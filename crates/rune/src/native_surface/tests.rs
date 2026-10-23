@@ -256,6 +256,17 @@ fn queued_video_frames_then_readback() {
 #[test]
 fn video_gpu_colour_sharpness_geometry_and_lifetime() {
     let gpu = Gpu::new(Gpu::instance(), None);
+    // Other renderers (including the parallel burst test) may own native planes.
+    // Their lifetime must not affect this renderer's ownership assertions.
+    #[cfg(target_os = "macos")]
+    let _unrelated = {
+        let surface = NativeSurface::new();
+        publish(&surface, synthetic(16, 16, 0), 0, true);
+        let mut renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);
+        renderer.prepare(&gpu.device, &gpu.queue, &[draw(&surface, [0.0, 0.0, 16.0, 16.0])], (16, 16));
+        assert_eq!(renderer.live_planes(), 2);
+        renderer
+    };
     let mut renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let surface = NativeSurface::new();
     let mut id = 0;
@@ -343,7 +354,7 @@ fn video_gpu_colour_sharpness_geometry_and_lifetime() {
     gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     assert!(weak.upgrade().is_none(), "old frame leaked after completion and removal");
     #[cfg(target_os = "macos")]
-    assert_eq!(macos::LIVE_PLANES.load(std::sync::atomic::Ordering::SeqCst), 0, "CVMetalTexture ownership leaked");
+    assert_eq!(renderer.live_planes(), 0, "CVMetalTexture ownership leaked");
     let (submitted, completed) = surface.counts();
     assert_eq!(submitted, completed);
     let timing = surface.timing().unwrap();
@@ -412,16 +423,12 @@ fn video_gpu_colour_sharpness_geometry_and_lifetime() {
         }
         surface.clear();
         renderer.prepare(&gpu.device, &gpu.queue, &[], (16, 16));
-        assert_eq!(
-            macos::LIVE_PLANES.load(std::sync::atomic::Ordering::SeqCst),
-            2,
-            "encoded frames released too early"
-        );
+        assert_eq!(renderer.live_planes(), 2, "encoded frames released too early");
         target.copy(&mut encoder);
         gpu.queue.submit([encoder.finish()]);
         let p = target.read(&gpu.device);
         assert_eq!(p[3], 255);
-        assert_eq!(macos::LIVE_PLANES.load(std::sync::atomic::Ordering::SeqCst), 0, "submitted plane owners leaked");
+        assert_eq!(renderer.live_planes(), 0, "submitted plane owners leaked");
         publish(
             &surface,
             ByteFrame {

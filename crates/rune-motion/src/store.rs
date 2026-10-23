@@ -1035,6 +1035,7 @@ impl AnimationStore {
         }
     }
 
+    #[allow(clippy::too_many_arguments, reason = "Internal lane scheduler takes a track/lane address and the pending animation fields")]
     pub(crate) fn schedule(&mut self, t: usize, lane: usize, at: f64, target: f32, curve: Curve, blend: Blend, velocity: Option<f32>) {
         let l = self.t_lane0[t] as usize + lane;
         self.push_pending(l, Pending { at, target, velocity: velocity.unwrap_or(f32::NAN), curve, blend, next: NONE });

@@ -177,21 +177,23 @@ impl PixelBuffer {
 pub(crate) struct Importer {
     cache: CFRetained<CVMetalTextureCache>,
     device: wgpu::Device,
+    #[cfg(test)]
+    pub(super) live_planes: Arc<std::sync::atomic::AtomicUsize>,
 }
 // CVMetalTexture retains the IOSurface mapping. wgpu's drop guard owns it for as long as any
 // bind group or submitted command uses that plane, rather than merely retaining MTLTexture.
 struct PlaneOwner {
     _texture: CFRetained<CVMetalTexture>,
     _buffer: PixelBuffer,
+    #[cfg(test)]
+    live_planes: Arc<std::sync::atomic::AtomicUsize>,
 }
 unsafe impl Send for PlaneOwner {}
 unsafe impl Sync for PlaneOwner {}
-#[cfg(test)]
-pub(super) static LIVE_PLANES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 impl Drop for PlaneOwner {
     fn drop(&mut self) {
         #[cfg(test)]
-        LIVE_PLANES.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        self.live_planes.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 impl Importer {
@@ -206,6 +208,8 @@ impl Importer {
         Ok(Self {
             cache: unsafe { CFRetained::from_raw(NonNull::new(raw).ok_or("null texture cache")?) },
             device: device.clone(),
+            #[cfg(test)]
+            live_planes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
     }
     pub fn flush(&self) {
@@ -232,9 +236,14 @@ impl Importer {
             )?;
             let cv = unsafe { CFRetained::from_raw(NonNull::new(raw).ok_or("null CVMetalTexture")?) };
             let texture = CVMetalTextureGetTexture(&cv).ok_or("null MTLTexture")?;
-            let owner = PlaneOwner { _texture: cv, _buffer: buffer.clone() };
+            let owner = PlaneOwner {
+                _texture: cv,
+                _buffer: buffer.clone(),
+                #[cfg(test)]
+                live_planes: self.live_planes.clone(),
+            };
             #[cfg(test)]
-            LIVE_PLANES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.live_planes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let desc = pipeline::descriptor(width, height, format);
             let hal = unsafe {
                 wgpu::hal::metal::Device::texture_from_raw(

@@ -10,7 +10,7 @@ fn sibling_order_matches_reference_after_removal_and_slot_reuse() {
         let mut seed = 1u32;
         for step in 0..300u64 {
             seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-            if !expected.is_empty() && seed % 3 != 0 {
+            if !expected.is_empty() && !seed.is_multiple_of(3) {
                 let i = seed as usize % expected.len();
                 scene.unmount(expected.remove(i));
             } else {
