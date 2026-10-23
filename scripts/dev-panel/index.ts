@@ -1,4 +1,4 @@
-import { colorHex, createRemoteControls, formatRust, type RemoteControls, type State } from "@kitlangton/knobs"
+import { createRemoteControls, formatRust, type RemoteControls } from "@kitlangton/knobs"
 import { mountPage } from "@kitlangton/knobs/panel"
 
 let controls: RemoteControls | undefined
@@ -32,12 +32,10 @@ socket.addEventListener("message", event => {
       // Header, group and row copies all emit `rune::tune!`; playback/scene controls are not app code.
       copyAs: (keys, group) => {
         const descriptors = controls!.descriptors.filter(d => !d.key.startsWith("rune.") && (!keys || keys.includes(d.key)))
-        // The colour control holds oklch; compare in Rune's hex form so unchanged colours stay out.
-        const values: Record<string, unknown> = { ...controls!.get() }
-        for (const d of descriptors) if (d.kind === "color") values[d.key] = colorHex(values[d.key] as string) ?? values[d.key]
+        const values = controls!.get()
         // Like knobs' built-in "rust": a selection or group with nothing changed copies its values as they are.
-        return formatRust(descriptors, values as State, group)
-          || (keys || group ? formatRust(descriptors, values as State, group, { includeDefaults: true }) : "")
+        return formatRust(descriptors, values, group)
+          || (keys || group ? formatRust(descriptors, values, group, { includeDefaults: true }) : "")
       },
     })
   } else if (next !== shape) {

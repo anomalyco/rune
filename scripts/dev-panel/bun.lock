@@ -5,12 +5,12 @@
     "": {
       "name": "rune-dev-panel-page",
       "dependencies": {
-        "@kitlangton/knobs": "0.4.0-next.19",
+        "@kitlangton/knobs": "0.4.0-next.20",
       },
     },
   },
   "packages": {
-    "@kitlangton/knobs": ["@kitlangton/knobs@0.4.0-next.19", "", { "dependencies": { "@kitlangton/rolling-number": "^0.4.1" }, "peerDependencies": { "@pierre/diffs": "^1.5.2", "react": ">=18", "solid-js": ">=1.8" }, "optionalPeers": ["@pierre/diffs", "react", "solid-js"] }, "sha512-oMRvkt+uce5dzdBaliYkF6dh4y6yu6aNGBvzN88AuYAFpmeTiD+ZraetXTtX7vrYPJLhDdef6izVR0uW45UpSw=="],
+    "@kitlangton/knobs": ["@kitlangton/knobs@0.4.0-next.20", "", { "dependencies": { "@kitlangton/rolling-number": "^0.4.1" }, "peerDependencies": { "@pierre/diffs": "^1.5.2", "react": ">=18", "solid-js": ">=1.8" }, "optionalPeers": ["@pierre/diffs", "react", "solid-js"] }, "sha512-3aX3l9iQs4Bx/IdukOzGEPPwx1OnTA7Ke5WwQ5RA51d7fH/WwiX3hh6QwqBJG6JS14BVbej/ldqz6xBMTKyqgQ=="],
 
     "@kitlangton/rolling-number": ["@kitlangton/rolling-number@0.4.1", "", { "peerDependencies": { "react": "^18.0.0 || ^19.0.0", "solid-js": "^1.9.0" }, "optionalPeers": ["react", "solid-js"] }, "sha512-wvtmA/iz2rZ8QKrHt32dsxWFq4AJk0RfeXUsk/eXHvto7m3bRQxJ5Nv3KzWZmE7FNB1Ysz567Oj/hILlvpCqLQ=="],
   }

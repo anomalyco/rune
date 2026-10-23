@@ -10,7 +10,7 @@ bun scripts/dev-panel/serve.ts
 ```
 
 Open `http://127.0.0.1:4794`. The page is knobs' own `mountPage`, pinned to
-`@kitlangton/knobs@0.4.0-next.19`. Every Copy action (header, group, row) emits
+`@kitlangton/knobs@0.4.0-next.20`. Every Copy action (header, group, row) emits
 `rune::tune!` lines through knobs' `formatRust`; playback and scene controls
 are left out. Rune contains no panel implementation.
 
