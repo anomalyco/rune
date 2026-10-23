@@ -983,6 +983,8 @@ impl<T: 'static> AnyHost for Overlay<T> {
                 self.rt.pointer_leave();
                 self.dirty = true;
             }
+            // TODO(Dax item 6): forward standalone modifier transitions once the shared
+            // modifier-only key event lands; do not introduce a second key API here.
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
             WindowEvent::Focused(false) => {
                 self.rt.cancel_composition();

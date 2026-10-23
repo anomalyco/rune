@@ -38,6 +38,10 @@ does not guarantee ordering among peers. Native status/status+1 levels are macOS
   `Regions` uses `.hit()` geometry; `Legacy` restores the spec's `interactive` behavior.
 - `set_follow_pointer(bool)` enables/disables following independently of placement/input.
   Scrawl can keep it disabled and supply its own `Rect` and `set_display` requests.
+- Standalone modifier transitions (for example, pressing/releasing Shift without another
+  key) are not delivered yet. They follow Dax's shared modifier-only key event in item 6;
+  the desktop and Wayland overlay callbacks have TODOs for that integration. Pressed keys
+  still carry modifier state, and Escape works.
 - `Display::native_id()` maps to `DisplayTarget::Native`: macOS CGDirectDisplayID, Windows
   full-width HMONITOR, X11 RandR CRTC, Wayland wl_output registry name. X11 output IDs can
   also be targeted with `NativeDisplayId::X11Output`. `native_bounds()` is global top-left

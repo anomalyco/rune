@@ -97,6 +97,7 @@ impl Dispatch<WlKeyboard, ()> for State {
                 }
             }
             wl_keyboard::Event::Modifiers { mods_depressed, mods_latched, mods_locked, group, .. } => {
+                // TODO(Dax item 6): emit the shared modifier-only event here when available.
                 if let Some(xkb) = &mut state.xkb { xkb.update_mask(mods_depressed, mods_latched, mods_locked, 0, 0, group); }
             }
             wl_keyboard::Event::Key { key, state: wayland_client::WEnum::Value(wl_keyboard::KeyState::Pressed), .. } if state.keyboard_focus => {
