@@ -1,7 +1,7 @@
 # Dev panel handoff
 
 Worktree: `/Users/kit/code/worktrees/rune/dev-panel`, branch `dev-panel`.
-Base: `origin/dev` at `28ef718`. Local commits only; no push.
+Base: `origin/dev` at `bc8bd76` (rebased). Local commits only; no push.
 
 ## What is implemented
 
@@ -29,13 +29,14 @@ Base: `origin/dev` at `28ef718`. Local commits only; no push.
 
 Local implementation commits, in order:
 
-1. `48b8d98`: separate clock bridge and dev feature.
-2. `71244d0`: dev protocol, tunable registry, macro and rune-motion retuning.
-3. `a198905`: core integration hooks, isolated for the parent's landing queue.
-4. `c376fab`: example, lab blur integration, protocol proof, knobs adapter and design.
-5. `680206f`: npm-pinned knobs page, `copyAs` Rust and the colour fix (see below).
+1. `eabab18`: separate clock bridge and dev feature (includes the idle-jump fix).
+2. `929f971`: dev protocol, tunable registry, macro and rune-motion retuning.
+3. `9feff39`: core integration hooks (dev config on `App`), isolated for the parent's landing queue.
+4. `2ff6ec5`: example, exhaustive-`AppSpec` compile test, lab blur integration, protocol proof, knobs adapter, design and lockfile.
+5. `d1291aa`: npm-pinned knobs page, `copyAs` Rust and the colour fix (see below).
+6. `184d663`: unchanged selections copy their current values.
 
-Core queue: the clock commit `48b8d98` lands after the overlay hooks and the
+Core queue: the clock commit `eabab18` lands after the overlay hooks and the
 window-panel batch.
 
 Apply the implementation stack together: the backend and integration commits
@@ -43,9 +44,9 @@ reference each other, and the example commit supplies the updated lockfile.
 The clock commit is independently usable.
 
 Core integration consists of feature-gated fields/frame dispatch in
-`runtime.rs`, attachment in `tooling.rs`/`app.rs`, and a six-line hidden-host
-dev wake path in `window.rs`. `overlay.rs` has only a test fixture conversion
-to `..AppSpec::new`. Retuning adds dev-only helpers in rune-motion store/scene.
+`runtime.rs`, a `dev` field on `App` (set only by `App::dev_panel`) attached via
+`tooling::attach_dev`, and the hidden-host dev wake path in `window.rs`.
+`AppSpec` and `overlay.rs` are unchanged. Retuning adds dev-only helpers in rune-motion store/scene.
 
 ## Proof
 
@@ -72,9 +73,28 @@ Reproduce the focused checks with HiveMind running
 builds. `bun scripts/dev-panel/smoke.ts /path/to/worker-built/rune-dev-panel`
 checks the native windowless host.
 
+## Pre-push review blockers (fixed)
+
+1. `AppSpec.dev` broke exhaustive literals under `--features dev`. The config
+   now lives on `App<S>`, set only by `App::dev_panel`; the windowed host attaches
+   it after `wall_start` is set, and headless tooling attaches it as before.
+   `examples/dev-panel/tests/app_spec_literal.rs` spells every `AppSpec` field and
+   chains `dev_panel` under `--features dev`. The `overlay.rs` literal is reverted.
+2. With a wall clock, `DevClock::advance` charged idle wall time to the animation
+   step. It now returns `(logical, animation)`: the logical clock (timers, `poll`)
+   follows host time × scale, animations step by `paused ? 0 : dt.max(0) × scale`,
+   and manual steps add 1/60 to both, like a native shell's capped dt. Regression
+   test: idle 2 s, commit a 0.4 s spring, and the first 1/120 s frame moves under
+   8 px of 80 while `rt.clock >= 2`.
+
+Mini (HiveMind) after the fixes: five dev tests, the literal test and the
+real-WebSocket test passed, as did `lab --features dev`, the no-default-features
+build and the release check. The clock commit alone also passed its two tests and
+a feature-off `cargo check -p rune`. `Cargo.lock` now carries the dev deps.
+
 ## Real knobs panel and copy-as-Rust
 
-`680206f` pins the page to npm `@kitlangton/knobs@0.4.0-next.19`
+`d1291aa` pins the page to npm `@kitlangton/knobs@0.4.0-next.19`
 (`scripts/dev-panel/package.json` + `bun.lock`; no file link), passes
 `formatRust` as `copyAs` and filters `rune.*` keys. Bundled with Bun on Studio.
 
@@ -112,8 +132,8 @@ build has stopped. Generated binaries and scratch files were removed.
 ## Rooms integration notes
 
 See `DESIGN.md` for the API and clock rationale. Forward a Rooms `dev` feature
-to `rune/dev`; add `..AppSpec::new(...)` to its currently exhaustive spec
-literal; attach `Config::transitions([...])`. Keep tune reads in the view's
+to `rune/dev`; its exhaustive `AppSpec` literal stays as is; attach
+`Config::transitions([...])` with `App::dev_panel`. Keep tune reads in the view's
 motion/size/colour declarations for immediate in-flight retuning. Compositors
 advertise `motion_blur: true` and read `rt.motion_blur_enabled()`.
 
