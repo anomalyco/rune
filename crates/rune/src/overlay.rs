@@ -684,13 +684,7 @@ impl<T: 'static> Overlay<T> {
         if let Some(panel) = &self.panel {
             let _prewarm = panel.prewarm();
             self.dirty = true;
-            // Adopting the view can invalidate its first surface acquisition. Finish
-            // that reconfiguration here, before on_created/show, rather than charging
-            // the first reveal for it. Persistent failure stays dirty for a later retry.
-            for _ in 0..3 {
-                self.draw_frame();
-                if !self.dirty { break; }
-            }
+            self.draw_frame(true);
             if let Some(gpu) = &self.gpu { let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely()); }
             return;
         }
@@ -711,6 +705,8 @@ impl<T: 'static> Overlay<T> {
 
     fn apply_input(&mut self) {
         if self.rt.pointer_captured() { return; }
+        #[cfg(target_os = "macos")]
+        if self.panel.as_ref().is_some_and(|panel| panel.pointer_captured()) { return; }
         let Some(input) = self.pending_input.take() else { return };
         self.options.input = input;
         let resolved = input.resolved(self.interactive);
@@ -834,10 +830,10 @@ impl<T: 'static> Overlay<T> {
     /// Draws a frame if one is due; true while it needs more (animating).
     fn draw(&mut self) -> bool {
         if !self.visible { return false; }
-        self.draw_frame()
+        self.draw_frame(false)
     }
 
-    fn draw_frame(&mut self) -> bool {
+    fn draw_frame(&mut self, prewarm: bool) -> bool {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Some(Live { backing: Backing::Layer(layer), .. }) = self.live.as_mut() {
             let changes = layer.dispatch();
@@ -881,13 +877,19 @@ impl<T: 'static> Overlay<T> {
         if !self.dirty && self.idle {
             return false;
         }
-        let frame = match live.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                live.surface.configure(&gpu.device, &live.config);
-                return true;
+        let mut retries = if prewarm { 2 } else { 0 };
+        let frame = loop {
+            match live.surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => break f,
+                wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                    live.surface.configure(&gpu.device, &live.config);
+                    if retries == 0 { return true; }
+                    retries -= 1;
+                }
+                // A truly occluded display or timed-out drawable must not be retried
+                // synchronously: nextDrawable can already have waited for a second.
+                _ => return true,
             }
-            _ => return true,
         };
         let now = Instant::now();
         let dt = if self.idle { 1.0 / 120.0 } else { (now - self.last).as_secs_f64().min(1.0 / 30.0) };
@@ -989,20 +991,24 @@ impl<T: 'static> AnyHost for Overlay<T> {
             WindowEvent::KeyboardInput { event, .. } if self.options.keys == KeyPolicy::OnDemand && event.state.is_pressed() => {
                 if let Some(key) = crate::window::map_key(&event.logical_key, self.mods) { self.rt.key(key); self.dirty = true; }
             }
-            WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } if self.options.input.resolved(self.interactive) != OverlayInput::None => {
+            WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } => {
                 #[cfg(target_os = "macos")]
-                if let Some(point) = self.panel.as_ref().and_then(|p| p.take_click(state.is_pressed())) { self.rt.pointer_move(point.0, point.1); }
-                #[cfg(target_os = "windows")]
-                if let Some(point) = self.native.as_ref().and_then(|p| p.take_click(state.is_pressed())) { self.rt.pointer_move(point.0, point.1); }
-                if let Some((x, y)) = self.rt.pointer() {
-                    match state {
-                        winit::event::ElementState::Pressed => self.rt.pointer_down(x, y),
-                        winit::event::ElementState::Released => self.rt.pointer_up(x, y),
+                let point = self.panel.as_ref().and_then(|p| p.take_click(state.is_pressed()));
+                if self.options.input.resolved(self.interactive) != OverlayInput::None {
+                    #[cfg(target_os = "macos")]
+                    if let Some(point) = point { self.rt.pointer_move(point.0, point.1); }
+                    #[cfg(target_os = "windows")]
+                    if let Some(point) = self.native.as_ref().and_then(|p| p.take_click(state.is_pressed())) { self.rt.pointer_move(point.0, point.1); }
+                    if let Some((x, y)) = self.rt.pointer() {
+                        match state {
+                            winit::event::ElementState::Pressed => self.rt.pointer_down(x, y),
+                            winit::event::ElementState::Released => self.rt.pointer_up(x, y),
+                        }
                     }
+                    self.dirty = true;
                 }
                 #[cfg(target_os = "macos")]
                 if !state.is_pressed() && let Some(panel) = &self.panel { panel.pointer_released(); }
-                self.dirty = true;
                 self.apply_input();
             }
             WindowEvent::ThemeChanged(theme) => {
@@ -1030,6 +1036,10 @@ impl<T: 'static> AnyHost for Overlay<T> {
         if self.live.is_some() && let Some(panel) = &self.panel {
             panel.poll_pointer(Instant::now());
             panel.observe_pointer();
+            if let Some((x, y)) = panel.take_recovered_release() && self.rt.pointer_captured() {
+                self.rt.pointer_up(x, y);
+                self.dirty = true;
+            }
             if let Some((x, y)) = panel.take_pointer() && self.rt.pointer() != Some((x, y)) {
                 self.observe_pointer(x, y);
                 if self.options.follow_pointer && self.options.display == DisplayTarget::UnderPointer {

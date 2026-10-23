@@ -50,8 +50,12 @@ does not guarantee ordering among peers. Native status/status+1 levels are macOS
   before reveal. Hidden hosts have no pointer observers or draw loop. Wayland recreates its
   layer after hide.
 - macOS Regions mode samples native pointer position/buttons at up to 120 Hz while visible.
-  Monitors wake the loop; native local downs establish ownership through delivery of Up.
-  None/All and hidden modes stop the polling deadline. Unchanged hover does not draw.
+   Monitors wake the loop; native local downs establish ownership through delivery of Up.
+   Input changes also wait for native ownership when `.hit()` has no Runtime press handler.
+   A known queued Up stays protected until dispatch. If no native Up was queued, 100 ms of
+   observed button-up clears ownership and forwards one recovered release to Runtime at the
+   first observed release position. Every Left Up acknowledges native ownership, even in None.
+   None/All and hidden modes stop the polling deadline. Unchanged hover does not draw.
 - Release measurements on a shared Pro: 30 retained re-shows reached the alpha setter in
   **0.369 ms median / 0.776 ms p95**. This is **not a presentation timestamp**. Alpha-only
   reveal reuses a drawable; Metal does not timestamp its compositor reveal. Opt-in diagnostic
@@ -72,7 +76,7 @@ Ordinary windows can opt into the same native switches without changing exhausti
 `WindowOptions` literals:
 
 ```rust
-WindowSpec::from_app("capsule", app).options(
+WindowSpec::from_app("capsule", app).configured_options(
     WindowOptions { transparent: true, borderless: true, ..Default::default() }
         .macos(MacWindowOptions::default()
             .shadow(false).level(27)
@@ -87,6 +91,9 @@ change an ordinary window into a nonactivating panel. Runtime `set_always_on_top
 the configured native level, including after recreation. `OVERLAY_LAB_UNDERLAY=1` plus
 `OVERLAY_LAB_NATIVE_WINDOW=1` exercises native options; `OVERLAY_PROBE_NATIVE_OPTIONS=1`
 logs native readbacks when the diagnostic library is loaded.
+
+Use `configured_options` for native builders; `options(WindowOptions)` remains concrete so
+existing `.options(Default::default())` calls keep compiling.
 
 `native/` contains diagnostic tools, loaded only into the lab process. Build through
 HiveMind on a worker, then copy the products into a fresh temporary directory on the

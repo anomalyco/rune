@@ -104,6 +104,8 @@ pub(crate) struct PointerState {
     display: Cell<Option<u32>>,
     follow: Cell<bool>,
     clicks: RefCell<VecDeque<(bool, f32, f32)>>,
+    release_since: Cell<Option<(Instant, (f32, f32))>>,
+    recovered_release: Cell<Option<(f32, f32)>>,
 }
 
 impl PointerState {
@@ -127,18 +129,36 @@ impl PointerState {
     }
     fn record_click(&self, down: bool, x: f32, y: f32) {
         if !self.hit(x, y) { return; }
-        if down { self.captured.set(true); }
+        if down { self.captured.set(true); self.release_since.set(None); }
         self.clicks.borrow_mut().push_back((down, x, y));
+    }
+    fn released(&self) {
+        // Native callbacks can queue another Down before winit dispatches this Up.
+        self.captured.set(self.clicks.borrow().iter().any(|(down, _, _)| *down));
+        self.release_since.set(None);
+    }
+    fn observe_release(&self, buttons: usize, now: Instant, point: (f32, f32)) {
+        if !self.captured.get() || buttons & 1 != 0 || self.clicks.borrow().iter().any(|(down, _, _)| !down) {
+            self.release_since.set(None);
+            return;
+        }
+        let (since, released_at) = self.release_since.get().unwrap_or_else(|| {
+            self.release_since.set(Some((now, point)));
+            (now, point)
+        });
+        if now.duration_since(since) < Duration::from_millis(100) { return; }
+        self.captured.set(false);
+        self.clicks.borrow_mut().clear();
+        self.release_since.set(None);
+        self.recovered_release.set(Some(released_at));
     }
     fn observe(&self, panel: &NSPanel, wake: Option<&crate::Waker>) {
         // SAFETY: monitors and frame publication run on AppKit's main thread.
         let pointer = unsafe { NSEvent::mouseLocation() };
-        // A local down establishes ownership, never a press belonging to another app.
-        // Keep native capture through dispatch of the queued Up even after physical release.
         let buttons: usize = unsafe { msg_send![NSEvent::class(), pressedMouseButtons] };
-        if self.captured.get() && buttons & 1 == 0 && let Some(wake) = wake { wake(); }
         let frame = panel.frame();
         let (x, y) = ((pointer.x - frame.origin.x) as f32, (frame.origin.y + frame.size.height - pointer.y) as f32);
+        self.observe_release(buttons, Instant::now(), (x, y));
         let ignore = !self.hit(x, y);
         if unsafe { panel.ignoresMouseEvents() } != ignore {
             panel.setIgnoresMouseEvents(ignore);
@@ -339,6 +359,8 @@ impl Panel {
         self.pointer.last.set(None);
         self.pointer.inside.set(false);
         self.pointer.clicks.borrow_mut().clear();
+        self.pointer.release_since.set(None);
+        self.pointer.recovered_release.set(None);
         if self.options.prewarm {
             unsafe { self.panel.setAlphaValue(0.0); self.panel.resignKeyWindow(); }
             self.panel.setIgnoresMouseEvents(true);
@@ -361,6 +383,8 @@ impl Panel {
         }
     }
     pub fn take_pointer(&self) -> Option<(f32, f32)> { self.pointer.pending.take() }
+    pub fn pointer_captured(&self) -> bool { self.pointer.captured.get() }
+    pub fn take_recovered_release(&self) -> Option<(f32, f32)> { self.pointer.recovered_release.take() }
     pub fn take_click(&self, down: bool) -> Option<(f32, f32)> {
         let mut clicks = self.pointer.clicks.borrow_mut();
         if clicks.front().is_some_and(|(pressed, _, _)| *pressed == down) {
@@ -368,7 +392,7 @@ impl Panel {
         } else { None }
     }
     pub fn pointer_released(&self) {
-        self.pointer.captured.set(false);
+        self.pointer.released();
         self.refresh_monitors();
         if self.visible.get() { self.pointer.observe(&self.panel, self.wake.as_ref()); }
     }
@@ -457,6 +481,42 @@ impl Drop for Panel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn overlay_lost_up_recovers_once_after_grace_using_release_position() {
+        let pointer = PointerState { input: Cell::new(OverlayInput::Regions), ..Default::default() };
+        pointer.regions.borrow_mut().push([10.0, 10.0, 30.0, 30.0]);
+        pointer.record_click(true, 20.0, 20.0);
+        let now = Instant::now();
+        pointer.observe_release(1, now, (40.0, 40.0));
+        pointer.observe_release(0, now, (50.0, 50.0));
+        pointer.observe_release(0, now + Duration::from_millis(99), (60.0, 60.0));
+        assert!(pointer.captured.get());
+        pointer.observe_release(0, now + Duration::from_millis(100), (70.0, 70.0));
+        assert!(!pointer.captured.get());
+        assert!(pointer.clicks.borrow().is_empty());
+        assert_eq!(pointer.recovered_release.take(), Some((50.0, 50.0)));
+        pointer.observe_release(0, now + Duration::from_secs(1), (80.0, 80.0));
+        assert_eq!(pointer.recovered_release.take(), None);
+    }
+    #[test]
+    fn overlay_queued_up_and_next_down_keep_their_ownership_until_dispatched() {
+        let pointer = PointerState { input: Cell::new(OverlayInput::Regions), ..Default::default() };
+        pointer.regions.borrow_mut().push([10.0, 10.0, 30.0, 30.0]);
+        pointer.record_click(true, 20.0, 20.0);
+        pointer.record_click(false, 100.0, 100.0);
+        pointer.observe_release(0, Instant::now(), (100.0, 100.0));
+        pointer.observe_release(0, Instant::now() + Duration::from_secs(1), (100.0, 100.0));
+        assert!(pointer.captured.get());
+        assert_eq!(pointer.recovered_release.get(), None);
+        pointer.clicks.borrow_mut().pop_front(); // Down dispatched
+        pointer.clicks.borrow_mut().pop_front(); // Up dispatched
+        pointer.record_click(true, 20.0, 20.0); // next native Down queued
+        pointer.released();
+        assert!(pointer.captured.get());
+        pointer.clicks.borrow_mut().clear();
+        pointer.released();
+        assert!(!pointer.captured.get());
+    }
     #[test]
     fn overlay_rejected_down_cannot_poison_later_click_and_owned_up_survives_exit() {
         let pointer = PointerState { input: Cell::new(OverlayInput::Regions), ..Default::default() };

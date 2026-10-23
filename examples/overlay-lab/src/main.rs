@@ -125,7 +125,7 @@ fn main() {
                 options.macos(rune::MacWindowOptions::default().shadow(false).level(24)
                     .collection_behavior(1 | 16 | 64 | 256).exclude_from_capture(true))
             } else { options.into() };
-            vec![WindowSpec::from_app("underlay", app).options(options)]
+            vec![WindowSpec::from_app("underlay", app).configured_options(options)]
         });
         return;
     }

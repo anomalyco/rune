@@ -121,7 +121,7 @@ impl MacWindowOptions {
     pub fn exclude_from_capture(mut self, exclude: bool) -> Self { self.exclude_from_capture = Some(exclude); self }
 }
 
-/// Ordinary WindowOptions plus optional native builders, accepted by WindowSpec::options.
+/// Ordinary options plus native builders, accepted by WindowSpec::configured_options.
 #[derive(Clone, Debug)]
 pub struct ConfiguredWindowOptions {
     options: WindowOptions,
@@ -156,8 +156,13 @@ impl<S> WindowSpec<S> {
     }
     /// Configure this window's frame, including headless traffic-light placement.
     pub fn chrome(mut self, chrome: crate::Chrome) -> Self { self.app = self.app.chrome(chrome); self }
-    pub fn options(mut self, options: impl Into<ConfiguredWindowOptions>) -> Self {
-        let ConfiguredWindowOptions { options, native } = options.into();
+    pub fn options(mut self, options: WindowOptions) -> Self {
+        self.options = options;
+        self.app.macos_window = MacWindowOptions::default();
+        self
+    }
+    pub fn configured_options(mut self, options: ConfiguredWindowOptions) -> Self {
+        let ConfiguredWindowOptions { options, native } = options;
         self.options = options;
         self.app.macos_window = native;
         self
@@ -181,6 +186,12 @@ pub(crate) fn validate<S>(windows: &[WindowSpec<S>]) -> Result<(), String> {
 mod tests {
     use super::*;
     use winit::dpi::{LogicalSize, Size};
+
+    #[test]
+    fn default_window_options_remain_inferable_at_existing_call_sites() {
+        // This fails to compile if options becomes generic over Into<...>.
+        let _configure: fn(WindowSpec<()>) -> WindowSpec<()> = |spec| spec.options(Default::default());
+    }
 
     #[test]
     fn compact_window_overrides_the_legacy_minimum_without_changing_defaults() {
