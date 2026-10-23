@@ -537,6 +537,19 @@ Model buffers and history wipe on drop; secure edits wipe replaced allocations.
 Use `replace_text(..)` or `clear()` for programmatic replacement. Direct assignment
 to the public `text: String` field bypasses replacement wiping.
 
+`tx.copy_secret(text, Duration::from_secs(30))` writes with the platform's clipboard
+history-exclusion marker and expires on Rune's shared clipboard worker. Expiry
+compares the current text and, on macOS/Windows, the clipboard revision; copying
+something else cancels the old expiry. Linux's portable API exposes no revision,
+so it compares text. Clipboard managers must honor the platform marker themselves.
+
+Put `.on_paste(|s: &mut State, text: &str, tx| { ... })` on the view root (or modal
+root) to handle Cmd/Ctrl-V when no field is focused. `tx.request_paste()` requests
+the same asynchronous clipboard read from a button, including in overlays.
+Focused editors take precedence; late reads are discarded if the target changed.
+Headless `--script` `paste` supplies text directly through the same routing and
+records `paste window` or `paste field` in `--trace`, without recording contents.
+
 `tx.fly_text("prompt", "sent-text")` hands a visible plain-text field to a newly
 mounted, uniquely keyed text node. The runtime captures its visible glyphs before
 committing and measures the destination after growth/scroll each frame. One 0.32 s

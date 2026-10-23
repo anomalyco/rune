@@ -48,6 +48,8 @@ pub mod tok;
 pub mod tooling;
 mod window;
 mod secure_input;
+mod clipboard;
+pub use clipboard::ClipboardWrite;
 pub mod windows;
 pub use window::WindowHandle;
 pub use windows::{ConfiguredWindowOptions, Display, MacWindowOptions, RunOptions, WindowOptions, WindowSpec};

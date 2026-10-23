@@ -89,6 +89,7 @@ impl<S> Cx<S> {
 }
 
 pub(crate) struct Node {
+    on_paste: Option<crate::el::PasteFn>,
     focus: crate::el::FocusSpec,
     modal: Option<crate::el::ModalSpec>,
     looping: Option<rune_motion::LoopSpec>,
@@ -141,7 +142,7 @@ enum Action {
     Drag(String, Drag),
     Key(KeyEvent),
     Ime(Ime),
-    Paste(String),
+    Paste(zeroize::Zeroizing<String>, Option<Option<String>>),
     Focus(String, f32, f32),
     Blur,
 }
@@ -334,7 +335,8 @@ pub struct Runtime<S: 'static> {
     /// The shell cancels native composition before enabling the new text focus.
     pub(crate) ime_reset: bool,
     /// Text the focused field asked to copy (the shell writes it to the clipboard).
-    pub copy_request: Option<String>,
+    pub copy_request: Option<crate::ClipboardWrite>,
+    pub(crate) paste_request: bool,
     /// A handler or `update` asked to close the window or quit (the shell takes it).
     pub shell_request: Option<Shell>,
     /// What `update` asked of the next commit.
@@ -479,6 +481,7 @@ impl<S: 'static> Runtime<S> {
             ime_area: None,
             ime_reset: false,
             copy_request: None,
+            paste_request: false,
             shell_request: None,
             pending: Tx::default(),
             animating: false,
@@ -689,6 +692,7 @@ impl<S: 'static> Runtime<S> {
         if let Some(copy) = tx.copy.take() {
             self.copy_request = Some(copy);
         }
+        self.paste_request |= tx.paste;
         self.shell_request = self.shell_request.max(tx.shell.take());
         for (source, target) in std::mem::take(&mut tx.text_flights) {
             self.capture_text_flight(source, target);
@@ -954,9 +958,16 @@ impl<S: 'static> Runtime<S> {
                 false
             }
             Action::Ime(ev) => self.with_focused(|e| e.ime(&ev), &mut one),
-            Action::Paste(s) => {
-                let s = zeroize::Zeroizing::new(s);
-                self.with_focused(|e| e.paste(&s), &mut one)
+            Action::Paste(s, target) => {
+                if target.is_some_and(|target| target != self.paste_target()) { return false; }
+                if self.with_focused(|e| e.paste(&s), &mut one) {
+                    self.events.push("paste field".into());
+                    true
+                } else if let Some(f) = self.app_paste_handler() {
+                    f(&mut self.state, &s, &mut one);
+                    self.events.push("paste window".into());
+                    true
+                } else { false }
             }
             Action::Focus(path, x, y) => {
                 let Some(access) = self.node(&path).and_then(|n| n.input.as_ref()?.access.clone()) else { return false };
@@ -2108,7 +2119,20 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub fn paste(&mut self, text: impl Into<String>) {
-        self.queue.push(Action::Paste(text.into()));
+        self.queue.push(Action::Paste(zeroize::Zeroizing::new(text.into()), None));
+    }
+
+    fn app_paste_handler(&self) -> Option<crate::el::PasteFn> {
+        self.nodes.get(self.active_modal().unwrap_or(0))?.on_paste.clone()
+    }
+    pub(crate) fn accepts_paste(&self) -> bool {
+        self.paste_target().is_some() || self.app_paste_handler().is_some()
+    }
+    pub(crate) fn paste_target(&self) -> Option<String> {
+        self.focused_input().filter(|i| i.access.is_some()).and(self.focused.clone())
+    }
+    pub(crate) fn paste_result(&mut self, target: Option<String>, text: zeroize::Zeroizing<String>) {
+        self.queue.push(Action::Paste(text, Some(target)));
     }
 
     /// Whether the focused editor requires secure native keyboard input.
@@ -2940,6 +2964,7 @@ impl<S: 'static> Runtime<S> {
 }
 
 fn merge(tx: &mut Tx, one: Tx) {
+    tx.paste |= one.paste;
     tx.scroll_to.extend(one.scroll_to);
     tx.wakes.extend(one.wakes);
     tx.text_flights.extend(one.text_flights);
@@ -3139,6 +3164,7 @@ fn flatten(
     let parent_is_stack = parent.is_some_and(|p| nodes[p].growth.is_some());
     let virtual_mount = el.virtual_mount || parent.is_some_and(|p| nodes[p].virtual_mount);
     let El {
+        on_paste,
         focus,
         modal,
         looping,
@@ -3171,6 +3197,7 @@ fn flatten(
     let measured = text.is_some();
     let measure = text.as_ref().map(|t| crate::text::text_hash(&t.content, &t.spans, t.style, scale, None) ^ u64::from(t.wrap) ^ (u64::from(t.truncate) << 1));
     nodes.push(Node {
+        on_paste,
         focus,
         modal,
         looping,
@@ -3629,6 +3656,33 @@ mod tests {
         rt.ime(Ime::Commit("ignored".into())); rt.frame(0.0);
         assert_eq!(rt.state.text, "hé界🙂");
         assert!(rt.events.iter().all(|e| !e.contains("hé")));
+    }
+
+    #[test]
+    fn clipboard_paste_routes_to_window_or_field_and_discards_late_reads() {
+        #[derive(Default)]
+        struct State { field: crate::TextEdit, pasted: String }
+        fn view(s: &State, _: &mut Cx<State>) -> El {
+            col().size(200.0, 100.0)
+                .on_paste(|s: &mut State, text, tx| { s.pasted = text.to_owned(); tx.copy_secret(text, std::time::Duration::from_secs(30)); })
+                .child(crate::text_input(&s.field, crate::TextStyle::new(16.0, 400.0)).key("field").size(200.0, 40.0)
+                    .on_edit(|s: &mut State| &mut s.field))
+        }
+        let mut rt = Runtime::new(State::default(), view, (200.0, 100.0), Env { system_dark: true, scale: 1.0 });
+        rt.frame(0.0);
+        assert!(rt.accepts_paste());
+        rt.paste("window fixture"); rt.frame(0.0);
+        assert_eq!(rt.state.pasted, "window fixture");
+        assert!(rt.events.iter().any(|e| e == "paste window"));
+        assert!(!format!("{:?}", rt.copy_request).contains("window fixture"));
+        rt.update(|s, _| s.field.focused = true); rt.frame(0.0);
+        rt.paste_result(None, zeroize::Zeroizing::new("late window reply".into())); rt.frame(0.0);
+        assert!(rt.state.field.text.is_empty());
+        assert_eq!(rt.state.pasted, "window fixture");
+        let target = rt.paste_target();
+        rt.paste_result(target, zeroize::Zeroizing::new("field fixture".into())); rt.frame(0.0);
+        assert_eq!(rt.state.field.text, "field fixture");
+        assert!(rt.events.iter().any(|e| e == "paste field"));
     }
 
     #[test]

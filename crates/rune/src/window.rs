@@ -234,7 +234,7 @@ struct Host<S: 'static> {
     idle: bool,
     mods: ModifiersState,
     control_click: bool,
-    clipboard: Option<arboard::Clipboard>,
+    clipboard: crate::clipboard::Client,
     secure_input: crate::secure_input::SecureInput,
     ime_allowed: bool,
     comp: Option<Box<dyn Compositor<S>>>,
@@ -293,6 +293,8 @@ impl<S: 'static> Host<S> {
         rt.transparent = options.transparent;
         rt.track_marks = comp.is_some();
         rt.wall_start = Some(Instant::now());
+        let mut clipboard = crate::clipboard::Client::default();
+        clipboard.connect(waker.clone());
         shared.connect(waker);
         Host {
             chrome,
@@ -319,7 +321,7 @@ impl<S: 'static> Host<S> {
             idle: true,
             mods: ModifiersState::empty(),
             control_click: false,
-            clipboard: arboard::Clipboard::new().ok(),
+            clipboard,
             secure_input: Default::default(),
             ime_allowed: false,
             comp,
@@ -625,6 +627,7 @@ impl<S: 'static> Host<S> {
 
     /// Applies everything other threads asked for since the last wake-up.
     fn drain(&mut self, event_loop: &ActiveEventLoop) {
+        self.clipboard.receive(&mut self.rt);
         let requests = self.shared.take();
         for f in requests.updates {
             self.rt.update(f);
@@ -933,11 +936,7 @@ impl<S: 'static> Host<S> {
             l.cursor = cursor;
             l.window.set_cursor(cursor_icon(cursor));
         }
-        if let Some(c) = rt.copy_request.take()
-            && let Some(cb) = self.clipboard.as_mut()
-        {
-            let _ = cb.set_text(c);
-        }
+        self.clipboard.flush(rt);
         if let Some(a) = rt.ime_area {
             l.window.set_ime_cursor_area(
                 LogicalPosition::new(a[0] as f64, a[1] as f64),
@@ -993,6 +992,7 @@ impl<S: 'static> AnyHost for Host<S> {
                 w.window.request_redraw();
             } else {
                 self.rt.frame(0.0);
+                self.clipboard.flush(&mut self.rt);
                 self.shell(event_loop);
             }
         }
@@ -1116,10 +1116,8 @@ impl<S: 'static> Host<S> {
             }
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } if event.state == ElementState::Pressed => {
                 if let Some(ev) = map_key(&event.logical_key, self.mods) {
-                    if ev.key == Key::Command('v') && rt.has_focus() {
-                        if let Some(text) = self.clipboard.as_mut().and_then(|c| c.get_text().ok()) {
-                            rt.paste(text);
-                        }
+                    if ev.key == Key::Command('v') && rt.accepts_paste() {
+                        self.clipboard.read(rt);
                     } else {
                         rt.key(ev);
                     }

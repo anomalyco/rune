@@ -21,7 +21,8 @@ pub struct Tx {
     pub(crate) color_motion: Option<Spring>,
     pub(crate) settle: bool,
     pub(crate) relayout: bool,
-    pub(crate) copy: Option<String>,
+    pub(crate) copy: Option<crate::ClipboardWrite>,
+    pub(crate) paste: bool,
     pub(crate) text_flights: Vec<(String, String)>,
     pub(crate) scroll_to: Vec<String>,
     pub(crate) wakes: Vec<std::time::Duration>,
@@ -59,8 +60,16 @@ impl Tx {
 
     /// Request a clipboard write from the shell after this handler finishes.
     pub fn copy(&mut self, text: impl Into<String>) {
-        self.copy = Some(text.into());
+        self.copy = Some(crate::ClipboardWrite::new(text.into(), None));
     }
+
+    /// Exclude this text from clipboard histories and clear it after `clear_after` if unchanged.
+    pub fn copy_secret(&mut self, text: impl Into<String>, clear_after: std::time::Duration) {
+        self.copy = Some(crate::ClipboardWrite::new(text.into(), Some(clear_after)));
+    }
+
+    /// Read the OS clipboard asynchronously and paste into the focused field or root `on_paste`.
+    pub fn request_paste(&mut self) { self.paste = true; }
 
     /// Close the window after this handler, as the close button would (`App::on_close` runs).
     pub fn close_window(&mut self) {
@@ -332,7 +341,10 @@ impl Default for Visual {
     }
 }
 
+pub(crate) type PasteFn = Rc<dyn Fn(&mut dyn Any, &str, &mut Tx)>;
+
 pub struct El {
+    pub(crate) on_paste: Option<PasteFn>,
     pub(crate) focus: FocusSpec,
     pub(crate) modal: Option<ModalSpec>,
     pub(crate) looping: Option<rune_motion::LoopSpec>,
@@ -369,6 +381,7 @@ pub struct El {
 
 fn base(dir: FlexDirection) -> El {
     El {
+        on_paste: None,
         focus: FocusSpec::default(),
         modal: None,
         looping: None,
@@ -487,6 +500,12 @@ pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
 }
 
 impl El {
+    /// On the root (or modal root), handle paste when no text field is focused.
+    /// Native clipboard reads are asynchronous. Script `paste` uses the same handler.
+    pub fn on_paste<S: 'static>(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
+        self.on_paste = Some(Rc::new(move |s, text, tx| f(s.downcast_mut::<S>().unwrap(), text, tx)));
+        self
+    }
     /// Mask a text input before layout; disable undo, copy, cut and IME composition.
     /// Prefer `TextEdit::secure()` when the model can be configured at construction.
     pub fn secure(mut self) -> Self {

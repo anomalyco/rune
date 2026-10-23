@@ -228,6 +228,7 @@ pub(crate) struct Overlay<T: 'static> {
     interactive: bool,
     shared: Arc<Shared<T>>,
     rt: Runtime<T>,
+    clipboard: crate::clipboard::Client,
     /// The non-activating panel holding winit's view (macOS), kept with the window. Declared
     /// before the window so the view goes back to it first.
     #[cfg(target_os = "macos")]
@@ -267,6 +268,7 @@ impl<T: 'static> Overlay<T> {
             interactive: spec.interactive,
             shared: shared.clone(),
             rt,
+            clipboard: Default::default(),
             live: None,
             #[cfg(target_os = "macos")]
             panel: None,
@@ -733,7 +735,8 @@ impl<T: 'static> Overlay<T> {
 
     fn advance(&mut self) {
         self.rt.frame(0.0);
-        after_frame(&mut self.rt);
+        self.rt.shell_request = None;
+        self.clipboard.flush(&mut self.rt);
         self.dirty = true;
     }
 
@@ -747,6 +750,7 @@ impl<T: 'static> Overlay<T> {
 
     /// Applies requests from other threads: updates, edge, show and hide.
     fn sync(&mut self, event_loop: &ActiveEventLoop) {
+        if self.clipboard.receive(&mut self.rt) { self.advance(); }
         let requests = std::mem::take(&mut *self.shared.requests.lock().unwrap());
         if let Some(input) = requests.input { self.pending_input = Some(input); }
         self.apply_input();
@@ -895,7 +899,8 @@ impl<T: 'static> Overlay<T> {
         let dt = if self.idle { 1.0 / 120.0 } else { (now - self.last).as_secs_f64().min(1.0 / 30.0) };
         self.last = now;
         let animating = self.rt.frame(dt);
-        after_frame(&mut self.rt);
+        self.rt.shell_request = None;
+        self.clipboard.flush(&mut self.rt);
         // Publish the geometry just rendered, never a layout cached from the preceding frame.
         #[cfg(target_os = "macos")]
         if let Some(panel) = &self.panel { panel.set_regions(self.rt.hit_regions()); }
@@ -1062,21 +1067,11 @@ impl<T: 'static> AnyHost for Overlay<T> {
 
 impl<T: 'static> PendingOverlay for Overlay<T> {
     fn connect(&mut self, wake: Waker, gpu: Rc<RefCell<Weak<Gpu>>>) {
+        self.clipboard.connect(wake.clone());
         self.gpu_pool = gpu;
         *self.shared.wake.lock().unwrap() = Some(wake.clone());
         // Requests made before the loop existed.
         wake();
-    }
-}
-
-/// Carries out a frame's clipboard request; window requests (`Tx::close_window`) don't apply
-/// to overlays.
-fn after_frame<T>(rt: &mut Runtime<T>) {
-    rt.shell_request = None;
-    if let Some(text) = rt.copy_request.take()
-        && let Ok(mut clipboard) = arboard::Clipboard::new()
-    {
-        let _ = clipboard.set_text(text);
     }
 }
 
