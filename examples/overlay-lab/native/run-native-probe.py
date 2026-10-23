@@ -1,5 +1,6 @@
 """Run on an authorized Mac, while the caller holds its GUI lock."""
 import json, math, os, pathlib, re, selectors, socket, statistics, subprocess, sys, time
+from prewarm_trace import assert_prewarmed
 
 root = pathlib.Path(sys.argv[1])
 retained = os.environ.get('OVERLAY_PROBE_RETAINED') == '1'
@@ -42,6 +43,8 @@ def command(value):
 try:
     created = wait_for(lambda line: 'pill created' in line)
     window = int(re.search(r'window_number: Some\((\d+)\)', created)[1])
+    if retained:
+        assert_prewarmed(lines, window)
     samples, identities, timed_out, alpha_ms, dropped = [], [], [], [], 0
     for trial in range(31):
         if trial:

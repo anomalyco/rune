@@ -130,6 +130,10 @@ drawable's actual `presentedTime`, not queue submission or callback arrival time
 timestamps are reported separately, with a two-second deadline for a positive timestamp.
 It checks WindowServer identity before 31 shows (initial plus 30 re-shows). Set
 `OVERLAY_PROBE_RETAINED=1` for alpha-zero hosts; the old order-out baseline omits it.
+The retained run fails before showing if the pill has no alpha-zero `nextDrawable`
+acquisition before `on_created`. This catches regressions in the wgpu occlusion override.
+`python3 native/prewarm_trace.py <presentation.log>` checks every created overlay in a saved
+trace; keep `prewarm_trace.py` beside the runner when copying the harness to another host.
 `OVERLAY_PROBE_REDRAW=1` adds diagnostic redraws until a positive timestamp. Report this
 endpoint separately from the alpha-only reveal; it includes work absent in normal showing.
 `results.json` and `presentation.log` are the evidence; the lab has a bounded shutdown timer.

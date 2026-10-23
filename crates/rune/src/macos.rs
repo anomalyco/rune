@@ -483,6 +483,31 @@ impl Drop for Panel {
 mod tests {
     use super::*;
     #[test]
+    fn overlay_handlerless_hit_releases_native_ownership_in_every_input_mode() {
+        fn view(_: &(), _: &mut crate::Cx<()>) -> crate::El {
+            crate::el().child(crate::el().absolute(10.0, 10.0).size(20.0, 20.0).hit())
+        }
+        for mode in [OverlayInput::Regions, OverlayInput::None] {
+            let mut rt = crate::Runtime::new((), view, (100.0, 100.0), crate::Env::default());
+            rt.native_overlay = true;
+            rt.frame(0.0);
+            let pointer = PointerState { input: Cell::new(OverlayInput::Regions), ..Default::default() };
+            pointer.regions.borrow_mut().extend_from_slice(rt.hit_regions());
+            pointer.record_click(true, 20.0, 20.0);
+            pointer.clicks.borrow_mut().pop_front(); // winit dispatches Down
+            rt.pointer_down(20.0, 20.0);
+            assert!(!rt.pointer_captured(), "a handlerless hit owns only the native press");
+            assert!(pointer.captured.get());
+            pointer.record_click(false, 50.0, 50.0);
+            pointer.input.set(mode);
+            pointer.clicks.borrow_mut().pop_front(); // winit dispatches Up
+            pointer.released(); // acknowledged even when Runtime input is disabled
+            assert!(!pointer.captured.get(), "native release cannot depend on Runtime capture or mode");
+            assert!(!pointer.hit(50.0, 50.0));
+        }
+    }
+
+    #[test]
     fn overlay_lost_up_recovers_once_after_grace_using_release_position() {
         let pointer = PointerState { input: Cell::new(OverlayInput::Regions), ..Default::default() };
         pointer.regions.borrow_mut().push([10.0, 10.0, 30.0, 30.0]);
