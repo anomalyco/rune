@@ -5,6 +5,9 @@ without a code change (goldens, layout, input), newest first, with the rev that 
 
 ## dev
 
+- **Scroll views clip their content** (#7). `El::scroll` now clips its children to its box with a
+  hard edge, so overflowing content no longer draws, or takes presses, outside it. An explicit
+  `clip_soft`/`clip_fade` still sets the edge. No `--snap` goldens move.
 - **Optical sizing on by default** (`2eae09d`, from `edc9892`). Text with an `opsz` axis now uses each
   run's point size, as AppKit does: system SF at 13 pt renders as SF Text, so labels are slightly
   wider. Layout is otherwise unchanged, but `--snap` goldens with SF text move (Scrawl: all 7, PAE

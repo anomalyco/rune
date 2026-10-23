@@ -2926,7 +2926,8 @@ impl<S: 'static> Runtime<S> {
             if self.track_marks {
                 self.marks.resize(self.instances.len(), mark);
             }
-            if let Some(f) = n.vis.clip {
+            // A scroll viewport clips its content with a hard edge unless it sets soft ones.
+            if let Some(f) = n.vis.clip.or(n.scroll.map(|_| [0.0; 4])) {
                 clip = [r[0].max(clip[0]), r[1].max(clip[1]), r[2].min(clip[2]), r[3].min(clip[3])];
                 inherit_fade(&mut fade, &mut fade_origin, r, f.map(|v| v * sc * s));
             }
