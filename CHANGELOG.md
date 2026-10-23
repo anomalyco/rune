@@ -7,7 +7,9 @@ without a code change (goldens, layout, input), newest first, with the rev that 
 
 - **Cached overlay reveals preserve new motion.** A prewarmed macOS overlay settles hidden
   changes while preparing its cached frame; updates arriving after that frame in the same
-  turn as `show()` now animate instead of snapping. Ordinary overlay shows still settle.
+  turn as `show()` now animate instead of snapping, including a hidden poll that commits
+  the target and requests show together. Already-stale frames and ordinary overlay shows
+  still settle before reveal.
 - **rune-kit menus open instantly** (Abattoir "Open menus instantly, fade only the close"). `Menu`,
   `context_menu`, submenus and `Select`'s list now appear fully on the next frame instead of fading
   and scaling in from 0.96, and close with a plain `.25 / 0` fade (no scale). Menu item highlights

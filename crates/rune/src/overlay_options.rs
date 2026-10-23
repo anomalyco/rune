@@ -107,6 +107,9 @@ pub struct OverlayOptions {
     /// Create and warm a hidden native host on the event thread at startup. Desktop hosts
     /// retain their window and GPU surface across hide/show; Wayland must recreate on hide.
     /// macOS keeps the pre-rendered panel ordered in at alpha zero, with input disabled.
+    /// A hidden poll may change state and request show in one call: if the cache was current
+    /// before that poll, reveal animates from the warmed pose. Content already stale before
+    /// the poll (or geometry/live changes at reveal) is refreshed and settled first.
     pub prewarm: bool,
 }
 

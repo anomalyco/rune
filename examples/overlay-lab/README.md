@@ -58,8 +58,9 @@ does not guarantee ordering among peers. Native status/status+1 levels are macOS
   CanJoinAllSpaces, FullScreenAuxiliary and Stationary. Wayland ordering remains compositor-owned.
 - Desktop hide retains the native window, GPU surface and renderer. With `prewarm`, macOS
   keeps the panel ordered in at alpha zero with input disabled and a frame rendered into its
-  actual surface. An unchanged show only restores input and alpha; hidden changes render
-  before reveal. Hidden hosts have no pointer observers or draw loop. Wayland recreates its
+  actual surface. An unchanged show only restores input and alpha; stale hidden changes render
+  before reveal. A change made by the hidden poll that requests show can animate from a
+  current cached pose (see below). Hidden hosts have no pointer observers or draw loop. Wayland recreates its
   layer after hide.
 - macOS Regions mode samples native pointer position/buttons at up to 120 Hz while visible.
    Monitors wake the loop; native local downs establish ownership through delivery of Up.
@@ -81,6 +82,37 @@ The idle path filters outside-canvas motion and skips unchanged hover redraws. W
 run on a separate message-loop thread; X11 observes XI2 raw motion instead of polling. The
 shared Wayland socket wakes its private queue; legacy noninteractive HUDs bind no seat and
 reuse their empty input region.
+
+## Show, then animate in
+
+For a prewarmed macOS overlay, initialize the view in its entry pose A (for example, a
+collapsed capsule), then commit target B and request `show()` in the same hidden poll:
+
+```rust,ignore
+fn poll(s: &mut Capsule, _now: f64, tx: &mut Tx) -> bool {
+    // Keep the app's existing wake scheduling here (Tx::wake_after, for example).
+    let Ok(Command::Enter) = s.events.try_recv() else { return false; };
+    s.expanded = true;                  // B: normal motion, not tx.instant().
+    s.overlay.as_ref().unwrap().show(); // Reveal the prepared A, then animate toward B.
+    true
+}
+
+let configured = OverlaySpec::new("capsule", canvas_size, view)
+    .options(OverlayOptions { prewarm: true, ..Default::default() })
+    .poll(poll);
+// Initialize expanded=false, install the returned OverlayHandle in the state,
+// and let startup prewarm finish before accepting Enter commands.
+```
+
+No early show or 0.25-second delay is needed. A scheduling-only poll returning false leaves
+the prepared frame current. The reveal resumes motion already committed by the entry poll;
+it also schedules a fresh frame for instant/text-only changes.
+
+This applies when the cached frame was current **before** that poll. Earlier hidden updates,
+resizes, scale changes or newly sampled live values make it stale: Rune refreshes and settles
+those before reveal, preserving the no-stale-frame guarantee. Ordinary/unretained overlays
+still settle their first visible frame. A separate update after `show()` can also animate in;
+putting B in an earlier queued hidden update intentionally uses the stale-frame path instead.
 
 ## Native measurement harness (macOS)
 
