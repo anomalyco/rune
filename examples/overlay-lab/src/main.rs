@@ -8,6 +8,7 @@ const DARK: Color = Color { r: 0.055, g: 0.065, b: 0.085, a: 0.97 };
 struct Handles { pill: Option<OverlayHandle<State>>, pickers: Vec<OverlayHandle<State>> }
 struct State {
     underlay: bool,
+    hit_only: bool,
     clicks: u32,
     picker: bool,
     expanded: bool,
@@ -17,7 +18,7 @@ struct State {
     handles: Arc<Mutex<Handles>>,
 }
 fn init() -> State {
-    State { underlay: false, clicks: 0, picker: false, expanded: false, hovered: String::new(), selection: None, pointer: rune::Live::new([160.0, 100.0]), handles: Arc::default() }
+    State { underlay: false, hit_only: false, clicks: 0, picker: false, expanded: false, hovered: String::new(), selection: None, pointer: rune::Live::new([160.0, 100.0]), handles: Arc::default() }
 }
 fn show_picker(s: &mut State) {
     let handles = s.handles.lock().unwrap();
@@ -63,6 +64,10 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         }
         return root;
     }
+    if s.hit_only {
+        return col().w_full().h_full().center().child(el().key("hit-only").size(300.0, 48.0).hit()
+            .fill(DARK).child(text("Native hit region").color(Color::WHITE)));
+    }
     let mut chips = row().key("pill").padding(8.0).gap(4.0).radius(28.0).fill(DARK)
         .child(chip("Area", show_picker)).child(chip("Window", show_picker))
         .child(chip("Screen", show_picker)).child(chip("iPhone", |s| s.expanded = !s.expanded));
@@ -99,6 +104,8 @@ fn native_probe(pill: OverlayHandle<State>, app: rune::AppHandle<State>) {
                 "none" => pill.set_input(OverlayInput::None),
                 "all" => pill.set_input(OverlayInput::All),
                 "regions" => pill.set_input(OverlayInput::Regions),
+                "hit-only" => pill.update(|s, _| s.hit_only = true),
+                "chips" => pill.update(|s, _| s.hit_only = false),
                 "status" => {},
                 "quit" => app.quit(),
                 _ => { let _ = writeln!(stream, "unknown command"); continue; }

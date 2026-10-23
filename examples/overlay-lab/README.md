@@ -135,6 +135,17 @@ user grants Accessibility. Do not replace the granted binary. The runner default
 `~/tmp/rune-overlay-probe/mouse-path`; `OVERLAY_MOUSE_HELPER` overrides it. Set
 `RUNE_OVERLAY_TRACE_INPUT=1` to log regions, monitor callbacks, polls, and native input flips.
 
+`run-cua-input-probe.py <directory> prepare` is the parent's approved CuaDriver alternative.
+It holds `/tmp/pro-gui.lock`, starts two disposable lab processes, captures `grounding.png`,
+then waits up to two minutes on `cua-control.sock`. After inspecting that screenshot and
+its backing scale, send JSON `{"run":true,"scale":2}` over the socket. It verifies twenty
+enter/click/leave/click cycles, hide-mid-press recovery, and `hit-only` → None during an
+owned press; `hit-only` and `chips` control commands switch the fixture. The final None
+assertion checks underlay delivery because None stops polling. `cycles:0,hide_case:false`
+runs only the handlerless case. Preserve `actions.jsonl`, `steps.jsonl`, and both process
+logs. Current evidence passed 20 boundary cycles, hide recovery and the handlerless case;
+see `artifacts/overlays/cua-boundary/README.md` for method and diagnostic-run caveats.
+
 The capture helper uses ScreenCaptureKit with and without the exact CGWindowID in
 `excludingWindows`. It checks permission first and exits 77 if unavailable. Capture exclusion
 is **pending Scrawl integration**: Scrawl.app will verify its CGWindowID exclusion filter

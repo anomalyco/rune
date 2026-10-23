@@ -117,8 +117,9 @@ impl PointerState {
         let local = (cursor.x - frame.origin.x, frame.origin.y + frame.size.height - cursor.y);
         let kind: usize = event.map_or(0, |event| unsafe { msg_send![event, type] });
         let event_point: NSPoint = event.map_or(NSPoint::new(0.0, 0.0), |event| unsafe { msg_send![event, locationInWindow] });
-        eprintln!("overlay-input source={source} window={} kind={kind} event={event_point:?} cursor={cursor:?} local={local:?} frame={frame:?} captured={} ignore={} regions={:?}",
-            unsafe { panel.windowNumber() }, self.captured.get(), unsafe { panel.ignoresMouseEvents() }, self.regions.borrow());
+        let buttons: usize = unsafe { msg_send![NSEvent::class(), pressedMouseButtons] };
+        eprintln!("overlay-input source={source} window={} kind={kind} event={event_point:?} cursor={cursor:?} local={local:?} frame={frame:?} input={:?} buttons={buttons} captured={} ignore={} regions={:?}",
+            unsafe { panel.windowNumber() }, self.input.get(), self.captured.get(), unsafe { panel.ignoresMouseEvents() }, self.regions.borrow());
     }
     pub(crate) fn hit(&self, x: f32, y: f32) -> bool {
         self.captured.get() || match self.input.get() {
@@ -457,7 +458,7 @@ impl Panel {
         });
         let mut tokens = Vec::new();
         unsafe {
-            let token: Option<Retained<NSObject>> = msg_send_id![NSEvent::class(), addGlobalMonitorForEventsMatchingMask: movement, handler: &*global];
+            let token: Option<Retained<NSObject>> = msg_send_id![NSEvent::class(), addGlobalMonitorForEventsMatchingMask: mask, handler: &*global];
             tokens.extend(token);
             let token: Option<Retained<NSObject>> = msg_send_id![NSEvent::class(), addLocalMonitorForEventsMatchingMask: mask, handler: &*local];
             tokens.extend(token);
