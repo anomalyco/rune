@@ -9,6 +9,7 @@ description = "Generic, themable components for Rune. Components read only seman
 rune = { path = "../rune" }
 rune-motion = { path = "../rune-motion" }
 serde_json = "1"
+unicode-segmentation = "1.13"
 
 [dev-dependencies]
 # Reference rasteriser for the built-in glyphs (tests/glyphs.rs).

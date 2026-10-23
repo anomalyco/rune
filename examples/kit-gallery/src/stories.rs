@@ -1,7 +1,7 @@
 //! The stories, one function per `@opencode/ui` Storybook story id (title + export name).
 //! Layout wrappers copy each story's own inline styles.
 
-use rune::{El, TextEdit, TextStyle, Tx, col, el, row, text};
+use rune::{Edge, El, TextEdit, TextStyle, Tx, col, el, row, text};
 use rune_kit::*;
 use rune_theme_opencode::icons as ic;
 
@@ -148,6 +148,7 @@ stories! {
     "ui-segmented-control--basic" => segmented_basic,
     "ui-segmented-control--controlled" => segmented_controlled,
     "rune-keybind--symbols" => keybind_symbols,
+    "rune-rolling-text--basic" => rolling_text_basic,
 }
 
 fn combobox_searchable(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
@@ -1265,4 +1266,30 @@ fn segmented_controlled(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
 #[allow(dead_code)]
 fn spare() -> El {
     el()
+}
+
+/// Deadbolt's copy label and countdown, sans and mono. Each press of "Roll" advances one step:
+/// "Copy password" → "Copied, clears in 0:30" → "… 0:29", and the countdown "0:30" → "0:29" → ….
+fn rolling_text_basic(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let step: u32 = s.picked("roll", "0").parse().unwrap_or(0);
+    let label = if step == 0 { "Copy password".to_owned() } else { format!("Copied, clears in 0:{:02}", 31 - step.min(31)) };
+    let count = format!("0:{:02}", 30 - step.min(30));
+    let big = TextStyle::new(28.0, 600.0);
+    let line = |name: &str, e: El| row().gap(12.0).center_y().child(text(name).font(k.ty.small).color(k.c.text_faint).w(56.0)).child(e);
+    col()
+        .gap(14.0)
+        .child(
+            Button::new("Roll")
+                .on_press(|s: &mut G| {
+                    let n: u32 = s.picked("roll", "0").parse().unwrap_or(0);
+                    s.pick.insert("roll".into(), (n + 1).to_string());
+                })
+                .build(k)
+                .key("roll"),
+        )
+        .child(line("Sans", RollingText::new("roll-sans", label.clone()).font(k.ty.body).build(k)))
+        .child(line("Mono", RollingText::new("roll-mono", label.clone()).font(k.ty.mono).build(k)))
+        .child(line("Centred", row().w(260.0).center().child(RollingText::new("roll-centre", label).font(k.ty.body).build(k))))
+        .child(line("Count", RollingText::new("count-sans", count.clone()).font(big).from(Edge::Top).build(k)))
+        .child(line("", RollingText::new("count-mono", count).font(big.mono()).from(Edge::Top).build(k)))
 }

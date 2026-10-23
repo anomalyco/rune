@@ -3,7 +3,8 @@
 //! components on Rune's core neutral theme instead of OpenCode's; `--kit palette` on
 //! `Kit::from_palette` with a near-black, off-white and red seed (Deadbolt's palette);
 //! `--kit palette black` (dark) and `--kit palette warm` (light) use Deadbolt's pure-black and
-//! paper seeds with ink focus rings.
+//! paper seeds with ink focus rings. `--reduced-motion` renders in the runtime's reduced-motion
+//! mode.
 //!
 //! ```sh
 //! kit-gallery --list-scenes
@@ -32,6 +33,8 @@ pub struct G {
     pub combo: rune_kit::ComboboxState,
     pub neutral: bool,
     pub palette: bool,
+    /// `--reduced-motion`: the runtime's reduced-motion mode.
+    pub reduced: bool,
 }
 
 impl G {
@@ -61,6 +64,7 @@ fn init() -> G {
         combo: Default::default(),
         neutral: rune::extra_args().iter().any(|a| a == "neutral"),
         palette: rune::extra_args().iter().any(|a| a == "palette"),
+        reduced: rune::extra_args().iter().any(|a| a == "--reduced-motion"),
     }
 }
 
@@ -94,6 +98,9 @@ pub fn kit(s: &G, dark: bool) -> &'static Kit {
 }
 
 fn view(s: &G, cx: &mut Cx<G>) -> El {
+    if s.reduced {
+        cx.reduced_motion(true);
+    }
     let k = kit(s, cx.system_dark());
     let mut overlays = Vec::new();
     let body = stories::render(s, k, &mut overlays);

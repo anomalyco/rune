@@ -2788,6 +2788,7 @@ dependencies = [
  "rune",
  "rune-motion",
  "serde_json",
+ "unicode-segmentation",
 ]
 
 [[package]]
