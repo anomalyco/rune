@@ -5,6 +5,11 @@ without a code change (goldens, layout, input), newest first, with the rev that 
 
 ## dev
 
+- **Unselected segments hover.** A `SegmentedControl` with `on_pick` now lights an unselected
+  segment under the pointer: the `hover` overlay fills it and its label turns `text_base`, on the
+  first frame in, fading out over the runtime's default 0.1 s. The selected segment and controls
+  without `on_pick` are unchanged. A forced `State::Hover` on an unselected segment now also
+  fills it, so snapshots match.
 - **Native traces record when frames reach the screen.** On macOS, `--native --trace` frames
   now add `target_ms` (the display link's target) and `present_ms` (Metal's `presentedTime`
   for the frame's drawable), plus `present_dt_ms`, the gap from the previous presented frame

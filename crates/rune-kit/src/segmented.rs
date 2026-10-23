@@ -97,6 +97,13 @@ impl SegmentedControl {
             let st = self.states.get(i).copied().unwrap_or_default();
             let on = self.selected == Some(i);
             let ink = if on || st == State::Hover { c.text_base } else { c.text_muted };
+            // An unselected segment lights under the pointer on the first frame and fades as it
+            // leaves (the runtime's default hover motion); the selected one already reads raised.
+            let hovers = st == State::Rest && !on && self.pick.is_some();
+            let mut label = text(l.clone()).key("label").font(font).color(ink).truncate();
+            if hovers {
+                label = label.group_color(c.text_base);
+            }
             let mut seg = row()
                 .key(format!("segment{i}"))
                 .role("radio")
@@ -108,7 +115,7 @@ impl SegmentedControl {
                 .px(12.0)
                 .center()
                 .radius(6.0)
-                .child(text(l).key("label").font(font).color(ink).truncate());
+                .child(label);
             if self.width == Width::Fit {
                 seg = seg.grid_cell(i);
             }
@@ -122,7 +129,11 @@ impl SegmentedControl {
             match st {
                 State::Focus => seg = seg.outline(2.0, 1.0, c.border_focus),
                 State::Disabled => seg = seg.dim(0.45),
+                State::Hover if !on => seg = seg.fill(c.hover),
                 _ => {}
+            }
+            if hovers {
+                seg = seg.hover(c.hover).press(crate::press_over(c.hover, c.pressed));
             }
             if st != State::Disabled
                 && let Some(p) = &self.pick

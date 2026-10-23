@@ -26,6 +26,38 @@ fn fitted_segments_share_the_widest_labels_width_and_the_indicator_slides_betwee
     assert!((indicator[0] - target[0]).abs() < 0.01 && (indicator[2] - target[2]).abs() < 0.01);
 }
 
+fn pickable(selected: &usize, _: &mut Cx<usize>) -> El {
+    rune::row().child(
+        SegmentedControl::new(&["Left", "Either", "Right"], Some(*selected))
+            .fit()
+            .on_pick(|s: &mut usize, i, _: &mut rune::Tx| *s = i)
+            .build(&Kit::neutral(true))
+            .key("seg"),
+    )
+}
+
+fn hover(rt: &Runtime<usize>, key: &str) -> f32 {
+    rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap().hover
+}
+
+#[test]
+fn an_unselected_segment_hovers_on_the_first_frame_and_fades_as_the_pointer_leaves() {
+    let mut rt = Runtime::new(1usize, pickable, (600.0, 100.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let (x, y) = rt.find("segment0").unwrap();
+    rt.pointer_move(x, y);
+    rt.frame(1.0 / 120.0);
+    assert_eq!(hover(&rt, "segment0"), 1.0, "the first frame under the pointer is fully hovered");
+    let (x, y) = rt.find("segment1").unwrap();
+    rt.pointer_move(x, y);
+    rt.frame(1.0 / 120.0);
+    let leaving = hover(&rt, "segment0");
+    assert!(leaving > 0.0 && leaving < 1.0, "leaving fades: {leaving}");
+    assert_eq!(hover(&rt, "segment1"), 0.0, "the selected segment stays as it is");
+    rt.frame(0.5);
+    assert_eq!(hover(&rt, "segment0"), 0.0);
+}
+
 fn field(_: &usize, _: &mut Cx<usize>) -> El {
     rune::row().child(Select::new::<&str>("model", &[]).appearance(SelectAppearance::Field).width(200.0).current(Some("Parakeet")).open(true).trigger(&Kit::neutral(true)))
 }
