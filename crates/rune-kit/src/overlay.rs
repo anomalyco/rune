@@ -74,7 +74,7 @@ pub fn scrim<S: 'static>(key: impl Into<String>, close: impl Fn(&mut S) + 'stati
 
 /// The older raised surface (popover, hover card): raised fill, half-strength border, md shadow.
 fn raised(k: &Kit, e: El, radius: f32) -> El {
-    shadows(e.radius(radius).fill(k.c.surface_raised).border(1.0, k.alpha(k.c.std_border, 0.5)), &k.elevation.md)
+    shadows(k, e.radius(radius).fill(k.c.surface_raised).border(1.0, k.alpha(k.c.std_border, 0.5)), &k.elevation.md)
 }
 
 /// `Popover::new("share").trigger(button).title("Share").open(s.open).build(&kit, &mut layer)`.
@@ -273,10 +273,13 @@ impl Tooltip {
         let body = row().key(format!("{}-tooltip", self.key)).role("tooltip").center_y().gap(6.0).children(self.value);
         let body = match self.appearance {
             TooltipAppearance::Compact => {
-                shadows(body.px(6.0).py(5.0).radius(4.0).fill(c.layer_01), &k.elevation.floating)
+                shadows(k, body.px(6.0).py(5.0).radius(4.0).fill(c.layer_01), &k.elevation.floating)
             }
-            TooltipAppearance::Large => shadows(body.padding(12.0).radius(4.0).fill(c.layer_01), &k.elevation.floating),
+            TooltipAppearance::Large => {
+                shadows(k, body.padding(12.0).radius(4.0).fill(c.layer_01), &k.elevation.floating)
+            }
             TooltipAppearance::Standard => shadows(
+                k,
                 body.max_w(320.0).px(8.0).py(2.0).radius(k.radius.sm).fill(c.surface_float).border(1.0, c.border_weak),
                 &k.elevation.md,
             ),

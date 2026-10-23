@@ -196,6 +196,7 @@ impl Select {
             after_item = true;
         }
         let content = shadows(
+            k,
             col()
                 .key(format!("{}-content", self.key))
                 .min_w(160.0)
@@ -268,7 +269,7 @@ impl Select {
                 } else if self.state == State::Focus && !self.open {
                     t = t.outline(1.0, 0.0, c.border_focus);
                 } else {
-                    t = shadows(t, &k.elevation.button_neutral);
+                    t = shadows(k, t, &k.elevation.button_neutral);
                     if self.state == State::Rest && !self.open {
                         t = t.hover(c.hover);
                     }

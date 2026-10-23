@@ -1,6 +1,7 @@
 //! The rune-kit gallery: one scene per `@opencode/ui` Storybook story, in the story's id, so
 //! `scripts/kit-diff.py` can render both and diff them. `--kit neutral` renders the same
-//! components on Rune's core neutral theme instead of OpenCode's.
+//! components on Rune's core neutral theme instead of OpenCode's; `--kit palette` on
+//! `Kit::from_palette` with a near-black, off-white and red seed (Deadbolt's palette).
 //!
 //! ```sh
 //! kit-gallery --list-scenes
@@ -28,6 +29,7 @@ pub struct G {
     pub edits: [TextEdit; 8],
     pub combo: rune_kit::ComboboxState,
     pub neutral: bool,
+    pub palette: bool,
 }
 
 impl G {
@@ -56,10 +58,25 @@ fn init() -> G {
         edits: Default::default(),
         combo: Default::default(),
         neutral: rune::extra_args().iter().any(|a| a == "neutral"),
+        palette: rune::extra_args().iter().any(|a| a == "palette"),
     }
 }
 
 pub fn kit(s: &G, dark: bool) -> &'static Kit {
+    if s.palette {
+        static D: std::sync::OnceLock<Kit> = std::sync::OnceLock::new();
+        static L: std::sync::OnceLock<Kit> = std::sync::OnceLock::new();
+        let seed = |bg: &str, fg: &str| rune_kit::PaletteSeed {
+            bg: rune::color::hex(bg).unwrap(),
+            fg: rune::color::hex(fg).unwrap(),
+            accent: rune::color::hex("#e5484d").unwrap(),
+        };
+        return if dark {
+            D.get_or_init(|| Kit::from_palette(seed("#0a0a0a", "#ededed")))
+        } else {
+            L.get_or_init(|| Kit::from_palette(seed("#ffffff", "#171717")))
+        };
+    }
     if s.neutral {
         static D: std::sync::OnceLock<Kit> = std::sync::OnceLock::new();
         static L: std::sync::OnceLock<Kit> = std::sync::OnceLock::new();
@@ -92,10 +109,11 @@ mod tests {
     /// Every story builds on both appearances of both themes (no GPU needed).
     #[test]
     fn every_story_builds() {
-        for neutral in [false, true] {
+        for (neutral, palette) in [(false, false), (true, false), (false, true)] {
             for dark in [false, true] {
                 let mut s = init();
                 s.neutral = neutral;
+                s.palette = palette;
                 for (id, setup) in stories::SCENES {
                     setup(&mut s);
                     let k = kit(&s, dark);

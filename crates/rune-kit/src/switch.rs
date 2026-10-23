@@ -106,6 +106,7 @@ impl Switch {
         let (w, radius) = if hover { (13.0, 3.0) } else { (12.0, 2.0) };
         let x = 2.0 + if self.checked { if hover { 7.0 } else { 8.0 } } else { 0.0 };
         let thumb = shadows(
+            k,
             el().key("thumb")
                 .size(w, 12.0)
                 .absolute(x, 2.0)
@@ -121,7 +122,7 @@ impl Switch {
         if !hover && self.state == State::Rest {
             track = track.hover(overlay);
         }
-        shadows(track, elevation).motion(k.motion.control).child(thumb)
+        shadows(k, track, elevation).motion(k.motion.control).child(thumb)
     }
 
     fn standard_control(&self, k: &Kit, hover: bool) -> El {
@@ -145,7 +146,7 @@ impl Switch {
         } else {
             thumb.size(16.0, 16.0).absolute(0.0, 0.0).border(1.0, c.std_border)
         };
-        thumb = shadows(thumb, &k.elevation.knob).motion(k.motion.control);
+        thumb = shadows(k, thumb, &k.elevation.knob).motion(k.motion.control);
         el().size(28.0, 16.0).radius(3.0).fill(fill).border(1.0, border).motion(k.motion.control).child(thumb)
     }
 }

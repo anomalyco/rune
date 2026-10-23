@@ -117,7 +117,7 @@ fn paint(k: &Kit, mut e: El, s: Skin, state: State, interactive: bool) -> El {
         State::Pressed => over(s.pressed, s.fill),
         _ => s.fill,
     };
-    e = shadows(e.fill(fill), &s.shadows);
+    e = shadows(k, e.fill(fill), &s.shadows);
     if let Some([top, bottom]) = s.sheen {
         e = e.gradient(top, bottom);
     }

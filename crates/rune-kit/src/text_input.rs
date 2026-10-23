@@ -16,14 +16,14 @@ fn shell(k: &Kit, e: El, sheen: [f32; 2], state: State, invalid: bool, focused: 
         .gradient(k.light(sheen[0]), k.light(sheen[1]))
         .motion(k.motion.control);
     if state == State::Disabled {
-        return shadows(e, &k.elevation.button_neutral).dim(0.5);
+        return shadows(k, e, &k.elevation.button_neutral).dim(0.5);
     }
     if invalid {
         e = e.outline(1.0, 0.0, c.danger.fg);
     } else if focused || state == State::Focus {
         e = e.outline(1.0, 0.0, c.border_focus);
     } else {
-        e = shadows(e, &k.elevation.button_neutral);
+        e = shadows(k, e, &k.elevation.button_neutral);
         if state == State::Rest {
             e = e.hover(c.hover);
         }

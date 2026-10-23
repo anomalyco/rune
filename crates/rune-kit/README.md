@@ -55,10 +55,12 @@ let mut k = rune_kit::Kit::from_palette(rune_kit::PaletteSeed {
 k.radius.sm = 3.0;
 ```
 
-This derives surfaces, borders, states and elevation in linear light. Secondary text uses
-OKLab with contrast floors of 4.5:1 (muted) and 3:1 (faint), when the supplied foreground
-supports them. It uses neutral typography and motion; override individual tokens as needed. The default
-glyph set includes `k.glyph.lock`, `k.glyph.eye` and `k.glyph.eye_off`.
+Layers step OKLab lightness away from `bg`; borders, hover and press are `fg` at low alpha,
+solved over `bg` (`k.blend_over`). Secondary text uses OKLab with contrast floors of 4.5:1
+(muted) and 3:1 (faint), when the supplied foreground supports them. Focus rings are a neutral
+blue (set `k.c.border_focus` to change it), and elevation rings follow `k.c.border_base` when
+painted, so overriding border tokens after `from_palette` restyles them too. It uses neutral
+typography and motion; override individual tokens as needed. The default glyph set includes `k.glyph.lock`, `k.glyph.eye` and `k.glyph.eye_off`.
 
 - Builders end in `.build(&kit)`; overlays take `.build(&kit, &mut layer)` and return their
   trigger. Content is `El::anchored` to the trigger (flips, shifts, stays inside the window).

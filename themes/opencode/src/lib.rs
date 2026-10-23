@@ -208,6 +208,7 @@ fn build(dark: bool) -> Kit {
             disclosure: rune::Spring::new(0.3, 0.0),
         },
         blend_over: Some(blend),
+        ring: None,
     }
 }
 

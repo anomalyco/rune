@@ -95,7 +95,7 @@ impl Toast {
             .gap(12.0)
             .radius(8.0)
             .fill(c.layer_01);
-        root = shadows(root, &k.elevation.floating).child(top);
+        root = shadows(k, root, &k.elevation.floating).child(top);
         if !self.actions.is_empty() {
             let indent = 16.0 + 12.0;
             root = root.child(row().key("actions").pl(indent).gap(8.0).flex_wrap().children(self.actions));

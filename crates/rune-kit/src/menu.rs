@@ -263,11 +263,12 @@ impl Menu {
         let mut list = col().key(format!("{}-menu", self.key)).role("menu").focus_group().min_w(self.min_width).items_stretch();
         list = if standard {
             shadows(
+                k,
                 list.padding(4.0).radius(k.radius.md).fill(c.surface_raised).border(1.0, k.alpha(c.std_border, 0.5)),
                 &k.elevation.md,
             )
         } else {
-            shadows(list.padding(2.0).radius(6.0).fill(c.layer_01), &k.elevation.floating)
+            shadows(k, list.padding(2.0).radius(6.0).fill(c.layer_01), &k.elevation.floating)
         };
         for (i, entry) in self.entries.into_iter().enumerate() {
             list = list.child(match entry {

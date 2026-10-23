@@ -100,9 +100,9 @@ impl Acts {
 }
 
 /// Paints a list of box-shadow layers on `e`.
-pub(crate) fn shadows(mut e: El, list: &[Shadow]) -> El {
-    for s in list {
-        e = e.box_shadow(*s);
+pub(crate) fn shadows(k: &Kit, mut e: El, list: &[Shadow]) -> El {
+    for s in k.shadow_layers(list) {
+        e = e.box_shadow(s);
     }
     e
 }

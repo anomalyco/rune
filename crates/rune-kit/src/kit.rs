@@ -199,6 +199,10 @@ pub struct Kit {
     pub motion: Motion,
     /// The surface translucent colours are solved over (for sRGB-equivalent blending).
     pub blend_over: Option<Color>,
+    /// When set, zero-blur elevation layers (rings) take this palette colour as they are
+    /// painted, so they follow token overrides made after the kit was built
+    /// ([`Kit::from_palette`] sets `c.border_base`).
+    pub ring: Option<fn(&Palette) -> Color>,
 }
 
 impl Kit {
@@ -214,6 +218,15 @@ impl Kit {
             return c;
         }
         rune::theme::srgb_equivalent(c, backdrop)
+    }
+
+    /// `layers` as painted: rings recoloured by [`Kit::ring`] when the theme sets it.
+    pub fn shadow_layers<'a>(&'a self, layers: &'a [Shadow]) -> impl Iterator<Item = Shadow> + 'a {
+        let ring = self.ring.map(|f| f(&self.c));
+        layers.iter().map(move |s| match ring {
+            Some(color) if s.blur == 0.0 => Shadow { color, ..*s },
+            _ => *s,
+        })
     }
 
     /// White at opacity `a` painted on `backdrop`.
