@@ -26,6 +26,7 @@ use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowId, WindowLevel};
 
 use crate::el::{Align, El, Tx};
+use crate::compose::{Compositor, Frame};
 use crate::render::{Gpu, Renderer};
 use crate::runtime::{Cx, Env, Runtime, Waker};
 use crate::text::TextSystem;
@@ -178,7 +179,7 @@ impl<T: 'static> OverlayHandle<T> {
     }
 
     /// Change the overlay's state on the UI thread, in call order, shown or not.
-    /// `Tx::wake_after` only redraws; the view re-runs on `update` (no poll callback yet).
+    /// `Tx::wake_after` invokes the configured poll at its deadline, including while hidden.
     pub fn update(&self, f: impl FnOnce(&mut T, &mut Tx) + Send + 'static) {
         self.request(|q| q.updates.push(Box::new(f)));
     }
@@ -229,6 +230,7 @@ pub(crate) struct Overlay<T: 'static> {
     shared: Arc<Shared<T>>,
     rt: Runtime<T>,
     clipboard: crate::clipboard::Client,
+    compositor: Option<Box<dyn Compositor<T>>>,
     /// The non-activating panel holding winit's view (macOS), kept with the window. Declared
     /// before the window so the view goes back to it first.
     #[cfg(target_os = "macos")]
@@ -250,7 +252,7 @@ pub(crate) struct Overlay<T: 'static> {
 
 impl<T: 'static> Overlay<T> {
     pub(crate) fn new<S>(configured: impl Into<ConfiguredOverlay<T>>, state: T, app: &AppSpec<S>) -> (Self, OverlayHandle<T>) {
-        let ConfiguredOverlay { spec, options, on_key, on_created } = configured.into();
+        let ConfiguredOverlay { spec, options, on_key, on_created, poll, compositor } = configured.into();
         let shared = Arc::new(Shared { native: Mutex::default(), requests: Mutex::default(), availability: AtomicU8::new(0), wake: Mutex::new(None) });
         let text = TextSystem::new(app.fonts, app.families);
         let mut rt = Runtime::with_text(state, spec.view, spec.size, Env::default(), text);
@@ -259,6 +261,11 @@ impl<T: 'static> Overlay<T> {
         rt.native_overlay = true;
         rt.on_key = on_key;
         rt.set_live_visible(false);
+        // App and overlay may use different state types. Downcast the function pointer
+        // once, without a per-frame adapter or changing App::overlay's generic API.
+        rt.poll = poll.or_else(|| app.poll.and_then(|f| {
+            (&f as &dyn std::any::Any).downcast_ref::<fn(&mut T, f64, &mut Tx) -> bool>().copied()
+        }));
         let overlay = Overlay {
             on_created,
             pending_input: None,
@@ -271,6 +278,7 @@ impl<T: 'static> Overlay<T> {
             shared: shared.clone(),
             rt,
             clipboard: Default::default(),
+            compositor,
             live: None,
             #[cfg(target_os = "macos")]
             panel: None,
@@ -321,7 +329,7 @@ impl<T: 'static> Overlay<T> {
         }
         self.visible = true;
         if !retained { self.dirty = true; }
-        self.idle = true;
+        self.idle = self.compositor.as_ref().is_none_or(|c| !c.animating());
     }
 
     fn prepare(&mut self, event_loop: &ActiveEventLoop) {
@@ -606,7 +614,10 @@ impl<T: 'static> Overlay<T> {
                 }
             }
         };
-        let pooled = self.gpu.clone().or_else(|| self.gpu_pool.borrow().upgrade());
+        let features = self.compositor.as_ref().map_or(wgpu::Features::empty(), |c| c.features());
+        let pooled = self.gpu.clone().or_else(|| self.gpu_pool.borrow().upgrade().filter(|gpu| {
+            gpu.device.features().contains(features & gpu.adapter.features())
+        }));
         let surface = match pooled {
             Some(gpu) => {
                 let surface = make(&gpu.instance)?;
@@ -616,7 +627,7 @@ impl<T: 'static> Overlay<T> {
             None => {
                 let instance = Gpu::instance();
                 let surface = make(&instance)?;
-                let gpu = Arc::new(Gpu::try_new(instance, Some(&surface)).ok()?);
+                let gpu = Arc::new(Gpu::try_with_features(instance, Some(&surface), features).ok()?);
                 *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
                 self.gpu = Some(gpu);
                 surface
@@ -701,17 +712,23 @@ impl<T: 'static> Overlay<T> {
             if let Some(gpu) = &self.gpu { let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely()); }
             return;
         }
-        let (Some(live), Some((renderer, _)), Some(gpu)) = (&self.live, &mut self.renderer, &self.gpu) else { return };
-        renderer.prepare(&gpu.device, &gpu.queue, &mut self.rt.text.atlas, &self.rt.instances, (live.config.width, live.config.height));
-        renderer.upload_images(&gpu.device, &gpu.queue, &mut self.rt.images);
-        renderer.prepare_surfaces(&gpu.device, &gpu.queue, &self.rt.surfaces, (live.config.width, live.config.height));
+        let Some(live) = &self.live else { return };
+        self.warm_offscreen((live.config.width, live.config.height));
+    }
+
+    fn warm_offscreen(&mut self, size: (u32, u32)) {
+        let (Some((renderer, format)), Some(gpu)) = (&mut self.renderer, &self.gpu) else { return };
         let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("overlay prewarm"), size: wgpu::Extent3d { width: live.config.width, height: live.config.height, depth_or_array_layers: 1 },
+            label: Some("overlay prewarm"), size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
             mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
-            format: live.config.format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[],
+            format: *format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[],
         });
         let mut enc = gpu.device.create_command_encoder(&Default::default());
-        renderer.draw(&mut enc, &target.create_view(&Default::default()), [0.0; 4]);
+        render_frame(&mut Frame {
+            device: &gpu.device, queue: &gpu.queue, encoder: &mut enc,
+            target: &target.create_view(&Default::default()), format: *format, size,
+            dt: 0.0, update_ms: 0.0, rt: &mut self.rt, ui: renderer,
+        }, &mut self.compositor);
         renderer.submit(&gpu.queue, enc);
         let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
     }
@@ -740,8 +757,12 @@ impl<T: 'static> Overlay<T> {
     fn apply_updates(&mut self, updates: Vec<Update<T>>) {
         if updates.is_empty() { return; }
         for f in updates { self.rt.update(f); }
-        // Register timer requests even before the first show; hidden overlays never draw.
-        self.advance();
+        if self.visible {
+            self.dirty = true;
+        } else {
+            // Register timer requests even before the first show; hidden overlays never draw.
+            self.advance();
+        }
     }
 
     fn advance(&mut self) {
@@ -754,8 +775,13 @@ impl<T: 'static> Overlay<T> {
     fn wake_due(&mut self, now: Instant) {
         let deadline = self.rt.wall_start.and_then(|start| start.checked_add(std::time::Duration::try_from_secs_f64(self.rt.wake_deadline()?).ok()?));
         if deadline.is_some_and(|deadline| deadline <= now) {
-            // Drain independently of surface acquisition (hidden, minimized, or unavailable).
-            self.advance();
+            if self.visible {
+                // Like the window host, poll once in the upcoming frame, after acquiring
+                // the drawable. A false poll result does not keep the display loop alive.
+                self.dirty = true;
+            } else {
+                self.advance();
+            }
         }
     }
 
@@ -908,9 +934,10 @@ impl<T: 'static> Overlay<T> {
             }
         };
         let now = Instant::now();
-        let dt = if self.idle { 1.0 / 120.0 } else { (now - self.last).as_secs_f64().min(1.0 / 30.0) };
+        let dt = if prewarm { 0.0 } else if self.idle { 1.0 / 120.0 } else { (now - self.last).as_secs_f64().min(1.0 / 30.0) };
         self.last = now;
-        let animating = self.rt.frame(dt);
+        let mut animating = self.rt.frame(dt);
+        let update_ms = if self.compositor.is_some() { now.elapsed().as_secs_f64() * 1000.0 } else { 0.0 };
         self.rt.shell_request = None;
         self.clipboard.flush(&mut self.rt);
         // Publish the geometry just rendered, never a layout cached from the preceding frame.
@@ -923,11 +950,13 @@ impl<T: 'static> Overlay<T> {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Backing::Layer(layer) = &live.backing { layer.input_regions(self.rt.hit_regions(), self.interactive); }
         let view = frame.texture.create_view(&Default::default());
-        renderer.prepare(&gpu.device, &gpu.queue, &mut self.rt.text.atlas, &self.rt.instances, (live.config.width, live.config.height));
-        renderer.upload_images(&gpu.device, &gpu.queue, &mut self.rt.images);
-        renderer.prepare_surfaces(&gpu.device, &gpu.queue, &self.rt.surfaces, (live.config.width, live.config.height));
         let mut enc = gpu.device.create_command_encoder(&Default::default());
-        renderer.draw(&mut enc, live.alpha.as_ref().map_or(&view, |a| &a.view), [0.0, 0.0, 0.0, 0.0]);
+        animating |= render_frame(&mut Frame {
+            device: &gpu.device, queue: &gpu.queue, encoder: &mut enc,
+            target: live.alpha.as_ref().map_or(&view, |a| &a.view), format: live.config.format,
+            size: (live.config.width, live.config.height), dt, update_ms,
+            rt: &mut self.rt, ui: renderer,
+        }, &mut self.compositor);
         if let Some(alpha) = &live.alpha {
             alpha.draw(&mut enc, &view);
         }
@@ -940,6 +969,20 @@ impl<T: 'static> Overlay<T> {
         self.dirty = false;
         self.idle = !(animating || self.rt.has_pending_input());
         !self.idle
+    }
+}
+
+/// Both native surface frames and offscreen prewarming use the same compositor path.
+fn render_frame<T: 'static>(f: &mut Frame<'_, T>, compositor: &mut Option<Box<dyn Compositor<T>>>) -> bool {
+    f.ui.upload_images(f.device, f.queue, &mut f.rt.images);
+    f.ui.prepare_surfaces(f.device, f.queue, &f.rt.surfaces, f.size);
+    if let Some(c) = compositor {
+        c.render(f);
+        c.animating()
+    } else {
+        f.ui.prepare(f.device, f.queue, &mut f.rt.text.atlas, &f.rt.instances, f.size);
+        f.ui.draw(f.encoder, f.target, [0.0; 4]);
+        false
     }
 }
 
@@ -1276,10 +1319,9 @@ mod tests {
             name: "timer test", size: (20.0, 20.0), edge: ScreenEdge::Top,
             margin: 0.0, align: Align::Center, inset: 0.0, interactive: false, view,
         };
-        let (mut overlay, handle) = Overlay::new(spec, Vec::new(), &app);
+        let (mut overlay, handle) = Overlay::new(spec.options(Default::default()).poll(|seen, now, _| { seen.push(now); false }), Vec::new(), &app);
         // The runtime's virtual clock makes scheduling exact; the host maps it to wall time.
         overlay.rt.wall_start = None;
-        overlay.rt.poll = Some(|seen, now, _| { seen.push(now); false });
         handle.update(|_, tx| tx.wake_after(Duration::from_millis(250)));
         let updates = std::mem::take(&mut overlay.shared.requests.lock().unwrap().updates);
         overlay.apply_updates(updates);
@@ -1299,5 +1341,106 @@ mod tests {
         assert!(!overlay.draw(), "hidden overlays do not acquire or animate a surface");
         assert_eq!(overlay.rt.state.len(), 2, "no polling after the one wake");
         assert!(overlay.live.is_none() && overlay.gpu.is_none());
+    }
+
+    #[test]
+    fn overlay_poll_inherits_overrides_and_wakes_visible_state_once() {
+        use std::time::Duration;
+        #[derive(Default)]
+        struct State { polls: usize, value: f32 }
+        fn view(s: &State, _: &mut Cx<State>) -> El {
+            crate::el().child(crate::el().key("value").size(10.0 + s.value, 10.0))
+        }
+        fn poll(s: &mut State, _: f64, tx: &mut Tx) -> bool {
+            s.polls += 1;
+            if s.polls == 1 { tx.wake_after(Duration::from_millis(250)); return false; }
+            if s.polls == 2 { s.value = 7.0; tx.instant(); return true; }
+            false
+        }
+        let app = AppSpec { poll: Some(poll), ..AppSpec::new("poll", (30.0, 20.0), State::default, view) };
+        let (mut overlay, _) = Overlay::new(OverlaySpec::new("poll", app.size, view), State::default(), &app);
+        overlay.visible = true;
+        overlay.rt.wall_start = None;
+        assert!(!overlay.rt.frame(0.0));
+        assert_eq!(overlay.rt.state.polls, 1);
+        assert_eq!(overlay.rt.wake_deadline(), Some(0.25), "false still registers wake_after");
+        overlay.dirty = false;
+        let start = Instant::now() - Duration::from_millis(251);
+        overlay.rt.wall_start = Some(start);
+        overlay.wake_due(start + Duration::from_millis(249));
+        assert!(!overlay.dirty);
+        overlay.wake_due(Instant::now());
+        assert!(overlay.dirty, "visible wake schedules the frame");
+        assert_eq!(overlay.rt.state.polls, 1, "do not poll twice: the drawable frame owns the poll");
+        assert!(!overlay.rt.frame(0.0), "true means changed state, not continuous animation");
+        assert_eq!(overlay.rt.state.polls, 2);
+        assert_eq!(overlay.rt.presented("value").unwrap().0[2], 17.0);
+        assert_eq!(overlay.wake_deadline(), None);
+        overlay.dirty = false;
+        overlay.wake_due(Instant::now());
+        assert!(!overlay.dirty, "no timer or animation means no more scheduled frames");
+
+        let configured = OverlaySpec::new("override", app.size, view).options(Default::default())
+            .poll(|s, _, _| { s.polls += 10; false });
+        let (mut other, _) = Overlay::new(configured, State::default(), &app);
+        other.rt.frame(0.0);
+        assert_eq!(other.rt.state.polls, 10, "builder overrides inherited poll");
+        assert_eq!(other.wake_deadline(), None);
+
+        fn other_view(_: &u32, _: &mut Cx<u32>) -> El { crate::el() }
+        let (mut different, _) = Overlay::new(OverlaySpec::new("different", app.size, other_view), 0_u32, &app);
+        assert!(different.rt.poll.is_none(), "never apply a poll to a different state type");
+        different.rt.frame(0.0);
+        assert_eq!(different.rt.state, 0);
+    }
+
+    #[test]
+    fn overlay_compositor_observes_prewarm_and_each_rendered_frame() {
+        use crate::render::{Offscreen, OFFSCREEN_FORMAT};
+        struct Trace(Rc<RefCell<Vec<f32>>>);
+        impl Compositor<f32> for Trace {
+            fn render(&mut self, f: &mut Frame<'_, f32>) {
+                f.draw_ui();
+                let element = f.rt.elements().into_iter().find(|e| e.key.as_deref() == Some("box")).unwrap();
+                self.0.borrow_mut().push(element.rect[2]);
+            }
+            fn animating(&self) -> bool { self.0.borrow().len() < 3 }
+        }
+        fn view(width: &f32, _: &mut Cx<f32>) -> El {
+            crate::el().size(32.0, 16.0).child(crate::el().key("box").size(*width, 8.0).fill(crate::Color::WHITE))
+        }
+        let app = AppSpec::new("trace", (32.0, 16.0), || 8.0, view);
+        let trace = Rc::new(RefCell::new(Vec::new()));
+        let spec = OverlaySpec::new("trace", app.size, view).options(OverlayOptions { prewarm: true, ..Default::default() })
+            .compositor(Trace(trace.clone()));
+        let (mut overlay, _) = Overlay::new(spec, 8.0, &app);
+        let gpu = Arc::new(Gpu::headless());
+        overlay.renderer = Some((Renderer::new(&gpu.device, OFFSCREEN_FORMAT), OFFSCREEN_FORMAT));
+        overlay.gpu = Some(gpu.clone());
+        overlay.rt.transparent = true;
+        overlay.rt.frame(0.0);
+        overlay.warm_offscreen((32, 16));
+        assert_eq!(*trace.borrow(), [8.0], "offscreen prewarm must use the compositor too");
+        assert!(!overlay.visible);
+
+        let target = Offscreen::new(&gpu.device, 32, 16);
+        for (width, more) in [(12.0, true), (20.0, false)] {
+            overlay.rt.update(|s, tx| { *s = width; tx.instant(); });
+            overlay.rt.frame(1.0 / 60.0);
+            let renderer = &mut overlay.renderer.as_mut().unwrap().0;
+            let mut enc = gpu.device.create_command_encoder(&Default::default());
+            let animating = render_frame(&mut Frame {
+                device: &gpu.device, queue: &gpu.queue, encoder: &mut enc, target: &target.view,
+                format: OFFSCREEN_FORMAT, size: (32, 16), dt: 1.0 / 60.0, update_ms: 0.0,
+                rt: &mut overlay.rt, ui: renderer,
+            }, &mut overlay.compositor);
+            assert_eq!(animating, more, "honour compositor-driven animation and stop when it settles");
+            target.copy(&mut enc);
+            renderer.submit(&gpu.queue, enc);
+            let pixels = target.read(&gpu.device);
+            assert_eq!(&pixels[4..8], &[255; 4], "draw_ui renders the overlay content");
+            assert_eq!(&pixels[(15*32+31)*4..(15*32+32)*4], &[0; 4], "draw_ui preserves the transparent clear");
+        }
+        assert_eq!(*trace.borrow(), [8.0, 12.0, 20.0], "one observation per rendered frame, with current geometry");
     }
 }

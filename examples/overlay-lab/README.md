@@ -38,6 +38,14 @@ does not guarantee ordering among peers. Native status/status+1 levels are macOS
   `Regions` uses `.hit()` geometry; `Legacy` restores the spec's `interactive` behavior.
 - `set_follow_pointer(bool)` enables/disables following independently of placement/input.
   Scrawl can keep it disabled and supply its own `Rect` and `set_display` requests.
+- `ConfiguredOverlay::poll(fn(&mut T, f64, &mut Tx) -> bool)` overrides the app's poll.
+  Overlays with the same state type inherit `AppSpec::poll`; different state types use the
+  builder. Return true when state changed, and use `Tx::wake_after` for the next deadline.
+  Hidden deadlines poll without drawing, matching the window host.
+- `ConfiguredOverlay::compositor(...)` takes the same `Compositor<T>` as `App::compositor`.
+  Call `frame.draw_ui()` and then `frame.rt.elements()` to trace each rendered overlay frame,
+  including alpha-zero/offscreen prewarm. Runtime-only hidden updates do not call it.
+  `animating()` keeps visible frames running; false allows them to go idle.
 - Standalone modifier transitions (for example, pressing/releasing Shift without another
   key) are not delivered yet. They follow Dax's shared modifier-only key event in item 6;
   the desktop and Wayland overlay callbacks have TODOs for that integration. Pressed keys

@@ -116,6 +116,8 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub options: OverlayOptions,
     pub on_key: Option<fn(&mut T, &crate::KeyEvent, &mut crate::Tx) -> bool>,
     pub on_created: Option<Box<dyn FnOnce(OverlayCreated)>>,
+    pub(crate) poll: Option<fn(&mut T, f64, &mut crate::Tx) -> bool>,
+    pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<T>>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -126,6 +128,18 @@ pub struct OverlayCreated {
 }
 
 impl<T: 'static> ConfiguredOverlay<T> {
+    /// Called before each frame; true means state changed, not that another frame is due.
+    /// Defaults to the app's poll when its state type matches this overlay's. Other state
+    /// types have no inherited poll. Use `Tx::wake_after` for the next timed update;
+    /// deadlines also run while hidden, like the window host, without drawing.
+    pub fn poll(mut self, f: fn(&mut T, f64, &mut crate::Tx) -> bool) -> Self { self.poll = Some(f); self }
+    /// Draw every rendered overlay frame, including hidden prewarm frames, through this
+    /// compositor. `Frame::draw_ui` keeps the overlay's transparent clear. Runtime-only
+    /// hidden timer updates do not render or call the compositor.
+    pub fn compositor(mut self, compositor: impl crate::compose::Compositor<T>) -> Self {
+        self.compositor = Some(Box::new(compositor));
+        self
+    }
     pub fn on_key(mut self, f: fn(&mut T, &crate::KeyEvent, &mut crate::Tx) -> bool) -> Self { self.on_key = Some(f); self }
     /// Called once on the event thread after native creation, before the first show.
     /// Use `prewarm: true` to create at startup rather than waiting for `show()`.
@@ -138,7 +152,7 @@ impl<T: 'static> OverlaySpec<T> {
     }
 
     pub fn options(self, options: OverlayOptions) -> ConfiguredOverlay<T> {
-        ConfiguredOverlay { spec: self, options, on_key: None, on_created: None }
+        ConfiguredOverlay { spec: self, options, on_key: None, on_created: None, poll: None, compositor: None }
     }
 }
 
