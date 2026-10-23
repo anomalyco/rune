@@ -1,4 +1,5 @@
 import { useEffect, useState, type JSX, type MouseEvent } from "react"
+import { Wordmark } from "./brand/Wordmark"
 import { layers, milestones, principles, risks } from "./content"
 import { ArchitectureView, HomeView, HowItWorksView, NotFoundView, PrinciplesView, RoadmapView, num } from "./pages"
 import { stripBase, withBase } from "./base"
@@ -6,11 +7,10 @@ import { REPO, normalizePath } from "./routes"
 import signature from "./footer-signature.svg"
 import { Frame, type NavGroup, type NavItem } from "./system/Frame"
 
-function Wordmark() {
+function Brand() {
   return (
-    <a className="wordmark" href={withBase("/")} aria-label="Rune, overview">
-      <span className="wordmark-glyph" aria-hidden="true" />
-      Rune
+    <a className="brand" href={withBase("/")} aria-label="Rune, overview">
+      <Wordmark />
     </a>
   )
 }
@@ -29,7 +29,13 @@ function navGroups(pathname: string): NavGroup[] {
     {
       label: "Rune",
       items: [
-        page("/", "Overview", [spy("status", "Status"), spy("next", "Next")]),
+        page("/", "Overview", [
+          spy("app", "A Rune app"),
+          spy("frame", "From code to screen"),
+          spy("how", "How do I…"),
+          spy("build", "What you can build"),
+          spy("next", "Next"),
+        ]),
         page("/how-it-works", "How it works", [
           spy("frame", "A frame"),
           spy("app", "A window and a view"),
@@ -127,7 +133,12 @@ export function App({ pathname: initial }: { pathname?: string }) {
 
   return (
     <div className="site" onClick={onClick}>
-      <Frame brand={<Wordmark />} groups={navGroups(pathname)} footer={<Footer />}>
+      <Frame
+        brand={<Brand />}
+        groups={navGroups(pathname)}
+        revealBrandAfter={pathname === "/" ? "home-hero" : undefined}
+        footer={<Footer />}
+      >
         <View />
       </Frame>
     </div>

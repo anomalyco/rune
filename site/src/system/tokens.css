@@ -1,5 +1,5 @@
 /* Anomaly docs tokens. Dark only. One sans for interface and prose, one mono for values, code and numbers.
-   Copy this file and primitives.css into any Anomaly docs page; nothing here knows about Abattoir. */
+   Copied from @anomalyco/site in Abattoir (packages/site). */
 @font-face { font-family: "Geist"; src: url("/fonts/geist.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
 @font-face { font-family: "Geist Mono"; src: url("/fonts/geist-mono.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
 
@@ -7,7 +7,8 @@
   --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
-  /* Type: six sizes, line heights on the 4 px grid. Mono only at 12 and 13, one step under the sans beside it. */
+  /* Type: seven sizes (11 only for sidebar section labels), line heights on the 4 px grid. Mono only at 12 and 13, one step under the sans beside it. */
+  --text-11: 500 11px/16px var(--font-sans);
   --text-12: 400 12px/16px var(--font-sans);
   --text-13: 400 13px/20px var(--font-sans);
   --text-14: 400 14px/22px var(--font-sans);
@@ -42,6 +43,10 @@
   --line-2: rgb(255 255 255 / .16);
   --ink: #ff2a2a;
   --ink-dim: color-mix(in srgb, var(--ink) 55%, transparent);
+  /* Code: three quiet hues at one lightness, red only for keywords. */
+  --code-keyword: oklch(.74 .12 25);
+  --code-string: oklch(.84 .06 80);
+  --code-call: oklch(.84 .045 235);
 
   /* Radius: one family; a control nests inside a bench with 4 px to spare. */
   --radius-1: 4px;

@@ -8,6 +8,7 @@
     "build": "bun scripts/build.ts",
     "preview": "vite preview",
     "check": "tsc --noEmit",
+    "icons": "bun scripts/icons.ts",
     "deploy:dev": "bun scripts/build.ts --mode dev && cf deploy --prebuilt --mode dev",
     "deploy:production": "bun scripts/build.ts --mode production && cf deploy --prebuilt --mode production"
   },

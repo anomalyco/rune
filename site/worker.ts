@@ -28,7 +28,11 @@ export default {
 
     const assetUrl = new URL(url)
     assetUrl.pathname = path
-    const response = await env.ASSETS.fetch(new Request(assetUrl, request))
+    let response = await env.ASSETS.fetch(new Request(assetUrl, request))
+    if (response.status === 404) {
+      const page = await env.ASSETS.fetch(new Request(new URL("/404", assetUrl)))
+      if (page.ok) response = new Response(page.body, { status: 404, headers: page.headers })
+    }
     const headers = new Headers(response.headers)
     // Asset redirects (trailing slashes, /index.html) point at root-relative paths.
     const location = headers.get("Location")

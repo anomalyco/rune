@@ -37,10 +37,19 @@ URLs are off, so nothing bypasses Access.
 
 ## Design system
 
-`src/system/` (`tokens.css`, `primitives.css`, `Frame.tsx`, `useActiveId.ts`) and the Geist fonts in
-`public/fonts/` are copied unchanged from Abattoir's design system (Anomaly's docs system, direction "Workbench").
-`src/site.css` sets Rune's accent by overriding `--ink` and adds only what the system lacks: the wordmark, the
-architecture diagram, the decisions table and the roadmap rows. These files should become a shared package that both
-sites import; until then, copy changes across by hand rather than editing the copies here.
+`src/system/` (`tokens.css`, `primitives.css`, `Frame.tsx`, `useScrollSpy.ts`) and the Geist fonts in
+`public/fonts/` are copied unchanged, apart from the font URLs, from `packages/site` in Abattoir (Anomaly's docs
+system, direction "Workbench"). `src/site.css` sets Rune's accent by overriding `--ink` and adds only what the system
+lacks: the wordmark, the home page, the diagrams, the decisions table and the roadmap rows. Once `@anomalyco/site` is
+published, import it instead of these copies; until then, copy changes across by hand rather than editing them here.
 
-The screenshots in `public/shots/` are Rune's own headless renders from `demo/`, resized.
+The screenshots in `public/shots/` are Rune's own headless renders (`--snap`) of the examples, some resized.
+
+## Brand
+
+The logo is ᚱUNE on Abattoir's pixel grid, the R swapped for the rune ᚱ. `src/brand/pixels.ts` holds the letters;
+`Wordmark.tsx` draws them in the sidebar (2 px a cell) and as the home masthead (12 px), and runs a light down the ᚱ's
+strokes on hover, and every 5–9 s on the home page while the masthead is on screen (`motion.ts`). `bun run icons`
+redraws the favicons, app icons and `og.png` in `public/` from the same pixels.
+
+The prerender also writes `404.html` (served by the Worker for missing paths) and `llms.txt`.

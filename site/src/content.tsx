@@ -1,7 +1,11 @@
 import type { ReactNode } from "react"
 
 export type Spec = { label: string; values: ReactNode[]; mono?: boolean }
-export type Entry = { slug: string; title: string; body: ReactNode; spec?: Spec[] }
+/** A file or folder in this repo that implements an idea. The prerender fails if the path doesn't exist. */
+export type CodeRef = { path: string; note?: string }
+export type Entry = { slug: string; title: string; body: ReactNode; spec?: Spec[]; code?: CodeRef[] }
+
+const at = (path: string, note?: string): CodeRef => ({ path, note })
 
 export const principles: Entry[] = [
   {
@@ -18,6 +22,10 @@ export const principles: Entry[] = [
     spec: [
       { label: "Frame", values: ["8.33 ms at 120 Hz"], mono: true },
       { label: "Target", values: ["event → frame p50 ≤ 8.3 ms"], mono: true },
+    ],
+    code: [
+      at("crates/rune-motion/src/spring.rs", "closed-form springs"),
+      at("examples/settings/src/main.rs", "the smoke test"),
     ],
   },
   {
@@ -40,6 +48,11 @@ export const principles: Entry[] = [
       { label: "Spring", values: [<code>Spring::new(duration, bounce)</code>], mono: true },
       { label: "Default", values: ["bounce 0"], mono: true },
     ],
+    code: [
+      at("crates/rune-motion/src/tokens.rs", "the motion palette"),
+      at("crates/rune-motion/src/transition.rs", "exits before unmount"),
+      at("scripts/check-ui.py", "motion gates"),
+    ],
   },
   {
     slug: "animation-off-app",
@@ -52,6 +65,10 @@ export const principles: Entry[] = [
       </p>
     ),
     spec: [{ label: "Target", values: ["app work per animated frame: 0"], mono: true }],
+    code: [
+      at("crates/rune-motion/src/scene.rs", "spring tracks"),
+      at("crates/rune/tests/live.rs", "no view, layout or shaping"),
+    ],
   },
   {
     slug: "native-behaviour",
@@ -69,6 +86,11 @@ export const principles: Entry[] = [
     spec: [
       { label: "Native", values: ["IME, accessibility, scrolling, clipboard, windows"] },
       { label: "Themed", values: ["controls, type, motion, materials"] },
+    ],
+    code: [
+      at("crates/rune/src/edit.rs", "text input and IME"),
+      at("crates/rune/src/theme.rs", "themes as data"),
+      at("themes/opencode", "OpenCode's theme"),
     ],
   },
   {
@@ -88,6 +110,10 @@ export const principles: Entry[] = [
       </>
     ),
     spec: [{ label: "Render", values: [<code>--snap out.png --at 0.25</code>], mono: true }],
+    code: [
+      at("crates/rune/src/tooling.rs", "--snap, --scene, --script, --trace"),
+      at("scripts/check-ui.py", "snapshot gates"),
+    ],
   },
   {
     slug: "one-way",
@@ -95,10 +121,11 @@ export const principles: Entry[] = [
     body: (
       <p>
         Views are plain Rust functions that return a keyed tree. There is no view macro language, no second way to
-        hold state and no notify call to forget. Errors name the fix, such as{" "}
+        hold state and no notify call to forget. Errors should name the fix, such as{" "}
         <code>Text has no key inside a dynamic list; add .key(id)</code>.
       </p>
     ),
+    code: [at("crates/rune/src/el.rs", "the whole view API")],
   },
   {
     slug: "fast-and-reference",
@@ -111,6 +138,10 @@ export const principles: Entry[] = [
       </p>
     ),
     spec: [{ label: "Reference", values: ["CPU renderer, no GPU tricks"] }],
+    code: [
+      at("crates/rune-ref/src/shader.rs", "the CPU renderer"),
+      at("crates/rune-ref/tests/differential.rs", "GPU against CPU"),
+    ],
   },
   {
     slug: "observable",
@@ -122,6 +153,10 @@ export const principles: Entry[] = [
         agent's view of the app is the accessibility tree, so every agent test exercises accessibility too.
       </p>
     ),
+    code: [
+      at("crates/rune-motion/src/trace.rs", "motion traces"),
+      at("crates/rune/src/tooling.rs", "--tree, --trace"),
+    ],
   },
   {
     slug: "hot-reload",
@@ -145,6 +180,7 @@ export const principles: Entry[] = [
         mono: true,
       },
     ],
+    code: [at("spikes/hot-patch", "989 ms median")],
   },
   {
     slug: "budgets",
@@ -160,6 +196,7 @@ export const principles: Entry[] = [
       { label: "At rest", values: ["0 ticks, 0 GPU submissions"], mono: true },
       { label: "Per frame", values: ["0 allocations"], mono: true },
     ],
+    code: [at("crates/rune/tests/alloc.rs", "0 allocations a frame"), at("crates/rune-motion/tests/alloc.rs")],
   },
   {
     slug: "owned",
@@ -172,6 +209,7 @@ export const principles: Entry[] = [
       </p>
     ),
     spec: [{ label: "Uses", values: ["wgpu, Taffy, Parley, AccessKit"] }],
+    code: [at("crates/rune/Cargo.toml", "dependencies")],
   },
 ]
 
@@ -196,6 +234,7 @@ export const layers: Entry[] = [
       { label: "Uses", values: ["keyed retained tree, typed models"] },
       { label: "Not", values: ["signals, GPUI entities, immediate mode"] },
     ],
+    code: [at("crates/rune/src/el.rs", "El, keys, handlers"), at("crates/rune/src/runtime.rs", "queue, view, diff")],
   },
   {
     slug: "layout",
@@ -211,6 +250,10 @@ export const layers: Entry[] = [
       { label: "Uses", values: ["Taffy"] },
       { label: "Not", values: ["own engine, SwiftUI-style proposals"] },
     ],
+    code: [
+      at("crates/rune/src/runtime.rs", "Taffy on the node arena"),
+      at("crates/rune/src/virtual_list.rs", "visible rows only"),
+    ],
   },
   {
     slug: "text",
@@ -225,6 +268,10 @@ export const layers: Entry[] = [
     spec: [
       { label: "Uses", values: ["Parley, swash, skrifa"] },
       { label: "Not", values: ["CoreText only, cosmic-text"] },
+    ],
+    code: [
+      at("crates/rune/src/text.rs", "Parley, swash, the atlas"),
+      at("research/23-text-quality.md", "against CoreText"),
     ],
   },
   {
@@ -248,6 +295,11 @@ export const layers: Entry[] = [
       { label: "Spring", values: ["ω = 2π / duration", "ζ = 1 − bounce"], mono: true },
       { label: "Snap", values: ["both edges to 1/64 px"], mono: true },
     ],
+    code: [
+      at("crates/rune-motion/src/spring.rs"),
+      at("crates/rune-motion/src/scene.rs", "today on the main thread"),
+      at("crates/rune-motion/src/transition.rs", "presence"),
+    ],
   },
   {
     slug: "renderer",
@@ -269,6 +321,11 @@ export const layers: Entry[] = [
       { label: "Uses", values: ["wgpu on every platform"] },
       { label: "Not", values: ["Skia, compute Vello, raw Metal first"] },
     ],
+    code: [
+      at("crates/rune/src/render.rs"),
+      at("crates/rune/src/shader.wgsl", "one uber-quad pipeline"),
+      at("crates/rune/src/shape.rs", "strokes and fills"),
+    ],
   },
   {
     slug: "shells",
@@ -284,6 +341,12 @@ export const layers: Entry[] = [
     spec: [
       { label: "Uses", values: ["winit, then own shells; AccessKit"] },
       { label: "Not", values: ["winit's IME, SDL3"] },
+    ],
+    code: [
+      at("crates/rune/src/window.rs", "winit today"),
+      at("crates/rune/src/macos.rs"),
+      at("crates/rune/src/win32.rs", "overlays"),
+      at("crates/rune/src/layer_shell.rs", "Wayland overlays"),
     ],
   },
   {
@@ -310,6 +373,10 @@ export const layers: Entry[] = [
         straight from the render thread.
       </p>
     ),
+    code: [
+      at("crates/rune/src/tooling.rs", "scenes and flags"),
+      at("crates/rune-motion/src/trace.rs", "motion traces"),
+    ],
   },
 ]
 

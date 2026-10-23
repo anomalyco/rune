@@ -1,0 +1,8 @@
+[package]
+name = "todo"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rune = { path = "../../crates/rune" }

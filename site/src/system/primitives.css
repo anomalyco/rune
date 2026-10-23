@@ -70,8 +70,30 @@ a {
 .sidebar-lockup { transition: opacity .2s var(--ease-out); }
 .sidebar-brand[data-brand-hidden] .sidebar-lockup { opacity: 0; transition-timing-function: var(--ease-in); }
 .sidebar-toggle,
-.sidebar-scrim {
+.sidebar-scrim,
+.sidebar-search-label {
   display: none;
+}
+.sidebar-actions {
+  display: flex;
+  align-items: center;
+}
+/* Search: an icon beside the lockup whose hover box ends on the nav pill's right edge. */
+.sidebar-search {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-right: calc(var(--space-3) - var(--space-5));
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-1);
+  background: none;
+  color: var(--fg-3);
+  cursor: pointer;
+}
+@media (hover: hover) and (pointer: fine) {
+  .sidebar-search:hover { background: var(--surface-2); color: var(--fg); }
 }
 .sidebar-scroll {
   position: relative;
@@ -128,27 +150,40 @@ a {
 }
 .nav-link[data-active] .nav-num { color: var(--ink); }
 
-/* Children hang off a thin guide line under their parent's text: smaller, with quiet group headers. */
+/* Children hang off a thin guide line under their parent's text: one line each, smaller, with quiet group headers.
+   A label too long for the column fades out at its end rather than wrapping. */
 .nav-list[data-depth="1"] {
   margin: 2px 0 var(--space-3) var(--space-2);
   box-shadow: inset 1px 0 var(--line);
 }
 .nav-list[data-depth="1"] .nav-link {
-  padding: 4px var(--space-2) 4px var(--space-3);
+  padding: 2px var(--space-2) 2px var(--space-3);
   border-radius: 0;
   font: var(--text-12);
   line-height: 16px;
+  white-space: nowrap;
+}
+.nav-list[data-depth="1"] .nav-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 1.5em), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 1.5em), transparent);
 }
 .nav-heading {
-  margin: var(--space-4) 0 var(--space-1);
+  margin: var(--space-3) 0 2px;
   padding: 0 var(--space-2) 0 var(--space-3);
+  line-height: 16px;
 }
-.nav-heading:first-child { margin-top: var(--space-2); }
+.nav-heading:first-child { margin-top: var(--space-1); }
 .nav-heading a {
-  font: var(--text-12);
-  font-weight: 500;
+  font: var(--text-11);
+  letter-spacing: .02em;
   color: var(--fg-3);
   text-decoration: none;
+}
+@media (hover: hover) and (pointer: fine) {
+  .nav-heading a:hover { color: var(--fg-2); }
 }
 .nav-pill,
 .nav-rail {
@@ -157,22 +192,29 @@ a {
   left: 0;
   opacity: 0;
   pointer-events: none;
-  transition: transform .25s var(--ease-out), height .25s var(--ease-out), opacity .15s;
 }
 .nav-pill {
   left: var(--space-3);
   right: var(--space-3);
   border-radius: var(--radius-1);
   background: var(--surface-2);
+  transition: transform .25s var(--ease-out), height .25s var(--ease-out), opacity .15s;
 }
+/* The stretch of guide line beside every rule in view. A spring in Frame.tsx moves it; CSS only fades it. */
 .nav-rail {
   z-index: 2;
   width: 2px;
   border-radius: 1px;
-  background: var(--fg);
+  background: var(--fg-3);
+  transition: opacity .15s;
+}
+.nav-list[data-depth="1"] :is(.nav-link, .nav-num) { transition: color .2s; }
+.nav-list[data-depth="1"] .nav-link[data-active] .nav-num { color: var(--fg-2); }
+@media (hover: hover) and (pointer: fine) {
+  .nav-list[data-depth="1"] .nav-link:hover { transition-duration: 0s; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .nav-pill, .nav-rail { transition: opacity .15s; }
+  .nav-pill { transition: opacity .15s; }
 }
 
 /* Page head */
@@ -256,6 +298,17 @@ a {
   font-weight: 500;
   text-wrap: balance;
 }
+.rule-title code { font-family: var(--font-mono); font-size: .875em; }
+/* Quiet marker for a rule nobody has approved yet. */
+.rule-tag {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-1);
+  font: var(--mono-12);
+  line-height: 18px;
+  color: var(--fg-3);
+}
 .rule-body {
   display: grid;
   grid-template-columns: minmax(0, var(--measure)) minmax(240px, 1fr);
@@ -268,7 +321,17 @@ a {
 }
 .rule-text p { margin: 0 0 var(--space-2); }
 .rule-text code { font: var(--mono-13); color: var(--fg); }
+.rule-text :not(pre) > code { white-space: nowrap; }
 .rule-text p:last-child { margin-bottom: 0; }
+.rule-text pre {
+  margin: var(--space-3) 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-2);
+  background: var(--surface-1);
+  box-shadow: inset 0 0 0 1px var(--line);
+  overflow-x: auto;
+}
+.rule-text pre code { font: var(--mono-12); line-height: 20px; }
 .rule-spec {
   display: grid;
   gap: var(--space-2);
@@ -297,6 +360,56 @@ a {
 }
 .rule-spec dd.mono code { font: inherit; }
 .rule-spec dd.mono > span { display: block; }
+
+/* References: a file in one of our repos (crate, then file, then a note), a principle, or plain text.
+   Crates sit in one column so the files line up. */
+.refs {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font: var(--mono-12);
+  line-height: 18px;
+}
+.refs > li,
+.ref-link {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+.ref-link { color: inherit; text-decoration: none; }
+.ref-label { color: var(--fg-2); }
+.ref-name { color: var(--fg); overflow-wrap: anywhere; }
+.ref-name + .ref-note { margin-left: var(--space-2); }
+.ref-note { color: var(--fg-3); }
+.ref-note code { font: inherit; }
+.ref-principle { font: var(--text-13); line-height: 18px; }
+.refs > .ref-text {
+  display: block;
+  font: var(--text-13);
+  line-height: 18px;
+  color: var(--fg-2);
+}
+.ref-text code { font: var(--mono-12); color: var(--fg); }
+a.ref-link .ref-name {
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+  transition: text-decoration-color .15s;
+}
+@media (hover: hover) and (pointer: fine) {
+  a.ref-link:hover .ref-name { text-decoration-color: var(--line-2); }
+}
+
+/* Code, highlighted at build time: keywords in soft red, strings sand, macros and attributes steel, the rest
+   neutral with dim punctuation. */
+.tk-k { color: var(--code-keyword); }
+.tk-s, .tk-n { color: var(--code-string); }
+.tk-f, .tk-a { color: var(--code-call); }
+.tk-c { color: var(--fg-3); }
+.tk-p { color: var(--fg-2); }
 .rule-benches {
   display: grid;
   gap: var(--space-4);
@@ -432,8 +545,13 @@ a {
     visibility: visible;
     transition: opacity .15s var(--ease-out), visibility 0s;
   }
-  .sidebar-toggle {
+  .sidebar-search-icon { display: none; }
+  .sidebar-search-label { display: inline; }
+  .sidebar-toggle,
+  .sidebar-search {
     display: block;
+    width: auto;
+    margin: 0;
     height: 36px;
     padding: 0 var(--space-3);
     border: 0;
@@ -523,4 +641,113 @@ a {
 @media (max-width: 760px) {
   .index-row { grid-template-columns: minmax(0, 1fr) auto; }
   .index-text { grid-column: 1 / -1; grid-row: 2; }
+}
+
+/* Command menu: a search field over a list of one fixed height, centred near the top. Opens on the next frame; the
+   close fade is the component's. The selected row moves with no transition. */
+.cmdk {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+}
+.cmdk[inert] { pointer-events: none; }
+.cmdk-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / .6);
+}
+.cmdk-panel {
+  position: relative;
+  width: min(560px, calc(100% - 2 * var(--space-2)));
+  margin: max(var(--space-4), 12vh) auto 0;
+  overflow: hidden;
+  border-radius: var(--radius-2);
+  background: color-mix(in srgb, var(--fg) 4%, var(--bg));
+  box-shadow: inset 0 0 0 1px var(--line-2), 0 1px 2px rgb(0 0 0 / .5), 0 24px 64px rgb(0 0 0 / .6);
+}
+/* On a phone the keyboard takes the bottom half, so the panel sits at the top. */
+@media (max-width: 900px) {
+  .cmdk-panel { margin-top: var(--space-2); }
+}
+.cmdk-input {
+  display: block;
+  width: 100%;
+  height: 48px;
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: inset 0 -1px var(--line);
+  color: var(--fg);
+  font: var(--text-16);
+  outline: none;
+}
+.cmdk-input::placeholder { color: var(--fg-3); }
+.cmdk-list {
+  position: relative;
+  height: min(344px, 52dvh);
+  padding: var(--space-1);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: var(--space-5);
+  scrollbar-width: none;
+  --edge: linear-gradient(to bottom, rgb(0 0 0 / calc(1 - var(--fade-top, 0))), #000 24px, #000 calc(100% - 24px), rgb(0 0 0 / calc(1 - var(--fade-bottom, 0))));
+  -webkit-mask-image: var(--edge);
+  mask-image: var(--edge);
+}
+.cmdk-list::-webkit-scrollbar { display: none; }
+.cmdk-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: 36px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-1);
+  color: var(--fg-2);
+  font: var(--text-14);
+  cursor: pointer;
+  user-select: none;
+}
+.cmdk-option[aria-selected="true"] { background: var(--surface-2); }
+.cmdk-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  -webkit-mask-image: linear-gradient(to left, transparent, #000 24px);
+  mask-image: linear-gradient(to left, transparent, #000 24px);
+}
+.cmdk-title mark {
+  background: none;
+  color: var(--fg);
+}
+.cmdk-context {
+  margin-left: var(--space-2);
+  font: var(--text-13);
+  color: var(--fg-3);
+}
+.cmdk-tag {
+  margin-left: var(--space-2);
+  font: var(--mono-12);
+  color: var(--fg-3);
+}
+.cmdk-kind {
+  flex: none;
+  font: var(--mono-12);
+  color: var(--fg-3);
+}
+.cmdk-empty {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  font: var(--text-14);
+  color: var(--fg-3);
+}
+.cmdk-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

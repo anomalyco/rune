@@ -1,25 +1,123 @@
-/* Rune on the Anomaly docs system (system/tokens.css, system/primitives.css): the accent, the wordmark, the
-   architecture diagram and the page parts the system doesn't have yet. */
+/* Rune on the Anomaly docs system (system/tokens.css, system/primitives.css): the accent, the wordmark, the home
+   page, the diagrams and the page parts the system doesn't have yet. */
 :root {
   /* Rune's accent replaces Abattoir's red ink; everything else is the shared system as is. */
   --ink: oklch(0.74 0.14 245);
 }
 
-/* Wordmark: one rounded quad, the shape Rune draws most, and the name. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Wordmark, ᚱUNE (src/brand): pixel letters, drawn at whole pixels a cell, 2 in the sidebar and 12 on the home page. */
 .wordmark {
-  display: inline-flex;
+  position: relative;
+  display: block;
+  width: calc(var(--cells) * 2px);
+  color: var(--ink);
+}
+.wordmark svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+}
+.wordmark-glint { fill: oklch(0.97 0.035 245); }
+.wordmark-rune.is-lit { fill: oklch(0.97 0.035 245); }
+/* The lockup row stands as tall as Abattoir's, whose search button sets it, so the nav starts on the same line. */
+.brand {
+  display: flex;
   align-items: center;
-  gap: 10px;
-  font: 600 18px/24px var(--font-sans);
-  letter-spacing: -.02em;
-  color: var(--fg);
+  min-height: 28px;
   text-decoration: none;
 }
-.wordmark-glyph {
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
-  background: var(--ink);
+
+/* Home */
+.home-hero {
+  max-width: 40rem;
+  margin-bottom: var(--space-9);
+  container-type: inline-size;
+}
+.masthead { margin: 0; font: inherit; }
+/* 12 px a cell, or the most whole pixels a cell that fit a narrow column. */
+.masthead .wordmark {
+  width: min(calc(var(--cells) * 12px), 100%);
+  width: min(calc(var(--cells) * 12px), round(down, 100cqw / var(--cells), 1px) * var(--cells));
+}
+.home-lede {
+  margin: var(--space-7) 0 0;
+  font: var(--text-20);
+  font-weight: 400;
+  letter-spacing: var(--track-20);
+  color: var(--fg-2);
+  text-wrap: pretty;
+}
+.home-lede strong { color: var(--fg); font-weight: 400; }
+.home-more {
+  margin: var(--space-4) 0 0;
+  font: var(--text-16);
+  color: var(--fg-2);
+  text-wrap: pretty;
+}
+@media (max-width: 900px) {
+  .home-hero { margin-bottom: var(--space-8); }
+}
+
+/* Home: an app's code beside its headless render, and the how-do-I examples. */
+.app-demo {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-5);
+  align-items: start;
+  margin-top: var(--space-5);
+}
+.app-demo .code-block { max-width: none; margin: 0; }
+.app-shot { width: var(--shot-w); max-width: 100%; }
+.app-shot figcaption code { font: inherit; white-space: nowrap; }
+.howto-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-8); }
+.howto h3 {
+  margin: 0 0 var(--space-2);
+  font: var(--text-16);
+  font-weight: 500;
+  scroll-margin-top: var(--space-6);
+}
+.howto > p {
+  max-width: var(--measure);
+  margin: 0;
+  color: var(--fg-2);
+  text-wrap: pretty;
+}
+.howto > p code, .home-section .section-intro code { font: var(--mono-12); color: var(--fg); }
+.howto-list + .home-more { margin-top: var(--space-7); }
+.build-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+}
+.build-meta a { color: var(--fg-3); text-decoration: none; }
+@media (hover: hover) and (pointer: fine) {
+  .build-meta a:hover { color: var(--fg); }
+}
+.home-section .index-list + .shots { margin-top: var(--space-7); }
+@media (max-width: 1100px) {
+  .app-demo { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 900px) {
+  .howto h3 { scroll-margin-top: calc(var(--topbar) + var(--space-4)); }
+  .build-meta { flex-direction: row; align-items: baseline; gap: var(--space-3); }
+}
+@media (max-width: 760px) {
+  /* The status and where to see it go under the text, so the title keeps the row. */
+  .index-row:has(.build-meta) { grid-template-columns: minmax(0, 1fr); }
+  .build-meta { grid-row: 3; justify-content: flex-start; }
 }
 
 /* Page sections */
@@ -51,13 +149,8 @@
   color: var(--fg-3);
 }
 
-/* Code, cut from Rune's source and highlighted at build time (scripts/snippets.ts). Token colours follow Abattoir:
-   keywords soft red, strings sand, calls and attributes steel, comments dim. */
-:root {
-  --code-keyword: oklch(.74 .12 25);
-  --code-string: oklch(.84 .06 80);
-  --code-call: oklch(.84 .045 235);
-}
+/* Code, cut from Rune's source and highlighted at build time (scripts/snippets.ts); the token colours are the
+   system's. */
 .code-block {
   max-width: 52rem;
   margin: var(--space-5) 0 0;
@@ -102,11 +195,6 @@
   tab-size: 4;
 }
 .code code { font: inherit; }
-.tk-k { color: var(--code-keyword); }
-.tk-s, .tk-n { color: var(--code-string); }
-.tk-f, .tk-a { color: var(--code-call); }
-.tk-c { color: var(--fg-3); }
-.tk-p { color: var(--fg-2); }
 .prose-after { margin-top: var(--space-6); }
 
 /* How-it-works diagrams: boxes on the surface, ink arrows, mono kickers; everything stacks on a phone. */
@@ -182,6 +270,69 @@
   border-bottom: 1px solid var(--ink);
   transform: rotate(45deg);
 }
+
+/* Chain: boxes left to right with arrows between, and a line back for a loop; top to bottom on a phone. */
+.dg-chain {
+  display: grid;
+  grid-template-columns: repeat(var(--links), minmax(0, 1fr));
+  gap: 20px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dg-chain > li { position: relative; }
+.dg-chain > li + li::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -20px;
+  width: 20px;
+  height: 1px;
+  background: var(--ink-dim);
+}
+.dg-chain > li + li::after {
+  content: "";
+  position: absolute;
+  top: calc(50% - 2.5px);
+  left: -8px;
+  width: 6px;
+  height: 6px;
+  border-top: 1px solid var(--ink);
+  border-right: 1px solid var(--ink);
+  transform: rotate(45deg);
+}
+.dg-chain h3 code { font: var(--mono-13); }
+.dg-back {
+  position: relative;
+  margin: 0;
+  padding: var(--space-5) 0 0;
+  font: var(--mono-12);
+  color: var(--fg-3);
+  text-align: center;
+}
+/* From under the last box, along the bottom and up into the first; the head points up. */
+.dg-back-line {
+  position: absolute;
+  top: 0;
+  left: 10%;
+  right: 10%;
+  height: 12px;
+  border: 1px solid var(--ink-dim);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-1) var(--radius-1);
+}
+.dg-back-line::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: -3.5px;
+  width: 6px;
+  height: 6px;
+  border-top: 1px solid var(--ink);
+  border-left: 1px solid var(--ink);
+  transform: rotate(45deg);
+}
+.dg-back-label { position: relative; }
 
 /* Frame */
 .dg-flow {
@@ -646,6 +797,12 @@
 
   .shots { grid-template-columns: minmax(0, 1fr); }
 
+  .dg-chain { grid-template-columns: minmax(0, 1fr); }
+  .dg-chain > li + li::before { top: -20px; left: 50%; width: 1px; height: 20px; }
+  .dg-chain > li + li::after { top: -7px; left: calc(50% - 2.5px); transform: rotate(135deg); }
+  .dg-back { padding: var(--space-3) 0 0; text-align: left; }
+  .dg-back-line { display: none; }
+
   .dg-pair, .dg-crates { grid-template-columns: minmax(0, 1fr); }
   .dg-pair { gap: var(--space-6); }
   .dg-test { grid-template-columns: minmax(0, 1fr); }
@@ -667,4 +824,10 @@
     content: attr(data-label) " ";
     color: var(--fg-3);
   }
+}
+
+/* The system's frame lets its two rows share spare height under 900 px, which drops a short page to the middle of the
+   screen; the top bar keeps its own height and the page takes the rest. (Abattoir has the same bug.) */
+@media (max-width: 900px) {
+  .frame { grid-template-rows: auto minmax(0, 1fr); }
 }

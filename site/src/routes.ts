@@ -6,7 +6,7 @@ export const routes: Route[] = [
   {
     path: "/",
     label: "Overview",
-    title: "Rune",
+    title: "Rune · Rust UI framework",
     description:
       "Rune is a Rust UI framework with its own GPU renderer, text, layout, spring animation and thin per-platform shells, written and checked by agents.",
   },

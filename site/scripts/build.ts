@@ -10,4 +10,4 @@ const mode = values.mode
 await $`tsc --noEmit`
 await $`vite build --mode ${mode}`
 await $`vite build --mode ${mode} --ssr src/entry-server.tsx --outDir dist-ssr`
-await $`bun scripts/prerender.ts`
+await $`bun scripts/prerender.ts --mode ${mode}`

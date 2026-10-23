@@ -1,22 +1,49 @@
 /** Code examples on the site, cut from Rune's own source at build time and highlighted there.
  *
  *  Each snippet names files in this repo and where to cut. A piece starts at the first line beginning with `from`
- *  (attributes above it come along) and ends at `to`, after `lines` lines, or at the closing brace at the starting
- *  line's indent. A missing file or marker fails the build, so an example can't drift away from the code.
+ *  (attributes above it come along) and ends at `to`, just before `until`, after `lines` lines, or at the closing
+ *  brace at the starting line's indent. A missing file or marker fails the build, so an example can't drift away from the code.
  *  The Vite plugin serves the result as `virtual:snippets`; the client gets HTML strings, not the highlighter. */
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import type { Plugin } from "vite"
 import { highlight, type CodeLang } from "./highlight"
 
-type Piece = { file: string; from?: string; to?: string; lines?: number }
+type Piece = { file: string; from?: string; to?: string; until?: string; lines?: number }
 type Spec = { lang: CodeLang; label: string; pieces: Piece[] }
 
 export type Snippet = { html: string; label: string; file: string; start: number; end: number }
 
 const SETTINGS = "examples/settings/src/main.rs"
+const HELLO = "examples/hello/src/main.rs"
+const TODO = "examples/todo/src/main.rs"
 
 const specs: Record<string, Spec> = {
+  hello: {
+    lang: "rust",
+    label: "Rust",
+    pieces: [{ file: HELLO, from: "use rune::", until: "#[cfg(test)]" }],
+  },
+  "hello-test": {
+    lang: "rust",
+    label: "Rust",
+    pieces: [{ file: HELLO, from: "    fn a_tap_flips_the_switch" }],
+  },
+  "todo-list": {
+    lang: "rust",
+    label: "Rust",
+    pieces: [{ file: TODO, from: "fn view(" }],
+  },
+  "todo-spring": {
+    lang: "rust",
+    label: "Rust",
+    pieces: [{ file: TODO, from: "fn progress(" }],
+  },
+  "overlay-windows": {
+    lang: "rust",
+    label: "Rust",
+    pieces: [{ file: "examples/overlay/src/main.rs", from: "    rune::run_windows(", to: "    });" }],
+  },
   "app-cargo": {
     lang: "toml",
     label: "TOML",
@@ -122,6 +149,10 @@ function cut(root: string, id: string, piece: Piece): { text: string; start: num
   let end: number
   if (piece.lines) {
     end = first + piece.lines - 1
+  } else if (piece.until) {
+    end = lines.findIndex((l, i) => i > first && l.startsWith(piece.until!)) - 1
+    if (end < 0) throw new Error(`${where}: no line starts with ${JSON.stringify(piece.until)} after ${JSON.stringify(piece.from)}`)
+    while (end > first && !lines[end]!.trim()) end--
   } else if (piece.to) {
     end = lines.findIndex((l, i) => i >= first && l.startsWith(piece.to!))
     if (end < 0) throw new Error(`${where}: no line starts with ${JSON.stringify(piece.to)} after ${JSON.stringify(piece.from)}`)

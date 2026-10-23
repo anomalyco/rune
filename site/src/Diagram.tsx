@@ -1,3 +1,5 @@
+import type { CSSProperties, ReactNode } from "react"
+
 /** The architecture in one figure: the app side and the render thread, the command channel between them, and the
  *  platform shell under both. Plain HTML so the text stays crisp and the layout can stack on a phone. */
 export function ArchitectureDiagram() {
@@ -280,5 +282,76 @@ export function TestDiagram() {
         so a run repeats exactly.
       </figcaption>
     </figure>
+  )
+}
+
+type Link = { name: ReactNode; does: ReactNode }
+
+/** Boxes left to right with an arrow between each (top to bottom on a phone), and an optional line back from the end
+ *  to the start for a loop. */
+function Chain({ id, links, back, caption }: { id: string; links: Link[]; back?: ReactNode; caption: ReactNode }) {
+  return (
+    <figure className="dg" aria-labelledby={`${id}-caption`}>
+      <ol className="dg-chain" style={{ "--links": links.length } as CSSProperties}>
+        {links.map((l, i) => (
+          <li key={i} className="dg-box dg-small">
+            <h3>{l.name}</h3>
+            <p>{l.does}</p>
+          </li>
+        ))}
+      </ol>
+      {back && (
+        <p className="dg-back">
+          <span className="dg-back-line" aria-hidden="true" />
+          <span className="dg-back-label">{back}</span>
+        </p>
+      )}
+      <figcaption id={`${id}-caption`}>{caption}</figcaption>
+    </figure>
+  )
+}
+
+/** From the code you write to pixels, for one frame. */
+export function PipelineDiagram() {
+  return (
+    <Chain
+      id="pipeline"
+      links={[
+        { name: "Your state", does: <>A plain struct, changed only by handlers with <code>&amp;mut</code> access</> },
+        { name: <code>view()</code>, does: <>Returns a keyed <code>El</code> tree: what should be on screen</> },
+        { name: "Layout", does: "Taffy places every node at its target; Parley shapes the text" },
+        { name: "Springs", does: "Each moved rect, colour or opacity animates from where it is now" },
+        { name: "GPU", does: "Rects, shadows and glyphs as instances, usually one wgpu draw call" },
+      ]}
+      back="A tap runs a handler, the state changes, and the view runs again"
+      caption={
+        <>
+          Your code runs in the first two boxes. Rune does the rest, and while something animates it repeats only the
+          last two, so your view isn't called again until the state changes.
+        </>
+      }
+    />
+  )
+}
+
+/** One state change, from the event to the spring targets. */
+export function StateLoopDiagram() {
+  return (
+    <Chain
+      id="state-loop"
+      links={[
+        { name: "Event", does: "A tap, key or poll() result is queued by the window" },
+        { name: "Handler", does: <><code>|s: &amp;mut State|</code> runs between frames</> },
+        { name: <code>view(&amp;State)</code>, does: "Builds the whole tree again from the new state" },
+        { name: "Diff by key", does: "Nodes with the same key are the same node, so they move instead of popping" },
+        { name: "Targets", does: <>Changed properties retarget their springs, using the node's <code>.motion()</code></> },
+      ]}
+      caption={
+        <>
+          A view never animates anything itself. It says where things are, and the diff turns the difference into
+          spring targets.
+        </>
+      }
+    />
   )
 }

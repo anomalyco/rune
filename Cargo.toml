@@ -8,6 +8,8 @@ members = [
     "crates/rune-fx",
     "crates/rune-light",
     "themes/opencode",
+    "examples/hello",
+    "examples/todo",
     "examples/settings",
     "examples/opencode",
     "examples/kit-gallery",

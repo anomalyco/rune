@@ -1186,6 +1186,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "hello"
+version = "0.0.1"
+dependencies = [
+ "rune",
+]
+
+[[package]]
 name = "hermit-abi"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3275,6 +3282,13 @@ dependencies = [
  "displaydoc",
  "serde_core",
  "zerovec",
+]
+
+[[package]]
+name = "todo"
+version = "0.0.1"
+dependencies = [
+ "rune",
 ]
 
 [[package]]

@@ -1,8 +1,17 @@
-import type { ReactNode } from "react"
-import { decisions, layers, milestones, principles, risks, type Entry, type Milestone } from "./content"
+import type { CSSProperties, ReactNode } from "react"
+import { decisions, layers, milestones, principles, risks, type CodeRef, type Entry, type Milestone } from "./content"
 import { Code } from "./Code"
-import { ArchitectureDiagram, CrateMap, FrameDiagram, TestDiagram, ThreadDiagram } from "./Diagram"
+import {
+  ArchitectureDiagram,
+  CrateMap,
+  FrameDiagram,
+  PipelineDiagram,
+  StateLoopDiagram,
+  TestDiagram,
+  ThreadDiagram,
+} from "./Diagram"
 import { withBase } from "./base"
+import { Wordmark } from "./brand/Wordmark"
 import { REPO } from "./routes"
 import { PageHead, SectionHead } from "./system/Frame"
 
@@ -21,9 +30,9 @@ function Rule({ entry, number, children }: { entry: Entry; number?: string; chil
       </header>
       <div className="rule-body">
         <div className="rule-text">{entry.body}</div>
-        {entry.spec && (
+        {(entry.spec || entry.code) && (
           <dl className="rule-spec">
-            {entry.spec.map(s => (
+            {entry.spec?.map(s => (
               <div key={s.label}>
                 <dt>{s.label}</dt>
                 <dd className={s.mono ? "mono" : undefined}>
@@ -33,11 +42,46 @@ function Rule({ entry, number, children }: { entry: Entry; number?: string; chil
                 </dd>
               </div>
             ))}
+            {entry.code && (
+              <div>
+                <dt>Code</dt>
+                <dd>
+                  <CodeRefs refs={entry.code} />
+                </dd>
+              </div>
+            )}
           </dl>
         )}
       </div>
       {children}
     </article>
+  )
+}
+
+/** Files in this repo, crate (or folder) first so the names line up, each linked to GitHub. */
+function CodeRefs({ refs }: { refs: CodeRef[] }) {
+  return (
+    <ul className="refs">
+      {refs.map(({ path, note }) => {
+        const parts = path.split("/")
+        const inCrate = parts[0] === "crates" || parts[0] === "examples"
+        const label = inCrate ? parts[1]! : parts[0]!
+        const rest = parts.slice(inCrate ? 2 : 1)
+        const folder = !/\.\w+$/.test(path)
+        const name = (rest[0] === "src" ? rest.slice(1) : rest).join("/") + (folder ? "/" : "")
+        return (
+          <li key={path}>
+            <a className="ref-link" href={`${REPO}/${folder ? "tree" : "blob"}/dev/${path}`} title={path}>
+              <span className="ref-label">{label}</span>
+              <span>
+                <span className="ref-name">{name}</span>
+                {note && <span className="ref-note">{note}</span>}
+              </span>
+            </a>
+          </li>
+        )
+      })}
+    </ul>
   )
 }
 
@@ -50,62 +94,241 @@ function Pager({ prev, next }: { prev?: [string, string]; next?: [string, string
   )
 }
 
-const running = [
+type Status = "works" | "partly" | "planned"
+
+const STATUS: Record<Status, { label: string; dot: Milestone["status"] }> = {
+  works: { label: "Works today", dot: "done" },
+  partly: { label: "Partly", dot: "started" },
+  planned: { label: "Planned", dot: "later" },
+}
+
+/** What Rune can build today, checked against the code; each row names where to see it. */
+const buildable: { title: string; text: ReactNode; status: Status; meta: string; href?: string }[] = [
   {
-    title: "Settings window",
-    text: "Toggles, a segmented control, a slider, and theme and accent changes that animate on springs.",
-    meta: "examples/settings",
-  },
-  {
-    title: "Component gallery",
-    text: "One scene per @opencode/ui story, rendered on the OpenCode theme and diffed against the web version.",
-    meta: "examples/kit-gallery",
-  },
-  {
-    title: "OpenCode Desktop",
-    text: "The home and session pages, from a fixture or read-only from a live OpenCode server.",
+    title: "Desktop apps on macOS",
+    text: (
+      <>
+        Windows drawn entirely by Rune through winit and wgpu. The Settings window, a gallery of OpenCode's components
+        and OpenCode Desktop's home and session pages (from a fixture, or read-only from a live server) run today.
+      </>
+    ),
+    status: "works",
     meta: "examples/opencode",
   },
   {
-    title: "Effects",
-    text: "Glow, pulses, fire, distortion and motion blur as GPU layers on any element's shape.",
-    meta: "crates/rune-fx",
+    title: "Windows and Linux",
+    text: (
+      <>
+        The same wgpu backend, with Win32, X11 and Wayland code for overlays already in. Running and checking apps on
+        both is the next milestone, with Hex's Settings as the first real screen.
+      </>
+    ),
+    status: "partly",
+    meta: "M2",
+    href: "/roadmap#m2",
   },
   {
-    title: "Headless renders",
-    text: "Every example renders offscreen to a PNG at a chosen moment, for goldens and for agents.",
-    meta: "--snap",
+    title: "Background and menu-bar apps",
+    text: (
+      <>
+        An app can start with no window, keep running after its window closes, reopen it with the same state, and on
+        macOS run with no Dock icon.
+      </>
+    ),
+    status: "works",
+    meta: "examples/background",
+  },
+  {
+    title: "Overlays and HUDs",
+    text: (
+      <>
+        Transparent, click-through windows over every display, and HUD panels at a screen edge that never take focus,
+        fed from any thread. Built for Rooms.
+      </>
+    ),
+    status: "works",
+    meta: "examples/overlay",
+  },
+  {
+    title: "Video",
+    text: (
+      <>
+        Decoded frames drawn as ordinary Rune nodes: NV12 IOSurfaces on macOS, uploaded planes elsewhere, fed by a
+        background producer. The example uses synthetic frames.
+      </>
+    ),
+    status: "works",
+    meta: "examples/video-tiles",
+  },
+  {
+    title: "Headless rendering",
+    text: (
+      <>
+        Every app also runs with no window: PNG stills at a chosen moment, frame sequences, input scripts and motion
+        traces, for tests, CI goldens and agents. A CPU reference renderer checks the GPU one.
+      </>
+    ),
+    status: "works",
+    meta: "crates/rune-ref",
+  },
+  {
+    title: "Effects and lighting",
+    text: (
+      <>
+        Glow, fire, electricity, distortion and motion blur (<code>rune-fx</code>), and soft shadows and highlights from
+        a light you place (<code>rune-light</code>), drawn through the compositor hook.
+      </>
+    ),
+    status: "works",
+    meta: "examples/lab",
+  },
+  {
+    title: "Web",
+    text: <>The same apps in a browser over WebGPU, starting with live demos on this site. There's no web build yet.</>,
+    status: "planned",
+    meta: "M5",
+    href: "/roadmap#m5",
+  },
+  {
+    title: "iOS, then Android",
+    text: (
+      <>
+        An iOS shell with native text input and a view for embedding Rune in SwiftUI. Nothing runs on a phone yet.
+      </>
+    ),
+    status: "planned",
+    meta: "M6",
+    href: "/roadmap#m6",
   },
 ]
 
 export function HomeView() {
   return (
     <>
-      <PageHead eyebrow={<><span>Rust UI framework</span><span>Early</span></>} title="Rune">
-        <p>
-          Rune is a Rust UI framework with its own GPU renderer, text, layout, spring animation and thin shells for each
-          platform. It aims to feel like SwiftUI on a 120&nbsp;Hz iPhone on every platform, and to be written and checked by
-          coding agents.
+      <header id="home-hero" className="home-hero">
+        <h1 className="masthead">
+          <span className="sr-only">Rune</span>
+          <Wordmark periodic />
+        </h1>
+        <p className="home-lede">
+          <strong>
+            Rune is a Rust UI framework with its own GPU renderer, text, layout, spring animation and thin shells for
+            each platform.
+          </strong>{" "}
+          It aims to feel like SwiftUI on a 120&nbsp;Hz iPhone on every platform, and to be written and checked by coding
+          agents. It's early, and its APIs will change.
         </p>
-        <p>
-          <a href={withBase("/how-it-works")}>How it works</a> follows one frame through the code and shows real
-          examples. The code and the full plan are at <a href={REPO}>anomalyco/rune</a>.
-        </p>
-      </PageHead>
+      </header>
 
       <section className="home-section">
-        <SectionHead id="status" title="Status" aside="October 2026">
+        <SectionHead id="app" title="A Rune app">
           <p>
-            Rune is early, and its APIs will change. Today it runs on macOS through winit and wgpu, and draws each frame
-            in one draw call.
+            State is a plain struct, the view is a function of it, and a handler changes it. This is{" "}
+            <code>examples/hello</code> apart from its test, which is further down. The switch never animates itself: the view says where the knob is, and{" "}
+            <code>.motion(motion::SNAPPY)</code> names the spring that moves it.
+          </p>
+        </SectionHead>
+        <div className="app-demo">
+          <Code id="hello" />
+          <figure className="shot app-shot" style={{ "--shot-w": "320px" } as CSSProperties}>
+            <img
+              src={withBase("/shots/hello-on.png")}
+              alt="A dark window with the words Lights on above a blue switch, turned on"
+              width={320}
+              height={200}
+            />
+            <figcaption>
+              Headless: <code>--snap hello.png --scene on</code>
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section className="home-section">
+        <SectionHead id="frame" title="From your code to the screen" />
+        <PipelineDiagram />
+      </section>
+
+      <section className="home-section">
+        <SectionHead id="how" title="How do I…">
+          <p>Each of these is cut from a Rune example or test when the site builds, so it compiles and runs.</p>
+        </SectionHead>
+        <div className="howto-list">
+          <article className="howto">
+            <h3 id="how-list">Keep a list in state</h3>
+            <p>
+              Build a row per item with a stable key. Rows added or removed after the first frame animate in and out on
+              their own, and handlers capture the id they act on.
+            </p>
+            <div className="app-demo">
+              <Code id="todo-list" />
+              <figure className="shot app-shot" style={{ "--shot-w": "360px" } as CSSProperties}>
+                <img
+                  src={withBase("/shots/todo.png")}
+                  alt="A dark todo list with a progress bar, three rows with round checkboxes, and an Add a todo link"
+                  width={360}
+                  height={240}
+                  loading="lazy"
+                />
+                <figcaption>
+                  Headless: <code>--snap todo.png</code>
+                </figcaption>
+              </figure>
+            </div>
+          </article>
+          <article className="howto">
+            <h3 id="how-spring">Animate on a spring</h3>
+            <p>
+              Set the value the state implies and name a spring with <code>Spring::new(duration, bounce)</code>. When
+              a todo is ticked, the bar retargets from wherever it is, keeping its velocity.
+            </p>
+            <Code id="todo-spring" />
+          </article>
+          <article className="howto">
+            <h3 id="how-overlay">Open an overlay on every display</h3>
+            <p>
+              <code>run_windows</code> builds one window per <code>WindowSpec</code>, and{" "}
+              <code>WindowOptions::overlay</code> makes it transparent, borderless, on top and click-through. All the
+              windows can share one <code>Live</code> value fed from a background thread.
+            </p>
+            <Code id="overlay-windows" />
+          </article>
+          <article className="howto">
+            <h3 id="how-test">Test it without a window</h3>
+            <p>
+              A <code>Runtime</code> is the window's runtime with no window. The test taps the switch and steps the
+              clock to check the knob travels and lands. It runs in <code>cargo test</code> with no GPU.
+            </p>
+            <Code id="hello-test" />
+          </article>
+        </div>
+        <p className="home-more">
+          <a href={withBase("/how-it-works")}>How it works</a> follows one frame through the code, with more examples.
+        </p>
+      </section>
+
+      <section className="home-section">
+        <SectionHead id="build" title="What you can build" aside="October 2026">
+          <p>
+            Native apps first, and anything that needs Rune's pixels without a window, since headless runs use the same
+            code. The web and phones are planned, not built.
           </p>
         </SectionHead>
         <ul className="index-list">
-          {running.map(r => (
-            <li key={r.title} className="index-row">
-              <span className="index-title">{r.title}</span>
-              <p className="index-text">{r.text}</p>
-              <span className="index-meta">{r.meta}</span>
+          {buildable.map(b => (
+            <li key={b.title} className="index-row">
+              <span className="index-title">{b.title}</span>
+              <p className="index-text">{b.text}</p>
+              <span className="index-meta build-meta">
+                <span className="status" data-status={STATUS[b.status].dot}>
+                  {STATUS[b.status].label}
+                </span>
+                {b.href ? (
+                  <a href={withBase(b.href)}>{b.meta}</a>
+                ) : (
+                  <a href={`${REPO}/tree/dev/${b.meta}`}>{b.meta}</a>
+                )}
+              </span>
             </li>
           ))}
         </ul>
@@ -183,6 +406,7 @@ export function HowItWorksView() {
             spring that gets it there.
           </p>
         </SectionHead>
+        <StateLoopDiagram />
         <div className="code-stack">
           <Code id="toggle" />
           <Code id="motion-tokens" />
