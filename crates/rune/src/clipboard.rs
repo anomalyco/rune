@@ -131,8 +131,9 @@ fn run_worker<B: Backend>(recv: mpsc::Receiver<Request>, mut open: impl FnMut() 
                 }
             }
             Request::Read { target, reply, wake } => {
-                if let Some(text) = cb.text() {
-                    if reply.send(Reply { target, text }).is_ok() { wake(); }
+                if let Some(text) = cb.text()
+                    && reply.send(Reply { target, text }).is_ok() {
+                    wake();
                 }
             }
             Request::Shutdown => unreachable!(),
@@ -161,8 +162,9 @@ impl Expiry {
     }
     fn clear_if_unchanged(self, cb: &mut impl Backend) {
         if self.revision != cb.revision() { return; }
-        if let Some(text) = cb.text() {
-            if self.matches(&text, cb.revision()) { cb.clear(); }
+        if let Some(text) = cb.text()
+            && self.matches(&text, cb.revision()) {
+            cb.clear();
         }
     }
 }

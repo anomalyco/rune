@@ -306,8 +306,7 @@ impl<T: 'static> Overlay<T> {
         self.resolve_size(event_loop);
         if self.live.is_none() { self.prepare(event_loop); }
         if self.live.is_none() { return; }
-        self.rt.set_live_visible(true);
-        if self.rt.live_pending() { self.dirty = true; }
+        self.resume_live();
         if size != self.at.size { self.resized(event_loop); }
         self.rt.settle_all();
         let retained = cfg!(target_os = "macos") && self.options.prewarm;
@@ -344,6 +343,13 @@ impl<T: 'static> Overlay<T> {
             }
             None => self.set_availability(Availability::Unavailable),
         }
+    }
+
+    // A retained host can be prepared while hidden. Resume sampling before warm/reveal so
+    // hidden publications reach that first visible frame, without waking hidden hosts.
+    fn resume_live(&mut self) {
+        self.rt.set_live_visible(true);
+        if self.rt.live_pending() { self.dirty = true; }
     }
 
     fn hide(&mut self) {
@@ -1172,6 +1178,41 @@ impl<T: 'static> Drop for Overlay<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlay_live_values_resume_before_retained_reveal_and_stop_on_hide() {
+        use std::sync::atomic::AtomicUsize;
+        fn init() -> crate::LiveText { crate::LiveText::new("00") }
+        fn view(value: &crate::LiveText, _: &mut Cx<crate::LiveText>) -> El {
+            crate::text("00").live_text(value)
+        }
+        let app = AppSpec::new("live overlay", (80.0, 40.0), init, view);
+        let spec = OverlaySpec::new("live overlay", app.size, view).options(OverlayOptions {
+            prewarm: true, keys: KeyPolicy::OnDemand, ..Default::default()
+        });
+        let value = init();
+        let (mut overlay, _) = Overlay::new(spec, value.clone(), &app);
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let count = wakes.clone();
+        overlay.rt.set_live_waker(Arc::new(move || { count.fetch_add(1, Ordering::Relaxed); }));
+        overlay.rt.frame(0.0);
+        value.set("01");
+        assert_eq!(wakes.load(Ordering::Relaxed), 0, "prewarming isn't visibility");
+        overlay.dirty = false;
+        overlay.resume_live();
+        assert!(overlay.dirty, "the retained surface must redraw before reveal");
+        overlay.rt.frame(0.0);
+        assert_eq!(overlay.rt.elements()[0].text.as_deref(), Some("01"));
+        overlay.hide();
+        let before = wakes.load(Ordering::Relaxed);
+        value.set("02");
+        assert_eq!(wakes.load(Ordering::Relaxed), before);
+        overlay.dirty = false;
+        overlay.resume_live();
+        assert!(overlay.dirty);
+        overlay.rt.frame(0.0);
+        assert_eq!(overlay.rt.elements()[0].text.as_deref(), Some("02"));
+    }
 
     #[test]
     fn overlay_input_switch_waits_for_owned_drag_release() {

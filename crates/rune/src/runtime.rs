@@ -595,7 +595,7 @@ impl<S: 'static> Runtime<S> {
             if let Some(spec) = &mut node.text
                 && let Some(live) = &spec.live
                 && let Some(text) = live.read(&mut node.live_text_seen)
-                && spec.content != &*text
+                && spec.content != *text
             {
                 spec.content = text.to_string();
                 node.text_layout = Some(self.text.layout_live(&text, spec.style, self.env.scale));

@@ -268,6 +268,8 @@ fn image_texel(t: vec2<i32>, premultiplied: bool) -> vec4<f32> {
 @fragment
 fn fs(i: Out) -> @location(0) vec4<f32> {
     if (i.params.y == 8.0) {
+        // The same Uint32x4 instance ABI feeds this path. Its zero fade words need no
+        // decoding: primitives were clipped/faded while rendering the layer contents.
         let p = i.pos.xy + projection.xy - i.rect.xy;
         if (any(p < vec2<f32>(0.0)) || any(p >= i.rect.zw)) { discard; }
         let color = textureLoad(images, vec2<i32>(floor(p)), 0);

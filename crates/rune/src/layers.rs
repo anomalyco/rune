@@ -168,6 +168,8 @@ impl Renderer {
             }
             let t = self.layers.targets[index].as_ref().unwrap();
             queue.write_buffer(&t.projection, 0, bytemuck::cast_slice(&bounds));
+            // Contents already carry packed clip fades. Composite with zero fade words so
+            // those ramps are applied exactly once; word 3 stays reserved for clip radius.
             let quad = Instance::begin_layer(bounds, NO_CLIP, LayerSpec {
                 opacity: self.layers.plan[index].opacity, blend: self.layers.plan[index].blend });
             queue.write_buffer(&t.quad, 0, bytemuck::bytes_of(&quad));

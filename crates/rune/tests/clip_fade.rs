@@ -13,6 +13,35 @@ fn pixels<S: 'static>(gpu: &Gpu, rt: &mut Runtime<S>, size: (u32, u32)) -> Vec<u
 }
 
 #[test]
+fn packed_fades_survive_group_layer_projection_without_double_application() {
+    fn layered(alpha: &f32, _: &mut Cx<f32>) -> El {
+        el().size(128.0, 128.0).child(col().absolute(16.0, 16.0).size(80.0, 80.0)
+            .clip_fade(0.0, 16.0, 0.0, 0.0)
+            .child(col().absolute(0.0, 8.0).size(80.0, 64.0).opacity(*alpha).clip_soft(0.0)
+                .child(el().size(80.0, 32.0).fill(Color::WHITE))
+                .child(el().size(80.0, 32.0).fill(Color::WHITE))))
+    }
+    let gpu = Gpu::headless();
+    for scale in [1.0, 2.0] {
+        let size = ((128.0 * scale) as u32, (128.0 * scale) as u32);
+        let env = Env::new(true, scale);
+        let mut plain = Runtime::new(1.0, layered, (128.0, 128.0), env);
+        let mut isolated = Runtime::new(0.5, layered, (128.0, 128.0), env);
+        plain.frame(0.0); isolated.frame(0.0);
+        assert!(isolated.instances.iter().any(|i| i.params[1] == rune::render::KIND_LAYER));
+        assert!(isolated.instances.iter().any(|i| i.fade[2] != 0), "exercise inherited origin offsets");
+        assert!(isolated.instances.iter().all(|i| i.fade[3] == 0), "clip-radius lane stays reserved");
+        let a = pixels(&gpu, &mut plain, size);
+        let b = pixels(&gpu, &mut isolated, size);
+        assert!(a.chunks_exact(4).any(|p| p[3] > 0 && p[3] < 255));
+        for (direct, group) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+            let expected = (f32::from(direct[3]) * 0.5).round() as u8;
+            assert!(group[3].abs_diff(expected) <= 1, "layer changed fade coverage: {direct:?} / {group:?}");
+        }
+    }
+}
+
+#[test]
 fn narrower_nested_edge_and_streaming_mask_survive_outer_fades() {
     use rune::render::unpack_fade;
     let gpu = Gpu::headless();

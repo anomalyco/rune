@@ -181,7 +181,7 @@ fn dissolve_adds_direct_primitives_and_native_surfaces_then_clamps_before_opacit
     surface.push_bytes(ByteFrame { width: 1, height: 1, format: Format::Bgra, color: ColorInfo::default(),
         planes: [vec![255, 0, 0, 255], vec![]] }, 1).unwrap();
     renderer.prepare_surfaces(&gpu.device, &gpu.queue, &[SurfaceDraw { surface, fit: SurfaceFit::Fill,
-        before_instance: 3, rect: bounds, radii: [0.0; 4], clip: NO_CLIP, fade: [0.0; 4], opacity: 1.0 }], (32, 16));
+        before_instance: 3, rect: bounds, radii: [0.0; 4], clip: NO_CLIP, fade: [0; 4], opacity: 1.0 }], (32, 16));
     let out = pixels(&gpu, &renderer, &target);
     // Red + blue saturates alpha to 1, then .5 opacity composites over green with source-over.
     near(&out[(8*32+16)*4..(8*32+17)*4], [128,128,128,255]);
@@ -362,7 +362,7 @@ fn isolated_layers_preserve_image_video_spring_and_list_order() {
     surface.push_bytes(ByteFrame { width: 2, height: 2, format: Format::Bgra, color: ColorInfo::default(),
         planes: [vec![255, 0, 0, 255].repeat(4), vec![]] }, 1).unwrap();
     renderer.prepare_surfaces(&gpu.device, &gpu.queue, &[SurfaceDraw { surface, fit: SurfaceFit::Fill,
-        before_instance: 4, rect: [22.0, 6.0, 2.0, 2.0], radii: [0.0; 4], clip: NO_CLIP, fade: [0.0; 4], opacity: 1.0 }], (32, 16));
+        before_instance: 4, rect: [22.0, 6.0, 2.0, 2.0], radii: [0.0; 4], clip: NO_CLIP, fade: [0; 4], opacity: 1.0 }], (32, 16));
     let format = wgpu::TextureFormat::Rgba8Unorm;
     renderer.add_format(&gpu.device, format);
     let target = Offscreen::with_format(&gpu.device, 32, 16, format);
@@ -476,7 +476,7 @@ fn opaque_shader_is_byte_identical_to_base_revision() {
             i.radii = [4.0, 7.0, 2.0, 9.0];
             i.border = [0.1, 0.2, 0.05, 0.5];
             i.clip = [4.25, 5.75, 88.5, 58.25];
-            i.fade = [3.0, 0.0, 4.0, 2.0];
+            i.fade = pack_fade([3.0, 0.0, 4.0, 2.0], i.clip, i.clip);
             match kind {
                 2 => { i.rect[2] = 16.0; i.rect[3] = 16.0; i.params[2] = 0.0; },
                 3 => { i.uv = [2.0, 3.0, 0.0, 0.0]; },

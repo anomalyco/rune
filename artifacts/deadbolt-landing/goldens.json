@@ -1,0 +1,379 @@
+{
+  "base": "28ef7186f40e4fee1e7b6976de2cd2c937ed3532",
+  "worker": "mini",
+  "images": [
+    {
+      "path": "demo/kit/index-dark.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "764e6b2ce8026921489846cad066fb5d1f7e7f6a3f4bf1c9aed190a7f3a5377d",
+      "after": "764e6b2ce8026921489846cad066fb5d1f7e7f6a3f4bf1c9aed190a7f3a5377d"
+    },
+    {
+      "path": "demo/kit/index-light.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "180e04a5282e6528d293ffb1cf864df8a63e1041f5d8315fb4faa1d6f6f65cd9",
+      "after": "180e04a5282e6528d293ffb1cf864df8a63e1041f5d8315fb4faa1d6f6f65cd9"
+    },
+    {
+      "path": "demo/kit/side-components-card--warning-dark.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "ed10a0bd89a22f9fe5bdb37c67af51447f315be283ed7f319f2249dcbb91970d",
+      "after": "ed10a0bd89a22f9fe5bdb37c67af51447f315be283ed7f319f2249dcbb91970d"
+    },
+    {
+      "path": "demo/kit/side-components-card--warning-light.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "27c3ba29bff600619e2a7fe991508169817830034c9bf9928f803ea6cba3624e",
+      "after": "27c3ba29bff600619e2a7fe991508169817830034c9bf9928f803ea6cba3624e"
+    },
+    {
+      "path": "demo/kit/side-ui-button--all-states-dark.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "0d38660259fd0ad7eb749b61e4c81b1c837efddb6dfc2fac96bc67aa3fb9e67d",
+      "after": "0d38660259fd0ad7eb749b61e4c81b1c837efddb6dfc2fac96bc67aa3fb9e67d"
+    },
+    {
+      "path": "demo/kit/side-ui-button--all-states-light.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "764164e44c0e5f8477919941047ecf5649c9ff50f9b938e1b8fb055e4b7e5881",
+      "after": "764164e44c0e5f8477919941047ecf5649c9ff50f9b938e1b8fb055e4b7e5881"
+    },
+    {
+      "path": "demo/kit/side-ui-menu--rich-dark.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "116317ffd3ded79907978ed1aa05c5884d8e128a23cea622dfe9cc301787e079",
+      "after": "116317ffd3ded79907978ed1aa05c5884d8e128a23cea622dfe9cc301787e079"
+    },
+    {
+      "path": "demo/kit/side-ui-menu--rich-light.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "1aeae92d0345dd1adcddc0d518f44d4002b47df24377b1ade21dee253ba5a4d0",
+      "after": "1aeae92d0345dd1adcddc0d518f44d4002b47df24377b1ade21dee253ba5a4d0"
+    },
+    {
+      "path": "demo/kit/side-ui-select--grouped-dark.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "e53d2ccb44d44c02216cf606537b9321699e257a177c029da35225456dab9ca7",
+      "after": "e53d2ccb44d44c02216cf606537b9321699e257a177c029da35225456dab9ca7"
+    },
+    {
+      "path": "demo/kit/side-ui-select--grouped-light.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "25e2c3eb47f6767669d5bc2dc16b29e036ef27119502ea11c8811f00eaf04bb9",
+      "after": "25e2c3eb47f6767669d5bc2dc16b29e036ef27119502ea11c8811f00eaf04bb9"
+    },
+    {
+      "path": "demo/kit/side-ui-text-input--states-dark.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "a73f8104c39fd4bbf6c492e6a1fa1c55c140d40ffc87deaf476d897aa957e7e8",
+      "after": "a73f8104c39fd4bbf6c492e6a1fa1c55c140d40ffc87deaf476d897aa957e7e8"
+    },
+    {
+      "path": "demo/kit/side-ui-text-input--states-light.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "bf9d584fce91d911f3c822aed4c9c5960ed245f131b5397803dab18787c5a1f9",
+      "after": "bf9d584fce91d911f3c822aed4c9c5960ed245f131b5397803dab18787c5a1f9"
+    },
+    {
+      "path": "demo/kit/side-ui-toast--all-examples-dark.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "5ffcb8a49e33679df448d46e730ec7ffa399893bfa1ee42048ee28532aad25d0",
+      "after": "5ffcb8a49e33679df448d46e730ec7ffa399893bfa1ee42048ee28532aad25d0"
+    },
+    {
+      "path": "demo/kit/side-ui-toast--all-examples-light.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "94e9921cddd7a80a4c42571cda964bb9b649215e985d89c23806cd0c6fb5feba",
+      "after": "94e9921cddd7a80a4c42571cda964bb9b649215e985d89c23806cd0c6fb5feba"
+    },
+    {
+      "path": "demo/opencode/home.png",
+      "byte_identical": false,
+      "changed_pixels": 26279,
+      "bounds": [
+        32,
+        368,
+        496,
+        836
+      ],
+      "before": "93f32e7fa480147da20c59167f2c15e02be9d6525325789b9fcf31ff8ac2bb6c",
+      "after": "0d20fcc660fedcd25bdad2a9b71600f4defac29f72e42ecbe71a518aea2184b8",
+      "cause": "Reviewed inherited sidebar fades."
+    },
+    {
+      "path": "demo/opencode/session-bottom.png",
+      "byte_identical": false,
+      "changed_pixels": 26135,
+      "bounds": [
+        32,
+        368,
+        495,
+        836
+      ],
+      "before": "2248710843b84df46b816572c0192792baeb2c2799b852f2ac3ce50d3201f4aa",
+      "after": "513ca002e7e31b971761088d11a23ff370472c9e668c691b6116b793cfe67861",
+      "cause": "Reviewed inherited sidebar fades."
+    },
+    {
+      "path": "demo/opencode/session-light.png",
+      "byte_identical": false,
+      "changed_pixels": 27201,
+      "bounds": [
+        32,
+        368,
+        493,
+        836
+      ],
+      "before": "adbabf310f098792d9f8046d2d9927420792f7b4e8644fef55005b197eb60dea",
+      "after": "3c1ee65392e96a2e9e7b9c3ba53271dddcc6a45e845e42e33bb5f5dc51c2ee2a",
+      "cause": "Reviewed inherited sidebar fades."
+    },
+    {
+      "path": "demo/opencode/session-top.png",
+      "byte_identical": false,
+      "changed_pixels": 28056,
+      "bounds": [
+        32,
+        368,
+        1107,
+        836
+      ],
+      "before": "9d3e6a9a588d2e9df684f903607e3054a0c58b121cdee1884e1ca1bb57faa3ff",
+      "after": "66c6973f2f6245638dcd2f5173d88309ef52b207d0868928c23120216867ecd4",
+      "cause": "Reviewed inherited sidebar fades and point-sized heading optical sizing."
+    },
+    {
+      "path": "demo/opencode/streaming.png",
+      "byte_identical": false,
+      "changed_pixels": 26135,
+      "bounds": [
+        32,
+        368,
+        495,
+        836
+      ],
+      "before": "7d144d86b0d66a3cd7468b1a62e697ee9999573ee67b70096a39e1e3de84d07f",
+      "after": "96a0ee1ebfdb90a9765ba495858149dd38fa91369938ce6566ea9a8d7cd63b3e",
+      "cause": "Reviewed inherited sidebar fades."
+    },
+    {
+      "path": "demo/settings-dark.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "6a08654491859ee3228f220ff5af649d5321267acd15495ab329c1ee5d5ba911",
+      "after": "6a08654491859ee3228f220ff5af649d5321267acd15495ab329c1ee5d5ba911"
+    },
+    {
+      "path": "demo/settings-light.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "aec5840f6e2a6ebac44e59ba66b15f8c8d2fd811968801dc130ffdc30b693874",
+      "after": "aec5840f6e2a6ebac44e59ba66b15f8c8d2fd811968801dc130ffdc30b693874"
+    },
+    {
+      "path": "overlay/controls.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "0a549b5e9461beb5263b6d59d240de24bba846e89d1dfb7afcc855b461cb8c99",
+      "after": "0a549b5e9461beb5263b6d59d240de24bba846e89d1dfb7afcc855b461cb8c99"
+    },
+    {
+      "path": "overlay/expanded.png",
+      "byte_identical": false,
+      "changed_pixels": 23770,
+      "bounds": [
+        255,
+        83,
+        1105,
+        188
+      ],
+      "before": "7d973ec7f0ff62f79190753dca541f878be2994c208c1a2778917a4b10a3a8ec",
+      "after": "bf923133189f2dfd4b2b737d3f534499d805aeed455645f2d10a03045db755ce",
+      "legacy_opsz_matches_base": true,
+      "cause": "Reviewed point-sized optical sizing; legacy policy restores base byte-for-byte."
+    },
+    {
+      "path": "overlay/overlay-0.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "dfdfeec13d831a7b8e878b0f7e40b34172ddc161201d63ab86a500269631711c",
+      "after": "dfdfeec13d831a7b8e878b0f7e40b34172ddc161201d63ab86a500269631711c"
+    },
+    {
+      "path": "overlay/picker.png",
+      "byte_identical": false,
+      "changed_pixels": 4190,
+      "bounds": [
+        49,
+        54,
+        425,
+        80
+      ],
+      "before": "7bf6787857f673cdef97be8a0e3765c8c2901b60fd95f60184bb28f8b560405f",
+      "after": "76d7c43d1d463e97473a9bb8e9682ec11ab30849f041f3bf171bbe9025ac40bd",
+      "legacy_opsz_matches_base": true,
+      "cause": "Reviewed point-sized optical sizing; legacy policy restores base byte-for-byte."
+    },
+    {
+      "path": "overlay/pill.png",
+      "byte_identical": false,
+      "changed_pixels": 19876,
+      "bounds": [
+        315,
+        83,
+        1045,
+        188
+      ],
+      "before": "a4d5ad6175907b8da11efa95dd11a0b86499bfa1d60bfcbcb252ccedf93cfc09",
+      "after": "225f5780df6b13bb600346daa4dbb9a2dfb8ac8e387f4c17a1ec2bc8ddbbfb01",
+      "legacy_opsz_matches_base": true,
+      "cause": "Reviewed point-sized optical sizing; legacy policy restores base byte-for-byte."
+    },
+    {
+      "path": "perf/autoresearch/text/goldens/examples/home.png",
+      "byte_identical": false,
+      "changed_pixels": 26279,
+      "bounds": [
+        32,
+        368,
+        496,
+        836
+      ],
+      "before": "93f32e7fa480147da20c59167f2c15e02be9d6525325789b9fcf31ff8ac2bb6c",
+      "after": "0d20fcc660fedcd25bdad2a9b71600f4defac29f72e42ecbe71a518aea2184b8",
+      "cause": "Reviewed inherited sidebar fades."
+    },
+    {
+      "path": "perf/autoresearch/text/goldens/examples/send.png",
+      "byte_identical": false,
+      "changed_pixels": 26135,
+      "bounds": [
+        32,
+        368,
+        495,
+        836
+      ],
+      "before": "8689ef48774eecfb39e0d96e27a36713c86d08deb39d6f2f705814e89ab47a83",
+      "after": "c6dcb3a0e74cf73f5f20c60dddb26a65cb3d4efec8cc3f1f275c6a48ed8779e0",
+      "cause": "Reviewed inherited sidebar fades."
+    },
+    {
+      "path": "perf/autoresearch/text/goldens/examples/session-bottom.png",
+      "byte_identical": false,
+      "changed_pixels": 26135,
+      "bounds": [
+        32,
+        368,
+        495,
+        836
+      ],
+      "before": "2248710843b84df46b816572c0192792baeb2c2799b852f2ac3ce50d3201f4aa",
+      "after": "513ca002e7e31b971761088d11a23ff370472c9e668c691b6116b793cfe67861",
+      "cause": "Reviewed inherited sidebar fades."
+    },
+    {
+      "path": "perf/autoresearch/text/goldens/examples/session-light.png",
+      "byte_identical": false,
+      "changed_pixels": 27201,
+      "bounds": [
+        32,
+        368,
+        493,
+        836
+      ],
+      "before": "adbabf310f098792d9f8046d2d9927420792f7b4e8644fef55005b197eb60dea",
+      "after": "3c1ee65392e96a2e9e7b9c3ba53271dddcc6a45e845e42e33bb5f5dc51c2ee2a",
+      "cause": "Reviewed inherited sidebar fades."
+    },
+    {
+      "path": "perf/autoresearch/text/goldens/examples/session-top.png",
+      "byte_identical": false,
+      "changed_pixels": 28056,
+      "bounds": [
+        32,
+        368,
+        1107,
+        836
+      ],
+      "before": "9d3e6a9a588d2e9df684f903607e3054a0c58b121cdee1884e1ca1bb57faa3ff",
+      "after": "66c6973f2f6245638dcd2f5173d88309ef52b207d0868928c23120216867ecd4",
+      "cause": "Reviewed inherited sidebar fades and point-sized heading optical sizing."
+    },
+    {
+      "path": "perf/autoresearch/text/goldens/examples/settings-dark.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "74af9b71055948ac76c591db77de09b761058306f1c9628113b11000a924dfa9",
+      "after": "74af9b71055948ac76c591db77de09b761058306f1c9628113b11000a924dfa9"
+    },
+    {
+      "path": "perf/autoresearch/text/goldens/examples/settings-light.png",
+      "byte_identical": true,
+      "changed_pixels": 0,
+      "bounds": null,
+      "before": "aec5840f6e2a6ebac44e59ba66b15f8c8d2fd811968801dc130ffdc30b693874",
+      "after": "aec5840f6e2a6ebac44e59ba66b15f8c8d2fd811968801dc130ffdc30b693874"
+    },
+    {
+      "path": "perf/autoresearch/text/goldens/examples/stream-end.png",
+      "byte_identical": false,
+      "changed_pixels": 26135,
+      "bounds": [
+        32,
+        368,
+        495,
+        836
+      ],
+      "before": "06aac5e6afd45bb356825e12989c3ee28b44a263ab20c2760981ef0f966aad7d",
+      "after": "75bc8e74015492cf8336330d4eefcadf7e5a45ee4cb2da92096d1533287c5f98",
+      "cause": "Reviewed inherited sidebar fades."
+    },
+    {
+      "path": "perf/autoresearch/text/goldens/examples/streaming.png",
+      "byte_identical": false,
+      "changed_pixels": 26135,
+      "bounds": [
+        32,
+        368,
+        495,
+        836
+      ],
+      "before": "7d144d86b0d66a3cd7468b1a62e697ee9999573ee67b70096a39e1e3de84d07f",
+      "after": "96a0ee1ebfdb90a9765ba495858149dd38fa91369938ce6566ea9a8d7cd63b3e",
+      "cause": "Reviewed inherited sidebar fades."
+    }
+  ]
+}
