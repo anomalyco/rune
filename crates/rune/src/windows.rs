@@ -1,6 +1,33 @@
 //! Window descriptions shared by the native shell and deterministic headless selection.
 use crate::{App, AppSpec};
 
+#[derive(Clone, Debug)]
+pub(crate) struct PlaceRequest {
+    pub display: crate::DisplayTarget,
+    pub placement: crate::OverlayPlacement,
+    pub pointer: Option<(i32, i32)>,
+}
+
+impl PlaceRequest {
+    pub fn new(display: crate::DisplayTarget, placement: crate::OverlayPlacement) -> Self {
+        let mut request = Self { display, placement, pointer: None };
+        if request.display == crate::DisplayTarget::UnderPointer {
+            #[cfg(target_os = "macos")]
+            { request.display = crate::macos::pointer_display().map_or(crate::DisplayTarget::Primary,
+                |id| crate::DisplayTarget::Native(crate::NativeDisplayId::MacOS(id))); }
+            #[cfg(target_os = "windows")]
+            { request.pointer = crate::win32::pointer_position(); }
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            { request.pointer = crate::x11_overlay::pointer_position(); }
+        }
+        request
+    }
+
+    pub fn at(size: (f32, f32)) -> crate::overlay::Placement {
+        crate::overlay::Placement { size, edge: crate::ScreenEdge::Top, margin: 0.0, align: crate::Align::Center, inset: 0.0 }
+    }
+}
+
 /// Process-level settings applied once, before constructing the native event loop.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RunOptions {
@@ -101,16 +128,19 @@ impl WindowOptions {
 }
 
 /// AppKit properties for an ordinary window, reapplied on native recreation.
-/// Omitted properties keep winit's defaults. These settings do not turn a window into a panel.
+/// Omitted properties keep winit's defaults.
 #[derive(Clone, Debug, Default)]
 pub struct MacWindowOptions {
     pub(crate) shadow: Option<bool>,
     pub(crate) level: Option<isize>,
     pub(crate) collection_behavior: Option<usize>,
     pub(crate) exclude_from_capture: Option<bool>,
+    pub(crate) nonactivating_panel: bool,
 }
 
 impl MacWindowOptions {
+    /// Use a key-taking NSPanel. Open/focus never activates the app or its other windows.
+    pub fn nonactivating_panel(mut self, enabled: bool) -> Self { self.nonactivating_panel = enabled; self }
     pub fn shadow(mut self, enabled: bool) -> Self { self.shadow = Some(enabled); self }
     /// AppKit NSWindow.Level value (normal 0, floating 3, status 25).
     pub fn level(mut self, level: isize) -> Self { self.level = Some(level); self }
@@ -156,6 +186,7 @@ impl<S> WindowSpec<S> {
     }
     /// Configure this window's frame, including headless traffic-light placement.
     pub fn chrome(mut self, chrome: crate::Chrome) -> Self { self.app = self.app.chrome(chrome); self }
+    pub fn on_focus(mut self, f: fn(&mut S, bool, &mut crate::Tx)) -> Self { self.app = self.app.on_focus(f); self }
     pub fn options(mut self, options: WindowOptions) -> Self {
         self.options = options;
         self.app.macos_window = MacWindowOptions::default();

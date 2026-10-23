@@ -28,6 +28,8 @@ struct Win {
     activator: Option<crate::activation::Activator>,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
+    #[cfg(target_os = "macos")]
+    panel: Option<crate::macos::Panel>,
     window: Arc<Window>,
     /// False while hidden (platforms that can hide a window keep it for the next open).
     visible: bool,
@@ -36,9 +38,38 @@ struct Win {
     alpha: Option<crate::surface_alpha::AlphaSurface>,
 }
 
+impl Win {
+    fn show(&self, focus: bool) {
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(panel) = &self.panel {
+                panel.show();
+                if focus { panel.request_keys(); }
+                return;
+            }
+            if !focus { crate::macos::show_without_focus(&self.window); return; }
+        }
+        self.window.set_visible(true);
+        if focus { self.window.focus_window(); }
+    }
+
+    fn hide(&self) {
+        #[cfg(target_os = "macos")]
+        if let Some(panel) = &self.panel { panel.hide(); return; }
+        self.window.set_visible(false);
+    }
+
+    fn focus(&self) {
+        #[cfg(target_os = "macos")]
+        if let Some(panel) = &self.panel { panel.request_keys(); return; }
+        self.window.focus_window();
+    }
+}
+
 pub(crate) enum WakeEvent {
     App(usize), Live(usize), Window(usize, WindowRequest), Focus(usize),
     Position(usize, (i32, i32)), Level(usize, bool),
+    Place(usize, crate::windows::PlaceRequest),
 }
 
 /// What `Windows` needs of a host, whatever its state type: an app window or an overlay.
@@ -90,6 +121,9 @@ impl WindowHandle {
     /// Physical desktop pixels; retained across recreation. Unsupported on Wayland.
     pub fn set_position(&self, position: (i32, i32)) {
         let _ = self.proxy.send_event(WakeEvent::Position(self.slot, position));
+    }
+    pub fn place(&self, display: crate::DisplayTarget, placement: crate::OverlayPlacement) {
+        let _ = self.proxy.send_event(WakeEvent::Place(self.slot, crate::windows::PlaceRequest::new(display, placement)));
     }
     /// Show/recreate without requesting focus, or hide while keeping the host and state.
     pub fn set_visible(&self, visible: bool) {
@@ -177,7 +211,7 @@ impl<S: 'static> ApplicationHandler<WakeEvent> for Windows<S> {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
         let slot = match &event {
             WakeEvent::App(i) | WakeEvent::Live(i) | WakeEvent::Window(i, _) | WakeEvent::Focus(i)
-                | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) => *i,
+                | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::Place(i, _) => *i,
         };
         if let Some(Some(host)) = self.hosts.get_mut(slot) {
             host.user_event(event_loop, event);
@@ -211,6 +245,7 @@ impl<S: 'static> ApplicationHandler<WakeEvent> for Windows<S> {
 struct Host<S: 'static> {
     chrome: Chrome,
     options: WindowOptions,
+    placement: Option<crate::windows::PlaceRequest>,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     macos_window: crate::MacWindowOptions,
     native_handle: WindowHandle,
@@ -244,7 +279,7 @@ struct Host<S: 'static> {
 pub fn run<S: 'static>(app: App<S>, args: Args) {
     let accessory = app.accessory;
     let options = app.window_options.clone();
-    run_configured(move |_| vec![WindowSpec::from_app("main", app).options(options)], args, accessory);
+    run_configured(move |_| { let mut spec = WindowSpec::from_app("main", app); spec.options = options; vec![spec] }, args, accessory);
 }
 
 pub(crate) fn run_windows<S: 'static>(factory: impl FnOnce(&[Display]) -> Vec<WindowSpec<S>> + 'static, args: Args, options: crate::RunOptions) {
@@ -285,6 +320,7 @@ impl<S: 'static> Host<S> {
         let (open, keep_running, on_close, release_gpu) = (app.open, app.keep_running, app.on_close, app.release_gpu);
         let mut app = app;
         let comp = app.compositor.take();
+        let on_focus = app.on_focus;
         let chrome = app.chrome;
         #[cfg(all(feature = "dev", debug_assertions))]
         let dev = app.dev.take();
@@ -293,6 +329,7 @@ impl<S: 'static> Host<S> {
         // The window reports the system appearance and scale when it opens.
         let env = Env::new(args.theme.as_deref() != Some("light"), 1.0);
         let mut rt = runtime_for(&spec, state, size, env, waker.clone());
+        rt.on_focus = on_focus;
         rt.set_system_reduced_motion(crate::preferences::reduced_motion());
         rt.set_live_waker(Arc::new(move || { let _ = live_proxy.send_event(WakeEvent::Live(slot)); }));
         rt.set_live_visible(false);
@@ -307,6 +344,7 @@ impl<S: 'static> Host<S> {
         Host {
             chrome,
             options,
+            placement: None,
             macos_window,
             native_handle,
             on_created,
@@ -582,6 +620,33 @@ pub(crate) fn map_key(key: &WKey, m: ModifiersState) -> Option<KeyEvent> {
 }
 
 impl<S: 'static> Host<S> {
+    fn place(&mut self, event_loop: &ActiveEventLoop, request: crate::windows::PlaceRequest) {
+        self.options.position = None;
+        self.placement = Some(request);
+        self.apply_placement(event_loop);
+    }
+
+    fn apply_placement(&self, event_loop: &ActiveEventLoop) {
+        let (Some(request), Some(w)) = (&self.placement, &self.win) else { return };
+        if is_wayland(event_loop) { return; }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = request.pointer;
+            crate::macos::place_window(&w.window, self.rt.viewport, request);
+        }
+        #[cfg(not(target_os = "macos"))]
+        if let Some(monitor) = crate::overlay::monitor_at(event_loop, &request.display, request.pointer) {
+            let scale = monitor.scale_factor();
+            let area = monitor.size();
+            let rect = crate::overlay_options::local_rect(crate::windows::PlaceRequest::at(self.rt.viewport), Some(request.placement),
+                (area.width as f32 / scale as f32, area.height as f32 / scale as f32));
+            let origin = monitor.position();
+            let _ = w.window.request_inner_size(LogicalSize::new(rect[2], rect[3]));
+            w.window.set_outer_position(PhysicalPosition::new(origin.x + (f64::from(rect[0]) * scale).round() as i32,
+                origin.y + (f64::from(rect[1]) * scale).round() as i32));
+        }
+    }
+
     fn window_request(&mut self, event_loop: &ActiveEventLoop, request: WindowRequest) {
         match request {
             WindowRequest::Open(token) => self.open(event_loop, token),
@@ -592,6 +657,7 @@ impl<S: 'static> Host<S> {
     }
 
     fn set_position(&mut self, event_loop: &ActiveEventLoop, position: (i32, i32)) {
+        self.placement = None;
         self.options.position = Some(position);
         if !is_wayland(event_loop) && let Some(w) = &self.win {
             w.window.set_outer_position(PhysicalPosition::new(position.0, position.1));
@@ -607,12 +673,10 @@ impl<S: 'static> Host<S> {
     }
 
     fn show(&mut self, event_loop: &ActiveEventLoop) {
+        self.apply_placement(event_loop);
         let Some(w) = self.win.as_mut() else { self.create(event_loop, None, false); return };
         if !w.visible {
-            #[cfg(target_os = "macos")]
-            crate::macos::show_without_focus(&w.window);
-            #[cfg(not(target_os = "macos"))]
-            w.window.set_visible(true);
+            w.show(false);
         }
         w.visible = true;
         w.occluded = false;
@@ -630,7 +694,7 @@ impl<S: 'static> Host<S> {
             w.window.request_user_attention(Some(winit::window::UserAttentionType::Informational));
             return;
         }
-        w.window.focus_window();
+        w.focus();
     }
 
     /// Applies everything other threads asked for since the last wake-up.
@@ -649,6 +713,7 @@ impl<S: 'static> Host<S> {
             crate::macos::set_dock_icon(visible);
         }
         if let Some(position) = requests.position { self.set_position(event_loop, position); }
+        if let Some(place) = requests.place { self.place(event_loop, place); }
         if let Some(request) = requests.window { self.window_request(event_loop, request); }
         if requests.focus { self.focus(event_loop); }
         self.shell(event_loop);
@@ -686,7 +751,7 @@ impl<S: 'static> Host<S> {
             return;
         }
         if !self.keep_running {
-            if let Some(w) = &self.win { w.window.set_visible(false); }
+            if let Some(w) = &self.win { w.hide(); }
             self.finished = true;
             return;
         }
@@ -700,6 +765,7 @@ impl<S: 'static> Host<S> {
         self.rt.set_live_visible(false);
         self.rt.pointer_leave();
         self.mods = ModifiersState::empty();
+        if let Some(w) = &self.win { w.hide(); }
         if self.release_gpu {
             self.win = None;
             self.native_handle.native.number.store(0, Ordering::Release);
@@ -711,12 +777,12 @@ impl<S: 'static> Host<S> {
             self.win = None;
             self.native_handle.native.number.store(0, Ordering::Release);
         } else if let Some(w) = self.win.as_mut() {
-            w.window.set_visible(false);
             w.visible = false;
         }
     }
 
     fn open(&mut self, event_loop: &ActiveEventLoop, token: Option<String>) {
+        self.apply_placement(event_loop);
         // The launcher's startup token belongs to the first window only.
         #[allow(unused_mut)]
         let mut from_env = None;
@@ -732,7 +798,7 @@ impl<S: 'static> Host<S> {
             return;
         };
         if !w.visible {
-            w.window.set_visible(true);
+            w.show(false);
             w.visible = true;
             self.rt.settle_all();
             self.idle = true;
@@ -761,7 +827,7 @@ impl<S: 'static> Host<S> {
             return;
         }
         let _ = token;
-        w.window.focus_window();
+        w.focus();
         w.window.request_redraw();
     }
 
@@ -781,6 +847,8 @@ impl<S: 'static> Host<S> {
         let visible = self.started || self.options.visible;
         #[allow(unused_mut)]
         let mut attrs = self.options.attributes(self.spec.title, size, self.spec.min_size, visible).with_active(focus);
+        #[cfg(target_os = "macos")]
+        if self.macos_window.nonactivating_panel { attrs = attrs.with_visible(false).with_active(false); }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         {
             if let Some(id) = crate::tooling::app_id() {
@@ -799,6 +867,10 @@ impl<S: 'static> Host<S> {
             attrs = attrs.with_titlebar_transparent(true).with_title_hidden(true).with_fullsize_content_view(true);
         }
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
+        #[cfg(target_os = "macos")]
+        let panel = if self.macos_window.nonactivating_panel {
+            Some(crate::macos::Panel::adopt_window(&window, size, &self.macos_window).ok_or("could not create nonactivating panel")?)
+        } else { None };
         #[cfg(target_os = "macos")]
         crate::macos::configure_window(&window, &self.macos_window);
         if self.options.click_through && let Err(error) = window.set_cursor_hittest(false) {
@@ -895,12 +967,17 @@ impl<S: 'static> Host<S> {
             activator: None,
             surface,
             config,
+            #[cfg(target_os = "macos")]
+            panel,
             window,
             visible,
             occluded: false,
             cursor: Cursor::Default,
             alpha,
         });
+        self.apply_placement(event_loop);
+        #[cfg(target_os = "macos")]
+        if visible && let Some(w) = &self.win && w.panel.is_some() { w.show(focus); }
         if let Some(created) = self.on_created.take() { created(self.native_handle.clone()); }
         if let Some(on_window) = self.on_window.as_mut() { on_window(&self.native_handle); }
         Ok(())
@@ -1058,6 +1135,7 @@ impl<S: 'static> Host<S> {
             WakeEvent::Window(_, request) => self.window_request(event_loop, request),
             WakeEvent::Focus(_) => self.focus(event_loop),
             WakeEvent::Position(_, position) => self.set_position(event_loop, position),
+            WakeEvent::Place(_, place) => self.place(event_loop, place),
             WakeEvent::Level(_, on) => self.set_always_on_top(event_loop, on),
         }
     }
@@ -1066,7 +1144,20 @@ impl<S: 'static> Host<S> {
         if self.win.as_ref().is_none_or(|w| w.window.id() != id) {
             return;
         }
+        if matches!(&event, WindowEvent::ScaleFactorChanged { .. }) { self.apply_placement(event_loop); }
         match event {
+            WindowEvent::Focused(focused) => {
+                #[cfg(target_os = "macos")]
+                if self.win.as_ref().and_then(|w| w.panel.as_ref()).is_some_and(|p| p.is_key() != focused) {
+                    // winit queues an initial false from its hidden source window before
+                    // adoption. It must not dismiss an already-key panel on first open.
+                    return;
+                }
+                // Deliver independently of drawable availability, including hide/occlusion.
+                self.rt.window_focus(focused);
+                self.shell(event_loop);
+                if self.finished || self.win.is_none() { return; }
+            }
             WindowEvent::CloseRequested => {
                 self.close(event_loop);
                 return;
@@ -1117,7 +1208,6 @@ impl<S: 'static> Host<S> {
             }
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
             WindowEvent::Focused(focused) => {
-                rt.window_focus(focused);
                 rt.set_system_reduced_motion(crate::preferences::reduced_motion());
                 self.secure_input.set(focused && l.visible && !l.occluded && rt.has_secure_focus());
                 place_chrome(&l.window, chrome);

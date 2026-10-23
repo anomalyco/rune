@@ -45,6 +45,7 @@ pub struct App<S: 'static> {
     pub(crate) accessory: bool,
     pub(crate) keep_running: bool,
     pub(crate) on_close: Option<fn(&mut S, &mut Tx)>,
+    pub(crate) on_focus: Option<fn(&mut S, bool, &mut Tx)>,
     pub(crate) shared: Arc<Shared<S>>,
     pub(crate) overlays: Vec<Box<dyn crate::overlay::PendingOverlay>>,
     pub(crate) on_window: Option<OnWindow>,
@@ -69,6 +70,7 @@ impl<S: 'static> App<S> {
             accessory: false,
             keep_running: false,
             on_close: None,
+            on_focus: None,
             shared: Arc::default(),
             overlays: Vec::new(),
             on_window: None,
@@ -88,6 +90,19 @@ impl<S: 'static> App<S> {
     /// `run_windows` takes them per `WindowSpec` instead.
     pub fn window_options(mut self, options: crate::WindowOptions) -> Self {
         self.window_options = options;
+        self
+    }
+
+    /// Native window policy, also retained by a single-window App.
+    pub fn macos_window(mut self, options: crate::MacWindowOptions) -> Self {
+        self.macos_window = options;
+        self
+    }
+
+    /// Called once per native focus transition, including while hidden or occluded.
+    /// Headless scripts deliver the same callback with `{"focus": false}`.
+    pub fn on_focus(mut self, f: fn(&mut S, bool, &mut Tx)) -> Self {
+        self.on_focus = Some(f);
         self
     }
 
@@ -247,7 +262,15 @@ impl<S: 'static> AppHandle<S> {
     /// Set the outer position in physical desktop pixels (negative coordinates are valid).
     /// Retained across recreation. Wayland does not support application window placement.
     pub fn set_position(&self, position: (i32, i32)) {
-        self.request(|q| q.position = Some(position));
+        self.request(|q| { q.position = Some(position); q.place = None; });
+    }
+
+    /// Place in display-local points. UnderPointer samples the pointer at this call;
+    /// disconnected displays fall back to primary when the UI thread applies the request.
+    /// Wayland does not permit application placement.
+    pub fn place(&self, display: crate::DisplayTarget, placement: crate::OverlayPlacement) {
+        let place = crate::windows::PlaceRequest::new(display, placement);
+        self.request(|q| { q.place = Some(place); q.position = None; });
     }
 
     /// Show and focus the window with an activation token another process forwarded
@@ -313,6 +336,7 @@ pub(crate) struct Requests<S> {
     pub dock: Option<bool>,
     pub focus: bool,
     pub position: Option<(i32, i32)>,
+    pub place: Option<crate::windows::PlaceRequest>,
     pub quit: bool,
     pub updates: Vec<Update<S>>,
 }
@@ -324,6 +348,7 @@ impl<S> Default for Requests<S> {
             dock: None,
             focus: false,
             position: None,
+            place: None,
             quit: false,
             updates: Vec::new(),
         }
@@ -378,6 +403,39 @@ mod tests {
 
     fn spec() -> AppSpec<u32> {
         AppSpec::new("test", (100.0, 100.0), || 0, |_: &u32, _: &mut Cx<u32>| el())
+    }
+
+    #[test]
+    fn window_panel_placement_and_pixel_position_are_last_request_wins() {
+        let app = App::new(spec());
+        let handle = app.handle();
+        handle.set_position((10, 20));
+        handle.place(crate::DisplayTarget::Primary, crate::OverlayPlacement::FullScreen);
+        let q = app.shared.take();
+        assert!(q.position.is_none());
+        assert_eq!(q.place.unwrap().placement, crate::OverlayPlacement::FullScreen);
+        handle.place(crate::DisplayTarget::Primary, crate::OverlayPlacement::FullScreen);
+        handle.set_position((-10, 20));
+        let q = app.shared.take();
+        assert!(q.place.is_none());
+        assert_eq!(q.position, Some((-10, 20)));
+    }
+
+    #[test]
+    fn window_panel_focus_is_local_deduplicated_and_runs_without_frames() {
+        let mut rt = Runtime::new(Vec::new(), |_: &Vec<bool>, _: &mut Cx<Vec<bool>>| el(), (100.0, 100.0), Env::default());
+        rt.on_focus = Some(|seen, focused, tx| { seen.push(focused); if !focused { tx.close_window(); } });
+        let mut other = Runtime::new(Vec::new(), |_: &Vec<bool>, _: &mut Cx<Vec<bool>>| el(), (100.0, 100.0), Env::default());
+        other.on_focus = rt.on_focus;
+        rt.window_focus(true);
+        rt.window_focus(true);
+        rt.window_focus(false);
+        rt.window_focus(false);
+        assert_eq!(rt.state, [true, false]);
+        assert_eq!(rt.shell_request, Some(Shell::Close));
+        assert!(other.state.is_empty());
+        other.window_focus(false);
+        assert_eq!(other.state, [false]);
     }
 
     #[test]

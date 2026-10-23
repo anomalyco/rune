@@ -40,6 +40,35 @@ declare_class!(
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" { fn CGDisplayBounds(display: u32) -> NSRect; }
 
+/// CoreGraphics queries are thread-safe; snapshot the display before queuing a UI request.
+pub(crate) fn pointer_display() -> Option<u32> {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGEventCreate(source: *const std::ffi::c_void) -> *const std::ffi::c_void;
+        fn CGEventGetLocation(event: *const std::ffi::c_void) -> NSPoint;
+        fn CGGetDisplaysWithPoint(point: NSPoint, max: u32, displays: *mut u32, count: *mut u32) -> i32;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" { fn CFRelease(object: *const std::ffi::c_void); }
+    // SAFETY: the created event is released exactly once; output buffers live through the call.
+    unsafe {
+        let event = CGEventCreate(std::ptr::null());
+        if event.is_null() { return None; }
+        let point = CGEventGetLocation(event);
+        CFRelease(event);
+        let (mut id, mut count) = (0, 0);
+        (CGGetDisplaysWithPoint(point, 1, &mut id, &mut count) == 0 && count > 0).then_some(id)
+    }
+}
+
+pub(crate) fn place_window(window: &winit::window::Window, size: (f32, f32), request: &crate::windows::PlaceRequest) {
+    let options = OverlayOptions { display: request.display.clone(), placement: Some(request.placement), ..Default::default() };
+    if let (Some(window), Some(rect)) = (ns_window(window), overlay_rect(crate::windows::PlaceRequest::at(size), &options))
+        && window.frame() != rect {
+        window.setFrame_display(rect, true);
+    }
+}
+
 pub(crate) fn display_bounds(id: u32) -> [f64; 4] {
     let r = unsafe { CGDisplayBounds(id) };
     [r.origin.x, r.origin.y, r.size.width, r.size.height]
@@ -253,6 +282,17 @@ pub(crate) struct Panel {
 
 impl Panel {
     pub fn adopt(window: &winit::window::Window, at: crate::overlay::Placement, interactive: bool, options: &OverlayOptions, wake: Option<crate::Waker>) -> Option<Panel> {
+        Self::adopt_kind(window, at, interactive, options, wake, false)
+    }
+
+    pub fn adopt_window(window: &winit::window::Window, size: (f32, f32), native: &crate::MacWindowOptions) -> Option<Panel> {
+        let options = OverlayOptions { input: OverlayInput::All, keys: KeyPolicy::OnDemand, ..Default::default() };
+        let panel = Self::adopt_kind(window, crate::windows::PlaceRequest::at(size), true, &options, None, true)?;
+        configure_native(&panel.panel, native);
+        Some(panel)
+    }
+
+    fn adopt_kind(window: &winit::window::Window, at: crate::overlay::Placement, interactive: bool, options: &OverlayOptions, wake: Option<crate::Waker>, ordinary: bool) -> Option<Panel> {
         use objc2_app_kit::{NSBackingStoreType, NSColor, NSPanel, NSView, NSWindowCollectionBehavior, NSWindowStyleMask};
         use objc2_foundation::{NSPoint, NSRect, NSSize};
         use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -265,10 +305,11 @@ impl Panel {
         let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(at.size.0 as f64, at.size.1 as f64));
         // SAFETY: AppKit calls on the main thread; the panel is retained by `Panel`.
         let warming = Rc::new(Cell::new(false));
+        let style = if ordinary { ns_window.styleMask() } else { NSWindowStyleMask::Borderless };
         let panel = unsafe {
             let panel: Retained<OverlayPanel> = msg_send_id![super(mtm.alloc().set_ivars(PanelFlags { keys: options.keys == KeyPolicy::OnDemand, warming: warming.clone() })),
                 initWithContentRect: rect,
-                styleMask: NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel,
+                styleMask: style | NSWindowStyleMask::NonactivatingPanel,
                 backing: NSBackingStoreType::NSBackingStoreBuffered,
                 defer: false];
             Retained::cast::<NSPanel>(panel)
@@ -290,6 +331,17 @@ impl Panel {
             .level(match options.level { OverlayLevel::Status => 25, OverlayLevel::AboveStatus => 26, OverlayLevel::AboveOverlays => 27 });
         if options.exclude_from_capture { native = native.exclude_from_capture(true); }
         configure_native(&panel, &native);
+        if ordinary {
+            panel.setTitle(&ns_window.title());
+            panel.setLevel(3);
+            panel.setHasShadow(ns_window.hasShadow());
+            // SAFETY: both retained windows are owned on the AppKit main thread.
+            unsafe {
+                panel.setContentMinSize(ns_window.contentMinSize());
+                panel.setContentMaxSize(ns_window.contentMaxSize());
+            }
+            panel.setFrame_display(ns_window.frame(), false);
+        }
         panel.setOpaque(false);
         panel.setIgnoresMouseEvents(options.input.resolved(interactive) != OverlayInput::All);
         panel.setAcceptsMouseMovedEvents(true);
@@ -303,7 +355,8 @@ impl Panel {
         ns_window.setContentView(None);
         panel.setContentView(Some(&view));
         let pointer = Rc::new(PointerState { input: Cell::new(options.input.resolved(interactive)), follow: Cell::new(options.follow_pointer), ..Default::default() });
-        let bridge = crate::macos_panel_bridge::Bridge::new(&ns_window, &panel, &view, Some(pointer.clone()));
+        let bridge = if ordinary { crate::macos_panel_bridge::Bridge::new_window(&ns_window, &panel, &view) }
+            else { crate::macos_panel_bridge::Bridge::new(&ns_window, &panel, &view, Some(pointer.clone())) };
         if bridge.is_none() {
             panel.setContentView(None);
             ns_window.setContentView(Some(&view));
@@ -385,6 +438,7 @@ impl Panel {
             unsafe { self.panel.makeKeyWindow(); }
         }
     }
+    pub fn is_key(&self) -> bool { self.panel.isKeyWindow() }
     pub fn take_pointer(&self) -> Option<(f32, f32)> { self.pointer.pending.take() }
     pub fn pointer_captured(&self) -> bool { self.pointer.captured.get() }
     pub fn take_recovered_release(&self) -> Option<(f32, f32)> { self.pointer.recovered_release.take() }

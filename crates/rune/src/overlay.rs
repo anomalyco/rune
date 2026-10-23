@@ -252,7 +252,7 @@ pub(crate) struct Overlay<T: 'static> {
 
 impl<T: 'static> Overlay<T> {
     pub(crate) fn new<S>(configured: impl Into<ConfiguredOverlay<T>>, state: T, app: &AppSpec<S>) -> (Self, OverlayHandle<T>) {
-        let ConfiguredOverlay { spec, options, on_key, on_created, poll, compositor } = configured.into();
+        let ConfiguredOverlay { spec, options, on_key, on_created, poll, on_focus, compositor } = configured.into();
         let shared = Arc::new(Shared { native: Mutex::default(), requests: Mutex::default(), availability: AtomicU8::new(0), wake: Mutex::new(None) });
         let text = TextSystem::new(app.fonts, app.families);
         let mut rt = Runtime::with_text(state, spec.view, spec.size, Env::default(), text);
@@ -260,6 +260,7 @@ impl<T: 'static> Overlay<T> {
         rt.wall_start = Some(Instant::now());
         rt.native_overlay = true;
         rt.on_key = on_key;
+        rt.on_focus = on_focus;
         rt.set_live_visible(false);
         // App and overlay may use different state types. Downcast the function pointer
         // once, without a per-frame adapter or changing App::overlay's generic API.
@@ -1023,7 +1024,17 @@ impl<T: 'static> AnyHost for Overlay<T> {
         window.is_some_and(|w| w.id() == id)
     }
 
-    fn window_event(&mut self, _event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        if let WindowEvent::Focused(focused) = &event {
+            #[cfg(target_os = "macos")]
+            if self.panel.as_ref().is_some_and(|p| p.is_key() != *focused) { return; }
+            self.rt.window_focus(*focused);
+            match self.rt.shell_request.take() {
+                Some(crate::el::Shell::Close) => self.hide(),
+                Some(crate::el::Shell::Quit) => event_loop.exit(),
+                None => {}
+            }
+        }
         if !self.visible { return; }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. })
@@ -1047,7 +1058,6 @@ impl<T: 'static> AnyHost for Overlay<T> {
             // modifier-only key event lands; do not introduce a second key API here.
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
             WindowEvent::Focused(focused) => {
-                self.rt.window_focus(focused);
                 self.rt.set_system_reduced_motion(crate::preferences::reduced_motion());
                 if !focused { self.rt.cancel_composition(); }
                 self.dirty = true;
@@ -1169,6 +1179,10 @@ fn position(event_loop: &ActiveEventLoop, at: Placement, options: &OverlayOption
 }
 
 fn monitor(event_loop: &ActiveEventLoop, target: &DisplayTarget) -> Option<winit::monitor::MonitorHandle> {
+    monitor_at(event_loop, target, None)
+}
+
+pub(crate) fn monitor_at(event_loop: &ActiveEventLoop, target: &DisplayTarget, sampled: Option<(i32, i32)>) -> Option<winit::monitor::MonitorHandle> {
     let monitors: Vec<_> = event_loop.available_monitors().collect();
     let primary = event_loop.primary_monitor().and_then(|p| monitors.iter().position(|m| *m == p));
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -1192,7 +1206,7 @@ fn monitor(event_loop: &ActiveEventLoop, target: &DisplayTarget) -> Option<winit
     let pointer = if *target == DisplayTarget::UnderPointer && !crate::window::is_wayland(event_loop) { crate::x11_overlay::pointer_position() } else { None };
     #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
     let pointer: Option<(i32, i32)> = None;
-    let i = crate::overlay_options::choose_display(&bounds, primary, requested, pointer.map(|(x, y)| (f64::from(x), f64::from(y))))?;
+    let i = crate::overlay_options::choose_display(&bounds, primary, requested, sampled.or(pointer).map(|(x, y)| (f64::from(x), f64::from(y))))?;
     Some(monitors[i].clone())
 }
 
@@ -1221,6 +1235,20 @@ impl<T: 'static> Drop for Overlay<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_panel_overlay_focus_callback_is_connected_before_first_show() {
+        fn view(_: &Vec<bool>, _: &mut Cx<Vec<bool>>) -> El { crate::el() }
+        let app = AppSpec::new("focus", (100.0, 100.0), Vec::new, view);
+        let spec = OverlaySpec::new("focus", app.size, view).options(Default::default())
+            .on_focus(|s, focused, tx| { s.push(focused); if !focused { tx.close_window(); } });
+        let (mut overlay, _) = Overlay::new(spec, Vec::new(), &app);
+        overlay.rt.window_focus(true);
+        overlay.rt.window_focus(false);
+        assert_eq!(overlay.rt.state, [true, false]);
+        assert_eq!(overlay.rt.shell_request, Some(crate::el::Shell::Close));
+        assert!(overlay.live.is_none());
+    }
 
     #[test]
     fn overlay_live_values_resume_before_retained_reveal_and_stop_on_hide() {

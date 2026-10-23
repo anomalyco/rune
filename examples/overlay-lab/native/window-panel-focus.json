@@ -1,0 +1,5 @@
+[
+  {"t": 0, "focus": true},
+  {"t": 0.1, "focus": false},
+  {"t": 0.2, "focus": false}
+]

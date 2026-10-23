@@ -266,6 +266,7 @@ struct LayoutEntry {
 
 pub struct Runtime<S: 'static> {
     pub state: S,
+    pub(crate) on_focus: Option<fn(&mut S, bool, &mut Tx)>,
     view: fn(&S, &mut Cx<S>) -> El,
     pub text: TextSystem,
     /// RGBA images elements show (`El::pixels`), uploaded by the renderer.
@@ -522,6 +523,7 @@ impl<S: 'static> Runtime<S> {
             live_wake: crate::live::Wake::new(Arc::new(|| {})),
             live_clock: Arc::new(()),
             window_focused: None,
+            on_focus: None,
             live_subscriptions: Vec::new(),
             live_dirty: false,
             key_warnings: None,
@@ -667,6 +669,7 @@ impl<S: 'static> Runtime<S> {
     pub fn window_focus(&mut self, focused: bool) {
         if self.window_focused != Some(focused) {
             self.window_focused = Some(focused);
+            if let Some(f) = self.on_focus { self.update(|s, tx| f(s, focused, tx)); }
             self.queue.push(Action::WindowFocus(focused));
         }
     }

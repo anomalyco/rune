@@ -4,7 +4,7 @@
 use std::{cell::RefCell, collections::HashMap, ffi::{CString, c_char, c_void}};
 use objc2::{msg_send, sel, runtime::{AnyClass, AnyObject, Bool, Sel}};
 use objc2_app_kit::{NSPanel, NSView, NSWindow};
-use objc2_foundation::{NSPoint, NSRect};
+use objc2_foundation::{NSPoint, NSRect, NSSize};
 use std::rc::Rc;
 
 unsafe extern "C" {
@@ -39,6 +39,33 @@ extern "C" fn screen(window: &AnyObject, _: Sel) -> *mut AnyObject {
     unsafe { let panel = handles(window).1 as *mut AnyObject; msg_send![panel, screen] }
 }
 
+// Ordinary panel hosts retain winit's geometry/appearance API. Only their source window
+// gets these forwards; overlay placement continues to manage both native frames itself.
+extern "C" fn frame(window: &AnyObject, _: Sel) -> NSRect {
+    unsafe { let panel = handles(window).1 as *mut AnyObject; msg_send![panel, frame] }
+}
+extern "C" fn key(window: &AnyObject, _: Sel) -> Bool {
+    unsafe { let panel = handles(window).1 as *mut AnyObject; msg_send![panel, isKeyWindow] }
+}
+extern "C" fn set_frame(window: &AnyObject, _: Sel, rect: NSRect, display: Bool) {
+    unsafe { let panel = handles(window).1 as *mut AnyObject; let _: () = msg_send![panel, setFrame: rect, display: display]; }
+}
+extern "C" fn set_origin(window: &AnyObject, _: Sel, point: NSPoint) {
+    unsafe { let panel = handles(window).1 as *mut AnyObject; let _: () = msg_send![panel, setFrameOrigin: point]; }
+}
+extern "C" fn set_size(window: &AnyObject, _: Sel, size: NSSize) {
+    unsafe { let panel = handles(window).1 as *mut AnyObject; let _: () = msg_send![panel, setContentSize: size]; }
+}
+extern "C" fn set_title(window: &AnyObject, _: Sel, title: *mut AnyObject) {
+    unsafe { let panel = handles(window).1 as *mut AnyObject; let _: () = msg_send![panel, setTitle: title]; }
+}
+extern "C" fn set_level(window: &AnyObject, _: Sel, level: isize) {
+    unsafe { let panel = handles(window).1 as *mut AnyObject; let _: () = msg_send![panel, setLevel: level]; }
+}
+extern "C" fn set_hit(window: &AnyObject, _: Sel, ignore: Bool) {
+    unsafe { let panel = handles(window).1 as *mut AnyObject; let _: () = msg_send![panel, setIgnoresMouseEvents: ignore]; }
+}
+
 extern "C" fn hit_test(view: &AnyObject, _: Sel, point: NSPoint) -> *mut AnyObject {
     let entry = VIEWS.with(|views| views.borrow().get(&(view as *const _ as usize)).cloned());
     let Some((original, state)) = entry else { return std::ptr::null_mut() };
@@ -57,10 +84,16 @@ pub(crate) struct Bridge { source: *mut AnyObject, original: *const AnyClass, vi
 impl Bridge {
     /// Main-thread only. The owner retains all three objects until after this bridge drops.
     pub fn new(source: &NSWindow, panel: &NSPanel, view: &NSView, filter: Option<Rc<crate::macos::PointerState>>) -> Option<Self> {
+        Self::new_kind(source, panel, view, filter, false)
+    }
+    pub fn new_window(source: &NSWindow, panel: &NSPanel, view: &NSView) -> Option<Self> {
+        Self::new_kind(source, panel, view, None, true)
+    }
+    fn new_kind(source: &NSWindow, panel: &NSPanel, view: &NSView, filter: Option<Rc<crate::macos::PointerState>>, ordinary: bool) -> Option<Self> {
         let source = (source as *const NSWindow).cast_mut().cast::<AnyObject>();
         unsafe {
             let original = object_getClass(source);
-            let name = CString::new(format!("RuneOverlaySource_{:x}", original as usize)).ok()?;
+            let name = CString::new(format!("RuneOverlaySource_{:x}_{ordinary}", original as usize)).ok()?;
             let class = if let Some(class) = AnyClass::get(name.to_str().ok()?) { class as *const AnyClass } else {
                 let class = objc_allocateClassPair(original, name.as_ptr(), 0);
                 if class.is_null() { return None; }
@@ -75,6 +108,22 @@ impl Bridge {
                     // All selectors belong to NSWindow, inherited by every winit/KVO source.
                     assert!(!method.is_null());
                     assert!(class_addMethod(class, selector, implementation, method_getTypeEncoding(method)));
+                }
+                if ordinary {
+                    for (selector, implementation) in [
+                        (sel!(frame), frame as *const c_void),
+                        (sel!(isKeyWindow), key as *const c_void),
+                        (sel!(setFrame:display:), set_frame as *const c_void),
+                        (sel!(setFrameOrigin:), set_origin as *const c_void),
+                        (sel!(setContentSize:), set_size as *const c_void),
+                        (sel!(setTitle:), set_title as *const c_void),
+                        (sel!(setLevel:), set_level as *const c_void),
+                        (sel!(setIgnoresMouseEvents:), set_hit as *const c_void),
+                    ] {
+                        let method = class_getInstanceMethod(original, selector);
+                        assert!(!method.is_null());
+                        assert!(class_addMethod(class, selector, implementation, method_getTypeEncoding(method)));
+                    }
                 }
                 objc_registerClassPair(class);
                 class

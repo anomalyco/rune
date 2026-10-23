@@ -244,7 +244,7 @@ const HELP: &str = "usage: <app> [window]
   --at SECONDS          virtual time of the snapshot/tree (default: end of frames or script)
   --size WxH            viewport in points      --scale N   device scale (default 2)
   --theme dark|light    system appearance
-  --script FILE.json    timestamped pointer events (move/down/up/tap/drag, by x,y or key)
+  --script FILE.json    timestamped input (move/down/up/tap/drag, keys, {\"focus\":false})
   --frames N --fps 60 --start S --out DIR     dump N frames from S seconds
   --strip out.png --crop x,y,w,h --every K    tile dumped frames into one image
                         (repeat --crop to stack several regions per frame; --cols N per row)
@@ -338,6 +338,7 @@ enum Pos {
 
 #[derive(Clone, Debug)]
 enum Kind {
+    Focus(bool),
     Move,
     Down,
     Up,
@@ -381,10 +382,18 @@ fn load_script(path: &PathBuf) -> Vec<Ev> {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| die(&format!("{}: {e}", path.display())));
     let v: Value = serde_json::from_str(&text).unwrap_or_else(|e| die(&format!("{}: {e}", path.display())));
     let list = v.get("events").cloned().unwrap_or(v);
+    parse_script(list)
+}
+
+fn parse_script(list: Value) -> Vec<Ev> {
     let Value::Array(items) = list else { die("script must be an array of events or {\"events\": [...]}") };
     let mut out = Vec::new();
     for e in items {
         let t = e["t"].as_f64().unwrap_or(0.0);
+        if let Some(focused) = e["focus"].as_bool() {
+            out.push(Ev { t, kind: Kind::Focus(focused), pos: Pos::Rel(0.0, 0.0) });
+            continue;
+        }
         let pos = if let Some(k) = e["key"].as_str() {
             Pos::Key(k.to_owned())
         } else if let (Some(x), Some(y)) = (e["x"].as_f64(), e["y"].as_f64()) {
@@ -479,6 +488,20 @@ fn load_script(path: &PathBuf) -> Vec<Ev> {
     }
     out.sort_by(|a, b| a.t.total_cmp(&b.t));
     out
+}
+
+#[cfg(test)]
+#[test]
+fn window_panel_headless_focus_steps_preserve_false_and_event_order() {
+    let script = parse_script(serde_json::json!([{"focus":true}, {"t":0.1,"focus":false}, {"t":0.2,"focus":false}]));
+    let mut rt = Runtime::new(Vec::new(), |_: &Vec<bool>, _: &mut crate::Cx<Vec<bool>>| crate::el(), (100.0, 100.0), Env::default());
+    rt.on_focus = Some(|s, focused, _| s.push(focused));
+    assert_eq!(script.len(), 3);
+    for event in script {
+        let Kind::Focus(focused) = event.kind else { panic!("focus parsed as pointer action") };
+        rt.window_focus(focused);
+    }
+    assert_eq!(rt.state, [true, false]);
 }
 
 // -------------------------------------------------------------------------------------------
@@ -732,6 +755,7 @@ fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, tran
     let mut comp = app.compositor.take();
     #[cfg(all(feature = "dev", debug_assertions))]
     let dev = app.dev.take();
+    let on_focus = app.on_focus;
     let (spec, state, shared) = app.into_parts(args.scene.as_deref());
     let scale = args.scale.unwrap_or(2.0);
     let size = args.size.unwrap_or(spec.size);
@@ -740,6 +764,7 @@ fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, tran
     let mut rt = runtime_for(&spec, state, size, Env::new(dark, scale), std::sync::Arc::new(|| {}));
     #[cfg(all(feature = "dev", debug_assertions))]
     attach_dev(&mut rt, &spec, dev, std::sync::Arc::new(|| {}));
+    rt.on_focus = on_focus;
     rt.transparent = transparent;
     if args.tree.is_some() { rt.key_warnings = Some(Vec::new()); }
     rt.track_marks = comp.is_some();
@@ -796,6 +821,7 @@ fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, tran
                 },
             };
             match &e.kind {
+                Kind::Focus(focused) => rt.window_focus(*focused),
                 Kind::Move => rt.pointer_move(x, y),
                 Kind::Down => {
                     last_down = (x, y);
