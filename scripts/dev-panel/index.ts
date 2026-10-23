@@ -35,7 +35,9 @@ socket.addEventListener("message", event => {
         // The colour control holds oklch; compare in Rune's hex form so unchanged colours stay out.
         const values: Record<string, unknown> = { ...controls!.get() }
         for (const d of descriptors) if (d.kind === "color") values[d.key] = colorHex(values[d.key] as string) ?? values[d.key]
+        // Like knobs' built-in "rust": a selection or group with nothing changed copies its values as they are.
         return formatRust(descriptors, values as State, group)
+          || (keys || group ? formatRust(descriptors, values as State, group, { includeDefaults: true }) : "")
       },
     })
   } else if (next !== shape) {
