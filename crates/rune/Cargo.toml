@@ -58,3 +58,7 @@ libloading = "0.8"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"] }
+
+[[test]]
+name = "macos_appearance_kvo"
+harness = false

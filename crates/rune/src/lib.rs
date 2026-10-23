@@ -43,6 +43,9 @@ mod win32_pointer;
 mod macos;
 #[cfg(target_os = "macos")]
 mod macos_panel_bridge;
+#[cfg(target_os = "macos")]
+#[doc(hidden)]
+pub mod macos_appearance;
 pub mod color;
 pub mod compose;
 pub mod edit;

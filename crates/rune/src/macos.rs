@@ -207,6 +207,7 @@ fn ns_window(window: &winit::window::Window) -> Option<objc2::rc::Retained<objc2
 }
 
 pub(crate) fn configure_window(window: &winit::window::Window, options: &crate::MacWindowOptions) {
+    crate::macos_appearance::install();
     if let Some(window) = ns_window(window) { configure_native(&window, options); }
 }
 
@@ -256,6 +257,7 @@ impl Panel {
         use objc2_foundation::{NSPoint, NSRect, NSSize};
         use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
         let mtm = MainThreadMarker::new()?;
+        crate::macos_appearance::install();
         let RawWindowHandle::AppKit(handle) = window.window_handle().ok()?.as_raw() else { return None };
         // SAFETY: winit's content view is alive while its window is, and we retain it.
         let view = unsafe { objc2::rc::Retained::retain(handle.ns_view.as_ptr().cast::<NSView>()) }?;
