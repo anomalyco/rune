@@ -184,6 +184,7 @@ pub struct ElementInfo {
 #[derive(Clone, Copy)]
 struct Inh {
     opacity: f32,
+    paint_opacity: f32,
     clip: [f32; 4],
     fade: [f32; 4],
     scale: f32,
@@ -198,7 +199,7 @@ struct Inh {
 
 impl Default for Inh {
     fn default() -> Self {
-        Inh { opacity: 1.0, clip: NO_CLIP, fade: [0.0; 4], scale: 1.0, anchor: [0.0; 2], blur: 0.0, dy: 0.0, mark: 0, group: 0.0 }
+        Inh { opacity: 1.0, paint_opacity: 1.0, clip: NO_CLIP, fade: [0.0; 4], scale: 1.0, anchor: [0.0; 2], blur: 0.0, dy: 0.0, mark: 0, group: 0.0 }
     }
 }
 
@@ -294,6 +295,8 @@ pub struct Runtime<S: 'static> {
     glyph_scratch: Vec<GlyphQuad>,
     deco_scratch: Vec<Deco>,
     inh_scratch: Vec<Inh>,
+    /// Only nonempty when retained exit nodes make storage order differ from subtree order.
+    layer_paint_order: Vec<usize>,
     /// Drawn rect per node (points, root space), for tools and hit tests.
     drawn: Vec<[f32; 4]>,
     scrolls: HashMap<NodeId, ScrollState>,
@@ -440,6 +443,7 @@ impl<S: 'static> Runtime<S> {
             glyph_scratch: Vec::new(),
             deco_scratch: Vec::new(),
             inh_scratch: Vec::new(),
+            layer_paint_order: Vec::new(),
             drawn: Vec::new(),
             scrolls: HashMap::new(),
             grows: HashMap::new(),
@@ -740,6 +744,29 @@ impl<S: 'static> Runtime<S> {
         }
         self.virtuals.retain(|path, _| self.nodes.iter().any(|n| n.path == *path));
         self.refresh_modal_index();
+        if !self.layer_paint_order.is_empty() { self.update_layer_paint_order(); }
+    }
+
+    fn update_layer_paint_order(&mut self) {
+        let n = self.nodes.len();
+        let mut first = vec![n; n + 1];
+        let mut next = vec![n; n];
+        for i in (0..n).rev() {
+            let parent = self.nodes[i].parent.map_or(0, |p| p + 1);
+            next[i] = first[parent]; first[parent] = i;
+        }
+        self.layer_paint_order.clear();
+        let mut i = first[0];
+        while i < n {
+            self.layer_paint_order.push(i);
+            if first[i + 1] < n { i = first[i + 1]; continue; }
+            while next[i] == n {
+                let Some(parent) = self.nodes[i].parent else { i = n; break };
+                i = parent;
+            }
+            if i < n { i = next[i]; }
+        }
+        if self.layer_paint_order.iter().copied().eq(0..n) { self.layer_paint_order.clear(); }
     }
 
     fn capture_text_flight(&mut self, source: String, target: String) {
@@ -1687,6 +1714,8 @@ impl<S: 'static> Runtime<S> {
         }
 
         self.nodes = nodes;
+        if self.nodes.len() > present_len { self.update_layer_paint_order(); }
+        else { self.layer_paint_order.clear(); }
         self.virtuals.retain(|path, _| self.nodes.iter().any(|n| n.path == *path));
         self.subscribe_live();
         self.refresh_modal_index();
@@ -2156,6 +2185,9 @@ impl<S: 'static> Runtime<S> {
         let vp = [0.0, 0.0, self.viewport.0 * s, self.viewport.1 * s];
         let mut glyph_count = 0usize;
         let mut ambient: Option<f32> = None;
+        // Allocates only when a group fades. Scope records preserve absolute instance indices
+        // for images, video insertions, retained springs and compositor list ranges.
+        let mut layers: Vec<(usize, usize, usize)> = Vec::new();
 
         // Growth rows: presented top offset, height and bottom feather mask per node index.
         self.row_dy.clear();
@@ -2188,8 +2220,24 @@ impl<S: 'static> Runtime<S> {
             self.row_h[ci] = y + stack.pad_bottom;
         }
 
-        for i in 0..n_nodes {
+        // Exiting descendants are appended to storage. Bring them back into their subtree
+        // only when isolation requires it; the ordinary painter stream stays byte-identical.
+        let tree_order = self.layer_paint_order.windows(2).any(|pair| {
+            let n = &self.nodes[pair[0]];
+            self.nodes[pair[1]].parent == Some(pair[0]) && (n.vis.group_opacity.is_some()
+                || matches!(n.looping, Some(rune_motion::LoopSpec { kind: rune_motion::LoopKind::Opacity { .. } | rune_motion::LoopKind::OpacityCycle(_), .. }))
+                || self.scene.presented(n.id).is_some_and(|p| p.opacity > 0.0 && p.opacity < 1.0))
+        });
+        for paint_index in 0..n_nodes {
+            let i = if tree_order { self.layer_paint_order[paint_index] } else { paint_index };
             let n = &self.nodes[i];
+            while let Some(&(ancestor, start, surface_start)) = layers.last() {
+                let mut parent = n.parent;
+                while parent.is_some_and(|p| p != ancestor) { parent = self.nodes[parent.unwrap()].parent; }
+                if parent == Some(ancestor) { break; }
+                crate::render::end_layer(&mut self.instances, &mut self.surfaces, &mut self.marks, start, surface_start);
+                layers.pop();
+            }
             let Some(p) = self.scene.presented(n.id) else { continue };
             let mut pinh = n.parent.map_or(Inh::default(), |pr| self.inh_scratch[pr]);
             pinh.dy += self.row_dy[i];
@@ -2198,17 +2246,21 @@ impl<S: 'static> Runtime<S> {
             if let Some([rest, hov]) = n.vis.group_opacity {
                 own *= rest + (hov - rest) * pinh.group;
             }
-            let mut o = (own * pinh.opacity).clamp(0.0, 1.0);
+            let base_opacity = (own * pinh.opacity).clamp(0.0, 1.0);
             let group = if n.vis.hover.a > 0.0 || n.vis.hover_group {
                 self.scene.get(n.id, P_HOVER).unwrap_or(0.0).clamp(0.0, 1.0)
             } else {
                 pinh.group
             };
-            let base_opacity = o;
             let loop_value = self.loops.get(&n.id).map(|l| l.sample_at(now, self.clock, self.reduced_motion));
             if let (Some(rune_motion::LoopSpec { kind: rune_motion::LoopKind::Opacity { .. } | rune_motion::LoopKind::OpacityCycle(_), .. }), Some(v)) = (n.looping, loop_value) {
-                o *= v;
+                own *= v;
             }
+            let effective_opacity = (own * pinh.opacity).clamp(0.0, 1.0);
+            let next = if tree_order { self.layer_paint_order.get(paint_index + 1).copied() } else { (i + 1 < n_nodes).then_some(i + 1) };
+            let isolate = own > 0.0 && own < 1.0 && effective_opacity > 0.0
+                && next.is_some_and(|j| self.nodes[j].parent == Some(i));
+            let o = if isolate { 1.0 } else { (own * pinh.paint_opacity).clamp(0.0, 1.0) };
             let (mut clip, mut fade) = (pinh.clip, pinh.fade);
             let own_sc = p.transform.scale.x;
             let (sc, anchor) = if (own_sc - 1.0).abs() > 1e-5 {
@@ -2286,7 +2338,22 @@ impl<S: 'static> Runtime<S> {
                     if self.loop_wake.is_none_or(|w| wake < w.0) { self.loop_wake = Some((wake, start)); }
                 }
             }
-            if o > 0.001 && visible {
+            if isolate {
+                layers.push((i, self.instances.len(), self.surfaces.len()));
+                self.instances.push(Instance::begin_layer([r[0], r[1], w, h], clip,
+                    crate::render::LayerSpec { opacity: own * pinh.paint_opacity }));
+            }
+            // Include native surface geometry, which lives beside the primitive stream.
+            if n.vis.surface.is_some() {
+                for &(_, at, _) in &layers {
+                    let b = &mut self.instances[at].rect;
+                    let hi = [(b[0] + b[2]).max(r[2].min(clip[2])), (b[1] + b[3]).max(r[3].min(clip[3]))];
+                    b[0] = b[0].min(r[0].max(clip[0])); b[1] = b[1].min(r[1].max(clip[1]));
+                    b[2] = hi[0] - b[0]; b[3] = hi[1] - b[1];
+                }
+            }
+
+            if effective_opacity > 0.0 && o > 0.0 && visible {
                 let k_px = sc * s;
                 for (k, sh) in n.vis.shadows.iter().enumerate() {
                     let c = if k < P_SHADOWS.len() { self.color(n.id, P_SHADOWS[k], sh.color) } else { sh.color };
@@ -2614,10 +2681,10 @@ impl<S: 'static> Runtime<S> {
                 let origin = self.virtuals.values().find(|v| v.scroll_path == n.path).map_or(0.0, |v| f64::from(v.before));
                 dy -= grid((st.offset - origin) as f32, s);
             }
-            self.inh_scratch[i] = Inh { opacity: o, clip, fade, scale: sc, anchor, blur, dy, mark, group };
+            self.inh_scratch[i] = Inh { opacity: effective_opacity, paint_opacity: o, clip, fade, scale: sc, anchor, blur, dy, mark, group };
             if (n.on_press.is_some() || n.on_secondary_press.is_some() || n.on_hover.is_some() || n.on_drag.is_some() || n.input.is_some() || n.window_drag || n.focus.enabled || n.modal.is_some())
                 && !self.subtree_exiting(i)
-                && self.allowed(i) && o > 0.001 && visible
+                && self.allowed(i) && effective_opacity > 0.001 && visible
             {
                 let c = self.inh_scratch[n.parent.unwrap_or(0)].clip;
                 let cr = [
@@ -2629,6 +2696,10 @@ impl<S: 'static> Runtime<S> {
                 self.hits.push((n.id, if n.parent.is_some() { cr } else { rect_pt }));
             }
         }
+        for (_, start, surface_start) in layers.into_iter().rev() {
+            crate::render::end_layer(&mut self.instances, &mut self.surfaces, &mut self.marks, start, surface_start);
+        }
+        if self.track_marks { self.marks.resize(self.instances.len(), 0); }
         self.stats.glyphs = glyph_count;
         self.ambient = ambient;
     }

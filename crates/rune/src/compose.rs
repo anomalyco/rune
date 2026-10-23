@@ -44,8 +44,9 @@ pub struct Frame<'a, S: 'static> {
     pub update_ms: f64,
     /// Instances, `marks`, the clock (`t`), the pointer, element rects and app state.
     pub rt: &'a mut Runtime<S>,
-    /// Rune's own renderer: `prepare_lists` + `draw_range` draw any subset of the instances
-    /// into any target (`add_format` for non-target formats).
+    /// Rune's own renderer: `prepare_lists`, `encode_layers`, then `draw_range` draw complete
+    /// painter scopes into any target (`add_format` for non-target formats). Layer begin/end
+    /// records must remain balanced; do not partition a scope by primitive kind.
     pub ui: &'a mut Renderer,
 }
 

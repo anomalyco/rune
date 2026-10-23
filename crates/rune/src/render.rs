@@ -1,9 +1,13 @@
-//! The wgpu renderer: one instanced pipeline, one draw call per frame, plus offscreen readback.
+//! The instanced wgpu renderer, with lazy bounded group layers and offscreen readback.
 
 use bytemuck::{Pod, Zeroable};
 
 use crate::pixels::ImageAtlas;
 use crate::text::{ATLAS_SIZE, Atlas};
+
+#[path = "layers.rs"]
+mod layers;
+pub use layers::LayerStats;
 
 pub const KIND_RECT: f32 = 0.0;
 pub const KIND_SHADOW: f32 = 1.0;
@@ -20,6 +24,21 @@ pub const KIND_TRIANGLE: f32 = 6.0;
 /// An RGBA image (`El::pixels`): `uv.xy` its origin in the image atlas, `uv.zw` its size in
 /// texels, drawn scaled into `rect` with the element's corner `radii`; `fill.a` is the opacity.
 pub const KIND_IMAGE: f32 = 7.0;
+/// Balanced scope records in the painter stream. They occupy instance indices but are never
+/// rasterized as ordinary quads. Keep scopes intact when partitioning compositor lists.
+pub const KIND_LAYER: f32 = 8.0;
+pub const KIND_LAYER_END: f32 = 9.0;
+
+/// Composition properties of an isolated subtree. Filters can extend this contract without
+/// changing painter-stream scopes or the target pool.
+#[derive(Clone, Copy, Debug)]
+pub struct LayerSpec {
+    pub opacity: f32,
+}
+
+impl Default for LayerSpec {
+    fn default() -> Self { Self { opacity: 1.0 } }
+}
 
 /// One instance, in device pixels.
 #[repr(C)]
@@ -39,6 +58,44 @@ pub struct Instance {
 }
 
 pub const NO_CLIP: [f32; 4] = [-1e6, -1e6, 1e6, 1e6];
+
+impl Instance {
+    /// Begin an isolated scope. `bounds` is a device-pixel [x,y,w,h] content bound, including
+    /// native surfaces. Primitive bounds (including shadow support) expand it during prepare.
+    pub fn begin_layer(bounds: [f32; 4], clip: [f32; 4], spec: LayerSpec) -> Self {
+        Self { rect: bounds, clip, fill: [0.0, 0.0, 0.0, spec.opacity.clamp(0.0, 1.0)],
+            params: [0.0, KIND_LAYER, 0.0, 0.0], ..Self::zeroed() }
+    }
+
+    pub fn end_layer() -> Self {
+        Self { params: [0.0, KIND_LAYER_END, 0.0, 0.0], ..Self::zeroed() }
+    }
+}
+
+/// Close a runtime scope, folding empty/single-draw groups back into the direct path. Only the
+/// last one or two records move, so video insertions before this scope keep their indices.
+pub(crate) fn end_layer(instances: &mut Vec<Instance>, surfaces: &mut [crate::native_surface::SurfaceDraw], marks: &mut Vec<u32>, start: usize, surface_start: usize) {
+    let primitives = instances.len() - start - 1;
+    let videos = surfaces.len() - surface_start;
+    if primitives + videos <= 1 {
+        let opacity = instances[start].fill[3];
+        if primitives == 1 {
+            let i = &mut instances[start + 1];
+            i.fill = i.fill.map(|v| v * opacity);
+            i.border = i.border.map(|v| v * opacity);
+            if i.params[1] == KIND_GRADIENT { i.uv = i.uv.map(|v| v * opacity); }
+        }
+        if videos == 1 {
+            surfaces[surface_start].opacity *= opacity;
+            surfaces[surface_start].before_instance -= 1;
+        }
+        instances.remove(start);
+        if marks.len() > start { marks.remove(start); }
+    } else {
+        instances.push(Instance::end_layer());
+        if let Some(&mark) = marks.get(start) { marks.push(mark); }
+    }
+}
 
 pub struct Gpu {
     pub instance: wgpu::Instance,
@@ -115,6 +172,7 @@ pub struct Renderer {
     count: u32,
     springs: Option<crate::gpu_springs::Bindings>,
     spring_instances: usize,
+    layers: layers::Layers,
 }
 
 impl Renderer {
@@ -130,7 +188,7 @@ impl Renderer {
 
     fn create(device: &wgpu::Device, format: wgpu::TextureFormat, properties: Option<(&[crate::gpu_springs::Node], &[u32])>) -> Renderer {
         let source = if properties.is_some() {
-            format!("{}\n{}", include_str!("shader.wgsl").replace("@vertex\nfn vs(", "fn base_vs("), crate::gpu_springs::SHADER)
+            format!("{}\n{}", include_str!("shader.wgsl"), crate::gpu_springs::SHADER)
         } else { include_str!("shader.wgsl").to_owned() };
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("uber"),
@@ -169,11 +227,18 @@ impl Renderer {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
             ],
         });
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: 16,
+            size: u64::from(device.limits().min_uniform_buffer_offset_alignment) + 16,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -188,7 +253,7 @@ impl Renderer {
             view_formats: &[],
         });
         let stand_in = Self::image_texture(device, 1, 1);
-        let bind_group = Self::bind_group(device, &bgl, &globals, &atlas, &stand_in);
+        let bind_group = Self::bind_group(device, &bgl, &globals, &atlas, &stand_in, None);
         let spring_layout = properties.map(|_| crate::gpu_springs::Bindings::layout(device));
         let layouts = [Some(&bgl), spring_layout.as_ref()];
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -221,6 +286,7 @@ impl Renderer {
             count: 0,
             springs,
             spring_instances,
+            layers: Default::default(),
         }
     }
 
@@ -285,6 +351,7 @@ impl Renderer {
         globals: &wgpu::Buffer,
         atlas: &wgpu::Texture,
         images: &wgpu::Texture,
+        target: Option<&wgpu::Buffer>,
     ) -> wgpu::BindGroup {
         let atlas_view = atlas.create_view(&Default::default());
         let image_view = images.create_view(&Default::default());
@@ -295,6 +362,11 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&atlas_view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&image_view) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: target.unwrap_or(globals),
+                    offset: if target.is_some() { 0 } else { u64::from(device.limits().min_uniform_buffer_offset_alignment) },
+                    size: std::num::NonZeroU64::new(16),
+                }) },
             ],
         })
     }
@@ -302,13 +374,15 @@ impl Renderer {
     /// Uploads changed rows of the runtime's image atlas (`El::pixels`), creating its texture on
     /// first use.
     pub fn upload_images(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, images: &mut ImageAtlas) {
+        let mut changed = self.images.len() != images.pages.len();
         self.images.resize_with(images.pages.len(), || None);
         for (index, page) in images.pages.iter_mut().enumerate() {
-            if page.data.is_empty() { self.images[index] = None; continue; }
+            if page.data.is_empty() { changed |= self.images[index].is_some(); self.images[index] = None; continue; }
             if self.images[index].as_ref().is_none_or(|(t, _)| t.width() != page.width || t.height() != page.height) {
                 let texture = Self::image_texture(device, page.width, page.height);
-                let bind = Self::bind_group(device, &self.bind_layout, &self.globals, &self.atlas, &texture);
+                let bind = Self::bind_group(device, &self.bind_layout, &self.globals, &self.atlas, &texture, None);
                 self.images[index] = Some((texture, bind));
+                changed = true;
                 page.dirty = Some((0, page.height));
             }
             let Some((y0, y1)) = page.dirty.take() else { continue };
@@ -325,6 +399,8 @@ impl Renderer {
             wgpu::Extent3d { width: page.width, height: y1 - y0, depth_or_array_layers: 1 },
         );
         }
+        if changed { self.images_changed(); }
+        self.refresh_layer_bindings(device);
     }
 
     /// Builds the pipeline for another target format (e.g. an `Rgba16Float` layer), once.
@@ -333,6 +409,8 @@ impl Renderer {
             let p = Self::pipeline(device, &self.layout, &self.shader, format, self.vertex_entry);
             self.extra.push((format, p));
         }
+        if self.layer_stats().targets > 0 { self.add_layer_format(device, format); }
+        if let Some(s) = &mut self.surfaces { s.add_format(device, format); }
     }
 
     /// Uploads several instance lists back to back (one buffer, one glyph upload) and returns
@@ -357,8 +435,15 @@ impl Renderer {
     }
 
     /// Draws uploaded instances `range` into a pass whose target has `format` (the renderer's
-    /// own, or one added with `add_format`).
+    /// own, or one added with `add_format`). Call `encode_layers` before opening the pass.
+    /// Scopes are atomic: list/range boundaries must not bisect a layer.
     pub fn draw_range(&self, pass: &mut wgpu::RenderPass<'_>, format: wgpu::TextureFormat, range: std::ops::Range<u32>) {
+        if range.is_empty() && range.end != self.count { return; }
+        self.validate_layer_range(&range);
+        self.draw_layer_range(pass, format, range, None);
+    }
+
+    fn draw_instances(&self, pass: &mut wgpu::RenderPass<'_>, format: wgpu::TextureFormat, range: std::ops::Range<u32>, target: Option<usize>) {
         if range.is_empty() {
             return;
         }
@@ -372,7 +457,11 @@ impl Renderer {
         pass.set_vertex_buffer(0, self.instances.slice(..));
         let start = self.image_batches.partition_point(|(batch, _)| batch.end <= range.start);
         for (batch, page) in self.image_batches[start..].iter().take_while(|(batch, _)| batch.start < range.end) {
-            pass.set_bind_group(0, self.images.get(*page).and_then(Option::as_ref).map_or(&self.bind_group, |(_, bind)| bind), &[]);
+            let bind = if let Some(index) = target {
+                let t = self.layers.targets[index].as_ref().unwrap();
+                t.images.get(*page).and_then(Option::as_ref).unwrap_or(&t.base)
+            } else { self.images.get(*page).and_then(Option::as_ref).map_or(&self.bind_group, |(_, bind)| bind) };
+            pass.set_bind_group(0, bind, &[]);
             pass.draw(0..4, batch.start.max(range.start)..batch.end.min(range.end));
         }
     }
@@ -420,7 +509,9 @@ impl Renderer {
         self.count = instances.len() as u32;
         self.image_batches.clear();
         let (mut start, mut page) = (0, 0);
+        let mut has_layers = false;
         for (i, instance) in instances.iter().enumerate() {
+            has_layers |= instance.params[1] == KIND_LAYER;
             if instance.params[1] == KIND_IMAGE && instance.params[0] as usize != page {
                 if start < i as u32 { self.image_batches.push((start..i as u32, page)); }
                 start = i as u32;
@@ -428,13 +519,17 @@ impl Renderer {
             }
         }
         if start < self.count { self.image_batches.push((start..self.count, page)); }
+        self.prepare_layers(device, queue, if has_layers { instances } else { &[] }, viewport);
     }
 
     pub fn prepare_surfaces(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, draws: &[crate::native_surface::SurfaceDraw], viewport: (u32,u32)) {
         if !draws.is_empty() && self.surfaces.is_none() {
-            self.surfaces = Some(crate::native_surface::SurfaceRenderer::new(device, self.format));
+            let mut surfaces = crate::native_surface::SurfaceRenderer::new(device, self.format);
+            for (format, _) in &self.extra { surfaces.add_format(device, *format); }
+            self.surfaces = Some(surfaces);
         }
         if let Some(s) = &mut self.surfaces { s.prepare(device,queue,draws,viewport); }
+        if self.layer_stats().targets > 0 { self.position_layer_surfaces(queue); }
     }
 
     pub fn submit(&self, queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) -> wgpu::SubmissionIndex {
@@ -467,6 +562,12 @@ impl Renderer {
     }
 
     pub fn draw_timed(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, clear: [f32; 4], timestamps: Option<wgpu::RenderPassTimestampWrites<'_>>) {
+        let timestamps = timestamps.or_else(|| self.surfaces.as_ref().and_then(|s| s.timestamp_writes()));
+        self.encode_layers_timed(encoder, timestamps.as_ref());
+        let timestamps = timestamps.map(|mut t| {
+            if self.layer_stats().extra_passes > 0 { t.beginning_of_pass_write_index = None; }
+            t
+        });
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("frame"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -484,20 +585,11 @@ impl Renderer {
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: timestamps.or_else(|| self.surfaces.as_ref().and_then(|s| s.timestamp_writes())),
+            timestamp_writes: timestamps,
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        let mut first = 0;
-        let video_count = self.surfaces.as_ref().map_or(0, |s| s.len());
-        for index in 0..=video_count {
-            let end = if index == video_count { self.count } else { self.surfaces.as_ref().unwrap().before_instance(index).min(self.count) };
-            if end > first {
-                self.draw_range(&mut pass, self.format, first..end);
-            }
-            if index < video_count { self.surfaces.as_ref().unwrap().draw(&mut pass,index); }
-            first = end;
-        }
+        self.draw_range(&mut pass, self.format, 0..self.count);
     }
 }
 

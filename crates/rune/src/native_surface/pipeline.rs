@@ -62,6 +62,8 @@ pub struct SurfaceRenderer {
     queries_used: std::sync::atomic::AtomicBool,
     completion: std::sync::mpsc::SyncSender<()>,
     pipeline: wgpu::RenderPipeline,
+    format: wgpu::TextureFormat,
+    extra: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     cache: HashMap<usize, Arc<Imported>>,
@@ -129,16 +131,36 @@ impl SurfaceRenderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let pipeline = Self::pipeline(device, &layout, format);
+        Self {
+            device: device.clone(),
+            timing_pool,
+            queries: None,
+            queries_used: std::sync::atomic::AtomicBool::new(false),
+            completion,
+            pipeline,
+            format,
+            extra: Vec::new(),
+            layout,
+            sampler,
+            cache: HashMap::new(),
+            draws: Vec::new(),
+            #[cfg(target_os = "macos")]
+            importer: None,
+        }
+    }
+
+    fn pipeline(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, format: wgpu::TextureFormat) -> wgpu::RenderPipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("video"),
             source: wgpu::ShaderSource::Wgsl(include_str!("video.wgsl").into()),
         });
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("video"),
-            bind_group_layouts: &[Some(&layout)],
+            bind_group_layouts: &[Some(layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("video"),
             layout: Some(&pl),
             vertex: wgpu::VertexState {
@@ -162,20 +184,12 @@ impl SurfaceRenderer {
             }),
             multiview_mask: None,
             cache: None,
-        });
-        Self {
-            device: device.clone(),
-            timing_pool,
-            queries: None,
-            queries_used: std::sync::atomic::AtomicBool::new(false),
-            completion,
-            pipeline,
-            layout,
-            sampler,
-            cache: HashMap::new(),
-            draws: Vec::new(),
-            #[cfg(target_os = "macos")]
-            importer: None,
+        })
+    }
+
+    pub(crate) fn add_format(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
+        if format != self.format && !self.extra.iter().any(|(f, _)| *f == format) {
+            self.extra.push((format, Self::pipeline(device, &self.layout, format)));
         }
     }
 
@@ -347,9 +361,19 @@ impl SurfaceRenderer {
     pub fn before_instance(&self, index: usize) -> u32 {
         self.draws[index].before
     }
+    /// Reproject one draw into a bounded layer without moving its screen-space clip or UVs.
+    pub(crate) fn target(&self, queue: &wgpu::Queue, index: usize, bounds: [f32; 4]) {
+        queue.write_buffer(&self.draws[index].uniform, 0,
+            bytemuck::cast_slice(&[bounds[2], bounds[3], bounds[0], bounds[1]]));
+    }
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, index: usize) {
+        self.draw_format(pass, index, self.format);
+    }
+    pub(crate) fn draw_format(&self, pass: &mut wgpu::RenderPass<'_>, index: usize, format: wgpu::TextureFormat) {
         self.draws[index].drawn.store(true, std::sync::atomic::Ordering::Relaxed);
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(if format == self.format { &self.pipeline } else {
+            &self.extra.iter().find(|(f, _)| *f == format).expect("SurfaceRenderer::add_format first").1
+        });
         pass.set_bind_group(0, &self.draws[index].bind, &[]);
         pass.draw(0..4, 0..1);
     }

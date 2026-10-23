@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Instant;
 
 use rune::compose::{Compositor, Frame, is_glyph};
-use rune::render::{Instance, KIND_RECT};
+use rune::render::{Instance, KIND_GRADIENT, KIND_LAYER, KIND_LAYER_END, KIND_RECT};
 use rune_fx::{
     AuroraParams, BlurMode, DistortParams, ElectricParams, ElectricStyle, FireParams, Fx, FxFrame, FxLayer, FxOptions,
     FxRenderer, GlowParams, GlowStyle, GrainParams, Heat, LensParams, MaskPyramid, MotionBlurParams, MotionSamples, Pose,
@@ -628,7 +628,27 @@ impl Compositor<Lab> for LabGfx {
         let mut top: HashMap<usize, usize> = HashMap::new();
         let mut stage_fill = [0.0, 0.0, 0.0, 1.0];
         let needs_mask = lays.iter().any(|l| l.layer.source.is_some_and(|s| s.slot == SRC_MASK));
+        // This demo owns a different effect graph: it splits glyphs from their backgrounds
+        // and inserts effects between individual nodes. Preserve its existing flattened
+        // opacity semantics until that graph can composite an entire scope after lighting.
+        // Ordinary Rune compositors instead preserve scopes and call encode_layers.
+        let mut opacity = 1.0;
+        let mut opacity_stack = Vec::new();
         for (i, ins) in inst.iter().enumerate() {
+            if ins.params[1] == KIND_LAYER {
+                opacity_stack.push(opacity);
+                opacity *= ins.fill[3];
+                continue;
+            }
+            if ins.params[1] == KIND_LAYER_END {
+                opacity = opacity_stack.pop().expect("balanced Rune layer scopes");
+                continue;
+            }
+            let mut flattened = *ins;
+            flattened.fill = flattened.fill.map(|v| v * opacity);
+            flattened.border = flattened.border.map(|v| v * opacity);
+            if flattened.params[1] == KIND_GRADIENT { flattened.uv = flattened.uv.map(|v| v * opacity); }
+            let ins = &flattened;
             let m = marks.get(i).copied().unwrap_or(0);
             if m == stage::STAGE_MARK && ins.params[1] == KIND_RECT {
                 stage_fill = ins.fill;

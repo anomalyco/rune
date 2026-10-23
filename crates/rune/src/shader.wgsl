@@ -1,7 +1,8 @@
 // One instanced "uber-quad": rounded rects with per-corner radius and border (kind 0), analytic
 // Gaussian rounded-rect shadows (kind 1), glyph-atlas text (kind 2), inset shadows (kind 3) and
 // vertical-gradient rounded rects (kind 4), stroke segments (kind 5) and filled triangles
-// (kind 6) for vector shapes, and RGBA images (kind 7). Every instance carries a
+// (kind 6) for vector shapes, RGBA images (kind 7), and premultiplied layer composites (kind 8).
+// Scope-end records (kind 9) never reach this shader. Every ordinary instance carries a
 // soft-edge clip. Output is premultiplied linear colour into an sRGB target (linear blending).
 
 struct Globals {
@@ -12,6 +13,9 @@ struct Globals {
 @group(0) @binding(0) var<uniform> g: Globals;
 @group(0) @binding(1) var atlas: texture_2d<f32>;
 @group(0) @binding(2) var images: texture_2d<f32>;
+// Zero size selects the window viewport. Layer targets keep all geometry/clip coordinates
+// absolute and change only the final projection, including GPU-spring translations.
+@group(0) @binding(3) var<uniform> projection: vec4<f32>;
 
 struct In {
     @builtin(vertex_index) vi: u32,
@@ -40,6 +44,17 @@ struct Out {
 
 @vertex
 fn vs(i: In) -> Out {
+    return base_vs(i);
+}
+
+// Composites deliberately bypass retained instance tracks: the layer's contents already
+// sampled those tracks using their original absolute instance indices.
+@vertex
+fn vs_layer(i: In) -> Out {
+    return base_vs(i);
+}
+
+fn base_vs(i: In) -> Out {
     let corner = vec2<f32>(f32(i.vi & 1u), f32(i.vi >> 1u));
     let kind = i.params.y;
     var grow = 1.0 + i.params.z * 2.0;
@@ -65,7 +80,9 @@ fn vs(i: In) -> Out {
         screen = center + vec2<f32>(c * q.x - s * q.y, s * q.x + c * q.y);
     }
     var o: Out;
-    o.pos = vec4<f32>(screen.x / g.viewport.x * 2.0 - 1.0, 1.0 - screen.y / g.viewport.y * 2.0, 0.0, 1.0);
+    let size_px = select(g.viewport, projection.zw, projection.z > 0.0);
+    let local = screen - projection.xy;
+    o.pos = vec4<f32>(local.x / size_px.x * 2.0 - 1.0, 1.0 - local.y / size_px.y * 2.0, 0.0, 1.0);
     o.p = p;
     o.rect = i.rect;
     o.radii = i.radii;
@@ -236,6 +253,11 @@ fn image_texel(t: vec2<i32>, premultiplied: bool) -> vec4<f32> {
 
 @fragment
 fn fs(i: Out) -> @location(0) vec4<f32> {
+    if (i.params.y == 8.0) {
+        let p = i.pos.xy + projection.xy - i.rect.xy;
+        if (any(p < vec2<f32>(0.0)) || any(p >= i.rect.zw)) { discard; }
+        return textureLoad(images, vec2<i32>(floor(p)), 0) * i.fill.a;
+    }
     let kind = i.params.y;
     let half = i.rect.zw * 0.5;
     let center = i.rect.xy + half;
@@ -271,11 +293,11 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
         let cov = clamp(0.5 - d, 0.0, 1.0);
         col = c * (i.fill.a * cov);
     } else if (kind > 4.5 && kind < 5.5) {
-        col = i.fill * segment(i.pos.xy, i.radii.xy, i.radii.zw, i.params.x, i.params.z > 0.5);
+        col = i.fill * segment(i.pos.xy + projection.xy, i.radii.xy, i.radii.zw, i.params.x, i.params.z > 0.5);
     } else if (kind > 5.5 && kind < 6.5) {
         // The pixel centre itself, not `p`: `p` is interpolated over each triangle's own quad, so
         // neighbours would disagree in the last bits about who owns a pixel on a shared edge.
-        col = i.fill * triangle(i.pos.xy, i.radii.xy, i.radii.zw, i.uv.xy, u32(i.params.x + 0.5));
+        col = i.fill * triangle(i.pos.xy + projection.xy, i.radii.xy, i.radii.zw, i.uv.xy, u32(i.params.x + 0.5));
     } else if (kind > 2.5) {
         let d = sd_rounded(i.p - center, half, i.radii);
         let cov = clamp(0.5 - d, 0.0, 1.0);
@@ -299,7 +321,7 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
     } else {
         // Interpolated screen coordinates can round below an integer texel
         // boundary. Fragment position is the rasterizer's exact pixel center.
-        let p = i.pos.xy;
+        let p = i.pos.xy + projection.xy;
         var cov: f32;
         if i.uv.z > 0.0 {
             // Flying text keeps the original atlas footprint while its quad scales uniformly.
@@ -315,6 +337,6 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
         col = i.fill * pow(cov, i.params.w);
     }
     var clip_p = i.p;
-    if (kind > 1.5 && kind < 2.5 && i.params.x != 0.0) { clip_p = i.pos.xy; }
+    if (kind > 1.5 && kind < 2.5 && i.params.x != 0.0) { clip_p = i.pos.xy + projection.xy; }
     return col * clip_alpha(clip_p, i.clip, i.fade);
 }

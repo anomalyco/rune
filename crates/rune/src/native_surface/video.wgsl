@@ -10,7 +10,8 @@ struct Out { @builtin(position) pos: vec4<f32> };
 @vertex fn vs(@builtin(vertex_index) vi: u32) -> Out {
     let corner = vec2<f32>(f32(vi & 1u), f32(vi >> 1u));
     let p = u.node.xy + corner * u.node.zw;
-    return Out(vec4<f32>(p.x / u.viewport.x * 2.0 - 1.0, 1.0 - p.y / u.viewport.y * 2.0, 0.0, 1.0));
+    let local = p - u.viewport.zw;
+    return Out(vec4<f32>(local.x / u.viewport.x * 2.0 - 1.0, 1.0 - local.y / u.viewport.y * 2.0, 0.0, 1.0));
 }
 fn linear(v: vec3<f32>) -> vec3<f32> {
     let x = clamp(v, vec3<f32>(0.0), vec3<f32>(1.0));
@@ -37,7 +38,7 @@ fn ramp(d: f32, width: f32) -> f32 {
     let x = clamp(d / width, 0.0, 1.0); return x*x*(3.0-2.0*x);
 }
 @fragment fn fs(i: Out) -> @location(0) vec4<f32> {
-    let p = i.pos.xy;
+    let p = i.pos.xy + u.viewport.zw;
     let uv = (p-u.image.xy) / u.image.zw;
     if any(uv < vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0)) { discard; }
     var col: vec4<f32>;
