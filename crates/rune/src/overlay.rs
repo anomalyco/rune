@@ -1072,6 +1072,8 @@ impl<T: 'static> AnyHost for Overlay<T> {
 
 impl<T: 'static> PendingOverlay for Overlay<T> {
     fn connect(&mut self, wake: Waker, gpu: Rc<RefCell<Weak<Gpu>>>) {
+        // All live sources (including Pixels) must share this registration: a second
+        // set_live_waker call replaces the wake lane and resets its subscriptions.
         self.rt.set_live_waker(wake.clone());
         self.clipboard.connect(wake.clone());
         self.gpu_pool = gpu;

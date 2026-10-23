@@ -26,8 +26,7 @@ struct In {
     @location(4) params: vec4<f32>,
     @location(5) uv: vec4<f32>,
     @location(6) clip: vec4<f32>,
-    @location(7) fade: vec4<f32>,
-    @location(8) fade_origin: vec4<f32>,
+    @location(7) fade: vec4<u32>,
 };
 
 struct Out {
@@ -40,8 +39,7 @@ struct Out {
     @location(5) @interpolate(flat) params: vec4<f32>,
     @location(6) @interpolate(flat) uv: vec4<f32>,
     @location(7) @interpolate(flat) clip: vec4<f32>,
-    @location(8) @interpolate(flat) fade: vec4<f32>,
-    @location(9) @interpolate(flat) fade_origin: vec4<f32>,
+    @location(8) @interpolate(flat) fade: vec4<u32>,
 };
 
 @vertex
@@ -94,7 +92,6 @@ fn base_vs(i: In) -> Out {
     o.uv = i.uv;
     o.clip = i.clip;
     o.fade = i.fade;
-    o.fade_origin = i.fade_origin;
     return o;
 }
 
@@ -119,12 +116,20 @@ fn ramp(d: f32, fade: f32) -> f32 {
     return x * x * (3.0 - 2.0 * x);
 }
 
-fn clip_alpha(p: vec2<f32>, c: vec4<f32>, f: vec4<f32>, origin: vec4<f32>) -> f32 {
+fn clip_alpha(p: vec2<f32>, c: vec4<f32>, packed: vec4<u32>) -> f32 {
+    let f = vec4<f32>(unpack2x16float(packed.x), unpack2x16float(packed.y));
+    let offset = unpack4x8unorm(packed.z);
     let hard = vec4<f32>(p - c.xy, c.zw - p);
-    let soft = vec4<f32>(p - origin.xy, origin.zw - p);
     var alpha = 1.0;
     for (var edge = 0u; edge < 4u; edge++) {
-        alpha *= select(ramp(hard[edge], 0.0), min(ramp(hard[edge], 0.0), ramp(soft[edge], f[edge])), f[edge] > 0.0);
+        // Keep the original sub-pixel ramp exactly when its origin is the hard edge.
+        var a = ramp(hard[edge], f[edge]);
+        if offset[edge] >= 1.0 {
+            a = ramp(hard[edge], 0.0);
+        } else if offset[edge] > 0.0 {
+            a = min(ramp(hard[edge], 0.0), ramp(hard[edge] + offset[edge] * f[edge], f[edge]));
+        }
+        alpha *= a;
     }
     return alpha;
 }
@@ -350,5 +355,5 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
     }
     var clip_p = i.p;
     if (kind > 1.5 && kind < 2.5 && i.params.x != 0.0) { clip_p = i.pos.xy + projection.xy; }
-    return col * clip_alpha(clip_p, i.clip, i.fade, i.fade_origin);
+    return col * clip_alpha(clip_p, i.clip, i.fade);
 }

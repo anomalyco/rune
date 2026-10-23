@@ -204,6 +204,7 @@ impl<S: 'static> ApplicationHandler<WakeEvent> for Windows<S> {
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         // Surfaces go while winit's display connection is still open (layer surfaces live on it).
         self.hosts.clear();
+        crate::clipboard::shutdown();
     }
 }
 
@@ -266,7 +267,9 @@ fn run_configured<S: 'static>(factory: impl FnOnce(&[Display]) -> Vec<WindowSpec
     event_loop.set_control_flow(ControlFlow::Wait);
     let proxy = event_loop.create_proxy();
     let mut windows = Windows { factory: Some(Box::new(factory)), args, proxy, hosts: Vec::new(), gpu: Rc::default() };
-    event_loop.run_app(&mut windows).expect("run");
+    let result = event_loop.run_app(&mut windows);
+    crate::clipboard::shutdown(); // Also cover an event-loop error before `exiting`.
+    result.expect("run");
 }
 
 impl<S: 'static> Host<S> {

@@ -186,3 +186,25 @@ fn linear_countdown_uses_render_time_without_commits_wakes_or_hidden_samples() {
     assert_eq!(width(&rt), 272.0, "a new tween restarts explicitly");
     assert_eq!(wakes.load(Ordering::Relaxed), 0);
 }
+
+#[test]
+fn tween_handle_keeps_its_start_across_unmount_and_remount() {
+    type State = (Tween<f32>, bool);
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let root = el().size(100.0, 100.0);
+        if s.1 { root.child(el().key("countdown").size(20.0, 20.0).live_opacity(&s.0)) } else { root }
+    }
+    let tween = Tween::linear(1.0, 0.0, std::time::Duration::from_secs(10));
+    let mut rt = Runtime::new((tween.clone(), true), view, (100.0, 100.0), Env { scale: 1.0, system_dark: true });
+    rt.frame(0.0); rt.frame(2.0);
+    rt.update(|s, tx| { s.1 = false; tx.settle(); }); rt.frame(0.0);
+    assert!(!rt.elements().iter().any(|e| e.key.as_deref() == Some("countdown")));
+    rt.frame(3.0);
+    rt.update(|s, tx| { s.1 = true; tx.settle(); }); rt.frame(0.0);
+    let opacity = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("countdown")).unwrap().opacity;
+    assert!((opacity - 0.5).abs() < 0.001, "remount must resume the original countdown");
+    // Sharing the handle must not mix independent runtime/virtual clocks.
+    let mut other = Runtime::new((tween, true), view, (100.0, 100.0), Env { scale: 1.0, system_dark: true });
+    other.frame(0.0);
+    assert_eq!(other.elements().into_iter().find(|e| e.key.as_deref() == Some("countdown")).unwrap().opacity, 1.0);
+}

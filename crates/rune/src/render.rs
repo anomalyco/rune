@@ -77,10 +77,31 @@ pub struct Instance {
     pub uv: [f32; 4],
     /// x0, y0, x1, y1
     pub clip: [f32; 4],
-    /// left, top, right, bottom fade widths
-    pub fade: [f32; 4],
-    /// The declaring edge for each fade, independent of the intersected hard clip.
-    pub fade_origin: [f32; 4],
+    /// Attribute 7 is Uint32x4; the instance ABI stays 128 bytes (8 × vec4).
+    /// [0] = pack2x16float(left, top), [1] = pack2x16float(right, bottom) widths.
+    /// [2] = pack4x8unorm(clamp(inward origin→clip distance / width, 0, 1)), LTRB.
+    /// [3] = f32 clip-radius bits, reserved for rounded clips; currently zero.
+    /// Layer records may leave all four words zero. See `pack_fade`.
+    pub fade: [u32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<Instance>() == 128);
+
+pub fn pack_fade(width: [f32; 4], origin: [f32; 4], clip: [f32; 4]) -> [u32; 4] {
+    let halves = width.map(|w| half::f16::from_f32(w.clamp(0.0, 65504.0)).to_bits() as u32);
+    let mut offsets = 0;
+    for edge in 0..4 {
+        let distance = if edge < 2 { clip[edge] - origin[edge] } else { origin[edge] - clip[edge] };
+        let offset = if width[edge] > 0.0 { (distance / width[edge]).clamp(0.0, 1.0) } else { 0.0 };
+        offsets |= ((offset * 255.0 + 0.5) as u32) << (edge * 8);
+    }
+    [halves[0] | (halves[1] << 16), halves[2] | (halves[3] << 16), offsets, 0]
+}
+
+/// Decode widths and normalized origin offsets for tools inspecting the instance stream.
+pub fn unpack_fade(fade: [u32; 4]) -> ([f32; 4], [f32; 4]) {
+    (std::array::from_fn(|e| half::f16::from_bits((fade[e / 2] >> ((e % 2) * 16)) as u16).to_f32()),
+     std::array::from_fn(|e| ((fade[2] >> (e * 8)) & 255) as f32 / 255.0))
 }
 
 pub const NO_CLIP: [f32; 4] = [-1e6, -1e6, 1e6, 1e6];
@@ -336,7 +357,7 @@ impl Renderer {
     ) -> wgpu::RenderPipeline {
         let attrs = wgpu::vertex_attr_array![
             0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4,
-            4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4
+            4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Uint32x4
         ];
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("uber"),

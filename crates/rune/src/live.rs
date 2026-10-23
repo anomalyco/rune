@@ -1,12 +1,12 @@
 //! Latest-wins property values. Sources outlive views and may be shared by windows.
 use std::marker::PhantomData;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Weak, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use portable_atomic::AtomicU128;
 use crate::{Color, Spring, Waker};
 
 /// A linear, render-time track. Keep it in app state and bind it like a `Live` value.
-/// Starts on first attachment to each runtime; view rebuilds retain its elapsed time.
+/// Starts on first attachment to each runtime; rebuilds and remounts retain elapsed time.
 /// No producer ticks, app wake requests or hidden-window sampling are needed.
 pub struct Tween<T: LiveValue> { live: Live<T> }
 impl<T: LiveValue> Clone for Tween<T> {
@@ -17,6 +17,7 @@ impl<T: LiveValue> Tween<T> {
         let mut live = Live::new(to);
         Arc::get_mut(&mut live.source).unwrap().linear = Some(Linear {
             from: from.encode().unwrap_or(0), duration: duration.as_secs_f64(),
+            starts: Mutex::new(Vec::new()),
         });
         Self { live }
     }
@@ -25,8 +26,22 @@ impl<T: LiveValue> From<&Tween<T>> for Binding<T> {
     fn from(tween: &Tween<T>) -> Self { Self { live: tween.live.clone(), spring: None } }
 }
 
-struct Linear { from: u128, duration: f64 }
+struct Linear {
+    from: u128,
+    duration: f64,
+    // The shared Tween owns each runtime clock's start, even while no element binds it.
+    // Weak clock identities also keep independent headless runs deterministic.
+    starts: Mutex<Vec<(Weak<()>, f64)>>,
+}
 impl Linear {
+    fn start(&self, clock: &Arc<()>, now: f64) -> f64 {
+        let mut starts = self.starts.lock().unwrap();
+        starts.retain(|(clock, _)| clock.strong_count() > 0);
+        let clock = Arc::downgrade(clock);
+        if let Some((_, start)) = starts.iter().find(|(c, _)| c.ptr_eq(&clock)) { return *start; }
+        starts.push((clock, now));
+        now
+    }
     fn sample(&self, to: u128, elapsed: f64) -> (u128, bool) {
         let t = if self.duration == 0.0 { 1.0 } else { (elapsed / self.duration).clamp(0.0, 1.0) };
         if t >= 1.0 { return (to, false); }
@@ -128,20 +143,19 @@ pub(crate) struct Bound {
     pub property: Property,
     pub spring: Option<Spring>,
     pub seen: Option<u128>,
-    pub started: Option<f64>,
 }
 impl Bound {
     pub fn new<T: LiveValue>(binding: impl Into<Binding<T>>, property: Property) -> Self {
         let b = binding.into();
-        Self { source: b.live.source, property, spring: b.spring, seen: None, started: None }
+        Self { source: b.live.source, property, spring: b.spring, seen: None }
     }
-    pub fn attach(&mut self, now: f64) {
-        if self.source.linear.is_some() { self.started.get_or_insert(now); }
+    pub fn attach(&self, clock: &Arc<()>, now: f64) {
+        if let Some(linear) = &self.source.linear { linear.start(clock, now); }
     }
-    pub fn read(&mut self, now: f64) -> (Option<u128>, bool) {
+    pub fn read(&mut self, clock: &Arc<()>, now: f64) -> (Option<u128>, bool) {
         let bits = self.source.value.load(Ordering::Acquire);
         let (bits, active) = match &self.source.linear {
-            Some(linear) => linear.sample(bits, now - *self.started.get_or_insert(now)),
+            Some(linear) => linear.sample(bits, now - linear.start(clock, now)),
             None => (bits, false),
         };
         if self.seen == Some(bits) { return (None, active); }

@@ -150,10 +150,14 @@ pub(crate) fn fragment(i: &Primitive, atlas: &Atlas, p: [f32; 2]) -> [f32; 4] {
     }
     let origin = i.fade_origin.unwrap_or(i.clip);
     let hard = [p[0] - i.clip[0], p[1] - i.clip[1], i.clip[2] - p[0], i.clip[3] - p[1]];
-    let soft = [p[0] - origin[0], p[1] - origin[1], origin[2] - p[0], origin[3] - p[1]];
     let clip: f32 = (0..4).map(|edge| {
-        let hard = ramp(hard[edge], 0.0);
-        if i.fade[edge] > 0.0 { hard.min(ramp(soft[edge], i.fade[edge])) } else { hard }
+        let width = half::f16::from_f32(i.fade[edge].clamp(0.0, 65504.0)).to_f32();
+        let distance = if edge < 2 { i.clip[edge] - origin[edge] } else { origin[edge] - i.clip[edge] };
+        let offset = if i.fade[edge] > 0.0 { (distance / i.fade[edge]).clamp(0.0, 1.0) } else { 0.0 };
+        let offset = libm::floorf(offset * 255.0 + 0.5) / 255.0;
+        if offset >= 1.0 { ramp(hard[edge], 0.0) }
+        else if offset > 0.0 { ramp(hard[edge], 0.0).min(ramp(hard[edge] + offset * width, width)) }
+        else { ramp(hard[edge], width) }
     }).product();
     col.map(|c| c * clip)
 }

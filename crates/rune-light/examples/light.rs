@@ -68,8 +68,7 @@ fn inst(rect: [f32; 4], r: f32, fill: Color, border: Option<(Color, f32)>) -> In
         params: [bw, KIND_RECT, 0.0, 1.0],
         uv: [0.0; 4],
         clip: NO_CLIP,
-        fade: [0.0; 4],
-        fade_origin: NO_CLIP,
+        fade: [0; 4],
     }
 }
 
@@ -104,8 +103,7 @@ impl<'a> Ui<'a> {
                 params: [0.0, KIND_GLYPH, 0.0, gamma],
                 uv: [q.uv[0], q.uv[1], 0.0, 0.0],
                 clip: NO_CLIP,
-                fade: [0.0; 4],
-                fade_origin: NO_CLIP,
+                fade: [0; 4],
             });
         }
         self.ts.measure(s, style, S).0

@@ -206,8 +206,8 @@ pub struct SurfaceDraw {
     pub rect: [f32; 4],
     pub radii: [f32; 4],
     pub clip: [f32; 4],
-    pub fade: [f32; 4],
-    pub fade_origin: [f32; 4],
+    /// Packed as `render::Instance::fade`.
+    pub fade: [u32; 4],
     pub opacity: f32,
 }
 

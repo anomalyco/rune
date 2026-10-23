@@ -183,8 +183,7 @@ fn main() {
                     params: [0.0, 2.0, 0.0, gamma],
                     uv: [q.uv[0], q.uv[1], 0.0, 0.0],
                     clip: NO_CLIP,
-                    fade: [0.0; 4],
-                    fade_origin: NO_CLIP,
+                    fade: [0; 4],
                 })
                 .collect();
             renderer.prepare(&gpu.device, &gpu.queue, &mut text.atlas, &instances, (w, h));
@@ -269,8 +268,7 @@ fn main() {
                     params: [0.0, 2.0, 0.0, 1.0],
                     uv: [q.uv[0], q.uv[1], 0.0, 0.0],
                     clip: NO_CLIP,
-                    fade: [0.0; 4],
-                    fade_origin: NO_CLIP,
+                    fade: [0; 4],
                 });
             }
             frames.push(json!({"x":x,"instances":instances.len()-start}));

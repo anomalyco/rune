@@ -567,6 +567,9 @@ starts a new track. It needs no app ticks, layout, shaping, or timer wakes.
 Hidden windows stop sampling and resume at the elapsed value. At the endpoint
 the renderer sleeps. This is a timed value, including under reduced motion;
 it does not use the decorative motion spring or jump to the end on settle.
+The shared handle retains each runtime's start across unmount/remount (including
+virtual-list culling). Replacing the handle, rather than remounting the view,
+starts a new countdown.
 
 `tx.fly_text("prompt", "sent-text")` hands a visible plain-text field to a newly
 mounted, uniquely keyed text node. The runtime captures its visible glyphs before

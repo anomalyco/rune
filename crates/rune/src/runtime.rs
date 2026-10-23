@@ -349,6 +349,7 @@ pub struct Runtime<S: 'static> {
     /// Counters for perf gates.
     pub stats: FrameStats,
     live_wake: Arc<crate::live::Wake>,
+    live_clock: Arc<()>,
     live_subscriptions: Vec<Arc<crate::live::Subscription>>,
     live_dirty: bool,
     /// Opt-in tooling checks. None keeps release commits free of key traversal/allocation.
@@ -489,6 +490,7 @@ impl<S: 'static> Runtime<S> {
             events: Vec::new(),
             stats: FrameStats::default(),
             live_wake: crate::live::Wake::new(Arc::new(|| {})),
+            live_clock: Arc::new(()),
             live_subscriptions: Vec::new(),
             live_dirty: false,
             key_warnings: None,
@@ -543,7 +545,7 @@ impl<S: 'static> Runtime<S> {
     fn subscribe_live(&mut self) {
         use std::sync::atomic::Ordering;
         for node in &mut self.nodes {
-            for bound in &mut node.live { bound.attach(self.clock); }
+            for bound in &mut node.live { bound.attach(&self.live_clock, self.clock); }
         }
         for sub in &self.live_subscriptions { sub.active.store(false, Ordering::Release); }
         for node in &self.nodes {
@@ -571,7 +573,7 @@ impl<S: 'static> Runtime<S> {
         for node in &mut self.nodes {
             for bound in &mut node.live {
                 let initial = bound.seen.is_none();
-                let (bits, active) = bound.read(self.clock);
+                let (bits, active) = bound.read(&self.live_clock, self.clock);
                 self.live_dirty |= active;
                 let Some(bits) = bits else { continue };
                 let spring = if initial { None } else { bound.spring };
@@ -1706,7 +1708,6 @@ impl<S: 'static> Runtime<S> {
                 for bound in &mut nodes[i].live {
                     if let Some(previous) = old.live.iter().find(|b| b.property == bound.property && Arc::ptr_eq(&b.source, &bound.source)) {
                         bound.seen = if tx.settle { None } else { previous.seen };
-                        bound.started = previous.started;
                         if bound.property == crate::live::Property::Fill { fill = Some(old.vis.fill); }
                     }
                 }
@@ -2474,7 +2475,6 @@ impl<S: 'static> Runtime<S> {
                             continue;
                         }
                         self.instances.push(Instance {
-                            fade_origin: clip,
                             rect,
                             radii: sradii,
                             fill: if ring { [0.0; 4] } else { c.premul(o) },
@@ -2482,12 +2482,11 @@ impl<S: 'static> Runtime<S> {
                             params: [if ring { sp } else { 0.0 }, KIND_RECT, 0.0, 1.0],
                             uv: [0.0; 4],
                             clip,
-                            fade,
+                            fade: crate::render::pack_fade(fade, clip, clip),
                         });
                         continue;
                     }
                     self.instances.push(Instance {
-                        fade_origin: clip,
                         rect,
                         radii: sradii,
                         fill: c.premul(o),
@@ -2495,7 +2494,7 @@ impl<S: 'static> Runtime<S> {
                         params: [0.0, KIND_SHADOW, ((sh.blur + blur) * s * 0.5).max(0.5), 1.0],
                         uv: [0.0; 4],
                         clip,
-                        fade,
+                        fade: crate::render::pack_fade(fade, clip, clip),
                     });
                 }
                 let mut overlay = [0.0f32; 4];
@@ -2520,7 +2519,6 @@ impl<S: 'static> Runtime<S> {
                     // Fill, gradient and overlays first, then the border on top, as in CSS.
                     if fill[3] > 0.0005 {
                         self.instances.push(Instance {
-                            fade_origin: clip,
                             rect: [r[0], r[1], w, h],
                             radii,
                             fill,
@@ -2528,7 +2526,7 @@ impl<S: 'static> Runtime<S> {
                             params: [0.0, KIND_RECT, blur * s, 1.0],
                             uv: [0.0; 4],
                             clip,
-                            fade,
+                            fade: crate::render::pack_fade(fade, clip, clip),
                         });
                     }
                     let g = n.vis.gradient.unwrap_or_default();
@@ -2536,7 +2534,6 @@ impl<S: 'static> Runtime<S> {
                     let bottom = self.color(n.id, P_GRADIENT[1], g[1]).premul(o);
                     if top[3] > 0.0005 || bottom[3] > 0.0005 {
                         self.instances.push(Instance {
-                            fade_origin: clip,
                             rect: [r[0], r[1], w, h],
                             radii,
                             fill: top,
@@ -2544,19 +2541,18 @@ impl<S: 'static> Runtime<S> {
                             params: [0.0, KIND_GRADIENT, 0.0, 1.0],
                             uv: bottom,
                             clip,
-                            fade,
+                            fade: crate::render::pack_fade(fade, clip, clip),
                         });
                     }
                     if let Some((surface, fit)) = &n.vis.surface {
                         self.surfaces.push(crate::native_surface::SurfaceDraw {
                             surface: surface.clone(), fit: *fit, before_instance: self.instances.len() as u32,
-                            rect: [r[0], r[1], w, h], radii, clip, fade, fade_origin, opacity: o,
+                            rect: [r[0], r[1], w, h], radii, clip, fade: crate::render::pack_fade(fade, fade_origin, clip), opacity: o,
                         });
                     }
                     let ov = overlay.map(|c| c * o);
                     if ov[3] > 0.0005 || border[3] > 0.0005 {
                         self.instances.push(Instance {
-                            fade_origin: clip,
                             rect: [r[0], r[1], w, h],
                             radii,
                             fill: ov,
@@ -2564,12 +2560,11 @@ impl<S: 'static> Runtime<S> {
                             params: [bw, KIND_RECT, blur * s, 1.0],
                             uv: [0.0; 4],
                             clip,
-                            fade,
+                            fade: crate::render::pack_fade(fade, clip, clip),
                         });
                     }
                 } else if fill[3] > 0.0005 || border[3] > 0.0005 {
                     self.instances.push(Instance {
-                        fade_origin: clip,
                         rect: [r[0], r[1], w, h],
                         radii,
                         fill,
@@ -2577,7 +2572,7 @@ impl<S: 'static> Runtime<S> {
                         params: [bw, KIND_RECT, blur * s, 1.0],
                         uv: [0.0; 4],
                         clip,
-                        fade,
+                        fade: crate::render::pack_fade(fade, clip, clip),
                     });
                 }
                 for (k, sh) in n.vis.shadows.iter().enumerate() {
@@ -2589,7 +2584,6 @@ impl<S: 'static> Runtime<S> {
                         continue;
                     }
                     self.instances.push(Instance {
-                        fade_origin: clip,
                         rect: [r[0], r[1], w, h],
                         radii,
                         fill: c.premul(o),
@@ -2597,7 +2591,7 @@ impl<S: 'static> Runtime<S> {
                         params: [sh.spread * k_px, KIND_INSET, if sh.blur > 0.0 { (sh.blur * s * 0.5).max(0.5) } else { 0.0 }, 1.0],
                         uv: [sh.x * k_px, sh.y * k_px, 0.0, 0.0],
                         clip,
-                        fade,
+                        fade: crate::render::pack_fade(fade, clip, clip),
                     });
                 }
                 let focus_ring = self.focus_ring_visible(i).then_some(n.focus.ring).flatten();
@@ -2606,7 +2600,6 @@ impl<S: 'static> Runtime<S> {
                     let g = (ol.offset + ol.width) * k_px;
                     if c.a > 0.0 && ol.width > 0.0 {
                         self.instances.push(Instance {
-                            fade_origin: clip,
                             rect: [r[0] - g, r[1] - g, w + 2.0 * g, h + 2.0 * g],
                             radii: radii.map(|v| if v > 0.0 { v + g } else { 0.0 }),
                             fill: [0.0; 4],
@@ -2614,7 +2607,7 @@ impl<S: 'static> Runtime<S> {
                             params: [ol.width * k_px, KIND_RECT, 0.0, 1.0],
                             uv: [0.0; 4],
                             clip,
-                            fade,
+                            fade: crate::render::pack_fade(fade, clip, clip),
                         });
                     }
                 }
@@ -2629,7 +2622,6 @@ impl<S: 'static> Runtime<S> {
                     && let Some(image) = self.images.place(pixels, [w, h])
                 {
                     self.instances.push(Instance {
-                        fade_origin: clip,
                         rect: [r[0], r[1], w, h],
                         radii,
                         fill: [0.0, 0.0, 0.0, o],
@@ -2637,7 +2629,7 @@ impl<S: 'static> Runtime<S> {
                         params: [image.page as f32, KIND_IMAGE, image.premultiplied as u8 as f32, 1.0],
                         uv: image.rect.map(|v| v as f32),
                         clip,
-                        fade,
+                        fade: crate::render::pack_fade(fade, clip, clip),
                     });
                 }
                 if let Some((ic, c)) = n.vis.icon {
@@ -2645,7 +2637,6 @@ impl<S: 'static> Runtime<S> {
                     let px = (w.min(h)).round().max(1.0) as u32;
                     if let Some(q) = self.text.icon_quad(ic, px, [r[0], r[1]]) {
                         self.instances.push(Instance {
-                            fade_origin: clip,
                             rect: q.rect,
                             radii: [0.0; 4],
                             fill: color.premul(o),
@@ -2653,7 +2644,7 @@ impl<S: 'static> Runtime<S> {
                             params: [if matches!(n.looping.map(|l| l.kind), Some(rune_motion::LoopKind::Rotation)) { loop_value.unwrap_or(0.0) } else { 0.0 }, KIND_GLYPH, 0.0, 1.0],
                             uv: [q.uv[0], q.uv[1], 0.0, 0.0],
                             clip,
-                            fade,
+                            fade: crate::render::pack_fade(fade, clip, clip),
                         });
                     }
                 } else if let (Some(spec), Some(layout)) = (&n.text, &n.text_layout) {
@@ -2769,8 +2760,9 @@ impl<S: 'static> Runtime<S> {
                     }
                 }
             }
+            let packed_fade = crate::render::pack_fade(fade, fade_origin, clip);
             for instance in &mut self.instances[first_instance..] {
-                instance.fade_origin = fade_origin;
+                instance.fade = packed_fade;
             }
             if self.track_marks {
                 self.marks.resize(self.instances.len(), mark);
@@ -3013,11 +3005,12 @@ fn truncated(text: &mut TextSystem, content: &str, spec: &TextSpec, scale: f32, 
     make(text, lo)
 }
 
-// Carry the declaring edge with the inherited maximum width. Descendant clipping must not
-// restart an ancestor's fade at a smaller rect.
+// Carry the declaring edge with the inherited width. Descendant clipping must not restart
+// its ramp; an inner fade takes over once the ancestor's ramp is fully opaque there.
 fn inherit_fade(width: &mut [f32; 4], origin: &mut [f32; 4], rect: [f32; 4], own: [f32; 4]) {
     for edge in 0..4 {
-        if own[edge] > 0.0 && own[edge] >= width[edge] {
+        let inset = if edge < 2 { rect[edge] - origin[edge] } else { origin[edge] - rect[edge] };
+        if own[edge] > 0.0 && (own[edge] >= width[edge] || inset >= width[edge]) {
             width[edge] = own[edge];
             origin[edge] = rect[edge];
         }
@@ -3026,7 +3019,6 @@ fn inherit_fade(width: &mut [f32; 4], origin: &mut [f32; 4], rect: [f32; 4], own
 
 fn glyph(q: &GlyphQuad, fill: [f32; 4], gamma: f32, clip: [f32; 4], fade: [f32; 4]) -> Instance {
     Instance {
-        fade_origin: clip,
         rect: q.rect,
         radii: [0.0; 4],
         fill,
@@ -3034,7 +3026,7 @@ fn glyph(q: &GlyphQuad, fill: [f32; 4], gamma: f32, clip: [f32; 4], fade: [f32; 
         params: [0.0, KIND_GLYPH, 0.0, gamma],
         uv: [q.uv[0], q.uv[1], 0.0, 0.0],
         clip,
-        fade,
+        fade: crate::render::pack_fade(fade, clip, clip),
     }
 }
 
@@ -3097,7 +3089,6 @@ fn push_shape(out: &mut Vec<Instance>, shape: &Shape, origin: [f32; 2], k: [f32;
                     let (a, b) = (at(points[i]), at(points[(i + 1) % n]));
                     let (x0, y0) = (a[0].min(b[0]) - pad, a[1].min(b[1]) - pad);
                     out.push(Instance {
-                        fade_origin: clip,
                         rect: [x0, y0, a[0].max(b[0]) + pad - x0, a[1].max(b[1]) + pad - y0],
                         radii: [a[0], a[1], b[0], b[1]],
                         fill,
@@ -3105,7 +3096,7 @@ fn push_shape(out: &mut Vec<Instance>, shape: &Shape, origin: [f32; 2], k: [f32;
                         params: [hw, KIND_SEGMENT, if *cap == LineCap::Round { 1.0 } else { 0.0 }, 1.0],
                         uv: [0.0; 4],
                         clip,
-                        fade,
+                        fade: crate::render::pack_fade(fade, clip, clip),
                     });
                 }
             }
@@ -3119,7 +3110,6 @@ fn push_shape(out: &mut Vec<Instance>, shape: &Shape, origin: [f32; 2], k: [f32;
                     let (x0, y0) = (a[0].min(b[0]).min(c[0]), a[1].min(b[1]).min(c[1]));
                     let (x1, y1) = (a[0].max(b[0]).max(c[0]), a[1].max(b[1]).max(c[1]));
                     out.push(Instance {
-                        fade_origin: clip,
                         rect: [x0, y0, x1 - x0, y1 - y0],
                         radii: [a[0], a[1], b[0], b[1]],
                         fill,
@@ -3127,7 +3117,7 @@ fn push_shape(out: &mut Vec<Instance>, shape: &Shape, origin: [f32; 2], k: [f32;
                         params: [aa as f32, KIND_TRIANGLE, 0.0, 1.0],
                         uv: [c[0], c[1], 0.0, 0.0],
                         clip,
-                        fade,
+                        fade: crate::render::pack_fade(fade, clip, clip),
                     });
                 }
             }
@@ -3137,7 +3127,6 @@ fn push_shape(out: &mut Vec<Instance>, shape: &Shape, origin: [f32; 2], k: [f32;
 
 fn rect_inst(rect: [f32; 4], fill: [f32; 4], radius: f32, clip: [f32; 4], fade: [f32; 4]) -> Instance {
     Instance {
-        fade_origin: clip,
         rect,
         radii: [radius; 4],
         fill,
@@ -3145,7 +3134,7 @@ fn rect_inst(rect: [f32; 4], fill: [f32; 4], radius: f32, clip: [f32; 4], fade: 
         params: [0.0, KIND_RECT, 0.0, 1.0],
         uv: [0.0; 4],
         clip,
-        fade,
+        fade: crate::render::pack_fade(fade, clip, clip),
     }
 }
 

@@ -8,6 +8,7 @@ use rune::{
 impl Primitive {
     /// Capture an application's emitted primitive with its inspector metadata.
     pub fn from_instance(p: &Instance, node: u32, source: String) -> Self {
+        let (fade, offset) = rune::render::unpack_fade(p.fade);
         Self {
             node,
             source,
@@ -18,8 +19,8 @@ impl Primitive {
             params: p.params,
             uv: p.uv,
             clip: p.clip,
-            fade: p.fade,
-            fade_origin: Some(p.fade_origin),
+            fade,
+            fade_origin: Some(std::array::from_fn(|e| p.clip[e] + offset[e] * fade[e] * if e < 2 { -1.0 } else { 1.0 })),
         }
     }
 }
@@ -34,8 +35,7 @@ impl From<&Primitive> for Instance {
             params: p.params,
             uv: p.uv,
             clip: p.clip,
-            fade: p.fade,
-            fade_origin: p.fade_origin.unwrap_or(p.clip),
+            fade: rune::render::pack_fade(p.fade, p.fade_origin.unwrap_or(p.clip), p.clip),
         }
     }
 }

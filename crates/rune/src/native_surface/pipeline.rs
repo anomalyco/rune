@@ -12,8 +12,7 @@ struct Uniforms {
     image: [f32; 4],
     radii: [f32; 4],
     clip: [f32; 4],
-    fade: [f32; 4],
-    fade_origin: [f32; 4],
+    fade: [u32; 4],
     // format (0 BGRA, 1 video NV12, 2 full NV12), matrix (0 601, 1 709), transfer, alpha
     color: [f32; 4],
     // Exact mapping flag, source dimensions, padding.
@@ -251,7 +250,6 @@ impl SurfaceRenderer {
                 radii: d.radii,
                 clip: d.clip,
                 fade: d.fade,
-                fade_origin: d.fade_origin,
                 color: [
                     match f.format {
                         Format::Bgra => 0.0,
