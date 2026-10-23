@@ -274,6 +274,18 @@ impl<S: 'static> Runtime<S> {
             self.set_focus(Some(target), self.keyboard_focus);
         }
     }
+
+    /// In a group whose selection follows focus, focus follows selection too: when the app
+    /// selects another item (a shortcut, say), focus in that group moves to it.
+    pub(super) fn sync_follows(&mut self) {
+        let Some(i) = self.focused.as_deref().and_then(|p| self.nodes.iter().position(|n| n.path == p)) else { return };
+        if self.nodes[i].focus.selected { return; }
+        let Some(g) = self.group(i).filter(|&g| self.nodes[g].focus.follows) else { return };
+        let Some(j) = (0..self.nodes.len())
+            .find(|&j| self.nodes[j].focus.selected && self.group(j) == Some(g) && self.can_focus(j)) else { return };
+        let path = self.nodes[j].path.clone();
+        self.set_focus(Some(path), self.keyboard_focus);
+    }
 }
 
 #[cfg(test)]
@@ -648,5 +660,24 @@ mod tests {
         assert_eq!(focused(&rt), "row2", "Down from the last row stays");
         key(&mut rt, Key::Up, false);
         assert_eq!(focused(&rt), "row1");
+    }
+
+    #[test]
+    fn focus_follows_an_app_selection_in_a_source_list() {
+        fn view(s: &State, _: &mut Cx<State>) -> El {
+            col().size(200.0, 200.0).child(col().role("list").focus_group().focus_follows().children((0..3).map(|i| {
+                button(&format!("row{i}")).focus_selected(s.selected == i).on_press(move |s: &mut State| s.selected = i)
+            })))
+        }
+        let mut rt = Runtime::new(State::default(), view, (200.0, 200.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        key(&mut rt, Key::Tab, false);
+        assert_eq!(focused(&rt), "row0");
+        rt.update(|s, _| s.selected = 2);
+        rt.frame(0.0);
+        assert_eq!(focused(&rt), "row2", "a shortcut's selection takes the focus with it");
+        assert!(rt.elements().iter().any(|e| e.focused && e.focus_visible), "and keeps the keyboard ring");
+        key(&mut rt, Key::Up, false);
+        assert_eq!((focused(&rt).as_str(), rt.state.selected), ("row1", 1));
     }
 }

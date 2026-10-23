@@ -2322,6 +2322,7 @@ impl<S: 'static> Runtime<S> {
         self.subscribe_live();
         self.refresh_modal_index();
         self.sync_modals();
+        self.sync_follows();
         self.loops.retain(|id, _| self.scene.contains(*id));
         for n in &self.nodes {
             if let Some(spec) = n.looping {

@@ -5,6 +5,9 @@ without a code change (goldens, layout, input), newest first, with the rev that 
 
 ## dev
 
+- **Focus follows an app selection.** In a `focus_follows` group, when the app selects a
+  different item (a ⌘-digit shortcut, say) while focus is in the group, focus moves to the
+  `focus_selected` item and keeps its keyboard ring, instead of staying on the old row.
 - **List arrows stop at the ends.** Up on the first row and Down on the last row of a
   `list`, `tree` or `grid` focus group now stay put, like NSTableView, instead of wrapping.
   Menus, select popups (`listbox`) and segmented or radio groups still wrap.
