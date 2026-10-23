@@ -58,12 +58,10 @@ const SCROLL_DECAY: f32 = 2.002;
 pub struct Env {
     pub system_dark: bool,
     pub scale: f32,
-    /// OS accessibility preference. Headless environments default to false.
-    pub reduced_motion: bool,
 }
 impl Env {
     pub const fn new(system_dark: bool, scale: f32) -> Self {
-        Self { system_dark, scale, reduced_motion: false }
+        Self { system_dark, scale }
     }
 }
 impl Default for Env {
@@ -76,6 +74,7 @@ pub type Waker = Arc<dyn Fn() + Send + Sync>;
 /// Passed to view functions: the environment, plus runtime settings a view may declare.
 pub struct Cx<S> {
     env: Env,
+    system_reduced_motion: bool,
     reduced_motion: bool,
     time_scale: f32,
     _s: PhantomData<fn(&S)>,
@@ -88,7 +87,11 @@ impl<S> Cx<S> {
     pub fn system_dark(&self) -> bool {
         self.env.system_dark
     }
-    /// Override Env::reduced_motion for this view: travel jumps, opacity/colour briefly fade.
+    /// The host's OS accessibility preference, independent of this commit's override.
+    pub fn system_reduced_motion(&self) -> bool {
+        self.system_reduced_motion
+    }
+    /// Override the host preference for this commit: travel jumps, opacity/colour briefly fade.
     pub fn reduced_motion(&mut self, on: bool) {
         self.reduced_motion = on;
     }
@@ -277,6 +280,7 @@ pub struct Runtime<S: 'static> {
     /// Animation time (seconds, scaled by the time scale).
     pub t: f64,
     pub reduced_motion: bool,
+    system_reduced_motion: bool,
     pub time_scale: f32,
     /// Called at the start of every frame with the clock; return true when state changed (new data).
     pub poll: Option<fn(&mut S, f64, &mut Tx) -> bool>,
@@ -433,6 +437,7 @@ impl<S: 'static> Runtime<S> {
             native_overlay: false,
             t: 0.0,
             reduced_motion: false,
+            system_reduced_motion: false,
             time_scale: 1.0,
             poll: None,
             clock: 0.0,
@@ -637,10 +642,14 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub fn set_system_reduced_motion(&mut self, reduced: bool) {
-        if self.env.reduced_motion != reduced {
-            self.env.reduced_motion = reduced;
+        if self.system_reduced_motion != reduced {
+            self.system_reduced_motion = reduced;
             self.dirty = true;
         }
+    }
+    /// Host accessibility preference; false by default in a headless runtime.
+    pub fn system_reduced_motion(&self) -> bool {
+        self.system_reduced_motion
     }
 
     /// Queue a native focus transition. Repeated notifications do not repeat the callback.
@@ -1144,6 +1153,7 @@ struct Measurement<'a, S> {
     view: fn(&S, &mut Cx<S>) -> El,
     env: Env,
     viewport: (f32, f32),
+    system_reduced_motion: bool,
     reduced_motion: bool,
     time_scale: f32,
     commits: u64,
@@ -1310,7 +1320,8 @@ impl<S> Measurement<'_, S> {
         let scale = self.env.scale;
         let mut cx = Cx::<S> {
             env: self.env,
-            reduced_motion: self.env.reduced_motion,
+            system_reduced_motion: self.system_reduced_motion,
+            reduced_motion: self.system_reduced_motion,
             time_scale: self.time_scale,
             _s: PhantomData,
         };
@@ -1450,6 +1461,7 @@ impl<S: 'static> Runtime<S> {
             view: self.view,
             env: self.env,
             viewport: self.viewport,
+            system_reduced_motion: self.system_reduced_motion,
             reduced_motion: self.reduced_motion,
             time_scale: self.time_scale,
             commits: self.commits,
@@ -2820,7 +2832,9 @@ impl<S: 'static> Runtime<S> {
                 let text_clip = [clip[0].max(bounds[0]), clip[1].max(bounds[1]), clip[2].min(bounds[2]), clip[3].min(bounds[3])];
                 let mut widths = fade;
                 let mut origins = fade_origin;
-                if spec.truncate_fade && layout.full_width() > bounds[2] - bounds[0] + 0.5 {
+                // Layout width already includes display scale `s`; bounds also include the
+                // element/ancestor transform `sc`. Compare both after that transform.
+                if spec.truncate_fade && layout.full_width() * sc > bounds[2] - bounds[0] + 0.5 * sc {
                     let width = (spec.style.size * sc * s).min((bounds[2] - bounds[0]).max(0.0));
                     let own = if spec.align == Align::End { [width, 0.0, 0.0, 0.0] }
                         else { [0.0, 0.0, width, 0.0] };

@@ -75,12 +75,13 @@ default-style probe; it was not used to choose the optical-size policy.
 
 ## Host preferences and fade truncation
 
-`Env::reduced_motion` supplies the native accessibility preference to views and
-defaults Rune's motion policy. `Cx::reduced_motion` overrides it for that view.
+`Cx::system_reduced_motion()` supplies the native accessibility preference to views
+and defaults Rune's motion policy. `Cx::reduced_motion` overrides it for the current
+commit only; the view must repeat the override on later commits.
 Hosts sample at creation and focus changes, rather than monitoring settings while
 continuously focused. macOS uses NSWorkspace; Windows uses client-area animation;
 Linux uses KDE's animation-duration factor or optional GNOME GSettings. Unknown
-platform preferences return false. Headless environments set the field explicitly.
+platform preferences return false. Headless runtimes use `set_system_reduced_motion`.
 
 Root `on_window_focus` handlers receive ordered, deduplicated native activation
 events through the normal transaction path. Tests can call `Runtime::window_focus`.
@@ -109,6 +110,7 @@ preference paths were not executed because the eligible HiveMind workers are Mac
 macOS preference code compiles and links; changing the user's OS settings was not
 part of the test. Focus callbacks were tested through runtime event injection.
 
-Consumers constructing `Env` literals must add `reduced_motion` or use
-`Env::new(dark, scale)`. `TextStyle` literals can inherit new defaults with
+`Env` keeps its original two public fields, `system_dark` and `scale`, so existing
+exhaustive literals still compile. The preference is private Runtime/Cx state.
+`TextStyle` literals can inherit new defaults with
 `..TextStyle::new(size, weight)`.

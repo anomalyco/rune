@@ -100,13 +100,17 @@ fn optical_size_uses_points_and_variations_reach_parley_and_raster_cache() {
 fn os_motion_preference_updates_and_view_can_override_it() {
     fn view(override_: &Option<bool>, cx: &mut Cx<Option<bool>>) -> El {
         if let Some(value) = override_ { cx.reduced_motion(*value); }
-        text(cx.env().reduced_motion.to_string())
+        text(cx.system_reduced_motion().to_string())
     }
-    let mut rt = Runtime::new(None, view, (100.0, 100.0), Env { reduced_motion: true, ..Env::default() });
+    let mut rt = Runtime::new(None, view, (100.0, 100.0), Env::default());
+    assert!(!rt.system_reduced_motion());
+    rt.set_system_reduced_motion(true);
     rt.frame(0.0); assert!(rt.reduced_motion);
     rt.set_system_reduced_motion(false); rt.frame(0.0); assert!(!rt.reduced_motion);
     rt.set_system_reduced_motion(true); rt.frame(0.0); assert!(rt.reduced_motion);
     rt.update(|s, _| *s = Some(false)); rt.frame(0.0); assert!(!rt.reduced_motion);
+    assert!(rt.system_reduced_motion(), "a commit override doesn't change the OS preference");
+    assert_eq!(rt.elements()[0].text.as_deref(), Some("true"));
     rt.update(|s, _| *s = None); rt.frame(0.0); assert!(rt.reduced_motion);
 }
 
@@ -143,5 +147,32 @@ fn fade_truncation_keeps_full_text_and_only_fades_overflowing_glyphs() {
         }
         rt.update(|s, tx| { *s = 500.0; tx.settle(); }); rt.frame(0.0);
         assert!(rt.instances.iter().all(|i| rune::render::unpack_fade(i.fade).0 == [0.0; 4]));
+    }
+}
+
+#[test]
+fn fade_truncation_overflow_is_independent_of_element_and_display_scale() {
+    const LABEL: &str = "clock 0123456789";
+    fn view(s: &(f32, rune::Live<f32>), _: &mut Cx<(f32, rune::Live<f32>)>) -> El {
+        row().padding(80.0).child(text(LABEL).w(s.0).font(TextStyle::new(14.0, 400.0))
+            .live_scale(&s.1).truncate_fade())
+    }
+    let mut text_system = rune::text::TextSystem::default();
+    for display_scale in [1.0, 2.0] {
+        let width = text_system.layout_rich(LABEL, &[], TextStyle::new(14.0, 400.0), display_scale, None)
+            .full_width() / display_scale;
+        for element_scale in [0.5, 1.0, 2.0] {
+            for (fraction, overflowing) in [(0.75, true), (1.25, false)] {
+                let mut rt = Runtime::new((width * fraction, rune::Live::new(element_scale)), view,
+                    (600.0, 300.0), Env::new(true, display_scale));
+                rt.frame(0.0);
+                let fades: Vec<_> = rt.instances.iter().filter(|i| i.params[1] == rune::render::KIND_GLYPH)
+                    .map(|i| rune::render::unpack_fade(i.fade).0[2]).collect();
+                assert!(!fades.is_empty());
+                let expected = if overflowing { 14.0 * display_scale * element_scale } else { 0.0 };
+                assert!(fades.iter().all(|fade| *fade == expected),
+                    "display={display_scale}, element={element_scale}, overflowing={overflowing}: {fades:?}");
+            }
+        }
     }
 }

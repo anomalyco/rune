@@ -285,12 +285,15 @@ documented in [Batch C text results](../../research/24-live-text-and-font-settin
 only when text overflows. It keeps the full string and paints no ellipsis. For
 end-aligned labels the overflow fades on the left.
 
-Native hosts populate `cx.env().reduced_motion` at creation and refresh it on
+Native hosts populate `cx.system_reduced_motion()` at creation and refresh it on
 window focus changes. Rune uses it by default; `cx.reduced_motion(value)` overrides
-it for that view. macOS reads the accessibility preference, Windows reads client
+it **for the current commit only**. Call it each time the view runs to keep an
+override; otherwise the next commit uses the host preference. macOS reads the accessibility preference, Windows reads client
 area animation, and Linux reads KDE's duration factor or GNOME's enable-animations
-setting when available. Headless `Env::new(dark, scale)` defaults to false; tests
-can set the field explicitly.
+setting when available. The preference lives on Runtime/Cx, so existing
+`Env { system_dark, scale }` literals remain valid. Headless runtimes default to
+false; tests can call `rt.set_system_reduced_motion(value)` and inspect
+`rt.system_reduced_motion()`.
 
 A root `.on_window_focus(|state: &mut State, focused, tx| ...)` receives native
 activation/deactivation in order. It applies to regular windows and interactive
