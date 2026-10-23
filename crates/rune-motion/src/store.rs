@@ -165,6 +165,9 @@ pub struct AnimationStore {
     events: Vec<MotionEvent>,
     events_seen: usize,
     retarget_audit: Option<RetargetAudit>,
+    /// Dev tuning commits may replace a running spring without changing its target.
+    #[cfg(all(feature = "dev", debug_assertions))]
+    pub retune_springs: bool,
 }
 
 impl Default for AnimationStore {
@@ -206,6 +209,8 @@ impl AnimationStore {
             events: Vec::new(),
             events_seen: 0,
             retarget_audit: None,
+            #[cfg(all(feature = "dev", debug_assertions))]
+            retune_springs: false,
         }
     }
 
@@ -748,6 +753,26 @@ impl AnimationStore {
             self.deactivate(t, slot);
         }
         self.set_touched.push(t as u32);
+    }
+
+    /// Retune only running spring lanes. Preserve targets, velocity, tokens and pending delays.
+    #[cfg(all(feature = "dev", debug_assertions))]
+    pub(crate) fn retune_raw(&mut self, t: usize, curves: &[Curve]) {
+        if !self.retune_springs || self.reduced_motion { return; }
+        let l0 = self.t_lane0[t] as usize;
+        let eps = self.t_meta[t].class.eps(self.pixel_scale);
+        let mut changed = false;
+        let mut duration = 0.0_f32;
+        for (i, &curve) in curves.iter().enumerate() {
+            let l = l0 + i;
+            if matches!((self.l_curve[l], curve), (Curve::Spring(_), Curve::Spring(_)))
+                && self.l_curve[l] != curve && self.l_layer[l].end > self.now {
+                self.start_lane(l, self.now, self.l_target[l], curve, Blend::Merge, None, eps);
+                duration = duration.max(curve.logical_duration());
+                changed = true;
+            }
+        }
+        if changed { self.commit_scheduled(t, self.now + duration as f64, self.t_meta[t].token); }
     }
 
     /// Animates lanes of track `t` toward `targets`. `lane_vel` overrides per-lane start velocity.

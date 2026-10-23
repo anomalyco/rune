@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-dev = []
+dev = ["dep:tungstenite", "dep:csscolorparser", "rune-motion/dev"]
 native-file-dialog = ["dep:rfd"]
 
 [dependencies]
@@ -27,6 +27,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 blake3 = "1"
 zeroize = "1.8"
 half = "2"
+tungstenite = { version = "0.28", optional = true }
+csscolorparser = { version = "0.7", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5.2"

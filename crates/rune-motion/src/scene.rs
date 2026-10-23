@@ -546,6 +546,10 @@ impl Scene {
         let anim = anim.into();
         let old = self.nodes[i].frame;
         let had_path = self.nodes[i].path.is_some();
+        #[cfg(all(feature = "dev", debug_assertions))]
+        if self.store.retune_springs && !had_path && let Some(track) = self.nodes[i].tracks[prop::FRAME.id.0 as usize] {
+            self.store.retune_raw(track.index_usize(), &[anim.x.curve, anim.y.curve, anim.x.curve, anim.y.curve]);
+        }
         // An explicit landing also cancels motion toward an unchanged target. Comparing only
         // target frames here used to leave a spring running after Runtime::settle_all().
         if anim == LayoutAnim::INSTANT && (had_path || self.store.is_animating(id, prop::FRAME)) {
@@ -782,6 +786,10 @@ impl Scene {
         let Some(i) = self.slot(id) else { return };
         let anim = anim.into();
         self.ensure_prop(i, prop);
+        #[cfg(all(feature = "dev", debug_assertions))]
+        if self.store.retune_springs && let Some(track) = self.nodes[i].tracks.get(prop.id.0 as usize).copied().flatten() {
+            self.store.retune_raw(track.index_usize(), &[anim.curve; MAX_LANES][..T::LANES]);
+        }
         self.track_animate(i, prop, target, anim);
         let bits = Intent::for_prop(prop.id);
         self.intent(id, bits, anim.curve.logical_duration());

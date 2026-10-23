@@ -8,6 +8,23 @@ mod activation;
 mod app;
 #[cfg(all(feature = "dev", debug_assertions))]
 mod dev_clock;
+#[cfg(all(feature = "dev", debug_assertions))]
+pub mod dev;
+
+/// Live dev value with a default at the call site. Release builds expand to the default alone.
+#[cfg(all(feature = "dev", debug_assertions))]
+#[macro_export]
+macro_rules! tune {
+    ($key:expr, $default:expr) => { $crate::dev::tune($key, $default, None) };
+    ($key:expr, $default:expr, $min:expr, $max:expr, $step:expr) => {
+        $crate::dev::tune($key, $default, Some([$min, $max, $step]))
+    };
+}
+#[cfg(not(all(feature = "dev", debug_assertions)))]
+#[macro_export]
+macro_rules! tune {
+    ($key:expr, $default:expr $(, $min:expr, $max:expr, $step:expr)?) => { $default };
+}
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 mod layer_shell;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
