@@ -49,6 +49,7 @@ pub struct App<S: 'static> {
     pub(crate) overlays: Vec<Box<dyn crate::overlay::PendingOverlay>>,
     pub(crate) on_window: Option<OnWindow>,
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<S>>>,
+    pub(crate) window_options: crate::WindowOptions,
 }
 
 impl<S: 'static> App<S> {
@@ -67,12 +68,20 @@ impl<S: 'static> App<S> {
             overlays: Vec::new(),
             on_window: None,
             compositor: None,
+            window_options: crate::WindowOptions::default(),
         }
     }
 
     /// Configure this window's frame. Overlays retain their own native behaviour.
     pub fn chrome(mut self, chrome: crate::Chrome) -> Self {
         self.chrome = chrome;
+        self
+    }
+
+    /// Native options for this app's window under `run` (size limits, resizability, ...);
+    /// `run_windows` takes them per `WindowSpec` instead.
+    pub fn window_options(mut self, options: crate::WindowOptions) -> Self {
+        self.window_options = options;
         self
     }
 

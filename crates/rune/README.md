@@ -140,6 +140,7 @@ let app = rune::App::new(spec)
     .release_gpu_when_closed()     // optional: drop the GPU device while closed
     .accessory()                   // macOS: menu-bar app, no Dock icon (h.set_dock_icon(true) shows it)
     .on_close(|s, tx| ..);         // runs before every close; tx.quit() quits instead
+    // .window_options(WindowOptions { max_size, resizable, .. }) for this window
 let handle = app.handle();     // AppHandle<S>: Clone + Send + Sync, usable before run
 std::thread::spawn(move || {
     handle.activate(token);    // show + focus with a forwarded XDG activation token

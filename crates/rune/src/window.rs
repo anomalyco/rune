@@ -237,7 +237,8 @@ struct Host<S: 'static> {
 
 pub fn run<S: 'static>(app: App<S>, args: Args) {
     let accessory = app.accessory;
-    run_configured(move |_| vec![WindowSpec::from_app("main", app)], args, accessory);
+    let options = app.window_options.clone();
+    run_configured(move |_| vec![WindowSpec::from_app("main", app).options(options)], args, accessory);
 }
 
 pub(crate) fn run_windows<S: 'static>(factory: impl FnOnce(&[Display]) -> Vec<WindowSpec<S>> + 'static, args: Args, options: crate::RunOptions) {
