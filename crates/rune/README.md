@@ -528,6 +528,15 @@ snapshots and retains at most 128 edits / 1 MiB of text (oversized edits drop hi
 Call `TextEdit::clear()` after submission to clear history while retaining focus;
 call `break_history_group()` when setting a selection from custom pointer handling.
 
+Use `TextEdit::new("").secure()` or `text_input(&edit, style).secure()` for passwords;
+kit's `TextInput::secure()` passes it through. Each Unicode scalar displays as one
+bullet, with model-byte selection and caret positions mapped to those bullets.
+Secure fields have no undo, copy, cut, IME composition, or inspector text. macOS
+Secure Event Input is held only while their native window is focused and visible.
+Model buffers and history wipe on drop; secure edits wipe replaced allocations.
+Use `replace_text(..)` or `clear()` for programmatic replacement. Direct assignment
+to the public `text: String` field bypasses replacement wiping.
+
 `tx.fly_text("prompt", "sent-text")` hands a visible plain-text field to a newly
 mounted, uniquely keyed text node. The runtime captures its visible glyphs before
 committing and measures the destination after growth/scroll each frame. One 0.32 s

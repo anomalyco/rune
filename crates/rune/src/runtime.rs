@@ -954,7 +954,10 @@ impl<S: 'static> Runtime<S> {
                 false
             }
             Action::Ime(ev) => self.with_focused(|e| e.ime(&ev), &mut one),
-            Action::Paste(s) => self.with_focused(|e| e.paste(&s), &mut one),
+            Action::Paste(s) => {
+                let s = zeroize::Zeroizing::new(s);
+                self.with_focused(|e| e.paste(&s), &mut one)
+            }
             Action::Focus(path, x, y) => {
                 let Some(access) = self.node(&path).and_then(|n| n.input.as_ref()?.access.clone()) else { return false };
                 let layout = self.node(&path).and_then(|n| n.text_layout.clone());
@@ -963,7 +966,7 @@ impl<S: 'static> Runtime<S> {
                 let e = access(&mut self.state as &mut dyn Any);
                 e.break_history_group();
                 if let Some(l) = layout {
-                    let i = Cursor::from_point(&l, x * s, y * s).index().min(e.text.len());
+                    let i = e.model_index(Cursor::from_point(&l, x * s, y * s).index());
                     e.anchor = i;
                     e.focus = i;
                 }
@@ -985,7 +988,7 @@ impl<S: 'static> Runtime<S> {
         let s = self.env.scale;
         let n = self.node(&path)?;
         let (spec, w) = (n.text.clone()?, n.target[2] - n.target[0] - n.inset[0] - n.inset[2]);
-        let text = n.input.as_ref()?.edit.text.clone();
+        let text = zeroize::Zeroizing::new(n.input.as_ref()?.edit.display().0);
         Some(self.text.layout_rich(&text, &spec.spans, spec.style, s, Some(w * s)))
     }
 
@@ -997,12 +1000,12 @@ impl<S: 'static> Runtime<S> {
             return false;
         };
         let Some(access) = access else { return false };
-        let before = change.as_ref().map(|_| access(&mut self.state as &mut dyn Any).text.clone());
+        let before = change.as_ref().map(|_| zeroize::Zeroizing::new(access(&mut self.state as &mut dyn Any).text.clone()));
         let out = f(access(&mut self.state as &mut dyn Any));
         // Typing is the user's own hand: no animation.
         tx.instant = !animate_layout;
         if let Some(change) = change
-            && before.as_deref() != Some(access(&mut self.state as &mut dyn Any).text.as_str())
+            && before.as_ref().map(|s| s.as_str()) != Some(access(&mut self.state as &mut dyn Any).text.as_str())
         { change(&mut self.state as &mut dyn Any, tx); }
         if let Some(c) = out.copy {
             tx.copy(c);
@@ -1721,7 +1724,7 @@ impl<S: 'static> Runtime<S> {
                 input.key = None;
                 input.change = None;
                 input.edit.focused = false;
-                input.edit.preedit = None;
+                input.edit.clear_preedit();
             }
             self.node_index.insert(old.id, nodes.len());
             nodes.push(old);
@@ -2106,6 +2109,11 @@ impl<S: 'static> Runtime<S> {
 
     pub fn paste(&mut self, text: impl Into<String>) {
         self.queue.push(Action::Paste(text.into()));
+    }
+
+    /// Whether the focused editor requires secure native keyboard input.
+    pub fn has_secure_focus(&self) -> bool {
+        self.focused_input().is_some_and(|i| i.edit.is_secure())
     }
 
     pub fn has_focus(&self) -> bool {
@@ -2645,8 +2653,8 @@ impl<S: 'static> Runtime<S> {
                             let (a, b) = e.range();
                             if a != b && e.preedit.is_none() {
                                 let sel = Selection::new(
-                                    Cursor::from_byte_index(layout, a, Affinity::Downstream),
-                                    Cursor::from_byte_index(layout, b, Affinity::Upstream),
+                                    Cursor::from_byte_index(layout, e.display_index(a), Affinity::Downstream),
+                                    Cursor::from_byte_index(layout, e.display_index(b), Affinity::Upstream),
                                 );
                                 for (bb, _) in sel.geometry(layout) {
                                     self.instances.push(rect_inst(
@@ -2661,7 +2669,7 @@ impl<S: 'static> Runtime<S> {
                             let ci = match &e.preedit {
                                 Some((p, Some((_, c)))) => (e.range().0 + (*c).min(p.len())).min(spec.content.len()),
                                 Some((p, None)) => (e.range().0 + p.len()).min(spec.content.len()),
-                                None => e.focus.min(spec.content.len()),
+                                None => e.display_index(e.focus).min(spec.content.len()),
                             };
                             let cur = Cursor::from_byte_index(layout, ci, Affinity::Downstream);
                             let bb = cur.geometry(layout, 1.5 * s);
@@ -2669,7 +2677,7 @@ impl<S: 'static> Runtime<S> {
                             let (cx0, cy0) = (origin[0] + bb.x0 as f32, origin[1] + bb.y0 as f32);
                             let ch = if bb.y1 > bb.y0 { (bb.y1 - bb.y0) as f32 } else { line };
                             caret = Some([cx0.round(), cy0 + ch * 0.1, (1.5 * s).round(), ch * 0.8]);
-                            self.ime_area = Some([cx0 / s, cy0 / s, 2.0, ch / s]);
+                            if !e.is_secure() { self.ime_area = Some([cx0 / s, cy0 / s, 2.0, ch / s]); }
                             if let Some((_, _)) = &e.preedit
                                 && let (_, Some((pa, pb))) = e.display()
                             {
@@ -2861,7 +2869,7 @@ impl<S: 'static> Runtime<S> {
                     key: n.key.clone(),
                     role: n.role,
                     label: n.label.clone(),
-                    text: n.text.as_ref().map(|t| t.content.clone()),
+                    text: n.text.as_ref().filter(|_| !n.input.as_ref().is_some_and(|i| i.edit.is_secure())).map(|t| t.content.clone()),
                     rect,
                     target: [n.target[0], n.target[1], n.target[2] - n.target[0], n.target[3] - n.target[1]],
                     opacity: flight.map_or_else(|| self.inh_scratch.get(i).map_or(p.opacity, |h| h.opacity), |f| f.target_alpha),
@@ -3590,6 +3598,37 @@ mod tests {
         assert_eq!(rt.cursor(), Cursor::Default);
         rt.pointer_leave();
         assert_eq!(rt.cursor(), Cursor::Default);
+    }
+
+    #[test]
+    fn secure_input_masks_layout_inspector_and_unicode_pointer_indices() {
+        fn view(s: &crate::TextEdit, _: &mut Cx<crate::TextEdit>) -> El {
+            crate::text_input(s, crate::TextStyle::new(16.0, 400.0)).secure()
+                .key("secret").size(200.0, 40.0).on_edit(|s: &mut crate::TextEdit| s)
+        }
+        let mut edit = crate::TextEdit::new("hé🙂");
+        edit.focused = true;
+        let mut rt = Runtime::new(edit, view, (200.0, 40.0), Env { system_dark: true, scale: 1.0 });
+        rt.frame(0.0);
+        assert!(rt.state.is_secure() && rt.has_secure_focus());
+        assert!(rt.ime_area.is_none());
+        assert!(rt.elements().iter().all(|e| e.text.is_none()));
+        let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("secret")).unwrap();
+        assert_eq!(n.text.as_ref().unwrap().content, "•••");
+        let path = n.path.clone();
+        let layout = rt.focused_layout().unwrap();
+        let caret = Cursor::from_byte_index(&layout, 6, Affinity::Downstream).geometry(&layout, 1.0);
+        rt.queue.push(Action::Focus(path, caret.x0 as f32 + 0.1, ((caret.y0 + caret.y1) * 0.5) as f32));
+        rt.frame(0.0);
+        assert_eq!(rt.state.focus, 3);
+        rt.paste("界"); rt.frame(0.0);
+        assert_eq!(rt.state.text, "hé界🙂");
+        rt.key(KeyEvent { key: crate::Key::Command('a'), mods: Default::default() }); rt.frame(0.0);
+        rt.key(KeyEvent { key: crate::Key::Command('c'), mods: Default::default() }); rt.frame(0.0);
+        assert!(rt.copy_request.is_none());
+        rt.ime(Ime::Commit("ignored".into())); rt.frame(0.0);
+        assert_eq!(rt.state.text, "hé界🙂");
+        assert!(rt.events.iter().all(|e| !e.contains("hé")));
     }
 
     #[test]

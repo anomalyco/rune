@@ -9,9 +9,13 @@ fn sync_input_focus<S: 'static>(nodes: &mut [Node], state: &mut S, path: Option<
             let focused = path == Some(n.path.as_str());
             if let Some(access) = &input.access {
                 let edit = access(state);
+                if input.edit.is_secure() && !edit.is_secure() {
+                    edit.set_secure(true);
+                    changed = true;
+                }
                 if edit.focused != focused || (!focused && edit.preedit.is_some()) {
                     edit.focused = focused;
-                    if !focused { edit.preedit = None; }
+                    if !focused { edit.clear_preedit(); }
                     edit.break_history_group();
                     changed = true;
                 }
@@ -85,10 +89,14 @@ impl<S: 'static> Runtime<S> {
         for (p, input) in &mut self.virtual_inputs {
             if let Some(access) = &input.access {
                 let edit = access(&mut self.state);
+                if input.edit.is_secure() && !edit.is_secure() {
+                    edit.set_secure(true);
+                    changed = true;
+                }
                 let focused = path.as_deref() == Some(p.as_str());
                 if edit.focused != focused || (!focused && edit.preedit.is_some()) {
                     edit.focused = focused;
-                    if !focused { edit.preedit = None; }
+                    if !focused { edit.clear_preedit(); }
                     edit.break_history_group();
                     changed = true;
                 }

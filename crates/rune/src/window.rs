@@ -235,6 +235,8 @@ struct Host<S: 'static> {
     mods: ModifiersState,
     control_click: bool,
     clipboard: Option<arboard::Clipboard>,
+    secure_input: crate::secure_input::SecureInput,
+    ime_allowed: bool,
     comp: Option<Box<dyn Compositor<S>>>,
 }
 
@@ -318,6 +320,8 @@ impl<S: 'static> Host<S> {
             mods: ModifiersState::empty(),
             control_click: false,
             clipboard: arboard::Clipboard::new().ok(),
+            secure_input: Default::default(),
+            ime_allowed: false,
             comp,
         }
     }
@@ -652,6 +656,7 @@ impl<S: 'static> Host<S> {
     }
 
     fn close(&mut self, event_loop: &ActiveEventLoop) {
+        self.secure_input.set(false);
         if self.win.is_none() || (self.keep_running && self.win.as_ref().is_some_and(|w| !w.visible)) {
             return;
         }
@@ -672,6 +677,9 @@ impl<S: 'static> Host<S> {
     }
 
     fn hide(&mut self, event_loop: &ActiveEventLoop) {
+        self.secure_input.set(false);
+        self.ime_allowed = false;
+        if let Some(w) = &self.win { w.window.set_ime_allowed(false); }
         self.rt.set_live_visible(false);
         self.rt.pointer_leave();
         self.mods = ModifiersState::empty();
@@ -912,10 +920,13 @@ impl<S: 'static> Host<S> {
         self.last = now;
         let rt = &mut self.rt;
         let mut animating = rt.frame(dt);
+        self.secure_input.set(rt.has_secure_focus() && l.window.has_focus());
         let update_ms = now.elapsed().as_secs_f64() * 1000.0;
-        if std::mem::take(&mut rt.ime_reset) {
+        let ime_allowed = rt.ime_area.is_some() && !rt.has_secure_focus() && l.window.has_focus();
+        if std::mem::take(&mut rt.ime_reset) || ime_allowed != self.ime_allowed {
             l.window.set_ime_allowed(false);
-            l.window.set_ime_allowed(rt.ime_area.is_some());
+            l.window.set_ime_allowed(ime_allowed);
+            self.ime_allowed = ime_allowed;
         }
         let cursor = rt.cursor();
         if cursor != l.cursor {
@@ -1061,7 +1072,7 @@ impl<S: 'static> Host<S> {
             WindowEvent::Resized(size) => {
                 place_chrome(&l.window, chrome);
                 rt.set_live_visible(l.visible && !l.occluded && size.width > 0 && size.height > 0 && !l.window.is_minimized().unwrap_or(false));
-                if size.width == 0 || size.height == 0 { self.idle = true; return; }
+                if size.width == 0 || size.height == 0 { self.secure_input.set(false); self.idle = true; return; }
                 l.config.width = size.width.max(1);
                 l.config.height = size.height.max(1);
                 l.surface.configure(&gpu.device, &l.config);
@@ -1078,7 +1089,7 @@ impl<S: 'static> Host<S> {
             WindowEvent::Occluded(occluded) => {
                 l.occluded = occluded;
                 rt.set_live_visible(l.visible && !occluded && !l.window.is_minimized().unwrap_or(false));
-                if occluded { self.idle = true; return; }
+                if occluded { self.secure_input.set(false); self.idle = true; return; }
                 place_chrome(&l.window, chrome);
                 // Coming back paints the settled state in the first frame (guarantee 8).
                 rt.settle_all();
@@ -1092,10 +1103,12 @@ impl<S: 'static> Host<S> {
             }
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
             WindowEvent::Focused(focused) => {
+                self.secure_input.set(focused && l.visible && !l.occluded && rt.has_secure_focus());
                 place_chrome(&l.window, chrome);
                 if !focused {
                     rt.cancel_composition();
                     l.window.set_ime_allowed(false);
+                    self.ime_allowed = false;
                 } else {
                     rt.ime_reset = true;
                 }

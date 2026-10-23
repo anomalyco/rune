@@ -73,6 +73,14 @@ pub struct TextInput {
 }
 
 impl TextInput {
+    pub fn secure(mut self) -> Self {
+        self.edit.set_secure(true);
+        self
+    }
+    pub fn animate_edit_layout(mut self) -> Self {
+        self.edits.0.push(Box::new(El::animate_edit_layout));
+        self
+    }
     pub fn on_change<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
         self.edits.change(f);
         self
@@ -182,7 +190,7 @@ impl TextInput {
             Some(w) => e.w(w),
             None => e.w_full(),
         };
-        if self.copy || self.clear {
+        if (self.copy && !self.edit.is_secure()) || self.clear {
             let (glyph, side, radius) =
                 if self.clear { (k.glyph.clear, 28.0, k.radius.md) } else { (k.glyph.copy, 20.0, k.radius.sm) };
             let mut b = row()

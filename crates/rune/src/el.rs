@@ -487,6 +487,20 @@ pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
 }
 
 impl El {
+    /// Mask a text input before layout; disable undo, copy, cut and IME composition.
+    /// Prefer `TextEdit::secure()` when the model can be configured at construction.
+    pub fn secure(mut self) -> Self {
+        if let Some(input) = &mut self.input {
+            input.edit.set_secure(true);
+            if let Some(text) = &mut self.text {
+                use zeroize::Zeroize;
+                text.content.zeroize();
+                text.content = input.edit.display().0;
+            }
+        }
+        self
+    }
+
     /// Bind opacity directly to a latest-wins value, without rebuilding or laying out the view.
     pub fn live_opacity(mut self, value: impl Into<crate::live::Binding<f32>>) -> Self {
         self.bind_live(crate::live::Bound::new(value, crate::live::Property::Opacity)); self
