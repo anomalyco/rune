@@ -2711,16 +2711,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline",
       "rect": [
         268.0,
-        -1218.5,
+        -1222.0,
         1004.0,
-        1884.5
+        1888.0
       ],
       "role": "group",
       "target": [
         268.0,
         56.0,
         1004.0,
-        1884.5
+        1888.0
       ]
     },
     {
@@ -2735,7 +2735,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/u-msg_001a162c32a80001fixture00",
       "rect": [
         422.0,
-        -1210.5,
+        -1214.0,
         696.0,
         82.0
       ],
@@ -2758,7 +2758,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/u-msg_001a162c32a80001fixture00/#0",
       "rect": [
         422.0,
-        -1210.5,
+        -1214.0,
         696.0,
         82.0
       ],
@@ -2781,7 +2781,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/u-msg_001a162c32a80001fixture00/#0/#0",
       "rect": [
         658.0,
-        -1202.5,
+        -1206.0,
         460.0,
         58.0
       ],
@@ -2806,7 +2806,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/u-msg_001a162c32a80001fixture00/#0/#0/text-msg_001a162c32a80001fixture00",
       "rect": [
         670.0,
-        -1194.5,
+        -1198.0,
         436.0,
         42.0
       ],
@@ -2831,7 +2831,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/r-msg_001a162c33250002fixture00-0",
       "rect": [
         422.0,
-        -1128.5,
+        -1132.0,
         696.0,
         40.0
       ],
@@ -2854,7 +2854,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/r-msg_001a162c33250002fixture00-0/#0",
       "rect": [
         422.0,
-        -1128.5,
+        -1132.0,
         696.0,
         40.0
       ],
@@ -2878,7 +2878,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/r-msg_001a162c33250002fixture00-0/#0/trigger",
       "rect": [
         422.0,
-        -1128.5,
+        -1132.0,
         696.0,
         28.0
       ],
@@ -2902,7 +2902,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/r-msg_001a162c33250002fixture00-0/#0/trigger/#0",
       "rect": [
         422.0,
-        -1122.5,
+        -1126.0,
         16.0,
         16.0
       ],
@@ -2926,7 +2926,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/r-msg_001a162c33250002fixture00-0/#0/trigger/#1",
       "rect": [
         444.0,
-        -1122.5,
+        -1126.0,
         91.5,
         16.0
       ],
@@ -2951,7 +2951,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/r-msg_001a162c33250002fixture00-0/#0/trigger/#2",
       "rect": [
         541.5,
-        -1121.5,
+        -1125.0,
         14.0,
         14.0
       ],
@@ -2975,7 +2975,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c33250002fixture00-1",
       "rect": [
         422.0,
-        -1088.5,
+        -1092.0,
         696.0,
         34.5
       ],
@@ -2998,7 +2998,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c33250002fixture00-1/#0",
       "rect": [
         422.0,
-        -1088.5,
+        -1092.0,
         696.0,
         34.5
       ],
@@ -3023,7 +3023,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c33250002fixture00-1/#0/b0",
       "rect": [
         422.0,
-        -1088.5,
+        -1092.0,
         696.0,
         22.5
       ],
@@ -3048,7 +3048,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_grep_27000",
       "rect": [
         422.0,
-        -1054.0,
+        -1057.5,
         696.0,
         40.0
       ],
@@ -3071,7 +3071,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_grep_27000/#0",
       "rect": [
         422.0,
-        -1054.0,
+        -1057.5,
         696.0,
         40.0
       ],
@@ -3095,7 +3095,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_grep_27000/#0/trigger",
       "rect": [
         422.0,
-        -1054.0,
+        -1057.5,
         696.0,
         28.0
       ],
@@ -3119,7 +3119,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_grep_27000/#0/trigger/#0",
       "rect": [
         422.0,
-        -1048.0,
+        -1051.5,
         36.0,
         16.0
       ],
@@ -3144,7 +3144,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_grep_27000/#0/trigger/#1",
       "rect": [
         458.0,
-        -1048.0,
+        -1051.5,
         8.5,
         16.0
       ],
@@ -3169,7 +3169,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_grep_27000/#0/trigger/#2",
       "rect": [
         466.5,
-        -1048.0,
+        -1051.5,
         33.5,
         16.0
       ],
@@ -3194,7 +3194,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_grep_27000/#0/trigger/#3",
       "rect": [
         502.0,
-        -1047.0,
+        -1050.5,
         14.0,
         14.0
       ],
@@ -3218,16 +3218,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0",
       "rect": [
         422.0,
-        -1014.0,
+        -1017.5,
         696.0,
-        644.5
+        646.0
       ],
       "role": "group",
       "target": [
         422.0,
         260.5,
         696.0,
-        644.5
+        646.0
       ]
     },
     {
@@ -3241,16 +3241,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0",
       "rect": [
         422.0,
-        -1014.0,
+        -1017.5,
         696.0,
-        644.5
+        646.0
       ],
       "role": "group",
       "target": [
         422.0,
         260.5,
         696.0,
-        644.5
+        646.0
       ]
     },
     {
@@ -3266,7 +3266,7 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b0",
       "rect": [
         422.0,
-        -1014.0,
+        -1017.5,
         696.0,
         24.0
       ],
@@ -3292,16 +3292,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b1",
       "rect": [
         422.0,
-        -980.0,
+        -983.5,
         696.0,
-        67.5
+        68.0
       ],
       "role": "text",
       "target": [
         422.0,
         294.5,
         696.0,
-        67.5
+        68.0
       ],
       "text": "The server sends a heartbeat every 10 seconds, but  stream.ts  only reconnects on an  error  event. When the machine sleeps, the TCP connection goes half-open: the browser never sees an error, so the client waits forever."
     },
@@ -3318,14 +3318,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b2",
       "rect": [
         422.0,
-        -900.5,
+        -903.5,
         696.0,
         22.5
       ],
       "role": "text",
       "target": [
         422.0,
-        374.0,
+        374.5,
         696.0,
         22.5
       ],
@@ -3343,16 +3343,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b3",
       "rect": [
         422.0,
-        -866.0,
+        -869.0,
         696.0,
-        49.0
+        50.0
       ],
       "role": "group",
       "target": [
         422.0,
-        408.5,
+        409.0,
         696.0,
-        49.0
+        50.0
       ]
     },
     {
@@ -3367,16 +3367,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b3/i0",
       "rect": [
         422.0,
-        -866.0,
+        -869.0,
         696.0,
-        22.5
+        23.0
       ],
       "role": "group",
       "target": [
         422.0,
-        408.5,
+        409.0,
         696.0,
-        22.5
+        23.0
       ]
     },
     {
@@ -3391,16 +3391,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b3/i0/#0",
       "rect": [
         422.0,
-        -866.0,
+        -869.0,
         32.0,
-        22.5
+        23.0
       ],
       "role": "text",
       "target": [
         422.0,
-        408.5,
+        409.0,
         32.0,
-        22.5
+        23.0
       ],
       "text": "•"
     },
@@ -3415,16 +3415,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b3/i0/#1",
       "rect": [
         454.0,
-        -866.0,
+        -869.0,
         664.0,
-        22.5
+        23.0
       ],
       "role": "group",
       "target": [
         454.0,
-        408.5,
+        409.0,
         664.0,
-        22.5
+        23.0
       ]
     },
     {
@@ -3440,16 +3440,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b3/i0/#1/b0",
       "rect": [
         454.0,
-        -866.0,
+        -869.0,
         664.0,
-        22.5
+        23.0
       ],
       "role": "text",
       "target": [
         454.0,
-        408.5,
+        409.0,
         664.0,
-        22.5
+        23.0
       ],
       "text": " backoff.ts  resets its delay on every message, so a flapping server is retried at full speed."
     },
@@ -3465,16 +3465,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b3/i1",
       "rect": [
         422.0,
-        -839.5,
+        -842.0,
         696.0,
-        22.5
+        23.0
       ],
       "role": "group",
       "target": [
         422.0,
-        435.0,
+        436.0,
         696.0,
-        22.5
+        23.0
       ]
     },
     {
@@ -3489,16 +3489,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b3/i1/#0",
       "rect": [
         422.0,
-        -839.5,
+        -842.0,
         32.0,
-        22.5
+        23.0
       ],
       "role": "text",
       "target": [
         422.0,
-        435.0,
+        436.0,
         32.0,
-        22.5
+        23.0
       ],
       "text": "•"
     },
@@ -3513,16 +3513,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b3/i1/#1",
       "rect": [
         454.0,
-        -839.5,
+        -842.0,
         664.0,
-        22.5
+        23.0
       ],
       "role": "group",
       "target": [
         454.0,
-        435.0,
+        436.0,
         664.0,
-        22.5
+        23.0
       ]
     },
     {
@@ -3538,16 +3538,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b3/i1/#1/b0",
       "rect": [
         454.0,
-        -839.5,
+        -842.0,
         664.0,
-        22.5
+        23.0
       ],
       "role": "text",
       "target": [
         454.0,
-        435.0,
+        436.0,
         664.0,
-        22.5
+        23.0
       ],
       "text": "The sidebar store ignores  session.updated  events that arrive before the first list fetch."
     },
@@ -3564,14 +3564,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b4",
       "rect": [
         422.0,
-        -797.0,
+        -799.0,
         696.0,
         20.0
       ],
       "role": "text",
       "target": [
         422.0,
-        477.5,
+        479.0,
         696.0,
         20.0
       ],
@@ -3590,14 +3590,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b5",
       "rect": [
         422.0,
-        -769.0,
+        -771.0,
         696.0,
         45.0
       ],
       "role": "text",
       "target": [
         422.0,
-        505.5,
+        507.0,
         696.0,
         45.0
       ],
@@ -3615,14 +3615,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b6",
       "rect": [
         422.0,
-        -712.0,
+        -714.0,
         696.0,
         284.0
       ],
       "role": "group",
       "target": [
         422.0,
-        562.5,
+        564.0,
         696.0,
         284.0
       ]
@@ -3639,14 +3639,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b6/#0",
       "rect": [
         434.0,
-        -700.0,
+        -702.0,
         672.0,
         260.0
       ],
       "role": "text",
       "target": [
         434.0,
-        574.5,
+        576.0,
         672.0,
         260.0
       ],
@@ -3665,14 +3665,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b7",
       "rect": [
         422.0,
-        -404.0,
+        -406.0,
         696.0,
         22.5
       ],
       "role": "text",
       "target": [
         422.0,
-        870.5,
+        872.0,
         696.0,
         22.5
       ],
@@ -3690,14 +3690,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_edit_50000",
       "rect": [
         422.0,
-        -369.5,
+        -371.5,
         696.0,
         40.0
       ],
       "role": "group",
       "target": [
         422.0,
-        905.0,
+        906.5,
         696.0,
         40.0
       ]
@@ -3713,14 +3713,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_edit_50000/#0",
       "rect": [
         422.0,
-        -369.5,
+        -371.5,
         696.0,
         40.0
       ],
       "role": "group",
       "target": [
         422.0,
-        905.0,
+        906.5,
         696.0,
         40.0
       ]
@@ -3737,14 +3737,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_edit_50000/#0/trigger",
       "rect": [
         422.0,
-        -369.5,
+        -371.5,
         696.0,
         28.0
       ],
       "role": "button",
       "target": [
         422.0,
-        905.0,
+        906.5,
         696.0,
         28.0
       ]
@@ -3761,14 +3761,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_edit_50000/#0/trigger/#0",
       "rect": [
         422.0,
-        -363.5,
+        -365.5,
         36.0,
         16.0
       ],
       "role": "text",
       "target": [
         422.0,
-        911.0,
+        912.5,
         36.0,
         16.0
       ],
@@ -3786,14 +3786,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_edit_50000/#0/trigger/#1",
       "rect": [
         458.0,
-        -363.5,
+        -365.5,
         8.5,
         16.0
       ],
       "role": "text",
       "target": [
         458.0,
-        911.0,
+        912.5,
         8.5,
         16.0
       ],
@@ -3811,14 +3811,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_edit_50000/#0/trigger/#2",
       "rect": [
         466.5,
-        -363.5,
+        -365.5,
         33.5,
         16.0
       ],
       "role": "text",
       "target": [
         466.5,
-        911.0,
+        912.5,
         33.5,
         16.0
       ],
@@ -3836,14 +3836,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_edit_50000/#0/trigger/#3",
       "rect": [
         502.0,
-        -362.5,
+        -364.5,
         14.0,
         14.0
       ],
       "role": "icon",
       "target": [
         502.0,
-        912.0,
+        913.5,
         14.0,
         14.0
       ]
@@ -3860,14 +3860,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/a-call_task_60500",
       "rect": [
         422.0,
-        -329.5,
+        -331.5,
         696.0,
         44.0
       ],
       "role": "group",
       "target": [
         422.0,
-        945.0,
+        946.5,
         696.0,
         44.0
       ]
@@ -3883,14 +3883,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/a-call_task_60500/#0",
       "rect": [
         422.0,
-        -329.5,
+        -331.5,
         696.0,
         44.0
       ],
       "role": "group",
       "target": [
         422.0,
-        945.0,
+        946.5,
         696.0,
         44.0
       ]
@@ -3907,14 +3907,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/a-call_task_60500/#0/chip",
       "rect": [
         422.0,
-        -329.5,
+        -331.5,
         321.0,
         32.0
       ],
       "role": "button",
       "target": [
         422.0,
-        945.0,
+        946.5,
         321.0,
         32.0
       ]
@@ -3931,14 +3931,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/a-call_task_60500/#0/chip/#0",
       "rect": [
         432.0,
-        -321.5,
+        -323.5,
         16.0,
         16.0
       ],
       "role": "icon",
       "target": [
         432.0,
-        953.0,
+        954.5,
         16.0,
         16.0
       ]
@@ -3955,14 +3955,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/a-call_task_60500/#0/chip/#1",
       "rect": [
         456.0,
-        -321.5,
+        -323.5,
         48.5,
         16.0
       ],
       "role": "text",
       "target": [
         456.0,
-        953.0,
+        954.5,
         48.5,
         16.0
       ],
@@ -3980,14 +3980,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/a-call_task_60500/#0/chip/#2",
       "rect": [
         512.5,
-        -321.5,
+        -323.5,
         182.0,
         16.0
       ],
       "role": "text",
       "target": [
         512.5,
-        953.0,
+        954.5,
         182.0,
         16.0
       ],
@@ -4005,14 +4005,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/a-call_task_60500/#0/chip/#3",
       "rect": [
         702.5,
-        -321.5,
+        -323.5,
         30.5,
         16.0
       ],
       "role": "text",
       "target": [
         702.5,
-        953.0,
+        954.5,
         30.5,
         16.0
       ],
@@ -4030,16 +4030,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0",
       "rect": [
         422.0,
-        -285.5,
+        -287.5,
         696.0,
-        201.5
+        203.5
       ],
       "role": "group",
       "target": [
         422.0,
-        989.0,
+        990.5,
         696.0,
-        201.5
+        203.5
       ]
     },
     {
@@ -4053,16 +4053,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0",
       "rect": [
         422.0,
-        -285.5,
+        -287.5,
         696.0,
-        201.5
+        203.5
       ],
       "role": "group",
       "target": [
         422.0,
-        989.0,
+        990.5,
         696.0,
-        201.5
+        203.5
       ]
     },
     {
@@ -4078,14 +4078,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b0",
       "rect": [
         422.0,
-        -285.5,
+        -287.5,
         696.0,
         22.5
       ],
       "role": "text",
       "target": [
         422.0,
-        989.0,
+        990.5,
         696.0,
         22.5
       ],
@@ -4103,16 +4103,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1",
       "rect": [
         422.0,
-        -251.0,
+        -253.0,
         696.0,
-        75.5
+        76.5
       ],
       "role": "group",
       "target": [
         422.0,
-        1023.5,
+        1025.0,
         696.0,
-        75.5
+        76.5
       ]
     },
     {
@@ -4127,16 +4127,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i0",
       "rect": [
         422.0,
-        -251.0,
+        -253.0,
         696.0,
-        22.5
+        23.0
       ],
       "role": "group",
       "target": [
         422.0,
-        1023.5,
+        1025.0,
         696.0,
-        22.5
+        23.0
       ]
     },
     {
@@ -4151,16 +4151,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i0/#0",
       "rect": [
         422.0,
-        -251.0,
+        -253.0,
         32.0,
-        22.5
+        23.0
       ],
       "role": "text",
       "target": [
         422.0,
-        1023.5,
+        1025.0,
         32.0,
-        22.5
+        23.0
       ],
       "text": "1."
     },
@@ -4175,16 +4175,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i0/#1",
       "rect": [
         454.0,
-        -251.0,
+        -253.0,
         664.0,
-        22.5
+        23.0
       ],
       "role": "group",
       "target": [
         454.0,
-        1023.5,
+        1025.0,
         664.0,
-        22.5
+        23.0
       ]
     },
     {
@@ -4200,16 +4200,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i0/#1/b0",
       "rect": [
         454.0,
-        -251.0,
+        -253.0,
         664.0,
-        22.5
+        23.0
       ],
       "role": "text",
       "target": [
         454.0,
-        1023.5,
+        1025.0,
         664.0,
-        22.5
+        23.0
       ],
       "text": "Watchdog:  stream.ts  closes and reopens the stream after 25 s of silence."
     },
@@ -4225,14 +4225,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i1",
       "rect": [
         422.0,
-        -224.5,
+        -226.0,
         696.0,
         22.5
       ],
       "role": "group",
       "target": [
         422.0,
-        1050.0,
+        1052.0,
         696.0,
         22.5
       ]
@@ -4249,14 +4249,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i1/#0",
       "rect": [
         422.0,
-        -224.5,
+        -226.0,
         32.0,
         22.5
       ],
       "role": "text",
       "target": [
         422.0,
-        1050.0,
+        1052.0,
         32.0,
         22.5
       ],
@@ -4273,14 +4273,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i1/#1",
       "rect": [
         454.0,
-        -224.5,
+        -226.0,
         664.0,
         22.5
       ],
       "role": "group",
       "target": [
         454.0,
-        1050.0,
+        1052.0,
         664.0,
         22.5
       ]
@@ -4298,14 +4298,14 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i1/#1/b0",
       "rect": [
         454.0,
-        -224.5,
+        -226.0,
         664.0,
         22.5
       ],
       "role": "text",
       "target": [
         454.0,
-        1050.0,
+        1052.0,
         664.0,
         22.5
       ],
@@ -4323,16 +4323,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i2",
       "rect": [
         422.0,
-        -198.0,
+        -199.5,
         696.0,
-        22.5
+        23.0
       ],
       "role": "group",
       "target": [
         422.0,
-        1076.5,
+        1078.5,
         696.0,
-        22.5
+        23.0
       ]
     },
     {
@@ -4347,16 +4347,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i2/#0",
       "rect": [
         422.0,
-        -198.0,
+        -199.5,
         32.0,
-        22.5
+        23.0
       ],
       "role": "text",
       "target": [
         422.0,
-        1076.5,
+        1078.5,
         32.0,
-        22.5
+        23.0
       ],
       "text": "3."
     },
@@ -4371,16 +4371,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i2/#1",
       "rect": [
         454.0,
-        -198.0,
+        -199.5,
         664.0,
-        22.5
+        23.0
       ],
       "role": "group",
       "target": [
         454.0,
-        1076.5,
+        1078.5,
         664.0,
-        22.5
+        23.0
       ]
     },
     {
@@ -4396,16 +4396,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i2/#1/b0",
       "rect": [
         454.0,
-        -198.0,
+        -199.5,
         664.0,
-        22.5
+        23.0
       ],
       "role": "text",
       "target": [
         454.0,
-        1076.5,
+        1078.5,
         664.0,
-        22.5
+        23.0
       ],
       "text": "Sidebar: early  session.updated  events are queued until the list loads."
     },
@@ -4422,16 +4422,16 @@
       "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b2",
       "rect": [
         422.0,
-        -163.5,
+        -164.5,
         696.0,
-        67.5
+        68.5
       ],
       "role": "text",
       "target": [
         422.0,
-        1111.0,
+        1113.5,
         696.0,
-        67.5
+        68.5
       ],
       "text": "The reviewer agreed and suggested one change, which I applied: the watchdog now also restarts on  visibilitychange , so waking the laptop reconnects immediately instead of after 25 s. All 14 tests in  src/net  pass."
     },
@@ -4454,7 +4454,7 @@
       "role": "group",
       "target": [
         422.0,
-        1190.5,
+        1194.0,
         696.0,
         94.0
       ]
@@ -4477,7 +4477,7 @@
       "role": "group",
       "target": [
         422.0,
-        1190.5,
+        1194.0,
         696.0,
         94.0
       ]
@@ -4500,7 +4500,7 @@
       "role": "group",
       "target": [
         658.0,
-        1210.5,
+        1214.0,
         460.0,
         58.0
       ]
@@ -4525,7 +4525,7 @@
       "role": "text",
       "target": [
         670.0,
-        1218.5,
+        1222.0,
         436.0,
         42.0
       ],
@@ -4550,7 +4550,7 @@
       "role": "group",
       "target": [
         422.0,
-        1284.5,
+        1288.0,
         696.0,
         40.0
       ]
@@ -4573,7 +4573,7 @@
       "role": "group",
       "target": [
         422.0,
-        1284.5,
+        1288.0,
         696.0,
         40.0
       ]
@@ -4597,7 +4597,7 @@
       "role": "button",
       "target": [
         422.0,
-        1284.5,
+        1288.0,
         696.0,
         28.0
       ]
@@ -4621,7 +4621,7 @@
       "role": "icon",
       "target": [
         422.0,
-        1290.5,
+        1294.0,
         16.0,
         16.0
       ]
@@ -4645,7 +4645,7 @@
       "role": "text",
       "target": [
         444.0,
-        1290.5,
+        1294.0,
         88.0,
         16.0
       ],
@@ -4670,7 +4670,7 @@
       "role": "icon",
       "target": [
         538.0,
-        1291.5,
+        1295.0,
         14.0,
         14.0
       ]
@@ -4694,7 +4694,7 @@
       "role": "group",
       "target": [
         422.0,
-        1324.5,
+        1328.0,
         696.0,
         40.0
       ]
@@ -4717,7 +4717,7 @@
       "role": "group",
       "target": [
         422.0,
-        1324.5,
+        1328.0,
         696.0,
         40.0
       ]
@@ -4741,7 +4741,7 @@
       "role": "button",
       "target": [
         422.0,
-        1324.5,
+        1328.0,
         696.0,
         28.0
       ]
@@ -4765,7 +4765,7 @@
       "role": "text",
       "target": [
         422.0,
-        1330.5,
+        1334.0,
         36.0,
         16.0
       ],
@@ -4790,7 +4790,7 @@
       "role": "text",
       "target": [
         458.0,
-        1330.5,
+        1334.0,
         5.5,
         16.0
       ],
@@ -4815,7 +4815,7 @@
       "role": "text",
       "target": [
         463.5,
-        1330.5,
+        1334.0,
         26.5,
         16.0
       ],
@@ -4840,7 +4840,7 @@
       "role": "icon",
       "target": [
         492.0,
-        1331.5,
+        1335.0,
         14.0,
         14.0
       ]
@@ -4864,7 +4864,7 @@
       "role": "group",
       "target": [
         422.0,
-        1364.5,
+        1368.0,
         696.0,
         524.0
       ]
@@ -4887,7 +4887,7 @@
       "role": "group",
       "target": [
         422.0,
-        1364.5,
+        1368.0,
         696.0,
         524.0
       ]
@@ -4912,7 +4912,7 @@
       "role": "text",
       "target": [
         422.0,
-        1364.5,
+        1368.0,
         696.0,
         22.5
       ],
@@ -4938,7 +4938,7 @@
       "role": "text",
       "target": [
         422.0,
-        1399.0,
+        1402.5,
         696.0,
         22.5
       ],
@@ -4963,7 +4963,7 @@
       "role": "group",
       "target": [
         422.0,
-        1433.5,
+        1437.0,
         696.0,
         75.5
       ]
@@ -4987,7 +4987,7 @@
       "role": "group",
       "target": [
         422.0,
-        1433.5,
+        1437.0,
         696.0,
         22.5
       ]
@@ -5011,7 +5011,7 @@
       "role": "text",
       "target": [
         422.0,
-        1433.5,
+        1437.0,
         32.0,
         22.5
       ],
@@ -5035,7 +5035,7 @@
       "role": "group",
       "target": [
         454.0,
-        1433.5,
+        1437.0,
         664.0,
         22.5
       ]
@@ -5060,7 +5060,7 @@
       "role": "text",
       "target": [
         454.0,
-        1433.5,
+        1437.0,
         664.0,
         22.5
       ],
@@ -5085,7 +5085,7 @@
       "role": "group",
       "target": [
         422.0,
-        1460.0,
+        1463.5,
         696.0,
         22.5
       ]
@@ -5109,7 +5109,7 @@
       "role": "text",
       "target": [
         422.0,
-        1460.0,
+        1463.5,
         32.0,
         22.5
       ],
@@ -5133,7 +5133,7 @@
       "role": "group",
       "target": [
         454.0,
-        1460.0,
+        1463.5,
         664.0,
         22.5
       ]
@@ -5158,7 +5158,7 @@
       "role": "text",
       "target": [
         454.0,
-        1460.0,
+        1463.5,
         664.0,
         22.5
       ],
@@ -5183,7 +5183,7 @@
       "role": "group",
       "target": [
         422.0,
-        1486.5,
+        1490.0,
         696.0,
         22.5
       ]
@@ -5207,7 +5207,7 @@
       "role": "text",
       "target": [
         422.0,
-        1486.5,
+        1490.0,
         32.0,
         22.5
       ],
@@ -5231,7 +5231,7 @@
       "role": "group",
       "target": [
         454.0,
-        1486.5,
+        1490.0,
         664.0,
         22.5
       ]
@@ -5256,7 +5256,7 @@
       "role": "text",
       "target": [
         454.0,
-        1486.5,
+        1490.0,
         664.0,
         22.5
       ],
@@ -5281,7 +5281,7 @@
       "role": "group",
       "target": [
         422.0,
-        1521.0,
+        1524.5,
         696.0,
         264.0
       ]
@@ -5305,7 +5305,7 @@
       "role": "text",
       "target": [
         434.0,
-        1533.0,
+        1536.5,
         672.0,
         240.0
       ],
@@ -5331,7 +5331,7 @@
       "role": "text",
       "target": [
         422.0,
-        1809.0,
+        1812.5,
         696.0,
         67.5
       ],
@@ -5356,7 +5356,7 @@
       "role": "group",
       "target": [
         422.0,
-        1888.5,
+        1892.0,
         696.0,
         28.0
       ]
@@ -5379,7 +5379,7 @@
       "role": "group",
       "target": [
         422.0,
-        1888.5,
+        1892.0,
         696.0,
         28.0
       ]
@@ -5403,7 +5403,7 @@
       "role": "group",
       "target": [
         422.0,
-        1888.5,
+        1892.0,
         65.5,
         28.0
       ]
@@ -5426,7 +5426,7 @@
       "role": "group",
       "target": [
         422.0,
-        1893.5,
+        1897.0,
         6.0,
         6.0
       ]
@@ -5450,7 +5450,7 @@
       "role": "text",
       "target": [
         436.0,
-        1888.5,
+        1892.0,
         51.5,
         16.0
       ],
@@ -5476,7 +5476,7 @@
       "role": "button",
       "target": [
         422.0,
-        1888.5,
+        1892.0,
         28.0,
         28.0
       ]
@@ -5500,7 +5500,7 @@
       "role": "icon",
       "target": [
         428.0,
-        1888.5,
+        1892.0,
         16.0,
         16.0
       ]
