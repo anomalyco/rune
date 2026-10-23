@@ -70,3 +70,20 @@ unsafe fn gnome_animations() -> Option<bool> {
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub(crate) fn reduced_motion() -> bool { false }
+
+/// macOS "Keyboard navigation" (Full Keyboard Access): when off, Tab visits only text fields
+/// and lists, as in AppKit. Windows and Linux always Tab through every control.
+#[cfg(target_os = "macos")]
+pub(crate) fn full_keyboard_access() -> bool {
+    use objc2::{class, msg_send};
+    // SAFETY: NSApplication's shared instance lives for the process; the selector returns an
+    // Objective-C BOOL. Native hosts call on the UI thread.
+    unsafe {
+        let app: *mut objc2::runtime::AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        let enabled: objc2::runtime::Bool = msg_send![app, isFullKeyboardAccessEnabled];
+        enabled.as_bool()
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn full_keyboard_access() -> bool { true }

@@ -118,6 +118,13 @@ impl KeyEvent {
         let m = self.mods;
         matches!(self.key, Key::Text(_)) && (m.cmd || m.ctrl) && (cfg!(target_os = "macos") || !m.alt)
     }
+    /// A macOS Control-letter text binding (Ctrl-A, Ctrl-E, Ctrl-K, …), as in every AppKit field.
+    pub(crate) fn control_binding(&self) -> Option<char> {
+        let m = self.mods;
+        let Key::Text(s) = &self.key else { return None };
+        let c = s.chars().next().filter(|_| s.chars().count() == 1)?.to_ascii_lowercase();
+        (cfg!(target_os = "macos") && m.ctrl && !m.cmd && !m.alt && "abefpndhk".contains(c)).then_some(c)
+    }
 }
 
 impl Drop for KeyEvent {
@@ -388,6 +395,23 @@ impl TextEdit {
     pub fn key(&mut self, ev: &KeyEvent, layout: Option<&Layout<Ink>>) -> EditOutcome {
         let mut out = EditOutcome::default();
         let m = ev.mods;
+        if let Some(c) = ev.control_binding() {
+            let (key, line) = match c {
+                'a' => (Key::Left, true), 'e' => (Key::Right, true), 'b' => (Key::Left, false),
+                'f' => (Key::Right, false), 'p' => (Key::Up, false), 'n' => (Key::Down, false),
+                'd' => (Key::Delete, false), 'h' => (Key::Backspace, false),
+                _ => {
+                    // Ctrl-K deletes to the end of the line, or the line break at its end.
+                    self.break_history_group();
+                    let (a, b) = self.range();
+                    let end = if a == b { self.line_edge(layout, true) } else { b };
+                    let to = if end > a { end } else if a < self.text.len() { next_char(&self.text, a) } else { a };
+                    if to > a { self.replace((a, to), "", false); }
+                    return out;
+                }
+            };
+            return self.key(&KeyEvent { key, mods: Mods { shift: m.shift, cmd: line, ..Mods::default() } }, layout);
+        }
         if ev.is_command_chord() { return out; }
         if !matches!(&ev.key, Key::Text(s) if !s.contains(['\r', '\n'])) { self.break_history_group(); }
         let word = m.alt || (m.ctrl && !cfg!(target_os = "macos"));
@@ -744,6 +768,25 @@ mod tests {
         rt.key(chord("x", Mods::default())); rt.frame(0.0);
         assert_eq!(rt.state.pw.text, "x");
         assert_eq!(rt.state.keys, [Key::Text(" ".into())]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn control_letters_edit_like_appkit_fields() {
+        let ctrl = |c: &str| KeyEvent { key: Key::Text(c.into()), mods: Mods { ctrl: true, ..Mods::default() } };
+        let mut e = TextEdit::new("one two\nthree");
+        e.set(4, false);
+        e.key(&ctrl("a"), None); assert_eq!(e.focus, 0);
+        e.key(&ctrl("e"), None); assert_eq!(e.focus, 7);
+        e.key(&ctrl("b"), None); e.key(&ctrl("b"), None); assert_eq!(e.focus, 5);
+        e.key(&ctrl("f"), None); assert_eq!(e.focus, 6);
+        e.key(&ctrl("h"), None); assert_eq!(e.text, "one to\nthree");
+        e.key(&ctrl("d"), None); assert_eq!(e.text, "one t\nthree");
+        e.set(0, false);
+        e.key(&ctrl("k"), None); assert_eq!(e.text, "\nthree");
+        e.key(&ctrl("k"), None); assert_eq!(e.text, "three", "at a line's end Ctrl-K joins the next line");
+        e.key(&ctrl("n"), None); assert_eq!(e.focus, 5);
+        e.key(&ctrl("x"), None); assert_eq!(e.text, "three", "other Control letters never type");
     }
 
     #[test]

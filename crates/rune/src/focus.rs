@@ -2,6 +2,15 @@
 use super::*;
 use crate::edit::Key;
 
+/// Groups whose items stack vertically: only Up and Down move between them.
+const VERTICAL_ROLES: [&str; 4] = ["menu", "listbox", "list", "tree"];
+/// Groups that move to the item whose label the user types.
+const TYPE_SELECT_ROLES: [&str; 5] = ["menu", "listbox", "list", "tree", "tablist"];
+/// Without Full Keyboard Access, Tab still visits lists inside these groups.
+const LIST_ROLES: [&str; 4] = ["listbox", "list", "tree", "grid"];
+/// AppKit's type-select resets after this long without a key.
+const TYPE_SELECT_PAUSE: f64 = 1.0;
+
 fn sync_input_focus<S: 'static>(nodes: &mut [Node], state: &mut S, path: Option<&str>) -> bool {
     let mut changed = false;
     for n in nodes {
@@ -72,6 +81,17 @@ impl<S: 'static> Runtime<S> {
         }
         None
     }
+    /// The `focus_highlight` row that `i` (a pointer target) belongs to.
+    pub(super) fn highlight_row(&self, mut i: usize) -> Option<usize> {
+        loop {
+            let n = &self.nodes[i];
+            if n.focus.enabled { return (n.focus.highlight.is_some() && self.can_focus(i)).then_some(i); }
+            i = n.parent?;
+        }
+    }
+    pub(super) fn highlight_visible(&self, i: usize) -> bool {
+        (self.keyboard_focus || self.hover_focus) && self.focused.as_deref() == Some(&self.nodes[i].path)
+    }
     pub(super) fn focus_ring_visible(&self, mut i: usize) -> bool {
         if !self.keyboard_focus { return false; }
         loop {
@@ -83,7 +103,7 @@ impl<S: 'static> Runtime<S> {
         }
     }
     pub(super) fn set_focus(&mut self, path: Option<String>, keyboard: bool) -> bool {
-        if self.focused != path { self.ime_area = None; self.ime_reset = true; self.blur_links(); }
+        if self.focused != path { self.ime_area = None; self.ime_reset = true; self.blur_links(); self.hover_focus = false; }
         let lost = self.focused != path && self.physical_focus_lost();
         let changed = sync_input_focus(&mut self.nodes, &mut self.state, path.as_deref()) || lost;
         let mut changed = changed;
@@ -150,7 +170,23 @@ impl<S: 'static> Runtime<S> {
         order.sort_by_key(|&i| { let n = self.nodes[i].focus.order; (if n > 0 { n } else { i32::MAX }, i) });
         order
     }
-    pub(super) fn focus_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    /// Type-select: the typed prefix picks the first item whose label starts with it. A
+    /// repeated letter cycles the items starting with it. The prefix resets after a pause.
+    fn type_select(&mut self, items: &[usize], pos: usize, typed: &str) -> Option<usize> {
+        let now = self.now_clock();
+        let (buffer, at) = &mut self.typeahead;
+        if now - *at > TYPE_SELECT_PAUSE { buffer.clear(); }
+        *at = now;
+        buffer.push_str(&typed.to_lowercase());
+        let label = |j: usize| self.nodes[items[j]].label.as_deref().unwrap_or("").to_lowercase();
+        let first = buffer.chars().next()?;
+        let cycle = buffer.chars().all(|c| c == first);
+        let order = (0..items.len()).map(|k| if cycle { (pos + 1 + k) % items.len() } else { k });
+        let prefix = if cycle { first.to_string() } else { buffer.clone() };
+        order.into_iter().find(|&j| label(j).starts_with(&prefix))
+    }
+    /// `shown`: the focus highlight was visible before this key arrived.
+    pub(super) fn focus_key(&mut self, ev: &KeyEvent, shown: bool, tx: &mut Tx) -> bool {
         if ev.mods.cmd || ev.mods.ctrl || ev.mods.alt || ev.mods.logo { return false; }
         self.keyboard_focus = true;
         if ev.key == Key::Escape && let Some(i) = self.active_modal() {
@@ -161,7 +197,11 @@ impl<S: 'static> Runtime<S> {
         }
         if ev.key == Key::Tab {
             if self.link_tab(ev.mods.shift) { return true; }
-            let order = self.tab_order();
+            let mut order = self.tab_order();
+            if !self.full_keyboard_access {
+                order.retain(|&i| self.nodes[i].input.is_some()
+                    || self.group(i).is_some_and(|g| LIST_ROLES.contains(&self.nodes[g].role)));
+            }
             if order.is_empty() { return self.active_modal().is_some(); }
             let current = order.iter().position(|&i| self.focused.as_deref() == Some(&self.nodes[i].path));
             let next = match current {
@@ -177,25 +217,42 @@ impl<S: 'static> Runtime<S> {
         let Some(i) = self.nodes.iter().position(|n| self.focused.as_deref() == Some(&n.path)) else { return false; };
         if !self.can_focus(i) { return false; }
         if let Some(g) = self.group(i) {
-            let backward = matches!(ev.key, Key::Left | Key::Up);
-            if backward || matches!(ev.key, Key::Right | Key::Down | Key::Home | Key::End) {
-                let items: Vec<_> = (0..self.nodes.len()).filter(|&j| self.can_focus(j) && self.group(j) == Some(g)).collect();
-                let pos = items.iter().position(|&j| j == i).unwrap();
-                let next = match ev.key {
+            let vertical = VERTICAL_ROLES.contains(&self.nodes[g].role);
+            let backward = matches!(ev.key, Key::Up) || (!vertical && ev.key == Key::Left);
+            let forward = matches!(ev.key, Key::Down) || (!vertical && ev.key == Key::Right);
+            let items: Vec<_> = (0..self.nodes.len()).filter(|&j| self.can_focus(j) && self.group(j) == Some(g)).collect();
+            let pos = items.iter().position(|&j| j == i).unwrap();
+            let next = if backward || forward || matches!(ev.key, Key::Home | Key::End) {
+                self.typeahead.0.clear();
+                Some(match ev.key {
                     Key::Home => 0, Key::End => items.len() - 1,
+                    // A highlight the user cannot see yet appears where it is (a popup's checked
+                    // item, else the first) before arrows move it; Up from nothing is the last.
+                    _ if self.nodes[i].focus.highlight.is_some() && !shown =>
+                        if backward && !self.nodes[i].focus.selected { items.len() - 1 } else { pos },
                     _ if backward => (pos + items.len() - 1) % items.len(),
                     _ => (pos + 1) % items.len(),
-                };
+                })
+            } else if let Key::Text(t) = &ev.key && TYPE_SELECT_ROLES.contains(&self.nodes[g].role) && !t.trim().is_empty() {
+                self.type_select(&items, pos, t)
+            } else { None };
+            if let Some(next) = next {
                 let n = &self.nodes[items[next]];
-                let action = (n.role == "radio" || n.role == "tab").then(|| n.on_press.clone()).flatten();
+                let follows = n.role == "radio" || n.role == "tab" || self.nodes[g].focus.follows;
+                let action = follows.then(|| n.on_press.clone()).flatten();
                 let path = n.path.clone();
                 self.set_focus(Some(path), true);
                 if let Some(f) = action { f(handler_state(&mut self.state), tx); }
                 return true;
             }
+        } else if self.nodes[i].role == "combobox" && self.nodes[i].input.is_none() && matches!(ev.key, Key::Up | Key::Down) {
+            // A popup button opens on its arrows as well as Space and Return (NSPopUpButton).
+            if let Some(f) = self.nodes[i].on_press.clone() { f(handler_state(&mut self.state), tx); }
+            return true;
         }
         if self.nodes[i].input.is_none() && (ev.key == Key::Enter || ev.key == Key::Text(" ".into())) {
-            self.keyboard_focus = true;
+            // A row the user cannot see highlighted (the pointer left it) chooses nothing.
+            if self.nodes[i].focus.highlight.is_some() && !shown { self.keyboard_focus = false; return true; }
             if self.link_key(i, tx) { return true; }
             if let Some(f) = self.nodes[i].on_press.clone() { f(handler_state(&mut self.state), tx); }
             return true;
@@ -419,5 +476,137 @@ mod tests {
         rt.pointer_down(5.0, 280.0); rt.pointer_up(5.0, 280.0); rt.frame(0.0);
         assert!(!rt.state.open); assert_eq!(focused(&rt), "opener");
         assert!(!rt.elements().iter().any(|e| e.focus_visible));
+    }
+
+    #[derive(Default)]
+    struct Menu { open: bool, checked: Option<usize>, picks: Vec<usize>, follows: bool, search: bool, field: crate::TextEdit }
+    const ITEMS: [&str; 4] = ["Alpha", "Beta", "Bravo", "Charlie"];
+    fn menu_view(s: &Menu, _: &mut Cx<Menu>) -> El {
+        let mut root = col().key("root").size(300.0, 300.0)
+            .child(button("popup").role("combobox").on_press(|s: &mut Menu| s.open = true))
+            .child(button("plain"));
+        if s.open {
+            let mut list = col().key("menu").role("menu").focus_group();
+            if s.follows { list = list.focus_follows(); }
+            root = root.child(col().key("surface").absolute(100.0, 100.0).focus_return("popup")
+                .modal(true, |s: &mut Menu| s.open = false)
+                .children(s.search.then(|| crate::text_input(&s.field, crate::TextStyle::new(14.0, 400.0))
+                    .key("field").size(80.0, 20.0).on_edit(|s: &mut Menu| &mut s.field)))
+                .child(list.children(ITEMS.iter().enumerate().map(|(i, label)| {
+                    el().key(*label).label(*label).size(80.0, 20.0).focusable(true)
+                        .focus_selected(s.checked == Some(i)).focus_highlight(crate::Color::WHITE)
+                        .on_press(move |s: &mut Menu| { s.picks.push(i); s.open = s.follows; })
+                }))));
+        }
+        root
+    }
+    fn menu_runtime(state: Menu) -> Runtime<Menu> {
+        let mut rt = Runtime::new(state, menu_view, (300.0, 300.0), Env::new(true, 1.0));
+        rt.frame(0.0); rt
+    }
+    fn press<S: 'static>(rt: &mut Runtime<S>, key: Key) {
+        rt.key(KeyEvent { key, mods: Mods::default() }); rt.frame(0.0);
+    }
+    fn highlighted(rt: &Runtime<Menu>) -> Option<String> {
+        (0..rt.nodes.len()).find(|&i| rt.nodes[i].focus.highlight.is_some() && rt.highlight_visible(i))
+            .and_then(|i| rt.nodes[i].key.clone())
+    }
+
+    #[test]
+    fn menu_arrows_wrap_vertically_and_return_focus_on_escape() {
+        let mut rt = menu_runtime(Menu::default());
+        let (x, y) = rt.find("popup").unwrap();
+        rt.pointer_down(x, y); rt.pointer_up(x, y); rt.frame(0.0);
+        assert_eq!(focused(&rt), "Alpha");
+        assert_eq!(highlighted(&rt), None, "a pointer-opened menu shows no highlight yet");
+        press(&mut rt, Key::Enter);
+        assert!(rt.state.open && rt.state.picks.is_empty(), "Return chooses no hidden highlight");
+        press(&mut rt, Key::Down);
+        assert_eq!(highlighted(&rt).as_deref(), Some("Alpha"), "the first arrow reveals the highlight");
+        press(&mut rt, Key::Down); assert_eq!(focused(&rt), "Beta");
+        press(&mut rt, Key::Right); assert_eq!(focused(&rt), "Beta", "Left and Right do not move in a menu");
+        press(&mut rt, Key::End); assert_eq!(focused(&rt), "Charlie");
+        press(&mut rt, Key::Down); assert_eq!(focused(&rt), "Alpha");
+        press(&mut rt, Key::Up); assert_eq!(focused(&rt), "Charlie");
+        press(&mut rt, Key::Home); assert_eq!(focused(&rt), "Alpha");
+        assert!(rt.state.picks.is_empty(), "moving does not choose");
+        press(&mut rt, Key::Escape);
+        assert!(!rt.state.open);
+        assert_eq!(focused(&rt), "popup");
+    }
+
+    #[test]
+    fn a_hidden_highlight_appears_on_the_checked_item_or_from_the_end() {
+        let mut rt = menu_runtime(Menu { open: true, checked: Some(2), ..Default::default() });
+        assert_eq!(focused(&rt), "Bravo", "a popup opens on its checked item");
+        press(&mut rt, Key::Up);
+        assert_eq!(focused(&rt), "Bravo");
+        let mut rt = menu_runtime(Menu { open: true, ..Default::default() });
+        press(&mut rt, Key::Up);
+        assert_eq!(focused(&rt), "Charlie", "Up into an unchecked menu starts from the bottom");
+    }
+
+    #[test]
+    fn type_select_matches_prefixes_and_cycles_a_repeated_letter() {
+        let mut rt = menu_runtime(Menu { open: true, ..Default::default() });
+        press(&mut rt, Key::Text("b".into())); assert_eq!(focused(&rt), "Beta");
+        press(&mut rt, Key::Text("r".into())); assert_eq!(focused(&rt), "Bravo");
+        rt.typeahead.1 -= TYPE_SELECT_PAUSE + 0.1;
+        press(&mut rt, Key::Text("c".into())); assert_eq!(focused(&rt), "Charlie", "a pause starts a new prefix");
+        rt.typeahead.1 -= TYPE_SELECT_PAUSE + 0.1;
+        press(&mut rt, Key::Text("b".into())); assert_eq!(focused(&rt), "Beta");
+        press(&mut rt, Key::Text("b".into())); assert_eq!(focused(&rt), "Bravo");
+        press(&mut rt, Key::Text("b".into())); assert_eq!(focused(&rt), "Beta");
+        press(&mut rt, Key::Enter);
+        assert_eq!(rt.state.picks, [1]);
+        assert!(!rt.state.open);
+    }
+
+    #[test]
+    fn pointer_and_keys_share_one_highlight_but_fields_keep_focus() {
+        let mut rt = menu_runtime(Menu { open: true, ..Default::default() });
+        let (x, y) = rt.find("Bravo").unwrap();
+        rt.pointer_move(x, y); rt.frame(0.0);
+        assert_eq!(highlighted(&rt).as_deref(), Some("Bravo"));
+        assert!(!rt.elements().iter().any(|e| e.focus_visible), "a pointer highlight is not a focus ring");
+        press(&mut rt, Key::Down); assert_eq!(highlighted(&rt).as_deref(), Some("Charlie"));
+        rt.pointer_move(5.0, 290.0); rt.frame(0.0);
+        assert_eq!(highlighted(&rt).as_deref(), Some("Charlie"), "leaving rows keeps a keyboard highlight");
+
+        let mut rt = menu_runtime(Menu { open: true, search: true, ..Default::default() });
+        assert_eq!(focused(&rt), "field");
+        let (x, y) = rt.find("Beta").unwrap();
+        rt.pointer_move(x, y); rt.frame(0.0);
+        assert_eq!(focused(&rt), "field", "hovering results never takes focus from their search field");
+    }
+
+    #[test]
+    fn follows_presses_as_it_moves_and_popups_open_on_arrows() {
+        let mut rt = menu_runtime(Menu { follows: true, ..Default::default() });
+        press(&mut rt, Key::Tab); assert_eq!(focused(&rt), "popup");
+        press(&mut rt, Key::Down);
+        assert!(rt.state.open, "Down opens a popup button");
+        assert_eq!(focused(&rt), "Alpha");
+        press(&mut rt, Key::Down); press(&mut rt, Key::Down);
+        assert_eq!(rt.state.picks, [1, 2], "each move presses the item it reaches");
+    }
+
+    #[test]
+    fn without_full_keyboard_access_tab_visits_only_fields_and_lists() {
+        use crate::{text_input, TextEdit, TextStyle};
+        fn view(s: &TextEdit, _: &mut Cx<TextEdit>) -> El {
+            col().size(200.0, 200.0)
+                .child(text_input(s, TextStyle::new(14.0, 400.0)).key("field").size(200.0, 30.0).on_edit(|s: &mut TextEdit| s))
+                .child(button("button"))
+                .child(col().role("list").focus_group().child(button("row0").focus_selected(true)).child(button("row1")))
+        }
+        let mut rt = Runtime::new(TextEdit::new(""), view, (200.0, 200.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        rt.set_full_keyboard_access(false);
+        press(&mut rt, Key::Tab); assert_eq!(focused(&rt), "field");
+        press(&mut rt, Key::Tab); assert_eq!(focused(&rt), "row0", "buttons are skipped, lists are not");
+        press(&mut rt, Key::Tab); assert_eq!(focused(&rt), "field");
+        rt.set_full_keyboard_access(true);
+        press(&mut rt, Key::Tab); assert_eq!(focused(&rt), "button");
     }
 }

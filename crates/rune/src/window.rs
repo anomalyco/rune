@@ -461,6 +461,7 @@ impl<S: 'static> Host<S> {
         let mut rt = runtime_for(&spec, state, size, env, waker.clone());
         rt.on_focus = on_focus;
         rt.set_system_reduced_motion(crate::preferences::reduced_motion());
+        rt.set_full_keyboard_access(crate::preferences::full_keyboard_access());
         rt.trace_channels = args.trace.as_ref().map(|_| Default::default());
         rt.set_live_waker(Arc::new(move || { let _ = live_proxy.send_event(WakeEvent::Live(slot)); }));
         rt.set_live_visible(false);
@@ -1557,6 +1558,7 @@ impl<S: 'static> Host<S> {
             }
             WindowEvent::Focused(focused) => {
                 rt.set_system_reduced_motion(crate::preferences::reduced_motion());
+                rt.set_full_keyboard_access(crate::preferences::full_keyboard_access());
                 self.secure_input.set(focused && l.visible && !l.occluded && rt.has_secure_focus());
                 place_chrome(&l.window, chrome);
                 if !focused {

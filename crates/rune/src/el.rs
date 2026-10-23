@@ -195,6 +195,8 @@ pub(crate) struct FocusSpec {
     pub group: bool,
     pub selected: bool,
     pub ring: Option<Outline>,
+    pub highlight: Option<Color>,
+    pub follows: bool,
     pub return_to: Option<String>,
 }
 
@@ -771,6 +773,19 @@ impl El {
     }
     pub fn focus_selected(mut self, selected: bool) -> Self {
         self.focus.selected = selected;
+        self
+    }
+    /// On a focus group: arrow keys and type-select also press the item they focus, so
+    /// selection follows focus (a source list). Radio and tab items always do.
+    pub fn focus_follows(mut self) -> Self {
+        self.focus.follows = true;
+        self
+    }
+    /// A menu or list row's highlight: painted while focused from the keyboard or pointer,
+    /// and moving the pointer over the row focuses it, so keys and mouse share one
+    /// highlight (NSMenu). Use instead of `hover` and `focus_ring`.
+    pub fn focus_highlight(mut self, color: Color) -> Self {
+        self.focus.highlight = Some(color);
         self
     }
     /// Return focus to this keyed trigger (or its first focusable child) when removed.

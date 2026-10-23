@@ -231,6 +231,8 @@ enum Action {
     WindowFocus(bool),
     Physical(crate::PhysicalInput, Option<physical_dispatch::Fallback>),
     FocusControl(String),
+    /// The pointer entered a `focus_highlight` row (`Some`) or left every such row.
+    HoverFocus(Option<String>),
     Dismiss(String),
     PointerMove(String, PointerPress),
     Hover(String),
@@ -456,6 +458,13 @@ pub struct Runtime<S: 'static> {
     grow_acc: f32,
     focused: Option<String>,
     keyboard_focus: bool,
+    /// The pointer focused a `focus_highlight` row, so its highlight shows without a key.
+    hover_focus: bool,
+    /// Type-select's typed prefix and when its last key arrived (`now_clock`).
+    typeahead: (String, f64),
+    /// Tab visits every control; off, only text fields and lists (macOS Full Keyboard
+    /// Access off). Native hosts sample the system setting; headless runtimes default on.
+    full_keyboard_access: bool,
     modal_stack: Vec<(String, Option<String>)>,
     modal_index: Option<usize>,
     modal_members: Vec<bool>,
@@ -635,6 +644,9 @@ impl<S: 'static> Runtime<S> {
             grow_acc: 0.0,
             focused: None,
             keyboard_focus: false,
+            hover_focus: false,
+            typeahead: (String::new(), f64::NEG_INFINITY),
+            full_keyboard_access: true,
             modal_stack: Vec::new(),
             modal_index: None,
             modal_members: Vec::new(),
@@ -798,6 +810,11 @@ impl<S: 'static> Runtime<S> {
         }
     }
 
+    /// Tab visits every control when on, else only text fields and lists, like macOS with
+    /// Keyboard navigation (Full Keyboard Access) off. Native windows follow the system setting.
+    pub fn set_full_keyboard_access(&mut self, on: bool) {
+        self.full_keyboard_access = on;
+    }
     pub fn set_system_reduced_motion(&mut self, reduced: bool) {
         if self.system_reduced_motion != reduced {
             self.system_reduced_motion = reduced;
@@ -1321,6 +1338,15 @@ impl<S: 'static> Runtime<S> {
                 self.set_focus(Some(path), false);
                 true
             }
+            Action::HoverFocus(path) => match path {
+                Some(path) => {
+                    self.set_focus(Some(path), false);
+                    self.hover_focus = true;
+                    one.instant = true;
+                    true
+                }
+                None => std::mem::take(&mut self.hover_focus),
+            },
             Action::Dismiss(path) => {
                 let Some(f) = self.node(&path).and_then(|n| n.modal.as_ref().map(|m| m.dismiss.clone())) else { return false };
                 self.set_focus(None, self.keyboard_focus);
@@ -1375,6 +1401,7 @@ impl<S: 'static> Runtime<S> {
                 true
             }
             Action::Key(ev) => {
+                let shown = self.keyboard_focus || self.hover_focus;
                 self.keyboard_focus = true;
                 // With no focused element, app-owned navigation (e.g. a toolbar)
                 // gets first refusal before Rune starts a new Tab traversal.
@@ -1391,14 +1418,14 @@ impl<S: 'static> Runtime<S> {
                     merge(tx, one);
                     return true;
                 }
-                if self.focus_key(&ev, &mut one) {
+                if self.focus_key(&ev, shown, &mut one) {
                     merge(tx, one);
                     return true;
                 }
                 let input_handles = match &ev.key {
                     crate::edit::Key::Function(_) | crate::edit::Key::Tab => false,
                     crate::edit::Key::Command(c) => matches!(c, 'a' | 'c' | 'x' | 'z'),
-                    _ => !ev.is_command_chord(),
+                    _ => !ev.is_command_chord() || ev.control_binding().is_some(),
                 };
                 if input_handles {
                     let layout = self.focused_layout();
@@ -2498,6 +2525,14 @@ impl<S: 'static> Runtime<S> {
         if hovered.map(|i| self.nodes[i].path.as_str()) == self.hovered.as_deref() { return; }
         self.hovered = hovered.map(|i| self.nodes[i].path.clone());
         if let Some(path) = &self.hovered { self.queue.push(Action::Hover(path.clone())); }
+        // A row never takes focus from a text field (a search field above its results).
+        let row = hovered.and_then(|i| self.highlight_row(i)).filter(|_| self.focused_input().is_none());
+        match row {
+            Some(i) if self.focused.as_deref() != Some(&self.nodes[i].path) || !self.hover_focus =>
+                self.queue.push(Action::HoverFocus(Some(self.nodes[i].path.clone()))),
+            None if self.hover_focus => self.queue.push(Action::HoverFocus(None)),
+            _ => {}
+        }
     }
 
     pub fn pointer_down(&mut self, x: f32, y: f32) {
@@ -3140,6 +3175,9 @@ impl<S: 'static> Runtime<S> {
                     });
                 }
                 let mut overlay = [0.0f32; 4];
+                if let Some(c) = n.focus.highlight && self.highlight_visible(i) {
+                    overlay = over(c.premul(1.0), overlay);
+                }
                 if n.vis.hover.a > 0.0 || self.scene.store().is_animating(n.id, P_HOVER_C) {
                     let hov_v = self.scene.get(n.id, P_HOVER).unwrap_or(0.0).clamp(0.0, 1.0);
                     if hov_v > 0.0 {
@@ -3607,7 +3645,8 @@ impl<S: 'static> Runtime<S> {
                     radius: p.radius.0[0],
                     fill: self.color(n.id, P_FILL, n.vis.fill),
                     text_color: n.text.as_ref().map(|t| t.color).or(n.vis.icon.map(|(_, c)| c)).map(|c| self.color(n.id, P_TEXT, c)),
-                    hover: self.scene.get(n.id, P_HOVER).unwrap_or(0.0),
+                    hover: if n.focus.highlight.is_some() && self.highlight_visible(i) { 1.0 }
+                        else { self.scene.get(n.id, P_HOVER).unwrap_or(0.0) },
                     press: self.scene.get(n.id, P_PRESS).unwrap_or(0.0),
                     moving,
                     parent: n.parent,

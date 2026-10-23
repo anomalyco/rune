@@ -13,7 +13,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         .item(MenuItem::new("More").submenu(vec![MenuEntry::item(MenuItem::new("Deeper"))], s.sub))
         .open(s.open)
         .build(&k, &mut layer);
-    root(body, layer)
+    root(rune::col().w_full().h_full().child(body), layer)
 }
 
 fn surface<S>(rt: &Runtime<S>, key: &str) -> Option<rune::runtime::ElementInfo> {

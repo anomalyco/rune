@@ -3,7 +3,8 @@
 
 use rune::{El, Icon, TextStyle, Tx, col, el, icon, row, text};
 
-use crate::overlay::{Placement, menu_anchor, scrim};
+use crate::menu::{Modal, dismissal};
+use crate::overlay::{Placement, menu_anchor};
 use crate::{Kit, State, over, press_over, shadows};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -33,7 +34,7 @@ pub struct Select {
     placement: Placement,
     choose: Option<Choose>,
     toggle: Option<Box<dyn FnOnce(El) -> El>>,
-    dismiss: Option<El>,
+    dismiss: Option<(El, Modal)>,
 }
 
 impl Select {
@@ -116,9 +117,9 @@ impl Select {
         self.toggle = Some(Box::new(move |e: El| e.on_press(f)));
         self
     }
-    /// Presses outside close the listbox.
+    /// Presses outside and Escape close the listbox. While open it holds keyboard focus.
     pub fn on_close<S: 'static>(mut self, f: impl Fn(&mut S) + 'static) -> Self {
-        self.dismiss = Some(scrim(format!("{}-scrim", self.key), f));
+        self.dismiss = Some(dismissal(format!("{}-scrim", self.key), f));
         self
     }
     /// Choosing an option: `f(state, option)`.
@@ -143,9 +144,10 @@ impl Select {
         }
         let c = &k.c;
         let anchor_key = format!("{}-trigger", self.key);
-        if let Some(s) = self.dismiss {
-            layer.push(s);
-        }
+        let modal = self.dismiss.map(|(scrim, modal)| {
+            layer.push(scrim);
+            modal
+        });
         // 12rem tall at most; consecutive options sit 2 points apart, headers flush.
         let mut list = col().key("listbox").role("listbox").focus_group().padding(4.0).max_h(192.0).clip_soft(0.0).items_stretch();
         let mut group: Option<&str> = None;
@@ -169,7 +171,7 @@ impl Select {
             let mut item = row()
                 .key(format!("option{i}"))
                 .role("option")
-                .focusable(true).focus_selected(selected).focus_ring(1.0, -1.0, c.border_focus)
+                .focusable(true).focus_selected(selected)
                 .label(o.clone())
                 .h(28.0)
                 .pl(12.0)
@@ -187,7 +189,7 @@ impl Select {
             if self.highlighted.as_deref() == Some(o.as_str()) {
                 item = item.fill(c.hover);
             } else {
-                item = item.hover(c.hover);
+                item = item.focus_highlight(c.hover);
             }
             if let Some(f) = &self.choose {
                 item = f(o)(item);
@@ -195,10 +197,11 @@ impl Select {
             list = list.child(item);
             after_item = true;
         }
-        let content = shadows(
+        let mut content = shadows(
             k,
             col()
                 .key(format!("{}-content", self.key))
+                .focus_return(&anchor_key)
                 .min_w(160.0)
                 .max_w(368.0)
                 .radius(6.0)
@@ -206,6 +209,9 @@ impl Select {
                 .child(list),
             &k.elevation.floating,
         );
+        if let Some(modal) = modal {
+            content = modal(content);
+        }
         layer.push(menu_anchor(k, content, &anchor_key, self.placement, 2.0));
         trigger
     }

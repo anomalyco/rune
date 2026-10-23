@@ -74,8 +74,11 @@ The first runnable piece of Rune: enough framework to draw a small Settings wind
   right-click (also control-click on macOS), without invoking primary actions. Scripts accept
   `secondary-down`, `secondary-up`, and `secondary-click`.
 - **Focus and modals**: `.focusable(true)`, `.tab_index(n)` (positive overrides, 0 document order,
-  negative pointer-only), `.focus_group()` for arrow-key roving, `.focus_selected(on)` for a group's
-  initial Tab stop, and `.focus_ring(width, offset, color)` for keyboard-only rings. Enter/Space
+  negative pointer-only), `.focus_group()` for arrow-key roving (Up/Down only, plus type-select,
+  for roles `menu`, `listbox`, `list` and `tree`), `.focus_follows()` to press each item it
+  reaches, `.focus_selected(on)` for a group's initial Tab stop, `.focus_ring(width, offset,
+  color)` for keyboard-only rings, and `.focus_highlight(color)` for a menu row's shared pointer
+  and keyboard highlight. Enter/Space
   activates non-text controls. `.modal(click_outside, close)` traps Tab, handles Escape, makes the
   background inert and restores the opener. Nested modals restore in stack order. Inspector tree
   flags (`focusable`, `focused`, `focusVisible`, `inert`) are the future platform AX hook.

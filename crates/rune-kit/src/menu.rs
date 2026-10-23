@@ -1,8 +1,9 @@
 //! Menu, context menu and their items (`@opencode/ui` navigation/menu, components/context-menu).
 //! Compact (default) and standard appearances.
 
+use std::rc::Rc;
+
 use rune::{El, Icon, PointerPress, TextStyle, Tx, col, el, icon, row, text};
-use rune_motion::{Anim, Curve, Easing};
 
 use crate::overlay::{Placement, menu_anchor, scrim};
 use crate::{Acts, Kit, State, shadows};
@@ -133,8 +134,8 @@ impl MenuItem {
         if highlighted {
             e = e.fill(hover);
         } else if !disabled {
-            // Abattoir "Make hover immediate": lands on arrival, leaves over 100 ms ease-out.
-            e = e.hover(hover).hover_motion(Anim::INSTANT, Curve::tween(0.1, Easing::EASE_OUT));
+            // One highlight for pointer and keys, landing at once like NSMenu's.
+            e = e.focus_highlight(hover);
         }
         e = e.child(content);
         if let Some(s) = self.shortcut {
@@ -177,7 +178,8 @@ impl MenuItem {
         if disabled && !standard {
             e = e.dim(0.5);
         }
-        self.acts.apply(e.focusable(!disabled).focus_ring(1.0, -1.0, c.border_focus), !disabled)
+        // A popup opens on its checked item (NSPopUpButton).
+        self.acts.apply(e.focusable(!disabled).focus_selected(self.checked == Some(true)), !disabled)
     }
 }
 
@@ -192,7 +194,18 @@ pub struct Menu {
     gutter: f32,
     min_width: f32,
     at: Option<(f32, f32)>,
-    dismiss: Option<El>,
+    dismiss: Option<(El, Modal)>,
+}
+
+/// Makes an open surface modal: it takes focus, Escape and outside presses dismiss it, and
+/// focus returns to the trigger when it closes.
+pub(crate) type Modal = Box<dyn FnOnce(El) -> El>;
+
+/// The outside-press scrim and the modal for a close request.
+pub(crate) fn dismissal<S: 'static>(key: String, close: impl Fn(&mut S) + 'static) -> (El, Modal) {
+    let close = Rc::new(close);
+    let outside = close.clone();
+    (scrim(key, move |s: &mut S| outside(s)), Box::new(move |e: El| e.modal(true, move |s: &mut S| close(s))))
 }
 
 impl Menu {
@@ -253,9 +266,9 @@ impl Menu {
         self.at = Some((x, y));
         self
     }
-    /// Presses outside close the menu.
+    /// Presses outside and Escape close the menu. While open it holds keyboard focus.
     pub fn on_close<S: 'static>(mut self, f: impl Fn(&mut S) + 'static) -> Self {
-        self.dismiss = Some(scrim(format!("{}-scrim", self.key), f));
+        self.dismiss = Some(dismissal(format!("{}-scrim", self.key), f));
         self
     }
 
@@ -298,9 +311,10 @@ impl Menu {
         if !self.open {
             return trigger;
         }
-        if let Some(s) = self.dismiss.take() {
-            layer.push(s);
-        }
+        let modal = self.dismiss.take().map(|(scrim, modal)| {
+            layer.push(scrim);
+            modal
+        });
         let (placement, gutter, key) = match self.at {
             Some((x, y)) => {
                 let point = format!("{}-point", self.key);
@@ -311,7 +325,10 @@ impl Menu {
         };
         // Submenus anchor to items inside this surface, so they mount after it.
         let mut subs = Vec::new();
-        let surface = self.surface(k, &mut subs).focus_return(anchor_key);
+        let mut surface = self.surface(k, &mut subs).focus_return(anchor_key);
+        if let Some(modal) = modal {
+            surface = modal(surface);
+        }
         layer.push(menu_anchor(k, surface, &key, placement, gutter));
         layer.extend(subs);
         trigger

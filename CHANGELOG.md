@@ -5,6 +5,17 @@ without a code change (goldens, layout, input), newest first, with the rev that 
 
 ## dev
 
+- **Mac keyboard navigation for menus, selects and lists**. Groups with role `menu`, `listbox`,
+  `list` or `tree` move with Up and Down only (Left and Right no longer move them), and those
+  plus `tablist` jump to the item whose label you type. `El::focus_highlight(color)` gives a
+  row one highlight for pointer and keys, as in `NSMenu`: hovering focuses the row (never
+  taking focus from a text field) and the first arrow reveals the current or checked item.
+  `El::focus_follows()` makes a group press each item it moves to (a source list). A
+  non-input `combobox` opens on Up and Down. rune-kit `Menu` and `Select` items use the shared
+  highlight, and with `on_close` an open menu or select traps focus, closes on Escape and
+  returns focus to its trigger. Text fields take macOS's Control bindings (Ctrl-A, E, B, F, P,
+  N, D, H, K). On macOS, with Keyboard navigation off in System Settings, Tab visits only text
+  fields and lists, as in AppKit; `Runtime::set_full_keyboard_access` overrides it.
 - **Hover lands at once.** A `.hover(color)` overlay (and a hover group's `group_opacity`) used
   to spring in, so a highlight trailed the pointer. Without `.hover_motion`, hover now appears on
   the first frame under the pointer and fades out over 0.1 s, like a native sidebar or menu.
@@ -42,7 +53,6 @@ without a code change (goldens, layout, input), newest first, with the rev that 
   flagged unmaintained (RUSTSEC-2026-0370, -0371, -0372) and no longer appear in Rune's default
   dependency graph. Linux builds need Rust 1.89 or newer. The opt-in `native-file-dialog` feature
   still reaches zbus 5 through `rfd`'s `ashpd`, which has no zbus 6 release yet.
-||||||| parent of 46c9c07 (Land hover at once and fade it out, like a native sidebar)
 - **Steady 60 Hz in Low Power Mode on ProMotion Macs.** Low Power Mode caps the built-in panel
   at 60 Hz while macOS still reports 120 Hz, so Rune drew a few fast frames after each change
   before settling. Windows and overlays on the built-in display now pace at 60 Hz in Low Power
