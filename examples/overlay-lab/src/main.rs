@@ -77,6 +77,35 @@ fn spec() -> AppSpec<State> {
         scenes: &[("pill", |_| {}), ("expanded", |s| s.expanded = true), ("picker", |s| { s.picker = true; s.selection = Some([140.0, 100.0, 560.0, 320.0]); })],
         fonts: &[], families: ("sans-serif", "monospace"), setup: None, poll: None, on_key: Some(key) }
 }
+
+/// Optional local control socket for bounded native lifecycle/presentation probes.
+#[cfg(target_os = "macos")]
+fn native_probe(pill: OverlayHandle<State>, app: rune::AppHandle<State>) {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+    #[link(name = "QuartzCore", kind = "framework")]
+    unsafe extern "C" { fn CACurrentMediaTime() -> f64; }
+    let Some(path) = std::env::var_os("OVERLAY_LAB_CONTROL") else { return };
+    let listener = UnixListener::bind(&path).expect("unique overlay probe socket");
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let mut command = String::new();
+            if BufReader::new(&stream).read_line(&mut command).is_err() { continue; }
+            let at = unsafe { CACurrentMediaTime() };
+            match command.trim() {
+                "show" => pill.show(),
+                "hide" => pill.hide(),
+                "status" => {},
+                "quit" => app.quit(),
+                _ => { let _ = writeln!(stream, "unknown command"); continue; }
+            }
+            let line = format!("probe command={} time={at:.9} window={:?}", command.trim(), pill.window_number());
+            eprintln!("{line}");
+            let _ = writeln!(stream, "{line}");
+        }
+    });
+}
 fn main() {
     if std::env::var_os("OVERLAY_LAB_UNDERLAY").is_some() {
         rune::run_windows(|displays| {
@@ -115,7 +144,9 @@ fn main() {
             input: OverlayInput::Regions, exclude_from_capture: exclude, level: OverlayLevel::AboveOverlays, prewarm: true, ..Default::default()
         }).on_created(|created| eprintln!("overlay-lab pill created {created:?}")), state);
         handles.lock().unwrap().pill = Some(pill.clone());
-        pill.show();
+        #[cfg(target_os = "macos")]
+        native_probe(pill.clone(), app.handle());
+        if !cfg!(target_os = "macos") || std::env::var_os("OVERLAY_LAB_CONTROL").is_none() { pill.show(); }
         if std::env::var_os("OVERLAY_LAB_PICKER").is_some() {
             let mut state = init(); state.handles = handles; show_picker(&mut state);
         }

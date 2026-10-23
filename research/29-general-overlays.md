@@ -53,8 +53,10 @@ until release, so a drag leaving a chip cannot strand the gesture. Hidden hosts 
 monitors or polling deadlines. Desktop hide retains the native window and GPU surface;
 Wayland destroys its layer. `prewarm` creates hidden hosts, warms layout/glyphs/pipelines
 offscreen, then calls `on_created` before first show. macOS CGWindowID stays stable from
-that callback through hide/show until drop. Under 16 ms to first presentation on Pro is a
-measurement target, **not yet verified**. No native window exists before the loop runs.
+that callback through hide/show until drop. Pro's debug-build native probe preserved the ID
+through 30 shows / 29 hides, but missed the 16 ms target: 29 valid re-show samples had a
+60.04 ms median and 67.18 ms p95. The initial show's Metal timestamp was zero and invalid.
+No native window exists before the loop runs.
 
 ## Layout, input and threads
 

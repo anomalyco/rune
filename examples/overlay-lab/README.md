@@ -25,7 +25,7 @@ input region, and the compositor chooses an output for UnderPointer. It cannot f
 global pointer. OnDemand permits click-to-focus on layer-shell v4; Windows/X11 do not offer
 nonactivating key focus. Capture requests on macOS must be supplemented with an explicit
 ScreenCaptureKit window-ID filter when the OS capture path ignores NSWindow sharingType.
-Wayland keeps both levels on the compositor's overlay layer; it has no higher layer and
+Wayland keeps all three levels on the compositor's overlay layer; it has no higher layer and
 does not guarantee ordering among peers. Native status/status+1 levels are macOS-specific.
 
 ## Scrawl integration
@@ -46,9 +46,47 @@ does not guarantee ordering among peers. Native status/status+1 levels are macOS
   CanJoinAllSpaces, FullScreenAuxiliary and Stationary. Wayland ordering remains compositor-owned.
 - Desktop hide retains the native window, GPU surface and renderer. Hidden hosts have no
   pointer observers or draw loop; warm startup renders offscreen once. Wayland recreates its
-  layer after hide. **Under 16 ms to first presented frame on Pro remains unmeasured.**
+  layer after hide. **The current Pro measurement misses the 16 ms target:** 29 valid
+  re-show samples measured 51.34–68.79 ms (median 60.04 ms, nearest-rank p95 67.18 ms).
+  The initial prewarmed show returned a zero Metal presentation timestamp and is not a
+  valid latency sample. These are debug-build measurements on a shared M2 Max worker.
 
 The idle path filters outside-canvas motion and skips unchanged hover redraws. Windows hooks
 run on a separate message-loop thread; X11 observes XI2 raw motion instead of polling. The
 shared Wayland socket wakes its private queue; legacy noninteractive HUDs bind no seat and
 reuse their empty input region.
+
+## Native measurement harness (macOS)
+
+`native/` contains diagnostic tools, loaded only into the lab process. Build through
+HiveMind on a worker, then copy the products into a fresh temporary directory on the
+authorized GUI host:
+
+```sh
+cargo build -p overlay-lab -j 2
+xcrun clang -dynamiclib -fobjc-arc -framework AppKit -framework QuartzCore -framework Metal \
+  examples/overlay-lab/native/presentation-probe.m -o presentation-probe.dylib
+xcrun swiftc -parse-as-library examples/overlay-lab/native/capture-probe.swift -o capture-probe
+```
+
+Put `overlay-lab`, `presentation-probe.dylib` and `capture-probe` in that directory. Hold
+the host's GUI lock (`/tmp/pro-gui.lock`, `fcntl.LOCK_EX` on Pro), then run
+`python3 examples/overlay-lab/native/run-native-probe.py <directory>` at normal priority.
+Never run it on Studio's screen.
+
+`OVERLAY_LAB_CONTROL` names a unique Unix socket and starts the pill prewarmed but hidden.
+Newline-terminated `show`, `hide`, `status`, and `quit` commands are accepted. The driver
+records the request's `CACurrentMediaTime` immediately before `handle.show()` and the
+drawable's actual `presentedTime`, not queue submission or callback arrival time. Zero
+timestamps are reported separately. It checks WindowServer identity/hidden state before
+each of 30 shows, allowing up to one second for asynchronous order-out propagation.
+`results.json` and `presentation.log` are the evidence; the lab has a bounded shutdown timer.
+
+The capture helper uses ScreenCaptureKit with and without the exact CGWindowID in
+`excludingWindows`. It checks permission first and exits 77 if unavailable. Pro's helper
+currently lacks Screen Recording permission, so exclusion by that filter is unverified.
+Granting permission is a separate user action.
+
+For click-through checks, use an independent underlay process. A coordinate-only synthetic
+click does not establish that native mouse-move observation ran first. Check actual pointer
+movement and both directions across the region boundary, and verify underlay/overlay logs.
