@@ -104,16 +104,16 @@ fn main() {
             let target = display.id.clone().map_or(DisplayTarget::Primary, DisplayTarget::Id);
             let picker = app.overlay(OverlaySpec::new("Rune picker", (680.0, 160.0), view).options(OverlayOptions {
                 display: target, placement: Some(OverlayPlacement::FullScreen), level: OverlayLevel::AboveStatus,
-                input: OverlayInput::Regions, exclude_from_capture: exclude, keys: KeyPolicy::OnDemand, ..Default::default()
-            }).on_key(key), state);
+                input: OverlayInput::All, exclude_from_capture: exclude, keys: KeyPolicy::OnDemand, prewarm: true, ..Default::default()
+            }).on_key(key).on_created(|created| eprintln!("overlay-lab picker created {created:?}")), state);
             handles.lock().unwrap().pickers.push(picker);
         }
         let mut state = init();
         state.handles = handles.clone();
         let pill = app.overlay(OverlaySpec { margin: 40.0, ..OverlaySpec::new("Rune pill", (680.0, 160.0), view) }.options(OverlayOptions {
             display: DisplayTarget::UnderPointer, follow_pointer: true,
-            input: OverlayInput::Regions, exclude_from_capture: exclude, ..Default::default()
-        }), state);
+            input: OverlayInput::Regions, exclude_from_capture: exclude, level: OverlayLevel::AboveOverlays, prewarm: true, ..Default::default()
+        }).on_created(|created| eprintln!("overlay-lab pill created {created:?}")), state);
         handles.lock().unwrap().pill = Some(pill.clone());
         pill.show();
         if std::env::var_os("OVERLAY_LAB_PICKER").is_some() {

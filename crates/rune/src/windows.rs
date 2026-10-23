@@ -21,6 +21,20 @@ pub struct Display {
     pub primary: bool,
 }
 
+impl Display {
+    pub fn native_id(&self) -> Option<crate::NativeDisplayId> { self.id.as_ref().and_then(|id| id.native_id()) }
+
+    /// (x, y, width, height) in the native global, top-left coordinate space. macOS uses
+    /// CGDisplayBounds points; Windows/X11 use desktop pixels; Wayland uses compositor
+    /// logical coordinates. Keep the origin in this space; scale only local offsets.
+    pub fn native_bounds(&self) -> [f64; 4] {
+        #[cfg(target_os = "macos")]
+        if let Some(crate::NativeDisplayId::MacOS(id)) = self.native_id() { return crate::macos::display_bounds(id); }
+        let divisor = if matches!(self.native_id(), Some(crate::NativeDisplayId::Wayland(_))) { self.scale } else { 1.0 };
+        [f64::from(self.position.0), f64::from(self.position.1), f64::from(self.size.0) / divisor, f64::from(self.size.1) / divisor]
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct WindowOptions {
     pub transparent: bool,

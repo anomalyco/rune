@@ -4,7 +4,39 @@ use crate::{Align, Cx, El, OverlaySpec, ScreenEdge};
 
 /// An opaque display identity, valid for this event-loop session. Obtain it from `Display::id`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DisplayId(pub(crate) winit::monitor::MonitorHandle);
+pub struct DisplayId(pub(crate) winit::monitor::MonitorHandle, Option<NativeDisplayId>);
+
+/// Native display identity. Windows handles retain their full pointer width.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeDisplayId {
+    MacOS(u32), Windows(isize),
+    /// winit identifies X11 monitors by RandR CRTC. Output IDs can also be targeted below.
+    X11Crtc(u32), X11Output(u32),
+    /// Registry-global wl_output name, not a client-local protocol object ID.
+    Wayland(u32),
+}
+
+impl DisplayId {
+    pub fn native_id(&self) -> Option<NativeDisplayId> { self.1 }
+
+    pub(crate) fn from_monitor(monitor: winit::monitor::MonitorHandle, _wayland: bool) -> Self {
+        #[cfg(target_os = "macos")]
+        let native = { use winit::platform::macos::MonitorHandleExtMacOS; Some(NativeDisplayId::MacOS(monitor.native_id())) };
+        #[cfg(target_os = "windows")]
+        let native = { use winit::platform::windows::MonitorHandleExtWindows; Some(NativeDisplayId::Windows(monitor.hmonitor())) };
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        let native = Some(if _wayland {
+            use winit::platform::wayland::MonitorHandleExtWayland;
+            NativeDisplayId::Wayland(monitor.native_id())
+        } else {
+            use winit::platform::x11::MonitorHandleExtX11;
+            NativeDisplayId::X11Crtc(monitor.native_id())
+        });
+        #[cfg(any(target_os = "ios", target_os = "android"))]
+        let native = None;
+        Self(monitor, native)
+    }
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum DisplayTarget {
@@ -12,6 +44,8 @@ pub enum DisplayTarget {
     Primary,
     UnderPointer,
     Id(DisplayId),
+    /// Resolve a native capture/display ID; disconnected IDs fall back to primary.
+    Native(NativeDisplayId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -27,6 +61,8 @@ pub enum OverlayLevel {
     #[default]
     Status,
     AboveStatus,
+    /// Above Rune's status and picker overlays (macOS level 27).
+    AboveOverlays,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -42,8 +78,18 @@ pub enum OverlayInput {
     /// Preserve `OverlaySpec::interactive` (whole surface or complete pass-through).
     #[default]
     Legacy,
+    /// Pass every click through. Following remains available when enabled; use Regions
+    /// without `.hit()` elements for a hover-only canvas.
+    None,
     /// Only elements marked `El::hit()` intercept the pointer.
     Regions,
+    All,
+}
+
+impl OverlayInput {
+    pub(crate) fn resolved(self, interactive: bool) -> Self {
+        match self { Self::Legacy => if interactive { Self::All } else { Self::None }, other => other }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -58,6 +104,9 @@ pub struct OverlayOptions {
     pub exclude_from_capture: bool,
     pub keys: KeyPolicy,
     pub input: OverlayInput,
+    /// Create and warm a hidden native host on the event thread at startup. Desktop hosts
+    /// retain their window and GPU surface across hide/show; Wayland must recreate on hide.
+    pub prewarm: bool,
 }
 
 /// Keeps existing exhaustive `OverlaySpec` literals source compatible.
@@ -65,10 +114,21 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub spec: OverlaySpec<T>,
     pub options: OverlayOptions,
     pub on_key: Option<fn(&mut T, &crate::KeyEvent, &mut crate::Tx) -> bool>,
+    pub on_created: Option<Box<dyn FnOnce(OverlayCreated)>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct OverlayCreated {
+    /// The actual macOS panel CGWindowID, available before its first show.
+    pub window_number: Option<u32>,
+    pub capabilities: OverlayCapabilities,
 }
 
 impl<T: 'static> ConfiguredOverlay<T> {
     pub fn on_key(mut self, f: fn(&mut T, &crate::KeyEvent, &mut crate::Tx) -> bool) -> Self { self.on_key = Some(f); self }
+    /// Called once on the event thread after native creation, before the first show.
+    /// Use `prewarm: true` to create at startup rather than waiting for `show()`.
+    pub fn on_created(mut self, f: impl FnOnce(OverlayCreated) + 'static) -> Self { self.on_created = Some(Box::new(f)); self }
 }
 
 impl<T: 'static> OverlaySpec<T> {
@@ -77,7 +137,7 @@ impl<T: 'static> OverlaySpec<T> {
     }
 
     pub fn options(self, options: OverlayOptions) -> ConfiguredOverlay<T> {
-        ConfiguredOverlay { spec: self, options, on_key: None }
+        ConfiguredOverlay { spec: self, options, on_key: None, on_created: None }
     }
 }
 

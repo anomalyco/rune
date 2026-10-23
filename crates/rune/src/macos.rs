@@ -28,7 +28,37 @@ declare_class!(
     }
 );
 
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" { fn CGDisplayBounds(display: u32) -> NSRect; }
+
+pub(crate) fn display_bounds(id: u32) -> [f64; 4] {
+    let r = unsafe { CGDisplayBounds(id) };
+    [r.origin.x, r.origin.y, r.size.width, r.size.height]
+}
+
 pub(crate) fn overlay_rect(at: crate::overlay::Placement, options: &OverlayOptions) -> Option<NSRect> {
+    overlay_rect_on(at, options, None)
+}
+
+fn screen_id(screen: &NSScreen) -> u32 {
+    unsafe {
+        let description: *mut objc2::runtime::AnyObject = msg_send![screen, deviceDescription];
+        let key = objc2_foundation::NSString::from_str("NSScreenNumber");
+        let number: *mut objc2::runtime::AnyObject = msg_send![description, objectForKey: &*key];
+        msg_send![number, unsignedIntValue]
+    }
+}
+
+fn contains_pointer(screen: &NSScreen, pointer: NSPoint) -> bool {
+    contains_appkit_rect(screen.frame(), pointer)
+}
+
+fn contains_appkit_rect(r: NSRect, pointer: NSPoint) -> bool {
+    pointer.x >= r.origin.x && pointer.x < r.origin.x + r.size.width
+        && pointer.y > r.origin.y && pointer.y <= r.origin.y + r.size.height
+}
+
+fn overlay_rect_on(at: crate::overlay::Placement, options: &OverlayOptions, previous: Option<u32>) -> Option<NSRect> {
     use winit::platform::macos::MonitorHandleExtMacOS;
     let mtm = MainThreadMarker::new()?;
     // SAFETY: AppKit screen and pointer queries on the event thread.
@@ -36,18 +66,19 @@ pub(crate) fn overlay_rect(at: crate::overlay::Placement, options: &OverlayOptio
     let pointer = unsafe { NSEvent::mouseLocation() };
     let screen = screens.iter().find(|screen| match &options.display {
         DisplayTarget::UnderPointer => {
-            let r = screen.frame();
-            pointer.x >= r.origin.x && pointer.y >= r.origin.y && pointer.x < r.origin.x + r.size.width && pointer.y < r.origin.y + r.size.height
+            contains_pointer(screen, pointer)
         }
-        DisplayTarget::Id(id) => unsafe {
-            let description: *mut objc2::runtime::AnyObject = msg_send![*screen, deviceDescription];
-            let key = objc2_foundation::NSString::from_str("NSScreenNumber");
-            let number: *mut objc2::runtime::AnyObject = msg_send![description, objectForKey: &*key];
-            let native: u32 = msg_send![number, unsignedIntValue];
-            native == id.0.native_id()
+        DisplayTarget::Id(_) | DisplayTarget::Native(_) => {
+            let native = screen_id(screen);
+            match options.display {
+                DisplayTarget::Id(ref id) => native == id.0.native_id(),
+                DisplayTarget::Native(crate::NativeDisplayId::MacOS(id)) => native == id,
+                _ => false,
+            }
         },
         DisplayTarget::Primary => false,
-    }).or_else(|| screens.iter().next())?;
+    }).or_else(|| screens.iter().find(|s| options.display == DisplayTarget::UnderPointer && previous == Some(screen_id(s))))
+        .or_else(|| screens.iter().next())?;
     let frame = screen.frame();
     let [x, y, w, h] = crate::overlay_options::local_rect(at, options.placement, (frame.size.width as f32, frame.size.height as f32));
     Some(NSRect::new(NSPoint::new(frame.origin.x + x as f64, frame.origin.y + frame.size.height - (y + h) as f64), NSSize::new(w as f64, h as f64)))
@@ -55,25 +86,41 @@ pub(crate) fn overlay_rect(at: crate::overlay::Placement, options: &OverlayOptio
 
 #[derive(Default)]
 pub(crate) struct PointerState {
+    input: Cell<OverlayInput>,
     regions: RefCell<Vec<[f32; 4]>>,
     pending: Cell<Option<(f32, f32)>>,
     captured: Cell<bool>,
+    last: Cell<Option<(f32, f32)>>,
+    inside: Cell<bool>,
+    display: Cell<Option<u32>>,
+    follow: Cell<bool>,
 }
 
 impl PointerState {
     pub(crate) fn hit(&self, x: f32, y: f32) -> bool {
-        self.captured.get() || self.regions.borrow().iter().any(|r| crate::overlay_options::contains(*r, x, y))
+        self.captured.get() || match self.input.get() {
+            OverlayInput::All => true,
+            OverlayInput::Regions => self.regions.borrow().iter().any(|r| crate::overlay_options::contains(*r, x, y)),
+            _ => false,
+        }
     }
-    fn observe(&self, panel: &NSPanel, regions: bool, wake: Option<&crate::Waker>) {
+    fn observe(&self, panel: &NSPanel, wake: Option<&crate::Waker>) {
         // SAFETY: monitors and frame publication run on AppKit's main thread.
         let pointer = unsafe { NSEvent::mouseLocation() };
         let frame = panel.frame();
         let (x, y) = ((pointer.x - frame.origin.x) as f32, (frame.origin.y + frame.size.height - pointer.y) as f32);
-        if regions {
-            panel.setIgnoresMouseEvents(!self.hit(x, y));
+        let ignore = !self.hit(x, y);
+        if unsafe { panel.ignoresMouseEvents() } != ignore { panel.setIgnoresMouseEvents(ignore); }
+        let inside = x >= 0.0 && y >= 0.0 && x < frame.size.width as f32 && y < frame.size.height as f32;
+        let was_inside = self.inside.replace(inside);
+        let display_changed = self.follow.get() && MainThreadMarker::new().is_some_and(|mtm| {
+            NSScreen::screens(mtm).iter().find(|s| contains_pointer(s, pointer))
+                .is_some_and(|s| self.display.replace(Some(screen_id(s))) != Some(screen_id(s)))
+        });
+        if (inside || was_inside || self.captured.get() || display_changed) && self.last.replace(Some((x, y))) != Some((x, y)) {
+            self.pending.set(Some((x, y)));
+            if let Some(wake) = wake { wake(); }
         }
-        self.pending.set(Some((x, y)));
-        if let Some(wake) = wake { wake(); }
     }
 }
 
@@ -118,6 +165,8 @@ pub(crate) struct Panel {
     monitors: RefCell<Option<MouseMonitors>>,
     pointer: Rc<PointerState>,
     options: OverlayOptions,
+    follow_pointer: Cell<bool>,
+    visible: Cell<bool>,
     wake: Option<crate::Waker>,
     panel: objc2::rc::Retained<objc2_app_kit::NSPanel>,
     window: objc2::rc::Retained<objc2_app_kit::NSWindow>,
@@ -165,39 +214,47 @@ impl Panel {
                     | NSWindowCollectionBehavior::FullScreenAuxiliary,
             );
         }
-        panel.setLevel(if options.level == OverlayLevel::AboveStatus { 26 } else { 25 });
+        panel.setLevel(match options.level { OverlayLevel::Status => 25, OverlayLevel::AboveStatus => 26, OverlayLevel::AboveOverlays => 27 });
         if options.exclude_from_capture {
             // NSWindowSharingNone; capture clients should additionally filter our window ID.
             unsafe { let _: () = msg_send![&*panel, setSharingType: 0usize]; }
         }
         panel.setOpaque(false);
         panel.setHasShadow(false);
-        panel.setIgnoresMouseEvents(!interactive || options.input == OverlayInput::Regions);
+        panel.setIgnoresMouseEvents(options.input.resolved(interactive) != OverlayInput::All);
         panel.setAcceptsMouseMovedEvents(true);
+        // defer:NO creates the WindowServer identity while hidden. Never publish a sentinel
+        // (-1/0) cast to CGWindowID as a successful native creation.
+        if unsafe { panel.windowNumber() } <= 0 { return None; }
         ns_window.setContentView(None);
         panel.setContentView(Some(&view));
-        let pointer = Rc::default();
-        let filter = (options.input == OverlayInput::Regions).then(|| Rc::clone(&pointer));
-        let bridge = crate::macos_panel_bridge::Bridge::new(&ns_window, &panel, &view, filter);
+        let pointer = Rc::new(PointerState { input: Cell::new(options.input.resolved(interactive)), follow: Cell::new(options.follow_pointer), ..Default::default() });
+        let bridge = crate::macos_panel_bridge::Bridge::new(&ns_window, &panel, &view, Some(pointer.clone()));
         if bridge.is_none() {
             panel.setContentView(None);
             ns_window.setContentView(Some(&view));
             return None;
         }
         panel.setDelegate(unsafe { ns_window.delegate() }.as_deref());
-        Some(Panel { bridge, monitors: RefCell::new(None), pointer, options: options.clone(), wake, panel, window: ns_window, view })
+        Some(Panel { bridge, monitors: RefCell::new(None), pointer, options: options.clone(), follow_pointer: Cell::new(options.follow_pointer), visible: Cell::new(false), wake, panel, window: ns_window, view })
     }
 
     /// On the primary screen (the one with the menu bar), in AppKit's bottom-left coordinates.
     pub fn place(&self, at: crate::overlay::Placement, options: &OverlayOptions) {
-        let Some(rect) = overlay_rect(at, options) else { return };
+        let Some(rect) = self.rect(at, options) else { return };
         if self.panel.frame() != rect {
             self.window.setFrame_display(rect, false);
             self.panel.setFrame_display(rect, true);
+            if self.visible.get() { self.pointer.observe(&self.panel, self.wake.as_ref()); }
         }
     }
 
+    pub fn rect(&self, at: crate::overlay::Placement, options: &OverlayOptions) -> Option<NSRect> {
+        overlay_rect_on(at, options, self.panel.screen().map(|s| screen_id(&s)))
+    }
+
     pub fn show(&self) {
+        self.visible.set(true);
         self.start_monitors();
         // SAFETY: an AppKit call on the main thread.
         unsafe { self.panel.orderFrontRegardless() };
@@ -212,9 +269,12 @@ impl Panel {
     }
 
     pub fn hide(&self) {
+        self.visible.set(false);
         self.monitors.borrow_mut().take();
         self.pointer.captured.set(false);
         self.pointer.pending.set(None);
+        self.pointer.last.set(None);
+        self.pointer.inside.set(false);
         self.panel.orderOut(None);
     }
 
@@ -223,7 +283,7 @@ impl Panel {
         if self.options.exclude_from_capture { OverlaySupport::Requested } else { OverlaySupport::Unknown }
     }
     pub fn global_pointer(&self) -> OverlaySupport {
-        if (self.options.follow_pointer || self.options.input == OverlayInput::Regions)
+        if (self.follow_pointer.get() || self.pointer.input.get() == OverlayInput::Regions)
             && self.monitors.borrow().as_ref().is_none_or(|m| m.tokens.len() != 2) { OverlaySupport::Failed }
         else { OverlaySupport::Supported }
     }
@@ -234,23 +294,33 @@ impl Panel {
         }
     }
     pub fn take_pointer(&self) -> Option<(f32, f32)> { self.pointer.pending.take() }
+    pub fn pointer_released(&self) { self.pointer.captured.set(false); self.refresh_monitors(); }
+    pub fn set_input(&self, input: OverlayInput) {
+        self.pointer.input.set(input);
+        self.refresh_monitors();
+        self.pointer.observe(&self.panel, self.wake.as_ref());
+    }
+    pub fn set_follow_pointer(&self, follow: bool) { self.follow_pointer.set(follow); self.pointer.follow.set(follow); self.refresh_monitors(); }
+    fn refresh_monitors(&self) {
+        if !self.visible.get() { return; }
+        if self.follow_pointer.get() || self.pointer.input.get() == OverlayInput::Regions || self.pointer.captured.get() { self.start_monitors(); }
+        else { self.monitors.borrow_mut().take(); }
+    }
     pub fn set_regions(&self, regions: &[[f32; 4]]) {
-        if self.options.input != OverlayInput::Regions { return; }
         if self.pointer.regions.borrow().as_slice() == regions { return; }
         *self.pointer.regions.borrow_mut() = regions.to_vec();
-        self.pointer.observe(&self.panel, true, None);
+        if self.visible.get() { self.pointer.observe(&self.panel, None); }
     }
 
     fn start_monitors(&self) {
-        if self.monitors.borrow().is_some() || !(self.options.follow_pointer || self.options.input == OverlayInput::Regions) { return; }
+        if self.monitors.borrow().is_some() || !(self.follow_pointer.get() || self.pointer.input.get() == OverlayInput::Regions || self.pointer.captured.get()) { return; }
         // NSEvent masks: moved, left/right/other dragged, left down/up. Observation never
         // suppresses an event. A local down owns its drag until a local/global release.
-        let mask = (1usize << 5) | (1 << 6) | (1 << 7) | (1 << 27) | (1 << 1) | (1 << 2);
+        let movement = (1usize << 5) | (1 << 6) | (1 << 7) | (1 << 27);
+        let mask = movement | (1 << 1) | (1 << 2);
         let (pointer, panel, wake) = (self.pointer.clone(), self.panel.clone(), self.wake.clone());
-        let regions = self.options.input == OverlayInput::Regions;
-        let global = block2::RcBlock::new(move |event: *mut NSEvent| {
-            unsafe { let kind: usize = msg_send![event, type]; if kind == 2 { pointer.captured.set(false); } }
-            pointer.observe(&panel, regions, wake.as_ref());
+        let global = block2::RcBlock::new(move |_event: *mut NSEvent| {
+            pointer.observe(&panel, wake.as_ref());
         });
         let (pointer, panel, wake) = (self.pointer.clone(), self.panel.clone(), self.wake.clone());
         let local = block2::RcBlock::new(move |event: *mut NSEvent| -> *mut NSEvent {
@@ -260,22 +330,22 @@ impl Panel {
                 if kind == 1 && window == (&*panel as *const NSPanel).cast_mut().cast() {
                     let point: NSPoint = msg_send![event, locationInWindow];
                     let frame = panel.frame();
-                    if !regions || pointer.hit(point.x as f32, (frame.size.height - point.y) as f32) { pointer.captured.set(true); }
+                    if pointer.hit(point.x as f32, (frame.size.height - point.y) as f32) { pointer.captured.set(true); }
                 }
                 if kind == 2 { pointer.captured.set(false); }
             }
-            pointer.observe(&panel, regions, wake.as_ref());
+            pointer.observe(&panel, wake.as_ref());
             event
         });
         let mut tokens = Vec::new();
         unsafe {
-            let token: Option<Retained<NSObject>> = msg_send_id![NSEvent::class(), addGlobalMonitorForEventsMatchingMask: mask, handler: &*global];
+            let token: Option<Retained<NSObject>> = msg_send_id![NSEvent::class(), addGlobalMonitorForEventsMatchingMask: movement, handler: &*global];
             tokens.extend(token);
             let token: Option<Retained<NSObject>> = msg_send_id![NSEvent::class(), addLocalMonitorForEventsMatchingMask: mask, handler: &*local];
             tokens.extend(token);
         }
         *self.monitors.borrow_mut() = Some(MouseMonitors { tokens });
-        self.pointer.observe(&self.panel, regions, self.wake.as_ref());
+        self.pointer.observe(&self.panel, self.wake.as_ref());
     }
 }
 
@@ -287,5 +357,19 @@ impl Drop for Panel {
         self.panel.orderOut(None);
         self.panel.setContentView(None);
         self.window.setContentView(Some(&self.view));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn overlay_appkit_top_row_belongs_to_secondary_display() {
+        let secondary = NSRect::new(NSPoint::new(-1920.0, 0.0), NSSize::new(1920.0, 1080.0));
+        assert!(contains_appkit_rect(secondary, NSPoint::new(-100.0, 1080.0)));
+        assert!(!contains_appkit_rect(secondary, NSPoint::new(-100.0, 0.0)));
+        assert!(!contains_appkit_rect(secondary, NSPoint::new(0.0, 500.0)));
+        let below = NSRect::new(NSPoint::new(-1920.0, -1080.0), NSSize::new(1920.0, 1080.0));
+        assert!(contains_appkit_rect(below, NSPoint::new(-100.0, 0.0)));
     }
 }

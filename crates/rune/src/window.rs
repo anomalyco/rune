@@ -153,7 +153,7 @@ impl<S: 'static> ApplicationHandler<WakeEvent> for Windows<S> {
         let Some(factory) = self.factory.take() else { return };
         let primary = event_loop.primary_monitor();
         let displays: Vec<_> = event_loop.available_monitors().map(|m| Display {
-            id: Some(crate::DisplayId(m.clone())),
+            id: Some(crate::DisplayId::from_monitor(m.clone(), is_wayland(event_loop))),
             name: m.name(), position: (m.position().x, m.position().y),
             size: (m.size().width, m.size().height), scale: m.scale_factor(), primary: primary.as_ref() == Some(&m),
         }).collect();

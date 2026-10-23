@@ -35,6 +35,9 @@ struct State {
     surface: Option<WlSurface>,
     pointer_inside: bool,
     keyboard_focus: bool,
+    want_pointer: bool,
+    want_keys: bool,
+    capabilities: Option<wl_seat::Capability>,
     pointer: Option<WlPointer>,
     keyboard: Option<WlKeyboard>,
     xkb: Option<xkbcommon::xkb::State>,
@@ -46,11 +49,20 @@ impl Dispatch<WlOutput, ()> for State {
 impl Dispatch<WlSeat, ()> for State {
     fn event(state: &mut Self, seat: &WlSeat, event: wl_seat::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
         if let wl_seat::Event::Capabilities { capabilities: wayland_client::WEnum::Value(caps) } = event {
-            if caps.contains(wl_seat::Capability::Pointer) && state.pointer.is_none() { state.pointer = Some(seat.get_pointer(qh, ())); }
-            if caps.contains(wl_seat::Capability::Keyboard) && state.keyboard.is_none() { state.keyboard = Some(seat.get_keyboard(qh, ())); }
-            if !caps.contains(wl_seat::Capability::Pointer) && let Some(pointer) = state.pointer.take() { if pointer.version() >= 3 { pointer.release(); } }
-            if !caps.contains(wl_seat::Capability::Keyboard) && let Some(keyboard) = state.keyboard.take() { if keyboard.version() >= 3 { keyboard.release(); } state.xkb = None; }
+            state.capabilities = Some(caps);
+            state.update_seat(seat, qh);
         }
+    }
+}
+impl State {
+    fn update_seat(&mut self, seat: &WlSeat, qh: &QueueHandle<Self>) {
+        let caps = self.capabilities.unwrap_or_else(wl_seat::Capability::empty);
+        let pointer = self.want_pointer && caps.contains(wl_seat::Capability::Pointer);
+        let keyboard = self.want_keys && caps.contains(wl_seat::Capability::Keyboard);
+        if pointer && self.pointer.is_none() { self.pointer = Some(seat.get_pointer(qh, ())); }
+        if keyboard && self.keyboard.is_none() { self.keyboard = Some(seat.get_keyboard(qh, ())); }
+        if !pointer && let Some(p) = self.pointer.take() { if p.version() >= 3 { p.release(); } self.pointer_inside = false; }
+        if !keyboard && let Some(k) = self.keyboard.take() { if k.version() >= 3 { k.release(); } self.xkb = None; self.keyboard_focus = false; }
     }
 }
 impl Dispatch<WlPointer, ()> for State {
@@ -157,6 +169,9 @@ pub(crate) struct Changes {
 }
 
 pub(crate) struct LayerSurface {
+    registry: WlRegistry,
+    seat_global: Option<(u32, u32)>,
+    regions: std::cell::RefCell<Option<Vec<[i32; 4]>>>,
     compositor: WlCompositor,
     output: Option<WlOutput>,
     seat: Option<WlSeat>,
@@ -170,7 +185,7 @@ pub(crate) struct LayerSurface {
 
 impl LayerSurface {
     /// None when the display isn't Wayland or the compositor lacks layer-shell.
-    pub fn new(display: RawDisplayHandle, namespace: &str, at: Placement, options: &OverlayOptions, output_id: Option<u32>) -> Option<LayerSurface> {
+    pub fn new(display: RawDisplayHandle, namespace: &str, at: Placement, interactive: bool, options: &OverlayOptions, output_id: Option<u32>) -> Option<LayerSurface> {
         let RawDisplayHandle::Wayland(display) = display else { return None };
         // SAFETY: winit owns this `wl_display` for the life of the event loop, which outlives
         // every overlay; a foreign backend never closes it.
@@ -185,7 +200,11 @@ impl LayerSurface {
                 globals.registry().bind::<WlOutput, _, _>(g.name, g.version.min(4), &qh, ())
             }))
         });
-        let seat: Option<WlSeat> = globals.bind(&qh, 1..=8, ()).ok();
+        let want_pointer = options.input.resolved(interactive) != OverlayInput::None;
+        let want_keys = options.keys == crate::KeyPolicy::OnDemand;
+        let registry = globals.registry().clone();
+        let seat_global = globals.contents().with_list(|list| list.iter().find(|g| g.interface == "wl_seat").map(|g| (g.name, g.version.min(8))));
+        let seat = if want_pointer || want_keys { seat_global.map(|(name, version)| registry.bind::<WlSeat, _, _>(name, version, &qh, ())) } else { None };
         let surface = compositor.create_surface(&qh, ());
         let region = compositor.create_region(&qh, ());
         surface.set_input_region(Some(&region));
@@ -195,8 +214,8 @@ impl LayerSurface {
         let layer = shell.get_layer_surface(&surface, output.as_ref(), Layer::Overlay, namespace.to_owned(), &qh, ());
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.set_exclusive_zone(0);
-        let state = State { surface: Some(surface.clone()), ..State::default() };
-        let mut this = LayerSurface { compositor, output, seat, options: options.clone(), queue, state, layer, surface, display: display.display };
+        let state = State { surface: Some(surface.clone()), want_pointer, want_keys, ..State::default() };
+        let mut this = LayerSurface { registry, seat_global, regions: std::cell::RefCell::new(Some(Vec::new())), compositor, output, seat, options: options.clone(), queue, state, layer, surface, display: display.display };
         this.place(at);
         this.surface.commit();
         while this.state.configured.is_none() && !this.state.closed {
@@ -243,18 +262,35 @@ impl LayerSurface {
     pub fn configured_size(&self) -> Option<(u32, u32)> { self.state.configured }
 
     pub fn input_regions(&self, regions: &[[f32; 4]], interactive: bool) {
-        if self.options.input == OverlayInput::Legacy && interactive { self.surface.set_input_region(None); return; }
-        let region = self.compositor.create_region(&self.queue.handle(), ());
-        if self.options.input == OverlayInput::Regions {
-            for r in regions {
+        let next = match self.options.input.resolved(interactive) {
+            OverlayInput::All => None,
+            OverlayInput::Regions => Some(regions.iter().filter_map(|r| {
                 let (x, y) = (r[0].floor() as i32, r[1].floor() as i32);
                 let (w, h) = (r[2].ceil() as i32 - x, r[3].ceil() as i32 - y);
-                if w > 0 && h > 0 { region.add(x, y, w, h); }
-            }
+                (w > 0 && h > 0).then_some([x, y, w, h])
+            }).collect()),
+            _ => Some(Vec::new()),
+        };
+        if *self.regions.borrow() == next { return; }
+        if let Some(rects) = &next {
+            let region = self.compositor.create_region(&self.queue.handle(), ());
+            for &[x, y, w, h] in rects { region.add(x, y, w, h); }
+            self.surface.set_input_region(Some(&region));
+            region.destroy();
+        } else {
+            self.surface.set_input_region(None);
         }
-        self.surface.set_input_region(Some(&region));
-        region.destroy();
+        *self.regions.borrow_mut() = next;
         // No commit here: the following wgpu presentation commits input and pixels together.
+    }
+
+    pub fn set_input(&mut self, input: OverlayInput) {
+        self.options.input = input;
+        self.state.want_pointer = input != OverlayInput::None;
+        if self.seat.is_none() && self.state.want_pointer {
+            self.seat = self.seat_global.map(|(name, version)| self.registry.bind(name, version, &self.queue.handle(), ()));
+        }
+        if let Some(seat) = &self.seat { self.state.update_seat(seat, &self.queue.handle()); }
     }
 
     pub fn request_keys(&self) -> bool {

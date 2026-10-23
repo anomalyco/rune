@@ -27,62 +27,48 @@ struct Input {
     hwnd: HWND,
     regions: RefCell<Vec<[f32; 4]>>,
     scale: Cell<f32>,
-    pending: Cell<Option<(f32, f32)>>,
     clicks: RefCell<VecDeque<(bool, (f32, f32))>>,
-    last: Cell<Option<(f32, f32)>>,
     captured: Cell<bool>,
     visible: Cell<bool>,
-    regional: bool,
-    track: bool,
+    input: Cell<OverlayInput>,
+    follow: Cell<bool>,
     level: OverlayLevel,
-    wake: Option<crate::Waker>,
 }
 impl Input {
+    fn track(&self) -> bool { self.input.get() == OverlayInput::Regions || self.follow.get() }
     fn local(&self, mut point: POINT) -> (f32, f32) {
         unsafe { windows_sys::Win32::Graphics::Gdi::ScreenToClient(self.hwnd, &mut point); }
         (point.x as f32 / self.scale.get(), point.y as f32 / self.scale.get())
     }
     fn hit(&self, point: (f32, f32)) -> bool {
-        self.captured.get() || self.regions.borrow().iter().any(|r| crate::overlay_options::contains(*r, point.0, point.1))
+        self.captured.get() || match self.input.get() {
+            OverlayInput::All => true,
+            OverlayInput::Regions => self.regions.borrow().iter().any(|r| crate::overlay_options::contains(*r, point.0, point.1)),
+            _ => false,
+        }
     }
     fn observe(&self, point: POINT) {
-        if !self.visible.get() || !self.track { return; }
+        if !self.visible.get() { return; }
         let local = self.local(point);
-        if self.regional {
+        {
             unsafe {
                 let style = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) as u32;
                 let next = if self.hit(local) { style & !WS_EX_TRANSPARENT } else { style | WS_EX_TRANSPARENT };
                 if next != style { SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, next as isize); }
             }
         }
-        if self.last.replace(Some(local)) != Some(local) {
-            self.pending.set(Some(local));
-            if let Some(wake) = &self.wake { wake(); }
-        }
     }
 }
 
 thread_local! {
-    static INPUTS: RefCell<(HHOOK, Vec<Rc<Input>>)> = const { RefCell::new((std::ptr::null_mut(), Vec::new())) };
-}
-
-unsafe extern "system" fn mouse_hook(code: i32, kind: WPARAM, data: LPARAM) -> LRESULT {
-    if code >= 0 {
-        let point = unsafe { (*(data as *const MSLLHOOKSTRUCT)).pt };
-        let inputs = INPUTS.with(|inputs| inputs.borrow().1.clone());
-        for input in inputs {
-            if kind as u32 == WM_LBUTTONUP { input.captured.set(false); }
-            input.observe(point);
-        }
-    }
-    unsafe { CallNextHookEx(std::ptr::null_mut(), code, kind, data) }
+    static INPUTS: RefCell<Vec<Rc<Input>>> = const { RefCell::new(Vec::new()) };
 }
 
 unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, _: usize, data: usize) -> LRESULT {
     // The owner removes this callback before releasing Input or the winit window.
     let input = unsafe { &*(data as *const Input) };
     match message {
-        WM_NCHITTEST if input.regional => {
+        WM_NCHITTEST => {
             let p = POINT { x: lparam as i16 as i32, y: (lparam >> 16) as i16 as i32 };
             return if input.hit(input.local(p)) { HTCLIENT as LRESULT } else { HTTRANSPARENT as LRESULT };
         }
@@ -100,6 +86,8 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
 
 /// Per-window input owner; the shared low-level hook observes but never consumes events.
 pub(crate) struct OverlayWindow {
+    watch: Option<crate::win32_pointer::MouseWatch>,
+    wake: Option<crate::Waker>,
     input: Rc<Input>,
     observing: bool,
     exclusion: OverlaySupport,
@@ -107,61 +95,69 @@ pub(crate) struct OverlayWindow {
 impl OverlayWindow {
     pub fn new(window: &winit::window::Window, interactive: bool, options: &OverlayOptions, wake: Option<crate::Waker>) -> Option<Self> {
         let hwnd = hwnd(window)?;
-        prepare_overlay(window, interactive);
-        let regional = options.input == OverlayInput::Regions;
-        if regional { unsafe {
+        let mode = options.input.resolved(interactive);
+        prepare_overlay(window, mode == OverlayInput::All);
+        unsafe {
             let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (style | WS_EX_LAYERED | WS_EX_TRANSPARENT) as isize);
-        } }
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (style | WS_EX_LAYERED) as isize);
+        }
         let exclusion = if options.exclude_from_capture {
             if unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) } != 0 { OverlaySupport::Requested } else { OverlaySupport::Failed }
         } else { OverlaySupport::Unknown };
-        let input = Rc::new(Input { hwnd, regions: RefCell::default(), scale: Cell::new(window.scale_factor() as f32), pending: Cell::new(None), clicks: RefCell::default(), last: Cell::new(None), captured: Cell::new(false), visible: Cell::new(false), regional, track: regional || options.follow_pointer, level: options.level, wake });
+        let input = Rc::new(Input { hwnd, regions: RefCell::default(), scale: Cell::new(window.scale_factor() as f32), clicks: RefCell::default(), captured: Cell::new(false), visible: Cell::new(false), input: Cell::new(mode), follow: Cell::new(options.follow_pointer), level: options.level });
         if unsafe { SetWindowSubclass(hwnd, Some(subclass), 0x52554e45, Rc::as_ptr(&input) as usize) } == 0 { return None; }
-        Some(Self { input, observing: false, exclusion })
+        Some(Self { input, observing: false, exclusion, watch: None, wake })
     }
     pub fn capture_exclusion(&self) -> OverlaySupport { self.exclusion }
     pub fn global_pointer(&self) -> OverlaySupport {
-        if self.input.track && INPUTS.with(|inputs| inputs.borrow().0.is_null()) { OverlaySupport::Failed }
+        if self.input.track() && self.watch.as_ref().is_none_or(|w| !w.supported()) { OverlaySupport::Failed }
         else { OverlaySupport::Supported }
     }
-    pub fn take_pointer(&self) -> Option<(f32, f32)> { self.input.pending.take() }
+    pub fn take_pointer(&self) -> Option<(f32, f32)> {
+        let (x, y) = self.watch.as_ref()?.take()?;
+        self.input.observe(POINT { x, y });
+        Some(self.input.local(POINT { x, y }))
+    }
+    pub fn set_input(&mut self, input: OverlayInput) {
+        self.input.input.set(input);
+        self.refresh_watch();
+        if let Some((x, y)) = pointer_position() { self.input.observe(POINT { x, y }); }
+    }
+    pub fn set_follow_pointer(&mut self, follow: bool) { self.input.follow.set(follow); self.refresh_watch(); }
+
+    fn refresh_watch(&mut self) {
+        if self.input.visible.get() && self.input.track() {
+            if self.watch.is_none() { self.watch = Some(crate::win32_pointer::MouseWatch::new(self.wake.clone())); }
+            if let Some(watch) = &self.watch { watch.geometry(self.input.hwnd, self.input.follow.get()); }
+        } else { self.watch.take(); }
+    }
     pub fn take_click(&self, down: bool) -> Option<(f32, f32)> {
         self.input.clicks.borrow_mut().pop_front().filter(|(pressed, _)| *pressed == down).map(|(_, point)| point)
     }
     pub fn set_regions(&self, regions: &[[f32; 4]], scale: f32) {
         self.input.scale.set(scale);
-        if !self.input.track { return; }
         if self.input.regions.borrow().as_slice() != regions { *self.input.regions.borrow_mut() = regions.to_vec(); }
-        if let Some((x, y)) = pointer_position() { self.input.observe(POINT { x, y }); }
+        if let Some(watch) = &self.watch { watch.geometry(self.input.hwnd, self.input.follow.get()); }
+        if let Some((x, y)) = pointer_position() {
+            self.input.observe(POINT { x, y });
+            if let Some(watch) = &self.watch { watch.observe((x, y)); }
+        }
     }
     pub fn show(&mut self) {
         self.input.visible.set(true);
         if self.observing { return; }
-        let needs_hook = INPUTS.with(|inputs| {
-            let mut inputs = inputs.borrow_mut();
-            inputs.1.push(self.input.clone());
-            inputs.0.is_null() && self.input.track
-        });
-        if needs_hook {
-            let hook = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(std::ptr::null()), 0) };
-            INPUTS.with(|inputs| inputs.borrow_mut().0 = hook);
-        }
+        INPUTS.with(|inputs| inputs.borrow_mut().push(self.input.clone()));
+        self.refresh_watch();
         self.observing = true;
+        if let Some((x, y)) = pointer_position() { self.input.observe(POINT { x, y }); }
     }
     pub fn hide(&mut self) {
         self.input.visible.set(false);
         self.input.captured.set(false);
-        self.input.pending.set(None);
+        self.watch.take();
         self.input.clicks.borrow_mut().clear();
         if !self.observing { return; }
-        let hook = INPUTS.with(|inputs| {
-            let mut inputs = inputs.borrow_mut();
-            inputs.1.retain(|i| !Rc::ptr_eq(i, &self.input));
-            if inputs.1.iter().all(|input| !input.track) { std::mem::replace(&mut inputs.0, std::ptr::null_mut()) }
-            else { std::ptr::null_mut() }
-        });
-        if !hook.is_null() { unsafe { UnhookWindowsHookEx(hook); } }
+        INPUTS.with(|inputs| inputs.borrow_mut().retain(|i| !Rc::ptr_eq(i, &self.input)));
         self.observing = false;
     }
 }
@@ -192,8 +188,8 @@ pub(crate) fn show_overlay(window: &winit::window::Window) {
         ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
-    let inputs = INPUTS.with(|inputs| inputs.borrow().1.clone());
-    for level in [OverlayLevel::Status, OverlayLevel::AboveStatus] {
+    let inputs = INPUTS.with(|inputs| inputs.borrow().clone());
+    for level in [OverlayLevel::Status, OverlayLevel::AboveStatus, OverlayLevel::AboveOverlays] {
         for input in &inputs {
             if input.visible.get() && input.level == level {
                 unsafe { SetWindowPos(input.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); }

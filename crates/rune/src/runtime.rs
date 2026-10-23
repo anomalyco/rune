@@ -258,6 +258,7 @@ pub struct Runtime<S: 'static> {
     pub viewport: (f32, f32),
     /// Transparent native surfaces/headless exports clear to transparent black.
     pub transparent: bool,
+    pub(crate) native_overlay: bool,
     /// Animation time (seconds, scaled by the time scale).
     pub t: f64,
     pub reduced_motion: bool,
@@ -411,6 +412,7 @@ impl<S: 'static> Runtime<S> {
             env,
             viewport,
             transparent: false,
+            native_overlay: false,
             t: 0.0,
             reduced_motion: false,
             time_scale: 1.0,
@@ -1902,7 +1904,9 @@ impl<S: 'static> Runtime<S> {
         self.refresh_hover(x, y);
         let Some((path, d)) = self.capture.clone() else { return };
         let Some((id, r, has_drag)) = self.node(&path).map(|n| (n.id, n.target, n.on_drag.is_some())) else { return };
-        self.capture_inside = self.hits.iter().any(|(hit, r)| *hit == id && crate::overlay_options::contains(*r, x, y));
+        self.capture_inside = if self.native_overlay {
+            self.hits.iter().any(|(hit, r)| *hit == id && crate::overlay_options::contains(*r, x, y))
+        } else { x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3] };
         if has_drag {
             let (dx, dy) = (x - self.press_at.0, y - self.press_at.1);
             let d = Drag { phase: Phase::Move, x: x - r[0], y: y - r[1], dx, dy, ..d };
@@ -1910,12 +1914,34 @@ impl<S: 'static> Runtime<S> {
         }
     }
 
+    /// Overlay observation updates coordinates without presenting unchanged hover pixels.
+    pub(crate) fn observe_pointer(&mut self, x: f32, y: f32) -> bool {
+        if self.pointer == Some((x, y)) { return false; }
+        let visual_changed = self.nodes.iter().enumerate().any(|(i, n)| {
+            if n.vis.hover.a <= 0.0 && n.vis.press.a <= 0.0 { return false; }
+            let r = self.drawn.get(i).map_or(n.target, |d| [d[0], d[1], d[0] + d[2], d[1] + d[3]]);
+            let inside = |p: Option<(f32, f32)>| p.is_some_and(|(x, y)| x >= r[0] && y >= r[1] && x <= r[2] && y <= r[3]);
+            inside(self.pointer) != inside(Some((x, y)))
+        });
+        let (queued, capture_inside) = (self.queue.len(), self.capture_inside);
+        self.pointer_move(x, y);
+        visual_changed || self.queue.len() != queued || self.capture_inside != capture_inside
+    }
+
+    pub(crate) fn pointer_captured(&self) -> bool { self.capture.is_some() || self.secondary_capture.is_some() }
+
+    pub(crate) fn cancel_pointer(&mut self) {
+        self.capture = None;
+        self.secondary_capture = None;
+        self.capture_inside = false;
+        self.pointer_leave();
+    }
+
     fn refresh_hover(&mut self, x: f32, y: f32) {
-        let hovered = self.primary_target(x, y).map(|i| self.nodes[i].path.clone());
-        if hovered != self.hovered {
-            if let Some(path) = &hovered { self.queue.push(Action::Hover(path.clone())); }
-            self.hovered = hovered;
-        }
+        let hovered = self.primary_target(x, y);
+        if hovered.map(|i| self.nodes[i].path.as_str()) == self.hovered.as_deref() { return; }
+        self.hovered = hovered.map(|i| self.nodes[i].path.clone());
+        if let Some(path) = &self.hovered { self.queue.push(Action::Hover(path.clone())); }
     }
 
     pub fn pointer_down(&mut self, x: f32, y: f32) {
@@ -2742,7 +2768,7 @@ impl<S: 'static> Runtime<S> {
         self.ambient = ambient;
         // A moving chip can enter a stationary pointer. Re-evaluate against this frame's
         // geometry without inventing pointer-move or drag events on animation frames.
-        if let Some((x, y)) = self.pointer { self.refresh_hover(x, y); }
+        if self.native_overlay && let Some((x, y)) = self.pointer { self.refresh_hover(x, y); }
     }
 
     // ---------------------------------------------------------------------------------------
@@ -3215,6 +3241,7 @@ mod tests {
         let offset = crate::Live::new([0.0, 0.0]);
         let opacity = crate::Live::new(1.0);
         let mut rt = Runtime::new(State { offset: offset.clone(), opacity: opacity.clone(), pressed: 0, hovered: 0, visible: true }, view, (100.0, 100.0), Env { system_dark: true, scale: 2.0 });
+        rt.native_overlay = true;
         rt.frame(0.0);
         assert_eq!(rt.hit_regions(), &[[30.0, 0.0, 60.0, 20.0]]);
         rt.pointer_move(15.0, 10.0);
@@ -3254,6 +3281,23 @@ mod tests {
         rt.frame(0.0);
         assert_eq!(rt.state, [PointerPress { x: 20.0, y: 40.0 }]);
         assert!(rt.hit_regions().is_empty());
+    }
+
+    #[test]
+    fn overlay_idle_pointer_does_not_request_unchanged_frames() {
+        fn view(_: &u32, _: &mut Cx<u32>) -> El {
+            el().child(el().size(40.0, 20.0).hit().on_hover(|n: &mut u32| *n += 1))
+        }
+        let mut rt = Runtime::new(0, view, (100.0, 100.0), Env { system_dark: true, scale: 1.0 });
+        rt.frame(0.0);
+        assert!(rt.observe_pointer(5.0, 5.0), "enter must run the hover callback");
+        rt.frame(0.0);
+        assert_eq!(rt.state, 1);
+        assert!(!rt.observe_pointer(6.0, 5.0), "movement within an unchanged chip needs no frame");
+        assert!(!rt.observe_pointer(6.0, 5.0), "duplicate monitor/winit observations need no frame");
+        assert!(!rt.observe_pointer(90.0, 90.0));
+        assert!(!rt.observe_pointer(200.0, 90.0), "movement outside the canvas needs no frame");
+        assert!(!rt.has_pending_input());
     }
 
     #[test]

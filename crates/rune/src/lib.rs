@@ -10,10 +10,16 @@ mod app;
 mod layer_shell;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 mod x11_overlay;
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+mod x11_pointer;
 mod overlay;
 mod overlay_options;
+#[cfg(any(test, target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+mod pointer_observer;
 #[cfg(target_os = "windows")]
 mod win32;
+#[cfg(target_os = "windows")]
+mod win32_pointer;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
@@ -48,7 +54,7 @@ pub use winit::raw_window_handle;
 
 pub use app::{App, AppHandle};
 pub use overlay::{Availability, OverlayHandle, OverlaySpec, ScreenEdge};
-pub use overlay_options::{ConfiguredOverlay, DisplayId, DisplayTarget, KeyPolicy, OverlayCapabilities, OverlayInput, OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySupport};
+pub use overlay_options::{ConfiguredOverlay, DisplayId, DisplayTarget, NativeDisplayId, KeyPolicy, OverlayCapabilities, OverlayCreated, OverlayInput, OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySupport};
 pub use color::{Color, oklch, oklcha};
 pub use compose::{Compositor, Frame};
 pub use edit::{Ime, Key, KeyEvent, Mods, TextEdit};

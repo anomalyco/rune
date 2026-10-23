@@ -27,3 +27,28 @@ nonactivating key focus. Capture requests on macOS must be supplemented with an 
 ScreenCaptureKit window-ID filter when the OS capture path ignores NSWindow sharingType.
 Wayland keeps both levels on the compositor's overlay layer; it has no higher layer and
 does not guarantee ordering among peers. Native status/status+1 levels are macOS-specific.
+
+## Scrawl integration
+
+- The lab prewarms hidden hosts and logs `on_created` with the actual macOS CGWindowID.
+  `window_number()` is available after that callback and stays stable through hide/show.
+  Host creation happens on the event loop, not synchronously in `App::overlay`.
+- Use `set_input(OverlayInput::All)` for selection and `set_input(OverlayInput::None)` for
+  pass-through ink/glow on the same host. Mode changes wait for an owned drag's release.
+  `Regions` uses `.hit()` geometry; `Legacy` restores the spec's `interactive` behavior.
+- `set_follow_pointer(bool)` enables/disables following independently of placement/input.
+  Scrawl can keep it disabled and supply its own `Rect` and `set_display` requests.
+- `Display::native_id()` maps to `DisplayTarget::Native`: macOS CGDirectDisplayID, Windows
+  full-width HMONITOR, X11 RandR CRTC, Wayland wl_output registry name. X11 output IDs can
+  also be targeted with `NativeDisplayId::X11Output`. `native_bounds()` is global top-left
+  (macOS/Wayland points, Windows/X11 pixels); `scale` converts local lengths.
+- The pill uses `AboveOverlays` (macOS 27), above the picker's `AboveStatus` (26). Both use
+  CanJoinAllSpaces, FullScreenAuxiliary and Stationary. Wayland ordering remains compositor-owned.
+- Desktop hide retains the native window, GPU surface and renderer. Hidden hosts have no
+  pointer observers or draw loop; warm startup renders offscreen once. Wayland recreates its
+  layer after hide. **Under 16 ms to first presented frame on Pro remains unmeasured.**
+
+The idle path filters outside-canvas motion and skips unchanged hover redraws. Windows hooks
+run on a separate message-loop thread; X11 observes XI2 raw motion instead of polling. The
+shared Wayland socket wakes its private queue; legacy noninteractive HUDs bind no seat and
+reuse their empty input region.

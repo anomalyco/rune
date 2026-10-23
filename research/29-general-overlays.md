@@ -1,6 +1,6 @@
 # General overlays
 
-Proposal, 22 October 2026. One `AnyHost` per overlay, sharing Rune's event loop and GPU.
+Design, 22 October 2026, including Scrawl's review. One `AnyHost` per overlay, sharing the event loop and GPU.
 The pill uses a **fixed maximum transparent canvas**; springs move its contents and hit
 regions. This avoids native resize/surface reconfiguration on every animation tick.
 The picker uses one full-display host per display; Scrawl shares state between them.
@@ -16,35 +16,45 @@ through `Into<ConfiguredOverlay<T>>`. Bare specs convert with legacy defaults. A
 ```rust
 let pill = app.overlay(spec.options(OverlayOptions {
     display: DisplayTarget::UnderPointer,
-    follow_pointer: true,
+    follow_pointer: false, // Scrawl supplies a display-local Rect.
     input: OverlayInput::Regions,
     exclude_from_capture: true,
+    prewarm: true,
     ..Default::default()
-}), state);
+}).on_created(|host| { /* add host.window_number to the capture filter */ }), state);
 // Chip geometry, including live/spring transforms and clipping, drives native input.
 el().hit().on_press(/* ... */)
 ```
 
 Options: `placement: Option<OverlayPlacement>` (`None` uses legacy edge fields),
 `OverlayPlacement::{Edge { edge, margin, align, inset }, Rect { x, y, width, height },
-FullScreen}`, `display: DisplayTarget::{Primary, UnderPointer, Id(DisplayId)}`,
-`follow_pointer`, `level: OverlayLevel::{Status, AboveStatus}`, `exclude_from_capture`,
-`keys: KeyPolicy::{None, OnDemand}`, `input: OverlayInput::{Legacy, Regions}`.
-Rect coordinates are **logical points from the selected display's top-left**; native
-display bounds are physical desktop pixels. IDs are opaque, session-scoped native output
-identities, exposed by `Display`, never names or enumeration indices. A disconnected ID
+FullScreen}`, `display: DisplayTarget::{Primary, UnderPointer, Id(DisplayId), Native(NativeDisplayId)}`,
+`follow_pointer`, `level: OverlayLevel::{Status, AboveStatus, AboveOverlays}`, `exclude_from_capture`,
+`keys: KeyPolicy::{None, OnDemand}`, `input: OverlayInput::{Legacy, None, Regions, All}`, `prewarm`.
+Rect coordinates are **logical points from the selected display's top-left**. Keep native
+desktop origins in their original coordinate space. IDs are opaque, session-scoped output
+identities. `native_id()` and `DisplayTarget::Native` map CGDirectDisplayID, full-width
+HMONITOR, RandR CRTC/output and wl_output registry names. `Display::native_bounds()` returns
+global top-left native bounds (points on macOS/Wayland, pixels on Windows/X11); `scale`
+converts local lengths. A disconnected ID
 falls back to primary; UnderPointer resolves on show, then on movement only if following.
 FullScreen means full bounds, not the work area. Legacy Windows edge placement retains
 its taskbar inset. `OverlayHandle` gets placement/display/key-focus requests and the native
 window number for capture filtering. `OnDemand` permits explicit `request_keys()`;
-showing a pill never requests keyboard focus.
+showing a pill never requests keyboard focus. `set_follow_pointer` is runtime-settable.
+`set_input(None/Regions/All)` reuses a picker as a pass-through ink/glow host; a change waits
+for its owned drag to release. `AboveOverlays` puts the pill above an `AboveStatus` picker.
 
 `El::hit()` marks a rectangular input region without adding a handler. In Regions mode
 unmarked pixels pass through; Legacy preserves `interactive` exactly. `on_hover` and a
 new `on_pointer_move` use overlay-local points even over passing-through content, without
 turning observational elements into click targets. A press retains pointer ownership
 until release, so a drag leaving a chip cannot strand the gesture. Hidden hosts have no
-monitors, polling deadlines, or input regions.
+monitors or polling deadlines. Desktop hide retains the native window and GPU surface;
+Wayland destroys its layer. `prewarm` creates hidden hosts, warms layout/glyphs/pipelines
+offscreen, then calls `on_created` before first show. macOS CGWindowID stays stable from
+that callback through hide/show until drop. Under 16 ms to first presentation on Pro is a
+measurement target, **not yet verified**. No native window exists before the loop runs.
 
 ## Layout, input and threads
 
@@ -58,21 +68,22 @@ not universally atomic: this prevents an extra Rune lag frame, not compositor-le
 atomicity. Wayland regions and buffers share a surface commit. Conservative rectangular
 regions are explicit; curved/path-perfect hit testing is a later API.
 
-All layout, native windows, monitor installation/removal and region publication run on the
-event thread (AppKit main thread). Handles only enqueue requests and wake the existing
+Layout, native windows and region publication run on the event thread (AppKit main thread).
+Windows hook/X11 reader threads own observation. Handles enqueue requests and wake the existing
 loop. Native callbacks record pointer/key data and wake the host; they must not re-enter
-Runtime. Global observation never consumes another app's events. Hold no mutex while
-calling AppKit/Win32 or invoking client callbacks. Drop monitors/subclasses before their
+Runtime. Global observation reports movement, not other apps' clicks. Outside-canvas
+movement wakes only on exit or a followed-display change; unchanged hover does not redraw.
+Hold no application mutex while calling native APIs or client callbacks. Drop monitors/subclasses before their
 views, and GPU surfaces before their native backing.
 
 ## Native implementation
 
 | Backend | Placement, input, keys and capture |
 | --- | --- |
-| macOS | Extend Dax's real NSPanel owner. Resolve NSScreen by native display ID; convert top-left points to AppKit bottom-left coordinates. Levels 25/26. Reuse launcher-spike's initialized key-capable nonactivating subclass (`canBecomeKeyWindow`, never main), retaining winit view/delegate routing. `sharingType = None` requests capture exclusion; also expose panel CGWindowID for Scrawl's explicit ScreenCaptureKit exclusion filter. A view `hitTest:` returning nil alone does **not** pass events to other processes: use local/global mouse observation to update `ignoresMouseEvents` against the published regions, retaining interception during drags. Key focus is requested explicitly, never app activation. |
-| Windows | Monitor bounds/DPI plus topmost `WS_EX_NOACTIVATE` tool window. `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` with reported failure. `WM_NCHITTEST` reads the snapshot, but `HTTRANSPARENT` alone forwards only within the same thread: cross-process pass-through also needs layered `WS_EX_TRANSPARENT` toggling and global pointer observation. Windows cannot promise macOS-style nonactivating keyboard focus; report unsupported rather than silently activate. Levels provide relative Rune overlay ordering, not status-bar semantics. |
-| X11 | Override-redirect windows on selected RandR outputs; input SHAPE rectangles in window-local device pixels. Observe root pointer position (bounded timer while visible if no global motion source), retain button grabs through release. No portable capture exclusion or nonactivating keyboard focus. Report unsupported capabilities. |
-| Wayland | Layer-shell surface bound to each selected `wl_output`; recreate on output migration. Anchors/margins encode placement; full-screen respects compositor configure. Commit `set_input_region` with drawn buffer; add private-queue seat/pointer/keyboard dispatch and event-loop wake integration. `OnDemand` keyboard interactivity where protocol version permits. No unrestricted global pointer coordinates/hover through an empty region, global pointer-follow, or portable capture exclusion: expose these limits, never claim success. |
+| macOS | Real NSPanel with winit view/delegate routing; levels 25/26/27 and CanJoinAllSpaces, FullScreenAuxiliary, Stationary. Native display IDs and top-row-inclusive pointer containment; gaps preserve the current screen. `sharingType=None` plus stable CGWindowID. A view `hitTest:` alone cannot pass events across processes: observation changes `ignoresMouseEvents` only at hit boundaries. Key focus is explicit, never app activation. |
+| Windows | Topmost `WS_EX_NOACTIVATE` window, display affinity, `WM_NCHITTEST` and layered `WS_EX_TRANSPARENT`. The shared observation hook has its own message-loop thread: store positions and wake; change styles on the event thread. Nonactivating key focus is unsupported. Levels order Rune overlays. |
+| X11 | Override-redirect windows, SHAPE input and XI2 raw-motion observation on a private reader connection; no idle polling. Implicit button grabs survive region changes. Capture exclusion and nonactivating key focus are unsupported. |
+| Wayland | Bind explicit outputs; Primary/UnderPointer leave the choice to the compositor. Bind devices only as needed; cache regions and commit changes with buffers. winit socket readiness drives the private queue. OnDemand keys require v4. No global hover/follow or capture exclusion; compositor orders peers on the Overlay layer. |
 
 ## Proof and risks
 
