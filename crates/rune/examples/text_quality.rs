@@ -81,6 +81,7 @@ fn experimental(
                     uv: [cursor[0] as f32, cursor[1] as f32],
                     ink: 0,
                     byte: 0,
+                    color: 0,
                 });
                 cursor[0] += p.width + 1;
                 cursor[2] = cursor[2].max(p.height);

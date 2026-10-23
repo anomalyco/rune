@@ -16,7 +16,8 @@ use parley::{
     LineHeight, PositionedLayoutItem, StyleProperty,
 };
 use swash::FontRef;
-use swash::scale::{Render, ScaleContext, Source};
+use swash::scale::image::Content;
+use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::zeno::{Cap, Fill, Format, Join, Mask, Stroke, Transform, Vector};
 
 use crate::color::{Color, srgb_encode};
@@ -38,18 +39,19 @@ const CJK_SCRIPTS: [&[u8; 4]; 5] = [b"Hani", b"Hira", b"Kana", b"Hang", b"Bopo"]
 // On macOS the system font comes first: its keyboard symbols (⌘⇧⏎⌫⎋⌥⌃) sit on the baseline at
 // cap height and follow the requested weight through its `wght` axis. Apple Symbols draws
 // them light, small and (⇧) below the baseline next to app fonts' capitals.
+// The colour emoji family comes last, so symbols with a text form keep it.
 #[cfg(target_os = "macos")]
-const SYMBOL_FAMILIES: &[&str] = &["System Font", ".SF NS", "Apple Symbols", ".SF NS Symbols", "Menlo"];
+const SYMBOL_FAMILIES: &[&str] = &["System Font", ".SF NS", "Apple Symbols", ".SF NS Symbols", "Menlo", "Apple Color Emoji"];
 #[cfg(target_os = "macos")]
-const SYMBOL_FONT_FILES: &[&str] = &["sfnsttf", "applesymbols", "sfnssymbols", "menlo"];
+const SYMBOL_FONT_FILES: &[&str] = &["sfnsttf", "applesymbols", "sfnssymbols", "menlo", "applecoloremoji"];
 #[cfg(windows)]
-const SYMBOL_FAMILIES: &[&str] = &["Segoe UI Symbol"];
+const SYMBOL_FAMILIES: &[&str] = &["Segoe UI Symbol", "Segoe UI Emoji"];
 #[cfg(windows)]
-const SYMBOL_FONT_FILES: &[&str] = &["seguisym"];
+const SYMBOL_FONT_FILES: &[&str] = &["seguisym", "seguiemj"];
 #[cfg(not(any(target_os = "macos", windows)))]
-const SYMBOL_FAMILIES: &[&str] = &["DejaVu Sans", "Noto Sans Symbols2", "Noto Sans Symbols"];
+const SYMBOL_FAMILIES: &[&str] = &["DejaVu Sans", "Noto Sans Symbols2", "Noto Sans Symbols", "Noto Color Emoji"];
 #[cfg(not(any(target_os = "macos", windows)))]
-const SYMBOL_FONT_FILES: &[&str] = &["dejavusans", "notosanssymbols"];
+const SYMBOL_FONT_FILES: &[&str] = &["dejavusans", "notosanssymbols", "notocoloremoji"];
 
 fn register_symbol_fallbacks(collection: &mut Collection) -> Vec<&'static str> {
     let mut files = system_font_files(SYMBOL_FONT_FILES);
@@ -201,6 +203,26 @@ pub struct GlyphQuad {
     pub uv: [f32; 2],
     pub ink: u16,
     pub byte: u32,
+    /// A colour glyph (emoji) drawn from [`TextSystem::color_glyph`] instead of the alpha
+    /// atlas: 0 for none, else its index plus one.
+    pub color: u32,
+}
+
+/// A colour glyph's RGBA image (`GlyphQuad::color`) and its placement around the pen (device px).
+#[derive(Clone, Copy)]
+struct ColorGlyph {
+    index: u32,
+    left: i32,
+    top: i32,
+    w: u32,
+    h: u32,
+}
+
+impl ColorGlyph {
+    fn quad(&self, x: f32, y: f32, ink: u16, byte: u32) -> GlyphQuad {
+        let rect = [x.round() + self.left as f32, y.round() - self.top as f32, self.w as f32, self.h as f32];
+        GlyphQuad { rect, uv: [0.0, 0.0], ink, byte, color: self.index }
+    }
 }
 
 /// A rect drawn under or over text: span backgrounds and underlines (device px).
@@ -280,6 +302,22 @@ fn rasterize(scaler: &mut swash::scale::Scaler<'_>, atlas: &mut Atlas, glyph: u1
         return None;
     }
     atlas.put(w, h, &image.data, image.placement.left, image.placement.top)
+}
+
+/// The colour image of `glyph` (COLR layers or an embedded bitmap scaled to size), or None
+/// when the font draws it as an outline.
+fn rasterize_color(scaler: &mut swash::scale::Scaler<'_>, glyph: u16) -> Option<(crate::pixels::Pixels, swash::zeno::Placement)> {
+    if !scaler.has_color_bitmaps() && !scaler.has_color_outlines() {
+        return None;
+    }
+    let image = Render::new(&[Source::ColorOutline(0), Source::ColorBitmap(StrikeWith::BestFit)]).render(scaler, glyph)?;
+    let (w, h) = (image.placement.width, image.placement.height);
+    if image.content != Content::Color || w == 0 || h == 0 || image.data.len() != (w * h * 4) as usize {
+        return None;
+    }
+    let pixels = crate::pixels::Pixels::new();
+    pixels.set(w, h, image.data);
+    Some((pixels, image.placement))
 }
 
 /// CoreText-calibrated coverage for a linear-light target. Keep colour adjustment out of
@@ -425,6 +463,8 @@ pub struct TextSystem {
     pub mono: String,
     symbol_families: Vec<&'static str>,
     pub atlas: Atlas,
+    color_glyphs: HashMap<GlyphKey, ColorGlyph>,
+    color_pixels: Vec<crate::pixels::Pixels>,
     /// Layouts built since the last commit (shaping work counter for perf gates).
     pub shaped: u32,
     /// Reused across lines and frames when mapping reveal glyphs back to source bytes.
@@ -489,9 +529,16 @@ impl TextSystem {
             mono: families.1.to_owned(),
             symbol_families,
             atlas: Atlas::new(),
+            color_glyphs: HashMap::new(),
+            color_pixels: Vec::new(),
             shaped: 0,
             cluster_scratch: Vec::new(),
         }
+    }
+
+    /// The RGBA image of a colour glyph quad (`GlyphQuad::color`, nonzero).
+    pub fn color_glyph(&self, color: u32) -> &crate::pixels::Pixels {
+        &self.color_pixels[color as usize - 1]
     }
 
     /// Drops layouts unused for two commits.
@@ -673,6 +720,12 @@ impl TextSystem {
                     let entry = match self.atlas.map.get(&key) {
                         Some(&e) => e,
                         None => {
+                            // Colour glyphs sit on whole pixels and ignore emboldening.
+                            let color_key = GlyphKey { subpx: 0, dilation: 0, ..key };
+                            if let Some(c) = self.color_glyphs.get(&color_key) {
+                                out.push(c.quad(gx, gy, ink, byte));
+                                continue;
+                            }
                             let Some(font_ref) = FontRef::from_index(font.data.as_ref(), font.index as usize) else {
                                 continue;
                             };
@@ -683,6 +736,14 @@ impl TextSystem {
                                 .hint(false)
                                 .normalized_coords(coords.iter().map(|c| c.to_bits()))
                                 .build();
+                            if let Some((pixels, at)) = rasterize_color(&mut scaler, g.id as u16) {
+                                self.color_pixels.push(pixels);
+                                let index = self.color_pixels.len() as u32;
+                                let c = ColorGlyph { index, left: at.left, top: at.top, w: at.width, h: at.height };
+                                self.color_glyphs.insert(color_key, c);
+                                out.push(c.quad(gx, gy, ink, byte));
+                                continue;
+                            }
                             let e = rasterize(&mut scaler, &mut self.atlas, g.id as u16, subpx, dilation);
                             self.atlas.map.insert(key, e);
                             e
@@ -694,6 +755,7 @@ impl TextSystem {
                             uv: [a.x as f32, a.y as f32],
                             ink,
                             byte,
+                            color: 0,
                         });
                     }
                 }
@@ -758,6 +820,7 @@ impl TextSystem {
             uv: [a.x as f32, a.y as f32],
             ink: 0,
             byte: 0,
+            color: 0,
         })
     }
 }
@@ -903,6 +966,40 @@ mod tests {
                 assert!(bottom.abs() < cap * 0.06, "{ch} at {size}pt: bottom {bottom:.1} off the baseline");
             }
         }
+    }
+
+    /// Emoji shape with the system's colour emoji font and draw as colour images about the
+    /// size of the text around them, not as blank alpha glyphs.
+    #[test]
+    fn emoji_draw_as_colour_images_beside_text() {
+        let mut ts = TextSystem::default();
+        if !ts.symbol_families.iter().any(|f| f.contains("Emoji")) {
+            eprintln!("skipping: no colour emoji font installed");
+            return;
+        }
+        let style = TextStyle::new(13.0, 400.0);
+        let layout = ts.layout_rich("Done 🎉", &[], style, 2.0, None);
+        let mut quads = Vec::new();
+        ts.glyphs_for_layout(&layout, 2.0, [0.0, 0.0], false, &mut quads);
+        let letters: Vec<_> = quads.iter().filter(|q| q.color == 0).collect();
+        let emoji: Vec<_> = quads.iter().filter(|q| q.color != 0).collect();
+        assert_eq!((letters.len(), emoji.len()), (4, 1), "{quads:?}");
+        let e = emoji[0];
+        let d = letters[0];
+        assert!(e.rect[0] > letters[3].rect[0] + letters[3].rect[2], "after the text: {e:?}");
+        assert!((20.0..40.0).contains(&e.rect[3]), "about 13pt at 2x: {e:?}");
+        // It sits on the line: overlapping the capital D's ink, not above or below it.
+        assert!(e.rect[1] < d.rect[1] + d.rect[3] && e.rect[1] + e.rect[3] > d.rect[1], "{e:?} vs {d:?}");
+        let pixels = ts.color_glyph(e.color);
+        let (w, h) = pixels.size();
+        assert_eq!((w as f32, h as f32), (e.rect[2], e.rect[3]));
+        let coloured = pixels.rgba().chunks(4).filter(|p| p[3] > 128 && (p[0].abs_diff(p[1]) > 40 || p[1].abs_diff(p[2]) > 40)).count();
+        assert!(coloured > (w * h / 10) as usize, "only {coloured} coloured pixels");
+        // Drawing it again reuses the image.
+        let mut again = Vec::new();
+        ts.glyphs_for_layout(&layout, 2.0, [0.0, 0.0], false, &mut again);
+        assert_eq!(again.iter().filter(|q| q.color != 0).map(|q| q.color).collect::<Vec<_>>(), vec![e.color]);
+        assert_eq!(ts.color_pixels.len(), 1);
     }
 }
 

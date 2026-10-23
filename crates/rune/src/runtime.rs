@@ -943,7 +943,8 @@ impl<S: 'static> Runtime<S> {
         self.glyph_scratch.clear();
         self.text.glyphs_for_layout(layout, scale, [rect.x * scale, rect.y * scale], false, &mut self.glyph_scratch);
         let color = spec.color;
-        let glyphs = self.glyph_scratch.iter().filter(|q| q.rect[1] < clip[3] * scale && q.rect[1] + q.rect[3] > clip[1] * scale)
+        // Colour glyphs live in the image atlas, which may move them before the flight ends.
+        let glyphs = self.glyph_scratch.iter().filter(|q| q.color == 0 && q.rect[1] < clip[3] * scale && q.rect[1] + q.rect[3] > clip[1] * scale)
             .map(|q| glyph(q, color.premul(1.0), glyph_gamma(color, scale), clip.map(|v| v * scale), [0.0; 4])).collect();
         self.flights.push(TextFlight::new(source, target, rect, clip, glyphs, scale, self.t));
     }
@@ -1003,7 +1004,7 @@ impl<S: 'static> Runtime<S> {
             self.glyph_scratch.clear();
             self.text.glyphs_for_layout(layout, s, [target.x * s, target.y * s], false, &mut self.glyph_scratch);
             for q in &self.glyph_scratch {
-                let q = glyph(q, spec.color.premul(1.0), glyph_gamma(spec.color, s), NO_CLIP, [0.0; 4]);
+                let Some(q) = glyph_or_image(q, &self.text, &mut self.images, spec.color.premul(1.0), glyph_gamma(spec.color, s), NO_CLIP, [0.0; 4]) else { continue };
                 self.instances.push(transformed(q, target, current, s, target_alpha,
                     if reduced { actual_clip } else { clip }, if reduced { final_fade } else { fade }));
             }
@@ -2831,7 +2832,7 @@ impl<S: 'static> Runtime<S> {
                             self.text.glyphs_for_layout(&pl, s, origin, false, &mut self.glyph_scratch);
                             let pc = inp.placeholder_color.premul(o);
                             for q in &self.glyph_scratch {
-                                self.instances.push(glyph(q, pc, glyph_gamma(inp.placeholder_color, s), clip, fade));
+                                self.instances.extend(glyph_or_image(q, &self.text, &mut self.images, pc, glyph_gamma(inp.placeholder_color, s), clip, fade));
                             }
                         }
                         if e.focused && !departing {
@@ -2909,7 +2910,7 @@ impl<S: 'static> Runtime<S> {
                             }
                             f = f.map(|v| v * a);
                         }
-                        self.instances.push(glyph(q, f, gm, clip, fade));
+                        self.instances.extend(glyph_or_image(q, &self.text, &mut self.images, f, gm, clip, fade));
                         glyph_count += 1;
                     }
                     if let (Some(c), Some(inp)) = (caret, &n.input) {
@@ -3247,6 +3248,25 @@ fn glyph(q: &GlyphQuad, fill: [f32; 4], gamma: f32, clip: [f32; 4], fade: [f32; 
         clip,
         fade: crate::render::pack_fade(fade, clip, clip),
     }
+}
+
+/// A text glyph's instance: alpha-atlas coverage tinted by `fill`, or a colour glyph's image
+/// at `fill`'s alpha. None when the image atlas can't place it.
+fn glyph_or_image(q: &GlyphQuad, text: &TextSystem, images: &mut crate::pixels::ImageAtlas, fill: [f32; 4], gamma: f32, clip: [f32; 4], fade: [f32; 4]) -> Option<Instance> {
+    if q.color == 0 {
+        return Some(glyph(q, fill, gamma, clip, fade));
+    }
+    let image = images.place(text.color_glyph(q.color), [q.rect[2], q.rect[3]])?;
+    Some(Instance {
+        rect: q.rect,
+        radii: [0.0; 4],
+        fill: [0.0, 0.0, 0.0, fill[3]],
+        border: [0.0; 4],
+        params: [image.page as f32, KIND_IMAGE, image.premultiplied as u8 as f32, 1.0],
+        uv: image.rect.map(|v| v as f32),
+        clip,
+        fade: crate::render::pack_fade(fade, clip, clip),
+    })
 }
 
 /// Where an anchored overlay of `size` goes next to `t` (x0, y0, x1, y1), flipped to the

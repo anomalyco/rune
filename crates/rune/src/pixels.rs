@@ -72,6 +72,11 @@ impl Pixels {
         let frame = self.frame.lock().unwrap();
         (frame.width, frame.height)
     }
+
+    #[cfg(test)]
+    pub(crate) fn rgba(&self) -> Vec<u8> {
+        self.frame.lock().unwrap().rgba.clone()
+    }
 }
 
 struct Slot {
@@ -259,6 +264,38 @@ mod tests {
         for (x, y, want) in [(0,0,[255,0,0,255]), (1,1,[0,0,255,255]), (2,2,[0,255,0,255]), (5,5,[255;4])] {
             assert_eq!(&out[(y*8+x)*4..(y*8+x+1)*4], &want, "at {x},{y}");
         }
+    }
+
+    /// An emoji in a text element reaches the screen in colour, from the image atlas.
+    #[test]
+    fn gpu_emoji_in_text_draws_in_colour() {
+        use crate::{Color, Cx, El, Env, Runtime, TextStyle, el, text};
+        use crate::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
+        fn view(_: &(), _: &mut Cx<()>) -> El {
+            el().size(80.0, 24.0).fill(Color::BLACK).child(text("Hi 🎉").font(TextStyle::new(16.0, 400.0)).color(Color::WHITE))
+        }
+        let mut rt = Runtime::new((), view, (80.0, 24.0), Env::new(true, 2.0));
+        rt.frame(0.0);
+        if rt.images.pages.is_empty() {
+            eprintln!("skipping: no colour emoji font installed");
+            return;
+        }
+        let (w, h) = (160, 48);
+        let gpu = Gpu::headless();
+        let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+        renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (w, h));
+        renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+        let target = Offscreen::new(&gpu.device, w, h);
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        renderer.draw(&mut enc, &target.view, [0.0, 0.0, 0.0, 1.0]);
+        target.copy(&mut enc);
+        gpu.queue.submit([enc.finish()]);
+        let out = target.read(&gpu.device);
+        if let Some(path) = std::env::var_os("RUNE_EMOJI_PNG") {
+            crate::render::write_png(std::path::Path::new(&path), w, h, &out).unwrap();
+        }
+        let coloured = out.chunks(4).filter(|p| p[0].abs_diff(p[1]) > 60 || p[1].abs_diff(p[2]) > 60).count();
+        assert!(coloured > 100, "only {coloured} coloured pixels");
     }
 
     #[test]
