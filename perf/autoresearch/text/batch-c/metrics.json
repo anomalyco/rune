@@ -1,0 +1,81 @@
+{
+  "font": "SFNS.ttf",
+  "font_sha256": "44890958f3e0b997028121ed7c7a789f3f5cce227c7a93ce8f86ec0db26da571",
+  "worker": "mini",
+  "os": "macOS 27.0.1 (26A434)",
+  "reference": "CoreText native optical size, matched Rune glyph IDs and positions",
+  "modes": {
+    "legacy": {
+      "raster": [
+        {
+          "name": "dark-1x",
+          "ssim": 0.9482086603220428,
+          "mean_abs_weight_error_pct": 6.198829186928209,
+          "signed_weight_error_pct": -6.011266029901663,
+          "ink_mae": 0.3355731252140466
+        },
+        {
+          "name": "dark-2x",
+          "ssim": 0.9241003139672155,
+          "mean_abs_weight_error_pct": 9.047052897208328,
+          "signed_weight_error_pct": -9.047052897208328,
+          "ink_mae": 0.35601250912974236
+        },
+        {
+          "name": "light-1x",
+          "ssim": 0.950077285833176,
+          "mean_abs_weight_error_pct": 2.6770652502274475,
+          "signed_weight_error_pct": -0.8633287766518296,
+          "ink_mae": 0.37717626248218017
+        },
+        {
+          "name": "light-2x",
+          "ssim": 0.9346669698021108,
+          "mean_abs_weight_error_pct": 2.756860546607135,
+          "signed_weight_error_pct": -1.9076627561476807,
+          "ink_mae": 0.37634454799862205
+        }
+      ],
+      "mean_absolute_advance_error_px": {
+        "1x": 18.291670417785646,
+        "2x": 29.911778335571288
+      }
+    },
+    "point": {
+      "raster": [
+        {
+          "name": "dark-1x",
+          "ssim": 0.9838287271702054,
+          "mean_abs_weight_error_pct": 4.795207016793457,
+          "signed_weight_error_pct": -3.583140157399178,
+          "ink_mae": 0.1429102437089953
+        },
+        {
+          "name": "dark-2x",
+          "ssim": 0.9845285909483137,
+          "mean_abs_weight_error_pct": 6.543545865086231,
+          "signed_weight_error_pct": -6.543545865086231,
+          "ink_mae": 0.11915486605755056
+        },
+        {
+          "name": "light-1x",
+          "ssim": 0.9868303983047158,
+          "mean_abs_weight_error_pct": 4.126608585716923,
+          "signed_weight_error_pct": 2.118246532275702,
+          "ink_mae": 0.15901845440419815
+        },
+        {
+          "name": "light-2x",
+          "ssim": 0.9905409714508471,
+          "mean_abs_weight_error_pct": 3.3730974998067405,
+          "signed_weight_error_pct": 0.8887740367175381,
+          "ink_mae": 0.09323879168672729
+        }
+      ],
+      "mean_absolute_advance_error_px": {
+        "1x": 0.005357208251953125,
+        "2x": 11.24212791442871
+      }
+    }
+  }
+}
