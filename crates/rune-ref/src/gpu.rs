@@ -19,6 +19,7 @@ impl Primitive {
             uv: p.uv,
             clip: p.clip,
             fade: p.fade,
+            fade_origin: Some(p.fade_origin),
         }
     }
 }
@@ -34,6 +35,7 @@ impl From<&Primitive> for Instance {
             uv: p.uv,
             clip: p.clip,
             fade: p.fade,
+            fade_origin: p.fade_origin.unwrap_or(p.clip),
         }
     }
 }
@@ -125,6 +127,7 @@ pub fn text_run(scene: &mut Scene, seed: u64) {
             uv: [q.uv[0], q.uv[1], 0.0, 0.0],
             clip: crate::NO_CLIP,
             fade: [0.0; 4],
+            fade_origin: None,
         });
     }
     scene.atlas = crate::Atlas {

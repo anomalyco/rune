@@ -189,6 +189,7 @@ struct Inh {
     paint_opacity: f32,
     clip: [f32; 4],
     fade: [f32; 4],
+    fade_origin: [f32; 4],
     scale: f32,
     anchor: [f32; 2],
     blur: f32,
@@ -201,7 +202,7 @@ struct Inh {
 
 impl Default for Inh {
     fn default() -> Self {
-        Inh { opacity: 1.0, paint_opacity: 1.0, clip: NO_CLIP, fade: [0.0; 4], scale: 1.0, anchor: [0.0; 2], blur: 0.0, dy: 0.0, mark: 0, group: 0.0 }
+        Inh { opacity: 1.0, paint_opacity: 1.0, clip: NO_CLIP, fade: [0.0; 4], fade_origin: NO_CLIP, scale: 1.0, anchor: [0.0; 2], blur: 0.0, dy: 0.0, mark: 0, group: 0.0 }
     }
 }
 
@@ -2318,6 +2319,7 @@ impl<S: 'static> Runtime<S> {
                     && next.is_some_and(|j| self.nodes[j].parent == Some(i))));
             let o = if isolate { 1.0 } else { (own * pinh.paint_opacity).clamp(0.0, 1.0) };
             let (mut clip, mut fade) = (pinh.clip, pinh.fade);
+            let mut fade_origin = pinh.fade_origin;
             let own_sc = p.transform.scale.x;
             let (sc, anchor) = if (own_sc - 1.0).abs() > 1e-5 {
                 (pinh.scale * own_sc, [p.anchor.x, p.anchor.y + pinh.dy])
@@ -2364,7 +2366,7 @@ impl<S: 'static> Runtime<S> {
                     (r[2] - ins[2]).min(clip[2]),
                     (r[3] - ins[3]).min(clip[3]),
                 ];
-                fade = [fea[0].max(fade[0]), fea[1].max(fade[1]), fea[2].max(fade[2]), fea[3].max(fade[3])];
+                inherit_fade(&mut fade, &mut fade_origin, [r[0] + ins[0], r[1] + ins[1], r[2] - ins[2], r[3] - ins[3]], fea);
             }
             let visible = r[2] >= clip[0].max(vp[0]) - 2.0
                 && r[0] <= clip[2].min(vp[2]) + 2.0
@@ -2409,6 +2411,7 @@ impl<S: 'static> Runtime<S> {
                 }
             }
 
+            let first_instance = self.instances.len();
             if effective_opacity > 0.001 && o > 0.001 && visible {
                 // Disabled styling is distributed to each authored paint leaf at build time.
                 // Keep this local to emission: it neither propagates to children nor opens scopes.
@@ -2430,6 +2433,7 @@ impl<S: 'static> Runtime<S> {
                             continue;
                         }
                         self.instances.push(Instance {
+                            fade_origin: clip,
                             rect,
                             radii: sradii,
                             fill: if ring { [0.0; 4] } else { c.premul(o) },
@@ -2442,6 +2446,7 @@ impl<S: 'static> Runtime<S> {
                         continue;
                     }
                     self.instances.push(Instance {
+                        fade_origin: clip,
                         rect,
                         radii: sradii,
                         fill: c.premul(o),
@@ -2474,6 +2479,7 @@ impl<S: 'static> Runtime<S> {
                     // Fill, gradient and overlays first, then the border on top, as in CSS.
                     if fill[3] > 0.0005 {
                         self.instances.push(Instance {
+                            fade_origin: clip,
                             rect: [r[0], r[1], w, h],
                             radii,
                             fill,
@@ -2489,6 +2495,7 @@ impl<S: 'static> Runtime<S> {
                     let bottom = self.color(n.id, P_GRADIENT[1], g[1]).premul(o);
                     if top[3] > 0.0005 || bottom[3] > 0.0005 {
                         self.instances.push(Instance {
+                            fade_origin: clip,
                             rect: [r[0], r[1], w, h],
                             radii,
                             fill: top,
@@ -2502,12 +2509,13 @@ impl<S: 'static> Runtime<S> {
                     if let Some((surface, fit)) = &n.vis.surface {
                         self.surfaces.push(crate::native_surface::SurfaceDraw {
                             surface: surface.clone(), fit: *fit, before_instance: self.instances.len() as u32,
-                            rect: [r[0], r[1], w, h], radii, clip, fade, opacity: o,
+                            rect: [r[0], r[1], w, h], radii, clip, fade, fade_origin, opacity: o,
                         });
                     }
                     let ov = overlay.map(|c| c * o);
                     if ov[3] > 0.0005 || border[3] > 0.0005 {
                         self.instances.push(Instance {
+                            fade_origin: clip,
                             rect: [r[0], r[1], w, h],
                             radii,
                             fill: ov,
@@ -2520,6 +2528,7 @@ impl<S: 'static> Runtime<S> {
                     }
                 } else if fill[3] > 0.0005 || border[3] > 0.0005 {
                     self.instances.push(Instance {
+                        fade_origin: clip,
                         rect: [r[0], r[1], w, h],
                         radii,
                         fill,
@@ -2539,6 +2548,7 @@ impl<S: 'static> Runtime<S> {
                         continue;
                     }
                     self.instances.push(Instance {
+                        fade_origin: clip,
                         rect: [r[0], r[1], w, h],
                         radii,
                         fill: c.premul(o),
@@ -2555,6 +2565,7 @@ impl<S: 'static> Runtime<S> {
                     let g = (ol.offset + ol.width) * k_px;
                     if c.a > 0.0 && ol.width > 0.0 {
                         self.instances.push(Instance {
+                            fade_origin: clip,
                             rect: [r[0] - g, r[1] - g, w + 2.0 * g, h + 2.0 * g],
                             radii: radii.map(|v| if v > 0.0 { v + g } else { 0.0 }),
                             fill: [0.0; 4],
@@ -2577,6 +2588,7 @@ impl<S: 'static> Runtime<S> {
                     && let Some(image) = self.images.place(pixels, [w, h])
                 {
                     self.instances.push(Instance {
+                        fade_origin: clip,
                         rect: [r[0], r[1], w, h],
                         radii,
                         fill: [0.0, 0.0, 0.0, o],
@@ -2592,6 +2604,7 @@ impl<S: 'static> Runtime<S> {
                     let px = (w.min(h)).round().max(1.0) as u32;
                     if let Some(q) = self.text.icon_quad(ic, px, [r[0], r[1]]) {
                         self.instances.push(Instance {
+                            fade_origin: clip,
                             rect: q.rect,
                             radii: [0.0; 4],
                             fill: color.premul(o),
@@ -2715,23 +2728,20 @@ impl<S: 'static> Runtime<S> {
                     }
                 }
             }
+            for instance in &mut self.instances[first_instance..] {
+                instance.fade_origin = fade_origin;
+            }
             if self.track_marks {
                 self.marks.resize(self.instances.len(), mark);
             }
-            let (mut clip, mut fade) = match n.vis.clip {
-                Some(f) => (
-                    [r[0].max(clip[0]), r[1].max(clip[1]), r[2].min(clip[2]), r[3].min(clip[3])],
-                    {
-                        let f = f.map(|v| v * sc * s);
-                        [f[0].max(fade[0]), f[1].max(fade[1]), f[2].max(fade[2]), f[3].max(fade[3])]
-                    },
-                ),
-                None => (clip, fade),
-            };
+            if let Some(f) = n.vis.clip {
+                clip = [r[0].max(clip[0]), r[1].max(clip[1]), r[2].min(clip[2]), r[3].min(clip[3])];
+                inherit_fade(&mut fade, &mut fade_origin, r, f.map(|v| v * sc * s));
+            }
             let mask = self.row_mask[i];
             if mask >= 0.0 {
                 clip[3] = clip[3].min(r[3]);
-                fade[3] = fade[3].max(mask * s);
+                inherit_fade(&mut fade, &mut fade_origin, r, [0.0, 0.0, 0.0, mask * s]);
             }
             let mut dy = pinh.dy;
             if n.scroll.is_some()
@@ -2740,7 +2750,7 @@ impl<S: 'static> Runtime<S> {
                 let origin = self.virtuals.values().find(|v| v.scroll_path == n.path).map_or(0.0, |v| f64::from(v.before));
                 dy -= grid((st.offset - origin) as f32, s);
             }
-            self.inh_scratch[i] = Inh { opacity: effective_opacity, paint_opacity: o, clip, fade, scale: sc, anchor, blur, dy, mark, group };
+            self.inh_scratch[i] = Inh { opacity: effective_opacity, paint_opacity: o, clip, fade, fade_origin, scale: sc, anchor, blur, dy, mark, group };
             if (n.vis.hit || n.on_pointer_move.is_some() || n.on_press.is_some() || n.on_secondary_press.is_some() || n.on_hover.is_some() || n.on_drag.is_some() || n.input.is_some() || n.window_drag || n.focus.enabled || n.modal.is_some())
                 && !self.subtree_exiting(i)
                 && self.allowed(i) && effective_opacity > 0.001 && visible
@@ -2961,8 +2971,20 @@ fn truncated(text: &mut TextSystem, content: &str, spec: &TextSpec, scale: f32, 
     make(text, lo)
 }
 
+// Carry the declaring edge with the inherited maximum width. Descendant clipping must not
+// restart an ancestor's fade at a smaller rect.
+fn inherit_fade(width: &mut [f32; 4], origin: &mut [f32; 4], rect: [f32; 4], own: [f32; 4]) {
+    for edge in 0..4 {
+        if own[edge] > 0.0 && own[edge] >= width[edge] {
+            width[edge] = own[edge];
+            origin[edge] = rect[edge];
+        }
+    }
+}
+
 fn glyph(q: &GlyphQuad, fill: [f32; 4], gamma: f32, clip: [f32; 4], fade: [f32; 4]) -> Instance {
     Instance {
+        fade_origin: clip,
         rect: q.rect,
         radii: [0.0; 4],
         fill,
@@ -3033,6 +3055,7 @@ fn push_shape(out: &mut Vec<Instance>, shape: &Shape, origin: [f32; 2], k: [f32;
                     let (a, b) = (at(points[i]), at(points[(i + 1) % n]));
                     let (x0, y0) = (a[0].min(b[0]) - pad, a[1].min(b[1]) - pad);
                     out.push(Instance {
+                        fade_origin: clip,
                         rect: [x0, y0, a[0].max(b[0]) + pad - x0, a[1].max(b[1]) + pad - y0],
                         radii: [a[0], a[1], b[0], b[1]],
                         fill,
@@ -3054,6 +3077,7 @@ fn push_shape(out: &mut Vec<Instance>, shape: &Shape, origin: [f32; 2], k: [f32;
                     let (x0, y0) = (a[0].min(b[0]).min(c[0]), a[1].min(b[1]).min(c[1]));
                     let (x1, y1) = (a[0].max(b[0]).max(c[0]), a[1].max(b[1]).max(c[1]));
                     out.push(Instance {
+                        fade_origin: clip,
                         rect: [x0, y0, x1 - x0, y1 - y0],
                         radii: [a[0], a[1], b[0], b[1]],
                         fill,
@@ -3071,6 +3095,7 @@ fn push_shape(out: &mut Vec<Instance>, shape: &Shape, origin: [f32; 2], k: [f32;
 
 fn rect_inst(rect: [f32; 4], fill: [f32; 4], radius: f32, clip: [f32; 4], fade: [f32; 4]) -> Instance {
     Instance {
+        fade_origin: clip,
         rect,
         radii: [radius; 4],
         fill,

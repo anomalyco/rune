@@ -1,6 +1,6 @@
 struct Uniforms {
     viewport: vec4<f32>, node: vec4<f32>, image: vec4<f32>, radii: vec4<f32>,
-    clip: vec4<f32>, fade: vec4<f32>, color: vec4<f32>, sampling: vec4<f32>,
+    clip: vec4<f32>, fade: vec4<f32>, fade_origin: vec4<f32>, color: vec4<f32>, sampling: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var plane0: texture_2d<f32>;
@@ -64,6 +64,11 @@ fn ramp(d: f32, width: f32) -> f32 {
     radius = min(radius, min(half.x, half.y));
     let q = abs(rel)-half+radius;
     let distance = min(max(q.x,q.y),0.0)+length(max(q,vec2<f32>(0.0)))-radius;
-    let clip = ramp(p.x-u.clip.x,u.fade.x)*ramp(p.y-u.clip.y,u.fade.y)*ramp(u.clip.z-p.x,u.fade.z)*ramp(u.clip.w-p.y,u.fade.w);
+    let hard = vec4<f32>(p-u.clip.xy, u.clip.zw-p);
+    let soft = vec4<f32>(p-u.fade_origin.xy, u.fade_origin.zw-p);
+    var clip = 1.0;
+    for (var edge = 0u; edge < 4u; edge++) {
+        clip *= select(ramp(hard[edge], 0.0), min(ramp(hard[edge], 0.0), ramp(soft[edge], u.fade[edge])), u.fade[edge] > 0.0);
+    }
     return col * (clamp(0.5-distance,0.0,1.0)*clip*u.color.w);
 }

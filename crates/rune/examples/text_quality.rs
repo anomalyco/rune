@@ -184,6 +184,7 @@ fn main() {
                     uv: [q.uv[0], q.uv[1], 0.0, 0.0],
                     clip: NO_CLIP,
                     fade: [0.0; 4],
+                    fade_origin: NO_CLIP,
                 })
                 .collect();
             renderer.prepare(&gpu.device, &gpu.queue, &mut text.atlas, &instances, (w, h));
@@ -269,6 +270,7 @@ fn main() {
                     uv: [q.uv[0], q.uv[1], 0.0, 0.0],
                     clip: NO_CLIP,
                     fade: [0.0; 4],
+                    fade_origin: NO_CLIP,
                 });
             }
             frames.push(json!({"x":x,"instances":instances.len()-start}));

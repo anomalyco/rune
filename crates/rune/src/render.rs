@@ -79,6 +79,8 @@ pub struct Instance {
     pub clip: [f32; 4],
     /// left, top, right, bottom fade widths
     pub fade: [f32; 4],
+    /// The declaring edge for each fade, independent of the intersected hard clip.
+    pub fade_origin: [f32; 4],
 }
 
 pub const NO_CLIP: [f32; 4] = [-1e6, -1e6, 1e6, 1e6];
@@ -334,7 +336,7 @@ impl Renderer {
     ) -> wgpu::RenderPipeline {
         let attrs = wgpu::vertex_attr_array![
             0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4,
-            4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4
+            4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4
         ];
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("uber"),

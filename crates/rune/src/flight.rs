@@ -70,6 +70,7 @@ pub(crate) fn transformed(mut q: Instance, from: Rect, to: Rect, scale: f32, alp
     q.fill = q.fill.map(|v| v * alpha);
     q.clip = clip.map(|v| v * scale);
     q.fade = fade.map(|v| v * scale);
+    q.fade_origin = q.clip;
     q
 }
 

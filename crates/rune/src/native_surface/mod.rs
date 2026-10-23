@@ -207,6 +207,7 @@ pub struct SurfaceDraw {
     pub radii: [f32; 4],
     pub clip: [f32; 4],
     pub fade: [f32; 4],
+    pub fade_origin: [f32; 4],
     pub opacity: f32,
 }
 

@@ -148,9 +148,12 @@ pub(crate) fn fragment(i: &Primitive, atlas: &Atlas, p: [f32; 2]) -> [f32; 4] {
         }
         _ => panic!("unsupported primitive kind"),
     }
-    let clip = ramp(p[0] - i.clip[0], i.fade[0])
-        * ramp(p[1] - i.clip[1], i.fade[1])
-        * ramp(i.clip[2] - p[0], i.fade[2])
-        * ramp(i.clip[3] - p[1], i.fade[3]);
+    let origin = i.fade_origin.unwrap_or(i.clip);
+    let hard = [p[0] - i.clip[0], p[1] - i.clip[1], i.clip[2] - p[0], i.clip[3] - p[1]];
+    let soft = [p[0] - origin[0], p[1] - origin[1], origin[2] - p[0], origin[3] - p[1]];
+    let clip: f32 = (0..4).map(|edge| {
+        let hard = ramp(hard[edge], 0.0);
+        if i.fade[edge] > 0.0 { hard.min(ramp(soft[edge], i.fade[edge])) } else { hard }
+    }).product();
     col.map(|c| c * clip)
 }

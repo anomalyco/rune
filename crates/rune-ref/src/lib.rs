@@ -26,6 +26,8 @@ pub struct Primitive {
     pub uv: [f32; 4],
     pub clip: [f32; 4],
     pub fade: [f32; 4],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fade_origin: Option<[f32; 4]>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -75,7 +77,7 @@ impl Scene {
         }
         for p in &self.primitives {
             if [
-                p.rect, p.radii, p.fill, p.border, p.params, p.uv, p.clip, p.fade,
+                p.rect, p.radii, p.fill, p.border, p.params, p.uv, p.clip, p.fade, p.fade_origin.unwrap_or(p.clip),
             ]
             .iter()
             .flatten()

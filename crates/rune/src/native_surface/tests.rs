@@ -10,6 +10,7 @@ fn draw(surface: &NativeSurface, rect: [f32; 4]) -> SurfaceDraw {
         radii: [0.0; 4],
         clip: NO_CLIP,
         fade: [0.0; 4],
+        fade_origin: NO_CLIP,
         opacity: 1.0,
     }
 }

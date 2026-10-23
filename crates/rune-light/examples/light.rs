@@ -69,6 +69,7 @@ fn inst(rect: [f32; 4], r: f32, fill: Color, border: Option<(Color, f32)>) -> In
         uv: [0.0; 4],
         clip: NO_CLIP,
         fade: [0.0; 4],
+        fade_origin: NO_CLIP,
     }
 }
 
@@ -104,6 +105,7 @@ impl<'a> Ui<'a> {
                 uv: [q.uv[0], q.uv[1], 0.0, 0.0],
                 clip: NO_CLIP,
                 fade: [0.0; 4],
+                fade_origin: NO_CLIP,
             });
         }
         self.ts.measure(s, style, S).0

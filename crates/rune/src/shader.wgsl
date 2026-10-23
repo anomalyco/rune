@@ -27,6 +27,7 @@ struct In {
     @location(5) uv: vec4<f32>,
     @location(6) clip: vec4<f32>,
     @location(7) fade: vec4<f32>,
+    @location(8) fade_origin: vec4<f32>,
 };
 
 struct Out {
@@ -40,6 +41,7 @@ struct Out {
     @location(6) @interpolate(flat) uv: vec4<f32>,
     @location(7) @interpolate(flat) clip: vec4<f32>,
     @location(8) @interpolate(flat) fade: vec4<f32>,
+    @location(9) @interpolate(flat) fade_origin: vec4<f32>,
 };
 
 @vertex
@@ -92,6 +94,7 @@ fn base_vs(i: In) -> Out {
     o.uv = i.uv;
     o.clip = i.clip;
     o.fade = i.fade;
+    o.fade_origin = i.fade_origin;
     return o;
 }
 
@@ -116,8 +119,14 @@ fn ramp(d: f32, fade: f32) -> f32 {
     return x * x * (3.0 - 2.0 * x);
 }
 
-fn clip_alpha(p: vec2<f32>, c: vec4<f32>, f: vec4<f32>) -> f32 {
-    return ramp(p.x - c.x, f.x) * ramp(p.y - c.y, f.y) * ramp(c.z - p.x, f.z) * ramp(c.w - p.y, f.w);
+fn clip_alpha(p: vec2<f32>, c: vec4<f32>, f: vec4<f32>, origin: vec4<f32>) -> f32 {
+    let hard = vec4<f32>(p - c.xy, c.zw - p);
+    let soft = vec4<f32>(p - origin.xy, origin.zw - p);
+    var alpha = 1.0;
+    for (var edge = 0u; edge < 4u; edge++) {
+        alpha *= select(ramp(hard[edge], 0.0), min(ramp(hard[edge], 0.0), ramp(soft[edge], f[edge])), f[edge] > 0.0);
+    }
+    return alpha;
 }
 
 // Evan Wallace's analytic rounded-box shadow (as in GPUI): exact along x, 4 samples along y.
@@ -341,5 +350,5 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
     }
     var clip_p = i.p;
     if (kind > 1.5 && kind < 2.5 && i.params.x != 0.0) { clip_p = i.pos.xy + projection.xy; }
-    return col * clip_alpha(clip_p, i.clip, i.fade);
+    return col * clip_alpha(clip_p, i.clip, i.fade, i.fade_origin);
 }
