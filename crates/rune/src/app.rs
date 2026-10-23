@@ -49,6 +49,7 @@ pub struct App<S: 'static> {
     pub(crate) shared: Arc<Shared<S>>,
     pub(crate) overlays: Vec<Box<dyn crate::overlay::PendingOverlay>>,
     pub(crate) on_window: Option<OnWindow>,
+    pub(crate) on_ready: Option<OnWindow>,
     pub(crate) macos_window: crate::MacWindowOptions,
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<S>>>,
     pub(crate) window_options: crate::WindowOptions,
@@ -74,6 +75,7 @@ impl<S: 'static> App<S> {
             shared: Arc::default(),
             overlays: Vec::new(),
             on_window: None,
+            on_ready: None,
             macos_window: crate::MacWindowOptions::default(),
             compositor: None,
             window_options: crate::WindowOptions::default(),
@@ -90,6 +92,13 @@ impl<S: 'static> App<S> {
     /// `run_windows` takes them per `WindowSpec` instead.
     pub fn window_options(mut self, options: crate::WindowOptions) -> Self {
         self.window_options = options;
+        self
+    }
+
+    /// Native and portable options together, including `WindowOptions::launcher_panel()`.
+    pub fn configured_options(mut self, options: crate::ConfiguredWindowOptions) -> Self {
+        self.window_options = options.options;
+        self.macos_window = options.native;
         self
     }
 
@@ -173,6 +182,14 @@ impl<S: 'static> App<S> {
     /// `WindowHandle::with_raw_handle`.
     pub fn on_window(mut self, f: impl FnMut(&crate::WindowHandle) + 'static) -> Self {
         self.on_window = Some(Box::new(f));
+        self
+    }
+
+    /// First-frame readiness, once per native creation. Launcher panels call this while
+    /// hidden, after GPU completion of its cached surface frame.
+    /// Not called by headless tooling. May queue a show through the supplied handle.
+    pub fn on_ready(mut self, f: impl FnMut(&crate::WindowHandle) + 'static) -> Self {
+        self.on_ready = Some(Box::new(f));
         self
     }
 

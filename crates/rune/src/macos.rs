@@ -286,7 +286,7 @@ impl Panel {
     }
 
     pub fn adopt_window(window: &winit::window::Window, size: (f32, f32), native: &crate::MacWindowOptions) -> Option<Panel> {
-        let options = OverlayOptions { input: OverlayInput::All, keys: KeyPolicy::OnDemand, ..Default::default() };
+        let options = OverlayOptions { input: OverlayInput::All, keys: KeyPolicy::OnDemand, prewarm: native.launcher, ..Default::default() };
         let panel = Self::adopt_kind(window, crate::windows::PlaceRequest::at(size), true, &options, None, true)?;
         configure_native(&panel.panel, native);
         Some(panel)

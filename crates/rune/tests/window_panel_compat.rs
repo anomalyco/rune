@@ -23,4 +23,8 @@ fn window_panel_builders_preserve_exhaustive_literals_and_default_inference() {
     let overlay = OverlaySpec { name: "compat", size: (50.0, 50.0), edge: ScreenEdge::Top,
         margin: 0.0, align: Align::Center, inset: 0.0, interactive: true, view };
     let _ = overlay.options(Default::default()).on_focus(|_, _, _| {});
+    let _ = WindowSpec::new("launcher", AppSpec::new("launcher", (300.0, 100.0), || (), view))
+        .configured_options(WindowOptions::launcher_panel()).on_ready(|w| { assert!(w.is_ready()); });
+    let _ = App::new(AppSpec::new("launcher", (300.0, 100.0), || (), view))
+        .configured_options(WindowOptions::launcher_panel()).on_ready(|_| {}).window_options(Default::default());
 }

@@ -1,7 +1,7 @@
 //! One event loop, independent window lifetime hosts. App/AppHandle and multi-window
 //! factories share the same input, rendering, activation and close/reopen paths.
 
-use std::sync::{Arc, Mutex, Weak, atomic::{AtomicU32, Ordering}};
+use std::sync::{Arc, Mutex, Weak, atomic::{AtomicBool, AtomicU32, Ordering}};
 use std::{cell::RefCell, rc::Rc};
 use std::time::{Duration, Instant};
 
@@ -24,6 +24,7 @@ use crate::windows::{Display, WindowOptions, WindowSpec};
 
 /// The open window. Fields drop in order: the surface before its window.
 struct Win {
+    first_frame: FirstFrame,
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     activator: Option<crate::activation::Activator>,
     surface: wgpu::Surface<'static>,
@@ -36,6 +37,50 @@ struct Win {
     occluded: bool,
     cursor: Cursor,
     alpha: Option<crate::surface_alpha::AlphaSurface>,
+}
+
+/// A reveal requested before the hidden frame completes is held behind the fence.
+/// Hiding cancels that intent, including when the first GPU frame completes later.
+#[derive(Default)]
+struct FirstFrame { ready: bool, reveal: bool, notified: bool, retry: Option<Instant>, until: Option<Instant> }
+impl FirstFrame {
+    fn request_reveal(&mut self) -> bool {
+        if self.ready { return true; }
+        self.reveal = true;
+        if self.retry.is_none() { self.prepare(); }
+        false
+    }
+    fn hide(&mut self) { self.reveal = false; }
+    fn prepare(&mut self) {
+        let now = Instant::now();
+        self.retry = Some(now);
+        self.until = Some(now + Duration::from_secs(2));
+    }
+    fn complete(&mut self) -> bool {
+        self.ready = true;
+        self.retry = None;
+        self.until = None;
+        std::mem::take(&mut self.reveal)
+    }
+}
+
+#[test]
+fn launcher_first_frame_holds_reveal_and_hide_cancels_late_completion() {
+    let mut frame = FirstFrame::default();
+    frame.prepare();
+    assert!(!frame.request_reveal());
+    assert!(!frame.ready);
+    assert!(frame.complete());
+    assert!(frame.ready && frame.retry.is_none());
+    assert!(!frame.complete(), "a second callback must not reopen a hidden panel");
+    let mut canceled = FirstFrame::default();
+    canceled.prepare();
+    assert!(!canceled.request_reveal());
+    canceled.hide();
+    assert!(!canceled.complete(), "hide before readiness cancels the pending show");
+    assert!(canceled.ready);
+    assert!(canceled.request_reveal(), "the prepared frame can be revealed without another preparation");
+    assert!(canceled.retry.is_none());
 }
 
 impl Win {
@@ -91,6 +136,7 @@ pub(crate) trait AnyHost {
 struct NativeWindow {
     window: Mutex<Weak<Window>>,
     number: AtomicU32,
+    ready: AtomicBool,
 }
 
 /// A window's native reference, refreshed across App close/reopen without owning the window.
@@ -102,6 +148,9 @@ pub struct WindowHandle {
     proxy: EventLoopProxy<WakeEvent>,
 }
 impl WindowHandle {
+    /// The first frame has completed for the current native lifetime. For a launcher
+    /// this confirms GPU completion of an alpha-zero frame before reveal. False after destruction.
+    pub fn is_ready(&self) -> bool { self.window().is_ok() && self.native.ready.load(Ordering::Acquire) }
     pub fn key(&self) -> &str { &self.key }
     fn window(&self) -> Result<Arc<Window>, String> {
         self.native.window.lock().unwrap().upgrade().ok_or_else(|| "window is closed".into())
@@ -125,7 +174,8 @@ impl WindowHandle {
     pub fn place(&self, display: crate::DisplayTarget, placement: crate::OverlayPlacement) {
         let _ = self.proxy.send_event(WakeEvent::Place(self.slot, crate::windows::PlaceRequest::new(display, placement)));
     }
-    /// Show/recreate without requesting focus, or hide while keeping the host and state.
+    /// Show/recreate, or hide while keeping state. A launcher takes keys and reveals cached
+    /// pixels; an ordinary window shows without requesting focus.
     pub fn set_visible(&self, visible: bool) {
         let request = if visible { WindowRequest::Show } else { WindowRequest::Hide };
         let _ = self.proxy.send_event(WakeEvent::Window(self.slot, request));
@@ -251,6 +301,7 @@ struct Host<S: 'static> {
     native_handle: WindowHandle,
     on_created: Option<Box<dyn FnOnce(WindowHandle)>>,
     on_window: Option<crate::app::OnWindow>,
+    on_ready: Option<crate::app::OnWindow>,
     finished: bool,
     spec: AppSpec<S>,
     args: Args,
@@ -311,6 +362,7 @@ impl<S: 'static> Host<S> {
     fn new(window_spec: WindowSpec<S>, args: Args, proxy: EventLoopProxy<WakeEvent>, slot: usize, gpu_pool: Rc<RefCell<Weak<Gpu>>>) -> Self {
         let WindowSpec { mut app, options, key, on_created } = window_spec;
         let on_window = app.on_window.take();
+        let on_ready = app.on_ready.take();
         let macos_window = std::mem::take(&mut app.macos_window);
         let native_handle = WindowHandle { native: Arc::default(), slot, key: key.into(), proxy: proxy.clone() };
         let live_proxy = proxy.clone();
@@ -349,6 +401,7 @@ impl<S: 'static> Host<S> {
             native_handle,
             on_created,
             on_window,
+            on_ready,
             finished: false,
             spec,
             args,
@@ -620,6 +673,36 @@ pub(crate) fn map_key(key: &WKey, m: ModifiersState) -> Option<KeyEvent> {
 }
 
 impl<S: 'static> Host<S> {
+    fn launcher(&self) -> bool { cfg!(target_os = "macos") && self.macos_window.launcher }
+
+    fn reveal_launcher(&mut self, event_loop: &ActiveEventLoop) {
+        self.apply_placement(event_loop);
+        if self.win.is_none() { self.create(event_loop, None, false); }
+        let Some(w) = &mut self.win else { return };
+        if !w.first_frame.request_reveal() {
+            w.window.request_redraw();
+            return;
+        }
+        w.show(true);
+        w.visible = true;
+        w.occluded = false;
+        self.rt.set_live_visible(true);
+        // No settle, frame, surface configure or acquisition on a cached reveal.
+    }
+
+    fn first_frame_ready(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(w) = &mut self.win else { return };
+        if w.first_frame.notified { return; }
+        if !w.first_frame.ready { return; }
+        let reveal = w.first_frame.complete();
+        self.native_handle.native.ready.store(true, Ordering::Release);
+        *self.shared.window_error.lock().unwrap() = None;
+        if !std::mem::replace(&mut w.first_frame.notified, true)
+            && let Some(ready) = self.on_ready.as_mut() { ready(&self.native_handle); }
+        if reveal { self.reveal_launcher(event_loop); }
+        self.publish();
+    }
+
     fn place(&mut self, event_loop: &ActiveEventLoop, request: crate::windows::PlaceRequest) {
         self.options.position = None;
         self.placement = Some(request);
@@ -673,6 +756,7 @@ impl<S: 'static> Host<S> {
     }
 
     fn show(&mut self, event_loop: &ActiveEventLoop) {
+        if self.launcher() { self.reveal_launcher(event_loop); return; }
         self.apply_placement(event_loop);
         let Some(w) = self.win.as_mut() else { self.create(event_loop, None, false); return };
         if !w.visible {
@@ -699,8 +783,9 @@ impl<S: 'static> Host<S> {
 
     /// Applies everything other threads asked for since the last wake-up.
     fn drain(&mut self, event_loop: &ActiveEventLoop) {
-        self.clipboard.receive(&mut self.rt);
+        let clipboard = self.clipboard.receive(&mut self.rt);
         let requests = self.shared.take();
+        let changed = clipboard || !requests.updates.is_empty();
         for f in requests.updates {
             self.rt.update(f);
         }
@@ -720,10 +805,10 @@ impl<S: 'static> Host<S> {
         #[cfg(all(feature = "dev", debug_assertions))]
         if self.rt.dev.is_some() && self.win.as_ref().is_none_or(|w| !w.visible || w.occluded || w.window.is_minimized().unwrap_or(false)) {
             // A hidden/windowless app still services its dev channel without a GPU or redraw.
-            self.rt.frame(0.0);
-            self.shell(event_loop);
+            if self.launcher() && let Some(w) = &self.win { w.window.request_redraw(); }
+            else { self.rt.frame(0.0); self.shell(event_loop); }
         }
-        if let Some(w) = self.win.as_ref().filter(|w| w.visible) {
+        if let Some(w) = self.win.as_ref().filter(|w| if self.launcher() { changed } else { w.visible }) {
             w.window.request_redraw();
         }
     }
@@ -738,6 +823,7 @@ impl<S: 'static> Host<S> {
     }
 
     fn close(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(w) = &mut self.win { w.first_frame.hide(); }
         self.secure_input.set(false);
         if self.win.is_none() || (self.keep_running && self.win.as_ref().is_some_and(|w| !w.visible)) {
             return;
@@ -759,6 +845,7 @@ impl<S: 'static> Host<S> {
     }
 
     fn hide(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(w) = &mut self.win { w.first_frame.hide(); }
         self.secure_input.set(false);
         self.ime_allowed = false;
         if let Some(w) = &self.win { w.window.set_ime_allowed(false); }
@@ -766,8 +853,9 @@ impl<S: 'static> Host<S> {
         self.rt.pointer_leave();
         self.mods = ModifiersState::empty();
         if let Some(w) = &self.win { w.hide(); }
-        if self.release_gpu {
+        if self.release_gpu && !self.launcher() {
             self.win = None;
+            self.native_handle.native.ready.store(false, Ordering::Release);
             self.native_handle.native.number.store(0, Ordering::Release);
             self.gpu = None;
             self.rt.text.atlas.invalidate();
@@ -775,6 +863,7 @@ impl<S: 'static> Host<S> {
         } else if is_wayland(event_loop) {
             // Wayland has no hidden toplevel: unmap by destroying, recreate on open.
             self.win = None;
+            self.native_handle.native.ready.store(false, Ordering::Release);
             self.native_handle.native.number.store(0, Ordering::Release);
         } else if let Some(w) = self.win.as_mut() {
             w.visible = false;
@@ -782,6 +871,7 @@ impl<S: 'static> Host<S> {
     }
 
     fn open(&mut self, event_loop: &ActiveEventLoop, token: Option<String>) {
+        if self.launcher() { self.reveal_launcher(event_loop); return; }
         self.apply_placement(event_loop);
         // The launcher's startup token belongs to the first window only.
         #[allow(unused_mut)]
@@ -844,7 +934,8 @@ impl<S: 'static> Host<S> {
     #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(unused_variables))]
     fn try_create(&mut self, event_loop: &ActiveEventLoop, token: Option<String>, focus: bool) -> Result<(), String> {
         let size = self.args.size.unwrap_or(self.spec.size);
-        let visible = self.started || self.options.visible;
+        let launcher = self.launcher();
+        let visible = !launcher && (self.started || self.options.visible);
         #[allow(unused_mut)]
         let mut attrs = self.options.attributes(self.spec.title, size, self.spec.min_size, visible).with_active(focus);
         #[cfg(target_os = "macos")]
@@ -952,17 +1043,18 @@ impl<S: 'static> Host<S> {
         };
         self.rt.set_system_dark(dark);
         self.rt.set_viewport((phys.width as f32 / scale, phys.height as f32 / scale), scale);
-        if self.shown {
+        if self.shown || launcher {
             // Reopening paints the settled state in the first frame (guarantee 8).
             self.rt.settle_all();
         }
         self.shown = true;
         self.idle = true;
         self.rt.set_live_visible(visible);
-        if visible { window.request_redraw(); }
+        if visible || launcher { window.request_redraw(); }
         *self.native_handle.native.window.lock().unwrap() = Arc::downgrade(&window);
         self.native_handle.native.number.store(native_window_number(&window).unwrap_or(0), Ordering::Release);
         self.win = Some(Win {
+            first_frame: FirstFrame::default(),
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             activator: None,
             surface,
@@ -975,6 +1067,7 @@ impl<S: 'static> Host<S> {
             cursor: Cursor::Default,
             alpha,
         });
+        if launcher { self.win.as_mut().unwrap().first_frame.prepare(); }
         self.apply_placement(event_loop);
         #[cfg(target_os = "macos")]
         if visible && let Some(w) = &self.win && w.panel.is_some() { w.show(focus); }
@@ -990,9 +1083,17 @@ impl<S: 'static> Host<S> {
     }
 
     fn redraw(&mut self) {
+        let launcher = self.launcher();
         let (Some(l), Some((gpu, renderer, _))) = (self.win.as_mut(), self.gpu.as_mut()) else { return };
-        if !l.visible || l.occluded || l.window.is_minimized().unwrap_or(false) {
+        let hidden = launcher && !l.visible;
+        if (!launcher && (!l.visible || l.occluded)) || l.window.is_minimized().unwrap_or(false) {
             return;
+        }
+        #[cfg(target_os = "macos")]
+        let _prewarm = if hidden { l.panel.as_ref().map(|p| p.prewarm()) } else { None };
+        if hidden && !l.first_frame.ready {
+            // Bounded retries while preparing the first frame (including acquisition errors).
+            l.first_frame.retry = l.first_frame.until.map(|_| Instant::now() + Duration::from_millis(16));
         }
         if self.native_handle.native.number.load(Ordering::Relaxed) == 0 {
             self.native_handle.native.number.store(native_window_number(&l.window).unwrap_or(0), Ordering::Release);
@@ -1002,17 +1103,18 @@ impl<S: 'static> Host<S> {
             wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 l.surface.configure(&gpu.device, &l.config);
-                l.window.request_redraw();
+                if !hidden { l.window.request_redraw(); }
                 return;
             }
-            _ => { l.window.request_redraw(); return; }
+            _ => { if !hidden { l.window.request_redraw(); } return; }
         };
         let now = Instant::now();
         // After an idle stretch, start the new motion from its first pose rather than
         // skipping ahead by the time spent idle.
-        let dt = if self.idle { 1.0 / 120.0 } else { (now - self.last).as_secs_f64().min(1.0 / 30.0) };
+        let dt = if hidden { 0.0 } else if self.idle { 1.0 / 120.0 } else { (now - self.last).as_secs_f64().min(1.0 / 30.0) };
         self.last = now;
         let rt = &mut self.rt;
+        if hidden { rt.settle_all(); }
         let mut animating = rt.frame(dt);
         self.secure_input.set(rt.has_secure_focus() && l.window.has_focus());
         let update_ms = now.elapsed().as_secs_f64() * 1000.0;
@@ -1062,8 +1164,12 @@ impl<S: 'static> Host<S> {
         renderer.submit(&gpu.queue, enc);
         l.window.pre_present_notify();
         gpu.queue.present(frame);
+        if !l.first_frame.ready
+            && gpu.device.poll(wgpu::PollType::wait_indefinitely()).is_ok() {
+            l.first_frame.ready = true;
+        }
         self.idle = !(animating || rt.has_pending_input() || rt.live_pending());
-        if !self.idle {
+        if !self.idle && !hidden {
             l.window.request_redraw();
         }
     }
@@ -1076,10 +1182,17 @@ impl<S: 'static> AnyHost for Host<S> {
     fn finished(&self) -> bool { self.finished }
 
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
+        if let Some(w) = &mut self.win && w.first_frame.retry.is_some_and(|at| at <= Instant::now()) {
+            if w.first_frame.until.is_some_and(|at| at <= Instant::now()) {
+                w.first_frame.retry = None;
+                w.first_frame.until = None;
+                *self.shared.window_error.lock().unwrap() = Some("launcher first frame was not ready within two seconds".into());
+            } else { w.window.request_redraw(); }
+        }
         if matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll)
             && self.rt.wall_start.and_then(|start| start.checked_add(Duration::try_from_secs_f64(self.rt.wake_deadline()?).ok()?)).is_some_and(|deadline| deadline <= Instant::now())
         {
-            if let Some(w) = self.win.as_ref().filter(|w| w.visible && !w.occluded && !w.window.is_minimized().unwrap_or(false)) {
+            if let Some(w) = self.win.as_ref().filter(|w| (self.launcher() || (w.visible && !w.occluded)) && !w.window.is_minimized().unwrap_or(false)) {
                 w.window.request_redraw();
             } else {
                 self.rt.frame(0.0);
@@ -1090,9 +1203,16 @@ impl<S: 'static> AnyHost for Host<S> {
     }
 
     fn wake_deadline(&self) -> Option<Instant> {
-        self.rt.wall_start.and_then(|start| {
+        let runtime = self.rt.wall_start.and_then(|start| {
             start.checked_add(Duration::try_from_secs_f64(self.rt.wake_deadline()?).ok()?)
-        })
+        });
+        runtime.into_iter().chain(self.win.as_ref().and_then(|w| w.first_frame.retry)).min()
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) -> bool {
+        // Process queued hide/close requests before completing a pending first reveal.
+        self.first_frame_ready(event_loop);
+        false
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -1116,7 +1236,10 @@ impl<S: 'static> Host<S> {
         if self.started {
             return;
         }
-        if self.open_at_start {
+        if self.launcher() {
+            self.create(event_loop, None, false);
+            if self.open_at_start && self.options.visible { self.reveal_launcher(event_loop); }
+        } else if self.open_at_start {
             self.open(event_loop, None);
         }
         self.started = true;
@@ -1147,6 +1270,7 @@ impl<S: 'static> Host<S> {
         if matches!(&event, WindowEvent::ScaleFactorChanged { .. }) { self.apply_placement(event_loop); }
         match event {
             WindowEvent::Focused(focused) => {
+                if self.launcher() && self.win.as_ref().is_some_and(|w| !w.first_frame.notified) { return; }
                 #[cfg(target_os = "macos")]
                 if self.win.as_ref().and_then(|w| w.panel.as_ref()).is_some_and(|p| p.is_key() != focused) {
                     // winit queues an initial false from its hidden source window before
@@ -1192,6 +1316,9 @@ impl<S: 'static> Host<S> {
                 l.window.request_redraw();
             }
             WindowEvent::Occluded(occluded) => {
+                // Alpha-zero launcher panels remain renderable on explicit invalidation.
+                // Their native occlusion transitions must not settle or redraw a reveal.
+                if self.macos_window.launcher && cfg!(target_os = "macos") { return; }
                 l.occluded = occluded;
                 rt.set_live_visible(l.visible && !occluded && !l.window.is_minimized().unwrap_or(false));
                 if occluded { self.secure_input.set(false); self.idle = true; return; }

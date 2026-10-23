@@ -38,20 +38,23 @@ fn inspect(s: &State) -> serde_json::Value {
             let window: *mut AnyObject = msg_send![view, window];
             let key: bool = msg_send![window, isKeyWindow];
             let visible: bool = msg_send![window, isVisible];
+            let alpha: f64 = msg_send![window, alphaValue];
+            let ignores_mouse: bool = msg_send![window, ignoresMouseEvents];
             let style: usize = msg_send![window, styleMask];
             let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
             let frontmost: *mut AnyObject = msg_send![workspace, frontmostApplication];
             let frontmost_pid: i32 = msg_send![frontmost, processIdentifier];
             let frame: objc2_foundation::NSRect = msg_send![window, frame];
             let app = objc2_app_kit::NSApplication::sharedApplication(objc2_foundation::MainThreadMarker::new().unwrap());
-            serde_json::json!({"key":key,"visible":visible,"style":style,"active":app.isActive(),
+            serde_json::json!({"key":key,"visible":visible,"alpha":alpha,"ignores_mouse":ignores_mouse,
+                "ready":s.native.as_ref().unwrap().is_ready(),"style":style,"active":app.isActive(),
                 "frontmost_pid":frontmost_pid,"number":s.native.as_ref().unwrap().window_number(),
                 "frame":[frame.origin.x,frame.origin.y,frame.size.width,frame.size.height]})
         }
     }).ok());
     serde_json::json!({"name":s.name,"polls":s.polls,"focus":s.focus,"native":native})
 }
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(not(target_os = "macos"))]
 fn inspect(s: &State) -> serde_json::Value { serde_json::json!({"name":s.name,"polls":s.polls,"focus":s.focus}) }
 
 fn main() {
@@ -59,20 +62,28 @@ fn main() {
         let main = app("main");
         let quick = app("quick").windowless();
         let (main_handle, quick_handle) = (main.handle(), quick.handle());
+        let launcher = std::env::var_os("WINDOW_PANEL_LAUNCHER").is_some();
+        let (native_tx, native_rx) = std::sync::mpsc::channel::<WindowHandle>();
+        #[cfg(not(unix))]
+        let _ = native_rx;
         #[cfg(unix)]
         if let Ok(path) = std::env::var("WINDOW_PANEL_SOCKET") {
             let listener = std::os::unix::net::UnixListener::bind(path).unwrap();
             let (main, quick) = (main_handle.clone(), quick_handle.clone());
             std::thread::spawn(move || {
+                let mut native = None;
                 for stream in listener.incoming() {
                     let mut stream = stream.unwrap();
                     let mut line = String::new();
                     BufReader::new(&mut stream).read_line(&mut line).unwrap();
+                    if native.is_none() { native = native_rx.try_recv().ok(); }
                     match line.trim() {
                         "open" => { quick.place(DisplayTarget::UnderPointer, OverlayPlacement::Edge {
                             edge: ScreenEdge::Top, margin: 160.0, align: Align::Center, inset: 0.0 }); quick.open(); }
                         "focus" => quick.focus(),
                         "hide" => quick.hide(),
+                        "visible" => native.as_ref().expect("created launcher").set_visible(true),
+                        "invisible" => native.as_ref().expect("created launcher").set_visible(false),
                         "status" => {
                             let (tx, rx) = std::sync::mpsc::channel();
                             let other = tx.clone();
@@ -91,10 +102,17 @@ fn main() {
         }
         vec![
             WindowSpec::from_app("main", main).on_created(move |h| main_handle.update(move |s, _| s.native = Some(h))),
-            WindowSpec::from_app("quick", quick).configured_options(WindowOptions {
+            WindowSpec::from_app("quick", quick).configured_options(if launcher { WindowOptions::launcher_panel() } else { WindowOptions {
                 borderless: true, min_size: Some((0.0, 0.0)), ..Default::default()
-            }.macos(MacWindowOptions::default().nonactivating_panel(true)))
-                .on_created(move |h| quick_handle.update(move |s, _| s.native = Some(h))),
+            }.macos(MacWindowOptions::default().nonactivating_panel(true)) })
+                .on_created(move |h| {
+                    let _ = native_tx.send(h.clone());
+                    quick_handle.update(move |s, _| s.native = Some(h));
+                })
+                .on_ready(|h| {
+                    let s = State { name: "ready", native: Some(h.clone()), ..Default::default() };
+                    eprintln!("panel ready {}", inspect(&s));
+                }),
         ]
     });
 }

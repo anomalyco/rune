@@ -16,6 +16,7 @@ def command(text):
 
 with open('/tmp/pro-gui.lock', 'a') as lock, (root/'app.log').open('w') as log, (root/'actions.jsonl').open('w') as actions:
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    subprocess.run([driver, 'start_session', json.dumps({'session':session})], capture_output=True, check=True, timeout=15)
     with socket.socket(socket.AF_UNIX) as server:
         server.bind(str(root/'proof.sock'))
         server.listen()

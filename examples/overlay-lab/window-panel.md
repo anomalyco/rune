@@ -1,5 +1,50 @@
 # Ordinary quick panels
 
+## Cached launcher panels
+
+Deadbolt and Invoke can use the same retained launcher:
+
+```rust,ignore
+WindowSpec::from_app("quick", App::new(spec).keep_running())
+    .configured_options(WindowOptions::launcher_panel())
+    .on_focus(|_, focused, tx| { if !focused { tx.close_window(); } })
+    .on_ready(|window| {
+        // Hidden, with a completed cached frame. Register your shortcut here.
+        assert!(window.is_ready());
+    })
+```
+
+For a single-window app, use `App::configured_options(WindowOptions::launcher_panel())`.
+Keep using accessory launch policy as described below. The preset is initially hidden,
+borderless, transparent and non-resizable, with no inherited minimum size. AppSpec sets its
+size. On macOS it prepares even with `App::windowless()`. `on_created` still means native
+creation; `on_ready` means the first surface frame completed on the GPU, not merely submission.
+Both callbacks run on the event thread. Readiness is per native lifetime, not a freshness
+guarantee for later state updates. Headless rendering does not invoke native callbacks.
+
+`WindowHandle::set_visible(true)`/`show()` and `AppHandle::show()`/`open()` reveal cached
+pixels and take keys without app activation. A show before readiness waits behind the
+first-frame fence; hide cancels that pending show. Hide leaves the panel ordered in at
+alpha zero, ignores mouse input, and returns keys through AppKit. It retains the surface
+even when `release_gpu_when_closed()` is set. Use `keep_running()` if closing should hide
+rather than end this host. Ordinary non-launcher windows keep their existing show semantics.
+
+The reveal itself does no settling, layout, surface configuration or drawable acquisition.
+Queued state updates, focus handlers and later input can draw fresh frames normally.
+Hidden updates render at alpha zero; hidden animations do not drive a continuous loop.
+First preparation retries unavailable drawables for at most two seconds, then reports through
+`AppHandle::window_error()` and remains hidden; a later show retries preparation. A late
+successful frame still completes readiness. Other platforms use an ordinary hidden
+window; their `on_ready` fires after the first shown frame completes on the GPU.
+
+The implementation ports the spike's retained reveal and uses a GPU fence for hidden preparation
+(a never-shown alpha-zero layer need not emit a positive `presentedTime`). Existing spike
+measurements (cached alpha 7.9/12.7 ms; native 6.2/15.8 ms) describe that experiment, not a new
+benchmark of this API. `WINDOW_PANEL_LAUNCHER=1` selects the launcher in the native fixture;
+its `visible`/`invisible` commands exercise WindowHandle directly.
+
+## Ordinary panels and focus
+
 `AppSpec`, `WindowSpec`, `WindowOptions` and `OverlaySpec` literals retain their fields.
 Configure focus callbacks on `App::on_focus`, `WindowSpec::on_focus`, or
 `ConfiguredOverlay::on_focus`. Each callback takes `fn(&mut S, bool, &mut Tx)`.

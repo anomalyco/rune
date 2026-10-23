@@ -92,6 +92,15 @@ impl Default for WindowOptions {
 }
 
 impl WindowOptions {
+    /// A hidden, retained launcher. On macOS, prepares its first frame at alpha zero;
+    /// show/open takes keys without activating the app. Use `on_ready` to register a shortcut.
+    /// Other platforms use an ordinary initially hidden window.
+    pub fn launcher_panel() -> ConfiguredWindowOptions {
+        let mut native = MacWindowOptions::default().nonactivating_panel(true);
+        native.launcher = true;
+        Self { visible: false, borderless: true, transparent: true, resizable: false,
+            min_size: Some((0.0, 0.0)), ..Default::default() }.macos(native)
+    }
     /// Optional AppKit settings without adding fields to existing WindowOptions literals.
     /// Ignored on other platforms.
     pub fn macos(self, native: MacWindowOptions) -> ConfiguredWindowOptions {
@@ -136,11 +145,16 @@ pub struct MacWindowOptions {
     pub(crate) collection_behavior: Option<usize>,
     pub(crate) exclude_from_capture: Option<bool>,
     pub(crate) nonactivating_panel: bool,
+    pub(crate) launcher: bool,
 }
 
 impl MacWindowOptions {
     /// Use a key-taking NSPanel. Open/focus never activates the app or its other windows.
-    pub fn nonactivating_panel(mut self, enabled: bool) -> Self { self.nonactivating_panel = enabled; self }
+    pub fn nonactivating_panel(mut self, enabled: bool) -> Self {
+        self.nonactivating_panel = enabled;
+        if !enabled { self.launcher = false; }
+        self
+    }
     pub fn shadow(mut self, enabled: bool) -> Self { self.shadow = Some(enabled); self }
     /// AppKit NSWindow.Level value (normal 0, floating 3, status 25).
     pub fn level(mut self, level: isize) -> Self { self.level = Some(level); self }
@@ -154,8 +168,8 @@ impl MacWindowOptions {
 /// Ordinary options plus native builders, accepted by WindowSpec::configured_options.
 #[derive(Clone, Debug)]
 pub struct ConfiguredWindowOptions {
-    options: WindowOptions,
-    native: MacWindowOptions,
+    pub(crate) options: WindowOptions,
+    pub(crate) native: MacWindowOptions,
 }
 
 impl From<WindowOptions> for ConfiguredWindowOptions {
@@ -187,6 +201,10 @@ impl<S> WindowSpec<S> {
     /// Configure this window's frame, including headless traffic-light placement.
     pub fn chrome(mut self, chrome: crate::Chrome) -> Self { self.app = self.app.chrome(chrome); self }
     pub fn on_focus(mut self, f: fn(&mut S, bool, &mut crate::Tx)) -> Self { self.app = self.app.on_focus(f); self }
+    /// Called on the event thread after the first frame is ready, once per native creation.
+    pub fn on_ready(mut self, f: impl FnMut(&crate::WindowHandle) + 'static) -> Self {
+        self.app = self.app.on_ready(f); self
+    }
     pub fn options(mut self, options: WindowOptions) -> Self {
         self.options = options;
         self.app.macos_window = MacWindowOptions::default();
@@ -217,6 +235,20 @@ pub(crate) fn validate<S>(windows: &[WindowSpec<S>]) -> Result<(), String> {
 mod tests {
     use super::*;
     use winit::dpi::{LogicalSize, Size};
+
+    #[test]
+    fn launcher_preset_is_hidden_and_preserves_ordinary_defaults() {
+        let preset = WindowOptions::launcher_panel();
+        assert!(preset.native.nonactivating_panel && preset.native.launcher);
+        assert!(!preset.options.visible && preset.options.borderless && preset.options.transparent);
+        assert!(!MacWindowOptions::default().nonactivating_panel(true).launcher);
+        assert!(!preset.native.nonactivating_panel(false).launcher);
+        assert!(WindowOptions::default().visible);
+        let spec = AppSpec::new("launcher", (300.0, 100.0), || (), |_, _| crate::el());
+        let app = App::new(spec).configured_options(WindowOptions::launcher_panel());
+        assert!(app.macos_window.launcher);
+        assert!(!app.window_options.visible);
+    }
 
     #[test]
     fn default_window_options_remain_inferable_at_existing_call_sites() {
