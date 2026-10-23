@@ -1147,6 +1147,16 @@ impl<S: 'static> Runtime<S> {
                 self.scene.trace_namespace(node.id, node.trace_namespace);
             }
         }
+        for (id, track) in &self.loops {
+            if let Some([x, y]) = track.offset(self.t, self.reduced_motion)
+                && let Some(n) = self.node_index.get(id).map(|&i| &self.nodes[i])
+            {
+                let offset = rune_motion::Vec2::new(x * n.local.w, y * n.local.h);
+                if self.scene.get(*id, prop::OFFSET) != Some(offset) {
+                    self.scene.set(*id, prop::OFFSET, offset);
+                }
+            }
+        }
         let out = self.scene.frame();
         let mut animating = out.animating;
         if !out.exited.is_empty() {
@@ -2971,9 +2981,17 @@ impl<S: 'static> Runtime<S> {
                 _ => c,
             };
 
+            // A slide may sweep wholly outside its clip; judge visibility at its resting place.
+            let home = match n.looping.map(|l| l.kind) {
+                Some(rune_motion::LoopKind::Slide { .. }) => {
+                    let o = self.scene.get(n.id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
+                    [r[0] - o.x * s, r[1] - o.y * s, r[2] - o.x * s, r[3] - o.y * s]
+                }
+                _ => r,
+            };
             if self.surface_visible && base_opacity > 0.001 && !self.reduced_motion
-                && r[2] > clip[0].max(vp[0] - filter_margin) && r[0] < clip[2].min(vp[2] + filter_margin)
-                && r[3] > clip[1].max(vp[1] - filter_margin) && r[1] < clip[3].min(vp[3] + filter_margin)
+                && home[2] > clip[0].max(vp[0] - filter_margin) && home[0] < clip[2].min(vp[2] + filter_margin)
+                && home[3] > clip[1].max(vp[1] - filter_margin) && home[1] < clip[3].min(vp[3] + filter_margin)
                 && let Some(track) = self.loops.get(&n.id)
             {
                 if let Some(dt) = track.frame_interval().filter(|_| track.active(now)) {
@@ -4756,6 +4774,40 @@ mod tests {
                 assert!(!rt.elements().iter().any(|e| e.key.as_deref() == Some("loop")));
             }
         }
+    }
+
+    #[test]
+    fn slides_sweep_through_their_clip_and_sleep_when_hidden_or_reduced() {
+        fn view(s: &(bool, bool), cx: &mut Cx<(bool, bool)>) -> El {
+            cx.reduced_motion(s.1);
+            let mut track = crate::row().key("track").size(100.0, 8.0).clip_soft(0.0);
+            if s.0 {
+                track = track.child(el().key("bar").w_frac(0.25).h_full().fill(Color::WHITE)
+                    .looping(rune_motion::LoopSpec::slide(1.0, [-1.0, 0.0], [4.0, 0.0])));
+            }
+            col().size(100.0, 100.0).child(track)
+        }
+        let bar = |rt: &Runtime<(bool, bool)>| {
+            rt.elements().into_iter().find(|e| e.key.as_deref() == Some("bar")).map(|e| e.rect[0])
+        };
+        let mut rt = Runtime::new((true, false), view, (100.0, 100.0), Env::new(true, 2.0));
+        assert!(rt.frame(0.0), "a slide starting outside its clip must still run");
+        assert_eq!(bar(&rt), Some(-25.0));
+        let mut xs = Vec::new();
+        for _ in 0..128 { assert!(rt.frame(1.0 / 128.0)); xs.push(bar(&rt).unwrap()); }
+        assert!((xs[63] - 37.5).abs() < 0.01, "halfway through the period is the sweep's midpoint: {}", xs[63]);
+        assert!(xs[..127].windows(2).all(|w| w[1] >= w[0]));
+        assert_eq!(xs[127], -25.0, "the sweep wraps");
+        rt.state.0 = false; rt.invalidate();
+        for _ in 0..240 { rt.frame(1.0 / 120.0); }
+        assert!(!rt.animating);
+        let mut rt = Runtime::new((true, true), view, (100.0, 100.0), Env::new(true, 2.0));
+        assert!(!rt.frame(0.0));
+        assert_eq!(bar(&rt), Some(37.5), "reduced motion holds the midpoint");
+        let mut rt = Runtime::new((true, false), view, (100.0, 100.0), Env::new(true, 2.0));
+        rt.frame(0.0);
+        rt.set_live_visible(false);
+        assert!(!rt.frame(1.0 / 120.0));
     }
 
     #[test]

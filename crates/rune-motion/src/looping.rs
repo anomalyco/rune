@@ -9,6 +9,9 @@ pub enum LoopKind {
     /// Finite opacity/scale choreography; holds its last pose at rest.
     Sequence(Sequence),
     Rotation,
+    /// An eased one-way sweep that wraps, in fractions of the node's own size (an
+    /// indeterminate progress segment). Descendants and hit tests follow it.
+    Slide { from: [f32; 2], to: [f32; 2] },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -30,6 +33,10 @@ impl LoopSpec {
     }
     pub fn rotation(period: f64) -> Self {
         Self { period, delay: 0.0, kind: LoopKind::Rotation }
+    }
+    /// Reduced motion holds the sweep's midpoint; removal cools it back to no offset.
+    pub fn slide(period: f64, from: [f32; 2], to: [f32; 2]) -> Self {
+        Self { period, delay: 0.0, kind: LoopKind::Slide { from, to } }
     }
 }
 
@@ -108,11 +115,19 @@ impl LoopTrack {
             LoopKind::Sequence(_) => self.pose(now, reduced).unwrap().opacity,
             LoopKind::OpacityCycle(c) => if reduced { c.still } else { c.sample(wall) },
             LoopKind::Rotation => phase * core::f32::consts::TAU,
+            LoopKind::Slide { .. } => 1.0,
             LoopKind::Opacity { low, high } => {
                 let triangle = if phase < 0.5 { phase * 2.0 } else { (1.0 - phase) * 2.0 };
                 low + (high - low) * Easing::EASE_IN_OUT.eval(triangle) * self.amplitude.sample(now)
             }
         }
+    }
+    /// A `Slide`'s offset in fractions of the node's own size.
+    pub fn offset(&self, now: f64, reduced: bool) -> Option<[f32; 2]> {
+        let LoopKind::Slide { from, to } = self.spec.kind else { return None };
+        let t = if reduced { 0.5 } else { Easing::EASE_IN_OUT.eval(self.phase(now) as f32) };
+        let a = self.amplitude.sample(now);
+        Some([0, 1].map(|i| (from[i] + (to[i] - from[i]) * t) * a))
     }
     pub fn pose(&self, now: f64, reduced: bool) -> Option<Beat> {
         let LoopKind::Sequence(frames) = self.spec.kind else { return None };
@@ -180,6 +195,22 @@ mod tests {
             assert_eq!(t.sample(now, false), t.sample(now, false));
         }
         assert_eq!(t.sample(100.0, true), 0.0);
+    }
+    #[test]
+    fn slide_sweeps_wraps_holds_midpoint_reduced_and_cools_to_rest() {
+        let mut t = LoopTrack::new(LoopSpec::slide(2.0, [-1.0, 0.0], [3.0, 0.0]), 0.0);
+        assert_eq!(t.offset(0.0, false), Some([-1.0, 0.0]));
+        assert_eq!(t.offset(1.0, false), Some([1.0, 0.0]));
+        assert_eq!(t.offset(2.0, false), t.offset(0.0, false));
+        let xs: Vec<f32> = (0..200).map(|i| t.offset(i as f64 * 0.01, false).unwrap()[0]).collect();
+        assert!(xs.windows(2).all(|w| w[1] >= w[0]), "a sweep only moves forward within a period");
+        assert_eq!(t.offset(0.37, true), Some([1.0, 0.0]));
+        assert_eq!(t.sample(0.37, false), 1.0, "a slide never changes opacity");
+        assert_eq!(LoopTrack::new(LoopSpec::rotation(1.0), 0.0).offset(0.5, false), None);
+        t.enabled(false, 1.0);
+        assert!(t.active(1.01));
+        assert!(!t.active(10.0));
+        assert_eq!(t.offset(10.0, false), Some([0.0, 0.0]));
     }
     #[test]
     fn cooling_keeps_phase_and_settles() {

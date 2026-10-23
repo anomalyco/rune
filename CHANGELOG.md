@@ -5,6 +5,11 @@ without a code change (goldens, layout, input), newest first, with the rev that 
 
 ## dev
 
+- **Indeterminate `Progress` animates.** `Progress::new(None)` used to draw an empty track; it
+  now sweeps a quarter-width segment across it every 1.4 s, centred and still under Reduce
+  Motion. The sweep is `LoopSpec::slide(period, from, to)`, a new looping offset in fractions of
+  the node's own size that descendants and hit tests follow. Like other loops it draws no frames
+  while hidden, scrolled away or reduced, including when the segment is outside its clip.
 - **`--script` taps links by id**. A script event's `"key"` (and
   `Runtime::find`) falls back to the link whose id matches when no element has that key, so
   `{"type":"tap","key":"https://x.dev"}` presses an `El::link` or Markdown link, aiming at its

@@ -141,10 +141,12 @@ impl Progress {
             .fill(c.surface_base)
             .border(1.0, c.border_weak)
             .clip_soft(0.0);
-        if let Some(v) = self.value {
-            track =
-                track.child(el().key("fill").w_frac(v.clamp(0.0, 1.0)).h_full().radius(999.0).fill(c.border_active));
-        }
+        let fill = el().key("fill").h_full().radius(999.0).fill(c.border_active);
+        track = track.child(match self.value {
+            Some(v) => fill.w_frac(v.clamp(0.0, 1.0)),
+            // A quarter-width segment crosses the whole track, then wraps from the left.
+            None => fill.w_frac(0.25).looping(rune_motion::LoopSpec::slide(1.4, [-1.0, 0.0], [4.0, 0.0])),
+        });
         root.child(track.key("track"))
     }
 }
