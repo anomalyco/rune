@@ -33,7 +33,7 @@ Local implementation commits, in order:
 2. `71244d0`: dev protocol, tunable registry, macro and rune-motion retuning.
 3. `a198905`: core integration hooks, isolated for the parent's landing queue.
 4. `c376fab`: example, lab blur integration, protocol proof, knobs adapter and design.
-5. The final commit: npm-pinned knobs page, `copyAs` Rust and the colour fix (see below).
+5. `680206f`: npm-pinned knobs page, `copyAs` Rust and the colour fix (see below).
 
 Core queue: the clock commit `48b8d98` lands after the overlay hooks and the
 window-panel batch.
@@ -74,7 +74,7 @@ checks the native windowless host.
 
 ## Real knobs panel and copy-as-Rust
 
-The final commit pins the page to npm `@kitlangton/knobs@0.4.0-next.19`
+`680206f` pins the page to npm `@kitlangton/knobs@0.4.0-next.19`
 (`scripts/dev-panel/package.json` + `bun.lock`; no file link), passes
 `formatRust` as `copyAs` and filters `rune.*` keys. Bundled with Bun on Studio.
 
