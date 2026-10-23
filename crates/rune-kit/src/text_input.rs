@@ -165,6 +165,7 @@ impl TextInput {
         let ink = if red { c.danger.fg } else { c.text_base };
         let hint = if red { c.danger.fg } else { c.text_faint };
         let field = text_input(&self.edit, k.ty.ui_compact)
+            .single_line()
             .key("input")
             .grow(1.0)
             .shrink()
@@ -367,6 +368,7 @@ impl TextField {
             .color(c.text_strong)
             .placeholder(self.placeholder.clone(), c.text_weak)
             .caret(c.text_strong, k.alpha(c.text_accent, 0.3));
+        let field = if self.multiline { field } else { field.single_line() };
         let field = if self.state == State::Disabled { field } else { self.edits.apply(field) };
         let mut wrapper = row()
             .key("wrapper")

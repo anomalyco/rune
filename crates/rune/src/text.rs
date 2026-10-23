@@ -510,7 +510,26 @@ impl TextSystem {
         scale: f32,
         max_width: Option<f32>,
     ) -> Rc<Layout<Ink>> {
-        let key = text_hash(text, spans, style, scale, max_width);
+        self.layout_aligned(text, spans, style, scale, max_width, Alignment::Start)
+    }
+
+    /// [`layout_rich`](Self::layout_rich) with each line aligned within `max_width`, so wrapped
+    /// centred or end-aligned text lines up per line rather than as one left-aligned block.
+    pub fn layout_aligned(
+        &mut self,
+        text: &str,
+        spans: &[Span],
+        style: TextStyle,
+        scale: f32,
+        max_width: Option<f32>,
+        align: Alignment,
+    ) -> Rc<Layout<Ink>> {
+        let mut key = text_hash(text, spans, style, scale, max_width);
+        if align != Alignment::Start {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (key, align as u8).hash(&mut h);
+            key = h.finish();
+        }
         let g = self.generation;
         if let Some((l, used)) = self.layouts.get_mut(&key) {
             *used = g;
@@ -569,7 +588,7 @@ impl TextSystem {
         }
         let mut layout: Layout<Ink> = b.build(text);
         layout.break_all_lines(max_width);
-        layout.align(Alignment::Start, AlignmentOptions::default());
+        layout.align(align, AlignmentOptions::default());
         let l = Rc::new(layout);
         self.layouts.insert(key, (l.clone(), g));
         l
@@ -890,6 +909,26 @@ mod tests {
 #[cfg(test)]
 mod quality_tests {
     use super::*;
+
+    #[test]
+    fn centred_wrapped_lines_centre_each_line_in_the_wrap_width() {
+        let mut text = TextSystem::default();
+        let style = TextStyle::new(13.0, 400.0);
+        let content = "a much longer first line of words that wraps\nshort";
+        let width = 400.0;
+        let start = text.layout_rich(content, &[], style, 2.0, Some(width));
+        let centred = text.layout_aligned(content, &[], style, 2.0, Some(width), Alignment::Center);
+        assert!(!Rc::ptr_eq(&start, &centred), "alignment is part of the cache key");
+        let offsets = |l: &Layout<Ink>| {
+            l.lines().map(|line| (line.metrics().offset, line.metrics().advance - line.metrics().hanging_advance)).collect::<Vec<_>>()
+        };
+        assert!(offsets(&start).iter().all(|(offset, _)| *offset == 0.0));
+        let lines = offsets(&centred);
+        assert!(lines.len() >= 2);
+        for (offset, advance) in lines {
+            assert!((offset - (width - advance) / 2.0).abs() < 1.0, "offset {offset} advance {advance}");
+        }
+    }
 
     #[test]
     fn live_layouts_do_not_accumulate_between_commits() {
