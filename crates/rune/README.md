@@ -17,6 +17,19 @@ The first runnable piece of Rune: enough framework to draw a small Settings wind
 - **Layout**: Taffy 0.15 at the target state. Text sizes round up to whole device pixels, so layout
   stays on the pixel grid. Keyed nodes retain Taffy's constraint cache between commits; only changed
   styles, children or text measurements dirty it. Text colour does not invalidate measurement.
+  Three gotchas, all CSS flexbox behaviour:
+  - `.grow(g)` is `flex: g 1 0`: flex-basis 0, so the element is only as big as the free space its
+    parent leaves. In an auto-height column there is none, and a grown `.scroll(..)` viewport
+    collapses to 0 pt. Bound an ancestor's height (`.h(..)`, `.h_full()`) or set `.min_h(..)`.
+  - Flex items default to a minimum of their content size, so a nested flex column overflows its
+    parent instead of shrinking and the scroll inside never scrolls. Put `.min_h(0.0)` on each
+    column between the bounded ancestor and the viewport.
+  - `.virtualize(..)` only works on a growth stack: call `.growth(GrowthSpec)` on the same element,
+    and make it the scroll viewport's first child.
+
+  Debug builds warn once per call site when a scroll viewport inside a `.grow()` container
+  resolves to 0 pt while its content is taller; `.virtualize` without `.growth` panics with the
+  element's path.
 - **Animation** (`rune-motion`, `runtime.rs`): analytic springs (`Spring::new(duration, bounce)`),
   tweens, decay and transitions driven through `rune_motion::Scene` and `AnimationStore`. Retargets
   keep exact position and velocity.

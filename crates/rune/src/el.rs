@@ -359,6 +359,8 @@ pub struct El {
     pub(crate) key: Option<String>,
     #[cfg(debug_assertions)]
     key_source: Option<&'static std::panic::Location<'static>>,
+    #[cfg(debug_assertions)]
+    pub(crate) scroll_source: Option<&'static std::panic::Location<'static>>,
     pub(crate) role: &'static str,
     pub(crate) label: Option<String>,
     pub(crate) style: Style,
@@ -397,6 +399,8 @@ fn base(dir: FlexDirection) -> El {
         key: None,
         #[cfg(debug_assertions)]
         key_source: None,
+        #[cfg(debug_assertions)]
+        scroll_source: None,
         role: "group",
         label: None,
         style: Style { display: Display::Flex, flex_direction: dir, flex_shrink: 0.0, ..Default::default() },
@@ -651,6 +655,16 @@ impl El {
     /// Window keyed rows of a growth stack directly inside a vertical scroll viewport.
     /// Unvisited rows use an estimated height; measurement preserves the visible anchor.
     /// Offscreen rows have no layout, text or scene nodes.
+    ///
+    /// The same element must also be a growth stack: call `.growth(GrowthSpec)` on it as well
+    /// as `.virtualize(..)`, and make it the first child of the `.scroll(..)` viewport. Layout
+    /// panics with the element's path otherwise.
+    ///
+    /// ```ignore
+    /// col().scroll(ScrollSpec { stick_bottom: false }).grow(1.0).child(
+    ///     col().key("rows").growth(GrowthSpec::default()).virtualize(32.0).children(rows),
+    /// )
+    /// ```
     pub fn virtualize(mut self, estimated_row_height: f32) -> Self {
         self.virtual_estimate = Some(estimated_row_height.max(1.0));
         self
@@ -705,6 +719,15 @@ impl El {
         self.style.size.height = percent(1.0);
         self
     }
+    /// Take a `g` share of the free space along the parent's main axis (CSS `flex: g 1 0`).
+    ///
+    /// This also sets flex-basis to 0 and allows shrinking, so the element's own content does
+    /// not size it: it is only as big as the space the parent has left over. Inside a parent
+    /// with no bounded height (an auto-height column) there is no free space, and a grown
+    /// `.scroll(..)` viewport collapses to 0 pt. Bound an ancestor's height (`.h(..)`,
+    /// `.h_full()`, or a grown child of a bounded parent), or use `.min_h(..)` for a floor.
+    /// A grown column that holds its own flex content also needs `.min_h(0.0)` (see
+    /// [`El::min_h`]).
     pub fn grow(mut self, g: f32) -> Self {
         self.style.flex_grow = g;
         self.style.flex_shrink = 1.0;
@@ -808,6 +831,18 @@ impl El {
         self.style.max_size.width = length(w);
         self
     }
+    /// Minimum height in points.
+    ///
+    /// Flex items default to a minimum of their content height (CSS `min-height: auto`), so a
+    /// nested flex column with tall content overflows its parent instead of shrinking, and a
+    /// scroll viewport inside it never gets to scroll. Put `.min_h(0.0)` on each flex column
+    /// between the bounded ancestor and the viewport:
+    ///
+    /// ```ignore
+    /// col().h_full().child(header).child(
+    ///     col().grow(1.0).min_h(0.0).child(col().scroll(ScrollSpec { stick_bottom: false }).grow(1.0).child(list)),
+    /// )
+    /// ```
     pub fn min_h(mut self, h: f32) -> Self {
         self.style.min_size.height = length(h);
         self
@@ -1119,12 +1154,22 @@ impl El {
         self
     }
     /// A vertical scroll viewport over its first child.
+    ///
+    /// The viewport needs a bounded height to scroll: a fixed `.h(..)`, or a `.grow(1.0)` share
+    /// of a parent whose height is itself bounded. Every flex column between that bounded
+    /// ancestor and the viewport needs `.min_h(0.0)`, or it grows to fit the content and the
+    /// viewport never overflows. Debug builds warn once per call site when a viewport inside a
+    /// `.grow()` container resolves to 0 pt tall while its content is not.
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn scroll(mut self, spec: ScrollSpec) -> Self {
         self.scroll = Some(spec);
+        #[cfg(debug_assertions)]
+        { self.scroll_source = Some(std::panic::Location::caller()); }
         self.style.overflow = taffy::Point { x: taffy::Overflow::Hidden, y: taffy::Overflow::Scroll };
         self
     }
-    /// Make this column a growth stack (see [`GrowthSpec`]).
+    /// Make this column a growth stack (see [`GrowthSpec`]). Required alongside
+    /// [`El::virtualize`] on the same element.
     pub fn growth(mut self, spec: GrowthSpec) -> Self {
         self.growth = Some(spec);
         self

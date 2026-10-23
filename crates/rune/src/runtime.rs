@@ -32,6 +32,10 @@ use crate::shape::{LineCap, Op, Shape};
 use crate::text::{Deco, GlyphQuad, Ink, TextSystem, layout_height};
 use crate::tok::motion;
 
+#[cfg(debug_assertions)]
+#[path = "layout_diagnostics.rs"]
+mod layout_diagnostics;
+
 #[path = "focus.rs"]
 mod focus;
 
@@ -145,6 +149,8 @@ pub(crate) struct Node {
     pub local: MRect,
     /// Padding plus border (left, top, right, bottom): text draws inside it.
     inset: [f32; 4],
+    #[cfg(debug_assertions)]
+    scroll_source: Option<&'static std::panic::Location<'static>>,
 }
 
 enum Action {
@@ -1305,7 +1311,7 @@ impl<S> Measurement<'_, S> {
         let seg = el.key.clone().unwrap_or_else(|| format!("#{index}"));
         let path = if parent.is_empty() { seg } else { format!("{parent}/{seg}") };
         if let Some(estimate) = el.virtual_estimate {
-            assert!(el.growth.is_some(), "virtual rows need a growth stack");
+            assert!(el.growth.is_some(), "`.virtualize(..)` at {path:?} needs `.growth(GrowthSpec)` on the same element");
             let (scroll_path, sticky) = scroll.expect("virtual stack must be the direct child of a scroll viewport");
             let old_scroll = self.path_ids.get(scroll_path).and_then(|id| self.scrolls.get(id));
             let pinned = (settle && sticky) || old_scroll.map_or(sticky, |s| s.pinned);
@@ -1474,6 +1480,8 @@ impl<S> Measurement<'_, S> {
                 .unwrap();
         }
         self.stats.layout_nodes = nodes.len();
+        #[cfg(debug_assertions)]
+        layout_diagnostics::collapsed_scrolls(&taffy, &nodes);
 
         self.node_index.clear();
         self.node_index.reserve(nodes.len());
@@ -3372,6 +3380,8 @@ fn flatten(
     let me = nodes.len();
     let parent_is_stack = parent.is_some_and(|p| nodes[p].growth.is_some());
     let virtual_mount = el.virtual_mount || parent.is_some_and(|p| nodes[p].virtual_mount);
+    #[cfg(debug_assertions)]
+    let scroll_source = el.scroll_source;
     let El {
         on_paste,
         on_window_focus,
@@ -3450,6 +3460,8 @@ fn flatten(
         target: [0.0; 4],
         local: MRect::ZERO,
         inset: [0.0; 4],
+        #[cfg(debug_assertions)]
+        scroll_source,
     });
     let child_in_row = in_row || parent_is_stack;
     let kids: Vec<taffy::NodeId> = children
