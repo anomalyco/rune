@@ -7,7 +7,7 @@
 //! it doesn't fit, and paints above everything mounted before it.
 
 use rune::{Align, Color, El, Side, TextStyle, Transition, col, el, row, text};
-use rune_motion::Vec2;
+use rune_motion::{Effect, Spring, SpringPair, Vec2, tokens};
 
 use crate::{Acts, ButtonSize, IconButton, IconButtonVariant, Kit, shadows};
 
@@ -65,6 +65,20 @@ pub(crate) fn anchor(k: &Kit, content: El, anchor: &str, placement: Placement, g
         .anchored(anchor, side, align, gap)
         .transition(Transition::scale_anchor(0.96, placement.origin()))
         .motion(k.motion.overlay)
+}
+
+/// Positions a menu surface next to `anchor` with no entrance: it is there on the next frame,
+/// and only its close fades (`.25 / 0`). Abattoir: "Open menus instantly, fade only the close".
+/// The 0.1 s enter spring only plays when a menu reopens mid-fade, from wherever the fade was.
+pub(crate) fn menu_anchor(k: &Kit, content: El, anchor: &str, placement: Placement, gap: f32) -> El {
+    let (side, align) = placement.split();
+    let fade = Transition {
+        insertion: Effect::IDENTITY,
+        removal: Effect::opacity(0.0),
+        springs: SpringPair::new(tokens::INSTANT, Spring::new(0.25, 0.0)),
+        ..Transition::identity()
+    };
+    content.anchored(anchor, side, align, gap).transition(fade).motion(k.motion.overlay)
 }
 
 /// A transparent full-window press target under an open overlay: pressing outside closes it.

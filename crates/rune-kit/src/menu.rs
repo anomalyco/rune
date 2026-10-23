@@ -2,8 +2,9 @@
 //! Compact (default) and standard appearances.
 
 use rune::{El, Icon, PointerPress, TextStyle, Tx, col, el, icon, row, text};
+use rune_motion::{Anim, Curve, Easing};
 
-use crate::overlay::{Placement, anchor, scrim};
+use crate::overlay::{Placement, menu_anchor, scrim};
 use crate::{Acts, Kit, State, shadows};
 
 /// A menu at a secondary-press position. Store the point from `El::on_secondary_press`
@@ -132,7 +133,8 @@ impl MenuItem {
         if highlighted {
             e = e.fill(hover);
         } else if !disabled {
-            e = e.hover(hover);
+            // Abattoir "Make hover immediate": lands on arrival, leaves over 100 ms ease-out.
+            e = e.hover(hover).hover_motion(Anim::INSTANT, Curve::tween(0.1, Easing::EASE_OUT));
         }
         e = e.child(content);
         if let Some(s) = self.shortcut {
@@ -168,7 +170,7 @@ impl MenuItem {
                 let sub = Menu { key: format!("{key}-sub"), entries, standard, min_width: 160.0, ..Menu::new("") };
                 let mut deeper = Vec::new();
                 let surface = sub.surface(k, &mut deeper);
-                layer.push(anchor(k, surface, &key, Placement::RightStart, 0.0));
+                layer.push(menu_anchor(k, surface, &key, Placement::RightStart, 0.0));
                 layer.extend(deeper);
             }
         }
@@ -310,7 +312,7 @@ impl Menu {
         // Submenus anchor to items inside this surface, so they mount after it.
         let mut subs = Vec::new();
         let surface = self.surface(k, &mut subs).focus_return(anchor_key);
-        layer.push(anchor(k, surface, &key, placement, gutter));
+        layer.push(menu_anchor(k, surface, &key, placement, gutter));
         layer.extend(subs);
         trigger
     }

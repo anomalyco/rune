@@ -3,7 +3,7 @@
 
 use rune::{El, Icon, TextStyle, Tx, col, el, icon, row, text};
 
-use crate::overlay::{Placement, anchor, scrim};
+use crate::overlay::{Placement, menu_anchor, scrim};
 use crate::{Kit, State, over, press_over, shadows};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -206,7 +206,7 @@ impl Select {
                 .child(list),
             &k.elevation.floating,
         );
-        layer.push(anchor(k, content, &anchor_key, self.placement, 2.0));
+        layer.push(menu_anchor(k, content, &anchor_key, self.placement, 2.0));
         trigger
     }
 
