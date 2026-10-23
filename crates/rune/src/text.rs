@@ -22,6 +22,8 @@ use swash::zeno::{Cap, Fill, Format, Join, Mask, Stroke, Transform, Vector};
 use crate::color::{Color, srgb_encode};
 use crate::tok::{Family, TextStyle};
 
+mod svg_path;
+
 const DEFAULT_FONTS: [&[u8]; 3] = [
     include_bytes!("../assets/Inter-Regular.ttf"),
     include_bytes!("../assets/Inter-Medium.ttf"),
@@ -355,6 +357,11 @@ fn element_path(el: &str) -> Option<String> {
 }
 
 fn rasterize_icon(icon: &Icon, px: u32, atlas: &mut Atlas) -> Option<AtlasGlyph> {
+    atlas.put(px, px, &icon_coverage(icon, px), 0, 0)
+}
+
+/// `icon`'s coverage at `px` × `px` device pixels, row-major, as the glyph atlas stores it.
+pub fn icon_coverage(icon: &Icon, px: u32) -> Vec<u8> {
     let s = px as f32 / icon.view;
     let mut acc = vec![0u8; (px * px) as usize];
     let mut buf = vec![0u8; (px * px) as usize];
@@ -364,11 +371,12 @@ fn rasterize_icon(icon: &Icon, px: u32, atlas: &mut Atlas) -> Option<AtlasGlyph>
             continue;
         }
         let Some(d) = element_path(el) else { continue };
+        let d = svg_path::parse(&d);
         let stroke = attr(el, "stroke").is_some_and(|v| v != "none");
         let fill = attr(el, "fill").map_or(!stroke, |v| v != "none");
         let mut paint = |style: swash::zeno::Style<'_>| {
             buf.iter_mut().for_each(|b| *b = 0);
-            Mask::new(d.as_str())
+            Mask::new(d.as_slice())
                 .style(style)
                 .transform(Some(Transform::scale(s, s)))
                 .size(px, px)
@@ -384,7 +392,8 @@ fn rasterize_icon(icon: &Icon, px: u32, atlas: &mut Atlas) -> Option<AtlasGlyph>
         }
         if stroke {
             let w = attr(el, "stroke-width").and_then(|v| v.parse().ok()).unwrap_or(1.0f32);
-            let mut st = Stroke::new(w * s);
+            // The transform scales the width with the geometry.
+            let mut st = Stroke::new(w);
             st.cap(match attr(el, "stroke-linecap") {
                 Some("round") => Cap::Round,
                 Some("square") => Cap::Square,
@@ -398,7 +407,7 @@ fn rasterize_icon(icon: &Icon, px: u32, atlas: &mut Atlas) -> Option<AtlasGlyph>
             paint(st.into());
         }
     }
-    atlas.put(px, px, &acc, 0, 0)
+    acc
 }
 
 // ---------------------------------------------------------------------------------------------

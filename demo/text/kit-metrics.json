@@ -2,14 +2,14 @@
   {
     "story": "components-card--warning",
     "scheme": "dark",
-    "similarity": 99.44,
-    "off": 1.07
+    "similarity": 99.446,
+    "off": 1.064
   },
   {
     "story": "components-card--warning",
     "scheme": "light",
-    "similarity": 99.537,
-    "off": 1.056
+    "similarity": 99.54,
+    "off": 1.051
   },
   {
     "story": "ui-button--all-states",
@@ -26,49 +26,49 @@
   {
     "story": "ui-menu--rich",
     "scheme": "dark",
-    "similarity": 99.434,
-    "off": 1.091
+    "similarity": 99.452,
+    "off": 1.04
   },
   {
     "story": "ui-menu--rich",
     "scheme": "light",
-    "similarity": 99.575,
-    "off": 1.118
+    "similarity": 99.578,
+    "off": 1.107
   },
   {
     "story": "ui-select--grouped",
     "scheme": "dark",
-    "similarity": 99.559,
-    "off": 0.975
+    "similarity": 99.56,
+    "off": 0.97
   },
   {
     "story": "ui-select--grouped",
     "scheme": "light",
-    "similarity": 99.549,
-    "off": 1.011
+    "similarity": 99.55,
+    "off": 1.007
   },
   {
     "story": "ui-text-input--states",
     "scheme": "dark",
-    "similarity": 99.603,
-    "off": 0.586
+    "similarity": 99.615,
+    "off": 0.508
   },
   {
     "story": "ui-text-input--states",
     "scheme": "light",
-    "similarity": 99.73,
-    "off": 0.532
+    "similarity": 99.738,
+    "off": 0.467
   },
   {
     "story": "ui-toast--all-examples",
     "scheme": "dark",
-    "similarity": 99.093,
-    "off": 1.333
+    "similarity": 99.099,
+    "off": 1.32
   },
   {
     "story": "ui-toast--all-examples",
     "scheme": "light",
-    "similarity": 99.292,
-    "off": 1.296
+    "similarity": 99.297,
+    "off": 1.294
   }
 ]
