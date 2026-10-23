@@ -56,9 +56,13 @@ then calls `on_created` before first show. On macOS it renders the actual surfac
 the panel ordered in at alpha zero with input disabled. Show restores alpha/input; hidden
 content changes render before reveal. macOS CGWindowID stays stable through hide/show.
 Release measurements on Pro preserved the ID over 31 shows. Thirty re-shows reached the alpha
-setter in 0.593 ms median / 2.964 ms p95. This is not visible-presentation latency: Metal
+setter in 0.369 ms median / 0.776 ms p95. This is not visible-presentation latency: Metal
 does not timestamp compositor revelation of retained pixels. Diagnostic redraws reached
-positive presentation in 49.154 ms median / 76.666 ms p95. Sub-16 ms presentation is unproven.
+positive presentation in 49.728 ms median / 75.907 ms p95. Sub-16 ms presentation is unproven.
+wgpu skips acquisition for an occluded panel. During the explicit prewarm only, the panel
+permits that acquisition with a scoped occlusion readback; the guard restores native
+readbacks on exit. The native trace confirms actual drawables before `on_created`, rather
+than deferring the first acquisition until show.
 No native window exists before the loop runs.
 
 ## Layout, input and threads

@@ -53,9 +53,9 @@ does not guarantee ordering among peers. Native status/status+1 levels are macOS
   Monitors wake the loop; native local downs establish ownership through delivery of Up.
   None/All and hidden modes stop the polling deadline. Unchanged hover does not draw.
 - Release measurements on a shared Pro: 30 retained re-shows reached the alpha setter in
-  **0.593 ms median / 2.964 ms p95**. This is **not a presentation timestamp**. Alpha-only
+  **0.369 ms median / 0.776 ms p95**. This is **not a presentation timestamp**. Alpha-only
   reveal reuses a drawable; Metal does not timestamp its compositor reveal. Opt-in diagnostic
-  redraws reached positive `presentedTime` at **49.154 ms median / 76.666 ms p95**.
+  redraws reached positive `presentedTime` at **49.728 ms median / 75.907 ms p95**.
   **Sub-16 ms visible presentation remains unproven.**
 - Ten-second idle intervals measured **0.044% CPU / 104 interrupt wakes/s** for a visible
   Regions pill with the pointer elsewhere and about **0.002% CPU** hidden. Neither interval

@@ -682,9 +682,15 @@ impl<T: 'static> Overlay<T> {
         self.publish_regions();
         #[cfg(target_os = "macos")]
         if let Some(panel) = &self.panel {
-            panel.prewarm();
+            let _prewarm = panel.prewarm();
             self.dirty = true;
-            self.draw_frame();
+            // Adopting the view can invalidate its first surface acquisition. Finish
+            // that reconfiguration here, before on_created/show, rather than charging
+            // the first reveal for it. Persistent failure stays dirty for a later retry.
+            for _ in 0..3 {
+                self.draw_frame();
+                if !self.dirty { break; }
+            }
             if let Some(gpu) = &self.gpu { let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely()); }
             return;
         }

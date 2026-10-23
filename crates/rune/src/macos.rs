@@ -10,21 +10,30 @@ use crate::{DisplayTarget, KeyPolicy, OverlayInput, OverlayLevel, OverlayOptions
 use std::{cell::{Cell, RefCell}, collections::VecDeque, rc::Rc, time::{Duration, Instant}};
 pub(crate) use show_overlay as show_without_focus;
 
-// The launcher's initialized NonactivatingPanel subclass. No application activation call.
+struct PanelFlags { keys: bool, warming: Rc<Cell<bool>> }
+
+// Initialized nonactivating panel. No application activation call.
 declare_class!(
-    struct KeyPanel;
-    unsafe impl ClassType for KeyPanel {
+    struct OverlayPanel;
+    unsafe impl ClassType for OverlayPanel {
         #[inherits(NSWindow, NSResponder, NSObject)]
         type Super = NSPanel;
         type Mutability = mutability::MainThreadOnly;
-        const NAME: &'static str = "RuneOverlayKeyPanel";
+        const NAME: &'static str = "RuneOverlayPanel";
     }
-    impl DeclaredClass for KeyPanel {}
-    unsafe impl KeyPanel {
+    impl DeclaredClass for OverlayPanel { type Ivars = PanelFlags; }
+    unsafe impl OverlayPanel {
         #[method(canBecomeKeyWindow)]
-        fn can_become_key(&self) -> bool { true }
+        fn can_become_key(&self) -> bool { self.ivars().keys }
         #[method(canBecomeMainWindow)]
         fn can_become_main(&self) -> bool { false }
+        #[method(occlusionState)]
+        fn occlusion_state(&self) -> usize {
+            // wgpu skips nextDrawable for occluded windows. Permit only the explicit
+            // alpha-zero prewarm acquisition; ordinary visibility readbacks stay native.
+            if self.ivars().warming.get() { 2 }
+            else { unsafe { msg_send![super(self), occlusionState] } }
+        }
     }
 );
 
@@ -149,6 +158,9 @@ impl PointerState {
 }
 
 struct MouseMonitors { tokens: Vec<Retained<NSObject>> }
+
+pub(crate) struct Prewarm(Rc<Cell<bool>>);
+impl Drop for Prewarm { fn drop(&mut self) { self.0.set(false); } }
 impl Drop for MouseMonitors {
     fn drop(&mut self) {
         for token in &self.tokens {
@@ -210,6 +222,7 @@ pub(crate) struct Panel {
     follow_pointer: Cell<bool>,
     visible: Cell<bool>,
     pointer_poll: Cell<Option<Instant>>,
+    warming: Rc<Cell<bool>>,
     wake: Option<crate::Waker>,
     panel: objc2::rc::Retained<objc2_app_kit::NSPanel>,
     window: objc2::rc::Retained<objc2_app_kit::NSWindow>,
@@ -228,22 +241,15 @@ impl Panel {
         let ns_window = view.window()?;
         let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(at.size.0 as f64, at.size.1 as f64));
         // SAFETY: AppKit calls on the main thread; the panel is retained by `Panel`.
-        let panel = unsafe { if options.keys == KeyPolicy::OnDemand {
-            let panel: Retained<KeyPanel> = msg_send_id![super(mtm.alloc().set_ivars(())),
+        let warming = Rc::new(Cell::new(false));
+        let panel = unsafe {
+            let panel: Retained<OverlayPanel> = msg_send_id![super(mtm.alloc().set_ivars(PanelFlags { keys: options.keys == KeyPolicy::OnDemand, warming: warming.clone() })),
                 initWithContentRect: rect,
                 styleMask: NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel,
                 backing: NSBackingStoreType::NSBackingStoreBuffered,
                 defer: false];
             Retained::cast::<NSPanel>(panel)
-        } else {
-            NSPanel::initWithContentRect_styleMask_backing_defer(
-                mtm.alloc(),
-                rect,
-                NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel,
-                NSBackingStoreType::NSBackingStoreBuffered,
-                false,
-            )
-        }};
+        };
         unsafe {
             panel.setReleasedWhenClosed(false);
             panel.setFloatingPanel(true);
@@ -281,7 +287,7 @@ impl Panel {
             return None;
         }
         panel.setDelegate(unsafe { ns_window.delegate() }.as_deref());
-        Some(Panel { bridge, monitors: RefCell::new(None), pointer, options: options.clone(), follow_pointer: Cell::new(options.follow_pointer), visible: Cell::new(false), pointer_poll: Cell::new(None), wake, panel, window: ns_window, view })
+        Some(Panel { bridge, monitors: RefCell::new(None), pointer, options: options.clone(), follow_pointer: Cell::new(options.follow_pointer), visible: Cell::new(false), pointer_poll: Cell::new(None), warming, wake, panel, window: ns_window, view })
     }
 
     /// On the primary screen (the one with the menu bar), in AppKit's bottom-left coordinates.
@@ -307,11 +313,13 @@ impl Panel {
         else { unsafe { self.panel.orderFrontRegardless() }; }
     }
 
-    pub fn prewarm(&self) {
-        if !self.options.prewarm { return; }
+    pub fn prewarm(&self) -> Prewarm {
+        debug_assert!(self.options.prewarm);
         unsafe { self.panel.setAlphaValue(0.0); }
         self.panel.setIgnoresMouseEvents(true);
         if !self.panel.isVisible() { unsafe { self.panel.orderFrontRegardless() }; }
+        self.warming.set(true);
+        Prewarm(self.warming.clone())
     }
 
     /// The moved view, for a new wgpu surface (winit's window handle would look for the view
