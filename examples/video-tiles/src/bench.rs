@@ -44,7 +44,7 @@ pub fn run() {
                 rect: [(i as u32 % columns * w) as f32, (i as u32 / columns * h) as f32, w as f32, h as f32],
                 radii: [0.0; 4],
                 clip: rune::render::NO_CLIP,
-                fade: [0.0; 4],
+                fade: [0; 4],
                 opacity: 1.0,
             })
             .collect();
