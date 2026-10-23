@@ -5,6 +5,14 @@ import ScreenCaptureKit
     static func main() async throws {
         let args = CommandLine.arguments
         let id = CGWindowID(args[1])!
+        if args.count > 2 && args[2] == "--geometry" {
+            let windows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] ?? []
+            guard let match = windows.first(where: { ($0[kCGWindowNumber as String] as? UInt32) == id }),
+                  let bounds = match[kCGWindowBounds as String] else { exit(1) }
+            let data = try JSONSerialization.data(withJSONObject: bounds, options: [.sortedKeys])
+            print(String(decoding: data, as: UTF8.self))
+            return
+        }
         if args.count == 2 || args[2] == "--hidden" {
             let started = ProcessInfo.processInfo.systemUptime
             var match: [String: Any]?

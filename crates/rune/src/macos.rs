@@ -7,7 +7,7 @@ use objc2::rc::Retained;
 use objc2_app_kit::{NSEvent, NSPanel, NSWindow, NSResponder, NSScreen};
 use objc2_foundation::{NSObject, NSPoint, NSRect, NSSize};
 use crate::{DisplayTarget, KeyPolicy, OverlayInput, OverlayLevel, OverlayOptions, OverlaySupport};
-use std::{cell::{Cell, RefCell}, rc::Rc};
+use std::{cell::{Cell, RefCell}, collections::VecDeque, rc::Rc, time::{Duration, Instant}};
 pub(crate) use show_overlay as show_without_focus;
 
 // The launcher's initialized NonactivatingPanel subclass. No application activation call.
@@ -94,9 +94,21 @@ pub(crate) struct PointerState {
     inside: Cell<bool>,
     display: Cell<Option<u32>>,
     follow: Cell<bool>,
+    clicks: RefCell<VecDeque<(bool, f32, f32)>>,
 }
 
 impl PointerState {
+    fn trace(&self, panel: &NSPanel, source: &str, event: Option<&NSEvent>) {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if !*ENABLED.get_or_init(|| std::env::var_os("RUNE_OVERLAY_TRACE_INPUT").is_some()) { return; }
+        let cursor = unsafe { NSEvent::mouseLocation() };
+        let frame = panel.frame();
+        let local = (cursor.x - frame.origin.x, frame.origin.y + frame.size.height - cursor.y);
+        let kind: usize = event.map_or(0, |event| unsafe { msg_send![event, type] });
+        let event_point: NSPoint = event.map_or(NSPoint::new(0.0, 0.0), |event| unsafe { msg_send![event, locationInWindow] });
+        eprintln!("overlay-input source={source} window={} kind={kind} event={event_point:?} cursor={cursor:?} local={local:?} frame={frame:?} captured={} ignore={} regions={:?}",
+            unsafe { panel.windowNumber() }, self.captured.get(), unsafe { panel.ignoresMouseEvents() }, self.regions.borrow());
+    }
     pub(crate) fn hit(&self, x: f32, y: f32) -> bool {
         self.captured.get() || match self.input.get() {
             OverlayInput::All => true,
@@ -104,13 +116,25 @@ impl PointerState {
             _ => false,
         }
     }
+    fn record_click(&self, down: bool, x: f32, y: f32) {
+        if !self.hit(x, y) { return; }
+        if down { self.captured.set(true); }
+        self.clicks.borrow_mut().push_back((down, x, y));
+    }
     fn observe(&self, panel: &NSPanel, wake: Option<&crate::Waker>) {
         // SAFETY: monitors and frame publication run on AppKit's main thread.
         let pointer = unsafe { NSEvent::mouseLocation() };
+        // A local down establishes ownership, never a press belonging to another app.
+        // Keep native capture through dispatch of the queued Up even after physical release.
+        let buttons: usize = unsafe { msg_send![NSEvent::class(), pressedMouseButtons] };
+        if self.captured.get() && buttons & 1 == 0 && let Some(wake) = wake { wake(); }
         let frame = panel.frame();
         let (x, y) = ((pointer.x - frame.origin.x) as f32, (frame.origin.y + frame.size.height - pointer.y) as f32);
         let ignore = !self.hit(x, y);
-        if unsafe { panel.ignoresMouseEvents() } != ignore { panel.setIgnoresMouseEvents(ignore); }
+        if unsafe { panel.ignoresMouseEvents() } != ignore {
+            panel.setIgnoresMouseEvents(ignore);
+            self.trace(panel, "flip", None);
+        }
         let inside = x >= 0.0 && y >= 0.0 && x < frame.size.width as f32 && y < frame.size.height as f32;
         let was_inside = self.inside.replace(inside);
         let display_changed = self.follow.get() && MainThreadMarker::new().is_some_and(|mtm| {
@@ -167,6 +191,7 @@ pub(crate) struct Panel {
     options: OverlayOptions,
     follow_pointer: Cell<bool>,
     visible: Cell<bool>,
+    pointer_poll: Cell<Option<Instant>>,
     wake: Option<crate::Waker>,
     panel: objc2::rc::Retained<objc2_app_kit::NSPanel>,
     window: objc2::rc::Retained<objc2_app_kit::NSWindow>,
@@ -223,6 +248,10 @@ impl Panel {
         panel.setHasShadow(false);
         panel.setIgnoresMouseEvents(options.input.resolved(interactive) != OverlayInput::All);
         panel.setAcceptsMouseMovedEvents(true);
+        if options.prewarm {
+            unsafe { panel.setAlphaValue(0.0); }
+            panel.setIgnoresMouseEvents(true);
+        }
         // defer:NO creates the WindowServer identity while hidden. Never publish a sentinel
         // (-1/0) cast to CGWindowID as a successful native creation.
         if unsafe { panel.windowNumber() } <= 0 { return None; }
@@ -236,7 +265,7 @@ impl Panel {
             return None;
         }
         panel.setDelegate(unsafe { ns_window.delegate() }.as_deref());
-        Some(Panel { bridge, monitors: RefCell::new(None), pointer, options: options.clone(), follow_pointer: Cell::new(options.follow_pointer), visible: Cell::new(false), wake, panel, window: ns_window, view })
+        Some(Panel { bridge, monitors: RefCell::new(None), pointer, options: options.clone(), follow_pointer: Cell::new(options.follow_pointer), visible: Cell::new(false), pointer_poll: Cell::new(None), wake, panel, window: ns_window, view })
     }
 
     /// On the primary screen (the one with the menu bar), in AppKit's bottom-left coordinates.
@@ -255,9 +284,18 @@ impl Panel {
 
     pub fn show(&self) {
         self.visible.set(true);
-        self.start_monitors();
+        self.refresh_monitors();
+        self.pointer.observe(&self.panel, self.wake.as_ref());
         // SAFETY: an AppKit call on the main thread.
-        unsafe { self.panel.orderFrontRegardless() };
+        if self.options.prewarm { unsafe { self.panel.setAlphaValue(1.0); } }
+        else { unsafe { self.panel.orderFrontRegardless() }; }
+    }
+
+    pub fn prewarm(&self) {
+        if !self.options.prewarm { return; }
+        unsafe { self.panel.setAlphaValue(0.0); }
+        self.panel.setIgnoresMouseEvents(true);
+        if !self.panel.isVisible() { unsafe { self.panel.orderFrontRegardless() }; }
     }
 
     /// The moved view, for a new wgpu surface (winit's window handle would look for the view
@@ -270,12 +308,17 @@ impl Panel {
 
     pub fn hide(&self) {
         self.visible.set(false);
+        self.pointer_poll.set(None);
         self.monitors.borrow_mut().take();
         self.pointer.captured.set(false);
         self.pointer.pending.set(None);
         self.pointer.last.set(None);
         self.pointer.inside.set(false);
-        self.panel.orderOut(None);
+        self.pointer.clicks.borrow_mut().clear();
+        if self.options.prewarm {
+            unsafe { self.panel.setAlphaValue(0.0); self.panel.resignKeyWindow(); }
+            self.panel.setIgnoresMouseEvents(true);
+        } else { self.panel.orderOut(None); }
     }
 
     pub fn window_number(&self) -> u32 { unsafe { self.panel.windowNumber() as u32 } }
@@ -294,7 +337,28 @@ impl Panel {
         }
     }
     pub fn take_pointer(&self) -> Option<(f32, f32)> { self.pointer.pending.take() }
-    pub fn pointer_released(&self) { self.pointer.captured.set(false); self.refresh_monitors(); }
+    pub fn take_click(&self, down: bool) -> Option<(f32, f32)> {
+        let mut clicks = self.pointer.clicks.borrow_mut();
+        if clicks.front().is_some_and(|(pressed, _, _)| *pressed == down) {
+            clicks.pop_front().map(|(_, x, y)| (x, y))
+        } else { None }
+    }
+    pub fn pointer_released(&self) {
+        self.pointer.captured.set(false);
+        self.refresh_monitors();
+        if self.visible.get() { self.pointer.observe(&self.panel, self.wake.as_ref()); }
+    }
+    pub fn pointer_deadline(&self) -> Option<Instant> { self.pointer_poll.get() }
+    pub fn poll_pointer(&self, now: Instant) {
+        if self.pointer_poll.get().is_some_and(|at| at <= now) {
+            self.pointer_poll.set(Some(now + Duration::from_secs_f64(1.0 / 120.0)));
+            self.pointer.trace(&self.panel, "poll", None);
+            self.pointer.observe(&self.panel, None);
+        }
+    }
+    pub fn observe_pointer(&self) {
+        if self.visible.get() { self.pointer.observe(&self.panel, None); }
+    }
     pub fn set_input(&self, input: OverlayInput) {
         self.pointer.input.set(input);
         self.refresh_monitors();
@@ -303,38 +367,44 @@ impl Panel {
     pub fn set_follow_pointer(&self, follow: bool) { self.follow_pointer.set(follow); self.pointer.follow.set(follow); self.refresh_monitors(); }
     fn refresh_monitors(&self) {
         if !self.visible.get() { return; }
+        if self.pointer.input.get() == OverlayInput::Regions {
+            if self.pointer_poll.get().is_none() { self.pointer_poll.set(Some(Instant::now())); }
+        } else { self.pointer_poll.set(None); }
         if self.follow_pointer.get() || self.pointer.input.get() == OverlayInput::Regions || self.pointer.captured.get() { self.start_monitors(); }
         else { self.monitors.borrow_mut().take(); }
     }
     pub fn set_regions(&self, regions: &[[f32; 4]]) {
         if self.pointer.regions.borrow().as_slice() == regions { return; }
         *self.pointer.regions.borrow_mut() = regions.to_vec();
+        self.pointer.trace(&self.panel, "regions", None);
         if self.visible.get() { self.pointer.observe(&self.panel, None); }
     }
 
     fn start_monitors(&self) {
         if self.monitors.borrow().is_some() || !(self.follow_pointer.get() || self.pointer.input.get() == OverlayInput::Regions || self.pointer.captured.get()) { return; }
-        // NSEvent masks: moved, left/right/other dragged, left down/up. Observation never
-        // suppresses an event. A local down owns its drag until a local/global release.
+        // Monitors wake the loop; position/button state is sampled there. A local down
+        // owns its drag until winit has delivered Up, including outside the hit region.
         let movement = (1usize << 5) | (1 << 6) | (1 << 7) | (1 << 27);
         let mask = movement | (1 << 1) | (1 << 2);
         let (pointer, panel, wake) = (self.pointer.clone(), self.panel.clone(), self.wake.clone());
-        let global = block2::RcBlock::new(move |_event: *mut NSEvent| {
-            pointer.observe(&panel, wake.as_ref());
+        let global = block2::RcBlock::new(move |event: *mut NSEvent| {
+            pointer.trace(&panel, "global", unsafe { event.as_ref() });
+            if let Some(wake) = &wake { wake(); }
         });
         let (pointer, panel, wake) = (self.pointer.clone(), self.panel.clone(), self.wake.clone());
         let local = block2::RcBlock::new(move |event: *mut NSEvent| -> *mut NSEvent {
+            pointer.trace(&panel, "local", unsafe { event.as_ref() });
             unsafe {
                 let kind: usize = msg_send![event, type];
                 let window: *mut NSWindow = msg_send![event, window];
-                if kind == 1 && window == (&*panel as *const NSPanel).cast_mut().cast() {
+                if (kind == 1 || kind == 2) && window == (&*panel as *const NSPanel).cast_mut().cast() {
                     let point: NSPoint = msg_send![event, locationInWindow];
                     let frame = panel.frame();
-                    if pointer.hit(point.x as f32, (frame.size.height - point.y) as f32) { pointer.captured.set(true); }
+                    let (x, y) = (point.x as f32, (frame.size.height - point.y) as f32);
+                    pointer.record_click(kind == 1, x, y);
                 }
-                if kind == 2 { pointer.captured.set(false); }
             }
-            pointer.observe(&panel, wake.as_ref());
+            if let Some(wake) = &wake { wake(); }
             event
         });
         let mut tokens = Vec::new();
@@ -363,6 +433,19 @@ impl Drop for Panel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn overlay_rejected_down_cannot_poison_later_click_and_owned_up_survives_exit() {
+        let pointer = PointerState { input: Cell::new(OverlayInput::Regions), ..Default::default() };
+        pointer.regions.borrow_mut().push([10.0, 10.0, 30.0, 30.0]);
+        pointer.record_click(true, 1.0, 1.0);
+        pointer.record_click(true, 20.0, 20.0);
+        pointer.record_click(false, 100.0, 100.0);
+        assert_eq!(*pointer.clicks.borrow(), VecDeque::from([(true, 20.0, 20.0), (false, 100.0, 100.0)]));
+        // Physical Up must not turn off native hit testing before winit dispatches it.
+        assert!(pointer.hit(100.0, 100.0));
+        pointer.captured.set(false);
+        assert!(!pointer.hit(100.0, 100.0));
+    }
     #[test]
     fn overlay_appkit_top_row_belongs_to_secondary_display() {
         let secondary = NSRect::new(NSPoint::new(-1920.0, 0.0), NSSize::new(1920.0, 1080.0));

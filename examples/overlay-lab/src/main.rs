@@ -96,6 +96,9 @@ fn native_probe(pill: OverlayHandle<State>, app: rune::AppHandle<State>) {
             match command.trim() {
                 "show" => pill.show(),
                 "hide" => pill.hide(),
+                "none" => pill.set_input(OverlayInput::None),
+                "all" => pill.set_input(OverlayInput::All),
+                "regions" => pill.set_input(OverlayInput::Regions),
                 "status" => {},
                 "quit" => app.quit(),
                 _ => { let _ = writeln!(stream, "unknown command"); continue; }

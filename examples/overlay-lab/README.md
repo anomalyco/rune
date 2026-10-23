@@ -44,12 +44,22 @@ does not guarantee ordering among peers. Native status/status+1 levels are macOS
   (macOS/Wayland points, Windows/X11 pixels); `scale` converts local lengths.
 - The pill uses `AboveOverlays` (macOS 27), above the picker's `AboveStatus` (26). Both use
   CanJoinAllSpaces, FullScreenAuxiliary and Stationary. Wayland ordering remains compositor-owned.
-- Desktop hide retains the native window, GPU surface and renderer. Hidden hosts have no
-  pointer observers or draw loop; warm startup renders offscreen once. Wayland recreates its
-  layer after hide. **The current Pro measurement misses the 16 ms target:** 29 valid
-  re-show samples measured 51.34–68.79 ms (median 60.04 ms, nearest-rank p95 67.18 ms).
-  The initial prewarmed show returned a zero Metal presentation timestamp and is not a
-  valid latency sample. These are debug-build measurements on a shared M2 Max worker.
+- Desktop hide retains the native window, GPU surface and renderer. With `prewarm`, macOS
+  keeps the panel ordered in at alpha zero with input disabled and a frame rendered into its
+  actual surface. An unchanged show only restores input and alpha; hidden changes render
+  before reveal. Hidden hosts have no pointer observers or draw loop. Wayland recreates its
+  layer after hide.
+- macOS Regions mode samples native pointer position/buttons at up to 120 Hz while visible.
+  Monitors wake the loop; native local downs establish ownership through delivery of Up.
+  None/All and hidden modes stop the polling deadline. Unchanged hover does not draw.
+- Release measurements on a shared Pro: 30 retained re-shows reached the alpha setter in
+  **0.593 ms median / 2.964 ms p95**. This is **not a presentation timestamp**. Alpha-only
+  reveal reuses a drawable; Metal does not timestamp its compositor reveal. Opt-in diagnostic
+  redraws reached positive `presentedTime` at **49.154 ms median / 76.666 ms p95**.
+  **Sub-16 ms visible presentation remains unproven.**
+- Ten-second idle intervals measured **0.044% CPU / 104 interrupt wakes/s** for a visible
+  Regions pill with the pointer elsewhere and about **0.002% CPU** hidden. Neither interval
+  produced drawable callbacks. All/None stopped polling and also produced no drawable callbacks.
 
 The idle path filters outside-canvas motion and skips unchanged hover redraws. Windows hooks
 run on a separate message-loop thread; X11 observes XI2 raw motion instead of polling. The
@@ -63,7 +73,7 @@ HiveMind on a worker, then copy the products into a fresh temporary directory on
 authorized GUI host:
 
 ```sh
-cargo build -p overlay-lab -j 2
+cargo build --release -p overlay-lab -j 2
 xcrun clang -dynamiclib -fobjc-arc -framework AppKit -framework QuartzCore -framework Metal \
   examples/overlay-lab/native/presentation-probe.m -o presentation-probe.dylib
 xcrun swiftc -parse-as-library examples/overlay-lab/native/capture-probe.swift -o capture-probe
@@ -75,12 +85,23 @@ the host's GUI lock (`/tmp/pro-gui.lock`, `fcntl.LOCK_EX` on Pro), then run
 Never run it on Studio's screen.
 
 `OVERLAY_LAB_CONTROL` names a unique Unix socket and starts the pill prewarmed but hidden.
-Newline-terminated `show`, `hide`, `status`, and `quit` commands are accepted. The driver
+Newline-terminated `show`, `hide`, `status`, `none`, `all`, `regions`, and `quit` commands are accepted. The driver
 records the request's `CACurrentMediaTime` immediately before `handle.show()` and the
 drawable's actual `presentedTime`, not queue submission or callback arrival time. Zero
-timestamps are reported separately. It checks WindowServer identity/hidden state before
-each of 30 shows, allowing up to one second for asynchronous order-out propagation.
+timestamps are reported separately, with a two-second deadline for a positive timestamp.
+It checks WindowServer identity before 31 shows (initial plus 30 re-shows). Set
+`OVERLAY_PROBE_RETAINED=1` for alpha-zero hosts; the old order-out baseline omits it.
+`OVERLAY_PROBE_REDRAW=1` adds diagnostic redraws until a positive timestamp. Report this
+endpoint separately from the alpha-only reveal; it includes work absent in normal showing.
 `results.json` and `presentation.log` are the evidence; the lab has a bounded shutdown timer.
+
+`run-idle-probe.py` samples process CPU and interrupt wake counters over ten-second intervals,
+without redraw assistance, and counts drawable callbacks. `--modes` measures All/None/Regions.
+`run-input-probe.py` drives an independent underlay and twenty raw-motion enter/click/leave/click
+cycles. Build `mouse-path.swift`, copy it to a stable path and ad-hoc sign once before the
+user grants Accessibility. Do not replace the granted binary. The runner defaults to
+`~/tmp/rune-overlay-probe/mouse-path`; `OVERLAY_MOUSE_HELPER` overrides it. Set
+`RUNE_OVERLAY_TRACE_INPUT=1` to log regions, monitor callbacks, polls, and native input flips.
 
 The capture helper uses ScreenCaptureKit with and without the exact CGWindowID in
 `excludingWindows`. It checks permission first and exits 77 if unavailable. Pro's helper

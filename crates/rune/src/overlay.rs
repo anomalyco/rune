@@ -303,15 +303,19 @@ impl<T: 'static> Overlay<T> {
         if self.live.is_none() { self.prepare(event_loop); }
         if self.live.is_none() { return; }
         if size != self.at.size { self.resized(event_loop); }
+        self.rt.settle_all();
+        let retained = cfg!(target_os = "macos") && self.options.prewarm;
         if let Some(Backing::Window(window)) = self.live.as_ref().map(|l| &l.backing) {
             let window = window.clone();
             self.place_window(event_loop, &window);
             if let Some(gpu) = self.gpu.clone() { self.rescale(&gpu, window.scale_factor() as f32); }
+            // Retained alpha-zero hosts already have pixels. A hidden update must reach
+            // the surface before exposing it, rather than flashing the old frame.
+            if retained && self.dirty { self.warm(); }
             self.show_window(&window);
         }
         self.visible = true;
-        self.rt.settle_all();
-        self.dirty = true;
+        if !retained { self.dirty = true; }
         self.idle = true;
     }
 
@@ -670,12 +674,20 @@ impl<T: 'static> Overlay<T> {
         let _ = live;
     }
 
-    /// Warm glyph uploads and render pipelines without ordering a native window on screen.
+    /// Warm glyphs/pipelines and, on macOS, the retained alpha-zero host's actual surface.
     fn warm(&mut self) {
         self.rt.frame(0.0);
         self.rt.settle_all();
         self.rt.frame(0.0);
         self.publish_regions();
+        #[cfg(target_os = "macos")]
+        if let Some(panel) = &self.panel {
+            panel.prewarm();
+            self.dirty = true;
+            self.draw_frame();
+            if let Some(gpu) = &self.gpu { let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely()); }
+            return;
+        }
         let (Some(live), Some((renderer, _)), Some(gpu)) = (&self.live, &mut self.renderer, &self.gpu) else { return };
         renderer.prepare(&gpu.device, &gpu.queue, &mut self.rt.text.atlas, &self.rt.instances, (live.config.width, live.config.height));
         renderer.upload_images(&gpu.device, &gpu.queue, &mut self.rt.images);
@@ -816,6 +828,10 @@ impl<T: 'static> Overlay<T> {
     /// Draws a frame if one is due; true while it needs more (animating).
     fn draw(&mut self) -> bool {
         if !self.visible { return false; }
+        self.draw_frame()
+    }
+
+    fn draw_frame(&mut self) -> bool {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Some(Live { backing: Backing::Layer(layer), .. }) = self.live.as_mut() {
             let changes = layer.dispatch();
@@ -905,14 +921,20 @@ impl<T: 'static> Overlay<T> {
 impl<T: 'static> AnyHost for Overlay<T> {
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
         if matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll) {
-            self.wake_due(Instant::now());
+            let now = Instant::now();
+            self.wake_due(now);
+            #[cfg(target_os = "macos")]
+            if let Some(panel) = &self.panel { panel.poll_pointer(now); }
         }
     }
 
     fn wake_deadline(&self) -> Option<Instant> {
-        self.rt.wall_start.and_then(|start| {
+        let deadline = self.rt.wall_start.and_then(|start| {
             start.checked_add(std::time::Duration::try_from_secs_f64(self.rt.wake_deadline()?).ok()?)
-        })
+        });
+        #[cfg(target_os = "macos")]
+        let deadline = deadline.into_iter().chain(self.panel.as_ref().and_then(|p| p.pointer_deadline())).min();
+        deadline
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -962,6 +984,8 @@ impl<T: 'static> AnyHost for Overlay<T> {
                 if let Some(key) = crate::window::map_key(&event.logical_key, self.mods) { self.rt.key(key); self.dirty = true; }
             }
             WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } if self.options.input.resolved(self.interactive) != OverlayInput::None => {
+                #[cfg(target_os = "macos")]
+                if let Some(point) = self.panel.as_ref().and_then(|p| p.take_click(state.is_pressed())) { self.rt.pointer_move(point.0, point.1); }
                 #[cfg(target_os = "windows")]
                 if let Some(point) = self.native.as_ref().and_then(|p| p.take_click(state.is_pressed())) { self.rt.pointer_move(point.0, point.1); }
                 if let Some((x, y)) = self.rt.pointer() {
@@ -998,6 +1022,8 @@ impl<T: 'static> AnyHost for Overlay<T> {
         }
         #[cfg(target_os = "macos")]
         if self.live.is_some() && let Some(panel) = &self.panel {
+            panel.poll_pointer(Instant::now());
+            panel.observe_pointer();
             if let Some((x, y)) = panel.take_pointer() && self.rt.pointer() != Some((x, y)) {
                 self.observe_pointer(x, y);
                 if self.options.follow_pointer && self.options.display == DisplayTarget::UnderPointer {

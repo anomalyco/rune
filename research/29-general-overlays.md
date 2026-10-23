@@ -51,11 +51,14 @@ new `on_pointer_move` use overlay-local points even over passing-through content
 turning observational elements into click targets. A press retains pointer ownership
 until release, so a drag leaving a chip cannot strand the gesture. Hidden hosts have no
 monitors or polling deadlines. Desktop hide retains the native window and GPU surface;
-Wayland destroys its layer. `prewarm` creates hidden hosts, warms layout/glyphs/pipelines
-offscreen, then calls `on_created` before first show. macOS CGWindowID stays stable from
-that callback through hide/show until drop. Pro's debug-build native probe preserved the ID
-through 30 shows / 29 hides, but missed the 16 ms target: 29 valid re-show samples had a
-60.04 ms median and 67.18 ms p95. The initial show's Metal timestamp was zero and invalid.
+Wayland destroys its layer. `prewarm` creates hidden hosts and warms layout/glyphs/pipelines,
+then calls `on_created` before first show. On macOS it renders the actual surface and leaves
+the panel ordered in at alpha zero with input disabled. Show restores alpha/input; hidden
+content changes render before reveal. macOS CGWindowID stays stable through hide/show.
+Release measurements on Pro preserved the ID over 31 shows. Thirty re-shows reached the alpha
+setter in 0.593 ms median / 2.964 ms p95. This is not visible-presentation latency: Metal
+does not timestamp compositor revelation of retained pixels. Diagnostic redraws reached
+positive presentation in 49.154 ms median / 76.666 ms p95. Sub-16 ms presentation is unproven.
 No native window exists before the loop runs.
 
 ## Layout, input and threads
@@ -74,7 +77,11 @@ Layout, native windows and region publication run on the event thread (AppKit ma
 Windows hook/X11 reader threads own observation. Handles enqueue requests and wake the existing
 loop. Native callbacks record pointer/key data and wake the host; they must not re-enter
 Runtime. Global observation reports movement, not other apps' clicks. Outside-canvas
-movement wakes only on exit or a followed-display change; unchanged hover does not redraw.
+movement is filtered by the Windows/X11 observers; unchanged hover does not redraw.
+macOS visible Regions mode samples native position/buttons on a 120 Hz deadline; monitors
+are extra wake sources. Local downs establish ownership, held through delivery of Up.
+The deadline stops in hidden/None/All modes. A ten-second visible idle sample measured
+0.044% CPU, 104 interrupt wakes/s and zero drawable callbacks; hidden cost was about 0.002%.
 Hold no application mutex while calling native APIs or client callbacks. Drop monitors/subclasses before their
 views, and GPU surfaces before their native backing.
 
@@ -95,7 +102,8 @@ offers pill/picker views as ordinary headless `--snap` scenes too. Compile macOS
 clippy, and Linux through HiveMind, one job at a time. Check actual cross-app clicks, hover,
 drag retention, focus and ScreenCaptureKit/screencapture on Pro or mini only.
 
-Main risks: global-monitor ordering near a click; moved winit-view geometry/delegate/IME
+Main risks: clicks between polling samples (raw-motion boundary proof is permission-blocked);
+moved winit-view geometry/delegate/IME
 assumptions (launcher research documents these); mixed-DPI output migration; private Wayland
 queue starvation; protocol-dependent keyboard focus. Modern macOS capture paths may ignore
 sharingType, so Scrawl's exclusion filter remains necessary and must be tested. Native

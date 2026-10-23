@@ -106,6 +106,7 @@ pub struct OverlayOptions {
     pub input: OverlayInput,
     /// Create and warm a hidden native host on the event thread at startup. Desktop hosts
     /// retain their window and GPU surface across hide/show; Wayland must recreate on hide.
+    /// macOS keeps the pre-rendered panel ordered in at alpha zero, with input disabled.
     pub prewarm: bool,
 }
 

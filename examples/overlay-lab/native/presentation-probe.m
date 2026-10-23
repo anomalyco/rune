@@ -7,6 +7,19 @@
 
 static id<CAMetalDrawable> (*originalNext)(id, SEL);
 static void (*originalOut)(id, SEL, id);
+static void (*originalAlpha)(id, SEL, CGFloat);
+static void setAlpha(NSWindow *window, SEL selector, CGFloat alpha) {
+    originalAlpha(window, selector, alpha);
+    if (![window isKindOfClass:NSPanel.class]) return;
+    fprintf(stderr, "probe alpha window=%ld alpha=%.1f time=%.9f\n", (long)window.windowNumber, alpha, CACurrentMediaTime());
+    // Opt-in measurement assistance, not Rune behavior. Alpha-only reveal reuses a
+    // previously submitted drawable; Metal cannot timestamp its compositor reveal.
+    if (alpha == 1 && getenv("OVERLAY_PROBE_REDRAW")) {
+        double deadline = CACurrentMediaTime() + 2;
+        objc_setAssociatedObject(window, @selector(setAlphaValue:), @(deadline), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        window.contentView.needsDisplay = YES;
+    }
+}
 static void orderOut(NSWindow *window, SEL selector, id sender) {
     originalOut(window, selector, sender);
     if ([window isKindOfClass:NSPanel.class])
@@ -26,9 +39,17 @@ static id<CAMetalDrawable> nextDrawable(id layer, SEL selector) {
         if (windowID) break;
     }
     double acquired = CACurrentMediaTime();
+    __weak NSWindow *owner;
+    for (NSWindow *window in NSApp.windows)
+        if (window.windowNumber == windowID) { owner = window; break; }
     [drawable addPresentedHandler:^(id<MTLDrawable> d) {
         fprintf(stderr, "probe presented window=%ld acquired=%.9f presented=%.9f callback=%.9f\n",
                 (long)windowID, acquired, d.presentedTime, CACurrentMediaTime());
+        if (d.presentedTime == 0 && getenv("OVERLAY_PROBE_REDRAW")) dispatch_async(dispatch_get_main_queue(), ^{
+            NSWindow *window = owner;
+            NSNumber *deadline = objc_getAssociatedObject(window, @selector(setAlphaValue:));
+            if (window.alphaValue == 1 && deadline.doubleValue > CACurrentMediaTime()) window.contentView.needsDisplay = YES;
+        });
     }];
     return drawable;
 }
@@ -37,4 +58,6 @@ __attribute__((constructor)) static void install(void) {
     originalNext = (void *)method_setImplementation(method, (IMP)nextDrawable);
     Method out = class_getInstanceMethod(NSWindow.class, @selector(orderOut:));
     originalOut = (void *)method_setImplementation(out, (IMP)orderOut);
+    Method alpha = class_getInstanceMethod(NSWindow.class, @selector(setAlphaValue:));
+    originalAlpha = (void *)method_setImplementation(alpha, (IMP)setAlpha);
 }
