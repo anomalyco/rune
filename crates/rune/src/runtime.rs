@@ -325,6 +325,8 @@ pub struct Runtime<S: 'static> {
     /// Only nonempty when retained exit nodes make storage order differ from subtree order.
     layer_paint_order: Vec<usize>,
     layer_scratch: Vec<(usize, usize, usize)>,
+    /// Sideways scroll of focused single-line fields, in points, keyed by node path.
+    input_scroll: HashMap<String, f32>,
     /// Drawn rect per node (points, root space), for tools and hit tests.
     drawn: Vec<[f32; 4]>,
     scrolls: HashMap<NodeId, ScrollState>,
@@ -483,6 +485,7 @@ impl<S: 'static> Runtime<S> {
             inh_scratch: Vec::new(),
             layer_paint_order: Vec::new(),
             layer_scratch: Vec::new(),
+            input_scroll: HashMap::new(),
             drawn: Vec::new(),
             scrolls: HashMap::new(),
             grows: HashMap::new(),
@@ -1112,10 +1115,12 @@ impl<S: 'static> Runtime<S> {
                 let Some(access) = self.node(&path).and_then(|n| n.input.as_ref()?.access.clone()) else { return false };
                 let layout = self.node(&path).and_then(|n| n.text_layout.clone());
                 let s = self.env.scale;
+                let scroll = self.input_scroll.get(&path).copied().unwrap_or(0.0);
                 self.set_focus(Some(path), false);
                 let e = access(&mut self.state as &mut dyn Any);
                 e.break_history_group();
                 if let Some(l) = layout {
+                    let x = x + scroll;
                     let i = e.model_index(Cursor::from_point(&l, x * s, y * s).index());
                     e.anchor = i;
                     e.focus = i;
@@ -1139,7 +1144,7 @@ impl<S: 'static> Runtime<S> {
         let n = self.node(&path)?;
         let (spec, w) = (n.text.clone()?, n.target[2] - n.target[0] - n.inset[0] - n.inset[2]);
         let text = zeroize::Zeroizing::new(n.input.as_ref()?.edit.display().0);
-        Some(self.text.layout_rich(&text, &spec.spans, spec.style, s, Some(w * s)))
+        Some(self.text.layout_aligned(&text, &spec.spans, spec.style, s, spec.wrap.then_some(w * s), line_alignment(&spec)))
     }
 
     fn with_focused(&mut self, f: impl FnOnce(&mut crate::edit::TextEdit) -> EditOutcome, tx: &mut Tx) -> bool {
@@ -1506,7 +1511,7 @@ impl<S> Measurement<'_, S> {
             if let Some(spec) = &nodes[i].text {
                 let w = (l.size.width - ins[0] - ins[2]).max(0.0);
                 let wrap = spec.wrap.then_some(w * scale);
-                let mut layout = self.text.layout_rich(&spec.content, &spec.spans, spec.style, scale, wrap);
+                let mut layout = self.text.layout_aligned(&spec.content, &spec.spans, spec.style, scale, wrap, line_alignment(spec));
                 if spec.truncate && layout.full_width() > w * scale + 0.5 {
                     layout = truncated(&mut self.text, &spec.content, spec, scale, w * scale);
                 }
@@ -2787,12 +2792,22 @@ impl<S: 'static> Runtime<S> {
                     let tw = layout.full_width().ceil();
                     let ins = n.inset.map(|v| v * sc * s);
                     let (x0, x1) = (r[0] + ins[0], r[2] - ins[2]);
+                    // Wrapped text aligns each line inside the wrap width itself.
                     let x = match spec.align {
+                        _ if line_alignment(spec) != parley::Alignment::Start => x0,
                         Align::Start => x0,
                         Align::Center => x0 + (x1 - x0 - tw) * 0.5,
                         Align::End => x1 - tw,
                     };
-                    let origin = [x, r[1] + ins[1]];
+                    let mut origin = [x, r[1] + ins[1]];
+                    let mut clip = clip;
+                    if let Some(inp) = n.input.as_ref().filter(|i| i.single_line) {
+                        let scroll = single_line_scroll(&mut self.input_scroll, &n.path, inp, &spec.content, layout, s, x1 - x0);
+                        origin[0] -= scroll;
+                        if layout.full_width() > x1 - x0 {
+                            clip = [clip[0].max(x0), clip[1], clip[2].min(x1), clip[3]];
+                        }
+                    }
                     // Text fields: selection under the text, placeholder, caret over it.
                     let mut caret = None;
                     if let Some(inp) = &n.input {
@@ -2825,11 +2840,7 @@ impl<S: 'static> Runtime<S> {
                                     ));
                                 }
                             }
-                            let ci = match &e.preedit {
-                                Some((p, Some((_, c)))) => (e.range().0 + (*c).min(p.len())).min(spec.content.len()),
-                                Some((p, None)) => (e.range().0 + p.len()).min(spec.content.len()),
-                                None => e.display_index(e.focus).min(spec.content.len()),
-                            };
+                            let ci = caret_index(e, &spec.content);
                             let cur = Cursor::from_byte_index(layout, ci, Affinity::Downstream);
                             let bb = cur.geometry(layout, 1.5 * s);
                             let line = spec.style.line_px() * s;
@@ -3145,6 +3156,43 @@ impl CeilTo for f32 {
     /// Rounds up to whole device pixels.
     fn ceil_to(self, scale: f32) -> f32 {
         (self * scale - 1e-3).ceil() / scale
+    }
+}
+
+/// How far a single-line field's text shifts left (device px) so its caret stays inside
+/// `visible` device px. Unfocused fields rest at their start, like a native text field.
+fn single_line_scroll(scrolls: &mut HashMap<String, f32>, path: &str, inp: &crate::el::InputSpec, content: &str, layout: &Layout<Ink>, s: f32, visible: f32) -> f32 {
+    if !inp.edit.focused {
+        scrolls.remove(path);
+        return 0.0;
+    }
+    let caret_w = (1.5 * s).round();
+    let caret = Cursor::from_byte_index(layout, caret_index(&inp.edit, content), Affinity::Downstream);
+    let cx = caret.geometry(layout, 1.5 * s).x0 as f32;
+    let mut scroll = scrolls.get(path).copied().unwrap_or(0.0) * s;
+    if cx - scroll > visible - caret_w {
+        scroll = cx - visible + caret_w;
+    }
+    scroll = scroll.min(cx).clamp(0.0, (layout.full_width() + caret_w - visible).max(0.0));
+    scrolls.insert(path.to_owned(), scroll / s);
+    scroll
+}
+
+/// The display byte index the caret sits at, inside any IME preedit.
+fn caret_index(e: &crate::edit::TextEdit, content: &str) -> usize {
+    match &e.preedit {
+        Some((p, Some((_, c)))) => (e.range().0 + (*c).min(p.len())).min(content.len()),
+        Some((p, None)) => (e.range().0 + p.len()).min(content.len()),
+        None => e.display_index(e.focus).min(content.len()),
+    }
+}
+
+/// Parley line alignment for a text node: only wrapped text aligns per line.
+fn line_alignment(spec: &TextSpec) -> parley::Alignment {
+    match spec.align {
+        Align::Center if spec.wrap => parley::Alignment::Center,
+        Align::End if spec.wrap => parley::Alignment::End,
+        _ => parley::Alignment::Start,
     }
 }
 
@@ -3813,6 +3861,36 @@ mod tests {
         assert_eq!(rt.cursor(), Cursor::Default);
         rt.pointer_leave();
         assert_eq!(rt.cursor(), Cursor::Default);
+    }
+
+    #[test]
+    fn single_line_input_scrolls_to_the_caret_instead_of_wrapping() {
+        fn view(s: &crate::TextEdit, _: &mut Cx<crate::TextEdit>) -> El {
+            crate::text_input(s, crate::TextStyle::new(16.0, 400.0)).single_line()
+                .key("search").size(100.0, 24.0).on_edit(|s: &mut crate::TextEdit| s)
+        }
+        let text = "a very long search query that keeps going past the edge";
+        let mut edit = crate::TextEdit::new(text);
+        edit.focused = true;
+        let mut rt = Runtime::new(edit, view, (100.0, 24.0), Env::new(true, 2.0));
+        rt.frame(0.0);
+        let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("search")).unwrap();
+        let path = n.path.clone();
+        assert_eq!(n.text_layout.as_ref().unwrap().lines().count(), 1);
+        let scroll = rt.input_scroll[&path];
+        assert!(scroll > 100.0, "the end of the text is in view: {scroll}");
+        let caret_x = rt.ime_area.unwrap()[0];
+        assert!((0.0..=100.0).contains(&caret_x), "caret {caret_x} stays inside the field");
+
+        // A click lands on the scrolled text, not on the hidden start.
+        rt.queue.push(Action::Focus(path.clone(), 1.0, 12.0));
+        rt.frame(0.0);
+        assert!(rt.state.focus > 10, "clicked index {}", rt.state.focus);
+
+        rt.queue.push(Action::Blur);
+        rt.frame(0.0);
+        assert!(!rt.state.focused);
+        assert!(!rt.input_scroll.contains_key(&path), "unfocused fields rest at their start");
     }
 
     #[test]

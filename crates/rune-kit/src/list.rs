@@ -97,6 +97,7 @@ impl List {
         let mut root = col().role("list").w_full().gap(12.0);
         if let Some((edit, placeholder)) = &self.search {
             let mut input = text_input(edit, TextStyle::new(14.0, 400.0).lh(20.0))
+                .single_line()
                 .key("input")
                 .grow(1.0)
                 .shrink()

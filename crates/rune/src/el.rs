@@ -186,6 +186,8 @@ pub struct InputSpec {
     pub placeholder_color: Color,
     pub caret: Color,
     pub selection: Color,
+    /// One unwrapped line that scrolls sideways to keep the caret visible, like `<input>`.
+    pub single_line: bool,
     pub(crate) access: Option<EditFn>,
     pub(crate) submit: Option<PressFn>,
     pub(crate) key: Option<InputKeyFn>,
@@ -500,6 +502,7 @@ pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
         placeholder_color: Color::WHITE.alpha(0.4),
         caret: Color::WHITE,
         selection: Color::WHITE.alpha(0.2),
+        single_line: false,
         access: None,
         submit: None,
         key: None,
@@ -1068,6 +1071,17 @@ impl El {
     pub fn reveal(mut self, word_fade: f32) -> Self {
         if let Some(t) = &mut self.text {
             t.reveal = word_fade.max(0.0);
+        }
+        self
+    }
+    /// Keep a text field to one line: long text scrolls sideways under the caret instead of
+    /// wrapping. Fields are multi-line by default.
+    pub fn single_line(mut self) -> Self {
+        if let Some(i) = &mut self.input {
+            i.single_line = true;
+            if let Some(t) = &mut self.text {
+                t.wrap = false;
+            }
         }
         self
     }
