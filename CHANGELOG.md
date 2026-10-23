@@ -5,7 +5,7 @@ without a code change (goldens, layout, input), newest first, with the rev that 
 
 ## dev
 
-- **Colour emoji** (#7?). Emoji fall back to the system's colour emoji font (Apple Color Emoji,
+- **Colour emoji** (#7). Emoji fall back to the system's colour emoji font (Apple Color Emoji,
   Segoe UI Emoji, Noto Color Emoji) and draw as colour images from the image atlas, where they
   used to draw as blank gaps. Text without emoji renders as before.
 
