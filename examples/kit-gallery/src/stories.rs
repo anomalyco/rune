@@ -149,6 +149,8 @@ stories! {
     "ui-segmented-control--controlled" => segmented_controlled,
     "rune-keybind--symbols" => keybind_symbols,
     "rune-rolling-text--basic" => rolling_text_basic,
+    "rune-markdown--basic" => markdown_basic,
+    "rune-markdown--streaming" => markdown_streaming,
 }
 
 fn combobox_searchable(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
@@ -1292,4 +1294,30 @@ fn rolling_text_basic(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
         .child(line("Centred", row().w(260.0).center().child(RollingText::new("roll-centre", label).font(k.ty.body).build(k))))
         .child(line("Count", RollingText::new("count-sans", count.clone()).font(big).from(Edge::Top).build(k)))
         .child(line("", RollingText::new("count-mono", count).font(big.mono()).from(Edge::Top).build(k)))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Markdown
+
+const MARKDOWN: &str = "# Rune markdown\n\nParagraphs take **strong**, *emphasis*, `inline code` and [links](https://rune.dev). \
+Links are styled now and become clickable with rich-text spans.\n\n## Lists\n\n- First item\n- Second item with `code`\n\n\
+1. One\n2. Two\n\n### Quote and rule\n\n> Quoted text sits behind a rule.\n\n---\n\n#### A muted heading\n\n```rust\nfn main() {\n    println!(\"hello\");\n}\n```\n";
+
+fn markdown_basic(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    col().w(560.0).child(Markdown::new(MARKDOWN).on_link(|_: &mut G, _| {}).build(k))
+}
+
+fn markdown_streaming(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let n: usize = s.picked("md-stream", "60").parse().unwrap_or(60);
+    let end = MARKDOWN.char_indices().map(|(i, _)| i).nth(n).unwrap_or(MARKDOWN.len());
+    col().w(560.0).gap(12.0)
+        .child(
+            Button::new("Stream more")
+                .on_press(move |s: &mut G| {
+                    s.pick.insert("md-stream".into(), (n + 40).to_string());
+                })
+                .build(k)
+                .key("stream-more"),
+        )
+        .child(Markdown::new(&MARKDOWN[..end]).reveal(0.18).build(k))
 }

@@ -31,6 +31,8 @@ mod feedback;
 mod field;
 mod keybind;
 mod list;
+#[cfg(feature = "markdown")]
+pub mod markdown;
 mod menu;
 mod overlay;
 mod radio;
@@ -55,6 +57,8 @@ pub use keybind::{Keybind, KeybindVariant};
 pub use kit::{Elevation, Glyphs, Kit, Motion, Palette, Radius, StateColors, Type};
 pub use palette::{PaletteFocus, PaletteSeed};
 pub use list::{List, ListItem};
+#[cfg(feature = "markdown")]
+pub use markdown::{Markdown, MarkdownStyle};
 pub use menu::{Menu, MenuEntry, MenuItem, context_menu};
 pub use overlay::{HoverCard, Placement, Popover, Tooltip, TooltipAppearance, body_text, overlay_text, scrim};
 pub use radio::{RadioGroup, RadioItem};

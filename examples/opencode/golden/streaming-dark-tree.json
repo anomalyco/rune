@@ -1,0 +1,5281 @@
+{
+  "anim_t": 0.0,
+  "animating": false,
+  "dark_system": true,
+  "elements": [
+    {
+      "fill": "#080808ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "window",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window",
+      "rect": [
+        0.0,
+        0.0,
+        1280.0,
+        820.0
+      ],
+      "role": "window"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "sidebar",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar",
+      "rect": [
+        0.0,
+        0.0,
+        260.0,
+        820.0
+      ],
+      "role": "navigation"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "sidebar-inner",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner",
+      "rect": [
+        0.0,
+        0.0,
+        260.0,
+        820.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "sidebar-header",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/sidebar-header",
+      "rect": [
+        10.0,
+        8.0,
+        248.0,
+        48.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "lights",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/sidebar-header/lights",
+      "rect": [
+        10.0,
+        18.0,
+        75.0,
+        28.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/sidebar-header/#1",
+      "rect": [
+        93.0,
+        32.0,
+        129.0,
+        0.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "toggle-slot",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/sidebar-header/toggle-slot",
+      "rect": [
+        230.0,
+        18.0,
+        28.0,
+        28.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "actions",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/actions",
+      "rect": [
+        10.0,
+        64.0,
+        248.0,
+        92.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "home",
+      "label": "Home",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/actions/home",
+      "rect": [
+        10.0,
+        64.0,
+        248.0,
+        28.0
+      ],
+      "role": "button"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/actions/home/#0",
+      "rect": [
+        16.0,
+        70.0,
+        16.0,
+        16.0
+      ],
+      "role": "icon"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/actions/home/#1",
+      "rect": [
+        38.0,
+        70.0,
+        36.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "Home"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/actions/home/#2",
+      "rect": [
+        80.5,
+        78.0,
+        142.0,
+        0.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/actions/home/#3",
+      "rect": [
+        228.5,
+        70.0,
+        21.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "⌘B"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "search",
+      "label": "Search sessions",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/actions/search",
+      "rect": [
+        10.0,
+        96.0,
+        248.0,
+        28.0
+      ],
+      "role": "button"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/actions/search/#0",
+      "rect": [
+        16.0,
+        102.0,
+        16.0,
+        16.0
+      ],
+      "role": "icon"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/actions/search/#1",
+      "rect": [
+        38.0,
+        102.0,
+        100.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "Search sessions"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "new",
+      "label": "New session",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/actions/new",
+      "rect": [
+        10.0,
+        128.0,
+        248.0,
+        28.0
+      ],
+      "role": "button"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/actions/new/#0",
+      "rect": [
+        16.0,
+        134.0,
+        16.0,
+        16.0
+      ],
+      "role": "icon"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/actions/new/#1",
+      "rect": [
+        38.0,
+        134.0,
+        78.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "New session"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/actions/new/#2",
+      "rect": [
+        122.5,
+        142.0,
+        100.0,
+        0.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/actions/new/#3",
+      "rect": [
+        228.5,
+        134.0,
+        21.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "⌘T"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "tabs-gap",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-gap",
+      "rect": [
+        10.0,
+        156.0,
+        248.0,
+        16.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "tabs-scroll",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll",
+      "rect": [
+        10.0,
+        172.0,
+        248.0,
+        638.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "tabs",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs",
+      "rect": [
+        10.0,
+        172.0,
+        248.0,
+        268.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#ffffff05",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "t-ses_fx0001aaaaaaaaaaaaaaaaaa",
+      "label": "Fix flaky reconnect in the event stream",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0001aaaaaaaaaaaaaaaaaa",
+      "rect": [
+        10.0,
+        172.0,
+        248.0,
+        28.0
+      ],
+      "role": "button"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "link",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0001aaaaaaaaaaaaaaaaaa/link",
+      "rect": [
+        10.0,
+        172.0,
+        218.0,
+        28.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#8c2d61ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0001aaaaaaaaaaaaaaaaaa/link/#0",
+      "rect": [
+        16.0,
+        178.0,
+        16.0,
+        16.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#ffffffff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0001aaaaaaaaaaaaaaaaaa/link/#0/#0",
+      "rect": [
+        20.75,
+        178.0,
+        6.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "L"
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0001aaaaaaaaaaaaaaaaaa/link/#1",
+      "rect": [
+        38.0,
+        178.0,
+        240.0,
+        16.0
+      ],
+      "role": "text",
+      "text": "Fix flaky reconnect in the event stream"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "status",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0001aaaaaaaaaaaaaaaaaa/status",
+      "rect": [
+        234.0,
+        176.0,
+        20.0,
+        20.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0001aaaaaaaaaaaaaaaaaa/status/#0",
+      "rect": [
+        244.0,
+        186.0,
+        0.0,
+        0.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#080808ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "close",
+      "label": "Close tab",
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0001aaaaaaaaaaaaaaaaaa/close",
+      "rect": [
+        234.0,
+        176.0,
+        20.0,
+        20.0
+      ],
+      "role": "button"
+    },
+    {
+      "fill": "#ffffff05",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "close-ink",
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0001aaaaaaaaaaaaaaaaaa/close/close-ink",
+      "rect": [
+        234.0,
+        176.0,
+        20.0,
+        20.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0001aaaaaaaaaaaaaaaaaa/close/close-ink/#0",
+      "rect": [
+        236.0,
+        178.0,
+        16.0,
+        16.0
+      ],
+      "role": "icon"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "t-ses_fx0003aaaaaaaaaaaaaaaaaa",
+      "label": "Sidebar shows stale session titles",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0003aaaaaaaaaaaaaaaaaa",
+      "rect": [
+        10.0,
+        204.0,
+        248.0,
+        28.0
+      ],
+      "role": "button"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "link",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0003aaaaaaaaaaaaaaaaaa/link",
+      "rect": [
+        10.0,
+        204.0,
+        238.0,
+        28.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#8c2d61ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0003aaaaaaaaaaaaaaaaaa/link/#0",
+      "rect": [
+        16.0,
+        210.0,
+        16.0,
+        16.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#ffffffff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0003aaaaaaaaaaaaaaaaaa/link/#0/#0",
+      "rect": [
+        20.75,
+        210.0,
+        6.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "L"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0003aaaaaaaaaaaaaaaaaa/link/#1",
+      "rect": [
+        38.0,
+        210.0,
+        209.0,
+        16.0
+      ],
+      "role": "text",
+      "text": "Sidebar shows stale session titles"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "status",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0003aaaaaaaaaaaaaaaaaa/status",
+      "rect": [
+        234.0,
+        208.0,
+        20.0,
+        20.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0003aaaaaaaaaaaaaaaaaa/status/#0",
+      "rect": [
+        244.0,
+        218.0,
+        0.0,
+        0.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#080808ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "close",
+      "label": "Close tab",
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0003aaaaaaaaaaaaaaaaaa/close",
+      "rect": [
+        234.0,
+        208.0,
+        20.0,
+        20.0
+      ],
+      "role": "button"
+    },
+    {
+      "fill": "#ffffff02",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "close-ink",
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0003aaaaaaaaaaaaaaaaaa/close/close-ink",
+      "rect": [
+        234.0,
+        208.0,
+        20.0,
+        20.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0003aaaaaaaaaaaaaaaaaa/close/close-ink/#0",
+      "rect": [
+        236.0,
+        210.0,
+        16.0,
+        16.0
+      ],
+      "role": "icon"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "t-ses_fx0006aaaaaaaaaaaaaaaaaa",
+      "label": "Migrate config loader to the new schema",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa",
+      "rect": [
+        10.0,
+        236.0,
+        248.0,
+        28.0
+      ],
+      "role": "button"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "link",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/link",
+      "rect": [
+        10.0,
+        236.0,
+        218.0,
+        28.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#7a1f23ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/link/#0",
+      "rect": [
+        16.0,
+        242.0,
+        16.0,
+        16.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#ffffffff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/link/#0/#0",
+      "rect": [
+        19.75,
+        242.0,
+        8.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "H"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/link/#1",
+      "rect": [
+        38.0,
+        242.0,
+        253.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "Migrate config loader to the new schema"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "status",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status",
+      "rect": [
+        234.0,
+        240.0,
+        20.0,
+        20.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "ring",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring",
+      "rect": [
+        237.0,
+        243.0,
+        14.0,
+        14.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d0",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.5460000038146973,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d0",
+      "rect": [
+        237.88,
+        243.88,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d1",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.6150000095367432,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d1",
+      "rect": [
+        240.5,
+        243.88,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d2",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d2",
+      "rect": [
+        243.13,
+        243.88,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d3",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.20000000298023224,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d3",
+      "rect": [
+        245.75,
+        243.88,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d4",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.20000000298023224,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d4",
+      "rect": [
+        248.38,
+        243.88,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d5",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.42500001192092896,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d5",
+      "rect": [
+        237.88,
+        246.5,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d6",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.5460000038146973,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d6",
+      "rect": [
+        240.5,
+        246.5,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d7",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d7",
+      "rect": [
+        243.13,
+        246.5,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d8",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.20000000298023224,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d8",
+      "rect": [
+        245.75,
+        246.5,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d9",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.20000000298023224,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d9",
+      "rect": [
+        248.38,
+        246.5,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d10",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.2939999997615814,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d10",
+      "rect": [
+        237.88,
+        249.13,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d11",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.2939999997615814,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d11",
+      "rect": [
+        240.5,
+        249.13,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d12",
+      "loopPhase": null,
+      "opacity": 0.6399999856948853,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d12",
+      "rect": [
+        243.13,
+        249.13,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d13",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.20000000298023224,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d13",
+      "rect": [
+        245.75,
+        249.13,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d14",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.20000000298023224,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d14",
+      "rect": [
+        248.38,
+        249.13,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d15",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.23399999737739563,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d15",
+      "rect": [
+        237.88,
+        251.75,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d16",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.21400000154972076,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d16",
+      "rect": [
+        240.5,
+        251.75,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d17",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.20000000298023224,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d17",
+      "rect": [
+        243.13,
+        251.75,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d18",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.20000000298023224,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d18",
+      "rect": [
+        245.75,
+        251.75,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d19",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.20000000298023224,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d19",
+      "rect": [
+        248.38,
+        251.75,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d20",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.21400000154972076,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d20",
+      "rect": [
+        237.88,
+        254.38,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d21",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.20399999618530273,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d21",
+      "rect": [
+        240.5,
+        254.38,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d22",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.20000000298023224,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d22",
+      "rect": [
+        243.13,
+        254.38,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d23",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.20000000298023224,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d23",
+      "rect": [
+        245.75,
+        254.38,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "d24",
+      "loopPhase": 0.0,
+      "moving": true,
+      "opacity": 0.20000000298023224,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/status/ring/d24",
+      "rect": [
+        248.38,
+        254.38,
+        1.75,
+        1.75
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#080808ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "close",
+      "label": "Close tab",
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/close",
+      "rect": [
+        234.0,
+        240.0,
+        20.0,
+        20.0
+      ],
+      "role": "button"
+    },
+    {
+      "fill": "#ffffff02",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "close-ink",
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/close/close-ink",
+      "rect": [
+        234.0,
+        240.0,
+        20.0,
+        20.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0006aaaaaaaaaaaaaaaaaa/close/close-ink/#0",
+      "rect": [
+        236.0,
+        242.0,
+        16.0,
+        16.0
+      ],
+      "role": "icon"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "t-ses_fx0004aaaaaaaaaaaaaaaaaa",
+      "label": "Add keyboard shortcuts to the command palette",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0004aaaaaaaaaaaaaaaaaa",
+      "rect": [
+        10.0,
+        268.0,
+        248.0,
+        28.0
+      ],
+      "role": "button"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "link",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0004aaaaaaaaaaaaaaaaaa/link",
+      "rect": [
+        10.0,
+        268.0,
+        218.0,
+        28.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#8c2d61ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0004aaaaaaaaaaaaaaaaaa/link/#0",
+      "rect": [
+        16.0,
+        274.0,
+        16.0,
+        16.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#ffffffff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0004aaaaaaaaaaaaaaaaaa/link/#0/#0",
+      "rect": [
+        20.75,
+        274.0,
+        6.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "L"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0004aaaaaaaaaaaaaaaaaa/link/#1",
+      "rect": [
+        38.0,
+        274.0,
+        299.0,
+        16.0
+      ],
+      "role": "text",
+      "text": "Add keyboard shortcuts to the command palette"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "status",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0004aaaaaaaaaaaaaaaaaa/status",
+      "rect": [
+        234.0,
+        272.0,
+        20.0,
+        20.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#3b5cf6ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0004aaaaaaaaaaaaaaaaaa/status/#0",
+      "rect": [
+        240.5,
+        278.5,
+        7.0,
+        7.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#080808ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "close",
+      "label": "Close tab",
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0004aaaaaaaaaaaaaaaaaa/close",
+      "rect": [
+        234.0,
+        272.0,
+        20.0,
+        20.0
+      ],
+      "role": "button"
+    },
+    {
+      "fill": "#ffffff02",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "close-ink",
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0004aaaaaaaaaaaaaaaaaa/close/close-ink",
+      "rect": [
+        234.0,
+        272.0,
+        20.0,
+        20.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0004aaaaaaaaaaaaaaaaaa/close/close-ink/#0",
+      "rect": [
+        236.0,
+        274.0,
+        16.0,
+        16.0
+      ],
+      "role": "icon"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "t-ses_fx0008aaaaaaaaaaaaaaaaaa",
+      "label": "Explain the tile cache eviction policy",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0008aaaaaaaaaaaaaaaaaa",
+      "rect": [
+        10.0,
+        300.0,
+        248.0,
+        28.0
+      ],
+      "role": "button"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "link",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0008aaaaaaaaaaaaaaaaaa/link",
+      "rect": [
+        10.0,
+        300.0,
+        218.0,
+        28.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#005a6eff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0008aaaaaaaaaaaaaaaaaa/link/#0",
+      "rect": [
+        16.0,
+        306.0,
+        16.0,
+        16.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#ffffffff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0008aaaaaaaaaaaaaaaaaa/link/#0/#0",
+      "rect": [
+        20.25,
+        306.0,
+        7.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "T"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0008aaaaaaaaaaaaaaaaaa/link/#1",
+      "rect": [
+        38.0,
+        306.0,
+        224.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "Explain the tile cache eviction policy"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "status",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0008aaaaaaaaaaaaaaaaaa/status",
+      "rect": [
+        234.0,
+        304.0,
+        20.0,
+        20.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#f2cf76ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0008aaaaaaaaaaaaaaaaaa/status/#0",
+      "rect": [
+        240.5,
+        310.5,
+        7.0,
+        7.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#080808ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "close",
+      "label": "Close tab",
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0008aaaaaaaaaaaaaaaaaa/close",
+      "rect": [
+        234.0,
+        304.0,
+        20.0,
+        20.0
+      ],
+      "role": "button"
+    },
+    {
+      "fill": "#ffffff02",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "close-ink",
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0008aaaaaaaaaaaaaaaaaa/close/close-ink",
+      "rect": [
+        234.0,
+        304.0,
+        20.0,
+        20.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0008aaaaaaaaaaaaaaaaaa/close/close-ink/#0",
+      "rect": [
+        236.0,
+        306.0,
+        16.0,
+        16.0
+      ],
+      "role": "icon"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "t-ses_fx0010aaaaaaaaaaaaaaaaaa",
+      "label": "Fix footnote numbering in exported PDFs",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0010aaaaaaaaaaaaaaaaaa",
+      "rect": [
+        10.0,
+        332.0,
+        248.0,
+        28.0
+      ],
+      "role": "button"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "link",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0010aaaaaaaaaaaaaaaaaa/link",
+      "rect": [
+        10.0,
+        332.0,
+        238.0,
+        28.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#8c2d61ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0010aaaaaaaaaaaaaaaaaa/link/#0",
+      "rect": [
+        16.0,
+        338.0,
+        16.0,
+        16.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#ffffffff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0010aaaaaaaaaaaaaaaaaa/link/#0/#0",
+      "rect": [
+        19.75,
+        338.0,
+        8.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "Q"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0010aaaaaaaaaaaaaaaaaa/link/#1",
+      "rect": [
+        38.0,
+        338.0,
+        253.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "Fix footnote numbering in exported PDFs"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "status",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0010aaaaaaaaaaaaaaaaaa/status",
+      "rect": [
+        234.0,
+        336.0,
+        20.0,
+        20.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0010aaaaaaaaaaaaaaaaaa/status/#0",
+      "rect": [
+        244.0,
+        346.0,
+        0.0,
+        0.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#080808ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "close",
+      "label": "Close tab",
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0010aaaaaaaaaaaaaaaaaa/close",
+      "rect": [
+        234.0,
+        336.0,
+        20.0,
+        20.0
+      ],
+      "role": "button"
+    },
+    {
+      "fill": "#ffffff02",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "close-ink",
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0010aaaaaaaaaaaaaaaaaa/close/close-ink",
+      "rect": [
+        234.0,
+        336.0,
+        20.0,
+        20.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0010aaaaaaaaaaaaaaaaaa/close/close-ink/#0",
+      "rect": [
+        236.0,
+        338.0,
+        16.0,
+        16.0
+      ],
+      "role": "icon"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "t-ses_fx0007aaaaaaaaaaaaaaaaaa",
+      "label": "Retry uploads after a dropped connection",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0007aaaaaaaaaaaaaaaaaa",
+      "rect": [
+        10.0,
+        364.0,
+        248.0,
+        28.0
+      ],
+      "role": "button"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "link",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0007aaaaaaaaaaaaaaaaaa/link",
+      "rect": [
+        10.0,
+        364.0,
+        218.0,
+        28.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#7a1f23ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0007aaaaaaaaaaaaaaaaaa/link/#0",
+      "rect": [
+        16.0,
+        370.0,
+        16.0,
+        16.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#ffffffff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0007aaaaaaaaaaaaaaaaaa/link/#0/#0",
+      "rect": [
+        19.75,
+        370.0,
+        8.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "H"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0007aaaaaaaaaaaaaaaaaa/link/#1",
+      "rect": [
+        38.0,
+        370.0,
+        257.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "Retry uploads after a dropped connection"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "status",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0007aaaaaaaaaaaaaaaaaa/status",
+      "rect": [
+        234.0,
+        368.0,
+        20.0,
+        20.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#3b5cf6ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0007aaaaaaaaaaaaaaaaaa/status/#0",
+      "rect": [
+        240.5,
+        374.5,
+        7.0,
+        7.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#080808ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "close",
+      "label": "Close tab",
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0007aaaaaaaaaaaaaaaaaa/close",
+      "rect": [
+        234.0,
+        368.0,
+        20.0,
+        20.0
+      ],
+      "role": "button"
+    },
+    {
+      "fill": "#ffffff02",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "close-ink",
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0007aaaaaaaaaaaaaaaaaa/close/close-ink",
+      "rect": [
+        234.0,
+        368.0,
+        20.0,
+        20.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0007aaaaaaaaaaaaaaaaaa/close/close-ink/#0",
+      "rect": [
+        236.0,
+        370.0,
+        16.0,
+        16.0
+      ],
+      "role": "icon"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "t-ses_fx0005aaaaaaaaaaaaaaaaaa",
+      "label": "Profile scroll jank in long transcripts",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0005aaaaaaaaaaaaaaaaaa",
+      "rect": [
+        10.0,
+        396.0,
+        248.0,
+        28.0
+      ],
+      "role": "button"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "link",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0005aaaaaaaaaaaaaaaaaa/link",
+      "rect": [
+        10.0,
+        396.0,
+        238.0,
+        28.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#8c2d61ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0005aaaaaaaaaaaaaaaaaa/link/#0",
+      "rect": [
+        16.0,
+        402.0,
+        16.0,
+        16.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#ffffffff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0005aaaaaaaaaaaaaaaaaa/link/#0/#0",
+      "rect": [
+        20.75,
+        402.0,
+        6.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "L"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0005aaaaaaaaaaaaaaaaaa/link/#1",
+      "rect": [
+        38.0,
+        402.0,
+        221.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "Profile scroll jank in long transcripts"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "status",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0005aaaaaaaaaaaaaaaaaa/status",
+      "rect": [
+        234.0,
+        400.0,
+        20.0,
+        20.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0005aaaaaaaaaaaaaaaaaa/status/#0",
+      "rect": [
+        244.0,
+        410.0,
+        0.0,
+        0.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#080808ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "close",
+      "label": "Close tab",
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0005aaaaaaaaaaaaaaaaaa/close",
+      "rect": [
+        234.0,
+        400.0,
+        20.0,
+        20.0
+      ],
+      "role": "button"
+    },
+    {
+      "fill": "#ffffff02",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "close-ink",
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0005aaaaaaaaaaaaaaaaaa/close/close-ink",
+      "rect": [
+        234.0,
+        400.0,
+        20.0,
+        20.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar/sidebar-inner/tabs-scroll/tabs/t-ses_fx0005aaaaaaaaaaaaaaaaaa/close/close-ink/#0",
+      "rect": [
+        236.0,
+        402.0,
+        16.0,
+        16.0
+      ],
+      "role": "icon"
+    },
+    {
+      "fill": "#161616ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "panel",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel",
+      "rect": [
+        268.0,
+        8.0,
+        1004.0,
+        804.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "session",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session",
+      "rect": [
+        268.0,
+        8.0,
+        1004.0,
+        804.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "header",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/header",
+      "rect": [
+        268.0,
+        8.0,
+        1004.0,
+        48.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "toggle-space",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/header/toggle-space",
+      "rect": [
+        282.0,
+        18.0,
+        0.0,
+        28.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "crumbs",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/header/crumbs",
+      "rect": [
+        290.0,
+        24.0,
+        323.0,
+        16.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#8c2d61ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/header/crumbs/#0",
+      "rect": [
+        290.0,
+        24.0,
+        16.0,
+        16.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#ffffffff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/header/crumbs/#0/#0",
+      "rect": [
+        294.75,
+        24.0,
+        6.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "L"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/header/crumbs/#1",
+      "rect": [
+        314.0,
+        24.0,
+        38.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "lumen"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/header/crumbs/#2",
+      "rect": [
+        352.5,
+        25.0,
+        16.5,
+        14.0
+      ],
+      "role": "text",
+      "text": "/"
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/header/crumbs/#3",
+      "rect": [
+        369.0,
+        24.0,
+        244.0,
+        16.0
+      ],
+      "role": "text",
+      "text": "Fix flaky reconnect in the event stream"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/header/#2",
+      "rect": [
+        621.0,
+        32.0,
+        535.5,
+        0.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "usage",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/header/usage",
+      "rect": [
+        1164.5,
+        24.0,
+        93.5,
+        16.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "ring",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/header/usage/ring",
+      "rect": [
+        1164.5,
+        24.0,
+        16.0,
+        16.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#3a3a3aff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/header/usage/ring/#0",
+      "rect": [
+        1164.5,
+        24.0,
+        16.0,
+        16.0
+      ],
+      "role": "icon"
+    },
+    {
+      "color": "#dbdbdbff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/header/usage/ring/#1",
+      "rect": [
+        1164.5,
+        24.0,
+        16.0,
+        16.0
+      ],
+      "role": "icon"
+    },
+    {
+      "color": "#aeaeaeff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/header/usage/#1",
+      "rect": [
+        1186.5,
+        24.0,
+        34.0,
+        16.0
+      ],
+      "role": "text",
+      "text": "63.8K"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/header/usage/#2",
+      "rect": [
+        1226.5,
+        24.0,
+        31.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "$1.84"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "scroll-ses_fx0001aaaaaaaaaaaaaaaaaa",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa",
+      "rect": [
+        268.0,
+        56.0,
+        1004.0,
+        610.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "timeline",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline",
+      "rect": [
+        268.0,
+        -614.5,
+        1004.0,
+        1280.5
+      ],
+      "role": "group",
+      "target": [
+        268.0,
+        56.0,
+        1004.0,
+        1280.5
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "u-msg_001a162c32a80001fixture00",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/u-msg_001a162c32a80001fixture00",
+      "rect": [
+        422.0,
+        -606.5,
+        696.0,
+        82.0
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        64.0,
+        696.0,
+        82.0
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/u-msg_001a162c32a80001fixture00/#0",
+      "rect": [
+        422.0,
+        -606.5,
+        696.0,
+        82.0
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        64.0,
+        696.0,
+        82.0
+      ]
+    },
+    {
+      "fill": "#2e2e2eff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/u-msg_001a162c32a80001fixture00/#0/#0",
+      "rect": [
+        658.0,
+        -598.5,
+        460.0,
+        58.0
+      ],
+      "role": "group",
+      "target": [
+        658.0,
+        72.0,
+        460.0,
+        58.0
+      ]
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "text-msg_001a162c32a80001fixture00",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/u-msg_001a162c32a80001fixture00/#0/#0/text-msg_001a162c32a80001fixture00",
+      "rect": [
+        670.0,
+        -590.5,
+        436.0,
+        42.0
+      ],
+      "role": "text",
+      "target": [
+        670.0,
+        80.0,
+        436.0,
+        42.0
+      ],
+      "text": "The event stream drops after the laptop sleeps, and the sidebar stops updating until I reload. Can you find out why and fix it?"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "r-msg_001a162c33250002fixture00-0",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/r-msg_001a162c33250002fixture00-0",
+      "rect": [
+        422.0,
+        -524.5,
+        696.0,
+        40.0
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        146.0,
+        696.0,
+        40.0
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/r-msg_001a162c33250002fixture00-0/#0",
+      "rect": [
+        422.0,
+        -524.5,
+        696.0,
+        40.0
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        146.0,
+        696.0,
+        40.0
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "trigger",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/r-msg_001a162c33250002fixture00-0/#0/trigger",
+      "rect": [
+        422.0,
+        -524.5,
+        696.0,
+        28.0
+      ],
+      "role": "button",
+      "target": [
+        422.0,
+        146.0,
+        696.0,
+        28.0
+      ]
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/r-msg_001a162c33250002fixture00-0/#0/trigger/#0",
+      "rect": [
+        422.0,
+        -518.5,
+        16.0,
+        16.0
+      ],
+      "role": "icon",
+      "target": [
+        422.0,
+        152.0,
+        16.0,
+        16.0
+      ]
+    },
+    {
+      "color": "#aeaeaeff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/r-msg_001a162c33250002fixture00-0/#0/trigger/#1",
+      "rect": [
+        444.0,
+        -518.5,
+        91.5,
+        16.0
+      ],
+      "role": "text",
+      "target": [
+        444.0,
+        152.0,
+        91.5,
+        16.0
+      ],
+      "text": "Thought for 4s"
+    },
+    {
+      "color": "#5c5c5cff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/r-msg_001a162c33250002fixture00-0/#0/trigger/#2",
+      "rect": [
+        541.5,
+        -517.5,
+        14.0,
+        14.0
+      ],
+      "role": "icon",
+      "target": [
+        541.5,
+        153.0,
+        14.0,
+        14.0
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "t-msg_001a162c33250002fixture00-1",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c33250002fixture00-1",
+      "rect": [
+        422.0,
+        -484.5,
+        696.0,
+        34.5
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        186.0,
+        696.0,
+        34.5
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c33250002fixture00-1/#0",
+      "rect": [
+        422.0,
+        -484.5,
+        696.0,
+        34.5
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        186.0,
+        696.0,
+        34.5
+      ]
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "b0",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c33250002fixture00-1/#0/b0",
+      "rect": [
+        422.0,
+        -484.5,
+        696.0,
+        22.5
+      ],
+      "role": "text",
+      "target": [
+        422.0,
+        186.0,
+        696.0,
+        22.5
+      ],
+      "text": "I'll start with how the client opens the stream and what it does when it goes quiet."
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "g-call_grep_27000",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_grep_27000",
+      "rect": [
+        422.0,
+        -450.0,
+        696.0,
+        40.0
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        220.5,
+        696.0,
+        40.0
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_grep_27000/#0",
+      "rect": [
+        422.0,
+        -450.0,
+        696.0,
+        40.0
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        220.5,
+        696.0,
+        40.0
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "trigger",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_grep_27000/#0/trigger",
+      "rect": [
+        422.0,
+        -450.0,
+        696.0,
+        28.0
+      ],
+      "role": "button",
+      "target": [
+        422.0,
+        220.5,
+        696.0,
+        28.0
+      ]
+    },
+    {
+      "color": "#aeaeaeff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_grep_27000/#0/trigger/#0",
+      "rect": [
+        422.0,
+        -444.0,
+        36.0,
+        16.0
+      ],
+      "role": "text",
+      "target": [
+        422.0,
+        226.5,
+        36.0,
+        16.0
+      ],
+      "text": "Used "
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_grep_27000/#0/trigger/#1",
+      "rect": [
+        458.0,
+        -444.0,
+        8.5,
+        16.0
+      ],
+      "role": "text",
+      "target": [
+        458.0,
+        226.5,
+        8.5,
+        16.0
+      ],
+      "text": "3"
+    },
+    {
+      "color": "#aeaeaeff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_grep_27000/#0/trigger/#2",
+      "rect": [
+        466.5,
+        -444.0,
+        33.5,
+        16.0
+      ],
+      "role": "text",
+      "target": [
+        466.5,
+        226.5,
+        33.5,
+        16.0
+      ],
+      "text": " tools"
+    },
+    {
+      "color": "#5c5c5cff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_grep_27000/#0/trigger/#3",
+      "rect": [
+        502.0,
+        -443.0,
+        14.0,
+        14.0
+      ],
+      "role": "icon",
+      "target": [
+        502.0,
+        227.5,
+        14.0,
+        14.0
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "t-msg_001a162c36130003fixture00-0",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0",
+      "rect": [
+        422.0,
+        -410.0,
+        696.0,
+        644.5
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        260.5,
+        696.0,
+        644.5
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0",
+      "rect": [
+        422.0,
+        -410.0,
+        696.0,
+        644.5
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        260.5,
+        696.0,
+        644.5
+      ]
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "b0",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b0",
+      "rect": [
+        422.0,
+        -410.0,
+        696.0,
+        24.0
+      ],
+      "role": "text",
+      "target": [
+        422.0,
+        260.5,
+        696.0,
+        24.0
+      ],
+      "text": "What's happening"
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "b1",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b1",
+      "rect": [
+        422.0,
+        -376.0,
+        696.0,
+        67.5
+      ],
+      "role": "text",
+      "target": [
+        422.0,
+        294.5,
+        696.0,
+        67.5
+      ],
+      "text": "The server sends a heartbeat every 10 seconds, but  stream.ts  only reconnects on an  error  event. When the machine sleeps, the TCP connection goes half-open: the browser never sees an error, so the client waits forever."
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "b2",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b2",
+      "rect": [
+        422.0,
+        -296.5,
+        696.0,
+        22.5
+      ],
+      "role": "text",
+      "target": [
+        422.0,
+        374.0,
+        696.0,
+        22.5
+      ],
+      "text": "Two smaller problems make it worse:"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "b3",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b3",
+      "rect": [
+        422.0,
+        -262.0,
+        696.0,
+        49.0
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        408.5,
+        696.0,
+        49.0
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "i0",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b3/i0",
+      "rect": [
+        422.0,
+        -262.0,
+        696.0,
+        22.5
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        408.5,
+        696.0,
+        22.5
+      ]
+    },
+    {
+      "color": "#aeaeaeff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b3/i0/#0",
+      "rect": [
+        422.0,
+        -262.0,
+        32.0,
+        22.5
+      ],
+      "role": "text",
+      "target": [
+        422.0,
+        408.5,
+        32.0,
+        22.5
+      ],
+      "text": "•"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b3/i0/#1",
+      "rect": [
+        454.0,
+        -262.0,
+        664.0,
+        22.5
+      ],
+      "role": "group",
+      "target": [
+        454.0,
+        408.5,
+        664.0,
+        22.5
+      ]
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "b0",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b3/i0/#1/b0",
+      "rect": [
+        454.0,
+        -262.0,
+        664.0,
+        22.5
+      ],
+      "role": "text",
+      "target": [
+        454.0,
+        408.5,
+        664.0,
+        22.5
+      ],
+      "text": " backoff.ts  resets its delay on every message, so a flapping server is retried at full speed."
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "i1",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b3/i1",
+      "rect": [
+        422.0,
+        -235.5,
+        696.0,
+        22.5
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        435.0,
+        696.0,
+        22.5
+      ]
+    },
+    {
+      "color": "#aeaeaeff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b3/i1/#0",
+      "rect": [
+        422.0,
+        -235.5,
+        32.0,
+        22.5
+      ],
+      "role": "text",
+      "target": [
+        422.0,
+        435.0,
+        32.0,
+        22.5
+      ],
+      "text": "•"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b3/i1/#1",
+      "rect": [
+        454.0,
+        -235.5,
+        664.0,
+        22.5
+      ],
+      "role": "group",
+      "target": [
+        454.0,
+        435.0,
+        664.0,
+        22.5
+      ]
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "b0",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b3/i1/#1/b0",
+      "rect": [
+        454.0,
+        -235.5,
+        664.0,
+        22.5
+      ],
+      "role": "text",
+      "target": [
+        454.0,
+        435.0,
+        664.0,
+        22.5
+      ],
+      "text": "The sidebar store ignores  session.updated  events that arrive before the first list fetch."
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "b4",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b4",
+      "rect": [
+        422.0,
+        -193.0,
+        696.0,
+        20.0
+      ],
+      "role": "text",
+      "target": [
+        422.0,
+        477.5,
+        696.0,
+        20.0
+      ],
+      "text": "The fix"
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "b5",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b5",
+      "rect": [
+        422.0,
+        -165.0,
+        696.0,
+        45.0
+      ],
+      "role": "text",
+      "target": [
+        422.0,
+        505.5,
+        696.0,
+        45.0
+      ],
+      "text": "Treat silence as failure. If no event or heartbeat arrives for 25 seconds, close the stream and reconnect with backoff:"
+    },
+    {
+      "fill": "#242424ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "b6",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b6",
+      "rect": [
+        422.0,
+        -108.0,
+        696.0,
+        284.0
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        562.5,
+        696.0,
+        284.0
+      ]
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b6/#0",
+      "rect": [
+        434.0,
+        -96.0,
+        672.0,
+        260.0
+      ],
+      "role": "text",
+      "target": [
+        434.0,
+        574.5,
+        672.0,
+        260.0
+      ],
+      "text": "const QUIET_MS = 25_000\n\nfunction watchdog(stream: EventStream, reconnect: () => void) {\n  let timer = setTimeout(fire, QUIET_MS)\n  function fire() {\n    stream.close()\n    reconnect()\n  }\n  stream.on(\"message\", () => {\n    clearTimeout(timer)\n    timer = setTimeout(fire, QUIET_MS)\n  })\n}"
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "b7",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c36130003fixture00-0/#0/b7",
+      "rect": [
+        422.0,
+        200.0,
+        696.0,
+        22.5
+      ],
+      "role": "text",
+      "target": [
+        422.0,
+        870.5,
+        696.0,
+        22.5
+      ],
+      "text": "I also moved the backoff reset to after a stream has stayed healthy for a minute."
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "g-call_edit_50000",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_edit_50000",
+      "rect": [
+        422.0,
+        234.5,
+        696.0,
+        40.0
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        905.0,
+        696.0,
+        40.0
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_edit_50000/#0",
+      "rect": [
+        422.0,
+        234.5,
+        696.0,
+        40.0
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        905.0,
+        696.0,
+        40.0
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "trigger",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_edit_50000/#0/trigger",
+      "rect": [
+        422.0,
+        234.5,
+        696.0,
+        28.0
+      ],
+      "role": "button",
+      "target": [
+        422.0,
+        905.0,
+        696.0,
+        28.0
+      ]
+    },
+    {
+      "color": "#aeaeaeff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_edit_50000/#0/trigger/#0",
+      "rect": [
+        422.0,
+        240.5,
+        36.0,
+        16.0
+      ],
+      "role": "text",
+      "target": [
+        422.0,
+        911.0,
+        36.0,
+        16.0
+      ],
+      "text": "Used "
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_edit_50000/#0/trigger/#1",
+      "rect": [
+        458.0,
+        240.5,
+        8.5,
+        16.0
+      ],
+      "role": "text",
+      "target": [
+        458.0,
+        911.0,
+        8.5,
+        16.0
+      ],
+      "text": "3"
+    },
+    {
+      "color": "#aeaeaeff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_edit_50000/#0/trigger/#2",
+      "rect": [
+        466.5,
+        240.5,
+        33.5,
+        16.0
+      ],
+      "role": "text",
+      "target": [
+        466.5,
+        911.0,
+        33.5,
+        16.0
+      ],
+      "text": " tools"
+    },
+    {
+      "color": "#5c5c5cff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/g-call_edit_50000/#0/trigger/#3",
+      "rect": [
+        502.0,
+        241.5,
+        14.0,
+        14.0
+      ],
+      "role": "icon",
+      "target": [
+        502.0,
+        912.0,
+        14.0,
+        14.0
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "a-call_task_60500",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/a-call_task_60500",
+      "rect": [
+        422.0,
+        274.5,
+        696.0,
+        44.0
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        945.0,
+        696.0,
+        44.0
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/a-call_task_60500/#0",
+      "rect": [
+        422.0,
+        274.5,
+        696.0,
+        44.0
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        945.0,
+        696.0,
+        44.0
+      ]
+    },
+    {
+      "fill": "#242424ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "chip",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/a-call_task_60500/#0/chip",
+      "rect": [
+        422.0,
+        274.5,
+        321.0,
+        32.0
+      ],
+      "role": "button",
+      "target": [
+        422.0,
+        945.0,
+        321.0,
+        32.0
+      ]
+    },
+    {
+      "color": "#dbdbdbff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/a-call_task_60500/#0/chip/#0",
+      "rect": [
+        432.0,
+        282.5,
+        16.0,
+        16.0
+      ],
+      "role": "icon",
+      "target": [
+        432.0,
+        953.0,
+        16.0,
+        16.0
+      ]
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/a-call_task_60500/#0/chip/#1",
+      "rect": [
+        456.0,
+        282.5,
+        48.5,
+        16.0
+      ],
+      "role": "text",
+      "target": [
+        456.0,
+        953.0,
+        48.5,
+        16.0
+      ],
+      "text": "General"
+    },
+    {
+      "color": "#aeaeaeff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/a-call_task_60500/#0/chip/#2",
+      "rect": [
+        512.5,
+        282.5,
+        182.0,
+        16.0
+      ],
+      "role": "text",
+      "target": [
+        512.5,
+        953.0,
+        182.0,
+        16.0
+      ],
+      "text": "Review the reconnect change"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/a-call_task_60500/#0/chip/#3",
+      "rect": [
+        702.5,
+        282.5,
+        30.5,
+        16.0
+      ],
+      "role": "text",
+      "target": [
+        702.5,
+        953.0,
+        30.5,
+        16.0
+      ],
+      "text": "Done"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "t-msg_001a162c52a38005fixture00-0",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0",
+      "rect": [
+        422.0,
+        318.5,
+        696.0,
+        201.5
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        989.0,
+        696.0,
+        201.5
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0",
+      "rect": [
+        422.0,
+        318.5,
+        696.0,
+        201.5
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        989.0,
+        696.0,
+        201.5
+      ]
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "b0",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b0",
+      "rect": [
+        422.0,
+        318.5,
+        696.0,
+        22.5
+      ],
+      "role": "text",
+      "target": [
+        422.0,
+        989.0,
+        696.0,
+        22.5
+      ],
+      "text": "Done. The stream now recovers from sleep on its own."
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "b1",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1",
+      "rect": [
+        422.0,
+        353.0,
+        696.0,
+        75.5
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        1023.5,
+        696.0,
+        75.5
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "i0",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i0",
+      "rect": [
+        422.0,
+        353.0,
+        696.0,
+        22.5
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        1023.5,
+        696.0,
+        22.5
+      ]
+    },
+    {
+      "color": "#aeaeaeff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i0/#0",
+      "rect": [
+        422.0,
+        353.0,
+        32.0,
+        22.5
+      ],
+      "role": "text",
+      "target": [
+        422.0,
+        1023.5,
+        32.0,
+        22.5
+      ],
+      "text": "1."
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i0/#1",
+      "rect": [
+        454.0,
+        353.0,
+        664.0,
+        22.5
+      ],
+      "role": "group",
+      "target": [
+        454.0,
+        1023.5,
+        664.0,
+        22.5
+      ]
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "b0",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i0/#1/b0",
+      "rect": [
+        454.0,
+        353.0,
+        664.0,
+        22.5
+      ],
+      "role": "text",
+      "target": [
+        454.0,
+        1023.5,
+        664.0,
+        22.5
+      ],
+      "text": "Watchdog:  stream.ts  closes and reopens the stream after 25 s of silence."
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "i1",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i1",
+      "rect": [
+        422.0,
+        379.5,
+        696.0,
+        22.5
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        1050.0,
+        696.0,
+        22.5
+      ]
+    },
+    {
+      "color": "#aeaeaeff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i1/#0",
+      "rect": [
+        422.0,
+        379.5,
+        32.0,
+        22.5
+      ],
+      "role": "text",
+      "target": [
+        422.0,
+        1050.0,
+        32.0,
+        22.5
+      ],
+      "text": "2."
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i1/#1",
+      "rect": [
+        454.0,
+        379.5,
+        664.0,
+        22.5
+      ],
+      "role": "group",
+      "target": [
+        454.0,
+        1050.0,
+        664.0,
+        22.5
+      ]
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "b0",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i1/#1/b0",
+      "rect": [
+        454.0,
+        379.5,
+        664.0,
+        22.5
+      ],
+      "role": "text",
+      "target": [
+        454.0,
+        1050.0,
+        664.0,
+        22.5
+      ],
+      "text": "Backoff: the delay only resets after a minute of healthy traffic."
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "i2",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i2",
+      "rect": [
+        422.0,
+        406.0,
+        696.0,
+        22.5
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        1076.5,
+        696.0,
+        22.5
+      ]
+    },
+    {
+      "color": "#aeaeaeff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i2/#0",
+      "rect": [
+        422.0,
+        406.0,
+        32.0,
+        22.5
+      ],
+      "role": "text",
+      "target": [
+        422.0,
+        1076.5,
+        32.0,
+        22.5
+      ],
+      "text": "3."
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i2/#1",
+      "rect": [
+        454.0,
+        406.0,
+        664.0,
+        22.5
+      ],
+      "role": "group",
+      "target": [
+        454.0,
+        1076.5,
+        664.0,
+        22.5
+      ]
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "b0",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b1/i2/#1/b0",
+      "rect": [
+        454.0,
+        406.0,
+        664.0,
+        22.5
+      ],
+      "role": "text",
+      "target": [
+        454.0,
+        1076.5,
+        664.0,
+        22.5
+      ],
+      "text": "Sidebar: early  session.updated  events are queued until the list loads."
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "b2",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/t-msg_001a162c52a38005fixture00-0/#0/b2",
+      "rect": [
+        422.0,
+        440.5,
+        696.0,
+        67.5
+      ],
+      "role": "text",
+      "target": [
+        422.0,
+        1111.0,
+        696.0,
+        67.5
+      ],
+      "text": "The reviewer agreed and suggested one change, which I applied: the watchdog now also restarts on  visibilitychange , so waking the laptop reconnects immediately instead of after 25 s. All 14 tests in  src/net  pass."
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "u-msg_001a162cb67e0006fixture00",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/u-msg_001a162cb67e0006fixture00",
+      "rect": [
+        422.0,
+        520.0,
+        696.0,
+        94.0
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        1190.5,
+        696.0,
+        94.0
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/u-msg_001a162cb67e0006fixture00/#0",
+      "rect": [
+        422.0,
+        520.0,
+        696.0,
+        94.0
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        1190.5,
+        696.0,
+        94.0
+      ]
+    },
+    {
+      "fill": "#2e2e2eff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/u-msg_001a162cb67e0006fixture00/#0/#0",
+      "rect": [
+        658.0,
+        540.0,
+        460.0,
+        58.0
+      ],
+      "role": "group",
+      "target": [
+        658.0,
+        1210.5,
+        460.0,
+        58.0
+      ]
+    },
+    {
+      "color": "#fafafaff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "text-msg_001a162cb67e0006fixture00",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/u-msg_001a162cb67e0006fixture00/#0/#0/text-msg_001a162cb67e0006fixture00",
+      "rect": [
+        670.0,
+        548.0,
+        436.0,
+        42.0
+      ],
+      "role": "text",
+      "target": [
+        670.0,
+        1218.5,
+        436.0,
+        42.0
+      ],
+      "text": "Nice. Can you add a test for the backoff, so the reset can't regress?"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "turn-actions",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/turn-actions",
+      "rect": [
+        422.0,
+        614.0,
+        696.0,
+        28.0
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        1284.5,
+        696.0,
+        28.0
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/turn-actions/#0",
+      "rect": [
+        422.0,
+        614.0,
+        696.0,
+        28.0
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        1284.5,
+        696.0,
+        28.0
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "working",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/turn-actions/#0/working",
+      "rect": [
+        422.0,
+        614.0,
+        65.5,
+        28.0
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        1284.5,
+        65.5,
+        28.0
+      ]
+    },
+    {
+      "fill": "#a2bcffff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/turn-actions/#0/working/#0",
+      "rect": [
+        422.0,
+        619.0,
+        6.0,
+        6.0
+      ],
+      "role": "group",
+      "target": [
+        422.0,
+        1289.5,
+        6.0,
+        6.0
+      ]
+    },
+    {
+      "color": "#aeaeaeff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/turn-actions/#0/working/#1",
+      "rect": [
+        436.0,
+        614.0,
+        51.5,
+        16.0
+      ],
+      "role": "text",
+      "target": [
+        436.0,
+        1284.5,
+        51.5,
+        16.0
+      ],
+      "text": "Working"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "copy",
+      "label": "Copy response",
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/turn-actions/#0/copy",
+      "rect": [
+        422.0,
+        614.0,
+        28.0,
+        28.0
+      ],
+      "role": "button",
+      "target": [
+        422.0,
+        1284.5,
+        28.0,
+        28.0
+      ]
+    },
+    {
+      "color": "#aeaeaeff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/panel/session/scroll-ses_fx0001aaaaaaaaaaaaaaaaaa/timeline/turn-actions/#0/copy/#0",
+      "rect": [
+        428.0,
+        614.0,
+        16.0,
+        16.0
+      ],
+      "role": "icon",
+      "target": [
+        428.0,
+        1284.5,
+        16.0,
+        16.0
+      ]
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "dock",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/dock",
+      "rect": [
+        268.0,
+        666.0,
+        1004.0,
+        118.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#242424ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "composer",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/dock/composer",
+      "rect": [
+        422.0,
+        666.0,
+        696.0,
+        108.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "editor",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/dock/composer/editor",
+      "rect": [
+        422.0,
+        666.0,
+        696.0,
+        64.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#ffffffff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": true,
+      "focused": false,
+      "inert": false,
+      "key": "prompt",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/dock/composer/editor/prompt",
+      "rect": [
+        438.0,
+        682.0,
+        664.0,
+        40.0
+      ],
+      "role": "textbox",
+      "text": ""
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "toolbar",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/dock/composer/toolbar",
+      "rect": [
+        422.0,
+        730.0,
+        696.0,
+        44.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "agent",
+      "label": "Choose agent",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/dock/composer/toolbar/agent",
+      "rect": [
+        430.0,
+        738.0,
+        64.5,
+        28.0
+      ],
+      "role": "button"
+    },
+    {
+      "color": "#aeaeaeff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/dock/composer/toolbar/agent/#0",
+      "rect": [
+        438.0,
+        744.0,
+        30.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "Build"
+    },
+    {
+      "color": "#5c5c5cff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/dock/composer/toolbar/agent/#1",
+      "rect": [
+        470.5,
+        744.0,
+        16.0,
+        16.0
+      ],
+      "role": "icon"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "model",
+      "label": "Choose model",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/dock/composer/toolbar/model",
+      "rect": [
+        498.5,
+        738.0,
+        135.5,
+        28.0
+      ],
+      "role": "button"
+    },
+    {
+      "color": "#aeaeaeff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/dock/composer/toolbar/model/#0",
+      "rect": [
+        506.5,
+        744.0,
+        101.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "Claude Opus 5.5"
+    },
+    {
+      "color": "#5c5c5cff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/dock/composer/toolbar/model/#1",
+      "rect": [
+        610.0,
+        744.0,
+        16.0,
+        16.0
+      ],
+      "role": "icon"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "effort",
+      "label": "Choose effort",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/dock/composer/toolbar/effort",
+      "rect": [
+        638.0,
+        738.0,
+        62.5,
+        28.0
+      ],
+      "role": "button"
+    },
+    {
+      "color": "#aeaeaeff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/dock/composer/toolbar/effort/#0",
+      "rect": [
+        646.0,
+        744.0,
+        28.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "High"
+    },
+    {
+      "color": "#5c5c5cff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/dock/composer/toolbar/effort/#1",
+      "rect": [
+        676.5,
+        744.0,
+        16.0,
+        16.0
+      ],
+      "role": "icon"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/dock/composer/toolbar/#3",
+      "rect": [
+        704.5,
+        752.0,
+        373.5,
+        0.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#2e2e2eff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "submit",
+      "label": "Send",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/dock/composer/toolbar/submit",
+      "rect": [
+        1082.0,
+        738.0,
+        28.0,
+        28.0
+      ],
+      "role": "button"
+    },
+    {
+      "color": "#5c5c5cff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/dock/composer/toolbar/submit/#0",
+      "rect": [
+        1088.0,
+        744.0,
+        16.0,
+        16.0
+      ],
+      "role": "icon"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "status",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/status",
+      "rect": [
+        268.0,
+        784.0,
+        1004.0,
+        28.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#5c5c5cff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/status/#0",
+      "rect": [
+        284.0,
+        791.0,
+        14.0,
+        14.0
+      ],
+      "role": "icon"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/status/#1",
+      "rect": [
+        310.0,
+        790.0,
+        80.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "~/code/lumen"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/status/#2",
+      "rect": [
+        402.5,
+        798.0,
+        683.0,
+        0.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "edge",
+      "label": "Streaming edge",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/status/edge",
+      "rect": [
+        1097.5,
+        787.0,
+        89.0,
+        22.0
+      ],
+      "role": "button"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/status/edge/#0",
+      "rect": [
+        1103.5,
+        790.0,
+        77.0,
+        16.0
+      ],
+      "role": "text",
+      "text": "Edge: feather"
+    },
+    {
+      "fill": "#5c5c5cff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/status/#4",
+      "rect": [
+        1198.5,
+        795.0,
+        6.0,
+        6.0
+      ],
+      "role": "group"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/panel/session/status/#5",
+      "rect": [
+        1216.5,
+        790.0,
+        39.5,
+        16.0
+      ],
+      "role": "text",
+      "text": "Fixture"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "drag-inset",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/drag-inset",
+      "rect": [
+        0.0,
+        0.0,
+        1280.0,
+        8.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "sidebar-resize",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar-resize",
+      "rect": [
+        260.0,
+        0.0,
+        8.0,
+        820.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#808080ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "pill",
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar-resize/pill",
+      "rect": [
+        262.0,
+        390.0,
+        4.0,
+        40.0
+      ],
+      "role": "group"
+    },
+    {
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "sidebar-toggle",
+      "label": "Toggle sidebar",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar-toggle",
+      "rect": [
+        230.0,
+        18.0,
+        28.0,
+        28.0
+      ],
+      "role": "button"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "window/sidebar-toggle/#0",
+      "rect": [
+        234.0,
+        22.0,
+        20.0,
+        20.0
+      ],
+      "role": "icon"
+    },
+    {
+      "color": "#808080ff",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 0.0,
+      "path": "window/sidebar-toggle/#1",
+      "rect": [
+        234.0,
+        22.0,
+        20.0,
+        20.0
+      ],
+      "role": "icon"
+    }
+  ],
+  "reduced_motion": false,
+  "scale": 2.0,
+  "t": 0.0,
+  "time_scale": 1.0,
+  "viewport": [
+    1280.0,
+    820.0
+  ],
+  "warnings": []
+}

@@ -10,6 +10,11 @@ rune = { path = "../rune" }
 rune-motion = { path = "../rune-motion" }
 serde_json = "1"
 unicode-segmentation = "1.13"
+pulldown-cmark = { version = "0.13", default-features = false, optional = true }
+
+[features]
+# `Markdown` and `MarkdownStyle`.
+markdown = ["dep:pulldown-cmark"]
 
 [dev-dependencies]
 # Reference rasteriser for the built-in glyphs (tests/glyphs.rs).

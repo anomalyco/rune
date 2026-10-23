@@ -4,12 +4,13 @@
 use std::sync::OnceLock;
 
 use rune::{
-    Align, Anim, AnimExt, Color, Curve, Cursor, Cx, Cycle, Drag, Easing, El, GrowthSpec, Icon, Phase, ScrollSpec, Span,
-    Spring, TextStyle, Tx, col, edge, el, icon, rich, row, spacer, text, text_input,
+    Anim, AnimExt, Color, Curve, Cursor, Cx, Cycle, Drag, Easing, El, GrowthSpec, Icon, Phase, ScrollSpec,
+    Spring, TextStyle, Tx, col, edge, el, icon, row, spacer, text, text_input,
 };
 
+use rune_kit::{Kit, Markdown, MarkdownStyle};
+
 use crate::icons as ic;
-use crate::markdown::{self, Block, Inline, Style};
 use crate::model::{self, Message, Part, SessionInfo, ToolStatus, Transcript};
 use crate::palette::{Pal, pal};
 use crate::{App, Route, TabStatus};
@@ -966,99 +967,22 @@ fn turn_actions(p: &Pal, busy: bool, session: &str, message: &Message) -> El {
 // ---------------------------------------------------------------------------------------------
 // Markdown
 
-fn spans(p: &Pal, inl: &Inline) -> Vec<Span> {
-    inl.spans
-        .iter()
-        .map(|&(a, b, st)| {
-            let mut s = Span::new(a, b);
-            match st {
-                Style::Code => {
-                    s.mono = true;
-                    s.weight = Some(500.0);
-                    s.size = Some(13.0);
-                    s.bg = Some(p.inline_code_bg);
-                }
-                Style::CodePad => s.bg = Some(p.inline_code_bg),
-                Style::Strong => s.weight = Some(670.0),
-                Style::Em => s.color = Some(p.text),
-                Style::Link => {
-                    s.color = Some(p.accent);
-                    s.underline = Some(p.accent.alpha(0.4));
-                }
-            }
-            s
-        })
-        .collect()
-}
-
-/// (margin-top, margin-bottom) per block, collapsed like CSS margins.
-fn margins(b: &Block) -> (f32, f32) {
-    match b {
-        Block::Para(_) => (0.0, 12.0),
-        Block::Heading(1, _) => (28.0, 12.0),
-        Block::Heading(2, _) => (24.0, 10.0),
-        Block::Heading(..) => (20.0, 8.0),
-        Block::Code { .. } => (12.0, 24.0),
-        Block::List { .. } => (8.0, 12.0),
-        Block::Quote(_) => (16.0, 16.0),
-        Block::Rule => (32.0, 32.0),
-    }
-}
-
-fn blocks_view(p: &Pal, blocks: &[Block], fade: f32) -> El {
-    let mut c = col().w_full();
-    let mut prev_mb = 0.0f32;
-    for (i, b) in blocks.iter().enumerate() {
-        let (mt, mb) = margins(b);
-        let top = if i == 0 { 0.0 } else { mt.max(prev_mb) };
-        c = c.child(block_view(p, b, fade).key(format!("b{i}")).mt(top));
-        prev_mb = mb;
-    }
-    c
-}
-
-fn para(p: &Pal, inl: &Inline, style: TextStyle, color: Color, fade: f32) -> El {
-    rich(inl.text.clone(), spans(p, inl)).font(style).color(color).reveal(fade).w_full()
-}
-
-fn block_view(p: &Pal, b: &Block, fade: f32) -> El {
-    match b {
-        Block::Para(inl) => para(p, inl, MD, p.text, fade),
-        Block::Heading(l, inl) => para(p, inl, [H1, H2, H3, H3][(*l as usize - 1).min(3)], if *l >= 4 { p.muted } else { p.text }, fade),
-        Block::Code(code) => col()
-            .w_full()
-            .padding(12.0)
-            .radius(6.0)
-            .fill(p.layer1)
-            .border(0.5, p.border_muted)
-            .child(text(code.clone()).font(CODE).color(p.text).wrap().reveal(fade).w_full()),
-        Block::List { start, items } => {
-            let mut c = col().w_full().gap(4.0);
-            for (k, item) in items.iter().enumerate() {
-                let marker = match start {
-                    Some(n) => format!("{}.", n + k as u64),
-                    None => "•".into(),
-                };
-                c = c.child(
-                    row()
-                        .key(format!("i{k}"))
-                        .w_full()
-                        .child(text(marker).font(MD).color(p.muted).w(32.0).align(Align::Center).reveal(fade))
-                        .child(blocks_view(p, item, fade).grow(1.0).shrink()),
-                );
-            }
-            c
-        }
-        Block::Quote(inner) => row()
-            .w_full()
-            .child(el().w(2.0).h_full().radius(1.0).fill(p.layer3))
-            .child(blocks_view(p, inner, fade).grow(1.0).shrink().pl(12.0)),
-        Block::Rule => el().w_full().h(0.5).fill(p.border),
-    }
-}
-
 fn markdown_view(p: &Pal, src: &str, fade: f32) -> El {
-    blocks_view(p, &markdown::parse(src), fade)
+    let kit = Kit::neutral(p.dark);
+    let style = MarkdownStyle::from_kit(&kit)
+        .text(p.text)
+        .muted(p.muted)
+        .link(p.accent)
+        .inline_code_bg(p.inline_code_bg)
+        .code_block(p.layer1, p.border_muted)
+        .quote_rule(p.layer3)
+        .rule(p.border)
+        .body_font(MD)
+        .heading_font(1, H1)
+        .heading_font(2, H2)
+        .heading_font(3, H3)
+        .code_block_font(CODE);
+    Markdown::new(src).style(style).reveal(fade).build(&kit)
 }
 
 // ---------------------------------------------------------------------------------------------

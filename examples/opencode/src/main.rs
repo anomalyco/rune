@@ -3,7 +3,6 @@
 
 mod icons;
 mod live;
-mod markdown;
 mod model;
 mod palette;
 mod pickers;
