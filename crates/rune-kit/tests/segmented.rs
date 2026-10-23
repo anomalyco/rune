@@ -11,7 +11,7 @@ fn fitted(selected: &usize, _: &mut Cx<usize>) -> El {
 
 #[test]
 fn fitted_segments_share_the_widest_labels_width_and_the_indicator_slides_between_them() {
-    let mut rt = Runtime::new(0usize, fitted, (600.0, 100.0), Env { system_dark: true, scale: 1.0 });
+    let mut rt = Runtime::new(0usize, fitted, (600.0, 100.0), Env::new(true, 1.0));
     rt.frame(0.0);
     let widths: Vec<f32> = (0..3).map(|i| rect(&rt, &format!("segment{i}"))[2]).collect();
     assert!(widths.iter().all(|w| (w - widths[0]).abs() < 0.01), "equal segments: {widths:?}");
@@ -32,7 +32,7 @@ fn field(_: &usize, _: &mut Cx<usize>) -> El {
 
 #[test]
 fn a_select_trigger_is_the_closed_field_without_a_listbox() {
-    let mut rt = Runtime::new(0usize, field, (400.0, 300.0), Env { system_dark: true, scale: 1.0 });
+    let mut rt = Runtime::new(0usize, field, (400.0, 300.0), Env::new(true, 1.0));
     rt.frame(0.0);
     assert_eq!(rect(&rt, "model-trigger")[2], 200.0);
     assert!(rt.elements().iter().all(|e| e.role != "listbox"), "open turns the chevron but builds no listbox");

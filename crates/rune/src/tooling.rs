@@ -727,7 +727,7 @@ fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, tran
     let size = args.size.unwrap_or(spec.size);
     let dark = args.theme.as_deref() != Some("light");
     let state_ms = launched.elapsed().as_secs_f64() * 1000.0;
-    let mut rt = runtime_for(&spec, state, size, Env { system_dark: dark, scale }, std::sync::Arc::new(|| {}));
+    let mut rt = runtime_for(&spec, state, size, Env::new(dark, scale), std::sync::Arc::new(|| {}));
     rt.transparent = transparent;
     if args.tree.is_some() { rt.key_warnings = Some(Vec::new()); }
     rt.track_marks = comp.is_some();

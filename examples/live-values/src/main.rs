@@ -79,7 +79,7 @@ fn bench_mode(rebuild: bool) {
     let mut medians = Vec::new();
     for run in 0..8 {
         let mut state = init(); state.rebuild = rebuild;
-        let mut rt = Runtime::new(state, view, (560.0, 440.0), Env { scale: 2.0, system_dark: true });
+        let mut rt = Runtime::new(state, view, (560.0, 440.0), Env::new(true, 2.0));
         let wakes = Arc::new(AtomicUsize::new(0)); let count = wakes.clone();
         rt.set_live_waker(Arc::new(move || { count.fetch_add(1, Ordering::Relaxed); }));
         rt.poll = Some(poll);

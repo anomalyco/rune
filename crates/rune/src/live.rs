@@ -58,6 +58,40 @@ impl Linear {
 
 mod sealed { pub trait Sealed {} }
 
+/// Latest-wins text for a fixed layout box. Equal strings do not wake subscribers.
+/// Unlike numeric Live publication, text publication takes a short mutex and may allocate.
+#[derive(Clone)]
+pub struct LiveText { text: Arc<Mutex<Arc<str>>>, source: Arc<Source> }
+impl std::fmt::Debug for LiveText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiveText").finish_non_exhaustive()
+    }
+}
+impl LiveText {
+    pub fn new(text: impl Into<Arc<str>>) -> Self {
+        Self { text: Arc::new(Mutex::new(text.into())), source: Source::new(0) }
+    }
+    pub fn get(&self) -> Arc<str> { self.text.lock().unwrap().clone() }
+    pub fn set(&self, text: impl Into<Arc<str>>) -> bool {
+        let text = text.into();
+        {
+            let mut current = self.text.lock().unwrap();
+            if *current == text { return false; }
+            *current = text;
+            self.source().value.fetch_add(1, Ordering::Release);
+        }
+        self.source().notify();
+        true
+    }
+    pub(crate) fn source(&self) -> &Arc<Source> { &self.source }
+    pub(crate) fn read(&self, seen: &mut Option<u128>) -> Option<Arc<str>> {
+        if *seen == Some(self.source().value.load(Ordering::Acquire)) { return None; }
+        let text = self.text.lock().unwrap();
+        *seen = Some(self.source().value.load(Ordering::Acquire));
+        Some(text.clone())
+    }
+}
+
 /// The small, atomically published values supported by [`Live`].
 pub trait LiveValue: sealed::Sealed + Copy + Send + Sync + 'static {
     /// `None` when any lane is NaN. ±inf clamps to ±`f32::MAX` and -0.0 becomes 0.0, so producers
@@ -109,12 +143,7 @@ impl<T: LiveValue> Clone for Live<T> {
 impl<T: LiveValue> Live<T> {
     pub fn new(value: T) -> Self {
         assert!(AtomicU128::is_lock_free(), "Rune Live requires lock-free 128-bit atomics on this CPU");
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        Self { source: Arc::new(Source {
-            id: NEXT.fetch_add(1, Ordering::Relaxed), value: AtomicU128::new(value.encode().unwrap_or(0)),
-            listeners: AtomicPtr::new(std::ptr::null_mut()),
-            linear: None,
-        }), _t: PhantomData }
+        Self { source: Source::new(value.encode().unwrap_or(0)), _t: PhantomData }
     }
     /// Returns whether the published bit pattern changed. No allocation, including first use
     /// on a producer thread. Concurrent producers publish whole values, never torn lanes.
@@ -198,6 +227,11 @@ pub(crate) struct Source {
     listeners: AtomicPtr<Listener>,
 }
 impl Source {
+    fn new(value: u128) -> Arc<Self> {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Arc::new(Self { id: NEXT.fetch_add(1, Ordering::Relaxed), value: AtomicU128::new(value),
+            listeners: AtomicPtr::new(std::ptr::null_mut()), linear: None })
+    }
     // Append-only immutable list: no reclamation can race a publisher. One cell per
     // source/runtime pair (not per view rebuild); all cells reclaimed with the source.
     pub fn subscribe(&self, wake: &Arc<Wake>) -> Arc<Subscription> {

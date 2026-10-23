@@ -240,7 +240,7 @@ mod tests {
         let surface = NativeSurface::new();
         surface.push_bytes(ByteFrame { width: 6, height: 6, format: Format::Bgra,
             color: ColorInfo::default(), planes: [[255,0,0,255].repeat(36), vec![]] }, 1).unwrap();
-        let mut rt = Runtime::new((pixels, surface), view, (8.0, 8.0), Env { system_dark: true, scale: 1.0 });
+        let mut rt = Runtime::new((pixels, surface), view, (8.0, 8.0), Env::new(true, 1.0));
         rt.frame(0.0);
         assert_eq!(rt.images.pages.len(), 2);
         let gpu = Gpu::headless();
@@ -282,7 +282,7 @@ mod tests {
         let gpu = Gpu::headless();
         let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
         let target = Offscreen::new(&gpu.device, 8, 8);
-        let mut rt = Runtime::new((image.pixels().clone(), Pixels::new(), false), view, (8.0, 8.0), Env { system_dark: true, scale: 1.0 });
+        let mut rt = Runtime::new((image.pixels().clone(), Pixels::new(), false), view, (8.0, 8.0), Env::new(true, 1.0));
         let mut draw = |rt: &mut Runtime<State>| {
             rt.frame(0.0);
             renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (8, 8));
@@ -376,7 +376,7 @@ mod tests {
             rgba.extend_from_slice(&[i * 16, 255 - i * 16, 40, 255]);
         }
         px.set(4, 4, rgba.clone());
-        let mut rt = Runtime::new(px.clone(), view, (4.0, 4.0), Env { system_dark: true, scale: 1.0 });
+        let mut rt = Runtime::new(px.clone(), view, (4.0, 4.0), Env::new(true, 1.0));
         let gpu = Gpu::new(Gpu::instance(), None);
         let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
         let target = Offscreen::new(&gpu.device, 4, 4);

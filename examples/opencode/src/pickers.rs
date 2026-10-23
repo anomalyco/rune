@@ -216,7 +216,7 @@ mod tests {
         app.load_fixture(crate::FIXTURE);
         crate::open_scene(&mut app);
         app.finish_stream();
-        let mut rt = Runtime::new(app, crate::view::app, (1280.0, 820.0), Env { scale: 1.0, system_dark: true });
+        let mut rt = Runtime::new(app, crate::view::app, (1280.0, 820.0), Env::new(true, 1.0));
         rt.on_key = Some(crate::on_key);
         rt.frame(0.0);
         rt

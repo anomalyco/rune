@@ -47,7 +47,7 @@ fn view(body: &String, _: &mut Cx<String>) -> El {
 
 #[test]
 fn streaming_presentation_allocates_nothing() {
-    let mut rt = Runtime::new("hello ".repeat(120), view, (400.0, 400.0), Env { system_dark: true, scale: 2.0 });
+    let mut rt = Runtime::new("hello ".repeat(120), view, (400.0, 400.0), Env::new(true, 2.0));
     rt.frame(0.0);
     rt.state.truncate(360);
     rt.settle_all();
@@ -71,7 +71,7 @@ fn live_publication_and_presentation_allocate_nothing() {
             .live_opacity(&s.0).live_offset(&s.1).live_fill(&s.2))
     }
     let state = (Live::new(1.0), Live::new([0.0, 0.0]), Live::new(Color::WHITE));
-    let mut rt = Runtime::new(state, view, (200.0, 200.0), Env { system_dark: true, scale: 2.0 });
+    let mut rt = Runtime::new(state, view, (200.0, 200.0), Env::new(true, 2.0));
     rt.frame(0.0);
     let producer = (rt.state.0.clone(), rt.state.1.clone(), rt.state.2.clone());
     // Includes the very first publication on a new producer thread, not only warmed sets.

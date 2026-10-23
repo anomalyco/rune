@@ -21,7 +21,7 @@ fn runtime() -> Runtime<State> {
     let mut s = State::default();
     s.combo.open = true;
     s.combo.search.focused = true;
-    let mut rt = Runtime::new(s, view, (400.0, 400.0), Env { system_dark: true, scale: 1.0 });
+    let mut rt = Runtime::new(s, view, (400.0, 400.0), Env::new(true, 1.0));
     rt.frame(0.0);
     rt
 }
@@ -34,7 +34,7 @@ fn opening_takes_focus_and_reveals_the_offscreen_selection() {
     let mut s = State::default();
     s.other.focused = true;
     s.chosen = Some("item-199".into());
-    let mut rt = Runtime::new(s, view, (400.0, 400.0), Env { system_dark: true, scale: 1.0 });
+    let mut rt = Runtime::new(s, view, (400.0, 400.0), Env::new(true, 1.0));
     rt.frame(0.0);
     rt.ime(Ime::Preedit("pending".into(), None)); rt.frame(0.0);
     let trigger = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("models-value-trigger")).unwrap();

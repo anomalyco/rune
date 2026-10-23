@@ -20,7 +20,7 @@ use swash::scale::{Render, ScaleContext, Source};
 use swash::zeno::{Cap, Fill, Format, Join, Mask, Stroke, Transform, Vector};
 
 use crate::color::{Color, srgb_encode};
-use crate::tok::{Family, TextStyle};
+use crate::tok::{Family, OpticalSize, TextStyle};
 
 mod svg_path;
 
@@ -446,7 +446,25 @@ pub fn text_hash(text: &str, spans: &[Span], style: TextStyle, scale: f32, width
     (style.size.to_bits(), style.weight.to_bits(), style.family, style.line_height.to_bits(), style.tracking.to_bits())
         .hash(&mut h);
     (scale.to_bits(), width.map(f32::to_bits)).hash(&mut h);
+    let optical = match style.optical_size {
+        OpticalSize::Auto => (0, 0), OpticalSize::FontDefault => (1, 0), OpticalSize::Fixed(size) => (2, size.to_bits()),
+    };
+    (style.variations, style.features, optical).hash(&mut h);
     h.finish()
+}
+
+fn variations(style: TextStyle, size: f32) -> Vec<parley::FontVariation> {
+    let mut settings: Vec<_> = parley::FontVariation::parse_css_list(style.variations).flatten().collect();
+    let opsz = parley::setting::Tag::new(b"opsz");
+    let value = match style.optical_size {
+        OpticalSize::Auto if !settings.iter().any(|v| v.tag == opsz) => Some(size),
+        OpticalSize::Fixed(value) => { settings.retain(|v| v.tag != opsz); Some(value) }
+        _ => None,
+    };
+    if let Some(value) = value.filter(|v| v.is_finite() && *v > 0.0) {
+        settings.push(parley::FontVariation::new(opsz, value));
+    }
+    settings
 }
 
 impl TextSystem {
@@ -515,6 +533,13 @@ impl TextSystem {
         b.push_default(FontFamily::from(sans.as_slice()));
         b.push_default(StyleProperty::FontSize(style.size));
         b.push_default(StyleProperty::FontWeight(FontWeight::new(style.weight)));
+        if !style.features.is_empty() {
+            b.push_default(StyleProperty::FontFeatures(style.features.into()));
+        }
+        let settings = variations(style, style.size);
+        if !settings.is_empty() {
+            b.push_default(parley::FontVariations::List(std::borrow::Cow::Owned(settings)));
+        }
         b.push_default(LineHeight::Absolute(style.line_px()));
         if style.tracking != 0.0 {
             b.push_default(StyleProperty::LetterSpacing(style.tracking));
@@ -533,6 +558,9 @@ impl TextSystem {
             }
             if let Some(sz) = s.size {
                 b.push(StyleProperty::FontSize(sz), r.clone());
+                if style.optical_size == OpticalSize::Auto {
+                    b.push(parley::FontVariations::List(std::borrow::Cow::Owned(variations(style, sz))), r.clone());
+                }
             }
         }
         let mut layout: Layout<Ink> = b.build(text);
@@ -547,6 +575,15 @@ impl TextSystem {
     pub fn measure(&mut self, text: &str, style: TextStyle, scale: f32) -> (f32, f32) {
         let l = self.layout_rich(text, &[], style, scale, None);
         (l.full_width().ceil() / scale, layout_height(&l, style, scale) / scale)
+    }
+
+    /// A live run owns its latest layout; don't retain every timer tick in the commit cache.
+    pub(crate) fn layout_live(&mut self, text: &str, style: TextStyle, scale: f32) -> Rc<Layout<Ink>> {
+        let key = text_hash(text, &[], style, scale, None);
+        let cached = self.layouts.contains_key(&key);
+        let layout = self.layout_rich(text, &[], style, scale, None);
+        if !cached { self.layouts.remove(&key); }
+        layout
     }
 
     /// Glyph quads for single-line `text` with its layout box's top-left at `origin` (device px).
@@ -849,6 +886,31 @@ mod tests {
 #[cfg(test)]
 mod quality_tests {
     use super::*;
+
+    #[test]
+    fn live_layouts_do_not_accumulate_between_commits() {
+        let mut text = TextSystem::default();
+        let style = TextStyle::new(13.0, 400.0);
+        let stable = text.layout_rich("stable label", &[], style, 2.0, None);
+        for tick in 0..256 { text.layout_live(&tick.to_string(), style, 2.0); }
+        assert_eq!(text.layouts.len(), 1);
+        assert!(Rc::ptr_eq(&stable, &text.layout_rich("stable label", &[], style, 2.0, None)));
+    }
+
+    #[test]
+    fn optical_size_default_keeps_static_font_glyphs_byte_identical() {
+        let mut a = TextSystem::default(); let mut b = TextSystem::default();
+        for scale in [1.0, 2.0] {
+            for size in [11.0, 13.0, 24.0] {
+                let style = TextStyle::new(size, 400.0);
+                let mut qa = Vec::new(); let mut qb = Vec::new();
+                a.glyphs("Hello ffi 0123456789", style, scale, [0.0, 0.0], &mut qa);
+                b.glyphs("Hello ffi 0123456789", style.optical_sizing(OpticalSize::FontDefault), scale, [0.0, 0.0], &mut qb);
+                assert_eq!(qa.iter().map(|q| (q.rect, q.uv)).collect::<Vec<_>>(), qb.iter().map(|q| (q.rect, q.uv)).collect::<Vec<_>>());
+                assert_eq!(a.atlas.data, b.atlas.data);
+            }
+        }
+    }
 
     #[test]
     fn moving_glyphs_reuse_four_phases_and_land_without_atlas_work() {

@@ -24,7 +24,7 @@ fn narrower_nested_edge_and_streaming_mask_survive_outer_fades() {
                     .child(el().size(80.0, 80.0).fill(Color::WHITE)))
         }
         let size = ((80.0 * scale) as u32, (200.0 * scale) as u32);
-        let env = Env { scale, system_dark: true };
+        let env = Env::new(true, scale);
         let mut plain = Runtime::new(false, nested, (80.0, 200.0), env);
         let mut outer = Runtime::new(true, nested, (80.0, 200.0), env);
         plain.frame(0.0); outer.frame(0.0);
@@ -69,7 +69,7 @@ fn nested_row_text_keeps_full_alpha_in_the_middle_of_a_faded_list() {
         let (w, h) = ((120.0 * scale) as u32, (100.0 * scale) as u32);
         let target = Offscreen::new(&gpu.device, w, h);
         let mut render = |faded, old_bug| {
-            let mut rt = Runtime::new(faded, view, (120.0, 100.0), Env { system_dark: true, scale });
+            let mut rt = Runtime::new(faded, view, (120.0, 100.0), Env::new(true, scale));
             rt.frame(0.0);
             if old_bug {
                 for instance in &mut rt.instances { instance.fade[2] = 0; }

@@ -254,7 +254,7 @@ mod tests {
         root
     }
     fn runtime() -> Runtime<State> {
-        let mut rt = Runtime::new(State::default(), view, (300.0, 300.0), Env { system_dark: true, scale: 2.0 });
+        let mut rt = Runtime::new(State::default(), view, (300.0, 300.0), Env::new(true, 2.0));
         rt.frame(0.0); rt
     }
     fn key(rt: &mut Runtime<State>, key: Key, shift: bool) {
@@ -270,7 +270,7 @@ mod tests {
                 .on_edit(|s: &mut crate::TextEdit| s)
         }
         let mut edit = crate::TextEdit::new("committed"); edit.focused = true;
-        let mut rt = Runtime::new(edit, view, (200.0, 40.0), Env { system_dark: true, scale: 1.0 });
+        let mut rt = Runtime::new(edit, view, (200.0, 40.0), Env::new(true, 1.0));
         rt.frame(0.0);
         rt.ime(crate::Ime::Preedit("pending".into(), None)); rt.frame(0.0);
         rt.ime_reset = false;
@@ -293,7 +293,7 @@ mod tests {
         }
         let mut state: Vec<_> = (0..100).map(|_| crate::TextEdit::new("")).collect();
         state[0].focused = true;
-        let mut rt = Runtime::new(state, view, (200.0, 240.0), Env { system_dark: true, scale: 1.0 });
+        let mut rt = Runtime::new(state, view, (200.0, 240.0), Env::new(true, 1.0));
         rt.frame(0.0);
         let path = rt.focused.clone();
         rt.wheel(100.0, 100.0, -2000.0); rt.frame(0.0);
@@ -326,7 +326,7 @@ mod tests {
         }
         let mut first = TextEdit::new("hello"); first.focused = true;
         let mut rt = Runtime::new(Form { first, search: TextEdit::new(""), open: false, app_keys: 0 }, view,
-            (300.0, 300.0), Env { system_dark: true, scale: 1.0 });
+            (300.0, 300.0), Env::new(true, 1.0));
         rt.on_key = Some(|s, _, _| { s.app_keys += 1; true });
         rt.frame(0.0);
         rt.ime(crate::Ime::Preedit("pending".into(), None)); rt.frame(0.0);

@@ -20,7 +20,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
 #[test]
 fn select_portal_inside_dialog_accepts_an_option_outside_the_panel() {
     let mut rt = Runtime::new(State { dialog: true, select: false, value: "First".into() }, view,
-        (1400.0, 800.0), Env { system_dark: true, scale: 1.0 });
+        (1400.0, 800.0), Env::new(true, 1.0));
     rt.frame(0.0);
     let (x, y) = rt.find("choice-trigger").unwrap();
     rt.pointer_down(x, y); rt.pointer_up(x, y); rt.frame(0.0);

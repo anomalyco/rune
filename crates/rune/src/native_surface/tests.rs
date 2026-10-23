@@ -452,7 +452,7 @@ fn video_gpu_colour_sharpness_geometry_and_lifetime() {
             .border(1.0, crate::Color::BLACK)
             .child(crate::el().w(2.0).h(2.0).fill(crate::Color::BLACK))
     }
-    let mut rt = crate::Runtime::new(surface.clone(), view, (8.0, 4.0), crate::Env { system_dark: true, scale: 2.0 });
+    let mut rt = crate::Runtime::new(surface.clone(), view, (8.0, 4.0), crate::Env::new(true, 2.0));
     rt.frame(0.0);
     assert_eq!(rt.surfaces[0].rect, [0.0, 0.0, 16.0, 8.0]);
     let mut renderer = crate::render::Renderer::new(&gpu.device, OFFSCREEN_FORMAT);

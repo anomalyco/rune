@@ -253,7 +253,8 @@ impl<T: 'static> Overlay<T> {
         let ConfiguredOverlay { spec, options, on_key, on_created } = configured.into();
         let shared = Arc::new(Shared { native: Mutex::default(), requests: Mutex::default(), availability: AtomicU8::new(0), wake: Mutex::new(None) });
         let text = TextSystem::new(app.fonts, app.families);
-        let mut rt = Runtime::with_text(state, spec.view, spec.size, Env { system_dark: true, scale: 1.0 }, text);
+        let mut rt = Runtime::with_text(state, spec.view, spec.size,
+            Env { reduced_motion: crate::preferences::reduced_motion(), ..Env::default() }, text);
         rt.wall_start = Some(Instant::now());
         rt.native_overlay = true;
         rt.on_key = on_key;
@@ -996,8 +997,10 @@ impl<T: 'static> AnyHost for Overlay<T> {
             // TODO(Dax item 6): forward standalone modifier transitions once the shared
             // modifier-only key event lands; do not introduce a second key API here.
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
-            WindowEvent::Focused(false) => {
-                self.rt.cancel_composition();
+            WindowEvent::Focused(focused) => {
+                self.rt.window_focus(focused);
+                self.rt.set_system_reduced_motion(crate::preferences::reduced_motion());
+                if !focused { self.rt.cancel_composition(); }
                 self.dirty = true;
             }
             WindowEvent::KeyboardInput { event, .. } if self.options.keys == KeyPolicy::OnDemand && event.state.is_pressed() => {

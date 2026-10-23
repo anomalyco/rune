@@ -473,6 +473,7 @@ mod tests {
             Env {
                 system_dark: true,
                 scale: 1.0,
+                reduced_motion: false,
             },
         );
         rt.frame(0.0);

@@ -289,7 +289,7 @@ impl<S: 'static> Host<S> {
         let (spec, state, shared) = app.into_parts(args.scene.as_deref());
         let size = args.size.unwrap_or(spec.size);
         // The window reports the system appearance and scale when it opens.
-        let env = Env { system_dark: args.theme.as_deref() != Some("light"), scale: 1.0 };
+        let env = Env { reduced_motion: crate::preferences::reduced_motion(), ..Env::new(args.theme.as_deref() != Some("light"), 1.0) };
         let mut rt = runtime_for(&spec, state, size, env, waker.clone());
         rt.set_live_waker(Arc::new(move || { let _ = live_proxy.send_event(WakeEvent::Live(slot)); }));
         rt.set_live_visible(false);
@@ -1106,6 +1106,8 @@ impl<S: 'static> Host<S> {
             }
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
             WindowEvent::Focused(focused) => {
+                rt.window_focus(focused);
+                rt.set_system_reduced_motion(crate::preferences::reduced_motion());
                 self.secure_input.set(focused && l.visible && !l.occluded && rt.has_secure_focus());
                 place_chrome(&l.window, chrome);
                 if !focused {

@@ -29,6 +29,17 @@ pub enum Family {
     Mono,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum OpticalSize {
+    /// Use the run's point size, independent of display scale. Explicit `opsz` variations win.
+    #[default]
+    Auto,
+    /// Leave optical sizing to Parley/the font (the legacy Rune behavior).
+    FontDefault,
+    /// Override `opsz`, in points, including an `opsz` in the variation settings.
+    Fixed(f32),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextStyle {
     pub size: f32,
@@ -38,11 +49,17 @@ pub struct TextStyle {
     pub line_height: f32,
     /// Letter spacing in points.
     pub tracking: f32,
+    /// CSS OpenType settings, e.g. `"'opsz' 14, 'wght' 500"`. Empty preserves font defaults.
+    pub variations: &'static str,
+    /// CSS OpenType settings, e.g. `"'tnum' 1, 'ss01' 1"`.
+    pub features: &'static str,
+    pub optical_size: OpticalSize,
 }
 
 impl TextStyle {
     pub const fn new(size: f32, weight: f32) -> TextStyle {
-        TextStyle { size, weight, family: Family::Sans, line_height: 0.0, tracking: 0.0 }
+        TextStyle { size, weight, family: Family::Sans, line_height: 0.0, tracking: 0.0,
+            variations: "", features: "", optical_size: OpticalSize::Auto }
     }
     pub const fn mono(self) -> TextStyle {
         TextStyle { family: Family::Mono, ..self }
@@ -52,6 +69,18 @@ impl TextStyle {
     }
     pub const fn tracking(self, tracking: f32) -> TextStyle {
         TextStyle { tracking, ..self }
+    }
+    pub const fn variations(self, variations: &'static str) -> TextStyle {
+        TextStyle { variations, ..self }
+    }
+    pub const fn features(self, features: &'static str) -> TextStyle {
+        TextStyle { features, ..self }
+    }
+    pub const fn optical_size(self, size: f32) -> TextStyle {
+        TextStyle { optical_size: OpticalSize::Fixed(size), ..self }
+    }
+    pub const fn optical_sizing(self, optical_size: OpticalSize) -> TextStyle {
+        TextStyle { optical_size, ..self }
     }
     /// Resolved line height in points.
     pub fn line_px(&self) -> f32 {

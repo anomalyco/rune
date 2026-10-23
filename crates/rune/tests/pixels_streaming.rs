@@ -37,7 +37,7 @@ fn sixty_hud_updates_allocate_nothing_and_keep_the_same_slot() {
     fn view(p: &Pixels, _: &mut Cx<Pixels>) -> El { el().size(112.0, 64.0).pixels(p) }
     let pixels = Pixels::new();
     pixels.set(224, 128, vec![0; 224 * 128 * 4]);
-    let mut rt = Runtime::new(pixels.clone(), view, (112.0, 64.0), Env { system_dark: true, scale: 2.0 });
+    let mut rt = Runtime::new(pixels.clone(), view, (112.0, 64.0), Env::new(true, 2.0));
     rt.frame(0.0);
     let slot = rt.images.place(&pixels, [224.0, 128.0]).unwrap();
     let page = rt.images.pages[0].data.as_ptr();

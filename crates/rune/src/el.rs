@@ -268,6 +268,10 @@ pub struct TextSpec {
     pub reveal: f32,
     /// One line, cut with an ellipsis when wider than the element.
     pub truncate: bool,
+    /// Fade the overflowing trailing edge rather than replacing text with an ellipsis.
+    pub truncate_fade: bool,
+    /// Plain live run. Layout is measured from the authored placeholder before latching it.
+    pub live: Option<crate::LiveText>,
 }
 
 pub use rune_motion::Cycle;
@@ -342,9 +346,11 @@ impl Default for Visual {
 }
 
 pub(crate) type PasteFn = Rc<dyn Fn(&mut dyn Any, &str, &mut Tx)>;
+pub(crate) type WindowFocusFn = Rc<dyn Fn(&mut dyn Any, bool, &mut Tx)>;
 
 pub struct El {
     pub(crate) on_paste: Option<PasteFn>,
+    pub(crate) on_window_focus: Option<WindowFocusFn>,
     pub(crate) focus: FocusSpec,
     pub(crate) modal: Option<ModalSpec>,
     pub(crate) looping: Option<rune_motion::LoopSpec>,
@@ -382,6 +388,7 @@ pub struct El {
 fn base(dir: FlexDirection) -> El {
     El {
         on_paste: None,
+        on_window_focus: None,
         focus: FocusSpec::default(),
         modal: None,
         looping: None,
@@ -447,6 +454,8 @@ pub fn text(content: impl Into<String>) -> El {
         wrap: false,
         reveal: -1.0,
         truncate: false,
+        truncate_fade: false,
+        live: None,
     });
     e
 }
@@ -500,6 +509,21 @@ pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
 }
 
 impl El {
+    /// On the root, receive native window activation/deactivation (not text-field focus).
+    /// Also works on interactive overlays. Headless hosts may call Runtime::window_focus.
+    pub fn on_window_focus<S: 'static>(mut self, f: impl Fn(&mut S, bool, &mut Tx) + 'static) -> Self {
+        self.on_window_focus = Some(Rc::new(move |s, focused, tx| f(s.downcast_mut::<S>().unwrap(), focused, tx)));
+        self
+    }
+    /// Paint the latest text in this element's fixed layout box. `text("00:00")` reserves
+    /// that placeholder's size; explicit `.size(w, h)` also works. Updates never resize the
+    /// box or reflow siblings, and overflow is clipped. Plain single-line text only.
+    pub fn live_text(mut self, value: &crate::LiveText) -> Self {
+        assert!(self.input.is_none(), "live_text cannot bind a text editor");
+        let spec = self.text.as_mut().expect("live_text requires a text element");
+        spec.live = Some(value.clone());
+        self
+    }
     /// On the root (or modal root), handle paste when no text field is focused.
     /// Native clipboard reads are asynchronous. Script `paste` uses the same handler.
     pub fn on_paste<S: 'static>(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
@@ -1022,6 +1046,18 @@ impl El {
     pub fn truncate(mut self) -> Self {
         if let Some(t) = &mut self.text {
             t.truncate = true;
+            t.truncate_fade = false;
+            t.wrap = false;
+        }
+        self.style.flex_shrink = 1.0;
+        self.style.min_size.width = length(0.0);
+        self
+    }
+    /// One line, clipped with a one-em trailing fade only when it overflows. No ellipsis.
+    pub fn truncate_fade(mut self) -> Self {
+        if let Some(t) = &mut self.text {
+            t.truncate = false;
+            t.truncate_fade = true;
             t.wrap = false;
         }
         self.style.flex_shrink = 1.0;

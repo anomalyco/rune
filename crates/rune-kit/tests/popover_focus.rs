@@ -17,7 +17,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
 
 #[test]
 fn popover_close_restores_its_trigger_before_exit_finishes() {
-    let mut rt = Runtime::new(State::default(), view, (400.0, 400.0), Env { system_dark: true, scale: 1.0 });
+    let mut rt = Runtime::new(State::default(), view, (400.0, 400.0), Env::new(true, 1.0));
     rt.frame(0.0);
     for key in [Key::Tab, Key::Enter, Key::Tab] {
         rt.key(KeyEvent { key, mods: Default::default() }); rt.frame(0.0);

@@ -2738,6 +2738,7 @@ dependencies = [
  "bytemuck",
  "half",
  "image",
+ "libloading",
  "objc2 0.5.3",
  "objc2 0.6.5",
  "objc2-app-kit 0.2.2",

@@ -49,6 +49,7 @@ pub mod tooling;
 mod window;
 mod secure_input;
 mod clipboard;
+mod preferences;
 pub use clipboard::ClipboardWrite;
 pub mod windows;
 pub use window::WindowHandle;
@@ -66,7 +67,7 @@ pub use el::{
     row, spacer, text, text_input,
 };
 pub use growth::{GROWTH, StreamEdge, edge};
-pub use live::{Live, Tween};
+pub use live::{Live, LiveText, Tween};
 pub use pixels::Pixels;
 pub use file_dialog::{FileDialogError, FileDialogKind, FileDialogOptions, FileDialogs, ScriptedFileDialog};
 pub use image::{Image, ImageCache, ImageError, ImageId};
@@ -79,5 +80,5 @@ pub use shape::{LineCap, Path, Shape};
 pub use native_surface::{NativeSurface, SurfaceFit};
 pub use text::{Icon, Span};
 pub use theme::Theme;
-pub use tok::{Family, TextStyle};
+pub use tok::{Family, OpticalSize, TextStyle};
 pub use tooling::{AppSpec, Chrome, extra_args, run, run_windows, run_windows_with, run_with, set_app_id};

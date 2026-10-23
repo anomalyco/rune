@@ -58,6 +58,16 @@ const SCROLL_DECAY: f32 = 2.002;
 pub struct Env {
     pub system_dark: bool,
     pub scale: f32,
+    /// OS accessibility preference. Headless environments default to false.
+    pub reduced_motion: bool,
+}
+impl Env {
+    pub const fn new(system_dark: bool, scale: f32) -> Self {
+        Self { system_dark, scale, reduced_motion: false }
+    }
+}
+impl Default for Env {
+    fn default() -> Self { Self::new(true, 1.0) }
 }
 
 /// Wakes the shell from another thread (new data arrived); a no-op headless.
@@ -78,7 +88,7 @@ impl<S> Cx<S> {
     pub fn system_dark(&self) -> bool {
         self.env.system_dark
     }
-    /// Switch the runtime to reduced motion: travel jumps, opacity and colour take a short fade.
+    /// Override Env::reduced_motion for this view: travel jumps, opacity/colour briefly fade.
     pub fn reduced_motion(&mut self, on: bool) {
         self.reduced_motion = on;
     }
@@ -90,6 +100,7 @@ impl<S> Cx<S> {
 
 pub(crate) struct Node {
     on_paste: Option<crate::el::PasteFn>,
+    on_window_focus: Option<crate::el::WindowFocusFn>,
     focus: crate::el::FocusSpec,
     modal: Option<crate::el::ModalSpec>,
     looping: Option<rune_motion::LoopSpec>,
@@ -102,6 +113,7 @@ pub(crate) struct Node {
     live: Vec<crate::live::Bound>,
     pub text: Option<TextSpec>,
     pub text_layout: Option<Rc<Layout<Ink>>>,
+    live_text_seen: Option<u128>,
     on_press: Option<PressFn>,
     on_secondary_press: Option<SecondaryFn>,
     on_hover: Option<PressFn>,
@@ -133,6 +145,7 @@ pub(crate) struct Node {
 }
 
 enum Action {
+    WindowFocus(bool),
     FocusControl(String),
     Dismiss(String),
     PointerMove(String, PointerPress),
@@ -350,6 +363,7 @@ pub struct Runtime<S: 'static> {
     pub stats: FrameStats,
     live_wake: Arc<crate::live::Wake>,
     live_clock: Arc<()>,
+    window_focused: Option<bool>,
     live_subscriptions: Vec<Arc<crate::live::Subscription>>,
     live_dirty: bool,
     /// Opt-in tooling checks. None keeps release commits free of key traversal/allocation.
@@ -491,6 +505,7 @@ impl<S: 'static> Runtime<S> {
             stats: FrameStats::default(),
             live_wake: crate::live::Wake::new(Arc::new(|| {})),
             live_clock: Arc::new(()),
+            window_focused: None,
             live_subscriptions: Vec::new(),
             live_dirty: false,
             key_warnings: None,
@@ -550,11 +565,12 @@ impl<S: 'static> Runtime<S> {
         for sub in &self.live_subscriptions { sub.active.store(false, Ordering::Release); }
         for node in &self.nodes {
             if self.is_exiting(node.id) { continue; }
-            for bound in &node.live {
-                if let Some(sub) = self.live_subscriptions.iter().find(|s| s.source_id == bound.source.id()) {
+            let text = node.text.as_ref().and_then(|t| t.live.as_ref()).map(|t| t.source());
+            for source in node.live.iter().map(|b| &b.source).chain(text) {
+                if let Some(sub) = self.live_subscriptions.iter().find(|s| s.source_id == source.id()) {
                     sub.active.store(true, Ordering::Release);
                 } else {
-                    self.live_subscriptions.push(bound.source.subscribe(&self.live_wake));
+                    self.live_subscriptions.push(source.subscribe(&self.live_wake));
                 }
             }
         }
@@ -571,6 +587,14 @@ impl<S: 'static> Runtime<S> {
         if !pending && !self.live_dirty { return false; }
         self.live_dirty = false;
         for node in &mut self.nodes {
+            if let Some(spec) = &mut node.text
+                && let Some(live) = &spec.live
+                && let Some(text) = live.read(&mut node.live_text_seen)
+                && spec.content != &*text
+            {
+                spec.content = text.to_string();
+                node.text_layout = Some(self.text.layout_live(&text, spec.style, self.env.scale));
+            }
             for bound in &mut node.live {
                 let initial = bound.seen.is_none();
                 let (bits, active) = bound.read(&self.live_clock, self.clock);
@@ -609,6 +633,21 @@ impl<S: 'static> Runtime<S> {
         if dark != self.env.system_dark {
             self.env.system_dark = dark;
             self.dirty = true;
+        }
+    }
+
+    pub fn set_system_reduced_motion(&mut self, reduced: bool) {
+        if self.env.reduced_motion != reduced {
+            self.env.reduced_motion = reduced;
+            self.dirty = true;
+        }
+    }
+
+    /// Queue a native focus transition. Repeated notifications do not repeat the callback.
+    pub fn window_focus(&mut self, focused: bool) {
+        if self.window_focused != Some(focused) {
+            self.window_focused = Some(focused);
+            self.queue.push(Action::WindowFocus(focused));
         }
     }
 
@@ -688,6 +727,9 @@ impl<S: 'static> Runtime<S> {
                 ran = true;
             }
             merge(&mut tx, one);
+        }
+        if self.commits == 0 && self.queue.iter().any(|a| matches!(a, Action::WindowFocus(_))) {
+            self.commit(Tx::default());
         }
         for action in std::mem::take(&mut self.queue) {
             ran |= self.run_action(action, &mut tx);
@@ -879,6 +921,11 @@ impl<S: 'static> Runtime<S> {
     fn run_action(&mut self, action: Action, tx: &mut Tx) -> bool {
         let mut one = Tx::default();
         let ran = match action {
+            Action::WindowFocus(focused) => {
+                let Some(f) = self.nodes.first().and_then(|n| n.on_window_focus.clone()) else { return false };
+                f(&mut self.state as &mut dyn Any, focused, &mut one);
+                true
+            }
             Action::FocusControl(path) => {
                 self.set_focus(Some(path), false);
                 true
@@ -1263,7 +1310,7 @@ impl<S> Measurement<'_, S> {
         let scale = self.env.scale;
         let mut cx = Cx::<S> {
             env: self.env,
-            reduced_motion: self.reduced_motion,
+            reduced_motion: self.env.reduced_motion,
             time_scale: self.time_scale,
             _s: PhantomData,
         };
@@ -1320,7 +1367,7 @@ impl<S> Measurement<'_, S> {
                             };
                             let l = text_sys.layout_rich(&spec.content, &spec.spans, spec.style, scale, w.map(|w| w * scale));
                             let mut lw = (l.full_width() / scale).ceil_to(scale);
-                            if spec.truncate
+                            if (spec.truncate || spec.truncate_fade)
                                 && let AvailableSpace::Definite(a) = avail.width
                             {
                                 lw = lw.min(a);
@@ -2764,6 +2811,28 @@ impl<S: 'static> Runtime<S> {
             for instance in &mut self.instances[first_instance..] {
                 instance.fade = packed_fade;
             }
+            // Text-only clipping leaves the box's fill/border and descendants untouched.
+            if let (Some(spec), Some(layout)) = (&n.text, &n.text_layout)
+                && (spec.truncate_fade || spec.live.is_some())
+            {
+                let ins = n.inset.map(|v| v * sc * s);
+                let bounds = [r[0] + ins[0], r[1] + ins[1], r[2] - ins[2], r[3] - ins[3]];
+                let text_clip = [clip[0].max(bounds[0]), clip[1].max(bounds[1]), clip[2].min(bounds[2]), clip[3].min(bounds[3])];
+                let mut widths = fade;
+                let mut origins = fade_origin;
+                if spec.truncate_fade && layout.full_width() > bounds[2] - bounds[0] + 0.5 {
+                    let width = (spec.style.size * sc * s).min((bounds[2] - bounds[0]).max(0.0));
+                    let own = if spec.align == Align::End { [width, 0.0, 0.0, 0.0] }
+                        else { [0.0, 0.0, width, 0.0] };
+                    inherit_fade(&mut widths, &mut origins, bounds, own);
+                }
+                for instance in &mut self.instances[first_instance..] {
+                    if instance.params[1] == KIND_GLYPH {
+                        instance.clip = text_clip;
+                        instance.fade = crate::render::pack_fade(widths, origins, text_clip);
+                    }
+                }
+            }
             if self.track_marks {
                 self.marks.resize(self.instances.len(), mark);
             }
@@ -3163,6 +3232,7 @@ fn flatten(
     let virtual_mount = el.virtual_mount || parent.is_some_and(|p| nodes[p].virtual_mount);
     let El {
         on_paste,
+        on_window_focus,
         focus,
         modal,
         looping,
@@ -3192,10 +3262,15 @@ fn flatten(
         window_drag,
         ..
     } = el;
+    if let Some(t) = &text && t.live.is_some() {
+        assert!(input.is_none() && !t.wrap && t.spans.is_empty() && t.reveal < 0.0 && !t.truncate,
+            "live_text requires plain single-line text; use truncate_fade for overflow");
+    }
     let measured = text.is_some();
-    let measure = text.as_ref().map(|t| crate::text::text_hash(&t.content, &t.spans, t.style, scale, None) ^ u64::from(t.wrap) ^ (u64::from(t.truncate) << 1));
+    let measure = text.as_ref().map(|t| crate::text::text_hash(&t.content, &t.spans, t.style, scale, None) ^ u64::from(t.wrap) ^ (u64::from(t.truncate || t.truncate_fade) << 1));
     nodes.push(Node {
         on_paste,
+        on_window_focus,
         focus,
         modal,
         looping,
@@ -3208,6 +3283,7 @@ fn flatten(
         live,
         text,
         text_layout: None,
+        live_text_seen: None,
         on_press,
         on_secondary_press,
         on_hover,
@@ -3369,7 +3445,7 @@ mod tests {
         }
         let mut edit = crate::TextEdit::default();
         edit.focused = true;
-        let mut rt = Runtime::new(vec![edit], view, (100.0, 100.0), Env { system_dark: true, scale: 1.0 });
+        let mut rt = Runtime::new(vec![edit], view, (100.0, 100.0), Env::new(true, 1.0));
         rt.frame(0.0);
         let path = rt.nodes.iter().find(|n| n.key.as_deref() == Some("delete")).unwrap().path.clone();
         rt.queue.push(Action::Press(path));
@@ -3390,7 +3466,7 @@ mod tests {
             parent.child(el().key("child").size(40.0, 40.0)
                 .on_secondary_press(|_: &mut State, _, _| {}))
         }
-        let mut rt = Runtime::new((0, 0, false), view, (100.0, 100.0), Env { system_dark: true, scale: 1.0 });
+        let mut rt = Runtime::new((0, 0, false), view, (100.0, 100.0), Env::new(true, 1.0));
         rt.frame(0.0);
         rt.pointer_move(10.0, 10.0);
         rt.pointer_down(10.0, 10.0);
@@ -3420,7 +3496,7 @@ mod tests {
                     .child(el().key("child").size(40.0, 40.0).on_press(|s: &mut State| s.0 += 1))
             })
         }
-        let mut rt = Runtime::new((0, Vec::new(), false), view, (100.0, 100.0), Env { system_dark: true, scale: 1.0 });
+        let mut rt = Runtime::new((0, Vec::new(), false), view, (100.0, 100.0), Env::new(true, 1.0));
         rt.frame(0.0);
         rt.secondary_down(10.0, 10.0);
         rt.secondary_up(12.0, 12.0);
@@ -3456,7 +3532,7 @@ mod tests {
             }
             false
         }
-        let mut rt = Runtime::new(Vec::new(), view, (100.0, 100.0), Env { system_dark: true, scale: 1.0 });
+        let mut rt = Runtime::new(Vec::new(), view, (100.0, 100.0), Env::new(true, 1.0));
         rt.poll = Some(poll);
         assert!(!rt.frame(0.0));
         assert_eq!(rt.wake_deadlines, [0.25, 0.375]);
@@ -3474,7 +3550,7 @@ mod tests {
                 tx.wake_after(std::time::Duration::from_millis(250));
             })
         }
-        let mut rt = Runtime::new((), view, (100.0, 100.0), Env { system_dark: true, scale: 1.0 });
+        let mut rt = Runtime::new((), view, (100.0, 100.0), Env::new(true, 1.0));
         rt.frame(0.0);
         rt.pointer_down(10.0, 10.0);
         rt.pointer_up(10.0, 10.0);
@@ -3488,13 +3564,13 @@ mod tests {
     #[cfg(debug_assertions)]
     #[should_panic(expected = "duplicate sibling key \"card\"")]
     fn duplicate_sibling_keys_fail_before_layout() {
-        let mut rt = Runtime::new((), duplicate_view, (100.0, 100.0), Env { system_dark: true, scale: 1.0 });
+        let mut rt = Runtime::new((), duplicate_view, (100.0, 100.0), Env::new(true, 1.0));
         rt.frame(0.0);
     }
 
     #[test]
     fn duplicate_sibling_keys_tooling_reports_without_invalid_layout() {
-        let mut rt = Runtime::new((), duplicate_view, (100.0, 100.0), Env { system_dark: true, scale: 1.0 });
+        let mut rt = Runtime::new((), duplicate_view, (100.0, 100.0), Env::new(true, 1.0));
         rt.key_warnings = Some(Vec::new());
         rt.frame(0.0);
         assert_eq!(rt.key_warnings.as_ref().unwrap().len(), 1);
@@ -3515,7 +3591,7 @@ mod tests {
                 .child(el().key("side-panel").w(s.0).h_full())
         }
         fn run(fps: usize, reduced: bool) -> Vec<f32> {
-            let mut rt = Runtime::new((0.0, reduced), view, (480.0, 700.0), Env { system_dark: true, scale: 2.0 });
+            let mut rt = Runtime::new((0.0, reduced), view, (480.0, 700.0), Env::new(true, 2.0));
             rt.frame(0.0);
             let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("message")).unwrap().id;
             let original = rt.grows[&id].h;
@@ -3582,7 +3658,7 @@ mod tests {
                     .child(el().key("button").size(40.0, 40.0).on_press(|s: &mut State| s.pressed += 1)))
                 .child(el().key("body").size(200.0, 40.0))
         }
-        let mut rt = Runtime::new(State { pressed: 0 }, view, (200.0, 200.0), Env { system_dark: true, scale: 1.0 });
+        let mut rt = Runtime::new(State { pressed: 0 }, view, (200.0, 200.0), Env::new(true, 1.0));
         rt.frame(0.0);
         for (x, y, drags) in [(100.0, 20.0, true), (20.0, 20.0, false), (100.0, 60.0, false)] {
             rt.pointer_move(x, y);
@@ -3608,7 +3684,7 @@ mod tests {
                     .on_edit(|s: &mut State| &mut s.field))
                 .child(el().key("plain").size(200.0, 40.0).on_press(|_: &mut State| {}))
         }
-        let mut rt = Runtime::new(State { field: crate::edit::TextEdit::new("") }, view, (200.0, 200.0), Env { system_dark: true, scale: 1.0 });
+        let mut rt = Runtime::new(State { field: crate::edit::TextEdit::new("") }, view, (200.0, 200.0), Env::new(true, 1.0));
         rt.frame(0.0);
         assert_eq!(rt.cursor(), Cursor::Default);
         for (y, cursor) in [(20.0, Cursor::Pointer), (60.0, Cursor::Grab), (100.0, Cursor::Text), (140.0, Cursor::Default)] {
@@ -3633,7 +3709,7 @@ mod tests {
         }
         let mut edit = crate::TextEdit::new("hé🙂");
         edit.focused = true;
-        let mut rt = Runtime::new(edit, view, (200.0, 40.0), Env { system_dark: true, scale: 1.0 });
+        let mut rt = Runtime::new(edit, view, (200.0, 40.0), Env::new(true, 1.0));
         rt.frame(0.0);
         assert!(rt.state.is_secure() && rt.has_secure_focus());
         assert!(rt.ime_area.is_none());
@@ -3666,7 +3742,7 @@ mod tests {
                 .child(crate::text_input(&s.field, crate::TextStyle::new(16.0, 400.0)).key("field").size(200.0, 40.0)
                     .on_edit(|s: &mut State| &mut s.field))
         }
-        let mut rt = Runtime::new(State::default(), view, (200.0, 100.0), Env { system_dark: true, scale: 1.0 });
+        let mut rt = Runtime::new(State::default(), view, (200.0, 100.0), Env::new(true, 1.0));
         rt.frame(0.0);
         assert!(rt.accepts_paste());
         rt.paste("window fixture"); rt.frame(0.0);
@@ -3690,7 +3766,7 @@ mod tests {
             el().size(100.0, 100.0).opacity(s.0).child(el().size(20.0, 20.0)
                 .looping(rune_motion::LoopSpec::opacity(1.0, 2.0, 0.0, 1.0)))
         }
-        let make = |opacity, scale| Runtime::new((opacity, scale), view, (100.0, 100.0), Env { system_dark: true, scale: 1.0 });
+        let make = |opacity, scale| Runtime::new((opacity, scale), view, (100.0, 100.0), Env::new(true, 1.0));
         let mut rt = make(1.0, 1.0);
         assert!(!rt.frame(0.0));
         assert_eq!(rt.wake_deadline(), Some(2.0));
@@ -3730,7 +3806,7 @@ mod tests {
                 .cycle(crate::Cycle { period: 1.0, phase: 0.0,
                     stops: &[(0.0, 0.0), (0.5, 1.0), (1.0, 0.0)], still: 0.4, fps: 30.0 }))
         }
-        let mut rt = Runtime::new(false, view, (100.0, 100.0), Env { scale: 1.0, system_dark: true });
+        let mut rt = Runtime::new(false, view, (100.0, 100.0), Env::new(true, 1.0));
         assert!(!rt.frame(0.0), "cycles must sleep rather than request continuous frames");
         assert!((rt.wake_deadline().unwrap() - 1.0 / 30.0).abs() < 1e-7);
         assert_eq!(rt.loops.len(), 1);
@@ -3763,7 +3839,7 @@ mod tests {
         }
         for (y, shown, reduced, active) in [(0.0, true, false, true), (200.0, true, false, false),
             (0.0, false, false, false), (0.0, true, true, false)] {
-            let mut rt = Runtime::new((y, shown, reduced), view, (100.0, 100.0), Env { system_dark: true, scale: 2.0 });
+            let mut rt = Runtime::new((y, shown, reduced), view, (100.0, 100.0), Env::new(true, 2.0));
             assert_eq!(rt.frame(0.0), active);
             // Model the shell's scheduling gate: zero requested frames over ten seconds at rest.
             let mut requested = 0;
@@ -3789,7 +3865,7 @@ mod tests {
                 .child(el().key("working").size(28.0, 28.0).opacity(if s.0 { 1.0 } else { 0.0 }).opacity_motion(fade(s.0)))
         }
         for reduced in [false, true] {
-            let mut rt = Runtime::new((false, reduced), view, (100.0, 100.0), Env { system_dark: true, scale: 2.0 });
+            let mut rt = Runtime::new((false, reduced), view, (100.0, 100.0), Env::new(true, 2.0));
             rt.frame(0.0);
             for busy in [true, false] {
                 rt.state.0 = busy;
@@ -3811,7 +3887,7 @@ mod tests {
             col().key("stack").w_full().growth(GrowthSpec::default())
                 .child(el().key("row").w_full().h(if *changed { 160.0 } else { 40.0 }))
         }
-        let mut rt = Runtime::new(false, view, (300.0, 300.0), Env { system_dark: true, scale: 2.0 });
+        let mut rt = Runtime::new(false, view, (300.0, 300.0), Env::new(true, 2.0));
         rt.frame(0.0);
         let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("row")).unwrap().id;
         let before = rt.scene.presented(id).unwrap().rect;
@@ -3846,7 +3922,7 @@ mod tests {
         }
         let mut draft = crate::edit::TextEdit::new("héllo flight");
         draft.focused = true;
-        let mut rt = Runtime::new(State { draft, sent: false, height: 80.0 }, view, (400.0, 300.0), Env { system_dark: true, scale: 2.0 });
+        let mut rt = Runtime::new(State { draft, sent: false, height: 80.0 }, view, (400.0, 300.0), Env::new(true, 2.0));
         rt.frame(0.0);
         rt.state.height = 400.0;
         rt.invalidate();
@@ -3888,7 +3964,7 @@ mod tests {
             }
             col().key("scroll").w_full().h_full().clip_fade(0.0, 8.0, 0.0, 8.0).scroll(ScrollSpec { stick_bottom: true }).child(stack)
         }
-        let env = Env { system_dark: true, scale: 2.0 };
+        let env = Env::new(true, 2.0);
         let mut full = Runtime::new(State { virtualized: false, keys: (0..600).collect() }, view, (240.0, 300.0), env);
         let mut window = Runtime::new(State { virtualized: true, keys: (0..600).collect() }, view, (240.0, 300.0), env);
         full.frame(0.0);
@@ -3945,7 +4021,7 @@ mod tests {
             }
             stack
         }
-        let mut rt = Runtime::new(false, view, (200.0, 300.0), Env { system_dark: true, scale: 2.0 });
+        let mut rt = Runtime::new(false, view, (200.0, 300.0), Env::new(true, 2.0));
         assert!(!rt.frame(0.0));
         rt.state = true;
         rt.invalidate();
@@ -3976,7 +4052,7 @@ mod tests {
         }
         let mut edit = TextEdit::new("héllo 👋");
         edit.anchor = 0;
-        let mut rt = Runtime::new(edit, view, (300.0, 200.0), Env { system_dark: true, scale: 2.0 });
+        let mut rt = Runtime::new(edit, view, (300.0, 200.0), Env::new(true, 2.0));
         rt.frame(0.0);
         let button = rt.nodes.iter().find(|n| n.key.as_deref() == Some("copy")).unwrap().path.clone();
         rt.focused = Some(rt.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone());
@@ -4000,7 +4076,7 @@ mod tests {
                 col().key("row").w_full().streaming(state.1).child(crate::el::text(state.0.clone()).wrap().w_full().reveal(0.18))
             )
         }
-        let mut rt = Runtime::new(("one".into(), true), view, (180.0, 500.0), Env { system_dark: true, scale: 2.0 });
+        let mut rt = Runtime::new(("one".into(), true), view, (180.0, 500.0), Env::new(true, 2.0));
         rt.frame(0.0);
         rt.state.0 = "one two three four five six seven eight nine ten eleven".into();
         rt.invalidate();
@@ -4050,7 +4126,7 @@ mod tests {
             }
             root
         }
-        let env = Env { system_dark: true, scale: 2.0 };
+        let env = Env::new(true, 2.0);
         let mut cached = Runtime::new(0usize, view, (320.0, 600.0), env);
         for seed in 0..40 {
             let size = (240.0 + (seed % 4) as f32 * 30.0, 600.0);
@@ -4081,7 +4157,7 @@ mod tests {
             root
         }
 
-        let mut rt = Runtime::new(true, view, (200.0, 100.0), Env { system_dark: true, scale: 2.0 });
+        let mut rt = Runtime::new(true, view, (200.0, 100.0), Env::new(true, 2.0));
         assert!(!rt.frame(0.0), "first mount never animates");
         assert_eq!(rt.elements().len(), 2);
 
@@ -4120,7 +4196,7 @@ mod tests {
             }
             col().key("root").child(col().key("scroll").h(300.0).w_full().scroll(ScrollSpec { stick_bottom: true }).child(stack))
         }
-        let mut rt = Runtime::new(10usize, view, (200.0, 300.0), Env { system_dark: true, scale: 2.0 });
+        let mut rt = Runtime::new(10usize, view, (200.0, 300.0), Env::new(true, 2.0));
         rt.frame(0.0);
         // First frame: at the bottom, nothing animating (guarantee 8).
         assert!(!rt.animating);

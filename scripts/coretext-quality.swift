@@ -6,6 +6,8 @@ import ImageIO
 import UniformTypeIdentifiers
 
 let dir = URL(fileURLWithPath: CommandLine.arguments[1])
+let nativeOpticalSize = CommandLine.arguments.contains("--native-opsz")
+var shaping: [[String: Any]] = []
 for url in try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
     where url.pathExtension == "json" && (url.lastPathComponent.hasPrefix("light-") || url.lastPathComponent.hasPrefix("dark-")) {
     let data = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
@@ -31,8 +33,16 @@ for url in try FileManager.default.contentsOfDirectory(at: dir, includingPropert
         let base = CTFontCreateWithGraphicsFont(cgfont,CGFloat(row["size"] as! Double),nil,nil)
         // Parley's current optical-size selection uses the run's device-pixel size.
         // Pin the reference to that same variation; otherwise SF compares different outlines.
-        let attrs = [kCTFontVariationAttribute: [NSNumber(value:0x6f70737a): (row["size"] as! Double)*scale]] as CFDictionary
-        let font = CTFontCreateCopyWithAttributes(base,0,nil,CTFontDescriptorCreateWithAttributes(attrs))
+        let opsz = row["opsz"] as? Double ?? (row["size"] as! Double)*scale
+        let attrs = [kCTFontVariationAttribute: [NSNumber(value:0x6f70737a): opsz]] as CFDictionary
+        let font = nativeOpticalSize ? base : CTFontCreateCopyWithAttributes(base,0,nil,CTFontDescriptorCreateWithAttributes(attrs))
+        let attributed = NSAttributedString(string: row["text"] as! String,
+            attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font])
+        let line = CTLineCreateWithAttributedString(attributed)
+        let advance = CTLineGetTypographicBounds(line, nil, nil, nil) * scale
+        shaping.append(["sample": url.lastPathComponent, "size": row["size"]!, "text": row["text"]!,
+            "rune_advance": row["advance"] ?? 0, "coretext_advance": advance,
+            "coretext_variations": String(describing: CTFontCopyVariation(font))])
         let items = row["glyphs"] as! [[String:Any]]
         var glyphs = items.map { CGGlyph($0["id"] as! Int) }
         var positions = items.map { CGPoint(x:($0["x"] as! Double)/scale,y:(Double(height)-($0["y"] as! Double))/scale) }
@@ -44,3 +54,5 @@ for url in try FileManager.default.contentsOfDirectory(at: dir, includingPropert
     precondition(CGImageDestinationFinalize(sink))
     print(dest.lastPathComponent)
 }
+try JSONSerialization.data(withJSONObject: shaping, options: [.prettyPrinted, .sortedKeys])
+    .write(to: dir.appendingPathComponent("coretext-shaping.json"))

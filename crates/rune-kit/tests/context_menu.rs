@@ -17,7 +17,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
 
 #[test]
 fn context_menu_opens_at_pointer_and_stays_inside_viewport() {
-    let mut rt = Runtime::new(State::default(), view, (300.0, 200.0), Env { system_dark: true, scale: 1.0 });
+    let mut rt = Runtime::new(State::default(), view, (300.0, 200.0), Env::new(true, 1.0));
     rt.frame(0.0);
     rt.secondary_down(290.0, 190.0);
     rt.secondary_up(290.0, 190.0);

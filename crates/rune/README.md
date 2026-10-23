@@ -254,6 +254,49 @@ ignore it; `run_windows` keeps its regular-launch default.
 
 ## High-frequency values
 
+`LiveText` updates a plain text run without rebuilding the view or moving its
+siblings. Reserve a box with a placeholder or an explicit size:
+
+```rust,ignore
+let clock = rune::LiveText::new("00:00");
+text("00:00").live_text(&clock).font(TextStyle::new(14.0, 400.0).features("'tnum' 1"));
+clock.set("00:01");
+```
+
+The placeholder determines layout even after a view rebuild. Only the changed
+run reshapes; overflow clips to that box. Equal strings do not shape or wake a
+host. Hidden hosts keep the latest value and sample it on return. Publication
+uses a short mutex and can allocate; it is not an audio-callback API. Live text
+supports plain single-line labels, including `.truncate_fade()`, but not rich
+spans, wrapping, editors, ellipsis truncation or streaming word reveals.
+
+`TextStyle::features("'tnum' 1, 'ss01' 1")` enables OpenType features, and
+`.variations("'wght' 500, 'opsz' 14")` selects variation axes. Both use CSS syntax
+and participate in the layout cache key. Tokens remain `Copy` and const-friendly;
+these strings have static lifetime. `.optical_size(value)` accepts a runtime value.
+
+Optical sizing defaults to each run's point size, including rich spans with a
+different size. An explicit `opsz` variation wins over the default; `.optical_size`
+wins over both. `.optical_sizing(OpticalSize::FontDefault)` restores Parley's old
+selection. Fonts without an `opsz` axis are unaffected. The measured SF change is
+documented in [Batch C text results](../../research/24-live-text-and-font-settings.md).
+
+`.truncate_fade()` shrinks a single-line label and fades its trailing one-em edge
+only when text overflows. It keeps the full string and paints no ellipsis. For
+end-aligned labels the overflow fades on the left.
+
+Native hosts populate `cx.env().reduced_motion` at creation and refresh it on
+window focus changes. Rune uses it by default; `cx.reduced_motion(value)` overrides
+it for that view. macOS reads the accessibility preference, Windows reads client
+area animation, and Linux reads KDE's duration factor or GNOME's enable-animations
+setting when available. Headless `Env::new(dark, scale)` defaults to false; tests
+can set the field explicitly.
+
+A root `.on_window_focus(|state: &mut State, focused, tx| ...)` receives native
+activation/deactivation in order. It applies to regular windows and interactive
+overlays, independently of text-field focus. Headless tests inject the same events
+with `Runtime::window_focus(bool)`.
+
 `Live<T>` is a cloneable, thread-safe latest-wins handle (`f32`, `[f32; 2]`,
 `[f32; 4]`, `Color`). Call `set(value)` from a producer thread; Rune coalesces a
 wake for each visible subscribed window. Equal values and hidden windows do not

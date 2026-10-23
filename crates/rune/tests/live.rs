@@ -20,7 +20,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
     el().size(300.0, 300.0).child(child)
 }
 fn runtime(s: State) -> Runtime<State> {
-    Runtime::new(s, view, (300.0, 300.0), Env { scale: 2.0, system_dark: true })
+    Runtime::new(s, view, (300.0, 300.0), Env::new(true, 2.0))
 }
 
 #[test]
@@ -134,7 +134,7 @@ fn live_rect_changes_presentation_without_reflow_and_unbinding_restores_layout()
             .child(el().key("sibling").size(20.0, 20.0))
     }
     let mut rt = Runtime::new((Live::new([10.0, 20.0, 80.0, 40.0]), true), view,
-        (300.0, 300.0), Env { scale: 2.0, system_dark: true });
+        (300.0, 300.0), Env::new(true, 2.0));
     let rect = |rt: &Runtime<State>, key: &str| rt.elements().into_iter().find(|n| n.key.as_deref() == Some(key)).unwrap().rect;
     rt.frame(0.0);
     assert_eq!(rect(&rt, "box"), [10.0, 20.0, 80.0, 40.0]);
@@ -155,7 +155,7 @@ fn linear_countdown_uses_render_time_without_commits_wakes_or_hidden_samples() {
         el().key("bar").size(272.0, 4.0).fill(Color::WHITE).live_rect(s)
     }
     let tween = || Tween::linear([0.0, 0.0, 272.0, 4.0], [0.0, 0.0, 0.0, 4.0], Duration::from_secs(30));
-    let mut rt = Runtime::new(tween(), view, (300.0, 20.0), Env { scale: 1.0, system_dark: true });
+    let mut rt = Runtime::new(tween(), view, (300.0, 20.0), Env::new(true, 1.0));
     let wakes = Arc::new(AtomicUsize::new(0));
     let count = wakes.clone();
     rt.set_live_waker(Arc::new(move || { count.fetch_add(1, Ordering::Relaxed); }));
@@ -195,7 +195,7 @@ fn tween_handle_keeps_its_start_across_unmount_and_remount() {
         if s.1 { root.child(el().key("countdown").size(20.0, 20.0).live_opacity(&s.0)) } else { root }
     }
     let tween = Tween::linear(1.0, 0.0, std::time::Duration::from_secs(10));
-    let mut rt = Runtime::new((tween.clone(), true), view, (100.0, 100.0), Env { scale: 1.0, system_dark: true });
+    let mut rt = Runtime::new((tween.clone(), true), view, (100.0, 100.0), Env::new(true, 1.0));
     rt.frame(0.0); rt.frame(2.0);
     rt.update(|s, tx| { s.1 = false; tx.settle(); }); rt.frame(0.0);
     assert!(!rt.elements().iter().any(|e| e.key.as_deref() == Some("countdown")));
@@ -204,7 +204,7 @@ fn tween_handle_keeps_its_start_across_unmount_and_remount() {
     let opacity = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("countdown")).unwrap().opacity;
     assert!((opacity - 0.5).abs() < 0.001, "remount must resume the original countdown");
     // Sharing the handle must not mix independent runtime/virtual clocks.
-    let mut other = Runtime::new((tween, true), view, (100.0, 100.0), Env { scale: 1.0, system_dark: true });
+    let mut other = Runtime::new((tween, true), view, (100.0, 100.0), Env::new(true, 1.0));
     other.frame(0.0);
     assert_eq!(other.elements().into_iter().find(|e| e.key.as_deref() == Some("countdown")).unwrap().opacity, 1.0);
 }

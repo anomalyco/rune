@@ -122,13 +122,16 @@ fn main() {
         for (si, size) in [11.0, 12.0, 13.0, 15.0, 24.0].into_iter().enumerate() {
             for (ti, string) in strings.iter().enumerate() {
                 let origin = [16.0 * scale, (8.0 + (si * 5 + ti) as f32 * 42.0) * scale];
-                let style = TextStyle {
+                let mut style = TextStyle {
                     size,
                     weight: 400.0,
                     family: Family::Sans,
                     line_height: 0.0,
                     tracking: 0.0,
+                    ..TextStyle::new(size, 400.0)
                 };
+                if std::env::var("RUNE_TEXT_OPSZ").as_deref() == Ok("point") { style = style.optical_size(size); }
+                if std::env::var("RUNE_TEXT_OPSZ").as_deref() == Ok("legacy") { style = style.optical_sizing(rune::OpticalSize::FontDefault); }
                 let layout = text.layout_rich(string, &[], style, scale, None);
                 if let Some((hint, embolden)) = experiment {
                     experimental(
@@ -159,7 +162,11 @@ fn main() {
                         }
                     }
                 }
-                rows.push(json!({"size":size,"text":string,"top":origin[1],"glyphs":glyphs}));
+                rows.push(json!({"size":size,"text":string,"top":origin[1],"glyphs":glyphs,
+                    "advance":layout.full_width(),"opsz":match style.optical_size {
+                        rune::OpticalSize::Auto => Some(size), rune::OpticalSize::Fixed(value) => Some(value),
+                        rune::OpticalSize::FontDefault => None,
+                    }}));
             }
         }
         for dark in [false, true] {
@@ -236,6 +243,7 @@ fn main() {
             family: Family::Sans,
             line_height: 0.0,
             tracking: 0.0,
+            ..TextStyle::new(13.0, 400.0)
         };
         let layout = text.layout_rich("lHEximno", &[], style, scale, None);
         let mut frames = Vec::new();
