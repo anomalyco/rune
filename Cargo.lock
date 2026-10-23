@@ -2727,6 +2727,7 @@ version = "0.0.1"
 dependencies = [
  "arboard",
  "blake3",
+ "block2 0.5.1",
  "bytemuck",
  "image",
  "objc2 0.5.3",
@@ -2754,6 +2755,8 @@ dependencies = [
  "wgpu",
  "windows-sys 0.59.0",
  "winit",
+ "x11rb",
+ "xkbcommon",
 ]
 
 [[package]]
@@ -4233,6 +4236,17 @@ name = "xcursor"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "163b33ed8786455e2fa5d72f554057ce3f3182425434f756cd39c99839d88e23"
+
+[[package]]
+name = "xkbcommon"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7a974f48060a14e95705c01f24ad9c3345022f4d97441b8a36beb7ed5c4a02d"
+dependencies = [
+ "libc",
+ "memmap2",
+ "xkeysym",
+]
 
 [[package]]
 name = "xkbcommon-dl"

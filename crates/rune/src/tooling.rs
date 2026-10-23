@@ -273,7 +273,7 @@ pub fn run_windows<S: 'static>(factory: impl FnOnce(&[crate::Display]) -> Vec<cr
 pub fn run_windows_with<S: 'static>(options: crate::RunOptions, factory: impl FnOnce(&[crate::Display]) -> Vec<crate::WindowSpec<S>> + 'static) {
     let args = Args::parse();
     if args.headless() {
-        let display = crate::Display { name: Some("headless".into()), position: (0, 0),
+        let display = crate::Display { id: None, name: Some("headless".into()), position: (0, 0),
             size: (1920, 1080), scale: f64::from(args.scale.unwrap_or(2.0)), primary: true };
         let mut windows = factory(std::slice::from_ref(&display));
         crate::windows::validate(&windows).unwrap_or_else(|e| die(&e));

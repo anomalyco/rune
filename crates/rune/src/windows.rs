@@ -12,6 +12,8 @@ pub struct RunOptions {
 /// Headless runs provide one deterministic virtual display.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Display {
+    /// Native identity for overlay targeting; absent for the headless virtual display.
+    pub id: Option<crate::DisplayId>,
     pub name: Option<String>,
     pub position: (i32, i32),
     pub size: (u32, u32),

@@ -1,7 +1,7 @@
 //! A Wayland layer-shell surface for overlays: `zwlr_layer_shell_v1` on winit's own display
-//! connection, in a private event queue. The surface sits on the overlay layer, anchored to the
-//! top or bottom edge, takes no keyboard focus, reserves no space, and has an empty input region
-//! so every click falls through. wgpu draws into it through the raw `wl_surface`.
+//! connection, in a private event queue with its own seat. The surface reserves no space;
+//! input regions and the rendered buffer share a commit. Global pointer observation and
+//! capture exclusion are unavailable. wgpu draws through the raw `wl_surface`.
 
 use std::ptr::NonNull;
 
@@ -12,12 +12,18 @@ use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_surface::{self, WlSurface};
+use wayland_client::protocol::{wl_output::{self, WlOutput}, wl_seat::{self, WlSeat}, wl_pointer::{self, WlPointer}, wl_keyboard::{self, WlKeyboard}};
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1};
 
 use crate::el::Align;
 use crate::overlay::{Placement, ScreenEdge};
+use crate::{OverlayInput, OverlayOptions, OverlayPlacement};
+
+pub(crate) enum Input {
+    Move(f32, f32), Leave, Button(bool), Key(crate::KeyEvent),
+}
 
 #[derive(Default)]
 struct State {
@@ -25,6 +31,89 @@ struct State {
     configured: Option<(u32, u32)>,
     scale: Option<i32>,
     closed: bool,
+    input: Vec<Input>,
+    surface: Option<WlSurface>,
+    pointer_inside: bool,
+    keyboard_focus: bool,
+    pointer: Option<WlPointer>,
+    keyboard: Option<WlKeyboard>,
+    xkb: Option<xkbcommon::xkb::State>,
+}
+
+impl Dispatch<WlOutput, ()> for State {
+    fn event(_: &mut Self, _: &WlOutput, _: wl_output::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+}
+impl Dispatch<WlSeat, ()> for State {
+    fn event(state: &mut Self, seat: &WlSeat, event: wl_seat::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
+        if let wl_seat::Event::Capabilities { capabilities: wayland_client::WEnum::Value(caps) } = event {
+            if caps.contains(wl_seat::Capability::Pointer) && state.pointer.is_none() { state.pointer = Some(seat.get_pointer(qh, ())); }
+            if caps.contains(wl_seat::Capability::Keyboard) && state.keyboard.is_none() { state.keyboard = Some(seat.get_keyboard(qh, ())); }
+            if !caps.contains(wl_seat::Capability::Pointer) && let Some(pointer) = state.pointer.take() { if pointer.version() >= 3 { pointer.release(); } }
+            if !caps.contains(wl_seat::Capability::Keyboard) && let Some(keyboard) = state.keyboard.take() { if keyboard.version() >= 3 { keyboard.release(); } state.xkb = None; }
+        }
+    }
+}
+impl Dispatch<WlPointer, ()> for State {
+    fn event(state: &mut Self, _: &WlPointer, event: wl_pointer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        match event {
+            wl_pointer::Event::Enter { surface, surface_x, surface_y, .. } => {
+                state.pointer_inside = state.surface.as_ref() == Some(&surface);
+                if state.pointer_inside { state.input.push(Input::Move(surface_x as f32, surface_y as f32)); }
+            }
+            wl_pointer::Event::Motion { surface_x, surface_y, .. } if state.pointer_inside => state.input.push(Input::Move(surface_x as f32, surface_y as f32)),
+            wl_pointer::Event::Leave { surface, .. } if state.surface.as_ref() == Some(&surface) => {
+                state.pointer_inside = false;
+                state.input.push(Input::Leave);
+            }
+            wl_pointer::Event::Button { button: 0x110, state: wayland_client::WEnum::Value(button), .. } if state.pointer_inside => state.input.push(Input::Button(button == wl_pointer::ButtonState::Pressed)),
+            _ => {}
+        }
+    }
+}
+impl Dispatch<WlKeyboard, ()> for State {
+    fn event(state: &mut Self, _: &WlKeyboard, event: wl_keyboard::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        use xkbcommon::xkb;
+        match event {
+            wl_keyboard::Event::Enter { surface, .. } => state.keyboard_focus = state.surface.as_ref() == Some(&surface),
+            wl_keyboard::Event::Leave { surface, .. } if state.surface.as_ref() == Some(&surface) => state.keyboard_focus = false,
+            wl_keyboard::Event::Keymap { format: wayland_client::WEnum::Value(wl_keyboard::KeymapFormat::XkbV1), fd, size } => {
+                use std::io::Read;
+                let mut map = String::new();
+                if size <= 16 * 1024 * 1024 && std::fs::File::from(fd).take(u64::from(size)).read_to_string(&mut map).is_ok() {
+                    let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+                    state.xkb = xkb::Keymap::new_from_string(&context, map.trim_end_matches('\0').to_owned(), xkb::KEYMAP_FORMAT_TEXT_V1, xkb::COMPILE_NO_FLAGS).map(|map| xkb::State::new(&map));
+                }
+            }
+            wl_keyboard::Event::Modifiers { mods_depressed, mods_latched, mods_locked, group, .. } => {
+                if let Some(xkb) = &mut state.xkb { xkb.update_mask(mods_depressed, mods_latched, mods_locked, 0, 0, group); }
+            }
+            wl_keyboard::Event::Key { key, state: wayland_client::WEnum::Value(wl_keyboard::KeyState::Pressed), .. } if state.keyboard_focus => {
+                if let Some(xkb) = &state.xkb && let Some(key) = key_event(xkb, key) { state.input.push(Input::Key(key)); }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn key_event(state: &xkbcommon::xkb::State, key: u32) -> Option<crate::KeyEvent> {
+    use xkbcommon::xkb;
+    let code = xkb::Keycode::new(key + 8);
+    let symbol = state.key_get_one_sym(code).raw();
+    let active = |name: &str| state.mod_name_is_active(name, xkb::STATE_MODS_EFFECTIVE);
+    let mods = crate::Mods { shift: active(xkb::MOD_NAME_SHIFT), ctrl: active(xkb::MOD_NAME_CTRL), cmd: active(xkb::MOD_NAME_CTRL), alt: active(xkb::MOD_NAME_ALT), logo: active(xkb::MOD_NAME_LOGO) };
+    let key = match symbol {
+        0xff1b => crate::Key::Escape, 0xff0d => crate::Key::Enter, 0xff08 => crate::Key::Backspace,
+        0xffff => crate::Key::Delete, 0xff09 | 0xfe20 => crate::Key::Tab,
+        0xff50 => crate::Key::Home, 0xff57 => crate::Key::End,
+        0xff51 => crate::Key::Left, 0xff52 => crate::Key::Up, 0xff53 => crate::Key::Right, 0xff54 => crate::Key::Down,
+        0xffbe..=0xffd5 => crate::Key::Function((symbol - 0xffbe + 1) as u8),
+        _ => {
+            let text = state.key_get_utf8(code);
+            if mods.cmd { crate::Key::Command(char::from_u32(xkb::keysym_to_utf32(state.key_get_one_sym(code)))?.to_ascii_lowercase()) }
+            else if !text.is_empty() && !text.chars().any(char::is_control) { crate::Key::Text(text) } else { return None; }
+        }
+    };
+    Some(crate::KeyEvent { key, mods })
 }
 
 impl Dispatch<WlRegistry, GlobalListContents> for State {
@@ -61,11 +150,17 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for State {
 
 /// What the overlay needs to know after the compositor talked to the surface.
 pub(crate) struct Changes {
+    pub size: Option<(u32, u32)>,
+    pub input: Vec<Input>,
     pub scale: Option<i32>,
     pub closed: bool,
 }
 
 pub(crate) struct LayerSurface {
+    compositor: WlCompositor,
+    output: Option<WlOutput>,
+    seat: Option<WlSeat>,
+    options: OverlayOptions,
     queue: EventQueue<State>,
     state: State,
     layer: ZwlrLayerSurfaceV1,
@@ -75,7 +170,7 @@ pub(crate) struct LayerSurface {
 
 impl LayerSurface {
     /// None when the display isn't Wayland or the compositor lacks layer-shell.
-    pub fn new(display: RawDisplayHandle, namespace: &str, at: Placement) -> Option<LayerSurface> {
+    pub fn new(display: RawDisplayHandle, namespace: &str, at: Placement, options: &OverlayOptions, output_id: Option<u32>) -> Option<LayerSurface> {
         let RawDisplayHandle::Wayland(display) = display else { return None };
         // SAFETY: winit owns this `wl_display` for the life of the event loop, which outlives
         // every overlay; a foreign backend never closes it.
@@ -85,14 +180,23 @@ impl LayerSurface {
         let qh = queue.handle();
         let compositor: WlCompositor = globals.bind(&qh, 1..=6, ()).ok()?;
         let shell: ZwlrLayerShellV1 = globals.bind(&qh, 1..=4, ()).ok()?;
+        let output = output_id.and_then(|id| {
+            globals.contents().with_list(|list| list.iter().find(|g| g.name == id && g.interface == "wl_output").map(|g| {
+                globals.registry().bind::<WlOutput, _, _>(g.name, g.version.min(4), &qh, ())
+            }))
+        });
+        let seat: Option<WlSeat> = globals.bind(&qh, 1..=8, ()).ok();
         let surface = compositor.create_surface(&qh, ());
         let region = compositor.create_region(&qh, ());
         surface.set_input_region(Some(&region));
         region.destroy();
-        let layer = shell.get_layer_surface(&surface, None, Layer::Overlay, namespace.to_owned(), &qh, ());
+        // Preserve existing overlay-layer semantics. There is no layer above Overlay;
+        // relative ordering of peers is compositor policy, unlike AppKit's numeric levels.
+        let layer = shell.get_layer_surface(&surface, output.as_ref(), Layer::Overlay, namespace.to_owned(), &qh, ());
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.set_exclusive_zone(0);
-        let mut this = LayerSurface { queue, state: State::default(), layer, surface, display: display.display };
+        let state = State { surface: Some(surface.clone()), ..State::default() };
+        let mut this = LayerSurface { compositor, output, seat, options: options.clone(), queue, state, layer, surface, display: display.display };
         this.place(at);
         this.surface.commit();
         while this.state.configured.is_none() && !this.state.closed {
@@ -102,6 +206,25 @@ impl LayerSurface {
     }
 
     pub fn place(&mut self, at: Placement) {
+        match self.options.placement {
+            Some(OverlayPlacement::FullScreen) => {
+                self.layer.set_size(0, 0);
+                self.layer.set_anchor(Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right);
+                self.layer.set_margin(0, 0, 0, 0);
+                return;
+            }
+            Some(OverlayPlacement::Rect { x, y, width, height }) => {
+                self.layer.set_size(width.ceil().max(1.0) as u32, height.ceil().max(1.0) as u32);
+                self.layer.set_anchor(Anchor::Top | Anchor::Left);
+                self.layer.set_margin(y.round() as i32, 0, 0, x.round() as i32);
+                return;
+            }
+            _ => {}
+        }
+        let at = match self.options.placement {
+            Some(OverlayPlacement::Edge { edge, margin, align, inset }) => Placement { size: at.size, edge, margin, align, inset },
+            _ => at,
+        };
         let (margin, inset) = (at.margin.round() as i32, at.inset.round() as i32);
         let (vertical, top, bottom) = match at.edge {
             ScreenEdge::Top => (Anchor::Top, margin, 0),
@@ -116,6 +239,33 @@ impl LayerSurface {
         self.layer.set_anchor(vertical | horizontal);
         self.layer.set_margin(top, right, bottom, left);
     }
+
+    pub fn configured_size(&self) -> Option<(u32, u32)> { self.state.configured }
+
+    pub fn input_regions(&self, regions: &[[f32; 4]], interactive: bool) {
+        if self.options.input == OverlayInput::Legacy && interactive { self.surface.set_input_region(None); return; }
+        let region = self.compositor.create_region(&self.queue.handle(), ());
+        if self.options.input == OverlayInput::Regions {
+            for r in regions {
+                let (x, y) = (r[0].floor() as i32, r[1].floor() as i32);
+                let (w, h) = (r[2].ceil() as i32 - x, r[3].ceil() as i32 - y);
+                if w > 0 && h > 0 { region.add(x, y, w, h); }
+            }
+        }
+        self.surface.set_input_region(Some(&region));
+        region.destroy();
+        // No commit here: the following wgpu presentation commits input and pixels together.
+    }
+
+    pub fn request_keys(&self) -> bool {
+        if self.layer.version() < 4 { return false; }
+        self.layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+        self.surface.commit();
+        let _ = self.queue.flush();
+        true
+    }
+
+    pub fn supports_keys(&self) -> bool { self.layer.version() >= 4 && self.seat.is_some() }
 
     /// Commit role state (placement) without a new buffer; wgpu's present commits buffers.
     pub fn commit(&mut self) {
@@ -133,7 +283,7 @@ impl LayerSurface {
     pub fn dispatch(&mut self) -> Changes {
         let _ = self.queue.dispatch_pending(&mut self.state);
         let _ = self.queue.flush();
-        Changes { scale: self.state.scale.take(), closed: self.state.closed }
+        Changes { size: self.state.configured.take(), input: std::mem::take(&mut self.state.input), scale: self.state.scale.take(), closed: self.state.closed }
     }
 
     pub fn raw_handles(&self) -> (RawDisplayHandle, RawWindowHandle) {
@@ -147,6 +297,10 @@ impl LayerSurface {
 
 impl Drop for LayerSurface {
     fn drop(&mut self) {
+        if let Some(pointer) = self.state.pointer.take() && pointer.version() >= 3 { pointer.release(); }
+        if let Some(keyboard) = self.state.keyboard.take() && keyboard.version() >= 3 { keyboard.release(); }
+        if let Some(seat) = self.seat.take() && seat.version() >= 5 { seat.release(); }
+        if let Some(output) = self.output.take() && output.version() >= 3 { output.release(); }
         self.layer.destroy();
         self.surface.destroy();
         let _ = self.queue.flush();

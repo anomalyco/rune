@@ -85,12 +85,12 @@ impl<S: 'static> App<S> {
         self
     }
 
-    /// Adds an overlay: an observational surface beside this app's window with its own state,
-    /// drawn transparent above every app, never focused, letting the pointer through (a
-    /// recording HUD), centred on the top or bottom edge of the primary display. Hidden until
-    /// `OverlayHandle::show`; uses the spec's fonts. Headless runs don't draw overlays.
-    pub fn overlay<T: 'static>(&mut self, spec: crate::overlay::OverlaySpec<T>, state: T) -> crate::overlay::OverlayHandle<T> {
-        let (overlay, handle) = crate::overlay::Overlay::new(spec, state, &self.spec);
+    /// Adds a transparent overlay with its own state, hidden until `OverlayHandle::show`.
+    /// Bare specs preserve primary-display edge placement and never request key focus;
+    /// `OverlaySpec::options` selects displays, placement and native input policy.
+    /// Uses this app's fonts. Headless runs don't draw overlays.
+    pub fn overlay<T: 'static>(&mut self, spec: impl Into<crate::ConfiguredOverlay<T>>, state: T) -> crate::overlay::OverlayHandle<T> {
+        let (overlay, handle) = crate::overlay::Overlay::new(spec.into(), state, &self.spec);
         self.overlays.push(Box::new(overlay));
         handle
     }

@@ -8,11 +8,16 @@ mod activation;
 mod app;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 mod layer_shell;
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+mod x11_overlay;
 mod overlay;
+mod overlay_options;
 #[cfg(target_os = "windows")]
 mod win32;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod macos_panel_bridge;
 pub mod color;
 pub mod compose;
 pub mod edit;
@@ -43,6 +48,7 @@ pub use winit::raw_window_handle;
 
 pub use app::{App, AppHandle};
 pub use overlay::{Availability, OverlayHandle, OverlaySpec, ScreenEdge};
+pub use overlay_options::{ConfiguredOverlay, DisplayId, DisplayTarget, KeyPolicy, OverlayCapabilities, OverlayInput, OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySupport};
 pub use color::{Color, oklch, oklcha};
 pub use compose::{Compositor, Frame};
 pub use edit::{Ime, Key, KeyEvent, Mods, TextEdit};

@@ -104,6 +104,7 @@ pub(crate) struct Node {
     on_press: Option<PressFn>,
     on_secondary_press: Option<SecondaryFn>,
     on_hover: Option<PressFn>,
+    on_pointer_move: Option<SecondaryFn>,
     above: Option<crate::el::Anchor>,
     on_drag: Option<DragFn>,
     motion: Spring,
@@ -133,6 +134,7 @@ pub(crate) struct Node {
 enum Action {
     FocusControl(String),
     Dismiss(String),
+    PointerMove(String, PointerPress),
     Hover(String),
     Press(String),
     SecondaryPress(String, PointerPress),
@@ -292,6 +294,7 @@ pub struct Runtime<S: 'static> {
     pub track_marks: bool,
     pub surfaces: Vec<crate::native_surface::SurfaceDraw>,
     hits: Vec<(NodeId, [f32; 4])>,
+    overlay_hits: Vec<[f32; 4]>,
     glyph_scratch: Vec<GlyphQuad>,
     deco_scratch: Vec<Deco>,
     inh_scratch: Vec<Inh>,
@@ -441,6 +444,7 @@ impl<S: 'static> Runtime<S> {
             track_marks: false,
             surfaces: Vec::new(),
             hits: Vec::new(),
+            overlay_hits: Vec::new(),
             glyph_scratch: Vec::new(),
             deco_scratch: Vec::new(),
             inh_scratch: Vec::new(),
@@ -866,6 +870,11 @@ impl<S: 'static> Runtime<S> {
                 let Some(f) = self.node(&path).and_then(|n| n.modal.as_ref().map(|m| m.dismiss.clone())) else { return false };
                 self.set_focus(None, self.keyboard_focus);
                 f(&mut self.state, &mut one);
+                true
+            }
+            Action::PointerMove(path, point) => {
+                let Some(f) = self.node(&path).and_then(|n| n.on_pointer_move.clone()) else { return false };
+                f(&mut self.state as &mut dyn Any, point, &mut one);
                 true
             }
             Action::Hover(path) => {
@@ -1882,18 +1891,30 @@ impl<S: 'static> Runtime<S> {
 
     pub fn pointer_move(&mut self, x: f32, y: f32) {
         self.pointer = Some((x, y));
-        let hovered = self.primary_target(x, y).map(|i| self.nodes[i].path.clone());
-        if hovered != self.hovered {
-            if let Some(path) = &hovered { self.queue.push(Action::Hover(path.clone())); }
-            self.hovered = hovered;
+        for &(id, rect) in &self.hits {
+            if crate::overlay_options::contains(rect, x, y)
+                && let Some(n) = self.node_index.get(&id).map(|&i| &self.nodes[i])
+                && n.on_pointer_move.is_some()
+            {
+                self.queue.push(Action::PointerMove(n.path.clone(), PointerPress { x, y }));
+            }
         }
+        self.refresh_hover(x, y);
         let Some((path, d)) = self.capture.clone() else { return };
-        let Some((r, has_drag)) = self.node(&path).map(|n| (n.target, n.on_drag.is_some())) else { return };
-        self.capture_inside = x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
+        let Some((id, r, has_drag)) = self.node(&path).map(|n| (n.id, n.target, n.on_drag.is_some())) else { return };
+        self.capture_inside = self.hits.iter().any(|(hit, r)| *hit == id && crate::overlay_options::contains(*r, x, y));
         if has_drag {
             let (dx, dy) = (x - self.press_at.0, y - self.press_at.1);
             let d = Drag { phase: Phase::Move, x: x - r[0], y: y - r[1], dx, dy, ..d };
             self.queue.push(Action::Drag(path, d));
+        }
+    }
+
+    fn refresh_hover(&mut self, x: f32, y: f32) {
+        let hovered = self.primary_target(x, y).map(|i| self.nodes[i].path.clone());
+        if hovered != self.hovered {
+            if let Some(path) = &hovered { self.queue.push(Action::Hover(path.clone())); }
+            self.hovered = hovered;
         }
     }
 
@@ -2019,6 +2040,9 @@ impl<S: 'static> Runtime<S> {
     pub fn pointer(&self) -> Option<(f32, f32)> {
         self.pointer
     }
+
+    /// Native overlay regions from the most recent frame, in logical window points (x0,y0,x1,y1).
+    pub fn hit_regions(&self) -> &[[f32; 4]] { &self.overlay_hits }
 
     /// The pointer shape the shell should show: the pressed element's while a gesture holds
     /// the pointer, else the hovered one's, from the nearest ancestor that sets one.
@@ -2177,6 +2201,7 @@ impl<S: 'static> Runtime<S> {
         self.hits.clear();
         self.loops_active = false;
         self.loop_wake = None;
+        self.overlay_hits.clear();
         let n_nodes = self.nodes.len();
         self.inh_scratch.clear();
         self.inh_scratch.resize(n_nodes, Inh::default());
@@ -2690,7 +2715,7 @@ impl<S: 'static> Runtime<S> {
                 dy -= grid((st.offset - origin) as f32, s);
             }
             self.inh_scratch[i] = Inh { opacity: effective_opacity, paint_opacity: o, clip, fade, scale: sc, anchor, blur, dy, mark, group };
-            if (n.on_press.is_some() || n.on_secondary_press.is_some() || n.on_hover.is_some() || n.on_drag.is_some() || n.input.is_some() || n.window_drag || n.focus.enabled || n.modal.is_some())
+            if (n.vis.hit || n.on_pointer_move.is_some() || n.on_press.is_some() || n.on_secondary_press.is_some() || n.on_hover.is_some() || n.on_drag.is_some() || n.input.is_some() || n.window_drag || n.focus.enabled || n.modal.is_some())
                 && !self.subtree_exiting(i)
                 && self.allowed(i) && effective_opacity > 0.001 && visible
             {
@@ -2701,7 +2726,11 @@ impl<S: 'static> Runtime<S> {
                     rect_pt[2].min(c[2] / s),
                     rect_pt[3].min(c[3] / s),
                 ];
-                self.hits.push((n.id, if n.parent.is_some() { cr } else { rect_pt }));
+                let rect = if n.parent.is_some() { cr } else { rect_pt };
+                self.hits.push((n.id, rect));
+                if n.vis.hit && effective_opacity > 0.0 && rect[2] > rect[0] && rect[3] > rect[1] {
+                    self.overlay_hits.push(rect);
+                }
             }
         }
         while let Some((_, start, surface_start)) = layers.pop() {
@@ -2711,6 +2740,9 @@ impl<S: 'static> Runtime<S> {
         if self.track_marks { self.marks.resize(self.instances.len(), 0); }
         self.stats.glyphs = glyph_count;
         self.ambient = ambient;
+        // A moving chip can enter a stationary pointer. Re-evaluate against this frame's
+        // geometry without inventing pointer-move or drag events on animation frames.
+        if let Some((x, y)) = self.pointer { self.refresh_hover(x, y); }
     }
 
     // ---------------------------------------------------------------------------------------
@@ -3062,6 +3094,7 @@ fn flatten(
         on_press,
         on_secondary_press,
         on_hover,
+        on_pointer_move,
         above,
         on_drag,
         opacity_motion,
@@ -3094,6 +3127,7 @@ fn flatten(
         on_press,
         on_secondary_press,
         on_hover,
+        on_pointer_move,
         above,
         on_drag,
         motion,
@@ -3166,6 +3200,60 @@ mod tests {
 
     fn duplicate_view(_: &(), _: &mut Cx<()>) -> El {
         col().children([el().key("card"), el().key("card")])
+    }
+
+    #[test]
+    fn overlay_hit_regions_follow_live_geometry_and_ancestor_clips_in_the_same_frame() {
+        struct State { offset: crate::Live<[f32; 2]>, opacity: crate::Live<f32>, pressed: u32, hovered: u32, visible: bool }
+        fn view(s: &State, _: &mut Cx<State>) -> El {
+            el().child(el().size(60.0, 60.0).clip_soft(0.0)
+                .children(s.visible.then(|| el().key("chip").size(40.0, 20.0).pin(Some(30.0), Some(0.0), None, None)
+                    .live_offset(&s.offset).live_opacity(&s.opacity).hit()
+                    .on_hover(|s: &mut State| s.hovered += 1).on_press(|s: &mut State| s.pressed += 1))))
+                .child(el().size(10.0, 10.0).on_hover(|_: &mut State| {}))
+        }
+        let offset = crate::Live::new([0.0, 0.0]);
+        let opacity = crate::Live::new(1.0);
+        let mut rt = Runtime::new(State { offset: offset.clone(), opacity: opacity.clone(), pressed: 0, hovered: 0, visible: true }, view, (100.0, 100.0), Env { system_dark: true, scale: 2.0 });
+        rt.frame(0.0);
+        assert_eq!(rt.hit_regions(), &[[30.0, 0.0, 60.0, 20.0]]);
+        rt.pointer_move(15.0, 10.0);
+        offset.set([20.0, 0.0]);
+        rt.frame(0.0);
+        assert_eq!(rt.hit_regions(), &[[50.0, 0.0, 60.0, 20.0]], "logical regions must use this frame's live offset, not the previous layout");
+        offset.set([-20.0, 0.0]);
+        rt.frame(0.0);
+        assert_eq!(rt.hit_regions(), &[[10.0, 0.0, 50.0, 20.0]]);
+        rt.pointer_down(15.0, 10.0);
+        rt.pointer_up(15.0, 10.0);
+        rt.frame(0.0);
+        assert_eq!(rt.state.pressed, 1, "the native hit and Rune release must agree on the moved chip");
+        assert_eq!(rt.state.hovered, 1, "a chip moving under a stationary pointer enters hover once");
+        assert!(!rt.has_pending_input(), "stationary hover must not generate an endless frame loop");
+        rt.pointer_down(15.0, 10.0);
+        rt.pointer_up(55.0, 10.0);
+        rt.frame(0.0);
+        assert_eq!(rt.state.pressed, 1, "release inside the old layout but outside the drawn chip must cancel");
+        opacity.set(0.0);
+        rt.frame(0.0);
+        assert!(rt.hit_regions().is_empty(), "transparent nodes and hover-only elements do not block native input");
+        opacity.set(1.0);
+        rt.update(|s, _| s.visible = false);
+        rt.frame(0.0);
+        assert!(rt.hit_regions().is_empty(), "exiting chips must immediately release native input");
+    }
+
+    #[test]
+    fn overlay_pointer_observation_does_not_require_a_native_hit_region() {
+        fn view(_: &Vec<PointerPress>, _: &mut Cx<Vec<PointerPress>>) -> El {
+            el().on_pointer_move(|s: &mut Vec<PointerPress>, p| s.push(p))
+        }
+        let mut rt = Runtime::new(Vec::new(), view, (100.0, 100.0), Env { system_dark: true, scale: 1.0 });
+        rt.frame(0.0);
+        rt.pointer_move(20.0, 40.0);
+        rt.frame(0.0);
+        assert_eq!(rt.state, [PointerPress { x: 20.0, y: 40.0 }]);
+        assert!(rt.hit_regions().is_empty());
     }
 
     #[test]

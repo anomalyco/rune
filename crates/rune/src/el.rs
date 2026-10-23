@@ -265,6 +265,8 @@ pub use rune_motion::Cycle;
 
 #[derive(Clone, Debug)]
 pub struct Visual {
+    /// Rectangular native input region for overlays using `OverlayInput::Regions`.
+    pub hit: bool,
     pub surface: Option<(crate::NativeSurface, crate::SurfaceFit)>,
     pub fill: Color,
     pub radius: [f32; 4],
@@ -303,6 +305,7 @@ pub struct Visual {
 impl Default for Visual {
     fn default() -> Self {
         Visual {
+            hit: false,
             surface: None,
             fill: Color::TRANSPARENT,
             radius: [0.0; 4],
@@ -346,6 +349,7 @@ pub struct El {
     pub(crate) on_press: Option<PressFn>,
     pub(crate) on_secondary_press: Option<SecondaryFn>,
     pub(crate) on_hover: Option<PressFn>,
+    pub(crate) on_pointer_move: Option<SecondaryFn>,
     pub(crate) above: Option<Anchor>,
     pub(crate) on_drag: Option<DragFn>,
     pub(crate) motion: Option<Spring>,
@@ -381,6 +385,7 @@ fn base(dir: FlexDirection) -> El {
         on_press: None,
         on_secondary_press: None,
         on_hover: None,
+        on_pointer_move: None,
         above: None,
         on_drag: None,
         motion: None,
@@ -822,6 +827,18 @@ impl El {
         self.window_drag = true;
         self
     }
+    /// Mark the drawn, ancestor-clipped rectangle as native overlay input. Does not add a handler.
+    pub fn hit(mut self) -> Self {
+        self.vis.hit = true;
+        self
+    }
+
+    /// Observe movement in window-local points without making a native overlay input region.
+    pub fn on_pointer_move<S: 'static>(mut self, f: impl Fn(&mut S, PointerPress) + 'static) -> Self {
+        self.on_pointer_move = Some(Rc::new(move |s, p, _| f(downcast::<S>(s), p)));
+        self
+    }
+
     /// Called once when the pointer enters this hit target, not on animation frames.
     pub fn on_hover<S: 'static>(mut self, f: impl Fn(&mut S) + 'static) -> Self {
         self.on_hover = Some(Rc::new(move |s, _| f(downcast::<S>(s))));
