@@ -17,6 +17,7 @@ members = [
     "examples/live-values",
     "examples/shapes",
     "examples/overlay",
+    "examples/overlay-lab",
     "examples/lab",
     "examples/video-tiles",
 ]
