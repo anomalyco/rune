@@ -467,6 +467,8 @@ impl<T: 'static> Overlay<T> {
         if let Some(p) = position(event_loop, self.at, &self.options) {
             window.set_outer_position(p);
         }
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if let Some(x11) = &self.x11 { x11.update_geometry(); }
     }
 
     /// Puts the window on screen without focusing it or activating the app.
@@ -933,6 +935,9 @@ impl<T: 'static> AnyHost for Overlay<T> {
 
     fn window_event(&mut self, _event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         if !self.visible { return; }
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. })
+            && let Some(x11) = &self.x11 { x11.update_geometry(); }
         match event {
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 if let Some(gpu) = self.gpu.clone() {

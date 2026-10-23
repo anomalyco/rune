@@ -60,7 +60,7 @@ impl InputWindow {
             self.update_geometry();
         } else { self.watch.borrow_mut().take(); }
     }
-    fn update_geometry(&self) {
+    pub fn update_geometry(&self) {
         let watch = self.watch.borrow();
         let Some(watch) = watch.as_ref() else { return };
         if let Some(p) = self.connection.translate_coordinates(self.window, self.root, 0, 0).ok().and_then(|r| r.reply().ok())
@@ -84,7 +84,6 @@ impl InputWindow {
         Some((((desktop.0 - i32::from(p.dst_x)) as f32 / scale, (desktop.1 - i32::from(p.dst_y)) as f32 / scale), desktop))
     }
     pub fn regions(&mut self, rects: &[[f32; 4]], scale: f32) {
-        self.update_geometry();
         let rects: Vec<_> = rects.iter().filter_map(|r| {
             let x = (r[0] * scale).floor().max(0.0).min(i16::MAX as f32) as i16;
             let y = (r[1] * scale).floor().max(0.0).min(i16::MAX as f32) as i16;

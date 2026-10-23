@@ -298,7 +298,7 @@ impl Panel {
     pub fn set_input(&self, input: OverlayInput) {
         self.pointer.input.set(input);
         self.refresh_monitors();
-        self.pointer.observe(&self.panel, self.wake.as_ref());
+        if self.visible.get() { self.pointer.observe(&self.panel, self.wake.as_ref()); }
     }
     pub fn set_follow_pointer(&self, follow: bool) { self.follow_pointer.set(follow); self.pointer.follow.set(follow); self.refresh_monitors(); }
     fn refresh_monitors(&self) {
