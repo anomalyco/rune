@@ -1,4 +1,4 @@
-//! Parley layout (wrapping, rich spans, two families) over embedded fonts, swash rasterising
+//! Parley layout (wrapping, rich spans, registered families) over embedded fonts, swash rasterising
 //! glyphs and SVG icons into one greyscale atlas.
 //!
 //! Invariants: layouts are in device pixels; every layout is cached by a 64-bit hash of
@@ -469,7 +469,7 @@ fn variations(style: TextStyle, size: f32) -> Vec<parley::FontVariation> {
 
 impl TextSystem {
     /// `fonts` replaces the built-in Inter faces when non-empty; `families` names the sans and
-    /// mono families those fonts register.
+    /// mono slots. Other registered families are selectable with `Family::Named`.
     pub fn new(fonts: &[&'static [u8]], families: (&str, &str)) -> Self {
         let mut collection = Collection::new(CollectionOptions { shared: false, system_fonts: false });
         let list: &[&'static [u8]] = if fonts.is_empty() { &DEFAULT_FONTS } else { fonts };
@@ -517,17 +517,21 @@ impl TextSystem {
             return l.clone();
         }
         self.shaped += 1;
-        let sans = match style.family {
-            Family::Sans => self.sans.as_str(),
-            Family::Mono => self.mono.as_str(),
-        };
         let with_symbols = |primary| {
             FontFamilyName::parse_css_list(primary)
                 .flatten()
                 .chain(self.symbol_families.iter().map(|name| FontFamilyName::named(name)))
                 .collect::<Vec<_>>()
         };
-        let sans = with_symbols(sans);
+        let sans = match style.family {
+            Family::Sans => with_symbols(self.sans.as_str()),
+            Family::Mono => with_symbols(self.mono.as_str()),
+            Family::Named(name) => {
+                let mut families = with_symbols(self.sans.as_str());
+                families.insert(0, FontFamilyName::named(name));
+                families
+            }
+        };
         let mono = with_symbols(self.mono.as_str());
         let mut b = self.layout_cx.ranged_builder(&mut self.font_cx, text, scale, true);
         b.push_default(FontFamily::from(sans.as_slice()));

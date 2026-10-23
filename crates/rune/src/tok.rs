@@ -21,12 +21,14 @@ pub mod radius {
     pub const LG: f32 = 12.0;
 }
 
-/// Which of the app's two font families a style uses (`AppSpec::families` names them).
+/// An app font slot (`AppSpec::families`) or a family registered through `AppSpec::fonts`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum Family {
     #[default]
     Sans,
     Mono,
+    /// A literal font family name, not a CSS list. Falls back to the sans slot if missing.
+    Named(&'static str),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -63,6 +65,9 @@ impl TextStyle {
     }
     pub const fn mono(self) -> TextStyle {
         TextStyle { family: Family::Mono, ..self }
+    }
+    pub const fn family(self, family: Family) -> TextStyle {
+        TextStyle { family, ..self }
     }
     pub const fn lh(self, line_height: f32) -> TextStyle {
         TextStyle { line_height, ..self }

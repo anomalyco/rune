@@ -275,6 +275,14 @@ spans, wrapping, editors, ellipsis truncation or streaming word reveals.
 and participate in the layout cache key. Tokens remain `Copy` and const-friendly;
 these strings have static lifetime. `.optical_size(value)` accepts a runtime value.
 
+Register extra font bytes in `AppSpec::fonts`, then select their embedded family
+name with `TextStyle::new(32.0, 400.0).family(Family::Named("Anton"))`. The name is a
+literal family name, not a CSS list or filename. Named families fall back to the
+sans slot when absent or missing a glyph, followed by the existing symbol/script
+fallbacks. `Family::Sans`, `Family::Mono`, and `.mono()` keep their existing meaning;
+mono rich spans still use the mono slot. Named styles remain `Copy` and const-friendly
+and the family name participates in the layout cache key.
+
 Optical sizing defaults to each run's point size, including rich spans with a
 different size. An explicit `opsz` variation wins over the default; `.optical_size`
 wins over both. `.optical_sizing(OpticalSize::FontDefault)` restores Parley's old
