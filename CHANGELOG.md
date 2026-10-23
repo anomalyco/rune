@@ -1,0 +1,15 @@
+# Changelog
+
+Rune has no releases yet; consumers pin `dev` revs. This lists changes that can move an app's output
+without a code change (goldens, layout, input), newest first, with the rev that introduced each.
+
+## dev
+
+- **Optical sizing on by default** (`2eae09d`, from `edc9892`). Text with an `opsz` axis now uses each
+  run's point size, as AppKit does: system SF at 13 pt renders as SF Text, so labels are slightly
+  wider. Layout is otherwise unchanged, but `--snap` goldens with SF text move (Scrawl: all 7, PAE
+  ~0.85). Opt out per style with `.optical_sizing(OpticalSize::FontDefault)`. Fonts without `opsz`
+  are unaffected.
+- **Presses inside scrolled views land** (`b3c7bdb`, #5). A captured press is released against
+  where the element was drawn (after scrolling), not its unscrolled layout rect, so `on_press` now
+  fires for rows scrolled into view.
