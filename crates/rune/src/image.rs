@@ -58,7 +58,7 @@ impl Image {
     }
 }
 
-enum Input { Encoded(Arc<[u8]>), Rgba(u32, u32, Arc<[u8]>) }
+enum Input { Encoded(Arc<[u8]>), Rgba(u32, u32, Arc<[u8]>), Icon(std::path::PathBuf, u32) }
 struct Job { image: Image, input: Input }
 
 /// Construct once during app setup. The cache deduplicates by content, not a path or pointer;
@@ -76,6 +76,7 @@ impl ImageCache {
                 let decoded = match job.input {
                     Input::Encoded(bytes) => decode(&bytes),
                     Input::Rgba(w, h, bytes) => mip_chain(w, h, &bytes),
+                    Input::Icon(path, px) => app_icon_rgba(&path, px).and_then(|(w, h, bytes)| mip_chain(w, h, &bytes)),
                 };
                 let decoded = decoded.map(Arc::new);
                 if let Ok(decoded) = &decoded { job.image.0.pixels.set_mips(decoded.clone()); }
@@ -108,6 +109,31 @@ impl ImageCache {
         self.request(*hash.finalize().as_bytes(), Input::Rgba(width, height, bytes))
     }
 
+    /// The Finder icon for an app bundle or any file path, rasterized at 2× `size_pt`.
+    /// See [`ImageCache::app_icon_scaled`].
+    pub fn app_icon(&self, path: impl AsRef<std::path::Path>, size_pt: f32) -> Image {
+        self.app_icon_scaled(path, size_pt, 2.0)
+    }
+
+    /// The Finder icon for `path`, rasterized at `size_pt * scale` pixels square (pass the
+    /// window's display scale). Handles are shared by (path, size, scale) rather than by
+    /// content, so repeated calls never re-rasterize while a handle is alive. Lookup and
+    /// rasterization run on the cache worker like any decode, so this is safe to call from a view.
+    /// Missing paths still get the system's generic document icon on macOS.
+    ///
+    /// Unsupported on Windows and Linux for now: the handle resolves to an error.
+    pub fn app_icon_scaled(&self, path: impl AsRef<std::path::Path>, size_pt: f32, scale: f32) -> Image {
+        let path = path.as_ref().to_path_buf();
+        let px = icon_pixels(size_pt, scale);
+        let mut hash = blake3::Hasher::new();
+        hash.update(b"rune-app-icon\0");
+        hash.update(path.as_os_str().as_encoded_bytes());
+        hash.update(&[0]);
+        hash.update(&size_pt.to_bits().to_le_bytes());
+        hash.update(&scale.to_bits().to_le_bytes());
+        self.request(*hash.finalize().as_bytes(), Input::Icon(path, px))
+    }
+
     fn request(&self, id: ImageId, input: Input) -> Image {
         let mut entries = self.entries.lock().unwrap();
         if let Some(state) = entries.get(&id).and_then(Weak::upgrade) { return Image(state); }
@@ -119,6 +145,84 @@ impl ImageCache {
         }
         image
     }
+}
+
+fn icon_pixels(size_pt: f32, scale: f32) -> u32 {
+    let px = (size_pt * scale).ceil();
+    if px.is_finite() { px.clamp(1.0, 1024.0) as u32 } else { 1 }
+}
+
+/// Rasterize the platform icon for an app bundle or file at `px`×`px`, as straight-alpha
+/// sRGB RGBA8 ready for [`ImageCache::rgba`]. Most code wants [`ImageCache::app_icon`], which
+/// calls this on its worker and caches the result.
+///
+/// macOS: `NSWorkspace iconForFile:` drawn into a thread-local `NSBitmapImageRep` context.
+/// Neither needs the main thread: `NSWorkspace` is not main-actor isolated in the SDK, and
+/// AppKit allows drawing an `NSImage` into a bitmap context owned by a secondary thread.
+/// Windows and Linux return an "unsupported" error.
+pub fn app_icon_rgba(path: &std::path::Path, px: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
+    if px == 0 || px > 1024 { return Err(ImageError("app icon size must be 1..=1024 pixels".into())); }
+    #[cfg(target_os = "macos")]
+    { macos_icon(path, px) }
+    #[cfg(not(target_os = "macos"))]
+    { let _ = path; Err(ImageError("app_icon is unsupported on this platform".into())) }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_icon(path: &std::path::Path, px: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
+    use objc2::runtime::{AnyClass, AnyObject, Bool};
+    use objc2::rc::{Allocated, Retained};
+    use objc2::{msg_send, msg_send_id};
+    use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+    let path = path.to_str().ok_or_else(|| ImageError("app icon path is not UTF-8".into()))?;
+    let class = |name: &str| AnyClass::get(name).ok_or_else(|| ImageError(format!("{name} is unavailable")));
+    let (workspace, bitmap, context, color_space) =
+        (class("NSWorkspace")?, class("NSBitmapImageRep")?, class("NSGraphicsContext")?, class("NSColorSpace")?);
+    objc2::rc::autoreleasepool(|_| unsafe {
+        let workspace: *mut AnyObject = msg_send![workspace, sharedWorkspace];
+        let icon: *mut AnyObject = msg_send![workspace, iconForFile: &*NSString::from_str(path)];
+        if icon.is_null() { return Err(ImageError("NSWorkspace returned no icon".into())); }
+        let side = px as isize;
+        let rep: Allocated<AnyObject> = msg_send_id![bitmap, alloc];
+        let null: *mut *mut u8 = std::ptr::null_mut();
+        // Default bitmapFormat is premultiplied alpha-last RGBA, the only layout AppKit draws into.
+        let rep: Option<Retained<AnyObject>> = msg_send_id![rep,
+            initWithBitmapDataPlanes: null pixelsWide: side pixelsHigh: side bitsPerSample: 8isize
+            samplesPerPixel: 4isize hasAlpha: Bool::YES isPlanar: Bool::NO
+            colorSpaceName: &*NSString::from_str("NSDeviceRGBColorSpace") bitmapFormat: 0usize
+            bytesPerRow: side * 4 bitsPerPixel: 32isize];
+        let rep = rep.ok_or_else(|| ImageError("could not allocate an icon bitmap".into()))?;
+        let srgb: *mut AnyObject = msg_send![color_space, sRGBColorSpace];
+        let tagged: *mut AnyObject = msg_send![&*rep, bitmapImageRepByRetaggingWithColorSpace: srgb];
+        let tagged = if tagged.is_null() { Retained::as_ptr(&rep).cast_mut() } else { tagged };
+        let ctx: *mut AnyObject = msg_send![context, graphicsContextWithBitmapImageRep: tagged];
+        if ctx.is_null() { return Err(ImageError("could not create an icon context".into())); }
+        let _: () = msg_send![context, saveGraphicsState];
+        let _: () = msg_send![context, setCurrentContext: ctx];
+        let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(px as f64, px as f64));
+        let zero = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0));
+        // NSCompositingOperationCopy (1); a zero fromRect draws the whole best-fit representation.
+        let _: () = msg_send![icon, drawInRect: rect fromRect: zero operation: 1usize fraction: 1.0f64];
+        let _: () = msg_send![ctx, flushGraphics];
+        let _: () = msg_send![context, restoreGraphicsState];
+        let data: *const u8 = msg_send![tagged, bitmapData];
+        let stride: isize = msg_send![tagged, bytesPerRow];
+        let result = if data.is_null() || stride < side * 4 {
+            Err(ImageError("icon bitmap has no pixel data".into()))
+        } else {
+            let mut out = Vec::with_capacity((px * px * 4) as usize);
+            for y in 0..side {
+                let row = std::slice::from_raw_parts(data.offset(y * stride), (side * 4) as usize);
+                for p in row.chunks_exact(4) {
+                    let a = p[3];
+                    let straight = |c: u8| if a == 0 { 0 } else { ((c as u32 * 255 + a as u32 / 2) / a as u32).min(255) as u8 };
+                    out.extend_from_slice(&[straight(p[0]), straight(p[1]), straight(p[2]), a]);
+                }
+            }
+            Ok((px, px, out))
+        };
+        result
+    })
 }
 
 fn decode(bytes: &[u8]) -> Result<Decoded, ImageError> {
@@ -259,5 +363,18 @@ mod tests {
         }
         assert!(mip_chain(0, 1, &[]).is_err());
         assert!(mip_chain(1, 1, &[0]).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn app_icon_rasterizes_calculator_off_the_main_thread_and_shares_handles() {
+        let cache = ImageCache::new(Arc::new(|| {}));
+        let icon = cache.app_icon("/System/Applications/Calculator.app", 32.0);
+        assert!(Arc::ptr_eq(&icon.0, &cache.app_icon("/System/Applications/Calculator.app", 32.0).0));
+        assert!(!Arc::ptr_eq(&icon.0, &cache.app_icon_scaled("/System/Applications/Calculator.app", 32.0, 1.0).0));
+        assert_eq!(icon.wait(), Ok([64, 64]));
+        let pixels = &icon.decoded().unwrap().unwrap().mips[0].pixels;
+        let opaque = pixels.chunks_exact(4).filter(|p| p[3] > 0).count();
+        assert!(opaque > 64 * 64 / 4, "icon is mostly empty: {opaque} visible pixels");
     }
 }
