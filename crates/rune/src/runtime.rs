@@ -527,6 +527,7 @@ impl<S: 'static> Runtime<S> {
         for sub in &self.live_subscriptions { sub.active.store(false, std::sync::atomic::Ordering::Release); }
         self.live_subscriptions.clear();
         self.live_wake = crate::live::Wake::new(waker);
+        self.live_wake.visible(self.surface_visible);
         self.subscribe_live();
     }
 
@@ -536,11 +537,14 @@ impl<S: 'static> Runtime<S> {
         if !visible { self.loop_wake = None; }
     }
     pub fn live_pending(&self) -> bool {
-        self.live_dirty || self.live_wake.pending.load(std::sync::atomic::Ordering::Acquire)
+        self.surface_visible && (self.live_dirty || self.live_wake.pending.load(std::sync::atomic::Ordering::Acquire))
     }
 
     fn subscribe_live(&mut self) {
         use std::sync::atomic::Ordering;
+        for node in &mut self.nodes {
+            for bound in &mut node.live { bound.attach(self.clock); }
+        }
         for sub in &self.live_subscriptions { sub.active.store(false, Ordering::Release); }
         for node in &self.nodes {
             if self.is_exiting(node.id) { continue; }
@@ -556,17 +560,20 @@ impl<S: 'static> Runtime<S> {
         self.live_dirty = !self.live_subscriptions.is_empty();
     }
 
-    fn latch_live(&mut self) {
+    fn latch_live(&mut self) -> bool {
+        if !self.surface_visible { return false; }
         // Clear before sampling: a concurrent publication either participates in this frame or
         // retains a pending wake for the next one. Never clear after sampling (lost wake race).
         let pending = self.live_wake.pending.swap(false, std::sync::atomic::Ordering::AcqRel);
-        if self.live_subscriptions.is_empty() { return; }
-        if !pending && !self.live_dirty { return; }
+        if self.live_subscriptions.is_empty() { return false; }
+        if !pending && !self.live_dirty { return false; }
         self.live_dirty = false;
         for node in &mut self.nodes {
             for bound in &mut node.live {
                 let initial = bound.seen.is_none();
-                let Some(bits) = bound.read() else { continue };
+                let (bits, active) = bound.read(self.clock);
+                self.live_dirty |= active;
+                let Some(bits) = bits else { continue };
                 let spring = if initial { None } else { bound.spring };
                 use crate::live::{LiveValue, Property};
                 fn apply<T: rune_motion::Animatable>(scene: &mut Scene, id: NodeId, prop: Prop<T>, value: T, spring: Option<Spring>) {
@@ -593,6 +600,7 @@ impl<S: 'static> Runtime<S> {
                 }
             }
         }
+        self.live_dirty
     }
 
     pub fn set_system_dark(&mut self, dark: bool) {
@@ -714,12 +722,12 @@ impl<S: 'static> Runtime<S> {
         if !scroll_to.is_empty() { self.step_scroll(0.0); }
         for key in scroll_to { self.reveal_row(&key); }
         self.update_interaction();
-        self.latch_live();
+        let live_animating = self.latch_live();
         let step = dt * self.time_scale as f64;
         self.t += step;
         self.scene.set_time(self.t);
         let out = self.scene.frame();
-        let mut animating = out.animating;
+        let mut animating = out.animating || live_animating;
         if !out.exited.is_empty() {
             self.prune_exited();
         }
@@ -1698,6 +1706,7 @@ impl<S: 'static> Runtime<S> {
                 for bound in &mut nodes[i].live {
                     if let Some(previous) = old.live.iter().find(|b| b.property == bound.property && Arc::ptr_eq(&b.source, &bound.source)) {
                         bound.seen = if tx.settle { None } else { previous.seen };
+                        bound.started = previous.started;
                         if bound.property == crate::live::Property::Fill { fill = Some(old.vis.fill); }
                     }
                 }

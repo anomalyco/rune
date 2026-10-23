@@ -550,6 +550,24 @@ Focused editors take precedence; late reads are discarded if the target changed.
 Headless `--script` `paste` supplies text directly through the same routing and
 records `paste window` or `paste field` in `--trace`, without recording contents.
 
+For a countdown, keep a `Tween` in app state and bind it through a live property:
+
+```rust,ignore
+let bar = rune::Tween::linear(
+    [0.0, 0.0, 272.0, 4.0], [0.0, 0.0, 0.0, 4.0],
+    std::time::Duration::from_secs(30),
+);
+// In the view:
+el().size(272.0, 4.0).live_rect(&s.bar)
+```
+
+The track starts on first attachment to a runtime and uses elapsed real time
+(virtual time in headless runs). Rebuilds retain progress; replacing the `Tween`
+starts a new track. It needs no app ticks, layout, shaping, or timer wakes.
+Hidden windows stop sampling and resume at the elapsed value. At the endpoint
+the renderer sleeps. This is a timed value, including under reduced motion;
+it does not use the decorative motion spring or jump to the end on settle.
+
 `tx.fly_text("prompt", "sent-text")` hands a visible plain-text field to a newly
 mounted, uniquely keyed text node. The runtime captures its visible glyphs before
 committing and measures the destination after growth/scroll each frame. One 0.32 s

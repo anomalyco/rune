@@ -257,6 +257,7 @@ impl<T: 'static> Overlay<T> {
         rt.wall_start = Some(Instant::now());
         rt.native_overlay = true;
         rt.on_key = on_key;
+        rt.set_live_visible(false);
         let overlay = Overlay {
             on_created,
             pending_input: None,
@@ -304,6 +305,8 @@ impl<T: 'static> Overlay<T> {
         self.resolve_size(event_loop);
         if self.live.is_none() { self.prepare(event_loop); }
         if self.live.is_none() { return; }
+        self.rt.set_live_visible(true);
+        if self.rt.live_pending() { self.dirty = true; }
         if size != self.at.size { self.resized(event_loop); }
         self.rt.settle_all();
         let retained = cfg!(target_os = "macos") && self.options.prewarm;
@@ -343,6 +346,7 @@ impl<T: 'static> Overlay<T> {
     }
 
     fn hide(&mut self) {
+        self.rt.set_live_visible(false);
         self.visible = false;
         self.rt.cancel_pointer();
         let Some(live) = &self.live else { return };
@@ -751,6 +755,7 @@ impl<T: 'static> Overlay<T> {
     /// Applies requests from other threads: updates, edge, show and hide.
     fn sync(&mut self, event_loop: &ActiveEventLoop) {
         if self.clipboard.receive(&mut self.rt) { self.advance(); }
+        if self.rt.live_pending() { self.dirty = true; }
         let requests = std::mem::take(&mut *self.shared.requests.lock().unwrap());
         if let Some(input) = requests.input { self.pending_input = Some(input); }
         self.apply_input();
@@ -1067,6 +1072,7 @@ impl<T: 'static> AnyHost for Overlay<T> {
 
 impl<T: 'static> PendingOverlay for Overlay<T> {
     fn connect(&mut self, wake: Waker, gpu: Rc<RefCell<Weak<Gpu>>>) {
+        self.rt.set_live_waker(wake.clone());
         self.clipboard.connect(wake.clone());
         self.gpu_pool = gpu;
         *self.shared.wake.lock().unwrap() = Some(wake.clone());

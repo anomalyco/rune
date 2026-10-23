@@ -5,6 +5,42 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use portable_atomic::AtomicU128;
 use crate::{Color, Spring, Waker};
 
+/// A linear, render-time track. Keep it in app state and bind it like a `Live` value.
+/// Starts on first attachment to each runtime; view rebuilds retain its elapsed time.
+/// No producer ticks, app wake requests or hidden-window sampling are needed.
+pub struct Tween<T: LiveValue> { live: Live<T> }
+impl<T: LiveValue> Clone for Tween<T> {
+    fn clone(&self) -> Self { Self { live: self.live.clone() } }
+}
+impl<T: LiveValue> Tween<T> {
+    pub fn linear(from: T, to: T, duration: std::time::Duration) -> Self {
+        let mut live = Live::new(to);
+        Arc::get_mut(&mut live.source).unwrap().linear = Some(Linear {
+            from: from.encode().unwrap_or(0), duration: duration.as_secs_f64(),
+        });
+        Self { live }
+    }
+}
+impl<T: LiveValue> From<&Tween<T>> for Binding<T> {
+    fn from(tween: &Tween<T>) -> Self { Self { live: tween.live.clone(), spring: None } }
+}
+
+struct Linear { from: u128, duration: f64 }
+impl Linear {
+    fn sample(&self, to: u128, elapsed: f64) -> (u128, bool) {
+        let t = if self.duration == 0.0 { 1.0 } else { (elapsed / self.duration).clamp(0.0, 1.0) };
+        if t >= 1.0 { return (to, false); }
+        if t == 0.0 { return (self.from, true); }
+        let mut bits = 0;
+        for lane in 0..4 {
+            let a = f32::decode(self.from >> (32 * lane)) as f64;
+            let b = f32::decode(to >> (32 * lane)) as f64;
+            bits |= ((a * (1.0 - t) + b * t) as f32).encode().unwrap_or(0) << (32 * lane);
+        }
+        (bits, true)
+    }
+}
+
 mod sealed { pub trait Sealed {} }
 
 /// The small, atomically published values supported by [`Live`].
@@ -62,6 +98,7 @@ impl<T: LiveValue> Live<T> {
         Self { source: Arc::new(Source {
             id: NEXT.fetch_add(1, Ordering::Relaxed), value: AtomicU128::new(value.encode().unwrap_or(0)),
             listeners: AtomicPtr::new(std::ptr::null_mut()),
+            linear: None,
         }), _t: PhantomData }
     }
     /// Returns whether the published bit pattern changed. No allocation, including first use
@@ -91,17 +128,25 @@ pub(crate) struct Bound {
     pub property: Property,
     pub spring: Option<Spring>,
     pub seen: Option<u128>,
+    pub started: Option<f64>,
 }
 impl Bound {
     pub fn new<T: LiveValue>(binding: impl Into<Binding<T>>, property: Property) -> Self {
         let b = binding.into();
-        Self { source: b.live.source, property, spring: b.spring, seen: None }
+        Self { source: b.live.source, property, spring: b.spring, seen: None, started: None }
     }
-    pub fn read(&mut self) -> Option<u128> {
+    pub fn attach(&mut self, now: f64) {
+        if self.source.linear.is_some() { self.started.get_or_insert(now); }
+    }
+    pub fn read(&mut self, now: f64) -> (Option<u128>, bool) {
         let bits = self.source.value.load(Ordering::Acquire);
-        if self.seen == Some(bits) { return None; }
+        let (bits, active) = match &self.source.linear {
+            Some(linear) => linear.sample(bits, now - *self.started.get_or_insert(now)),
+            None => (bits, false),
+        };
+        if self.seen == Some(bits) { return (None, active); }
         self.seen = Some(bits);
-        Some(bits)
+        (Some(bits), active)
     }
 }
 
@@ -133,6 +178,7 @@ pub(crate) struct Subscription {
 struct Listener { subscription: Arc<Subscription>, next: *mut Listener }
 
 pub(crate) struct Source {
+    linear: Option<Linear>,
     id: u64,
     value: AtomicU128,
     listeners: AtomicPtr<Listener>,

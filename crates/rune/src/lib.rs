@@ -66,7 +66,7 @@ pub use el::{
     row, spacer, text, text_input,
 };
 pub use growth::{GROWTH, StreamEdge, edge};
-pub use live::Live;
+pub use live::{Live, Tween};
 pub use pixels::Pixels;
 pub use file_dialog::{FileDialogError, FileDialogKind, FileDialogOptions, FileDialogs, ScriptedFileDialog};
 pub use image::{Image, ImageCache, ImageError, ImageId};

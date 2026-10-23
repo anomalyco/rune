@@ -1,5 +1,6 @@
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use rune::{Color, Cx, El, Env, Live, Runtime, Spring, el};
+use rune::Tween;
 
 struct State {
     opacity: Live<f32>, offset: Live<[f32; 2]>, scale: Live<f32>, fill: Live<Color>,
@@ -108,6 +109,23 @@ fn removing_last_binding_consumes_an_already_pending_wake() {
 }
 
 #[test]
+fn connecting_a_waker_to_a_hidden_runtime_keeps_publications_asleep() {
+    let mut rt = runtime(state());
+    rt.set_live_visible(false);
+    let count = Arc::new(AtomicUsize::new(0));
+    let wakes = count.clone();
+    rt.set_live_waker(Arc::new(move || { wakes.fetch_add(1, Ordering::Relaxed); }));
+    rt.frame(0.0);
+    rt.state.opacity.set(0.2);
+    assert_eq!(count.load(Ordering::Relaxed), 0);
+    assert!(!rt.live_pending());
+    rt.set_live_visible(true);
+    assert_eq!(count.load(Ordering::Relaxed), 1);
+    rt.frame(0.0);
+    assert!(!rt.live_pending());
+}
+
+#[test]
 fn live_rect_changes_presentation_without_reflow_and_unbinding_restores_layout() {
     type State = (Live<[f32; 4]>, bool);
     fn view(s: &State, _: &mut Cx<State>) -> El {
@@ -127,4 +145,44 @@ fn live_rect_changes_presentation_without_reflow_and_unbinding_restores_layout()
     assert_eq!(rect(&rt, "box"), [20.0, 30.0, 60.0, 50.0]);
     rt.state.1 = false; rt.settle_all(); rt.frame(0.0);
     assert_eq!(rect(&rt, "box"), [0.0, 0.0, 40.0, 20.0]);
+}
+
+#[test]
+fn linear_countdown_uses_render_time_without_commits_wakes_or_hidden_samples() {
+    use std::time::Duration;
+    type State = Tween<[f32; 4]>;
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        el().key("bar").size(272.0, 4.0).fill(Color::WHITE).live_rect(s)
+    }
+    let tween = || Tween::linear([0.0, 0.0, 272.0, 4.0], [0.0, 0.0, 0.0, 4.0], Duration::from_secs(30));
+    let mut rt = Runtime::new(tween(), view, (300.0, 20.0), Env { scale: 1.0, system_dark: true });
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let count = wakes.clone();
+    rt.set_live_waker(Arc::new(move || { count.fetch_add(1, Ordering::Relaxed); }));
+    let width = |rt: &Runtime<State>| rt.elements().into_iter().find(|n| n.key.as_deref() == Some("bar")).unwrap().rect[2];
+    assert!(rt.frame(0.0));
+    assert_eq!(width(&rt), 272.0);
+    for _ in 0..120 { assert!(rt.frame(0.1)); }
+    assert!((width(&rt) - 163.2).abs() < 0.01);
+    assert_eq!(rt.stats.commits, 1);
+    assert_eq!(rt.stats.shaped, 0);
+    assert_eq!(wakes.load(Ordering::Relaxed), 0);
+    assert!(rt.wake_deadline().is_none());
+    rt.invalidate(); rt.frame(0.0);
+    assert!((width(&rt) - 163.2).abs() < 0.01, "rebuild must not restart the track");
+    rt.set_live_visible(false);
+    let before = width(&rt);
+    assert!(!rt.frame(10.0));
+    assert_eq!(width(&rt), before, "hidden track is not sampled");
+    assert!(!rt.live_pending());
+    rt.set_live_visible(true);
+    assert!(rt.frame(0.0));
+    assert!((width(&rt) - 272.0 * 8.0 / 30.0).abs() < 0.01, "resume uses elapsed real time");
+    assert!(!rt.frame(8.01));
+    assert_eq!(width(&rt), 0.0);
+    assert!(!rt.live_pending());
+    rt.update(|s, _| *s = tween());
+    assert!(rt.frame(0.0));
+    assert_eq!(width(&rt), 272.0, "a new tween restarts explicitly");
+    assert_eq!(wakes.load(Ordering::Relaxed), 0);
 }
