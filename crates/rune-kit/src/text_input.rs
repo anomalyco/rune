@@ -153,15 +153,16 @@ impl TextInput {
     pub fn build(self, k: &Kit) -> El {
         let c = &k.c;
         let disabled = self.state == State::Disabled;
-        let ink = if self.invalid && !disabled { c.danger.fg } else { c.text_base };
-        let hint = if self.invalid && !disabled { c.danger.fg } else { c.text_faint };
+        let red = self.invalid && !disabled && k.invalid_text;
+        let ink = if red { c.danger.fg } else { c.text_base };
+        let hint = if red { c.danger.fg } else { c.text_faint };
         let field = text_input(&self.edit, k.ty.ui_compact)
             .key("input")
             .grow(1.0)
             .shrink()
             .color(ink)
             .placeholder(self.placeholder.clone(), hint)
-            .caret(if self.invalid { c.danger.fg } else { c.text_base }, k.alpha(c.text_accent, 0.3));
+            .caret(if self.invalid && k.invalid_text { c.danger.fg } else { c.text_base }, k.alpha(c.text_accent, 0.3));
         let field = if disabled { field } else { self.edits.apply(field) };
         let mut value = row().key("value").grow(1.0).shrink().gap(6.0).center_y();
         if let Some(i) = self.leading {
@@ -263,8 +264,9 @@ impl TextArea {
         let c = &k.c;
         let disabled = self.state == State::Disabled;
         let style = TextStyle { line_height: (13.0f32 * 1.35 * 2.0).round() / 2.0, ..k.ty.ui };
-        let ink = if self.invalid && !disabled { c.danger.fg } else { c.text_base };
-        let hint = if self.invalid && !disabled { c.danger.fg } else { c.text_faint };
+        let red = self.invalid && !disabled && k.invalid_text;
+        let ink = if red { c.danger.fg } else { c.text_base };
+        let hint = if red { c.danger.fg } else { c.text_faint };
         let field = text_input(&self.edit, style)
             .key("input")
             .w_full()

@@ -215,9 +215,10 @@ impl Select {
         let c = &k.c;
         let disabled = self.state == State::Disabled;
         let anchor_key = format!("{}-trigger", self.key);
+        let red = self.invalid && !disabled && k.invalid_text;
         let (label, ink) = match &self.current {
-            Some(v) => (v.clone(), if self.invalid && !disabled { c.danger.fg } else { c.text_base }),
-            None => (self.placeholder.clone(), if self.invalid && !disabled { c.danger.fg } else { c.text_faint }),
+            Some(v) => (v.clone(), if red { c.danger.fg } else { c.text_base }),
+            None => (self.placeholder.clone(), if red { c.danger.fg } else { c.text_faint }),
         };
         let chevron: &'static Icon = if self.open { k.glyph.chevron_up } else { k.glyph.chevron_down };
         let mut trigger = row().key(anchor_key.clone()).role("combobox").label(label.clone()).center_y()

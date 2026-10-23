@@ -203,6 +203,9 @@ pub struct Kit {
     /// painted, so they follow token overrides made after the kit was built
     /// ([`Kit::from_palette`] sets `c.border_base`).
     pub ring: Option<fn(&Palette) -> Color>,
+    /// Invalid inputs also paint their text, placeholder and caret in `c.danger.fg`
+    /// (`@opencode/ui`'s look). Otherwise only the outline turns `danger`.
+    pub invalid_text: bool,
 }
 
 impl Kit {
