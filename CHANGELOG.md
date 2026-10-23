@@ -5,10 +5,10 @@ without a code change (goldens, layout, input), newest first, with the rev that 
 
 ## dev
 
-- **Wrapped centred and end-aligned text aligns each line** (#8). A wrapping `Align::Center`/`End`
+- **Wrapped centred and end-aligned text aligns each line** (#6). A wrapping `Align::Center`/`End`
   text now centres (or right-aligns) every line inside its wrap width, instead of moving the whole
   block as one left-aligned paragraph. `--snap` goldens with multi-line centred text move.
-- **Single-line text fields** (#8). `El::single_line()` keeps a text input on one line: it scrolls
+- **Single-line text fields** (#6). `El::single_line()` keeps a text input on one line: it scrolls
   sideways to keep the caret visible, clips to the field, and rests at the start when unfocused.
   rune-kit `TextInput` (except `multiline`) and `List` search opt in; core `text_input` is unchanged.
 
