@@ -1,0 +1,172 @@
+[
+  {
+    "path": "demo/kit/side-ui-menu--rich-light.png",
+    "changed_bounds": null,
+    "sha256": "905da5de7c096f4a5153bfaf3b882eafbc71a6fabc01a55f802677eb96c2e7a1"
+  },
+  {
+    "path": "demo/kit/side-ui-select--grouped-light.png",
+    "changed_bounds": null,
+    "sha256": "19fb0ad9407cd16a21874715cc80c4296c13a0704a481c6f4df5e08502fcb197"
+  },
+  {
+    "path": "demo/kit/side-components-card--warning-dark.png",
+    "changed_bounds": null,
+    "sha256": "a6d9c5f931d1c3c81d006191605c96c142ddfe3a59f77d639744c164b6abd64d"
+  },
+  {
+    "path": "demo/kit/side-ui-toast--all-examples-dark.png",
+    "changed_bounds": null,
+    "sha256": "e80e2f7d9a00494202637c6f4232ac4b4e9fc7ed9ff3422eaf8240f62ae0deb9"
+  },
+  {
+    "path": "demo/kit/side-ui-toast--all-examples-light.png",
+    "changed_bounds": null,
+    "sha256": "80b8a7ac21b6b11860abe14c99ce86143fe80eb2a9f922e74d7781224d6ece8b"
+  },
+  {
+    "path": "demo/kit/side-ui-button--all-states-dark.png",
+    "changed_bounds": null,
+    "sha256": "0d38660259fd0ad7eb749b61e4c81b1c837efddb6dfc2fac96bc67aa3fb9e67d"
+  },
+  {
+    "path": "demo/kit/side-ui-text-input--states-light.png",
+    "changed_bounds": null,
+    "sha256": "6fa0eef9e8e50ac07fd67244a792eb57aede1c8adbac94ed2cb88c6c5bcf2853"
+  },
+  {
+    "path": "demo/kit/index-dark.png",
+    "changed_bounds": [
+      23,
+      114,
+      697,
+      1400
+    ],
+    "sha256": "764e6b2ce8026921489846cad066fb5d1f7e7f6a3f4bf1c9aed190a7f3a5377d"
+  },
+  {
+    "path": "demo/kit/side-ui-button--all-states-light.png",
+    "changed_bounds": null,
+    "sha256": "764164e44c0e5f8477919941047ecf5649c9ff50f9b938e1b8fb055e4b7e5881"
+  },
+  {
+    "path": "demo/kit/side-components-card--warning-light.png",
+    "changed_bounds": null,
+    "sha256": "9134011295385598f54690c0cbef56d8e43dacff574452fefef77b500257f26b"
+  },
+  {
+    "path": "demo/kit/side-ui-menu--rich-dark.png",
+    "changed_bounds": null,
+    "sha256": "faa757416303ae04153bfae2915d362fe801749cbbf04eb8681134116fecdcb4"
+  },
+  {
+    "path": "demo/kit/index-light.png",
+    "changed_bounds": [
+      22,
+      114,
+      698,
+      1400
+    ],
+    "sha256": "180e04a5282e6528d293ffb1cf864df8a63e1041f5d8315fb4faa1d6f6f65cd9"
+  },
+  {
+    "path": "demo/kit/side-ui-text-input--states-dark.png",
+    "changed_bounds": null,
+    "sha256": "6a61c4d375188d6393609d9785eb980c322a3064e1e60d718dae9ba99ceb5640"
+  },
+  {
+    "path": "demo/kit/side-ui-select--grouped-dark.png",
+    "changed_bounds": null,
+    "sha256": "39d37ac1e3905085055b610a39ab02fe170d4403ef257f9941bc2686f3f641e2"
+  },
+  {
+    "path": "demo/opencode/sidebar-closed.png",
+    "changed_bounds": null,
+    "sha256": "145abd6e02f73e0c4252abe10fb6fb4bcdda390a0722c79a841ff5a341531319"
+  },
+  {
+    "path": "demo/opencode/sidebar-toggle-strip.png",
+    "changed_bounds": null,
+    "sha256": "02dd3e2e2189a29105033adea3c8e3aaeaf28c1ee664fb76d2d2e7e22cbcb89e"
+  },
+  {
+    "path": "demo/opencode/streaming.png",
+    "changed_bounds": [
+      32,
+      368,
+      495,
+      836
+    ],
+    "sha256": "6c4d7724821d9c0714805e5fc8895df9e8d8197ac98e7790845f5f5bffe3eb04"
+  },
+  {
+    "path": "demo/opencode/home.png",
+    "changed_bounds": [
+      32,
+      368,
+      496,
+      836
+    ],
+    "sha256": "7442b28952dc079c430dbf99689f1d11cc95b6ddf897c58278252cc9ecc6632d"
+  },
+  {
+    "path": "demo/opencode/session-top.png",
+    "changed_bounds": [
+      32,
+      368,
+      495,
+      836
+    ],
+    "sha256": "36b9aa18fbb84455f26f9a1a9575860a68ef23c6672d7f3fdf38dcb5c9e0887d"
+  },
+  {
+    "path": "demo/opencode/send-strip.png",
+    "changed_bounds": null,
+    "sha256": "a0f408af17d45801ced8bb34335b43d33a70785f74fa4acc1708b0ad9e0f8a22"
+  },
+  {
+    "path": "demo/opencode/session-light.png",
+    "changed_bounds": [
+      32,
+      368,
+      493,
+      836
+    ],
+    "sha256": "c15d65487434c3426b92badd22de68da41fa783a5789db4b2f45c8066cc6d455"
+  },
+  {
+    "path": "demo/opencode/sidebar-status.png",
+    "changed_bounds": null,
+    "sha256": "ab05165ba4269fc7ff155bbc97c434d16dfb7573d81e6894d78517f58c73836f"
+  },
+  {
+    "path": "demo/opencode/session-bottom.png",
+    "changed_bounds": [
+      32,
+      368,
+      495,
+      836
+    ],
+    "sha256": "45c1bc04cf6e0b23ae9098dad5b4525fb4ab5b7cf9a40372192f3006a7762612"
+  },
+  {
+    "path": "demo/opencode/switch-strip.png",
+    "changed_bounds": null,
+    "sha256": "6f1e1d3caed804a86b9e93f86a51cb2c23e889107e76cd59fae0ed979fade441"
+  },
+  {
+    "path": "demo/opencode/stream-reveal-strip.png",
+    "changed_bounds": null,
+    "sha256": "bbe8ddc4673c388c4a9912585dbe343caa3bd1be88eb94b70f39165a592aa3bf"
+  },
+  {
+    "path": "demo/settings-light.png",
+    "changed_bounds": null,
+    "sha256": "aec5840f6e2a6ebac44e59ba66b15f8c8d2fd811968801dc130ffdc30b693874"
+  },
+  {
+    "path": "demo/settings-dark.png",
+    "changed_bounds": null,
+    "sha256": "6a08654491859ee3228f220ff5af649d5321267acd15495ab329c1ee5d5ba911"
+  }
+]
