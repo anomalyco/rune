@@ -286,6 +286,8 @@ impl<S: 'static> Host<S> {
         let mut app = app;
         let comp = app.compositor.take();
         let chrome = app.chrome;
+        #[cfg(all(feature = "dev", debug_assertions))]
+        let dev = app.dev.take();
         let (spec, state, shared) = app.into_parts(args.scene.as_deref());
         let size = args.size.unwrap_or(spec.size);
         // The window reports the system appearance and scale when it opens.
@@ -297,6 +299,8 @@ impl<S: 'static> Host<S> {
         rt.transparent = options.transparent;
         rt.track_marks = comp.is_some();
         rt.wall_start = Some(Instant::now());
+        #[cfg(all(feature = "dev", debug_assertions))]
+        crate::tooling::attach_dev(&mut rt, &spec, dev, waker.clone());
         let mut clipboard = crate::clipboard::Client::default();
         clipboard.connect(waker.clone());
         shared.connect(waker);
@@ -648,6 +652,12 @@ impl<S: 'static> Host<S> {
         if let Some(request) = requests.window { self.window_request(event_loop, request); }
         if requests.focus { self.focus(event_loop); }
         self.shell(event_loop);
+        #[cfg(all(feature = "dev", debug_assertions))]
+        if self.rt.dev.is_some() && self.win.as_ref().is_none_or(|w| !w.visible || w.occluded || w.window.is_minimized().unwrap_or(false)) {
+            // A hidden/windowless app still services its dev channel without a GPU or redraw.
+            self.rt.frame(0.0);
+            self.shell(event_loop);
+        }
         if let Some(w) = self.win.as_ref().filter(|w| w.visible) {
             w.window.request_redraw();
         }

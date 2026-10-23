@@ -51,11 +51,15 @@ pub struct App<S: 'static> {
     pub(crate) macos_window: crate::MacWindowOptions,
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<S>>>,
     pub(crate) window_options: crate::WindowOptions,
+    #[cfg(all(feature = "dev", debug_assertions))]
+    pub(crate) dev: Option<crate::dev::Config<S>>,
 }
 
 impl<S: 'static> App<S> {
     pub fn new(spec: AppSpec<S>) -> Self {
         App {
+            #[cfg(all(feature = "dev", debug_assertions))]
+            dev: None,
             spec,
             chrome: crate::Chrome::DEFAULT,
             init: None,
@@ -169,6 +173,13 @@ impl<S: 'static> App<S> {
         AppHandle {
             shared: self.shared.clone(),
         }
+    }
+
+    /// Opt into the knobs remote panel for this debug runtime.
+    #[cfg(all(feature = "dev", debug_assertions))]
+    pub fn dev_panel(mut self, config: crate::dev::Config<S>) -> Self {
+        self.dev = Some(config);
+        self
     }
 
     /// Runs until the app quits. Agent-tooling arguments (`--snap`, `--tree`, ...) render

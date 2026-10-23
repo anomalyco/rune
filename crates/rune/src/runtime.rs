@@ -288,6 +288,8 @@ pub struct Runtime<S: 'static> {
     pub clock: f64,
     #[cfg(all(feature = "dev", debug_assertions))]
     pub(crate) dev_clock: Option<crate::dev_clock::DevClock>,
+    #[cfg(all(feature = "dev", debug_assertions))]
+    pub(crate) dev: Option<crate::dev::Session<S>>,
     wake_deadlines: Vec<f64>,
     /// Windowed runs read the clock from the wall instead of summing frame steps.
     pub wall_start: Option<std::time::Instant>,
@@ -445,6 +447,8 @@ impl<S: 'static> Runtime<S> {
             clock: 0.0,
             #[cfg(all(feature = "dev", debug_assertions))]
             dev_clock: None,
+            #[cfg(all(feature = "dev", debug_assertions))]
+            dev: None,
             wake_deadlines: Vec::new(),
             wall_start: None,
             on_key: None,
@@ -669,6 +673,30 @@ impl<S: 'static> Runtime<S> {
         self.dirty = true;
     }
 
+    /// Whether a compositor should apply its optional rune-fx motion blur.
+    /// Always true when no dev panel is attached.
+    pub fn motion_blur_enabled(&self) -> bool {
+        #[cfg(all(feature = "dev", debug_assertions))]
+        if let Some(dev) = &self.dev { return dev.blur; }
+        true
+    }
+
+    #[cfg(all(feature = "dev", debug_assertions))]
+    pub(crate) fn dev_velocity_overlay(&mut self) {
+        for (i, node) in self.nodes.iter().enumerate() {
+            let Some(v) = self.scene.store().velocity(node.id, prop::FRAME) else { continue };
+            let (vx, vy) = (v.x + v.w * 0.5, v.y + v.h * 0.5);
+            if vx.hypot(vy) < 1.0 { continue; }
+            let [x, y, w, h] = self.drawn[i];
+            let start = [x + w * 0.5, y + h * 0.5];
+            let end = [start[0] + vx * 0.05, start[1] + vy * 0.05];
+            let shape = Shape::new().line(start, end, 2.0, LineCap::Round, Color::WHITE);
+            let scale = self.env.scale;
+            push_shape(&mut self.instances, &shape, [0.0; 2], [scale; 2], scale, 0.8, NO_CLIP, [0.0; 4]);
+        }
+        if self.track_marks { self.marks.resize(self.instances.len(), 0); }
+    }
+
     /// Changes the state from outside any handler, for data another thread delivered
     /// (`AppHandle::update`). Runs now, so it works while no window shows; the next frame commits
     /// it with the motion `f` asked for.
@@ -703,6 +731,25 @@ impl<S: 'static> Runtime<S> {
     /// if state changed, steps `Scene`, growth, scroll and reveals, and builds this frame's
     /// instances.
     pub fn frame(&mut self, dt: f64) -> bool {
+        #[cfg(all(feature = "dev", debug_assertions))]
+        if let Some(mut dev) = self.dev.take() {
+            let scope = dev.scope();
+            let moving = crate::dev::scope(scope, || {
+                // Bring existing tracks/timers to the command's timestamp first. Idle wall
+                // time must never be charged to a transition or spring created by that command.
+                let commands = dev.prepare();
+                if commands { self.frame_clock(dt); }
+                dev.before(self);
+                self.frame_clock(if commands { 0.0 } else { dt });
+                dev.after(self)
+            });
+            self.dev = Some(dev);
+            return moving;
+        }
+        self.frame_clock(dt)
+    }
+
+    fn frame_clock(&mut self, dt: f64) -> bool {
         // Like a native shell: the logical clock follows host time (timers, poll), while
         // animations step by the frame's own dt, so idle time never lands on a fresh commit.
         #[cfg(not(all(feature = "dev", debug_assertions)))]

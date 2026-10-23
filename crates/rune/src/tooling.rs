@@ -130,6 +130,14 @@ pub(crate) fn runtime_for<S: 'static>(spec: &AppSpec<S>, state: S, size: (f32, f
     rt
 }
 
+/// Attaches `App::dev_panel`'s session once the runtime's clock is set up.
+#[cfg(all(feature = "dev", debug_assertions))]
+pub(crate) fn attach_dev<S: 'static>(rt: &mut Runtime<S>, spec: &AppSpec<S>, config: Option<crate::dev::Config<S>>, waker: Waker) {
+    if let Some(config) = config {
+        crate::dev::attach(rt, spec, &config, waker).unwrap_or_else(|e| panic!("Rune dev panel: {e}"));
+    }
+}
+
 #[derive(Clone, Default, Debug)]
 pub struct Args {
     pub snap: Option<PathBuf>,
@@ -722,12 +730,16 @@ fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, tran
         return;
     }
     let mut comp = app.compositor.take();
+    #[cfg(all(feature = "dev", debug_assertions))]
+    let dev = app.dev.take();
     let (spec, state, shared) = app.into_parts(args.scene.as_deref());
     let scale = args.scale.unwrap_or(2.0);
     let size = args.size.unwrap_or(spec.size);
     let dark = args.theme.as_deref() != Some("light");
     let state_ms = launched.elapsed().as_secs_f64() * 1000.0;
     let mut rt = runtime_for(&spec, state, size, Env::new(dark, scale), std::sync::Arc::new(|| {}));
+    #[cfg(all(feature = "dev", debug_assertions))]
+    attach_dev(&mut rt, &spec, dev, std::sync::Arc::new(|| {}));
     rt.transparent = transparent;
     if args.tree.is_some() { rt.key_warnings = Some(Vec::new()); }
     rt.track_marks = comp.is_some();
