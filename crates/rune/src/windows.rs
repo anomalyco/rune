@@ -65,6 +65,11 @@ impl Default for WindowOptions {
 }
 
 impl WindowOptions {
+    /// Optional AppKit settings without adding fields to existing WindowOptions literals.
+    /// Ignored on other platforms.
+    pub fn macos(self, native: MacWindowOptions) -> ConfiguredWindowOptions {
+        ConfiguredWindowOptions { options: self, native }
+    }
     /// One transparent, borderless, topmost, click-through overlay covering this display.
     pub fn overlay(display: &Display) -> Self {
         Self {
@@ -95,6 +100,38 @@ impl WindowOptions {
     }
 }
 
+/// AppKit properties for an ordinary window, reapplied on native recreation.
+/// Omitted properties keep winit's defaults. These settings do not turn a window into a panel.
+#[derive(Clone, Debug, Default)]
+pub struct MacWindowOptions {
+    pub(crate) shadow: Option<bool>,
+    pub(crate) level: Option<isize>,
+    pub(crate) collection_behavior: Option<usize>,
+    pub(crate) exclude_from_capture: Option<bool>,
+}
+
+impl MacWindowOptions {
+    pub fn shadow(mut self, enabled: bool) -> Self { self.shadow = Some(enabled); self }
+    /// AppKit NSWindow.Level value (normal 0, floating 3, status 25).
+    pub fn level(mut self, level: isize) -> Self { self.level = Some(level); self }
+    /// AppKit NSWindow.CollectionBehavior bit mask. Replaces the existing mask.
+    pub fn collection_behavior(mut self, bits: usize) -> Self { self.collection_behavior = Some(bits); self }
+    /// Requests NSWindowSharingNone; capture clients should also filter window_number().
+    /// false restores NSWindowSharingReadOnly. This is not a capture guarantee.
+    pub fn exclude_from_capture(mut self, exclude: bool) -> Self { self.exclude_from_capture = Some(exclude); self }
+}
+
+/// Ordinary WindowOptions plus optional native builders, accepted by WindowSpec::options.
+#[derive(Clone, Debug)]
+pub struct ConfiguredWindowOptions {
+    options: WindowOptions,
+    native: MacWindowOptions,
+}
+
+impl From<WindowOptions> for ConfiguredWindowOptions {
+    fn from(options: WindowOptions) -> Self { Self { options, native: MacWindowOptions::default() } }
+}
+
 /// One independent retained tree and app state. Share Live handles or application services
 /// between states; events, focus, animation clocks and redraws remain window-local.
 pub struct WindowSpec<S: 'static> {
@@ -117,9 +154,14 @@ impl<S> WindowSpec<S> {
     pub fn from_app(key: impl Into<String>, app: App<S>) -> Self {
         Self { key: key.into(), app, options: WindowOptions::default(), on_created: None }
     }
-    pub fn options(mut self, options: WindowOptions) -> Self { self.options = options; self }
     /// Configure this window's frame, including headless traffic-light placement.
     pub fn chrome(mut self, chrome: crate::Chrome) -> Self { self.app = self.app.chrome(chrome); self }
+    pub fn options(mut self, options: impl Into<ConfiguredWindowOptions>) -> Self {
+        let ConfiguredWindowOptions { options, native } = options.into();
+        self.options = options;
+        self.app.macos_window = native;
+        self
+    }
     pub fn state(mut self, state: S) -> Self { self.app = self.app.init(move || state); self }
     pub fn on_created(mut self, callback: impl FnOnce(crate::window::WindowHandle) + 'static) -> Self {
         self.on_created = Some(Box::new(callback));

@@ -49,7 +49,7 @@ pub mod tooling;
 mod window;
 pub mod windows;
 pub use window::WindowHandle;
-pub use windows::{Display, RunOptions, WindowOptions, WindowSpec};
+pub use windows::{ConfiguredWindowOptions, Display, MacWindowOptions, RunOptions, WindowOptions, WindowSpec};
 pub use winit::raw_window_handle;
 
 pub use app::{App, AppHandle};

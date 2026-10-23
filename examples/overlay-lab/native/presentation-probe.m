@@ -42,6 +42,10 @@ static id<CAMetalDrawable> nextDrawable(id layer, SEL selector) {
     __weak NSWindow *owner;
     for (NSWindow *window in NSApp.windows)
         if (window.windowNumber == windowID) { owner = window; break; }
+    if (getenv("OVERLAY_PROBE_NATIVE_OPTIONS"))
+        fprintf(stderr, "probe native window=%ld shadow=%d level=%ld collection=%lu sharing=%lu\n",
+            (long)owner.windowNumber, owner.hasShadow, (long)owner.level,
+            (unsigned long)owner.collectionBehavior, (unsigned long)owner.sharingType);
     [drawable addPresentedHandler:^(id<MTLDrawable> d) {
         fprintf(stderr, "probe presented window=%ld acquired=%.9f presented=%.9f callback=%.9f\n",
                 (long)windowID, acquired, d.presentedTime, CACurrentMediaTime());

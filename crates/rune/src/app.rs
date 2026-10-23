@@ -48,6 +48,7 @@ pub struct App<S: 'static> {
     pub(crate) shared: Arc<Shared<S>>,
     pub(crate) overlays: Vec<Box<dyn crate::overlay::PendingOverlay>>,
     pub(crate) on_window: Option<OnWindow>,
+    pub(crate) macos_window: crate::MacWindowOptions,
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<S>>>,
     pub(crate) window_options: crate::WindowOptions,
 }
@@ -67,6 +68,7 @@ impl<S: 'static> App<S> {
             shared: Arc::default(),
             overlays: Vec::new(),
             on_window: None,
+            macos_window: crate::MacWindowOptions::default(),
             compositor: None,
             window_options: crate::WindowOptions::default(),
         }

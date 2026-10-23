@@ -121,6 +121,10 @@ fn main() {
             let options = displays.iter().find(|d| d.primary).or_else(|| displays.first()).map(|display| rune::WindowOptions {
                 borderless: true, position: Some(display.position), physical_size: Some(display.size), ..Default::default()
             }).unwrap_or_default();
+            let options = if std::env::var_os("OVERLAY_LAB_NATIVE_WINDOW").is_some() {
+                options.macos(rune::MacWindowOptions::default().shadow(false).level(24)
+                    .collection_behavior(1 | 16 | 64 | 256).exclude_from_capture(true))
+            } else { options.into() };
             vec![WindowSpec::from_app("underlay", app).options(options)]
         });
         return;

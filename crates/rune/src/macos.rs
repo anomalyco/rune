@@ -173,6 +173,24 @@ fn ns_window(window: &winit::window::Window) -> Option<objc2::rc::Retained<objc2
     view.window()
 }
 
+pub(crate) fn configure_window(window: &winit::window::Window, options: &crate::MacWindowOptions) {
+    if let Some(window) = ns_window(window) { configure_native(&window, options); }
+}
+
+fn configure_native(window: &NSWindow, options: &crate::MacWindowOptions) {
+    if let Some(shadow) = options.shadow { window.setHasShadow(shadow); }
+    if let Some(level) = options.level { window.setLevel(level); }
+    // SAFETY: all callers are native creation paths on the AppKit main thread.
+    unsafe {
+        if let Some(bits) = options.collection_behavior {
+            let _: () = msg_send![window, setCollectionBehavior: bits];
+        }
+        if let Some(exclude) = options.exclude_from_capture {
+            let _: () = msg_send![window, setSharingType: if exclude { 0usize } else { 1usize }];
+        }
+    }
+}
+
 /// Orders a window front without making it key or activating the app.
 #[allow(dead_code)]
 pub(crate) fn show_overlay(window: &winit::window::Window) {
@@ -239,13 +257,11 @@ impl Panel {
                     | NSWindowCollectionBehavior::FullScreenAuxiliary,
             );
         }
-        panel.setLevel(match options.level { OverlayLevel::Status => 25, OverlayLevel::AboveStatus => 26, OverlayLevel::AboveOverlays => 27 });
-        if options.exclude_from_capture {
-            // NSWindowSharingNone; capture clients should additionally filter our window ID.
-            unsafe { let _: () = msg_send![&*panel, setSharingType: 0usize]; }
-        }
+        let mut native = crate::MacWindowOptions::default().shadow(false)
+            .level(match options.level { OverlayLevel::Status => 25, OverlayLevel::AboveStatus => 26, OverlayLevel::AboveOverlays => 27 });
+        if options.exclude_from_capture { native = native.exclude_from_capture(true); }
+        configure_native(&panel, &native);
         panel.setOpaque(false);
-        panel.setHasShadow(false);
         panel.setIgnoresMouseEvents(options.input.resolved(interactive) != OverlayInput::All);
         panel.setAcceptsMouseMovedEvents(true);
         if options.prewarm {

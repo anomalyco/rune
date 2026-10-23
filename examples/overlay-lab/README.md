@@ -68,6 +68,26 @@ reuse their empty input region.
 
 ## Native measurement harness (macOS)
 
+Ordinary windows can opt into the same native switches without changing exhaustive
+`WindowOptions` literals:
+
+```rust
+WindowSpec::from_app("capsule", app).options(
+    WindowOptions { transparent: true, borderless: true, ..Default::default() }
+        .macos(MacWindowOptions::default()
+            .shadow(false).level(27)
+            .collection_behavior(1 | 16 | 64 | 256)
+            .exclude_from_capture(true))
+)
+```
+
+The mask above is CanJoinAllSpaces | Stationary | IgnoresCycle | FullScreenAuxiliary.
+These settings apply at each native creation; other platforms ignore them. They do not
+change an ordinary window into a nonactivating panel. Runtime `set_always_on_top` overrides
+the configured native level, including after recreation. `OVERLAY_LAB_UNDERLAY=1` plus
+`OVERLAY_LAB_NATIVE_WINDOW=1` exercises native options; `OVERLAY_PROBE_NATIVE_OPTIONS=1`
+logs native readbacks when the diagnostic library is loaded.
+
 `native/` contains diagnostic tools, loaded only into the lab process. Build through
 HiveMind on a worker, then copy the products into a fresh temporary directory on the
 authorized GUI host:

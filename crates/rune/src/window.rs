@@ -210,6 +210,8 @@ impl<S: 'static> ApplicationHandler<WakeEvent> for Windows<S> {
 struct Host<S: 'static> {
     chrome: Chrome,
     options: WindowOptions,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    macos_window: crate::MacWindowOptions,
     native_handle: WindowHandle,
     on_created: Option<Box<dyn FnOnce(WindowHandle)>>,
     on_window: Option<crate::app::OnWindow>,
@@ -269,6 +271,7 @@ impl<S: 'static> Host<S> {
     fn new(window_spec: WindowSpec<S>, args: Args, proxy: EventLoopProxy<WakeEvent>, slot: usize, gpu_pool: Rc<RefCell<Weak<Gpu>>>) -> Self {
         let WindowSpec { mut app, options, key, on_created } = window_spec;
         let on_window = app.on_window.take();
+        let macos_window = std::mem::take(&mut app.macos_window);
         let native_handle = WindowHandle { native: Arc::default(), slot, key: key.into(), proxy: proxy.clone() };
         let live_proxy = proxy.clone();
         let waker: Waker = Arc::new(move || {
@@ -292,6 +295,7 @@ impl<S: 'static> Host<S> {
         Host {
             chrome,
             options,
+            macos_window,
             native_handle,
             on_created,
             on_window,
@@ -582,6 +586,7 @@ impl<S: 'static> Host<S> {
 
     fn set_always_on_top(&mut self, event_loop: &ActiveEventLoop, on: bool) {
         self.options.always_on_top = on;
+        self.macos_window.level = None;
         if !is_wayland(event_loop) && let Some(w) = &self.win {
             w.window.set_window_level(if on { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal });
         }
@@ -769,6 +774,8 @@ impl<S: 'static> Host<S> {
             attrs = attrs.with_titlebar_transparent(true).with_title_hidden(true).with_fullsize_content_view(true);
         }
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
+        #[cfg(target_os = "macos")]
+        crate::macos::configure_window(&window, &self.macos_window);
         if self.options.click_through && let Err(error) = window.set_cursor_hittest(false) {
             eprintln!("click-through unavailable for {}: {error}", self.native_handle.key());
         }
