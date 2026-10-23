@@ -381,16 +381,23 @@ impl Scene {
 
     /// A keyed node appears. On `Mount::Animated` it enters with its transition's insertion
     /// effect; on `Mount::Initial` (or under an entering parent, which it rides) it just appears.
-    /// If the key is still exiting, it revives from exactly where it is.
+    /// If the key is still exiting, `Mount::Animated` revives it from exactly where it is and
+    /// `Mount::Initial` lands it present, at rest on `spec.frame`.
     pub fn insert(&mut self, id: NodeId, spec: NodeSpec, mount: Mount) {
         if let Some(i) = self.slot(id) {
             self.nodes[i].transition = spec.transition;
-            if let Phase::Exiting { .. } = self.nodes[i].phase {
+            let exiting = matches!(self.nodes[i].phase, Phase::Exiting { .. });
+            if exiting && mount == Mount::Initial {
+                self.present_now(i);
+                // Also lands motion toward an unchanged frame and ends screen travel.
+                self.set_frame(id, spec.frame, LayoutAnim::INSTANT);
+                return;
+            }
+            if exiting {
                 self.revive(i);
             }
             if self.nodes[i].frame != spec.frame && self.nodes[i].path.is_none() {
-                let layout = LayoutAnim::new(crate::tokens::REFLOW);
-                self.set_frame(id, spec.frame, layout);
+                self.set_frame(id, spec.frame, LayoutAnim::new(crate::tokens::REFLOW));
             }
             return;
         }
@@ -524,6 +531,19 @@ impl Scene {
         let id = n.id;
         self.track_animate(i, prop::PRESENCE, 1.0, Anim::from(enter));
         self.intent(id, Intent::TRANSITION | Intent::OPACITY, enter.duration);
+    }
+
+    /// An exiting node is present again at once: no presence effect, nothing left to settle.
+    fn present_now(&mut self, i: usize) {
+        let n = &mut self.nodes[i];
+        n.generation += 1;
+        n.phase = Phase::Present;
+        let ins = n.transition.insertion.kit_rules(false);
+        n.fx_a = fx_of(&ins);
+        n.fx_b = FX_ID;
+        n.anchor = ins.anchor;
+        n.reveal = ins.reveal;
+        self.track_set(i, prop::PRESENCE, 1.0);
     }
 
     fn presence_now(&self, i: usize) -> f32 {

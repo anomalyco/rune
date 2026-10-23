@@ -132,6 +132,58 @@ fn a_key_that_returns_mid_exit_revives_without_a_jump() {
 }
 
 #[test]
+fn a_key_that_returns_mid_exit_on_an_initial_mount_lands_at_rest() {
+    for transition in [Transition::opacity(), Transition::blur_replace(), Transition::push(Edge::Bottom)] {
+        let mut s = Scene::new();
+        let id = NodeId(5);
+        let sp = spec(0.0, 0.0, 120.0, 40.0).transition(transition);
+        s.insert(id, sp, Mount::Initial);
+        s.frame_at(0.0);
+        s.remove(id);
+        // Deep in the exit tail.
+        let (seen, gone) = run(&mut s, 0.0, 0.2, id);
+        assert!(gone.is_none() && seen.last().unwrap().1.opacity < 0.2);
+        let t = 0.2 + 1.0 / HZ;
+        let moved = Rect::new(10.0, 30.0, 140.0, 40.0);
+        s.insert(id, NodeSpec::new(moved).transition(transition), Mount::Initial);
+        let out = s.frame_at(t);
+        assert!(!out.animating, "nothing left to animate");
+        let p = find(out.changed, id).unwrap();
+        assert_eq!((p.opacity, p.blur, p.transform.scale.x, p.phase), (1.0, 0.0, 1.0, Phase::Present));
+        assert_eq!(p.rect, moved, "at its final layout");
+        // The stale exit never retires it.
+        let (seen, gone) = run(&mut s, t, t + 1.0, id);
+        assert!(gone.is_none() && s.contains(id));
+        assert!(seen.iter().all(|(_, p)| p.opacity == 1.0 && p.rect == moved));
+    }
+}
+
+#[test]
+fn an_initial_mount_revive_lands_motion_toward_the_same_frame_and_screen_travel() {
+    for screen in [false, true] {
+        let mut s = Scene::new();
+        let id = NodeId(6);
+        let target = Rect::new(60.0, 80.0, 120.0, 40.0);
+        s.insert(id, spec(0.0, 0.0, 120.0, 40.0).transition(Transition::opacity()), Mount::Initial);
+        s.frame_at(0.0);
+        let slow = LayoutAnim::new(Spring::new(1.0, 0.0));
+        s.set_frame(id, target, if screen { slow.screen() } else { slow });
+        s.frame_at(0.05);
+        s.remove(id);
+        let (seen, gone) = run(&mut s, 0.05, 0.15, id);
+        assert!(gone.is_none() && seen.last().unwrap().1.rect != target, "still travelling");
+        let t = 0.15 + 1.0 / HZ;
+        s.insert(id, NodeSpec::new(target).transition(Transition::opacity()), Mount::Initial);
+        let out = s.frame_at(t);
+        assert!(!out.animating, "nothing left to animate (screen: {screen})");
+        let p = find(out.changed, id).unwrap();
+        assert_eq!((p.opacity, p.rect, p.phase), (1.0, target, Phase::Present));
+        let (seen, _) = run(&mut s, t, t + 1.0, id);
+        assert!(seen.iter().all(|(_, p)| p.opacity == 1.0 && p.rect == target));
+    }
+}
+
+#[test]
 fn stationary_edges_never_move_and_width_leads() {
     let mut s = Scene::new();
     let id = NodeId(4);
