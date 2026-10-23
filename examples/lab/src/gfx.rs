@@ -599,7 +599,7 @@ impl Compositor<Lab> for LabGfx {
             };
             let p = MotionBlurParams {
                 mode: if s.on(Scene::Motion, "directional") { BlurMode::Directional } else { BlurMode::Shutter },
-                shutter_angle: if s.reduced { 0.0 } else { s.k(Scene::Motion, "shutter_angle") },
+                shutter_angle: if s.reduced || !rt.motion_blur_enabled() { 0.0 } else { s.k(Scene::Motion, "shutter_angle") },
                 smooth_shutter: s.on(Scene::Motion, "smooth"),
                 ..Default::default()
             };

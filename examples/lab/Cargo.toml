@@ -4,6 +4,9 @@ version = "0.0.1"
 edition.workspace = true
 license.workspace = true
 
+[features]
+dev = ["rune/dev"]
+
 [dependencies]
 rune = { path = "../../crates/rune" }
 rune-motion = { path = "../../crates/rune-motion" }

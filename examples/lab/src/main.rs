@@ -122,7 +122,7 @@ fn thrown(s: &mut Lab) {
 }
 
 fn main() {
-    rune::run_with(
+    let app = rune::App::new(
         AppSpec::<Lab> {
             min_size: Some((1080.0, 640.0)),
             scenes: &[
@@ -154,6 +154,8 @@ fn main() {
             on_key: Some(on_key),
             ..AppSpec::new("Rune Lab", (1320.0, 800.0), Lab::new, ui::view)
         },
-        gfx::LabGfx::default(),
-    );
+    ).compositor(gfx::LabGfx::default());
+    #[cfg(all(feature = "dev", debug_assertions))]
+    let app = app.dev_panel(rune::dev::Config { motion_blur: true, ..Default::default() });
+    app.run();
 }
