@@ -35,10 +35,13 @@ const CJK_SCRIPTS: [&[u8; 4]; 5] = [b"Hani", b"Hira", b"Kana", b"Hang", b"Bopo"]
 
 // Common-script symbols can inherit the script of adjacent letters. Put these families at
 // the end of the requested family list, rather than registering only a Zyyy fallback.
+// On macOS the system font comes first: its keyboard symbols (⌘⇧⏎⌫⎋⌥⌃) sit on the baseline at
+// cap height and follow the requested weight through its `wght` axis. Apple Symbols draws
+// them light, small and (⇧) below the baseline next to app fonts' capitals.
 #[cfg(target_os = "macos")]
-const SYMBOL_FAMILIES: &[&str] = &["Apple Symbols", ".SF NS Symbols", "Menlo"];
+const SYMBOL_FAMILIES: &[&str] = &["System Font", ".SF NS", "Apple Symbols", ".SF NS Symbols", "Menlo"];
 #[cfg(target_os = "macos")]
-const SYMBOL_FONT_FILES: &[&str] = &["applesymbols", "sfnssymbols", "menlo"];
+const SYMBOL_FONT_FILES: &[&str] = &["sfnsttf", "applesymbols", "sfnssymbols", "menlo"];
 #[cfg(windows)]
 const SYMBOL_FAMILIES: &[&str] = &["Segoe UI Symbol"];
 #[cfg(windows)]
@@ -795,6 +798,51 @@ mod tests {
             .flatten()
             .collect();
         assert_eq!(ids, "Hello".chars().map(|ch| u32::from(plex.charmap().map(ch))).collect::<Vec<_>>());
+    }
+
+    /// Each glyph's ink top and bottom in px above the baseline, with its run's weight axis.
+    fn ink_extents(ts: &mut TextSystem, text: &str, style: TextStyle) -> Vec<(f32, f32)> {
+        let layout = ts.layout_rich(text, &[], style, 2.0, None);
+        let mut out = Vec::new();
+        for line in layout.lines() {
+            for item in line.items() {
+                let PositionedLayoutItem::GlyphRun(glyph_run) = item else { continue };
+                let run = glyph_run.run();
+                let font = run.font();
+                let font_ref = FontRef::from_index(font.data.as_ref(), font.index as usize).unwrap();
+                let mut scaler = ts
+                    .scale_cx
+                    .builder(font_ref)
+                    .size(run.font_size())
+                    .normalized_coords(run.normalized_coords().iter().map(|c| c.to_bits()))
+                    .build();
+                for g in glyph_run.glyphs() {
+                    let b = scaler.scale_outline(g.id as u16).unwrap().bounds();
+                    out.push((b.max.y, b.min.y));
+                }
+            }
+        }
+        out
+    }
+
+    /// Keyboard symbols a primary font lacks fall back to glyphs that stand on the baseline at
+    /// about cap height, so `⇧` and `⏎` don't shrink and sink next to the font's capitals.
+    #[test]
+    fn keyboard_symbol_fallbacks_match_cap_height() {
+        const PLEX: &[u8] = include_bytes!("../../../themes/opencode/assets/fonts/IBMPlexMono-Regular.ttf");
+        let mut ts = TextSystem::new(&[PLEX], ("IBM Plex Mono", "IBM Plex Mono"));
+        if !cfg!(target_os = "macos") || system_font_files(&["sfnsttf"]).is_empty() {
+            eprintln!("skipping: no macOS system font");
+            return;
+        }
+        for size in [13.0, 15.0] {
+            let glyphs = ink_extents(&mut ts, "H⌘⇧⏎⌫⎋⌥", TextStyle::new(size, 400.0).mono());
+            let (cap, _) = glyphs[0];
+            for (ch, (top, bottom)) in "H⌘⇧⏎⌫⎋⌥".chars().zip(&glyphs).skip(1) {
+                assert!((top / cap - 1.0).abs() < 0.12, "{ch} at {size}pt: top {top:.1} vs cap {cap:.1}");
+                assert!(bottom.abs() < cap * 0.06, "{ch} at {size}pt: bottom {bottom:.1} off the baseline");
+            }
+        }
     }
 }
 

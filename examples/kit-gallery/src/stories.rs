@@ -147,6 +147,7 @@ stories! {
     "components-progress--indeterminate" => progress_indeterminate,
     "ui-segmented-control--basic" => segmented_basic,
     "ui-segmented-control--controlled" => segmented_controlled,
+    "rune-keybind--symbols" => keybind_symbols,
 }
 
 fn combobox_searchable(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
@@ -1162,6 +1163,42 @@ fn keybind_all(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
             .child(Keybind::new(&["Ctrl", "Shift", "B"]).variant(v).build(k))
     };
     col().gap(16.0).child(line("Neutral", KeybindVariant::Neutral)).child(line("Ghost", KeybindVariant::Ghost))
+}
+
+/// Keyboard symbols next to capitals, in both families at 13 and 15 pt, then keycaps.
+fn keybind_symbols(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    const SAMPLE: &str = "⌘K ⇧P ⏎ ⌫ ⎋ ⌥⌃ ←↑ HP";
+    let mut c = col().gap(10.0);
+    for mono in [false, true] {
+        for size in [13.0, 15.0] {
+            let font = TextStyle::new(size, 500.0).lh(size * 1.5);
+            let font = if mono { font.mono() } else { font };
+            let label = format!("{} {size}", if mono { "Plex Mono" } else { "Inter" });
+            c = c.child(
+                row()
+                    .gap(16.0)
+                    .center_y()
+                    .child(text(label).w(96.0).font(TextStyle::new(11.0, 440.0).lh(16.0)).color(k.c.text_faint))
+                    .child(text(SAMPLE).font(font).color(k.c.text_base)),
+            );
+        }
+        let mut kk = k.clone();
+        if mono {
+            kk.ty.small_medium = kk.ty.small_medium.mono();
+        }
+        let mut caps = row().gap(12.0).center_y().child(
+            text(if mono { "Plex Mono caps" } else { "Inter caps" })
+                .w(96.0)
+                .font(TextStyle::new(11.0, 440.0).lh(16.0))
+                .color(k.c.text_faint),
+        );
+        let sets: [&[&str]; 6] = [&["⌘", "⇧", "P"], &["⇧", "⏎"], &["⌫"], &["⎋"], &["⌥", "⌃", "K"], &["←", "↑"]];
+        for keys in sets {
+            caps = caps.child(Keybind::new(keys).build(&kk));
+        }
+        c = c.child(caps);
+    }
+    c
 }
 
 fn spinner_basic(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
