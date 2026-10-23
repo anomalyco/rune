@@ -9,6 +9,9 @@
 
 mod stories;
 
+#[cfg(test)]
+mod layer_timing;
+
 use std::collections::{HashMap, HashSet};
 
 use rune::{AppSpec, Cx, El, TextEdit, col};

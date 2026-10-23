@@ -297,6 +297,7 @@ pub struct Runtime<S: 'static> {
     inh_scratch: Vec<Inh>,
     /// Only nonempty when retained exit nodes make storage order differ from subtree order.
     layer_paint_order: Vec<usize>,
+    layer_scratch: Vec<(usize, usize, usize)>,
     /// Drawn rect per node (points, root space), for tools and hit tests.
     drawn: Vec<[f32; 4]>,
     scrolls: HashMap<NodeId, ScrollState>,
@@ -444,6 +445,7 @@ impl<S: 'static> Runtime<S> {
             deco_scratch: Vec::new(),
             inh_scratch: Vec::new(),
             layer_paint_order: Vec::new(),
+            layer_scratch: Vec::new(),
             drawn: Vec::new(),
             scrolls: HashMap::new(),
             grows: HashMap::new(),
@@ -2185,9 +2187,10 @@ impl<S: 'static> Runtime<S> {
         let vp = [0.0, 0.0, self.viewport.0 * s, self.viewport.1 * s];
         let mut glyph_count = 0usize;
         let mut ambient: Option<f32> = None;
-        // Allocates only when a group fades. Scope records preserve absolute instance indices
+        // Retain scope capacity across frames. Records preserve absolute instance indices
         // for images, video insertions, retained springs and compositor list ranges.
-        let mut layers: Vec<(usize, usize, usize)> = Vec::new();
+        let mut layers = std::mem::take(&mut self.layer_scratch);
+        layers.clear();
 
         // Growth rows: presented top offset, height and bottom feather mask per node index.
         self.row_dy.clear();
@@ -2258,7 +2261,7 @@ impl<S: 'static> Runtime<S> {
             }
             let effective_opacity = (own * pinh.opacity).clamp(0.0, 1.0);
             let next = if tree_order { self.layer_paint_order.get(paint_index + 1).copied() } else { (i + 1 < n_nodes).then_some(i + 1) };
-            let isolate = own > 0.0 && own < 1.0 && effective_opacity > 0.0
+            let isolate = own > 0.001 && own < 1.0 && effective_opacity > 0.001
                 && next.is_some_and(|j| self.nodes[j].parent == Some(i));
             let o = if isolate { 1.0 } else { (own * pinh.paint_opacity).clamp(0.0, 1.0) };
             let (mut clip, mut fade) = (pinh.clip, pinh.fade);
@@ -2353,7 +2356,7 @@ impl<S: 'static> Runtime<S> {
                 }
             }
 
-            if effective_opacity > 0.0 && o > 0.0 && visible {
+            if effective_opacity > 0.001 && o > 0.001 && visible {
                 let k_px = sc * s;
                 for (k, sh) in n.vis.shadows.iter().enumerate() {
                     let c = if k < P_SHADOWS.len() { self.color(n.id, P_SHADOWS[k], sh.color) } else { sh.color };
@@ -2696,9 +2699,10 @@ impl<S: 'static> Runtime<S> {
                 self.hits.push((n.id, if n.parent.is_some() { cr } else { rect_pt }));
             }
         }
-        for (_, start, surface_start) in layers.into_iter().rev() {
+        while let Some((_, start, surface_start)) = layers.pop() {
             crate::render::end_layer(&mut self.instances, &mut self.surfaces, &mut self.marks, start, surface_start);
         }
+        self.layer_scratch = layers;
         if self.track_marks { self.marks.resize(self.instances.len(), 0); }
         self.stats.glyphs = glyph_count;
         self.ambient = ambient;

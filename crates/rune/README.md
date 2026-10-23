@@ -388,6 +388,10 @@ and its goldens are unchanged. `examples/lab` uses it to composite `rune-light` 
   `draw_range` draws complete scopes into that pass; `add_format` builds the uber
   pipeline for another target format (e.g. an `Rgba16Float` scene, a text mask or a node layer).
   `Frame::draw_ui` is the default frame.
+- Custom compositors **must call `encode_layers`** before opening passes that use `draw_range`.
+  Keep each balanced scope together: partitioning by primitive kind (for example extracting
+  glyphs) breaks isolation. `draw_range` now also draws native surfaces in painter order;
+  do not draw those surfaces again separately.
 - `Compositor::animating` keeps the display link running while something moves on its own;
   `features` requests device features (e.g. `TIMESTAMP_QUERY`) when the adapter has them;
   `summary` prints after a headless run.
@@ -399,7 +403,16 @@ Fading containers render their subtree into a bounded, pooled target, then apply
 Overlapping opaque children in a 0.5 group therefore have 0.5 coverage everywhere. Nested groups
 compose inside-out. Opaque containers and individual leaves retain the direct instance path;
 zero-opacity subtrees emit no draws. `live_opacity` updates this without a view rebuild or layout.
-Targets are reused while fading and released at either endpoint.
+Targets use 64-pixel buckets, reused while they fit and occupy at most twice the needed area
+(with a minimum-bucket floor), and are released at either endpoint. Projection and viewport
+cover only the used rectangle. Static translucent containers also cost a target and pass each
+presentation; target resources and planning capacity are reused, but contents are redrawn.
+
+The manual kit-gallery `disabled_controls_gpu_cost` benchmark combines radio, text-input and
+select state stories plus disabled segmented controls at 1024×640 pt, 2×. On M4 Pro/Metal,
+60 paired frames measured legacy/isolated median **0.927917/1.076041 ms** (+0.148124 ms),
+p95 **0.930000/1.109167 ms**, with seven targets (1,605,632 bytes). This measures the whole
+GPU frame, not CPU planning. Content caching remains a separate policy decision.
 
 Low-level compositors can use `Instance::begin_layer(bounds, clip, LayerSpec { opacity })` and
 `Instance::end_layer()`. Bounds are device-pixel `[x,y,w,h]`; include native surfaces and the full

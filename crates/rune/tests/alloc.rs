@@ -16,6 +16,27 @@ unsafe impl GlobalAlloc for Counting {
 static A: Counting = Counting;
 fn allocs() -> usize { ALLOCS.with(Cell::get) }
 
+#[test]
+fn static_faded_container_planning_allocates_nothing() {
+    use rune::{Color, Live, el};
+    fn view(offset: &Live<[f32; 2]>, _: &mut Cx<Live<[f32; 2]>>) -> El {
+        el().size(200.0, 200.0).opacity(0.5)
+            .child(el().size(100.0, 100.0).fill(Color::WHITE))
+            .child(el().size(100.0, 100.0).live_offset(offset).fill(Color::WHITE))
+    }
+    let mut rt = Runtime::new(Live::new([0.0; 2]), view, (200.0, 200.0), Env { system_dark: true, scale: 2.0 });
+    rt.frame(0.0);
+    rt.state.set([1.0; 2]);
+    rt.frame(0.0);
+    let before = allocs();
+    for i in 0..60 {
+        // Force presentation without rebuilding the static-opacity ancestor.
+        rt.state.set([i as f32; 2]);
+        rt.frame(1.0 / 60.0);
+    }
+    assert_eq!(allocs() - before, 0, "static faded ancestor scope planning");
+}
+
 fn view(body: &String, _: &mut Cx<String>) -> El {
     col().w_full().h(400.0).scroll(ScrollSpec { stick_bottom: true }).child(
         col().w_full().virtualize(80.0).growth(GrowthSpec::default()).child(

@@ -1452,6 +1452,7 @@ dependencies = [
  "rune",
  "rune-kit",
  "rune-theme-opencode",
+ "wgpu",
 ]
 
 [[package]]

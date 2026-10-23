@@ -43,7 +43,7 @@ fn isolated_layers_match_scalar_overlap_crossfade_and_nesting() {
     let out = pixels(&gpu, &renderer, &target);
     for x in [6, 16, 26] { near(&out[(8 * 32 + x) * 4..(8 * 32 + x + 1) * 4], rgba([0.5; 4])); }
     assert_eq!(renderer.layer_stats().targets, 1);
-    assert!(renderer.layer_stats().bytes < 32 * 16 * 8, "bounded allocation");
+    assert_eq!(renderer.layer_stats().bytes, 64 * 64 * 8, "minimum bucket");
     let allocations = renderer.layer_stats().allocations;
 
     // Two opaque states, each with internal overlap. Source-over crossfade is B(1-t) over
@@ -68,7 +68,8 @@ fn isolated_layers_match_scalar_overlap_crossfade_and_nesting() {
     instances = group(bounds, 0.5, [1.0; 4]);
     for i in &mut instances[..3] { i.clip = [8.0, 5.0, 24.0, 11.0]; }
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &instances, (32, 16));
-    assert_eq!(renderer.layer_stats().bytes, 16 * 6 * 8, "clip bounds the linear RGBA target");
+    assert_eq!(renderer.layer_stats().bytes, 64 * 64 * 8, "clip uses the minimum bucket");
+    assert_eq!(renderer.layers.plan[0].bounds, [8.0, 5.0, 16.0, 6.0]);
     let out = pixels(&gpu, &renderer, &target);
     near(&out[(8 * 32 + 6) * 4..(8 * 32 + 7) * 4], [0; 4]);
     near(&out[(8 * 32 + 16) * 4..(8 * 32 + 17) * 4], rgba([0.5; 4]));
@@ -92,6 +93,44 @@ fn isolated_layers_match_scalar_overlap_crossfade_and_nesting() {
 }
 
 #[test]
+fn scale_and_fade_reuse_bucket_for_sixty_growing_frames() {
+    type State = (Live<f32>, Live<f32>);
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        el().size(256.0, 256.0).child(el().size(180.0, 180.0)
+            .live_scale(&s.0).live_opacity(&s.1)
+            .child(el().size(180.0, 180.0).fill(Color::WHITE))
+            .child(el().size(90.0, 90.0).fill(Color::WHITE)))
+    }
+    let gpu = Gpu::headless();
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let target = Offscreen::new(&gpu.device, 256, 256);
+    let mut rt = Runtime::new((Live::new(0.9), Live::new(0.1)), view, (256.0, 256.0), Env { scale: 1.0, system_dark: true });
+    rt.frame(0.0);
+    renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (256, 256));
+    let allocations = renderer.layer_stats().allocations;
+    let first_bounds = renderer.layers.plan[0].bounds;
+    assert_eq!(allocations, 1);
+    for frame in 1..=60 {
+        let t = frame as f32 / 60.0;
+        rt.state.0.set(0.9 + 0.1 * t);
+        rt.state.1.set(0.1 + 0.8 * t);
+        rt.frame(1.0 / 60.0);
+        renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (256, 256));
+        let out = pixels(&gpu, &renderer, &target);
+        near(&out[(90 * 256 + 90) * 4..(90 * 256 + 91) * 4], rgba([0.1 + 0.8 * t; 4]));
+        assert_eq!(renderer.layer_stats().allocations, allocations, "frame {frame}");
+    }
+    assert!(renderer.layers.plan[0].bounds[2] > first_bounds[2]);
+    // A genuine shrink drops an oversized allocation, then the tiny minimum bucket stays put.
+    for size in [20.0, 19.0, 20.0] {
+        let content = group([4.0, 4.0, size, size], 0.5, [1.0; 4]);
+        renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &content, (256, 256));
+        assert_eq!(renderer.layer_stats().bytes, 64 * 64 * 8);
+        assert_eq!(renderer.layer_stats().allocations, allocations + 1);
+    }
+}
+
+#[test]
 fn live_group_opacity_changes_scopes_without_view_or_layout_work() {
     fn view(alpha: &Live<f32>, _: &mut Cx<Live<f32>>) -> El {
         el().size(32.0, 16.0).live_opacity(alpha)
@@ -112,6 +151,9 @@ fn live_group_opacity_changes_scopes_without_view_or_layout_work() {
     alpha.set(0.0);
     rt.frame(1.0 / 60.0);
     assert!(rt.instances.is_empty());
+    alpha.set(0.0009);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.instances.is_empty(), "hide sub-threshold tails");
     alpha.set(1.0);
     rt.frame(1.0 / 60.0);
     assert_eq!(rt.stats.commits, commits);

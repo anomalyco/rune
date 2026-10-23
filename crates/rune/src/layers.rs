@@ -135,7 +135,15 @@ impl Renderer {
             }
             let bounds = l.bounds;
             let (width, height) = (bounds[2] as u32, bounds[3] as u32);
-            if self.layers.targets[index].as_ref().is_none_or(|t| t.texture.width() != width || t.texture.height() != height) {
+            let bucket = (width.div_ceil(64) * 64, height.div_ceil(64) * 64);
+            if self.layers.targets[index].as_ref().is_none_or(|t| {
+                let size = (t.texture.width(), t.texture.height());
+                // The minimum bucket is unavoidable for tiny controls. Do not recreate that
+                // same bucket every frame when rounding alone exceeds the 2x area limit.
+                size.0 < width || size.1 < height || (size != bucket
+                    && u64::from(size.0) * u64::from(size.1) > 2 * u64::from(width) * u64::from(height))
+            }) {
+                let (width, height) = bucket;
                 let texture = device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("isolated group"), size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
                     mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
@@ -244,6 +252,7 @@ impl Renderer {
                 occlusion_query_set: None, multiview_mask: None,
             });
             first = false;
+            pass.set_viewport(0.0, 0.0, l.bounds[2], l.bounds[3], 0.0, 1.0);
             self.draw_layer_range(&mut pass, FORMAT, l.begin + 1..l.end, Some(index));
         }
     }

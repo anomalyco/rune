@@ -9,3 +9,6 @@ publish = false
 rune = { path = "../../crates/rune" }
 rune-kit = { path = "../../crates/rune-kit" }
 rune-theme-opencode = { path = "../../themes/opencode" }
+
+[dev-dependencies]
+wgpu = { version = "30", default-features = false }
