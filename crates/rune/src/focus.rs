@@ -8,6 +8,8 @@ const VERTICAL_ROLES: [&str; 4] = ["menu", "listbox", "list", "tree"];
 const TYPE_SELECT_ROLES: [&str; 5] = ["menu", "listbox", "list", "tree", "tablist"];
 /// Without Full Keyboard Access, Tab still visits lists inside these groups.
 const LIST_ROLES: [&str; 4] = ["listbox", "list", "tree", "grid"];
+/// Tables and outlines stop at their ends (NSTableView); menus, popups and segments wrap.
+const CLAMPED_ROLES: [&str; 3] = ["list", "tree", "grid"];
 /// AppKit's type-select resets after this long without a key.
 const TYPE_SELECT_PAUSE: f64 = 1.0;
 
@@ -217,6 +219,8 @@ impl<S: 'static> Runtime<S> {
                     // item, else the first) before arrows move it; Up from nothing is the last.
                     _ if self.nodes[i].focus.highlight.is_some() && !shown =>
                         if backward && !self.nodes[i].focus.selected { items.len() - 1 } else { pos },
+                    _ if CLAMPED_ROLES.contains(&self.nodes[g].role) =>
+                        if backward { pos.saturating_sub(1) } else { (pos + 1).min(items.len() - 1) },
                     _ if backward => (pos + items.len() - 1) % items.len(),
                     _ => (pos + 1) % items.len(),
                 })
@@ -625,5 +629,24 @@ mod tests {
         key(&mut rt, Key::Tab, true); key(&mut rt, Key::Tab, false);
         assert_eq!(focused(&rt), "row0");
         assert!(visible(&rt, "row0"), "Tab reveals the control it reaches");
+    }
+
+    #[test]
+    fn list_arrows_stop_at_the_ends() {
+        fn view(_: &State, _: &mut Cx<State>) -> El {
+            col().size(200.0, 200.0)
+                .child(col().role("list").focus_group().children((0..3).map(|i| button(&format!("row{i}")))))
+        }
+        let mut rt = Runtime::new(State::default(), view, (200.0, 200.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        key(&mut rt, Key::Tab, false);
+        assert_eq!(focused(&rt), "row0");
+        key(&mut rt, Key::Up, false);
+        assert_eq!(focused(&rt), "row0", "Up from the first row stays");
+        key(&mut rt, Key::End, false);
+        key(&mut rt, Key::Down, false);
+        assert_eq!(focused(&rt), "row2", "Down from the last row stays");
+        key(&mut rt, Key::Up, false);
+        assert_eq!(focused(&rt), "row1");
     }
 }

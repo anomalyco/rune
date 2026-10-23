@@ -5,6 +5,9 @@ without a code change (goldens, layout, input), newest first, with the rev that 
 
 ## dev
 
+- **List arrows stop at the ends.** Up on the first row and Down on the last row of a
+  `list`, `tree` or `grid` focus group now stay put, like NSTableView, instead of wrapping.
+  Menus, select popups (`listbox`) and segmented or radio groups still wrap.
 - **ShortcutRecorder can retry an unchanged chord.** `ShortcutRecorderState::mark_unregistered()`
   says the shown shortcut isn't registered (its launch registration failed, say). Recording
   the same chord then goes through `on_change` again instead of being a no-op, until a change
