@@ -317,7 +317,7 @@ impl<T: 'static> Overlay<T> {
         if self.live.is_none() { return; }
         self.resume_live();
         if size != self.at.size { self.resized(event_loop); }
-        self.rt.settle_all();
+        self.settle_before_reveal();
         let retained = cfg!(target_os = "macos") && self.options.prewarm;
         if let Some(Backing::Window(window)) = self.live.as_ref().map(|l| &l.backing) {
             let window = window.clone();
@@ -359,6 +359,12 @@ impl<T: 'static> Overlay<T> {
     fn resume_live(&mut self) {
         self.rt.set_live_visible(true);
         if self.rt.live_pending() { self.dirty = true; }
+    }
+
+    fn settle_before_reveal(&mut self) {
+        // Retained pixels were settled by warm(). Leaving a settle flag pending here
+        // would snap changes arriving after that frame, in the same turn as show().
+        if !(cfg!(target_os = "macos") && self.options.prewarm) { self.rt.settle_all(); }
     }
 
     fn hide(&mut self) {
@@ -1235,6 +1241,32 @@ impl<T: 'static> Drop for Overlay<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn overlay_cached_reveal_does_not_settle_a_same_tick_update() {
+        fn view(width: &f32, _: &mut Cx<f32>) -> El {
+            crate::el().child(crate::el().key("box").size(*width, 8.0))
+        }
+        let app = AppSpec::new("reveal", (100.0, 50.0), || 8.0, view);
+        for prewarm in [true, false] {
+            let spec = OverlaySpec::new("reveal", app.size, view)
+                .options(OverlayOptions { prewarm, ..Default::default() });
+            let (mut overlay, _) = Overlay::new(spec, 8.0, &app);
+            overlay.rt.frame(0.0);
+            overlay.rt.update(|width, _| *width = 12.0);
+            overlay.warm();
+            assert_eq!(overlay.rt.presented("box").unwrap().0[2], 12.0, "hidden changes settle in prewarm");
+            overlay.settle_before_reveal();
+            // A show and update can arrive in one event-loop turn, after the cached frame.
+            overlay.rt.update(|width, _| *width = 20.0);
+            let moving = overlay.rt.frame(1.0 / 60.0);
+            let width = overlay.rt.presented("box").unwrap().0[2];
+            if prewarm {
+                assert!(moving && width < 20.0, "cached reveal erased new motion: width={width}, moving={moving}");
+            } else { assert_eq!(width, 20.0, "ordinary show retains its settled first-frame contract"); }
+        }
+    }
 
     #[test]
     fn window_panel_overlay_focus_callback_is_connected_before_first_show() {
