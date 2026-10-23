@@ -5,12 +5,14 @@ binary on the app host. It announces `ws://127.0.0.1:4793`.
 `--windowless` keeps a live runtime for protocol work without opening a window.
 
 ```sh
+(cd scripts/dev-panel && bun install)
 bun scripts/dev-panel/serve.ts
 ```
 
-Open `http://127.0.0.1:4794`. The page uses the actual knobs source at
-`~/code/open-source/knobs`; `KNOBS_DIR` overrides that path. It requires knobs'
-Rust formatter (`formatRust`). Rune contains no panel implementation.
+Open `http://127.0.0.1:4794`. The page is knobs' own `mountPage`, pinned to
+`@kitlangton/knobs@0.4.0-next.19`. Every Copy action (header, group, row) emits
+`rune::tune!` lines through knobs' `formatRust`; playback and scene controls
+are left out. Rune contains no panel implementation.
 
 `PORT` changes the page port; `RUNE_DEV_WS` selects the app's announced socket.
 The page proxies WebSocket traffic, so serving its loopback port through

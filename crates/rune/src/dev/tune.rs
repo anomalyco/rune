@@ -49,7 +49,11 @@ impl Tunable for Spring {
 
 impl Tunable for Color {
     const KIND: &'static str = "color";
-    fn encode(self) -> Value { json!(self.hex()) }
+    fn encode(self) -> Value {
+        // knobs' colour control reads #rrggbb; it has no alpha channel to edit.
+        let hex = self.hex();
+        json!(hex.strip_suffix("ff").unwrap_or(&hex))
+    }
     fn decode(value: &Value) -> Option<Self> {
         let css: csscolorparser::Color = value.as_str()?.parse().ok()?;
         let (r, g, b, a) = (css.r, css.g, css.b, css.a);

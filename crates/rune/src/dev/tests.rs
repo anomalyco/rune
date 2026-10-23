@@ -50,6 +50,10 @@ fn scopes_isolate_apps_restore_on_unwind_and_accept_css_colors() {
     });
     assert_eq!(tune("x", 2.0_f32, None), 2.0);
     assert!(crate::Color::decode(&json!("oklch(65% 0.1 250 / 0.5)")).is_some());
+    // knobs' colour control reads #rrggbb and writes oklch.
+    assert_eq!(crate::color::hex("#4a94db").unwrap().encode(), json!("#4a94db"));
+    assert_eq!(crate::color::hex("#4a94db80").unwrap().encode(), json!("#4a94db80"));
+    assert!(crate::Color::decode(&json!("oklch(0.65102 0.12977 249.632)")).is_some());
     assert!(Spring::decode(&json!({"duration":1,"bounce":1})).is_none());
 }
 

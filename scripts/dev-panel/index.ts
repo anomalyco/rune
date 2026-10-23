@@ -1,5 +1,5 @@
-import { createRemoteControls, formatRust, type RemoteControls } from "knobs"
-import { mountPage } from "knobs/panel"
+import { colorHex, createRemoteControls, formatRust, type RemoteControls, type State } from "@kitlangton/knobs"
+import { mountPage } from "@kitlangton/knobs/panel"
 
 let controls: RemoteControls | undefined
 let shape = ""
@@ -29,7 +29,14 @@ socket.addEventListener("message", event => {
     })
     mountPage(controls, document.body, {
       title: "Rune",
-      copy: () => formatRust(controls!.descriptors.filter(d => !d.key.startsWith("rune.")), controls!.modified()),
+      // Header, group and row copies all emit `rune::tune!`; playback/scene controls are not app code.
+      copyAs: (keys, group) => {
+        const descriptors = controls!.descriptors.filter(d => !d.key.startsWith("rune.") && (!keys || keys.includes(d.key)))
+        // The colour control holds oklch; compare in Rune's hex form so unchanged colours stay out.
+        const values: Record<string, unknown> = { ...controls!.get() }
+        for (const d of descriptors) if (d.kind === "color") values[d.key] = colorHex(values[d.key] as string) ?? values[d.key]
+        return formatRust(descriptors, values as State, group)
+      },
     })
   } else if (next !== shape) {
     controls.update(message.descriptors, message.values)
@@ -37,7 +44,7 @@ socket.addEventListener("message", event => {
     controls.sync(message.values, { replace: true })
   }
   shape = next
-  for (const [key, value] of Object.entries(message.readouts ?? {})) controls.watch(key, value)
+  for (const [key, value] of Object.entries<number>(message.readouts ?? {})) controls.watch(key, value)
 })
 socket.addEventListener("close", () => { document.title = "Rune · disconnected" })
 socket.addEventListener("open", () => { document.title = "Rune" })

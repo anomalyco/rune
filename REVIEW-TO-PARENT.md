@@ -33,6 +33,10 @@ Local implementation commits, in order:
 2. `71244d0`: dev protocol, tunable registry, macro and rune-motion retuning.
 3. `a198905`: core integration hooks, isolated for the parent's landing queue.
 4. `c376fab`: example, lab blur integration, protocol proof, knobs adapter and design.
+5. The final commit: npm-pinned knobs page, `copyAs` Rust and the colour fix (see below).
+
+Core queue: the clock commit `48b8d98` lands after the overlay hooks and the
+window-panel batch.
 
 Apply the implementation stack together: the backend and integration commits
 reference each other, and the example commit supplies the updated lockfile.
@@ -68,16 +72,42 @@ Reproduce the focused checks with HiveMind running
 builds. `bun scripts/dev-panel/smoke.ts /path/to/worker-built/rune-dev-panel`
 checks the native windowless host.
 
-## External dependency still being coordinated
+## Real knobs panel and copy-as-Rust
 
-The KNOBS session (`ses_ec91ede28ffeFpn6L7FZtGoka0`) has two queued asks for
-`formatRust(descriptors, values, group?)` / `RemoteControls.rust()`. The adapter
-uses `formatRust` in knobs' own `mountPage` Copy callback and excludes reserved
-`rune.*` playback keys. At this writing that export is absent; the page cannot
-bundle until KNOBS supplies it. No knobs files were edited. Browser/panel proof
-and Rust-copy verification are consequently pending. No clip was captured.
-The bounded ten-minute formatter watch expired. No listener, preview, review,
-build or watch is left running. Generated binaries were removed after the smoke.
+The final commit pins the page to npm `@kitlangton/knobs@0.4.0-next.19`
+(`scripts/dev-panel/package.json` + `bun.lock`; no file link), passes
+`formatRust` as `copyAs` and filters `rune.*` keys. Bundled with Bun on Studio.
+
+Headless Chromium on Studio drove the real page against the windowless example
+(no screen capture). Each step was confirmed through the app's own socket tree:
+
+- Jump to joining, then room: the tree label changed to Joining, then Room.
+- Join replay: the scene settled on lobby, then the card retargeted to x=220 (moving).
+- Spring card and width slider: app values 0.39 s and 263; card target width 263.
+- Pause, then Step frame: logical time advanced exactly 1/60 s while paused.
+- Header Copy, group Copy (rooms.join) and row Copy (width) each produced only
+  modified keys, for example:
+  `rune::tune!("rooms.join.spring", rune::Spring::new(0.39_f32, 0.0_f32))  // was ...`
+  The copied lines plus a colour line compiled with `rustc -D warnings` on the Mini
+  against a stub with Rune's real signatures. No page errors.
+
+Still: `~/code/home/artifacts/2026-10-22-rune-dev-panel/knobs-panel.png`;
+copied text: `copied.rs` in that folder.
+
+The panel check found one colour mismatch, now fixed. knobs' colour control
+reads only `#rgb`, `#rrggbb` or `oklch(...)`, so Rune's `#rrggbbaa` showed as grey.
+Its copy also listed an unchanged colour, because it compares the control's
+oklch value with the hex default as strings.
+Rune now encodes opaque colours as `#rrggbb` (oklch input was already
+accepted; unit test added). The adapter compares colours in hex form via knobs'
+`colorHex`. Translucent colours still send `#rrggbbaa`, which knobs cannot edit.
+Worth a KNOBS fix: normalise colours before `same()` in `formatRust`.
+Also, copy emits the two-argument `tune!` form, so it drops declared numeric
+bounds. That form is valid, but pasting it over a bounded call loses min/max/step.
+
+Latest Mini job: four dev tests, the real-WebSocket test and the example build
+passed after the colour change. Every app process, page server, listener and
+build has stopped. Generated binaries and scratch files were removed.
 
 ## Rooms integration notes
 

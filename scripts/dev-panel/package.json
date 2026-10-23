@@ -1,0 +1,8 @@
+{
+  "name": "rune-dev-panel-page",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@kitlangton/knobs": "0.4.0-next.19"
+  }
+}

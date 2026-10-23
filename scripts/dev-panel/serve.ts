@@ -4,17 +4,11 @@ import { resolve } from "node:path"
 
 const port = Number(process.env.PORT ?? 4794)
 const upstream = process.env.RUNE_DEV_WS ?? "ws://127.0.0.1:4793"
-const knobs = process.env.KNOBS_DIR ?? resolve(process.env.HOME!, "code/open-source/knobs")
 const bundle = await Bun.build({
   entrypoints: [resolve(import.meta.dir, "index.ts")],
   target: "browser",
   conditions: ["development"],
   external: ["@pierre/diffs"],
-  plugins: [{ name: "knobs-source", setup(build) {
-    build.onResolve({ filter: /^knobs(?:\/panel)?$/ }, ({ path }) => ({
-      path: resolve(knobs, path === "knobs" ? "src/index.ts" : "src/panel/index.ts"),
-    }))
-  } }],
 })
 if (!bundle.success) throw new AggregateError(bundle.logs, "Could not bundle the knobs remote page")
 const js = await bundle.outputs[0]!.text()
