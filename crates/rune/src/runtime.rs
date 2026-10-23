@@ -286,6 +286,8 @@ pub struct Runtime<S: 'static> {
     pub poll: Option<fn(&mut S, f64, &mut Tx) -> bool>,
     /// Seconds since the first frame, unscaled (virtual when headless).
     pub clock: f64,
+    #[cfg(all(feature = "dev", debug_assertions))]
+    pub(crate) dev_clock: Option<crate::dev_clock::DevClock>,
     wake_deadlines: Vec<f64>,
     /// Windowed runs read the clock from the wall instead of summing frame steps.
     pub wall_start: Option<std::time::Instant>,
@@ -441,6 +443,8 @@ impl<S: 'static> Runtime<S> {
             time_scale: 1.0,
             poll: None,
             clock: 0.0,
+            #[cfg(all(feature = "dev", debug_assertions))]
+            dev_clock: None,
             wake_deadlines: Vec::new(),
             wall_start: None,
             on_key: None,
@@ -678,6 +682,13 @@ impl<S: 'static> Runtime<S> {
 
     /// Next requested wake on the unscaled app clock. None lets the shell sleep indefinitely.
     pub fn wake_deadline(&self) -> Option<f64> {
+        let deadline = self.logical_wake_deadline()?;
+        #[cfg(all(feature = "dev", debug_assertions))]
+        if let Some(clock) = &self.dev_clock { return clock.deadline(deadline); }
+        Some(deadline)
+    }
+
+    fn logical_wake_deadline(&self) -> Option<f64> {
         self.wake_deadlines.first().copied().into_iter().chain(self.loop_wake.map(|w| w.0)).min_by(f64::total_cmp)
     }
 
@@ -692,30 +703,43 @@ impl<S: 'static> Runtime<S> {
     /// if state changed, steps `Scene`, growth, scroll and reveals, and builds this frame's
     /// instances.
     pub fn frame(&mut self, dt: f64) -> bool {
+        // Like a native shell: the logical clock follows host time (timers, poll), while
+        // animations step by the frame's own dt, so idle time never lands on a fresh commit.
+        #[cfg(not(all(feature = "dev", debug_assertions)))]
+        let elapsed = dt;
+        #[cfg(all(feature = "dev", debug_assertions))]
+        let (elapsed, dt) = match &mut self.dev_clock {
+            Some(clock) => clock.advance(self.wall_start.map(|t| t.elapsed().as_secs_f64()), dt),
+            None => (dt, dt),
+        };
         // A coarse headless step still polls at every timer deadline, independent of FPS.
         // Input queued for the requested frame stays at that frame's timestamp.
         if self.wall_start.is_none()
-            && self.wake_deadline().is_some_and(|deadline| deadline > self.clock && deadline < self.clock + dt)
+            && self.logical_wake_deadline().is_some_and(|deadline| deadline > self.clock && deadline < self.clock + elapsed)
         {
-            let target = self.clock + dt;
+            let target = self.clock + elapsed;
             let input = std::mem::take(&mut self.queue);
-            while let Some(deadline) = self.wake_deadline()
+            while let Some(deadline) = self.logical_wake_deadline()
                 && deadline > self.clock && deadline < target
             {
-                self.frame_step(deadline - self.clock);
+                self.frame_step(deadline - self.clock, deadline - self.clock);
             }
             self.queue.extend(input);
-            return self.frame_step(target - self.clock);
+            return self.frame_step(target - self.clock, target - self.clock);
         }
-        self.frame_step(dt)
+        self.frame_step(elapsed, dt)
     }
 
-    fn frame_step(&mut self, dt: f64) -> bool {
+    /// `elapsed` advances the logical clock when no wall clock drives it; `dt` steps animations.
+    fn frame_step(&mut self, elapsed: f64, dt: f64) -> bool {
         let mut tx = std::mem::take(&mut self.pending);
         let mut ran = false;
-        self.clock = match self.wall_start {
+        let wall_start = self.wall_start;
+        #[cfg(all(feature = "dev", debug_assertions))]
+        let wall_start = wall_start.filter(|_| self.dev_clock.is_none());
+        self.clock = match wall_start {
             Some(t0) => t0.elapsed().as_secs_f64(),
-            None => self.clock + dt,
+            None => self.clock + elapsed,
         };
         if let Some((deadline, animation_time)) = self.loop_wake
             && !self.animating
@@ -796,6 +820,8 @@ impl<S: 'static> Runtime<S> {
         }
         self.stats.shaped = self.text.shaped - shaped0;
         self.animating = animating && self.time_scale > 0.0;
+        #[cfg(all(feature = "dev", debug_assertions))]
+        if self.dev_clock.as_ref().is_some_and(|clock| clock.paused) { self.animating = false; }
         self.animating
     }
 

@@ -6,6 +6,8 @@
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 mod activation;
 mod app;
+#[cfg(all(feature = "dev", debug_assertions))]
+mod dev_clock;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 mod layer_shell;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]

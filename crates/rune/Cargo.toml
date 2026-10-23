@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [features]
+dev = []
 native-file-dialog = ["dep:rfd"]
 
 [dependencies]
