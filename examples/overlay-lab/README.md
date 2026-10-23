@@ -117,6 +117,11 @@ endpoint separately from the alpha-only reveal; it includes work absent in norma
 
 `run-idle-probe.py` samples process CPU and interrupt wake counters over ten-second intervals,
 without redraw assistance, and counts drawable callbacks. `--modes` measures All/None/Regions.
+`run-scrawl-probe.py <installed-binary> <directory>` runs 30 `lab pill tap-then-screen`
+cycles using the same diagnostic library without redraw assistance. It measures native
+already-visible `orderFrontRegardless` entry to positive presentation, not the beginning of
+the coordinator request. Pro's installed Metal pill measured 81.833 ms median / 101.002 ms
+p95; its optimization profile is unknown, so this is not a controlled release-to-release comparison.
 `run-input-probe.py` drives an independent underlay and twenty raw-motion enter/click/leave/click
 cycles. Build `mouse-path.swift`, copy it to a stable path and ad-hoc sign once before the
 user grants Accessibility. Do not replace the granted binary. The runner defaults to
@@ -124,9 +129,9 @@ user grants Accessibility. Do not replace the granted binary. The runner default
 `RUNE_OVERLAY_TRACE_INPUT=1` to log regions, monitor callbacks, polls, and native input flips.
 
 The capture helper uses ScreenCaptureKit with and without the exact CGWindowID in
-`excludingWindows`. It checks permission first and exits 77 if unavailable. Pro's helper
-currently lacks Screen Recording permission, so exclusion by that filter is unverified.
-Granting permission is a separate user action.
+`excludingWindows`. It checks permission first and exits 77 if unavailable. Capture exclusion
+is **pending Scrawl integration**: Scrawl.app will verify its CGWindowID exclusion filter
+using its existing Screen Recording permission. The probe does not change TCC.
 
 For click-through checks, use an independent underlay process. A coordinate-only synthetic
 click does not establish that native mouse-move observation ran first. Check actual pointer

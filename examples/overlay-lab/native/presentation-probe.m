@@ -8,6 +8,15 @@
 static id<CAMetalDrawable> (*originalNext)(id, SEL);
 static void (*originalOut)(id, SEL, id);
 static void (*originalAlpha)(id, SEL, CGFloat);
+static void (*originalFront)(id, SEL);
+static void orderFront(NSWindow *window, SEL selector) {
+    double requested = CACurrentMediaTime();
+    BOOL wasVisible = window.visible;
+    originalFront(window, selector);
+    fprintf(stderr, "probe front window=%ld requested=%.9f was_visible=%d panel=%d level=%ld view=%s\n",
+        (long)window.windowNumber, requested, wasVisible, [window isKindOfClass:NSPanel.class],
+        (long)window.level, class_getName(window.contentView.class));
+}
 static void setAlpha(NSWindow *window, SEL selector, CGFloat alpha) {
     originalAlpha(window, selector, alpha);
     if (![window isKindOfClass:NSPanel.class]) return;
@@ -65,4 +74,6 @@ __attribute__((constructor)) static void install(void) {
     originalOut = (void *)method_setImplementation(out, (IMP)orderOut);
     Method alpha = class_getInstanceMethod(NSWindow.class, @selector(setAlphaValue:));
     originalAlpha = (void *)method_setImplementation(alpha, (IMP)setAlpha);
+    Method front = class_getInstanceMethod(NSWindow.class, @selector(orderFrontRegardless));
+    originalFront = (void *)method_setImplementation(front, (IMP)orderFront);
 }
