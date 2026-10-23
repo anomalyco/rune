@@ -210,7 +210,9 @@ impl<S: 'static> Runtime<S> {
                 None if ev.mods.shift => order.len() - 1,
                 None => 0,
             };
-            self.set_focus(Some(self.nodes[order[next]].path.clone()), true);
+            let path = self.nodes[order[next]].path.clone();
+            self.set_focus(Some(path.clone()), true);
+            tx.scroll_to.push(path);
             self.enter_links(order[next], ev.mods.shift);
             return true;
         }
@@ -241,7 +243,8 @@ impl<S: 'static> Runtime<S> {
                 let follows = n.role == "radio" || n.role == "tab" || self.nodes[g].focus.follows;
                 let action = follows.then(|| n.on_press.clone()).flatten();
                 let path = n.path.clone();
-                self.set_focus(Some(path), true);
+                self.set_focus(Some(path.clone()), true);
+                tx.scroll_to.push(path);
                 if let Some(f) = action { f(handler_state(&mut self.state), tx); }
                 return true;
             }
@@ -608,5 +611,34 @@ mod tests {
         press(&mut rt, Key::Tab); assert_eq!(focused(&rt), "field");
         rt.set_full_keyboard_access(true);
         press(&mut rt, Key::Tab); assert_eq!(focused(&rt), "button");
+    }
+
+    #[test]
+    fn keyboard_focus_scrolls_into_view() {
+        fn view(_: &State, _: &mut Cx<State>) -> El {
+            col().key("root").size(200.0, 200.0).child(button("before"))
+                .child(col().key("viewport").size(200.0, 100.0).scroll(ScrollSpec { stick_bottom: false }).clip_soft(0.0)
+                    .child(col().role("list").focus_group().children((0..10).map(|i| button(&format!("row{i}"))))))
+                .child(button("after"))
+        }
+        let mut rt = Runtime::new(State::default(), view, (200.0, 200.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let visible = |rt: &Runtime<State>, key: &str| {
+            let (_, y) = rt.find(key).unwrap();
+            let (_, top) = rt.find("viewport").unwrap();
+            (top - 50.0..=top + 50.0).contains(&y)
+        };
+        assert!(!visible(&rt, "row9"));
+        key(&mut rt, Key::Tab, false); key(&mut rt, Key::Tab, false);
+        key(&mut rt, Key::End, false);
+        assert_eq!(focused(&rt), "row9");
+        assert!(visible(&rt, "row9"), "arrows reveal the row they reach");
+        key(&mut rt, Key::Tab, false); key(&mut rt, Key::Tab, true);
+        key(&mut rt, Key::Home, false);
+        assert!(visible(&rt, "row0"));
+        rt.wheel(100.0, 100.0, -2000.0); rt.frame(0.0);
+        key(&mut rt, Key::Tab, true); key(&mut rt, Key::Tab, false);
+        assert_eq!(focused(&rt), "row0");
+        assert!(visible(&rt, "row0"), "Tab reveals the control it reaches");
     }
 }

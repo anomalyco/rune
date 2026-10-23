@@ -5,6 +5,9 @@ without a code change (goldens, layout, input), newest first, with the rev that 
 
 ## dev
 
+- **Keyboard focus scrolls into view.** Tab, Shift-Tab, arrows, Home, End and type-select
+  reveal the control they reach inside its scroll view, as `Tx::scroll_into_view` does, so
+  focus never moves off-screen.
 - **Overlay drags report screen travel.** When an overlay moves its own window (`place`,
   `set_placement`, `set_align`) during a drag, `Drag::dx`/`dy` keep measuring pointer travel
   instead of travel relative to the moving window, so a dragged capsule follows the pointer
