@@ -172,8 +172,8 @@ impl MenuItem {
                 layer.extend(deeper);
             }
         }
-        if disabled {
-            e = e.opacity(if standard { 1.0 } else { 0.5 });
+        if disabled && !standard {
+            e = e.dim(0.5);
         }
         self.acts.apply(e.focusable(!disabled).focus_ring(1.0, -1.0, c.border_focus), !disabled)
     }

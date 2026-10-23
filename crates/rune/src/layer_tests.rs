@@ -93,6 +93,28 @@ fn isolated_layers_match_scalar_overlap_crossfade_and_nesting() {
 }
 
 #[test]
+fn leaf_dimming_keeps_container_opacity_isolated() {
+    fn view(alpha: &Live<f32>, _: &mut Cx<Live<f32>>) -> El {
+        el().size(32.0, 16.0).live_opacity(alpha)
+            .child(el().size(24.0, 8.0).absolute(4.0, 4.0).fill(Color::WHITE))
+            .child(el().size(12.0, 8.0).absolute(10.0, 4.0).fill(Color::WHITE))
+            .dim(0.5)
+    }
+    let gpu = Gpu::headless();
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let target = Offscreen::new(&gpu.device, 32, 16);
+    let mut rt = Runtime::new(Live::new(0.5), view, (32.0, 16.0), Env { scale: 1.0, system_dark: true });
+    for (alpha, targets) in [(0.5, 1), (1.0, 0)] {
+        rt.state.set(alpha); rt.frame(0.0);
+        renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (32, 16));
+        assert_eq!(renderer.layer_stats().targets, targets);
+        let out = pixels(&gpu, &renderer, &target);
+        near(&out[(8*32+6)*4..(8*32+7)*4], rgba([0.5 * alpha; 4]));
+        near(&out[(8*32+16)*4..(8*32+17)*4], rgba([0.75 * alpha; 4]));
+    }
+}
+
+#[test]
 fn dissolve_keeps_opaque_coverage_and_isolates_each_state() {
     type State = (Live<f32>, Live<f32>);
     fn view(s: &State, _: &mut Cx<State>) -> El {

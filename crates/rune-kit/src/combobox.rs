@@ -195,7 +195,7 @@ impl<S: 'static> Combobox<S> {
                 .child(text(&option.label).font(k.ty.ui_compact).color(k.c.text_base).grow(1.0).shrink().truncate())
                 .child(icon(k.glyph.check_small, 14.0).color(k.c.icon_base)
                     .opacity(if self.current.as_deref() == Some(id.as_str()) { 1.0 } else { 0.0 }));
-            if option.disabled { item = item.opacity(0.5); } else {
+            if option.disabled { item = item.dim(0.5); } else {
                 item = item.on_hover(move |s: &mut S| {
                     let state = hover_access(s);
                     state.active = Some(hover_id.clone()); state.query = state.search.text.clone();

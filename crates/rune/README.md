@@ -408,11 +408,18 @@ Targets use 64-pixel buckets, reused while they fit and occupy at most twice the
 cover only the used rectangle. Static translucent containers also cost a target and pass each
 presentation; target resources and planning capacity are reused, but contents are redrawn.
 
+For static disabled styling, `El::dim(alpha)` distributes a fixed alpha to each element's own
+paint in the built subtree, including fills, strokes, text, icons, images and native surfaces.
+Call it after adding children. It neither changes inherited/hit-test opacity nor introduces
+layers. Rune-kit uses this for disabled controls; normal container `opacity` still isolates.
+
 The manual kit-gallery `disabled_controls_gpu_cost` benchmark combines radio, text-input and
 select state stories plus disabled segmented controls at 1024×640 pt, 2×. On M4 Pro/Metal,
-60 paired frames measured legacy/isolated median **0.927917/1.076041 ms** (+0.148124 ms),
-p95 **0.930000/1.109167 ms**, with seven targets (1,605,632 bytes). This measures the whole
-GPU frame, not CPU planning. Content caching remains a separate policy decision.
+60 paired frames originally measured legacy/isolated median **0.927917/1.076041 ms** with
+seven targets (1,605,632 bytes). Disabled leaf styling now measures **0.948250 ms** median,
+**0.950583 ms** p95, with **zero targets/passes/allocations** (flat reference: 0.948333 ms).
+This measures the whole GPU frame, not CPU planning. Layer content caching is unnecessary
+for these controls; ordinary container opacity keeps its correct isolation semantics.
 
 Low-level compositors can use `Instance::begin_layer(bounds, clip, LayerSpec { opacity, ..Default::default() })` and
 `Instance::end_layer()`. Bounds are device-pixel `[x,y,w,h]`; include native surfaces and the full

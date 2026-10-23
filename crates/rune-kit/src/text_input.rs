@@ -16,7 +16,7 @@ fn shell(k: &Kit, e: El, sheen: [f32; 2], state: State, invalid: bool, focused: 
         .gradient(k.light(sheen[0]), k.light(sheen[1]))
         .motion(k.motion.control);
     if state == State::Disabled {
-        return shadows(e, &k.elevation.button_neutral).opacity(0.5);
+        return shadows(e, &k.elevation.button_neutral).dim(0.5);
     }
     if invalid {
         e = e.outline(1.0, 0.0, c.danger.fg);
@@ -390,6 +390,6 @@ impl TextField {
         if let Some(e) = &self.error {
             root = root.child(text(e.clone()).key("error").font(k.ty.text_xsmall_medium).color(c.danger.fg));
         }
-        if self.state == State::Disabled { root.opacity(0.5) } else { root }
+        if self.state == State::Disabled { root.dim(0.5) } else { root }
     }
 }

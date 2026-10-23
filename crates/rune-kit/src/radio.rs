@@ -86,7 +86,7 @@ impl RadioItem {
             control = control.hover(c.hover);
         }
         if disabled {
-            control = control.opacity(0.5);
+            control = control.dim(0.5);
         }
         if self.state == State::Focus {
             control = control.outline(2.0, 1.0, c.border_focus);

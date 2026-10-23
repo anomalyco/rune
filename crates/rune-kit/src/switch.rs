@@ -69,7 +69,7 @@ impl Switch {
         let hover = self.state == State::Hover;
         let disabled = self.state == State::Disabled;
         let control = if self.standard { self.standard_control(k, hover) } else { self.compact_control(k, hover) };
-        let control = if disabled { control.opacity(if self.standard { 1.0 } else { 0.5 }) } else { control };
+        let control = if disabled && !self.standard { control.dim(0.5) } else { control };
         let control = if self.state == State::Focus && !self.standard {
             control.outline(2.0, 1.0, c.border_focus)
         } else {

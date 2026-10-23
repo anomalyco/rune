@@ -1,4 +1,4 @@
-//! Manual, headless comparison of legacy per-primitive opacity and isolated disabled controls.
+//! Manual, headless disabled-control timing and legacy per-instance pixel comparison.
 use super::*;
 use rune::render::{Gpu, Instance, Renderer, Offscreen, OFFSCREEN_FORMAT, KIND_LAYER, KIND_LAYER_END, KIND_GRADIENT};
 
@@ -38,6 +38,50 @@ fn legacy(instances: &[Instance]) -> Vec<Instance> {
 }
 
 #[test]
+#[ignore = "manual byte-for-byte disabled styling check; provide RUNE_KIT_PIXEL_BASELINE"]
+fn disabled_controls_match_legacy_pixels() {
+    // Record against the pre-dimming kit source (reconstructing dev's per-instance opacity),
+    // then run without RECORD on the new source. Keep the directory outside HiveMind's checkout.
+    let directory = std::path::PathBuf::from(std::env::var_os("RUNE_KIT_PIXEL_BASELINE").unwrap());
+    let record = std::env::var_os("RUNE_KIT_RECORD_BASELINE").is_some();
+    std::fs::create_dir_all(&directory).unwrap();
+    let gpu = Gpu::headless();
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    for dark in [false, true] {
+        for scale in [1.0, 2.0] {
+            let target = Offscreen::new(&gpu.device, (1024.0 * scale) as u32, (800.0 * scale) as u32);
+            for story in ["ui-button--all-states", "ui-icon-button--all-states", "ui-radio--states",
+                "ui-text-input--states", "ui-textarea--states", "ui-select--disabled",
+                "ui-switch--states", "ui-menu--basic", "ui-segmented-control--basic"] {
+                let Some((_, setup)) = stories::SCENES.iter().find(|(id, _)| *id == story) else { panic!("missing {story}") };
+                let mut s = init(); setup(&mut s);
+                let text = rune::text::TextSystem::new(rune_theme_opencode::FONTS, rune_theme_opencode::FAMILIES);
+                let mut rt = rune::Runtime::with_text(s, view, (1024.0, 800.0), rune::Env { scale, system_dark: dark }, text);
+                rt.frame(0.0); rt.settle_all(); rt.frame(0.0);
+                if record && story == "ui-button--all-states" {
+                    assert!(rt.instances.iter().any(|i| i.params[1] == KIND_LAYER),
+                        "record the legacy baseline with the pre-dimming kit source");
+                }
+                let instances = if record { legacy(&rt.instances) } else { rt.instances.clone() };
+                renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &instances, ((1024.0 * scale) as u32, (800.0 * scale) as u32));
+                let mut encoder = gpu.device.create_command_encoder(&Default::default());
+                renderer.draw(&mut encoder, &target.view, [0.0; 4]); target.copy(&mut encoder);
+                gpu.queue.submit([encoder.finish()]);
+                let pixels = target.read(&gpu.device);
+                let path = directory.join(format!("{story}-{dark}-{scale}.rgba"));
+                if record { std::fs::write(path, pixels).unwrap(); }
+                else {
+                    let before = std::fs::read(path).unwrap();
+                    let differences = pixels.iter().zip(&before).filter(|(a, b)| a != b).count();
+                    assert_eq!(pixels.len(), before.len());
+                    assert_eq!(differences, 0, "{story} dark={dark} scale={scale}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "manual disabled-controls GPU comparison; run through HiveMind"]
 fn disabled_controls_gpu_cost() {
     let gpu = Gpu::headless();
@@ -47,13 +91,14 @@ fn disabled_controls_gpu_cost() {
     let mut rt = rune::Runtime::with_text(init(), disabled_controls, (1024.0, 640.0),
         rune::Env { scale: 2.0, system_dark: true }, text);
     rt.frame(0.0); rt.settle_all(); rt.frame(0.0);
+    assert!(rt.instances.iter().all(|i| i.params[1] != KIND_LAYER && i.params[1] != KIND_LAYER_END));
     let old = legacy(&rt.instances);
     let mut renderers = [Renderer::new(&gpu.device, OFFSCREEN_FORMAT), Renderer::new(&gpu.device, OFFSCREEN_FORMAT)];
     for (renderer, instances) in renderers.iter_mut().zip([&old, &rt.instances]) {
         rt.text.atlas.dirty = Some((0, rune::text::ATLAS_SIZE));
         renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, instances, (2048, 1280));
     }
-    assert!(renderers[1].layer_stats().targets >= 4, "exercise disabled multi-draw controls");
+    assert_eq!(renderers[1].layer_stats().targets, 0, "disabled styling must stay on the direct path");
     let target = Offscreen::new(&gpu.device, 2048, 1280);
     for _ in 0..8 {
         for renderer in &renderers {
@@ -89,7 +134,7 @@ fn disabled_controls_gpu_cost() {
     read.slice(..).map_async(wgpu::MapMode::Read, |r| r.unwrap());
     gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     let bytes = read.slice(..).get_mapped_range().unwrap();
-    for (mode, name) in ["legacy", "isolated"].into_iter().enumerate() {
+    for (mode, name) in ["flat-reference", "disabled-leaves"].into_iter().enumerate() {
         let mut ms: Vec<f64> = bytes.chunks_exact(32).map(|b| {
             let b = &b[mode * 16..mode * 16 + 16];
             let a = u64::from_le_bytes(b[..8].try_into().unwrap());

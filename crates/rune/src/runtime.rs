@@ -2359,6 +2359,9 @@ impl<S: 'static> Runtime<S> {
             }
 
             if effective_opacity > 0.001 && o > 0.001 && visible {
+                // Disabled styling is distributed to each authored paint leaf at build time.
+                // Keep this local to emission: it neither propagates to children nor opens scopes.
+                let o = o * n.vis.paint_alpha;
                 let k_px = sc * s;
                 for (k, sh) in n.vis.shadows.iter().enumerate() {
                     let c = if k < P_SHADOWS.len() { self.color(n.id, P_SHADOWS[k], sh.color) } else { sh.color };

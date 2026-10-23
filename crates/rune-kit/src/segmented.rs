@@ -121,7 +121,7 @@ impl SegmentedControl {
             }
             match st {
                 State::Focus => seg = seg.outline(2.0, 1.0, c.border_focus),
-                State::Disabled => seg = seg.opacity(0.45),
+                State::Disabled => seg = seg.dim(0.45),
                 _ => {}
             }
             if st != State::Disabled

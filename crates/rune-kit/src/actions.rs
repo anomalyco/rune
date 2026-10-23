@@ -129,7 +129,6 @@ fn paint(k: &Kit, mut e: El, s: Skin, state: State, interactive: bool) -> El {
     }
     match state {
         State::Focus if interactive => e.outline(2.0, 2.5, k.c.border_focus),
-        State::Disabled => e.opacity(s.disabled_opacity),
         _ => e,
     }
 }
@@ -213,6 +212,7 @@ impl Button {
             font = k.ty.ui;
         }
         let (ink, icon_c) = (s.ink, s.icon);
+        let disabled_alpha = s.disabled_opacity;
         let interactive = self.variant != ButtonVariant::Loading;
         let enabled = self.state != State::Disabled && interactive;
         let mut e = row().role("button").label(self.label.clone()).h(h).px(px).gap(6.0).center().radius(radius);
@@ -221,6 +221,7 @@ impl Button {
             e = e.child(icon(i, 16.0).key("icon").color(icon_c));
         }
         e = e.child(text(self.label).key("label").font(font).color(ink));
+        if self.state == State::Disabled { e = e.dim(disabled_alpha); }
         self.acts.apply(e, enabled)
     }
 }
@@ -322,12 +323,14 @@ impl IconButton {
             s.icon = if self.variant == IconButtonVariant::GhostMuted { k.c.icon_base } else { s.icon };
         }
         let ink = s.icon;
+        let disabled_alpha = s.disabled_opacity;
         let enabled = self.state != State::Disabled;
         let mut e = row().role("button").size(side, side).center().radius(radius);
         if let Some(l) = self.label {
             e = e.label(l);
         }
         e = paint(k, e, s, self.state, true).child(icon(self.icon, 16.0).key("icon").color(ink));
+        if self.state == State::Disabled { e = e.dim(disabled_alpha); }
         self.acts.apply(e, enabled)
     }
 }

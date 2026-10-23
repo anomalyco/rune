@@ -272,6 +272,8 @@ pub struct Visual {
     pub border: Color,
     pub shadows: Vec<Shadow>,
     pub opacity: f32,
+    /// Static alpha of this element's own paint; never inherited or isolated.
+    pub paint_alpha: f32,
     pub blend: crate::render::Blend,
     pub hover: Color,
     pub press: Color,
@@ -308,6 +310,7 @@ impl Default for Visual {
             border: Color::TRANSPARENT,
             shadows: Vec::new(),
             opacity: 1.0,
+            paint_alpha: 1.0,
             blend: crate::render::Blend::SourceOver,
             hover: Color::TRANSPARENT,
             press: Color::TRANSPARENT,
@@ -877,6 +880,18 @@ impl El {
     }
     pub fn opacity(mut self, o: f32) -> Self {
         self.vis.opacity = o;
+        self
+    }
+    /// Dim each paint leaf in the currently built subtree, independently. Unlike `opacity`,
+    /// overlapping draws retain their individual coverage and no group layer is introduced.
+    /// Call after adding children. Useful for static disabled styling; animation and hit-test
+    /// opacity still belong to `opacity` / `live_opacity`.
+    pub fn dim(mut self, alpha: f32) -> Self {
+        fn apply(e: &mut El, alpha: f32) {
+            e.vis.paint_alpha *= alpha;
+            for child in &mut e.children { apply(child, alpha); }
+        }
+        apply(&mut self, alpha.clamp(0.0, 1.0));
         self
     }
     /// Isolate this container even at opacity 1 and add its children's premultiplied colours.
