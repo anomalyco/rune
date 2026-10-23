@@ -1,6 +1,6 @@
 import { useEffect, useState, type JSX, type MouseEvent } from "react"
 import { layers, milestones, principles, risks } from "./content"
-import { ArchitectureView, HomeView, NotFoundView, PrinciplesView, RoadmapView, num } from "./pages"
+import { ArchitectureView, HomeView, HowItWorksView, NotFoundView, PrinciplesView, RoadmapView, num } from "./pages"
 import { stripBase, withBase } from "./base"
 import { REPO, normalizePath } from "./routes"
 import signature from "./footer-signature.svg"
@@ -30,11 +30,16 @@ function navGroups(pathname: string): NavGroup[] {
       label: "Rune",
       items: [
         page("/", "Overview", [spy("status", "Status"), spy("next", "Next")]),
-        page(
-          "/principles",
-          "Principles",
-          principles.map((p, i) => spy(p.slug, p.title, num(i))),
-        ),
+        page("/how-it-works", "How it works", [
+          spy("frame", "A frame"),
+          spy("app", "A window and a view"),
+          spy("state", "State changes in handlers"),
+          spy("springs", "Springs keep their velocity"),
+          spy("live", "Values that skip the view"),
+          spy("threads", "Threads"),
+          spy("testing", "Tests without a window"),
+          spy("crates", "Where the code lives"),
+        ]),
         page("/architecture", "Architecture", [
           spy("overview", "Overview"),
           spy("channel", "The command channel"),
@@ -44,6 +49,11 @@ function navGroups(pathname: string): NavGroup[] {
           spy("decisions", "Decisions"),
           spy("gpui", "Why not fork GPUI"),
         ]),
+        page(
+          "/principles",
+          "Principles",
+          principles.map((p, i) => spy(p.slug, p.title, num(i))),
+        ),
         page("/roadmap", "Roadmap", [
           heading("milestones", "Milestones"),
           ...milestones.map(m => spy(m.id, m.title)),
@@ -108,6 +118,7 @@ export function App({ pathname: initial }: { pathname?: string }) {
 
   const views: Record<string, () => JSX.Element> = {
     "/": HomeView,
+    "/how-it-works": HowItWorksView,
     "/principles": PrinciplesView,
     "/architecture": ArchitectureView,
     "/roadmap": RoadmapView,

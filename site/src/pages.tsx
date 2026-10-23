@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import { decisions, layers, milestones, principles, risks, type Entry, type Milestone } from "./content"
-import { ArchitectureDiagram } from "./Diagram"
+import { Code } from "./Code"
+import { ArchitectureDiagram, CrateMap, FrameDiagram, TestDiagram, ThreadDiagram } from "./Diagram"
 import { withBase } from "./base"
 import { REPO } from "./routes"
 import { PageHead, SectionHead } from "./system/Frame"
@@ -87,7 +88,8 @@ export function HomeView() {
           coding agents.
         </p>
         <p>
-          The code and the full plan are at <a href={REPO}>anomalyco/rune</a>.
+          <a href={withBase("/how-it-works")}>How it works</a> follows one frame through the code and shows real
+          examples. The code and the full plan are at <a href={REPO}>anomalyco/rune</a>.
         </p>
       </PageHead>
 
@@ -129,7 +131,133 @@ export function HomeView() {
         </SectionHead>
       </section>
 
-      <Pager next={["/principles", "Principles"]} />
+      <Pager next={["/how-it-works", "How it works"]} />
+    </>
+  )
+}
+
+export function HowItWorksView() {
+  return (
+    <>
+      <PageHead eyebrow={<span>How it works</span>} title="How Rune works">
+        <p>
+          You write a function from your app's state to a keyed tree of elements. Rune lays the tree out, animates
+          every change on springs and draws the frame with wgpu.
+        </p>
+        <p>
+          This page follows one frame through the code, then shows the code you write. Every example is cut from
+          Rune's source when the site builds and links to the lines it came from.
+        </p>
+      </PageHead>
+
+      <section className="doc-section">
+        <SectionHead id="frame" title="A frame">
+          <p>
+            Each frame runs these steps in order, in <code>Runtime::frame</code> and the window's redraw. The view
+            function only runs when state changed, so animating costs your code nothing.
+          </p>
+        </SectionHead>
+        <FrameDiagram />
+      </section>
+
+      <section className="doc-section">
+        <SectionHead id="app" title="A window and a view">
+          <p>
+            An app is a state type, a view function and an <code>AppSpec</code>. <code>rune::run</code> opens the
+            window, or renders headless when given a flag like <code>--snap</code>. Scenes are named starting states
+            for those renders. This is the <a href={withBase("/")}>Settings window</a> from the overview.
+          </p>
+        </SectionHead>
+        <div className="code-stack">
+          <Code id="app-cargo" />
+          <Code id="app-main" />
+        </div>
+      </section>
+
+      <section className="doc-section">
+        <SectionHead id="state" title="State changes in handlers">
+          <p>
+            A handler is a plain function that gets <code>&amp;mut</code> state. Handlers are queued and run between
+            frames, then the view re-runs and the new tree is matched to the old one by key. The toggle never animates
+            anything itself. It says where the knob should be, and <code>.motion(motion::SNAPPY)</code> names the
+            spring that gets it there.
+          </p>
+        </SectionHead>
+        <div className="code-stack">
+          <Code id="toggle" />
+          <Code id="motion-tokens" />
+        </div>
+      </section>
+
+      <section className="doc-section">
+        <SectionHead id="springs" title="Springs keep their velocity">
+          <p>
+            <code>Spring::new(duration, bounce)</code> uses SwiftUI's numbers: ω&nbsp;=&nbsp;2π&nbsp;/&nbsp;duration
+            and ζ&nbsp;=&nbsp;1&nbsp;−&nbsp;bounce. Each animated property is a track of closed-form spring segments, so
+            its position and velocity are exact at any time. When the target changes mid-flight, the new segment
+            starts from that position and velocity, so the value turns smoothly instead of jumping or stopping. This
+            test checks it.
+          </p>
+        </SectionHead>
+        <Code id="retarget" />
+      </section>
+
+      <section className="doc-section">
+        <SectionHead id="live" title="Values that change every frame skip the view">
+          <p>
+            Audio levels, remote cursors and drag positions change too often to go through state.
+            A <code>Live&lt;T&gt;</code> binds straight to a property, and any thread can set it. The test checks that
+            setting four of them runs no view, layout or text shaping.
+          </p>
+        </SectionHead>
+        <Code id="live" />
+      </section>
+
+      <section className="doc-section">
+        <SectionHead id="threads" title="Threads">
+          <p>
+            Springs belong to the runtime's <code>Scene</code>, which today lives on the main thread with everything
+            else. The <a href={withBase("/architecture")}>architecture</a> moves it to a render thread.
+          </p>
+        </SectionHead>
+        <ThreadDiagram />
+      </section>
+
+      <section className="doc-section">
+        <SectionHead id="testing" title="Tests run without a window">
+          <p>
+            A test builds a <code>Runtime</code> from a state and a view, steps it frame by frame and reads back what
+            it laid out. The same binaries take flags that render PNGs, play input scripts and write motion traces.
+          </p>
+        </SectionHead>
+        <TestDiagram />
+        <div className="code-stack">
+          <Code id="test-segmented" />
+          <Code id="tap-script" />
+          <Code id="snap-commands" />
+        </div>
+        <div className="prose prose-after">
+          <p>
+            The renderer is checked against a reference. <code>rune-ref</code> draws the same instances on the CPU
+            with strict float rules, and a hash of each generated scene is pinned in <code>goldens.json</code>. A
+            differential test then holds the GPU to within 2 levels per channel of the CPU image.
+          </p>
+        </div>
+        <Code id="golden-hashes" />
+      </section>
+
+      <section className="doc-section">
+        <SectionHead id="crates" title="Where the code lives">
+          <p>
+            The workspace is a few crates. <code>rune</code> holds most of the framework and builds on these
+            foundations.
+          </p>
+        </SectionHead>
+        <CrateMap />
+        <Code id="rune-deps" />
+      </section>
+
+      <Pager prev={["/", "Overview"]} next={["/architecture", "Architecture"]} />
     </>
   )
 }
@@ -148,37 +276,23 @@ export function PrinciplesView() {
           <Rule key={p.slug} entry={p} number={num(i)} />
         ))}
       </div>
-      <Pager prev={["/", "Overview"]} next={["/architecture", "Architecture"]} />
+      <Pager prev={["/architecture", "Architecture"]} next={["/roadmap", "Roadmap"]} />
     </>
   )
 }
-
-const rustToggle = `fn toggle(p: Paint, on: bool) -> El {
-    let (w, h, k) = (38.0, 22.0, 18.0);
-    let inset = (h - k) / 2.0;
-    el().key("switch")
-        .role("switch")
-        .size(w, h)
-        .radius(h / 2.0)
-        .fill(if on { p.accent } else { p.t.control_off })
-        .motion(motion::SNAPPY)
-        .child(
-            el().key("knob")
-                .size(k, k)
-                .absolute(if on { w - k - inset } else { inset }, inset)
-                .radius(k / 2.0)
-                .fill(p.t.knob),
-        )
-}`
 
 export function ArchitectureView() {
   return (
     <>
       <PageHead eyebrow={<span>Architecture</span>} title="How Rune is built">
         <p>
-          A Rune app runs on two threads. The app side turns state into a keyed tree and lays it out at its target
-          state. The render thread owns what's on screen and animates toward those targets. Everything between them
-          goes through one command channel.
+          The design splits a Rune app across two threads. The app side turns state into a keyed tree and lays it out
+          at its target state. The render thread owns what's on screen and animates toward those targets. Everything
+          between them goes through one command channel.
+        </p>
+        <p>
+          This page is the target from <a href={`${REPO}/blob/dev/PLAN.md`}>PLAN.md</a>. Today both sides run on one
+          thread, in the order shown in <a href={withBase("/how-it-works#frame")}>How it works</a>.
         </p>
       </PageHead>
 
@@ -217,11 +331,7 @@ export function ArchitectureView() {
         <div className="rules">
           {layers.map((l, i) => (
             <Rule key={l.slug} entry={l} number={num(i)}>
-              {l.slug === "tree" && (
-                <pre className="code">
-                  <code>{rustToggle}</code>
-                </pre>
-              )}
+              {l.slug === "tree" && <Code id="toggle-only" />}
             </Rule>
           ))}
         </div>
@@ -273,7 +383,7 @@ export function ArchitectureView() {
       </section>
       </div>
 
-      <Pager prev={["/principles", "Principles"]} next={["/roadmap", "Roadmap"]} />
+      <Pager prev={["/how-it-works", "How it works"]} next={["/principles", "Principles"]} />
     </>
   )
 }
@@ -325,7 +435,7 @@ export function RoadmapView() {
         </div>
       </section>
 
-      <Pager prev={["/architecture", "Architecture"]} />
+      <Pager prev={["/principles", "Principles"]} />
     </>
   )
 }

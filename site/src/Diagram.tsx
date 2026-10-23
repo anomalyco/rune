@@ -67,3 +67,218 @@ export function ArchitectureDiagram() {
     </figure>
   )
 }
+
+type Step = { name: string; does: string; at: string }
+
+const everyFrameBefore: Step[] = [
+  { name: "Input", does: "The window queues clicks, keys and scrolls; poll() reads outside data.", at: "window.rs" },
+  { name: "Handlers", does: "Queued handlers run with &mut access to the app's state.", at: "runtime.rs" },
+]
+const onChange: Step[] = [
+  { name: "View", does: "The view function returns a keyed El tree, matched to the last one by key.", at: "fn view(&S, &mut Cx<S>) -> El" },
+  { name: "Layout", does: "Taffy lays the tree out at its target state; Parley shapes the text.", at: "Taffy, Parley" },
+  { name: "Targets", does: "Each changed rect, colour or opacity retargets its spring.", at: "rune-motion Scene" },
+]
+const everyFrameAfter: Step[] = [
+  { name: "Springs", does: "Every track is sampled at the frame's time; scroll and reveals step too.", at: "rune-motion" },
+  { name: "Draw", does: "Rects, shadows and glyphs become instances in one wgpu pipeline.", at: "render.rs" },
+]
+
+function Steps({ steps, from }: { steps: Step[]; from: number }) {
+  return steps.map((s, i) => (
+    <li key={s.name} className="dg-step">
+      <span className="dg-num">{String(from + i).padStart(2, "0")}</span>
+      <span className="dg-name">{s.name}</span>
+      <span className="dg-does">{s.does}</span>
+      <code className="dg-at">{s.at}</code>
+    </li>
+  ))
+}
+
+/** One frame, top to bottom, as `Runtime::frame` and the window's redraw run it today. */
+export function FrameDiagram() {
+  return (
+    <figure className="dg" aria-labelledby="frame-caption">
+      <ol className="dg-flow">
+        <Steps steps={everyFrameBefore} from={1} />
+        <li className="dg-group">
+          <p className="dg-group-label">Only when state changed</p>
+          <ol className="dg-flow">
+            <Steps steps={onChange} from={3} />
+          </ol>
+        </li>
+        <Steps steps={everyFrameAfter} from={6} />
+      </ol>
+      <figcaption id="frame-caption">
+        Steps 3–5 run only after a handler or <code>poll()</code> changes state. A frame that is only animating runs
+        1, 2, 6 and 7, and a settled window doesn't draw at all.
+      </figcaption>
+    </figure>
+  )
+}
+
+/** Who runs what: one thread today, and the split PLAN.md §3 describes. */
+export function ThreadDiagram() {
+  return (
+    <figure className="dg" aria-labelledby="threads-caption">
+      <div className="dg-pair">
+        <section className="dg-panel">
+          <p className="dg-kicker">Today</p>
+          <div className="dg-box">
+            <h3>Main thread, winit event loop</h3>
+            <ul>
+              <li>Input and handlers</li>
+              <li>View, Taffy and Parley, on a change</li>
+              <li>Springs: the Runtime's Scene, sampled each frame</li>
+              <li>wgpu encode and present</li>
+            </ul>
+          </div>
+          <div className="dg-feeds">
+            <div className="dg-box dg-small">
+              <h3>Your threads</h3>
+              <p><code>Live&lt;T&gt;::set</code> writes an atomic and wakes the window, without re-running the view</p>
+            </div>
+            <div className="dg-box dg-small">
+              <h3>rune-images</h3>
+              <p>Decodes images, then wakes the window</p>
+            </div>
+          </div>
+        </section>
+        <section className="dg-panel" data-planned>
+          <p className="dg-kicker">Planned</p>
+          <div className="dg-box">
+            <h3>App side, main thread</h3>
+            <ul>
+              <li>Handlers, view, diff</li>
+              <li>Taffy and Parley</li>
+            </ul>
+          </div>
+          <p className="dg-link">
+            <span className="dg-arrow" aria-hidden="true" />
+            Command channel: diffs, rects, spring targets down; hits and settles back
+          </p>
+          <div className="dg-box">
+            <h3>Render thread, paced by the display</h3>
+            <ul>
+              <li>Owns the springs, scroll and drags</li>
+              <li>wgpu encode and present</li>
+            </ul>
+          </div>
+        </section>
+      </div>
+      <figcaption id="threads-caption">
+        Today one thread runs every step. Animation still skips app code, because the view only re-runs when state
+        changes. The plan moves springs and drawing to a render thread, so a slow handler can't stall an animation
+        that's already moving.
+      </figcaption>
+    </figure>
+  )
+}
+
+type Crate = { name: string; does: string }
+
+const crateRows: { label: string; crates: Crate[] }[] = [
+  {
+    label: "Apps",
+    crates: [{ name: "examples/*", does: "settings, opencode, kit-gallery, live-values, shapes and others" }],
+  },
+  {
+    label: "Components",
+    crates: [
+      { name: "rune-kit", does: "Button, Switch, Select, Menu, TextField…, reading only semantic tokens" },
+      { name: "themes/opencode", does: "OpenCode's tokens, fonts and icons as a rune-kit theme" },
+    ],
+  },
+  {
+    label: "Framework",
+    crates: [{ name: "rune", does: "El tree, runtime, layout, text, wgpu renderer, window, headless tooling" }],
+  },
+  {
+    label: "Foundations",
+    crates: [
+      { name: "rune-motion", does: "Springs, tracks, presence; no dependencies" },
+      { name: "wgpu · winit · Taffy · Parley", does: "GPU, windows, layout, text" },
+    ],
+  },
+]
+
+const crateSide: Crate[] = [
+  { name: "rune-ref", does: "CPU reference renderer and golden hashes" },
+  { name: "rune-fx", does: "Effect layers: glow, fire, motion blur" },
+  { name: "rune-light", does: "Lighting: soft shadows, god rays, GI" },
+]
+
+/** The workspace: each row builds on the rows below it; the side column is optional. */
+export function CrateMap() {
+  return (
+    <figure className="dg" aria-labelledby="crates-caption">
+      <div className="dg-crates">
+        <ol className="dg-layers">
+          {crateRows.map(row => (
+            <li key={row.label} className="dg-layer">
+              <p className="dg-kicker">{row.label}</p>
+              <div className="dg-layer-row">
+                {row.crates.map(c => (
+                  <div key={c.name} className="dg-box dg-small">
+                    <h3><code>{c.name}</code></h3>
+                    <p>{c.does}</p>
+                  </div>
+                ))}
+              </div>
+            </li>
+          ))}
+        </ol>
+        <aside className="dg-side">
+          <p className="dg-kicker">Beside the core</p>
+          {crateSide.map(c => (
+            <div key={c.name} className="dg-box dg-small">
+              <h3><code>{c.name}</code></h3>
+              <p>{c.does}</p>
+            </div>
+          ))}
+        </aside>
+      </div>
+      <figcaption id="crates-caption">
+        Each row depends only on rows below it. Apps never need the crates beside the core.
+      </figcaption>
+    </figure>
+  )
+}
+
+/** How a test drives the same runtime the window uses, and what it can check. */
+export function TestDiagram() {
+  return (
+    <figure className="dg" aria-labelledby="tests-caption">
+      <div className="dg-test">
+        <div className="dg-box dg-small" data-area="in">
+          <h3>Start</h3>
+          <p>A state, often a named scene, and an optional <code>--script</code> of taps at exact times</p>
+        </div>
+        <span className="dg-arrow" data-area="a1" aria-hidden="true" />
+        <div className="dg-box dg-small" data-area="rt">
+          <h3><code>Runtime</code></h3>
+          <p>The window's runtime, stepped by <code>frame(dt)</code> on a virtual clock, with no window</p>
+        </div>
+        <span className="dg-arrow" data-area="a2" aria-hidden="true" />
+        <ul className="dg-outs" data-area="out">
+          <li className="dg-box dg-small">
+            <h3><code>elements()</code></h3>
+            <p>Rects, text and opacity for <code>assert!</code> in <code>cargo test</code>, no GPU</p>
+          </li>
+          <li className="dg-box dg-small">
+            <h3><code>--snap</code>, <code>--frames</code></h3>
+            <p>Offscreen wgpu to PNG, compared byte for byte with pinned images</p>
+          </li>
+          <li className="dg-box dg-small">
+            <h3><code>--trace</code></h3>
+            <p>Per-frame rects and opacity as JSONL; motion-lint fails pops, jumps and jitter</p>
+          </li>
+        </ul>
+      </div>
+      <figcaption id="tests-caption">
+        Tests and agents run the same code path as the window, minus the window. Time only moves when the test steps it,
+        so a run repeats exactly.
+      </figcaption>
+    </figure>
+  )
+}

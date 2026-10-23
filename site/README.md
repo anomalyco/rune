@@ -11,6 +11,11 @@ static HTML.
 Content lives in `src/content.tsx` (principles, layers, decisions, milestones, risks) and `src/pages.tsx`. The
 source of truth for all of it is `PLAN.md` at the repo root; update the plan first, then the site.
 
+Code examples are cut from Rune's source at build time. `scripts/snippets.ts` lists each one by file and marker,
+highlights it with `scripts/highlight.ts` (copied from Abattoir) and serves the HTML as `virtual:snippets`; pages
+render them with `<Code id="…" />`. A moved or renamed function fails the build with the snippet's name. The
+how-it-works diagrams are plain HTML in `src/Diagram.tsx`.
+
 ## Hosting and deploys
 
 The site is served at https://anoma.ly/team/rune and https://dev.anoma.ly/team/rune, the same way as Abattoir.

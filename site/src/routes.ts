@@ -11,6 +11,13 @@ export const routes: Route[] = [
       "Rune is a Rust UI framework with its own GPU renderer, text, layout, spring animation and thin per-platform shells, written and checked by agents.",
   },
   {
+    path: "/how-it-works",
+    label: "How it works",
+    title: "How it works · Rune",
+    description:
+      "How a Rune frame runs, from input and state through Taffy layout and springs to wgpu, with real code, the thread model, headless tests and the crate map.",
+  },
+  {
     path: "/principles",
     label: "Principles",
     title: "Principles · Rune",
