@@ -5,7 +5,7 @@ use std::ops::Range;
 
 // Linear premultiplied intermediates preserve HDR colours and avoid accumulating 8-bit
 // quantization through nested layers. The destination format is applied only at composition.
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+pub(super) const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 #[cfg(test)]
 #[path = "layer_tests.rs"]
@@ -17,6 +17,7 @@ pub(super) struct Layers {
     pub targets: Vec<Option<Target>>,
     stack: Vec<usize>,
     pipelines: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+    pub additive: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline)>,
     viewport: (u32, u32),
     image_generation: u64,
     allocations: u64,
@@ -29,6 +30,7 @@ struct Layer {
     bounds: [f32; 4], // edges while planning, xywh after preparation
     clip: [f32; 4],
     opacity: f32,
+    blend: Blend,
 }
 
 pub(super) struct Target {
@@ -90,6 +92,7 @@ impl Renderer {
                     bounds: [i.rect[0], i.rect[1], i.rect[0] + i.rect[2], i.rect[1] + i.rect[3]],
                     clip,
                     opacity: if hidden { 0.0 } else { i.fill[3].clamp(0.0, 1.0) },
+                    blend: if i.params[0] == 1.0 { Blend::PlusLighter } else { Blend::SourceOver },
                 });
             } else if i.params[1] == KIND_LAYER_END {
                 let at = self.layers.stack.pop().expect("unbalanced layer end");
@@ -125,11 +128,12 @@ impl Renderer {
         assert!(self.layers.stack.is_empty(), "unclosed layer scope");
         self.layers.targets.resize_with(self.layers.plan.len(), || None);
         for index in 0..self.layers.plan.len() {
+            let additive_parent = self.layers.plan[index].parent.is_some_and(|p| self.layers.plan[p].blend == Blend::PlusLighter);
             let l = &mut self.layers.plan[index];
             l.bounds[2] = (l.bounds[2] - l.bounds[0]).max(0.0);
             l.bounds[3] = (l.bounds[3] - l.bounds[1]).max(0.0);
             if l.bounds[2] == 0.0 || l.bounds[3] == 0.0 { l.opacity = 0.0; }
-            if l.opacity == 0.0 || l.opacity == 1.0 {
+            if l.opacity == 0.0 || (l.opacity == 1.0 && l.blend == Blend::SourceOver && !additive_parent) {
                 self.layers.targets[index] = None;
                 continue;
             }
@@ -164,7 +168,8 @@ impl Renderer {
             }
             let t = self.layers.targets[index].as_ref().unwrap();
             queue.write_buffer(&t.projection, 0, bytemuck::cast_slice(&bounds));
-            let quad = Instance::begin_layer(bounds, NO_CLIP, LayerSpec { opacity: self.layers.plan[index].opacity });
+            let quad = Instance::begin_layer(bounds, NO_CLIP, LayerSpec {
+                opacity: self.layers.plan[index].opacity, blend: self.layers.plan[index].blend });
             queue.write_buffer(&t.quad, 0, bytemuck::bytes_of(&quad));
         }
         // Rebind child composites to their nearest materialized parent (opaque scopes flatten).
@@ -185,6 +190,14 @@ impl Renderer {
             self.add_layer_format(device, self.format);
             for index in 0..self.extra.len() { self.add_layer_format(device, self.extra[index].0); }
         }
+        if self.layers.plan.iter().any(|l| l.blend == Blend::PlusLighter) {
+            if self.layers.additive.is_none() {
+                self.layers.additive = Some((
+                    Self::pipeline_blend(device, &self.layout, &self.shader, FORMAT, self.vertex_entry, Blend::PlusLighter),
+                    Self::pipeline_blend(device, &self.layout, &self.shader, FORMAT, "vs_layer", Blend::PlusLighter)));
+            }
+            if let Some(s) = &mut self.surfaces { s.add_plus_lighter(device, FORMAT); }
+        }
         self.refresh_layer_bindings(device);
         if had_layers || !self.layers.plan.is_empty() { self.position_layer_surfaces(queue); }
     }
@@ -201,6 +214,10 @@ impl Renderer {
             layer = self.layers.plan[index].parent;
         }
         None
+    }
+
+    pub(super) fn layer_blend(&self, target: Option<usize>) -> Blend {
+        target.map_or(Blend::SourceOver, |p| self.layers.plan[p].blend)
     }
 
     pub(super) fn images_changed(&mut self) { self.layers.image_generation += 1; }
@@ -264,7 +281,9 @@ impl Renderer {
             assert!(l.end < range.end, "draw_range must not split a layer scope");
             self.draw_plain(pass, format, cursor..l.begin, target, true);
             if let Some(t) = &self.layers.targets[index] {
-                let pipeline = &self.layers.pipelines.iter().find(|(f, _)| *f == format).expect("Renderer::add_format first").1;
+                let pipeline = if self.layer_blend(target) == Blend::PlusLighter {
+                    &self.layers.additive.as_ref().expect("prepared dissolve").1
+                } else { &self.layers.pipelines.iter().find(|(f, _)| *f == format).expect("Renderer::add_format first").1 };
                 pass.set_pipeline(pipeline);
                 if let Some(properties) = &self.springs { pass.set_bind_group(1, &properties.group, &[]); }
                 pass.set_bind_group(0, &t.composite, &[]);
@@ -293,7 +312,7 @@ impl Renderer {
                 let before = s.before_instance(index);
                 if before < range.start || before > range.end || (before == range.end && !include_end) { continue; }
                 self.draw_instances(pass, format, cursor..before, target);
-                s.draw_format(pass, index, format);
+                s.draw_blended(pass, index, format, self.layer_blend(target));
                 cursor = before;
             }
         }

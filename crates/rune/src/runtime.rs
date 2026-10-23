@@ -2227,7 +2227,7 @@ impl<S: 'static> Runtime<S> {
         // only when isolation requires it; the ordinary painter stream stays byte-identical.
         let tree_order = self.layer_paint_order.windows(2).any(|pair| {
             let n = &self.nodes[pair[0]];
-            self.nodes[pair[1]].parent == Some(pair[0]) && (n.vis.group_opacity.is_some()
+            self.nodes[pair[1]].parent == Some(pair[0]) && (n.vis.blend == crate::render::Blend::PlusLighter || n.vis.group_opacity.is_some()
                 || matches!(n.looping, Some(rune_motion::LoopSpec { kind: rune_motion::LoopKind::Opacity { .. } | rune_motion::LoopKind::OpacityCycle(_), .. }))
                 || self.scene.presented(n.id).is_some_and(|p| p.opacity > 0.0 && p.opacity < 1.0))
         });
@@ -2261,8 +2261,10 @@ impl<S: 'static> Runtime<S> {
             }
             let effective_opacity = (own * pinh.opacity).clamp(0.0, 1.0);
             let next = if tree_order { self.layer_paint_order.get(paint_index + 1).copied() } else { (i + 1 < n_nodes).then_some(i + 1) };
-            let isolate = own > 0.001 && own < 1.0 && effective_opacity > 0.001
-                && next.is_some_and(|j| self.nodes[j].parent == Some(i));
+            let additive_parent = n.parent.is_some_and(|p| self.nodes[p].vis.blend == crate::render::Blend::PlusLighter);
+            let isolate = effective_opacity > 0.001 && (n.vis.blend == crate::render::Blend::PlusLighter
+                || additive_parent || (own > 0.001 && own < 1.0
+                    && next.is_some_and(|j| self.nodes[j].parent == Some(i))));
             let o = if isolate { 1.0 } else { (own * pinh.paint_opacity).clamp(0.0, 1.0) };
             let (mut clip, mut fade) = (pinh.clip, pinh.fade);
             let own_sc = p.transform.scale.x;
@@ -2344,7 +2346,7 @@ impl<S: 'static> Runtime<S> {
             if isolate {
                 layers.push((i, self.instances.len(), self.surfaces.len()));
                 self.instances.push(Instance::begin_layer([r[0], r[1], w, h], clip,
-                    crate::render::LayerSpec { opacity: own * pinh.paint_opacity }));
+                    crate::render::LayerSpec { opacity: own * pinh.paint_opacity, blend: n.vis.blend }));
             }
             // Include native surface geometry, which lives beside the primitive stream.
             if n.vis.surface.is_some() {

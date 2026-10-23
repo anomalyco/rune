@@ -2,6 +2,7 @@ use super::*;
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
 use wgpu::util::DeviceExt;
+use crate::render::Blend;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -64,6 +65,7 @@ pub struct SurfaceRenderer {
     pipeline: wgpu::RenderPipeline,
     format: wgpu::TextureFormat,
     extra: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+    additive: Option<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     cache: HashMap<usize, Arc<Imported>>,
@@ -131,7 +133,7 @@ impl SurfaceRenderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let pipeline = Self::pipeline(device, &layout, format);
+        let pipeline = Self::pipeline(device, &layout, format, Blend::SourceOver);
         Self {
             device: device.clone(),
             timing_pool,
@@ -141,6 +143,7 @@ impl SurfaceRenderer {
             pipeline,
             format,
             extra: Vec::new(),
+            additive: None,
             layout,
             sampler,
             cache: HashMap::new(),
@@ -150,7 +153,7 @@ impl SurfaceRenderer {
         }
     }
 
-    fn pipeline(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, format: wgpu::TextureFormat) -> wgpu::RenderPipeline {
+    fn pipeline(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, format: wgpu::TextureFormat, blend: Blend) -> wgpu::RenderPipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("video"),
             source: wgpu::ShaderSource::Wgsl(include_str!("video.wgsl").into()),
@@ -178,7 +181,7 @@ impl SurfaceRenderer {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    blend: Some(blend.state()),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -189,7 +192,13 @@ impl SurfaceRenderer {
 
     pub(crate) fn add_format(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
         if format != self.format && !self.extra.iter().any(|(f, _)| *f == format) {
-            self.extra.push((format, Self::pipeline(device, &self.layout, format)));
+            self.extra.push((format, Self::pipeline(device, &self.layout, format, Blend::SourceOver)));
+        }
+    }
+
+    pub(crate) fn add_plus_lighter(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
+        if self.additive.as_ref().is_none_or(|(f, _)| *f != format) {
+            self.additive = Some((format, Self::pipeline(device, &self.layout, format, Blend::PlusLighter)));
         }
     }
 
@@ -370,8 +379,15 @@ impl SurfaceRenderer {
         self.draw_format(pass, index, self.format);
     }
     pub(crate) fn draw_format(&self, pass: &mut wgpu::RenderPass<'_>, index: usize, format: wgpu::TextureFormat) {
+        self.draw_blended(pass, index, format, Blend::SourceOver);
+    }
+    pub(crate) fn draw_blended(&self, pass: &mut wgpu::RenderPass<'_>, index: usize, format: wgpu::TextureFormat, blend: Blend) {
         self.draws[index].drawn.store(true, std::sync::atomic::Ordering::Relaxed);
-        pass.set_pipeline(if format == self.format { &self.pipeline } else {
+        pass.set_pipeline(if blend == Blend::PlusLighter {
+            let (f, pipeline) = self.additive.as_ref().expect("prepared dissolve surface");
+            assert_eq!(*f, format);
+            pipeline
+        } else if format == self.format { &self.pipeline } else {
             &self.extra.iter().find(|(f, _)| *f == format).expect("SurfaceRenderer::add_format first").1
         });
         pass.set_bind_group(0, &self.draws[index].bind, &[]);

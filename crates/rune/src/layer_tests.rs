@@ -6,7 +6,7 @@ fn rect(bounds: [f32; 4], color: [f32; 4]) -> Instance {
 }
 
 fn group(bounds: [f32; 4], opacity: f32, color: [f32; 4]) -> Vec<Instance> {
-    vec![Instance::begin_layer(bounds, NO_CLIP, LayerSpec { opacity }),
+    vec![Instance::begin_layer(bounds, NO_CLIP, LayerSpec { opacity, ..Default::default() }),
         rect(bounds, color), rect([bounds[0] + bounds[2] * 0.25, bounds[1], bounds[2] * 0.5, bounds[3]], color),
         Instance::end_layer()]
 }
@@ -58,7 +58,7 @@ fn isolated_layers_match_scalar_overlap_crossfade_and_nesting() {
     }
     assert_eq!(renderer.layer_stats().allocations, allocations + 1, "reuse targets while opacity changes");
 
-    instances = vec![Instance::begin_layer(bounds, NO_CLIP, LayerSpec { opacity: 0.5 })];
+    instances = vec![Instance::begin_layer(bounds, NO_CLIP, LayerSpec { opacity: 0.5, ..Default::default() })];
     instances.extend(group(bounds, 0.5, [1.0; 4]));
     instances.push(Instance::end_layer());
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &instances, (32, 16));
@@ -90,6 +90,80 @@ fn isolated_layers_match_scalar_overlap_crossfade_and_nesting() {
     assert_eq!(ordinary.layers.targets.capacity(), 0);
     assert_eq!(ordinary.layers.stack.capacity(), 0);
     assert_eq!(ordinary.layers.pipelines.capacity(), 0);
+}
+
+#[test]
+fn dissolve_keeps_opaque_coverage_and_isolates_each_state() {
+    type State = (Live<f32>, Live<f32>);
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let state = |alpha: &Live<f32>, color: Color| {
+            el().size(24.0, 8.0).absolute(4.0, 4.0).live_opacity(alpha)
+                .child(el().size(24.0, 8.0).fill(color))
+                .child(el().size(12.0, 8.0).absolute(6.0, 0.0).fill(color))
+        };
+        el().size(32.0, 16.0).dissolve()
+            .child(state(&s.0, Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 }))
+            .child(state(&s.1, Color { r: 0.0, g: 0.0, b: 1.0, a: 1.0 }))
+    }
+    let gpu = Gpu::headless();
+    // Linear destination makes the exact colour-average assertion independent of sRGB encoding.
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let mut renderer = Renderer::new(&gpu.device, format);
+    let target = Offscreen::with_format(&gpu.device, 32, 16, format);
+    let mut rt = Runtime::new((Live::new(0.5), Live::new(0.5)), view, (32.0, 16.0), Env { scale: 1.0, system_dark: true });
+    for t in [0.5, 0.0, 0.25, 0.75, 1.0] {
+        rt.state.0.set(1.0 - t); rt.state.1.set(t); rt.frame(0.0);
+        renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (32, 16));
+        assert!(renderer.layers.targets[0].is_some(), "opaque dissolve parent must remain isolated");
+        let out = pixels(&gpu, &renderer, &target);
+        let want = [((1.0-t)*255.0).round() as u8, 0, (t*255.0).round() as u8, 255];
+        for x in [6, 16, 26] {
+            near(&out[(8*32+x)*4..(8*32+x+1)*4], want);
+            assert_eq!(out[(8*32+x)*4+3], 255, "opaque coverage at t={t}");
+        }
+        near(&out[..4], [0; 4]);
+    }
+    // A sole multi-draw state at opacity 1 still composites internally with source-over.
+    // Using translucent primitives distinguishes correct isolation from additive saturation.
+    let bounds = [4.0, 4.0, 24.0, 8.0];
+    let mut all = vec![Instance::begin_layer(bounds, NO_CLIP, LayerSpec { blend: Blend::PlusLighter, ..Default::default() })];
+    all.extend(group(bounds, 1.0, [0.5, 0.0, 0.0, 0.5]));
+    all.push(Instance::end_layer());
+    renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &all, (32, 16));
+    let out = pixels(&gpu, &renderer, &target);
+    near(&out[(8*32+6)*4..(8*32+7)*4], [128,0,0,128]);
+    near(&out[(8*32+16)*4..(8*32+17)*4], [191,0,0,191]);
+    // Saturate colour as well as alpha, before either the dissolve or enclosing group's fade.
+    let nested = [Instance::begin_layer(bounds, NO_CLIP, LayerSpec { opacity: 0.5, ..Default::default() }),
+        Instance::begin_layer(bounds, NO_CLIP, LayerSpec { opacity: 0.5, blend: Blend::PlusLighter }),
+        rect(bounds, [1.0; 4]), rect(bounds, [1.0; 4]), Instance::end_layer(), Instance::end_layer()];
+    renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &nested, (32, 16));
+    let out = pixels(&gpu, &renderer, &target);
+    near(&out[(8*32+16)*4..(8*32+17)*4], [64; 4]);
+}
+
+#[test]
+fn dissolve_adds_direct_primitives_and_native_surfaces_then_clamps_before_opacity() {
+    use crate::native_surface::{ByteFrame, ColorInfo, Format, NativeSurface, SurfaceDraw, SurfaceFit};
+    let gpu = Gpu::headless();
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let mut renderer = Renderer::new(&gpu.device, format);
+    let target = Offscreen::with_format(&gpu.device, 32, 16, format);
+    let mut atlas = crate::text::TextSystem::default().atlas;
+    let bounds = [4.0, 4.0, 24.0, 8.0];
+    let content = [rect([0.0, 0.0, 32.0, 16.0], [0.0, 1.0, 0.0, 1.0]),
+        Instance::begin_layer(bounds, NO_CLIP, LayerSpec { opacity: 0.5, blend: Blend::PlusLighter }),
+        rect(bounds, [1.0, 0.0, 0.0, 1.0]), Instance::end_layer()];
+    renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &content, (32, 16));
+    let surface = NativeSurface::new();
+    surface.push_bytes(ByteFrame { width: 1, height: 1, format: Format::Bgra, color: ColorInfo::default(),
+        planes: [vec![255, 0, 0, 255], vec![]] }, 1).unwrap();
+    renderer.prepare_surfaces(&gpu.device, &gpu.queue, &[SurfaceDraw { surface, fit: SurfaceFit::Fill,
+        before_instance: 3, rect: bounds, radii: [0.0; 4], clip: NO_CLIP, fade: [0.0; 4], opacity: 1.0 }], (32, 16));
+    let out = pixels(&gpu, &renderer, &target);
+    // Red + blue saturates alpha to 1, then .5 opacity composites over green with source-over.
+    near(&out[(8*32+16)*4..(8*32+17)*4], [128,128,128,255]);
+    near(&out[..4], [0,255,0,255]);
 }
 
 #[test]
@@ -346,7 +420,7 @@ fn layer_gpu_timing_and_stills() {
     for t in [0.25, 0.75] {
         let mut all = vec![rect([0.0, 0.0, 880.0, 320.0], [0.025, 0.025, 0.035, 1.0])];
         for (alpha, color, bar_width) in [(t, [0.03, 0.28, 0.65, 1.0], 360.0), (1.0 - t, [0.45, 0.08, 0.28, 1.0], 480.0)] {
-            all.push(Instance::begin_layer([40.0, 40.0, 800.0, 240.0], NO_CLIP, LayerSpec { opacity: alpha }));
+            all.push(Instance::begin_layer([40.0, 40.0, 800.0, 240.0], NO_CLIP, LayerSpec { opacity: alpha, ..Default::default() }));
             all.push(Instance { radii: [120.0; 4], ..rect([40.0, 40.0, 800.0, 240.0], color) });
             all.push(Instance { radii: [48.0; 4], ..rect([100.0, 112.0, 96.0, 96.0], [1.0; 4]) });
             for y in [120.0, 158.0, 196.0] {

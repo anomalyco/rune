@@ -414,7 +414,7 @@ select state stories plus disabled segmented controls at 1024×640 pt, 2×. On M
 p95 **0.930000/1.109167 ms**, with seven targets (1,605,632 bytes). This measures the whole
 GPU frame, not CPU planning. Content caching remains a separate policy decision.
 
-Low-level compositors can use `Instance::begin_layer(bounds, clip, LayerSpec { opacity })` and
+Low-level compositors can use `Instance::begin_layer(bounds, clip, LayerSpec { opacity, ..Default::default() })` and
 `Instance::end_layer()`. Bounds are device-pixel `[x,y,w,h]`; include native surfaces and the full
 travel of any retained GPU translations. Primitive/shadow bounds expand this rectangle, and the
 result is clipped to the viewport. Scope records retain absolute instance indices, including
@@ -427,9 +427,26 @@ The lab demo's custom lighting/effect graph still uses its previous flattened-op
 its adapter consumes scope records before splitting glyphs, backgrounds and effect anchors.
 Full isolation across that custom graph requires applying opacity after its lighting/effect passes.
 
-Crossfading two isolated states still uses source-over: B at `1-t` over A at `t` has alpha
-`1-t+t²`, not 1. Isolation removes internal overlap darkening; it does not change the blend
-operator into an additive dissolve.
+The default blend remains source-over: B at `1-t` over A at `t` has alpha `1-t+t²`, not 1.
+For full-state crossfades, opt into additive composition with a dissolve container:
+
+```rust,ignore
+el().dissolve()
+    .child(state_a.opacity(1.0 - t))
+    .child(state_b.opacity(t)) // position the states over the same rectangle
+```
+
+`El::dissolve()` keeps the parent isolated even at opacity 1, composites each child's subtree
+internally with source-over, then adds the states with premultiplied One/One blending. Two
+opaque states give alpha 1 and their exact linear colour average at `t = .5`. A single-draw
+state can fold directly into the additive pass. Shared backgrounds belong outside this scope;
+the container's own paint also participates in addition. Normal opacity/Live bindings control
+the weights. Hit testing still uses effective opacity.
+
+The low-level equivalent is `LayerSpec { blend: Blend::PlusLighter, ..Default::default() }`.
+Its direct primitives and native surfaces add; wrap each multi-draw state in a normal child
+scope, including at opacity 1. The completed dissolve clamps its premultiplied result before
+applying its own opacity, then uses its parent's blend (normally source-over) on the backdrop.
 
 The headless GPU path uses the same layers as windows. The `rune-ref` replay format currently
 covers only flat primitive kinds 0–4 and rejects layer records; it cannot yet replay a grouped

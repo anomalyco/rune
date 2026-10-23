@@ -272,6 +272,7 @@ pub struct Visual {
     pub border: Color,
     pub shadows: Vec<Shadow>,
     pub opacity: f32,
+    pub blend: crate::render::Blend,
     pub hover: Color,
     pub press: Color,
     /// Soft clip of children to this rect: fade widths left, top, right, bottom.
@@ -307,6 +308,7 @@ impl Default for Visual {
             border: Color::TRANSPARENT,
             shadows: Vec::new(),
             opacity: 1.0,
+            blend: crate::render::Blend::SourceOver,
             hover: Color::TRANSPARENT,
             press: Color::TRANSPARENT,
             clip: None,
@@ -875,6 +877,13 @@ impl El {
     }
     pub fn opacity(mut self, o: f32) -> Self {
         self.vis.opacity = o;
+        self
+    }
+    /// Isolate this container even at opacity 1 and add its children's premultiplied colours.
+    /// Give two overlaid states opacity `1-t` and `t` for a dissolve without a midpoint alpha dip.
+    /// Put a shared background outside this scope; its own paint also participates in addition.
+    pub fn dissolve(mut self) -> Self {
+        self.vis.blend = crate::render::Blend::PlusLighter;
         self
     }
     /// Tags this element's instances (and its descendants', until one sets its own) for a

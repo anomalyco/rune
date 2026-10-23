@@ -29,15 +29,39 @@ pub const KIND_IMAGE: f32 = 7.0;
 pub const KIND_LAYER: f32 = 8.0;
 pub const KIND_LAYER_END: f32 = 9.0;
 
+/// How a scope combines its contents. The completed scope still uses source-over on its parent
+/// unless that parent also requests additive composition.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Blend {
+    #[default]
+    SourceOver,
+    /// Premultiplied One/One addition, clamped when the isolated scope is composited.
+    PlusLighter,
+}
+
+impl Blend {
+    pub(crate) fn state(self) -> wgpu::BlendState {
+        match self {
+            Self::SourceOver => wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+            Self::PlusLighter => {
+                let add = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add };
+                wgpu::BlendState { color: add, alpha: add }
+            }
+        }
+    }
+}
+
 /// Composition properties of an isolated subtree. Filters can extend this contract without
 /// changing painter-stream scopes or the target pool.
 #[derive(Clone, Copy, Debug)]
 pub struct LayerSpec {
     pub opacity: f32,
+    pub blend: Blend,
 }
 
 impl Default for LayerSpec {
-    fn default() -> Self { Self { opacity: 1.0 } }
+    fn default() -> Self { Self { opacity: 1.0, blend: Blend::SourceOver } }
 }
 
 /// One instance, in device pixels.
@@ -64,7 +88,7 @@ impl Instance {
     /// native surfaces. Primitive bounds (including shadow support) expand it during prepare.
     pub fn begin_layer(bounds: [f32; 4], clip: [f32; 4], spec: LayerSpec) -> Self {
         Self { rect: bounds, clip, fill: [0.0, 0.0, 0.0, spec.opacity.clamp(0.0, 1.0)],
-            params: [0.0, KIND_LAYER, 0.0, 0.0], ..Self::zeroed() }
+            params: [if spec.blend == Blend::PlusLighter { 1.0 } else { 0.0 }, KIND_LAYER, 0.0, 0.0], ..Self::zeroed() }
     }
 
     pub fn end_layer() -> Self {
@@ -77,7 +101,7 @@ impl Instance {
 pub(crate) fn end_layer(instances: &mut Vec<Instance>, surfaces: &mut [crate::native_surface::SurfaceDraw], marks: &mut Vec<u32>, start: usize, surface_start: usize) {
     let primitives = instances.len() - start - 1;
     let videos = surfaces.len() - surface_start;
-    if primitives + videos <= 1 {
+    if primitives + videos <= 1 && instances[start].params[0] == 0.0 {
         let opacity = instances[start].fill[3];
         if primitives == 1 {
             let i = &mut instances[start + 1];
@@ -297,6 +321,17 @@ impl Renderer {
         format: wgpu::TextureFormat,
         vertex_entry: &str,
     ) -> wgpu::RenderPipeline {
+        Self::pipeline_blend(device, layout, shader, format, vertex_entry, Blend::SourceOver)
+    }
+
+    fn pipeline_blend(
+        device: &wgpu::Device,
+        layout: &wgpu::PipelineLayout,
+        shader: &wgpu::ShaderModule,
+        format: wgpu::TextureFormat,
+        vertex_entry: &str,
+        blend: Blend,
+    ) -> wgpu::RenderPipeline {
         let attrs = wgpu::vertex_attr_array![
             0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4,
             4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4
@@ -323,7 +358,7 @@ impl Renderer {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    blend: Some(blend.state()),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -447,7 +482,9 @@ impl Renderer {
         if range.is_empty() {
             return;
         }
-        let pipeline = if format == self.format {
+        let pipeline = if self.layer_blend(target) == Blend::PlusLighter {
+            &self.layers.additive.as_ref().expect("prepared dissolve").0
+        } else if format == self.format {
             &self.pipeline
         } else {
             &self.extra.iter().find(|(f, _)| *f == format).expect("Renderer::add_format first").1
@@ -528,7 +565,10 @@ impl Renderer {
             for (format, _) in &self.extra { surfaces.add_format(device, *format); }
             self.surfaces = Some(surfaces);
         }
-        if let Some(s) = &mut self.surfaces { s.prepare(device,queue,draws,viewport); }
+        if let Some(s) = &mut self.surfaces {
+            if self.layers.additive.is_some() { s.add_plus_lighter(device, layers::FORMAT); }
+            s.prepare(device,queue,draws,viewport);
+        }
         if self.layer_stats().targets > 0 { self.position_layer_surfaces(queue); }
     }
 
