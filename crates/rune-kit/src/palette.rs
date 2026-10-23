@@ -18,11 +18,24 @@ fn contrast(a: Color, b: Color) -> f32 {
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
-/// Perceptual dimming, bounded by a contrast floor when the supplied foreground supports it.
-fn secondary(bg: Color, fg: Color, amount: f32, minimum: f32) -> Color {
-    let a = bg.to_oklab();
-    let b = fg.to_oklab();
-    let mix = |t: f32| Color::from_oklab(std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t));
+/// Where [`Kit::from_palette_focus`] takes the focus-ring colour from.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum PaletteFocus {
+    /// A neutral blue that reads as focus on any palette.
+    #[default]
+    Blue,
+    /// The seed's accent.
+    Accent,
+    /// The seed's foreground (text) colour.
+    Ink,
+    Custom(Color),
+}
+
+/// Perceptual dimming along OKLab lightness at the palette's tint (`[a, b]`), bounded by a
+/// contrast floor when the supplied foreground supports it.
+fn secondary(bg: Color, fg: Color, tint: [f32; 2], amount: f32, minimum: f32) -> Color {
+    let (lb, lf) = (bg.to_oklab()[0], fg.to_oklab()[0]);
+    let mix = |t: f32| Color::from_oklab([lb + (lf - lb) * t, tint[0], tint[1], 1.0]);
     let candidate = mix(amount);
     if contrast(bg, candidate) >= minimum {
         return candidate;
@@ -52,19 +65,26 @@ fn mix_oklab(a: Color, b: Color, t: f32) -> Color {
 /// elevation: `layer_01`–`layer_04`.
 const DARK_LAYERS: [f32; 4] = [0.04, 0.07, 0.10, 0.13];
 const LIGHT_LAYERS: [f32; 4] = [0.02, 0.045, 0.065, 0.10];
+/// Dark palettes derive surfaces from at least this OKLab lightness (about #0a0a0a): lightness
+/// steps from pure black stay invisible (+0.04 L from #000 is #010101).
+const DARK_FLOOR: f32 = 0.145;
 
 impl Kit {
     /// Derives surfaces, text, borders, states and elevation from three theme colours.
     /// Appearance is dark when `fg` is lighter than `bg`.
     ///
     /// - Layers step OKLab lightness away from `bg` (+0.04, then +0.03 per elevation when
-    ///   dark; smaller steps the other way when light), keeping `bg`'s hue.
+    ///   dark; smaller steps the other way when light). Dark surfaces step from at least
+    ///   #0a0a0a's lightness, so pure black still gets visible layers and status tints.
+    /// - Derived neutrals (layers, opaque borders, secondary text) keep the hue and chroma of
+    ///   the more colourful of `bg` and `fg`, so warm palettes stay warm.
     /// - `border_muted`/`border_base`/`border_strong`, hover and press are `fg` at low alpha,
     ///   solved so Rune's linear-light blending over `bg` matches sRGB blending
     ///   (`blend_over` is `bg`). Opaque `std_border`/`border_*` tokens are lightness steps.
     /// - Secondary text mixes towards `fg` in OKLab, with contrast floors of 4.5:1 (muted) and
     ///   3:1 (faint) when `fg` supports them.
-    /// - Focus rings are a neutral blue, not `accent`; set `c.border_focus` to change it.
+    /// - Focus rings are a neutral blue, not `accent`; [`Kit::from_palette_focus`] picks
+    ///   accent, ink or a custom colour instead.
     /// - Elevation rings are `c.border_base`, and re-resolve when painted (`Kit::ring`), so
     ///   overriding it restyles them.
     ///
@@ -78,24 +98,48 @@ impl Kit {
     /// });
     /// ```
     pub fn from_palette(seed: PaletteSeed) -> Kit {
+        Kit::from_palette_focus(seed, PaletteFocus::Blue)
+    }
+
+    /// [`Kit::from_palette`] with the focus ring from `focus`.
+    ///
+    /// ```
+    /// use rune::Color;
+    /// use rune_kit::{Kit, PaletteFocus, PaletteSeed};
+    /// let seed = PaletteSeed { bg: Color::BLACK, fg: Color::WHITE, accent: Color::WHITE };
+    /// let kit = Kit::from_palette_focus(seed, PaletteFocus::Ink);
+    /// assert_eq!(kit.c.border_focus, Color::WHITE);
+    /// ```
+    pub fn from_palette_focus(seed: PaletteSeed, focus: PaletteFocus) -> Kit {
         let PaletteSeed { bg, fg, accent } = seed;
         let dark = fg.luminance() > bg.luminance();
         let mut kit = Kit::neutral(dark);
-        let base = bg.to_oklab();
+        let (lab_bg, lab_fg) = (bg.to_oklab(), fg.to_oklab());
+        let chroma = |o: [f32; 4]| o[1].hypot(o[2]);
+        let tinted = if chroma(lab_bg) >= chroma(lab_fg) { lab_bg } else { lab_fg };
+        let tint = [tinted[1], tinted[2]];
+        let tone = |l: f32| Color::from_oklab([l.clamp(0.0, 1.0), tint[0], tint[1], 1.0]);
+        let base = if dark { lab_bg[0].max(DARK_FLOOR) } else { lab_bg[0] };
         let toward_fg = if dark { 1.0 } else { -1.0 };
-        let lift = |dl: f32| Color::from_oklab([(base[0] + toward_fg * dl).clamp(0.0, 1.0), base[1], base[2], 1.0]);
+        let lift = |dl: f32| tone(base + toward_fg * dl);
         let [l1, l2, l3, l4] = if dark { DARK_LAYERS } else { LIGHT_LAYERS }.map(lift);
+        let surface = lift(0.0);
         let ink = |a: f32| rune::theme::srgb_equivalent(fg.alpha(a), bg);
-        let muted = secondary(bg, fg, if dark { 0.72 } else { 0.60 }, 4.5);
-        let faint = secondary(bg, fg, if dark { 0.54 } else { 0.42 }, 3.0);
+        let muted = secondary(bg, fg, tint, if dark { 0.72 } else { 0.57 }, 4.5);
+        let faint = secondary(bg, fg, tint, if dark { 0.54 } else { 0.36 }, 3.0);
         let border = ink(if dark { 0.11 } else { 0.10 });
         let solid_border = lift(if dark { 0.20 } else { 0.18 });
         let hover = ink(if dark { 0.06 } else { 0.05 });
         let pressed = ink(if dark { 0.10 } else { 0.08 });
-        let focus = oklch(if dark { 0.70 } else { 0.58 }, 0.15, 264.0);
+        let focus = match focus {
+            PaletteFocus::Blue => oklch(if dark { 0.70 } else { 0.58 }, 0.15, 264.0),
+            PaletteFocus::Accent => accent,
+            PaletteFocus::Ink => fg,
+            PaletteFocus::Custom(c) => c,
+        };
         let state = |role: StateColors| StateColors {
-            bg: mix_oklab(bg, role.fg, 0.12),
-            border: mix_oklab(bg, role.fg, 0.35),
+            bg: mix_oklab(surface, role.fg, 0.12),
+            border: mix_oklab(surface, role.fg, 0.35),
             ..role
         };
         kit.blend_over = Some(bg);
@@ -279,5 +323,76 @@ mod tests {
         assert_eq!(ring(&k).hex(), "#336699ff");
         let drops: Vec<_> = k.shadow_layers(&k.elevation.floating).filter(|s| s.blur > 0.0).collect();
         assert!(!drops.is_empty() && drops.iter().all(|s| srgb8(s.color) == [0, 0, 0]));
+    }
+
+    /// `c` painted over `bg` as Rune blends (linear light), in sRGB bytes.
+    fn over(c: Color, bg: Color) -> [u8; 3] {
+        let m = |x: f32, y: f32| x * c.a + y * (1.0 - c.a);
+        srgb8(Color { r: m(c.r, bg.r), g: m(c.g, bg.g), b: m(c.b, bg.b), a: 1.0 })
+    }
+
+    fn oklab_distance(a: Color, b: Color) -> f32 {
+        let (a, b) = (a.to_oklab(), b.to_oklab());
+        (0..3).map(|i| (a[i] - b[i]).powi(2)).sum::<f32>().sqrt()
+    }
+
+    #[test]
+    fn pure_black_still_gets_visible_layers_borders_and_status_tints() {
+        for bg in ["#000000", "#0a0a0a"] {
+            let bg = hex(bg).unwrap();
+            let k = Kit::from_palette(PaletteSeed { bg, fg: Color::WHITE, accent: hex("#ff2a2a").unwrap() });
+            let layers = [k.c.layer_01, k.c.layer_02, k.c.layer_03, k.c.layer_04].map(srgb8);
+            assert!(layers[0].iter().all(|&v| v >= 0x12), "layer_01 {:02x?} on {}", layers[0], bg.hex());
+            assert!(layers.windows(2).all(|w| w[1][0] >= w[0][0] + 4), "{layers:02x?}");
+            assert!(layers[3][0] <= 0x2c, "{layers:02x?}");
+            for opaque in [k.c.border_weak, k.c.std_border, k.c.border_disabled] {
+                assert!(srgb8(opaque)[0] >= 0x1c, "opaque border {} on {}", opaque.hex(), bg.hex());
+            }
+            for border in [k.c.border_muted, k.c.border_base, k.c.border_strong] {
+                assert!(over(border, bg)[0] >= 0x14, "border {:02x?} on {}", over(border, bg), bg.hex());
+            }
+            for state in [k.c.danger, k.c.warning, k.c.success, k.c.info] {
+                let tint = srgb8(state.bg);
+                assert!(tint.iter().max().unwrap() >= &0x1c, "status bg {tint:02x?} on {}", bg.hex());
+            }
+            let [r, g, _] = srgb8(k.c.danger.bg);
+            assert!(r > g, "danger bg should read red");
+        }
+        let k = Kit::from_palette(PaletteSeed { bg: Color::WHITE, fg: Color::BLACK, accent: hex("#d81414").unwrap() });
+        let layers = [k.c.layer_01, k.c.layer_02, k.c.layer_03, k.c.layer_04].map(srgb8);
+        assert!(layers.windows(2).all(|w| w[0][0] > w[1][0]) && layers[0][0] < 0xff, "{layers:02x?}");
+    }
+
+    #[test]
+    fn warm_palettes_keep_their_hue_in_derived_neutrals() {
+        // Deadbolt's paper: the site's own inks are #4a463f and #857f74.
+        let bg = hex("#e8e4dc").unwrap();
+        let k = Kit::from_palette(PaletteSeed { bg, fg: Color::BLACK, accent: hex("#d81414").unwrap() });
+        let lch = |c: Color| {
+            let o = c.to_oklab();
+            (o[1].hypot(o[2]), o[2].atan2(o[1]).to_degrees())
+        };
+        for (token, site) in [(k.c.text_muted, "#4a463f"), (k.c.text_faint, "#857f74"), (k.c.layer_03, "#dcd7cc")] {
+            let (c, h) = lch(token);
+            assert!(c > 0.009 && (70.0..100.0).contains(&h), "{} is C {c:.4} h {h:.0}", token.hex());
+            assert!(oklab_distance(token, hex(site).unwrap()) < 0.03, "{} vs {site}", token.hex());
+        }
+        assert!(contrast(bg, k.c.text_muted) >= 4.5 && contrast(bg, k.c.text_faint) >= 3.0);
+        // A warm foreground on black tints the dark neutrals the same way.
+        let k = Kit::from_palette(PaletteSeed { bg: Color::BLACK, fg: hex("#f3e7cf").unwrap(), accent: Color::WHITE });
+        let (c, h) = lch(k.c.text_muted);
+        assert!(c > 0.02 && (60.0..100.0).contains(&h), "C {c:.4} h {h:.0}");
+        assert!(contrast(Color::BLACK, k.c.text_muted) >= 4.5);
+    }
+
+    #[test]
+    fn focus_can_follow_accent_ink_or_a_custom_colour() {
+        let seed = PaletteSeed { bg: Color::BLACK, fg: Color::WHITE, accent: hex("#ff2a2a").unwrap() };
+        let blue = hex("#3b82f6").unwrap();
+        assert_eq!(Kit::from_palette_focus(seed, PaletteFocus::Ink).c.border_focus, Color::WHITE);
+        assert_eq!(Kit::from_palette_focus(seed, PaletteFocus::Accent).c.border_focus, seed.accent);
+        assert_eq!(Kit::from_palette_focus(seed, PaletteFocus::Custom(blue)).c.border_focus, blue);
+        let default = Kit::from_palette_focus(seed, PaletteFocus::default());
+        assert_eq!(Kit::from_palette(seed).c.border_focus, default.c.border_focus);
     }
 }

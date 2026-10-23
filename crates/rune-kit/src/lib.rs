@@ -52,7 +52,7 @@ pub use feedback::{Loader, Progress, ProgressCircle, Spinner};
 pub use field::Field;
 pub use keybind::{Keybind, KeybindVariant};
 pub use kit::{Elevation, Glyphs, Kit, Motion, Palette, Radius, StateColors, Type};
-pub use palette::PaletteSeed;
+pub use palette::{PaletteFocus, PaletteSeed};
 pub use list::{List, ListItem};
 pub use menu::{Menu, MenuEntry, MenuItem, context_menu};
 pub use overlay::{HoverCard, Placement, Popover, Tooltip, TooltipAppearance, body_text, overlay_text, scrim};

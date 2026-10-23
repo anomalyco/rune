@@ -1,7 +1,9 @@
 //! The rune-kit gallery: one scene per `@opencode/ui` Storybook story, in the story's id, so
 //! `scripts/kit-diff.py` can render both and diff them. `--kit neutral` renders the same
 //! components on Rune's core neutral theme instead of OpenCode's; `--kit palette` on
-//! `Kit::from_palette` with a near-black, off-white and red seed (Deadbolt's palette).
+//! `Kit::from_palette` with a near-black, off-white and red seed (Deadbolt's palette);
+//! `--kit palette black` (dark) and `--kit palette warm` (light) use Deadbolt's pure-black and
+//! paper seeds with ink focus rings.
 //!
 //! ```sh
 //! kit-gallery --list-scenes
@@ -66,15 +68,21 @@ pub fn kit(s: &G, dark: bool) -> &'static Kit {
     if s.palette {
         static D: std::sync::OnceLock<Kit> = std::sync::OnceLock::new();
         static L: std::sync::OnceLock<Kit> = std::sync::OnceLock::new();
-        let seed = |bg: &str, fg: &str| rune_kit::PaletteSeed {
-            bg: rune::color::hex(bg).unwrap(),
-            fg: rune::color::hex(fg).unwrap(),
-            accent: rune::color::hex("#e5484d").unwrap(),
-        };
+        let hex = |c: &str| rune::color::hex(c).unwrap();
+        let seed = |bg: &str, fg: &str, accent: &str| rune_kit::PaletteSeed { bg: hex(bg), fg: hex(fg), accent: hex(accent) };
+        // `--kit palette black|warm`: Deadbolt's pure-black and paper seeds with ink focus.
+        let variant = |name: &str| rune::extra_args().iter().any(|a| a == name);
+        let ink = |seed| Kit::from_palette_focus(seed, rune_kit::PaletteFocus::Ink);
         return if dark {
-            D.get_or_init(|| Kit::from_palette(seed("#0a0a0a", "#ededed")))
+            D.get_or_init(|| match variant("black") {
+                true => ink(seed("#000000", "#ffffff", "#ff2a2a")),
+                false => Kit::from_palette(seed("#0a0a0a", "#ededed", "#e5484d")),
+            })
         } else {
-            L.get_or_init(|| Kit::from_palette(seed("#ffffff", "#171717")))
+            L.get_or_init(|| match variant("warm") {
+                true => ink(seed("#e8e4dc", "#000000", "#d81414")),
+                false => Kit::from_palette(seed("#ffffff", "#171717", "#e5484d")),
+            })
         };
     }
     if s.neutral {
