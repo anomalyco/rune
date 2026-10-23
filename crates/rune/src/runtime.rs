@@ -2061,8 +2061,11 @@ impl<S: 'static> Runtime<S> {
         self.refresh_hover(x, y);
         let Some((path, d)) = self.capture.clone() else { return };
         let Some((id, r, has_drag)) = self.node(&path).map(|n| (n.id, n.target, n.on_drag.is_some())) else { return };
-        self.capture_inside = if self.native_overlay {
-            self.hits.iter().any(|(hit, r)| *hit == id && crate::overlay_options::contains(*r, x, y))
+        // A hit rect is where the element was drawn (after scrolling); `target` is its
+        // unscrolled layout rect, kept only for elements that were never drawn.
+        let mut hits = self.hits.iter().filter(|(hit, _)| *hit == id).peekable();
+        self.capture_inside = if self.native_overlay || hits.peek().is_some() {
+            hits.any(|(_, r)| crate::overlay_options::contains(*r, x, y))
         } else { x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3] };
         if has_drag {
             let (dx, dy) = (x - self.press_at.0, y - self.press_at.1);
@@ -3734,6 +3737,29 @@ mod tests {
             let b = run(120, reduced);
             for (a, b) in a.into_iter().zip(b) { assert!((a - b).abs() < 0.05, "frame-rate dependent hold: {a} vs {b}"); }
         }
+    }
+
+    #[test]
+    fn presses_land_inside_a_scrolled_view() {
+        struct State { pressed: Vec<usize> }
+        fn view(_: &State, _: &mut Cx<State>) -> El {
+            let mut list = col().key("list").w_full();
+            for i in 0..10 {
+                list = list.child(el().key(format!("b{i}")).size(200.0, 40.0).on_press(move |s: &mut State| s.pressed.push(i)));
+            }
+            col().size(200.0, 200.0).child(col().key("scroll").size(200.0, 200.0).scroll(ScrollSpec { stick_bottom: false }).child(list))
+        }
+        let mut rt = Runtime::new(State { pressed: Vec::new() }, view, (200.0, 200.0), Env { system_dark: true, scale: 1.0 });
+        rt.frame(0.0);
+        rt.wheel(100.0, 100.0, -120.0);
+        rt.frame(1.0 / 120.0);
+        let (x, y) = rt.find("b5").expect("b5 is drawn");
+        assert!(y < 200.0, "b5 scrolled into view at {y}");
+        rt.pointer_move(x, y);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(1.0 / 120.0);
+        assert_eq!(rt.state.pressed, [5]);
     }
 
     #[test]
