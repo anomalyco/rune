@@ -4,6 +4,7 @@
   "dark_system": false,
   "elements": [
     {
+      "blur": 0.0,
       "fill": "#fafafaff",
       "focusVisible": false,
       "focusable": false,
@@ -19,9 +20,11 @@
         1280.0,
         820.0
       ],
-      "role": "window"
+      "role": "window",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -37,9 +40,11 @@
         260.0,
         820.0
       ],
-      "role": "navigation"
+      "role": "navigation",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -55,9 +60,11 @@
         260.0,
         820.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -73,9 +80,11 @@
         248.0,
         48.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -91,9 +100,11 @@
         75.0,
         28.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -108,9 +119,11 @@
         129.0,
         0.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -126,9 +139,11 @@
         28.0,
         28.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -144,9 +159,11 @@
         248.0,
         92.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -163,9 +180,11 @@
         248.0,
         28.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -181,9 +200,11 @@
         16.0,
         16.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -200,9 +221,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "Home"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -217,9 +240,11 @@
         142.0,
         0.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -236,9 +261,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "⌘B"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -255,9 +282,11 @@
         248.0,
         28.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -273,9 +302,11 @@
         16.0,
         16.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -292,9 +323,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "Search sessions"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -311,9 +344,11 @@
         248.0,
         28.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -329,9 +364,11 @@
         16.0,
         16.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -348,9 +385,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "New session"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -365,9 +404,11 @@
         100.0,
         0.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -384,9 +425,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "⌘T"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -402,9 +445,11 @@
         248.0,
         16.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -420,9 +465,11 @@
         248.0,
         638.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -438,9 +485,11 @@
         248.0,
         268.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#0000002b",
       "focusVisible": false,
       "focusable": false,
@@ -457,9 +506,11 @@
         248.0,
         28.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -475,9 +526,11 @@
         218.0,
         28.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#e4429eff",
       "focusVisible": false,
       "focusable": false,
@@ -492,9 +545,11 @@
         16.0,
         16.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#ffffffff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -511,9 +566,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "L"
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -530,9 +587,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "Fix flaky reconnect in the event stream"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -548,9 +607,11 @@
         20.0,
         20.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -565,9 +626,11 @@
         0.0,
         0.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#fafafaff",
       "focusVisible": false,
       "focusable": false,
@@ -584,9 +647,11 @@
         20.0,
         20.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#0000002b",
       "focusVisible": false,
       "focusable": false,
@@ -602,9 +667,11 @@
         20.0,
         20.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -620,9 +687,11 @@
         16.0,
         16.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -639,9 +708,11 @@
         248.0,
         28.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -657,9 +728,11 @@
         238.0,
         28.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#e4429eff",
       "focusVisible": false,
       "focusable": false,
@@ -674,9 +747,11 @@
         16.0,
         16.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#ffffffff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -693,9 +768,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "L"
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -712,9 +789,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "Sidebar shows stale session titles"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -730,9 +809,11 @@
         20.0,
         20.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -747,9 +828,11 @@
         0.0,
         0.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#fafafaff",
       "focusVisible": false,
       "focusable": false,
@@ -766,9 +849,11 @@
         20.0,
         20.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000016",
       "focusVisible": false,
       "focusable": false,
@@ -784,9 +869,11 @@
         20.0,
         20.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -802,9 +889,11 @@
         16.0,
         16.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -821,9 +910,11 @@
         248.0,
         28.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -839,9 +930,11 @@
         218.0,
         28.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#d92e3cff",
       "focusVisible": false,
       "focusable": false,
@@ -856,9 +949,11 @@
         16.0,
         16.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#ffffffff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -875,9 +970,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "H"
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -894,9 +991,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "Migrate config loader to the new schema"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -912,9 +1011,11 @@
         20.0,
         20.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -930,9 +1031,11 @@
         14.0,
         14.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -949,9 +1052,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -968,9 +1073,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -987,9 +1094,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1006,9 +1115,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1025,9 +1136,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1044,9 +1157,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1063,9 +1178,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1082,9 +1199,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1101,9 +1220,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1120,9 +1241,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1139,9 +1262,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1158,9 +1283,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1176,9 +1303,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1195,9 +1324,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1214,9 +1345,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1233,9 +1366,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1252,9 +1387,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1271,9 +1408,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1290,9 +1429,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1309,9 +1450,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1328,9 +1471,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1347,9 +1492,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1366,9 +1513,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1385,9 +1534,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -1404,9 +1555,11 @@
         1.75,
         1.75
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#fafafaff",
       "focusVisible": false,
       "focusable": false,
@@ -1423,9 +1576,11 @@
         20.0,
         20.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000016",
       "focusVisible": false,
       "focusable": false,
@@ -1441,9 +1596,11 @@
         20.0,
         20.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -1459,9 +1616,11 @@
         16.0,
         16.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -1478,9 +1637,11 @@
         248.0,
         28.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -1496,9 +1657,11 @@
         218.0,
         28.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#e4429eff",
       "focusVisible": false,
       "focusable": false,
@@ -1513,9 +1676,11 @@
         16.0,
         16.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#ffffffff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -1532,9 +1697,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "L"
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -1551,9 +1718,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "Add keyboard shortcuts to the command palette"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -1569,9 +1738,11 @@
         20.0,
         20.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#3b5cf6ff",
       "focusVisible": false,
       "focusable": false,
@@ -1586,9 +1757,11 @@
         7.0,
         7.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#fafafaff",
       "focusVisible": false,
       "focusable": false,
@@ -1605,9 +1778,11 @@
         20.0,
         20.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000016",
       "focusVisible": false,
       "focusable": false,
@@ -1623,9 +1798,11 @@
         20.0,
         20.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -1641,9 +1818,11 @@
         16.0,
         16.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -1660,9 +1839,11 @@
         248.0,
         28.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -1678,9 +1859,11 @@
         218.0,
         28.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#0096b8ff",
       "focusVisible": false,
       "focusable": false,
@@ -1695,9 +1878,11 @@
         16.0,
         16.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#ffffffff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -1714,9 +1899,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "T"
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -1733,9 +1920,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "Explain the tile cache eviction policy"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -1751,9 +1940,11 @@
         20.0,
         20.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#cb9f34ff",
       "focusVisible": false,
       "focusable": false,
@@ -1768,9 +1959,11 @@
         7.0,
         7.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#fafafaff",
       "focusVisible": false,
       "focusable": false,
@@ -1787,9 +1980,11 @@
         20.0,
         20.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000016",
       "focusVisible": false,
       "focusable": false,
@@ -1805,9 +2000,11 @@
         20.0,
         20.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -1823,9 +2020,11 @@
         16.0,
         16.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -1842,9 +2041,11 @@
         248.0,
         28.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -1860,9 +2061,11 @@
         238.0,
         28.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#e4429eff",
       "focusVisible": false,
       "focusable": false,
@@ -1877,9 +2080,11 @@
         16.0,
         16.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#ffffffff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -1896,9 +2101,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "Q"
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -1915,9 +2122,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "Fix footnote numbering in exported PDFs"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -1933,9 +2142,11 @@
         20.0,
         20.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -1950,9 +2161,11 @@
         0.0,
         0.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#fafafaff",
       "focusVisible": false,
       "focusable": false,
@@ -1969,9 +2182,11 @@
         20.0,
         20.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000016",
       "focusVisible": false,
       "focusable": false,
@@ -1987,9 +2202,11 @@
         20.0,
         20.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -2005,9 +2222,11 @@
         16.0,
         16.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2024,9 +2243,11 @@
         248.0,
         28.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2042,9 +2263,11 @@
         218.0,
         28.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#d92e3cff",
       "focusVisible": false,
       "focusable": false,
@@ -2059,9 +2282,11 @@
         16.0,
         16.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#ffffffff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -2078,9 +2303,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "H"
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -2097,9 +2324,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "Retry uploads after a dropped connection"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2115,9 +2344,11 @@
         20.0,
         20.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#3b5cf6ff",
       "focusVisible": false,
       "focusable": false,
@@ -2132,9 +2363,11 @@
         7.0,
         7.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#fafafaff",
       "focusVisible": false,
       "focusable": false,
@@ -2151,9 +2384,11 @@
         20.0,
         20.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000016",
       "focusVisible": false,
       "focusable": false,
@@ -2169,9 +2404,11 @@
         20.0,
         20.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -2187,9 +2424,11 @@
         16.0,
         16.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2206,9 +2445,11 @@
         248.0,
         28.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2224,9 +2465,11 @@
         238.0,
         28.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#e4429eff",
       "focusVisible": false,
       "focusable": false,
@@ -2241,9 +2484,11 @@
         16.0,
         16.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#ffffffff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -2260,9 +2505,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "L"
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -2279,9 +2526,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "Profile scroll jank in long transcripts"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2297,9 +2546,11 @@
         20.0,
         20.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2314,9 +2565,11 @@
         0.0,
         0.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#fafafaff",
       "focusVisible": false,
       "focusable": false,
@@ -2333,9 +2586,11 @@
         20.0,
         20.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000016",
       "focusVisible": false,
       "focusable": false,
@@ -2351,9 +2606,11 @@
         20.0,
         20.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -2369,9 +2626,11 @@
         16.0,
         16.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#ffffffff",
       "focusVisible": false,
       "focusable": false,
@@ -2387,9 +2646,11 @@
         1004.0,
         804.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2405,9 +2666,11 @@
         1004.0,
         804.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2423,9 +2686,11 @@
         1004.0,
         48.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2441,9 +2706,11 @@
         0.0,
         28.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2459,9 +2726,11 @@
         323.0,
         16.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#e4429eff",
       "focusVisible": false,
       "focusable": false,
@@ -2476,9 +2745,11 @@
         16.0,
         16.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#ffffffff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -2495,9 +2766,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "L"
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -2514,9 +2787,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "lumen"
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -2533,9 +2808,11 @@
         14.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "/"
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -2552,9 +2829,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "Fix flaky reconnect in the event stream"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2569,9 +2848,11 @@
         535.5,
         0.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2587,9 +2868,11 @@
         93.5,
         16.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2605,9 +2888,11 @@
         16.0,
         16.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#eeeeeeff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -2623,9 +2908,11 @@
         16.0,
         16.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#3a3a3aff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -2641,9 +2928,11 @@
         16.0,
         16.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#5c5c5cff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -2660,9 +2949,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "63.8K"
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -2679,9 +2970,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "$1.84"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2697,9 +2990,11 @@
         1004.0,
         610.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2716,6 +3011,7 @@
         1284.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         268.0,
         56.0,
@@ -2724,6 +3020,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2740,6 +3037,7 @@
         82.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         64.0,
@@ -2748,6 +3046,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2763,6 +3062,7 @@
         82.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         64.0,
@@ -2771,6 +3071,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#f2f2f2ff",
       "focusVisible": false,
       "focusable": false,
@@ -2786,6 +3087,7 @@
         58.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         658.0,
         72.0,
@@ -2794,6 +3096,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -2811,6 +3114,7 @@
         42.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         670.0,
         80.0,
@@ -2820,6 +3124,7 @@
       "text": "The event stream drops after the laptop sleeps, and the sidebar stops updating until I reload. Can you find out why and fix it?"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2836,6 +3141,7 @@
         40.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         146.0,
@@ -2844,6 +3150,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2859,6 +3166,7 @@
         40.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         146.0,
@@ -2867,6 +3175,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2883,6 +3192,7 @@
         28.0
       ],
       "role": "button",
+      "scale": 1.0,
       "target": [
         422.0,
         146.0,
@@ -2891,6 +3201,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -2907,6 +3218,7 @@
         16.0
       ],
       "role": "icon",
+      "scale": 1.0,
       "target": [
         422.0,
         152.0,
@@ -2915,6 +3227,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#5c5c5cff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -2931,6 +3244,7 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         444.0,
         152.0,
@@ -2940,6 +3254,7 @@
       "text": "Thought for 4s"
     },
     {
+      "blur": 0.0,
       "color": "#aeaeaeff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -2956,6 +3271,7 @@
         14.0
       ],
       "role": "icon",
+      "scale": 1.0,
       "target": [
         541.5,
         153.0,
@@ -2964,6 +3280,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -2980,6 +3297,7 @@
         34.5
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         186.0,
@@ -2988,6 +3306,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -3003,6 +3322,7 @@
         34.5
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         186.0,
@@ -3011,6 +3331,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3028,6 +3349,7 @@
         22.5
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         422.0,
         186.0,
@@ -3037,6 +3359,7 @@
       "text": "I'll start with how the client opens the stream and what it does when it goes quiet."
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -3053,6 +3376,7 @@
         40.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         220.5,
@@ -3061,6 +3385,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -3076,6 +3401,7 @@
         40.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         220.5,
@@ -3084,6 +3410,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -3100,6 +3427,7 @@
         28.0
       ],
       "role": "button",
+      "scale": 1.0,
       "target": [
         422.0,
         220.5,
@@ -3108,6 +3436,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#5c5c5cff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3124,6 +3453,7 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         422.0,
         226.5,
@@ -3133,6 +3463,7 @@
       "text": "Used "
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3149,6 +3480,7 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         458.0,
         226.5,
@@ -3158,6 +3490,7 @@
       "text": "3"
     },
     {
+      "blur": 0.0,
       "color": "#5c5c5cff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3174,6 +3507,7 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         466.5,
         226.5,
@@ -3183,6 +3517,7 @@
       "text": " tools"
     },
     {
+      "blur": 0.0,
       "color": "#aeaeaeff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3199,6 +3534,7 @@
         14.0
       ],
       "role": "icon",
+      "scale": 1.0,
       "target": [
         502.0,
         227.5,
@@ -3207,6 +3543,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -3223,6 +3560,7 @@
         646.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         260.5,
@@ -3231,6 +3569,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -3246,6 +3585,7 @@
         646.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         260.5,
@@ -3254,6 +3594,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3271,6 +3612,7 @@
         24.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         422.0,
         260.5,
@@ -3280,6 +3622,7 @@
       "text": "What's happening"
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3297,6 +3640,7 @@
         68.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         422.0,
         294.5,
@@ -3306,6 +3650,7 @@
       "text": "The server sends a heartbeat every 10 seconds, but  stream.ts  only reconnects on an  error  event. When the machine sleeps, the TCP connection goes half-open: the browser never sees an error, so the client waits forever."
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3323,6 +3668,7 @@
         22.5
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         422.0,
         374.5,
@@ -3332,6 +3678,7 @@
       "text": "Two smaller problems make it worse:"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -3348,6 +3695,7 @@
         50.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         409.0,
@@ -3356,6 +3704,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -3372,6 +3721,7 @@
         23.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         409.0,
@@ -3380,6 +3730,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#5c5c5cff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3396,6 +3747,7 @@
         23.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         422.0,
         409.0,
@@ -3405,6 +3757,7 @@
       "text": "•"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -3420,6 +3773,7 @@
         23.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         454.0,
         409.0,
@@ -3428,6 +3782,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3445,6 +3800,7 @@
         23.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         454.0,
         409.0,
@@ -3454,6 +3810,7 @@
       "text": " backoff.ts  resets its delay on every message, so a flapping server is retried at full speed."
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -3470,6 +3827,7 @@
         23.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         436.0,
@@ -3478,6 +3836,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#5c5c5cff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3494,6 +3853,7 @@
         23.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         422.0,
         436.0,
@@ -3503,6 +3863,7 @@
       "text": "•"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -3518,6 +3879,7 @@
         23.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         454.0,
         436.0,
@@ -3526,6 +3888,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3543,6 +3906,7 @@
         23.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         454.0,
         436.0,
@@ -3552,6 +3916,7 @@
       "text": "The sidebar store ignores  session.updated  events that arrive before the first list fetch."
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3569,6 +3934,7 @@
         20.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         422.0,
         479.0,
@@ -3578,6 +3944,7 @@
       "text": "The fix"
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3595,6 +3962,7 @@
         45.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         422.0,
         507.0,
@@ -3604,6 +3972,7 @@
       "text": "Treat silence as failure. If no event or heartbeat arrives for 25 seconds, close the stream and reconnect with backoff:"
     },
     {
+      "blur": 0.0,
       "fill": "#fafafaff",
       "focusVisible": false,
       "focusable": false,
@@ -3620,6 +3989,7 @@
         284.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         564.0,
@@ -3628,6 +3998,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3644,6 +4015,7 @@
         260.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         434.0,
         576.0,
@@ -3653,6 +4025,7 @@
       "text": "const QUIET_MS = 25_000\n\nfunction watchdog(stream: EventStream, reconnect: () => void) {\n  let timer = setTimeout(fire, QUIET_MS)\n  function fire() {\n    stream.close()\n    reconnect()\n  }\n  stream.on(\"message\", () => {\n    clearTimeout(timer)\n    timer = setTimeout(fire, QUIET_MS)\n  })\n}"
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3670,6 +4043,7 @@
         22.5
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         422.0,
         872.0,
@@ -3679,6 +4053,7 @@
       "text": "I also moved the backoff reset to after a stream has stayed healthy for a minute."
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -3695,6 +4070,7 @@
         40.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         906.5,
@@ -3703,6 +4079,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -3718,6 +4095,7 @@
         40.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         906.5,
@@ -3726,6 +4104,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -3742,6 +4121,7 @@
         28.0
       ],
       "role": "button",
+      "scale": 1.0,
       "target": [
         422.0,
         906.5,
@@ -3750,6 +4130,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#5c5c5cff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3766,6 +4147,7 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         422.0,
         912.5,
@@ -3775,6 +4157,7 @@
       "text": "Used "
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3791,6 +4174,7 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         458.0,
         912.5,
@@ -3800,6 +4184,7 @@
       "text": "3"
     },
     {
+      "blur": 0.0,
       "color": "#5c5c5cff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3816,6 +4201,7 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         466.5,
         912.5,
@@ -3825,6 +4211,7 @@
       "text": " tools"
     },
     {
+      "blur": 0.0,
       "color": "#aeaeaeff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3841,6 +4228,7 @@
         14.0
       ],
       "role": "icon",
+      "scale": 1.0,
       "target": [
         502.0,
         913.5,
@@ -3849,6 +4237,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -3865,6 +4254,7 @@
         44.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         946.5,
@@ -3873,6 +4263,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -3888,6 +4279,7 @@
         44.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         946.5,
@@ -3896,6 +4288,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#fafafaff",
       "focusVisible": false,
       "focusable": false,
@@ -3912,6 +4305,7 @@
         32.0
       ],
       "role": "button",
+      "scale": 1.0,
       "target": [
         422.0,
         946.5,
@@ -3920,6 +4314,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#3a3a3aff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3936,6 +4331,7 @@
         16.0
       ],
       "role": "icon",
+      "scale": 1.0,
       "target": [
         432.0,
         954.5,
@@ -3944,6 +4340,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3960,6 +4357,7 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         456.0,
         954.5,
@@ -3969,6 +4367,7 @@
       "text": "General"
     },
     {
+      "blur": 0.0,
       "color": "#5c5c5cff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -3985,6 +4384,7 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         512.5,
         954.5,
@@ -3994,6 +4394,7 @@
       "text": "Review the reconnect change"
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -4010,6 +4411,7 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         702.5,
         954.5,
@@ -4019,6 +4421,7 @@
       "text": "Done"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4035,6 +4438,7 @@
         203.5
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         990.5,
@@ -4043,6 +4447,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4058,6 +4463,7 @@
         203.5
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         990.5,
@@ -4066,6 +4472,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -4083,6 +4490,7 @@
         22.5
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         422.0,
         990.5,
@@ -4092,6 +4500,7 @@
       "text": "Done. The stream now recovers from sleep on its own."
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4108,6 +4517,7 @@
         76.5
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         1025.0,
@@ -4116,6 +4526,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4132,6 +4543,7 @@
         23.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         1025.0,
@@ -4140,6 +4552,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#5c5c5cff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -4156,6 +4569,7 @@
         23.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         422.0,
         1025.0,
@@ -4165,6 +4579,7 @@
       "text": "1."
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4180,6 +4595,7 @@
         23.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         454.0,
         1025.0,
@@ -4188,6 +4604,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -4205,6 +4622,7 @@
         23.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         454.0,
         1025.0,
@@ -4214,6 +4632,7 @@
       "text": "Watchdog:  stream.ts  closes and reopens the stream after 25 s of silence."
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4230,6 +4649,7 @@
         22.5
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         1052.0,
@@ -4238,6 +4658,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#5c5c5cff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -4254,6 +4675,7 @@
         22.5
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         422.0,
         1052.0,
@@ -4263,6 +4685,7 @@
       "text": "2."
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4278,6 +4701,7 @@
         22.5
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         454.0,
         1052.0,
@@ -4286,6 +4710,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -4303,6 +4728,7 @@
         22.5
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         454.0,
         1052.0,
@@ -4312,6 +4738,7 @@
       "text": "Backoff: the delay only resets after a minute of healthy traffic."
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4328,6 +4755,7 @@
         23.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         1078.5,
@@ -4336,6 +4764,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#5c5c5cff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -4352,6 +4781,7 @@
         23.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         422.0,
         1078.5,
@@ -4361,6 +4791,7 @@
       "text": "3."
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4376,6 +4807,7 @@
         23.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         454.0,
         1078.5,
@@ -4384,6 +4816,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -4401,6 +4834,7 @@
         23.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         454.0,
         1078.5,
@@ -4410,6 +4844,7 @@
       "text": "Sidebar: early  session.updated  events are queued until the list loads."
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -4427,6 +4862,7 @@
         68.5
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         422.0,
         1113.5,
@@ -4436,6 +4872,7 @@
       "text": "The reviewer agreed and suggested one change, which I applied: the watchdog now also restarts on  visibilitychange , so waking the laptop reconnects immediately instead of after 25 s. All 14 tests in  src/net  pass."
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4452,6 +4889,7 @@
         94.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         1194.0,
@@ -4460,6 +4898,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4475,6 +4914,7 @@
         94.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         1194.0,
@@ -4483,6 +4923,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#f2f2f2ff",
       "focusVisible": false,
       "focusable": false,
@@ -4498,6 +4939,7 @@
         58.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         658.0,
         1214.0,
@@ -4506,6 +4948,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#161616ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -4523,6 +4966,7 @@
         42.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         670.0,
         1222.0,
@@ -4532,6 +4976,7 @@
       "text": "Nice. Can you add a test for the backoff, so the reset can't regress?"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4548,6 +4993,7 @@
         28.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         1288.0,
@@ -4556,6 +5002,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4571,6 +5018,7 @@
         28.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         1288.0,
@@ -4579,6 +5027,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4595,6 +5044,7 @@
         28.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         1288.0,
@@ -4603,6 +5053,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#3b5cf6ff",
       "focusVisible": false,
       "focusable": false,
@@ -4618,6 +5069,7 @@
         6.0
       ],
       "role": "group",
+      "scale": 1.0,
       "target": [
         422.0,
         1293.0,
@@ -4626,6 +5078,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#5c5c5cff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -4642,6 +5095,7 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "target": [
         436.0,
         1288.0,
@@ -4651,6 +5105,7 @@
       "text": "Working"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4668,6 +5123,7 @@
         28.0
       ],
       "role": "button",
+      "scale": 1.0,
       "target": [
         422.0,
         1288.0,
@@ -4676,6 +5132,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "color": "#5c5c5cff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -4692,6 +5149,7 @@
         16.0
       ],
       "role": "icon",
+      "scale": 1.0,
       "target": [
         428.0,
         1288.0,
@@ -4700,6 +5158,7 @@
       ]
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4715,9 +5174,11 @@
         1004.0,
         118.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#ffffffff",
       "focusVisible": false,
       "focusable": false,
@@ -4733,9 +5194,11 @@
         696.0,
         108.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4751,9 +5214,11 @@
         696.0,
         64.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#ffffffff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -4771,9 +5236,11 @@
         40.0
       ],
       "role": "textbox",
+      "scale": 1.0,
       "text": ""
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4789,9 +5256,11 @@
         696.0,
         44.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4808,9 +5277,11 @@
         64.5,
         28.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#5c5c5cff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -4827,9 +5298,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "Build"
     },
     {
+      "blur": 0.0,
       "color": "#aeaeaeff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -4845,9 +5318,11 @@
         16.0,
         16.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4864,9 +5339,11 @@
         135.5,
         28.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#5c5c5cff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -4883,9 +5360,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "Claude Opus 5.5"
     },
     {
+      "blur": 0.0,
       "color": "#aeaeaeff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -4901,9 +5380,11 @@
         16.0,
         16.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4920,9 +5401,11 @@
         62.5,
         28.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#5c5c5cff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -4939,9 +5422,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "High"
     },
     {
+      "blur": 0.0,
       "color": "#aeaeaeff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -4957,9 +5442,11 @@
         16.0,
         16.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -4974,9 +5461,11 @@
         373.5,
         0.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#f2f2f2ff",
       "focusVisible": false,
       "focusable": false,
@@ -4993,9 +5482,11 @@
         28.0,
         28.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#aeaeaeff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -5011,9 +5502,11 @@
         16.0,
         16.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -5029,9 +5522,11 @@
         1004.0,
         28.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#aeaeaeff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -5047,9 +5542,11 @@
         14.0,
         14.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -5066,9 +5563,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "~/code/lumen"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -5083,9 +5582,11 @@
         683.0,
         0.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -5102,9 +5603,11 @@
         89.0,
         22.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -5121,9 +5624,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "Edge: feather"
     },
     {
+      "blur": 0.0,
       "fill": "#aeaeaeff",
       "focusVisible": false,
       "focusable": false,
@@ -5138,9 +5643,11 @@
         6.0,
         6.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -5157,9 +5664,11 @@
         16.0
       ],
       "role": "text",
+      "scale": 1.0,
       "text": "Fixture"
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -5175,9 +5684,11 @@
         1280.0,
         8.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -5193,9 +5704,11 @@
         8.0,
         820.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#808080ff",
       "focusVisible": false,
       "focusable": false,
@@ -5211,9 +5724,11 @@
         4.0,
         40.0
       ],
-      "role": "group"
+      "role": "group",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "fill": "#00000000",
       "focusVisible": false,
       "focusable": false,
@@ -5230,9 +5745,11 @@
         28.0,
         28.0
       ],
-      "role": "button"
+      "role": "button",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -5248,9 +5765,11 @@
         20.0,
         20.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     },
     {
+      "blur": 0.0,
       "color": "#808080ff",
       "fill": "#00000000",
       "focusVisible": false,
@@ -5266,7 +5785,8 @@
         20.0,
         20.0
       ],
-      "role": "icon"
+      "role": "icon",
+      "scale": 1.0
     }
   ],
   "reduced_motion": false,
