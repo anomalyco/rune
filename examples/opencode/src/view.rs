@@ -10,7 +10,7 @@ use rune::{
 
 use rune_kit::{Kit, Markdown, MarkdownStyle};
 
-use crate::icons as ic;
+use rune_theme_opencode::icons as ic;
 use crate::model::{self, Message, Part, SessionInfo, ToolStatus, Transcript};
 use crate::palette::{Pal, pal};
 use crate::{App, Route, TabStatus};

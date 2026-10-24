@@ -1,7 +1,6 @@
 //! OpenCode Desktop's home and session pages in Rune, live against an OpenCode server
 //! (read-only) or from a synthetic fixture.
 
-mod icons;
 mod live;
 mod model;
 mod palette;

@@ -12,7 +12,8 @@ NAMES = [
     "magnifying-glass", "circle-x", "trash", "settings-gear", "arrow-up", "fill-triangle-down", "folder", "help",
     "outline-dots", "branch", "brain", "console", "status", "sidebar", "home", "outline-copy", "save", "cut", "paste",
     "print", "inspect", "warning", "circle-check", "info", "keyboard", "microphone", "globe", "sparkle", "bell",
-    "circle-ban-sign", "dash",
+    "circle-ban-sign", "dash", "subagent", "checklist", "code-lines", "file-tree", "stop", "outline-worktree",
+    "grid-plus", "layout-left", "layout-left-full",
 ]
 # Card title icons draw at stroke-width 1.5 (card.css); these get a `_BOLD` twin.
 BOLD = ["circle-ban-sign", "warning", "circle-check", "help", "dash"]
