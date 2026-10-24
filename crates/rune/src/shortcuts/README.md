@@ -120,6 +120,7 @@ than F1–F24) is refused before the callback with "Add ⌘, ⌃ or ⌥." unless
 Click or keyboard activation starts recording, held modifiers preview immediately,
 Escape cancels, Backspace clears, and focus loss or disabling cancels recording.
 Repeated key presses are consumed without registering again.
+`scripts/shortcut-recorder.json` records a chord headlessly.
 
 `Shortcut` stores a `PhysicalKeyCode`. Parsing and Display use canonical US physical
 names; `keycaps()` is for display only. On the macOS main thread, printable labels
@@ -180,4 +181,5 @@ disabled and ambiguous items fail the script.
 `scripts/check-native-menu-macos.py <menu_probe>` exercises the app-menu click,
 key equivalent, named-menu click, runtime enabled/checked updates, preservation of
 Quit/Hide and the Dock delegate selector on a GUI test Mac, under the same lock.
-`scripts/menu.json` exercises title/id dispatch headlessly.
+`scripts/check-dock-menu-macos.py <dock_menu_probe>` checks the accessory-to-Regular
+default menu in both orders. `scripts/menu.json` exercises title/id dispatch headlessly.

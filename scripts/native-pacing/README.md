@@ -78,3 +78,7 @@ prove tear-free output. Removing the half-refresh admission guard moves waiting
 into `nextDrawable` without raising presentation frequency, and breaks the
 half-refresh bound: keep the guard. The evidence points to synced drawable
 backpressure, not callback rate.
+
+`refresh-probe.m` then found the cause of the 60-Hz cap: Low Power Mode holds a
+ProMotion panel at 60 Hz while both display links and `NSScreen` still report
+120 Hz. `crates/rune/src/display_link.rs` paces submissions at that cap.

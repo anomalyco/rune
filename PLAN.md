@@ -69,7 +69,7 @@ Kit's fork) under its Apache-2.0 licence.
 ## 2. Tenets
 
 1. **Feel is the product.** 120 Hz, interruptible springs, nothing pops, jumps or hard-clips. Kit's motion rules
-   (Kit's motion rules) are runtime defaults, not discipline.
+   are runtime defaults, not discipline.
 2. **Animation never runs through app code.** Views state targets; the render thread animates.
 3. **Everything observable.** Every frame, node, layout rect, spring and timing can be queried, traced and replayed.
    The agent's view of the app is the same tree as accessibility's.
@@ -145,17 +145,15 @@ on Apple and weak everywhere else; C++ gives up safety and agent reliability for
 yet ([04 §1](research/04-language-gpu-renderer.md)). Swift is used only for thin host pieces Apple exposes no other
 way (SwiftUI-only glass morphing, the `RuneView` representable).
 
-### 4.2 GPU API: own thin HAL, raw Metal on Apple, wgpu elsewhere
+### 4.2 GPU API: wgpu everywhere, raw Metal on Apple only where measured
 
-*Start with wgpu on every platform, since the desktop trio ships together; the raw Metal backend below
-becomes a later optimization, added only where measurements show wgpu falls short.*
-
-A ~400-line internal trait over two backends. Raw Metal (`objc2-metal`) on Apple gets precompiled `.metallib`
-(no shader compile at launch), `IOSurface` zero-copy video, framebuffer fetch for cheap group opacity on Apple
-silicon, and exact control of `CAMetalLayer` presentation (`presentsWithTransaction`, drawable count). wgpu covers
-Windows, Linux, Android and WebGPU; Zed's own move from blade to wgpu in 2026 is the evidence that it's good enough
-there ([04 §2](research/04-language-gpu-renderer.md), [01](research/01-gpui-zed-warp.md)). Rejected: wgpu on Apple
-(loses the above, adds startup cost), hand-written Vulkan/D3D12 (Zed just deleted theirs).
+wgpu runs on every platform, since the desktop trio ships together. Zed's own move from blade to wgpu in 2026 is
+the evidence that it's good enough ([04 §2](research/04-language-gpu-renderer.md),
+[01](research/01-gpui-zed-warp.md)). A raw Metal (`objc2-metal`) backend behind a thin internal trait is a later
+optimization, added only where measurements show wgpu falls short: precompiled `.metallib` (no shader compile at
+launch), `IOSurface` zero-copy video, framebuffer fetch for cheap group opacity on Apple silicon, and exact control
+of `CAMetalLayer` presentation (`presentsWithTransaction`, drawable count). Rejected: hand-written Vulkan/D3D12 (Zed
+just deleted theirs).
 
 ### 4.3 Renderer
 
@@ -309,7 +307,8 @@ methods, and adding a struct field isn't detected. So the ≤ 300 ms target hold
 most tuning edits; structural Rust edits are about a second. Getting those under 300 ms is M1 work: measure at
 foreground priority on the Mac, keep each app's views in a tiny leaf crate, use the fastest linker, and try the
 cranelift backend for dev builds. Patch boundaries are Rune's view functions and handlers, not arbitrary code; a
-type change in a model triggers the snapshot-and-restore path instead of a silent patch.
+type change in a model triggers the snapshot-and-restore path instead of a silent patch. Layer 3 ships as the
+opt-in `hot` feature and `scripts/rune-dev` (see "Live Rust editing" in [`crates/rune/README.md`](crates/rune/README.md)).
 
 **Split-process dev mode.** In dev builds the iPhone runs a generic Rune "player": shell, renderer, render thread,
 animation, text rasterizing, scroll and drag physics. The app side (models, views, layout, shaping) runs on the Mac
@@ -414,9 +413,10 @@ were recalled rather than re-read; each note marks which. Cite-check before rely
   ([13](research/13-research-latency-startup.md), [15]).
 - **Text under motion:** snap y, ¼-px x phases while moving, end the track at the analytic settle time to avoid
   shimmer; spatial springs may overshoot, opacity/colour springs never do ([15]).
-- **CPU reference renderer = `vello_cpu`** (pinned), the exact lane with hash goldens; GPU lanes get per-primitive
-  tolerances, because the WGSL spec allows FMA fusion and reassociation, so GPU bit-exactness can't be promised
-  ([12](research/12-research-rendering.md), [14](research/14-research-determinism-verification.md)).
+- **CPU reference renderer:** `crates/rune-ref` evaluates Rune's own instance formulas on the CPU, the exact lane
+  with hash goldens; GPU lanes get per-channel tolerances, because the WGSL spec allows FMA fusion and
+  reassociation, so GPU bit-exactness can't be promised ([24](research/24-reference-renderer.md),
+  [12](research/12-research-rendering.md), [14](research/14-research-determinism-verification.md)).
 - **Differential fuzzing of fast vs reference** from one structured scene generator (Vello's
   `cpu_gpu_differential` fuzz target is the model), plus metamorphic and model-based tests from the same generator
   ([14]).
@@ -447,7 +447,7 @@ were recalled rather than re-read; each note marks which. Cite-check before rely
 - **Springs evaluated on the GPU.** Two notes reached this independently ([12], [17]): instances reference
   transform/clip/effect property nodes (Chromium's property trees) whose analytic spring tracks a shader evaluates,
   so an animating frame costs the CPU about one uniform write regardless of how many things move. Verified against
-  the CPU evaluator.
+  the CPU evaluator. Spiked as opt-in translation/opacity tracks in `crates/rune/src/gpu_springs.rs`.
 - Liquid-glass lens in our own shader (SDF height field, refraction, dispersion, smooth-union morphing) ([12]).
 - Word-level FLIP when text reflows during a resize ([15]); Slug for scale-animated text ([12]).
 - Runtime-generated UI: an A2UI-shaped protocol (flat ids, separate data model, patches) on the command channel, with
@@ -550,9 +550,9 @@ never a developer's desk display). CI runs deterministic correctness on every ch
 | S1 hot patch | edit → patched function running, with state, via subsecond in a non-Dioxus Rust binary | **done:** works; 989 ms median, 1,150 ms p95 ([08](research/08-spike-hot-patch.md)) |
 | S1b fast patch | same edit at foreground priority, views in a leaf crate, fastest linker, cranelift: can it reach 300 ms? | build Mac |
 | S2 glass sync | can an `NSGlassEffectView` underlay track a render-thread-animated shape at 120 Hz with the main thread blocked, no edge glitches? | GUI test Mac, recorded off the desk display |
-| S3 pacing | `CADisplayLink` vs `CAMetalDisplayLink` latency and stability; immediate draw on input; event → present numbers | GUI test Mac |
+| S3 pacing | `CADisplayLink` vs `CAMetalDisplayLink` latency and stability; immediate draw on input; event → present numbers | **probe built:** `CVDisplayLink` and `CADisplayLink` both tick at 120 Hz; Rune paces one submission per tick ([native-pacing](scripts/native-pacing/README.md)) |
 | S4 split mode | renderer on an iPhone, app side on the Mac over USB: round-trip latency and edit → pixels | build Mac + an iPhone |
-| S5 text | Parley + atlas + dilation vs CoreText, pixel diff on 200 strings at 1× and 2× | headless worker |
+| S5 text | Parley + atlas + dilation vs CoreText, pixel diff on 200 strings at 1× and 2× | **done:** raster and blend calibrated against CoreText ([23](research/23-text-quality.md)) |
 
 **M0.5 — Rendering smoke test (now).** Before any of the theming or component work: one small window (a settings
 panel) that proves the basics render correctly. Rounded rects, borders, shadows, soft edges, crisp text that isn't
