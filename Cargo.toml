@@ -7,6 +7,7 @@ members = [
     "crates/rune-kit",
     "crates/rune-fx",
     "crates/rune-light",
+    "crates/procwatch",
     "themes/opencode",
     "examples/hello",
     "examples/todo",
