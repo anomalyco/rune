@@ -159,6 +159,7 @@ mod frame_profile;
 #[doc(hidden)]
 pub use frame_profile::{PHASES, take_frame_phases, thread_cpu_ms};
 pub mod file_dialog;
+pub mod tray;
 mod open_url;
 mod open_url_in;
 pub mod prefs;
@@ -203,6 +204,7 @@ pub use growth::{GROWTH, StreamEdge, edge};
 pub use live::{Live, LiveText, Tween};
 pub use memo::memo;
 pub use pixels::Pixels;
+pub use tray::{Tray, TrayError, TrayEvent, TrayIcon, TrayItem, TraySpec};
 pub use file_dialog::{FileDialogError, FileDialogKind, FileDialogOptions, FileDialogResult, FileDialogs, ScriptedFileDialog};
 pub use image::{Image, ImageCache, ImageError, ImageId};
 pub use rune_motion::{
