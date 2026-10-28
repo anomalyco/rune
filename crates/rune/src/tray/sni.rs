@@ -163,9 +163,9 @@ impl Native {
             };
             runtime.block_on(async move {
                 let setup = async {
-                    let conn = zbus::connection::Builder::session()?
-                        .serve_at(ITEM_PATH, Item { model: model.clone(), on_event: on_event.clone() })?
-                        .serve_at(MENU_PATH, Menu { model: model.clone(), on_event })?
+                    let conn = zbus::connection::Builder::session()
+                        .serve_at(ITEM_PATH, Item { model: model.clone(), on_event: on_event.clone() })
+                        .serve_at(MENU_PATH, Menu { model: model.clone(), on_event })
                         .build().await?;
                     let bus = Proxy::new(&conn, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus").await?;
                     let owners = bus.receive_signal_with_args("NameOwnerChanged", &[(0, WATCHER)]).await?;
