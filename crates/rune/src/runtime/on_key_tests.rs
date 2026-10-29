@@ -239,6 +239,7 @@ fn outline_state_reaches_the_element_tree() {
     assert_eq!((file.level, file.expanded, file.item_selected), (Some(2), None, false));
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn a_truncation_tooltip_shows_only_while_the_text_is_cut() {
     struct S {
