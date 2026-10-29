@@ -190,16 +190,17 @@ fn a_long_scrolled_text_paints_only_its_visible_lines() {
     rt.frame(1.0 / 60.0);
     assert!(rt.text.atlas.glyph_entries() > top, "the capitals on the last line rasterize only once shown");
 
-    // Line 6 sits at y = 72..84 pt, 22 pt (> 2 * 10 pt) below the 50 pt clip, but its 120 pt
-    // span's ascender reaches up into the clip and must still paint.
+    // Line 15 starts at y = 75 pt, 25 pt (> 2 * 10 pt) below the 50 pt clip. The 120 pt span keeps
+    // the paragraph's 0.5 leading ratio, so its box is 60 pt tall and the glyph overhangs it:
+    // the ascender reaches up into the clip and must still paint.
     fn span_view(_: &(), _: &mut Cx<()>) -> El {
-        let s = "a\n".repeat(6) + "T";
+        let s = "a\n".repeat(15) + "T";
         col().w_full().h_full().child(col().w_full().h(50.0).scroll(ScrollSpec { stick_bottom: false })
-            .child(text(&s).font(TextStyle::new(10.0, 400.0).lh(12.0)).spans(vec![Span::new(12, 13).size(120.0)])))
+            .child(text(&s).font(TextStyle::new(10.0, 400.0).lh(5.0)).spans(vec![Span::new(30, 31).size(120.0)])))
     }
     let mut rt = Runtime::new((), span_view, (200.0, 200.0), Env::new(true, 2.0));
     rt.frame(0.0);
-    assert_eq!(rt.stats.glyphs, 5, "4 visible 'a' lines plus the overhanging 'T' glyph");
+    assert_eq!(rt.stats.glyphs, 11, "10 visible 'a' lines plus the overhanging 'T' glyph");
     assert_eq!(rt.text.atlas.glyph_entries(), 2, "'a' and overhanging 'T' both rasterized");
 }
 
