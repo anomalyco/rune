@@ -387,7 +387,7 @@ impl<S: 'static> Runtime<S> {
         let mut queued = false;
         let quiet = !self.layout_feedback_open();
         let last = std::mem::take(&mut self.drawn_fired);
-        let mut fired = HashMap::with_capacity(last.len());
+        let mut fired = HashMap::with_capacity_and_hasher(last.len(), Default::default());
         for i in 0..self.nodes.len() {
             let n = &self.nodes[i];
             if n.on_drawn_layout.is_none() || self.subtree_exiting(i) { continue; }
@@ -448,7 +448,7 @@ impl<S: 'static> Runtime<S> {
     fn report_rects(&mut self, quiet: bool, screen: bool) -> bool {
         let last = std::mem::take(if screen { &mut self.screen_fired } else { &mut self.layout_fired });
         let (ox, oy) = if screen { self.window_origin } else { (0.0, 0.0) };
-        let mut fired = HashMap::with_capacity(last.len());
+        let mut fired = HashMap::with_capacity_and_hasher(last.len(), Default::default());
         let mut queued = false;
         for i in 0..self.nodes.len() {
             let n = &self.nodes[i];

@@ -7,7 +7,9 @@
 //! queued input → (commit if state changed) → Scene → growth → scroll → reveals → build.
 
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+// The runtime's maps hash node ids and paths every commit; SipHash's DoS resistance buys nothing here.
+pub(crate) type HashMap<K, V> = std::collections::HashMap<K, V, rustc_hash::FxBuildHasher>;
+pub(crate) type HashSet<K> = std::collections::HashSet<K, rustc_hash::FxBuildHasher>;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -1447,9 +1449,9 @@ impl<S: 'static> Runtime<S> {
                 tree.disable_rounding();
                 tree
             },
-            layout_entries: HashMap::new(),
-            node_index: HashMap::new(),
-            path_ids: HashMap::new(),
+            layout_entries: HashMap::default(),
+            node_index: HashMap::default(),
+            path_ids: HashMap::default(),
             memo: Default::default(),
             next_id: 1,
             commits: 0,
@@ -1485,16 +1487,16 @@ impl<S: 'static> Runtime<S> {
             built: false,
             built_ids: Vec::new(),
             #[cfg(debug_assertions)]
-            matched_warned: HashSet::new(),
+            matched_warned: HashSet::default(),
             layer_scratch: Vec::new(),
-            input_scroll: HashMap::new(),
+            input_scroll: HashMap::default(),
             dissolve_scratch: Vec::new(),
             has_dissolve: false,
             cache_live_scratch: Vec::new(),
             cache_check_scratch: Vec::new(),
             cache_paint_scratch: Vec::new(),
             cache_inside_scratch: Vec::new(),
-            node_caches: HashMap::new(),
+            node_caches: HashMap::default(),
             has_cache: false,
             commit_gen: 0,
             last_dt: 0.0,
@@ -1515,19 +1517,19 @@ impl<S: 'static> Runtime<S> {
             drawn: Vec::new(),
             drawn_scale: Vec::new(),
             seen: Vec::new(),
-            scrolls: HashMap::new(),
+            scrolls: HashMap::default(),
             wheel_lock: Default::default(),
             #[cfg(any(test, target_arch = "wasm32"))]
             web_scroll: None,
-            grows: HashMap::new(),
-            stacks: HashMap::new(),
-            virtuals: HashMap::new(),
-            virtual_culled: HashSet::new(),
+            grows: HashMap::default(),
+            stacks: HashMap::default(),
+            virtuals: HashMap::default(),
+            virtual_culled: HashSet::default(),
             memo_since: 0,
             virtual_fill: 0,
             state_unchanged: false,
-            virtual_inputs: HashMap::new(),
-            reveals: HashMap::new(),
+            virtual_inputs: HashMap::default(),
+            reveals: HashMap::default(),
             flights: Vec::new(),
             launches: Default::default(),
             pixel_snap: Default::default(),
@@ -1551,10 +1553,10 @@ impl<S: 'static> Runtime<S> {
             unmounted_focused: Vec::new(),
             modal_index: None,
             modal_members: Vec::new(),
-            loops: HashMap::new(),
+            loops: HashMap::default(),
             loop_clock: Default::default(),
             loops_active: false,
-            static_scales: HashMap::new(),
+            static_scales: HashMap::default(),
             static_scale_settling: false,
             time_scaled: false,
             loop_wake: None,
@@ -1571,9 +1573,9 @@ impl<S: 'static> Runtime<S> {
             caret: None,
             caret_watch: false,
             layout_seen: Default::default(),
-            layout_fired: HashMap::new(),
-            screen_fired: HashMap::new(),
-            drawn_fired: HashMap::new(),
+            layout_fired: HashMap::default(),
+            screen_fired: HashMap::default(),
+            drawn_fired: HashMap::default(),
             window_origin: (0.0, 0.0),
             layout_echoes: 0,
             caret_follow: false,
@@ -3903,7 +3905,7 @@ impl<S: 'static> Runtime<S> {
 
         // What drew nothing last frame has no exit to show (`unseen_presence.rs`).
         let drew_nothing = self.drew_nothing();
-        let unseen_ids: HashSet<NodeId> = if self.virtuals.is_empty() { HashSet::new() } else {
+        let unseen_ids: HashSet<NodeId> = if self.virtuals.is_empty() { HashSet::default() } else {
             self.nodes.iter().zip(&drew_nothing).filter(|&(_, &u)| u).map(|(n, _)| n.id).collect()
         };
 

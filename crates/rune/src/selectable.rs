@@ -430,7 +430,7 @@ impl<S: 'static> Runtime<S> {
             return Vec::new();
         }
         let sel = (!selected.is_empty()).then(|| self.selection_snapshot()).flatten();
-        let (mut out, mut heard) = (Vec::new(), HashMap::new());
+        let (mut out, mut heard) = (Vec::new(), HashMap::default());
         for w in watchers {
             let path = self.nodes[w].path.clone();
             let now = sel.clone().filter(|_| selected.iter().any(|&j| inside(w, j)));
@@ -712,7 +712,7 @@ impl<S: 'static> Runtime<S> {
             let content = self.content_of(i).to_owned();
             let (a, b) = self.unit_in(i, at, Unit::Word);
             self.text_sel = Held { path: Some(path.to_owned()), content, anchor: a, focus: b, far: None,
-                anchor_end: None, focus_end: None, mounted_between: HashMap::new(), between: 0,
+                anchor_end: None, focus_end: None, mounted_between: HashMap::default(), between: 0,
                 unit: Unit::Word, origin: (a, b), dragging: false, last: None, shift: self.text_sel.shift,
                 pick: std::mem::take(&mut self.text_sel.pick) };
             self.seal_between();

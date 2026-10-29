@@ -56,7 +56,7 @@ impl<S: 'static> Runtime<S> {
     /// just mounted. Costs nothing without matched elements; else O(matched), plus one pass over
     /// the old nodes when a pair matches.
     pub(super) fn match_elements(&mut self, nodes: &[Node], arrivals: Vec<(Rc<str>, usize, bool)>, tx: &Tx, instant: bool) {
-        let mut by_id: HashMap<Rc<str>, (usize, bool)> = HashMap::with_capacity(arrivals.len());
+        let mut by_id: HashMap<Rc<str>, (usize, bool)> = HashMap::with_capacity_and_hasher(arrivals.len(), Default::default());
         for (key, i, arriving) in arrivals {
             if by_id.insert(key.clone(), (i, arriving)).is_some() { self.warn_duplicate_match(&key); }
         }

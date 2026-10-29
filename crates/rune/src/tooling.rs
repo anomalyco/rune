@@ -1001,7 +1001,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         trace.all = args.trace_all;
         trace
     });
-    rt.trace_channels = trace.as_ref().map(|_| HashMap::new());
+    rt.trace_channels = trace.as_ref().map(|_| Default::default());
     rt.scene.store_mut().audit_retargets(trace.is_some());
     let mut strip: Vec<Vec<u8>> = Vec::new();
     let crops_px: Vec<[u32; 4]> = args.crops.iter().map(|c| c.map(|v| (v * scale).round() as u32)).collect();

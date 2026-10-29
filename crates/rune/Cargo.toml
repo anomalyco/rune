@@ -52,6 +52,7 @@ serde_json = "1"
 portable-atomic = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 blake3 = "1"
+rustc-hash = "2"
 zeroize = "1.8"
 half = "2"
 unicode-segmentation = "1.13"
