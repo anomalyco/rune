@@ -20,7 +20,7 @@ const CODE: TextStyle =
 
 /// A parsed piece of a [`Note`]: either plain Markdown or a structured block.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Piece {
+pub(crate) enum Piece {
     Markdown(String),
     Facts(Vec<(String, String)>),
     Compare(Vec<(String, String)>),
@@ -32,17 +32,17 @@ pub enum Piece {
 
 /// One `{status} Title · note` row inside a ```` ```steps ```` fence.
 #[derive(Clone, Debug, PartialEq)]
-pub struct StepRow {
-    pub status: String,
-    pub title: String,
-    pub note: Option<String>,
+pub(crate) struct StepRow {
+    pub(crate) status: String,
+    pub(crate) title: String,
+    pub(crate) note: Option<String>,
 }
 
 /// Parsed diffstat breakdown inside a ```` ```size ```` fence.
 #[derive(Clone, Debug, PartialEq)]
-pub struct SizeBar {
-    pub parts: Vec<(String, i64, i64)>,
-    pub files: Option<String>,
+pub(crate) struct SizeBar {
+    pub(crate) parts: Vec<(String, i64, i64)>,
+    pub(crate) files: Option<String>,
 }
 
 /// Builder for rendering a Markdown note containing structured communication
@@ -101,7 +101,7 @@ fn render_with_gap(key_prefix: &str, src: &str, gap: f32, k: &Kit) -> El {
 }
 
 /// Split `src` into plain Markdown chunks and structured [`Piece`] blocks.
-pub fn cut(src: &str) -> Vec<Piece> {
+pub(crate) fn cut(src: &str) -> Vec<Piece> {
     let lines: Vec<&str> = src.lines().collect();
     let mut out = Vec::new();
     let mut md: Vec<&str> = Vec::new();
@@ -322,7 +322,7 @@ fn fnv1a(s: &str) -> u32 {
     h
 }
 
-pub fn draw_facts(key: &str, rows: &[(String, String)], k: &Kit) -> El {
+pub(crate) fn draw_facts(key: &str, rows: &[(String, String)], k: &Kit) -> El {
     let c = &k.c;
     let mut list = col().key(key).w_full().radius(8.0).fill(c.layer_02).border(1.0, c.border_weak).px(14.0).py(6.0);
     for (idx, (label, val)) in rows.iter().enumerate() {
@@ -362,7 +362,7 @@ pub fn draw_facts(key: &str, rows: &[(String, String)], k: &Kit) -> El {
     list
 }
 
-pub fn draw_compare(key: &str, sides: &[(String, String)], k: &Kit) -> El {
+pub(crate) fn draw_compare(key: &str, sides: &[(String, String)], k: &Kit) -> El {
     let c = &k.c;
     let mut grid = row().key(key).w_full().gap(10.0);
     for (idx, (label, body)) in sides.iter().enumerate() {
@@ -389,7 +389,7 @@ pub fn draw_compare(key: &str, sides: &[(String, String)], k: &Kit) -> El {
     grid
 }
 
-pub fn draw_steps(key: &str, steps: &[StepRow], k: &Kit) -> El {
+pub(crate) fn draw_steps(key: &str, steps: &[StepRow], k: &Kit) -> El {
     let c = &k.c;
     let built = steps
         .iter()
@@ -427,7 +427,7 @@ pub fn draw_steps(key: &str, steps: &[StepRow], k: &Kit) -> El {
     wrap
 }
 
-pub fn draw_size(key: &str, size: &SizeBar, k: &Kit) -> El {
+pub(crate) fn draw_size(key: &str, size: &SizeBar, k: &Kit) -> El {
     let c = &k.c;
     let totals: Vec<i64> = size.parts.iter().map(|(_, a, d)| (*a + *d).max(1)).collect();
     let grand: i64 = totals.iter().sum::<i64>().max(1);
@@ -480,7 +480,7 @@ pub fn draw_size(key: &str, size: &SizeBar, k: &Kit) -> El {
         .child(legend)
 }
 
-pub fn draw_code(key: &str, title: Option<&str>, marks: &[RangeInclusive<usize>], lines: &[String], k: &Kit) -> El {
+pub(crate) fn draw_code(key: &str, title: Option<&str>, marks: &[RangeInclusive<usize>], lines: &[String], k: &Kit) -> El {
     let c = &k.c;
     let mut card = col().key(key).w_full().radius(8.0).fill(c.bg_deep).border(1.0, c.border_weak);
     if let Some(title) = title {
@@ -522,7 +522,7 @@ pub fn draw_code(key: &str, title: Option<&str>, marks: &[RangeInclusive<usize>]
     card.child(body)
 }
 
-pub fn draw_callout(key: &str, label: Option<&str>, body: &str, k: &Kit) -> El {
+pub(crate) fn draw_callout(key: &str, label: Option<&str>, body: &str, k: &Kit) -> El {
     let c = &k.c;
     let mut inner = col().grow(1.0).shrink().gap(4.0);
     if let Some(label) = label {
