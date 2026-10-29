@@ -4411,9 +4411,9 @@ impl<S: 'static> Runtime<S> {
 
         // Removed nodes stay mounted in `Scene` until their exit transition settles at opacity 0.
         let present_len = nodes.len();
-        let old_nodes = std::mem::take(&mut self.nodes);
+        let mut old_nodes = std::mem::take(&mut self.nodes);
         let old_ids: Vec<NodeId> = old_nodes.iter().map(|n| n.id).collect();
-        for (oi, mut old) in old_nodes.into_iter().enumerate() {
+        for old in &old_nodes {
             if let Some(&i) = self.node_index.get(&old.id) {
                 let mut fill = None;
                 for bound in &mut nodes[i].live {
@@ -4434,7 +4434,12 @@ impl<S: 'static> Runtime<S> {
                     }
                 }
             }
-            if self.node_index.contains_key(&old.id) { continue; }
+        }
+        // Only the nodes that left are moved out; the rest drop where they are.
+        let gone: Vec<usize> = (0..old_nodes.len()).filter(|&oi| !self.node_index.contains_key(&old_ids[oi])).collect();
+        let mut at = 0;
+        old_nodes.retain(|_| { at += 1; gone.binary_search(&(at - 1)).is_ok() });
+        for (oi, mut old) in gone.into_iter().zip(old_nodes) {
             if !self.scene.contains(old.id) {
                 self.hover_pruned(&old);
                 continue;
