@@ -345,6 +345,7 @@ impl Renderer {
         let any = self.effects.iter().any(|(_, i)| i.params[1] == KIND_BACKDROP_BLUR);
         if let Some(b) = &mut self.backdrop_blur { b.records.clear(); }
         if !any || vw == 0 || vh == 0 { return; }
+        let staging = self.uploads.staging(device, queue);
         if self.backdrop_blur.is_none() {
             let mut blur = BackdropBlur::new(device, &self.bind_layout);
             for bd in &self.backdrops { blur.bind_backdrop(device, bd.format, &bd.view); }
@@ -401,7 +402,7 @@ impl Renderer {
             blur.records.push(Record { at, slot, levels: n, region, origin });
         }
         let used = blur.records.last().map_or(0, |r| (r.slot + 1) * SLOTS * SLOT as usize);
-        if used > 0 { queue.write_buffer(&blur.uniforms, 0, &levels_data[..used]); }
+        staging.write_buffer(&blur.uniforms, 0, &levels_data[..used]);
     }
 
     /// Draws the backdrop blur record at `at`: splits the pass to copy and blur what is below,

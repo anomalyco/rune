@@ -2908,6 +2908,7 @@ dependencies = [
  "resvg",
  "rfd",
  "rune-motion",
+ "rune-staging",
  "serde",
  "serde_json",
  "subsecond",
@@ -3032,6 +3033,13 @@ name = "rune-register"
 version = "0.1.0"
 dependencies = [
  "linkme",
+]
+
+[[package]]
+name = "rune-staging"
+version = "0.0.1"
+dependencies = [
+ "wgpu",
 ]
 
 [[package]]

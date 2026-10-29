@@ -4,6 +4,7 @@ members = [
     "crates/rune",
     "crates/rune-ref",
     "crates/rune-motion",
+    "crates/rune-staging",
     "crates/rune-kit",
     "crates/rune-fx",
     "crates/rune-light",

@@ -598,6 +598,7 @@ pub struct Renderer {
     backdrops: Vec<Backdrop>,
     /// Pipelines and pyramid for backdrop blur records, built on the first one.
     backdrop_blur: Option<backdrop_blur::BackdropBlur>,
+    uploads: upload::Uploads,
 }
 
 impl Renderer {
@@ -681,6 +682,7 @@ impl Renderer {
             effects: Vec::new(),
             backdrops: Vec::new(),
             backdrop_blur: None,
+            uploads: Default::default(),
         }
     }
 
@@ -805,6 +807,7 @@ impl Renderer {
     /// Scopes are atomic: list/range boundaries must not bisect a layer.
     pub fn draw_range(&self, pass: &mut wgpu::RenderPass<'_>, format: wgpu::TextureFormat, range: std::ops::Range<u32>) {
         if range.is_empty() && range.end != self.count { return; }
+        self.submit_uploads();
         self.validate_layer_range(&range);
         let mut active = ActivePass::borrowed(pass);
         self.draw_layer_range(&mut active, format, range, None, &mut |_, _| {});
@@ -817,6 +820,7 @@ impl Renderer {
     /// `draw_with_backdrop`, or `draw_target_range_with` when slots request a backdrop copy.
     pub fn draw_range_with(&self, pass: &mut wgpu::RenderPass<'_>, format: wgpu::TextureFormat, range: std::ops::Range<u32>, hook: &mut EffectHook<'_>) {
         if range.is_empty() && range.end != self.count { return; }
+        self.submit_uploads();
         self.validate_layer_range(&range);
         let mut active = ActivePass::borrowed(pass);
         self.draw_layer_range(&mut active, format, range, None, &mut |phase, site| {
@@ -870,6 +874,7 @@ impl Renderer {
     ) {
         if range.is_empty() && range.end != self.count { return; }
         self.validate_layer_range(&range);
+        self.flush_uploads(encoder);
         let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("frame"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -965,6 +970,7 @@ impl Renderer {
     pub fn srgb_blend(&self) -> bool { self.srgb_blend }
 
     pub fn submit(&self, queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) -> wgpu::SubmissionIndex {
+        self.submit_uploads();
         if let Some(s) = &self.surfaces { s.submit(queue,encoder) } else { queue.submit([encoder.finish()]) }
     }
 

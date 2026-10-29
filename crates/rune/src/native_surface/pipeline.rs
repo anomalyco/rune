@@ -73,6 +73,8 @@ pub struct SurfaceRenderer {
     cache: HashMap<usize, Arc<Imported>>,
     draws: Vec<Prepared>,
     srgb_blend: bool,
+    /// The owning `Renderer`'s uploads, when it has one; queue writes otherwise.
+    staging: Option<rune_staging::Staging>,
     #[cfg(target_os = "macos")]
     importer: Option<macos::Importer>,
 }
@@ -158,6 +160,7 @@ impl SurfaceRenderer {
             cache: HashMap::new(),
             draws: Vec::new(),
             srgb_blend: false,
+            staging: None,
             #[cfg(target_os = "macos")]
             importer: None,
         }
@@ -165,6 +168,17 @@ impl SurfaceRenderer {
 
     pub fn set_srgb_blend(&mut self, enabled: bool) {
         self.srgb_blend = enabled;
+    }
+
+    pub(crate) fn set_staging(&mut self, staging: rune_staging::Staging) {
+        self.staging = Some(staging);
+    }
+
+    fn write(&self, queue: &wgpu::Queue, buffer: &wgpu::Buffer, data: &[u8]) {
+        match &self.staging {
+            Some(s) => s.write_buffer(buffer, 0, data),
+            None => queue.write_buffer(buffer, 0, data),
+        }
     }
 
     fn pipeline(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, format: wgpu::TextureFormat, blend: Blend) -> wgpu::RenderPipeline {
@@ -280,7 +294,10 @@ impl SurfaceRenderer {
             };
             if let Some(p) = self.draws.get_mut(count).filter(|p| Arc::ptr_eq(&p.imported, &imported)) {
                 *p.drawn.get_mut() = false;
-                queue.write_buffer(&p.uniform, 0, bytemuck::bytes_of(&u));
+                match &self.staging {
+                    Some(s) => s.write_buffer(&p.uniform, 0, bytemuck::bytes_of(&u)),
+                    None => queue.write_buffer(&p.uniform, 0, bytemuck::bytes_of(&u)),
+                }
                 p.before = d.before_instance;
                 p.surface = d.surface.clone();
             } else {
@@ -392,8 +409,7 @@ impl SurfaceRenderer {
     }
     /// Reproject one draw into a bounded layer without moving its screen-space clip or UVs.
     pub(crate) fn target(&self, queue: &wgpu::Queue, index: usize, bounds: [f32; 4]) {
-        queue.write_buffer(&self.draws[index].uniform, 0,
-            bytemuck::cast_slice(&[bounds[2], bounds[3], bounds[0], bounds[1]]));
+        self.write(queue, &self.draws[index].uniform, bytemuck::cast_slice(&[bounds[2], bounds[3], bounds[0], bounds[1]]));
     }
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, index: usize) {
         self.draw_format(pass, index, self.format);

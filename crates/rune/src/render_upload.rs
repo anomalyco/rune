@@ -1,27 +1,79 @@
 //! Per-frame uploads: instances, globals, glyph and image atlas rows, and GPU spring nodes.
+//!
+//! Writes go through the renderer's `Staging`, so a steady frame allocates no buffers. They are
+//! recorded into the frame's encoder where the renderer first uses it (`flush_uploads`, at the
+//! start of `encode_layers*` and `draw_target_range_with`), or submitted ahead of a draw into a
+//! caller's pass (`draw_range*`) and of `Renderer::submit`. Globals are written only when they
+//! change, and instances only from the first to the last one that changed.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use rune_staging::Staging;
 
 use super::*;
 
+/// Upload state: the staging, and what the instance and globals buffers hold.
+pub(super) struct Uploads {
+    /// Made on the first upload, which brings the queue.
+    staging: Option<Staging>,
+    /// The instance buffer's contents, so a frame writes only the span that changed.
+    instances: Vec<Instance>,
+    /// The viewport last written to globals (`width << 32 | height`, `u64::MAX` before any).
+    viewport: AtomicU64,
+    /// The sRGB flag last written to globals.
+    srgb: Option<bool>,
+    /// `Staging::lost` as last seen by `prepare` and by `upload_images`.
+    lost: (u64, u64),
+    #[cfg(test)]
+    pub(super) globals_writes: u64,
+}
+
+impl Default for Uploads {
+    fn default() -> Uploads {
+        Uploads { staging: None, instances: Vec::new(), viewport: AtomicU64::new(u64::MAX), srgb: None, lost: (0, 0),
+            #[cfg(test)] globals_writes: 0 }
+    }
+}
+
+impl Uploads {
+    pub(super) fn staging(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Staging {
+        self.staging.get_or_insert_with(|| Staging::new(device, queue)).clone()
+    }
+
+    #[cfg(test)]
+    pub(super) fn stats(&self) -> rune_staging::Stats {
+        self.staging.as_ref().map(Staging::stats).unwrap_or_default()
+    }
+}
+
+fn pack((w, h): (u32, u32)) -> u64 { u64::from(w) << 32 | u64::from(h) }
+
 impl Renderer {
-    /// Uploads rows `y0..y1` of `texture` from its tightly packed CPU copy `data`.
-    fn write_rows(queue: &wgpu::Queue, texture: &wgpu::Texture, data: &[u8], (y0, y1): (u32, u32)) {
+    /// Records pending uploads into `encoder`, ahead of the renderer's commands in it.
+    pub(super) fn flush_uploads(&self, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(s) = &self.uploads.staging { s.flush(encoder); }
+    }
+
+    /// Submits pending uploads ahead of commands already recorded.
+    pub(super) fn submit_uploads(&self) {
+        if let Some(s) = &self.uploads.staging { s.submit(); }
+    }
+
+    /// Writes rows `y0..y1` of `texture` from its tightly packed CPU copy `data`.
+    fn write_rows(staging: &Staging, texture: &wgpu::Texture, data: &[u8], (y0, y1): (u32, u32)) {
+        if y1 <= y0 { return; }
         let row = texture.width() * texture.format().block_copy_size(None).unwrap();
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d { x: 0, y: y0, z: 0 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            &data[(y0 * row) as usize..(y1 * row) as usize],
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: None },
-            wgpu::Extent3d { width: texture.width(), height: y1 - y0, depth_or_array_layers: 1 },
-        );
+        staging.write_texture_rows(texture, y0, &data[(y0 * row) as usize..(y1 * row) as usize]);
     }
 
     /// Uploads changed rows of the runtime's image atlas (`El::pixels`), creating its texture on
     /// first use.
     pub fn upload_images(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, images: &mut ImageAtlas) {
+        let staging = self.uploads.staging(device, queue);
+        if staging.lost() != self.uploads.lost.1 {
+            self.uploads.lost.1 = staging.lost();
+            for page in &mut images.pages { page.dirty = Some((0, page.height)); }
+        }
         let mut changed = self.images.len() != images.pages.len();
         self.images.resize_with(images.pages.len(), || None);
         for (index, page) in images.pages.iter_mut().enumerate() {
@@ -34,7 +86,7 @@ impl Renderer {
                 page.dirty = Some((0, page.height));
             }
             let Some(rows) = page.dirty.take() else { continue };
-            Self::write_rows(queue, &self.images[index].as_ref().unwrap().0, &page.data, rows);
+            Self::write_rows(&staging, &self.images[index].as_ref().unwrap().0, &page.data, rows);
         }
         if changed { self.images_changed(); }
         self.refresh_layer_bindings(device);
@@ -70,7 +122,9 @@ impl Renderer {
         })
     }
 
-    /// Uploads instances, globals and any new glyphs.
+    /// Uploads instances, globals and any new glyphs. They land ahead of the renderer's next draw:
+    /// recorded into the encoder it draws into, which must then be submitted, or submitted ahead
+    /// of a `draw_range` and of `submit`.
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
@@ -80,7 +134,12 @@ impl Renderer {
         viewport: (u32, u32),
     ) {
         if self.springs.is_some() { assert_eq!(instances.len(), self.spring_instances); }
-        if let Some(rows) = atlas.dirty.take() { Self::write_rows(queue, &self.atlas, &atlas.data, rows); }
+        let staging = self.uploads.staging(device, queue);
+        if staging.lost() != self.uploads.lost.0 {
+            self.uploads.lost.0 = staging.lost();
+            self.resend_uploads(atlas);
+        }
+        if let Some(rows) = atlas.dirty.take() { Self::write_rows(&staging, &self.atlas, &atlas.data, rows); }
         let mut atlas_changed = self.atlas_pages.len() > atlas.pages.len();
         self.atlas_pages.truncate(atlas.pages.len());
         for (index, page) in atlas.pages.iter_mut().enumerate() {
@@ -91,20 +150,26 @@ impl Renderer {
                 atlas_changed = true;
             }
             if let Some(rows) = page.dirty.take() {
-                Self::write_rows(queue, &self.atlas_pages[index].0, &page.data, rows);
+                Self::write_rows(&staging, &self.atlas_pages[index].0, &page.data, rows);
             }
         }
         if atlas_changed { self.images_changed(); }
         if instances.len() > self.capacity {
             self.capacity = instances.len().next_power_of_two();
             self.instances = Self::instance_buffer(device, self.capacity);
+            self.uploads.instances.clear();
         }
-        queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(instances));
+        self.write_instances(&staging, instances);
         // Geometry uploads must preserve a presentation timestamp already latched this frame.
-        let g: [f32; 2] = [viewport.0 as f32, viewport.1 as f32];
-        queue.write_buffer(&self.globals, 0, bytemuck::cast_slice(&g));
-        let flags: [f32; 4] = [if self.srgb_blend { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0];
-        queue.write_buffer(&self.globals, 16, bytemuck::cast_slice(&flags));
+        if self.uploads.viewport.swap(pack(viewport), Ordering::Relaxed) != pack(viewport) {
+            staging.write_buffer(&self.globals, 0, bytemuck::cast_slice(&[viewport.0 as f32, viewport.1 as f32]));
+            #[cfg(test)] { self.uploads.globals_writes += 1; }
+        }
+        if self.uploads.srgb.replace(self.srgb_blend) != Some(self.srgb_blend) {
+            let flags: [f32; 4] = [if self.srgb_blend { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0];
+            staging.write_buffer(&self.globals, 16, bytemuck::cast_slice(&flags));
+            #[cfg(test)] { self.uploads.globals_writes += 1; }
+        }
         self.count = instances.len() as u32;
         self.image_batches.clear();
         let (mut start, mut bind) = (0, BatchBind::Image(0));
@@ -153,6 +218,7 @@ impl Renderer {
         if !draws.is_empty() && self.surfaces.is_none() {
             let mut surfaces = crate::native_surface::SurfaceRenderer::new(device, self.format);
             surfaces.set_srgb_blend(self.srgb_blend);
+            surfaces.set_staging(self.uploads.staging(device, queue));
             for (format, _) in &self.extra { surfaces.add_format(device, *format); }
             self.surfaces = Some(surfaces);
         }
@@ -167,7 +233,12 @@ impl Renderer {
     /// One uniform write per presentation-only frame; use the display's target time.
     pub fn present_at(&self, queue: &wgpu::Queue, viewport: (u32, u32), time: f64) {
         let t = crate::gpu_springs::split_time(time);
-        queue.write_buffer(&self.globals, 0, bytemuck::cast_slice(&[viewport.0 as f32, viewport.1 as f32, t[0], t[1]]));
+        let data = [viewport.0 as f32, viewport.1 as f32, t[0], t[1]];
+        self.uploads.viewport.store(pack(viewport), Ordering::Relaxed);
+        match &self.uploads.staging {
+            Some(s) => s.write_buffer(&self.globals, 0, bytemuck::cast_slice(&data)),
+            None => queue.write_buffer(&self.globals, 0, bytemuck::cast_slice(&data)),
+        }
     }
 
     /// A retarget touches one node record; caller computes inherited position/velocity on CPU.
@@ -176,6 +247,44 @@ impl Renderer {
         assert!(id < properties.deadlines.len());
         properties.deadlines[id] = node.settle_at();
         properties.settle_at = properties.deadlines.iter().copied().fold(0.0, f64::max);
-        queue.write_buffer(&properties.nodes, (id * std::mem::size_of::<crate::gpu_springs::Node>()) as u64, bytemuck::bytes_of(node));
+        let offset = (id * std::mem::size_of::<crate::gpu_springs::Node>()) as u64;
+        match &self.uploads.staging {
+            Some(s) => s.write_buffer(&properties.nodes, offset, bytemuck::bytes_of(node)),
+            None => queue.write_buffer(&properties.nodes, offset, bytemuck::bytes_of(node)),
+        }
+    }
+
+    /// Writes the instances from the first to the last that differs from what the buffer holds.
+    fn write_instances(&mut self, staging: &Staging, instances: &[Instance]) {
+        let held = &mut self.uploads.instances;
+        let same = |(a, b): (&Instance, &Instance)| bytemuck::bytes_of(a) == bytemuck::bytes_of(b);
+        let shared = instances.len().min(held.len());
+        let pairs = || instances[..shared].iter().zip(&held[..shared]);
+        let first = pairs().position(|p| !same(p)).unwrap_or(shared);
+        let end = if instances.len() > held.len() {
+            instances.len()
+        } else {
+            pairs().rposition(|p| !same(p)).map_or(first, |last| last + 1)
+        };
+        held.resize(instances.len(), Instance::zeroed());
+        if first >= end { return; }
+        held[first..end].copy_from_slice(&instances[first..end]);
+        let offset = (first * std::mem::size_of::<Instance>()) as u64;
+        staging.write_buffer(&self.instances, offset, bytemuck::cast_slice(&instances[first..end]));
+    }
+
+    /// The staging lost writes (an encoder holding them was dropped unsubmitted): forget what
+    /// the buffers are thought to hold, so this frame writes it all again.
+    fn resend_uploads(&mut self, atlas: &mut Atlas) {
+        self.uploads.instances.clear();
+        self.uploads.viewport.store(u64::MAX, Ordering::Relaxed);
+        self.uploads.srgb = None;
+        atlas.dirty = Some((0, ATLAS_SIZE));
+        for page in &mut atlas.pages { page.dirty = Some((0, ATLAS_SIZE)); }
+        self.layers.forget_blur_uniforms();
     }
 }
+
+#[cfg(test)]
+#[path = "render_upload_tests.rs"]
+mod tests;

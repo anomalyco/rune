@@ -30,6 +30,7 @@ procwatch = { path = "../procwatch", optional = true }
 subsecond = { version = "=0.7.10", optional = true }
 dioxus-devtools = { version = "=0.7.10", optional = true }
 rune-motion = { path = "../rune-motion" }
+rune-staging = { path = "../rune-staging" }
 # Allow backend patch fixes; headless pixel equivalence guards the precompiled Metal path.
 wgpu = { version = "~30.0.1", default-features = false, features = ["std", "parking_lot", "metal", "wgsl"] }
 # Keep Wayland client-side frames/buttons without the title font's ab_glyph/ttf-parser.
@@ -116,6 +117,10 @@ futures-util = "0.3"
 
 [target.'cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
 wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"] }
+
+[dev-dependencies]
+# Live buffer counts (`Device::get_internal_counters`) for the upload tests.
+wgpu = { version = "~30.0.1", default-features = false, features = ["counters"] }
 
 [[example]]
 name = "tree_swap"

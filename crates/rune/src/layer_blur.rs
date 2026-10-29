@@ -129,7 +129,10 @@ impl Scratch {
     }
     pub fn passes(&self) -> usize { if self.reduced != self.size { 4 } else { 2 } }
 
-    pub fn prepare(&mut self, device: &wgpu::Device, pipeline: &Pipeline, queue: &wgpu::Queue, size: [f32; 2], sigma: f32, additive: bool) -> bool {
+    /// Makes the next `prepare` write the uniforms again.
+    pub fn forget_uniforms(&mut self) { self.sigma = f32::NAN; }
+
+    pub fn prepare(&mut self, device: &wgpu::Device, pipeline: &Pipeline, staging: &rune_staging::Staging, size: [f32; 2], sigma: f32, additive: bool) -> bool {
         let sigma = sigma.clamp(0.001, MAX_SIGMA);
         if self.size == size && self.sigma == sigma && self.additive == additive { return false; }
         let reduction = (sigma / 3.0).clamp(1.0, 8.0);
@@ -170,7 +173,7 @@ impl Scratch {
                 3 => [1.0 / scale[0], 1.0 / scale[1], 0.0, 0.0],
                 _ => [1.0, 1.0, 0.0, 0.0],
             };
-            queue.write_buffer(&self.uniforms[pass], 0, bytemuck::bytes_of(&u));
+            staging.write_buffer(&self.uniforms[pass], 0, bytemuck::bytes_of(&u));
             #[cfg(test)] { self.uniform_writes += 1; }
         }
         allocated
