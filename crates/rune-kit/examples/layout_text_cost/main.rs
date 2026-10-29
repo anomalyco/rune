@@ -12,6 +12,8 @@
 //! - `md-resize`: a `--kb` Markdown note in a scroll view; each frame steps the width 1 pt,
 //!   900 → 600 → 900, as a live resize does.
 //! - `md-same`: the Markdown note; each frame re-runs the view with nothing changed.
+//! - `vlist-resize`: the note's blocks as `virtual_rows` of Markdown, scrolled to the middle, as
+//!   a notes reader shows them; each frame steps the width as `md-resize` does.
 //! - `md-open`: the first frame of a fresh runtime showing the Markdown note (every text shaped).
 //! - `md-virtual`: the Markdown note's blocks as `virtual_rows`, scrolled 40 pt a frame, so the
 //!   mounted window shifts every frame or two.
@@ -44,7 +46,7 @@ use rune_kit::{Badge, Button, ButtonVariant, Card, Kit, Markdown, MarkdownStyle,
 #[global_allocator]
 static ALLOC: probe::Probe = probe::Probe;
 
-const CASES: &[&str] = &["stack", "stack-same", "list", "edit", "md-resize", "md-same", "md-open", "md-virtual", "md-beside", "tree"];
+const CASES: &[&str] = &["stack", "stack-same", "list", "edit", "md-resize", "md-same", "md-open", "md-virtual", "md-beside", "tree", "vlist-resize"];
 const METRICS: &[&str] = &["cpu_ms", "view_ms", "commit_ms", "layout_ms", "text_ms", "paint_ms", "apply_ms", "allocs", "shaped", "rebroken", "nodes"];
 const BG: Color = Color { r: 0.008, g: 0.008, b: 0.009, a: 1.0 };
 const WORDS: &[&str] = &["amber", "lantern", "orchard", "quiet", "harbor", "copper", "meadow", "signal", "drift",
@@ -255,6 +257,16 @@ fn tree_state() -> Tree {
     Tree { counts: vec![0; GROUPS * CELLS], labels: (0..GROUPS * CELLS).map(|_| { let n = 2 + r.next(4); r.words(n) }).collect() }
 }
 
+// vlist-resize
+
+struct Blocks { blocks: Vec<String>, keys: Vec<String>, style: MarkdownStyle }
+
+fn blocks_view(s: &Blocks, _: &mut Cx<Blocks>) -> El {
+    scroller(col().key("rows").w_full().px(32.0).py(24.0).gap(12.0).growth(GrowthSpec::default())
+        .virtual_rows(s.blocks.len(), 60.0, |s: &Blocks, i| Cow::Borrowed(s.keys[i].as_str()),
+            |s: &Blocks, i| Markdown::new(s.blocks[i].as_str()).render(&s.style)))
+}
+
 fn fonts() -> TextSystem {
     let mut fonts = TextSystem::default();
     fonts.layout_rich("Warm fonts", &[], TextStyle::new(15.0, 400.0), 2.0, None);
@@ -358,6 +370,18 @@ fn run(case: &str, tag: u32, kb: usize, meta: &mut Vec<String>) -> Vec<Vec<f64>>
                 let widths = (1..=300).map(|i| 900.0 - i as f32).chain((1..=300).map(|i| 600.0 + i as f32));
                 widths.map(|w| timed(&mut rt, tag, |rt| rt.set_viewport((w, 900.0), 2.0))).collect()
             }
+        }
+        "vlist-resize" => {
+            let blocks: Vec<String> = src.split("\n\n").filter(|b| !b.trim().is_empty()).map(String::from).collect();
+            let keys = (0..blocks.len()).map(|i| format!("b{i}")).collect();
+            let mut rt = runtime(Blocks { blocks, keys, style: MarkdownStyle::neutral(true) }, blocks_view, (900.0, 900.0));
+            rt.pointer_move(450.0, 450.0);
+            for _ in 0..40 { rt.wheel(450.0, 450.0, -400.0); rt.frame(1.0 / 120.0); }
+            settle(&mut rt);
+            probe::snapshot(tag);
+            meta.push(census(&rt, case, heap0));
+            let widths = (1..=300).map(|i| 900.0 - i as f32).chain((1..=300).map(|i| 600.0 + i as f32));
+            widths.map(|w| timed(&mut rt, tag, |rt| rt.set_viewport((w, 900.0), 2.0))).collect()
         }
         "md-open" => {
             let rows = (0..10).map(|_| {
