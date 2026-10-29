@@ -969,12 +969,12 @@ impl Renderer {
     /// premultiplied values, encoded by the `*Srgb` target on write.
     pub fn srgb_blend(&self) -> bool { self.srgb_blend }
 
-    pub fn submit(&self, queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) -> wgpu::SubmissionIndex {
-        self.submit_uploads();
+    pub fn submit(&self, queue: &wgpu::Queue, mut encoder: wgpu::CommandEncoder) -> wgpu::SubmissionIndex {
+        self.before_submit(&mut encoder);
         if let Some(s) = &self.surfaces { s.submit(queue,encoder) } else { queue.submit([encoder.finish()]) }
     }
 
-    /// Whether `submit` is `queue.submit` after `submit_uploads` and nothing more: no native video
+    /// Whether `submit` is `queue.submit` after `before_submit` and nothing more: no native video
     /// surface waits on the frame's submission, so another thread may make it.
     #[cfg(target_os = "macos")]
     pub(crate) fn submits_plainly(&self) -> bool {

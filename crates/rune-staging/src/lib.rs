@@ -48,6 +48,9 @@ pub struct Stats {
 struct Chunk {
     buffer: wgpu::Buffer,
     used: u64,
+    /// The whole chunk's mapping, made at its first write and dropped before it unmaps, so a
+    /// write costs wgpu no mapped-range bookkeeping of its own.
+    view: Option<wgpu::BufferViewMut>,
 }
 
 enum Dst {
@@ -145,8 +148,19 @@ impl Staging {
     /// `encoder` must be submitted: dropped, the writes never land (`lost` counts it).
     pub fn flush(&self, encoder: &mut wgpu::CommandEncoder) {
         let mut s = self.lock();
-        if s.pending.is_empty() { return; }
+        if s.pending.is_empty() && s.active.is_empty() { return; }
         s.encode(encoder, self);
+        s.stats.flushes += 1;
+    }
+
+    /// Records the pending copies into `encoder` but leaves their chunks mapped, so later writes
+    /// share them: one chunk unmapped and remapped per frame instead of one per write. The next
+    /// `flush` unmaps them and must be into the same encoder (or one submitted after it); a
+    /// `submit` before then would remap them before `encoder` copies out of them.
+    pub fn record(&self, encoder: &mut wgpu::CommandEncoder) {
+        let mut s = self.lock();
+        if s.pending.is_empty() { return; }
+        s.copy(encoder);
         s.stats.flushes += 1;
     }
 
@@ -173,7 +187,7 @@ impl Staging {
 
 impl Inner {
     /// Reserves `size` bytes (rounded up to 4) at `align` in a mapped chunk and fills them.
-    fn stage(&mut self, size: u64, align: u64, staging: &Staging, fill: impl FnOnce(&mut wgpu::BufferViewMut)) -> (wgpu::Buffer, u64) {
+    fn stage(&mut self, size: u64, align: u64, staging: &Staging, fill: impl FnOnce(&mut wgpu::WriteOnly<'_, [u8]>)) -> (wgpu::Buffer, u64) {
         let size = size.next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT);
         if self.pending_bytes + size > MAX_PENDING { self.submit(staging); }
         let fits = |c: &Chunk| c.used.next_multiple_of(align) + size <= c.buffer.size();
@@ -191,7 +205,7 @@ impl Inner {
                             usage: wgpu::BufferUsages::MAP_WRITE | wgpu::BufferUsages::COPY_SRC,
                             mapped_at_creation: true,
                         });
-                        Chunk { buffer, used: 0 }
+                        Chunk { buffer, used: 0, view: None }
                     }
                 };
                 self.active.push(chunk);
@@ -201,7 +215,8 @@ impl Inner {
         let chunk = &mut self.active[index];
         let at = chunk.used.next_multiple_of(align);
         chunk.used = at + size;
-        fill(&mut chunk.buffer.slice(at..at + size).get_mapped_range_mut().expect("a mapped staging chunk"));
+        let view = chunk.view.get_or_insert_with(|| chunk.buffer.get_mapped_range_mut(..).expect("a mapped staging chunk"));
+        fill(&mut view.slice(at as usize..(at + size) as usize));
         self.pending_bytes += size;
         self.stats.writes += 1;
         self.stats.bytes += size;
@@ -221,6 +236,20 @@ impl Inner {
     }
 
     fn encode(&mut self, encoder: &mut wgpu::CommandEncoder, staging: &Staging) {
+        self.copy(encoder);
+        for mut chunk in self.active.drain(..) {
+            chunk.view = None;
+            chunk.buffer.unmap();
+            let buffer = chunk.buffer.clone();
+            let mut back = Return { chunk: Some(chunk), recycle: self.recycle.clone(), lost: staging.1.clone() };
+            encoder.map_buffer_on_submit(&buffer, wgpu::MapMode::Write, .., move |mapped| {
+                if mapped.is_ok() && let Some(chunk) = back.chunk.take() { let _ = back.recycle.send(chunk); }
+            });
+        }
+    }
+
+    /// Records the pending copies; their chunks stay mapped and active.
+    fn copy(&mut self, encoder: &mut wgpu::CommandEncoder) {
         for p in self.pending.drain(..) {
             match p.dst {
                 Dst::Buffer(buffer, offset) => encoder.copy_buffer_to_buffer(&p.src, p.offset, &buffer, offset, p.size),
@@ -233,14 +262,6 @@ impl Inner {
             }
         }
         self.pending_bytes = 0;
-        for chunk in self.active.drain(..) {
-            chunk.buffer.unmap();
-            let buffer = chunk.buffer.clone();
-            let mut back = Return { chunk: Some(chunk), recycle: self.recycle.clone(), lost: staging.1.clone() };
-            encoder.map_buffer_on_submit(&buffer, wgpu::MapMode::Write, .., move |mapped| {
-                if mapped.is_ok() && let Some(chunk) = back.chunk.take() { let _ = back.recycle.send(chunk); }
-            });
-        }
     }
 
     fn submit(&mut self, staging: &Staging) {

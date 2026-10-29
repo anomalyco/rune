@@ -16,6 +16,9 @@ use super::*;
 pub(super) struct Uploads {
     /// Made on the first upload, which brings the queue.
     staging: Option<Staging>,
+    /// A compositor's `Frame::write_buffer`s, recorded into the frame's encoder as they come and
+    /// sealed when it's submitted. Apart from `staging`, whose `submit` would seal them early.
+    frame_writes: Option<Staging>,
     /// The instance buffer's contents, so a frame writes only the span that changed.
     instances: Vec<Instance>,
     /// The viewport last written to globals (`width << 32 | height`, `u64::MAX` before any).
@@ -30,7 +33,7 @@ pub(super) struct Uploads {
 
 impl Default for Uploads {
     fn default() -> Uploads {
-        Uploads { staging: None, instances: Vec::new(), viewport: AtomicU64::new(u64::MAX), srgb: None, lost: (0, 0),
+        Uploads { staging: None, frame_writes: None, instances: Vec::new(), viewport: AtomicU64::new(u64::MAX), srgb: None, lost: (0, 0),
             #[cfg(test)] globals_writes: 0 }
     }
 }
@@ -44,6 +47,11 @@ impl Uploads {
     pub(super) fn stats(&self) -> rune_staging::Stats {
         self.staging.as_ref().map(Staging::stats).unwrap_or_default()
     }
+
+    #[cfg(test)]
+    pub(super) fn frame_write_stats(&self) -> rune_staging::Stats {
+        self.frame_writes.as_ref().map(Staging::stats).unwrap_or_default()
+    }
 }
 
 fn pack((w, h): (u32, u32)) -> u64 { u64::from(w) << 32 | u64::from(h) }
@@ -55,17 +63,25 @@ impl Renderer {
     }
 
     /// Submits pending uploads ahead of commands already recorded.
-    pub(crate) fn submit_uploads(&self) {
+    pub(super) fn submit_uploads(&self) {
         if let Some(s) = &self.uploads.staging { s.submit(); }
     }
 
-    /// `Queue::write_buffer` through the renderer's staging chunks, recorded into `encoder` here:
-    /// ahead of the commands recorded after it (`Frame::write_buffer`).
+    /// Readies the frame's `encoder` for submission: submits pending uploads ahead of it, and
+    /// seals the compositor's writes recorded into it.
+    pub(crate) fn before_submit(&self, encoder: &mut wgpu::CommandEncoder) {
+        self.submit_uploads();
+        if let Some(s) = &self.uploads.frame_writes { s.flush(encoder); }
+    }
+
+    /// `Queue::write_buffer` through staging chunks, recorded into `encoder` here: ahead of the
+    /// commands recorded after it (`Frame::write_buffer`). A frame's writes share a chunk, which
+    /// `before_submit` hands back to the GPU.
     pub(crate) fn write_buffer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder,
         buffer: &wgpu::Buffer, offset: u64, data: &[u8]) {
-        let staging = self.uploads.staging(device, queue);
+        let staging = self.uploads.frame_writes.get_or_insert_with(|| Staging::new(device, queue));
         staging.write_buffer(buffer, offset, data);
-        staging.flush(encoder);
+        staging.record(encoder);
     }
 
     /// Writes rows `y0..y1` of `texture` from its tightly packed CPU copy `data`.
