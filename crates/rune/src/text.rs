@@ -34,6 +34,7 @@ pub use coretext_match::FontSmoothing;
 #[doc(hidden)]
 pub mod pixel_compare;
 mod fallback;
+mod glyph_cache;
 mod glyph_emit;
 mod hidden_axes;
 mod icon;
@@ -57,6 +58,7 @@ pub(crate) use case::Source as CaseSource;
 
 use default_fonts::DEFAULT_FONTS;
 use fallback::Route;
+use glyph_emit::Face;
 use hidden_axes::hidden_axes;
 use layout_cache::{Cache, evict};
 #[cfg(test)]
@@ -1167,6 +1169,7 @@ pub struct TextSystem {
     primary_axes: HashMap<(Family, u32, bool), Rc<[parley::FontVariation]>>,
     /// CoreGraphics' glyph pipeline for `smoothing`, and its per-ink state.
     apple: macos_smoothing::Smoothing,
+    pub(crate) glyph_cache: glyph_cache::GlyphCache,
 }
 
 impl Default for TextSystem {
@@ -1216,34 +1219,6 @@ impl Run {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         (self.hash, text_hash("", &[], style, scale, None)).hash(&mut h);
         h.finish()
-    }
-}
-
-/// One glyph run's face, as the rasterizer needs it.
-struct Face {
-    font: parley::FontData,
-    size: f32,
-    coords_key: u64,
-    ink: u16,
-    /// A face without italics leans by a fixed angle instead of fontique's 14°.
-    skew: u8,
-    baseline: f32,
-}
-
-impl Face {
-    /// The face of `glyph_run`; its normalized coordinates go to `coords`.
-    fn of(glyph_run: &parley::GlyphRun<'_, Ink>, coords: &mut Vec<i16>) -> Face {
-        let run = glyph_run.run();
-        coords.clear();
-        coords.extend(run.normalized_coords().iter().map(|c| c.to_bits()));
-        Face {
-            font: run.font().clone(),
-            size: run.font_size(),
-            coords_key: coords.iter().fold(0u64, |h, &c| h.wrapping_mul(31).wrapping_add(c as u16 as u64)),
-            ink: glyph_run.style().brush.0,
-            skew: if run.synthesis().skew().is_some() { SYNTHETIC_OBLIQUE } else { 0 },
-            baseline: glyph_run.baseline(),
-        }
     }
 }
 
@@ -1448,6 +1423,7 @@ impl TextSystem {
             primary_traks: HashMap::new(),
             primary_axes: HashMap::new(),
             apple: Default::default(),
+            glyph_cache: Default::default(),
         }
     }
 
@@ -1545,6 +1521,7 @@ impl TextSystem {
 
     pub(crate) fn begin_frame_pinned(&mut self, pinned_mask: u32) {
         self.atlas.begin_frame(pinned_mask);
+        self.glyph_cache.begin_frame();
         if self.color_bytes > COLOR_GLYPH_BUDGET {
             let before = self.color_glyphs.len();
             self.color_glyphs.retain(|_, c| c.used);

@@ -6955,12 +6955,19 @@ impl<S: 'static> Runtime<S> {
                         } else {
                             f32::NEG_INFINITY..f32::INFINITY
                         };
-                        self.text.glyphs_in_band(layout, r_origin, raster, reveal.is_some() || !link_fx.is_empty() || has_hl_fg, band, &mut self.glyph_scratch);
+                        let bytes = reveal.is_some() || !link_fx.is_empty() || has_hl_fg;
+                        // A secret's glyphs aren't kept past the frame that draws them.
+                        if spec.redacted || n.input.as_ref().is_some_and(|i| i.edit.is_secure()) {
+                            self.text.glyphs_in_band(layout, r_origin, raster, bytes, band, &mut self.glyph_scratch);
+                        } else {
+                            self.text.glyphs_in_band_cached(layout, r_origin, raster, bytes, band, &mut self.glyph_scratch);
+                        }
                         tk / raster
                     };
                     let base = premul(color, o, srgb);
+                    let lands = self.flights.iter().any(|f| f.lands(&n.path, n.key.as_deref()));
                     for q in &self.glyph_scratch {
-                        if self.flights.iter().any(|f| f.lands(&n.path, n.key.as_deref())) { continue; }
+                        if lands { continue; }
                         let [x0, y0] = if zoom == 1.0 && origin == r_origin { [q.rect[0], q.rect[1]] } else {
                             std::array::from_fn(|k| origin[k] + (q.rect[k] - r_origin[k]) * zoom)
                         };

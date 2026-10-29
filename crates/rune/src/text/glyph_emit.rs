@@ -108,7 +108,7 @@ impl TextSystem {
 
     /// Rasterizes (once) and appends one glyph at device position `at`, `k` times its size.
     #[allow(clippy::too_many_arguments)]
-    fn push_glyph(&mut self, face: &Face, coords: &[i16], glyph: u32, at: [f32; 2], k: f32, byte: u32, out: &mut Vec<GlyphQuad>) {
+    pub(super) fn push_glyph(&mut self, face: &Face, coords: &[i16], glyph: u32, at: [f32; 2], k: f32, byte: u32, out: &mut Vec<GlyphQuad>) -> Placed {
         let [gx, gy] = at;
         let (font, font_size, ink, skew) = (&face.font, face.size * k, face.ink, face.skew);
         let radius = self.apple.radius(ink, font_size);
@@ -137,10 +137,10 @@ impl TextSystem {
                 if let Some(c) = self.color_glyphs.get_mut(&color_key) {
                     c.used = true;
                     out.push(c.quad(gx, gy, ink, byte));
-                    return;
+                    return Placed::Other;
                 }
                 let Some(font_ref) = FontRef::from_index(font.data.as_ref(), font.index as usize) else {
-                    return;
+                    return Placed::Other;
                 };
                 let mut scaler = self
                     .scale_cx
@@ -156,7 +156,7 @@ impl TextSystem {
                     let c = ColorGlyph { index, used: true, left: at.left, top: at.top, w: at.width, h: at.height };
                     self.color_glyphs.insert(color_key, c);
                     out.push(c.quad(gx, gy, ink, byte));
-                    return;
+                    return Placed::Other;
                 }
                 let placed = self.apple.rasterize(&mut self.scale_cx, &mut self.atlas, macos_smoothing::Job {
                     font: font_ref, key: (key.font, key.index, key.coords), coords, glyph: glyph as u16, ppem: font_size,
@@ -171,18 +171,63 @@ impl TextSystem {
                         self.atlas.map.insert(key, None);
                         None
                     }
-                    Rasterized::Unplaced => None,
+                    Rasterized::Unplaced => return Placed::Other,
                 }
             }
         };
-        if let Some(a) = entry {
-            out.push(GlyphQuad {
-                rect: [fx + a.left as f32, gy.round() - a.top as f32, a.w as f32, a.h as f32],
-                uv: [a.x as f32, (a.page as u32 * ATLAS_SIZE + a.y) as f32],
-                ink,
-                byte,
-                color: 0,
-            });
+        match entry {
+            Some(a) => {
+                out.push(atlas_quad(a, fx, gy, ink, byte));
+                Placed::Atlas(a, subpx)
+            }
+            None => Placed::Empty(subpx),
+        }
+    }
+}
+
+/// What [`TextSystem::push_glyph`] drew: an atlas mask or nothing at an x phase, which a
+/// later frame can replay at that phase, or a quad it must ask for again.
+pub(super) enum Placed {
+    Atlas(AtlasGlyph, u8),
+    Empty(u8),
+    Other,
+}
+
+/// The quad of atlas mask `a` for a pen at whole-pixel x `fx` and baseline `gy`.
+pub(super) fn atlas_quad(a: AtlasGlyph, fx: f32, gy: f32, ink: u16, byte: u32) -> GlyphQuad {
+    GlyphQuad {
+        rect: [fx + a.left as f32, gy.round() - a.top as f32, a.w as f32, a.h as f32],
+        uv: [a.x as f32, (a.page as u32 * ATLAS_SIZE + a.y) as f32],
+        ink,
+        byte,
+        color: 0,
+    }
+}
+
+/// One glyph run's face, as the rasterizer needs it.
+pub(super) struct Face {
+    pub(super) font: parley::FontData,
+    pub(super) size: f32,
+    pub(super) coords_key: u64,
+    pub(super) ink: u16,
+    /// A face without italics leans by a fixed angle instead of fontique's 14°.
+    pub(super) skew: u8,
+    pub(super) baseline: f32,
+}
+
+impl Face {
+    /// The face of `glyph_run`; its normalized coordinates go to `coords`.
+    pub(super) fn of(glyph_run: &parley::GlyphRun<'_, Ink>, coords: &mut Vec<i16>) -> Face {
+        let run = glyph_run.run();
+        coords.clear();
+        coords.extend(run.normalized_coords().iter().map(|c| c.to_bits()));
+        Face {
+            font: run.font().clone(),
+            size: run.font_size(),
+            coords_key: coords.iter().fold(0u64, |h, &c| h.wrapping_mul(31).wrapping_add(c as u16 as u64)),
+            ink: glyph_run.style().brush.0,
+            skew: if run.synthesis().skew().is_some() { SYNTHETIC_OBLIQUE } else { 0 },
+            baseline: glyph_run.baseline(),
         }
     }
 }
