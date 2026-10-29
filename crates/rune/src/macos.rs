@@ -330,6 +330,11 @@ impl PointerState {
         if inside && self.hit(x, y) { set_ns_cursor(cursor); }
         else { self.cursor.set(None); set_ns_cursor(crate::el::Cursor::Default); }
     }
+    /// Whether a sample can tell the overlay anything: one passing every click through, holding
+    /// no press, showing no cursor and following nothing never reads the pointer.
+    fn wanted(&self) -> bool {
+        self.input.get() != OverlayInput::None || self.follow.get() || self.captured.get() || self.cursor.get().is_some()
+    }
     fn observe(&self, panel: &NSPanel, wake: Option<&crate::Waker>) {
         // SAFETY: monitors and frame publication run on AppKit's main thread.
         let pointer = unsafe { NSEvent::mouseLocation() };
@@ -814,11 +819,11 @@ impl Panel {
         }
         false
     }
-    /// Once per event-loop turn: keeps the view and samples the pointer, through the timed
-    /// poll when it is due and `poll` allows it.
+    /// Once per event-loop turn: keeps the view (it hosts the layer the overlay draws into) and
+    /// samples the pointer, through the timed poll when it is due and `poll` allows it.
     pub fn observe_pointer(&self, now: Instant, poll: bool) {
         self.keep_view();
-        if self.visible.get() && !(poll && self.poll_pointer(now)) { self.pointer.observe(&self.panel, None); }
+        if self.visible.get() && self.pointer.wanted() && !(poll && self.poll_pointer(now)) { self.pointer.observe(&self.panel, None); }
     }
     pub fn set_input(&self, input: OverlayInput) {
         self.pointer.input.set(input);
@@ -964,6 +969,22 @@ mod tests {
             pointer.released(); // acknowledged even when Runtime input is disabled
             assert!(!pointer.captured.get(), "native release cannot depend on Runtime capture or mode");
             assert!(!pointer.hit(50.0, 50.0));
+        }
+    }
+
+    #[test]
+    fn a_click_through_overlay_that_follows_nothing_never_samples_the_pointer() {
+        let pointer = PointerState { input: Cell::new(OverlayInput::None), ..Default::default() };
+        assert!(!pointer.wanted());
+        pointer.follow.set(true);
+        assert!(pointer.wanted(), "following the pointer reads it");
+        pointer.follow.set(false);
+        pointer.captured.set(true);
+        assert!(pointer.wanted(), "a press it holds still needs its release");
+        pointer.captured.set(false);
+        for input in [OverlayInput::Regions, OverlayInput::All] {
+            pointer.input.set(input);
+            assert!(pointer.wanted());
         }
     }
 
