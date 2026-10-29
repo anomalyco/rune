@@ -140,7 +140,7 @@ impl std::ops::DerefMut for LayoutRects {
 #[derive(Default)]
 pub(crate) struct LayoutSeen {
     pub(crate) rects: LayoutRects,
-    reads: LayoutReads,
+    pub(super) reads: LayoutReads,
 }
 
 impl LayoutSeen {

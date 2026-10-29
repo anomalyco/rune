@@ -32,6 +32,10 @@ impl<S: 'static> Runtime<S> {
     /// `committing` when the result is applied, so the last commit's text layouts can go.
     pub(super) fn measure_pass(&mut self, tx: &Tx, committing: bool) -> Measured {
         let _blend = crate::theme::scope(self.srgb_blend);
+        self.measurement(committing).finish(tx)
+    }
+
+    pub(super) fn measurement(&mut self, committing: bool) -> Measurement<'_, S> {
         Measurement {
             state: &self.state,
             view: self.view,
@@ -68,7 +72,7 @@ impl<S: 'static> Runtime<S> {
             focused: self.focused.as_deref(),
             state_unchanged: std::mem::take(&mut self.state_unchanged),
             retry: false,
-        }.finish(tx)
+        }
     }
 
     /// Forgets the ids of paths that left with nothing kept under their id, so a session that

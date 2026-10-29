@@ -17,6 +17,7 @@ mod no_motion;
 mod picture_scale;
 mod pointer_drag;
 mod pointer_hit;
+mod relayout;
 mod scroll_children;
 mod scroll_growth;
 mod scroll_hover;

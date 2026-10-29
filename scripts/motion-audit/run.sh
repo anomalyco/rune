@@ -36,4 +36,6 @@ run shell-resize      3.6 $SH --script $S/shell-resize.json
 run shell-reorder     3.6 $SH --script $S/shell-reorder.json
 run shell-virtual-peek 5.0 $SH virtual --script $S/shell-peek.json
 run shell-virtual-reorder 3.6 $SH virtual --script $S/shell-reorder-virtual.json
+run shell-window-resize 3.0 $SH --script $S/shell-window-resize.json
+run shell-virtual-window-resize 3.0 $SH virtual --script $S/shell-window-resize.json
 ls "$O"

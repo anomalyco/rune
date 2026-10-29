@@ -180,6 +180,8 @@ impl MemoCache {
     /// Drops the memos no build since pass `since` (a [`MemoCache::next_pass`]) used: a commit
     /// keeps what any of its view builds used.
     pub(crate) fn keep_since(&mut self, since: u64) {
+        // A commit that didn't build the view used no memos, and drops none.
+        if self.pass < since { return; }
         self.entries.retain(|_, e| e.pass >= since);
     }
 }

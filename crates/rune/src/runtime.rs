@@ -413,6 +413,7 @@ enum RowLayout {
     Horizontal,
 }
 
+#[derive(Clone)]
 pub(crate) struct Node {
     on_paste: Option<crate::el::PasteFn>,
     on_window_focus: Option<crate::el::WindowFocusFn>,
@@ -1156,6 +1157,7 @@ pub struct Runtime<S: 'static> {
     virtual_fill: u32,
     /// True when the commit in flight is for scroll/layout only (`self.state` wasn't mutated).
     state_unchanged: bool,
+    reuse: relayout::Reuse,
     pub(crate) virtual_culled: HashSet<String>,
     /// Fresh view accessors for focused text fields omitted by virtualization.
     virtual_inputs: HashMap<String, Box<InputSpec>>,
@@ -1548,6 +1550,7 @@ impl<S: 'static> Runtime<S> {
             memo_since: 0,
             virtual_fill: 0,
             state_unchanged: false,
+            reuse: Default::default(),
             virtual_inputs: HashMap::default(),
             reveals: HashMap::default(),
             flights: Vec::new(),
@@ -2230,6 +2233,7 @@ impl<S: 'static> Runtime<S> {
         }
         if self.caret_watch && self.caret_moved(None) { self.dirty = true; }
         let read_moved = self.layout_reads_moved();
+        self.reuse.read_moved = read_moved;
         if self.has_pixel_aspect && self.pixel_aspect_changed() { self.relayout = true; }
         let besides = self.dirty || self.relayout || self.settle || self.virtual_window_changed();
         let other = ran || besides;
@@ -3336,7 +3340,7 @@ impl<S: 'static> Measurement<'_, S> {
         nodes.reserve(self.nodes.len().max(32));
         // Root constraints are part of the retained style, not a dirty write after flattening.
         // A window that fits its content lays the root out at its natural height.
-        root.style.size = Size { width: length(self.viewport.0), height: if self.fit_height { auto() } else { length(self.viewport.1) } };
+        root.style.size = relayout::root_size(self.viewport, self.fit_height);
         let root_id = flatten(root, None, "", 0, motion::DEFAULT, RowLayout::Free, true, &mut taffy, &mut nodes, &mut self.layout_entries, scale);
         if self.committing { release_kept_layouts(self.nodes, self.layout_entries); }
         self.layout_entries.retain(|_, entry| {
@@ -3361,8 +3365,7 @@ impl<S: 'static> Runtime<S> {
                 scroll.pinned = true;
             }
         }
-        self.refresh_layout_seen();
-        let mut measured = self.measure(tx);
+        let mut measured = self.measure_commit(tx);
         self.focus_before_commit = self.focused.clone();
         // Settle layout reads first so a field that mounts once a rect is known is in `nodes`.
         measured = self.settle_layout_reads(measured, tx);
@@ -4046,6 +4049,8 @@ impl<S: 'static> Runtime<S> {
                 old.text_layout = Some(layout);
                 old.elided = elided;
             }
+            // A resize that laid the tree out again took the text layouts before the view ran.
+            if old.text_layout.is_none() { relayout::lay_out_text_in_place(&mut self.text, &mut old, self.env.scale); }
             self.node_index.insert(old.id, nodes.len());
             nodes.push(old);
         }
@@ -4101,6 +4106,7 @@ impl<S: 'static> Runtime<S> {
             }
         }
         self.layout = taffy;
+        self.reuse.scale = self.env.scale;
         self.text.end_commit();
         self.dirty = false;
         self.relayout = false;
