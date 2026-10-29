@@ -8,7 +8,7 @@ impl LightRenderer {
     pub fn render(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        _queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         scene: &Scene<'_>,
         base: &wgpu::TextureView,
@@ -26,11 +26,11 @@ impl LightRenderer {
             self.rebind_prims(device);
         }
         if !scene.prims.is_empty() {
-            queue.write_buffer(&self.prims, 0, bytemuck::cast_slice(scene.prims));
+            self.staging.write_buffer(&self.prims, 0, bytemuck::cast_slice(scene.prims));
         }
         let nl = scene.lights.len().min(MAX_LIGHTS);
         if nl > 0 {
-            queue.write_buffer(&self.lights, 0, bytemuck::cast_slice(&scene.lights[..nl]));
+            self.staging.write_buffer(&self.lights, 0, bytemuck::cast_slice(&scene.lights[..nl]));
         }
         let zmax = scene.prims.iter().filter(|p| p.flags() & FLAG_OCCLUDER != 0).fold(0.0f32, |m, p| m.max(p.z[1]));
         let shafts = scene.lights.iter().any(|l| l.extra[0] > 0.0);
@@ -58,7 +58,8 @@ impl LightRenderer {
             bg: [s.background_gloss, s.background_roughness, s.contact_ao, s.rim],
             ext: [s.albedo_floor, g.emission, 0.0, 0.0],
         };
-        queue.write_buffer(&self.frame, 0, bytemuck::bytes_of(&fu));
+        self.staging.write_buffer(&self.frame, 0, bytemuck::bytes_of(&fu));
+        self.staging.flush(encoder);
 
         let ts = |i: u32| {
             self.query.as_ref().map(|(qs, _, _)| wgpu::ComputePassTimestampWrites {

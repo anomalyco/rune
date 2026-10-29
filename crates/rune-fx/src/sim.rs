@@ -217,7 +217,7 @@ impl Sims {
         self.grids.iter().any(|g| g.plan.is_some_and(|p| p.steps > 0))
     }
 
-    pub fn record(&mut self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, timestamps: Option<wgpu::ComputePassTimestampWrites<'_>>) -> bool {
+    pub fn record(&mut self, staging: Option<&rune_staging::Staging>, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, timestamps: Option<wgpu::ComputePassTimestampWrites<'_>>) -> bool {
         if !self.pending() {
             return false;
         }
@@ -230,8 +230,12 @@ impl Sims {
                 u.origin[3] = if plan.reset && k == 0 { 1.0 } else { 0.0 };
                 bytes[k * SLOT..k * SLOT + std::mem::size_of::<SimUniform>()].copy_from_slice(bytemuck::bytes_of(&u));
             }
-            queue.write_buffer(&g.uniforms, 0, &bytes);
+            match staging {
+                Some(s) => s.write_buffer(&g.uniforms, 0, &bytes),
+                None => queue.write_buffer(&g.uniforms, 0, &bytes),
+            }
         }
+        if let Some(s) = staging { s.flush(encoder); }
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fx firesim"), timestamp_writes: timestamps });
         for g in &mut self.grids {
             let Some(plan) = g.plan.filter(|p| p.steps > 0) else { continue };

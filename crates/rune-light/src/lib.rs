@@ -418,6 +418,7 @@ pub struct LightRenderer {
     t: Targets,
     query: Option<(wgpu::QuerySet, wgpu::Buffer, wgpu::Buffer)>,
     period: f32,
+    staging: rune_staging::Staging,
     /// Formats the composite can write; float formats get linear light, other non-sRGB formats get a manual sRGB
     /// encode + dither.
     pub output_format: wgpu::TextureFormat,
@@ -798,6 +799,7 @@ impl LightRenderer {
             t,
             query,
             period: queue.get_timestamp_period(),
+            staging: rune_staging::Staging::new(device, queue),
             output_format,
             inspect: false,
         }

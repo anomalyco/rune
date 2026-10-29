@@ -163,6 +163,8 @@ pub struct FxRenderer {
     viewport: [u32; 2],
     opts: FxOptions,
     sims: Option<crate::sim::Sims>,
+    /// Upload staging, made by the first `prepare`, and the globals it last wrote.
+    staging: Option<(rune_staging::Staging, [f32; 4])>,
 }
 
 const INST_SIZE: usize = std::mem::size_of::<InstRaw>();
@@ -378,6 +380,7 @@ impl FxRenderer {
             viewport: [0, 0],
             opts,
             sims: None,
+            staging: None,
         }
     }
 
@@ -484,7 +487,7 @@ impl FxRenderer {
     /// after `prepare`, outside any render pass, before drawing the fire layers. Returns false and
     /// records nothing when no step is due.
     pub fn simulate(&mut self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, timestamps: Option<wgpu::ComputePassTimestampWrites<'_>>) -> bool {
-        self.sims.as_mut().is_some_and(|s| s.record(queue, encoder, timestamps))
+        self.sims.as_mut().is_some_and(|s| s.record(self.staging.as_ref().map(|(s, _)| s), queue, encoder, timestamps))
     }
 
     /// Draw one prepared layer (no-op when it was culled).
@@ -563,6 +566,7 @@ impl FxRenderer {
     /// false (after still binding `backdrop` when the layer reads it) for non-frosted layers; a
     /// frosted lens drawn without it falls back to a small in-shader blur.
     pub fn blur_backdrop(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, backdrop: &wgpu::TextureView, layer: usize) -> bool {
+        let staging = self.staging(device, queue);
         self.set_layer_backdrop(device, backdrop, layer);
         let Some(Some(p)) = self.prepared.get(layer) else { return false };
         let (Some(pyr), true) = (self.blur.as_ref(), p.blur_px > 0.0) else { return false };
@@ -584,7 +588,12 @@ impl FxRenderer {
             let w: f32 = if k + 1 == n { frac } else { 1.0 };
             params[k * 256..k * 256 + 4].copy_from_slice(&w.to_le_bytes());
         }
-        queue.write_buffer(&self.blur_uniforms, (base * 256) as u64, &params);
+        staging.write_buffer(&self.blur_uniforms, (base * 256) as u64, &params);
+        // Tell the lens shader the pyramid is ready (xf.x), and how much of it to use (xf.y).
+        let xf = [1.0f32, (p.blur_px / 3.0).min(1.0), 0.0, 0.0];
+        let off = p.instance as usize * INST_SIZE + std::mem::offset_of!(InstRaw, xf);
+        staging.write_buffer(&self.insts, off as u64, bytemuck::cast_slice(&xf));
+        staging.flush(encoder);
         let scissor = |m: usize| {
             let k = (2u32 << m) as f32;
             let w = (vw.div_ceil(2) >> m).max(1);
@@ -625,10 +634,6 @@ impl FxRenderer {
             let bg = if m + 1 == n { from_down } else { from_up.as_ref().unwrap() };
             run(&self.blur_up, &pyr.up[m], bg, base + m, m);
         }
-        // Tell the lens shader the pyramid is ready (xf.x), and how much of it to use (xf.y).
-        let xf = [1.0f32, (p.blur_px / 3.0).min(1.0), 0.0, 0.0];
-        let off = p.instance as usize * INST_SIZE + std::mem::offset_of!(InstRaw, xf);
-        queue.write_buffer(&self.insts, off as u64, bytemuck::cast_slice(&xf));
         true
     }
 

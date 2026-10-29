@@ -6,6 +6,7 @@ license.workspace = true
 description = "Real-time lighting for Rune UIs: SDF soft shadows, bevel normals, god rays and radiance-cascade GI over the frame's analytic primitives."
 
 [dependencies]
+rune-staging = { path = "../rune-staging" }
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "metal", "wgsl"] }
 bytemuck = { version = "1.25", features = ["derive"] }
 

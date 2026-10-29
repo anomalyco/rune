@@ -132,14 +132,22 @@ impl FxRenderer {
                 ],
             }));
         }
-        if !self.scratch.is_empty() {
-            queue.write_buffer(&self.insts, 0, bytemuck::cast_slice(&self.scratch));
-        }
-        if !self.scratch_xf.is_empty() {
-            queue.write_buffer(&self.xforms, 0, bytemuck::cast_slice(&self.scratch_xf));
-        }
+        let staging = self.staging(device, queue);
+        staging.write_buffer(&self.insts, 0, bytemuck::cast_slice(&self.scratch));
+        staging.write_buffer(&self.xforms, 0, bytemuck::cast_slice(&self.scratch_xf));
         let g = [vw, vh, if self.opts.dither { 1.0 } else { 0.0 }, if self.srgb.unwrap_or(false) { 1.0 } else { 0.0 }];
-        queue.write_buffer(&self.globals, 0, bytemuck::cast_slice(&g));
+        let written = &mut self.staging.as_mut().unwrap().1;
+        if *written != g {
+            *written = g;
+            staging.write_buffer(&self.globals, 0, bytemuck::cast_slice(&g));
+        }
+        // Submitted now, ahead of the frame that draws them, as queue writes would be.
+        staging.submit();
         stats
+    }
+
+    /// The upload staging; its globals start unknown (NaN), so the first `prepare` writes them.
+    pub(super) fn staging(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> rune_staging::Staging {
+        self.staging.get_or_insert_with(|| (rune_staging::Staging::new(device, queue), [f32::NAN; 4])).0.clone()
     }
 }

@@ -7,6 +7,7 @@ description = "Rune's special-effects layers: glow, pulses, electricity, fire, m
 
 [dependencies]
 rune-motion = { path = "../rune-motion" }
+rune-staging = { path = "../rune-staging" }
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "metal", "wgsl"] }
 bytemuck = { version = "1.25", features = ["derive"] }
 

@@ -172,6 +172,7 @@ pub struct GlassRenderer {
     pyramid: wgpu::TextureView,
     levels: Vec<wgpu::TextureView>,
     down_bgs: Vec<wgpu::BindGroup>,
+    staging: Option<rune_staging::Staging>,
 }
 
 fn section(name: &str) -> String {
@@ -258,7 +259,7 @@ impl GlassRenderer {
         let down_bgs = (1..mips as usize)
             .map(|k| crate::bind(device, &down_bgl, &[crate::tv(&levels[k - 1]), wgpu::BindingResource::Sampler(&sampler)]))
             .collect();
-        GlassRenderer { width, height, mips, uniform, glass, lights, sampler, pipe, bgl, down, down_bgl, pyramid, levels, down_bgs }
+        GlassRenderer { width, height, mips, uniform, glass, lights, sampler, pipe, bgl, down, down_bgl, pyramid, levels, down_bgs, staging: None }
     }
 
     fn pass<'a>(encoder: &'a mut wgpu::CommandEncoder, target: &'a wgpu::TextureView, label: &'a str) -> wgpu::RenderPass<'a> {
@@ -294,18 +295,16 @@ impl GlassRenderer {
     ) {
         let ng = glass.len().min(MAX_GLASS);
         let nl = lights.len().min(MAX_GLIGHTS);
-        if ng > 0 {
-            queue.write_buffer(&self.glass, 0, bytemuck::cast_slice(&glass[..ng]));
-        }
-        if nl > 0 {
-            queue.write_buffer(&self.lights, 0, bytemuck::cast_slice(&lights[..nl]));
-        }
+        let staging = self.staging.get_or_insert_with(|| rune_staging::Staging::new(device, queue));
+        staging.write_buffer(&self.glass, 0, bytemuck::cast_slice(&glass[..ng]));
+        staging.write_buffer(&self.lights, 0, bytemuck::cast_slice(&lights[..nl]));
         let u = GlassU {
             size: [self.width as f32, self.height as f32, ng as f32, nl as f32],
             misc: [self.mips as f32, settings.env, settings.shadow, settings.caustic],
             shadow: [settings.shadow_offset[0], settings.shadow_offset[1], settings.shadow_blur, 0.0],
         };
-        queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&u));
+        staging.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&u));
+        staging.flush(encoder);
         if ng > 0 {
             let first = crate::bind(device, &self.down_bgl, &[crate::tv(backdrop), wgpu::BindingResource::Sampler(&self.sampler)]);
             for k in 0..self.mips as usize {

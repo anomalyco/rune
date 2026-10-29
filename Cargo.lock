@@ -2946,6 +2946,7 @@ dependencies = [
  "rune",
  "rune-motion",
  "rune-ref",
+ "rune-staging",
  "wgpu",
 ]
 
@@ -2979,6 +2980,7 @@ dependencies = [
  "pollster",
  "rune",
  "rune-fx",
+ "rune-staging",
  "wgpu",
  "winit",
 ]
