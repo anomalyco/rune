@@ -532,7 +532,7 @@ impl<S: 'static> Host<S> {
         let comp = app.compositor.take();
         let (on_focus, on_ime) = (app.on_focus, app.on_ime);
         let chrome = app.chrome;
-        let srgb_blend = app.srgb_blend;
+        let (srgb_blend, font_smoothing) = (app.srgb_blend, app.font_smoothing);
         let modifier_keys = app.modifier_keys;
         let tab_visits_controls = app.tab_visits_controls;
         let fit_height = app.fit_content_height;
@@ -559,7 +559,7 @@ impl<S: 'static> Host<S> {
         rt.on_focus = on_focus;
         rt.app_ime.hook = on_ime;
         rt.set_modifier_keys(modifier_keys);
-        rt.set_srgb_blend(srgb_blend);
+        rt.set_srgb_blend(srgb_blend); rt.set_font_smoothing(font_smoothing);
         rt.set_system_reduced_motion(crate::preferences::reduced_motion());
         rt.set_full_keyboard_access(crate::preferences::full_keyboard_access());
         rt.set_tab_visits_controls(tab_visits_controls);

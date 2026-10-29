@@ -147,9 +147,10 @@ pub struct OverlayCreated {
 
 impl<T: 'static> ConfiguredOverlay<T> {
     pub fn on_focus(mut self, f: fn(&mut T, bool, &mut crate::Tx)) -> Self { self.on_focus = Some(f); self }
-    /// Composite this overlay's translucent fills, blurs, shadows, images and video in sRGB
-    /// (gamma) space instead of linear light, matching CSS and Core Animation. With a
-    /// `Compositor`, `Frame::srgb_blend` says which encoding its passes must match.
+    /// Composite this overlay's translucent fills, blurs, shadows, images, video and text in
+    /// sRGB (gamma) space instead of linear light, matching CSS and Core Animation (on by
+    /// default). With a `Compositor`, `Frame::srgb_blend` says which encoding its passes must
+    /// match.
     pub fn srgb_blend(mut self, enabled: bool) -> Self { self.srgb_blend = enabled; self }
     /// Called before each frame; true means state changed, not that another frame is due.
     /// Defaults to the app's poll when its state type matches this overlay's. Other state
@@ -188,7 +189,7 @@ impl<T: 'static> OverlaySpec<T> {
     }
 
     pub fn options(self, options: OverlayOptions) -> ConfiguredOverlay<T> {
-        ConfiguredOverlay { spec: self, options, on_key: None, on_created: None, poll: None, on_focus: None, compositor: None, setup: None, srgb_blend: false, macos_level: None, modifier_keys: false }
+        ConfiguredOverlay { spec: self, options, on_key: None, on_created: None, poll: None, on_focus: None, compositor: None, setup: None, srgb_blend: true, macos_level: None, modifier_keys: false }
     }
 }
 

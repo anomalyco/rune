@@ -173,8 +173,12 @@ fn top_left_gravity(contents_flipped: bool) -> &'static objc2::runtime::AnyObjec
 /// Pins the Metal layer's contents to the window's top left at their own size. A drawable that
 /// doesn't match the layer yet (a frame that isn't drawn in time for a resize) is clipped or
 /// leaves a strip, rather than stretched to the new size and snapped back a frame later.
+/// Also tags the contents sRGB, as AppKit's own drawing is, so the compositor colour-matches
+/// them to the display (untagged, a wide-gamut display shows them oversaturated). Either
+/// surface format holds sRGB-encoded values; wgpu's reconfigures keep the tag.
 pub(crate) fn pin_contents_top_left(surface: &wgpu::Surface) {
     use objc2::runtime::{AnyObject, Bool};
+    use objc2_core_graphics::{CGColorSpace, kCGColorSpaceSRGB};
     // SAFETY: a live CAMetalLayer, on the main thread, under wgpu's lock.
     unsafe {
         let Some(hal) = surface.as_hal::<wgpu::hal::api::Metal>() else { return };
@@ -182,6 +186,9 @@ pub(crate) fn pin_contents_top_left(surface: &wgpu::Surface) {
         let layer = &*std::ptr::from_ref(&**layer).cast::<AnyObject>();
         let flipped: Bool = msg_send![layer, contentsAreFlipped];
         let _: () = msg_send![layer, setContentsGravity: top_left_gravity(flipped.as_bool())];
+        let Some(srgb) = CGColorSpace::with_name(Some(kCGColorSpaceSRGB)) else { return };
+        let layer = &*std::ptr::from_ref(layer).cast::<objc2_video::runtime::AnyObject>();
+        let _: () = objc2_video::msg_send![layer, setColorspace: &*srgb];
     }
 }
 
@@ -927,6 +934,10 @@ mod tests {
             pin_contents_top_left(&surface);
             let gravity: Retained<objc2_foundation::NSString> = unsafe { msg_send_id![&*layer, contentsGravity] };
             assert_eq!(gravity.to_string(), if flipped { "bottomLeft" } else { "topLeft" }, "flipped: {flipped}");
+            let layer6 = unsafe { &*Retained::as_ptr(&layer).cast::<objc2_video::runtime::AnyObject>() };
+            let space: *mut objc2_core_graphics::CGColorSpace = unsafe { objc2_video::msg_send![layer6, colorspace] };
+            let name = objc2_core_graphics::CGColorSpace::name(unsafe { space.as_ref() }).map(|n| n.to_string());
+            assert_eq!(name.as_deref(), Some("kCGColorSpaceSRGB"), "the layer's contents are tagged sRGB");
             drop(surface);
         }
     }

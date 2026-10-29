@@ -481,9 +481,9 @@ mod prewarm {
     use std::sync::Mutex;
     use std::thread::JoinHandle;
 
-    /// A Mac window's surface format (`surface_config`) unless the app blends in sRGB space, so
-    /// the window renders with the pipeline compiled here.
-    const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
+    /// A Mac window's target format (`surface_config`), which blends in sRGB space unless the
+    /// app turns that off, so the window renders with the pipeline compiled here.
+    const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
 
     struct Prewarmed(Gpu, Renderer);
     // SAFETY: wgpu's objects are `Send`. The one part of a `Renderer` that isn't, the native
@@ -1175,7 +1175,7 @@ mod prewarm_tests {
         };
         let Some(renderer) = renderer else { return eprintln!("skipped: no GPU for the prewarm thread") };
         assert!(gpu.device.features().contains(wgpu::Features::PASSTHROUGH_SHADERS));
-        assert_eq!(renderer.format, wgpu::TextureFormat::Bgra8UnormSrgb);
+        assert_eq!(renderer.format, wgpu::TextureFormat::Bgra8Unorm);
         drop((renderer, gpu));
         let (_, _surface, again) = Gpu::for_surface(wgpu::Features::empty(), false, |i| surface(i, &layer)).expect("a second GPU");
         assert!(again.is_none(), "the prewarmed GPU goes to one window");

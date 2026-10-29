@@ -79,6 +79,9 @@ pub(crate) fn handler_state_ref<S: 'static>(state: &S) -> &dyn Any {
 #[cfg(debug_assertions)]
 #[path = "runtime/layout_diagnostics.rs"]
 mod layout_diagnostics;
+#[path = "runtime/blend.rs"]
+mod blend;
+pub(crate) use blend::{glyph, glyph_uv_page, premul};
 
 #[path = "focus.rs"]
 mod focus;
@@ -1869,7 +1872,7 @@ impl<S: 'static> Runtime<S> {
     pub fn update_if(&mut self, f: impl FnOnce(&mut S, &mut Tx) -> bool) -> bool {
         let mut one = self.transaction();
         let changed = f(&mut self.state, &mut one);
-        let stale = changed || one.frame_work() || one.window_frame.is_some() || one.srgb_blend.is_some_and(|b| b != self.srgb_blend)
+        let stale = changed || one.frame_work() || one.window_frame.is_some() || one.srgb_blend.is_some_and(|b| b != self.srgb_blend) || one.font_smoothing.is_some_and(|m| m != self.text.smoothing)
             || (one.blur && self.focused.is_some());
         self.latch_requests(&mut one);
         merge(&mut self.pending, one);
@@ -1939,6 +1942,7 @@ impl<S: 'static> Runtime<S> {
         for request in tx.file_dialogs.drain(..).filter_map(|call| call.take()) {
             self.request_file_dialog(request);
         }
+        if let Some(mode) = tx.font_smoothing.take() { self.set_font_smoothing(mode); }
         if let Some(srgb) = tx.srgb_blend.take() { self.set_srgb_blend(srgb); }
         if std::mem::take(&mut tx.blur) {
             if self.focused.is_some() {
@@ -2569,12 +2573,13 @@ impl<S: 'static> Runtime<S> {
             (rect.x + rect.w).min(clip[2]).min(self.viewport.0), (rect.y + rect.h).min(clip[3]).min(self.viewport.1)];
         if rect.w <= 0.0 || clip[2] <= clip[0] || clip[3] <= clip[1] { return; }
         self.glyph_scratch.clear();
+        self.text.set_glyph_inks(spec.color, &[]);
         self.text.glyphs_for_layout(layout, scale, [origin[0] * scale, origin[1] * scale], false, &mut self.glyph_scratch);
         let color = spec.color;
         let srgb = self.srgb_blend;
         // Colour glyphs live in the image atlas, which may move them before the flight ends.
         let glyphs = self.glyph_scratch.iter().filter(|q| q.color == 0 && q.rect[1] < clip[3] * scale && q.rect[1] + q.rect[3] > clip[1] * scale)
-            .map(|q| glyph(q, premul(color, 1.0, srgb), glyph_gamma(color, scale, srgb), clip.map(|v| v * scale), [0.0; 4])).collect();
+            .map(|q| glyph(q, premul(color, 1.0, srgb), clip.map(|v| v * scale), [0.0; 4])).collect();
         self.flights.push(TextFlight::new(source, target, rect, clip, glyphs, scale, self.t));
     }
 
@@ -2633,9 +2638,10 @@ impl<S: 'static> Runtime<S> {
                 }
             }
             self.glyph_scratch.clear();
+            self.text.set_glyph_inks(spec.color, &[]);
             self.text.glyphs_for_layout(layout, s, [origin[0] * s, origin[1] * s], false, &mut self.glyph_scratch);
             for q in &self.glyph_scratch {
-                let Some(q) = glyph_or_image(q, &self.text, &mut self.images, premul(spec.color, 1.0, srgb), glyph_gamma(spec.color, s, srgb), NO_CLIP, [0.0; 4]) else { continue };
+                let Some(q) = glyph_or_image(q, &self.text, &mut self.images, premul(spec.color, 1.0, srgb), NO_CLIP, [0.0; 4]) else { continue };
                 self.instances.push(transformed(q, target, current, s, target_alpha,
                     if reduced { actual_clip } else { clip }, if reduced { final_fade } else { fade }));
             }
@@ -5566,7 +5572,7 @@ impl<S: 'static> Runtime<S> {
             self.focused.hash(&mut h);
             self.keyboard_focus.hash(&mut h);
             self.hover_focus.hash(&mut h);
-            self.srgb_blend.hash(&mut h);
+            (self.srgb_blend, self.text.smoothing).hash(&mut h);
             h.write_u32(s.to_bits());
             sel_ranges.hash(&mut h);
             let mut scroll_mix = 0u64;
@@ -6831,10 +6837,11 @@ impl<S: 'static> Runtime<S> {
                             let pl_r_origin = if scale_motion == ScaleMotion::Still { pl_origin } else { [0.0, 0.0] };
                             let pl = self.text.layout_rich(&inp.placeholder, &[], spec.style, s, Some((w - pl_indent).max(1.0) / tk.max(1e-4)));
                             self.glyph_scratch.clear();
-                            self.text.glyphs_for_layout_scaled(&pl, s, pl_r_origin, raster, false, &mut self.glyph_scratch);
+                            self.text.set_glyph_inks(inp.placeholder_color, &[]);
+                            self.text.glyphs_for_layout_scaled(&pl, pl_r_origin, raster, false, &mut self.glyph_scratch);
                             let pc = premul(inp.placeholder_color, o, srgb);
                             for q in &self.glyph_scratch {
-                                self.instances.extend(glyph_or_image(q, &self.text, &mut self.images, pc, glyph_gamma(inp.placeholder_color, s, srgb), clip, fade)
+                                self.instances.extend(glyph_or_image(q, &self.text, &mut self.images, pc, clip, fade)
                                     .map(|g| zoom_glyph(g, pl_origin, pl_r_origin, tk / raster)));
                             }
                         }
@@ -6918,7 +6925,7 @@ impl<S: 'static> Runtime<S> {
                         let pill_fg = fg.unwrap_or(pill_fg);
                         let at = if tk == 1.0 { at } else { std::array::from_fn(|k| origin[k] + (at[k] - origin[k]) * tk) };
                         if let Some(q) = self.text.icon_quad(icon, px, at) {
-                            self.instances.push(glyph(&q, premul(pill_fg, o, srgb), glyph_gamma(pill_fg, s, srgb), clip, fade));
+                            self.instances.push(glyph(&q, premul(pill_fg, o, srgb), clip, fade));
                         }
                     }
                     if spec.selectable && let Some((a, b)) = selectable::range_in(&sel_ranges, i) {
@@ -6926,6 +6933,7 @@ impl<S: 'static> Runtime<S> {
                         selectable::push_selection(&mut self.instances, layout, a, b, origin, tk, premul(spec.selection, o, srgb), s, clip, fade);
                     }
                     self.glyph_scratch.clear();
+                    self.text.set_glyph_inks(color, &spec.spans);
                     let r_origin = if scale_motion == ScaleMotion::Still { origin } else { [0.0, 0.0] };
                     let has_hl_fg = spec.highlights.iter().any(|h| h.fg.is_some());
                     // A cell of a longer run draws its slice of the run's glyphs, shaped in context.
@@ -6944,10 +6952,9 @@ impl<S: 'static> Runtime<S> {
                         } else {
                             f32::NEG_INFINITY..f32::INFINITY
                         };
-                        self.text.glyphs_in_band(layout, s, r_origin, raster, reveal.is_some() || !link_fx.is_empty() || has_hl_fg, band, &mut self.glyph_scratch);
+                        self.text.glyphs_in_band(layout, r_origin, raster, reveal.is_some() || !link_fx.is_empty() || has_hl_fg, band, &mut self.glyph_scratch);
                         tk / raster
                     };
-                    let gamma = glyph_gamma(color, s, srgb);
                     let base = premul(color, o, srgb);
                     for q in &self.glyph_scratch {
                         if self.flights.iter().any(|f| f.lands(&n.path, n.key.as_deref())) { continue; }
@@ -6960,12 +6967,11 @@ impl<S: 'static> Runtime<S> {
                         if y0 > clip[3] || y1 < clip[1] || x0 > clip[2] || x1 < clip[0] {
                             continue;
                         }
-                        let (mut f, mut gm) = (base, gamma);
+                        let mut f = base;
                         if q.ink > 0
                             && let Some(c) = spec.spans.get(q.ink as usize - 1).and_then(|sp| sp.color)
                         {
                             f = premul(c, o, srgb);
-                            gm = glyph_gamma(c, s, srgb);
                         }
                         if has_hl_fg
                             && let Some(c) = spec.highlights.iter().rev().find_map(|h| {
@@ -6974,11 +6980,9 @@ impl<S: 'static> Runtime<S> {
                             })
                         {
                             f = premul(c, o, srgb);
-                            gm = glyph_gamma(c, s, srgb);
                         }
                         if !link_fx.is_empty() && let Some(c) = link_fx.glyph_color(q.byte) {
                             f = premul(c, o, srgb);
-                            gm = glyph_gamma(c, s, srgb);
                         }
                         if let Some(st) = reveal {
                             let a = Self::reveal_alpha(st, q.byte, self.scene.store().node_time(n.id));
@@ -6987,7 +6991,7 @@ impl<S: 'static> Runtime<S> {
                             }
                             f = f.map(|v| v * a);
                         }
-                        self.instances.extend(glyph_or_image(q, &self.text, &mut self.images, f, gm, clip, fade)
+                        self.instances.extend(glyph_or_image(q, &self.text, &mut self.images, f, clip, fade)
                             .map(|g| zoom_glyph(g, origin, r_origin, zoom)));
                         glyph_count += 1;
                     }
@@ -7219,7 +7223,7 @@ impl<S: 'static> Runtime<S> {
         h.write_u64(ac.node_id.0);
         // Blur is baked into the target, unlike opacity and clipping on the composite.
         h.write_u32(self.instances[start].params[2].to_bits());
-        h.write_u8(self.srgb_blend as u8);
+        h.write_u8(self.srgb_blend as u8 | (self.text.smoothing as u8) << 1);
         h.write_u32(ac.raster_scale.to_bits());
         h.write_u32(ac.size[0].to_bits());
         h.write_u32(ac.size[1].to_bits());
@@ -7689,35 +7693,6 @@ impl<S: 'static> Runtime<S> {
         let c = self.color(n.id, P_FILL, n.vis.fill);
         (c.a > 0.5).then(|| 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b < 0.25)
     }
-
-    /// Enable or disable gamma-space (sRGB) blending for translucent fills, shadows, blurs,
-    /// images and video, as `App::srgb_blend` does for a window. Every colour the next frame
-    /// builds, hover and press tints included, is premultiplied in sRGB encoding
-    /// (`Color::premul_srgb`). A runtime drawn by the app itself (`Runtime::with_text`, a
-    /// headless snapshot) then draws with `Renderer::set_srgb_blend(true)` into a non-sRGB
-    /// target (`format.remove_srgb_suffix()`), cleared to `clear_color()`.
-    pub fn set_srgb_blend(&mut self, enabled: bool) {
-        if self.srgb_blend != enabled {
-            self.srgb_blend = enabled;
-            self.dirty = true;
-        }
-    }
-
-    pub fn srgb_blend(&self) -> bool {
-        self.srgb_blend
-    }
-
-    pub fn clear_color(&self) -> [f32; 4] {
-        if self.transparent { return [0.0; 4]; }
-        self.nodes.get(self.app_root()).map_or([0.0, 0.0, 0.0, 1.0], |n| {
-            let c = self.color(n.id, P_FILL, n.vis.fill);
-            if self.srgb_blend {
-                [srgb_encode(c.r), srgb_encode(c.g), srgb_encode(c.b), 1.0]
-            } else {
-                [c.r, c.g, c.b, 1.0]
-            }
-        })
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7874,7 +7849,6 @@ fn emit_block_decorations(
     if !markers.is_empty() {
         let marker_color = spec.rich_style.marker.unwrap_or_else(|| text_color.alpha(0.68));
         let mc = premul(marker_color, o, srgb);
-        let m_gamma = glyph_gamma(marker_color, s, srgb);
         for (indent_px, baseline_y, blk, num) in markers {
             match blk {
                 Block::Bullet(lvl) => {
@@ -7894,10 +7868,11 @@ fn emit_block_decorations(
                     let my = baseline_y - m_base * tk;
                     let m_origin = [mx.round(), my.round()];
                     glyph_scratch.clear();
-                    text_sys.glyphs_for_layout_scaled(&ml, s, m_origin, raster, false, glyph_scratch);
+                    text_sys.set_glyph_inks(marker_color, &[]);
+                    text_sys.glyphs_for_layout_scaled(&ml, m_origin, raster, false, glyph_scratch);
                     for q in &*glyph_scratch {
                         instances.extend(
-                            glyph_or_image(q, text_sys, images, mc, m_gamma, clip, fade)
+                            glyph_or_image(q, text_sys, images, mc, clip, fade)
                                 .map(|g| zoom_glyph(g, m_origin, m_origin, tk / raster)),
                         );
                     }
@@ -7991,30 +7966,11 @@ fn zoom_glyph(mut g: Instance, origin: [f32; 2], r_origin: [f32; 2], k: f32) -> 
     g
 }
 
-fn glyph_uv_page(uv: [f32; 2]) -> ([f32; 2], f32) {
-    let page = (uv[1] as u32) / crate::text::ATLAS_SIZE;
-    ([uv[0], uv[1] - (page * crate::text::ATLAS_SIZE) as f32], page as f32)
-}
-
-fn glyph(q: &GlyphQuad, fill: [f32; 4], gamma: f32, clip: [f32; 4], fade: [f32; 4]) -> Instance {
-    let (uv, page) = glyph_uv_page(q.uv);
-    Instance {
-        rect: q.rect,
-        radii: [0.0; 4],
-        fill,
-        border: [0.0; 4],
-        params: [0.0, KIND_GLYPH, page, gamma],
-        uv: [uv[0], uv[1], 0.0, 0.0],
-        clip,
-        fade: crate::render::pack_fade(fade, clip, clip),
-    }
-}
-
 /// A text glyph's instance: alpha-atlas coverage tinted by `fill`, or a colour glyph's image
 /// at `fill`'s alpha. None when the image atlas can't place it.
-fn glyph_or_image(q: &GlyphQuad, text: &TextSystem, images: &mut crate::pixels::ImageAtlas, fill: [f32; 4], gamma: f32, clip: [f32; 4], fade: [f32; 4]) -> Option<Instance> {
+fn glyph_or_image(q: &GlyphQuad, text: &TextSystem, images: &mut crate::pixels::ImageAtlas, fill: [f32; 4], clip: [f32; 4], fade: [f32; 4]) -> Option<Instance> {
     if q.color == 0 {
-        return Some(glyph(q, fill, gamma, clip, fade));
+        return Some(glyph(q, fill, clip, fade));
     }
     let image = images.place(text.color_glyph(q.color), [q.rect[2], q.rect[3]])?;
     Some(Instance {
@@ -8040,14 +7996,6 @@ fn rect_inst(rect: [f32; 4], fill: [f32; 4], radius: f32, clip: [f32; 4], fade: 
         clip,
         fade: crate::render::pack_fade(fade, clip, clip),
     }
-}
-
-fn premul(c: Color, opacity: f32, srgb: bool) -> [f32; 4] {
-    if srgb { c.premul_srgb(opacity) } else { c.premul(opacity) }
-}
-
-fn glyph_gamma(c: Color, scale: f32, srgb: bool) -> f32 {
-    if srgb { 1.0 } else { crate::text::glyph_coverage_exponent(c, scale) }
 }
 
 #[cfg(test)]

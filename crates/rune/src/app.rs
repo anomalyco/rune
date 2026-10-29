@@ -66,6 +66,7 @@ pub struct App<S: 'static> {
     pub(crate) modifier_keys: bool,
     pub(crate) tab_visits_controls: bool,
     pub(crate) srgb_blend: bool,
+    pub(crate) font_smoothing: crate::FontSmoothing,
     pub(crate) dev_stats: Option<fn() -> String>,
     pub(crate) playground: Option<crate::Playground<S>>,
 }
@@ -103,17 +104,28 @@ impl<S: 'static> App<S> {
             float_on_open: false,
             modifier_keys: false,
             tab_visits_controls: false,
-            srgb_blend: false,
+            srgb_blend: true,
+            font_smoothing: crate::FontSmoothing::default(),
             dev_stats: None,
             playground: None,
         }
     }
 
-    /// Composite this window's translucent fills, blurs, shadows, images and video in sRGB
-    /// (gamma) space instead of linear light, matching CSS and Core Animation over dark
-    /// backgrounds. With a `Compositor`, `Frame::srgb_blend` says which encoding its passes must match.
+    /// Composite this window's translucent fills, blurs, shadows, images, video and text in
+    /// sRGB (gamma) space instead of linear light, matching CSS and Core Animation over dark
+    /// backgrounds, as CoreText does. On by default. With a `Compositor`, `Frame::srgb_blend`
+    /// says which encoding its passes must match.
     pub fn srgb_blend(mut self, enabled: bool) -> Self {
         self.srgb_blend = enabled;
+        self
+    }
+
+    /// How this app's windows rasterise and place glyphs (see [`crate::FontSmoothing`]):
+    /// `On` by default on macOS, `Off` elsewhere (CoreGraphics' pipeline without font
+    /// smoothing's dilation, as `-webkit-font-smoothing: antialiased` draws).
+    /// `Tx::set_font_smoothing` switches it while running.
+    pub fn font_smoothing(mut self, mode: crate::FontSmoothing) -> Self {
+        self.font_smoothing = mode;
         self
     }
 

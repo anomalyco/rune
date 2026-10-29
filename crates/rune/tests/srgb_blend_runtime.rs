@@ -113,7 +113,7 @@ fn a_headless_run_follows_a_live_switch() {
             .child(el().size(40.0, 40.0).fill(Color::WHITE.alpha(0.5)))
             .on_press_tx(|_: &mut (), tx| tx.set_srgb_blend(true))
     };
-    App::new(AppSpec::new("srgb-live", (40.0, 40.0), || (), view)).compositor(Watch)
+    App::new(AppSpec::new("srgb-live", (40.0, 40.0), || (), view)).srgb_blend(false).compositor(Watch)
         .args(["--snap", png.to_str().unwrap(), "--scale", "1", "--script", script.to_str().unwrap(), "--at", "0.5"].map(String::from))
         .run();
     let decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&png).unwrap()));

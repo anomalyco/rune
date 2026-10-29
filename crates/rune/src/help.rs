@@ -198,10 +198,10 @@ impl<S: 'static> Runtime<S> {
         });
         let origin = [r[0] + PAD[0] * s, r[1] + PAD[1] * s];
         self.glyph_scratch.clear();
-        self.text.glyphs_for_layout_scaled(&layout, s, origin, 1.0, false, &mut self.glyph_scratch);
-        let gamma = glyph_gamma(ink, s, srgb);
+        self.text.set_glyph_inks(ink, &[]);
+        self.text.glyphs_for_layout_scaled(&layout, origin, 1.0, false, &mut self.glyph_scratch);
         for q in &self.glyph_scratch {
-            self.instances.extend(glyph_or_image(q, &self.text, &mut self.images, premul(ink, 1.0, srgb), gamma, NO_CLIP, [0.0; 4]));
+            self.instances.extend(glyph_or_image(q, &self.text, &mut self.images, premul(ink, 1.0, srgb), NO_CLIP, [0.0; 4]));
         }
         self.help.tip = Some((text, [x, y, w, h]));
     }
