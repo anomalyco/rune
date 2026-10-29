@@ -585,7 +585,9 @@ impl Panel {
                 NSWindowCollectionBehavior::CanJoinAllSpaces
                     | NSWindowCollectionBehavior::Stationary
                     | NSWindowCollectionBehavior::IgnoresCycle
-                    | NSWindowCollectionBehavior::FullScreenAuxiliary,
+                    | NSWindowCollectionBehavior::FullScreenAuxiliary
+                    // Over other apps' full-screen Spaces too (macOS 13+; earlier ignores the bit).
+                    | NSWindowCollectionBehavior::CanJoinAllApplications,
             );
         }
         let mut native = crate::MacWindowOptions::default().shadow(false)
