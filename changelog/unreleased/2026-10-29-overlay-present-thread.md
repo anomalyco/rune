@@ -7,3 +7,6 @@
   writes a buffer through Rune's staging chunks and records the copy into the frame's encoder,
   so a compositor's per-frame uniform writes reuse staging memory instead of
   `Queue::write_buffer`'s per-call staging buffer, and land ahead of what it records next.
+  A `Queue::write_buffer` made outside the compositor callback, after the frame is drawn, can
+  now land in that frame's submission instead of the next one; write per-frame data from the
+  callback, or with `Frame::write_buffer`.
