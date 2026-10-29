@@ -2087,12 +2087,7 @@ impl<S: 'static> Host<S> {
             && gpu.adapter.get_info().backend != wgpu::Backend::Metal)
             .then(|| crate::surface_alpha::AlphaSurface::new(&gpu.device, target_format, (config.width, config.height)));
         let scale = window.scale_factor() as f32;
-        let dark = match self.args.theme.as_deref() {
-            Some("light") => false,
-            Some("dark") => true,
-            _ => window.theme().is_none_or(|t| t == Theme::Dark),
-        };
-        self.rt.set_system_dark(dark);
+        self.rt.set_system_dark(crate::preferences::window_dark(&window, self.args.theme.as_deref()));
         self.rt.set_viewport((phys.width as f32 / scale, phys.height as f32 / scale), scale);
         if (self.shown || launcher) && !built {
             // Reopening paints the settled state in the first frame (guarantee 8).
@@ -2565,8 +2560,11 @@ impl<S: 'static> Host<S> {
             WindowEvent::DroppedFile(path) => { self.files.file(path, true); return; }
             WindowEvent::HoveredFileCancelled => { self.files.steps.push(FileStep::Leave); return; }
             WindowEvent::RedrawRequested => {
-                // A new accent asks every window to redraw (`accent::watch`).
+                // A new accent or light/dark preference asks every window to redraw (`accent::watch`, `window_dark`).
                 self.rt.set_system_accent(crate::system_accent());
+                if self.args.theme.is_none() && let Some(dark) = self.win.as_ref().and_then(|l| crate::preferences::desktop_dark(&l.window)) {
+                    self.rt.set_system_dark(dark);
+                }
                 #[cfg(target_os = "macos")]
                 if let Some(l) = self.win.as_ref().filter(|l| l.full_screen.take()) {
                     self.rt.set_titlebar_inset(place_chrome(&l.window, self.chrome));

@@ -180,6 +180,8 @@ mod present_time;
 mod secure_input;
 pub mod clipboard;
 mod preferences;
+#[cfg(target_os = "linux")]
+mod portal_appearance;
 mod accent;
 pub use accent::{SystemAccent, system_accent};
 pub use clipboard::{ClipboardContent, ClipboardImage, ClipboardWrite, SecretCopy, SecretState};

@@ -392,7 +392,7 @@ impl<T: 'static> Overlay<T> {
     }
 
     fn show_fading(&mut self, event_loop: &ActiveEventLoop, fade: Duration) {
-        self.rt.set_system_dark(self.dark);
+        self.rt.set_system_dark(crate::preferences::dark().unwrap_or(self.dark));
         // Hidden, it missed the redraws a new accent asks for (`accent::watch`).
         self.accent_changed(crate::system_accent());
         if self.visible { return; }
@@ -612,7 +612,7 @@ impl<T: 'static> Overlay<T> {
         let window = Arc::new(event_loop.create_window(attrs).ok()?);
         #[cfg(target_os = "macos")]
         crate::native_menu::adopt_standard_view();
-        self.dark = window.theme().is_none_or(|t| t == winit::window::Theme::Dark);
+        self.dark = window.theme().map_or_else(|| crate::preferences::desktop_dark(&window).unwrap_or(true), |t| t == winit::window::Theme::Dark);
         self.rt.set_system_dark(self.dark);
         if self.cursor.is_none() { self.cursor = Some(crate::os_cursor::OsCursor::new(event_loop)); }
         let scale = crate::window::backing_scale(&window);
