@@ -53,7 +53,7 @@ if a.frame_cpu:
     workloads['startup'] = ('settings', ['--first-pixels', '--frames', '1'])
 if a.scroll:
     workloads = {f'scroll-{name}': ('examples/scroll_bench', ['--workload', name, '--frames', '480'])
-                 for name in ('list', 'markdown', 'sticky', 'growth')}
+                 for name in ('list', 'markdown', 'sticky', 'growth', 'prose')}
 rx = re.compile(r'gpu init ([\d.]+) ms, first frame ([\d.]+) ms, frame cpu mean ([\d.]+) ms p50 ([\d.]+) p95 ([\d.]+) max ([\d.]+), (\d+) instances')
 names = ['gpu_ms', 'first_ms', 'mean_ms', 'p50_ms', 'p95_ms', 'max_ms', 'instances']
 result = {}
