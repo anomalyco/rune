@@ -601,3 +601,35 @@ fn a_hidden_overlay_still_runs_on_drag_end() {
     overlay.drag_ends_due();
     assert_eq!(overlay.rt.state.ended, [crate::DragOutcome::Copied]);
 }
+
+/// A card that arrives while the overlay is hidden, in the update that shows it, enters from
+/// the first visible frame with `animate_reveal`; without it the overlay shows settled.
+#[test]
+fn an_animated_reveal_lets_the_first_card_enter() {
+    fn view(card: &bool, _: &mut Cx<bool>) -> El {
+        let card = card.then(|| crate::el().key("card").size(100.0, 40.0).transition(crate::Transition::offset(0.0, -24.0)));
+        crate::el().children(card)
+    }
+    let app = AppSpec::new("stack", (200.0, 100.0), || false, view);
+    for animate in [true, false] {
+        let mut spec = OverlaySpec::new("stack", app.size, view).options(Default::default());
+        if animate { spec = spec.animate_reveal(); }
+        let (mut overlay, _) = Overlay::new(spec, false, &app);
+        overlay.rt.wall_start = None;
+        let start = Instant::now();
+        present(&mut overlay, start);
+        overlay.rt.update(|card, _| *card = true);
+        overlay.visible = true;
+        overlay.settle_before_reveal();
+        present(&mut overlay, start + Duration::from_secs(5));
+        let y = overlay.rt.presented("card").unwrap().0[1];
+        if animate {
+            assert!(y < -10.0 && overlay.rt.animating, "the first frame shows the card entering: y={y}");
+            present(&mut overlay, start + Duration::from_secs(5) + FRAME * 6);
+            let later = overlay.rt.presented("card").unwrap().0[1];
+            assert!(later > y, "and it moves: {y} then {later}");
+        } else {
+            assert_eq!(y, 0.0, "an ordinary show lands at rest");
+        }
+    }
+}

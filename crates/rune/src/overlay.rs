@@ -145,7 +145,7 @@ impl<T: 'static> OverlayHandle<T> {
 
     /// Reveal the overlay. Prewarmed macOS overlays refresh hidden changes before reveal,
     /// preserving motion elapsed since each commit, even when show arrives in a later turn.
-    /// Unretained hosts keep their settled first-frame behavior.
+    /// Unretained hosts show settled, unless built with `ConfiguredOverlay::animate_reveal`.
     pub fn show(&self) {
         self.request(|q| { q.visible = Some(true); q.fade = None; });
     }
@@ -267,6 +267,7 @@ pub(crate) struct Overlay<T: 'static> {
     setup: Option<fn(&mut T, Waker)>,
     pending_input: Option<OverlayInput>,
     visible: bool,
+    animate_reveal: bool, // `ConfiguredOverlay::animate_reveal`
     /// When a fade-out started by `OverlayHandle::fade_out` ends. Until then the hidden
     /// overlay takes no input but keeps drawing, and isn't treated as occluded.
     fading_out: Option<Instant>,
@@ -320,7 +321,7 @@ pub(crate) struct Overlay<T: 'static> {
 
 impl<T: 'static> Overlay<T> {
     pub(crate) fn new<S>(configured: impl Into<ConfiguredOverlay<T>>, state: T, app: &AppSpec<S>) -> (Self, OverlayHandle<T>) {
-        let ConfiguredOverlay { spec, options, on_key, on_created, poll, on_focus, compositor, setup, srgb_blend, macos_level, modifier_keys } = configured.into();
+        let ConfiguredOverlay { spec, options, on_key, on_created, poll, on_focus, compositor, setup, srgb_blend, macos_level, modifier_keys, animate_reveal } = configured.into();
         let shared = Arc::new(Shared { native: Mutex::default(), requests: Mutex::default(), availability: AtomicU8::new(0), wake: Mutex::new(None), stats: Arc::default() });
         let meter = crate::surface_stats::SurfaceMeter::new(spec.name, shared.stats.clone());
         let text = TextSystem::new(app.fonts, app.families);
@@ -347,6 +348,7 @@ impl<T: 'static> Overlay<T> {
             setup,
             pending_input: None,
             visible: false,
+            animate_reveal,
             fading_out: None,
             options,
             canvas_size: spec.size,
@@ -461,7 +463,7 @@ impl<T: 'static> Overlay<T> {
                     self.rescale(&gpu, scale);
                 }
                 self.set_availability(Availability::Available);
-                self.rt.settle_all();
+                if !self.animate_reveal { self.rt.settle_all(); }
                 self.dirty = true;
                 self.idle = true;
                 if self.options.prewarm { self.warm(); }
@@ -484,7 +486,7 @@ impl<T: 'static> Overlay<T> {
     fn settle_before_reveal(&mut self) {
         // Initial retained pixels were settled by warm(). Leaving a settle flag pending here
         // would snap changes arriving after that frame, in the same turn as show().
-        if !self.retained() { self.rt.settle_all(); }
+        if !self.retained() && !self.animate_reveal { self.rt.settle_all(); }
     }
 
     /// macOS keeps a prewarmed host's alpha-zero surface, and its pixels, while hidden.
@@ -1060,9 +1062,7 @@ impl<T: 'static> Overlay<T> {
         if let Some(Live { backing: Backing::Layer(layer), .. }) = &mut self.live { layer.commit(); }
     }
 
-    fn advance(&mut self) {
-        self.advance_at(Instant::now());
-    }
+    fn advance(&mut self) { self.advance_at(Instant::now()); }
 
     /// An overlay that draws nothing delivers queued input without drawing, such as the
     /// releases of the modifier keys held when it hid, rather than when it next shows.
