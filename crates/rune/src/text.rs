@@ -1810,6 +1810,9 @@ impl TextSystem {
                 }
                 if let Some(sz) = s.size {
                     b.push(StyleProperty::FontSize(sz), r.clone());
+                    // CSS's unitless line-height: a span of its own size (inline code, a smaller run) keeps the
+                    // paragraph's leading ratio, so its box fits inside the line instead of growing it
+                    b.push(LineHeight::FontSizeRelative(style.line_px() / style.size), r.clone());
                     if style.optical_size == OpticalSize::Auto {
                         b.push(parley::FontVariations::List(std::borrow::Cow::Owned(variations(style, sz))), r.clone());
                     }
