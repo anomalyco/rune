@@ -398,10 +398,10 @@ impl<T: 'static> Overlay<T> {
     }
 
     fn show_fading(&mut self, event_loop: &ActiveEventLoop, fade: Duration) {
-        self.rt.set_system_dark(crate::preferences::dark().unwrap_or(self.dark));
-        // Hidden, it missed the redraws a new accent asks for (`accent::watch`).
-        self.accent_changed(crate::system_accent());
         if self.visible { return; }
+        // Hidden, it missed the redraws a new accent asks for (`accent::watch`).
+        self.rt.set_system_dark(crate::preferences::dark().unwrap_or(self.dark));
+        self.accent_changed(crate::system_accent());
         // Shown again mid fade-out: the window is still up with current pixels, and its motion
         // carries on rather than settling.
         let fading = self.fading_out.take().is_some();
