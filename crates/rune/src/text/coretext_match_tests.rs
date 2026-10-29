@@ -64,7 +64,8 @@ fn each_mode_keys_its_own_glyphs_and_changes_the_pixels() {
     assert!(new_on > 0 && new_off > 0, "every mode rasterises its own glyphs: {new_on} {new_off}");
     assert_eq!(again, 0, "switching back reuses the mode's glyphs");
     assert!(ink_off < ink_on, "Off has no dilation: {ink_off} < {ink_on}");
-    assert_eq!(x_on, x_off, "both modes floor pens to the same CoreGraphics steps");
+    // Same CoreGraphics pen steps; On's dilation can widen a glyph's box by a pixel to the left.
+    assert!(x_on.iter().zip(&x_off).all(|(a, b)| (a - b).abs() <= 1.0), "both modes floor pens to the same CoreGraphics steps: {x_on:?} {x_off:?}");
 }
 
 /// `Tx::set_font_smoothing` switches a running window: the next frame rasterises the new

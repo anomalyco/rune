@@ -83,9 +83,8 @@ fn default_faces_keep_batch_c_pixels() {
             }
         }
         system.atlas.data.hash(&mut hash);
-        // Captured on batch C (a68df8f); re-baseline from this test's output for
-        // `FontSmoothing::On` now that Rune's calibrated rasterizer is gone.
-        let expected = if scale == 1.0 { 8029160967625528053 } else { 2969448254494463802 };
+        // Re-baselined for `FontSmoothing::On` (CoreGraphics pipeline) once Calibrated was removed.
+        let expected = if scale == 1.0 { 17045220814369067823 } else { 10933675232581112092 };
         assert_eq!(hash.finish(), expected, "sans/mono pixels changed at {scale}×");
     }
 }
