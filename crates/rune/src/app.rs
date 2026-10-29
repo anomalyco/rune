@@ -51,6 +51,10 @@ pub struct App<S: 'static> {
     pub(crate) on_ime: Option<fn(&mut S, &crate::Ime, &mut Tx) -> bool>,
     pub(crate) on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
     pub(crate) on_open_url: Option<crate::open_url_in::OnOpenUrl<S>>,
+    pub(crate) on_open: Option<fn(&mut S, &[String], &mut Tx)>,
+    pub(crate) single_instance: Option<String>,
+    #[cfg(all(unix, not(target_os = "macos")))]
+    pub(crate) instance_queue: Option<crate::instance::Queue>,
     pub(crate) shared: Arc<Shared<S>>,
     pub(crate) overlays: Vec<Box<dyn crate::overlay::PendingOverlay>>,
     pub(crate) windows: Vec<crate::AnyWindowSpec>,
@@ -88,6 +92,10 @@ impl<S: 'static> App<S> {
             on_ime: None,
             on_reopen: None,
             on_open_url: None,
+            on_open: None,
+            single_instance: None,
+            #[cfg(all(unix, not(target_os = "macos")))]
+            instance_queue: None,
             shared,
             overlays: Vec::new(),
             windows: Vec::new(),
@@ -318,6 +326,31 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// Linux: runs on the event thread when a second launch forwards its files or URLs
+    /// through the single-instance bus name (see `single_instance`): `uris` in order,
+    /// like a macOS file-open. Empty when a bare activation arrived — treat it as
+    /// `on_reopen` with no visible windows. A handler that opens a window should show
+    /// and activate it; the forwarded `XDG_ACTIVATION_TOKEN` (if any) reaches the shown
+    /// window when the handler calls `AppHandle::activate`. Headless runs never claim
+    /// the bus name, so this hook never fires there.
+    pub fn on_open(mut self, f: fn(&mut S, &[String], &mut Tx)) -> Self {
+        self.on_open = Some(f);
+        self
+    }
+
+    /// Linux: one running copy per `app_id` (reverse-DNS, e.g. `com.example.App`).
+    /// The first launch owns `rune_<id>` on the session bus; a second launch forwards
+    /// its argv files/URLs plus `XDG_ACTIVATION_TOKEN` to the owner through
+    /// `org.freedesktop.Application` (`Open`, else bare `Activate`) and exits 0 without
+    /// opening a window. Without a session bus (or when the claim fails) the launch
+    /// runs unclaimed, as without this call. No-op on other platforms and in headless
+    /// tooling. Pair with `on_open` (and `keep_running`, so the owner has no window to
+    /// lose) — see `on_reopen` for the macOS half of the same story.
+    pub fn single_instance(mut self, app_id: impl Into<String>) -> Self {
+        self.single_instance = Some(app_id.into());
+        self
+    }
+
     /// Runs on the UI thread each time the native window is created (again after a Wayland
     /// close or a GPU release): set its icon or native styles through
     /// `WindowHandle::with_raw_handle`.
@@ -423,6 +456,19 @@ impl<S: 'static> App<S> {
             crate::render::discard_prewarm();
             crate::tooling::try_headless(self, args)
         } else {
+            // Single instance (Linux): a second launch forwards its files/URLs to the
+            // owner and exits before any window opens. Headless already returned above.
+            #[cfg(all(unix, not(target_os = "macos")))]
+            if let Some(app_id) = self.single_instance.clone() {
+                // The queue lives on the leaked serving connection; re-resolve it here so
+                // the host can drain it. A second launch already returned inside `claim`.
+                let queue = match crate::instance::claim(&app_id, crate::instance::launch_uris(&args)) {
+                    Ok(crate::instance::Claim::Owner(queue)) => Some(queue),
+                    Ok(crate::instance::Claim::Forwarded) => return Ok(()),
+                    Err(_) => None,
+                };
+                self.instance_queue = queue;
+            }
             crate::window::run(self, args)
         }
     }
@@ -676,6 +722,15 @@ impl<S> Shared<S> {
     /// Queues `f` for the next `take`, as `AppHandle::update_if` does, without waking the loop.
     pub(crate) fn queue_update(&self, f: Update<S>) {
         self.requests.lock().unwrap().updates.push(f);
+    }
+
+    /// Queues a window/show/focus request the next `take` applies, as `AppHandle` does.
+    pub fn queue_window(&self, window: WindowRequest) {
+        let mut requests = self.requests.lock().unwrap();
+        requests.window = Some(window);
+        requests.minimize = false;
+        drop(requests);
+        self.wake();
     }
 
     /// A request a `--desktop` run applies to the window (dock and quit aside) waits for `take`.

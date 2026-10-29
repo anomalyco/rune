@@ -45,7 +45,7 @@ const MARGIN: f32 = 4.0;
 
 impl<S: 'static> Runtime<S> {
     /// The host shows the system's own tooltips for [`Runtime::help_regions`], so Rune draws none.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn set_native_help(&mut self, on: bool) { self.help.native = on; }
 
     /// Each visible help element's rect (window points, x0 y0 x1 y1) and text, in paint order,

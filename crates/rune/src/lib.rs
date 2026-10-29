@@ -9,6 +9,8 @@ compile_error!("web does not support Rune's hot or native-file-dialog features; 
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 mod activation;
 mod app;
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) mod instance;
 pub mod time;
 #[cfg(target_arch = "wasm32")]
 pub mod web;

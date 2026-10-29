@@ -88,9 +88,9 @@ const SYMBOL_FAMILIES: &[&str] = &["Segoe UI Symbol", "Segoe UI Emoji"];
 #[cfg(windows)]
 const SYMBOL_FONT_FILES: &[&str] = &["seguisym", "seguiemj"];
 #[cfg(not(any(target_os = "macos", windows)))]
-const SYMBOL_FAMILIES: &[&str] = &["DejaVu Sans", "Noto Sans Symbols2", "Noto Sans Symbols", "Noto Color Emoji"];
+const SYMBOL_FAMILIES: &[&str] = &["DejaVu Sans", "FreeSerif", "Noto Sans Symbols2", "Noto Sans Symbols", "Noto Color Emoji"];
 #[cfg(not(any(target_os = "macos", windows)))]
-const SYMBOL_FONT_FILES: &[&str] = &["dejavusans", "notosanssymbols", "notocoloremoji"];
+const SYMBOL_FONT_FILES: &[&str] = &["dejavusans", "freeserif", "notosanssymbols", "notocoloremoji"];
 
 // `Family::SystemMono`: the platform's monospaced UI families, most preferred first, and the
 // files they're in. SF Mono's family name is `.SF NS Mono`, as SF's is `.SF NS`.

@@ -61,6 +61,13 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     crate::render::prewarm_gpu();
     #[allow(unused_mut)]
     let mut builder = EventLoop::<WakeEvent>::with_user_event();
+    // Pin the Wayland backend explicitly (winit 0.30 auto-detects, but an explicit pin
+    // keeps backend choice independent of env-var races at startup).
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        use winit::platform::wayland::EventLoopBuilderExtWayland;
+        builder.with_wayland();
+    }
     #[cfg(target_os = "macos")]
     if accessory {
         use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};

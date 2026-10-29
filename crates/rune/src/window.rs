@@ -454,6 +454,9 @@ struct Host<S: 'static> {
     on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
     /// Its place among the windows receiving links (`App::on_open_url`).
     _open_urls: Option<crate::open_url_in::Listening>,
+    on_open: Option<fn(&mut S, &[String], &mut Tx)>,
+    #[cfg(all(unix, not(target_os = "macos")))]
+    instance_queue: Option<crate::instance::Queue>,
     /// When it last hid, in `reopen::stamp` order.
     hidden_at: Option<u64>,
     release_gpu: bool,
@@ -523,6 +526,11 @@ impl<S: 'static> Host<S> {
         });
         let (open, keep_running, on_close, release_gpu) = (app.open, app.keep_running, app.on_close, app.release_gpu);
         let on_reopen = app.on_reopen;
+        let on_open = app.on_open;
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let mut instance_queue = None;
+        #[cfg(all(unix, not(target_os = "macos")))]
+        std::mem::swap(&mut instance_queue, &mut app.instance_queue);
         #[cfg(target_os = "macos")]
         let present_log = args.trace.as_ref().map(|_| Arc::default());
         let mut app = app;
@@ -597,6 +605,9 @@ impl<S: 'static> Host<S> {
             on_close,
             on_reopen,
             _open_urls: None,
+            on_open,
+            #[cfg(all(unix, not(target_os = "macos")))]
+            instance_queue,
             hidden_at: None,
             release_gpu,
             open_at_start: open,
@@ -1675,6 +1686,34 @@ impl<S: 'static> Host<S> {
         let stale_before = self.rt.needs_commit();
         let clipboard = self.clipboard.receive(&mut self.rt);
         let answered = self.popup.answer(&mut self.rt) | self.file_dialog.answer(&mut self.rt);
+        // Single instance (Linux): a second launch's Open/Activate lands here as updates,
+        // so its frame, wakes and window requests go as an update's do (as `reopen_hook`).
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if let Some(queue) = &self.instance_queue {
+            let open = std::mem::take(&mut *queue.lock().unwrap());
+            for request in open {
+                let uris = request.uris;
+                let token = request.activation_token;
+                if uris.is_empty() {
+                    // Bare activation: a reopen with nothing to open.
+                    self.reopen_hook(event_loop, true);
+                } else if let Some(on_open) = self.on_open {
+                    self.shared.queue_update(Box::new(move |s, tx| {
+                        on_open(s, &uris, tx);
+                        true
+                    }));
+                    // The forwarded token is consumed by showing: queue an Open behind the
+                    // update so the window comes up activated, as a relaunch would.
+                    // (The token itself rides the forwarded env into `try_create`.)
+                    if let Some(token) = token.filter(|t| !t.is_empty()) {
+                        // SAFETY: set before any spawn in this handler turn; the event thread
+                        // owns the env here as `reset_activation_token_env` does at startup.
+                        unsafe { std::env::set_var("XDG_ACTIVATION_TOKEN", token) };
+                    }
+                    self.shared.queue_window(WindowRequest::Open(None));
+                }
+            }
+        }
         self.shortcuts.drain();
         self.menus.drain();
         let (mut had_updates, mut updated) = (false, false);

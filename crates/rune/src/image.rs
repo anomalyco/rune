@@ -394,8 +394,13 @@ fn svg_rgba(_: &[u8], _: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
     Err(ImageError("SVG images need rune's `svg` feature".into()))
 }
 
-/// Freedesktop icon lookup: a `.desktop` entry's `Icon=` as an absolute path, or by name in the
-/// hicolor theme (every size directory, `@2` included) and then `pixmaps`.
+/// Freedesktop icon lookup: a `.desktop` entry's `Icon=` as an absolute path, by name in
+/// the current theme (falling back through `Inherits`, ending at hicolor) and then `pixmaps`.
+/// `$XDG_CURRENT_DESKTOP` names the session (`Xfce`, `KDE`, ...); without it, or when the
+/// desktop names no installed theme, this resolves `Adwaita`, `Humanity` (which inherits
+/// Adwaita before hicolor) and finally `hicolor` itself, which every icon install provides.
+/// Theme directories are read verbatim from each theme's `index.theme`, so non-hicolor
+/// layouts (Humanity's `apps/48`, `@2` scaled sets) work without guessing `NxN` names.
 #[cfg(any(target_os = "linux", test))]
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod freedesktop {
@@ -427,30 +432,192 @@ mod freedesktop {
         let name = icon_name(&text)?;
         if Path::new(name).is_absolute() { return Path::new(name).is_file().then(|| name.into()); }
         let name = name.strip_suffix(".png").or_else(|| name.strip_suffix(".svg")).unwrap_or(name);
-        // (effective pixel size, path); scalable sorts as "any size".
-        let mut found: Vec<(Option<u32>, PathBuf)> = Vec::new();
+        // (effective pixel size, theme order, path); scalable sorts as "any size".
+        let mut found: Vec<(Option<u32>, usize, PathBuf)> = Vec::new();
         for dir in data_dirs {
-            let Ok(sizes) = std::fs::read_dir(dir.join("icons/hicolor")) else { continue };
-            for size in sizes.flatten() {
-                let label = size.file_name().to_string_lossy().into_owned();
-                let effective = if label == "scalable" { None } else {
-                    let (dims, scale) = label.split_once('@').unwrap_or((&label, "1"));
-                    let size = dims.split_once('x').and_then(|(w, _)| w.parse::<u32>().ok());
-                    let Some(n) = size.zip(scale.parse::<u32>().ok()).map(|(w, s)| w * s.max(1)) else { continue };
-                    Some(n)
-                };
-                for ext in ["png", "svg"] {
-                    let file = size.path().join("apps").join(format!("{name}.{ext}"));
-                    if file.is_file() { found.push((effective, file)); }
+            for (order, theme) in theme_chain(dir).iter().enumerate() {
+                let root = dir.join("icons").join(theme);
+                for (subdir, size, scale) in theme_sizes(&root) {
+                    for ext in ["png", "svg"] {
+                        if let Some(file) = theme_icon(&root, &subdir, ext, name)
+                            && file.is_file()
+                        {
+                            // `size` of None is scalable; `@2` doubles the effective pixels.
+                            found.push((size.map(|n| n * scale.max(1)), order, file));
+                        }
+                    }
                 }
             }
         }
-        // Smallest bitmap that covers `px`, else scalable, else the largest bitmap.
-        let covering = found.iter().filter(|(n, _)| n.is_some_and(|n| n >= px)).min_by_key(|(n, _)| *n);
-        let scalable = found.iter().find(|(n, _)| n.is_none());
-        let largest = found.iter().max_by_key(|(n, _)| *n);
-        if let Some((_, file)) = covering.or(scalable).or(largest) { return Some(file.clone()); }
+        // Smallest bitmap that covers `px` across every theme directory, else the largest
+        // bitmap (scalable beats a too-small bitmap), like the spec's lookup order across
+        // the theme chain.
+        let covering = found.iter().filter(|(n, _, _)| n.is_some_and(|n| n >= px)).min_by_key(|(n, _, _)| *n);
+        let scalable = found.iter().find(|(n, _, _)| n.is_none());
+        let largest = found.iter().filter(|(n, _, _)| n.is_some()).max_by_key(|(n, _, _)| *n);
+        if let Some((_, _, file)) = covering.or(scalable).or(largest) { return Some(file.clone()); }
         data_dirs.iter().flat_map(|dir| ["png", "svg"].map(|ext| dir.join(format!("pixmaps/{name}.{ext}")))).find(|f| f.is_file())
+    }
+
+    /// The theme for this session, then its `Inherits` chain, ending at hicolor.
+    /// `Humanity` inherits `Adwaita` before hicolor; unknown desktops fall back to
+    /// `Adwaita`, `Humanity`, `hicolor`, so a stock Ubuntu box resolves its own theme.
+    pub(super) fn theme_chain(dir: &Path) -> Vec<String> {
+        let icons = dir.join("icons");
+        // Filesystems here are case-sensitive but theme installs vary (`Humanity` vs
+        // `humanity`); match the installed directory case-insensitively.
+        let installed_name = |theme: &str| {
+            std::fs::read_dir(&icons).ok().and_then(|entries| {
+                entries.flatten().find_map(|e| {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    (name.eq_ignore_ascii_case(theme) && e.path().join("index.theme").is_file()).then_some(name)
+                })
+            })
+        };
+
+        let mut chain: Vec<String> = Vec::new();
+        for desktop in std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().split([':', ';']).filter(|d| !d.is_empty()) {
+            let lower = desktop.to_lowercase();
+            let known = ["adwaita", "humanity", "hicolor", "oxygen", "breeze", "gnome", "tango", "elementary", "papirus", "yaru"]
+                .into_iter()
+                .find(|theme| lower.contains(theme));
+            // Own the probed names: `installed_name` returns fresh strings each call.
+            if let Some(hit) = known
+                .and_then(|theme| installed_name(theme))
+                .or_else(|| installed_name(&lower))
+                .or_else(|| {
+                    let title = format!("{}{}", lower[..1].to_uppercase(), &lower[1..]);
+                    installed_name(&title)
+                })
+            {
+                chain.push(hit);
+            }
+        }
+        for fallback in ["Adwaita", "Humanity", "hicolor"] {
+            if let Some(actual) = installed_name(fallback)
+                && !chain.iter().any(|t| t.eq_ignore_ascii_case(&actual))
+            {
+                chain.push(actual);
+            }
+        }
+        // `Inherits` breadth-first after the session theme, ending at hicolor.
+        let mut i = 0;
+        while i < chain.len() {
+            let theme = chain[i].clone();
+            i += 1;
+            for parent in theme_inherits(&icons.join(&theme)) {
+                if let Some(actual) = installed_name(&parent)
+                    && !chain.iter().any(|t| t.eq_ignore_ascii_case(&actual))
+                {
+                    chain.push(actual);
+                }
+            }
+        }
+        if let Some(actual) = installed_name("hicolor")
+            && !chain.iter().any(|t| t.eq_ignore_ascii_case(&actual))
+        {
+            chain.push(actual);
+        }
+        chain
+    }
+
+    /// The `Inherits=` parents of a theme's `index.theme`, in order.
+    fn theme_inherits(theme: &Path) -> Vec<String> {
+        let Ok(text) = std::fs::read_to_string(theme.join("index.theme")) else { return Vec::new() };
+        text.lines()
+            .filter_map(|line| line.split_once('='))
+            .find(|(key, _)| key.trim() == "Inherits")
+            .map(|(_, parents)| parents.split(',').map(str::trim).filter(|p| !p.is_empty()).map(str::to_owned).collect())
+            .unwrap_or_default()
+    }
+
+    /// Every icon directory in a theme: `(subdir, effective size, scale)` from its
+    /// `index.theme`, so `apps/48` and `@2` scaled sets resolve without guessing names.
+    /// `scalable` and unknown layouts keep no size (they sort as "any size").
+    /// Falls back to scanning for `NxN`-style directories when there is no index.
+    fn theme_sizes(theme: &Path) -> Vec<(String, Option<u32>, u32)> {
+        theme_subdirs(theme)
+            .into_iter()
+            .filter_map(|(subdir, declared_scale)| {
+                let (dir, at) = subdir.split_once('@').unwrap_or((subdir.as_str(), ""));
+                // Humanity-style `apps/48`: the size trails the context path.
+                let size = dir.rsplit('/').next().and_then(|n| n.parse::<u32>().ok());
+                // hicolor-style `48x48@2`: leading WxH wins over the trailing number.
+                let size = dir.split_once('x').and_then(|(w, _)| w.parse::<u32>().ok()).or(size);
+                let scale = at
+                    .strip_suffix('x')
+                    .or(declared_scale.as_deref())
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .unwrap_or(1);
+                Some((subdir, size, scale.max(1)))
+            })
+            .collect()
+    }
+
+    /// `(subdirectory, declared scale)` pairs from a theme's `index.theme`.
+    fn theme_subdirs(theme: &Path) -> Vec<(String, Option<String>)> {
+        let Ok(text) = std::fs::read_to_string(theme.join("index.theme")) else { return legacy_sizes(theme); };
+        let mut current: Option<String> = None;
+        let mut scales: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut order: Vec<String> = Vec::new();
+        for line in text.lines().map(str::trim) {
+            if let Some(section) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                current = Some(section.to_owned());
+                continue;
+            }
+            let Some(section) = current.as_deref() else { continue };
+            if section == "Icon Theme" {
+                if let Some((key, value)) = line.split_once('=')
+                    && key.trim() == "Directories"
+                {
+                    for dir in value.split(',').map(str::trim).filter(|d| !d.is_empty()) {
+                        if !order.contains(&dir.to_owned()) { order.push(dir.to_owned()); }
+                    }
+                }
+                if let Some((key, value)) = line.split_once('=')
+                    && key.trim() == "ScaledDirectories"
+                {
+                    for dir in value.split(',').map(str::trim).filter(|d| !d.is_empty()) {
+                        scales.insert(dir.to_owned(), "2".to_owned());
+                        if !order.contains(&dir.to_owned()) { order.push(dir.to_owned()); }
+                    }
+                }
+                continue;
+            }
+            if let Some((key, value)) = line.split_once('=')
+                && key.trim() == "Scale"
+            {
+                scales.insert(section.to_owned(), value.trim().to_owned());
+            }
+            if !order.contains(&section.to_owned()) { order.push(section.to_owned()); }
+        }
+        if order.is_empty() { return legacy_sizes(theme); }
+        order.into_iter().map(|dir| {
+            let scale = scales.get(&dir).cloned();
+            (dir, scale)
+        }).collect()
+    }
+
+    /// Pre-`index.theme` fallback: `NxN[@s]` directories directly under the theme.
+    fn legacy_sizes(theme: &Path) -> Vec<(String, Option<String>)> {
+        let Ok(entries) = std::fs::read_dir(theme) else { return Vec::new() };
+        entries
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|label| label != "scalable")
+            .map(|label| (label, None))
+            .collect()
+    }
+
+    /// The icon file for `name` in one theme subdirectory: `<dir>/apps/<name>.<ext>` for
+    /// hicolor-style `<dir>` (`32x32`), or `<dir>/<name>.<ext>` when the directory already
+    /// ends in the `apps` context (Humanity-style `apps/48`).
+    fn theme_icon(theme: &Path, subdir: &str, ext: &str, name: &str) -> Option<PathBuf> {
+        let direct = theme.join(subdir).join(format!("{name}.{ext}"));
+        if direct.is_file() { return Some(direct); }
+        let under_apps = theme.join(subdir).join("apps").join(format!("{name}.{ext}"));
+        if under_apps.is_file() { return Some(under_apps); }
+        None
     }
 }
 
@@ -799,6 +966,19 @@ mod tests {
             std::fs::write(&path, b"icon").unwrap();
             path
         };
+        let index = |theme: &std::path::Path, dirs: &[&str]| {
+            let mut text = format!("[Icon Theme]\nName=Test\nDirectories={}\n", dirs.join(","));
+            for dir in dirs {
+                let (size, scale) = dir.split_once('@').map_or((dir.to_string(), 1), |(d, s)| {
+                    (d.to_string(), s.parse::<u32>().unwrap_or(1))
+                });
+                let (w, h) = size.split_once('x').unwrap_or((size.as_str(), size.as_str()));
+                text.push_str(&format!("[{dir}]\nSize={w}\nContext=Applications\nType=Fixed\nScale={scale}\n"));
+                let _ = (w, h);
+            }
+            std::fs::create_dir_all(theme).unwrap();
+            std::fs::write(theme.join("index.theme"), text).unwrap();
+        };
         let entry = |icon: &str| {
             let path = root.join(format!("{}.desktop", icon.replace('/', "_")));
             std::fs::create_dir_all(&root).unwrap();
@@ -806,6 +986,9 @@ mod tests {
             path
         };
         let dirs = [user.clone(), system.clone()];
+        // hicolor's real layout: `NxN` (and scalable) directories with `apps/` inside.
+        index(&system.join("icons/hicolor"), &["32x32", "48x48@2", "64x64", "256x256", "scalable"]);
+        index(&user.join("icons/hicolor"), &["64x64"]);
         put(system.join("icons/hicolor/32x32/apps/editor.png"));
         let at_64 = put(user.join("icons/hicolor/64x64/apps/editor.png"));
         let at_2x = put(system.join("icons/hicolor/48x48@2/apps/editor.png"));
@@ -821,6 +1004,71 @@ mod tests {
         assert_eq!(freedesktop::icon_file(&entry(pixmap.to_str().unwrap()), 48, &dirs), Some(pixmap), "absolute Icon= path");
         assert_eq!(freedesktop::icon_file(&entry("missing"), 48, &dirs), None);
         assert_eq!(freedesktop::icon_name("[Desktop Action x]\nIcon=no\n"), None, "only the main group counts");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn desktop_entries_follow_the_session_theme_and_its_inherits_chain() {
+        // Humanity-style theme: the icon lives in `apps/48` (no hicolor `NxN` guess would
+        // find it) and inherits Adwaita before hicolor. A hicolor-only icon is still found.
+        let root = std::env::temp_dir().join(format!("rune-icon-inherit-{}", std::process::id()));
+        let put = |path: std::path::PathBuf| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"icon").unwrap();
+            path
+        };
+        let theme = |theme: &std::path::Path, body: &str| {
+            std::fs::create_dir_all(theme).unwrap();
+            std::fs::write(theme.join("index.theme"), body).unwrap();
+        };
+        let entry = |icon: &str| {
+            let path = root.join(format!("{}.desktop", icon));
+            std::fs::write(&path, format!("[Desktop Entry]\nName=App\nIcon={icon}\n")).unwrap();
+            path
+        };
+        let dirs = [root.join("session"), root.join("base")];
+        theme(
+            &dirs[0].join("icons/Humanity"),
+            "[Icon Theme]\nName=Humanity\nInherits=Adwaita,hicolor\nDirectories=apps/48\n[apps/48]\nSize=48\nContext=Applications\nType=Scalable\n",
+        );
+        theme(
+            &dirs[1].join("icons/hicolor"),
+            "[Icon Theme]\nName=Hicolor\nDirectories=32x32\n[32x32]\nSize=32\nContext=Applications\nType=Fixed\n",
+        );
+        let humanity_icon = put(dirs[0].join("icons/Humanity/apps/48/dictionary.svg"));
+        let hicolor_icon = put(dirs[1].join("icons/hicolor/32x32/apps/terminal.png"));
+        // No XDG_CURRENT_DESKTOP: the Adwaita/Humanity/hicolor fallback chain still finds both.
+        assert_eq!(freedesktop::icon_file(&entry("dictionary"), 48, &dirs), Some(humanity_icon));
+        assert_eq!(freedesktop::icon_file(&entry("terminal"), 48, &dirs), Some(hicolor_icon));
+        // Real-system probe (stock Ubuntu): `accessories-dictionary` ships only in
+        // Humanity (no hicolor copy at all), so only a current-theme chain finds it.
+        // It must resolve and rasterize through resvg at the asked size.
+        let probe = std::process::Command::new("find")
+            .args(["/usr/share/icons/Humanity", "-name", "accessories-dictionary.svg"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or_default().to_owned())
+            .unwrap_or_default();
+        if std::path::Path::new(&probe).is_file() {
+            let humanity =
+                freedesktop::icon_file(&entry("accessories-dictionary"), 96, &[std::path::PathBuf::from("/usr/share")]);
+            let humanity = humanity.unwrap_or_else(|| panic!("Humanity-only SVG must resolve, probed at {probe}"));
+            assert!(humanity.starts_with("/usr/share/icons/Humanity"),
+                "Humanity-only SVG resolves inside the session theme chain, got {}", humanity.display());
+            let (w, h, pixels) = app_icon_rgba(&humanity, 96).unwrap();
+            assert_eq!((w, h), (96, 96), "Humanity SVG rasterizes to the asked square");
+            assert!(pixels.chunks(4).any(|p| p[3] > 0), "rasterized SVG has visible pixels");
+        } else {
+            eprintln!("skipping real-system icons: Humanity fixtures absent");
+        }
+        // A named session desktop resolves its own theme first.
+        unsafe { std::env::set_var("XDG_CURRENT_DESKTOP", "XFCE") };
+        theme(
+            &dirs[0].join("icons/xfce"),
+            "[Icon Theme]\nName=Xfce\nDirectories=32x32\n[32x32]\nSize=32\nContext=Applications\nType=Fixed\n",
+        );
+        let xfce_icon = put(dirs[0].join("icons/xfce/32x32/apps/panel.png"));
+        assert_eq!(freedesktop::icon_file(&entry("panel"), 48, &dirs), Some(xfce_icon));
+        unsafe { std::env::remove_var("XDG_CURRENT_DESKTOP") };
         std::fs::remove_dir_all(&root).unwrap();
     }
 

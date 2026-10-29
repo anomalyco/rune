@@ -444,7 +444,24 @@ impl<T: 'static> Overlay<T> {
     fn prepare(&mut self, event_loop: &ActiveEventLoop) {
         if self.live.is_some() { return; }
         self.resolve_size(event_loop);
-        let made = if crate::window::is_wayland(event_loop) { self.layer(event_loop) } else { self.window(event_loop) };
+        let made = if crate::window::is_wayland(event_loop) {
+            // GNOME/Mutter has no layer-shell: a layer surface never binds there, so fall
+            // back to an undecorated transparent xdg toplevel (see `window()`), which
+            // reports what's degraded. Elsewhere the layer surface takes it.
+            self.layer(event_loop).or_else(|| self.window(event_loop).map(|live| {
+                self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities {
+                    capture_exclusion: OverlaySupport::Unsupported,
+                    // Best effort only: a toplevel can't position itself, take keys without
+                    // activating, stay above fullscreen windows, or punch click-through holes
+                    // in its input region the way a layer surface can.
+                    nonactivating_keys: OverlaySupport::Unsupported,
+                    global_pointer: OverlaySupport::Supported,
+                };
+                live
+            }))
+        } else {
+            self.window(event_loop)
+        };
         match made {
             Some(live) => {
                 self.live = Some(live);
@@ -603,6 +620,17 @@ impl<T: 'static> Overlay<T> {
         {
             use winit::platform::windows::WindowAttributesExtWindows;
             attrs = attrs.with_skip_taskbar(true).with_undecorated_shadow(false);
+        }
+        // Wayland xdg-toplevel fallback (no layer-shell, e.g. GNOME): xdg-shell has no
+        // taskbar-entry or always-on-top concept, so name the surface for the compositor's
+        // own rules and let it decide stacking and focus. What's degraded is reported
+        // through `OverlayCapabilities` in `prepare()`.
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        {
+            use winit::platform::wayland::WindowAttributesExtWayland;
+            if crate::window::is_wayland(event_loop) {
+                attrs = attrs.with_name("rune-overlay", "rune-overlay");
+            }
         }
         #[cfg(target_os = "macos")]
         {

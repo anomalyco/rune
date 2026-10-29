@@ -5,6 +5,38 @@ without a code change (goldens, layout, input), newest first, with the rev that 
 
 ## dev
 
+- **Linux app icons resolve the session theme, `Inherits` and SVG.**
+  `ImageCache::app_icon` on Linux read only `icons/hicolor` plus `pixmaps`, so an icon
+  installed solely in the session theme (Humanity's `apps/48`, GNOME's Adwaita sets) or
+  reachable only through `Inherits` resolved to nothing. The lookup now reads the
+  `index.theme` of the `XDG_CURRENT_DESKTOP` theme (falling back to Adwaita, Humanity,
+  hicolor), follows `Inherits` breadth-first to hicolor, and matches directories verbatim
+  from each theme (so Humanity's `apps/48` and `@2` scaled sets work without guessing
+  `NxN` names). Smallest covering bitmap wins across the chain, then scalable SVG
+  (rasterized by resvg at the asked size), then the largest bitmap, then pixmaps.
+  Existing hicolor-only resolves are unchanged in order. Covered by a temp-theme unit
+  test, an `Inherits`-chain test, and a real-system probe (Humanity-only
+  `accessories-dictionary.svg` resolves and rasterizes 96×96 on stock Ubuntu).
+- **Linux single instance: `App::single_instance` + `App::on_open`.** The first launch
+  owns `rune_<id>` on the session bus (served on a dedicated bus thread, since only a
+  live executor dispatches the owner's methods); a second launch probes `NameHasOwner`
+  (no stray `Activate` queued), forwards its files/URLs (plus `XDG_ACTIVATION_TOKEN`)
+  through `org.freedesktop.Application` (`Open`, else bare `Activate`) and exits 0
+  without opening a window — the Linux half of the macOS `on_reopen` story. The owner
+  drains them on the event thread through `on_open` (empty URIs act as `on_reopen`) and
+  queues an `Open` behind the update so the forwarded activation token shows the window.
+  No session bus means the launch runs unclaimed; headless runs never claim. Covered by
+  session-bus round-trip tests (Open-forward, bare Activate).
+- **Linux keyboard symbols: `⎋` falls back to FreeSerif when DejaVu Sans lacks it.**
+  On stock Ubuntu the eager Linux symbol stack (`DejaVu Sans`, then Noto families that are
+  absent) resolved `DejaVu Sans` for every keyboard symbol and stopped there, leaving
+  U+238B as tofu (glyph id 0) in shortcut recorders and keybind UI. `FreeSerif`
+  (fonts-freefont-ttf) now sits between DejaVu Sans and Noto in
+  `SYMBOL_FAMILIES`/`SYMBOL_FONT_FILES`, covering U+238B (glyph 5047) plus the other
+  eleven symbols. Picks for machines that already resolved everything are unchanged:
+  Parley's per-cluster coverage keeps the first font that covers each character. Verified
+  by `text::tests::plex_keyboard_symbols_use_real_glyphs`, the kit-gallery
+  `rune-keybind--symbols` scene snap, and the settings/opencode scripted flows.
 - **Multi-click and click-drag selection in `text_input`.** Double-clicking a text field selects
   the word under the pointer (sharing `El::selectable`'s Unicode word boundaries), triple-clicking
   selects the line in a single-line field or the `\n`-delimited paragraph in a multi-line field,
