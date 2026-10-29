@@ -152,6 +152,8 @@ mod app_ime;
 mod press_clicks;
 #[path = "runtime/window_requests.rs"]
 mod window_requests;
+#[path = "runtime/node_colors.rs"]
+mod node_colors;
 #[path = "runtime/action.rs"]
 mod action;
 use action::*;
@@ -4087,6 +4089,7 @@ impl<S: 'static> Runtime<S> {
         // `El::matched` elements of this tree: (id, index, newly mounted).
         let mut arrivals: Vec<(Rc<str>, usize, bool)> = Vec::new();
         let mut mounted = vec![false; nodes.len()];
+        let mut last = node_colors::LastBuild::default();
         for i in 0..nodes.len() {
             let id = nodes[i].id;
             let parent_id = nodes[i].parent.map(|p| nodes[p].id);
@@ -4269,8 +4272,10 @@ impl<S: 'static> Runtime<S> {
                     self.scene.animate(id, prop::BLUR, vis.blur, anim);
                 } else { self.set_or_anim(id, prop::BLUR, vis.blur, spring_l, instant || !was_present); }
             }
+            let old = last.find(&self.nodes, id).map(|o| &self.nodes[o]);
+            let (old_fill, old_text) = (old.map(|o| o.vis.fill), old.and_then(node_colors::text_color));
             if !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Fill) {
-                self.set_or_anim(id, P_FILL, vis.fill, spring_c, instant);
+                self.commit_color(id, P_FILL, old_fill, vis.fill, spring_c, instant);
             }
             if vis.border_width > 0.0 {
                 let had_bottom = self.scene.store().has(id, P_BORDER_BOTTOM);
@@ -4283,8 +4288,8 @@ impl<S: 'static> Runtime<S> {
                     self.set_or_anim(id, P_BORDER_BOTTOM, vis.border_bottom.unwrap_or(vis.border), spring_c, instant);
                 }
             }
-            if let Some(c) = nodes[i].text.as_ref().map(|t| t.color).or(nodes[i].vis.icon.map(|(_, c)| c)) {
-                self.set_or_anim(id, P_TEXT, c, spring_tc, instant);
+            if let Some(c) = node_colors::text_color(&nodes[i]) {
+                self.commit_color(id, P_TEXT, old_text, c, spring_tc, instant);
             }
             if nodes[i].vis.icon.is_some() && (nodes[i].vis.icon_turn != 0.0 || self.scene.store().has(id, P_ICON_TURN)) {
                 if was_present && !self.scene.store().has(id, P_ICON_TURN) {
