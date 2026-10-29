@@ -569,6 +569,7 @@ impl<S: 'static> Host<S> {
         rt.track_marks = comp.is_some();
         rt.wall_start = Some(Instant::now());
         rt.open_urls_natively = args.script.is_none() && args.trace.is_none() && args.frames.is_none();
+        rt.record_events = false;
         let meter = SurfaceMeter::new(native_handle.key(), native_handle.native.stats.clone());
         rt.surface_stats = Some(meter.shared());
         rt.app_stats = app_stats;

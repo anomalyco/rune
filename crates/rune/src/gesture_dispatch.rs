@@ -306,7 +306,7 @@ impl<S: 'static> Runtime<S> {
         }
         for i in chain {
             if let Some(f) = self.nodes[i].focus.key_up.clone() && Tx::took(f(states!(self), ev, tx), tx) {
-                self.events.push(if secure { "key-up [redacted]".into() } else { format!("key-up {:?}", ev.key) });
+                if secure { log_event!(self, "key-up [redacted]") } else { log_event!(self, "key-up {:?}", ev.key) }
                 return true;
             }
         }

@@ -226,7 +226,7 @@ impl<S: 'static> Runtime<S> {
             let t = n.text.as_ref()?;
             Some((t.on_link.clone()?, t.links.get(k)?.id.clone()))
         }) else { return false };
-        self.events.push(format!("link {path} {id}"));
+        log_event!(self, "link {path} {id}");
         (f.0)(states!(self), &id, tx);
         true
     }
@@ -250,7 +250,7 @@ impl<S: 'static> Runtime<S> {
             let t = n.text.as_ref()?;
             Some((t.on_link_secondary.clone()?, t.links.get(k)?.id.clone()))
         }) else { return false };
-        self.events.push(format!("link secondary {path} {id}"));
+        log_event!(self, "link secondary {path} {id}");
         (f.0)(states!(self), &id, point.window(), tx);
         true
     }

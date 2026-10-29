@@ -695,7 +695,7 @@ impl<S: 'static> Runtime<S> {
         let Some(h) = holder else { return false };
         let path = self.end_path(h).to_owned();
         let Some(text) = self.copy_text() else { return false };
-        self.events.push(format!("copy {path}"));
+        log_event!(self, "copy {path}");
         tx.copy(text);
         true
     }
@@ -720,7 +720,7 @@ impl<S: 'static> Runtime<S> {
         let text = self.copy_text();
         let mut copy = crate::PopupItem::new("copy", "Copy").enabled(text.is_some());
         if let Ok(shortcut) = "cmd+c".parse::<crate::Shortcut>() { copy = copy.key_equivalent(shortcut); }
-        self.events.push(format!("selection menu {path}"));
+        log_event!(self, "selection menu {path}");
         self.popups.push_back(crate::popup_menu::Request {
             menu: crate::PopupMenu::new().item(copy),
             anchor: crate::PopupAnchor::Point(x, y),

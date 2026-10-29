@@ -202,7 +202,7 @@ impl<S: 'static> Runtime<S> {
         st.x.v = 0.0;
         st.x.glide = None;
         st.direct = true;
-        self.events.push(format!("wheel-x {dx:.1}"));
+        log_event!(self, "wheel-x {dx:.1}");
         if st.x.offset != before { self.scroll_cancels_press(id); }
     }
 
@@ -220,7 +220,7 @@ impl<S: 'static> Runtime<S> {
         if let Some(st) = self.scrolls.get_mut(&id) {
             st.x.v = -vx;
             st.x.glide = None;
-            self.events.push(format!("fling-x {vx:.0}"));
+            log_event!(self, "fling-x {vx:.0}");
             if vx != 0.0 { self.scroll_cancels_press(id); }
         }
     }

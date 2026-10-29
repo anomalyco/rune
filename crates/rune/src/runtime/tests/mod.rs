@@ -4,6 +4,7 @@ use crate::el::{col, el};
 
 mod app_ime;
 mod context_menu_key;
+mod event_markers;
 mod group_opacity;
 mod input_clipboard;
 mod layout_hover;

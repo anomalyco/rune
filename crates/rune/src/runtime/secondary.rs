@@ -74,7 +74,7 @@ impl<S: 'static> Runtime<S> {
             if let Some(f) = n.on_secondary_press.clone() {
                 let path = n.path.clone();
                 let point = self.pointer_event(index, x, y);
-                self.events.push(format!("secondary press {path}"));
+                log_event!(self, "secondary press {path}");
                 f(states!(self), point, tx);
                 return true;
             }

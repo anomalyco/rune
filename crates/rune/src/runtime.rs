@@ -33,6 +33,7 @@ use crate::render::{Instance, KIND_DASHED, KIND_EFFECT, KIND_GLYPH, KIND_GRADIEN
 use crate::shape::{LineCap, Op, Shape};
 use crate::text::{Deco, PaintedDeco, GlyphQuad, Ink, TextSystem, layout_height};
 use crate::tok::motion;
+use event_log::log_event;
 
 /// The states a handler call can reach: the app's (`$self.state`), or while the playground is
 /// attached, its stage's beside its own controls.
@@ -97,6 +98,8 @@ mod playground_host;
 mod scroll_bottom;
 #[path = "runtime/caret.rs"]
 mod caret;
+#[path = "runtime/event_log.rs"]
+pub(crate) mod event_log;
 #[path = "runtime/layout_read.rs"]
 pub(crate) mod layout_read;
 #[path = "links.rs"]
@@ -1288,8 +1291,10 @@ pub struct Runtime<S: 'static> {
     pub(crate) anim_sources: u16,
     /// This frame's commit landed every track (`Tx::settle`): a deliberate cut.
     pub settled: bool,
-    /// Events since the last frame, for traces.
+    /// Input markers for traces and headless tests, at most `event_log::CAP` of them unread.
     pub events: Vec<String>,
+    /// Record `events` without a trace: headless runs. Live hosts turn it off.
+    pub(crate) record_events: bool,
     /// Tooling opts in before any callbacks. Absent in ordinary app runs.
     pub(crate) trace_channels: Option<HashMap<&'static str, (&'static str, f32)>>,
     /// Counters for perf gates.
@@ -1608,6 +1613,7 @@ impl<S: 'static> Runtime<S> {
             anim_sources: 0,
             settled: false,
             events: Vec::new(),
+            record_events: true,
             trace_channels: None,
             stats: FrameStats::default(),
             live_wake: crate::live::Wake::new(Arc::new(|| {})),
@@ -1987,7 +1993,7 @@ impl<S: 'static> Runtime<S> {
 
     /// Queues an app marker once for each attached writer. Formatting is skipped when off.
     pub fn trace_event(&mut self, event: impl std::fmt::Display) {
-        if self.trace_channels.is_some() { self.events.push(event.to_string()); }
+        if self.trace_channels.is_some() { event_log::push(&mut self.events, event.to_string()); }
         if let Some(trace) = self.scene.trace_mut() { trace.event(event); }
     }
 
@@ -2728,14 +2734,14 @@ impl<S: 'static> Runtime<S> {
             }
             Action::Press(path, button) => {
                 let Some(f) = self.node(&path).and_then(|n| n.on_press.clone()) else { return false };
-                self.events.push(format!("press {path}"));
+                log_event!(self, "press {path}");
                 one.button = button;
                 f(states!(self), &mut one);
                 true
             }
             Action::DoublePress(path) => {
                 let Some(f) = self.node(&path).and_then(|n| n.on_double_press.clone()) else { return false };
-                self.events.push(format!("double press {path}"));
+                log_event!(self, "double press {path}");
                 f(states!(self), &mut one);
                 true
             }
@@ -2744,7 +2750,7 @@ impl<S: 'static> Runtime<S> {
             Action::SecondaryPress(path, point) => {
                 let Some(n) = self.node(&path).filter(|n| !self.is_exiting(n.id)) else { return false };
                 let Some(f) = n.on_secondary_press.clone() else { return false };
-                self.events.push(format!("secondary press {path}"));
+                log_event!(self, "secondary press {path}");
                 f(states!(self), point, &mut one);
                 true
             }
@@ -2758,7 +2764,7 @@ impl<S: 'static> Runtime<S> {
                 f(states!(self), &mut d, &mut one);
                 self.drag_data = d.data;
                 if d.phase != Phase::Move {
-                    self.events.push(format!("drag {:?} {path}", d.phase));
+                    log_event!(self, "drag {:?} {path}", d.phase);
                 }
                 true
             }
@@ -2768,7 +2774,7 @@ impl<S: 'static> Runtime<S> {
                 true
             }
             Action::DragEnd(path, outcome) => {
-                self.events.push(format!("drag-end {outcome:?} {path}"));
+                log_event!(self, "drag-end {outcome:?} {path}");
                 let Some(f) = self.node(&path).and_then(|n| n.on_drag_end.clone()) else { return false };
                 f(states!(self), outcome, &mut one);
                 true
@@ -2810,10 +2816,10 @@ impl<S: 'static> Runtime<S> {
                     edit.paste(content.text())
                 };
                 if self.with_focused_state(into_field, &mut one) {
-                    self.events.push("paste field".into());
+                    log_event!(self, "paste field");
                     true
                 } else if let Some(f) = self.app_paste_handler() && (f.call)(states!(self), &content, &mut one) {
-                    self.events.push("paste window".into());
+                    log_event!(self, "paste window");
                     true
                 } else { false }
             }
@@ -3002,7 +3008,7 @@ impl<S: 'static> Runtime<S> {
         }
         one.physical_key = physical_key;
         if !app_first && !self.playground_typing() && let Some(f) = self.on_key && Tx::took(self.app_key(f, ev, one), one) {
-            self.events.push(format!("key {:?}", ev.key));
+            log_event!(self, "key {:?}", ev.key);
             return true;
         }
         one.physical_key = None;
@@ -3044,7 +3050,7 @@ impl<S: 'static> Runtime<S> {
             .or_else(|| (0..self.nodes.len()).find(|&i| self.pageable(i)));
         let Some(i) = i else { return false };
         if !self.page_to(i, |offset, max, page| match ev.key { PageUp => offset - page, PageDown => offset + page, Home => 0.0, _ => max }) { return false; }
-        self.events.push(format!("page {:?}", ev.key));
+        log_event!(self, "page {:?}", ev.key);
         true
     }
 
@@ -3125,7 +3131,7 @@ impl<S: 'static> Runtime<S> {
         if out.submit
             && let Some(sub) = submit
         {
-            self.events.push(format!("submit {path}"));
+            log_event!(self, "submit {path}");
             tx.instant = false;
             sub(states!(self), tx);
         } else if out.submit {
@@ -4908,7 +4914,7 @@ impl<S: 'static> Runtime<S> {
         let clip = self.screen_clip_of_parent(n.parent).map(|v| v / self.env.scale);
         let (x0, y0) = (r[0].max(clip[0]), r[1].max(clip[1]));
         let rect = [x0, y0, ((r[0] + r[2]).min(clip[2]) - x0).max(0.0), ((r[1] + r[3]).min(clip[3]) - y0).max(0.0)];
-        self.events.push(format!("drag-out {path}"));
+        log_event!(self, "drag-out {path}");
         self.drop_drag_out_request();
         self.queue.push(Action::DragStart(path.clone()));
         self.drag_out_request = Some(crate::drag_out::DragOutStart { path, item, rect, bounds: r, press: self.press_at });
@@ -5405,7 +5411,7 @@ impl<S: 'static> Runtime<S> {
             st.glide = None;
             st.direct = true;
             st.pinned = stick && st.offset >= st.max - 0.5;
-            self.events.push(format!("wheel {dy:.1}"));
+            log_event!(self, "wheel {dy:.1}");
             if st.offset != before { self.scroll_cancels_press(id); }
         }
     }
@@ -5422,7 +5428,7 @@ impl<S: 'static> Runtime<S> {
             st.v = -velocity;
             st.pinned = false;
             st.glide = None;
-            self.events.push(format!("fling {velocity:.0}"));
+            log_event!(self, "fling {velocity:.0}");
             if velocity != 0.0 { self.scroll_cancels_press(id); }
         }
     }

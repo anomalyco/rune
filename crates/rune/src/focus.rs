@@ -111,7 +111,7 @@ impl<S: 'static> Runtime<S> {
         else { return false };
         if tx.key_repeat { return true; }
         let f = self.nodes[i].on_press.clone().unwrap();
-        self.events.push(format!("default {}", self.nodes[i].path));
+        log_event!(self, "default {}", self.nodes[i].path);
         f(states!(self), tx);
         true
     }

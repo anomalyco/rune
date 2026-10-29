@@ -1849,6 +1849,7 @@ impl<T: 'static> PendingOverlay for Overlay<T> {
         // set_live_waker call replaces the wake lane and resets its subscriptions.
         self.rt.set_live_waker(wake.clone());
         self.rt.open_urls_natively = true;
+        self.rt.record_events = false;
         self.clipboard.connect(wake.clone());
         self.popup.connect(wake.clone());
         self.gpu_pool = gpu;

@@ -185,7 +185,7 @@ impl<S: 'static> Runtime<S> {
             return true;
         }
         if !app_first && let Some(f) = self.on_key && Tx::took(self.app_key(f, ev, one), one) {
-            self.events.push(format!("key {:?}", ev.key));
+            log_event!(self, "key {:?}", ev.key);
             return true;
         }
         matches!(ev.key, Key::Modifier { pressed: false, .. }) && self.route_key_up(ev, one)

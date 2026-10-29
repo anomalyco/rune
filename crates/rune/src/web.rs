@@ -144,6 +144,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             let now = Instant::now();
             rt.wall_start = Some(now);
             rt.open_urls_natively = true;
+            rt.record_events = false;
             shared.connect(wake.clone());
             let menus = crate::native_menu::Guard::attach(&shared, false);
             let shortcuts = crate::shortcuts::Guard::attach(&shared, wake.clone(), false, false);
