@@ -553,7 +553,7 @@ impl Scene {
             self.track_set(i as usize, prop::PRESENCE, 0.0);
             self.track_animate(i as usize, prop::PRESENCE, 1.0, Anim::from(enter));
             self.intent(id, Intent::TRANSITION | Intent::OPACITY, enter.duration);
-        } else {
+        } else if !self.at_base(i as usize, prop::PRESENCE, 1.0) {
             self.track_set(i as usize, prop::PRESENCE, 1.0);
         }
     }
@@ -601,6 +601,7 @@ impl Scene {
         }
         n.dirty = true;
         let exit = n.transition.springs.exit;
+        self.ensure_prop(i, prop::PRESENCE);
         self.track_animate(i, prop::PRESENCE, 0.0, Anim::from(exit));
         self.intent(id, Intent::TRANSITION | Intent::OPACITY, exit.duration);
     }

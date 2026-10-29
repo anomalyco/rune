@@ -5,10 +5,33 @@ impl AnimationStore {
     /// Sets a value immediately: direct manipulation, no animation, cancels anything running.
     /// The first `set` or `animate` of a property creates its track.
     pub fn set<T: Animatable>(&mut self, node: NodeId, prop: Prop<T>, value: T) -> TrackId {
+        self.set_changed(node, prop, value).0
+    }
+
+    /// [`set`](Self::set), and whether it changed anything: setting a track already at rest on
+    /// `value` leaves it, and what it last presented, as they are.
+    pub(crate) fn set_changed<T: Animatable>(&mut self, node: NodeId, prop: Prop<T>, value: T) -> (TrackId, bool) {
         let v = lanes(&value);
-        let t = self.ensure(node, prop.id, prop.class, &v[..T::LANES]);
-        self.set_raw(t, &v[..T::LANES]);
-        self.id_of(t as usize)
+        let v = &v[..T::LANES];
+        if let Some(&t) = self.index.get(&(node.0, prop.id.0)) {
+            self.check_lanes(t as usize, T::LANES);
+            if self.at_rest_on(t as usize, v) {
+                return (self.id_of(t as usize), false);
+            }
+        }
+        let t = self.ensure(node, prop.id, prop.class, v);
+        self.set_raw(t, v);
+        (self.id_of(t as usize), true)
+    }
+
+    /// Track `t` is settled exactly on `v`: nothing running, scheduled or stacked on any lane.
+    fn at_rest_on(&self, t: usize, v: &[f32]) -> bool {
+        let l0 = self.t_lane0[t] as usize;
+        self.t_slot[t] == NONE && self.t_meta[t].token == 0 && v.iter().enumerate().all(|(i, &x)| {
+            let l = l0 + i;
+            self.l_target[l] == x && self.l_value[l] == x && self.l_vel[l] == 0.0
+                && self.l_pending[l] == NONE && self.l_more[l] == NONE && self.l_layer[l].kind == Kind::Rest
+        })
     }
 
     /// Animates a property to `target`. Retargets from the exact current position and velocity.
@@ -21,14 +44,18 @@ impl AnimationStore {
         target: T,
         anim: impl Into<Anim>,
     ) -> TrackId {
-        let v = lanes(&target);
-        let anim = anim.into();
+        self.animate_changed(node, prop, target, anim.into()).0
+    }
+
+    /// [`animate`](Self::animate), and whether it changed anything (an unchanged target doesn't).
+    pub(crate) fn animate_changed<T: Animatable>(&mut self, node: NodeId, prop: Prop<T>, target: T, anim: Anim) -> (TrackId, bool) {
         match self.index.get(&(node.0, prop.id.0)).copied() {
-            None => self.set(node, prop, target),
+            None => self.set_changed(node, prop, target),
             Some(t) => {
                 self.check_lanes(t as usize, T::LANES);
-                self.animate_raw(t as usize, &v[..T::LANES], anim, None);
-                self.id_of(t as usize)
+                let v = lanes(&target);
+                let changed = self.animate_raw(t as usize, &v[..T::LANES], anim, None);
+                (self.id_of(t as usize), changed)
             }
         }
     }

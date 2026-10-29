@@ -692,7 +692,8 @@ impl AnimationStore {
     }
 
     /// Animates lanes of track `t` toward `targets`. `lane_vel` overrides per-lane start velocity.
-    pub(crate) fn animate_raw(&mut self, t: usize, targets: &[f32], mut anim: Anim, lane_vel: Option<&[f32]>) {
+    /// False when no lane's target changed, so nothing moves.
+    pub(crate) fn animate_raw(&mut self, t: usize, targets: &[f32], mut anim: Anim, lane_vel: Option<&[f32]>) -> bool {
         let now = self.time_of(t);
         if self.t_next_due[t] <= now {
             self.apply_due(t, now);
@@ -753,6 +754,7 @@ impl AnimationStore {
                 self.t_meta[t].token = anim.token;
             }
         }
+        changed
     }
 
     /// Starts a new segment on lane `l` at time `at` from its exact state there.

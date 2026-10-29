@@ -483,3 +483,55 @@ fn a_trailing_child_rests_where_its_parent_does() {
     assert!(shown.rect.x > 30.0 && shown.rect.x < 60.0, "{:?}", shown.rect);
     assert_eq!(rest, Some(Rect::new(60.0, 4.0, 6.0, 6.0)), "the child comes to rest against the parent's new edge");
 }
+
+#[test]
+fn a_static_node_keeps_no_tracks_and_an_unchanged_commit_leaves_it_clean() {
+    let id = NodeId(1);
+    let frame = Rect::new(0.0, 0.0, 100.0, 40.0);
+    let mut s = Scene::new();
+    s.insert(id, NodeSpec::new(frame).opacity(0.5).radius(Corners([4.0; 4])), Mount::Initial);
+    s.frame_at(0.0);
+    assert_eq!(s.store().track_len(), 0, "a node that never moves keeps no tracks, presence included");
+    for k in 1..3 {
+        s.set_frame(id, frame, Spring::new(0.3, 0.0));
+        s.animate(id, prop::OPACITY, 0.5, Spring::new(0.3, 0.0));
+        s.set(id, prop::RADIUS, Corners([4.0; 4]));
+        assert!(s.frame_at(k as f64 / HZ).changed.is_empty(), "nothing changed, so nothing presents again");
+    }
+    assert_eq!(s.store().track_len(), 0);
+}
+
+#[test]
+fn a_settled_track_set_to_its_value_stays_clean() {
+    let id = NodeId(1);
+    let mut s = Scene::new();
+    s.insert(id, spec(0.0, 0.0, 100.0, 40.0), Mount::Initial);
+    s.frame_at(0.0);
+    s.animate(id, prop::OPACITY, 0.2, Spring::new(0.2, 0.0));
+    let half = s.frame_at(0.05);
+    let o = find(half.changed, id).unwrap().opacity;
+    assert!(o < 1.0 && o > 0.2, "the first animation starts from the base value: {o}");
+    let mut t = 0.05;
+    while s.frame_at(t).animating { t += 1.0 / HZ; }
+    s.set(id, prop::OPACITY, 0.2);
+    s.animate(id, prop::OPACITY, 0.2, Spring::new(0.2, 0.0));
+    assert!(s.frame_at(t + 1.0 / HZ).changed.is_empty());
+}
+
+#[test]
+fn a_node_without_a_presence_track_still_fades_out() {
+    let id = NodeId(1);
+    let mut s = Scene::new();
+    s.insert(id, spec(0.0, 0.0, 100.0, 40.0), Mount::Initial);
+    s.frame_at(0.0);
+    s.remove(id);
+    let o = find(s.frame_at(0.05).changed, id).unwrap().opacity;
+    assert!(o > 0.0 && o < 1.0, "the exit plays: {o}");
+    let mut t = 0.05;
+    let mut gone = false;
+    while t < 3.0 && !gone {
+        t += 1.0 / HZ;
+        gone = s.frame_at(t).exited.contains(&id);
+    }
+    assert!(gone);
+}
