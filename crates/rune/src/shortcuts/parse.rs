@@ -64,7 +64,7 @@ impl fmt::Display for Shortcut {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "dbus"))]
 impl Shortcut {
     pub(super) fn keysym_name(&self) -> String {
         match self.key_name() {

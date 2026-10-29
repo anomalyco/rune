@@ -6,11 +6,11 @@
 //!
 //! Linux shows the icon only where a tray host runs (KDE, waybar, most bars; GNOME needs an
 //! extension). Without one, [`Tray::new`] still succeeds and the icon appears once a host
-//! starts. macOS isn't supported yet.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+//! starts. The Linux backend needs the default `dbus` feature. macOS isn't supported yet.
+#[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "windows"))]
 use std::sync::Arc;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "dbus"))]
 #[path = "tray/sni.rs"]
 mod native;
 #[cfg(target_os = "windows")]
@@ -51,7 +51,7 @@ pub enum TrayEvent {
 }
 
 #[derive(Clone, Debug)]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(all(target_os = "linux", feature = "dbus")), allow(dead_code))]
 pub struct TraySpec {
     /// A stable application id (Linux `Id`).
     pub(crate) id: String,
@@ -79,11 +79,11 @@ impl std::fmt::Display for TrayError {
 impl std::error::Error for TrayError {}
 
 /// Runs on the tray's thread; keep it short and hand work to the app.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "windows"))]
 pub(crate) type Handler = Arc<dyn Fn(TrayEvent) + Send + Sync>;
 
 pub struct Tray {
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "windows"))]
     native: native::Native,
 }
 
@@ -92,21 +92,21 @@ impl Tray {
         if spec.icon.rgba.len() != spec.icon.width as usize * spec.icon.height as usize * 4 {
             return Err(TrayError::Backend("tray icon size doesn't match its pixels".into()));
         }
-        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        #[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "windows"))]
         { native::Native::new(spec, Arc::new(on_event)).map(|native| Self { native }) }
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(not(any(all(target_os = "linux", feature = "dbus"), target_os = "windows")))]
         { let _ = (spec, on_event); Err(TrayError::Unsupported) }
     }
     pub fn set_menu(&self, menu: Vec<TrayItem>) {
-        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        #[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "windows"))]
         self.native.set_menu(menu);
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(not(any(all(target_os = "linux", feature = "dbus"), target_os = "windows")))]
         let _ = menu;
     }
     pub fn set_tooltip(&self, tooltip: impl Into<String>) {
-        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        #[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "windows"))]
         self.native.set_tooltip(tooltip.into());
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(not(any(all(target_os = "linux", feature = "dbus"), target_os = "windows")))]
         let _ = tooltip;
     }
 }

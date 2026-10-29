@@ -5,11 +5,11 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["ogg-audio", "svg"]
+default = ["dbus", "ogg-audio", "svg"]
 # Headless benchmark instrumentation; ordinary builds contain no phase clocks.
 frame-profile = ["dep:procwatch", "dep:libc"]
 # Native Open, Save and folder dialogs: rfd on macOS and Windows, the XDG desktop portal over zbus on Linux.
-native-file-dialog = ["dep:rfd"]
+native-file-dialog = ["dep:rfd", "dbus"]
 hot = ["dep:subsecond", "dep:dioxus-devtools"]
 # macOS: let an overlay set its element's cursor while its app isn't frontmost. macOS ignores
 # `[NSCursor set]` from a background app; this sets WindowServer's private per-connection
@@ -24,6 +24,13 @@ ogg-audio = ["dep:symphonia", "dep:opuscule"]
 # SVG and SVGZ images (`ImageCache::svg`, `file`, `load_mime`, and `load` on sniffed SVG bytes), and
 # scalable Linux app icons, rasterized by resvg. Off, those images resolve to `Image::error`.
 svg = ["dep:resvg"]
+# Linux desktop services over D-Bus (zbus, with a tokio runtime on each service's thread): the
+# desktop's light or dark preference (the Settings portal), the system tray (`Tray`), global
+# shortcuts on Wayland (the GlobalShortcuts portal) and, with `native-file-dialog`, the
+# FileChooser portal. Off, neither crate is compiled: a window winit gives no theme draws dark,
+# `Tray::new` returns `TrayError::Unsupported` on Linux and a Wayland session's global shortcuts
+# return `ShortcutError::Unsupported`; X11 shortcuts keep working. No effect on other platforms.
+dbus = ["dep:zbus", "dep:tokio", "dep:futures-util"]
 
 [dependencies]
 procwatch = { path = "../procwatch", optional = true }
@@ -111,9 +118,9 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_Wind
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 libloading = "0.8"
-zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service"] }
-tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"] }
-futures-util = "0.3"
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service"], optional = true }
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"], optional = true }
+futures-util = { version = "0.3", optional = true }
 
 [target.'cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
 wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"] }

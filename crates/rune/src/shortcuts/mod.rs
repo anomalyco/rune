@@ -16,7 +16,7 @@ mod windows;
 mod x11;
 #[cfg(any(target_os = "linux", test))]
 mod x11_repeat;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "dbus"))]
 mod wayland;
 
 pub use parse::Shortcut;
@@ -74,8 +74,12 @@ fn backend(wayland: bool, sink: Sink) -> Result<NativeBackend, ShortcutError> {
     #[cfg(target_os = "windows")]
     return Ok(Box::new(windows::Native::new(sink)?));
     #[cfg(target_os = "linux")]
-    return if wayland { Ok(Box::new(wayland::Native::new(sink)?)) }
-        else { Ok(Box::new(x11::Native::new(sink)?)) };
+    return if wayland {
+        #[cfg(feature = "dbus")]
+        { Ok(Box::new(wayland::Native::new(sink)?)) }
+        #[cfg(not(feature = "dbus"))]
+        { Err(ShortcutError::Unsupported) }
+    } else { Ok(Box::new(x11::Native::new(sink)?)) };
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     { let _ = sink; Err(ShortcutError::Unsupported) }
 }

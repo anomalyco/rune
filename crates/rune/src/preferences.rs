@@ -74,10 +74,10 @@ pub(crate) fn reduced_motion() -> bool { false }
 
 /// The desktop's light or dark preference where winit reports none (Linux: the XDG desktop
 /// portal's `color-scheme`). None leaves the host's own default.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "dbus"))]
 pub(crate) fn dark() -> Option<bool> { crate::portal_appearance::dark() }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(all(target_os = "linux", feature = "dbus")))]
 pub(crate) fn dark() -> Option<bool> { None }
 
 /// [`dark`] for a window winit gives no theme; None leaves the window's appearance as it is.
@@ -88,7 +88,7 @@ pub(crate) fn desktop_dark(window: &winit::window::Window) -> Option<bool> {
 /// A new window's appearance: `--theme` when given, else winit's theme, else [`desktop_dark`],
 /// else dark. On Linux a change of the desktop's preference redraws the window, which rereads it.
 pub(crate) fn window_dark(window: &std::sync::Arc<winit::window::Window>, theme: Option<&str>) -> bool {
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "dbus"))]
     crate::portal_appearance::follow(window);
     match theme {
         Some("light") => false,
