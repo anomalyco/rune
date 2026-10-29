@@ -543,6 +543,8 @@ impl<T: 'static> Overlay<T> {
                 if let Some(x11) = &self.x11 { x11.hide(); }
                 #[cfg(target_os = "windows")]
                 if let Some(native) = &mut self.native { native.hide(); }
+                #[cfg(target_os = "windows")]
+                crate::win32::hide_overlay(window);
                 #[cfg(target_os = "macos")]
                 if let Some(panel) = &self.panel {
                     panel.hide(fade);

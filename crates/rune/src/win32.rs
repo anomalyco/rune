@@ -13,6 +13,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_EX_TRANSPARENT,
 };
 
+#[cfg(test)]
+#[path = "win32_tests.rs"]
+mod tests;
+
 fn hwnd(window: &winit::window::Window) -> Option<HWND> {
     let RawWindowHandle::Win32(h) = window.window_handle().ok()?.as_raw() else { return None };
     Some(h.hwnd.get() as HWND)
@@ -202,6 +206,13 @@ pub(crate) fn show_overlay(window: &winit::window::Window) {
             }
         }
     }
+}
+
+/// Hide the window that `show_overlay` exposed directly through Win32.
+pub(crate) fn hide_overlay(window: &winit::window::Window) {
+    let Some(hwnd) = hwnd(window) else { return };
+    // winit did not perform the show, so its cached visibility may still be false.
+    unsafe { ShowWindow(hwnd, SW_HIDE); }
 }
 
 /// The bottom of the primary display's work area (above the taskbar), in physical pixels.

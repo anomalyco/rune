@@ -1,0 +1,2 @@
+- Fix Windows overlays remaining visible after they are hidden.
+- Prefer explicit alpha composition for transparent Windows surfaces when Vulkan only reports inherited alpha.
