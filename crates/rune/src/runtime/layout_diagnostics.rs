@@ -2,7 +2,7 @@
 use std::collections::BTreeSet;
 use std::sync::Mutex;
 
-use taffy::prelude::*;
+use rune_taffy::prelude::*;
 
 use super::Node;
 
@@ -14,7 +14,7 @@ static WARNED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 pub(super) fn collapsed_scrolls(taffy: &TaffyTree<usize>, nodes: &[Node]) {
     let height = |i: usize| taffy.layout(nodes[i].taffy).map_or(0.0, |l| l.size.height);
     let bottom = |i: usize| taffy.layout(nodes[i].taffy).map_or(0.0, |l| l.location.y + l.size.height);
-    let grown = |i: usize| taffy.style(nodes[i].taffy).is_ok_and(|s| s.flex_grow > 0.0 && s.flex_basis == length(0.0));
+    let grown = |i: usize| taffy.style(nodes[i].taffy).is_ok_and(|s| s.flex_grow() > 0.0 && s.flex_basis() == length(0.0));
     for (i, n) in nodes.iter().enumerate() {
         if n.scroll.is_none() { continue; }
         let direct = || (i + 1..nodes.len()).take_while(|&j| nodes[j].parent >= Some(i)).filter(|&j| nodes[j].parent == Some(i));

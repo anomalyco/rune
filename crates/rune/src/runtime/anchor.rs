@@ -104,7 +104,7 @@ impl<S: 'static> Measurement<'_, S> {
             let vertical = matches!(a.side, Side::Top | Side::Bottom);
             let len = if vertical { n.local.h } else { n.local.w };
             let Some(bound) = fit_bound(a, target, len, self.viewport) else { continue };
-            let mut style = taffy.style(n.taffy).unwrap().clone();
+            let mut style: Style = taffy.style(n.taffy).unwrap().clone().into();
             let max = if vertical { &mut style.max_size.height } else { &mut style.max_size.width };
             *max = length(bound);
             taffy.set_style(n.taffy, style).unwrap();

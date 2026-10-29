@@ -21,7 +21,7 @@ use rune_motion::{
     Anim, Corners, LayoutAnim, Mount, NodeId, NodeSpec, Phase as PresencePhase, Prop, PropClass, Rect as MRect, Scene,
     Spring, Transition, prop, snap::grid,
 };
-use taffy::prelude::*;
+use rune_taffy::prelude::*;
 use taffy::TraversePartialTree;
 
 use crate::color::{Color, over, srgb_encode};
@@ -4001,7 +4001,7 @@ impl<S: 'static> Runtime<S> {
             }
             stack.width = width;
             stack.pending_heights.retain(|id, _| new_set.contains(id));
-            stack.gap = crate::virtual_list::gap_y(taffy.style(nodes[c].taffy).unwrap());
+            stack.gap = crate::virtual_list::gap_y(&taffy.style(nodes[c].taffy).unwrap().clone().into());
             // With every row gone, the leaving rows still stand below the stack's top padding.
             let pad_top = rows.first().map_or(stack.pad_top, |&j| nodes[j].target[1] - ctop);
             stack.pad_bottom = rows.last().map_or(nodes[c].target[3] - ctop - pad_top, |&j| nodes[c].target[3] - nodes[j].target[3]);

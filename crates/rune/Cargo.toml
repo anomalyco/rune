@@ -31,6 +31,8 @@ svg = ["dep:resvg"]
 # `Tray::new` returns `TrayError::Unsupported` on Linux and a Wayland session's global shortcuts
 # return `ShortcutError::Unsupported`; X11 shortcuts keep working. No effect on other platforms.
 dbus = ["dep:zbus", "dep:tokio", "dep:futures-util"]
+# Use upstream `taffy::TaffyTree` instead of `rune_taffy::CompactTaffyTree` for A/B benchmarks and parity checks.
+baseline-taffy = ["rune-taffy/baseline-taffy"]
 
 [dependencies]
 procwatch = { path = "../procwatch", optional = true }
@@ -38,6 +40,7 @@ subsecond = { version = "=0.7.10", optional = true }
 dioxus-devtools = { version = "=0.7.10", optional = true }
 rune-motion = { path = "../rune-motion" }
 rune-staging = { path = "../rune-staging" }
+rune-taffy = { path = "../rune-taffy" }
 # Allow backend patch fixes; headless pixel equivalence guards the precompiled Metal path.
 wgpu = { version = "~30.0.1", default-features = false, features = ["std", "parking_lot", "metal", "wgsl"] }
 # Keep Wayland client-side frames/buttons without the title font's ab_glyph/ttf-parser.
@@ -146,6 +149,10 @@ required-features = ["frame-profile"]
 
 [[example]]
 name = "long_note"
+required-features = ["frame-profile"]
+
+[[example]]
+name = "taffy_adapter_bench"
 required-features = ["frame-profile"]
 
 [[test]]
