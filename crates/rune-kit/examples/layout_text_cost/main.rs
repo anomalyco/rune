@@ -13,8 +13,15 @@
 //!   900 → 600 → 900, as a live resize does.
 //! - `md-same`: the Markdown note; each frame re-runs the view with nothing changed.
 //! - `md-open`: the first frame of a fresh runtime showing the Markdown note (every text shaped).
+//! - `md-virtual`: the Markdown note's blocks as `virtual_rows`, scrolled 40 pt a frame, so the
+//!   mounted window shifts every frame or two.
+//! - `md-beside`: `md-virtual` beside a static panel showing a quarter of the note, as a card's
+//!   notes sit next to a scrolling list.
+//! - `tree`: 80 keyed groups of 20 keyed rows (about 5,000 layout nodes) in a scroll view with
+//!   one layout read; each frame bumps one row's count and keeps that row on screen.
 //!
-//! `--mode time` (default) prints `METRIC case=.. metric=.. median=.. p95=.. mean=..` per measurement;
+//! `--mode time` (default) prints `METRIC case=.. metric=.. median=.. p95=.. mean=..` per measurement,
+//! and again as `case=..:commit` over only the frames that committed when not all of them did;
 //! `cpu_ms` is thread CPU of the input and its frame, the phases are thread CPU and overlap
 //! (commit includes view, layout and apply; layout includes text), `allocs` counts allocator
 //! calls in the frame. `--mode sample --out FILE` samples the main thread's stacks every
@@ -37,7 +44,7 @@ use rune_kit::{Badge, Button, ButtonVariant, Card, Kit, Markdown, MarkdownStyle,
 #[global_allocator]
 static ALLOC: probe::Probe = probe::Probe;
 
-const CASES: &[&str] = &["stack", "stack-same", "list", "edit", "md-resize", "md-same", "md-open"];
+const CASES: &[&str] = &["stack", "stack-same", "list", "edit", "md-resize", "md-same", "md-open", "md-virtual", "md-beside", "tree"];
 const METRICS: &[&str] = &["cpu_ms", "view_ms", "commit_ms", "layout_ms", "text_ms", "paint_ms", "apply_ms", "allocs", "shaped", "rebroken", "nodes"];
 const BG: Color = Color { r: 0.008, g: 0.008, b: 0.009, a: 1.0 };
 const WORDS: &[&str] = &["amber", "lantern", "orchard", "quiet", "harbor", "copper", "meadow", "signal", "drift",
@@ -195,6 +202,59 @@ fn md_view(s: &Md, _: &mut Cx<Md>) -> El {
     scroller(col().w_full().px(32.0).py(24.0).child(Markdown::new(s.src.as_str()).render(&s.style)))
 }
 
+// md-virtual, md-beside
+
+struct MdRows { blocks: Vec<String>, keys: Vec<String>, side: Option<String>, style: MarkdownStyle }
+
+fn md_rows_view(s: &MdRows, _: &mut Cx<MdRows>) -> El {
+    let list = col().key("blocks").w_full().px(32.0).growth(GrowthSpec::default()).virtual_rows(
+        s.blocks.len(), 60.0,
+        |s: &MdRows, i| Cow::Borrowed(s.keys[i].as_str()),
+        |s: &MdRows, i| col().w_full().pb(12.0).child(Markdown::new(s.blocks[i].as_str()).render(&s.style)),
+    );
+    let Some(side) = &s.side else { return scroller(list) };
+    row().w_full().h_full().fill(BG)
+        .child(col().key("side").w(320.0).h_full().px(16.0).py(16.0).child(Markdown::new(side.as_str()).render(&s.style)))
+        .child(col().key("main").grow(1.0).h_full().child(scroller(list)))
+}
+
+fn md_rows_state(src: &str, side: bool) -> MdRows {
+    let blocks: Vec<String> = src.split("\n\n").filter(|b| !b.trim().is_empty()).map(String::from).collect();
+    let keys = (0..blocks.len()).map(|i| format!("b{i}")).collect();
+    let side = side.then(|| src[..src.len() / 4].rfind("\n\n").map_or(src, |at| &src[..at]).to_owned());
+    MdRows { blocks, keys, side, style: MarkdownStyle::neutral(true) }
+}
+
+// tree
+
+const GROUPS: usize = 80;
+const CELLS: usize = 20;
+
+struct Tree { counts: Vec<u32>, labels: Vec<String> }
+
+fn tree_view(s: &Tree, cx: &mut Cx<Tree>) -> El {
+    let w = cx.layout_size("g0").map_or(0.0, |[w, _]| w);
+    let groups = (0..GROUPS).map(|g| {
+        let cells = (0..CELLS).map(|c| {
+            let i = g * CELLS + c;
+            row().key(format!("c{i}")).w_full().h(24.0).gap(8.0).center_y()
+                .child(text(s.labels[i].clone()).font(TextStyle::new(13.0, 400.0)).color(Color::WHITE).grow(1.0).shrink().truncate())
+                .child(text(format!("{}", s.counts[i])).font(TextStyle::new(13.0, 500.0)).color(Color::WHITE.alpha(0.7)))
+        });
+        col().key(format!("g{g}")).w_full().gap(2.0)
+            .child(text(format!("Group {g}")).font(TextStyle::new(15.0, 600.0)).color(Color::WHITE))
+            .children(cells)
+    });
+    scroller(col().w_full().px(24.0).py(16.0).gap(12.0)
+        .child(text(format!("width {w:.0}")).font(TextStyle::new(12.0, 400.0)).color(Color::WHITE.alpha(0.5)))
+        .children(groups))
+}
+
+fn tree_state() -> Tree {
+    let mut r = Rng(5);
+    Tree { counts: vec![0; GROUPS * CELLS], labels: (0..GROUPS * CELLS).map(|_| { let n = 2 + r.next(4); r.words(n) }).collect() }
+}
+
 fn fonts() -> TextSystem {
     let mut fonts = TextSystem::default();
     fonts.layout_rich("Warm fonts", &[], TextStyle::new(15.0, 400.0), 2.0, None);
@@ -232,6 +292,13 @@ fn timed<S: 'static>(rt: &mut Runtime<S>, tag: u32, input: impl FnOnce(&mut Runt
 }
 
 fn report(case: &str, rows: &[Vec<f64>]) {
+    summarize(case, rows);
+    // Scrolling cases commit on only some frames; those frames, apart.
+    let commits: Vec<Vec<f64>> = rows.iter().filter(|r| r[2] > 0.0).cloned().collect();
+    if !commits.is_empty() && commits.len() < rows.len() { summarize(&format!("{case}:commit"), &commits); }
+}
+
+fn summarize(case: &str, rows: &[Vec<f64>]) {
     for (m, name) in METRICS.iter().enumerate() {
         let mut v: Vec<f64> = rows.iter().map(|r| r[m]).collect();
         v.sort_by(f64::total_cmp);
@@ -300,6 +367,23 @@ fn run(case: &str, tag: u32, kb: usize, meta: &mut Vec<String>) -> Vec<Vec<f64>>
                 timed(&mut rt, tag, |_| {})
             }).collect();
             rows
+        }
+        "md-virtual" | "md-beside" => {
+            let mut rt = runtime(md_rows_state(&src, case == "md-beside"), md_rows_view, (1100.0, 900.0));
+            let x = if case == "md-beside" { 700.0 } else { 550.0 };
+            rt.pointer_move(x, 450.0);
+            probe::snapshot(tag);
+            meta.push(census(&rt, case, heap0));
+            (0..360).map(|_| timed(&mut rt, tag, |rt| rt.wheel(x, 450.0, -40.0))).collect()
+        }
+        "tree" => {
+            let mut rt = runtime(tree_state(), tree_view, (900.0, 900.0));
+            probe::snapshot(tag);
+            meta.push(census(&rt, case, heap0));
+            (0..240).map(|i| timed(&mut rt, tag, |rt| {
+                let k = (i * 37) % (GROUPS * CELLS) % (CELLS * 3);
+                rt.update(|s, tx| { s.counts[k] += 1; tx.keep_on_screen(format!("c{k}")); });
+            })).collect()
         }
         other => panic!("unknown case {other}; one of {CASES:?}"),
     }
