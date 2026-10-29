@@ -126,6 +126,7 @@ mod el_pills;
 mod el_pixel_snap;
 mod el_ride_trailing;
 mod el_sticky;
+mod el_text;
 mod el_tx;
 mod element_info;
 mod input_time;
