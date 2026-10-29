@@ -170,3 +170,52 @@ fn a_frame_with_nothing_to_upload_never_touches_the_staging() {
     assert_eq!(writes.stats().flushes, flushes);
     queue.submit([encoder.finish()]);
 }
+
+/// A compositor asking for `IMMEDIATES` gets the adapter's immediate size and can colour a
+/// draw with `set_immediates`, no buffer written.
+#[test]
+fn a_device_asked_for_immediates_draws_with_them() {
+    let Ok(gpu) = Gpu::try_with_features(Gpu::instance(), None, wgpu::Features::IMMEDIATES) else { return };
+    let device = &gpu.device;
+    if !device.features().contains(wgpu::Features::IMMEDIATES) { return; }
+    assert!(device.limits().max_immediate_size >= 16, "the limit came with the feature");
+    assert_eq!(Gpu::headless().device.limits().max_immediate_size, 0, "only when asked");
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl("
+            var<immediate> fill: vec4<f32>;
+            @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+                return vec4<f32>(vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u)) * 2.0 - 1.0, 0.0, 1.0);
+            }
+            @fragment fn fs() -> @location(0) vec4<f32> { return fill; }
+        ".into()),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[], immediate_size: 16 });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: None, layout: Some(&layout),
+        vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader, entry_point: Some("fs"), compilation_options: Default::default(),
+            targets: &[Some(OFFSCREEN_FORMAT.into())],
+        }),
+        primitive: Default::default(), depth_stencil: None, multisample: Default::default(), multiview_mask: None, cache: None,
+    });
+    let target = Offscreen::new(device, SIZE.0, SIZE.1);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &target.view, resolve_target: None, depth_slice: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+            })],
+            ..Default::default()
+        });
+        pass.set_pipeline(&pipeline);
+        pass.set_immediates(0, bytemuck::cast_slice(&[1.0f32, 0.0, 0.0, 1.0]));
+        pass.draw(0..3, 0..1);
+    }
+    target.copy(&mut encoder);
+    gpu.queue.submit([encoder.finish()]);
+    assert_eq!(pixel(&target.read(device), 10, 10), RED);
+}

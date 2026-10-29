@@ -8,6 +8,9 @@ use crate::runtime::Runtime;
 
 pub trait Compositor<S: 'static>: 'static {
     /// Device features to request when the adapter has them (e.g. `TIMESTAMP_QUERY`).
+    /// `IMMEDIATES` also raises `max_immediate_size` to the adapter's (4 KB on Metal): per-draw
+    /// values set with `RenderPass::set_immediates` travel inside the pass, where a uniform
+    /// written through the queue or `Frame::write_buffer` costs the frame another command buffer.
     fn features(&self) -> wgpu::Features {
         wgpu::Features::empty()
     }

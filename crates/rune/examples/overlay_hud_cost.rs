@@ -5,7 +5,9 @@
 //! Profile it with Time Profiler or samply.
 //!
 //! - `OVERLAY_WRITES=n`: the compositor writes a 256-byte uniform buffer `n` times a frame,
-//!   through `Queue::write_buffer`, or through `Frame::write_buffer` with `OVERLAY_STAGED=1`.
+//!   through `Queue::write_buffer`, or through `Frame::write_buffer` with `OVERLAY_STAGED=1`,
+//!   and draws a triangle reading it. `OVERLAY_IMMEDIATES=1` sets the 256 bytes `n` times with
+//!   `RenderPass::set_immediates` instead (`Compositor::features` asks for `IMMEDIATES`).
 //! - `OVERLAY_SHOW_HZ=n`: another thread calls `OverlayHandle::show` `n` times a second, as an
 //!   app that keeps an overlay under the pointer does.
 //! - `OVERLAY_COUNT_METAL=1` counts the Metal calls a frame makes (command buffers committed,
@@ -104,26 +106,76 @@ struct Hud {
     in_callback: f64,
     writes: usize,
     staged: bool,
+    immediates: bool,
     uniforms: Option<wgpu::Buffer>,
+    pipeline: Option<(wgpu::RenderPipeline, Option<wgpu::BindGroup>)>,
+}
+
+const SHADER: &str = "
+struct Fill { c: array<vec4<f32>, 16> }
+BINDING
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    return vec4<f32>(vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u)) * 2.0 - 1.0, 0.0, 1.0);
+}
+@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(0.0, 0.0, fill.c[0].x * 0.4, 0.4); }
+";
+
+/// A full-window triangle coloured from a uniform buffer, or from immediates.
+fn hud_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat, uniforms: Option<&wgpu::Buffer>) -> (wgpu::RenderPipeline, Option<wgpu::BindGroup>) {
+    let binding = if uniforms.is_some() { "@group(0) @binding(0) var<uniform> fill: Fill;" } else { "var<immediate> fill: Fill;" };
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("hud"), source: wgpu::ShaderSource::Wgsl(SHADER.replace("BINDING", binding).into()),
+    });
+    let group = uniforms.map(|buffer| {
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0, visibility: wgpu::ShaderStages::FRAGMENT, count: None,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+            }],
+        });
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None, layout: &layout, entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+        });
+        (layout, group)
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None, bind_group_layouts: &[group.as_ref().map(|g| &g.0)], immediate_size: if uniforms.is_some() { 0 } else { 256 },
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("hud"), layout: Some(&layout),
+        vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+        fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs"), compilation_options: Default::default(), targets: &[Some(format.into())] }),
+        primitive: Default::default(), depth_stencil: None, multisample: Default::default(), multiview_mask: None, cache: None,
+    });
+    (pipeline, group.map(|g| g.1))
 }
 
 impl Compositor<()> for Hud {
+    fn features(&self) -> wgpu::Features {
+        if self.immediates { wgpu::Features::IMMEDIATES } else { wgpu::Features::empty() }
+    }
+
     fn render(&mut self, f: &mut Frame<'_, ()>) {
         let entered = thread_cpu_ms();
         self.frames += 1;
         let phase = (self.start.elapsed().as_secs_f64() * 2.0).sin() * 0.5 + 0.5;
-        if self.writes > 0 {
-            let uniforms = self.uniforms.get_or_insert_with(|| f.device.create_buffer(&wgpu::BufferDescriptor {
+        let data = [phase as f32; 64];
+        if self.writes > 0 && self.pipeline.is_none() {
+            let uniforms = (!self.immediates).then(|| self.uniforms.get_or_insert_with(|| f.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("hud uniforms"), size: 256, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-            })).clone();
-            let data = [phase as f32; 64];
+            })).clone());
+            self.pipeline = Some(hud_pipeline(f.device, f.format, uniforms.as_ref()));
+        }
+        if self.writes > 0 && !self.immediates {
+            let uniforms = self.uniforms.clone().expect("made with the pipeline");
             for _ in 0..self.writes {
                 if self.staged { f.write_buffer(&uniforms, 0, bytemuck_cast(&data)); }
                 else { f.queue.write_buffer(&uniforms, 0, bytemuck_cast(&data)); }
             }
         }
         {
-            let _pass = f.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = f.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("hud"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: f.target, resolve_target: None, depth_slice: None,
@@ -131,6 +183,12 @@ impl Compositor<()> for Hud {
                 })],
                 ..Default::default()
             });
+            if let Some((pipeline, group)) = &self.pipeline {
+                pass.set_pipeline(pipeline);
+                if let Some(group) = group { pass.set_bind_group(0, group, &[]); }
+                if self.immediates { for _ in 0..self.writes { pass.set_immediates(0, bytemuck_cast(&data)); } }
+                pass.draw(0..3, 0..1);
+            }
         }
         let elapsed = self.start.elapsed();
         if self.from.is_none() && elapsed >= WARMUP {
@@ -209,11 +267,12 @@ fn main() {
     let seconds = env("OVERLAY_SECONDS", 12.0);
     let writes = env("OVERLAY_WRITES", 0);
     let staged = env("OVERLAY_STAGED", 0) != 0;
+    let immediates = env("OVERLAY_IMMEDIATES", 0) != 0;
     let show_hz = env("OVERLAY_SHOW_HZ", 0.0);
     rune::run_windows_with_args(RunOptions { accessory: true }, [], move |_| {
         let spec = AppSpec::new("Overlay HUD cost", (360.0, 80.0), || (), view);
         let mut app = App::new(spec).windowless();
-        let hud = Hud { start: Instant::now(), seconds, frames: 0, from: None, in_callback: 0.0, writes, staged, uniforms: None };
+        let hud = Hud { start: Instant::now(), seconds, frames: 0, from: None, in_callback: 0.0, writes, staged, immediates, uniforms: None, pipeline: None };
         let overlay = app.overlay(OverlaySpec {
             name: "HUD", size: (360.0, 80.0), edge: rune::ScreenEdge::Bottom,
             margin: 60.0, align: rune::Align::Center, inset: 0.0, interactive: false, view,
