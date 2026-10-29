@@ -44,7 +44,7 @@ impl<S: 'static> Runtime<S> {
     /// The root's natural height at the current width, measured without committing, so a
     /// window that fits its content can open at that height.
     pub fn content_height(&mut self) -> f32 {
-        let measured = self.measure(&Tx::default());
+        let measured = self.measure_pass(&Tx::default(), false);
         let height = measured.nodes.first().map_or(self.viewport.1, |root| root.local.h);
         self.layout = measured.layout;
         height.ceil_to(self.env.scale).max(1.0)

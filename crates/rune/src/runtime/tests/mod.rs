@@ -24,6 +24,7 @@ mod secure_text;
 mod shimmer;
 mod springs;
 mod text_keys;
+mod text_rebreak;
 mod window_wake;
 
 thread_local! {

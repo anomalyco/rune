@@ -3139,7 +3139,9 @@ struct Measurement<'a, S: 'static> {
     reduced_motion: bool,
     time_scale: f32,
     commits: u64,
-    nodes: &'a [Node],
+    /// The last commit's nodes. A pass that commits drops the text layouts of the ones it keeps.
+    nodes: &'a mut [Node],
+    committing: bool,
     spare_nodes: Vec<Node>,
     text: &'a mut TextSystem,
     layout: &'a mut TaffyTree<usize>,
@@ -3378,6 +3380,7 @@ impl<S: 'static> Measurement<'_, S> {
         // A window that fits its content lays the root out at its natural height.
         root.style.size = Size { width: length(self.viewport.0), height: if self.fit_height { auto() } else { length(self.viewport.1) } };
         let root_id = flatten(root, None, "", 0, motion::DEFAULT, RowLayout::Free, true, &mut taffy, &mut nodes, &mut self.layout_entries, scale);
+        if self.committing { release_kept_layouts(self.nodes, self.layout_entries); }
         self.layout_entries.retain(|_, entry| {
             if !entry.used { taffy.remove(entry.id).unwrap(); }
             entry.used

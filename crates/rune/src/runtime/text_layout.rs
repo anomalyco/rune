@@ -193,6 +193,15 @@ pub(super) fn truncated(text: &mut TextSystem, spec: &TextSpec, scale: f32, max_
     (make(text, e), e)
 }
 
+/// Drops the text layouts of the last commit's nodes this pass flattened again, before
+/// measuring, so the layout cache holds the only reference to each and a width change re-breaks
+/// it in place rather than copying it. Nodes that leave keep theirs to draw their exit.
+pub(super) fn release_kept_layouts(old: &mut [Node], entries: &HashMap<String, LayoutEntry>) {
+    for o in old.iter_mut().filter(|o| o.text_layout.is_some()) {
+        if entries.get(&o.path).is_some_and(|e| e.used) { o.text_layout = None; }
+    }
+}
+
 /// Lays out the flattened tree in `room`, measuring text leaves. Not generic over the app state,
 /// so Taffy's layout code is instantiated once, not once per `Runtime<S>`.
 pub(super) fn compute_layout(taffy: &mut TaffyTree<usize>, root: taffy::NodeId, room: Size<AvailableSpace>, nodes: &[Node], text: &mut TextSystem, scale: f32) {

@@ -1471,16 +1471,20 @@ impl TextSystem {
         if cache {
             if let Some((l, used, _)) = self.layouts.get_mut(&key) {
                 *used = g;
-                self.shapes.insert(shape_key, key);
+                // A width change re-breaks the newest layout, not one measured since at another.
+                self.shapes.entry(shape_key).or_insert(key);
                 return l.clone();
             }
-            if let Some(shaped) = self.shapes.get(&shape_key).and_then(|k| self.layouts.get(k)) {
+            if let Some(prev) = self.shapes.get(&shape_key).copied() && let Some((shaped, used, _)) = self.layouts.get(&prev) {
                 self.rebroken += 1;
                 let _break_time = crate::frame_profile::Scope::new(crate::frame_profile::Phase::Text);
-                let mut layout = Layout::clone(&shaped.0);
-                break_lines(&mut layout);
+                // One this commit hasn't used and nothing else holds moves to the new width and
+                // re-breaks in place; otherwise the shaped runs are copied.
+                let (moves, mut l) = (*used != g && Rc::strong_count(shaped) == 1, shaped.clone());
+                if moves { self.layouts.remove(&prev); }
+                let layout = Rc::make_mut(&mut l);
+                break_lines(layout);
                 layout.align(align, AlignmentOptions::default());
-                let l = Rc::new(layout);
                 self.layouts.insert(key, (l.clone(), g, text.len() as u32));
                 self.shapes.insert(shape_key, key);
                 return l;

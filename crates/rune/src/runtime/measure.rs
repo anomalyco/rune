@@ -26,6 +26,11 @@ pub(super) fn collect_virtual_inputs(el: &El, parent: &str, index: usize, inert:
 
 impl<S: 'static> Runtime<S> {
     pub(super) fn measure(&mut self, tx: &Tx) -> Measured {
+        self.measure_pass(tx, true)
+    }
+
+    /// `committing` when the result is applied, so the last commit's text layouts can go.
+    pub(super) fn measure_pass(&mut self, tx: &Tx, committing: bool) -> Measured {
         let _blend = crate::theme::scope(self.srgb_blend);
         Measurement {
             state: &self.state,
@@ -44,7 +49,8 @@ impl<S: 'static> Runtime<S> {
             layout_seen: self.layout_seen.rects.clone(),
             layout_reads: Vec::new(),
             commits: self.commits,
-            nodes: &self.nodes,
+            nodes: &mut self.nodes,
+            committing,
             spare_nodes: std::mem::take(&mut self.spare_nodes),
             text: &mut self.text,
             layout: &mut self.layout,
