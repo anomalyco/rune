@@ -71,6 +71,8 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     }
     let event_loop = builder.build().inspect_err(|_| crate::render::discard_prewarm()).map_err(event_loop_error)?;
     event_loop.set_control_flow(ControlFlow::Wait);
+    #[cfg(target_os = "macos")]
+    crate::app_icon::launched();
     let proxy = event_loop.create_proxy();
     let mut windows = Windows { factory: Some(factory), args, proxy, hosts: Vec::new(), gpu: Rc::default() };
     crate::open_url_in::prepare();

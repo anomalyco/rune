@@ -9,6 +9,7 @@ compile_error!("web does not support Rune's hot or native-file-dialog features; 
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 mod activation;
 mod app;
+mod app_icon;
 pub mod time;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
@@ -107,6 +108,8 @@ mod macos_traffic_lights;
 #[cfg(target_os = "macos")]
 mod macos_window_shape;
 #[cfg(target_os = "macos")]
+mod main_queue;
+#[cfg(target_os = "macos")]
 mod fn_key;
 mod cold;
 pub mod color;
@@ -192,6 +195,7 @@ mod preferences;
 mod portal_appearance;
 mod accent;
 pub use accent::{SystemAccent, system_accent};
+pub use app_icon::set_app_icon;
 pub use clipboard::{ClipboardContent, ClipboardImage, ClipboardWrite, SecretCopy, SecretState};
 pub mod drag_out;
 pub use drag_out::{DragImage, DragItem, DragOperation, DragOutcome};
