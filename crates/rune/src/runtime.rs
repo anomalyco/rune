@@ -680,6 +680,9 @@ struct Inh {
     group: f32,
     /// How `scale` is changing, which decides how text rasterizes under it.
     scale_motion: ScaleMotion,
+    /// `(scale, anchor, anchor_to)` of the ancestors whose scales hold still from the root down,
+    /// as an app-wide zoom does, stopping at the first that moves. A flight keeps this part.
+    still: (f32, [f32; 2], [f32; 2]),
     /// Inside an active `El::cache` scope: do not cull children against the window viewport.
     in_cache: bool,
     /// Inside an elided or off-screen `El::cache` scope: skip primitive emission.
@@ -874,7 +877,8 @@ impl Default for Inh {
         Inh { opacity: 1.0, paint_opacity: 1.0, clip: NO_CLIP, fade: [0.0; 4], fade_origin: NO_CLIP,
             paint_clip: NO_CLIP, paint_fade: [0.0; 4], paint_fade_origin: NO_CLIP, rounded: None,
             scale: 1.0, anchor: [0.0; 2], anchor_to: [0.0; 2], blur: 0.0, dy: 0.0, dx: 0.0, cover: [0.0; 2], outer: None, mark: 0, group: 0.0,
-            scale_motion: ScaleMotion::Still, in_cache: false, skip_paint: false, turn: 0, snap_off: false, snap_rigid: [0.0; 2] }
+            scale_motion: ScaleMotion::Still, still: (1.0, [0.0; 2], [0.0; 2]), in_cache: false, skip_paint: false, turn: 0,
+            snap_off: false, snap_rigid: [0.0; 2] }
     }
 }
 
@@ -5716,9 +5720,8 @@ impl<S: 'static> Runtime<S> {
                 pinh.dx = ax - w.x;
                 pinh.dy = ay - w.y;
                 pinh.snap_rigid = [0.0; 2];
-                pinh.scale = 1.0;
-                pinh.anchor = [0.0; 2];
-                pinh.anchor_to = [0.0; 2];
+                (pinh.scale, pinh.anchor, pinh.anchor_to) = (1.0, [0.0; 2], [0.0; 2]);
+                pinh.still = (1.0, [0.0; 2], [0.0; 2]);
             }
             if self.has_sticky && let Some((edge, inset, tail)) = n.sticky.as_ref().and_then(|s| Some((s.edge?, s.inset, s.tail))) {
                 // Worked out from this frame's offsets, which the viewport above already applied.
@@ -5815,9 +5818,9 @@ impl<S: 'static> Runtime<S> {
             if lift {
                 // Keep the destination's clips (consumed ones included) and offsets. Drop its
                 // ancestors' opacity, scale and blur: an entering parent's fade or scale would
-                // otherwise hide the flight or jump it off the rect it was seen at. A scale holding
-                // still (an app-wide zoom) stays, so it flies at the size it lands at. Inside
-                // another flight, also drop that flight's cover offset and clip.
+                // otherwise hide the flight or jump it off the rect it was seen at. The scales
+                // holding still above that parent (an app-wide zoom) stay, so it flies at the size
+                // it lands at. Inside another flight, also drop that flight's cover offset and clip.
                 let [clip, fade, fade_origin] = if self.launches.flying(node_id) {
                     // A launch leaves where its clips don't reach.
                     [crate::render::NO_CLIP, [0.0; 4], pinh.fade_origin]
@@ -5827,7 +5830,7 @@ impl<S: 'static> Runtime<S> {
                         [clip, pinh.fade, pinh.fade_origin]
                     })
                 };
-                let (scale, anchor, anchor_to) = flights::still_scale(&pinh);
+                let (scale, anchor, anchor_to) = pinh.still;
                 pinh = Inh { opacity: 1.0, paint_opacity: 1.0, clip, fade, fade_origin, paint_clip: clip, paint_fade: fade,
                     paint_fade_origin: fade_origin, rounded: None, scale, anchor, anchor_to, blur: 0.0,
                     dx: pinh.dx - pinh.cover[0], dy: pinh.dy - pinh.cover[1], cover: [0.0; 2], outer: None,
@@ -7039,6 +7042,7 @@ impl<S: 'static> Runtime<S> {
                 dy += (r_exact[1] / s - rect_pt[1]) / sc;
             }
             let (mut cover_offset, mut outer) = (pinh.cover, pinh.outer);
+            let scale_motion = if cover.is_some() { ScaleMotion::Moving } else { scale_motion };
             if let Some((k, c)) = cover {
                 // Children ride this node's presented origin at their rest layout. Scale them by
                 // `k` about the drawn origin, centred, and clip them to the moving rect.
@@ -7063,7 +7067,7 @@ impl<S: 'static> Runtime<S> {
                 clip: full_clip, fade: hit_fade, fade_origin: hit_origin,
                 paint_clip: clip, paint_fade: fade, paint_fade_origin: fade_origin, rounded, scale, anchor, anchor_to, blur, dy, dx,
                 cover: cover_offset, outer, mark, group,
-                scale_motion: if cover.is_some() { ScaleMotion::Moving } else { scale_motion },
+                scale_motion, still: if scale_motion == ScaleMotion::Still { (scale, anchor, anchor_to) } else { pinh.still },
                 in_cache, skip_paint, turn: turn_index, snap_off, snap_rigid };
             let hits_before = self.hits.len();
             if (n.vis.hit || n.on_pointer_move.is_some() || n.on_press.is_some() || n.on_double_press.is_some() || n.on_secondary_press.is_some() || n.on_hover.is_some() || n.on_hover_change.is_some() || n.on_drag.is_some() || n.drag_out.is_some() || n.input.is_some() || n.role == "textbox" || n.window_drag || n.focus.enabled || n.modal.is_some()

@@ -1,13 +1,16 @@
 //! `Tx::launch`: a sent message's new row starts on the composer's text at its own size and
 //! travels one smooth path into its slot in the scroll view.
-use rune::{Cx, El, Env, GrowthSpec, Key, KeyEvent, Runtime, ScrollSpec, TextEdit, TextStyle, Tx, col, text, text_input};
+use rune::{Cx, El, Env, GrowthSpec, Key, KeyEvent, Runtime, ScrollSpec, TextEdit, TextStyle, Transition, Tx, col, text, text_input};
 
-struct State { draft: TextEdit, sent: Vec<String>, relaunch: bool, zoom: f32, ticks: u32 }
+struct State { draft: TextEdit, sent: Vec<String>, relaunch: bool, zoom: f32, ticks: u32, tray: bool }
 
 fn view(s: &State, _: &mut Cx<State>) -> El {
     let mut rows = col().w_full().growth(GrowthSpec::default());
     for (i, m) in s.sent.iter().enumerate() {
-        rows = rows.child(col().key(format!("msg-{i}")).w_full().py(8.0).items_end().child(text(m.clone()).key("body")));
+        let row = col().key(format!("msg-{i}")).w_full().py(8.0).items_end().child(text(m.clone()).key("body"));
+        // A new row's container entering with it, as a queue appears with its first prompt.
+        let tray = || col().key("tray").w_full().transition(Transition::scale(0.9).combined(Transition::opacity()));
+        rows = rows.child(if s.tray && i == 2 { tray().child(row) } else { row });
     }
     rows = rows.child(text(format!("{}", s.ticks)).key("ticks"));
     let page = col().w_full().h_full()
@@ -33,7 +36,7 @@ fn app_at(relaunch: bool, zoom: f32) -> Runtime<State> {
     let mut draft = TextEdit::new("third");
     draft.focused = true;
     let sent = vec!["first".to_string(), "second".to_string()];
-    let mut rt = Runtime::new(State { draft, sent, relaunch, zoom, ticks: 0 }, view, (400.0, 300.0), Env::new(true, 2.0));
+    let mut rt = Runtime::new(State { draft, sent, relaunch, zoom, ticks: 0, tray: false }, view, (400.0, 300.0), Env::new(true, 2.0));
     rt.frame(0.0);
     rt
 }
@@ -157,5 +160,28 @@ fn a_launch_after_another_commit_in_its_frame_still_leaves_from_the_source() {
         let at: Vec<f32> = frames.iter().map(|(r, _)| r[axis]).collect();
         let total = at[at.len() - 1] - at[0];
         assert!(at.windows(2).all(|w| (w[1] - w[0]) * total.signum() >= -0.01), "axis {axis} turns back: {at:?}");
+    }
+}
+
+#[test]
+fn a_launch_into_an_entering_container_keeps_the_zoom_above_it() {
+    // The container's entrance scale is dropped while the row flies; the app's still zoom above
+    // it is not, so the row flies at the size it lands at and doesn't snap when the entrance ends.
+    let zoom = 1.6;
+    let mut rt = app_at(false, zoom);
+    rt.update(|s, _| s.tray = true);
+    rt.frame(0.0);
+    let mut frames = send(&mut rt);
+    frames.extend((0..120).map(|_| { rt.frame(1.0 / 120.0); rect(&rt, "body", Some("third")) }));
+    for (f, (r, t)) in frames.iter().enumerate() {
+        assert!((r[2] - t[2] * zoom).abs() < 0.01 && (r[3] - t[3] * zoom).abs() < 0.01, "frame {f}: drawn at the zoom: {r:?} vs {t:?}");
+    }
+    for axis in 0..2 {
+        let at: Vec<f32> = frames.iter().map(|(r, _)| r[axis]).collect();
+        let total = at[at.len() - 1] - at[0];
+        for w in at.windows(2) {
+            assert!((w[1] - w[0]) * total.signum() >= -0.01, "axis {axis} turns back: {at:?}");
+            assert!((w[1] - w[0]).abs() <= total.abs().max(20.0) / 10.0, "axis {axis} snaps: {at:?}");
+        }
     }
 }

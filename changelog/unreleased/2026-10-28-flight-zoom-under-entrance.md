@@ -1,0 +1,1 @@
+- A `Tx::launch` or `El::matched` flight into a container that is still entering (its scale or fade animating) keeps the still scales above that container, such as an app-wide zoom. It used to drop every ancestor scale, so under a zoom it flew at 1/zoom size and snapped to the zoom when the container's entrance ended. The entering container's own scale is still dropped.

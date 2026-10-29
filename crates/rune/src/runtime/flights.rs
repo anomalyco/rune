@@ -50,12 +50,6 @@ impl Launches {
     }
 }
 
-/// The ancestors' scale a flight keeps under `inh` (scale, anchor, anchor_to): theirs while it
-/// holds still, as an app-wide zoom does, else none, so an entering parent's scale can't move it.
-pub(super) fn still_scale(inh: &Inh) -> (f32, [f32; 2], [f32; 2]) {
-    if inh.scale_motion == ScaleMotion::Still { (inh.scale, inh.anchor, inh.anchor_to) } else { (1.0, [0.0; 2], [0.0; 2]) }
-}
-
 impl<S: 'static> Runtime<S> {
     /// Shared-element motion (`El::matched`): each of the last commit's matched elements that
     /// left the tree hands its geometry, radius, fill and opacity to the element with its id that
@@ -153,7 +147,7 @@ impl<S: 'static> Runtime<S> {
                 .and_then(|k| self.inh_scratch.get(k))
             {
                 shift = [h.dx - h.cover[0], h.dy - h.cover[1]];
-                zoom = still_scale(h);
+                zoom = h.still;
             }
             let (k, anchor, anchor_to) = zoom;
             let at = |axis: usize| anchor[axis] + (from[axis] - anchor_to[axis]) / k - rel[axis] - shift[axis];
