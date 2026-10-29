@@ -10,7 +10,7 @@ use rune::El;
 
 use crate::markdown::{DiagramPaint, MarkdownStyle};
 
-pub use rune_mermaid::{DiagramStyle, supported};
+pub use rune_mermaid::{DiagramStyle, Hover, supported};
 
 /// `src` drawn as a diagram card with `style`'s diagram colours, or `None` when it is outside
 /// the supported subset.
@@ -34,6 +34,12 @@ pub(crate) fn diagram(src: &str, paint: &DiagramPaint) -> Option<El> {
             note_border: paint.note_border,
             font: paint.font,
             max_width: paint.max_width,
+            hover: match (paint.hover.a > 0.0, paint.hover_neighbours) {
+                (false, _) => Hover::Off,
+                (true, false) => Hover::Edges,
+                (true, true) => Hover::Neighbours,
+            },
+            hover_color: paint.hover,
         },
     )
 }

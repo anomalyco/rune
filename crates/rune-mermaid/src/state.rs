@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use rune::{Align, TextStyle};
 
 use super::flowchart::{Dir, Edge, Head, Line, NodeShape};
-use super::flowchart_draw::{boundary, connector, node_size, outline, self_loop};
+use super::flowchart_draw::{edges, label_box, node_size, outline, title_box};
+use super::route::Ctx;
 use super::layered::{GCluster, GEdge, Graph, Spacing, layout};
 use super::{
     Canvas, DiagramStyle, MAX_ITEMS, Measured, NodeStyle, Scene, clean_quoted, ellipse, fit,
@@ -370,7 +371,6 @@ fn draw_in(
     let across = matches!(dir, Dir::Right | Dir::Left);
     let ax = |s: [f32; 2]| if across { [s[1], s[0]] } else { s };
     let flip = matches!(dir, Dir::Up | Dir::Left);
-    let label_box = |m: &Measured| [m.size[0] + 10.0, m.size[1] + 4.0];
     let graph = Graph {
         sizes: nodes.iter().map(|n| ax(n.size)).collect(),
         edges: d
@@ -396,6 +396,7 @@ fn draw_in(
     let placed = layout(&graph, &SPACING)?;
     let pt = |p: [f32; 2]| if across { [p[1], p[0]] } else { p };
     let mut c = Canvas::default();
+    c.hover(paint);
 
     let depth = |mut i: usize| {
         let mut dep = 0;
@@ -408,6 +409,7 @@ fn draw_in(
         }
         dep
     };
+    let mut title_boxes = Vec::new();
     let mut order: Vec<usize> = (0..d.composites.len()).collect();
     order.sort_by_key(|&i| depth(i));
     for i in order {
@@ -418,34 +420,19 @@ fn draw_in(
         let (p0, p1) = (pt([b[0], b[1]]), pt([b[2], b[3]]));
         c.shape(rounded_rect(p0[0], p0[1], p1[0], p1[1], 8.0), paint.cluster_fill, paint.node_border, 1.0);
         c.label_at(&titles[i], [p0[0] + 10.0, p0[1] + 7.0], title_font, paint.muted, Align::Start);
+        title_boxes.push(title_box(&titles[i], p0));
     }
 
     let centers: Vec<[f32; 2]> = placed.centers.iter().map(|&p| pt(p)).collect();
-    for (i, e) in d.edges.iter().enumerate() {
-        let mut path: Vec<[f32; 2]> = placed.paths[i].iter().map(|&p| pt(p)).collect();
-        if flip {
-            path.reverse();
-        }
-        let (from, to) = (e.from, e.to);
-        let mid = if path.len() <= 1 {
-            let s = labels[i].as_ref().map_or(0.0, |m| label_box(m)[0]);
-            self_loop(&mut c, e, centers[from], nodes[from].size, paint).map(|at| [at[0] + s / 2.0, at[1]])
-        } else {
-            let n = path.len();
-            path[0] = boundary(nodes[from].shape, centers[from], nodes[from].size, path[1]);
-            path[n - 1] = boundary(nodes[to].shape, centers[to], nodes[to].size, path[n - 2]);
-            connector(&mut c, &mut path, e, paint);
-            placed.labels[i].map(pt)
-        };
-        if let (Some(m), Some(at)) = (&labels[i], mid) {
-            let s = label_box(m);
-            c.fill(rounded_rect(at[0] - s[0] / 2.0, at[1] - s[1] / 2.0, at[0] + s[0] / 2.0, at[1] + s[1] / 2.0, 3.0), paint.surface);
-            c.label(m, at, edge_font, paint.text, Align::Center);
-        }
-    }
+    let sizes: Vec<[f32; 2]> = nodes.iter().map(|n| n.size).collect();
+    let ends = d.edges.iter().map(|e| (e.from, e.to)).collect();
+    let boxes = labels.iter().map(|l| l.as_ref().map(|m| ax(label_box(m)))).collect();
+    let ctx = Ctx::new(&placed, &sizes, nodes.iter().map(|n| n.shape).collect(), boxes, across, ends).titles(title_boxes);
+    edges(&mut c, &ctx, &d.edges, labels, flip, edge_font, paint);
 
     for (i, s) in d.states.iter().enumerate() {
         let (ctr, size) = (centers[i], nodes[i].size);
+        c.region(i, outline(nodes[i].shape, ctr, size));
         match s.kind {
             StateKind::Start => c.fill(ellipse(ctr, 8.0, 8.0), paint.line),
             StateKind::End => {

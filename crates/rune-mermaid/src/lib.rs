@@ -34,7 +34,9 @@
 
 mod flowchart;
 mod flowchart_draw;
+mod hover;
 mod layered;
+mod route;
 mod sequence;
 mod state;
 
@@ -44,6 +46,9 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use rune::{Align, Color, El, LineCap, Shape, TextStyle, canvas, col, el, oklch, oklcha, text, tok};
+
+pub use hover::Hover;
+use hover::Trace;
 
 /// Colours and type a diagram draws with.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -60,6 +65,10 @@ pub struct DiagramStyle {
     pub note_border: Color,
     pub font: TextStyle,
     pub max_width: f32,
+    /// What lights up while the pointer is over a node.
+    pub hover: Hover,
+    /// The colour it lights up in.
+    pub hover_color: Color,
 }
 
 impl DiagramStyle {
@@ -79,6 +88,8 @@ impl DiagramStyle {
             note_border: oklch(if dark { 0.4 } else { 0.85 }, 0.08, 80.0),
             font: TextStyle::new(13.0, 400.0).lh(18.0),
             max_width: 680.0,
+            hover: Hover::Edges,
+            hover_color: t.text.alpha(0.9),
         }
     }
 }
@@ -363,6 +374,7 @@ pub(crate) fn parse_style_props(props: &str) -> NodeStyle {
     out
 }
 
+#[derive(Clone)]
 pub(crate) enum Op {
     Fill(Vec<[f32; 2]>, Color),
     Stroke { points: Vec<[f32; 2]>, closed: bool, width: f32, cap: LineCap, color: Color },
@@ -383,6 +395,11 @@ pub(crate) struct Label {
 pub(crate) struct Canvas {
     pub(crate) ops: Vec<Op>,
     pub(crate) labels: Vec<Label>,
+    /// Per node: its outline, where hovering it lights up its traces (empty when not drawn).
+    pub(crate) regions: Vec<Vec<[f32; 2]>>,
+    /// Per edge: its ends and its drawing in the hover colour.
+    pub(crate) traces: Vec<Trace>,
+    pub(crate) hover: Option<(Hover, Color)>,
 }
 
 impl Canvas {
@@ -465,6 +482,7 @@ impl Canvas {
     pub(crate) fn append(&mut self, other: Canvas) {
         self.ops.extend(other.ops);
         self.labels.extend(other.labels);
+        self.traces.extend(other.traces);
     }
 
     /// The bounding box of everything drawn: `[x0, y0, x1, y1]`.
@@ -498,15 +516,14 @@ impl Canvas {
         let b = self.bounds();
         let pad = 1.0;
         let map = |p: [f32; 2]| [(p[0] - b[0]) * scale + pad, (p[1] - b[1]) * scale + pad];
-        let mut shape = Shape::new();
-        for op in self.ops {
-            shape = match op {
-                Op::Fill(points, color) => shape.fill(points.into_iter().map(map).collect::<Vec<_>>(), color),
-                Op::Stroke { points, closed, width, cap, color } => {
-                    shape.stroke_with(points.into_iter().map(map).collect::<Vec<_>>(), closed, width * scale.max(0.8), cap, color)
-                }
-            };
-        }
+        let paint = |shape: Shape, op: &Op| match op {
+            Op::Fill(points, color) => shape.fill(points.iter().map(|&p| map(p)).collect::<Vec<_>>(), *color),
+            Op::Stroke { points, closed, width, cap, color } => {
+                shape.stroke_with(points.iter().map(|&p| map(p)).collect::<Vec<_>>(), *closed, width * scale.max(0.8), *cap, *color)
+            }
+        };
+        let shape = self.ops.iter().fold(Shape::new(), paint);
+        let hovers = self.hovers(map, paint);
         let labels = self
             .labels
             .into_iter()
@@ -518,7 +535,7 @@ impl Canvas {
             })
             .collect();
         let size = [(b[2] - b[0]) * scale + 2.0 * pad, (b[3] - b[1]) * scale + 2.0 * pad];
-        Some(Scene { size, shape, labels })
+        Some(Scene { size, shape, labels, hovers })
     }
 }
 
@@ -527,12 +544,18 @@ pub(crate) struct Scene {
     pub(crate) size: [f32; 2],
     shape: Shape,
     labels: Vec<Label>,
+    /// Per hoverable node: its index, where it is (`[x, y, w, h]`) and what lights up.
+    hovers: Vec<(usize, [f32; 4], Shape)>,
 }
 
 impl Scene {
     fn el(&self, paint: &DiagramStyle) -> El {
         let [w, h] = self.size;
         let mut body = el().key("diagram").size(w, h).child(canvas(self.shape.clone()).key("shape").absolute(0.0, 0.0).size(w, h));
+        for (v, r, lit) in &self.hovers {
+            let glow = canvas(lit.clone()).absolute(-r[0], -r[1]).size(w, h).group_opacity(0.0, 1.0);
+            body = body.child(el().key(format!("node{v}")).absolute(r[0], r[1]).size(r[2], r[3]).hover_group().child(glow));
+        }
         for (i, l) in self.labels.iter().enumerate() {
             // A point of slack so rounding never breaks a measured line.
             let mut t = text(l.text.clone())

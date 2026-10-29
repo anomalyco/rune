@@ -113,6 +113,8 @@ pub(crate) struct DiagramPaint {
     pub note_border: Color,
     pub font: TextStyle,
     pub max_width: f32,
+    pub hover: Color,
+    pub hover_neighbours: bool,
 }
 
 /// `t` of the way from `base` toward `hue` in Oklab, at `base`'s alpha: a quiet wash that keeps
@@ -202,6 +204,8 @@ impl MarkdownStyle {
                 note_border: c.warning.border,
                 font: TextStyle { size: 13.0, line_height: 18.0, ..k.ty.body },
                 max_width: 680.0,
+                hover: k.alpha(c.text_base, 0.9),
+                hover_neighbours: false,
             },
         }
     }
@@ -373,6 +377,14 @@ impl MarkdownStyle {
     /// is laid out top-down instead; anything still wider is drawn smaller, down to 60%.
     pub fn diagram_max_width(mut self, points: f32) -> Self {
         self.diagram.max_width = points.max(120.0);
+        self
+    }
+    /// What lights up while the pointer is over a flowchart or state diagram node: its edges in
+    /// `color` (the text colour by default; transparent turns it off), and with `neighbours` its
+    /// outline and the outlines of the nodes they reach.
+    pub fn diagram_hover(mut self, color: Color, neighbours: bool) -> Self {
+        self.diagram.hover = color;
+        self.diagram.hover_neighbours = neighbours;
         self
     }
     /// Background fill of standard [`Markdown::highlights`] matches.
