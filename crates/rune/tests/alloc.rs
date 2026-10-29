@@ -138,3 +138,15 @@ fn scroll_edge_fades_allocate_nothing_per_frame() {
     };
     assert_eq!(gliding(true), gliding(false), "edge fades add no per-frame allocations while scrolling");
 }
+
+#[test]
+fn a_cached_ink_probe_allocates_nothing() {
+    let style = rune::TextStyle::new(12.0, 400.0);
+    let first = rune::text::ink("⌘K", style);
+    assert!(first.is_some());
+    let before = allocs();
+    for _ in 0..100 {
+        assert_eq!(rune::text::ink("⌘K", style), first);
+    }
+    assert_eq!(allocs() - before, 0);
+}

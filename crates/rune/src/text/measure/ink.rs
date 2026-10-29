@@ -4,7 +4,8 @@
 //! and its centre of mass, so a view can centre what is actually drawn.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::hash::{Hash, Hasher};
 
 use parley::PositionedLayoutItem;
 use swash::FontRef;
@@ -18,6 +19,9 @@ use crate::tok::TextStyle;
 
 /// Rasterizing at this many times the size puts every measurement within 1/8 pt.
 const OVERSAMPLE: f32 = 8.0;
+/// Inks kept per thread, and bytes of their entries and text, before the oldest go.
+const MAX_ENTRIES: usize = 1024;
+const MAX_BYTES: usize = 256 << 10;
 
 /// Where a text's ink sits, in points from the top-left of its box (the size
 /// [`measure`](super::measure) gives, which is the box a `text` element lays out).
@@ -45,16 +49,62 @@ impl TextInk {
     }
 }
 
+struct Entry {
+    text: Box<str>,
+    style: TextStyle,
+    ink: Option<TextInk>,
+}
+
+impl Entry {
+    fn bytes(&self) -> usize { size_of::<Entry>() + self.text.len() }
+}
+
+/// Inks by a hash of text and style, checked against both on a hit, so a hit allocates nothing.
+/// Oldest out first, bounded in entries and bytes.
+#[derive(Default)]
+struct Cache {
+    entries: HashMap<u64, Entry>,
+    order: VecDeque<u64>,
+    bytes: usize,
+}
+
+impl Cache {
+    fn key(text: &str, style: TextStyle) -> u64 {
+        let mut h = std::hash::DefaultHasher::new();
+        (text, style).hash(&mut h);
+        h.finish()
+    }
+
+    fn get(&self, key: u64, text: &str, style: TextStyle) -> Option<Option<TextInk>> {
+        self.entries.get(&key).filter(|e| &*e.text == text && e.style == style).map(|e| e.ink)
+    }
+
+    fn insert(&mut self, key: u64, text: &str, style: TextStyle, ink: Option<TextInk>) {
+        let entry = Entry { text: text.into(), style, ink };
+        if entry.bytes() > MAX_BYTES { return; }
+        self.bytes += entry.bytes();
+        // A colliding text takes the slot (and its place in line).
+        match self.entries.insert(key, entry) {
+            Some(old) => self.bytes -= old.bytes(),
+            None => self.order.push_back(key),
+        }
+        while self.entries.len() > MAX_ENTRIES || self.bytes > MAX_BYTES {
+            let Some(oldest) = self.order.pop_front() else { break };
+            if let Some(old) = self.entries.remove(&oldest) { self.bytes -= old.bytes(); }
+        }
+    }
+}
+
 thread_local! {
-    static CACHE: RefCell<HashMap<(String, String), Option<TextInk>>> = RefCell::new(HashMap::new());
+    static CACHE: RefCell<Cache> = RefCell::new(Cache::default());
 }
 
 /// Where `text` set in `style` puts its ink, or None when it draws nothing (spaces, empty).
 /// Cached per text and style for the thread; the first call for each costs one shaping pass and
 /// a raster of each glyph at 8× size.
 pub fn ink(text: &str, style: TextStyle) -> Option<TextInk> {
-    let key = (text.to_owned(), format!("{style:?}"));
-    if let Some(hit) = CACHE.with_borrow(|c| c.get(&key).copied()) {
+    let key = Cache::key(text, style);
+    if let Some(hit) = CACHE.with_borrow(|c| c.get(key, text, style)) {
         return hit;
     }
     let found = with_text(|t| {
@@ -92,7 +142,7 @@ pub fn ink(text: &str, style: TextStyle) -> Option<TextInk> {
         }
         acc.done()
     });
-    CACHE.with_borrow_mut(|c| c.insert(key, found));
+    CACHE.with_borrow_mut(|c| c.insert(key, text, style, found));
     found
 }
 
@@ -128,25 +178,5 @@ impl Acc {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ink_sits_inside_the_box_and_spaces_have_none() {
-        let style = TextStyle::new(12.0, 400.0).lh(16.0);
-        let (w, h) = super::super::measure("H", &[], style, None);
-        let h_ink = ink("H", style).expect("H draws");
-        let [x, y, iw, ih] = h_ink.bounds;
-        assert!(x >= 0.0 && y >= 0.0 && x + iw <= w && y + ih <= h, "{h_ink:?} in {w}×{h}");
-        assert!(ih > 7.0 && ih < 10.0, "an H is about cap height: {ih}");
-        let [cx, _] = h_ink.centre();
-        assert!((h_ink.mass[0] - cx).abs() < 0.2, "H is symmetric: {h_ink:?}");
-        assert_eq!(ink(" ", style), None);
-    }
-
-    #[test]
-    fn a_wider_word_has_wider_ink() {
-        let style = TextStyle::new(12.0, 400.0);
-        assert!(ink("HH", style).unwrap().bounds[2] > ink("H", style).unwrap().bounds[2] * 1.8);
-    }
-}
+#[path = "ink_tests.rs"]
+mod tests;
