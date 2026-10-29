@@ -690,8 +690,11 @@ impl Scene {
     /// path instead, whatever its ancestors do.
     pub fn set_frame(&mut self, id: NodeId, frame: Rect, anim: impl Into<LayoutAnim>) {
         let Some(i) = self.slot(id) else { return };
-        let anim = anim.into();
         let old = self.nodes[i].frame;
+        if old == frame && self.nodes[i].path.is_none() && self.nodes[i].tracks[prop::FRAME.id.0 as usize].is_none() {
+            return;
+        }
+        let anim = anim.into();
         if frame.w != old.w {
             self.rebase_trailing(i, frame.w - old.w);
         }
