@@ -125,6 +125,8 @@ mod motion_elements;
 pub use motion_elements::MotionElement;
 #[path = "runtime/live_latch.rs"]
 mod live_latch;
+#[path = "runtime/loop_clock.rs"]
+mod loop_clock;
 #[path = "runtime/scroll_watch.rs"]
 mod scroll_watch;
 #[path = "gesture_dispatch.rs"]
@@ -1177,6 +1179,7 @@ pub struct Runtime<S: 'static> {
     modal_index: Option<usize>,
     modal_members: Vec<bool>,
     loops: HashMap<NodeId, rune_motion::LoopTrack>,
+    loop_clock: loop_clock::LoopClock,
     loops_active: bool,
     /// `El::scale` per node that has one or had one: (factor, animation time it last changed,
     /// whether it has ever changed). See [`ScaleMotion`].
@@ -1551,6 +1554,7 @@ impl<S: 'static> Runtime<S> {
             modal_index: None,
             modal_members: Vec::new(),
             loops: HashMap::new(),
+            loop_clock: Default::default(),
             loops_active: false,
             static_scales: HashMap::new(),
             static_scale_settling: false,
@@ -2160,6 +2164,7 @@ impl<S: 'static> Runtime<S> {
         // retargets them. Presenting waits for `step_motion`, so the frame is sampled and
         // built once.
         if catch_up > 0.0 { self.catch_up_motion(catch_up); }
+        self.keep_loops_on_clock(dt);
         let polled = self.timer_wake.frame_polled(self.wake_deadlines.first().is_some_and(|t| *t <= self.clock));
         let due = self.wake_deadlines.partition_point(|t| *t <= self.clock);
         self.wake_deadlines.drain(..due);
@@ -2374,6 +2379,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     fn step_motion(&mut self, dt: f64) -> bool {
+        self.loops_stepped();
         let step = dt * self.time_scale as f64;
         self.slack_dt = std::mem::take(&mut self.caught_up) + step as f32;
         self.last_dt = step;
@@ -4530,12 +4536,14 @@ impl<S: 'static> Runtime<S> {
         self.sync_modals();
         self.sync_follows();
         self.loops.retain(|id, _| self.scene.contains(*id));
+        self.catch_loops_up();
         self.static_scales.retain(|id, _| self.scene.contains(*id));
         for n in &self.nodes {
             let t = if time_scaled { self.scene.store().node_time(n.id) } else { self.t };
             if let Some(spec) = n.looping {
+                let start = self.loop_start(n.id, t);
                 let track = self.loops.entry(n.id).and_modify(|l| { l.retime(spec, t); l.enabled(true, t); })
-                    .or_insert_with(|| rune_motion::LoopTrack::new(spec, t));
+                    .or_insert_with(|| rune_motion::LoopTrack::new(spec, start));
                 if tx.settle || self.reduced_motion { track.finish(); }
             } else if let Some(l) = self.loops.get_mut(&n.id) {
                 l.enabled(false, t);

@@ -18,6 +18,7 @@ mod scroll_children;
 mod scroll_growth;
 mod scroll_hover;
 mod secure_text;
+mod shimmer;
 mod springs;
 mod window_wake;
 
