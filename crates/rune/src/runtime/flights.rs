@@ -103,6 +103,27 @@ impl<S: 'static> Runtime<S> {
         }
     }
 
+    pub(super) fn capture_text_flight(&mut self, source: String, target: String) {
+        let Some((i, n)) = self.nodes.iter().enumerate().find(|(_, n)| crate::flight::selects(&source, &n.path, n.key.as_deref())) else { return };
+        let (Some(spec), Some(layout), Some(r)) = (&n.text, &n.text_layout, self.drawn.get(i)) else { return };
+        if spec.redacted || spec.content.is_empty() { return; }
+        let scale = self.env.scale;
+        let (rect, origin) = text_extent(n, spec, layout, *r, scale);
+        let clip = self.screen_clip_of_parent(n.parent).map(|v| v / scale);
+        let clip = [rect.x.max(clip[0]).max(0.0), rect.y.max(clip[1]).max(0.0),
+            (rect.x + rect.w).min(clip[2]).min(self.viewport.0), (rect.y + rect.h).min(clip[3]).min(self.viewport.1)];
+        if rect.w <= 0.0 || clip[2] <= clip[0] || clip[3] <= clip[1] { return; }
+        self.glyph_scratch.clear();
+        self.text.set_glyph_inks(spec.color, &[]);
+        self.text.glyphs_for_layout(layout, scale, [origin[0] * scale, origin[1] * scale], false, &mut self.glyph_scratch);
+        let color = spec.color;
+        let srgb = self.srgb_blend;
+        // Colour glyphs live in the image atlas, which may move them before the flight ends.
+        let glyphs = self.glyph_scratch.iter().filter(|q| q.color == 0 && q.rect[1] < clip[3] * scale && q.rect[1] + q.rect[3] > clip[1] * scale)
+            .map(|q| glyph(q, premul(color, 1.0, srgb), clip.map(|v| v * scale), [0.0; 4])).collect();
+        self.flights.push(TextFlight::new(source, target, rect, clip, glyphs, scale, self.t));
+    }
+
     /// `Tx::launch`, before the commit: where the source's text starts on screen.
     pub(super) fn capture_launch(&mut self, source: String, target: String) {
         let Some((i, n)) = self.nodes.iter().enumerate().find(|(_, n)| crate::flight::selects(&source, &n.path, n.key.as_deref())) else { return };
