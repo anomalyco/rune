@@ -157,6 +157,8 @@ mod bands;
 #[path = "runtime/paint_slots.rs"]
 mod paint_slots;
 mod pixel_snap;
+mod soft_edges;
+use soft_edges::{in_fade, inherit_fade};
 #[path = "runtime/shape_paint.rs"]
 mod shape_paint;
 use shape_paint::push_shape;
@@ -7968,27 +7970,6 @@ fn fades(looping: Option<rune_motion::LoopSpec>) -> bool {
 /// took the event said so.
 pub(crate) fn fold_live(live: &mut Option<bool>, took: bool, one: &Tx) {
     if took { *live = Some(live.unwrap_or(true) && one.live_only); }
-}
-
-// Carry the declaring edge with the inherited width. Descendant clipping must not restart
-// its ramp; an inner fade takes over once the ancestor's ramp is fully opaque there.
-fn inherit_fade(width: &mut [f32; 4], origin: &mut [f32; 4], rect: [f32; 4], own: [f32; 4]) {
-    for edge in 0..4 {
-        let inset = if edge < 2 { rect[edge] - origin[edge] } else { origin[edge] - rect[edge] };
-        if own[edge] > 0.0 && (own[edge] >= width[edge] || inset >= width[edge]) {
-            width[edge] = own[edge];
-            origin[edge] = rect[edge];
-        }
-    }
-}
-
-/// Whether `r` (x0, y0, x1, y1) reaches into a soft edge of `clip`: one fading over `width`
-/// from `origin`, edge by edge (left, top, right, bottom).
-fn in_fade(r: [f32; 4], clip: [f32; 4], width: [f32; 4], origin: [f32; 4]) -> bool {
-    (width[0] > 0.0 && r[0] < origin[0] + width[0] && r[2] > clip[0])
-        || (width[1] > 0.0 && r[1] < origin[1] + width[1] && r[3] > clip[1])
-        || (width[2] > 0.0 && r[2] > origin[2] - width[2] && r[0] < clip[2])
-        || (width[3] > 0.0 && r[3] > origin[3] - width[3] && r[1] < clip[3])
 }
 
 /// `rect` (x, y, w, h) magnified `k` times about `origin`.

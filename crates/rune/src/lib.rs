@@ -108,6 +108,7 @@ mod macos_traffic_lights;
 mod macos_window_shape;
 #[cfg(target_os = "macos")]
 mod fn_key;
+mod cold;
 pub mod color;
 pub mod compose;
 pub mod edit;
@@ -115,9 +116,9 @@ pub mod el;
 mod el_anchor;
 mod el_backdrop;
 mod el_child_exit;
-mod cold;
 mod el_drop;
 mod el_effect;
+mod el_focus;
 mod el_pills;
 mod el_pixel_snap;
 mod el_ride_trailing;
