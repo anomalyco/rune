@@ -3495,46 +3495,6 @@ impl<S: 'static> Runtime<S> {
         self.prune_text_selection();
     }
 
-    fn measure(&mut self, tx: &Tx) -> Measured {
-        let _blend = crate::theme::scope(self.srgb_blend);
-        Measurement {
-            state: &self.state,
-            view: self.view,
-            playground: self.playground.as_deref(),
-            env: self.env,
-            viewport: self.viewport,
-            fit_height: self.fit_height,
-            system_reduced_motion: self.system_reduced_motion,
-            titlebar_inset: self.titlebar_inset,
-            system_accent: self.system_accent,
-            reduced_motion: self.reduced_motion,
-            time_scale: self.time_scale,
-            caret: self.caret.clone(),
-            caret_read: false,
-            layout_seen: self.layout_seen.rects.clone(),
-            layout_reads: Vec::new(),
-            commits: self.commits,
-            nodes: &self.nodes,
-            spare_nodes: std::mem::take(&mut self.spare_nodes),
-            text: &mut self.text,
-            layout: &mut self.layout,
-            layout_entries: &mut self.layout_entries,
-            node_index: &mut self.node_index,
-            path_ids: &mut self.path_ids,
-            memo: &mut self.memo,
-            next_id: &mut self.next_id,
-            scrolls: &mut self.scrolls,
-            virtuals: &mut self.virtuals,
-            virtual_culled: &mut self.virtual_culled,
-            virtual_inputs: &mut self.virtual_inputs,
-            stats: &mut self.stats,
-            key_warnings: &mut self.key_warnings,
-            focused: self.focused.as_deref(),
-            state_unchanged: std::mem::take(&mut self.state_unchanged),
-            retry: false,
-        }.finish(tx)
-    }
-
     /// The mutation phase cannot accept an El or an unfinished measurement pass.
     fn apply(&mut self, measured: Measured, tx: &Tx) {
         let _apply_time = crate::frame_profile::Scope::new(crate::frame_profile::Phase::Apply);
