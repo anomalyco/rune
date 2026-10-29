@@ -1,6 +1,5 @@
 # <path> <ceiling>: non-test line ceilings for files above 1500. Ceilings only go down.
 # Refresh with scripts/file-size.sh --update-exceptions.
-crates/rune-fx/src/lib.rs 1509
 crates/rune-kit/src/markdown.rs 1795
 crates/rune-kit/src/syntax/scan.rs 1694
 crates/rune-light/examples/reel.rs 1899
