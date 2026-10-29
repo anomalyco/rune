@@ -4,10 +4,10 @@ crates/rune-fx/src/lib.rs 1509
 crates/rune-kit/src/markdown.rs 1795
 crates/rune-kit/src/syntax/scan.rs 1694
 crates/rune-light/examples/reel.rs 1899
-crates/rune/src/edit.rs 2657
-crates/rune/src/el.rs 3692
+crates/rune/src/edit.rs 2648
+crates/rune/src/el.rs 3179
 crates/rune/src/overlay.rs 1963
-crates/rune/src/runtime.rs 8191
+crates/rune/src/runtime.rs 8025
 crates/rune/src/text.rs 2886
-crates/rune/src/window.rs 3401
+crates/rune/src/window.rs 2763
 examples/kit-gallery/src/stories.rs 1613
