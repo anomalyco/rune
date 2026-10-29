@@ -10,6 +10,15 @@ fn the_default_is_on_on_macos_and_off_elsewhere() {
     assert_eq!(TextSystem::default().apple_pipeline(), want.pipeline());
 }
 
+/// A pen that summed advances in a different order lands within f32 noise of the same 1/256 px
+/// and so on the same step.
+#[test]
+fn summation_noise_does_not_move_a_pen_across_a_step() {
+    assert_eq!(glyph_x(935.99945, 26.0), glyph_x(936.0, 26.0));
+    assert_eq!(glyph_x(1013.9993, 26.0), glyph_x(1014.0, 26.0));
+    assert_eq!(glyph_x(353.0 - 1.0 / 256.0, 40.0), (352.0, 0));
+}
+
 #[test]
 fn pens_floor_to_coregraphics_steps() {
     // 13 pt at 2× (26 ppem): halves.
