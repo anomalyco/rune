@@ -27,7 +27,7 @@ use crate::runtime::Waker;
 use crate::{OverlayInput, OverlayOptions, OverlayPlacement};
 
 pub(crate) enum Input {
-    Move(f32, f32), Leave, Button(bool), Key(crate::KeyEvent), KeyUp(crate::KeyEvent),
+    Move(f32, f32), Leave, Button(bool), Secondary(bool), Key(crate::KeyEvent), KeyUp(crate::KeyEvent),
     Physical(crate::PhysicalInput, Option<crate::KeyEvent>),
 }
 
@@ -92,6 +92,11 @@ impl Dispatch<WlPointer, ()> for State {
                 if pressed && let Some(xkb) = &state.xkb {
                     state.input.push(Input::Physical(crate::PhysicalInput::Modifiers(key_mods(xkb)), None));
                 }
+            }
+            // BTN_RIGHT: the secondary gesture, as a window's right button is.
+            wl_pointer::Event::Button { serial, button: 0x111, state: wayland_client::WEnum::Value(button), .. } if state.pointer_inside => {
+                state.press = Some(serial);
+                state.input.push(Input::Secondary(button == wl_pointer::ButtonState::Pressed));
             }
             _ => {}
         }
