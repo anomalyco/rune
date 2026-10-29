@@ -1358,6 +1358,7 @@ impl<T: 'static> Overlay<T> {
                     Input::Button(down) => if let Some((x, y)) = self.rt.pointer() {
                         if down { self.rt.pointer_down(x, y); } else { self.rt.pointer_up(x, y); }
                     },
+                    Input::Secondary(down) => if let Some((x, y)) = self.rt.pointer() { if down { self.rt.secondary_down(x, y) } else { self.rt.secondary_up(x, y) } },
                     Input::Key(key) => self.rt.key(key),
                     Input::KeyUp(key) => {
                         self.dirty |= self.rt.key_up(key);
