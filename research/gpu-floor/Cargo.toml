@@ -1,0 +1,27 @@
+# Probes behind research/35-wgpu-vulkan-dx12-cost.md. Not a workspace member: build it from this
+# directory. `wgpu_frame` draws research/30's HUD frame through wgpu; `vk_floor` and `dx12_floor`
+# draw the same frame on the raw API with the fewest calls it allows.
+[package]
+name = "gpu-floor"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+wgpu = { version = "~30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "dx12", "wgsl"] }
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11"] }
+pollster = "1"
+ash = "0.38"
+ash-window = "0.13"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_System_Threading", "Win32_Security"] }
+
+[profile.release]
+codegen-units = 16
+debug = false

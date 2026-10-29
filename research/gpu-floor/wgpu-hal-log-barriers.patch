@@ -1,0 +1,36 @@
+--- a/src/vulkan/command.rs
++++ b/src/vulkan/command.rs
+@@ -120,6 +120,7 @@
+     type A = super::Api;
+ 
+     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
++        if std::env::var_os("LOG_BARRIERS").is_some() { eprintln!("BEGIN {:?}", label); }
+         if self.free.is_empty() {
+             let vk_info = vk::CommandBufferAllocateInfo::default()
+                 .command_pool(self.raw)
+@@ -208,6 +209,7 @@
+             let (dst_stage, dst_access) = conv::map_buffer_usage_to_barrier(bar.usage.to);
+             dst_stages |= dst_stage;
+ 
++            if std::env::var_os("LOG_BARRIERS").is_some() { eprintln!("BARRIER buf {:?} -> {:?}", bar.usage.from, bar.usage.to); }
+             vk_barriers.push(
+                 vk::BufferMemoryBarrier::default()
+                     .buffer(bar.buffer.raw)
+@@ -254,6 +256,7 @@
+             let dst_layout = conv::derive_image_layout(bar.usage.to, bar.texture.format);
+             dst_stages |= dst_stage;
+ 
++            if std::env::var_os("LOG_BARRIERS").is_some() { eprintln!("BARRIER tex {:?} -> {:?} layout {:?} -> {:?}", bar.usage.from, bar.usage.to, src_layout, dst_layout); }
+             vk_barriers.push(
+                 vk::ImageMemoryBarrier::default()
+                     .image(bar.texture.raw)
+--- a/src/vulkan/mod.rs
++++ b/src/vulkan/mod.rs
+@@ -1376,6 +1376,7 @@
+         surface_textures: &[&SurfaceTexture],
+         (signal_fence, signal_value): (&Fence, crate::FenceValue),
+     ) -> Result<(), crate::DeviceError> {
++        if std::env::var_os("LOG_BARRIERS").is_some() { eprintln!("SUBMIT cbs={} surfaces={}", command_buffers.len(), surface_textures.len()); }
+         let mut fence_raw = vk::Fence::null();
+ 
+         let mut wait_semaphores = SemaphoreList::new(SemaphoreListMode::Wait);
