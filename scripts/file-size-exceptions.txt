@@ -8,5 +8,5 @@ crates/rune/src/el.rs 3179
 crates/rune/src/overlay.rs 1963
 crates/rune/src/runtime.rs 8025
 crates/rune/src/text.rs 2886
-crates/rune/src/window.rs 2763
+crates/rune/src/window.rs 2761
 examples/kit-gallery/src/stories.rs 1613
