@@ -31,7 +31,12 @@ impl<S: 'static> Live<S> {
         }
         if in_side { return Nav::Pass; }
         if letter == Some('/') { return Nav::Filter; }
-        self.list_nav(ev, letter)
+        match self.list_nav(ev, letter) {
+            // The list's arrows and Return, even where they do nothing. Every other key it
+            // leaves, ⌘-chords and digits included, is the stage's.
+            Nav::Pass if !m.cmd && matches!(ev.key, Key::Up | Key::Down | Key::Left | Key::Right | Key::Enter) => Nav::Stay,
+            nav => nav,
+        }
     }
 
     /// Keys in the story list: along it, into and out of groups, and on to the other columns.

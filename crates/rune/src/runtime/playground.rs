@@ -133,6 +133,7 @@ impl<S: 'static> Runtime<S> {
         let at = self.focused.as_deref().filter(|_| !self.hover_focus).and_then(|f| side.iter().position(|p| p == f));
         match playground.nav(ev, playground.region()) {
             Nav::Pass => false,
+            Nav::Stay => true,
             Nav::Request(request) => {
                 let trigger = matches!(request, Request::Trigger(_) | Request::Replay);
                 if !(trigger && one.key_repeat) { one.playground.push(request); }

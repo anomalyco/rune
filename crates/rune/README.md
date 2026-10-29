@@ -2313,6 +2313,8 @@ App::new(spec).playground(
     ←, Tab or Esc go back to the list.
   - On the stage, keys are the story's: its focused element's, then the stage's `on_key`. Esc it
     leaves goes back to the list.
+  - Keys the list and side column leave, ⌘-chords and digits included, go to the stage's
+    `on_key` wherever the keyboard is, so a story's shortcuts work as soon as it opens.
 
   `.shortcut(None)` turns the shortcut off; `tx.open_playground()` opens it from the app.
   `Playground::typing(|s| ..)` gives the stage's `on_key` every key first, wherever the keyboard

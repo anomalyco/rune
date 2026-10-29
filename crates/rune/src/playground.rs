@@ -101,8 +101,10 @@ use tree::Row;
 /// - **The stage**: every key is the story's, through its focused element or the stage's
 ///   `AppSpec::on_key`, and Esc it leaves goes back to the list.
 ///
-/// Esc goes to the stage's `on_key` first wherever the keyboard is, and
-/// [`Playground::typing`] gives it every key first. A focused text field keeps all its keys.
+/// Keys the list and side column leave, ⌘-chords and digits included, go to the stage's
+/// `on_key` too, so a story's shortcuts work wherever the keyboard is. From the list, Esc goes
+/// to it first, and [`Playground::typing`] gives it every key first. A focused text field
+/// keeps all its keys.
 pub struct Playground<S: 'static> {
     pages: Vec<Page<S>>,
     triggers: Vec<(&'static str, Trigger<S>)>,
@@ -363,6 +365,8 @@ impl Request {
 /// What a key does in the open playground, for the runtime to carry out.
 pub(crate) enum Nav {
     Pass,
+    /// The playground's key, which does nothing here.
+    Stay,
     Request(Request),
     /// Focus the side column's first control.
     IntoSide,

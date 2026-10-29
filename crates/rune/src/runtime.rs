@@ -3026,9 +3026,9 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// `AppSpec::on_key`, given the stage's state while the playground shows one of the app's.
+    /// The playground's list and side column have already taken the keys they use.
     fn app_key(&mut self, f: fn(&mut S, &KeyEvent, &mut Tx) -> bool, ev: &KeyEvent, one: &mut Tx) -> bool {
         let state = match &mut self.playground {
-            Some(playground) if !playground.stage_hears(&self.state, ev.key == crate::Key::Escape) => None,
             Some(playground) => playground.key_state(&mut self.state),
             None => Some(&mut self.state),
         };
