@@ -32,6 +32,10 @@ required-features = ["markdown", "frame-profile"]
 name = "scroll_bench"
 required-features = ["markdown", "frame-profile"]
 
+[[example]]
+name = "layout_text_cost"
+required-features = ["markdown", "frame-profile"]
+
 [dev-dependencies]
 procwatch = { path = "../procwatch" }
 # Reference rasteriser for the built-in glyphs (tests/glyphs.rs).
