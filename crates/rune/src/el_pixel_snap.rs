@@ -10,7 +10,8 @@ impl El {
     ///
     /// While an element animates, its correction eases toward the pixels for where it comes to
     /// rest, in step with the distance left, so motion stays smooth and starts and lands
-    /// without a jump.
+    /// without a jump. Content under an `El::scale` (a zoomed canvas) draws at its exact
+    /// sub-pixel edges while the scale moves and eases onto whole pixels once it holds still.
     /// Turn it off for an element an app moves itself frame by frame at sub-pixel speeds
     /// (`El::offset` from a value it animates), so it glides instead of stepping a pixel at a
     /// time.

@@ -695,11 +695,7 @@ struct Inh {
     /// Ancestors' `El::rotate` layers, composed, as an index into `turn_scratch` plus one
     /// (0: none): where this subtree's device pixels land. An index keeps `Inh` small.
     turn: u32,
-    /// `El::pixel_snap(false)` above, or a turn: this subtree draws at its exact edges.
-    snap_off: bool,
-    /// The translation in points from scrolls, sticky shifts and growth rows above, which
-    /// snaps as a whole (`pixel_snap`).
-    snap_rigid: [f32; 2],
+    snap: pixel_snap::Inherit,
 }
 
 /// A 2×3 affine in device pixels, `[a, b, c, d, tx, ty]`: `(x, y)` lands at
@@ -883,7 +879,7 @@ impl Default for Inh {
             paint_clip: NO_CLIP, paint_fade: [0.0; 4], paint_fade_origin: NO_CLIP, rounded: None,
             scale: 1.0, anchor: [0.0; 2], anchor_to: [0.0; 2], blur: 0.0, dy: 0.0, dx: 0.0, cover: [0.0; 2], outer: None, mark: 0, group: 0.0,
             scale_motion: ScaleMotion::Still, still: (1.0, [0.0; 2], [0.0; 2]), in_cache: false, skip_paint: false, turn: 0,
-            snap_off: false, snap_rigid: [0.0; 2] }
+            snap: Default::default() }
     }
 }
 
@@ -2444,7 +2440,7 @@ impl<S: 'static> Runtime<S> {
         // A report waits for the next frame: draw one to deliver it.
         animating |= self.report_drawn();
         animating |= source(self.loops_active, AnimSource::LOOP);
-        animating |= source(self.static_scale_settling, AnimSource::SCALE_SETTLE);
+        animating |= source(self.static_scale_settling || self.pixel_snap.easing(), AnimSource::SCALE_SETTLE);
         animating |= source(self.videos_active, AnimSource::VIDEO);
         animating |= source(self.draw_text_flights(), AnimSource::TEXT_FLIGHT);
         self.images.end_frame();
@@ -5686,7 +5682,7 @@ impl<S: 'static> Runtime<S> {
         });
         let default_ring = self.default_ring_owner();
         let mut active_cache: Option<ActiveCache> = None;
-        self.pixel_snap.begin_frame();
+        self.pixel_snap.begin_frame(self.t);
         for paint_index in 0..n_nodes {
             let i = if tree_order { self.layer_paint_order[paint_index] } else { paint_index };
             let node_id = self.nodes[i].id;
@@ -5720,7 +5716,7 @@ impl<S: 'static> Runtime<S> {
             let Some(p) = self.scene.presented(n.id) else { continue };
             let mut pinh = n.parent.map_or(Inh::default(), |pr| self.inh_scratch[pr]);
             pinh.dy += self.row_dy[i];
-            pinh.snap_rigid[1] += self.row_dy[i];
+            pinh.snap.rigid[1] += self.row_dy[i];
             if let Some(a) = &n.above
                 && let Some(j) = self.nodes[..i].iter().position(|n| n.key.as_ref() == Some(&a.key))
             {
@@ -5736,7 +5732,7 @@ impl<S: 'static> Runtime<S> {
                 let w = self.scene.world(n.id).unwrap_or(p.rect);
                 pinh.dx = ax - w.x;
                 pinh.dy = ay - w.y;
-                pinh.snap_rigid = [0.0; 2];
+                (pinh.snap.rigid, pinh.snap.layer) = ([0.0; 2], 0);
                 (pinh.scale, pinh.anchor, pinh.anchor_to) = (1.0, [0.0; 2], [0.0; 2]);
                 pinh.still = (1.0, [0.0; 2], [0.0; 2]);
             }
@@ -5769,7 +5765,7 @@ impl<S: 'static> Runtime<S> {
                 let shift = sticky::shift(edge, if tail { inset - h } else { inset }, [top, top + h, left, left + p.rect.w], frame);
                 self.stuck[i] = shift;
                 if edge == crate::el::StickyEdge::Left { pinh.dx += shift } else { pinh.dy += shift }
-                pinh.snap_rigid[(edge != crate::el::StickyEdge::Left) as usize] += shift;
+                pinh.snap.rigid[(edge != crate::el::StickyEdge::Left) as usize] += shift;
                 // A sticky element stays crisp against the viewport edge it sticks to while rows
                 // scrolling under its fill fade out.
                 let slot = match edge {
@@ -5851,7 +5847,7 @@ impl<S: 'static> Runtime<S> {
                 pinh = Inh { opacity: 1.0, paint_opacity: 1.0, clip, fade, fade_origin, paint_clip: clip, paint_fade: fade,
                     paint_fade_origin: fade_origin, rounded: None, scale, anchor, anchor_to, blur: 0.0,
                     dx: pinh.dx - pinh.cover[0], dy: pinh.dy - pinh.cover[1], cover: [0.0; 2], outer: None,
-                    scale_motion: ScaleMotion::Still, in_cache: false, skip_paint: false, turn: 0, ..pinh };
+                    scale_motion: ScaleMotion::Still, in_cache: false, skip_paint: false, turn: 0, snap: pixel_snap::Inherit { layer: 0, ..pinh.snap }, ..pinh };
                 let fix = self.launches.offset_fix(&self.scene, node_id, [pinh.dx, pinh.dy]);
                 (pinh.dx, pinh.dy) = (pinh.dx + fix[0], pinh.dy + fix[1]);
             }
@@ -5989,22 +5985,25 @@ impl<S: 'static> Runtime<S> {
             let r_exact = rect_pt.map(snap_px);
             // A node the visibility test below culls paints nothing, and any clip it hands down is
             // off screen too, so it keeps its exact edges.
-            let snaps = !pinh.snap_off && !n.vis.no_pixel_snap && p.transform.rotate == 0.0 && (pinh.in_cache || {
+            let rigid = pinh.snap.rigid.map(|v| v * s);
+            let can_snap = !pinh.snap.off && !n.vis.no_pixel_snap && p.transform.rotate == 0.0;
+            let snaps = can_snap && (pinh.in_cache || {
                 let m = filter_margin + 2.0;
                 r_exact[2].max(r_exact[0]) >= clip[0].max(vp[0]) - m && r_exact[0] <= clip[2].min(vp[2]) + m
                     && r_exact[3].max(r_exact[1]) >= clip[1].max(vp[1]) - m && r_exact[1] <= clip[3].min(vp[3]) + m
             });
             let unscaled = (sc - 1.0).abs() <= 1e-5 && anchor == anchor_to;
+            let snap_layer = if can_snap && (own_sc - 1.0).abs() > 1e-5 { self.pixel_snap.layer(n.id, r_exact, rigid, pinh.in_cache || n.vis.cache) } else { pinh.snap.layer };
             let animating = p.flags & (rune_motion::flags::ANIMATED | rune_motion::flags::ANCESTOR_ANIMATED) != 0;
             let rest = if snaps && animating { self.scene.rest(n.id) } else { None };
             let r = if !snaps {
                 r_exact
             } else if rest.is_none() && unscaled {
-                self.pixel_snap.at_rest(n.id, r_exact, pinh.snap_rigid.map(|v| v * s))
+                self.pixel_snap.at_rest(n.id, r_exact, rigid)
             } else {
                 let motion = pixel_snap::motion(&p, rest, s, n.above.is_some(), self.row_h[i] >= 0.0);
                 let raw = if unscaled { r_exact } else { raw_edges.map(snap_px) };
-                self.pixel_snap.snapped(n.id, motion, (r_exact, raw), pinh.snap_rigid.map(|v| v * s))
+                self.pixel_snap.snapped(n.id, motion, (r_exact, raw), rigid, (snap_layer, sc))
             };
             let (w, h) = ((r[2] - r[0]).max(0.0), (r[3] - r[1]).max(0.0));
             let intersect = |a: [f32; 4], b: [f32; 4]| [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])];
@@ -7038,8 +7037,8 @@ impl<S: 'static> Runtime<S> {
                 inherit_fade(&mut fade, &mut fade_origin, r, [0.0, 0.0, 0.0, mask * s]);
             }
             let mut dy = pinh.dy;
-            let snap_off = pinh.snap_off || n.vis.no_pixel_snap || turn_index != 0;
-            let mut snap_rigid = pinh.snap_rigid;
+            let snap_off = pinh.snap.off || n.vis.no_pixel_snap || turn_index != 0;
+            let mut snap_rigid = pinh.snap.rigid;
             if n.scroll.is_some()
                 && let Some(st) = self.scrolls.get(&n.id)
             {
@@ -7085,7 +7084,8 @@ impl<S: 'static> Runtime<S> {
                 paint_clip: clip, paint_fade: fade, paint_fade_origin: fade_origin, rounded, scale, anchor, anchor_to, blur, dy, dx,
                 cover: cover_offset, outer, mark, group,
                 scale_motion, still: if scale_motion == ScaleMotion::Still { (scale, anchor, anchor_to) } else { pinh.still },
-                in_cache, skip_paint, turn: turn_index, snap_off, snap_rigid };
+                in_cache, skip_paint, turn: turn_index,
+                snap: pixel_snap::Inherit { off: snap_off, rigid: snap_rigid, layer: if cover.is_some() { 0 } else { snap_layer } } };
             let hits_before = self.hits.len();
             if (n.vis.hit || n.on_pointer_move.is_some() || n.on_press.is_some() || n.on_double_press.is_some() || n.on_secondary_press.is_some() || n.on_hover.is_some() || n.on_hover_change.is_some() || n.on_drag.is_some() || n.drag_out.is_some() || n.input.is_some() || n.role == "textbox" || n.window_drag || n.focus.enabled || n.modal.is_some()
                 || n.text.as_ref().is_some_and(|t| t.selectable) || n.gestures.as_ref().is_some_and(|g| g.takes_gestures()))

@@ -281,3 +281,105 @@ fn a_trailing_child_holds_its_place_against_a_widening_parent() {
     let f = fills(&rt);
     assert!(f.iter().flatten().all(|&v| whole(v)), "{f:?}");
 }
+
+/// A zoomed canvas (`El::scale`) with boxes at fractional places, snapping or not.
+fn canvas(st: &(f32, bool), _: &mut Cx<(f32, bool)>) -> El {
+    let boxes = (0..4).map(|i| el().size(17.3, 11.1).absolute(3.3 + i as f32 * 21.7, 5.45 + i as f32 * 9.2).fill(Color::WHITE));
+    el().size(160.0, 120.0).child(
+        el().size(100.3, 70.15).absolute(20.15, 15.3).scale(st.0).pixel_snap(st.1)
+            .fill(Color::WHITE.mix(Color::BLACK, 0.5)).children(boxes),
+    )
+}
+
+fn edges(f: &[[f32; 4]]) -> Vec<f32> {
+    f.iter().flat_map(|r| [r[0], r[1], r[0] + r[2], r[1] + r[3]]).collect()
+}
+
+#[test]
+fn a_still_zoomed_canvas_draws_on_whole_pixels() {
+    for on in [true, false] {
+        let mut rt = Runtime::new((1.37, on), canvas, (160.0, 120.0), Env::new(true, 2.0));
+        rt.frame(0.0);
+        let e = edges(&fills(&rt));
+        assert_eq!(e.len(), 20);
+        if on {
+            assert!(e.iter().all(|&v| whole(v)), "{e:?}");
+        } else {
+            assert!(e.iter().any(|&v| !whole(v)), "the opt-out draws at the exact scaled edges: {e:?}");
+        }
+    }
+}
+
+#[test]
+fn a_zoom_draws_exact_while_it_moves_and_eases_onto_the_grid() {
+    let mut snapped = Runtime::new((1.2, true), canvas, (160.0, 120.0), Env::new(true, 2.0));
+    let mut exact = Runtime::new((1.2, false), canvas, (160.0, 120.0), Env::new(true, 2.0));
+    snapped.frame(0.0);
+    exact.frame(0.0);
+    // A pinch: the zoom lands at once on every frame for 30 frames, then holds.
+    let mut frames = Vec::new();
+    for k in 1..=80 {
+        if k <= 30 {
+            let z = 1.2 + 0.17 * k as f32 / 30.0;
+            for rt in [&mut snapped, &mut exact] {
+                rt.update(|st, tx| {
+                    st.0 = z;
+                    tx.instant();
+                });
+            }
+        }
+        let asks = snapped.frame(1.0 / 120.0);
+        exact.frame(1.0 / 120.0);
+        let (a, b) = (edges(&fills(&snapped)), edges(&fills(&exact)));
+        // Past its first pixel of travel the zoom draws at its exact sub-pixel edges.
+        if (3..=30).contains(&k) {
+            assert!(a.iter().zip(&b).all(|(a, b)| (a - b).abs() < 1.0 / 64.0), "frame {k}: {a:?} vs {b:?}");
+        }
+        assert!(a.iter().zip(&b).all(|(a, b)| (a - b).abs() <= 0.5 + 1.0 / 64.0), "frame {k}: {a:?} vs {b:?}");
+        frames.push((a, asks));
+    }
+    // Held still, it eases onto whole pixels within a few frames and then stops asking for them.
+    let (end, asks) = frames.last().unwrap();
+    assert!(end.iter().all(|&v| whole(v)), "{end:?}");
+    assert!(!asks, "an idle canvas draws nothing");
+    let landed = frames.iter().position(|(e, _)| e.iter().all(|&v| whole(v))).unwrap();
+    assert!(landed <= 30 + 16, "lands {} frames after the zoom stops", landed + 1 - 30);
+    assert!(frames[30..landed].iter().all(|(_, asks)| *asks), "asks for each frame of the ease");
+    // No pop: once the zoom stops, no edge moves more than the ease's steepest step.
+    for w in frames[29..].windows(2) {
+        let step = w[0].0.iter().zip(&w[1].0).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+        assert!(step < 0.07, "{step}: {:?} -> {:?}", w[0].0, w[1].0);
+    }
+}
+
+#[test]
+fn a_scale_spring_glides_exact_and_lands_snapped() {
+    fn view(big: &bool, _: &mut Cx<bool>) -> El {
+        let k = if *big { 1.37 } else { 1.0 };
+        el().size(160.0, 120.0).child(
+            el().size(60.3, 40.15).absolute(40.15, 35.3).scale(k).scale_motion(Spring::new(0.4, 0.0)).fill(Color::WHITE)
+                .child(el().size(17.3, 11.1).absolute(13.3, 9.45).fill(Color::BLACK)),
+        )
+    }
+    let mut rt = Runtime::new(false, view, (160.0, 120.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    rt.state = true;
+    rt.invalidate();
+    let mut frames = Vec::new();
+    for _ in 0..160 {
+        rt.frame(1.0 / 120.0);
+        frames.push(edges(&fills(&rt)));
+    }
+    let end = frames.last().unwrap();
+    assert!(end.iter().all(|&v| whole(v)), "lands on whole pixels: {end:?}");
+    let fractional = frames.iter().filter(|e| e.iter().any(|&v| !whole(v))).count();
+    assert!(fractional > 20, "glides between pixels while it scales ({fractional} frames)");
+    // Each edge eases in: once the spring is nearly done, no frame moves an edge further than
+    // the frame before it did, beyond the ease onto the grid.
+    for k in 0..end.len() {
+        let steps: Vec<f32> = frames.windows(2).map(|w| (w[1][k] - w[0][k]).abs()).collect();
+        for w in steps[steps.len() / 3..].windows(2) {
+            assert!(w[1] <= w[0] + 0.07, "edge {k}: {steps:?}");
+        }
+    }
+}

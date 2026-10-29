@@ -58,13 +58,15 @@ fn shimmer_view(s: &Shimmer, _: &mut Cx<Shimmer>) -> El {
 }
 
 /// For each bright glyph quad, how far (device px) its centre sits from the dim glyph it
-/// copies. A glyph drawn between pixels takes a slightly larger quad, so sizes match loosely.
+/// copies. A glyph drawn between pixels takes a slightly larger quad, and one sampled from its
+/// rest-size raster under a zoom that is still settling a larger one again, so sizes match
+/// loosely.
 fn lit_offsets(rt: &Runtime<Shimmer>) -> Vec<f32> {
     let glyphs = |c: Color| rt.instances.iter().filter(|i| i.params[1] == KIND_GLYPH && (i.fill[0] - c.r).abs() < 0.02 && (i.fill[1] - c.g).abs() < 0.02)
         .map(|i| i.rect).collect::<Vec<_>>();
     let (dim, lit) = (glyphs(DIM), glyphs(LIT));
     lit.iter().map(|l| {
-        dim.iter().filter(|d| (d[2] - l[2]).abs() < 2.0 && (d[3] - l[3]).abs() < 2.0)
+        dim.iter().filter(|d| (d[2] - l[2]).abs() < 3.0 && (d[3] - l[3]).abs() < 3.0)
             .map(|d| (l[0] + l[2] / 2.0) - (d[0] + d[2] / 2.0)).min_by(|a, b| a.abs().total_cmp(&b.abs())).unwrap_or(f32::NAN)
     }).collect()
 }
@@ -103,7 +105,10 @@ fn a_counter_sliding_shimmer_keeps_its_bright_copy_on_the_label() {
         for snap in [true, false] {
             for mount_at in [0.0, 0.5] {
                 let w = worst_offset(snap, zoom, mount_at);
-                if !(w.abs() < GLYPH_PX) { bad.push((zoom, snap, mount_at, w)); }
+                // An opted-out shimmer over a snapped label rounds its glyphs on its own, up to
+                // a whole pixel from the label's.
+                let bound = if snap { GLYPH_PX } else { GLYPH_PX + 1.0 / 64.0 };
+                if !(w.abs() < bound) { bad.push((zoom, snap, mount_at, w)); }
             }
         }
     }
