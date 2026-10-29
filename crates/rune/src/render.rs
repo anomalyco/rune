@@ -378,14 +378,11 @@ impl Gpu {
     #[cfg(not(target_arch = "wasm32"))]
     fn try_for(instance: wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, wanted: wgpu::Features, translucent: bool) -> Result<Gpu, String> {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: surface,
-            apply_limit_buckets: false,
-        }))
-        .map_err(|error| format!("no GPU adapter: {error}"))?;
-        let adapter = match surface { Some(s) if translucent => crate::translucency::prefer(&instance, s, adapter), _ => adapter };
+        let pick = crate::gpu_pick::pick(&instance, surface)?;
+        let adapter = match surface {
+            Some(s) if translucent && !pick.from_env() => crate::translucency::prefer(&instance, s, &pick),
+            _ => pick.adapter,
+        };
         let optional_features = wgpu::Features::TIMESTAMP_QUERY | wanted;
         #[cfg(target_os = "macos")]
         let optional_features = optional_features | wgpu::Features::PASSTHROUGH_SHADERS;

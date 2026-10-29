@@ -133,6 +133,8 @@ pub mod live;
 pub mod memo;
 pub mod motion_gate;
 mod pixels;
+#[cfg(not(target_arch = "wasm32"))]
+mod gpu_pick;
 pub mod gpu_springs;
 pub mod image;
 #[cfg(feature = "hot")]
