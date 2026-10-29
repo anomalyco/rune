@@ -1716,9 +1716,7 @@ impl Renderer {
         };
         match b {
             Block::Para(inl) => self.para(inl, inl_map, s.body, s.text),
-            Block::Heading(l, inl) => {
-                self.para(inl, inl_map, s.headings[(*l as usize - 1).min(2)], if *l >= 4 { s.muted } else { s.text })
-            }
+            Block::Heading(l, inl) => self.para(inl, inl_map, s.headings[(*l as usize - 1).min(2)], if *l >= 4 { s.muted } else { s.text }).role("heading").level(u32::from(*l)),
             Block::Code(code) => {
                 let n = self.next_source.get();
                 self.next_source.set(n + 1);

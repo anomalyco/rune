@@ -61,6 +61,7 @@ pub struct App<S: 'static> {
     pub(crate) macos_window: crate::MacWindowOptions,
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<S>>>,
     pub(crate) window_options: crate::WindowOptions,
+    pub(crate) canvas_id: Option<String>,
     pub(crate) fit_content_height: bool,
     pub(crate) float_on_open: bool,
     pub(crate) modifier_keys: bool,
@@ -100,6 +101,7 @@ impl<S: 'static> App<S> {
             macos_window: crate::MacWindowOptions::default(),
             compositor: None,
             window_options: crate::WindowOptions::default(),
+            canvas_id: None,
             fit_content_height: false,
             float_on_open: false,
             modifier_keys: false,
@@ -148,6 +150,14 @@ impl<S: 'static> App<S> {
     /// `Tx::resize_window`. Give the root no fixed or `fill` height. Users still set the width.
     pub fn fit_content_height(mut self) -> Self {
         self.fit_content_height = true;
+        self
+    }
+
+    /// Mount onto an existing `<canvas id="…">` in the web document instead of appending a
+    /// full-viewport canvas and locking `document.body`. Pair with [`Self::fit_content_height`]
+    /// to embed a Rune view inline in a scrollable page. Ignored on native.
+    pub fn canvas_id(mut self, id: impl Into<String>) -> Self {
+        self.canvas_id = Some(id.into());
         self
     }
 

@@ -221,6 +221,8 @@ const SCROLL_DECAY: f32 = 2.002;
 #[cfg(any(test, target_arch = "wasm32"))]
 #[path = "runtime/web_runtime.rs"]
 pub(crate) mod web_runtime;
+#[path = "runtime/web_a11y.rs"]
+pub(crate) mod web_a11y;
 
 #[path = "runtime/text_layout.rs"]
 mod text_layout;

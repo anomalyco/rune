@@ -25,6 +25,7 @@ use crate::color::Color;
 use crate::tok::{Family, OpticalSize, TextStyle};
 
 mod case;
+mod default_fonts;
 #[cfg(all(test, target_os = "macos"))]
 mod core_text_tests;
 pub(crate) mod coretext_match;
@@ -33,6 +34,7 @@ pub use coretext_match::FontSmoothing;
 #[doc(hidden)]
 pub mod pixel_compare;
 mod fallback;
+mod hidden_axes;
 mod icon;
 mod layout_cache;
 mod macos_smoothing;
@@ -48,79 +50,15 @@ pub use measure::{TextInk, advance, ink, measure};
 pub use rich_layout::RichLayoutOptions;
 pub(crate) use case::Source as CaseSource;
 
+use default_fonts::DEFAULT_FONTS;
 use fallback::Route;
+use hidden_axes::hidden_axes;
 use layout_cache::{Cache, evict};
 #[cfg(test)]
 use layout_cache::{STALE_ENTRY, STALE_TEXT};
 pub use icon::{Icon, icon_coverage};
 use icon::rasterize_icon;
-use trak::Trak;
-
-/// Fonts' `trak` tables (None for an untracked font), by blob and index.
-type Traks = HashMap<(u64, u32), Option<Rc<Trak>>>;
-
-fn font_trak(traks: &mut Traks, data: &Blob<u8>, index: u32) -> Option<Rc<Trak>> {
-    traks
-        .entry((data.id(), index))
-        .or_insert_with(|| FontRef::from_index(data.as_ref(), index as usize).and_then(Trak::of).map(Rc::new))
-        .clone()
-}
-
-/// The coordinates a font's named instances give its hidden axes at `weight` (SF Mono's and SF
-/// Italic's `YAXS`), interpolated along `wght` between the nearest instances and held at the
-/// ends; only axes off their default. Core Text draws a weight at its instance (AppKit's regular
-/// SF Mono is wght 400, YAXS 324.3); Parley sets only `wght`, which leaves a hidden axis at its
-/// default, in SF Mono the Light instance's thin horizontal strokes. Instances at another value
-/// of a visible axis (a width or optical size) only count when no instance is at the defaults;
-/// of several at one weight (SF's grades), the one nearest the hidden defaults counts.
-fn hidden_axes(font: FontRef, weight: f32) -> Vec<parley::FontVariation> {
-    let axes: Vec<_> = font.variations().map(|a| (a.tag(), a.default_value(), a.is_hidden())).collect();
-    let Some(wght) = axes.iter().position(|a| a.0 == swash::tag_from_bytes(b"wght")) else { return Vec::new() };
-    let hidden: Vec<usize> = (0..axes.len()).filter(|&i| i != wght && axes[i].2).collect();
-    if hidden.is_empty() {
-        return Vec::new();
-    }
-    let instances: Vec<Vec<f32>> = font.instances().map(|i| i.values().collect::<Vec<f32>>()).filter(|v| v.len() == axes.len()).collect();
-    let at_defaults = |v: &&Vec<f32>| (0..axes.len()).all(|i| i == wght || axes[i].2 || (v[i] - axes[i].1).abs() < 1e-3);
-    let mut points: Vec<(f32, Vec<f32>)> = instances.iter().filter(at_defaults).map(|v| (v[wght], hidden.iter().map(|&i| v[i]).collect())).collect();
-    if points.is_empty() {
-        points = instances.iter().map(|v| (v[wght], hidden.iter().map(|&i| v[i]).collect())).collect();
-    }
-    // Of instances at one weight (SF's grades), the one nearest the hidden defaults.
-    let off_default = |v: &[f32]| hidden.iter().zip(v).map(|(&i, x)| (x - axes[i].1).abs()).sum::<f32>();
-    points.sort_by(|a, b| a.0.total_cmp(&b.0).then(off_default(&a.1).total_cmp(&off_default(&b.1))));
-    points.dedup_by(|b, a| a.0 == b.0);
-    let (Some(first), Some(last)) = (points.first(), points.last()) else { return Vec::new() };
-    let values: Vec<f32> = if weight <= first.0 {
-        first.1.clone()
-    } else if weight >= last.0 {
-        last.1.clone()
-    } else {
-        let k = points.iter().position(|p| p.0 >= weight).unwrap_or(points.len() - 1);
-        let (lo, hi) = (&points[k - 1], &points[k]);
-        let t = (weight - lo.0) / (hi.0 - lo.0);
-        lo.1.iter().zip(&hi.1).map(|(a, b)| a + (b - a) * t).collect()
-    };
-    hidden
-        .iter()
-        .zip(values)
-        .filter(|&(&i, v)| (v - axes[i].1).abs() >= 1e-3)
-        .map(|(&i, v)| parley::FontVariation::new(parley::setting::Tag::new(&axes[i].0.to_be_bytes()), v))
-        .collect()
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-const DEFAULT_FONTS: [&[u8]; 3] = [
-    include_bytes!("../assets/Inter-Regular.ttf"),
-    include_bytes!("../assets/Inter-Medium.ttf"),
-    include_bytes!("../assets/Inter-SemiBold.ttf"),
-];
-
-#[cfg(target_arch = "wasm32")]
-const DEFAULT_FONTS: [&[u8]; 2] = [
-    include_bytes!("../assets/Inter-Regular.ttf"),
-    include_bytes!("../assets/IBMPlexMono-Regular.ttf"),
-];
+use trak::{Trak, Traks, font_trak};
 
 /// Scripts the app's own families usually lack: Han, kana, Hangul and Bopomofo.
 const CJK_SCRIPTS: [&[u8; 4]; 5] = [b"Hani", b"Hira", b"Kana", b"Hang", b"Bopo"];
@@ -1456,12 +1394,12 @@ impl TextSystem {
     pub fn new(fonts: &[&'static [u8]], families: (&str, &str)) -> Self {
         measure::note_fonts(fonts, families);
         let mut collection = Collection::new(CollectionOptions { shared: false, system_fonts: false });
-        let list: &[&'static [u8]] = if fonts.is_empty() { &DEFAULT_FONTS } else { fonts };
+        let list: &[&'static [u8]] = if fonts.is_empty() { DEFAULT_FONTS } else { fonts };
         let mut registered = Vec::new();
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(all(target_arch = "wasm32", feature = "embedded-fonts"))]
         if !fonts.is_empty() {
             for data in DEFAULT_FONTS {
-                collection.register_fonts(Blob::new(Arc::new(data)), None);
+                collection.register_fonts(Blob::new(Arc::new(*data)), None);
             }
         }
         for data in list {

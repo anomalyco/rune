@@ -5,8 +5,12 @@ use winit::keyboard::ModifiersState;
 
 #[wasm_bindgen(module = "/src/web/bridge.js")]
 extern "C" {
-    fn mount(canvas: &web_sys::HtmlCanvasElement, callback: &js_sys::Function) -> JsValue;
+    fn mount(canvas: &web_sys::HtmlCanvasElement, callback: &js_sys::Function, embedded: bool, fit_height: bool) -> JsValue;
     fn sync(handle: &JsValue, key: &str, text: &str, base: usize, anchor: u32, focus: u32, secure: bool);
+    #[wasm_bindgen(js_name = syncCopy)]
+    fn sync_copy(handle: &JsValue, text: &str);
+    #[wasm_bindgen(js_name = syncA11y)]
+    fn sync_a11y(handle: &JsValue, json: &str);
     fn activate(handle: &JsValue);
     fn destroy(handle: &JsValue);
     #[wasm_bindgen(js_name = pastedImage)]
@@ -20,6 +24,9 @@ pub(super) struct Bridge {
     mods: ModifiersState,
     touch: Option<Touch>,
     mirror: crate::runtime::web_runtime::Mirror,
+    a11y: crate::runtime::web_a11y::A11yMirror,
+    copy_cache: String,
+    fit_height: bool,
 }
 struct Touch {
     id: u64,
@@ -35,18 +42,21 @@ struct Touch {
 
 impl Bridge {
     pub(super) fn new<S: 'static>(canvas: &web_sys::HtmlCanvasElement,
-        running: std::rc::Weak<RefCell<Option<Running<S>>>>, window: Arc<Window>) -> Self {
+        running: std::rc::Weak<RefCell<Option<Running<S>>>>, window: Arc<Window>,
+        embedded: bool, fit_height: bool) -> Self {
         let callback = Closure::new(move |event: String| {
             let Some(running) = running.upgrade() else { return };
             let event = zeroize::Zeroizing::new(event);
             if let Ok(mut event) = serde_json::from_str(&event) {
-                if let Some(r) = &mut *running.borrow_mut() { r.input_event(&mut event); }
+                if let Some(r) = &mut *running.borrow_mut() { r.input_event(&mut event, &window); }
                 window.request_redraw();
             }
         });
-        let dispose_viewport = platform::viewport(canvas, callback.as_ref().unchecked_ref());
-        Self { handle: mount(canvas, callback.as_ref().unchecked_ref()), _callback: callback, dispose_viewport,
-            mods: ModifiersState::empty(), touch: None, mirror: Default::default() }
+        let dispose_viewport = platform::viewport(canvas, callback.as_ref().unchecked_ref(), embedded);
+        let handle = mount(canvas, callback.as_ref().unchecked_ref(), embedded, fit_height);
+        Self { handle, _callback: callback, dispose_viewport, mods: ModifiersState::empty(),
+            touch: None, mirror: Default::default(), a11y: Default::default(),
+            copy_cache: String::new(), fit_height }
     }
 }
 impl Drop for Bridge {
@@ -62,15 +72,28 @@ impl<S: 'static> Running<S> {
             let m = &self.input.mirror;
             sync(&self.input.handle, &m.key, &m.text, m.base, m.anchor, m.focus, m.secure);
         }
+        let next_copy = self.rt.copy_text().unwrap_or_default();
+        if self.input.copy_cache != next_copy {
+            self.input.copy_cache = next_copy;
+            sync_copy(&self.input.handle, &self.input.copy_cache);
+        }
+        if let Some(json) = self.rt.web_a11y(&mut self.input.a11y) {
+            sync_a11y(&self.input.handle, json);
+        }
         if focus { activate(&self.input.handle); }
     }
 
-    pub(super) fn input_event(&mut self, event: &mut serde_json::Value) {
+    pub(super) fn input_event(&mut self, event: &mut serde_json::Value, window: &Arc<Window>) {
         let mut activate = false;
         match event["kind"].as_str() {
             Some("viewport") => {
                 let insets = std::array::from_fn(|i| event["insets"][i].as_f64().unwrap_or(0.0).max(0.0) as f32);
                 if INSETS.replace(insets) != insets { self.rt.invalidate(); }
+            }
+            Some("dpr") => {
+                let size = window.inner_size();
+                let scale = event["scale"].as_f64().unwrap_or_else(|| window.scale_factor()).max(0.5) as f32;
+                self.resize_surface(size, scale);
             }
             Some("motion") => self.rt.set_system_reduced_motion(event["reduced"].as_bool().unwrap_or(false)),
             Some("focus") => self.rt.window_focus(event["focused"].as_bool().unwrap_or(false)),
@@ -93,15 +116,17 @@ impl<S: 'static> Running<S> {
                 }
             }
             Some("key") => activate = self.rt.web_key(event),
+            Some("a11y_press" | "a11y_link") => { let _ = self.rt.web_a11y_action(event); }
             _ => {}
         }
         // Commit within the DOM event: clipboard, link and soft-keyboard APIs need activation.
         self.rt.frame(0.0);
+        self.apply_frame_requests(window);
         self.clipboard.flush(&mut self.rt);
         self.sync_input(activate);
     }
 
-    pub(super) fn window_input(&mut self, event: &WindowEvent, window: &Window) -> bool {
+    pub(super) fn window_input(&mut self, event: &WindowEvent, window: &Arc<Window>) -> bool {
         let scale = window.scale_factor() as f32;
         let mut activate = false;
         let mut immediate = false;
@@ -109,8 +134,12 @@ impl<S: 'static> Running<S> {
             WindowEvent::ModifiersChanged(mods) => { self.input.mods = mods.state(); return false; }
             WindowEvent::CursorMoved { position, .. } if self.input.touch.is_none() => {
                 self.rt.pointer_move(position.x as f32 / scale, position.y as f32 / scale);
+                self.cursor.apply(window, self.rt.cursor(), true);
             }
-            WindowEvent::CursorLeft { .. } if self.input.touch.is_none() => self.rt.pointer_leave(),
+            WindowEvent::CursorLeft { .. } if self.input.touch.is_none() => {
+                self.rt.pointer_leave();
+                self.cursor.apply(window, crate::el::Cursor::Default, false);
+            }
             WindowEvent::MouseInput { button, state, .. } if self.input.touch.is_none() => {
                 immediate = true;
                 let Some((x, y)) = self.rt.pointer() else { return false };
@@ -126,9 +155,10 @@ impl<S: 'static> Running<S> {
             WindowEvent::MouseWheel { delta, .. } => {
                 let Some((x, y)) = self.rt.pointer() else { return false };
                 let (dx, dy) = crate::runtime::wheel_delta(*delta, scale, self.input.mods.shift_key());
-                // Trackpad pinch is ctrl+wheel: an `on_magnify` handler's, else ignored, and the
-                // page never zooms.
                 if self.input.mods.control_key() { return self.rt.pinch_wheel(x, y, dy); }
+                // On a content-sized embedded canvas, vertical wheel belongs to the page unless
+                // a horizontal strip is being scrolled.
+                if self.input.fit_height && dx.abs() <= dy.abs() { return false; }
                 let precise = matches!(delta, winit::event::MouseScrollDelta::PixelDelta(_));
                 self.rt.wheel_event(crate::WheelEvent::new(dx, dy).at(x, y).mods(modifiers(self.input.mods)).precise(precise));
             }
@@ -150,7 +180,7 @@ impl<S: 'static> Running<S> {
                     if pressed { self.rt.key(key); } else { self.rt.key_up(key); }
                 }
             }
-            WindowEvent::Touch(touch) => {
+            WindowEvent::Touch(touch) if !self.input.fit_height => {
                 let point = (touch.location.x as f32 / scale, touch.location.y as f32 / scale);
                 match touch.phase {
                     TouchPhase::Started if self.input.touch.is_none() => {
@@ -162,7 +192,6 @@ impl<S: 'static> Running<S> {
                         if t.id != touch.id { return false; }
                         let (dx, dy) = (point.0 - t.origin.0, point.1 - t.origin.1);
                         if !t.pan && dx.hypot(dy) > 8.0 {
-                            // The pan's first direction picks the axis for the rest of the touch.
                             t.pan = true;
                             (t.scroll, t.horizontal) = self.rt.web_touch_pan(t.origin.0, t.origin.1, dx.abs() > dy.abs(), t.scroll);
                         }
@@ -196,8 +225,10 @@ impl<S: 'static> Running<S> {
         // commit before the DOM handler returns (clipboard, links and keyboard focus).
         if immediate {
             self.rt.frame(0.0);
+            self.apply_frame_requests(window);
             self.clipboard.flush(&mut self.rt);
             self.sync_input(activate);
+            self.cursor.apply(window, self.rt.cursor(), self.rt.pointer().is_some());
         }
         true
     }

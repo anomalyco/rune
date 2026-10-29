@@ -43,23 +43,36 @@ export function openLink(url) {
     window.open(parsed.href, '_blank', 'noopener,noreferrer');
 }
 
-export function viewport(canvas, callback) {
+export function viewport(canvas, callback, embedded) {
     const probe = document.createElement('div');
     probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';
     document.body.append(probe);
     const update = () => {
-        const v = window.visualViewport;
-        canvas.style.width = `${v?.width ?? innerWidth}px`;
-        canvas.style.height = `${v?.height ?? innerHeight}px`;
-        canvas.style.left = `${v?.offsetLeft ?? 0}px`;
-        canvas.style.top = `${v?.offsetTop ?? 0}px`;
+        if (!embedded) {
+            const v = window.visualViewport;
+            canvas.style.width = `${v?.width ?? innerWidth}px`;
+            canvas.style.height = `${v?.height ?? innerHeight}px`;
+            canvas.style.left = `${v?.offsetLeft ?? 0}px`;
+            canvas.style.top = `${v?.offsetTop ?? 0}px`;
+        }
         const s = getComputedStyle(probe);
-        callback(JSON.stringify({ kind: 'viewport', insets: [s.paddingTop, s.paddingRight, s.paddingBottom, s.paddingLeft].map(parseFloat) }));
+        callback(JSON.stringify({ kind: 'viewport', insets: embedded ? [0, 0, 0, 0] : [s.paddingTop, s.paddingRight, s.paddingBottom, s.paddingLeft].map(parseFloat) }));
     };
     const motion = matchMedia('(prefers-reduced-motion: reduce)');
     const reduced = () => callback(JSON.stringify({ kind: 'motion', reduced: motion.matches }));
     const focus = () => callback(JSON.stringify({ kind: 'focus', focused: document.hasFocus() }));
     const visibility = () => callback(JSON.stringify({ kind: 'visibility', visible: !document.hidden }));
+    let dprMedia = null;
+    const watchDpr = () => {
+        dprMedia?.removeEventListener('change', onDpr);
+        dprMedia = matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+        dprMedia.addEventListener('change', onDpr);
+    };
+    function onDpr() {
+        watchDpr();
+        callback(JSON.stringify({ kind: 'dpr', scale: window.devicePixelRatio || 1 }));
+    }
+    watchDpr();
     window.visualViewport?.addEventListener('resize', update);
     window.visualViewport?.addEventListener('scroll', update);
     window.addEventListener('resize', update);
@@ -70,6 +83,7 @@ export function viewport(canvas, callback) {
     // Mount is called while Rust is installing the shell; enter it only after installation.
     queueMicrotask(() => { update(); reduced(); focus(); visibility(); });
     return () => {
+        dprMedia?.removeEventListener('change', onDpr);
         window.visualViewport?.removeEventListener('resize', update);
         window.visualViewport?.removeEventListener('scroll', update);
         window.removeEventListener('resize', update);

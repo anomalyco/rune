@@ -5,7 +5,13 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["dbus", "ogg-audio", "svg"]
+default = ["dbus", "embedded-fonts", "ogg-audio", "svg"]
+# On web, bundle Inter (Regular, Medium, SemiBold) and IBM Plex Mono as built-in fallback fonts.
+# Disable when AppSpec::fonts supplies the app's own fonts to omit the bytes from the wasm.
+# Native builds always bundle Inter.
+embedded-fonts = []
+# Fall back to WebGL2 on wasm32 when WebGPU is unavailable.
+webgl = ["wgpu/webgl"]
 # Headless benchmark instrumentation; ordinary builds contain no phase clocks.
 frame-profile = ["dep:procwatch", "dep:libc"]
 # Native Open, Save and folder dialogs: rfd on macOS and Windows, the XDG desktop portal over zbus on Linux.

@@ -1,6 +1,7 @@
 //! Single-threaded browser shell. GPU initialization yields to the browser; winit owns
 //! demand-driven rAF and its device-pixel-content-box ResizeObserver (with DPR fallback).
 use std::{cell::RefCell, rc::Rc, sync::{Arc, atomic::Ordering}, time::Duration};
+use wasm_bindgen::JsCast;
 use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     platform::web::{EventLoopExtWebSys, WindowAttributesExtWebSys, WindowExtWebSys}, window::{Window, WindowId}};
 use crate::{App, Runtime, Env, render::{Gpu, Renderer}, time::Instant};
@@ -32,7 +33,7 @@ pub(crate) fn run<S: 'static>(app: App<S>) -> Result<(), String> {
     let event_loop = EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let proxy = event_loop.create_proxy();
-    event_loop.spawn_app(Browser { app: Some(app), proxy, window: None, pending: Rc::default(), running: Rc::default() });
+    event_loop.spawn_app(Browser { app: Some(app), proxy, window: None, embedded: false, pending: Rc::default(), running: Rc::default() });
     Ok(())
 }
 
@@ -40,6 +41,7 @@ struct Browser<S: 'static> {
     app: Option<App<S>>,
     proxy: EventLoopProxy<Wake>,
     window: Option<Arc<Window>>,
+    embedded: bool,
     pending: Rc<RefCell<Option<Result<(Gpu, wgpu::Surface<'static>), String>>>>,
     running: Rc<RefCell<Option<Running<S>>>>,
 }
@@ -54,55 +56,146 @@ struct Running<S: 'static> {
     clock: crate::frame_clock::FrameClock,
     compositor: Option<Box<dyn crate::Compositor<S>>>,
     suspended: bool,
+    embedded: bool,
+    cursor: crate::os_cursor::OsCursor,
     _menus: crate::native_menu::Guard<S>,
     shortcuts: crate::shortcuts::Guard,
     input: input::Bridge,
     clipboard: crate::clipboard::Client,
 }
 
-fn error(message: &str) {
-    web_sys::console::error_1(&message.into());
-    if let Some(document) = web_sys::window().and_then(|w| w.document()) {
-        if let (Some(body), Ok(label)) = (document.body(), document.create_element("pre")) {
-            label.set_text_content(Some(message));
-            let _ = label.set_attribute("style", "position:fixed;inset:0;z-index:1;padding:24px;white-space:pre-wrap;background:Canvas;color:CanvasText");
-            let _ = body.append_child(&label);
+impl<S: 'static> Running<S> {
+    pub(super) fn resize_surface(&mut self, size: winit::dpi::PhysicalSize<u32>, scale: f32) {
+        self.suspended = size.width == 0 || size.height == 0;
+        if self.suspended { return; }
+        let max_dim = self.gpu.device.limits().max_texture_dimension_2d.max(1);
+        let width = size.width.min(max_dim);
+        let height = size.height.min(max_dim);
+        if self.config.width != width || self.config.height != height {
+            self.config.width = width;
+            self.config.height = height;
+            self.surface.configure(&self.gpu.device, &self.config);
+        }
+        self.rt.set_viewport((width as f32 / scale, height as f32 / scale), scale);
+    }
+
+    pub(super) fn apply_frame_requests(&mut self, window: &Window) {
+        if !self.embedded
+            && let Some(title) = self.rt.window_title.take_change()
+            && let Some(doc) = web_sys::window().and_then(|w| w.document())
+        {
+            doc.set_title(title);
+        }
+        if let Some(req) = self.rt.window_frame.take()
+            && let Some((_, h)) = req.size
+            && let Some(canvas) = window.canvas()
+        {
+            let _ = canvas.style().set_property("height", &format!("{h}px"));
         }
     }
 }
 
-async fn gpu(canvas: web_sys::HtmlCanvasElement, features: wgpu::Features) -> Result<(Gpu, wgpu::Surface<'static>), String> {
+fn error(message: &str, target: Option<&web_sys::HtmlCanvasElement>, embedded: bool) {
+    web_sys::console::error_1(&message.into());
+    if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+        if let Ok(label) = document.create_element("pre") {
+            label.set_text_content(Some(message));
+            if embedded && let Some(canvas) = target && let Some(parent) = canvas.parent_element() {
+                let _ = label.set_attribute("style", "margin:0;padding:16px;white-space:pre-wrap;background:Canvas;color:CanvasText;border:1px solid #444;border-radius:8px");
+                let _ = parent.insert_before(&label, Some(canvas));
+                return;
+            }
+            if let Some(body) = document.body() {
+                let _ = label.set_attribute("style", "position:fixed;inset:0;z-index:1;padding:24px;white-space:pre-wrap;background:Canvas;color:CanvasText");
+                let _ = body.append_child(&label);
+            }
+        }
+    }
+}
+
+async fn try_backend(canvas: &web_sys::HtmlCanvasElement, backends: wgpu::Backends, features: wgpu::Features, webgl: bool)
+    -> Result<(Gpu, wgpu::Surface<'static>), String> {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
+    descriptor.backends = backends;
     let instance = wgpu::Instance::new(descriptor);
-    let surface = instance.create_surface(wgpu::SurfaceTarget::Canvas(canvas)).map_err(|e| e.to_string())?;
+    let surface = instance.create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone())).map_err(|e| e.to_string())?;
     let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::LowPower, compatible_surface: Some(&surface),
         force_fallback_adapter: false, apply_limit_buckets: false,
-    }).await.map_err(|e| format!("WebGPU adapter unavailable (HTTPS and WebGPU are required): {e}"))?;
+    }).await.map_err(|e| e.to_string())?;
+    let required_limits = if webgl {
+        wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
+    } else {
+        wgpu::Limits::default().using_resolution(adapter.limits())
+    };
     let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("rune web"), required_features: adapter.features() & features,
-        required_limits: wgpu::Limits::default(), experimental_features: Default::default(),
+        required_limits, experimental_features: Default::default(),
         memory_hints: Default::default(), trace: Default::default(),
-    }).await.map_err(|e| format!("WebGPU device: {e}"))?;
+    }).await.map_err(|e| format!("GPU device: {e}"))?;
     Ok((Gpu { instance, adapter, device, queue }, surface))
+}
+
+async fn gpu(canvas: web_sys::HtmlCanvasElement, features: wgpu::Features) -> Result<(Gpu, wgpu::Surface<'static>), String> {
+    match try_backend(&canvas, wgpu::Backends::BROWSER_WEBGPU, features, false).await {
+        Ok(pair) => Ok(pair),
+        #[cfg(feature = "webgl")]
+        Err(webgpu_err) => try_backend(&canvas, wgpu::Backends::GL, features, true)
+            .await
+            .map_err(|gl_err| format!("WebGPU ({webgpu_err}) and WebGL2 ({gl_err}) unavailable")),
+        #[cfg(not(feature = "webgl"))]
+        Err(e) => Err(format!("WebGPU adapter unavailable (HTTPS and WebGPU are required): {e}")),
+    }
 }
 
 impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() { return; }
         let app = self.app.as_ref().expect("app before canvas");
-        let window = match event_loop.create_window(Window::default_attributes().with_title(app.spec.title)
-            .with_append(true).with_prevent_default(false)) {
+        let existing = match &app.canvas_id {
+            Some(id) => {
+                let Some(el) = web_sys::window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id(id)) else {
+                    error(&format!("canvas #{id} not found in document"), None, true);
+                    event_loop.exit();
+                    return;
+                };
+                match el.dyn_into::<web_sys::HtmlCanvasElement>() {
+                    Ok(canvas) => Some(canvas),
+                    Err(_) => {
+                        error(&format!("element #{id} is not a <canvas>"), None, true);
+                        event_loop.exit();
+                        return;
+                    }
+                }
+            }
+            None => None,
+        };
+        self.embedded = existing.is_some();
+        let mut attrs = Window::default_attributes().with_title(app.spec.title).with_prevent_default(false);
+        attrs = match &existing {
+            Some(c) => attrs.with_canvas(Some(c.clone())).with_append(false),
+            None => attrs.with_append(true),
+        };
+        let window = match event_loop.create_window(attrs) {
             Ok(window) => Arc::new(window),
-            Err(e) => { error(&e.to_string()); event_loop.exit(); return; }
+            Err(e) => { error(&e.to_string(), existing.as_ref(), self.embedded); event_loop.exit(); return; }
         };
         let canvas = window.canvas().expect("winit web canvas");
-        // No border/padding: winit's physical input and resize coordinates must match pixels.
-        canvas.style().set_css_text("position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;outline:none;user-select:none;-webkit-user-select:none");
-        if let Some(document) = web_sys::window().and_then(|w| w.document()) {
-            document.set_title(app.spec.title);
-            if let Some(body) = document.body() { body.style().set_css_text("margin:0;overflow:hidden;overscroll-behavior:none"); }
+        if !canvas.has_attribute("tabindex") {
+            let _ = canvas.set_attribute("tabindex", "0");
+        }
+        if self.embedded {
+            let touch = if app.fit_content_height { "pan-y" } else { "none" };
+            canvas.style().set_css_text(&format!(
+                "display:block;width:100%;touch-action:{touch};outline:none;user-select:none;-webkit-user-select:none"
+            ));
+        } else {
+            // No border/padding: winit's physical input and resize coordinates must match pixels.
+            canvas.style().set_css_text("position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;outline:none;user-select:none;-webkit-user-select:none");
+            if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+                document.set_title(app.spec.title);
+                if let Some(body) = document.body() { body.style().set_css_text("margin:0;overflow:hidden;overscroll-behavior:none"); }
+            }
         }
         let features = app.compositor.as_ref().map_or(wgpu::Features::empty(), |c| c.features());
         let pending = self.pending.clone();
@@ -110,7 +203,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         self.window = Some(window);
         wasm_bindgen_futures::spawn_local(async move {
             *pending.borrow_mut() = Some(gpu(canvas, features).await);
-            if proxy.send_event(Wake::Ready).is_err() { error("web event loop closed during GPU initialization"); }
+            if proxy.send_event(Wake::Ready).is_err() { error("web event loop closed during GPU initialization", None, false); }
         });
     }
 
@@ -122,24 +215,48 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 Ok(gpu) => gpu,
                 Err(e) => {
                     if let Some(app) = &self.app { *app.shared.window_error.lock().unwrap() = Some(e.clone()); }
-                    error(&e); event_loop.exit(); return;
+                    error(&e, window.canvas().as_ref(), self.embedded); event_loop.exit(); return;
                 }
             };
             let mut app = self.app.take().expect("one canvas initialization");
             let compositor = app.compositor.take();
             let (on_focus, modifier_keys, srgb_blend) = (app.on_focus, app.modifier_keys, app.srgb_blend);
-            let font_smoothing = app.font_smoothing;
+            let (font_smoothing, fit_height) = (app.font_smoothing, app.fit_content_height);
+            let tab_visits_controls = app.tab_visits_controls;
             let playground = app.playground.take();
             let (spec, state, shared) = app.into_parts(None);
-            let size = window.inner_size();
+            let mut size = window.inner_size();
             let scale = window.scale_factor() as f32;
+            if size.width == 0 {
+                if let Some(c) = window.canvas() {
+                    let cw = c.client_width().max(1) as f32;
+                    size.width = (cw * scale).round().max(1.0) as u32;
+                } else {
+                    size.width = (spec.size.0 * scale).round().max(1.0) as u32;
+                }
+            }
+            if size.height == 0 {
+                size.height = (spec.size.1 * scale).round().max(1.0) as u32;
+            }
             let dark = web_sys::window().and_then(|w| w.match_media("(prefers-color-scheme: dark)").ok().flatten()).is_some_and(|q| q.matches());
             let proxy = self.proxy.clone();
             let wake: crate::Waker = Arc::new(move || { let _ = proxy.send_event(Wake::App); });
             let mut rt = crate::tooling::runtime_for(&spec, state, (size.width as f32 / scale, size.height as f32 / scale), Env::new(dark, scale), wake.clone());
             crate::playground::attach(&mut rt, playground, &spec, None, None, true);
+            if fit_height {
+                rt.fit_height = true;
+                let w = (size.width as f32 / scale).max(1.0);
+                rt.set_viewport((w, spec.size.1), scale);
+                let h = rt.content_height();
+                rt.set_viewport((w, h), scale);
+                size.height = (h * scale).round().max(1.0) as u32;
+                if let Some(canvas) = window.canvas() {
+                    let _ = canvas.style().set_property("height", &format!("{h}px"));
+                }
+            }
             rt.on_focus = on_focus;
             rt.set_modifier_keys(modifier_keys);
+            rt.set_tab_visits_controls(tab_visits_controls);
             rt.set_srgb_blend(srgb_blend);
             rt.set_font_smoothing(font_smoothing);
             rt.set_os_drag(false);
@@ -153,20 +270,29 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             let mut clipboard = crate::clipboard::Client::default();
             clipboard.connect(wake);
             shared.visible.store(true, Ordering::Release);
-            let Some(mut config) = surface.get_default_config(&gpu.adapter, size.width.max(1), size.height.max(1)) else {
-                error("WebGPU canvas has no supported configuration"); event_loop.exit(); return;
+            let max_dim = gpu.device.limits().max_texture_dimension_2d.max(1);
+            let Some(mut config) = surface.get_default_config(&gpu.adapter, size.width.clamp(1, max_dim), size.height.clamp(1, max_dim)) else {
+                error("WebGPU canvas has no supported configuration", window.canvas().as_ref(), self.embedded); event_loop.exit(); return;
             };
             config.present_mode = wgpu::PresentMode::Fifo;
-            // Backdrop blurs and effect backdrops copy the canvas mid-frame; without it they fall back.
-            config.usage |= surface.get_capabilities(&gpu.adapter).usages & wgpu::TextureUsages::COPY_SRC;
-            let format = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format.add_srgb_suffix() };
-            if format != config.format { config.view_formats.push(format); }
+            let caps = surface.get_capabilities(&gpu.adapter);
+            config.usage |= caps.usages & wgpu::TextureUsages::COPY_SRC;
+            let wanted = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format.add_srgb_suffix() };
+            let is_gl = gpu.adapter.get_info().backend == wgpu::Backend::Gl;
+            let format = if wanted != config.format && !is_gl {
+                config.view_formats.push(wanted);
+                wanted
+            } else {
+                config.format
+            };
             surface.configure(&gpu.device, &config);
             let mut renderer = Renderer::new(&gpu.device, format);
-            renderer.set_srgb_blend(srgb_blend);
-            let input = input::Bridge::new(&window.canvas().unwrap(), Rc::downgrade(&self.running), window.clone());
+            renderer.set_srgb_blend(!format.is_srgb());
+            let cursor = crate::os_cursor::OsCursor::new(event_loop);
+            let input = input::Bridge::new(&window.canvas().unwrap(), Rc::downgrade(&self.running), window.clone(), self.embedded, fit_height);
             *self.running.borrow_mut() = Some(Running { gpu, surface, config, renderer, rt, shared, input, clipboard,
-                clock: crate::frame_clock::FrameClock::new(now), compositor, suspended: false, _menus: menus, shortcuts });
+                clock: crate::frame_clock::FrameClock::new(now), compositor, suspended: false, embedded: self.embedded,
+                cursor, _menus: menus, shortcuts });
         }
         if let Some(r) = &mut *self.running.borrow_mut() {
             r.shortcuts.drain();
@@ -177,14 +303,14 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 || requests.position.is_some() || requests.place.is_some() || requests.minimize {
                 web_sys::console::warn_1(&"Native window management is ignored on web.".into());
             }
+            let had_updates = !requests.updates.is_empty();
             for update in requests.updates { r.rt.update_if(update); }
+            if !had_updates { r.rt.invalidate(); }
             window.request_redraw();
         }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
-        // Canvas/editor focus moves are internal, and may occur while a DOM callback owns
-        // Running. Actual window focus comes from the DOM bridge, not the canvas listener.
         if matches!(event, WindowEvent::Focused(_)) { return; }
         let mut running = self.running.borrow_mut();
         let (Some(window), Some(r)) = (&self.window, &mut *running) else { return };
@@ -192,19 +318,18 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         if r.window_input(&event, window) { window.request_redraw(); return; }
         match event {
             WindowEvent::Resized(size) => {
-                r.suspended = size.width == 0 || size.height == 0;
-                if r.suspended { return; }
-                r.config.width = size.width;
-                r.config.height = size.height;
-                r.surface.configure(&r.gpu.device, &r.config);
-                let scale = window.scale_factor() as f32;
-                r.rt.set_viewport((size.width as f32 / scale, size.height as f32 / scale), scale);
+                r.resize_surface(size, window.scale_factor() as f32);
+                window.request_redraw();
+            }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                r.resize_surface(window.inner_size(), scale_factor as f32);
                 window.request_redraw();
             }
             WindowEvent::ThemeChanged(theme) => { r.rt.set_system_dark(theme == winit::window::Theme::Dark); window.request_redraw(); }
             WindowEvent::RedrawRequested if !r.suspended => {
                 let now = Instant::now();
                 let (animating, dt) = r.clock.advance(&mut r.rt, now, r.compositor.as_ref().is_some_and(|c| c.animating()));
+                r.apply_frame_requests(window);
                 r.clipboard.flush(&mut r.rt);
                 if r.rt.popup_menu().is_some() {
                     web_sys::console::warn_1(&"Native popup menus are unsupported on web.".into());
@@ -212,11 +337,11 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 }
                 r.rt.refuse_file_dialog("native file dialogs are unsupported on web");
                 r.sync_input(false);
+                r.cursor.apply(window, r.rt.cursor(), r.rt.pointer().is_some());
                 if !r.rt.surfaces.is_empty() {
-                    error("native video surfaces are unsupported on web"); event_loop.exit(); return;
+                    error("native video surfaces are unsupported on web", window.canvas().as_ref(), r.embedded); event_loop.exit(); return;
                 }
-                if r.renderer.srgb_blend() != r.rt.srgb_blend() {
-                    // `Tx::set_srgb_blend`: the canvas keeps its format and views it the other way.
+                if r.gpu.adapter.get_info().backend != wgpu::Backend::Gl && r.renderer.srgb_blend() != r.rt.srgb_blend() {
                     let format = if r.rt.srgb_blend() { r.config.format.remove_srgb_suffix() } else { r.config.format.add_srgb_suffix() };
                     if format != r.config.format && !r.config.view_formats.contains(&format) {
                         r.config.view_formats.push(format);
@@ -226,7 +351,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 }
                 let frame = match r.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
-                    _ => { error("WebGPU canvas acquisition failed"); event_loop.exit(); return; }
+                    _ => { error("WebGPU canvas acquisition failed", window.canvas().as_ref(), r.embedded); event_loop.exit(); return; }
                 };
                 let target = frame.texture.create_view(&wgpu::TextureViewDescriptor {
                     format: Some(r.renderer.format()), ..Default::default()
@@ -254,9 +379,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // A synchronous textarea callback can focus the canvas, causing winit to finish
-        // a nested focus turn here. That callback requests a redraw when it releases
-        // Running; compute deadlines in that turn rather than reborrowing it now.
+        crate::os_cursor::make_pending(event_loop);
         let Ok(running) = self.running.try_borrow() else { return };
         let Some(r) = &*running else { return };
         event_loop.set_control_flow(match r.rt.wake_deadline() {
@@ -276,7 +399,8 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
     }
 
     fn exiting(&mut self, _: &ActiveEventLoop) {
+        let embedded = self.embedded;
         if let Some(r) = self.running.borrow_mut().take() { r.shared.visible.store(false, Ordering::Release); }
-        if let Some(canvas) = self.window.as_ref().and_then(|w| w.canvas()) { canvas.remove(); }
+        if !embedded && let Some(canvas) = self.window.as_ref().and_then(|w| w.canvas()) { canvas.remove(); }
     }
 }

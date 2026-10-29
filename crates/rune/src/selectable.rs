@@ -483,7 +483,7 @@ impl<S: 'static> Runtime<S> {
 
     /// What copying the selection puts on the clipboard: the nearest [`El::selection_copy`]
     /// around it says, else the text as drawn.
-    fn copy_text(&self) -> Option<String> {
+    pub(crate) fn copy_text(&self) -> Option<String> {
         if self.selection_spans_unmounted() {
             return self.copy_virtual_text();
         }
@@ -687,7 +687,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn selection_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
         let crate::Key::Command(c @ ('c' | 'a')) = ev.key else { return false };
         let m = ev.mods;
-        let plain = m.cmd && !m.shift && !m.alt && if cfg!(target_os = "macos") { !m.ctrl } else { !m.logo };
+        let plain = m.cmd && !m.shift && !m.alt && !(m.ctrl && m.logo);
         if !plain || self.focused_input().is_some() || (c == 'c' && self.text_sel.path.is_none()) { return false; }
         let holder = self.selection_holder_end();
         if holder.is_none() { self.clear_text_selection(); }
