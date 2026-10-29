@@ -44,8 +44,6 @@ subsecond = { version = "=0.7.10", optional = true }
 dioxus-devtools = { version = "=0.7.10", optional = true }
 rune-motion = { path = "../rune-motion" }
 rune-staging = { path = "../rune-staging" }
-# Allow backend patch fixes; headless pixel equivalence guards the precompiled Metal path.
-wgpu = { version = "~30.0.1", default-features = false, features = ["std", "parking_lot", "metal", "wgsl"] }
 # Keep Wayland client-side frames/buttons without the title font's ab_glyph/ttf-parser.
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita-notitle"] }
 taffy = { version = "0.15", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "content_size"] }
@@ -68,6 +66,8 @@ resvg = { version = "0.45", default-features = false, optional = true }
 libc = { version = "0.2", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Allow backend patch fixes; headless pixel equivalence guards the precompiled Metal path.
+wgpu = { version = "~30.0.1", default-features = false, features = ["std", "parking_lot", "metal", "wgsl"] }
 pollster = "1"
 arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
 
@@ -81,7 +81,7 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
-wgpu = { version = "30", default-features = false, features = ["webgpu"] }
+wgpu = { version = "30", default-features = false, features = ["webgpu", "wgsl"] }
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "CssStyleDeclaration", "MediaQueryList", "console"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]

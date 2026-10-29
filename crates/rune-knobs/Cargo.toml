@@ -6,7 +6,7 @@ license.workspace = true
 description = "Live tuning values for Rune apps: knobs in groups, and the ⌘⇧K panel that tunes them."
 
 [dependencies]
-rune = { path = "../rune" }
+rune = { path = "../rune", default-features = false }
 
 [features]
 # The panel and its live values. Dev builds only: without it, knobs read their defaults.

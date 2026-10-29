@@ -85,7 +85,10 @@ enum Input {
 impl Input {
     fn decode(self) -> Result<Decoded, ImageError> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Input::Encoded(bytes) => decode(&bytes),
+            #[cfg(target_arch = "wasm32")]
+            Input::Encoded(_) => Err(ImageError("use decode_web on wasm32".into())),
             Input::Rgba(w, h, bytes) => mip_chain(w, h, &bytes),
             Input::Svg(bytes, px) => svg_rgba(&bytes, px).and_then(|(w, h, bytes)| mip_chain(w, h, &bytes)),
             #[cfg(not(target_arch = "wasm32"))]
@@ -114,6 +117,31 @@ impl Input {
             let why = panic.downcast_ref::<&str>().copied().or_else(|| panic.downcast_ref::<String>().map(String::as_str));
             Err(ImageError(format!("image decoder panicked: {}", why.unwrap_or("no message"))))
         })
+    }
+    #[cfg(target_arch = "wasm32")]
+    async fn decode_web(self) -> Result<Decoded, ImageError> {
+        match self {
+            Input::Encoded(bytes) if is_svg(&bytes) => {
+                svg_rgba(&bytes, 0).and_then(|(w, h, rgba)| mip_chain(w, h, &rgba))
+            }
+            Input::Encoded(bytes) => {
+                let bytes = if bytes.starts_with(b"icns") { icns_png(&bytes)? } else { &bytes };
+                let val = wasm_bindgen_futures::JsFuture::from(crate::web::platform::decode_image(bytes))
+                    .await
+                    .map_err(|e| ImageError(format!("{e:?}")))?;
+                if val.is_undefined() || val.is_null() {
+                    return Err(ImageError("browser could not decode image".into()));
+                }
+                let packed = js_sys::Uint8Array::new(&val).to_vec();
+                if packed.len() < 8 {
+                    return Err(ImageError("empty decoded image".into()));
+                }
+                let w = u32::from_le_bytes(packed[0..4].try_into().unwrap());
+                let h = u32::from_le_bytes(packed[4..8].try_into().unwrap());
+                mip_chain(w, h, &packed[8..])
+            }
+            other => other.decode(),
+        }
     }
 }
 struct Job { image: Image, input: Input }
@@ -246,7 +274,7 @@ impl ImageCache {
             let image = image.clone();
             let wake = self.wake.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                image.finish(input.decode());
+                image.finish(input.decode_web().await);
                 wake();
             });
         }
@@ -541,6 +569,7 @@ unsafe fn macos_bitmap(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn decode(bytes: &[u8]) -> Result<Decoded, ImageError> {
     if is_svg(bytes) {
         let (w, h, rgba) = svg_rgba(bytes, 0)?;

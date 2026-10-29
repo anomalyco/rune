@@ -1,0 +1,1 @@
+- Web builds omit `naga` (`wgpu/wgsl`) unless `webgl` is enabled, library crates (`rune-kit`, `rune-mermaid`, `rune-knobs`, `rune-theme-opencode`) leave `rune`'s default features off so callers can drop `embedded-fonts` and `svg`, and `ImageCache::load` on web decodes raster images off the main thread via `createImageBitmap`.

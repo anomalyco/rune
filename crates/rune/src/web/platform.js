@@ -94,3 +94,31 @@ export function viewport(canvas, callback, embedded) {
         probe.remove();
     };
 }
+
+// Decode a raster image (PNG, JPEG, WebP, GIF, AVIF) off the main thread with the browser's
+// native codec, preserving straight alpha and EXIF orientation; returns `Uint8Array` headed by
+// `[w_le32, h_le32, ...rgba8]`, or `undefined` when unavailable or unsupported.
+export async function decodeImage(bytes) {
+    if (typeof createImageBitmap !== 'function' || typeof OffscreenCanvas === 'undefined') return undefined;
+    let bmp;
+    try {
+        bmp = await createImageBitmap(new Blob([bytes]), { premultiplyAlpha: 'none', colorSpaceConversion: 'default' });
+        const { width: w, height: h } = bmp;
+        if (w <= 0 || h <= 0 || w > 8192 || h > 8192 || w * h > 64 * 1024 * 1024) return undefined;
+        const c = new OffscreenCanvas(w, h);
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        if (!ctx) return undefined;
+        ctx.drawImage(bmp, 0, 0);
+        const data = ctx.getImageData(0, 0, w, h).data;
+        const out = new Uint8Array(8 + data.byteLength);
+        const view = new DataView(out.buffer);
+        view.setUint32(0, w, true);
+        view.setUint32(4, h, true);
+        out.set(data, 8);
+        return out;
+    } catch {
+        return undefined;
+    } finally {
+        bmp?.close();
+    }
+}
