@@ -5693,7 +5693,7 @@ impl<S: 'static> Runtime<S> {
         });
         let default_ring = self.default_ring_owner();
         let mut active_cache: Option<ActiveCache> = None;
-        self.pixel_snap.begin_frame(self.t);
+        self.pixel_snap.begin_frame(self.t, [vp[2], vp[3]]);
         for paint_index in 0..n_nodes {
             let i = if tree_order { self.layer_paint_order[paint_index] } else { paint_index };
             let node_id = self.nodes[i].id;
@@ -6004,7 +6004,7 @@ impl<S: 'static> Runtime<S> {
                     && r_exact[3].max(r_exact[1]) >= clip[1].max(vp[1]) - m && r_exact[1] <= clip[3].min(vp[3]) + m
             });
             let unscaled = (sc - 1.0).abs() <= 1e-5 && anchor == anchor_to;
-            let snap_layer = if can_snap && (own_sc - 1.0).abs() > 1e-5 { self.pixel_snap.layer(n.id, r_exact, rigid, pinh.in_cache || n.vis.cache) } else { pinh.snap.layer };
+            let snap_layer = if can_snap && (own_sc - 1.0).abs() > 1e-5 { self.pixel_snap.layer(n.id, (r_exact, raw_edges.map(snap_px)), rigid, pinh.in_cache || n.vis.cache) } else { pinh.snap.layer };
             let animating = p.flags & (rune_motion::flags::ANIMATED | rune_motion::flags::ANCESTOR_ANIMATED) != 0;
             let rest = if snaps && animating { self.scene.rest(n.id) } else { None };
             let r = if !snaps {

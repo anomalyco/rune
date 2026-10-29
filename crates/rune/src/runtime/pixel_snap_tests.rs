@@ -331,8 +331,8 @@ fn a_zoom_draws_exact_while_it_moves_and_eases_onto_the_grid() {
         let asks = snapped.frame(1.0 / 120.0);
         exact.frame(1.0 / 120.0);
         let (a, b) = (edges(&fills(&snapped)), edges(&fills(&exact)));
-        // Past its first pixel of travel the zoom draws at its exact sub-pixel edges.
-        if (3..=30).contains(&k) {
+        // Once each box has moved a pixel, the zoom draws at its exact sub-pixel edges.
+        if (8..=30).contains(&k) {
             assert!(a.iter().zip(&b).all(|(a, b)| (a - b).abs() < 1.0 / 64.0), "frame {k}: {a:?} vs {b:?}");
         }
         assert!(a.iter().zip(&b).all(|(a, b)| (a - b).abs() <= 0.5 + 1.0 / 64.0), "frame {k}: {a:?} vs {b:?}");
@@ -380,6 +380,70 @@ fn a_scale_spring_glides_exact_and_lands_snapped() {
         let steps: Vec<f32> = frames.windows(2).map(|w| (w[1][k] - w[0][k]).abs()).collect();
         for w in steps[steps.len() / 3..].windows(2) {
             assert!(w[1] <= w[0] + 0.07, "edge {k}: {steps:?}");
+        }
+    }
+}
+
+/// A zoomed canvas (`zoom`, scaled about `origin`) with boxes across it, some straddling the
+/// point it scales about, and an overlay layer on top scaled about the window's centre and
+/// shifted to line up, outlining each box: art and outlines drawn by two layers anchored apart.
+#[derive(Clone, Copy)]
+struct Anchored {
+    zoom: f32,
+    snap: bool,
+    origin: [f32; 2],
+    overlay: bool,
+}
+
+const CANVAS: [f32; 4] = [20.15, 15.3, 100.3, 70.15];
+
+fn anchored(st: &Anchored, _: &mut Cx<Anchored>) -> El {
+    let spots = [(41.3, 29.45), (45.85, 31.2), (3.3, 5.45), (70.1, 48.35), (12.6, 50.9), (0.0, 0.0)];
+    let boxes = |dx: f32, dy: f32| spots.map(|(x, y)| el().size(17.3, 11.1).absolute(x + dx, y + dy).fill(Color::WHITE));
+    let [cx, cy, cw, ch] = CANVAS;
+    let mut root = el().size(160.0, 120.0).child(
+        el().size(cw, ch).absolute(cx, cy).scale(st.zoom).origin(st.origin[0], st.origin[1]).pixel_snap(st.snap).children(boxes(0.0, 0.0)),
+    );
+    if st.overlay {
+        // Scaled about (80, 60) and shifted so it maps a point the way the canvas does.
+        let pivot = [cx + cw * st.origin[0], cy + ch * st.origin[1]];
+        let off = [(pivot[0] - 80.0) * (1.0 - st.zoom), (pivot[1] - 60.0) * (1.0 - st.zoom)];
+        root = root.child(el().size(160.0, 120.0).absolute(0.0, 0.0).scale(st.zoom).offset(off[0], off[1]).pixel_snap(st.snap).children(boxes(cx, cy)));
+    }
+    root
+}
+
+fn pinch(rts: &mut [&mut Runtime<Anchored>], k: usize) {
+    if k <= 30 {
+        let z = 1.2 + 0.17 * k as f32 / 30.0;
+        for rt in rts.iter_mut() {
+            rt.update(|st, tx| {
+                st.zoom = z;
+                tx.instant();
+            });
+        }
+    }
+    for rt in rts.iter_mut() {
+        rt.frame(1.0 / 120.0);
+    }
+}
+
+#[test]
+fn outlines_on_a_layer_anchored_elsewhere_stay_on_the_art() {
+    for origin in [[0.5, 0.5], [0.0, 0.0], [0.41, 0.62], [3.0, -2.0]] {
+        let mut rt = Runtime::new(Anchored { zoom: 1.2, snap: true, origin, overlay: true }, anchored, (160.0, 120.0), Env::new(true, 2.0));
+        rt.frame(0.0);
+        for k in 1..=80 {
+            pinch(&mut [&mut rt], k);
+            let e = edges(&fills(&rt));
+            let (art, outline) = e.split_at(e.len() / 2);
+            // Each layer lands a box's exact edges on the 1/64 px quantum through its own sums,
+            // so they can sit a quantum apart, and so can how far each says the box has moved.
+            let worst = art.iter().zip(outline).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+            assert!(worst <= 1.0 / 32.0, "origin {origin:?}, frame {k}: off by {worst}: {art:?} vs {outline:?}");
+            if k == 80 {
+                assert!(e.iter().all(|&v| whole(v)), "origin {origin:?}: {e:?}");
+            }
         }
     }
 }

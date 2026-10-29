@@ -22,10 +22,15 @@
 //!
 //! Scaled layers: a node with its own scale (a zoomed canvas, a pressed button) heads a layer,
 //! and its subtree snaps against the grid where the scale puts it once the layer holds still.
-//! While the layer's drawn rect moves (a zoom, a pinch, a spring), its content draws at its
-//! exact sub-pixel edges. Once it holds still the correction to the grid eases in over
-//! [`SETTLE`], so a zoom ends with no pop; when it moves again the correction it drew at rest
-//! fades out over the first pixel the layer's edges move.
+//! While the layer moves (a zoom, a pinch, a spring), its content draws at its exact sub-pixel
+//! edges, except that each box lets go of its resting correction over the first pixel that box
+//! moves, so content at the pivot stays put. Once the layer holds still the correction to the
+//! grid eases in over [`SETTLE`], so a zoom ends with no pop. Nothing depends on where a box
+//! sits against the pivot: whether the layer moves is how far it moves points of the window,
+//! and how near its scale is to 1 is one value for the whole layer, how far the scale moves the
+//! layer's edges. Two layers that draw a point in the same place snap it alike, wherever each
+//! is anchored, except while a scale is within a pixel of 1, where each lands on the unscaled
+//! grid.
 
 use std::collections::HashMap;
 
@@ -99,6 +104,8 @@ pub(super) struct Glides {
     now: Vec<LayerSnap>,
     frame: u32,
     t: f64,
+    /// The window (device px).
+    size: [f32; 2],
     /// A layer's correction still has a visible way to go.
     easing: bool,
 }
@@ -112,19 +119,17 @@ pub(super) const SETTLE: f64 = 0.1;
 /// A node with its own scale, which heads a scaled layer.
 #[derive(Clone, Copy)]
 struct Layer {
-    /// Its drawn rect (device px, less its rigid translation) when it last moved or came to
-    /// rest, and when.
+    /// Its drawn rect (device px, less its rigid translation) last frame, and when it last
+    /// moved.
     rect: [f32; 4],
     t: f64,
     seen: u32,
     moving: bool,
     /// When it came to rest.
     since: f64,
-    /// The rest whose correction fades out, the weight it was drawn with when the layer began
-    /// to move, and its weight when the layer stopped.
-    rest: [f32; 4],
-    rest_w: f32,
-    held: f32,
+    /// Rests it has left, each its rect there and the weight its correction was drawn with
+    /// when the layer left it: the two heaviest, fading out.
+    outs: [([f32; 4], f32); 2],
 }
 
 /// A scaled layer's snapping this frame, handed down its subtree.
@@ -132,26 +137,48 @@ struct Layer {
 struct LayerSnap {
     /// Weight of the snap where the layer is now: 0 while it moves, easing to 1 once it holds.
     to: f32,
-    /// Weight of the correction it drew at its last rest, fading out.
-    from: f32,
-    /// Maps a device px coordinate now to where it was at that rest: `x * a + b`, per axis.
-    map: [f32; 4],
+    /// Weight of the snap to the unscaled grid: 1 while the scale moves the layer's edges by
+    /// no more than 1/16 px, fading out over the pixel before, so a scale settling at 1 lands
+    /// without a jump.
+    near: f32,
+    /// The corrections drawn at rests the layer left, fading out: each maps a device px
+    /// coordinate now to where it was at that rest (`x * a + b` per axis), with its weight.
+    outs: [([f32; 4], f32); 2],
     /// The layer's rigid translation (device px).
     rigid: [f32; 2],
 }
 
-const NO_LAYER: LayerSnap = LayerSnap { to: 0.0, from: 0.0, map: [1.0, 0.0, 1.0, 0.0], rigid: [0.0; 2] };
+const IDENTITY: [f32; 4] = [1.0, 0.0, 1.0, 0.0];
+
+const NO_LAYER: LayerSnap = LayerSnap { to: 0.0, near: 0.0, outs: [(IDENTITY, 0.0); 2], rigid: [0.0; 2] };
 
 /// The largest distance between matching edges.
 fn far(a: [f32; 4], b: [f32; 4]) -> f32 {
     (0..4).map(|k| (a[k] - b[k]).abs()).fold(0.0, f32::max)
 }
 
+/// The map `x * a + b` per axis that takes `from`'s edges to `to`'s.
+fn affine(from: [f32; 4], to: [f32; 4]) -> [f32; 4] {
+    let mut map = IDENTITY;
+    for a in 0..2 {
+        let (w, to_w) = (from[a + 2] - from[a], to[a + 2] - to[a]);
+        let k = if w.abs() > 1e-3 { to_w / w } else { 1.0 };
+        (map[a * 2], map[a * 2 + 1]) = (k, to[a] - from[a] * k);
+    }
+    map
+}
+
+/// How far `map` moves a point of a window `size` across at most (device px).
+fn reach(map: [f32; 4], size: [f32; 2]) -> f32 {
+    (0..2).map(|a| map[a * 2 + 1].abs().max(((map[a * 2] - 1.0) * size[a] + map[a * 2 + 1]).abs())).fold(0.0, f32::max)
+}
+
 impl Glides {
-    /// Called once before each paint pass, at animation time `t`.
-    pub(super) fn begin_frame(&mut self, t: f64) {
+    /// Called once before each paint pass, at animation time `t`, in a window `size` across
+    /// (device px).
+    pub(super) fn begin_frame(&mut self, t: f64, size: [f32; 2]) {
         self.frame = self.frame.wrapping_add(1);
-        self.t = t;
+        (self.t, self.size) = (t, size);
         self.now.clear();
         self.easing = false;
         let frame = self.frame;
@@ -169,57 +196,47 @@ impl Glides {
         self.easing
     }
 
-    /// Node `id` has its own scale and heads a layer: `r` is its drawn rect (device px edges)
-    /// and `rigid` its rigid translation (device px). `cached` content snaps without easing,
-    /// as its raster isn't redrawn while the correction eases. The returned index goes in
-    /// `Inherit::layer`.
-    pub(super) fn layer(&mut self, id: NodeId, r: [f32; 4], rigid: [f32; 2], cached: bool) -> u32 {
+    /// Node `id` has its own scale and heads a layer: `r` is its drawn rect and `unscaled` the
+    /// same rect before the scales on it and above it (device px edges), and `rigid` its rigid
+    /// translation (device px). `cached` content snaps without easing, as its raster isn't
+    /// redrawn while the correction eases. The returned index goes in `Inherit::layer`.
+    pub(super) fn layer(&mut self, id: NodeId, (r, unscaled): ([f32; 4], [f32; 4]), rigid: [f32; 2], cached: bool) -> u32 {
         let cur: [f32; 4] = core::array::from_fn(|k| r[k] - rigid[k % 2]);
-        let (t, frame) = (self.t, self.frame);
-        let l = self.layers.entry(id).or_insert(Layer {
-            rect: cur, t, seen: frame, moving: false, since: f64::NEG_INFINITY, rest: cur, rest_w: 0.0, held: 0.0,
-        });
+        let (t, frame, size) = (self.t, self.frame, self.size);
+        let l = self.layers.entry(id).or_insert(Layer { rect: cur, t, seen: frame, moving: false, since: f64::NEG_INFINITY, outs: [(cur, 0.0); 2] });
         let eased = |since: f64| {
             let x = if cached { 1.0 } else { ((t - since) / SETTLE).clamp(0.0, 1.0) as f32 };
             x * x * (3.0 - 2.0 * x)
         };
-        let (to, from);
-        if far(cur, l.rect) > 1.0 / 256.0 {
+        let to;
+        if reach(affine(l.rect, cur), size) > 1.0 / 256.0 {
             if !l.moving {
-                // It drew `f` of this rest's correction and `last` of the one before: carry the
-                // larger out.
+                // It drew `f` of this rest's correction, and `1 - f` of what the rests before it
+                // still drew.
                 let f = eased(l.since);
-                let last = l.held * (1.0 - f);
-                if f >= last {
-                    (l.rest, l.rest_w) = (l.rect, f);
-                } else {
-                    l.rest_w = last;
-                }
+                let [a, b] = l.outs.map(|(rest, w)| (rest, w * (1.0 - f)));
+                let mut outs = [(l.rect, f), a, b];
+                outs.sort_by(|x, y| y.1.total_cmp(&x.1));
+                l.outs = [outs[0], outs[1]];
                 l.moving = true;
             }
             (l.rect, l.t) = (cur, t);
             to = 0.0;
-            from = l.rest_w * (1.0 - far(cur, l.rest)).clamp(0.0, 1.0);
         } else {
             if l.moving {
                 // Still since its last paint, which already drew it here.
                 l.moving = false;
                 l.since = l.t;
-                l.held = l.rest_w * (1.0 - far(cur, l.rest)).clamp(0.0, 1.0);
             }
             to = eased(l.since);
-            from = l.held * (1.0 - to);
-        }
-        l.seen = frame;
-        let mut map = NO_LAYER.map;
-        if from > 0.0 {
-            for a in 0..2 {
-                let (w, rest_w) = (cur[a + 2] - cur[a], l.rest[a + 2] - l.rest[a]);
-                let k = if w.abs() > 1e-3 { rest_w / w } else { 1.0 };
-                (map[a * 2], map[a * 2 + 1]) = (k, l.rest[a] - cur[a] * k);
+            if to == 1.0 {
+                l.outs = [(cur, 0.0); 2];
             }
         }
-        self.now.push(LayerSnap { to, from, map, rigid });
+        l.seen = frame;
+        let outs = l.outs.map(|(rest, w)| if w > 0.0 { (affine(cur, rest), w * (1.0 - to)) } else { (IDENTITY, 0.0) });
+        let near = ((1.0 - far(r, unscaled)) / (1.0 - 1.0 / 16.0)).clamp(0.0, 1.0);
+        self.now.push(LayerSnap { to, near, outs, rigid });
         self.now.len() as u32
     }
 
@@ -237,11 +254,11 @@ impl Glides {
     /// the scales on it and above it, `motion` from [`motion`], and `rigid` as in
     /// [`Self::at_rest`]. `layer` is `Inherit::layer` and `sc` the node's scale.
     pub(super) fn snapped(&mut self, id: NodeId, motion: Option<Motion>, (r, unscaled): ([f32; 4], [f32; 4]), rigid: [f32; 2], (layer, sc): (u32, f32)) -> [f32; 4] {
-        // How far scaling moves the edges. Snapping to the unscaled grid fades in over its last
-        // pixel, so a scale settling at 1 lands on the grid without a jump.
-        let moved = far(r, unscaled);
-        let weight = ((1.0 - moved) / (1.0 - 1.0 / 16.0)).clamp(0.0, 1.0);
+        // Snapping to the unscaled grid fades in over the last pixel scaling moves the edges, so
+        // a scale settling at 1 lands on the grid without a jump. In a layer that is how far
+        // its scale moves the layer's edges, the same for every box in it.
         let l = layer.checked_sub(1).map_or(NO_LAYER, |i| self.now[i as usize]);
+        let weight = if layer == 0 { ((1.0 - far(r, unscaled)) / (1.0 - 1.0 / 16.0)).clamp(0.0, 1.0) } else { l.near };
         let mut out = r;
         if weight > 0.0 && l.to < 1.0 {
             let snapped = match motion {
@@ -260,14 +277,19 @@ impl Glides {
         let lr = l.rigid;
         let rigid: [f32; 2] = core::array::from_fn(|a| lr[a] + (rigid[a] - lr[a]) * sc);
         let mut left = 0.0f32;
-        if l.from > 0.0 && weight < 1.0 {
+        for (map, w) in l.outs {
+            if w <= 0.0 || weight >= 1.0 {
+                continue;
+            }
             let m: [f32; 4] = core::array::from_fn(|k| {
                 let a = k % 2;
-                (r[k] - lr[a]) * l.map[a * 2] + l.map[a * 2 + 1] + lr[a]
+                (r[k] - lr[a]) * map[a * 2] + map[a * 2 + 1] + lr[a]
             });
+            // Each box lets go of it over the first pixel it moves from that rest.
+            let w = w * (1.0 - weight) * (1.0 - far(r, m)).clamp(0.0, 1.0);
             let at = snap(m, [0.0; 4], rigid, |_, c| c);
             for k in 0..4 {
-                let c = (at[k] - m[k]) * l.from * (1.0 - weight);
+                let c = (at[k] - m[k]) * w;
                 out[k] += c;
                 left = left.max(c.abs());
             }
@@ -278,7 +300,7 @@ impl Glides {
             // Moving: where holding still would take it, to know if it has anywhere to go.
             _ => snap(r, [0.0; 4], rigid, |_, c| c),
         };
-        if l.to == 1.0 && l.from == 0.0 {
+        if l.to == 1.0 {
             return at;
         }
         for k in 0..4 {
