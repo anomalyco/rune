@@ -852,10 +852,12 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn a_small_app_icon_matches_the_large_one_scaled_down() {
-        let app = std::path::Path::new("/System/Applications/Calculator.app");
-        let (_, _, small) = app_icon_rgba(app, 32).unwrap();
-        let (_, _, large) = app_icon_rgba(app, 256).unwrap();
-        let mut worst = 0u32;
+        let dir = std::env::temp_dir().join(format!("rune-icon-bundle-{}", std::process::id()));
+        let app = synthetic_app(&dir);
+        let small = app_icon_rgba(&app, 32).unwrap().2;
+        let large = app_icon_rgba(&app, 256).unwrap().2;
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut total, mut count) = (0u32, 0u32);
         for y in 0..32 {
             for x in 0..32 {
                 // Straight colour is noise where the icon is nearly transparent.
@@ -863,10 +865,49 @@ mod tests {
                 for c in (if solid { 0 } else { 3 })..4 {
                     let block: u32 = (0..8).flat_map(|dy| (0..8).map(move |dx| (dx, dy)))
                         .map(|(dx, dy)| u32::from(large[((y * 8 + dy) * 256 + x * 8 + dx) * 4 + c])).sum();
-                    worst = worst.max((block / 64).abs_diff(u32::from(small[(y * 32 + x) * 4 + c])));
+                    total += (block / 64).abs_diff(u32::from(small[(y * 32 + x) * 4 + c]));
+                    count += 1;
                 }
             }
         }
-        assert!(worst < 64, "the 32 px icon differs from the 256 px one by up to {worst}");
+        // The resampling filter rings on the tile's hard edge, so compare the mean, not the worst
+        // pixel. A different rendition (a framed or shrunken tile) differs across the whole icon.
+        let mean = total as f32 / count as f32;
+        assert!(mean < 12.0, "the 32 px icon differs from the 256 px one by {mean} on average");
+    }
+
+    /// A bundle whose only icon is a generated 256 px gradient, so the test does not depend on
+    /// the icons the installed macOS ships.
+    #[cfg(target_os = "macos")]
+    fn synthetic_app(dir: &std::path::Path) -> std::path::PathBuf {
+        let app = dir.join("Synthetic.app");
+        let resources = app.join("Contents/Resources");
+        std::fs::create_dir_all(&resources).unwrap();
+        std::fs::write(app.join("Contents/Info.plist"), concat!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>"#,
+            "<key>CFBundleIdentifier</key><string>dev.rune.synthetic-icon</string>",
+            "<key>CFBundleName</key><string>Synthetic</string>",
+            "<key>CFBundlePackageType</key><string>APPL</string>",
+            "<key>CFBundleIconFile</key><string>icon</string></dict></plist>",
+        )).unwrap();
+        let mut rgba = Vec::with_capacity(256 * 256 * 4);
+        for y in 0..256u32 {
+            for x in 0..256u32 {
+                let inside = (16..240).contains(&x) && (16..240).contains(&y);
+                rgba.extend_from_slice(&[x as u8, y as u8, (x + y) as u8 / 2, if inside { 255 } else { 0 }]);
+            }
+        }
+        let mut png = Vec::new();
+        let mut encoder = png::Encoder::new(&mut png, 256, 256);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header().unwrap().write_image_data(&rgba).unwrap();
+        let mut icns = b"icns".to_vec();
+        icns.extend_from_slice(&((png.len() as u32 + 16).to_be_bytes()));
+        icns.extend_from_slice(b"ic08");
+        icns.extend_from_slice(&((png.len() as u32 + 8).to_be_bytes()));
+        icns.extend_from_slice(&png);
+        std::fs::write(resources.join("icon.icns"), icns).unwrap();
+        app
     }
 }
