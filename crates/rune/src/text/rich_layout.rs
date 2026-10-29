@@ -89,6 +89,25 @@ impl TextSystem {
         self.layout_blocks_inner(text, spans, blocks, pills, style, scale, max_width, align, false, true)
     }
 
+    /// [`layout_blocks`](Self::layout_blocks) with overflow-wrap, and out of the shared cache
+    /// when `cache` is false.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn layout_blocks_inner(
+        &mut self,
+        text: &str,
+        spans: &[Span],
+        blocks: &[crate::edit::Block],
+        pills: &[PillChip],
+        style: TextStyle,
+        scale: f32,
+        max_width: Option<f32>,
+        align: Alignment,
+        wrap_anywhere: bool,
+        cache: bool,
+    ) -> Rc<Layout<Ink>> {
+        self.layout_keyed(None, text, spans, blocks, pills, style, scale, max_width, align, wrap_anywhere, cache)
+    }
+
     /// Secure display runs must not enter the shared layout cache or leave character
     /// scratch in the reusable shaping context. Layouts contain glyphs and byte ranges,
     /// not source strings; only the mounted node owns a secure run's layout.
@@ -99,7 +118,8 @@ impl TextSystem {
         max_width: Option<f32>,
         align: Alignment,
     ) -> Rc<Layout<Ink>> {
-        self.layout_blocks_inner(&spec.content, &spec.spans, &spec.blocks, &spec.pills, spec.style, scale, max_width, align, spec.wrap_anywhere, !spec.redacted)
+        let shape = spec.shape_key(scale);
+        self.layout_keyed(shape, &spec.content, &spec.spans, &spec.blocks, &spec.pills, spec.style, scale, max_width, align, spec.wrap_anywhere, !spec.redacted)
     }
 }
 

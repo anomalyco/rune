@@ -224,8 +224,9 @@ pub(super) fn flatten(
     });
     let mut text = text;
     if input.is_none() && let Some(t) = &mut text { t.apply_case(); }
+    if let Some(t) = &mut text { t.key_shape(scale); }
     let measured = text.is_some();
-    let measure = text.as_ref().map(|t| crate::text::text_hash(&t.content, &t.spans, t.style, scale, None) ^ u64::from(t.wrap) ^ (u64::from(t.truncate || t.truncate_fade) << 1)
+    let measure = text.as_ref().map(|t| t.shape.map_or(0, |s| s.1) ^ u64::from(t.wrap) ^ (u64::from(t.truncate || t.truncate_fade) << 1)
         ^ ((t.max_lines as u64) << 2)
         ^ (u64::from(input.as_ref().is_some_and(|i| i.edit.is_revealed()) || t.secure_revealed) << 3)
         ^ (u64::from(t.wrap_anywhere) << 4)

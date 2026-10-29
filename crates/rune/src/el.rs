@@ -794,6 +794,7 @@ pub fn text(content: impl Into<String>) -> El {
         redacted: false,
         secure_revealed: false,
         wrap_anywhere: false,
+        shape: None,
     }));
     e
 }
@@ -935,9 +936,7 @@ impl El {
             input.edit.set_secure(true);
             let single = input.single_line;
             if let Some(text) = &mut self.text {
-                use zeroize::Zeroize;
-                text.content.zeroize();
-                text.content = input.edit.display().0;
+                text.replace_content(input.edit.display().0);
                 text.redacted = true;
                 if !single {
                     text.wrap_anywhere = true;
@@ -966,9 +965,7 @@ impl El {
             input.edit.set_revealed(revealed);
             input.revealed_override = Some(revealed);
             if let Some(text) = &mut self.text {
-                use zeroize::Zeroize;
-                text.content.zeroize();
-                text.content = input.edit.display().0;
+                text.replace_content(input.edit.display().0);
             }
             self.sync_input_pills();
             self.sync_input_rich();
@@ -2429,9 +2426,7 @@ impl El {
                 t.wrap = false;
                 t.wrap_anywhere = false;
                 if i.edit.is_secure() && !i.edit.is_revealed() {
-                    use zeroize::Zeroize;
-                    t.content.zeroize();
-                    t.content = i.edit.display().0;
+                    t.replace_content(i.edit.display().0);
                 }
             }
         }

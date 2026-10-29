@@ -8,7 +8,7 @@
 //! the run's variation coordinates, so one variable font serves every weight.
 
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -36,6 +36,7 @@ pub mod pixel_compare;
 mod fallback;
 mod glyph_cache;
 mod glyph_emit;
+mod hash;
 mod hidden_axes;
 mod icon;
 mod layout_cache;
@@ -52,6 +53,8 @@ mod line_metrics;
 pub use line_metrics::{last_line_fill, layout_height, stream_height_lag};
 pub(crate) use underline::underline_edges;
 pub use case::TextCase;
+pub use hash::text_hash;
+pub(crate) use hash::shape_key;
 pub use measure::{TextInk, advance, ink, measure};
 pub use rich_layout::RichLayoutOptions;
 pub(crate) use case::Source as CaseSource;
@@ -1178,22 +1181,6 @@ impl Default for TextSystem {
     }
 }
 
-pub fn text_hash(text: &str, spans: &[Span], style: TextStyle, scale: f32, width: Option<f32>) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    text.hash(&mut h);
-    for s in spans {
-        (s.start, s.end, s.mono, s.weight.map(f32::to_bits), s.size.map(f32::to_bits), s.italic).hash(&mut h);
-    }
-    (style.size.to_bits(), style.weight.to_bits(), style.family, style.line_height.to_bits(), style.tracking.to_bits())
-        .hash(&mut h);
-    (scale.to_bits(), width.map(f32::to_bits)).hash(&mut h);
-    let optical = match style.optical_size {
-        OpticalSize::Auto => (0, 0), OpticalSize::FontDefault => (1, 0), OpticalSize::Fixed(size) => (2, size.to_bits()),
-    };
-    (style.variations, style.features, optical, style.italic).hash(&mut h);
-    h.finish()
-}
-
 /// A string that several text cells each show one grapheme of (see [`El::advance_in`]), hashed
 /// once so cells and frames can look up its shaped layout without rehashing it.
 ///
@@ -1207,18 +1194,14 @@ pub struct Run {
 impl Run {
     pub fn new(text: impl Into<Rc<str>>) -> Run {
         let text = text.into();
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        text.hash(&mut h);
-        Run { hash: h.finish(), text }
+        Run { hash: hash::run_hash(&text), text }
     }
     pub fn as_str(&self) -> &str {
         &self.text
     }
     /// The run's cache key for one style and scale.
     pub(crate) fn key(&self, style: TextStyle, scale: f32) -> u64 {
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        (self.hash, text_hash("", &[], style, scale, None)).hash(&mut h);
-        h.finish()
+        hash::run_key(self.hash, style, scale)
     }
 }
 
@@ -1552,9 +1535,11 @@ impl TextSystem {
         self.generation = g.wrapping_add(1);
     }
 
+    /// `shape` is [`shape_key`] of the same text when the caller already has it.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn layout_blocks_inner(
+    pub(crate) fn layout_keyed(
         &mut self,
+        shape: Option<u64>,
         text: &str,
         spans: &[Span],
         blocks: &[crate::edit::Block],
@@ -1571,6 +1556,7 @@ impl TextSystem {
         // Each pill's label range, and the room before and after it in device px; boxes keep
         // the pill's index in their id, so ranges that fail the checks keep no chip.
         let pm = PillMetrics::new(style.size);
+        let raw_pills = pills;
         let pills: Vec<(usize, std::ops::Range<usize>, u32, u32)> = pills
             .iter()
             .enumerate()
@@ -1585,19 +1571,8 @@ impl TextSystem {
         // Shaping depends on the text, spans, style, scale, overflow-wrap and pills; line
         // breaking adds the width, alignment and block indents. A layout cached at one width
         // is re-broken at another rather than shaped again.
-        let mut shape_key = text_hash(text, spans, style, scale, None);
-        if wrap_anywhere || !pills.is_empty() {
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            (shape_key, wrap_anywhere, &pills).hash(&mut h);
-            shape_key = h.finish();
-        }
-        let key = if max_width.is_none() && align == Alignment::Start && !has_indented_blocks {
-            shape_key
-        } else {
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            (shape_key, max_width.map(f32::to_bits), align as u8, has_indented_blocks.then_some(blocks)).hash(&mut h);
-            h.finish()
-        };
+        let shape_key = shape.unwrap_or_else(|| shape_key(text, spans, style, scale, wrap_anywhere, raw_pills));
+        let key = hash::break_key(shape_key, max_width, align, has_indented_blocks.then_some(blocks));
         let g = self.generation;
         let break_lines = |layout: &mut Layout<Ink>| {
             if has_indented_blocks || !pills.is_empty() {
@@ -1959,7 +1934,7 @@ impl TextSystem {
 
     /// A live run owns its latest layout; don't retain every timer tick in the commit cache.
     pub(crate) fn layout_live(&mut self, text: &str, style: TextStyle, scale: f32) -> Rc<Layout<Ink>> {
-        let key = text_hash(text, &[], style, scale, None);
+        let key = shape_key(text, &[], style, scale, false, &[]);
         let cached = self.layouts.contains_key(&key);
         let prev_shape = self.shapes.get(&key).copied();
         let layout = self.layout_rich(text, &[], style, scale, None);

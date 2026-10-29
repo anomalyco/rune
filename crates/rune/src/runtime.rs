@@ -2787,10 +2787,7 @@ impl<S: 'static> Runtime<S> {
         let s = self.env.scale;
         let n = self.node(&path)?;
         let (mut spec, w) = (n.text.clone()?, n.target[2] - n.target[0] - n.inset[0] - n.inset[2]);
-        let text = n.input.as_ref()?.edit.display().0;
-        use zeroize::Zeroize;
-        spec.content.zeroize();
-        spec.content = text;
+        spec.replace_content(n.input.as_ref()?.edit.display().0);
         Some(self.text.layout_for_spec(&spec, s, spec.wrap.then_some(w * s), line_alignment(&spec)))
     }
 
@@ -4176,9 +4173,7 @@ impl<S: 'static> Runtime<S> {
                 input.edit.clear_preedit();
                 input.edit.conceal();
                 if was_revealed && let Some(spec) = &mut old.text {
-                    use zeroize::Zeroize;
-                    spec.content.zeroize();
-                    spec.content = input.edit.display().0;
+                    spec.replace_content(input.edit.display().0);
                     if input.edit.is_hidden_multiline() { spec.wrap = false; }
                     let scale = self.env.scale;
                     let w = (old.local.w - old.inset[0] - old.inset[2]).max(0.0);
