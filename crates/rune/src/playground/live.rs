@@ -36,6 +36,8 @@ pub(crate) struct Live<S: 'static> {
     pub(super) folded: Vec<&'static str>,
     /// [`Playground::folds`].
     pub(super) folds: Folds,
+    /// [`Playground::widths`].
+    pub(super) widths: Widths,
     /// The keyboard is on the open story's side controls, which take keys.
     pub(super) side_active: bool,
     /// The column that has the keyboard.
@@ -63,7 +65,8 @@ pub(crate) struct Live<S: 'static> {
 
 impl<S: 'static> Live<S> {
     pub(super) fn new(playground: Playground<S>, spec: &crate::AppSpec<S>, menu: bool) -> Self {
-        let Playground { pages, triggers, sides, stages, sizes, shortcut, bar, enabled: _, scenes: show, fresh, keep, variants, typing, dark: app_dark, folds, group_order } = playground;
+        let Playground { pages, triggers, sides, stages, sizes, shortcut, bar, enabled: _, scenes: show, fresh, keep, variants, typing, dark: app_dark, folds, mut widths, group_order } = playground;
+        let controls = Controls { save_widths: widths.save.take(), ..Controls::default() };
         let mut live = Live {
             owned: pages.iter().map(|_| None).collect(),
             pages,
@@ -89,11 +92,12 @@ impl<S: 'static> Live<S> {
             header: None,
             folded: Vec::new(),
             folds,
+            widths,
             side_active: false,
             region: Region::List,
             region_seen: None,
             scene: None,
-            controls: Controls::default(),
+            controls,
             dark: None,
             size: 0,
             reduce_motion: false,
@@ -118,6 +122,7 @@ impl<S: 'static> Live<S> {
         live.order = live.tree_order(&listed, &group_order);
         live.selected = live.order.first().copied().unwrap_or(0);
         if live.folds.start { live.folded = live.all_groups(); }
+        live.load_widths();
         live
     }
 
@@ -212,6 +217,7 @@ impl<S: 'static> Live<S> {
     pub(crate) fn apply(&mut self, clock: f64, real: &mut S) -> bool {
         self.now = clock;
         self.load_folds();
+        self.load_widths();
         let mut changed = false;
         for request in std::mem::take(&mut self.pending) {
             changed = true;

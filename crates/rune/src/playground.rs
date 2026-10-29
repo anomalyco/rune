@@ -41,9 +41,11 @@ mod testing;
 mod tree;
 mod variants;
 mod view;
+mod widths;
 
 pub(crate) use live::Live;
 use folds::Folds;
+use widths::Widths;
 pub use open::slug;
 pub(crate) use region::Region;
 pub(crate) use stage::call;
@@ -121,6 +123,7 @@ pub struct Playground<S: 'static> {
     typing: Option<fn(&S) -> bool>,
     dark: Option<fn(&S) -> bool>,
     folds: Folds,
+    widths: Widths,
     group_order: Vec<&'static str>,
 }
 
@@ -150,6 +153,7 @@ impl<S: 'static> Playground<S> {
             typing: None,
             dark: None,
             folds: Folds::default(),
+            widths: Widths::default(),
             group_order: Vec::new(),
         }
     }
@@ -380,19 +384,30 @@ pub(crate) enum Nav {
     SideStep(isize),
 }
 
-/// The playground's own controls' state: the story list's filter field. Its other controls
-/// change the playground through requests.
-#[derive(Default)]
+/// The playground's own controls' state: the story list's filter field and column widths. Its
+/// other controls change the playground through requests.
 pub(crate) struct Controls {
     pub(crate) filter: crate::TextEdit,
+    pub(super) sidebar_w: f32,
+    pub(super) side_w: f32,
+    pub(super) save_widths: Option<Rc<dyn Fn(f32, f32)>>,
+}
+
+impl Default for Controls {
+    fn default() -> Self {
+        Self { filter: Default::default(), sidebar_w: SIDEBAR, side_w: SIDE, save_widths: None }
+    }
 }
 
 /// Shows `playground` in `rt`'s window when this run offers it: an enabled playground, in a
 /// window unless `RUNE_PLAYGROUND=0`, or wherever `--playground` asks for it, headless included,
 /// opened at the story it names, on the variant `--variant` names.
 pub(crate) fn attach<S: 'static>(rt: &mut crate::Runtime<S>, playground: Option<Playground<S>>, spec: &crate::AppSpec<S>, open: Option<Option<String>>, variant: Option<String>, windowed: bool) {
-    let Some(playground) = playground.filter(Playground::is_enabled) else { return };
+    let Some(mut playground) = playground.filter(Playground::is_enabled) else { return };
     if open.is_none() && (!windowed || hidden_by_env()) { return; }
+    if windowed && !cfg!(test) && playground.widths.load.is_none() && playground.widths.save.is_none() {
+        playground.widths = Widths::prefs(crate::tooling::app_id().unwrap_or(spec.title));
+    }
     let mut live = Live::new(playground, spec, windowed && cfg!(target_os = "macos"));
     if let Some(name) = open {
         live.open_at(name.as_deref(), variant.as_deref()).unwrap_or_else(|e| crate::tooling::die(&e));

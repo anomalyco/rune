@@ -16,7 +16,8 @@ impl<S: 'static> Live<S> {
                 .child(root.w(viewport.0).h((viewport.1 - BAR).max(0.0)))
                 .child(self.bar_view(t));
         }
-        let stage_w = (viewport.0 - SIDEBAR - SIDE - 2.0).max(0.0);
+        let (sidebar_w, side_w) = self.widths(viewport.0);
+        let stage_w = (viewport.0 - sidebar_w - side_w - 2.0).max(0.0);
         let stage = self.stage(app, view, cx, (stage_w, viewport.1), t, dark);
         let stage = match self.region {
             // The stage has no selection to colour, so a ring inside its edge shows it has the
@@ -24,13 +25,15 @@ impl<S: 'static> Live<S> {
             Region::Stage => stage.child(el().key("playground-stage-ring").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).border(2.0, cx.focus_color())),
             _ => stage,
         };
-        let side = self.side(app, cx, t, dark, viewport.1);
+        let side = self.side(app, cx, t, dark, side_w, viewport.1);
         row().key("playground").w(viewport.0).h(viewport.1).fill(t.bg)
-            .child(self.sidebar(t, dark, cx.accent(), cx.titlebar_inset(), viewport.1))
+            .child(self.sidebar(t, dark, cx.accent(), cx.titlebar_inset(), sidebar_w, viewport.1))
             .child(el().w(1.0).h(viewport.1).fill(t.separator))
             .child(stage)
             .child(el().w(1.0).h(viewport.1).fill(t.separator))
             .child(side)
+            .child(self.sidebar_edge(sidebar_w, viewport))
+            .child(self.side_edge(side_w, viewport))
     }
 
     fn bar_view(&self, t: Theme) -> El {
@@ -53,13 +56,13 @@ impl<S: 'static> Live<S> {
     }
 
     /// Along the sidebar's foot: the stage's size, motion and appearance.
-    pub(super) fn stage_controls(&self, t: Theme, window_dark: bool) -> El {
+    pub(super) fn stage_controls(&self, t: Theme, window_dark: bool, sidebar_w: f32) -> El {
         let dark = self.dark.unwrap_or(window_dark);
         let (glyph, appearance) = if dark { (&MOON, "Dark appearance") } else { (&SUN, "Light appearance") };
         let theme = icon_button(t, "playground-theme", glyph, appearance, false, window_dark, Request::Dark(!dark));
         let reduce = icon_button(t, "playground-reduce-motion", &MOTION, "Reduce Motion", self.reduce_motion, window_dark, Request::ReduceMotion(!self.reduce_motion));
         let sizes = (!self.sizes.is_empty()).then(|| self.size_menu(t));
-        row().key("playground-stage-controls").w(SIDEBAR).h(HEADER).px(8.0).gap(2.0).center_y()
+        row().key("playground-stage-controls").w(sidebar_w).h(HEADER).px(8.0).gap(2.0).center_y()
             .children(sizes)
             .child(spacer())
             .child(reduce)
@@ -93,7 +96,7 @@ impl<S: 'static> Live<S> {
 
     /// The column right of the stage: the story's group and name, the app's controls for it,
     /// its triggers, and a key hint.
-    fn side(&self, app: &S, cx: &mut Cx<S>, t: Theme, dark: bool, height: f32) -> El {
+    fn side(&self, app: &S, cx: &mut Cx<S>, t: Theme, dark: bool, side_w: f32, height: f32) -> El {
         let i = self.selected;
         let title = (i < self.count()).then(|| {
             col().key("playground-title").px(4.0).gap(2.0)
@@ -138,7 +141,7 @@ impl<S: 'static> Live<S> {
                 }))
         });
         let hint = self.hint(variants.len(), slot.is_some() || !variants.is_empty() || !triggers.is_empty());
-        col().key("playground-side").w(SIDE).h(height).px(12.0).pt(12.0).pb(12.0).gap(12.0)
+        col().key("playground-side").w(side_w).h(height).px(12.0).pt(12.0).pb(12.0).gap(12.0)
             .children(title)
             .children(slot)
             .children(picker)
