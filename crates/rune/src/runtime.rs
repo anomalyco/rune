@@ -198,6 +198,8 @@ mod selection_api_tests;
 mod anchored_grow_tests;
 #[cfg(test)]
 mod pixel_snap_tests;
+#[cfg(test)]
+mod size_tests;
 
 /// Seconds after a commit before debug builds check a `Tx::live_only` event (`skip_view`).
 #[cfg(debug_assertions)]
@@ -396,9 +398,9 @@ enum RowLayout {
 pub(crate) struct Node {
     on_paste: Option<crate::el::PasteFn>,
     on_window_focus: Option<crate::el::WindowFocusFn>,
-    focus: crate::el::FocusSpec,
+    focus: crate::cold::Cold<crate::el::FocusSpec>,
     modal: Option<crate::el::ModalSpec>,
-    looping: Option<rune_motion::LoopSpec>,
+    looping: Option<Box<rune_motion::LoopSpec>>,
     pub id: NodeId,
     pub path: String,
     pub key: Option<String>,
@@ -408,7 +410,7 @@ pub(crate) struct Node {
     pub label: Option<String>,
     pub vis: Visual,
     live: Vec<crate::live::Bound>,
-    pub text: Option<TextSpec>,
+    pub text: Option<Box<TextSpec>>,
     pub text_layout: Option<Rc<Layout<Ink>>>,
     /// Where `text_layout` cut the text for `El::truncate` and its kin.
     pub(crate) elided: Option<Elision>,
@@ -431,12 +433,12 @@ pub(crate) struct Node {
     on_drag_end: Option<DragEndFn>,
     drop: Option<Box<crate::el::DropSpec>>,
     motion: Spring,
-    opacity_motion: Option<rune_motion::Anim>,
+    opacity_motion: Option<Box<rune_motion::Anim>>,
     lead: Option<(Spring, Spring)>,
     width_leads: bool,
     /// Inside an `El::instant_changes` element, or one itself.
     instant_changes: bool,
-    transition: Option<Transition>,
+    transition: Option<Box<Transition>>,
     /// `El::matched` id, with the element's own (not inherited) layout spring.
     matched: Option<(Rc<str>, Option<Spring>)>,
     scroll: Option<ScrollSpec>,
@@ -451,7 +453,7 @@ pub(crate) struct Node {
     /// `El::sticky_top`, `El::sticky_bottom` and `El::stuck_shadow`.
     sticky: Option<Box<crate::el::Sticky>>,
     scroll_edges: crate::el::ScrollEdges,
-    growth: Option<GrowthSpec>,
+    growth: Option<Box<GrowthSpec>>,
     streaming: bool,
     whole: bool,
     input: Option<Box<InputSpec>>,
@@ -3907,7 +3909,7 @@ impl<S: 'static> Runtime<S> {
 
         // Growth stacks: rows of a stack that existed before grow; a new stack mounts settled.
         for c in 0..nodes.len() {
-            let Some(_spec) = nodes[c].growth else { continue };
+            if nodes[c].growth.is_none() { continue }
             let cid = nodes[c].id;
             let instant = instant || nodes[c].instant_changes;
             // A reader away from the tail is anchored using measured row heights. Land those
@@ -4102,7 +4104,7 @@ impl<S: 'static> Runtime<S> {
             if !was_present || was_exiting {
                 // Presence belongs to the transition. Layout tuning must not replace
                 // the caller's enter/exit springs when this node mounts or revives.
-                let tr = nodes[i].transition.unwrap_or_else(Transition::opacity);
+                let tr = nodes[i].transition.as_deref().copied().unwrap_or_else(Transition::opacity);
                 // Revive presence first, then let this transaction own the layout retarget.
                 // Scene::insert otherwise starts its default .4 s reflow before our .25 s
                 // menu curve; the equal target makes the intended retarget a no-op.
@@ -4121,7 +4123,7 @@ impl<S: 'static> Runtime<S> {
                 mounted[i] = !was_present;
                 let rides_row = row_like || (nodes[i].in_row == RowLayout::Horizontal && nodes[i].parent.is_some_and(|p| mounted[p]));
                 let quiet_row = rides_row
-                    && nodes[i].transition.is_none_or(|t| t.insertion == rune_motion::Effect::IDENTITY)
+                    && nodes[i].transition.as_ref().is_none_or(|t| t.insertion == rune_motion::Effect::IDENTITY)
                     && !was_exiting
                     && !self.reduced_motion;
                 let mount = if enters_at_once || nodes[i].virtual_mount || quiet_row { Mount::Initial } else { Mount::Animated };
@@ -4133,7 +4135,7 @@ impl<S: 'static> Runtime<S> {
             if was_present {
                 // As in SwiftUI, a node leaves with the transition of its last render.
                 if !was_exiting {
-                    self.scene.set_transition(id, nodes[i].transition.unwrap_or_else(Transition::opacity));
+                    self.scene.set_transition(id, nodes[i].transition.as_deref().copied().unwrap_or_else(Transition::opacity));
                 }
                 let stack_row = nodes[i].parent.is_some_and(|p| nodes[p].growth.is_some()) || self.virtuals.contains_key(&nodes[i].path)
                     || (nodes[i].in_row == RowLayout::Horizontal && !self.aspect_snap.contains(&id));
@@ -4189,7 +4191,7 @@ impl<S: 'static> Runtime<S> {
                 self.set_or_anim(id, prop::RADIUS, Corners(nodes[i].vis.radius), spring_l, quiet);
                 if nodes[i].live.iter().any(|b| b.property == crate::live::Property::Opacity) {
                     // The live source owns this property, including across unrelated commits.
-                } else if !quiet && let Some(anim) = nodes[i].opacity_motion {
+                } else if !quiet && let Some(&anim) = nodes[i].opacity_motion.as_deref() {
                     // Only a new target: an anim with its own velocity would restart each commit,
                     // and would run on an element that mounted where it rests.
                     let rest = self.scene.store().target(id, prop::OPACITY).or_else(|| self.scene.get(id, prop::OPACITY));
@@ -4214,14 +4216,14 @@ impl<S: 'static> Runtime<S> {
                         let now = self.scene.get(id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
                         self.scene.set(id, prop::OFFSET, rune_motion::Vec2::new(now.x, now.y + row_jump));
                     }
-                    match nodes[i].vis.offset_motion {
+                    match nodes[i].vis.offset_motion.as_deref().copied() {
                         Some(anim) => self.scene.animate(id, prop::OFFSET, to, anim),
                         None => self.scene.animate(id, prop::OFFSET, to, spring_l),
                     }
                 }
             }
             let rest_quiet = lands || !was_present || was_exiting || self.reduced_motion;
-            nodes[i].group_fade = self.set_group_rest(id, nodes[i].vis.group_opacity, nodes[i].opacity_motion, spring_l, rest_quiet);
+            nodes[i].group_fade = self.set_group_rest(id, nodes[i].vis.group_opacity, nodes[i].opacity_motion.as_deref().copied(), spring_l, rest_quiet);
             let k = nodes[i].static_scale;
             nodes[i].scale_track = k != 1.0 || self.scene.store().has(id, P_SCALE);
             if nodes[i].scale_track {
@@ -4251,7 +4253,7 @@ impl<S: 'static> Runtime<S> {
             if !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Blur)
                 && (vis.blur != 0.0 || self.scene.store().has(id, prop::BLUR))
             {
-                if !instant && was_present && let Some(anim) = vis.blur_motion {
+                if !instant && was_present && let Some(&anim) = vis.blur_motion.as_deref() {
                     self.scene.animate(id, prop::BLUR, vis.blur, anim);
                 } else { self.set_or_anim(id, prop::BLUR, vis.blur, spring_l, instant || !was_present); }
             }
@@ -4297,7 +4299,7 @@ impl<S: 'static> Runtime<S> {
                     break;
                 }
             }
-            if let Some(g) = vis.gradient {
+            if let Some(&g) = vis.gradient.as_deref() {
                 self.set_or_anim(id, P_GRADIENT[0], g[0], spring_c, instant);
                 self.set_or_anim(id, P_GRADIENT[1], g[1], spring_c, instant);
             }
@@ -4443,7 +4445,7 @@ impl<S: 'static> Runtime<S> {
                 if tx.settle || (instant && !self.is_exiting(old.id)) || drew_nothing.get(oi).copied().unwrap_or(false) {
                     self.scene.unmount(old.id);
                 } else {
-                    if let Some(t) = old_parent_id.and_then(|pid| self.node_index.get(&pid)).and_then(|&p| nodes[p].vis.child_exit) {
+                    if let Some(t) = old_parent_id.and_then(|pid| self.node_index.get(&pid)).and_then(|&p| nodes[p].vis.child_exit.as_deref().copied()) {
                         self.scene.set_transition(old.id, t);
                     }
                     self.scene.remove(old.id);
@@ -4536,7 +4538,7 @@ impl<S: 'static> Runtime<S> {
         self.static_scales.retain(|id, _| self.scene.contains(*id));
         for n in &self.nodes {
             let t = if time_scaled { self.scene.store().node_time(n.id) } else { self.t };
-            if let Some(spec) = n.looping {
+            if let Some(&spec) = n.looping.as_deref() {
                 let start = self.loop_start(n.id, t);
                 let track = self.loops.entry(n.id).and_modify(|l| { l.retime(spec, t); l.enabled(true, t); })
                     .or_insert_with(|| rune_motion::LoopTrack::new(spec, start));
@@ -4593,7 +4595,7 @@ impl<S: 'static> Runtime<S> {
         let mut moving = false;
         for (cid, stack) in self.stacks.iter_mut() {
             let Some(&ci) = self.node_index.get(cid) else { continue };
-            let Some(spec) = self.nodes[ci].growth else { continue };
+            let Some(spec) = self.nodes[ci].growth.as_deref().copied() else { continue };
             let n_rows = stack.order.len();
             let mut st_growing = !stack.pending_heights.is_empty();
             let mut st_moving = st_growing;
@@ -4643,7 +4645,7 @@ impl<S: 'static> Runtime<S> {
     /// Presented content extent of node `c` if it is a growth stack (points).
     fn stack_extent(&self, c: usize) -> Option<f64> {
         let n = &self.nodes[c];
-        n.growth?;
+        n.growth.as_ref()?;
         let stack = self.stacks.get(&n.id)?;
         let mut count = 0usize;
         let rows: f64 = stack.order.iter().filter_map(|id| self.grows.get(id)).map(|g| { count += 1; f64::from(g.h) }).sum();
@@ -5290,7 +5292,7 @@ impl<S: 'static> Runtime<S> {
                 .take_while(|&p| p != s)
                 .find_map(|r| {
                     let c = self.nodes[r].parent?;
-                    self.nodes[c].growth?;
+                    self.nodes[c].growth.as_ref()?;
                     let stack = self.stacks.get(&self.nodes[c].id)?;
                     let rid = self.nodes[r].id;
                     let mut count = 0usize;
@@ -5536,7 +5538,7 @@ impl<S: 'static> Runtime<S> {
             let Some(p) = self.scene.presented(n.id) else { continue };
             let mut opacity = p.opacity;
             opacity *= self.group_factor(n, inherited_group);
-            if fades(n.looping) && let Some(track) = self.loops.get(&n.id) {
+            if fades(n.looping.as_deref().copied()) && let Some(track) = self.loops.get(&n.id) {
                 opacity *= track.sample_at(self.scene.store().node_time(n.id), self.clock, self.reduced_motion);
             }
             self.dissolve_scratch[parent] |= opacity > 0.001 && opacity < 1.0;
@@ -5644,7 +5646,7 @@ impl<S: 'static> Runtime<S> {
         self.row_mask.resize(n_nodes, -1.0);
         for (cid, stack) in &self.stacks {
             let Some(&ci) = self.node_index.get(cid) else { continue };
-            let Some(spec) = self.nodes[ci].growth else { continue };
+            let Some(spec) = self.nodes[ci].growth.as_deref().copied() else { continue };
             let origin = self.virtuals.get(&self.nodes[ci].path).map_or(0.0, |v| v.before);
             self.row_dy[ci] = grid(origin, s);
             let mut y = stack.pad_top - origin;
@@ -5677,7 +5679,7 @@ impl<S: 'static> Runtime<S> {
         let tree_order = ((flying || self.has_sticky || self.has_raise) && !self.layer_paint_order.is_empty()) || self.layer_paint_order.windows(2).any(|pair| {
             let n = &self.nodes[pair[0]];
             self.nodes[pair[1]].parent == Some(pair[0]) && ((self.has_dissolve && self.dissolve_scratch[pair[0]]) || n.vis.cache || n.vis.clip_radius.is_some() || n.vis.group_opacity.is_some() || n.group_fade
-                || fades(n.looping)
+                || fades(n.looping.as_deref().copied())
                 || self.scene.presented(n.id).is_some_and(|p| (p.opacity > 0.0 && p.opacity < 1.0) || p.blur > 0.0 || p.transform.rotate.abs() > 1e-6))
         });
         let default_ring = self.default_ring_owner();
@@ -5863,7 +5865,7 @@ impl<S: 'static> Runtime<S> {
             // Loops and reveals run on the node's clock (`El::time_scale`).
             let lnow = self.scene.store().node_time(n.id);
             let loop_value = self.loops.get(&n.id).map(|l| l.sample_at(lnow, self.clock, self.reduced_motion));
-            if fades(n.looping) && let Some(v) = loop_value {
+            if fades(n.looping.as_deref().copied()) && let Some(v) = loop_value {
                 own *= v;
             }
             let effective_opacity = (own * pinh.opacity).clamp(0.0, 1.0);
@@ -5878,7 +5880,7 @@ impl<S: 'static> Runtime<S> {
             let mut rounded = pinh.rounded;
             let press_k = if n.press_scale.is_some() { self.scene.get(n.id, P_PRESS_SCALE).unwrap_or(1.0) } else { 1.0 };
             let sequence = self.loops.get(&n.id)
-                .filter(|_| matches!(n.looping.map(|l| l.kind), Some(rune_motion::LoopKind::Sequence(_))));
+                .filter(|_| matches!(n.looping.as_ref().map(|l| l.kind), Some(rune_motion::LoopKind::Sequence(_))));
             let static_k = if n.scale_track { self.scene.get(n.id, P_SCALE).unwrap_or(n.static_scale) } else { n.static_scale };
             let own_sc = p.transform.scale.x * press_k * static_k
                 * sequence.and_then(|l| l.pose(lnow, self.reduced_motion)).map_or(1.0, |p| p.scale);
@@ -6074,7 +6076,7 @@ impl<S: 'static> Runtime<S> {
             };
 
             // A slide may sweep wholly outside its clip; judge visibility at its resting place.
-            let home = match n.looping.map(|l| l.kind) {
+            let home = match n.looping.as_ref().map(|l| l.kind) {
                 Some(rune_motion::LoopKind::Slide { .. } | rune_motion::LoopKind::SlideEased { .. }) => {
                     let o = self.scene.get(n.id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
                     [r[0] - o.x * s, r[1] - o.y * s, r[2] - o.x * s, r[3] - o.y * s]
@@ -6532,7 +6534,7 @@ impl<S: 'static> Runtime<S> {
                             fade: crate::render::pack_fade(fade, clip, clip),
                         });
                     }
-                    let g = n.vis.gradient.unwrap_or_default();
+                    let g = n.vis.gradient.as_deref().copied().unwrap_or_default();
                     let top = premul(self.color(n.id, P_GRADIENT[0], g[0]), o, srgb);
                     let bottom = premul(self.color(n.id, P_GRADIENT[1], g[1]), o, srgb);
                     if top[3] > 0.0005 || bottom[3] > 0.0005 {
@@ -6733,7 +6735,7 @@ impl<S: 'static> Runtime<S> {
                 }
                 if let Some((ic, c)) = n.vis.icon {
                     let color = text_tint(self.color(n.id, P_TEXT, c));
-                    let looped = if matches!(n.looping.map(|l| l.kind), Some(rune_motion::LoopKind::Rotation)) { loop_value.unwrap_or(0.0) } else { 0.0 };
+                    let looped = if matches!(n.looping.as_ref().map(|l| l.kind), Some(rune_motion::LoopKind::Rotation)) { loop_value.unwrap_or(0.0) } else { 0.0 };
                     let turn = looped + if self.scene.store().has(n.id, P_ICON_TURN) {
                         self.scene.get(n.id, P_ICON_TURN).unwrap_or(n.vis.icon_turn)
                     } else { n.vis.icon_turn };
@@ -7427,7 +7429,7 @@ impl<S: 'static> Runtime<S> {
                     let group = up(self.nodes[gi].parent)
                         .map(|pi| &self.nodes[pi].vis)
                         .find(|v| v.hover.a > 0.0 || v.hover_group);
-                    if group.and_then(|v| v.hover_motion).is_some_and(|(e, x)| [e, x].iter().any(|a| matches!(a.curve, rune_motion::Curve::Instant))) {
+                    if group.and_then(|v| v.hover_motion.as_deref().copied()).is_some_and(|(e, x)| [e, x].iter().any(|a| matches!(a.curve, rune_motion::Curve::Instant))) {
                         live_intent |= 4 | 16;
                     }
                 }
@@ -7458,7 +7460,7 @@ impl<S: 'static> Runtime<S> {
                     trace_name: n.trace_name,
                     trace_namespace: n.trace_namespace,
                     loop_phase: self.loops.get(&n.id).map(|l| {
-                        if self.reduced_motion && !matches!(n.looping.map(|s| s.kind), Some(rune_motion::LoopKind::Sequence(_))) { 0.0 }
+                        if self.reduced_motion && !matches!(n.looping.as_ref().map(|s| s.kind), Some(rune_motion::LoopKind::Sequence(_))) { 0.0 }
                         else { l.phase(self.scene.store().node_time(n.id)) }
                     }),
                     focusable: self.can_focus(i),

@@ -134,7 +134,7 @@ fn walk_row_el<'a>(
         && matches!(el.style.flex_direction, FlexDirection::Row | FlexDirection::RowReverse);
     let mut had_child_text = false;
     if !inert && el.input.is_none() && let Some(t) = &el.text && t.selectable && !t.redacted {
-        let mut spec = t.clone();
+        let mut spec = TextSpec::clone(t);
         spec.apply_case();
         texts.push(OffscreenText {
             list_path: list_path.to_owned(),

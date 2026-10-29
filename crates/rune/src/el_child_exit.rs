@@ -10,7 +10,7 @@ impl El {
     /// only the commit that removes it knows. Set it on each build with that build's direction.
     /// Children still present, and those already leaving, keep their own transitions.
     pub fn child_exit(mut self, t: Transition) -> Self {
-        self.vis.child_exit = Some(t);
+        self.vis.child_exit = Some(Box::new(t));
         self
     }
 }

@@ -289,8 +289,8 @@ impl<S: 'static> Runtime<S> {
         let on = allowed && (inside || held) && captured.is_none_or(|p| holds(&n.path, p));
         // Like a native sidebar or menu: the highlight lands with the pointer and fades
         // briefly as it leaves.
-        let anim = match n.vis.hover_motion {
-            Some((enter, exit)) => if on { enter } else { exit },
+        let anim = match n.vis.hover_motion.as_deref() {
+            Some(&(enter, exit)) => if on { enter } else { exit },
             None if on => Anim::INSTANT,
             None => rune_motion::Curve::tween(0.1, rune_motion::Easing::EASE_OUT).into(),
         };

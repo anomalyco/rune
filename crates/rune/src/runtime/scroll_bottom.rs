@@ -211,7 +211,7 @@ impl<S: 'static> Runtime<S> {
             return false;
         }
         let Some(c) = self.scroll_content(i) else { return false };
-        let stack = self.nodes[c].growth.and_then(|spec| Some((spec, self.stacks.get_mut(&self.nodes[c].id)?)));
+        let stack = self.nodes[c].growth.as_deref().copied().and_then(|spec| Some((spec, self.stacks.get_mut(&self.nodes[c].id)?)));
         let view = self.scene.presented(id).map(|p| p.rect.edges());
         let (Some((spec, stack)), Some(view), false) = (stack, view, self.reduced_motion) else {
             if let Some(st) = self.scrolls.get_mut(&id) { st.slack = Slack::landed(st.slack.window); }

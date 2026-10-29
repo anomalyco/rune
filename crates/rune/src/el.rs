@@ -108,7 +108,7 @@ pub(crate) struct A11y {
     pub secure: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct FocusSpec {
     pub physical: Option<crate::physical_input::Handler>,
     pub enabled: bool,
@@ -133,6 +133,28 @@ pub(crate) struct FocusSpec {
     pub key_up: Option<InputKeyFn>,
     /// `El::on_key`: keys while this element or one inside it has focus.
     pub key: Option<InputKeyFn>,
+}
+
+impl crate::cold::Empty for FocusSpec {
+    const EMPTY: &'static Self = &FocusSpec {
+        physical: None,
+        enabled: false,
+        order: 0,
+        group: false,
+        selected: false,
+        reveal_selected: false,
+        preserve_on_press: crate::runtime::selectable::OnPress { focus: false, selection: false },
+        ring: None,
+        ring_off: false,
+        default: false,
+        highlight: None,
+        follows: false,
+        return_to: None,
+        step: None,
+        step_limit: None,
+        key_up: None,
+        key: None,
+    };
 }
 
 #[derive(Clone)]
@@ -567,7 +589,7 @@ pub struct Visual {
     pub shadows: Vec<Shadow>,
     pub opacity: f32,
     pub blur: f32,
-    pub blur_motion: Option<Anim>,
+    pub blur_motion: Option<Box<Anim>>,
     /// Static alpha of this element's own paint; never inherited or isolated.
     pub paint_alpha: f32,
     pub blend: crate::render::Blend,
@@ -581,9 +603,9 @@ pub struct Visual {
     pub(crate) clip_corners: Option<[f32; 4]>,
     pub icon: Option<(&'static Icon, Color)>,
     /// Vertical linear gradient (top, bottom) painted over the fill, under hover/press overlays.
-    pub gradient: Option<[Color; 2]>,
+    pub gradient: Option<Box<[Color; 2]>>,
     /// Radial or angled linear gradient painted over the fill, under hover/press overlays.
-    pub(crate) radial: Option<RadialGradient>,
+    pub(crate) radial: Option<Box<RadialGradient>>,
     pub outline: Option<Outline>,
     /// Vector strokes and fills in the element's own points, over the fill.
     pub shape: Option<Rc<Shape>>,
@@ -601,9 +623,9 @@ pub struct Visual {
     /// element with a hover colour is a group too.
     pub hover_group: bool,
     /// The hover track's enter and exit curves (default: snappy spring both ways).
-    pub hover_motion: Option<(Anim, Anim)>,
+    pub hover_motion: Option<Rc<(Anim, Anim)>>,
     /// Hover curves for this element and the hover tracks below it without their own.
-    pub(crate) hover_within: Option<(Anim, Anim)>,
+    pub(crate) hover_within: Option<Rc<(Anim, Anim)>>,
     /// Opacity factor (rest, hovered) following the nearest ancestor group's hover.
     pub group_opacity: Option<[f32; 2]>,
     /// Text or icon colour while the nearest ancestor group is hovered.
@@ -616,7 +638,7 @@ pub struct Visual {
     pub(crate) cache_key: Option<u64>,
     /// `El::offset`: a visual shift in points, and the curve it moves on.
     pub(crate) offset: [f32; 2],
-    pub(crate) offset_motion: Option<Anim>,
+    pub(crate) offset_motion: Option<Box<Anim>>,
     /// `El::raise`: paints and takes input above the rest of the window.
     pub(crate) raise: bool,
     /// `El::pixel_snap(false)`: this subtree paints at its exact fractional rects.
@@ -630,7 +652,7 @@ pub struct Visual {
     /// The curve `El::rotate` changes on.
     pub(crate) rotate_motion: Option<Box<Anim>>,
     /// `El::child_exit`: how children removed in a commit leave, in place of their own.
-    pub(crate) child_exit: Option<Transition>,
+    pub(crate) child_exit: Option<Box<Transition>>,
     /// `El::ride_trailing`: x holds against the parent's trailing edge while its width moves.
     pub(crate) ride_trailing: bool,
 }
@@ -792,9 +814,9 @@ pub(crate) type WindowFocusFn = Rc<dyn Fn(crate::states::States<'_>, bool, &mut 
 pub struct El {
     pub(crate) on_paste: Option<PasteFn>,
     pub(crate) on_window_focus: Option<WindowFocusFn>,
-    pub(crate) focus: FocusSpec,
+    pub(crate) focus: crate::cold::Cold<FocusSpec>,
     pub(crate) modal: Option<ModalSpec>,
-    pub(crate) looping: Option<rune_motion::LoopSpec>,
+    pub(crate) looping: Option<Box<rune_motion::LoopSpec>>,
     pub(crate) key: Option<String>,
     pub(crate) trace_name: Option<&'static str>,
     pub(crate) trace_namespace: Option<(&'static str, &'static str)>,
@@ -807,7 +829,7 @@ pub struct El {
     pub(crate) style: Style,
     pub(crate) vis: Visual,
     pub(crate) live: Vec<crate::live::Bound>,
-    pub(crate) text: Option<TextSpec>,
+    pub(crate) text: Option<Box<TextSpec>>,
     pub(crate) children: Vec<El>,
     /// Children a [`memo`](crate::memo) shares with its cache, before `children`. Copied in
     /// by [`El::expand_memo`] only when the element mounts.
@@ -830,12 +852,12 @@ pub struct El {
     pub(crate) on_drag_end: Option<DragEndFn>,
     pub(crate) drop: Option<Box<DropSpec>>,
     pub(crate) motion: Option<Spring>,
-    pub(crate) opacity_motion: Option<Anim>,
+    pub(crate) opacity_motion: Option<Box<Anim>>,
     pub(crate) lead: Option<(Spring, Spring)>,
     pub(crate) width_leads: bool,
     pub(crate) animate_layout: bool,
     pub(crate) instant_changes: bool,
-    pub(crate) transition: Option<Transition>,
+    pub(crate) transition: Option<Box<Transition>>,
     pub(crate) matched: Option<Rc<str>>,
     pub(crate) scroll: Option<ScrollSpec>,
     pub(crate) scroll_axes: ScrollAxes,
@@ -848,7 +870,7 @@ pub struct El {
     pub(crate) on_scroll_offset: Option<ScrollOffsetFn>,
     pub(crate) sticky: Option<Box<Sticky>>,
     pub(crate) scroll_edges: ScrollEdges,
-    pub(crate) growth: Option<GrowthSpec>,
+    pub(crate) growth: Option<Box<GrowthSpec>>,
     pub(crate) virtual_estimate: Option<f32>,
     /// Rows `El::virtual_rows` builds at layout time, in place of `children`.
     pub(crate) virtual_rows: Option<Rc<crate::virtual_rows::RowSource>>,
@@ -885,7 +907,7 @@ fn base(dir: FlexDirection) -> El {
     El {
         on_paste: None,
         on_window_focus: None,
-        focus: FocusSpec::default(),
+        focus: Default::default(),
         modal: None,
         looping: None,
         key: None,
@@ -992,7 +1014,7 @@ pub fn spacer() -> El {
 pub fn text(content: impl Into<String>) -> El {
     let mut e = base(FlexDirection::Row);
     e.role = "text";
-    e.text = Some(TextSpec {
+    e.text = Some(Box::new(TextSpec {
         content: content.into(),
         style: crate::tok::type_::BODY,
         color: Color::WHITE,
@@ -1027,7 +1049,7 @@ pub fn text(content: impl Into<String>) -> El {
         redacted: false,
         secure_revealed: false,
         wrap_anywhere: false,
-    });
+    }));
     e
 }
 
@@ -1471,7 +1493,7 @@ impl El {
 
     /// A renderer-owned periodic or finite presentation track, on the shared clock.
     pub fn looping(mut self, spec: rune_motion::LoopSpec) -> Self {
-        self.looping = Some(spec);
+        self.looping = Some(Box::new(spec));
         self
     }
     /// Window keyed rows of a growth stack directly inside a vertical scroll viewport.
@@ -2072,7 +2094,7 @@ impl El {
     }
     /// A vertical gradient from `top` to `bottom` painted over the fill (CSS `linear-gradient(180deg, ..)`).
     pub fn gradient(mut self, top: Color, bottom: Color) -> Self {
-        self.vis.gradient = Some([top, bottom]);
+        self.vis.gradient = Some(Box::new([top, bottom]));
         self
     }
     /// A radial gradient painted over the fill and clipped to the element's rounded corners.
@@ -2097,7 +2119,8 @@ impl El {
             && ry > 0.0;
         self.vis.radial = valid
             .then(|| normalize_gradient_stops(GradientGeometry::Radial { center, radius: [rx, ry] }, stops.as_ref()))
-            .flatten();
+            .flatten()
+            .map(Box::new);
         self
     }
     /// A linear gradient at `angle` radians (CSS convention: `0.0` is bottom-to-top, `PI / 2` is
@@ -2107,7 +2130,8 @@ impl El {
         self.vis.radial = angle
             .is_finite()
             .then(|| normalize_gradient_stops(GradientGeometry::Linear { angle }, stops.as_ref()))
-            .flatten();
+            .flatten()
+            .map(Box::new);
         self
     }
     /// Paints `shape` (strokes and fills in this element's points, origin top-left) over the
@@ -2150,7 +2174,7 @@ impl El {
     }
     /// Override the blur target's curve. Ordinary changes use the element's motion spring.
     pub fn blur_motion(mut self, anim: impl Into<Anim>) -> Self {
-        self.vis.blur_motion = Some(anim.into());
+        self.vis.blur_motion = Some(Box::new(anim.into()));
         self
     }
     /// Dim each paint leaf in the currently built subtree, independently. Unlike `opacity`,
@@ -2313,7 +2337,7 @@ impl El {
     /// Curves for this element's hover track: `enter` when the pointer arrives, `exit` when it
     /// leaves (e.g. a delayed reveal).
     pub fn hover_motion(mut self, enter: impl Into<Anim>, exit: impl Into<Anim>) -> Self {
-        self.vis.hover_motion = Some((enter.into(), exit.into()));
+        self.vis.hover_motion = Some(Rc::new((enter.into(), exit.into())));
         self
     }
     /// Default hover curves for this element and everything below it: any hover track (an
@@ -2325,12 +2349,12 @@ impl El {
     /// and fades out over 0.1 s. Rows highlighted by `focus_highlight` (menu items, select
     /// options) are never faded.
     pub fn hover_motion_within(mut self, enter: impl Into<Anim>, exit: impl Into<Anim>) -> Self {
-        self.vis.hover_within = Some((enter.into(), exit.into()));
+        self.vis.hover_within = Some(Rc::new((enter.into(), exit.into())));
         self
     }
     /// The pair set by [`Self::hover_motion_within`].
     pub fn hover_within_curves(&self) -> Option<(Anim, Anim)> {
-        self.vis.hover_within
+        self.vis.hover_within.as_deref().copied()
     }
     /// Opacity factor `rest` normally and `hovered` while the nearest ancestor group is hovered.
     pub fn group_opacity(mut self, rest: f32, hovered: f32) -> Self {
@@ -2916,7 +2940,7 @@ impl El {
     /// Make this column a growth stack (see [`GrowthSpec`]). Required alongside
     /// [`El::virtualize`] on the same element.
     pub fn growth(mut self, spec: GrowthSpec) -> Self {
-        self.growth = Some(spec);
+        self.growth = Some(Box::new(spec));
         self
     }
     /// A growth-stack row that is streaming: slows near its target and reveals through the
@@ -3002,7 +3026,7 @@ impl El {
     }
     /// The curve [`Self::offset`] changes on.
     pub fn offset_motion(mut self, anim: impl Into<Anim>) -> Self {
-        self.vis.offset_motion = Some(anim.into());
+        self.vis.offset_motion = Some(Box::new(anim.into()));
         self
     }
     /// Paint this element and its subtree above everything else in the window, and give it
@@ -3018,7 +3042,7 @@ impl El {
     /// Override this element's opacity curve, including an optional entrance delay.
     /// The first paint and explicit instant/settle transactions still land immediately.
     pub fn opacity_motion(mut self, anim: impl Into<Anim>) -> Self {
-        self.opacity_motion = Some(anim.into());
+        self.opacity_motion = Some(Box::new(anim.into()));
         self
     }
     /// When this element travels, its leading edge moves on `lead` and its trailing edge on `trail`
@@ -3060,7 +3084,7 @@ impl El {
     /// open unless they set one, so `.transition(Transition::offset(0.0, 8.0).combined(Transition::opacity()))`
     /// on a row also slides and fades it in. Rows a virtual list remounts on scroll never replay it.
     pub fn transition(mut self, t: Transition) -> Self {
-        self.transition = Some(t);
+        self.transition = Some(Box::new(t));
         self
     }
     /// Shared-element motion (SwiftUI `matchedGeometryEffect`, Motion `layoutId`). When an

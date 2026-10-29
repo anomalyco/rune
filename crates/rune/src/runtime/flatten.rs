@@ -187,11 +187,11 @@ pub(super) fn flatten(
     if vis.hover_within.is_none() {
         vis.hover_within = above.as_ref()
             .and_then(|a| nodes.iter().position(|n| n.key.as_ref() == Some(&a.key)))
-            .and_then(|j| nodes[j].vis.hover_within)
-            .or_else(|| parent.and_then(|p| nodes[p].vis.hover_within));
+            .and_then(|j| nodes[j].vis.hover_within.clone())
+            .or_else(|| parent.and_then(|p| nodes[p].vis.hover_within.clone()));
     }
     if vis.hover_motion.is_none() {
-        vis.hover_motion = vis.hover_within;
+        vis.hover_motion = vis.hover_within.clone();
     }
     if let Some(t) = &text && t.live.is_some() {
         assert!(input.is_none() && !t.redacted && !t.wrap && t.spans.is_empty() && t.reveal < 0.0 && !t.truncate,
