@@ -826,6 +826,15 @@ fn native_trace_does_not_select_virtual_rendering() {
 }
 
 #[test]
+fn a_script_alone_replays_headless_unless_native() {
+    // A window never replays a script, so `--script` alone renders offscreen like `--frames`.
+    let args = |v: &[&str]| Args::parse_from(v.iter().map(|s| (*s).into()).collect());
+    assert!(args(&["--script", "s.json"]).headless());
+    assert!(!args(&["--native", "--script", "s.json"]).headless());
+    assert!(!args(&["--theme", "light"]).headless());
+}
+
+#[test]
 fn tree_and_trace_serialize_effects_and_remove_channels() {
     fn view(show: &bool, _: &mut Cx<bool>) -> El {
         crate::el().key("root").size(100.0, 100.0).children(show.then(||

@@ -156,7 +156,7 @@ pub(crate) fn runtime_for<S: 'static>(spec: &AppSpec<S>, state: S, size: (f32, f
 mod args;
 #[path = "tooling/crop.rs"]
 mod crop;
-pub use args::Args;
+pub use args::{Args, is_headless};
 pub(crate) use args::*;
 
 /// Opens the app's window and quits when it closes (`App` for other lifetimes), or renders

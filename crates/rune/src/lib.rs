@@ -230,5 +230,5 @@ pub use recorder::{FakeMicrophone, Level, MicPermission, RecordFormat, Recorder,
 pub use text::{FontSmoothing, Icon, Link, LinkPaint, Span, TextCase, TextHighlight};
 pub use theme::Theme;
 pub use tok::{Family, OpticalSize, TextStyle};
-pub use tooling::{AppSpec, Chrome, extra_args, run, run_windows, run_windows_with, run_windows_with_args, run_with, set_app_id,
+pub use tooling::{AppSpec, Chrome, extra_args, is_headless, run, run_windows, run_windows_with, run_windows_with_args, run_with, set_app_id,
     try_run_windows_with, try_run_windows_with_args};
