@@ -40,6 +40,9 @@ mod shell_requests;
 mod keys;
 pub(crate) use keys::{key_base, map_key, map_mods};
 mod event_loop;
+mod file_drop;
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+mod float_on_open;
 #[cfg(not(target_arch = "wasm32"))]
 pub use event_loop::run;
 pub(crate) use event_loop::run_windows;
@@ -401,37 +404,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
     }
 }
 
-/// A file drag from another app over the window. winit reports one event per file; the host
-/// gathers them and hands the runtime one drag and one drop (`Host::flush_files`).
-#[derive(Default)]
-struct FileDrop {
-    /// What winit reported since the last pass, in order.
-    steps: Vec<FileStep>,
-    /// Samples the pointer while the drag is over the window, and where it last was.
-    pointer: Option<crate::drop_pointer::DropPointer>,
-    at: Option<(f32, f32)>,
-}
-
-enum FileStep {
-    Enter(Vec<std::path::PathBuf>),
-    Drop(Vec<std::path::PathBuf>),
-    Leave,
-}
-
-impl FileDrop {
-    /// One file of a drag that entered (`drop` false) or dropped: the run of files it belongs
-    /// to grows, or a new run starts.
-    fn file(&mut self, path: std::path::PathBuf, drop: bool) {
-        match self.steps.last_mut() {
-            Some(FileStep::Enter(files)) if !drop => files.push(path),
-            Some(FileStep::Drop(files)) if drop => files.push(path),
-            _ => self.steps.push(if drop { FileStep::Drop(vec![path]) } else { FileStep::Enter(vec![path]) }),
-        }
-    }
-}
-
-/// How often a file drag's position is sampled while it's over the window.
-const DROP_SAMPLE: Duration = Duration::from_millis(16);
+use file_drop::{DROP_SAMPLE, FileDrop, FileStep};
 
 struct Host<S: 'static> {
     chrome: Chrome,
@@ -1438,14 +1411,8 @@ impl<S: 'static> Host<S> {
         let Some(w) = &mut self.win else { return };
         if !w.first_frame.pending() { return; }
         let reveal = w.first_frame.complete();
-        // Mapped at a fixed size, so a tiling window manager floated it: now the user can resize it.
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if self.float_on_open && !w.first_frame.notified {
-            use winit::dpi::LogicalSize;
-            let (min, max) = self.options.size_limits(self.spec.min_size);
-            w.window.set_min_inner_size(Some(LogicalSize::new(min.0, min.1)));
-            w.window.set_max_inner_size(max.map(|(w, h)| LogicalSize::new(w, h)));
-        }
+        if self.float_on_open && !w.first_frame.notified { float_on_open::release(&w.window, &self.options, self.spec.min_size); }
         self.native_handle.native.ready.store(true, Ordering::Release);
         *self.shared.window_error.lock().unwrap() = None;
         if !std::mem::replace(&mut w.first_frame.notified, true)
@@ -1996,15 +1963,7 @@ impl<S: 'static> Host<S> {
                 attrs = winit::platform::wayland::WindowAttributesExtWayland::with_name(attrs, id, id);
                 attrs = winit::platform::x11::WindowAttributesExtX11::with_name(attrs, id, id);
             }
-            // Tiling window managers float a toplevel that maps at a fixed size;
-            // `first_frame_ready` restores the window's own limits.
-            if self.float_on_open {
-                let fixed: winit::dpi::Size = match self.options.physical_size {
-                    Some((w, h)) => winit::dpi::PhysicalSize::new(w, h).into(),
-                    None => winit::dpi::LogicalSize::new(size.0, size.1).into(),
-                };
-                attrs = attrs.with_min_inner_size(fixed).with_max_inner_size(fixed);
-            }
+            if self.float_on_open { attrs = float_on_open::fixed(attrs, &self.options, size); }
             if let Some(token) = token {
                 let token = winit::window::ActivationToken::from_raw(token);
                 attrs = winit::platform::startup_notify::WindowAttributesExtStartupNotify::with_activation_token(attrs, token);
