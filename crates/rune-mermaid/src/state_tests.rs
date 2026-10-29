@@ -31,7 +31,7 @@ fn transitions_pseudostates_descriptions_and_composites() {
     assert!(s.states.iter().any(|st| st.id == "Check" && st.kind == StateKind::Choice));
     assert_eq!(s.states.iter().find(|st| st.id == "Applied").unwrap().desc, vec!["Card moves to Review"]);
     let paint = DiagramStyle::neutral(true);
-    assert!(draw(&s, &paint).is_some());
+    assert!(draw(&s, &paint, None).is_some());
 }
 
 #[test]
@@ -52,7 +52,7 @@ fn every_prefix_draws_or_falls_back_without_panicking() {
     let src = "stateDiagram-v2\n  [*] --> Idle\n  Idle --> Busy : prompt\n  Busy --> Idle : done\n  Idle --> [*]";
     let paint = DiagramStyle::neutral(false);
     for (i, _) in src.char_indices() {
-        let _ = crate::scene(&src[..i], &paint);
+        let _ = crate::scene(&src[..i], &paint, None);
     }
-    assert!(crate::scene(src, &paint).is_some());
+    assert!(crate::scene(src, &paint, None).is_some());
 }

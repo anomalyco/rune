@@ -130,9 +130,9 @@ fn every_prefix_of_a_source_parses_or_falls_back_without_panicking() {
     let src = "flowchart TD\n  A[Start] -->|go| B{Ok?}\n  B -- yes --> C([Done])\n  B -.->|no| A\n  subgraph s [Group]\n    C --> D[(Store)]\n  end";
     let paint = DiagramStyle::neutral(false);
     for (i, _) in src.char_indices() {
-        let _ = crate::scene(&src[..i], &paint);
+        let _ = crate::scene(&src[..i], &paint, None);
     }
-    assert!(crate::scene(src, &paint).is_some());
+    assert!(crate::scene(src, &paint, None).is_some());
 }
 
 #[test]

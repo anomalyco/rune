@@ -2,14 +2,14 @@
 
 use std::collections::HashMap;
 
-use rune::{Align, TextStyle};
+use rune::{Align, Color, TextStyle};
 
 use super::flowchart::{Dir, Edge, Head, Line, NodeShape};
 use super::flowchart_draw::{edges, label_box, node_size, outline, title_box};
 use super::route::Ctx;
 use super::layered::{GCluster, GEdge, Graph, Spacing, layout};
 use super::{
-    Canvas, DiagramStyle, MAX_ITEMS, Measured, NodeStyle, Scene, clean_quoted, ellipse, fit,
+    Canvas, DiagramStyle, Hover, MAX_ITEMS, Measured, NodeStyle, Scene, clean_quoted, ellipse, fit,
     measure, parse_style_props, room, rounded_rect, statements,
 };
 
@@ -326,7 +326,7 @@ struct SizedState {
     size: [f32; 2],
 }
 
-pub(crate) fn draw(d: &StateDiagram, paint: &DiagramStyle) -> Option<Scene> {
+pub(crate) fn draw(d: &StateDiagram, paint: &DiagramStyle, hover: Option<(Hover, Color)>) -> Option<Scene> {
     let nodes: Vec<SizedState> = d
         .states
         .iter()
@@ -346,9 +346,9 @@ pub(crate) fn draw(d: &StateDiagram, paint: &DiagramStyle) -> Option<Scene> {
     let labels: Vec<Option<Measured>> = d.edges.iter().map(|e| e.label.as_ref().map(|l| measure(l, edge_font))).collect();
     let title_font = TextStyle { weight: 600.0, ..edge_font };
     let titles: Vec<Measured> = d.composites.iter().map(|c| measure(&c.title, title_font)).collect();
-    let mut canvas = draw_in(d, d.dir, &nodes, &labels, &titles, edge_font, title_font, paint)?;
+    let mut canvas = draw_in(d, d.dir, &nodes, &labels, &titles, edge_font, title_font, paint, hover)?;
     if canvas.width() > room(paint) && matches!(d.dir, Dir::Right | Dir::Left) {
-        let down = draw_in(d, if d.dir == Dir::Right { Dir::Down } else { Dir::Up }, &nodes, &labels, &titles, edge_font, title_font, paint)?;
+        let down = draw_in(d, if d.dir == Dir::Right { Dir::Down } else { Dir::Up }, &nodes, &labels, &titles, edge_font, title_font, paint, hover)?;
         if down.width() < canvas.width() {
             canvas = down;
         }
@@ -367,6 +367,7 @@ fn draw_in(
     edge_font: TextStyle,
     title_font: TextStyle,
     paint: &DiagramStyle,
+    hover: Option<(Hover, Color)>,
 ) -> Option<Canvas> {
     let across = matches!(dir, Dir::Right | Dir::Left);
     let ax = |s: [f32; 2]| if across { [s[1], s[0]] } else { s };
@@ -396,7 +397,7 @@ fn draw_in(
     let placed = layout(&graph, &SPACING)?;
     let pt = |p: [f32; 2]| if across { [p[1], p[0]] } else { p };
     let mut c = Canvas::default();
-    c.hover(paint);
+    c.hover = hover;
 
     let depth = |mut i: usize| {
         let mut dep = 0;

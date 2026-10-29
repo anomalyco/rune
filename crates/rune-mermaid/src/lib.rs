@@ -65,10 +65,6 @@ pub struct DiagramStyle {
     pub note_border: Color,
     pub font: TextStyle,
     pub max_width: f32,
-    /// What lights up while the pointer is over a node.
-    pub hover: Hover,
-    /// The colour it lights up in.
-    pub hover_color: Color,
 }
 
 impl DiagramStyle {
@@ -88,24 +84,29 @@ impl DiagramStyle {
             note_border: oklch(if dark { 0.4 } else { 0.85 }, 0.08, 80.0),
             font: TextStyle::new(13.0, 400.0).lh(18.0),
             max_width: 680.0,
-            hover: Hover::Edges,
-            hover_color: t.text.alpha(0.9),
         }
     }
 }
 
 /// `src` drawn as a diagram card in `style`, or `None` when it is outside the supported subset.
 pub fn render(src: &str, style: &DiagramStyle) -> Option<El> {
+    render_with_hover(src, style, Hover::Edges, style.text.alpha(0.9))
+}
+
+/// [`render`], with `hover` lighting up in `color` while the pointer is over a flowchart or state
+/// diagram node.
+pub fn render_with_hover(src: &str, style: &DiagramStyle, hover: Hover, color: Color) -> Option<El> {
+    let hover = (hover != Hover::Off).then_some((hover, color));
     let mut h = std::collections::hash_map::DefaultHasher::new();
     src.hash(&mut h);
-    format!("{style:?}").hash(&mut h);
+    format!("{style:?}{hover:?}").hash(&mut h);
     let key = h.finish();
     let cached = SCENES.with_borrow(|c| c.map.get(&key).cloned());
     let scene = match cached {
         Some(s) => s,
         None => {
             // Defensive: a bug in layout must cost a diagram, not the app.
-            let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scene(src, style))).ok().flatten().map(Rc::new);
+            let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scene(src, style, hover))).ok().flatten().map(Rc::new);
             SCENES.with_borrow_mut(|c| {
                 if c.order.len() >= CACHE_LEN
                     && let Some(old) = c.order.pop_front()
@@ -198,11 +199,11 @@ thread_local! {
     static SCENES: RefCell<Cache> = RefCell::new(Cache::default());
 }
 
-pub(crate) fn scene(src: &str, paint: &DiagramStyle) -> Option<Scene> {
+pub(crate) fn scene(src: &str, paint: &DiagramStyle, hover: Option<(Hover, Color)>) -> Option<Scene> {
     match parse(src)? {
-        Diagram::Flowchart(f) => flowchart_draw::draw(&f, paint),
+        Diagram::Flowchart(f) => flowchart_draw::draw(&f, paint, hover),
         Diagram::Sequence(s) => sequence::draw(&s, paint),
-        Diagram::State(s) => state::draw(&s, paint),
+        Diagram::State(s) => state::draw(&s, paint, hover),
     }
 }
 

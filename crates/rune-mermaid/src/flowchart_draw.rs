@@ -1,11 +1,11 @@
 //! Flowchart node geometry, outlines, connectors and layered scene drawing.
 
-use rune::{Align, TextStyle};
+use rune::{Align, Color, TextStyle};
 
 use super::flowchart::{Dir, Edge, Flowchart, Head, Line, NodeShape};
 use super::layered::{GCluster, GEdge, Graph, Spacing, layout};
 use super::route::Ctx;
-use super::{Canvas, DiagramStyle, Measured, Scene, arc, arrowhead, ellipse, fit, measure, room, rounded_rect, smooth, unit};
+use super::{Canvas, DiagramStyle, Hover, Measured, Scene, arc, arrowhead, ellipse, fit, measure, room, rounded_rect, smooth, unit};
 
 const PAD: [f32; 2] = [30.0, 22.0];
 const SPACING: Spacing = Spacing { node: 36.0, rank: 44.0, cluster: 14.0 };
@@ -88,14 +88,14 @@ pub(crate) fn outline(shape: NodeShape, c: [f32; 2], s: [f32; 2]) -> Vec<[f32; 2
     }
 }
 
-pub(crate) fn draw(f: &Flowchart, paint: &DiagramStyle) -> Option<Scene> {
-    let canvas = draw_canvas(f, paint)?;
+pub(crate) fn draw(f: &Flowchart, paint: &DiagramStyle, hover: Option<(Hover, Color)>) -> Option<Scene> {
+    let canvas = draw_canvas(f, paint, hover)?;
     let scale = fit(canvas.width(), paint);
     canvas.finish(scale)
 }
 
 /// `f` drawn at full size, before [`Canvas::finish`].
-pub(crate) fn draw_canvas(f: &Flowchart, paint: &DiagramStyle) -> Option<Canvas> {
+pub(crate) fn draw_canvas(f: &Flowchart, paint: &DiagramStyle, hover: Option<(Hover, Color)>) -> Option<Canvas> {
     let nodes: Vec<Sized> = f
         .nodes
         .iter()
@@ -109,9 +109,9 @@ pub(crate) fn draw_canvas(f: &Flowchart, paint: &DiagramStyle) -> Option<Canvas>
     let title_font = TextStyle { weight: 600.0, ..edge_font };
     let titles: Vec<Measured> = f.subgraphs.iter().map(|s| measure(&s.title, title_font)).collect();
     let fonts = Fonts { node: paint.font, edge: edge_font, title: title_font };
-    let mut canvas = draw_in(f, f.dir, &nodes, &labels, &titles, fonts, paint)?;
+    let mut canvas = draw_in(f, f.dir, &nodes, &labels, &titles, fonts, paint, hover)?;
     if canvas.width() > room(paint) && matches!(f.dir, Dir::Right | Dir::Left) {
-        let down = draw_in(f, if f.dir == Dir::Right { Dir::Down } else { Dir::Up }, &nodes, &labels, &titles, fonts, paint)?;
+        let down = draw_in(f, if f.dir == Dir::Right { Dir::Down } else { Dir::Up }, &nodes, &labels, &titles, fonts, paint, hover)?;
         if down.width() < canvas.width() {
             canvas = down;
         }
@@ -126,7 +126,7 @@ struct Fonts {
     title: TextStyle,
 }
 
-fn draw_in(f: &Flowchart, dir: Dir, nodes: &[Sized], labels: &[Option<Measured>], titles: &[Measured], fonts: Fonts, paint: &DiagramStyle) -> Option<Canvas> {
+fn draw_in(f: &Flowchart, dir: Dir, nodes: &[Sized], labels: &[Option<Measured>], titles: &[Measured], fonts: Fonts, paint: &DiagramStyle, hover: Option<(Hover, Color)>) -> Option<Canvas> {
     let across = matches!(dir, Dir::Right | Dir::Left);
     let ax = |s: [f32; 2]| if across { [s[1], s[0]] } else { s };
     let flip = matches!(dir, Dir::Up | Dir::Left);
@@ -155,7 +155,7 @@ fn draw_in(f: &Flowchart, dir: Dir, nodes: &[Sized], labels: &[Option<Measured>]
     let placed = layout(&graph, &SPACING)?;
     let pt = |p: [f32; 2]| if across { [p[1], p[0]] } else { p };
     let mut c = Canvas::default();
-    c.hover(paint);
+    c.hover = hover;
 
     let depth = |mut i: usize| {
         let mut d = 0;

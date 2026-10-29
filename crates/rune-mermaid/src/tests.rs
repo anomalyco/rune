@@ -56,7 +56,7 @@ fn smooth_passes_through_its_points() {
 fn hostile(src: &str, draws: bool) {
     let paint = DiagramStyle::neutral(true);
     let t = std::time::Instant::now();
-    let scene = scene(src, &paint);
+    let scene = scene(src, &paint, None);
     let took = t.elapsed();
     assert_eq!(scene.is_some(), draws, "{}…", &src[..src.len().min(80)]);
     assert!(took.as_secs_f32() < 5.0, "{took:?} for {}…", &src[..src.len().min(80)]);
@@ -86,8 +86,8 @@ fn a_huge_dash_count_draws_at_the_longest_link() {
     let paint = DiagramStyle::neutral(true);
     hostile(&format!("graph TD\nA {}> B", "-".repeat(10_000)), true);
     hostile(&format!("graph TD\nA -{}-> B", ".".repeat(10_000)), true);
-    let longest = scene(&format!("graph TD\nA {}> B", "-".repeat(10_000)), &paint).unwrap();
-    let eight = scene(&format!("graph TD\nA {}> B", "-".repeat(9)), &paint).unwrap();
+    let longest = scene(&format!("graph TD\nA {}> B", "-".repeat(10_000)), &paint, None).unwrap();
+    let eight = scene(&format!("graph TD\nA {}> B", "-".repeat(9)), &paint, None).unwrap();
     assert_eq!(longest.size, eight.size);
 }
 
@@ -110,7 +110,7 @@ fn the_biggest_allowed_charts_draw_in_bounded_time() {
     assert!(parse(&src).is_some());
     let paint = DiagramStyle::neutral(true);
     let t = std::time::Instant::now();
-    let drawn = scene(&src, &paint).is_some();
+    let drawn = scene(&src, &paint, None).is_some();
     assert!(!drawn, "dense 260-edge random graph hits MAX_DUMMIES and falls back");
     assert!(t.elapsed().as_secs_f32() < 5.0, "{:?}", t.elapsed());
     let mut big = String::from("graph TD\nsubgraph left\n");
@@ -125,7 +125,7 @@ fn the_biggest_allowed_charts_draw_in_bounded_time() {
         big.push_str(&format!("N{} --> N{}\n", k % 20, k % 20 + 37));
     }
     let t = std::time::Instant::now();
-    assert!(scene(&big, &paint).is_some());
+    assert!(scene(&big, &paint, None).is_some());
     assert!(t.elapsed().as_secs_f32() < 5.0, "{:?}", t.elapsed());
     let mut nested = String::from("graph TD\n");
     for d in 0..8 {

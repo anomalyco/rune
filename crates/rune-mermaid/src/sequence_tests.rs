@@ -63,15 +63,15 @@ fn every_prefix_draws_or_falls_back_without_panicking() {
     let src = "sequenceDiagram\n  autonumber\n  actor U as User\n  U->>+A: hi\n  loop retry\n    A->>B: call\n    B--xA: fail\n  end\n  Note left of U: waits\n  A-->>-U: done";
     let paint = DiagramStyle::neutral(true);
     for (i, _) in src.char_indices() {
-        let _ = crate::scene(&src[..i], &paint);
+        let _ = crate::scene(&src[..i], &paint, None);
     }
-    assert!(crate::scene(src, &paint).is_some());
+    assert!(crate::scene(src, &paint, None).is_some());
 }
 
 #[test]
 fn long_messages_widen_their_gap() {
     let paint = DiagramStyle::neutral(false);
-    let narrow = crate::scene("sequenceDiagram\nA->>B: hi", &paint).unwrap();
-    let wide = crate::scene("sequenceDiagram\nA->>B: a much longer message that needs room", &paint).unwrap();
+    let narrow = crate::scene("sequenceDiagram\nA->>B: hi", &paint, None).unwrap();
+    let wide = crate::scene("sequenceDiagram\nA->>B: a much longer message that needs room", &paint, None).unwrap();
     assert!(wide.size[0] > narrow.size[0] + 100.0, "{:?} vs {:?}", wide.size, narrow.size);
 }

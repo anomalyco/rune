@@ -5,7 +5,7 @@
 
 use rune::{Color, LineCap, Shape};
 
-use super::{Canvas, DiagramStyle, Op};
+use super::{Canvas, Op};
 
 /// What hovering a flowchart or state diagram node lights up.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -25,11 +25,6 @@ pub(crate) struct Trace {
 }
 
 impl Canvas {
-    /// Lights edges up in `paint`'s hover colour while a node is hovered.
-    pub(crate) fn hover(&mut self, paint: &DiagramStyle) {
-        self.hover = (paint.hover != Hover::Off).then_some((paint.hover, paint.hover_color));
-    }
-
     /// Node `i` drawn as `outline`: hovering it lights up its traces.
     pub(crate) fn region(&mut self, i: usize, outline: Vec<[f32; 2]>) {
         if self.hover.is_none() {

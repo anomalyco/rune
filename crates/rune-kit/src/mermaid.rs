@@ -19,7 +19,7 @@ pub fn render(src: &str, style: &MarkdownStyle) -> Option<El> {
 }
 
 pub(crate) fn diagram(src: &str, paint: &DiagramPaint) -> Option<El> {
-    rune_mermaid::render(
+    rune_mermaid::render_with_hover(
         src,
         &DiagramStyle {
             text: paint.text,
@@ -34,12 +34,12 @@ pub(crate) fn diagram(src: &str, paint: &DiagramPaint) -> Option<El> {
             note_border: paint.note_border,
             font: paint.font,
             max_width: paint.max_width,
-            hover: match (paint.hover.a > 0.0, paint.hover_neighbours) {
-                (false, _) => Hover::Off,
-                (true, false) => Hover::Edges,
-                (true, true) => Hover::Neighbours,
-            },
-            hover_color: paint.hover,
         },
+        match (paint.hover.a > 0.0, paint.hover_neighbours) {
+            (false, _) => Hover::Off,
+            (true, false) => Hover::Edges,
+            (true, true) => Hover::Neighbours,
+        },
+        paint.hover,
     )
 }
