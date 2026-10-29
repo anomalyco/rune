@@ -8,6 +8,12 @@
 //!   through `Queue::write_buffer`, or through `Frame::write_buffer` with `OVERLAY_STAGED=1`.
 //! - `OVERLAY_SHOW_HZ=n`: another thread calls `OverlayHandle::show` `n` times a second, as an
 //!   app that keeps an overlay under the pointer does.
+//! - `OVERLAY_COUNT_METAL=1` counts the Metal calls a frame makes (command buffers committed,
+//!   render and blit encoders, presents, completion handlers), on macOS. `=labels` also tallies
+//!   commits by command buffer label and thread; `OVERLAY_COMMIT_STACKS=1` adds who committed.
+//! - Every run prints CPU by thread (main, present, display link, the rest) and the process's
+//!   retired instructions per frame, which compare runs that CPU time can't on a Mac whose
+//!   cores change speed.
 //! - `OVERLAY_PRESUME_VISIBLE=1` makes every window report itself on screen, so a Mac whose
 //!   screen is locked still draws (its frames never reach the display): only for profiling.
 
@@ -16,6 +22,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use rune::compose::{Compositor, Frame};
+#[cfg(target_os = "macos")]
+#[path = "hud_probe/mod.rs"]
+mod probe;
 use rune::{App, AppSpec, Cx, El, OverlaySpec, RunOptions, WindowSpec, el};
 
 struct Counting;
@@ -60,7 +69,32 @@ fn env<T: std::str::FromStr>(name: &str, default: T) -> T {
 
 const WARMUP: Duration = Duration::from_secs(2);
 
-struct Start { main: f64, process: f64, wall: Instant, frames: u64, allocs: u64 }
+struct Start { main: f64, process: f64, wall: Instant, frames: u64, allocs: u64, threads: (f64, f64), metal: [u64; 5], counts: [u64; 3] }
+
+/// CPU ms of the present thread and of the display link's thread.
+fn side_threads() -> (f64, f64) {
+    #[cfg(target_os = "macos")]
+    {
+        let threads = probe::named_threads();
+        (probe::thread_ms(&threads, "rune present"), probe::thread_ms(&threads, "CVDisplayLink"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    (0.0, 0.0)
+}
+
+fn process_counts() -> [u64; 3] {
+    #[cfg(target_os = "macos")]
+    return probe::process_counts();
+    #[cfg(not(target_os = "macos"))]
+    [0; 3]
+}
+
+fn metal_counts() -> [u64; 5] {
+    #[cfg(target_os = "macos")]
+    return probe::metal_counts();
+    #[cfg(not(target_os = "macos"))]
+    [0; 5]
+}
 
 struct Hud {
     start: Instant,
@@ -100,19 +134,39 @@ impl Compositor<()> for Hud {
         }
         let elapsed = self.start.elapsed();
         if self.from.is_none() && elapsed >= WARMUP {
-            self.from = Some(Start { main: entered, process: process_cpu_ms(), wall: Instant::now(), frames: self.frames, allocs: ALLOCS.load(Ordering::Relaxed) });
+            self.from = Some(Start { main: entered, process: process_cpu_ms(), wall: Instant::now(), frames: self.frames,
+                allocs: ALLOCS.load(Ordering::Relaxed), threads: side_threads(), metal: metal_counts(), counts: process_counts() });
             self.in_callback = 0.0;
         }
         if let Some(s) = &self.from && elapsed.as_secs_f64() >= self.seconds {
             let frames = (self.frames - s.frames) as f64;
             let wall = s.wall.elapsed().as_secs_f64();
             let main = thread_cpu_ms() - s.main;
+            let process = process_cpu_ms() - s.process;
+            let (present, link) = side_threads();
+            let (present, link) = (present - s.threads.0, link - s.threads.1);
             println!(
                 "frames={frames} fps={:.1} main_ms_per_s={:.1} main_us_per_frame={:.1} callback_us_per_frame={:.1} process_cpu_pct={:.1} allocs_per_frame={:.1}",
                 frames / wall, main / wall, main * 1e3 / frames, self.in_callback * 1e3 / frames,
-                (process_cpu_ms() - s.process) / wall / 10.0,
+                process / wall / 10.0,
                 (ALLOCS.load(Ordering::Relaxed) - s.allocs) as f64 / frames,
             );
+            println!(
+                "present_ms_per_s={:.1} display_link_ms_per_s={:.1} other_ms_per_s={:.1} process_ms_per_s={:.1}",
+                present / wall, link / wall, (process - main - present - link) / wall, process / wall,
+            );
+            let counts = process_counts();
+            println!("process_per_frame: kinstructions={:.1} kcycles={:.1} wakeups={:.2}",
+                (counts[0] - s.counts[0]) as f64 / frames / 1e3, (counts[1] - s.counts[1]) as f64 / frames / 1e3,
+                (counts[2] - s.counts[2]) as f64 / frames);
+            let metal = metal_counts();
+            if metal != s.metal {
+                let per = |i: usize| (metal[i] - s.metal[i]) as f64 / frames;
+                println!("per_frame: command_buffers={:.2} render_encoders={:.2} blit_encoders={:.2} presents={:.2} completed_handlers={:.2}",
+                    per(0), per(1), per(2), per(3), per(4));
+            }
+            #[cfg(target_os = "macos")]
+            for (label, n) in probe::LABELS.lock().unwrap().iter() { println!("  commits: {label}: {n}"); }
             std::process::exit(0);
         }
         self.in_callback += thread_cpu_ms() - entered;
@@ -147,6 +201,11 @@ fn presume_visible() {
 fn main() {
     #[cfg(target_os = "macos")]
     if std::env::var_os("OVERLAY_PRESUME_VISIBLE").is_some() { presume_visible(); }
+    #[cfg(target_os = "macos")]
+    if let Some(mode) = std::env::var_os("OVERLAY_COUNT_METAL") {
+        probe::count_metal();
+        probe::TALLY_LABELS.store(mode == "labels", Ordering::Relaxed);
+    }
     let seconds = env("OVERLAY_SECONDS", 12.0);
     let writes = env("OVERLAY_WRITES", 0);
     let staged = env("OVERLAY_STAGED", 0) != 0;
