@@ -339,3 +339,131 @@ standalone `wgpu::naga` (`wgsl` → `process_overrides` → `msl`) compiles ever
   without `wgpu-core`), and **do not own Linux Vulkan** unless `wgpu-core` exceeds 0.50 ms/frame
   (> 30%) on a 120 Hz Wayland layer-shell workload after `present-skip` and a targeted upstream
   `wgpu-hal/vulkan` patch cannot fix it.
+
+## Spike results (Phase 0)
+
+Code: `crates/rune/src/gpu_metal/` behind the `metal-spike` cargo feature and
+`RUNE_GPU_BACKEND=metal` at run time; wgpu stays the default, and a build without the feature
+compiles none of it. About 600 lines of backend (half of it `wgpu::custom` trait stubs), a
+285-line shader test and a 90-line dispatch benchmark (`examples/metal_spike_dispatch.rs`).
+
+A frame through it: `nextDrawable` after waiting on an `MTLSharedEvent` counter if two frames
+are in flight; the encoder makes one `MTLCommandBuffer` (`commandBufferWithUnretainedReferences`)
+on its first render pass; `Queue::submit` holds a buffer that drew into the drawable;
+`Queue::present` calls `presentDrawable` on that buffer, signals the event and commits.
+`Queue::write_buffer` copies straight into `MTLStorageModeShared` memory. The overlay's
+`submit_and_present` skips `PresentWorker` on this backend. No completion handlers.
+
+### Verdict
+
+| Gate | Result | |
+| --- | --- | --- |
+| 1 CB, 1 present, 0 handlers, 0 blits at `WRITES=0` and `1` | 1.00, 1.00, 0.00, 0.00 at both | go |
+| `WRITES=0` ≤ 960 kinstr/frame | 894 | go |
+| `WRITES=1` adds ≤ 15 kinstr/frame | +3 | go |
+| 29/29 WGSL shaders compile to `MTLLibrary` | 29/29 (79 libraries) | go |
+| `wgpu::custom` adds ≤ 25 kinstr/frame | +3.3 to +3.9 | no pivot |
+| Beats patched wgpu by ≥ 180 at `WRITES=0` | by 143 | **miss** |
+| Beats patched wgpu by ≥ 400 at `WRITES=1` | by 487 | go |
+| `WRITES=0` within +40 of `metal_hud.swift` (after the loop fixes) | +86, without them | not tested |
+
+The kill gate is split. With no buffer writes, owning Metal saves 143 kinstr/frame (14%) over
+wgpu with both upstream patches, short of 180. With one write a frame it saves 487 (35%),
+because wgpu's write path still costs about +347 kinstr (a staging buffer, a blit encoder and a
+command buffer) and the direct write costs 3. Both baselines are lower on this Mac than in
+[30](30-overlay-gpu-cost.md) (patched 1,037 here vs 1,118; plain wgpu 1,395 vs 1,555; Swift
+808 vs 850), so the absolute margins moved with them.
+
+What decides it: an app that writes any buffer per frame (every real HUD writes at least its
+uniforms) sees the 487 saving, and an idle-clear HUD sees 143. Shipping the two wgpu patches
+upstream gets the first ~358 kinstr either way.
+
+### Overlay HUD, per frame
+
+`overlay_hud_cost --profile perf`, real 360×80 overlay on an M2 Max MacBook Pro's built-in
+120 Hz display (macOS 27.0.1, screen unlocked and awake), 4 alternating rounds of 10 s after a
+2 s warmup, medians of the middle two. `queue.write_buffer` for writes (`OVERLAY_STAGED` unset).
+Without `perf/overlay-rune-cost`. Patched wgpu is 30.0.1 with both `research/overlay-cpu/`
+patches through `--config patch.crates-io`. The Swift HUD has no write option, so it shows once.
+
+| | Metal spike | wgpu | wgpu, patched | `metal_hud.swift` |
+| --- | ---: | ---: | ---: | ---: |
+| Kinstructions, `WRITES=0` | **894** | 1,395 | 1,037 | 808 |
+| Kinstructions, `WRITES=1` | **897** | 1,668 | 1,384 | – |
+| Process CPU, `WRITES=0` | 6.7% | 9.4% | 7.5% | 6.3% |
+| Process CPU, `WRITES=1` | 6.6% | 10.9% | 10.1% | – |
+| Heap allocations, `WRITES=0` / `1` | 7.1 / 7.1 | 65.1 / 73.1 | 55.1 / 64.1 | – |
+| Command buffers, `WRITES=0` / `1` | 1 / 1 | 6 / 7 | 2 / 3 | 1 |
+| Completion handlers | 0 / 0 | 2 / 2 | 1 / 1 | 0 |
+| Blit encoders | 0 / 0 | 0 / 1 | 0 / 1 | 0 |
+
+Rounds, kinstr/frame: Metal 883, 903, 895, 894 and 900, 906, 895, 892; wgpu 1,396, 1,393,
+1,397, 1,379 and 1,652, 1,710, 1,665, 1,670; patched 1,038, 1,042, 1,037, 1,037 and 1,383,
+1,382, 1,385, 1,388; Swift 814, 806, 802, 811. Counts come from separate 8 s runs with
+`OVERLAY_COUNT_METAL=1`, whose swizzles add instructions.
+
+CPU by thread, ms per second, `WRITES=0` (`WRITES=1`):
+
+| | Main | Present thread | Display link | Driver and the rest | Total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Metal spike | 18.3 (17.8) | – | 2.0 (2.0) | 46.6 (46.4) | 66.9 (66.2) |
+| wgpu | 14.4 (21.0) | 15.6 (17.2) | 1.9 (2.0) | 61.0 (68.7) | 94.3 (109.1) |
+| wgpu, patched | 13.9 (22.2) | 11.9 (15.1) | 1.9 (2.0) | 47.4 (61.3) | 74.7 (101.2) |
+| `metal_hud.swift` | 1.8 | – | 11.3 (draws here) | 50.7 | 63.4 |
+
+The main thread does more on Metal (about +4 ms/s) because it now encodes, commits and
+presents itself instead of handing the frame to the present thread; the compositor callback
+grows from ~4 µs to ~35 µs because the render pass is encoded there rather than replayed at
+submit. The remaining 86 kinstr over Swift is Rune's own loop (step, `about_to_wait`, acquire),
+which `perf/overlay-rune-cost` targets.
+
+### `wgpu::custom`
+
+`examples/metal_spike_dispatch.rs`, offscreen, the HUD frame through wgpu's API into the
+custom backend against the same Metal calls made directly, 3,000 frames × 4 alternating rounds:
+
+| | Through `wgpu::custom` | Direct | Added |
+| --- | ---: | ---: | ---: |
+| `WRITES=0` | 213.9 | 210.6 | 3.3 |
+| `WRITES=1` | 214.9 | 211.1 | 3.8 |
+
+Under the 25-kinstr pivot line, so the spike stays on `wgpu::custom`. What it could express:
+the whole overlay frame unchanged, including holding a command buffer from `submit` to
+`present` so the drawable presents on it, direct buffer writes, `map_async` that completes at
+once, and adapter, surface and capability queries Rune's attach path makes. What it can't, or
+what costs:
+
+- `Surface::as_hal` and `Device::as_hal` return `None` for a custom backend, so every macOS
+  helper that reaches the CAMetalLayer through them silently does nothing: the occlusion check,
+  `PresumeShown`, `present_with_transaction`, present timing, system materials, and
+  `NativeSurface` errors. Phase 2's move of these onto the backend is required, not optional.
+- The traits are about 150 methods across 30 interfaces; a backend implements them all, and
+  most of the spike's are stubs (`unimplemented!` for compute, ray tracing, bundles and
+  external textures; inert shader modules, pipelines, bind groups and samplers).
+- `Frame::write_buffer` (`rune-staging`) writes a mapped staging buffer and records a
+  `copy_buffer_to_buffer`; the spike drops copies, so that path is wrong here. A real backend
+  should let staging write straight into a shared destination.
+- The `custom` feature adds a variant to every wgpu dispatch enum in any build that enables it;
+  its cost on the wgpu path wasn't measured (the wgpu baselines were built without it).
+
+### Shaders
+
+`gpu_metal/shader_tests.rs` composes each of the 29 WGSL files as its crate does (clip and
+common prefixes, gi, glass and reel sections, `layer_blur`'s 5 override pairs), then for each
+entry point runs naga `process_overrides` → `msl::write_string` with wgpu-hal's Metal options
+(MSL 4.0 on macOS 26+, Restrict bounds checks, loop bounding, zero-initialized workgroup
+memory, vertex pulling with a buffer at slot 30, per-entry resource slots with a sizes buffer)
+and `newLibraryWithSource` with preserve-invariance. All 29 files compile in every module they
+are part of: 31 modules, 79 libraries, 2.3 s in a debug build. No failures.
+
+What the test doesn't prove: resource slots come from the module's own bindings rather than each
+pipeline's layout, and vertex inputs are packed into one buffer, so the MSL matches wgpu-hal's
+shape but not each pipeline's exact strides.
+
+### Limits of the spike
+
+- It clears and presents; draws, pipelines and bind groups are inert. The HUD and its empty
+  Rune view need nothing more, so the measured frame is complete, but drawing cost is untested.
+- A direct write can race a frame still on the GPU that reads the same buffer. Phase 1's ring
+  is needed for correctness, and will add a little to `WRITES=1`.
+- The layer's scale is set once at creation and doesn't follow a display change.
