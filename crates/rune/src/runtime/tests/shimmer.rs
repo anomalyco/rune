@@ -71,8 +71,16 @@ fn lit_offsets(rt: &Runtime<Shimmer>) -> Vec<f32> {
     }).collect()
 }
 
-/// Pixel snapping moves a glyph by up to one device px; more is a misplaced copy.
-const GLYPH_PX: f32 = 1.0;
+/// A shimmer at 2× in the default font smoothing.
+fn shimmer_rt(s: Shimmer) -> Runtime<Shimmer> {
+    Runtime::new(s, shimmer_view, (400.0, 60.0), Env::new(true, 2.0))
+}
+
+/// Pixel snapping moves a glyph by up to one device px. Above 33 ppem (13 pt zoomed 1.6×)
+/// CoreGraphics' pens go to whole pixels, so a copy whose origin is a fraction off can land one
+/// more pixel away, as CoreText's would. More is a misplaced copy: these tests check motion,
+/// not placement.
+const GLYPH_PX: f32 = 2.0;
 
 fn worst_of(rt: &Runtime<Shimmer>, worst: f32) -> f32 {
     let w = lit_offsets(rt).into_iter().fold(0.0f32, |a, b| if b.is_nan() || b.abs() > a.abs() { b } else { a });
@@ -93,7 +101,7 @@ fn run(rt: &mut Runtime<Shimmer>, frames: usize) -> f32 {
 
 fn worst_offset(snap: bool, zoom: f32, mount_at: f64) -> f32 {
     let s = Shimmer { now: mount_at, snap, zoom, ..base() };
-    let mut rt = Runtime::new(s, shimmer_view, (400.0, 60.0), Env::new(true, 2.0));
+    let mut rt = shimmer_rt(s);
     rt.frame(0.0);
     run(&mut rt, (period(&s) * 2.5 * 120.0) as usize)
 }
@@ -122,7 +130,7 @@ fn a_shimmer_that_stops_and_starts_again_keeps_its_bright_copy_on_the_label() {
         for off_frames in [1usize, 6, 60] {
             for stop_at in [0.3f64, 0.9, 1.5] {
                 let s = Shimmer { tail, ..base() };
-                let mut rt = Runtime::new(s, shimmer_view, (400.0, 60.0), Env::new(true, 2.0));
+                let mut rt = shimmer_rt(s);
                 rt.frame(0.0);
                 run(&mut rt, (stop_at * 120.0) as usize);
                 rt.state.on = false;
@@ -151,7 +159,7 @@ fn a_shimmer_stopped_while_waiting_restarts_in_step() {
         for gap in [0.05f64, 0.5] {
             // Mounted 0.8 s into a 2.13 s pass: both loops wait 1.33 s for the next.
             let s = Shimmer { since: -0.8, band: 140.0, ..base() };
-            let mut rt = Runtime::new(s, shimmer_view, (400.0, 60.0), Env::new(true, 2.0));
+            let mut rt = shimmer_rt(s);
             rt.frame(0.0);
             run(&mut rt, (stop_at * 120.0) as usize);
             rt.state.on = false;
@@ -179,7 +187,7 @@ fn a_shimmer_under_a_hovering_pointer_and_late_frames_stays_in_step() {
     let mut bad = Vec::new();
     for seed in 0..6u64 {
         let s = Shimmer { since: -0.8, band: 140.0, ring: true, tail: true, zoom: 1.6, pad: 40.0, ..base() };
-        let mut rt = Runtime::new(s, shimmer_view, (400.0, 60.0), Env::new(true, 2.0));
+        let mut rt = shimmer_rt(s);
         rt.frame(0.0);
         let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
         let mut rnd = move || { x ^= x << 13; x ^= x >> 7; x ^= x << 17; (x % 1000) as f64 / 1000.0 };
@@ -285,7 +293,7 @@ fn a_shimmer_through_what_a_real_window_does_stays_in_step() {
     }
     let mut bad = Vec::new();
     for (tag, s, mut events) in cases {
-        let mut rt = Runtime::new(s, shimmer_view, (400.0, 60.0), Env::new(true, 2.0));
+        let mut rt = shimmer_rt(s);
         rt.frame(0.0);
         let mut worst = (0.0f32, 0.0f32);
         window(&mut rt, 7.0, &mut events, &mut worst);
@@ -324,7 +332,7 @@ fn a_shimmer_on_a_sleeping_host_keeps_its_bright_copy_on_the_label() {
         for gap in [0.05f64, 0.4, 1.3] {
             for stop_at in [0.7f64, 1.6, 2.05] {
                 let s = Shimmer { since: -0.8, ring: true, band: 140.0, tail: true, zoom, ..base() };
-                let mut rt = Runtime::new(s, shimmer_view, (400.0, 60.0), Env::new(true, 2.0));
+                let mut rt = shimmer_rt(s);
                 rt.frame(0.0);
                 let mut events: Vec<(f64, fn(&mut Shimmer))> = vec![
                     (stop_at, |s| s.on = false),

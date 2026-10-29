@@ -163,6 +163,7 @@ pub(super) fn merge(tx: &mut Tx, one: Tx) {
     tx.playground.extend(one.playground);
     tx.open_urls.extend(one.open_urls);
     tx.srgb_blend = one.srgb_blend.or(tx.srgb_blend);
+    tx.font_smoothing = one.font_smoothing.or(tx.font_smoothing);
     tx.blur |= one.blur;
     if one.select.is_some() {
         tx.select = one.select;

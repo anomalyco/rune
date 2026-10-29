@@ -128,6 +128,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             let mut app = self.app.take().expect("one canvas initialization");
             let compositor = app.compositor.take();
             let (on_focus, modifier_keys, srgb_blend) = (app.on_focus, app.modifier_keys, app.srgb_blend);
+            let font_smoothing = app.font_smoothing;
             let playground = app.playground.take();
             let (spec, state, shared) = app.into_parts(None);
             let size = window.inner_size();
@@ -140,6 +141,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             rt.on_focus = on_focus;
             rt.set_modifier_keys(modifier_keys);
             rt.set_srgb_blend(srgb_blend);
+            rt.set_font_smoothing(font_smoothing);
             rt.set_os_drag(false);
             let now = Instant::now();
             rt.wall_start = Some(now);

@@ -61,6 +61,7 @@ pub struct Tx {
     /// Modifier keys held as the handler runs.
     pub(crate) mods: crate::Mods,
     pub(crate) srgb_blend: Option<bool>,
+    pub(crate) font_smoothing: Option<crate::text::FontSmoothing>,
     pub(crate) blur: bool,
     /// The text selection as the event arrived (`Tx::text_selection`).
     pub(crate) selection: Option<Rc<crate::TextSelection>>,
@@ -281,6 +282,13 @@ impl Tx {
     /// Windows, overlays, the web canvas and headless runs all follow.
     pub fn set_srgb_blend(&mut self, enabled: bool) {
         self.srgb_blend = Some(enabled);
+    }
+
+    /// Rasterise and place this window's glyphs in `mode` from the next frame, as if it had
+    /// launched with `App::font_smoothing(mode)`; glyphs are rasterised again for the new mode
+    /// (each mode's stay cached). Blending is separate ([`Self::set_srgb_blend`]).
+    pub fn set_font_smoothing(&mut self, mode: crate::text::FontSmoothing) {
+        self.font_smoothing = Some(mode);
     }
 
     fn frame_request(&mut self, request: crate::window_frame::FrameRequest) {

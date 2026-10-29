@@ -918,7 +918,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         return crate::hot::snap_window(app, args);
     }
     let mut comp = app.compositor.take();
-    let srgb_blend = app.srgb_blend;
+    let (srgb_blend, font_smoothing) = (app.srgb_blend, app.font_smoothing);
     let (on_focus, on_ime) = (app.on_focus, app.on_ime);
     let on_reopen = app.on_reopen;
     let source = read_script(&args);
@@ -959,6 +959,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     rt.transparent = transparent;
     rt.fit_height = fit_height;
     rt.set_srgb_blend(srgb_blend);
+    rt.set_font_smoothing(font_smoothing);
     rt.set_modifier_keys(modifier_keys);
     rt.set_tab_visits_controls(tab_visits_controls);
     // Only limits the app set: the canvas opens at any size, below the default minimum too.

@@ -178,14 +178,13 @@ impl<'a> Ui<'a> {
         let scale = S * self.k;
         let mut quads = Vec::new();
         self.ts.glyphs(s, style, scale, [((self.o[0] + x * self.k) * S).round(), ((self.o[1] + y * self.k) * S).round()], &mut quads);
-        let gamma = rune::text::glyph_coverage_exponent(color, scale);
         for q in quads {
             self.text.push(Instance {
                 rect: q.rect,
                 radii: [0.0; 4],
                 fill: color.premul(1.0),
                 border: [0.0; 4],
-                params: [0.0, KIND_GLYPH, 0.0, gamma],
+                params: [0.0, KIND_GLYPH, 0.0, 1.0],
                 uv: [q.uv[0], q.uv[1], 0.0, 0.0],
                 clip: NO_CLIP,
                 fade: [0; 4],
@@ -1355,14 +1354,13 @@ impl Reel {
             let style = TextStyle::new(*size, *weight);
             let mut quads = Vec::new();
             ctx.ts.glyphs(s, style, S, [(x * S).round(), (y * S).round()], &mut quads);
-            let gamma = rune::text::glyph_coverage_exponent(*c, S);
             for q in quads {
                 insts.push(Instance {
                     rect: q.rect,
                     radii: [0.0; 4],
                     fill: c.premul(1.0),
                     border: [0.0; 4],
-                    params: [0.0, KIND_GLYPH, 0.0, gamma],
+                    params: [0.0, KIND_GLYPH, 0.0, 1.0],
                     uv: [q.uv[0], q.uv[1], 0.0, 0.0],
                     clip: NO_CLIP,
                     fade: [0; 4],

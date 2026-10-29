@@ -225,7 +225,7 @@ pub use native_surface::{NativeSurface, SurfaceFit};
 pub use system_material::{MAX_NATIVE_MATERIALS, SystemMaterial};
 pub use video::{MediaRequest, MediaSource, Player, PlayerState, Video};
 pub use recorder::{FakeMicrophone, Level, MicPermission, RecordFormat, Recorder, RecorderState, Recording};
-pub use text::{Icon, Link, LinkPaint, Span, TextCase, TextHighlight};
+pub use text::{FontSmoothing, Icon, Link, LinkPaint, Span, TextCase, TextHighlight};
 pub use theme::Theme;
 pub use tok::{Family, OpticalSize, TextStyle};
 pub use tooling::{AppSpec, Chrome, extra_args, run, run_windows, run_windows_with, run_windows_with_args, run_with, set_app_id,
