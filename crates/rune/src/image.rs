@@ -596,46 +596,107 @@ fn mip_chain(width: u32, height: u32, bytes: &[u8]) -> Result<Decoded, ImageErro
     if width == 0 || height == 0 || width > 8192 || height > 8192
         || bytes.len() != width as usize * height as usize * 4
     { return Err(ImageError("RGBA image dimensions or byte length are invalid".into())); }
-    let mut linear: Vec<[f32; 4]> = bytes.as_chunks::<4>().0.iter().map(|p| {
+    let srgb = &*SRGB;
+    // Mip 0 is the source with RGB premultiplied in linear light; an opaque pixel is unchanged.
+    let mut top = bytes.to_vec();
+    for p in top.as_chunks_mut::<4>().0 {
+        if p[3] == 255 { continue; }
         let a = p[3] as f32 / 255.0;
-        [crate::color::srgb_decode(p[0] as f32 / 255.0) * a,
-         crate::color::srgb_decode(p[1] as f32 / 255.0) * a,
-         crate::color::srgb_decode(p[2] as f32 / 255.0) * a, a]
-    }).collect();
-    let (mut w, mut h) = (width, height);
-    let mut mips = Vec::new();
-    loop {
-        let pixels = linear.iter().flat_map(|p| {
-            let a = byte(p[3]);
-            // Quantized alpha bounds premultiplied RGB, including fully transparent tails.
-            let rgb = [p[0], p[1], p[2]].map(|v| byte(crate::color::srgb_encode(v.min(a as f32 / 255.0))));
-            [rgb[0], rgb[1], rgb[2], a]
-        }).collect();
-        mips.push(Mip { width: w, height: h, pixels });
-        if w == 1 && h == 1 { break; }
-        let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
-        // Area resampling includes the last row/column of odd-sized sources. Work in
-        // linear premultiplied floats throughout; quantization happens only on upload data.
-        let mut next = Vec::with_capacity((nw * nh) as usize);
-        for y in 0..nh { for x in 0..nw {
-            let (x0, x1) = (x as f32 * w as f32 / nw as f32, (x + 1) as f32 * w as f32 / nw as f32);
-            let (y0, y1) = (y as f32 * h as f32 / nh as f32, (y + 1) as f32 * h as f32 / nh as f32);
-            let mut sum = [0.0; 4];
-            for sy in y0.floor() as u32..(y1.ceil() as u32).min(h) {
-                for sx in x0.floor() as u32..(x1.ceil() as u32).min(w) {
-                    let weight = ((sx + 1) as f32).min(x1) - (sx as f32).max(x0);
-                    let weight = weight * (((sy + 1) as f32).min(y1) - (sy as f32).max(y0));
-                    for c in 0..4 { sum[c] += linear[(sy * w + sx) as usize][c] * weight; }
-                }
-            }
-            next.push(sum.map(|v| v / ((x1 - x0) * (y1 - y0))));
-        }}
-        linear = next;
-        (w, h) = (nw, nh);
+        for c in 0..3 { p[c] = srgb.encode(srgb.decode[p[c] as usize] * a, p[3]); }
+    }
+    let mut mips = vec![Mip { width, height, pixels: top }];
+    // Mip 1 filters the straight source, so a translucent edge is premultiplied once, not
+    // quantized first. Each later mip filters the bytes of the one above it.
+    if width > 1 || height > 1 {
+        mips.push(downsample(width, height, bytes, |p| {
+            let a = p[3] as f32 / 255.0;
+            [srgb.decode[p[0] as usize] * a, srgb.decode[p[1] as usize] * a, srgb.decode[p[2] as usize] * a, a]
+        }));
+    }
+    while let Some(last) = mips.last().filter(|m| m.width > 1 || m.height > 1) {
+        let next = downsample(last.width, last.height, &last.pixels, |p| {
+            [srgb.decode[p[0] as usize], srgb.decode[p[1] as usize], srgb.decode[p[2] as usize], p[3] as f32 / 255.0]
+        });
+        mips.push(next);
     }
     Ok(Decoded { mips })
 }
+
+/// Halves `w`×`h` RGBA8 `src` by area, summing `linear` (premultiplied linear RGBA) of each
+/// source pixel. Area resampling includes the last row/column of odd-sized sources.
+fn downsample(w: u32, h: u32, src: &[u8], linear: impl Fn(&[u8; 4]) -> [f32; 4]) -> Mip {
+    let src = src.as_chunks::<4>().0;
+    let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+    let mut pixels = Vec::with_capacity(nw as usize * nh as usize * 4);
+    let mut emit = |sum: [f32; 4], area: f32| {
+        let [r, g, b, a] = sum.map(|v| v / area);
+        let a = byte(a);
+        pixels.extend_from_slice(&[SRGB.encode(r, a), SRGB.encode(g, a), SRGB.encode(b, a), a]);
+    };
+    if w % 2 == 0 && h % 2 == 0 {
+        // Each target pixel is exactly a 2×2 block.
+        let w = w as usize;
+        for y in 0..nh as usize { for x in 0..nw as usize {
+            let i = 2 * y * w + 2 * x;
+            let mut sum = [0.0; 4];
+            for p in [i, i + 1, i + w, i + w + 1].map(|i| linear(&src[i])) {
+                for c in 0..4 { sum[c] += p[c]; }
+            }
+            emit(sum, 4.0);
+        }}
+        return Mip { width: nw, height: nh, pixels };
+    }
+    for y in 0..nh { for x in 0..nw {
+        let (x0, x1) = (x as f32 * w as f32 / nw as f32, (x + 1) as f32 * w as f32 / nw as f32);
+        let (y0, y1) = (y as f32 * h as f32 / nh as f32, (y + 1) as f32 * h as f32 / nh as f32);
+        let mut sum = [0.0; 4];
+        for sy in y0.floor() as u32..(y1.ceil() as u32).min(h) {
+            for sx in x0.floor() as u32..(x1.ceil() as u32).min(w) {
+                let weight = ((sx + 1) as f32).min(x1) - (sx as f32).max(x0);
+                let weight = weight * (((sy + 1) as f32).min(y1) - (sy as f32).max(y0));
+                let p = linear(&src[(sy * w + sx) as usize]);
+                for c in 0..4 { sum[c] += p[c] * weight; }
+            }
+        }
+        emit(sum, (x1 - x0) * (y1 - y0));
+    }}
+    Mip { width: nw, height: nh, pixels }
+}
 fn byte(v: f32) -> u8 { (v.clamp(0.0, 1.0) * 255.0).round() as u8 }
+
+/// sRGB transfer tables, so mip generation runs no `powf` per pixel.
+struct Srgb {
+    /// Linear light of each sRGB byte.
+    decode: [f32; 256],
+    /// `up[k]`: the linear value at and above which the sRGB encoding rounds past byte `k`.
+    up: [f32; 256],
+    /// The byte at the low edge of each 1/`STEPS` of linear light. The curve's steepest
+    /// slope (12.92) crosses under one byte per step, so one `up` comparison finishes it.
+    coarse: [u8; STEPS + 1],
+}
+const STEPS: usize = 4096;
+static SRGB: std::sync::LazyLock<Srgb> = std::sync::LazyLock::new(|| {
+    let mut up: [f32; 256] = std::array::from_fn(|k| crate::color::srgb_decode((k as f32 + 0.5) / 255.0));
+    up[255] = f32::INFINITY;
+    Srgb {
+        decode: std::array::from_fn(|i| crate::color::srgb_decode(i as f32 / 255.0)),
+        coarse: std::array::from_fn(|i| up.partition_point(|&t| t <= i as f32 / STEPS as f32) as u8),
+        up,
+    }
+});
+impl Srgb {
+    /// The sRGB byte of premultiplied linear `v`, capped by its quantized alpha `a` so a pixel
+    /// whose alpha rounded to zero emits no light.
+    fn encode(&self, v: f32, a: u8) -> u8 {
+        let v = v.clamp(0.0, a as f32 / 255.0);
+        let b = self.coarse[(v * STEPS as f32) as usize];
+        b + u8::from(v >= self.up[b as usize])
+    }
+}
+
+#[cfg(test)]
+#[path = "image_mip_tests.rs"]
+mod mip_tests;
 
 #[cfg(test)]
 mod tests {

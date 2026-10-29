@@ -124,6 +124,8 @@ mod el_sticky;
 mod el_tx;
 mod input_time;
 mod key_diagnostics;
+#[cfg(test)]
+mod test_alloc;
 pub mod growth;
 pub mod live;
 pub mod memo;
