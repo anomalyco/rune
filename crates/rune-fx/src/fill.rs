@@ -4,6 +4,7 @@
 //!
 //! Every style is a pure function of (pixel, params, time, seed). Under reduced motion each one
 //! holds a single settled pose. `catalog` lists the styles, their params and presets.
+#![expect(clippy::approx_constant, reason = "rounded radian bounds for fill angle knobs")]
 
 use crate::catalog::*;
 use crate::*;

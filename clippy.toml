@@ -1,0 +1,12 @@
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-dbg-in-tests = true
+
+disallowed-methods = [
+    { path = "std::env::var", reason = "read environment variables at startup or in an explicit boundary module" },
+    { path = "std::env::var_os", reason = "read environment variables at startup or in an explicit boundary module" },
+    { path = "std::time::SystemTime::now", reason = "pass timestamps in or read wall time in an explicit clock/boundary module" },
+    { path = "std::thread::spawn", reason = "spawn owned worker threads in an explicit runtime or platform module" },
+    { path = "std::thread::Builder::spawn", reason = "spawn owned worker threads in an explicit runtime or platform module" },
+]

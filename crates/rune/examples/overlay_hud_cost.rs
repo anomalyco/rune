@@ -16,6 +16,7 @@
 //!   cores change speed.
 //! - `OVERLAY_PRESUME_VISIBLE=1` makes every window report itself on screen, so a Mac whose
 //!   screen is locked still draws (its frames never reach the display): only for profiling.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicU64, Ordering};

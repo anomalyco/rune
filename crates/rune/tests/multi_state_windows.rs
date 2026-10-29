@@ -1,5 +1,6 @@
 //! Windows with different state types share one app; headless tools select one by key and
 //! render it with its own state.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::*;
 
 struct Review { count: u32 }

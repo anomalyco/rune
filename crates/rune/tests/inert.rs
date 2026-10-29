@@ -1,4 +1,5 @@
 //! `El::inert`: a subtree that draws and lays out while the pointer and keyboard pass through.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::runtime::ElementInfo;
 use rune::tok::TextStyle;
 use rune::{Color, Cursor, Cx, El, Env, Key, KeyEvent, Mods, Runtime, TextEdit, el, text_input};

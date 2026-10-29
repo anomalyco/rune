@@ -8,6 +8,7 @@
 //!
 //! `cargo run -p rune-kit --example shell` opens the window. The stills in `demo/kit/` are
 //! `-- --snap demo/kit/shell-light.png --theme light --size 1040x640` (and `dark`).
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use std::borrow::Cow;
 
 use rune::{AppSpec, Chrome, Cx, El, Icon, KeyEvent, Spring, TextEdit, Tx, col, oklch, row, text};

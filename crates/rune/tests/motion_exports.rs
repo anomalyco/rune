@@ -1,4 +1,5 @@
 //! Every type the re-exported motion API takes or returns can be named through `rune`.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{AnimExt, Blend, CubicBezier, Decay, Easing, Edge, Effect, Reveal, Spring, StepPosition, Transition, Vec2, Velocity};
 
 #[test]

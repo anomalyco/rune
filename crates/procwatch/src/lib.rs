@@ -18,6 +18,7 @@
 //!
 //! macOS only for now; elsewhere [`snapshot`] returns `None`, [`usage`] has every field `None`,
 //! and [`watch`] does nothing.
+#![cfg_attr(test, allow(clippy::disallowed_methods, clippy::let_underscore_must_use))]
 
 pub mod alloc;
 pub mod gauge;
@@ -70,7 +71,7 @@ impl Snapshot {
 
     pub fn to_json(&self) -> String {
         let mut s = String::new();
-        let _ = write!(
+        write!(
             s,
             "{{\"pid\":{},\"footprint\":{},\"footprint_peak\":{},\"resident\":{},\"cpu_s\":{:.3},\"exited_cpu_s\":{:.3},\"fds\":{},\"threads\":[",
             self.pid,
@@ -80,24 +81,24 @@ impl Snapshot {
             self.cpu_s,
             self.exited_cpu_s(),
             self.fds,
-        );
+        ).ok();
         for (i, t) in self.threads.iter().enumerate() {
-            let _ = write!(s, "{}{{\"name\":\"{}\",\"cpu_s\":{:.3}}}", if i > 0 { "," } else { "" }, clean(&t.name), t.cpu_s);
+            write!(s, "{}{{\"name\":\"{}\",\"cpu_s\":{:.3}}}", if i > 0 { "," } else { "" }, clean(&t.name), t.cpu_s).ok();
         }
         s.push(']');
         if let Some(h) = &self.heap {
-            let _ = write!(
+            write!(
                 s,
                 ",\"heap\":{{\"live\":{},\"peak\":{},\"allocations\":{},\"largest\":{},\"big_live\":{},\"big_blocks\":{},\"tags\":",
                 h.live, h.peak, h.allocations, h.largest, h.big_live, h.big_blocks
-            );
+            ).ok();
             json_map(&mut s, &h.tags);
             s.push('}');
         }
         s.push_str(",\"gauges\":");
         json_map(&mut s, &self.gauges);
         if let Some(bytes) = self.unaccounted() {
-            let _ = write!(s, ",\"unaccounted\":{bytes}");
+            write!(s, ",\"unaccounted\":{bytes}").ok();
         }
         s.push('}');
         s
@@ -111,7 +112,7 @@ fn clean(name: &str) -> String {
 fn json_map(s: &mut String, entries: &[(&'static str, i64)]) {
     s.push('{');
     for (i, (name, bytes)) in entries.iter().enumerate() {
-        let _ = write!(s, "{}\"{}\":{bytes}", if i > 0 { "," } else { "" }, clean(name));
+        write!(s, "{}\"{}\":{bytes}", if i > 0 { "," } else { "" }, clean(name)).ok();
     }
     s.push('}');
 }
@@ -340,6 +341,7 @@ pub fn watch(config: Config) {
 
 /// [`watch`], and calls `on_warning` on the watcher thread for every warning (not the
 /// periodic report): to drop a cache, write a capture, or post the numbers somewhere.
+#[expect(clippy::disallowed_methods, clippy::let_underscore_must_use, reason = "background process sampler thread")]
 pub fn watch_with(config: Config, on_warning: impl Fn(&Event, &Snapshot) + Send + 'static) {
     if snapshot().is_none() {
         return;
@@ -497,10 +499,10 @@ fn memory_note(s: &Snapshot) -> String {
     };
     let top: Vec<String> = s.gauges.iter().filter(|(_, b)| *b > 0).take(3).map(|(n, b)| format!("{n} {}", mb(*b as u64))).collect();
     if !top.is_empty() {
-        let _ = write!(note, "; {}", top.join(", "));
+        write!(note, "; {}", top.join(", ")).ok();
     }
     if let Some(bytes) = s.unaccounted() {
-        let _ = write!(note, "; unaccounted {}", mb(bytes.max(0) as u64));
+        write!(note, "; unaccounted {}", mb(bytes.max(0) as u64)).ok();
     }
     note
 }
@@ -516,6 +518,7 @@ pub fn mb(bytes: u64) -> String {
 }
 
 /// Answers every request on `addr` (keep it loopback) with a fresh [`snapshot`] as JSON.
+#[expect(clippy::disallowed_methods, clippy::let_underscore_must_use, reason = "loopback snapshot HTTP thread")]
 pub fn serve(addr: std::net::SocketAddr) -> std::io::Result<std::net::SocketAddr> {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind(addr)?;

@@ -1,4 +1,5 @@
 //! Count the whole runtime frame, not only the spring evaluator. No GPU/driver allocations.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use rune::{Cx, El, Env, GrowthSpec, Runtime, ScrollSpec, col, text};

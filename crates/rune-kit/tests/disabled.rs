@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Color, Cx, El, Env, Runtime, TextEdit, col, el, text};
 use rune::render::{KIND_LAYER, KIND_LAYER_END};
 use rune_kit::*;

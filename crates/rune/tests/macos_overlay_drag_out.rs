@@ -11,6 +11,7 @@
 //! The press and drag are `postEvent:` NSEvents. The overlay also polls the real pointer, so the
 //! test warps it to where the drag goes; that moves the cursor but posts no events. Opens
 //! windows, so it only runs with RUNE_GUI_TESTS=1 in a logged-in GUI session.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 #[cfg(not(target_os = "macos"))]
 fn main() {}

@@ -1,4 +1,5 @@
 //! The producer supplies its buffer; replacing and staging a warm stream allocates nothing.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 

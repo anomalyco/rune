@@ -144,6 +144,7 @@ pub(super) fn uber_shader_and_pipeline(
 }
 
 #[cfg(target_os = "macos")]
+#[expect(clippy::disallowed_methods, reason = "reads RUNE_DISABLE_METALLIB diagnostic override")]
 pub(super) fn metallib_enabled() -> bool {
     if let Some(forced) = FORCE_METALLIB.with(std::cell::Cell::get) {
         return forced;

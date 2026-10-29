@@ -1,4 +1,5 @@
 //! A binary without `procwatch::alloc::Counting` installed.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 #[test]
 fn counters_are_unknown_without_the_allocator() {

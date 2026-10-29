@@ -1,6 +1,7 @@
 //! Native acceptance probe. Starts windowless; stdin EOF shuts down cleanly.
 //! --probe-conflict expects another copy to own the accelerator.
 //! --script scripts/global-shortcut.json --tree /path/to/tree.json tests the static handler.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{App, AppSpec, ShortcutError, Tx, text};
 use std::io::Write;
 

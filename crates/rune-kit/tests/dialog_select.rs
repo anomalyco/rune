@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Cx, El, Env, Runtime, row};
 use rune_kit::{Dialog, Kit, Placement, Select, SelectAppearance, root};
 

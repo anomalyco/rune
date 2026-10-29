@@ -48,6 +48,22 @@ exclude = ["tools/rune-dev-guard"]
 edition = "2024"
 license = "MIT"
 
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+dbg_macro = "deny"
+disallowed_methods = "deny"
+disallowed_types = "deny"
+expect_used = "warn"
+let_underscore_must_use = "deny"
+todo = "warn"
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "warn"
+
 [profile.dev.package."*"]
 debug = false
 

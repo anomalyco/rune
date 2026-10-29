@@ -1,5 +1,6 @@
 //! `--script` events at t = 0 run once the first frame is laid out, so they find elements by
 //! key and hit them by position like later events.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::*;
 
 #[derive(Default)]

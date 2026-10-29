@@ -1,6 +1,7 @@
 //! Keys the playground's list doesn't use reach the open story: its `AppSpec::on_key` hears ⌘K
 //! and digits while the list has the keyboard, and the list keeps its arrows, J K, Esc and the
 //! filter.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{App, AppSpec, Cx, El, Env, Key, KeyEvent, Mods, Playground, Runtime, text};
 
 #[derive(Default)]

@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use rune::{Color, Cx, El, Env, Live, Runtime, Spring, el};
 use rune::Tween;

@@ -6,6 +6,7 @@
 //!     live --snap out.png [--scene chat] [--at X,Y] [--down | --click] [--after S] [--rays]
 //!               [--mode behind|overhead|backlight] [--soft] [--bare]
 //!               one frame headless at 2560×1600; --down/--click press (and release) at --at at t=0, rendered at S
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 #[allow(dead_code)]
 #[path = "light.rs"]

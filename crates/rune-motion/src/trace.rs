@@ -1,6 +1,7 @@
 //! motion-lint JSONL traces, written from what was actually presented (post-snap, post-mask), with
 //! exact "this was animated on purpose" intent bits. Same format apps write
 //! and `motion-lint analyze` reads.
+#![expect(clippy::let_underscore_must_use, reason = "infallible String fmt::Write and best-effort trace file flushes")]
 
 use std::fmt::Write as _;
 use std::io::{self, Write};
@@ -207,6 +208,7 @@ impl MotionTrace {
     }
 
     /// Opens `$RUNE_MOTION_TRACE` if it is set (one env read).
+    #[expect(clippy::disallowed_methods, reason = "optional trace output path from RUNE_MOTION_TRACE")]
     pub fn from_env(header: &TraceHeader) -> Option<MotionTrace> {
         let path = std::env::var_os("RUNE_MOTION_TRACE")?;
         let file = std::fs::File::create(path).ok()?;

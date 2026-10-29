@@ -1,4 +1,5 @@
 //! Flex alignment builders place children where CSS would.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Cx, El, Env, Runtime, col, el, row};
 
 fn rect(rt: &Runtime<u8>, key: &str) -> [f32; 4] {

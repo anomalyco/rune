@@ -7,6 +7,7 @@
 //!
 //! Frames render in Rgba16Float linear light and are converted on the GPU to BT.709 Y'CbCr 4:2:0 with blue-noise TPDF
 //! dither at the exact 8- and 10-bit quantisation steps, then piped raw to ffmpeg (no swscale conversion).
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

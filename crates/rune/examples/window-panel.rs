@@ -1,4 +1,5 @@
 //! Bounded native focus fixture; commands arrive through WINDOW_PANEL_SOCKET.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::*;
 #[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};

@@ -1,6 +1,7 @@
 //! A commit that inserts rows above the first one of a reader's virtual growth stack and
 //! reveals the new first row in the same `Tx` shows that row at full height from the first
 //! frame, as rows entering under a reveal from an earlier commit do.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::runtime::ElementInfo;
 use rune::{Cx, El, Env, GrowthSpec, Runtime, ScrollSpec, col, el, memo, text};
 

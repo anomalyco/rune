@@ -5,6 +5,7 @@
 //! test posts one where the pointer already is, then checks the end callback ran once and the
 //! next click is an ordinary press. Without it, it checks the session start and pasteboard only.
 //! Opens a window, so it only runs with RUNE_GUI_TESTS=1 in a logged-in GUI session.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 #[cfg(not(target_os = "macos"))]
 fn main() {}

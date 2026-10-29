@@ -1,5 +1,6 @@
 //! An app's tests driving its playground headless: open a story, run its triggers and their
 //! `Play::after` steps on the logical clock, and read the stage's state and elements.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{App, AppSpec, Cx, El, Env, Play, Playground, Runtime, Story, Tx, col, el, text};
 
 const DT: f64 = 1.0 / 60.0;

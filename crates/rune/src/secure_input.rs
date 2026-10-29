@@ -6,6 +6,7 @@ impl SecureInput {
     pub(crate) fn set(&mut self, active: bool) {
         if active == self.0 { return; }
         #[cfg(target_os = "macos")]
+        // SAFETY: Carbon's `EnableSecureEventInput`/`DisableSecureEventInput` are process-global C functions paired 1:1 via `self.0`.
         unsafe {
             if active {
                 self.0 = EnableSecureEventInput() == 0;

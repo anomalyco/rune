@@ -3,6 +3,7 @@
 //! hidden `App::window` window. A launcher panel's open and an overlay's show stay
 //! nonactivating. Starts a helper app to hold the focus (handed to it with CuaDriver when
 //! nothing yields), so it only runs with RUNE_GUI_TESTS=1 in a logged-in macOS GUI session.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 #[cfg(not(target_os = "macos"))]
 fn main() {}

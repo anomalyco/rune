@@ -1,5 +1,6 @@
 //! A scroll pinned to all four edges of its parent takes its size from those insets, not from
 //! its content, so its rows scroll inside it.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::runtime::ElementInfo;
 use rune::{Cx, El, Env, Runtime, ScrollSpec, col, el};
 

@@ -23,6 +23,7 @@
 //! `rows_built` counts row builder calls in the swap frame (an eager list builds every row in
 //! its view); `rows_mounted` counts the shown list's rows laid out after it, and
 //! `rows_settled` after the frames that follow.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::time::Instant;

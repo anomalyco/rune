@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Color, Cx, El, Env, Runtime, Spring, Transition, col, el, row};
 
 /// A tile that lives in the left box (40 pt) or, zoomed, in the right box (160 pt).

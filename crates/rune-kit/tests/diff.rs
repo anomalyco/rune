@@ -1,6 +1,7 @@
 //! `rune_kit::diff`: patches parse into files of hunks, texts diff line by line and word by
 //! word, folded ranges open, and `DiffView` lays annotations under their lines, builds only
 //! the rows in view, selects lines from the gutter and copies one side's text.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use std::fmt::Write;
 

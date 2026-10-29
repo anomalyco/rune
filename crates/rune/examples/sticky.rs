@@ -12,6 +12,7 @@
 //!
 //! Scroll frame benchmark (50 sticky sections, `--profile perf`):
 //!   cargo run --profile perf -p rune --example sticky -- --bench
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use std::time::Instant;
 
 use rune::tok::{self, type_};

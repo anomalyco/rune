@@ -42,8 +42,8 @@ thread_local! {
 
 fn counted(size: usize) {
     ALLOCS.fetch_add(1, Relaxed);
-    let _ = THREAD_ALLOCS.try_with(|c| c.set(c.get() + 1));
-    let _ = THREAD_BYTES.try_with(|c| c.set(c.get().wrapping_add(size as u64)));
+    THREAD_ALLOCS.try_with(|c| c.set(c.get() + 1)).ok();
+    THREAD_BYTES.try_with(|c| c.set(c.get().wrapping_add(size as u64))).ok();
 }
 
 /// Allocations (and reallocations) made on this thread so far; 0 unless [`Counting`] is the
@@ -105,6 +105,7 @@ fn shrank(size: usize) {
 unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         INSTALLED.store(1, Relaxed);
+        // SAFETY: caller upholds `GlobalAlloc::alloc`'s layout preconditions for `inner`.
         let p = unsafe { self.inner.alloc(layout) };
         if !p.is_null() {
             counted(layout.size());
@@ -115,6 +116,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         INSTALLED.store(1, Relaxed);
+        // SAFETY: caller upholds `GlobalAlloc::alloc_zeroed`'s layout preconditions for `inner`.
         let p = unsafe { self.inner.alloc_zeroed(layout) };
         if !p.is_null() {
             counted(layout.size());
@@ -124,11 +126,13 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: caller upholds `GlobalAlloc::dealloc`'s pointer and layout preconditions.
         unsafe { self.inner.dealloc(ptr, layout) };
         shrank(layout.size());
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        // SAFETY: caller upholds `GlobalAlloc::realloc`'s pointer, layout and size preconditions.
         let p = unsafe { self.inner.realloc(ptr, layout, new_size) };
         if !p.is_null() {
             counted(new_size);
@@ -152,8 +156,9 @@ pub fn tag_thread(name: &'static str) {
             match TAG_NAMES[i].compare_exchange(std::ptr::null_mut(), fresh, Release, Acquire) {
                 Ok(_) => true,
                 Err(other) => {
-                    // SAFETY: `fresh` was never shared.
+                    // SAFETY: `fresh` was never shared, and `other` came from a leaked `&'static str` box.
                     drop(unsafe { Box::from_raw(fresh) });
+                    // SAFETY: `other` is non-null because `compare_exchange` against null failed.
                     unsafe { *other == name }
                 }
             }

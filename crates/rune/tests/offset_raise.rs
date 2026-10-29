@@ -1,6 +1,7 @@
 //! `El::offset` shifts an element without moving its siblings and springs between shifts;
 //! `El::raise` paints and hits an element above later siblings; `on_hover_change` hears an
 //! element that appears under a still pointer.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Cx, El, Env, Runtime, Spring, col, el};
 
 #[derive(Default)]

@@ -1,6 +1,7 @@
 //! Selectable text in the places it meets the rest of the app: inside a clickable, draggable or
 //! context-menu row, with links beside a focused field, under app shortcuts, at line ends, and
 //! when the view changes the text under a live selection.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use std::cell::Cell;
 
 use rune::runtime::ElementInfo;

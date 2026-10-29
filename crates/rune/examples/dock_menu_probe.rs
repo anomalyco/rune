@@ -1,5 +1,6 @@
 //! Accessory-to-Regular native menu proof. RUNE_MENU_ORDER=before|after chooses
 //! whether custom items are installed before or after showing the Dock icon.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 #[cfg(not(target_os = "macos"))]
 fn main() { eprintln!("macOS only"); }
 

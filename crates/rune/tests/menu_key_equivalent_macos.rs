@@ -2,6 +2,7 @@
 //! each item holds, what it shows, and that the key typing its character fires it on the
 //! machine's own layout. Key events are built from key codes and handed to the menu, never
 //! posted.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 #[cfg(target_os = "macos")]
 #[allow(dead_code)]
 #[path = "../src/native_menu/key_equivalent.rs"]

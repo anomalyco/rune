@@ -4,6 +4,7 @@
 //! macOS only shows notifications for a bundled, signed app, so outside one (`cargo run`, tests)
 //! `available` is false and `post` does nothing. Notifications are silent: they never set a sound.
 //! The first post asks the person for permission; until they allow it, posts are dropped.
+#![cfg_attr(target_os = "macos", expect(clippy::undocumented_unsafe_blocks, reason = "UserNotifications/objc2 FFI pending per-call SAFETY audit"))]
 
 use std::sync::{Mutex, OnceLock};
 

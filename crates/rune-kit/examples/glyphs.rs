@@ -1,5 +1,6 @@
 //! Every built-in glyph at 16 pt, labelled, light beside dark. The still `demo/kit/glyphs.png`:
 //! `-- --snap demo/kit/glyphs.png --size 1000x540 --scale 2`.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{AppSpec, Cx, El, Icon, col, icon, row, text};
 use rune_kit::{Kit, glyphs};
 

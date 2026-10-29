@@ -19,6 +19,7 @@ use crate::Tx;
 use crate::runtime::Waker;
 
 #[cfg(all(feature = "native-file-dialog", target_os = "linux"))]
+#[expect(clippy::disallowed_methods, clippy::let_underscore_must_use, reason = "XDG FileChooser portal thread")]
 mod portal;
 #[cfg(any(all(feature = "native-file-dialog", target_os = "linux"), all(test, unix)))]
 mod portal_format;

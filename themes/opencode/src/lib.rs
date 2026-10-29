@@ -6,6 +6,7 @@
 //! let k = rune_theme_opencode::kit(cx.system_dark());
 //! rune_kit::Button::new("Save").build(k)
 //! ```
+#![deny(unsafe_code)]
 
 pub mod icons;
 

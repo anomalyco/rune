@@ -2,6 +2,7 @@
 //! Basic operations use strict Rust f32 semantics (no mul_add or fast-math); all
 //! transcendentals use pinned libm. The canonical output is sRGB RGBA8, quantized
 //! after each source-over operation, including clear. See research/24.
+#![deny(unsafe_code)]
 
 pub mod generate;
 pub mod blend;

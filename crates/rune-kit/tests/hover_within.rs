@@ -1,4 +1,5 @@
 //! `El::hover_motion_within` sets the hover curves kit controls' inner elements use.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Anim, Color, Cx, Curve, Easing, El, Env, Runtime, col, el, row, text};
 use rune_kit::{Kit, Popover, SegmentedControl, Switch, root};
 

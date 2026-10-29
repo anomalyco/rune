@@ -1,6 +1,7 @@
 //! Pressing anywhere on a `TextInput`, `TextField` or `TextArea` box focuses its editor,
 //! places the caret at the nearest end, never blurs a focused field or starts a window drag,
 //! and leaves trailing action buttons with their own presses.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use rune::runtime::ElementInfo;
 use rune::{Cx, El, Env, Runtime, TextEdit, col, row, text};

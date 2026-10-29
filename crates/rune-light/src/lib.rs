@@ -13,6 +13,7 @@
 //!    contact AO, text with a contrast floor, soft shoulder, sRGB + dither.
 //!
 //! Zero lights and no emitters: [`LightRenderer::render`] records nothing and returns `false`; draw the UI as usual.
+#![deny(unsafe_code)]
 
 pub mod cpu;
 pub mod glass;

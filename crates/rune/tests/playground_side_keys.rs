@@ -1,5 +1,6 @@
 //! A story's side controls that take keys (`Story::side_keys`, `Playground::side_keys`): the
 //! keyboard goes onto them from the list, their hook gets keys first, and Esc or Tab leave.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{App, AppSpec, Cx, El, Env, Key, KeyEvent, Mods, Playground, Runtime, Story, Tx, text};
 
 #[derive(Default)]

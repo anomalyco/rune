@@ -1,5 +1,6 @@
 //! The focused field's caret is readable from the view (`Cx::caret`) and tools
 //! (`ElementInfo::caret`) in window points, after scrolling and inside an IME composition.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::runtime::ElementInfo;
 use rune::{Cx, El, Env, Ime, Key, KeyEvent, Runtime, ScrollSpec, TextEdit, TextStyle, col, el, text_input};
 

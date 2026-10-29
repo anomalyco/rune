@@ -1,4 +1,5 @@
 //! Tests for `rune_kit::markdown::find` and `Case`.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 #![cfg(feature = "markdown")]
 
 use std::ops::Range;

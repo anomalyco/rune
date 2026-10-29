@@ -2,6 +2,7 @@
 //! by hiding without quitting the app, reopens with that state, and never keeps the app
 //! running once the main window closes, closing with it. Opens native windows, so it only runs with
 //! RUNE_GUI_TESTS=1 in a logged-in GUI session.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use std::sync::{Mutex, atomic::{AtomicUsize, Ordering}};
 use std::time::{Duration, Instant};

@@ -2,6 +2,7 @@
 //! file the tree has selected. `cargo run -p rune-kit --example tree` opens the window;
 //! `-- --big` loads 50,000 files instead. The stills in `demo/kit/tree-{dark,light}.png`:
 //! `-- --snap tree.png --theme dark --size 720x480 --scale 2`.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{AppSpec, Cx, El, TextEdit, col, row, text};
 use rune_kit::{FileNode, FileTree, Kit, TextInput, Tree, TreeItem, TreeModel};
 

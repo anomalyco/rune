@@ -1,5 +1,6 @@
 //! Replaying and triggering the open story from a handler: `Tx::replay_playground` and
 //! `Tx::playground_trigger`, as a deep link does after `Tx::open_playground_at`.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{App, AppSpec, Cx, El, Env, Playground, Runtime, Story, text};
 
 #[derive(Default)]

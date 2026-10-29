@@ -3,6 +3,7 @@
 //! shadow once after each show and resize, never on ordinary frames. Reads the layer and
 //! counts `-[NSWindow invalidateShadow]` calls without looking at the screen. Opens a native
 //! window, so it only runs with RUNE_GUI_TESTS=1 in a logged-in macOS GUI session.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 #[cfg(not(target_os = "macos"))]
 fn main() {}

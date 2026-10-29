@@ -24,3 +24,6 @@ gungraun = "=0.20.0"
 [[bench]]
 name = "instructions"
 harness = false
+
+[lints]
+workspace = true

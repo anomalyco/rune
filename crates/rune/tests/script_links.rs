@@ -1,5 +1,6 @@
 //! `--script` taps a link (`El::link`) by its id, as it taps an element by key. A wrapped link
 //! is tapped on its first line.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::*;
 
 const TEXT: &str = "see docs or a very long link that wraps";

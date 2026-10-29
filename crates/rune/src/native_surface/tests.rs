@@ -703,6 +703,7 @@ fn publish_oriented(s: &NativeSurface, b: ByteFrame, id: u64, native: bool, o: O
 }
 
 #[test]
+#[expect(clippy::approx_constant, reason = "4-digit sin/cos literal checks non-quarter-turn rejection")]
 fn orientations_come_from_quarter_turn_transforms_only() {
     // An iPhone portrait clip: buffer (x, y) shows at (h - y, x).
     assert_eq!(Orient::from_transform(0.0, 1.0, -1.0, 0.0), Orient([0, 1, -1, 0]));

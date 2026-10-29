@@ -2,6 +2,7 @@
 //!
 //! Every scenario keeps all tracks active for the whole measurement (long, bouncy springs that
 //! can't settle in time) and reports the best of several runs (robust to a busy machine).
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use std::hint::black_box;
 use std::time::Instant;

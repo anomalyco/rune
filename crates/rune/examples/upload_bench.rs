@@ -3,6 +3,7 @@
 //! time to record and submit a frame, the median time until the GPU is done, and the buffers
 //! created per frame. Run with `--profile perf`; it leaves out presentation, and the GPU copy
 //! is counted only in `frame_us`.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use std::time::Instant;
 

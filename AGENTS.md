@@ -12,6 +12,7 @@ A Rust GPU UI framework (wgpu, winit) for apps that feel like SwiftUI on iOS at 
 
 - `cargo test -p rune -p rune-kit --features rune-kit/markdown`
 - `cargo check --workspace --all-targets`
+- `cargo clippy --workspace --all-targets`
 - Tests run in debug. `--release` is incremental, for looking at an app. Benchmarks use `--profile perf`; the runtime bench scripts refuse other builds.
 
 ## Changes

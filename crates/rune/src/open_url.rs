@@ -165,7 +165,7 @@ fn percent_encode_non_ascii(url: &str) -> std::borrow::Cow<'_, str> {
             out.push(b as char);
         } else {
             use std::fmt::Write;
-            let _ = write!(out, "%{b:02X}");
+            write!(out, "%{b:02X}").ok();
         }
     }
     std::borrow::Cow::Owned(out)
@@ -183,6 +183,7 @@ fn open(url: &str) -> Result<(), OpenUrlError> {
 }
 
 #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))]
+#[expect(clippy::disallowed_methods, clippy::let_underscore_must_use, reason = "reaps detached xdg-open child process")]
 fn open(url: &str) -> Result<(), OpenUrlError> {
     debug_assert!(!url.starts_with('-'));
     // xdg-open's argument loop rejects `--` as an unknown option; `check` guarantees a scheme prefix.

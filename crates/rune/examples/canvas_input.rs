@@ -12,6 +12,7 @@
 //!   the view.
 //!
 //! cargo run -p rune --example canvas_input
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Color, Cx, Drag, El, Env, Key, KeyEvent, Live, MagnifyEvent, Mods, Phase, PointerButton, Runtime, ScrollSpec, Tx, WheelEvent, col, el, row};
 
 const CANVAS: f32 = 400.0;

@@ -408,6 +408,7 @@ pub(crate) fn arg(argv: &[String], i: &mut usize) -> Option<String> {
     name
 }
 
+#[expect(clippy::disallowed_methods, reason = "reads RUNE_PLAYGROUND toggle")]
 fn hidden_by_env() -> bool {
     std::env::var("RUNE_PLAYGROUND").is_ok_and(|v| v == "0")
 }

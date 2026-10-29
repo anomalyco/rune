@@ -4,6 +4,7 @@
 //! Off macOS every helper is a no-op: `remember_frame` returns true (so a `poll` that waits on it
 //! stops), `saved_size` returns `None`, `is_full_screen` returns false, and `toggle_full_screen`,
 //! `launch` and `busy` do nothing. `notify` posts nothing and reports `available() == false`.
+#![cfg_attr(test, allow(clippy::disallowed_methods, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks))]
 
 pub mod notify;
 mod quiet;
@@ -14,6 +15,7 @@ pub use quiet::launch;
 /// (from `poll`) until it returns true: the window doesn't exist during `setup`.
 pub fn remember_frame(name: &str) -> bool {
     #[cfg(target_os = "macos")]
+    // SAFETY: called on the main thread inside AppKit's event loop; selectors match NSApplication/NSWindow.
     unsafe {
         use objc2::{class, msg_send, runtime::AnyObject};
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
@@ -38,6 +40,7 @@ pub fn remember_frame(name: &str) -> bool {
 /// ⌃⌘F). Headless, with no window, it does nothing.
 pub fn toggle_full_screen() {
     #[cfg(target_os = "macos")]
+    // SAFETY: called on the main thread; null sender is valid for `toggleFullScreen:`.
     unsafe {
         use objc2::{class, msg_send, runtime::AnyObject};
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
@@ -54,6 +57,7 @@ pub fn toggle_full_screen() {
 /// Whether the app's key window is in macOS full screen.
 pub fn is_full_screen() -> bool {
     #[cfg(target_os = "macos")]
+    // SAFETY: called on the main thread; `styleMask` returns `NSWindowStyleMask` (`NSUInteger`).
     unsafe {
         use objc2::{class, msg_send, runtime::AnyObject};
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
@@ -74,6 +78,7 @@ pub fn is_full_screen() -> bool {
 /// frame after the first layout resizes it, and the layout animates to the new size at launch.
 pub fn saved_size(name: &str) -> Option<(f32, f32)> {
     #[cfg(target_os = "macos")]
+    // SAFETY: `key` is NUL-terminated and `UTF8String` stays valid within the autoreleased `NSString`.
     unsafe {
         use objc2::{class, msg_send, runtime::AnyObject};
         let key = std::ffi::CString::new(format!("NSWindow Frame {name}")).ok()?;
@@ -107,6 +112,7 @@ mod tests;
 /// Holds `scripts/mac-app`'s relaunch while `on`, for work a relaunch would lose (a recording in
 /// progress, say). The marker is this process's pid in `~/Library/Caches/mac-app/busy/`, so only
 /// this process holds the swap and a crash can't hold it forever.
+#[expect(clippy::disallowed_methods, clippy::let_underscore_must_use, reason = "best-effort pid marker under HOME/Library/Caches")]
 pub fn busy(on: bool) {
     if !cfg!(target_os = "macos") {
         return;

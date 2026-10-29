@@ -3,6 +3,7 @@
 //! Mouse events are synthetic NSEvents on the app's own queue. Opens a window, so it only runs
 //! with RUNE_GUI_TESTS=1 in a logged-in GUI session. With RUNE_HELP_HOLD=<seconds> it keeps the
 //! tooltip up that long after printing `TOOLTIP`, for an outside screenshot.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 #[cfg(not(target_os = "macos"))]
 fn main() {}

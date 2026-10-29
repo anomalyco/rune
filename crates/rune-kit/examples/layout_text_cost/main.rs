@@ -26,6 +26,7 @@
 //! CARGO_PROFILE_PERF_DEBUG=limited cargo build --profile perf -p rune-kit \
 //!   --example layout_text_cost --features markdown,frame-profile
 //! target/perf/examples/layout_text_cost [--case stack,list] [--kb 50] [--mode time|sample|heap] [--out FILE] [--repeat N]
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 mod probe;
 
 use std::borrow::Cow;

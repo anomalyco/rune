@@ -8,6 +8,7 @@
 //! against a 2× browser screenshot of the same page.
 //! `coretext_compare export DIR` and `pack DIR`: the two halves of
 //! `scripts/coretext-reference.sh`.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::FontSmoothing;
 use rune::text::pixel_compare::{self as pc, Image, Options, Reference, Set};
 use std::path::{Path, PathBuf};

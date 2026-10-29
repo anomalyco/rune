@@ -1,5 +1,6 @@
 //! Editing keeps the caret line inside the field's nearest scroll viewport, as a browser
 //! textarea does.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::runtime::ElementInfo;
 use rune::{Color, El, Env, Ime, Key, KeyEvent, Runtime, ScrollSpec, TextEdit, TextStyle, col, el, text_input};
 

@@ -1,6 +1,7 @@
 //! winit's `effectiveAppearance` observer receives `NSNull` when ReplayKit/ScreenCaptureKit
 //! calls `setStyleMask:` on app windows. Opens windows, so it only runs with RUNE_GUI_TESTS=1
 //! in a logged-in GUI session. Each case runs in a child process because the bug aborts.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 #[cfg(not(target_os = "macos"))]
 fn main() {}

@@ -1,6 +1,7 @@
 //! `El::scroll_x` and `El::scroll_xy`: horizontal offsets, clamping, momentum, the axis a wheel
 //! gesture locks to in nested viewports, `Tx::scroll_into_view` and `Tx::scroll_to_x` on x, and
 //! left and right edge fades.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::render::{KIND_GLYPH, unpack_fade};
 use rune::{Color, Cx, El, Env, GrowthSpec, Runtime, ScrollSpec, col, el, row, text};
 

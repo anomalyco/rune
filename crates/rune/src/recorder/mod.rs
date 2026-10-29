@@ -13,6 +13,7 @@
 mod fake;
 mod meter;
 #[cfg(target_os = "macos")]
+#[expect(clippy::disallowed_methods, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, reason = "AVAudioRecorder worker thread and FFI")]
 mod macos;
 #[cfg(target_os = "macos")]
 use macos as backend;
@@ -434,7 +435,7 @@ impl Recorder {
             backend::cancel(session);
         }
         if let Some(path) = path {
-            let _ = std::fs::remove_file(path);
+            std::fs::remove_file(path).ok();
         }
         shared.settle();
     }
@@ -775,7 +776,7 @@ impl Drop for Shared {
             && matches!(c.state, RecorderState::Recording | RecorderState::Paused)
         {
             let elapsed = f.unplug.map_or(c.elapsed, |t| c.elapsed.min(t));
-            let _ = fake::write_wav(&f.path, &f.input, frames_at(elapsed, f.input.rate));
+            fake::write_wav(&f.path, &f.input, frames_at(elapsed, f.input.rate)).ok();
         }
         if let Some((_, session)) = self.native.get_mut().unwrap_or_else(PoisonError::into_inner).take() {
             backend::finish(session);

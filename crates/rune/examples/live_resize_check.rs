@@ -9,6 +9,7 @@
 //!
 //! Prints a line per size, PASS/FAIL lines, and exits nonzero on a failure. It needs a screen
 //! and moves no real pointer. `RUNE_LIVE_RESIZE_SLOW_MS=10` makes each frame cost that much.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 #[cfg(not(target_os = "macos"))]
 fn main() { eprintln!("macOS only"); }
 

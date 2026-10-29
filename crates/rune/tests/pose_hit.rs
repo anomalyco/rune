@@ -1,5 +1,6 @@
 //! `Runtime::presented_pose` and the moving flag cover shadow and rotation springs;
 //! Picking shares press geometry, but also finds elements without handlers.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Color, Cx, El, Env, Runtime, Shadow, Spring, col, el};
 use std::f32::consts::FRAC_PI_4;
 

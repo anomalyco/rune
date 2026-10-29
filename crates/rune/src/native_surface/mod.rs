@@ -5,6 +5,7 @@
 #[path = "tests.rs"]
 mod gpu_tests;
 #[cfg(target_os = "macos")]
+#[expect(clippy::undocumented_unsafe_blocks, reason = "IOSurface/CoreVideo Metal import FFI")]
 pub mod macos;
 mod pipeline;
 pub use pipeline::SurfaceRenderer;

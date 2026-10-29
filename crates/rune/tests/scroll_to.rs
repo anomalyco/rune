@@ -1,6 +1,7 @@
 //! `Tx::scroll_to`, `Tx::scroll_to_instant` and `Tx::scroll_to_y`: moving a viewport to an
 //! offset the app picked, gliding or at once, clamped, on virtual rows too; and
 //! `Tx::scroll_key_to`, landing a row at a height in its viewport.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Cx, El, Env, GrowthSpec, Runtime, ScrollSpec, col, el, row};
 
 #[derive(Default)]

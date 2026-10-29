@@ -6,6 +6,7 @@
 //! Run: `cargo test -p rune-kit --features mermaid --test markdown_fixture`.
 //! Accept an intended change by re-running with `RUNE_BLESS=1`, then review the golden diff.
 //! On a mismatch the fresh tree is written next to the build output (path in the failure).
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use std::fmt::Write as _;
 use std::path::PathBuf;

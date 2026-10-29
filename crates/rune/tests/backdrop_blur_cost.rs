@@ -2,6 +2,7 @@
 //! scrolling list, against the same bar with a plain fill.
 //!
 //! `cargo test -p rune --profile perf --test backdrop_blur_cost -- --ignored --nocapture`
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use std::time::Instant;
 
 use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};

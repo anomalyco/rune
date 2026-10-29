@@ -90,6 +90,7 @@ pub(crate) struct Log {
 
 #[cfg(feature = "frame-profile")]
 impl Log {
+    #[expect(clippy::disallowed_methods, reason = "reads RUNE_FRAME_LOG output path")]
     pub(crate) fn new(frames: usize) -> Self {
         let out = std::env::var_os("RUNE_FRAME_LOG").map(|path| {
             let file = std::fs::File::create(&path).unwrap_or_else(|e| panic!("RUNE_FRAME_LOG {}: {e}", path.to_string_lossy()));

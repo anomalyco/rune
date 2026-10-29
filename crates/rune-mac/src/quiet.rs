@@ -6,6 +6,7 @@
 const VAR: &str = "MAC_APP_QUIET";
 
 /// Call first thing in `main`, before the event loop.
+#[expect(clippy::disallowed_methods, reason = "reads MAC_APP_QUIET handoff variable at startup")]
 pub fn launch() {
     if std::env::var_os(VAR).is_none() {
         return;
@@ -13,6 +14,7 @@ pub fn launch() {
     // SAFETY: called first in `main`, before the app starts any thread.
     unsafe { std::env::remove_var(VAR) };
     #[cfg(target_os = "macos")]
+    // SAFETY: called on the main thread before winit builds the event loop.
     unsafe {
         use objc2::{class, msg_send, runtime::AnyObject};
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
@@ -27,6 +29,7 @@ pub fn launch() {
 /// behind whatever is in front.
 #[cfg(target_os = "macos")]
 extern "C" fn check(tries: *mut std::ffi::c_void) {
+    // SAFETY: dispatched onto the main queue by `after`; `tries` carries an integer count.
     unsafe {
         use objc2::{class, msg_send, runtime::AnyObject};
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
@@ -42,6 +45,7 @@ extern "C" fn check(tries: *mut std::ffi::c_void) {
 
 #[cfg(target_os = "macos")]
 fn after(tries: usize) {
+    // SAFETY: `_dispatch_main_q` is the static main queue and `check` has matching C ABI.
     unsafe { dispatch_after_f(dispatch_time(0, 250_000_000), &raw const _dispatch_main_q, tries as *mut std::ffi::c_void, check) };
 }
 

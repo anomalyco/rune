@@ -243,7 +243,7 @@ fn system_font_files(fragments: &[&str]) -> Vec<std::path::PathBuf> {
     files.into_iter().map(|(_, path)| path.clone()).collect()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_arch = "wasm32"))] #[expect(clippy::disallowed_methods, reason = "system font directory env discovery")]
 fn walk_font_dirs() -> Vec<(String, std::path::PathBuf)> {
     let mut dirs: Vec<std::path::PathBuf> = Vec::new();
     if cfg!(target_os = "macos") {

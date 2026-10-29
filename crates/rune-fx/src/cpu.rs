@@ -53,7 +53,8 @@ pub(crate) fn gnoise(x: f32, y: f32, per: i32, seed: u32) -> f32 {
     let (ux, uy) = (fade(fx), fade(fy));
     let ab = a + (b - a) * ux;
     let cd = c + (d - c) * ux;
-    (ab + (cd - ab) * uy) * 1.41421
+    #[expect(clippy::approx_constant, reason = "matches WGSL shader literal bit-for-bit")]
+    { (ab + (cd - ab) * uy) * 1.41421 }
 }
 /// Multi-octave lateral displacement for bolts, ~[-1.6, 1.6].
 pub(crate) fn disp(x0: f32, t0: f32, per0: i32, seed: u32, oct: u32) -> f32 {

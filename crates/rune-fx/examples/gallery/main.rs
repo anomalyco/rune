@@ -4,6 +4,7 @@
 //!   gallery --effect fire            one effect
 //!   gallery --frames DIR --fps 60 --seconds 2 --effect fire   PNG sequence
 //!   gallery --timings                GPU timings only
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 mod ui;
 

@@ -5,6 +5,7 @@
 //! in opaque windows and in headless renders, the element's fill (or a neutral tint) stands in.
 
 #[cfg(target_os = "macos")]
+#[expect(clippy::undocumented_unsafe_blocks, reason = "NSVisualEffectView/NSGlassEffectView AppKit FFI")]
 pub(crate) mod macos;
 #[cfg(test)]
 mod tests;
@@ -151,6 +152,7 @@ impl Mode {
     }
 
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[expect(clippy::disallowed_methods, reason = "reads RUNE_SYSTEM_MATERIAL override")]
     pub(crate) fn from_env() -> Mode {
         Mode::parse(std::env::var("RUNE_SYSTEM_MATERIAL").ok().as_deref())
     }

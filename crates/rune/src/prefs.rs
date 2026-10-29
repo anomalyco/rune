@@ -59,6 +59,7 @@ pub struct Prefs {
 impl Prefs {
     /// The settings of the app with this id (a reverse-DNS name is conventional), loaded from
     /// its config directory. Slashes and other characters a folder name can't hold become `_`.
+    #[expect(clippy::disallowed_methods, reason = "resolves OS config directory from HOME/XDG/APPDATA")]
     pub fn open(app_id: &str) -> Prefs {
         match config_dir(|k| std::env::var_os(k)) {
             Some(dir) => Prefs::at(dir.join(sanitize(app_id)).join(FILE)),
@@ -119,7 +120,7 @@ fn load(path: &Path) -> BTreeMap<String, Value> {
     if let Ok(values) = serde_json::from_slice(&bytes) { return values; }
     let mut bad = path.as_os_str().to_owned();
     bad.push(".bad");
-    if std::fs::rename(path, &bad).is_err() { let _ = std::fs::write(&bad, &bytes); }
+    if std::fs::rename(path, &bad).is_err() { std::fs::write(&bad, &bytes).ok(); }
     BTreeMap::new()
 }
 
@@ -139,7 +140,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         drop(file);
         std::fs::rename(&tmp, path)
     })();
-    if result.is_err() { let _ = std::fs::remove_file(&tmp); }
+    if result.is_err() { std::fs::remove_file(&tmp).ok(); }
     result
 }
 

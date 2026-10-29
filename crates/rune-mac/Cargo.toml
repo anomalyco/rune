@@ -8,3 +8,6 @@ description = "Small macOS helpers for Rune apps: a remembered window frame, ful
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5.2"
 block2 = "0.5"
+
+[lints]
+workspace = true

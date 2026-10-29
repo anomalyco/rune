@@ -1,5 +1,6 @@
 //! Timestamp-only native spring probe. Run on a worker with a display:
 //! cargo run --profile perf -p rune --example pacing -- --native --trace pacing.jsonl --frames 240
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{App, AppSpec, Color, Cx, El, Spring, el};
 
 fn view(wide: &bool, _: &mut Cx<bool>) -> El {

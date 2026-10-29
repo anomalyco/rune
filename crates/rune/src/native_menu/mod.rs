@@ -15,6 +15,7 @@ mod key_equivalent_tests;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod standard;
 #[cfg(target_os = "macos")]
+#[expect(clippy::undocumented_unsafe_blocks, reason = "NSMenu standard edit actions AppKit FFI")]
 mod standard_macos;
 #[cfg(target_os = "macos")]
 pub(crate) use default_macos::{ensure as ensure_default_menu, promote as promote_default_menu};

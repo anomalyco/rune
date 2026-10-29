@@ -1,6 +1,7 @@
 //! Every built-in glyph rasterises like a reference SVG renderer (resvg) at the sizes
 //! components draw them. Set `RUNE_GLYPH_PROOF=<dir>` to also write enlarged contact sheets:
 //! Rune's mask, resvg's, and their difference, per glyph and size.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use resvg::{tiny_skia, usvg};
 use rune::Icon;

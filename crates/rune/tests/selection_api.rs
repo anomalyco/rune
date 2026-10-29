@@ -2,6 +2,7 @@
 //! `Tx::clear_text_selection` set it after the handler's commit (in time for a key in the same
 //! frame), `Tx::text_selection` reads it, `El::selection_copy` decides what copying takes and
 //! `El::on_selection_change` hears it change.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use std::cell::RefCell;
 use std::ops::Range;
 

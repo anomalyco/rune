@@ -1,6 +1,7 @@
 //! `w_frac` on an absolute child resolves against its own parent's padding box: not a padded
 //! ancestor's (which made it 12 pt too wide under a 6 pt padded grandparent), not the parent's
 //! content box, and with no scrollbar gutter in a scroll viewport.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::runtime::ElementInfo;
 use rune::{Color, Cx, El, Env, Runtime, ScrollSpec, col, el, row};
 

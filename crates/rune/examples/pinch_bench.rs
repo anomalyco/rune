@@ -16,6 +16,7 @@
 //! pinch frames: `commits` per frame, `cpu_ms` (thread CPU of the frame, then of preparing and
 //! encoding its draw), `frame_ms` (the runtime's part), `encode_ms` (the draw's), `view_ms`
 //! and `layout_ms` (phases of the commit), and `allocations`.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
 use rune::{Color, Cx, El, Env, Live, MagnifyEvent, Runtime, TextStyle, Tx, el, text};
 

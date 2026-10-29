@@ -1,5 +1,6 @@
 //! Main-thread native test: read installed layouts' data without selecting one or changing
 //! user settings.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 #[cfg(target_os = "macos")]
 #[path = "../src/shortcuts/layout_macos.rs"]
 mod layout_macos;

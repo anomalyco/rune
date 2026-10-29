@@ -1,5 +1,6 @@
 //! `Runtime::motion_elements` agrees with `Runtime::elements` on what a motion watcher reads,
 //! frame by frame, through a wheel scroll and a fade.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Cx, El, Env, MotionElement, Runtime, ScrollSpec, col, el, text};
 
 struct S {

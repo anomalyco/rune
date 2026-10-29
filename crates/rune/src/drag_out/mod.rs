@@ -22,6 +22,7 @@ use crate::color::{Color, srgb_decode, srgb_encode};
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "macos")]
+#[expect(clippy::undocumented_unsafe_blocks, reason = "NSDraggingSource AppKit FFI")]
 mod macos;
 
 /// Whether this platform's windows start OS drag sessions.

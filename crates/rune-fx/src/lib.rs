@@ -10,6 +10,7 @@
 //! - Intensity 0 or bounds off the viewport => the layer is culled in `prepare` (no draw, no cost).
 //! - Speeds never multiply raw time inside a shader without going through `Phase` on the caller side
 //!   when the speed animates; otherwise the phase jumps (no phase jump on speed change).
+#![deny(unsafe_code)]
 
 mod binds;
 mod catalog;

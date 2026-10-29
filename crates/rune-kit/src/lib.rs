@@ -12,6 +12,7 @@
 //! Overlays (popover, menu, select, tooltip, hover card, toast) return their trigger in place
 //! and their content as a separate `El` that the view mounts at the root with [`root`], so it
 //! draws above later siblings and escapes clipping ancestors.
+#![deny(unsafe_code)]
 
 mod budget;
 pub mod css;

@@ -1,5 +1,6 @@
 //! `fly_text` measures its landing spot by the destination's laid-out text, as it does the
 //! source, so a body stretched across a column doesn't scale the flight.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Cx, El, Env, Key, KeyEvent, Runtime, TextEdit, TextStyle, Tx, col, text, text_input};
 
 const STYLE: TextStyle = TextStyle::new(14.0, 400.0);

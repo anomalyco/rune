@@ -169,7 +169,7 @@ impl Args {
             }
             i += 1;
         }
-        let _ = EXTRA.set(extra);
+        EXTRA.set(extra).ok();
         if a.variant.is_some() && a.playground.is_none() { die("--variant needs --playground"); }
         if a.crop_key.is_some() && a.snap.is_none() { die("--crop KEY needs --snap"); }
         if a.whole_window && (a.playground.is_none() || a.snap.is_none()) { die("--whole-window needs --playground and --snap"); }

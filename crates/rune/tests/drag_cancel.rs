@@ -1,5 +1,6 @@
 //! A held drag ends cancelled, with `Phase::Up` and `Drag::cancelled`, when Escape is pressed or
 //! the window loses focus. The release that follows does nothing, and other keys pass through.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Cx, El, Env, Key, KeyEvent, Mods, Phase, Runtime, col, el};
 
 #[derive(Default)]

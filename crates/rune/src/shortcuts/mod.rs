@@ -3,20 +3,25 @@
 mod parse;
 mod keys;
 #[cfg(target_os = "macos")]
+#[expect(clippy::undocumented_unsafe_blocks, reason = "TIS keyboard layout Carbon FFI")]
 mod layout_macos;
 #[cfg(all(test, target_os = "macos"))]
 pub(crate) use layout_macos::force as force_layout;
 pub use keys::{PhysicalKeyCode, modifier_keycaps};
 mod service;
 #[cfg(target_os = "macos")]
+#[expect(clippy::let_underscore_must_use, reason = "catches panics across Carbon hotkey callback boundary")]
 mod macos;
 #[cfg(target_os = "windows")]
+#[expect(clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, reason = "Win32 RegisterHotKey FFI")]
 mod windows;
 #[cfg(target_os = "linux")]
+#[expect(clippy::disallowed_methods, clippy::let_underscore_must_use, reason = "X11 shortcut listener thread")]
 mod x11;
 #[cfg(any(target_os = "linux", test))]
 mod x11_repeat;
 #[cfg(all(target_os = "linux", feature = "dbus"))]
+#[expect(clippy::disallowed_methods, clippy::let_underscore_must_use, reason = "Wayland GlobalShortcuts portal thread")]
 mod wayland;
 
 pub use parse::Shortcut;

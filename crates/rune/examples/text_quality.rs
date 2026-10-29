@@ -1,4 +1,5 @@
 //! Headless S5 raster oracle. Export the exact shaped glyph IDs/positions for CoreText.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use parley::PositionedLayoutItem;
 use rune::color::hex;
 use rune::render::{Gpu, Instance, NO_CLIP, OFFSCREEN_FORMAT, Offscreen, Renderer, write_png};

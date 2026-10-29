@@ -1,5 +1,6 @@
 //! An instant commit lands what it changes and leaves motion an earlier commit started: a key
 //! pressed while a width springs doesn't land that width mid-flight. `Tx::settle` still lands it.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Cx, El, Env, Runtime, Spring, el, row, text};
 
 #[derive(Default)]

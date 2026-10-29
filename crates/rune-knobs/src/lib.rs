@@ -20,6 +20,7 @@
 //! root.child(rune_knobs::layer(&s.knobs, GROUPS, Style::dark(), |s: &mut State| &mut s.knobs))
 //! // in on_key: if rune_knobs::key(&mut s.knobs, ev) { return true }
 //! ```
+#![deny(unsafe_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -115,7 +116,7 @@ static NOTES: std::sync::OnceLock<&'static [Note]> = std::sync::OnceLock::new();
 
 /// Sets the app's notes on its knobs, once; later calls are ignored.
 pub fn describe(notes: &'static [Note]) {
-    let _ = NOTES.set(notes);
+    NOTES.get_or_init(|| notes);
 }
 
 fn note(name: &str) -> Option<&'static Note> {
@@ -555,6 +556,7 @@ impl Knobs {
     }
 
     /// Each of `g`'s knobs to a random value in its range.
+    #[expect(clippy::disallowed_methods, reason = "seed xorshift PRNG from wall clock on first Randomize")]
     pub fn random(&mut self, g: &Group) {
         self.checkpoint();
         if self.seed == 0 {

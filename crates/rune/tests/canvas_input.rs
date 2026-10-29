@@ -1,6 +1,7 @@
 //! Canvas input: `on_wheel` ahead of scroll views, pinch, rotation and smart magnify in the
 //! handler's own points, the middle button pressing and dragging elements that opt in, and key
 //! releases.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Cx, El, Env, GesturePhase, Ime, Key, KeyEvent, MagnifyEvent, Mods, Phase, PointerButton, RotateEvent, Runtime, ScrollSpec, TextEdit, TextStyle, WheelEvent, col, el, text_input};
 
 #[derive(Default)]

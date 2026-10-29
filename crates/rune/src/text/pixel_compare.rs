@@ -9,6 +9,7 @@
 //! `tests/coretext/sf/` and `tests/coretext/mono/` (ignored by git) and their comparisons are skipped where they're missing.
 //! `cargo run -p rune --example coretext_compare` prints the table; the macOS-only test
 //! `text::pixel_compare::tests` holds it to loose bounds.
+#![expect(clippy::let_underscore_must_use, reason = "infallible String fmt::Write in comparison report")]
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

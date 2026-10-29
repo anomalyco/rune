@@ -1,5 +1,6 @@
 //! Deep story paths: groups at any depth, a list that starts folded, folds kept across runs,
 //! the filter's keys, and top-level groups in the order the app names.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use std::cell::RefCell;
 use std::rc::Rc;
 

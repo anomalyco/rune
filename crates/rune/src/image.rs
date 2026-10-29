@@ -66,7 +66,7 @@ impl Image {
     fn finish(&self, decoded: Result<Decoded, ImageError>) {
         let decoded = decoded.map(Arc::new);
         let mips = decoded.as_ref().ok().cloned();
-        let _ = self.0.decoded.set(decoded);
+        self.0.decoded.set(decoded).ok();
         if let Some(mips) = mips { self.0.pixels.set_mips(mips); }
     }
 }
@@ -134,6 +134,7 @@ impl ImageCache {
         Self { entries: Mutex::new(HashMap::new()), wake }
     }
     #[cfg(not(target_arch = "wasm32"))]
+    #[expect(clippy::disallowed_methods, reason = "background image decode worker thread")]
     pub fn new(waker: crate::Waker) -> Self {
         let (jobs, receive) = mpsc::channel::<Job>();
         std::thread::Builder::new().name("rune-images".into()).spawn(move || {
@@ -239,7 +240,7 @@ impl ImageCache {
         entries.insert(id, Arc::downgrade(&image.0));
         #[cfg(not(target_arch = "wasm32"))]
         if self.jobs.send(Job { image: image.clone(), input }).is_err() {
-            let _ = image.0.decoded.set(Err(ImageError("image worker stopped".into())));
+            image.0.decoded.set(Err(ImageError("image worker stopped".into()))).ok();
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -401,6 +402,7 @@ fn svg_rgba(_: &[u8], _: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
 mod freedesktop {
     use std::path::{Path, PathBuf};
 
+    #[cfg_attr(target_os = "linux", expect(clippy::disallowed_methods, reason = "XDG icon search path discovery"))]
     pub(super) fn data_dirs() -> Vec<PathBuf> {
         let home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
@@ -461,6 +463,7 @@ fn macos_icon(path: &std::path::Path, px: u32) -> Result<(u32, u32, Vec<u8>), Im
     use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
     let path = path.to_str().ok_or_else(|| ImageError("app icon path is not UTF-8".into()))?;
     let workspace = macos_class("NSWorkspace")?;
+    // SAFETY: `NSWorkspace`/`NSBitmapImageRep` icon lookup uses valid UTF-8 `NSString` paths inside an autorelease pool.
     objc2::rc::autoreleasepool(|_| unsafe {
         let workspace: *mut AnyObject = msg_send![workspace, sharedWorkspace];
         let icon: *mut AnyObject = msg_send![workspace, iconForFile: &*NSString::from_str(path)];

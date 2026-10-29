@@ -5,6 +5,7 @@
 //! alone, that the source keeps its KVO class, and that a panel whose view was taken anyway
 //! gets it back. Opens windows, so it only runs with RUNE_GUI_TESTS=1 in a
 //! logged-in GUI session. Clicks are synthesized with `postEvent:`; the real pointer never moves.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 #[cfg(not(target_os = "macos"))]
 fn main() {}

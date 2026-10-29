@@ -1,5 +1,6 @@
 //! Headless frame output: a ring of staging buffers so the GPU renders the next frame while the
 //! last one is read back, and writer threads that stream frames to ffmpeg or PNG files.
+#![expect(clippy::disallowed_methods, clippy::let_underscore_must_use, reason = "ffmpeg/PNG capture worker threads and best-effort child teardown")]
 
 use std::collections::VecDeque;
 use std::io::Write;

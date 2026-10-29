@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{App, AppSpec, Chrome, Cx, El, WindowSpec};
 
 // Exactly the public field set at 32a1715. Deliberately exhaustive: adding a required field

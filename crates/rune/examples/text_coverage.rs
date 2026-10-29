@@ -1,5 +1,6 @@
 //! Text coverage: colour emoji, math alphanumerics and aligned wrapped text.
 //! `cargo run -p rune --example text_coverage -- --snap emoji.png --scene emoji --theme dark`
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use rune::tok::{self, TextStyle};
 use rune::{Align, AppSpec, Cx, El, col, row, text};

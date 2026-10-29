@@ -1,6 +1,7 @@
 //! Pressable spans in rich text: only a link's shaped glyph boxes take the pointer; it shows a
 //! hand, paints its hover and pressed looks, is a Tab stop pressed by Enter or Space, and is
 //! reported to tools with its role.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::runtime::ElementInfo;
 use rune::{Color, Cursor, Cx, El, Env, Key, KeyEvent, Link, LinkPaint, Mods, Runtime, Span, TextEdit, TextStyle, col, rich, text_input};
 

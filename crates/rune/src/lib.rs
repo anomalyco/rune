@@ -2,15 +2,18 @@
 //! spring tracks, an instanced wgpu uber-quad renderer with Parley text, pointer and keyboard
 //! input, scroll viewports, growth stacks, streaming reveals, themes as data, and headless agent
 //! tooling.
+#![cfg_attr(test, allow(clippy::disallowed_methods, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks))]
 
 #[cfg(all(target_arch = "wasm32", any(feature = "hot", feature = "native-file-dialog")))]
 compile_error!("web does not support Rune's hot or native-file-dialog features; disable them for wasm32");
 
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+#[expect(clippy::let_underscore_must_use, reason = "best-effort Wayland queue flush on close")]
 mod activation;
 mod app;
 pub mod time;
 #[cfg(target_arch = "wasm32")]
+#[expect(clippy::let_underscore_must_use, reason = "DOM listener teardown on web")]
 pub mod web;
 /// The logical clock a scene fn (`AppSpec::scenes`) builds its state against. `--scene` starts
 /// at time zero.
@@ -70,11 +73,15 @@ pub use native_menu::{MenuError, MenuItem};
 mod popup_menu;
 pub use popup_menu::{PopupAnchor, PopupItem, PopupMenu, PopupMenuError, popup_menu_supported};
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+#[expect(clippy::disallowed_methods, clippy::let_underscore_must_use, reason = "Wayland layer-shell watcher thread and queue flushes")]
 mod layer_shell;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+#[expect(clippy::let_underscore_must_use, reason = "X11 overlay configure and shape requests")]
 mod x11_overlay;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+#[expect(clippy::disallowed_methods, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, reason = "X11 pointer observer thread and Xlib FFI")]
 mod x11_pointer;
+#[expect(clippy::let_underscore_must_use, reason = "wgpu poll and winit size requests on closing overlays")]
 mod overlay;
 mod overlay_options;
 mod cursor;
@@ -83,26 +90,34 @@ mod os_cursor;
 #[cfg(any(test, target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
 mod pointer_observer;
 #[cfg(target_os = "windows")]
+#[expect(clippy::undocumented_unsafe_blocks, reason = "Win32 window FFI pending per-call SAFETY audit")]
 mod win32;
 #[cfg(target_os = "windows")]
+#[expect(clippy::disallowed_methods, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, reason = "Win32 pointer hook thread and FFI")]
 mod win32_pointer;
 #[cfg(target_os = "macos")]
+#[expect(clippy::disallowed_methods, clippy::undocumented_unsafe_blocks, reason = "AppKit shell FFI and RUNE_OVERLAY_TRACE_INPUT flag")]
 mod macos;
 #[cfg(target_os = "macos")]
 mod macos_cursor;
 #[cfg(target_os = "macos")]
+#[expect(clippy::disallowed_methods, clippy::undocumented_unsafe_blocks, reason = "AppKit drag destination FFI and drop temp timestamps")]
 mod macos_drop;
 #[cfg(target_os = "macos")]
 #[doc(hidden)]
+#[expect(clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, reason = "NSPanel AppKit FFI and TLS shutdown tracking")]
 pub mod macos_panel_bridge;
 #[cfg(target_os = "macos")]
 #[doc(hidden)]
+#[expect(clippy::undocumented_unsafe_blocks, reason = "NSAppearance KVO FFI pending per-call SAFETY audit")]
 pub mod macos_appearance;
 #[cfg(target_os = "macos")]
+#[expect(clippy::undocumented_unsafe_blocks, reason = "CADisplayLink/CVDisplayLink FFI")]
 mod display_link;
 #[cfg(target_os = "macos")]
 mod macos_help;
 #[cfg(target_os = "macos")]
+#[expect(clippy::undocumented_unsafe_blocks, reason = "NSWindow standardWindowButton AppKit FFI")]
 mod macos_traffic_lights;
 #[cfg(target_os = "macos")]
 mod macos_window_shape;
@@ -138,6 +153,7 @@ mod gpu_pick;
 pub mod gpu_springs;
 pub mod image;
 #[cfg(feature = "hot")]
+#[expect(clippy::disallowed_methods, clippy::let_underscore_must_use, reason = "dev hot-reload env handoff and timestamps")]
 pub mod hot;
 pub mod render;
 mod translucency;
@@ -174,6 +190,7 @@ pub mod text;
 pub mod theme;
 pub mod tok;
 pub mod tooling;
+#[expect(clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, reason = "winit event-loop proxy sends on teardown and raw window handles")]
 mod window;
 mod reopen;
 mod drop_pointer;
@@ -184,11 +201,13 @@ pub use frame_encoded::{FrameEncoded, FrameOutcome};
 pub use input_time::last_input;
 mod present_time;
 #[cfg(target_os = "macos")]
+#[expect(clippy::disallowed_methods, clippy::let_underscore_must_use, reason = "dedicated Metal drawable present worker thread")]
 mod present_worker;
 mod secure_input;
 pub mod clipboard;
 mod preferences;
 #[cfg(all(target_os = "linux", feature = "dbus"))]
+#[expect(clippy::disallowed_methods, clippy::let_underscore_must_use, reason = "XDG settings portal listener thread")]
 mod portal_appearance;
 mod accent;
 pub use accent::{SystemAccent, system_accent};

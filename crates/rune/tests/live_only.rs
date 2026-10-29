@@ -1,6 +1,7 @@
 //! `Tx::live_only`: a handler that moves only live values (a canvas camera) draws its frame,
 //! hit tests and reports `on_drawn_layout` without re-running the view. And the element-local
 //! points `on_pointer_move_local` and `on_secondary_press_local` give.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Cx, Drag, El, Env, Key, KeyEvent, Live, MagnifyEvent, Mods, Phase, PointerButton, PointerEvent, PointerPress, RotateEvent, Runtime, Tx, WheelEvent, el};
 
 struct S {

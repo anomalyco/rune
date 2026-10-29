@@ -1,5 +1,6 @@
 //! A story table made in a loop: each story's init, view, triggers and variants are closures
 //! that capture their row, and a story opens by its slug.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::playground::slug;
 use rune::{App, AppSpec, Cx, El, Env, Playground, Runtime, Story, Tx, text};
 

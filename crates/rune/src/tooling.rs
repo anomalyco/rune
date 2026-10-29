@@ -117,7 +117,7 @@ static APP_ID: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
 /// The application id the window reports to the desktop (Wayland `app_id`, X11 `WM_CLASS`), so
 /// compositors match it to the app's `.desktop` entry, icon and window rules. Call before `run`.
 pub fn set_app_id(id: &'static str) {
-    let _ = APP_ID.set(id);
+    APP_ID.set(id).ok();
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -514,6 +514,7 @@ impl Trace {
         Self::open_clock(path, size, fps, scale, "virtual")
     }
 
+    #[expect(clippy::let_underscore_must_use, reason = "best-effort trace directory creation and header write")]
     pub(crate) fn open_clock(path: &PathBuf, size: (f32, f32), fps: f64, scale: f32, clock: &str) -> Trace {
         if let Some(d) = path.parent() {
             let _ = std::fs::create_dir_all(d);
@@ -711,7 +712,7 @@ impl Trace {
             return;
         }
         line.push('}');
-        let _ = writeln!(self.out, "{line}");
+        writeln!(self.out, "{line}").ok();
     }
 }
 
@@ -723,7 +724,7 @@ impl Drop for Trace {
         }
         if self.presents.is_none() { return; }
         self.settle_presents(crate::present_time::SETTLE);
-        let _ = self.out.flush();
+        self.out.flush().ok();
         if let Some(summary) = std::fs::read_to_string(&self.path).ok().as_deref().and_then(crate::present_time::Summary::of_trace) {
             eprintln!("{summary}");
         }
@@ -904,6 +905,7 @@ pub(crate) fn try_headless<S: 'static>(mut app: crate::app::App<S>, args: Args) 
     headless_window(std::iter::once(main.into()).chain(windows).collect(), &displays, args, crate::RunOptions { accessory })
 }
 
+#[expect(clippy::disallowed_methods, reason = "honours RUNE_HEADLESS_WAIT profiler attach delay")]
 pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, transparent: bool) {
     // RUNE_HEADLESS_WAIT=SECS holds the run before it starts, so a sampling profiler can attach.
     if let Some(secs) = std::env::var("RUNE_HEADLESS_WAIT").ok().and_then(|s| s.parse::<f64>().ok()) {

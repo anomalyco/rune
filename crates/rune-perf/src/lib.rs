@@ -1,5 +1,7 @@
 //! Bounded local diagnostics. Apps explicitly choose a directory and install their hooks.
 //! No network, global allocator installation, redraws, or per-frame formatting.
+#![cfg_attr(not(test), deny(unsafe_code))]
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
 
 mod incident;
 mod recorder;

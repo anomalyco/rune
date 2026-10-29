@@ -1,5 +1,6 @@
 //! Headless `El::on_screen_layout`: a window opens on the script's virtual desktop, and moving
 //! it with `place()` reports its elements' new global rects without a relayout.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::*;
 use std::sync::{Mutex, OnceLock};
 

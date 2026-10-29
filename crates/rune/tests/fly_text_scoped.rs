@@ -1,5 +1,6 @@
 //! `fly_text` destinations can be row-scoped key paths, so every message row can key its text
 //! `body` and the flight still lands on the new row's.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Cx, El, Env, GrowthSpec, Key, KeyEvent, Runtime, ScrollSpec, TextEdit, TextStyle, Tx, col, text, text_input};
 
 struct State { draft: TextEdit, sent: Vec<String>, destination: &'static str }

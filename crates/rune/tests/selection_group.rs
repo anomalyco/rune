@@ -6,6 +6,7 @@
 //! further than the pointer, table rows select by band, inner groups stay their own, and a
 //! change to a text between the ends drops the selection. Elided texts select through their
 //! ellipsis, and a virtual row scrolling out drops the selection it holds.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::runtime::ElementInfo;
 use rune::{Cursor, Cx, Drag, El, Env, GrowthSpec, Key, KeyEvent, Link, Mods, PhysicalInput, Runtime, ScrollSpec, TextStyle, col, rich, row, text};
 

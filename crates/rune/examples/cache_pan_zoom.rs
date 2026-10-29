@@ -4,6 +4,7 @@
 //! target/perf/examples/cache_pan_zoom [--samples 15] [--cards 25] [--frames 60]
 //!
 //! Prints `METRIC mode=.. case=.. metric=.. median=.. p95=.. n=..` per measurement.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use std::time::Instant;
 
 use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};

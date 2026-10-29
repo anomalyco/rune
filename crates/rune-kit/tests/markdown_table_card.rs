@@ -1,5 +1,6 @@
 //! Markdown tables on a card: `MarkdownStyle::table_frame`, `table_body`, `table_header_pad`,
 //! `table_full_width`, `table_margin` and the `table_card` preset.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 #![cfg(feature = "markdown")]
 
 use rune::runtime::ElementInfo;

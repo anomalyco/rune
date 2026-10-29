@@ -1,4 +1,5 @@
 //! `rune::extra_args()` is ready before any `App` or window exists.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 const CHILD: &str = "RUNE_EXTRA_ARGS_CHILD";
 

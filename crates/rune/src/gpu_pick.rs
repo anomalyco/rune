@@ -50,6 +50,7 @@ impl Pick {
 
 /// The adapter for `surface` (or for offscreen work without one), by the order in the module
 /// docs.
+#[expect(clippy::disallowed_methods, reason = "honours standard WGPU_ADAPTER_NAME override")]
 pub(crate) fn pick(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) -> Result<Pick, String> {
     let usable = |adapter: &wgpu::Adapter| surface.is_none_or(|s| adapter.is_surface_supported(s));
     let compositor = compositor_pci();
@@ -107,6 +108,7 @@ fn same_pci(a: &str, b: &str) -> bool {
     !a.is_empty() && a.eq_ignore_ascii_case(b)
 }
 
+#[expect(clippy::disallowed_methods, reason = "reads RUNE_GPU_LOG diagnostic toggle")]
 fn log(pick: Pick, adapters: Option<usize>) -> Pick {
     static ONCE: std::sync::Once = std::sync::Once::new();
     if std::env::var_os("RUNE_GPU_LOG").is_some_and(|v| v != "0") || adapters.is_some_and(|n| n > 1) {
@@ -197,6 +199,7 @@ mod dmabuf {
     /// The compositor's main device `dev_t`, from its default dmabuf feedback on a short-lived
     /// connection of our own. None off Wayland or before `zwp_linux_dmabuf_v1` version 4.
     /// Version 6 stops sending the main device, so Rune binds at most 5.
+    #[expect(clippy::disallowed_methods, clippy::let_underscore_must_use, reason = "Wayland display probe and teardown flush")]
     pub(super) fn main_device() -> Option<Vec<u8>> {
         std::env::var_os("WAYLAND_DISPLAY")?;
         let conn = Connection::connect_to_env().ok()?;

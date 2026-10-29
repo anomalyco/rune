@@ -1,5 +1,6 @@
 //! The scroll requests on `Tx` name elements as `Cx::layout` does, key paths included, so an
 //! app can tell apart two elements that share a key (its own `label` and a component's).
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Cx, El, Env, Runtime, ScrollSpec, col, el, row};
 
 /// One of two lists side by side, each with a `label` far down.

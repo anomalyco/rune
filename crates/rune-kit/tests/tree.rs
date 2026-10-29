@@ -1,5 +1,6 @@
 //! Tree: the file-tree helpers, the model's keyboard, filtering and selection, and the
 //! virtualised view in a headless runtime (focus, keys, clicks, accessibility, reveal).
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use rune::runtime::ElementInfo;
 use rune::{Cx, El, Env, Key, KeyEvent, Mods, PhysicalInput, Runtime, col};

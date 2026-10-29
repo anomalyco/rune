@@ -1,5 +1,6 @@
 //! An `opacity_motion` with its own delay and start velocity keeps running across commits that
 //! leave the opacity alone, instead of starting over (and waiting out its delay) at each one.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Anim, Curve, Cx, El, Env, Runtime, Spring, Velocity, col, el};
 
 struct S {

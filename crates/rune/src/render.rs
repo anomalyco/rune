@@ -503,6 +503,7 @@ mod prewarm {
             Self(Mutex::new(State::Idle))
         }
 
+        #[expect(clippy::disallowed_methods, reason = "background GPU pipeline prewarm thread")]
         pub(super) fn start(&self) {
             let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
             if !matches!(*state, State::Idle) { return; }

@@ -1,6 +1,7 @@
 //! A runtime the app draws itself (`Runtime::with_text`, a headless snapshot) can blend in sRGB
 //! with `Runtime::set_srgb_blend`, hover and press tints included, as an `App::srgb_blend`
 //! window does.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::color::over;
 use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
 use rune::text::TextSystem;

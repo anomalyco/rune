@@ -1,3 +1,4 @@
+#![expect(clippy::disallowed_methods, clippy::let_underscore_must_use, reason = "surface upload worker thread and non-blocking completion channel")]
 use super::*;
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;

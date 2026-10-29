@@ -1,5 +1,6 @@
 //! The app shell: pane resizing and collapse, the toggle shortcut, the source list's keyboard,
 //! virtualised rows, accessibility roles and the title bar inset.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use std::borrow::Cow;
 

@@ -1,5 +1,6 @@
 //! Headless tests for `El::sticky_top`, `El::sticky_bottom`, `El::stuck_shadow`,
 //! `ElementInfo::stuck`, and `Tx::keep_on_screen`.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
 use rune::runtime::ElementInfo;
 use rune::{

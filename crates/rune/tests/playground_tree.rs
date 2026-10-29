@@ -1,5 +1,6 @@
 //! The story list as a tree, nested by each story's path, and the keyboard in one column at a
 //! time: the list, the stage or the side column.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use std::cell::RefCell;
 use std::rc::Rc;
 

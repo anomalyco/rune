@@ -2,6 +2,7 @@
 //! lines are, `TextSelection::backward` for which end the pointer is at,
 //! `SelectionChange::dragging` to wait for the release, and `El::keeps_text_selection` so a
 //! press on the toolbar leaves the selection and the focus alone.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use std::cell::RefCell;
 
 use rune::{Cx, El, ElementInfo, Env, Mods, PhysicalInput, Runtime, ScrollSpec, TextEdit, TextStyle, col, text, text_input};

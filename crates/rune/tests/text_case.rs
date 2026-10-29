@@ -1,4 +1,5 @@
 //! `El::text_case` draws cased glyphs while tools, spans and links keep the authored string.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::runtime::ElementInfo;
 use rune::{Cx, El, Env, Link, Runtime, Span, TextCase, TextEdit, TextStyle, col, rich, text, text_input};
 

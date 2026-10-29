@@ -11,9 +11,11 @@
 use std::sync::Arc;
 
 #[cfg(all(target_os = "linux", feature = "dbus"))]
+#[expect(clippy::disallowed_methods, clippy::let_underscore_must_use, reason = "StatusNotifierItem worker thread")]
 #[path = "tray/sni.rs"]
 mod native;
 #[cfg(target_os = "windows")]
+#[expect(clippy::disallowed_methods, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, reason = "Shell_NotifyIcon worker thread and Win32 FFI")]
 #[path = "tray/win32.rs"]
 mod native;
 

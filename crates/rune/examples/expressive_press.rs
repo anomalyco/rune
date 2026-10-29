@@ -3,6 +3,7 @@
 //! `cargo run -p rune --example expressive_press -- --script crates/rune/examples/expressive_press.json
 //! --video press.mp4` records it; `-- --snap press.png --scene still` renders rest and pressed side
 //! by side.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use rune::tok::{self, type_};
 use rune::{AppSpec, Color, Cx, El, Key, KeyEvent, Spring, TextStyle, Tx, col, el, row, text};

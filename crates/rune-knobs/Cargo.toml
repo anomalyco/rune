@@ -15,3 +15,6 @@ panel = []
 [dev-dependencies]
 # The tests drive the panel, so they build with it on.
 rune-knobs = { path = ".", features = ["panel"] }
+
+[lints]
+workspace = true

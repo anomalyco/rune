@@ -3,6 +3,7 @@
 //! (double-click the edge to put it back), and use the arrows, Shift and Cmd-A to select.
 //! The stills in `demo/kit/table-{dark,light}.png`:
 //! `-- --snap table.png --theme dark --size 760x480 --scale 2`.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use std::borrow::Cow;
 
 use rune::{Align, AppSpec, Cx, El, col, el, row, text};

@@ -1,6 +1,7 @@
 //! A stuck-to-bottom scroll whose content crosses between overflowing and fitting while the
 //! viewport resizes (a banner above it opening or closing) keeps its rows in place: no jump
 //! and slide back, in either direction, for bottom-aligned and top-aligned content alike.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Cx, El, Env, GrowthSpec, Runtime, ScrollSpec, col, el};
 
 #[derive(Default)]

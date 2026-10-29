@@ -150,7 +150,7 @@ impl Control {
                 return result;
             }
             let (tx, rx) = mpsc::sync_channel(1);
-            route.jobs.push(Box::new(move |engine| { let _ = tx.send(f(engine)); }));
+            route.jobs.push(Box::new(move |engine| { tx.send(f(engine)).ok(); }));
             let wake = route.wake.clone();
             drop(route);
             if let Some(wake) = wake { wake(); }
@@ -187,7 +187,7 @@ impl<S: 'static> Hub<S> {
 
     pub(super) fn errors(&self) -> Vec<ShortcutError> { std::mem::take(&mut self.errors.lock().unwrap()) }
 
-    pub(crate) fn named(&self, title: &'static str) { let _ = self.title.set(title); }
+    pub(crate) fn named(&self, title: &'static str) { self.title.set(title).ok(); }
 
     pub(super) fn allow_unmodified(&self) { self.unmodified.store(true, Ordering::Relaxed); }
 

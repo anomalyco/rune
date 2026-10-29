@@ -1,5 +1,6 @@
 //! Opening a playground story from the app: `Tx::open_playground_at` by path, name or slug,
 //! as a link through `App::on_open_url` does at launch.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use std::cell::Cell;
 
 use rune::playground::slug;

@@ -21,6 +21,7 @@
 //! building the frame's draw list.
 //! `shaped` counts texts shaped that frame, `rebroken` texts re-broken from an earlier shape,
 //! `nodes` layout nodes and `glyphs` glyph quads painted.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::text::TextSystem;
 use rune::{Color, Cx, El, Env, Runtime, ScrollSpec, col};
 use rune_kit::{Highlight, Markdown, MarkdownStyle};

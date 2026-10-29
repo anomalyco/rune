@@ -1,6 +1,7 @@
 //! A release where the pointer last was is not a drag move. A tap on a slider track animates
 //! the knob there on `Phase::Down`; an extra `Phase::Move` on the release would run as an
 //! instant transaction and snap the knob the rest of the way mid-spring.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::runtime::ElementInfo;
 use rune::{Drag, El, Env, Phase, Runtime, Spring, el};
 

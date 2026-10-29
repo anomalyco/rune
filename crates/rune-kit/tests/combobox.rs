@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Cx, El, Env, Ime, Key, KeyEvent, Mods, Runtime};
 use rune_kit::{Combobox, ComboboxOption, ComboboxState, Kit};
 

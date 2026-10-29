@@ -2,6 +2,7 @@
 //! toolbar inside it, a padded sidebar whose contents slide with its edge, one spring for both
 //! panes with a late fade, the closed sidebar's peek, the toggle at the header's end, and tall
 //! rows with a status slot, a hover close button and drag to reorder.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use std::time::Duration;
 

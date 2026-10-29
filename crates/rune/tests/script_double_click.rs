@@ -1,5 +1,6 @@
 //! A `double-click` script event drives `on_double_press` on the virtual clock, and `on_press`
 //! still runs for each of its presses.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::*;
 
 #[derive(Default)]

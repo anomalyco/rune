@@ -1,6 +1,7 @@
 //! `El::help` tooltips where Rune draws them: the pointer resting on an element for
 //! `help_delay` shows its tooltip under it; a press, scroll or key hides it until the pointer
 //! leaves; leaving hides it; it follows its element; and it takes no hover or press.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::runtime::ElementInfo;
 use rune::{Cx, El, Env, Key, KeyEvent, Mods, Runtime, col, el, row};
 

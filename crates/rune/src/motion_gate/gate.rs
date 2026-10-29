@@ -52,6 +52,7 @@ pub fn run(cells: Vec<(String, Job)>, filter: &str) -> Vec<Cell> {
     cells.into_iter().map(|c| c.1).collect()
 }
 
+#[expect(clippy::disallowed_methods, reason = "reads MOTION_GATE_* output flags in test harness")]
 fn evidence(cell: &str, rec: &Recording) {
     let out = std::env::var("MOTION_GATE_OUT").ok();
     if let Ok(spec) = std::env::var("MOTION_GATE_DUMP") {
@@ -127,6 +128,7 @@ pub fn report(cells: &[Cell], allow: &[Allow], list_allowed: bool, secs: f32) ->
 
 /// The gate as a test: runs the cells `MOTION_GATE` keeps, writes the report to
 /// `MOTION_GATE_OUT`, and panics with it when a finding isn't allowed.
+#[expect(clippy::disallowed_methods, reason = "reads MOTION_GATE filter and output flags")]
 pub fn gate(cells: Vec<(String, Job)>, allow: &[Allow]) {
     let filter = std::env::var("MOTION_GATE").unwrap_or_default();
     let started = Instant::now();

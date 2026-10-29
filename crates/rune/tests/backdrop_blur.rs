@@ -1,5 +1,6 @@
 //! `El::backdrop_blur`: an element blurs what is drawn behind it in the same window, inside its
 //! rounded rect and clip, under its fill.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::render::{Gpu, KIND_BACKDROP_BLUR, KIND_LAYER, OFFSCREEN_FORMAT, Offscreen, Renderer};
 use rune::{Color, Cx, El, Env, Runtime, ScrollSpec, col, el, row};
 

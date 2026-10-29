@@ -1,5 +1,6 @@
 //! The story list's counts and motion marks, and how a stage lays a story out: centred, a
 //! scrolling page, or edge to edge.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{App, AppSpec, Cx, El, Env, Playground, Runtime, Stage, Story, col, el, text};
 
 const SIZE: (f32, f32) = (1200.0, 700.0);

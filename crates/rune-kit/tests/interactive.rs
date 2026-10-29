@@ -1,5 +1,6 @@
 //! `Kit::interactive` gives an app's own element the kit's hover and press look, and
 //! `Kit::elevate` its shadows.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Cx, El, Env, Runtime, col, el};
 use rune_kit::Kit;
 

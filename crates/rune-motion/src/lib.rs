@@ -26,6 +26,7 @@
 //! let o = store.get(card, prop::OPACITY).unwrap();
 //! assert!(o > 0.5 && o < 1.0);
 //! ```
+#![deny(unsafe_code)]
 
 mod animated;
 mod choreo;

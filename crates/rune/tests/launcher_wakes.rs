@@ -3,6 +3,7 @@
 //! in the same turn. With RUNE_LATENCY=1 it repeats 12 times and prints the median reveal
 //! latency of both paths. Opens a native panel, so it only runs with RUNE_GUI_TESTS=1 in a
 //! logged-in macOS GUI session.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 #[cfg(not(target_os = "macos"))]
 fn main() {}

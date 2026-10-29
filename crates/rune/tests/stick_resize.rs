@@ -1,5 +1,6 @@
 //! A stuck-to-bottom scroll keeps its last row on its bottom edge while its own height
 //! animates (a banner opening above the timeline), on every frame.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::runtime::ElementInfo;
 use rune::{Cx, El, Env, GrowthSpec, Runtime, ScrollSpec, col, el};
 

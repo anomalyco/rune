@@ -1,6 +1,7 @@
 //! Effect slots (`El::effect`) and the compositor hooks around them: a compositor draws its own
 //! pass at the slot, inside isolated layers, clipped like the primitives around it, in either
 //! blend mode and in every format it is handed.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use std::sync::{Arc, Mutex};
 

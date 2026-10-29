@@ -26,8 +26,10 @@
 //! Other platforms report [`PlayerState::Failed`] and draw a neutral placeholder for video.
 
 #[cfg(all(target_os = "macos", feature = "ogg-audio"))]
+#[expect(clippy::let_underscore_must_use, reason = "best-effort temp WAV cleanup")]
 mod foreign;
 #[cfg(target_os = "macos")]
+#[expect(clippy::disallowed_methods, clippy::undocumented_unsafe_blocks, reason = "AVFoundation/CoreMedia worker threads and FFI")]
 mod macos;
 #[cfg(target_os = "macos")]
 use macos as backend;
@@ -748,7 +750,7 @@ fn push_placeholder(surface: &NativeSurface) {
         color: ColorInfo { matrix: crate::native_surface::Matrix::Bt709, transfer: crate::native_surface::Transfer::Srgb },
         planes: [rgba, Vec::new()],
     };
-    let _ = surface.push_bytes(frame, u64::MAX);
+    surface.push_bytes(frame, u64::MAX).ok();
 }
 
 #[cfg(test)]

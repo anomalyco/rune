@@ -1,6 +1,7 @@
 //! Rects under live transforms: `El::on_drawn_layout` reports where an element on a zoomed,
 //! panned canvas shows, hit tests and `ElementInfo::rect` agree with it, and `on_layout` keeps
 //! the laid-out rect.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Cx, Drag, El, Env, Live, Runtime, el};
 
 struct S {

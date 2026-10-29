@@ -2,6 +2,7 @@
 //! triple-click a paragraph and Shift extends; Cmd+C copies, Cmd+A selects all and a right-click
 //! offers Copy. Selecting never moves layout, a press elsewhere clears it, links still open, and
 //! the highlight is drawn exactly as a text field's.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::runtime::ElementInfo;
 use rune::{Color, Cursor, Cx, El, Env, Key, KeyEvent, Link, Mods, PhysicalInput, Runtime, Span, TextEdit, TextStyle, col, el, rich, text, text_input};
 

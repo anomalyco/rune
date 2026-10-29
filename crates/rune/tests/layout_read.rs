@@ -1,6 +1,7 @@
 //! Views read another element's laid-out rect (`Cx::layout`) and handlers hear about it
 //! (`El::on_layout`), re-running only when it moves, and settling when a view reads
 //! something its own output resizes.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::runtime::ElementInfo;
 use rune::{Cx, El, Env, Runtime, ScrollSpec, col, el, row, text};
 use std::cell::Cell;

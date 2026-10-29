@@ -1,6 +1,7 @@
 //! `Markdown::selectable`: one selection across a message's paragraphs, list items and code
 //! blocks, copied as the text drawn (no list markers or fences), with links still opening on a
 //! click, inside memo'd rows and while the message streams in.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 #![cfg(feature = "markdown")]
 
 use rune::runtime::ElementInfo;

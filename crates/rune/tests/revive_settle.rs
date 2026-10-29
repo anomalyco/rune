@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Color, Cx, El, Env, Runtime, Transition, col, el};
 
 fn view(shown: &(bool, f32), _: &mut Cx<(bool, f32)>) -> El {

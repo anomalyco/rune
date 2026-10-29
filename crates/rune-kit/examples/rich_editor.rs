@@ -3,6 +3,7 @@
 //!
 //! Run headless to capture the demo still:
 //! `cargo run -p rune-kit --example rich_editor -- --snap demo/kit/rich-editor.png`
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use rune::tok::type_;
 use rune::{AppSpec, Block, Cx, El, Icon, Mark, PillStyle, Span, TextEdit, col, el, row, text};

@@ -1,4 +1,5 @@
 //! A steady frame reuses last frame's bind groups instead of making new ones.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use rune::render::Gpu;
 use rune_fx::*;

@@ -1,6 +1,7 @@
 //! Native pop-up menus: a settings-style picker that opens over its button with the current
 //! choice under the pointer, and a context menu on secondary press. Off macOS both answer
 //! `None` straight away. Headless: `--script` with `{"type":"menu-pick","id":"dark"}`.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::*;
 
 struct State { theme: String, last: String }

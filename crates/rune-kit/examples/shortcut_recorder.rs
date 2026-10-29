@@ -1,5 +1,6 @@
 //! `cargo run -p rune-kit --example shortcut_recorder`
 //! Ctrl-Shift-Space is reserved here to demonstrate real registration conflicts and their owner.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{App, AppHandle, AppSpec, Cx, El, Shortcut, ShortcutError, ShortcutId, Tx, col, text};
 use rune_kit::{Kit, ShortcutRecorder, ShortcutRecorderState, shortcut_error_message};
 

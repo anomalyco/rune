@@ -159,6 +159,7 @@ impl Log<'_> {
     }
 }
 
+#[expect(clippy::disallowed_methods, reason = "wall-clock timestamp in perf log header")]
 fn now_ms() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64 }
 
 #[cfg(test)]

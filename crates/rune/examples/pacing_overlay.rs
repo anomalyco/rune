@@ -1,4 +1,5 @@
 //! Matched-size overlay probe for scripts/native-pacing/run.py. No capture or input automation.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{App, AppSpec, Color, Cx, El, OverlaySpec, RunOptions, WindowSpec, col, el, row, text};
 
 fn view(animate: &bool, _: &mut Cx<bool>) -> El {

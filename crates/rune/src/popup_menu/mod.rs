@@ -294,7 +294,7 @@ impl Presenter {
         self.session = None;
         if let Err(error) = rt.resolve_popup(picked.as_deref()) {
             eprintln!("rune: {error}");
-            let _ = rt.resolve_popup(None);
+            rt.resolve_popup(None).ok();
         }
         true
     }
@@ -320,7 +320,7 @@ impl Presenter {
             }
             #[cfg(not(target_os = "macos"))]
             let _ = (window, show);
-            let _ = rt.resolve_popup(None);
+            rt.resolve_popup(None).ok();
         }
     }
 

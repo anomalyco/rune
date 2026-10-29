@@ -18,6 +18,7 @@ pub struct Recorder {
 }
 
 impl Recorder {
+    #[expect(clippy::disallowed_methods, reason = "dedicated off-UI disk writer thread")]
     pub fn start(config: Config) -> io::Result<Self> {
         if config.app.len() > 128 || config.build.len() > 256 {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "app/build identity too long"));

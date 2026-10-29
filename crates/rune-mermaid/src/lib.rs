@@ -31,6 +31,7 @@
 //! participants), subgraphs nested more than 8 deep, and graphs whose long edges need more
 //! than 3,000 bend points fall back to source; links longer than `--------->` draw at that
 //! length.
+#![deny(unsafe_code)]
 
 mod flowchart;
 mod flowchart_draw;

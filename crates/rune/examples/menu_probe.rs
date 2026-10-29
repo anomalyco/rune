@@ -1,4 +1,5 @@
 //! Native menu acceptance probe. stdin commands: status, disable, enable, clear, quit.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{App, AppHandle, AppSpec, MenuItem, Tx, text};
 use std::io::{BufRead, Write};
 

@@ -1,5 +1,6 @@
 //! `auto_grow` fits a plain `text_input` to its lines between a minimum and maximum, springs
 //! between heights, then scrolls inside with the caret in view.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::runtime::ElementInfo;
 use rune::{Cx, El, Env, Ime, Key, KeyEvent, Mods, Runtime, TextEdit, TextStyle, auto_grow, col, text_input};
 

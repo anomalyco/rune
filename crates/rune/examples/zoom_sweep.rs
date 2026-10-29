@@ -7,6 +7,7 @@
 //!   on a 25-card text-heavy canvas, plus a settled rest frame at an off-bucket scale (1.13).
 //! - `font_sweep_10s`: 10 s (1,200 frames at 120 Hz) continuous authored font-size sweep forcing
 //!   repeated glyph-atlas page recycling, verifying zero dropped glyphs after sweep.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use std::time::Instant;
 
 use rune::render::{Gpu, KIND_GLYPH, OFFSCREEN_FORMAT, Offscreen, Renderer};

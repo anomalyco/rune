@@ -2,6 +2,7 @@
 //! MP4s (raw frames piped to ffmpeg) under `demo/light/`.
 //!
 //!     light all | chat | flashlight | emissive | raised | godrays | bench | verify  [--out DIR] [--frames N]
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

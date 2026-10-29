@@ -1,5 +1,6 @@
 //! `hover_delays`: `on_hover_change` hears an enter only after the pointer rests inside, and a
 //! leave only after it stays out; shorter passes report nothing, and a press cancels the wait.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use std::time::Duration;
 
 use rune::{Cx, El, Env, Runtime, col, el};

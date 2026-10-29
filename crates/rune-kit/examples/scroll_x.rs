@@ -4,6 +4,7 @@
 //! `demo/kit/scroll-x.png` is a sideways swipe on the filmstrip, a mostly vertical one over it
 //! (the page scrolls), then sideways swipes on the code block and the table:
 //! `-- --script crates/rune-kit/examples/scroll_x.json --fps 60 --start 0.25 --frames 193 --every 48 --cols 5 --scale 1 --strip strip.png`
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::tok::type_;
 use rune::{AppSpec, Cx, El, ScrollSpec, col, el, oklch, row, text};
 use rune_kit::{Kit, Markdown};

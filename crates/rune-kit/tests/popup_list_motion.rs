@@ -1,6 +1,7 @@
 //! A `PopupList` above its field (`Side::Top`) holds its bottom while its height springs, so its
 //! rows ride its top. Filtering to one row and then growing again mid-exit must move every row
 //! one way to its slot.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Align, Cx, El, Env, Runtime, Side, col, el};
 use rune_kit::{Kit, PopupItem, PopupList, root};
 

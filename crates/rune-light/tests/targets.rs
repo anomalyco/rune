@@ -1,5 +1,6 @@
 //! What `LightRenderer::render` and `GlassRenderer::render` allocate and record, on a real device. Skips when no
 //! adapter is found.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use rune_light::{Gi, Glass, GlassRenderer, GlassSettings, Light, LightRenderer, Prim, Scene, Settings};
 

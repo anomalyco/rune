@@ -1,5 +1,6 @@
 //! Deterministic, windowless scroll workloads for scripts/bench-ui.py --scroll.
 //! Times input dispatch through draw-list construction, excluding GPU submission.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use std::cell::Cell;
 use rune::{Color, Cx, El, Env, GrowthSpec, Runtime, ScrollSpec, col, text};
 use rune_kit::{Markdown, MarkdownStyle};

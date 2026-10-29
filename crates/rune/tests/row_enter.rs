@@ -1,6 +1,7 @@
 //! Rows inserted into a growth stack play an explicit `.transition` on top of growing open, in
 //! plain and virtual stacks under a stick-to-bottom scroll. Rows without one only grow; the
 //! first frame and rows a virtual list remounts on scroll never replay an entrance.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::runtime::ElementInfo;
 use rune::{Cx, El, Env, GrowthSpec, Runtime, ScrollSpec, Transition, col, text};
 

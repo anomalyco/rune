@@ -3,6 +3,7 @@
 //! execution, upload and presentation.
 //!
 //!     cargo run -p rune-light --profile perf --example frame_bench
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use std::time::Instant;
 

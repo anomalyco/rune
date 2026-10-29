@@ -23,6 +23,7 @@ pub(crate) fn reduced_motion() -> bool {
 }
 
 #[cfg(target_os = "linux")]
+#[expect(clippy::disallowed_methods, reason = "reads XDG_CONFIG_HOME and XDG_CURRENT_DESKTOP for KDE reduced-motion")]
 pub(crate) fn reduced_motion() -> bool {
     // KDE exposes animation duration in kdeglobals; zero disables animation.
     let config = std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from)
@@ -35,6 +36,7 @@ pub(crate) fn reduced_motion() -> bool {
     { return factor == 0.0; }
     // Optional GNOME GSettings, with schema lookup before constructing settings (missing
     // schemas otherwise abort GLib). No subprocess or required GNOME dependency.
+    // SAFETY: `gnome_animations` dynamically loads GIO and checks all pointers for null.
     unsafe { gnome_animations().is_some_and(|enabled| !enabled) }
 }
 

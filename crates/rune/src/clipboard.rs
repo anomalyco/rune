@@ -8,6 +8,7 @@
 //! Copies and pastes can carry HTML and RTF beside the plain text ([`ClipboardContent`]).
 //! HTML read from the clipboard passes through [`sanitize_html`] on the worker; on macOS an
 //! RTF-only clipboard (TextEdit, Notes, Pages) is converted to HTML there too.
+#![expect(clippy::disallowed_methods, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, reason = "shared OS clipboard worker thread, best-effort channel sends and platform FFI")]
 use std::hash::{BuildHasher, RandomState};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, mpsc};

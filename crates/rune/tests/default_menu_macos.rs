@@ -1,4 +1,5 @@
 //! Main-thread AppKit menu assertions, without opening a window or running an event loop.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 #[cfg(target_os = "macos")]
 #[path = "../src/native_menu/default_macos.rs"]
 mod default_macos;

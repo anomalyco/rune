@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Align, Cx, El, Env, Key, KeyEvent, Mods, Runtime, Side, TextEdit, col, icon, text};
 use rune_kit::{Kit, PopupItem, PopupList, TextInput, root};
 

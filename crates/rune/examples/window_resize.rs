@@ -3,6 +3,7 @@
 //! content follows the frame: a stretched, stale or blank strip would show at the bottom.
 //! Press "Toggle", or set `RUNE_RESIZE_AUTO=1` to toggle every 1.5 s. `RUNE_RESIZE_FIT=1`
 //! lets the content set the height instead (`App::fit_content_height`).
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::*;
 
 #[derive(Default)]

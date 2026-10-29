@@ -1,5 +1,6 @@
 //! Table: column widths and resizing, sorting from the header, row selection and keys,
 //! virtualisation, accessibility roles and truncation tooltips, in a headless runtime.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use std::borrow::Cow;
 

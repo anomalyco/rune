@@ -9,6 +9,7 @@
 //! Writes land in the order they were made, at the next `flush` or `submit`. A write must be
 //! flushed into an encoder ahead of the commands that read it, or submitted before them.
 //! On the web, whose `writeBuffer` already stages, writes go straight to the queue.
+#![deny(unsafe_code)]
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -243,7 +244,7 @@ impl Inner {
             let buffer = chunk.buffer.clone();
             let mut back = Return { chunk: Some(chunk), recycle: self.recycle.clone(), lost: staging.1.clone() };
             encoder.map_buffer_on_submit(&buffer, wgpu::MapMode::Write, .., move |mapped| {
-                if mapped.is_ok() && let Some(chunk) = back.chunk.take() { let _ = back.recycle.send(chunk); }
+                if mapped.is_ok() && let Some(chunk) = back.chunk.take() { back.recycle.send(chunk).ok(); }
             });
         }
     }

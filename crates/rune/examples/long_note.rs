@@ -32,6 +32,7 @@
 //! phases are thread CPU and overlap: commit includes view, layout and apply, layout includes
 //! text (shaping). `shaped` counts layouts shaped that frame and `glyphs` glyph quads painted.
 //! `--gpu` adds `encode_ms`: renderer prepare, draw and submit on a headless GPU.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use std::time::Instant;
 
 use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};

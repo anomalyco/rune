@@ -1,6 +1,7 @@
 //! Absolute children size and pin against their parent's padding box, wherever the parent sits:
 //! plain columns, growth stacks and virtual lists inside a scroll viewport. Root overlays
 //! (scrims, anchored popovers) keep sizing against the window.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::{Align, Cx, El, Env, GrowthSpec, Runtime, ScrollSpec, Side, col, el, row, text};
 
 fn view(case: &u8, _: &mut Cx<u8>) -> El {

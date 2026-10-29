@@ -1,5 +1,6 @@
 //! `El::scroll_edge_fade`: each edge fades only while content is hidden under it, at strength
 //! hidden / 15 pt. `El::scroll_margin`: revealed rows stop clear of the fade.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer, unpack_fade};
 use rune::{Color, Cx, El, Env, GrowthSpec, Runtime, ScrollSpec, col, el};
 

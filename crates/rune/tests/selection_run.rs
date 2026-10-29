@@ -1,4 +1,5 @@
 //! Words flowed as separate selectable texts draw one continuous highlight per line.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 
 use rune::{Cx, El, Env, Key, KeyEvent, Mods, Runtime, TextStyle, row, text};
 

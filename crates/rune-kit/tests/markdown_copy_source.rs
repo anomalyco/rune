@@ -1,6 +1,7 @@
 //! `Markdown::copy_source`: copying a selection copies the Markdown source of the top-level
 //! blocks it touches, the whole source verbatim for all of them, and the drawn text for part
 //! of one block. And an app's `on_key` sees Cmd+A before a selectable note does.
+#![allow(clippy::disallowed_methods, clippy::expect_used, clippy::let_underscore_must_use, clippy::undocumented_unsafe_blocks, clippy::unwrap_used)]
 #![cfg(feature = "markdown")]
 
 use rune::{Cx, El, Env, Key, KeyEvent, Mods, Runtime, col};
