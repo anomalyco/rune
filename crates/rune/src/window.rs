@@ -2722,12 +2722,8 @@ impl<S: 'static> Host<S> {
                 // A release's logical key only matters to `on_key_up` handlers.
                 let logical = (pressed || rt.wants_key_up()).then(|| map_key(&event.logical_key, self.mods)).flatten();
                 let mut redraw = false;
-                // A standard ⌘W or ⌘M menu item handing Rune its key: close or minimize after,
-                // if no handler takes it.
-                #[cfg(target_os = "macos")]
-                let unhandled = logical.as_ref().filter(|_| pressed).and_then(crate::native_menu::take_unhandled);
-                #[cfg(not(target_os = "macos"))]
-                let unhandled = None;
+                // A menu item handing Rune its key: it acts after, if no handler takes it.
+                let unhandled = crate::native_menu::take_unhandled(logical.as_ref().filter(|_| pressed));
                 if let winit::keyboard::PhysicalKey::Code(key) = event.physical_key {
                     redraw = rt.physical_then(crate::PhysicalInput::Key {
                         key, mods: map_mods(self.mods), pressed, repeat: event.repeat,

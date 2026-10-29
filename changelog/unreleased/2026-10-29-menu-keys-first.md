@@ -1,0 +1,1 @@
+- `MenuItem::keys_first()` lets the window's own key handling see a menu item's key equivalent before the item does: the focused element, modals and `on_key` get the press first, and the item runs only if none takes it (picking it in the menu always runs it). Without it AppKit hands the chord to the menu before any view, as before.

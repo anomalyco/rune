@@ -19,7 +19,7 @@ mod standard_macos;
 #[cfg(target_os = "macos")]
 pub(crate) use default_macos::{ensure as ensure_default_menu, promote as promote_default_menu};
 #[cfg(target_os = "macos")]
-pub(crate) use standard_macos::{adopt as adopt_standard_view, install as install_standard_menus, take_unhandled};
+pub(crate) use standard_macos::{adopt as adopt_standard_view, install as install_standard_menus};
 #[cfg(target_os = "macos")]
 pub(crate) use key_equivalent::set_key_equivalent;
 
@@ -32,6 +32,7 @@ struct Description {
     title: String,
     location: Location,
     equivalent: Option<Shortcut>,
+    keys_first: bool,
     enabled: bool,
     checked: bool,
     separator: bool,
@@ -46,7 +47,7 @@ impl<S> MenuItem<S> {
     pub fn new(title: impl Into<String>, action: fn(&mut S, &mut Tx)) -> Self {
         let title = title.into();
         Self { description: Description { id: title.clone(), title, location: Location::App,
-            equivalent: None, enabled: true, checked: false, separator: false }, action }
+            equivalent: None, keys_first: false, enabled: true, checked: false, separator: false }, action }
     }
     /// A separator line, placed with `menu` or `dock` like an item. It has no id or title,
     /// can't be fired, and needs no unique id.
@@ -60,6 +61,12 @@ impl<S> MenuItem<S> {
     pub fn menu(mut self, title: impl Into<String>) -> Self { self.description.location = Location::Named(title.into()); self }
     pub fn dock(mut self) -> Self { self.description.location = Location::Dock; self }
     pub fn key_equivalent(mut self, shortcut: Shortcut) -> Self { self.description.equivalent = Some(shortcut); self }
+    /// Let the window's own key handling see this item's key equivalent first. AppKit gives a
+    /// menu equivalent to the menu before any view, so by default the item takes the chord
+    /// even while a field, a modal or `on_key` wants it. With this, the press goes to the key
+    /// window like any other key (the focused element, then modals, then `on_key`), and the
+    /// item runs only if no handler takes it. Picking the item in the menu always runs it.
+    pub fn keys_first(mut self) -> Self { self.description.keys_first = true; self }
     pub fn enabled(mut self, enabled: bool) -> Self { self.description.enabled = enabled; self }
     pub fn checked(mut self, checked: bool) -> Self { self.description.checked = checked; self }
 }
@@ -158,6 +165,15 @@ fn lookup<S>(state: &State<S>, selector: &str) -> Result<usize, MenuError> {
     };
     if !state.items[index].description.enabled { return Err(MenuError::Disabled(selector.into())); }
     Ok(index)
+}
+
+/// The window host, for a key press it maps to `key`: what to do if no handler takes it, when
+/// a menu item (a standard ⌘W or ⌘M, or `MenuItem::keys_first`) is handing Rune that key.
+pub(crate) fn take_unhandled(key: Option<&crate::KeyEvent>) -> Option<crate::runtime::Unhandled> {
+    #[cfg(target_os = "macos")]
+    { key.and_then(standard_macos::take_unhandled) }
+    #[cfg(not(target_os = "macos"))]
+    { let _ = key; None }
 }
 
 pub(crate) fn fire<S: 'static>(shared: &Arc<Shared<S>>, selector: &str) -> Result<(), MenuError> {
@@ -325,6 +341,7 @@ mod tests {
         let shortcut: Shortcut = "cmd+shift+k".parse().unwrap();
         let item = item("quick").key_equivalent(shortcut.clone());
         assert_eq!(item.description.equivalent, Some(shortcut));
+        assert!(!item.description.keys_first && item.keys_first().description.keys_first);
     }
 
     #[cfg(not(target_os = "macos"))]

@@ -4,10 +4,17 @@ use crate::{PhysicalInput, PhysicalKeyCode};
 pub(super) struct Fallback { key: KeyEvent, base: Option<char>, unhandled: Option<Unhandled> }
 
 /// What a window does with a logical key no handler took: close or minimize as its title-bar
-/// button would. A standard ⌘W or ⌘M menu item asks for it, so an app's own binding wins.
+/// button would, or run a menu item. A standard ⌘W or ⌘M item, or an app's item marked
+/// `MenuItem::keys_first`, asks for it, so an app's own binding wins.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Unhandled { Close, Minimize }
+#[derive(Clone)]
+pub(crate) enum Unhandled { Close, Minimize, Menu(std::sync::Arc<dyn Fn() + Send + Sync>) }
+
+impl std::fmt::Debug for Unhandled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self { Self::Close => "Close", Self::Minimize => "Minimize", Self::Menu(_) => "Menu" })
+    }
+}
 
 /// An activation key held down: its physical code (native and physical input) or logical key
 /// (`Runtime::key`), and the focus its first press landed on.
@@ -150,15 +157,18 @@ impl<S: 'static> Runtime<S> {
                 } else {
                     let mut one = Tx { physical_key: code, key_base: base, ..self.transaction() };
                     let ran = self.route_key(&key, repeat, &mut one);
-                    let unhandled = unhandled.filter(|_| !ran && !repeat);
+                    // A held key repeats a menu item, as AppKit's own equivalents do, but closes once.
+                    let unhandled = unhandled.filter(|u| !ran && (!repeat || matches!(u, Unhandled::Menu(_))));
+                    let fell = unhandled.is_some();
                     match unhandled {
                         Some(Unhandled::Close) => one.close_window(),
                         Some(Unhandled::Minimize) => one.minimize(),
+                        Some(Unhandled::Menu(run)) => run(),
                         None => {}
                     }
-                    fold_live(&mut live, ran || unhandled.is_some(), &one);
+                    fold_live(&mut live, ran || fell, &one);
                     merge(tx, one);
-                    ran || unhandled.is_some()
+                    ran || fell
                 }
             }
             None => false,
@@ -596,6 +606,33 @@ mod tests {
         rt.frame(0.0);
         assert_eq!(focused_key(&rt).as_deref(), Some("sink"));
         assert_eq!((rt.state.go_repeats, rt.state.sink), (0, 0), "the repeat went nowhere");
+    }
+
+    /// A `keys_first` menu item's key: the focused field, then `on_key`, see it before the item,
+    /// which runs only when neither takes it (and on each repeat, as a menu equivalent does).
+    #[test]
+    fn a_menu_item_handing_over_its_key_runs_only_when_no_handler_takes_it() {
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        let mut rt = fields_runtime(false);
+        rt.on_key = Some(|s, ev, _| { s.app_keys += 1; ev.is_command(']') });
+        let ran = Arc::new(AtomicUsize::new(0));
+        let item = { let ran = ran.clone(); Unhandled::Menu(Arc::new(move || { ran.fetch_add(1, Ordering::Relaxed); })) };
+        let mods = Mods { cmd: true, ..Mods::default() };
+        let chord = |rt: &mut Runtime<Fields>, code, c, repeat| {
+            rt.physical_then(PhysicalInput::Key { key: code, mods, pressed: true, repeat },
+                Some(KeyEvent { key: Key::Command(c), mods }), None, Some(item.clone()));
+            rt.frame(0.0);
+            ran.load(Ordering::Relaxed)
+        };
+        assert_eq!(chord(&mut rt, PhysicalKeyCode::BracketRight, ']', false), 0, "the app's on_key took it");
+        assert_eq!(chord(&mut rt, PhysicalKeyCode::BracketLeft, '[', false), 1, "nobody took it: the item runs");
+        assert_eq!(chord(&mut rt, PhysicalKeyCode::BracketLeft, '[', true), 2, "and repeats");
+        assert_eq!(rt.state.app_keys, 3);
+        // A field that takes the key (⌘A selects all) keeps it from the item and from on_key.
+        click(&mut rt, "first");
+        rt.frame(0.0);
+        assert_eq!(chord(&mut rt, PhysicalKeyCode::KeyA, 'a', false), 2);
+        assert_eq!(rt.state.app_keys, 3);
     }
 
     #[test]
