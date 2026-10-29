@@ -261,9 +261,9 @@ impl<S: 'static> Runtime<S> {
         [t[0] * k + turn, t[1] * k + turn, (t[2] - t[0]) * k, (t[3] - t[1]) * k]
     }
 
-    fn layout_of(&self, nodes: &[Node], key: &str) -> Option<[f32; 4]> {
+    fn layout_of(&self, nodes: &[Node], keyed: &Keyed, key: &str) -> Option<[f32; 4]> {
         if key == SELECTION { return None; }
-        if let Some(i) = nodes.iter().position(|n| crate::flight::selects(key, &n.path, n.key.as_deref())) {
+        if let Some(i) = keyed.first(nodes, key) {
             return Some(self.laid_out(nodes, i));
         }
         let (i, [x0, y0, x1, y1]) = self.highlight_target_in(nodes, None, key)?;
@@ -279,7 +279,8 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn layout_moved(&mut self, reads: Option<LayoutReads>, nodes: Option<&[Node]>, force: bool) -> bool {
         let reads = reads.unwrap_or_else(|| std::mem::take(&mut self.layout_seen.reads));
         let nodes = nodes.unwrap_or(&self.nodes);
-        let now: Vec<Option<[f32; 4]>> = reads.iter().map(|r| self.layout_of(nodes, &r.key)).collect();
+        let keyed = Keyed::new(nodes);
+        let now: Vec<Option<[f32; 4]>> = reads.iter().map(|r| self.layout_of(nodes, &keyed, &r.key)).collect();
         let boxes = reads.iter().any(|r| r.key == SELECTION).then(|| self.selection_boxes(nodes));
         let rects = &mut self.layout_seen.rects;
         let changed = reads.iter().zip(&now).any(|(r, rect)| rects.get(&r.key).is_none_or(|old| r.moved(*old, *rect)))
@@ -301,7 +302,8 @@ impl<S: 'static> Runtime<S> {
     /// current rect, since it re-runs anyway.
     pub(super) fn refresh_layout_seen(&mut self) {
         if self.layout_seen.rects.is_empty() { return; }
-        let now: Vec<_> = self.layout_seen.rects.keys().map(|k| self.layout_of(&self.nodes, k)).collect();
+        let keyed = Keyed::new(&self.nodes);
+        let now: Vec<_> = self.layout_seen.rects.keys().map(|k| self.layout_of(&self.nodes, &keyed, k)).collect();
         for (seen, rect) in self.layout_seen.rects.values_mut().zip(now) { *seen = rect; }
         if self.layout_seen.rects.contains_key(SELECTION) { self.layout_seen.rects.selection = self.selection_boxes(&self.nodes).into(); }
     }
@@ -564,5 +566,39 @@ mod tests {
         frames(&mut rt, 2);
         assert!(!rt.set_window_origin((50.0, 50.0)));
         assert_eq!(rt.state.local.len(), 1);
+    }
+}
+
+/// Keyed nodes by key, so each read finds its node without scanning the whole tree.
+struct Keyed<'a> {
+    /// Each key's first node.
+    first: HashMap<&'a str, u32>,
+    /// The next node with the same key, or `u32::MAX`.
+    next: Vec<u32>,
+}
+
+impl<'a> Keyed<'a> {
+    fn new(nodes: &'a [Node]) -> Self {
+        let mut first = HashMap::default();
+        let mut next = vec![u32::MAX; nodes.len()];
+        for (i, n) in nodes.iter().enumerate().rev() {
+            if let Some(key) = &n.key { next[i] = first.insert(key.as_str(), i as u32).unwrap_or(u32::MAX); }
+        }
+        Keyed { first, next }
+    }
+
+    /// The first node `selector` picks (see [`crate::flight::selects`]): its key is the
+    /// selector or a tail of it after a `/`.
+    fn first(&self, nodes: &[Node], selector: &str) -> Option<usize> {
+        let tails = std::iter::once(selector).chain(selector.match_indices('/').map(|(at, _)| &selector[at + 1..]));
+        tails.filter_map(|key| {
+            let mut i = *self.first.get(key)?;
+            while i != u32::MAX {
+                let n = &nodes[i as usize];
+                if crate::flight::selects(selector, &n.path, n.key.as_deref()) { return Some(i as usize); }
+                i = self.next[i as usize];
+            }
+            None
+        }).min()
     }
 }
