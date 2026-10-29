@@ -131,6 +131,8 @@ wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"]
 wgpu = { version = "~30.0.1", default-features = false, features = ["counters"] }
 # Thread and process CPU clocks in the overlay cost example.
 libc = "0.2"
+# research/engine-spike: a per-word shaper cache straight over Parley's engine.
+parley_engine = "0.12"
 
 [[example]]
 name = "tree_swap"

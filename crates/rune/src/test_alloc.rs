@@ -28,6 +28,9 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static COUNTING: Counting = Counting;
 
+/// Bytes live on this thread now.
+pub(crate) fn live() -> isize { LIVE.with(Cell::get) }
+
 /// Allocations made on this thread so far.
 pub(crate) fn allocs() -> usize { ALLOCS.with(Cell::get) }
 

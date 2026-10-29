@@ -1761,6 +1761,10 @@ impl TextSystem {
         type Spacings = [(std::ops::Range<usize>, f32)];
         let build = |lcx: &mut LayoutContext<Ink>, fcx: &mut FontContext, exact: &Spacings, widen: &Spacings| {
             let mut b = lcx.ranged_builder(fcx, text, scale, true);
+            #[cfg(test)]
+            if let Some(d) = engine_spike::FORCE_DIR.with(std::cell::Cell::get) {
+                b.set_base_direction(d);
+            }
             b.push_default(FontFamily::from(sans.as_slice()));
             b.push_default(StyleProperty::FontSize(style.size));
             b.push_default(StyleProperty::FontWeight(FontWeight::new(style.weight)));
@@ -2870,3 +2874,7 @@ mod quality_tests;
 #[cfg(test)]
 #[path = "text/rewrap_tests.rs"]
 mod rewrap_tests;
+
+#[cfg(test)]
+#[path = "../../../research/engine-spike/paragraph_stack.rs"]
+mod engine_spike;
