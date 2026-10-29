@@ -1344,8 +1344,9 @@ impl AnimationStore {
         let m = self.t_meta[t];
         self.index.remove(&(m.node.0, m.prop.0));
         self.lane_free[n].push(l0 as u32);
+        // Removal cancels the animation: whoever waits on its completion hears so.
+        self.take_token(t, false);
         self.t_meta[t].alive = false;
-        self.t_meta[t].token = 0;
         self.track_free.push(t as u32);
     }
 }
