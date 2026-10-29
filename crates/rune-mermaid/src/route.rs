@@ -7,8 +7,8 @@
 //! Everything here works in the layout's own axes (ranks run down `y`); callers map points to
 //! the screen with [`Ctx::screen`].
 
-use super::flowchart::NodeShape;
-use super::flowchart_draw::{boundary, outline};
+use super::canvas::{dist, lerp};
+use super::layered_draw::{NodeShape, boundary, outline};
 use super::layered::Placed;
 
 /// Clearance between an edge and nodes it passes.
@@ -147,8 +147,8 @@ impl<'a> Ctx<'a> {
         let pts: Vec<[f32; 2]> = cubic(a, b)
             .windows(2)
             .flat_map(|w| {
-                let steps = (super::dist(w[0], w[1]) / 3.0).ceil().max(1.0) as usize;
-                (0..steps).map(move |k| super::lerp(w[0], w[1], k as f32 / steps as f32))
+                let steps = (dist(w[0], w[1]) / 3.0).ceil().max(1.0) as usize;
+                (0..steps).map(move |k| lerp(w[0], w[1], k as f32 / steps as f32))
             })
             .chain([b])
             .collect();
@@ -320,7 +320,7 @@ pub(crate) fn cubic(a: [f32; 2], b: [f32; 2]) -> Vec<[f32; 2]> {
         return vec![a, b];
     }
     let (c1, c2) = ([a[0], a[1] + dy * 0.5], [b[0], b[1] - dy * 0.5]);
-    let len = super::dist(a, c1) + super::dist(c1, c2) + super::dist(c2, b);
+    let len = dist(a, c1) + dist(c1, c2) + dist(c2, b);
     let steps = (len / 3.0).ceil().clamp(8.0, 96.0) as usize;
     (0..=steps)
         .map(|s| {
@@ -374,7 +374,7 @@ fn seg_dist(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let l = dx * dx + dy * dy;
     let t = if l < 1e-6 { 0.0 } else { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l).clamp(0.0, 1.0) };
-    super::dist(p, [a[0] + dx * t, a[1] + dy * t])
+    dist(p, [a[0] + dx * t, a[1] + dy * t])
 }
 
 #[cfg(test)]

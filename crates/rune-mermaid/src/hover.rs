@@ -5,10 +5,10 @@
 
 use rune::{Color, LineCap, Shape};
 
-use super::{Canvas, Op};
+use super::canvas::{Canvas, Op};
 
 /// What hovering a flowchart or state diagram node lights up.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Hover {
     /// Nothing.
     Off,

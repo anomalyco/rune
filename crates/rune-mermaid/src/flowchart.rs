@@ -1,91 +1,37 @@
-//! Flowcharts: the parser for `graph`/`flowchart` sources and their drawing on top of
-//! [`super::layered`].
+//! Flowcharts: the parser for `graph`/`flowchart` sources and their drawing on [`super::layered_draw`].
 
 use std::collections::HashMap;
 
-use super::layered::MAX_MINLEN;
-use super::{Cur, MAX_ITEMS, NodeStyle, clean, clean_quoted, parse_style_props, statements};
+use rune::Color;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Dir {
-    Down,
-    Up,
-    Right,
-    Left,
-}
-
-impl Dir {
-    pub(crate) fn parse(s: &str) -> Option<Self> {
-        match s {
-            "" | "TD" | "TB" => Some(Dir::Down),
-            "BT" => Some(Dir::Up),
-            "LR" => Some(Dir::Right),
-            "RL" => Some(Dir::Left),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NodeShape {
-    Rect,
-    Round,
-    Stadium,
-    Subroutine,
-    Cylinder,
-    Circle,
-    Asymmetric,
-    Diamond,
-    Hexagon,
-    Parallelogram,
-    Trapezoid,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Line {
-    Solid,
-    Dotted,
-    Thick,
-    Invisible,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Head {
-    None,
-    Arrow,
-    Circle,
-    Cross,
-}
+use super::canvas::{Canvas, Scene, fit, measure};
+use super::layered::{MAX_MINLEN, Spacing};
+use super::layered_draw::{ClusterSpec, Dir, DrawNode, Edge, Head, Line, NodeShape, layered_canvas, node_size};
+use super::{
+    Cur, DiagramStyle, Hover, EdgeStyle, MAX_ITEMS, NodeStyle, clean, clean_quoted,
+    parse_edge_style_props, parse_style_props, statements,
+};
 
 #[derive(Debug)]
 pub(crate) struct Node {
-    #[cfg_attr(not(test), allow(dead_code, reason = "tests check parsing by id"))]
     pub id: String,
     pub label: String,
     pub shape: NodeShape,
     pub cluster: Option<usize>,
     pub style: NodeStyle,
-}
-
-#[derive(Debug)]
-pub(crate) struct Edge {
-    pub from: usize,
-    pub to: usize,
-    pub label: Option<String>,
-    pub line: Line,
-    pub start: Head,
-    pub end: Head,
-    pub minlen: usize,
+    pub explicit_shape: bool,
 }
 
 #[derive(Debug)]
 pub(crate) struct Subgraph {
+    pub id: Option<String>,
     pub title: String,
     pub parent: Option<usize>,
 }
 
 #[derive(Debug)]
 pub(crate) struct Flowchart {
+    pub title: Option<String>,
     pub dir: Dir,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
@@ -97,17 +43,22 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<Flowchart> {
     let (dir, rest) = header.trim_start().split_once(|c: char| c.is_whitespace() || c == ';').unwrap_or((header.trim(), ""));
     let dir = Dir::parse(dir)?;
     let mut p = Parser {
-        f: Flowchart { dir, nodes: Vec::new(), edges: Vec::new(), subgraphs: Vec::new() },
+        f: Flowchart { title: None, dir, nodes: Vec::new(), edges: Vec::new(), subgraphs: Vec::new() },
         ids: HashMap::new(),
         stack: Vec::new(),
         class_defs: HashMap::new(),
         node_classes: HashMap::new(),
         node_styles: HashMap::new(),
+        default_edge_style: EdgeStyle::default(),
+        edge_styles: HashMap::new(),
     };
     for line in std::iter::once(rest).chain(body.iter().copied()) {
         for stmt in statements(line) {
             p.statement(stmt)?;
         }
+    }
+    if !p.stack.is_empty() {
+        return None;
     }
     for (id, &idx) in &p.ids {
         let mut st = NodeStyle::default();
@@ -123,7 +74,71 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<Flowchart> {
         }
         p.f.nodes[idx].style = st;
     }
+    for (i, e) in p.f.edges.iter_mut().enumerate() {
+        let mut st = p.default_edge_style;
+        if let Some(&es) = p.edge_styles.get(&i) {
+            st = st.merge(es);
+        }
+        e.style = st;
+    }
+    resolve_subgraph_endpoints(&mut p.f);
     (!p.f.nodes.is_empty()).then_some(p.f)
+}
+
+/// Redirects edges targeting a `subgraph id` placeholder onto that subgraph's first/last member.
+fn resolve_subgraph_endpoints(f: &mut Flowchart) {
+    let mut redirects: HashMap<usize, (usize, usize)> = HashMap::new();
+    for (sg_idx, sg) in f.subgraphs.iter().enumerate() {
+        let Some(id) = &sg.id else { continue };
+        let Some(node_idx) = f.nodes.iter().position(|n| &n.id == id && !n.explicit_shape) else { continue };
+        let members: Vec<usize> = (0..f.nodes.len())
+            .filter(|&i| i != node_idx && in_cluster(i, sg_idx, &f.nodes, &f.subgraphs))
+            .collect();
+        if let (Some(&first), Some(&last)) = (members.first(), members.last()) {
+            redirects.insert(node_idx, (first, last));
+        }
+    }
+    if redirects.is_empty() {
+        return;
+    }
+    for e in &mut f.edges {
+        if let Some(&(_, last)) = redirects.get(&e.from) {
+            e.from = last;
+        }
+        if let Some(&(first, _)) = redirects.get(&e.to) {
+            e.to = first;
+        }
+    }
+    let mut keep = Vec::with_capacity(f.nodes.len());
+    let mut remap = vec![0usize; f.nodes.len()];
+    for i in 0..f.nodes.len() {
+        if !redirects.contains_key(&i) {
+            remap[i] = keep.len();
+            keep.push(i);
+        }
+    }
+    let mut old = std::mem::take(&mut f.nodes).into_iter().enumerate().collect::<HashMap<_, _>>();
+    f.nodes = keep.into_iter().filter_map(|i| old.remove(&i)).collect();
+    for e in &mut f.edges {
+        e.from = remap[e.from];
+        e.to = remap[e.to];
+    }
+}
+
+fn in_cluster(node_idx: usize, target: usize, nodes: &[Node], subgraphs: &[Subgraph]) -> bool {
+    let mut cur = nodes[node_idx].cluster;
+    let mut steps = 0;
+    while let Some(c) = cur {
+        if c == target {
+            return true;
+        }
+        cur = subgraphs[c].parent;
+        steps += 1;
+        if steps > subgraphs.len() {
+            break;
+        }
+    }
+    false
 }
 
 struct Parser {
@@ -133,9 +148,10 @@ struct Parser {
     class_defs: HashMap<String, NodeStyle>,
     node_classes: HashMap<String, Vec<String>>,
     node_styles: HashMap<String, NodeStyle>,
+    default_edge_style: EdgeStyle,
+    edge_styles: HashMap<usize, EdgeStyle>,
 }
 
-/// Subgraphs nest at most this deep.
 const MAX_DEPTH: usize = 8;
 
 struct Link {
@@ -147,8 +163,6 @@ struct Link {
 }
 
 impl Parser {
-    /// `None` once the chart already holds [`MAX_ITEMS`] nodes, edges and subgraphs, checked
-    /// before each one is added so no single statement can build an unbounded amount.
     fn budget(&self) -> Option<()> {
         (self.f.nodes.len() + self.f.edges.len() + self.f.subgraphs.len() < MAX_ITEMS).then_some(())
     }
@@ -158,19 +172,32 @@ impl Parser {
         match word {
             "subgraph" => {
                 let rest = s["subgraph".len()..].trim();
-                let title = match rest.find('[') {
-                    Some(i) if rest.ends_with(']') => clean_quoted(&rest[i + 1..rest.len() - 1]),
-                    _ => clean_quoted(rest),
+                let (sg_id, title) = match rest.find('[') {
+                    Some(i) if rest.ends_with(']') => {
+                        let raw_id = rest[..i].trim();
+                        let id = (!raw_id.is_empty()).then(|| raw_id.to_owned());
+                        (id, clean_quoted(&rest[i + 1..rest.len() - 1]))
+                    }
+                    _ => {
+                        let id = (!rest.starts_with('"') && !rest.contains(char::is_whitespace) && !rest.is_empty()).then(|| rest.to_owned());
+                        (id, clean_quoted(rest))
+                    }
                 };
                 self.budget()?;
                 if self.stack.len() >= MAX_DEPTH {
                     return None;
                 }
-                self.f.subgraphs.push(Subgraph { title, parent: self.stack.last().copied() });
+                self.f.subgraphs.push(Subgraph { id: sg_id, title, parent: self.stack.last().copied() });
                 self.stack.push(self.f.subgraphs.len() - 1);
             }
             "end" if s == "end" => {
                 self.stack.pop()?;
+            }
+            "title" => {
+                let t = clean_quoted(s["title".len()..].trim());
+                if !t.is_empty() {
+                    self.f.title = Some(t);
+                }
             }
             "direction" => {
                 let rest = s["direction".len()..].trim();
@@ -208,7 +235,21 @@ impl Parser {
                     }
                 }
             }
-            "linkStyle" | "click" | "accTitle" | "accDescr" => {}
+            "linkStyle" => {
+                let rest = s["linkStyle".len()..].trim();
+                if let Some((targets, props)) = rest.split_once(char::is_whitespace) {
+                    let st = parse_edge_style_props(props);
+                    for tok in targets.split(',').map(str::trim) {
+                        if tok == "default" {
+                            self.default_edge_style = self.default_edge_style.merge(st);
+                        } else if let Ok(idx) = tok.parse::<usize>() {
+                            let cur = self.edge_styles.get(&idx).copied().unwrap_or_default();
+                            self.edge_styles.insert(idx, cur.merge(st));
+                        }
+                    }
+                }
+            }
+            "click" | "accTitle" | "accDescr" => {}
             _ => self.chain(s)?,
         }
         Some(())
@@ -236,6 +277,7 @@ impl Parser {
                         start: link.start,
                         end: link.end,
                         minlen: link.minlen,
+                        style: EdgeStyle::default(),
                     });
                 }
             }
@@ -267,19 +309,28 @@ impl Parser {
             Some(&i) => i,
             None => {
                 self.budget()?;
-                self.f.nodes.push(Node { label: id.clone(), id: id.clone(), shape: NodeShape::Rect, cluster, style: NodeStyle::default() });
+                self.f.nodes.push(Node {
+                    label: id.clone(),
+                    id: id.clone(),
+                    shape: NodeShape::Rect,
+                    cluster,
+                    style: NodeStyle::default(),
+                    explicit_shape: false,
+                });
                 self.ids.insert(id, self.f.nodes.len() - 1);
                 self.f.nodes.len() - 1
             }
         };
         let n = &mut self.f.nodes[i];
-        // A node first used outside a subgraph joins the first subgraph that mentions it.
         if n.cluster.is_none() {
             n.cluster = cluster;
         }
         if let Some((label, shape)) = shape {
-            n.label = label;
+            if let Some(l) = label {
+                n.label = l;
+            }
             n.shape = shape;
+            n.explicit_shape = true;
         }
         Some(i)
     }
@@ -298,7 +349,6 @@ fn ident(c: &mut Cur) -> Option<String> {
     (c.i > start).then(|| c.s[start..c.i].to_owned())
 }
 
-/// Openers and closers, longest first.
 const SHAPES: &[(&str, &str, NodeShape)] = &[
     ("(((", ")))", NodeShape::Circle),
     ("([", "])", NodeShape::Stadium),
@@ -312,7 +362,6 @@ const SHAPES: &[(&str, &str, NodeShape)] = &[
     ("{", "}", NodeShape::Diamond),
 ];
 
-/// Finds a closing delimiter outside `"…"` quotes, tracking single-character bracket nesting.
 fn find_close(s: &str, open: &str, close: &str) -> Option<usize> {
     let nested = open.len() == 1 && close.len() == 1 && open != ">";
     let (mut depth, mut quoted, mut escaped) = (1usize, false, false);
@@ -375,7 +424,6 @@ fn find_quote_end(s: &str) -> Option<(String, usize)> {
     None
 }
 
-/// Finds `needle` outside `"…"` quotes.
 fn find_unquoted(s: &str, needle: &str) -> Option<usize> {
     let (mut quoted, mut escaped) = (false, false);
     for (i, ch) in s.char_indices() {
@@ -402,12 +450,79 @@ fn find_unquoted(s: &str, needle: &str) -> Option<usize> {
     None
 }
 
-/// A node's bracketed label: `Some(None)` when there is none, `None` when it is malformed.
-fn shape(c: &mut Cur) -> Option<Option<(String, NodeShape)>> {
-    if c.rest().starts_with("@{") {
+/// Mermaid v11 `@{ shape: cyl, label: "Postgres" }` node metadata.
+fn parse_at_shape(c: &mut Cur) -> Option<(Option<String>, NodeShape)> {
+    c.eat("@{");
+    let end = find_close(c.rest(), "{", "}")?;
+    let inner = &c.rest()[..end];
+    let mut kind = NodeShape::Rect;
+    let mut label = None;
+    let mut saw_key = false;
+    for part in split_top_commas(inner) {
+        let (k, v) = part.split_once(':')?;
+        saw_key = true;
+        let v = v.trim();
+        match k.trim() {
+            "shape" => {
+                kind = match v.trim_matches('"').to_ascii_lowercase().as_str() {
+                    "rect" | "proc" | "process" | "doc" | "card" => NodeShape::Rect,
+                    "rounded" | "event" => NodeShape::Round,
+                    "stadium" | "pill" | "terminal" => NodeShape::Stadium,
+                    "subproc" | "subprocess" | "subroutine" | "fr-rect" => NodeShape::Subroutine,
+                    "cyl" | "cylinder" | "db" | "database" | "lin-cyl" => NodeShape::Cylinder,
+                    "circle" | "circ" | "sm-circ" | "dbl-circ" | "f-circ" => NodeShape::Circle,
+                    "diam" | "diamond" | "decision" => NodeShape::Diamond,
+                    "hex" | "hexagon" | "prepare" => NodeShape::Hexagon,
+                    "lean-r" | "lean-l" | "in-out" | "out-in" | "parallelogram" => NodeShape::Parallelogram,
+                    "trap-b" | "trap-t" | "trapezoid" | "manual" => NodeShape::Trapezoid,
+                    "odd" | "flag" => NodeShape::Asymmetric,
+                    _ => return None,
+                };
+            }
+            "label" => label = Some(clean_quoted(v)),
+            _ => {}
+        }
+    }
+    if !saw_key {
         return None;
     }
-    // `[/…/]`, `[\…\]` lean; `[/…\]`, `[\…/]` are trapezoids.
+    c.i += end + 1;
+    Some((label, kind))
+}
+
+fn split_top_commas(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut start, mut quoted, mut escaped) = (0, false, false);
+    for (i, ch) in s.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            ',' if !quoted => {
+                let seg = s[start..i].trim();
+                if !seg.is_empty() {
+                    out.push(seg);
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    let tail = s[start..].trim();
+    if !tail.is_empty() {
+        out.push(tail);
+    }
+    out
+}
+
+/// A node's bracketed label: `Some(None)` when there is none, `None` when it is malformed.
+fn shape(c: &mut Cur) -> Option<Option<(Option<String>, NodeShape)>> {
+    if c.rest().starts_with("@{") {
+        return parse_at_shape(c).map(Some);
+    }
     for open in ["[/", "[\\"] {
         if c.rest().starts_with(open) {
             c.eat(open);
@@ -416,7 +531,7 @@ fn shape(c: &mut Cur) -> Option<Option<(String, NodeShape)>> {
             let same = rest[end..].starts_with(&open[1..]);
             let label = clean_quoted(&rest[..end]);
             c.i += end + 2;
-            return Some(Some((label, if same { NodeShape::Parallelogram } else { NodeShape::Trapezoid })));
+            return Some(Some((Some(label), if same { NodeShape::Parallelogram } else { NodeShape::Trapezoid })));
         }
     }
     let Some(&(open, close, kind)) = SHAPES.iter().find(|(open, ..)| c.rest().starts_with(open)) else {
@@ -439,7 +554,7 @@ fn shape(c: &mut Cur) -> Option<Option<(String, NodeShape)>> {
         c.i += end + close.len();
         label
     };
-    Some(Some((clean(&label), kind)))
+    Some(Some((Some(clean(&label)), kind)))
 }
 
 fn run(c: &mut Cur) -> String {
@@ -450,7 +565,6 @@ fn run(c: &mut Cur) -> String {
     c.s[start..c.i].to_owned()
 }
 
-/// A head right after a link's body: `>`, or `o`/`x` when no identifier follows.
 fn end_head(c: &mut Cur) -> Head {
     match c.peek() {
         Some('>') => {
@@ -483,7 +597,6 @@ fn link(c: &mut Cur) -> Option<Link> {
     let mut body = first.clone();
     let mut label = None;
     if end == Head::None && matches!(first.as_str(), "--" | "==" | "-.") {
-        // `-- text -->`: the text runs to the closing body outside quotes.
         let close = if first == "-." { ".-" } else { &first[..] };
         let at = find_unquoted(c.rest(), close)?;
         let text = clean_quoted(&c.rest()[..at]);
@@ -523,6 +636,28 @@ fn link(c: &mut Cur) -> Option<Link> {
         c.i = save;
     }
     Some(Link { line, start, end, minlen, label })
+}
+
+const SPACING: Spacing = Spacing { node: 36.0, rank: 44.0, cluster: 14.0 };
+
+pub(crate) fn draw(f: &Flowchart, paint: &DiagramStyle, hover: Option<(Hover, Color)>) -> Option<Scene> {
+    let canvas = draw_canvas(f, paint, hover)?;
+    let scale = fit(canvas.width(), paint);
+    canvas.finish(scale)
+}
+
+/// `f` drawn at full size, before [`Canvas::finish`].
+pub(crate) fn draw_canvas(f: &Flowchart, paint: &DiagramStyle, hover: Option<(Hover, Color)>) -> Option<Canvas> {
+    let nodes: Vec<DrawNode> = f
+        .nodes
+        .iter()
+        .map(|n| {
+            let label = measure(&n.label, paint.font);
+            DrawNode::Shape { shape: n.shape, size: node_size(n.shape, label.size), label, cluster: n.cluster, style: n.style }
+        })
+        .collect();
+    let clusters: Vec<ClusterSpec> = f.subgraphs.iter().map(|s| ClusterSpec { title: s.title.clone(), parent: s.parent }).collect();
+    layered_canvas(f.dir, &nodes, &f.edges, &clusters, &SPACING, paint, hover)
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 use super::*;
 
 fn state(src: &str) -> StateDiagram {
-    match crate::parse(src) {
+    match crate::parse(src).map(|p| p.diagram) {
         Some(crate::Diagram::State(s)) => s,
         _ => panic!("not a state diagram: {src:?}"),
     }

@@ -1,10 +1,12 @@
 //! Native ```` ```mermaid ```` diagrams inside [`crate::Markdown`], backed by [`rune_mermaid`].
 //!
 //! Covers flowcharts (`graph`/`flowchart` in `TD`/`TB`/`BT`/`LR`/`RL` with subgraphs, all node
-//! shapes, link styles and `style`/`classDef` tints), sequence diagrams (`sequenceDiagram` with
-//! participants, actors, activations, notes and frames) and state diagrams (`stateDiagram` /
-//! `stateDiagram-v2` with `[*]`, composite states and `<<choice>>`). Anything outside the
-//! supported subset returns `None`, and [`crate::Markdown`] falls back to the code block.
+//! shapes including `@{ shape: … }`, link styles and `style`/`classDef`/`linkStyle` tints),
+//! sequence diagrams (`sequenceDiagram` with participants, actors, `box` groups, `rect` bands,
+//! activations, notes and frames), state diagrams (`stateDiagram`/`stateDiagram-v2` with `[*]`,
+//! composite states and `<<choice>>`) and class diagrams (`classDiagram` with fields, methods,
+//! stereotypes, namespaces and UML relations). Anything outside the supported subset returns
+//! `None`, and [`crate::Markdown`] falls back to the code block.
 
 use rune::El;
 

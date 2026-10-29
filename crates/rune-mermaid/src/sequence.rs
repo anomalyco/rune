@@ -2,9 +2,12 @@
 
 use std::collections::HashMap;
 
-use rune::{Align, TextStyle};
+use rune::{Align, Color, TextStyle};
 
-use super::{Canvas, DiagramStyle, MAX_ITEMS, Measured, Scene, arrowhead, clean, clean_quoted, ellipse, fit, measure, rounded_rect};
+use super::canvas::{
+    Canvas, Measured, Scene, arrowhead, ellipse, fit, measure, over_color, rounded_rect,
+};
+use super::{DiagramStyle, MAX_ITEMS, adapt_fill, clean, clean_quoted, parse_color_spec};
 
 #[derive(Debug)]
 pub(crate) struct Participant {
@@ -12,6 +15,13 @@ pub(crate) struct Participant {
     pub id: String,
     pub label: String,
     pub actor: bool,
+    pub group: Option<usize>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ParticipantBox {
+    pub title: String,
+    pub color: Option<Color>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,11 +39,8 @@ pub(crate) struct Message {
     pub text: String,
     pub dotted: bool,
     pub tip: Tip,
-    /// `<<->>`: a tip at both ends.
     pub both: bool,
-    /// `+`: the receiver activates.
     pub activate: bool,
-    /// `-`: the sender deactivates.
     pub deactivate: bool,
 }
 
@@ -50,27 +57,36 @@ pub(crate) enum Event {
     Note(NotePos, String),
     Activate(usize),
     Deactivate(usize),
-    /// A frame opens: its keyword (`None` for undrawn `rect`/`box` groups) and label.
-    Open(Option<String>, String),
-    /// `else`, `and` or `option`, with its label.
+    /// A frame (`Some(kind)`) or a `rect` highlight band (`None`, with optional colour).
+    Open { kind: Option<String>, label: String, fill: Option<Color> },
     Else(String),
     End,
 }
 
 #[derive(Debug)]
 pub(crate) struct Sequence {
+    pub title: Option<String>,
     pub participants: Vec<Participant>,
+    pub boxes: Vec<ParticipantBox>,
     pub events: Vec<Event>,
     pub autonumber: bool,
 }
 
 pub(crate) fn parse(_header: &str, body: &[&str]) -> Option<Sequence> {
-    let mut p = Parser { s: Sequence { participants: Vec::new(), events: Vec::new(), autonumber: false }, ids: HashMap::new(), depth: 0 };
+    let mut p = Parser {
+        s: Sequence { title: None, participants: Vec::new(), boxes: Vec::new(), events: Vec::new(), autonumber: false },
+        ids: HashMap::new(),
+        depth: 0,
+        active_box: None,
+    };
     for line in body {
         p.line(line)?;
         if p.s.participants.len() > 40 || p.s.events.len() > MAX_ITEMS {
             return None;
         }
+    }
+    if p.active_box.is_some() || p.depth != 0 {
+        return None;
     }
     (!p.s.participants.is_empty()).then_some(p.s)
 }
@@ -79,9 +95,9 @@ struct Parser {
     s: Sequence,
     ids: HashMap<String, usize>,
     depth: usize,
+    active_box: Option<usize>,
 }
 
-/// Arrow, dotted, tip, both ends; longest first at each position.
 const ARROWS: &[(&str, bool, Tip, bool)] = &[
     ("<<-->>", true, Tip::Filled, true),
     ("<<->>", false, Tip::Filled, true),
@@ -101,7 +117,6 @@ impl Parser {
         let (word, rest) = l.split_once(char::is_whitespace).map_or((l, ""), |(w, r)| (w, r.trim()));
         match word.trim_end_matches(':') {
             "participant" | "actor" => self.declare(rest, word == "actor")?,
-            // `create participant A`: drawn like any participant (from the top).
             "create" => {
                 let (kind, name) = rest.split_once(char::is_whitespace).map_or((rest, ""), |(w, r)| (w, r.trim()));
                 match kind {
@@ -109,7 +124,13 @@ impl Parser {
                     _ => return None,
                 }
             }
-            "destroy" | "title" | "accTitle" | "accDescr" | "link" | "links" | "properties" | "details" => {}
+            "title" => {
+                let t = clean_quoted(l["title".len()..].trim().trim_start_matches(':'));
+                if !t.is_empty() {
+                    self.s.title = Some(t);
+                }
+            }
+            "destroy" | "accTitle" | "accDescr" | "link" | "links" | "properties" | "details" => {}
             "autonumber" => self.s.autonumber = true,
             "activate" => {
                 let i = self.id(rest)?;
@@ -122,11 +143,19 @@ impl Parser {
             "Note" | "note" => self.note(rest)?,
             kind @ ("loop" | "alt" | "opt" | "par" | "critical" | "break") => {
                 self.depth += 1;
-                self.s.events.push(Event::Open(Some(kind.to_owned()), clean(rest)));
+                self.s.events.push(Event::Open { kind: Some(kind.to_owned()), label: clean(rest), fill: None });
             }
-            "rect" | "box" => {
+            "rect" => {
                 self.depth += 1;
-                self.s.events.push(Event::Open(None, String::new()));
+                self.s.events.push(Event::Open { kind: None, label: String::new(), fill: parse_color_spec(rest) });
+            }
+            "box" => {
+                if self.active_box.is_some() {
+                    return None;
+                }
+                let (color, title) = parse_box_header(rest);
+                self.s.boxes.push(ParticipantBox { title, color });
+                self.active_box = Some(self.s.boxes.len() - 1);
             }
             "else" | "and" | "option" => {
                 if self.depth == 0 {
@@ -135,8 +164,12 @@ impl Parser {
                 self.s.events.push(Event::Else(clean(rest)));
             }
             "end" => {
-                self.depth = self.depth.checked_sub(1)?;
-                self.s.events.push(Event::End);
+                if self.active_box.is_some() {
+                    self.active_box = None;
+                } else {
+                    self.depth = self.depth.checked_sub(1)?;
+                    self.s.events.push(Event::End);
+                }
             }
             _ => self.message(l)?,
         }
@@ -155,6 +188,9 @@ impl Parser {
         let p = &mut self.s.participants[i];
         p.label = label;
         p.actor = actor;
+        if p.group.is_none() {
+            p.group = self.active_box;
+        }
         Some(())
     }
 
@@ -166,7 +202,7 @@ impl Parser {
         if let Some(&i) = self.ids.get(name) {
             return Some(i);
         }
-        self.s.participants.push(Participant { id: name.to_owned(), label: clean(name), actor: false });
+        self.s.participants.push(Participant { id: name.to_owned(), label: clean(name), actor: false, group: self.active_box });
         self.ids.insert(name.to_owned(), self.s.participants.len() - 1);
         Some(self.s.participants.len() - 1)
     }
@@ -217,16 +253,35 @@ impl Parser {
     }
 }
 
-// Drawing.
+fn parse_box_header(rest: &str) -> (Option<Color>, String) {
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return (None, String::new());
+    }
+    if let Some(after_paren) = rest.strip_prefix("rgb(").or_else(|| rest.strip_prefix("rgba("))
+        && let Some(end) = after_paren.find(')')
+    {
+        let col_len = rest.len() - after_paren.len() + end + 1;
+        return (parse_color_spec(&rest[..col_len]), clean_quoted(&rest[col_len..]));
+    }
+    let (first, tail) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+    if first.eq_ignore_ascii_case("transparent") {
+        return (None, clean_quoted(tail));
+    }
+    if let Some(c) = parse_color_spec(first) {
+        return (Some(c), clean_quoted(tail));
+    }
+    (None, clean_quoted(rest))
+}
 
 const BAR: f32 = 10.0;
 
 struct Frame {
     kind: Option<Measured>,
     label: Measured,
+    fill: Option<Color>,
     top: f32,
     dividers: Vec<(f32, Measured)>,
-    /// Horizontal extent of what the frame holds.
     x: [f32; 2],
 }
 
@@ -243,20 +298,27 @@ pub(crate) fn draw(s: &Sequence, paint: &DiagramStyle) -> Option<Scene> {
         .zip(&heads)
         .map(|(p, m)| if p.actor { [m.size[0].max(40.0), 40.0 + m.size[1]] } else { [(m.size[0] + 24.0).max(72.0), m.size[1] + 16.0] })
         .collect();
-    let top_h = boxes.iter().map(|b| b[1]).fold(0.0, f32::max);
+    let box_titles: Vec<Measured> = s.boxes.iter().map(|b| measure(&b.title, bold)).collect();
+    let box_lead = if s.boxes.is_empty() {
+        0.0
+    } else {
+        let th = box_titles.iter().map(|t| t.size[1]).fold(0.0, f32::max);
+        if th > 0.0 { th + 18.0 } else { 10.0 }
+    };
+    let max_head_h = boxes.iter().map(|b| b[1]).fold(0.0, f32::max);
+    let top_h = box_lead + max_head_h;
     let texts: Vec<Option<Measured>> = s
         .events
         .iter()
         .map(|e| match e {
             Event::Message(m) => Some(measure(&m.text, small)),
             Event::Note(_, t) => Some(measure(t, small)),
-            Event::Open(_, t) | Event::Else(t) => Some(measure(&if t.is_empty() { String::new() } else { format!("[{t}]") }, small)),
+            Event::Open { label: t, .. } | Event::Else(t) => Some(measure(&if t.is_empty() { String::new() } else { format!("[{t}]") }, small)),
             _ => None,
         })
         .collect();
     let width_of = |i: usize| texts[i].as_ref().map_or(0.0, |m| m.size[0]);
 
-    // Columns: neighbours clear each other, and every message and side note fits its gap.
     let number = if s.autonumber { 20.0 } else { 0.0 };
     let mut need: Vec<(usize, usize, f32)> = Vec::new();
     for (i, e) in s.events.iter().enumerate() {
@@ -268,9 +330,10 @@ pub(crate) fn draw(s: &Sequence, paint: &DiagramStyle) -> Option<Scene> {
             _ => {}
         }
     }
-    let mut cx = vec![boxes[0][0] / 2.0; n];
+    let mut cx = vec![boxes[0][0] / 2.0 + if s.participants[0].group.is_some() { 10.0 } else { 0.0 }; n];
     for j in 1..n {
-        cx[j] = cx[j - 1] + (boxes[j - 1][0] + boxes[j][0]) / 2.0 + 24.0;
+        let boundary_gap = if s.participants[j - 1].group != s.participants[j].group { 20.0 } else { 0.0 };
+        cx[j] = cx[j - 1] + (boxes[j - 1][0] + boxes[j][0]) / 2.0 + 24.0 + boundary_gap;
         for &(a, b, d) in &need {
             if b == j {
                 cx[j] = cx[j].max(cx[a] + d);
@@ -278,8 +341,14 @@ pub(crate) fn draw(s: &Sequence, paint: &DiagramStyle) -> Option<Scene> {
         }
     }
 
-    let (mut back, mut lifelines, mut bars, mut front, mut tops) = (Canvas::default(), Canvas::default(), Canvas::default(), Canvas::default(), Canvas::default());
-    // Frame tabs and labels sit above activation bars so a bar never covers "loop".
+    let (mut groups_bg, mut back, mut lifelines, mut bars, mut front, mut tops) = (
+        Canvas::default(),
+        Canvas::default(),
+        Canvas::default(),
+        Canvas::default(),
+        Canvas::default(),
+        Canvas::default(),
+    );
     let mut tabs = Canvas::default();
     let mut active: Vec<Vec<f32>> = vec![Vec::new(); n];
     let mut frames: Vec<Frame> = Vec::new();
@@ -368,11 +437,11 @@ pub(crate) fn draw(s: &Sequence, paint: &DiagramStyle) -> Option<Scene> {
             }
             Event::Activate(a) => active[*a].push(y - 8.0),
             Event::Deactivate(a) => close_bar(&mut bars, &mut active, *a, y - 8.0),
-            Event::Open(kind, _) => {
+            Event::Open { kind, fill, .. } => {
                 let label = texts[i].clone().expect("frames are measured");
                 let kind = kind.as_deref().map(|k| measure(k, bold));
-                let h = kind.as_ref().map_or(0.0, |k| k.size[1].max(label.size[1]) + 14.0);
-                frames.push(Frame { kind, label, top: y, dividers: Vec::new(), x: [f32::MAX, f32::MIN] });
+                let h = kind.as_ref().map_or(if fill.is_some() { 8.0 } else { 0.0 }, |k| k.size[1].max(label.size[1]) + 14.0);
+                frames.push(Frame { kind, label, fill: *fill, top: y, dividers: Vec::new(), x: [f32::MAX, f32::MIN] });
                 y += h;
             }
             Event::Else(_) => {
@@ -403,6 +472,9 @@ pub(crate) fn draw(s: &Sequence, paint: &DiagramStyle) -> Option<Scene> {
                         back.dashed(&[[x0, *dy], [x1, *dy]], 1.0, paint.node_border, 4.0, 3.0);
                         tabs.label_at(label, [x0 + 9.0, dy + 4.0], small, paint.muted, Align::Start);
                     }
+                } else if let Some(rect_col) = f.fill {
+                    let band = adapt_fill(paint.surface, rect_col, 0.04, 0.03).alpha(0.55);
+                    back.fill(rounded_rect(x0, f.top - 2.0, x1, bottom, 4.0), band);
                 }
                 touch(&mut frames, x0, x1);
                 y = bottom + 16.0;
@@ -415,7 +487,25 @@ pub(crate) fn draw(s: &Sequence, paint: &DiagramStyle) -> Option<Scene> {
             close_bar(&mut bars, &mut active, a, end - 8.0);
         }
     }
-    // Participants at the top and mirrored at the bottom, joined by their lifelines.
+
+    // Participant `box` columns behind everything else.
+    let box_border = over_color(paint.node_border.alpha(0.45), paint.surface_border);
+    for (b_idx, b) in s.boxes.iter().enumerate() {
+        let members: Vec<usize> = (0..n).filter(|&i| s.participants[i].group == Some(b_idx)).collect();
+        let (Some(&first), Some(&last)) = (members.first(), members.last()) else { continue };
+        let mut x0 = cx[first] - boxes[first][0] / 2.0 - 10.0;
+        let mut x1 = cx[last] + boxes[last][0] / 2.0 + 10.0;
+        let title = &box_titles[b_idx];
+        if x1 - x0 < title.size[0] + 20.0 {
+            let mid = (x0 + x1) / 2.0;
+            x0 = mid - title.size[0] / 2.0 - 10.0;
+            x1 = mid + title.size[0] / 2.0 + 10.0;
+        }
+        let fill = b.color.map_or(paint.cluster_fill, |col| adapt_fill(paint.surface, col, 0.035, 0.03));
+        groups_bg.shape(rounded_rect(x0, 0.0, x1, end + max_head_h + 10.0, 6.0), fill, box_border, 1.0);
+        groups_bg.label(title, [(x0 + x1) / 2.0, 7.0 + title.size[1] / 2.0], bold, paint.muted, Align::Center);
+    }
+
     for (i, p) in s.participants.iter().enumerate() {
         let [w, h] = boxes[i];
         lifelines.stroke(vec![[cx[i], top_h], [cx[i], end]], false, 1.0, paint.node_border);
@@ -429,8 +519,8 @@ pub(crate) fn draw(s: &Sequence, paint: &DiagramStyle) -> Option<Scene> {
             }
         }
     }
-    let mut c = back;
-    for layer in [lifelines, bars, tabs, front, tops] {
+    let mut c = groups_bg;
+    for layer in [back, lifelines, bars, tabs, front, tops] {
         c.append(layer);
     }
     let scale = fit(c.width(), paint);
@@ -465,7 +555,6 @@ fn tip(c: &mut Canvas, t: Tip, at: [f32; 2], d: [f32; 2], paint: &DiagramStyle) 
     }
 }
 
-/// A stick figure 36 points tall with its head's top at `top`.
 fn actor(c: &mut Canvas, top: [f32; 2], paint: &DiagramStyle) {
     let [x, y] = top;
     c.shape(ellipse([x, y + 7.0], 7.0, 7.0), paint.node_fill, paint.line, 1.25);

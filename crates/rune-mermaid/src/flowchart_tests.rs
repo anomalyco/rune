@@ -1,9 +1,10 @@
 use super::*;
-use crate::flowchart_draw::boundary;
-use crate::{DiagramStyle, dist};
+use crate::DiagramStyle;
+use crate::canvas::dist;
+use crate::layered_draw::boundary;
 
 fn flow(src: &str) -> Flowchart {
-    match crate::parse(src) {
+    match crate::parse(src).map(|p| p.diagram) {
         Some(crate::Diagram::Flowchart(f)) => f,
         _ => panic!("not a flowchart: {src:?}"),
     }
@@ -37,6 +38,25 @@ fn directions_shapes_and_labels() {
         ]
     );
     assert_eq!(edges(&f)[3..5], [("D", "E"), ("D", "F")], "`&` fans out");
+}
+
+#[test]
+fn v11_at_shapes_subgraph_endpoints_and_link_styles() {
+    let f = flow(
+        "flowchart TD\n\
+         App[Viewer] --> core\n\
+         subgraph core [Rune Core]\n\
+           El[El tree] --> Store@{ shape: cyl, label: \"AnimationStore\" }\n\
+         end\n\
+         core --> GPU@{ shape: hex, label: \"wgpu\" }\n\
+         linkStyle 0 stroke:#22c55e,stroke-width:2px",
+    );
+    assert_eq!(f.nodes.len(), 4, "placeholder node for `core` was redirected and removed");
+    assert_eq!(edges(&f), [("App", "El"), ("El", "Store"), ("Store", "GPU")]);
+    let store = f.nodes.iter().find(|n| n.id == "Store").unwrap();
+    assert_eq!((store.shape, store.label.as_str()), (NodeShape::Cylinder, "AnimationStore"));
+    assert!(f.edges[0].style.stroke.is_some());
+    assert_eq!(f.edges[0].style.width, Some(2.0));
 }
 
 #[test]
@@ -115,7 +135,9 @@ fn malformed_and_unsupported_input_is_rejected() {
         "graph TD\nA -- --> B",
         "graph TD\nA -->|unclosed B",
         "graph TD\nA - B",
-        "graph TD\nA@{ shape: rect } --> B",
+        "graph TD\nA@{ shape: unknown_shape } --> B",
+        "graph TD\nA@{ unclosed --> B",
+        "graph TD\nsubgraph open\n  A --> B",
         "graph TD\nend",
         "graph TD\nA --> ",
         "graph TD",

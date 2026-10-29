@@ -1,3 +1,4 @@
+use super::canvas::{Canvas, Op, dist, smooth};
 use super::*;
 
 #[test]
@@ -11,12 +12,15 @@ fn clean_turns_markup_into_text() {
 
 #[test]
 fn other_diagram_types_and_garbage_are_unsupported() {
-    for src in ["", "pie title Pets\n\"Dogs\" : 386", "classDiagram\nA <|-- B", "gantt\ntitle x", "erDiagram\nA ||--o{ B : has", "hello", "%% only a comment"] {
+    for src in ["", "pie title Pets\n\"Dogs\" : 386", "gantt\ntitle x", "erDiagram\nA ||--o{ B : has", "hello", "%% only a comment"] {
         assert!(!supported(src), "{src:?}");
     }
-    assert!(supported("---\ntitle: Hi\n---\ngraph TD\nA-->B"), "front matter is skipped");
+    let with_title = scene("---\ntitle: Hi\n---\ngraph TD\nA-->B", &DiagramStyle::neutral(true), None).unwrap();
+    assert_eq!(with_title.title.as_deref(), Some("Hi"), "front matter title is preserved");
     assert!(supported("%%{\n  init: {'theme': 'dark'}\n}%%\nflowchart LR\nA-->B"), "multiline init directive is skipped");
     assert!(supported("stateDiagram-v2\n[*] --> Idle\nIdle --> [*]"));
+    assert!(supported("classDiagram\nA <|-- B"));
+    assert!(supported("flowchart TD\n  A[Runtime&lt;S&gt;] --> B[a; b]; B --> C"), "entities and bracketed `;` stay intact");
 }
 
 #[test]
@@ -28,6 +32,8 @@ fn node_style_keeps_contrast_in_dark_and_light_themes() {
         let diff = (fill.to_oklab()[0] - text.to_oklab()[0]).abs();
         assert!(diff > 0.45, "dark={dark} contrast {diff} between {fill:?} and {text:?}");
     }
+    assert!(parse_color_spec("rgb(30, 60, 90)").is_some());
+    assert!(parse_color_spec("lightgreen").is_some());
 }
 
 #[test]
@@ -51,8 +57,6 @@ fn smooth_passes_through_its_points() {
     assert!(curve.iter().any(|p| dist(*p, pts[1]) < 0.01));
 }
 
-/// Each source falls back (`false`) or draws (`true`), in well under a second at full speed;
-/// the bound here is loose for debug builds on a busy machine.
 fn hostile(src: &str, draws: bool) {
     let paint = DiagramStyle::neutral(true);
     let t = std::time::Instant::now();
