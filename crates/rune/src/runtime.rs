@@ -4056,6 +4056,8 @@ impl<S: 'static> Runtime<S> {
                 || order.iter().any(|r| self.grows.get(r).is_some_and(|g| g.target > g.h + 1.0 / 128.0));
             stack.moving = stack.growing
                 || order.iter().any(|r| self.grows.get(r).is_some_and(|g| g.moving()));
+            // Order holds the rows this commit brought and the ones still closing; no others.
+            stack.tops.retain(|id, _| new_set.contains(id) || stack.closing.contains_key(id));
             stack.order = order;
             self.stacks.insert(cid, stack);
         }
@@ -4522,6 +4524,7 @@ impl<S: 'static> Runtime<S> {
         else { self.layer_paint_order.clear(); }
         self.built = false;
         self.virtuals.retain(|path, _| self.nodes.iter().any(|n| n.path == *path));
+        self.prune_path_ids();
         self.subscribe_live();
         self.refresh_modal_index();
         self.sync_modals();
