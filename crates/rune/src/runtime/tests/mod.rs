@@ -11,6 +11,7 @@ mod input_clipboard;
 mod layout_hover;
 mod layout_rows;
 mod loop_sleep;
+mod no_motion;
 mod picture_scale;
 mod pointer_drag;
 mod pointer_hit;

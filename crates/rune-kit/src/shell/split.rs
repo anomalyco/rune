@@ -4,7 +4,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use rune::{Anim, Color, Curve, Cursor, Drag, Easing, El, Phase, Spring, SpringPair, Transition, Tx, col, el, row};
+use rune::{Anim, Color, Curve, Cursor, Drag, Easing, El, Phase, Spring, Transition, Tx, col, el, row};
 
 use super::pane::{PaneMotion, PaneState, Peek, SidebarPeek};
 use super::toolbar::{TOOLBAR_HEIGHT, Toolbar};
@@ -313,7 +313,7 @@ impl SplitView {
                 overlay = Some(b);
             }
             if let (Some(pk), Some(h)) = (peek, &hover) {
-                let instant = instant_transition();
+                let instant = Transition::none();
                 if shown {
                     let hold = el().key("sidebar-peek-hold").pin(Some(0.0), Some(0.0), None, Some(0.0)).w(s.width() + pk.margin);
                     zones.push(h(hold.transition(instant), Duration::ZERO, pk.grace, false));
@@ -538,12 +538,7 @@ fn pane<S: 'static>(state: PaneState, access: fn(&mut S) -> &mut PaneState, cont
     Pane { state, content, handlers: vec![drag], toggle, clear, hover }
 }
 
-const INSTANT_SPRING: Spring = Spring { duration: 0.001, bounce: 0.0 };
 const DOT_FADE: f32 = 0.15;
-
-fn instant_transition() -> Transition {
-    Transition::identity().springs(SpringPair::new(INSTANT_SPRING, INSTANT_SPRING))
-}
 
 /// What the panes share.
 struct Dock<'a> {
@@ -619,7 +614,7 @@ fn dock(d: &Dock, key: &str, p: Pane, leading: bool, content: Contents) -> El {
             .opacity(if shown { 1.0 } else { 0.0 })
             .opacity_motion(surface_motion)
             // Its size only changes while it's hidden (a resize of the open pane).
-            .motion(INSTANT_SPRING);
+            .motion(Spring::NONE);
         body = body.offset(x, 0.0).offset_motion(slide).child(k.elevate(surface, &k.elevation.floating));
     }
     if floating {
@@ -633,7 +628,7 @@ fn dock(d: &Dock, key: &str, p: Pane, leading: bool, content: Contents) -> El {
         slot = slot.clip_soft(0.0);
     }
     if open {
-        let instant = instant_transition();
+        let instant = Transition::none();
         if leading {
             slot = slot
                 .child(el().key("pane-open-main").size(0.0, 0.0).transition(instant).focus_return("main-column"))
@@ -653,7 +648,7 @@ fn dock(d: &Dock, key: &str, p: Pane, leading: bool, content: Contents) -> El {
             .cursor(Cursor::ResizeColumn)
             .fill(Color::TRANSPARENT)
             .opacity(0.02)
-            .transition(instant_transition());
+            .transition(Transition::none());
         grip = if leading { grip.pin(None, Some(0.0), Some(0.0), Some(0.0)) } else { grip.pin(Some(0.0), Some(0.0), None, Some(0.0)) };
         if floating {
             grip = grip.raise();
