@@ -691,3 +691,32 @@ fn span_ring_draws_inset_border_on_light_page_merges_runs_wraps_and_stays_on_hov
         assert_eq!((d.radii, d.params[0], d.border), ([6.0; 4], 1.5, RING.premul(1.0)));
     }
 }
+
+/// Underline rects drawn at 2× for `words`, each its own underlined text element side by side
+/// in a row; device px `(left, right)`, left to right.
+fn underlines(words: &[&str]) -> Vec<(f32, f32)> {
+    use crate::{Cx, El, Env, Runtime};
+    fn view(s: &Vec<String>, _: &mut Cx<Vec<String>>) -> El {
+        let line = crate::oklcha(0.6, 0.15, 260.0, 0.4);
+        crate::row().children(s.iter().map(|w| crate::el::rich(w.clone(), vec![Span::new(0, w.len()).underline(line)])))
+    }
+    let mut rt = Runtime::new(words.iter().map(|w| w.to_string()).collect(), view, (600.0, 100.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    let mut out: Vec<(f32, f32)> = rt.instances.iter()
+        .filter(|i| i.params[1] == crate::render::KIND_RECT && i.rect[3] == 2.0)
+        .map(|i| (i.rect[0], i.rect[0] + i.rect[2]))
+        .collect();
+    out.sort_by(|a, b| a.0.total_cmp(&b.0));
+    out
+}
+
+/// A link flowed a word an element (Seer's notes) underlines as one line: each word's line
+/// meets the next one's at the space, with no gap where an element's width rounds up (t942).
+#[test]
+fn underlined_words_in_a_row_meet_without_gaps() {
+    let lines = underlines(&["Watch ", "Kaizen ", "× ", "OpenCode ", "(4:12, ", "1080p60) ", "→"]);
+    assert_eq!(lines.len(), 7, "{lines:?}");
+    for w in lines.windows(2) {
+        assert_eq!(w[0].1, w[1].0, "each line meets the next: {lines:?}");
+    }
+}

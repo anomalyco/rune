@@ -108,6 +108,8 @@ impl LinkFx {
                 }
                 if let (Some(c), Some(l)) = (p.underline, layout.get(line)) {
                     let y = (origin[1] + l.metrics().baseline + 2.0 * s).round();
+                    let (x0, x1) = crate::text::underline_edges(&l, origin[0], bb.x0 as f32, bb.x1 as f32);
+                    let w = x1 - x0;
                     if let Some(d) = out.iter_mut().find(|d| {
                         d.radius == 0.0
                             && (d.rect[0] - x0).abs() < 1.5

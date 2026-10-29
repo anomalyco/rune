@@ -2255,7 +2255,8 @@ impl TextSystem {
                 }
                 if let Some(uc) = s.underline.filter(|c| c.a > 0.0) {
                     let y = (origin[1] + m.baseline + 2.0 * scale).round();
-                    out.push(D::new(Deco { rect: [x0, y, w, scale.max(1.0)], color: uc, radius: 0.0 }, None, 0));
+                    let (l, r) = underline_edges(&line, origin[0], gr.offset(), gr.offset() + w);
+                    out.push(D::new(Deco { rect: [l, y, r - l, scale.max(1.0)], color: uc, radius: 0.0 }, None, 0));
                 }
             }
         }
@@ -2786,6 +2787,19 @@ pub(crate) fn move_line(layout: &Layout<Ink>, byte: usize, down: bool) -> Option
     let line = layout.get(if down { idx + 1 } else { idx - 1 })?;
     let m = line.metrics();
     Some(cursor_from_point(layout, bb.x0 as f32, (m.block_min_coord + m.block_max_coord) * 0.5).index())
+}
+
+/// An underline's left and right edges (device px) under layout x `a..b` of `line`, its text
+/// starting at `origin_x`. Both are on whole pixels, so runs that touch share an edge, and one
+/// that ends its line runs on to the text box's edge (its width rounded up): a link split into
+/// a text element a word meets the next word's line with no gap at the space (t942).
+pub(crate) fn underline_edges(line: &parley::Line<'_, Ink>, origin_x: f32, a: f32, b: f32) -> (f32, f32) {
+    let end = line.items().fold(0.0f32, |e, item| match item {
+        PositionedLayoutItem::GlyphRun(gr) => e.max(gr.offset() + gr.advance()),
+        PositionedLayoutItem::InlineBox(_) => e,
+    });
+    let r = if b >= end - 0.01 { (b - 1e-3).ceil() } else { b.round() };
+    ((origin_x + a.round()).round(), (origin_x + r).round())
 }
 
 /// Line boxes (`(BoundingBox, line_idx)`) covering bytes `a..b` of `layout`. When `pill_boxes`
