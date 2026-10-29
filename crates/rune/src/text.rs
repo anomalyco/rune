@@ -20,16 +20,23 @@ use parley::{
 use swash::FontRef;
 use swash::scale::image::Content;
 use swash::scale::{Render, ScaleContext, Source, StrikeWith};
-use swash::zeno::{Format, Transform, Vector};
 
-use crate::color::{Color, srgb_encode};
+use crate::color::Color;
 use crate::tok::{Family, OpticalSize, TextStyle};
 
 mod case;
 #[cfg(all(test, target_os = "macos"))]
 mod core_text_tests;
+pub(crate) mod coretext_match;
+pub use coretext_match::FontSmoothing;
+#[cfg(not(target_arch = "wasm32"))]
+#[doc(hidden)]
+pub mod pixel_compare;
 mod fallback;
 mod icon;
+mod layout_cache;
+mod macos_smoothing;
+pub use macos_smoothing::ApplePipeline;
 mod measure;
 mod pill_chips;
 mod rich_layout;
@@ -42,6 +49,9 @@ pub use rich_layout::RichLayoutOptions;
 pub(crate) use case::Source as CaseSource;
 
 use fallback::Route;
+use layout_cache::{Cache, evict};
+#[cfg(test)]
+use layout_cache::{STALE_ENTRY, STALE_TEXT};
 pub use icon::{Icon, icon_coverage};
 use icon::rasterize_icon;
 use trak::Trak;
@@ -295,7 +305,6 @@ fn walk_font_dirs() -> Vec<(String, std::path::PathBuf)> {
 }
 
 pub const ATLAS_SIZE: u32 = 2048;
-const SUBPIXEL_STEPS: f32 = 4.0;
 
 /// Brush carried through Parley: 0 is the element's own colour, n is `spans[n - 1]`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -652,8 +661,12 @@ struct GlyphKey {
     glyph: u32,
     size: u32,
     coords: u64,
+    /// The x phase in sixtieths of a pixel (`coretext_match::PHASES`).
     subpx: u8,
+    /// The dilation radius in device px, as f32 bits.
     dilation: u32,
+    /// The CoreGraphics pipeline's stages (`macos_smoothing::Smoothing::key`).
+    apple: u8,
     /// Synthetic oblique, in degrees (0 for none).
     skew: u8,
 }
@@ -1107,29 +1120,6 @@ impl Atlas {
 /// Lean of a synthetic oblique, in degrees, for faces with no italic.
 const SYNTHETIC_OBLIQUE: u8 = 12;
 
-fn rasterize(scaler: &mut swash::scale::Scaler<'_>, atlas: &mut Atlas, glyph: u16, subpx: u8, dilation: f32, skew: u8) -> Rasterized {
-    // Outlines are y-up here, so a positive x-skew leans the tops right.
-    let lean = (skew != 0).then(|| Transform::skew(swash::zeno::Angle::from_degrees(skew as f32), swash::zeno::Angle::ZERO));
-    let Some(image) = Render::new(&[Source::Outline])
-        .format(Format::Alpha)
-        .transform(lean)
-        // Swash expands toward +x/+y; offset back to preserve the outline's centre.
-        .embolden(dilation)
-        .offset(Vector::new(subpx as f32 / SUBPIXEL_STEPS - dilation, -dilation))
-        .render(scaler, glyph)
-    else {
-        return Rasterized::Empty;
-    };
-    let (w, h) = (image.placement.width, image.placement.height);
-    if w == 0 || h == 0 || !image.data.iter().any(|&coverage| coverage != 0) {
-        return Rasterized::Empty;
-    }
-    match atlas.put(w, h, &image.data, image.placement.left, image.placement.top) {
-        Some(g) => Rasterized::Placed(g),
-        None => Rasterized::Unplaced,
-    }
-}
-
 /// The colour image of `glyph` (COLR layers or an embedded bitmap scaled to size), or None
 /// when the font draws it as an outline.
 fn rasterize_color(scaler: &mut swash::scale::Scaler<'_>, glyph: u16) -> Option<(crate::pixels::Pixels, swash::zeno::Placement)> {
@@ -1146,53 +1136,7 @@ fn rasterize_color(scaler: &mut swash::scale::Scaler<'_>, glyph: u16) -> Option<
     Some((pixels, image.placement))
 }
 
-/// CoreText-calibrated coverage for a linear-light target. Keep colour adjustment out of
-/// atlas keys: theme animation must not rasterize five copies or jump between buckets.
-/// See research/23-text-quality.md for the held-out glyph and motion measurements.
-pub fn glyph_coverage_exponent(color: Color, scale: f32) -> f32 {
-    // Stronger bright-ink contrast at Retina density limits phase-dependent blooming.
-    0.35 + (1.15 + 0.2 * (scale - 1.0).clamp(0.0, 1.0)) * srgb_encode(color.luminance())
-}
-
 // ---------------------------------------------------------------------------------------------
-
-/// Shaped text by hash: the value, the commit generation it was last used in, and its text's
-/// length in bytes.
-type Cache<T> = HashMap<u64, (Rc<T>, u32, u32)>;
-
-/// Bytes of text, each layout counting [`STALE_ENTRY`] more, kept shaped after the commits
-/// that used it, so a view shown again after a while (a list returned to from a grid someone
-/// browsed) doesn't reshape. About 800 short labels or 64 KB of paragraphs, either about 3 MB.
-const STALE_TEXT: usize = 64 * 1024;
-const STALE_ENTRY: usize = 64;
-
-/// Drops what `cache` hasn't used in the last two commits once it outgrows [`STALE_TEXT`],
-/// least recently used first. A view's layouts all share the commit it was last shown in, so
-/// that commit's are kept while the budget lasts rather than all dropped together.
-fn evict<T>(cache: &mut Cache<T>, g: u32) {
-    let stale = |used: u32| g.wrapping_sub(used) >= 2;
-    let cost = |bytes: u32| bytes as usize + STALE_ENTRY;
-    let total: usize = cache.values().filter(|e| stale(e.1)).map(|e| cost(e.2)).sum();
-    if total <= STALE_TEXT {
-        return;
-    }
-    let mut ages: Vec<(u32, usize)> = cache.values().filter(|e| stale(e.1)).map(|e| (g.wrapping_sub(e.1), cost(e.2))).collect();
-    ages.sort_unstable_by_key(|a| a.0);
-    let (mut younger, mut kept, mut cutoff) = (0, 0, u32::MAX);
-    for (i, &(age, cost)) in ages.iter().enumerate() {
-        if i > 0 && ages[i - 1].0 != age { younger = kept; }
-        kept += cost;
-        if kept > STALE_TEXT {
-            cutoff = age;
-            break;
-        }
-    }
-    let mut room = STALE_TEXT - younger;
-    cache.retain(|_, e| {
-        let age = g.wrapping_sub(e.1);
-        age < cutoff || age == cutoff && cost(e.2) <= room && { room -= cost(e.2); true }
-    });
-}
 
 pub struct TextSystem {
     font_cx: FontContext,
@@ -1230,8 +1174,11 @@ pub struct TextSystem {
     cluster_scratch: Vec<(f32, u32)>,
     coords_scratch: Vec<i16>,
     traks: Traks,
+    pub(crate) smoothing: FontSmoothing,
     /// The `trak` table of the first font of a family slot at a weight, upright or italic.
     primary_traks: HashMap<(Family, u32, bool), Option<Rc<Trak>>>,
+    /// CoreGraphics' glyph pipeline for `smoothing`, and its per-ink state.
+    apple: macos_smoothing::Smoothing,
 }
 
 impl Default for TextSystem {
@@ -1509,7 +1456,9 @@ impl TextSystem {
             cluster_scratch: Vec::new(),
             coords_scratch: Vec::new(),
             traks: Traks::new(),
+            smoothing: FontSmoothing::default(),
             primary_traks: HashMap::new(),
+            apple: Default::default(),
         }
     }
 
@@ -1557,6 +1506,27 @@ impl TextSystem {
         &self.color_pixels[color as usize - 1]
     }
 
+    /// The colours the next glyphs draw in (`spans` by `Ink`). On macOS they choose each
+    /// glyph's dilation, so glyphs in light and dark inks rasterize separately.
+    pub fn set_glyph_inks(&mut self, element: Color, spans: &[Span]) { self.apple.set_inks(element, spans); }
+
+    /// How glyphs rasterise and place ([`FontSmoothing`]).
+    pub fn font_smoothing(&self) -> FontSmoothing { self.smoothing }
+
+    /// Rasterise and place glyphs in `mode` from the next placement on, with its CoreGraphics
+    /// stages ([`FontSmoothing::pipeline`]). Glyphs already rasterised in another mode stay
+    /// cached under their own keys.
+    pub fn set_font_smoothing(&mut self, mode: FontSmoothing) {
+        self.smoothing = mode;
+        self.apple.set_pipeline(mode.pipeline());
+    }
+
+    /// The CoreGraphics stages glyphs rasterize with.
+    pub fn apple_pipeline(&self) -> ApplePipeline { self.apple.pipeline() }
+    /// Overrides the stages [`Self::set_font_smoothing`] chose, until the next call to it; for
+    /// measuring the stages one at a time.
+    pub fn set_apple_pipeline(&mut self, pipeline: ApplePipeline) { self.apple.set_pipeline(pipeline); }
+
     /// Begins a new batch of glyph placements, reclaiming unused atlas storage.
     /// Previously emitted quads must no longer be sampled after this call. Runtime
     /// calls this automatically; direct text/renderer users call it before shaping.
@@ -1586,7 +1556,7 @@ impl TextSystem {
     }
 
     /// Keeps layouts used in the last two commits, and older ones, most recently used first,
-    /// while they fit in [`STALE_TEXT`].
+    /// while they fit in [`layout_cache::STALE_TEXT`].
     pub fn end_commit(&mut self) {
         let g = self.generation;
         evict(&mut self.layouts, g);
@@ -2005,16 +1975,17 @@ impl TextSystem {
     }
 
     /// Glyph quads for a cached [`Layout`] with its top-left at `origin` (device px). When
-    /// `bytes` is set, each quad carries the byte offset of its cluster.
+    /// `bytes` is set, each quad carries the byte offset of its cluster. The layout already
+    /// holds its scale, so `_scale` is unused; it stays for source compatibility.
     pub fn glyphs_for_layout(
         &mut self,
         layout: &Layout<Ink>,
-        scale: f32,
+        _scale: f32,
         origin: [f32; 2],
         bytes: bool,
         out: &mut Vec<GlyphQuad>,
     ) {
-        self.glyphs_for_layout_scaled(layout, scale, origin, 1.0, bytes, out);
+        self.glyphs_for_layout_scaled(layout, origin, 1.0, bytes, out);
     }
 
     /// [`Self::glyphs_for_layout`] with the layout magnified `k` times about `origin`: pen
@@ -2022,13 +1993,12 @@ impl TextSystem {
     pub(crate) fn glyphs_for_layout_scaled(
         &mut self,
         layout: &Layout<Ink>,
-        scale: f32,
         origin: [f32; 2],
         k: f32,
         bytes: bool,
         out: &mut Vec<GlyphQuad>,
     ) {
-        self.glyphs_in_band(layout, scale, origin, k, bytes, f32::NEG_INFINITY..f32::INFINITY, out);
+        self.glyphs_in_band(layout, origin, k, bytes, f32::NEG_INFINITY..f32::INFINITY, out);
     }
 
     /// [`Self::glyphs_for_layout_scaled`] for only the lines whose box meets `band`, a span of
@@ -2038,7 +2008,6 @@ impl TextSystem {
     pub(crate) fn glyphs_in_band(
         &mut self,
         layout: &Layout<Ink>,
-        scale: f32,
         origin: [f32; 2],
         k: f32,
         bytes: bool,
@@ -2081,7 +2050,7 @@ impl TextSystem {
                     };
                     let at = if k == 1.0 { [origin[0] + rel + g.x, baseline + g.y] }
                         else { [origin[0] + (rel + g.x) * k, baseline + g.y * k] };
-                    self.push_glyph(&face, &coords, g.id, at, scale, k, byte, out);
+                    self.push_glyph(&face, &coords, g.id, at, k, byte, out);
                     rel += g.advance;
                 }
             }
@@ -2091,26 +2060,25 @@ impl TextSystem {
     }
 
     /// Glyph quads for the grapheme at byte `at` of a shaped run, with the run's top-left at
-    /// `origin` (device px). Only that grapheme's glyphs are visited.
-    pub fn glyphs_in(&mut self, run: &RunLayout, at: usize, scale: f32, origin: [f32; 2], out: &mut Vec<GlyphQuad>) {
+    /// `origin` (device px). Only that grapheme's glyphs are visited. `_scale` is unused (the
+    /// run holds its scale); it stays for source compatibility.
+    pub fn glyphs_in(&mut self, run: &RunLayout, at: usize, _scale: f32, origin: [f32; 2], out: &mut Vec<GlyphQuad>) {
         let Some(i) = run.grapheme(at) else { return };
         let glyphs = run.graphemes[i].2 as usize..run.graphemes[i + 1].2 as usize;
         for g in &run.glyphs[glyphs] {
             let face = &run.faces[g.face as usize];
             let baseline = (origin[1] + face.face.baseline).round();
-            self.push_glyph(&face.face, &face.coords, g.id, [origin[0] + g.x, baseline + g.y], scale, 1.0, at as u32, out);
+            self.push_glyph(&face.face, &face.coords, g.id, [origin[0] + g.x, baseline + g.y], 1.0, at as u32, out);
         }
     }
 
     /// Rasterizes (once) and appends one glyph at device position `at`, `k` times its size.
     #[allow(clippy::too_many_arguments)]
-    fn push_glyph(&mut self, face: &Face, coords: &[i16], glyph: u32, at: [f32; 2], scale: f32, k: f32, byte: u32, out: &mut Vec<GlyphQuad>) {
-        let dilation = 0.1 * scale;
+    fn push_glyph(&mut self, face: &Face, coords: &[i16], glyph: u32, at: [f32; 2], k: f32, byte: u32, out: &mut Vec<GlyphQuad>) {
         let [gx, gy] = at;
         let (font, font_size, ink, skew) = (&face.font, face.size * k, face.ink, face.skew);
-        let fx = gx.floor();
-        let subpx = ((gx - fx) * SUBPIXEL_STEPS).round() as u8;
-        let (fx, subpx) = if subpx as f32 >= SUBPIXEL_STEPS { (fx + 1.0, 0) } else { (fx, subpx) };
+        let radius = self.apple.radius(ink, font_size);
+        let (fx, subpx) = coretext_match::glyph_x(gx, font_size);
         let key = GlyphKey {
             font: font.data.id(),
             index: font.index,
@@ -2118,7 +2086,8 @@ impl TextSystem {
             size: font_size.to_bits(),
             coords: face.coords_key,
             subpx,
-            dilation: dilation.to_bits(),
+            dilation: (radius as f32).to_bits(),
+            apple: self.apple.key(),
             skew,
         };
         let entry = match self.atlas.map.get(&key) {
@@ -2130,7 +2099,7 @@ impl TextSystem {
             }
             None => {
                 // Colour glyphs sit on whole pixels and ignore emboldening and obliques.
-                let color_key = GlyphKey { subpx: 0, dilation: 0, skew: 0, ..key };
+                let color_key = GlyphKey { subpx: 0, dilation: 0, apple: 0, skew: 0, ..key };
                 if let Some(c) = self.color_glyphs.get_mut(&color_key) {
                     c.used = true;
                     out.push(c.quad(gx, gy, ink, byte));
@@ -2155,7 +2124,11 @@ impl TextSystem {
                     out.push(c.quad(gx, gy, ink, byte));
                     return;
                 }
-                match rasterize(&mut scaler, &mut self.atlas, glyph as u16, subpx, dilation, skew) {
+                let placed = self.apple.rasterize(&mut self.scale_cx, &mut self.atlas, macos_smoothing::Job {
+                    font: font_ref, key: (key.font, key.index, key.coords), coords, glyph: glyph as u16, ppem: font_size,
+                    phase_x: subpx as f32 / coretext_match::PHASES, radius, skew,
+                });
+                match placed {
                     Rasterized::Placed(g) => {
                         self.atlas.map.insert(key, Some(g));
                         Some(g)

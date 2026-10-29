@@ -330,14 +330,16 @@ fn moving_glyphs_reuse_four_phases_and_land_without_atlas_work() {
 }
 
 #[test]
-fn nominal_size_dilation_is_part_of_the_cache_key() {
+fn glyphs_at_the_same_device_ppem_share_a_mask() {
     let mut text = TextSystem::default();
+    text.set_font_smoothing(FontSmoothing::On);
     let small = text.layout_rich("H", &[], TextStyle::new(12.0, 400.0), 2.0, None);
     let large = text.layout_rich("H", &[], TextStyle::new(24.0, 400.0), 1.0, None);
     let mut a = Vec::new(); let mut b = Vec::new();
+    // CoreGraphics dilates by device ppem alone, so the two share a mask.
     text.glyphs_for_layout(&small, 2.0, [0.0, 0.0], false, &mut a);
     text.glyphs_for_layout(&large, 1.0, [0.0, 0.0], false, &mut b);
-    assert_ne!(a[0].uv, b[0].uv, "same pixel size, different nominal-size dilation");
+    assert_eq!(a[0].uv, b[0].uv, "same device ppem and ink, same CoreGraphics mask");
 }
 
 #[test]
@@ -365,7 +367,7 @@ fn atlas_capacity_never_overwrites_current_or_pinned_placements() {
 #[test]
 fn atlas_eviction_preserves_cached_empty_outlines() {
     let mut atlas = Atlas::new();
-    let key = GlyphKey { font: 0, index: 0, glyph: 0, size: 0, coords: 0, subpx: 0, dilation: 0, skew: 0 };
+    let key = GlyphKey { font: 0, index: 0, glyph: 0, size: 0, coords: 0, subpx: 0, dilation: 0, apple: 0, skew: 0 };
     atlas.map.insert(key, None);
     atlas.icons.insert((0, 0), None);
     atlas.evict_page(0);
@@ -376,7 +378,7 @@ fn atlas_eviction_preserves_cached_empty_outlines() {
 #[test]
 fn colour_budget_retires_unused_scales_without_flushing_active_images() {
     let mut text = TextSystem::default();
-    let key = GlyphKey { font: 0, index: 0, glyph: 0, size: 0, coords: 0, subpx: 0, dilation: 0, skew: 0 };
+    let key = GlyphKey { font: 0, index: 0, glyph: 0, size: 0, coords: 0, subpx: 0, dilation: 0, apple: 0, skew: 0 };
     let pixels = crate::pixels::Pixels::new();
     pixels.set(1, 1, vec![255; 4]);
     text.color_pixels = vec![pixels.clone(), pixels];
