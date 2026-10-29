@@ -101,7 +101,8 @@ impl<S: 'static> Runtime<S> {
         self.schedule_wakes_from(polled, wakes);
     }
 
-    fn rests(&self) -> bool {
+    /// Nothing but a timer asks this runtime for a frame.
+    pub(crate) fn rests(&self) -> bool {
         #[cfg(feature = "hot")]
         if self.hot.is_some() { return false; }
         !self.animating && !self.stale() && !self.settle && self.loop_wake.is_none() && self.window_frame.is_none()

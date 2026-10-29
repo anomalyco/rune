@@ -648,6 +648,38 @@ fn a_turn_whose_frame_is_not_due_never_waits_on_the_present_thread() {
     assert_eq!(waits, 3);
 }
 
+#[test]
+fn a_runtime_at_rest_builds_nothing_while_its_compositor_animates() {
+    struct Spin;
+    impl Compositor<f32> for Spin {
+        fn render(&mut self, _: &mut Frame<'_, f32>) {}
+        fn animating(&self) -> bool { true }
+    }
+    let mut overlay = width_overlay("resting runtime");
+    overlay.compositor = Some(Box::new(Spin));
+    let start = Instant::now();
+    let (animating, _) = step(&mut overlay.rt, &mut overlay.clock, &overlay.compositor, start, false);
+    let idle = idle_after(&overlay.rt, animating, Some(start + FRAME));
+    assert!(idle && frame::rests(&overlay.rt, idle, false));
+    let (commits, instances, t) = (overlay.rt.stats.commits, overlay.rt.instances.len(), overlay.rt.t);
+    let (animating, dt) = frame::rest(&mut overlay.rt, &mut overlay.clock, &overlay.compositor, start + FRAME);
+    assert!(!animating);
+    assert!((dt - FRAME.as_secs_f64()).abs() < 1e-6, "the compositor still steps the frame's time: {dt}");
+    assert_eq!((overlay.rt.stats.commits, overlay.rt.instances.len()), (commits, instances));
+    assert!((overlay.rt.t - t - FRAME.as_secs_f64()).abs() < 1e-6, "a compositor reading `t` sees it move");
+    assert!(!frame::rests(&overlay.rt, false, false), "the runtime asked for the frame");
+    assert!(!frame::rests(&overlay.rt, idle, true), "something marked the overlay dirty");
+    overlay.rt.update(|width, _| *width = 20.0);
+    assert!(!frame::rests(&overlay.rt, idle, false), "state changed");
+    overlay.rt.frame(0.0);
+    overlay.rt.poll = Some(|_, _, _| false);
+    assert!(!frame::rests(&overlay.rt, idle, false), "a poll runs on every frame drawn");
+    overlay.rt.poll = None;
+    overlay.rt.update(|_, tx| tx.wake_after(std::time::Duration::from_secs(1)));
+    overlay.rt.frame(0.0);
+    assert!(!frame::rests(&overlay.rt, idle, false), "a timer is pending");
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn an_overlay_reads_its_occlusion_once_a_turn() {

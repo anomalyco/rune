@@ -310,6 +310,8 @@ pub(crate) struct Overlay<T: 'static> {
     dark: bool,
     dirty: bool,
     idle: bool,
+    /// After the last frame the runtime asked for no other; only the compositor animates.
+    runtime_idle: bool,
     clock: FrameClock,
     /// The panel is shown but none of it is on screen (covered, or the displays asleep).
     #[cfg(target_os = "macos")]
@@ -387,6 +389,7 @@ impl<T: 'static> Overlay<T> {
             dark: true,
             dirty: true,
             idle: true,
+            runtime_idle: false,
             clock: FrameClock::new(Instant::now()),
             #[cfg(target_os = "macos")]
             occluded: false,

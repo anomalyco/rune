@@ -142,7 +142,11 @@ impl<T: 'static> Overlay<T> {
         let frame_time = target.unwrap_or(now);
         #[cfg(target_os = "macos")]
         { self.rt.native_materials = live.materials.native(); }
-        let (mut animating, dt) = step(&mut self.rt, &mut self.clock, &self.compositor, frame_time, prewarm);
+        let (mut animating, dt) = if !prewarm && frame::rests(&self.rt, self.runtime_idle, self.dirty) {
+            frame::rest(&mut self.rt, &mut self.clock, &self.compositor, frame_time)
+        } else {
+            step(&mut self.rt, &mut self.clock, &self.compositor, frame_time, prewarm)
+        };
         #[cfg(target_os = "macos")]
         let frame = {
             let Backing::Window(window) = &live.backing;
@@ -205,6 +209,7 @@ impl<T: 'static> Overlay<T> {
             format: (target_format != live.config.format).then_some(target_format),
             ..Default::default()
         });
+        let runtime_animating = animating;
         let mut enc = gpu.device.create_command_encoder(&Default::default());
         animating |= render_frame(&mut Frame {
             device: &gpu.device, queue: &gpu.queue, encoder: &mut enc,
@@ -223,6 +228,7 @@ impl<T: 'static> Overlay<T> {
         #[cfg(not(target_os = "macos"))]
         let next_tick = None;
         self.idle = idle_after(&self.rt, animating, next_tick);
+        self.runtime_idle = !prewarm && idle_after(&self.rt, runtime_animating, next_tick);
         if !prewarm { self.occluded_wait = crate::window::OCCLUDED_RETRY; }
         // The display link wakes this overlay, never ControlFlow::Poll. Without one (it can't
         // be made while the displays sleep, or didn't start), a timer paces its motion.

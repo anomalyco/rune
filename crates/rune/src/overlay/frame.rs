@@ -26,6 +26,25 @@ pub(super) fn step<T: 'static>(rt: &mut Runtime<T>, clock: &mut FrameClock, comp
     clock.advance(rt, frame_time, compositor.as_ref().is_some_and(|c| c.animating()))
 }
 
+/// Whether a frame can leave the runtime as it is, drawing its last build again: after the
+/// last frame it asked for no other (`runtime_idle`: only the compositor animates), nothing
+/// marked the overlay dirty since, and no input, live value, timer, playground or poll (which
+/// runs on every frame drawn) waits. An overlay without a compositor draws nothing then.
+pub(super) fn rests<T: 'static>(rt: &Runtime<T>, runtime_idle: bool, dirty: bool) -> bool {
+    runtime_idle && !dirty && rt.poll.is_none() && rt.playground.is_none() && rt.wake_deadline().is_none() && rt.rests()
+}
+
+/// `step` for a runtime that `rests`: its clocks (`clock`, `t`) move to the frame as a step
+/// would move them, so a compositor reading them animates the same, and nothing runs or builds.
+pub(super) fn rest<T: 'static>(rt: &mut Runtime<T>, clock: &mut FrameClock, compositor: &Option<Box<dyn Compositor<T>>>, frame_time: Instant) -> (bool, f64) {
+    let elapsed = clock.step(frame_time, compositor.as_ref().is_some_and(|c| c.animating())).total();
+    rt.frame_target = Some(frame_time);
+    rt.clock = rt.wall_start.map_or(rt.clock + elapsed, |t0| t0.elapsed().as_secs_f64());
+    rt.t += elapsed * rt.time_scale as f64;
+    rt.scene.set_time(rt.t);
+    (false, elapsed)
+}
+
 /// A due frame's target presentation time, or `None` when the display link says wait. The
 /// opportunity is claimed before `settle` waits for the frame still on the present thread, so
 /// a turn that draws nothing (the loop's second look after a tick drew) never blocks on it.
