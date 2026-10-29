@@ -14,7 +14,7 @@
 //!   render and blit encoders, presents, completion handlers), on macOS. `=labels` also tallies
 //!   commits by command buffer label and thread; `OVERLAY_COMMIT_STACKS=1` adds who committed.
 //! - Every run prints CPU by thread (main, present, display link, the rest) and the process's
-//!   retired instructions per frame, which compare runs that CPU time can't on a Mac whose
+//!   and the main thread's retired instructions per frame, which compare runs that CPU time can't on a Mac whose
 //!   cores change speed.
 //! - `OVERLAY_PRESUME_VISIBLE=1` makes every window report itself on screen, so a Mac whose
 //!   screen is locked still draws (its frames never reach the display): only for profiling.
@@ -71,7 +71,7 @@ fn env<T: std::str::FromStr>(name: &str, default: T) -> T {
 
 const WARMUP: Duration = Duration::from_secs(2);
 
-struct Start { main: f64, process: f64, wall: Instant, frames: u64, allocs: u64, threads: (f64, f64), metal: [u64; 5], counts: [u64; 3] }
+struct Start { main: f64, process: f64, wall: Instant, frames: u64, allocs: u64, threads: (f64, f64), metal: [u64; 5], counts: [u64; 3], main_counts: [u64; 2] }
 
 /// CPU ms of the present thread and of the display link's thread.
 fn side_threads() -> (f64, f64) {
@@ -89,6 +89,14 @@ fn process_counts() -> [u64; 3] {
     return probe::process_counts();
     #[cfg(not(target_os = "macos"))]
     [0; 3]
+}
+
+/// The main thread's retired instructions and cycles, read on it.
+fn main_counts() -> [u64; 2] {
+    #[cfg(target_os = "macos")]
+    return probe::thread_counts();
+    #[cfg(not(target_os = "macos"))]
+    [0; 2]
 }
 
 fn metal_counts() -> [u64; 5] {
@@ -193,7 +201,7 @@ impl Compositor<()> for Hud {
         let elapsed = self.start.elapsed();
         if self.from.is_none() && elapsed >= WARMUP {
             self.from = Some(Start { main: entered, process: process_cpu_ms(), wall: Instant::now(), frames: self.frames,
-                allocs: ALLOCS.load(Ordering::Relaxed), threads: side_threads(), metal: metal_counts(), counts: process_counts() });
+                allocs: ALLOCS.load(Ordering::Relaxed), threads: side_threads(), metal: metal_counts(), counts: process_counts(), main_counts: main_counts() });
             self.in_callback = 0.0;
         }
         if let Some(s) = &self.from && elapsed.as_secs_f64() >= self.seconds {
@@ -214,9 +222,11 @@ impl Compositor<()> for Hud {
                 present / wall, link / wall, (process - main - present - link) / wall, process / wall,
             );
             let counts = process_counts();
-            println!("process_per_frame: kinstructions={:.1} kcycles={:.1} wakeups={:.2}",
+            let main_now = main_counts();
+            println!("process_per_frame: kinstructions={:.1} kcycles={:.1} wakeups={:.2} main_kinstructions={:.1} main_kcycles={:.1}",
                 (counts[0] - s.counts[0]) as f64 / frames / 1e3, (counts[1] - s.counts[1]) as f64 / frames / 1e3,
-                (counts[2] - s.counts[2]) as f64 / frames);
+                (counts[2] - s.counts[2]) as f64 / frames,
+                (main_now[0] - s.main_counts[0]) as f64 / frames / 1e3, (main_now[1] - s.main_counts[1]) as f64 / frames / 1e3);
             let metal = metal_counts();
             if metal != s.metal {
                 let per = |i: usize| (metal[i] - s.metal[i]) as f64 / frames;

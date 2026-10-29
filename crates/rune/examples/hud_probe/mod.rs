@@ -49,6 +49,18 @@ pub fn process_counts() -> [u64; 3] {
     }
 }
 
+unsafe extern "C" {
+    fn thread_selfcounts(kind: i32, buf: *mut u64, size: usize) -> i32;
+}
+
+/// The calling thread's retired instructions and cycles so far.
+pub fn thread_counts() -> [u64; 2] {
+    let mut counts = [0u64; 2];
+    // SAFETY: kind 1 (THSC_CPI) writes two u64s into the buffer it is handed.
+    unsafe { thread_selfcounts(1, counts.as_mut_ptr(), size_of_val(&counts)) };
+    counts
+}
+
 /// Summed CPU ms of the named threads matching `name`.
 pub fn thread_ms(threads: &[(String, f64)], name: &str) -> f64 {
     threads.iter().filter(|(n, _)| n == name).map(|(_, ms)| ms).sum()
