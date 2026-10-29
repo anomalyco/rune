@@ -16,9 +16,13 @@
 
 pub mod cpu;
 pub mod glass;
+mod gpu;
 mod render;
+mod targets;
 
 pub use glass::{Glass, GlassLight, GlassRenderer, GlassSettings};
+use gpu::{bgl, bind, compute, gi_section, layout, module, texture, tv};
+use targets::Targets;
 
 use bytemuck::{Pod, Zeroable};
 
@@ -364,27 +368,6 @@ pub const CASCADES: u32 = 5;
 const QUERIES: u32 = 12 + 2 * CASCADES;
 const GI_SCALE: f32 = 0.125;
 
-struct Targets {
-    vis_tex: wgpu::Texture,
-    gb0: wgpu::TextureView,
-    gb1: wgpu::TextureView,
-    field: wgpu::TextureView,
-    vis: wgpu::TextureView,
-    air: wgpu::TextureView,
-    scene_emit: wgpu::TextureView,
-    scene_occ: wgpu::TextureView,
-    /// Merged radiance per cascade level (index = level).
-    levels: Vec<wgpu::TextureView>,
-    /// Each level's own interval without the merge: black until `inspect` is first on, then written while it's on.
-    own: Vec<wgpu::TextureView>,
-    fluence: wgpu::TextureView,
-    field_bg: wgpu::BindGroup,
-    shadow_bg: wgpu::BindGroup,
-    cascade_bgs: Vec<wgpu::BindGroup>,
-    own_bgs: Vec<wgpu::BindGroup>,
-    fluence_bg: wgpu::BindGroup,
-}
-
 pub struct LightRenderer {
     pub width: u32,
     pub height: u32,
@@ -446,123 +429,6 @@ pub struct Inspect<'a> {
     /// Output px per gi texel.
     pub texel: f32,
     pub field_size: (u32, u32),
-}
-
-const COMMON: &str = include_str!("shaders/common.wgsl");
-
-fn module(device: &wgpu::Device, label: &str, src: &str) -> wgpu::ShaderModule {
-    device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some(label),
-        source: wgpu::ShaderSource::Wgsl(format!("{COMMON}\n{src}").into()),
-    })
-}
-
-fn gi_section(name: &str) -> String {
-    let src = include_str!("shaders/gi.wgsl");
-    let mut parts = src.split("// ---- ");
-    let header = parts.next().unwrap_or_default();
-    let body = parts.find(|p| p.starts_with(name)).unwrap_or_default();
-    format!("{header}\n// ---- {body}")
-}
-
-mod bgl {
-    pub fn uniform(binding: u32, vis: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
-        wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: vis,
-            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
-            count: None,
-        }
-    }
-    pub fn storage(binding: u32, vis: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
-        wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: vis,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }
-    }
-    pub fn tex(binding: u32, vis: wgpu::ShaderStages, kind: wgpu::TextureSampleType, dim: wgpu::TextureViewDimension) -> wgpu::BindGroupLayoutEntry {
-        wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: vis,
-            ty: wgpu::BindingType::Texture { sample_type: kind, view_dimension: dim, multisampled: false },
-            count: None,
-        }
-    }
-    pub fn f2(binding: u32, vis: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
-        tex(binding, vis, wgpu::TextureSampleType::Float { filterable: true }, wgpu::TextureViewDimension::D2)
-    }
-    pub fn f2a(binding: u32, vis: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
-        tex(binding, vis, wgpu::TextureSampleType::Float { filterable: true }, wgpu::TextureViewDimension::D2Array)
-    }
-    pub fn u2(binding: u32, vis: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
-        tex(binding, vis, wgpu::TextureSampleType::Uint, wgpu::TextureViewDimension::D2)
-    }
-    pub fn store(binding: u32, dim: wgpu::TextureViewDimension) -> wgpu::BindGroupLayoutEntry {
-        wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::StorageTexture {
-                access: wgpu::StorageTextureAccess::WriteOnly,
-                format: wgpu::TextureFormat::Rgba16Float,
-                view_dimension: dim,
-            },
-            count: None,
-        }
-    }
-    pub fn sampler(binding: u32, vis: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
-        wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: vis,
-            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-            count: None,
-        }
-    }
-}
-
-fn layout(device: &wgpu::Device, label: &str, entries: &[wgpu::BindGroupLayoutEntry]) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some(label), entries })
-}
-
-fn compute(device: &wgpu::Device, label: &str, m: &wgpu::ShaderModule, entry: &str, bgls: &[&wgpu::BindGroupLayout]) -> wgpu::ComputePipeline {
-    let bgls: Vec<Option<&wgpu::BindGroupLayout>> = bgls.iter().map(|b| Some(*b)).collect();
-    let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some(label), bind_group_layouts: &bgls, immediate_size: 0 });
-    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some(label),
-        layout: Some(&pl),
-        module: m,
-        entry_point: Some(entry),
-        compilation_options: Default::default(),
-        cache: None,
-    })
-}
-
-fn texture(device: &wgpu::Device, label: &str, w: u32, h: u32, layers: u32, format: wgpu::TextureFormat, usage: wgpu::TextureUsages) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
-        label: Some(label),
-        size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: layers },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage,
-        view_formats: &[],
-    })
-}
-
-fn bind(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, entries: &[wgpu::BindingResource<'_>]) -> wgpu::BindGroup {
-    let e: Vec<wgpu::BindGroupEntry> =
-        entries.iter().enumerate().map(|(i, r)| wgpu::BindGroupEntry { binding: i as u32, resource: r.clone() }).collect();
-    device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout, entries: &e })
-}
-
-fn tv(v: &wgpu::TextureView) -> wgpu::BindingResource<'_> {
-    wgpu::BindingResource::TextureView(v)
 }
 
 impl LightRenderer {
@@ -812,121 +678,6 @@ impl LightRenderer {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn targets(
-        device: &wgpu::Device,
-        w: u32,
-        h: u32,
-        fsz: (u32, u32),
-        gsz: (u32, u32),
-        frame: &wgpu::Buffer,
-        prims: &wgpu::Buffer,
-        lights: &wgpu::Buffer,
-        cascade_u: &[wgpu::Buffer],
-        sampler: &wgpu::Sampler,
-        black: &wgpu::TextureView,
-        [field_bgl, shadow_bgl, cascade_bgl, fluence_bgl]: [&wgpu::BindGroupLayout; 4],
-    ) -> Targets {
-        use wgpu::TextureFormat as Tf;
-        use wgpu::TextureUsages as U;
-        let rt = U::RENDER_ATTACHMENT | U::TEXTURE_BINDING;
-        let st = U::STORAGE_BINDING | U::TEXTURE_BINDING | U::COPY_SRC;
-        let gb0 = texture(device, "gb0", w, h, 1, Tf::Rgba16Float, rt).create_view(&Default::default());
-        let gb1 = texture(device, "gb1", w, h, 1, Tf::R32Uint, rt).create_view(&Default::default());
-        let field = texture(device, "field", fsz.0, fsz.1, 1, Tf::Rgba16Float, st).create_view(&Default::default());
-        let arr = |label| {
-            let t = texture(device, label, fsz.0, fsz.1, 2, Tf::Rgba16Float, st);
-            let v = t.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
-            (t, v)
-        };
-        let (vis_tex, vis) = arr("vis");
-        let (_, air) = arr("air");
-        let scene_emit = texture(device, "gi emit", gsz.0, gsz.1, 1, Tf::Rgba16Float, st).create_view(&Default::default());
-        let scene_occ = texture(device, "gi occ", gsz.0, gsz.1, 1, Tf::Rgba16Float, st).create_view(&Default::default());
-        let level = |label| texture(device, label, gsz.0 * 2, gsz.1 * 2, 1, Tf::Rgba16Float, st).create_view(&Default::default());
-        let levels: Vec<wgpu::TextureView> = (0..CASCADES).map(|_| level("cascade")).collect();
-        let fluence = texture(device, "fluence", gsz.0, gsz.1, 1, Tf::Rgba16Float, st).create_view(&Default::default());
-        let smp = wgpu::BindingResource::Sampler(sampler);
-        let field_bg = bind(device, field_bgl, &[frame.as_entire_binding(), prims.as_entire_binding(), tv(&field)]);
-        let shadow_bg = bind(
-            device,
-            shadow_bgl,
-            &[frame.as_entire_binding(), lights.as_entire_binding(), tv(&field), smp.clone(), tv(&gb0), tv(&vis), tv(&air)],
-        );
-        // Dispatched top cascade first; each level reads the merged level above it.
-        let cascade_bgs = (0..CASCADES as usize)
-            .rev()
-            .map(|n| {
-                let upper = if n + 1 < CASCADES as usize { &levels[n + 1] } else { black };
-                bind(
-                    device,
-                    cascade_bgl,
-                    &[cascade_u[n].as_entire_binding(), tv(&scene_emit), tv(&scene_occ), tv(&field), smp.clone(), tv(upper), tv(&levels[n]), tv(&gb0)],
-                )
-            })
-            .collect();
-        let fluence_bg = bind(device, fluence_bgl, &[tv(&levels[0]), tv(&fluence)]);
-        Targets {
-            vis_tex,
-            gb0,
-            gb1,
-            field,
-            vis,
-            air,
-            scene_emit,
-            scene_occ,
-            levels,
-            own: vec![black.clone(); CASCADES as usize],
-            fluence,
-            field_bg,
-            shadow_bg,
-            cascade_bgs,
-            own_bgs: Vec::new(),
-            fluence_bg,
-        }
-    }
-
-    /// The per-level textures for `inspect`, made the first time it's on.
-    fn own_targets(&mut self, device: &wgpu::Device) {
-        if !self.t.own_bgs.is_empty() {
-            return;
-        }
-        let st = wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC;
-        let (gw, gh) = (self.gi_size.0 * 2, self.gi_size.1 * 2);
-        self.t.own = (0..CASCADES).map(|_| texture(device, "cascade own", gw, gh, 1, wgpu::TextureFormat::Rgba16Float, st).create_view(&Default::default())).collect();
-        let t = &self.t;
-        let smp = wgpu::BindingResource::Sampler(&self.sampler);
-        let own_bgs = (0..CASCADES as usize)
-            .rev()
-            .map(|n| {
-                bind(
-                    device,
-                    &self.cascade_bgl,
-                    &[self.own_u[n].as_entire_binding(), tv(&t.scene_emit), tv(&t.scene_occ), tv(&t.field), smp.clone(), tv(&self.black), tv(&t.own[n]), tv(&t.gb0)],
-                )
-            })
-            .collect();
-        self.t.own_bgs = own_bgs;
-    }
-
-    fn rebind_prims(&mut self, device: &wgpu::Device) {
-        self.gbuf_bg = bind(device, &self.gbuf_bgl, &[self.frame.as_entire_binding(), self.prims.as_entire_binding()]);
-        self.t = Self::targets(
-            device,
-            self.width,
-            self.height,
-            self.field_size,
-            self.gi_size,
-            &self.frame,
-            &self.prims,
-            &self.lights,
-            &self.cascade_u,
-            &self.sampler,
-            &self.black,
-            [&self.field_bgl, &self.shadow_bgl, &self.cascade_bgl, &self.fluence_bgl],
-        );
     }
 
     /// Blocking read of the last submitted frame's pass times. Call after the encoder from `render` was submitted.
