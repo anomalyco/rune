@@ -12,13 +12,17 @@ impl FxLayer {
     pub fn opacity(mut self, k: f32) -> Self { self.opacity = k; self }
 
     /// Whether this layer still changes over time (the frame loop may stop ticking when false).
+    /// A layer that draws nothing at any time (zero opacity or amplitude) is not animating.
     pub fn is_animating(&self) -> bool {
+        if self.silent() {
+            return false;
+        }
         let t = self.time;
         let rm = self.reduced_motion;
         match &self.fx {
             Fx::Glow(p) => (p.breathe > 0.0 && !rm) || p.style == GlowStyle::Aura && p.aura_speed > 0.0 && !rm,
             Fx::Pulse(p) => match p.style {
-                PulseStyle::Ping { .. } => p.repeat > 0.0 || t < p.t0 + p.duration * 2.0,
+                PulseStyle::Ping { .. } => p.repeat > 0.0 || t < p.t0 + p.duration * PING_LIFE,
                 PulseStyle::Ripple { .. } => t < p.t0 + p.duration,
                 _ => !rm,
             },
@@ -33,7 +37,33 @@ impl FxLayer {
             _ => !rm,
         }
     }
+
+    /// Whether the layer draws nothing whatever the time: no opacity, or an amplitude of zero.
+    fn silent(&self) -> bool {
+        if !(self.opacity > 0.0) {
+            return true;
+        }
+        match &self.fx {
+            Fx::Glow(p) => p.intensity <= 0.0 || p.heat <= 0.0,
+            Fx::Pulse(p) => p.intensity <= 0.0,
+            Fx::Electric(p) => p.intensity <= 0.0,
+            Fx::Fire(p) => p.intensity <= 0.0,
+            Fx::Distort(DistortParams::HeatHaze { amount, .. } | DistortParams::Shockwave { amount, .. }) => *amount <= 0.0,
+            Fx::Distort(DistortParams::ChromaSplit { offset, glitch, .. }) => *offset == [0.0, 0.0] && *glitch <= 0.0,
+            Fx::Distort(DistortParams::Lens(_) | DistortParams::Crt { .. }) => false,
+            Fx::MotionBlur(..) => self.source.is_none(),
+            Fx::Shimmer(p) => p.intensity <= 0.0 && p.base_alpha <= 0.0,
+            Fx::Sparkles(p) => p.intensity <= 0.0 || p.count == 0,
+            Fx::Aurora(p) => p.intensity <= 0.0,
+            Fx::Grain(p) => p.amount <= 0.0,
+            Fx::Fill(p) => p.draws_nothing(self.shape.rect),
+        }
+    }
 }
+
+/// A ping's life in multiples of its duration: the head arrives at 1, then blooms and cools.
+/// `pulse.wgsl` stops drawing a shot at the same age.
+const PING_LIFE: f32 = 2.2;
 
 // ---------------------------------------------------------------- packing
 
@@ -78,7 +108,7 @@ impl FxLayer {
     /// Pack into an instance; `None` when the layer is idle (intensity 0, finished one-shot).
     /// Returns (kind, instance without bounds, bounds in pt).
     pub(crate) fn pack(&self) -> Option<(usize, InstRaw, Rect)> {
-        if self.opacity <= 0.0 {
+        if self.silent() {
             return None;
         }
         let s = self.shape;
@@ -105,9 +135,6 @@ impl FxLayer {
         let looped_t = if rm { CALM_T } else { self.time };
         let (kind, bounds) = match &self.fx {
             Fx::Glow(p) => {
-                if p.intensity <= 0.0 || p.heat <= 0.0 {
-                    return None;
-                }
                 i.t[2] = match p.style { GlowStyle::Soft => 0.0, GlowStyle::Neon => 1.0, GlowStyle::Aura => 2.0, GlowStyle::Mask => 3.0 };
                 i.c0 = p.color.v4();
                 i.c1 = p.core.v4();
@@ -118,9 +145,6 @@ impl FxLayer {
                 (KIND_GLOW, r.inflate(p.radius * p.reach * (1.0 + 0.22 * p.breathe)))
             }
             Fx::Pulse(p) => {
-                if p.intensity <= 0.0 {
-                    return None;
-                }
                 i.c0 = p.color.v4();
                 i.c1 = p.core.v4();
                 i.p0 = [p.count as f32, p.period, p.reach, p.width];
@@ -131,7 +155,7 @@ impl FxLayer {
                     PulseStyle::Breathe => (1.0, r.inflate(p.reach * 5.0)),
                     PulseStyle::Heartbeat => (2.0, r.inflate(p.reach + p.width * 16.0 + 2.0)),
                     PulseStyle::Ping { from, dir, travel } => {
-                        if p.repeat <= 0.0 && (self.time < p.t0 || self.time > p.t0 + p.duration * 2.2) {
+                        if p.repeat <= 0.0 && (self.time < p.t0 || self.time > p.t0 + p.duration * PING_LIFE) {
                             return None;
                         }
                         // A zero direction points right rather than nowhere (the shader would normalise it to NaN).
@@ -159,9 +183,6 @@ impl FxLayer {
                 (KIND_PULSE, b)
             }
             Fx::Electric(p) => {
-                if p.intensity <= 0.0 {
-                    return None;
-                }
                 i.t[0] = looped_t;
                 if let Some(t0) = p.zap {
                     if self.time < t0 || self.time > t0 + ElectricParams::ZAP_LIFE {
@@ -194,9 +215,6 @@ impl FxLayer {
                 }
             }
             Fx::Fire(p) => {
-                if p.intensity <= 0.0 {
-                    return None;
-                }
                 i.t[0] = looped_t;
                 i.t[2] = match p.style { FireStyle::Top => 0.0, FireStyle::Border => 1.0, FireStyle::Heat => 0.0, FireStyle::Embers => 3.0 };
                 i.c0 = p.low.v4();
@@ -227,9 +245,6 @@ impl FxLayer {
             Fx::Distort(d) => {
                 let b = match *d {
                     DistortParams::HeatHaze { height, scale, speed, amount, whole_shape } => {
-                        if amount <= 0.0 {
-                            return None;
-                        }
                         i.t[0] = looped_t;
                         i.t[2] = 0.0;
                         i.p0 = [height, scale, speed, amount];
@@ -237,7 +252,7 @@ impl FxLayer {
                         if whole_shape { r.inflate(amount + 2.0) } else { Rect::new(r.x - 4.0, r.y - height - 4.0, r.w + 8.0, height + 12.0) }
                     }
                     DistortParams::Shockwave { at, reach, width, amount, chroma, t0, duration } => {
-                        if amount <= 0.0 || self.time < t0 || self.time > t0 + duration {
+                        if self.time < t0 || self.time > t0 + duration {
                             return None;
                         }
                         i.t[2] = 1.0;
@@ -269,9 +284,6 @@ impl FxLayer {
                         r.inflate(feather)
                     }
                     DistortParams::ChromaSplit { offset, glitch, feather } => {
-                        if offset == [0.0, 0.0] && glitch <= 0.0 {
-                            return None;
-                        }
                         i.t[2] = 4.0;
                         i.p0 = [offset[0], offset[1], glitch, feather];
                         r.inflate(feather)
@@ -282,15 +294,9 @@ impl FxLayer {
             Fx::MotionBlur(_, ms) => {
                 i.xf = [0.0, ms.count as f32, if ms.mode == BlurMode::Shutter { 0.0 } else { 1.0 }, 0.0];
                 i.aux = [ms.blur[0], ms.blur[1], 0.0, 0.0];
-                if self.source.is_none() {
-                    return None;
-                }
                 (KIND_MOTION, ms.bounds.inflate(2.0))
             }
             Fx::Shimmer(p) => {
-                if p.intensity <= 0.0 && p.base_alpha <= 0.0 {
-                    return None;
-                }
                 i.t[2] = 0.0;
                 i.c0 = p.color.v4();
                 i.c1 = [p.base.0[0], p.base.0[1], p.base.0[2], p.base_alpha];
@@ -299,9 +305,6 @@ impl FxLayer {
                 (KIND_EXTRAS, r.inflate(1.0))
             }
             Fx::Sparkles(p) => {
-                if p.intensity <= 0.0 || p.count == 0 {
-                    return None;
-                }
                 if let Some(t0) = p.burst
                     && (self.time < t0 || self.time > t0 + p.burst_life())
                 {
@@ -314,9 +317,6 @@ impl FxLayer {
                 (KIND_EXTRAS, r.inflate(p.margin + p.size * cpu::SPARKLE_MAX_SCALE + 2.0))
             }
             Fx::Aurora(p) => {
-                if p.intensity <= 0.0 {
-                    return None;
-                }
                 i.t[2] = 2.0;
                 i.c0 = p.a.v4();
                 i.c1 = p.b.v4();
@@ -325,9 +325,6 @@ impl FxLayer {
                 (KIND_EXTRAS, r.inflate(1.0))
             }
             Fx::Grain(p) => {
-                if p.amount <= 0.0 {
-                    return None;
-                }
                 i.t[2] = 3.0;
                 i.p0 = [p.amount, p.fps, p.feather, 0.0];
                 (KIND_EXTRAS, r.inflate(1.0))

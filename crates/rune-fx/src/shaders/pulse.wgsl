@@ -126,6 +126,7 @@ fn shade(in: VOut) -> vec4f {
         }
         for (var k = 0; k < shots; k++) {
             let a = age + f32(k) * i.p1.w;
+            // PING_LIFE in pack.rs: the frame loop ticks until the last shot ends here.
             if (a > age0 + 1e-4 || a > dur * 2.2) { break; }
             let pe = ping(c, i, a, dur);
             e += pe.x;

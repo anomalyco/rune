@@ -1180,6 +1180,52 @@ mod tests {
     }
 
     #[test]
+    fn layers_that_draw_nothing_never_keep_the_loop_awake() {
+        let glow = GlowParams { breathe: 0.3, ..Default::default() };
+        let pulse = PulseParams::default();
+        let electric = ElectricParams::default();
+        let fire = FireParams::default();
+        let haze = |amount| DistortParams::HeatHaze { height: 40.0, scale: 14.0, speed: 2.2, amount, whole_shape: false };
+        let chroma = |glitch| DistortParams::ChromaSplit { offset: [0.0, 0.0], glitch, feather: 0.0 };
+        let shimmer = ShimmerParams::default();
+        let sparkles = SparkleParams::default();
+        let aurora = AuroraParams::default();
+        let grain = GrainParams { fps: 24.0, ..Default::default() };
+        let pairs = [
+            (Fx::glow(glow), Fx::glow(GlowParams { intensity: 0.0, ..glow })),
+            (Fx::glow(glow), Fx::glow(GlowParams { heat: 0.0, ..glow })),
+            (Fx::pulse(pulse), Fx::pulse(PulseParams { intensity: 0.0, ..pulse })),
+            (Fx::electric(electric), Fx::electric(ElectricParams { intensity: 0.0, ..electric })),
+            (Fx::fire(fire), Fx::fire(FireParams { intensity: 0.0, ..fire })),
+            (Fx::distort(haze(1.6)), Fx::distort(haze(0.0))),
+            (Fx::distort(chroma(0.5)), Fx::distort(chroma(0.0))),
+            (Fx::shimmer(shimmer), Fx::shimmer(ShimmerParams { intensity: 0.0, base_alpha: 0.0, ..shimmer })),
+            (Fx::sparkles(sparkles), Fx::sparkles(SparkleParams { intensity: 0.0, ..sparkles })),
+            (Fx::sparkles(sparkles), Fx::sparkles(SparkleParams { count: 0, ..sparkles })),
+            (Fx::aurora(aurora), Fx::aurora(AuroraParams { intensity: 0.0, ..aurora })),
+            (Fx::grain(grain), Fx::grain(GrainParams { amount: 0.0, ..grain })),
+        ];
+        for (live, silent) in pairs {
+            let live = live.on(card()).at(1.0);
+            assert!(live.is_animating() && live.pack().is_some(), "{live:?}");
+            assert!(!live.opacity(0.0).is_animating(), "zero opacity: {live:?}");
+            let silent = silent.on(card()).at(1.0);
+            assert!(!silent.is_animating() && silent.pack().is_none(), "{silent:?}");
+        }
+    }
+
+    #[test]
+    fn a_ping_ticks_until_its_shot_has_cooled() {
+        let ping = PulseParams { style: PulseStyle::Ping { from: [0.0, 0.0], dir: [1.0, 0.0], travel: 200.0 }, t0: 1.0, duration: 0.5, ..Default::default() };
+        let at = |t: f32| Fx::pulse(ping).on(card()).at(t);
+        let cooling = 1.0 + 0.5 * 2.1;
+        assert!(at(cooling).pack().is_some(), "still drawn while it cools");
+        assert!(at(cooling).is_animating(), "so the loop keeps ticking");
+        let done = 1.0 + 0.5 * 2.3;
+        assert!(at(done).pack().is_none() && !at(done).is_animating());
+    }
+
+    #[test]
     fn one_shots_overlap_and_retire_by_fading() {
         let mut p = OneShots::new(3);
         for k in 0..3 {
