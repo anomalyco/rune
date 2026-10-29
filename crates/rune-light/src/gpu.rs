@@ -107,10 +107,29 @@ pub(crate) fn texture(device: &wgpu::Device, label: &str, w: u32, h: u32, layers
     })
 }
 
-pub(crate) fn bind(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, entries: &[wgpu::BindingResource<'_>]) -> wgpu::BindGroup {
-    let e: Vec<wgpu::BindGroupEntry> =
-        entries.iter().enumerate().map(|(i, r)| wgpu::BindGroupEntry { binding: i as u32, resource: r.clone() }).collect();
-    device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout, entries: &e })
+pub(crate) fn bind<const N: usize>(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, entries: [wgpu::BindingResource<'_>; N]) -> wgpu::BindGroup {
+    let mut binding = 0;
+    let entries = entries.map(|resource| {
+        binding += 1;
+        wgpu::BindGroupEntry { binding: binding - 1, resource }
+    });
+    device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout, entries: &entries })
+}
+
+/// The last bind group made, reused while the resources it's keyed on stay the same.
+pub(crate) struct BindCache<K>(Option<(K, wgpu::BindGroup)>);
+
+impl<K: PartialEq> BindCache<K> {
+    pub(crate) const fn new() -> Self {
+        BindCache(None)
+    }
+
+    pub(crate) fn get(&mut self, key: K, make: impl FnOnce() -> wgpu::BindGroup) -> &wgpu::BindGroup {
+        if self.0.as_ref().is_none_or(|(k, _)| *k != key) {
+            self.0 = Some((key, make()));
+        }
+        &self.0.as_ref().expect("just set").1
+    }
 }
 
 pub(crate) fn tv(v: &wgpu::TextureView) -> wgpu::BindingResource<'_> {

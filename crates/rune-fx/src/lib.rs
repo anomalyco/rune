@@ -11,6 +11,7 @@
 //! - Speeds never multiply raw time inside a shader without going through `Phase` on the caller side
 //!   when the speed animates; otherwise the phase jumps (no phase jump on speed change).
 
+mod binds;
 mod catalog;
 mod cpu;
 mod fill;

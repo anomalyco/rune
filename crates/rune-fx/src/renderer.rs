@@ -3,6 +3,7 @@
 //! into the caller's render pass (target must not be the backdrop texture).
 
 use crate::*;
+use crate::binds::BindSet;
 use wgpu::util::DeviceExt;
 
 #[path = "renderer_prepare.rs"]
@@ -85,6 +86,36 @@ struct BlurPyramid {
 const BLUR_MIPS: u32 = 6;
 const BLUR_SLOTS: usize = 64;
 
+/// Group 1's resources: backdrop, source and blurred backdrop views, and the backdrop encoding.
+pub(crate) type Fx1Key = ([wgpu::TextureView; 3], usize);
+
+/// The index of a group binding `views` and encoding `enc`, made only when no group of this or last frame does.
+pub(crate) fn fx1(
+    binds: &mut BindSet<Fx1Key>,
+    device: &wgpu::Device,
+    bgl: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    encoding: &[wgpu::Buffer; 4],
+    views: [&wgpu::TextureView; 3],
+    enc: usize,
+) -> usize {
+    let is = |(v, e): &Fx1Key| *e == enc && v[0] == *views[0] && v[1] == *views[1] && v[2] == *views[2];
+    binds.find(is, || {
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fx1"),
+            layout: bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(views[0]) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(views[1]) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(views[2]) },
+                wgpu::BindGroupEntry { binding: 4, resource: encoding[enc].as_entire_binding() },
+            ],
+        });
+        ((views.map(Clone::clone), enc), bg)
+    })
+}
+
 /// A blur pass's inputs; the uniform slot is a dynamic offset.
 fn blur_bind(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, src: &wgpu::TextureView, fine: &wgpu::TextureView, sampler: &wgpu::Sampler, uniforms: &wgpu::Buffer) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -148,7 +179,9 @@ pub struct FxRenderer {
     xform_cap: usize,
     sampler: wgpu::Sampler,
     dummy: wgpu::TextureView,
-    binds: Vec<wgpu::BindGroup>,
+    binds: BindSet<Fx1Key>,
+    /// The blur pyramid's first pass per backdrop.
+    blur_binds: BindSet<wgpu::TextureView>,
     prepared: Vec<Option<Prepared>>,
     scratch: Vec<InstRaw>,
     scratch_xf: Vec<[f32; 4]>,
@@ -365,7 +398,8 @@ impl FxRenderer {
             xform_cap,
             sampler,
             dummy,
-            binds: Vec::new(),
+            binds: BindSet::new(),
+            blur_binds: BindSet::new(),
             prepared: Vec::new(),
             scratch: Vec::new(),
             scratch_xf: Vec::new(),
@@ -490,6 +524,13 @@ impl FxRenderer {
         self.sims.as_mut().is_some_and(|s| s.record(self.staging.as_ref().map(|(s, _)| s), queue, encoder, timestamps))
     }
 
+    /// The group-1 bind group `layer` was prepared with; `None` when it was culled. For tests.
+    #[doc(hidden)]
+    pub fn layer_bind_group(&self, layer: usize) -> Option<&wgpu::BindGroup> {
+        let p = self.prepared.get(layer).copied().flatten()?;
+        Some(self.binds.get(p.bind))
+    }
+
     /// Draw one prepared layer (no-op when it was culled).
     pub fn draw_layer(&self, pass: &mut wgpu::RenderPass<'_>, layer: usize) {
         self.draw_layer_in(pass, self.format, [0.0; 2], layer);
@@ -514,7 +555,7 @@ impl FxRenderer {
         };
         pass.set_pipeline(&pipelines[p.kind][blend_idx]);
         pass.set_bind_group(0, self.bg0.as_ref().unwrap(), &[]);
-        pass.set_bind_group(1, &self.binds[p.bind], &[]);
+        pass.set_bind_group(1, self.binds.get(p.bind), &[]);
         pass.draw(0..4, p.instance..p.instance + 1);
         if shifted {
             pass.set_viewport(0.0, 0.0, self.viewport[0] as f32, self.viewport[1] as f32, 0.0, 1.0);
@@ -542,18 +583,8 @@ impl FxRenderer {
         } else {
             &self.dummy
         };
-        let bind = self.binds.len();
-        self.binds.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("fx1"),
-            layout: &self.bgl1,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(backdrop) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.dummy) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(blurred) },
-                wgpu::BindGroupEntry { binding: 4, resource: self.backdrop_encoding[2 | usize::from(p.backdrop_srgb)].as_entire_binding() },
-            ],
-        }));
+        let enc = 2 | usize::from(p.backdrop_srgb);
+        let bind = fx1(&mut self.binds, device, &self.bgl1, &self.sampler, &self.backdrop_encoding, [backdrop, &self.dummy, blurred], enc);
         self.prepared[layer].as_mut().unwrap().bind = bind;
     }
 
@@ -583,12 +614,12 @@ impl FxRenderer {
         let region = [(p.bounds[0] - margin).max(0.0), (p.bounds[1] - margin).max(0.0), (p.bounds[2] + margin).min(vw as f32), (p.bounds[3] + margin).min(vh as f32)];
         let base = self.blur_slot;
         self.blur_slot += mips;
-        let mut params = vec![0u8; mips * 256];
+        let mut params = [0u8; BLUR_MIPS as usize * 256];
         for k in 0..mips {
             let w: f32 = if k + 1 == n { frac } else { 1.0 };
             params[k * 256..k * 256 + 4].copy_from_slice(&w.to_le_bytes());
         }
-        staging.write_buffer(&self.blur_uniforms, (base * 256) as u64, &params);
+        staging.write_buffer(&self.blur_uniforms, (base * 256) as u64, &params[..mips * 256]);
         // Tell the lens shader the pyramid is ready (xf.x), and how much of it to use (xf.y).
         let xf = [1.0f32, (p.blur_px / 3.0).min(1.0), 0.0, 0.0];
         let off = p.instance as usize * INST_SIZE + std::mem::offset_of!(InstRaw, xf);
@@ -604,7 +635,10 @@ impl FxRenderer {
             let y1 = ((region[3] / k).ceil() as u32 + 2).min(h);
             (x0, y0, x1.max(x0 + 1) - x0, y1.max(y0 + 1) - y0)
         };
-        let first = blur_bind(device, &self.blur_bgl, backdrop, &self.dummy, &self.sampler, &self.blur_uniforms);
+        let first = self.blur_binds.find(|k| k == backdrop, || {
+            (backdrop.clone(), blur_bind(device, &self.blur_bgl, backdrop, &self.dummy, &self.sampler, &self.blur_uniforms))
+        });
+        let first = self.blur_binds.get(first);
         let mut run = |pipe: &wgpu::RenderPipeline, dst: &wgpu::TextureView, bg: &wgpu::BindGroup, slot: usize, m: usize| {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("fx blur"),
@@ -626,7 +660,7 @@ impl FxRenderer {
             pass.draw(0..3, 0..1);
         };
         for m in 0..=n {
-            let bg = if m == 0 { &first } else { &pyr.down_binds[m - 1] };
+            let bg = if m == 0 { first } else { &pyr.down_binds[m - 1] };
             run(&self.blur_down, &pyr.down[m], bg, base + m, m);
         }
         for m in (0..n).rev() {

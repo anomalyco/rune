@@ -141,22 +141,24 @@ impl LightRenderer {
                 pass.set_bind_group(0, &self.gi_bg0, &[]);
                 f(&mut pass);
             };
-            let scene_bg = bind(
-                device,
-                &self.scene_bgl,
-                &[
-                    self.prims.as_entire_binding(),
-                    self.lights.as_entire_binding(),
-                    tv(&self.t.vis),
-                    tv(scene.emission.unwrap_or(&self.black)),
-                    smp.clone(),
-                    tv(&gt.scene_emit),
-                    tv(&gt.scene_occ),
-                ],
-            );
+            let scene_bg = self.scene_bg.get((self.prims.clone(), scene.emission.cloned()), || {
+                bind(
+                    device,
+                    &self.scene_bgl,
+                    [
+                        self.prims.as_entire_binding(),
+                        self.lights.as_entire_binding(),
+                        tv(&self.t.vis),
+                        tv(scene.emission.unwrap_or(&self.black)),
+                        smp.clone(),
+                        tv(&gt.scene_emit),
+                        tv(&gt.scene_occ),
+                    ],
+                )
+            });
             gi_pass(encoder, "gi scene", 5, &|pass| {
                 pass.set_pipeline(&self.scene_pipe);
-                pass.set_bind_group(1, &scene_bg, &[]);
+                pass.set_bind_group(1, scene_bg, &[]);
                 let (x, y) = wg(self.gi_size.0, self.gi_size.1);
                 pass.dispatch_workgroups(x, y, 1);
             });
@@ -193,24 +195,26 @@ impl LightRenderer {
             (Some(_), Some(gt)) => &gt.fluence,
             _ => &self.black,
         };
-        let comp_bg = bind(
-            device,
-            &self.comp_bgl,
-            &[
-                self.frame.as_entire_binding(),
-                self.prims.as_entire_binding(),
-                self.lights.as_entire_binding(),
-                tv(base),
-                tv(text),
-                tv(&self.t.gb0),
-                tv(&self.t.gb1),
-                tv(&self.t.vis),
-                tv(&self.t.air),
-                tv(fluence),
-                tv(&self.t.field),
-                smp,
-            ],
-        );
+        let comp_bg = self.comp_bg.get((self.prims.clone(), [base.clone(), text.clone(), fluence.clone()]), || {
+            bind(
+                device,
+                &self.comp_bgl,
+                [
+                    self.frame.as_entire_binding(),
+                    self.prims.as_entire_binding(),
+                    self.lights.as_entire_binding(),
+                    tv(base),
+                    tv(text),
+                    tv(&self.t.gb0),
+                    tv(&self.t.gb1),
+                    tv(&self.t.vis),
+                    tv(&self.t.air),
+                    tv(fluence),
+                    tv(&self.t.field),
+                    smp,
+                ],
+            )
+        });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("light composite"),
@@ -226,7 +230,7 @@ impl LightRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.comp_pipe);
-            pass.set_bind_group(0, &comp_bg, &[]);
+            pass.set_bind_group(0, comp_bg, &[]);
             pass.draw(0..3, 0..1);
         }
         let last = self.last_query();

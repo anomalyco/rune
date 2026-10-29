@@ -56,8 +56,8 @@ impl LightRenderer {
         let (vis_tex, vis) = arr("vis");
         let (_, air) = arr("air");
         let smp = wgpu::BindingResource::Sampler(sampler);
-        let field_bg = bind(device, field_bgl, &[frame.as_entire_binding(), prims.as_entire_binding(), tv(&field)]);
-        let shadow_bg = bind(device, shadow_bgl, &[frame.as_entire_binding(), lights.as_entire_binding(), tv(&field), smp, tv(&gb0), tv(&vis), tv(&air)]);
+        let field_bg = bind(device, field_bgl, [frame.as_entire_binding(), prims.as_entire_binding(), tv(&field)]);
+        let shadow_bg = bind(device, shadow_bgl, [frame.as_entire_binding(), lights.as_entire_binding(), tv(&field), smp, tv(&gb0), tv(&vis), tv(&air)]);
         Targets { vis_tex, gb0, gb1, field, vis, air, field_bg, shadow_bg, gi: None }
     }
 
@@ -84,11 +84,11 @@ impl LightRenderer {
                 bind(
                     device,
                     &self.cascade_bgl,
-                    &[self.cascade_u[n].as_entire_binding(), tv(&scene_emit), tv(&scene_occ), tv(&t.field), smp.clone(), tv(upper), tv(&levels[n]), tv(&t.gb0)],
+                    [self.cascade_u[n].as_entire_binding(), tv(&scene_emit), tv(&scene_occ), tv(&t.field), smp.clone(), tv(upper), tv(&levels[n]), tv(&t.gb0)],
                 )
             })
             .collect();
-        let fluence_bg = bind(device, &self.fluence_bgl, &[tv(&levels[0]), tv(&fluence)]);
+        let fluence_bg = bind(device, &self.fluence_bgl, [tv(&levels[0]), tv(&fluence)]);
         let own = vec![black.clone(); CASCADES as usize];
         self.t.gi = Some(GiTargets { scene_emit, scene_occ, levels, own, fluence, cascade_bgs, own_bgs: Vec::new(), fluence_bg });
     }
@@ -108,7 +108,7 @@ impl LightRenderer {
                 bind(
                     device,
                     &self.cascade_bgl,
-                    &[self.own_u[n].as_entire_binding(), tv(&g.scene_emit), tv(&g.scene_occ), tv(&t.field), smp.clone(), tv(&self.black), tv(&own[n]), tv(&t.gb0)],
+                    [self.own_u[n].as_entire_binding(), tv(&g.scene_emit), tv(&g.scene_occ), tv(&t.field), smp.clone(), tv(&self.black), tv(&own[n]), tv(&t.gb0)],
                 )
             })
             .collect();
@@ -120,7 +120,7 @@ impl LightRenderer {
 
     /// After `prims` was reallocated: rebuild only the bind groups that bind it.
     pub(crate) fn rebind_prims(&mut self, device: &wgpu::Device) {
-        self.gbuf_bg = bind(device, &self.gbuf_bgl, &[self.frame.as_entire_binding(), self.prims.as_entire_binding()]);
-        self.t.field_bg = bind(device, &self.field_bgl, &[self.frame.as_entire_binding(), self.prims.as_entire_binding(), tv(&self.t.field)]);
+        self.gbuf_bg = bind(device, &self.gbuf_bgl, [self.frame.as_entire_binding(), self.prims.as_entire_binding()]);
+        self.t.field_bg = bind(device, &self.field_bgl, [self.frame.as_entire_binding(), self.prims.as_entire_binding(), tv(&self.t.field)]);
     }
 }

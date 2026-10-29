@@ -21,7 +21,7 @@ mod render;
 mod targets;
 
 pub use glass::{Glass, GlassLight, GlassRenderer, GlassSettings};
-use gpu::{bgl, bind, compute, gi_section, layout, module, texture, tv};
+use gpu::{BindCache, bgl, bind, compute, gi_section, layout, module, texture, tv};
 use targets::Targets;
 
 use bytemuck::{Pod, Zeroable};
@@ -400,6 +400,10 @@ pub struct LightRenderer {
     /// One black view per cascade, for `inspect` before GI runs.
     blacks: Vec<wgpu::TextureView>,
     t: Targets,
+    /// Keyed on the prim buffer and the extra emission.
+    scene_bg: BindCache<(wgpu::Buffer, Option<wgpu::TextureView>)>,
+    /// Keyed on the prim buffer, base, text and fluence.
+    comp_bg: BindCache<(wgpu::Buffer, [wgpu::TextureView; 3])>,
     query: Option<(wgpu::QuerySet, wgpu::Buffer, wgpu::Buffer)>,
     /// Whether the last timed frame ran GI; without it the GI queries aren't written.
     timed_gi: bool,
@@ -593,8 +597,8 @@ impl LightRenderer {
         });
 
         let noop_pipe = compute(device, "light ts marker", &module(device, "noop", "@compute @workgroup_size(1) fn noop() {}"), "noop", &[]);
-        let gbuf_bg = bind(device, &gbuf_bgl, &[frame.as_entire_binding(), prims.as_entire_binding()]);
-        let gi_bg0 = bind(device, &gi_bgl0, &[frame.as_entire_binding()]);
+        let gbuf_bg = bind(device, &gbuf_bgl, [frame.as_entire_binding(), prims.as_entire_binding()]);
+        let gi_bg0 = bind(device, &gi_bgl0, [frame.as_entire_binding()]);
         let black = texture(device, "light black", 1, 1, 1, wgpu::TextureFormat::Rgba16Float, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
         queue.write_texture(
             wgpu::TexelCopyTextureInfo { texture: &black, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
@@ -655,6 +659,8 @@ impl LightRenderer {
             blacks: vec![black.clone(); CASCADES as usize],
             black,
             t,
+            scene_bg: BindCache::new(),
+            comp_bg: BindCache::new(),
             query,
             timed_gi: false,
             compute_passes: 0,

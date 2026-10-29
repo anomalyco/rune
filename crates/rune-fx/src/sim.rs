@@ -94,6 +94,8 @@ pub(crate) struct Sims {
     bgl: wgpu::BindGroupLayout,
     pub grids: Vec<Grid>,
     frame: u64,
+    /// One grid's step uniforms, reused across frames.
+    bytes: Vec<u8>,
 }
 
 const CURL: usize = 0;
@@ -152,6 +154,7 @@ impl Sims {
             bgl,
             grids: Vec::new(),
             frame: 0,
+            bytes: Vec::new(),
         }
     }
 
@@ -223,7 +226,9 @@ impl Sims {
         }
         for g in &self.grids {
             let Some(plan) = g.plan.filter(|p| p.steps > 0) else { continue };
-            let mut bytes = vec![0u8; plan.steps * SLOT];
+            let bytes = &mut self.bytes;
+            bytes.clear();
+            bytes.resize(plan.steps * SLOT, 0);
             for k in 0..plan.steps {
                 let mut u = plan.u;
                 u.origin[2] = plan.t0 + (k + 1) as f32 * DT;
@@ -231,8 +236,8 @@ impl Sims {
                 bytes[k * SLOT..k * SLOT + std::mem::size_of::<SimUniform>()].copy_from_slice(bytemuck::bytes_of(&u));
             }
             match staging {
-                Some(s) => s.write_buffer(&g.uniforms, 0, &bytes),
-                None => queue.write_buffer(&g.uniforms, 0, &bytes),
+                Some(s) => s.write_buffer(&g.uniforms, 0, bytes),
+                None => queue.write_buffer(&g.uniforms, 0, bytes),
             }
         }
         if let Some(s) = staging { s.flush(encoder); }

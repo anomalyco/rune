@@ -172,6 +172,10 @@ pub struct GlassRenderer {
     pyramid: wgpu::TextureView,
     levels: Vec<wgpu::TextureView>,
     down_bgs: Vec<wgpu::BindGroup>,
+    /// The pyramid's first level, keyed on the backdrop.
+    first_bg: crate::BindCache<wgpu::TextureView>,
+    /// Keyed on the backdrop and fluence.
+    bg: crate::BindCache<[wgpu::TextureView; 2]>,
     staging: Option<rune_staging::Staging>,
 }
 
@@ -257,9 +261,9 @@ impl GlassRenderer {
             .map(|k| tex.create_view(&wgpu::TextureViewDescriptor { base_mip_level: k, mip_level_count: Some(1), ..Default::default() }))
             .collect();
         let down_bgs = (1..mips as usize)
-            .map(|k| crate::bind(device, &down_bgl, &[crate::tv(&levels[k - 1]), wgpu::BindingResource::Sampler(&sampler)]))
+            .map(|k| crate::bind(device, &down_bgl, [crate::tv(&levels[k - 1]), wgpu::BindingResource::Sampler(&sampler)]))
             .collect();
-        GlassRenderer { width, height, mips, uniform, glass, lights, sampler, pipe, bgl, down, down_bgl, pyramid, levels, down_bgs, staging: None }
+        GlassRenderer { width, height, mips, uniform, glass, lights, sampler, pipe, bgl, down, down_bgl, pyramid, levels, down_bgs, first_bg: crate::BindCache::new(), bg: crate::BindCache::new(), staging: None }
     }
 
     fn pass<'a>(encoder: &'a mut wgpu::CommandEncoder, target: &'a wgpu::TextureView, label: &'a str) -> wgpu::RenderPass<'a> {
@@ -306,30 +310,34 @@ impl GlassRenderer {
         staging.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&u));
         staging.flush(encoder);
         if ng > 0 {
-            let first = crate::bind(device, &self.down_bgl, &[crate::tv(backdrop), wgpu::BindingResource::Sampler(&self.sampler)]);
+            let first = self.first_bg.get(backdrop.clone(), || {
+                crate::bind(device, &self.down_bgl, [crate::tv(backdrop), wgpu::BindingResource::Sampler(&self.sampler)])
+            });
             for k in 0..self.mips as usize {
                 let mut pass = Self::pass(encoder, &self.levels[k], "glass pyramid");
                 pass.set_pipeline(&self.down);
-                pass.set_bind_group(0, if k == 0 { &first } else { &self.down_bgs[k - 1] }, &[]);
+                pass.set_bind_group(0, if k == 0 { first } else { &self.down_bgs[k - 1] }, &[]);
                 pass.draw(0..3, 0..1);
             }
         }
-        let bg = crate::bind(
-            device,
-            &self.bgl,
-            &[
-                self.uniform.as_entire_binding(),
-                self.glass.as_entire_binding(),
-                self.lights.as_entire_binding(),
-                crate::tv(backdrop),
-                crate::tv(&self.pyramid),
-                crate::tv(fluence),
-                wgpu::BindingResource::Sampler(&self.sampler),
-            ],
-        );
+        let bg = self.bg.get([backdrop.clone(), fluence.clone()], || {
+            crate::bind(
+                device,
+                &self.bgl,
+                [
+                    self.uniform.as_entire_binding(),
+                    self.glass.as_entire_binding(),
+                    self.lights.as_entire_binding(),
+                    crate::tv(backdrop),
+                    crate::tv(&self.pyramid),
+                    crate::tv(fluence),
+                    wgpu::BindingResource::Sampler(&self.sampler),
+                ],
+            )
+        });
         let mut pass = Self::pass(encoder, target, "glass");
         pass.set_pipeline(&self.pipe);
-        pass.set_bind_group(0, &bg, &[]);
+        pass.set_bind_group(0, bg, &[]);
         pass.draw(0..3, 0..1);
     }
 }

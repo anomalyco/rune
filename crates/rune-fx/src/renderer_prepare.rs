@@ -19,7 +19,8 @@ impl FxRenderer {
         self.scratch.clear();
         self.scratch_xf.clear();
         self.prepared.clear();
-        self.binds.clear();
+        self.binds.begin();
+        self.blur_binds.begin();
         let vw = frame.viewport[0] as f32;
         let vh = frame.viewport[1] as f32;
         self.viewport = frame.viewport;
@@ -35,8 +36,6 @@ impl FxRenderer {
         if let Some(sims) = self.sims.as_mut() {
             sims.begin_frame();
         }
-        // Bind groups keyed by (needs backdrop, source slot, blurred backdrop, fire sim grid) so equal layers share one.
-        let mut keys: Vec<(bool, Option<u32>, bool, Option<usize>, bool)> = Vec::new();
         for (index, layer) in frame.layers.iter().enumerate() {
             let slot = slots.get(index).copied().unwrap_or_default();
             let Some((kind, mut inst, b)) = layer.pack() else {
@@ -78,32 +77,16 @@ impl FxRenderer {
                 Fx::Fill(FillParams { style: FillStyle::FlutedGlass(p), .. }) => (p.frost.clamp(0.0, 1.0) * LENS_FROST_SIGMA * s).max(0.0),
                 _ => 0.0,
             };
-            let key = (needs_bd && frame.backdrop.is_some(), layer.source.map(|s| s.slot), blur_px > 0.0 && frame.backdrop.is_some(), grid, slot.backdrop_srgb.unwrap_or(false));
-            let bind = match keys.iter().position(|k| *k == key) {
-                Some(p) => p,
-                None => {
-                    let bd = if key.0 { frame.backdrop.unwrap() } else { &self.dummy };
-                    let src = match (key.3, self.sims.as_ref()) {
-                        (Some(g), Some(sims)) => sims.final_view(g),
-                        _ => key.1.and_then(|slot| frame.sources.get(slot as usize).copied()).unwrap_or(&self.dummy),
-                    };
-                    let blurred = if key.2 { self.blur.as_ref().map_or(&self.dummy, |b| &b.result) } else { &self.dummy };
-                    let enc_idx = (usize::from(key.0) << 1) | usize::from(key.4);
-                    self.binds.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("fx1"),
-                        layout: &self.bgl1,
-                        entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(bd) },
-                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(src) },
-                            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(blurred) },
-                            wgpu::BindGroupEntry { binding: 4, resource: self.backdrop_encoding[enc_idx].as_entire_binding() },
-                        ],
-                    }));
-                    keys.push(key);
-                    keys.len() - 1
-                }
+            // Layers that bind the same resources share one group, kept across frames.
+            let reads_bd = needs_bd && frame.backdrop.is_some();
+            let bd = if reads_bd { frame.backdrop.unwrap() } else { &self.dummy };
+            let src = match (grid, self.sims.as_ref()) {
+                (Some(g), Some(sims)) => sims.final_view(g),
+                _ => layer.source.and_then(|s| frame.sources.get(s.slot as usize).copied()).unwrap_or(&self.dummy),
             };
+            let blurred = if blur_px > 0.0 && frame.backdrop.is_some() { self.blur.as_ref().map_or(&self.dummy, |b| &b.result) } else { &self.dummy };
+            let enc = (usize::from(reads_bd) << 1) | usize::from(slot.backdrop_srgb.unwrap_or(false));
+            let bind = fx1(&mut self.binds, device, &self.bgl1, &self.sampler, &self.backdrop_encoding, [bd, src, blurred], enc);
             stats.drawn += 1;
             stats.pixels += ((x1 - x0) * (y1 - y0)) as u64;
             self.prepared.push(Some(Prepared { kind, instance: self.scratch.len() as u32, bind, bounds: [x0, y0, x1, y1], blur_px, needs_backdrop: needs_bd,
