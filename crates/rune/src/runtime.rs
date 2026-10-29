@@ -152,8 +152,8 @@ mod app_ime;
 mod press_clicks;
 #[path = "runtime/window_requests.rs"]
 mod window_requests;
-#[path = "runtime/node_colors.rs"]
-mod node_colors;
+#[path = "runtime/paint_tracks.rs"]
+mod paint_tracks;
 #[path = "runtime/action.rs"]
 mod action;
 use action::*;
@@ -4089,7 +4089,7 @@ impl<S: 'static> Runtime<S> {
         // `El::matched` elements of this tree: (id, index, newly mounted).
         let mut arrivals: Vec<(Rc<str>, usize, bool)> = Vec::new();
         let mut mounted = vec![false; nodes.len()];
-        let mut last = node_colors::LastBuild::default();
+        let mut last = paint_tracks::LastBuild::default();
         for i in 0..nodes.len() {
             let id = nodes[i].id;
             let parent_id = nodes[i].parent.map(|p| nodes[p].id);
@@ -4272,24 +4272,25 @@ impl<S: 'static> Runtime<S> {
                     self.scene.animate(id, prop::BLUR, vis.blur, anim);
                 } else { self.set_or_anim(id, prop::BLUR, vis.blur, spring_l, instant || !was_present); }
             }
-            let old = last.find(&self.nodes, id).map(|o| &self.nodes[o]);
-            let (old_fill, old_text) = (old.map(|o| o.vis.fill), old.and_then(node_colors::text_color));
+            let old = last.find(&self.nodes, id);
             if !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Fill) {
-                self.commit_color(id, P_FILL, old_fill, vis.fill, spring_c, instant);
+                self.commit_paint(id, P_FILL, old.map(|o| self.nodes[o].vis.fill), vis.fill, spring_c, instant);
             }
             if vis.border_width > 0.0 {
                 let had_bottom = self.scene.store().has(id, P_BORDER_BOTTOM);
-                if vis.border_bottom.is_some() && !had_bottom && let Some(c) = self.scene.get(id, P_BORDER) {
+                if vis.border_bottom.is_some() && !had_bottom
+                    && let Some(c) = self.scene.get(id, P_BORDER).or(old.map(|o| self.nodes[o].vis.border))
+                {
                     // A solid border's bottom springs into the gradient rather than jumping.
                     self.scene.set(id, P_BORDER_BOTTOM, c);
                 }
-                self.set_or_anim(id, P_BORDER, vis.border, spring_c, instant);
+                self.commit_paint(id, P_BORDER, old.map(|o| self.nodes[o].vis.border), vis.border, spring_c, instant);
                 if vis.border_bottom.is_some() || had_bottom {
                     self.set_or_anim(id, P_BORDER_BOTTOM, vis.border_bottom.unwrap_or(vis.border), spring_c, instant);
                 }
             }
-            if let Some(c) = node_colors::text_color(&nodes[i]) {
-                self.commit_color(id, P_TEXT, old_text, c, spring_tc, instant);
+            if let Some(c) = paint_tracks::text_color(&nodes[i]) {
+                self.commit_paint(id, P_TEXT, old.and_then(|o| paint_tracks::text_color(&self.nodes[o])), c, spring_tc, instant);
             }
             if nodes[i].vis.icon.is_some() && (nodes[i].vis.icon_turn != 0.0 || self.scene.store().has(id, P_ICON_TURN)) {
                 if was_present && !self.scene.store().has(id, P_ICON_TURN) {
@@ -4298,39 +4299,34 @@ impl<S: 'static> Runtime<S> {
                 self.set_or_anim(id, P_ICON_TURN, nodes[i].vis.icon_turn, spring_l, instant || !was_present);
             }
             if vis.hover.a > 0.0 || self.scene.store().has(id, P_HOVER_C) {
-                self.set_or_anim(id, P_HOVER_C, vis.hover, spring_c, instant);
+                self.commit_paint(id, P_HOVER_C, old.map(|o| self.nodes[o].vis.hover), vis.hover, spring_c, instant);
             }
             if vis.press.a > 0.0 || self.scene.store().has(id, P_PRESS_C) {
-                self.set_or_anim(id, P_PRESS_C, vis.press, spring_c, instant);
+                self.commit_paint(id, P_PRESS_C, old.map(|o| self.nodes[o].vis.press), vis.press, spring_c, instant);
             }
             for (k, sh) in vis.shadows.iter().take(P_SHADOWS.len()).enumerate() {
-                self.set_or_anim(id, P_SHADOWS[k], sh.color, spring_c, instant);
-                let geo = rune_motion::Rect { x: sh.x, y: sh.y, w: sh.blur, h: sh.spread };
-                self.set_or_anim(id, P_SHADOW_GEO[k], geo, spring_l, instant);
+                let was = old.and_then(|o| self.nodes[o].vis.shadows.get(k).copied());
+                self.commit_paint(id, P_SHADOWS[k], was.map(|w| w.color), sh.color, spring_c, instant);
+                self.commit_paint(id, P_SHADOW_GEO[k], was.map(|w| paint_tracks::shadow_geo(&w)), paint_tracks::shadow_geo(sh), spring_l, instant);
             }
-            for k in vis.shadows.len()..P_SHADOWS.len() {
-                if self.scene.store().has(id, P_SHADOWS[k]) {
-                    self.scene.store_mut().remove(id, P_SHADOWS[k]);
-                    self.scene.store_mut().remove(id, P_SHADOW_GEO[k]);
-                } else {
-                    break;
-                }
+            // Only a shadow that was drawn can have a track.
+            for k in vis.shadows.len()..old.map_or(0, |o| self.nodes[o].vis.shadows.len()).min(P_SHADOWS.len()) {
+                self.scene.store_mut().remove(id, P_SHADOWS[k]);
+                self.scene.store_mut().remove(id, P_SHADOW_GEO[k]);
             }
             if let Some(&g) = vis.gradient.as_deref() {
-                self.set_or_anim(id, P_GRADIENT[0], g[0], spring_c, instant);
-                self.set_or_anim(id, P_GRADIENT[1], g[1], spring_c, instant);
+                let was = old.and_then(|o| self.nodes[o].vis.gradient.as_deref().copied());
+                self.commit_paint(id, P_GRADIENT[0], was.map(|w| w[0]), g[0], spring_c, instant);
+                self.commit_paint(id, P_GRADIENT[1], was.map(|w| w[1]), g[1], spring_c, instant);
             }
             if let Some(rg) = &vis.radial {
                 for (k, &(_, c)) in rg.stops.iter().take(P_RADIAL.len()).enumerate() {
-                    self.set_or_anim(id, P_RADIAL[k], c, spring_c, instant);
+                    let was = old.and_then(|o| self.nodes[o].vis.radial.as_ref()?.stops.get(k).map(|s| s.1));
+                    self.commit_paint(id, P_RADIAL[k], was, c, spring_c, instant);
                 }
             }
             if let Some(ol) = vis.outline {
-                self.set_or_anim(id, P_OUTLINE, ol.color, spring_c, instant);
-            }
-            if (vis.hover.a > 0.0 || vis.press.a > 0.0 || vis.hover_group) && !self.scene.store().has(id, P_HOVER) {
-                self.scene.set(id, P_HOVER, 0.0);
-                self.scene.set(id, P_PRESS, 0.0);
+                self.commit_paint(id, P_OUTLINE, old.and_then(|o| self.nodes[o].vis.outline.map(|w| w.color)), ol.color, spring_c, instant);
             }
 
             // Streaming word reveal.

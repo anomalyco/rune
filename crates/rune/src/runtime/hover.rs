@@ -314,7 +314,10 @@ impl<S: 'static> Runtime<S> {
                 // An unchanged target preserves its trajectory in the store already; avoid
                 // dirtying the scene node for that no-op. Custom animations may carry an
                 // explicit velocity, decay or token and must still reach the store.
-                Some(f) if n.vis.hover_motion.is_some() => self.scene.animate(f.id, P_HOVER, f.on as u8 as f32, f.anim),
+                Some(f) if n.vis.hover_motion.is_some() => {
+                    if !self.scene.store().has(f.id, P_HOVER) { self.scene.set(f.id, P_HOVER, 0.0); }
+                    self.scene.animate(f.id, P_HOVER, f.on as u8 as f32, f.anim);
+                }
                 Some(_) => {}
                 None => {}
             }
@@ -328,11 +331,15 @@ impl<S: 'static> Runtime<S> {
             let pressed = down && n.vis.press.a > 0.0;
             let (id, press_scale) = (n.id, n.press_scale);
             changed |= self.scene.store().target(id, P_PRESS).unwrap_or(0.0) != pressed as u8 as f32;
-            self.scene.animate(id, P_PRESS, pressed as u8 as f32, if pressed { motion::INSTANT } else { motion::SNAPPY });
+            if paint_tracks::ready_from_rest(&mut self.scene, id, P_PRESS, 0.0, pressed as u8 as f32) {
+                self.scene.animate(id, P_PRESS, pressed as u8 as f32, if pressed { motion::INSTANT } else { motion::SNAPPY });
+            }
             if let Some(k) = press_scale {
                 // Down follows the hand; the release springs back with a little life.
                 let down = down && !self.reduced_motion;
-                self.scene.animate(id, P_PRESS_SCALE, if down { k } else { 1.0 }, if down { motion::INSTANT } else { motion::POP });
+                if paint_tracks::ready_from_rest(&mut self.scene, id, P_PRESS_SCALE, 1.0, if down { k } else { 1.0 }) {
+                    self.scene.animate(id, P_PRESS_SCALE, if down { k } else { 1.0 }, if down { motion::INSTANT } else { motion::POP });
+                }
             }
         }
         let held = held.unwrap_or_else(|| {
@@ -343,7 +350,9 @@ impl<S: 'static> Runtime<S> {
         // A leave from an element turned inert lands now; the rest wait while layout holds hover.
         for f in flips.drain(..) {
             if held && !f.now { continue; }
-            self.scene.animate(f.id, P_HOVER, f.on as u8 as f32, f.anim);
+            if paint_tracks::ready_from_rest(&mut self.scene, f.id, P_HOVER, 0.0, f.on as u8 as f32) {
+                self.scene.animate(f.id, P_HOVER, f.on as u8 as f32, f.anim);
+            }
             changed = true;
         }
         self.hover_hold.flips = flips;

@@ -1,5 +1,5 @@
-//! A node's fill and text colours. Most never change, so their tracks are made only when one
-//! does, and start from the colour last drawn.
+//! A node's paint: colours, shadow geometry, hover and press. Most of it never changes, so a
+//! property gets a track only when it does, starting from what was last drawn.
 
 use super::*;
 
@@ -27,11 +27,30 @@ pub(super) fn text_color(n: &Node) -> Option<Color> {
     n.text.as_ref().map(|t| t.color).or(n.vis.icon.map(|(_, c)| c))
 }
 
+/// Readies `p` (hover, press, press scale), which reads `rest` without a track, to move to
+/// `to`: false when it has no track and `to` is `rest`, so there's nothing to do; otherwise it
+/// has a track, made at `rest` if it had none.
+pub(super) fn ready_from_rest(scene: &mut Scene, id: NodeId, p: Prop<f32>, rest: f32, to: f32) -> bool {
+    if scene.store().has(id, p) {
+        return true;
+    }
+    if to == rest {
+        return false;
+    }
+    scene.set(id, p, rest);
+    true
+}
+
+/// A shadow's geometry as its track holds it.
+pub(super) fn shadow_geo(sh: &crate::el::Shadow) -> rune_motion::Rect {
+    rune_motion::Rect { x: sh.x, y: sh.y, w: sh.blur, h: sh.spread }
+}
+
 impl<S: 'static> Runtime<S> {
-    /// Commits colour `to` on `p` of node `id`, which last drew `from` (None if it's new). A
-    /// node without a track draws its own colour (`Runtime::color`), so it needs none until the
-    /// colour changes, and a commit that leaves it changes nothing.
-    pub(super) fn commit_color(&mut self, id: NodeId, p: Prop<Color>, from: Option<Color>, to: Color, s: Spring, instant: bool) {
+    /// Commits `to` on paint property `p` of node `id`, which last drew `from` (None if it's
+    /// new). Without a track a node draws its own value (`Runtime::color`, `shadow_at`), so it
+    /// needs none until the value changes, and a commit that leaves it changes nothing.
+    pub(super) fn commit_paint<T: rune_motion::Animatable + PartialEq>(&mut self, id: NodeId, p: Prop<T>, from: Option<T>, to: T, s: Spring, instant: bool) {
         let tracked = self.scene.store().has(id, p);
         if from == Some(to) && !(instant && tracked) {
             // Its track, if any, already heads to `to`: nothing else moves this property.
@@ -45,8 +64,9 @@ impl<S: 'static> Runtime<S> {
         }
         self.set_or_anim(id, p, to, s, instant);
     }
+
 }
 
 #[cfg(test)]
-#[path = "node_colors_tests.rs"]
+#[path = "paint_tracks_tests.rs"]
 mod tests;
