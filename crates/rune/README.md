@@ -78,11 +78,10 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     edges, so they have no seams. No atlas, so a shape can change every frame (`examples/shapes`).
     Translucent strokes blend twice where segments overlap at a joint; fills do not overlap.
   - Every instance has a soft-edge clip (`clip_soft`, `clip_fade`).
-  - Colour is premultiplied linear and drawn into an sRGB target by default (linear-light blending),
-    with a CoreText-calibrated luminance/scale glyph coverage exponent. Windows and overlays that want
-    CSS / Core Animation gamma-space compositing for faint glows, blurs, shadows, images and video over
-    dark canvases can opt into `.srgb_blend(true)` on `App`, `WindowSpec` or `ConfiguredOverlay`,
-    which encodes premultiplied colours in sRGB (`Color::premul_srgb`) and renders into a non-sRGB
+  - Windows blend in sRGB-encoded space by default, as Core Animation, CoreText and CSS do.
+    `.srgb_blend(false)` on `App`, `WindowSpec` or `ConfiguredOverlay` opts out into linear-light
+    blending (colour premultiplied in linear light, drawn into an sRGB target). sRGB blending
+    encodes premultiplied colours in sRGB (`Color::premul_srgb`) and renders into a non-sRGB
     target view (`format.remove_srgb_suffix()`). With a `Compositor`, `Frame::srgb_blend()` and `Frame::format` tell it which encoding and view its own passes must match.
     A runtime the app draws itself (`Runtime::with_text`, a headless snapshot) opts in with
     `Runtime::set_srgb_blend(true)`, then draws with `Renderer::set_srgb_blend(true)` into a
@@ -92,8 +91,27 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     changes its view).
   - The Retina scale is applied throughout.
 - **Text** (`text.rs`): Parley 0.12 lays out embedded Inter 4.1 (OFL, `assets/`). swash 0.2
-  rasterises unhinted, centered, .1-point-emboldened outlines into a 2048² R8 shelf atlas with four
-  horizontal subpixel positions, a 1 px zeroed border per glyph, and pixel-snapped baselines. The
+  outlines are rasterised through a port of CoreGraphics' glyph pipeline into a 2048² R8 shelf
+  atlas, at CoreGraphics' subpixel pen steps, with a 1 px zeroed border per glyph and
+  pixel-snapped baselines.
+  **Font smoothing** (`FontSmoothing`, `text/coretext_match.rs`) picks how glyphs are rasterised
+  and placed, app-wide with `App::new(spec).font_smoothing(FontSmoothing::Off)` (or
+  `WindowSpec::font_smoothing`), or while running with `Tx::set_font_smoothing(mode)`, which
+  rasterises the new mode's glyphs on the next frame (each mode keeps its own atlas entries, so a
+  switch back is free). Modes:
+  - `On`, the default on macOS: CoreText's text with font smoothing on. Apple's pipeline (pens
+    floored to CoreGraphics' subpixel step, which depends on the ppem: fifths of a device pixel
+    below 8⅓ ppem, quarters to 11.1, thirds to 16.7, halves to 33.3 and whole pixels above; coverage
+    drawn as is; sRGB blending; CoreGraphics' curve flattening and its y autohinter at 7–18 ppem)
+    plus font smoothing's outline dilation, a radius set by the ink's luminance and the device
+    ppem (`text/macos_smoothing.rs`, `ApplePipeline::SMOOTHED`).
+  - `Off`: what macOS browsers draw for `-webkit-font-smoothing: antialiased`, CoreText with font
+    smoothing off, and the default on every other platform (Linux, Windows, the web). Apple's
+    pipeline without the dilation (`ApplePipeline::UNSMOOTHED`); lighter than `On`.
+  Both work on every OS, since they are arithmetic on outlines. Blending is separate
+  (`srgb_blend`).
+  `cargo run -p rune --example coretext_compare [-- --smoothing on|off]` measures
+  each mode against CoreText references (`tests/coretext/`, `scripts/coretext-reference.sh`). The
   atlas recycles a two-page steady ping-pong pool across frames without zeroing 4 MiB buffers,
   spills to overflow pages when a single frame exceeds one page, and never caches an allocation
   failure as an empty glyph. Colors share the same atlas masks.
