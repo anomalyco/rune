@@ -129,6 +129,8 @@ wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"]
 [dev-dependencies]
 # Live buffer counts (`Device::get_internal_counters`) for the upload tests.
 wgpu = { version = "~30.0.1", default-features = false, features = ["counters"] }
+# Thread and process CPU clocks in the overlay cost example.
+libc = "0.2"
 
 [[example]]
 name = "tree_swap"
