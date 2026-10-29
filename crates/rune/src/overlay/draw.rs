@@ -286,4 +286,44 @@ impl<T: 'static> Overlay<T> {
             None => live.pacing = crate::display_link::DisplayLink::new(window, wake.clone()),
         }
     }
+
+    /// Warm glyphs/pipelines and, on macOS, the retained alpha-zero host's actual surface.
+    pub(super) fn warm(&mut self) {
+        self.rt.frame(0.0);
+        self.rt.settle_all();
+        self.rt.frame(0.0);
+        self.clock.hold(Instant::now());
+        self.warm_frame();
+    }
+
+    pub(super) fn warm_frame(&mut self) {
+        self.publish_regions();
+        #[cfg(target_os = "macos")]
+        if let Some(panel) = &self.panel {
+            let _prewarm = panel.prewarm();
+            self.dirty = true;
+            self.draw_frame(true);
+            if let Some(gpu) = &self.gpu { let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely()); }
+            return;
+        }
+        let Some(live) = &self.live else { return };
+        self.warm_offscreen((live.config.width, live.config.height));
+    }
+
+    pub(super) fn warm_offscreen(&mut self, size: (u32, u32)) {
+        let (Some((renderer, format)), Some(gpu)) = (&mut self.renderer, &self.gpu) else { return };
+        let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("overlay prewarm"), size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+            format: *format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[],
+        });
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        render_frame(&mut Frame {
+            device: &gpu.device, queue: &gpu.queue, encoder: &mut enc,
+            target: &target.create_view(&Default::default()), format: *format, size,
+            dt: 0.0, update_ms: 0.0, rt: &mut self.rt, ui: renderer,
+        }, &mut self.compositor);
+        renderer.submit(&gpu.queue, enc);
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    }
 }
