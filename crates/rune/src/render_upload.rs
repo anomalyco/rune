@@ -94,6 +94,7 @@ impl Renderer {
     /// Uploads changed rows of the runtime's image atlas (`El::pixels`), creating its texture on
     /// first use.
     pub fn upload_images(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, images: &mut ImageAtlas) {
+        if images.pages.is_empty() && self.images.is_empty() { return self.refresh_layer_bindings(device); }
         let staging = self.uploads.staging(device, queue);
         if staging.lost() != self.uploads.lost.1 {
             self.uploads.lost.1 = staging.lost();

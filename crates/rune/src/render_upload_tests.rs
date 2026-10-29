@@ -148,3 +148,25 @@ fn compositor_buffer_writes_land_in_order_and_reuse_staging() {
         }
     }
 }
+
+#[test]
+fn a_frame_with_nothing_to_upload_never_touches_the_staging() {
+    let gpu = Gpu::headless();
+    let (device, queue) = (&gpu.device, &gpu.queue);
+    let mut renderer = Renderer::new(device, OFFSCREEN_FORMAT);
+    renderer.upload_images(device, queue, &mut ImageAtlas::default());
+    assert!(renderer.uploads.staging.is_none(), "no images, no staging");
+    let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None, size: 16, usage: wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    renderer.write_buffer(device, queue, &mut encoder, &uniforms, 0, bytemuck::cast_slice(&[1u32; 4]));
+    let writes = renderer.uploads.frame_writes.clone().unwrap();
+    assert!(writes.busy(), "recorded, its chunk still mapped");
+    renderer.before_submit(&mut encoder);
+    assert!(!writes.busy(), "sealed into the frame");
+    let flushes = writes.stats().flushes;
+    renderer.before_submit(&mut encoder);
+    assert_eq!(writes.stats().flushes, flushes);
+    queue.submit([encoder.finish()]);
+}

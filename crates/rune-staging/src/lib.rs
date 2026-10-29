@@ -10,7 +10,7 @@
 //! flushed into an encoder ahead of the commands that read it, or submitted before them.
 //! On the web, whose `writeBuffer` already stages, writes go straight to the queue.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
 /// The size of a new chunk; a larger write gets a chunk sized to its next power of two.
@@ -25,9 +25,11 @@ const MAX_PENDING: u64 = 16 << 20;
 /// Staged texture rows start at this alignment, and `bytes_per_row` is a multiple of it.
 const ROW_ALIGN: u64 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64;
 
-/// A shared handle to one set of staging chunks and the writes pending in them.
+/// A shared handle to one set of staging chunks and the writes pending in them: the chunks,
+/// the count of lost ones, and whether any are pending or mapped (so `flush` and `submit` with
+/// nothing to do never lock).
 #[derive(Clone)]
-pub struct Staging(Arc<Mutex<Inner>>, Arc<AtomicU64>);
+pub struct Staging(Arc<Mutex<Inner>>, Arc<AtomicU64>, Arc<AtomicBool>);
 
 /// Counters, for tests and benchmarks.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -99,7 +101,7 @@ impl Staging {
         Staging(Arc::new(Mutex::new(Inner {
             device: device.clone(), queue: queue.clone(), active: Vec::new(), free: Vec::new(), recycle, returned,
             pending: Vec::new(), pending_bytes: 0, stats: Stats::default(),
-        })), Arc::default())
+        })), Arc::default(), Arc::default())
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -147,6 +149,7 @@ impl Staging {
     /// Records the pending writes into `encoder` here, ahead of what is recorded after them.
     /// `encoder` must be submitted: dropped, the writes never land (`lost` counts it).
     pub fn flush(&self, encoder: &mut wgpu::CommandEncoder) {
+        if !self.busy() { return; }
         let mut s = self.lock();
         if s.pending.is_empty() && s.active.is_empty() { return; }
         s.encode(encoder, self);
@@ -158,6 +161,7 @@ impl Staging {
     /// `flush` unmaps them and must be into the same encoder (or one submitted after it); a
     /// `submit` before then would remap them before `encoder` copies out of them.
     pub fn record(&self, encoder: &mut wgpu::CommandEncoder) {
+        if !self.busy() { return; }
         let mut s = self.lock();
         if s.pending.is_empty() { return; }
         s.copy(encoder);
@@ -166,7 +170,13 @@ impl Staging {
 
     /// Submits the pending writes now, ahead of anything submitted later.
     pub fn submit(&self) {
+        if !self.busy() { return; }
         self.lock().submit(self);
+    }
+
+    /// Whether writes are pending or chunks still mapped since the last `flush` or `submit`.
+    pub fn busy(&self) -> bool {
+        self.2.load(Ordering::Acquire)
     }
 
     /// Whether writes are waiting for a `flush` or `submit`.
@@ -220,6 +230,7 @@ impl Inner {
         self.pending_bytes += size;
         self.stats.writes += 1;
         self.stats.bytes += size;
+        staging.2.store(true, Ordering::Release);
         (chunk.buffer.clone(), at)
     }
 
@@ -246,6 +257,7 @@ impl Inner {
                 if mapped.is_ok() && let Some(chunk) = back.chunk.take() { let _ = back.recycle.send(chunk); }
             });
         }
+        staging.2.store(false, Ordering::Release);
     }
 
     /// Records the pending copies; their chunks stay mapped and active.
