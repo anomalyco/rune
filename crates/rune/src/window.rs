@@ -1080,6 +1080,9 @@ pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (
     } else {
         srgb
     };
+    // Backdrop copies read the drawable mid-frame (`ActivePass::split`: backdrop blur, effect
+    // backdrops, rune-fx blend modes). On Metal it costs `framebufferOnly`, but without it they
+    // quietly fall back.
     config.usage |= caps.usages & wgpu::TextureUsages::COPY_SRC;
     config.present_mode = wgpu::PresentMode::AutoVsync;
     config.desired_maximum_frame_latency = 2;
