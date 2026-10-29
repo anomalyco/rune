@@ -458,6 +458,9 @@ struct Host<S: 'static> {
     hidden_at: Option<u64>,
     release_gpu: bool,
     open_at_start: bool,
+    /// `App::float_on_open`: each window maps at a fixed size, then takes its own limits.
+    #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
+    float_on_open: bool,
     shared: Arc<Shared<S>>,
     shortcuts: crate::shortcuts::Guard,
     menus: crate::native_menu::Guard<S>,
@@ -533,6 +536,7 @@ impl<S: 'static> Host<S> {
         let modifier_keys = app.modifier_keys;
         let tab_visits_controls = app.tab_visits_controls;
         let fit_height = app.fit_content_height;
+        let float_on_open = app.float_on_open;
         let app_stats = app.dev_stats;
         let playground = app.playground.take();
         let (mut spec, state, shared) = app.into_parts(args.scene.as_deref());
@@ -601,6 +605,7 @@ impl<S: 'static> Host<S> {
             hidden_at: None,
             release_gpu,
             open_at_start: open,
+            float_on_open,
             shared,
             shortcuts,
             menus,
@@ -1433,6 +1438,14 @@ impl<S: 'static> Host<S> {
         let Some(w) = &mut self.win else { return };
         if !w.first_frame.pending() { return; }
         let reveal = w.first_frame.complete();
+        // Mapped at a fixed size, so a tiling window manager floated it: now the user can resize it.
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if self.float_on_open && !w.first_frame.notified {
+            use winit::dpi::LogicalSize;
+            let (min, max) = self.options.size_limits(self.spec.min_size);
+            w.window.set_min_inner_size(Some(LogicalSize::new(min.0, min.1)));
+            w.window.set_max_inner_size(max.map(|(w, h)| LogicalSize::new(w, h)));
+        }
         self.native_handle.native.ready.store(true, Ordering::Release);
         *self.shared.window_error.lock().unwrap() = None;
         if !std::mem::replace(&mut w.first_frame.notified, true)
@@ -1982,6 +1995,15 @@ impl<S: 'static> Host<S> {
             if let Some(id) = crate::tooling::app_id() {
                 attrs = winit::platform::wayland::WindowAttributesExtWayland::with_name(attrs, id, id);
                 attrs = winit::platform::x11::WindowAttributesExtX11::with_name(attrs, id, id);
+            }
+            // Tiling window managers float a toplevel that maps at a fixed size;
+            // `first_frame_ready` restores the window's own limits.
+            if self.float_on_open {
+                let fixed: winit::dpi::Size = match self.options.physical_size {
+                    Some((w, h)) => winit::dpi::PhysicalSize::new(w, h).into(),
+                    None => winit::dpi::LogicalSize::new(size.0, size.1).into(),
+                };
+                attrs = attrs.with_min_inner_size(fixed).with_max_inner_size(fixed);
             }
             if let Some(token) = token {
                 let token = winit::window::ActivationToken::from_raw(token);

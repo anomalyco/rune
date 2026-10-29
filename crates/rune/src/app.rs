@@ -62,6 +62,7 @@ pub struct App<S: 'static> {
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<S>>>,
     pub(crate) window_options: crate::WindowOptions,
     pub(crate) fit_content_height: bool,
+    pub(crate) float_on_open: bool,
     pub(crate) modifier_keys: bool,
     pub(crate) tab_visits_controls: bool,
     pub(crate) srgb_blend: bool,
@@ -99,6 +100,7 @@ impl<S: 'static> App<S> {
             compositor: None,
             window_options: crate::WindowOptions::default(),
             fit_content_height: false,
+            float_on_open: false,
             modifier_keys: false,
             tab_visits_controls: false,
             srgb_blend: false,
@@ -134,6 +136,15 @@ impl<S: 'static> App<S> {
     /// `Tx::resize_window`. Give the root no fixed or `fill` height. Users still set the width.
     pub fn fit_content_height(mut self) -> Self {
         self.fit_content_height = true;
+        self
+    }
+
+    /// Ask a tiling window manager to float the window when it opens, with no window rule.
+    /// On Linux the window maps at a fixed size (its minimum equals its maximum), which
+    /// sway, Hyprland, niri and i3 float; once its first frame is shown, the window's own
+    /// minimum and maximum apply and the user can resize it. Ignored elsewhere.
+    pub fn float_on_open(mut self) -> Self {
+        self.float_on_open = true;
         self
     }
 
