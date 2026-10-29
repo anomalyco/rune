@@ -60,6 +60,13 @@ impl<S: 'static> Frame<'_, S> {
         self.ui.srgb_blend()
     }
 
+    /// `queue.write_buffer` without its per-call staging buffer: `data` goes through Rune's
+    /// reused staging memory and lands in `buffer` at `offset` ahead of the commands recorded
+    /// into `encoder` after this call. `offset` and `data.len()` are multiples of 4.
+    pub fn write_buffer(&mut self, buffer: &wgpu::Buffer, offset: u64, data: &[u8]) {
+        self.ui.write_buffer(self.device, self.queue, self.encoder, buffer, offset, data);
+    }
+
     /// The default frame: every instance into the target, cleared to the window colour.
     pub fn draw_ui(&mut self) {
         let clear = self.rt.clear_color();

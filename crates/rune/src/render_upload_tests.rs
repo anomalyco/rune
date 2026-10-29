@@ -106,3 +106,41 @@ fn a_dropped_encoder_makes_the_next_frame_resend_everything() {
     renderer.submit(queue, encoder);
     assert_eq!(pixel(&target.read(device), 14, 14), RED);
 }
+
+/// `Frame::write_buffer`: each write lands ahead of the commands recorded after it, and a steady
+/// frame's writes reuse staging memory rather than making a buffer each, as a queue write would.
+#[test]
+fn compositor_buffer_writes_land_in_order_and_reuse_staging() {
+    let gpu = Gpu::headless();
+    let (device, queue) = (&gpu.device, &gpu.queue);
+    let mut renderer = Renderer::new(device, OFFSCREEN_FORMAT);
+    let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None, size: 16, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+    });
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None, size: 32, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false,
+    });
+    let mut chunks = 0;
+    for frame in 0..12u32 {
+        let buffers = live_buffers(device);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        renderer.write_buffer(device, queue, &mut encoder, &uniforms, 0, bytemuck::cast_slice(&[frame; 4]));
+        encoder.copy_buffer_to_buffer(&uniforms, 0, &readback, 0, 16);
+        renderer.write_buffer(device, queue, &mut encoder, &uniforms, 0, bytemuck::cast_slice(&[frame + 100; 4]));
+        encoder.copy_buffer_to_buffer(&uniforms, 0, &readback, 16, 16);
+        let created = live_buffers(device) - buffers;
+        queue.submit([encoder.finish()]);
+        let slice = readback.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback"));
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let words: Vec<u32> = bytemuck::cast_slice(&slice.get_mapped_range().unwrap()).to_vec();
+        readback.unmap();
+        assert_eq!(words, [[frame; 4], [frame + 100; 4]].concat(), "frame {frame}: each write before the copy after it");
+        let stats = renderer.uploads.stats();
+        if frame >= 2 {
+            assert_eq!(created, 0, "frame {frame} created buffers");
+            assert_eq!(stats.chunks, chunks, "frame {frame} made a staging chunk");
+        }
+        chunks = stats.chunks;
+    }
+}

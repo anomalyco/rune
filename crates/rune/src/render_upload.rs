@@ -55,8 +55,17 @@ impl Renderer {
     }
 
     /// Submits pending uploads ahead of commands already recorded.
-    pub(super) fn submit_uploads(&self) {
+    pub(crate) fn submit_uploads(&self) {
         if let Some(s) = &self.uploads.staging { s.submit(); }
+    }
+
+    /// `Queue::write_buffer` through the renderer's staging chunks, recorded into `encoder` here:
+    /// ahead of the commands recorded after it (`Frame::write_buffer`).
+    pub(crate) fn write_buffer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder,
+        buffer: &wgpu::Buffer, offset: u64, data: &[u8]) {
+        let staging = self.uploads.staging(device, queue);
+        staging.write_buffer(buffer, offset, data);
+        staging.flush(encoder);
     }
 
     /// Writes rows `y0..y1` of `texture` from its tightly packed CPU copy `data`.
