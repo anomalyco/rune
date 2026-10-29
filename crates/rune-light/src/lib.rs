@@ -386,7 +386,6 @@ pub struct LightRenderer {
     field_pipe: wgpu::ComputePipeline,
     field_bgl: wgpu::BindGroupLayout,
     shadow_pipe: wgpu::ComputePipeline,
-    shadow_bgl: wgpu::BindGroupLayout,
     gi_bg0: wgpu::BindGroup,
     scene_pipe: wgpu::ComputePipeline,
     scene_bgl: wgpu::BindGroupLayout,
@@ -398,8 +397,14 @@ pub struct LightRenderer {
     noop_pipe: wgpu::ComputePipeline,
     comp_bgl: wgpu::BindGroupLayout,
     black: wgpu::TextureView,
+    /// One black view per cascade, for `inspect` before GI runs.
+    blacks: Vec<wgpu::TextureView>,
     t: Targets,
     query: Option<(wgpu::QuerySet, wgpu::Buffer, wgpu::Buffer)>,
+    /// Whether the last timed frame ran GI; without it the GI queries aren't written.
+    timed_gi: bool,
+    /// Compute passes the last `render` recorded.
+    compute_passes: u32,
     period: f32,
     staging: rune_staging::Staging,
     /// Formats the composite can write; float formats get linear light, other non-sRGB formats get a manual sRGB
@@ -618,20 +623,7 @@ impl LightRenderer {
 
         let field_size = (width.div_ceil(2), height.div_ceil(2));
         let gi_size = ((width.div_ceil(8)).div_ceil(16) * 16, (height.div_ceil(8)).div_ceil(16) * 16);
-        let t = Self::targets(
-            device,
-            width,
-            height,
-            field_size,
-            gi_size,
-            &frame,
-            &prims,
-            &lights,
-            &cascade_u,
-            &sampler,
-            &black,
-            [&field_bgl, &shadow_bgl, &cascade_bgl, &fluence_bgl],
-        );
+        let t = Self::targets(device, width, height, field_size, &frame, &prims, &lights, &sampler, [&field_bgl, &shadow_bgl]);
         LightRenderer {
             width,
             height,
@@ -650,7 +642,6 @@ impl LightRenderer {
             field_pipe,
             field_bgl,
             shadow_pipe,
-            shadow_bgl,
             gi_bg0,
             scene_pipe,
             scene_bgl,
@@ -661,9 +652,12 @@ impl LightRenderer {
             comp_pipe,
             noop_pipe,
             comp_bgl,
+            blacks: vec![black.clone(); CASCADES as usize],
             black,
             t,
             query,
+            timed_gi: false,
+            compute_passes: 0,
             period: queue.get_timestamp_period(),
             staging: rune_staging::Staging::new(device, queue),
             output_format,
@@ -692,17 +686,23 @@ impl LightRenderer {
         };
         read.unmap();
         let ms = |a: u32, b: u32| ticks[b as usize].saturating_sub(ticks[a as usize]) as f64 * self.period as f64 / 1e6;
-        let (field, shadows, total) = (ms(1, 2), ms(3, 4), ms(0, QUERIES - 1));
-        let gi_scene = ms(5, 6);
+        let gi_ms = |a: u32, b: u32| if self.timed_gi { ms(a, b) } else { 0.0 };
+        let (field, shadows, total) = (ms(1, 2), ms(3, 4), ms(0, self.last_query()));
+        let gi_scene = gi_ms(5, 6);
         let mut cascades = [0.0; CASCADES as usize];
         for (n, c) in cascades.iter_mut().enumerate() {
-            *c = ms(7 + 2 * n as u32, 8 + 2 * n as u32);
+            *c = gi_ms(7 + 2 * n as u32, 8 + 2 * n as u32);
         }
-        let fluence = ms(7 + 2 * CASCADES, 8 + 2 * CASCADES);
+        let fluence = gi_ms(7 + 2 * CASCADES, 8 + 2 * CASCADES);
         let gi = gi_scene + cascades.iter().sum::<f64>() + fluence;
         // The surface and composite render passes overlap the compute work on tile GPUs, so they are reported
         // together as the rest of the frame.
         Some(Timings { field, shadows, gi, gi_scene, cascades, fluence, raster: (total - field - shadows - gi).max(0.0), total })
+    }
+
+    /// The frame's closing timestamp: after the GI passes, or in the first GI slot when GI didn't run.
+    fn last_query(&self) -> u32 {
+        if self.timed_gi { QUERIES - 1 } else { 5 }
     }
 
     /// The half-resolution visibility texture (2 layers × 4 lights), for debugging and the CPU reference check.
@@ -715,14 +715,16 @@ impl LightRenderer {
     }
 
     /// The GI pass's intermediate buffers from the last recorded frame.
+    /// Before GI first runs, its buffers are black.
     pub fn inspect(&self) -> Inspect<'_> {
+        let g = self.t.gi.as_ref();
         Inspect {
             field: &self.t.field,
-            emission: &self.t.scene_emit,
-            occluders: &self.t.scene_occ,
-            merged: &self.t.levels,
-            own: &self.t.own,
-            fluence: &self.t.fluence,
+            emission: g.map_or(&self.black, |g| &g.scene_emit),
+            occluders: g.map_or(&self.black, |g| &g.scene_occ),
+            merged: g.map_or(&self.blacks, |g| &g.levels),
+            own: g.map_or(&self.blacks, |g| &g.own),
+            fluence: g.map_or(&self.black, |g| &g.fluence),
             gi_size: self.gi_size,
             texel: 1.0 / GI_SCALE,
             field_size: self.field_size,
