@@ -181,6 +181,8 @@ mod frame_encoded;
 pub use frame_encoded::{FrameEncoded, FrameOutcome};
 pub use input_time::last_input;
 mod present_time;
+#[cfg(target_os = "macos")]
+mod present_worker;
 mod secure_input;
 pub mod clipboard;
 mod preferences;

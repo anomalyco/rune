@@ -974,6 +974,13 @@ impl Renderer {
         if let Some(s) = &self.surfaces { s.submit(queue,encoder) } else { queue.submit([encoder.finish()]) }
     }
 
+    /// Whether `submit` is `queue.submit` after `submit_uploads` and nothing more: no native video
+    /// surface waits on the frame's submission, so another thread may make it.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn submits_plainly(&self) -> bool {
+        self.surfaces.as_ref().is_none_or(|s| s.draws_nothing())
+    }
+
     pub fn draw(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, clear: [f32; 4]) {
         self.draw_timed(encoder, view, clear, None);
     }

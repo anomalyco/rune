@@ -1,8 +1,10 @@
 //! An overlay frame's steps apart from its window: the animation step, the compositor or
-//! default draw, and whether anything asks for another frame.
+//! default draw, whether anything asks for another frame, and the submit and present.
 
+use super::{Backing, Live};
 use crate::compose::{Compositor, Frame};
 use crate::frame_clock::FrameClock;
+use crate::render::{Gpu, Renderer};
 use crate::runtime::Runtime;
 use crate::time::Instant;
 
@@ -35,5 +37,48 @@ pub(super) fn render_frame<T: 'static>(f: &mut Frame<'_, T>, compositor: &mut Op
         f.ui.prepare(f.device, f.queue, &mut f.rt.text.atlas, &f.rt.instances, f.size);
         f.ui.draw(f.encoder, f.target, [0.0; 4]);
         false
+    }
+}
+
+/// Submits the frame's commands and presents its drawable. On macOS a plain frame (no material
+/// views to move with the drawable, no transaction, no native video surface waiting on the
+/// submission) is finished, submitted and presented on the overlay's present thread, so the
+/// event loop's thread spends none of wgpu's encode, submit and present on it. Prewarm frames
+/// present here, before the window is revealed.
+pub(super) fn submit_and_present<T: 'static>(live: &mut Live, renderer: &Renderer, gpu: &Gpu, rt: &Runtime<T>,
+    encoder: wgpu::CommandEncoder, frame: wgpu::SurfaceTexture, prewarm: bool) {
+    #[allow(irrefutable_let_patterns)]
+    if let Backing::Window(w) = &live.backing {
+        w.pre_present_notify();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if !prewarm && live.materials.presents_plainly() && renderer.submits_plainly() {
+            if live.present.is_none() { live.present = crate::present_worker::PresentWorker::spawn(); }
+            if let Some(worker) = &mut live.present {
+                renderer.submit_uploads();
+                let queue = gpu.queue.clone();
+                return worker.run(move || {
+                    queue.submit([encoder.finish()]);
+                    queue.present(frame);
+                });
+            }
+        }
+        renderer.submit(&gpu.queue, encoder);
+        live.materials.present(&rt.materials, rt.env.scale, || gpu.queue.present(frame));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (rt, prewarm);
+        renderer.submit(&gpu.queue, encoder);
+        gpu.queue.present(frame);
+    }
+}
+
+impl Live {
+    /// Waits for the frame on the present thread, before the surface is touched again.
+    pub(super) fn settle(&mut self) {
+        #[cfg(target_os = "macos")]
+        if let Some(worker) = &mut self.present { worker.wait(); }
     }
 }

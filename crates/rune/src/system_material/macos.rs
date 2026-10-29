@@ -76,6 +76,12 @@ impl Materials {
     /// Whether this frame's elements should leave their interior to native views.
     pub(crate) fn native(&self) -> bool { self.active }
 
+    /// Whether `present` would only present: no material views to move with the drawable, and
+    /// the layer presents without transactions, so the present can happen on another thread.
+    pub(crate) fn presents_plainly(&self) -> bool {
+        !self.active && self.slots.iter().all(|s| s.shown.is_none()) && !self.flag.get().written()
+    }
+
     fn update_flag(&self, f: impl FnOnce(&mut PresentFlag) -> Option<bool>) -> Option<bool> {
         let mut flag = self.flag.get();
         let out = f(&mut flag);

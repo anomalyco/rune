@@ -244,6 +244,9 @@ enum Backing {
 
 /// A shown overlay. The wgpu surface drops before what it draws into.
 struct Live {
+    /// Presents plain frames off the event loop's thread; joined before the surface drops.
+    #[cfg(target_os = "macos")]
+    present: Option<crate::present_worker::PresentWorker>,
     #[cfg(target_os = "macos")]
     pacing: Option<crate::display_link::DisplayLink>,
     /// `El::system_material` views behind the Metal layer.
@@ -876,6 +879,8 @@ impl<T: 'static> Overlay<T> {
             materials: crate::system_material::macos::Materials::new(),
             #[cfg(target_os = "macos")]
             fn_key,
+            #[cfg(target_os = "macos")]
+            present: None,
             alpha, surface, config, backing, scale,
         })
     }
@@ -888,6 +893,7 @@ impl<T: 'static> Overlay<T> {
         live.scale = scale;
         live.config.width = (self.at.size.0 * scale).round().max(1.0) as u32;
         live.config.height = (self.at.size.1 * scale).round().max(1.0) as u32;
+        live.settle();
         live.surface.configure(&gpu.device, &live.config);
         if let Some(alpha) = &mut live.alpha {
             alpha.resize(&gpu.device, (live.config.width, live.config.height));
@@ -1417,6 +1423,7 @@ impl<T: 'static> Overlay<T> {
         let (Some(live), Some((renderer, renderer_format)), Some(gpu)) = (self.live.as_mut(), self.renderer.as_mut(), self.gpu.as_ref()) else {
             return false;
         };
+        live.settle();
         #[cfg(target_os = "macos")]
         let target = if prewarm { None } else if let Some(pacing) = &mut live.pacing {
             let Some(target) = pacing.next_frame().target() else { return false };
@@ -1526,15 +1533,7 @@ impl<T: 'static> Overlay<T> {
         if let Some(alpha) = &live.alpha {
             alpha.draw(&mut enc, &view);
         }
-        renderer.submit(&gpu.queue, enc);
-        #[allow(irrefutable_let_patterns)]
-        if let Backing::Window(w) = &live.backing {
-            w.pre_present_notify();
-        }
-        #[cfg(target_os = "macos")]
-        live.materials.present(&self.rt.materials, self.rt.env.scale, || gpu.queue.present(frame));
-        #[cfg(not(target_os = "macos"))]
-        gpu.queue.present(frame);
+        frame::submit_and_present(live, renderer, gpu, &self.rt, enc, frame, prewarm);
         if !prewarm { self.meter.presented(); }
         self.dirty = false;
         #[cfg(target_os = "macos")]

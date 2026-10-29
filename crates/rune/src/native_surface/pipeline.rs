@@ -387,6 +387,11 @@ impl SurfaceRenderer {
     pub(super) fn live_planes(&self) -> usize {
         self.importer.as_ref().map_or(0, |i| i.live_planes.load(std::sync::atomic::Ordering::SeqCst))
     }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn draws_nothing(&self) -> bool {
+        self.draws.is_empty()
+    }
+
     /// Include this in the containing render pass for hardware GPU timing.
     /// Submit that encoder through [`Self::submit`] before the next [`Self::prepare`].
     /// Plain `Queue::submit` does not retain the timing slot and may let it be reused
