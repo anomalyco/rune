@@ -752,10 +752,19 @@ impl Missed {
 /// `reconfigures` times, synchronously; every other miss returns at once. On macOS a surface
 /// wgpu would call occluded is never asked: each failed `get_current_texture` leaks a texture
 /// id in wgpu-core 30.0.1.
-pub(crate) fn acquire(surface: &wgpu::Surface, device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, mut reconfigures: u32,
+pub(crate) fn acquire(surface: &wgpu::Surface, device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, reconfigures: u32,
     meter: &mut SurfaceMeter) -> Result<wgpu::SurfaceTexture, Missed> {
+    acquire_checked(surface, device, config, reconfigures, meter, true)
+}
+
+/// `acquire`, skipping the occlusion check when the caller has just read the window hosting
+/// the surface as visible (`check_occlusion` false).
+pub(crate) fn acquire_checked(surface: &wgpu::Surface, device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, mut reconfigures: u32,
+    meter: &mut SurfaceMeter, check_occlusion: bool) -> Result<wgpu::SurfaceTexture, Missed> {
+    #[cfg(not(target_os = "macos"))]
+    let _ = check_occlusion;
     #[cfg(target_os = "macos")]
-    if crate::macos::surface_occluded(surface) {
+    if check_occlusion && crate::macos::surface_occluded(surface) {
         meter.skipped();
         return Err(Missed::Occluded);
     }

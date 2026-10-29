@@ -75,6 +75,12 @@ impl<T: 'static> Overlay<T> {
         if self.live.is_none() || self.renderer.is_none() || self.gpu.is_none() {
             return false;
         }
+        // `sync_occlusion` below reads, once a turn, the panel hosting the surface: the window
+        // the acquire would check again.
+        #[cfg(target_os = "macos")]
+        let read_occlusion = !prewarm && self.panel.is_some();
+        #[cfg(not(target_os = "macos"))]
+        let read_occlusion = false;
         // Even an idle overlay looks again on its retry while occluded: the occlusion
         // notification that should uncover it may never come.
         #[cfg(target_os = "macos")]
@@ -118,7 +124,7 @@ impl<T: 'static> Overlay<T> {
                 live.alpha = Some(crate::surface_alpha::AlphaSurface::new(&gpu.device, target, (live.config.width, live.config.height)));
             }
         }
-        let frame = match crate::window::acquire(&live.surface, &gpu.device, &live.config, if prewarm { 2 } else { 1 }, &mut self.meter) {
+        let frame = match crate::window::acquire_checked(&live.surface, &gpu.device, &live.config, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
             Ok(frame) => frame,
             Err(missed) => {
                 if !prewarm {
@@ -146,7 +152,7 @@ impl<T: 'static> Overlay<T> {
                 drop(frame);
                 self.rt.native_materials = true;
                 animating |= self.rt.frame(0.0);
-                match crate::window::acquire(&live.surface, &gpu.device, &live.config, if prewarm { 2 } else { 1 }, &mut self.meter) {
+                match crate::window::acquire_checked(&live.surface, &gpu.device, &live.config, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
                     Ok(frame) => frame,
                     // Returning true turned the loop with ControlFlow::Poll; wait like any miss.
                     Err(missed) => {
@@ -167,7 +173,7 @@ impl<T: 'static> Overlay<T> {
             if live.alpha.is_some() {
                 live.alpha = Some(crate::surface_alpha::AlphaSurface::new(&gpu.device, target, (live.config.width, live.config.height)));
             }
-            match crate::window::acquire(&live.surface, &gpu.device, &live.config, if prewarm { 2 } else { 1 }, &mut self.meter) {
+            match crate::window::acquire_checked(&live.surface, &gpu.device, &live.config, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
                 Ok(frame) => frame,
                 Err(missed) => {
                     if !prewarm {
@@ -262,9 +268,11 @@ impl<T: 'static> Overlay<T> {
     }
 
     /// Reads the panel's occlusion directly: one shown onto covered or sleeping displays gets
-    /// no event saying so.
+    /// no event saying so. Once a loop turn: the tick's draw and `about_to_wait` share it, and
+    /// `Occluded` events land in between.
     #[cfg(target_os = "macos")]
     pub(super) fn sync_occlusion(&mut self) {
+        if std::mem::replace(&mut self.occlusion_read, true) { return; }
         let occluded = self.panel.as_ref().is_some_and(|p| p.occluded());
         self.set_occluded(occluded);
     }

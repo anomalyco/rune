@@ -647,3 +647,17 @@ fn a_turn_whose_frame_is_not_due_never_waits_on_the_present_thread() {
     assert_eq!(frame::claim(None, || waits += 1), Some(None));
     assert_eq!(waits, 3);
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn an_overlay_reads_its_occlusion_once_a_turn() {
+    let mut overlay = width_overlay("occlusion once");
+    overlay.sync_occlusion();
+    assert!(overlay.occlusion_read && !overlay.occluded);
+    overlay.occluded = true;
+    overlay.sync_occlusion();
+    assert!(overlay.occluded, "the turn's reading isn't taken again");
+    overlay.occlusion_read = false;
+    overlay.sync_occlusion();
+    assert!(!overlay.occluded, "the next turn reads it again");
+}

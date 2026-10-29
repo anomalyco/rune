@@ -314,6 +314,9 @@ pub(crate) struct Overlay<T: 'static> {
     /// The panel is shown but none of it is on screen (covered, or the displays asleep).
     #[cfg(target_os = "macos")]
     occluded: bool,
+    /// This loop turn already read the panel's occlusion (`sync_occlusion`).
+    #[cfg(target_os = "macos")]
+    occlusion_read: bool,
     /// When to try a frame again that had no drawable, or the next frame of motion with no
     /// display link to pace it.
     retry: Option<Instant>,
@@ -387,6 +390,8 @@ impl<T: 'static> Overlay<T> {
             clock: FrameClock::new(Instant::now()),
             #[cfg(target_os = "macos")]
             occluded: false,
+            #[cfg(target_os = "macos")]
+            occlusion_read: false,
             retry: None,
             occluded_wait: crate::window::OCCLUDED_RETRY,
             hidden_pace: Default::default(),
@@ -437,6 +442,7 @@ impl<T: 'static> Overlay<T> {
         #[cfg(target_os = "macos")]
         {
             self.occluded = false;
+            self.occlusion_read = false;
             self.sync_occlusion();
             if !self.occluded { self.ensure_pacing(); }
         }
@@ -1302,6 +1308,8 @@ impl<T: 'static> Overlay<T> {
 impl<T: 'static> AnyHost for Overlay<T> {
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
         self.meter.turn(matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll), crate::surface_stats::slept(cause));
+        #[cfg(target_os = "macos")]
+        { self.occlusion_read = false; }
         if matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll) {
             let now = Instant::now();
             self.wake_due(now);
