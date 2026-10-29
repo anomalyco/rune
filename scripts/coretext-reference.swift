@@ -5,8 +5,11 @@
 // baselines) with CTFontDrawGlyphs into an opaque sRGB bitmap, one sheet per entry of "sheets":
 // antialiasing, subpixel positioning and subpixel quantisation on, as macOS draws window text,
 // with font smoothing on or off. Inter comes from its files; "system" cases use CoreText's own
-// system font (CTFontCreateUIFontForLanguage) at the case's wght and opsz. Sheets keep the green
+// system font (CTFontCreateUIFontForLanguage) at the case's wght and opsz; "mono" cases AppKit's
+// monospaced system font (NSFont.monospacedSystemFont, SF Mono) at the case's weight, the
+// instance native apps draw code in. Sheets keep the green
 // channel. No window or screen access.
+import AppKit
 import CoreGraphics
 import CoreText
 import Foundation
@@ -38,6 +41,17 @@ func systemFont(_ size: CGFloat, weight: Double, opsz: Double) -> CTFont {
     return CTFontCreateCopyWithAttributes(base, size, nil, desc)
 }
 
+func monoFont(_ size: CGFloat, weight: Double) -> CTFont {
+    let named: [(Double, NSFont.Weight)] = [(100, .ultraLight), (200, .thin), (300, .light), (400, .regular), (500, .medium), (600, .semibold), (700, .bold), (800, .heavy), (900, .black)]
+    let w = named.min { abs($0.0 - weight) < abs($1.0 - weight) }!.1
+    let font = NSFont.monospacedSystemFont(ofSize: size, weight: w) as CTFont
+    // Rune shapes SFNSMono's glyph ids; the system's monospaced font must be that file.
+    let file = (CTFontManagerCreateFontDescriptorsFromURL(URL(fileURLWithPath: paths["mono"] as! String) as CFURL) as! [CTFontDescriptor])[0]
+    precondition(CTFontGetGlyphCount(font) == CTFontGetGlyphCount(CTFontCreateWithFontDescriptor(file, size, nil)),
+        "AppKit's monospaced system font isn't \(paths["mono"] as! String)")
+    return font
+}
+
 func color(_ hex: String) -> CGColor {
     let v = Int(hex.dropFirst(), radix: 16)!
     return CGColor(srgbRed: CGFloat((v >> 16) & 255) / 255, green: CGFloat((v >> 8) & 255) / 255, blue: CGFloat(v & 255) / 255, alpha: 1)
@@ -48,6 +62,7 @@ let fonts: [CTFont] = cases.map { c in
     let size = CGFloat(c["size"] as! Double)
     switch c["font"] as! String {
     case "system": return systemFont(size, weight: c["weight"] as! Double, opsz: c["opsz"] as! Double)
+    case "mono": return monoFont(size, weight: c["weight"] as! Double)
     case let name: return fileFont(paths[name] as! String, size)
     }
 }

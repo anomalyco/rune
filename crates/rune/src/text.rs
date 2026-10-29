@@ -66,6 +66,49 @@ fn font_trak(traks: &mut Traks, data: &Blob<u8>, index: u32) -> Option<Rc<Trak>>
         .clone()
 }
 
+/// The coordinates a font's named instances give its hidden axes at `weight` (SF Mono's and SF
+/// Italic's `YAXS`), interpolated along `wght` between the nearest instances and held at the
+/// ends; only axes off their default. Core Text draws a weight at its instance (AppKit's regular
+/// SF Mono is wght 400, YAXS 324.3); Parley sets only `wght`, which leaves a hidden axis at its
+/// default, in SF Mono the Light instance's thin horizontal strokes. Instances at another value
+/// of a visible axis (a width or optical size) only count when no instance is at the defaults;
+/// of several at one weight (SF's grades), the one nearest the hidden defaults counts.
+fn hidden_axes(font: FontRef, weight: f32) -> Vec<parley::FontVariation> {
+    let axes: Vec<_> = font.variations().map(|a| (a.tag(), a.default_value(), a.is_hidden())).collect();
+    let Some(wght) = axes.iter().position(|a| a.0 == swash::tag_from_bytes(b"wght")) else { return Vec::new() };
+    let hidden: Vec<usize> = (0..axes.len()).filter(|&i| i != wght && axes[i].2).collect();
+    if hidden.is_empty() {
+        return Vec::new();
+    }
+    let instances: Vec<Vec<f32>> = font.instances().map(|i| i.values().collect::<Vec<f32>>()).filter(|v| v.len() == axes.len()).collect();
+    let at_defaults = |v: &&Vec<f32>| (0..axes.len()).all(|i| i == wght || axes[i].2 || (v[i] - axes[i].1).abs() < 1e-3);
+    let mut points: Vec<(f32, Vec<f32>)> = instances.iter().filter(at_defaults).map(|v| (v[wght], hidden.iter().map(|&i| v[i]).collect())).collect();
+    if points.is_empty() {
+        points = instances.iter().map(|v| (v[wght], hidden.iter().map(|&i| v[i]).collect())).collect();
+    }
+    // Of instances at one weight (SF's grades), the one nearest the hidden defaults.
+    let off_default = |v: &[f32]| hidden.iter().zip(v).map(|(&i, x)| (x - axes[i].1).abs()).sum::<f32>();
+    points.sort_by(|a, b| a.0.total_cmp(&b.0).then(off_default(&a.1).total_cmp(&off_default(&b.1))));
+    points.dedup_by(|b, a| a.0 == b.0);
+    let (Some(first), Some(last)) = (points.first(), points.last()) else { return Vec::new() };
+    let values: Vec<f32> = if weight <= first.0 {
+        first.1.clone()
+    } else if weight >= last.0 {
+        last.1.clone()
+    } else {
+        let k = points.iter().position(|p| p.0 >= weight).unwrap_or(points.len() - 1);
+        let (lo, hi) = (&points[k - 1], &points[k]);
+        let t = (weight - lo.0) / (hi.0 - lo.0);
+        lo.1.iter().zip(&hi.1).map(|(a, b)| a + (b - a) * t).collect()
+    };
+    hidden
+        .iter()
+        .zip(values)
+        .filter(|&(&i, v)| (v - axes[i].1).abs() >= 1e-3)
+        .map(|(&i, v)| parley::FontVariation::new(parley::setting::Tag::new(&axes[i].0.to_be_bytes()), v))
+        .collect()
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 const DEFAULT_FONTS: [&[u8]; 3] = [
     include_bytes!("../assets/Inter-Regular.ttf"),
@@ -1177,6 +1220,8 @@ pub struct TextSystem {
     pub(crate) smoothing: FontSmoothing,
     /// The `trak` table of the first font of a family slot at a weight, upright or italic.
     primary_traks: HashMap<(Family, u32, bool), Option<Rc<Trak>>>,
+    /// The hidden-axis coordinates (`hidden_axes`) of the same first font.
+    primary_axes: HashMap<(Family, u32, bool), Rc<[parley::FontVariation]>>,
     /// CoreGraphics' glyph pipeline for `smoothing`, and its per-ink state.
     apple: macos_smoothing::Smoothing,
 }
@@ -1458,6 +1503,7 @@ impl TextSystem {
             traks: Traks::new(),
             smoothing: FontSmoothing::default(),
             primary_traks: HashMap::new(),
+            primary_axes: HashMap::new(),
             apple: Default::default(),
         }
     }
@@ -1468,6 +1514,30 @@ impl TextSystem {
         if let Some(trak) = self.primary_traks.get(&key) {
             return trak.clone();
         }
+        let font = self.primary_font(family, weight, italic);
+        let trak = font.and_then(|f| font_trak(&mut self.traks, &f.blob, f.index));
+        self.primary_traks.insert(key, trak.clone());
+        trak
+    }
+
+    /// The hidden-axis coordinates (`hidden_axes`) of the font text in `family` at `weight`
+    /// shapes with first.
+    fn primary_axes(&mut self, family: Family, weight: f32, italic: bool) -> Rc<[parley::FontVariation]> {
+        let key = (family, weight.to_bits(), italic);
+        if let Some(axes) = self.primary_axes.get(&key) {
+            return axes.clone();
+        }
+        let font = self.primary_font(family, weight, italic);
+        let axes: Rc<[parley::FontVariation]> = font
+            .and_then(|f| FontRef::from_index(f.blob.as_ref(), f.index as usize).map(|r| hidden_axes(r, weight)))
+            .unwrap_or_default()
+            .into();
+        self.primary_axes.insert(key, axes.clone());
+        axes
+    }
+
+    /// The font text in `family` at `weight` shapes with first.
+    fn primary_font(&mut self, family: Family, weight: f32, italic: bool) -> Option<parley::fontique::QueryFont> {
         if family == Family::SystemMono || self.slot_system_mono {
             self.system_mono();
         }
@@ -1488,11 +1558,7 @@ impl TextSystem {
         query.set_families(names.iter().map(|name| parley::fontique::QueryFamily::Named(name)));
         let style = if italic { FontStyle::Italic } else { FontStyle::Normal };
         query.set_attributes(parley::fontique::Attributes::new(parley::fontique::FontWidth::NORMAL, style, FontWeight::new(weight)));
-        let font = query.first_available_font();
-        drop(query);
-        let trak = font.and_then(|f| font_trak(&mut self.traks, &f.blob, f.index));
-        self.primary_traks.insert(key, trak.clone());
-        trak
+        query.first_available_font()
     }
 
     /// The installed `Family::SystemMono` families, loading them the first time.
@@ -1709,6 +1775,20 @@ impl TextSystem {
                 Some(spacing(trak, s.size.unwrap_or(style.size))).filter(|&v| v != base_spacing)
             })
             .collect();
+        // Each style range's predicted first font at its weight, drawn at its named instance.
+        let base_axes = self.primary_axes(style.family, style.weight, style.italic);
+        let span_axes: Vec<Rc<[parley::FontVariation]>> = spans
+            .iter()
+            .map(|s| {
+                let family = if s.mono { Family::Mono } else { style.family };
+                self.primary_axes(family, s.weight.unwrap_or(style.weight), s.italic || style.italic)
+            })
+            .collect();
+        let with_axes = |mut settings: Vec<parley::FontVariation>, axes: &[parley::FontVariation]| {
+            let extra: Vec<_> = axes.iter().filter(|a| !settings.iter().any(|v| v.tag == a.tag)).copied().collect();
+            settings.extend(extra);
+            settings
+        };
         if style.family == Family::SystemMono || self.slot_system_mono {
             self.system_mono();
         }
@@ -1781,7 +1861,7 @@ impl TextSystem {
             } else if !style.features.is_empty() {
                 b.push_default(StyleProperty::FontFeatures(style.features.into()));
             }
-            let settings = variations(style, style.size);
+            let settings = with_axes(variations(style, style.size), &base_axes);
             if !settings.is_empty() {
                 b.push_default(parley::FontVariations::List(std::borrow::Cow::Owned(settings)));
             }
@@ -1813,9 +1893,11 @@ impl TextSystem {
                     // CSS's unitless line-height: a span of its own size (inline code, a smaller run) keeps the
                     // paragraph's leading ratio, so its box fits inside the line instead of growing it
                     b.push(LineHeight::FontSizeRelative(style.line_px() / style.size), r.clone());
-                    if style.optical_size == OpticalSize::Auto {
-                        b.push(parley::FontVariations::List(std::borrow::Cow::Owned(variations(style, sz))), r.clone());
-                    }
+                }
+                let resized = s.size.is_some() && style.optical_size == OpticalSize::Auto;
+                if resized || span_axes[i] != base_axes {
+                    let settings = with_axes(variations(style, s.size.unwrap_or(style.size)), &span_axes[i]);
+                    b.push(parley::FontVariations::List(std::borrow::Cow::Owned(settings)), r.clone());
                 }
                 if let Some(v) = span_spacing[i] {
                     b.push(StyleProperty::LetterSpacing(v), r.clone());
