@@ -97,12 +97,14 @@ impl<T: 'static> Overlay<T> {
         let (Some(live), Some((renderer, renderer_format)), Some(gpu)) = (self.live.as_mut(), self.renderer.as_mut(), self.gpu.as_ref()) else {
             return false;
         };
-        live.settle();
         #[cfg(target_os = "macos")]
-        let target = if prewarm { None } else if let Some(pacing) = &mut live.pacing {
-            let Some(target) = pacing.next_frame().target() else { return false };
+        let target = {
+            let opportunity = if prewarm { None } else { live.pacing.as_mut().map(|p| p.next_frame()) };
+            let Some(target) = frame::claim(opportunity, || live.settle()) else { return false };
             target
-        } else { None };
+        };
+        #[cfg(not(target_os = "macos"))]
+        live.settle();
         #[cfg(target_os = "macos")]
         let paced = live.pacing.as_ref().is_some_and(|p| p.running());
         #[cfg(not(target_os = "macos"))]

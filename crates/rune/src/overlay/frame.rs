@@ -26,6 +26,16 @@ pub(super) fn step<T: 'static>(rt: &mut Runtime<T>, clock: &mut FrameClock, comp
     clock.advance(rt, frame_time, compositor.as_ref().is_some_and(|c| c.animating()))
 }
 
+/// A due frame's target presentation time, or `None` when the display link says wait. The
+/// opportunity is claimed before `settle` waits for the frame still on the present thread, so
+/// a turn that draws nothing (the loop's second look after a tick drew) never blocks on it.
+#[cfg(target_os = "macos")]
+pub(super) fn claim(opportunity: Option<crate::display_link::Opportunity>, settle: impl FnOnce()) -> Option<Option<Instant>> {
+    let target = match opportunity { Some(opportunity) => opportunity.target()?, None => None };
+    settle();
+    Some(target)
+}
+
 /// Both native surface frames and offscreen prewarming use the same compositor path.
 pub(super) fn render_frame<T: 'static>(f: &mut Frame<'_, T>, compositor: &mut Option<Box<dyn Compositor<T>>>) -> bool {
     f.ui.upload_images(f.device, f.queue, &mut f.rt.images);

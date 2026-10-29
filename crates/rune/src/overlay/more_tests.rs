@@ -633,3 +633,17 @@ fn an_animated_reveal_lets_the_first_card_enter() {
         }
     }
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_turn_whose_frame_is_not_due_never_waits_on_the_present_thread() {
+    use crate::display_link::Opportunity;
+    let mut waits = 0;
+    assert_eq!(frame::claim(Some(Opportunity::Wait), || waits += 1), None);
+    assert_eq!(waits, 0);
+    let at = Instant::now();
+    assert_eq!(frame::claim(Some(Opportunity::Tick(at)), || waits += 1), Some(Some(at)));
+    assert_eq!(frame::claim(Some(Opportunity::Now), || waits += 1), Some(None));
+    assert_eq!(frame::claim(None, || waits += 1), Some(None));
+    assert_eq!(waits, 3);
+}
