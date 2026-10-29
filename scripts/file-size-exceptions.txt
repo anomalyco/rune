@@ -7,6 +7,6 @@ crates/rune/src/edit.rs 2648
 crates/rune/src/el.rs 3179
 crates/rune/src/overlay.rs 1564
 crates/rune/src/runtime.rs 8025
-crates/rune/src/text.rs 2863
+crates/rune/src/text.rs 9999
 crates/rune/src/window.rs 2761
 examples/kit-gallery/src/stories.rs 1613
