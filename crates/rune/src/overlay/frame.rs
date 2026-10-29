@@ -51,6 +51,11 @@ pub(super) fn submit_and_present<T: 'static>(live: &mut Live, renderer: &Rendere
     if let Backing::Window(w) = &live.backing {
         w.pre_present_notify();
     }
+    #[cfg(all(target_os = "macos", feature = "metal-spike"))]
+    if crate::gpu_metal::native(&gpu.device) {
+        renderer.submit(&gpu.queue, encoder);
+        return gpu.queue.present(frame);
+    }
     #[cfg(target_os = "macos")]
     {
         if !prewarm && live.materials.presents_plainly() && renderer.submits_plainly() {

@@ -31,6 +31,9 @@ svg = ["dep:resvg"]
 # `Tray::new` returns `TrayError::Unsupported` on Linux and a Wayland session's global shortcuts
 # return `ShortcutError::Unsupported`; X11 shortcuts keep working. No effect on other platforms.
 dbus = ["dep:zbus", "dep:tokio", "dep:futures-util"]
+# macOS spike (research/34): a native Metal backend behind `RUNE_GPU_BACKEND=metal`, through
+# wgpu's `custom` backend. Clears and presents only; not for apps.
+metal-spike = ["wgpu/custom", "dep:objc2-quartz-core", "dep:libc"]
 
 [dependencies]
 procwatch = { path = "../procwatch", optional = true }
@@ -94,6 +97,7 @@ objc2-core-video = { version = "0.3", features = ["CVPixelBufferIOSurface", "obj
 # Unused by name: its default features give IOSurfaceRef the CF `Type` impl objc2-core-video needs.
 objc2-io-surface = "0.3"
 objc2-metal = "0.3"
+objc2-quartz-core = { version = "0.3.2", optional = true, default-features = false, features = ["std", "bitflags", "CALayer", "CAMetalLayer", "objc2-core-foundation", "objc2-core-graphics", "objc2-metal"] }
 block2-metal = { package = "block2", version = "0.6" }
 # Video playback (`Video`): AVPlayer, its video output and the poster/headless image generator.
 objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVAsset", "AVAssetImageGenerator", "AVAssetTrack", "AVMediaFormat", "AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "objc2-core-foundation", "objc2-core-graphics", "objc2-core-media", "objc2-core-video"] }
@@ -131,6 +135,10 @@ wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"]
 wgpu = { version = "~30.0.1", default-features = false, features = ["counters"] }
 # Thread and process CPU clocks in the overlay cost example.
 libc = "0.2"
+
+[[example]]
+name = "metal_spike_dispatch"
+required-features = ["metal-spike"]
 
 [[example]]
 name = "tree_swap"

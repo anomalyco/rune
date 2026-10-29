@@ -417,6 +417,8 @@ impl Gpu {
     /// records on Rune's device still work; wgpu just doesn't check their argument buffers.
     pub fn instance() -> wgpu::Instance {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
+        #[cfg(all(target_os = "macos", feature = "metal-spike"))]
+        if crate::gpu_metal::enabled() { return crate::gpu_metal::instance(); }
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
         // An HWND's DXGI swapchain is opaque only; DirectComposition composites alpha on every GPU.
