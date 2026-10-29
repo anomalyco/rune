@@ -36,6 +36,8 @@ use crate::tooling::AppSpec;
 use crate::window::{AnyHost, WakeEvent};
 use crate::{ConfiguredOverlay, DisplayTarget, KeyPolicy, OverlayInput, OverlayOptions, OverlayPlacement, OverlaySupport};
 
+#[path = "overlay_cursor.rs"]
+mod cursor;
 #[path = "overlay_requests.rs"]
 mod requests;
 use requests::{Requests, Update};
@@ -895,24 +897,6 @@ impl<T: 'static> Overlay<T> {
 }
 
 impl<T: 'static> Overlay<T> {
-    /// The runtime's cursor while the pointer is over a hit area of a shown overlay that takes
-    /// input; the arrow once when it leaves, so `Cursor::Hidden` never outlives the overlay or
-    /// the hover, and a click-through area leaves the cursor to the window under it.
-    fn apply_cursor(&mut self) {
-        let input = self.options.input.resolved(self.interactive);
-        let over = self.rt.pointer().is_some_and(|(x, y)| {
-            x >= 0.0 && y >= 0.0 && x < self.at.size.0 && y < self.at.size.1
-                && (input != OverlayInput::Regions || self.rt.pointer_captured()
-                    || self.rt.hit_regions().iter().any(|r| crate::overlay_options::contains(*r, x, y)))
-        });
-        let active = self.visible && input != OverlayInput::None && over;
-        let want = self.rt.cursor();
-        let (Some(Live { backing: Backing::Window(window), .. }), Some(cursor)) = (&self.live, &mut self.cursor) else { return };
-        cursor.apply(window, want, active);
-        #[cfg(target_os = "macos")]
-        if let Some(panel) = &self.panel { panel.set_cursor(active.then_some(want)); }
-    }
-
     fn observe_pointer(&mut self, x: f32, y: f32) {
         if self.rt.pointer_captured() || (x >= 0.0 && y >= 0.0 && x < self.at.size.0 && y < self.at.size.1) {
             self.dirty |= self.rt.observe_pointer(x, y);
