@@ -18,7 +18,7 @@ use controls::{button_all_states, button_icon, button_playground, button_sizes, 
 use display::{accordion_basic, accordion_multiple, accordion_single, badge_accent, badge_appearances, badge_basic, badge_high_contrast, badge_subtle, card_error, card_info, card_normal, card_success, card_warning, collapsible_basic, collapsible_ghost, keybind_all, keybind_multiple, keybind_playground, keybind_symbols, keybind_variants, list_active_icon, list_basic, list_divider, list_empty, list_grouped, list_no_search, list_with_add, loader_basic, loader_sizes, progress_basic, progress_indeterminate, progress_no_label, rolling_text_basic, segmented_basic, segmented_controlled, spinner_basic, spinner_sizes};
 use inputs::{field_direct_child, field_invalid, field_text_input, field_textarea, select_disabled, select_grouped, select_invalid, select_playground, select_with_field, text_input_appearances, text_input_controlled, text_input_copy, text_input_playground, text_input_states, text_input_with_field, textarea_controlled, textarea_playground, textarea_states, textarea_with_field};
 use markdown::{
-    markdown_basic, markdown_code, markdown_diagrams, markdown_lenient, markdown_mermaid_charts, markdown_mermaid_flows, markdown_mermaid_git, markdown_mermaid_hover, markdown_mermaid_maps, markdown_mermaid_shapes, markdown_streaming, markdown_table_styles,
+    markdown_basic, markdown_code, markdown_diagrams, markdown_lenient, markdown_mermaid_charts, markdown_mermaid_data, markdown_mermaid_flows, markdown_mermaid_git, markdown_mermaid_hover, markdown_mermaid_maps, markdown_mermaid_shapes, markdown_mermaid_systems, markdown_streaming, markdown_table_styles,
     markdown_walkthrough,
 };
 use overlays::{hover_card_basic, menu_appearances, menu_basic, menu_checkbox, menu_radio, menu_rich, menu_submenu, popover_basic, popover_controlled, toast_all, tooltip_keybind, tooltip_path, tooltip_simple, tooltip_title_description};
@@ -187,6 +187,8 @@ stories! {
     "rune-markdown--mermaid-charts" => markdown_mermaid_charts,
     "rune-markdown--mermaid-maps" => markdown_mermaid_maps,
     "rune-markdown--mermaid-git" => markdown_mermaid_git,
+    "rune-markdown--mermaid-data" => markdown_mermaid_data,
+    "rune-markdown--mermaid-systems" => markdown_mermaid_systems,
     "rune-markdown--mermaid-flows" => markdown_mermaid_flows,
     "rune-markdown--mermaid-hover" => markdown_mermaid_hover,
     "rune-markdown--table-styles" => markdown_table_styles,

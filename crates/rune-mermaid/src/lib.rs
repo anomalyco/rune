@@ -1,8 +1,8 @@
 //! Native ```` ```mermaid ```` diagrams: flowcharts, sequence, state, class and
 //! entity-relationship diagrams, gantt and pie charts, mindmaps, timelines, user journeys, git
-//! graphs and quadrant charts, parsed and laid out in Rust and drawn with
-//! [`rune::Shape`]s and text, so they theme with the app and stay crisp at any scale. No
-//! JavaScript, web view or network.
+//! graphs, quadrant and XY charts, sankey, block, requirement and C4 diagrams, parsed and laid out
+//! in Rust and drawn with [`rune::Shape`]s and text, so they theme with the app and stay crisp at
+//! any scale. No JavaScript, web view or network.
 //!
 //! **Flowcharts** (`graph` or `flowchart`, directions `TD`/`TB`/`BT`/`LR`/`RL`): node shapes
 //! `[rect]`, `(rounded)`, `([stadium])`, `[[subroutine]]`, `[(cylinder)]`, `((circle))`,
@@ -64,12 +64,37 @@
 //! `quadrant-1` to `quadrant-4`, and `Name: [x, y]` points with `radius`, `color`, `stroke-color`
 //! and `stroke-width`, inline or from `classDef` and `:::class`.
 //!
+//! **XY charts** (`xychart-beta`, `xychart-beta horizontal`): `title`, `x-axis` as `[categories]`
+//! or `min --> max`, `y-axis "title" min --> max`, and `bar` and `line` series (optionally named,
+//! with a legend). Without a y range the axis rounds out from the data and takes in zero.
+//!
+//! **Sankey diagrams** (`sankey-beta`): `source,target,value` CSV rows with quoted fields. Nodes
+//! sit in columns by their longest path, sinks last, joined by bands as thick as their flow.
+//!
+//! **Block diagrams** (`block-beta`): `columns n`, blocks with the flowchart shapes, `id:n` spans,
+//! `space[:n]`, nested `block[:id[:n]] … end` groups, block arrows `id<["label"]>(right|left|up|down|x|y)`,
+//! edges with labels, and `style`/`classDef`/`class`. Blocks fill rows left to right and wrap.
+//!
+//! **Requirement diagrams** (`requirementDiagram`): `requirement` (and the functional, interface,
+//! performance, physical and design-constraint kinds) and `element` blocks with their fields,
+//! `a - satisfies -> b` and `b <- copies - a` relationships of the seven kinds, `direction`, and
+//! `style`/`classDef`/`class`/`:::class`.
+//!
+//! **C4 diagrams** (`C4Context`, `C4Container`, `C4Component`, `C4Dynamic`, `C4Deployment`):
+//! `Person`, `System`, `Container` and `Component` with their `Db`, `Queue` and `_Ext` forms;
+//! `Boundary`, `Enterprise_Boundary`, `System_Boundary`, `Container_Boundary` and
+//! `Deployment_Node`/`Node` frames, nested; `Rel`, `BiRel`, `Rel_Back`, the `Rel_U`/`D`/`L`/`R`
+//! forms and `RelIndex`, with technology, numbered in `C4Dynamic`. Style and layout updates are
+//! read and left out.
+//!
 //! **Leniency.** A statement that doesn't read is skipped and the rest still draws; a shape opener
 //! without its closer (`B[/items split view]`) is a plain rectangle holding the text as written;
 //! blocks left open close at the end. [`render`] returns `None`, so callers can show the source,
 //! only for a diagram type it doesn't know (kanban, packet, architecture, …), when nothing reads,
 //! or past the size bounds (400 items, nesting 8 deep).
 
+mod block;
+mod c4;
 mod canvas;
 mod chart;
 mod class;
@@ -86,12 +111,15 @@ mod layered_draw;
 mod mindmap;
 mod pie;
 mod quadrant;
+mod requirement;
 mod route;
+mod sankey;
 mod sequence;
 mod sequence_draw;
 mod shape;
 mod state;
 mod timeline;
+mod xychart;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -218,6 +246,11 @@ pub(crate) enum Diagram {
     Journey(journey::Journey),
     Git(git::GitGraph),
     Quadrant(quadrant::Quadrant),
+    XyChart(xychart::XyChart),
+    Sankey(sankey::Sankey),
+    Block(block::BlockDiagram),
+    Requirement(requirement::Requirements),
+    C4(c4::C4),
 }
 
 pub(crate) struct Parsed {
@@ -295,6 +328,11 @@ pub(crate) fn parse(src: &str) -> Option<Parsed> {
         "journey" => journey::parse(&body).map(|j| (j.title.clone(), Diagram::Journey(j)))?,
         "gitGraph" | "gitGraph:" => git::parse(rest, &body).map(|g| (None, Diagram::Git(g)))?,
         "quadrantChart" => quadrant::parse(&body).map(|q| (q.title.clone(), Diagram::Quadrant(q)))?,
+        "xychart-beta" | "xychart" => xychart::parse(rest, &body).map(|x| (x.title.clone(), Diagram::XyChart(x)))?,
+        "sankey-beta" | "sankey" => sankey::parse(&body).map(|s| (None, Diagram::Sankey(s)))?,
+        "block-beta" | "block" => block::parse(&body).map(|b| (None, Diagram::Block(b)))?,
+        "requirementDiagram" => requirement::parse(&body).map(|r| (None, Diagram::Requirement(r)))?,
+        "C4Context" | "C4Container" | "C4Component" | "C4Dynamic" | "C4Deployment" => c4::parse(kind, &body).map(|c| (c.title.clone(), Diagram::C4(c)))?,
         _ => return None,
     };
     Some(Parsed { title: body_title.or(fm_title), diagram })
@@ -327,6 +365,11 @@ pub(crate) fn scene(src: &str, paint: &DiagramStyle, hover: Option<(Hover, Color
         Diagram::Journey(j) => journey::draw(j, paint),
         Diagram::Git(g) => git::draw(g, paint),
         Diagram::Quadrant(q) => quadrant::draw(q, paint),
+        Diagram::XyChart(x) => xychart::draw(x, paint),
+        Diagram::Sankey(s) => sankey::draw(s, paint),
+        Diagram::Block(b) => block::draw(b, paint),
+        Diagram::Requirement(r) => requirement::draw(r, paint, hover),
+        Diagram::C4(c) => c4::draw(c, paint, hover),
     }?;
     Some(s.with_title(parsed.title))
 }

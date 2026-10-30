@@ -3,7 +3,7 @@
 
 use rune::{Align, Color, TextStyle};
 
-use super::canvas::{Canvas, Measured, Scene, ellipse, fit, measure, over_color, room, rounded_rect};
+use super::canvas::{Canvas, Measured, Scene, ellipse, fit, measure, measure_wrap, over_color, room, rounded_rect};
 use super::connector::{self, label_box, title_box};
 use super::layered::{GCluster, GEdge, Graph, Spacing, layout};
 use super::route::Ctx;
@@ -53,6 +53,8 @@ pub(crate) enum Head {
     ZeroOrOne,
     OneOrMore,
     ZeroOrMore,
+    /// A circle with a cross: the container's end of a requirement's `contains`.
+    Contains,
 }
 
 #[derive(Debug)]
@@ -106,12 +108,22 @@ pub(crate) enum DrawNode {
         size: [f32; 2],
         style: NodeStyle,
     },
+    /// Lines of text, each in its own font, down a filled shape in `[fill, border, text]` (C4
+    /// elements), under a person glyph when `person`.
+    Card {
+        shape: NodeShape,
+        lines: Vec<(Measured, TextStyle)>,
+        size: [f32; 2],
+        cluster: Option<usize>,
+        colors: [Color; 3],
+        person: bool,
+    },
 }
 
 impl DrawNode {
     fn size(&self) -> [f32; 2] {
         match self {
-            DrawNode::Shape { size, .. } | DrawNode::ClassBox { size, .. } | DrawNode::Entity { size, .. } => *size,
+            DrawNode::Shape { size, .. } | DrawNode::ClassBox { size, .. } | DrawNode::Entity { size, .. } | DrawNode::Card { size, .. } => *size,
             DrawNode::Start { .. } => [18.0, 18.0],
             DrawNode::End { .. } => [22.0, 22.0],
             DrawNode::Bar { .. } => [64.0, 8.0],
@@ -120,7 +132,7 @@ impl DrawNode {
 
     fn shape(&self) -> NodeShape {
         match self {
-            DrawNode::Shape { shape, .. } => *shape,
+            DrawNode::Shape { shape, .. } | DrawNode::Card { shape, .. } => *shape,
             DrawNode::Start { .. } | DrawNode::End { .. } => NodeShape::Circle,
             DrawNode::Bar { .. } | DrawNode::ClassBox { .. } | DrawNode::Entity { .. } => NodeShape::Rect,
         }
@@ -132,7 +144,8 @@ impl DrawNode {
             | DrawNode::Start { cluster }
             | DrawNode::End { cluster }
             | DrawNode::Bar { cluster }
-            | DrawNode::ClassBox { cluster, .. } => *cluster,
+            | DrawNode::ClassBox { cluster, .. }
+            | DrawNode::Card { cluster, .. } => *cluster,
             DrawNode::Entity { .. } => None,
         }
     }
@@ -319,6 +332,22 @@ fn draw_node(c: &mut Canvas, node: &DrawNode, ctr: [f32; 2], paint: &DiagramStyl
                 y += 3.0;
             }
         }
+        DrawNode::Card { shape, lines, size, colors, person, .. } => {
+            shape::draw(c, *shape, &Measured::default(), ctr, *size, *colors, paint);
+            let cap = if *shape == NodeShape::Cylinder { 10.0 } else { 0.0 };
+            let glyph = if *person { PERSON } else { 0.0 };
+            let total = glyph + lines.iter().map(|l| l.0.size[1] + 3.0).sum::<f32>() - 3.0;
+            let mut y = ctr[1] - total / 2.0 + cap / 2.0;
+            if *person {
+                c.fill(ellipse([ctr[0], y + 6.0], 6.0, 6.0), colors[2]);
+                c.fill(super::canvas::arc([ctr[0], y + 23.0], 11.0, 8.5, 180.0, 360.0, 16), colors[2]);
+                y += glyph;
+            }
+            for (m, font) in lines {
+                c.label(m, [ctr[0], y + m.size[1] / 2.0], *font, colors[2], Align::Center);
+                y += m.size[1] + 3.0;
+            }
+        }
         DrawNode::Entity { name, rows, cols, size, style } => {
             let (fill, border, text_color) = style.resolve(paint);
             let (x0, y0, x1, y1) = (ctr[0] - size[0] / 2.0, ctr[1] - size[1] / 2.0, ctr[0] + size[0] / 2.0, ctr[1] + size[1] / 2.0);
@@ -346,6 +375,32 @@ fn draw_node(c: &mut Canvas, node: &DrawNode, ctr: [f32; 2], paint: &DiagramStyl
             }
         }
     }
+}
+
+/// The room a [`DrawNode::Card`]'s person glyph takes above its text.
+pub(crate) const PERSON: f32 = 30.0;
+
+/// A box of a stereotype, a name and two sections of rows (class members, requirement fields).
+pub(crate) fn class_box(stereo: Option<&str>, name: &str, fields: &[String], methods: &[String], cluster: Option<usize>, style: NodeStyle, paint: &DiagramStyle) -> DrawNode {
+    let head_font = TextStyle { weight: 600.0, ..paint.font };
+    let mem_font = TextStyle { size: paint.font.size - 1.0, line_height: paint.font.line_height - 2.0, ..paint.font };
+    let stereo_font = TextStyle { size: paint.font.size - 2.0, line_height: paint.font.line_height - 4.0, italic: true, ..paint.font };
+    let stereo = stereo.map(|s| measure_wrap(&format!("«{s}»"), stereo_font, 240.0));
+    let name = measure_wrap(name, head_font, 240.0);
+    let fields: Vec<Measured> = fields.iter().map(|f| measure_wrap(f, mem_font, 240.0)).collect();
+    let methods: Vec<Measured> = methods.iter().map(|m| measure_wrap(m, mem_font, 240.0)).collect();
+    let mut w = name.size[0].max(stereo.as_ref().map_or(0.0, |s| s.size[0]));
+    for m in fields.iter().chain(&methods) {
+        w = w.max(m.size[0]);
+    }
+    let w = (w + 26.0).max(84.0);
+    let mut h = 16.0 + name.size[1] + stereo.as_ref().map_or(0.0, |s| s.size[1] + 2.0);
+    for sec in [&fields, &methods] {
+        if !sec.is_empty() {
+            h += 9.0 + sec.iter().map(|m| m.size[1] + 3.0).sum::<f32>();
+        }
+    }
+    DrawNode::ClassBox { stereo, name, fields, methods, size: [w, h.max(38.0)], cluster, style }
 }
 
 /// An entity's padding inside each cell: `[across, down]`.

@@ -10,10 +10,13 @@
 //! (`erDiagram` with attribute tables and crow's-foot cardinalities), gantt charts (`gantt` with
 //! sections, durations, `after`/`until` links and `excludes`), pie charts (`pie`, with
 //! `showData`), mindmaps (`mindmap`), timelines (`timeline`), user journeys (`journey`), git
-//! graphs (`gitGraph` with branches, merges, cherry-picks, tags and commit types) and quadrant
-//! charts (`quadrantChart`). Lines that don't read are skipped and the rest
-//! draws; an unknown diagram type, or a source where nothing reads, returns `None`, and
-//! [`crate::Markdown`] falls back to the code block.
+//! graphs (`gitGraph` with branches, merges, cherry-picks, tags and commit types), quadrant
+//! charts (`quadrantChart`), XY charts (`xychart-beta` bars and lines, upright or horizontal),
+//! sankey diagrams (`sankey-beta`), block diagrams (`block-beta` with columns, spans, groups and
+//! block arrows), requirement diagrams (`requirementDiagram`) and C4 diagrams (`C4Context`,
+//! `C4Container`, `C4Component`, `C4Dynamic` and `C4Deployment`). Lines that don't read are
+//! skipped and the rest draws; an unknown diagram type, or a source where nothing reads, returns
+//! `None`, and [`crate::Markdown`] falls back to the code block.
 
 use rune::El;
 

@@ -382,6 +382,95 @@ pub(super) fn markdown_mermaid_git(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     col().w(560.0).child(Markdown::new(GIT).style(style).build(k))
 }
 
+/// An XY chart, a sankey diagram and a block diagram.
+const DATA: &str = r#"```mermaid
+xychart-beta
+    title "Frame time by build"
+    x-axis [debug, release, perf, wasm]
+    y-axis "Milliseconds" 0 --> 20
+    bar "p50" [16.2, 6.1, 5.8, 9.4]
+    line "p99" [19.1, 8.3, 7.9, 13.2]
+```
+
+```mermaid
+sankey-beta
+Input,Layout,40
+Input,Text,25
+Layout,Paint,32
+Layout,Idle,8
+Text,Paint,25
+Paint,GPU,50
+Paint,Cache,7
+```
+
+```mermaid
+block-beta
+    columns 3
+    app["App"]:3
+    view["Views"] state[("State")] motion(["Motion"])
+    block:core:2
+        columns 2
+        layout["Layout"] text["Text"]
+    end
+    gpu{{"wgpu"}}
+    arrow<["frames"]>(down):3
+    screen["Screen"]:3
+    view --> layout
+    state -- "reads" --> text
+```
+"#;
+
+pub(super) fn markdown_mermaid_data(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let style = MarkdownStyle::from_kit(k).diagram_max_width(560.0);
+    col().w(560.0).child(Markdown::new(DATA).style(style).build(k))
+}
+
+/// A requirement diagram and a C4 container diagram.
+const SYSTEMS: &str = r#"```mermaid
+requirementDiagram
+    requirement fast_start {
+    id: 1
+    text: First frame in 100 ms.
+    risk: high
+    verifymethod: test
+    }
+    performanceRequirement idle {
+    id: 1.1
+    text: An idle window draws nothing.
+    risk: medium
+    verifymethod: analysis
+    }
+    element runtime {
+    type: crate
+    docref: crates/rune
+    }
+    fast_start - contains -> idle
+    runtime - satisfies -> fast_start
+    runtime - verifies -> idle
+```
+
+```mermaid
+C4Container
+    title Notes app
+    Person(user, "Writer", "Takes notes on a laptop")
+    System_Boundary(app, "Notes") {
+        Container(ui, "Window", "Rust, Rune", "Draws the editor")
+        Container(sync, "Sync", "Rust", "Merges edits")
+        ContainerDb(db, "Store", "SQLite", "Notes and history")
+    }
+    System_Ext(cloud, "Cloud backup", "Keeps a copy")
+    Rel(user, ui, "Types in")
+    Rel(ui, sync, "Sends edits")
+    Rel(sync, db, "Reads and writes", "SQL")
+    Rel(sync, cloud, "Uploads", "HTTPS")
+```
+"#;
+
+pub(super) fn markdown_mermaid_systems(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let style = MarkdownStyle::from_kit(k).diagram_max_width(560.0);
+    col().w(560.0).child(Markdown::new(SYSTEMS).style(style).build(k))
+}
+
 pub(super) fn markdown_mermaid_flows(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     let style = MarkdownStyle::from_kit(k).diagram_max_width(560.0);
     col().w(560.0).child(Markdown::new(FLOWS).style(style).build(k))

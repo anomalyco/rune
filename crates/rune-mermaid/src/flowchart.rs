@@ -158,13 +158,13 @@ struct Parser {
     over: bool,
 }
 
-struct Link {
-    id: Option<String>,
-    line: Line,
-    start: Head,
-    end: Head,
-    minlen: usize,
-    label: Option<String>,
+pub(crate) struct Link {
+    pub id: Option<String>,
+    pub line: Line,
+    pub start: Head,
+    pub end: Head,
+    pub minlen: usize,
+    pub label: Option<String>,
 }
 
 impl Parser {
@@ -368,7 +368,7 @@ fn node_ref(c: &mut Cur) -> Option<NodeRef> {
     Some(NodeRef { id, shape, class })
 }
 
-fn ident(c: &mut Cur) -> Option<String> {
+pub(crate) fn ident(c: &mut Cur) -> Option<String> {
     let start = c.i;
     while let Some(ch) = c.peek() {
         let word = |ch: char| ch.is_alphanumeric() || ch == '_';
@@ -540,7 +540,7 @@ fn split_top_commas(s: &str) -> Vec<&str> {
 
 /// A node's bracketed label and shape, `None` when it has none. An opener without its closer
 /// reads as a plain rectangle holding the text as written, so `[/route]` is the label `/route`.
-fn shape(c: &mut Cur) -> Option<(Option<String>, NodeShape)> {
+pub(crate) fn shape(c: &mut Cur) -> Option<(Option<String>, NodeShape)> {
     let start = c.i;
     if !c.rest().starts_with("@{") && !matches!(c.peek()?, '[' | '(' | '{' | '>') {
         return None;
@@ -633,7 +633,7 @@ fn end_head(c: &mut Cur) -> Head {
     }
 }
 
-fn link(c: &mut Cur) -> Option<Link> {
+pub(crate) fn link(c: &mut Cur) -> Option<Link> {
     // A v11 edge id, `A e1@--> B`, names the edge for a later `e1@{ … }`.
     let save = c.i;
     let id = ident(c).filter(|_| c.eat("@") && matches!(c.peek(), Some('-' | '=' | '.' | '~' | '<' | 'o' | 'x')));

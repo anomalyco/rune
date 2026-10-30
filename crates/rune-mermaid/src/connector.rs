@@ -21,11 +21,12 @@ pub(crate) fn title_box(m: &Measured, p0: [f32; 2]) -> [f32; 4] {
 }
 
 /// How far a head of kind `h` takes its end of the line back.
-fn inset(h: Head) -> f32 {
+pub(crate) fn inset(h: Head) -> f32 {
     match h {
         Head::None => 0.0,
         Head::Arrow => ARROW * 0.7,
         Head::Circle => 8.0,
+        Head::Contains => 12.0,
         Head::Cross => 4.0,
         Head::OpenTriangle => 10.0,
         Head::DiamondFilled | Head::DiamondOpen => 12.0,
@@ -152,6 +153,12 @@ fn head(c: &mut Canvas, h: Head, tip: [f32; 2], d: [f32; 2], width: f32, color: 
         Head::DiamondFilled => c.fill(diamond_head(tip, d, 12.0, 8.0), color),
         Head::DiamondOpen => c.shape(diamond_head(tip, d, 12.0, 8.0), paint.node_fill, color, width),
         Head::Circle => c.shape(ellipse(back(4.0), 4.0, 4.0), paint.node_fill, color, width),
+        Head::Contains => {
+            let (m, n) = (back(6.0), [-d[1], d[0]]);
+            c.shape(ellipse(m, 6.0, 6.0), paint.node_fill, color, width);
+            c.stroke(vec![back(0.0), back(12.0)], false, width, color);
+            c.stroke(vec![[m[0] + n[0] * 6.0, m[1] + n[1] * 6.0], [m[0] - n[0] * 6.0, m[1] - n[1] * 6.0]], false, width, color);
+        }
         Head::Cross => {
             let m = back(4.0);
             let (a, b) = ([d[0] + d[1], d[1] - d[0]], [d[0] - d[1], d[1] + d[0]]);

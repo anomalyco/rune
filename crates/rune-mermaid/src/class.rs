@@ -2,11 +2,11 @@
 
 use std::collections::HashMap;
 
-use rune::{Color, TextStyle};
+use rune::Color;
 
-use super::canvas::{Measured, Scene, measure_wrap};
+use super::canvas::Scene;
 use super::layered::Spacing;
-use super::layered_draw::{ClusterSpec, Dir, DrawNode, Edge, Head, Line, draw_layered};
+use super::layered_draw::{ClusterSpec, Dir, DrawNode, Edge, Head, Line, class_box, draw_layered};
 use super::{DiagramStyle, EdgeStyle, Hover, MAX_ITEMS, NodeStyle, clean, clean_quoted, parse_style_props, statements};
 
 #[derive(Debug)]
@@ -443,31 +443,7 @@ fn parse_side(s: &str, left: bool) -> Option<(String, Option<String>)> {
 const SPACING: Spacing = Spacing { node: 38.0, rank: 48.0, cluster: 16.0 };
 
 pub(crate) fn draw(d: &ClassDiagram, paint: &DiagramStyle, hover: Option<(Hover, Color)>) -> Option<Scene> {
-    let head_font = TextStyle { weight: 600.0, ..paint.font };
-    let mem_font = TextStyle { size: paint.font.size - 1.0, line_height: paint.font.line_height - 2.0, ..paint.font };
-    let stereo_font = TextStyle { size: paint.font.size - 2.0, line_height: paint.font.line_height - 4.0, italic: true, ..paint.font };
-    let nodes: Vec<DrawNode> = d
-        .classes
-        .iter()
-        .map(|c| {
-            let stereo = c.stereo.as_ref().map(|s| measure_wrap(&format!("«{s}»"), stereo_font, 240.0));
-            let name = measure_wrap(&c.label, head_font, 240.0);
-            let fields: Vec<Measured> = c.fields.iter().map(|f| measure_wrap(f, mem_font, 240.0)).collect();
-            let methods: Vec<Measured> = c.methods.iter().map(|m| measure_wrap(m, mem_font, 240.0)).collect();
-            let mut w = name.size[0].max(stereo.as_ref().map_or(0.0, |s| s.size[0]));
-            for m in fields.iter().chain(&methods) {
-                w = w.max(m.size[0]);
-            }
-            let w = (w + 26.0).max(84.0);
-            let mut h = 16.0 + name.size[1] + stereo.as_ref().map_or(0.0, |s| s.size[1] + 2.0);
-            for sec in [&fields, &methods] {
-                if !sec.is_empty() {
-                    h += 9.0 + sec.iter().map(|m| m.size[1] + 3.0).sum::<f32>();
-                }
-            }
-            DrawNode::ClassBox { stereo, name, fields, methods, size: [w, h.max(38.0)], cluster: c.namespace, style: c.style }
-        })
-        .collect();
+    let nodes: Vec<DrawNode> = d.classes.iter().map(|c| class_box(c.stereo.as_deref(), &c.label, &c.fields, &c.methods, c.namespace, c.style, paint)).collect();
     let clusters: Vec<ClusterSpec> = d.namespaces.iter().map(|n| ClusterSpec { title: n.title.clone(), parent: None }).collect();
     draw_layered(d.dir, &nodes, &d.edges, &clusters, &SPACING, paint, hover)
 }
