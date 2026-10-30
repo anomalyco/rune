@@ -39,6 +39,9 @@ struct Slots {
     /// Earlier storage, and how many writes it holds.
     spares: VecDeque<(Arc<BufferRaw>, u64)>,
     swaps: u64,
+    /// Bytes swaps copied forward, for tests.
+    #[cfg(test)]
+    copied: u64,
 }
 
 /// Whether anything besides the store holds `raw`: a command buffer's keep list, recorded or
@@ -65,7 +68,11 @@ impl Slots {
 
 impl Store {
     pub(super) fn new(raw: BufferRaw) -> Self {
-        let slots = Slots { current: Arc::new(raw), writes: 0, log: VecDeque::new(), spares: VecDeque::new(), swaps: 0 };
+        let slots = Slots {
+            current: Arc::new(raw), writes: 0, log: VecDeque::new(), spares: VecDeque::new(), swaps: 0,
+            #[cfg(test)]
+            copied: 0,
+        };
         Store { slots: Mutex::new(slots), pinned: AtomicBool::new(false) }
     }
 
@@ -110,8 +117,11 @@ impl Store {
         };
         let missed = if held == u64::MAX { 0..size } else { slots.missed(held) };
         let end = offset + data.len() as u64;
-        next.copy_from(&slots.current, missed.start..missed.end.min(offset));
-        next.copy_from(&slots.current, missed.start.max(end)..missed.end);
+        // Only what the write leaves: a write over everything it missed copies nothing.
+        let (before, after) = (missed.start..missed.end.min(offset), missed.start.max(end)..missed.end);
+        #[cfg(test)] { slots.copied += before.end.saturating_sub(before.start) + after.end.saturating_sub(after.start); }
+        next.copy_from(&slots.current, before);
+        next.copy_from(&slots.current, after);
         let held = slots.writes;
         let old = std::mem::replace(&mut slots.current, next);
         slots.spares.push_back((old, held));
@@ -128,4 +138,8 @@ impl Store {
         let slots = self.slots.lock();
         (slots.spares.len(), slots.swaps)
     }
+
+    /// Bytes swaps copied forward, for tests.
+    #[cfg(test)]
+    pub(super) fn copied(&self) -> u64 { self.slots.lock().copied }
 }

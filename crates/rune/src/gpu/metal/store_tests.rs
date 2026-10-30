@@ -62,6 +62,44 @@ fn writes_while_the_gpu_reads_swap_storage_and_land_in_order() {
     }
 }
 
+/// A frame that writes the whole buffer while the GPU reads it swaps in a spare and copies
+/// nothing forward, and a partial write after it still copies what it leaves: every frame reads
+/// exactly what was written by then.
+#[test]
+fn a_partial_write_after_a_whole_one_reads_the_right_bytes() {
+    use wgpu::BufferUsages as B;
+    const WORDS: usize = 64;
+    let (device, queue) = gpu();
+    let source = buffer(&device, (WORDS * 4) as u64, B::COPY_SRC | B::COPY_DST);
+    let frames: [&[(usize, usize)]; 6] = [&[(0, WORDS)], &[(0, WORDS)], &[(8, 12)], &[(0, WORDS)], &[(60, 64), (0, 2)], &[(30, 31)]];
+    let out = buffer(&device, (WORDS * 4 * frames.len()) as u64, B::COPY_DST | B::MAP_READ);
+    let store = &source.as_custom::<MetalBuffer>().unwrap().store;
+    let (mut model, mut want, mut recorded) = ([0u32; WORDS], Vec::new(), None);
+    for (frame, writes) in frames.iter().enumerate() {
+        let copied = store.copied();
+        for (k, &(a, b)) in writes.iter().enumerate() {
+            let words = vec![(frame * 100 + k + 1) as u32; b - a];
+            model[a..b].copy_from_slice(&words);
+            assert!(write_in_place(&source, (a * 4) as u64, bytemuck::cast_slice(&words)));
+        }
+        if writes[..] == [(0, WORDS)] { assert_eq!(store.copied(), copied, "frame {frame} wrote everything, so copied nothing"); }
+        want.extend_from_slice(&model);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.copy_buffer_to_buffer(&source, 0, &out, (frame * WORDS * 4) as u64, (WORDS * 4) as u64);
+        if let Some(last) = recorded.replace(encoder.finish()) {
+            let index = queue.submit([last]);
+            device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None }).unwrap();
+        }
+    }
+    queue.submit(recorded);
+    assert_eq!(swaps(&source).1, frames.len() as u64 - 1, "each frame but the first swapped");
+    assert!(store.copied() > 0, "partial writes copied what they left");
+    let got = read(&device, &out);
+    for (frame, (got, want)) in got.chunks(WORDS * 4).zip(want.chunks(WORDS)).enumerate() {
+        assert_eq!(got, bytemuck::cast_slice::<u32, u8>(want), "frame {frame}");
+    }
+}
+
 const FILL: &str = "
 @group(0) @binding(0) var<uniform> color: vec4<f32>;
 @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
