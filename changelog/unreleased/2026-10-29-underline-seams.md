@@ -1,1 +1,0 @@
-- Text: underlines sit on whole device pixels, and one that ends its line runs to the text box's rounded-up edge, so a link split into an element a word draws one line with no gaps at the spaces.

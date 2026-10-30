@@ -1,1 +1,0 @@
-- **`Runtime::events` stays small.** A live window, overlay or web canvas no longer formats an input marker (`press …`, `wheel …`, `key …`) on every input unless `--trace` is on, and a headless runtime keeps at most 512 unread markers, dropping the oldest half when it fills. Tests that read `rt.events` after a few inputs see the same markers as before.

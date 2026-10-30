@@ -1,1 +1,0 @@
-- `El::help_when_truncated` now shows its tooltip when an `El::truncate_fade` text runs past its box, as it does for `truncate` and `max_lines`, so a faded label no longer needs a "…" to get its tooltip. The fade still draws no ellipsis.

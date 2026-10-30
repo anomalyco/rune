@@ -1,1 +1,0 @@
-- A `memo` hit no longer deep-clones its subtree: the cached subtree is shared, its flattened nodes and layout subtree are reused when its parent didn't change, and apply skips unchanged reused subtrees. On a chat-sized test window, a keystroke's commit takes about half the CPU and 79% fewer bytes. No API change.

@@ -5,6 +5,1032 @@ without a code change (goldens, layout, input), newest first, with the rev that 
 
 ## dev
 
+- `RollingText` now remembers at most 512 labels (and 256 KiB of text) per thread, dropping the least recently built; a label that comes back after that starts its roll over (t841).
+
+- Docs: a "Fast apps" page (rules with before and after snippets, the memo lesson) and `scripts/app-audit <repo>`, a quick grep for the slow patterns it lists; no API change.
+
+- **`Tx::scroll_center` and `Tx::scroll_center_in` reveal and vertically centre elements, virtual
+  rows and `TextHighlight`s.** Passing `"row/mark"` mounts an unrealized virtual row `row` first
+  and centres `mark` inside it, gliding on the scroll spring (`scroll_center_instant` and
+  `scroll_center_in_instant` jump, as `Tx::instant` does). A centring sent mid-glide keeps the
+  glide's speed without carrying past its new stop. `Tx::scroll_into_view` takes `"row/mark"`
+  too, and `Tx::scroll_key_to` also resolves `TextHighlight` keys.
+
+- **`Cx::layout` and `Cx::layout_with` read an element inside `virtual_rows` (or `virtualize`)
+  where it draws.** With rows culled above the mounted window, the rect read was the culled
+  rows' height too far down.
+
+- A `Tx::launch` flight re-aimed mid-flight (its row or an ancestor moved) keeps the speed it was drawn moving at, including the part a scroll view's correction under it added, instead of slowing for a frame and picking up again. `Scene::shift_travel`, which nothing called, is replaced by `Scene::retarget_drawn`, a `set_frame` that starts the new path where the renderer draws the node and at the speed it's drawn moving. The motion audit reports such a one-frame speed dip as `stall`.
+
+- A `memo` hit no longer deep-clones its subtree: the cached subtree is shared, its flattened nodes and layout subtree are reused when its parent didn't change, and apply skips unchanged reused subtrees. On a chat-sized test window, a keystroke's commit takes about half the CPU and 79% fewer bytes. No API change.
+
+- Growth stacks: a row that moves to a new place and changes height in the same animated commit now slides from where it was drawn, instead of stepping by its height change on the commit's frame. A `Tx::launch` flight whose row (or an ancestor) is moved mid-flight now heads for the new place from where it was drawn, instead of jumping by the move. And when a commit changes the padding, gap or margin above a row's contents (a row that stops sitting close to the one above it), those contents slide from where they were drawn; a sibling's new size still moves the contents under it at once.
+
+- **`Tx::keep_on_screen` holds a stuck header in place.** Shutting a group from its `sticky_top` header while the header is stuck (for example in a `stick_bottom` timeline scrolled into a group taller than the view) keeps the header where it's drawn for the whole commit, and the rows below fold up to it on the growth spring. Before, the header unstuck as its group shrank, the scroll jumped to bring it back, and the rows below dipped hundreds of points while the group's first rows flashed for a frame. Anchors that aren't stuck behave as before.
+
+- **`Latest` gains `set_waker`, `request_if_changed` and `request_opt`.** `set_waker` attaches the waker in `setup` to a `Latest::default().debounce(..)` built in `init`, keeping its debounce, pending request and answer. `request_if_changed(&key, work)` (`K: Clone + PartialEq`) does nothing when the key equals the last such request's, so `poll` can call it every time without restarting work; `request`, `request_opt` and `cancel` forget the key. `request_opt` takes work returning `Option<T>`: `None` lands nothing and doesn't wake the window, but still supersedes older requests.
+
+- `El::anchored` overlays draw at their anchor's zoom: inside a subtree drawn at `El::scale(1.6)`, a popover and its text draw at 1.6 (crisp once still) beside where the anchor draws, growing away from it, with the gap zoomed and flipping, `anchored_fit` and hit testing on the drawn size. An overlay with its own `El::scale` keeps it instead of the inherited zoom, so popovers already wrapped in `.scale(zoom)` by hand don't zoom twice. One that scales a child inside it instead needs `El::anchored_unscaled()`, which keeps an overlay at window scale.
+
+- `El::help_when_truncated` now shows its tooltip when an `El::truncate_fade` text runs past its box, as it does for `truncate` and `max_lines`, so a faded label no longer needs a "…" to get its tooltip. The fade still draws no ellipsis.
+
+- **`rune::Latest<T>`: latest-wins background requests.** `Latest::new(waker)` (the `setup`
+  waker), optionally `.debounce(wait)`; `request(key, |key| work(key))` from a handler runs the
+  work on a small shared worker pool (up to four threads, which exit when idle) and supersedes
+  every earlier request: one not yet started never runs, and a stale answer is dropped even when
+  it finishes last. The landed answer wakes the window once and `take()` returns it once, so
+  `poll` returns true only when it changed. `cancel()` and dropping the `Latest` stop its
+  requests; `is_pending()` drives a spinner. On the web the work runs on the main thread from
+  `spawn_local`. The debug stall warning points here.
+
+- A drag in a selection group reaches only text that shows: text clipped out of sight but laid out under the words (a folded part above them) no longer takes the drag, which selected everything between it and the press.
+
+- Growth stacks and virtual lists: rows an animated commit puts in a new order slide from where they were drawn into their new places on the layout spring (or the transaction's motion), instead of jumping there in one frame. Only rows whose order changed move; inserts, removals, window shifts, instant commits, Reduce Motion and rows out of sight before and after still land as before. A virtual list read from its top no longer re-anchors to the row that moved.
+
+- **Typing or streaming into a text no longer fills the layout cache with each edit's copy.**
+  The cache kept every version of an edited paragraph as a stale layout until its budget ran
+  out: about 100 copies, over 3 MB, of a 600-byte paragraph being typed into, pushing out the
+  layouts of views that would be shown again. When a node's text changes into an edit of
+  itself (most of it shared at the start and end), the old version's layouts now go at the end
+  of that commit unless another node still shows them; text replaced by something unrelated,
+  as a reader switching notes, stays cached for when it comes back. The stale budget is now
+  counted in estimated heap bytes (3 MB) rather than bytes of text.
+
+- **Resizing a window lays the last tree out again instead of running the view.** When only
+  the viewport changed since the last commit (same state, scale and env, no layout or caret
+  read that moved), a commit re-solves layout on the nodes it already has and re-breaks their
+  text at the new widths, skipping the view and flattening. A view that reads layout
+  (`Cx::layout`, `Cx::layout_size`), the caret, a breakpoint or the env still runs when what it
+  read changes. Virtual lists keep their mounted rows and lay them out again; the view runs
+  only when the viewport nears the edge of the mounted rows, or rows outside the overscan add
+  up to more than a viewport. A notes-sized Markdown page resizes in 2.5 ms per step, down from
+  3.6 ms, with 42% fewer allocations; a virtual list of Markdown rows in 0.62 ms, down from 0.82.
+
+- **A dimmed box with a solid fill fades as CSS `opacity` does.** `El::dim`, which disabled
+  kit controls use, no longer lets the box's outer shadows show through its faded fill, and
+  a fill under a gradient (a contrast button's sheen) fades with it as one, still without a
+  layer. A disabled contrast button on white now paints the browser's light grey (about 176
+  instead of 159 mid-height with the OpenCode theme), and a disabled neutral button no longer
+  shows its drop shadow through. A crisp offset shadow under a native material, backdrop blur
+  or dimmed box now leaves the interior clear too.
+
+- **Resizable playground columns** (`Playground::widths`): the story list and the right-hand controls column in `App::playground` drag by their separator edges to resize and double-click back to their default widths, persisted in `Prefs` by default for windowed apps or through `Playground::widths(load, save)`.
+
+- **Theme colours authored for sRGB blending are painted as authored now that windows blend in
+  sRGB.** A theme with `"blend": {"mode": "srgb"}`, the OpenCode theme's translucent tokens and
+  shadows, `Kit::alpha`, `Kit::on` and `Kit::from_palette`'s borders and tints re-solve alpha
+  only in a window that blends in linear light (`srgb_blend(false)`), so fills, selected rows,
+  disabled controls and status banners look as they did before the sRGB default instead of
+  double-compensated. Colours resolve for the blend mode of the window building the view
+  (`rune::theme::blends_srgb`, `rune::theme::for_blend`, `rune::theme::with_blend`), a live
+  `Tx::set_srgb_blend` re-resolves them (memoised rows included), and
+  `rune_theme_opencode::kit` returns the kit for the current mode, so get it in the view.
+
+- **Debug builds warn about two slow patterns, once per site, on stderr.** A `virtualize` list
+  handed more than 200 rows and four times what it mounts names its path and `.virtualize` call
+  site and points to `El::virtual_rows`, which builds only the mounted rows. A handler, `poll`,
+  `update` closure, `init` or `on_ready` that spends over 8 ms on the main thread and over four
+  times its CPU time warns as "`poll` blocked 263 ms (CPU 2 ms) on the main thread: move IO off
+  it with `rune::Latest` or a thread". `RUNE_PERF_WARN=0` silences both; release builds contain
+  neither. On macOS `libc` is now a regular dependency for the thread CPU clock.
+
+- Text: underlines sit on whole device pixels, and one that ends its line runs to the text box's rounded-up edge, so a link split into an element a word draws one line with no gaps at the spaces.
+
+- **Elements that never animate keep no motion tracks.** A property gets a track only when its
+  value first changes, starting from what was last drawn, so a static tree holds none: on a
+  60-card settings column (about 5,300 nodes) a commit's apply phase takes about a third less
+  time and the heap is 12 MB smaller. A node mounted with the first frame has no
+  `prop::PRESENCE` track until it leaves (`Scene::get` still reads 1.0), and fill, text,
+  border, shadow, gradient, outline, hover and press follow the same rule, so
+  `AnimationStore::track_len`, `has` and `get` see only what has moved. A `Scene::set` or
+  `Scene::animate` that leaves a property where it already rests no longer marks the node
+  changed.
+
+- `ElementInfo` implements `Default` (a plain, opaque `el()` at rest) and adds `ElementInfo::stub(key)`, so a test that stands in for `Runtime::elements` can write `ElementInfo { focused: true, ..ElementInfo::stub("send") }` and keep building when Rune adds a field.
+
+- **`rune::is_headless()`, and `--script` alone runs headless.** `is_headless()` answers from the
+  process's arguments, parsed once, whether the run renders offscreen, so an app can skip a tray,
+  global shortcuts or network work before `run` without scanning argv itself; it leaves
+  `extra_args` for an app that passes `App::args`. A window never replayed a script, so
+  `--script FILE` without `--snap`, `--video` or another output used to open a real window and
+  ignore the script; it now replays it headless like `--frames` (`--native` still opens the window).
+
+- `MenuItem::keys_first()` lets the window's own key handling see a menu item's key equivalent before the item does: the focused element, modals and `on_key` get the press first, and the item runs only if none takes it (picking it in the menu always runs it). Without it AppKit hands the chord to the menu before any view, as before.
+
+- **`rune::set_app_icon(bytes)` sets the Dock icon from image bytes.** macOS shows an `.icns`, PNG
+  or any image `NSImage` reads as the app's Dock and app-switcher icon while it runs, so an app no
+  longer needs its own `NSImage` and `setApplicationIconImage` glue. Call it from any thread,
+  before `run` (applied once the app finishes launching) or after; it fails on bytes that aren't
+  an image and does nothing elsewhere or in a headless run.
+
+- `Transition::none()`, `SpringPair::NONE` and `Spring::NONE` give a node no motion at all: it shows whole the frame it mounts and unmounts the frame after it's removed, focus returns as with any transition, and the rest of the change still animates. A spring of `Spring::NONE` becomes `Curve::Instant`, so Reduce Motion no longer stretches it into a fade the way it does a 0.001 s spring. The split shell's panes use it.
+
+- **A compositor that asks for `wgpu::Features::IMMEDIATES` can use immediates.**
+  `Compositor::features` returning `IMMEDIATES` now also raises the device's
+  `max_immediate_size` to the adapter's (4 KB on Metal), so per-draw values set with
+  `RenderPass::set_immediates` travel inside the pass instead of in a uniform written through
+  `Queue::write_buffer` or `Frame::write_buffer`, which costs a macOS overlay frame another
+  command buffer.
+
+- **An overlay whose compositor animates over a still view no longer steps or rebuilds the view
+  each frame.** When the last frame asked for no other and nothing has changed since (no input,
+  state change, timer, live value, poll or playground), a frame only advances `Runtime::clock`
+  and `Runtime::t`, then draws the last build again, so a compositor reading the clock still
+  animates. The macOS overlay frame also waits on its present thread only once a frame is due,
+  reads the panel's occlusion once per loop turn, and doesn't sample the pointer for a
+  click-through overlay that follows nothing.
+
+- On web, `App::canvas_id` mounts onto an existing `<canvas>` without locking `document.body`, `App::fit_content_height` sizes the canvas to its content height, `OsCursor` and `Tx::set_title` apply, macOS `⌘C`/`⌘A` and synchronous `copy` events work on `El::selectable` text, default web fonts include Inter Medium and SemiBold (with an `embedded-fonts` feature to omit them when `AppSpec::fonts` supplies its own), and a hidden semantic DOM layer mirrors headings, inline links and buttons over the canvas for assistive tech and Find-in-page.
+
+- **A variable font's hidden axes follow its named instances at the text's weight, as Core Text
+  draws them.** SF Mono's regular is wght 400 with YAXS 324.3; Rune set only wght, leaving YAXS
+  at the Light instance's default, so code drew thin horizontal strokes (2% less ink than
+  CoreText, mean error 0.66 at 2×; now 0.997 ink, 0.14). SF Italic's YAXS follows the same way.
+  Fonts without hidden axes (Inter, SF upright) draw as before. `coretext_compare --set mono`
+  measures SF Mono against AppKit's monospaced system font.
+
+- **Structured communication notes in `rune_kit::notes` (`markdown` feature).** `Note::new(src)`
+  and `notes::render_note` render `facts`, `compare`, `steps`, `size`, titled/marked code fences
+  (`title="…" {2-4}`), and `> [!note]` callouts alongside `Markdown` prose, tables and diagrams.
+
+- **Wayland overlays take right-clicks.** A layer-shell overlay passed on only the left
+  button, so `on_secondary_press` never fired on an overlay. Its right button now opens the
+  secondary gesture, as a window's does.
+
+- **On Linux, Rune draws on the GPU the Wayland compositor uses.** Rune took the lowest-power
+  adapter, so on a desktop with an integrated GPU beside the discrete card driving the display
+  (Hyprland on NVIDIA, for one) every window and overlay showed as a black rectangle: the
+  compositor couldn't show the integrated GPU's buffers. Rune now asks the compositor for its
+  main device (`zwp_linux_dmabuf_v1` feedback) and takes the adapter on the same PCI device,
+  falling back to the lowest-power adapter as before, which keeps laptops that drive their panel
+  from the integrated GPU on it. `WGPU_ADAPTER_NAME` (part of the adapter's name) and
+  `WGPU_POWER_PREF` (`low`, `high`, `none`) override the choice on every platform. A machine with
+  more than one GPU prints the choice and its reason to stderr once; `RUNE_GPU_LOG=1` prints it
+  anywhere.
+
+- `ConfiguredOverlay::animate_reveal`: showing an overlay no longer settles motion its state started while hidden, so a notification stack's first card plays its enter transition from the first visible frame. Without it an unretained overlay still shows settled.
+
+- **Text: a glyph no longer lands a pixel off when a colour span splits its line.** The pen is snapped to Parley's 1/256 px grid before it floors to CoreGraphics' subpixel steps, so f32 noise from summing advances in a different order (syntax highlighting, rich text spans) can't tip a glyph onto the next step.
+
+- **Mermaid flowchart and state edges are smooth curves.** Each edge leaves and enters its nodes
+  straight along the rank axis, keeps only the layout's bend points it needs to stay clear of
+  other nodes, labels and subgraph titles, and joins them with cubics, so there are no kinks or
+  wobbles and arrowheads sit on the line's last tangent. A label breaks the line around it
+  instead of sitting on a filled chip (a label left on a subgraph's border still gets one).
+  Hovering a node lights up its edges: `rune_mermaid::render_with_hover` (`Hover::Off`, `Edges`,
+  `Neighbours`, which also rings the nodes they reach, and a colour), or
+  `MarkdownStyle::diagram_hover(color, neighbours)`. Each node's hover area is keyed `node{i}`.
+
+- **`FontSmoothing` picks how text is rasterised: `On` (the macOS default, CoreText with font
+  smoothing on) or `Off` (the default on Linux, Windows and the web: CoreText with font
+  smoothing off, as `-webkit-font-smoothing: antialiased` draws).** Both run CoreGraphics'
+  glyph pipeline; `On` adds font smoothing's dilation. Set it app-wide with
+  `App::font_smoothing` or `WindowSpec::font_smoothing`, or while running with
+  `Tx::set_font_smoothing`; each mode keeps its own glyphs in the atlas. Blending is separate
+  (`srgb_blend`, on by default). `Runtime::set_font_smoothing` and `Runtime::font_smoothing` do
+  the same for a runtime an app draws itself.
+- **Breaking: `FontSmoothing::Calibrated` (Rune's previous rasteriser) is removed, and `MacOS` is
+  renamed `On`.** Its quarter-pixel pens, 0.1 pt outline
+  grow and luminance/scale coverage curve are gone, with `rune::text::glyph_coverage_exponent`.
+  `TextSystem::apple_pipeline` returns an `ApplePipeline` and `TextSystem::set_apple_pipeline`
+  takes one (no `Option`). The `glyphs_for_layout` and `glyphs_in` `scale` arguments are now
+  unused.
+
+- Glyphs rasterize the way CoreText draws them (`FontSmoothing::pipeline`): CoreGraphics' curve flattening, its y autohinter at integer sizes 7–18 px and, for `FontSmoothing::On`, the outline dilation font smoothing applies (radius from the ink's luminance bucket and the ppem, sides and tops grown, bottoms fixed). Masks land within a few levels of CoreGraphics', and glyphs in light and dark ink rasterize separately. `TextSystem::set_font_smoothing` picks the mode for a text system used directly; `TextSystem::set_apple_pipeline` overrides its stages (`ApplePipeline::SMOOTHED`, `UNSMOOTHED`).
+
+- **Glyph pens floor to CoreGraphics' subpixel steps,
+  as CoreText's quantisation does.** The step depends on the glyph's size in device pixels:
+  fifths of a pixel below 8⅓ ppem, quarters to 11.1, thirds to 16.7, halves to 33.3 and whole
+  pixels above, at every scale. Glyphs used to round to the nearest quarter pixel. Measured
+  against CoreText, the report paragraph's mean error falls to 0.06 levels at 2× and 0.10 at 1×.
+
+- **Windows and overlays blend in sRGB-encoded space by default on every platform, as Core
+  Animation, CoreText and CSS do.** Text drawn at the colour's full coverage (no compensating coverage curve)
+  now has native weight in light and dark themes, and translucent fills, shadows and blurs
+  composite as AppKit's would. `App::srgb_blend(false)` (or the overlay's) keeps linear-light
+  blending. Rune's Metal layer is now tagged sRGB, so a wide-gamut display colour-matches its
+  pixels instead of showing them as display-native values.
+
+- **macOS overlays join other apps' full-screen Spaces.** Overlay panels add
+  `NSWindowCollectionBehaviorCanJoinAllApplications` to their collection behaviour, so a HUD shows
+  over another app's full-screen window on every macOS that has the flag, not only where the
+  system already allows it.
+
+- **macOS overlays finish, submit and present off the main thread, and compositors can stage
+  buffer writes.** An overlay frame with no system materials, no presents-with-transaction and
+  no native video surface now hands its encoder and drawable to a per-overlay present thread,
+  which runs `CommandEncoder::finish`, `Queue::submit` and `Queue::present`; the main thread
+  waits for it only before it next touches the surface. An overlay animating at 120 Hz spends
+  about half the main-thread time per frame it did. `Frame::write_buffer(buffer, offset, data)`
+  writes a buffer through Rune's staging chunks and records the copy into the frame's encoder,
+  so a compositor's per-frame uniform writes reuse staging memory instead of
+  `Queue::write_buffer`'s per-call staging buffer, and land ahead of what it records next.
+  A `Queue::write_buffer` made outside the compositor callback, after the frame is drawn, can
+  now land in that frame's submission instead of the next one; write per-frame data from the
+  callback, or with `Frame::write_buffer`.
+
+- **A scaled layer snaps the same wherever its scale is anchored.** Content within a pixel of
+  a layer's anchor snapped to the unscaled grid while the rest of the layer drew exact, and a
+  layer's resting correction faded out by how far that layer's own edges moved, so outlines on
+  an overlay anchored elsewhere drifted up to 0.2 px off the art beneath them during a zoom.
+  The unscaled-grid weight is now one value per layer, taken from the layer's edges. Each box
+  lets go of its resting correction over the first pixel that box moves, so content at the
+  anchor stays put instead of drifting. A layer counts as moving by how far it moves points
+  of the window.
+
+- **Linux builds can leave out D-Bus.** zbus, tokio and futures-util, which Rune compiled into
+  every Linux build, now sit behind a new default `dbus` feature (26 fewer crates without it). It
+  covers the desktop's light or dark preference, the system tray, global shortcuts in a Wayland
+  session and the FileChooser portal, which `native-file-dialog` now turns on itself. Off, a
+  window winit gives no theme draws dark, `Tray::new` returns `TrayError::Unsupported` on Linux
+  and a Wayland session's global shortcuts return `ShortcutError::Unsupported`; X11 shortcuts
+  keep working. An app that sets `default-features = false` and wants these adds
+  `features = ["dbus"]`. Other platforms are unaffected.
+
+- **Decoding a large image no longer needs a full-size float copy.** `ImageCache` builds mip 0 by
+  copying opaque pixels straight through and premultiplying the rest with sRGB lookup tables, and
+  builds each smaller mip from the 8-bit level above it (mip 1 from the source), so the only memory
+  it holds is the mips themselves. An 8192×8192 image peaked at 1.5 GiB and took about 1.25 s; it
+  now peaks at its 341 MiB of mips and takes 0.15–0.25 s. Mip bytes match the old float chain within
+  one level per channel.
+
+- **Scaled content lands on whole device pixels once its scale holds still.** Pixel snapping
+  skipped everything under an `El::scale` other than 1, so a canvas zoomed to 1.37 drew its
+  boxes at edges like 548.61 px, soft and up to half a pixel off unscaled outlines drawn over
+  it. A node with its own scale now heads a layer: while the layer's drawn rect moves (a zoom,
+  a pinch, a spring) its content keeps its exact sub-pixel edges, and once it holds still the
+  correction to the grid eases in over 0.1 s, so a zoom ends with no pop. When it moves again,
+  the resting correction fades out over the first pixel its edges travel. Cached subtrees snap
+  at once. `El::pixel_snap(false)` still opts a subtree out.
+
+- **Linux follows the desktop's light or dark preference.** winit reports no theme on Wayland
+  (and layer surfaces have none), so windows and overlays there always drew dark. When winit has
+  nothing they now read the XDG desktop portal's `org.freedesktop.appearance` `color-scheme`: a
+  worker thread reads it once and follows `SettingChanged`, a change asks every window to redraw
+  (as a new accent does) and the redraw rereads it, and overlays read it each time they show. The
+  first window waits at most 100 ms for the first answer. "No preference", no portal or no session
+  bus keep dark as before, and `--theme` and winit's own theme still win.
+
+- **An invisible effect layer no longer keeps the frame loop awake.** `FxLayer::is_animating` is
+  false for a layer that draws nothing whatever the time: zero opacity, or a zero intensity,
+  heat, amount or sparkle count (and a motion blur with no source). Such layers already drew
+  nothing but kept an idle window ticking at the display rate. A `PulseStyle::Ping` now reports
+  animating until 2.2× its duration, when its head finishes cooling, instead of stopping at 2×
+  and freezing the bloom mid-fade.
+
+- **rune-light allocates GI only when GI runs, and a bigger scene keeps its render targets.** With
+  `Settings::gi` off, `LightRenderer` makes none of the GI textures (media, five cascades, fluence)
+  and records no empty GI passes when timing; they're made the first frame GI is on.
+  `LightRenderer::inspect` returns black views for the GI buffers until then, and `Timings::gi` is
+  0 for a frame without GI. Growing past the primitive buffer's capacity now rebuilds only the two
+  bind groups that read it instead of reallocating every render target.
+
+- The playground's list and side column keep only the keys they use (arrows, Return, J K, triggers, Tab, Esc, and typing in the filter). Every other key, ⌘-chords and digits included, reaches the open story's `AppSpec::on_key`, so its shortcuts work as soon as it opens from the list, without a click on the stage or ⇧Tab.
+
+- **Periodic loops keep the app's time.** Animation time drops what a covered, idle or stalled window spends, and a `.looping` track kept its phase on animation time, while apps work out `LoopSpec::delay` from their own clock. So two loops created in different commits fell out of step by whatever animation time had dropped between them. A text shimmer's window and the bright copy that slides back inside it stopped cancelling, and the copy sat a fixed distance off its label for every pass. Running periodic loops now also get the time animation time dropped, and a loop a frame's commit creates starts at that frame's presented time, so loops with delays from the app clock stay in step however late each mounts. A newly created loop starts one frame later in its cycle than before; finite sequences are unchanged.
+
+- **Removing an animating track completes it.** `AnimationStore::remove` and `remove_node` (so a node unmounting mid-animation) now emit `MotionEvent::Completed { finished: false }` for an animation started with a completion token, as replacing it already did, instead of dropping the token silently.
+
+- **`Runtime::events` stays small.** A live window, overlay or web canvas no longer formats an input marker (`press …`, `wheel …`, `key …`) on every input unless `--trace` is on, and a headless runtime keeps at most 512 unread markers, dropping the oldest half when it fills. Tests that read `rt.events` after a few inputs see the same markers as before.
+
+- **A steady animating frame allocates no GPU buffers.** Per-frame uploads in `Renderer`,
+  `FxRenderer`, `LightRenderer` and `GlassRenderer` go through reused staging chunks (the new
+  `rune-staging` crate) instead of `Queue::write_buffer`/`write_texture`, which allocate a fresh
+  staging buffer each call on native backends. `Renderer::prepare` writes only the instances that
+  changed and writes globals only when the viewport or sRGB flag changes. Its uploads now land
+  ahead of the renderer's next draw, recorded into that draw's encoder, or are submitted ahead of
+  `draw_range*` and `Renderer::submit`, so submit the encoder a renderer drew into. One dropped
+  unsubmitted is detected, and the next frame uploads everything again. On the web, writes still
+  go straight to the queue. A headless 2,000-instance frame takes about half the CPU time to
+  record and submit (`examples/upload_bench.rs`).
+
+- A `Tx::launch` or `El::matched` flight into a container that is still entering (its scale or fade animating) keeps the still scales above that container, such as an app-wide zoom. It used to drop every ancestor scale, so under a zoom it flew at 1/zoom size and snapped to the zoom when the container's entrance ended. The entering container's own scale is still dropped.
+
+- **`Recording::counts_roll`: an app whose live numbers roll can gate a count that ticks in place.** Set `rec.counts_roll = true` and a count or clock whose words change in one frame ("9s" → "10s") is a `text-swap`, as other words are; a label over its own rolling glyphs still passes. It's off by default, where a tick passes as before.
+
+- **The motion gate finds four more things: `lands-unseen`, `remount`, `unpinned` and `twice`.** `rune::motion_gate::check` now reports an element that travels in view and then its clip hides it the frame it rests (`lands-unseen`), words that start leaving as the same words mount under a path one segment different (`remount`: a row lost its key), a scroll pinned to its end whose content's bottom slides below the viewport with no input since (`unpinned`; an input named `event…` is data arriving and doesn't count), and an element Rune renamed `key#dupN` because two siblings share a key (`twice`). Each has a `RULES` row. An app's gate can fail on these where it passed before: fix the motion, or allow the finding with its reason.
+
+- **New crate `rune-mermaid`: native Mermaid diagrams in Rust.** Extracted from `rune-kit` so
+  apps can render Mermaid diagrams (`rune_mermaid::render` with `DiagramStyle`) without pulling
+  in `rune-kit` or `pulldown-cmark`, while `rune-kit`'s `mermaid` feature continues to draw
+  closed ```` ```mermaid ```` fences inside `Markdown`. Adds `stateDiagram` / `stateDiagram-v2`
+  (`[*]`, composite states, `<<choice>>`), theme-adapted node tints from `style` / `classDef` /
+  `:::class`, quoted edge labels, and nested brackets inside unquoted node labels.
+
+- **New opt-in crate `rune-register`: self-registration for stories, scenes and knob groups.** A module adds its items to a list from its own file with `register!(LIST: Type = [...])`, the list is declared with `slice!`, and `collect` reads it ordered by module path (so link order doesn't matter); `merge` folds extra items in by name. Nothing in `rune` or `rune-kit` depends on it. It uses linkme (Linux, macOS, iOS, Windows, Android and more); on wasm32 lists are empty, and on any other target linkme lacks the build fails with its compile error.
+
+- `rune-mac` posts system notifications: `notify::post(&Notification::new(id, title).body(..).info(k, v))` goes through `UNUserNotificationCenter` (silent, asking for permission on the first post), `notify::remove(ids)` takes them back out, `notify::on_click(f)` hands back the clicked id and user info, and `notify::app_focused()` / `notify::bring_to_front()` cover "only when the app isn't in front" and "a click opens it". Only a bundled app can post; elsewhere `notify::available()` is false and posting does nothing.
+
+- A child mounted under a parent past half its entrance enters on its own instead of appearing at once at the parent's opacity: a `RollingText` digit changing while its row's fade has a percent left rolls in rather than popping in place.
+
+- **The playground's story list is a tree, filters as you type, and the keyboard is in one column at a time.** Each `/` in a story's path nests a group, as deep as the path goes: `"Prototypes/Onboarding/Option · Pill"` lists the story in Onboarding, inside Prototypes. Group headers are bolder, with a chevron and a count, and each level indents 12 pt. Every level folds, by click or ← → ↵. `Playground::folds(load, save)` names groups by their full paths (`"Sidebar/Filter buttons"`), and saved one-level names still load. New: `Playground::start_folded(true)` starts every group folded except the open story's, which unfold each time the playground opens, including from a link at launch; with it, `folds` saves the unfolded groups instead. `Playground::group_order(&[..])` lists the named top-level groups first, scenes and stories alike, so stories can come before scenes; a name that matches no group is logged in debug builds. When two stories share a name, a lookup by name (`open_playground_at`, `--playground`) now picks the first in list order, not the first declared. A filter field over the list keeps the stories whose path contains every typed word, along with their groups. `/` or a click focuses it; ↓ moves into the matches, Return opens the first match, and Esc clears the field, then leaves it. The keyboard is in the list, the stage or the side column, and a click in a column moves it there. The column that has it shows its selection in the accent, or a ring around the stage, and the hint lists that column's keys. **Behavior change:** 1–9 pick a variant and `side_keys` hooks hear keys only while the keyboard is in the side column (→ or Tab from a story, Esc back), and the stage's `on_key` hears keys only while the stage has the keyboard, except Esc and `Playground::typing`.
+
+- **`TraySpec` and `TrayIcon` are built with constructors, and the tray enums can grow.** `TraySpec { id, title, tooltip, icon, menu }` becomes `TraySpec::new(id, title, icon).tooltip(..).menu(..)`, and `TrayIcon { width, height, rgba }` becomes `TrayIcon::rgba(width, height, pixels)`. Their fields are private, and `TrayItem`, `TrayEvent` and `TrayError` are `#[non_exhaustive]`, so a match on them needs a `_` arm.
+
+- **macOS app icons at small sizes are the app's real icon.** `app_icon_rgba` (and
+  `ImageCache::app_icon`) now draws the icon at 256 pixels or more and scales it down. On macOS 26
+  and later, asking for a small size directly could return the system's "legacy" rendition, a
+  shrunken tile inside a grey rounded frame.
+
+- **`Tx::scroll_into_view` leaves a row taller than the viewport where it fills it.** Revealing
+  such a row from above lands its end at the viewport's bottom, as before, but a virtual row's
+  re-placement after its rows measure (or a follow frame while the list grows) no longer flips it
+  to its start. Before, where it ended up depended on how many placements ran, so one extra
+  trailing row could move it.
+
+- **A typed line stays clear of a scroll viewport's faded edges.** After an edit, the focused
+  field's caret now stops `El::scroll_margin` short of its viewport's edge, as
+  `Tx::scroll_into_view` does and as CSS `scroll-padding` does for a textarea, so the line being
+  typed never sits under a `scroll_edge_fade`. The content's own ends still stop flush.
+
+- **A window with placed traffic lights no longer crashes entering full screen on macOS.** Going
+  full screen, AppKit observes the titlebar container and puts its own KVO subclass above the one
+  `Chrome::traffic_lights` gave it, so the layout hook called AppKit's `-layout` through its own
+  class again and overflowed the stack. The hook now finds Rune's subclass in the chain and calls
+  the class above it, and the buttons still return to their spot on leaving full screen.
+
+- Add `rune-perf`, an opt-in bounded local recorder (`Recorder::start(Config::new(dir, app))`, `Frame::new(window, seq, outcome).update_ms(..)`) with rolling stats, `perf.json` snapshots, rotating logs and capped warning incidents; it reads procwatch, which gains `procwatch::usage()` (footprint, peak, resident and fds without a thread walk) and `procwatch::alloc::thread_allocated_bytes()` (this thread's requested bytes, `None` without `procwatch::alloc::Counting`).
+
+- **`FrameEncoded::update_ms` and `FrameEncoded::encode_ms`.** A `Drawn` frame's report says how
+  long the runtime took to build it and how long encoding took until submit, the numbers a
+  compositor gets. Logging frame timing from `App::on_frame_encoded` no longer needs a
+  compositor, which would turn off the window's skip of unchanged timer frames. Other outcomes
+  report `None`.
+
+- `Tx::launch` leaves from its source under an app zoom or a scrolled view when another commit landed earlier in the same frame (a state update or event just before the key that sends). It used to skip the zoom and scroll then, so the new row started off to one side, sometimes off-screen or right of where it rests.
+
+- **Fills, borders and clips land on whole device pixels.** A box laid out at a fractional
+  position (a 1.1 pt gap at 2×) drew soft, half-covered edge rows. Each painted rect now rounds
+  its four edges to the device grid at paint time, so edges are hard, boxes that share an edge
+  meet with no seam, a 0.5 pt border at 2× is one crisp pixel, and text keeps the same offset
+  from its fill wherever the box lands. Layout, hit testing, `Cx::layout_size` and
+  `Runtime::elements` keep the exact fractional rects. Motion stays smooth: a moving element's
+  correction eases from the one it drew with toward the rounding of where it comes to rest, in
+  step with the distance left, so it glides between pixels with no jump at the start or the
+  landing; a scroll snaps its content as one
+  translation, and a scale fades the snap in over its last pixel. `El::pixel_snap(false)` turns
+  it off for a subtree an app moves itself at sub-pixel speeds.
+
+- `TextSystem::layout_rich_with(text, spans, style, scale, max_width, RichLayoutOptions::new().wrap_anywhere())` lays out rich text that breaks inside a word wider than the wrap width (a long URL, hash or token) instead of running past it, as `El::wrap_anywhere()` does for elements; `RichLayoutOptions::align(..)` aligns lines as `layout_aligned` does. Apps that lay out their own text, such as editors, can now wrap an unbroken word.
+
+- **A key press on a resting macOS window draws at once.** A window that had stopped its
+  display link started it on input and waited for its first tick before drawing, so the first
+  frame after a key, click or paste ran its handler about 12 ms late (median, `--profile perf`).
+  When the last frame reached the display at least a period and a half ago, the window now draws
+  in the same run-loop turn, and its handlers run about 0.3 ms after the event (median). Frames while
+  something moves still wait for the display's tick, and a Low Power cap still spaces them.
+  `FrameEncoded::presents_at()` is `None` for such a frame.
+
+- `Tx::launch` and `El::matched` flights under a still ancestor `El::scale` (an app-wide zoom) fly at the size and place they land at. They used to draw unscaled, off the source's text, and snap to the zoom on landing. An ancestor scale that is animating is still dropped.
+
+- macOS: `Chrome::traffic_lights` holds. Since macOS 26 AppKit put the buttons back at (9, 9) whenever it laid the titlebar out on its own (a title or appearance change, a zoom), so they drifted off the spot and out of line with the app's title-bar controls; the titlebar views now put them back after each layout.
+
+- **Icons honour SVG opacity.** `opacity`, `fill-opacity` and `stroke-opacity` on an icon's
+  elements now scale that element's coverage, so one `Icon` can hold a graded shape (a faint
+  track under an arc, dots fading round a spinner). Before, they were ignored and drew solid.
+
+- `Tx::replay_playground()` makes the open playground story again and runs its `r` trigger, as R does, and `Tx::playground_trigger(key)` runs one of its triggers, so a deep link can open a story and replay it.
+
+- **Separators in application and Dock menus.** New `MenuItem::separator()` puts a separator
+  line among an app's custom items, placed with `.menu("File")` or `.dock()` like any item
+  (`NSMenuItem.separatorItem` on macOS). Separators need no id, can't be fired and are skipped
+  by id/title lookup. Windows and Linux still report `Unsupported` for native menus.
+
+- **The knobs panel's filter is a real text field.** It was a row that drew `Knobs::query` with a fake caret, so ⌘A did nothing and ← → stepped knobs and folded sections while typing. Now `/` or a click starts a single-line `text_input` bound to a private `TextEdit` in `Knobs`, with ⌘A, ← → and ⇧ to select, ⌥ and ⌘ with arrows and Backspace, paste and IME. `query` stays the field's text on every edit (`Knobs::set_query` sets both), and the filter runs as the text changes. While it edits, the field owns ← →, digits, `[` `]`, `/` and Backspace; ↑ ↓ and Tab still move the panel's row, Return stops, and Esc stops, then clears, then closes. Stopping gives focus back to the panel. `Knobs::filter(query)` starts it with text selected, and `side_key` leaves ← → to the field.
+- **A text field's selection highlight no longer stretches to a fill behind it.** The highlight joined runs and took any recently drawn fill behind the first rect on a line for a chip, so a field inside a filled pill selected from the pill's edge. Fields draw their selection rects as they are.
+
+- **Wayland overlays take clicks while idle.** A layer-shell overlay reads input from its own
+  queue on winit's connection, and winit turns its loop only for its own events, so a click
+  on an overlay that wasn't animating waited for an unrelated wake (a timer, the pointer
+  leaving) and often landed late or never. A watcher thread now wakes the loop when the
+  compositor writes to the display, at most once per read.
+
+- **Overlays can hand focus to another app.** New: `rune::press_activation_token(app_id)`, an
+  XDG activation token from the latest pointer press on a Wayland layer-shell overlay, made with
+  that press's serial, seat and surface. A notification server emits it as `ActivationToken`
+  before `ActionInvoked`, so the app it opens may raise its window. None off Wayland, before any
+  press, or when the compositor lacks `xdg_activation_v1`.
+
+- **Filtering a `Combobox` or `PopupList` is instant by default.** A keystroke's rows and the
+  popover's height used to crossfade and spring (0.3 s in, 0.24 s out); they now land in the
+  frame, and a `PopupList` lands any change to its `items` at once, even in a commit that
+  animates the field it follows (`animate_edit_layout`). Opening, closing and the hover
+  highlight keep their motion. `.animate_filtering(true)` on either brings the crossfade back.
+  New: `El::instant_changes()`, which lands every change inside an element (layout, opacity,
+  transforms, presence of what it holds, growth rows) in any commit while its own entrance,
+  exit and colours keep theirs. A scroll-into-view that mounts new virtual rows now commits
+  them as instantly as the change that asked for it.
+
+- **Filtering a virtual list crossfades what shows, and motion nobody sees ends at once.** A
+  removed element that drew nothing last frame used to skip its exit only when it had already
+  faded out. It now also skips it when it, and everything it holds, lay out of the window or
+  clipped away, so filtering a long list no longer runs dozens of fades under its viewport's
+  clip. In a virtual list, rows a change to the rows (a filter, a sort) mounts now enter with
+  their insertion transition, and those that land out of view finish it as soon as they draw.
+  A change that keeps none of the rows in view no longer anchors the scroll offset to a kept
+  row further down, and the rows it removes no longer hold their space: they fade where they
+  stood while the matches fade in at the top. A kept row that was out of view and lands in
+  view enters too, rather than appearing whole. Rows scrolled into view still mount as they
+  are. New: `Scene::enter_now` and `Scene::reenter`.
+
+- `ConfiguredWindowOptions::macos(|native| ..)` amends the AppKit settings a preset made, so `WindowOptions::launcher_panel().macos(|n| n.corner_radius(16.0))` keeps its launcher behaviour.
+
+- **Trailing `RollingText` digits hold still in a width-leading row.** A trailing label's glyphs
+  slid on the label's own spring to cancel their row's slide, so in a parent that slides on
+  another spring (`width_leads`, say) they drifted 2–3 pt out and back as the label widened. The
+  label and its glyphs now ride their parent's trailing edge: `El::ride_trailing()` (and
+  `rune_motion::Scene::set_ride_trailing`) keeps an element against its parent's right edge while
+  the parent's width animates, so glyphs that stay, leave or enter hold their columns whatever
+  springs the rows around them use. The motion audit's odometer scenario adds header rows with a
+  usage group, and `analyze.py` no longer splits a motion at a frame or two of rest, so an
+  out-and-back through its start reads as a `reversal`.
+
+- **Big shadows and border rings cost a fraction of what they did.** A window-sized panel's
+  blurred shadow shaded every pixel under the panel each frame, running the erf shadow math
+  where the panel hides it, and a border-only ring shaded its whole empty middle. A shadow
+  under a solid box, and a ring with no fill, now draw as four bands around the middle they
+  leave blank, and a shadow skips its erf rows well inside the box. Output matches to within one
+  colour level; on a 5K window with a large panel the frame pass went from about 13 ms to about 4.5 ms.
+
+- **Playground: `--whole-window`.** A headless `--snap` with `--playground` is now the story's stage only, by default, and `--crop KEY` looks for its key on the stage. `--whole-window` snaps the whole window, list, stage and side column, and lets `--crop` take any key in it, such as `playground-list`, `playground-side` or a group header's `playground-group-N`. `--out`, `--video` and `--strip` frames are still the whole window.
+
+- **A story picks how the playground's stage lays it out.** `Story::stage(Stage::Scroll)` and
+  `Playground::stage(scene, Stage::Scroll)` make it a page for content taller than the stage:
+  laid out at the stage's width inside a 24 pt margin, at its own height, from the top, and the
+  stage scrolls. `Stage::Fill` puts it edge to edge across the whole stage, whatever size is
+  picked beside it. `Stage::Center`, the default, lays out as before. `rune::Stage` is new at
+  the crate root, so an app that glob-imports `rune::*` beside another `Stage` names one of them.
+  The story list now shows each group's story count on its header, and a motion mark on stories
+  and scenes with triggers.
+
+- **`Combobox` reads like a command menu.** Its search field sits borderless under a search
+  icon, over a divider, with no focus outline (the caret shows focus), and each option shows its
+  `detail` in muted text after the label. The result list fits the window like the other
+  dropdowns, never shorter than one row, and scrolls with faded edges. New builders:
+  `trigger(El)` replaces the default field trigger, `placement`, and `max_height` (192 by
+  default). `Popover::padding` sets the body's inset (12 by default; 0 for edge-to-edge bodies).
+
+- **A motion watcher can read every frame cheaply.** `Runtime::motion_elements(&mut out)` fills a
+  reused list with what a frame-by-frame watcher needs of each presented element (id, parent,
+  drawn and visible rects, opacity, scale, loop phase, a hash of its words and `MotionElement`
+  flags) with no strings copied, and `Runtime::element_path(id)` gives its path and key to cache.
+  `elements()` is unchanged. Next: the `--trace-all` motion tracer will read the same walk,
+  so its flags and the in-app watcher's can't drift.
+
+- **Apps can watch their own frames.** `App::on_frame_drawn(|rt| ..)` runs after each drawn frame
+  of a desktop window with the runtime as that frame presented it (`rt.elements()`, `rt.state`),
+  and `rune::last_input()` says when the thread last took an input event from the platform, so an
+  app can log a motion glitch it sees in real use. Drawing doesn't change.
+
+- **`MacWindowOptions::corner_radius(r)` rounds transparent, borderless macOS windows and
+  panels.** The content view's layer clips everything with a continuous curve
+  (`.corner_curve_circular()` for a circular arc), so the root view no longer needs to clip
+  itself to the radius; a border inside the edge is still the app's. Opaque and bordered
+  windows ignore it. Transparent windows with a system shadow now call `invalidateShadow`
+  once the first frame after each show, resize, scale change or launcher prewarm reaches the
+  screen, so the shadow traces the drawn shape instead of an empty or older frame.
+
+- **Menus show the accelerator's own key on every keyboard layout.** A `MenuItem` or
+  `PopupItem` key equivalent is now the character its accelerator names: `cmd+b` is ⌘B on
+  Dvorak too, and fires from the key that types "b", where it used to show and take ⌘X (the
+  key in QWERTY's B position) away from Cut. `cmd+shift+=` is "=" with ⇧⌘; arrows, Return,
+  Delete, Escape, Tab, Space and F-keys use AppKit's characters. The app, named, Dock and
+  context menus all follow it, and a custom item with a standard item's key (⌘X) now takes it
+  on any layout as it does on QWERTY. New `Shortcut::menu_keycaps()` gives the same label for
+  menus and hints; the playground bar and rune-kit's button shortcut tooltips use it.
+  `Shortcut::keycaps()` still names the key at the shortcut's position in the current layout,
+  for global shortcuts and the shortcut recorder.
+
+- **The playground takes an app's story table.**
+  - `Tx::open_playground_at(story, variant)` opens it on a story from app code, by path, name or
+    slug, through the same lookup as `--playground`/`--variant` and `Runtime::open_playground`.
+    From `App::on_open_url` a link opens straight onto the story at launch. A bad name at runtime
+    is logged and opens the list. `rune::playground::slug(path)` makes a story's stable link
+    slug (`"Timeline/Send"` is `"timeline-send"`), and every lookup takes one. The `playground`
+    module is public for it.
+  - `Story::side_keys(view, key)` and `Playground::side_keys(scene, view, key)` are `side` for
+    controls that take keys: → or Tab puts the keyboard on them, the view gets `active` to mark
+    what the keys move, and the hook gets each key first. Esc and Tab leave; ← no longer does
+    there. `rune_knobs::side_key(groups, lens)` is the hook for `rune_knobs::inline`: ↑↓ pick a
+    knob, ←→ step it.
+  - `Story::new`, `from_real`, `overlay`, `poll`, `trigger`, `variant` and `side`,
+    `Play::after`, and `Playground::page`, `trigger`, `variant`, `side` and `side_real` take any
+    `Fn` (`FnOnce` for a step) where they took a `fn`, so a story table can build its stories in
+    a loop, each capturing its row. Code passing fns compiles unchanged. `Story::trigger_tx` and
+    `Playground::trigger_tx` take a step that needs only the `Tx`.
+  - Folded groups stay folded after the playground closes, for as long as the app runs, where
+    they used to unfold. `Playground::folds(load, save)` keeps them from one run to the next.
+
+- **Children can leave the way the commit that removes them says.** `El::child_exit(t)` gives
+  children removed from an element in a commit the transition `t` in place of their last render's.
+  `RollingText` uses it so old digits leave the way new ones enter, including on a first count
+  down or a value that turns back mid-roll. A trailing `RollingText` now holds leaving digits in
+  their columns too, matches from the right like an odometer ("19s" → "100s" keeps only the
+  "s"), and keeps its staggered roll spring when its width changes. `rune::text::advance` gives a
+  line's unrounded advance.
+
+- rune-knobs: the side panel's keyboard choice numbers its options and 1–9 pick one. Typing no longer filters on its own: `/` (or a click on the filter) starts it, Return or Esc stops typing and keeps the matches, and a second Esc clears them.
+
+- Playground: a trigger's `Play::after` steps land on the same frame on every replay; due times allow for rounding in the running clock, which used to push a later replay's step one frame late.
+
+- **An instant commit no longer lands motion it didn't change.** `Tx::instant` still lands
+  every layout, colour and opacity change the commit makes, but a node already springing toward
+  a place or value the commit leaves alone keeps springing, so a quick key press during a layout
+  spring (a row of chips opening, a selection moving) doesn't snap it to the end mid-flight.
+  `Tx::settle` still lands every running track; use it where an instant commit was used to stop
+  motion in place.
+
+- rune-knobs: right-click a knob to put it back to its default, and a hovered group header offers Random and Reset for that group (right-click resets it). Clicking anywhere on a choice row puts ←→ on its options, and moving the pointer takes the highlight from the keyboard's row so only one row is lit.
+
+- **`rune_knobs::inline` fills its parent's width, so knobs fit a playground's side column.** Rows lay out from the width they get: a slider's fill and handle are a share of its track instead of math on a fixed 300 pt, and a choice reads its card's laid-out width to sit beside its label or under it (rebuilding only when the width changes). The floating ⌘⇧K panel keeps 300 pt, set by the panel and not the rows; `inline`'s signature is unchanged, and `actions` now fills its parent up to 300 pt. New `Style::light()`. `examples/knobs` hosts a story's knobs in `Story::side` (`-- --playground Knobs`).
+
+- **Tests can drive the playground.** `App::headless_runtime(size, env)` builds a windowless
+  runtime with `App::playground` attached. On it, `Runtime::open_playground(story, variant)`
+  opens a story as `--playground NAME --variant V` does, `Runtime::playground_trigger(key)` runs
+  a trigger as its key does, and `Play::after` steps run as `Runtime::frame` moves the logical
+  clock. `Runtime::playground_state::<P>()` reads the stage's state and
+  `Runtime::playground_element(key)` finds an element on the stage; `rt.state` stays the real
+  state. `Play::clear()` drops the stage's queued steps, a loop's included, so a trigger can
+  take over from a running one.
+
+- **A toolbar can float over a text selection.** `Cx::selection_rects()` returns the selection's
+  line boxes in window points (empty with nothing selected) and re-runs the view when one moves
+  more than half a point, as `Cx::layout` does; a `memo` that reads it is rebuilt when they move.
+  `TextSelection::backward()` says the selection was made dragging up or left, so a toolbar can
+  open at the pointer's end. `SelectionChange::dragging()` says a press is still making the
+  selection, and **`El::on_selection_change` handlers the selection is inside now hear one more
+  call when that press releases**, with the same selection and `dragging()` false, so a handler that treated every
+  call as a change sees one extra call per drag. `El::keeps_text_selection()` makes a press on an
+  element (a Quote button) leave the selection and the keyboard focus as they are, so its
+  handler can read the selection, and a drag that starts on it doesn't start a new one.
+
+- **`El::backdrop_blur(sigma)`: frosted glass over the window's own content.**
+  `el().backdrop_blur(8.0).fill(tint)` blurs what is already drawn behind the element, inside
+  its rounded or continuous corners and its clip, and draws the fill over it as a tint, with the
+  border and children on top. It works through plain `rune::run`, follows scrolling, springs and
+  opacity, and renders the same headless. The renderer splits the pass at the element, blurs a
+  copy with a half-resolution pyramid cut to the element plus three sigma, and composites it
+  through the corner mask. A frame blurs at most `MAX_BACKDROP_BLURS` (4) elements; later ones,
+  and any drawn into a target without `COPY_SRC` or a caller's own pass (`Renderer::draw_range`),
+  draw only their fill. Frames without one are unchanged. The web backend now asks the canvas
+  for `COPY_SRC`. `examples/frosted-bar` shows a list scrolling under a frosted bottom bar.
+
+- **Every `RollingText`'s glyphs now slide on the row's width-leading X spring**, not the plain
+  label spring, so glyphs that stay hold still against the row's edge while the width changes. This
+  moves the glyphs of every rolling label. **A right-aligned `RollingText` rolls new digits in their
+  columns:** `RollingText::trailing()` says the label widens to the left, so a glyph that rolls in
+  starts where it will rest instead of riding in from the right with the label's slide ("9s" →
+  "10s" no longer rolls "10" over the "s"). A trailing label's row and glyphs slide on the plain
+  label spring (no width lead), so a container that right-aligns it should slide on that spring
+  too.
+
+- **A `RollingText` can roll the way its number moves.** `RollingText::value(v)` is SwiftUI's
+  `.numericText(value:)`: while the value rises, new glyphs enter from `from` (digits move up, the
+  default); when it falls, they enter from the opposite edge. Text that changes while the value
+  holds, or with a value that isn't finite, rolls from `from`. Labels without a value are unchanged.
+
+- **Text selection across virtual rows.** `El::selectable` and `El::selection_group` now keep
+  working across unbuilt and scrolled-out rows of an `El::virtual_rows` or `El::virtualize` list:
+  the virtual list pins the rows holding the selection's anchor and focus (storing endpoints by
+  row identity, relative path and byte offset so they survive rows mounting and unmounting around
+  them), Cmd+A and `Tx::select_all_text(key)` select from the first row to the last row of the
+  virtual list, `Tx::select_text(key, range)` pins and builds an unbuilt target row without
+  scrolling, and Cmd+C / `Runtime::selected_text()` / `Tx::text_selection()` build any unmounted
+  rows between the selection's ends on demand (view only, capped at 10,000 unbuilt rows and 4 MiB
+  of UTF-8 text) using the same `\t` and `\n` separators as mounted rows.
+
+- rune-knobs: a choice's options can say what they are (`Knob::hints`), shown under the panel's list while one is hovered or picked; an app can describe all its knobs from one table (`Note`, `describe`), which wins over a knob's own label, about and hints; `Knob::describe` and `Knob::hint` read them, and `Knobs::hover` puts the pointer on a knob or option for a still or a test. `Knob` gained a pub `hints` field.
+
+- **Transparent windows and overlays stay clear on Windows, on every GPU.** A surface whose
+  adapter can't composite alpha (a Win32 Vulkan surface on AMD's integrated GPUs, any DXGI
+  swapchain made from an HWND) fell back to opaque, so an overlay drew a black box around its
+  content, silently. DX12 surfaces now present through DirectComposition, which composites alpha
+  on any GPU. A translucent surface gets the lowest-power adapter that can composite it, and
+  reuses a shared device only if that device can. An overlay that still can't be translucent
+  logs it, as a window already did.
+
+- **Playground: folding groups.** A click on a group's header folds or unfolds it, and so do ←, → and ↵ while the header is the list's selection. ↑↓ walk headers and the stories that show; J K skip the headers. Groups stay folded until the playground closes. ← leaves the side column, as Tab and Esc do. `Playground::scenes(|name| ..)` picks which of `AppSpec::scenes` the list shows. Choosing a scene, or a story whose state is new, runs its `'r'` trigger as R does, so its motion plays at once, headless `--playground NAME` included. `Playground::fresh(|real| ..)` starts scenes from the real state, and `Story::from_real(name, |real| .., view)` derives a story's state from it, each time it's made. `Playground::keep(|stage, real| ..)` copies a scene's stage back before R, a switch or Back, so tuning sticks. `Story::variant(name, |p| ..)` and `Playground::variant(scene, name, |s| ..)` add variants, listed in the side column and picked with 1 to 9. `Playground::typing(|s| ..)` gives the stage's `on_key` every key first while it's true. `Playground::dark(|s| ..)` makes the chrome follow the app's own light/dark setting. `Playground::side_real(scene, |stage, real, cx| ..)` draws a scene's side column from both states, and `Tx::keep_playground()` runs `keep` on demand. Headless, `--variant N|name` opens `--playground`'s story on a variant, and `--crop KEY` crops a `--snap` to the element with that key or path, the stage's first; `--crop x,y,w,h` still crops strip tiles.
+
+- **Inline code chips get real padding and a gap from the text around them.** Markdown pads
+  the chip `MarkdownStyle::inline_code_pad` points around the code (3.5 by default) instead of
+  painting one narrow space each side, and sets two unpainted narrow spaces each side, so what's
+  left is a small margin. Code in a link is a chip in the link's colour without an underline.
+  Span backgrounds snap to whole device pixels, sit balanced on the cap height rather than a
+  mono face's tall line box, and merge across a link's underline instead of leaving a seam at
+  the chip's edge. `MarkdownStyle::list(indent, gap)` sets the marker column and the gap between
+  items (32 and 4, as before), and `code_block_padding(x, y)` the room inside code blocks and
+  diffs (12 by 12).
+
+- **`App::on_frame_encoded` reports each frame of a desktop window.** The hook (also on
+  `WindowSpec`) runs on the UI thread with a `FrameEncoded`: its `FrameOutcome` (`Drawn` once
+  encoded, submitted and presented, the first frame and a hidden launcher's included;
+  `Unchanged` for a timer's frame that drew what was on screen; `Skipped` when the window was
+  covered, minimised or occluded or no drawable came), when encoding finished, the window's key,
+  a per-window sequence number, and the display link's target refresh when it paced the frame.
+  Frames, skips, pacing and redraws are the same with it as without; without it each frame
+  checks an `Option`. Headless runs, overlays and the web don't call it.
+
+- **`Cursor::Image` shows an app's own cursor.** `Cursor::Image(CursorImage::png(bytes, hot))`
+  takes a PNG drawn at 2x (a 64×64 px PNG is a 32×32 pt cursor) and a hot spot in points,
+  clamped into the image. The OS draws it, so a pencil over a canvas keeps up with the pointer
+  and reaches the window's edge. It comes and goes like the system cursors under hover, press
+  capture, overlays and focus changes. On macOS it's an `NSCursor` sized in points, with the
+  window's cursor rects off while it shows; elsewhere it's a winit custom cursor made at the
+  window's scale, set before the loop sleeps the first time each image is used. Each image is
+  decoded once and its OS cursor cached (32 images, 8 MiB). A PNG that doesn't decode, or is
+  over 256 px a side, shows the arrow and is logged once. `Cursor` is still `Copy` and `Eq`;
+  two images are equal when they have the same bytes and hot spot, which for the same bytes in
+  memory is an address check. New example: `examples/sketch`.
+
+- **`Tx::input_time()` says when a handler's input arrived.** Key, IME, pointer, wheel and
+  trackpad gesture handlers get `Some(instant)`: on macOS the timestamp of the `NSEvent`
+  AppKit dispatched, converted to an `Instant`, elsewhere the moment the window took the event
+  from winit. Input that piles up between frames keeps each event's own time. Timers, polls,
+  updates, layout callbacks and input fed to a `Runtime` directly see `None`. Nothing else
+  changes; handlers that don't ask pay nothing but a stamp on each queued action.
+
+- **`scripts/mac-app` installs and relaunches a Mac app in place.** It copies a built binary into
+  `~/Applications/NAME.app` with an icon, an optional URL scheme for `App::on_open_url` and an
+  optional microphone usage string, then starts the new copy before the old one quits, so with
+  `rune_mac::remember_frame` the window doesn't blink. `--wait-idle` holds an unattended swap
+  while the app is in use and relaunches behind the app in front; `rune_mac::busy` holds it while
+  the app is busy. `MAC_APP_SIGN` picks a signing identity (ad hoc by default). See "Relaunching
+  a Mac app" in `crates/rune/README.md`.
+
+- **`rune::motion_gate` lets an app gate its own motion in `cargo test`.** `Run` records the
+  app's real `Runtime` frame by frame on the virtual clock, `check` lists what a person would see
+  go wrong (pops, jumps, lurches, overshoot, flicker, text swaps, motion that never settles or
+  keeps waking) against the `RULES` thresholds, and `gate` runs the app's cells in parallel and
+  fails on findings its allowlist doesn't explain. `scripts/motion-audit/gate` runs it with a
+  cell filter, `--dump` and `--sheet` evidence; `scripts/motion-audit/motion-trace.py` reads an
+  app's own frame-cost trace from a real run.
+
+- **`scripts/rune-dev --local` hot-reloads on one machine.** The compiler, the edit guard and the
+  app run here with no build Mac, and an edit that needs a restart rebuilds and relaunches the
+  app. `RUNE_DEV_WRAP` runs it under a command prefix (default: plain `cargo`).
+  `scripts/rune-hot --manifest … --patch … [--port …]` is the same with an app script's flags.
+
+- **New crate `rune-knobs`: live tuning values and the ⌘⇧K panel.** A `Knob` is a named
+  slider or choice with a range and a default, grouped by the keyed element it tunes. The panel
+  comes as a side panel that pushes the page over (`side`), a floating panel (`layer`), or rows
+  for an app's own layout (`inline`, `actions`), such as `App::playground`'s side column.
+  Without the `panel` feature, knobs read their defaults and the panel isn't built.
+  `examples/knobs` shows it.
+
+- **New crate `rune-mac`: small macOS helpers for apps.** `remember_frame` and `saved_size`
+  reopen a window where and at the size it was, `toggle_full_screen` and `is_full_screen` drive
+  the green button's full screen, and `launch` and `busy` pair with the new `scripts/mac-app`
+  to relaunch a rebuilt app behind the app in front, and to hold a relaunch off while the app
+  is busy. Off macOS they do nothing.
+
+- **Scroll viewports measure all direct children.** `El::scroll`, `El::scroll_x` and
+  `El::scroll_xy` now measure their content extent across every present direct child instead of
+  only the first, so a scroll container holding several rows or tiles directly scrolls to its
+  end, follows `stick_bottom`, and reveals later children with `Tx::scroll_into_view` without
+  needing a wrapper column or row. Growth-stack tracking (`El::growth`) finds the growth-stack
+  child among direct children and warns once in debug builds if `.growth(..)` is placed on the
+  scroll viewport itself or followed by trailing sibling elements.
+
+- **Pills in static text.** `El::pill(range, PillStyle)` and `El::pills(..)` draw byte ranges of a
+  `text` or `rich` element as the rounded chips a field draws for `Mark::Pill`: chip colour,
+  label colour and icon from the `PillStyle`, a label that never splits across lines, and chip
+  padding that takes room in the line. Selection and copy treat the label as text, and `El::spans`
+  called afterwards keeps the label colours. On a field it does nothing (use `El::pill_style`).
+
+- **An editor the app draws gets the input method: `App::on_ime` and `El::ime_cursor`.** The
+  input method was on only while a `text_input` had focus, so dead keys, CJK input, the emoji
+  picker and dictation couldn't reach an app-drawn editor. Mark its caret `.ime_cursor()`:
+  while it's drawn and no field has focus, the window turns the input method on with the
+  candidate window at the caret, and `App::on_ime` (and `WindowSpec::on_ime`) hears
+  `Ime::Preedit` with its cursor range, `Ime::Commit`, and the new `Ime::Enabled` and
+  `Ime::Disabled`. Plain typing still arrives as keys, so nothing arrives twice; Return and
+  Escape mid-composition go to the input method. A focused field keeps the events and a
+  focused secure field keeps the input method off. An exhaustive `match` on `Ime` needs the
+  two new arms.
+
+- **File drops say where they land: `Tx::drop_point()` and `El::on_drop_move`.** In
+  `on_drop_files`, `on_drop_rejected` and `on_drop_hover(true)`, `tx.drop_point()` gives the
+  drag's point on the element (its own points, following scroll and transforms, and the
+  window's), so an editor can insert a dropped file where it landed. `.on_drop_move(|s, p, tx|
+  ..)` hears the point when the target is reached and as the drag moves over it, at most once a
+  frame, for a drop caret. Hosts already passed every position (AppKit's at every step, the
+  sampled pointer elsewhere); `Runtime::drag_files_to` now also queues a move, and asks for a
+  frame, when the drag moves over a target with `on_drop_move`. Nothing changes for targets
+  without one.
+
+- **Images: EXIF orientation, and a decoder panic fails only its image.** `ImageCache` turns a
+  JPEG upright by its EXIF orientation (a phone photo stored sideways used to draw sideways,
+  with its width and height swapped). A panic inside a codec on a malformed file used to end
+  the cache's worker, leaving that image pending forever and failing every later one with
+  "image worker stopped"; it now fails that image with "image decoder panicked: …" and the
+  worker goes on.
+
+- **Dropdowns fit the window, and a click shows no focus ring.** `El::anchored_fit` places an
+  overlay like `anchored` and, when it fits on neither side of its anchor, puts it on the side
+  with more room and caps its height (or width) to that room, so a scroll viewport inside
+  (`.shrink().min_h(0.0)`) scrolls instead of running off the window. rune-kit's `Popover`,
+  `Menu`, `Select` and `PopupList` use it above or below their trigger, and their rows scroll
+  with faded edges; a `Popover` body now shrinks. Focus shows only after keyboard navigation,
+  as CSS `:focus-visible`: Tab, the arrows, Home, End, Page Up and Page Down (and type-select
+  that moves focus) show it, while Space, Escape or typing after a click no longer do.
+
+- **`Drag::clicks` counts a run of presses for `on_drag`.** 1, then 2, 3 and on for presses on
+  the element each within the double-click interval and 4 pt of the one before (AppKit's
+  `clickCount`), the same on every phase, so an app-drawn editor can select by words or lines
+  and extend by them as a double- or triple-click drag moves. A press that drags past 4 pt
+  ends the run. `on_double_press` is unchanged. Code that builds a `Drag` itself (Rune's own
+  only; its private field keeps apps from it) sets `clicks`.
+
+- **`Tx::open_folder(options, on_answer)` and `FileDialogs::open_folder` pick a folder.**
+  An Open dialog that chooses an existing folder: rfd's `pick_folder` on macOS and Windows,
+  the portal's `OpenFile` with `directory` on Linux. It waits in `--tree` as a `fileDialog`
+  of kind `"folder"` and scripts answer it with `file-dialog` as they do a file. New
+  `FileDialogKind::Folder`: an exhaustive `match` on `FileDialogKind` needs its arm.
+
+- **`Tx::set_title(title)` sets the window's title** from a handler or `update`, without
+  asking for a frame. The window opens with `AppSpec`'s title and, closed and opened again,
+  with the last one set. Headless `--tree` output gains a `"title"` field.
+
+- **`Tx::key_base()`: the character a key types with no modifiers.** In a key handler it gives
+  the key's character under the current keyboard layout with no modifiers held, from winit's
+  `key_without_modifiers` on macOS, Windows and Linux: `Some('a')` for ⌥A, which arrives as
+  `Key::Text("å")`, and for AZERTY's A key, where `Tx::physical_key` says `KeyQ`. Bindings by
+  letter that follow the layout (as `DefaultKeyBinding.dict` binds ⌥-letters) match on it. A
+  script key with a `"code"` takes a `"base"`, else its one-character name pressed without
+  Shift or Option.
+
+- **`Player::preload` decodes a clip's first frame before anything draws it.** A clip's poster
+  was only requested the first frame it drew, so a page opening on a clip showed an empty box
+  for a few frames while a worker opened it. An app that knows which page comes next can now call
+  `preload()` on its clips; the first frame that
+  draws one shows its picture. It does nothing for audio, once a poster or player has started,
+  or headless, where frames decode as they draw.
+
+- A selection highlight also bridges the small gap a chip's icon and padding leave, and runs as tall as the line's tallest text, so words and chips on a line share one rect.
+
+- **`OverlayHandle::set_exclude_from_capture` changes a live overlay's capture exclusion.**
+  `OverlayOptions::exclude_from_capture` was fixed when the native window was made, so an app
+  that lets recorders see its overlays on demand (a demo mode) had to recreate them. The new
+  call flips macOS `sharingType` between none and read-only, and the Windows display affinity,
+  on the existing window, shown or hidden; `capture_exclusion` reports the new state.
+
+- Selectable texts flowed side by side (words around a chip) draw one continuous highlight rect per line instead of one per word, so no seams show between them.
+
+- **`rune::text::ink` says where text's ink sits.** Text is placed by its line box and
+  advance, so symbols like ↵, ⇥ and ⌘ draw off the middle of a box that centres them.
+  `ink(text, style)` rasterizes the text with the renderer's fonts and fallbacks at 8× and
+  returns a `TextInk` with the ink's bounds and centre of mass in points from the text's box,
+  cached per text and style; `TextInk::optical(pull)` gives a point between the two for
+  centring a glyph by eye.
+
+- **Apps receive links opened with them.** `App::on_open_url(|s, url, tx| ..)` (and
+  `WindowSpec::on_open_url`) runs on macOS for each `myapp://...` link the system opens with the
+  app, including the one that launched it, which runs before the window's first frame: the event
+  loop installs a get-URL Apple event handler before it starts (winit 0.30 doesn't forward these)
+  and keeps links until a window whose app has the hook starts, then runs them in order as
+  `AppHandle::update`s, waking an idle loop. Without a hook the handler goes once launch is over,
+  and an app's own handler is left alone. The app's bundle declares the scheme
+  (`CFBundleURLTypes`; see the README) and must validate the string. Other platforms never call
+  it.
+
+- **A window an `AppHandle::update` opens opens in the same turn.** The window host took the
+  other requests (open, show, focus, place, quit) before running the queued updates, so one an
+  update made waited for the next wake; a windowless app opening its window from an update
+  dropped the GPU it had prewarmed at launch first. Updates queued before launch now also run
+  before the window's first frame.
+
+- **`Tx::scroll_key_to` and `El::sticky_top_showing` land a new page right on its first frame.**
+  `scroll_key_to(key, at)` scrolls instantly so element `key`'s top sits `at` points below the
+  viewport's top, computed from the layout of the commit the handler causes, so it applies
+  before that layout draws (no marker, no correction a frame later). `sticky_top_showing(show)`
+  is `sticky_top` held with only the element's bottom `show` points in view, measured from its
+  height as laid out in the frame that draws it, so a header whose height changes (or a new
+  page's taller one) sticks in the right place at once instead of a frame late.
+
+- `Tx::copy_rich` now writes a `ClipboardContent`'s image (PNG and TIFF on macOS, PNG on the web, pixels on Windows and Linux) and its new file list (`ClipboardContent::with_files`, read back with `files()`): one file URL item per file on macOS, so Finder pastes the files, and the file list on Windows and Linux. Windows and Linux write one form per copy: the files, else the image, else HTML with the text. The text may be empty beside an image or files, and isn't written then. Pastes to hooks that take every form carry the files too.
+
+- The Menu key (new `Key::ContextMenu`, from winit, the web and Wayland layer shells; `ContextMenu` in headless `--keys`) and Shift+F10 open the focused element's context menu: its focused link's `on_link_secondary`, else its own or its nearest ancestor's `on_secondary_press`, at the bottom-left of the link or element. A key handler or focused field that takes the key keeps it, and with no handler nothing happens. A `match` on `Key` with a `_` arm is unaffected.
+
+- `El::on_link_secondary` and `Markdown::on_link_secondary` take a right-click (or macOS control-click) on a link's glyphs with its id and point, for a per-link menu. The link takes the press from ancestors' `on_secondary_press` and the text's Copy menu; elsewhere in the text they still get it.
+
+- **`El::on_scroll_offset` follows a scroll viewport exactly.** On a scroll viewport it is
+  called with a `ScrollPos` (the offset and how far it can scroll) once at first, then in
+  every frame scrolling moves it (the wheel, a glide, a reveal) or its content resizes, after
+  that frame's scroll step and before it draws. A
+  `Live` set from it shows in that same frame, so a header that shrinks or fades as a page
+  scrolls rides the scroll 1:1, where `on_drawn_layout` hears a frame late and not at all
+  while a glide runs. `Scene::present` presents values set after `Scene::frame` without
+  stepping time. `El::on_layout`, `on_screen_layout` and `on_drawn_layout` moved, unchanged,
+  to `layout_watch.rs`.
+
+- Settled elements resnap to the pixel grid when the display scale changes, without waiting for an animation or hover update.
+
+- Scrolling long lists and sticky sidebars spends less CPU on unchanged hover highlights, preserving their enter and exit animations.
+
+- **`Cx::layout_with` and `Cx::layout_size` read what a view needs from an element's rect,
+  re-running it only when that changes.** `layout_with(key, f)` returns `f` of the rect
+  `Cx::layout` would, and re-runs the view only when `f` of the new rect differs from `f` of
+  the old one: `layout_with("feed", |r| r[1] < 0.0)` re-runs a header on the frames the feed
+  scrolls past the top, not on every scrolled frame. `layout_size` is `layout_with` the
+  `[w, h]`, so a view sizing something from an element inside a scrolling viewport no longer
+  re-commits on every scroll frame. Both settle on the first layout as `Cx::layout` does, so
+  the first frame has the right value. `memo::layout_with` and `memo::layout_size` do the same
+  for components without a `Cx`, and memos that read them are reused while the value holds.
+  `Cx::layout` keeps its half-point threshold, but movement below it now adds up until it
+  counts instead of being lost frame by frame, and a memo holding a `Cx::layout` read is
+  reused through moves below it. Layout reads and `on_layout` report an element's width and
+  height as layout sized it, so moving an element no longer changes its size by a rounding
+  error.
+
+- **A tall whole row glides in no harder than a short one.** An `El::arrives_whole` row glided
+  on the growth spring's fixed duration however far it went, and a critically damped spring
+  opens with an acceleration of its distance over its duration squared, so a tall insert (a
+  restored turn, a long pasted prompt) and the pinned viewport following it lurched as they
+  started. Past `growth::WHOLE_REACH` (300 pt) the glide now lengthens with the square root of
+  its distance, so it opens no harder than a 300 pt glide does; shorter glides are unchanged.
+
+- **Markdown: an outlined table's header no longer cuts off the outline's rounded top corners.**
+  The header row's fill now rounds by the frame's radius less its inset (and at the bottom too
+  when the table has no body rows), as the `table_body` card layout already did.
+
+- **`App::playground`: a storybook built into the window.** ⌘⇧D (Ctrl+Shift+D off macOS, or
+  `Playground::shortcut`, `None` to turn it off) shows the app's scenes plus its own
+  `Playground::page`s and `Story`s, grouped by the part of their names before a `/`. One shows at
+  a time on a plain stage, live and interactive, with a column beside it for the story's `side`
+  view and its single-letter triggers. R makes the story's state again and runs its `'r'`
+  trigger; `Play::after(secs, step)` queues timed follow-ups on the logical clock, so a replay
+  runs the same every time. ↑↓/J K move between stories, ⌘↑ ⌘↓ go to the ends, → or Tab move
+  into the side column, Esc leaves. An element focused in the stage keeps its keys until Esc.
+  Triggers and side views name their scene as `--playground` does, by path or just name. Root
+  `on_paste`, `on_drop_files` and `on_window_focus` still reach the app above the bar, and the
+  stage's root while it's open. Scenes get a fresh state, stories their own; the real
+  state keeps polling and is untouched. It's on in debug builds (`.enabled`, `RUNE_PLAYGROUND=0`);
+  its bar takes 26 pt off the bottom of the app's content, and `.bar(false)` leaves the app's
+  layout as it was. Snapshots, `--scene` and goldens never include it unless `--playground
+  [story]` is passed. `WindowSpec::playground` gives each window its own; hot reload drops it.
+  `examples/playground` shows each kind.
+
+- **Breaking: the browser dev panel is gone.** The `rune/dev` feature (and `rune-motion/dev`),
+  `App::dev_panel`, the `rune::dev` module and the `tune!` macro were removed, along with
+  `Runtime::motion_blur_enabled` and `examples/dev-panel`. Replace each `tune!("key", default, ..)`
+  with its default as a plain constant (hot reload picks up edits), drop `dev = ["rune/dev"]`
+  from the app's features, and audit scenes, pages and overlays with `App::playground`.
+  `rune::scene_clock()` works without any feature.
+
+- **A window with a still compositor rests.** A window with a `Compositor` never counted as
+  resting, so each due `wake_after` built and presented a frame even when `poll` changed
+  nothing (four presents a second for a 250 ms timer). When `Compositor::animating` is false,
+  the window now rests like any other: a due timer runs `poll` alone and draws only when that
+  poll changed something, with one frame for that poll. A compositor's frame still never counts
+  as unchanged, since the same instances may composite differently. A compositor that reports
+  `animating` (even one that starts while the window rests) draws every frame and every due
+  timer, as before. For every window, a resting wake's frame that runs covered or misses its
+  drawable no longer polls a second time, the timers that poll armed survive the window being
+  occluded or minimized before its frame, and a frame that leaves a commit pending (a
+  compositor that updates or invalidates the state while drawing) no longer lets the window
+  go idle.
+
+- **Hover waits while layout moves content under a still pointer.** When a row expanded and
+  the rows below slid, each row passing under a pointer that hadn't moved took the hover for a
+  frame or so, flashing its hover-revealed controls. The glide hold now covers all layout
+  motion: frame and offset springs, growth stacks, growths, flights and app-asked glides. As on
+  macOS, hover lands on the row under the pointer once the motion settles, or at once when the
+  pointer moves or presses. The hovered element, `on_hover_change`, hover styles, the cursor
+  and tooltips all hold together. A wheel or trackpad scroll still hovers each row it brings
+  under the pointer, a press still shows and lets go, and an element that leaves the tree,
+  starts its exit or turns inert (a modal opening) lets go of hover at once. An element on its
+  way out now hears `on_hover_change(false)`, which it used to miss; with `hover_delays`, only
+  an element whose enter was reported hears the leave, now also when it unmounts. A held press
+  no longer keeps every element it passed inside: only what contains the pressed element.
+
+- **Adding or dropping `El::group_opacity` fades, and a shrunk-end reader sticks in the tail.**
+  An element that takes on a group-opacity rest level, or drops one (a parked queue row's
+  actions shown at rest), now fades from or to full on its motion instead of cutting, and a
+  dropped one leaves nothing behind once it lands; an instant opacity motion drops it at once.
+  A reader a collapse glided to the new end sticks to it once the rows are within half a point,
+  without the rows' last fraction lifting it, so rows arriving in the collapse's long spring
+  tail grow in under a pinned end instead of mounting below the viewport. `on_far_from_bottom`
+  measures from the end collapsing rows head for, so a glide landing early or rows regrowing
+  mid-glide don't report far for a moment.
+
+- **A glide the app asked for holds a still pointer's hover until it stops.** During
+  `Tx::scroll_to_bottom` or `Tx::scroll_to`, each row passing under a pointer that hadn't moved
+  took the hover for a frame, so hover-revealed controls flashed down the list. As on macOS,
+  hover now waits for the pointer to move or the glide to end, then lands on the row under it.
+  A wheel or trackpad scroll still hovers each row it brings under the pointer, and ends the
+  hold. Presses still let go during the glide, and a row that leaves the tree under the held
+  pointer still hears `on_hover_change(false)`.
+
+- **A new `El::group_opacity` rest level fades instead of cutting.** Changing an element's rest
+  level (a row's actions shown or hidden at rest) used to multiply the new level in on the next
+  frame, so they snapped 0↔1. The rest now moves on the element's `opacity_motion`, or the
+  commit's spring without one; an instant commit, Reduce Motion and a new mount land it in the
+  frame.
+
+- **Rows leaving a padded growth stack all at once hold their place.** With every row removed,
+  the stack forgot its top padding, so the leaving rows jumped up by it on their first frame.
+  They now collapse where they stood.
+
+- **Content shrinking under a reader who scrolled up glides to its new end.** When a growth
+  stack's rows left or shrank until it ended above the reader's offset, the viewport sat still,
+  then rode the presented end down at the collapse's own speed (thousands of points a second
+  from a standstill in one frame). It now glides to the layout's new end from rest on
+  `motion::GLIDE`, as `Tx::scroll_to` does, never past the presented end, and sticks to the end
+  once the rows get there. The glide follows a further removal to the newer end, ends if rows
+  come back past the offset, and leaves the viewport to a wheel, a fling or a kept row until
+  the rows settle. Settled, instant and reduced-motion changes still land at once. Any glide
+  whose end the content shrinks past now lands there instead of overshooting and springing back.
+
+- **A new window holds two drawables until it rests, on macOS.** A window's Metal surface now
+  starts at frame latency 1 (two drawables) and goes to its configured 2 (three) once the window
+  first goes idle on screen, or after its first second of frames there. A window that drew frames
+  back to back while coming on screen (an app animating at launch, or launch frames waiting on
+  the window server or on shader compiles) made CAMetalLayer allocate a third window-sized
+  drawable and keep it: about 12 MB more settled memory for a 980x760 window. Raising the count
+  allocates nothing until a frame needs it, so a window that animates later still gets its third
+  drawable then.
+
+- **A resting window's timer runs `poll` alone and draws only when it changed something.**
+  A due `wake_after` on a shown window with nothing moving used to build, lay out, draw and
+  present a frame every time, even when `poll` returned false. Now `poll` runs first, as it
+  does for a hidden window, and the next timer is armed; the view, layout and a frame follow
+  only when the poll returns true, asks for a scroll, a window frame or the next frame
+  (`wake_after(ZERO)`), or leaves a request the window must draw for, and that frame doesn't
+  poll again. An app polling a few times a second while idle builds no frames for those
+  polls. Motion, scrolls, queued input, hover and tooltip delays, loops, live values,
+  `SurfaceDraw` content and polls that step every frame take their frames as before.
+
+- **A resting window presents nothing for a timer frame that draws what's on screen.** When
+  only a due timer (`wake_after`, `poll`) wakes an idle window, the frame is built before a
+  drawable is taken, and when its instances, clear colour, surface size, format, scale and
+  blending match the last frame presented, with no glyph or image upload, `SurfaceDraw` or
+  system material in it, the window acquires and presents nothing. Cursor, IME, secure input,
+  help tags and the clipboard still follow the frame. A `poll` that returns true on every tick
+  with nothing new on screen no longer costs a GPU frame each time. Input, resizes, scale and
+  occlusion changes, animation, traces and compositors draw as before.
+
+- **`markdown::find(src, query, case)` (`Markdown::find`, `Case`) searches rendered Markdown text and returns source byte ranges for `Markdown::highlights`.**
+  Each outer entry of `Vec<Vec<Range<usize>>>` is one non-overlapping match in document order within a single block (paragraph, heading, list item block, table cell, code block or diff block), and each inner `Vec<Range<usize>>` lists the source UTF-8 byte ranges it covers, merged where adjacent and skipping inline markers (`**`, `*`, `~~`, `` ` ``), link and image URLs, and container prefixes. `Case::Insensitive` folds characters with `char::to_lowercase` (and Greek `'ς'` to `'σ'`) while preserving exact UTF-8 byte boundaries when lowercasing changes byte length (such as `'İ'` or `'ẞ'`/`'ß'`). `Markdown::highlights` now accepts `find` matches directly (`Vec<Range<usize>>`, `&[Range<usize>]`, or paired with `Highlight`) as well as single `Range<usize>` items.
+
+- Cmd+A (and the Select All menu item) with no selection now selects all of a selectable group, so a read-only `Markdown` view needn't call `Tx::select_all_text` itself: the group holding the selection, else the one last clicked or selected in the window while it's mounted, else the window's only selectable group, else nothing. An app's `on_key` still runs first and a focused text field keeps its own. `Tx::select_text` and `select_all_text` document that the key is the element's final key, which a `memo` id replaces.
+
+- **A launch whose place moves mid-flight turns toward it instead of jumping.** A
+  `Tx::launch` flight now blends from the offsets outside the scene it left under to the ones
+  its destination has each frame, so a row above that grows under a growth stack's offset
+  moves where it lands, never where it is (a prompt growing its copy line as the steer under
+  it stops joining its run lurched a steer in the air by 25 pt). When a growth row launched
+  itself and its slot moved, the row's instant vertical place used to land the whole flight
+  in one frame; it now restarts its path from where it is, on a spring.
+
+- **Markdown table cards: review fixes.** A scrolling full-width table no longer shifts its columns while its last row streams in. `table`, `table_outline` and `table_like` now replace an earlier `table_frame` or `table_card` (`table_like` also drops the card and the header padding), the table setters treat non-finite points as zero, a table with no body rows is sized by its header's padding alone, and a header's overflow stops at the frame's rounded top corners.
+
+- **Markdown tables on a card.** `MarkdownStyle::table_body(fill, radius, shadows)` puts the
+  body rows on a card of their own, rounded and raised, with rules between body rows only and
+  none under the header, which sits on the frame. `table_frame(fill, ring, pad)` draws a
+  filled, rounded frame with an inset ring in place of the outline, `table_header_pad(x, y)`
+  pads header cells apart from body cells, `table_full_width(true)` stretches a table to the
+  text's width (columns widen in proportion to their content), and `table_margin(top, bottom)`
+  sets the space around a table. `table_card(&kit)` sets all of these from the kit's tokens:
+  a raised `bg_base` card 2 points inside a `layer_01` frame, a faint medium header and 13-point
+  cells. Defaults are unchanged. `MarkdownStyle` now lives in `markdown/style.rs`; its path is
+  the same.
+
+- **Instant changes, live resizes and invisible exits land in the frame; a still pointer keeps
+  its hover while rows mount.** An instant commit lands a pinned viewport's slack at once
+  instead of gliding it closed a moment later (zoom). During a window resize, rows that rewrap
+  land at their new height in the frame, so a pinned tail stays put instead of sliding back
+  after the drag; a streaming row still waits for the width to settle. A removed element that
+  drew nothing last frame (faded out already, or under a parent that hid at once) unmounts
+  with no exit, and an exit stops once it draws nothing. An instant close of a modal keeps a
+  focus request outside it, as an animated close did. Nodes mounting earlier in the tree no
+  longer drop the hover of a still pointer for a frame (a hover-revealed row's actions
+  flashed out while a timeline streamed). Scripts take `{"type": "resize", "dw", "dh",
+  "dur"}`, a person dragging the window's corner. `scripts/motion-audit/analyze.py` adds
+  `cut-exit`, `reversal` and `dog-leg` findings, script `expect`ations (`instant`, `follow`,
+  `smooth`, `leaves`) and an allowlist with `--fail`.
+
+- **`macos_drop` tests skip their pasteboard round trips in a session with no pasteboard.**
+  A headless or SSH-only Mac (no window server) has no pasteboard server, and the six tests that
+  write a private pasteboard panicked there. They now probe once, print a one-line skip note and
+  pass; the pure parts (hover stand-ins, promised types, file URLs, numbered names, URL names,
+  operations, step coalescing) run everywhere. No change to apps.
+
+- **`Tx::launch(source, destination)`: a new element leaves from another's text.** The element
+  keyed `destination` that mounts in this commit starts with its first text on `source`'s text
+  (a composer's typed words), at its own size, and travels one straight screen path to its
+  place on `tok::motion::REFLOW` (or the commit's `Tx::motion`). It draws above the window and
+  outside every clip until it lands, so a sent message can rise out of a panel into a scroll
+  view while the composer clears. Reduce Motion, instant commits and an already mounted
+  destination leave it in place. Matched flights also settle later: travel progress settles
+  like a scale instead of in points, so a long flight no longer ends a couple of points short
+  and snaps the rest in one frame.
+
+- **Markdown tables: the header's rule, fill and weight are set on their own.**
+  `MarkdownStyle::table_header_rule(c)` draws the hairline under the header in its own colour
+  (a web `th` with a stronger `border-bottom` than the `td`s), `table_header_fill(c)` sets the
+  header fill without the border, and `table_header_weight(w)` gives the header a medium weight
+  beside bold `strong` text. Defaults are unchanged.
+
 - **Multi-click and click-drag selection in `text_input`.** Double-clicking a text field selects
   the word under the pointer (sharing `El::selectable`'s Unicode word boundaries), triple-clicking
   selects the line in a single-line field or the `\n`-delimited paragraph in a multi-line field,

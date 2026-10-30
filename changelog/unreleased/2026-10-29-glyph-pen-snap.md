@@ -1,1 +1,0 @@
-- **Text: a glyph no longer lands a pixel off when a colour span splits its line.** The pen is snapped to Parley's 1/256 px grid before it floors to CoreGraphics' subpixel steps, so f32 noise from summing advances in a different order (syntax highlighting, rich text spans) can't tip a glyph onto the next step.

@@ -1,1 +1,0 @@
-- **Resizable playground columns** (`Playground::widths`): the story list and the right-hand controls column in `App::playground` drag by their separator edges to resize and double-click back to their default widths, persisted in `Prefs` by default for windowed apps or through `Playground::widths(load, save)`.

@@ -1,1 +1,0 @@
-- macOS: `Chrome::traffic_lights` holds. Since macOS 26 AppKit put the buttons back at (9, 9) whenever it laid the titlebar out on its own (a title or appearance change, a zoom), so they drifted off the spot and out of line with the app's title-bar controls; the titlebar views now put them back after each layout.

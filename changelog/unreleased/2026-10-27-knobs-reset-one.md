@@ -1,1 +1,0 @@
-- rune-knobs: right-click a knob to put it back to its default, and a hovered group header offers Random and Reset for that group (right-click resets it). Clicking anywhere on a choice row puts ←→ on its options, and moving the pointer takes the highlight from the keyboard's row so only one row is lit.

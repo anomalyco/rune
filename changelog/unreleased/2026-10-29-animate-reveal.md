@@ -1,1 +1,0 @@
-- `ConfiguredOverlay::animate_reveal`: showing an overlay no longer settles motion its state started while hidden, so a notification stack's first card plays its enter transition from the first visible frame. Without it an unretained overlay still shows settled.

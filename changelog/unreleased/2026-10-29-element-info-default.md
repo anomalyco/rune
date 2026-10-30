@@ -1,1 +1,0 @@
-- `ElementInfo` implements `Default` (a plain, opaque `el()` at rest) and adds `ElementInfo::stub(key)`, so a test that stands in for `Runtime::elements` can write `ElementInfo { focused: true, ..ElementInfo::stub("send") }` and keep building when Rune adds a field.
