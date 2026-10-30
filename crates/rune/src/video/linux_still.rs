@@ -1,6 +1,11 @@
 //! Shared still-frame helpers for Linux Player backends (no ffmpeg).
 use super::*;
 
+/// True when any opaque-ish pixel has colour (preroll can hand us an all-black buffer first).
+pub(super) fn frame_has_signal(frame: &ByteFrame) -> bool {
+    frame.planes[0].chunks_exact(4).any(|p| p[0] > 8 || p[1] > 8 || p[2] > 8)
+}
+
 /// Nearest-neighbour shrink so the long edge is at most `max` (scrub previews).
 pub(super) fn fit_bgra(frame: ByteFrame, max: u32) -> ByteFrame {
     let long = frame.width.max(frame.height);

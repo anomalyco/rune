@@ -3,7 +3,7 @@
 //! Live clips use `playbin` with an `appsink` video sink (BGRA into [`NativeSurface`]) and the
 //! default audio sink for sound — one pipeline, one clock.
 use super::*;
-use super::linux_still::fit_bgra;
+use super::linux_still::{fit_bgra, frame_has_signal};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
@@ -418,17 +418,21 @@ pub(super) fn enable() {
 }
 
 fn wait_frame(session: &mut Session, c: &mut Control, playing: bool) -> Result<Option<ByteFrame>, String> {
-    for _ in 0..120 {
+    let mut last = None;
+    for _ in 0..180 {
         if !session.pump_bus(c) {
             return Err(c.failed.clone().unwrap_or_else(|| "gstreamer session failed".into()));
         }
         session.reconcile(c, Instant::now());
         if let Some(frame) = session.pull_frame(playing)? {
-            return Ok(Some(frame));
+            if frame_has_signal(&frame) {
+                return Ok(Some(frame));
+            }
+            last = Some(frame);
         }
         std::thread::sleep(Duration::from_millis(8));
     }
-    Ok(None)
+    Ok(last)
 }
 
 pub(super) fn probe(
@@ -444,6 +448,9 @@ pub(super) fn probe(
     let mut c = Control::default();
     c.muted = true;
     session.reconcile(&mut c, Instant::now());
+    if kind == Kind::Audio && session.list_tracks(MediaTrackKind::Audio).is_empty() {
+        return Err("no playable audio track".into());
+    }
     let d = session
         .duration_secs()
         .filter(|d| *d > 0.0)

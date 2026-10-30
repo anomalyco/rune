@@ -3,7 +3,7 @@
 //! Live clips use `libvlc_video_set_callbacks` (RV32 → BGRA into [`NativeSurface`]) and
 //! libVLC's audio output. One media player, one clock.
 use super::*;
-use super::linux_still::fit_bgra;
+use super::linux_still::{fit_bgra, frame_has_signal};
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::ptr;
@@ -661,18 +661,26 @@ pub(super) fn enable() {
 }
 
 fn wait_frame(session: &mut Session) -> Result<Option<ByteFrame>, String> {
-    for _ in 0..120 {
+    unsafe { libvlc_media_player_set_pause(session.player, 0) };
+    let mut last = None;
+    for _ in 0..180 {
         let mut c = Control::default();
         if !session.pump(&mut c) {
+            unsafe { libvlc_media_player_set_pause(session.player, 1) };
             return Err(c.failed.clone().unwrap_or_else(|| "libvlc session failed".into()));
         }
         session.sync_meta(&mut c);
         if let Some(frame) = session.pull_frame()? {
-            return Ok(Some(frame));
+            if frame_has_signal(&frame) {
+                unsafe { libvlc_media_player_set_pause(session.player, 1) };
+                return Ok(Some(frame));
+            }
+            last = Some(frame);
         }
         std::thread::sleep(Duration::from_millis(8));
     }
-    Ok(None)
+    unsafe { libvlc_media_player_set_pause(session.player, 1) };
+    Ok(last)
 }
 
 pub(super) fn probe(
@@ -698,6 +706,9 @@ pub(super) fn probe(
         std::thread::sleep(Duration::from_millis(8));
     }
     session.reconcile(&mut c, Instant::now());
+    if kind == Kind::Audio && session.list_tracks(MediaTrackKind::Audio).is_empty() {
+        return Err("no playable audio track".into());
+    }
     let meta = c.meta.ok_or_else(|| "media has no duration".to_string())?;
     if kind == Kind::Video && meta.size.is_none() {
         let _ = wait_frame(&mut session)?;

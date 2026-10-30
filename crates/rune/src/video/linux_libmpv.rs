@@ -3,7 +3,7 @@
 //! Live clips use `vo=libmpv` with the software render API (BGRA into [`NativeSurface`]) and
 //! libmpv's audio output. One handle, one clock.
 use super::*;
-use super::linux_still::fit_bgra;
+use super::linux_still::{fit_bgra, frame_has_signal};
 use libmpv2_sys as sys;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
@@ -176,6 +176,7 @@ impl Session {
                 if let Err(e) = set_option(handle, "vo", "libmpv") {
                     return destroy_on_err(handle, e);
                 }
+                let _ = set_option(handle, "hr-seek", "yes");
             }
             Kind::Audio => {
                 if let Err(e) = set_option(handle, "video", "no") {
@@ -545,19 +546,66 @@ pub(super) fn enable() {
 }
 
 
-fn wait_frame(session: &mut Session) -> Result<Option<ByteFrame>, String> {
-    for _ in 0..120 {
+fn seek_exact(session: &mut Session, at: f64) -> Result<(), String> {
+    // time-pos / seek are often unavailable until the demuxer has produced a clock. Prime briefly.
+    let _ = set_prop_flag(session.handle, "pause", false);
+    for _ in 0..60 {
         let mut c = Control::default();
         if !session.pump(&mut c) {
             return Err(c.failed.clone().unwrap_or_else(|| "mpv session failed".into()));
         }
         session.sync_meta(&mut c);
-        if let Some(frame) = session.pull_frame()? {
-            return Ok(Some(frame));
+        if session.position().is_some() {
+            break;
         }
         std::thread::sleep(Duration::from_millis(8));
     }
-    Ok(None)
+    let _ = set_prop_flag(session.handle, "pause", true);
+    let _ = command(session.handle, &["seek", &format!("{at:.6}"), "absolute"]);
+    let _ = set_prop_f64(session.handle, "time-pos", at);
+    for _ in 0..180 {
+        let mut c = Control::default();
+        if !session.pump(&mut c) {
+            return Err(c.failed.clone().unwrap_or_else(|| "mpv session failed".into()));
+        }
+        if let Some(pos) = session.position()
+            && (pos - at).abs() < 0.08
+        {
+            session.seeking = None;
+            return Ok(());
+        }
+        let _ = set_prop_f64(session.handle, "time-pos", at);
+        std::thread::sleep(Duration::from_millis(8));
+    }
+    Err(format!(
+        "seek to {at:.3} timed out (pos={:?})",
+        session.position()
+    ))
+}
+
+fn wait_frame(session: &mut Session, at: Option<f64>) -> Result<Option<ByteFrame>, String> {
+    // Stay paused: unpausing races an in-flight seek and returns the first frame again.
+    let _ = set_prop_flag(session.handle, "pause", true);
+    let mut last = None;
+    for _ in 0..180 {
+        let mut c = Control::default();
+        if !session.pump(&mut c) {
+            return Err(c.failed.clone().unwrap_or_else(|| "mpv session failed".into()));
+        }
+        session.sync_meta(&mut c);
+        let pos = session.position();
+        if let Some(frame) = session.pull_frame()? {
+            if frame_has_signal(&frame) {
+                let on_target = at.is_none_or(|want| pos.is_some_and(|p| (p - want).abs() < 0.1));
+                if on_target {
+                    return Ok(Some(frame));
+                }
+            }
+            last = Some(frame);
+        }
+        std::thread::sleep(Duration::from_millis(8));
+    }
+    Ok(last)
 }
 
 pub(super) fn probe(
@@ -583,9 +631,12 @@ pub(super) fn probe(
         std::thread::sleep(Duration::from_millis(8));
     }
     session.reconcile(&mut c, Instant::now());
+    if kind == Kind::Audio && session.list_tracks(MediaTrackKind::Audio).is_empty() {
+        return Err("no playable audio track".into());
+    }
     let meta = c.meta.ok_or_else(|| "media has no duration".to_string())?;
     if kind == Kind::Video && meta.size.is_none() {
-        let _ = wait_frame(&mut session)?;
+        let _ = wait_frame(&mut session, None)?;
         let mut c2 = Control::default();
         session.sync_meta(&mut c2);
         if let Some(m) = c2.meta {
@@ -611,11 +662,22 @@ pub(super) fn decode(
     let mut session = Session::open(source, Kind::Video, native.size)?;
     let mut c = Control::default();
     c.muted = true;
-    c.seek = Some(at.max(0.0));
-    session.reconcile(&mut c, Instant::now());
-    let frame = wait_frame(&mut session)?.ok_or_else(|| "timed out decoding frame".to_string())?;
+    // Reach the target before we start decoding frames.
+    for _ in 0..32 {
+        if !session.pump(&mut c) {
+            return Err(c.failed.clone().unwrap_or_else(|| "mpv session failed".into()));
+        }
+        session.sync_meta(&mut c);
+        if c.opened() || session.size.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(8));
+    }
+    let at = at.max(0.0);
+    seek_exact(&mut session, at)?;
+    let frame = wait_frame(&mut session, Some(at))?.ok_or_else(|| "timed out decoding frame".to_string())?;
     native.size = Some((frame.width, frame.height));
-    native.frame = Some(native.frame.unwrap_or(1.0 / 30.0));
+    native.frame = Some(c.meta.map(|m| m.frame).unwrap_or(native.frame.unwrap_or(1.0 / 30.0)));
     Ok(frame)
 }
 
