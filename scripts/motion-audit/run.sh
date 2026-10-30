@@ -7,8 +7,10 @@ O=${1:-target/motion-audit}
 mkdir -p "$O"
 cargo build --release -p todo -p settings -p kit-gallery -p odometer
 cargo build --release -p rune-kit --example shell
+cargo build --release -p rune --example growth_reorder
 B=${CARGO_TARGET_DIR:-target}/release
 SH=$B/examples/shell
+GR=$B/examples/growth_reorder
 S=scripts/motion-audit/scenarios
 FPS=120
 
@@ -38,4 +40,6 @@ run shell-virtual-peek 5.0 $SH virtual --script $S/shell-peek.json
 run shell-virtual-reorder 3.6 $SH virtual --script $S/shell-reorder-virtual.json
 run shell-window-resize 3.0 $SH --script $S/shell-window-resize.json
 run shell-virtual-window-resize 3.0 $SH virtual --script $S/shell-window-resize.json
+run growth-reorder    4.2 $GR --script $S/growth-reorder.json
+run growth-reorder-virtual 4.0 $GR virtual --script $S/growth-reorder-virtual.json
 ls "$O"

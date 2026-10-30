@@ -144,7 +144,7 @@ impl<S: 'static> Measurement<'_, S> {
         // Index-built rows build here, so memos inside them share the view's cache. A window that
         // fits its content lays its root out at its natural height, which nothing bounds.
         let bound = if self.fit_height { f32::INFINITY } else { self.viewport.1 };
-        self.window_tree(&mut root, "", 0, None, tx.settle, force_all, bound, false, None);
+        self.window_tree(&mut root, "", 0, None, tx, force_all, bound, false, None);
         root
     }
 

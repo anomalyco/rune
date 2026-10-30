@@ -248,6 +248,8 @@ mod relayout;
 mod virtual_window;
 #[path = "runtime/unseen_presence.rs"]
 mod unseen_presence;
+#[path = "runtime/row_reorder.rs"]
+mod row_reorder;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Env {
@@ -980,6 +982,7 @@ struct Stack {
     pub(crate) growing: bool,
     /// Whether any row in the stack is still animating.
     pub(crate) moving: bool,
+    reorder: row_reorder::Reorder,
 }
 
 struct LayoutEntry {
@@ -3111,7 +3114,7 @@ impl<S: 'static> Measurement<'_, S> {
     /// `bound` is the most `el` can be tall (see [`crate::virtual_list::height_bound`]); `scroll`
     /// is the scroll viewport `el` is the content of, whether it sticks to the bottom, and its bound.
     #[allow(clippy::too_many_arguments)]
-    fn window_tree(&mut self, el: &mut El, parent: &str, index: usize, scroll: Option<(&str, bool, f32)>, settle: bool, force_all: bool, bound: f32, inert: bool, group: Option<&str>) {
+    fn window_tree(&mut self, el: &mut El, parent: &str, index: usize, scroll: Option<(&str, bool, f32)>, tx: &Tx, force_all: bool, bound: f32, inert: bool, group: Option<&str>) {
         el.expand_memo();
         let inert = inert || el.inert;
         let bound = crate::virtual_list::height_bound(&el.style, bound);
@@ -3120,7 +3123,7 @@ impl<S: 'static> Measurement<'_, S> {
             assert!(el.growth.is_some(), "`.virtualize(..)` at {path:?} needs `.growth(GrowthSpec)` on the same element");
             let (scroll_path, sticky, scroll_bound) = scroll.expect("virtual stack must be the direct child of a scroll viewport");
             let old_scroll = self.path_ids.get(scroll_path).and_then(|id| self.scrolls.get(id));
-            let pinned = (settle && sticky) || old_scroll.map_or(sticky, |s| s.pinned);
+            let pinned = (tx.settle && sticky) || old_scroll.map_or(sticky, |s| s.pinned);
             let mut offset = old_scroll.map_or(0.0, |s| s.offset as f32);
             // A new viewport has no height yet: its bound from the tree, else the window's.
             let first = if scroll_bound.is_finite() { scroll_bound } else { self.viewport.1 };
@@ -3176,12 +3179,14 @@ impl<S: 'static> Measurement<'_, S> {
                         None => crate::key_diagnostics::warn_once(&duplicates),
                     }
                 }
-                // Offset-driven reorder already keeps each row where it was drawn. Anchoring
-                // to the formerly first row as it changes slots would scroll the entire list
-                // a second time. Inserts/removals still preserve the reader's anchor.
+                // A reorder keeps each row where it was drawn, by its offset or by sliding it
+                // (`row_reorder.rs`). Anchoring to the formerly first row as it changes slots
+                // would scroll the entire list a second time. Inserts/removals still preserve
+                // the reader's anchor, and so does a reorder that lands at once.
+                let slides = !tx.instant && !tx.settle && !tx.relayout && !self.reduced_motion;
                 let reorder = keys.len() == v.keys.len() && keys.iter().all(|key| v.has(key))
-                    && self.nodes.iter().any(|n| n.vis.offset != [0.0; 2]
-                        && n.parent.is_some_and(|p| self.nodes[p].path == path));
+                    && (slides || self.nodes.iter().any(|n| n.vis.offset != [0.0; 2]
+                        && n.parent.is_some_and(|p| self.nodes[p].path == path)));
                 v.set_keys(keys, self.commits, (!pinned && !reorder).then_some(offset))
             };
             v.anchor = anchor;
@@ -3193,7 +3198,7 @@ impl<S: 'static> Measurement<'_, S> {
             // Rows new since the last commit spread over frames, unless this pass is a retry to
             // fill the viewport or a settle. A list's first showing is all new rows: it mounts
             // its viewport and a budget of overscan, and the rest fills over the next frames.
-            let budget = v.indexed && !self.retry && !settle;
+            let budget = v.indexed && !self.retry && !tx.settle;
             let shown = std::mem::take(&mut v.shown);
             v.select(offset, pinned, budget.then_some(&shown));
             if force_all { v.range = 0..v.keys.len(); v.before = 0.0; v.after = 0.0; }
@@ -3211,7 +3216,7 @@ impl<S: 'static> Measurement<'_, S> {
         let child_group = if el.selection_group { Some(path.as_str()) } else { group };
         for (i, child) in el.children.iter_mut().enumerate() {
             let bound = bounds.of(child);
-            self.window_tree(child, &path, i, scroll, settle, force_all, bound, inert, child_group);
+            self.window_tree(child, &path, i, scroll, tx, force_all, bound, inert, child_group);
         }
     }
 
@@ -3554,6 +3559,8 @@ impl<S: 'static> Runtime<S> {
                 || order.iter().any(|r| self.grows.get(r).is_some_and(|g| g.moving()));
             // Order holds the rows this commit brought and the ones still closing; no others.
             stack.tops.retain(|id, _| new_set.contains(id) || stack.closing.contains_key(id));
+            let animates = existed && !instant && !tx.relayout && !self.reduced_motion;
+            stack.reorder.measure(animates, &stack.order, &order, stack.gap, |id| self.grows.get(&id).map(|g| g.h));
             stack.order = order;
             self.stacks.insert(cid, stack);
         }
@@ -3624,7 +3631,7 @@ impl<S: 'static> Runtime<S> {
             }
             self.scene.set_ride_trailing(id, nodes[i].vis.ride_trailing);
             // How far a growth or virtual row's place jumps in this commit (drawn minus new).
-            let mut row_jump = 0.0;
+            let (mut row_jump, mut reorder_jump) = (0.0, 0.0);
             if was_present {
                 // As in SwiftUI, a node leaves with the transition of its last render.
                 if !was_exiting {
@@ -3646,6 +3653,7 @@ impl<S: 'static> Runtime<S> {
                     // still springs, or a re-centred column jumps against its moving parent. So
                     // do `animate_layout` contents inside the row.
                     if let Some(drawn) = self.scene.get(id, prop::FRAME) { row_jump = drawn.y - scene_rect.y; }
+                    reorder_jump = self.reorder_jump(&nodes, i);
                     let mut la = LayoutAnim::axes(anim_l, Anim::INSTANT);
                     if tx.motion.is_none() && nodes[i].width_leads {
                         la = la.width_leads();
@@ -3697,7 +3705,7 @@ impl<S: 'static> Runtime<S> {
             }
             let shift = nodes[i].vis.offset;
             if nodes[i].looping.is_none() && !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Offset)
-                && (shift != [0.0; 2] || self.scene.store().has(id, prop::OFFSET))
+                && (shift != [0.0; 2] || reorder_jump != 0.0 || self.scene.store().has(id, prop::OFFSET))
             {
                 let to = rune_motion::Vec2::new(shift[0], shift[1]);
                 if lands || !was_present || was_exiting || self.reduced_motion {
@@ -3713,6 +3721,8 @@ impl<S: 'static> Runtime<S> {
                         Some(anim) => self.scene.animate(id, prop::OFFSET, to, anim),
                         None => self.scene.animate(id, prop::OFFSET, to, spring_l),
                     }
+                } else if reorder_jump != 0.0 {
+                    self.slide_reordered(id, reorder_jump, to, anim_l);
                 }
             }
             let rest_quiet = lands || !was_present || was_exiting || self.reduced_motion;

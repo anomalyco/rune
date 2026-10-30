@@ -128,7 +128,8 @@ pub struct ScrollSpec {
 }
 
 /// A growth stack (the session timeline): children are rows whose heights ease on `spring`
-/// with per-second speed limits; positions derive from the presented heights above.
+/// with per-second speed limits; positions derive from the presented heights above. Rows an
+/// animated commit puts in a new order slide from where they were drawn into their new places.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GrowthSpec {
     pub spring: Spring,
