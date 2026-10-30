@@ -619,6 +619,15 @@ impl<S: 'static> Runtime<S> {
         self.animating
     }
 
+    /// Wakes when a delayed start at animation time `at` comes due, on the loops' wake: the
+    /// frame then runs at exactly that time, however long the host slept. A hidden window
+    /// sleeps through it; showing it settles.
+    fn wake_for_motion(&mut self, at: f64) {
+        if !self.surface_visible || self.time_scale <= 0.0 { return; }
+        let wake = self.clock + (at - self.t).max(0.0) / self.time_scale as f64;
+        if self.loop_wake.is_none_or(|w| wake < w.0) { self.loop_wake = Some((wake, at)); }
+    }
+
     pub(super) fn catch_up_motion(&mut self, dt: f64) {
         let step = dt * self.time_scale as f64;
         self.t += step;
@@ -653,9 +662,13 @@ impl<S: 'static> Runtime<S> {
         }
         self.end_unseen_exits();
         let out = self.scene.frame();
-        let mut animating = out.animating;
-        let mut sources = if out.animating { AnimSource::TRACKS } else { 0 };
-        if !out.exited.is_empty() {
+        let (mut animating, exited) = (out.animating, !out.exited.is_empty());
+        // Tracks that only wait for a delayed start (`El::enter_delay`, a delayed `Anim`)
+        // draw nothing new until it: sleep, and wake for it after the build.
+        let waits = if animating { self.scene.store().waiting_until() } else { None };
+        if waits.is_some() { animating = false; }
+        let mut sources = if animating { AnimSource::TRACKS } else { 0 };
+        if exited {
             self.prune_exited();
         }
         self.land_group_fades();
@@ -699,6 +712,7 @@ impl<S: 'static> Runtime<S> {
         animating |= source(self.static_scale_settling || self.pixel_snap.easing(), AnimSource::SCALE_SETTLE);
         animating |= source(self.videos_active, AnimSource::VIDEO);
         animating |= source(self.draw_text_flights(), AnimSource::TEXT_FLIGHT);
+        if let Some(at) = waits { self.wake_for_motion(at); }
         self.images.end_frame();
         if self.track_marks {
             self.marks.resize(self.instances.len(), 0);

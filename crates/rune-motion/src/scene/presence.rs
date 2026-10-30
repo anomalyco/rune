@@ -8,6 +8,16 @@ impl Scene {
     /// If the key is still exiting, `Mount::Animated` revives it from exactly where it is and
     /// `Mount::Initial` lands it present, at rest on `spec.frame`.
     pub fn insert(&mut self, id: NodeId, spec: NodeSpec, mount: Mount) {
+        self.insert_delayed(id, spec, mount, 0.0);
+    }
+
+    /// [`insert`](Self::insert), with a new node's entrance held `delay` seconds of its own
+    /// clock: it waits whole at its insertion effect (offset, scale, blur, opacity and reveal
+    /// together), then plays the entrance on the transition's enter spring. A node that mounts
+    /// at once, rides an entering parent or revives mid-exit ignores the delay, and
+    /// [`land_waiting`](Self::land_waiting) lands it. Removed while it waits, it unmounts at
+    /// once if its insertion effect is invisible, or else leaves from that effect.
+    pub fn insert_delayed(&mut self, id: NodeId, spec: NodeSpec, mount: Mount, delay: f32) {
         if let Some(i) = self.slot(id) {
             self.nodes[i].transition = spec.transition;
             let exiting = matches!(self.nodes[i].phase, Phase::Exiting { .. });
@@ -92,7 +102,8 @@ impl Scene {
         let enter = spec.transition.springs.enter;
         if animate {
             self.track_set(i as usize, prop::PRESENCE, 0.0);
-            self.track_animate(i as usize, prop::PRESENCE, 1.0, Anim::from(enter));
+            let delay = if delay.is_finite() { delay.max(0.0) } else { 0.0 };
+            self.track_animate(i as usize, prop::PRESENCE, 1.0, Anim { delay, ..Anim::from(enter) });
             self.intent(id, Intent::TRANSITION | Intent::OPACITY, enter.duration);
         } else if !self.at_base(i as usize, prop::PRESENCE, 1.0) {
             self.track_set(i as usize, prop::PRESENCE, 1.0);
@@ -118,6 +129,13 @@ impl Scene {
             return;
         }
         let p = self.presence_now(i);
+        let unplayed = p < 1e-3;
+        if unplayed && lerp_fx(&self.nodes[i].fx_a, &self.nodes[i].fx_b, p)[0] < 1.0 / 512.0 {
+            // An entrance that hasn't shown anything yet (a delayed one still waiting) has no
+            // exit to play.
+            self.remove_now(i);
+            return;
+        }
         let rem = self.nodes[i].transition.removal.kit_rules(true);
         let target = fx_of(&rem);
         let n = &mut self.nodes[i];
@@ -126,6 +144,11 @@ impl Scene {
         if p >= 0.999 {
             n.fx_a = target;
             n.fx_b = FX_ID;
+        } else if unplayed {
+            // None of the entrance has played, but its insertion effect shows (a slide that
+            // doesn't fade): leave from there, as a whole exit from it.
+            n.fx_b = lerp_fx(&n.fx_a, &n.fx_b, p);
+            n.fx_a = target;
         } else {
             // Mid-entrance: keep the current look at p, land exactly on the removal effect at 0.
             let cur = lerp_fx(&n.fx_a, &n.fx_b, p);
@@ -142,7 +165,11 @@ impl Scene {
         }
         n.dirty = true;
         let exit = n.transition.springs.exit;
-        self.ensure_prop(i, prop::PRESENCE);
+        if unplayed {
+            self.track_set(i, prop::PRESENCE, 1.0);
+        } else {
+            self.ensure_prop(i, prop::PRESENCE);
+        }
         self.track_animate(i, prop::PRESENCE, 0.0, Anim::from(exit));
         self.intent(id, Intent::TRANSITION | Intent::OPACITY, exit.duration);
     }
@@ -159,6 +186,17 @@ impl Scene {
     pub fn enter_now(&mut self, id: NodeId) {
         if let Some(i) = self.slot(id)
             && self.nodes[i].phase == Phase::Entering
+        {
+            self.present_now(i);
+        }
+    }
+
+    /// An entering node that hasn't started to show (a delayed entrance still waiting) is
+    /// present at once. One already under way keeps going.
+    pub fn land_waiting(&mut self, id: NodeId) {
+        if let Some(i) = self.slot(id)
+            && self.nodes[i].phase == Phase::Entering
+            && self.presence_now(i) < 1e-3
         {
             self.present_now(i);
         }

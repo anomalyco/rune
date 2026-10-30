@@ -459,15 +459,14 @@ impl AnimationStore {
         while i < self.active.len() {
             let t = self.active[i] as usize;
             let now = if clocked { self.time_of(t) } else { self.now };
-            if clocked {
-                let frozen = self.frozen(t);
-                if frozen && self.t_held[t] {
-                    // Nothing moves on a stopped clock, and it was already sampled where it holds.
-                    i += 1;
-                    continue;
-                }
-                self.t_held[t] = frozen;
+            // Nothing moves on a stopped clock, or on a track that only waits for a delayed
+            // start: once sampled where it holds, it isn't touched again until it moves.
+            let held = (clocked && self.frozen(t)) || (now >= self.t_settle_at[t] && self.t_next_due[t] > now);
+            if held && self.t_held[t] {
+                i += 1;
+                continue;
             }
+            self.t_held[t] = held;
             self.touched.push(TrackId { index: t as u32, generation: self.t_meta[t].generation });
             if self.t_next_due[t] <= now {
                 self.apply_due(t, now);

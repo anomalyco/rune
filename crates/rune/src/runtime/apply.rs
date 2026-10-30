@@ -354,8 +354,8 @@ impl<S: 'static> Runtime<S> {
                     && !was_exiting
                     && !self.reduced_motion;
                 let mount = if enters_at_once || nodes[i].virtual_mount || quiet_row || self.enters_unseen(&nodes, &unseen, i) { Mount::Initial } else { Mount::Animated };
-                self.scene.insert(id, spec, mount);
-            }
+                self.scene.insert_delayed(id, spec, mount, nodes[i].vis.enter_delay);
+            } else if tx.settle { self.scene.land_waiting(id); }
             self.scene.set_ride_trailing(id, nodes[i].vis.ride_trailing);
             // How far a growth or virtual row's place jumps in this commit (drawn minus new).
             let (mut row_jump, mut reorder_jump) = (0.0, 0.0);

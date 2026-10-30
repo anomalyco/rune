@@ -1,7 +1,7 @@
 //! The stories, one function per `@opencode/ui` Storybook story id (title + export name).
 //! Layout wrappers copy each story's own inline styles.
 
-use rune::{Edge, El, TextEdit, TextStyle, Tx, col, row, text};
+use rune::{Edge, El, Stagger, TextEdit, TextStyle, Transition, Tx, col, row, text};
 use rune_kit::*;
 use rune_theme_opencode::icons as ic;
 
@@ -86,6 +86,7 @@ stories! {
     "rune-combobox--animated-filter" => combobox::animated_filter,
     "ui-dialog--basic" => dialog_basic,
     "motion-focus-modal" => motion_focus_modal,
+    "motion-stagger-list" => motion_stagger_list,
     "ui-button--playground" => button_playground,
     "ui-button--variants" => button_variants,
     "ui-button--sizes" => button_sizes,
@@ -265,6 +266,22 @@ fn motion_focus_modal(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
         .child(Checkbox::new(s.is("check")).label("Remember").on_toggle(|s: &mut G| s.flip("check")).build(k).key("check"))
         .child(SegmentedControl::new(&["First", "Second"], Some(if s.is("second") { 1 } else { 0 }))
             .on_pick(|s: &mut G, i, _| { if s.is("second") != (i == 1) { s.flip("second"); } }).build(k))
+}
+
+/// Five rows that rise and fade in one after another (`El::enter_delay` with a `Stagger`) and
+/// leave together.
+fn motion_stagger_list(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    const ROWS: [&str; 5] = ["Inbox", "Drafts", "Sent", "Archive", "Trash"];
+    let stagger = Stagger::new(0.05);
+    let rows = ROWS.iter().enumerate().filter(|_| s.is("rows")).map(|(i, label)| {
+        row().key(*label).w(240.0).h(36.0).px(12.0).center_y().fill(k.c.surface_base).radius(k.radius.md)
+            .child(text(*label).font(k.ty.ui).color(k.c.text_base))
+            .transition(Transition::offset(0.0, 12.0).combined(Transition::opacity()))
+            .enter_delay(stagger.delay(i, ROWS.len()))
+    });
+    col().gap(8.0)
+        .child(Button::new("Show rows").on_press(|s: &mut G| s.flip("rows")).build(k).key("opener"))
+        .child(col().key("rows").gap(4.0).children(rows))
 }
 
 pub fn render(s: &G, k: &Kit, overlays: &mut Vec<El>) -> El {

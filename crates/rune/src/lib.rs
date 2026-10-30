@@ -101,6 +101,7 @@ mod el_backdrop;
 mod el_child_exit;
 mod el_drop;
 mod el_effect;
+mod el_enter_delay;
 mod el_focus;
 mod el_handlers;
 mod el_pills;
@@ -224,7 +225,8 @@ pub use file_dialog::{FileDialogError, FileDialogKind, FileDialogOptions, FileDi
 pub use image::{Image, ImageCache, ImageError, ImageId};
 pub use rune_motion::{
     Anim, AnimExt, Beat, Blend, Clock, CubicBezier, Curve, Decay, Easing, Edge, Effect, LayoutAnim, LoopKind, LoopSpec, NodeId,
-    Phase as PresencePhase, Presented, Reveal, Sequence, Spring, SpringPair, StepPosition, Transition, Travel, Vec2, Velocity,
+    Phase as PresencePhase, Presented, Reveal, Sequence, Spring, SpringPair, Stagger, StaggerFrom, StepPosition, Transition, Travel, Vec2,
+    Velocity,
 };
 pub use runtime::{Cx, ElementInfo, Env, MotionElement, Pick, Picked, Pose, Runtime, SelectedText, SelectionChange, TextSelection, TitlebarAction, Waker, commit_generation};
 pub use shape::{LineCap, Path, Shape};

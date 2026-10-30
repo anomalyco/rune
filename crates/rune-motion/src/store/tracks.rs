@@ -16,6 +16,28 @@ impl AnimationStore {
         })
     }
 
+    /// When everything running only waits for a delayed start, holding still until then: the
+    /// store time the first of them starts. `None` while anything moves, or nothing waits. A
+    /// host can sleep until then rather than draw frames that show nothing new. Tracks on a
+    /// stopped clock don't count, as in [`running`](Self::running).
+    pub fn waiting_until(&self) -> Option<f64> {
+        let mut first = f64::INFINITY;
+        for &t in &self.active {
+            let t = t as usize;
+            if self.frozen(t) {
+                continue;
+            }
+            let now = self.time_of(t);
+            let due = self.t_next_due[t];
+            if self.t_settle_at[t] > now || !due.is_finite() {
+                return None;
+            }
+            let k = self.clock_scale(self.t_clock[t]) as f64;
+            first = first.min(self.now + (due - now).max(0.0) / k);
+        }
+        first.is_finite().then_some(first)
+    }
+
     /// Like [`touched`](Self::touched), with track ids.
     pub fn touched_tracks(&self) -> impl Iterator<Item = (TrackId, NodeId, PropId)> + '_ {
         self.touched.iter().filter(|&&id| self.contains(id)).map(|&id| {

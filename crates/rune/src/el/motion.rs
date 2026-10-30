@@ -37,8 +37,11 @@ impl El {
         self.vis.raise = true;
         self
     }
-    /// Override this element's opacity curve, including an optional entrance delay.
-    /// The first paint and explicit instant/settle transactions still land immediately.
+    /// Override the curve this element's own opacity changes on, with an optional delay
+    /// ([`AnimExt::delay`](crate::AnimExt::delay)). The first paint and explicit
+    /// instant/settle transactions still land immediately. A new element's entrance runs on
+    /// its [`transition`](Self::transition) and multiplies this opacity; hold all of it with
+    /// [`enter_delay`](Self::enter_delay).
     pub fn opacity_motion(mut self, anim: impl Into<Anim>) -> Self {
         self.opacity_motion = Some(Box::new(anim.into()));
         self
@@ -81,6 +84,7 @@ impl El {
     /// action should unmount elements at once. Rows inserted into a growth stack only grow
     /// open unless they set one, so `.transition(Transition::offset(0.0, 8.0).combined(Transition::opacity()))`
     /// on a row also slides and fades it in. Rows a virtual list remounts on scroll never replay it.
+    /// [`enter_delay`](Self::enter_delay) holds the whole entrance, as a staggered list does.
     pub fn transition(mut self, t: Transition) -> Self {
         self.transition = Some(Box::new(t));
         self
