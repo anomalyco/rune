@@ -202,21 +202,58 @@ fn reordered_virtual_rows_slide_and_a_scroll_moves_none() {
 }
 
 #[test]
-fn zz_probe_move_grow() {
-    let rows = vec![("m0", 120.0), ("m1", 60.0), ("m2", 90.0), ("w", 77.0), ("a", 53.0), ("b", 53.0)];
-    let mut rt = settled(rows);
-    let dump = |rt: &Runtime<Rows>, tag: &str| {
-        let mut line = format!("{tag}");
-        for k in ["a", "w", "b"] {
-            let e = rt.elements().into_iter().find(|e| e.key.as_deref() == Some(k) && !e.exiting).unwrap();
-            let n = rt.nodes.iter().find(|n| n.path.ends_with(&format!("/{k}"))).unwrap();
-            let off = rt.scene.get(n.id, prop::OFFSET).map_or(0.0, |o| o.y);
-            let fr = rt.scene.get(n.id, prop::FRAME).map_or(-1.0, |r| r.y);
-            line += &format!(" | {k} y={:.2} h={:.2} off={:.2} frame={:.2} tgt={:.1}", e.rect[1], e.rect[3], off, fr, n.target[1]);
-        }
-        println!("{line}");
-    };
-    dump(&rt, "before");
+fn a_row_that_moves_and_grows_slides_without_a_step() {
+    // A delivered prompt grows from 53 to 77 pt and moves above the Working row in one commit.
+    let mut rt = settled(vec![("m0", 120.0), ("m1", 60.0), ("m2", 90.0), ("w", 77.0), ("a", 53.0), ("b", 53.0)]);
+    let (a0, w0, b0) = (y(&rt, "a"), y(&rt, "w"), y(&rt, "b"));
     rt.update(|rows, _| { rows[4].1 = 77.0; let a = rows.remove(4); rows.insert(3, a); });
-    for f in 0..8 { rt.frame(1.0 / 120.0); dump(&rt, &format!("f{f}")); }
+    let frames = trace(&mut rt, &["a", "w", "b"], 120);
+    assert!(!rt.animating);
+    let col = |k: usize| frames.iter().map(|f| f[k]).collect::<Vec<_>>();
+    let end = &frames[119];
+    assert!((end[1] - end[0] - 85.0).abs() < 0.01, "Working rests under the grown row: {end:?}");
+    slides("a", a0, end[0], &col(0), 8.0);
+    slides("w", w0, end[1], &col(1), 8.0);
+    let mut last = b0;
+    for (f, &y) in col(2).iter().enumerate() {
+        assert!((y - last).abs() <= 8.0, "b jumps {} pt at frame {f}: {:?}", y - last, col(2));
+        last = y;
+    }
+}
+
+/// Three rows whose contents sit under a gap, with a foot under each body; the middle row's gap
+/// and body height are the state.
+fn gapped(&(gap, body): &(f32, f32), _: &mut Cx<(f32, f32)>) -> El {
+    let row = |k: &'static str, pt: f32, h: f32| col().key(k).w_full().pt(pt)
+        .child(el().key(format!("{k}-body")).w_full().h(h).fill(Color::WHITE))
+        .child(el().key(format!("{k}-foot")).w_full().h(20.0).mt(4.0).fill(Color::WHITE));
+    let stack = col().key("stack").w_full().padding(12.0).gap(8.0).growth(GrowthSpec::default())
+        .child(row("a", 16.0, 37.0)).child(row("b", gap, body)).child(row("c", 16.0, 37.0));
+    col().w_full().h_full().child(col().key("scroll").w_full().h(400.0).scroll(ScrollSpec { stick_bottom: false }).child(stack))
+}
+
+#[test]
+fn contents_whose_gap_in_their_row_changes_slide_from_where_they_were_drawn() {
+    // A steer stops joining the prompt above it: its gap grows from 4 to 16 pt.
+    let mut rt = Runtime::new((4.0f32, 37.0f32), gapped, (300.0, 400.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    for _ in 0..240 { rt.frame(1.0 / 120.0); }
+    let at = |rt: &Runtime<(f32, f32)>, k: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(k) && !e.exiting).unwrap().rect[1];
+    let keys = ["b-body", "b-foot", "c-body"];
+    let ys0 = keys.map(|k| at(&rt, k));
+    rt.update(|s, _| s.0 = 16.0);
+    let frames: Vec<[f32; 3]> = (0..120).map(|_| { rt.frame(1.0 / 120.0); keys.map(|k| at(&rt, k)) }).collect();
+    assert!(!rt.animating);
+    for (k, key) in keys.iter().enumerate() {
+        slides(key, ys0[k], ys0[k] + 12.0, &frames.iter().map(|f| f[k]).collect::<Vec<_>>(), 3.0);
+    }
+    // A body that grows moves the foot under it at once, as the row's growth reveals it.
+    let foot = at(&rt, "b-foot");
+    rt.update(|s, _| s.1 = 77.0);
+    rt.frame(1.0 / 120.0);
+    assert_eq!(at(&rt, "b-foot"), foot + 40.0);
+    // Instant, the gap lands at once.
+    rt.update(|s, tx| { tx.instant(); s.0 = 4.0 });
+    rt.frame(1.0 / 120.0);
+    assert_eq!(at(&rt, "b-body"), ys0[0]);
 }

@@ -218,6 +218,8 @@ pub struct FrameOutput<'a> {
 struct Path {
     start: Rect,
     end_local: Rect,
+    /// Its parent's root-space target origin as the last frame drew it.
+    origin: Vec2,
 }
 
 // Effect state lanes: opacity, scale, offset x/y, size-fraction offset x/y, blur, hidden reveal.
@@ -720,7 +722,15 @@ impl Scene {
         };
         self.intent(id, Intent::POSITION | Intent::SIZE, ms);
         if anim.travel == Travel::Screen && !self.store.reduced_motion() {
-            let (start, vel) = self.exact_world(i);
+            // A path restarts from where it was drawn: under the origin the last frame drew it
+            // against, which an ancestor laid out elsewhere in this commit has already moved.
+            let (start, vel) = match self.nodes[i].path {
+                Some(path) => {
+                    let e = self.path_dual(i, path, path.origin);
+                    (e.map(|d| d.x), e.map(|d| d.v))
+                }
+                None => self.exact_world(i),
+            };
             self.nodes[i].frame = frame;
             self.start_path(i, start, vel, anim);
             return;
@@ -827,14 +837,7 @@ impl Scene {
     fn world_dual(&self, i: usize) -> [D; 4] {
         let n = &self.nodes[i];
         if let Some(path) = n.path {
-            let mut p = [D::c(1.0); 2];
-            self.lanes_dual(i, prop::TRAVEL.id, &mut p);
-            let s = path.start.edges();
-            let end = path.end_local.translated(self.parent_target_origin(i)).edges();
-            return core::array::from_fn(|k| {
-                let a = D::c(s[k]);
-                a.add(D::c(end[k] - s[k]).mul(p[k % 2]))
-            });
+            return self.path_dual(i, path, self.parent_target_origin(i));
         }
         let mut local = n.frame.edges().map(D::c);
         self.lanes_dual(i, prop::FRAME.id, &mut local);
@@ -844,6 +847,15 @@ impl Scene {
         let mut o = self.origin_dual(n.parent as usize);
         o[0] = o[0].add(self.trail_dual(i));
         core::array::from_fn(|k| local[k].add(o[k % 2]))
+    }
+
+    /// Where node `i` is on its screen path, ending at its layout under parent origin `origin`.
+    fn path_dual(&self, i: usize, path: Path, origin: Vec2) -> [D; 4] {
+        let mut p = [D::c(1.0); 2];
+        self.lanes_dual(i, prop::TRAVEL.id, &mut p);
+        let s = path.start.edges();
+        let end = path.end_local.translated(origin).edges();
+        core::array::from_fn(|k| D::c(s[k]).add(D::c(end[k] - s[k]).mul(p[k % 2])))
     }
 
     /// The origin children of `i` ride: layout origin plus offsets (own and presence).
@@ -940,6 +952,10 @@ impl Scene {
                 self.end_path(i);
                 self.track_set(i, prop::FRAME, end_local);
                 continue;
+            }
+            let po = self.parent_target_origin(i);
+            if let Some(path) = &mut self.nodes[i].path {
+                path.origin = po;
             }
             k += 1;
         }

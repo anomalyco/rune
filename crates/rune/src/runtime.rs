@@ -3509,6 +3509,10 @@ impl<S: 'static> Runtime<S> {
         // `El::matched` elements of this tree: (id, index, newly mounted).
         let mut arrivals: Vec<(Rc<str>, usize, bool)> = Vec::new();
         let mut mounted = vec![false; nodes.len()];
+        // Nodes this commit slid from where they were drawn, or under an ancestor that slid.
+        let mut slid = vec![false; nodes.len()];
+        // How far the top of each node's contents moved down in its growth row (drawn less new).
+        let mut top_moved = vec![0.0f32; nodes.len()];
         let mut last = paint_tracks::LastBuild::default();
         for i in 0..nodes.len() {
             let id = nodes[i].id;
@@ -3587,8 +3591,11 @@ impl<S: 'static> Runtime<S> {
                     // Growth and virtual windows own a row's vertical place; its horizontal place
                     // still springs, or a re-centred column jumps against its moving parent. So
                     // do `animate_layout` contents inside the row.
-                    if let Some(drawn) = self.scene.get(id, prop::FRAME) { row_jump = drawn.y - scene_rect.y; }
-                    reorder_jump = self.reorder_jump(&nodes, i);
+                    // A flying row's path restarts from where it is drawn, with no slide on top.
+                    if !self.flying.iter().any(|f| f.0 == id) {
+                        if let Some(drawn) = self.scene.get(id, prop::FRAME) { row_jump = drawn.y - scene_rect.y; }
+                        reorder_jump = self.reorder_jump(&nodes, i);
+                    }
                     let mut la = LayoutAnim::axes(anim_l, Anim::INSTANT);
                     if tx.motion.is_none() && nodes[i].width_leads {
                         la = la.width_leads();
@@ -3609,11 +3616,25 @@ impl<S: 'static> Runtime<S> {
                 };
                 let flying = if self.flying.is_empty() || lands { None }
                     else { self.flying.iter().position(|f| f.0 == id) };
+                // A growth row lays out its contents at once. When the top of a parent's contents
+                // moves in it (a padding, gap or margin above its first child changed), they all
+                // slide from where they were drawn; a sibling's new size still moves the ones
+                // under it at once, as the row's growth reveals it.
+                if nodes[i].in_row == RowLayout::Snaps && !stack_row && !lands && !tx.relayout && !follows_window && !out_of_sight
+                    && let Some(p) = nodes[i].parent
+                {
+                    if i == p + 1 && flying.is_none() && let Some(drawn) = self.scene.get(id, prop::FRAME) {
+                        top_moved[p] = drawn.y - scene_rect.y;
+                    }
+                    if top_moved[p].abs() > 1.0 / 64.0 && flying.is_none() {
+                        (row_jump, reorder_jump) = (top_moved[p], top_moved[p]);
+                    }
+                }
                 if let Some(f) = flying {
                     // Keep a matched flight on its one screen path, even where a growth row
-                    // owns its place; retarget it only if its layout moved, so an unrelated
-                    // commit doesn't re-time it.
-                    if self.flying[f].1 != nodes[i].local {
+                    // owns its place; retarget it only if its layout moved, or an ancestor's
+                    // under a slide its path doesn't ride, so an unrelated commit doesn't re-time it.
+                    if self.flying[f].1 != nodes[i].local || nodes[i].parent.is_some_and(|p| slid[p]) {
                         self.flying[f].1 = nodes[i].local;
                         // A growth row's instant vertical place would land the whole flight.
                         let la = if layout_anim.x == Anim::INSTANT || layout_anim.y == Anim::INSTANT { LayoutAnim::new(spring_l) } else { layout_anim };
@@ -3639,6 +3660,7 @@ impl<S: 'static> Runtime<S> {
                 }
             }
             let shift = nodes[i].vis.offset;
+            slid[i] = nodes[i].parent.is_some_and(|p| slid[p]);
             if nodes[i].looping.is_none() && !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Offset)
                 && (shift != [0.0; 2] || reorder_jump != 0.0 || self.scene.store().has(id, prop::OFFSET))
             {
@@ -3651,6 +3673,7 @@ impl<S: 'static> Runtime<S> {
                         // offset slides into its new place.
                         let now = self.scene.get(id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
                         self.scene.set(id, prop::OFFSET, rune_motion::Vec2::new(now.x, now.y + row_jump));
+                        slid[i] = true;
                     }
                     match nodes[i].vis.offset_motion.as_deref().copied() {
                         Some(anim) => self.scene.animate(id, prop::OFFSET, to, anim),
@@ -3658,6 +3681,7 @@ impl<S: 'static> Runtime<S> {
                     }
                 } else if reorder_jump != 0.0 {
                     self.slide_reordered(id, reorder_jump, to, anim_l);
+                    slid[i] = true;
                 }
             }
             let rest_quiet = lands || !was_present || was_exiting || self.reduced_motion;
