@@ -6,6 +6,6 @@ license.workspace = true
 description = "OpenCode's design language (@opencode/ui tokens, fonts, icons) as a rune-kit theme."
 
 [dependencies]
-rune = { path = "../../crates/rune" }
+rune = { path = "../../crates/rune", default-features = false }
 rune-kit = { path = "../../crates/rune-kit" }
 serde_json = "1"

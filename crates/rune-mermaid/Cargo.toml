@@ -6,4 +6,4 @@ license.workspace = true
 description = "Native Mermaid diagrams for Rune: flowcharts, sequence diagrams and state diagrams, drawn with Rune shapes and text."
 
 [dependencies]
-rune = { path = "../rune" }
+rune = { path = "../rune", default-features = false }
