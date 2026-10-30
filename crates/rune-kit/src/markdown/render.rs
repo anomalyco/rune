@@ -316,14 +316,7 @@ impl Renderer {
     pub(super) fn mermaid(&self, src: &str, map: Option<&SpanMap>) -> El {
         #[cfg(feature = "mermaid")]
         {
-            match crate::mermaid::diagram(src, &self.s.diagram) {
-                Some(d) => d,
-                None => col()
-                    .w_full()
-                    .gap(6.0)
-                    .child(self.code(src, None, map).key("source"))
-                    .child(text("Diagram not supported").font(TextStyle { size: 12.0, line_height: 16.0, ..self.s.body }).color(self.s.muted).key("hint")),
-            }
+            crate::mermaid::diagram(src, &self.s.diagram).unwrap_or_else(|| col().w_full().child(self.code(src, None, map).key("source")))
         }
         #[cfg(not(feature = "mermaid"))]
         self.code(src, None, map)

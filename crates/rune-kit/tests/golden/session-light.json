@@ -1,6 +1,6 @@
 [
 {"path":"#0","role":"group","rect":[0.00,0.00,720.00,900.00],"fill":"#00000000"},
-{"path":"#0/#0","role":"group","rect":[16.00,16.00,688.00,2037.00],"fill":"#00000000"},
+{"path":"#0/#0","role":"group","rect":[16.00,16.00,688.00,2015.00],"fill":"#00000000"},
 {"path":"#0/#0/b0","role":"heading","rect":[16.00,16.00,688.00,24.00],"fill":"#00000000","key":"b0","text":"What's happening","color":"#161616ff"},
 {"path":"#0/#0/b1","role":"text","rect":[16.00,50.00,688.00,90.00],"fill":"#00000000","key":"b1","text":"The server sends a heartbeat every 10 seconds, but \u{202f}\u{202f}stream.ts\u{202f}\u{202f} only reconnects on an \u{202f}\u{202f}error\u{202f}\u{202f} event. When the machine sleeps, the TCP connection goes half-open: the client never sees an error, so it waits forever. See the retry notes for the long version, which is deliberately wordy so that this paragraph has to wrap onto several lines at every width.","color":"#161616ff"},
 {"path":"#0/#0/b2","role":"text","rect":[16.00,152.00,688.00,22.50],"fill":"#00000000","key":"b2","text":"Two smaller problems make it worse:","color":"#161616ff"},
@@ -118,9 +118,8 @@
 {"path":"#0/#0/b14/diagram/t5","role":"text","rect":[297.25,1853.00,38.00,18.00],"fill":"#00000000","key":"t5","text":"Client","color":"#161616ff"},
 {"path":"#0/#0/b14/diagram/t6","role":"text","rect":[397.75,1635.00,43.00,18.00],"fill":"#00000000","key":"t6","text":"Server","color":"#161616ff"},
 {"path":"#0/#0/b14/diagram/t7","role":"text","rect":[397.75,1853.00,43.00,18.00],"fill":"#00000000","key":"t7","text":"Server","color":"#161616ff"},
-{"path":"#0/#0/b15","role":"group","rect":[16.00,1920.50,688.00,86.00],"fill":"#00000000","key":"b15"},
+{"path":"#0/#0/b15","role":"group","rect":[16.00,1920.50,688.00,64.00],"fill":"#00000000","key":"b15"},
 {"path":"#0/#0/b15/source","role":"group","rect":[16.00,1920.50,688.00,64.00],"fill":"#fafafaff","key":"source"},
 {"path":"#0/#0/b15/source/#0","role":"text","rect":[28.00,1932.50,664.00,40.00],"fill":"#00000000","text":"graph LR\n  this is not valid","color":"#161616ff"},
-{"path":"#0/#0/b15/hint","role":"text","rect":[16.00,1990.50,688.00,16.00],"fill":"#00000000","key":"hint","text":"Diagram not supported","color":"#5c5c5cff"},
-{"path":"#0/#0/b16","role":"text","rect":[16.00,2030.50,688.00,22.50],"fill":"#00000000","key":"b16","text":"Done. All 14 tests in \u{202f}\u{202f}src/net\u{202f}\u{202f} pass.","color":"#161616ff"}
+{"path":"#0/#0/b16","role":"text","rect":[16.00,2008.50,688.00,22.50],"fill":"#00000000","key":"b16","text":"Done. All 14 tests in \u{202f}\u{202f}src/net\u{202f}\u{202f} pass.","color":"#161616ff"}
 ]

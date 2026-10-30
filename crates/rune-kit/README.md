@@ -302,8 +302,7 @@ source each time, and earlier blocks stay mounted.
 - **```` ```mermaid ````** (feature `mermaid`, backed by `rune-mermaid`) draws flowcharts,
   sequence diagrams and state diagrams natively, with no JS or webview, themed through
   `MarkdownStyle::diagram*`. Layout runs once per source and is cached. Anything outside the
-  supported subset (listed in `rune-mermaid`) shows as its code block with a
-  "Diagram not supported" hint. `rune_kit::mermaid::render(src, &style)` draws one on its own.
+  supported subset (listed in `rune-mermaid`) shows as its plain code block. `rune_kit::mermaid::render(src, &style)` draws one on its own.
 - **`selectable(true)`** lets people select and copy the text as one selection: a drag runs from
   a paragraph through list items into a code block, Shift-click extends, Cmd+A selects the
   whole Markdown and Cmd+C copies the text as drawn, as a web browser does: a newline between
