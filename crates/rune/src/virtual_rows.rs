@@ -171,11 +171,13 @@ mod tests {
         tick: u64,
         markdown: bool,
         mode: Mode,
+        /// Room above the first row, as a timeline's top padding.
+        pad: f32,
     }
 
     impl Chat {
         fn new(n: u64, markdown: bool, mode: Mode) -> Self {
-            let mut chat = Chat { ids: Vec::new(), keys: Vec::new(), tick: 0, markdown, mode };
+            let mut chat = Chat { ids: Vec::new(), keys: Vec::new(), tick: 0, markdown, mode, pad: 0.0 };
             chat.splice(0, (0..n).map(|i| 100_000 + i));
             chat
         }
@@ -206,7 +208,7 @@ mod tests {
 
     fn view(s: &Chat, _: &mut Cx<Chat>) -> El {
         let start = Instant::now();
-        let stack = col().key("rows").w_full().growth(GrowthSpec::default());
+        let stack = col().key("rows").w_full().pt(s.pad).growth(GrowthSpec::default());
         let stack = match s.mode {
             Mode::Memo => stack.virtualize(72.0).children(s.ids.iter().map(|&id| memo(format!("m{id}"), 0, || body(id, s.markdown)))),
             Mode::Index => stack.virtual_rows(s.ids.len(), 72.0, |s: &Chat, i| s.keys[i].as_str().into(), |s: &Chat, i| {
@@ -377,6 +379,33 @@ mod tests {
             rt.frame(1.0 / 120.0);
         }
         assert_eq!(visible(&rt), after, "and nothing drifts after");
+    }
+
+    #[test]
+    fn a_page_prepended_while_the_top_padding_shows_keeps_the_reader_in_place() {
+        // At the very top the padding above the first row shows, so the reader's row starts
+        // below the offset. Once the page lands, that gap is the end of the row above it, still
+        // at its estimate: measuring it must not push the reader's row down.
+        let mut rt = chat(300, true, Mode::Index);
+        rt.state.pad = 8.0;
+        commit(&mut rt);
+        for _ in 0..20 {
+            rt.wheel(300.0, 400.0, 100_000.0);
+            rt.frame(1.0 / 120.0);
+        }
+        let before = visible(&rt);
+        assert_eq!(before[0].0, "m100000", "at the top");
+        let first = rt.state.ids[0];
+        rt.state.splice(0, first - 60..first);
+        commit(&mut rt);
+        for _ in 0..10 {
+            let after = visible(&rt);
+            for (key, was) in &before {
+                let now = after.iter().find(|(k, _)| k == key).map(|(_, r)| r);
+                assert!(now.is_some_and(|now| (now[1] - was[1]).abs() < 0.05), "{key} moved: {was:?} vs {now:?}");
+            }
+            rt.frame(1.0 / 120.0);
+        }
     }
 
     #[test]

@@ -348,7 +348,15 @@ impl VirtualList {
                 (start, end)
             }
         };
-        self.anchor = if pinned { None } else { self.first_visible(offset, |_| true) };
+        // A row still at its estimate grows or shrinks once measured; anchoring to it would move
+        // the measured rows below, such as the reader's row under a page that just landed.
+        self.anchor = if pinned { None } else {
+            let range = self.visible_range(offset, false);
+            let sums = self.sums();
+            range.into_iter().find(|&i| self.rows[&self.keys[i]].height.is_some())
+                .map(|i| (self.keys[i].clone(), self.pad_top + sums[i]))
+                .or_else(|| self.first_visible(offset, |_| true))
+        };
         if pinned { start = start.min(end.saturating_sub(32)); }
         end = end.max(start);
         self.range = start..end;
