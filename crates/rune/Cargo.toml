@@ -43,18 +43,18 @@ dbus = ["dep:zbus", "dep:tokio", "dep:futures-util"]
 metal-backend = ["wgpu/custom", "dep:objc2-quartz-core", "dep:parking_lot", "dep:raw-window-metal"]
 # Linux: live `Player` via GStreamer playbin + appsink. Needs GStreamer and the usual plugins at
 # runtime (`gstreamer`, `gst-plugins-base`, `gst-plugins-good`, plus `gst-libav` /
-# `gst-plugins-bad` for many codecs). Posters and headless `--snap` still use `ffmpeg`/`ffprobe`
-# on PATH. Mutually exclusive with `linux-libmpv` / `linux-libvlc`. Off (the default), Linux
-# reports unsupported like other non-macOS platforms. No effect on macOS or Windows.
+# `gst-plugins-bad` for many codecs). Headless stills and scrub previews use the same playbin.
+# Mutually exclusive with `linux-libmpv` / `linux-libvlc`. Off (the default), Linux reports
+# unsupported like other non-macOS platforms. No effect on macOS or Windows.
 linux-gstreamer = ["dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video", "dep:glib"]
 # Linux: live `Player` via libmpv (`vo=libmpv` + software BGRA render). Needs libmpv at link
-# time and a working mpv install for codecs. Posters and headless `--snap` still use
-# `ffmpeg`/`ffprobe` on PATH. Mutually exclusive with `linux-gstreamer` / `linux-libvlc`. No
-# effect on macOS or Windows.
+# time and a working mpv install for codecs. Headless stills and scrub previews use the same
+# handle. Mutually exclusive with `linux-gstreamer` / `linux-libvlc`. No effect on macOS or
+# Windows.
 linux-libmpv = ["dep:libmpv2-sys"]
 # Linux: live `Player` via libVLC (memory video callbacks → BGRA + system audio). Needs
-# `libvlc` at link time (`pkg-config libvlc`) and a VLC install for codecs. Posters / headless
-# still use `ffmpeg`/`ffprobe` on PATH. Mutually exclusive with `linux-gstreamer` /
+# `libvlc` at link time (`pkg-config libvlc`) and a VLC install for codecs. Headless stills and
+# scrub previews use the same player. Mutually exclusive with `linux-gstreamer` /
 # `linux-libmpv`. No effect on macOS or Windows.
 linux-libvlc = []
 
@@ -152,7 +152,7 @@ libloading = "0.8"
 zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service"], optional = true }
 tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"], optional = true }
 futures-util = { version = "0.3", optional = true }
-# Live `Player` on Linux (`linux-gstreamer` / `linux-libmpv` / `linux-libvlc`). Headless/posters still use ffmpeg.
+# Live `Player` on Linux (`linux-gstreamer` / `linux-libmpv` / `linux-libvlc`).
 gstreamer = { version = "0.25", optional = true }
 gstreamer-app = { version = "0.25", optional = true }
 gstreamer-video = { version = "0.25", optional = true }

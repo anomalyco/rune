@@ -1,9 +1,9 @@
-//! GStreamer for windowed playback; posters and headless frames use [`linux_ffmpeg`].
+//! GStreamer for windowed playback; headless stills and scrub previews use the same playbin.
 //!
 //! Live clips use `playbin` with an `appsink` video sink (BGRA into [`NativeSurface`]) and the
 //! default audio sink for sound — one pipeline, one clock.
 use super::*;
-use super::linux_ffmpeg::{POSTER_MAX, decode_at, open_meta};
+use super::linux_still::fit_bgra;
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
@@ -90,7 +90,7 @@ impl Session {
 
         let appsink = if kind == Kind::Video {
             // sync=true so playback follows the clock (sync=false races at decode speed).
-            // Paused scrub uses try_pull_preroll after ASYNC_DONE — not ffmpeg posters (no subs).
+            // Paused scrub uses try_pull_preroll after ASYNC_DONE.
             let sink = gst_app::AppSink::builder()
                 .caps(
                     &gst::Caps::builder("video/x-raw")
@@ -393,18 +393,8 @@ fn bus_error(playbin: &gst::Element) -> Option<String> {
 #[derive(Default)]
 pub(crate) struct Native {
     session: Option<Session>,
-    posters: Arc<Mutex<Posters>>,
-    poster_started: bool,
-    poster_due: bool,
     size: Option<(u32, u32)>,
     frame: Option<f64>,
-}
-
-#[derive(Default)]
-struct Posters {
-    want: Option<f64>,
-    busy: bool,
-    done: Option<Result<(Option<ByteFrame>, Meta), String>>,
 }
 
 static AUDIO: Mutex<Vec<Weak<Shared>>> = Mutex::new(Vec::new());
@@ -415,7 +405,7 @@ pub(super) fn created(shared: &Arc<Shared>) {
     if shared.kind == Kind::Audio {
         AUDIO.lock().unwrap().push(Arc::downgrade(shared));
         if playback_enabled() {
-            load_audio(shared);
+            drive(shared);
         }
     }
 }
@@ -423,77 +413,22 @@ pub(super) fn created(shared: &Arc<Shared>) {
 pub(super) fn enable() {
     let clips: Vec<Arc<Shared>> = AUDIO.lock().unwrap().iter().filter_map(Weak::upgrade).collect();
     for clip in clips {
-        load_audio(&clip);
         drive(&clip);
     }
 }
 
-fn load_audio(shared: &Arc<Shared>) {
-    let mut native = shared.native.lock().unwrap();
-    if !native.poster_started && !shared.ctl.lock().unwrap().opened() {
-        request_poster(shared, &mut native, 0.0);
+fn wait_frame(session: &mut Session, c: &mut Control, playing: bool) -> Result<Option<ByteFrame>, String> {
+    for _ in 0..120 {
+        if !session.pump_bus(c) {
+            return Err(c.failed.clone().unwrap_or_else(|| "gstreamer session failed".into()));
+        }
+        session.reconcile(c, Instant::now());
+        if let Some(frame) = session.pull_frame(playing)? {
+            return Ok(Some(frame));
+        }
+        std::thread::sleep(Duration::from_millis(8));
     }
-}
-
-fn request_poster(shared: &Arc<Shared>, native: &mut Native, at: f64) {
-    native.poster_started = true;
-    let mut slot = native.posters.lock().unwrap();
-    slot.want = Some(at);
-    if slot.busy {
-        return;
-    }
-    slot.busy = true;
-    let posters = native.posters.clone();
-    let clip = Arc::downgrade(shared);
-    let (source, kind) = (shared.source.clone(), shared.kind);
-    std::thread::Builder::new()
-        .name("rune-media-poster".into())
-        .spawn(move || {
-            let mut opened: Option<Meta> = None;
-            loop {
-                let Some(at) = ({
-                    let mut slot = posters.lock().unwrap();
-                    let want = slot.want.take();
-                    if want.is_none() {
-                        slot.busy = false;
-                    }
-                    want
-                }) else {
-                    return;
-                };
-                if clip.strong_count() == 0 {
-                    return;
-                }
-                let result = (|| {
-                    if opened.is_none() {
-                        opened = Some(open_meta(&source, kind)?);
-                    }
-                    let meta = *opened.as_ref().unwrap();
-                    let frame = match (kind, meta.size) {
-                        (Kind::Video, Some(size)) => {
-                            Some(decode_at(&source, meta.frame_time(meta.frame_index(at)), size, meta.frame, Some(POSTER_MAX))?)
-                        }
-                        (Kind::Video, None) => return Err("video track has no size".into()),
-                        (Kind::Audio, _) => None,
-                    };
-                    Ok((frame, meta))
-                })();
-                if let Ok((_, meta)) = &result
-                    && let Some(clip) = clip.upgrade()
-                {
-                    let mut native = clip.native.lock().unwrap();
-                    native.size = meta.size;
-                    native.frame = Some(meta.frame);
-                }
-                posters.lock().unwrap().done = Some(result);
-                let Some(clip) = clip.upgrade() else { return };
-                match kind {
-                    Kind::Video => clip.wake_windows(),
-                    Kind::Audio => drive(&clip),
-                }
-            }
-        })
-        .expect("spawn media poster worker");
+    Ok(None)
 }
 
 pub(super) fn probe(
@@ -505,10 +440,25 @@ pub(super) fn probe(
     if !headers.is_empty() {
         return Err("Linux Player does not support MediaRequest headers yet".into());
     }
-    let meta = open_meta(source, kind)?;
-    native.size = meta.size;
-    native.frame = Some(meta.frame);
-    Ok(meta)
+    let mut session = Session::open(source, kind)?;
+    let mut c = Control::default();
+    c.muted = true;
+    session.reconcile(&mut c, Instant::now());
+    let d = session
+        .duration_secs()
+        .filter(|d| *d > 0.0)
+        .ok_or_else(|| "media has no duration".to_string())?;
+    let (size, frame) = match kind {
+        Kind::Video => {
+            let got = wait_frame(&mut session, &mut c, false)?;
+            let size = got.as_ref().map(|f| (f.width, f.height));
+            (size, 1.0 / 30.0)
+        }
+        Kind::Audio => (None, 1.0 / 30.0),
+    };
+    native.size = size;
+    native.frame = Some(frame);
+    Ok(Meta { duration: d, size, frame })
 }
 
 pub(super) fn decode(
@@ -520,19 +470,18 @@ pub(super) fn decode(
     if !headers.is_empty() {
         return Err("Linux Player does not support MediaRequest headers yet".into());
     }
-    let (size, frame) = match (native.size, native.frame) {
-        (Some(size), Some(frame)) => (size, frame),
-        _ => {
-            let meta = open_meta(source, Kind::Video)?;
-            native.size = meta.size;
-            native.frame = Some(meta.frame);
-            (meta.size.ok_or_else(|| "video track has no size".to_string())?, meta.frame)
-        }
-    };
-    decode_at(source, at, size, frame, None)
+    let mut session = Session::open(source, Kind::Video)?;
+    let mut c = Control::default();
+    c.muted = true;
+    c.seek = Some(at.max(0.0));
+    session.reconcile(&mut c, Instant::now());
+    let frame = wait_frame(&mut session, &mut c, false)?
+        .ok_or_else(|| "timed out decoding frame".to_string())?;
+    native.size = Some((frame.width, frame.height));
+    native.frame = Some(native.frame.unwrap_or(1.0 / 30.0));
+    Ok(frame)
 }
 
-/// Scrub preview: never takes `Native`, so a worker cannot stall live `pull`.
 pub(super) fn decode_preview_at(
     source: &MediaSource,
     headers: &[(String, String)],
@@ -543,27 +492,25 @@ pub(super) fn decode_preview_at(
     if !headers.is_empty() {
         return Err("Linux Player does not support MediaRequest headers yet".into());
     }
-    let (size, frame) = match cached {
-        Some(c) => c,
-        None => {
-            let meta = open_meta(source, Kind::Video)?;
-            (meta.size.ok_or_else(|| "video track has no size".to_string())?, meta.frame)
-        }
-    };
-    Ok((decode_at(source, at, size, frame, Some(max))?, (size, frame)))
+    let mut native = Native { size: cached.map(|c| c.0), frame: cached.map(|c| c.1), ..Default::default() };
+    let frame = decode(&mut native, source, headers, at)?;
+    let key = (
+        native.size.ok_or_else(|| "video track has no size".to_string())?,
+        native.frame.unwrap_or(1.0 / 30.0),
+    );
+    Ok((fit_bgra(frame, max), key))
 }
 
-/// Decode the first frame now so the first draw already has a poster.
 pub(super) fn preload(shared: &Arc<Shared>) {
-    let mut native = shared.native.lock().unwrap();
-    let c = shared.ctl.lock().unwrap();
-    if shared.kind == Kind::Audio || native.session.is_some() || native.poster_started || c.failed.is_some() {
+    if shared.kind == Kind::Audio || shared.ctl.lock().unwrap().failed.is_some() {
         return;
     }
-    let at = c.time;
-    drop(c);
-    native.poster_due = true;
-    request_poster(shared, &mut native, at);
+    let mut native = shared.native.lock().unwrap();
+    if native.session.is_some() {
+        return;
+    }
+    let mut c = shared.ctl.lock().unwrap();
+    let _ = ensure_session(shared, &mut native, &mut c);
 }
 
 pub(super) fn apply(shared: &Arc<Shared>) {
@@ -625,28 +572,6 @@ pub(super) fn live_time(shared: &Shared) -> Option<f64> {
     Some(c.duration.map_or(time, |d| time.clamp(0.0, d)))
 }
 
-fn take_poster(native: &mut Native, c: &mut Control, surface: Option<&NativeSurface>) {
-    let Some(done) = native.posters.lock().unwrap().done.take() else { return };
-    match done {
-        Ok((bytes, meta)) => {
-            if !c.opened() {
-                c.open(Ok(meta));
-            }
-            native.size = meta.size.or(native.size);
-            native.frame = Some(meta.frame);
-            // Only when there is no live playbin session — posters omit the subtitle overlay.
-            if let (Some(bytes), Some(surface), None, true) = (bytes, surface, &native.session, native.poster_due) {
-                native.poster_due = false;
-                let id = c.next_frame_id();
-                if let Err(e) = surface.push_bytes(bytes, id) {
-                    c.fail(e);
-                }
-            }
-        }
-        Err(e) => c.fail(e),
-    }
-}
-
 fn ensure_session(shared: &Arc<Shared>, native: &mut Native, c: &mut Control) -> bool {
     if native.session.is_some() {
         return true;
@@ -674,8 +599,6 @@ fn ensure_session(shared: &Arc<Shared>, native: &mut Native, c: &mut Control) ->
                 }
             }
             native.session = Some(session);
-            native.poster_started = true;
-            native.poster_due = false;
             true
         }
         Err(e) => {
@@ -690,22 +613,12 @@ pub(super) fn pull(shared: &Arc<Shared>, surface: &NativeSurface, _target: Insta
     let mut native = shared.native.lock().unwrap();
     let mut c = shared.ctl.lock().unwrap();
 
-    take_poster(&mut native, &mut c, Some(surface));
     if c.failed.is_some() {
         native.session = None;
         return false;
     }
 
-    if native.session.is_none() && !c.playing {
-        let want = c.seek.take().or_else(|| (!native.poster_started).then_some(c.time));
-        if let Some(at) = want {
-            drop(c);
-            native.poster_due = true;
-            request_poster(shared, &mut native, at);
-        }
-        return false;
-    }
-
+    // Park a paused session for preroll (first still) and so missing files fail immediately.
     if !ensure_session(shared, &mut native, &mut c) {
         return false;
     }
@@ -752,12 +665,8 @@ fn step_audio(shared: &Arc<Shared>) -> bool {
     let now = Instant::now();
     let Ok(mut native) = shared.native.try_lock() else { return true };
     let mut c = shared.ctl.lock().unwrap();
-    take_poster(&mut native, &mut c, None);
     if c.failed.is_some() {
         native.session = None;
-        return false;
-    }
-    if native.session.is_none() && !c.playing {
         return false;
     }
     if !ensure_session(shared, &mut native, &mut c) {

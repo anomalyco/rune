@@ -8,8 +8,8 @@
 //! video costs nothing per frame. On macOS, AVPlayer + AVPlayerItemVideoOutput pull
 //! IOSurface-backed `CVPixelBuffer`s for the display link's target time, zero-copy. On Linux,
 //! with `linux-gstreamer`, `linux-libmpv`, or `linux-libvlc`, the chosen backend presents into the
-//! surface on the same clock as audio. Until a video first plays, and after its player is parked,
-//! it shows a poster frame decoded on a worker thread, with no player or decoder session held.
+//! surface on the same clock as audio. A paused clip opens a parked live session for preroll
+//! (first still + duration); headless `--snap` and scrub previews reuse that same engine.
 //!
 //! Audio ([`Player::audio`]): no surface and no frames. In a window, edits apply on the main
 //! thread at once, and a 20 Hz main-queue tick runs only while some clip plays, loads to play
@@ -25,9 +25,9 @@
 //! rate, looping and the end (which wakes the app's waker) all as in a window, silently.
 //!
 //! On Linux, enable exactly one of `linux-gstreamer`, `linux-libmpv`, or `linux-libvlc` for
-//! windowed playback (BGRA into the surface + system audio); `ffmpeg`/`ffprobe` on PATH still
-//! handle posters and headless frames. Other platforms (and Linux with no backend feature)
-//! report [`PlayerState::Failed`] and draw a neutral placeholder for video.
+//! windowed playback (BGRA into the surface + system audio), including headless stills and scrub
+//! previews. Other platforms (and Linux with no backend feature) report
+//! [`PlayerState::Failed`] and draw a neutral placeholder for video.
 
 #[cfg(any(
     all(feature = "linux-gstreamer", feature = "linux-libmpv"),
@@ -48,7 +48,7 @@ pub(crate) use macos::test_frames;
     target_os = "linux",
     any(feature = "linux-gstreamer", feature = "linux-libmpv", feature = "linux-libvlc")
 ))]
-mod linux_ffmpeg;
+mod linux_still;
 #[cfg(all(target_os = "linux", feature = "linux-gstreamer"))]
 mod linux_gstreamer;
 #[cfg(all(target_os = "linux", feature = "linux-gstreamer"))]

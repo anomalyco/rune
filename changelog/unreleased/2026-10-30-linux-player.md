@@ -3,13 +3,12 @@
   `linux-gstreamer` uses GStreamer `playbin` (appsink BGRA + system audio). `linux-libmpv`
   uses libmpv (`vo=libmpv` software BGRA render + mpv audio; `hwdec=no` so the SW renderer
   gets CPU frames). `linux-libvlc` uses libVLC memory video callbacks (RV32 → BGRA + system
-  audio). Live libmpv/libvlc sessions open `Meta` from the engine's duration/size instead of
-  waiting on the ffmpeg poster (which play used to skip, leaving the UI on Loading while
-  audio ran). SW frames force opaque alpha — mpv's `bgr0` and VLC's RV32 leave the A byte
-  uninitialized (often 0), and the video shader premultiplies by it. All need the matching
-  runtime stack, and posters / headless `--snap` still use `ffmpeg`/`ffprobe` on PATH. Off
-  (the default), Linux reports unsupported like other non-macOS platforms. Enable one of:
-  `features = ["linux-gstreamer"]`, `["linux-libmpv"]`, or `["linux-libvlc"]`.
+  audio). Live sessions open `Meta` from the engine's duration/size. SW frames force opaque
+  alpha — mpv's `bgr0` and VLC's RV32 leave the A byte uninitialized (often 0), and the video
+  shader premultiplies by it. Headless `--snap` / scrub previews reuse the same live engine
+  (no `ffmpeg`/`ffprobe`). Off (the default), Linux reports unsupported like other non-macOS
+  platforms. Enable one of: `features = ["linux-gstreamer"]`, `["linux-libmpv"]`, or
+  `["linux-libvlc"]`.
 
 - **`Player::set_volume` / `volume`.** Linear gain `0.0`…`1.0` (default `1.0`), independent of
   mute, applied on macOS AVPlayer and the Linux backends.

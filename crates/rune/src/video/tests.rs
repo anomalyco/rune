@@ -65,7 +65,7 @@ fn webm_video_fails_at_once() {
     }
     #[cfg(all(target_os = "linux", any(feature = "linux-gstreamer", feature = "linux-libmpv", feature = "linux-libvlc")))]
     {
-        // Linux probes asynchronously; a remote WebM stays Loading until ffprobe/GStreamer fail.
+        // Linux probes asynchronously; a remote WebM stays Loading until the live backend fails.
         match a.state() {
             PlayerState::Loading => {}
             PlayerState::Failed(message) => {

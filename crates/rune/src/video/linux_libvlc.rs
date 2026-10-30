@@ -1,9 +1,9 @@
-//! libVLC for windowed playback; posters and headless frames use [`linux_ffmpeg`].
+//! libVLC for windowed playback; headless stills and scrub previews use the same player.
 //!
 //! Live clips use `libvlc_video_set_callbacks` (RV32 → BGRA into [`NativeSurface`]) and
 //! libVLC's audio output. One media player, one clock.
 use super::*;
-use super::linux_ffmpeg::{POSTER_MAX, decode_at, open_meta};
+use super::linux_still::fit_bgra;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::ptr;
@@ -636,18 +636,8 @@ impl Session {
 #[derive(Default)]
 pub(crate) struct Native {
     session: Option<Session>,
-    posters: Arc<Mutex<Posters>>,
-    poster_started: bool,
-    poster_due: bool,
     size: Option<(u32, u32)>,
     frame: Option<f64>,
-}
-
-#[derive(Default)]
-struct Posters {
-    want: Option<f64>,
-    busy: bool,
-    done: Option<Result<(Option<ByteFrame>, Meta), String>>,
 }
 
 static AUDIO: Mutex<Vec<Weak<Shared>>> = Mutex::new(Vec::new());
@@ -658,7 +648,7 @@ pub(super) fn created(shared: &Arc<Shared>) {
     if shared.kind == Kind::Audio {
         AUDIO.lock().unwrap().push(Arc::downgrade(shared));
         if playback_enabled() {
-            load_audio(shared);
+            drive(shared);
         }
     }
 }
@@ -666,77 +656,23 @@ pub(super) fn created(shared: &Arc<Shared>) {
 pub(super) fn enable() {
     let clips: Vec<Arc<Shared>> = AUDIO.lock().unwrap().iter().filter_map(Weak::upgrade).collect();
     for clip in clips {
-        load_audio(&clip);
         drive(&clip);
     }
 }
 
-fn load_audio(shared: &Arc<Shared>) {
-    let mut native = shared.native.lock().unwrap();
-    if !native.poster_started && !shared.ctl.lock().unwrap().opened() {
-        request_poster(shared, &mut native, 0.0);
+fn wait_frame(session: &mut Session) -> Result<Option<ByteFrame>, String> {
+    for _ in 0..120 {
+        let mut c = Control::default();
+        if !session.pump(&mut c) {
+            return Err(c.failed.clone().unwrap_or_else(|| "libvlc session failed".into()));
+        }
+        session.sync_meta(&mut c);
+        if let Some(frame) = session.pull_frame()? {
+            return Ok(Some(frame));
+        }
+        std::thread::sleep(Duration::from_millis(8));
     }
-}
-
-fn request_poster(shared: &Arc<Shared>, native: &mut Native, at: f64) {
-    native.poster_started = true;
-    let mut slot = native.posters.lock().unwrap();
-    slot.want = Some(at);
-    if slot.busy {
-        return;
-    }
-    slot.busy = true;
-    let posters = native.posters.clone();
-    let clip = Arc::downgrade(shared);
-    let (source, kind) = (shared.source.clone(), shared.kind);
-    std::thread::Builder::new()
-        .name("rune-media-poster".into())
-        .spawn(move || {
-            let mut opened: Option<Meta> = None;
-            loop {
-                let Some(at) = ({
-                    let mut slot = posters.lock().unwrap();
-                    let want = slot.want.take();
-                    if want.is_none() {
-                        slot.busy = false;
-                    }
-                    want
-                }) else {
-                    return;
-                };
-                if clip.strong_count() == 0 {
-                    return;
-                }
-                let result = (|| {
-                    if opened.is_none() {
-                        opened = Some(open_meta(&source, kind)?);
-                    }
-                    let meta = *opened.as_ref().unwrap();
-                    let frame = match (kind, meta.size) {
-                        (Kind::Video, Some(size)) => {
-                            Some(decode_at(&source, meta.frame_time(meta.frame_index(at)), size, meta.frame, Some(POSTER_MAX))?)
-                        }
-                        (Kind::Video, None) => return Err("video track has no size".into()),
-                        (Kind::Audio, _) => None,
-                    };
-                    Ok((frame, meta))
-                })();
-                if let Ok((_, meta)) = &result
-                    && let Some(clip) = clip.upgrade()
-                {
-                    let mut native = clip.native.lock().unwrap();
-                    native.size = meta.size;
-                    native.frame = Some(meta.frame);
-                }
-                posters.lock().unwrap().done = Some(result);
-                let Some(clip) = clip.upgrade() else { return };
-                match kind {
-                    Kind::Video => clip.wake_windows(),
-                    Kind::Audio => drive(&clip),
-                }
-            }
-        })
-        .expect("spawn media poster worker");
+    Ok(None)
 }
 
 pub(super) fn probe(
@@ -748,7 +684,31 @@ pub(super) fn probe(
     if !headers.is_empty() {
         return Err("Linux Player does not support MediaRequest headers yet".into());
     }
-    let meta = open_meta(source, kind)?;
+    let mut session = Session::open(source, kind, None)?;
+    let mut c = Control::default();
+    c.muted = true;
+    for _ in 0..64 {
+        if !session.pump(&mut c) {
+            return Err(c.failed.clone().unwrap_or_else(|| "libvlc session failed".into()));
+        }
+        session.sync_meta(&mut c);
+        if c.opened() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(8));
+    }
+    session.reconcile(&mut c, Instant::now());
+    let meta = c.meta.ok_or_else(|| "media has no duration".to_string())?;
+    if kind == Kind::Video && meta.size.is_none() {
+        let _ = wait_frame(&mut session)?;
+        let mut c2 = Control::default();
+        session.sync_meta(&mut c2);
+        if let Some(m) = c2.meta {
+            native.size = m.size;
+            native.frame = Some(m.frame);
+            return Ok(m);
+        }
+    }
     native.size = meta.size;
     native.frame = Some(meta.frame);
     Ok(meta)
@@ -763,16 +723,15 @@ pub(super) fn decode(
     if !headers.is_empty() {
         return Err("Linux Player does not support MediaRequest headers yet".into());
     }
-    let (size, frame) = match (native.size, native.frame) {
-        (Some(size), Some(frame)) => (size, frame),
-        _ => {
-            let meta = open_meta(source, Kind::Video)?;
-            native.size = meta.size;
-            native.frame = Some(meta.frame);
-            (meta.size.ok_or_else(|| "video track has no size".to_string())?, meta.frame)
-        }
-    };
-    decode_at(source, at, size, frame, None)
+    let mut session = Session::open(source, Kind::Video, native.size)?;
+    let mut c = Control::default();
+    c.muted = true;
+    c.seek = Some(at.max(0.0));
+    session.reconcile(&mut c, Instant::now());
+    let frame = wait_frame(&mut session)?.ok_or_else(|| "timed out decoding frame".to_string())?;
+    native.size = Some((frame.width, frame.height));
+    native.frame = Some(native.frame.unwrap_or(1.0 / 30.0));
+    Ok(frame)
 }
 
 pub(super) fn decode_preview_at(
@@ -785,26 +744,25 @@ pub(super) fn decode_preview_at(
     if !headers.is_empty() {
         return Err("Linux Player does not support MediaRequest headers yet".into());
     }
-    let (size, frame) = match cached {
-        Some(c) => c,
-        None => {
-            let meta = open_meta(source, Kind::Video)?;
-            (meta.size.ok_or_else(|| "video track has no size".to_string())?, meta.frame)
-        }
-    };
-    Ok((decode_at(source, at, size, frame, Some(max))?, (size, frame)))
+    let mut native = Native { size: cached.map(|c| c.0), frame: cached.map(|c| c.1), ..Default::default() };
+    let frame = decode(&mut native, source, headers, at)?;
+    let key = (
+        native.size.ok_or_else(|| "video track has no size".to_string())?,
+        native.frame.unwrap_or(1.0 / 30.0),
+    );
+    Ok((fit_bgra(frame, max), key))
 }
 
 pub(super) fn preload(shared: &Arc<Shared>) {
-    let mut native = shared.native.lock().unwrap();
-    let c = shared.ctl.lock().unwrap();
-    if shared.kind == Kind::Audio || native.session.is_some() || native.poster_started || c.failed.is_some() {
+    if shared.kind == Kind::Audio || shared.ctl.lock().unwrap().failed.is_some() {
         return;
     }
-    let at = c.time;
-    drop(c);
-    native.poster_due = true;
-    request_poster(shared, &mut native, at);
+    let mut native = shared.native.lock().unwrap();
+    if native.session.is_some() {
+        return;
+    }
+    let mut c = shared.ctl.lock().unwrap();
+    let _ = ensure_session(shared, &mut native, &mut c);
 }
 
 pub(super) fn apply(shared: &Arc<Shared>) {
@@ -866,27 +824,6 @@ pub(super) fn live_time(shared: &Shared) -> Option<f64> {
     Some(c.duration.map_or(time, |d| time.clamp(0.0, d)))
 }
 
-fn take_poster(native: &mut Native, c: &mut Control, surface: Option<&NativeSurface>) {
-    let Some(done) = native.posters.lock().unwrap().done.take() else { return };
-    match done {
-        Ok((bytes, meta)) => {
-            if !c.opened() {
-                c.open(Ok(meta));
-            }
-            native.size = meta.size.or(native.size);
-            native.frame = Some(meta.frame);
-            if let (Some(bytes), Some(surface), None, true) = (bytes, surface, &native.session, native.poster_due) {
-                native.poster_due = false;
-                let id = c.next_frame_id();
-                if let Err(e) = surface.push_bytes(bytes, id) {
-                    c.fail(e);
-                }
-            }
-        }
-        Err(e) => c.fail(e),
-    }
-}
-
 fn ensure_session(shared: &Arc<Shared>, native: &mut Native, c: &mut Control) -> bool {
     if native.session.is_some() {
         return true;
@@ -919,8 +856,6 @@ fn ensure_session(shared: &Arc<Shared>, native: &mut Native, c: &mut Control) ->
             if let Some(size) = session.size {
                 native.size = Some(size);
             }
-            native.poster_started = true;
-            native.poster_due = false;
             native.session = Some(session);
             true
         }
@@ -934,18 +869,6 @@ fn ensure_session(shared: &Arc<Shared>, native: &mut Native, c: &mut Control) ->
 pub(super) fn pull(shared: &Arc<Shared>, surface: &NativeSurface, _target: Instant) -> bool {
     let now = Instant::now();
     let mut native = shared.native.lock().unwrap();
-    {
-        let mut c = shared.ctl.lock().unwrap();
-        take_poster(&mut native, &mut c, Some(surface));
-    }
-    let playing = shared.ctl.lock().unwrap().playing;
-    let seeking = shared.ctl.lock().unwrap().seek.is_some();
-    if !playing && !seeking && native.session.is_none() {
-        if !native.poster_started && !shared.ctl.lock().unwrap().opened() {
-            request_poster(shared, &mut native, shared.ctl.lock().unwrap().time);
-        }
-        return false;
-    }
     {
         let mut c = shared.ctl.lock().unwrap();
         if !ensure_session(shared, &mut native, &mut c) {
@@ -973,7 +896,6 @@ pub(super) fn pull(shared: &Arc<Shared>, surface: &NativeSurface, _target: Insta
             if let Err(e) = surface.push_bytes(frame, id) {
                 c.fail(e);
             }
-            native.poster_due = false;
         }
         Ok(None) => {}
         Err(e) => shared.ctl.lock().unwrap().fail(e),
@@ -991,7 +913,6 @@ pub(super) fn drive(shared: &Arc<Shared>) {
     {
         let mut native = shared.native.lock().unwrap();
         let mut c = shared.ctl.lock().unwrap();
-        take_poster(&mut native, &mut c, None);
         if c.failed.is_some() {
             return;
         }
@@ -1034,7 +955,6 @@ fn tick_audio() {
             let now = Instant::now();
             let mut native = clip.native.lock().unwrap();
             let mut c = clip.ctl.lock().unwrap();
-            take_poster(&mut native, &mut c, None);
             if c.failed.is_some() {
                 continue;
             }
