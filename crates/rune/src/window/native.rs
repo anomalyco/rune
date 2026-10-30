@@ -9,11 +9,11 @@ pub(super) struct Native {
     /// Reports when each drawable reached the screen, while tracing or for `shadow`.
     pub(super) present: Option<crate::present_time::metal::LayerHook>,
     /// Re-samples a transparent window's system shadow once its new pixels land.
-    pub(super) shadow: Option<crate::macos_window_shape::Shadow>,
+    pub(super) shadow: Option<crate::macos::window_shape::Shadow>,
     pub(super) panel: Option<crate::macos::Panel>,
     /// `El::system_material` views behind the Metal layer.
     pub(super) materials: crate::system_material::macos::Materials,
-    pub(super) help: crate::macos_help::NativeHelp,
+    pub(super) help: crate::macos::help::NativeHelp,
     /// Redraws on full screen changes.
     pub(super) full_screen: super::mac::FullScreenWatch,
     /// Fn presses, which winit doesn't send, while the app wants modifier keys.
@@ -23,7 +23,7 @@ pub(super) struct Native {
     pub(super) prime: u8,
     pub(super) launch_drawables: super::LaunchDrawables,
     /// Forgets the window's traffic-light spot.
-    pub(super) _spot: crate::macos_traffic_lights::Spot,
+    pub(super) _spot: crate::macos::traffic_lights::Spot,
 }
 
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]

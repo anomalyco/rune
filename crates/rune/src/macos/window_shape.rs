@@ -136,5 +136,5 @@ impl Shadow {
 }
 
 #[cfg(test)]
-#[path = "macos_window_shape_tests.rs"]
+#[path = "window_shape_tests.rs"]
 mod tests;

@@ -7,8 +7,18 @@ use objc2::rc::Retained;
 use objc2_app_kit::{NSEvent, NSPanel, NSWindow, NSResponder, NSScreen, NSView};
 use objc2_foundation::{NSObject, NSPoint, NSRect, NSSize};
 use crate::{DisplayTarget, KeyPolicy, OverlayInput, OverlayLevel, OverlayOptions, OverlaySupport};
-use crate::macos_cursor::set_ns_cursor;
+use crate::macos::cursor::set_ns_cursor;
 use std::{cell::{Cell, RefCell}, collections::VecDeque, rc::Rc, time::{Duration, Instant}};
+
+#[doc(hidden)]
+pub mod appearance;
+pub(crate) mod cursor;
+pub(crate) mod drop;
+pub(crate) mod help;
+#[doc(hidden)]
+pub mod panel_bridge;
+pub(crate) mod traffic_lights;
+pub(crate) mod window_shape;
 
 struct PanelFlags { keys: bool, warming: Rc<Cell<bool>>, revealing: Rc<Cell<bool>>, constrain: bool }
 
@@ -45,7 +55,7 @@ declare_class!(
         #[method(sendEvent:)]
         fn send_event(&self, event: &NSEvent) {
             // Without its view the panel would swallow this click and every later one.
-            if crate::macos_panel_bridge::reattach(self.as_super()) { eprintln!("rune: panel lost its view; reattached on input"); }
+            if crate::macos::panel_bridge::reattach(self.as_super()) { eprintln!("rune: panel lost its view; reattached on input"); }
             unsafe { let _: () = msg_send![super(self), sendEvent: event]; }
         }
     }
@@ -507,7 +517,7 @@ fn occlusion_hidden(window: &NSWindow) -> bool {
 }
 
 pub(crate) fn configure_window(window: &winit::window::Window, options: &crate::MacWindowOptions) {
-    crate::macos_appearance::install();
+    crate::macos::appearance::install();
     if let Some(window) = ns_window(window) { configure_native(&window, options); }
 }
 
@@ -536,7 +546,7 @@ pub(crate) fn show_without_focus(window: &winit::window::Window) {
 /// into) moves into it, so clicks reach Rune through winit while the app never activates and
 /// the panel only becomes key on request. winit's own window stays hidden and gets its view back on drop.
 pub(crate) struct Panel {
-    bridge: Option<crate::macos_panel_bridge::Bridge>,
+    bridge: Option<crate::macos::panel_bridge::Bridge>,
     monitors: RefCell<Option<MouseMonitors>>,
     pointer: Rc<PointerState>,
     options: OverlayOptions,
@@ -571,7 +581,7 @@ impl Panel {
     fn adopt_kind(window: &winit::window::Window, at: crate::overlay::Placement, interactive: bool, options: &OverlayOptions, wake: Option<crate::Waker>, ordinary: bool) -> Option<Panel> {
         use objc2_app_kit::{NSBackingStoreType, NSColor, NSWindowCollectionBehavior, NSWindowStyleMask};
         let mtm = MainThreadMarker::new()?;
-        crate::macos_appearance::install();
+        crate::macos::appearance::install();
         let view = content_view(window)?;
         let ns_window = view.window()?;
         let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(at.size.0 as f64, at.size.1 as f64));
@@ -630,8 +640,8 @@ impl Panel {
         ns_window.setContentView(None);
         panel.setContentView(Some(&view));
         let pointer = Rc::new(PointerState { input: Cell::new(options.input.resolved(interactive)), follow: Cell::new(options.follow_pointer), ..Default::default() });
-        let bridge = if ordinary { crate::macos_panel_bridge::Bridge::new_window(&ns_window, &panel, &view) }
-            else { crate::macos_panel_bridge::Bridge::new(&ns_window, &panel, &view, Some(pointer.clone())) };
+        let bridge = if ordinary { crate::macos::panel_bridge::Bridge::new_window(&ns_window, &panel, &view) }
+            else { crate::macos::panel_bridge::Bridge::new(&ns_window, &panel, &view, Some(pointer.clone())) };
         if bridge.is_none() {
             panel.setContentView(None);
             ns_window.setContentView(Some(&view));
@@ -664,8 +674,8 @@ impl Panel {
             (msg_send![&*self.panel, contentView], msg_send![&*self.view, window])
         };
         let attached = std::ptr::eq(content, &*self.view) && std::ptr::eq(window.cast::<NSPanel>(), &*self.panel);
-        if !attached && crate::macos_panel_bridge::reattach(&self.panel) { eprintln!("rune: panel lost its view; reattached"); }
-        if crate::macos_panel_bridge::take_reattached(&self.panel) { self.pointer.view_lost(); }
+        if !attached && crate::macos::panel_bridge::reattach(&self.panel) { eprintln!("rune: panel lost its view; reattached"); }
+        if crate::macos::panel_bridge::take_reattached(&self.panel) { self.pointer.view_lost(); }
     }
 
     /// Whether none of the panel is on screen: covered, or its displays asleep. Reads as

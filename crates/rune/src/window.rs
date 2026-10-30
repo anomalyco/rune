@@ -642,7 +642,7 @@ fn place_chrome(window: &Window, chrome: Chrome) -> f32 {
     #[cfg(target_os = "macos")]
     {
         if let Some(p) = chrome.traffic_lights {
-            crate::macos_traffic_lights::place(window, p);
+            crate::macos::traffic_lights::place(window, p);
         }
         mac::titlebar_inset(window)
     }
@@ -721,7 +721,7 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         crate::macos::configure_window(&window, &self.macos_window);
         #[cfg(target_os = "macos")]
-        crate::macos_drop::install(&window);
+        crate::macos::drop::install(&window);
         if self.options.click_through && let Err(error) = window.set_cursor_hittest(false) {
             eprintln!("click-through unavailable for {}: {error}", self.native_handle.key());
         }
@@ -796,7 +796,7 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         crate::macos::pin_contents_top_left(&surface);
         #[cfg(target_os = "macos")]
-        crate::macos_window_shape::apply_corners(&window, &self.macos_window, self.options.transparent, self.options.borderless);
+        crate::macos::window_shape::apply_corners(&window, &self.macos_window, self.options.transparent, self.options.borderless);
         // Metal's PostMultiplied mode only makes CAMetalLayer non-opaque; Core Animation
         // still composites premultiplied pixels. Other backends follow wgpu's straight-alpha contract.
         let alpha = (self.options.transparent && config.alpha_mode == wgpu::CompositeAlphaMode::PostMultiplied
@@ -815,7 +815,7 @@ impl<S: 'static> Host<S> {
         *self.native_handle.native.window.lock().unwrap() = Arc::downgrade(&window);
         self.native_handle.native.number.store(native_window_number(&window).unwrap_or(0), Ordering::Release);
         #[cfg(target_os = "macos")]
-        let resamples = crate::macos_window_shape::resamples(&window, self.options.transparent);
+        let resamples = crate::macos::window_shape::resamples(&window, self.options.transparent);
         #[cfg(target_os = "macos")]
         let hook_log = self.present_log.clone()
             .or_else(|| resamples.then(|| Arc::new(crate::present_time::metal::Log::untraced())));
@@ -823,7 +823,7 @@ impl<S: 'static> Host<S> {
         let present = hook_log.clone().and_then(|log| crate::present_time::metal::LayerHook::attach(&surface, log));
         #[cfg(target_os = "macos")]
         let shadow = hook_log.filter(|_| resamples && present.is_some())
-            .and_then(|log| crate::macos_window_shape::Shadow::new(&window, log, visible || launcher));
+            .and_then(|log| crate::macos::window_shape::Shadow::new(&window, log, visible || launcher));
         #[cfg(target_os = "macos")]
         if self.present_log.is_some() && present.is_none() { eprintln!("rune: trace: this surface reports no present times"); }
         #[cfg(target_os = "macos")]
@@ -844,7 +844,7 @@ impl<S: 'static> Host<S> {
             fn_key,
             prime,
             launch_drawables,
-            _spot: crate::macos_traffic_lights::Spot::new(&window),
+            _spot: crate::macos::traffic_lights::Spot::new(&window),
         };
         #[cfg(not(target_os = "macos"))]
         let native = Native::default();

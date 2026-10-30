@@ -50,7 +50,7 @@ impl<S: 'static> Host<S> {
     /// changes the drop target. Runs even while the window is covered, as queued input does.
     pub(super) fn flush_files(&mut self, event_loop: &ActiveEventLoop) {
         #[cfg(target_os = "macos")]
-        let appkit = self.win.as_ref().map(|l| crate::macos_drop::take(&l.window)).unwrap_or_default();
+        let appkit = self.win.as_ref().map(|l| crate::macos::drop::take(&l.window)).unwrap_or_default();
         let Some(l) = self.win.as_ref().filter(|w| w.visible) else {
             self.files = FileDrop::default();
             return;
@@ -60,7 +60,7 @@ impl<S: 'static> Host<S> {
         // AppKit's drags say where they are at every step (`macos_drop`), so nothing samples.
         #[cfg(target_os = "macos")]
         for step in appkit {
-            use crate::macos_drop::Step;
+            use crate::macos::drop::Step;
             queued |= match step {
                 Step::Enter(paths, at) => { self.rt.drag_files(paths, Some(at)); true }
                 Step::Move(at) => self.rt.drag_files_to(Some(at)),

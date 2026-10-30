@@ -90,23 +90,7 @@ mod win32_pointer;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
-mod macos_cursor;
-#[cfg(target_os = "macos")]
-mod macos_drop;
-#[cfg(target_os = "macos")]
-#[doc(hidden)]
-pub mod macos_panel_bridge;
-#[cfg(target_os = "macos")]
-#[doc(hidden)]
-pub mod macos_appearance;
-#[cfg(target_os = "macos")]
 mod display_link;
-#[cfg(target_os = "macos")]
-mod macos_help;
-#[cfg(target_os = "macos")]
-mod macos_traffic_lights;
-#[cfg(target_os = "macos")]
-mod macos_window_shape;
 #[cfg(target_os = "macos")]
 mod main_queue;
 #[cfg(target_os = "macos")]
@@ -204,6 +188,9 @@ pub use clipboard::{ClipboardContent, ClipboardImage, ClipboardWrite, SecretCopy
 pub mod drag_out;
 pub use drag_out::{DragImage, DragItem, DragOperation, DragOutcome};
 pub mod windows;
+#[cfg(target_os = "macos")]
+#[doc(hidden)]
+pub use macos::{appearance as macos_appearance, panel_bridge as macos_panel_bridge};
 pub use window::WindowHandle;
 pub use windows::{AnyWindowSpec, ConfiguredWindowOptions, Display, MacWindowOptions, RunOptions, WindowOptions, WindowSpec};
 pub use winit::raw_window_handle;

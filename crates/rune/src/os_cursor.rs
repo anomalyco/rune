@@ -54,7 +54,7 @@ impl OsCursor {
             return;
         };
         #[cfg(target_os = "macos")]
-        let Some(next) = crate::macos_cursor::window_cursor(window, next) else { return };
+        let Some(next) = crate::macos::cursor::window_cursor(window, next) else { return };
         #[cfg(not(target_os = "macos"))]
         images::forget(window);
         match next {
@@ -73,7 +73,7 @@ impl OsCursor {
     /// Sets the image cursor again, if one holds the pointer.
     pub(crate) fn reassert(&self) {
         #[cfg(target_os = "macos")]
-        if let (true, Cursor::Image(image)) = self.applied { crate::macos_cursor::reassert(image); }
+        if let (true, Cursor::Image(image)) = self.applied { crate::macos::cursor::reassert(image); }
     }
 }
 
