@@ -560,7 +560,7 @@ impl<S: 'static> Runtime<S> {
     /// pointer has.
     fn group_point(&self, g: usize, anchor: virtual_selection::EndRef, x: f32, y: f32) -> Option<(usize, usize)> {
         use virtual_selection::EndRef;
-        let mut boxes: Vec<_> = self.group_texts(g).into_iter().map(|j| (j, self.drawn_box(j))).collect();
+        let mut boxes: Vec<_> = self.group_texts(g).into_iter().map(|j| (j, self.drawn_box(j))).filter(|&(j, r)| self.shows(j, r)).collect();
         boxes.sort_by(|a, b| a.1[1].total_cmp(&b.1[1]));
         // Bands as (top, bottom, first text, last text), with their texts in `boxes[from..to]`.
         let mut bands: Vec<(f32, f32, usize, usize)> = Vec::new();
@@ -584,6 +584,17 @@ impl<S: 'static> Runtime<S> {
             (Some(a), _) => texts(a).max().map(|j| (j, self.content_of(j).len())),
             _ => None,
         }
+    }
+
+    /// Text `j`, drawn at `r` (x0, y0, x1, y1), shows inside the clips around it. Text clipped
+    /// out of sight can lie under the words that show (a folded part above them), and a drag
+    /// that reached it selected everything between it and the press.
+    fn shows(&self, j: usize, r: [f32; 4]) -> bool {
+        if self.inh_scratch.len() != self.nodes.len() || self.drawn.get(j).is_none_or(|d| d[2] <= 0.0 && d[3] <= 0.0) {
+            return true;
+        }
+        let c = self.screen_clip_of_parent(Some(j)).map(|v| v / self.env.scale);
+        r[0] < c[2] && c[0] < r[2] && r[1] < c[3] && c[1] < r[3]
     }
 
     /// A primary press on `target` (None: on nothing). On selectable text away from its links it

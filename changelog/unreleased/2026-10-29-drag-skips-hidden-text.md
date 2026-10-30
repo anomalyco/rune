@@ -1,0 +1,1 @@
+- A drag in a selection group reaches only text that shows: text clipped out of sight but laid out under the words (a folded part above them) no longer takes the drag, which selected everything between it and the press.
