@@ -28,6 +28,7 @@ mod shimmer;
 mod springs;
 mod text_keys;
 mod text_rebreak;
+mod unseen_entrances;
 mod window_wake;
 
 thread_local! {

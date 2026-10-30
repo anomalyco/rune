@@ -332,7 +332,7 @@ impl<S: 'static> Runtime<S> {
                     && nodes[i].transition.as_ref().is_none_or(|t| t.insertion == rune_motion::Effect::IDENTITY)
                     && !was_exiting
                     && !self.reduced_motion;
-                let mount = if enters_at_once || nodes[i].virtual_mount || quiet_row { Mount::Initial } else { Mount::Animated };
+                let mount = if enters_at_once || nodes[i].virtual_mount || quiet_row || self.enters_unseen(&nodes, &unseen, i) { Mount::Initial } else { Mount::Animated };
                 self.scene.insert(id, spec, mount);
             }
             self.scene.set_ride_trailing(id, nodes[i].vis.ride_trailing);

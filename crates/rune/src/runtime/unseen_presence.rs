@@ -1,7 +1,8 @@
 //! Presence nobody would see. A removed node that drew nothing last frame has no exit to show: it
 //! faded out already, sits under a parent that hid at once, or lies out of the window or its
 //! clips with everything it holds (a filtered list's rows scrolled out of view). It goes at
-//! once rather than fading where nothing shows. Likewise a virtual row that a change mounted with
+//! once rather than fading where nothing shows, and what mounts under such a node, still out of
+//! sight, enters at once. Likewise a virtual row that a change mounted with
 //! its entrance but that landed out of view lands its entrance at once, and one nobody saw that
 //! a filter brings into view enters like the rows new to it.
 use super::*;
@@ -30,6 +31,12 @@ impl<S: 'static> Runtime<S> {
         if !(k > 0.01) { return f32::INFINITY; }
         let bottom = (self.screen_clip_of_parent(self.nodes[i].parent)[3] / self.env.scale).min(self.viewport.1);
         h + (bottom - d[1] - d[3]) / k
+    }
+
+    /// Node `i` of the commit mounts out of sight before and after (`unseen_before_and_after`),
+    /// so its entrance lands. A matched element still flies to its match.
+    pub(super) fn enters_unseen(&self, nodes: &[Node], unseen: &[bool], i: usize) -> bool {
+        unseen.get(i).copied().unwrap_or(false) && nodes[i].matched.is_none()
     }
 
     /// Ends the exits that drew nothing last frame. A flight paints outside its clips, so it stays.
@@ -148,6 +155,14 @@ impl<S: 'static> Runtime<S> {
             inner[i] = (clip, shift_min, shift_max);
         }
         mark_ancestors(nodes, &mut after);
-        nodes.iter().zip(&after).map(|(n, a)| !a && before.contains(&n.id)).collect()
+        // A node new under one nobody saw before or after (a ticking digit in a row scrolled out
+        // of view) enters where nothing shows, so it lands at once too.
+        let old: HashSet<NodeId> = self.nodes.iter().map(|n| n.id).collect();
+        let mut unseen = vec![false; nodes.len()];
+        for (i, n) in nodes.iter().enumerate() {
+            let new_under_unseen = !old.contains(&n.id) && n.parent.is_some_and(|p| p < i && unseen[p]);
+            unseen[i] = !after[i] && (before.contains(&n.id) || new_under_unseen);
+        }
+        unseen
     }
 }
