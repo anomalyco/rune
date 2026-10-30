@@ -76,6 +76,8 @@ pub(crate) struct Row {
     pub events: usize,
     pub allocations: u64,
     pub commits: u64,
+    /// Why the frame committed, as `runtime::commit_why::CommitWhy` bits.
+    pub why: u16,
     pub shaped: u32,
     pub animating: bool,
     pub cpu_ms: Option<f64>,
@@ -104,12 +106,13 @@ impl Log {
         if let Some(out) = self.out.as_mut() {
             use std::io::Write;
             let p = &row.phases;
-            let line = serde_json::json!({
+            let mut line = serde_json::json!({
                 "k": self.rows.len(), "ms": row.update_ms + row.encode_ms, "cpu_ms": row.cpu_ms, "events": row.events, "update_ms": row.update_ms, "encode_ms": row.encode_ms,
                 "view_cpu": p[PHASES], "commit_cpu": p[PHASES + 1], "layout_cpu": p[PHASES + 2], "text_cpu": p[PHASES + 3],
                 "paint_cpu": p[PHASES + 4], "apply_cpu": p[PHASES + 5], "allocations": row.allocations,
                 "commits": row.commits, "shaped": row.shaped, "animating": row.animating,
             });
+            if row.commits > 0 { line["why"] = crate::runtime::CommitWhy::names(row.why).into(); }
             writeln!(out, "{line}").expect("RUNE_FRAME_LOG write");
         }
         self.rows.push(row);

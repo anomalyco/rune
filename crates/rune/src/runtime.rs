@@ -81,6 +81,8 @@ pub(crate) fn handler_state_ref<S: 'static>(state: &S) -> &dyn Any {
 mod layout_diagnostics;
 #[path = "runtime/blend.rs"]
 mod blend;
+#[path = "runtime/commit_why.rs"]
+mod commit_why;
 #[path = "runtime/drag_out_host.rs"]
 mod drag_out_host;
 #[path = "runtime/exit_mask.rs"]
@@ -289,6 +291,7 @@ pub(crate) use turn::intersect;
 use turn::{Turn, compose_turn, open_turned_layer, screen_clip_of};
 mod types;
 pub use types::{FrameStats, TitlebarAction};
+pub(crate) use commit_why::CommitWhy;
 pub(crate) use types::{AnimSource, Node};
 use types::{AxisScroll, Inh, LayoutEntry, NodeCold, RevealState, RowLayout, ScaleMotion, ScrollState, Stack};
 mod tracks;
@@ -625,6 +628,8 @@ pub struct Runtime<S: 'static> {
     pub animating: bool,
     /// Why the last frame was animating, as [`AnimSource`] bits, for traces.
     pub(crate) anim_sources: u16,
+    /// Why this frame committed, as [`commit_why::CommitWhy`] bits, until the frame log takes them.
+    pub(crate) commit_why: u16,
     /// This frame's commit landed every track (`Tx::settle`): a deliberate cut.
     pub settled: bool,
     /// Input markers for traces and headless tests, at most `event_log::CAP` of them unread.
@@ -921,6 +926,7 @@ impl<S: 'static> Runtime<S> {
             pending: Tx::default(),
             animating: false,
             anim_sources: 0,
+            commit_why: 0,
             settled: false,
             events: Vec::new(),
             record_events: true,

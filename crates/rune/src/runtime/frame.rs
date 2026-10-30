@@ -400,6 +400,7 @@ impl<S: 'static> Runtime<S> {
         }
         let mut tx = std::mem::take(&mut self.pending);
         let mut ran = false;
+        let mut why = 0;
         let shaped0 = self.text.shaped;
         self.settled = false;
         self.clock = self.wall_clock().unwrap_or(self.clock + elapsed);
@@ -434,6 +435,7 @@ impl<S: 'static> Runtime<S> {
             // Scheduling does not imply a model change.
             if self.idle_meter.polled(crate::perf_warn::timed("poll", || app_call!(poll, &mut self.state, self.clock, &mut one))) {
                 ran = true;
+                why |= CommitWhy::POLL;
             }
             merge(&mut tx, one);
         }
@@ -442,6 +444,7 @@ impl<S: 'static> Runtime<S> {
             let clock = self.clock;
             if self.playground.as_mut().is_some_and(|p| p.poll_stage(clock, &mut one)) {
                 ran = true;
+                why |= CommitWhy::POLL;
             }
             merge(&mut tx, one);
         }
@@ -479,6 +482,7 @@ impl<S: 'static> Runtime<S> {
                     #[cfg(debug_assertions)]
                     let check = self.live_check.take().filter(|_| !ran_other && !self.dirty && !ran_layout);
                     self.capture_keeps(&mut tx);
+                    self.commit_why |= std::mem::take(&mut why) | CommitWhy::ROUTE | if self.dirty { CommitWhy::DIRTY } else { 0 };
                     self.commit(&tx);
                     #[cfg(debug_assertions)]
                     { self.compare_live_check(check); ran_other = false; }
@@ -506,17 +510,20 @@ impl<S: 'static> Runtime<S> {
                 #[cfg(debug_assertions)]
                 { ran_other |= r && checks == self.live_checks; }
                 ran |= r;
+                if r { why |= CommitWhy::INPUT; }
             }
             self.run_pick_reads(&mut tx);
         }
         // Once a frame, however often a drag moved the selection, and in time for this commit.
-        for action in self.selection_changes() { ran |= self.run_action(action, &mut tx); }
+        for action in self.selection_changes() {
+            if self.run_action(action, &mut tx) { ran = true; why |= CommitWhy::INPUT; }
+        }
         let mut open_urls = std::mem::take(&mut tx.open_urls);
         self.latch_requests(&mut tx);
         // A handler asked for a menu: the hover it takes ends in this commit, not a frame later.
         if self.release_pointer_for_popup() {
             for queued in std::mem::take(&mut self.queue) {
-                if matches!(queued.action, Action::HoverChange(..)) { ran |= self.run_action(queued.action, &mut tx); } else { self.queue.push_queued(queued); }
+                if !matches!(queued.action, Action::HoverChange(..)) { self.queue.push_queued(queued); } else if self.run_action(queued.action, &mut tx) { ran = true; why |= CommitWhy::INPUT; }
             }
             open_urls.extend(std::mem::take(&mut tx.open_urls));
             self.latch_requests(&mut tx);
@@ -528,7 +535,8 @@ impl<S: 'static> Runtime<S> {
         let read_moved = self.layout_reads_moved();
         self.reuse.read_moved = read_moved;
         if self.has_pixel_aspect && self.pixel_aspect_changed() { self.relayout = true; }
-        let besides = self.dirty || self.relayout || self.settle || self.virtual_window_changed();
+        let shifted = !(self.dirty || self.relayout || self.settle) && self.virtual_window_changed();
+        let besides = self.dirty || self.relayout || self.settle || shifted;
         let other = ran || besides;
         self.count_layout_echo(ran_layout || read_moved, other);
         if other || ran_layout || read_moved {
@@ -544,6 +552,9 @@ impl<S: 'static> Runtime<S> {
             #[cfg(debug_assertions)]
             let check = self.live_check.take().filter(|_| !ran_other && !besides && !ran_layout && !read_moved);
             self.capture_keeps(&mut tx);
+            let flag = |on: bool, bit: u16| if on { bit } else { 0 };
+            self.commit_why |= why | flag(self.dirty, CommitWhy::DIRTY) | flag(self.relayout, CommitWhy::RELAYOUT) | flag(self.settle, CommitWhy::SETTLE)
+                | flag(shifted, CommitWhy::VIRTUAL) | flag(ran_layout, CommitWhy::LAYOUT) | flag(read_moved, CommitWhy::READ);
             self.commit(&tx);
             #[cfg(debug_assertions)]
             self.compare_live_check(check);

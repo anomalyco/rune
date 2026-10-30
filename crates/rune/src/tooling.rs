@@ -1220,7 +1220,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         profile.push(crate::frame_profile::Row {
             phases: crate::frame_profile::take(), update_ms, encode_ms: ms - update_ms, events: next_ev - events0,
             allocations: procwatch::alloc::thread_allocations() - alloc0, commits: rt.stats.commits - commits0,
-            shaped: rt.stats.shaped, animating, cpu_ms: cpu0.map(|start| crate::frame_profile::cpu_ms().unwrap() - start),
+            why: std::mem::take(&mut rt.commit_why), shaped: rt.stats.shaped, animating, cpu_ms: cpu0.map(|start| crate::frame_profile::cpu_ms().unwrap() - start),
         });
         cpu_ms.push(ms);
         if k > 0 {

@@ -6,7 +6,9 @@ where the main thread's time goes.
            with RUNE_FRAME_LOG set (build the app with rune/frame-profile). `--sample` adds one
            extra run per scenario under macOS `sample`, kept apart from the timed runs.
   summary  Reads a run directory: per scenario and window, frame CPU p50/p95/p99/max and frames
-           over the 120 Hz budget (median across runs, warmup left out), phase means, memory.
+           over the 120 Hz budget (median across runs, warmup left out), phase means, memory,
+           and committing frames by reason (the frame log's `why`: poll, input, layout, read,
+           dirty, relayout, settle, virtual, route; "other" for a commit outside the frame's checks).
   profile  Buckets a `sample` dump's main thread by self time (`--binary` adds file:line for
            the hottest functions through atos).
 
@@ -164,12 +166,23 @@ def window_stats(frames, fps, t0, t1):
         "phases_mean_ms": {p: statistics.fmean(f[p] for f in drawn) if drawn else None for p in PHASES},
         "allocations_mean": statistics.fmean(f["allocations"] for f in drawn) if drawn else None,
         "commits_per_frame": statistics.fmean(f["commits"] for f in inside) if inside else None,
+        "commit_why": commit_why(inside),
         "shaped_mean": statistics.fmean(f["shaped"] for f in drawn) if drawn else None,
         "worst": sorted(({"k": f["k"], "t": round(f["k"] / fps, 3), "cpu_ms": cost(f), "shaped": f["shaped"],
                           "text_cpu": f["text_cpu"], "layout_cpu": f["layout_cpu"], "view_cpu": f["view_cpu"],
                           "encode_ms": f["encode_ms"], "allocations": f["allocations"]} for f in drawn),
                         key=lambda f: -f["cpu_ms"])[:5],
     }
+
+
+def commit_why(frames):
+    """Committing frames per reason (the frame log's `why`; "other" when it names none)."""
+    counts = {}
+    for f in frames:
+        if f["commits"]:
+            for why in f.get("why") or ["other"]:
+                counts[why] = counts.get(why, 0) + 1
+    return counts
 
 
 def median_of(rows, path):
@@ -214,6 +227,8 @@ def summary(args):
                 "phases_mean_ms": {p: median_of(ws, ["phases_mean_ms", p]) for p in PHASES},
                 "allocations_mean": median_of(ws, ["allocations_mean"]),
                 "commits_per_frame": median_of(ws, ["commits_per_frame"]),
+                "commit_why": {k: statistics.median(x["commit_why"].get(k, 0) for x in ws)
+                               for k in sorted({k for x in ws for k in x["commit_why"]})},
                 "shaped_mean": median_of(ws, ["shaped_mean"]),
                 "worst_frames_by_run": [x["worst"][:3] for x in ws],
             }
@@ -239,6 +254,8 @@ def table(report):
             d, ph = x["drawn_cpu_ms"], x["phases_mean_ms"]
             rows.append(f"{name + '/' + w:<20} " + " ".join(f(d[k]) for k in ("n", "p50", "p95", "p99", "max", "over_budget"))
                         + "  " + " ".join(f(ph[k]) for k in ("view_cpu", "commit_cpu", "layout_cpu", "text_cpu", "paint_cpu", "update_ms", "encode_ms")))
+            if x.get("commit_why"):
+                rows.append(f"{'':<20} committing frames by reason: " + ", ".join(f"{k} {f(v)}" for k, v in x["commit_why"].items()))
         if e.get("launch_ms"):
             rows.append(f"{name}: launch " + json.dumps({k: round(v, 1) for k, v in e["launch_ms"].items() if v is not None})
                         + " first frame " + f(e["first_frame_cpu_ms"]) + " memory MB " + json.dumps({k: round(v) for k, v in e["memory_mb"].items()}))
