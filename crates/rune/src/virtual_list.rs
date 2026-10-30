@@ -1,12 +1,12 @@
 //! Virtual row bookkeeping. Only geometry outside the mounted window is estimated.
 
 use std::cell::{Cell, Ref, RefCell};
-use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use taffy::style::{Display, FlexDirection, FlexWrap, LengthPercentage, LengthPercentageAuto, Position, Style};
 
 use crate::El;
+use crate::runtime::{HashMap, HashSet};
 
 /// What a row keeps while its key stays.
 #[derive(Debug, Clone, Copy)]
@@ -208,7 +208,7 @@ impl VirtualList {
     /// at `commit`. Returns the first row visible at `offset` (when given) that stays, with its
     /// top before the change, to anchor the reader to: none when no row in view stays.
     pub fn set_keys(&mut self, keys: Vec<String>, commit: u64, offset: Option<f32>) -> Option<(String, f32)> {
-        let mut rows = HashMap::with_capacity(keys.len());
+        let mut rows = HashMap::with_capacity_and_hasher(keys.len(), Default::default());
         let mut born = Vec::with_capacity(keys.len());
         let mut heights = Vec::with_capacity(keys.len());
         for (index, key) in keys.iter().enumerate() {

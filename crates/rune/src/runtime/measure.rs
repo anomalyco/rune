@@ -190,6 +190,14 @@ impl<S: 'static> Measurement<'_, S> {
         }
     }
 
+    /// The last commit's node at `path`.
+    fn committed_node(&self, path: &str) -> Option<usize> {
+        // The index can describe a retried pass's nodes rather than the last commit's: check.
+        let id = *self.path_ids.get(path)?;
+        let at = self.node_index.get(&id).copied().filter(|&i| self.nodes.get(i).is_some_and(|n| n.id == id));
+        at.or_else(|| self.nodes.iter().position(|n| n.path == path))
+    }
+
     /// `bound` is the most `el` can be tall (see [`crate::virtual_list::height_bound`]); `scroll`
     /// is the scroll viewport `el` is the content of, whether it sticks to the bottom, and its bound.
     #[allow(clippy::too_many_arguments)]
@@ -209,11 +217,12 @@ impl<S: 'static> Measurement<'_, S> {
             let mut offset = old_scroll.map_or(0.0, |s| s.offset as f32);
             // A new viewport has no height yet: its bound from the tree, else the window's.
             let first = if scroll_bound.is_finite() { scroll_bound } else { self.viewport.1 };
-            let height = self.nodes.iter().find(|n| n.path == scroll_path).map_or(first, |n| n.local.h);
+            let height = self.committed_node(scroll_path).map_or(first, |i| self.nodes[i].local.h);
             let padding = |p: LengthPercentage| match p.expand() {
                 taffy::style::ExpandedLengthPercentage::Length(x) => x,
                 _ => panic!("virtual stack padding must be in points"),
             };
+            let list = self.committed_node(&path);
             let v = self.virtuals.entry(path.clone()).or_default();
             v.set_estimate(estimate);
             v.scroll_path = scroll_path.to_owned();
@@ -267,8 +276,7 @@ impl<S: 'static> Measurement<'_, S> {
                 // the reader's anchor, and so does a reorder that lands at once.
                 let slides = !tx.instant && !tx.settle && !tx.relayout && !self.reduced_motion;
                 let reorder = keys.len() == v.keys.len() && keys.iter().all(|key| v.has(key))
-                    && (slides || self.nodes.iter().any(|n| n.vis.offset != [0.0; 2]
-                        && n.parent.is_some_and(|p| self.nodes[p].path == path)));
+                    && (slides || list.is_some_and(|list| self.nodes.iter().any(|n| n.vis.offset != [0.0; 2] && n.parent == Some(list))));
                 v.set_keys(keys, self.commits, (!pinned && !reorder).then_some(offset))
             };
             v.anchor = anchor;
@@ -284,8 +292,8 @@ impl<S: 'static> Measurement<'_, S> {
             let shown = std::mem::take(&mut v.shown);
             v.select(offset, pinned, budget.then_some(&shown));
             if force_all { v.range = 0..v.keys.len(); v.before = 0.0; v.after = 0.0; }
-            let mounted: HashSet<&str> = v.keys[v.range.clone()].iter().map(String::as_str).collect();
-            for key in shown.iter().filter(|k| !mounted.contains(k.as_str()) && v.has(k)) {
+            // Keys are unique, so a key is mounted when its row's index is in the range.
+            for key in shown.iter().filter(|k| v.index_of(k).is_some_and(|i| !v.range.contains(&i))) {
                 self.virtual_culled.insert(format!("{path}/{key}"));
             }
             v.shown = shown;
