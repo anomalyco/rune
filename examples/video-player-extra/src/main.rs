@@ -2,17 +2,25 @@
 //! seek hover preview, speed menu, volume, fullscreen chrome that auto-hides. Click the video
 //! to play/pause. Audio / video / subtitle tracks via the hamburger menu (Linux backends).
 //!
-//! Pick one Linux backend (`gstreamer` or `libmpv`); macOS ignores both.
+//! Pick one Linux backend (`gstreamer`, `libmpv`, or `libvlc`); macOS ignores these.
 //!
 //! ```text
 //! cargo run -p video-player-extra --features gstreamer -- clip.mkv
 //! cargo run -p video-player-extra --features libmpv -- clip.mkv
+//! cargo run -p video-player-extra --features libvlc -- clip.mkv
 //! ```
 
-#[cfg(all(target_os = "linux", not(any(feature = "gstreamer", feature = "libmpv"))))]
-compile_error!("pick a Linux Player backend: --features gstreamer  or  --features libmpv");
-#[cfg(all(feature = "gstreamer", feature = "libmpv"))]
-compile_error!("enable only one of --features gstreamer or --features libmpv");
+#[cfg(all(
+    target_os = "linux",
+    not(any(feature = "gstreamer", feature = "libmpv", feature = "libvlc"))
+))]
+compile_error!("pick a Linux Player backend: --features gstreamer, libmpv, or libvlc");
+#[cfg(any(
+    all(feature = "gstreamer", feature = "libmpv"),
+    all(feature = "gstreamer", feature = "libvlc"),
+    all(feature = "libmpv", feature = "libvlc"),
+))]
+compile_error!("enable only one of --features gstreamer, libmpv, or libvlc");
 
 use rune::tok::type_;
 use rune::{

@@ -7,9 +7,9 @@
 //! the UI thread and pulls the frame for the frame's presentation time, so a paused or hidden
 //! video costs nothing per frame. On macOS, AVPlayer + AVPlayerItemVideoOutput pull
 //! IOSurface-backed `CVPixelBuffer`s for the display link's target time, zero-copy. On Linux,
-//! with `linux-gstreamer` or `linux-libmpv`, the chosen backend presents into the surface on the
-//! same clock as audio. Until a video first plays, and after its player is parked, it shows a
-//! poster frame decoded on a worker thread, with no player or decoder session held.
+//! with `linux-gstreamer`, `linux-libmpv`, or `linux-libvlc`, the chosen backend presents into the
+//! surface on the same clock as audio. Until a video first plays, and after its player is parked,
+//! it shows a poster frame decoded on a worker thread, with no player or decoder session held.
 //!
 //! Audio ([`Player::audio`]): no surface and no frames. In a window, edits apply on the main
 //! thread at once, and a 20 Hz main-queue tick runs only while some clip plays, loads to play
@@ -24,16 +24,17 @@
 //! on the thread that made it, from the first frame or edit after `play`: pausing, seeking,
 //! rate, looping and the end (which wakes the app's waker) all as in a window, silently.
 //!
-//! On Linux, enable exactly one of `linux-gstreamer` or `linux-libmpv` for windowed playback
-//! (BGRA into the surface + system audio); `ffmpeg`/`ffprobe` on PATH still handle posters and
-//! headless frames. Other platforms (and Linux with neither feature) report
-//! [`PlayerState::Failed`] and draw a neutral placeholder for video.
+//! On Linux, enable exactly one of `linux-gstreamer`, `linux-libmpv`, or `linux-libvlc` for
+//! windowed playback (BGRA into the surface + system audio); `ffmpeg`/`ffprobe` on PATH still
+//! handle posters and headless frames. Other platforms (and Linux with no backend feature)
+//! report [`PlayerState::Failed`] and draw a neutral placeholder for video.
 
-#[cfg(all(
-    feature = "linux-gstreamer",
-    feature = "linux-libmpv"
+#[cfg(any(
+    all(feature = "linux-gstreamer", feature = "linux-libmpv"),
+    all(feature = "linux-gstreamer", feature = "linux-libvlc"),
+    all(feature = "linux-libmpv", feature = "linux-libvlc"),
 ))]
-compile_error!("enable only one of `linux-gstreamer` or `linux-libmpv`");
+compile_error!("enable only one of `linux-gstreamer`, `linux-libmpv`, or `linux-libvlc`");
 
 #[cfg(all(target_os = "macos", feature = "ogg-audio"))]
 mod foreign;
@@ -45,7 +46,7 @@ use macos as backend;
 pub(crate) use macos::test_frames;
 #[cfg(all(
     target_os = "linux",
-    any(feature = "linux-gstreamer", feature = "linux-libmpv")
+    any(feature = "linux-gstreamer", feature = "linux-libmpv", feature = "linux-libvlc")
 ))]
 mod linux_ffmpeg;
 #[cfg(all(target_os = "linux", feature = "linux-gstreamer"))]
@@ -56,14 +57,24 @@ use linux_gstreamer as backend;
 mod linux_libmpv;
 #[cfg(all(target_os = "linux", feature = "linux-libmpv"))]
 use linux_libmpv as backend;
+#[cfg(all(target_os = "linux", feature = "linux-libvlc"))]
+mod linux_libvlc;
+#[cfg(all(target_os = "linux", feature = "linux-libvlc"))]
+use linux_libvlc as backend;
 #[cfg(not(any(
     target_os = "macos",
-    all(target_os = "linux", any(feature = "linux-gstreamer", feature = "linux-libmpv"))
+    all(
+        target_os = "linux",
+        any(feature = "linux-gstreamer", feature = "linux-libmpv", feature = "linux-libvlc")
+    )
 )))]
 mod unsupported;
 #[cfg(not(any(
     target_os = "macos",
-    all(target_os = "linux", any(feature = "linux-gstreamer", feature = "linux-libmpv"))
+    all(
+        target_os = "linux",
+        any(feature = "linux-gstreamer", feature = "linux-libmpv", feature = "linux-libvlc")
+    )
 )))]
 use unsupported as backend;
 
@@ -860,7 +871,10 @@ impl Control {
     #[cfg_attr(
         not(any(
             target_os = "macos",
-            all(target_os = "linux", any(feature = "linux-gstreamer", feature = "linux-libmpv"))
+            all(
+                target_os = "linux",
+                any(feature = "linux-gstreamer", feature = "linux-libmpv", feature = "linux-libvlc")
+            )
         )),
         allow(dead_code)
     )]

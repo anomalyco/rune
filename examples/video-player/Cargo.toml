@@ -7,6 +7,7 @@ license.workspace = true
 [features]
 gstreamer = ["rune/linux-gstreamer"]
 libmpv = ["rune/linux-libmpv"]
+libvlc = ["rune/linux-libvlc"]
 
 [dependencies]
 rune = { path = "../../crates/rune" }

@@ -6,9 +6,10 @@ license.workspace = true
 publish = false
 
 [features]
-# Pick exactly one Linux live Player backend (mutually exclusive in rune). macOS ignores both.
+# Pick exactly one Linux live Player backend (mutually exclusive in rune). macOS ignores these.
 gstreamer = ["rune/linux-gstreamer"]
 libmpv = ["rune/linux-libmpv"]
+libvlc = ["rune/linux-libvlc"]
 
 [dependencies]
 async-std = "1"

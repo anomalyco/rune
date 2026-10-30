@@ -3,17 +3,25 @@
 //! area to play. With no argument it plays the four-frame test clip muted.
 //! `-- --snap out.png --at 0.6` renders the frame at 0.6 s headless.
 //!
-//! On Linux pick one backend; macOS ignores both:
+//! On Linux pick one backend; macOS ignores these:
 //!
 //! ```text
 //! cargo run -p video-player --features gstreamer -- clip.mkv
 //! cargo run -p video-player --features libmpv -- clip.mkv
+//! cargo run -p video-player --features libvlc -- clip.mkv
 //! ```
 
-#[cfg(all(target_os = "linux", not(any(feature = "gstreamer", feature = "libmpv"))))]
-compile_error!("pick a Linux Player backend: --features gstreamer  or  --features libmpv");
-#[cfg(all(feature = "gstreamer", feature = "libmpv"))]
-compile_error!("enable only one of --features gstreamer or --features libmpv");
+#[cfg(all(
+    target_os = "linux",
+    not(any(feature = "gstreamer", feature = "libmpv", feature = "libvlc"))
+))]
+compile_error!("pick a Linux Player backend: --features gstreamer, libmpv, or libvlc");
+#[cfg(any(
+    all(feature = "gstreamer", feature = "libmpv"),
+    all(feature = "gstreamer", feature = "libvlc"),
+    all(feature = "libmpv", feature = "libvlc"),
+))]
+compile_error!("enable only one of --features gstreamer, libmpv, or libvlc");
 
 use rune::tok::{self, type_};
 use rune::{AppSpec, Cx, Drag, El, Phase, Player, PlayerState, SurfaceFit, Tx, Waker, col, el, text};
