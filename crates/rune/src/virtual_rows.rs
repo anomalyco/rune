@@ -105,7 +105,7 @@ impl El {
         mut self,
         f: impl Fn(&mut S, std::ops::Range<usize>) -> bool + 'static,
     ) -> Self {
-        self.on_visible_rows = Some(Rc::new(move |s, r| f(downcast::<S>(s), r)));
+        self.handlers.on_visible_rows = Some(Rc::new(move |s, r| f(downcast::<S>(s), r)));
         self
     }
 }

@@ -7,5 +7,5 @@ use crate::El;
 fn elements_and_nodes_stay_small() {
     let (el, node) = (std::mem::size_of::<El>(), std::mem::size_of::<Node>());
     eprintln!("SIZES El={el} Node={node} Visual={} Style={}", std::mem::size_of::<crate::el::Visual>(), std::mem::size_of::<taffy::Style>());
-    assert!(el <= 2048 && node <= 1600, "El is {el} bytes and Node {node}");
+    assert!(el <= 1280 && node <= 512, "El is {el} bytes and Node {node}");
 }

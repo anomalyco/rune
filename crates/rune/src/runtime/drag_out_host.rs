@@ -17,5 +17,5 @@ impl<S: 'static> Runtime<S> {
     /// none.
     pub(crate) fn set_os_drag(&mut self, supported: bool) { self.os_drag = supported; }
 
-    pub(super) fn drags_out(&self, n: &Node) -> bool { self.os_drag && n.drag_out.is_some() }
+    pub(super) fn drags_out(&self, n: &Node) -> bool { self.os_drag && n.handlers.get().is_some_and(|h| h.drag_out.is_some()) }
 }

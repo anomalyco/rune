@@ -57,7 +57,7 @@ impl<S: 'static> Runtime<S> {
     }
     pub(super) fn refresh_modal_index(&mut self) {
         self.modal_index = self.nodes.iter().enumerate().rev()
-            .find(|(i, n)| n.modal.is_some() && !self.subtree_exiting(*i) && !self.subtree_unmounted(*i)).map(|(i, _)| i);
+            .find(|(i, n)| n.handlers.get().is_some_and(|h| h.modal.is_some()) && !self.subtree_exiting(*i) && !self.subtree_unmounted(*i)).map(|(i, _)| i);
         self.modal_members = (0..self.nodes.len()).map(|i| self.modal_index.is_none_or(|m| i >= m)).collect();
         // Portals are root siblings. Follow their anchor ownership, including chained
         // popovers, rather than requiring their layout parent to be the modal.
@@ -107,10 +107,10 @@ impl<S: 'static> Runtime<S> {
     /// Presses the default button, if one is in reach; a held Return presses it once.
     pub(super) fn press_default_button(&mut self, tx: &mut Tx) -> bool {
         let Some(i) = (0..self.nodes.len()).rev()
-            .find(|&i| self.nodes[i].focus.default && self.nodes[i].on_press.is_some() && self.reachable(i))
+            .find(|&i| self.nodes[i].focus.default && self.nodes[i].handlers.on_press.is_some() && self.reachable(i))
         else { return false };
         if tx.key_repeat { return true; }
-        let f = self.nodes[i].on_press.clone().unwrap();
+        let f = self.nodes[i].handlers.on_press.clone().unwrap();
         log_event!(self, "default {}", self.nodes[i].path);
         f(states!(self), tx);
         true
@@ -318,7 +318,7 @@ impl<S: 'static> Runtime<S> {
         let repeat = tx.key_repeat;
         if ev.key == Key::Escape && let Some(i) = self.active_modal() {
             if repeat { return true; }
-            let f = self.nodes[i].modal.as_ref().unwrap().dismiss.clone();
+            let f = self.nodes[i].handlers.modal.as_ref().unwrap().dismiss.clone();
             self.set_focus(None, self.keyboard_focus);
             f(states!(self), tx);
             return true;
@@ -390,7 +390,7 @@ impl<S: 'static> Runtime<S> {
             if let Some(next) = next {
                 let n = &self.nodes[items[next]];
                 let follows = n.role == "radio" || n.role == "tab" || self.nodes[g].focus.follows;
-                let action = follows.then(|| n.on_press.clone()).flatten();
+                let action = follows.then(|| n.handlers.on_press.clone()).flatten();
                 let path = n.path.clone();
                 self.set_focus(Some(path.clone()), true);
                 tx.scroll_to.push(crate::runtime::ScrollReveal::into_view(None, path));
@@ -400,7 +400,7 @@ impl<S: 'static> Runtime<S> {
         } else if self.nodes[i].role == "combobox" && self.nodes[i].input.is_none() && matches!(ev.key, Key::Up | Key::Down) {
             // A popup button opens on its arrows as well as Space (NSPopUpButton).
             if repeat { return true; }
-            if let Some(f) = self.nodes[i].on_press.clone() { f(states!(self), tx); }
+            if let Some(f) = self.nodes[i].handlers.on_press.clone() { f(states!(self), tx); }
             return true;
         }
         // Space presses the focused control. Return presses only rows and links; for a button
@@ -411,7 +411,7 @@ impl<S: 'static> Runtime<S> {
             if self.nodes[i].focus.highlight.is_some() && !shown { self.keyboard_focus = false; return true; }
             if repeat { return true; }
             if self.link_key(i, tx) { return true; }
-            if let Some(f) = self.nodes[i].on_press.clone() { f(states!(self), tx); }
+            if let Some(f) = self.nodes[i].handlers.on_press.clone() { f(states!(self), tx); }
             return true;
         }
         false

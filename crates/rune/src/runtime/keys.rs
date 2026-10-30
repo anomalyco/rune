@@ -284,7 +284,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub(super) fn app_paste_handler(&self) -> Option<crate::el::PasteFn> {
-        self.nodes.get(self.active_modal().unwrap_or_else(|| self.app_root()))?.on_paste.clone()
+        self.nodes.get(self.active_modal().unwrap_or_else(|| self.app_root()))?.handlers.on_paste.clone()
     }
     pub(crate) fn accepts_paste(&self) -> bool {
         self.paste_target().is_some() || self.app_paste_handler().is_some()

@@ -114,7 +114,7 @@ impl<S: 'static> Runtime<S> {
                 // Hover, press and link paint land without a commit (an instant track or a
                 // pointer move inside one text), so hash what this frame samples.
                 let links = n.text.as_ref().is_some_and(|t| !t.links.is_empty());
-                if n.vis.hover.a > 0.0 || n.vis.hover_group || n.vis.press.a > 0.0 || n.press_scale.is_some() || links {
+                if n.vis.hover.a > 0.0 || n.vis.hover_group || n.vis.press.a > 0.0 || n.handlers.get().is_some_and(|h| h.press_scale.is_some()) || links {
                     let mut ph = rune_motion::Fx::default();
                     ph.write_u64(n.id.0);
                     for prop in [P_HOVER, P_PRESS, P_PRESS_SCALE] {

@@ -12,208 +12,185 @@ pub(super) enum RowLayout {
     Horizontal,
 }
 
+/// Rarely set per-node metadata, motion overrides, accessibility, live bindings and container
+/// specs, kept behind `Cold<NodeCold>` so common nodes stay under four hundred bytes.
 #[derive(Clone)]
-pub(crate) struct Node {
-    pub(super) on_paste: Option<crate::el::PasteFn>,
-    pub(super) on_window_focus: Option<crate::el::WindowFocusFn>,
-    pub(super) focus: crate::cold::Cold<crate::el::FocusSpec>,
-    pub(super) modal: Option<crate::el::ModalSpec>,
-    pub(super) looping: Option<Box<rune_motion::LoopSpec>>,
-    pub id: NodeId,
-    pub path: String,
-    pub key: Option<String>,
+pub(crate) struct NodeCold {
     pub trace_name: Option<&'static str>,
     pub trace_namespace: Option<(&'static str, &'static str)>,
-    pub role: &'static str,
     pub label: Option<String>,
-    pub vis: Visual,
     pub(super) live: Vec<crate::live::Bound>,
-    pub text: Option<crate::cold::SharedBox<TextSpec>>,
-    pub text_layout: Option<Rc<Layout<Ink>>>,
-    /// Where `text_layout` cut the text for `El::truncate` and its kin.
-    pub(crate) elided: Option<Elision>,
     /// The run a cell measures and draws from (see `El::advance_in`).
     pub(super) run_layout: Option<Rc<crate::text::RunLayout>>,
     pub(super) live_text_seen: Option<u128>,
-    pub(super) on_press: Option<PressFn>,
-    pub(super) on_double_press: Option<PressFn>,
-    pub(super) on_secondary_press: Option<PointerFn>,
-    pub(super) on_hover: Option<PressFn>,
-    pub(super) on_hover_change: Option<crate::el::WindowFocusFn>,
-    pub(super) hover_delay: [f32; 2],
-    pub(super) on_pointer_move: Option<PointerFn>,
-    pub(super) gestures: Option<Box<crate::canvas_input::CanvasInput>>,
-    pub(super) above: Option<crate::el::Anchor>,
-    pub(super) on_drag: Option<DragFn>,
-    pub(super) drag_out: Option<DragOutFn>,
-    pub(super) drag_threshold: Option<f32>,
-    pub(super) on_drag_start: Option<PressFn>,
-    pub(super) on_drag_end: Option<DragEndFn>,
-    pub(super) drop: Option<Box<crate::el::DropSpec>>,
-    pub(super) motion: Spring,
+    pub(super) looping: Option<Box<rune_motion::LoopSpec>>,
     pub(super) opacity_motion: Option<Box<rune_motion::Anim>>,
     pub(super) lead: Option<(Spring, Spring)>,
-    pub(super) width_leads: bool,
-    /// Inside an `El::instant_changes` element, or one itself.
-    pub(super) instant_changes: bool,
     pub(super) transition: Option<Box<Transition>>,
     /// `El::matched` id, with the element's own (not inherited) layout spring.
     pub(super) matched: Option<(Rc<str>, Option<Spring>)>,
+    pub(super) above: Option<crate::el::Anchor>,
     pub(super) scroll: Option<ScrollSpec>,
     pub(super) scroll_axes: crate::el::ScrollAxes,
-    pub(super) on_at_bottom: Option<crate::el::AtBottomFn>,
-    pub(super) on_far_from_bottom: Option<(f32, crate::el::AtBottomFn)>,
-    pub(super) on_visible_rows: Option<crate::el::VisibleRowsFn>,
-    pub(super) on_layout: Option<crate::el::LayoutFn>,
-    pub(super) on_screen_layout: Option<crate::el::LayoutFn>,
-    pub(super) on_drawn_layout: Option<crate::el::DrawnLayoutFn>,
-    pub(super) on_scroll_offset: Option<crate::el::ScrollOffsetFn>,
+    pub(super) scroll_edges: crate::el::ScrollEdges,
     /// `El::sticky_top`, `El::sticky_bottom` and `El::stuck_shadow`.
     pub(super) sticky: Option<Box<crate::el::Sticky>>,
-    pub(super) scroll_edges: crate::el::ScrollEdges,
     pub(super) growth: Option<Box<GrowthSpec>>,
-    pub(super) streaming: bool,
-    pub(super) whole: bool,
     pub(super) glide: Option<rune_motion::Spring>,
-    pub(super) input: Option<Box<InputSpec>>,
-    pub(super) cursor: Option<crate::el::Cursor>,
-    pub(super) window_drag: bool,
-    pub(super) ime_cursor: bool,
-    /// `El::selection_group`.
-    pub(super) selection_group: bool,
-    /// `El::selection_copy`.
-    pub(super) selection_copy: Option<crate::el::SelectionCopy>,
-    /// `El::on_selection_change`.
-    pub(super) on_selection_change: Option<crate::el::SelectionChangeFn>,
     pub(super) a11y: crate::el::A11y,
-    /// Inside an `El::inert` subtree (this element or an ancestor).
-    pub(crate) inert: bool,
-    pub(super) press_scale: Option<f32>,
-    /// `El::scale`: a factor on the element's own scale, springing on `P_SCALE`.
-    pub(super) static_scale: f32,
-    /// `P_SCALE` has a track: paint reads the sprung factor.
-    pub(super) scale_track: bool,
-    /// `P_GROUP_REST` fades a dropped `El::group_opacity` to full: paint reads it until it lands.
-    pub(super) group_fade: bool,
-    /// `El::time_scale`: this element's own factor; the scene multiplies ancestors' in.
-    pub(super) time_scale: f32,
     /// The image ratio this picture's layout took, when it sizes one side from its pixels.
     pub(super) pixel_aspect: Option<f32>,
     /// `El::aspect_fit`: the ratio and the element's own style, which the fitted size replaces.
     pub(super) aspect_fit: Option<Box<(f32, Style)>>,
     pub(super) material: Option<crate::SystemMaterial>,
-    /// Where it sits relative to a growth row, which carries its contents' motion.
-    pub(super) in_row: RowLayout,
-    pub(super) virtual_mount: bool,
+    /// `El::help`.
+    pub(super) help: Option<String>,
+    /// `El::help_when_truncated`.
+    pub(super) help_cut: bool,
+    #[cfg(debug_assertions)]
+    pub(super) scroll_source: Option<&'static std::panic::Location<'static>>,
+}
+
+impl crate::cold::Empty for NodeCold {
+    const EMPTY: &'static Self = &NodeCold {
+        trace_name: None,
+        trace_namespace: None,
+        label: None,
+        live: Vec::new(),
+        run_layout: None,
+        live_text_seen: None,
+        looping: None,
+        opacity_motion: None,
+        lead: None,
+        transition: None,
+        matched: None,
+        above: None,
+        scroll: None,
+        scroll_axes: crate::el::ScrollAxes::Y,
+        scroll_edges: crate::el::ScrollEdges { fade: 0.0, margin: 0.0 },
+        sticky: None,
+        growth: None,
+        glide: None,
+        a11y: crate::el::A11y { level: None, expanded: None, secure: false },
+        pixel_aspect: None,
+        aspect_fit: None,
+        material: None,
+        help: None,
+        help_cut: false,
+        #[cfg(debug_assertions)]
+        scroll_source: None,
+    };
+}
+
+#[derive(Clone)]
+pub(crate) struct Node {
+    pub id: NodeId,
+    pub path: String,
+    pub key: Option<String>,
+    pub role: &'static str,
     pub parent: Option<usize>,
     pub(super) taffy: taffy::NodeId,
+    pub text: Option<crate::cold::SharedBox<TextSpec>>,
+    pub text_layout: Option<Rc<Layout<Ink>>>,
+    /// Where `text_layout` cut the text for `El::truncate` and its kin.
+    pub(crate) elided: Option<Elision>,
+    pub(super) input: Option<Box<InputSpec>>,
+    pub(super) focus: crate::cold::Cold<crate::el::FocusSpec>,
+    pub(super) handlers: crate::cold::Cold<crate::el::Handlers>,
+    pub(super) cold: crate::cold::Cold<NodeCold>,
+    pub vis: Visual,
     /// Layout target in root space: x0, y0, x1, y1 in points.
     pub target: [f32; 4],
     /// Layout target in parent space.
     pub local: MRect,
     /// Padding plus border (left, top, right, bottom): text draws inside it.
     pub(super) inset: [f32; 4],
-    /// `El::help`.
-    pub(super) help: Option<String>,
-    /// `El::help_when_truncated`.
-    pub(super) help_cut: bool,
+    pub(super) motion: Spring,
+    /// `El::scale`: a factor on the element's own scale, springing on `P_SCALE`.
+    pub(super) static_scale: f32,
+    /// `El::time_scale`: this element's own factor; the scene multiplies ancestors' in.
+    pub(super) time_scale: f32,
+    /// Where it sits relative to a growth row, which carries its contents' motion.
+    pub(super) in_row: RowLayout,
+    pub(super) width_leads: bool,
+    /// Inside an `El::instant_changes` element, or one itself.
+    pub(super) instant_changes: bool,
+    pub(super) streaming: bool,
+    pub(super) whole: bool,
+    /// Inside an `El::inert` subtree (this element or an ancestor).
+    pub(crate) inert: bool,
+    /// `P_SCALE` has a track: paint reads the sprung factor.
+    pub(super) scale_track: bool,
+    /// `P_GROUP_REST` fades a dropped `El::group_opacity` to full: paint reads it until it lands.
+    pub(super) group_fade: bool,
+    pub(super) virtual_mount: bool,
+    /// `El::selection_group`.
+    pub(super) selection_group: bool,
+    pub(super) window_drag: bool,
+    pub(super) ime_cursor: bool,
     /// Placeholder left in `self.nodes` after `try_reuse_memo` moves a node into the new pass.
     pub(super) moved_stub: bool,
-    #[cfg(debug_assertions)]
-    pub(super) scroll_source: Option<&'static std::panic::Location<'static>>,
+}
+
+impl std::ops::Deref for Node {
+    type Target = NodeCold;
+    #[inline(always)]
+    fn deref(&self) -> &NodeCold {
+        &self.cold
+    }
 }
 
 impl Node {
+    #[inline]
+    pub(super) fn cold_mut(&mut self) -> &mut NodeCold {
+        &mut self.cold
+    }
+
+    #[inline]
+    pub(super) fn clear_run_layout(&mut self) {
+        if self.cold.get().is_some_and(|c| c.run_layout.is_some()) {
+            self.cold_mut().run_layout = None;
+        }
+    }
+
     /// Zero-allocation placeholder left in `self.nodes` when a committing pass moves a
     /// `same_path` memo-reused node into the new `nodes` slice. Retains the last commit's
     /// identity, parent index, geometry and track flags that `apply` and retry restoration read.
     pub(super) fn moved_stub(old: &Self) -> Self {
         Node {
-            on_paste: None,
-            on_window_focus: None,
-            focus: Default::default(),
-            modal: None,
-            looping: None,
             id: old.id,
             path: String::new(),
             key: None,
-            trace_name: None,
-            trace_namespace: None,
             role: "group",
-            label: None,
-            vis: Visual::default(),
-            live: Vec::new(),
+            parent: old.parent,
+            taffy: old.taffy,
             text: None,
             text_layout: None,
             elided: None,
-            run_layout: None,
-            live_text_seen: None,
-            on_press: None,
-            on_double_press: None,
-            on_secondary_press: None,
-            on_hover: None,
-            on_hover_change: None,
-            hover_delay: [0.0; 2],
-            on_pointer_move: None,
-            gestures: None,
-            above: None,
-            on_drag: None,
-            drag_out: None,
-            drag_threshold: None,
-            on_drag_start: None,
-            on_drag_end: None,
-            drop: None,
-            motion: old.motion,
-            opacity_motion: None,
-            lead: None,
-            width_leads: false,
-            instant_changes: false,
-            transition: None,
-            matched: None,
-            scroll: None,
-            scroll_axes: Default::default(),
-            on_at_bottom: None,
-            on_far_from_bottom: None,
-            on_visible_rows: None,
-            on_layout: None,
-            on_screen_layout: None,
-            on_drawn_layout: None,
-            on_scroll_offset: None,
-            sticky: None,
-            scroll_edges: Default::default(),
-            growth: None,
-            streaming: false,
-            whole: false,
-            glide: None,
             input: None,
-            cursor: None,
-            window_drag: false,
-            ime_cursor: false,
-            selection_group: false,
-            selection_copy: None,
-            on_selection_change: None,
-            a11y: Default::default(),
-            inert: false,
-            press_scale: None,
-            static_scale: 1.0,
-            scale_track: old.scale_track,
-            group_fade: old.group_fade,
-            time_scale: 1.0,
-            pixel_aspect: None,
-            aspect_fit: None,
-            material: None,
-            in_row: RowLayout::Free,
-            virtual_mount: false,
-            parent: old.parent,
-            taffy: old.taffy,
+            focus: Default::default(),
+            handlers: Default::default(),
+            cold: Default::default(),
+            vis: Visual::default(),
             target: old.target,
             local: old.local,
             inset: old.inset,
-            help: None,
-            help_cut: false,
+            motion: old.motion,
+            static_scale: 1.0,
+            time_scale: 1.0,
+            in_row: RowLayout::Free,
+            width_leads: false,
+            instant_changes: false,
+            streaming: false,
+            whole: false,
+            inert: false,
+            scale_track: old.scale_track,
+            group_fade: old.group_fade,
+            virtual_mount: false,
+            selection_group: false,
+            window_drag: false,
+            ime_cursor: false,
             moved_stub: true,
-            #[cfg(debug_assertions)]
-            scroll_source: None,
         }
     }
 
@@ -224,11 +201,13 @@ impl Node {
 
     /// Whether its text is a secret: marked secure, redacted, or a secure field.
     pub(super) fn is_secure(&self) -> bool {
-        self.a11y.secure || self.text.as_ref().is_some_and(|t| t.redacted) || self.input.as_ref().is_some_and(|i| i.edit.is_secure())
+        self.cold.get().is_some_and(|c| c.a11y.secure)
+            || self.text.as_ref().is_some_and(|t| t.redacted)
+            || self.input.as_ref().is_some_and(|i| i.edit.is_secure())
     }
     /// Whether a press, hover or drag can go to this node itself.
     pub(super) fn has_primary_handler(&self) -> bool {
-        self.on_press.is_some() || self.on_double_press.is_some() || self.on_hover.is_some() || self.on_drag.is_some() || self.drag_out.is_some()
+        self.handlers.get().is_some_and(crate::el::Handlers::has_primary)
     }
     /// Whether `selector` names this node, as `Cx::layout` reads it: its key, its full path, or
     /// a key path such as `msg-42/body` (see `flight::selects`).

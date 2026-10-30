@@ -266,7 +266,7 @@ impl<S: 'static> Runtime<S> {
         let ran = match action {
             Action::WindowFocus(focused) => {
                 if !focused { self.held = None; }
-                let Some(f) = self.nodes.get(self.app_root()).and_then(|n| n.on_window_focus.clone()) else { return false };
+                let Some(f) = self.nodes.get(self.app_root()).and_then(|n| n.handlers.on_window_focus.clone()) else { return false };
                 f(states!(self), focused, &mut one);
                 true
             }
@@ -291,73 +291,73 @@ impl<S: 'static> Runtime<S> {
                 None => std::mem::take(&mut self.hover_focus),
             },
             Action::Dismiss(path) => {
-                let Some(f) = self.node(&path).and_then(|n| n.modal.as_ref().map(|m| m.dismiss.clone())) else { return false };
+                let Some(f) = self.node(&path).and_then(|n| n.handlers.modal.as_ref().map(|m| m.dismiss.clone())) else { return false };
                 self.set_focus(None, self.keyboard_focus);
                 f(states!(self), &mut one);
                 true
             }
             Action::PointerMove(path, point) => {
-                let Some(f) = self.node(&path).and_then(|n| n.on_pointer_move.clone()) else { return false };
+                let Some(f) = self.node(&path).and_then(|n| n.handlers.on_pointer_move.clone()) else { return false };
                 f(states!(self), point, &mut one);
                 true
             }
             Action::AtBottom(path, at) => {
-                let Some(f) = self.node(&path).and_then(|n| n.on_at_bottom.clone()) else { return false };
+                let Some(f) = self.node(&path).and_then(|n| n.handlers.on_at_bottom.clone()) else { return false };
                 f(states!(self), at);
                 true
             }
             Action::FarFromBottom(path, far) => {
-                let Some((_, f)) = self.node(&path).and_then(|n| n.on_far_from_bottom.clone()) else { return false };
+                let Some((_, f)) = self.node(&path).and_then(|n| n.handlers.on_far_from_bottom.clone()) else { return false };
                 f(states!(self), far);
                 true
             }
             Action::VisibleRows(path, range) => {
-                let Some(f) = self.node(&path).and_then(|n| n.on_visible_rows.clone()) else { return false };
+                let Some(f) = self.node(&path).and_then(|n| n.handlers.on_visible_rows.clone()) else { return false };
                 f(states!(self), range)
             }
             Action::Layout(path, rect) => {
-                let Some(f) = self.node(&path).and_then(|n| n.on_layout.clone()) else { return false };
+                let Some(f) = self.node(&path).and_then(|n| n.handlers.on_layout.clone()) else { return false };
                 f(states!(self), rect);
                 true
             }
             Action::ScreenLayout(path, rect) => {
-                let Some(f) = self.node(&path).and_then(|n| n.on_screen_layout.clone()) else { return false };
+                let Some(f) = self.node(&path).and_then(|n| n.handlers.on_screen_layout.clone()) else { return false };
                 f(states!(self), rect);
                 true
             }
             Action::DrawnLayout(path, rect, _) => {
-                let Some(f) = self.node(&path).and_then(|n| n.on_drawn_layout.clone()) else { return false };
+                let Some(f) = self.node(&path).and_then(|n| n.handlers.on_drawn_layout.clone()) else { return false };
                 f(states!(self), rect, &mut one);
                 true
             }
             Action::Hover(path) => {
-                let Some(f) = self.node(&path).and_then(|n| n.on_hover.clone()) else { return false };
+                let Some(f) = self.node(&path).and_then(|n| n.handlers.on_hover.clone()) else { return false };
                 f(states!(self), &mut one);
                 true
             }
             Action::HoverChange(path, inside) => {
                 let gone = self.hover_gone.iter().position(|g| g.0 == path).map(|i| self.hover_gone.remove(i).1);
                 // A leave still reaches an element on its way out.
-                let exiting = || self.nodes.iter().find(|n| !inside && n.path == path).and_then(|n| n.on_hover_change.clone());
-                let Some(f) = self.node(&path).and_then(|n| n.on_hover_change.clone()).or(gone).or_else(exiting) else { return false };
+                let exiting = || self.nodes.iter().find(|n| !inside && n.path == path).and_then(|n| n.handlers.on_hover_change.clone());
+                let Some(f) = self.node(&path).and_then(|n| n.handlers.on_hover_change.clone()).or(gone).or_else(exiting) else { return false };
                 f(states!(self), inside, &mut one);
                 true
             }
             Action::SelectionChange(path, change) => {
-                let Some(f) = self.node(&path).and_then(|n| n.on_selection_change.clone()) else { return false };
+                let Some(f) = self.node(&path).and_then(|n| n.handlers.on_selection_change.clone()) else { return false };
                 f(states!(self), &change, &mut one);
                 one.select_from_change = one.select.is_some();
                 true
             }
             Action::Press(path, button) => {
-                let Some(f) = self.node(&path).and_then(|n| n.on_press.clone()) else { return false };
+                let Some(f) = self.node(&path).and_then(|n| n.handlers.on_press.clone()) else { return false };
                 log_event!(self, "press {path}");
                 one.button = button;
                 f(states!(self), &mut one);
                 true
             }
             Action::DoublePress(path) => {
-                let Some(f) = self.node(&path).and_then(|n| n.on_double_press.clone()) else { return false };
+                let Some(f) = self.node(&path).and_then(|n| n.handlers.on_double_press.clone()) else { return false };
                 log_event!(self, "double press {path}");
                 f(states!(self), &mut one);
                 true
@@ -366,13 +366,13 @@ impl<S: 'static> Runtime<S> {
             Action::LinkSecondary(path, k, point) => self.secondary_press_link(&path, k, point, &mut one),
             Action::SecondaryPress(path, point) => {
                 let Some(n) = self.node(&path).filter(|n| !self.is_exiting(n.id)) else { return false };
-                let Some(f) = n.on_secondary_press.clone() else { return false };
+                let Some(f) = n.handlers.on_secondary_press.clone() else { return false };
                 log_event!(self, "secondary press {path}");
                 f(states!(self), point, &mut one);
                 true
             }
             Action::Drag(path, mut d, button) => {
-                let Some(f) = self.node(&path).and_then(|n| n.on_drag.clone()) else { return false };
+                let Some(f) = self.node(&path).and_then(|n| n.handlers.on_drag.clone()) else { return false };
                 if d.phase == Phase::Move {
                     one.instant = true;
                 }
@@ -386,13 +386,13 @@ impl<S: 'static> Runtime<S> {
                 true
             }
             Action::DragStart(path) => {
-                let Some(f) = self.node(&path).and_then(|n| n.on_drag_start.clone()) else { return false };
+                let Some(f) = self.node(&path).and_then(|n| n.handlers.on_drag_start.clone()) else { return false };
                 f(states!(self), &mut one);
                 true
             }
             Action::DragEnd(path, outcome) => {
                 log_event!(self, "drag-end {outcome:?} {path}");
-                let Some(f) = self.node(&path).and_then(|n| n.on_drag_end.clone()) else { return false };
+                let Some(f) = self.node(&path).and_then(|n| n.handlers.on_drag_end.clone()) else { return false };
                 f(states!(self), outcome, &mut one);
                 true
             }

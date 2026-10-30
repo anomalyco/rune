@@ -65,7 +65,7 @@ impl<S: 'static> Runtime<S> {
                 self.cancel_pointer();
                 self.held = None;
             }
-            if self.commits == 0 || self.dirty || self.nodes.get(self.app_root()).is_some_and(|n| n.on_window_focus.is_some()) {
+            if self.commits == 0 || self.dirty || self.nodes.get(self.app_root()).is_some_and(|n| n.handlers.on_window_focus.is_some()) {
                 self.queue.push(Action::WindowFocus(focused));
             }
             if !focused {
@@ -705,7 +705,9 @@ impl<S: 'static> Runtime<S> {
     /// The next commit lays those pictures out at once, whatever else it animates.
     pub(super) fn pixel_aspect_changed(&mut self) -> bool {
         for n in &mut self.nodes {
-            if let (Some(ratio), Some(pixels)) = (&mut n.pixel_aspect, &n.vis.pixels) {
+            if let Some(cold) = n.cold.get_mut_if_some()
+                && let (Some(ratio), Some(pixels)) = (&mut cold.pixel_aspect, &n.vis.pixels)
+            {
                 let now = pixel_ratio(pixels);
                 if now != *ratio { self.aspect_snap.push(n.id); }
                 *ratio = now;
@@ -723,7 +725,7 @@ impl<S: 'static> Runtime<S> {
         let mut next = vec![n; n];
         let rank = |i: usize| {
             let nd = &self.nodes[i];
-            if nd.above.is_some() || nd.modal.is_some() { 2 }
+            if nd.above.is_some() || nd.handlers.modal.is_some() { 2 }
             else if self.sticky_of(i).is_some() { 1 }
             else { 0 }
         };

@@ -187,10 +187,10 @@ impl<S: 'static> Runtime<S> {
             }
             let b = self.drawn_box(i);
             let rect = rect4(b);
-            let button_like = (n.role == "button" || n.on_press.is_some()) && !n.window_drag;
+            let button_like = (n.role == "button" || n.handlers.on_press.is_some()) && !n.window_drag;
             // Only collapse a pressable container into one button when it doesn't wrap an entire
             // multi-block section with independent buttons inside.
-            let nested_press = (i + 1..end).any(|j| self.nodes[j].on_press.is_some() || self.nodes[j].role == "button");
+            let nested_press = (i + 1..end).any(|j| self.nodes[j].handlers.on_press.is_some() || self.nodes[j].role == "button");
             if button_like && !nested_press && rect[2] > 0.0 && rect[3] > 0.0 {
                 let label = n.label.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| self.descendant_label(i, end));
                 if !label.is_empty() {
@@ -316,7 +316,7 @@ impl<S: 'static> Runtime<S> {
         match event["kind"].as_str() {
             Some("a11y_press") => {
                 let Some(i) = self.live(path) else { return false };
-                if self.nodes[i].on_press.is_none() { return false; }
+                if self.nodes[i].handlers.on_press.is_none() { return false; }
                 self.queue.push(Action::Press(path.to_owned(), crate::PointerButton::Primary));
                 true
             }

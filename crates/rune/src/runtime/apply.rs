@@ -506,29 +506,30 @@ impl<S: 'static> Runtime<S> {
             if vis.press.a > 0.0 || self.scene.store().has(id, P_PRESS_C) {
                 self.commit_paint(id, P_PRESS_C, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.press), vis.press, spring_c, instant);
             }
-            for (k, sh) in vis.shadows.iter().take(P_SHADOWS.len()).enumerate() {
-                let was = paint_tracks::prev_node(&self.nodes, &nodes, old, i).and_then(|o| o.vis.shadows.get(k).copied());
-                self.commit_paint(id, P_SHADOWS[k], was.map(|w| w.color), sh.color, spring_c, instant);
-                self.commit_paint(id, P_SHADOW_GEO[k], was.map(|w| paint_tracks::shadow_geo(&w)), paint_tracks::shadow_geo(sh), spring_l, instant);
-            }
-            // Only a shadow that was drawn can have a track.
-            for k in vis.shadows.len()..paint_tracks::prev_node(&self.nodes, &nodes, old, i).map_or(0, |o| o.vis.shadows.len()).min(P_SHADOWS.len()) {
-                self.scene.store_mut().remove(id, P_SHADOWS[k]);
-                self.scene.store_mut().remove(id, P_SHADOW_GEO[k]);
-            }
-            if let Some(&g) = vis.gradient.as_deref() {
-                let was = paint_tracks::prev_node(&self.nodes, &nodes, old, i).and_then(|o| o.vis.gradient.as_deref().copied());
-                self.commit_paint(id, P_GRADIENT[0], was.map(|w| w[0]), g[0], spring_c, instant);
-                self.commit_paint(id, P_GRADIENT[1], was.map(|w| w[1]), g[1], spring_c, instant);
-            }
-            if let Some(rg) = &vis.radial {
-                for (k, &(_, c)) in rg.stops.iter().take(P_RADIAL.len()).enumerate() {
-                    let was = paint_tracks::prev_node(&self.nodes, &nodes, old, i).and_then(|o| o.vis.radial.as_ref()?.stops.get(k).map(|s| s.1));
-                    self.commit_paint(id, P_RADIAL[k], was, c, spring_c, instant);
+            if !vis.cold.is_empty() || paint_tracks::prev_node(&self.nodes, &nodes, old, i).is_some_and(|o| !o.vis.cold.is_empty()) {
+                for (k, sh) in vis.shadows.iter().take(P_SHADOWS.len()).enumerate() {
+                    let was = paint_tracks::prev_node(&self.nodes, &nodes, old, i).and_then(|o| o.vis.shadows.get(k).copied());
+                    self.commit_paint(id, P_SHADOWS[k], was.map(|w| w.color), sh.color, spring_c, instant);
+                    self.commit_paint(id, P_SHADOW_GEO[k], was.map(|w| paint_tracks::shadow_geo(&w)), paint_tracks::shadow_geo(sh), spring_l, instant);
                 }
-            }
-            if let Some(ol) = vis.outline {
-                self.commit_paint(id, P_OUTLINE, paint_tracks::prev_node(&self.nodes, &nodes, old, i).and_then(|o| o.vis.outline.map(|w| w.color)), ol.color, spring_c, instant);
+                for k in vis.shadows.len()..paint_tracks::prev_node(&self.nodes, &nodes, old, i).map_or(0, |o| o.vis.shadows.len()).min(P_SHADOWS.len()) {
+                    self.scene.store_mut().remove(id, P_SHADOWS[k]);
+                    self.scene.store_mut().remove(id, P_SHADOW_GEO[k]);
+                }
+                if let Some(&g) = vis.gradient.as_deref() {
+                    let was = paint_tracks::prev_node(&self.nodes, &nodes, old, i).and_then(|o| o.vis.gradient.as_deref().copied());
+                    self.commit_paint(id, P_GRADIENT[0], was.map(|w| w[0]), g[0], spring_c, instant);
+                    self.commit_paint(id, P_GRADIENT[1], was.map(|w| w[1]), g[1], spring_c, instant);
+                }
+                if let Some(rg) = &vis.radial {
+                    for (k, &(_, c)) in rg.stops.iter().take(P_RADIAL.len()).enumerate() {
+                        let was = paint_tracks::prev_node(&self.nodes, &nodes, old, i).and_then(|o| o.vis.radial.as_ref()?.stops.get(k).map(|s| s.1));
+                        self.commit_paint(id, P_RADIAL[k], was, c, spring_c, instant);
+                    }
+                }
+                if let Some(ol) = vis.outline {
+                    self.commit_paint(id, P_OUTLINE, paint_tracks::prev_node(&self.nodes, &nodes, old, i).and_then(|o| o.vis.outline.map(|w| w.color)), ol.color, spring_c, instant);
+                }
             }
 
             // Streaming word reveal.
@@ -626,13 +627,15 @@ impl<S: 'static> Runtime<S> {
         let present_len = nodes.len();
         let mut old_nodes = std::mem::take(&mut self.nodes);
         for old in &old_nodes {
-            if old.live.is_empty() { continue; }
+            if old.cold.get().is_none_or(|c| c.live.is_empty()) { continue; }
             if let Some(&i) = self.node_index.get(&old.id) {
                 let mut fill = None;
-                for bound in &mut nodes[i].live {
-                    if let Some(previous) = old.live.iter().find(|b| b.property == bound.property && Arc::ptr_eq(&b.source, &bound.source)) {
-                        bound.seen = if tx.settle { None } else { previous.seen };
-                        if bound.property == crate::live::Property::Fill { fill = Some(old.vis.fill); }
+                if let Some(cold) = nodes[i].cold.get_mut_if_some() {
+                    for bound in &mut cold.live {
+                        if let Some(previous) = old.live.iter().find(|b| b.property == bound.property && Arc::ptr_eq(&b.source, &bound.source)) {
+                            bound.seen = if tx.settle { None } else { previous.seen };
+                            if bound.property == crate::live::Property::Fill { fill = Some(old.vis.fill); }
+                        }
                     }
                 }
                 if let Some(fill) = fill { nodes[i].vis.fill = fill; }
@@ -679,7 +682,7 @@ impl<S: 'static> Runtime<S> {
                     self.scene.remove(old.id);
                 }
                 old.parent = old_parent_id.and_then(|pid| self.node_index.get(&pid).copied());
-                old.live.clear();
+                if let Some(cold) = old.cold.get_mut_if_some() { cold.live.clear(); }
                 // Exit visuals outlive their model. Never call an accessor captured by
                 // a deleted row while normalizing a later focus change.
                 if let Some(input) = &mut old.input {
@@ -741,12 +744,14 @@ impl<S: 'static> Runtime<S> {
         for n in &self.nodes {
             dissolve |= n.vis.blend == crate::render::Blend::PlusLighter;
             cache |= n.vis.cache;
-            pix |= n.pixel_aspect.is_some();
-            drawn_ly |= n.on_drawn_layout.is_some();
-            key_up |= n.focus.key_up.is_some();
-            sticky |= n.sticky.as_ref().is_some_and(|s| s.edge.is_some());
+            if let Some(c) = n.cold.get() {
+                pix |= c.pixel_aspect.is_some();
+                sticky |= c.sticky.as_ref().is_some_and(|s| s.edge.is_some());
+                any_loop |= c.looping.is_some();
+            }
+            drawn_ly |= n.handlers.get().is_some_and(|h| h.on_drawn_layout.is_some());
+            key_up |= n.focus.get().is_some_and(|f| f.key_up.is_some());
             raise |= n.vis.raise;
-            any_loop |= n.looping.is_some();
         }
         self.has_dissolve = dissolve;
         self.has_cache = cache;

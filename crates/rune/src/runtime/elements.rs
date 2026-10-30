@@ -277,7 +277,7 @@ impl<S: 'static> Runtime<S> {
                     scrolling,
                     live_intent,
                     caret: self.caret_rect(&self.nodes, i),
-                    drag_out: n.drag_out.is_some(),
+                    drag_out: n.handlers.drag_out.is_some(),
                     help: n.help.as_ref().filter(|_| !n.help_cut || n.text_cut(s)).cloned(),
                     selected: n.text.as_ref().filter(|t| t.selectable && !secure).and_then(|t| {
                         let (a, b) = selectable::range_in(&sel_ranges, i)?;

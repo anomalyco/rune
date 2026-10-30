@@ -158,7 +158,7 @@ impl<S: 'static> Runtime<S> {
             let n = &self.nodes[i];
             // A secondary-only child must not obscure primary input or background blur.
             (!self.subtree_exiting(i) && self.allowed(i) && (n.has_primary_handler() || n.input.is_some() || n.role == "textbox"
-                || (n.role == "button" && n.vis.hit) || n.window_drag || n.focus.enabled || n.modal.is_some()
+                || (n.role == "button" && n.vis.hit) || n.window_drag || n.focus.enabled || n.handlers.modal.is_some()
                 || self.is_selectable(i))).then_some(i)
         })
     }
@@ -174,7 +174,7 @@ impl<S: 'static> Runtime<S> {
         let handles = |n: &Node| n.has_primary_handler() || n.focus.enabled;
         let mut p = n.parent;
         while let Some(a) = p {
-            if self.subtree_exiting(a) || !self.allowed(a) || self.nodes[a].modal.is_some() { break; }
+            if self.subtree_exiting(a) || !self.allowed(a) || self.nodes[a].handlers.modal.is_some() { break; }
             if handles(&self.nodes[a]) { return Some(a); }
             p = self.nodes[a].parent;
         }
@@ -206,8 +206,8 @@ impl<S: 'static> Runtime<S> {
         let s = self.env.scale;
         let n = &self.nodes[i];
         let hits_before = self.hits.len();
-        if (n.vis.hit || n.on_pointer_move.is_some() || n.on_press.is_some() || n.on_double_press.is_some() || n.on_secondary_press.is_some() || n.on_hover.is_some() || n.on_hover_change.is_some() || n.on_drag.is_some() || n.drag_out.is_some() || n.input.is_some() || n.role == "textbox" || n.window_drag || n.focus.enabled || n.modal.is_some()
-            || n.text.as_ref().is_some_and(|t| t.selectable) || n.gestures.as_ref().is_some_and(|g| g.takes_gestures()))
+        if (n.vis.hit || n.handlers.get().is_some_and(crate::el::Handlers::takes_hit) || n.input.is_some() || n.role == "textbox" || n.window_drag || n.focus.get().is_some_and(|f| f.enabled)
+            || n.text.as_ref().is_some_and(|t| t.selectable))
             && !self.subtree_exiting(i)
             && self.allowed(i) && effective_opacity > 0.001 && visible
         {
@@ -230,12 +230,12 @@ impl<S: 'static> Runtime<S> {
                 self.overlay_hits.push(self.hit_screen_rect(n.id, rect));
             }
         }
-        if self.nodes[i].help.is_some() && (!self.nodes[i].help_cut || self.nodes[i].text_cut(s)) && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible {
+        if self.nodes[i].cold.get().is_some_and(|c| c.help.is_some() && (!c.help_cut || self.nodes[i].text_cut(s))) && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible {
             let c = if self.nodes[i].parent.is_some() { pinh_clip } else { NO_CLIP };
             let r = [rect_pt[0].max(c[0] / s), rect_pt[1].max(c[1] / s), rect_pt[2].min(c[2] / s), rect_pt[3].min(c[3] / s)];
             self.push_help_hit(i, r, hits_before);
         }
-        if self.nodes[i].drop.is_some() && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible {
+        if self.nodes[i].handlers.get().is_some_and(|h| h.drop.is_some()) && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible {
             let c = if self.nodes[i].parent.is_some() { pinh_clip } else { NO_CLIP };
             let r = [rect_pt[0].max(c[0] / s), rect_pt[1].max(c[1] / s), rect_pt[2].min(c[2] / s), rect_pt[3].min(c[3] / s)];
             self.push_drop_hit(i, r, hits_before);

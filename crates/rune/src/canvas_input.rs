@@ -143,7 +143,7 @@ fn state<S: 'static>(s: crate::states::States<'_>) -> &mut S {
 
 impl El {
     fn canvas_input(&mut self) -> &mut CanvasInput {
-        self.gestures.get_or_insert_with(Default::default)
+        self.handlers.gestures.get_or_insert_with(Default::default)
     }
 
     /// Wheel and trackpad scrolls over this element, before any scroll view around or under

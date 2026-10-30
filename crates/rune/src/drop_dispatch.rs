@@ -196,7 +196,7 @@ impl<S: 'static> Runtime<S> {
             .chain(std::iter::once(root).filter(|&r| r < self.nodes.len()))
             .filter(|&i| self.allowed(i) && !self.subtree_exiting(i))
             .find_map(|i| {
-                let drop = self.nodes[i].drop.as_ref()?;
+                let drop = self.nodes[i].handlers.drop.as_ref()?;
                 let (files, rejected) = drop.split(paths);
                 (!files.is_empty() || (!rejected.is_empty() && drop.claims_rejects())).then_some(Target { i, files, rejected })
             })
@@ -207,12 +207,12 @@ impl<S: 'static> Runtime<S> {
     }
 
     fn drop_hover_fn(&self, (path, accepted): &Aim) -> Option<DropHoverFn> {
-        self.node(path).and_then(|n| n.drop.as_ref()?.hover_fn(*accepted))
+        self.node(path).and_then(|n| n.handlers.drop.as_ref()?.hover_fn(*accepted))
     }
 
     /// The `El::on_drop_move` of a target that takes the drag.
     fn drop_move_fn(&self, (path, accepted): &Aim) -> Option<DropMoveFn> {
-        self.node(path).filter(|_| *accepted).and_then(|n| n.drop.as_ref()?.on_move.clone())
+        self.node(path).filter(|_| *accepted).and_then(|n| n.handlers.drop.as_ref()?.on_move.clone())
     }
 
     /// `at` on the mounted element `path`, for `Tx::drop_point`.
@@ -278,7 +278,7 @@ impl<S: 'static> Runtime<S> {
                 let target = self.drop_target(&paths, at);
                 let mut ran = self.set_drop_hover(None, None, tx);
                 let Some(Target { i, files, rejected }) = target else { return ran };
-                let Some(drop) = self.nodes[i].drop.as_deref().cloned() else { return ran };
+                let Some(drop) = self.nodes[i].handlers.drop.as_deref().cloned() else { return ran };
                 let path = self.nodes[i].path.clone();
                 tx.drop_point = self.drop_point(&path, at);
                 if !files.is_empty() && let Some(f) = drop.on_drop {

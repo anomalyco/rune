@@ -75,7 +75,7 @@ impl<S: 'static> Runtime<S> {
     /// None when no element tracks `on_hover_change` and none is waiting on a delay.
     fn within_next(&self) -> Option<Within> {
         if self.hover_within.is_empty() && self.hover_shown.is_empty() && self.hover_pending.is_empty()
-            && !self.hits.iter().any(|(id, _)| self.node_index.get(id).is_some_and(|&i| self.nodes[i].on_hover_change.is_some()))
+            && !self.hits.iter().any(|(id, _)| self.node_index.get(id).is_some_and(|&i| self.nodes[i].handlers.get().is_some_and(|h| h.on_hover_change.is_some())))
         {
             return None;
         }
@@ -84,7 +84,7 @@ impl<S: 'static> Runtime<S> {
         if let Some((x, y)) = self.pointer {
             for &(id, r) in &self.hits {
                 if let Some((i, n)) = self.node_index.get(&id).map(|&i| (i, &self.nodes[i]))
-                    && n.on_hover_change.is_some() && self.hit_contains(id, r, x, y) && !inside.contains(&n.path)
+                    && n.handlers.get().is_some_and(|h| h.on_hover_change.is_some()) && self.hit_contains(id, r, x, y) && !inside.contains(&n.path)
                 {
                     if !self.hover_within.contains(&n.path) { entering.push(i); }
                     inside.push(n.path.clone());
@@ -108,7 +108,7 @@ impl<S: 'static> Runtime<S> {
         // Held, the pointer stays inside what it was until that leaves the tree or turns inert.
         if held { inside = self.hover_within.iter().filter(|p| self.hover_live(p).is_some()).cloned().collect(); }
         // An element on its way out keeps its delays: only a shown hover hears its leave.
-        let delayed = |this: &Self, path: &str| this.nodes.iter().find(|n| n.path == path).map(|n| n.hover_delay).filter(|d| *d != [0.0; 2]);
+        let delayed = |this: &Self, path: &str| this.nodes.iter().find(|n| n.path == path).map(|n| n.handlers.hover_delay).filter(|d| *d != [0.0; 2]);
         for path in &self.hover_within {
             if !inside.contains(path) && delayed(self, path).is_none() { self.queue.push(Action::HoverChange(path.clone(), false)); }
         }
@@ -154,8 +154,8 @@ impl<S: 'static> Runtime<S> {
         let inside = take(&mut self.hover_within);
         let shown = take(&mut self.hover_shown);
         self.hover_pending.retain(|p| p.0 != n.path);
-        let heard = if n.hover_delay == [0.0; 2] { inside } else { shown };
-        let Some(f) = n.on_hover_change.clone().filter(|_| heard) else { return };
+        let heard = if n.handlers.hover_delay == [0.0; 2] { inside } else { shown };
+        let Some(f) = n.handlers.on_hover_change.clone().filter(|_| heard) else { return };
         self.hover_gone.push((n.path.clone(), f));
         self.queue.push(Action::HoverChange(n.path.clone(), false));
     }
@@ -164,12 +164,12 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn settle_hover_delays(&mut self) {
         let mut paths: Vec<String> = self.hover_shown.clone();
         paths.extend(self.hover_pending.iter().map(|p| p.0.clone()));
-        paths.extend(self.hover_within.iter().filter(|p| self.node(p).is_some_and(|n| n.hover_delay != [0.0; 2])).cloned());
+        paths.extend(self.hover_within.iter().filter(|p| self.node(p).is_some_and(|n| n.handlers.hover_delay != [0.0; 2])).cloned());
         paths.sort();
         paths.dedup();
         let now = self.now_clock();
         for path in paths {
-            let Some(delay) = self.node(&path).map(|n| n.hover_delay) else {
+            let Some(delay) = self.node(&path).map(|n| n.handlers.hover_delay) else {
                 // Gone or on its way out: a shown hover hears its leave now, a pending enter
                 // just stops waiting.
                 self.hover_pending.retain(|p| p.0 != path);
@@ -306,7 +306,8 @@ impl<S: 'static> Runtime<S> {
         let captured = self.capture.as_ref().map(|(p, _)| p.as_str()).or(self.secondary_capture.as_deref());
         for i in 0..self.nodes.len() {
             let n = &self.nodes[i];
-            if n.vis.hover.a <= 0.0 && !n.vis.hover_group && n.vis.press.a <= 0.0 && n.press_scale.is_none() { continue; }
+            let press_scale = n.handlers.get().and_then(|h| h.press_scale);
+            if n.vis.hover.a <= 0.0 && !n.vis.hover_group && n.vis.press.a <= 0.0 && press_scale.is_none() { continue; }
             if self.is_exiting(n.id) { continue; }
             match self.hover_flip(i, captured) {
                 Some(f) if f.changed => flips.push(f),
@@ -321,7 +322,7 @@ impl<S: 'static> Runtime<S> {
                 Some(_) => {}
                 None => {}
             }
-            if n.vis.press.a <= 0.0 && n.press_scale.is_none() { continue; }
+            if n.vis.press.a <= 0.0 && press_scale.is_none() { continue; }
             let capture_inside = if self.secondary_capture.is_some() {
                 self.pointer.is_some_and(|(x, y)| self.node_contains(i, x, y))
             } else {
@@ -329,7 +330,7 @@ impl<S: 'static> Runtime<S> {
             };
             let down = self.allowed(i) && captured == Some(n.path.as_str()) && capture_inside;
             let pressed = down && n.vis.press.a > 0.0;
-            let (id, press_scale) = (n.id, n.press_scale);
+            let id = n.id;
             changed |= self.scene.store().target(id, P_PRESS).unwrap_or(0.0) != pressed as u8 as f32;
             if paint_tracks::ready_from_rest(&mut self.scene, id, P_PRESS, 0.0, pressed as u8 as f32) {
                 self.scene.animate(id, P_PRESS, pressed as u8 as f32, if pressed { motion::INSTANT } else { motion::SNAPPY });

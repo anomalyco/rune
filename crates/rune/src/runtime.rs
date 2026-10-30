@@ -26,7 +26,7 @@ use taffy::TraversePartialTree;
 
 use crate::color::{Color, over, srgb_encode};
 use crate::edit::{EditOutcome, Ime, KeyEvent};
-use crate::el::{Align, Drag, DragEndFn, DragFn, DragOutFn, El, GrowthSpec, InputSpec, Phase, PointerEvent, PointerFn, PressFn, ScrollSpec, Shell, TextSpec, Tx, Visual};
+use crate::el::{Align, Drag, El, GrowthSpec, InputSpec, Phase, PointerEvent, ScrollSpec, Shell, TextSpec, Tx, Visual};
 use crate::growth::{GrowTrack, SUBSTEP};
 // Half-open, like overlays, NSPointInRect and PtInRect: a shared edge belongs to one side.
 use crate::overlay_options::contains;
@@ -280,7 +280,7 @@ use turn::{Turn, compose_turn, open_turned_layer, screen_clip_of};
 mod types;
 pub use types::{FrameStats, TitlebarAction};
 pub(crate) use types::{AnimSource, Node};
-use types::{AxisScroll, Inh, LayoutEntry, RevealState, RowLayout, ScaleMotion, ScrollState, Stack};
+use types::{AxisScroll, Inh, LayoutEntry, NodeCold, RevealState, RowLayout, ScaleMotion, ScrollState, Stack};
 mod tracks;
 use tracks::{SCROLL_DECAY, mark_ancestors, scroll_offsets, word_starts};
 mod commit;

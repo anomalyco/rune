@@ -261,7 +261,8 @@ impl<S: 'static> Runtime<S> {
             let (mut clip, mut fade) = (pinh.paint_clip, pinh.paint_fade);
             let mut fade_origin = pinh.paint_fade_origin;
             let mut rounded = pinh.rounded;
-            let press_k = if n.press_scale.is_some() { self.scene.get(n.id, P_PRESS_SCALE).unwrap_or(1.0) } else { 1.0 };
+            let has_press_scale = n.handlers.get().is_some_and(|h| h.press_scale.is_some());
+            let press_k = if has_press_scale { self.scene.get(n.id, P_PRESS_SCALE).unwrap_or(1.0) } else { 1.0 };
             let sequence = self.loops.get(&n.id)
                 .filter(|_| matches!(n.looping.as_ref().map(|l| l.kind), Some(rune_motion::LoopKind::Sequence(_))));
             let static_k = if n.scale_track { self.scene.get(n.id, P_SCALE).unwrap_or(n.static_scale) } else { n.static_scale };
@@ -287,7 +288,7 @@ impl<S: 'static> Runtime<S> {
             } else { false };
             let store = self.scene.store();
             let scale_animating = store.is_animating(n.id, prop::SCALE) || store.is_animating(n.id, prop::PRESENCE)
-                || (n.press_scale.is_some() && store.is_animating(n.id, P_PRESS_SCALE))
+                || (has_press_scale && store.is_animating(n.id, P_PRESS_SCALE))
                 || (n.scale_track && store.is_animating(n.id, P_SCALE))
                 || sequence.is_some_and(|l| !self.reduced_motion && l.active(lnow));
             let scale_motion = pinh.scale_motion.max(

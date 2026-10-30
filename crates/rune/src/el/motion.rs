@@ -24,7 +24,7 @@ impl El {
     }
     /// The curve [`Self::offset`] changes on.
     pub fn offset_motion(mut self, anim: impl Into<Anim>) -> Self {
-        self.vis.offset_motion = Some(Box::new(anim.into()));
+        self.vis.cold_mut().offset_motion = Some(Box::new(anim.into()));
         self
     }
     /// Paint this element and its subtree above everything else in the window, and give it

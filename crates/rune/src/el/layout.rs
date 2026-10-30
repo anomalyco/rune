@@ -277,7 +277,7 @@ impl El {
     /// Applies while the pointer is over a hit target (a pressable, draggable, hoverable or
     /// text element) inside this one.
     pub fn cursor(mut self, cursor: Cursor) -> Self {
-        self.cursor = Some(cursor);
+        self.handlers.cursor = Some(cursor);
         self
     }
     /// Pressing this element moves the window, as a title bar does, and a double press zooms or
@@ -306,7 +306,7 @@ impl El {
     /// Observe the pointer moving over this element, in window points, without making a native
     /// overlay input region. [`El::on_pointer_move_local`] gives the element's own points.
     pub fn on_pointer_move<S: 'static>(mut self, f: impl Fn(&mut S, PointerPress) + 'static) -> Self {
-        self.on_pointer_move = Some(Rc::new(move |s, p, _| f(downcast::<S>(s), p.window())));
+        self.handlers.on_pointer_move = Some(Rc::new(move |s, p, _| f(downcast::<S>(s), p.window())));
         self
     }
     /// [`El::on_pointer_move`] with the point in this element's own layout points as well as
@@ -321,13 +321,13 @@ impl El {
     /// })
     /// ```
     pub fn on_pointer_move_local<S: 'static>(mut self, f: impl Fn(&mut S, PointerEvent, &mut Tx) + 'static) -> Self {
-        self.on_pointer_move = Some(Rc::new(move |s, p, tx| f(downcast::<S>(s), p, tx)));
+        self.handlers.on_pointer_move = Some(Rc::new(move |s, p, tx| f(downcast::<S>(s), p, tx)));
         self
     }
 
     /// Called once when the pointer enters this hit target, not on animation frames.
     pub fn on_hover<S: 'static>(mut self, f: impl Fn(&mut S) + 'static) -> Self {
-        self.on_hover = Some(Rc::new(move |s, _| f(downcast::<S>(s))));
+        self.handlers.on_hover = Some(Rc::new(move |s, _| f(downcast::<S>(s))));
         self
     }
 
@@ -336,7 +336,7 @@ impl El {
     /// hit target, so it never takes presses or hover from its children. A held press keeps the
     /// pointer inside until it releases.
     pub fn on_hover_change<S: 'static>(mut self, f: impl Fn(&mut S, bool, &mut Tx) + 'static) -> Self {
-        self.on_hover_change = Some(Rc::new(move |s, inside, tx| f(downcast::<S>(s), inside, tx)));
+        self.handlers.on_hover_change = Some(Rc::new(move |s, inside, tx| f(downcast::<S>(s), inside, tx)));
         self
     }
 
@@ -346,7 +346,10 @@ impl El {
     /// the wait starts again when the pointer next moves). A sidebar that peeks open when the pointer
     /// rests at the window's edge uses `hover_delays(40 ms, 0)`.
     pub fn hover_delays(mut self, enter: std::time::Duration, leave: std::time::Duration) -> Self {
-        self.hover_delay = [enter.as_secs_f32(), leave.as_secs_f32()];
+        let d = [enter.as_secs_f32(), leave.as_secs_f32()];
+        if d != [0.0; 2] || !self.handlers.is_empty() {
+            self.handlers.hover_delay = d;
+        }
         self
     }
 }

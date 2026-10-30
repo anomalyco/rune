@@ -25,7 +25,9 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn subscribe_live(&mut self) {
         use std::sync::atomic::Ordering;
         for node in &mut self.nodes {
-            for bound in &mut node.live { bound.attach(&self.live_clock, self.clock); }
+            if let Some(cold) = node.cold.get_mut_if_some() {
+                for bound in &mut cold.live { bound.attach(&self.live_clock, self.clock); }
+            }
         }
         for sub in &self.live_subscriptions { sub.active.store(false, Ordering::Release); }
         // Pixels only wake: each frame's build uploads their current image, so unlike bound
@@ -33,15 +35,16 @@ impl<S: 'static> Runtime<S> {
         let mut sampled = false;
         for node in &self.nodes {
             let text = node.text.as_ref().and_then(|t| t.live.as_ref()).map(|t| &t.source);
-            let pixels = node.vis.pixels.as_ref().map(|p| &p.source);
-            if node.live.is_empty() && text.is_none() && pixels.is_none() {
+            let pixels = node.vis.cold.get().and_then(|v| v.pixels.as_ref()).map(|p| &p.source);
+            let has_live = node.cold.get().is_some_and(|c| !c.live.is_empty());
+            if !has_live && text.is_none() && pixels.is_none() {
                 continue;
             }
             // An element removed outright leaves the scene now but `nodes` only at the next
             // prune. Exiting elements and their children are still drawn, so their text and
             // pixels keep waking until the exit ends (commit already dropped their bindings).
             if !self.scene.contains(node.id) { continue; }
-            sampled |= text.is_some() || !node.live.is_empty();
+            sampled |= text.is_some() || has_live;
             for source in node.live.iter().map(|b| &b.source).chain(text).chain(pixels) {
                 if let Some(sub) = self.live_subscriptions.iter().find(|s| s.source_id == source.id()) {
                     sub.active.store(true, Ordering::Release);
@@ -68,14 +71,16 @@ impl<S: 'static> Runtime<S> {
         for node in &mut self.nodes {
             if let Some(spec) = &mut node.text
                 && let Some(live) = &spec.live
-                && let Some(text) = live.read(&mut node.live_text_seen)
-                && spec.source_text() != &*text
             {
-                spec.replace_content(text.to_string());
-                spec.apply_case();
-                node.text_layout = Some(self.text.layout_live(&spec.content, spec.style, self.env.scale));
+                let seen = &mut node.cold.live_text_seen;
+                if let Some(text) = live.read(seen) && spec.source_text() != &*text {
+                    spec.replace_content(text.to_string());
+                    spec.apply_case();
+                    node.text_layout = Some(self.text.layout_live(&spec.content, spec.style, self.env.scale));
+                }
             }
-            for bound in &mut node.live {
+            let Some(cold) = node.cold.get_mut_if_some() else { continue };
+            for bound in &mut cold.live {
                 let initial = bound.seen.is_none();
                 let (bits, active) = bound.read(&self.live_clock, self.clock);
                 self.live_dirty |= active;

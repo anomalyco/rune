@@ -320,7 +320,9 @@ impl El {
         if let Some(t) = &mut self.text {
             t.links.push(link);
             self.focus.enabled = true;
-            self.cursor.get_or_insert(Cursor::Pointer);
+            if self.handlers.cursor.is_none() {
+                self.handlers.cursor = Some(Cursor::Pointer);
+            }
         }
         self
     }
@@ -371,8 +373,8 @@ impl El {
         if let Some(t) = &mut self.text {
             if self.input.is_some() || t.redacted { return self; }
             t.selectable = on;
-            if on && (self.cursor.is_none() || (!t.links.is_empty() && self.cursor == Some(Cursor::Pointer))) {
-                self.cursor = Some(Cursor::Text);
+            if on && (self.handlers.cursor.is_none() || (!t.links.is_empty() && self.handlers.cursor == Some(Cursor::Pointer))) {
+                self.handlers.cursor = Some(Cursor::Text);
             }
         }
         self
@@ -403,7 +405,7 @@ impl El {
     ///
     /// [`TextSelection::text`]: crate::TextSelection::text
     pub fn selection_copy(mut self, f: impl Fn(&crate::TextSelection) -> Option<String> + 'static) -> Self {
-        self.selection_copy = Some(Rc::new(f));
+        self.handlers.selection_copy = Some(Rc::new(f));
         self
     }
     /// Hears the [`El::selectable`] text selection change inside this element: when one starts
@@ -424,7 +426,7 @@ impl El {
     ///
     /// [`SelectionChange`]: crate::SelectionChange
     pub fn on_selection_change<S: 'static>(mut self, f: impl Fn(&mut S, &crate::SelectionChange, &mut Tx) + 'static) -> Self {
-        self.on_selection_change = Some(Rc::new(move |s, change, tx| f(downcast::<S>(s), change, tx)));
+        self.handlers.on_selection_change = Some(Rc::new(move |s, change, tx| f(downcast::<S>(s), change, tx)));
         self
     }
     /// Draws and lays out, but the pointer and keyboard pass through this element and

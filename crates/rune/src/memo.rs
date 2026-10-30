@@ -94,7 +94,7 @@ fn el_flatten_reusable(e: &El) -> bool {
         && e.above.is_none()
         && e.live.is_empty()
         && e.input.is_none()
-        && e.modal.is_none()
+        && e.handlers.get().is_none_or(|h| h.modal.is_none())
         && !(e.scroll.is_some() && e.scroll_axes.x())
         && e.text.as_ref().is_none_or(|t| !t.redacted && t.live.is_none())
         && e.vis.pixels.as_ref().is_none_or(|_| {

@@ -17,7 +17,7 @@ impl<S: 'static> Runtime<S> {
         for &(id, rect) in &self.hits {
             if self.hit_contains(id, rect, x, y)
                 && let Some(&i) = self.node_index.get(&id)
-                && self.nodes[i].on_pointer_move.is_some()
+                && self.nodes[i].handlers.get().is_some_and(|h| h.on_pointer_move.is_some())
             {
                 let point = self.pointer_event(i, x, y);
                 self.queue.push(Action::PointerMove(self.nodes[i].path.clone(), point));
@@ -35,7 +35,7 @@ impl<S: 'static> Runtime<S> {
             return;
         }
         let Some(i) = self.live_index(&path) else { return };
-        let (id, r, has_drag) = (self.nodes[i].id, self.nodes[i].target, self.nodes[i].on_drag.is_some() && !self.drags_out(&self.nodes[i]));
+        let (id, r, has_drag) = (self.nodes[i].id, self.nodes[i].target, self.nodes[i].handlers.on_drag.is_some() && !self.drags_out(&self.nodes[i]));
         // A hit rect is where the element was drawn (after scrolling); `target` is its
         // unscrolled layout rect, kept only for elements that were never drawn.
         let mut hits = self.hits.iter().filter(|(hit, _)| *hit == id).peekable();
@@ -54,7 +54,7 @@ impl<S: 'static> Runtime<S> {
     pub(crate) fn observe_pointer(&mut self, x: f32, y: f32) -> bool {
         if self.pointer == Some((x, y)) { return false; }
         let visual_changed = self.nodes.iter().enumerate().any(|(i, n)| {
-            if n.vis.hover.a <= 0.0 && n.vis.press.a <= 0.0 && n.press_scale.is_none() { return false; }
+            if n.vis.hover.a <= 0.0 && n.vis.press.a <= 0.0 && n.handlers.get().is_none_or(|h| h.press_scale.is_none()) { return false; }
             let inside = |p: Option<(f32, f32)>| p.is_some_and(|(x, y)| self.node_contains(i, x, y));
             inside(self.pointer) != inside(Some((x, y)))
         });
@@ -94,7 +94,7 @@ impl<S: 'static> Runtime<S> {
         if self.input_click.captured { return false; }
         let Some((path, d)) = &self.capture else { return false };
         let Some(i) = self.live_index(&path) else { return false };
-        if self.nodes[i].on_drag.is_none() || self.drags_out(&self.nodes[i]) { return false; }
+        if self.nodes[i].handlers.on_drag.is_none() || self.drags_out(&self.nodes[i]) { return false; }
         let (x, y) = self.pointer.unwrap_or(self.press_at);
         let [lx, ly] = self.to_local(i, x, y);
         let (dx, dy) = (x - self.press_at.0, y - self.press_at.1);
@@ -115,7 +115,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn start_drag_out(&mut self, path: String) -> bool {
         self.drag_out_armed = false;
         let Some(i) = self.live_index(&path) else { return false };
-        let Some(f) = self.nodes[i].drag_out.clone() else { return false };
+        let Some(f) = self.nodes[i].handlers.drag_out.clone() else { return false };
         let Some(item) = f(playground_host::handler_states_ref(&self.state, self.playground.as_deref())).filter(|item| !item.is_empty()) else { return false };
         let n = &self.nodes[i];
         let r = self.drawn.get(i).copied().unwrap_or([n.target[0], n.target[1], n.target[2] - n.target[0], n.target[3] - n.target[1]]);
@@ -169,7 +169,7 @@ impl<S: 'static> Runtime<S> {
         if let Some(i) = self.active_modal()
             && target.is_none_or(|t| !self.allowed(t))
         {
-            if self.nodes[i].modal.as_ref().is_some_and(|m| m.outside) {
+            if self.nodes[i].handlers.modal.as_ref().is_some_and(|m| m.outside) {
                 self.queue.push(Action::Dismiss(self.nodes[i].path.clone()));
             }
             return;
@@ -177,7 +177,7 @@ impl<S: 'static> Runtime<S> {
         self.playground_pointer_down(x);
         self.press_selection(target, x, y);
         // Inside a draggable row, dragging drags the row; clicks still select words and lines.
-        if target.is_some_and(|t| self.nodes[t].on_drag.is_some() || self.nodes[t].drag_out.is_some()) {
+        if target.is_some_and(|t| self.nodes[t].handlers.on_drag.is_some() || self.nodes[t].handlers.drag_out.is_some()) {
             self.text_sel.dragging = false;
         }
         let Some(ti) = target else {
@@ -191,7 +191,7 @@ impl<S: 'static> Runtime<S> {
         let pending = self.last_press.take();
         let now = self.now_clock();
         let n = &self.nodes[ti];
-        if n.window_drag && n.on_press.is_none() && n.on_double_press.is_none() && n.on_drag.is_none() && n.drag_out.is_none() && self.textbox_input(ti).is_none() {
+        if n.window_drag && n.handlers.on_press.is_none() && n.handlers.on_double_press.is_none() && n.handlers.on_drag.is_none() && n.handlers.drag_out.is_none() && self.textbox_input(ti).is_none() {
             let double = self.last_drag_press.is_some_and(|(t, px, py)| {
                 now - t <= self.double_click_interval && (x - px).abs() <= CLICK_SLOP && (y - py).abs() <= CLICK_SLOP
             });
@@ -204,7 +204,7 @@ impl<S: 'static> Runtime<S> {
         }
         self.press_at = (x, y);
         let clicks = self.press_clicks.press(&n.path, now, (x, y), self.double_click_interval);
-        self.double_armed = n.on_double_press.is_some() && pending.is_some_and(|(p, t, px, py)| {
+        self.double_armed = n.handlers.on_double_press.is_some() && pending.is_some_and(|(p, t, px, py)| {
             p == n.path && now - t <= self.double_click_interval && (x - px).abs() <= CLICK_SLOP && (y - py).abs() <= CLICK_SLOP
         });
         self.press_down_t = now;
@@ -248,8 +248,8 @@ impl<S: 'static> Runtime<S> {
         };
         let path = n.path.clone();
         self.drag_out_armed = self.drags_out(n);
-        self.drag_out_threshold = n.drag_threshold.unwrap_or(crate::drag_out::DRAG_THRESHOLD);
-        if n.on_drag.is_some() && !self.drag_out_armed {
+        self.drag_out_threshold = n.handlers.drag_threshold.unwrap_or(crate::drag_out::DRAG_THRESHOLD);
+        if n.handlers.on_drag.is_some() && !self.drag_out_armed {
             self.queue.push(Action::Drag(path.clone(), d, crate::PointerButton::Primary));
         }
         self.capture = Some((path, d));
@@ -293,7 +293,7 @@ impl<S: 'static> Runtime<S> {
         }
         let Some(i) = self.live_index(&path) else { return };
         let n = &self.nodes[i];
-        let (has_drag, has_press, has_double) = (n.on_drag.is_some() && !self.drags_out(n), n.on_press.is_some(), n.on_double_press.is_some());
+        let (has_drag, has_press, has_double) = (n.handlers.on_drag.is_some() && !self.drags_out(n), n.handlers.on_press.is_some(), n.handlers.on_double_press.is_some());
         if has_drag {
             let (dx, dy) = (x - self.press_at.0, y - self.press_at.1);
             let [lx, ly] = self.to_local(i, x, y);
@@ -354,14 +354,14 @@ impl<S: 'static> Runtime<S> {
         let Some(mut i) = target else {
             return crate::el::Cursor::Default;
         };
-        if self.nodes[i].cursor.is_none() && (self.nodes[i].input.is_some() || self.nodes[i].role == "textbox") {
+        if self.nodes[i].handlers.cursor.is_none() && (self.nodes[i].input.is_some() || self.nodes[i].role == "textbox") {
             return crate::el::Cursor::Text;
         }
         if self.is_selectable(i) && !self.text_sel.dragging && self.link_at(i, x, y).is_some() {
             return crate::el::Cursor::Pointer;
         }
         loop {
-            if let Some(c) = self.nodes[i].cursor {
+            if let Some(c) = self.nodes[i].handlers.cursor {
                 return c;
             }
             let Some(parent) = self.nodes[i].parent else { return crate::el::Cursor::Default };
@@ -432,7 +432,7 @@ impl<S: 'static> Runtime<S> {
         let Some((path, _)) = &self.capture else { return };
         let Some(i) = self.nodes.iter().position(|n| &n.path == path) else { return };
         let inside = std::iter::successors(self.nodes[i].parent, |&p| self.nodes[p].parent).any(|p| self.nodes[p].id == id);
-        if inside && self.nodes[i].on_drag.is_none() {
+        if inside && self.nodes[i].handlers.on_drag.is_none() {
             self.press_cancelled = true;
             self.capture_inside = false;
             self.double_armed = false;
