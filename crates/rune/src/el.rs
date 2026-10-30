@@ -20,6 +20,7 @@ use crate::tok::TextStyle;
 pub use crate::el_tx::{Shell, Tx};
 pub(crate) use crate::el_tx::{SelectRequest, TraceCalls};
 
+mod growth;
 mod handlers;
 mod layout;
 mod motion;
@@ -1412,25 +1413,6 @@ impl El {
     /// the edge it scrolls to, like CSS `scroll-padding`. The content's own ends still stop flush.
     pub fn scroll_margin(mut self, pts: f32) -> Self {
         self.scroll_edges.margin = pts.max(0.0);
-        self
-    }
-    /// Make this column a growth stack (see [`GrowthSpec`]). Required alongside
-    /// [`El::virtualize`] on the same element.
-    pub fn growth(mut self, spec: GrowthSpec) -> Self {
-        self.growth = Some(Box::new(spec));
-        self
-    }
-    /// A growth-stack row that is streaming: slows near its target and reveals through the
-    /// feathered edge.
-    pub fn streaming(mut self, on: bool) -> Self {
-        self.streaming = on;
-        self
-    }
-    /// A growth-stack row whose content arrives complete, like a sent message: its height
-    /// changes glide on the growth spring alone, without the speed limits that pace streaming
-    /// text, so a large insert and the pinned viewport following it move in one quick glide.
-    pub fn arrives_whole(mut self) -> Self {
-        self.whole = true;
         self
     }
     pub fn color(mut self, c: Color) -> Self {
