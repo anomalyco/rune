@@ -30,6 +30,7 @@ impl<T: 'static> Overlay<T> {
         if let Some(panel) = &self.panel { panel.set_cursor(active.then_some(want)); }
     }
 
+    #[cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code))]
     pub(super) fn observe_pointer(&mut self, x: f32, y: f32) {
         if self.rt.pointer_captured() || (x >= 0.0 && y >= 0.0 && x < self.at.size.0 && y < self.at.size.1) {
             self.dirty |= self.rt.observe_pointer(x, y);
@@ -112,7 +113,7 @@ impl<T: 'static> Overlay<T> {
         let Some(input) = self.pending_input.take() else { return };
         self.options.input = input;
         let resolved = input.resolved(self.interactive);
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(any(target_arch = "wasm32", target_os = "ios", target_os = "android"))]
         let _ = resolved;
         #[cfg(target_os = "macos")]
         if let Some(panel) = &self.panel { panel.set_input(resolved); }

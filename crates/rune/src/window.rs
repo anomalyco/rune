@@ -891,6 +891,7 @@ impl<S: 'static> Host<S> {
         // The first frame, now, so the window comes on screen with it instead of empty for a
         // frame or two. AppKit has ordered the window in, but it reaches the screen with this
         // turn's Core Animation commit, so nothing reports it visible yet.
+        #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
         let mut drew = false;
         #[cfg(target_os = "macos")]
         if visible && !self.rt.minimize_request && !self.finished && !event_loop.exiting()

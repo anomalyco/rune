@@ -111,6 +111,8 @@ mod el_text;
 mod el_tx;
 mod el_visual;
 mod element_info;
+#[cfg(target_vendor = "apple")]
+pub mod embed;
 mod input_time;
 mod key_diagnostics;
 #[cfg(test)]
