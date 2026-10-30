@@ -8,7 +8,7 @@ thread_local! {
 }
 
 pub(crate) struct InputWindow {
-    watch: std::cell::RefCell<Option<crate::x11_pointer::MouseWatch>>,
+    watch: std::cell::RefCell<Option<crate::x11::pointer::MouseWatch>>,
     wake: Option<crate::Waker>,
     visible: std::cell::Cell<bool>,
     follow: std::cell::Cell<bool>,
@@ -56,7 +56,7 @@ impl InputWindow {
     pub fn set_follow_pointer(&self, follow: bool) { self.follow.set(follow); self.refresh_watch(); }
     fn refresh_watch(&self) {
         if self.visible.get() && (self.input.get() == crate::OverlayInput::Regions || self.follow.get()) {
-            if self.watch.borrow().is_none() { *self.watch.borrow_mut() = crate::x11_pointer::MouseWatch::new(self.wake.clone()); }
+            if self.watch.borrow().is_none() { *self.watch.borrow_mut() = crate::x11::pointer::MouseWatch::new(self.wake.clone()); }
             self.update_geometry();
         } else { self.watch.borrow_mut().take(); }
     }

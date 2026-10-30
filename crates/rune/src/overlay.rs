@@ -304,7 +304,7 @@ pub(crate) struct Overlay<T: 'static> {
     #[cfg(target_os = "windows")]
     native: Option<crate::win32::OverlayWindow>,
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-    x11: Option<crate::x11_overlay::InputWindow>,
+    x11: Option<crate::x11::overlay::InputWindow>,
     live: Option<Live>,
     cursor: Option<crate::os_cursor::OsCursor>,
     mods: winit::keyboard::ModifiersState,
@@ -663,7 +663,7 @@ impl<T: 'static> Overlay<T> {
             let _ = window.set_cursor_hittest(self.options.input.resolved(self.interactive) == OverlayInput::All);
             #[cfg(all(unix, not(target_os = "ios"), not(target_os = "android")))]
             {
-                self.x11 = crate::x11_overlay::InputWindow::new(&window, self.shared.wake.lock().unwrap().clone(), self.options.input.resolved(self.interactive), self.options.follow_pointer);
+                self.x11 = crate::x11::overlay::InputWindow::new(&window, self.shared.wake.lock().unwrap().clone(), self.options.input.resolved(self.interactive), self.options.follow_pointer);
                 if self.options.input == OverlayInput::Regions && self.x11.is_none() { return None; }
                 self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities {
                     capture_exclusion: OverlaySupport::Unsupported, nonactivating_keys: OverlaySupport::Unsupported, global_pointer: OverlaySupport::Supported,

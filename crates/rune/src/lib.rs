@@ -73,9 +73,7 @@ pub use popup_menu::{PopupAnchor, PopupItem, PopupMenu, PopupMenuError, popup_me
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 mod layer_shell;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-mod x11_overlay;
-#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-mod x11_pointer;
+mod x11;
 mod overlay;
 mod overlay_options;
 mod cursor;
