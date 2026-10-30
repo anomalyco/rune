@@ -427,6 +427,7 @@ impl Gpu {
             trace: Default::default(),
         }))
         .map_err(|error| format!("no GPU device: {error}"))?;
+        crate::gpu::pick::log_ready();
         Ok(Gpu { instance, adapter, device, queue })
     }
 

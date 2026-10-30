@@ -7,4 +7,6 @@
   before Vulkan, so translucent windows composite through DirectComposition on every
   GPU and resizes keep their swapchain. `WGPU_BACKEND` (`dx12`, `vulkan`, comma-separated)
   now limits the backends on desktop; `WGPU_ADAPTER_NAME` and `WGPU_POWER_PREF` still
-  choose the card, and `RUNE_GPU_LOG=1` prints the choice.
+  choose the card, and `RUNE_GPU_LOG=1` prints the choice and, on Windows, how long after the
+  process started the device was ready. The card order comes from DXGI directly (`windows`
+  0.62, which wgpu-hal already builds), so the choice adds no launch time.

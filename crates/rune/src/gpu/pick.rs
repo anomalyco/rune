@@ -93,15 +93,10 @@ pub(crate) fn pick(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>
     }
     #[cfg(target_os = "windows")]
     {
-        let order = windows_order();
-        enumerated = Some(order.len());
-        if let Some(&card) = order.first() {
-            let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
-            let infos: Vec<_> = adapters.iter().map(|a| (a.get_info(), usable(a))).collect();
-            if let Some(index) = by_card(card, &infos) {
-                let adapter = adapters.into_iter().nth(index).expect("index from this list");
-                return Ok(log(Pick { adapter, reason: Reason::Windows, compositor, windows: Some(card) }, enumerated));
-            }
+        let cards = windows_cards();
+        enumerated = Some(cards.len());
+        if let Some(&card) = cards.first() && let Some(adapter) = on_card(instance, &usable, card) {
+            return Ok(log(Pick { adapter, reason: Reason::Windows, compositor, windows: Some(card) }, enumerated));
         }
     }
     let adapter = request(instance, surface, wgpu::PowerPreference::LowPower)?;
@@ -114,10 +109,8 @@ fn finish(instance: &wgpu::Instance, usable: &dyn Fn(&wgpu::Adapter) -> bool, mu
     #[cfg(target_os = "windows")]
     {
         let info = pick.adapter.get_info();
-        let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
-        let infos: Vec<_> = adapters.iter().map(|a| (a.get_info(), usable(a))).collect();
-        if let Some(index) = by_card((info.vendor, info.device), &infos) {
-            pick.adapter = adapters.into_iter().nth(index).expect("index from this list");
+        if info.backend != wgpu::Backend::Dx12 && let Some(adapter) = on_card(instance, usable, (info.vendor, info.device)) {
+            pick.adapter = adapter;
         }
     }
     #[cfg(not(target_os = "windows"))]
@@ -125,17 +118,60 @@ fn finish(instance: &wgpu::Instance, usable: &dyn Fn(&wgpu::Adapter) -> bool, mu
     log(pick, enumerated)
 }
 
-/// The hardware cards DXGI lists, in its order, as PCI (vendor, device) ids, read once per
-/// process on a DX12-only instance, so a `WGPU_BACKEND` without DX12 still gets Windows' card.
+/// The usable adapter on `card` on its first backend (`by_card`). DX12 alone is listed first:
+/// listing every backend also opens each card's Vulkan device.
 #[cfg(target_os = "windows")]
-fn windows_order() -> &'static [(u32, u32)] {
-    static ORDER: std::sync::OnceLock<Vec<(u32, u32)>> = std::sync::OnceLock::new();
-    ORDER.get_or_init(|| {
-        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        descriptor.backends = wgpu::Backends::DX12;
-        pollster::block_on(wgpu::Instance::new(descriptor).enumerate_adapters(wgpu::Backends::DX12)).iter()
-            .map(|a| a.get_info()).filter(|i| i.device_type != wgpu::DeviceType::Cpu).map(|i| (i.vendor, i.device)).collect()
+fn on_card(instance: &wgpu::Instance, usable: &dyn Fn(&wgpu::Adapter) -> bool, card: (u32, u32)) -> Option<wgpu::Adapter> {
+    [wgpu::Backends::DX12, wgpu::Backends::all()].into_iter().find_map(|backends| {
+        let adapters = pollster::block_on(instance.enumerate_adapters(backends));
+        let infos: Vec<_> = adapters.iter().map(|a| (a.get_info(), usable(a))).collect();
+        by_card(card, &infos).map(|index| adapters.into_iter().nth(index).expect("index from this list"))
     })
+}
+
+/// The hardware cards DXGI lists, in its order, as PCI (vendor, device) ids, read once per
+/// process. DXGI's own list takes milliseconds; wgpu's DX12 enumeration opens a device on every
+/// card to read its features (350-400 ms on a two-GPU desktop, before the window could open),
+/// and so does asking D3D12 whether a card runs it (about 230 ms more).
+#[cfg(target_os = "windows")]
+fn windows_cards() -> &'static [(u32, u32)] {
+    static CARDS: std::sync::OnceLock<Vec<(u32, u32)>> = std::sync::OnceLock::new();
+    CARDS.get_or_init(|| {
+        use windows::Win32::Graphics::Dxgi::*;
+        let started = std::time::Instant::now();
+        let mut cards = Vec::new();
+        // SAFETY: plain DXGI calls on a factory and adapters this function owns.
+        if let Ok(factory) = unsafe { CreateDXGIFactory1::<IDXGIFactory1>() } {
+            for index in 0.. {
+                let Ok(adapter) = (unsafe { factory.EnumAdapters1(index) }) else { break };
+                let Ok(desc) = (unsafe { adapter.GetDesc1() }) else { continue };
+                if desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0 { continue; }
+                cards.push((desc.VendorId, desc.DeviceId));
+            }
+        }
+        if std::env::var_os("RUNE_GPU_LOG").is_some_and(|v| v != "0") {
+            eprintln!("rune: GPU: read Windows' order of {} cards in {:.1} ms", cards.len(), started.elapsed().as_secs_f64() * 1000.0);
+        }
+        cards
+    })
+}
+
+/// With `RUNE_GPU_LOG=1`, the first device's time since the process started (Windows).
+pub(crate) fn log_ready() {
+    #[cfg(target_os = "windows")]
+    if std::env::var_os("RUNE_GPU_LOG").is_some_and(|v| v != "0") {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            use windows_sys::Win32::{Foundation::FILETIME, System::{SystemInformation::GetSystemTimeAsFileTime, Threading::{GetCurrentProcess, GetProcessTimes}}};
+            let zero = || FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+            let (mut created, mut exited, mut kernel, mut user, mut now) = (zero(), zero(), zero(), zero(), zero());
+            let ticks = |t: &FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
+            // SAFETY: the current-process pseudo-handle is valid and every output is a live FILETIME.
+            if unsafe { GetProcessTimes(GetCurrentProcess(), &mut created, &mut exited, &mut kernel, &mut user) } == 0 { return; }
+            unsafe { GetSystemTimeAsFileTime(&mut now) };
+            eprintln!("rune: GPU: device ready {:.0} ms after the process started", ticks(&now).saturating_sub(ticks(&created)) as f64 / 10_000.0);
+        });
+    }
 }
 
 fn request(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, power_preference: wgpu::PowerPreference) -> Result<wgpu::Adapter, String> {
