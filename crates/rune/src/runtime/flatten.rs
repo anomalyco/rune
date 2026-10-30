@@ -49,8 +49,22 @@ pub(super) fn node_path(parent: &str, key: Option<&str>, index: usize) -> String
     match (parent.is_empty(), key) {
         (true, Some(key)) => key.to_owned(),
         (true, None) => format!("#{index}"),
-        (false, Some(key)) => format!("{parent}/{key}"),
-        (false, None) => format!("{parent}/#{index}"),
+        // Sized up front: `format!` guesses short and reallocates every deep path, twice a
+        // commit per element.
+        (false, Some(key)) => {
+            let mut path = String::with_capacity(parent.len() + 1 + key.len());
+            path.push_str(parent);
+            path.push('/');
+            path.push_str(key);
+            path
+        }
+        (false, None) => {
+            use std::fmt::Write;
+            let mut path = String::with_capacity(parent.len() + 22);
+            path.push_str(parent);
+            let _ = write!(path, "/#{index}");
+            path
+        }
     }
 }
 

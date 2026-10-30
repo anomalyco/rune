@@ -1026,6 +1026,9 @@ pub struct Runtime<S: 'static> {
     /// Called for keys unhandled by the focused control; return true to consume it.
     pub on_key: Option<fn(&mut S, &KeyEvent, &mut Tx) -> bool>,
     pub(crate) nodes: Vec<Node>,
+    /// The last commit's node buffer, emptied, for the next flatten to fill: an app of a few
+    /// thousand elements otherwise maps and faults in megabytes every commit.
+    spare_nodes: Vec<Node>,
     layout: TaffyTree<usize>,
     layout_entries: HashMap<String, LayoutEntry>,
     node_index: HashMap<NodeId, usize>,
@@ -1455,6 +1458,7 @@ impl<S: 'static> Runtime<S> {
             wall_start: None,
             on_key: None,
             nodes: Vec::new(),
+            spare_nodes: Vec::new(),
             layout: {
                 let mut tree = TaffyTree::new();
                 tree.disable_rounding();
@@ -3245,6 +3249,7 @@ struct Measurement<'a, S: 'static> {
     time_scale: f32,
     commits: u64,
     nodes: &'a [Node],
+    spare_nodes: Vec<Node>,
     text: &'a mut TextSystem,
     layout: &'a mut TaffyTree<usize>,
     layout_entries: &'a mut HashMap<String, LayoutEntry>,
@@ -3476,7 +3481,8 @@ impl<S: 'static> Measurement<'_, S> {
         for entry in self.layout_entries.values_mut() {
             entry.used = false;
         }
-        let mut nodes = Vec::with_capacity(self.nodes.len().max(32));
+        let mut nodes = std::mem::take(&mut self.spare_nodes);
+        nodes.reserve(self.nodes.len().max(32));
         // Root constraints are part of the retained style, not a dirty write after flattening.
         // A window that fits its content lays the root out at its natural height.
         root.style.size = Size { width: length(self.viewport.0), height: if self.fit_height { auto() } else { length(self.viewport.1) } };
@@ -3597,6 +3603,7 @@ impl<S: 'static> Runtime<S> {
             layout_reads: Vec::new(),
             commits: self.commits,
             nodes: &self.nodes,
+            spare_nodes: std::mem::take(&mut self.spare_nodes),
             text: &mut self.text,
             layout: &mut self.layout,
             layout_entries: &mut self.layout_entries,
@@ -4219,7 +4226,7 @@ impl<S: 'static> Runtime<S> {
         let gone: Vec<usize> = (0..old_nodes.len()).filter(|&oi| !self.node_index.contains_key(&old_ids[oi])).collect();
         let mut at = 0;
         old_nodes.retain(|_| { at += 1; gone.binary_search(&(at - 1)).is_ok() });
-        for (oi, mut old) in gone.into_iter().zip(old_nodes) {
+        for (oi, mut old) in gone.into_iter().zip(old_nodes.drain(..)) {
             if !self.scene.contains(old.id) {
                 self.hover_pruned(&old);
                 continue;
@@ -4284,6 +4291,7 @@ impl<S: 'static> Runtime<S> {
             self.node_index.insert(old.id, nodes.len());
             nodes.push(old);
         }
+        self.spare_nodes = old_nodes;
 
         if time_scaled {
             // Exits keep following their present ancestors' scale, so one under a frozen subtree
