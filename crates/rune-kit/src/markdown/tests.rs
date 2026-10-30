@@ -138,8 +138,8 @@ fn rebuilding_a_view_runs_the_highlighter_once_per_block() {
 /// or not, as in the plain block and in the block mid-stream.
 #[test]
 fn highlighting_never_moves_a_glyph() {
-    const INTER: &[u8] = include_bytes!("../../../themes/opencode/assets/fonts/InterVariable.ttf");
-    const PLEX: &[u8] = include_bytes!("../../../themes/opencode/assets/fonts/IBMPlexMono-Regular.ttf");
+    const INTER: &[u8] = include_bytes!("../../../../themes/opencode/assets/fonts/InterVariable.ttf");
+    const PLEX: &[u8] = include_bytes!("../../../../themes/opencode/assets/fonts/IBMPlexMono-Regular.ttf");
     let mut ts = TextSystem::new(&[INTER, PLEX], ("Inter", "IBM Plex Mono"));
     let style = MarkdownStyle::neutral(true);
     let font = style.code_block;
