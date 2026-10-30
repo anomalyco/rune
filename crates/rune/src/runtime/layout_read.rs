@@ -234,7 +234,7 @@ impl<S: 'static> Runtime<S> {
         }
         if let Some(anc) = std::iter::successors(Some(i), |&p| nodes[p].parent).find(|&p| nodes[p].above.is_some())
             && let Some(a) = &nodes[anc].above
-            && let Some(k) = nodes[..anc].iter().position(|n| n.key.as_ref() == Some(&a.key))
+            && let Some(k) = anchor_index(&nodes, anc, a)
         {
             let at = sticky::anchored_target(nodes, &self.scrolls, k, self.viewport);
             let (w, h) = (nodes[anc].target[2] - nodes[anc].target[0], nodes[anc].target[3] - nodes[anc].target[1]);
@@ -421,17 +421,8 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn rect_springing(&self, i: usize) -> bool {
         let store = self.scene.store();
         let n = &self.nodes[i];
-        let step = |p: usize| {
-            if let Some(a) = &self.nodes[p].above
-                && let Some(j) = self.nodes[..p].iter().position(|n| n.key.as_ref() == Some(&a.key))
-            {
-                Some(j)
-            } else {
-                self.nodes[p].parent
-            }
-        };
         self.flights.iter().any(|f| f.lands(&n.path, n.key.as_deref()))
-            || std::iter::successors(Some(i), |&p| step(p)).any(|p| {
+            || std::iter::successors(Some(i), |&p| step_up(&self.nodes, p)).any(|p| {
                 let id = self.nodes[p].id;
                 store.is_animating(id, prop::FRAME) || store.is_animating(id, prop::TRAVEL) || store.is_animating(id, prop::PRESENCE)
                     || store.is_animating(id, prop::OFFSET) || store.is_animating(id, prop::SCALE) || store.is_animating(id, P_PRESS_SCALE)

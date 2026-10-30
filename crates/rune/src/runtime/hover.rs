@@ -167,7 +167,7 @@ impl<S: 'static> Runtime<S> {
         paths.extend(self.hover_within.iter().filter(|p| self.node(p).is_some_and(|n| n.hover_delay != [0.0; 2])).cloned());
         paths.sort();
         paths.dedup();
-        let now = self.wall_clock().unwrap_or(self.clock);
+        let now = self.now_clock();
         for path in paths {
             let Some(delay) = self.node(&path).map(|n| n.hover_delay) else {
                 // Gone or on its way out: a shown hover hears its leave now, a pending enter

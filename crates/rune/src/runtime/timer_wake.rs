@@ -34,7 +34,7 @@ impl<S: 'static> Runtime<S> {
     /// A resting wake's poll still stands for a frame it asked for that runs covered or misses
     /// its drawable: its timers count from it, and nothing polls again unless another came due.
     pub(crate) fn poll_hidden(&mut self) -> bool {
-        let now = self.wall_clock().unwrap_or(self.clock);
+        let now = self.now_clock();
         if self.timer_wake.asked.is_some() && self.wake_deadlines.first().is_none_or(|t| *t > now) {
             self.cancel_timer_frame();
             return self.needs_commit();

@@ -1,5 +1,6 @@
 //! Paint records that keep a place in the painter stream for pixels Rune doesn't paint itself:
 //! effect slots a compositor fills (`El::effect`) and backdrop blurs (`El::backdrop_blur`).
+use super::intersect;
 use crate::render::{Instance, KIND_BACKDROP_BLUR, KIND_EFFECT, LayerSpec, NO_CLIP};
 
 /// Pushes the effect slot `(bleed_pt, backdrop)` over `rect` with corner `radii`, clipped by
@@ -36,7 +37,6 @@ pub(super) fn push_effect(instances: &mut Vec<Instance>, (bleed, backdrop): (f32
 /// opacity `o`. Returns the signed corner radius an outer shadow leaves clear over the blur.
 pub(super) fn push_backdrop_blur(instances: &mut Vec<Instance>, sigma: f32, (rect, radii, continuous): ([f32; 4], [f32; 4], bool),
     (clip, fade, fade_origin): ([f32; 4], [f32; 4], [f32; 4]), rounded: Option<([f32; 4], [f32; 4])>, k_px: f32, o: f32) -> f32 {
-    let intersect = |a: [f32; 4], b: [f32; 4]| [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])];
     // One clip rectangle fits the packed ABI: a rounded clip cut by `clip` keeps only the cut.
     let (clip, round) = match rounded {
         Some((mask, radii)) if intersect(clip, mask) == mask => (mask, Some(radii)),

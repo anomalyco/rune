@@ -87,10 +87,7 @@ impl<S: 'static> Runtime<S> {
         let s = self.env.scale;
         for (i, node) in self.nodes.iter().enumerate() {
             // `elements` steps up to an `El::above` target before the parent.
-            let up = match &node.above {
-                Some(a) => self.nodes[..i].iter().position(|m| m.key.as_ref() == Some(&a.key)).or(node.parent),
-                None => node.parent,
-            };
+            let up = step_up(&self.nodes, i);
             let mut flags = up.map_or(0, |u| down[u].1);
             let mut pass = flags;
             if intent(node) { pass |= MotionElement::LIVE; }

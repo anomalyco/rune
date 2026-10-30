@@ -132,7 +132,7 @@ mod reveal;
 mod sticky;
 #[path = "runtime/anchor.rs"]
 mod anchor;
-use anchor::anchor_position;
+use anchor::{anchor_index, anchor_position, step_up};
 #[path = "runtime/motion_elements.rs"]
 mod motion_elements;
 pub use motion_elements::MotionElement;
@@ -533,6 +533,14 @@ pub(crate) struct Node {
 }
 
 impl Node {
+    /// Whether its text is a secret: marked secure, redacted, or a secure field.
+    fn is_secure(&self) -> bool {
+        self.a11y.secure || self.text.as_ref().is_some_and(|t| t.redacted) || self.input.as_ref().is_some_and(|i| i.edit.is_secure())
+    }
+    /// Whether a press, hover or drag can go to this node itself.
+    fn has_primary_handler(&self) -> bool {
+        self.on_press.is_some() || self.on_double_press.is_some() || self.on_hover.is_some() || self.on_drag.is_some() || self.drag_out.is_some()
+    }
     /// Whether `selector` names this node, as `Cx::layout` reads it: its key, its full path, or
     /// a key path such as `msg-42/body` (see `flight::selects`).
     pub(crate) fn named(&self, selector: &str) -> bool {
@@ -772,7 +780,6 @@ fn open_turned_layer(instances: &mut Vec<Instance>, layers: &mut Vec<(usize, usi
     rect: [f32; 4], (angle, pivot): (f32, [f32; 2]),
     (clip, fade, fade_origin, rounded): (&mut [f32; 4], &mut [f32; 4], &mut [f32; 4], &mut Option<([f32; 4], [f32; 4])>))
 {
-    let intersect = |a: [f32; 4], b: [f32; 4]| [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])];
     if let Some((mask, _)) = *rounded && intersect(*clip, mask) != mask {
         let mut marker = Instance::begin_layer(rect, *clip, Default::default());
         marker.fade = crate::render::pack_fade(*fade, *fade_origin, *clip);
@@ -789,13 +796,18 @@ fn open_turned_layer(instances: &mut Vec<Instance>, layers: &mut Vec<(usize, usi
     (*clip, *fade, *fade_origin, *rounded) = (NO_CLIP, [0.0; 4], NO_CLIP, None);
 }
 
+/// The overlap of two `[x0, y0, x1, y1]` rects (inverted when they don't meet).
+pub(crate) fn intersect(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])]
+}
+
 fn screen_clip_of(parent: Option<usize>, inh: &[Inh], turns: &[Turn]) -> [f32; 4] {
     let Some(pi) = parent else { return NO_CLIP };
     let Some(h) = inh.get(pi) else { return NO_CLIP };
     if let Some(&t) = h.turn.checked_sub(1).and_then(|k| turns.get(k as usize)) {
         let ic = if h.clip == NO_CLIP { NO_CLIP } else { t.bbox(h.clip) };
         let oc = t.outer_clip;
-        [oc[0].max(ic[0]), oc[1].max(ic[1]), oc[2].min(ic[2]), oc[3].min(ic[3])]
+        intersect(oc, ic)
     } else {
         h.clip
     }
@@ -822,7 +834,7 @@ impl Turn {
         let oc = self.outer_clip;
         Turn {
             mat: [a * e + b * g, a * f + b * h, c * e + d * g, c * f + d * h, a * u + b * v + x, c * u + d * v + y],
-            outer_clip: [oc[0].max(ic[0]), oc[1].max(ic[1]), oc[2].min(ic[2]), oc[3].min(ic[3])],
+            outer_clip: intersect(oc, ic),
             ..inner
         }
     }
@@ -1932,7 +1944,7 @@ impl<S: 'static> Runtime<S> {
     /// floor on timers (`window::timer_deadline`) still counts from that poll.
     pub(crate) fn schedule_pending_wakes(&mut self) {
         let wakes = std::mem::take(&mut self.pending.wakes);
-        self.schedule_wakes_from(self.wall_clock().unwrap_or(self.clock), wakes);
+        self.schedule_wakes_from(self.now_clock(), wakes);
     }
 
     /// Sorted, de-duplicated deadlines on the logical clock.
@@ -2053,10 +2065,6 @@ impl<S: 'static> Runtime<S> {
     /// frame or a sleeping host's gap belongs to old tracks, never to targets first observed
     /// on this frame.
     pub(crate) fn frame_split(&mut self, catch_up: f64, dt: f64) -> bool {
-        self.frame_clock(catch_up, dt)
-    }
-
-    fn frame_clock(&mut self, catch_up: f64, dt: f64) -> bool {
         // Like a native shell: the logical clock follows host time (timers, poll), while
         // animations step by the frame's own dt, so idle time never lands on a fresh commit.
         let elapsed = catch_up + dt;
@@ -2843,10 +2851,15 @@ impl<S: 'static> Runtime<S> {
         [(ux - b[0]) / k, (uy - b[1]) / k]
     }
 
+    /// The turn node `i` draws inside (`Inh::turn` is 1-based, 0 for none).
+    fn turn_of(&self, i: usize) -> Option<Turn> {
+        self.inh_scratch.get(i).and_then(|h| h.turn.checked_sub(1)).and_then(|k| self.turn_scratch.get(k as usize)).copied()
+    }
+
     /// Node `i`'s unturned border box (points, x0 y0 x1 y1) and window point (x, y) unturned into
     /// that layer's points.
     pub(super) fn unturned_box_and_point(&self, i: usize, x: f32, y: f32) -> ([f32; 4], f32, f32) {
-        if let Some(t) = self.inh_scratch.get(i).and_then(|h| h.turn.checked_sub(1)).and_then(|k| self.turn_scratch.get(k as usize))
+        if let Some(t) = self.turn_of(i)
             && let Some(&(b, _)) = self.unturned_drawn.get(i)
         {
             let s = self.env.scale;
@@ -2868,7 +2881,7 @@ impl<S: 'static> Runtime<S> {
     #[inline(never)]
     fn hit_contains_turned(&self, id: NodeId, r: [f32; 4], x: f32, y: f32) -> bool {
         let Some(&i) = self.node_index.get(&id) else { return contains(r, x, y) };
-        let Some(&t) = self.inh_scratch.get(i).and_then(|h| h.turn.checked_sub(1)).and_then(|k| self.turn_scratch.get(k as usize)) else {
+        let Some(t) = self.turn_of(i) else {
             return contains(r, x, y);
         };
         let s = self.env.scale;
@@ -2884,13 +2897,13 @@ impl<S: 'static> Runtime<S> {
             return r;
         }
         let Some(&i) = self.node_index.get(&id) else { return r };
-        let Some(&t) = self.inh_scratch.get(i).and_then(|h| h.turn.checked_sub(1)).and_then(|k| self.turn_scratch.get(k as usize)) else {
+        let Some(t) = self.turn_of(i) else {
             return r;
         };
         let s = self.env.scale;
         let b = t.bbox(r.map(|v| v * s)).map(|v| v / s);
         let c = t.outer_clip.map(|v| v / s);
-        [b[0].max(c[0]), b[1].max(c[1]), b[2].min(c[2]), b[3].min(c[3])]
+        intersect(b, c)
     }
 
     fn node_contains(&self, i: usize, x: f32, y: f32) -> bool {
@@ -2908,13 +2921,13 @@ impl<S: 'static> Runtime<S> {
                 .and_then(|p| self.unturned_drawn.get(p))
                 .map_or(NO_CLIP, |u| u.1)
                 .map(|v| v / s);
-            let shown = [b[0].max(lc[0]), b[1].max(lc[1]), b[2].min(lc[2]), b[3].min(lc[3])];
+            let shown = intersect(b, lc);
             let [ux, uy] = t.unturn([x * s, y * s]).map(|v| v / s);
             return contains(shown, ux, uy);
         }
         let r = self.drawn_edges(i);
         let c = self.nodes[i].parent.and_then(|p| self.inh_scratch.get(p)).map_or(NO_CLIP, |h| h.clip).map(|v| v / self.env.scale);
-        let shown = [r[0].max(c[0]), r[1].max(c[1]), r[2].min(c[2]), r[3].min(c[3])];
+        let shown = intersect(r, c);
         contains(shown, x, y)
     }
 
@@ -3255,8 +3268,7 @@ impl<S: 'static> Runtime<S> {
             let i = *self.node_index.get(&id)?;
             let n = &self.nodes[i];
             // A secondary-only child must not obscure primary input or background blur.
-            (!self.subtree_exiting(i) && self.allowed(i) && (n.on_press.is_some() || n.on_double_press.is_some() || n.on_hover.is_some()
-                || n.on_drag.is_some() || n.drag_out.is_some() || n.input.is_some() || n.role == "textbox"
+            (!self.subtree_exiting(i) && self.allowed(i) && (n.has_primary_handler() || n.input.is_some() || n.role == "textbox"
                 || (n.role == "button" && n.vis.hit) || n.window_drag || n.focus.enabled || n.modal.is_some()
                 || self.is_selectable(i))).then_some(i)
         })
@@ -3269,10 +3281,8 @@ impl<S: 'static> Runtime<S> {
     fn primary_target(&self, x: f32, y: f32) -> Option<usize> {
         let i = self.top_target(x, y)?;
         let n = &self.nodes[i];
-        let own = n.on_press.is_some() || n.on_double_press.is_some() || n.on_hover.is_some() || n.on_drag.is_some() || n.drag_out.is_some();
-        if !self.is_selectable(i) || own || self.link_at(i, x, y).is_some() { return Some(i); }
-        let handles = |n: &Node| n.on_press.is_some() || n.on_double_press.is_some() || n.on_hover.is_some()
-            || n.on_drag.is_some() || n.drag_out.is_some() || n.focus.enabled;
+        if !self.is_selectable(i) || n.has_primary_handler() || self.link_at(i, x, y).is_some() { return Some(i); }
+        let handles = |n: &Node| n.has_primary_handler() || n.focus.enabled;
         let mut p = n.parent;
         while let Some(a) = p {
             if self.subtree_exiting(a) || !self.allowed(a) || self.nodes[a].modal.is_some() { break; }
@@ -3316,7 +3326,7 @@ impl<S: 'static> Runtime<S> {
             self.input_drag(x, y, drag_move);
             return;
         }
-        let Some(i) = self.nodes.iter().enumerate().position(|(i, n)| n.path == path && !self.subtree_exiting(i)) else { return };
+        let Some(i) = self.live_index(&path) else { return };
         let (id, r, has_drag) = (self.nodes[i].id, self.nodes[i].target, self.nodes[i].on_drag.is_some() && !self.drags_out(&self.nodes[i]));
         // A hit rect is where the element was drawn (after scrolling); `target` is its
         // unscrolled layout rect, kept only for elements that were never drawn.
@@ -3370,12 +3380,17 @@ impl<S: 'static> Runtime<S> {
         self.drag_files_leave();
     }
 
+    /// The node at `path`, unless it is on its way out.
+    pub(crate) fn live_index(&self, path: &str) -> Option<usize> {
+        self.nodes.iter().enumerate().position(|(i, n)| n.path == path && !self.subtree_exiting(i))
+    }
+
     /// End a held drag without a drop: its handler hears `Phase::Up` with [`Drag::cancelled`]
     /// and the release that follows does nothing. False when no drag is held.
     fn cancel_drag(&mut self) -> bool {
         if self.input_click.captured { return false; }
         let Some((path, d)) = &self.capture else { return false };
-        let Some(i) = self.nodes.iter().enumerate().position(|(i, n)| &n.path == path && !self.subtree_exiting(i)) else { return false };
+        let Some(i) = self.live_index(&path) else { return false };
         if self.nodes[i].on_drag.is_none() || self.drags_out(&self.nodes[i]) { return false; }
         let (x, y) = self.pointer.unwrap_or(self.press_at);
         let [lx, ly] = self.to_local(i, x, y);
@@ -3396,7 +3411,7 @@ impl<S: 'static> Runtime<S> {
     /// False when the element offers nothing this time and the press stays a press.
     fn start_drag_out(&mut self, path: String) -> bool {
         self.drag_out_armed = false;
-        let Some(i) = self.nodes.iter().enumerate().position(|(i, n)| n.path == path && !self.subtree_exiting(i)) else { return false };
+        let Some(i) = self.live_index(&path) else { return false };
         let Some(f) = self.nodes[i].drag_out.clone() else { return false };
         let Some(item) = f(playground_host::handler_states_ref(&self.state, self.playground.as_deref())).filter(|item| !item.is_empty()) else { return false };
         let n = &self.nodes[i];
@@ -3577,7 +3592,7 @@ impl<S: 'static> Runtime<S> {
             self.capture_inside = false;
             return;
         }
-        let Some(i) = self.nodes.iter().enumerate().position(|(i, n)| n.path == path && !self.subtree_exiting(i)) else { return };
+        let Some(i) = self.live_index(&path) else { return };
         let n = &self.nodes[i];
         let (has_drag, has_press, has_double) = (n.on_drag.is_some() && !self.drags_out(n), n.on_press.is_some(), n.on_double_press.is_some());
         if has_drag {
@@ -3646,7 +3661,7 @@ impl<S: 'static> Runtime<S> {
         // Selectable text shows its I-beam even where its presses go to a row around it.
         let target = match &self.capture {
             Some(_) if self.text_sel.dragging => self.selection_holder(),
-            Some((p, _)) => (0..self.nodes.len()).find(|&i| self.nodes[i].path == *p && !self.subtree_exiting(i) && self.allowed(i)),
+            Some((p, _)) => self.live_index(p).filter(|&i| self.allowed(i)),
             // Moving layout holds hover: the cursor stays with what the pointer was over.
             None => self.held_hover().flatten().or_else(|| self.selectable_at(x, y).or_else(|| self.primary_target(x, y))),
         };
@@ -4073,7 +4088,7 @@ impl<S: 'static> Runtime<S> {
             pinh.dy += self.row_dy[i];
             pinh.snap.rigid[1] += self.row_dy[i];
             if let Some(a) = &n.above
-                && let Some(j) = self.nodes[..i].iter().position(|n| n.key.as_ref() == Some(&a.key))
+                && let Some(j) = anchor_index(&self.nodes, i, a)
             {
                 self.anchored_inh(i, j, a, &p, &mut pinh);
             }
@@ -4329,7 +4344,6 @@ impl<S: 'static> Runtime<S> {
                 self.pixel_snap.snapped(n.id, motion, (r_exact, raw), rigid, (snap_layer, sc))
             };
             let (w, h) = ((r[2] - r[0]).max(0.0), (r[3] - r[1]).max(0.0));
-            let intersect = |a: [f32; 4], b: [f32; 4]| [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])];
             // `El::rotate`: this subtree draws into a layer turned about its origin.
             // The layer takes the clips from above; the node's own clips apply inside, upright.
             let own_turn = p.transform.rotate;
@@ -5148,22 +5162,19 @@ impl<S: 'static> Runtime<S> {
                     let mut pill_icons = Vec::new();
                     let pill_bg = spec.pill_colors.map_or(spec.rich_style.link.alpha(0.2), |(bg, _)| bg);
                     crate::text::pill_chips(layout, &spec.pills, spec.style.size, s, origin, pill_bg, &mut self.deco_scratch, &mut pill_icons);
-                    match n.elided.filter(|_| !spec.spans.is_empty() || !spec.rings.is_empty()) {
-                        Some(e) => self.text.decorations_with_rings(layout, &e.spans(&spec.spans), &e.rings(&spec.rings), s, origin, &mut self.deco_scratch),
-                        None => self.text.decorations_with_rings(layout, &spec.spans, &spec.rings, s, origin, &mut self.deco_scratch),
-                    }
+                    // Elided text draws its decorations over the drawn string's offsets.
+                    let drawn_spans = n.elided.map(|e| e.spans(&spec.spans));
+                    let spans = drawn_spans.as_deref().unwrap_or(&spec.spans);
+                    let drawn_rings = n.elided.map(|e| e.rings(&spec.rings));
+                    self.text.decorations_with_rings(layout, spans, drawn_rings.as_deref().unwrap_or(&spec.rings), s, origin, &mut self.deco_scratch);
                     let drawn_len = n.elided.map_or(spec.content.len(), |e| e.drawn_len(spec.content.len()));
                     if !spec.highlights.is_empty() {
-                        match n.elided {
-                            Some(e) => self.text.highlight_decorations(layout, &e.highlights(&spec.highlights), drawn_len, s, origin, &mut self.deco_scratch),
-                            None => self.text.highlight_decorations(layout, &spec.highlights, drawn_len, s, origin, &mut self.deco_scratch),
-                        }
+                        let drawn = n.elided.map(|e| e.highlights(&spec.highlights));
+                        self.text.highlight_decorations(layout, drawn.as_deref().unwrap_or(&spec.highlights), drawn_len, s, origin, &mut self.deco_scratch);
                     }
                     if !spec.strikes.is_empty() {
-                        match n.elided {
-                            Some(e) => self.text.strike_decorations(layout, &e.spans(&spec.spans), &e.strikes(&spec.strikes), color, s, origin, &mut self.deco_scratch),
-                            None => self.text.strike_decorations(layout, &spec.spans, &spec.strikes, color, s, origin, &mut self.deco_scratch),
-                        }
+                        let drawn = n.elided.map(|e| e.strikes(&spec.strikes));
+                        self.text.strike_decorations(layout, spans, drawn.as_deref().unwrap_or(&spec.strikes), color, s, origin, &mut self.deco_scratch);
                     }
                     link_fx.decos(layout, drawn_len, s, origin, &mut self.deco_scratch);
                     if !spec.rings.is_empty() || spec.highlights.iter().any(|h| h.ring.is_some()) {
@@ -5236,8 +5247,7 @@ impl<S: 'static> Runtime<S> {
                     };
                     let base = premul(color, o, srgb);
                     let lands = self.flights.iter().any(|f| f.lands(&n.path, n.key.as_deref()));
-                    for q in &self.glyph_scratch {
-                        if lands { continue; }
+                    for q in if lands { &[][..] } else { &self.glyph_scratch[..] } {
                         let [x0, y0] = if zoom == 1.0 && origin == r_origin { [q.rect[0], q.rect[1]] } else {
                             std::array::from_fn(|k| origin[k] + (q.rect[k] - r_origin[k]) * zoom)
                         };
@@ -5290,7 +5300,7 @@ impl<S: 'static> Runtime<S> {
             {
                 let ins = n.inset.map(|v| v * sc * s);
                 let bounds = [r[0] + ins[0], r[1] + ins[1], r[2] - ins[2], r[3] - ins[3]];
-                let text_clip = [clip[0].max(bounds[0]), clip[1].max(bounds[1]), clip[2].min(bounds[2]), clip[3].min(bounds[3])];
+                let text_clip = intersect(clip, bounds);
                 let mut widths = fade;
                 let mut origins = fade_origin;
                 // Layout width already includes display scale `s`; bounds also include the
@@ -5322,7 +5332,7 @@ impl<S: 'static> Runtime<S> {
             }
             // A scroll viewport clips its content with a hard edge unless it sets soft ones.
             if let Some(f) = n.vis.clip.or(n.scroll.map(|_| [0.0; 4])) {
-                clip = [r[0].max(clip[0]), r[1].max(clip[1]), r[2].min(clip[2]), r[3].min(clip[3])];
+                clip = intersect(r, clip);
                 let (own, origin) = self.scroll_edge_fade(i, f, r, sc * s, p.rect.edges()[3]);
                 inherit_fade(&mut fade, &mut fade_origin, origin, own);
             }
@@ -5474,16 +5484,7 @@ impl<S: 'static> Runtime<S> {
             let b2 = (ac.origin[0] + entry.rel_bounds[2] * k).ceil();
             let b3 = (ac.origin[1] + entry.rel_bounds[3] * k).ceil();
             let sig = entry.signature;
-            let marker = &mut self.instances[start];
-            marker.rect = [b0, b1, (b2 - b0).max(0.0), (b3 - b1).max(0.0)];
-            marker.params[3] = 1.0;
-            marker.radii = crate::render::pack_u64_f32(ac.node_id.0);
-            marker.uv = crate::render::pack_u64_f32(sig);
-            self.instances.push(Instance::end_layer());
-            if self.track_marks {
-                let mark = self.marks.get(start).copied().unwrap_or(0);
-                self.marks.resize(self.instances.len(), mark);
-            }
+            self.seal_cache_marker(start, [b0, b1, (b2 - b0).max(0.0), (b3 - b1).max(0.0)], ac.node_id, sig);
             *glyph_count += ac.cached_glyphs;
             return;
         }
@@ -5493,8 +5494,7 @@ impl<S: 'static> Runtime<S> {
             if self.track_marks {
                 self.marks.truncate(self.instances.len());
             }
-            self.node_caches.remove(&ac.node_id);
-            self.text.atlas.resident_caches.remove(&ac.node_id.0);
+            self.evict_cache(ac.node_id);
             return;
         }
 
@@ -5597,8 +5597,7 @@ impl<S: 'static> Runtime<S> {
         let bw = (b2 - b0).max(0.0);
         let bh = (b3 - b1).max(0.0);
         if bw > 4096.0 || bh > 4096.0 {
-            self.node_caches.remove(&ac.node_id);
-            self.text.atlas.resident_caches.remove(&ac.node_id.0);
+            self.evict_cache(ac.node_id);
             crate::render::end_layer(&mut self.instances, &mut self.surfaces, &mut self.marks, start, surface_start);
             return;
         }
@@ -5622,16 +5621,27 @@ impl<S: 'static> Runtime<S> {
         if is_resident && self.surfaces.len() == surface_start {
             self.instances.truncate(start + 1);
         }
+        self.seal_cache_marker(start, [b0, b1, bw, bh], ac.node_id, sig);
+    }
+
+    /// Finishes a cached layer's marker at `rect`, naming its cache entry and signature, and
+    /// closes the layer.
+    fn seal_cache_marker(&mut self, start: usize, rect: [f32; 4], id: NodeId, sig: u64) {
         let marker = &mut self.instances[start];
-        marker.rect = [b0, b1, bw, bh];
+        marker.rect = rect;
         marker.params[3] = 1.0;
-        marker.radii = crate::render::pack_u64_f32(ac.node_id.0);
+        marker.radii = crate::render::pack_u64_f32(id.0);
         marker.uv = crate::render::pack_u64_f32(sig);
         self.instances.push(Instance::end_layer());
         if self.track_marks {
             let mark = self.marks.get(start).copied().unwrap_or(0);
             self.marks.resize(self.instances.len(), mark);
         }
+    }
+
+    fn evict_cache(&mut self, id: NodeId) {
+        self.node_caches.remove(&id);
+        self.text.atlas.resident_caches.remove(&id.0);
     }
 
     // ---------------------------------------------------------------------------------------
@@ -5666,10 +5676,7 @@ impl<S: 'static> Runtime<S> {
     /// adapters should use this alongside [`Self::elements`] to report protected content.
     /// Unknown paths (including synthetic flight/link paths) return false.
     pub fn element_is_secure(&self, path: &str) -> bool {
-        self.nodes.iter().find(|n| n.path == path).is_some_and(|n| {
-            n.a11y.secure || n.text.as_ref().is_some_and(|t| t.redacted)
-                || n.input.as_ref().is_some_and(|i| i.edit.is_secure())
-        })
+        self.nodes.iter().find(|n| n.path == path).is_some_and(Node::is_secure)
     }
 
     pub fn elements(&self) -> Vec<ElementInfo> {
@@ -5726,16 +5733,7 @@ impl<S: 'static> Runtime<S> {
                         live_intent |= 4 | 16;
                     }
                 }
-                let step_up = |k: usize| {
-                    if let Some(a) = &self.nodes[k].above
-                        && let Some(j) = self.nodes[..k].iter().position(|n| n.key.as_ref() == Some(&a.key))
-                    {
-                        Some(j)
-                    } else {
-                        self.nodes[k].parent
-                    }
-                };
-                let mut a = step_up(i);
+                let mut a = step_up(&self.nodes, i);
                 while let Some(pi) = a {
                     let parent = &self.nodes[pi];
                     moving |= animating(parent.id)
@@ -5744,11 +5742,9 @@ impl<S: 'static> Runtime<S> {
                     live_intent |= intent(parent);
                     scrolling |= self.scrolls.get(&parent.id).is_some_and(|s| s.scrolling);
                     in_growing_row |= self.grows.get(&parent.id).is_some_and(|g| g.moving());
-                    a = step_up(pi);
+                    a = step_up(&self.nodes, pi);
                 }
-                let secure = n.a11y.secure
-                    || n.text.as_ref().is_some_and(|t| t.redacted)
-                    || n.input.as_ref().is_some_and(|i| i.edit.is_secure());
+                let secure = n.is_secure();
                 Some(ElementInfo {
                     trace_name: n.trace_name,
                     trace_namespace: n.trace_namespace,
@@ -5946,13 +5942,8 @@ impl<S: 'static> Runtime<S> {
                 None => sh,
             }
         }).collect();
-        let step = |p: usize| {
-            self.nodes[p].above.as_ref()
-                .and_then(|a| self.nodes[..p].iter().position(|n| n.key.as_ref() == Some(&a.key)))
-                .or(self.nodes[p].parent)
-        };
         let moving = self.rect_springing(i)
-            || std::iter::successors(Some(i), |&p| step(p)).any(|p| {
+            || std::iter::successors(Some(i), |&p| step_up(&self.nodes, p)).any(|p| {
                 let id = self.nodes[p].id;
                 paint_pose_springing(store, id)
                     || (!self.reduced_motion && self.loops.get(&id).is_some_and(|l| l.active(store.node_time(id))))

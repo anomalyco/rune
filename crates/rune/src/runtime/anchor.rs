@@ -3,6 +3,16 @@
 use super::*;
 use crate::el::{Anchor, Side};
 
+/// The node an `El::above` anchor `a` names, among the `before` nodes ahead of its element.
+pub(super) fn anchor_index(nodes: &[Node], before: usize, a: &Anchor) -> Option<usize> {
+    nodes[..before].iter().position(|n| n.key.as_ref() == Some(&a.key))
+}
+
+/// Where a walk from node `i` goes next: the node it is anchored above, else its parent.
+pub(super) fn step_up(nodes: &[Node], i: usize) -> Option<usize> {
+    nodes[i].above.as_ref().and_then(|a| anchor_index(nodes, i, a)).or(nodes[i].parent)
+}
+
 /// How far an anchored overlay stays inside the window.
 const MARGIN: f32 = 8.0;
 
@@ -81,7 +91,7 @@ impl<S: 'static> Measurement<'_, S> {
             let mut x = px + l.location.x;
             let mut y = py + l.location.y;
             if let Some(a) = &nodes[i].above
-                && let Some(j) = nodes[..i].iter().position(|n| n.key.as_ref() == Some(&a.key))
+                && let Some(j) = anchor_index(&nodes, i, a)
             {
                 // Anchors inside scroll viewports sit where they are scrolled (and stuck) to.
                 let target = sticky::anchored_target(nodes, self.scrolls, j, self.viewport);
@@ -105,7 +115,7 @@ impl<S: 'static> Measurement<'_, S> {
         let mut changed = false;
         for (i, n) in nodes.iter().enumerate() {
             let Some(a) = n.above.as_ref().filter(|a| a.fit) else { continue };
-            let Some(j) = nodes[..i].iter().position(|m| m.key.as_ref() == Some(&a.key)) else { continue };
+            let Some(j) = anchor_index(&nodes, i, a) else { continue };
             let target = sticky::anchored_target(nodes, self.scrolls, j, self.viewport);
             // It draws `k` times its layout size beside where the anchor draws.
             let k = inherited_zoom(nodes, i, &|m: &Node| m.static_scale).max(MIN_ZOOM);
@@ -145,7 +155,7 @@ pub(super) fn inherited_zoom(nodes: &[Node], i: usize, own: &impl Fn(&Node) -> f
     if n.scale_track || n.static_scale != 1.0 {
         return 1.0;
     }
-    let Some(j) = nodes[..i].iter().position(|m| m.key.as_ref() == Some(&a.key)) else { return 1.0 };
+    let Some(j) = anchor_index(&nodes, i, a) else { return 1.0 };
     let mut k = 1.0;
     let mut at = nodes[j].parent;
     while let Some(p) = at {

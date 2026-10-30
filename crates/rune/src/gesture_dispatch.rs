@@ -270,8 +270,8 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn route_key_up(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
         if self.eat_ime_key_up() { return false; }
         tx.focused = self.focused_key();
-        let pressed = self.key_focus.as_deref().and_then(|p| self.nodes.iter().enumerate().position(|(i, n)| n.path == p && !self.subtree_exiting(i)));
-        let focused = self.focused.as_deref().and_then(|p| self.nodes.iter().enumerate().position(|(i, n)| n.path == p && !self.subtree_exiting(i)));
+        let pressed = self.key_focus.as_deref().and_then(|p| self.live_index(p));
+        let focused = self.focused.as_deref().and_then(|p| self.live_index(p));
         let secure = [pressed, focused].into_iter().flatten()
             .any(|i| self.nodes[i].input.as_ref().is_some_and(|input| input.edit.is_secure()));
         if self.keys_held > 0 {

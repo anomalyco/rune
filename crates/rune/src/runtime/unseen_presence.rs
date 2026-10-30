@@ -113,7 +113,7 @@ impl<S: 'static> Runtime<S> {
             after[i] |= swept[2] >= clip[0] - MARGIN && swept[0] <= clip[2] + MARGIN
                 && swept[3] >= clip[1] - MARGIN && swept[1] <= clip[3] + MARGIN;
             let clip = if n.vis.clip.is_some() || n.scroll.is_some() {
-                [clip[0].max(swept[0]), clip[1].max(swept[1]), clip[2].min(swept[2]), clip[3].min(swept[3])]
+                intersect(clip, swept)
             } else { clip };
             let (shift_min, shift_max) = match (self.scrolls.get(&n.id), n.scroll) {
                 (Some(st), Some(sp)) => {
