@@ -280,6 +280,108 @@ pub(super) fn markdown_mermaid_charts(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     col().w(560.0).child(Markdown::new(CHARTS).style(style).build(k))
 }
 
+/// A mindmap, a timeline and a user journey.
+const MAPS: &str = r#"```mermaid
+mindmap
+  root((Rune))
+    Layout
+      Flex rows
+      Virtual lists
+      Text measure
+    Motion
+      Springs
+      Transitions
+    Platforms
+      Mac
+      iOS
+      Web
+    Diagrams
+      Flowcharts
+      Charts))new((
+```
+
+```mermaid
+timeline
+    title Shipping a release
+    section Plan
+        Week 1 : Scope : Design review
+        Week 2 : Prototype
+    section Build
+        Week 3 : Core engine : Tests
+        Week 4 : Plugins
+    section Ship
+        Week 5 : Beta : Docs
+        Week 6 : Launch
+```
+
+```mermaid
+journey
+    title A first-time user
+    section Discover
+      Find the site: 4: User
+      Read the docs: 3: User
+    section Try
+      Install: 2: User, CLI
+      First build: 5: User, CLI
+    section Share
+      Tell a friend: 5: User
+```
+"#;
+
+pub(super) fn markdown_mermaid_maps(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let style = MarkdownStyle::from_kit(k).diagram_max_width(560.0);
+    col().w(560.0).child(Markdown::new(MAPS).style(style).build(k))
+}
+
+/// A git graph, a short timeline and a quadrant chart.
+const GIT: &str = r#"```mermaid
+timeline
+    title Rune
+    2024 : First window
+    2025 : Kit components : Motion
+    2026 : Mermaid diagrams
+```
+
+```mermaid
+gitGraph
+    commit id: "init"
+    commit id: "layout" tag: "v0.1"
+    branch feature
+    checkout feature
+    commit id: "springs"
+    commit id: "fix" type: REVERSE
+    checkout main
+    commit id: "docs" type: HIGHLIGHT
+    merge feature id: "merge" tag: "v0.2"
+    branch hotfix
+    commit id: "patch"
+    checkout main
+    cherry-pick id: "patch"
+```
+
+```mermaid
+quadrantChart
+    title Reach and engagement
+    x-axis Low Reach --> High Reach
+    y-axis Low Engagement --> High Engagement
+    quadrant-1 Expand
+    quadrant-2 Promote
+    quadrant-3 Re-evaluate
+    quadrant-4 Improve
+    Campaign A: [0.3, 0.6]
+    Campaign B: [0.45, 0.23]
+    Campaign C: [0.57, 0.69]
+    Campaign D: [0.78, 0.34]
+    Campaign E: [0.40, 0.34]
+    Campaign F: [0.35, 0.78] radius: 8, color: #e8590c
+```
+"#;
+
+pub(super) fn markdown_mermaid_git(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let style = MarkdownStyle::from_kit(k).diagram_max_width(560.0);
+    col().w(560.0).child(Markdown::new(GIT).style(style).build(k))
+}
+
 pub(super) fn markdown_mermaid_flows(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     let style = MarkdownStyle::from_kit(k).diagram_max_width(560.0);
     col().w(560.0).child(Markdown::new(FLOWS).style(style).build(k))

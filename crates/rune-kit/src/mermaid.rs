@@ -8,8 +8,10 @@
 //! notes, `<<choice>>` and `<<fork>>`/`<<join>>`), class diagrams (`classDiagram` with fields,
 //! methods, stereotypes, namespaces and UML relations), entity-relationship diagrams
 //! (`erDiagram` with attribute tables and crow's-foot cardinalities), gantt charts (`gantt` with
-//! sections, durations, `after`/`until` links and `excludes`) and pie charts (`pie`, with
-//! `showData`). Lines that don't read are skipped and the rest
+//! sections, durations, `after`/`until` links and `excludes`), pie charts (`pie`, with
+//! `showData`), mindmaps (`mindmap`), timelines (`timeline`), user journeys (`journey`), git
+//! graphs (`gitGraph` with branches, merges, cherry-picks, tags and commit types) and quadrant
+//! charts (`quadrantChart`). Lines that don't read are skipped and the rest
 //! draws; an unknown diagram type, or a source where nothing reads, returns `None`, and
 //! [`crate::Markdown`] falls back to the code block.
 

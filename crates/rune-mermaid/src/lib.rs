@@ -1,5 +1,6 @@
 //! Native ```` ```mermaid ```` diagrams: flowcharts, sequence, state, class and
-//! entity-relationship diagrams, gantt and pie charts, parsed and laid out in Rust and drawn with
+//! entity-relationship diagrams, gantt and pie charts, mindmaps, timelines, user journeys, git
+//! graphs and quadrant charts, parsed and laid out in Rust and drawn with
 //! [`rune::Shape`]s and text, so they theme with the app and stay crisp at any scale. No
 //! JavaScript, web view or network.
 //!
@@ -45,10 +46,28 @@
 //!
 //! **Pie charts** (`pie`): `showData`, `title`, and `"Label" : value` slices.
 //!
+//! **Mindmaps** (`mindmap`): nesting by indentation from one root, node shapes `[square]`,
+//! `(rounded)`, `((circle))`, `))bang((`, `)cloud(` and `{{hexagon}}`, with `::icon(…)` and
+//! `:::class` read and left out. Branches split to either side of the root, each in its colour.
+//!
+//! **Timelines** (`timeline`, `timeline TD`): `title`, `section`s, and `period : event : event`
+//! with `: event` continuation lines. Periods that don't fit across run top to bottom.
+//!
+//! **User journeys** (`journey`): `title`, `section`s, and `Task: score: actor, actor` tasks, with a
+//! face for each score from 1 to 5 and a legend of actors.
+//!
+//! **Git graphs** (`gitGraph`, `gitGraph TB:`, `gitGraph BT:`): `commit` with `id`, `tag` and
+//! `type: NORMAL | REVERSE | HIGHLIGHT`, `branch` (with `order`), `checkout`/`switch`, `merge` and
+//! `cherry-pick`. Commits without an `id` are unlabelled.
+//!
+//! **Quadrant charts** (`quadrantChart`): `title`, `x-axis`/`y-axis` with `low --> high` ends,
+//! `quadrant-1` to `quadrant-4`, and `Name: [x, y]` points with `radius`, `color`, `stroke-color`
+//! and `stroke-width`, inline or from `classDef` and `:::class`.
+//!
 //! **Leniency.** A statement that doesn't read is skipped and the rest still draws; a shape opener
 //! without its closer (`B[/items split view]`) is a plain rectangle holding the text as written;
 //! blocks left open close at the end. [`render`] returns `None`, so callers can show the source,
-//! only for a diagram type it doesn't know (timeline, gitGraph, mindmap, …), when nothing reads,
+//! only for a diagram type it doesn't know (kanban, packet, architecture, …), when nothing reads,
 //! or past the size bounds (400 items, nesting 8 deep).
 
 mod canvas;
@@ -59,15 +78,20 @@ mod date;
 mod er;
 mod flowchart;
 mod gantt;
+mod git;
 mod hover;
+mod journey;
 mod layered;
 mod layered_draw;
+mod mindmap;
 mod pie;
+mod quadrant;
 mod route;
 mod sequence;
 mod sequence_draw;
 mod shape;
 mod state;
+mod timeline;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -189,6 +213,11 @@ pub(crate) enum Diagram {
     Er(er::ErDiagram),
     Gantt(gantt::Gantt),
     Pie(pie::Pie),
+    Mindmap(mindmap::Mindmap),
+    Timeline(timeline::Timeline),
+    Journey(journey::Journey),
+    Git(git::GitGraph),
+    Quadrant(quadrant::Quadrant),
 }
 
 pub(crate) struct Parsed {
@@ -212,7 +241,7 @@ pub(crate) fn parse(src: &str) -> Option<Parsed> {
                 in_directive = false;
                 let rest = l[pos + 3..].trim();
                 if !rest.is_empty() && !rest.starts_with("%%") {
-                    cleaned.push(rest);
+                    cleaned.push((0, rest));
                 }
             }
             continue;
@@ -221,7 +250,7 @@ pub(crate) fn parse(src: &str) -> Option<Parsed> {
             if let Some(pos) = l.find("}%%") {
                 let rest = l[pos + 3..].trim();
                 if !rest.is_empty() && !rest.starts_with("%%") {
-                    cleaned.push(rest);
+                    cleaned.push((0, rest));
                 }
             } else {
                 in_directive = true;
@@ -229,15 +258,16 @@ pub(crate) fn parse(src: &str) -> Option<Parsed> {
             continue;
         }
         if !l.is_empty() && !l.starts_with("%%") {
-            cleaned.push(l);
+            // Mindmaps nest by indentation.
+            cleaned.push((raw.len() - raw.trim_start().len(), l));
         }
     }
     let mut lines = cleaned.into_iter().peekable();
     let mut fm_title = None;
     // A front-matter block (`---` … `---`) may carry `title: …` and config.
-    if lines.peek() == Some(&"---") {
+    if lines.peek().map(|l| l.1) == Some("---") {
         lines.next();
-        for l in lines.by_ref() {
+        for (_, l) in lines.by_ref() {
             if l == "---" {
                 break;
             }
@@ -249,9 +279,9 @@ pub(crate) fn parse(src: &str) -> Option<Parsed> {
             }
         }
     }
-    let header = lines.next()?;
+    let (_, header) = lines.next()?;
     let (kind, rest) = header.split_once(|c: char| c.is_whitespace() || c == ';').unwrap_or((header, ""));
-    let body: Vec<&str> = lines.collect();
+    let (indents, body): (Vec<usize>, Vec<&str>) = lines.unzip();
     let (body_title, diagram) = match kind {
         "graph" | "flowchart" => flowchart::parse(rest, &body).map(|f| (f.title.clone(), Diagram::Flowchart(f)))?,
         "sequenceDiagram" => sequence::parse(rest, &body).map(|s| (s.title.clone(), Diagram::Sequence(s)))?,
@@ -260,6 +290,11 @@ pub(crate) fn parse(src: &str) -> Option<Parsed> {
         "erDiagram" => er::parse(rest, &body).map(|e| (e.title.clone(), Diagram::Er(e)))?,
         "gantt" => gantt::parse(rest, &body).map(|g| (g.title.clone(), Diagram::Gantt(g)))?,
         "pie" => pie::parse(rest, &body).map(|p| (p.title.clone(), Diagram::Pie(p)))?,
+        "mindmap" => mindmap::parse(&body, &indents).map(|m| (None, Diagram::Mindmap(m)))?,
+        "timeline" => timeline::parse(rest, &body).map(|t| (t.title.clone(), Diagram::Timeline(t)))?,
+        "journey" => journey::parse(&body).map(|j| (j.title.clone(), Diagram::Journey(j)))?,
+        "gitGraph" | "gitGraph:" => git::parse(rest, &body).map(|g| (None, Diagram::Git(g)))?,
+        "quadrantChart" => quadrant::parse(&body).map(|q| (q.title.clone(), Diagram::Quadrant(q)))?,
         _ => return None,
     };
     Some(Parsed { title: body_title.or(fm_title), diagram })
@@ -287,6 +322,11 @@ pub(crate) fn scene(src: &str, paint: &DiagramStyle, hover: Option<(Hover, Color
         Diagram::Er(e) => er::draw(e, paint, hover),
         Diagram::Gantt(g) => gantt::draw(g, paint),
         Diagram::Pie(p) => pie::draw(p, paint),
+        Diagram::Mindmap(m) => mindmap::draw(m, paint),
+        Diagram::Timeline(t) => timeline::draw(t, paint),
+        Diagram::Journey(j) => journey::draw(j, paint),
+        Diagram::Git(g) => git::draw(g, paint),
+        Diagram::Quadrant(q) => quadrant::draw(q, paint),
     }?;
     Some(s.with_title(parsed.title))
 }
@@ -471,6 +511,11 @@ pub(crate) fn parse_color_spec(s: &str) -> Option<Color> {
         _ => return None,
     };
     rune::color::hex(hex)
+}
+
+/// What follows keyword `w` and a space, trimmed.
+pub(crate) fn word<'a>(l: &'a str, w: &str) -> Option<&'a str> {
+    l.strip_prefix(w).filter(|r| r.is_empty() || r.starts_with(char::is_whitespace)).map(str::trim)
 }
 
 /// A line split at `;` outside quotes and brackets (and never at an HTML entity's `;`).
