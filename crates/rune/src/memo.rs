@@ -65,6 +65,22 @@ pub(crate) struct Shared {
     pub(crate) duplicate_keys: bool,
 }
 
+impl El {
+    /// Every child: those shared with a memo cache, then the element's own.
+    pub(crate) fn all_children(&self) -> impl Iterator<Item = &El> {
+        self.memo_children.iter().flat_map(|c| c.children.iter()).chain(&self.children)
+    }
+
+    /// Copies in the children shared with a memo cache, so the element owns all of them.
+    pub(crate) fn expand_memo(&mut self) {
+        if let Some(shared) = self.memo_children.take() {
+            let shared = Rc::unwrap_or_clone(shared).children;
+            let own = std::mem::replace(&mut self.children, shared);
+            self.children.extend(own);
+        }
+    }
+}
+
 /// Whether `el` or anything under it is a focused field.
 pub(crate) fn has_focused_input(el: &El) -> bool {
     el.input.as_ref().is_some_and(|i| i.edit.focused)
