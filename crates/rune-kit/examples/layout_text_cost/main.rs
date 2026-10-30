@@ -21,6 +21,8 @@
 //!   notes sit next to a scrolling list.
 //! - `tree`: 80 keyed groups of 20 keyed rows (about 5,000 layout nodes) in a scroll view with
 //!   one layout read; each frame bumps one row's count and keeps that row on screen.
+//! - `memo-chat`: a three-pane workspace — a sidebar of 300 memo'd rows, an item page of memo'd
+//!   Markdown sections, and a chat of memo'd `virtual_rows` whose composer input changes per keystroke.
 //!
 //! `--mode time` (default) prints `METRIC case=.. metric=.. median=.. p95=.. mean=..` per measurement,
 //! and again as `case=..:commit` over only the frames that committed when not all of them did;
@@ -46,8 +48,8 @@ use rune_kit::{Badge, Button, ButtonVariant, Card, Kit, Markdown, MarkdownStyle,
 #[global_allocator]
 static ALLOC: probe::Probe = probe::Probe;
 
-const CASES: &[&str] = &["stack", "stack-same", "list", "edit", "md-resize", "md-same", "md-open", "md-virtual", "md-beside", "tree", "vlist-resize"];
-const METRICS: &[&str] = &["cpu_ms", "view_ms", "commit_ms", "layout_ms", "text_ms", "paint_ms", "apply_ms", "allocs", "shaped", "rebroken", "nodes"];
+const CASES: &[&str] = &["stack", "stack-same", "list", "edit", "md-resize", "md-same", "md-open", "md-virtual", "md-beside", "tree", "vlist-resize", "memo-chat"];
+const METRICS: &[&str] = &["cpu_ms", "view_ms", "commit_ms", "layout_ms", "text_ms", "paint_ms", "apply_ms", "allocs", "alloc_bytes", "shaped", "rebroken", "nodes"];
 const BG: Color = Color { r: 0.008, g: 0.008, b: 0.009, a: 1.0 };
 const WORDS: &[&str] = &["amber", "lantern", "orchard", "quiet", "harbor", "copper", "meadow", "signal", "drift",
     "pebble", "willow", "ember", "tide", "cinder", "fable", "glacier", "hollow", "juniper", "kestrel", "lumen",
@@ -267,6 +269,112 @@ fn blocks_view(s: &Blocks, _: &mut Cx<Blocks>) -> El {
             |s: &Blocks, i| Markdown::new(s.blocks[i].as_str()).render(&s.style)))
 }
 
+// memo-chat
+
+const SIDE_ROWS: usize = 300;
+const CHAT_ROWS: usize = 200;
+
+struct SideRow {
+    title: String,
+    group: String,
+    age: String,
+    ver: u64,
+}
+
+struct MemoChat {
+    kit: Kit,
+    md_style: MarkdownStyle,
+    side: Vec<SideRow>,
+    notes: Vec<(String, u64)>,
+    chat: Vec<String>,
+    chat_keys: Vec<String>,
+    picked: usize,
+    composer: TextEdit,
+}
+
+fn memo_side_row(r: &SideRow, i: usize, picked: bool, k: &Kit) -> El {
+    rune::memo(format!("side-{i}"), (r.ver, picked), || {
+        row().w_full().h(36.0).px(10.0).gap(8.0).center_y().radius(6.0)
+            .fill(if picked { Color::WHITE.alpha(0.08) } else { Color::TRANSPARENT })
+            .hover(Color::WHITE.alpha(0.05))
+            .on_press(move |s: &mut MemoChat| s.picked = i)
+            .child(rune::el().key("dot").size(8.0, 8.0).radius(4.0).fill(Color { r: 0.35, g: 0.65, b: 0.95, a: 1.0 }))
+            .child(col().key("copy").grow(1.0).shrink().gap(2.0)
+                .child(text(r.title.clone()).key("title").font(TextStyle::new(13.0, 500.0)).color(Color::WHITE).truncate())
+                .child(row().key("meta").gap(6.0).center_y()
+                    .child(Badge::new(r.group.clone()).build(k))
+                    .child(text(r.age.clone()).key("age").font(TextStyle::new(11.0, 400.0)).color(Color::WHITE.alpha(0.55)))))
+    })
+}
+
+fn memo_chat_view(s: &MemoChat, _: &mut Cx<MemoChat>) -> El {
+    let sidebar = col().key("sidebar").w(260.0).h_full().child(
+        col().key("side-scroll").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(
+            col().key("side-rows").w_full().px(8.0).py(8.0).gap(2.0).growth(GrowthSpec::default()).virtualize(36.0)
+                .children(s.side.iter().enumerate().map(|(i, r)| memo_side_row(r, i, i == s.picked, &s.kit))),
+        ),
+    );
+    let item_page = col().key("item-page").grow(1.0).shrink().h_full().child(
+        col().key("item-scroll").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(
+            col().key("item-body").w_full().px(28.0).py(20.0).gap(16.0)
+                .child(text("Overview and notes").key("heading").font(TextStyle::new(20.0, 600.0)).color(Color::WHITE))
+                .children(s.notes.iter().enumerate().map(|(i, (md, ver))| {
+                    rune::memo(format!("note-{i}"), *ver, || {
+                        col().w_full().child(Markdown::new(md.as_str()).render(&s.md_style))
+                    })
+                })),
+        ),
+    );
+    let chat_list = col().key("chat-scroll").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: true }).child(
+        col().key("chat-rows").w_full().px(12.0).py(12.0).gap(10.0).growth(GrowthSpec::default())
+            .virtual_rows(
+                s.chat.len(),
+                56.0,
+                |s: &MemoChat, i| Cow::Borrowed(s.chat_keys[i].as_str()),
+                |s: &MemoChat, i| rune::memo(s.chat_keys[i].as_str(), 0u64, || {
+                    col().w_full().padding(8.0).radius(8.0).fill(Color::WHITE.alpha(0.04))
+                        .child(Markdown::new(s.chat[i].as_str()).render(&s.md_style))
+                }),
+            )
+            .virtual_rows_version(0u64),
+    );
+    let composer = col().key("composer-box").w_full().px(12.0).py(10.0).child(
+        text_input(&s.composer, edit_style()).key("composer").w_full()
+            .on_edit(|s: &mut MemoChat| &mut s.composer),
+    );
+    let right = col().key("right-panel").w(360.0).h_full().child(chat_list).child(composer);
+    row().w_full().h_full().fill(BG).child(sidebar).child(item_page).child(right)
+}
+
+fn memo_chat_state(src: &str) -> MemoChat {
+    let mut r = Rng(19);
+    let side = (0..SIDE_ROWS).map(|i| {
+        let n = 3 + r.next(4);
+        SideRow {
+            title: format!("{} {}", r.words(n), i),
+            group: WORDS[r.next(12)].to_string(),
+            age: format!("{}m", 1 + (i % 59)),
+            ver: 1,
+        }
+    }).collect();
+    let sections: Vec<&str> = src.split("\n## ").filter(|b| !b.trim().is_empty()).collect();
+    let notes = (0..20).map(|i| {
+        let piece = sections[i % sections.len()];
+        (format!("## {piece}"), 1u64)
+    }).collect();
+    let blocks: Vec<&str> = src.split("\n\n").filter(|b| !b.trim().is_empty()).collect();
+    let chat = (0..CHAT_ROWS).map(|i| {
+        let a = blocks[(i * 2) % blocks.len()];
+        let b = blocks[(i * 2 + 1) % blocks.len()];
+        format!("{a}\n\n{b}")
+    }).collect();
+    let chat_keys = (0..CHAT_ROWS).map(|i| format!("msg-{i}")).collect();
+    let mut composer = TextEdit::new("Draft reply: ");
+    composer.focused = true;
+    composer.set_caret(composer.text.len());
+    MemoChat { kit: Kit::neutral(true), md_style: MarkdownStyle::neutral(true), side, notes, chat, chat_keys, picked: 0, composer }
+}
+
 fn fonts() -> TextSystem {
     let mut fonts = TextSystem::default();
     fonts.layout_rich("Warm fonts", &[], TextStyle::new(15.0, 400.0), 2.0, None);
@@ -289,7 +397,7 @@ fn runtime<S: 'static>(state: S, view: fn(&S, &mut Cx<S>) -> El, size: (f32, f32
 /// Times `input` and the one frame that follows it, under case `tag`.
 fn timed<S: 'static>(rt: &mut Runtime<S>, tag: u32, input: impl FnOnce(&mut Runtime<S>)) -> Vec<f64> {
     rune::take_frame_phases();
-    let (shaped0, rebroken0, allocs0) = (rt.text.shaped, rt.text.rebroken, probe::allocations());
+    let (shaped0, rebroken0, allocs0, bytes0) = (rt.text.shaped, rt.text.rebroken, probe::allocations(), probe::allocated_bytes());
     probe::TAG.store(tag, std::sync::atomic::Ordering::Relaxed);
     let cpu0 = rune::thread_cpu_ms();
     input(rt);
@@ -297,9 +405,10 @@ fn timed<S: 'static>(rt: &mut Runtime<S>, tag: u32, input: impl FnOnce(&mut Runt
     let cpu = rune::thread_cpu_ms() - cpu0;
     probe::TAG.store(0, std::sync::atomic::Ordering::Relaxed);
     let allocs = probe::allocations() - allocs0;
+    let bytes = probe::allocated_bytes() - bytes0;
     let p = rune::take_frame_phases();
     let q = rune::PHASES;
-    vec![cpu, p[q], p[q + 1], p[q + 2], p[q + 3], p[q + 4], p[q + 5], allocs as f64,
+    vec![cpu, p[q], p[q + 1], p[q + 2], p[q + 3], p[q + 4], p[q + 5], allocs as f64, bytes as f64,
         (rt.text.shaped - shaped0) as f64, (rt.text.rebroken - rebroken0) as f64, rt.stats.layout_nodes as f64]
 }
 
@@ -407,6 +516,26 @@ fn run(case: &str, tag: u32, kb: usize, meta: &mut Vec<String>) -> Vec<Vec<f64>>
             (0..240).map(|i| timed(&mut rt, tag, |rt| {
                 let k = (i * 37) % (GROUPS * CELLS) % (CELLS * 3);
                 rt.update(|s, tx| { s.counts[k] += 1; tx.keep_on_screen(format!("c{k}")); });
+            })).collect()
+        }
+        "memo-chat" => {
+            let mut rt = runtime(memo_chat_state(&src), memo_chat_view, (1440.0, 860.0));
+            for _ in 0..3 { rt.ime(Ime::Commit("a".into())); rt.frame(1.0 / 120.0); }
+            settle(&mut rt);
+            probe::snapshot(tag);
+            meta.push(census(&rt, case, heap0));
+            let chars = ["a", "b", "c", "d", "e", " "];
+            (0..240).map(|i| timed(&mut rt, tag, |rt| {
+                if i > 0 && i % 48 == 0 {
+                    rt.update(|s, _| {
+                        let mut next = TextEdit::new("Draft reply: ");
+                        next.focused = true;
+                        next.set_caret(next.text.len());
+                        s.composer = next;
+                    });
+                } else {
+                    rt.ime(Ime::Commit(chars[i % chars.len()].into()));
+                }
             })).collect()
         }
         other => panic!("unknown case {other}; one of {CASES:?}"),
