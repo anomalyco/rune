@@ -30,7 +30,6 @@ thread_local! {
 /// Tests: translate labels on this thread with `layout` (Carbon key, modifiers) instead of
 /// the current input source, or stop with `None`.
 #[cfg(test)]
-#[allow(dead_code)]
 pub(crate) fn force(layout: Option<fn(u32, u32) -> Option<String>>) { FORCED.with(|forced| forced.set(layout)); }
 
 /// The label for `key` pressed with Carbon `modifiers` (`cmdKey`, `shiftKey`, ...).
