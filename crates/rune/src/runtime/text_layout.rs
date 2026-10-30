@@ -79,6 +79,17 @@ pub(super) fn text_x(spec: &TextSpec, x0: f32, x1: f32, width: f32) -> f32 {
     }
 }
 
+impl Node {
+    /// Whether the text shows less than its whole content: cut by `El::truncate` or a line
+    /// clamp, or running past its box under `El::truncate_fade`. A fade keeps the whole
+    /// content in its layout, so it has no [`Elision`]; it only reads as cut.
+    pub(crate) fn text_cut(&self, scale: f32) -> bool {
+        self.elided.is_some()
+            || self.text.as_ref().is_some_and(|t| t.truncate_fade) && self.run_layout.is_none()
+                && self.text_layout.as_ref().is_some_and(|l| l.full_width() > (self.local.w - self.inset[0] - self.inset[2]).max(0.0) * scale + 0.5)
+    }
+}
+
 /// Where truncation cut a text: it draws `content[..head]`, "…", then `content[tail..]`.
 /// Selections and links stay in content bytes and map through this onto the drawn layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

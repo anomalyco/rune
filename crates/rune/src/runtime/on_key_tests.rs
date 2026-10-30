@@ -263,6 +263,32 @@ fn a_truncation_tooltip_shows_only_while_the_text_is_cut() {
     assert_eq!(rt.elements().into_iter().find(|e| e.key.as_deref() == Some("cell")).unwrap().help, None);
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn a_faded_text_that_runs_past_its_box_reads_as_cut() {
+    struct S {
+        w: f32,
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        col().size(400.0, 100.0).child(
+            row().size(s.w, 20.0).child(
+                text("A rather long file name.rs").key("cell").font(TextStyle::new(13.0, 400.0)).truncate_fade().shrink().help_when_truncated("A rather long file name.rs"),
+            ),
+        )
+    }
+    let mut rt = Runtime::new(S { w: 60.0 }, view, (400.0, 100.0), Env::new(true, 2.0));
+    rt.set_native_help(true);
+    rt.frame(0.0);
+    let i = rt.nodes.iter().position(|n| n.key.as_deref() == Some("cell")).unwrap();
+    assert!(rt.nodes[i].text_cut(2.0) && rt.nodes[i].elided.is_none(), "a fade cuts nothing out of the layout");
+    assert_eq!(rt.help_regions().len(), 1, "faded out, the cell offers its whole text");
+    assert_eq!(rt.elements().into_iter().find(|e| e.key.as_deref() == Some("cell")).unwrap().help.as_deref(), Some("A rather long file name.rs"));
+    rt.update(|s, _| s.w = 380.0);
+    rt.frame(0.0);
+    assert!(rt.help_regions().is_empty(), "the whole text shows, so no tooltip");
+    assert_eq!(rt.elements().into_iter().find(|e| e.key.as_deref() == Some("cell")).unwrap().help, None);
+}
+
 /// Two lists keyed alike, side by side, each in its own scope.
 fn twins(_: &(), _: &mut Cx<()>) -> El {
     let list = |scope: &str| {

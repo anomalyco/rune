@@ -1391,8 +1391,8 @@ impl El {
         self.help_cut = false;
         self
     }
-    /// [`El::help`] that shows only while this [`truncate`](Self::truncate)d text is cut short,
-    /// as AppKit's expansion tooltips show a table cell's whole text. Text that fits shows none.
+    /// [`El::help`] that shows only while this text is cut short ([`truncate`](Self::truncate), `max_lines`
+    /// or `truncate_fade`), as AppKit's expansion tooltips show a table cell's whole text.
     pub fn help_when_truncated(self, text: impl Into<String>) -> Self {
         let mut e = self.help(text);
         e.help_cut = true;

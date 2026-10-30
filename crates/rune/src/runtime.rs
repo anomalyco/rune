@@ -6593,7 +6593,7 @@ impl<S: 'static> Runtime<S> {
                     self.overlay_hits.push(self.hit_screen_rect(n.id, rect));
                 }
             }
-            if self.nodes[i].help.is_some() && (!self.nodes[i].help_cut || self.nodes[i].elided.is_some()) && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible {
+            if self.nodes[i].help.is_some() && (!self.nodes[i].help_cut || self.nodes[i].text_cut(s)) && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible {
                 let c = if self.nodes[i].parent.is_some() { pinh.clip } else { NO_CLIP };
                 let r = [rect_pt[0].max(c[0] / s), rect_pt[1].max(c[1] / s), rect_pt[2].min(c[2] / s), rect_pt[3].min(c[3] / s)];
                 self.push_help_hit(i, r, hits_before);
@@ -6977,7 +6977,7 @@ impl<S: 'static> Runtime<S> {
                     live_intent,
                     caret: self.caret_rect(&self.nodes, i),
                     drag_out: n.drag_out.is_some(),
-                    help: n.help.as_ref().filter(|_| !n.help_cut || n.elided.is_some()).cloned(),
+                    help: n.help.as_ref().filter(|_| !n.help_cut || n.text_cut(s)).cloned(),
                     selected: n.text.as_ref().filter(|t| t.selectable && !secure).and_then(|t| {
                         let (a, b) = selectable::range_in(&sel_ranges, i)?;
                         t.copy_slice(a as u32, b as u32)
