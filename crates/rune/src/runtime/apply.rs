@@ -448,6 +448,13 @@ impl<S: 'static> Runtime<S> {
                         self.scene.retarget_drawn(id, scene_rect, la.screen(), drawn, speed);
                     }
                 } else if !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Rect) {
+                    // Springing to a new place, it slides from where it was drawn: a flight
+                    // under it, headed for its target, lands or re-aims.
+                    let was = self.scene.store().target(id, prop::FRAME).or_else(|| self.scene.get(id, prop::FRAME));
+                    if was.is_some_and(|r| (layout_anim.x != Anim::INSTANT && r.x != scene_rect.x) || (layout_anim.y != Anim::INSTANT && r.y != scene_rect.y)) {
+                        if slid.is_empty() { slid.resize(nodes.len(), false); }
+                        slid[i] = true;
+                    }
                     self.scene.set_frame(id, scene_rect, layout_anim);
                 }
                 let quiet = lands || out_of_sight;

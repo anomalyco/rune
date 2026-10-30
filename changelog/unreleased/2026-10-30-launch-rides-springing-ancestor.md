@@ -1,0 +1,1 @@
+- A `Tx::launch` flight whose ancestor springs to a new place in a later commit (a panel pinned to the window's bottom that grows as a row is added) now lands and rides it if it has as good as landed, or heads for its new place from where it's drawn, instead of jumping to where the ancestor will end up (a 33 pt one-frame jump for a row at rest in a growing panel).
