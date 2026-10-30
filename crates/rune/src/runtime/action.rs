@@ -194,6 +194,7 @@ pub(super) fn merge(tx: &mut Tx, one: Tx) {
     tx.open_urls.extend(one.open_urls);
     tx.srgb_blend = one.srgb_blend.or(tx.srgb_blend);
     tx.font_smoothing = one.font_smoothing.or(tx.font_smoothing);
+    if one.font_families.is_some() { tx.font_families = one.font_families; }
     tx.blur |= one.blur;
     if one.select.is_some() {
         tx.select = one.select;

@@ -52,7 +52,7 @@ impl<S: 'static> Runtime<S> {
             self.focused.hash(&mut h);
             self.keyboard_focus.hash(&mut h);
             self.hover_focus.hash(&mut h);
-            (self.srgb_blend, self.text.smoothing).hash(&mut h);
+            (self.srgb_blend, self.text.smoothing, self.text.families()).hash(&mut h);
             h.write_u32(s.to_bits());
             sel_ranges.hash(&mut h);
             let mut scroll_mix = 0u64;

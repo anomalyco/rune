@@ -153,6 +153,8 @@ impl<T: 'static> AnyHost for Overlay<T> {
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) -> bool {
         #[cfg(target_os = "macos")]
         self.fn_key();
+        // A window switched the font families (`Tx::set_font_families`).
+        self.dirty |= self.rt.follow_font_families();
         // A fading-out overlay takes no input; it only draws its exit.
         if !self.visible {
             self.hidden_input();

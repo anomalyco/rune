@@ -28,6 +28,7 @@ mod atlas;
 mod case;
 mod cursor;
 mod decorations;
+mod families;
 mod line_break;
 mod span;
 mod system_fonts;
@@ -62,7 +63,8 @@ pub(crate) use underline::underline_edges;
 pub use case::TextCase;
 pub use hash::text_hash;
 pub(crate) use hash::shape_key;
-pub use measure::{TextInk, advance, ink, measure};
+pub(crate) use families::choose_families;
+pub use measure::{TextInk, advance, font_epoch, ink, measure};
 pub use rich_layout::RichLayoutOptions;
 pub use run::{Run, RunLayout};
 pub(crate) use case::Source as CaseSource;
@@ -133,6 +135,10 @@ pub struct TextSystem {
     superseded: std::collections::HashSet<u64>,
     runs: Cache<RunLayout>,
     generation: u32,
+    /// The slots' families as named; `sans` and `mono` are the lists text asks for.
+    families: (String, String),
+    /// The `choose_families` change these slots follow.
+    chosen: u64,
     pub sans: String,
     pub mono: String,
     symbol_families: Vec<&'static str>,
@@ -252,6 +258,7 @@ impl TextSystem {
         let emoji = symbol_families.iter().copied().find(|f| f.contains("Emoji"));
         #[cfg(target_arch = "wasm32")]
         let families = if fonts.is_empty() { ("Inter", "IBM Plex Mono") } else { families };
+        let (sans, mono) = families::slots(families.0, families.1);
         TextSystem {
             font_cx: FontContext { collection, source_cache: SourceCache::default() },
             layout_cx: LayoutContext::new(),
@@ -261,8 +268,9 @@ impl TextSystem {
             superseded: Default::default(),
             runs: HashMap::new(),
             generation: 0,
-            sans: if cfg!(target_arch = "wasm32") { format!("{}, Inter", families.0) } else { families.0.to_owned() },
-            mono: if cfg!(target_arch = "wasm32") { format!("{}, IBM Plex Mono", families.1) } else { families.1.to_owned() },
+            families: (families.0.to_owned(), families.1.to_owned()),
+            chosen: 0,
+            sans, mono,
             symbol_families,
             emoji,
             math: None,

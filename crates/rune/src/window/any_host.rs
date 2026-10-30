@@ -153,6 +153,8 @@ impl<S: 'static> AnyHost for Host<S> {
         #[cfg(target_os = "macos")]
         self.fn_key();
         self.flush_files(event_loop);
+        // Another window switched the font families (`Tx::set_font_families`).
+        if self.rt.follow_font_families() && let Some(w) = &self.win { w.window.request_redraw(); }
         // Process queued hide/close requests before completing a pending first reveal.
         self.first_frame_ready(event_loop);
         if !self.win.as_ref().is_some_and(|w| w.visible || w.first_frame.reveal) {

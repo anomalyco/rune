@@ -11,6 +11,9 @@
 //!
 //! `--memo` wraps the note in `rune::memo`, so a resize reuses its subtree instead of building it.
 //! `--only marks` times adding 2,000 source-range highlights and reading their element boxes.
+//! `--only fonts` times `Runtime::set_font_families` switching between Inter and Helvetica Neue
+//! with Menlo (system fonts on macOS), the note scrolled to the top: the frame that follows
+//! re-shapes and lays out every text.
 //!
 //! cargo build --profile perf -p rune-kit --example markdown_resize --features markdown,frame-profile
 //! target/perf/examples/markdown_resize [--sizes 5,50] [--only resize] [--step 1] [--memo]
@@ -202,6 +205,15 @@ fn main() {
             let widths = (1..=steps).map(|i| 900.0 - i as f32 * step).chain((1..=steps).map(|i| 600.0 + i as f32 * step));
             let rows: Vec<_> = widths.map(|w| timed(&mut rt, |rt| rt.set_viewport((w, HEIGHT), 2.0))).collect();
             report(kb, "resize", &rows);
+        }
+
+        if run("fonts") {
+            let mut rt = runtime(src.clone(), 900.0);
+            let rows: Vec<_> = (0..40).map(|i| {
+                let (sans, mono) = if i % 2 == 0 { ("Helvetica Neue", "Menlo") } else { ("Inter", "Inter") };
+                timed(&mut rt, |rt| rt.set_font_families(sans, mono))
+            }).collect();
+            report(kb, "fonts", &rows);
         }
 
         if run("scroll") {

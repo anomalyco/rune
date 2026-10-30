@@ -140,6 +140,7 @@ impl<S: 'static> Runtime<S> {
         let mut one = self.transaction();
         let changed = crate::perf_warn::timed("an `update` closure", || f(&mut self.state, &mut one));
         let stale = changed || one.frame_work() || one.window_frame.is_some() || one.srgb_blend.is_some_and(|b| b != self.srgb_blend) || one.font_smoothing.is_some_and(|m| m != self.text.smoothing)
+            || self.changes_families(&one)
             || (one.blur && self.focused.is_some());
         self.latch_requests(&mut one);
         merge(&mut self.pending, one);
@@ -194,6 +195,7 @@ impl<S: 'static> Runtime<S> {
             self.request_file_dialog(request);
         }
         if let Some(mode) = tx.font_smoothing.take() { self.set_font_smoothing(mode); }
+        if let Some((sans, mono)) = tx.font_families.take() { self.set_font_families(&sans, &mono); }
         if let Some(srgb) = tx.srgb_blend.take() { self.set_srgb_blend(srgb); }
         if std::mem::take(&mut tx.blur) {
             if self.focused.is_some() {
@@ -386,6 +388,8 @@ impl<S: 'static> Runtime<S> {
         // Each queued action runs with its own input's arrival time; nothing else has one.
         let _input = crate::input_time::scope(None);
         let mut live_woke = self.take_live_wake();
+        // Another window may have switched the font families since this one's last frame.
+        self.follow_font_families();
         for v in self.virtuals.values_mut() { v.frame_begins(); }
         #[cfg(feature = "hot")]
         if self.hot.as_mut().is_some_and(crate::hot::Session::changed) {

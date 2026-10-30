@@ -85,6 +85,8 @@ mod blend;
 mod drag_out_host;
 #[path = "runtime/exit_mask.rs"]
 mod exit_mask;
+#[path = "runtime/font_families.rs"]
+mod font_families;
 #[path = "runtime/key_index.rs"]
 mod key_index;
 #[path = "runtime/system_settings.rs"]

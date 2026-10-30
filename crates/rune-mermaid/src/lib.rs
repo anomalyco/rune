@@ -124,6 +124,8 @@ pub fn render_with_hover(src: &str, style: &DiagramStyle, hover: Hover, color: C
     src.hash(&mut h);
     style.hash(&mut h);
     hover.hash(&mut h);
+    // Layout measures labels in the app's fonts.
+    rune::text::font_epoch().hash(&mut h);
     let key = h.finish();
     let cached = SCENES.with_borrow(|c| c.map.get(&key).cloned());
     let scene = match cached {

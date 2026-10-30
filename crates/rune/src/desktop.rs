@@ -323,7 +323,7 @@ impl<S: 'static> Member for Window<S> {
         self.shared.window_pending() || self.rt.shell_request.is_some() || self.handle.as_ref().is_some_and(WindowHandle::headless_pending)
     }
 
-    fn stale(&self) -> bool { self.rt.stale() }
+    fn stale(&self) -> bool { self.rt.stale() || self.rt.text.families_behind() }
     fn advance(&mut self, dt: f64) { self.rt.frame(dt); }
     fn focus(&mut self, focused: bool) { self.rt.window_focus(focused); }
 

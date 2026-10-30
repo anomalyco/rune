@@ -146,6 +146,13 @@ impl GlyphCache {
         self.bytes = self.entries.values().map(Entry::size).sum();
     }
 
+    /// Drops every entry, for layouts shaped in fonts that no longer apply.
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+        self.spare = None;
+        self.bytes = 0;
+    }
+
     /// Drops entries whose layout is gone, then the least recently painted while over budget.
     pub(crate) fn begin_frame(&mut self) {
         self.frame += 1;
