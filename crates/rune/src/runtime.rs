@@ -2438,7 +2438,7 @@ impl<S: 'static> Runtime<S> {
         let rank = |i: usize| {
             let nd = &self.nodes[i];
             if nd.above.is_some() || nd.modal.is_some() { 2 }
-            else if nd.sticky.as_ref().is_some_and(|s| s.edge.is_some()) { 1 }
+            else if self.sticky_of(i).is_some() { 1 }
             else { 0 }
         };
         if self.has_sticky {
@@ -4026,7 +4026,7 @@ impl<S: 'static> Runtime<S> {
         self.has_pixel_aspect = self.nodes.iter().any(|n| n.pixel_aspect.is_some());
         self.has_drawn_layout = self.nodes.iter().any(|n| n.on_drawn_layout.is_some());
         self.has_key_up = self.nodes.iter().any(|n| n.focus.key_up.is_some());
-        self.has_sticky = self.nodes.iter().any(|n| n.sticky.as_ref().is_some_and(|s| s.edge.is_some()));
+        self.has_sticky = self.holding() || self.nodes.iter().any(|n| n.sticky.as_ref().is_some_and(|s| s.edge.is_some()));
         self.has_raise = self.nodes.iter().any(|n| n.vis.raise);
         // A flight that left the tree stays lifted and covered while it exits, so it doesn't pop.
         self.flying.retain(|(id, _)| self.node_index.contains_key(id));
@@ -5102,7 +5102,7 @@ impl<S: 'static> Runtime<S> {
                 let n = &self.nodes[i];
                 let live = store.is_node_animating(n.id)
                     // Sticky and anchored descendants move within a raster without motion tracks.
-                    || n.sticky.as_ref().is_some_and(|s| s.edge.is_some())
+                    || self.sticky_of(i).is_some()
                     || n.above.is_some()
                     || (!self.reduced_motion && self.loops.get(&n.id).is_some_and(|l| l.active(store.node_time(n.id))))
                     || self.grows.get(&n.id).is_some_and(|g| g.moving())
@@ -5232,29 +5232,11 @@ impl<S: 'static> Runtime<S> {
             {
                 self.anchored_inh(i, j, a, &p, &mut pinh);
             }
-            if self.has_sticky && let Some((edge, inset, tail)) = n.sticky.as_ref().and_then(|s| Some((s.edge?, s.inset, s.tail))) {
+            if self.has_sticky && let Some((edge, inset, tail)) = self.sticky_of(i) {
                 // Worked out from this frame's offsets, which the viewport above already applied.
                 // Exclude this node's own `prop::OFFSET` (`live_offset`) so it translates from the
                 // stuck place rather than being clamped away by the sticky edge.
-                let mut frame = n.parent.map_or(sticky::UNBOUNDED, |pr| self.sticky_frame[pr]);
-                let mut ancestor = n.parent;
-                let mut viewport = None;
-                while let Some(a) = ancestor {
-                    let nd = &self.nodes[a];
-                    let horizontal = edge == crate::el::StickyEdge::Left;
-                    if nd.scroll.is_some() && if horizontal { nd.scroll_axes.x() } else { nd.scroll_axes.y() } {
-                        viewport = Some(a);
-                        break;
-                    }
-                    // A section nested inside a growth row must stop at that row's presented
-                    // bottom, not its descendants' final layout height. Only sticky nodes
-                    // need this ancestor walk; ordinary painting keeps its existing fast path.
-                    if !horizontal && self.row_h[a] >= 0.0 {
-                        frame[2] = frame[2].max(self.sticky_frame[a][2]);
-                        frame[3] = frame[3].min(self.sticky_frame[a][3]);
-                    }
-                    ancestor = nd.parent;
-                }
+                let (frame, viewport) = self.sticky_frame_of(i, edge);
                 let own_off = self.scene.get(n.id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
                 let (top, left) = (p.rect.y - own_off.y + pinh.dy, p.rect.x - own_off.x + pinh.dx);
                 let h = if self.row_h[i] >= 0.0 { self.row_h[i] } else { p.rect.h };

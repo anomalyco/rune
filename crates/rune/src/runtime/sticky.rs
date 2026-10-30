@@ -21,6 +21,17 @@ pub(super) struct Keep {
     pub was: f32,
     /// When the element lives inside a virtual row: `(virtual_list_path, row_key, y_in_row)`.
     pub virtual_row: Option<(String, String, f32)>,
+    /// The element, or the header it's in, was stuck to the top: it stays there for the commit.
+    pub hold: Option<Hold>,
+}
+
+/// A header stuck to the top when a `Tx::keep_on_screen` commit started. Until the motion
+/// settles it sticks `inset` points below its viewport's top whether or not it's still sticky,
+/// bounded by the bottom of the growth row it's drawn in rather than its parent's new layout, so
+/// the rows under it fold up to it before the scroll moves, on the same frame.
+pub(super) struct Hold {
+    pub path: String,
+    pub inset: f32,
 }
 
 /// One `Tx::scroll_into_view` request that follows its target while the viewport's subtree moves.
@@ -417,6 +428,10 @@ impl<S: 'static> Runtime<S> {
             });
             let Some(i) = found else { continue };
             let Some(s) = self.viewport_of(i) else { continue };
+            let hold = self.stuck_header(i, s).map(|h| Hold {
+                path: self.nodes[h].path.clone(),
+                inset: (self.drawn[h][1] - self.drawn[s][1]) / self.drawn_scale[s].max(1e-4),
+            });
             self.keeps.retain(|k| k.viewport != self.nodes[s].path);
             self.scroll_reveals.retain(|r| r.viewport != self.nodes[s].path);
             let virtual_row = std::iter::successors(Some(i), |&p| self.nodes[p].parent)
@@ -434,8 +449,73 @@ impl<S: 'static> Runtime<S> {
                 viewport: self.nodes[s].path.clone(),
                 was: self.drawn[i][1] - self.drawn[s][1],
                 virtual_row,
+                hold,
             });
         }
+    }
+
+    /// Node `i`, or the header holding it, if it's drawn stuck to the top of viewport `s`.
+    fn stuck_header(&self, i: usize, s: usize) -> Option<usize> {
+        if !self.has_sticky || self.stuck.len() != self.nodes.len() { return None; }
+        std::iter::successors(Some(i), |&p| self.nodes[p].parent)
+            .take_while(|&p| p != s)
+            .find(|&h| self.stuck[h] > 0.0 && self.sticky_of(h).is_some_and(|(edge, ..)| edge == StickyEdge::Top))
+    }
+
+    /// Whether a `Tx::keep_on_screen` holds a stuck header (`Hold`).
+    pub(super) fn holding(&self) -> bool {
+        self.keeps.iter().any(|k| k.hold.is_some())
+    }
+
+    fn hold_of(&self, i: usize) -> Option<&Hold> {
+        if self.keeps.is_empty() { return None; }
+        let path = &self.nodes[i].path;
+        self.keeps.iter().find_map(|k| k.hold.as_ref().filter(|h| h.path == *path))
+    }
+
+    /// Node `i`'s sticky edge, inset and whether the inset counts from its bottom: a `Hold`'s,
+    /// else its own.
+    pub(super) fn sticky_of(&self, i: usize) -> Option<(StickyEdge, f32, bool)> {
+        if let Some(h) = self.hold_of(i) { return Some((StickyEdge::Top, h.inset, false)); }
+        self.nodes[i].sticky.as_ref().and_then(|s| Some((s.edge?, s.inset, s.tail)))
+    }
+
+    /// The bands and box node `i` sticks within along `edge` (see `shift`), from its ancestors'
+    /// drawn places this frame, and the viewport it sticks to.
+    pub(super) fn sticky_frame_of(&self, i: usize, edge: StickyEdge) -> ([f32; 8], Option<usize>) {
+        let n = &self.nodes[i];
+        let mut frame = n.parent.map_or(UNBOUNDED, |pr| self.sticky_frame[pr]);
+        let horizontal = edge == StickyEdge::Left;
+        let mut ancestor = n.parent;
+        let mut viewport = None;
+        while let Some(a) = ancestor {
+            let nd = &self.nodes[a];
+            if nd.scroll.is_some() && if horizontal { nd.scroll_axes.x() } else { nd.scroll_axes.y() } {
+                viewport = Some(a);
+                break;
+            }
+            // A section nested inside a growth row must stop at that row's presented
+            // bottom, not its descendants' final layout height. Only sticky nodes
+            // need this ancestor walk; ordinary painting keeps its existing fast path.
+            if !horizontal && self.row_h[a] >= 0.0 {
+                frame[2] = frame[2].max(self.sticky_frame[a][2]);
+                frame[3] = frame[3].min(self.sticky_frame[a][3]);
+            }
+            ancestor = nd.parent;
+        }
+        // A held header's parent may have shrunk in the commit while the growth row it's drawn
+        // in folds: it stops at that row's drawn bottom, less what the row lays out below the
+        // parent, so it rests where its parent ends once the row settles.
+        if !horizontal && self.hold_of(i).is_some() && let Some(p) = n.parent {
+            let r = std::iter::successors(Some(p), |&a| self.nodes[a].parent)
+                .take_while(|&a| Some(a) != viewport)
+                .find(|&a| self.row_h[a] >= 0.0)
+                .unwrap_or(p);
+            let content_bottom = |a: usize| self.nodes[a].target[3] - self.nodes[a].inset[3];
+            frame[2] = f32::NEG_INFINITY;
+            frame[3] = self.sticky_frame[r][3] - (content_bottom(r) - content_bottom(p));
+        }
+        (frame, viewport)
     }
 
     /// Scrolls each kept element's viewport so the element's top lands where it showed before
