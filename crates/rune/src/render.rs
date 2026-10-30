@@ -138,7 +138,10 @@ pub struct EffectSite<'a> {
     pub size: [u32; 2],
     /// True inside an isolated layer: the pass is that layer's offscreen target.
     pub in_layer: bool,
-    /// Whether colours are sRGB-encoded for blending (`Renderer::srgb_blend`).
+    /// Whether colours are sRGB-encoded for blending (`Renderer::srgb_blend`). Choose a
+    /// pipeline's encoding from this: encode the shader's output when it's true, write linear
+    /// values when it's false. Don't use `format.is_srgb()`: an isolated layer's `Rgba16Float`
+    /// target is neither, and holds whichever encoding the frame uses.
     pub srgb_blend: bool,
     /// Viewport-sized copy of the pass's target up to this slot when the slot asked for a
     /// backdrop (`El::effect_backdrop(true)`, `instance.params[0] != 0.0`) and the pass was run
