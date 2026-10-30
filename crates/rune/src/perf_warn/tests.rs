@@ -189,3 +189,21 @@ fn a_slow_launch_names_its_slowest_part_and_rune_s_own_time_stays_quiet() {
         the slowest is `init`: start slow work from `on_ready`");
     assert!(launch::report(150.0, 0.0, 0.0, 200.0).unwrap().contains("the slowest is setup in `main` before `run`"));
 }
+
+#[test]
+fn a_memo_over_a_differently_keyed_root_warns_once_per_site() {
+    take_log();
+    fn view(_: &u32, _: &mut Cx<u32>) -> El {
+        let same = crate::memo("same", 0, || col().key("same"));
+        let renamed = crate::memo("outer", 0, || col().key("inner"));
+        col().child(same).child(renamed)
+    }
+    let mut rt = Runtime::new(0u32, view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|n, _| *n += 1);
+    rt.frame(1.0 / 60.0);
+    let log = take_log();
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert!(log[0].contains("\"outer\"") && log[0].contains("\"inner\""), "{}", log[0]);
+    assert!(rt.find("outer").is_some() && rt.find("inner").is_none());
+}

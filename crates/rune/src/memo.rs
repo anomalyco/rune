@@ -438,6 +438,16 @@ pub(crate) fn hash_of(v: &impl Hash) -> u64 {
     h.finish()
 }
 
+/// `el` keyed `key`; debug builds warn once per call site when it already had another key.
+#[cfg_attr(debug_assertions, track_caller)]
+fn keyed(el: El, key: String) -> El {
+    #[cfg(debug_assertions)]
+    if let Some(existing) = &el.key {
+        crate::perf_warn::memo_key_replaced(&key, existing, std::panic::Location::caller());
+    }
+    el.key(key)
+}
+
 /// The subtree `build` returns, keyed `id`, built again only when `version` (or the window's
 /// environment) differs from the last build's. Otherwise `build` isn't called and the
 /// previous subtree is reused, with the same node ids and state.
@@ -511,10 +521,10 @@ pub fn memo(id: impl Into<String>, version: impl Hash, build: impl FnOnce() -> E
     });
     let (id, version, store) = match step {
         Step::Reuse(built) => return built.placeholder(key),
-        Step::Plain => return build().key(key),
+        Step::Plain => return keyed(build(), key),
         Step::Build { id, version, store } => (id, version, store),
     };
-    let el = build().key(key);
+    let el = keyed(build(), key);
     SCOPES.with_borrow_mut(|scopes| {
         let Some(s) = scopes.last_mut() else { return el };
         s.path.pop();
