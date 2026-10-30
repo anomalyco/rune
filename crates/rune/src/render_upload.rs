@@ -54,14 +54,23 @@ impl Uploads {
     }
 }
 
+/// Bits for the kinds the batching loop in `prepare` looks at; every other kind leaves the batch
+/// as it is.
+const BATCHED_KINDS: u32 = 1 << KIND_GLYPH as u32 | 1 << KIND_IMAGE as u32 | 1 << KIND_LAYER as u32
+    | 1 << KIND_EFFECT as u32 | 1 << KIND_BACKDROP_BLUR as u32;
+
 /// Instances `write_instances` compares at once.
 const BLOCK: usize = 64;
 
-/// Whether two equally long instance lists hold the same bytes. Folds over words, which
-/// vectorizes, at about half the cost of a `memcmp`.
+/// Whether two equally long instance lists hold the same bytes. Folds over words into one
+/// accumulator per word of an instance, which vectorizes, at about half the cost of a `memcmp`.
 fn same(a: &[Instance], b: &[Instance]) -> bool {
-    let words = |l| bytemuck::cast_slice::<Instance, [u32; 32]>(l);
-    words(a).iter().zip(words(b)).fold(0, |acc, (x, y)| x.iter().zip(y).fold(acc, |acc, (p, q)| acc | (p ^ q))) == 0
+    let words = |l| bytemuck::cast_slice::<Instance, [u64; 16]>(l);
+    let mut acc = [0u64; 16];
+    for (x, y) in words(a).iter().zip(words(b)) {
+        for j in 0..16 { acc[j] |= x[j] ^ y[j]; }
+    }
+    acc.iter().fold(0, |s, w| s | w) == 0
 }
 
 fn pack((w, h): (u32, u32)) -> u64 { u64::from(w) << 32 | u64::from(h) }
@@ -212,6 +221,8 @@ impl Renderer {
         let mut has_layers = false;
         self.effects.clear();
         for (i, instance) in instances.iter().enumerate() {
+            let kind = instance.params[1];
+            if kind >= 0.0 && kind < 16.0 && BATCHED_KINDS & (1 << kind as u32) == 0 { continue }
             has_layers |= instance.params[1] == KIND_LAYER;
             if instance.params[1] == KIND_EFFECT || instance.params[1] == KIND_BACKDROP_BLUR { self.effects.push((i as u32, *instance)); }
             let next_bind = if instance.params[1] == KIND_IMAGE {

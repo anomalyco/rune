@@ -263,3 +263,37 @@ fn a_device_asked_for_immediates_draws_with_them() {
     gpu.queue.submit([encoder.finish()]);
     assert_eq!(pixel(&target.read(device), 10, 10), RED);
 }
+
+#[test]
+fn same_finds_one_changed_bit_in_any_word() {
+    let a = scene(0);
+    assert!(same(&a, &a.clone()));
+    for word in 0..size_of::<Instance>() / 4 {
+        let mut b = a.clone();
+        let words: &mut [u32] = bytemuck::cast_slice_mut(&mut b[a.len() - 1..]);
+        words[word] ^= 1 << 31;
+        assert!(!same(&a, &b), "missed a change in word {word}");
+    }
+}
+
+/// Plain rects between images and glyphs keep the batch they're in; only image and glyph pages
+/// start one.
+#[test]
+fn batches_break_only_where_the_bound_page_changes() {
+    let gpu = Gpu::headless();
+    let (device, queue) = (&gpu.device, &gpu.queue);
+    let mut renderer = Renderer::new(device, OFFSCREEN_FORMAT);
+    let mut text = crate::text::TextSystem::new(&[], ("Inter", "Inter"));
+    let with = |kind: f32, page: f32| Instance { params: [page, kind, 0.0, 0.0], ..square(0.0, 0.0) };
+    let glyph = |page: f32| Instance { params: [0.0, KIND_GLYPH, page, 0.0], ..square(0.0, 0.0) };
+    let instances = [
+        square(0.0, 0.0), with(KIND_IMAGE, 1.0), square(0.0, 0.0), with(KIND_SHADOW, 0.0),
+        glyph(2.0), with(KIND_GRADIENT, 0.0), glyph(0.0), square(0.0, 0.0), with(KIND_IMAGE, 1.0),
+    ];
+    renderer.prepare(device, queue, &mut text.atlas, &instances, SIZE);
+    let batches: Vec<_> = renderer.image_batches.iter().map(|(range, bind)| (range.clone(), match bind {
+        BatchBind::Image(page) => ('i', *page),
+        BatchBind::Glyph(page) => ('g', *page),
+    })).collect();
+    assert_eq!(batches, [(0..1, ('i', 0)), (1..4, ('i', 1)), (4..6, ('g', 1)), (6..8, ('i', 0)), (8..9, ('i', 1))]);
+}

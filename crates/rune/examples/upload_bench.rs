@@ -2,8 +2,9 @@
 //! with a few instances moving (`steady`) or all of them (`scroll`). Prints the median CPU
 //! time to record and submit a frame (and on macOS the instructions the process ran meanwhile,
 //! which a throttled or busy machine leaves unchanged), the median time until the GPU is done,
-//! and the buffers created per frame. Run with `--profile perf`; it leaves out presentation,
-//! and the GPU copy is counted only in `frame_us`.
+//! and the buffers created per frame, then the instructions each step ran (`prepare`, making the
+//! encoder, `draw`, `submit`). Run with `--profile perf`; it leaves out presentation, and the GPU
+//! copy is counted only in `frame_us`.
 
 use std::time::Instant;
 
@@ -14,6 +15,9 @@ const SIZE: (u32, u32) = (1280, 800);
 const COUNT: usize = 2000;
 const FRAMES: usize = 600;
 const WARMUP: usize = 60;
+
+/// `UPLOAD_FRAMES` frames, default `FRAMES`: more to profile a run.
+fn frames() -> usize { std::env::var("UPLOAD_FRAMES").ok().and_then(|s| s.parse().ok()).unwrap_or(FRAMES) }
 
 fn scene(frame: usize, scroll: bool) -> Vec<Instance> {
     (0..COUNT)
@@ -55,15 +59,20 @@ fn main() {
     for (name, scroll) in [("steady", false), ("scroll", true)] {
         let mut renderer = Renderer::new(device, rune::render::OFFSCREEN_FORMAT);
         let (mut cpu, mut instructions, mut frame, mut created) = (Vec::new(), Vec::new(), Vec::new(), 0isize);
-        for i in 0..FRAMES + WARMUP {
+        let mut phases: Vec<[f64; 4]> = Vec::new();
+        for i in 0..frames() + WARMUP {
             let instances = scene(i, scroll);
             let buffers = device.get_internal_counters().hal.buffers.read();
             let (start, start_kinstr) = (Instant::now(), kinstr());
             renderer.prepare(device, queue, &mut text.atlas, &instances, SIZE);
+            let k1 = kinstr();
             let mut encoder = device.create_command_encoder(&Default::default());
+            let k2 = kinstr();
             renderer.draw(&mut encoder, &target.view, [0.0; 4]);
+            let k3 = kinstr();
             let made = device.get_internal_counters().hal.buffers.read() - buffers;
             renderer.submit(queue, encoder);
+            if i >= WARMUP { phases.push([k1 - start_kinstr, k2 - k1, k3 - k2, kinstr() - k3]); }
             let (recorded, recorded_kinstr) = (start.elapsed(), kinstr() - start_kinstr);
             device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
             if i >= WARMUP {
@@ -78,7 +87,9 @@ fn main() {
             median(cpu),
             median(instructions),
             median(frame),
-            created as f64 / FRAMES as f64
+            created as f64 / frames() as f64
         );
+        let ph = |j: usize| median(phases.iter().map(|p| p[j]).collect());
+        println!("  phases kinstr: prepare={:.1} encoder={:.1} draw={:.1} submit={:.1}", ph(0), ph(1), ph(2), ph(3));
     }
 }
