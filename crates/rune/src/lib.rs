@@ -124,6 +124,8 @@ mod gpu;
 #[cfg(all(target_os = "macos", feature = "metal-backend"))]
 #[doc(hidden)]
 pub use gpu::metal::bench::dispatch_overhead as __metal_dispatch_overhead;
+mod gpu_backend;
+pub use gpu_backend::GpuBackend;
 #[cfg(not(target_arch = "wasm32"))]
 mod gpu_pick;
 pub mod gpu_springs;

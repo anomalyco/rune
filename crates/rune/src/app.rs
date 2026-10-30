@@ -286,6 +286,15 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// Draws with `backend` on macOS; `GpuBackend::Metal` needs Rune's `metal-backend` feature.
+    /// `RUNE_GPU_BACKEND=wgpu` or `=metal` overrides it without a rebuild. It applies to every
+    /// GPU the process makes from here on, and a `prewarm_gpu` already running on the other
+    /// backend starts over on this one. Does nothing elsewhere.
+    pub fn gpu_backend(self, backend: crate::GpuBackend) -> Self {
+        crate::gpu_backend::choose(backend);
+        self
+    }
+
     /// macOS: run as an accessory (menu-bar) app: no Dock icon, no default menu bar, and
     /// launching doesn't activate the app or take focus. The app installs its own menu if it
     /// wants one (`standard_menus` gives it Close, Minimize and Edit), and may change the

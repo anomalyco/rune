@@ -58,6 +58,16 @@ impl Slot {
         thread.join().ok().flatten().map(|Prewarmed(gpu, renderer)| (gpu, renderer))
     }
 
+    /// Starts a new thread if one is working; that one drops its result when it finishes.
+    #[cfg_attr(not(feature = "metal-backend"), allow(dead_code))]
+    pub(super) fn restart(&self) {
+        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if !matches!(*state, State::Running(_)) { return; }
+        *state = State::Idle;
+        drop(state);
+        self.start();
+    }
+
     /// The thread, if still working, drops its result when it finishes.
     pub(super) fn discard(&self) {
         let state = std::mem::replace(&mut *self.0.lock().unwrap_or_else(|e| e.into_inner()), State::Done);
@@ -69,5 +79,7 @@ static GLOBAL: Slot = Slot::new();
 
 pub(super) fn start() { GLOBAL.start(); }
 pub(super) fn take() -> Option<(Gpu, Renderer)> { GLOBAL.take() }
+#[cfg(feature = "metal-backend")]
+pub(super) fn restart() { GLOBAL.restart(); }
 #[cfg_attr(test, allow(dead_code))]
 pub(super) fn discard() { GLOBAL.discard(); }

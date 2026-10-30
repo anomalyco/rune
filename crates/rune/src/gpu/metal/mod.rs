@@ -53,9 +53,9 @@ pub(crate) use device::{MetalDevice, Shared};
 
 pub(crate) type Obj<P> = Retained<ProtocolObject<P>>;
 
-/// Whether `RUNE_GPU_BACKEND=metal` asks for this backend.
+/// Whether `App::gpu_backend` or `RUNE_GPU_BACKEND=metal` asks for this backend.
 pub(crate) fn enabled() -> bool {
-    std::env::var("RUNE_GPU_BACKEND").is_ok_and(|v| v == "metal")
+    crate::gpu_backend::current() == crate::GpuBackend::Metal
 }
 
 pub(crate) fn instance() -> wgpu::Instance {

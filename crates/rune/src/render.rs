@@ -481,6 +481,12 @@ pub fn prewarm_gpu() {
     prewarm::start();
 }
 
+/// Starts `prewarm_gpu`'s thread over if it's working, for a backend chosen after it started.
+#[cfg(all(target_os = "macos", feature = "metal-backend"))]
+pub(crate) fn restart_prewarm() {
+    prewarm::restart();
+}
+
 /// Drops what `prewarm_gpu` made if no window took it.
 pub(crate) fn discard_prewarm() {
     #[cfg(not(test))]
@@ -1134,6 +1140,15 @@ mod prewarm_tests {
         assert!(discarded.take().is_none());
         discarded.start();
         assert!(discarded.take().is_none());
+
+        // `restart` replaces a working thread and leaves an idle or finished slot alone.
+        let restarted = super::prewarm::Slot::new();
+        restarted.restart();
+        restarted.start();
+        restarted.restart();
+        assert!(restarted.take().is_some(), "the new thread's GPU");
+        restarted.restart();
+        assert!(restarted.take().is_none(), "a taken slot stays taken");
     }
 
     /// A prewarmed device without a feature the window wants (and the adapter has) is replaced on
