@@ -184,14 +184,16 @@ fn a_scene_matches_wgpus_pixel_for_pixel() {
 fn a_frame_is_one_command_buffer_and_writes_land() {
     let (device, queue) = gpu();
     let target = texture(&device, wgpu::TextureFormat::Bgra8UnormSrgb, (64, 64), wgpu::TextureUsages::RENDER_ATTACHMENT);
+    queue.submit([]);
+    assert_eq!(last(&device), 1, "a new texture's zeroing commits on the next submit");
     let empty = device.create_command_encoder(&Default::default());
     queue.submit([empty.finish()]);
-    assert_eq!(last(&device), 0, "an empty encoder commits nothing");
+    assert_eq!(last(&device), 1, "an empty encoder commits nothing");
     let view = target.create_view(&Default::default());
     let mut encoder = device.create_command_encoder(&Default::default());
     drop(clear(&mut encoder, &view));
     queue.submit([encoder.finish()]);
-    assert_eq!(last(&device), 1);
+    assert_eq!(last(&device), 2);
     let staged = buffer(&device, 16, wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST);
     queue.write_buffer(&staged, 4, &[1, 2, 3, 4]);
     queue.submit([]);
@@ -264,6 +266,8 @@ fn an_encoder_dropped_mid_frame_frees_its_buffer_before_its_targets() {
 fn a_steady_frame_reuses_its_keep_lists() {
     let (device, queue) = gpu();
     let target = texture(&device, wgpu::TextureFormat::Rgba8Unorm, (W, H), wgpu::TextureUsages::RENDER_ATTACHMENT);
+    queue.submit([]);
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     let view = target.create_view(&Default::default());
     let frame = || {
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -282,4 +286,23 @@ fn a_steady_frame_reuses_its_keep_lists() {
     frame();
     frame();
     assert_eq!(spare(), lists, "later frames take the same lists back");
+}
+
+/// A poll that finds the queue empty has run every callback: the GPU finishing between the two
+/// must not leave one waiting for a poll nobody makes.
+#[test]
+fn an_empty_poll_has_run_every_callback() {
+    let (device, queue) = gpu();
+    let target = texture(&device, wgpu::TextureFormat::Rgba8Unorm, (W, H), wgpu::TextureUsages::RENDER_ATTACHMENT);
+    let view = target.create_view(&Default::default());
+    for frame in 0..300 {
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = ran.clone();
+        let mut encoder = device.create_command_encoder(&Default::default());
+        drop(clear(&mut encoder, &view));
+        encoder.on_submitted_work_done(move || flag.store(true, Ordering::SeqCst));
+        queue.submit([encoder.finish()]);
+        while !matches!(device.poll(wgpu::PollType::Poll).unwrap(), wgpu::PollStatus::QueueEmpty) {}
+        assert!(ran.load(Ordering::SeqCst), "frame {frame}: the queue read empty before its callback ran");
+    }
 }

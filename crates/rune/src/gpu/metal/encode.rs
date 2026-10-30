@@ -6,13 +6,15 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use objc2_foundation_video::NSRange;
-use objc2_metal::{MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLOrigin, MTLSize};
+use objc2_metal::{MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLDevice, MTLOrigin, MTLResourceOptions, MTLSize, MTLTexture};
 use objc2_video::rc::autoreleasepool;
 use objc2_video::runtime::ProtocolObject;
 use parking_lot::Mutex;
 use wgpu::custom::*;
 
+use super::compute::MetalComputePass;
 use super::pass::MetalPass;
+use super::query::QuerySet;
 use super::resource::{MetalBuffer, MetalTexture, TextureRaw};
 use super::submit::Keep;
 use super::{Obj, Shared, send_sync};
@@ -142,6 +144,45 @@ fn layers(t: &TextureRaw, at: wgpu::Origin3d, size: wgpu::Extent3d) -> impl Iter
     (0..count).map(move |i| if three { (0, at.z, size.depth_or_array_layers, 0) } else { ((at.z + i) as usize, 0, 1, i as usize) })
 }
 
+/// Bytes of zeros a texture's first clear copies from: the widest row, 16384 texels of 16 bytes.
+const ZEROS: usize = 256 << 10;
+
+/// A buffer of `ZEROS` zeroed bytes, outside the live buffer count.
+#[derive(Debug)]
+pub(super) struct Zeros(Obj<dyn MTLBuffer>);
+send_sync!(Zeros);
+
+impl Zeros {
+    pub(super) fn new(shared: &Shared) -> Self {
+        Zeros(shared.device.newBufferWithLength_options(ZEROS, MTLResourceOptions::StorageModeShared).expect("a Metal buffer"))
+    }
+}
+
+/// Zeroes every mip and layer of a new texture, which wgpu promises reads as zero until written.
+pub(super) fn zero_texture(blit: &ProtocolObject<dyn MTLBlitCommandEncoder>, zeros: &Zeros, texture: &TextureRaw) {
+    let Some(block) = texture.format.block_copy_size(None) else { return };
+    let (bw, bh) = texture.format.block_dimensions();
+    let three = texture.dimension == wgpu::TextureDimension::D3;
+    let raw = &texture.raw;
+    for mip in 0..texture.mips as usize {
+        let (w, h) = ((raw.width() >> mip).max(1), (raw.height() >> mip).max(1));
+        let row = w.div_ceil(bw as usize) * block as usize;
+        let strip = (ZEROS / row).max(1) * bh as usize;
+        let slices = if three { (raw.depth() >> mip).max(1) } else { texture.layers as usize };
+        for s in 0..slices {
+            let (slice, z) = if three { (0, s) } else { (s, 0) };
+            for y in (0..h).step_by(strip) {
+                // SAFETY: each strip is within the mip and reads at most `ZEROS` bytes.
+                unsafe {
+                    blit.copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
+                        &zeros.0, 0, row, 0, MTLSize { width: w, height: strip.min(h - y), depth: 1 },
+                        raw, slice, mip, MTLOrigin { x: 0, y, z })
+                }
+            }
+        }
+    }
+}
+
 pub(super) fn buffer_to_texture(blit: &ProtocolObject<dyn MTLBlitCommandEncoder>, buffer: &ProtocolObject<dyn MTLBuffer>,
     layout: wgpu::TexelCopyBufferLayout, texture: &TextureRaw, mip: u32, at: wgpu::Origin3d, size: wgpu::Extent3d) {
     let (row, image) = strides(texture.format, layout, size);
@@ -218,8 +259,8 @@ impl CommandEncoderInterface for MetalEncoder {
         }
         rec.keep([src as _, dst as _]);
     }
-    fn begin_compute_pass(&self, _: &wgpu::ComputePassDescriptor<'_>) -> DispatchComputePass {
-        unimplemented!("RUNE_GPU_BACKEND=metal: compute")
+    fn begin_compute_pass(&self, desc: &wgpu::ComputePassDescriptor<'_>) -> DispatchComputePass {
+        DispatchComputePass::custom(MetalComputePass::begin(self.rec.clone(), desc))
     }
     fn begin_render_pass(&self, desc: &wgpu::RenderPassDescriptor<'_>) -> DispatchRenderPass {
         DispatchRenderPass::custom(MetalPass::begin(self.rec.clone(), desc))
@@ -244,9 +285,15 @@ impl CommandEncoderInterface for MetalEncoder {
     fn insert_debug_marker(&self, _: &str) {}
     fn push_debug_group(&self, _: &str) {}
     fn pop_debug_group(&self) {}
-    fn write_timestamp(&self, _: &DispatchQuerySet, _: u32) { unimplemented!("RUNE_GPU_BACKEND=metal: timestamps") }
-    fn resolve_query_set(&self, _: &DispatchQuerySet, _: u32, _: u32, _: &DispatchBuffer, _: wgpu::BufferAddress) {
-        unimplemented!("RUNE_GPU_BACKEND=metal: query sets")
+    fn write_timestamp(&self, _: &DispatchQuerySet, _: u32) { unimplemented!("RUNE_GPU_BACKEND=metal: timestamps between passes") }
+    fn resolve_query_set(&self, set: &DispatchQuerySet, first: u32, count: u32, destination: &DispatchBuffer, offset: wgpu::BufferAddress) {
+        if count == 0 { return }
+        let set = set.as_custom::<QuerySet>().expect("a Metal query set").raw.clone();
+        let dst = buffer(destination).store.gpu_write();
+        let mut rec = self.rec.lock();
+        // SAFETY: wgpu validated the range against the set and the destination's size.
+        unsafe { rec.blit().resolveCounters_inRange_destinationBuffer_destinationOffset(&set.0, NSRange::new(first as usize, count as usize), &dst.raw, offset as usize) };
+        rec.keep([set as _, dst as _]);
     }
     fn mark_acceleration_structures_built<'a>(&self, _: &mut dyn Iterator<Item = &'a wgpu::Blas>, _: &mut dyn Iterator<Item = &'a wgpu::Tlas>) {
         unimplemented!("RUNE_GPU_BACKEND=metal: ray tracing")

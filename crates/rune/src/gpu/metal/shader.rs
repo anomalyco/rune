@@ -29,6 +29,8 @@ pub(crate) struct ShaderModule {
 pub(super) struct Compiled {
     pub(super) function: Obj<dyn MTLFunction>,
     pub(super) sized: Vec<naga::ResourceBinding>,
+    /// Threads per workgroup, for a compute entry point.
+    pub(super) workgroup: [u32; 3],
 }
 
 /// One stage of a pipeline, as `compile` needs it.
@@ -109,5 +111,6 @@ pub(super) fn compile(shared: &Shared, stage: &Stage<'_>, resources: &msl::Entry
         .filter(|(_, g)| module.types[g.ty].inner.needs_host_buffer_byte_size(&module.types))
         .filter_map(|(_, g)| g.binding)
         .collect();
-    Ok(Compiled { function, sized })
+    let workgroup = module.entry_points.iter().find(|e| e.stage == stage.kind && e.name == name).map_or([1; 3], |e| e.workgroup_size);
+    Ok(Compiled { function, sized, workgroup })
 }

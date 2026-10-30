@@ -20,14 +20,20 @@
 //! Rune's layer tweaks (materials, present timing, transactions, occlusion) reach this backend's
 //! CAMetalLayer through `gpu::with_layer`. Video planes from CoreVideo wrap as textures
 //! (`texture_from_raw`) whose owner the bind groups and command buffers using them keep.
-//! Compute, queries, render bundles and depth are not implemented.
+//! Compute passes, and timestamps at pass boundaries (`TIMESTAMP_QUERY`), are as wgpu-hal's.
+//! New textures read as zero, as wgpu promises. Other queries, render bundles, indirect
+//! commands and depth are not implemented.
 
 pub(crate) mod bench;
+mod compute;
+#[cfg(test)]
+mod compute_tests;
 mod device;
 mod encode;
 mod layout;
 mod pass;
 mod pipeline;
+mod query;
 mod resource;
 mod shader;
 #[cfg(test)]
@@ -148,7 +154,9 @@ impl AdapterInterface for MetalAdapter {
         Box::pin(ready(Ok((DispatchDevice::custom(device), DispatchQueue::custom(queue)))))
     }
     fn is_surface_supported(&self, _: &DispatchSurface) -> bool { true }
-    fn features(&self) -> wgpu::Features { wgpu::Features::empty() }
+    fn features(&self) -> wgpu::Features {
+        if query::supported(&self.device) { wgpu::Features::TIMESTAMP_QUERY } else { wgpu::Features::empty() }
+    }
     fn limits(&self) -> wgpu::Limits { limits() }
     fn downlevel_capabilities(&self) -> wgpu::DownlevelCapabilities { Default::default() }
     fn get_info(&self) -> wgpu::AdapterInfo { info(&self.device) }

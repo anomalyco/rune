@@ -10,12 +10,15 @@ use objc2_metal::{MTLSamplerState, MTLTexture};
 use wgpu::custom::*;
 use wgpu::naga::{self, back::msl};
 
-use super::resource::{MetalBuffer, MetalSampler, MetalView};
+use super::resource::{Live, MetalBuffer, MetalSampler, MetalView};
 use super::store::Store;
 use super::{Obj, send_sync};
 
-/// The stages a render pipeline binds resources for: vertex, then fragment.
-pub(super) const STAGES: [wgpu::ShaderStages; 2] = [wgpu::ShaderStages::VERTEX, wgpu::ShaderStages::FRAGMENT];
+/// The stages a pipeline binds resources for: vertex and fragment for render pipelines, then compute.
+pub(super) const STAGES: [wgpu::ShaderStages; 3] = [wgpu::ShaderStages::VERTEX, wgpu::ShaderStages::FRAGMENT, wgpu::ShaderStages::COMPUTE];
+
+/// The compute stage's index in `STAGES`.
+pub(super) const COMPUTE: usize = 2;
 
 /// Slots of each kind a stage has handed out.
 #[derive(Debug, Clone, Copy, Default)]
@@ -39,8 +42,8 @@ pub(crate) struct PipelineLayout {
 #[derive(Debug)]
 pub(crate) struct LayoutRaw {
     /// Each group's first slots, per stage.
-    pub(super) bases: Vec<[Counts; 2]>,
-    pub(super) stages: [msl::EntryPointResources; 2],
+    pub(super) bases: Vec<[Counts; 3]>,
+    pub(super) stages: [msl::EntryPointResources; 3],
     pub(super) immediates: u32,
 }
 
@@ -51,12 +54,14 @@ pub(crate) struct BindGroup {
 
 #[derive(Debug, Default)]
 pub(crate) struct GroupRaw {
-    pub(super) stages: [StageBinds; 2],
+    pub(super) stages: [StageBinds; 3],
     /// Storage buffers' bound lengths by binding, which the sizes buffer reports.
     pub(super) sizes: Vec<(u32, u32)>,
     /// Owners of the textures it binds that this backend didn't make.
     #[allow(dead_code, reason = "held, never read")]
     owners: Vec<super::Owner>,
+    #[allow(dead_code, reason = "held, never read")]
+    live: Option<Live>,
 }
 
 #[derive(Debug, Default)]
@@ -118,9 +123,9 @@ impl BindGroupLayoutInterface for BindGroupLayout {}
 
 impl PipelineLayout {
     pub(crate) fn new(desc: &wgpu::PipelineLayoutDescriptor<'_>) -> Self {
-        let mut counts = [Counts::default(); 2];
-        let mut stages: [msl::EntryPointResources; 2] = Default::default();
-        let mut storage = [false; 2];
+        let mut counts = [Counts::default(); 3];
+        let mut stages: [msl::EntryPointResources; 3] = Default::default();
+        let mut storage = [false; 3];
         if desc.immediate_size > 0 {
             for (s, resources) in stages.iter_mut().enumerate() {
                 resources.immediates_buffer = Some(counts[s].buffers);
@@ -141,7 +146,7 @@ impl PipelineLayout {
                 }
             }
         }
-        for s in 0..2 {
+        for s in 0..3 {
             if storage[s] { stages[s].sizes_buffer = Some(counts[s].buffers); }
         }
         PipelineLayout { raw: Arc::new(LayoutRaw { bases, stages, immediates: desc.immediate_size }) }
@@ -151,10 +156,10 @@ impl PipelineLayout {
 impl PipelineLayoutInterface for PipelineLayout {}
 
 impl BindGroup {
-    pub(crate) fn new(desc: &wgpu::BindGroupDescriptor<'_>) -> Self {
+    pub(crate) fn new(desc: &wgpu::BindGroupDescriptor<'_>, live: Live) -> Self {
         let layout = desc.layout.as_custom::<BindGroupLayout>().expect("a Metal bind group layout");
-        let mut group = GroupRaw::default();
-        let mut counts = [Counts::default(); 2];
+        let mut group = GroupRaw { live: Some(live), ..GroupRaw::default() };
+        let mut counts = [Counts::default(); 3];
         let mut dynamic = 0;
         for entry in layout.entries.iter() {
             let resource = &desc.entries.iter().find(|e| e.binding == entry.binding).expect("a bind group entry for every layout entry").resource;

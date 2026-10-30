@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use objc2_metal::{
-    MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLIndexType, MTLLoadAction, MTLRenderCommandEncoder, MTLRenderPassDescriptor,
+    MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCounterDontSample, MTLIndexType, MTLLoadAction, MTLRenderCommandEncoder, MTLRenderPassDescriptor,
     MTLScissorRect, MTLStoreAction, MTLViewport,
 };
 use objc2_video::rc::autoreleasepool;
@@ -18,6 +18,7 @@ use wgpu::custom::*;
 use super::encode::Rec;
 use super::layout::{Counts, GroupRaw};
 use super::pipeline::{PipelineRaw, RenderPipeline, vertex_slot};
+use super::query::{self, QuerySet};
 use super::resource::{BufferRaw, MetalBuffer, MetalView};
 use super::store::{SWAPS, Store};
 use super::submit::Keep;
@@ -53,6 +54,19 @@ impl MetalPass {
         let d = MTLRenderPassDescriptor::new();
         let mut keep = rec.lock().shared().keep_list();
         let mut drawable = false;
+        if let Some(ts) = &desc.timestamp_writes {
+            let set = ts.query_set.as_custom::<QuerySet>().expect("a Metal query set").raw.clone();
+            // SAFETY: attachment 0 exists on every descriptor; the indices are within the query set, as wgpu validated.
+            unsafe {
+                let attachment = d.sampleBufferAttachments().objectAtIndexedSubscript(0);
+                attachment.setSampleBuffer(Some(&set.0));
+                attachment.setStartOfVertexSampleIndex(query::index(ts.beginning_of_pass_write_index));
+                attachment.setEndOfVertexSampleIndex(MTLCounterDontSample);
+                attachment.setStartOfFragmentSampleIndex(MTLCounterDontSample);
+                attachment.setEndOfFragmentSampleIndex(query::index(ts.end_of_pass_write_index));
+            }
+            keep.push(set);
+        }
         for (i, attachment) in desc.color_attachments.iter().enumerate() {
             let Some(attachment) = attachment else { continue };
             assert!(attachment.resolve_target.is_none(), "RUNE_GPU_BACKEND=metal: multisample resolves");
@@ -148,8 +162,8 @@ fn bytes<T: Copy>(raw: &Obj<dyn MTLRenderCommandEncoder>, s: usize, data: &[T], 
     }
 }
 
-fn apply(raw: &Obj<dyn MTLRenderCommandEncoder>, group: &GroupRaw, offsets: &[u32], bases: &[Counts; 2], keep: &mut Keep) {
-    for (s, binds) in group.stages.iter().enumerate() {
+fn apply(raw: &Obj<dyn MTLRenderCommandEncoder>, group: &GroupRaw, offsets: &[u32], bases: &[Counts; 3], keep: &mut Keep) {
+    for (s, binds) in group.stages[..2].iter().enumerate() {
         let base = bases[s];
         // SAFETY: slots come from the pipeline layout the shaders were compiled against, and the
         // resources stay alive in the pass's keep list.

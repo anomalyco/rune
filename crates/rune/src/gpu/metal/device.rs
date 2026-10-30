@@ -2,16 +2,16 @@
 
 use std::future::ready;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 
 use objc2_metal::{MTLCommandQueue, MTLDevice, MTLLanguageVersion, MTLSharedEvent};
 use parking_lot::Mutex;
 use wgpu::custom::*;
 
-use super::encode::{Inert, MetalEncoder};
+use super::encode::{Inert, MetalEncoder, Zeros, zero_texture};
 use super::layout::{BindGroup, BindGroupLayout, PipelineLayout};
-use super::resource::{MetalBuffer, MetalSampler, MetalTexture};
+use super::resource::{Live, MetalBuffer, MetalSampler, MetalTexture};
 use super::shader::ShaderModule;
 use super::submit::{MetalQueue, State};
 use super::{Obj, info, send_sync};
@@ -27,9 +27,14 @@ pub(crate) struct Shared {
     pub(super) state: Mutex<State>,
     /// Buffers alive, for `Device::get_internal_counters`.
     pub(super) buffers: Arc<AtomicIsize>,
+    /// Bind groups and textures alive, likewise.
+    bind_groups: Arc<AtomicIsize>,
+    textures: Arc<AtomicIsize>,
     /// Encoders that made a command buffer not yet submitted or dropped. While none has, every
     /// recorded command that reads a buffer's storage was submitted.
     pub(super) recording: AtomicUsize,
+    /// What new textures are zeroed from, made with the first.
+    pub(super) zeros: OnceLock<Zeros>,
 }
 send_sync!(Shared);
 
@@ -47,7 +52,10 @@ pub(super) fn new(device: Obj<dyn MTLDevice>, desc: &wgpu::DeviceDescriptor<'_>)
         msl: msl_version(),
         state: Mutex::new(State::default()),
         buffers: Arc::default(),
+        bind_groups: Arc::default(),
+        textures: Arc::default(),
         recording: AtomicUsize::new(0),
+        zeros: OnceLock::new(),
         device,
     });
     let device = MetalDevice { shared: shared.clone(), features: desc.required_features, limits: desc.required_limits.clone() };
@@ -83,7 +91,7 @@ impl DeviceInterface for MetalDevice {
     fn create_bind_group_layout(&self, desc: &wgpu::BindGroupLayoutDescriptor<'_>) -> DispatchBindGroupLayout {
         DispatchBindGroupLayout::custom(BindGroupLayout::new(desc))
     }
-    fn create_bind_group(&self, desc: &wgpu::BindGroupDescriptor<'_>) -> DispatchBindGroup { DispatchBindGroup::custom(BindGroup::new(desc)) }
+    fn create_bind_group(&self, desc: &wgpu::BindGroupDescriptor<'_>) -> DispatchBindGroup { DispatchBindGroup::custom(BindGroup::new(desc, Live::new(&self.shared.bind_groups))) }
     fn create_pipeline_layout(&self, desc: &wgpu::PipelineLayoutDescriptor<'_>) -> DispatchPipelineLayout {
         DispatchPipelineLayout::custom(PipelineLayout::new(desc))
     }
@@ -93,15 +101,19 @@ impl DeviceInterface for MetalDevice {
     fn create_mesh_pipeline(&self, _: &wgpu::MeshPipelineDescriptor<'_>) -> DispatchRenderPipeline {
         unimplemented!("RUNE_GPU_BACKEND=metal: mesh shaders")
     }
-    fn create_compute_pipeline(&self, _: &wgpu::ComputePipelineDescriptor<'_>) -> DispatchComputePipeline {
-        unimplemented!("RUNE_GPU_BACKEND=metal: compute")
+    fn create_compute_pipeline(&self, desc: &wgpu::ComputePipelineDescriptor<'_>) -> DispatchComputePipeline {
+        DispatchComputePipeline::custom(super::compute::create(&self.shared, desc))
     }
     unsafe fn create_pipeline_cache(&self, _: &wgpu::PipelineCacheDescriptor<'_>) -> DispatchPipelineCache { DispatchPipelineCache::custom(Inert) }
     fn create_buffer(&self, desc: &wgpu::BufferDescriptor<'_>) -> DispatchBuffer {
         DispatchBuffer::custom(MetalBuffer::new(&self.shared, desc.size))
     }
     fn create_texture(&self, desc: &wgpu::TextureDescriptor<'_>) -> DispatchTexture {
-        DispatchTexture::custom(MetalTexture::new(&self.shared.device, desc))
+        let texture = MetalTexture::new(&self.shared.device, desc, Live::new(&self.shared.textures));
+        let raw = texture.raw.clone();
+        let zeros = self.shared.zeros.get_or_init(|| Zeros::new(&self.shared));
+        self.shared.upload(|blit| zero_texture(blit, zeros, &raw), [raw.clone(), raw.clone()]);
+        DispatchTexture::custom(texture)
     }
     fn create_external_texture(&self, _: &wgpu::ExternalTextureDescriptor<'_>, _: &[&wgpu::TextureView]) -> DispatchExternalTexture {
         unimplemented!("RUNE_GPU_BACKEND=metal: external textures")
@@ -113,8 +125,8 @@ impl DeviceInterface for MetalDevice {
     fn create_sampler(&self, desc: &wgpu::SamplerDescriptor<'_>) -> DispatchSampler {
         DispatchSampler::custom(MetalSampler::new(&self.shared.device, desc))
     }
-    fn create_query_set(&self, _: &wgpu::QuerySetDescriptor<'_>) -> DispatchQuerySet {
-        unimplemented!("RUNE_GPU_BACKEND=metal: query sets")
+    fn create_query_set(&self, desc: &wgpu::QuerySetDescriptor<'_>) -> DispatchQuerySet {
+        DispatchQuerySet::custom(super::query::QuerySet::new(&self.shared.device, desc))
     }
     fn create_command_encoder(&self, _: &wgpu::CommandEncoderDescriptor<'_>) -> DispatchCommandEncoder {
         DispatchCommandEncoder::custom(MetalEncoder::new(self.shared.clone()))
@@ -133,6 +145,8 @@ impl DeviceInterface for MetalDevice {
     fn get_internal_counters(&self) -> wgpu::InternalCounters {
         let counters = wgpu::InternalCounters::default();
         counters.hal.buffers.set(self.shared.buffers.load(Ordering::Relaxed));
+        counters.hal.bind_groups.set(self.shared.bind_groups.load(Ordering::Relaxed));
+        counters.hal.textures.set(self.shared.textures.load(Ordering::Relaxed));
         counters
     }
     fn generate_allocator_report(&self) -> Option<wgpu::AllocatorReport> { None }

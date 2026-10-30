@@ -121,8 +121,9 @@ impl Shared {
     }
 
     /// Releases what completed command buffers used and runs the callbacks waiting on them.
-    /// One at a time, outside the lock: callbacks may call back into the device.
-    pub(super) fn retire(&self) {
+    /// One at a time, outside the lock: callbacks may call back into the device. Returns the
+    /// value it retired up to.
+    pub(super) fn retire(&self) -> u64 {
         let done = self.event.signaledValue();
         loop {
             let next = {
@@ -143,12 +144,16 @@ impl Shared {
                 None => break,
             }
         }
+        done
     }
 
     pub(super) fn poll(&self, poll: wgpu::wgt::PollType<u64>) -> Result<wgpu::PollStatus, wgpu::PollError> {
         let wgpu::wgt::PollType::Wait { submission_index, timeout } = poll else {
-            self.retire();
-            let idle = self.event.signaledValue() >= self.lock().last;
+            // Empty only as of the value retire ran callbacks up to: work finishing after it
+            // still has callbacks to run, so the caller polls again.
+            let done = self.retire();
+            let st = self.lock();
+            let idle = done >= st.last && st.callbacks.is_empty();
             return Ok(if idle { wgpu::PollStatus::QueueEmpty } else { wgpu::PollStatus::Poll });
         };
         let last = {

@@ -17,11 +17,9 @@ struct Rig {
 }
 
 fn rig() -> Option<Rig> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
-    let features = adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
-    let (device, queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor { required_features: features, ..Default::default() })).ok()?;
+    // Rune's GPU, so `RUNE_GPU_BACKEND` picks the backend these run on.
+    let rune::render::Gpu { device, queue, .. } = rune::render::Gpu::try_new(rune::render::Gpu::instance(), None).ok()?;
+    let features = device.features() & wgpu::Features::TIMESTAMP_QUERY;
     let view = |format| {
         device
             .create_texture(&wgpu::TextureDescriptor {

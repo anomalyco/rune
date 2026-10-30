@@ -84,11 +84,13 @@ pub(crate) struct TextureRaw {
     pub(super) raw: Obj<dyn MTLTexture>,
     pub(super) format: wgpu::TextureFormat,
     pub(super) dimension: wgpu::TextureDimension,
-    layers: u32,
-    mips: u32,
+    pub(super) layers: u32,
+    pub(super) mips: u32,
     pub(super) drawable: bool,
     /// What keeps a texture this backend didn't make valid (`texture_from_raw`).
     owner: Option<Owner>,
+    #[allow(dead_code, reason = "held, never read")]
+    live: Option<Live>,
 }
 
 #[derive(Debug)]
@@ -118,6 +120,21 @@ pub(crate) struct MetalSampler {
 }
 
 send_sync!(BufferRaw, MappedRange, TextureRaw, ViewRaw, SamplerRaw);
+
+/// Counts one live resource of a kind, for `Device::get_internal_counters`, until dropped.
+#[derive(Debug)]
+pub(crate) struct Live(Arc<AtomicIsize>);
+
+impl Live {
+    pub(super) fn new(count: &Arc<AtomicIsize>) -> Self {
+        count.fetch_add(1, Ordering::Relaxed);
+        Live(count.clone())
+    }
+}
+
+impl Drop for Live {
+    fn drop(&mut self) { self.0.fetch_sub(1, Ordering::Relaxed); }
+}
 
 impl Drop for BufferRaw {
     fn drop(&mut self) { self.live.fetch_sub(1, Ordering::Relaxed); }
@@ -213,7 +230,7 @@ fn texture_type(dimension: wgpu::TextureViewDimension) -> MTLTextureType {
 impl TextureRaw {
     /// A drawable's texture, which a surface hands out for one frame.
     pub(super) fn drawable(raw: Obj<dyn MTLTexture>, format: wgpu::TextureFormat) -> Self {
-        TextureRaw { raw, format, dimension: wgpu::TextureDimension::D2, layers: 1, mips: 1, drawable: true, owner: None }
+        TextureRaw { raw, format, dimension: wgpu::TextureDimension::D2, layers: 1, mips: 1, drawable: true, owner: None, live: None }
     }
 
     fn view_dimension(&self) -> wgpu::TextureViewDimension {
@@ -227,18 +244,18 @@ impl TextureRaw {
 }
 
 impl MetalTexture {
-    pub(crate) fn new(device: &Obj<dyn MTLDevice>, desc: &wgpu::TextureDescriptor<'_>) -> Self {
+    pub(crate) fn new(device: &Obj<dyn MTLDevice>, desc: &wgpu::TextureDescriptor<'_>, live: Live) -> Self {
         assert_eq!(desc.sample_count, 1, "RUNE_GPU_BACKEND=metal: multisampled textures");
         let layers = if desc.dimension == wgpu::TextureDimension::D3 { 1 } else { desc.size.depth_or_array_layers };
         let raw = TextureRaw { raw: device_texture(device, desc, layers), format: desc.format, dimension: desc.dimension, layers,
-            mips: desc.mip_level_count, drawable: false, owner: None };
+            mips: desc.mip_level_count, drawable: false, owner: None, live: Some(live) };
         MetalTexture { raw: Arc::new(raw) }
     }
 
     /// Over `raw`, a texture made elsewhere that matches `desc`, kept valid by `owner`.
     pub(crate) fn from_raw(raw: Obj<dyn MTLTexture>, desc: &wgpu::TextureDescriptor<'_>, owner: Owner) -> Self {
         let raw = TextureRaw { raw, format: desc.format, dimension: desc.dimension, layers: desc.size.depth_or_array_layers,
-            mips: desc.mip_level_count, drawable: false, owner: Some(owner) };
+            mips: desc.mip_level_count, drawable: false, owner: Some(owner), live: None };
         MetalTexture { raw: Arc::new(raw) }
     }
 }
