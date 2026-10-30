@@ -788,7 +788,7 @@ impl<T: 'static> Overlay<T> {
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
     fn follow_pointer(&mut self, event_loop: &ActiveEventLoop, point: (i32, i32)) {
         if !self.options.follow_pointer || self.options.display != DisplayTarget::UnderPointer { return; }
         let Some(Backing::Window(window)) = self.live.as_ref().map(|l| &l.backing) else { return };

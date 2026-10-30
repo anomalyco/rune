@@ -109,6 +109,8 @@ mod el_sticky;
 mod el_text;
 mod el_tx;
 mod element_info;
+#[cfg(target_vendor = "apple")]
+pub mod embed;
 mod input_time;
 mod key_diagnostics;
 #[cfg(test)]

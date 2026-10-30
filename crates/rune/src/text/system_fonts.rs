@@ -12,34 +12,34 @@ const CJK_SCRIPTS: [&[u8; 4]; 5] = [b"Hani", b"Hira", b"Kana", b"Hang", b"Bopo"]
 // cap height and follow the requested weight through its `wght` axis. Apple Symbols draws
 // them light, small and (⇧) below the baseline next to app fonts' capitals.
 // The colour emoji family comes last, so symbols with a text form keep it.
-#[cfg(target_os = "macos")]
+#[cfg(target_vendor = "apple")]
 pub(super) const SYMBOL_FAMILIES: &[&str] = &["System Font", ".SF NS", "Apple Symbols", ".SF NS Symbols", "Menlo", "Apple Color Emoji"];
-#[cfg(target_os = "macos")]
+#[cfg(target_vendor = "apple")]
 // SF italic rides along so `Family::Named("System Font").italic()` gets the real face.
 pub(super) const SYMBOL_FONT_FILES: &[&str] = &["sfnsttf", "sfnsitalic", "applesymbols", "sfnssymbols", "menlo", "applecoloremoji"];
 #[cfg(windows)]
 pub(super) const SYMBOL_FAMILIES: &[&str] = &["Segoe UI Symbol", "Segoe UI Emoji"];
 #[cfg(windows)]
 pub(super) const SYMBOL_FONT_FILES: &[&str] = &["seguisym", "seguiemj"];
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_vendor = "apple", windows)))]
 pub(super) const SYMBOL_FAMILIES: &[&str] = &["DejaVu Sans", "Noto Sans Symbols2", "Noto Sans Symbols", "Noto Color Emoji"];
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_vendor = "apple", windows)))]
 pub(super) const SYMBOL_FONT_FILES: &[&str] = &["dejavusans", "notosanssymbols", "notocoloremoji"];
 
 // `Family::SystemMono`: the platform's monospaced UI families, most preferred first, and the
 // files they're in. SF Mono's family name is `.SF NS Mono`, as SF's is `.SF NS`.
-#[cfg(target_os = "macos")]
+#[cfg(target_vendor = "apple")]
 const SYSTEM_MONO_FAMILIES: &[&str] = &[".SF NS Mono", "Menlo"];
-#[cfg(target_os = "macos")]
+#[cfg(target_vendor = "apple")]
 const SYSTEM_MONO_FILES: &[&str] = &["sfnsmono", "menlo"];
 #[cfg(windows)]
 const SYSTEM_MONO_FAMILIES: &[&str] = &["Cascadia Mono", "Consolas", "Courier New"];
 #[cfg(windows)]
 const SYSTEM_MONO_FILES: &[&str] = &["cascadiamono", "consola", "cour"];
 // After fontconfig's own answer (`fontconfig_monospace`).
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_vendor = "apple", windows)))]
 const SYSTEM_MONO_FAMILIES: &[&str] = &["DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", "Ubuntu Mono"];
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_vendor = "apple", windows)))]
 const SYSTEM_MONO_FILES: &[&str] = &["dejavusansmono", "liberationmono", "notosansmono", "ubuntumono"];
 
 /// The family and file fontconfig resolves `monospace` to, asked once per process.
@@ -191,6 +191,8 @@ fn walk_font_dirs() -> Vec<(String, std::path::PathBuf)> {
     let mut dirs: Vec<std::path::PathBuf> = Vec::new();
     if cfg!(target_os = "macos") {
         dirs.extend(["/System/Library/Fonts", "/Library/Fonts"].map(Into::into));
+    } else if cfg!(target_os = "ios") {
+        dirs.push("/System/Library/Fonts".into());
     } else if cfg!(windows) {
         let root = std::env::var_os("WINDIR").map_or_else(|| "C:\\Windows".into(), std::path::PathBuf::from);
         dirs.push(root.join("Fonts"));
