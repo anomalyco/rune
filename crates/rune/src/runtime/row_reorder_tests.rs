@@ -200,3 +200,23 @@ fn reordered_virtual_rows_slide_and_a_scroll_moves_none() {
     let keys: Vec<&str> = rt.state.iter().map(|r| r.0).collect();
     assert!(keys.iter().all(|k| !offset_tracked(&rt, k)), "a window shift slides no row");
 }
+
+#[test]
+fn zz_probe_move_grow() {
+    let rows = vec![("m0", 120.0), ("m1", 60.0), ("m2", 90.0), ("w", 77.0), ("a", 53.0), ("b", 53.0)];
+    let mut rt = settled(rows);
+    let dump = |rt: &Runtime<Rows>, tag: &str| {
+        let mut line = format!("{tag}");
+        for k in ["a", "w", "b"] {
+            let e = rt.elements().into_iter().find(|e| e.key.as_deref() == Some(k) && !e.exiting).unwrap();
+            let n = rt.nodes.iter().find(|n| n.path.ends_with(&format!("/{k}"))).unwrap();
+            let off = rt.scene.get(n.id, prop::OFFSET).map_or(0.0, |o| o.y);
+            let fr = rt.scene.get(n.id, prop::FRAME).map_or(-1.0, |r| r.y);
+            line += &format!(" | {k} y={:.2} h={:.2} off={:.2} frame={:.2} tgt={:.1}", e.rect[1], e.rect[3], off, fr, n.target[1]);
+        }
+        println!("{line}");
+    };
+    dump(&rt, "before");
+    rt.update(|rows, _| { rows[4].1 = 77.0; let a = rows.remove(4); rows.insert(3, a); });
+    for f in 0..8 { rt.frame(1.0 / 120.0); dump(&rt, &format!("f{f}")); }
+}

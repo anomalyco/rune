@@ -3645,7 +3645,7 @@ impl<S: 'static> Runtime<S> {
                 let to = rune_motion::Vec2::new(shift[0], shift[1]);
                 if lands || !was_present || was_exiting || self.reduced_motion {
                     self.scene.set(id, prop::OFFSET, to);
-                } else if self.scene.store().target(id, prop::OFFSET) != Some(to) {
+                } else if self.scene.store().target(id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO) != to {
                     if row_jump != 0.0 {
                         // The row starts from where it was drawn: a reordered row that drops its
                         // offset slides into its new place.
