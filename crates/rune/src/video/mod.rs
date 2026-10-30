@@ -6,10 +6,10 @@
 //! Video: each frame that draws the element reconciles that intent with the platform player on
 //! the UI thread and pulls the frame for the frame's presentation time, so a paused or hidden
 //! video costs nothing per frame. On macOS, AVPlayer + AVPlayerItemVideoOutput pull
-//! IOSurface-backed `CVPixelBuffer`s for the display link's target time, zero-copy. On Linux,
-//! GStreamer `playbin` presents into an appsink on the same pipeline clock as audio. Until a
-//! video first plays, and after its player is parked, it shows a poster frame decoded on a
-//! worker thread, with no player or decoder session held.
+//! IOSurface-backed `CVPixelBuffer`s for the display link's target time, zero-copy. On Linux
+//! with the `linux-gstreamer` feature, GStreamer `playbin` presents into an appsink on the same
+//! pipeline clock as audio. Until a video first plays, and after its player is parked, it shows
+//! a poster frame decoded on a worker thread, with no player or decoder session held.
 //!
 //! Audio ([`Player::audio`]): no surface and no frames. In a window, edits apply on the main
 //! thread at once, and a 20 Hz main-queue tick runs only while some clip plays, loads to play
@@ -24,9 +24,10 @@
 //! on the thread that made it, from the first frame or edit after `play`: pausing, seeking,
 //! rate, looping and the end (which wakes the app's waker) all as in a window, silently.
 //!
-//! On Linux, GStreamer `playbin` drives windowed playback (appsink BGRA + system audio);
-//! `ffmpeg`/`ffprobe` on PATH still handle posters and headless frames. Other platforms report
-//! [`PlayerState::Failed`] and draw a neutral placeholder for video.
+//! On Linux with `linux-gstreamer`, GStreamer `playbin` drives windowed playback (appsink BGRA +
+//! system audio); `ffmpeg`/`ffprobe` on PATH still handle posters and headless frames. Other
+//! platforms (and Linux without that feature) report [`PlayerState::Failed`] and draw a neutral
+//! placeholder for video.
 
 #[cfg(all(target_os = "macos", feature = "ogg-audio"))]
 mod foreign;
@@ -36,13 +37,13 @@ mod macos;
 use macos as backend;
 #[cfg(all(test, target_os = "macos"))]
 pub(crate) use macos::test_frames;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "linux-gstreamer"))]
 mod linux;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "linux-gstreamer"))]
 use linux as backend;
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", all(target_os = "linux", feature = "linux-gstreamer"))))]
 mod unsupported;
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", all(target_os = "linux", feature = "linux-gstreamer"))))]
 use unsupported as backend;
 
 use crate::native_surface::{ByteFrame, ColorInfo, Format, NativeSurface};
@@ -835,7 +836,10 @@ impl Control {
 
     /// Display clock: fold a player position into the state, looping or ending at the end.
     /// Returns true when the player should restart from zero.
-    #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "macos", all(target_os = "linux", feature = "linux-gstreamer"))),
+        allow(dead_code)
+    )]
     pub(crate) fn observe(&mut self, time: f64, at_end: bool) -> bool {
         self.time = self.duration.map_or(time, |d| time.clamp(0.0, d));
         if !(self.playing && at_end) {

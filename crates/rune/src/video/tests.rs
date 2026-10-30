@@ -16,7 +16,7 @@ fn new_videos_are_muted_paused_and_loading() {
     assert_eq!(v.duration(), None);
     assert_eq!(v.natural_size(), None);
     assert!(!v.is_audio());
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", all(target_os = "linux", feature = "linux-gstreamer")))]
     assert_eq!(v.state(), PlayerState::Loading);
     assert_eq!(v.source(), &MediaSource::File("missing.mp4".into()));
 }
@@ -63,7 +63,7 @@ fn webm_video_fails_at_once() {
         a.play();
         assert!(!a.is_playing(), "a failed clip doesn't play");
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "linux-gstreamer"))]
     {
         // Linux probes asynchronously; a remote WebM stays Loading until ffprobe/GStreamer fail.
         match a.state() {
@@ -74,7 +74,7 @@ fn webm_video_fails_at_once() {
             other => panic!("{other:?}"),
         }
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", all(target_os = "linux", feature = "linux-gstreamer"))))]
     {
         let PlayerState::Failed(message) = a.state() else { panic!("{:?}", a.state()) };
         assert_eq!(message, "video playback isn't supported on this platform yet");
@@ -170,7 +170,7 @@ fn handle_edits_are_shared_and_validated() {
     assert!(!v.muted());
     assert_eq!(v.time(), 0.0);
     v.play();
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", all(target_os = "linux", feature = "linux-gstreamer")))]
     {
         assert!(other.is_playing());
         // Still loading: playing is intent until the clip opens.
@@ -278,12 +278,12 @@ fn the_last_handle_or_element_frees_the_player() {
     assert!(shared.upgrade().is_none());
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", all(target_os = "linux", feature = "linux-gstreamer")))]
 fn fixture() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/rgbw.mp4")
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", all(target_os = "linux", feature = "linux-gstreamer")))]
 fn sound(name: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
 }
@@ -298,9 +298,9 @@ fn failures_draw_a_placeholder_and_stop_drawing() {
     let mut rt = crate::Runtime::new(v.clone(), view, (32.0, 18.0), crate::Env::new(true, 2.0));
     rt.frame(0.0);
     let PlayerState::Failed(message) = v.state() else { panic!("{:?}", v.state()) };
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", all(target_os = "linux", feature = "linux-gstreamer")))]
     assert!(message.contains("no such file"), "{message}");
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", all(target_os = "linux", feature = "linux-gstreamer"))))]
     assert_eq!(message, "video playback isn't supported on this platform yet");
     let frame = v.surface().latest().expect("placeholder frame");
     assert_eq!((frame.size, frame.format), ([32, 18], Format::Bgra));
@@ -310,7 +310,7 @@ fn failures_draw_a_placeholder_and_stop_drawing() {
 
 /// Headless audio opens on first read and never plays: no player, no sound. With no runtime
 /// stepping on its thread, time holds.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", all(target_os = "linux", feature = "linux-gstreamer")))]
 #[test]
 fn headless_audio_opens_on_read_and_holds_time() {
     let a = Player::audio(sound("silence.m4a"));
@@ -331,7 +331,7 @@ fn headless_audio_opens_on_read_and_holds_time() {
     assert!(matches!(video.state(), PlayerState::Failed(e) if e.contains("no playable audio track")));
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", all(target_os = "linux", feature = "linux-gstreamer")))]
 mod headless {
     use super::*;
     use crate::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};

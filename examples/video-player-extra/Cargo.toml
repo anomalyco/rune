@@ -7,6 +7,6 @@ publish = false
 
 [dependencies]
 async-std = "1"
-rune = { path = "../../crates/rune", features = ["native-file-dialog"] }
+rune = { path = "../../crates/rune", features = ["native-file-dialog", "linux-gstreamer"] }
 rune-kit = { path = "../../crates/rune-kit" }
 rune-theme-opencode = { path = "../../themes/opencode" }
