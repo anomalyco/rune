@@ -308,7 +308,8 @@ impl Tx {
     /// (memoized subtrees included), lays out again and draws one frame. A family that isn't
     /// registered or installed falls back as it would at launch. Asking for the families the
     /// slots already hold costs nothing. [`rune::text::measure`](crate::text::measure) follows
-    /// too, and caches of measured sizes can key on [`rune::text::font_epoch`](crate::text::font_epoch).
+    /// too, and caches of measured sizes can key on [`rune::text::font_epoch`](crate::text::font_epoch). Tests that switch families
+    /// on parallel threads isolate `measure` with [`rune::text::with_families`](crate::text::with_families).
     pub fn set_font_families(&mut self, sans: impl Into<String>, mono: impl Into<String>) {
         self.font_families = Some((sans.into(), mono.into()));
     }
