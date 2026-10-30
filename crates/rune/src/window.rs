@@ -1428,7 +1428,10 @@ impl<S: 'static> Host<S> {
         self.native_handle.native.ready.store(true, Ordering::Release);
         *self.shared.window_error.lock().unwrap() = None;
         if !std::mem::replace(&mut w.first_frame.notified, true)
-            && let Some(ready) = self.on_ready.as_mut() { ready(&self.native_handle); }
+            && let Some(ready) = self.on_ready.as_mut()
+        {
+            crate::perf_warn::timed("on_ready", || ready(&self.native_handle));
+        }
         if reveal {
             self.reveal_launcher(event_loop);
             self.shell(event_loop);

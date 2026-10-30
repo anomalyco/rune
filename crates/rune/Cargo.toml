@@ -13,7 +13,7 @@ embedded-fonts = []
 # Fall back to WebGL2 on wasm32 when WebGPU is unavailable.
 webgl = ["wgpu/webgl"]
 # Headless benchmark instrumentation; ordinary builds contain no phase clocks.
-frame-profile = ["dep:procwatch", "dep:libc"]
+frame-profile = ["dep:procwatch"]
 # Native Open, Save and folder dialogs: rfd on macOS and Windows, the XDG desktop portal over zbus on Linux.
 native-file-dialog = ["dep:rfd", "dbus"]
 hot = ["dep:subsecond", "dep:dioxus-devtools"]
@@ -65,7 +65,8 @@ unicode-segmentation = "1.13"
 resvg = { version = "0.45", default-features = false, optional = true }
 
 [target.'cfg(all(unix, not(target_os = "linux")))'.dependencies]
-libc = { version = "0.2", optional = true }
+# The thread CPU clock for frame profiles and debug builds' stall warnings.
+libc = "0.2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "1"

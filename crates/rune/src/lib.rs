@@ -168,6 +168,7 @@ mod frame_profile;
 #[cfg(feature = "frame-profile")]
 #[doc(hidden)]
 pub use frame_profile::{PHASES, take_frame_phases, thread_cpu_ms};
+mod perf_warn;
 pub mod file_dialog;
 pub mod tray;
 mod open_url;

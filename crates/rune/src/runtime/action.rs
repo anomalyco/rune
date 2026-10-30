@@ -134,6 +134,36 @@ pub(super) fn action_path(action: &Action) -> Option<&str> {
     }
 }
 
+/// The handler an action runs, for the stall warning.
+#[cfg(debug_assertions)]
+fn handler_name(action: &Action) -> &'static str {
+    live_only_handler(action).unwrap_or(match action {
+        Action::Physical(..) => "on_key",
+        Action::FocusControl(_) | Action::HoverFocus(_) | Action::Focus(..) | Action::Blur => "a focus change",
+        Action::Dismiss(_) => "a modal's dismiss",
+        Action::AtBottom(..) => "on_at_bottom",
+        Action::FarFromBottom(..) => "on_far_from_bottom",
+        Action::VisibleRows(..) => "on_visible_rows",
+        Action::Layout(..) => "on_layout",
+        Action::ScreenLayout(..) => "on_screen_layout",
+        Action::Files(_) => "on_drop_files",
+        Action::Ime(_) => "a text input's edit",
+        Action::Paste(..) => "on_paste",
+        Action::ClipboardRead(..) => "a `read_clipboard` callback",
+        Action::FileDialog(..) => "a file dialog callback",
+        _ => "a handler",
+    })
+}
+
+#[cfg(debug_assertions)]
+fn stall_path(action: &Action) -> Option<&str> {
+    match action {
+        Action::Dismiss(path) | Action::AtBottom(path, _) | Action::FarFromBottom(path, _) | Action::VisibleRows(path, _)
+        | Action::Layout(path, _) | Action::ScreenLayout(path, _) | Action::Focus(path, ..) | Action::FocusControl(path) => Some(path),
+        _ => action_path(action),
+    }
+}
+
 pub(super) fn merge(tx: &mut Tx, one: Tx) {
     tx.pick_reads.extend(one.pick_reads);
     tx.paste |= one.paste;
@@ -207,7 +237,23 @@ pub(super) fn order_drag_ends(queue: ActionQueue, ended: Vec<(String, crate::Dra
 }
 
 impl<S: 'static> Runtime<S> {
+    /// Runs `action`'s handlers; debug builds warn when they block the main thread.
     pub(super) fn run_action(&mut self, action: Action, tx: &mut Tx) -> bool {
+        #[cfg(debug_assertions)]
+        let (name, path) = (handler_name(&action), stall_path(&action).map(str::to_owned));
+        let stall = crate::perf_warn::Stall::start();
+        let ran = self.dispatch_action(action, tx);
+        #[cfg(debug_assertions)]
+        stall.end(|| match path {
+            Some(path) => (crate::perf_warn::handler_site(name, &path), format!("`{name}` on {path:?}")),
+            None => (name.to_owned(), format!("`{name}`")),
+        });
+        #[cfg(not(debug_assertions))]
+        stall.end(|| unreachable!());
+        ran
+    }
+
+    fn dispatch_action(&mut self, action: Action, tx: &mut Tx) -> bool {
         let mut one = self.transaction();
         // Debug builds name the element too, for the stale-view warning.
         #[cfg(debug_assertions)]

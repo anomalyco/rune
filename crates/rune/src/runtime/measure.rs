@@ -171,6 +171,8 @@ impl<S: 'static> Measurement<'_, S> {
                     v.selected_row = selected;
                 }
             }
+            #[cfg(debug_assertions)]
+            crate::perf_warn::overbuilt(path, el.virtual_source, el.children.len(), v.range.len());
             let pinned: Vec<usize> = v.pinned_rows.iter()
                 .filter_map(|key| v.index_of(key))
                 .filter(|i| !v.range.contains(i))

@@ -1875,7 +1875,7 @@ impl<S: 'static> Runtime<S> {
     /// next change.
     pub fn update_if(&mut self, f: impl FnOnce(&mut S, &mut Tx) -> bool) -> bool {
         let mut one = self.transaction();
-        let changed = f(&mut self.state, &mut one);
+        let changed = crate::perf_warn::timed("an `update` closure", || f(&mut self.state, &mut one));
         let stale = changed || one.frame_work() || one.window_frame.is_some() || one.srgb_blend.is_some_and(|b| b != self.srgb_blend) || one.font_smoothing.is_some_and(|m| m != self.text.smoothing)
             || (one.blur && self.focused.is_some());
         self.latch_requests(&mut one);
@@ -2182,7 +2182,7 @@ impl<S: 'static> Runtime<S> {
         if let Some(poll) = self.poll.filter(|_| !polled) {
             let mut one = self.transaction();
             // Scheduling does not imply a model change.
-            if app_call!(poll, &mut self.state, self.clock, &mut one) {
+            if crate::perf_warn::timed("poll", || app_call!(poll, &mut self.state, self.clock, &mut one)) {
                 ran = true;
             }
             merge(&mut tx, one);

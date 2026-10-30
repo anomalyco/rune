@@ -7,41 +7,43 @@ pub(crate) enum Phase { View, Commit, Layout, Text, Paint, Apply }
 #[cfg_attr(not(feature = "frame-profile"), allow(dead_code))]
 pub const PHASES: usize = 6;
 
+/// CPU consumed by this thread, excluding time the scheduler runs other work. Debug builds
+/// time app callbacks with it for `perf_warn`.
+#[cfg(any(feature = "frame-profile", debug_assertions))]
+pub(crate) fn cpu_ms() -> Option<f64> {
+    #[cfg(unix)]
+    {
+        let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        // SAFETY: `t` is a live, writable timespec and the clock needs no handle.
+        let ok = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
+        assert_eq!(ok, 0, "thread CPU clock unavailable");
+        Some(t.tv_sec as f64 * 1000.0 + t.tv_nsec as f64 / 1e6)
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::{Foundation::FILETIME, System::Threading::{GetCurrentThread, GetThreadTimes}};
+        let mut created = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+        let mut exited = created;
+        let mut kernel = created;
+        let mut user = created;
+        // SAFETY: the current-thread pseudo-handle is valid and all four outputs are
+        // live, writable FILETIMEs. The pseudo-handle is borrowed, not closed.
+        let ok = unsafe { GetThreadTimes(GetCurrentThread(), &mut created, &mut exited, &mut kernel, &mut user) };
+        assert_ne!(ok, 0, "thread CPU clock unavailable");
+        let ticks = |t: FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
+        Some((ticks(kernel) + ticks(user)) as f64 / 10_000.0)
+    }
+    #[cfg(not(any(unix, windows)))]
+    { None }
+}
+
 #[cfg(feature = "frame-profile")]
 mod enabled {
-    use super::{PHASES, Phase};
+    use super::{PHASES, Phase, cpu_ms};
     use std::{cell::Cell, time::Instant};
 
     thread_local! {
         static TIMES: Cell<[f64; 2 * PHASES]> = const { Cell::new([0.0; 2 * PHASES]) };
-    }
-
-    /// CPU consumed by this thread, excluding time the scheduler runs other work.
-    pub(crate) fn cpu_ms() -> Option<f64> {
-        #[cfg(unix)]
-        {
-            let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-            // SAFETY: `t` is a live, writable timespec and the clock needs no handle.
-            let ok = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
-            assert_eq!(ok, 0, "thread CPU clock unavailable");
-            Some(t.tv_sec as f64 * 1000.0 + t.tv_nsec as f64 / 1e6)
-        }
-        #[cfg(windows)]
-        {
-            use windows_sys::Win32::{Foundation::FILETIME, System::Threading::{GetCurrentThread, GetThreadTimes}};
-            let mut created = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
-            let mut exited = created;
-            let mut kernel = created;
-            let mut user = created;
-            // SAFETY: the current-thread pseudo-handle is valid and all four outputs are
-            // live, writable FILETIMEs. The pseudo-handle is borrowed, not closed.
-            let ok = unsafe { GetThreadTimes(GetCurrentThread(), &mut created, &mut exited, &mut kernel, &mut user) };
-            assert_ne!(ok, 0, "thread CPU clock unavailable");
-            let ticks = |t: FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
-            Some((ticks(kernel) + ticks(user)) as f64 / 10_000.0)
-        }
-        #[cfg(not(any(unix, windows)))]
-        { None }
     }
 
     pub(crate) struct Scope(Phase, Instant, Option<f64>);
@@ -62,7 +64,7 @@ mod enabled {
 }
 
 #[cfg(feature = "frame-profile")]
-pub(crate) use enabled::{Scope, cpu_ms, take};
+pub(crate) use enabled::{Scope, take};
 
 /// One headless frame: phase times (wall then CPU), the update and encode split, and counts.
 #[cfg(feature = "frame-profile")]

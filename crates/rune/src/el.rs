@@ -777,6 +777,8 @@ pub struct El {
     key_source: Option<&'static std::panic::Location<'static>>,
     #[cfg(debug_assertions)]
     pub(crate) scroll_source: Option<&'static std::panic::Location<'static>>,
+    #[cfg(debug_assertions)]
+    pub(crate) virtual_source: Option<&'static std::panic::Location<'static>>,
     pub(crate) role: &'static str,
     pub(crate) label: Option<String>,
     pub(crate) style: Style,
@@ -870,6 +872,8 @@ fn base(dir: FlexDirection) -> El {
         key_source: None,
         #[cfg(debug_assertions)]
         scroll_source: None,
+        #[cfg(debug_assertions)]
+        virtual_source: None,
         role: "group",
         label: None,
         // Relative makes every element the containing block for its absolute children, so they
@@ -1453,6 +1457,10 @@ impl El {
     /// Unvisited rows use an estimated height; measurement preserves the visible anchor.
     /// Offscreen rows have no layout, text or scene nodes.
     ///
+    /// Use [`El::virtual_rows`] unless the list is short: the view still builds every row
+    /// handed to `virtualize` on every commit, mounted or not. Debug builds warn once per list
+    /// that builds more than 200 rows and four times what it mounts.
+    ///
     /// The same element must also be a growth stack: call `.growth(GrowthSpec)` on it as well
     /// as `.virtualize(..)`, and make it the first child of the `.scroll(..)` viewport. Layout
     /// panics with the element's path otherwise.
@@ -1462,8 +1470,11 @@ impl El {
     ///     col().key("rows").growth(GrowthSpec::default()).virtualize(32.0).children(rows),
     /// )
     /// ```
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn virtualize(mut self, estimated_row_height: f32) -> Self {
         self.virtual_estimate = Some(estimated_row_height.max(1.0));
+        #[cfg(debug_assertions)]
+        { self.virtual_source = Some(std::panic::Location::caller()); }
         self
     }
 
