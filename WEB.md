@@ -51,6 +51,24 @@ example. Disable Rune's `dev`, `hot` and `native-file-dialog` features on wasm. 
 filesystem, process and thread dependencies behind target conditions in your app too.
 Use `rune::time::Instant` for deadlines passed to Rune; it is `std::time::Instant` on native.
 
+## Mount in a page
+
+By default Rune appends its own canvas, covers the viewport and stops the body scrolling.
+`App::canvas_id("id")` mounts onto a `<canvas id="id">` the page already has instead:
+
+```rust,ignore
+// Inline in an article, as tall as its content; the page keeps scrolling.
+App::new(spec).canvas_id("chart").fit_content_height().try_run()?;
+// Full screen inside a single-page app's route, which owns the canvas.
+App::new(spec).canvas_id("route-canvas").full_viewport().try_run()?;
+```
+
+Inline, the canvas is as wide as its parent and as tall as `AppSpec::size` (or its content with
+`fit_content_height`, when vertical wheel and touch pans scroll the page); safe-area insets
+are zero and the title doesn't touch `document.title`. With `full_viewport` the canvas is fixed to
+the visual viewport like Rune's own, so an ancestor with a `transform` or `filter` would
+become its containing block; mount it outside one.
+
 ## Fonts and browser input
 
 Web includes Inter Regular and IBM Plex Mono Regular. There is no system-font discovery.

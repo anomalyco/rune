@@ -62,6 +62,7 @@ pub struct App<S: 'static> {
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<S>>>,
     pub(crate) window_options: crate::WindowOptions,
     pub(crate) canvas_id: Option<String>,
+    pub(crate) full_viewport: bool,
     pub(crate) fit_content_height: bool,
     pub(crate) float_on_open: bool,
     pub(crate) modifier_keys: bool,
@@ -102,6 +103,7 @@ impl<S: 'static> App<S> {
             compositor: None,
             window_options: crate::WindowOptions::default(),
             canvas_id: None,
+            full_viewport: false,
             fit_content_height: false,
             float_on_open: false,
             modifier_keys: false,
@@ -154,10 +156,21 @@ impl<S: 'static> App<S> {
     }
 
     /// Mount onto an existing `<canvas id="…">` in the web document instead of appending a
-    /// full-viewport canvas and locking `document.body`. Pair with [`Self::fit_content_height`]
-    /// to embed a Rune view inline in a scrollable page. Ignored on native.
+    /// full-viewport canvas and locking `document.body`. The canvas sits inline in the page at
+    /// its parent's width: pair with [`Self::fit_content_height`] to embed a Rune view in a
+    /// scrollable page, or add [`Self::full_viewport`] to cover the screen. Ignored on native.
     pub fn canvas_id(mut self, id: impl Into<String>) -> Self {
         self.canvas_id = Some(id.into());
+        self
+    }
+
+    /// On web, cover the browser viewport even when [`Self::canvas_id`] names the canvas, as an
+    /// app without one does: the canvas is fixed to the visual viewport, the body stops
+    /// scrolling, `Cx::safe_area` reports the page's insets and the title sets
+    /// `document.title`. For a single-page app that mounts Rune full screen in a route's own
+    /// `<canvas>`. [`Self::fit_content_height`] wins over it. Ignored on native.
+    pub fn full_viewport(mut self) -> Self {
+        self.full_viewport = true;
         self
     }
 
@@ -475,6 +488,13 @@ impl<S: 'static> App<S> {
         self.argv.take().map_or(inherited, Args::parse_from)
     }
 
+    /// On web: the canvas sits inline in the page (`canvas_id` without `full_viewport`, or with
+    /// `fit_content_height`) rather than covering the viewport.
+    #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+    pub(crate) fn web_inline(&self) -> bool {
+        self.canvas_id.is_some() && (self.fit_content_height || !self.full_viewport)
+    }
+
     pub(crate) fn into_parts(self, scene: Option<&str>) -> (AppSpec<S>, S, Arc<Shared<S>>) {
         let state = crate::perf_warn::launch::init(|| match self.init {
             Some(init) => crate::tooling::with_scene(&self.spec, init(), scene),
@@ -741,6 +761,17 @@ mod tests {
 
     fn spec() -> AppSpec<u32> {
         AppSpec::new("test", (100.0, 100.0), || 0, |_: &u32, _: &mut Cx<u32>| el())
+    }
+
+    #[test]
+    fn a_named_web_canvas_sits_inline_unless_it_covers_the_viewport() {
+        assert!(!App::new(spec()).web_inline(), "Rune's own canvas covers the viewport");
+        assert!(!App::new(spec()).full_viewport().web_inline());
+        assert!(App::new(spec()).canvas_id("view").web_inline(), "canvas_id alone stays inline");
+        assert!(App::new(spec()).canvas_id("view").fit_content_height().web_inline());
+        assert!(!App::new(spec()).canvas_id("route").full_viewport().web_inline());
+        assert!(App::new(spec()).canvas_id("view").full_viewport().fit_content_height().web_inline(),
+            "sizing to content wins over covering the viewport");
     }
 
     #[test]

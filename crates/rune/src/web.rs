@@ -33,7 +33,8 @@ pub(crate) fn run<S: 'static>(app: App<S>) -> Result<(), String> {
     let event_loop = EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let proxy = event_loop.create_proxy();
-    event_loop.spawn_app(Browser { app: Some(app), proxy, window: None, embedded: false, pending: Rc::default(), running: Rc::default() });
+    event_loop.spawn_app(Browser { app: Some(app), proxy, window: None, embedded: false, owns_canvas: true,
+        pending: Rc::default(), running: Rc::default() });
     Ok(())
 }
 
@@ -41,7 +42,10 @@ struct Browser<S: 'static> {
     app: Option<App<S>>,
     proxy: EventLoopProxy<Wake>,
     window: Option<Arc<Window>>,
+    /// Inline in the page at its parent's width, rather than covering the viewport.
     embedded: bool,
+    /// Rune made the canvas (no `App::canvas_id`), so it removes it when the app ends.
+    owns_canvas: bool,
     pending: Rc<RefCell<Option<Result<(Gpu, wgpu::Surface<'static>), String>>>>,
     running: Rc<RefCell<Option<Running<S>>>>,
 }
@@ -170,7 +174,8 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             }
             None => None,
         };
-        self.embedded = existing.is_some();
+        self.owns_canvas = existing.is_none();
+        self.embedded = app.web_inline();
         let mut attrs = Window::default_attributes().with_title(app.spec.title).with_prevent_default(false);
         attrs = match &existing {
             Some(c) => attrs.with_canvas(Some(c.clone())).with_append(false),
@@ -194,7 +199,12 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             canvas.style().set_css_text("position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;outline:none;user-select:none;-webkit-user-select:none");
             if let Some(document) = web_sys::window().and_then(|w| w.document()) {
                 document.set_title(app.spec.title);
-                if let Some(body) = document.body() { body.style().set_css_text("margin:0;overflow:hidden;overscroll-behavior:none"); }
+                if let Some(body) = document.body() {
+                    let style = body.style();
+                    for (name, value) in [("margin", "0"), ("overflow", "hidden"), ("overscroll-behavior", "none")] {
+                        let _ = style.set_property(name, value);
+                    }
+                }
             }
         }
         let features = app.compositor.as_ref().map_or(wgpu::Features::empty(), |c| c.features());
@@ -399,8 +409,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
     }
 
     fn exiting(&mut self, _: &ActiveEventLoop) {
-        let embedded = self.embedded;
         if let Some(r) = self.running.borrow_mut().take() { r.shared.visible.store(false, Ordering::Release); }
-        if !embedded && let Some(canvas) = self.window.as_ref().and_then(|w| w.canvas()) { canvas.remove(); }
+        if self.owns_canvas && let Some(canvas) = self.window.as_ref().and_then(|w| w.canvas()) { canvas.remove(); }
     }
 }
