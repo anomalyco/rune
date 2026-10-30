@@ -58,14 +58,14 @@ fn deliver(s: &mut Chat) {
 }
 
 fn view(s: &Chat, _: &mut Cx<Chat>) -> El {
-    let working = s.rows.iter().position(|r| r.0 == "working").unwrap_or(usize::MAX);
+    let working = s.rows.iter().position(|r| r.0 == "working");
     let rows = s.rows.iter().enumerate().map(|(i, (key, h))| {
         let tint = if key == "working" { oklch(0.42, 0.06, 250.0) } else { oklch(0.32, 0.02, 250.0) };
         let id = key.clone();
         let mut label = text(if key == "working" { "Working…".to_owned() } else { key.clone() }).font(TextStyle::new(13.0, 500.0)).color(Color::WHITE);
         if s.steer { label = label.key("label"); }
         let row = col().key(key.clone()).w_full().h(*h).radius(10.0).padding(10.0).fill(tint);
-        let row = match (s.steer && key.starts_with("steer-"), i > working + 1) {
+        let row = match (s.steer && key.starts_with("steer-"), working.is_some_and(|w| i > w + 1)) {
             (true, true) => row.pt(4.0),
             (true, false) => row.pt(18.0),
             _ => row,
