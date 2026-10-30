@@ -63,6 +63,13 @@ fn mix_oklab(a: Color, b: Color, t: f32) -> Color {
     Color::from_oklab(std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t))
 }
 
+/// `t` of the way from `base` toward `hue` in OKLab, at `base`'s alpha: a quiet wash that keeps
+/// `base`'s lightness close in both themes.
+pub(crate) fn tint(base: Color, hue: Color, t: f32) -> Color {
+    let [a, b] = [base.to_oklab(), hue.to_oklab()];
+    Color::from_oklab([0, 1, 2, 3].map(|i| if i == 3 { a[3] } else { a[i] + (b[i] - a[i]) * t }))
+}
+
 /// OKLab lightness steps away from `bg` (lighter on dark themes, darker on light ones) per
 /// elevation: `layer_01`–`layer_04`.
 const DARK_LAYERS: [f32; 4] = [0.04, 0.07, 0.10, 0.13];

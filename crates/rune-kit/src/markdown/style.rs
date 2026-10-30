@@ -4,6 +4,7 @@ use rune::{Icon, Spring};
 
 use super::*;
 use crate::PaletteSeed;
+use crate::palette::tint;
 
 /// How markdown looks. [`MarkdownStyle::from_kit`] takes every colour and font from the kit's
 /// tokens, [`MarkdownStyle::neutral`] and [`MarkdownStyle::from_seed`] need no kit; each builder
@@ -115,13 +116,6 @@ pub(crate) struct DiagramPaint {
     pub max_width: f32,
     pub hover: Color,
     pub hover_neighbours: bool,
-}
-
-/// `t` of the way from `base` toward `hue` in Oklab, at `base`'s alpha: a quiet wash that keeps
-/// `base`'s lightness close in both themes.
-pub(super) fn tint(base: Color, hue: Color, t: f32) -> Color {
-    let [a, b] = [base.to_oklab(), hue.to_oklab()];
-    Color::from_oklab([0, 1, 2, 3].map(|i| if i == 3 { a[3] } else { a[i] + (b[i] - a[i]) * t }))
 }
 
 impl MarkdownStyle {
