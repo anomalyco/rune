@@ -67,7 +67,12 @@ impl<S: 'static> Measurement<'_, S> {
         self.node_index.clear();
         self.node_index.reserve(nodes.len());
         for i in 0..nodes.len() {
-            let id = self.node_id(&nodes[i].path);
+            let id = if nodes[i].id != NodeId(0) {
+                debug_assert_eq!(self.path_ids.get(&nodes[i].path).copied(), Some(nodes[i].id));
+                nodes[i].id
+            } else {
+                self.node_id(&nodes[i].path)
+            };
             nodes[i].id = id;
             self.node_index.insert(id, i);
             let l = taffy.layout(nodes[i].taffy).unwrap();

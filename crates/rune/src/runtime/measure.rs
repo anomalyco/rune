@@ -159,20 +159,31 @@ impl<S: 'static> Measurement<'_, S> {
 
     pub(super) fn finish(mut self, tx: &Tx) -> Measured {
         let mut passes = 0;
-        let (layout, nodes) = loop {
+        let (layout, nodes, memo_pending, memo_reused) = loop {
             passes += 1;
             self.retry = passes > 1;
             self.virtual_culled.clear();
             self.virtual_inputs.clear();
             // Degenerate zero-height runs fall back to a full measurement instead of
             // an unbounded retry loop. Normal transcripts need one pass.
-            let (layout, nodes) = self.measure_view(tx, passes > 8);
-            if !self.measure_virtuals(&nodes, tx.settle) { break (layout, nodes); }
+            let (layout, nodes, pending, reused) = self.measure_view(tx, passes > 8);
+            if !self.measure_virtuals(&nodes, tx.settle) { break (layout, nodes, pending, reused); }
+            self.memo.pending_scratch = pending;
+            self.memo.reused_scratch = reused;
             *self.layout = layout;
         };
         // Exiting virtual subtrees still use their origin and measured extent while
         // fading. Runtime prunes this metadata with the retained scene nodes.
-        Measured { layout, nodes, reduced_motion: self.reduced_motion, time_scale: self.time_scale, caret_read: self.caret_read, layout_reads: self.layout_reads }
+        Measured {
+            layout,
+            nodes,
+            reduced_motion: self.reduced_motion,
+            time_scale: self.time_scale,
+            caret_read: self.caret_read,
+            layout_reads: self.layout_reads,
+            memo_flattened: Some(memo_pending),
+            memo_reused,
+        }
     }
 
     /// `bound` is the most `el` can be tall (see [`crate::virtual_list::height_bound`]); `scroll`
@@ -287,7 +298,7 @@ impl<S: 'static> Measurement<'_, S> {
         }
     }
 
-    fn measure_view(&mut self, tx: &Tx, force_all: bool) -> (TaffyTree<usize>, Vec<Node>) {
+    fn measure_view(&mut self, tx: &Tx, force_all: bool) -> (TaffyTree<usize>, Vec<Node>, Vec<memo_reuse::PendingFlat>, Vec<memo_reuse::ReusedSpan>) {
         let scale = self.env.scale;
         let fresh_cx = |this: &Self| Cx::<S> {
             env: this.env,
@@ -352,13 +363,28 @@ impl<S: 'static> Measurement<'_, S> {
         // Root constraints are part of the retained style, not a dirty write after flattening.
         // A window that fits its content lays the root out at its natural height.
         root.style.size = relayout::root_size(self.viewport, self.fit_height);
-        let root_id = flatten(root, None, "", 0, motion::DEFAULT, RowLayout::Free, true, &mut taffy, &mut nodes, &mut self.layout_entries, scale);
-        if self.committing { release_kept_layouts(self.nodes, &nodes, self.layout_entries, &taffy, self.text); }
+        let (pending, reused, root_id) = {
+            let mut pending = std::mem::take(&mut self.memo.pending_scratch);
+            pending.clear();
+            let mut reused = std::mem::take(&mut self.memo.reused_scratch);
+            reused.clear();
+            let mut memo_ctx = memo_reuse::MemoFlattenCtx {
+                old_nodes: &*self.nodes,
+                old_present_len: self.memo.present_len,
+                committed: &self.memo.flattened,
+                pending,
+                reused,
+            };
+            let root_id = flatten(root, None, "", 0, motion::DEFAULT, RowLayout::Free, true, &mut taffy, &mut nodes, &mut self.layout_entries, scale, &mut memo_ctx);
+            (memo_ctx.pending, memo_ctx.reused, root_id)
+        };
+        if self.committing { release_kept_layouts(self.nodes, &nodes, self.layout_entries, &taffy, self.text, &reused); }
         self.layout_entries.retain(|_, entry| {
             if !entry.used { taffy.remove(entry.id).unwrap(); }
             entry.used
         });
-        self.solve(taffy, root_id, nodes)
+        let (taffy, nodes) = self.solve(taffy, root_id, nodes);
+        (taffy, nodes, pending, reused)
     }
 
     pub(super) fn populate_virtual_children(

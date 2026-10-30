@@ -34,6 +34,7 @@ impl<S: 'static> Runtime<S> {
             self.nodes.push(n);
         }
         self.spare_nodes = old;
+        self.memo.on_prune(&remap);
         self.virtuals.retain(|path, _| self.nodes.iter().any(|n| n.path == *path));
         self.refresh_modal_index();
         self.flying.retain(|(id, _)| self.node_index.contains_key(id));

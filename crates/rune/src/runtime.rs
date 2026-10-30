@@ -242,6 +242,8 @@ use text_layout::*;
 #[path = "runtime/flatten.rs"]
 mod flatten;
 use flatten::*;
+#[path = "runtime/memo_reuse.rs"]
+pub(crate) mod memo_reuse;
 #[path = "runtime/measure.rs"]
 mod measure;
 #[path = "runtime/apply.rs"]
@@ -3018,6 +3020,8 @@ struct Measured {
     time_scale: f32,
     caret_read: bool,
     layout_reads: layout_read::LayoutReads,
+    memo_flattened: Option<Vec<memo_reuse::PendingFlat>>,
+    memo_reused: Vec<memo_reuse::ReusedSpan>,
 }
 
 impl<S: 'static> Runtime<S> {

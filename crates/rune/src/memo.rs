@@ -65,6 +65,8 @@ pub(crate) struct Shared {
     pub(crate) duplicate_keys: bool,
     /// Whether any descendant uses `virtualize` or `virtual_rows`.
     pub(crate) has_virtual: bool,
+    /// Whether every descendant can reuse its flattened `Node` and Taffy subtree across commits.
+    pub(crate) reusable: bool,
 }
 
 impl El {
@@ -75,6 +77,7 @@ impl El {
 
     /// Copies in the children shared with a memo cache, so the element owns all of them.
     pub(crate) fn expand_memo(&mut self) {
+        self.memo_built = None;
         if let Some(shared) = self.memo_children.take() {
             self.has_virtual |= shared.has_virtual;
             let shared = Rc::unwrap_or_clone(shared).children;
@@ -82,6 +85,22 @@ impl El {
             self.children.extend(own);
         }
     }
+}
+
+fn el_flatten_reusable(e: &El) -> bool {
+    e.virtual_estimate.is_none()
+        && e.aspect_fit <= 0.0
+        && e.above.is_none()
+        && e.live.is_empty()
+        && e.input.is_none()
+        && e.modal.is_none()
+        && !(e.scroll.is_some() && e.scroll_axes.x())
+        && e.text.as_ref().is_none_or(|t| !t.redacted && t.live.is_none())
+        && e.vis.pixels.as_ref().is_none_or(|_| {
+            e.style.aspect_ratio.is_some() || (e.style.size.width.is_auto() == e.style.size.height.is_auto())
+        })
+        && e.memo_children.as_ref().is_none_or(|m| m.reusable && !m.duplicate_keys)
+        && e.children.iter().all(el_flatten_reusable)
 }
 
 /// Precomputes `shape` on plain, non-input, non-cased text specs at `scale` while the freshly
@@ -111,14 +130,19 @@ pub(crate) fn has_focused_input(el: &El) -> bool {
 
 /// A built subtree: its root without children (or key, supplied per placeholder), and the
 /// children placeholders share.
-struct Built {
-    root: El,
-    children: Rc<Shared>,
+pub(crate) struct Built {
+    pub(crate) id: u64,
+    pub(crate) reusable: bool,
+    pub(crate) root: El,
+    pub(crate) children: Rc<Shared>,
 }
+
+static NEXT_BUILT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl Built {
     fn new(mut el: El, scale: f32) -> (Rc<Built>, String) {
         let key = el.key.take().unwrap_or_default();
+        el.memo_built = None;
         let shared = if el.children.is_empty() && let Some(shared) = el.memo_children.take() {
             prekey_text_shapes(&mut el, scale);
             shared
@@ -129,18 +153,22 @@ impl Built {
             let focused_input = children.iter().any(has_focused_input);
             let duplicate_keys = crate::key_diagnostics::memo_children_have_duplicates(&el, &children);
             let has_virtual = children.iter().any(|c| c.has_virtual);
-            Rc::new(Shared { children, focused_input, duplicate_keys, has_virtual })
+            let reusable = !duplicate_keys && !has_virtual && children.iter().all(el_flatten_reusable);
+            Rc::new(Shared { children, focused_input, duplicate_keys, has_virtual, reusable })
         };
         el.has_virtual = el.virtual_estimate.is_some();
-        (Rc::new(Built { root: el, children: shared }), key)
+        let reusable = shared.reusable && !shared.duplicate_keys && el_flatten_reusable(&el);
+        let id = NEXT_BUILT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        (Rc::new(Built { id, reusable, root: el, children: shared }), key)
     }
 
     /// The root, with its children shared rather than copied.
-    fn placeholder(&self, key: String) -> El {
+    fn placeholder(self: &Rc<Self>, key: String) -> El {
         let mut el = self.root.clone();
         el.key = Some(key);
         el.has_virtual |= self.children.has_virtual;
         el.memo_children = Some(self.children.clone());
+        el.memo_built = Some(self.clone());
         el
     }
 }
@@ -206,6 +234,10 @@ struct Entry {
 #[derive(Default)]
 pub(crate) struct MemoCache {
     entries: HashMap<Rc<str>, Entry>,
+    pub(crate) flattened: crate::runtime::HashMap<u64, crate::runtime::memo_reuse::FlattenedMemo>,
+    pub(crate) pending_scratch: Vec<crate::runtime::memo_reuse::PendingFlat>,
+    pub(crate) reused_scratch: Vec<crate::runtime::memo_reuse::ReusedSpan>,
+    pub(crate) present_len: usize,
     pass: u64,
     #[cfg(test)]
     pub(crate) builds: usize,
@@ -214,6 +246,8 @@ pub(crate) struct MemoCache {
 impl MemoCache {
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
+        self.flattened.clear();
+        self.present_len = 0;
     }
 
     /// No memos, counting passes on from this cache's, for a build that must start from scratch.
@@ -232,7 +266,12 @@ impl MemoCache {
     pub(crate) fn keep_since(&mut self, since: u64) {
         // A commit that didn't build the view used no memos, and drops none.
         if self.pass < since { return; }
+        let before = self.entries.len();
         self.entries.retain(|_, e| e.pass >= since);
+        if self.entries.len() < before && !self.flattened.is_empty() {
+            let live: crate::runtime::HashSet<u64> = self.entries.values().map(|e| e.built.id).collect();
+            self.flattened.retain(|id, _| live.contains(id));
+        }
     }
 }
 

@@ -16,6 +16,16 @@ impl<T: Empty> Default for Cold<T> {
     fn default() -> Self { Cold(None) }
 }
 
+impl<T: Empty> Cold<T> {
+    pub(crate) fn ptr_eq(a: &Self, b: &Self) -> bool {
+        match (&a.0, &b.0) {
+            (None, None) => true,
+            (Some(x), Some(y)) => Rc::ptr_eq(x, y),
+            _ => false,
+        }
+    }
+}
+
 impl<T: Empty> Deref for Cold<T> {
     type Target = T;
     fn deref(&self) -> &T { self.0.as_deref().unwrap_or(T::EMPTY) }

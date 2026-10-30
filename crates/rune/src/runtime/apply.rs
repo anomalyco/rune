@@ -6,7 +6,7 @@ impl<S: 'static> Runtime<S> {
     /// The mutation phase cannot accept an El or an unfinished measurement pass.
     pub(super) fn apply(&mut self, measured: Measured, tx: &Tx) {
         let _apply_time = crate::frame_profile::Scope::new(crate::frame_profile::Phase::Apply);
-        let Measured { layout: taffy, mut nodes, reduced_motion, time_scale, caret_read, .. } = measured;
+        let Measured { layout: taffy, mut nodes, reduced_motion, time_scale, caret_read, memo_flattened, memo_reused, .. } = measured;
         self.caret_watch = caret_read;
         if reduced_motion != self.reduced_motion {
             self.reduced_motion = reduced_motion;
@@ -709,6 +709,7 @@ impl<S: 'static> Runtime<S> {
             self.time_scaled = time_scales.iter().any(|&k| k != 1.0);
         }
         self.nodes = nodes;
+        self.memo.commit_flattened(&self.nodes, present_len, memo_flattened, memo_reused);
         self.find_app_root();
         self.commit_gen = self.commit_gen.wrapping_add(1);
         self.has_dissolve = self.nodes.iter().any(|n| n.vis.blend == crate::render::Blend::PlusLighter);

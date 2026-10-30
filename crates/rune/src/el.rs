@@ -569,7 +569,7 @@ pub struct El {
     pub(crate) trace_name: Option<&'static str>,
     pub(crate) trace_namespace: Option<(&'static str, &'static str)>,
     #[cfg(debug_assertions)]
-    key_source: Option<&'static std::panic::Location<'static>>,
+    pub(crate) key_source: Option<&'static std::panic::Location<'static>>,
     #[cfg(debug_assertions)]
     pub(crate) scroll_source: Option<&'static std::panic::Location<'static>>,
     #[cfg(debug_assertions)]
@@ -583,6 +583,9 @@ pub struct El {
     pub(crate) children: Vec<El>,
     /// Children a [`memo`](crate::memo) shares with its cache, before `children`.
     pub(crate) memo_children: Option<Rc<crate::memo::Shared>>,
+    /// The cached [`memo`](crate::memo) subtree this placeholder came from, cleared if expanded or
+    /// given extra children.
+    pub(crate) memo_built: Option<Rc<crate::memo::Built>>,
     /// Whether this element or anything under it uses `virtualize` or `virtual_rows`.
     pub(crate) has_virtual: bool,
     pub(crate) on_press: Option<PressFn>,
@@ -681,6 +684,7 @@ fn base(dir: FlexDirection) -> El {
         text: None,
         children: Vec::new(),
         memo_children: None,
+        memo_built: None,
         has_virtual: false,
         on_press: None,
         on_double_press: None,
@@ -1310,11 +1314,13 @@ impl El {
         e
     }
     pub fn child(mut self, child: El) -> Self {
+        self.memo_built = None;
         self.has_virtual |= child.has_virtual;
         self.children.push(child);
         self
     }
     pub fn children(mut self, children: impl IntoIterator<Item = El>) -> Self {
+        self.memo_built = None;
         let start = self.children.len();
         self.children.extend(children);
         self.has_virtual |= self.children[start..].iter().any(|c| c.has_virtual);

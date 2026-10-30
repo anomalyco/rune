@@ -101,7 +101,16 @@ impl<S: 'static> Measurement<'_, S> {
         }
         // The mounted rows are the ones shown, so none was culled.
         self.virtual_culled.clear();
-        Some(Measured { layout, nodes, reduced_motion: self.reduced_motion, time_scale: self.time_scale, caret_read: self.caret_read, layout_reads: self.layout_reads })
+        Some(Measured {
+            layout,
+            nodes,
+            reduced_motion: self.reduced_motion,
+            time_scale: self.time_scale,
+            caret_read: self.caret_read,
+            layout_reads: self.layout_reads,
+            memo_flattened: None,
+            memo_reused: Vec::new(),
+        })
     }
 
     /// Anchors each virtual list's reader to the first row in view, as a commit's window pass

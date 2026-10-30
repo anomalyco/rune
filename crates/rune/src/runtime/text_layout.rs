@@ -209,8 +209,39 @@ pub(super) fn truncated(text: &mut TextSystem, spec: &TextSpec, scale: f32, max_
 /// width change re-breaks it in place rather than copying it. Nodes that leave keep theirs to
 /// draw their exit. A text that was edited (typed into, streamed onto) tells the cache its old
 /// version's layouts are done; one replaced by unrelated text may be shown again.
-pub(super) fn release_kept_layouts(old: &mut [Node], nodes: &[Node], entries: &HashMap<String, LayoutEntry>, taffy: &TaffyTree<usize>, text: &mut TextSystem) {
-    for o in old.iter_mut() {
+pub(super) fn release_kept_layouts(
+    old: &mut [Node],
+    nodes: &[Node],
+    entries: &HashMap<String, LayoutEntry>,
+    taffy: &TaffyTree<usize>,
+    text: &mut TextSystem,
+    reused: &[memo_reuse::ReusedSpan],
+) {
+    let mut sorted_buf: Vec<(usize, usize)> = Vec::new();
+    let ordered = reused.windows(2).all(|w| w[0].old_start <= w[1].old_start);
+    if !ordered {
+        sorted_buf.extend(reused.iter().map(|s| (s.old_start, s.len)));
+        sorted_buf.sort_unstable_by_key(|s| s.0);
+    }
+    let span_len = if ordered { reused.len() } else { sorted_buf.len() };
+    let span_at = |k: usize| if ordered { (reused[k].old_start, reused[k].len) } else { sorted_buf[k] };
+    let mut ri = 0usize;
+    let mut oi = 0usize;
+    while oi < old.len() {
+        while ri < span_len && { let (s, l) = span_at(ri); s + l <= oi } {
+            ri += 1;
+        }
+        if ri < span_len && { let (s, l) = span_at(ri); oi >= s && oi < s + l } {
+            let (start, len) = span_at(ri);
+            let end = (start + len).min(old.len());
+            for o in &mut old[oi..end] {
+                o.text_layout = None;
+            }
+            oi = end;
+            continue;
+        }
+        let o = &mut old[oi];
+        oi += 1;
         let (Some(was), Some(e)) = (o.text.as_deref(), entries.get(&o.path).filter(|e| e.used)) else { continue };
         o.text_layout = None;
         let now = taffy.get_node_context(e.id).and_then(|&i| nodes.get(i)).filter(|n| n.path == o.path).and_then(|n| n.text.as_deref());
