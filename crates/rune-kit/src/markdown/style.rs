@@ -373,9 +373,10 @@ impl MarkdownStyle {
         self.diagram.max_width = points.max(120.0);
         self
     }
-    /// What lights up while the pointer is over a flowchart or state diagram node: its edges in
-    /// `color` (the text colour by default; transparent turns it off), and with `neighbours` its
-    /// outline and the outlines of the nodes they reach.
+    /// What lights up while the pointer is over a flowchart or state diagram node: its edges and
+    /// their labels in `color` (the text colour by default; transparent turns it off), and with
+    /// `neighbours` its outline and the outlines of the nodes they reach. Pointing at an edge or
+    /// its label lights that edge and its label.
     pub fn diagram_hover(mut self, color: Color, neighbours: bool) -> Self {
         self.diagram.hover = color;
         self.diagram.hover_neighbours = neighbours;

@@ -43,17 +43,21 @@ fn pen(e: &Edge, paint: &DiagramStyle) -> (Color, f32) {
 }
 
 /// Every edge routed through `ctx`, with its label in a gap in the line (on a pill of `backs[i]`
-/// where it would cover a subgraph's border); each edge's drawing is kept as a trace so hovering
-/// either node lights it up.
+/// where it would cover a subgraph's border); each edge's drawing and label are kept as a trace
+/// so hovering either node, the edge or its label lights them up.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn edges(c: &mut Canvas, ctx: &Ctx, edges: &[Edge], labels: &[Option<Measured>], backs: &[Color], flip: bool, font: TextStyle, paint: &DiagramStyle) {
     for (i, e) in edges.iter().enumerate() {
         let start = c.ops.len();
         let (color, _) = pen(e, paint);
+        let back = backs.get(i).copied().unwrap_or(paint.surface);
+        let mut lit_label = None;
         if ctx.placed.paths[i].len() <= 1 {
             let s = labels[i].as_ref().map_or(0.0, |m| label_box(m)[0]);
             let at = self_loop(c, e, ctx.screen(ctx.placed.centers[e.from]), ctx.sizes[e.from], paint);
             if let Some(m) = &labels[i] {
+                let b = label_box(m);
+                lit_label = Some((c.labels.len(), [at[0], at[1] - b[1] / 2.0, at[0] + b[0], at[1] + b[1] / 2.0], back));
                 c.label(m, [at[0] + s / 2.0, at[1]], font, paint.text, Align::Center);
             }
         } else {
@@ -67,12 +71,15 @@ pub(crate) fn edges(c: &mut Canvas, ctx: &Ctx, edges: &[Edge], labels: &[Option<
             if let (Some(m), Some(at), Some(g)) = (&labels[i], r.label, gap) {
                 // A label left on a subgraph's border hides it, as the line does around it.
                 if ctx.on_border(g) {
-                    c.fill(rounded_rect(g[0], g[1], g[2], g[3], 4.0), backs.get(i).copied().unwrap_or(paint.surface));
+                    c.fill(rounded_rect(g[0], g[1], g[2], g[3], 4.0), back);
                 }
+                lit_label = Some((c.labels.len(), g, back));
                 c.label(m, at, font, paint.text, Align::Center);
             }
         }
-        c.trace(e.from, e.to, start, color);
+        // A label with no text draws nothing, so nothing lights.
+        let lit_label = lit_label.filter(|l| l.0 < c.labels.len());
+        c.trace(e.from, e.to, start, color, lit_label);
     }
 }
 

@@ -125,7 +125,8 @@ pub fn render(src: &str, style: &DiagramStyle) -> Option<El> {
 }
 
 /// [`render`], with `hover` lighting up in `color` while the pointer is over a flowchart, state
-/// or class diagram node.
+/// or class diagram node; an edge, or its label, lights itself and its label whatever `hover` is
+/// short of [`Hover::Off`].
 pub fn render_with_hover(src: &str, style: &DiagramStyle, hover: Hover, color: Color) -> Option<El> {
     let hover = (hover != Hover::Off).then_some((hover, color));
     let mut h = std::collections::hash_map::DefaultHasher::new();

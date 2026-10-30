@@ -3,7 +3,7 @@
 use rune::{Align, Color, El, LineCap, Shape, TextStyle, canvas, col, el, text};
 
 use crate::DiagramStyle;
-use crate::hover::{Hover, Trace};
+use crate::hover::{Hover, Spot, Trace};
 
 /// The card's padding on each side.
 pub(crate) const CARD_PAD: f32 = 16.0;
@@ -161,9 +161,10 @@ impl Canvas {
 
     /// Draws `other` over this.
     pub(crate) fn append(&mut self, other: Canvas) {
+        let shift = self.labels.len();
         self.ops.extend(other.ops);
         self.labels.extend(other.labels);
-        self.traces.extend(other.traces);
+        self.traces.extend(other.traces.into_iter().map(|t| Trace { label: t.label.map(|(i, g)| (i + shift, g)), ..t }));
     }
 
     /// The bounding box of everything drawn: `[x0, y0, x1, y1]`.
@@ -216,7 +217,8 @@ impl Canvas {
             })
             .collect();
         let size = [(b[2] - b[0]) * scale + 2.0 * pad, (b[3] - b[1]) * scale + 2.0 * pad];
-        Some(Scene { title: None, size, shape, labels, hovers })
+        let lit = self.hover.map_or(Color::TRANSPARENT, |h| h.1);
+        Some(Scene { title: None, size, shape, labels, hovers, lit })
     }
 }
 
@@ -225,9 +227,11 @@ pub(crate) struct Scene {
     pub(crate) title: Option<String>,
     pub(crate) size: [f32; 2],
     shape: Shape,
-    labels: Vec<Label>,
-    /// Per hoverable node: its index, where it is (`[x, y, w, h]`) and what lights up.
-    hovers: Vec<(usize, [f32; 4], Shape)>,
+    pub(crate) labels: Vec<Label>,
+    /// The hover groups over edges, edge labels and nodes, and what each lights up.
+    pub(crate) hovers: Vec<Spot>,
+    /// The hover colour.
+    lit: Color,
 }
 
 impl Scene {
@@ -241,23 +245,24 @@ impl Scene {
     pub(crate) fn el(&self, paint: &DiagramStyle) -> El {
         let [w, h] = self.size;
         let mut body = el().key("diagram").size(w, h).child(canvas(self.shape.clone()).key("shape").absolute(0.0, 0.0).size(w, h));
-        for (v, r, lit) in &self.hovers {
-            let glow = canvas(lit.clone()).absolute(-r[0], -r[1]).size(w, h).group_opacity(0.0, 1.0);
-            body = body.child(el().key(format!("node{v}")).absolute(r[0], r[1]).size(r[2], r[3]).hover_group().child(glow));
-        }
-        for (i, l) in self.labels.iter().enumerate() {
+        let label = |l: &Label, color: Color, at: [f32; 2]| {
             // A point of slack so rounding never breaks a measured line.
-            let mut t = text(l.text.clone())
-                .key(format!("t{i}"))
-                .font(l.font)
-                .color(l.color)
-                .align(l.align)
-                .w(l.size[0] + 2.0)
-                .absolute(l.at[0] - 1.0, l.at[1]);
-            if l.wrap {
-                t = t.wrap();
+            let t = text(l.text.clone()).font(l.font).color(color).align(l.align).w(l.size[0] + 2.0).absolute(at[0] - 1.0, at[1]);
+            if l.wrap { t.wrap() } else { t }
+        };
+        for (i, l) in self.labels.iter().enumerate() {
+            body = body.child(label(l, l.color, l.at).key(format!("t{i}")));
+        }
+        // Over the labels, so a lit label's backing covers the one it lights.
+        for s in &self.hovers {
+            let r = s.rect;
+            let mut glow = el().absolute(-r[0], -r[1]).size(w, h).group_opacity(0.0, 1.0).child(canvas(s.lit.clone()).key("lit").absolute(0.0, 0.0).size(w, h));
+            for &i in &s.labels {
+                if let Some(l) = self.labels.get(i) {
+                    glow = glow.child(label(l, self.lit, l.at).key(format!("t{i}")));
+                }
             }
-            body = body.child(t);
+            body = body.child(el().key(s.key.clone()).absolute(r[0], r[1]).size(r[2], r[3]).hover_group().child(glow));
         }
         let mut card = col()
             .w_full()

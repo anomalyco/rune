@@ -224,6 +224,23 @@ pub(super) fn markdown_mermaid_flows(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     col().w(560.0).child(Markdown::new(FLOWS).style(style).build(k))
 }
 
+/// A state diagram for hover: pointing at an edge or its label lights both.
+const HOVER: &str = r#"```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Loading : fetch
+    Loading --> Ready : 200 OK
+    Loading --> Failed : error
+    Failed --> Loading : retry
+    Ready --> [*]
+```
+"#;
+
+pub(super) fn markdown_mermaid_hover(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let style = MarkdownStyle::from_kit(k).diagram_max_width(560.0);
+    col().w(560.0).child(Markdown::new(HOVER).style(style).build(k))
+}
+
 /// A table without an outline, with a dimmed header and figures that line up, and a diff whose
 /// line text is tinted too.
 const TABLE_STYLES: &str = "| Field | Compared |\n|---|---|\n| title | yes |\n| updatedAt | yes |\n| draft cursor | no |\n\n| Build | Files | Time | Size |\n|:--|--:|--:|--:|\n| debug | 1,204 | 41.8 s | 118.4 MB |\n| release | 1,204 | 71.0 s | 31.1 MB |\n| perf | 1,211 | 69.6 s | 33.7 MB |\n\n```diff\n@@ -3,3 +3,3 @@ fields:\n   title: compared\n-  draft: compared\n+  draft: ignored\n```\n";
