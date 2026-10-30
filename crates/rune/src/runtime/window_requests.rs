@@ -46,7 +46,7 @@ impl<S: 'static> Runtime<S> {
     pub fn content_height(&mut self) -> f32 {
         let measured = self.measure_pass(&Tx::default(), false);
         let height = measured.nodes.first().map_or(self.viewport.1, |root| root.local.h);
-        self.layout = measured.layout;
+        self.discard_measured(measured);
         height.ceil_to(self.env.scale).max(1.0)
     }
 

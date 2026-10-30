@@ -40,6 +40,8 @@ impl Card {
         self
     }
 
+    /// The root is unkeyed. Its inner keys (`rule`, `body`, ...) are scoped under it, so sibling
+    /// cards never collide; key the result (`.build(k).key(id)`) when cards can reorder.
     pub fn build(self, k: &Kit) -> El {
         let c = &k.c;
         let accent = self.accent.unwrap_or(c.icon_base);

@@ -329,7 +329,7 @@ impl<S: 'static> Runtime<S> {
                 settled = true;
                 break;
             }
-            self.layout = measured.layout;
+            self.discard_measured(measured);
             measured = self.measure(tx);
         }
         if !settled { self.layout_moved(Some(std::mem::take(&mut measured.layout_reads)), Some(&measured.nodes), true); }
@@ -389,7 +389,7 @@ impl<S: 'static> Runtime<S> {
         let mut fired = HashMap::with_capacity_and_hasher(last.len(), Default::default());
         for i in 0..self.nodes.len() {
             let n = &self.nodes[i];
-            if n.on_drawn_layout.is_none() || self.subtree_exiting(i) { continue; }
+            if n.handlers.get().is_none_or(|h| h.on_drawn_layout.is_none()) || self.subtree_exiting(i) { continue; }
             let Some(&drawn) = self.drawn.get(i) else { continue };
             let id = n.id;
             if self.rect_springing(i) {
@@ -442,7 +442,7 @@ impl<S: 'static> Runtime<S> {
         let mut queued = false;
         for i in 0..self.nodes.len() {
             let n = &self.nodes[i];
-            if (if screen { n.on_screen_layout.is_none() } else { n.on_layout.is_none() }) || self.subtree_exiting(i) { continue; }
+            if n.handlers.get().is_none_or(|h| if screen { h.on_screen_layout.is_none() } else { h.on_layout.is_none() }) || self.subtree_exiting(i) { continue; }
             let id = n.id;
             let [x, y, w, h] = self.laid_out(&self.nodes, i);
             let r = [x + ox, y + oy, w, h];

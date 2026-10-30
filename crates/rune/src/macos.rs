@@ -150,15 +150,9 @@ pub(crate) fn set_window_frame(window: &winit::window::Window, [x, y, w, h]: [f3
 /// window frame change and the frame drawn for it reach the screen together. Costs a
 /// wait for the GPU to schedule each frame, so it is on only while a frame moves.
 pub(crate) fn present_with_transaction(surface: &wgpu::Surface, on: bool) {
-    use objc2::runtime::{AnyObject, Bool};
+    use objc2_video::runtime::Bool;
     // SAFETY: a live CAMetalLayer, on the main thread, between frames.
-    unsafe {
-        let Some(hal) = surface.as_hal::<wgpu::hal::api::Metal>() else { return };
-        let layer = hal.render_layer().lock();
-        // wgpu's objc2 may be another version than ours; the object is the same.
-        let layer = &*std::ptr::from_ref(&**layer).cast::<AnyObject>();
-        let _: () = msg_send![layer, setPresentsWithTransaction: Bool::new(on)];
-    }
+    crate::gpu::with_layer(surface, |layer| unsafe { let _: () = objc2_video::msg_send![layer, setPresentsWithTransaction: Bool::new(on)]; });
 }
 
 /// Whether the user is dragging the window's edge.
@@ -190,16 +184,13 @@ pub(crate) fn pin_contents_top_left(surface: &wgpu::Surface) {
     use objc2::runtime::{AnyObject, Bool};
     use objc2_core_graphics::{CGColorSpace, kCGColorSpaceSRGB};
     // SAFETY: a live CAMetalLayer, on the main thread, under wgpu's lock.
-    unsafe {
-        let Some(hal) = surface.as_hal::<wgpu::hal::api::Metal>() else { return };
-        let layer = hal.render_layer().lock();
-        let layer = &*std::ptr::from_ref(&**layer).cast::<AnyObject>();
+    crate::gpu::with_layer(surface, |video_layer| unsafe {
+        let layer = &*std::ptr::from_ref(video_layer).cast::<AnyObject>();
         let flipped: Bool = msg_send![layer, contentsAreFlipped];
         let _: () = msg_send![layer, setContentsGravity: top_left_gravity(flipped.as_bool())];
         let Some(srgb) = CGColorSpace::with_name(Some(kCGColorSpaceSRGB)) else { return };
-        let layer = &*std::ptr::from_ref(layer).cast::<objc2_video::runtime::AnyObject>();
-        let _: () = objc2_video::msg_send![layer, setColorspace: &*srgb];
-    }
+        let _: () = objc2_video::msg_send![video_layer, setColorspace: &*srgb];
+    });
 }
 
 pub(crate) fn display_bounds(id: u32) -> [f64; 4] {
@@ -416,12 +407,8 @@ pub(crate) fn window_occluded(window: &winit::window::Window) -> bool {
 /// occlusion state is checked before `nextDrawable`. Asking wgpu anyway costs a texture id that
 /// wgpu-core 30.0.1 never frees, so `acquire` asks this first.
 pub(crate) fn surface_occluded(surface: &wgpu::Surface<'_>) -> bool {
-    // SAFETY: only reads the layer wgpu presents into, under wgpu's own lock.
-    let Some(hal) = (unsafe { surface.as_hal::<wgpu::hal::api::Metal>() }) else { return false };
-    let layer = hal.render_layer().lock();
-    let layer = objc2_video::rc::Retained::as_ptr(&*layer).cast::<objc2_video::runtime::AnyObject>();
-    // SAFETY: a live CAMetalLayer, retained by the surface while the lock is held.
-    unsafe { layer_occluded(&*layer) }
+    // SAFETY: only reads the layer wgpu presents into, a CALayer, under wgpu's own lock.
+    crate::gpu::with_layer(surface, |layer| unsafe { layer_occluded(layer) }).unwrap_or(false)
 }
 
 /// `surface_occluded` for a layer: the same walk as wgpu-hal's `hosting_window`.
@@ -488,11 +475,10 @@ pub(crate) struct PresumeShown {
 impl PresumeShown {
     /// `None` off Metal.
     pub(crate) fn new(surface: &wgpu::Surface<'_>) -> Option<PresumeShown> {
-        use objc2_video::{ClassType, msg_send, rc::Retained, runtime::AnyObject};
-        // SAFETY: the layer is retained here and the lock released, so wgpu can take it to acquire.
-        let layer = unsafe { surface.as_hal::<wgpu::hal::api::Metal>() }?.render_layer().lock().clone();
-        // SAFETY: a CAMetalLayer is an object; only messages every CALayer answers are sent to it.
-        let layer: Retained<AnyObject> = unsafe { Retained::cast_unchecked(layer) };
+        use objc2_video::{ClassType, Message, msg_send, rc::Retained, runtime::AnyObject};
+        // The layer is retained here and the lock released, so wgpu can take it to acquire. Only
+        // messages every CALayer answers are sent to it.
+        let layer: Retained<AnyObject> = crate::gpu::with_layer(surface, |layer| layer.retain())?;
         // SAFETY: CALayer delegate reads and writes on the main thread (window creation).
         unsafe {
             let previous: Option<Retained<AnyObject>> = msg_send![&*layer, delegate];

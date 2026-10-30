@@ -22,7 +22,7 @@ impl El {
     /// moves or resizes by more than half a point. Never per animation frame: the rect is where
     /// layout puts the element, not where its spring is on the way there.
     pub fn on_layout<S: 'static>(mut self, f: impl Fn(&mut S, [f32; 4]) + 'static) -> Self {
-        self.on_layout = Some(Rc::new(move |s, r| f(downcast::<S>(s), r)));
+        self.handlers.on_layout = Some(Rc::new(move |s, r| f(downcast::<S>(s), r)));
         self
     }
     /// [`El::on_layout`] in global screen points: `[x, y, w, h]` from the top-left of the
@@ -35,7 +35,7 @@ impl El {
     /// share a scale; on Wayland, which hides window positions, the origin reads `(0, 0)`.
     /// Headless runs place windows on the script's virtual desktop.
     pub fn on_screen_layout<S: 'static>(mut self, f: impl Fn(&mut S, [f32; 4]) + 'static) -> Self {
-        self.on_screen_layout = Some(Rc::new(move |s, r| f(downcast::<S>(s), r)));
+        self.handlers.on_screen_layout = Some(Rc::new(move |s, r| f(downcast::<S>(s), r)));
         self
     }
     /// [`El::on_layout`] as drawn: `[x, y, w, h]` in window points where this frame put the
@@ -50,7 +50,7 @@ impl El {
     /// report is a state change, so the view runs again, unless the handler says
     /// [`Tx::live_only`] (see [`El::on_drawn_layout_tx`]).
     pub fn on_drawn_layout<S: 'static>(mut self, f: impl Fn(&mut S, [f32; 4]) + 'static) -> Self {
-        self.on_drawn_layout = Some(Rc::new(move |s, r, _| f(downcast::<S>(s), r)));
+        self.handlers.on_drawn_layout = Some(Rc::new(move |s, r, _| f(downcast::<S>(s), r)));
         self
     }
     /// [`El::on_drawn_layout`] with a [`Tx`]. A toolbar that floats over a selection by its own
@@ -64,7 +64,7 @@ impl El {
     /// })
     /// ```
     pub fn on_drawn_layout_tx<S: 'static>(mut self, f: impl Fn(&mut S, [f32; 4], &mut Tx) + 'static) -> Self {
-        self.on_drawn_layout = Some(Rc::new(move |s, r, tx| f(downcast::<S>(s), r, tx)));
+        self.handlers.on_drawn_layout = Some(Rc::new(move |s, r, tx| f(downcast::<S>(s), r, tx)));
         self
     }
     /// On a scroll viewport: called with where it's scrolled to once it's first laid out, then in
@@ -79,7 +79,7 @@ impl El {
     /// col().scroll(ScrollSpec::default()).on_scroll_offset(move |at: ScrollPos| k.set(1.0 - (at.offset[1] / 80.0).clamp(0.0, 1.0) * 0.4))
     /// ```
     pub fn on_scroll_offset(mut self, f: impl Fn(ScrollPos) + 'static) -> Self {
-        self.on_scroll_offset = Some(Rc::new(f));
+        self.handlers.on_scroll_offset = Some(Rc::new(f));
         self
     }
 }

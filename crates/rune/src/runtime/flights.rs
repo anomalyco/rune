@@ -74,10 +74,10 @@ impl<S: 'static> Runtime<S> {
     /// left the tree hands its geometry, radius, fill and opacity to the element with its id that
     /// just mounted. Costs nothing without matched elements; else O(matched), plus one pass over
     /// the old nodes when a pair matches.
-    pub(super) fn match_elements(&mut self, nodes: &[Node], arrivals: Vec<(Rc<str>, usize, bool)>, tx: &Tx, instant: bool) {
+    pub(super) fn match_elements(&mut self, nodes: &[Node], arrivals: &[(Rc<str>, usize, bool)], tx: &Tx, instant: bool) {
         let mut by_id: HashMap<Rc<str>, (usize, bool)> = HashMap::with_capacity_and_hasher(arrivals.len(), Default::default());
         for (key, i, arriving) in arrivals {
-            if by_id.insert(key.clone(), (i, arriving)).is_some() { self.warn_duplicate_match(&key); }
+            if by_id.insert(key.clone(), (*i, *arriving)).is_some() { self.warn_duplicate_match(key); }
         }
         let mut current: Vec<(Rc<str>, NodeId)> = by_id.iter().map(|(key, &(i, _))| (key.clone(), nodes[i].id)).collect();
         current.sort_unstable_by_key(|(key, _)| by_id[key].0);

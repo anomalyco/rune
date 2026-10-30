@@ -32,7 +32,10 @@ impl El {
     /// (`El::group_opacity`, `El::blur`, `El::cache`) the backdrop is what that layer has drawn
     /// so far, as in CSS.
     pub fn backdrop_blur(mut self, sigma: f32) -> Self {
-        self.vis.backdrop_blur = if sigma.is_finite() { sigma.max(0.0) } else { 0.0 };
+        let s = if sigma.is_finite() { sigma.max(0.0) } else { 0.0 };
+        if s != 0.0 || !self.vis.cold.is_empty() {
+            self.vis.cold_mut().backdrop_blur = s;
+        }
         self
     }
 }

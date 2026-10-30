@@ -116,6 +116,8 @@ pub(crate) struct A11y {
 }
 
 pub(crate) use crate::el_focus::FocusSpec;
+pub(crate) use crate::el_handlers::Handlers;
+pub use crate::el_visual::{Visual, VisualCold};
 
 #[derive(Clone)]
 pub(crate) struct ModalSpec {
@@ -318,150 +320,6 @@ pub use rune_motion::Cycle;
 /// Default `truncate_fade` edge, in ems.
 const TRUNCATE_FADE_EM: f32 = 1.5;
 
-#[derive(Clone, Debug)]
-pub struct Visual {
-    /// Rectangular native input region for overlays using `OverlayInput::Regions`.
-    pub hit: bool,
-    pub surface: Option<(crate::NativeSurface, crate::SurfaceFit)>,
-    pub fill: Color,
-    pub radius: [f32; 4],
-    /// Corners follow Apple's continuous curve instead of circular arcs (`El::continuous_corners`).
-    pub continuous_corners: bool,
-    pub border_width: f32,
-    pub border: Color,
-    /// Bottom colour of a vertical border gradient whose top is `border` (`El::border_gradient`).
-    pub border_bottom: Option<Color>,
-    /// Dash and gap lengths of a dashed border, in points (`El::border_dash`).
-    pub border_dash: Option<[f32; 2]>,
-    /// Points into the dash pattern where it starts (`El::border_dash_phase`).
-    pub border_dash_phase: f32,
-    pub shadows: Vec<Shadow>,
-    pub opacity: f32,
-    pub blur: f32,
-    pub blur_motion: Option<Box<Anim>>,
-    /// Static alpha of this element's own paint; never inherited or isolated.
-    pub paint_alpha: f32,
-    pub blend: crate::render::Blend,
-    pub hover: Color,
-    pub press: Color,
-    /// Soft clip of children to this rect: fade widths left, top, right, bottom.
-    pub clip: Option<[f32; 4]>,
-    /// Rounded clip of this element and its subtree, applied after subtree filters.
-    pub clip_radius: Option<f32>,
-    /// Per-corner clip radii override (`[tl, tr, br, bl]`, in points).
-    pub(crate) clip_corners: Option<[f32; 4]>,
-    pub icon: Option<(&'static Icon, Color)>,
-    /// Vertical linear gradient (top, bottom) painted over the fill, under hover/press overlays.
-    pub gradient: Option<Box<[Color; 2]>>,
-    /// Radial or angled linear gradient painted over the fill, under hover/press overlays.
-    pub(crate) radial: Option<Box<RadialGradient>>,
-    pub outline: Option<Outline>,
-    /// Vector strokes and fills in the element's own points, over the fill.
-    pub shape: Option<Rc<Shape>>,
-    /// An RGBA image scaled into the element's rect, over the fill and shape.
-    pub pixels: Option<crate::pixels::Pixels>,
-    /// How `pixels` keeps its aspect ratio; `None` stretches it to the rect.
-    pub pixels_fit: Option<crate::SurfaceFit>,
-    /// App-defined tag a compositor reads per instance (`Runtime::marks`); 0 inherits the parent's.
-    pub mark: u32,
-    /// An effect slot (`El::effect`): `(bleed_pt, needs_backdrop)`.
-    pub(crate) effect: Option<(f32, bool)>,
-    /// Backdrop blur standard deviation in points (`El::backdrop_blur`); 0 is off.
-    pub(crate) backdrop_blur: f32,
-    /// Tracks hover for its descendants' `group_*` styles even without a hover colour. Any
-    /// element with a hover colour is a group too.
-    pub hover_group: bool,
-    /// The hover track's enter and exit curves (default: snappy spring both ways).
-    pub hover_motion: Option<Rc<(Anim, Anim)>>,
-    /// Hover curves for this element and the hover tracks below it without their own.
-    pub(crate) hover_within: Option<Rc<(Anim, Anim)>>,
-    /// Opacity factor (rest, hovered) following the nearest ancestor group's hover.
-    pub group_opacity: Option<[f32; 2]>,
-    /// Text or icon colour while the nearest ancestor group is hovered.
-    pub group_color: Option<Color>,
-    /// `El::icon_rotation`: the icon's turn in radians, clockwise.
-    pub(crate) icon_turn: f32,
-    /// Rasterize this subtree once into an offscreen texture when settled (`El::cache`).
-    pub(crate) cache: bool,
-    /// Optional app-supplied key mixed into the cached subtree's signature (`El::cache_key`).
-    pub(crate) cache_key: Option<u64>,
-    /// `El::offset`: a visual shift in points, and the curve it moves on.
-    pub(crate) offset: [f32; 2],
-    pub(crate) offset_motion: Option<Box<Anim>>,
-    /// `El::raise`: paints and takes input above the rest of the window.
-    pub(crate) raise: bool,
-    /// `El::pixel_snap(false)`: this subtree paints at its exact fractional rects.
-    pub(crate) no_pixel_snap: bool,
-    /// The curve `El::scale` changes on.
-    pub(crate) scale_motion: Option<Box<Anim>>,
-    /// `El::origin`: the unit point scale and rotation pivot about; `None` is the centre.
-    pub(crate) origin: Option<[f32; 2]>,
-    /// `El::rotate`, in radians clockwise.
-    pub(crate) rotate: f32,
-    /// The curve `El::rotate` changes on.
-    pub(crate) rotate_motion: Option<Box<Anim>>,
-    /// `El::child_exit`: how children removed in a commit leave, in place of their own.
-    pub(crate) child_exit: Option<Box<Transition>>,
-    /// `El::ride_trailing`: x holds against the parent's trailing edge while its width moves.
-    pub(crate) ride_trailing: bool,
-}
-
-impl Default for Visual {
-    fn default() -> Self {
-        Visual {
-            hit: false,
-            surface: None,
-            fill: Color::TRANSPARENT,
-            radius: [0.0; 4],
-            continuous_corners: false,
-            border_width: 0.0,
-            border: Color::TRANSPARENT,
-            border_bottom: None,
-            border_dash: None,
-            border_dash_phase: 0.0,
-            shadows: Vec::new(),
-            opacity: 1.0,
-            blur: 0.0,
-            blur_motion: None,
-            paint_alpha: 1.0,
-            blend: crate::render::Blend::SourceOver,
-            hover: Color::TRANSPARENT,
-            press: Color::TRANSPARENT,
-            clip: None,
-            clip_radius: None,
-            clip_corners: None,
-            icon: None,
-            gradient: None,
-            radial: None,
-            outline: None,
-            shape: None,
-            pixels: None,
-            pixels_fit: None,
-            mark: 0,
-            effect: None,
-            backdrop_blur: 0.0,
-            hover_group: false,
-            hover_motion: None,
-            hover_within: None,
-            group_opacity: None,
-            group_color: None,
-            icon_turn: 0.0,
-            cache: false,
-            cache_key: None,
-            offset: [0.0; 2],
-            offset_motion: None,
-            raise: false,
-            no_pixel_snap: false,
-            scale_motion: None,
-            origin: None,
-            rotate: 0.0,
-            rotate_motion: None,
-            child_exit: None,
-            ride_trailing: false,
-        }
-    }
-}
-
 /// A root paste handler; `rich` is true only for [`El::on_paste_content`], so a plain
 /// [`El::on_paste`] never asks the OS clipboard for HTML or RTF.
 #[derive(Clone)]
@@ -561,10 +419,8 @@ pub(crate) type WindowFocusFn = Rc<dyn Fn(crate::states::States<'_>, bool, &mut 
 
 #[derive(Clone)]
 pub struct El {
-    pub(crate) on_paste: Option<PasteFn>,
-    pub(crate) on_window_focus: Option<WindowFocusFn>,
     pub(crate) focus: crate::cold::Cold<FocusSpec>,
-    pub(crate) modal: Option<ModalSpec>,
+    pub(crate) handlers: crate::cold::Cold<Handlers>,
     pub(crate) looping: Option<Box<rune_motion::LoopSpec>>,
     pub(crate) key: Option<String>,
     pub(crate) trace_name: Option<&'static str>,
@@ -589,23 +445,7 @@ pub struct El {
     pub(crate) memo_built: Option<Rc<crate::memo::Built>>,
     /// Whether this element or anything under it uses `virtualize` or `virtual_rows`.
     pub(crate) has_virtual: bool,
-    pub(crate) on_press: Option<PressFn>,
-    pub(crate) on_double_press: Option<PressFn>,
-    pub(crate) on_secondary_press: Option<PointerFn>,
-    pub(crate) on_hover: Option<PressFn>,
-    pub(crate) on_hover_change: Option<WindowFocusFn>,
-    /// Seconds the pointer must stay inside, then outside, before `on_hover_change` hears it.
-    pub(crate) hover_delay: [f32; 2],
-    pub(crate) on_pointer_move: Option<PointerFn>,
-    /// `on_wheel`, `on_magnify` and the other canvas handlers (`canvas_input.rs`).
-    pub(crate) gestures: Option<Box<crate::canvas_input::CanvasInput>>,
     pub(crate) above: Option<Anchor>,
-    pub(crate) on_drag: Option<DragFn>,
-    pub(crate) drag_out: Option<DragOutFn>,
-    pub(crate) drag_threshold: Option<f32>,
-    pub(crate) on_drag_start: Option<PressFn>,
-    pub(crate) on_drag_end: Option<DragEndFn>,
-    pub(crate) drop: Option<Box<DropSpec>>,
     pub(crate) motion: Option<Spring>,
     pub(crate) opacity_motion: Option<Box<Anim>>,
     pub(crate) lead: Option<(Spring, Spring)>,
@@ -616,13 +456,6 @@ pub struct El {
     pub(crate) matched: Option<Rc<str>>,
     pub(crate) scroll: Option<ScrollSpec>,
     pub(crate) scroll_axes: ScrollAxes,
-    pub(crate) on_at_bottom: Option<AtBottomFn>,
-    pub(crate) on_far_from_bottom: Option<(f32, AtBottomFn)>,
-    pub(crate) on_visible_rows: Option<VisibleRowsFn>,
-    pub(crate) on_layout: Option<LayoutFn>,
-    pub(crate) on_screen_layout: Option<LayoutFn>,
-    pub(crate) on_drawn_layout: Option<DrawnLayoutFn>,
-    pub(crate) on_scroll_offset: Option<ScrollOffsetFn>,
     pub(crate) sticky: Option<Box<Sticky>>,
     pub(crate) scroll_edges: ScrollEdges,
     pub(crate) growth: Option<Box<GrowthSpec>>,
@@ -636,11 +469,9 @@ pub struct El {
     pub(crate) whole: bool,
     pub(crate) glide: Option<rune_motion::Spring>,
     pub(crate) input: Option<Box<InputSpec>>,
-    pub(crate) cursor: Option<Cursor>,
     pub(crate) window_drag: bool,
     /// `El::ime_cursor`.
     pub(crate) ime_cursor: bool,
-    pub(crate) press_scale: Option<f32>,
     pub(crate) scale: f32,
     pub(crate) time_scale: f32,
     pub(crate) help: Option<String>,
@@ -650,10 +481,6 @@ pub struct El {
     /// `El::aspect_fit`'s width over height; 0 when unset.
     pub(crate) aspect_fit: f32,
     pub(crate) selection_group: bool,
-    /// `El::selection_copy`.
-    pub(crate) selection_copy: Option<SelectionCopy>,
-    /// `El::on_selection_change`.
-    pub(crate) on_selection_change: Option<SelectionChangeFn>,
     /// `El::level` and `El::expanded`.
     pub(crate) a11y: A11y,
     pub(crate) inert: bool,
@@ -661,10 +488,8 @@ pub struct El {
 
 fn base(dir: FlexDirection) -> El {
     El {
-        on_paste: None,
-        on_window_focus: None,
         focus: Default::default(),
-        modal: None,
+        handlers: Default::default(),
         looping: None,
         key: None,
         trace_name: None,
@@ -688,21 +513,7 @@ fn base(dir: FlexDirection) -> El {
         memo_children: None,
         memo_built: None,
         has_virtual: false,
-        on_press: None,
-        on_double_press: None,
-        on_secondary_press: None,
-        on_hover: None,
-        on_hover_change: None,
-        hover_delay: [0.0; 2],
-        on_pointer_move: None,
-        gestures: None,
         above: None,
-        on_drag: None,
-        drag_out: None,
-        drag_threshold: None,
-        on_drag_start: None,
-        on_drag_end: None,
-        drop: None,
         motion: None,
         opacity_motion: None,
         lead: None,
@@ -713,13 +524,6 @@ fn base(dir: FlexDirection) -> El {
         matched: None,
         scroll: None,
         scroll_axes: ScrollAxes::Y,
-        on_at_bottom: None,
-        on_far_from_bottom: None,
-        on_visible_rows: None,
-        on_layout: None,
-        on_screen_layout: None,
-        on_drawn_layout: None,
-        on_scroll_offset: None,
         sticky: None,
         scroll_edges: ScrollEdges::default(),
         growth: None,
@@ -731,10 +535,8 @@ fn base(dir: FlexDirection) -> El {
         whole: false,
         glide: None,
         input: None,
-        cursor: None,
         window_drag: false,
         ime_cursor: false,
-        press_scale: None,
         scale: 1.0,
         time_scale: 1.0,
         help: None,
@@ -742,8 +544,6 @@ fn base(dir: FlexDirection) -> El {
         material: None,
         aspect_fit: 0.0,
         selection_group: false,
-        selection_copy: None,
-        on_selection_change: None,
         a11y: A11y::default(),
         inert: false,
     }
@@ -833,7 +633,7 @@ pub fn rich(content: impl Into<String>, spans: Vec<Span>) -> El {
 pub fn icon(i: &'static Icon, size: f32) -> El {
     let mut e = base(FlexDirection::Row).size(size, size);
     e.role = "icon";
-    e.vis.icon = Some((i, Color::WHITE));
+    e.vis.cold_mut().icon = Some((i, Color::WHITE));
     e
 }
 
@@ -905,7 +705,7 @@ impl El {
     /// On the root, receive native window activation/deactivation (not text-field focus).
     /// Also works on interactive overlays. Headless hosts may call Runtime::window_focus.
     pub fn on_window_focus<S: 'static>(mut self, f: impl Fn(&mut S, bool, &mut Tx) + 'static) -> Self {
-        self.on_window_focus = Some(Rc::new(move |s, focused, tx| f(downcast::<S>(s), focused, tx)));
+        self.handlers.on_window_focus = Some(Rc::new(move |s, focused, tx| f(downcast::<S>(s), focused, tx)));
         self
     }
     /// Paint the latest text in this element's fixed layout box. `text("00:00")` reserves
@@ -921,7 +721,7 @@ impl El {
     /// Native clipboard reads are asynchronous. Script `paste` uses the same handler.
     /// It hears the plain text; [`El::on_paste_content`] hears every form.
     pub fn on_paste<S: 'static>(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
-        self.on_paste = Some(PasteFn {
+        self.handlers.on_paste = Some(PasteFn {
             rich: false,
             call: Rc::new(move |s, content, tx| {
                 content.has_plain() && { f(downcast::<S>(s), content.text(), tx); true }
@@ -932,7 +732,7 @@ impl El {
     /// [`El::on_paste`] with everything the clipboard held: plain text and, when the source
     /// offered them, sanitised HTML and RTF. Replaces an `on_paste` on the same element.
     pub fn on_paste_content<S: 'static>(mut self, f: impl Fn(&mut S, &crate::ClipboardContent, &mut Tx) + 'static) -> Self {
-        self.on_paste = Some(PasteFn {
+        self.handlers.on_paste = Some(PasteFn {
             rich: true,
             call: Rc::new(move |s, content, tx| { f(downcast::<S>(s), content, tx); true }),
         });
@@ -964,8 +764,8 @@ impl El {
             text.redacted = true;
             if text.selectable {
                 text.selectable = false;
-                if self.cursor == Some(Cursor::Text) {
-                    self.cursor = None;
+                if self.handlers.cursor == Some(Cursor::Text) {
+                    self.handlers.cursor = None;
                 }
             }
         }
@@ -1088,7 +888,7 @@ impl El {
     /// element or one inside it is focused and no key handler took the key, at the focused
     /// element's bottom-left.
     pub fn on_secondary_press<S: 'static>(mut self, f: impl Fn(&mut S, PointerPress, &mut Tx) + 'static) -> Self {
-        self.on_secondary_press = Some(Rc::new(move |s, p, tx| {
+        self.handlers.on_secondary_press = Some(Rc::new(move |s, p, tx| {
             f(downcast::<S>(s), p.window(), tx);
         }));
         self
@@ -1103,7 +903,7 @@ impl El {
     /// })
     /// ```
     pub fn on_secondary_press_local<S: 'static>(mut self, f: impl Fn(&mut S, PointerEvent, &mut Tx) + 'static) -> Self {
-        self.on_secondary_press = Some(Rc::new(move |s, p, tx| f(downcast::<S>(s), p, tx)));
+        self.handlers.on_secondary_press = Some(Rc::new(move |s, p, tx| f(downcast::<S>(s), p, tx)));
         self
     }
 
@@ -1115,7 +915,7 @@ impl El {
 
     /// Paint the newest video frame inside this node. Node dimensions are in points.
     pub fn native_surface(mut self, surface: &crate::NativeSurface, fit: crate::SurfaceFit) -> Self {
-        self.vis.surface = Some((surface.clone(), fit));
+        self.vis.cold_mut().surface = Some((surface.clone(), fit));
         self
     }
     /// Play `video` inside this node: `Fit` letterboxes, `Fill` crops. Frames come from the
@@ -1235,12 +1035,12 @@ impl El {
     }
     /// Trap focus and make the background inert while mounted. Escape requests dismissal.
     pub fn modal<S: 'static>(mut self, click_outside: bool, dismiss: impl Fn(&mut S) + 'static) -> Self {
-        self.modal = Some(ModalSpec { outside: click_outside,
+        self.handlers.modal = Some(ModalSpec { outside: click_outside,
             dismiss: Rc::new(move |s, _| dismiss(downcast::<S>(s))) });
         self
     }
     pub fn modal_click_outside(mut self, enabled: bool) -> Self {
-        if let Some(m) = &mut self.modal { m.outside = enabled; }
+        if let Some(h) = self.handlers.get_mut_if_some() && let Some(m) = &mut h.modal { m.outside = enabled; }
         self
     }
     /// A finite opacity/scale sequence on the shared render clock. The final pose holds;
@@ -1296,7 +1096,10 @@ impl El {
     /// [`motion`](Self::motion) and jumps under reduced motion. Only the glyph turns; layout and
     /// hit testing keep the upright box.
     pub fn icon_rotation(mut self, radians: f32) -> Self {
-        self.vis.icon_turn = if radians.is_finite() { radians } else { 0.0 };
+        let r = if radians.is_finite() { radians } else { 0.0 };
+        if r != 0.0 || !self.vis.cold.is_empty() {
+            self.vis.cold_mut().icon_turn = r;
+        }
         self
     }
     /// A tooltip shown after the system's hover delay while the pointer rests on this element,
@@ -1387,14 +1190,14 @@ impl El {
     /// after its first layout, then only when that changes, never per frame. Pair with
     /// [`Tx::scroll_to_bottom`] for a "jump to latest" button.
     pub fn on_at_bottom<S: 'static>(mut self, f: impl Fn(&mut S, bool) + 'static) -> Self {
-        self.on_at_bottom = Some(Rc::new(move |s, at| f(downcast::<S>(s), at)));
+        self.handlers.on_at_bottom = Some(Rc::new(move |s, at| f(downcast::<S>(s), at)));
         self
     }
     /// On a scroll viewport, called with whether it stands more than its own height, and at
     /// least `min` points, above its bottom: where a chat shows its "jump to latest" button and
     /// hides it again near the end. Once after its first layout, then only when that changes.
     pub fn on_far_from_bottom<S: 'static>(mut self, min: f32, f: impl Fn(&mut S, bool) + 'static) -> Self {
-        self.on_far_from_bottom = Some((min, Rc::new(move |s, far| f(downcast::<S>(s), far))));
+        self.handlers.on_far_from_bottom = Some((min, Rc::new(move |s, far| f(downcast::<S>(s), far))));
         self
     }
     /// On a scroll viewport, fade its top and bottom edges over `width` points (16–32 reads well),
@@ -1421,7 +1224,7 @@ impl El {
         if let Some(t) = &mut self.text {
             t.color = c;
         }
-        if let Some((_, ic)) = &mut self.vis.icon {
+        if let Some(cold) = self.vis.cold.get_mut_if_some() && let Some((_, ic)) = &mut cold.icon {
             *ic = c;
         }
         if self.input.is_some() {

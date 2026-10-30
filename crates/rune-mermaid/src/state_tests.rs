@@ -1,7 +1,7 @@
 use super::*;
 
 fn state(src: &str) -> StateDiagram {
-    match crate::parse(src) {
+    match crate::parse(src).map(|p| p.diagram) {
         Some(crate::Diagram::State(s)) => s,
         _ => panic!("not a state diagram: {src:?}"),
     }
@@ -35,16 +35,21 @@ fn transitions_pseudostates_descriptions_and_composites() {
 }
 
 #[test]
-fn malformed_state_diagrams_are_rejected() {
-    for src in [
-        "stateDiagram-v2",
-        "stateDiagram\n}",
-        "stateDiagram-v2\nstate Open {\n  A --> B",
-        "stateDiagram-v2\nnote right of A\n  unclosed",
-        "stateDiagram-v2\ndirection diagonal\nA --> B",
-    ] {
+fn only_sources_where_nothing_reads_are_rejected() {
+    for src in ["stateDiagram-v2", "stateDiagram\n}", "stateDiagram-v2\nnote right of A\n  unclosed"] {
         assert!(crate::parse(src).is_none(), "{src:?}");
     }
+}
+
+#[test]
+fn a_statement_that_does_not_read_is_skipped() {
+    let s = state("stateDiagram-v2\nstate Open {\n  A --> B");
+    assert_eq!((s.states.len(), s.edges.len(), s.composites.len()), (2, 1, 1), "an open composite closes at the end");
+    let s = state("stateDiagram-v2\ndirection diagonal\nA --> B");
+    assert_eq!((s.dir, s.edges.len()), (Dir::Down, 1));
+    let s = state("stateDiagram-v2\nstate \"no id\" {\n  A --> B\n}\nC --> A");
+    assert_eq!(s.composites[0].title, "no id");
+    assert_eq!(s.states.iter().filter(|st| st.cluster.is_none()).count(), 1, "its closing brace closes the unnamed composite");
 }
 
 #[test]

@@ -403,11 +403,11 @@ impl<S: 'static> Runtime<S> {
         // A release is heard by whoever holds the selection, though it didn't change.
         let released = self.sel_heard.from.as_ref().is_some_and(|f| f.5 && !self.text_sel.dragging);
         self.sel_heard.from = Some(self.selection_from());
-        if self.sel_heard.by_path.is_empty() && !self.nodes.iter().any(|n| n.on_selection_change.is_some()) {
+        if self.sel_heard.by_path.is_empty() && !self.nodes.iter().any(|n| n.handlers.get().is_some_and(|h| h.on_selection_change.is_some())) {
             return Vec::new();
         }
         let watchers: Vec<usize> = (0..self.nodes.len())
-            .filter(|&i| self.nodes[i].on_selection_change.is_some() && !self.subtree_exiting(i) && self.allowed(i))
+            .filter(|&i| self.nodes[i].handlers.get().is_some_and(|h| h.on_selection_change.is_some()) && !self.subtree_exiting(i) && self.allowed(i))
             .collect();
         if watchers.is_empty() && self.sel_heard.by_path.is_empty() { return Vec::new(); }
         let mut selected: Vec<usize> = self.selection_ranges().into_iter().filter(|r| r.1 < r.2).map(|r| r.0).collect();
@@ -490,8 +490,8 @@ impl<S: 'static> Runtime<S> {
         let drawn = self.joined(&ranges);
         let around = |a: usize, j: usize| std::iter::successors(Some(j), |&p| self.nodes[p].parent).any(|p| p == a);
         let provider = std::iter::successors(Some(first), |&p| self.nodes[p].parent)
-            .find(|&p| self.nodes[p].selection_copy.is_some() && around(p, last));
-        if let Some(p) = provider && let Some(f) = self.nodes[p].selection_copy.clone() {
+            .find(|&p| self.nodes[p].handlers.selection_copy.is_some() && around(p, last));
+        if let Some(p) = provider && let Some(f) = self.nodes[p].handlers.selection_copy.clone() {
             let g = self.group_of(first);
             let texts = (p..self.nodes.len())
                 .take_while(|&j| around(p, j))
@@ -714,7 +714,7 @@ impl<S: 'static> Runtime<S> {
     /// selection, as AppKit text does. False when the app's handler should run instead.
     pub(super) fn selection_menu(&mut self, path: &str, x: f32, y: f32) -> bool {
         let Some(i) = self.live(path) else { return false };
-        if !self.is_selectable(i) || self.nodes[i].on_secondary_press.is_some() { return false; }
+        if !self.is_selectable(i) || self.nodes[i].handlers.on_secondary_press.is_some() { return false; }
         if let Some(at) = self.text_index_at(i, x, y)
             && range_in(&self.selection_ranges(), i).is_none_or(|(a, b)| at < a || at >= b)
         {

@@ -6,7 +6,7 @@ license.workspace = true
 description = "Generic, themable components for Rune. Components read only semantic tokens (`Kit`); a theme crate supplies them."
 
 [dependencies]
-rune = { path = "../rune" }
+rune = { path = "../rune", default-features = false }
 rune-mermaid = { path = "../rune-mermaid", optional = true }
 rune-motion = { path = "../rune-motion" }
 unicode-segmentation = "1.13"

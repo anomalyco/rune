@@ -1,6 +1,16 @@
 //! Debug-only warnings for app code that works but runs slow: a `virtualize` list that builds
-//! every row to mount a few, and a callback that blocks the main thread. Each warns once per
-//! site, on stderr; `RUNE_PERF_WARN=0` silences them. Release builds contain none of it.
+//! every row to mount a few, a callback that blocks the main thread, a `poll` that says it
+//! changed what shows when nothing did, a window that keeps drawing while idle, a slow first
+//! frame, and (a mistake rather than slowness) a `memo` whose root already had another key.
+//! Each warns once per site, on stderr; `RUNE_PERF_WARN=0` silences them. Release builds contain
+//! none of it.
+
+mod idle;
+pub(crate) mod launch;
+
+#[cfg(debug_assertions)]
+pub(crate) use idle::Drawn;
+pub(crate) use idle::IdleMeter;
 
 #[cfg(debug_assertions)]
 use std::{collections::HashSet, sync::{Mutex, OnceLock}, time::Instant};
@@ -53,6 +63,16 @@ pub(crate) fn overbuilt(path: &str, site: Option<&std::panic::Location>, built: 
     warn_once(format!("overbuild {path}"), || format!(
         "virtualized list {path:?}{site} built {built} rows to mount {mounted}: build only the \
          mounted rows with `.virtual_rows(count, estimated_row_height, key, build)`"
+    ));
+}
+
+/// `memo(id, ..)`, called at `site`, built a root already keyed `existing` and renamed it `id`.
+#[cfg(debug_assertions)]
+pub(crate) fn memo_key_replaced(id: &str, existing: &str, site: &std::panic::Location) {
+    if existing == id { return }
+    warn_once(format!("memo key {site}"), || format!(
+        "`memo({id:?}, ..)` at {site} replaced its root's key {existing:?} with {id:?}: look it up \
+         by {id:?}, or key the memo with the id you want"
     ));
 }
 

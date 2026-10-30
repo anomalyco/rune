@@ -94,7 +94,7 @@ fn el_flatten_reusable(e: &El) -> bool {
         && e.above.is_none()
         && e.live.is_empty()
         && e.input.is_none()
-        && e.modal.is_none()
+        && e.handlers.get().is_none_or(|h| h.modal.is_none())
         && !(e.scroll.is_some() && e.scroll_axes.x())
         && e.text.as_ref().is_none_or(|t| !t.redacted && t.live.is_none())
         && e.vis.pixels.as_ref().is_none_or(|_| {
@@ -239,6 +239,8 @@ pub(crate) struct MemoCache {
     pub(crate) pending_scratch: Vec<crate::runtime::memo_reuse::PendingFlat>,
     pub(crate) reused_scratch: Vec<crate::runtime::memo_reuse::ReusedSpan>,
     pub(crate) skip_scratch: Vec<crate::runtime::memo_reuse::CleanApplySpan>,
+    pub(crate) kids_scratch: Vec<taffy::NodeId>,
+    pub(crate) path_scratch: String,
     pub(crate) present_len: usize,
     pass: u64,
     #[cfg(test)]
@@ -436,6 +438,16 @@ pub(crate) fn hash_of(v: &impl Hash) -> u64 {
     h.finish()
 }
 
+/// `el` keyed `key`; debug builds warn once per call site when it already had another key.
+#[cfg_attr(debug_assertions, track_caller)]
+fn keyed(el: El, key: String) -> El {
+    #[cfg(debug_assertions)]
+    if let Some(existing) = &el.key {
+        crate::perf_warn::memo_key_replaced(&key, existing, std::panic::Location::caller());
+    }
+    el.key(key)
+}
+
 /// The subtree `build` returns, keyed `id`, built again only when `version` (or the window's
 /// environment) differs from the last build's. Otherwise `build` isn't called and the
 /// previous subtree is reused, with the same node ids and state.
@@ -509,10 +521,10 @@ pub fn memo(id: impl Into<String>, version: impl Hash, build: impl FnOnce() -> E
     });
     let (id, version, store) = match step {
         Step::Reuse(built) => return built.placeholder(key),
-        Step::Plain => return build().key(key),
+        Step::Plain => return keyed(build(), key),
         Step::Build { id, version, store } => (id, version, store),
     };
-    let el = build().key(key);
+    let el = keyed(build(), key);
     SCOPES.with_borrow_mut(|scopes| {
         let Some(s) = scopes.last_mut() else { return el };
         s.path.pop();

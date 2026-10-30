@@ -497,7 +497,7 @@ pub(super) const UBER_WGSL_BLAKE3: &str = \"{wgsl_hash}\";", uber_abi_hash());
     fn uber_shader_loads_precompiled_metallib_and_falls_back_cleanly() {
         use super::super::{Gpu, OFFSCREEN_FORMAT, Renderer};
 
-        let gpu = Gpu::headless();
+        let gpu = Gpu::headless_wgpu();
         assert!(
             gpu.device.features().contains(wgpu::Features::PASSTHROUGH_SHADERS),
             "Metal device must enable PASSTHROUGH_SHADERS"
@@ -550,7 +550,7 @@ pub(super) const UBER_WGSL_BLAKE3: &str = \"{wgsl_hash}\";", uber_abi_hash());
     fn pipeline_linkage_failure_retries_wgsl_without_uncaptured_error() {
         use super::super::{Blend, Gpu, OFFSCREEN_FORMAT, Renderer};
 
-        let gpu = Gpu::headless();
+        let gpu = Gpu::headless_wgpu();
         let renderer = with_metallib_enabled(false, || Renderer::new(&gpu.device, OFFSCREEN_FORMAT));
         let before = METALLIB_LOADS.with(std::cell::Cell::get);
         let mut attempts = 0;
@@ -584,10 +584,12 @@ pub(super) const UBER_WGSL_BLAKE3: &str = \"{wgsl_hash}\";", uber_abi_hash());
         };
         use bytemuck::Zeroable;
 
-        let gpu = Gpu::headless();
+        let gpu = Gpu::headless_wgpu();
+        #[cfg(feature = "metal-backend")]
+        let native = Gpu::new(crate::gpu::metal::instance(), None);
         let (width, height) = (160u32, 120u32);
 
-        let render_scene = |use_metallib: bool, format: wgpu::TextureFormat, srgb_blend: bool| {
+        let render_scene = |gpu: &Gpu, use_metallib: bool, format: wgpu::TextureFormat, srgb_blend: bool| {
             with_metallib_enabled(use_metallib, || {
                 let mut renderer = Renderer::new(&gpu.device, format);
                 renderer.set_srgb_blend(srgb_blend);
@@ -745,11 +747,16 @@ pub(super) const UBER_WGSL_BLAKE3: &str = \"{wgsl_hash}\";", uber_abi_hash());
             (wgpu::TextureFormat::Bgra8UnormSrgb, false),
             (wgpu::TextureFormat::Rgba8Unorm, true),
         ] {
-            let metallib_pixels = render_scene(true, format, srgb_blend);
-            let wgsl_pixels = render_scene(false, format, srgb_blend);
+            let metallib_pixels = render_scene(&gpu, true, format, srgb_blend);
+            let wgsl_pixels = render_scene(&gpu, false, format, srgb_blend);
             assert_eq!(
                 metallib_pixels, wgsl_pixels,
                 "metallib and WGSL pixel output differed for format={format:?} srgb_blend={srgb_blend}"
+            );
+            #[cfg(feature = "metal-backend")]
+            assert!(
+                render_scene(&native, true, format, srgb_blend) == wgsl_pixels,
+                "Rune's Metal backend and wgpu's differed for format={format:?} srgb_blend={srgb_blend}"
             );
         }
     }

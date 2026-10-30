@@ -8,7 +8,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use std::{cell::{Cell, RefCell}, collections::VecDeque, rc::Rc};
 use crate::{OverlayInput, OverlayLevel, OverlayOptions, OverlaySupport};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SPI_GETWORKAREA, SetWindowLongPtrW, SetWindowPos, ShowWindow, SystemParametersInfoW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     WS_EX_TRANSPARENT,
 };
@@ -204,6 +204,14 @@ pub(crate) fn show_overlay(window: &winit::window::Window) {
             }
         }
     }
+}
+
+/// Hides an overlay `show_overlay` showed. winit never saw that show, so its
+/// `set_visible(false)` finds nothing to change and leaves the window on screen.
+pub(crate) fn hide_overlay(window: &winit::window::Window) {
+    let Some(hwnd) = hwnd(window) else { return };
+    // SAFETY: a Win32 call on a live window owned by this thread.
+    unsafe { ShowWindow(hwnd, SW_HIDE); }
 }
 
 /// The bottom of the primary display's work area (above the taskbar), in physical pixels.

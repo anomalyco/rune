@@ -35,6 +35,8 @@ pub struct GCluster {
     pub parent: Option<usize>,
     /// Extra room at the cluster's leading edge along each axis (`[along, across]`), for its title.
     pub lead: [f32; 2],
+    /// Minimum span along the horizontal screen axis (`[min_along, min_across]`) so titles fit.
+    pub min_span: [f32; 2],
 }
 
 pub struct Spacing {
@@ -387,7 +389,16 @@ pub fn layout(g: &Graph, sp: &Spacing) -> Option<Placed> {
                 continue;
             }
             let lead = g.clusters[c].lead;
-            let padded = [b[0] - sp.cluster - lead[0], b[1] - sp.cluster - lead[1], b[2] + sp.cluster, b[3] + sp.cluster];
+            let min_span = g.clusters[c].min_span;
+            let mut padded = [b[0] - sp.cluster - lead[0], b[1] - sp.cluster - lead[1], b[2] + sp.cluster, b[3] + sp.cluster];
+            for axis in [0, 1] {
+                let cur = padded[axis + 2] - padded[axis];
+                if cur < min_span[axis] {
+                    let extra = (min_span[axis] - cur) / 2.0;
+                    padded[axis] -= extra;
+                    padded[axis + 2] += extra;
+                }
+            }
             boxes[c] = padded;
             if let Some(p) = g.clusters[c].parent {
                 let pb = &mut boxes[p];

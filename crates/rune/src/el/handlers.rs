@@ -7,7 +7,7 @@ impl El {
         self.on_press_tx(move |s: &mut S, _tx: &mut Tx| f(s))
     }
     pub fn on_press_tx<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
-        self.on_press = Some(Rc::new(move |s, tx| f(downcast::<S>(s), tx)));
+        self.handlers.on_press = Some(Rc::new(move |s, tx| f(downcast::<S>(s), tx)));
         if self.role == "group" {
             self.role = "button";
         }
@@ -22,7 +22,7 @@ impl El {
         self.on_double_press_tx(move |s: &mut S, _tx: &mut Tx| f(s))
     }
     pub fn on_double_press_tx<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
-        self.on_double_press = Some(Rc::new(move |s, tx| f(downcast::<S>(s), tx)));
+        self.handlers.on_double_press = Some(Rc::new(move |s, tx| f(downcast::<S>(s), tx)));
         self
     }
     /// Receives Down, Move, then Up. Up also ends a cancelled gesture: always check
@@ -30,7 +30,7 @@ impl El {
     /// Save the original value on Down (in state, or [`Drag::data`]) and restore it on cancel.
     /// Move commits are instant unless the handler calls [`Tx::animated`].
     pub fn on_drag<S: 'static>(mut self, f: impl Fn(&mut S, &mut Drag, &mut Tx) + 'static) -> Self {
-        self.on_drag = Some(Rc::new(move |s, d, tx| f(downcast::<S>(s), d, tx)));
+        self.handlers.on_drag = Some(Rc::new(move |s, d, tx| f(downcast::<S>(s), d, tx)));
         self
     }
     /// Drag this element out of the window into another app, as a file, image or text. Once
@@ -51,7 +51,7 @@ impl El {
     /// <path>` in the trace and `dragOut` in the tree instead. Overlay panels start the same
     /// session; see [`crate::drag_out`] for how far that path is tested.
     pub fn drag_out<S: 'static>(mut self, f: impl Fn(&S) -> Option<crate::DragItem> + 'static) -> Self {
-        self.drag_out = Some(Rc::new(move |s| f(s.cast::<S>().expect("handler registered for a different state type than the app's"))));
+        self.handlers.drag_out = Some(Rc::new(move |s| f(s.cast::<S>().expect("handler registered for a different state type than the app's"))));
         self
     }
     /// How far (points, straight-line) the pointer travels from the press before this
@@ -64,7 +64,7 @@ impl El {
     /// el().drag_out(|_: &App| Some(DragItem::new().text("row"))).drag_threshold(3.0);
     /// ```
     pub fn drag_threshold(mut self, points: f32) -> Self {
-        self.drag_threshold = Some(points.max(0.0));
+        self.handlers.drag_threshold = Some(points.max(0.0));
         self
     }
     /// Called when a [`El::drag_out`] drag starts, after the drag image was taken, so the app
@@ -81,12 +81,12 @@ impl El {
     ///     .on_drag_end(|s: &mut App, _, _| s.dragging = false);
     /// ```
     pub fn on_drag_start<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
-        self.on_drag_start = Some(Rc::new(move |s, tx| f(downcast::<S>(s), tx)));
+        self.handlers.on_drag_start = Some(Rc::new(move |s, tx| f(downcast::<S>(s), tx)));
         self
     }
     /// Called once when a [`El::drag_out`] drag ends, with what the drop did.
     pub fn on_drag_end<S: 'static>(mut self, f: impl Fn(&mut S, crate::DragOutcome, &mut Tx) + 'static) -> Self {
-        self.on_drag_end = Some(Rc::new(move |s, outcome, tx| f(downcast::<S>(s), outcome, tx)));
+        self.handlers.on_drag_end = Some(Rc::new(move |s, outcome, tx| f(downcast::<S>(s), outcome, tx)));
         self
     }
 }

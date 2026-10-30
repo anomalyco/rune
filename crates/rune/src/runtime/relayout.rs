@@ -37,7 +37,9 @@ pub(super) fn root_size(viewport: (f32, f32), fit_height: bool) -> Size<Dimensio
 /// `aspect_fit` elements and fitted anchored overlays, and live bindings and pictures change
 /// their nodes between commits.
 fn reusable(n: &Node) -> bool {
-    n.aspect_fit.is_none() && n.above.as_ref().is_none_or(|a| !a.fit) && n.live.is_empty() && n.pixel_aspect.is_none()
+    n.cold.get().is_none_or(|c| {
+        c.aspect_fit.is_none() && c.above.as_ref().is_none_or(|a| !a.fit) && c.live.is_empty() && c.pixel_aspect.is_none()
+    })
 }
 
 impl<S: 'static> Runtime<S> {
@@ -80,11 +82,15 @@ impl<S: 'static> Measurement<'_, S> {
         self.anchor_virtuals();
         let quiet = self.quiet_rows();
         let mut taffy = std::mem::replace(self.layout, TaffyTree::with_capacity(0));
-        let mut nodes = std::mem::take(&mut self.spare_nodes);
+        let mut nodes = std::mem::take(self.spare_nodes);
+        nodes.clear();
+        nodes.reserve(self.nodes.len());
         nodes.extend(self.nodes.iter_mut().zip(quiet).map(|(n, quiet)| {
             // The new nodes lay their text out again; the cache then holds the only reference.
             n.text_layout = None;
-            Node { run_layout: None, elided: None, virtual_mount: quiet, ..n.clone() }
+            let mut copy = Node { elided: None, virtual_mount: quiet, ..n.clone() };
+            copy.clear_run_layout();
+            copy
         }));
         let root = nodes[0].taffy;
         let mut style = taffy.style(root).unwrap().clone();
@@ -94,8 +100,10 @@ impl<S: 'static> Measurement<'_, S> {
         for n in nodes.iter().filter(|n| n.text.as_ref().is_some_and(|t| t.redacted)) {
             taffy.mark_dirty(n.taffy).unwrap();
         }
-        let (layout, nodes) = self.solve(taffy, root, nodes);
+        let (layout, mut nodes) = self.solve(taffy, root, nodes);
         if self.measure_virtuals(&nodes, false) || self.windows_move() {
+            nodes.clear();
+            *self.spare_nodes = nodes;
             *self.layout = layout;
             return None;
         }
@@ -201,7 +209,7 @@ pub(super) fn lay_out_text(text: &mut TextSystem, n: &mut Node, w: f32, scale: f
     let run = spec.advance_in.as_ref().map(|(run, at)| (text.run_layout(run, spec.style, scale), *at));
     if let Some((r, _)) = run.filter(|(r, at)| r.x(*at).is_some()) {
         n.text_layout = Some(r.layout.clone());
-        n.run_layout = Some(r);
+        n.cold_mut().run_layout = Some(r);
         return;
     }
     let wrap = spec.wrap.then_some(w * scale);

@@ -13,7 +13,7 @@ impl<S: 'static> Runtime<S> {
         loop {
             let n = &self.nodes[index];
             if self.subtree_exiting(index) || !self.allowed(index) { break; }
-            if n.on_secondary_press.is_some() || self.secondary_link_at(index, x, y).is_some() { return Some(&n.path); }
+            if n.handlers.on_secondary_press.is_some() || self.secondary_link_at(index, x, y).is_some() { return Some(&n.path); }
             if text.is_none() && self.is_selectable(index) { text = Some(n.path.as_str()); }
             let Some(p) = n.parent else { break };
             index = p;
@@ -71,7 +71,7 @@ impl<S: 'static> Runtime<S> {
         loop {
             let n = &self.nodes[index];
             if !self.allowed(index) { return false; }
-            if let Some(f) = n.on_secondary_press.clone() {
+            if let Some(f) = n.handlers.on_secondary_press.clone() {
                 let path = n.path.clone();
                 let point = self.pointer_event(index, x, y);
                 log_event!(self, "secondary press {path}");

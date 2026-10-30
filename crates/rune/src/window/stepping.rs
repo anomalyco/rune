@@ -35,22 +35,33 @@ impl<S: 'static> Host<S> {
 
     pub(super) fn first_frame_ready(&mut self, event_loop: &ActiveEventLoop) {
         let Some(w) = &mut self.win else { return };
-        if !w.first_frame.pending() { return; }
+        if !w.first_frame.pending() {
+            // No first frame to wait for (`FirstFrame::skipped`, `READY_FALLBACK`): the app's live
+            // work starts anyway. The window isn't ready (`is_ready`) until it draws.
+            if w.first_frame.ready_due(Instant::now()) && w.first_frame.take_ready() { self.run_on_ready(); }
+            return;
+        }
         let reveal = w.first_frame.complete();
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if self.float_on_open && !w.first_frame.notified { float_on_open::release(&w.window, &self.options, self.spec.min_size); }
         self.native_handle.native.ready.store(true, Ordering::Release);
         *self.shared.window_error.lock().unwrap() = None;
-        if !std::mem::replace(&mut w.first_frame.notified, true)
-            && let Some(ready) = self.on_ready.as_mut()
-        {
-            crate::perf_warn::timed("on_ready", || ready(&self.native_handle));
-        }
+        crate::perf_warn::launch::first_frame();
+        w.first_frame.notified = true;
+        if w.first_frame.take_ready() { self.run_on_ready(); }
         if reveal {
             self.reveal_launcher(event_loop);
             self.shell(event_loop);
         }
         self.publish();
+    }
+
+    fn run_on_ready(&mut self) {
+        if let Some(ready) = self.on_ready.as_mut() {
+            crate::perf_warn::timed("on_ready", || ready(&self.native_handle));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::ready_signal::ready();
     }
 
     pub(super) fn place(&mut self, event_loop: &ActiveEventLoop, request: crate::windows::PlaceRequest) {

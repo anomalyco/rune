@@ -16,6 +16,7 @@ impl<S: 'static> Host<S> {
             // Covered or asleep with no notification yet: rest as if one came, and look
             // again on `retry`.
             l.occluded = true;
+            l.first_frame.skipped(now);
             #[cfg(target_os = "macos")]
             l.set_live_resize(false);
             self.rt.set_live_visible(false);
@@ -40,6 +41,7 @@ impl<S: 'static> Host<S> {
         l.presented = None;
         l.stop_pacing();
         let shown = l.visible;
+        l.first_frame.skipped(Instant::now());
         self.land_frame();
         if shown {
             self.rt.set_live_visible(false);

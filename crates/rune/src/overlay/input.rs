@@ -346,6 +346,8 @@ impl<T: 'static> Overlay<T> {
                         layer.place(at);
                         layer.commit();
                     }
+                    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                    Some(Backing::Xwayland(surface)) => surface.place(at, &self.options),
                     None => {}
                 }
             }

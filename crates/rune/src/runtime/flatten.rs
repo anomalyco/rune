@@ -173,13 +173,56 @@ fn inherit_hover_within(
     nodes: &[Node],
 ) {
     if vis.hover_within.is_none() {
-        vis.hover_within = above
+        let inherited = above
             .and_then(|a| nodes.iter().position(|n| n.key.as_ref() == Some(&a.key)))
             .and_then(|j| nodes[j].vis.hover_within.clone())
             .or_else(|| parent.and_then(|p| nodes[p].vis.hover_within.clone()));
+        if inherited.is_some() {
+            vis.cold_mut().hover_within = inherited;
+        }
     }
-    if vis.hover_motion.is_none() {
-        vis.hover_motion = vis.hover_within.clone();
+    if vis.hover_motion.is_none()
+        && let Some(hw) = vis.hover_within.clone()
+    {
+        vis.cold_mut().hover_motion = Some(hw);
+    }
+}
+
+#[inline]
+fn node_cold_needed(c: &NodeCold) -> bool {
+    let base = c.trace_name.is_some()
+        || c.trace_namespace.is_some()
+        || c.label.is_some()
+        || !c.live.is_empty()
+        || c.looping.is_some()
+        || c.opacity_motion.is_some()
+        || c.lead.is_some()
+        || c.transition.is_some()
+        || c.matched.is_some()
+        || c.above.is_some()
+        || c.scroll.is_some()
+        || c.scroll_axes != crate::el::ScrollAxes::Y
+        || c.scroll_edges != crate::el::ScrollEdges::default()
+        || c.sticky.is_some()
+        || c.growth.is_some()
+        || c.glide.is_some()
+        || c.a11y != crate::el::A11y::default()
+        || c.pixel_aspect.is_some()
+        || c.aspect_fit.is_some()
+        || c.material.is_some()
+        || c.help.is_some()
+        || c.help_cut;
+    #[cfg(debug_assertions)]
+    let base = base || c.scroll_source.is_some();
+    base
+}
+
+#[inline]
+fn pack_node_cold(c: NodeCold) -> crate::cold::Cold<NodeCold> {
+    if node_cold_needed(&c) {
+        crate::cold::Cold::from_owned(c)
+    } else {
+        crate::cold::Cold::default()
     }
 }
 
@@ -234,10 +277,10 @@ fn sync_taffy_node(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn flatten(
+pub(super) fn flatten_with_buf(
     el: El,
     parent: Option<usize>,
-    parent_path: &str,
+    path_buf: &mut String,
     index: usize,
     motion: Spring,
     in_row: RowLayout,
@@ -249,9 +292,10 @@ pub(super) fn flatten(
     scale: f32,
     memo_ctx: &mut memo_reuse::MemoFlattenCtx<'_>,
 ) -> taffy::NodeId {
-    let mut path_buf = String::with_capacity(parent_path.len() + 128);
-    path_buf.push_str(parent_path);
-    flatten_owned(el, parent, &mut path_buf, index, motion, in_row, parent_row, None, taffy, nodes, entries, scale, memo_ctx)
+    if path_buf.capacity() < path_buf.len() + 128 {
+        path_buf.reserve(128);
+    }
+    flatten_owned(el, parent, path_buf, index, motion, in_row, parent_row, None, taffy, nodes, entries, scale, memo_ctx)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -301,10 +345,8 @@ fn flatten_owned(
     let scroll_source = el.scroll_source;
     let trace_namespace = el.trace_namespace.or_else(|| parent.and_then(|p| nodes[p].trace_namespace));
     let El {
-        on_paste,
-        on_window_focus,
         focus,
-        modal,
+        handlers,
         looping,
         key,
         trace_name,
@@ -316,21 +358,7 @@ fn flatten_owned(
         mut text,
         children,
         memo_children,
-        on_press,
-        on_double_press,
-        on_secondary_press,
-        on_hover,
-        on_hover_change,
-        hover_delay,
-        on_pointer_move,
-        gestures,
         above,
-        on_drag,
-        drag_out,
-        drag_threshold,
-        on_drag_start,
-        on_drag_end,
-        drop,
         opacity_motion,
         lead,
         width_leads,
@@ -338,13 +366,6 @@ fn flatten_owned(
         matched,
         scroll,
         scroll_axes,
-        on_at_bottom,
-        on_far_from_bottom,
-        on_visible_rows,
-        on_layout,
-        on_screen_layout,
-        on_drawn_layout,
-        on_scroll_offset,
         sticky,
         scroll_edges,
         growth,
@@ -352,10 +373,8 @@ fn flatten_owned(
         whole,
         glide,
         input,
-        cursor,
         window_drag,
         ime_cursor,
-        press_scale,
         scale: static_scale,
         time_scale,
         help,
@@ -363,8 +382,6 @@ fn flatten_owned(
         material,
         aspect_fit,
         selection_group,
-        selection_copy,
-        on_selection_change,
         a11y,
         inert,
         ..
@@ -399,109 +416,90 @@ fn flatten_owned(
     } else {
         None
     };
-    nodes.push(Node {
-        on_paste,
-        on_window_focus,
-        focus,
-        modal,
-        looping,
-        id: NodeId(0),
-        path,
-        key,
+    let cold = pack_node_cold(NodeCold {
         trace_name,
         trace_namespace,
-        role,
         label,
-        vis,
         live,
-        text,
-        text_layout: None,
-        elided: None,
         run_layout: None,
         live_text_seen: None,
-        on_press,
-        on_double_press,
-        on_secondary_press,
-        on_hover,
-        on_hover_change,
-        hover_delay,
-        on_pointer_move,
-        gestures,
-        above,
-        on_drag,
-        drag_out,
-        drag_threshold,
-        on_drag_start,
-        on_drag_end,
-        drop,
-        motion,
+        looping,
         opacity_motion,
         lead,
-        width_leads,
-        instant_changes,
         transition,
         matched: matched.map(|id| (id, own_motion)),
+        above,
         scroll,
         scroll_axes,
-        on_at_bottom,
-        on_far_from_bottom,
-        on_visible_rows,
-        on_layout,
-        on_screen_layout,
-        on_drawn_layout,
-        on_scroll_offset,
-        sticky,
         scroll_edges,
+        sticky,
         growth,
-        streaming,
-        whole,
         glide,
-        input,
-        cursor,
-        window_drag,
-        ime_cursor,
-        selection_group,
-        selection_copy,
-        on_selection_change,
         a11y,
-        inert,
-        press_scale,
-        static_scale,
-        scale_track: false,
-        group_fade: false,
-        time_scale,
         pixel_aspect,
         aspect_fit,
         material,
-        in_row,
-        virtual_mount,
-        parent,
-        taffy: taffy::NodeId::from(0u64),
-        target: [0.0; 4],
-        local: MRect::ZERO,
-        inset: [0.0; 4],
         help,
         help_cut,
         #[cfg(debug_assertions)]
         scroll_source,
+    });
+    nodes.push(Node {
+        id: NodeId(0),
+        path,
+        key,
+        role,
+        parent,
+        taffy: taffy::NodeId::from(0u64),
+        text,
+        text_layout: None,
+        elided: None,
+        input,
+        focus,
+        handlers,
+        cold,
+        vis,
+        target: [0.0; 4],
+        local: MRect::ZERO,
+        inset: [0.0; 4],
+        motion,
+        static_scale,
+        time_scale,
+        in_row,
+        width_leads,
+        instant_changes,
+        streaming,
+        whole,
+        inert,
+        scale_track: false,
+        group_fade: false,
+        virtual_mount,
+        selection_group,
+        window_drag,
+        ime_cursor,
+        moved_stub: false,
     });
     let child_in_row = match in_row {
         RowLayout::Free if parent_is_stack => if animate_layout { RowLayout::Horizontal } else { RowLayout::Snaps },
         r => r,
     };
     let row = matches!(style.flex_direction, FlexDirection::Row | FlexDirection::RowReverse);
-    let mut kids = Vec::with_capacity(total_children);
+    let kids_start = memo_ctx.kids.len();
+    memo_ctx.kids.reserve(total_children);
     let shared_len = memo_children.as_ref().map_or(0, |m| m.children.len());
     if let Some(shared) = &memo_children {
         for (i, c) in shared.children.iter().enumerate() {
-            kids.push(flatten_ref(c, Some(me), path_buf, i, motion, child_in_row, row, child_sx, taffy, nodes, entries, scale, memo_ctx));
+            let kid = flatten_ref(c, Some(me), path_buf, i, motion, child_in_row, row, child_sx, taffy, nodes, entries, scale, memo_ctx);
+            memo_ctx.kids.push(kid);
         }
     }
     for (j, c) in children.into_iter().enumerate() {
-        kids.push(flatten_owned(c, Some(me), path_buf, shared_len + j, motion, child_in_row, row, child_sx, taffy, nodes, entries, scale, memo_ctx));
+        let kid = flatten_owned(c, Some(me), path_buf, shared_len + j, motion, child_in_row, row, child_sx, taffy, nodes, entries, scale, memo_ctx);
+        memo_ctx.kids.push(kid);
     }
     path_buf.truncate(prev_len);
-    let id = sync_taffy_node(me, Cow::Owned(style), &kids, text_meta, taffy, nodes, entries);
+    let id = sync_taffy_node(me, Cow::Owned(style), &memo_ctx.kids[kids_start..], text_meta, taffy, nodes, entries);
+    memo_ctx.kids.truncate(kids_start);
     if let Some((built_id, inherited, hover_within)) = record_built {
         memo_ctx.pending.push(memo_reuse::PendingFlat {
             built_id,
@@ -594,103 +592,111 @@ fn flatten_ref(
     } else {
         None
     };
+    let cold_any = el.trace_name.is_some()
+        || trace_namespace.is_some()
+        || el.label.is_some()
+        || !el.live.is_empty()
+        || el.looping.is_some()
+        || el.opacity_motion.is_some()
+        || el.lead.is_some()
+        || el.transition.is_some()
+        || el.matched.is_some()
+        || el.above.is_some()
+        || el.scroll.is_some()
+        || el.scroll_axes != crate::el::ScrollAxes::Y
+        || el.scroll_edges != crate::el::ScrollEdges::default()
+        || el.sticky.is_some()
+        || el.growth.is_some()
+        || el.glide.is_some()
+        || el.a11y != crate::el::A11y::default()
+        || pixel_aspect.is_some()
+        || aspect_fit.is_some()
+        || el.material.is_some()
+        || el.help.is_some()
+        || el.help_cut;
+    #[cfg(debug_assertions)]
+    let cold_any = cold_any || el.scroll_source.is_some();
+    let cold = if cold_any {
+        crate::cold::Cold::from_owned(NodeCold {
+            trace_name: el.trace_name,
+            trace_namespace,
+            label: el.label.clone(),
+            live: el.live.clone(),
+            run_layout: None,
+            live_text_seen: None,
+            looping: el.looping.clone(),
+            opacity_motion: el.opacity_motion.clone(),
+            lead: el.lead,
+            transition: el.transition.clone(),
+            matched: el.matched.as_ref().map(|id| (id.clone(), own_motion)),
+            above: el.above.clone(),
+            scroll: el.scroll,
+            scroll_axes: el.scroll_axes,
+            scroll_edges: el.scroll_edges,
+            sticky: el.sticky.clone(),
+            growth: el.growth.clone(),
+            glide: el.glide,
+            a11y: el.a11y,
+            pixel_aspect,
+            aspect_fit,
+            material: el.material,
+            help: el.help.clone(),
+            help_cut: el.help_cut,
+            #[cfg(debug_assertions)]
+            scroll_source: el.scroll_source,
+        })
+    } else {
+        crate::cold::Cold::default()
+    };
     nodes.push(Node {
-        on_paste: el.on_paste.clone(),
-        on_window_focus: el.on_window_focus.clone(),
-        focus: el.focus.clone(),
-        modal: el.modal.clone(),
-        looping: el.looping.clone(),
         id: NodeId(0),
         path,
         key: el.key.clone(),
-        trace_name: el.trace_name,
-        trace_namespace,
         role: el.role,
-        label: el.label.clone(),
-        vis,
-        live: el.live.clone(),
+        parent,
+        taffy: taffy::NodeId::from(0u64),
         text,
         text_layout: None,
         elided: None,
-        run_layout: None,
-        live_text_seen: None,
-        on_press: el.on_press.clone(),
-        on_double_press: el.on_double_press.clone(),
-        on_secondary_press: el.on_secondary_press.clone(),
-        on_hover: el.on_hover.clone(),
-        on_hover_change: el.on_hover_change.clone(),
-        hover_delay: el.hover_delay,
-        on_pointer_move: el.on_pointer_move.clone(),
-        gestures: el.gestures.clone(),
-        above: el.above.clone(),
-        on_drag: el.on_drag.clone(),
-        drag_out: el.drag_out.clone(),
-        drag_threshold: el.drag_threshold,
-        on_drag_start: el.on_drag_start.clone(),
-        on_drag_end: el.on_drag_end.clone(),
-        drop: el.drop.clone(),
-        motion,
-        opacity_motion: el.opacity_motion.clone(),
-        lead: el.lead,
-        width_leads: el.width_leads,
-        instant_changes,
-        transition: el.transition.clone(),
-        matched: el.matched.as_ref().map(|id| (id.clone(), own_motion)),
-        scroll: el.scroll,
-        scroll_axes: el.scroll_axes,
-        on_at_bottom: el.on_at_bottom.clone(),
-        on_far_from_bottom: el.on_far_from_bottom.clone(),
-        on_visible_rows: el.on_visible_rows.clone(),
-        on_layout: el.on_layout.clone(),
-        on_screen_layout: el.on_screen_layout.clone(),
-        on_drawn_layout: el.on_drawn_layout.clone(),
-        on_scroll_offset: el.on_scroll_offset.clone(),
-        sticky: el.sticky.clone(),
-        scroll_edges: el.scroll_edges,
-        growth: el.growth.clone(),
-        streaming: el.streaming,
-        whole: el.whole,
-        glide: el.glide,
         input,
-        cursor: el.cursor.clone(),
-        window_drag: el.window_drag,
-        ime_cursor: el.ime_cursor,
-        selection_group: el.selection_group,
-        selection_copy: el.selection_copy.clone(),
-        on_selection_change: el.on_selection_change.clone(),
-        a11y: el.a11y,
-        inert,
-        press_scale: el.press_scale,
-        static_scale: el.scale,
-        scale_track: false,
-        group_fade: false,
-        time_scale: el.time_scale,
-        pixel_aspect,
-        aspect_fit,
-        material: el.material,
-        in_row,
-        virtual_mount: el.virtual_mount,
-        parent,
-        taffy: taffy::NodeId::from(0u64),
+        focus: el.focus.clone(),
+        handlers: el.handlers.clone(),
+        cold,
+        vis,
         target: [0.0; 4],
         local: MRect::ZERO,
         inset: [0.0; 4],
-        help: el.help.clone(),
-        help_cut: el.help_cut,
-        #[cfg(debug_assertions)]
-        scroll_source: el.scroll_source,
+        motion,
+        static_scale: el.scale,
+        time_scale: el.time_scale,
+        in_row,
+        width_leads: el.width_leads,
+        instant_changes,
+        streaming: el.streaming,
+        whole: el.whole,
+        inert,
+        scale_track: false,
+        group_fade: false,
+        virtual_mount: el.virtual_mount,
+        selection_group: el.selection_group,
+        window_drag: el.window_drag,
+        ime_cursor: el.ime_cursor,
+        moved_stub: false,
     });
     let child_in_row = match in_row {
         RowLayout::Free if parent_is_stack => if animate_layout { RowLayout::Horizontal } else { RowLayout::Snaps },
         r => r,
     };
     let row = matches!(style.flex_direction, FlexDirection::Row | FlexDirection::RowReverse);
-    let mut kids = Vec::with_capacity(total_children);
+    let kids_start = memo_ctx.kids.len();
+    memo_ctx.kids.reserve(total_children);
     for (i, c) in el.all_children().enumerate() {
-        kids.push(flatten_ref(c, Some(me), path_buf, i, motion, child_in_row, row, child_sx, taffy, nodes, entries, scale, memo_ctx));
+        let kid = flatten_ref(c, Some(me), path_buf, i, motion, child_in_row, row, child_sx, taffy, nodes, entries, scale, memo_ctx);
+        memo_ctx.kids.push(kid);
     }
     path_buf.truncate(prev_len);
-    let id = sync_taffy_node(me, style, &kids, text_meta, taffy, nodes, entries);
+    let id = sync_taffy_node(me, style, &memo_ctx.kids[kids_start..], text_meta, taffy, nodes, entries);
+    memo_ctx.kids.truncate(kids_start);
     if let Some((built_id, inherited, hover_within)) = record_built {
         memo_ctx.pending.push(memo_reuse::PendingFlat {
             built_id,

@@ -102,12 +102,14 @@ mod el_child_exit;
 mod el_drop;
 mod el_effect;
 mod el_focus;
+mod el_handlers;
 mod el_pills;
 mod el_pixel_snap;
 mod el_ride_trailing;
 mod el_sticky;
 mod el_text;
 mod el_tx;
+mod el_visual;
 mod element_info;
 #[cfg(target_vendor = "apple")]
 pub mod embed;
@@ -121,6 +123,13 @@ pub mod live;
 pub mod memo;
 pub mod motion_gate;
 mod pixels;
+#[cfg(target_os = "macos")]
+mod gpu;
+#[cfg(all(target_os = "macos", feature = "metal-backend"))]
+#[doc(hidden)]
+pub use gpu::metal::bench::dispatch_overhead as __metal_dispatch_overhead;
+mod gpu_backend;
+pub use gpu_backend::GpuBackend;
 #[cfg(not(target_arch = "wasm32"))]
 mod gpu_pick;
 pub mod gpu_springs;
@@ -153,6 +162,8 @@ mod frame_profile;
 #[doc(hidden)]
 pub use frame_profile::{PHASES, take_frame_phases, thread_cpu_ms};
 mod perf_warn;
+#[cfg(not(target_arch = "wasm32"))]
+mod ready_signal;
 pub mod file_dialog;
 pub mod tray;
 mod open_url;

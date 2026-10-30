@@ -505,7 +505,7 @@ std::thread::spawn(move || {
     handle.update(|s, tx| ..); // change state on the UI thread; commits on the next frame
     handle.close();            // as the close button (on_close runs)
     handle.minimize();         // as the minimize button
-    handle.quit();             // run returns
+    handle.quit();             // run returns; on web, unmounts
 });
 app.run();
 ```
@@ -629,9 +629,16 @@ app for the patterns it lists.
   The first view build and layout run inside creation, right after the window-created callbacks, so keep the initial
   state, `view` and `on_window` cheap.
 - **Defer the rest to `on_ready`.** It runs once per native creation after the first frame is ready (for a
-  launcher, while hidden). Capture `app.handle()` and call `handle.update(|s, tx| ..)` there to start status
+  launcher, while hidden). A window that isn't on screen (covered, occluded, hidden or on another Space) doesn't
+  wait to draw: it runs at the first frame skipped for that, or a second after the window opens. Capture `app.handle()` and call `handle.update(|s, tx| ..)` there to start status
   items, HUDs, secondary windows, network and indexing; updates run on the UI thread even with no window showing.
   There is no state-level first-frame hook yet.
+- **A launcher can wait for readiness.** With `RUNE_READY_DIR` set, the process writes
+  `$RUNE_READY_DIR/<bundle id>.<pid>` (the main bundle's identifier on macOS, else the executable's name) right
+  after its first `on_ready` returns, and removes it when it exits normally. It's one line of JSON,
+  `{"pid":123,"bundle_id":"com.example.app","ready_ms":412,"rune":"0.1.0"}`, with `ready_ms` counted from the
+  process's start; the directory is made 0700 if it's missing. A process killed outright leaves its file, so treat
+  one whose PID isn't running as stale. Without the variable nothing is written.
 - **Keep the first second still.** Rune animates nothing then, so every frame is the app's. Land state that
   arrives right after launch (a system setting, a first network answer) with `tx.instant()`, or don't animate it.
   One settings window's launch fade drew about 85 frames in its first second instead of 4 to 8, and drawing back to
@@ -1649,11 +1656,15 @@ draws:
 let scale = env.scale; // the window's device pixels per point
 let mark = cache.svg(svg_bytes, 16.0, scale);               // fits 16 pt square, crisp at 2×
 let any = cache.load_mime(bytes, "image/svg+xml", 16.0, scale); // from a data URL's MIME type
-let file = cache.file("assets/logo.svg", 48.0, scale);      // read on the worker; not on web
+let file = cache.file("assets/logo.svg", 48.0, scale);      // read on the worker; fetched on web
+let photo = cache.url("https://example.com/p.avif", 96.0, scale); // web: the browser fetches and decodes
 ```
 
 `cache.file` treats `.svg` and `.svgz` paths (or SVG content) as vectors and decodes other
-files like `load`. `cache.load` recognises SVG by its content and rasterizes it at twice its
+files like `load`. On web, `cache.file` and `cache.url` fetch the URL (relative to the page) and
+let the browser decode it off the main thread, so WebP and AVIF work there; SVG still rasterizes
+through resvg. On native `cache.url` takes a path or `file:` URL only: Rune has no HTTP client,
+so fetch remote bytes yourself and call `load`. `cache.load` recognises SVG by its content and rasterizes it at twice its
 own size. SVG text needs fonts resvg isn't given, so convert text to paths. With the feature
 off, SVG images resolve to `Image::error`.
 

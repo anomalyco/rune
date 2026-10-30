@@ -432,11 +432,24 @@ impl Gpu {
         Self::new(Self::instance(), None)
     }
 
+    /// A headless GPU on wgpu's backends, for tests of what needs wgpu-hal.
+    #[cfg(test)]
+    pub(crate) fn headless_wgpu() -> Gpu {
+        Self::new(Self::wgpu_instance(), None)
+    }
+
     /// Without `VALIDATION_INDIRECT_CALL`: Rune issues no indirect draws or dispatches, and the
     /// validation pipeline wgpu would build for them costs every device a shader compile (about
     /// 40 ms on a Mac's first launch after an install or update). Indirect draws a compositor
     /// records on Rune's device still work; wgpu just doesn't check their argument buffers.
     pub fn instance() -> wgpu::Instance {
+        #[cfg(all(target_os = "macos", feature = "metal-backend"))]
+        if crate::gpu::metal::enabled() { return crate::gpu::metal::instance(); }
+        Self::wgpu_instance()
+    }
+
+    /// wgpu's own backends, whatever `RUNE_GPU_BACKEND` says.
+    fn wgpu_instance() -> wgpu::Instance {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
@@ -487,6 +500,12 @@ pub fn prewarm_gpu() {
     prewarm::start();
 }
 
+/// Starts `prewarm_gpu`'s thread over if it's working, for a backend chosen after it started.
+#[cfg(all(target_os = "macos", feature = "metal-backend"))]
+pub(crate) fn restart_prewarm() {
+    prewarm::restart();
+}
+
 /// Drops what `prewarm_gpu` made if no window took it.
 pub(crate) fn discard_prewarm() {
     #[cfg(not(test))]
@@ -494,79 +513,8 @@ pub(crate) fn discard_prewarm() {
 }
 
 #[cfg(target_os = "macos")]
-mod prewarm {
-    use super::{Gpu, Renderer};
-    use std::sync::Mutex;
-    use std::thread::JoinHandle;
-
-    /// A Mac window's target format (`surface_config`), which blends in sRGB space unless the
-    /// app turns that off, so the window renders with the pipeline compiled here.
-    const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
-
-    struct Prewarmed(Gpu, Renderer);
-    // SAFETY: wgpu's objects are `Send`. The one part of a `Renderer` that isn't, the native
-    // surface renderer with its CoreVideo texture cache, is made on first use: a new renderer
-    // has none (asserted where it's made).
-    unsafe impl Send for Prewarmed {}
-
-    #[derive(Default)]
-    enum State {
-        #[default]
-        Idle,
-        Running(JoinHandle<Option<Prewarmed>>),
-        Done,
-    }
-
-    pub(super) struct Slot(Mutex<State>);
-
-    impl Slot {
-        pub(super) const fn new() -> Self {
-            Self(Mutex::new(State::Idle))
-        }
-
-        pub(super) fn start(&self) {
-            let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
-            if !matches!(*state, State::Idle) { return; }
-            let thread = std::thread::Builder::new().name("rune-gpu-prewarm".into()).spawn(|| {
-                objc2::rc::autoreleasepool(|_| {
-                    let gpu = Gpu::try_new(Gpu::instance(), None).ok()?;
-                    #[cfg(test)]
-                    let loads_before = super::metallib::thread_loads();
-                    let renderer = Renderer::new(&gpu.device, FORMAT);
-                    assert!(renderer.surfaces.is_none(), "a new renderer has no native surface renderer");
-                    #[cfg(test)]
-                    if super::metallib::metallib_enabled() {
-                        assert_eq!(super::metallib::thread_loads(), loads_before + 1, "prewarm_gpu loads the precompiled metallib");
-                    }
-                    Some(Prewarmed(gpu, renderer))
-                })
-            });
-            *state = match thread {
-                Ok(thread) => State::Running(thread),
-                Err(_) => State::Done,
-            };
-        }
-
-        pub(super) fn take(&self) -> Option<(Gpu, Renderer)> {
-            let state = std::mem::replace(&mut *self.0.lock().unwrap_or_else(|e| e.into_inner()), State::Done);
-            let State::Running(thread) = state else { return None };
-            thread.join().ok().flatten().map(|Prewarmed(gpu, renderer)| (gpu, renderer))
-        }
-
-        /// The thread, if still working, drops its result when it finishes.
-        pub(super) fn discard(&self) {
-            let state = std::mem::replace(&mut *self.0.lock().unwrap_or_else(|e| e.into_inner()), State::Done);
-            drop(state);
-        }
-    }
-
-    static GLOBAL: Slot = Slot::new();
-
-    pub(super) fn start() { GLOBAL.start(); }
-    pub(super) fn take() -> Option<(Gpu, Renderer)> { GLOBAL.take() }
-    #[cfg_attr(test, allow(dead_code))]
-    pub(super) fn discard() { GLOBAL.discard(); }
-}
+#[path = "render_prewarm.rs"]
+mod prewarm;
 
 #[cfg(not(target_os = "macos"))]
 mod prewarm {
@@ -1211,6 +1159,15 @@ mod prewarm_tests {
         assert!(discarded.take().is_none());
         discarded.start();
         assert!(discarded.take().is_none());
+
+        // `restart` replaces a working thread and leaves an idle or finished slot alone.
+        let restarted = super::prewarm::Slot::new();
+        restarted.restart();
+        restarted.start();
+        restarted.restart();
+        assert!(restarted.take().is_some(), "the new thread's GPU");
+        restarted.restart();
+        assert!(restarted.take().is_none(), "a taken slot stays taken");
     }
 
     /// A prewarmed device without a feature the window wants (and the adapter has) is replaced on

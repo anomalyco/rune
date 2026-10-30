@@ -43,6 +43,42 @@ export function openLink(url) {
     window.open(parsed.href, '_blank', 'noopener,noreferrer');
 }
 
+// `url` resolved against the page, and whether it stays on the page's origin.
+export function resolveLink(url) {
+    const parsed = new URL(url, document.baseURI);
+    if (!['https:', 'http:', 'mailto:'].includes(parsed.protocol)) throw new Error('Unsupported link scheme.');
+    return [parsed.href, parsed.origin === location.origin];
+}
+
+export function assignLink(href) {
+    location.assign(href);
+}
+
+// `url` (relative to the page) decoded by the browser's own codecs, which run off the main
+// thread: `[width, height, rgba]` with straight-alpha sRGB RGBA bytes, upright by EXIF. SVG comes
+// back as `[0, 0, bytes]` for Rune to rasterize. Images over `maxSide` a side are refused
+// before their pixels are read.
+export async function fetchImage(url, maxSide) {
+    const response = await fetch(new URL(url, document.baseURI));
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const blob = await response.blob();
+    const type = (response.headers.get('content-type') || blob.type).split(';')[0].trim().toLowerCase();
+    const path = response.url ? new URL(response.url).pathname : '';
+    if (type === 'image/svg+xml' || /\.svgz?$/i.test(path)) return [0, 0, new Uint8Array(await blob.arrayBuffer())];
+    const bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image', colorSpaceConversion: 'default' });
+    try {
+        const { width, height } = bitmap;
+        if (width > maxSide || height > maxSide) throw new Error(`${width}×${height} is over ${maxSide} pixels a side`);
+        const canvas = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(width, height)
+            : Object.assign(document.createElement('canvas'), { width, height });
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        context.drawImage(bitmap, 0, 0);
+        return [width, height, new Uint8Array(context.getImageData(0, 0, width, height).data.buffer)];
+    } finally {
+        bitmap.close();
+    }
+}
+
 export function viewport(canvas, callback, embedded) {
     const probe = document.createElement('div');
     probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';

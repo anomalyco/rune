@@ -16,7 +16,7 @@ impl<S: 'static> Runtime<S> {
         if self.virtuals.is_empty() { return false; }
         let mut queued = false;
         for i in 0..self.nodes.len() {
-            if self.nodes[i].on_visible_rows.is_none() || self.subtree_exiting(i) { continue; }
+            if self.nodes[i].handlers.get().is_none_or(|h| h.on_visible_rows.is_none()) || self.subtree_exiting(i) { continue; }
             let path = &self.nodes[i].path;
             let Some(v) = self.virtuals.get_mut(path) else { continue };
             let (offset, pinned) = self.path_ids.get(&v.scroll_path)

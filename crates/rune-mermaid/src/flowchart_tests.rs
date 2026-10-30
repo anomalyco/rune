@@ -1,9 +1,10 @@
 use super::*;
-use crate::flowchart_draw::boundary;
-use crate::{DiagramStyle, dist};
+use crate::DiagramStyle;
+use crate::canvas::dist;
+use crate::layered_draw::boundary;
 
 fn flow(src: &str) -> Flowchart {
-    match crate::parse(src) {
+    match crate::parse(src).map(|p| p.diagram) {
         Some(crate::Diagram::Flowchart(f)) => f,
         _ => panic!("not a flowchart: {src:?}"),
     }
@@ -37,6 +38,25 @@ fn directions_shapes_and_labels() {
         ]
     );
     assert_eq!(edges(&f)[3..5], [("D", "E"), ("D", "F")], "`&` fans out");
+}
+
+#[test]
+fn v11_at_shapes_subgraph_endpoints_and_link_styles() {
+    let f = flow(
+        "flowchart TD\n\
+         App[Viewer] --> core\n\
+         subgraph core [Rune Core]\n\
+           El[El tree] --> Store@{ shape: cyl, label: \"AnimationStore\" }\n\
+         end\n\
+         core --> GPU@{ shape: hex, label: \"wgpu\" }\n\
+         linkStyle 0 stroke:#22c55e,stroke-width:2px",
+    );
+    assert_eq!(f.nodes.len(), 4, "placeholder node for `core` was redirected and removed");
+    assert_eq!(edges(&f), [("App", "El"), ("El", "Store"), ("Store", "GPU")]);
+    let store = f.nodes.iter().find(|n| n.id == "Store").unwrap();
+    assert_eq!((store.shape, store.label.as_str()), (NodeShape::Cylinder, "AnimationStore"));
+    assert!(f.edges[0].style.stroke.is_some());
+    assert_eq!(f.edges[0].style.width, Some(2.0));
 }
 
 #[test]
@@ -108,21 +128,88 @@ fn quoted_labels_breaks_and_dashed_ids() {
 }
 
 #[test]
-fn malformed_and_unsupported_input_is_rejected() {
-    for src in [
-        "graph XY\nA-->B",
-        "graph TD\nA[unclosed --> B",
-        "graph TD\nA -- --> B",
-        "graph TD\nA -->|unclosed B",
-        "graph TD\nA - B",
-        "graph TD\nA@{ shape: rect } --> B",
-        "graph TD\nend",
-        "graph TD\nA --> ",
-        "graph TD",
-        "flowchart TD\n  A{\"quote never closes} --> B",
-    ] {
+fn only_sources_where_nothing_reads_are_rejected() {
+    for src in ["graph TD", "graph TD\nend", "graph TD\n-->", "graph LR\n  this is not valid", "graph TD\n%% just a comment", "notADiagram\nA --> B"] {
         assert!(crate::parse(src).is_none(), "{src:?}");
     }
+}
+
+#[test]
+fn an_unclosed_shape_is_a_rectangle_with_its_text_as_written() {
+    // Mermaid itself rejects `[/…]` without its `/]`; we draw it as a plain rectangle on purpose,
+    // so one stray slash doesn't turn the whole chart back into source.
+    let src = "flowchart LR\n  A[List + count] --> B[/items split view]\n  B --> C[Details]\n  C --> D[Pause / Resume / Delete]";
+    let f = flow(src);
+    let nodes: Vec<(&str, &str, NodeShape)> = f.nodes.iter().map(|n| (n.id.as_str(), n.label.as_str(), n.shape)).collect();
+    assert_eq!(
+        nodes,
+        [
+            ("A", "List + count", NodeShape::Rect),
+            ("B", "/items split view", NodeShape::Rect),
+            ("C", "Details", NodeShape::Rect),
+            ("D", "Pause / Resume / Delete", NodeShape::Rect),
+        ]
+    );
+    assert_eq!(edges(&f), [("A", "B"), ("B", "C"), ("C", "D")]);
+    assert!(crate::scene(src, &DiagramStyle::neutral(true), None).is_some(), "the whole chart draws, no fallback");
+    let label = |src: &str| flow(src).nodes[0].label.clone();
+    assert_eq!(label("graph TD\nA[\\back slash]"), "\\back slash");
+    assert_eq!(label("graph TD\nA(open round"), "open round");
+    assert_eq!(label("graph TD\nA[unclosed --> B"), "unclosed --> B");
+    assert_eq!(label("flowchart TD\n  A{\"quote never closes} --> B"), "\"quote never closes} --> B");
+    assert_eq!(flow("graph TD\nA@{ shape: not_a_shape } --> B").nodes[0].shape, NodeShape::Rect);
+    assert_eq!(flow("graph TD\nA@{ unclosed --> B").nodes[0].label, "A");
+}
+
+#[test]
+fn punctuation_in_labels_is_plain_text() {
+    // `->` inside a cylinder is its label, not an edge; `_`, `*`, `+` and `.` are plain text; and
+    // the unclosed `[/…]` (which Mermaid itself rejects) is a rectangle on purpose.
+    let src = "flowchart LR\n  a[setting.some_name] --> b[run_* + /go]\n  c[(store -> row)] --> d[Item.Worker]\n  d --> e[/api/v2/item]";
+    let f = flow(src);
+    let nodes: Vec<(&str, &str, NodeShape)> = f.nodes.iter().map(|n| (n.id.as_str(), n.label.as_str(), n.shape)).collect();
+    assert_eq!(
+        nodes,
+        [
+            ("a", "setting.some_name", NodeShape::Rect),
+            ("b", "run_* + /go", NodeShape::Rect),
+            ("c", "store -> row", NodeShape::Cylinder),
+            ("d", "Item.Worker", NodeShape::Rect),
+            ("e", "/api/v2/item", NodeShape::Rect),
+        ]
+    );
+    assert_eq!(edges(&f), [("a", "b"), ("c", "d"), ("d", "e")]);
+    assert!(crate::scene(src, &DiagramStyle::neutral(false), None).is_some(), "the whole chart draws, no fallback");
+}
+
+#[test]
+fn a_statement_that_does_not_read_is_skipped() {
+    for (src, want) in [
+        ("graph XY\nA-->B", vec![("A", "B")]),
+        ("graph TD\nA -- --> B\nC --> D", vec![("C", "D")]),
+        ("graph TD\nA -->|unclosed B\nC --> D", vec![("C", "D")]),
+        ("graph TD\nA - B\nC --> D", vec![("C", "D")]),
+        ("graph TD\nsubgraph open\n  A --> B", vec![("A", "B")]),
+        ("graph TD\nend\nA --> B\nend", vec![("A", "B")]),
+        ("graph TD\nA --> \nC --> D", vec![("C", "D")]),
+    ] {
+        let f = flow(src);
+        assert_eq!(edges(&f), want, "{src:?}");
+        let ids: Vec<&str> = f.nodes.iter().map(|n| n.id.as_str()).collect();
+        let mut used: Vec<&str> = want.iter().flat_map(|&(a, b)| [a, b]).collect();
+        used.dedup();
+        if !want.is_empty() {
+            assert_eq!(ids, used, "a statement that fails adds no nodes: {src:?}");
+        }
+    }
+}
+
+#[test]
+fn going_past_the_bounds_still_rejects() {
+    let deep = (0..=crate::MAX_DEPTH).map(|d| format!("subgraph s{d}\nA{d}")).collect::<Vec<_>>().join("\n");
+    assert!(crate::parse(&format!("graph TD\n{deep}")).is_none());
+    let wide = (0..crate::MAX_ITEMS).map(|i| format!("N{i} --> M{i}")).collect::<Vec<_>>().join("\n");
+    assert!(crate::parse(&format!("graph TD\n{wide}")).is_none());
 }
 
 #[test]

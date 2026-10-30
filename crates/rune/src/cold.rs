@@ -17,6 +17,25 @@ impl<T: Empty> Default for Cold<T> {
 }
 
 impl<T: Empty> Cold<T> {
+    #[inline(always)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_none()
+    }
+
+    #[inline(always)]
+    pub(crate) fn get(&self) -> Option<&T> {
+        self.0.as_deref()
+    }
+
+    #[inline(always)]
+    pub(crate) fn get_mut_if_some(&mut self) -> Option<&mut T> {
+        self.0.as_mut().map(Rc::make_mut)
+    }
+
+    pub(crate) fn from_owned(value: T) -> Self {
+        Cold(Some(Rc::new(value)))
+    }
+
     pub(crate) fn ptr_eq(a: &Self, b: &Self) -> bool {
         match (&a.0, &b.0) {
             (None, None) => true,
@@ -26,8 +45,15 @@ impl<T: Empty> Cold<T> {
     }
 }
 
+impl<T: Empty + std::fmt::Debug> std::fmt::Debug for Cold<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&**self, f)
+    }
+}
+
 impl<T: Empty> Deref for Cold<T> {
     type Target = T;
+    #[inline(always)]
     fn deref(&self) -> &T { self.0.as_deref().unwrap_or(T::EMPTY) }
 }
 

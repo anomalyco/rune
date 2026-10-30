@@ -2,6 +2,10 @@
 
 use super::*;
 
+/// How long `on_ready` waits for a first frame that never comes, as when the window opens
+/// hidden or its drawable never arrives. A covered or occluded window doesn't wait for it.
+pub(super) const READY_FALLBACK: Duration = Duration::from_secs(1);
+
 /// The open window. Fields drop in order: what's native to the OS, then the surface before its
 /// window.
 pub(super) struct Win {
@@ -49,9 +53,32 @@ impl Win {
 /// A reveal requested before the hidden frame completes is held behind the fence, as is a
 /// reveal of cached pixels older than the state. Hiding cancels that intent, including when
 /// the GPU frame completes later. `deadline` is (next retry, give up) while it prepares.
+/// `on_ready` runs at the first frame, or at `ready_at` when there is none to wait for: the
+/// window is covered, occluded or hidden, or no frame came within `READY_FALLBACK` of opening.
 #[derive(Default)]
-pub(super) struct FirstFrame { pub(super) ready: bool, pub(super) reveal: bool, pub(super) notified: bool, pub(super) deadline: Option<(Instant, Instant)> }
+pub(super) struct FirstFrame {
+    pub(super) ready: bool,
+    pub(super) reveal: bool,
+    pub(super) notified: bool,
+    pub(super) deadline: Option<(Instant, Instant)>,
+    /// `on_ready` has run for this native window.
+    pub(super) ran: bool,
+    pub(super) ready_at: Option<Instant>,
+}
 impl FirstFrame {
+    /// A window opened at `now`.
+    pub(super) fn opened(now: Instant) -> Self { Self { ready_at: Some(now + READY_FALLBACK), ..Default::default() } }
+    /// A frame went by undrawn because the window isn't on screen, which may last until it is
+    /// uncovered: `on_ready` stops waiting for a drawn one.
+    pub(super) fn skipped(&mut self, now: Instant) {
+        if !self.ran { self.ready_at = Some(self.ready_at.map_or(now, |at| at.min(now))); }
+    }
+    /// When `on_ready` runs without a first frame, until it has run.
+    pub(super) fn ready_deadline(&self) -> Option<Instant> { self.ready_at.filter(|_| !self.ran) }
+    /// `on_ready` is owed without a first frame.
+    pub(super) fn ready_due(&self, now: Instant) -> bool { self.ready_deadline().is_some_and(|at| at <= now) }
+    /// Takes the first `on_ready`: true once per native window.
+    pub(super) fn take_ready(&mut self) -> bool { !std::mem::replace(&mut self.ran, true) }
     /// Whether to show the cached frame now. One already on screen shows at once; its next
     /// frame (or retry) draws a stale state, with no first-frame deadline.
     pub(super) fn request_reveal(&mut self, stale: bool, visible: bool) -> bool {
@@ -278,4 +305,34 @@ impl Win {
         if let Some(panel) = &self.native.panel { panel.request_keys(); return; }
         self.window.focus_window();
     }
+}
+
+/// `on_ready` starts an app's live work, so it can't wait on a drawable: a window launched
+/// covered, occluded or hidden by the system may not draw for as long as it stays that way.
+/// It runs at the first frame skipped for being off screen, or `READY_FALLBACK` after opening
+/// when no frame comes at all; a window on screen still runs it after its first frame.
+#[test]
+fn on_ready_runs_for_a_window_launched_occluded_or_hidden() {
+    let now = Instant::now();
+    let ms = Duration::from_millis;
+    let mut shown = FirstFrame::opened(now);
+    assert!(!shown.ready_due(now + ms(16)), "a window on screen waits for its first frame");
+    shown.ready = true;
+    assert!(shown.pending() && !shown.complete());
+    assert!(shown.take_ready(), "its first frame runs on_ready");
+    assert!(!shown.take_ready() && shown.ready_deadline().is_none(), "once");
+
+    let mut covered = FirstFrame::opened(now);
+    covered.skipped(now + ms(30));
+    assert!(covered.ready_due(now + ms(30)) && covered.take_ready(), "the first covered frame runs on_ready");
+    assert!(!covered.ready && !covered.pending(), "the window isn't ready until it draws");
+    covered.skipped(now + ms(60));
+    assert_eq!(covered.ready_deadline(), None, "and skipping again doesn't run it again");
+    covered.ready = true; // Uncovered.
+    assert!(covered.pending() && !covered.complete() && !covered.take_ready(), "drawing at last doesn't either");
+
+    let mut hidden = FirstFrame::opened(now);
+    assert_eq!(hidden.ready_deadline(), Some(now + READY_FALLBACK), "the event loop wakes for it");
+    assert!(!hidden.ready_due(now + READY_FALLBACK - ms(1)));
+    assert!(hidden.ready_due(now + READY_FALLBACK) && hidden.take_ready(), "a window that never draws runs it after the fallback");
 }
