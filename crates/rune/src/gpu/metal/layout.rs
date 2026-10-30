@@ -6,11 +6,12 @@
 
 use std::sync::Arc;
 
-use objc2_metal::{MTLBuffer, MTLSamplerState, MTLTexture};
+use objc2_metal::{MTLSamplerState, MTLTexture};
 use wgpu::custom::*;
 use wgpu::naga::{self, back::msl};
 
 use super::resource::{MetalBuffer, MetalSampler, MetalView};
+use super::store::Store;
 use super::{Obj, send_sync};
 
 /// The stages a render pipeline binds resources for: vertex, then fragment.
@@ -65,7 +66,8 @@ pub(super) struct StageBinds {
 #[derive(Debug)]
 pub(super) struct BufferBind {
     pub(super) slot: u8,
-    pub(super) raw: Obj<dyn MTLBuffer>,
+    /// Resolved to its current storage when the group is applied.
+    pub(super) store: Arc<Store>,
     pub(super) offset: u64,
     /// Its index among the group's dynamic offsets.
     pub(super) dynamic: Option<usize>,
@@ -167,8 +169,9 @@ impl BindGroup {
                 let binds = &mut group.stages[s];
                 match resource {
                     wgpu::BindingResource::Buffer(b) => {
-                        let raw = b.buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").raw.raw.clone();
-                        binds.buffers.push(BufferBind { slot: slot.buffer.unwrap(), raw, offset: b.offset, dynamic: dynamic_index });
+                        let store = b.buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").store.clone();
+                        if slot.mutable { store.gpu_write(); }
+                        binds.buffers.push(BufferBind { slot: slot.buffer.unwrap(), store, offset: b.offset, dynamic: dynamic_index });
                     }
                     wgpu::BindingResource::TextureView(v) => {
                         binds.textures.push((slot.texture.unwrap(), v.as_custom::<MetalView>().expect("a Metal texture view").raw.raw.clone()));

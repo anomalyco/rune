@@ -3,6 +3,7 @@
 use std::ops::Range;
 use std::ptr::NonNull;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicIsize, Ordering};
 
 use objc2_foundation_video::NSRange;
 use objc2_metal::{
@@ -12,6 +13,7 @@ use objc2_metal::{
 };
 use wgpu::custom::*;
 
+use super::store::Store;
 use super::{Obj, Shared, send_sync};
 
 pub(crate) fn pixel_format(format: wgpu::TextureFormat) -> MTLPixelFormat {
@@ -62,12 +64,13 @@ pub(crate) struct BufferRaw {
     pub(super) raw: Obj<dyn MTLBuffer>,
     contents: NonNull<u8>,
     pub(super) size: u64,
+    live: Arc<AtomicIsize>,
 }
 
 #[derive(Debug)]
 pub(crate) struct MetalBuffer {
-    pub(super) raw: Arc<BufferRaw>,
-    shared: Arc<Shared>,
+    pub(super) store: Arc<Store>,
+    pub(super) shared: Arc<Shared>,
 }
 
 #[derive(Debug)]
@@ -112,25 +115,30 @@ pub(crate) struct MetalSampler {
 
 send_sync!(BufferRaw, MappedRange, TextureRaw, ViewRaw, SamplerRaw);
 
+impl Drop for BufferRaw {
+    fn drop(&mut self) { self.live.fetch_sub(1, Ordering::Relaxed); }
+}
+
 impl BufferRaw {
-    fn from(raw: Obj<dyn MTLBuffer>, size: u64) -> Self {
+    fn from(shared: &Shared, raw: Obj<dyn MTLBuffer>, size: u64) -> Self {
+        shared.buffers.fetch_add(1, Ordering::Relaxed);
         let contents = raw.contents().cast();
-        BufferRaw { raw, contents, size }
+        BufferRaw { raw, contents, size, live: shared.buffers.clone() }
     }
 
     /// A shared buffer of `size` zeroed bytes.
-    pub(super) fn new(device: &Obj<dyn MTLDevice>, size: u64) -> Self {
-        let raw = device.newBufferWithLength_options(size.max(4) as usize, MTLResourceOptions::StorageModeShared).expect("a Metal buffer");
-        Self::from(raw, size)
+    pub(super) fn new(shared: &Shared, size: u64) -> Self {
+        let raw = shared.device.newBufferWithLength_options(size.max(4) as usize, MTLResourceOptions::StorageModeShared).expect("a Metal buffer");
+        Self::from(shared, raw, size)
     }
 
     /// A shared buffer holding a copy of `data`, which is not empty.
-    pub(super) fn with_bytes(device: &Obj<dyn MTLDevice>, data: &[u8]) -> Self {
+    pub(super) fn with_bytes(shared: &Shared, data: &[u8]) -> Self {
         // SAFETY: `data` is valid for its length, which is nonzero.
         let raw = unsafe {
-            device.newBufferWithBytes_length_options(NonNull::from(data).cast(), data.len(), MTLResourceOptions::StorageModeShared)
+            shared.device.newBufferWithBytes_length_options(NonNull::from(data).cast(), data.len(), MTLResourceOptions::StorageModeShared)
         }.expect("a Metal buffer");
-        Self::from(raw, data.len() as u64)
+        Self::from(shared, raw, data.len() as u64)
     }
 
     /// Writes `data` at `offset` from the CPU, which the GPU must not be reading then.
@@ -138,6 +146,17 @@ impl BufferRaw {
         assert!(offset + data.len() as u64 <= self.size, "a write past the end of a buffer");
         // SAFETY: in bounds, checked above, of storage that lives as long as `raw`.
         unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), self.contents.as_ptr().add(offset as usize), data.len()) };
+    }
+
+    /// Copies `range` of `other`, a buffer of the same size, into the same range here.
+    pub(super) fn copy_from(&self, other: &BufferRaw, range: Range<u64>) {
+        if range.is_empty() { return }
+        assert!(range.end <= self.size && range.end <= other.size, "a copy past the end of a buffer");
+        // SAFETY: in bounds of both, checked above; distinct allocations.
+        unsafe {
+            std::ptr::copy_nonoverlapping(other.contents.as_ptr().add(range.start as usize), self.contents.as_ptr().add(range.start as usize),
+                (range.end - range.start) as usize)
+        };
     }
 
     fn range(&self, range: Range<u64>) -> MappedRange {
@@ -149,8 +168,11 @@ impl BufferRaw {
 
 impl MetalBuffer {
     pub(crate) fn new(shared: &Arc<Shared>, size: u64) -> Self {
-        MetalBuffer { raw: Arc::new(BufferRaw::new(&shared.device, size)), shared: shared.clone() }
+        MetalBuffer { store: Arc::new(Store::new(BufferRaw::new(shared, size))), shared: shared.clone() }
     }
+
+    /// The storage commands recorded now read.
+    pub(super) fn raw(&self) -> Arc<BufferRaw> { self.store.current() }
 }
 
 impl BufferInterface for MetalBuffer {
@@ -158,7 +180,7 @@ impl BufferInterface for MetalBuffer {
         self.shared.map_after_work(callback);
     }
     fn get_mapped_range(&self, range: Range<wgpu::BufferAddress>) -> Result<DispatchBufferMappedRange, wgpu::MapRangeError> {
-        Ok(DispatchBufferMappedRange::custom(self.raw.range(range)))
+        Ok(DispatchBufferMappedRange::custom(self.store.current().range(range)))
     }
     fn unmap(&self) {}
     fn destroy(&self) {}

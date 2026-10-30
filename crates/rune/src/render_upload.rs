@@ -4,7 +4,7 @@
 //! recorded into the frame's encoder where the renderer first uses it (`flush_uploads`, at the
 //! start of `encode_layers*` and `draw_target_range_with`), or submitted ahead of a draw into a
 //! caller's pass (`draw_range*`) and of `Renderer::submit`. Globals are written only when they
-//! change, and instances only from the first to the last one that changed.
+//! change, and instances only in the spans that changed.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -52,6 +52,16 @@ impl Uploads {
     pub(super) fn frame_write_stats(&self) -> rune_staging::Stats {
         self.frame_writes.as_ref().map(Staging::stats).unwrap_or_default()
     }
+}
+
+/// Instances `write_instances` compares at once.
+const BLOCK: usize = 64;
+
+/// Whether two equally long instance lists hold the same bytes. Folds over words, which
+/// vectorizes, at about half the cost of a `memcmp`.
+fn same(a: &[Instance], b: &[Instance]) -> bool {
+    let words = |l| bytemuck::cast_slice::<Instance, [u32; 32]>(l);
+    words(a).iter().zip(words(b)).fold(0, |acc, (x, y)| x.iter().zip(y).fold(acc, |acc, (p, q)| acc | (p ^ q))) == 0
 }
 
 fn pack((w, h): (u32, u32)) -> u64 { u64::from(w) << 32 | u64::from(h) }
@@ -280,23 +290,42 @@ impl Renderer {
         }
     }
 
-    /// Writes the instances from the first to the last that differs from what the buffer holds.
+    /// Writes the spans of instances that differ from what the buffer holds, comparing a block
+    /// at a time. Spans less than a block apart merge, so a scroll writes one span and a frame
+    /// where a few instances move writes only those.
     fn write_instances(&mut self, staging: &Staging, instances: &[Instance]) {
         let held = &mut self.uploads.instances;
-        let same = |(a, b): (&Instance, &Instance)| bytemuck::bytes_of(a) == bytemuck::bytes_of(b);
         let shared = instances.len().min(held.len());
-        let pairs = || instances[..shared].iter().zip(&held[..shared]);
-        let first = pairs().position(|p| !same(p)).unwrap_or(shared);
-        let end = if instances.len() > held.len() {
-            instances.len()
-        } else {
-            pairs().rposition(|p| !same(p)).map_or(first, |last| last + 1)
-        };
         held.resize(instances.len(), Instance::zeroed());
-        if first >= end { return; }
-        held[first..end].copy_from_slice(&instances[first..end]);
-        let offset = (first * std::mem::size_of::<Instance>()) as u64;
-        staging.write_buffer(&self.instances, offset, bytemuck::cast_slice(&instances[first..end]));
+        let mut open: Option<std::ops::Range<usize>> = None;
+        for start in (0..shared).step_by(BLOCK) {
+            let end = (start + BLOCK).min(shared);
+            let differs = |i: &usize| !same(&instances[*i..=*i], &held[*i..=*i]);
+            // The first instance alone, so a block that all moved costs one compare to find.
+            let first = if differs(&start) { start } else if same(&instances[start..end], &held[start..end]) { continue } else {
+                (start + 1..end).find(differs).unwrap_or(start)
+            };
+            let last = (first..end).rfind(differs).map_or(end, |i| i + 1);
+            Self::join(&self.instances, held, staging, instances, &mut open, first..last);
+        }
+        if instances.len() > shared { Self::join(&self.instances, held, staging, instances, &mut open, shared..instances.len()); }
+        if let Some(span) = open { Self::write_span(&self.instances, held, staging, instances, span); }
+    }
+
+    /// Adds `span` to the open span if it is less than a block past it, or writes the open span
+    /// and opens `span`.
+    fn join(buffer: &wgpu::Buffer, held: &mut [Instance], staging: &Staging, instances: &[Instance],
+        open: &mut Option<std::ops::Range<usize>>, span: std::ops::Range<usize>) {
+        match open {
+            Some(o) if span.start <= o.end + BLOCK => o.end = span.end,
+            _ => if let Some(o) = open.replace(span) { Self::write_span(buffer, held, staging, instances, o); },
+        }
+    }
+
+    fn write_span(buffer: &wgpu::Buffer, held: &mut [Instance], staging: &Staging, instances: &[Instance], span: std::ops::Range<usize>) {
+        held[span.clone()].copy_from_slice(&instances[span.clone()]);
+        let offset = (span.start * std::mem::size_of::<Instance>()) as u64;
+        staging.write_buffer(buffer, offset, bytemuck::cast_slice(&instances[span]));
     }
 
     /// The staging lost writes (an encoder holding them was dropped unsubmitted): forget what

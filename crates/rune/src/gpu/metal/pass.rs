@@ -5,6 +5,7 @@
 use std::ops::Range;
 use std::ptr::NonNull;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use objc2_metal::{
     MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLIndexType, MTLLoadAction, MTLRenderCommandEncoder, MTLRenderPassDescriptor,
@@ -18,6 +19,7 @@ use super::encode::Rec;
 use super::layout::{Counts, GroupRaw};
 use super::pipeline::{PipelineRaw, RenderPipeline, vertex_slot};
 use super::resource::{BufferRaw, MetalBuffer, MetalView};
+use super::store::{SWAPS, Store};
 use super::submit::Keep;
 use super::{Obj, send_sync};
 
@@ -35,7 +37,10 @@ pub(crate) struct MetalPass {
     sizes_dirty: bool,
     immediates: Vec<u8>,
     immediates_dirty: bool,
-    index: Option<(Arc<BufferRaw>, u64, MTLIndexType, u64)>,
+    index: Option<(Arc<Store>, Arc<BufferRaw>, u64, MTLIndexType, u64)>,
+    vertex: Vec<(u32, Arc<Store>, u64)>,
+    /// `SWAPS` when buffers were last bound: a swap since may have moved a bound buffer.
+    swaps: u64,
 }
 send_sync!(MetalPass);
 
@@ -80,19 +85,38 @@ impl MetalPass {
         };
         MetalPass {
             rec, raw, keep, pipeline: None, groups: Default::default(), dirty: 0, sizes_dirty: false,
-            immediates: Vec::new(), immediates_dirty: false, index: None,
+            immediates: Vec::new(), immediates_dirty: false, index: None, vertex: Vec::new(), swaps: SWAPS.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Rebinds bound buffers whose storage a write swapped since they were bound.
+    fn rebind(&mut self) {
+        let swaps = SWAPS.load(Ordering::Relaxed);
+        if swaps == self.swaps { return }
+        self.swaps = swaps;
+        self.dirty = self.groups.iter().enumerate().filter(|(_, g)| g.is_some()).fold(0, |m, (i, _)| m | 1 << i);
+        for (slot, store, offset) in &self.vertex {
+            let raw = store.current();
+            // SAFETY: as in `set_vertex_buffer`.
+            unsafe { self.raw.setVertexBuffer_offset_atIndex(Some(&raw.raw), *offset as usize, vertex_slot(*slot)) };
+            self.keep.push(raw);
+        }
+        if let Some((store, raw, ..)) = &mut self.index {
+            *raw = store.current();
+            self.keep.push(raw.clone());
         }
     }
 
     /// Applies what changed since the last draw against the bound pipeline.
     fn flush(&mut self) {
+        self.rebind();
         let Some(pipeline) = &self.pipeline else { return };
         let layout = &pipeline.layout;
         while self.dirty != 0 {
             let index = self.dirty.trailing_zeros() as usize;
             self.dirty &= self.dirty - 1;
             let (Some((group, offsets)), Some(bases)) = (&self.groups[index], layout.bases.get(index)) else { continue };
-            apply(&self.raw, group, offsets, bases);
+            apply(&self.raw, group, offsets, bases, &mut self.keep);
             self.sizes_dirty = true;
         }
         if std::mem::take(&mut self.sizes_dirty) {
@@ -124,7 +148,7 @@ fn bytes<T: Copy>(raw: &Obj<dyn MTLRenderCommandEncoder>, s: usize, data: &[T], 
     }
 }
 
-fn apply(raw: &Obj<dyn MTLRenderCommandEncoder>, group: &GroupRaw, offsets: &[u32], bases: &[Counts; 2]) {
+fn apply(raw: &Obj<dyn MTLRenderCommandEncoder>, group: &GroupRaw, offsets: &[u32], bases: &[Counts; 2], keep: &mut Keep) {
     for (s, binds) in group.stages.iter().enumerate() {
         let base = bases[s];
         // SAFETY: slots come from the pipeline layout the shaders were compiled against, and the
@@ -133,7 +157,9 @@ fn apply(raw: &Obj<dyn MTLRenderCommandEncoder>, group: &GroupRaw, offsets: &[u3
             for b in &binds.buffers {
                 let offset = (b.offset + b.dynamic.map_or(0, |i| u64::from(offsets[i]))) as usize;
                 let at = usize::from(base.buffers + b.slot);
-                if s == 0 { raw.setVertexBuffer_offset_atIndex(Some(&b.raw), offset, at) } else { raw.setFragmentBuffer_offset_atIndex(Some(&b.raw), offset, at) }
+                let buffer = b.store.current();
+                if s == 0 { raw.setVertexBuffer_offset_atIndex(Some(&buffer.raw), offset, at) } else { raw.setFragmentBuffer_offset_atIndex(Some(&buffer.raw), offset, at) }
+                keep.push(buffer);
             }
             for (slot, texture) in &binds.textures {
                 let at = usize::from(base.textures + slot);
@@ -186,20 +212,24 @@ impl RenderPassInterface for MetalPass {
         self.dirty |= 1 << index;
     }
     fn set_index_buffer(&mut self, buffer: &DispatchBuffer, format: wgpu::IndexFormat, offset: wgpu::BufferAddress, _: Option<wgpu::BufferSize>) {
-        let raw = buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").raw.clone();
+        let store = buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").store.clone();
+        let raw = store.current();
         let (kind, stride) = match format {
             wgpu::IndexFormat::Uint16 => (MTLIndexType::UInt16, 2),
             wgpu::IndexFormat::Uint32 => (MTLIndexType::UInt32, 4),
         };
         self.keep.push(raw.clone());
-        self.index = Some((raw, offset, kind, stride));
+        self.index = Some((store, raw, offset, kind, stride));
     }
     fn set_vertex_buffer(&mut self, slot: u32, buffer: Option<&DispatchBuffer>, offset: wgpu::BufferAddress, _: Option<wgpu::BufferSize>) {
-        let raw = buffer.map(|b| b.as_custom::<MetalBuffer>().expect("a Metal buffer").raw.clone());
+        let store = buffer.map(|b| b.as_custom::<MetalBuffer>().expect("a Metal buffer").store.clone());
+        let raw = store.as_ref().map(|s| s.current());
         // SAFETY: the slot is one the pipeline's vertex descriptor reads; the buffer stays alive
         // in the keep list.
         unsafe { self.raw.setVertexBuffer_offset_atIndex(raw.as_ref().map(|b| &*b.raw), offset as usize, vertex_slot(slot)) };
         if let Some(raw) = raw { self.keep.push(raw); }
+        self.vertex.retain(|(at, ..)| *at != slot);
+        if let Some(store) = store { self.vertex.push((slot, store, offset)); }
     }
     fn set_immediates(&mut self, offset: u32, data: &[u8]) {
         let at = offset as usize;
@@ -232,7 +262,7 @@ impl RenderPassInterface for MetalPass {
     fn draw_indexed(&mut self, indices: Range<u32>, base_vertex: i32, instances: Range<u32>) {
         if indices.is_empty() || instances.is_empty() { return }
         self.flush();
-        let (Some(pipeline), Some((buffer, offset, kind, stride))) = (&self.pipeline, &self.index) else { return };
+        let (Some(pipeline), Some((_, buffer, offset, kind, stride))) = (&self.pipeline, &self.index) else { return };
         // SAFETY: wgpu validated the draw against the bound pipeline and buffers.
         unsafe {
             self.raw.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount_baseVertex_baseInstance(

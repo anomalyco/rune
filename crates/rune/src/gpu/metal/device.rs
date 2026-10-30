@@ -3,6 +3,7 @@
 use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicIsize, Ordering};
 
 use objc2_metal::{MTLCommandQueue, MTLDevice, MTLLanguageVersion, MTLSharedEvent};
 use parking_lot::Mutex;
@@ -24,6 +25,8 @@ pub(crate) struct Shared {
     pub(super) event: Obj<dyn MTLSharedEvent>,
     pub(super) msl: ((u8, u8), MTLLanguageVersion),
     pub(super) state: Mutex<State>,
+    /// Buffers alive, for `Device::get_internal_counters`.
+    pub(super) buffers: Arc<AtomicIsize>,
 }
 send_sync!(Shared);
 
@@ -40,6 +43,7 @@ pub(super) fn new(device: Obj<dyn MTLDevice>, desc: &wgpu::DeviceDescriptor<'_>)
         event: device.newSharedEvent().expect("a Metal shared event"),
         msl: msl_version(),
         state: Mutex::new(State::default()),
+        buffers: Arc::default(),
         device,
     });
     let device = MetalDevice { shared: shared.clone(), features: desc.required_features, limits: desc.required_limits.clone() };
@@ -122,7 +126,11 @@ impl DeviceInterface for MetalDevice {
     unsafe fn start_graphics_debugger_capture(&self) {}
     unsafe fn stop_graphics_debugger_capture(&self) {}
     fn poll(&self, poll: wgpu::wgt::PollType<u64>) -> Result<wgpu::PollStatus, wgpu::PollError> { self.shared.poll(poll) }
-    fn get_internal_counters(&self) -> wgpu::InternalCounters { Default::default() }
+    fn get_internal_counters(&self) -> wgpu::InternalCounters {
+        let counters = wgpu::InternalCounters::default();
+        counters.hal.buffers.set(self.shared.buffers.load(Ordering::Relaxed));
+        counters
+    }
     fn generate_allocator_report(&self) -> Option<wgpu::AllocatorReport> { None }
     fn destroy(&self) {}
 }

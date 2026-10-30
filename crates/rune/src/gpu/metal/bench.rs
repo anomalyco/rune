@@ -45,7 +45,7 @@ pub fn dispatch_overhead() {
     let uniforms = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 256, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
     let shared = device.as_custom::<MetalDevice>().unwrap().shared.clone();
     let raw_target = target.as_custom::<MetalTexture>().unwrap().raw.raw.clone();
-    let raw_uniforms = uniforms.as_custom::<MetalBuffer>().unwrap().raw.clone();
+    let raw_uniforms = uniforms.as_custom::<MetalBuffer>().unwrap().raw();
     let data = [0.5f32; 64];
     let bytes: &[u8] = bytemuck::cast_slice(&data);
     let via_wgpu = |writes: usize| {

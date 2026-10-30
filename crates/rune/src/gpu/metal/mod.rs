@@ -8,9 +8,14 @@
 //! A command encoder records one `MTLCommandBuffer` with unretained references: everything it
 //! uses is kept alive until the queue's `MTLSharedEvent` reaches that buffer's value. A submit
 //! that drew into a drawable holds its buffer, and `Queue::present` presents the drawable on it
-//! and commits it, so a frame is one command buffer. `Queue::write_buffer` and `write_texture`
-//! stage through a blit buffer committed ahead of the next submit, as wgpu orders them. Map and
-//! work-done callbacks run from `Device::poll` and `Queue::submit` once their work has finished.
+//! and commits it, so a frame is one command buffer.
+//!
+//! The CPU writes buffers in place (`store`): `Staging` and `Frame::write_buffer` writes always,
+//! swapping in a spare storage while the GPU still reads the current one, and
+//! `Queue::write_buffer` when no recorded command uses the buffer. Writes to buffers the GPU
+//! writes, and `write_texture`, stage through a blit buffer committed ahead of the next submit,
+//! as wgpu orders them. Map and work-done callbacks run from `Device::poll` and `Queue::submit`
+//! once their work has finished.
 //!
 //! Rune's layer tweaks (materials, present timing, transactions, occlusion) reach this backend's
 //! CAMetalLayer through `gpu::with_layer`. What needs wgpu-hal itself (native video surfaces) is
@@ -26,6 +31,9 @@ mod resource;
 mod shader;
 #[cfg(test)]
 mod shader_tests;
+mod store;
+#[cfg(test)]
+mod store_tests;
 mod submit;
 mod surface;
 #[cfg(test)]
@@ -51,7 +59,13 @@ pub(crate) fn enabled() -> bool {
 }
 
 pub(crate) fn instance() -> wgpu::Instance {
+    rune_staging::set_direct(write_in_place);
     wgpu::Instance::from_custom(MetalInstance)
+}
+
+/// Staging's in-place writer: a Metal buffer the GPU only reads takes writes into its storage.
+fn write_in_place(buffer: &wgpu::Buffer, offset: u64, data: &[u8]) -> bool {
+    buffer.as_custom::<resource::MetalBuffer>().is_some_and(|b| b.store.write_ahead(&b.shared, offset, data))
 }
 
 /// The CAMetalLayer a surface of this backend presents into.

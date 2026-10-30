@@ -152,7 +152,7 @@ fn buffer(buffer: &DispatchBuffer) -> &MetalBuffer { buffer.as_custom::<MetalBuf
 impl CommandEncoderInterface for MetalEncoder {
     fn copy_buffer_to_buffer(&self, source: &DispatchBuffer, from: wgpu::BufferAddress, destination: &DispatchBuffer,
         to: wgpu::BufferAddress, size: Option<wgpu::BufferAddress>) {
-        let (src, dst) = (buffer(source).raw.clone(), buffer(destination).raw.clone());
+        let (src, dst) = (buffer(source).raw(), buffer(destination).store.gpu_write());
         let size = size.unwrap_or(src.size - from);
         if size == 0 { return }
         let mut rec = self.rec.lock();
@@ -162,14 +162,14 @@ impl CommandEncoderInterface for MetalEncoder {
     }
     fn copy_buffer_to_texture(&self, source: wgpu::TexelCopyBufferInfo<'_>, destination: wgpu::TexelCopyTextureInfo<'_>, size: wgpu::Extent3d) {
         if size.width == 0 || size.height == 0 || size.depth_or_array_layers == 0 { return }
-        let (src, dst) = (source.buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").raw.clone(), texture(&destination));
+        let (src, dst) = (source.buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").raw(), texture(&destination));
         let mut rec = self.rec.lock();
         buffer_to_texture(rec.blit(), &src.raw, source.layout, &dst, destination.mip_level, destination.origin, size);
         rec.keep([src as _, dst as _]);
     }
     fn copy_texture_to_buffer(&self, source: wgpu::TexelCopyTextureInfo<'_>, destination: wgpu::TexelCopyBufferInfo<'_>, size: wgpu::Extent3d) {
         if size.width == 0 || size.height == 0 || size.depth_or_array_layers == 0 { return }
-        let (src, dst) = (texture(&source), destination.buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").raw.clone());
+        let (src, dst) = (texture(&source), destination.buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").store.gpu_write());
         let mut rec = self.rec.lock();
         texture_to_buffer(rec.blit(), &src, source.mip_level, source.origin, &dst.raw, destination.layout, size);
         rec.keep([src as _, dst as _]);
@@ -205,7 +205,7 @@ impl CommandEncoderInterface for MetalEncoder {
         unimplemented!("RUNE_GPU_BACKEND=metal: CommandEncoder::clear_texture")
     }
     fn clear_buffer(&self, target: &DispatchBuffer, offset: wgpu::BufferAddress, size: Option<wgpu::BufferAddress>) {
-        let raw = buffer(target).raw.clone();
+        let raw = buffer(target).store.gpu_write();
         let size = size.unwrap_or(raw.size - offset);
         if size == 0 { return }
         let mut rec = self.rec.lock();

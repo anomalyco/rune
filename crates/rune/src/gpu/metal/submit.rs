@@ -210,8 +210,13 @@ pub(crate) struct MetalQueue(pub(super) Arc<Shared>);
 impl QueueInterface for MetalQueue {
     fn write_buffer(&self, buffer: &DispatchBuffer, offset: wgpu::BufferAddress, data: &[u8]) {
         if data.is_empty() { return }
-        let target = buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").raw.clone();
-        let staging = Arc::new(BufferRaw::with_bytes(&self.0.device, data));
+        let store = &buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").store;
+        // Written now only if nothing recorded uses it: an encoder recorded earlier and
+        // submitted later must read these bytes too. Staged, it pins the storage, since a later
+        // swap would copy the rest without this write.
+        if !store.pinned() && store.write_idle(&self.0, offset, data) { return }
+        let target = store.gpu_write();
+        let staging = Arc::new(BufferRaw::with_bytes(&self.0, data));
         self.0.upload(|blit| {
             // SAFETY: both ranges are in bounds; wgpu checked the target's.
             unsafe { blit.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(&staging.raw, 0, &target.raw, offset as usize, data.len()) }
@@ -226,7 +231,7 @@ impl QueueInterface for MetalQueue {
         let data = &data[layout.offset as usize..];
         if data.is_empty() || size.width == 0 || size.height == 0 || size.depth_or_array_layers == 0 { return }
         let texture = dst.texture.as_custom::<MetalTexture>().expect("a Metal texture").raw.clone();
-        let staging = Arc::new(BufferRaw::with_bytes(&self.0.device, data));
+        let staging = Arc::new(BufferRaw::with_bytes(&self.0, data));
         let layout = wgpu::TexelCopyBufferLayout { offset: 0, ..layout };
         self.0.upload(|blit| buffer_to_texture(blit, &staging.raw, layout, &texture, dst.mip_level, dst.origin, size), [staging.clone(), texture.clone()]);
     }

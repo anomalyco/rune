@@ -1,8 +1,9 @@
 //! Headless per-frame upload cost: `prepare`, `draw` and `submit` of a 2,000-instance frame,
 //! with a few instances moving (`steady`) or all of them (`scroll`). Prints the median CPU
-//! time to record and submit a frame, the median time until the GPU is done, and the buffers
-//! created per frame. Run with `--profile perf`; it leaves out presentation, and the GPU copy
-//! is counted only in `frame_us`.
+//! time to record and submit a frame (and on macOS the instructions the process ran meanwhile,
+//! which a throttled or busy machine leaves unchanged), the median time until the GPU is done,
+//! and the buffers created per frame. Run with `--profile perf`; it leaves out presentation,
+//! and the GPU copy is counted only in `frame_us`.
 
 use std::time::Instant;
 
@@ -28,6 +29,19 @@ fn scene(frame: usize, scroll: bool) -> Vec<Instance> {
         .collect()
 }
 
+/// Instructions the process has retired, in thousands (0 off macOS).
+fn kinstr() -> f64 {
+    #[cfg(target_os = "macos")]
+    // SAFETY: proc_pid_rusage fills the rusage_info_v4 it is handed for RUSAGE_INFO_V4.
+    unsafe {
+        let mut info: libc::rusage_info_v4 = std::mem::zeroed();
+        libc::proc_pid_rusage(libc::getpid(), libc::RUSAGE_INFO_V4, (&raw mut info).cast());
+        info.ri_instructions as f64 / 1e3
+    }
+    #[cfg(not(target_os = "macos"))]
+    0.0
+}
+
 fn median(mut v: Vec<f64>) -> f64 {
     v.sort_by(f64::total_cmp);
     v[v.len() / 2]
@@ -40,27 +54,29 @@ fn main() {
     let target = Offscreen::new(device, SIZE.0, SIZE.1);
     for (name, scroll) in [("steady", false), ("scroll", true)] {
         let mut renderer = Renderer::new(device, rune::render::OFFSCREEN_FORMAT);
-        let (mut cpu, mut frame, mut created) = (Vec::new(), Vec::new(), 0isize);
+        let (mut cpu, mut instructions, mut frame, mut created) = (Vec::new(), Vec::new(), Vec::new(), 0isize);
         for i in 0..FRAMES + WARMUP {
             let instances = scene(i, scroll);
             let buffers = device.get_internal_counters().hal.buffers.read();
-            let start = Instant::now();
+            let (start, start_kinstr) = (Instant::now(), kinstr());
             renderer.prepare(device, queue, &mut text.atlas, &instances, SIZE);
             let mut encoder = device.create_command_encoder(&Default::default());
             renderer.draw(&mut encoder, &target.view, [0.0; 4]);
             let made = device.get_internal_counters().hal.buffers.read() - buffers;
             renderer.submit(queue, encoder);
-            let recorded = start.elapsed();
+            let (recorded, recorded_kinstr) = (start.elapsed(), kinstr() - start_kinstr);
             device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
             if i >= WARMUP {
                 cpu.push(recorded.as_secs_f64() * 1e6);
+                instructions.push(recorded_kinstr);
                 frame.push(start.elapsed().as_secs_f64() * 1e6);
                 created += made;
             }
         }
         println!(
-            "scene={name} cpu_us={:.1} frame_us={:.1} buffers_per_frame={:.2}",
+            "scene={name} cpu_us={:.1} kinstr={:.1} frame_us={:.1} buffers_per_frame={:.2}",
             median(cpu),
+            median(instructions),
             median(frame),
             created as f64 / FRAMES as f64
         );

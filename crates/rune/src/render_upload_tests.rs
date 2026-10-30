@@ -48,11 +48,54 @@ fn a_steady_animating_frame_creates_no_buffers_and_skips_unchanged_globals() {
         assert_eq!(renderer.uploads.globals_writes, globals, "frame {frame} rewrote unchanged globals");
         assert_eq!((now.writes - stats.writes, now.bytes - stats.bytes), (1, size_of::<Instance>() as u64),
             "frame {frame} writes only the instance that moved");
-        assert_eq!((now.flushes - stats.flushes, now.submits - stats.submits), (1, 0), "recorded into the frame");
+        // Written in place where the backend can (`rune_staging::set_direct`), else staged.
+        let staged = u64::from(now.direct == stats.direct);
+        assert_eq!((now.flushes - stats.flushes, now.submits - stats.submits), (staged, 0), "recorded into the frame");
     }
     pixels.extend(target.read(device));
     assert_eq!(pixel(&pixels, 27, 24), RED, "the square reached its last position");
     assert_eq!(pixel(&pixels, 2, 24), CLEAR, "and left its first");
+}
+
+/// Instances that moved far apart are written alone, ones close together as one span, and every
+/// write lands: the frame draws each square where it is now.
+#[test]
+fn instances_are_written_in_the_spans_that_changed() {
+    let gpu = Gpu::headless();
+    let (device, queue) = (&gpu.device, &gpu.queue);
+    let mut renderer = Renderer::new(device, OFFSCREEN_FORMAT);
+    let mut text = crate::text::TextSystem::new(&[], ("Inter", "Inter"));
+    let target = Offscreen::new(device, SIZE.0, SIZE.1);
+    let hidden = square(-100.0, -100.0);
+    // Two short of a power of two, so the instances added below fit the buffer.
+    let (far, last) = (2 * BLOCK + 10, 4 * BLOCK - 3);
+    let mut instances = vec![hidden; last + 1];
+    let mut frame = |instances: &[Instance]| {
+        let stats = renderer.uploads.stats();
+        renderer.prepare(device, queue, &mut text.atlas, instances, SIZE);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        renderer.draw(&mut encoder, &target.view, [0.0; 4]);
+        target.copy(&mut encoder);
+        renderer.submit(queue, encoder);
+        let now = renderer.uploads.stats();
+        ((now.writes - stats.writes, (now.bytes - stats.bytes) / size_of::<Instance>() as u64), target.read(device))
+    };
+    frame(&instances);
+    (instances[3], instances[far], instances[last]) = (square(0.0, 0.0), square(20.0, 0.0), square(40.0, 0.0));
+    let (written, pixels) = frame(&instances);
+    assert_eq!(written, (3, 3), "three far apart instances, written alone");
+    for x in [4, 24, 44] { assert_eq!(pixel(&pixels, x, 4), RED, "the square at {x} landed"); }
+    (instances[far], instances[far + 10], instances[far + 25]) = (hidden, square(20.0, 20.0), square(40.0, 20.0));
+    let (written, pixels) = frame(&instances);
+    assert_eq!(written, (1, 26), "close together, one span from the first to the last");
+    assert_eq!(pixel(&pixels, 24, 4), CLEAR, "the square that left");
+    for x in [24, 44] { assert_eq!(pixel(&pixels, x, 24), RED, "the square at {x}, 24 landed"); }
+    instances.extend([square(56.0, 0.0), hidden]);
+    let (written, pixels) = frame(&instances);
+    assert_eq!(written, (1, 2), "added instances");
+    assert_eq!(pixel(&pixels, 60, 4), RED);
+    instances.iter_mut().for_each(|i| i.rect[1] += 1.0);
+    assert_eq!(frame(&instances).0, (1, last as u64 + 3), "everything moved: one span");
 }
 
 /// The upload has no encoder to go into when the first draw is into a caller's pass, and a
@@ -140,7 +183,8 @@ fn compositor_buffer_writes_land_in_order_and_reuse_staging() {
         readback.unmap();
         assert_eq!(words, [[frame; 4], [frame + 100; 4]].concat(), "frame {frame}: each write before the copy after it");
         let stats = renderer.uploads.frame_write_stats();
-        assert_eq!(stats.chunks, 1, "frame {frame}: the writes share one chunk, reused once the GPU is done");
+        let staged = u64::from(stats.direct == 0);
+        assert_eq!(stats.chunks, staged, "frame {frame}: the writes share one chunk, reused once the GPU is done");
         if frame >= 2 {
             assert_eq!(created, 0, "frame {frame} created buffers");
             // A queue write allocates 6 or 7 times; the first command in a new encoder grows its list once.
@@ -162,7 +206,7 @@ fn a_frame_with_nothing_to_upload_never_touches_the_staging() {
     let mut encoder = device.create_command_encoder(&Default::default());
     renderer.write_buffer(device, queue, &mut encoder, &uniforms, 0, bytemuck::cast_slice(&[1u32; 4]));
     let writes = renderer.uploads.frame_writes.clone().unwrap();
-    assert!(writes.busy(), "recorded, its chunk still mapped");
+    assert!(writes.busy() || writes.stats().direct == 1, "recorded, its chunk still mapped, or written in place");
     renderer.before_submit(&mut encoder);
     assert!(!writes.busy(), "sealed into the frame");
     let flushes = writes.stats().flushes;

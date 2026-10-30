@@ -8,10 +8,24 @@
 //!
 //! Writes land in the order they were made, at the next `flush` or `submit`. A write must be
 //! flushed into an encoder ahead of the commands that read it, or submitted before them.
-//! On the web, whose `writeBuffer` already stages, writes go straight to the queue.
+//! On the web, whose `writeBuffer` already stages, writes go straight to the queue. A backend
+//! whose buffers the CPU can write in place registers a `Direct` writer, and buffer writes it
+//! takes skip the staging.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
+
+/// Writes `data` to `buffer` at `offset` in place, for the commands recorded after it, or
+/// returns false to have it staged. Commands recorded before it keep reading what they would
+/// have, so the write lands no later than a flush would land it.
+pub type Direct = fn(&wgpu::Buffer, u64, &[u8]) -> bool;
+
+static DIRECT: OnceLock<Direct> = OnceLock::new();
+
+/// Registers the process's `Direct` writer. The first one stays.
+pub fn set_direct(direct: Direct) {
+    let _ = DIRECT.set(direct);
+}
 
 /// The size of a new chunk; a larger write gets a chunk sized to its next power of two.
 const CHUNK: u64 = 128 * 1024;
@@ -45,6 +59,8 @@ pub struct Stats {
     pub flushes: u64,
     /// Pending writes submitted on their own.
     pub submits: u64,
+    /// Writes made in place by the `Direct` writer, counted in `writes` and `bytes` too.
+    pub direct: u64,
 }
 
 struct Chunk {
@@ -111,6 +127,13 @@ impl Staging {
     /// Stages a write of `data` to `buffer` at `offset`. Both are multiples of 4.
     pub fn write_buffer(&self, buffer: &wgpu::Buffer, offset: u64, data: &[u8]) {
         if data.is_empty() { return; }
+        if let Some(direct) = DIRECT.get() && direct(buffer, offset, data) {
+            let mut s = self.lock();
+            s.stats.direct += 1;
+            s.stats.writes += 1;
+            s.stats.bytes += data.len() as u64;
+            return;
+        }
         let mut s = self.lock();
         if cfg!(target_arch = "wasm32") { return s.queue.write_buffer(buffer, offset, data); }
         let size = data.len() as u64;
