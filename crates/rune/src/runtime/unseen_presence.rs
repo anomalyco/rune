@@ -69,4 +69,65 @@ impl<S: 'static> Runtime<S> {
         }
         for id in land { self.scene.enter_now(id); }
     }
+
+    /// Per node of the new tree `nodes`: neither it nor anything under it drew in the last
+    /// build, and none of its swept path lands in sight in this layout (in the window, inside
+    /// its clips). Empty when nothing qualifies.
+    pub(super) fn unseen_before_and_after(&self, nodes: &[Node]) -> Vec<bool> {
+        if !self.built || self.seen.len() != self.nodes.len() { return Vec::new(); }
+        let mut seen = self.seen.clone();
+        mark_ancestors(&self.nodes, &mut seen);
+        let before: HashSet<NodeId> = self.nodes.iter().zip(&seen).filter(|(_, s)| !**s).map(|(n, _)| n.id).collect();
+        if before.is_empty() { return Vec::new(); }
+        let old_drawn: HashMap<NodeId, [f32; 4]> = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, old)| old.target[2] > old.target[0] || old.target[3] > old.target[1])
+            .map(|(old_i, old)| (old.id, self.drawn_edges(old_i)))
+            .collect();
+        // Room for shadows and blur, which draw past a node's rect.
+        const MARGIN: f32 = 32.0;
+        let window = [0.0, 0.0, self.viewport.0, self.viewport.1];
+        // Per node: the swept clip and scroll-offset range its children are under, in points.
+        let mut inner = vec![(window, [0.0f32; 2], [0.0f32; 2]); nodes.len()];
+        let mut after = vec![false; nodes.len()];
+        for (i, n) in nodes.iter().enumerate() {
+            let (clip, shift_min, shift_max) = match n.parent {
+                Some(p) if n.above.is_none() && p < i => inner[p],
+                Some(_) if n.above.is_none() => { after[i] = true; (window, [0.0; 2], [0.0; 2]) }
+                _ => (window, [0.0; 2], [0.0; 2]),
+            };
+            let t = n.target;
+            let r = [t[0] - shift_max[0], t[1] - shift_max[1], t[2] - shift_min[0], t[3] - shift_min[1]];
+            let swept = match old_drawn.get(&n.id) {
+                Some(&b) => [b[0].min(r[0]), b[1].min(r[1]), b[2].max(r[2]), b[3].max(r[3])],
+                None => r,
+            };
+            after[i] |= swept[2] >= clip[0] - MARGIN && swept[0] <= clip[2] + MARGIN
+                && swept[3] >= clip[1] - MARGIN && swept[1] <= clip[3] + MARGIN;
+            let clip = if n.vis.clip.is_some() || n.scroll.is_some() {
+                [clip[0].max(swept[0]), clip[1].max(swept[1]), clip[2].min(swept[2]), clip[3].min(swept[3])]
+            } else { clip };
+            let (shift_min, shift_max) = match (self.scrolls.get(&n.id), n.scroll) {
+                (Some(st), Some(sp)) => {
+                    let children = || (i + 1..nodes.len()).take_while(|&j| nodes[j].parent >= Some(i)).filter(|&j| nodes[j].parent == Some(i));
+                    let max_x = if n.scroll_axes.x() { children().fold(0.0_f32, |m, c| m.max(nodes[c].target[2] - n.target[2])) } else { 0.0 };
+                    let max_y = if n.scroll_axes.y() { children().fold(0.0_f32, |m, c| m.max(nodes[c].target[3] - n.target[3])) } else { 0.0 };
+                    let ox0 = st.x.offset as f32;
+                    let ox1 = ox0.clamp(0.0, max_x);
+                    let oy0 = st.offset as f32 + st.slack.height();
+                    let oy1 = if st.pinned && sp.stick_bottom { max_y + st.slack.height() } else { oy0.clamp(0.0, max_y + st.slack.height()) };
+                    (
+                        [shift_min[0] + ox0.min(ox1), shift_min[1] + oy0.min(oy1)],
+                        [shift_max[0] + ox0.max(ox1), shift_max[1] + oy0.max(oy1)],
+                    )
+                }
+                _ => (shift_min, shift_max),
+            };
+            inner[i] = (clip, shift_min, shift_max);
+        }
+        mark_ancestors(nodes, &mut after);
+        nodes.iter().zip(&after).map(|(n, a)| !a && before.contains(&n.id)).collect()
+    }
 }
