@@ -522,3 +522,316 @@ fn self_prefix_rebase_box_into_box_box_and_back_matches_fresh_build() {
         step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, &format!("unwrap-settle-{f}"), |_| {});
     }
 }
+
+struct MoveHarness {
+    use_memo: bool,
+    tick: u32,
+    theme_ver: u32,
+    header_h: f32,
+    show_modal: bool,
+    show_banner_chip: bool,
+    show_mid_memo: bool,
+    list_ver: u32,
+    vrows_len: usize,
+    editor: TextEdit,
+    modal_input: TextEdit,
+}
+
+fn move_harness_view(s: &MoveHarness, cx: &mut Cx<MoveHarness>) -> El {
+    let m = s.use_memo;
+    let dark = cx.env().system_dark;
+    let hdr_rect = cx.layout("dyn-hdr").unwrap_or([0.0; 4]);
+    let caret = cx.caret("editor").unwrap_or([0.0; 4]);
+    let card_bg = if dark && s.theme_ver % 2 == 0 {
+        Color { r: 0.13, g: 0.15, b: 0.20, a: 1.0 }
+    } else {
+        Color { r: 0.88, g: 0.89, b: 0.93, a: 1.0 }
+    };
+    let ink = if dark && s.theme_ver % 2 == 0 { Color::WHITE } else { Color { r: 0.1, g: 0.12, b: 0.16, a: 1.0 } };
+
+    // Styled memo cards with shadows, gradients, radial stops, outlines and selectable text,
+    // exercising `apply`'s paint-track `prev_node` path whenever `skip_spans` is bypassed.
+    let styled_card = |idx: usize| {
+        maybe_memo(m, format!("styled-{idx}"), s.theme_ver, move || {
+            col()
+                .w_full()
+                .padding(8.0)
+                .gap(4.0)
+                .radius(6.0)
+                .fill(card_bg)
+                .border(1.0, ink.alpha(0.2))
+                .shadow(2.0, 6.0, Color::BLACK.alpha(0.25))
+                .gradient(card_bg, card_bg.alpha(0.85))
+                .radial_gradient([0.5, 0.5], 40.0, [(0.0, ink.alpha(0.08)), (1.0, Color::TRANSPARENT)])
+                .outline(1.0, 1.0, ink.alpha(0.15))
+                .hover(ink.alpha(0.06))
+                .press(ink.alpha(0.12))
+                .focusable(true)
+                .transition(Transition::opacity())
+                .children([
+                    text(format!("Styled memo {idx}")).key("h").font(TextStyle::new(13.0, 600.0)).color(ink),
+                    text(format!("Selectable line inside moved memo {idx} for drag & copy")).key("p").font(TextStyle::new(12.0, 400.0)).color(ink).selectable(true),
+                ])
+        })
+    };
+
+    // A single `memo` owning a long scrollable list (140 items, >420 nodes moved in one slice).
+    let long_static_list = maybe_memo(m, "long-list-memo", (s.list_ver, s.theme_ver), || {
+        col()
+            .w_full()
+            .h(120.0)
+            .scroll(ScrollSpec { stick_bottom: false })
+            .child(
+                col().key("items").w_full().gap(2.0).children((0..140).map(|i| {
+                    row()
+                        .key(format!("li-{i}"))
+                        .w_full()
+                        .h(22.0)
+                        .px(6.0)
+                        .gap(6.0)
+                        .center_y()
+                        .fill(card_bg.alpha(0.5))
+                        .focusable(i % 25 == 0)
+                        .children([
+                            el().key("b").size(6.0, 6.0).radius(3.0).fill(ink),
+                            text(format!("Long memo item #{i}")).key("t").font(TextStyle::new(12.0, 400.0)).color(ink).selectable(true),
+                        ])
+                })),
+            )
+    });
+
+    // A long `virtual_rows` list inside a `memo` whose true row height (64 pt) intentionally
+    // exceeds its 14 pt estimate so `measure_virtuals` exercises multi-pass retry restoration.
+    let long_virtual_memo = maybe_memo(m, "long-vlist-memo", s.vrows_len, || {
+        col()
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .scroll(ScrollSpec { stick_bottom: true })
+            .child(
+                col().key("vstack").w_full().gap(4.0).growth(GrowthSpec::default()).virtual_rows(
+                    s.vrows_len,
+                    14.0,
+                    |_: &MoveHarness, i| Cow::Owned(format!("mv-{i}")),
+                    |s: &MoveHarness, i| {
+                        maybe_memo(s.use_memo, format!("mv-{i}"), s.theme_ver, move || {
+                            col().w_full().h(64.0).padding(6.0).fill(Color::WHITE.alpha(0.04)).children([
+                                text(format!("Virtual row {i}")).key("vt").font(TextStyle::new(12.0, 500.0)),
+                                text("Second line keeping row taller than estimate").key("vs").font(TextStyle::new(11.0, 400.0)),
+                            ])
+                        })
+                    },
+                ),
+            )
+    });
+
+    let mut body = col()
+        .w_full()
+        .h_full()
+        .padding(10.0)
+        .gap(6.0)
+        .selection_group(true)
+        .child_exit(Transition::opacity())
+        .children([
+            el().key("dyn-hdr").w_full().h(s.header_h).fill(ink.alpha(0.1)),
+            text(format!("t={} hdr={:.0} caret={:.1}", s.tick, hdr_rect[3], caret[0]))
+                .key("readout")
+                .font(TextStyle::new(11.0, 400.0)),
+            styled_card(0),
+        ]);
+    if s.show_banner_chip {
+        body = body.child(
+            row().key("leaving-chip").w_full().h(20.0).fill(ink.alpha(0.15)).transition(Transition::opacity())
+                .child(text("Transient banner").key("lbl").font(TextStyle::new(11.0, 400.0))),
+        );
+    }
+    if s.show_mid_memo {
+        body = body.child(styled_card(1));
+    }
+    body = body.children([
+        long_static_list,
+        long_virtual_memo,
+        text_input(&s.editor, TextStyle::new(13.0, 400.0))
+            .key("editor")
+            .w_full()
+            .h(30.0)
+            .on_edit(|s: &mut MoveHarness| &mut s.editor),
+    ]);
+    if s.show_modal {
+        body = body.child(
+            col()
+                .key("popover")
+                .w_full()
+                .padding(6.0)
+                .focus_return("styled-0")
+                .transition(Transition::opacity())
+                .child(
+                    text_input(&s.modal_input, TextStyle::new(13.0, 400.0))
+                        .key("modal-field")
+                        .w_full()
+                        .h(28.0)
+                        .on_edit(|s: &mut MoveHarness| &mut s.modal_input),
+                ),
+        );
+    }
+    body
+}
+
+#[test]
+fn move_path_preserves_allocations_and_matches_fresh_across_exits_focus_selection_scroll_theme_and_long_lists() {
+    let make = |use_memo| {
+        let mut editor = TextEdit::new("seed ");
+        editor.focused = true;
+        editor.set_caret(editor.text.len());
+        MoveHarness {
+            use_memo,
+            tick: 0,
+            theme_ver: 0,
+            header_h: 18.0,
+            show_modal: false,
+            show_banner_chip: true,
+            show_mid_memo: true,
+            list_ver: 0,
+            vrows_len: 320,
+            editor,
+            modal_input: TextEdit::new("modal"),
+        }
+    };
+    let mut rt_m = Runtime::new(make(true), move_harness_view, (500.0, 620.0), Env::new(true, 2.0));
+    let mut rt_f = Runtime::new(make(false), move_harness_view, (500.0, 620.0), Env::new(true, 2.0));
+    step_both(&mut rt_m, &mut rt_f, 0.0, "init", |_| {});
+    for f in 0..8 {
+        step_both(&mut rt_m, &mut rt_f, 1.0 / 120.0, &format!("init-fill-{f}"), |_| {});
+    }
+
+    // Proof that `same_path` memo reuse moves `Node`s rather than cloning their owned heap strings.
+    let path_ptr = |rt: &Runtime<MoveHarness>, path: &str| {
+        rt.nodes.iter().find(|n| n.path == path).unwrap().path.as_ptr() as usize
+    };
+    let p_styled = path_ptr(&rt_m, "#0/styled-0/p");
+    let p_long = path_ptr(&rt_m, "#0/long-list-memo/items/li-95/t");
+
+    // Non-committing `content_height()` must leave `rt_m.nodes` intact before the next commit.
+    assert_eq!(rt_m.content_height(), rt_f.content_height(), "content_height matches");
+
+    for k in 0..4 {
+        step_both(&mut rt_m, &mut rt_f, 1.0 / 120.0, &format!("steady-move-{k}"), |rt| {
+            rt.update(|s, _| s.tick += 1);
+        });
+        assert_eq!(path_ptr(&rt_m, "#0/styled-0/p"), p_styled, "styled memo path moved without reallocation");
+        assert_eq!(path_ptr(&rt_m, "#0/long-list-memo/items/li-95/t"), p_long, "long-list node moved without reallocation");
+    }
+
+    // Typing moves `cx.caret("editor")`, triggering `caret_moved` -> `discard_measured` -> re-measure
+    // after pass 1 already moved `styled-0`, `styled-1` and `long-list-memo`.
+    for ch in ["x", "y", "z"] {
+        step_both(&mut rt_m, &mut rt_f, 1.0 / 120.0, &format!("caret-remeasure-{ch}"), |rt| {
+            rt.ime(Ime::Commit(ch.into()));
+        });
+    }
+    assert_eq!(path_ptr(&rt_m, "#0/styled-0/p"), p_styled, "caret re-measure restored and re-moved node");
+
+    // Changing `header_h` shifts `cx.layout("dyn-hdr")` AND shifts `styled-0`'s local rect (bypassing
+    // `skip_spans` so `apply`'s `prev_node` runs on shadows/gradients/radials/outlines) AND triggers
+    // `settle_layout_reads` -> `discard_measured` -> re-measure.
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 120.0, "layout-read-remeasure", |rt| {
+        rt.update(|s, _| s.header_h = 54.0);
+    });
+    for f in 0..10 {
+        step_both(&mut rt_m, &mut rt_f, 1.0 / 120.0, &format!("hdr-spring-{f}"), |rt| {
+            if f == 4 {
+                rt.update(|s, tx| {
+                    s.tick += 1;
+                    tx.settle();
+                });
+            }
+        });
+    }
+
+    // Elements leaving: both an un-memoized sibling (`leaving-chip`) and a moved memo (`styled-1`)
+    // exit while commits continue, then prune, then `styled-1` revives.
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "elements-leave", |rt| {
+        rt.update(|s, _| {
+            s.show_banner_chip = false;
+            s.show_mid_memo = false;
+        });
+    });
+    for f in 0..25 {
+        step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, &format!("leaving-fade-{f}"), |rt| {
+            if f == 3 || f == 12 {
+                rt.update(|s, _| s.tick += 1);
+            }
+        });
+    }
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "revive-mid-memo", |rt| {
+        rt.update(|s, _| s.show_mid_memo = true);
+    });
+
+    // Focus request (`sync_requested_focus` -> `discard_measured` -> re-measure) + `focus_return` on close,
+    // followed by Tab traversal and text selection across moved memos.
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "open-focused-modal", |rt| {
+        rt.update(|s, _| {
+            s.show_modal = true;
+            s.modal_input.focused = true;
+        });
+    });
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "close-modal-focus-return", |rt| {
+        rt.update(|s, tx| {
+            s.show_modal = false;
+            s.modal_input.focused = false;
+            tx.instant();
+        });
+    });
+    for t in 0..4 {
+        step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, &format!("focus-tab-{t}"), |rt| {
+            rt.key(KeyEvent { key: Key::Tab, mods: Mods::default() });
+        });
+    }
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "select-all-moved", |rt| {
+        rt.update(|_, tx| tx.select_all_text(""));
+    });
+    let (sx, sy) = rt_m.find("styled-0/p").unwrap();
+    let (ex, ey) = rt_m.find("styled-1/p").unwrap();
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "drag-sel-down", |rt| rt.pointer_down(sx, sy));
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "drag-sel-move", |rt| rt.pointer_move(ex, ey));
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "drag-sel-up", |rt| rt.pointer_up(ex, ey));
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "commit-with-selection", |rt| rt.update(|s, _| s.tick += 1));
+
+    // Scrolling BOTH the long static list inside `long-list-memo` and the long `virtual_rows` list
+    // inside `long-vlist-memo` while commits run.
+    let (lx, ly) = rt_m.find("long-list-memo").unwrap();
+    for s in 0..8 {
+        step_both(&mut rt_m, &mut rt_f, 1.0 / 120.0, &format!("scroll-long-static-{s}"), |rt| {
+            rt.wheel(lx, ly, -120.0);
+            if s % 2 == 1 {
+                rt.update(|st, _| st.tick += 1);
+            }
+        });
+    }
+    let (vx, vy) = rt_m.find("long-vlist-memo").unwrap();
+    for s in 0..10 {
+        step_both(&mut rt_m, &mut rt_f, 1.0 / 120.0, &format!("scroll-long-virtual-{s}"), |rt| {
+            rt.wheel(vx, vy, 220.0);
+            if s % 3 == 0 {
+                rt.update(|st, _| st.tick += 1);
+            }
+        });
+    }
+
+    // Theme changes: both `Env::system_dark` flip and app-versioned theme crossfade across moved memos.
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "system-light", |rt| rt.set_system_dark(false));
+    for f in 0..10 {
+        step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, &format!("light-crossfade-{f}"), |rt| {
+            if f == 2 {
+                rt.update(|s, _| s.tick += 1);
+            }
+        });
+    }
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "app-theme-bump", |rt| {
+        rt.update(|s, _| s.theme_ver += 1);
+    });
+    for f in 0..10 {
+        step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, &format!("app-theme-fade-{f}"), |_| {});
+    }
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "system-dark-again", |rt| rt.set_system_dark(true));
+}

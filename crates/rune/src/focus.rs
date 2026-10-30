@@ -216,7 +216,12 @@ impl<S: 'static> Runtime<S> {
             let has_children = self.nodes.iter().any(|m| m.parent == Some(i));
             let scope = if !has_children && !old.focus.enabled && old.input.is_none()
                 && old.local.w == 0.0 && old.local.h == 0.0 {
-                self.nodes.get(old.parent?)?.path.as_str()
+                let p = self.nodes.get(old.parent?)?;
+                if p.is_moved_stub() {
+                    nodes.get(*self.node_index.get(&p.id)?)?.path.as_str()
+                } else {
+                    p.path.as_str()
+                }
             } else {
                 old.path.as_str()
             };

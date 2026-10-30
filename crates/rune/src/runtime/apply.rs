@@ -476,23 +476,23 @@ impl<S: 'static> Runtime<S> {
             }
             let old = last.find(&self.nodes, id);
             if !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Fill) {
-                self.commit_paint(id, P_FILL, old.map(|o| self.nodes[o].vis.fill), vis.fill, spring_c, instant);
+                self.commit_paint(id, P_FILL, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.fill), vis.fill, spring_c, instant);
             }
             if vis.border_width > 0.0 {
                 let had_bottom = self.scene.store().has(id, P_BORDER_BOTTOM);
                 if vis.border_bottom.is_some() && !had_bottom
-                    && let Some(c) = self.scene.get(id, P_BORDER).or(old.map(|o| self.nodes[o].vis.border))
+                    && let Some(c) = self.scene.get(id, P_BORDER).or(paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.border))
                 {
                     // A solid border's bottom springs into the gradient rather than jumping.
                     self.scene.set(id, P_BORDER_BOTTOM, c);
                 }
-                self.commit_paint(id, P_BORDER, old.map(|o| self.nodes[o].vis.border), vis.border, spring_c, instant);
+                self.commit_paint(id, P_BORDER, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.border), vis.border, spring_c, instant);
                 if vis.border_bottom.is_some() || had_bottom {
                     self.set_or_anim(id, P_BORDER_BOTTOM, vis.border_bottom.unwrap_or(vis.border), spring_c, instant);
                 }
             }
             if let Some(c) = paint_tracks::text_color(&nodes[i]) {
-                self.commit_paint(id, P_TEXT, old.and_then(|o| paint_tracks::text_color(&self.nodes[o])), c, spring_tc, instant);
+                self.commit_paint(id, P_TEXT, paint_tracks::prev_node(&self.nodes, &nodes, old, i).and_then(paint_tracks::text_color), c, spring_tc, instant);
             }
             if nodes[i].vis.icon.is_some() && (nodes[i].vis.icon_turn != 0.0 || self.scene.store().has(id, P_ICON_TURN)) {
                 if was_present && !self.scene.store().has(id, P_ICON_TURN) {
@@ -501,34 +501,34 @@ impl<S: 'static> Runtime<S> {
                 self.set_or_anim(id, P_ICON_TURN, nodes[i].vis.icon_turn, spring_l, instant || !was_present);
             }
             if vis.hover.a > 0.0 || self.scene.store().has(id, P_HOVER_C) {
-                self.commit_paint(id, P_HOVER_C, old.map(|o| self.nodes[o].vis.hover), vis.hover, spring_c, instant);
+                self.commit_paint(id, P_HOVER_C, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.hover), vis.hover, spring_c, instant);
             }
             if vis.press.a > 0.0 || self.scene.store().has(id, P_PRESS_C) {
-                self.commit_paint(id, P_PRESS_C, old.map(|o| self.nodes[o].vis.press), vis.press, spring_c, instant);
+                self.commit_paint(id, P_PRESS_C, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.press), vis.press, spring_c, instant);
             }
             for (k, sh) in vis.shadows.iter().take(P_SHADOWS.len()).enumerate() {
-                let was = old.and_then(|o| self.nodes[o].vis.shadows.get(k).copied());
+                let was = paint_tracks::prev_node(&self.nodes, &nodes, old, i).and_then(|o| o.vis.shadows.get(k).copied());
                 self.commit_paint(id, P_SHADOWS[k], was.map(|w| w.color), sh.color, spring_c, instant);
                 self.commit_paint(id, P_SHADOW_GEO[k], was.map(|w| paint_tracks::shadow_geo(&w)), paint_tracks::shadow_geo(sh), spring_l, instant);
             }
             // Only a shadow that was drawn can have a track.
-            for k in vis.shadows.len()..old.map_or(0, |o| self.nodes[o].vis.shadows.len()).min(P_SHADOWS.len()) {
+            for k in vis.shadows.len()..paint_tracks::prev_node(&self.nodes, &nodes, old, i).map_or(0, |o| o.vis.shadows.len()).min(P_SHADOWS.len()) {
                 self.scene.store_mut().remove(id, P_SHADOWS[k]);
                 self.scene.store_mut().remove(id, P_SHADOW_GEO[k]);
             }
             if let Some(&g) = vis.gradient.as_deref() {
-                let was = old.and_then(|o| self.nodes[o].vis.gradient.as_deref().copied());
+                let was = paint_tracks::prev_node(&self.nodes, &nodes, old, i).and_then(|o| o.vis.gradient.as_deref().copied());
                 self.commit_paint(id, P_GRADIENT[0], was.map(|w| w[0]), g[0], spring_c, instant);
                 self.commit_paint(id, P_GRADIENT[1], was.map(|w| w[1]), g[1], spring_c, instant);
             }
             if let Some(rg) = &vis.radial {
                 for (k, &(_, c)) in rg.stops.iter().take(P_RADIAL.len()).enumerate() {
-                    let was = old.and_then(|o| self.nodes[o].vis.radial.as_ref()?.stops.get(k).map(|s| s.1));
+                    let was = paint_tracks::prev_node(&self.nodes, &nodes, old, i).and_then(|o| o.vis.radial.as_ref()?.stops.get(k).map(|s| s.1));
                     self.commit_paint(id, P_RADIAL[k], was, c, spring_c, instant);
                 }
             }
             if let Some(ol) = vis.outline {
-                self.commit_paint(id, P_OUTLINE, old.and_then(|o| self.nodes[o].vis.outline.map(|w| w.color)), ol.color, spring_c, instant);
+                self.commit_paint(id, P_OUTLINE, paint_tracks::prev_node(&self.nodes, &nodes, old, i).and_then(|o| o.vis.outline.map(|w| w.color)), ol.color, spring_c, instant);
             }
 
             // Streaming word reveal.

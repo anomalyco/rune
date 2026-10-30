@@ -482,6 +482,7 @@ fn flatten_owned(
         inset: [0.0; 4],
         help,
         help_cut,
+        moved_stub: false,
         #[cfg(debug_assertions)]
         scroll_source,
     });
@@ -677,6 +678,7 @@ fn flatten_ref(
         inset: [0.0; 4],
         help: el.help.clone(),
         help_cut: el.help_cut,
+        moved_stub: false,
         #[cfg(debug_assertions)]
         scroll_source: el.scroll_source,
     });

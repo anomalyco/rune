@@ -166,8 +166,12 @@ impl<S: 'static> Measurement<'_, S> {
             self.virtual_inputs.clear();
             // Degenerate zero-height runs fall back to a full measurement instead of
             // an unbounded retry loop. Normal transcripts need one pass.
-            let (layout, nodes, pending, reused) = self.measure_view(tx, passes > 8);
+            let (layout, mut nodes, pending, mut reused) = self.measure_view(tx, passes > 8);
             if !self.measure_virtuals(&nodes, tx.settle) { break (layout, nodes, pending, reused); }
+            memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused);
+            nodes.clear();
+            self.spare_nodes = nodes;
+            reused.clear();
             self.memo.pending_scratch = pending;
             self.memo.reused_scratch = reused;
             *self.layout = layout;
@@ -369,8 +373,9 @@ impl<S: 'static> Measurement<'_, S> {
             let mut reused = std::mem::take(&mut self.memo.reused_scratch);
             reused.clear();
             let mut memo_ctx = memo_reuse::MemoFlattenCtx {
-                old_nodes: &*self.nodes,
+                old_nodes: &mut *self.nodes,
                 old_present_len: self.memo.present_len,
+                committing: self.committing,
                 committed: &self.memo.flattened,
                 pending,
                 reused,

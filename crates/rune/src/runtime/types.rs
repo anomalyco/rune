@@ -117,11 +117,111 @@ pub(crate) struct Node {
     pub(super) help: Option<String>,
     /// `El::help_when_truncated`.
     pub(super) help_cut: bool,
+    /// Placeholder left in `self.nodes` after `try_reuse_memo` moves a node into the new pass.
+    pub(super) moved_stub: bool,
     #[cfg(debug_assertions)]
     pub(super) scroll_source: Option<&'static std::panic::Location<'static>>,
 }
 
 impl Node {
+    /// Zero-allocation placeholder left in `self.nodes` when a committing pass moves a
+    /// `same_path` memo-reused node into the new `nodes` slice. Retains the last commit's
+    /// identity, parent index, geometry and track flags that `apply` and retry restoration read.
+    pub(super) fn moved_stub(old: &Self) -> Self {
+        Node {
+            on_paste: None,
+            on_window_focus: None,
+            focus: Default::default(),
+            modal: None,
+            looping: None,
+            id: old.id,
+            path: String::new(),
+            key: None,
+            trace_name: None,
+            trace_namespace: None,
+            role: "group",
+            label: None,
+            vis: Visual::default(),
+            live: Vec::new(),
+            text: None,
+            text_layout: None,
+            elided: None,
+            run_layout: None,
+            live_text_seen: None,
+            on_press: None,
+            on_double_press: None,
+            on_secondary_press: None,
+            on_hover: None,
+            on_hover_change: None,
+            hover_delay: [0.0; 2],
+            on_pointer_move: None,
+            gestures: None,
+            above: None,
+            on_drag: None,
+            drag_out: None,
+            drag_threshold: None,
+            on_drag_start: None,
+            on_drag_end: None,
+            drop: None,
+            motion: old.motion,
+            opacity_motion: None,
+            lead: None,
+            width_leads: false,
+            instant_changes: false,
+            transition: None,
+            matched: None,
+            scroll: None,
+            scroll_axes: Default::default(),
+            on_at_bottom: None,
+            on_far_from_bottom: None,
+            on_visible_rows: None,
+            on_layout: None,
+            on_screen_layout: None,
+            on_drawn_layout: None,
+            on_scroll_offset: None,
+            sticky: None,
+            scroll_edges: Default::default(),
+            growth: None,
+            streaming: false,
+            whole: false,
+            glide: None,
+            input: None,
+            cursor: None,
+            window_drag: false,
+            ime_cursor: false,
+            selection_group: false,
+            selection_copy: None,
+            on_selection_change: None,
+            a11y: Default::default(),
+            inert: false,
+            press_scale: None,
+            static_scale: 1.0,
+            scale_track: old.scale_track,
+            group_fade: old.group_fade,
+            time_scale: 1.0,
+            pixel_aspect: None,
+            aspect_fit: None,
+            material: None,
+            in_row: RowLayout::Free,
+            virtual_mount: false,
+            parent: old.parent,
+            taffy: old.taffy,
+            target: old.target,
+            local: old.local,
+            inset: old.inset,
+            help: None,
+            help_cut: false,
+            moved_stub: true,
+            #[cfg(debug_assertions)]
+            scroll_source: None,
+        }
+    }
+
+    #[inline]
+    pub(super) fn is_moved_stub(&self) -> bool {
+        self.moved_stub
+    }
+
     /// Whether its text is a secret: marked secure, redacted, or a secure field.
     pub(super) fn is_secure(&self) -> bool {
         self.a11y.secure || self.text.as_ref().is_some_and(|t| t.redacted) || self.input.as_ref().is_some_and(|i| i.edit.is_secure())

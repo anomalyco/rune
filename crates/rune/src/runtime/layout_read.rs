@@ -329,7 +329,7 @@ impl<S: 'static> Runtime<S> {
                 settled = true;
                 break;
             }
-            self.layout = measured.layout;
+            self.discard_measured(measured);
             measured = self.measure(tx);
         }
         if !settled { self.layout_moved(Some(std::mem::take(&mut measured.layout_reads)), Some(&measured.nodes), true); }

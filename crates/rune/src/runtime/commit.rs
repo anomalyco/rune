@@ -78,12 +78,12 @@ impl<S: 'static> Runtime<S> {
         // Settle layout reads first so a field that mounts once a rect is known is in `nodes`.
         measured = self.settle_layout_reads(measured, tx);
         if self.sync_requested_focus(&mut measured.nodes) {
-            self.layout = measured.layout;
+            self.discard_measured(measured);
             measured = self.measure(tx);
             measured = self.settle_layout_reads(measured, tx);
         }
         if measured.caret_read && self.caret_moved(Some(&measured.nodes)) {
-            self.layout = measured.layout;
+            self.discard_measured(measured);
             measured = self.measure(tx);
             measured = self.settle_layout_reads(measured, tx);
         }
@@ -92,6 +92,21 @@ impl<S: 'static> Runtime<S> {
         self.memo.keep_since(self.memo_since);
         self.track_focused_rows();
         self.prune_text_selection();
+    }
+
+    /// Restores any nodes moved out of `self.nodes` and recycles `measured`'s buffers before a
+    /// commit pass re-measures.
+    pub(super) fn discard_measured(&mut self, mut measured: Measured) {
+        memo_reuse::restore_moved_nodes(&mut self.nodes, &mut measured.nodes, &measured.memo_reused);
+        measured.nodes.clear();
+        self.spare_nodes = measured.nodes;
+        if let Some(mut pending) = measured.memo_flattened {
+            pending.clear();
+            self.memo.pending_scratch = pending;
+        }
+        measured.memo_reused.clear();
+        self.memo.reused_scratch = measured.memo_reused;
+        self.layout = measured.layout;
     }
 }
 

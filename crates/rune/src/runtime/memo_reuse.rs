@@ -37,6 +37,7 @@ pub(crate) struct ReusedSpan {
     pub(super) old_start: usize,
     pub(super) len: usize,
     pub(super) same_path: bool,
+    pub(super) moved: bool,
 }
 
 /// A contiguous sub-range of `nodes` (`new_start .. new_start + len`, from `old_start`) whose
@@ -137,8 +138,9 @@ impl<S: 'static> Runtime<S> {
 }
 
 pub(super) struct MemoFlattenCtx<'a> {
-    pub(super) old_nodes: &'a [Node],
+    pub(super) old_nodes: &'a mut [Node],
     pub(super) old_present_len: usize,
+    pub(super) committing: bool,
     pub(super) committed: &'a HashMap<u64, FlattenedMemo>,
     pub(super) pending: Vec<PendingFlat>,
     pub(super) reused: Vec<ReusedSpan>,
@@ -553,7 +555,7 @@ pub(super) fn try_reuse_memo(
         return None;
     }
     let old_slice = &ctx.old_nodes[flat.start..end];
-    if old_slice[0].id != flat.root_id || old_slice[flat.len - 1].id != flat.last_id {
+    if old_slice[0].is_moved_stub() || old_slice[0].id != flat.root_id || old_slice[flat.len - 1].id != flat.last_id {
         return None;
     }
     let (inherited, hover_within) = inherited_for(parent, nodes, motion, in_row, scale);
@@ -563,15 +565,40 @@ pub(super) fn try_reuse_memo(
     if el.key != old_slice[0].key || !same_root_el(el, built) {
         return None;
     }
-    if !old_slice.iter().all(|old| entries.get(&old.path).is_some_and(|e| !e.used && e.id == old.taffy)) {
+    if !old_slice.iter().all(|old| !old.is_moved_stub() && entries.get(&old.path).is_some_and(|e| !e.used && e.id == old.taffy)) {
         return None;
     }
 
     let old_root_path = old_slice[0].path.as_str();
     let same_path = path_matches(old_root_path, parent_path, el.key.as_deref(), index);
     let new_start = nodes.len();
+    let moved = same_path && ctx.committing;
+    let root_taffy = old_slice[0].taffy;
 
-    if same_path {
+    if moved {
+        for k in 0..flat.len {
+            let new_idx = new_start + k;
+            let slot = &mut ctx.old_nodes[flat.start + k];
+            let entry = entries.get_mut(&slot.path).unwrap();
+            entry.used = true;
+            if entry.measure.is_some() {
+                *taffy.get_node_context_mut(slot.taffy).unwrap() = new_idx;
+            }
+            let stub = Node::moved_stub(slot);
+            let mut n = std::mem::replace(slot, stub);
+            n.text_layout = None;
+            n.elided = None;
+            n.run_layout = None;
+            n.scale_track = false;
+            n.group_fade = false;
+            n.virtual_mount = if k == 0 { el.virtual_mount } else { false };
+            n.parent = if k == 0 { parent } else { n.parent.map(|p| new_start + (p - flat.start)) };
+            n.target = [0.0; 4];
+            n.local = MRect::ZERO;
+            n.inset = [0.0; 4];
+            nodes.push(n);
+        }
+    } else if same_path {
         for (k, old) in old_slice.iter().enumerate() {
             let new_idx = new_start + k;
             let entry = entries.get_mut(&old.path).unwrap();
@@ -615,7 +642,7 @@ pub(super) fn try_reuse_memo(
         if let Some(old_p) = taffy.parent(old_slice[0].taffy) {
             let _ = taffy.remove_child(old_p, old_slice[0].taffy);
         }
-        let moved: Vec<LayoutEntry> = old_slice
+        let moved_entries: Vec<LayoutEntry> = old_slice
             .iter()
             .map(|old| entries.remove(&old.path).unwrap())
             .collect();
@@ -625,7 +652,7 @@ pub(super) fn try_reuse_memo(
                 taffy.remove(stale.id).unwrap();
             }
         }
-        for (k, ((old, path), mut entry)) in old_slice.iter().zip(rebased).zip(moved).enumerate() {
+        for (k, ((old, path), mut entry)) in old_slice.iter().zip(rebased).zip(moved_entries).enumerate() {
             let new_idx = new_start + k;
             entry.used = true;
             if entry.measure.is_some() {
@@ -662,8 +689,30 @@ pub(super) fn try_reuse_memo(
         old_start: flat.start,
         len: flat.len,
         same_path,
+        moved,
     });
-    Some(old_slice[0].taffy)
+    Some(root_taffy)
+}
+
+/// Puts `moved` slices back into `old_nodes` with their pre-pass geometry and flags before a
+/// virtual-window retry or a layout-read, focus or caret re-measure runs again.
+pub(super) fn restore_moved_nodes(old_nodes: &mut [Node], nodes: &mut [Node], reused: &[ReusedSpan]) {
+    for span in reused.iter().filter(|s| s.moved) {
+        for k in 0..span.len {
+            let stub = &old_nodes[span.old_start + k];
+            let n = &mut nodes[span.new_start + k];
+            n.parent = stub.parent;
+            n.target = stub.target;
+            n.local = stub.local;
+            n.inset = stub.inset;
+            n.scale_track = stub.scale_track;
+            n.group_fade = stub.group_fade;
+            n.text_layout = None;
+            n.elided = None;
+            n.run_layout = None;
+            std::mem::swap(&mut old_nodes[span.old_start + k], n);
+        }
+    }
 }
 
 impl crate::memo::MemoCache {

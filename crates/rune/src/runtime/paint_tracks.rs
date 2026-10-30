@@ -26,6 +26,13 @@ impl LastBuild {
     }
 }
 
+/// Resolves `old` against `old_nodes`, falling back to `nodes[i]` when `old` was moved out of
+/// `old_nodes` by a `same_path` memo reuse (leaving its paint and text fields unchanged on `nodes[i]`).
+#[inline]
+pub(super) fn prev_node<'a>(old_nodes: &'a [Node], nodes: &'a [Node], old: Option<usize>, i: usize) -> Option<&'a Node> {
+    old.map(|o| if old_nodes[o].is_moved_stub() { &nodes[i] } else { &old_nodes[o] })
+}
+
 /// The colour a node's text or icon draws in.
 pub(super) fn text_color(n: &Node) -> Option<Color> {
     n.text.as_ref().map(|t| t.color).or(n.vis.icon.map(|(_, c)| c))
