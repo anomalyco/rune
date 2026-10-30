@@ -569,11 +569,15 @@ impl<T: 'static> Overlay<T> {
                 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
                 if let Some(x11) = &self.x11 { x11.hide(); }
                 #[cfg(target_os = "windows")]
-                if let Some(native) = &mut self.native { native.hide(); }
+                {
+                    if let Some(native) = &mut self.native { native.hide(); }
+                    crate::win32::hide_overlay(window);
+                }
                 #[cfg(target_os = "macos")]
                 if let Some(panel) = &self.panel {
                     panel.hide(fade);
                 }
+                #[cfg(not(target_os = "windows"))]
                 window.set_visible(false);
             }
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
