@@ -42,3 +42,21 @@ fn a_path_keeps_its_id_while_it_holds_state() {
     let again = rt.nodes.iter().find(|n| n.key.as_deref() == Some("scroll")).unwrap().id;
     assert_eq!(id, again, "a scroll view coming back finds its scroll state");
 }
+
+/// Commits and prunes trade two node buffers instead of growing a new one each time a row
+/// leaves.
+#[test]
+fn pruning_left_rows_reuses_the_node_buffers() {
+    let mut rt = Runtime::new(0usize, view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let mut buffers = std::collections::HashSet::new();
+    for round in 0..12 {
+        rt.update(|n, _| *n += 3);
+        for _ in 0..90 { rt.frame(1.0 / 60.0); }
+        if round >= 4 {
+            buffers.insert(rt.nodes.as_ptr() as usize);
+            assert!(rt.spare_nodes.capacity() >= rt.nodes.len(), "the spare holds a whole commit");
+        }
+    }
+    assert!(buffers.len() <= 2, "{} node buffers in 8 rounds", buffers.len());
+}

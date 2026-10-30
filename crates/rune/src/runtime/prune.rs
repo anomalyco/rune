@@ -4,12 +4,16 @@ use super::*;
 
 impl<S: 'static> Runtime<S> {
     pub(super) fn prune_exited(&mut self) {
-        let old = std::mem::take(&mut self.nodes);
+        // Fills last commit's spare buffer and keeps this one as the next spare: a few thousand
+        // nodes would otherwise grow a fresh Vec, megabytes, on every frame a node exits.
+        let mut old = std::mem::replace(&mut self.nodes, std::mem::take(&mut self.spare_nodes));
+        self.nodes.clear();
+        self.nodes.reserve(old.len());
         self.has_dissolve = false;
         self.has_cache = false;
         let mut remap = vec![None; old.len()];
         self.node_index.clear();
-        for (old_idx, mut n) in old.into_iter().enumerate() {
+        for (old_idx, mut n) in old.drain(..).enumerate() {
             if !self.scene.contains(n.id) {
                 self.hover_pruned(&n);
                 self.reveals.remove(&n.id);
@@ -29,6 +33,7 @@ impl<S: 'static> Runtime<S> {
             self.has_cache |= n.vis.cache;
             self.nodes.push(n);
         }
+        self.spare_nodes = old;
         self.virtuals.retain(|path, _| self.nodes.iter().any(|n| n.path == *path));
         self.refresh_modal_index();
         self.flying.retain(|(id, _)| self.node_index.contains_key(id));
