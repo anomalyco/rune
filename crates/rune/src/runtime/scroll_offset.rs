@@ -53,7 +53,7 @@ impl<S: 'static> Runtime<S> {
                     let end = to.min(st.x.max);
                     st.x.offset = st.x.offset.clamp(end - reach, end + reach);
                     st.x.aim = to;
-                    st.x.glide = Some(st.x.glide.unwrap_or(0.0));
+                    st.x.glide = Some(retarget_v(st.x.offset, st.x.glide.unwrap_or(0.0), end));
                 } else {
                     st.x.glide = None;
                     jumps.push((id, true, to));
@@ -67,7 +67,7 @@ impl<S: 'static> Runtime<S> {
                     let end = to.min(st.max);
                     st.offset = st.offset.clamp(end - reach, end + reach);
                     st.glide_to = Some(to);
-                    st.glide = Some(st.glide.unwrap_or(0.0));
+                    st.glide = Some(retarget_v(st.offset, st.glide.unwrap_or(0.0), end));
                     st.shrink_glide = false;
                     st.pinned = false;
                 } else {
@@ -163,12 +163,26 @@ impl<S: 'static> Runtime<S> {
     }
 }
 
+/// The speed a running glide at `offset` keeps when it's sent to `to`: all of it, unless that
+/// would carry it past `to` and back (a critically damped spring heading for its end faster
+/// than ω times the distance left overshoots), so a glide sent somewhere nearer stops there
+/// on one path instead of bouncing.
+pub(super) fn retarget_v(offset: f64, v: f32, to: f64) -> f32 {
+    let d = (offset - to) as f32;
+    let most = motion::GLIDE.omega() * d.abs();
+    if v * d < 0.0 && v.abs() > most { -d.signum() * most } else { v }
+}
+
+/// How near its end a glide lands, in points: its speed, in points a second, under 40 times that.
+const LAND: f32 = 0.1;
+
 /// Steps a glide on one axis toward `to` on `GLIDE`. Returns whether it is still moving.
 pub(super) fn glide_axis(offset: &mut f64, glide: &mut Option<f32>, to: f64, dt: f32) -> bool {
     let Some(v) = *glide else { return false };
     // Sample the displacement, not the absolute offset: f32 loses sub-point precision far down.
     let (d, v) = motion::GLIDE.sample((*offset - to) as f32, v, 0.0, dt);
-    if d.abs() < 0.5 && v.abs() < 20.0 {
+    // Lands under a tenth of a point out, so the last step is no bigger than the ones before it.
+    if d.abs() < LAND && v.abs() < 40.0 * LAND {
         *offset = to;
         *glide = None;
         return false;

@@ -21,6 +21,7 @@ mod relayout;
 mod scroll_children;
 mod scroll_growth;
 mod scroll_hover;
+mod scroll_retarget;
 mod secure_text;
 mod shimmer;
 mod springs;
