@@ -14,12 +14,12 @@ use crate::Kit;
 pub struct PaneState {
     width: f32,
     open: bool,
-    default: f32,
     min: f32,
     max: f32,
     resizing: bool,
     peek: Peek,
-    /// The width and default as asked, before clamping, so a later `range` can widen to them.
+    /// The width and the width it was made with (the default), as asked, before clamping, so a
+    /// later `range` can widen to them.
     asked: [f32; 2],
 }
 
@@ -44,7 +44,7 @@ impl PaneState {
 
     /// An open pane `width` points wide, which double-clicking its edge also returns to.
     pub fn new(width: f32) -> PaneState {
-        let mut p = PaneState { width, open: true, default: width, min: Self::MIN, max: Self::MAX, resizing: false, peek: Peek::None, asked: [width; 2] };
+        let mut p = PaneState { width, open: true, min: Self::MIN, max: Self::MAX, resizing: false, peek: Peek::None, asked: [width; 2] };
         p.clamp();
         p
     }
@@ -53,7 +53,7 @@ impl PaneState {
     pub fn range(mut self, min: f32, max: f32) -> Self {
         self.min = min.max(1.0);
         self.max = max.max(self.min);
-        [self.width, self.default] = self.asked;
+        self.width = self.asked[0];
         self.clamp();
         self
     }
@@ -84,7 +84,7 @@ impl PaneState {
         self.max
     }
     pub fn default_width(&self) -> f32 {
-        self.default
+        self.asked[1].round().clamp(self.min, self.max)
     }
     /// Whether its edge is being dragged.
     pub fn is_resizing(&self) -> bool {
@@ -137,7 +137,7 @@ impl PaneState {
     }
     /// Back to the width it was made with (double-clicking its edge).
     pub fn reset_width(&mut self) {
-        self.width = self.default;
+        self.width = self.default_width();
     }
     /// Where dragging its edge to `width` leaves it: clamped, or collapsed (keeping its last
     /// width) once dragged below half its minimum, as AppKit's split views do. Dragging back
@@ -159,7 +159,6 @@ impl PaneState {
 
     fn clamp(&mut self) {
         self.width = self.width.round().clamp(self.min, self.max);
-        self.default = self.default.round().clamp(self.min, self.max);
     }
 }
 
@@ -380,6 +379,20 @@ mod tests {
         assert_eq!(p.peek_phase(), Peek::None, "a close from docked isn't a peek");
         p.toggle();
         assert_eq!(p.peek_phase(), Peek::None, "an open without a peek isn't docked from one");
+    }
+
+    #[test]
+    fn the_default_follows_the_range_from_the_width_it_was_made_with() {
+        let p = PaneState::new(640.4).with_width(500.0);
+        assert_eq!((p.width(), p.default_width()), (480.0, 480.0));
+        let p = p.range(360.0, 960.0);
+        assert_eq!((p.width(), p.default_width()), (500.0, 640.0));
+        let p = p.range(100.0, 200.0).range(360.0, 960.0);
+        assert_eq!((p.width(), p.default_width()), (500.0, 640.0), "ranges don't accumulate");
+        let mut p = p;
+        p.set_width(400.0);
+        p.reset_width();
+        assert_eq!(p.width(), 640.0);
     }
 
     #[test]

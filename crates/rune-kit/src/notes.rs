@@ -26,7 +26,7 @@ pub(crate) enum Piece {
     Compare(Vec<(String, String)>),
     Steps(Vec<StepRow>),
     Size(SizeBar),
-    CodeFence { lang: String, title: Option<String>, marks: Vec<RangeInclusive<usize>>, lines: Vec<String> },
+    CodeFence { title: Option<String>, marks: Vec<RangeInclusive<usize>>, lines: Vec<String> },
     Callout { label: Option<String>, body: String },
 }
 
@@ -90,7 +90,7 @@ fn render_with_gap(key_prefix: &str, src: &str, gap: f32, k: &Kit) -> El {
             Piece::Compare(sides) => draw_compare(&key, &sides, k),
             Piece::Steps(steps) => draw_steps(&key, &steps, k),
             Piece::Size(size) => draw_size(&key, &size, k),
-            Piece::CodeFence { lang: _, title, marks, lines } => draw_code(&key, title.as_deref(), &marks, &lines, k),
+            Piece::CodeFence { title, marks, lines } => draw_code(&key, title.as_deref(), &marks, &lines, k),
             Piece::Callout { label, body } => draw_callout(&key, label.as_deref(), &body, k),
         }
         .motion(Spring::new(0.32, 0.0))
@@ -167,7 +167,6 @@ pub(crate) fn cut(src: &str) -> Vec<Piece> {
                     _ if info_raw.contains("title=") || info_raw.contains('{') => {
                         let (title, marks) = parse_code_meta(info_raw);
                         Some(Piece::CodeFence {
-                            lang: tag,
                             title,
                             marks,
                             lines: body.iter().map(|s| (*s).to_owned()).collect(),
@@ -322,7 +321,7 @@ fn fnv1a(s: &str) -> u32 {
     h
 }
 
-pub(crate) fn draw_facts(key: &str, rows: &[(String, String)], k: &Kit) -> El {
+fn draw_facts(key: &str, rows: &[(String, String)], k: &Kit) -> El {
     let c = &k.c;
     let mut list = col().key(key).w_full().radius(8.0).fill(c.layer_02).border(1.0, c.border_weak).px(14.0).py(6.0);
     for (idx, (label, val)) in rows.iter().enumerate() {
@@ -362,7 +361,7 @@ pub(crate) fn draw_facts(key: &str, rows: &[(String, String)], k: &Kit) -> El {
     list
 }
 
-pub(crate) fn draw_compare(key: &str, sides: &[(String, String)], k: &Kit) -> El {
+fn draw_compare(key: &str, sides: &[(String, String)], k: &Kit) -> El {
     let c = &k.c;
     let mut grid = row().key(key).w_full().gap(10.0);
     for (idx, (label, body)) in sides.iter().enumerate() {
@@ -389,7 +388,7 @@ pub(crate) fn draw_compare(key: &str, sides: &[(String, String)], k: &Kit) -> El
     grid
 }
 
-pub(crate) fn draw_steps(key: &str, steps: &[StepRow], k: &Kit) -> El {
+fn draw_steps(key: &str, steps: &[StepRow], k: &Kit) -> El {
     let c = &k.c;
     let built = steps
         .iter()
@@ -427,7 +426,7 @@ pub(crate) fn draw_steps(key: &str, steps: &[StepRow], k: &Kit) -> El {
     wrap
 }
 
-pub(crate) fn draw_size(key: &str, size: &SizeBar, k: &Kit) -> El {
+fn draw_size(key: &str, size: &SizeBar, k: &Kit) -> El {
     let c = &k.c;
     let totals: Vec<i64> = size.parts.iter().map(|(_, a, d)| (*a + *d).max(1)).collect();
     let grand: i64 = totals.iter().sum::<i64>().max(1);
@@ -480,7 +479,7 @@ pub(crate) fn draw_size(key: &str, size: &SizeBar, k: &Kit) -> El {
         .child(legend)
 }
 
-pub(crate) fn draw_code(key: &str, title: Option<&str>, marks: &[RangeInclusive<usize>], lines: &[String], k: &Kit) -> El {
+fn draw_code(key: &str, title: Option<&str>, marks: &[RangeInclusive<usize>], lines: &[String], k: &Kit) -> El {
     let c = &k.c;
     let mut card = col().key(key).w_full().radius(8.0).fill(c.bg_deep).border(1.0, c.border_weak);
     if let Some(title) = title {
@@ -522,7 +521,7 @@ pub(crate) fn draw_code(key: &str, title: Option<&str>, marks: &[RangeInclusive<
     card.child(body)
 }
 
-pub(crate) fn draw_callout(key: &str, label: Option<&str>, body: &str, k: &Kit) -> El {
+fn draw_callout(key: &str, label: Option<&str>, body: &str, k: &Kit) -> El {
     let c = &k.c;
     let mut inner = col().grow(1.0).shrink().gap(4.0);
     if let Some(label) = label {

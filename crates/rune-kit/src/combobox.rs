@@ -130,7 +130,7 @@ impl<S: 'static> Combobox<S> {
             None => Select::new::<&str>(format!("{}-value", self.key), &[])
                 .current(selected.map(|o| o.label.as_str())).placeholder(self.placeholder)
                 .appearance(SelectAppearance::Field).width(self.width).disabled(self.disabled)
-                .build(k, &mut Vec::new()),
+                .trigger(k),
         };
         if !self.disabled {
             trigger = trigger.on_press_tx(move |s: &mut S, tx| {
