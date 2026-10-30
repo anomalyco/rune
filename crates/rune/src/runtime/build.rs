@@ -232,7 +232,7 @@ impl<S: 'static> Runtime<S> {
                 pinh = Inh { opacity: 1.0, paint_opacity: 1.0, clip, fade, fade_origin, paint_clip: clip, paint_fade: fade,
                     paint_fade_origin: fade_origin, rounded: None, scale, anchor, anchor_to, blur: 0.0,
                     dx: pinh.dx - pinh.cover[0], dy: pinh.dy - pinh.cover[1], cover: [0.0; 2], outer: None,
-                    scale_motion: ScaleMotion::Still, in_cache: false, skip_paint: false, turn: 0, snap: pixel_snap::Inherit { layer: 0, ..pinh.snap }, ..pinh };
+                    scale_motion: ScaleMotion::Still, in_cache: false, skip_paint: false, turn: 0, snap: pixel_snap::Inherit { layer: 0, parent: None, ..pinh.snap }, ..pinh };
                 let fix = self.launches.offset_fix(&self.scene, node_id, [pinh.dx, pinh.dy], self.commit_gen);
                 (pinh.dx, pinh.dy) = (pinh.dx + fix[0], pinh.dy + fix[1]);
             }
@@ -383,14 +383,14 @@ impl<S: 'static> Runtime<S> {
             let snap_layer = if can_snap && (own_sc - 1.0).abs() > 1e-5 { self.pixel_snap.layer(n.id, (r_exact, raw_edges.map(snap_px)), rigid, pinh.in_cache || n.vis.cache) } else { pinh.snap.layer };
             let animating = p.flags & (rune_motion::flags::ANIMATED | rune_motion::flags::ANCESTOR_ANIMATED) != 0;
             let rest = if snaps && animating { self.scene.rest(n.id) } else { None };
-            let r = if !snaps {
-                r_exact
+            let (r, snap_rest) = if !snaps {
+                (r_exact, None)
             } else if rest.is_none() && unscaled {
-                self.pixel_snap.at_rest(n.id, r_exact, rigid)
+                self.pixel_snap.at_rest(n.id, r_exact, rigid, pinh.snap.parent)
             } else {
                 let motion = pixel_snap::motion(&p, rest, s, n.above.is_some(), self.row_h[i] >= 0.0);
                 let raw = if unscaled { r_exact } else { raw_edges.map(snap_px) };
-                self.pixel_snap.snapped(n.id, motion, (r_exact, raw), rigid, (snap_layer, sc))
+                self.pixel_snap.snapped(n.id, motion, (r_exact, raw), rigid, (snap_layer, sc), pinh.snap.parent)
             };
             let (w, h) = ((r[2] - r[0]).max(0.0), (r[3] - r[1]).max(0.0));
             // `El::rotate`: this subtree draws into a layer turned about its origin.
@@ -1439,7 +1439,7 @@ impl<S: 'static> Runtime<S> {
                 cover: cover_offset, outer, mark, group,
                 scale_motion, still: if scale_motion == ScaleMotion::Still { (scale, anchor, anchor_to) } else { pinh.still },
                 in_cache, skip_paint, turn: turn_index,
-                snap: pixel_snap::Inherit { off: snap_off, rigid: snap_rigid, layer: if cover.is_some() { 0 } else { snap_layer } } };
+                snap: pixel_snap::Inherit { off: snap_off, rigid: snap_rigid, layer: if cover.is_some() { 0 } else { snap_layer }, parent: snap_rest.filter(|_| cover.is_none() && snap_rigid == pinh.snap.rigid && pixel_snap::frames(&n.vis)) } };
             self.register_node_hits(i, pinh.clip, (effective_opacity, visible), rect_pt, (press_k, press_anchor));
         }
         while let Some((_, start, surface_start)) = layers.pop() {
