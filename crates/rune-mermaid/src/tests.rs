@@ -12,7 +12,7 @@ fn clean_turns_markup_into_text() {
 
 #[test]
 fn other_diagram_types_and_garbage_are_unsupported() {
-    for src in ["", "pie title Pets\n\"Dogs\" : 386", "gantt\ntitle x", "erDiagram\nA ||--o{ B : has", "hello", "%% only a comment"] {
+    for src in ["", "kanban\n  Todo", "pie title Pets", "gantt\ntitle x", "erDiagram", "hello", "%% only a comment"] {
         assert!(!supported(src), "{src:?}");
     }
     let with_title = scene("---\ntitle: Hi\n---\ngraph TD\nA-->B", &DiagramStyle::neutral(true), None).unwrap();

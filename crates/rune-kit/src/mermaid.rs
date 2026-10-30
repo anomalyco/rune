@@ -5,8 +5,11 @@
 //! sequence diagrams (`sequenceDiagram` with participants and their v11 types, actors, `box`
 //! groups, `rect` bands, activations, notes, frames, `create`/`destroy` and `autonumber`), state
 //! diagrams (`stateDiagram`/`stateDiagram-v2` with `[*]`, composite states and `--` regions,
-//! notes, `<<choice>>` and `<<fork>>`/`<<join>>`) and class diagrams (`classDiagram` with fields, methods,
-//! stereotypes, namespaces and UML relations). Lines that don't read are skipped and the rest
+//! notes, `<<choice>>` and `<<fork>>`/`<<join>>`), class diagrams (`classDiagram` with fields,
+//! methods, stereotypes, namespaces and UML relations), entity-relationship diagrams
+//! (`erDiagram` with attribute tables and crow's-foot cardinalities), gantt charts (`gantt` with
+//! sections, durations, `after`/`until` links and `excludes`) and pie charts (`pie`, with
+//! `showData`). Lines that don't read are skipped and the rest
 //! draws; an unknown diagram type, or a source where nothing reads, returns `None`, and
 //! [`crate::Markdown`] falls back to the code block.
 

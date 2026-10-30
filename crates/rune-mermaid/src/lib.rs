@@ -1,6 +1,7 @@
-//! Native ```` ```mermaid ```` diagrams: flowcharts, sequence diagrams, state diagrams and class
-//! diagrams, parsed and laid out in Rust and drawn with [`rune::Shape`]s and text, so they theme
-//! with the app and stay crisp at any scale. No JavaScript, web view or network.
+//! Native ```` ```mermaid ```` diagrams: flowcharts, sequence, state, class and
+//! entity-relationship diagrams, gantt and pie charts, parsed and laid out in Rust and drawn with
+//! [`rune::Shape`]s and text, so they theme with the app and stay crisp at any scale. No
+//! JavaScript, web view or network.
 //!
 //! **Flowcharts** (`graph` or `flowchart`, directions `TD`/`TB`/`BT`/`LR`/`RL`): node shapes
 //! `[rect]`, `(rounded)`, `([stadium])`, `[[subroutine]]`, `[(cylinder)]`, `((circle))`,
@@ -31,19 +32,37 @@
 //! `<<trait>>` / `<<enum>>` stereotypes, `namespace Name { … }`, and UML relationships `<|--`,
 //! `*--`, `o--`, `-->`, `..>`, `..|>`, `--` and `..` with labels and cardinalities.
 //!
+//! **Entity-relationship diagrams** (`erDiagram`): entities with `{ type name PK, FK "comment" }`
+//! attribute tables, `name["Alias"]` and quoted names, relationships in crow's-foot notation
+//! (`||`, `|o`, `}|`, `}o` either side of `--` or `..`, or worded: `only one to zero or more`,
+//! `optionally to`) with labels, `direction`, and `classDef`/`class`/`style` tints.
+//!
+//! **Gantt charts** (`gantt`): `dateFormat` (dayjs tokens), `axisFormat` (d3 `%` codes),
+//! `tickInterval`, `section`s, tasks `Name :[done|active|crit|milestone|vert,] [id,] [start,]
+//! end` with dates, durations (`3d`, `1w`, `12h`), `after a b` and `until a`, `excludes`
+//! (weekends, weekdays, dates; `weekend friday`) and `inclusiveEndDates`. Times have no zone,
+//! and there is no today marker, so a chart draws the same anywhere.
+//!
+//! **Pie charts** (`pie`): `showData`, `title`, and `"Label" : value` slices.
+//!
 //! **Leniency.** A statement that doesn't read is skipped and the rest still draws; a shape opener
 //! without its closer (`B[/items split view]`) is a plain rectangle holding the text as written;
 //! blocks left open close at the end. [`render`] returns `None`, so callers can show the source,
-//! only for a diagram type it doesn't know (gantt, pie, ER, timeline, gitGraph, mindmap, …), when
-//! nothing reads, or past the size bounds (400 items, nesting 8 deep).
+//! only for a diagram type it doesn't know (timeline, gitGraph, mindmap, …), when nothing reads,
+//! or past the size bounds (400 items, nesting 8 deep).
 
 mod canvas;
+mod chart;
 mod class;
 mod connector;
+mod date;
+mod er;
 mod flowchart;
+mod gantt;
 mod hover;
 mod layered;
 mod layered_draw;
+mod pie;
 mod route;
 mod sequence;
 mod sequence_draw;
@@ -167,6 +186,9 @@ pub(crate) enum Diagram {
     Sequence(sequence::Sequence),
     State(state::StateDiagram),
     Class(class::ClassDiagram),
+    Er(er::ErDiagram),
+    Gantt(gantt::Gantt),
+    Pie(pie::Pie),
 }
 
 pub(crate) struct Parsed {
@@ -235,6 +257,9 @@ pub(crate) fn parse(src: &str) -> Option<Parsed> {
         "sequenceDiagram" => sequence::parse(rest, &body).map(|s| (s.title.clone(), Diagram::Sequence(s)))?,
         "stateDiagram" | "stateDiagram-v2" => state::parse(rest, &body).map(|s| (s.title.clone(), Diagram::State(s)))?,
         "classDiagram" => class::parse(rest, &body).map(|c| (c.title.clone(), Diagram::Class(c)))?,
+        "erDiagram" => er::parse(rest, &body).map(|e| (e.title.clone(), Diagram::Er(e)))?,
+        "gantt" => gantt::parse(rest, &body).map(|g| (g.title.clone(), Diagram::Gantt(g)))?,
+        "pie" => pie::parse(rest, &body).map(|p| (p.title.clone(), Diagram::Pie(p)))?,
         _ => return None,
     };
     Some(Parsed { title: body_title.or(fm_title), diagram })
@@ -259,6 +284,9 @@ pub(crate) fn scene(src: &str, paint: &DiagramStyle, hover: Option<(Hover, Color
         Diagram::Sequence(s) => sequence::draw(s, paint),
         Diagram::State(s) => state::draw(s, paint, hover),
         Diagram::Class(c) => class::draw(c, paint, hover),
+        Diagram::Er(e) => er::draw(e, paint, hover),
+        Diagram::Gantt(g) => gantt::draw(g, paint),
+        Diagram::Pie(p) => pie::draw(p, paint),
     }?;
     Some(s.with_title(parsed.title))
 }

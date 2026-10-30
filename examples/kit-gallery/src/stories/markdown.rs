@@ -58,7 +58,8 @@ sequenceDiagram
 ```
 "#;
 
-/// Subgraphs, every node shape, a left-to-right chart that fits, and an unsupported diagram.
+/// Subgraphs, every node shape, a left-to-right chart that fits, a pie chart, and an unsupported
+/// diagram.
 const DIAGRAMS: &str = r#"```mermaid
 graph TD
     subgraph client [Client]
@@ -87,6 +88,12 @@ flowchart LR
 pie title Pets
     "Dogs" : 386
     "Cats" : 85
+```
+
+```mermaid
+kanban
+    Todo
+        Write docs
 ```
 "#;
 
@@ -218,6 +225,60 @@ stateDiagram-v2
     note right of Save : writes to disk
 ```
 "#;
+
+/// An entity-relationship diagram, a gantt chart and a pie chart.
+const CHARTS: &str = r#"```mermaid
+erDiagram
+    CUSTOMER ||--o{ ORDER : places
+    ORDER ||--|{ LINE-ITEM : contains
+    PRODUCT |o..o{ LINE-ITEM : "listed in"
+    CUSTOMER {
+        string id PK
+        string name
+        string email UK "login"
+    }
+    ORDER {
+        int id PK
+        string customer FK
+        date placed
+    }
+    LINE-ITEM {
+        int qty
+        decimal price
+    }
+```
+
+```mermaid
+gantt
+    title Release 2.0
+    dateFormat YYYY-MM-DD
+    axisFormat %b %d
+    excludes weekends
+    section Build
+    Design       :done, des, 2024-03-04, 4d
+    Core engine  :active, core, after des, 8d
+    Plugins      :plug, after des, 6d
+    section Ship
+    Beta         :crit, beta, after core plug, 4d
+    Docs         :docs, after plug, 5d
+    Release      :milestone, after beta docs, 0d
+    Code freeze  :vert, 2024-03-18, 0d
+```
+
+```mermaid
+pie showData title Where the time went
+    "Building" : 42
+    "Reviewing" : 23
+    "Waiting on CI" : 18
+    "Meetings" : 9
+    "Other" : 4
+```
+"#;
+
+pub(super) fn markdown_mermaid_charts(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let style = MarkdownStyle::from_kit(k).diagram_max_width(560.0);
+    col().w(560.0).child(Markdown::new(CHARTS).style(style).build(k))
+}
 
 pub(super) fn markdown_mermaid_flows(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     let style = MarkdownStyle::from_kit(k).diagram_max_width(560.0);

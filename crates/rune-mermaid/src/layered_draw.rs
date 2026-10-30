@@ -48,6 +48,11 @@ pub(crate) enum Head {
     OpenTriangle,
     DiamondFilled,
     DiamondOpen,
+    /// Entity-relationship cardinalities, drawn in crow's-foot notation.
+    OnlyOne,
+    ZeroOrOne,
+    OneOrMore,
+    ZeroOrMore,
 }
 
 #[derive(Debug)]
@@ -93,12 +98,20 @@ pub(crate) enum DrawNode {
         cluster: Option<usize>,
         style: NodeStyle,
     },
+    /// An entity: its name over a table of attributes, one row each, in columns `cols` wide.
+    Entity {
+        name: Measured,
+        rows: Vec<Vec<Measured>>,
+        cols: Vec<f32>,
+        size: [f32; 2],
+        style: NodeStyle,
+    },
 }
 
 impl DrawNode {
     fn size(&self) -> [f32; 2] {
         match self {
-            DrawNode::Shape { size, .. } | DrawNode::ClassBox { size, .. } => *size,
+            DrawNode::Shape { size, .. } | DrawNode::ClassBox { size, .. } | DrawNode::Entity { size, .. } => *size,
             DrawNode::Start { .. } => [18.0, 18.0],
             DrawNode::End { .. } => [22.0, 22.0],
             DrawNode::Bar { .. } => [64.0, 8.0],
@@ -109,7 +122,7 @@ impl DrawNode {
         match self {
             DrawNode::Shape { shape, .. } => *shape,
             DrawNode::Start { .. } | DrawNode::End { .. } => NodeShape::Circle,
-            DrawNode::Bar { .. } | DrawNode::ClassBox { .. } => NodeShape::Rect,
+            DrawNode::Bar { .. } | DrawNode::ClassBox { .. } | DrawNode::Entity { .. } => NodeShape::Rect,
         }
     }
 
@@ -120,6 +133,7 @@ impl DrawNode {
             | DrawNode::End { cluster }
             | DrawNode::Bar { cluster }
             | DrawNode::ClassBox { cluster, .. } => *cluster,
+            DrawNode::Entity { .. } => None,
         }
     }
 }
@@ -305,5 +319,38 @@ fn draw_node(c: &mut Canvas, node: &DrawNode, ctr: [f32; 2], paint: &DiagramStyl
                 y += 3.0;
             }
         }
+        DrawNode::Entity { name, rows, cols, size, style } => {
+            let (fill, border, text_color) = style.resolve(paint);
+            let (x0, y0, x1, y1) = (ctr[0] - size[0] / 2.0, ctr[1] - size[1] / 2.0, ctr[0] + size[0] / 2.0, ctr[1] + size[1] / 2.0);
+            let head_font = TextStyle { weight: 600.0, ..paint.font };
+            let row_font = TextStyle { size: paint.font.size - 1.0, line_height: paint.font.line_height - 2.0, ..paint.font };
+            let head_h = name.size[1] + ENTITY_PAD[1] * 2.0;
+            c.shape(rounded_rect(x0, y0, x1, y1, 4.0), fill, border, 1.0);
+            c.label(name, [ctr[0], y0 + head_h / 2.0], head_font, text_color, Align::Center);
+            let mut y = y0 + head_h;
+            let stripe = text_color.alpha(0.035);
+            for (r, row) in rows.iter().enumerate() {
+                let h = entity_row_h(row);
+                if r % 2 == 1 {
+                    c.fill(vec![[x0 + 0.5, y], [x1 - 0.5, y], [x1 - 0.5, y + h], [x0 + 0.5, y + h]], stripe);
+                }
+                c.stroke(vec![[x0, y], [x1, y]], false, if r == 0 { 1.0 } else { 0.5 }, if r == 0 { border } else { border.alpha(0.5) });
+                let mut x = x0;
+                for (i, (cell, w)) in row.iter().zip(cols).enumerate() {
+                    // Keys are muted; comments, last, are muted and may run the rest of the width.
+                    let color = if i >= 2 { paint.muted } else { text_color };
+                    c.label_at(cell, [x + ENTITY_PAD[0], y + (h - cell.size[1]) / 2.0], row_font, color, Align::Start);
+                    x += w;
+                }
+                y += h;
+            }
+        }
     }
+}
+
+/// An entity's padding inside each cell: `[across, down]`.
+pub(crate) const ENTITY_PAD: [f32; 2] = [10.0, 5.0];
+
+pub(crate) fn entity_row_h(row: &[Measured]) -> f32 {
+    row.iter().map(|m| m.size[1]).fold(0.0, f32::max) + ENTITY_PAD[1] * 2.0
 }

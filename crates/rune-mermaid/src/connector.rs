@@ -29,6 +29,7 @@ fn inset(h: Head) -> f32 {
         Head::Cross => 4.0,
         Head::OpenTriangle => 10.0,
         Head::DiamondFilled | Head::DiamondOpen => 12.0,
+        Head::OnlyOne | Head::ZeroOrOne | Head::OneOrMore | Head::ZeroOrMore => 0.0,
     }
 }
 
@@ -158,6 +159,29 @@ fn head(c: &mut Canvas, h: Head, tip: [f32; 2], d: [f32; 2], width: f32, color: 
             c.stroke(vec![[m[0] - a[0] * k, m[1] - a[1] * k], [m[0] + a[0] * k, m[1] + a[1] * k]], false, width, color);
             c.stroke(vec![[m[0] - b[0] * k, m[1] - b[1] * k], [m[0] + b[0] * k, m[1] + b[1] * k]], false, width, color);
         }
+        Head::OnlyOne | Head::ZeroOrOne | Head::OneOrMore | Head::ZeroOrMore => crow(c, h, tip, d, width, color, paint),
+    }
+}
+
+/// A crow's-foot cardinality at `tip`: a foot for many, a bar for one, a ring for zero, with the
+/// inner mark (minimum) furthest from the entity.
+fn crow(c: &mut Canvas, h: Head, tip: [f32; 2], d: [f32; 2], width: f32, color: Color, paint: &DiagramStyle) {
+    let back = |by: f32| [tip[0] - d[0] * by, tip[1] - d[1] * by];
+    let n = [-d[1], d[0]];
+    let bar = |c: &mut Canvas, at: [f32; 2]| c.stroke(vec![[at[0] + n[0] * 6.0, at[1] + n[1] * 6.0], [at[0] - n[0] * 6.0, at[1] - n[1] * 6.0]], false, width, color);
+    let many = matches!(h, Head::OneOrMore | Head::ZeroOrMore);
+    if many {
+        let heel = back(12.0);
+        for side in [1.0, -1.0] {
+            c.stroke(vec![heel, [tip[0] + n[0] * 6.5 * side, tip[1] + n[1] * 6.5 * side]], false, width, color);
+        }
+    } else {
+        bar(c, back(5.0));
+    }
+    let inner = if many { 16.0 } else { 10.0 };
+    match h {
+        Head::OnlyOne | Head::OneOrMore => bar(c, back(inner)),
+        _ => c.shape(ellipse(back(inner + 4.0), 4.0, 4.0), paint.surface, color, width),
     }
 }
 
