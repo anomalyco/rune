@@ -141,6 +141,7 @@ impl<S: 'static> AnyHost for Host<S> {
         let win = self.win.as_ref();
         runtime.into_iter()
             .chain(win.and_then(|w| w.first_frame.deadline.map(|(retry, _)| retry)))
+            .chain(win.and_then(|w| w.first_frame.ready_deadline()))
             .chain(win.and_then(|w| w.retry))
             .chain(win.filter(|w| !w.visible).and_then(|w| w.hidden_pace.deadline()))
             .chain(self.files.pointer.as_ref().filter(|_| win.is_some_and(|w| w.visible)).map(|_| Instant::now() + DROP_SAMPLE))

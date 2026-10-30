@@ -394,7 +394,9 @@ impl<S: 'static> App<S> {
     }
 
     /// First-frame readiness, once per native creation. Launcher panels call this while
-    /// hidden, after GPU completion of its cached surface frame.
+    /// hidden, after GPU completion of its cached surface frame. A window that isn't on screen
+    /// (covered, occluded, hidden or on another Space) doesn't wait to draw: this runs at its
+    /// first frame skipped for that, or a second after it opens with no frame at all.
     /// Not called by headless tooling. May queue a show through the supplied handle.
     pub fn on_ready(mut self, f: impl FnMut(&crate::WindowHandle) + 'static) -> Self {
         self.on_ready = Some(Box::new(f));

@@ -850,7 +850,7 @@ impl<S: 'static> Host<S> {
         let native = Native::default();
         self.win = Some(Win {
             native,
-            first_frame: FirstFrame::default(),
+            first_frame: FirstFrame::opened(Instant::now()),
             surface,
             config,
             window,
