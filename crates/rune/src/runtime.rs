@@ -5230,21 +5230,7 @@ impl<S: 'static> Runtime<S> {
             if let Some(a) = &n.above
                 && let Some(j) = self.nodes[..i].iter().position(|n| n.key.as_ref() == Some(&a.key))
             {
-                let d = self.drawn[j];
-                let target = if d != [0.0; 4] { [d[0], d[1], d[0] + d[2], d[1] + d[3]] }
-                    else { sticky::anchored_target(&self.nodes, &self.scrolls, j, self.viewport) };
-                let (ax, ay) = anchor_position(a, target, (p.rect.w, p.rect.h), self.viewport);
-                // Placed from the presented size and anchor, so drop the scene's own layout
-                // position (this node's `prop::FRAME` x/y and its ancestors' origins) while
-                // keeping this node's own `prop::OFFSET` and transition offset: with the frame
-                // position spring left in, an End-aligned box growing in width would start from
-                // its old x and its end edge would swing out and back.
-                let w = self.scene.world(n.id).unwrap_or(p.rect);
-                pinh.dx = ax - w.x;
-                pinh.dy = ay - w.y;
-                (pinh.snap.rigid, pinh.snap.layer) = ([0.0; 2], 0);
-                (pinh.scale, pinh.anchor, pinh.anchor_to) = (1.0, [0.0; 2], [0.0; 2]);
-                pinh.still = (1.0, [0.0; 2], [0.0; 2]);
+                self.anchored_inh(i, j, a, &p, &mut pinh);
             }
             if self.has_sticky && let Some((edge, inset, tail)) = n.sticky.as_ref().and_then(|s| Some((s.edge?, s.inset, s.tail))) {
                 // Worked out from this frame's offsets, which the viewport above already applied.

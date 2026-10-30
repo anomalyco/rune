@@ -21,6 +21,8 @@ pub struct Anchor {
     pub gap: f32,
     /// [`El::anchored_fit`]: at most as long as the room on the side it goes to.
     pub fit: bool,
+    /// [`El::anchored_unscaled`]: at window scale, not its anchor's zoom.
+    pub unscaled: bool,
 }
 
 impl El {
@@ -33,9 +35,15 @@ impl El {
     /// side, `gap` points away. It flips to the opposite side when it doesn't fit, and stays
     /// 8 points inside the window. Attach it at the root (after the anchor) so it draws above
     /// later siblings and escapes clipping ancestors.
+    ///
+    /// It draws at its anchor's zoom: inside a page drawn at [`El::scale`]`(1.6)`, the overlay
+    /// and its text draw 1.6 times their size too, growing away from the anchor. Its gap zooms
+    /// with it, and flipping, fitting and the 8-point window margin use its drawn size. Its own
+    /// [`El::scale`] replaces the inherited zoom; [`El::anchored_unscaled`] keeps it at window
+    /// scale.
     pub fn anchored(mut self, key: impl Into<String>, side: Side, align: Align, gap: f32) -> Self {
         self.style.position = Position::Absolute;
-        self.above = Some(Anchor { key: key.into(), side, align, gap, fit: false });
+        self.above = Some(Anchor { key: key.into(), side, align, gap, fit: false, unscaled: false });
         self
     }
     /// [`El::anchored`], sized to the window as Floating UI's `size` middleware sizes a
@@ -50,5 +58,13 @@ impl El {
             a.fit = true;
         }
         e
+    }
+    /// Keep this [`El::anchored`] overlay at window scale instead of its anchor's zoom, for an
+    /// overlay that zooms its own content (or must not zoom). Call it after `anchored`.
+    pub fn anchored_unscaled(mut self) -> Self {
+        if let Some(a) = &mut self.above {
+            a.unscaled = true;
+        }
+        self
     }
 }
