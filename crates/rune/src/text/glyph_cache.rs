@@ -128,6 +128,17 @@ impl Entry {
 }
 
 impl GlyphCache {
+    /// Drops `layout`'s entries, so a layout re-broken in place stays at its address
+    /// (`Rc::make_mut` moves a value that weak references still point to).
+    pub(crate) fn forget(&mut self, layout: &Rc<Layout<Ink>>) {
+        if Rc::weak_count(layout) == 0 {
+            return;
+        }
+        let at = Rc::as_ptr(layout) as usize;
+        self.entries.retain(|k, _| k.layout != at);
+        self.bytes = self.entries.values().map(Entry::size).sum();
+    }
+
     /// Drops entries whose layout is gone, then the least recently painted while over budget.
     pub(crate) fn begin_frame(&mut self) {
         self.frame += 1;

@@ -4106,7 +4106,7 @@ impl<S: 'static> Runtime<S> {
             }
         }
         self.layout = taffy;
-        self.reuse.scale = self.env.scale;
+        self.reuse.built(self.env.scale, self.srgb_blend);
         self.text.end_commit();
         self.dirty = false;
         self.relayout = false;

@@ -1470,7 +1470,7 @@ impl TextSystem {
                 // One this commit hasn't used and nothing else holds moves to the new width and
                 // re-breaks in place; otherwise the shaped runs are copied.
                 let (moves, mut l) = (*used != g && Rc::strong_count(shaped) == 1, shaped.clone());
-                if moves { self.layouts.remove(&prev); }
+                if moves { self.layouts.remove(&prev); self.glyph_cache.forget(&l); }
                 let layout = Rc::make_mut(&mut l);
                 break_lines(layout);
                 layout.align(align, AlignmentOptions::default());

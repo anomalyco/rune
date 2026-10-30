@@ -92,6 +92,16 @@ fn a_new_scale_runs_the_view() {
     assert_eq!(resize(&mut rt, 600.0, 1.0), 0, "and the next resize at that scale doesn't");
 }
 
+/// Theme colours resolve per blend mode, so a resize in the frame the mode switched runs the view.
+#[test]
+fn a_new_blend_mode_runs_the_view() {
+    let mut rt = Runtime::new(0, paragraphs, (700.0, 600.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    rt.set_srgb_blend(!rt.srgb_blend());
+    assert_eq!(resize(&mut rt, 600.0, 2.0), 1);
+    assert_eq!(resize(&mut rt, 500.0, 2.0), 0, "and the next resize in that mode doesn't");
+}
+
 /// A node still showing its exit has left the layout tree, so the tree can't be laid out again.
 #[test]
 fn a_resize_during_an_exit_runs_the_view_and_the_exit_carries_on() {

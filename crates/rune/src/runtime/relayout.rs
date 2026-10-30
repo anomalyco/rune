@@ -16,6 +16,16 @@ pub(super) struct Reuse {
     pub(super) scale: f32,
     /// A layout read moved this frame, so the view runs to see it.
     pub(super) read_moved: bool,
+    /// The blend mode the last commit built its view in; theme colours resolve per mode.
+    pub(super) srgb: Option<bool>,
+}
+
+impl Reuse {
+    /// Records what the commit just applied was built with.
+    pub(super) fn built(&mut self, scale: f32, srgb: bool) {
+        self.scale = scale;
+        self.srgb = Some(srgb);
+    }
 }
 
 /// The root's size in a viewport; a window that fits its content takes its natural height.
@@ -55,7 +65,7 @@ impl<S: 'static> Runtime<S> {
     /// last commit built it, and the nodes it built are all there, in the layout tree's order.
     pub(super) fn resize_only(&self, tx: &Tx) -> bool {
         self.relayout && self.state_unchanged && !tx.settle && !self.reuse.read_moved
-            && self.reuse.scale == self.env.scale
+            && self.reuse.scale == self.env.scale && self.reuse.srgb == Some(self.srgb_blend)
             && self.playground.is_none() && !self.patch_pending()
             // Exiting nodes left the layout tree.
             && self.layout_entries.len() == self.nodes.len()
