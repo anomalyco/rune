@@ -839,6 +839,7 @@ fn video_json(v: &crate::video::Snapshot) -> Value {
         "rate": v.rate,
         "looping": v.looping,
         "muted": v.muted,
+        "volume": v.volume,
     });
     if let Some(e) = error { out["error"] = e.into(); }
     out

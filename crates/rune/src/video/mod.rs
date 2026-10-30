@@ -6,7 +6,8 @@
 //! Video: each frame that draws the element reconciles that intent with the platform player on
 //! the UI thread and pulls the frame for the frame's presentation time, so a paused or hidden
 //! video costs nothing per frame. On macOS, AVPlayer + AVPlayerItemVideoOutput pull
-//! IOSurface-backed `CVPixelBuffer`s for the display link's target time, zero-copy. Until a
+//! IOSurface-backed `CVPixelBuffer`s for the display link's target time, zero-copy. On Linux,
+//! GStreamer `playbin` presents into an appsink on the same pipeline clock as audio. Until a
 //! video first plays, and after its player is parked, it shows a poster frame decoded on a
 //! worker thread, with no player or decoder session held.
 //!
@@ -23,7 +24,9 @@
 //! on the thread that made it, from the first frame or edit after `play`: pausing, seeking,
 //! rate, looping and the end (which wakes the app's waker) all as in a window, silently.
 //!
-//! Other platforms report [`PlayerState::Failed`] and draw a neutral placeholder for video.
+//! On Linux, GStreamer `playbin` drives windowed playback (appsink BGRA + system audio);
+//! `ffmpeg`/`ffprobe` on PATH still handle posters and headless frames. Other platforms report
+//! [`PlayerState::Failed`] and draw a neutral placeholder for video.
 
 #[cfg(all(target_os = "macos", feature = "ogg-audio"))]
 mod foreign;
@@ -33,9 +36,13 @@ mod macos;
 use macos as backend;
 #[cfg(all(test, target_os = "macos"))]
 pub(crate) use macos::test_frames;
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+use linux as backend;
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod unsupported;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 use unsupported as backend;
 
 use crate::native_surface::{ByteFrame, ColorInfo, Format, NativeSurface};
@@ -185,6 +192,43 @@ pub(crate) enum Kind {
     Audio,
 }
 
+/// Stream kind for [`Player::tracks`] / [`Player::set_track`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaTrackKind {
+    Audio,
+    Video,
+    Subtitle,
+}
+
+/// One selectable audio, video, or subtitle stream inside a clip.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MediaTrack {
+    pub index: i32,
+    pub language: Option<String>,
+    pub title: Option<String>,
+}
+
+impl MediaTrack {
+    /// Menu label: title, language, or `Track N`.
+    pub fn label(&self) -> String {
+        match (&self.title, &self.language) {
+            (Some(t), Some(l)) if !t.is_empty() => format!("{t} ({l})"),
+            (Some(t), _) if !t.is_empty() => t.clone(),
+            (_, Some(l)) if !l.is_empty() => l.clone(),
+            _ => format!("Track {}", self.index + 1),
+        }
+    }
+}
+
+/// Desired subtitle stream; `Unset` leaves the playbin default alone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum SubtitleSelect {
+    #[default]
+    Unset,
+    Off,
+    Track(i32),
+}
+
 /// A video or audio clip. Clones share one player; dropping the last clone (and, for video,
 /// every element showing it) stops and frees it. Video starts muted; audio starts unmuted.
 ///
@@ -316,6 +360,8 @@ impl Player {
         });
     }
     /// Playback speed while playing; 1 is normal. Negative and non-finite rates are ignored.
+    /// Pitch stays steady when the platform can (Linux: GStreamer `scaletempo`; macOS: AVFoundation
+    /// time-pitch). Without that plugin or algorithm, audio pitch still tracks rate.
     pub fn set_rate(&self, rate: f32) {
         if rate.is_finite() && rate > 0.0 {
             self.edit(|c| {
@@ -330,6 +376,12 @@ impl Player {
     /// Sound plays only while unmuted. Videos start muted, audio clips unmuted.
     pub fn set_muted(&self, muted: bool) {
         self.edit(|c| c.muted = muted);
+    }
+    /// Linear gain while unmuted, `0.0`…`1.0` (clamped). Default `1.0`. Independent of mute.
+    pub fn set_volume(&self, volume: f32) {
+        if volume.is_finite() {
+            self.edit(|c| c.volume = volume.clamp(0.0, 1.0));
+        }
     }
     /// Called, from any thread, when the state changes: loaded, ended, failed, or started
     /// again by a loop. Hand it the app's `setup` waker so `poll` sees an audio clip end
@@ -369,6 +421,58 @@ impl Player {
     }
     pub fn muted(&self) -> bool {
         self.shared.ctl.lock().unwrap().muted
+    }
+    pub fn volume(&self) -> f32 {
+        self.shared.ctl.lock().unwrap().volume
+    }
+    /// Audio, video, or subtitle streams once a player session exists (empty until then, or on
+    /// platforms without track selection).
+    pub fn tracks(&self, kind: MediaTrackKind) -> Vec<MediaTrack> {
+        backend::list_tracks(&self.shared, kind)
+    }
+    /// Selected stream index, or `None` when subtitles are off / unknown.
+    pub fn current_track(&self, kind: MediaTrackKind) -> Option<i32> {
+        backend::current_track(&self.shared, kind)
+    }
+    /// Select a stream. For [`MediaTrackKind::Subtitle`], `None` turns subtitles off.
+    pub fn set_track(&self, kind: MediaTrackKind, index: Option<i32>) {
+        self.edit(|c| match kind {
+            MediaTrackKind::Audio => {
+                if let Some(i) = index.filter(|i| *i >= 0) {
+                    c.audio_track = Some(i);
+                }
+            }
+            MediaTrackKind::Video => {
+                if let Some(i) = index.filter(|i| *i >= 0) {
+                    c.video_track = Some(i);
+                }
+            }
+            MediaTrackKind::Subtitle => {
+                c.subtitle = match index {
+                    None => SubtitleSelect::Off,
+                    Some(i) if i >= 0 => SubtitleSelect::Track(i),
+                    Some(_) => SubtitleSelect::Off,
+                };
+            }
+        });
+    }
+    /// Decode one BGRA frame at `at` seconds for scrub previews. Blocks; call from a worker.
+    /// Long edges are scaled down to at most 240 px. Does not hold the live-player lock across
+    /// decode, so a scrub worker cannot stall windowed playback. Needs a loadable video.
+    pub fn decode_frame_at(&self, at: f64) -> Result<ByteFrame, String> {
+        if self.shared.kind != Kind::Video {
+            return Err("audio has no video frames".into());
+        }
+        let source = self.shared.source.clone();
+        let headers = self.shared.headers.clone();
+        let cached = {
+            let c = self.shared.ctl.lock().unwrap();
+            match (c.size, c.meta) {
+                (Some(size), Some(meta)) => Some((size, meta.frame)),
+                _ => None,
+            }
+        };
+        Ok(backend::decode_preview_at(&source, &headers, at.max(0.0), 240, cached)?.0)
     }
     /// The surface video frames land in: for frame observers and draw counts.
     pub fn surface(&self) -> &NativeSurface {
@@ -435,6 +539,7 @@ pub(crate) struct Snapshot {
     pub rate: f32,
     pub looping: bool,
     pub muted: bool,
+    pub volume: f32,
 }
 
 /// Clip facts read once when it opens.
@@ -473,6 +578,7 @@ impl Shared {
             rate: c.rate,
             looping: c.looping,
             muted: c.muted,
+            volume: c.volume,
         }
     }
 
@@ -605,7 +711,13 @@ pub(crate) struct Control {
     pub rate: f32,
     pub looping: bool,
     pub muted: bool,
+    /// Linear gain `0.0`…`1.0` while unmuted.
+    pub volume: f32,
     pub seek: Option<f64>,
+    /// Selected audio stream; `None` leaves the backend default.
+    pub audio_track: Option<i32>,
+    pub video_track: Option<i32>,
+    pub subtitle: SubtitleSelect,
     // Reported by pulls and ticks.
     pub time: f64,
     pub duration: Option<f64>,
@@ -629,7 +741,11 @@ impl Default for Control {
             rate: 1.0,
             looping: false,
             muted: true,
+            volume: 1.0,
             seek: None,
+            audio_track: None,
+            video_track: None,
+            subtitle: SubtitleSelect::Unset,
             time: 0.0,
             duration: None,
             size: None,
@@ -719,7 +835,7 @@ impl Control {
 
     /// Display clock: fold a player position into the state, looping or ending at the end.
     /// Returns true when the player should restart from zero.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
     pub(crate) fn observe(&mut self, time: f64, at_end: bool) -> bool {
         self.time = self.duration.map_or(time, |d| time.clamp(0.0, d));
         if !(self.playing && at_end) {

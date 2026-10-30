@@ -136,6 +136,11 @@ libloading = "0.8"
 zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service"], optional = true }
 tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"], optional = true }
 futures-util = { version = "0.3", optional = true }
+# Live `Player` on Linux: GStreamer playbin + appsink. Headless/posters still use ffmpeg on PATH.
+gstreamer = "0.25"
+gstreamer-app = "0.25"
+gstreamer-video = "0.25"
+glib = "0.21"
 
 [target.'cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
 wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"] }
