@@ -8,14 +8,14 @@ impl El {
     /// pass there. See `Renderer::draw_range_with`.
     pub fn effect(mut self, mark: u32) -> Self {
         self.vis.mark = mark;
-        self.vis.effect.get_or_insert((0.0, false));
+        self.vis.cold_mut().effect.get_or_insert((0.0, false));
         self
     }
     /// Points past the rect an effect slot may paint (a glow's reach). Grows the bounds of an
     /// enclosing isolated layer; the clip still applies.
     pub fn effect_bleed(mut self, pt: f32) -> Self {
         let bd = self.vis.effect.map_or(false, |(_, bd)| bd);
-        self.vis.effect = Some((pt.max(0.0), bd));
+        self.vis.cold_mut().effect = Some((pt.max(0.0), bd));
         self
     }
     /// Request a backdrop copy up to this effect slot (`EffectSite::backdrop`) when drawn with
@@ -24,7 +24,7 @@ impl El {
     /// A target without `COPY_SRC` usage can't be copied: the slot draws in the open pass with `backdrop == None`.
     pub fn effect_backdrop(mut self, on: bool) -> Self {
         let bleed = self.vis.effect.map_or(0.0, |(b, _)| b);
-        self.vis.effect = Some((bleed, on));
+        self.vis.cold_mut().effect = Some((bleed, on));
         self
     }
 }

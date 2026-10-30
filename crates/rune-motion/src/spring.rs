@@ -135,6 +135,11 @@ impl Spring {
         (s, (total * 1000.0).round() as u32)
     }
 
+    /// No motion: as a [`crate::Curve`] or [`crate::Anim`] (a transition's presence, a layout
+    /// change) it is `Curve::Instant`, which Reduce Motion leaves instant where it turns a short
+    /// spring into a fade. [`SpringPair::NONE`] and [`crate::Transition::none`] build on it.
+    pub const NONE: Spring = Spring::new(1e-6, 0.0);
+
     // SwiftUI's named springs (iOS 17+). Duration 0.5 by default.
 
     /// SwiftUI `.smooth`: duration 0.5, bounce 0.
@@ -177,6 +182,8 @@ impl SpringPair {
     pub const fn new(enter: Spring, exit: Spring) -> SpringPair {
         SpringPair { enter, exit }
     }
+    /// [`Spring::NONE`] both ways: enters and leaves in the frame it starts.
+    pub const NONE: SpringPair = SpringPair::new(Spring::NONE, Spring::NONE);
     /// A pair whose exit is `enter` shortened by `ratio` (Kit: 0.75–0.9).
     pub fn with_exit_ratio(enter: Spring, ratio: f32) -> SpringPair {
         SpringPair { enter, exit: Spring::new(enter.duration * ratio, enter.bounce * 0.5) }

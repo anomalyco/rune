@@ -1,4 +1,5 @@
 use super::*;
+use super::history::{HISTORY_BYTES, HISTORY_STEPS};
 
 fn k(key: Key) -> KeyEvent {
     KeyEvent { key, mods: Mods::default() }

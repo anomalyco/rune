@@ -162,6 +162,9 @@ impl Timer {
         Some(Timer { qs, resolve, read, state: Arc::new(AtomicU8::new(0)), period: queue.get_timestamp_period(), recording: false })
     }
 
+    /// Collects a finished reading (ms) and decides whether this frame records one. Last frame's queries are
+    /// resolved here, a command buffer later: Metal orders work by resource, so a resolve in the same encoder
+    /// can run before the final pass's end-of-pass sample lands.
     fn begin(&mut self, enc: &mut wgpu::CommandEncoder) -> Option<f32> {
         let mut out = None;
         match self.state.load(Ordering::Acquire) {
@@ -189,6 +192,8 @@ impl Timer {
         out
     }
 
+    /// The query set when this frame records. The writes go on the compositor's own render passes: Metal may
+    /// overlap a resource-free marker pass with the work around it, so empty marker passes read near zero.
     fn query(&self) -> Option<wgpu::QuerySet> {
         self.recording.then(|| self.qs.clone())
     }

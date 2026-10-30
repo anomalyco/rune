@@ -1,12 +1,12 @@
 //! Virtual row bookkeeping. Only geometry outside the mounted window is estimated.
 
 use std::cell::{Cell, Ref, RefCell};
-use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use taffy::style::{Display, FlexDirection, FlexWrap, LengthPercentage, LengthPercentageAuto, Position, Style};
 
 use crate::El;
+use crate::runtime::{HashMap, HashSet};
 
 /// What a row keeps while its key stays.
 #[derive(Debug, Clone, Copy)]
@@ -208,7 +208,7 @@ impl VirtualList {
     /// at `commit`. Returns the first row visible at `offset` (when given) that stays, with its
     /// top before the change, to anchor the reader to: none when no row in view stays.
     pub fn set_keys(&mut self, keys: Vec<String>, commit: u64, offset: Option<f32>) -> Option<(String, f32)> {
-        let mut rows = HashMap::with_capacity(keys.len());
+        let mut rows = HashMap::with_capacity_and_hasher(keys.len(), Default::default());
         let mut born = Vec::with_capacity(keys.len());
         let mut heights = Vec::with_capacity(keys.len());
         for (index, key) in keys.iter().enumerate() {
@@ -315,13 +315,9 @@ impl VirtualList {
     pub fn select(&mut self, offset: f32, pinned: bool, budget: Option<&HashSet<String>>) {
         let total = self.prefix(self.keys.len());
         let offset = if pinned { self.max_offset() } else { offset.min(self.max_offset()) };
-        let lo = offset - self.viewport * OVERSCAN;
-        let hi = offset + self.viewport * (1.0 + OVERSCAN);
+        let (start, end) = self.overscan(offset);
         let (mut start, mut end) = {
             let sums = self.sums();
-            // Rows ending at or above `lo` go; rows starting below `hi` stay.
-            let start = sums[1..].partition_point(|&s| self.pad_top + s - self.gap <= lo);
-            let end = sums[..self.keys.len()].partition_point(|&s| self.pad_top + s < hi);
             if let Some(shown) = budget.filter(|_| !pinned) {
                 let mounted = |k: &str| shown.contains(k);
                 // The viewport's own rows always mount; the overscan takes new rows up to a budget.
@@ -352,12 +348,40 @@ impl VirtualList {
                 (start, end)
             }
         };
-        self.anchor = if pinned { None } else { self.first_visible(offset, |_| true) };
+        // A row still at its estimate grows or shrinks once measured; anchoring to it would move
+        // the measured rows below, such as the reader's row under a page that just landed.
+        self.anchor = if pinned { None } else {
+            let range = self.visible_range(offset, false);
+            let sums = self.sums();
+            range.into_iter().find(|&i| self.rows[&self.keys[i]].height.is_some())
+                .map(|i| (self.keys[i].clone(), self.pad_top + sums[i]))
+                .or_else(|| self.first_visible(offset, |_| true))
+        };
         if pinned { start = start.min(end.saturating_sub(32)); }
         end = end.max(start);
         self.range = start..end;
         self.before = self.prefix(start);
         self.after = if start < end { total - self.row_end(end) } else { total - self.before };
+    }
+
+    /// The rows within the overscan around `offset`: rows ending at or above its top go, rows
+    /// starting above its bottom stay.
+    fn overscan(&self, offset: f32) -> (usize, usize) {
+        let lo = offset - self.viewport * OVERSCAN;
+        let hi = offset + self.viewport * (1.0 + OVERSCAN);
+        let sums = self.sums();
+        let start = sums[1..].partition_point(|&s| self.pad_top + s - self.gap <= lo);
+        (start, sums[..self.keys.len()].partition_point(|&s| self.pad_top + s < hi))
+    }
+
+    /// How tall the mounted rows outside the overscan around `offset` are: rows that grew since
+    /// the window was picked and lay out for nothing.
+    pub(crate) fn spare(&self, offset: f32, pinned: bool) -> f32 {
+        if pinned || self.keys.is_empty() { return 0.0; }
+        let (start, end) = self.overscan(offset.min(self.max_offset()));
+        let above = self.prefix(start.min(self.range.end)) - self.prefix(self.range.start.min(start));
+        let below = self.row_end(self.range.end) - self.row_end(end.max(self.range.start).min(self.range.end));
+        above.max(0.0) + below.max(0.0)
     }
 
     pub fn anchor_delta(&self) -> f32 {

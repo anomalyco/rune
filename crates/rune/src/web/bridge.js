@@ -1,4 +1,4 @@
-// Browser text services. Rust supplies a bounded UTF-16 context with a UTF-8 base offset.
+// Browser text services and semantic DOM accessibility mirror.
 const coarse = () => matchMedia('(pointer: coarse)').matches;
 const high = n => n >= 0xd800 && n <= 0xdbff;
 const low = n => n >= 0xdc00 && n <= 0xdfff;
@@ -15,8 +15,6 @@ function replacement(old, next, composition, caret) {
     while (end > start && nextEnd > start && old[end - 1] === next[nextEnd - 1]) { end--; nextEnd--; }
     const adjusted = boundary(old, end, true) - end;
     end += adjusted; nextEnd += adjusted;
-    // Recomposition can contain unchanged letters (even the entire old word). Include
-    // those in the replaced range, otherwise preedit would be appended to committed text.
     if (composition && caret >= composition.length && next.slice(caret - composition.length, caret) === composition) {
         const from = caret - composition.length;
         const to = caret + old.length - next.length;
@@ -28,7 +26,17 @@ function replacement(old, next, composition, caret) {
     return { start, end, text: next.slice(start, nextEnd) };
 }
 
-export function mount(canvas, callback) {
+function browserShortcut(event) {
+    const chord = event.metaKey || event.ctrlKey;
+    if (event.key === 'F5' || event.key === 'F12') return true;
+    if (!chord) return false;
+    const k = event.key.toLowerCase();
+    // Leave copy ('c') un-prevented too so the browser fires its synchronous `copy` event.
+    return ['c', 'r', 'l', 't', 'w', 'n', 'f', 'g', '=', '+', '-', '0'].includes(k)
+        || (event.altKey && ['i', 'j', 'u'].includes(k));
+}
+
+export function mount(canvas, callback, embedded, fitHeight) {
     const textarea = document.createElement('textarea');
     textarea.setAttribute('aria-label', 'Text input');
     textarea.setAttribute('autocapitalize', 'sentences');
@@ -45,13 +53,26 @@ export function mount(canvas, callback) {
         field.inputMode = coarse() ? 'none' : 'text';
         document.body.append(field);
     }
-    const h = { canvas, textarea, password, field: textarea, key: '', base: 0, value: '',
-        composing: false, composition: '', shift: false, listeners: [], syncing: false, disposed: false };
+    const a11y = document.createElement('div');
+    a11y.setAttribute('data-rune-a11y', '');
+    a11y.setAttribute('role', 'document');
+    if (embedded && canvas.parentElement) {
+        if (getComputedStyle(canvas.parentElement).position === 'static') canvas.parentElement.style.position = 'relative';
+        a11y.style.cssText = 'position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:1;color:transparent;';
+        canvas.after(a11y);
+    } else {
+        a11y.style.cssText = 'position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:1;color:transparent;';
+        document.body.append(a11y);
+    }
+    const h = { canvas, textarea, password, a11y, a11yNodes: new Map(), field: textarea, key: '', base: 0, value: '',
+        copyText: '', composing: false, composition: '', shift: false, listeners: [], syncing: false, disposed: false,
+        embedded, fitHeight };
     const send = event => {
         const message = JSON.stringify(event);
         if (h.syncing) queueMicrotask(() => { if (!h.disposed) callback(message); });
         else if (!h.disposed) callback(message);
     };
+    h.send = send;
     const listen = (target, name, handler, options) => {
         target.addEventListener(name, handler, options);
         h.listeners.push(() => target.removeEventListener(name, handler, options));
@@ -69,8 +90,6 @@ export function mount(canvas, callback) {
     listen(textarea, 'compositionstart', () => { h.composing = true; h.composition = ''; });
     listen(textarea, 'compositionupdate', event => {
         h.composition = event.data ?? '';
-        // compositionupdate can precede the DOM replacement; input observes it immediately,
-        // and this microtask also covers engines that omit that intermediate input event.
         queueMicrotask(() => { if (!h.disposed && h.composing) changed(true); });
     });
     listen(textarea, 'compositionend', () => {
@@ -80,14 +99,13 @@ export function mount(canvas, callback) {
     });
     listen(password, 'input', () => {
         const text = password.value;
-        password.value = ''; // A transient input sink, never a mirror of the secret model.
+        password.value = '';
         if (text) send({ kind: 'secure', key: h.key, text });
     });
     for (const field of [textarea, password]) {
         listen(field, 'paste', event => {
             event.preventDefault();
             const data = event.clipboardData;
-            // The file must be taken during the event; Rust reads its bytes only for a hook.
             h.image = field === textarea ? [...(data?.items ?? [])].find(i => i.kind === 'file' && i.type === 'image/png')?.getAsFile() ?? undefined : undefined;
             try {
                 send({ kind: 'paste', text: data?.getData('text/plain') ?? '', html: field === textarea ? data?.getData('text/html') ?? '' : '', image: !!h.image });
@@ -128,14 +146,24 @@ export function mount(canvas, callback) {
             anchor: backward ? textarea.selectionEnd : textarea.selectionStart,
             focus: backward ? textarea.selectionStart : textarea.selectionEnd });
     });
-    // Disable browser default focus without winit's forced canvas.focus(): a touch in an
-    // already-focused field must not dismiss its software keyboard before Rune sees the tap.
+    // Synchronous copy support for read-only `El::selectable` selections (`Edit › Copy` / ⌘C).
+    listen(document, 'copy', event => {
+        const active = document.activeElement;
+        if (!h.key && h.copyText && event.clipboardData && (active === canvas || active === document.body)) {
+            event.preventDefault();
+            event.clipboardData.setData('text/plain', h.copyText);
+        }
+    });
     listen(canvas, 'pointerdown', event => event.preventDefault(), { capture: true });
-    listen(canvas, 'keydown', event => event.preventDefault());
-    listen(canvas, 'wheel', event => event.preventDefault(), { passive: false });
-    listen(document, 'gesturestart', event => event.preventDefault(), { passive: false });
+    listen(canvas, 'keydown', event => {
+        if (!browserShortcut(event)) event.preventDefault();
+    });
+    if (!fitHeight) {
+        listen(canvas, 'wheel', event => event.preventDefault(), { passive: false });
+        listen(document, 'gesturestart', event => event.preventDefault(), { passive: false });
+    }
     queueMicrotask(() => {
-        if (!h.disposed && document.activeElement === document.body) canvas.focus({ preventScroll: true });
+        if (!h.disposed && !embedded && document.activeElement === document.body) canvas.focus({ preventScroll: true });
     });
     return h;
 }
@@ -166,13 +194,90 @@ export function sync(h, key, text, base, anchor, focus, secure) {
     h.syncing = false;
 }
 
+export function syncCopy(h, text) {
+    h.copyText = text;
+}
+
+function webLink(url) {
+    return url.startsWith('https://') || url.startsWith('http://') || url.startsWith('mailto:');
+}
+
+export function syncA11y(h, json) {
+    if (h.disposed) return;
+    const items = JSON.parse(json);
+    const seen = new Set();
+    let cursor = h.a11y.firstElementChild;
+    for (const item of items) {
+        const tag = item.k === 'heading' ? `h${item.l || 2}` : item.k === 'button' ? 'button' : 'p';
+        const key = `${tag}:${item.p}`;
+        seen.add(key);
+        let el = h.a11yNodes.get(key);
+        if (!el) {
+            el = document.createElement(tag);
+            if (tag === 'button') {
+                el.type = 'button';
+                el.tabIndex = -1;
+                el.addEventListener('click', ev => {
+                    ev.preventDefault();
+                    h.send({ kind: 'a11y_press', path: item.p });
+                });
+            }
+            h.a11yNodes.set(key, el);
+        }
+        const [x, y, w, bh] = item.r;
+        const fs = item.s || 14;
+        el.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${bh}px;margin:0;padding:0;border:0;background:transparent;color:transparent;font:${fs}px/1.25 sans-serif;overflow:hidden;white-space:pre-wrap;pointer-events:none;`;
+        if (tag === 'button') {
+            if (item.x === true || item.x === false) el.setAttribute('aria-expanded', String(item.x));
+            else el.removeAttribute('aria-expanded');
+        }
+        const sig = item.u?.length ? JSON.stringify(item.u) : item.t ?? '';
+        if (el._sig !== sig) {
+            el._sig = sig;
+            el.replaceChildren();
+            if (item.u?.length) {
+                for (const run of item.u) {
+                    if (run.h) {
+                        const a = document.createElement('a');
+                        a.textContent = run.t;
+                        a.style.cssText = 'color:transparent;text-decoration:none;pointer-events:none;';
+                        if (webLink(run.h)) {
+                            a.href = run.h;
+                            a.target = '_blank';
+                            a.rel = 'noopener noreferrer';
+                        } else {
+                            a.href = '#';
+                            a.addEventListener('click', ev => {
+                                ev.preventDefault();
+                                h.send({ kind: 'a11y_link', path: run.p, link: run.i });
+                            });
+                        }
+                        el.append(a);
+                    } else {
+                        el.append(document.createTextNode(run.t));
+                    }
+                }
+            } else {
+                el.textContent = item.t ?? '';
+            }
+        }
+        if (cursor !== el) h.a11y.insertBefore(el, cursor);
+        else cursor = cursor.nextElementSibling;
+    }
+    for (const [key, el] of h.a11yNodes) {
+        if (!seen.has(key)) {
+            el.remove();
+            h.a11yNodes.delete(key);
+        }
+    }
+}
+
 export function activate(h) {
     const field = h.key ? h.field : h.canvas;
     if (h.key) field.inputMode = 'text';
     if (document.activeElement !== field) field.focus({ preventScroll: true });
 }
 
-// The PNG the last paste carried, as a Uint8Array of at most `max` bytes, read once.
 export async function pastedImage(h, max) {
     const file = h.image;
     h.image = undefined;
@@ -183,6 +288,8 @@ export function destroy(h) {
     h.disposed = true;
     h.image = undefined;
     for (const remove of h.listeners) remove();
-    h.password.value = ''; h.textarea.value = '';
+    h.password.value = ''; h.textarea.value = ''; h.copyText = '';
+    h.a11yNodes.clear();
+    h.a11y.remove();
     h.password.remove(); h.textarea.remove();
 }

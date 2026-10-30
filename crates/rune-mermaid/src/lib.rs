@@ -1,40 +1,44 @@
-//! Native ```` ```mermaid ```` diagrams: flowcharts, sequence diagrams and state diagrams,
-//! parsed and laid out in Rust and drawn with [`rune::Shape`]s and text, so they theme with the
-//! app and stay crisp at any scale. No JavaScript, web view or network.
+//! Native ```` ```mermaid ```` diagrams: flowcharts, sequence diagrams, state diagrams and class
+//! diagrams, parsed and laid out in Rust and drawn with [`rune::Shape`]s and text, so they theme
+//! with the app and stay crisp at any scale. No JavaScript, web view or network.
 //!
 //! **Flowcharts** (`graph` or `flowchart`, directions `TD`/`TB`/`BT`/`LR`/`RL`): node shapes
 //! `[rect]`, `(rounded)`, `([stadium])`, `[[subroutine]]`, `[(cylinder)]`, `((circle))`,
-//! `>asymmetric]`, `{diamond}`, `{{hexagon}}`, `[/parallelogram/]` and `[/trapezoid\]`; links
-//! `-->`, `---`, `-.->`, `==>`, `~~~`, `<-->`, `--o`, `--x`, longer forms for longer links,
-//! labels as `-- text -->`, `-- "text" -->` or `-->|text|`; chains (`A --> B --> C`), `&`
-//! groups, quoted labels, `<br>` and `\n` breaks, nested `subgraph … end`, and node tints from
-//! `style`, `classDef`, `class` and `:::class`. `linkStyle`, `click` and `%%` comments are
-//! ignored.
+//! `>asymmetric]`, `{diamond}`, `{{hexagon}}`, `[/parallelogram/]`, `[/trapezoid\]` and v11
+//! `@{ shape: …, label: … }`; links `-->`, `---`, `-.->`, `==>`, `~~~`, `<-->`, `--o`, `--x`,
+//! longer forms for longer links, labels as `-- text -->`, `-- "text" -->` or `-->|text|`; chains
+//! (`A --> B --> C`), `&` groups, quoted labels, `<br>` and `\n` breaks, nested `subgraph … end`
+//! (including edges to/from subgraph ids), node tints from `style`/`classDef`/`class`/`:::class`,
+//! and edge tints from `linkStyle`.
 //!
 //! **Sequence diagrams** (`sequenceDiagram`): `participant` and `actor` with `as` aliases;
-//! messages `->`, `-->`, `->>`, `-->>`, `-x`, `--x`, `-)`, `--)`, `<<->>` and `<<-->>`, with
-//! `+`/`-` activation; `activate`/`deactivate`; `Note left of|right of|over A[,B]`;
-//! `autonumber`; and `loop`, `alt`/`else`, `opt`, `par`/`and`, `critical`/`option` and `break`
-//! frames (`rect` and `box` groups are accepted and not drawn).
+//! `box` participant column groups; `rect` highlight bands; messages `->`, `-->`, `->>`, `-->>`,
+//! `-x`, `--x`, `-)`, `--)`, `<<->>` and `<<-->>`, with `+`/`-` activation; `activate` and
+//! `deactivate`; `Note left of|right of|over A[,B]`; `autonumber`; and `loop`, `alt`/`else`,
+//! `opt`, `par`/`and`, `critical`/`option` and `break` frames.
 //!
 //! **State diagrams** (`stateDiagram` or `stateDiagram-v2`): `direction TB|BT|LR|RL`, `[*]`
 //! start and end pseudostates, `state "Label" as id`, `state id <<choice>>` (`<<fork>>`,
-//! `<<join>>`), `id : description`, transitions `A --> B` and `A --> B : label`, and composite
-//! `state Name { … }` blocks.
+//! `<<join>>`), `id : description`, transitions `A --> B : label`, and composite `state Name { … }`.
 //!
-//! Anything else (gantt, pie, class, ER, timeline, gitGraph, mindmap, unknown statements or
-//! unbalanced brackets) is unsupported: [`render`] returns `None` so callers can show the source.
+//! **Class diagrams** (`classDiagram`): `class Name { +field \n +method() }`, `Name : +member`,
+//! `<<trait>>` / `<<enum>>` stereotypes, `namespace Name { … }`, and UML relationships `<|--`,
+//! `*--`, `o--`, `-->`, `..>`, `..|>`, `--` and `..` with labels and cardinalities.
 //!
-//! **Cost.** Parsing, measuring and layout happen once per source and style, on the first
-//! build that sees them; later builds reuse the laid-out scene from a small cache. Work is
-//! bounded for untrusted input: charts over 400 nodes, edges and subgraphs (or 40
-//! participants), subgraphs nested more than 8 deep, and graphs whose long edges need more
-//! than 3,000 bend points fall back to source; links longer than `--------->` draw at that
-//! length.
+//! **Leniency.** A statement that doesn't read is skipped and the rest still draws; a shape opener
+//! without its closer (`B[/items split view]`) is a plain rectangle holding the text as written;
+//! blocks left open close at the end. [`render`] returns `None`, so callers can show the source,
+//! only for a diagram type it doesn't know (gantt, pie, ER, timeline, gitGraph, mindmap, …), when
+//! nothing reads, or past the size bounds (400 items, nesting 8 deep).
 
+mod canvas;
+mod class;
+mod connector;
 mod flowchart;
-mod flowchart_draw;
+mod hover;
 mod layered;
+mod layered_draw;
+mod route;
 mod sequence;
 mod state;
 
@@ -43,7 +47,10 @@ use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-use rune::{Align, Color, El, LineCap, Shape, TextStyle, canvas, col, el, oklch, oklcha, text, tok};
+use rune::{Color, El, TextStyle, oklch, oklcha, tok};
+
+use canvas::Scene;
+pub use hover::Hover;
 
 /// Colours and type a diagram draws with.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -60,6 +67,27 @@ pub struct DiagramStyle {
     pub note_border: Color,
     pub font: TextStyle,
     pub max_width: f32,
+}
+
+impl Hash for DiagramStyle {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        [
+            self.text,
+            self.muted,
+            self.surface,
+            self.surface_border,
+            self.node_fill,
+            self.node_border,
+            self.line,
+            self.cluster_fill,
+            self.note_fill,
+            self.note_border,
+        ]
+        .hash(state);
+        self.font.hash(state);
+        let bits = if self.max_width == 0.0 { 0 } else if self.max_width.is_nan() { f32::NAN.to_bits() } else { self.max_width.to_bits() };
+        bits.hash(state);
+    }
 }
 
 impl DiagramStyle {
@@ -85,16 +113,26 @@ impl DiagramStyle {
 
 /// `src` drawn as a diagram card in `style`, or `None` when it is outside the supported subset.
 pub fn render(src: &str, style: &DiagramStyle) -> Option<El> {
+    render_with_hover(src, style, Hover::Edges, style.text.alpha(0.9))
+}
+
+/// [`render`], with `hover` lighting up in `color` while the pointer is over a flowchart, state
+/// or class diagram node.
+pub fn render_with_hover(src: &str, style: &DiagramStyle, hover: Hover, color: Color) -> Option<El> {
+    let hover = (hover != Hover::Off).then_some((hover, color));
     let mut h = std::collections::hash_map::DefaultHasher::new();
     src.hash(&mut h);
-    format!("{style:?}").hash(&mut h);
+    style.hash(&mut h);
+    hover.hash(&mut h);
+    // Layout measures labels in the app's fonts.
+    rune::text::font_epoch().hash(&mut h);
     let key = h.finish();
     let cached = SCENES.with_borrow(|c| c.map.get(&key).cloned());
     let scene = match cached {
         Some(s) => s,
         None => {
             // Defensive: a bug in layout must cost a diagram, not the app.
-            let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scene(src, style))).ok().flatten().map(Rc::new);
+            let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scene(src, style, hover))).ok().flatten().map(Rc::new);
             SCENES.with_borrow_mut(|c| {
                 if c.order.len() >= CACHE_LEN
                     && let Some(old) = c.order.pop_front()
@@ -119,12 +157,21 @@ pub(crate) enum Diagram {
     Flowchart(flowchart::Flowchart),
     Sequence(sequence::Sequence),
     State(state::StateDiagram),
+    Class(class::ClassDiagram),
+}
+
+pub(crate) struct Parsed {
+    pub title: Option<String>,
+    pub diagram: Diagram,
 }
 
 /// Diagrams bigger than this are left as source: they would be unreadable at markdown width.
 pub(crate) const MAX_ITEMS: usize = 400;
 
-pub(crate) fn parse(src: &str) -> Option<Diagram> {
+/// How deep subgraphs, composite states, frames and other blocks may nest.
+pub(crate) const MAX_DEPTH: usize = 8;
+
+pub(crate) fn parse(src: &str) -> Option<Parsed> {
     let mut cleaned = Vec::new();
     let mut in_directive = false;
     for raw in src.lines() {
@@ -155,24 +202,33 @@ pub(crate) fn parse(src: &str) -> Option<Diagram> {
         }
     }
     let mut lines = cleaned.into_iter().peekable();
-    // A front-matter block (`---` … `---`) carries a title and config; skip it.
+    let mut fm_title = None;
+    // A front-matter block (`---` … `---`) may carry `title: …` and config.
     if lines.peek() == Some(&"---") {
         lines.next();
         for l in lines.by_ref() {
             if l == "---" {
                 break;
             }
+            if let Some(rest) = l.strip_prefix("title:") {
+                let t = clean_quoted(rest);
+                if !t.is_empty() {
+                    fm_title = Some(t);
+                }
+            }
         }
     }
     let header = lines.next()?;
     let (kind, rest) = header.split_once(|c: char| c.is_whitespace() || c == ';').unwrap_or((header, ""));
     let body: Vec<&str> = lines.collect();
-    match kind {
-        "graph" | "flowchart" => flowchart::parse(rest, &body).map(Diagram::Flowchart),
-        "sequenceDiagram" => sequence::parse(rest, &body).map(Diagram::Sequence),
-        "stateDiagram" | "stateDiagram-v2" => state::parse(rest, &body).map(Diagram::State),
-        _ => None,
-    }
+    let (body_title, diagram) = match kind {
+        "graph" | "flowchart" => flowchart::parse(rest, &body).map(|f| (f.title.clone(), Diagram::Flowchart(f)))?,
+        "sequenceDiagram" => sequence::parse(rest, &body).map(|s| (s.title.clone(), Diagram::Sequence(s)))?,
+        "stateDiagram" | "stateDiagram-v2" => state::parse(rest, &body).map(|s| (s.title.clone(), Diagram::State(s)))?,
+        "classDiagram" => class::parse(rest, &body).map(|c| (c.title.clone(), Diagram::Class(c)))?,
+        _ => return None,
+    };
+    Some(Parsed { title: body_title.or(fm_title), diagram })
 }
 
 const CACHE_LEN: usize = 16;
@@ -187,48 +243,15 @@ thread_local! {
     static SCENES: RefCell<Cache> = RefCell::new(Cache::default());
 }
 
-pub(crate) fn scene(src: &str, paint: &DiagramStyle) -> Option<Scene> {
-    match parse(src)? {
-        Diagram::Flowchart(f) => flowchart_draw::draw(&f, paint),
-        Diagram::Sequence(s) => sequence::draw(&s, paint),
-        Diagram::State(s) => state::draw(&s, paint),
-    }
-}
-
-/// The card's padding on each side.
-const CARD_PAD: f32 = 16.0;
-
-/// The widest a diagram's drawing can be for its card to fit `paint.max_width`.
-pub(crate) fn room(paint: &DiagramStyle) -> f32 {
-    paint.max_width - 2.0 * CARD_PAD - 2.0
-}
-
-/// How much a canvas `width` points wide is drawn at to fit its card in `paint.max_width`.
-pub(crate) fn fit(width: f32, paint: &DiagramStyle) -> f32 {
-    if width <= room(paint) { 1.0 } else { (room(paint) / width).max(0.6) }
-}
-
-/// Text measured for a diagram: its size, and whether it wraps at [`WRAP`].
-#[derive(Clone)]
-pub(crate) struct Measured {
-    pub text: String,
-    pub size: [f32; 2],
-    pub wrap: bool,
-}
-
-/// Labels wider than this wrap.
-const WRAP: f32 = 200.0;
-
-pub(crate) fn measure(s: &str, font: TextStyle) -> Measured {
-    if s.is_empty() {
-        return Measured { text: String::new(), size: [0.0, 0.0], wrap: false };
-    }
-    let (w, h) = rune::text::measure(s, &[], font, None);
-    if w <= WRAP {
-        return Measured { text: s.to_owned(), size: [w, h], wrap: false };
-    }
-    let (w, h) = rune::text::measure(s, &[], font, Some(WRAP));
-    Measured { text: s.to_owned(), size: [w, h], wrap: true }
+pub(crate) fn scene(src: &str, paint: &DiagramStyle, hover: Option<(Hover, Color)>) -> Option<Scene> {
+    let parsed = parse(src)?;
+    let s = match &parsed.diagram {
+        Diagram::Flowchart(f) => flowchart::draw(f, paint, hover),
+        Diagram::Sequence(s) => sequence::draw(s, paint),
+        Diagram::State(s) => state::draw(s, paint, hover),
+        Diagram::Class(c) => class::draw(c, paint, hover),
+    }?;
+    Some(s.with_title(parsed.title))
 }
 
 /// Strips one pair of surrounding `"…"` quotes (unescaping `\"`), then runs [`clean`].
@@ -304,37 +327,8 @@ impl NodeStyle {
     /// Resolves `(fill, border, text)` against `paint` in Oklab so light-mode Mermaid hex fills
     /// (like `fill:#dcf5dc`) read cleanly in both dark and light themes without washing out text.
     pub(crate) fn resolve(self, paint: &DiagramStyle) -> (Color, Color, Color) {
-        let base_l = paint.node_fill.to_oklab()[0];
-        let dark = base_l < 0.5;
-        let fill = match self.fill {
-            Some(c) => {
-                let [_, a, b, _] = c.to_oklab();
-                let chroma = a.hypot(b);
-                if chroma < 0.01 {
-                    oklab_mix(paint.node_fill, c, 0.2)
-                } else {
-                    let target = (chroma * 0.9).clamp(0.032, 0.075);
-                    let scale = target / chroma;
-                    let l = if dark { (base_l + 0.055).min(0.42) } else { (base_l - 0.035).max(0.82) };
-                    Color::from_oklab([l, a * scale, b * scale, paint.node_fill.a])
-                }
-            }
-            None => paint.node_fill,
-        };
-        let border = match self.stroke.or(self.fill) {
-            Some(c) => {
-                let [_, a, b, _] = c.to_oklab();
-                let chroma = a.hypot(b);
-                if chroma < 0.01 {
-                    oklab_mix(paint.node_border, c, 0.35)
-                } else {
-                    let scale = (chroma * 1.1).clamp(0.07, 0.13) / chroma;
-                    let l = if dark { 0.56 } else { 0.62 };
-                    Color::from_oklab([l, a * scale, b * scale, 1.0])
-                }
-            }
-            None => paint.node_border,
-        };
+        let fill = self.fill.map_or(paint.node_fill, |c| adapt_fill(paint.node_fill, c, 0.055, 0.035));
+        let border = self.stroke.or(self.fill).map_or(paint.node_border, |c| adapt_stroke(paint.node_border, c, paint.node_fill.to_oklab()[0] < 0.5));
         let text = match self.color {
             Some(c) if (c.to_oklab()[0] - fill.to_oklab()[0]).abs() > 0.35 => c,
             _ => paint.text,
@@ -343,326 +337,127 @@ impl NodeStyle {
     }
 }
 
-fn oklab_mix(a: Color, b: Color, t: f32) -> Color {
+/// Optional edge overrides from `linkStyle`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct EdgeStyle {
+    pub stroke: Option<Color>,
+    pub width: Option<f32>,
+}
+
+impl EdgeStyle {
+    pub(crate) fn merge(self, over: EdgeStyle) -> EdgeStyle {
+        EdgeStyle { stroke: over.stroke.or(self.stroke), width: over.width.or(self.width) }
+    }
+}
+
+/// Adapts a user colour `c` into a subtle Oklab fill harmonious with `base`.
+pub(crate) fn adapt_fill(base: Color, c: Color, dark_lift: f32, light_drop: f32) -> Color {
+    let base_l = base.to_oklab()[0];
+    let dark = base_l < 0.5;
+    let [_, a, b, _] = c.to_oklab();
+    let chroma = a.hypot(b);
+    if chroma < 0.01 {
+        return oklab_mix(base, c, 0.2);
+    }
+    let scale = (chroma * 0.9).clamp(0.032, 0.075) / chroma;
+    let l = if dark { (base_l + dark_lift).min(0.42) } else { (base_l - light_drop).max(0.82) };
+    Color::from_oklab([l, a * scale, b * scale, base.a])
+}
+
+pub(crate) fn adapt_stroke(base: Color, c: Color, dark: bool) -> Color {
+    let [_, a, b, _] = c.to_oklab();
+    let chroma = a.hypot(b);
+    if chroma < 0.01 {
+        return oklab_mix(base, c, 0.35);
+    }
+    let scale = (chroma * 1.1).clamp(0.07, 0.13) / chroma;
+    Color::from_oklab([if dark { 0.58 } else { 0.60 }, a * scale, b * scale, 1.0])
+}
+
+pub(crate) fn oklab_mix(a: Color, b: Color, t: f32) -> Color {
     let (a, b) = (a.to_oklab(), b.to_oklab());
     Color::from_oklab([0, 1, 2, 3].map(|i| if i == 3 { a[3] } else { a[i] + (b[i] - a[i]) * t }))
 }
 
 pub(crate) fn parse_style_props(props: &str) -> NodeStyle {
     let mut out = NodeStyle::default();
-    for part in props.split(',') {
+    for part in props.split([',', ';']) {
         let Some((k, v)) = part.split_once(':') else { continue };
         let v = v.trim().trim_end_matches("!important").trim();
         match k.trim() {
-            "fill" => out.fill = rune::color::hex(v),
-            "stroke" => out.stroke = rune::color::hex(v),
-            "color" => out.color = rune::color::hex(v),
+            "fill" => out.fill = parse_color_spec(v),
+            "stroke" => out.stroke = parse_color_spec(v),
+            "color" => out.color = parse_color_spec(v),
             _ => {}
         }
     }
     out
 }
 
-pub(crate) enum Op {
-    Fill(Vec<[f32; 2]>, Color),
-    Stroke { points: Vec<[f32; 2]>, closed: bool, width: f32, cap: LineCap, color: Color },
-}
-
-pub(crate) struct Label {
-    pub text: String,
-    pub at: [f32; 2],
-    pub size: [f32; 2],
-    pub font: TextStyle,
-    pub color: Color,
-    pub wrap: bool,
-    pub align: Align,
-}
-
-/// Drawing in a diagram's own points; [`Canvas::finish`] moves it to the origin and scales it.
-#[derive(Default)]
-pub(crate) struct Canvas {
-    pub(crate) ops: Vec<Op>,
-    pub(crate) labels: Vec<Label>,
-}
-
-impl Canvas {
-    pub(crate) fn fill(&mut self, points: Vec<[f32; 2]>, color: Color) {
-        if points.len() >= 3 {
-            self.ops.push(Op::Fill(points, color));
-        }
-    }
-
-    pub(crate) fn stroke(&mut self, points: Vec<[f32; 2]>, closed: bool, width: f32, color: Color) {
-        if points.len() >= 2 {
-            self.ops.push(Op::Stroke { points, closed, width, cap: LineCap::Round, color });
-        }
-    }
-
-    /// A filled outline.
-    pub(crate) fn shape(&mut self, points: Vec<[f32; 2]>, fill: Color, border: Color, width: f32) {
-        self.fill(points.clone(), fill);
-        self.stroke(points, true, width, border);
-    }
-
-    pub(crate) fn dashed(&mut self, points: &[[f32; 2]], width: f32, color: Color, on: f32, off: f32) {
-        let mut dash: Vec<[f32; 2]> = Vec::new();
-        let mut drawing = true;
-        let mut left = on;
-        // Bounded so a huge or non-finite length (where `t += step` stops advancing) can't spin.
-        let mut budget = 20_000usize;
-        for w in points.windows(2) {
-            let (a, b) = (w[0], w[1]);
-            let len = dist(a, b);
-            if !len.is_finite() {
-                continue;
-            }
-            let mut t = 0.0;
-            while t < len {
-                let Some(rest) = budget.checked_sub(1) else { return };
-                budget = rest;
-                let step = left.min(len - t);
-                let p0 = lerp(a, b, t / len);
-                let p1 = lerp(a, b, (t + step) / len);
-                if drawing {
-                    if dash.is_empty() {
-                        dash.push(p0);
-                    }
-                    dash.push(p1);
-                }
-                t += step;
-                left -= step;
-                if left <= 1e-3 {
-                    if drawing && dash.len() >= 2 {
-                        self.ops.push(Op::Stroke { points: std::mem::take(&mut dash), closed: false, width, cap: LineCap::Butt, color });
-                    }
-                    dash.clear();
-                    drawing = !drawing;
-                    left = if drawing { on } else { off };
-                }
-            }
-        }
-        if dash.len() >= 2 {
-            self.ops.push(Op::Stroke { points: dash, closed: false, width, cap: LineCap::Butt, color });
-        }
-    }
-
-    /// `m` centred on `center`.
-    pub(crate) fn label(&mut self, m: &Measured, center: [f32; 2], font: TextStyle, color: Color, align: Align) {
-        if m.text.is_empty() {
-            return;
-        }
-        let at = [center[0] - m.size[0] / 2.0, center[1] - m.size[1] / 2.0];
-        self.label_at(m, at, font, color, align);
-    }
-
-    pub(crate) fn label_at(&mut self, m: &Measured, at: [f32; 2], font: TextStyle, color: Color, align: Align) {
-        if !m.text.is_empty() {
-            self.labels.push(Label { text: m.text.clone(), at, size: m.size, font, color, wrap: m.wrap, align });
-        }
-    }
-
-    /// Draws `other` over this.
-    pub(crate) fn append(&mut self, other: Canvas) {
-        self.ops.extend(other.ops);
-        self.labels.extend(other.labels);
-    }
-
-    /// The bounding box of everything drawn: `[x0, y0, x1, y1]`.
-    fn bounds(&self) -> [f32; 4] {
-        let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
-        let mut add = |p: [f32; 2], r: f32| {
-            b = [b[0].min(p[0] - r), b[1].min(p[1] - r), b[2].max(p[0] + r), b[3].max(p[1] + r)];
-        };
-        for op in &self.ops {
-            match op {
-                Op::Fill(points, _) => points.iter().for_each(|&p| add(p, 0.0)),
-                Op::Stroke { points, width, .. } => points.iter().for_each(|&p| add(p, width / 2.0)),
-            }
-        }
-        for l in &self.labels {
-            add(l.at, 0.0);
-            add([l.at[0] + l.size[0], l.at[1] + l.size[1]], 0.0);
-        }
-        if b[0] > b[2] { [0.0; 4] } else { b }
-    }
-
-    pub(crate) fn width(&self) -> f32 {
-        let b = self.bounds();
-        b[2] - b[0]
-    }
-
-    pub(crate) fn finish(self, scale: f32) -> Option<Scene> {
-        if self.ops.is_empty() && self.labels.is_empty() {
-            return None;
-        }
-        let b = self.bounds();
-        let pad = 1.0;
-        let map = |p: [f32; 2]| [(p[0] - b[0]) * scale + pad, (p[1] - b[1]) * scale + pad];
-        let mut shape = Shape::new();
-        for op in self.ops {
-            shape = match op {
-                Op::Fill(points, color) => shape.fill(points.into_iter().map(map).collect::<Vec<_>>(), color),
-                Op::Stroke { points, closed, width, cap, color } => {
-                    shape.stroke_with(points.into_iter().map(map).collect::<Vec<_>>(), closed, width * scale.max(0.8), cap, color)
-                }
-            };
-        }
-        let labels = self
-            .labels
-            .into_iter()
-            .map(|l| Label {
-                at: map(l.at),
-                size: [l.size[0] * scale, l.size[1] * scale],
-                font: TextStyle { size: l.font.size * scale, line_height: l.font.line_height * scale, ..l.font },
-                ..l
-            })
-            .collect();
-        let size = [(b[2] - b[0]) * scale + 2.0 * pad, (b[3] - b[1]) * scale + 2.0 * pad];
-        Some(Scene { size, shape, labels })
-    }
-}
-
-/// A laid-out diagram, drawn the same way every build.
-pub(crate) struct Scene {
-    pub(crate) size: [f32; 2],
-    shape: Shape,
-    labels: Vec<Label>,
-}
-
-impl Scene {
-    fn el(&self, paint: &DiagramStyle) -> El {
-        let [w, h] = self.size;
-        let mut body = el().key("diagram").size(w, h).child(canvas(self.shape.clone()).key("shape").absolute(0.0, 0.0).size(w, h));
-        for (i, l) in self.labels.iter().enumerate() {
-            // A point of slack so rounding never breaks a measured line.
-            let mut t = text(l.text.clone())
-                .key(format!("t{i}"))
-                .font(l.font)
-                .color(l.color)
-                .align(l.align)
-                .w(l.size[0] + 2.0)
-                .absolute(l.at[0] - 1.0, l.at[1]);
-            if l.wrap {
-                t = t.wrap();
-            }
-            body = body.child(t);
-        }
-        col()
-            .w_full()
-            .items_center()
-            .padding(CARD_PAD)
-            .radius(6.0)
-            .fill(paint.surface)
-            .border(0.5, paint.surface_border)
-            .clip_rounded(6.0)
-            .child(body)
-    }
-}
-
-pub(crate) fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
-    ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt()
-}
-
-pub(crate) fn lerp(a: [f32; 2], b: [f32; 2], t: f32) -> [f32; 2] {
-    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
-}
-
-pub(crate) fn unit(a: [f32; 2], b: [f32; 2]) -> [f32; 2] {
-    let d = dist(a, b).max(1e-6);
-    [(b[0] - a[0]) / d, (b[1] - a[1]) / d]
-}
-
-/// A rectangle with corners of radius `r`, as a polygon.
-pub(crate) fn rounded_rect(x0: f32, y0: f32, x1: f32, y1: f32, r: f32) -> Vec<[f32; 2]> {
-    let r = r.min((x1 - x0) / 2.0).min((y1 - y0) / 2.0).max(0.0);
-    if r < 0.5 {
-        return vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
-    }
-    let steps = 6;
-    let mut pts = Vec::with_capacity(4 * (steps + 1));
-    let corners = [([x1 - r, y0 + r], -90.0f32), ([x1 - r, y1 - r], 0.0), ([x0 + r, y1 - r], 90.0), ([x0 + r, y0 + r], 180.0)];
-    for (c, start) in corners {
-        for i in 0..=steps {
-            let a = (start + 90.0 * i as f32 / steps as f32).to_radians();
-            pts.push([c[0] + r * a.cos(), c[1] + r * a.sin()]);
-        }
-    }
-    pts
-}
-
-/// An ellipse's arc from `a0` to `a1` degrees (clockwise on screen), as points.
-pub(crate) fn arc(c: [f32; 2], rx: f32, ry: f32, a0: f32, a1: f32, steps: usize) -> Vec<[f32; 2]> {
-    (0..=steps)
-        .map(|i| {
-            let a = (a0 + (a1 - a0) * i as f32 / steps as f32).to_radians();
-            [c[0] + rx * a.cos(), c[1] + ry * a.sin()]
-        })
-        .collect()
-}
-
-pub(crate) fn ellipse(c: [f32; 2], rx: f32, ry: f32) -> Vec<[f32; 2]> {
-    let mut pts = arc(c, rx, ry, 0.0, 360.0, 48);
-    pts.pop();
-    pts
-}
-
-/// A filled arrowhead with its tip at `tip`, pointing along `dir` (a unit vector).
-pub(crate) fn arrowhead(tip: [f32; 2], dir: [f32; 2], len: f32, width: f32) -> Vec<[f32; 2]> {
-    let base = [tip[0] - dir[0] * len, tip[1] - dir[1] * len];
-    let n = [-dir[1] * width / 2.0, dir[0] * width / 2.0];
-    vec![tip, [base[0] + n[0], base[1] + n[1]], [base[0] - n[0], base[1] - n[1]]]
-}
-
-/// A smooth curve through `pts` (Catmull-Rom, as flattened cubics).
-pub(crate) fn smooth(pts: &[[f32; 2]]) -> Vec<[f32; 2]> {
-    if pts.len() < 3 {
-        return pts.to_vec();
-    }
-    let n = pts.len();
-    let tangent = |i: usize| {
-        let (a, b) = if i == 0 {
-            (pts[0], pts[1])
-        } else if i == n - 1 {
-            (pts[n - 2], pts[n - 1])
-        } else {
-            (pts[i - 1], pts[i + 1])
-        };
-        let k = if i == 0 || i == n - 1 { 1.0 } else { 0.5 };
-        [(b[0] - a[0]) * k, (b[1] - a[1]) * k]
-    };
-    let mut out = vec![pts[0]];
-    for i in 0..n - 1 {
-        let (a, b) = (pts[i], pts[i + 1]);
-        let (ta, tb) = (tangent(i), tangent(i + 1));
-        let c1 = [a[0] + ta[0] / 3.0, a[1] + ta[1] / 3.0];
-        let c2 = [b[0] - tb[0] / 3.0, b[1] - tb[1] / 3.0];
-        let steps = ((dist(a, c1) + dist(c1, c2) + dist(c2, b)) / 4.0).ceil().clamp(2.0, 48.0) as usize;
-        for s in 1..=steps {
-            let t = s as f32 / steps as f32;
-            let u = 1.0 - t;
-            let (b0, b1, b2, b3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
-            out.push([
-                b0 * a[0] + b1 * c1[0] + b2 * c2[0] + b3 * b[0],
-                b0 * a[1] + b1 * c1[1] + b2 * c2[1] + b3 * b[1],
-            ]);
+pub(crate) fn parse_edge_style_props(props: &str) -> EdgeStyle {
+    let mut out = EdgeStyle::default();
+    for part in props.split([',', ';']) {
+        let Some((k, v)) = part.split_once(':') else { continue };
+        let v = v.trim().trim_end_matches("!important").trim();
+        match k.trim() {
+            "stroke" => out.stroke = parse_color_spec(v),
+            "stroke-width" => out.width = v.trim_end_matches("px").trim().parse::<f32>().ok().map(|w| w.clamp(0.75, 5.0)),
+            _ => {}
         }
     }
     out
 }
 
-/// A line split at `;` outside quotes.
+/// `#hex`, `rgb(r, g, b)`, `rgba(r, g, b, a)`, or a common CSS colour word.
+pub(crate) fn parse_color_spec(s: &str) -> Option<Color> {
+    let s = s.trim();
+    if let Some(c) = rune::color::hex(s) {
+        return Some(c);
+    }
+    let lower = s.to_ascii_lowercase();
+    if let Some(inner) = lower.strip_prefix("rgb(").or_else(|| lower.strip_prefix("rgba(")).and_then(|r| r.strip_suffix(')')) {
+        let nums: Vec<f32> = inner.split(',').filter_map(|p| p.trim().parse::<f32>().ok()).collect();
+        if nums.len() >= 3 {
+            let [r, g, b] = [nums[0], nums[1], nums[2]].map(|v| rune::color::srgb_decode((v / 255.0).clamp(0.0, 1.0)));
+            let a = nums.get(3).copied().unwrap_or(1.0).clamp(0.0, 1.0);
+            return Some(Color { r, g, b, a });
+        }
+    }
+    let hex = match lower.as_str() {
+        "red" | "crimson" | "salmon" | "lightcoral" | "pink" => "#ef4444",
+        "green" | "lightgreen" | "palegreen" | "emerald" | "lime" => "#22c55e",
+        "blue" | "lightblue" | "skyblue" | "dodgerblue" => "#3b82f6",
+        "yellow" | "lightyellow" | "gold" | "amber" | "orange" => "#eab308",
+        "purple" | "violet" | "lavender" | "magenta" => "#a855f7",
+        "cyan" | "aqua" | "teal" | "turquoise" => "#06b6d4",
+        "gray" | "grey" | "lightgray" | "lightgrey" | "silver" => "#9ca3af",
+        _ => return None,
+    };
+    rune::color::hex(hex)
+}
+
+/// A line split at `;` outside quotes and brackets (and never at an HTML entity's `;`).
 pub(crate) fn statements(line: &str) -> Vec<&str> {
     let mut out = Vec::new();
-    let (mut start, mut quoted, mut escaped) = (0, false, false);
+    let (mut start, mut quoted, mut escaped, mut brackets) = (0usize, false, false, 0usize);
     for (i, c) in line.char_indices() {
         if escaped {
             escaped = false;
             continue;
         }
+        if quoted {
+            match c {
+                '\\' => escaped = true,
+                '"' => quoted = false,
+                _ => {}
+            }
+            continue;
+        }
         match c {
-            '\\' if quoted => escaped = true,
-            '"' => quoted = !quoted,
-            ';' if !quoted => {
+            '"' => quoted = true,
+            '[' | '(' | '{' => brackets += 1,
+            ']' | ')' | '}' => brackets = brackets.saturating_sub(1),
+            ';' if brackets == 0 => {
                 out.push(&line[start..i]);
                 start = i + 1;
             }

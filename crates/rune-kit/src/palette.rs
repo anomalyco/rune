@@ -63,6 +63,13 @@ fn mix_oklab(a: Color, b: Color, t: f32) -> Color {
     Color::from_oklab(std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t))
 }
 
+/// `t` of the way from `base` toward `hue` in OKLab, at `base`'s alpha: a quiet wash that keeps
+/// `base`'s lightness close in both themes.
+pub(crate) fn tint(base: Color, hue: Color, t: f32) -> Color {
+    let [a, b] = [base.to_oklab(), hue.to_oklab()];
+    Color::from_oklab([0, 1, 2, 3].map(|i| if i == 3 { a[3] } else { a[i] + (b[i] - a[i]) * t }))
+}
+
 /// OKLab lightness steps away from `bg` (lighter on dark themes, darker on light ones) per
 /// elevation: `layer_01`–`layer_04`.
 const DARK_LAYERS: [f32; 4] = [0.04, 0.07, 0.10, 0.13];
@@ -81,8 +88,9 @@ impl Kit {
     /// - Derived neutrals (layers, opaque borders, secondary text) keep the hue and chroma of
     ///   the more colourful of `bg` and `fg`, so warm palettes stay warm.
     /// - `border_muted`/`border_base`/`border_strong`, hover and press are `fg` at low alpha,
-    ///   solved so Rune's linear-light blending over `bg` matches sRGB blending
-    ///   (`blend_over` is `bg`). Opaque `std_border`/`border_*` tokens are lightness steps.
+    ///   as a browser blends it: authored for sRGB blending, and solved over `bg`
+    ///   (`blend_over`) when the kit is built in a window that blends in linear light.
+    ///   Opaque `std_border`/`border_*` tokens are lightness steps.
     /// - Secondary text mixes towards `fg` in OKLab, with contrast floors of 4.5:1 (muted) and
     ///   3:1 (faint) when `fg` supports them.
     /// - Focus rings are a neutral blue, not `accent`; [`Kit::from_palette_focus`] picks
@@ -126,7 +134,7 @@ impl Kit {
         let lift = |dl: f32| tone(base + toward_fg * dl);
         let [l1, l2, l3, l4] = if dark { DARK_LAYERS } else { LIGHT_LAYERS }.map(lift);
         let surface = lift(0.0);
-        let ink = |a: f32| rune::theme::srgb_equivalent(fg.alpha(a), bg);
+        let ink = |a: f32| rune::theme::for_blend(fg.alpha(a), bg);
         let muted = secondary(bg, fg, tint, if dark { 0.72 } else { 0.57 }, 4.5);
         let faint = secondary(bg, fg, tint, if dark { 0.54 } else { 0.36 }, 3.0);
         let border = ink(if dark { 0.11 } else { 0.10 });
@@ -292,7 +300,7 @@ mod tests {
         for dark in [true, false] {
             let (seed, k) = red_accent(dark);
             for border in [k.c.border_muted, k.c.border_base, k.c.border_strong] {
-                // Alpha as solved for linear-light blending (sRGB 8–20%).
+                // The authored alpha (8–20%): built outside a linear-light window.
                 assert!(border.a > 0.0 && border.a < 0.4, "border alpha {}", border.a);
                 assert_eq!(srgb8(border.alpha(1.0)), srgb8(seed.fg));
             }

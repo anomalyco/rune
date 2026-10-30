@@ -149,8 +149,8 @@ fn fullscreen(device: &wgpu::Device, module: &wgpu::ShaderModule, entry: &str, f
     Fullscreen { pipeline, bgl }
 }
 
-/// Whole-frame GPU time from two compute timestamp markers (render-pass timestamps aren't ordered
-/// on tile GPUs), read back a frame or two later without stalling.
+/// Whole-frame GPU time from timestamps on the compositor's own passes, read back a couple of
+/// frames later without stalling.
 struct Timer {
     qs: wgpu::QuerySet,
     resolve: wgpu::Buffer,

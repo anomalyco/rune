@@ -1,0 +1,8 @@
+{
+  "events": [
+    { "t": 0.3, "type": "tap", "key": "v1", "expect": "smooth" },
+    { "t": 1.4, "type": "tap", "key": "v0", "expect": "smooth" },
+    { "t": 2.5, "type": "scroll", "x": 200, "y": 200, "dy": -300 },
+    { "t": 3.6, "type": "move", "x": 10, "y": 10 }
+  ]
+}

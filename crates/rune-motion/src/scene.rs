@@ -10,6 +10,7 @@ use crate::trace::{Intent, MotionTrace, flags};
 use crate::transition::{Effect, Reveal, Transition};
 use crate::value::{Animatable, Color, Corners, MAX_LANES, Rect, Sides, Transform, Vec2, lanes};
 
+mod props;
 mod trailing;
 mod travel;
 
@@ -217,6 +218,8 @@ pub struct FrameOutput<'a> {
 struct Path {
     start: Rect,
     end_local: Rect,
+    /// Its parent's root-space target origin as the last frame drew it.
+    origin: Vec2,
 }
 
 // Effect state lanes: opacity, scale, offset x/y, size-fraction offset x/y, blur, hidden reveal.
@@ -552,7 +555,7 @@ impl Scene {
             self.track_set(i as usize, prop::PRESENCE, 0.0);
             self.track_animate(i as usize, prop::PRESENCE, 1.0, Anim::from(enter));
             self.intent(id, Intent::TRANSITION | Intent::OPACITY, enter.duration);
-        } else {
+        } else if !self.at_base(i as usize, prop::PRESENCE, 1.0) {
             self.track_set(i as usize, prop::PRESENCE, 1.0);
         }
     }
@@ -600,6 +603,7 @@ impl Scene {
         }
         n.dirty = true;
         let exit = n.transition.springs.exit;
+        self.ensure_prop(i, prop::PRESENCE);
         self.track_animate(i, prop::PRESENCE, 0.0, Anim::from(exit));
         self.intent(id, Intent::TRANSITION | Intent::OPACITY, exit.duration);
     }
@@ -687,9 +691,17 @@ impl Scene {
     /// edge gets no motion at all. With `Travel::Screen` the node takes one straight root-space
     /// path instead, whatever its ancestors do.
     pub fn set_frame(&mut self, id: NodeId, frame: Rect, anim: impl Into<LayoutAnim>) {
+        self.set_frame_drawn(id, frame, anim.into(), [Vec2::ZERO; 2]);
+    }
+
+    /// [`set_frame`](Self::set_frame) for a node drawn `drawn[0]` away from its scene rect,
+    /// moving `drawn[1]` faster: a screen path starts there, at that speed.
+    pub(super) fn set_frame_drawn(&mut self, id: NodeId, frame: Rect, anim: LayoutAnim, drawn: [Vec2; 2]) {
         let Some(i) = self.slot(id) else { return };
-        let anim = anim.into();
         let old = self.nodes[i].frame;
+        if old == frame && self.nodes[i].path.is_none() && self.nodes[i].tracks[prop::FRAME.id.0 as usize].is_none() {
+            return;
+        }
         if frame.w != old.w {
             self.rebase_trailing(i, frame.w - old.w);
         }
@@ -715,7 +727,20 @@ impl Scene {
         };
         self.intent(id, Intent::POSITION | Intent::SIZE, ms);
         if anim.travel == Travel::Screen && !self.store.reduced_motion() {
-            let (start, vel) = self.exact_world(i);
+            // A path restarts from where it was drawn: under the origin the last frame drew it
+            // against, which an ancestor laid out elsewhere in this commit has already moved.
+            let (mut start, mut vel) = match self.nodes[i].path {
+                Some(path) => {
+                    let e = self.path_dual(i, path, path.origin);
+                    (e.map(|d| d.x), e.map(|d| d.v))
+                }
+                None => self.exact_world(i),
+            };
+            for k in 0..4 {
+                let [offset, speed] = drawn.map(|v| if k % 2 == 0 { v.x } else { v.y });
+                start[k] += offset;
+                vel[k] += speed;
+            }
             self.nodes[i].frame = frame;
             self.start_path(i, start, vel, anim);
             return;
@@ -822,14 +847,7 @@ impl Scene {
     fn world_dual(&self, i: usize) -> [D; 4] {
         let n = &self.nodes[i];
         if let Some(path) = n.path {
-            let mut p = [D::c(1.0); 2];
-            self.lanes_dual(i, prop::TRAVEL.id, &mut p);
-            let s = path.start.edges();
-            let end = path.end_local.translated(self.parent_target_origin(i)).edges();
-            return core::array::from_fn(|k| {
-                let a = D::c(s[k]);
-                a.add(D::c(end[k] - s[k]).mul(p[k % 2]))
-            });
+            return self.path_dual(i, path, self.parent_target_origin(i));
         }
         let mut local = n.frame.edges().map(D::c);
         self.lanes_dual(i, prop::FRAME.id, &mut local);
@@ -839,6 +857,15 @@ impl Scene {
         let mut o = self.origin_dual(n.parent as usize);
         o[0] = o[0].add(self.trail_dual(i));
         core::array::from_fn(|k| local[k].add(o[k % 2]))
+    }
+
+    /// Where node `i` is on its screen path, ending at its layout under parent origin `origin`.
+    fn path_dual(&self, i: usize, path: Path, origin: Vec2) -> [D; 4] {
+        let mut p = [D::c(1.0); 2];
+        self.lanes_dual(i, prop::TRAVEL.id, &mut p);
+        let s = path.start.edges();
+        let end = path.end_local.translated(origin).edges();
+        core::array::from_fn(|k| D::c(s[k]).add(D::c(end[k] - s[k]).mul(p[k % 2])))
     }
 
     /// The origin children of `i` ride: layout origin plus offsets (own and presence).
@@ -859,90 +886,6 @@ impl Scene {
             }
             o
         })
-    }
-
-    // ------------------------------------------------------------------------------------------
-    // Node properties
-
-    /// Animates one of the node's properties (`prop::OPACITY`, `prop::RADIUS`, …, or a custom one).
-    /// The first animation starts from the node's base value, so `.opacity(1)` → `animate(0)`
-    /// fades.
-    pub fn animate<T: Animatable>(&mut self, id: NodeId, prop: Prop<T>, target: T, anim: impl Into<Anim>) {
-        let Some(i) = self.slot(id) else { return };
-        let anim = anim.into();
-        self.ensure_prop(i, prop);
-        self.track_animate(i, prop, target, anim);
-        let bits = Intent::for_prop(prop.id);
-        self.intent(id, bits, anim.curve.logical_duration());
-    }
-
-    /// Sets a property immediately (direct manipulation).
-    pub fn set<T: Animatable>(&mut self, id: NodeId, prop: Prop<T>, value: T) {
-        if self.in_flight_to(id, prop, value) {
-            return;
-        }
-        if let Some(i) = self.slot(id) {
-            self.track_set(i, prop, value);
-        }
-    }
-
-    /// The property's presented value (last frame), falling back to the node's base value.
-    pub fn get<T: Animatable>(&self, id: NodeId, prop: Prop<T>) -> Option<T> {
-        let i = self.slot(id)?;
-        self.store.get(id, prop).or_else(|| self.base::<T>(i, prop.id))
-    }
-
-    fn ensure_prop<T: Animatable>(&mut self, i: usize, p: Prop<T>) {
-        if self.nodes[i].tracks.get(p.id.0 as usize).copied().flatten().is_none()
-            && !self.store.has(self.nodes[i].id, p)
-            && let Some(base) = self.base::<T>(i, p.id)
-        {
-            self.track_set(i, p, base);
-        }
-    }
-
-    fn base<T: Animatable>(&self, i: usize, p: PropId) -> Option<T> {
-        let n = &self.nodes[i];
-        let mut l = [0.0; MAX_LANES];
-        match p {
-            x if x == prop::OPACITY.id => l[0] = n.opacity,
-            x if x == prop::SCALE.id => l[0] = 1.0,
-            x if x == prop::FRAME.id => l[..4].copy_from_slice(&n.frame.edges()),
-            x if x == prop::RADIUS.id => l[..4].copy_from_slice(&n.radius.0),
-            x if x == prop::FILL.id => l = lanes(&n.fill),
-            x if x == prop::OFFSET.id || x == prop::ROTATION.id || x == prop::BLUR.id || x == prop::MASK.id => {}
-            _ => return None,
-        }
-        Some(T::read_lanes(&l[..T::LANES]))
-    }
-
-    fn current<T: Animatable>(&self, i: usize, p: Prop<T>) -> Option<T> {
-        let t = self.nodes[i].tracks.get(p.id.0 as usize).copied().flatten()?;
-        self.sample(t).map(|(x, _)| T::read_lanes(&x[..T::LANES]))
-    }
-
-    fn track_set<T: Animatable>(&mut self, i: usize, p: Prop<T>, value: T) {
-        let id = self.store.set(self.nodes[i].id, p, value);
-        self.record_track(i, p.id, id);
-    }
-
-    fn track_animate<T: Animatable>(&mut self, i: usize, p: Prop<T>, target: T, anim: Anim) {
-        let id = self.store.animate(self.nodes[i].id, p, target, anim);
-        self.record_track(i, p.id, id);
-    }
-
-    /// Remembers built-in props' tracks on the node (custom props live only in the store).
-    fn record_track(&mut self, i: usize, p: PropId, id: TrackId) {
-        if let Some(slot) = self.nodes[i].tracks.get_mut(p.0 as usize) {
-            *slot = Some(id);
-        }
-        self.nodes[i].dirty = true;
-    }
-
-    fn intent(&mut self, id: NodeId, bits: u32, seconds: f32) {
-        if self.trace.is_some() {
-            self.intents.push((id, bits, seconds));
-        }
     }
 
     // ------------------------------------------------------------------------------------------
@@ -1019,6 +962,10 @@ impl Scene {
                 self.end_path(i);
                 self.track_set(i, prop::FRAME, end_local);
                 continue;
+            }
+            let po = self.parent_target_origin(i);
+            if let Some(path) = &mut self.nodes[i].path {
+                path.origin = po;
             }
             k += 1;
         }

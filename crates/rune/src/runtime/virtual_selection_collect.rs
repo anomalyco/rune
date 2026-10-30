@@ -19,9 +19,9 @@ impl<S: 'static> Runtime<S> {
         let (n0, n1) = (node_for(h)?, node_for(f)?);
         let around = |a: usize, j: usize| std::iter::successors(Some(j), |&p| self.nodes[p].parent).any(|p| p == a);
         let provider = std::iter::successors(Some(n0), |&p| self.nodes[p].parent)
-            .find(|&p| self.nodes[p].selection_copy.is_some() && around(p, n1));
+            .find(|&p| self.nodes[p].handlers.selection_copy.is_some() && around(p, n1));
         if let Some(p) = provider
-            && let Some(copy_fn) = self.nodes[p].selection_copy.clone()
+            && let Some(copy_fn) = self.nodes[p].handlers.selection_copy.clone()
         {
             let sel = self.collect_virtual_selection(Some(p))?;
             if let Some(text) = copy_fn(&sel) {

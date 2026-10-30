@@ -247,9 +247,9 @@ fn stale_layouts_stay_within_their_budget_newest_kept() {
     }
     // Two more, so even the last label is stale.
     for _ in 0..2 { text.end_commit(); }
-    let cost: usize = text.layouts.values().map(|e| e.2 as usize + STALE_ENTRY).sum();
-    assert!(cost <= STALE_TEXT, "{cost}");
-    assert!(cost > STALE_TEXT * 9 / 10, "{cost}");
+    let cost: usize = text.layouts.values().map(|e| e.cost as usize).sum();
+    assert!(cost <= STALE_BYTES, "{cost}");
+    assert!(cost > STALE_BYTES * 9 / 10, "{cost}");
     let key = |label: &str| text_hash(label, &[], style, 2.0, None);
     assert!(text.layouts.contains_key(&key(&labels[1199])));
     assert!(!text.layouts.contains_key(&key(&labels[0])));
@@ -268,9 +268,9 @@ fn a_view_over_the_budget_keeps_a_budget_of_its_layouts() {
         assert_eq!(text.layouts.len(), 1200, "the current and previous commits are never evicted");
     }
     text.end_commit();
-    let cost: usize = text.layouts.values().map(|e| e.2 as usize + STALE_ENTRY).sum();
-    assert!(cost <= STALE_TEXT, "{cost}");
-    assert!(cost > STALE_TEXT * 9 / 10, "{cost}");
+    let cost: usize = text.layouts.values().map(|e| e.cost as usize).sum();
+    assert!(cost <= STALE_BYTES, "{cost}");
+    assert!(cost > STALE_BYTES * 9 / 10, "{cost}");
     let kept = text.layouts.len();
     let shaped = text.shaped;
     show(&mut text);
@@ -689,5 +689,34 @@ fn span_ring_draws_inset_border_on_light_page_merges_runs_wraps_and_stays_on_hov
     assert!(lines.len() >= 2, "wrapped span splits into one ringed rect per line: {lines:?}");
     for d in &lines {
         assert_eq!((d.radii, d.params[0], d.border), ([6.0; 4], 1.5, RING.premul(1.0)));
+    }
+}
+
+/// Underline rects drawn at 2× for `words`, each its own underlined text element side by side
+/// in a row; device px `(left, right)`, left to right.
+fn underlines(words: &[&str]) -> Vec<(f32, f32)> {
+    use crate::{Cx, El, Env, Runtime};
+    fn view(s: &Vec<String>, _: &mut Cx<Vec<String>>) -> El {
+        let line = crate::oklcha(0.6, 0.15, 260.0, 0.4);
+        crate::row().children(s.iter().map(|w| crate::el::rich(w.clone(), vec![Span::new(0, w.len()).underline(line)])))
+    }
+    let mut rt = Runtime::new(words.iter().map(|w| w.to_string()).collect(), view, (600.0, 100.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    let mut out: Vec<(f32, f32)> = rt.instances.iter()
+        .filter(|i| i.params[1] == crate::render::KIND_RECT && i.rect[3] == 2.0)
+        .map(|i| (i.rect[0], i.rect[0] + i.rect[2]))
+        .collect();
+    out.sort_by(|a, b| a.0.total_cmp(&b.0));
+    out
+}
+
+/// A link flowed a word an element underlines as one line: each word's line
+/// meets the next one's at the space, with no gap where an element's width rounds up (t942).
+#[test]
+fn underlined_words_in_a_row_meet_without_gaps() {
+    let lines = underlines(&["Watch ", "Kaizen ", "× ", "OpenCode ", "(4:12, ", "1080p60) ", "→"]);
+    assert_eq!(lines.len(), 7, "{lines:?}");
+    for w in lines.windows(2) {
+        assert_eq!(w[0].1, w[1].0, "each line meets the next: {lines:?}");
     }
 }

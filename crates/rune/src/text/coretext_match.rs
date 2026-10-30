@@ -60,10 +60,10 @@ pub(crate) fn quantisation_steps(ppem: f32) -> f32 {
 /// to [`quantisation_steps`] steps a pixel, as CoreGraphics' default subpixel quantisation does.
 pub(crate) fn glyph_x(x: f32, ppem: f32) -> (f32, u8) {
     let steps = quantisation_steps(ppem);
-    // A 1/1024-step allowance keeps pens that sit on the grid (monospaced text, runs split by
-    // colour spans) from flooring a step down on f32 summation error. Parley's pens are whole
-    // 1/256 px, so a pen just short of a step (353 - 1/256 at whole-pixel steps) must still floor.
-    let x = (x * steps + 1.0 / 1024.0).floor() / steps;
+    // Parley's pens are whole 1/256 px, so summing a line's advances in f32 only adds noise
+    // (a run split by a colour span sums in a different order). Snapping to that grid drops
+    // the noise without moving a pen that sits just short of a step (353 - 1/256 still floors).
+    let x = ((x * 256.0).round() / 256.0 * steps).floor() / steps;
     let fx = x.floor();
     let phase = ((x - fx) * steps).round();
     if phase >= steps { (fx + 1.0, 0) } else { (fx, (phase * (PHASES / steps)) as u8) }

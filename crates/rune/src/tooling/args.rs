@@ -84,6 +84,21 @@ impl Args {
 
     /// Parses `argv` (without the program name); unrecognised arguments become `extra_args`.
     pub fn parse_from(argv: Vec<String>) -> Args {
+        let (args, extra) = Args::parse_split(argv);
+        let _ = EXTRA.set(extra);
+        args
+    }
+
+    /// The process's arguments, leaving `extra_args` unset so an app's own `App::args` can still
+    /// set it.
+    fn parse_process() -> Args {
+        #[cfg(target_arch = "wasm32")]
+        return Args::parse_split(Vec::new()).0;
+        #[cfg(not(target_arch = "wasm32"))]
+        Args::parse_split(std::env::args().skip(1).collect()).0
+    }
+
+    fn parse_split(argv: Vec<String>) -> (Args, Vec<String>) {
         #[cfg(feature = "hot")]
         crate::hot::enable_from_env();
         let mut a = Args { fps: 60.0, every: 1, cols: 10, ..Default::default() };
@@ -169,11 +184,10 @@ impl Args {
             }
             i += 1;
         }
-        let _ = EXTRA.set(extra);
         if a.variant.is_some() && a.playground.is_none() { die("--variant needs --playground"); }
         if a.crop_key.is_some() && a.snap.is_none() { die("--crop KEY needs --snap"); }
         if a.whole_window && (a.playground.is_none() || a.snap.is_none()) { die("--whole-window needs --playground and --snap"); }
-        a
+        (a, extra)
     }
 
     pub fn headless(&self) -> bool {
@@ -181,7 +195,8 @@ impl Args {
         if self.snap_on_patch.is_some() { return true; }
         self.snap.is_some()
             || self.tree.is_some()
-            || (!self.native && (self.trace.is_some() || self.frames.is_some() || self.duration.is_some() || self.out.is_some()))
+            || (!self.native
+                && (self.script.is_some() || self.trace.is_some() || self.frames.is_some() || self.duration.is_some() || self.out.is_some()))
             || self.video.is_some()
             || self.strip.is_some()
             || self.list_scenes
@@ -189,6 +204,16 @@ impl Args {
             || self.list_windows
             || self.desktop.is_some()
     }
+}
+
+/// Whether this process runs headless: its arguments ask for an offscreen render, a scripted
+/// run, a trace or a listing rather than a window, as `Args::headless` decides. Parsed from the
+/// process's arguments once, so it answers before `run` (to skip a tray, global shortcuts or
+/// network work in a scripted run, say), with `--help` and a malformed flag handled as `run`
+/// handles them. An app that passes `App::args` asks `Args::parse_from(..).headless()` instead.
+pub fn is_headless() -> bool {
+    static HEADLESS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *HEADLESS.get_or_init(|| Args::parse_process().headless())
 }
 
 pub(crate) const HELP: &str = "usage: <app> [window]
@@ -205,10 +230,11 @@ pub(crate) const HELP: &str = "usage: <app> [window]
                         mark:NAME or mark:NAME+0.5 for a script mark's time (also --start)
   --size WxH            viewport in points      --scale N   device scale (default 2)
   --theme dark|light    system appearance
-  --script FILE.json    timestamped input (move/down/up/tap/drag, keys, {\"focus\":false}); a
-                        key with \"repeat\":true is a held key's auto-repeat; {\"type\":\"mark\",\"name\":N}
-                        marks a time; {\"type\":\"shortcut\",\"chord\":\"cmd+space\"} presses a chord
-                        through its registered global shortcut handler, never on_key;
+  --script FILE.json    timestamped input, replayed headless (move/down/up/tap/drag, keys,
+                        {\"focus\":false}); a key with \"repeat\":true is a held key's auto-repeat;
+                        {\"type\":\"mark\",\"name\":N} marks a time;
+                        {\"type\":\"shortcut\",\"chord\":\"cmd+space\"} presses a chord through its
+                        registered global shortcut handler, never on_key;
                         an object adds \"displays\" and \"pointer\" for place() (rune-placed, --tree)
                         menu-pick with an \"id\" and menu-cancel answer a pop-up menu;
                         file-dialog with a \"path\" and file-dialog-cancel a file dialog

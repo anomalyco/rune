@@ -66,6 +66,8 @@ struct Cache {
     entries: HashMap<u64, Entry>,
     order: VecDeque<u64>,
     bytes: usize,
+    /// The [`super::font_epoch`] the entries were measured in.
+    epoch: u64,
 }
 
 impl Cache {
@@ -104,7 +106,14 @@ thread_local! {
 /// a raster of each glyph at 8× size.
 pub fn ink(text: &str, style: TextStyle) -> Option<TextInk> {
     let key = Cache::key(text, style);
-    if let Some(hit) = CACHE.with_borrow(|c| c.get(key, text, style)) {
+    let epoch = super::font_epoch();
+    let hit = CACHE.with_borrow_mut(|c| {
+        if c.epoch != epoch {
+            *c = Cache { epoch, ..Cache::default() };
+        }
+        c.get(key, text, style)
+    });
+    if let Some(hit) = hit {
         return hit;
     }
     let found = with_text(|t| {

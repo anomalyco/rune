@@ -1,6 +1,6 @@
-//! `overlay_hud_cost`'s macOS probes: CPU time by thread, and counts of the Metal calls a frame
-//! makes (command buffers committed, encoders, presents, completion handlers), counted by
-//! replacing those methods on the GPU's command buffer class.
+//! `overlay_hud_cost`'s and `window_scroll_cost`'s macOS probes: CPU time by thread, and counts
+//! of the Metal calls a frame makes (command buffers committed, encoders, presents, completion
+//! handlers), counted by replacing those methods on the GPU's command buffer class.
 
 use std::ffi::{CStr, c_char, c_void};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -47,6 +47,18 @@ pub fn process_counts() -> [u64; 3] {
         if libc::proc_pid_rusage(libc::getpid(), libc::RUSAGE_INFO_V4, (&raw mut info).cast()) != 0 { return [0; 3]; }
         [info.ri_instructions, info.ri_cycles, info.ri_interrupt_wkups]
     }
+}
+
+unsafe extern "C" {
+    fn thread_selfcounts(kind: i32, buf: *mut u64, size: usize) -> i32;
+}
+
+/// The calling thread's retired instructions and cycles so far.
+pub fn thread_counts() -> [u64; 2] {
+    let mut counts = [0u64; 2];
+    // SAFETY: kind 1 (THSC_CPI) writes two u64s into the buffer it is handed.
+    unsafe { thread_selfcounts(1, counts.as_mut_ptr(), size_of_val(&counts)) };
+    counts
 }
 
 /// Summed CPU ms of the named threads matching `name`.
@@ -147,5 +159,17 @@ pub fn count_metal() {
         BLIT = std::mem::transmute(swap(c"blitCommandEncoder", blit_encoder as *const c_void));
         PRESENT = std::mem::transmute(swap(c"presentDrawable:", present as *const c_void));
         HANDLER = std::mem::transmute(swap(c"addCompletedHandler:", completed_handler as *const c_void));
+    }
+}
+
+/// Makes every window report itself on screen, so a Mac whose screen is locked still draws (its
+/// frames never reach the display): only for profiling.
+pub fn presume_visible() {
+    extern "C" fn visible(_: Id, _: Sel) -> usize { 1 << 1 }
+    // SAFETY: replaces -[NSWindow occlusionState] with one of the same signature.
+    unsafe {
+        let method = class_getInstanceMethod(objc_getClass(c"NSWindow".as_ptr()), sel_registerName(c"occlusionState".as_ptr()));
+        assert!(!method.is_null());
+        method_setImplementation(method, visible as *const c_void);
     }
 }

@@ -167,6 +167,14 @@ impl Transition {
     pub fn identity() -> Transition {
         Transition::symmetric(Effect::IDENTITY)
     }
+    /// No motion at all: a node shows whole the frame it mounts and is gone the frame it's
+    /// removed, through the usual presence lifecycle (it exits invisible and inert, then
+    /// unmounts, and focus returns as for any transition). Unlike `Tx::instant`, the rest of
+    /// the change still animates; unlike a very short spring, Reduce Motion doesn't stretch it
+    /// into a fade that keeps the node on screen.
+    pub fn none() -> Transition {
+        Transition::identity().springs(SpringPair::NONE)
+    }
     /// `.opacity`.
     pub fn opacity() -> Transition {
         Transition::symmetric(Effect::opacity(0.0))

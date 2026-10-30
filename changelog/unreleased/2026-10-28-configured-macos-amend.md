@@ -1,1 +1,0 @@
-- `ConfiguredWindowOptions::macos(|native| ..)` amends the AppKit settings a preset made, so `WindowOptions::launcher_panel().macos(|n| n.corner_radius(16.0))` keeps its launcher behaviour.

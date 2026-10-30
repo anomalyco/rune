@@ -1,3 +1,4 @@
+use super::canvas::{Canvas, Op, dist, smooth};
 use super::*;
 
 #[test]
@@ -11,12 +12,15 @@ fn clean_turns_markup_into_text() {
 
 #[test]
 fn other_diagram_types_and_garbage_are_unsupported() {
-    for src in ["", "pie title Pets\n\"Dogs\" : 386", "classDiagram\nA <|-- B", "gantt\ntitle x", "erDiagram\nA ||--o{ B : has", "hello", "%% only a comment"] {
+    for src in ["", "pie title Pets\n\"Dogs\" : 386", "gantt\ntitle x", "erDiagram\nA ||--o{ B : has", "hello", "%% only a comment"] {
         assert!(!supported(src), "{src:?}");
     }
-    assert!(supported("---\ntitle: Hi\n---\ngraph TD\nA-->B"), "front matter is skipped");
+    let with_title = scene("---\ntitle: Hi\n---\ngraph TD\nA-->B", &DiagramStyle::neutral(true), None).unwrap();
+    assert_eq!(with_title.title.as_deref(), Some("Hi"), "front matter title is preserved");
     assert!(supported("%%{\n  init: {'theme': 'dark'}\n}%%\nflowchart LR\nA-->B"), "multiline init directive is skipped");
     assert!(supported("stateDiagram-v2\n[*] --> Idle\nIdle --> [*]"));
+    assert!(supported("classDiagram\nA <|-- B"));
+    assert!(supported("flowchart TD\n  A[Runtime&lt;S&gt;] --> B[a; b]; B --> C"), "entities and bracketed `;` stay intact");
 }
 
 #[test]
@@ -28,6 +32,8 @@ fn node_style_keeps_contrast_in_dark_and_light_themes() {
         let diff = (fill.to_oklab()[0] - text.to_oklab()[0]).abs();
         assert!(diff > 0.45, "dark={dark} contrast {diff} between {fill:?} and {text:?}");
     }
+    assert!(parse_color_spec("rgb(30, 60, 90)").is_some());
+    assert!(parse_color_spec("lightgreen").is_some());
 }
 
 #[test]
@@ -51,12 +57,10 @@ fn smooth_passes_through_its_points() {
     assert!(curve.iter().any(|p| dist(*p, pts[1]) < 0.01));
 }
 
-/// Each source falls back (`false`) or draws (`true`), in well under a second at full speed;
-/// the bound here is loose for debug builds on a busy machine.
 fn hostile(src: &str, draws: bool) {
     let paint = DiagramStyle::neutral(true);
     let t = std::time::Instant::now();
-    let scene = scene(src, &paint);
+    let scene = scene(src, &paint, None);
     let took = t.elapsed();
     assert_eq!(scene.is_some(), draws, "{}…", &src[..src.len().min(80)]);
     assert!(took.as_secs_f32() < 5.0, "{took:?} for {}…", &src[..src.len().min(80)]);
@@ -86,8 +90,8 @@ fn a_huge_dash_count_draws_at_the_longest_link() {
     let paint = DiagramStyle::neutral(true);
     hostile(&format!("graph TD\nA {}> B", "-".repeat(10_000)), true);
     hostile(&format!("graph TD\nA -{}-> B", ".".repeat(10_000)), true);
-    let longest = scene(&format!("graph TD\nA {}> B", "-".repeat(10_000)), &paint).unwrap();
-    let eight = scene(&format!("graph TD\nA {}> B", "-".repeat(9)), &paint).unwrap();
+    let longest = scene(&format!("graph TD\nA {}> B", "-".repeat(10_000)), &paint, None).unwrap();
+    let eight = scene(&format!("graph TD\nA {}> B", "-".repeat(9)), &paint, None).unwrap();
     assert_eq!(longest.size, eight.size);
 }
 
@@ -110,7 +114,7 @@ fn the_biggest_allowed_charts_draw_in_bounded_time() {
     assert!(parse(&src).is_some());
     let paint = DiagramStyle::neutral(true);
     let t = std::time::Instant::now();
-    let drawn = scene(&src, &paint).is_some();
+    let drawn = scene(&src, &paint, None).is_some();
     assert!(!drawn, "dense 260-edge random graph hits MAX_DUMMIES and falls back");
     assert!(t.elapsed().as_secs_f32() < 5.0, "{:?}", t.elapsed());
     let mut big = String::from("graph TD\nsubgraph left\n");
@@ -125,7 +129,7 @@ fn the_biggest_allowed_charts_draw_in_bounded_time() {
         big.push_str(&format!("N{} --> N{}\n", k % 20, k % 20 + 37));
     }
     let t = std::time::Instant::now();
-    assert!(scene(&big, &paint).is_some());
+    assert!(scene(&big, &paint, None).is_some());
     assert!(t.elapsed().as_secs_f32() < 5.0, "{:?}", t.elapsed());
     let mut nested = String::from("graph TD\n");
     for d in 0..8 {
@@ -137,9 +141,9 @@ fn the_biggest_allowed_charts_draw_in_bounded_time() {
 }
 
 #[test]
-fn repeated_create_falls_back_without_recursing() {
-    hostile(&format!("sequenceDiagram\n{}participant A\nA->>B: hi", "create ".repeat(100_000)), false);
-    hostile("sequenceDiagram\ncreate loop x\nA->>B: hi\nend", false);
+fn repeated_create_is_skipped_without_recursing() {
+    hostile(&format!("sequenceDiagram\n{}participant A\nA->>B: hi", "create ".repeat(100_000)), true);
+    hostile("sequenceDiagram\ncreate loop x\nA->>B: hi\nend", true);
     hostile("sequenceDiagram\ncreate participant A\nA->>B: hi", true);
     hostile("sequenceDiagram\nA->>B: hi\ncreate actor C as Carol\nB->>C: hello", true);
 }

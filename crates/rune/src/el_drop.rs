@@ -61,14 +61,14 @@ impl El {
     /// macOS, Windows and X11. Wayland reports no file drags in winit 0.30, and the web build
     /// has no paths to give. Headless scripts drop files with `drop_files` events.
     pub fn on_drop_files<S: 'static>(mut self, f: impl Fn(&mut S, &[std::path::PathBuf], &mut Tx) + 'static) -> Self {
-        self.drop.get_or_insert_default().on_drop = Some(Rc::new(move |s, files, tx| f(downcast::<S>(s), files, tx)));
+        self.handlers.drop.get_or_insert_default().on_drop = Some(Rc::new(move |s, files, tx| f(downcast::<S>(s), files, tx)));
         self
     }
     /// Only the files `accepts` returns true for reach this element's [`El::on_drop_files`]. A
     /// drag carrying none of them passes this element over: the next accepting ancestor takes
     /// the drop and shows the drop hover.
     pub fn accepts_files(mut self, accepts: impl Fn(&std::path::Path) -> bool + 'static) -> Self {
-        self.drop.get_or_insert_default().accepts = Some(Rc::new(accepts));
+        self.handlers.drop.get_or_insert_default().accepts = Some(Rc::new(accepts));
         self
     }
     /// [`El::accepts_files`] for files with one of these extensions, compared without case.
@@ -83,7 +83,7 @@ impl El {
     /// away under the drag. Draw a drop highlight from it. With `true`, [`Tx::drop_point`] says
     /// where the drag came in.
     pub fn on_drop_hover<S: 'static>(mut self, f: impl Fn(&mut S, bool, &mut Tx) + 'static) -> Self {
-        self.drop.get_or_insert_default().on_hover = Some(Rc::new(move |s, over, tx| f(downcast::<S>(s), over, tx)));
+        self.handlers.drop.get_or_insert_default().on_hover = Some(Rc::new(move |s, over, tx| f(downcast::<S>(s), over, tx)));
         self
     }
     /// Follow a file drag this element takes ([`El::on_drop_files`]) while it's over it: `f`
@@ -95,7 +95,7 @@ impl El {
     /// drag the platform gives no position for is never heard here. Scripts move a drag with
     /// further `drag_files` events.
     pub fn on_drop_move<S: 'static>(mut self, f: impl Fn(&mut S, PointerEvent, &mut Tx) + 'static) -> Self {
-        self.drop.get_or_insert_default().on_move = Some(Rc::new(move |s, p, tx| f(downcast::<S>(s), p, tx)));
+        self.handlers.drop.get_or_insert_default().on_move = Some(Rc::new(move |s, p, tx| f(downcast::<S>(s), p, tx)));
         self
     }
     /// Hear the files dropped on this element that it doesn't accept ([`El::accepts_files`]),
@@ -113,7 +113,7 @@ impl El {
     ///     .on_drop_rejected_hover(|s: &mut App, over, _| s.wrong = over);
     /// ```
     pub fn on_drop_rejected<S: 'static>(mut self, f: impl Fn(&mut S, &[std::path::PathBuf], &mut Tx) + 'static) -> Self {
-        self.drop.get_or_insert_default().on_reject = Some(Rc::new(move |s, files, tx| f(downcast::<S>(s), files, tx)));
+        self.handlers.drop.get_or_insert_default().on_reject = Some(Rc::new(move |s, files, tx| f(downcast::<S>(s), files, tx)));
         self
     }
     /// [`El::on_drop_hover`] for a drag this element stops but takes none of (see
@@ -121,7 +121,7 @@ impl El {
     /// leaves the window or drops, or when the element goes away under it. Draw a "can't drop
     /// here" state from it.
     pub fn on_drop_rejected_hover<S: 'static>(mut self, f: impl Fn(&mut S, bool, &mut Tx) + 'static) -> Self {
-        self.drop.get_or_insert_default().on_reject_hover = Some(Rc::new(move |s, over, tx| f(downcast::<S>(s), over, tx)));
+        self.handlers.drop.get_or_insert_default().on_reject_hover = Some(Rc::new(move |s, over, tx| f(downcast::<S>(s), over, tx)));
         self
     }
 }

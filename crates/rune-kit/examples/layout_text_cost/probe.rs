@@ -18,6 +18,7 @@ const DEPTH: usize = 96;
 pub static TAG: AtomicU32 = AtomicU32::new(0);
 static MAIN: AtomicUsize = AtomicUsize::new(0);
 static ALLOCS: AtomicU64 = AtomicU64::new(0);
+static BYTES: AtomicU64 = AtomicU64::new(0);
 static LIVE: AtomicI64 = AtomicI64::new(0);
 static TRACK: AtomicBool = AtomicBool::new(false);
 
@@ -108,6 +109,7 @@ unsafe impl GlobalAlloc for Probe {
 fn note_alloc(p: *mut u8, size: usize) {
     if !on_main() { return; }
     ALLOCS.fetch_add(1, Relaxed);
+    BYTES.fetch_add(size as u64, Relaxed);
     LIVE.fetch_add(size as i64, Relaxed);
     if TRACK.load(Relaxed) && !BUSY.get() {
         let mut buf = [0u64; DEPTH];
@@ -136,6 +138,8 @@ fn note_free(p: *mut u8, size: usize) {
 
 /// Allocations the main thread has made, a running count.
 pub fn allocations() -> u64 { ALLOCS.load(Relaxed) }
+/// Bytes the main thread has allocated, a running total.
+pub fn allocated_bytes() -> u64 { BYTES.load(Relaxed) }
 /// Bytes the main thread has allocated and not freed since `init`.
 pub fn live_bytes() -> i64 { LIVE.load(Relaxed) }
 

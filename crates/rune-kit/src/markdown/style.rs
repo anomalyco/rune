@@ -4,6 +4,7 @@ use rune::{Icon, Spring};
 
 use super::*;
 use crate::PaletteSeed;
+use crate::palette::tint;
 
 /// How markdown looks. [`MarkdownStyle::from_kit`] takes every colour and font from the kit's
 /// tokens, [`MarkdownStyle::neutral`] and [`MarkdownStyle::from_seed`] need no kit; each builder
@@ -113,13 +114,8 @@ pub(crate) struct DiagramPaint {
     pub note_border: Color,
     pub font: TextStyle,
     pub max_width: f32,
-}
-
-/// `t` of the way from `base` toward `hue` in Oklab, at `base`'s alpha: a quiet wash that keeps
-/// `base`'s lightness close in both themes.
-pub(super) fn tint(base: Color, hue: Color, t: f32) -> Color {
-    let [a, b] = [base.to_oklab(), hue.to_oklab()];
-    Color::from_oklab([0, 1, 2, 3].map(|i| if i == 3 { a[3] } else { a[i] + (b[i] - a[i]) * t }))
+    pub hover: Color,
+    pub hover_neighbours: bool,
 }
 
 impl MarkdownStyle {
@@ -202,6 +198,8 @@ impl MarkdownStyle {
                 note_border: c.warning.border,
                 font: TextStyle { size: 13.0, line_height: 18.0, ..k.ty.body },
                 max_width: 680.0,
+                hover: k.alpha(c.text_base, 0.9),
+                hover_neighbours: false,
             },
         }
     }
@@ -373,6 +371,14 @@ impl MarkdownStyle {
     /// is laid out top-down instead; anything still wider is drawn smaller, down to 60%.
     pub fn diagram_max_width(mut self, points: f32) -> Self {
         self.diagram.max_width = points.max(120.0);
+        self
+    }
+    /// What lights up while the pointer is over a flowchart or state diagram node: its edges in
+    /// `color` (the text colour by default; transparent turns it off), and with `neighbours` its
+    /// outline and the outlines of the nodes they reach.
+    pub fn diagram_hover(mut self, color: Color, neighbours: bool) -> Self {
+        self.diagram.hover = color;
+        self.diagram.hover_neighbours = neighbours;
         self
     }
     /// Background fill of standard [`Markdown::highlights`] matches.

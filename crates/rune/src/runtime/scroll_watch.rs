@@ -10,7 +10,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn tell_scroll_offsets(&mut self) -> bool {
         let mut calls = Vec::new();
         for n in &self.nodes {
-            let Some(f) = &n.on_scroll_offset else { continue };
+            let Some(f) = n.handlers.get().and_then(|h| h.on_scroll_offset.as_ref()) else { continue };
             let Some(st) = self.scrolls.get_mut(&n.id) else { continue };
             let at = crate::ScrollPos { offset: [st.x.offset as f32, st.offset as f32 + st.slack.height()], max: [st.x.max as f32, st.max as f32] };
             if st.told.replace(at) != Some(at) { calls.push((f.clone(), at)); }

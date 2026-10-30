@@ -35,8 +35,8 @@ pub struct Tx {
     pub(crate) text_flights: Vec<(String, String)>,
     /// `Tx::launch`: (source, destination).
     pub(crate) launches: Vec<(String, String)>,
-    /// Rows to reveal: (scope, key).
-    pub(crate) scroll_to: Vec<(Option<String>, String)>,
+    /// Rows to reveal or centre (`Tx::scroll_into_view` and `Tx::scroll_center`).
+    pub(crate) scroll_to: Vec<crate::runtime::ScrollReveal>,
     /// Scroll viewports to send to their bottom: (key, animated).
     pub(crate) scroll_bottom: Vec<(String, bool)>,
     /// Scroll viewports to page: (key, pages).
@@ -51,7 +51,7 @@ pub struct Tx {
     /// `Tx::drop_point`.
     pub(crate) drop_point: Option<PointerEvent>,
     pub(crate) title: Option<String>,
-    pub(crate) open_urls: Vec<String>,
+    pub(crate) open_urls: Vec<crate::open_url::Link>,
     pub(crate) trace: Option<TraceCalls>,
     pub(crate) popups: Vec<crate::popup_menu::Call>,
     pub(crate) file_dialogs: Vec<crate::file_dialog::Call>,
@@ -62,6 +62,7 @@ pub struct Tx {
     pub(crate) mods: crate::Mods,
     pub(crate) srgb_blend: Option<bool>,
     pub(crate) font_smoothing: Option<crate::text::FontSmoothing>,
+    pub(crate) font_families: Option<(String, String)>,
     pub(crate) blur: bool,
     /// The text selection as the event arrived (`Tx::text_selection`).
     pub(crate) selection: Option<Rc<crate::TextSelection>>,
@@ -202,7 +203,17 @@ impl Tx {
     /// own) and malformed links are refused here with the reason and nothing opens. Headless
     /// runs and tests open nothing; read the requests with `Runtime::take_url_requests`.
     pub fn open_url(&mut self, url: &str) -> Result<(), crate::open_url::OpenUrlError> {
-        self.open_urls.push(crate::open_url::check(url)?);
+        self.open_urls.push(crate::open_url::Link { url: crate::open_url::check(url)?, same_tab: false });
+        Ok(())
+    }
+
+    /// `open_url`, but on web the link replaces this page instead of opening a tab: the app's
+    /// [`App::same_tab_router`](crate::App::same_tab_router) gets it first (a single-page app
+    /// routes it with `history.pushState`), else the browser loads it with `location.assign`.
+    /// On web a link without a scheme (`/notes/42`) is relative to the page. Native opens it as
+    /// `open_url` does, and headless runs record it with the others.
+    pub fn open_url_same_tab(&mut self, url: &str) -> Result<(), crate::open_url::OpenUrlError> {
+        self.open_urls.push(crate::open_url::Link { url: crate::open_url::check_same_tab(url)?, same_tab: true });
         Ok(())
     }
 
@@ -289,6 +300,17 @@ impl Tx {
     /// (each mode's stay cached). Blending is separate ([`Self::set_srgb_blend`]).
     pub fn set_font_smoothing(&mut self, mode: crate::text::FontSmoothing) {
         self.font_smoothing = Some(mode);
+    }
+
+    /// Put `sans` and `mono` (CSS family lists, as `App::families` takes them) behind the
+    /// `Family::Sans` and `Family::Mono` slots of every window and overlay, from the next
+    /// frame: a font picker. Each window drops what it shaped and measured in the old families
+    /// (memoized subtrees included), lays out again and draws one frame. A family that isn't
+    /// registered or installed falls back as it would at launch. Asking for the families the
+    /// slots already hold costs nothing. [`rune::text::measure`](crate::text::measure) follows
+    /// too, and caches of measured sizes can key on [`rune::text::font_epoch`](crate::text::font_epoch).
+    pub fn set_font_families(&mut self, sans: impl Into<String>, mono: impl Into<String>) {
+        self.font_families = Some((sans.into(), mono.into()));
     }
 
     fn frame_request(&mut self, request: crate::window_frame::FrameRequest) {

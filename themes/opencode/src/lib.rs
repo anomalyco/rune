@@ -29,6 +29,7 @@ pub const FONTS: &[&[u8]] = &[
 pub const FAMILIES: (&str, &str) = ("Inter", "IBM Plex Mono");
 
 /// The resolved `rune::Theme` for one appearance (every `--*` colour token by name, without `--`).
+/// Translucent tokens resolve for the current blend mode as they are read (`rune::theme::blends_srgb`).
 pub fn theme(dark: bool) -> &'static Theme {
     static DARK: OnceLock<Theme> = OnceLock::new();
     static LIGHT: OnceLock<Theme> = OnceLock::new();
@@ -71,11 +72,14 @@ fn raw_theme(dark: bool) -> &'static Theme {
     if dark { DARK.get_or_init(load) } else { LIGHT.get_or_init(load) }
 }
 
-/// The kit tokens for one appearance.
+/// The kit tokens for one appearance, resolved for the blend mode of the window building the
+/// view (`rune::theme::blends_srgb`): translucent tokens as authored when it blends in sRGB,
+/// re-solved over `bg_base` when it blends in linear light. Get it in the view rather than
+/// keeping it across a `Tx::set_srgb_blend`.
 pub fn kit(dark: bool) -> &'static Kit {
-    static DARK: OnceLock<Kit> = OnceLock::new();
-    static LIGHT: OnceLock<Kit> = OnceLock::new();
-    if dark { DARK.get_or_init(|| build(true)) } else { LIGHT.get_or_init(|| build(false)) }
+    static KITS: [[OnceLock<Kit>; 2]; 2] = [const { [const { OnceLock::new() }; 2] }; 2];
+    let srgb = rune::theme::blends_srgb();
+    KITS[dark as usize][srgb as usize].get_or_init(|| rune::theme::with_blend(srgb, || build(dark)))
 }
 
 /// Inter at a variable weight with the kit's tracking (`-0.04px` at 13, `0.05px` at 11).
@@ -105,7 +109,7 @@ fn build(dark: bool) -> Kit {
         icon,
     };
     let blend = v("background-bg-base");
-    let solve = |x: Color| rune::theme::srgb_equivalent(x, blend);
+    let solve = |x: Color| rune::theme::for_blend(x, blend);
     let data: Value = serde_json::from_str(THEME).expect("theme.json");
     let mode = if dark { "dark" } else { "light" };
     let sh = |n: &str| {
@@ -246,6 +250,24 @@ mod tests {
             assert_eq!(k.dark, dark);
             let b = super::brand(dark);
             assert!(b.a > 0.99 && b.r > b.g && b.r > b.b, "ember is opaque and warm: {b:?}");
+        }
+    }
+
+    #[test]
+    fn translucent_tokens_follow_the_blend_mode() {
+        for dark in [false, true] {
+            let srgb = rune::theme::with_blend(true, || super::kit(dark));
+            let linear = rune::theme::with_blend(false, || super::kit(dark));
+            let authored = super::raw_theme(dark).color("v2-overlay-simple-overlay-hover");
+            assert_eq!(srgb.c.hover, authored, "sRGB blending paints the authored alpha");
+            assert_eq!(linear.c.hover, rune::theme::srgb_equivalent(authored, linear.c.bg_base));
+            assert_ne!(linear.c.hover.a, authored.a);
+            assert!(std::ptr::eq(super::kit(dark), srgb), "windows blend in sRGB by default");
+            // Shadows too: light's floating elevation is `#0000000a 0px 8px 16px 0px, #00000014 …`.
+            if !dark {
+                let alphas: Vec<u8> = srgb.elevation.floating.iter().map(|s| (s.color.a * 255.0).round() as u8).collect();
+                assert_eq!(alphas[..3], [0x0a, 0x14, 0x1f], "sRGB blending paints the authored shadow alpha");
+            }
         }
     }
 

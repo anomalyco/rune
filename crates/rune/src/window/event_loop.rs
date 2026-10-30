@@ -52,6 +52,8 @@ fn run_configured(_: Factory, _: Args, _: bool) -> Result<(), String> {
 #[cfg(not(target_arch = "wasm32"))]
 fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), String> {
     let _ = accessory;
+    crate::perf_warn::launch::run_starts();
+    crate::ready_signal::run_starts();
     #[cfg(target_os = "macos")]
     if !window_server_session() {
         crate::render::discard_prewarm();
@@ -71,12 +73,15 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     }
     let event_loop = builder.build().inspect_err(|_| crate::render::discard_prewarm()).map_err(event_loop_error)?;
     event_loop.set_control_flow(ControlFlow::Wait);
+    #[cfg(target_os = "macos")]
+    crate::app_icon::launched();
     let proxy = event_loop.create_proxy();
     let mut windows = Windows { factory: Some(factory), args, proxy, hosts: Vec::new(), gpu: Rc::default() };
     crate::open_url_in::prepare();
     let result = event_loop.run_app(&mut windows);
     crate::render::discard_prewarm();
     crate::clipboard::shutdown(); // Also cover an event-loop error before `exiting`.
+    crate::ready_signal::clear();
     result.map_err(|error| format!("run: {error}"))
 }
 

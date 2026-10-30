@@ -26,9 +26,10 @@ impl<S: 'static> Live<S> {
 
     /// The column at window point `x`, in a window `width` wide.
     pub(crate) fn region_at(&self, x: f32, width: f32) -> Region {
-        if x < SIDEBAR + 1.0 {
+        let (sidebar_w, side_w) = self.widths(width);
+        if x < sidebar_w + 1.0 {
             Region::List
-        } else if x >= width - SIDE {
+        } else if x >= width - side_w {
             Region::Side
         } else {
             Region::Stage

@@ -8,10 +8,12 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use std::{cell::{Cell, RefCell}, collections::VecDeque, rc::Rc};
 use crate::{OverlayInput, OverlayLevel, OverlayOptions, OverlaySupport};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SPI_GETWORKAREA, SetWindowLongPtrW, SetWindowPos, ShowWindow, SystemParametersInfoW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     WS_EX_TRANSPARENT,
 };
+
+mod pointer;
 
 fn hwnd(window: &winit::window::Window) -> Option<HWND> {
     let RawWindowHandle::Win32(h) = window.window_handle().ok()?.as_raw() else { return None };
@@ -86,7 +88,7 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
 
 /// Per-window input owner; the shared low-level hook observes but never consumes events.
 pub(crate) struct OverlayWindow {
-    watch: Option<crate::win32_pointer::MouseWatch>,
+    watch: Option<crate::win32::pointer::MouseWatch>,
     wake: Option<crate::Waker>,
     input: Rc<Input>,
     observing: bool,
@@ -133,7 +135,7 @@ impl OverlayWindow {
 
     fn refresh_watch(&mut self) {
         if self.input.visible.get() && self.input.track() {
-            if self.watch.is_none() { self.watch = Some(crate::win32_pointer::MouseWatch::new(self.wake.clone())); }
+            if self.watch.is_none() { self.watch = Some(crate::win32::pointer::MouseWatch::new(self.wake.clone())); }
             if let Some(watch) = &self.watch { watch.geometry(self.input.hwnd, self.input.follow.get()); }
         } else { self.watch.take(); }
     }
@@ -202,6 +204,14 @@ pub(crate) fn show_overlay(window: &winit::window::Window) {
             }
         }
     }
+}
+
+/// Hides an overlay `show_overlay` showed. winit never saw that show, so its
+/// `set_visible(false)` finds nothing to change and leaves the window on screen.
+pub(crate) fn hide_overlay(window: &winit::window::Window) {
+    let Some(hwnd) = hwnd(window) else { return };
+    // SAFETY: a Win32 call on a live window owned by this thread.
+    unsafe { ShowWindow(hwnd, SW_HIDE); }
 }
 
 /// The bottom of the primary display's work area (above the taskbar), in physical pixels.

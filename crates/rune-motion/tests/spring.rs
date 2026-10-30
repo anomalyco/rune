@@ -174,3 +174,17 @@ fn css_linear_export() {
     assert!(css.starts_with("linear(0,") && css.ends_with(",1)"));
     assert!(ms > 200 && ms < 1000, "{ms}");
 }
+
+#[test]
+fn the_none_spring_is_an_instant_curve_everywhere_a_spring_converts() {
+    use rune_motion::{Anim, Curve, Effect, PropClass, Spring, SpringPair, Transition};
+    assert_eq!(Curve::from(Spring::NONE), Curve::Instant);
+    assert_eq!(Anim::from(Spring::NONE).curve, Curve::Instant);
+    assert_eq!(Anim::from(SpringPair::NONE).curve, Curve::Instant);
+    // Reduce Motion keeps it instant; a short spring would become a fade.
+    assert_eq!(PropClass::Presence.reduce(Spring::NONE.into()), Curve::Instant);
+    let t = Transition::none();
+    assert_eq!((t.insertion, t.removal, t.springs), (Effect::IDENTITY, Effect::IDENTITY, SpringPair::NONE));
+    // Any other spring, however short, is still a spring.
+    assert_eq!(Curve::from(Spring::new(0.001, 0.0)), Curve::Spring(Spring::new(0.001, 0.0)));
+}

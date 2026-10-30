@@ -7,8 +7,11 @@ O=${1:-target/motion-audit}
 mkdir -p "$O"
 cargo build --release -p todo -p settings -p kit-gallery -p odometer
 cargo build --release -p rune-kit --example shell
+cargo build --release -p rune --example growth_reorder --example keep_stuck --example sticky
 B=${CARGO_TARGET_DIR:-target}/release
 SH=$B/examples/shell
+GR=$B/examples/growth_reorder
+KS=$B/examples/keep_stuck
 S=scripts/motion-audit/scenarios
 FPS=120
 
@@ -36,4 +39,13 @@ run shell-resize      3.6 $SH --script $S/shell-resize.json
 run shell-reorder     3.6 $SH --script $S/shell-reorder.json
 run shell-virtual-peek 5.0 $SH virtual --script $S/shell-peek.json
 run shell-virtual-reorder 3.6 $SH virtual --script $S/shell-reorder-virtual.json
+run shell-window-resize 3.0 $SH --script $S/shell-window-resize.json
+run shell-virtual-window-resize 3.0 $SH virtual --script $S/shell-window-resize.json
+run growth-reorder    4.2 $GR --script $S/growth-reorder.json
+run growth-reorder-virtual 4.0 $GR virtual --script $S/growth-reorder-virtual.json
+run keep-stuck        3.2 $KS --script $S/keep-stuck.json
+run growth-reorder-grow 3.5 $GR steer --script $S/growth-reorder-grow.json
+run growth-reorder-gap 4.7 $GR steer --script $S/growth-reorder-gap.json
+run growth-reorder-flight 2.6 $GR steer --script $S/growth-reorder-flight.json
+run sticky-scroll     1.6 $B/examples/sticky --script crates/rune/examples/sticky.json
 ls "$O"

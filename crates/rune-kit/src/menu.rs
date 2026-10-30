@@ -208,6 +208,14 @@ pub(crate) fn dismissal<S: 'static>(key: String, close: impl Fn(&mut S) + 'stati
     (scrim(key, move |s: &mut S| outside(s)), Box::new(move |e: El| e.modal(true, move |s: &mut S| close(s))))
 }
 
+/// Mounts a dismissal's scrim into `layer` and hands back its modal.
+pub(crate) fn mount_dismiss(dismiss: Option<(El, Modal)>, layer: &mut Vec<El>) -> Option<Modal> {
+    dismiss.map(|(scrim, modal)| {
+        layer.push(scrim);
+        modal
+    })
+}
+
 impl Menu {
     pub fn new(key: impl Into<String>) -> Menu {
         Menu {
@@ -308,10 +316,7 @@ impl Menu {
         if !self.open {
             return trigger;
         }
-        let modal = self.dismiss.take().map(|(scrim, modal)| {
-            layer.push(scrim);
-            modal
-        });
+        let modal = mount_dismiss(self.dismiss.take(), layer);
         let (placement, gutter, key) = match self.at {
             Some((x, y)) => {
                 let point = format!("{}-point", self.key);

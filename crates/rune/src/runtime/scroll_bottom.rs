@@ -272,16 +272,17 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn report_at_bottom(&mut self) {
         for i in 0..self.nodes.len() {
             let n = &self.nodes[i];
-            if (n.on_at_bottom.is_none() && n.on_far_from_bottom.is_none()) || self.subtree_exiting(i) { continue; }
+            let Some(h) = n.handlers.get().filter(|h| h.on_at_bottom.is_some() || h.on_far_from_bottom.is_some()) else { continue };
+            if self.subtree_exiting(i) { continue; }
             let Some(st) = self.scrolls.get_mut(&n.id) else { continue };
-            if n.on_at_bottom.is_some() {
+            if h.on_at_bottom.is_some() {
                 let at = st.offset >= st.max - AT_BOTTOM;
                 if st.at_bottom != Some(at) {
                     st.at_bottom = Some(at);
                     self.queue.push(Action::AtBottom(n.path.clone(), at));
                 }
             }
-            if let Some((min, _)) = &n.on_far_from_bottom {
+            if let Some((min, _)) = &h.on_far_from_bottom {
                 // Rows collapsing measure from the end they head for, glide or not.
                 let end = st.laid.map_or(st.max, |end| end.min(st.max));
                 let far = end - st.offset > f64::from(min.max(n.local.h));

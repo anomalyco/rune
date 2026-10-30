@@ -2,26 +2,18 @@
 
 use super::*;
 
-/// The open window. Fields drop in order: the surface before its window.
+/// How long `on_ready` waits for a first frame that never comes, as when the window opens
+/// hidden or its drawable never arrives. A covered or occluded window doesn't wait for it.
+pub(super) const READY_FALLBACK: Duration = Duration::from_secs(1);
+
+/// The open window. Fields drop in order: what's native to the OS, then the surface before its
+/// window.
 pub(super) struct Win {
+    #[cfg_attr(not(any(target_os = "macos", all(unix, not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+    pub(super) native: Native,
     pub(super) first_frame: FirstFrame,
-    #[cfg(target_os = "macos")]
-    pub(super) pacing: Option<crate::display_link::DisplayLink>,
-    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-    pub(super) activator: Option<crate::activation::Activator>,
-    /// Reports when each drawable reached the screen, while tracing or for `shadow`.
-    #[cfg(target_os = "macos")]
-    pub(super) present: Option<crate::present_time::metal::LayerHook>,
-    /// Re-samples a transparent window's system shadow once its new pixels land.
-    #[cfg(target_os = "macos")]
-    pub(super) shadow: Option<crate::macos_window_shape::Shadow>,
     pub(super) surface: wgpu::Surface<'static>,
     pub(super) config: wgpu::SurfaceConfiguration,
-    #[cfg(target_os = "macos")]
-    pub(super) panel: Option<crate::macos::Panel>,
-    /// `El::system_material` views behind the Metal layer.
-    #[cfg(target_os = "macos")]
-    pub(super) materials: crate::system_material::macos::Materials,
     pub(super) window: Arc<Window>,
     /// False while hidden (platforms that can hide a window keep it for the next open).
     pub(super) visible: bool,
@@ -37,20 +29,6 @@ pub(super) struct Win {
     pub(super) hidden_pace: HiddenPace,
     pub(super) cursor: crate::os_cursor::OsCursor,
     pub(super) alpha: Option<crate::surface_alpha::AlphaSurface>,
-    #[cfg(target_os = "macos")]
-    pub(super) help: crate::macos_help::NativeHelp,
-    #[cfg(target_os = "macos")]
-    /// Redraws on full screen changes.
-    pub(super) full_screen: mac::FullScreenWatch,
-    /// Fn presses, which winit doesn't send, while the app wants modifier keys.
-    #[cfg(target_os = "macos")]
-    pub(super) fn_key: Option<crate::fn_key::FnKey>,
-    /// Initial frames (`Host::try_create` and one follow-up) that may draw before AppKit
-    /// reports the new window on screen.
-    #[cfg(target_os = "macos")]
-    pub(super) prime: u8,
-    #[cfg(target_os = "macos")]
-    pub(super) launch_drawables: LaunchDrawables,
     /// Only a due timer asked for the next frame, which may then draw nothing new.
     pub(super) quiet: bool,
     /// The last frame presented, while the window rests.
@@ -67,7 +45,7 @@ impl Win {
         self.surface.configure(device, &self.config);
         if let Some(alpha) = &mut self.alpha { alpha.resize(device, (width, height)); }
         #[cfg(target_os = "macos")]
-        if let Some(shadow) = &self.shadow { shadow.redraw(); }
+        if let Some(shadow) = &self.native.shadow { shadow.redraw(); }
         true
     }
 }
@@ -75,9 +53,32 @@ impl Win {
 /// A reveal requested before the hidden frame completes is held behind the fence, as is a
 /// reveal of cached pixels older than the state. Hiding cancels that intent, including when
 /// the GPU frame completes later. `deadline` is (next retry, give up) while it prepares.
+/// `on_ready` runs at the first frame, or at `ready_at` when there is none to wait for: the
+/// window is covered, occluded or hidden, or no frame came within `READY_FALLBACK` of opening.
 #[derive(Default)]
-pub(super) struct FirstFrame { pub(super) ready: bool, pub(super) reveal: bool, pub(super) notified: bool, pub(super) deadline: Option<(Instant, Instant)> }
+pub(super) struct FirstFrame {
+    pub(super) ready: bool,
+    pub(super) reveal: bool,
+    pub(super) notified: bool,
+    pub(super) deadline: Option<(Instant, Instant)>,
+    /// `on_ready` has run for this native window.
+    pub(super) ran: bool,
+    pub(super) ready_at: Option<Instant>,
+}
 impl FirstFrame {
+    /// A window opened at `now`.
+    pub(super) fn opened(now: Instant) -> Self { Self { ready_at: Some(now + READY_FALLBACK), ..Default::default() } }
+    /// A frame went by undrawn because the window isn't on screen, which may last until it is
+    /// uncovered: `on_ready` stops waiting for a drawn one.
+    pub(super) fn skipped(&mut self, now: Instant) {
+        if !self.ran { self.ready_at = Some(self.ready_at.map_or(now, |at| at.min(now))); }
+    }
+    /// When `on_ready` runs without a first frame, until it has run.
+    pub(super) fn ready_deadline(&self) -> Option<Instant> { self.ready_at.filter(|_| !self.ran) }
+    /// `on_ready` is owed without a first frame.
+    pub(super) fn ready_due(&self, now: Instant) -> bool { self.ready_deadline().is_some_and(|at| at <= now) }
+    /// Takes the first `on_ready`: true once per native window.
+    pub(super) fn take_ready(&mut self) -> bool { !std::mem::replace(&mut self.ran, true) }
     /// Whether to show the cached frame now. One already on screen shows at once; its next
     /// frame (or retry) draws a stale state, with no first-frame deadline.
     pub(super) fn request_reveal(&mut self, stale: bool, visible: bool) -> bool {
@@ -199,8 +200,8 @@ impl Win {
     pub(super) fn show(&self, focus: bool) {
         #[cfg(target_os = "macos")]
         {
-            if let Some(shadow) = &self.shadow { shadow.shown(); }
-            if let Some(panel) = &self.panel {
+            if let Some(shadow) = &self.native.shadow { shadow.shown(); }
+            if let Some(panel) = &self.native.panel {
                 panel.show(std::time::Duration::ZERO);
                 if focus { panel.request_keys(); }
                 return;
@@ -215,23 +216,23 @@ impl Win {
         #[cfg(all(feature = "native-file-dialog", target_os = "linux"))]
         crate::file_dialog::window_focus(&self.window, false);
         #[cfg(target_os = "macos")]
-        if let Some(shadow) = &self.shadow { shadow.hidden(); }
+        if let Some(shadow) = &self.native.shadow { shadow.hidden(); }
         #[cfg(target_os = "macos")]
-        if let Some(panel) = &self.panel { panel.hide(std::time::Duration::ZERO); return; }
+        if let Some(panel) = &self.native.panel { panel.hide(std::time::Duration::ZERO); return; }
         self.window.set_visible(false);
     }
 
     /// Its last frame is on screen and nothing has asked for another since.
     pub(super) fn rests(&self) -> bool {
         #[cfg(target_os = "macos")]
-        if self.prime > 0 { return false; }
+        if self.native.prime > 0 { return false; }
         self.presented.is_some()
     }
 
     /// The display link's next tick after `now`, while it runs.
     pub(super) fn next_tick(&self, now: Instant) -> Option<Instant> {
         #[cfg(target_os = "macos")]
-        return self.pacing.as_ref().filter(|p| p.running()).map(|p| now + Duration::from_secs_f64(1.0 / p.refresh_hz()));
+        return self.native.pacing.as_ref().filter(|p| p.running()).map(|p| now + Duration::from_secs_f64(1.0 / p.refresh_hz()));
         #[cfg(not(target_os = "macos"))]
         { let _ = now; None }
     }
@@ -239,7 +240,7 @@ impl Win {
     /// Whether the display link drives redraws. Other platforms redraw on request.
     pub(super) fn paced(&self) -> bool {
         #[cfg(target_os = "macos")]
-        return self.pacing.as_ref().is_some_and(|p| p.running());
+        return self.native.pacing.as_ref().is_some_and(|p| p.running());
         #[cfg(not(target_os = "macos"))]
         false
     }
@@ -257,7 +258,7 @@ impl Win {
     /// What paces the window's frames, for its stats.
     pub(super) fn pacing_state(&self, moving: bool) -> Pacing {
         #[cfg(target_os = "macos")]
-        return crate::display_link::pacing(self.pacing.as_ref(), moving);
+        return crate::display_link::pacing(self.native.pacing.as_ref(), moving);
         #[cfg(not(target_os = "macos"))]
         if moving { Pacing::Vsync } else { Pacing::Idle }
     }
@@ -273,7 +274,7 @@ impl Win {
     /// as visible).
     #[cfg(target_os = "macos")]
     pub(super) fn natively_occluded(&self) -> bool {
-        match &self.panel {
+        match &self.native.panel {
             Some(panel) => panel.occluded(),
             None => crate::macos::window_occluded(&self.window),
         }
@@ -281,7 +282,7 @@ impl Win {
 
     pub(super) fn stop_pacing(&mut self) {
         #[cfg(target_os = "macos")]
-        if let Some(pacing) = &mut self.pacing { pacing.stop(); }
+        if let Some(pacing) = &mut self.native.pacing { pacing.stop(); }
         #[cfg(target_os = "macos")]
         self.present_with_transaction(false);
     }
@@ -289,19 +290,49 @@ impl Win {
     /// Presents drawables inside Core Animation transactions, while the frame moves.
     #[cfg(target_os = "macos")]
     pub(super) fn present_with_transaction(&mut self, on: bool) {
-        self.materials.set_moving(&self.surface, on);
+        self.native.materials.set_moving(&self.surface, on);
     }
 
     /// Presents the frame in the transaction that resizes the window while the user drags its
     /// edge. Before the drawable is acquired: wgpu reads `presentsWithTransaction` then.
     #[cfg(target_os = "macos")]
     pub(super) fn set_live_resize(&mut self, on: bool) {
-        self.materials.set_live(&self.window, &self.surface, on);
+        self.native.materials.set_live(&self.window, &self.surface, on);
     }
 
     pub(super) fn focus(&self) {
         #[cfg(target_os = "macos")]
-        if let Some(panel) = &self.panel { panel.request_keys(); return; }
+        if let Some(panel) = &self.native.panel { panel.request_keys(); return; }
         self.window.focus_window();
     }
+}
+
+/// `on_ready` starts an app's live work, so it can't wait on a drawable: a window launched
+/// covered, occluded or hidden by the system may not draw for as long as it stays that way.
+/// It runs at the first frame skipped for being off screen, or `READY_FALLBACK` after opening
+/// when no frame comes at all; a window on screen still runs it after its first frame.
+#[test]
+fn on_ready_runs_for_a_window_launched_occluded_or_hidden() {
+    let now = Instant::now();
+    let ms = Duration::from_millis;
+    let mut shown = FirstFrame::opened(now);
+    assert!(!shown.ready_due(now + ms(16)), "a window on screen waits for its first frame");
+    shown.ready = true;
+    assert!(shown.pending() && !shown.complete());
+    assert!(shown.take_ready(), "its first frame runs on_ready");
+    assert!(!shown.take_ready() && shown.ready_deadline().is_none(), "once");
+
+    let mut covered = FirstFrame::opened(now);
+    covered.skipped(now + ms(30));
+    assert!(covered.ready_due(now + ms(30)) && covered.take_ready(), "the first covered frame runs on_ready");
+    assert!(!covered.ready && !covered.pending(), "the window isn't ready until it draws");
+    covered.skipped(now + ms(60));
+    assert_eq!(covered.ready_deadline(), None, "and skipping again doesn't run it again");
+    covered.ready = true; // Uncovered.
+    assert!(covered.pending() && !covered.complete() && !covered.take_ready(), "drawing at last doesn't either");
+
+    let mut hidden = FirstFrame::opened(now);
+    assert_eq!(hidden.ready_deadline(), Some(now + READY_FALLBACK), "the event loop wakes for it");
+    assert!(!hidden.ready_due(now + READY_FALLBACK - ms(1)));
+    assert!(hidden.ready_due(now + READY_FALLBACK) && hidden.take_ready(), "a window that never draws runs it after the fallback");
 }

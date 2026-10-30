@@ -369,3 +369,91 @@ synthetic vocabulary is replaced.
 Re-run `layout_text_cost` across `--mode time`, `--mode sample` and `--mode heap`. Start the
 native flex solver (§5.3) or `parley_engine` line breaker (§5.4) only if a workload still trips
 the §1 or §2 trigger.
+
+## Spike results
+
+Throwaway code on branch `spike/engine`: `research/engine-spike/paragraph_stack.rs`, compiled as
+a test module of `rune` (it needs `layout_blocks_inner` and `test_alloc`). Timings use
+`--profile perf` with `debug-assertions` on for the `rune` crate only, because its lib tests need
+them. Parley and HarfRust build at plain perf settings. Modes alternate order on every keystroke
+or round, and the numbers are medians.
+
+### Q1: one cached layout per `\n` paragraph, stacked
+
+**Equivalence.** The matrix is every `rewrap_tests` case plus Arabic followed by digits. Each case
+is joined as `[case, plain, empty, case]`, `[plain, case]`, and both of those again with a
+trailing `\n`. Every join runs at 1x and 2x, at widths 1200, 433.5, 210 and unbounded: 384 runs
+per mode. A run is exact when every line box, run, glyph and pill box matches within 1e-3 px.
+
+| Stacking rule | Exact runs |
+| --- | --- |
+| Each paragraph laid out alone, tops summed | 264 / 384 |
+| + every paragraph forced to the text's base direction | 318 / 384 |
+| + line tops rounded from the running total, unbounded width aligned to the widest paragraph | **384 / 384** |
+
+The base rule is that each paragraph keeps its `\n`, and every paragraph but the last drops the
+empty line after it. With that rule, trailing newlines, empty lines and their heights never
+caused a mismatch. Three things did:
+
+1. **Base direction.** Parley sets one base level per layout, from the first strong character.
+   A paragraph laid out alone takes its own: a Latin line after Arabic goes LTR instead of RTL,
+   which moves its alignment and run order. This affected RTL, RTL justified, Arabic then
+   digits, end and centred. Fix: pass the whole text's direction to each paragraph's builder.
+   Bidi reordering never crosses a `\n`, so nothing else leaked between paragraphs.
+2. **Line-top rounding.** Parley rounds each line's top from the unrounded sum of the line
+   heights above it. A fractional line height (monospace tabs at 32.5 px, pill lines at 1x)
+   shifts the lines after it by 0.5 px when a paragraph restarts from a rounded top. Fix: round
+   each line top from the running unrounded total, not the paragraph's own top.
+3. **Unbounded width with centre, end or RTL alignment.** One layout aligns every line in its
+   widest line; a paragraph alone aligns in its own widest line. Fix: shift each paragraph by
+   (widest paragraph − its width) × the alignment share. When the widest paragraph changes, the
+   other paragraphs move but nothing is reshaped.
+
+**Typing.** The `edit` workload is a 50 KB note in 695 paragraphs, with one character typed mid-note
+per keystroke at 1392 px width and 2x scale. Each mode ran 480 keystrokes:
+
+| Mode | cpu ms median | p95 | Parley heap after open | after 480 keys |
+| --- | --- | --- | --- | --- |
+| whole (one layout) | 15.2 | 16.7 | 5.39 MB | 5.46 MB |
+| naive (every paragraph through the cache) | 0.23 | 0.31 | 4.03 MB | 7.21 MB |
+| incremental (only the edited paragraph) | **0.10** | **0.14** | **4.03 MB** | 7.22 MB |
+
+Across three runs, incremental stayed between 0.10 and 0.18 ms median and between 0.14 and
+0.26 ms p95. That is about 150× faster than one layout, and the gate is 1.2 ms. The live paragraph
+layouts take 4.03 MB. Heap here means live growth from opening, which is not how research 31
+counted its 13.8 MB.
+
+The growth to 7.2 MB comes from the cache's stale copies of the edited paragraph. Clearing the
+cache frees 3.18 MB while the live paragraphs stay. The stale budget (`STALE_TEXT`, 64 KB) is
+charged in text bytes plus 64 per entry, but a 605-byte paragraph's layout holds about 31 KB.
+So about 100 superseded copies fit, and the total settles near 64 KB × ~50.
+
+**Verdict: go.** Stacking matches exactly with the three rules above, and typing is 0.1 ms. The
+heap gate holds only if the layout cache charges stale entries by layout heap, or an edited
+paragraph's old layout is dropped instead of kept as stale.
+
+### Q2: per-word `parley_engine` shaper cache versus Parley paragraph shaping
+
+The first ~50 KB of each file, cut at a newline. Inter 15 pt for the Markdown files and IBM Plex
+Mono 13 pt for `runtime.rs`, at 2x and 1392 px. The cache is a word-keyed map of shaped glyphs;
+a miss shapes the word alone. A greedy breaker splits lines at spaces. Each row is the median of
+20 rounds, with a cold cache every round.
+
+| File | tokens | distinct | hit rate | Parley ms | cache ms | + analysis | speedup | with analysis | warm cache |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| PLAN.md | 7,480 | 3,136 | 58.1% | 14.36 | 7.68 | 9.21 | 1.87× | **1.56×** | 8.9× |
+| CHANGELOG.md | 7,231 | 2,980 | 58.8% | 14.20 | 8.26 | 9.73 | 1.72× | **1.46×** | 9.0× |
+| runtime.rs | 6,252 | 2,661 | 57.4% | 6.30 | 2.69 | 4.02 | 2.34× | **1.57×** | 4.1× |
+
+On real text only 57–59% of words repeat within 50 KB, against 89% for the synthetic note's 772
+distinct words. "+ analysis" adds the per-paragraph `Analyzer` pass that any real breaker needs
+for break opportunities, bidi and script, and with it the cache wins only 1.5×. "Warm cache"
+means every word was already shaped, as on a re-wrap. That case is not the cache's to win: Parley
+re-breaks an existing layout without reshaping, and per-paragraph caching already makes typing
+0.1 ms.
+
+The cache side is also an upper bound. It uses one font with no fallback, a fixed advance for
+spaces, no kerning or ligatures across spaces, and breaks only at `' '`, not UAX #14.
+
+**Verdict: kill** the custom breaker. A cold cache wins 1.5×, below the 2× bar, and the case
+where it wins big (a warm cache) is already cheap with Parley plus per-paragraph layouts.

@@ -51,6 +51,53 @@ example. Disable Rune's `dev`, `hot` and `native-file-dialog` features on wasm. 
 filesystem, process and thread dependencies behind target conditions in your app too.
 Use `rune::time::Instant` for deadlines passed to Rune; it is `std::time::Instant` on native.
 
+## Mount in a page
+
+By default Rune appends its own canvas, covers the viewport and stops the body scrolling.
+`App::canvas_id("id")` mounts onto a `<canvas id="id">` the page already has instead:
+
+```rust,ignore
+// Inline in an article, as tall as its content; the page keeps scrolling.
+App::new(spec).canvas_id("chart").fit_content_height().try_run()?;
+// Full screen inside a single-page app's route, which owns the canvas.
+App::new(spec).canvas_id("route-canvas").full_viewport().try_run()?;
+```
+
+Inline, the canvas is as wide as its parent and as tall as `AppSpec::size` (or its content with
+`fit_content_height`, when vertical wheel and touch pans scroll the page); safe-area insets
+are zero and the title doesn't touch `document.title`. With `full_viewport` the canvas is fixed to
+the visual viewport like Rune's own, so an ancestor with a `transform` or `filter` would
+become its containing block; mount it outside one.
+
+`AppHandle::quit` unmounts the app when its route goes away: the loop stops, the GPU device is
+destroyed, Rune's listeners come off the page, and the body style and title it changed go back.
+Rune removes a canvas it made; a passed-in canvas stays, with its own style and attributes
+back, for the page to remove. One app runs per page at a time. An app started while another is
+quitting mounts once that one has gone, so a route can swap apps in the same tick:
+
+```rust,ignore
+let handle = app.handle();           // keep it with the route
+App::new(spec).canvas_id("route-canvas").full_viewport().try_run()?; // after handle.quit()
+```
+
+## Images
+
+`ImageCache::url` fetches an image and lets the browser decode it with its own codecs
+(`createImageBitmap`, off the main thread), so WebP, AVIF and anything else the browser reads
+work, turned upright by EXIF orientation. The pixels land through the same mip path as
+`ImageCache::rgba` and the cache's waker draws the frame. `ImageCache::file` does the same on
+web with its path as a URL relative to the page, so one call loads a bundled asset in both
+builds:
+
+```rust,ignore
+let logo = cache.file("assets/logo.webp", 48.0, env.scale); // disk on native, fetched on web
+let avatar = cache.url(&user.avatar_url, 32.0, env.scale);  // size and scale matter for SVG only
+```
+
+SVG (by `Content-Type` or a `.svg`/`.svgz` path) rasterizes with Rune's renderer at the size
+asked for. Images over 8192 pixels a side are refused before their pixels are read, and a
+failed request or a cross-origin image without CORS headers resolves to `Image::error`.
+
 ## Fonts and browser input
 
 Web includes Inter Regular and IBM Plex Mono Regular. There is no system-font discovery.
@@ -80,7 +127,17 @@ without an asynchronous clipboard read. Secret-copy requests report failure beca
 browser cannot promise native clipboard-history exclusion or conditional timed clearing.
 
 `rune::web::open_url` accepts HTTP(S) and mail links and opens a tab with `noopener,noreferrer`.
-Call it from a user input handler. `Cx::safe_area()` returns top/right/bottom/left insets in
+Call it from a user input handler. `Tx::open_url_same_tab` (or `rune::web::open_url_same_tab`)
+replaces the page instead, and takes links relative to the page (`/notes/42`). A single-page
+app routes those itself with `App::same_tab_router`: it gets the absolute URL of each link on
+the page's origin and returns true when it handled it; otherwise, and for other origins, the
+browser loads the link with `location.assign`.
+
+```rust,ignore
+App::new(spec).same_tab_router(|href| router.push(href)) // true: routed with pushState
+tx.open_url_same_tab("/notes/42")?;                       // from a handler
+```
+ `Cx::safe_area()` returns top/right/bottom/left insets in
 points (zero on native). Apply them inside a full-canvas background. The canvas follows
 `visualViewport` when a software keyboard reduces the visible height. Keep the generated
 page's `viewport-fit=cover` meta tag and the textarea's 16 px font size.

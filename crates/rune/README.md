@@ -280,8 +280,10 @@ policy changes are applied in the same mutation phase.
 - **Icons** (`icon(&Icon, size)`): SVG icon bodies (as in `@opencode/ui`'s catalog) rasterised into
   the glyph atlas.
 - **Themes as data** (`theme.rs`): `Theme::from_json(src, dark)` reads named tokens (hex, rgba or
-  references, plus numbers). `"blend": {"mode": "srgb", "over": token}` re-solves translucent tokens so
-  linear-light blending matches a browser's sRGB blending (`srgb_equivalent`, `Theme::alpha`). An app's own theme lives
+  references, plus numbers). `"blend": {"mode": "srgb", "over": token}` says translucent tokens are
+  authored for a browser's sRGB blending: they resolve as authored in a window that blends in sRGB
+  (the default) and re-solved over `over` in one that blends in linear light, following the mode
+  of the window building the view (`theme::blends_srgb`, `theme::for_blend`, `Theme::alpha`). An app's own theme lives
   in the app; core ships only the format.
 - **Scrolling** (`.scroll(ScrollSpec { stick_bottom })`): a runtime-owned fractional offset, wheel 1:1,
   fling decay, and follow-the-end. A new viewport opens at its end on its first frame.
@@ -503,7 +505,7 @@ std::thread::spawn(move || {
     handle.update(|s, tx| ..); // change state on the UI thread; commits on the next frame
     handle.close();            // as the close button (on_close runs)
     handle.minimize();         // as the minimize button
-    handle.quit();             // run returns
+    handle.quit();             // run returns; on web, unmounts
 });
 app.run();
 ```
@@ -606,6 +608,8 @@ app.run();
 
 A small app puts its first window, with content, on screen about 300 ms after `open` on Apple silicon.
 The full page, with the measurement method, is "Launch fast" on the docs site (`site/src/pages.tsx`).
+Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`); `scripts/app-audit <repo>` greps an
+app for the patterns it lists.
 
 - **`rune::prewarm_gpu()` first in `main`.** On macOS it makes the adapter, device and uber pipeline on a thread
   while AppKit starts; the first window or overlay opened at launch takes them, waiting if the thread is still
@@ -625,9 +629,16 @@ The full page, with the measurement method, is "Launch fast" on the docs site (`
   The first view build and layout run inside creation, right after the window-created callbacks, so keep the initial
   state, `view` and `on_window` cheap.
 - **Defer the rest to `on_ready`.** It runs once per native creation after the first frame is ready (for a
-  launcher, while hidden). Capture `app.handle()` and call `handle.update(|s, tx| ..)` there to start status
+  launcher, while hidden). A window that isn't on screen (covered, occluded, hidden or on another Space) doesn't
+  wait to draw: it runs at the first frame skipped for that, or a second after the window opens. Capture `app.handle()` and call `handle.update(|s, tx| ..)` there to start status
   items, HUDs, secondary windows, network and indexing; updates run on the UI thread even with no window showing.
   There is no state-level first-frame hook yet.
+- **A launcher can wait for readiness.** With `RUNE_READY_DIR` set, the process writes
+  `$RUNE_READY_DIR/<bundle id>.<pid>` (the main bundle's identifier on macOS, else the executable's name) right
+  after its first `on_ready` returns, and removes it when it exits normally. It's one line of JSON,
+  `{"pid":123,"bundle_id":"com.example.app","ready_ms":412,"rune":"0.1.0"}`, with `ready_ms` counted from the
+  process's start; the directory is made 0700 if it's missing. A process killed outright leaves its file, so treat
+  one whose PID isn't running as stale. Without the variable nothing is written.
 - **Keep the first second still.** Rune animates nothing then, so every frame is the app's. Land state that
   arrives right after launch (a system setting, a first network answer) with `tx.instant()`, or don't animate it.
   One settings window's launch fade drew about 85 frames in its first second instead of 4 to 8, and drawing back to
@@ -658,6 +669,44 @@ The full page, with the measurement method, is "Launch fast" on the docs site (`
 | Cold shader cache, `Renderer::new` alone (10 rounds) | 232 | 85 |
 
 Absolute times were high because the machine was busy; the differences are what matter.
+
+### Requests off the main thread (`rune::Latest`)
+
+A search box, a mention list or a path completer asks once per keystroke and wants only the newest
+answer. Doing it in the handler blocks the window for the whole round trip; debug builds warn when a
+handler or `poll` spends 8 ms waiting. `Latest<T>` runs the request on a worker and lands the newest
+answer:
+
+```rust
+// init: build it once, with its debounce.
+results: Latest::default().debounce(Duration::from_millis(60)),
+// setup: the waker runs `poll` when an answer lands. Pending state and debounce stay.
+s.results.set_waker(waker);
+// A handler, on every keystroke:
+s.results.request(query.clone(), |q| index.search(&q));
+// poll: true only when an answer landed.
+let Some(hits) = s.results.take() else { return false };
+s.hits = hits;
+true
+```
+
+- **Latest wins.** Each request supersedes the earlier ones. One that hasn't started never runs; one
+  already running finishes, and its answer is dropped, even if it finishes after the newer one.
+- **One wake per answer.** The waker fires once when an answer lands, and `take` returns it once, so
+  `poll` returns true once and an idle window stays idle. `is_pending` drives a spinner.
+- **Skip without waking.** `request_opt(input, |q| -> Option<T>)` lands nothing when the work
+  returns `None` and doesn't wake the window. It still supersedes older requests, so their
+  answers stay dropped.
+- **Call it from `poll`.** `request_if_changed(&key, |k| ..)` does nothing when `key == ` the last
+  such request's key (`K: Clone + PartialEq`), so work isn't restarted nor its debounce pushed
+  back. `request`, `request_opt` and `cancel` forget the key.
+- **Debounce** (optional) waits for that long without a newer request before starting one.
+- **No thread per request.** Up to four shared workers, started on demand, exit after ten idle
+  seconds. On the web the work runs on the main thread from `spawn_local`, after the debounce.
+- **Cancel** drops pending and running requests; dropping the `Latest` cancels it. State outlives a
+  closed window, so call `cancel` from `App::on_close` to stop requests on close.
+
+Only the closure runs on the worker; the answer reaches state in `poll`, on the UI thread.
 
 ### Relaunching a Mac app (`scripts/mac-app`, `rune-mac`)
 
@@ -952,6 +1001,14 @@ font, name CSS's `ui-monospace` in it: `families: ("Inter", "ui-monospace")`. It
 the same families as `Family::SystemMono`, and the rest of the list follows it, so
 `"ui-monospace, Menlo"` falls back to Menlo where none is installed. Inline code then
 matches a code block set in `Family::SystemMono`.
+
+`tx.set_font_families(sans, mono)` swaps what's behind the slots while the app runs, for a
+UI or code font picker; it takes the same lists as `AppSpec::families`. Every window and
+overlay follows on its next frame. Each drops the layouts it shaped in the old families,
+re-runs memoized subtrees, lays out again and draws one frame. `rune::text::measure` follows
+too. A cache of measured sizes outside Rune should key on `rune::text::font_epoch()`. A family
+that isn't installed falls back as it would at launch, and asking for the families the slots
+already hold costs nothing.
 
 Optical sizing defaults to each run's point size, including rich spans with a
 different size. An explicit `opsz` variation wins over the default; `.optical_size`
@@ -1607,11 +1664,15 @@ draws:
 let scale = env.scale; // the window's device pixels per point
 let mark = cache.svg(svg_bytes, 16.0, scale);               // fits 16 pt square, crisp at 2×
 let any = cache.load_mime(bytes, "image/svg+xml", 16.0, scale); // from a data URL's MIME type
-let file = cache.file("assets/logo.svg", 48.0, scale);      // read on the worker; not on web
+let file = cache.file("assets/logo.svg", 48.0, scale);      // read on the worker; fetched on web
+let photo = cache.url("https://example.com/p.avif", 96.0, scale); // web: the browser fetches and decodes
 ```
 
 `cache.file` treats `.svg` and `.svgz` paths (or SVG content) as vectors and decodes other
-files like `load`. `cache.load` recognises SVG by its content and rasterizes it at twice its
+files like `load`. On web, `cache.file` and `cache.url` fetch the URL (relative to the page) and
+let the browser decode it off the main thread, so WebP and AVIF work there; SVG still rasterizes
+through resvg. On native `cache.url` takes a path or `file:` URL only: Rune has no HTTP client,
+so fetch remote bytes yourself and call `load`. `cache.load` recognises SVG by its content and rasterizes it at twice its
 own size. SVG text needs fonts resvg isn't given, so convert text to paths. With the feature
 off, SVG images resolve to `Image::error`.
 
@@ -1897,6 +1958,9 @@ For static disabled styling, `El::dim(alpha)` distributes a fixed alpha to each 
 paint in the built subtree, including fills, strokes, text, icons, images and native surfaces.
 Call it after adding children. It neither changes inherited/hit-test opacity nor introduces
 layers. Rune-kit uses this for disabled controls; normal container `opacity` still isolates.
+A dimmed box with a solid fill fades as CSS `opacity` fades it: its outer shadows stay outside
+it, and its fill and gradient fade as one. Content drawn over it (a label, an icon) still fades
+on its own, so it shows a little of the faded fill through it where a layer would not.
 
 The manual kit-gallery `disabled_controls_gpu_cost` benchmark measures the whole GPU frame
 for disabled controls: leaf dimming allocates no layer targets or passes and matches a flat
@@ -1978,7 +2042,8 @@ remain rectangular, including visually clipped corners. The 128-byte instance st
 in attribute 7 `fade[3]`.
 
 For a known opaque neutral backdrop, use `theme::srgb_equivalent(white.alpha(authored_alpha), bg)`
-to match AppKit's sRGB source-over in Rune's linear renderer. Recompute from the current authored
+to match AppKit's sRGB source-over in a window that blends in linear light (`srgb_blend(false)`);
+`theme::for_blend` applies it only in such a window. Recompute from the current authored
 alpha during animation. This changes only alpha and adds no GPU work. It is exact for neutral
 foreground/background pairs apart from quantization, but chromatic pairs are approximate;
 unknown/translucent backdrops, group opacity and overlapping paints require different math.

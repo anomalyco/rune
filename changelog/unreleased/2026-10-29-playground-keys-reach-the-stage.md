@@ -1,1 +1,0 @@
-- The playground's list and side column keep only the keys they use (arrows, Return, J K, triggers, Tab, Esc, and typing in the filter). Every other key, ⌘-chords and digits included, reaches the open story's `AppSpec::on_key`, so its shortcuts work as soon as it opens from the list, without a click on the stage or ⇧Tab.

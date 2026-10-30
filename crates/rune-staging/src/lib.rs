@@ -8,10 +8,24 @@
 //!
 //! Writes land in the order they were made, at the next `flush` or `submit`. A write must be
 //! flushed into an encoder ahead of the commands that read it, or submitted before them.
-//! On the web, whose `writeBuffer` already stages, writes go straight to the queue.
+//! On the web, whose `writeBuffer` already stages, writes go straight to the queue. A backend
+//! whose buffers the CPU can write in place registers a `Direct` writer, and buffer writes it
+//! takes skip the staging.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
+
+/// Writes `data` to `buffer` at `offset` in place, for the commands recorded after it, or
+/// returns false to have it staged. Commands recorded before it keep reading what they would
+/// have, so the write lands no later than a flush would land it.
+pub type Direct = fn(&wgpu::Buffer, u64, &[u8]) -> bool;
+
+static DIRECT: OnceLock<Direct> = OnceLock::new();
+
+/// Registers the process's `Direct` writer. The first one stays.
+pub fn set_direct(direct: Direct) {
+    let _ = DIRECT.set(direct);
+}
 
 /// The size of a new chunk; a larger write gets a chunk sized to its next power of two.
 const CHUNK: u64 = 128 * 1024;
@@ -25,9 +39,11 @@ const MAX_PENDING: u64 = 16 << 20;
 /// Staged texture rows start at this alignment, and `bytes_per_row` is a multiple of it.
 const ROW_ALIGN: u64 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64;
 
-/// A shared handle to one set of staging chunks and the writes pending in them.
+/// A shared handle to one set of staging chunks and the writes pending in them: the chunks,
+/// the count of lost ones, and whether any are pending or mapped (so `flush` and `submit` with
+/// nothing to do never lock).
 #[derive(Clone)]
-pub struct Staging(Arc<Mutex<Inner>>, Arc<AtomicU64>);
+pub struct Staging(Arc<Mutex<Inner>>, Arc<AtomicU64>, Arc<AtomicBool>);
 
 /// Counters, for tests and benchmarks.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -43,6 +59,8 @@ pub struct Stats {
     pub flushes: u64,
     /// Pending writes submitted on their own.
     pub submits: u64,
+    /// Writes made in place by the `Direct` writer, counted in `writes` and `bytes` too.
+    pub direct: u64,
 }
 
 struct Chunk {
@@ -99,7 +117,7 @@ impl Staging {
         Staging(Arc::new(Mutex::new(Inner {
             device: device.clone(), queue: queue.clone(), active: Vec::new(), free: Vec::new(), recycle, returned,
             pending: Vec::new(), pending_bytes: 0, stats: Stats::default(),
-        })), Arc::default())
+        })), Arc::default(), Arc::default())
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -109,6 +127,13 @@ impl Staging {
     /// Stages a write of `data` to `buffer` at `offset`. Both are multiples of 4.
     pub fn write_buffer(&self, buffer: &wgpu::Buffer, offset: u64, data: &[u8]) {
         if data.is_empty() { return; }
+        if let Some(direct) = DIRECT.get() && direct(buffer, offset, data) {
+            let mut s = self.lock();
+            s.stats.direct += 1;
+            s.stats.writes += 1;
+            s.stats.bytes += data.len() as u64;
+            return;
+        }
         let mut s = self.lock();
         if cfg!(target_arch = "wasm32") { return s.queue.write_buffer(buffer, offset, data); }
         let size = data.len() as u64;
@@ -147,6 +172,7 @@ impl Staging {
     /// Records the pending writes into `encoder` here, ahead of what is recorded after them.
     /// `encoder` must be submitted: dropped, the writes never land (`lost` counts it).
     pub fn flush(&self, encoder: &mut wgpu::CommandEncoder) {
+        if !self.busy() { return; }
         let mut s = self.lock();
         if s.pending.is_empty() && s.active.is_empty() { return; }
         s.encode(encoder, self);
@@ -158,6 +184,7 @@ impl Staging {
     /// `flush` unmaps them and must be into the same encoder (or one submitted after it); a
     /// `submit` before then would remap them before `encoder` copies out of them.
     pub fn record(&self, encoder: &mut wgpu::CommandEncoder) {
+        if !self.busy() { return; }
         let mut s = self.lock();
         if s.pending.is_empty() { return; }
         s.copy(encoder);
@@ -166,7 +193,13 @@ impl Staging {
 
     /// Submits the pending writes now, ahead of anything submitted later.
     pub fn submit(&self) {
+        if !self.busy() { return; }
         self.lock().submit(self);
+    }
+
+    /// Whether writes are pending or chunks still mapped since the last `flush` or `submit`.
+    pub fn busy(&self) -> bool {
+        self.2.load(Ordering::Acquire)
     }
 
     /// Whether writes are waiting for a `flush` or `submit`.
@@ -220,6 +253,7 @@ impl Inner {
         self.pending_bytes += size;
         self.stats.writes += 1;
         self.stats.bytes += size;
+        staging.2.store(true, Ordering::Release);
         (chunk.buffer.clone(), at)
     }
 
@@ -246,6 +280,7 @@ impl Inner {
                 if mapped.is_ok() && let Some(chunk) = back.chunk.take() { let _ = back.recycle.send(chunk); }
             });
         }
+        staging.2.store(false, Ordering::Release);
     }
 
     /// Records the pending copies; their chunks stay mapped and active.

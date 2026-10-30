@@ -43,6 +43,39 @@ fn shell(k: &Kit, e: El, sheen: [f32; 2], state: State, invalid: bool, focused: 
 }
 
 
+/// The rich-text builders every field forwards to its inner text element.
+macro_rules! rich_forwarders {
+    () => {
+        pub fn spans(mut self, spans: impl Into<Vec<Span>>) -> Self {
+            let spans = spans.into();
+            self.edits.visual(move |e| e.spans(spans));
+            self
+        }
+        pub fn decorations(self, spans: impl Into<Vec<Span>>) -> Self {
+            self.spans(spans)
+        }
+        pub fn rich_style(mut self, style: RichStyle) -> Self {
+            self.edits.visual(move |e| e.rich_style(style));
+            self
+        }
+        /// See [`El::pill_icon`](rune::El::pill_icon).
+        pub fn pill_icon(mut self, icon: impl Fn(&str) -> Option<&'static Icon> + 'static) -> Self {
+            self.edits.visual(move |e| e.pill_icon(icon));
+            self
+        }
+        /// See [`El::pill_style`](rune::El::pill_style).
+        pub fn pill_style(mut self, style: impl Fn(&str) -> rune::PillStyle + 'static) -> Self {
+            self.edits.visual(move |e| e.pill_style(style));
+            self
+        }
+        /// See [`El::pill_colors`](rune::El::pill_colors).
+        pub fn pill_colors(mut self, bg: Color, fg: Option<Color>) -> Self {
+            self.edits.visual(move |e| e.pill_colors(bg, fg));
+            self
+        }
+    };
+}
+
 /// Edit bindings collected for the inner text field.
 #[derive(Default)]
 struct EditActs {
@@ -63,23 +96,8 @@ impl EditActs {
     fn change<S: 'static>(&mut self, f: impl Fn(&mut S, &mut Tx) + 'static) {
         self.handlers.push(Box::new(move |e: El| e.on_input_change(f)));
     }
-    fn spans(&mut self, spans: Vec<Span>) {
-        self.visual.push(Box::new(move |e: El| e.spans(spans)));
-    }
-    fn rich_style(&mut self, style: RichStyle) {
-        self.visual.push(Box::new(move |e: El| e.rich_style(style)));
-    }
-    fn pill_icon(&mut self, icon: impl Fn(&str) -> Option<&'static Icon> + 'static) {
-        self.visual.push(Box::new(move |e: El| e.pill_icon(icon)));
-    }
-    fn pill_style(&mut self, style: impl Fn(&str) -> rune::PillStyle + 'static) {
-        self.visual.push(Box::new(move |e: El| e.pill_style(style)));
-    }
-    fn pill_colors(&mut self, bg: Color, fg: Option<Color>) {
-        self.visual.push(Box::new(move |e: El| e.pill_colors(bg, fg)));
-    }
-    fn revealed(&mut self, revealed: bool) {
-        self.visual.push(Box::new(move |e: El| e.revealed(revealed)));
+    fn visual(&mut self, f: impl FnOnce(El) -> El + 'static) {
+        self.visual.push(Box::new(f));
     }
     fn apply(self, mut e: El, disabled: bool) -> El {
         for f in self.visual {
@@ -121,7 +139,7 @@ impl TextInput {
     }
     pub fn revealed(mut self, revealed: bool) -> Self {
         self.edit.set_revealed(revealed);
-        self.edits.revealed(revealed);
+        self.edits.visual(move |e| e.revealed(revealed));
         self
     }
     pub fn animate_edit_layout(mut self) -> Self {
@@ -246,32 +264,7 @@ impl TextInput {
         self.copy_acts.press_tx(f);
         self
     }
-    pub fn spans(mut self, spans: impl Into<Vec<Span>>) -> Self {
-        self.edits.spans(spans.into());
-        self
-    }
-    pub fn decorations(self, spans: impl Into<Vec<Span>>) -> Self {
-        self.spans(spans)
-    }
-    pub fn rich_style(mut self, style: RichStyle) -> Self {
-        self.edits.rich_style(style);
-        self
-    }
-    /// See [`El::pill_icon`](rune::El::pill_icon).
-    pub fn pill_icon(mut self, icon: impl Fn(&str) -> Option<&'static Icon> + 'static) -> Self {
-        self.edits.pill_icon(icon);
-        self
-    }
-    /// See [`El::pill_style`](rune::El::pill_style).
-    pub fn pill_style(mut self, style: impl Fn(&str) -> rune::PillStyle + 'static) -> Self {
-        self.edits.pill_style(style);
-        self
-    }
-    /// See [`El::pill_colors`](rune::El::pill_colors).
-    pub fn pill_colors(mut self, bg: Color, fg: Option<Color>) -> Self {
-        self.edits.pill_colors(bg, fg);
-        self
-    }
+    rich_forwarders!();
 
     pub fn build(self, k: &Kit) -> El {
         let c = &k.c;
@@ -366,7 +359,7 @@ impl TextArea {
     /// Toggling preserves the model selection until a hidden edit or navigation occurs.
     pub fn revealed(mut self, revealed: bool) -> Self {
         self.edit.set_revealed(revealed);
-        self.edits.revealed(revealed);
+        self.edits.visual(move |e| e.revealed(revealed));
         self
     }
     pub fn new(edit: &TextEdit) -> TextArea {
@@ -414,7 +407,7 @@ impl TextArea {
     }
     /// See [`El::wrap_anywhere`](rune::El::wrap_anywhere).
     pub fn wrap_anywhere(mut self) -> Self {
-        self.edits.visual.push(Box::new(El::wrap_anywhere));
+        self.edits.visual(El::wrap_anywhere);
         self
     }
     pub fn invalid(mut self, i: bool) -> Self {
@@ -447,32 +440,7 @@ impl TextArea {
         self.edits.change(f);
         self
     }
-    pub fn spans(mut self, spans: impl Into<Vec<Span>>) -> Self {
-        self.edits.spans(spans.into());
-        self
-    }
-    pub fn decorations(self, spans: impl Into<Vec<Span>>) -> Self {
-        self.spans(spans)
-    }
-    pub fn rich_style(mut self, style: RichStyle) -> Self {
-        self.edits.rich_style(style);
-        self
-    }
-    /// See [`El::pill_icon`](rune::El::pill_icon).
-    pub fn pill_icon(mut self, icon: impl Fn(&str) -> Option<&'static Icon> + 'static) -> Self {
-        self.edits.pill_icon(icon);
-        self
-    }
-    /// See [`El::pill_style`](rune::El::pill_style).
-    pub fn pill_style(mut self, style: impl Fn(&str) -> rune::PillStyle + 'static) -> Self {
-        self.edits.pill_style(style);
-        self
-    }
-    /// See [`El::pill_colors`](rune::El::pill_colors).
-    pub fn pill_colors(mut self, bg: Color, fg: Option<Color>) -> Self {
-        self.edits.pill_colors(bg, fg);
-        self
-    }
+    rich_forwarders!();
 
     pub fn build(self, k: &Kit) -> El {
         let c = &k.c;
@@ -598,32 +566,7 @@ impl TextField {
         self.edits.edit(f);
         self
     }
-    pub fn spans(mut self, spans: impl Into<Vec<Span>>) -> Self {
-        self.edits.spans(spans.into());
-        self
-    }
-    pub fn decorations(self, spans: impl Into<Vec<Span>>) -> Self {
-        self.spans(spans)
-    }
-    pub fn rich_style(mut self, style: RichStyle) -> Self {
-        self.edits.rich_style(style);
-        self
-    }
-    /// See [`El::pill_icon`](rune::El::pill_icon).
-    pub fn pill_icon(mut self, icon: impl Fn(&str) -> Option<&'static Icon> + 'static) -> Self {
-        self.edits.pill_icon(icon);
-        self
-    }
-    /// See [`El::pill_style`](rune::El::pill_style).
-    pub fn pill_style(mut self, style: impl Fn(&str) -> rune::PillStyle + 'static) -> Self {
-        self.edits.pill_style(style);
-        self
-    }
-    /// See [`El::pill_colors`](rune::El::pill_colors).
-    pub fn pill_colors(mut self, bg: Color, fg: Option<Color>) -> Self {
-        self.edits.pill_colors(bg, fg);
-        self
-    }
+    rich_forwarders!();
 
     pub fn build(self, k: &Kit) -> El {
         let c = &k.c;

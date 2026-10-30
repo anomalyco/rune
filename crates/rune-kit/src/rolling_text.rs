@@ -30,15 +30,57 @@ const STAGGER_CAP: usize = 6;
 /// LCS only runs while `old × new` middle clusters fit this budget; longer middles just roll.
 const LCS_BUDGET: usize = 48 * 48;
 
+/// Labels remembered per thread; the least recently built go first. A label that was evicted
+/// and comes back starts its roll over.
+const MAX_LABELS: usize = 512;
+/// Cluster text (and key) bytes remembered per thread.
+const MAX_BYTES: usize = 256 * 1024;
+
 #[derive(Default)]
 struct Memory {
     clusters: Vec<(String, u64)>,
     next: u64,
     value: Option<f64>,
+    used: u64,
+}
+
+impl Memory {
+    fn bytes(&self, key: &str) -> usize {
+        key.len() + self.clusters.iter().map(|(c, _)| c.len() + 16).sum::<usize>()
+    }
+}
+
+#[derive(Default)]
+struct Store {
+    labels: HashMap<String, Memory>,
+    tick: u64,
+    bytes: usize,
+}
+
+impl Store {
+    /// Drops the least recently built labels until both bounds hold, never `keep` (the label being
+    /// built, so one label bigger than the byte bound is still remembered).
+    fn evict(&mut self, keep: &str) {
+        if self.labels.len() <= MAX_LABELS && self.bytes <= MAX_BYTES {
+            return;
+        }
+        let mut order: Vec<(u64, String)> = self.labels.iter().filter(|(k, _)| k.as_str() != keep).map(|(k, m)| (m.used, k.clone())).collect();
+        order.sort_unstable();
+        // Down to three quarters, so the sort isn't paid on every new label.
+        let (labels, bytes) = (MAX_LABELS * 3 / 4, MAX_BYTES * 3 / 4);
+        for (_, k) in order {
+            if self.labels.len() <= labels && self.bytes <= bytes {
+                break;
+            }
+            if let Some(m) = self.labels.remove(&k) {
+                self.bytes -= m.bytes(&k);
+            }
+        }
+    }
 }
 
 thread_local! {
-    static MEMORY: RefCell<HashMap<String, Memory>> = RefCell::new(HashMap::new());
+    static MEMORY: RefCell<Store> = RefCell::new(Store::default());
 }
 
 /// A label that rolls only the characters that changed.
@@ -188,8 +230,16 @@ struct Glyph {
 /// one.
 fn keys(key: &str, text: &str, value: Option<f64>, trailing: bool) -> (Vec<Glyph>, bool) {
     MEMORY.with(|m| {
-        let mut m = m.borrow_mut();
-        let mem = m.entry(key.to_owned()).or_default();
+        let mut store = m.borrow_mut();
+        store.tick += 1;
+        let tick = store.tick;
+        let Store { labels, bytes, .. } = &mut *store;
+        let known = labels.contains_key(key);
+        let mem = labels.entry(key.to_owned()).or_default();
+        mem.used = tick;
+        if known {
+            *bytes -= mem.bytes(key);
+        }
         let new: Vec<&str> = text.graphemes(true).collect();
         let old: Vec<&str> = mem.clusters.iter().map(|(c, _)| c.as_str()).collect();
         let matched = diff(&old, &new, trailing);
@@ -210,6 +260,8 @@ fn keys(key: &str, text: &str, value: Option<f64>, trailing: bool) -> (Vec<Glyph
         if let Some(v) = value.filter(|v| v.is_finite()) {
             mem.value = Some(v);
         }
+        *bytes += mem.bytes(key);
+        store.evict(key);
         (glyphs, falling)
     })
 }
@@ -291,6 +343,37 @@ pub(crate) fn diff(old: &[&str], new: &[&str], trailing: bool) -> Vec<Option<usi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stored() -> (usize, usize) {
+        MEMORY.with(|m| {
+            let m = m.borrow();
+            (m.labels.len(), m.bytes)
+        })
+    }
+
+    #[test]
+    fn memory_is_bounded_and_a_label_built_every_frame_keeps_its_own() {
+        for i in 0..10_000 {
+            keys("busy", &format!("{}", i % 7), None, false);
+            keys(&format!("row-{i}"), "0:30", None, false);
+            assert!(stored().0 <= MAX_LABELS && stored().1 <= MAX_BYTES);
+        }
+        let (first, _) = keys("busy", "3", None, false);
+        let (again, _) = keys("busy", "3", None, false);
+        assert!(!again[0].entered && again[0].id == first[0].id, "the busy label kept its memory");
+        assert!(first[0].id > 1, "ids continued rather than restarting");
+        let bytes: usize = MEMORY.with(|m| m.borrow().labels.iter().map(|(k, v)| v.bytes(k)).sum());
+        assert_eq!(bytes, stored().1);
+    }
+
+    #[test]
+    fn long_labels_are_bounded_by_bytes() {
+        let long = "x".repeat(5_000);
+        for i in 0..200 {
+            keys(&format!("long-{i}"), &long, None, false);
+            assert!(stored().1 <= MAX_BYTES);
+        }
+    }
 
     fn kept(old: &str, new: &str) -> String {
         let (o, n): (Vec<&str>, Vec<&str>) = (old.graphemes(true).collect(), new.graphemes(true).collect());

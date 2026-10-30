@@ -152,7 +152,7 @@ impl<S: 'static> Runtime<S> {
         while let Some(i) = at {
             if self.subtree_exiting(i) || !self.allowed(i) { break; }
             let n = &self.nodes[i];
-            if n.gestures.as_deref().is_some_and(&has) { chain.push(n.path.clone()); }
+            if n.handlers.gestures.as_deref().is_some_and(&has) { chain.push(n.path.clone()); }
             if stop_at_scroll && n.scroll.is_some() { break; }
             at = n.parent;
         }
@@ -162,7 +162,7 @@ impl<S: 'static> Runtime<S> {
     /// Element `path` (not exiting or inert) and the handler `pick` takes from its canvas input.
     fn gesture_handler<F>(&self, path: &str, pick: impl Fn(&CanvasInput) -> Option<F>) -> Option<(usize, F)> {
         let i = self.nodes.iter().enumerate().position(|(i, n)| n.path == path && !self.subtree_exiting(i) && self.allowed(i))?;
-        Some((i, pick(self.nodes[i].gestures.as_deref()?)?))
+        Some((i, pick(self.nodes[i].handlers.gestures.as_deref()?)?))
     }
 
     /// A mouse button went down at (x, y). The primary and secondary buttons do what
@@ -183,7 +183,7 @@ impl<S: 'static> Runtime<S> {
             .take_while(|&i| !self.subtree_exiting(i) && self.allowed(i))
             .find(|&i| {
                 let n = &self.nodes[i];
-                n.gestures.as_ref().is_some_and(|g| g.buttons & button.bit() != 0) && (n.on_press.is_some() || n.on_drag.is_some())
+                n.handlers.gestures.as_ref().is_some_and(|g| g.buttons & button.bit() != 0) && (n.handlers.on_press.is_some() || n.handlers.on_drag.is_some())
             });
         let Some(i) = target else { return };
         let n = &self.nodes[i];
@@ -191,7 +191,7 @@ impl<S: 'static> Runtime<S> {
         let [lx, ly] = self.to_local(i, x, y);
         let d = Drag { phase: Phase::Down, x: lx, y: ly, w: r[2] - r[0], h: r[3] - r[1], start_x: lx, start_y: ly, dx: 0.0, dy: 0.0, data: 0.0, clicks: 1, cancelled: false };
         let path = n.path.clone();
-        if n.on_drag.is_some() { self.queue.push(Action::Drag(path.clone(), d, button)); }
+        if n.handlers.on_drag.is_some() { self.queue.push(Action::Drag(path.clone(), d, button)); }
         self.drag_out_armed = false;
         self.double_armed = false;
         self.last_press = None;
@@ -227,7 +227,7 @@ impl<S: 'static> Runtime<S> {
 
     /// Some reachable element has an `on_wheel` handler.
     pub(crate) fn hears_wheel(&self) -> bool {
-        self.nodes.iter().enumerate().any(|(i, n)| n.gestures.as_ref().is_some_and(|g| g.wheel.is_some()) && self.allowed(i))
+        self.nodes.iter().enumerate().any(|(i, n)| n.handlers.get().is_some_and(|h| h.gestures.as_ref().is_some_and(|g| g.wheel.is_some())) && self.allowed(i))
     }
 
     /// Some element hears key releases, so a host maps them to logical keys.
@@ -270,8 +270,8 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn route_key_up(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
         if self.eat_ime_key_up() { return false; }
         tx.focused = self.focused_key();
-        let pressed = self.key_focus.as_deref().and_then(|p| self.nodes.iter().enumerate().position(|(i, n)| n.path == p && !self.subtree_exiting(i)));
-        let focused = self.focused.as_deref().and_then(|p| self.nodes.iter().enumerate().position(|(i, n)| n.path == p && !self.subtree_exiting(i)));
+        let pressed = self.key_focus.as_deref().and_then(|p| self.live_index(p));
+        let focused = self.focused.as_deref().and_then(|p| self.live_index(p));
         let secure = [pressed, focused].into_iter().flatten()
             .any(|i| self.nodes[i].input.as_ref().is_some_and(|input| input.edit.is_secure()));
         if self.keys_held > 0 {

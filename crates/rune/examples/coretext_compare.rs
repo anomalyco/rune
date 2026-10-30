@@ -1,6 +1,6 @@
 //! Rune's text against CoreText (`rune::text::pixel_compare`).
 //!
-//! `coretext_compare [--set inter|sf] [--smoothing on|off] [--blend srgb|linear]
+//! `coretext_compare [--set inter|sf|mono] [--smoothing on|off] [--blend srgb|linear]
 //! [--against smoothed|unsmoothed] [--out DIR]`: prints every case's numbers, by default in the
 //! platform's font smoothing and its blending, against the CoreText rendering that mode matches;
 //! `--out` also writes Rune's sheets and heatmaps.
@@ -41,7 +41,8 @@ fn main() {
     let set = match flag("--set").as_deref() {
         None | Some("inter") => Set::Inter,
         Some("sf") => Set::Sf,
-        Some(other) => die(&format!("--set {other}: inter or sf")),
+        Some("mono") => Set::Mono,
+        Some(other) => die(&format!("--set {other}: inter, sf or mono")),
     };
     let reference = flag("--against").map(|r| if r == "unsmoothed" { Reference::Unsmoothed } else { Reference::Smoothed });
     let options = Options { set, smoothing, srgb_blend: blend, reference };
@@ -62,7 +63,7 @@ fn die(message: &str) -> ! {
 }
 
 fn export(dir: &Path) {
-    for (set, name) in [(Set::Inter, "inter"), (Set::Sf, "sf")] {
+    for (set, name) in [(Set::Inter, "inter"), (Set::Sf, "sf"), (Set::Mono, "mono")] {
         let sub = dir.join(name);
         for scale in pc::SCALES {
             match pc::export(set, scale) {
@@ -79,7 +80,7 @@ fn export(dir: &Path) {
 /// Recompresses the sheets Swift drew in `dir/<set>` into each set's directory and records the
 /// layout they were drawn from.
 fn pack(dir: &Path) {
-    for (set, name) in [(Set::Inter, "inter"), (Set::Sf, "sf")] {
+    for (set, name) in [(Set::Inter, "inter"), (Set::Sf, "sf"), (Set::Mono, "mono")] {
         let Ok(entries) = std::fs::read_dir(dir.join(name)) else { continue };
         std::fs::create_dir_all(set.dir()).unwrap();
         for entry in entries.flatten() {

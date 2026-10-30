@@ -4,7 +4,7 @@
 //! recorded into the frame's encoder where the renderer first uses it (`flush_uploads`, at the
 //! start of `encode_layers*` and `draw_target_range_with`), or submitted ahead of a draw into a
 //! caller's pass (`draw_range*`) and of `Renderer::submit`. Globals are written only when they
-//! change, and instances only from the first to the last one that changed.
+//! change, and instances only in the spans that changed.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -21,6 +21,11 @@ pub(super) struct Uploads {
     frame_writes: Option<Staging>,
     /// The instance buffer's contents, so a frame writes only the span that changed.
     instances: Vec<Instance>,
+    /// Whether `image_batches`, `effects` and `has_layers` were made from `instances`: false
+    /// once the list's length or an instance's `params` change, which can move a batch.
+    batched: bool,
+    /// Whether `instances` holds a layer.
+    has_layers: bool,
     /// The viewport last written to globals (`width << 32 | height`, `u64::MAX` before any).
     viewport: AtomicU64,
     /// The sRGB flag last written to globals.
@@ -29,16 +34,24 @@ pub(super) struct Uploads {
     lost: (u64, u64),
     #[cfg(test)]
     pub(super) globals_writes: u64,
+    #[cfg(test)]
+    pub(super) batch_runs: u64,
 }
 
 impl Default for Uploads {
     fn default() -> Uploads {
-        Uploads { staging: None, frame_writes: None, instances: Vec::new(), viewport: AtomicU64::new(u64::MAX), srgb: None, lost: (0, 0),
-            #[cfg(test)] globals_writes: 0 }
+        Uploads { staging: None, frame_writes: None, instances: Vec::new(), batched: false, has_layers: false, viewport: AtomicU64::new(u64::MAX), srgb: None, lost: (0, 0),
+            #[cfg(test)] globals_writes: 0, #[cfg(test)] batch_runs: 0 }
     }
 }
 
 impl Uploads {
+    /// Forgets what the instance buffer holds, so the next frame writes and batches it all.
+    fn forget_instances(&mut self) {
+        self.instances.clear();
+        self.batched = false;
+    }
+
     pub(super) fn staging(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Staging {
         self.staging.get_or_insert_with(|| Staging::new(device, queue)).clone()
     }
@@ -52,6 +65,26 @@ impl Uploads {
     pub(super) fn frame_write_stats(&self) -> rune_staging::Stats {
         self.frame_writes.as_ref().map(Staging::stats).unwrap_or_default()
     }
+}
+
+/// Bits for the kinds the batching loop in `prepare` looks at; every other kind leaves the batch
+/// as it is.
+const BATCHED_KINDS: u32 = 1 << KIND_GLYPH as u32 | 1 << KIND_IMAGE as u32 | 1 << KIND_LAYER as u32
+    | 1 << KIND_EFFECT as u32 | 1 << KIND_BACKDROP_BLUR as u32;
+
+/// Instances `write_instances` compares at once.
+const BLOCK: usize = 64;
+
+/// Whether two equally long instance lists hold the same bytes. Folds over words into one
+/// accumulator per word of an instance, which vectorizes, at about half the cost of a `memcmp`.
+/// Words are `u32`, `Instance`'s own alignment, so any list casts.
+fn same(a: &[Instance], b: &[Instance]) -> bool {
+    let words = |l| bytemuck::cast_slice::<Instance, [u32; 32]>(l);
+    let mut acc = [0u32; 32];
+    for (x, y) in words(a).iter().zip(words(b)) {
+        for j in 0..32 { acc[j] |= x[j] ^ y[j]; }
+    }
+    acc.iter().fold(0, |s, w| s | w) == 0
 }
 
 fn pack((w, h): (u32, u32)) -> u64 { u64::from(w) << 32 | u64::from(h) }
@@ -94,6 +127,7 @@ impl Renderer {
     /// Uploads changed rows of the runtime's image atlas (`El::pixels`), creating its texture on
     /// first use.
     pub fn upload_images(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, images: &mut ImageAtlas) {
+        if images.pages.is_empty() && self.images.is_empty() { return self.refresh_layer_bindings(device); }
         let staging = self.uploads.staging(device, queue);
         if staging.lost() != self.uploads.lost.1 {
             self.uploads.lost.1 = staging.lost();
@@ -182,7 +216,7 @@ impl Renderer {
         if instances.len() > self.capacity {
             self.capacity = instances.len().next_power_of_two();
             self.instances = Self::instance_buffer(device, self.capacity);
-            self.uploads.instances.clear();
+            self.uploads.forget_instances();
         }
         self.write_instances(&staging, instances);
         // Geometry uploads must preserve a presentation timestamp already latched this frame.
@@ -196,35 +230,13 @@ impl Renderer {
             #[cfg(test)] { self.uploads.globals_writes += 1; }
         }
         self.count = instances.len() as u32;
-        self.image_batches.clear();
-        let (mut start, mut bind) = (0, BatchBind::Image(0));
-        let mut has_layers = false;
-        self.effects.clear();
-        for (i, instance) in instances.iter().enumerate() {
-            has_layers |= instance.params[1] == KIND_LAYER;
-            if instance.params[1] == KIND_EFFECT || instance.params[1] == KIND_BACKDROP_BLUR { self.effects.push((i as u32, *instance)); }
-            let next_bind = if instance.params[1] == KIND_IMAGE {
-                Some(BatchBind::Image(instance.params[0] as usize))
-            } else if instance.params[1] == KIND_GLYPH {
-                let g = instance.params[2] as usize;
-                if g == 0 {
-                    match bind {
-                        BatchBind::Image(_) => None,
-                        BatchBind::Glyph(_) => Some(BatchBind::Image(0)),
-                    }
-                } else {
-                    Some(BatchBind::Glyph(g - 1))
-                }
-            } else {
-                None
-            };
-            if let Some(next) = next_bind && next != bind {
-                if start < i as u32 { self.image_batches.push((start..i as u32, bind)); }
-                start = i as u32;
-                bind = next;
-            }
+        if !self.uploads.batched {
+            self.batch(instances);
+        } else {
+            // Same batches: only the effects' copies of their instances can be out of date.
+            for (at, effect) in &mut self.effects { *effect = instances[*at as usize]; }
         }
-        if start < self.count { self.image_batches.push((start..self.count, bind)); }
+        let has_layers = self.uploads.has_layers;
         self.prepare_layers(device, queue, if has_layers { instances } else { &[] }, viewport);
         self.sync_resident_caches(&mut atlas.resident_caches);
         if self.effects.iter().any(|(_, i)| i.params[0] != 0.0 || i.params[1] == KIND_BACKDROP_BLUR) {
@@ -279,29 +291,95 @@ impl Renderer {
         }
     }
 
-    /// Writes the instances from the first to the last that differs from what the buffer holds.
+    /// Splits the instances into runs that bind the same atlas pages, and notes their effects
+    /// and whether they hold a layer.
+    fn batch(&mut self, instances: &[Instance]) {
+        self.image_batches.clear();
+        let (mut start, mut bind) = (0, BatchBind::Image(0));
+        let mut has_layers = false;
+        self.effects.clear();
+        for (i, instance) in instances.iter().enumerate() {
+            let kind = instance.params[1];
+            if kind >= 0.0 && kind < 16.0 && BATCHED_KINDS & (1 << kind as u32) == 0 { continue }
+            has_layers |= instance.params[1] == KIND_LAYER;
+            if instance.params[1] == KIND_EFFECT || instance.params[1] == KIND_BACKDROP_BLUR { self.effects.push((i as u32, *instance)); }
+            let next_bind = if instance.params[1] == KIND_IMAGE {
+                Some(BatchBind::Image(instance.params[0] as usize))
+            } else if instance.params[1] == KIND_GLYPH {
+                let g = instance.params[2] as usize;
+                if g == 0 {
+                    match bind {
+                        BatchBind::Image(_) => None,
+                        BatchBind::Glyph(_) => Some(BatchBind::Image(0)),
+                    }
+                } else {
+                    Some(BatchBind::Glyph(g - 1))
+                }
+            } else {
+                None
+            };
+            if let Some(next) = next_bind && next != bind {
+                if start < i as u32 { self.image_batches.push((start..i as u32, bind)); }
+                start = i as u32;
+                bind = next;
+            }
+        }
+        if start < instances.len() as u32 { self.image_batches.push((start..instances.len() as u32, bind)); }
+        self.uploads.has_layers = has_layers;
+        self.uploads.batched = true;
+        #[cfg(test)] { self.uploads.batch_runs += 1; }
+    }
+
+    /// Writes the spans of instances that differ from what the buffer holds, comparing a block
+    /// at a time. Spans less than a block apart merge, so a scroll writes one span and a frame
+    /// where a few instances move writes only those. A span whose `params` changed asks `prepare`
+    /// to batch again.
     fn write_instances(&mut self, staging: &Staging, instances: &[Instance]) {
         let held = &mut self.uploads.instances;
-        let same = |(a, b): (&Instance, &Instance)| bytemuck::bytes_of(a) == bytemuck::bytes_of(b);
         let shared = instances.len().min(held.len());
-        let pairs = || instances[..shared].iter().zip(&held[..shared]);
-        let first = pairs().position(|p| !same(p)).unwrap_or(shared);
-        let end = if instances.len() > held.len() {
-            instances.len()
-        } else {
-            pairs().rposition(|p| !same(p)).map_or(first, |last| last + 1)
-        };
+        let mut rebatch = instances.len() != held.len();
         held.resize(instances.len(), Instance::zeroed());
-        if first >= end { return; }
-        held[first..end].copy_from_slice(&instances[first..end]);
-        let offset = (first * std::mem::size_of::<Instance>()) as u64;
-        staging.write_buffer(&self.instances, offset, bytemuck::cast_slice(&instances[first..end]));
+        let mut open: Option<std::ops::Range<usize>> = None;
+        for start in (0..shared).step_by(BLOCK) {
+            let end = (start + BLOCK).min(shared);
+            let differs = |i: &usize| !same(&instances[*i..=*i], &held[*i..=*i]);
+            // The first instance alone, so a block that all moved costs one compare to find.
+            let first = if differs(&start) { start } else if same(&instances[start..end], &held[start..end]) { continue } else {
+                (start + 1..end).find(differs).unwrap_or(start)
+            };
+            let last = (first..end).rfind(differs).map_or(end, |i| i + 1);
+            rebatch |= Self::join(&self.instances, held, staging, instances, &mut open, first..last);
+        }
+        if instances.len() > shared { rebatch |= Self::join(&self.instances, held, staging, instances, &mut open, shared..instances.len()); }
+        if let Some(span) = open { rebatch |= Self::write_span(&self.instances, held, staging, instances, span); }
+        self.uploads.batched &= !rebatch;
+    }
+
+    /// Adds `span` to the open span if it is less than a block past it, or writes the open span
+    /// and opens `span`. True if it wrote a span whose `params` changed.
+    fn join(buffer: &wgpu::Buffer, held: &mut [Instance], staging: &Staging, instances: &[Instance],
+        open: &mut Option<std::ops::Range<usize>>, span: std::ops::Range<usize>) -> bool {
+        match open {
+            Some(o) if span.start <= o.end + BLOCK => { o.end = span.end; false }
+            _ => open.replace(span).is_some_and(|o| Self::write_span(buffer, held, staging, instances, o)),
+        }
+    }
+
+    /// Writes `span`, and says whether any of its instances' `params`, which pick their batch,
+    /// changed.
+    fn write_span(buffer: &wgpu::Buffer, held: &mut [Instance], staging: &Staging, instances: &[Instance], span: std::ops::Range<usize>) -> bool {
+        let params = |i: &Instance| bytemuck::cast::<[f32; 4], u128>(i.params);
+        let rebatch = held[span.clone()].iter().zip(&instances[span.clone()]).any(|(h, i)| params(h) != params(i));
+        held[span.clone()].copy_from_slice(&instances[span.clone()]);
+        let offset = (span.start * std::mem::size_of::<Instance>()) as u64;
+        staging.write_buffer(buffer, offset, bytemuck::cast_slice(&instances[span]));
+        rebatch
     }
 
     /// The staging lost writes (an encoder holding them was dropped unsubmitted): forget what
     /// the buffers are thought to hold, so this frame writes it all again.
     fn resend_uploads(&mut self, atlas: &mut Atlas) {
-        self.uploads.instances.clear();
+        self.uploads.forget_instances();
         self.uploads.viewport.store(u64::MAX, Ordering::Relaxed);
         self.uploads.srgb = None;
         atlas.dirty = Some((0, ATLAS_SIZE));

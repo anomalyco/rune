@@ -12,6 +12,7 @@ use rune::{Color, Cursor, Drag, El, GrowthSpec, Icon, Phase, ScrollSpec, Span, T
 use super::model::{FileStatus, LineKind, Side};
 use super::state::{Annotation, DiffMode, DiffState, EXPAND_STEP, Expand, GAP_H, HEADER_H, LINE_H, LineRange, LineRef, NOTE_H, Row};
 use crate::Kit;
+use crate::palette::tint;
 use crate::syntax::SyntaxTheme;
 
 static EXPAND_UP: Icon = Icon {
@@ -201,12 +202,6 @@ struct Tints {
     number: Color,
     bar: Color,
     count: Color,
-}
-
-/// `base` moved `t` of the way to `hue` in Oklab, keeping `base`'s alpha.
-fn tint(base: Color, hue: Color, t: f32) -> Color {
-    let [a, b] = [base.to_oklab(), hue.to_oklab()];
-    Color::from_oklab([0, 1, 2, 3].map(|i| if i == 3 { a[3] } else { a[i] + (b[i] - a[i]) * t }))
 }
 
 impl Look {

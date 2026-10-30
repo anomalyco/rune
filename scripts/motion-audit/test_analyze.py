@@ -120,6 +120,24 @@ def main():
     drift = hold(at(100, 100), 5) + [at(x, 100) for x in ease(100, 97.5, 6)] + hold(at(97.5, 100), 2) + [at(x, 100) for x in ease(97.5, 100, 12)] + hold(at(100, 100), 10)
     assert "reversal" in kinds(drift), "out and back with a rest at the turn"
 
+    # one steady speed: a retarget that drops part of its speed for a frame stalls; one that
+    # keeps its speed and only pulls harder toward a farther target doesn't.
+    xs = ease(100, 200, 20)
+    slow = xs[7] + 0.3 * (xs[8] - xs[7])
+    dip = xs[:8] + [slow] + [slow + v for v in ease(0, 230 - slow, 24)]
+    assert "stall" in kinds(hold(at(100, 100), 5) + [at(x, 100) for x in dip] + hold(at(dip[-1], 100), 10)), "a re-aim that lost its speed for a frame"
+    def spring(x, v, target, n, k=320.0, c=36.0, dt=1 / 120):
+        out = []
+        for _ in range(n):
+            v += (k * (target - x) - c * v) * dt
+            x += v * dt
+            out.append(x)
+        return out, v
+    first, v = spring(100.0, 0.0, 200.0, 10)
+    retarget, _ = spring(first[-1], v, 240.0, 60)
+    assert "stall" not in kinds(hold(at(100, 100), 5) + [at(x, 100) for x in first + retarget] + hold(at(retarget[-1], 100), 10)), "a retarget at its own speed"
+    assert "stall" not in kinds(straight), "a straight eased move"
+
     # nothing unmounts above opacity 0.
     half = hold({**still, "root/chip": (10, 10, 50, 20, 1)}, 5) + [{**still, "root/chip": (10, 10, 50, 20, op)} for op in ease(1, 0.4, 6)] + hold(still, 10)
     assert "cut-exit" in kinds(half), "a fade cut short at 0.4"

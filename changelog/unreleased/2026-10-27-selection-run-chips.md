@@ -1,1 +1,0 @@
-- A selection highlight also bridges the small gap a chip's icon and padding leave, and runs as tall as the line's tallest text, so words and chips on a line share one rect.

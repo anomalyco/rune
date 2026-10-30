@@ -40,7 +40,10 @@ fn cycles_and_self_loops_lay_out() {
 #[test]
 fn sibling_clusters_never_overlap_across_layers() {
     let mut g = graph(7, &[(0, 1), (2, 3), (2, 4), (0, 2), (3, 5), (4, 5), (4, 6)]);
-    g.clusters = vec![GCluster { parent: None, lead: [0.0, 16.0] }, GCluster { parent: None, lead: [0.0, 16.0] }];
+    g.clusters = vec![
+        GCluster { parent: None, lead: [0.0, 16.0], min_span: [0.0, 0.0] },
+        GCluster { parent: None, lead: [0.0, 16.0], min_span: [0.0, 0.0] },
+    ];
     g.node_cluster = vec![Some(0), Some(0), Some(1), Some(1), Some(1), None, None];
     let p = layout(&g, &SP).unwrap();
     let (a, b) = (p.clusters[0], p.clusters[1]);
@@ -65,7 +68,7 @@ fn isotonic_keeps_separation_and_hits_free_targets() {
 #[test]
 fn clusters_stay_contiguous_and_contain_their_members() {
     let mut g = graph(4, &[(0, 1), (0, 2), (0, 3)]);
-    g.clusters.push(GCluster { parent: None, lead: [0.0, 16.0] });
+    g.clusters.push(GCluster { parent: None, lead: [0.0, 16.0], min_span: [0.0, 0.0] });
     g.node_cluster[1] = Some(0);
     g.node_cluster[3] = Some(0);
     let p = layout(&g, &SP).unwrap();

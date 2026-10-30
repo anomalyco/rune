@@ -20,19 +20,23 @@ pub(crate) fn serves(gpu: &crate::render::Gpu, surface: &wgpu::Surface<'_>, want
         && (!translucent || mode(surface, &gpu.adapter).is_some())
 }
 
-/// `adapter` when it composites translucent pixels on `surface`; otherwise the lowest-power
-/// adapter on `instance` that does, or `adapter` when none can.
+/// `pick`'s adapter when it composites translucent pixels on `surface`; otherwise the adapter
+/// on `instance` that does on the compositor's GPU (`gpu_pick`), then the lowest-power one that
+/// does, or `pick`'s adapter when none can.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn prefer(instance: &wgpu::Instance, surface: &wgpu::Surface<'_>, adapter: wgpu::Adapter) -> wgpu::Adapter {
-    if mode(surface, &adapter).is_some() {
-        return adapter;
+pub(crate) fn prefer(instance: &wgpu::Instance, surface: &wgpu::Surface<'_>, pick: &crate::gpu_pick::Pick) -> wgpu::Adapter {
+    if mode(surface, &pick.adapter).is_some() {
+        return pick.adapter.clone();
     }
     let mut able: Vec<_> = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()))
         .into_iter()
         .filter(|candidate| candidate.is_surface_supported(surface) && mode(surface, candidate).is_some())
         .collect();
-    able.sort_by_key(|candidate| power_rank(candidate.get_info().device_type));
-    able.into_iter().next().unwrap_or(adapter)
+    able.sort_by_key(|candidate| {
+        let info = candidate.get_info();
+        (!pick.on_compositor_device(&info), power_rank(info.device_type))
+    });
+    able.into_iter().next().unwrap_or_else(|| pick.adapter.clone())
 }
 
 /// `PowerPreference::LowPower`'s order; a software adapter comes last.

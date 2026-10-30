@@ -10,10 +10,12 @@ refuses to run until the sheets are regenerated.
 
 `sf/` holds the same for San Francisco, drawn from the Mac's own system font. It is ignored by
 git (Apple's font can't be redistributed): regenerate it locally, and its comparisons are
-skipped where it is missing.
+skipped where it is missing. `mono/` is SF Mono (`Family::SystemMono`) at 11–16 pt and a
+13.5/22 pt diff paragraph, drawn with AppKit's `NSFont.monospacedSystemFont` (the instance
+native apps draw code in), kept the same way.
 
 - Regenerate (macOS): `scripts/coretext-reference.sh`. Drawn on macOS 15.3 (24D60).
-- Compare: `cargo run -p rune --example coretext_compare -- [--set inter|sf]
+- Compare: `cargo run -p rune --example coretext_compare -- [--set inter|sf|mono]
   [--smoothing on|off] [--blend srgb|linear] [--against smoothed|unsmoothed]
   [--out DIR]`, or `-- shot SHOT.png --pair light|dark` for a 2× browser screenshot of the
   report paragraph.

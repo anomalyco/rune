@@ -1,1 +1,0 @@
-- `Tx::launch` and `El::matched` flights under a still ancestor `El::scale` (an app-wide zoom) fly at the size and place they land at. They used to draw unscaled, off the source's text, and snap to the zoom on landing. An ancestor scale that is animating is still dropped.

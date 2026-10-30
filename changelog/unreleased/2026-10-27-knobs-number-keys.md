@@ -1,1 +1,0 @@
-- rune-knobs: the side panel's keyboard choice numbers its options and 1–9 pick one. Typing no longer filters on its own: `/` (or a click on the filter) starts it, Return or Esc stops typing and keeps the matches, and a second Esc clears them.

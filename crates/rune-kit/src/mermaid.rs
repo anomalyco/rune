@@ -1,16 +1,19 @@
 //! Native ```` ```mermaid ```` diagrams inside [`crate::Markdown`], backed by [`rune_mermaid`].
 //!
 //! Covers flowcharts (`graph`/`flowchart` in `TD`/`TB`/`BT`/`LR`/`RL` with subgraphs, all node
-//! shapes, link styles and `style`/`classDef` tints), sequence diagrams (`sequenceDiagram` with
-//! participants, actors, activations, notes and frames) and state diagrams (`stateDiagram` /
-//! `stateDiagram-v2` with `[*]`, composite states and `<<choice>>`). Anything outside the
-//! supported subset returns `None`, and [`crate::Markdown`] falls back to the code block.
+//! shapes including `@{ shape: … }`, link styles and `style`/`classDef`/`linkStyle` tints),
+//! sequence diagrams (`sequenceDiagram` with participants, actors, `box` groups, `rect` bands,
+//! activations, notes and frames), state diagrams (`stateDiagram`/`stateDiagram-v2` with `[*]`,
+//! composite states and `<<choice>>`) and class diagrams (`classDiagram` with fields, methods,
+//! stereotypes, namespaces and UML relations). Lines that don't read are skipped and the rest
+//! draws; an unknown diagram type, or a source where nothing reads, returns `None`, and
+//! [`crate::Markdown`] falls back to the code block.
 
 use rune::El;
 
 use crate::markdown::{DiagramPaint, MarkdownStyle};
 
-pub use rune_mermaid::{DiagramStyle, supported};
+pub use rune_mermaid::{DiagramStyle, Hover, supported};
 
 /// `src` drawn as a diagram card with `style`'s diagram colours, or `None` when it is outside
 /// the supported subset.
@@ -19,7 +22,7 @@ pub fn render(src: &str, style: &MarkdownStyle) -> Option<El> {
 }
 
 pub(crate) fn diagram(src: &str, paint: &DiagramPaint) -> Option<El> {
-    rune_mermaid::render(
+    rune_mermaid::render_with_hover(
         src,
         &DiagramStyle {
             text: paint.text,
@@ -35,5 +38,11 @@ pub(crate) fn diagram(src: &str, paint: &DiagramPaint) -> Option<El> {
             font: paint.font,
             max_width: paint.max_width,
         },
+        match (paint.hover.a > 0.0, paint.hover_neighbours) {
+            (false, _) => Hover::Off,
+            (true, false) => Hover::Edges,
+            (true, true) => Hover::Neighbours,
+        },
+        paint.hover,
     )
 }

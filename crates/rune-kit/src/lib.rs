@@ -39,6 +39,8 @@ pub mod markdown;
 mod menu;
 #[cfg(feature = "mermaid")]
 pub mod mermaid;
+#[cfg(feature = "markdown")]
+pub mod notes;
 mod overlay;
 mod popup_list;
 mod radio;
@@ -73,6 +75,8 @@ pub use list::{List, ListItem};
 #[cfg(feature = "markdown")]
 pub use markdown::{Case, Highlight, Markdown, MarkdownStyle};
 pub use menu::{Menu, MenuEntry, MenuItem, context_menu};
+#[cfg(feature = "markdown")]
+pub use notes::Note;
 pub use overlay::{HoverCard, Placement, Popover, Tooltip, TooltipAppearance, TooltipStyle, body_text, overlay_text, scrim};
 pub use popup_list::{PopupItem, PopupList};
 pub use radio::{RadioGroup, RadioItem};

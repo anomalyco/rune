@@ -17,7 +17,7 @@ pub(super) fn sync_platform<S: 'static>(l: &mut Win, rt: &mut Runtime<S>, secure
     }
     l.apply_cursor(rt, focused);
     #[cfg(target_os = "macos")]
-    l.help.sync(&l.window, rt.help_regions());
+    l.native.help.sync(&l.window, rt.help_regions());
     clipboard.flush(rt);
     if let Some(a) = rt.ime_area {
         l.window.set_ime_cursor_area(

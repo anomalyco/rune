@@ -50,8 +50,9 @@ impl Curve {
 }
 
 impl From<Spring> for Curve {
+    /// [`Spring::NONE`] is [`Curve::Instant`].
     fn from(s: Spring) -> Curve {
-        Curve::Spring(s)
+        if s == Spring::NONE { Curve::Instant } else { Curve::Spring(s) }
     }
 }
 
@@ -140,13 +141,13 @@ impl From<Curve> for Anim {
 }
 impl From<Spring> for Anim {
     fn from(s: Spring) -> Anim {
-        Anim::new(Curve::Spring(s))
+        Anim::new(s.into())
     }
 }
 /// A pair used where no direction is known animates on `enter`.
 impl From<SpringPair> for Anim {
     fn from(p: SpringPair) -> Anim {
-        Anim::new(Curve::Spring(p.enter))
+        Anim::new(p.enter.into())
     }
 }
 

@@ -8,7 +8,7 @@ use super::*;
 const FIELD: f32 = 32.0;
 
 impl<S: 'static> Live<S> {
-    pub(super) fn sidebar(&self, t: Theme, dark: bool, accent: Color, inset: f32, height: f32) -> El {
+    pub(super) fn sidebar(&self, t: Theme, dark: bool, accent: Color, inset: f32, sidebar_w: f32, height: f32) -> El {
         let back = row().key("playground-back").h(CONTROL).pl(4.0).pr(8.0).gap(2.0).center_y().radius(radius::SM)
             .hover(t.hover).press(t.press)
             .child(icon(&CHEVRON_LEFT, 16.0).color(t.text_secondary))
@@ -18,8 +18,8 @@ impl<S: 'static> Live<S> {
         // Back sits at the list's text inset; where the window's own controls take the corner,
         // it goes in the row under them.
         let band = if inset > 0.0 { BAND } else { 0.0 };
-        let header = row().w(SIDEBAR).h(HEADER).pl(8.0).center_y().child(back);
-        let drag = (band > 0.0).then(|| el().w(SIDEBAR).h(band).window_drag());
+        let header = row().w(sidebar_w).h(HEADER).pl(8.0).center_y().child(back);
+        let drag = (band > 0.0).then(|| el().w(sidebar_w).h(band).window_drag());
         // The list's selection takes the accent while the list has the keyboard.
         let on_fill = if self.region == Region::List { focused(accent) } else { selected(t, dark) };
         // A scroll measures its first child, so the rows go in one content column.
@@ -35,18 +35,18 @@ impl<S: 'static> Live<S> {
             let empty = if self.order.is_empty() { "No stories" } else { "No matches" };
             list = list.child(text(empty).font(type_::BODY).color(t.text_secondary).px(8.0).pt(4.0));
         }
-        let list = col().key("playground-list").w(SIDEBAR).h(height - 2.0 * HEADER - FIELD - band).px(8.0).pb(8.0)
+        let list = col().key("playground-list").w(sidebar_w).h(height - 2.0 * HEADER - FIELD - band).px(8.0).pb(8.0)
             .scroll(ScrollSpec { stick_bottom: false }).child(list);
-        col().w(SIDEBAR).h(height)
+        col().w(sidebar_w).h(height)
             .children(drag)
             .child(header)
-            .child(self.filter_field(t))
+            .child(self.filter_field(t, sidebar_w))
             .child(list)
-            .child(self.stage_controls(t, dark))
+            .child(self.stage_controls(t, dark, sidebar_w))
     }
 
     /// Narrows the list to the stories whose path has every word typed; / focuses it.
-    fn filter_field(&self, t: Theme) -> El {
+    fn filter_field(&self, t: Theme, sidebar_w: f32) -> El {
         let field = text_input(&self.controls.filter, type_::LABEL).key(FILTER)
             .single_line()
             .color(t.text)
@@ -56,7 +56,7 @@ impl<S: 'static> Live<S> {
             .min_w(0.0)
             .label("Filter stories")
             .on_edit(|c: &mut Controls| &mut c.filter);
-        row().w(SIDEBAR).h(FIELD).px(8.0).pb(8.0).child(
+        row().w(sidebar_w).h(FIELD).px(8.0).pb(8.0).child(
             row().w_full().h(FIELD - 8.0).px(8.0).center_y().radius(radius::MD).fill(t.card).outline(1.0, 0.0, t.card_border).child(field),
         )
     }

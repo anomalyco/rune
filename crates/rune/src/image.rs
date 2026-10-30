@@ -76,7 +76,10 @@ enum Input {
     Rgba(u32, u32, Arc<[u8]>),
     Icon(std::path::PathBuf, u32),
     Svg(Arc<[u8]>, u32),
+    #[cfg(not(target_arch = "wasm32"))]
     File(std::path::PathBuf, u32),
+    /// `ImageCache::url`, and `ImageCache::file` on web.
+    Url(String, u32),
     /// A decoder that panics, standing in for a codec bug.
     #[cfg(test)]
     Panic,
@@ -99,8 +102,13 @@ impl Input {
                     decode(&bytes)
                 }
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            Input::Url(url, px) => Input::File(from_url::file_path(&url)?, px).decode(),
             #[cfg(target_arch = "wasm32")]
-            Input::Icon(..) | Input::File(..) => Err(ImageError("filesystem images are unsupported on web".into())),
+            Input::Icon(..) => Err(ImageError("filesystem images are unsupported on web".into())),
+            // Fetched asynchronously by `ImageCache::request`.
+            #[cfg(target_arch = "wasm32")]
+            Input::Url(url, _) => Err(ImageError(format!("{url}: fetched, not decoded"))),
             #[cfg(test)]
             Input::Panic => panic!("decoder bug"),
         }
@@ -182,7 +190,8 @@ impl ImageCache {
     /// An image file, read and decoded on the worker. `.svg` and `.svgz` files (or SVG content)
     /// rasterize like [`ImageCache::svg`]; other formats decode like [`ImageCache::load`], ignoring
     /// the size. Handles are shared by path, size and scale, so an edited file needs a new handle
-    /// once the old ones drop. Unsupported on web, where the image resolves to an error.
+    /// once the old ones drop. On web the path is a URL relative to the page, fetched as
+    /// [`ImageCache::url`] does, so `cache.file("assets/logo.webp", ..)` works in both builds.
     pub fn file(&self, path: impl AsRef<std::path::Path>, size_pt: f32, scale: f32) -> Image {
         let path = path.as_ref().to_path_buf();
         let px = icon_pixels(size_pt, scale);
@@ -191,7 +200,11 @@ impl ImageCache {
         hash.update(path.as_os_str().as_encoded_bytes());
         hash.update(&[0]);
         hash.update(&px.to_le_bytes());
-        self.request(*hash.finalize().as_bytes(), Input::File(path, px))
+        #[cfg(target_arch = "wasm32")]
+        let input = Input::Url(path.to_string_lossy().into_owned(), px);
+        #[cfg(not(target_arch = "wasm32"))]
+        let input = Input::File(path, px);
+        self.request(*hash.finalize().as_bytes(), input)
     }
 
     /// Straight-alpha sRGB RGBA8. Validation, premultiplication and mips happen off-thread.
@@ -246,7 +259,11 @@ impl ImageCache {
             let image = image.clone();
             let wake = self.wake.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                image.finish(input.decode());
+                let decoded = match input {
+                    Input::Url(url, px) => from_url::fetch(&url, px).await,
+                    input => input.decode(),
+                };
+                image.finish(decoded);
                 wake();
             });
         }
@@ -693,6 +710,9 @@ impl Srgb {
         b + u8::from(v >= self.up[b as usize])
     }
 }
+
+#[path = "image_url.rs"]
+mod from_url;
 
 #[cfg(test)]
 #[path = "image_mip_tests.rs"]

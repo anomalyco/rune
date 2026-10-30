@@ -86,6 +86,46 @@ or `Frame::write_buffer`. Either way wgpu-core records the copy in a command buf
 Staging maps its chunk once per frame however many writes share it, so each extra write costs
 ~12 kinstructions against ~35 for a queue write.
 
+## Rune's own frame
+
+Each change stacks on the one before. The fixture also prints the main thread's instructions
+(`thread_selfcounts`), which isolate Rune's share from the driver threads. Medians of 6
+alternating rounds, 10 s each, no writes, unpatched wgpu:
+
+| Build | Main kinstructions | Main µs | Process kinstructions | Present thread ms/s |
+| --- | ---: | ---: | ---: | ---: |
+| Before | 161.9 | 149 | 1,395 | 17.0 |
+| Claim the display link's frame before waiting on the present thread | 153.3 | 134 | 1,398 | 16.4 |
+| Skip the pointer sample when nothing reads it | 148.3 | 127 | 1,388 | 15.5 |
+| Read occlusion once a turn | 144.2 | 118 | 1,384 | 15.3 |
+| Leave a still runtime alone while only the compositor animates | 139.2 | 102 | 1,371 | 14.9 |
+| Skip the staging when nothing is staged | 140.8 | 109 | 1,375 | 13.7 |
+
+- The main thread does 13% fewer instructions. The process total moves by about as much as the
+  run-to-run spread (±50 kinstructions), because driver threads dominate it.
+- A Time Profiler run on the main thread finds `frame_step` and `step_motion` (14 of 117 samples
+  before) gone once the runtime rests. What's left is `acquire`, mostly `nextDrawable`.
+- Allocations stay at 65.1 a frame: they are wgpu's and Metal's, not Rune's.
+
+## Writes with immediates
+
+A compositor that asks for `Features::IMMEDIATES` gets the adapter's immediate size (4 KB on
+Metal), so it can hand a frame's uniforms to `RenderPass::set_immediates` instead of writing a
+buffer. Three writes a frame, same rounds:
+
+| Path | Process kinstructions | Main kinstructions | Allocations | Command buffers, blit encoders |
+| --- | ---: | ---: | ---: | ---: |
+| `Queue::write_buffer`, before | 1,708 | 277 | 82.1 | 7, 1 |
+| `Queue::write_buffer`, after | 1,696 | 258 | 82.1 | 7, 1 |
+| `Frame::write_buffer`, before | 1,679 | 166 | 85.1 | 7, 1 |
+| `Frame::write_buffer`, after | 1,650 | 144 | 85.2 | 7, 1 |
+| Immediates | 1,405 | 148 | 71.1 | 6, 0 |
+
+Immediates cost what a frame with no writes costs: no copy, so no command buffer and blit
+encoder for it. A uniform ring in `MAPPABLE_PRIMARY_BUFFERS` memory was not tried. It would also
+skip the copy, but it needs its own fencing per frame in flight, and it isn't available on every
+backend.
+
 ## What's left
 
 - Ship the wgpu fix. A `[patch]` in Rune's workspace doesn't reach apps that pin Rune. A git
@@ -96,5 +136,5 @@ Staging maps its chunk once per frame however many writes share it, so each extr
   That would remove buffers 4 to 6 and one handler, about 110 kinstructions of driver work by the
   Metal HUD's measure plus wgpu-core's present path. In exchange, Rune would bypass wgpu's
   surface on macOS.
-- Rune's main-thread share (about 105 ms per 10 s in slow mode, ~10% of the process) is mostly the runtime's motion step and paint pass,
-  which run every frame because the compositor animates, even when the view is empty.
+- Rune's main thread is now about 10% of the process's instructions, most of it `acquire`. The
+  rest of the cost is wgpu's command buffers and Metal's driver threads.

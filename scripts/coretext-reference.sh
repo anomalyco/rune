@@ -6,12 +6,13 @@
 #   crates/rune/tests/coretext/     Inter, committed.
 #   crates/rune/tests/coretext/sf/  San Francisco from this Mac's system font; never committed
 #                                   (Apple's font can't be redistributed). Skipped without SFNS.
+#   crates/rune/tests/coretext/mono/  SF Mono (SFNSMono) the same way. Skipped without it.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 cargo run -q -p rune --example coretext_compare -- export "$tmp"
-for set in inter sf; do
+for set in inter sf mono; do
   [[ -d "$tmp/$set" ]] || continue
   for scale in 1 2; do
     swift scripts/coretext-reference.swift "$tmp/$set/cases-${scale}x.json" "$tmp/$set" >/dev/null

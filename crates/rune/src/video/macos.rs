@@ -1,6 +1,7 @@
 //! AVFoundation: AVPlayer + AVPlayerItemVideoOutput for windows, AVAssetImageGenerator for
 //! posters and headless frames, and a bare AVPlayer for audio.
 use super::*;
+use crate::main_queue::on_main;
 use crate::native_surface::Orient;
 use crate::native_surface::macos::PixelBuffer;
 use objc2_av_foundation::{
@@ -122,24 +123,6 @@ impl Drop for Player {
             unsafe { release.0.player.pause() };
         });
     }
-}
-
-#[link(name = "System", kind = "dylib")]
-unsafe extern "C" {
-    static _dispatch_main_q: u8;
-    fn dispatch_async_f(queue: *const u8, context: *mut std::ffi::c_void, work: extern "C" fn(*mut std::ffi::c_void));
-}
-
-/// Run `f` on the main queue, which the window event loop drains.
-fn on_main(f: impl FnOnce() + Send + 'static) {
-    type Job = Box<dyn FnOnce() + Send>;
-    extern "C" fn run(context: *mut std::ffi::c_void) {
-        let job = unsafe { Box::from_raw(context.cast::<Job>()) };
-        job();
-    }
-    let job: Job = Box::new(f);
-    let context = Box::into_raw(Box::new(job)).cast();
-    unsafe { dispatch_async_f(&raw const _dispatch_main_q, context, run) };
 }
 
 /// Paused players holding a native player, oldest first.

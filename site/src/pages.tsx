@@ -85,7 +85,7 @@ function CodeRefs({ refs }: { refs: CodeRef[] }) {
   )
 }
 
-function Pager({ prev, next }: { prev?: [string, string]; next?: [string, string] }) {
+export function Pager({ prev, next }: { prev?: [string, string]; next?: [string, string] }) {
   return (
     <nav className="doc-pager" aria-label="Pages">
       {prev ? <a href={withBase(prev[0])}>← {prev[1]}</a> : <span />}
@@ -482,7 +482,7 @@ export function HowItWorksView() {
   )
 }
 
-function Sample({ lang = "Rust", children }: { lang?: string; children: string }) {
+export function Sample({ lang = "Rust", children }: { lang?: string; children: string }) {
   return (
     <figure className="code-block">
       <figcaption className="code-head">
@@ -535,7 +535,8 @@ export function LaunchFastView() {
         </p>
         <p>
           Two of them need one line or nothing from the app. The rest is about what the app leaves out of its first
-          frame. The numbers are at the end.
+          frame. The numbers are at the end. Keeping the app fast after launch is on{" "}
+          <a href={withBase("/fast-apps")}>Fast apps</a>.
         </p>
       </PageHead>
 
@@ -664,8 +665,9 @@ export function LaunchFastView() {
           <p>
             <code>App::on_ready</code> (and <code>WindowSpec::on_ready</code>) runs on the event thread once per native
             window creation, after the first frame is ready. For a launcher it runs while the window is still hidden,
-            once its cached frame has finished on the GPU, which is the place to register a global shortcut. It isn't
-            called by headless tooling. The callback gets a <code>WindowHandle</code>, not the state, so capture an{" "}
+            once its cached frame has finished on the GPU, which is the place to register a global shortcut. A window
+            that isn't on screen (covered, occluded, hidden or on another Space) doesn't wait to draw: it runs at the
+            first frame skipped for that, or a second after the window opens. It isn't called by headless tooling. The callback gets a <code>WindowHandle</code>, not the state, so capture an{" "}
             <code>AppHandle</code> and hand the work to <code>update</code>, which runs on the UI thread with{" "}
             <code>&amp;mut S</code> and a <code>Tx</code>.
           </p>
@@ -677,6 +679,13 @@ export function LaunchFastView() {
             event loop even while no window shows, so an update may do main-thread native work such as creating a
             status item. For work that doesn't need the main thread, spawn a thread from the update and report back
             with <code>AppHandle::update</code> or <code>AppHandle::wake</code> and <code>AppSpec::poll</code>.
+          </p>
+          <p>
+            A launcher can wait for readiness. With <code>RUNE_READY_DIR</code> set, the process writes{" "}
+            <code>$RUNE_READY_DIR/&lt;bundle id&gt;.&lt;pid&gt;</code> right after its first <code>on_ready</code>{" "}
+            returns: one line of JSON with <code>pid</code>, <code>bundle_id</code>, <code>ready_ms</code> (since the
+            process started) and <code>rune</code> (its version). It removes the file when it exits normally; a
+            process killed outright leaves it, so treat one whose PID isn't running as stale.
           </p>
         </div>
       </section>
@@ -870,7 +879,7 @@ export function LaunchFastView() {
         </div>
       </section>
 
-      <Pager prev={["/how-it-works", "How it works"]} next={["/architecture", "Architecture"]} />
+      <Pager prev={["/how-it-works", "How it works"]} next={["/fast-apps", "Fast apps"]} />
     </>
   )
 }
@@ -996,7 +1005,7 @@ export function ArchitectureView() {
       </section>
       </div>
 
-      <Pager prev={["/launch-fast", "Launch fast"]} next={["/principles", "Principles"]} />
+      <Pager prev={["/fast-apps", "Fast apps"]} next={["/principles", "Principles"]} />
     </>
   )
 }

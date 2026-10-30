@@ -58,9 +58,13 @@ pub struct App<S: 'static> {
     pub(crate) on_ready: Option<OnWindow>,
     pub(crate) on_frame_encoded: Option<crate::frame_encoded::OnFrameEncoded>,
     pub(crate) on_frame_drawn: Option<crate::frame_encoded::OnFrameDrawn<S>>,
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) same_tab_router: Option<Box<dyn Fn(&str) -> bool>>,
     pub(crate) macos_window: crate::MacWindowOptions,
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<S>>>,
     pub(crate) window_options: crate::WindowOptions,
+    pub(crate) canvas_id: Option<String>,
+    pub(crate) full_viewport: bool,
     pub(crate) fit_content_height: bool,
     pub(crate) float_on_open: bool,
     pub(crate) modifier_keys: bool,
@@ -97,9 +101,12 @@ impl<S: 'static> App<S> {
             on_ready: None,
             on_frame_encoded: None,
             on_frame_drawn: None,
+            same_tab_router: None,
             macos_window: crate::MacWindowOptions::default(),
             compositor: None,
             window_options: crate::WindowOptions::default(),
+            canvas_id: None,
+            full_viewport: false,
             fit_content_height: false,
             float_on_open: false,
             modifier_keys: false,
@@ -148,6 +155,25 @@ impl<S: 'static> App<S> {
     /// `Tx::resize_window`. Give the root no fixed or `fill` height. Users still set the width.
     pub fn fit_content_height(mut self) -> Self {
         self.fit_content_height = true;
+        self
+    }
+
+    /// Mount onto an existing `<canvas id="…">` in the web document instead of appending a
+    /// full-viewport canvas and locking `document.body`. The canvas sits inline in the page at
+    /// its parent's width: pair with [`Self::fit_content_height`] to embed a Rune view in a
+    /// scrollable page, or add [`Self::full_viewport`] to cover the screen. Ignored on native.
+    pub fn canvas_id(mut self, id: impl Into<String>) -> Self {
+        self.canvas_id = Some(id.into());
+        self
+    }
+
+    /// On web, cover the browser viewport even when [`Self::canvas_id`] names the canvas, as an
+    /// app without one does: the canvas is fixed to the visual viewport, the body stops
+    /// scrolling, `Cx::safe_area` reports the page's insets and the title sets
+    /// `document.title`. For a single-page app that mounts Rune full screen in a route's own
+    /// `<canvas>`. [`Self::fit_content_height`] wins over it. Ignored on native.
+    pub fn full_viewport(mut self) -> Self {
+        self.full_viewport = true;
         self
     }
 
@@ -276,6 +302,15 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// Draws with `backend` on macOS; `GpuBackend::Metal` needs Rune's `metal-backend` feature.
+    /// `RUNE_GPU_BACKEND=wgpu` or `=metal` overrides it without a rebuild. It applies to every
+    /// GPU the process makes from here on, and a `prewarm_gpu` already running on the other
+    /// backend starts over on this one. Does nothing elsewhere.
+    pub fn gpu_backend(self, backend: crate::GpuBackend) -> Self {
+        crate::gpu_backend::choose(backend);
+        self
+    }
+
     /// macOS: run as an accessory (menu-bar) app: no Dock icon, no default menu bar, and
     /// launching doesn't activate the app or take focus. The app installs its own menu if it
     /// wants one (`standard_menus` gives it Close, Minimize and Edit), and may change the
@@ -341,6 +376,15 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// On web, routes [`Tx::open_url_same_tab`] links inside a single-page app: `route` gets the
+    /// absolute URL of each link on the page's own origin and returns true when it handled it
+    /// (`history.pushState` and a render), or false to let the browser load it with
+    /// `location.assign`. Links to other origins always load. Ignored on native.
+    pub fn same_tab_router(mut self, route: impl Fn(&str) -> bool + 'static) -> Self {
+        self.same_tab_router = Some(Box::new(route));
+        self
+    }
+
     /// Runs on the UI thread each time the native window is created (again after a Wayland
     /// close or a GPU release): set its icon or native styles through
     /// `WindowHandle::with_raw_handle`.
@@ -350,7 +394,9 @@ impl<S: 'static> App<S> {
     }
 
     /// First-frame readiness, once per native creation. Launcher panels call this while
-    /// hidden, after GPU completion of its cached surface frame.
+    /// hidden, after GPU completion of its cached surface frame. A window that isn't on screen
+    /// (covered, occluded, hidden or on another Space) doesn't wait to draw: this runs at its
+    /// first frame skipped for that, or a second after it opens with no frame at all.
     /// Not called by headless tooling. May queue a show through the supplied handle.
     pub fn on_ready(mut self, f: impl FnMut(&crate::WindowHandle) + 'static) -> Self {
         self.on_ready = Some(Box::new(f));
@@ -456,11 +502,18 @@ impl<S: 'static> App<S> {
         self.argv.take().map_or(inherited, Args::parse_from)
     }
 
+    /// On web: the canvas sits inline in the page (`canvas_id` without `full_viewport`, or with
+    /// `fit_content_height`) rather than covering the viewport.
+    #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+    pub(crate) fn web_inline(&self) -> bool {
+        self.canvas_id.is_some() && (self.fit_content_height || !self.full_viewport)
+    }
+
     pub(crate) fn into_parts(self, scene: Option<&str>) -> (AppSpec<S>, S, Arc<Shared<S>>) {
-        let state = match self.init {
+        let state = crate::perf_warn::launch::init(|| match self.init {
             Some(init) => crate::tooling::with_scene(&self.spec, init(), scene),
             None => crate::tooling::initial_state(&self.spec, scene),
-        };
+        });
         (self.spec, state, self.shared)
     }
 }
@@ -548,7 +601,14 @@ impl<S: 'static> AppHandle<S> {
     }
 
     /// Quit the app: the window closes without `on_close`, and `run` returns.
+    ///
+    /// On web this unmounts the app: its loop stops, its GPU device is destroyed, its listeners
+    /// come off the page, the body style and title it changed go back, and the canvas Rune made
+    /// is removed, while one passed in with [`App::canvas_id`] stays, restyled as it was, for
+    /// its owner. Another app may start straight away; it mounts once this one has gone. An
+    /// app quit before it mounts never does.
     pub fn quit(&self) {
+        self.shared.quitting.store(true, Ordering::Release);
         self.request(|q| q.quit = true);
     }
 
@@ -647,6 +707,8 @@ pub(crate) struct Shared<S> {
     wake: Mutex<Option<crate::runtime::Waker>>,
     /// Published by the window host for `AppHandle::is_visible` / `window_error`.
     pub(crate) visible: AtomicBool,
+    /// `AppHandle::quit` was called, or the web app is ending.
+    pub(crate) quitting: AtomicBool,
     pub(crate) window_error: Mutex<Option<String>>,
 }
 
@@ -658,6 +720,7 @@ impl<S> Default for Shared<S> {
             requests: Mutex::default(),
             wake: Mutex::new(None),
             visible: AtomicBool::new(false),
+            quitting: AtomicBool::new(false),
             window_error: Mutex::new(None),
         }
     }
@@ -722,6 +785,17 @@ mod tests {
 
     fn spec() -> AppSpec<u32> {
         AppSpec::new("test", (100.0, 100.0), || 0, |_: &u32, _: &mut Cx<u32>| el())
+    }
+
+    #[test]
+    fn a_named_web_canvas_sits_inline_unless_it_covers_the_viewport() {
+        assert!(!App::new(spec()).web_inline(), "Rune's own canvas covers the viewport");
+        assert!(!App::new(spec()).full_viewport().web_inline());
+        assert!(App::new(spec()).canvas_id("view").web_inline(), "canvas_id alone stays inline");
+        assert!(App::new(spec()).canvas_id("view").fit_content_height().web_inline());
+        assert!(!App::new(spec()).canvas_id("route").full_viewport().web_inline());
+        assert!(App::new(spec()).canvas_id("view").full_viewport().fit_content_height().web_inline(),
+            "sizing to content wins over covering the viewport");
     }
 
     #[test]

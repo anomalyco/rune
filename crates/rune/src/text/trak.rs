@@ -3,6 +3,10 @@
 //! HarfRust, but Parley hands HarfRust the font size in device pixels as the point size, so on a
 //! 2x display 14 pt text was tracked as 28 pt text. [`Trak::spacing`] corrects for that.
 
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use parley::fontique::Blob;
 use swash::FontRef;
 
 /// A font's horizontal track-0 tracking, in font units, at each point size its table lists.
@@ -194,4 +198,14 @@ mod tests {
             sane(Trak::parse(&t, 2048));
         }
     }
+}
+
+/// Fonts' `trak` tables (None for an untracked font), by blob and index.
+pub(super) type Traks = HashMap<(u64, u32), Option<Rc<Trak>>>;
+
+pub(super) fn font_trak(traks: &mut Traks, data: &Blob<u8>, index: u32) -> Option<Rc<Trak>> {
+    traks
+        .entry((data.id(), index))
+        .or_insert_with(|| FontRef::from_index(data.as_ref(), index as usize).and_then(Trak::of).map(Rc::new))
+        .clone()
 }

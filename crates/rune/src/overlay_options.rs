@@ -136,6 +136,7 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub(crate) srgb_blend: bool,
     pub(crate) macos_level: Option<isize>,
     pub(crate) modifier_keys: bool,
+    pub(crate) animate_reveal: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -177,6 +178,10 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// Called once on the event thread after native creation, before the first show.
     /// Use `prewarm: true` to create at startup rather than waiting for `show()`.
     pub fn on_created(mut self, f: impl FnOnce(OverlayCreated) + 'static) -> Self { self.on_created = Some(Box::new(f)); self }
+    /// Showing doesn't settle motion: what the state started while hidden plays from the
+    /// first visible frame, such as a notification stack's first card entering. By default
+    /// an unretained overlay shows settled, at its target.
+    pub fn animate_reveal(mut self) -> Self { self.animate_reveal = true; self }
     /// The macOS window level (`NSWindow.Level`, e.g. 3 for `.floating`), in place of
     /// `OverlayOptions::level`; `OverlayHandle::set_macos_level` changes it later. At any
     /// level a macOS overlay goes exactly where it's placed, over the menu bar too.
@@ -189,7 +194,7 @@ impl<T: 'static> OverlaySpec<T> {
     }
 
     pub fn options(self, options: OverlayOptions) -> ConfiguredOverlay<T> {
-        ConfiguredOverlay { spec: self, options, on_key: None, on_created: None, poll: None, on_focus: None, compositor: None, setup: None, srgb_blend: true, macos_level: None, modifier_keys: false }
+        ConfiguredOverlay { spec: self, options, on_key: None, on_created: None, poll: None, on_focus: None, compositor: None, setup: None, srgb_blend: true, macos_level: None, modifier_keys: false, animate_reveal: false }
     }
 }
 

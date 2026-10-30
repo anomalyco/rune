@@ -1,1 +1,0 @@
-- **`Recording::counts_roll`: an app whose live numbers roll can gate a count that ticks in place.** Set `rec.counts_roll = true` and a count or clock whose words change in one frame ("9s" → "10s") is a `text-swap`, as other words are; a label over its own rolling glyphs still passes. It's off by default, where a tick passes as before.

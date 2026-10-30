@@ -21,7 +21,7 @@ impl PlaceRequest {
             #[cfg(target_os = "windows")]
             { request.pointer = crate::win32::pointer_position(); }
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-            { request.pointer = crate::x11_overlay::pointer_position(); }
+            { request.pointer = crate::x11::overlay::pointer_position(); }
         }
         request
     }

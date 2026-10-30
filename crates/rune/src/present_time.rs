@@ -222,7 +222,7 @@ pub(crate) mod metal {
     use objc2_metal::MTLDrawable;
     use objc2_video::rc::Retained;
     use objc2_video::runtime::{AnyClass, AnyObject, ClassBuilder, ProtocolObject, Sel};
-    use objc2_video::{msg_send, sel};
+    use objc2_video::{Message, msg_send, sel};
     use std::ptr::NonNull;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::ffi::CString;
@@ -375,11 +375,11 @@ pub(crate) mod metal {
         pub(crate) fn attach(surface: &wgpu::Surface<'_>, log: Arc<Log>) -> Option<Self> {
             // SAFETY: the layer is only retained and has its class swapped for a subclass of its
             // class without state; wgpu keeps using it as a CAMetalLayer.
-            let hal = unsafe { surface.as_hal::<wgpu::hal::api::Metal>() }?;
-            // Held until the class is swapped, so wgpu doesn't use the layer in between.
-            let guard = hal.render_layer().lock();
-            // SAFETY: a valid, live CAMetalLayer pointer.
-            let layer = unsafe { Retained::retain(Retained::as_ptr(&*guard).cast::<AnyObject>().cast_mut()) }?;
+            // Under wgpu's lock until the class is swapped, so wgpu doesn't use the layer in between.
+            crate::gpu::with_layer(surface, |layer| Self::hook(layer.retain(), log))?
+        }
+
+        fn hook(layer: Retained<AnyObject>, log: Arc<Log>) -> Option<Self> {
             let metal = AnyClass::get(c"CAMetalLayer")?;
             let base = layer.class();
             // SAFETY: isKindOfClass: takes any class.

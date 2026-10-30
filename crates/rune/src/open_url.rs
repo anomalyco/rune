@@ -37,8 +37,22 @@ impl std::fmt::Display for OpenUrlError {
 }
 impl std::error::Error for OpenUrlError {}
 
+/// A link a handler asked to open, already checked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Link {
+    pub url: String,
+    /// `Tx::open_url_same_tab`: replace the page on web rather than open a tab.
+    pub same_tab: bool,
+}
+
 /// The link to open, trimmed and with a lowercase scheme, or why it can't be.
-pub(crate) fn check(url: &str) -> Result<String, OpenUrlError> {
+pub(crate) fn check(url: &str) -> Result<String, OpenUrlError> { check_link(url, false) }
+
+/// `check` for a same-tab link: on web a link without a scheme (`/notes/42`, `?q=a`, `#top`)
+/// is relative to the page, and the browser resolves it.
+pub(crate) fn check_same_tab(url: &str) -> Result<String, OpenUrlError> { check_link(url, cfg!(target_arch = "wasm32")) }
+
+fn check_link(url: &str, relative: bool) -> Result<String, OpenUrlError> {
     let url = url.trim();
     if url.is_empty() { return Err(OpenUrlError::Empty); }
     if url.len() > MAX_LEN
@@ -47,6 +61,9 @@ pub(crate) fn check(url: &str) -> Result<String, OpenUrlError> {
         || bad_percent(url.as_bytes())
     {
         return Err(OpenUrlError::Invalid);
+    }
+    if relative && url.find([':', '/', '?', '#']).is_none_or(|i| url.as_bytes()[i] != b':') {
+        return Ok(url.to_owned());
     }
     let (scheme, rest) = url.split_once(':').ok_or(OpenUrlError::Invalid)?;
     let scheme = scheme.to_ascii_lowercase();
@@ -124,12 +141,16 @@ impl<S: 'static> Runtime<S> {
     /// headless run or test, none in a window. Each was already checked.
     pub fn take_url_requests(&mut self) -> Vec<String> { std::mem::take(&mut self.url_requests) }
 
-    pub(crate) fn open_urls(&mut self, urls: Vec<String>) {
-        for url in urls {
+    pub(crate) fn open_urls(&mut self, links: Vec<Link>) {
+        for link in links {
             if self.open_urls_natively {
-                if let Err(e) = open(&url) { eprintln!("rune: open_url({url}): {e}"); }
+                #[cfg(target_arch = "wasm32")]
+                let opened = if link.same_tab { crate::web::open_url_same_tab(&link.url).map_err(OpenUrlError::Failed) } else { open(&link.url) };
+                #[cfg(not(target_arch = "wasm32"))]
+                let opened = open(&link.url);
+                if let Err(e) = opened { eprintln!("rune: open_url({}): {e}", link.url); }
             } else {
-                self.url_requests.push(url);
+                self.url_requests.push(link.url);
             }
         }
     }
@@ -227,6 +248,18 @@ mod tests {
     }
 
     #[test]
+    fn same_tab_links_may_be_relative_only_on_web() {
+        for relative in ["/notes/42", "notes/42?x=1", "?q=a", "#top", "../c", "a/b:c"] {
+            assert_eq!(check_link(relative, true).as_deref(), Ok(relative), "{relative:?}");
+            assert_eq!(check_link(relative, false), Err(OpenUrlError::Invalid), "{relative:?}");
+        }
+        assert_eq!(check_link("javascript:alert(1)", true), Err(OpenUrlError::UnsupportedScheme("javascript".into())));
+        assert_eq!(check_link("/a b", true), Err(OpenUrlError::Invalid));
+        assert_eq!(check_link("HTTPS://example.com/x", true).as_deref(), Ok("https://example.com/x"));
+        assert_eq!(check_same_tab("/notes/42"), Err(OpenUrlError::Invalid), "native has no page to resolve against");
+    }
+
+    #[test]
     fn headless_runs_record_the_request_and_open_nothing() {
         fn view(seen: &Vec<&'static str>, _: &mut Cx<Vec<&'static str>>) -> El {
             let _ = seen;
@@ -242,14 +275,16 @@ mod tests {
             results.push(tx.open_url("https://example.com/docs"));
             results.push(tx.open_url("file:///etc/hosts"));
             results.push(tx.open_url("mailto:a@example.com"));
+            results.push(tx.open_url_same_tab("https://example.com/here"));
         });
         rt.pointer_down(5.0, 5.0);
         rt.pointer_up(5.0, 5.0);
         rt.frame(0.0);
-        assert_eq!(results, [Ok(()), Err(OpenUrlError::UnsupportedScheme("file".into())), Ok(())]);
+        assert_eq!(results, [Ok(()), Err(OpenUrlError::UnsupportedScheme("file".into())), Ok(()), Ok(())]);
         assert_eq!(rt.take_url_requests(), [
             "https://example.com/docs",
             "mailto:a@example.com",
+            "https://example.com/here",
             "https://example.com/clicked",
         ]);
         assert!(rt.take_url_requests().is_empty());

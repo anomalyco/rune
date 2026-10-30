@@ -134,6 +134,9 @@ impl Smoothing {
         self.inks.extend(spans.iter().map(|s| s.color.map_or(base, color_bucket)));
     }
 
+    /// Each `Ink`'s luminance bucket, as [`Self::set_inks`] last chose them.
+    pub(crate) fn inks(&self) -> &[u8] { &self.inks }
+
     /// The dilation radius of a glyph in `ink` at `ppem` device px (0 without the dilation
     /// stage). The radius, not the bucket, keys the atlas: buckets that reach the cap share
     /// masks.

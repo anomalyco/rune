@@ -1,12 +1,12 @@
 //! Rune's text against CoreText, pixel for pixel. Fixed cases (four ink/paper pairs; Inter
 //! Regular and Bold at seven sizes and the Rune vs macOS report's paragraph, or San Francisco
-//! body and heading sizes; 1× and 2×) are drawn through Rune's real glyph rasteriser, atlas and
+//! body and heading sizes, or SF Mono at code sizes; 1× and 2×) are drawn through Rune's real glyph rasteriser, atlas and
 //! GPU blend, read back, and compared with CoreText reference sheets that
 //! `scripts/coretext-reference.sh` draws on a Mac, with font smoothing on and off.
 //!
 //! The Inter sheets are committed in `crates/rune/tests/coretext/`. San Francisco can't be
-//! redistributed, so its sheets are drawn from the system's font into `tests/coretext/sf/`
-//! (ignored by git) and their comparisons are skipped where they're missing.
+//! redistributed, so its sheets (and SF Mono's) are drawn from the system's fonts into
+//! `tests/coretext/sf/` and `tests/coretext/mono/` (ignored by git) and their comparisons are skipped where they're missing.
 //! `cargo run -p rune --example coretext_compare` prints the table; the macOS-only test
 //! `text::pixel_compare::tests` holds it to loose bounds.
 
@@ -43,6 +43,10 @@ pub const SIZES: [f32; 7] = [9.0, 11.0, 13.0, 16.0, 20.0, 24.0, 32.0];
 pub const SAMPLE: &str = "IHT\u{2014}/AVSog@8 Hamburgefonstiv";
 /// The paragraph of the Rune vs macOS text report: 16/26 pt, wrapped at 567 pt, at (49, 40) pt,
 /// measured over the band 30–120 pt of a 640 pt canvas, as the report did.
+/// SF Mono's glyphs: thin stems on a fixed grid (i, l, 1, t), wide ones (m), punctuation.
+pub const MONO_SAMPLE: &str = "It doesn't look like it; illicit 1111 mmmm @@ -33,3 +33,4 @@";
+/// A diff, as the History drawer's view shows it, in a code block's 13.5/22 pt.
+pub const MONO_PARAGRAPH: &str = "diff --git a/Welcome.md b/Welcome.md --- a/Welcome.md +++ b/Welcome.md @@ -33,3 +33,4 @@ $1 + 1$ It doesn't look like it +*Italics work though!* iiiiiiii llllllll mmmmmmmm";
 pub const PARAGRAPH: &str = "The quick brown fox jumps over the lazy dog. AV To Wa Ty Yo LT fi fl ffi office flour 0123456789 ($4.50, 87%) \u{2014} \"quoted\" & semicolons; colons: question? Incomprehensibilities and HYPERVENTILATION.";
 pub const SHEET_WIDTH: f32 = 640.0;
 const ROW_X: f32 = 16.0;
@@ -57,6 +61,8 @@ pub enum Set {
     Inter,
     /// San Francisco (the system font, SFNS) at its `opsz` for each size; references local.
     Sf,
+    /// SF Mono (`Family::SystemMono`, SFNSMono) at inline-code and code-block sizes; references local.
+    Mono,
 }
 
 /// Which CoreText rendering a sheet holds.
@@ -108,6 +114,7 @@ impl Case {
     fn font(&self) -> &'static str {
         match (self.family, self.weight >= 700.0) {
             (Family::Named(SYSTEM_FONT), _) => "system",
+            (Family::SystemMono, _) => "mono",
             (_, true) => "bold",
             _ => "regular",
         }
@@ -116,6 +123,7 @@ impl Case {
 
 /// The cases of `set`, top to bottom.
 pub fn cases(set: Set) -> Vec<Case> {
+    let text = if set == Set::Mono { MONO_SAMPLE } else { SAMPLE };
     let (family, rows): (Family, Vec<(&str, f32, f32)>) = match set {
         Set::Inter => {
             let mut rows = Vec::new();
@@ -125,6 +133,7 @@ pub fn cases(set: Set) -> Vec<Case> {
             (Family::Sans, rows)
         }
         Set::Sf => (Family::Named(SYSTEM_FONT), vec![("sf regular", 400.0, 16.0), ("sf bold", 700.0, 16.0), ("sf bold", 700.0, 28.0), ("sf bold", 700.0, 32.0)]),
+        Set::Mono => (Family::SystemMono, [11.0, 12.0, 13.0, 13.5, 14.0, 16.0].iter().map(|&size| ("mono", 400.0, size)).collect()),
     };
     let mut out = Vec::new();
     let mut y = 4.0f32;
@@ -137,7 +146,7 @@ pub fn cases(set: Set) -> Vec<Case> {
             size,
             line_height: 0.0,
             wrap: None,
-            text: SAMPLE,
+            text,
             origin: [ROW_X, y + 3.0],
             region: [0.0, y, SHEET_WIDTH, height],
             whole_region: false,
@@ -150,6 +159,20 @@ pub fn cases(set: Set) -> Vec<Case> {
 }
 
 fn paragraph_case(family: Family, top: f32) -> Case {
+    if family == Family::SystemMono {
+        return Case {
+            name: "mono paragraph 13.5/22".into(),
+            family,
+            weight: 400.0,
+            size: 13.5,
+            line_height: 22.0,
+            wrap: Some(567.0),
+            text: MONO_PARAGRAPH,
+            origin: [49.0, top + 40.0],
+            region: [0.0, top + 30.0, SHEET_WIDTH, 90.0],
+            whole_region: true,
+        };
+    }
     Case {
         name: if family == Family::Sans { "paragraph 16/26".into() } else { "sf paragraph 16/26".into() },
         family,
@@ -177,10 +200,10 @@ pub fn refs_dir() -> PathBuf {
 impl Set {
     /// Where this set's sheets and `layout.txt` live.
     pub fn dir(self) -> PathBuf {
-        match self { Set::Inter => refs_dir(), Set::Sf => refs_dir().join("sf") }
+        match self { Set::Inter => refs_dir(), Set::Sf => refs_dir().join("sf"), Set::Mono => refs_dir().join("mono") }
     }
     pub fn name(self) -> &'static str {
-        match self { Set::Inter => "Inter", Set::Sf => "San Francisco" }
+        match self { Set::Inter => "Inter", Set::Sf => "San Francisco", Set::Mono => "SF Mono" }
     }
 }
 
@@ -194,6 +217,12 @@ pub fn font_paths() -> [PathBuf; 2] {
 pub fn system_font_path() -> Option<PathBuf> {
     if !cfg!(target_os = "macos") { return None; }
     super::system_font_files(&["sfnsttf"]).into_iter().next()
+}
+
+/// The SF Mono file `Family::SystemMono` loads, when this machine has one.
+pub fn system_mono_path() -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") { return None; }
+    super::system_font_files(&["sfnsmono"]).into_iter().find(|p| !p.to_string_lossy().to_lowercase().contains("italic"))
 }
 
 fn text_system() -> Result<TextSystem, String> {
@@ -234,6 +263,9 @@ pub fn available(set: Set) -> Result<(), String> {
     if set == Set::Sf && system_font_path().is_none() {
         return Err("no system font (SFNS) on this machine".into());
     }
+    if set == Set::Mono && system_mono_path().is_none() {
+        return Err("no SF Mono (SFNSMono) on this machine".into());
+    }
     let have = std::fs::read_to_string(set.dir().join("layout.txt")).map_err(|_| {
         format!("no {} references in {}: run scripts/coretext-reference.sh", set.name(), set.dir().display())
     })?;
@@ -249,8 +281,12 @@ pub fn export(set: Set, scale: f32) -> Result<serde_json::Value, String> {
     let mut text = text_system()?;
     let [regular, bold] = font_paths().map(|p| p.display().to_string());
     let system = system_font_path().map(|p| p.display().to_string());
+    let mono = system_mono_path().map(|p| p.display().to_string());
     if set == Set::Sf && system.is_none() {
         return Err("no system font (SFNS) on this machine".into());
+    }
+    if set == Set::Mono && mono.is_none() {
+        return Err("no SF Mono (SFNSMono) on this machine".into());
     }
     let mut rows = Vec::new();
     for case in cases(set) {
@@ -269,7 +305,7 @@ pub fn export(set: Set, scale: f32) -> Result<serde_json::Value, String> {
         "scale": scale,
         "width": (SHEET_WIDTH * scale) as u32,
         "height": (sheet_height(set) * scale) as u32,
-        "fonts": { "regular": regular, "bold": bold, "system": system },
+        "fonts": { "regular": regular, "bold": bold, "system": system, "mono": mono },
         "sheets": sheets,
         "cases": rows,
     }))

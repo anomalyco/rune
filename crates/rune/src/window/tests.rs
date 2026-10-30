@@ -390,3 +390,86 @@ fn reporting_frames_changes_no_frame_skip_or_redraw() {
     let drawn = outcomes.iter().filter(|o| **o == crate::FrameOutcome::Drawn).count() as u32;
     assert_eq!(drawn, hooked.last().unwrap().4 - 2, "one Drawn per presented frame after the two `new` drew");
 }
+
+#[test]
+fn hidden_pace_renders_a_change_at_once_then_at_most_every_refresh() {
+    let t0 = Instant::now();
+    let mut pace = HiddenPace::default();
+    assert!(pace.changed(t0), "the first change renders at once");
+    pace.rendered(t0);
+    assert_eq!(pace.deadline(), None);
+    assert!(!pace.changed(t0 + Duration::from_millis(100)));
+    assert!(!pace.changed(t0 + Duration::from_millis(200)));
+    assert_eq!(pace.deadline(), Some(t0 + HIDDEN_REFRESH), "later ones wait for one render");
+    assert!(!pace.take_due(t0 + Duration::from_millis(249)));
+    assert!(pace.take_due(t0 + HIDDEN_REFRESH));
+    assert_eq!(pace.deadline(), None, "a due render asked for doesn't wake the loop again");
+    assert!(pace.changed(t0 + HIDDEN_REFRESH));
+    pace.rendered(t0 + HIDDEN_REFRESH);
+    assert_eq!(pace.deadline(), None);
+    assert!(pace.changed(t0 + Duration::from_secs(5)), "after a quiet spell, at once again");
+    pace.reset();
+    assert!(pace.changed(t0 + Duration::from_secs(5)));
+}
+
+#[test]
+fn missed_frames_never_poll() {
+    use wgpu::CurrentSurfaceTexture as S;
+    let now = Instant::now();
+    for status in [S::Occluded, S::Timeout, S::Outdated, S::Lost, S::Validation] {
+        let missed = Missed::of(status).err().expect("a miss");
+        for paced in [false, true] {
+            for wait in [Duration::ZERO, OCCLUDED_RETRY, Duration::from_secs(60)] {
+                // A retry deadline at or before now would spin like a poll.
+                let flow = match missed.retry(paced, now, &mut { wait }) {
+                    Some(at) => { assert!(at > now, "{missed:?} retries later, not now"); ControlFlow::WaitUntil(at) }
+                    None => ControlFlow::Wait,
+                };
+                assert_ne!(flow, ControlFlow::Poll, "{missed:?} (paced: {paced}) must not poll");
+            }
+        }
+    }
+    let occluded = |mut wait| Missed::Occluded.retry(true, now, &mut wait);
+    assert_eq!(occluded(Duration::ZERO), Some(now + OCCLUDED_RETRY), "the safety net is slow");
+    assert_eq!(occluded(Duration::from_secs(60)), Some(now + OCCLUDED_MAX));
+    let mut zero = Duration::ZERO;
+    assert_eq!(Missed::Timeout.retry(true, now, &mut zero), None, "a running display link retries on its tick");
+    assert_eq!(Missed::Timeout.retry(false, now, &mut zero), Some(now + TIMEOUT_RETRY));
+    let mut wait = OCCLUDED_RETRY;
+    Missed::Occluded.retry(true, now, &mut wait);
+    assert_eq!(wait, OCCLUDED_RETRY * 2, "an occluded miss backs off");
+    Missed::Outdated.retry(true, now, &mut wait);
+    assert_eq!(wait, OCCLUDED_RETRY * 2, "other misses leave the backoff");
+}
+
+#[test]
+fn a_window_s_first_updates_can_register_on_a_later_window() {
+    use crate::{App, AppSpec, MenuItem, el};
+    type S = Vec<String>;
+    let apps: Vec<App<S>> = ["first", "second"].map(|title| App::new(AppSpec::new(title, (10.0, 10.0), Vec::new, |_, _| el()))).into();
+    let second = apps[1].handle();
+    apps[0].handle().update(move |s: &mut S, _| {
+        s.push(format!("{:?}", second.register_shortcut("ctrl+alt+shift+f18".parse().unwrap(), |_, _| {}).map(|_| ())));
+        s.push(format!("{:?}", second.set_menu([MenuItem::new("Item", |_: &mut S, _| {})])));
+    });
+    // As Host::new and Host::resumed: attach the guards, then drain the first updates.
+    let hosts = start_all(apps.into(), |_, app| {
+        let shortcuts = crate::shortcuts::Guard::attach(&app.shared, Arc::new(|| {}), true, false);
+        let menus = crate::native_menu::Guard::attach(&app.shared, true);
+        Some((app, shortcuts, menus, S::new()))
+    }, |(app, _, _, state)| for f in app.shared.take().updates { f(state, &mut Tx::default()); });
+    assert_eq!(hosts[0].as_ref().unwrap().3, ["Ok(())", "Ok(())"]);
+}
+
+#[test]
+fn drag_region_policy_preserves_titled_windows_and_panels() {
+    for enabled in [false, true] {
+        for full_size in [false, true] {
+            let chrome = Chrome { drag_regions: enabled, full_size_content: full_size, ..Chrome::DEFAULT };
+            assert_eq!(uses_drag_regions(chrome, false, false), enabled && full_size);
+            assert_eq!(uses_drag_regions(chrome, true, false), enabled);
+            assert!(!uses_drag_regions(chrome, false, true));
+            assert!(!uses_drag_regions(chrome, true, true));
+        }
+    }
+}

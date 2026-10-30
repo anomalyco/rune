@@ -1,1 +1,0 @@
-- **Removing an animating track completes it.** `AnimationStore::remove` and `remove_node` (so a node unmounting mid-animation) now emit `MotionEvent::Completed { finished: false }` for an animation started with a completion token, as replacing it already did, instead of dropping the token silently.

@@ -145,6 +145,9 @@ pub struct Placed {
 pub struct ImageAtlas {
     pub pages: Vec<ImagePage>,
     slots: HashMap<(u64, usize), Slot>,
+    /// Frames copied in so far, so the idle meter sees new pixels in a slot it already drew.
+    #[cfg(debug_assertions)]
+    pub(crate) copies: u64,
 }
 
 impl ImageAtlas {
@@ -181,6 +184,8 @@ impl ImageAtlas {
         self.pages[slot.page].touched = true;
         if slot.generation != frame.generation {
             slot.generation = frame.generation;
+            #[cfg(debug_assertions)]
+            { self.copies += 1; }
             let page = &mut self.pages[slot.page];
             let row = (page.width * 4) as usize;
             for line in 0..h as usize {
