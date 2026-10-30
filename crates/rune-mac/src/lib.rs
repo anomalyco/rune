@@ -62,7 +62,7 @@ pub fn toggle_full_screen() {
 pub fn is_full_screen() -> bool {
     #[cfg(target_os = "macos")]
     unsafe {
-        use objc2::{msg_send, runtime::AnyObject};
+        use objc2::msg_send;
         let w = key_window();
         if !w.is_null() {
             let mask: usize = msg_send![w, styleMask];
