@@ -1,0 +1,362 @@
+//! Visual builders: fill, corners, borders, shadows, gradients, opacity, blur, transforms,
+//! clips and hover groups.
+
+use super::*;
+
+impl El {
+    pub fn fill(mut self, c: Color) -> Self {
+        self.vis.fill = c;
+        self
+    }
+    pub fn radius(mut self, r: f32) -> Self {
+        self.vis.radius = [r; 4];
+        self
+    }
+    /// Round the corners with Apple's continuous curve (`CALayerCornerCurve.continuous`, SwiftUI's
+    /// `.continuous` style), which eases into the straight edges over about 1.53 times the radius
+    /// instead of meeting them at a circular arc. Applies to the fill, border, image, outline,
+    /// `clip_rounded` and system material; shadows keep circular corners, like a CALayer
+    /// shadow from a `CGPath(roundedRect:)`.
+    pub fn continuous_corners(mut self) -> Self {
+        self.vis.continuous_corners = true;
+        self
+    }
+    /// Per-corner radius: top-left, top-right, bottom-right, bottom-left.
+    pub fn corners(mut self, r: [f32; 4]) -> Self {
+        self.vis.radius = r;
+        self
+    }
+    /// A ring `width` points wide just inside the border box, following the corner radii. It
+    /// takes no layout space and replaces the fill under it rather than drawing over it, so a
+    /// translucent ring shows what's behind the element. For a stroke over the fill (SwiftUI's
+    /// `strokeBorder`), put the border on an unfilled child the same size.
+    pub fn border(mut self, width: f32, c: Color) -> Self {
+        self.vis.border_width = width;
+        self.vis.border = c;
+        self.vis.border_bottom = None;
+        self
+    }
+    /// A border whose colour runs from `top` at the top edge to `bottom` at the bottom edge,
+    /// e.g. a top-lit hairline rim. Drawn like [`El::border`], inside the box in place of the
+    /// fill. Replaces any `border`, and `border` replaces it.
+    pub fn border_gradient(mut self, width: f32, top: Color, bottom: Color) -> Self {
+        self.vis.border_width = width;
+        self.vis.border = top;
+        self.vis.border_bottom = Some(bottom);
+        self
+    }
+    /// Dashes the border (`border` or `border_gradient`): `dash` points on, `gap` points off,
+    /// with butt ends, along the ring's centre line, round the corners too. The pattern starts
+    /// with a dash where the top edge leaves the top-left corner and runs clockwise. The period
+    /// stretches or shrinks a little so a whole number of dashes fits, and the last gap meets the
+    /// first dash cleanly. Unlike a solid border, the fill shows through the gaps and the dashes
+    /// draw over it. A zero `dash` or `gap` keeps the border solid.
+    pub fn border_dash(mut self, dash: f32, gap: f32) -> Self {
+        let valid = dash.is_finite() && gap.is_finite() && dash > 0.0 && gap > 0.0;
+        self.vis.border_dash = valid.then_some([dash, gap]);
+        self
+    }
+    /// Starts the dash pattern `phase` points into itself (SwiftUI's `dashPhase`), so growing it
+    /// marches the dashes anticlockwise. A phase of `dash + gap` is one whole period. It is
+    /// applied as given every frame and never springs (a spring would run a wrapped phase
+    /// backwards), so drive it from a clock for marching ants.
+    pub fn border_dash_phase(mut self, phase: f32) -> Self {
+        self.vis.border_dash_phase = if phase.is_finite() { phase } else { 0.0 };
+        self
+    }
+    /// An outer drop shadow offset by `(0, y)` with CSS `blur` radius (`blur = 2σ`; pass
+    /// `2.0 * r` to match `CALayer.shadowRadius`). Springs like [`Self::box_shadow`].
+    pub fn shadow(mut self, y: f32, blur: f32, color: Color) -> Self {
+        self.vis.shadows.push(Shadow { y, blur, color, ..Shadow::default() });
+        self
+    }
+    /// A full box shadow (offset, spread, inset), e.g. one layer of a CSS elevation token.
+    /// `s.blur` follows CSS (`blur = 2σ`, twice `CALayer.shadowRadius`). The first four
+    /// shadows spring: a change to one's offset, blur or spread moves on the element's layout
+    /// spring and its colour on the colour spring, so a pressed card's shadow tightens as it
+    /// sinks. Under Reduce Motion, and in an instant transaction, the geometry lands at once.
+    pub fn box_shadow(mut self, s: Shadow) -> Self {
+        self.vis.shadows.push(s);
+        self
+    }
+    /// A vertical gradient from `top` to `bottom` painted over the fill (CSS `linear-gradient(180deg, ..)`).
+    pub fn gradient(mut self, top: Color, bottom: Color) -> Self {
+        self.vis.gradient = Some(Box::new([top, bottom]));
+        self
+    }
+    /// A radial gradient painted over the fill and clipped to the element's rounded corners.
+    ///
+    /// `center` is in normalized element coordinates (`[0.5, 0.5]` is the centre, `[0.0, 0.0]` top-left).
+    /// `radius` is in points (`f32` for a circle or `[rx, ry]` for an ellipse).
+    /// `stops` are up to 8 `(position, color)` pairs along `0.0..=1.0` from `center` (`0.0`) to
+    /// `radius` (`1.0`). Stop colours spring in Oklab when changed and interpolate in premultiplied
+    /// colour across the quad, matching [`El::gradient`].
+    pub fn radial_gradient(
+        mut self,
+        center: [f32; 2],
+        radius: impl Into<RadialRadius>,
+        stops: impl AsRef<[(f32, Color)]>,
+    ) -> Self {
+        let [rx, ry] = radius.into().0;
+        let valid = center[0].is_finite()
+            && center[1].is_finite()
+            && rx.is_finite()
+            && ry.is_finite()
+            && rx > 0.0
+            && ry > 0.0;
+        self.vis.radial = valid
+            .then(|| normalize_gradient_stops(GradientGeometry::Radial { center, radius: [rx, ry] }, stops.as_ref()))
+            .flatten()
+            .map(Box::new);
+        self
+    }
+    /// A linear gradient at `angle` radians (CSS convention: `0.0` is bottom-to-top, `PI / 2` is
+    /// left-to-right, `PI` is top-to-bottom like [`El::gradient`]) with up to 8 stops, painted over
+    /// the fill.
+    pub fn linear_gradient(mut self, angle: f32, stops: impl AsRef<[(f32, Color)]>) -> Self {
+        self.vis.radial = angle
+            .is_finite()
+            .then(|| normalize_gradient_stops(GradientGeometry::Linear { angle }, stops.as_ref()))
+            .flatten()
+            .map(Box::new);
+        self
+    }
+    /// Paints `shape` (strokes and fills in this element's points, origin top-left) over the
+    /// fill and under any text. It does not affect layout or hit testing.
+    pub fn shape(mut self, shape: Shape) -> Self {
+        self.vis.shape = (!shape.is_empty()).then(|| Rc::new(shape));
+        self
+    }
+    /// Shows `pixels`, scaled into the element's rect and clipped to its corner radius. The image
+    /// can change without the view re-running: the next frame draws its latest contents.
+    /// An element that sets only its width (`w`, `w_full`) or only its height takes the other
+    /// side from the image's aspect ratio, updating when the image decodes or changes shape;
+    /// [`aspect_ratio`](Self::aspect_ratio) overrides it.
+    pub fn pixels(mut self, pixels: &crate::pixels::Pixels) -> Self {
+        self.vis.pixels = Some(pixels.clone());
+        self.vis.pixels_fit = None;
+        self
+    }
+    /// Shows `pixels` at its own aspect ratio, centred: `Fit` letterboxes the whole image inside
+    /// the rect (the corner radius rounds the image), `Fill` covers the rect and crops the overflow.
+    pub fn pixels_fit(mut self, pixels: &crate::pixels::Pixels, fit: crate::SurfaceFit) -> Self {
+        self.vis.pixels = Some(pixels.clone());
+        self.vis.pixels_fit = Some(fit);
+        self
+    }
+    /// A ring `offset` points outside the border box (CSS `outline` + `outline-offset`).
+    pub fn outline(mut self, width: f32, offset: f32, color: Color) -> Self {
+        self.vis.outline = Some(Outline { width, offset, color });
+        self
+    }
+    pub fn opacity(mut self, o: f32) -> Self {
+        self.vis.opacity = o;
+        self
+    }
+    /// Gaussian blur of the completed subtree, in points (standard deviation). Zero has no
+    /// filter cost. The renderer caps sigma at 64 device pixels; bounds grow by three sigma.
+    pub fn blur(mut self, sigma: f32) -> Self {
+        self.vis.blur = sigma.max(0.0);
+        self
+    }
+    /// Override the blur target's curve. Ordinary changes use the element's motion spring.
+    pub fn blur_motion(mut self, anim: impl Into<Anim>) -> Self {
+        self.vis.blur_motion = Some(Box::new(anim.into()));
+        self
+    }
+    /// Dim each paint leaf in the currently built subtree, independently. Unlike `opacity`,
+    /// overlapping draws retain their individual coverage and no group layer is introduced. A
+    /// box with a solid fill still fades as `opacity` would: its outer shadows stay outside it
+    /// and its fill and gradient fade as one.
+    /// Call after adding children. Useful for static disabled styling; animation and hit-test
+    /// opacity still belong to `opacity` / `live_opacity`.
+    pub fn dim(mut self, alpha: f32) -> Self {
+        fn apply(e: &mut El, alpha: f32) {
+            e.expand_memo();
+            e.vis.paint_alpha *= alpha;
+            for child in &mut e.children { apply(child, alpha); }
+        }
+        apply(&mut self, alpha.clamp(0.0, 1.0));
+        self
+    }
+    /// Add children's premultiplied colours while a direct child is between opacity 0 and 1.
+    /// Give two overlaid states opacity `1-t` and `t` for a dissolve without a midpoint alpha dip.
+    /// Put a shared background outside this scope; its own paint also participates in addition.
+    /// At rest (all direct children at 0 or 1), draw normally without a dissolve layer. Overlapping
+    /// opaque states therefore use source-over at rest; this API is for replacing states.
+    pub fn dissolve(mut self) -> Self {
+        self.vis.blend = crate::render::Blend::PlusLighter;
+        self
+    }
+    /// Rasterize this subtree once into an offscreen texture when settled and composite that
+    /// texture until the subtree's draw output changes, including while an ancestor's
+    /// [`live_offset`](Self::live_offset) or [`live_scale`](Self::live_scale) moves it. While a
+    /// spring, transition, or effect slot inside the subtree is active, it draws live and
+    /// re-caches once settled.
+    pub fn cache(mut self) -> Self {
+        self.vis.cache = true;
+        self
+    }
+    /// Cache this subtree like [`Self::cache`], also mixing `key` into its invalidation signature.
+    pub fn cache_key(mut self, key: u64) -> Self {
+        self.vis.cache = true;
+        self.vis.cache_key = Some(key);
+        self
+    }
+    /// Tags this element's instances (and its descendants', until one sets its own) for a
+    /// compositor: `Runtime::marks` runs parallel to `Runtime::instances`.
+    pub fn mark(mut self, mark: u32) -> Self {
+        self.vis.mark = mark;
+        self
+    }
+    /// Overlay drawn over the fill while hovered.
+    pub fn hover(mut self, c: Color) -> Self {
+        self.vis.hover = c;
+        self
+    }
+    /// Overlay drawn over the fill while pressed.
+    pub fn press(mut self, c: Color) -> Self {
+        self.vis.press = c;
+        self
+    }
+    /// Shrink to `scale` about the centre while a press on this element is held, as iOS tiles
+    /// and buttons do (0.96 to 0.97), springing back on release or when the pointer leaves.
+    /// Put it on the element with `on_press`. Layout and hit testing keep the resting size, and
+    /// Reduce Motion turns it off. `1.0` (or anything not positive) removes it.
+    pub fn press_scale(mut self, scale: f32) -> Self {
+        self.press_scale = (scale.is_finite() && scale > 0.0 && scale != 1.0).then_some(scale);
+        self
+    }
+    /// Draw this element and everything in it `k` times its size about its centre, like
+    /// SwiftUI's `scaleEffect`: fills, borders, text, icons and images all scale, and text
+    /// rasterizes at the scaled size once it rests. Layout keeps the unscaled size, so siblings
+    /// don't move; hit testing follows the scaled rect. A change springs on the element's layout
+    /// spring (or [`Self::scale_motion`]); under Reduce Motion, and in an instant transaction, it
+    /// lands at once. Multiplies with transitions, `live_scale` and `press_scale`. Anything not
+    /// finite or below zero is `1.0`.
+    pub fn scale(mut self, k: f32) -> Self {
+        self.scale = if k.is_finite() && k >= 0.0 { k } else { 1.0 };
+        self
+    }
+    /// The curve [`Self::scale`] changes on.
+    pub fn scale_motion(mut self, anim: impl Into<Anim>) -> Self {
+        self.vis.scale_motion = Some(Box::new(anim.into()));
+        self
+    }
+    /// Draw this element and everything in it turned `radians` clockwise about its
+    /// [`origin`](Self::origin), like SwiftUI's `rotationEffect`: fills, borders, shadows,
+    /// text, icons and images all turn. Layout keeps the upright box, so siblings don't move.
+    /// A change springs on the element's layout spring (or [`Self::rotate_motion`]); under
+    /// Reduce Motion, and in an instant transaction, it lands at once. While turned, the
+    /// subtree draws into its own layer, and a native surface inside it (a video, a web view)
+    /// stays upright. Hit testing follows the turned box; the reported rect uses its upright
+    /// bounding box. Anything not finite is `0.0`.
+    pub fn rotate(mut self, radians: f32) -> Self {
+        self.vis.rotate = if radians.is_finite() { radians } else { 0.0 };
+        self
+    }
+    /// The curve [`Self::rotate`] changes on.
+    pub fn rotate_motion(mut self, anim: impl Into<Anim>) -> Self {
+        self.vis.rotate_motion = Some(Box::new(anim.into()));
+        self
+    }
+    /// The point this element scales and rotates about, in units of its own size: `(0.5, 0.5)`
+    /// (the default) is its centre, `(0.5, 1.0)` the middle of its bottom edge, which stays put
+    /// while a keycap sinks. Like SwiftUI's `anchor:`. [`Self::scale`], [`Self::rotate`],
+    /// `live_scale`, `press_scale` and a transition's scale all pivot here once it's set;
+    /// [`Self::offset`] ignores it. Values outside 0..1 pivot outside the element; anything not
+    /// finite is the centre.
+    pub fn origin(mut self, x: f32, y: f32) -> Self {
+        self.vis.origin = (x.is_finite() && y.is_finite() && (x, y) != (0.5, 0.5)).then_some([x, y]);
+        self
+    }
+    /// Run the animations of this element and everything in it at `k` times normal speed:
+    /// springs, transitions (enter, exit, layout), implicit animations, hover and press
+    /// fades, loops and word reveals. `0.0` freezes them exactly where they are, `0.5` is slow
+    /// motion, and changing `k` carries on from the same place. Nested scales multiply, and
+    /// all of them multiply with the window's [`Cx::time_scale`](crate::Cx::time_scale).
+    ///
+    /// Only time slows. State still updates at once: a hover or press is tracked as usual and
+    /// only its fade waits. An exiting element drops its own factor and follows its ancestors
+    /// still in the tree, so one under a frozen subtree stays mid-exit until that scale rises,
+    /// then finishes and is removed. A frozen subtree requests no frames.
+    /// Scrolling, growth stacks and `Tween` keep the window's clock: they follow input and
+    /// layout, and a frozen scroll view would ignore the wheel. Anything not finite or below
+    /// zero is `1.0`.
+    pub fn time_scale(mut self, k: f32) -> Self {
+        self.time_scale = if k.is_finite() && k >= 0.0 { k } else { 1.0 };
+        self
+    }
+    /// Clip children to this box with soft gradient edges (never a hard crop).
+    pub fn clip_soft(mut self, fade: f32) -> Self {
+        self.vis.clip = Some([fade; 4]);
+        self
+    }
+    /// Clip this element and its descendants to its presented rounded rectangle. Follows
+    /// [`El::corners`] and [`El::continuous_corners`] when set on this element; otherwise rounds
+    /// all four corners by `radius` points (capped at half the shorter edge). Filters run before
+    /// this mask. Nested masks intersect without moving either rectangle's corners; complex
+    /// intersections use a layer. Hit testing uses the rectangular clip bounds, including visually
+    /// clipped corner areas.
+    pub fn clip_rounded(mut self, radius: f32) -> Self {
+        self.vis.clip_corners = None;
+        self.vis.clip_radius = Some(radius.max(0.0));
+        self
+    }
+    /// Clip this element and its descendants to its presented rectangle with per-corner radii
+    /// `[top_left, top_right, bottom_right, bottom_left]` in points, capped at half the shorter
+    /// edge and following [`El::continuous_corners`]. Unlike [`El::clip_rounded`], ignores the
+    /// element's paint radii. Hit testing still uses the rectangular clip bounds.
+    pub fn clip_corners(mut self, radii: [f32; 4]) -> Self {
+        let clamped = radii.map(|r| r.max(0.0));
+        self.vis.clip_corners = Some(clamped);
+        self.vis.clip_radius = Some(clamped.into_iter().fold(0.0, f32::max));
+        self
+    }
+    /// Soft clip with a fade width per side (left, top, right, bottom).
+    pub fn clip_fade(mut self, left: f32, top: f32, right: f32, bottom: f32) -> Self {
+        self.vis.clip = Some([left, top, right, bottom]);
+        self
+    }
+    /// Track hover for descendants' `group_*` styles (see [`Visual::hover_group`]).
+    pub fn hover_group(mut self) -> Self {
+        self.vis.hover_group = true;
+        self
+    }
+    /// Curves for this element's hover track: `enter` when the pointer arrives, `exit` when it
+    /// leaves (e.g. a delayed reveal).
+    pub fn hover_motion(mut self, enter: impl Into<Anim>, exit: impl Into<Anim>) -> Self {
+        self.vis.hover_motion = Some(Rc::new((enter.into(), exit.into())));
+        self
+    }
+    /// Default hover curves for this element and everything below it: any hover track (an
+    /// element with [`Self::hover`] or [`Self::hover_group`]) without its own
+    /// [`Self::hover_motion`] uses the nearest ancestor's pair, and [`Self::anchored`] overlays
+    /// inherit from their anchor, so kit controls whose inner elements you can't reach follow it
+    /// too. Set it on the root of the view (or on what you pass to `rune_kit::root`, which
+    /// carries it to the overlays it layers beside the view). Without any, hover lands at once
+    /// and fades out over 0.1 s. Rows highlighted by `focus_highlight` (menu items, select
+    /// options) are never faded.
+    pub fn hover_motion_within(mut self, enter: impl Into<Anim>, exit: impl Into<Anim>) -> Self {
+        self.vis.hover_within = Some(Rc::new((enter.into(), exit.into())));
+        self
+    }
+    /// The pair set by [`Self::hover_motion_within`].
+    pub fn hover_within_curves(&self) -> Option<(Anim, Anim)> {
+        self.vis.hover_within.as_deref().copied()
+    }
+    /// Opacity factor `rest` normally and `hovered` while the nearest ancestor group is hovered.
+    pub fn group_opacity(mut self, rest: f32, hovered: f32) -> Self {
+        self.vis.group_opacity = Some([rest, hovered]);
+        self
+    }
+    /// Text or icon colour while the nearest ancestor group is hovered.
+    pub fn group_color(mut self, c: Color) -> Self {
+        self.vis.group_color = Some(c);
+        self
+    }
+    /// Wall-clock opacity loop, using the shared loop engine and host wake deadline.
+    pub fn cycle(self, c: Cycle) -> Self {
+        self.looping(rune_motion::LoopSpec::cycle(c))
+    }
+}
