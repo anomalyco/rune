@@ -6,7 +6,7 @@ crates/rune-light/examples/reel.rs 1899
 crates/rune/src/edit.rs 2648
 crates/rune/src/el.rs 3179
 crates/rune/src/overlay.rs 1564
-crates/rune/src/runtime.rs 7753
+crates/rune/src/runtime.rs 7740
 crates/rune/src/text.rs 2657
 crates/rune/src/window.rs 2761
 examples/kit-gallery/src/stories.rs 1613

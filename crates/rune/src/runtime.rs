@@ -81,6 +81,8 @@ pub(crate) fn handler_state_ref<S: 'static>(state: &S) -> &dyn Any {
 mod layout_diagnostics;
 #[path = "runtime/blend.rs"]
 mod blend;
+#[path = "runtime/drag_out_host.rs"]
+mod drag_out_host;
 pub(crate) use blend::{glyph, glyph_uv_page, premul};
 
 #[path = "focus.rs"]
@@ -1670,22 +1672,6 @@ impl<S: 'static> Runtime<S> {
             drags_open: 0,
         }
     }
-
-    /// A drag-out the pointer move just delivered asked for. The shell must start the OS
-    /// session before returning from that move event.
-    pub(crate) fn take_drag_out(&mut self) -> Option<crate::drag_out::DragOutStart> {
-        self.drag_out_request.take()
-    }
-
-    /// Where the host reports how a drag-out ended; delivered to `on_drag_end` next frame.
-    pub(crate) fn drag_end_sink(&self) -> crate::drag_out::DragEnds { self.drag_ends.clone() }
-    pub(crate) fn drag_ends_pending(&self) -> bool { !self.drag_ends.borrow().is_empty() }
-
-    /// Whether this host can start OS drags. Without, `drag_out` elements act as if they had
-    /// none.
-    pub(crate) fn set_os_drag(&mut self, supported: bool) { self.os_drag = supported; }
-
-    fn drags_out(&self, n: &Node) -> bool { self.os_drag && n.drag_out.is_some() }
 
     /// A window drag or titlebar double-click requested by the press just delivered. The shell
     /// must act on it before returning from that press event.
