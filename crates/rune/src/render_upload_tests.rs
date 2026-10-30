@@ -276,6 +276,22 @@ fn same_finds_one_changed_bit_in_any_word() {
     }
 }
 
+/// Lists at any 4-byte offset compare, not only 8-aligned ones: a stack array or a Vec may land
+/// either way.
+#[test]
+fn same_takes_lists_at_any_word_offset() {
+    let n = size_of::<Instance>() / 4;
+    let words: Vec<u32> = (0..3 * n as u32 + 1).collect();
+    let mut other = words.clone();
+    for skip in [0, 1] {
+        let a: &[Instance] = bytemuck::cast_slice(&words[skip..skip + 3 * n]);
+        assert!(same(a, a), "offset {skip}");
+        other[skip + 2 * n] ^= 1;
+        assert!(!same(a, bytemuck::cast_slice(&other[skip..skip + 3 * n])), "offset {skip}");
+        other[skip + 2 * n] ^= 1;
+    }
+}
+
 /// Plain rects between images and glyphs keep the batch they're in; only image and glyph pages
 /// start one.
 #[test]

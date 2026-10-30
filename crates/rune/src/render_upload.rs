@@ -77,11 +77,12 @@ const BLOCK: usize = 64;
 
 /// Whether two equally long instance lists hold the same bytes. Folds over words into one
 /// accumulator per word of an instance, which vectorizes, at about half the cost of a `memcmp`.
+/// Words are `u32`, `Instance`'s own alignment, so any list casts.
 fn same(a: &[Instance], b: &[Instance]) -> bool {
-    let words = |l| bytemuck::cast_slice::<Instance, [u64; 16]>(l);
-    let mut acc = [0u64; 16];
+    let words = |l| bytemuck::cast_slice::<Instance, [u32; 32]>(l);
+    let mut acc = [0u32; 32];
     for (x, y) in words(a).iter().zip(words(b)) {
-        for j in 0..16 { acc[j] |= x[j] ^ y[j]; }
+        for j in 0..32 { acc[j] |= x[j] ^ y[j]; }
     }
     acc.iter().fold(0, |s, w| s | w) == 0
 }
