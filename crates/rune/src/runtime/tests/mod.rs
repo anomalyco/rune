@@ -20,6 +20,7 @@ mod scroll_hover;
 mod secure_text;
 mod shimmer;
 mod springs;
+mod window_shift;
 mod window_wake;
 
 thread_local! {

@@ -46,6 +46,9 @@ pub(crate) struct VirtualList {
     /// The rows the last applied commit mounted. Every measurement of a commit compares with
     /// these, not with the pass before it.
     pub shown: HashSet<String>,
+    /// Index-built rows as last built, by key, for commits that change no state: a window shift
+    /// builds only the rows it newly mounts.
+    pub kept: crate::runtime::HashMap<String, crate::memo::Kept<El>>,
     /// The row holding the focused element, kept while that row is scrolled out.
     pub focused_row: Option<String>,
     /// The rows holding the text selection's anchor and focus, kept built while scrolled out.

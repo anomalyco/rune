@@ -3446,16 +3446,19 @@ impl<S: 'static> Measurement<'_, S> {
         let mut cx = fresh_cx(self);
         #[cfg(feature = "hot")]
         let emptied = self.memo.emptied();
-        let memo = crate::memo::enter(std::mem::take(self.memo), self.env, self.system_accent, self.system_reduced_motion, cx.caret.clone(), cx.layout.clone());
+        let mut kept = std::mem::take(&mut self.memo.view);
+        // A resize re-runs the view: the web's safe area moves with it, unseen by any read.
+        let unchanged = self.state_unchanged && self.playground.is_none() && !tx.relayout && !tx.window_step;
+        let memo = crate::memo::enter(std::mem::take(self.memo), self.env, self.system_accent, self.system_reduced_motion, cx.caret.clone(), cx.layout.clone(), unchanged);
         let view_time = crate::frame_profile::Scope::new(crate::frame_profile::Phase::View);
         #[cfg(not(feature = "hot"))]
-        let mut root = { let root = self.root_view(&mut cx); self.build_tree(root, tx, force_all) };
+        let mut root = { let root = self.kept_root_view(&mut kept, &mut cx); self.build_tree(root, tx, force_all) };
         // Index-built rows run the app's closures in `build_tree`, so a patch's panic there
         // falls back like one in the view.
         #[cfg(feature = "hot")]
         let (mut root, memo) = {
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let root = self.root_view(&mut cx);
+                let root = self.kept_root_view(&mut kept, &mut cx);
                 self.build_tree(root, tx, force_all)
             })) {
                 Ok(root) => (root, memo),
@@ -3467,7 +3470,7 @@ impl<S: 'static> Measurement<'_, S> {
                     self.virtual_culled.clear();
                     self.virtual_inputs.clear();
                     cx = fresh_cx(self);
-                    let memo = crate::memo::enter(emptied, self.env, self.system_accent, self.system_reduced_motion, cx.caret.clone(), cx.layout.clone());
+                    let memo = crate::memo::enter(emptied, self.env, self.system_accent, self.system_reduced_motion, cx.caret.clone(), cx.layout.clone(), false);
                     let root = crate::hot::original_only(|| self.root_view(&mut cx));
                     (crate::hot::original_only(|| self.build_tree(root, tx, force_all)), memo)
                 }
@@ -3477,6 +3480,7 @@ impl<S: 'static> Measurement<'_, S> {
         let (memo, replayed) = memo.finish();
         drop(view_time);
         *self.memo = memo;
+        self.memo.view = kept;
         self.reduced_motion = cx.reduced_motion;
         self.time_scale = cx.time_scale;
         // Reads made by memos this build reused count as made again.

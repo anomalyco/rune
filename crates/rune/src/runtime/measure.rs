@@ -98,6 +98,18 @@ impl<S: 'static> Measurement<'_, S> {
         root
     }
 
+    /// The view's root element, or the last build's when nothing it depends on changed: a
+    /// commit only a virtual window's shift caused doesn't run the view (see `memo::Kept`).
+    pub(super) fn kept_root_view(&self, kept: &mut crate::memo::Kept<(El, bool, f32)>, cx: &mut Cx<S>) -> El {
+        let (root, reduced_motion, time_scale) = kept.get(|| {
+            let root = self.root_view(cx);
+            (root, cx.reduced_motion, cx.time_scale)
+        });
+        cx.reduced_motion = reduced_motion;
+        cx.time_scale = time_scale;
+        root
+    }
+
     pub(super) fn populate_virtual_children(
         &mut self,
         el: &mut El,
@@ -118,16 +130,23 @@ impl<S: 'static> Measurement<'_, S> {
             let quiet: Vec<bool> = v.range.clone().map(|i| v.mounts_quietly(i, self.commits)).collect();
             let key_warnings = &mut *self.key_warnings;
             let keys = &v.keys;
+            let mut kept_before = std::mem::take(&mut v.kept);
+            let mut kept = HashMap::default();
             let mut build = |i: usize| {
                 let key = &keys[i];
-                let mut row = (rows.build)(state, i).key(key.clone());
-                // The view's key repair ran before these rows existed.
-                if crate::key_diagnostics::clean(&row) { return row; }
-                let duplicates = crate::key_diagnostics::repair_at(&mut row, &format!("{path}/{key}"));
-                match key_warnings.as_mut() {
-                    Some(out) => out.extend(duplicates.into_iter().map(|d| d.message)),
-                    None => crate::key_diagnostics::warn_once(&duplicates),
-                }
+                let mut slot = kept_before.remove(key).unwrap_or_default();
+                let row = slot.get(|| {
+                    let mut row = (rows.build)(state, i).key(key.clone());
+                    // The view's key repair ran before these rows existed.
+                    if crate::key_diagnostics::clean(&row) { return row; }
+                    let duplicates = crate::key_diagnostics::repair_at(&mut row, &format!("{path}/{key}"));
+                    match key_warnings.as_mut() {
+                        Some(out) => out.extend(duplicates.into_iter().map(|d| d.message)),
+                        None => crate::key_diagnostics::warn_once(&duplicates),
+                    }
+                    row
+                });
+                if !slot.is_empty() { kept.insert(key.clone(), slot); }
                 row
             };
             // A focused field's row and a selection's pinned end rows are built unmounted.
@@ -161,6 +180,7 @@ impl<S: 'static> Measurement<'_, S> {
                 row.virtual_mount = quiet;
                 row
             }).collect();
+            v.kept = kept;
             v.selection.source = Some(rows);
         } else {
             v.selection.source = None;

@@ -49,6 +49,9 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
 
+mod kept;
+pub(crate) use kept::Kept;
+
 use crate::El;
 use crate::runtime::layout_read::{LayoutRects, SELECTION, Same, boxes_moved, moved, note_read, seen_rect, size};
 
@@ -156,6 +159,12 @@ struct Entry {
 pub(crate) struct MemoCache {
     entries: HashMap<Rc<str>, Entry>,
     pass: u64,
+    /// Bumped by each view build that may see changed state, so a [`Kept`] build from before
+    /// it isn't reused.
+    stamp: u64,
+    /// The view's last build, with the `Cx` settings it left (reduced motion, time scale), for
+    /// commits that change no state. The runtime takes it out for each view build.
+    pub(crate) view: Kept<(El, bool, f32)>,
     #[cfg(test)]
     pub(crate) builds: usize,
 }
@@ -163,12 +172,13 @@ pub(crate) struct MemoCache {
 impl MemoCache {
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
+        self.stamp += 1;
     }
 
     /// No memos, counting passes on from this cache's, for a build that must start from scratch.
     #[cfg(feature = "hot")]
     pub(crate) fn emptied(&self) -> MemoCache {
-        MemoCache { pass: self.pass, ..MemoCache::default() }
+        MemoCache { pass: self.pass, stamp: self.stamp + 1, ..MemoCache::default() }
     }
 
     /// The pass the next view build will be.
@@ -186,6 +196,8 @@ impl MemoCache {
 struct Scope {
     cache: MemoCache,
     env: u64,
+    /// The frame loop saw no state change since the last commit, so [`Kept`] builds may be reused.
+    unchanged: bool,
     /// The ids of the memos whose closures are running, innermost last.
     path: Vec<Rc<str>>,
     /// The memos each running closure has created so far.
@@ -213,7 +225,9 @@ thread_local! {
 }
 
 /// Makes `cache` the one [`memo`] uses until [`Guard::finish`], for one view build.
-/// `caret` and `layout` are what the view's `Cx` returns.
+/// `caret` and `layout` are what the view's `Cx` returns; `unchanged`, that no state the view
+/// reads may have changed since the last build, so [`Kept`] builds can be reused.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn enter(
     mut cache: MemoCache,
     env: crate::Env,
@@ -221,13 +235,16 @@ pub(crate) fn enter(
     reduced_motion: bool,
     caret: Option<(String, [f32; 4])>,
     layout: LayoutRects,
+    unchanged: bool,
 ) -> Guard {
     cache.pass += 1;
+    if !unchanged { cache.stamp += 1; }
     let accent = [accent.accent(env.system_dark), accent.focus(env.system_dark)].map(|c| [c.r, c.g, c.b, c.a].map(f32::to_bits));
     let env = hash_of(&(env.system_dark, env.scale.to_bits(), reduced_motion, accent));
     let scope = Scope {
         cache,
         env,
+        unchanged,
         path: Vec::new(),
         nested: Vec::new(),
         reads: Vec::new(),
@@ -380,14 +397,7 @@ pub fn memo(id: impl Into<String>, version: impl Hash, build: impl FnOnce() -> E
         if let Some((el, nested, reads)) = reused {
             keep_nested(&mut s.cache, nested, pass);
             s.note(&reads);
-            for read in reads {
-                match read {
-                    Read::Caret(..) => s.replayed.caret = true,
-                    Read::Layout(key, _) => note_read(&mut s.replayed.layout, &key, None),
-                    Read::LayoutWith(key, same, _) => note_read(&mut s.replayed.layout, &key, Some(same)),
-                    Read::Selection(_) => note_read(&mut s.replayed.layout, SELECTION, None),
-                }
-            }
+            replay(s, reads.into_iter());
             if let Some(parent) = s.nested.last_mut() {
                 parent.push(rc_id());
             }
@@ -427,6 +437,18 @@ pub fn memo(id: impl Into<String>, version: impl Hash, build: impl FnOnce() -> E
         s.cache.entries.insert(id, Entry { version, built, reads, nested, pass });
         el
     })
+}
+
+/// Counts the reads of a reused build as made again by the view.
+fn replay(s: &mut Scope, reads: impl Iterator<Item = Read>) {
+    for read in reads {
+        match read {
+            Read::Caret(..) => s.replayed.caret = true,
+            Read::Layout(key, _) => note_read(&mut s.replayed.layout, &key, None),
+            Read::LayoutWith(key, same, _) => note_read(&mut s.replayed.layout, &key, Some(same)),
+            Read::Selection(_) => note_read(&mut s.replayed.layout, SELECTION, None),
+        }
+    }
 }
 
 /// Marks the memos built inside a reused one as used, so they survive to its next build.
@@ -515,7 +537,7 @@ mod tests {
     #[test]
     fn a_view_panicking_inside_a_memo_leaves_no_scope_for_the_next_build() {
         let panicked = std::panic::catch_unwind(|| {
-            let _scope = enter(MemoCache::default(), Env::new(true, 1.0), crate::SystemAccent::DEFAULT, false, None, LayoutRects::default());
+            let _scope = enter(MemoCache::default(), Env::new(true, 1.0), crate::SystemAccent::DEFAULT, false, None, LayoutRects::default(), false);
             memo("outer", 0, || memo("inner", 0, || panic!("view panicked")))
         });
         assert!(panicked.is_err());
