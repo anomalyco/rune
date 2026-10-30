@@ -104,19 +104,25 @@ impl<S: 'static> Runtime<S> {
         }
     }
 
-    /// The vertical viewport around the element `key` and the offset that puts the element's
-    /// top `at` points below its top, before clamping.
+    /// The vertical viewport around the element or `TextHighlight` `key` and the offset that puts
+    /// its top `at` points below the viewport's top, before clamping.
     fn anchor_offset(&self, key: &str, at: f32) -> Option<(usize, f64)> {
-        let e = self.nodes.iter().enumerate().position(|(i, n)| n.named(key) && !self.subtree_exiting(i))?;
+        let top = self.nodes.iter().enumerate()
+            .find_map(|(i, n)| (n.named(key) && !self.subtree_exiting(i)).then_some(n.target[1]))
+            .or_else(|| {
+                let (i, [_, y0, _, _]) = self.highlight_target_in(&self.nodes, None, key)?;
+                (!self.subtree_exiting(i)).then_some(y0)
+            })?;
         let v = self.scroll_viewport_on(key, false, true)?;
-        Some((v, f64::from(self.nodes[e].target[1] - self.nodes[v].target[1] - at).max(0.0)))
+        Some((v, f64::from(top - self.nodes[v].target[1] - at).max(0.0)))
     }
 
     /// The viewport keyed (or pathed) `key`, or the nearest one around it, that scrolls
     /// horizontally (`x`) or vertically (`y`).
     fn scroll_viewport_on(&self, key: &str, x: bool, y: bool) -> Option<usize> {
         let i = self.nodes.iter().enumerate()
-            .position(|(i, n)| n.named(key) && !self.subtree_exiting(i))?;
+            .position(|(i, n)| n.named(key) && !self.subtree_exiting(i))
+            .or_else(|| self.highlight_target_in(&self.nodes, None, key).map(|(i, _)| i))?;
         std::iter::successors(Some(i), |&p| self.nodes[p].parent).find(|&p| {
             let n = &self.nodes[p];
             n.scroll.is_some() && ((x && n.scroll_axes.x()) || (y && n.scroll_axes.y()))

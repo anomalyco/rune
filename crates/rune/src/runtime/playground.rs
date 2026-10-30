@@ -168,7 +168,7 @@ impl<S: 'static> Runtime<S> {
                 };
                 let path = side[to as usize].clone();
                 self.set_focus(Some(path.clone()), true);
-                one.scroll_to.push((None, path));
+                one.scroll_to.push(crate::runtime::ScrollReveal::into_view(None, path));
                 true
             }
         }

@@ -34,11 +34,13 @@ pub(super) struct Hold {
     pub inset: f32,
 }
 
-/// One `Tx::scroll_into_view` request that follows its target while the viewport's subtree moves.
+/// One `Tx::scroll_into_view` or `Tx::scroll_center` request that follows its target while the
+/// viewport's subtree moves.
 pub(super) struct Reveal {
     pub scope: Option<String>,
     pub key: String,
     pub viewport: String,
+    pub center: bool,
     /// Whether this reveal lands at the bottom of a `stick_bottom` viewport.
     pub at_end: bool,
 }
@@ -592,25 +594,38 @@ impl<S: 'static> Runtime<S> {
             moved = true;
         }
         for r in &self.scroll_reveals {
-            let Some(i) = (0..self.nodes.len()).find(|&i| {
-                let n = &self.nodes[i];
-                n.named(&r.key) && !self.subtree_exiting(i)
-                    && n.parent.is_none_or(|p| super::in_scope(&self.nodes[p].path, r.scope.as_deref()))
-            }) else { continue };
+            let target = (0..self.nodes.len()).find(|&i| self.reveal_names(r, i))
+                .map(|i| (i, self.drawn[i][1], self.drawn[i][3]))
+                .or_else(|| {
+                    let (i, [_, y0, _, y1]) = self.highlight_target_in(&self.nodes, r.scope.as_deref(), &r.key)?;
+                    if self.subtree_exiting(i) { return None; }
+                    let scale = self.drawn_scale.get(i).copied().unwrap_or(1.0);
+                    let dy = (y0 - self.nodes[i].target[1]) * scale;
+                    Some((i, self.drawn[i][1] + dy, (y1 - y0).max(0.0) * scale))
+                });
+            let Some((i, drawn_top, drawn_h)) = target else { continue };
             let Some(s) = self.viewport_of(i).filter(|&s| self.nodes[s].path == r.viewport) else { continue };
             let scale = self.drawn_scale[s];
             if scale <= 1e-4 { continue; }
             let Some(cover) = self.stuck_cover(&r.viewport, &r.key) else { continue };
             let cover = cover / f64::from(scale);
-            let rel_top = f64::from((self.drawn[i][1] - self.drawn[s][1]) / scale) - cover;
-            let height = f64::from(self.drawn[i][3] / scale) + cover;
+            let rel_top = f64::from((drawn_top - self.drawn[s][1]) / scale) - cover;
+            let height = f64::from(drawn_h / scale) + cover;
             let viewport = f64::from(self.drawn[s][3] / scale);
             let margin = f64::from(self.nodes[s].scroll_edges.margin);
             let stick = self.nodes[s].scroll.is_some_and(|s| s.stick_bottom);
             let growing = self.scroll_stack(s).and_then(|c| self.stacks.get(&self.nodes[c].id)).is_some_and(|st| st.growing);
             let Some(st) = self.scrolls.get_mut(&self.nodes[s].id) else { continue };
             let top = st.offset + rel_top;
-            let to = scroll_edge::reveal(st.offset, top, height, viewport, margin).clamp(0.0, st.max);
+            let to = reveal::place(r.center, st.offset, top, height, viewport, margin).clamp(0.0, st.max);
+            // A `Tx::scroll_center` glide follows its target once the target moves.
+            if let Some(v) = st.glide {
+                if st.glide_to.is_none_or(|g| (to - g).abs() >= 1.0 / 64.0) {
+                    st.glide_to = Some(to);
+                    st.glide = Some(scroll_offset::retarget_v(st.offset, v, to));
+                }
+                continue;
+            }
             if (to - st.offset).abs() < 1.0 / 64.0 {
                 if growing { st.pinned = false; }
                 continue;
@@ -649,14 +664,30 @@ impl<S: 'static> Runtime<S> {
                 || self.grows.get(&n.id).is_some_and(|g| g.moving())
                 || self.scrolls.get(&n.id).is_some_and(|st| st.slack.moving()))
         });
+        let gliding = |viewport: &str| self.path_ids.get(viewport)
+            .and_then(|id| self.scrolls.get(id))
+            .is_some_and(|st| st.glide.is_some());
         keeps.retain(|k| animating(&k.viewport));
-        reveals.retain(|r| animating(&r.viewport) && self.nodes.iter().enumerate().any(|(i, n)| {
-            n.named(&r.key) && !self.subtree_exiting(i)
-                && n.parent.is_none_or(|p| super::in_scope(&self.nodes[p].path, r.scope.as_deref()))
-                && self.viewport_of(i).is_some_and(|s| self.nodes[s].path == r.viewport)
-        }));
+        // A glide keeps its reveal until it lands; otherwise a reveal lasts while its viewport's
+        // subtree moves with its target in it.
+        reveals.retain(|r| gliding(&r.viewport) || (animating(&r.viewport) && self.reveal_mounted(r)));
         self.keeps = keeps;
         self.scroll_reveals = reveals;
+    }
+
+    /// Whether node `i` is reveal `r`'s target element.
+    fn reveal_names(&self, r: &Reveal, i: usize) -> bool {
+        let n = &self.nodes[i];
+        n.named(&r.key) && !self.subtree_exiting(i)
+            && n.parent.is_none_or(|p| super::in_scope(&self.nodes[p].path, r.scope.as_deref()))
+    }
+
+    /// Whether reveal `r`'s target element or highlight is mounted in its viewport.
+    fn reveal_mounted(&self, r: &Reveal) -> bool {
+        let in_viewport = |i: usize| self.viewport_of(i).is_some_and(|s| self.nodes[s].path == r.viewport);
+        (0..self.nodes.len()).any(|i| self.reveal_names(r, i) && in_viewport(i))
+            || self.highlight_target_in(&self.nodes, r.scope.as_deref(), &r.key)
+                .is_some_and(|(i, _)| !self.subtree_exiting(i) && in_viewport(i))
     }
 
     /// What a reveal of row `key` in viewport `path` must leave to stuck headers: `None` when

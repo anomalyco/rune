@@ -70,3 +70,34 @@ fn a_glide_lands_without_a_last_step() {
     // The landing frame moves no more than a tenth of a point past the frame before's step.
     assert!(steps[n - 1] <= steps[n - 2] + 0.1, "the last step jumps: {:.2?}", &steps[n - 4..]);
 }
+
+#[test]
+fn a_centring_glide_sent_nearer_mid_flight_stops_there_without_going_past() {
+    let mut rt = at(0.0);
+    rt.update(|_, tx| tx.scroll_center("r30"));
+    for _ in 0..5 { rt.frame(DT); }
+    let mid = offset(&rt);
+    // The first row whose centred offset (its top less 75 points) lies just ahead.
+    let k = ((mid + 40.0 + 75.0) / 50.0).ceil();
+    let to = k * 50.0 - 75.0;
+    assert!(to < 1425.0, "it's well short of r30: {mid}");
+    rt.update(|_, tx| tx.scroll_center(format!("r{k}")));
+    let path = glide(&mut rt);
+    let past = path.iter().map(|y| y - to).fold(0.0, f64::max);
+    assert!(past < 0.05, "it went {past:.2} points past {to:.1} and came back: {path:.1?}");
+    assert!(path.windows(2).all(|w| w[1] >= w[0] - 1e-6), "one way only: {path:.1?}");
+    assert_eq!(*path.last().unwrap(), to);
+}
+
+#[test]
+fn a_centring_glide_sent_further_mid_flight_keeps_its_speed() {
+    let mut rt = at(0.0);
+    rt.update(|_, tx| tx.scroll_center("r20"));
+    for _ in 0..5 { rt.frame(DT); }
+    let [a, b] = [offset(&rt), { rt.frame(DT); offset(&rt) }];
+    rt.update(|_, tx| tx.scroll_center("r35"));
+    rt.frame(DT);
+    assert!(offset(&rt) - b >= (b - a) - 0.5, "it goes on at least as fast: {a:.1} {b:.1} {:.1}", offset(&rt));
+    glide(&mut rt);
+    assert_eq!(offset(&rt), 35.0 * 50.0 - 75.0);
+}

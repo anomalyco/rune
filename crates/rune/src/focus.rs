@@ -336,7 +336,7 @@ impl<S: 'static> Runtime<S> {
             };
             let path = self.nodes[order[next]].path.clone();
             self.set_focus(Some(path.clone()), true);
-            tx.scroll_to.push((None, path));
+            tx.scroll_to.push(crate::runtime::ScrollReveal::into_view(None, path));
             self.enter_links(order[next], ev.mods.shift);
             return true;
         }
@@ -388,7 +388,7 @@ impl<S: 'static> Runtime<S> {
                 let action = follows.then(|| n.on_press.clone()).flatten();
                 let path = n.path.clone();
                 self.set_focus(Some(path.clone()), true);
-                tx.scroll_to.push((None, path));
+                tx.scroll_to.push(crate::runtime::ScrollReveal::into_view(None, path));
                 if let Some(f) = action { f(states!(self), tx); }
                 return true;
             }

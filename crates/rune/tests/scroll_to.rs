@@ -123,3 +123,57 @@ fn scroll_key_to_lands_a_row_where_asked_in_the_frame_that_builds_it() {
     rt.frame(1.0 / 60.0);
     assert_eq!(at(&rt, "row0").1, 0.0, "and to the top");
 }
+
+#[test]
+fn scroll_center_mounts_virtual_rows_and_centres_elements_and_text_highlights() {
+    use rune::{Color, TextHighlight, TextStyle, text};
+
+    #[derive(Default)]
+    struct FindS { hit_row: usize }
+
+    fn find_view(_: &FindS, _: &mut Cx<FindS>) -> El {
+        let rows = col().key("rows").w_full().growth(GrowthSpec::default())
+            .virtual_rows(80, 40.0, |_: &FindS, i| format!("r{i}").into(), |s: &FindS, i| {
+                let mut body = text(format!("line a\nline b\nhit in row {i}\nline d"))
+                    .font(TextStyle::new(14.0, 400.0).lh(20.0));
+                if i == s.hit_row {
+                    body = body.text_highlight(TextHighlight::new(14..17, Color::WHITE).key("active-hit"));
+                }
+                col().w_full().py(10.0).child(body)
+            });
+        col().w_full().h_full().child(col().key("list").w_full().h(200.0).scroll(ScrollSpec { stick_bottom: false }).child(rows))
+    }
+
+    let mut rt = Runtime::new(FindS { hit_row: 40 }, find_view, (300.0, 300.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    // `"r40/active-hit"` mounts virtual row `r40` and glides the highlight's 20pt line to the
+    // middle of the 200pt viewport (y ≈ 90).
+    rt.update(|_, tx| tx.scroll_center_in("list", "r40/active-hit"));
+    rt.frame(1.0 / 60.0);
+    let mut frames = 0;
+    while rt.frame(1.0 / 60.0) {
+        frames += 1;
+        assert!(frames < 600, "glide settled");
+    }
+    assert!(frames > 4, "glided to the match ({frames} frames)");
+    let mark = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("active-hit")).expect("active-hit mounted");
+    let mid = mark.rect[1] + mark.rect[3] * 0.5;
+    assert!((mid - 100.0).abs() < 2.0, "highlight centred in 200pt viewport: {mark:?}");
+
+    // Instant variant lands centred in one frame.
+    rt.update(|s, tx| {
+        s.hit_row = 15;
+        tx.scroll_center_in_instant("list", "r15/active-hit");
+    });
+    rt.frame(1.0 / 60.0);
+    let mark = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("active-hit")).expect("r15 active-hit");
+    let mid = mark.rect[1] + mark.rect[3] * 0.5;
+    assert!((mid - 100.0).abs() < 2.0, "instant centre in one frame: {mark:?}");
+
+    // `scroll_key_to` also resolves `TextHighlight` keys once mounted.
+    rt.update(|_, tx| tx.scroll_key_to("active-hit", 24.0));
+    rt.frame(1.0 / 60.0);
+    let mark = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("active-hit")).unwrap();
+    assert!((mark.rect[1] - 24.0).abs() < 2.0, "scroll_key_to placed TextHighlight at 24pt: {mark:?}");
+}

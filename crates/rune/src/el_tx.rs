@@ -35,8 +35,8 @@ pub struct Tx {
     pub(crate) text_flights: Vec<(String, String)>,
     /// `Tx::launch`: (source, destination).
     pub(crate) launches: Vec<(String, String)>,
-    /// Rows to reveal: (scope, key).
-    pub(crate) scroll_to: Vec<(Option<String>, String)>,
+    /// Rows to reveal or centre (`Tx::scroll_into_view` and `Tx::scroll_center`).
+    pub(crate) scroll_to: Vec<crate::runtime::ScrollReveal>,
     /// Scroll viewports to send to their bottom: (key, animated).
     pub(crate) scroll_bottom: Vec<(String, bool)>,
     /// Scroll viewports to page: (key, pages).

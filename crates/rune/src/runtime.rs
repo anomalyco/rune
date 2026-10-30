@@ -182,6 +182,7 @@ use shape_paint::push_shape;
 use props::*;
 pub(crate) use scroll_x::{SHIFT_TURNS_WHEEL, wheel_delta};
 pub(crate) use scroll_offset::ScrollRequest;
+pub(crate) use reveal::ScrollReveal;
 pub use selectable::{SelectedText, SelectionChange, TextSelection};
 #[cfg(test)]
 #[path = "runtime/timer_wake_tests.rs"]
@@ -2200,8 +2201,8 @@ impl<S: 'static> Runtime<S> {
                 if !tx.scroll_to.is_empty() {
                     self.keeps.clear();
                     self.scroll_reveals.clear();
-                    for (scope, key) in std::mem::take(&mut tx.scroll_to) {
-                        self.reveal_row(scope.as_deref(), &key, tx.instant);
+                    for r in std::mem::take(&mut tx.scroll_to) {
+                        self.reveal_row(&r, tx.instant);
                     }
                 }
             }
@@ -2277,7 +2278,7 @@ impl<S: 'static> Runtime<S> {
                 // intercept the reveal, including when this row is still virtual.
                 let scope = path.split('/').filter(|seg| !seg.starts_with('#')).collect::<Vec<_>>().join("/");
                 let key = if scope.is_empty() { key } else { format!("{scope}/{key}") };
-                scroll_to.push((None, key));
+                scroll_to.push(ScrollReveal::into_view(None, key));
             }
         }
         let mut scroll_bottom = std::mem::take(&mut tx.scroll_bottom);
@@ -2293,7 +2294,7 @@ impl<S: 'static> Runtime<S> {
             self.keeps.clear();
             self.scroll_reveals.clear();
         }
-        for (scope, key) in scroll_to { self.reveal_row(scope.as_deref(), &key, tx.instant); }
+        for r in &scroll_to { self.reveal_row(r, tx.instant); }
         if !scroll_bottom.is_empty() || !scroll_pages.is_empty() || !scroll_offsets.is_empty() || follow {
             self.step_scroll(0.0);
         }
