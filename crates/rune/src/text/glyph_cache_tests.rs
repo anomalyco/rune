@@ -121,3 +121,30 @@ fn entries_are_bounded() {
     assert!(ts.glyph_cache.bytes() <= MAX_BYTES, "{} bytes", ts.glyph_cache.bytes());
     assert_eq!(ts.glyph_cache.bytes(), ts.glyph_cache.entries.values().map(Entry::size).sum::<usize>());
 }
+
+/// A layout that replaces one that went this frame, as a streamed text's next version does,
+/// flattens into the room the old entry had, so its lines coming into view over the next
+/// frames don't allocate. Room nobody takes for a frame goes.
+#[test]
+fn a_new_entry_grows_into_the_room_of_one_that_went() {
+    let mut ts = TextSystem::default();
+    ts.set_glyph_inks(Color::WHITE, &[]);
+    let all = f32::NEG_INFINITY..f32::INFINITY;
+    let old = Rc::new((*paragraph(&mut ts)).clone());
+    cached(&mut ts, &old, [0.0, 0.0], 1.0, false, all.clone());
+    let room = ts.glyph_cache.entries.values().map(|e| e.glyphs.capacity()).sum::<usize>();
+    assert!(room > 0);
+    drop(old);
+    ts.begin_frame();
+    let new = Rc::new((*paragraph(&mut ts)).clone());
+    cached(&mut ts, &new, [0.0, 0.0], 1.0, false, 0.0..20.0);
+    let e = ts.glyph_cache.entries.values().next().unwrap();
+    assert!(e.glyphs.capacity() >= room && e.glyphs.len() < room, "{} of {room}", e.glyphs.capacity());
+    assert_eq!(cached(&mut ts, &new, [0.0, 0.0], 1.0, false, all.clone()), direct(&mut ts, &new, [0.0, 0.0], 1.0, false, all.clone()));
+    assert_eq!(ts.glyph_cache.bytes(), ts.glyph_cache.entries.values().map(Entry::size).sum::<usize>());
+    drop(new);
+    ts.begin_frame();
+    assert!(ts.glyph_cache.spare.is_some());
+    ts.begin_frame();
+    assert!(ts.glyph_cache.spare.is_none(), "room nobody took goes");
+}

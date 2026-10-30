@@ -32,6 +32,10 @@ pub(crate) struct GlyphCache {
     entries: HashMap<Key, Entry, std::hash::BuildHasherDefault<rune_motion::Fx>>,
     bytes: usize,
     frame: u64,
+    /// The buffers of an entry whose layout went this frame, for the next new entry to grow
+    /// into. A streamed text's new layout replaces its last each commit, and its lines come
+    /// into view over the frames after, so they flatten into room it already has.
+    spare: Option<Entry>,
     /// Lines flattened out of Parley, a running count.
     pub(crate) flattened: u64,
 }
@@ -43,6 +47,7 @@ struct Key {
     apple: u8,
 }
 
+#[derive(Default)]
 struct Entry {
     layout: Weak<Layout<Ink>>,
     inks: Vec<u8>,
@@ -135,15 +140,20 @@ impl GlyphCache {
             return;
         }
         let at = Rc::as_ptr(layout) as usize;
-        self.entries.retain(|k, _| k.layout != at);
+        for (_, e) in self.entries.extract_if(|k, _| k.layout == at) {
+            retire(&mut self.spare, e);
+        }
         self.bytes = self.entries.values().map(Entry::size).sum();
     }
 
     /// Drops entries whose layout is gone, then the least recently painted while over budget.
     pub(crate) fn begin_frame(&mut self) {
         self.frame += 1;
+        self.spare = None;
         let before = self.entries.len();
-        self.entries.retain(|_, e| e.layout.strong_count() > 0);
+        for (_, e) in self.entries.extract_if(|_, e| e.layout.strong_count() == 0) {
+            retire(&mut self.spare, e);
+        }
         if self.entries.len() != before {
             self.bytes = self.entries.values().map(Entry::size).sum();
         }
@@ -167,6 +177,16 @@ impl GlyphCache {
 
     #[cfg(test)]
     pub(crate) fn bytes(&self) -> usize { self.bytes }
+}
+
+/// Keeps the roomiest of the entries that went this frame, up to one paragraph's share, and
+/// lets go of its layout, so one re-broken in place stays where it is.
+fn retire(spare: &mut Option<Entry>, mut e: Entry) {
+    let room = |e: &Entry| e.glyphs.capacity();
+    if room(&e) * size_of::<Glyph>() <= ENTRY_BYTES && spare.as_ref().is_none_or(|s| room(s) < room(&e)) {
+        e.layout = Weak::new();
+        *spare = Some(e);
+    }
 }
 
 impl TextSystem {
@@ -195,18 +215,15 @@ impl TextSystem {
                 let size = o.get().size();
                 (o.into_mut(), size)
             }
-            std::collections::hash_map::Entry::Vacant(v) => (v.insert(Entry {
-                layout: Rc::downgrade(layout),
-                inks: inks.to_vec(),
-                k: k.to_bits(),
-                bytes,
-                clock: self.atlas.clock,
-                used: frame,
-                lines: vec![(UNFLAT, UNFLAT); layout.len()],
-                glyphs: Vec::new(),
-                faces: Vec::new(),
-                coords: Vec::new(),
-            }), 0),
+            std::collections::hash_map::Entry::Vacant(v) => {
+                let mut e = cache.spare.take().unwrap_or_default();
+                e.layout = Rc::downgrade(layout);
+                e.inks.clear();
+                e.inks.extend_from_slice(inks);
+                (e.k, e.bytes, e.clock, e.used) = (k.to_bits(), bytes, self.atlas.clock, frame);
+                e.clear(layout.len());
+                (v.insert(e), 0)
+            }
         };
         let fits = entry.k == k.to_bits() && entry.bytes == bytes && entry.inks == inks;
         // A raster factor in motion changes every frame: draw directly until it rests.
