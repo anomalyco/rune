@@ -1,7 +1,7 @@
 {
   "events": [
-    { "t": 0.3, "type": "tap", "key": "composer" },
-    { "t": 0.39, "type": "tap", "key": "working", "expect": "smooth" },
+    { "t": 0.38, "type": "tap", "key": "composer", "hold": 0 },
+    { "t": 0.47, "type": "tap", "key": "working", "hold": 0, "expect": "smooth" },
     { "t": 1.5, "type": "move", "x": 10, "y": 10 }
   ]
 }

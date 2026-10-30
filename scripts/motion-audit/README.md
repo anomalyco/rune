@@ -29,6 +29,7 @@ tracks it sampled (`tk`: `[element id or path, property, active]`; inactive mean
 | `latency`, `hitch` | input with no motion for several frames; a frame over budget |
 | `cut-exit` | unmounts partway through its fade: nothing leaves above opacity 0 |
 | `reversal`, `dog-leg` | one motion heads the wrong way first or goes out and back; a route much longer than its chord |
+| `stall` | one motion's speed drops for a frame and picks up again, as a retarget that lost part of its velocity does |
 
 An app's scenario can say what each input should do with `"expect"` on its script event:
 

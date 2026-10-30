@@ -4296,7 +4296,7 @@ impl<S: 'static> Runtime<S> {
                     paint_fade_origin: fade_origin, rounded: None, scale, anchor, anchor_to, blur: 0.0,
                     dx: pinh.dx - pinh.cover[0], dy: pinh.dy - pinh.cover[1], cover: [0.0; 2], outer: None,
                     scale_motion: ScaleMotion::Still, in_cache: false, skip_paint: false, turn: 0, snap: pixel_snap::Inherit { layer: 0, ..pinh.snap }, ..pinh };
-                let fix = self.launches.offset_fix(&self.scene, node_id, [pinh.dx, pinh.dy]);
+                let fix = self.launches.offset_fix(&self.scene, node_id, [pinh.dx, pinh.dy], self.commit_gen);
                 (pinh.dx, pinh.dy) = (pinh.dx + fix[0], pinh.dy + fix[1]);
             }
             let mark = if n.vis.mark != 0 { n.vis.mark } else { pinh.mark };

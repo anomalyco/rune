@@ -2,7 +2,7 @@
 //! travels one smooth path into its slot in the scroll view.
 use rune::{Cx, El, Env, GrowthSpec, Key, KeyEvent, Runtime, ScrollSpec, TextEdit, TextStyle, Transition, Tx, col, text, text_input};
 
-struct State { draft: TextEdit, sent: Vec<String>, relaunch: bool, zoom: f32, ticks: u32, tray: bool, swap: bool, into_body: bool }
+struct State { draft: TextEdit, sent: Vec<String>, relaunch: bool, zoom: f32, ticks: u32, tray: bool, swap: bool, into_body: bool, tail: bool }
 
 fn view(s: &State, _: &mut Cx<State>) -> El {
     let mut rows = col().w_full().growth(GrowthSpec::default());
@@ -15,7 +15,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         let tray = || col().key("tray").w_full().transition(Transition::scale(0.9).combined(Transition::opacity()));
         rows = rows.child(if s.tray && i == 2 { tray().child(row) } else { row });
     }
-    rows = rows.child(text(format!("{}", s.ticks)).key("ticks"));
+    rows = rows.child(text(if s.tail { format!("{}\nand\nthe\nrest", s.ticks) } else { format!("{}", s.ticks) }).key("ticks"));
     let page = col().w_full().h_full()
         .child(col().key("scroll").w_full().grow(1.0).shrink().scroll(ScrollSpec { stick_bottom: true }).child(rows))
         .child(text_input(&s.draft, TextStyle::new(14.0, 400.0)).key("composer").w_full().h(60.0)
@@ -39,7 +39,7 @@ fn app_at(relaunch: bool, zoom: f32) -> Runtime<State> {
     let mut draft = TextEdit::new("third");
     draft.focused = true;
     let sent = vec!["first".to_string(), "second".to_string()];
-    let mut rt = Runtime::new(State { draft, sent, relaunch, zoom, ticks: 0, tray: false, swap: false, into_body: false }, view, (400.0, 300.0), Env::new(true, 2.0));
+    let mut rt = Runtime::new(State { draft, sent, relaunch, zoom, ticks: 0, tray: false, swap: false, into_body: false, tail: false }, view, (400.0, 300.0), Env::new(true, 2.0));
     rt.frame(0.0);
     rt
 }
@@ -216,6 +216,33 @@ fn a_launch_whose_row_reorders_mid_flight_slides_and_lands_without_a_lurch() {
                     assert!((w[1] - w[0]).abs() <= 4.0, "into_body {into_body}: {name} axis {axis} lurches {} pt at frame {}: {at:?}", w[1] - w[0], k + 1);
                 }
             }
+        }
+    }
+}
+
+#[test]
+fn a_launch_reaimed_while_the_scroll_view_corrects_under_it_keeps_its_speed() {
+    // The rows below grow while it flies, so sticking to the bottom scrolls it: part of its
+    // speed comes from offsets outside the scene, which the re-aimed path has to carry on.
+    for (at, into_body) in [(6, false), (8, false), (12, false), (16, false), (8, true)] {
+        let mut rt = app(false);
+        rt.update(|s, _| { s.into_body = into_body; for k in 0..12 { s.sent.insert(0, format!("earlier {k}")); } });
+        for _ in 0..60 { rt.frame(1.0 / 120.0); }
+        rt.key(KeyEvent { key: Key::Enter, mods: Default::default() });
+        let body: Vec<[f32; 4]> = (0..40).map(|f| {
+            if f == 1 { rt.update(|s, _| s.tail = true); }
+            if f == at { rt.update(|s, _| s.swap = true); }
+            rt.frame(1.0 / 120.0);
+            rect(&rt, "body", Some("third")).0
+        }).collect();
+        for axis in 0..2 {
+            let steps: Vec<f32> = body.windows(2).map(|w| w[1][axis] - w[0][axis]).collect();
+            // How much its per-frame step changes: on the re-aim frame, between what the spring
+            // does on the frames either side, as a spring retargeted at its own speed would.
+            let change: Vec<f32> = steps.windows(2).map(|w| w[1] - w[0]).collect();
+            let (before, reaim, after) = (change[at - 3], change[at - 2], change[at - 1]);
+            assert!(reaim >= before.min(after) - 0.1 && reaim <= before.max(after) + 0.1,
+                "re-aimed at {at}, into_body {into_body}: axis {axis} step changes {before} then {reaim} then {after}: {steps:?}");
         }
     }
 }

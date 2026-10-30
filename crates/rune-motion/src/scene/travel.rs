@@ -59,14 +59,12 @@ impl Scene {
         self.intent(id, Intent::POSITION, anim.y.curve.logical_duration());
     }
 
-    /// Moves where a travelling node's path starts by `d` (root space), for an offset the
-    /// renderer applies outside the scene that only shows once the node is drawn.
-    pub fn shift_travel(&mut self, id: NodeId, d: Vec2) {
-        let Some(i) = self.slot(id) else { return };
-        if let Some(path) = &mut self.nodes[i].path {
-            path.start = path.start.translated(d);
-            self.nodes[i].dirty = true;
-        }
+    /// [`set_frame`](Self::set_frame) with screen travel for a node the renderer draws `offset`
+    /// away from its scene rect, moving `velocity` faster (root space), by offsets it applies
+    /// outside the scene: the new path starts where the node is drawn, at the speed it's drawn
+    /// moving, so a re-aim keeps its speed. The renderer then stops adding them.
+    pub fn retarget_drawn(&mut self, id: NodeId, frame: Rect, anim: impl Into<LayoutAnim>, offset: Vec2, velocity: Vec2) {
+        self.set_frame_drawn(id, frame, anim.into(), [offset, velocity]);
     }
 
     pub(super) fn start_path(&mut self, i: usize, start: [f32; 4], vel: [f32; 4], anim: LayoutAnim) {

@@ -411,8 +411,8 @@ impl<S: 'static> Runtime<S> {
                         self.flying[f].1 = nodes[i].local;
                         // A growth row's instant vertical place would land the whole flight.
                         let la = if layout_anim.x == Anim::INSTANT || layout_anim.y == Anim::INSTANT { LayoutAnim::new(spring_l) } else { layout_anim };
-                        self.launches.restart(&self.scene, id);
-                        self.scene.set_frame(id, scene_rect, la.screen());
+                        let [drawn, speed] = self.launches.restart(&self.scene, id);
+                        self.scene.retarget_drawn(id, scene_rect, la.screen(), drawn, speed);
                     }
                 } else if !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Rect) {
                     self.scene.set_frame(id, scene_rect, layout_anim);

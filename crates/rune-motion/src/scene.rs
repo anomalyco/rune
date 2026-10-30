@@ -691,12 +691,17 @@ impl Scene {
     /// edge gets no motion at all. With `Travel::Screen` the node takes one straight root-space
     /// path instead, whatever its ancestors do.
     pub fn set_frame(&mut self, id: NodeId, frame: Rect, anim: impl Into<LayoutAnim>) {
+        self.set_frame_drawn(id, frame, anim.into(), [Vec2::ZERO; 2]);
+    }
+
+    /// [`set_frame`](Self::set_frame) for a node drawn `drawn[0]` away from its scene rect,
+    /// moving `drawn[1]` faster: a screen path starts there, at that speed.
+    pub(super) fn set_frame_drawn(&mut self, id: NodeId, frame: Rect, anim: LayoutAnim, drawn: [Vec2; 2]) {
         let Some(i) = self.slot(id) else { return };
         let old = self.nodes[i].frame;
         if old == frame && self.nodes[i].path.is_none() && self.nodes[i].tracks[prop::FRAME.id.0 as usize].is_none() {
             return;
         }
-        let anim = anim.into();
         if frame.w != old.w {
             self.rebase_trailing(i, frame.w - old.w);
         }
@@ -724,13 +729,18 @@ impl Scene {
         if anim.travel == Travel::Screen && !self.store.reduced_motion() {
             // A path restarts from where it was drawn: under the origin the last frame drew it
             // against, which an ancestor laid out elsewhere in this commit has already moved.
-            let (start, vel) = match self.nodes[i].path {
+            let (mut start, mut vel) = match self.nodes[i].path {
                 Some(path) => {
                     let e = self.path_dual(i, path, path.origin);
                     (e.map(|d| d.x), e.map(|d| d.v))
                 }
                 None => self.exact_world(i),
             };
+            for k in 0..4 {
+                let [offset, speed] = drawn.map(|v| if k % 2 == 0 { v.x } else { v.y });
+                start[k] += offset;
+                vel[k] += speed;
+            }
             self.nodes[i].frame = frame;
             self.start_path(i, start, vel, anim);
             return;

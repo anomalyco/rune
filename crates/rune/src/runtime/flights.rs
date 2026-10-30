@@ -9,12 +9,14 @@ pub(super) struct Launches {
     flying: Vec<Launched>,
 }
 
-/// A launch in the air, the offsets outside the scene it was started against, and the ones
-/// its last frame drew it under.
+/// A launch in the air, the offsets outside the scene it was started against, the ones its
+/// last frame drew it under, and how fast they last moved between frames with no commit.
 struct Launched {
     id: NodeId,
     shift: [f32; 2],
     last: Option<[f32; 2]>,
+    seen: (f64, u64),
+    drift: [f32; 2],
 }
 
 impl Launches {
@@ -23,13 +25,22 @@ impl Launches {
     /// Draws outside every clip, at its own size, until it lands.
     pub(super) fn flying(&self, id: NodeId) -> bool { self.flying.iter().any(|l| l.id == id) }
 
-    /// Before its destination's layout moves mid-flight and its path restarts from where it is:
-    /// it starts again under the offsets it was last drawn under, so the restart doesn't jump.
-    pub(super) fn restart(&mut self, scene: &Scene, id: NodeId) {
-        let Some(l) = self.flying.iter_mut().find(|l| l.id == id) else { return };
-        let Some(last) = l.last else { return };
+    /// Before its destination's layout moves mid-flight and its path restarts from where it is
+    /// drawn: the offset and velocity outside the scene its last frame drew it with, which the
+    /// new path takes over, so the restart keeps its place and speed. It then flies on under
+    /// the offsets it was last drawn under.
+    pub(super) fn restart(&mut self, scene: &Scene, id: NodeId) -> [rune_motion::Vec2; 2] {
+        let none = [rune_motion::Vec2::ZERO; 2];
+        let Some(l) = self.flying.iter_mut().find(|l| l.id == id) else { return none };
+        let Some(last) = l.last else { return none };
         let travel = scene.get(id, prop::TRAVEL).unwrap_or(rune_motion::Vec2::new(1.0, 1.0));
-        l.shift = [last[0] + (l.shift[0] - last[0]) * (1.0 - travel.x), last[1] + (l.shift[1] - last[1]) * (1.0 - travel.y)];
+        let rate = scene.store().sample_velocity(id, prop::TRAVEL).unwrap_or(rune_motion::Vec2::ZERO);
+        // Drawn under `offset + (shift - offset) * (1 - travel)`: its rate is the offset's drift
+        // times travel plus `(offset - shift) * rate`.
+        let axis = |k: usize, t: f32, r: f32| ((l.shift[k] - last[k]) * (1.0 - t), l.drift[k] * t + (last[k] - l.shift[k]) * r);
+        let ((ox, vx), (oy, vy)) = (axis(0, travel.x, rate.x), axis(1, travel.y, rate.y));
+        l.shift = last;
+        [rune_motion::Vec2::new(ox, oy), rune_motion::Vec2::new(vx, vy)]
     }
 
     /// Drops launches that landed (left `flying`).
@@ -42,9 +53,17 @@ impl Launches {
     /// this frame's `offset`, blending by its travel. A growth row above still resizing, a
     /// moved virtual window, or a row whose slot moves under an offset that hides the move
     /// (an inserted row's growth) shifts where it lands, never where it is. What to add to it.
-    pub(super) fn offset_fix(&mut self, scene: &Scene, id: NodeId, offset: [f32; 2]) -> [f32; 2] {
+    /// A commit's offset step comes with a layout move that hides it, so only frames with
+    /// no commit between them measure the offsets' drift.
+    pub(super) fn offset_fix(&mut self, scene: &Scene, id: NodeId, offset: [f32; 2], commit: u64) -> [f32; 2] {
         let Some(l) = self.flying.iter_mut().find(|l| l.id == id) else { return [0.0; 2] };
+        let now = scene.now();
+        if let Some(last) = l.last && l.seen.1 == commit && now > l.seen.0 {
+            let dt = (now - l.seen.0) as f32;
+            l.drift = [(offset[0] - last[0]) / dt, (offset[1] - last[1]) / dt];
+        }
         l.last = Some(offset);
+        l.seen = (now, commit);
         let travel = scene.get(id, prop::TRAVEL).unwrap_or(rune_motion::Vec2::new(1.0, 1.0));
         [(l.shift[0] - offset[0]) * (1.0 - travel.x), (l.shift[1] - offset[1]) * (1.0 - travel.y)]
     }
@@ -179,7 +198,7 @@ impl<S: 'static> Runtime<S> {
             self.flying.retain(|f| f.0 != to);
             self.flying.push((to, nodes[i].local));
             self.launches.flying.retain(|l| l.id != to);
-            self.launches.flying.push(Launched { id: to, shift, last: None });
+            self.launches.flying.push(Launched { id: to, shift, last: None, seen: (0.0, 0), drift: [0.0; 2] });
         }
     }
 

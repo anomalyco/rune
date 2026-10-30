@@ -46,5 +46,5 @@ run growth-reorder-virtual 4.0 $GR virtual --script $S/growth-reorder-virtual.js
 run keep-stuck        3.2 $KS --script $S/keep-stuck.json
 run growth-reorder-grow 3.5 $GR steer --script $S/growth-reorder-grow.json
 run growth-reorder-gap 4.7 $GR steer --script $S/growth-reorder-gap.json
-run growth-reorder-flight 1.8 $GR steer --script $S/growth-reorder-flight.json
+run growth-reorder-flight 2.6 $GR steer --script $S/growth-reorder-flight.json
 ls "$O"

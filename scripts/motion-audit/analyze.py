@@ -17,6 +17,8 @@ looks wrong:
   overshoot        an edge passes its rest value and comes back
   jiggle           an edge reverses direction twice or more within one motion
   reversal         one motion heads the wrong way first, or goes out and comes back
+  stall            one motion's speed drops for a frame and picks up again (a retarget that
+                   lost part of its velocity)
   dog-leg          a move's route is much longer than the straight line between its ends
   latency          input whose first visible response comes frames later
   hitch            frame CPU over budget during motion
@@ -44,6 +46,10 @@ POP_OPACITY = 0.5
 JUMP_PT = 12.0
 # Frames at rest a motion segment bridges (see the segments in `analyze`).
 SEG_GAP = 2
+# A one-frame speed dip worth reporting: at least this many points a frame, and this share of
+# the slower neighbour's speed (a spring's speed never has a corner).
+STALL_PT = 0.5
+STALL_SHARE = 0.25
 MIN_AREA = 1.0
 SCROLLING = 4  # flags: under a scroll viewport whose offset moved this frame
 BLANK = 64  # flags: draws nothing and holds nothing (a hit or hover zone, a spacer)
@@ -136,6 +142,26 @@ def loop_ids(els, moved):
         grew = bool(more)
         out |= more
     return out
+
+
+def stalled(e, parent, edge, pts, travel):
+    """The first frame of one motion (`pts`, consecutive history rows) whose speed along
+    `travel` dips below both neighbours' and recovers, with the three speeds; one that rides
+    its parent is the parent's to report."""
+    ph = {x[0]: x for x in parent.hist} if parent else {}
+    sign = math.copysign(1, travel)
+    for m in range(2, len(pts) - 1):
+        if pts[m + 1][0] - pts[m - 2][0] != 3:
+            continue
+        u = [(pts[m + j][edge] - pts[m + j - 1][edge]) * sign for j in (-1, 0, 1)]
+        floor = min(u[0], u[2])
+        if floor <= STALL_PT or u[1] >= floor - max(STALL_PT, STALL_SHARE * floor):
+            continue
+        k = pts[m][0]
+        if k in ph and k - 1 in ph and abs((ph[k][edge] - ph[k - 1][edge]) - (pts[m][edge] - pts[m - 1][edge])) < 0.05:
+            continue
+        return k, u
+    return None
 
 
 def analyze(path, script=None):
@@ -440,6 +466,7 @@ def analyze(path, script=None):
                     reversals = sum(1 for a, b in zip(signs, signs[1:]) if a != b)
                     past = max(((v - rest) * math.copysign(1, travel) for v in vals), default=0) if abs(travel) > 0.5 else 0
                     k0, k1 = h[seg[0]][0], h[seg[-1]][0]
+                    found = len(findings)
                     if past > 1.0:
                         findings.append(dict(kind="overshoot", element=e.name, frames=k1 - k0 + 1, longest=k1 - k0 + 1, at=f"{k0}–{k1}",
                                              detail=f"{label} {start:.1f} → {rest:.1f}, overshoots by {past:.1f}pt ({100 * past / abs(travel):.0f}%)"))
@@ -459,6 +486,12 @@ def analyze(path, script=None):
                         if back > 1.0:
                             findings.append(dict(kind="reversal", element=e.name, frames=k1 - k0 + 1, longest=k1 - k0 + 1, at=f"{k0}–{k1}",
                                                  detail=what))
+                    if len(findings) == found and abs(travel) > 0.5:
+                        stall = stalled(e, els.get(e.parent), edge, [h[seg[0] - 1]] + [h[j] for j in seg], travel)
+                        if stall:
+                            k, u = stall
+                            findings.append(dict(kind="stall", element=e.name, frames=1, longest=1, at=str(k),
+                                                 detail=f"{label} speed {u[0]:.1f} → {u[1]:.1f} → {u[2]:.1f} pt/frame ({start:.1f} → {rest:.1f})"))
                 if not moving:
                     seg = []
         # One straight path: the top-left corner's route against its chord, per continuous move.
