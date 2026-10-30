@@ -3448,7 +3448,7 @@ impl<S: 'static> Measurement<'_, S> {
         let mut cx = fresh_cx(self);
         #[cfg(feature = "hot")]
         let emptied = self.memo.emptied();
-        let memo = crate::memo::enter(std::mem::take(self.memo), self.env, self.system_accent, self.system_reduced_motion, cx.caret.clone(), cx.layout.clone());
+        let memo = crate::memo::enter(std::mem::take(self.memo), self.env, self.system_accent, self.system_reduced_motion, crate::theme::blends_srgb(), cx.caret.clone(), cx.layout.clone());
         let view_time = crate::frame_profile::Scope::new(crate::frame_profile::Phase::View);
         #[cfg(not(feature = "hot"))]
         let mut root = { let root = self.root_view(&mut cx); self.build_tree(root, tx, force_all) };
@@ -3469,7 +3469,7 @@ impl<S: 'static> Measurement<'_, S> {
                     self.virtual_culled.clear();
                     self.virtual_inputs.clear();
                     cx = fresh_cx(self);
-                    let memo = crate::memo::enter(emptied, self.env, self.system_accent, self.system_reduced_motion, cx.caret.clone(), cx.layout.clone());
+                    let memo = crate::memo::enter(emptied, self.env, self.system_accent, self.system_reduced_motion, crate::theme::blends_srgb(), cx.caret.clone(), cx.layout.clone());
                     let root = crate::hot::original_only(|| self.root_view(&mut cx));
                     (crate::hot::original_only(|| self.build_tree(root, tx, force_all)), memo)
                 }
@@ -3592,6 +3592,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     fn measure(&mut self, tx: &Tx) -> Measured {
+        let _blend = crate::theme::scope(self.srgb_blend);
         Measurement {
             state: &self.state,
             view: self.view,
@@ -5264,7 +5265,7 @@ impl<S: 'static> Runtime<S> {
     // Frame build: Scene Presented → instances
 
     fn build(&mut self) -> bool {
-        let _paint_time = crate::frame_profile::Scope::new(crate::frame_profile::Phase::Paint);
+        let (_paint_time, _blend) = (crate::frame_profile::Scope::new(crate::frame_profile::Phase::Paint), crate::theme::scope(self.srgb_blend));
         let s = self.env.scale;
         let snap_px = |v: f32| grid(v, s) * s;
         self.instances.clear();

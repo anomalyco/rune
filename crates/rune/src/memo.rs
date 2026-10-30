@@ -19,8 +19,9 @@
 //!   rows are inserted or removed above it while the memo keeps the old handler.
 //! - **Live values and pixels** stay bound: a `Live`, `LiveText` or `Pixels` is a shared handle,
 //!   so a reused subtree shows its newest value or image without a rebuild.
-//! - **Environment.** The window's dark mode, scale, reduced-motion preference and system accent
-//!   (`Cx::accent`, `Cx::focus_color`) are part of every version, so changing any of them builds
+//! - **Environment.** The window's dark mode, scale, reduced-motion preference, system accent
+//!   (`Cx::accent`, `Cx::focus_color`) and blend mode (`theme::blends_srgb`, which theme
+//!   colours resolve by) are part of every version, so changing any of them builds
 //!   again. App state the closure reads (a theme, a locale, a selection) must be part of
 //!   `version`. For a text field that's the
 //!   `TextEdit` itself, which hashes its text, selection, composition and focus.
@@ -219,12 +220,14 @@ pub(crate) fn enter(
     env: crate::Env,
     accent: crate::SystemAccent,
     reduced_motion: bool,
+    srgb_blend: bool,
     caret: Option<(String, [f32; 4])>,
     layout: LayoutRects,
 ) -> Guard {
     cache.pass += 1;
     let accent = [accent.accent(env.system_dark), accent.focus(env.system_dark)].map(|c| [c.r, c.g, c.b, c.a].map(f32::to_bits));
-    let env = hash_of(&(env.system_dark, env.scale.to_bits(), reduced_motion, accent));
+    // Theme colours resolve per blend mode (`theme::blends_srgb`), so a switch rebuilds memos.
+    let env = hash_of(&(env.system_dark, env.scale.to_bits(), reduced_motion, accent, srgb_blend));
     let scope = Scope {
         cache,
         env,
@@ -515,7 +518,7 @@ mod tests {
     #[test]
     fn a_view_panicking_inside_a_memo_leaves_no_scope_for_the_next_build() {
         let panicked = std::panic::catch_unwind(|| {
-            let _scope = enter(MemoCache::default(), Env::new(true, 1.0), crate::SystemAccent::DEFAULT, false, None, LayoutRects::default());
+            let _scope = enter(MemoCache::default(), Env::new(true, 1.0), crate::SystemAccent::DEFAULT, false, true, None, LayoutRects::default());
             memo("outer", 0, || memo("inner", 0, || panic!("view panicked")))
         });
         assert!(panicked.is_err());

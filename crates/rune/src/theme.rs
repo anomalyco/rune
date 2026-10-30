@@ -11,10 +11,14 @@
 //!   "numbers": { "radius-panel": 10 } }
 //! ```
 //!
-//! `blend.mode = "srgb"`: web themes are authored for sRGB-space blending while Rune blends in
-//! linear light. Each translucent token is re-solved so that, composited over the `over` token's
-//! colour, it gives the pixel a browser would; over other surfaces it stays close.
+//! `blend.mode = "srgb"`: the theme's translucent tokens are authored for sRGB-space blending,
+//! as a browser composites them. Windows blend that way by default (`App::srgb_blend`), so the
+//! tokens resolve as authored. In a window that blends in linear light (`srgb_blend(false)`)
+//! each translucent token is re-solved ([`srgb_equivalent`]) so that, composited over the `over`
+//! token's colour, it gives the pixel a browser would; over other surfaces it stays close.
+//! Tokens resolve for the blend mode of the window building the view ([`blends_srgb`]).
 
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use serde_json::Value;
@@ -26,12 +30,53 @@ pub struct Theme {
     pub name: String,
     pub dark: bool,
     blend_bg: Option<Color>,
+    /// As authored; translucent ones resolve per blend mode when read.
     colors: HashMap<String, Color>,
     numbers: HashMap<String, f32>,
 }
 
-/// Compensate a translucent colour authored for sRGB blending, for a known opaque backdrop.
-/// Input/output RGB remain linear and unchanged; only alpha is re-solved. Neutral foreground
+thread_local! {
+    static SRGB: Cell<bool> = const { Cell::new(true) };
+}
+
+/// Whether colours resolve for sRGB-space blending on this thread: the blend mode of the
+/// runtime building or painting a view here (`App::srgb_blend`, `Tx::set_srgb_blend`,
+/// `Runtime::set_srgb_blend`), and true, the windows' default, outside one.
+pub fn blends_srgb() -> bool {
+    SRGB.with(Cell::get)
+}
+
+/// Runs `f` with colours resolving for `srgb` blending, then restores the mode before it, e.g.
+/// to build a theme's tokens for a window in the other mode.
+pub fn with_blend<R>(srgb: bool, f: impl FnOnce() -> R) -> R {
+    let _mode = scope(srgb);
+    f()
+}
+
+/// Holds a blend mode for [`blends_srgb`] until dropped, then restores the one before it.
+#[must_use]
+pub(crate) struct Scope(bool);
+
+pub(crate) fn scope(srgb: bool) -> Scope {
+    Scope(SRGB.with(|c| c.replace(srgb)))
+}
+
+impl Drop for Scope {
+    fn drop(&mut self) {
+        SRGB.with(|c| c.set(self.0));
+    }
+}
+
+/// `c`, authored for sRGB blending (as CSS colours are), as it should be painted over the
+/// opaque `bg` in the current blend mode ([`blends_srgb`]): unchanged when blending in sRGB,
+/// its alpha re-solved with [`srgb_equivalent`] when blending in linear light.
+pub fn for_blend(c: Color, bg: Color) -> Color {
+    if blends_srgb() { c } else { srgb_equivalent(c, bg) }
+}
+
+/// Compensate a translucent colour authored for sRGB blending, for a known opaque backdrop,
+/// in a window that blends in linear light (`App::srgb_blend(false)`); [`for_blend`] applies
+/// it only then. Input/output RGB remain linear and unchanged; only alpha is re-solved. Neutral foreground
 /// and background pairs match sRGB source-over exactly (apart from output quantization).
 /// Chromatic pairs use a luminance-weighted least-squares fit: one alpha cannot generally
 /// match three channels. `bg.a` must be 1; HDR, translucent/unknown backdrops, overlapping
@@ -87,12 +132,7 @@ impl Theme {
         let mut blend_bg = None;
         if blend.and_then(|b| b.get("mode")).and_then(Value::as_str) == Some("srgb") {
             let over = blend.and_then(|b| b.get("over")).and_then(Value::as_str).unwrap_or("");
-            if let Some(&bg) = colors.get(over) {
-                blend_bg = Some(bg);
-                for c in colors.values_mut() {
-                    *c = srgb_equivalent(*c, bg);
-                }
-            }
+            blend_bg = colors.get(over).copied();
         }
         let mut numbers = HashMap::new();
         if let Some(n) = v.get("numbers").and_then(Value::as_object) {
@@ -106,11 +146,13 @@ impl Theme {
         Ok(Theme { name, dark, blend_bg, colors, numbers })
     }
 
+    /// A colour token for the current blend mode ([`blends_srgb`]), or None.
     pub fn try_color(&self, name: &str) -> Option<Color> {
-        self.colors.get(name).copied()
+        self.colors.get(name).map(|&c| self.blended(c))
     }
 
-    /// A colour token. Panics naming the closest tokens when it is missing.
+    /// A colour token for the current blend mode ([`blends_srgb`]): as authored when blending in
+    /// sRGB, re-solved over the theme's `blend.over` when blending linearly. Panics naming the closest tokens when it is missing.
     #[track_caller]
     pub fn color(&self, name: &str) -> Color {
         self.try_color(name).unwrap_or_else(|| {
@@ -122,10 +164,14 @@ impl Theme {
         })
     }
 
-    /// `c` at opacity `a`, re-solved for linear-light blending when the theme blends in sRGB.
+    /// `c` at opacity `a`, re-solved when the window blends in linear light and the theme's
+    /// colours are authored for sRGB blending.
     pub fn alpha(&self, c: Color, a: f32) -> Color {
-        let ca = c.alpha(a);
-        self.blend_bg.map_or(ca, |bg| srgb_equivalent(ca, bg))
+        self.blended(c.alpha(a))
+    }
+
+    fn blended(&self, c: Color) -> Color {
+        self.blend_bg.map_or(c, |bg| for_blend(c, bg))
     }
 
     pub fn num(&self, name: &str) -> f32 {

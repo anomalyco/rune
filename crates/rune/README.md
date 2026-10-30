@@ -280,8 +280,10 @@ policy changes are applied in the same mutation phase.
 - **Icons** (`icon(&Icon, size)`): SVG icon bodies (as in `@opencode/ui`'s catalog) rasterised into
   the glyph atlas.
 - **Themes as data** (`theme.rs`): `Theme::from_json(src, dark)` reads named tokens (hex, rgba or
-  references, plus numbers). `"blend": {"mode": "srgb", "over": token}` re-solves translucent tokens so
-  linear-light blending matches a browser's sRGB blending (`srgb_equivalent`, `Theme::alpha`). An app's own theme lives
+  references, plus numbers). `"blend": {"mode": "srgb", "over": token}` says translucent tokens are
+  authored for a browser's sRGB blending: they resolve as authored in a window that blends in sRGB
+  (the default) and re-solved over `over` in one that blends in linear light, following the mode
+  of the window building the view (`theme::blends_srgb`, `theme::for_blend`, `Theme::alpha`). An app's own theme lives
   in the app; core ships only the format.
 - **Scrolling** (`.scroll(ScrollSpec { stick_bottom })`): a runtime-owned fractional offset, wheel 1:1,
   fling decay, and follow-the-end. A new viewport opens at its end on its first frame.
@@ -1978,7 +1980,8 @@ remain rectangular, including visually clipped corners. The 128-byte instance st
 in attribute 7 `fade[3]`.
 
 For a known opaque neutral backdrop, use `theme::srgb_equivalent(white.alpha(authored_alpha), bg)`
-to match AppKit's sRGB source-over in Rune's linear renderer. Recompute from the current authored
+to match AppKit's sRGB source-over in a window that blends in linear light (`srgb_blend(false)`);
+`theme::for_blend` applies it only in such a window. Recompute from the current authored
 alpha during animation. This changes only alpha and adds no GPU work. It is exact for neutral
 foreground/background pairs apart from quantization, but chromatic pairs are approximate;
 unknown/translucent backdrops, group opacity and overlapping paints require different math.
