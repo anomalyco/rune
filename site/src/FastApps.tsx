@@ -153,6 +153,13 @@ export function FastAppsView() {
             on <a href={withBase("/launch-fast#defer")}>Launch fast</a>.
           </p>
         </SectionHead>
+        <div className="prose">
+          <p>
+            Debug builds warn when setup in <code>main</code> before <code>run</code>, <code>init</code> and the first{" "}
+            <code>view</code> take over 100 ms between them before the first frame, and name the slowest. Rune's own
+            window and GPU time doesn't count toward it.
+          </p>
+        </div>
       </section>
 
       <section className="doc-section">
@@ -202,6 +209,11 @@ export function FastAppsView() {
         </SectionHead>
         <Pair before={loopBefore} after={loopAfter} />
         <div className="prose prose-after">
+          <p>
+            Debug builds warn when <code>poll</code> returns true for 30 frames in a row while nothing on screen
+            changes, and when a window draws 120 frames within 2 s with no input, motion or visible change; the warning
+            names what woke it, such as a <code>wake_after</code> loop.
+          </p>
           <p>
             Check it with <code>procwatch</code>: an app with its window shown and untouched should sit near zero CPU.
           </p>
