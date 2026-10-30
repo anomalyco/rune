@@ -152,6 +152,9 @@ mod text_flights;
 mod hover;
 #[path = "runtime/timer_wake.rs"]
 mod timer_wake;
+#[cfg(feature = "hot")]
+#[path = "runtime/hot_state.rs"]
+mod hot_state;
 #[path = "runtime/props.rs"]
 mod props;
 #[path = "runtime/secondary.rs"]
@@ -2001,20 +2004,6 @@ impl<S: 'static> Runtime<S> {
 
     fn logical_wake_deadline(&self) -> Option<f64> {
         self.wake_deadlines.first().copied().into_iter().chain(self.loop_wake.map(|w| w.0)).min_by(f64::total_cmp)
-    }
-
-    #[cfg(feature = "hot")]
-    pub(crate) fn hot_scrolls(&self) -> Vec<(String, f64)> {
-        self.nodes.iter().filter_map(|n| self.scrolls.get(&n.id).map(|s| (n.path.clone(), s.offset))).collect()
-    }
-
-    #[cfg(feature = "hot")]
-    pub(crate) fn hot_motion(&self) -> Vec<(String, [f32; 4], [f32; 4])> {
-        let store = self.scene.store();
-        self.nodes.iter().filter_map(|n| {
-            if !store.is_animating(n.id, prop::FRAME) { return None; }
-            Some((n.path.clone(), store.sample(n.id, prop::FRAME)?.edges(), store.sample_velocity(n.id, prop::FRAME)?.edges()))
-        }).collect()
     }
 
     /// Lands every track before the next frame: growth, reveals and follow-the-end (guarantee 8,
