@@ -7,7 +7,7 @@ use rune::Icon;
 use rune::text::icon_coverage;
 use rune_kit::glyphs;
 
-const ALL: [&Icon; 26] = [
+const ALL: [&Icon; 28] = [
     &glyphs::CHECK,
     &glyphs::CHECK_SMALL,
     &glyphs::CHEVRON_DOWN,
@@ -34,6 +34,8 @@ const ALL: [&Icon; 26] = [
     &glyphs::CURSOR_TEXT,
     &glyphs::ARROW_RIGHT,
     &glyphs::SPARKLE,
+    &glyphs::STAR,
+    &glyphs::STAR_FILLED,
 ];
 
 /// Glyph sizes in points (a password manager's 16–20 pt plus a large one) at 1× and 2×.

@@ -3,7 +3,7 @@
 use rune::{AppSpec, Cx, El, Icon, col, icon, row, text};
 use rune_kit::{Kit, glyphs};
 
-const ALL: [&Icon; 26] = [
+const ALL: [&Icon; 28] = [
     &glyphs::CHECK,
     &glyphs::CHECK_SMALL,
     &glyphs::CHEVRON_DOWN,
@@ -30,6 +30,8 @@ const ALL: [&Icon; 26] = [
     &glyphs::CURSOR_TEXT,
     &glyphs::ARROW_RIGHT,
     &glyphs::SPARKLE,
+    &glyphs::STAR,
+    &glyphs::STAR_FILLED,
 ];
 
 fn panel(dark: bool) -> El {

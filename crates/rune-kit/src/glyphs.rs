@@ -1,6 +1,6 @@
-//! The small built-in glyphs components draw (check marks, chevrons, close). Geometric
+//! The small built-in glyphs components draw (check marks, chevrons, close, stars). Geometric
 //! shapes, not an icon catalog; a theme may replace any of them through `Kit::glyph`.
-//! `MIC`, `KEYBOARD`, `CURSOR_TEXT`, `ARROW_RIGHT` and `SPARKLE` have no `Glyphs` slot: draw them with `icon(&glyphs::MIC, 16.0)`.
+//! `MIC`, `KEYBOARD`, `CURSOR_TEXT`, `ARROW_RIGHT`, `SPARKLE`, `STAR` and `STAR_FILLED` have no `Glyphs` slot: draw them with `icon(&glyphs::MIC, 16.0)`.
 
 use rune::Icon;
 
@@ -105,6 +105,19 @@ pub static SPARKLE: Icon = Icon {
     name: "kit-sparkle",
     view: 16.0,
     body: r#"<path d="M8 1.5Q10 6 14.5 8Q10 10 8 14.5Q6 10 1.5 8Q6 6 8 1.5Z" stroke="currentColor" stroke-linejoin="round"/>"#,
+};
+
+/// A five-point star, outline. Not a `Glyphs` slot: `icon(&glyphs::STAR, 16.0)`.
+pub static STAR: Icon = Icon {
+    name: "kit-star",
+    view: 16.0,
+    body: r#"<path d="M8 2.1L9.7 6.25L14.18 6.59L10.76 9.5L11.82 13.86L8 11.5L4.18 13.86L5.24 9.5L1.82 6.59L6.3 6.25Z" stroke="currentColor" stroke-linejoin="round"/>"#,
+};
+/// A five-point star, filled. Not a `Glyphs` slot: `icon(&glyphs::STAR_FILLED, 16.0)`.
+pub static STAR_FILLED: Icon = Icon {
+    name: "kit-star-filled",
+    view: 16.0,
+    body: r#"<path d="M8 2.1L9.7 6.25L14.18 6.59L10.76 9.5L11.82 13.86L8 11.5L4.18 13.86L5.24 9.5L1.82 6.59L6.3 6.25Z" fill="currentColor" stroke="currentColor" stroke-linejoin="round"/>"#,
 };
 
 const PAGE: &str = r#"<path d="M3.5 1.5H9.5L12.5 4.5V14.5H3.5V1.5Z" stroke="currentColor" stroke-linejoin="round"/><path d="M9.5 1.5V4.5H12.5" stroke="currentColor" stroke-linejoin="round"/>"#;

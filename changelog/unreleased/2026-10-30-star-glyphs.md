@@ -1,0 +1,1 @@
+- **`glyphs::STAR` and `glyphs::STAR_FILLED`.** Two five-point star icons on the 16 pt grid, outline and filled, drawn with the same 1 pt stroke and round joins as the other glyphs. They are not `Glyphs` slots: `icon(&glyphs::STAR, 16.0)`. (t886)
