@@ -264,8 +264,8 @@ impl<S: 'static> Runtime<S> {
         std::mem::take(&mut self.ime_eat_key_up)
     }
 
-    /// A key release goes to the focused element and up through its ancestors, else to the
-    /// root or the open modal. If focus moved since the key went down, the element that had
+    /// A key release goes to the focused element and up through its ancestors, else to every
+    /// element with a handler (deepest first), inside the open modal if there is one. If focus moved since the key went down, the element that had
     /// focus on the press (and its ancestors) hears the release first.
     pub(super) fn route_key_up(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
         if self.eat_ime_key_up() { return false; }
@@ -289,11 +289,10 @@ impl<S: 'static> Runtime<S> {
                 at = self.nodes[i].parent;
             }
         }
-        if chain.is_empty()
-            && let Some(i) = self.active_modal().or((!self.nodes.is_empty()).then_some(0))
-            && self.allowed(i)
-        {
-            chain.push(i);
+        if chain.is_empty() {
+            // Nothing is focused: every element that hears releases is offered this one, the
+            // deepest first, confined to the open modal (a handler on any element, not only the root).
+            chain.extend((0..self.nodes.len()).rev().filter(|&i| self.allowed(i) && self.nodes[i].focus.key_up.is_some()));
         } else if pressed.is_some() && focused.is_some() && pressed != focused {
             // Keep shared ancestors (such as the root) after both focused elements.
             let mut shared = Vec::new();
@@ -352,6 +351,60 @@ mod tests {
         rt.physical_with_fallback(release, Some(space));
         rt.frame(0.0);
         assert_eq!(rt.state.ups.len(), 2);
+    }
+
+    #[derive(Default)]
+    struct Keys { log: Vec<&'static str> }
+
+    fn stage(s: &Keys, _: &mut crate::Cx<Keys>) -> El {
+        let _ = s;
+        el().w_full().h_full()
+            .child(el().key("stage").size(40.0, 40.0).on_key_up(|s: &mut Keys, _, _| { s.log.push("stage"); true }))
+            .child(el().key("other").size(40.0, 40.0).focusable(true))
+    }
+
+    fn up() -> KeyEvent { KeyEvent { key: crate::Key::Text("a".into()), mods: Mods::default() } }
+
+    #[test]
+    fn an_unfocused_release_reaches_a_nested_handler() {
+        let mut rt = Runtime::new(Keys::default(), stage, (100.0, 100.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        assert!(rt.wants_key_up());
+        rt.key_up(up());
+        rt.frame(0.0);
+        assert_eq!(rt.state.log, ["stage"]);
+    }
+
+    #[test]
+    fn a_release_still_finds_the_nested_handler_after_focus_moves_between_down_and_up() {
+        let mut rt = Runtime::new(Keys::default(), stage, (100.0, 100.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        rt.key(up());
+        rt.frame(0.0);
+        let (x, y) = rt.find("other").unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+        rt.key_up(up());
+        rt.frame(0.0);
+        assert_eq!(rt.state.log, ["stage"], "focus on a sibling leaves the release to the ancestor-less stage handler");
+    }
+
+    fn modal_view(_: &Keys, _: &mut crate::Cx<Keys>) -> El {
+        el().w_full().h_full()
+            .on_key_up(|s: &mut Keys, _, _| { s.log.push("root"); true })
+            .child(el().key("under").size(40.0, 40.0).on_key_up(|s: &mut Keys, _, _| { s.log.push("under"); true }))
+            .child(el().key("sheet").absolute(50.0, 50.0).size(40.0, 40.0).modal(true, |_: &mut Keys| {})
+                .child(el().key("inside").size(10.0, 10.0).on_key_up(|s: &mut Keys, _, _| { s.log.push("inside"); true })))
+    }
+
+    #[test]
+    fn an_unfocused_release_in_a_modal_stays_inside_it() {
+        let mut rt = Runtime::new(Keys::default(), modal_view, (100.0, 100.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        rt.key_up(up());
+        rt.frame(0.0);
+        assert_eq!(rt.state.log, ["inside"]);
     }
 
     #[test]
