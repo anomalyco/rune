@@ -26,6 +26,16 @@ pub(super) fn decode(_: &mut Native, _: &MediaSource, _: &[(String, String)], _:
     Err(unsupported(Kind::Video))
 }
 
+pub(super) fn decode_preview_at(
+    _: &MediaSource,
+    _: &[(String, String)],
+    _: f64,
+    _: u32,
+    _: Option<((u32, u32), f64)>,
+) -> Result<(ByteFrame, ((u32, u32), f64)), String> {
+    Err(unsupported(Kind::Video))
+}
+
 pub(super) fn apply(_: &Arc<Shared>) {}
 
 pub(super) fn drive(_: &Arc<Shared>) {}
@@ -38,4 +48,12 @@ pub(super) fn live_time(_: &Shared) -> Option<f64> {
 
 pub(super) fn pull(_: &Arc<Shared>, _: &NativeSurface, _: Instant) -> bool {
     false
+}
+
+pub(super) fn list_tracks(_: &Arc<Shared>, _: MediaTrackKind) -> Vec<MediaTrack> {
+    Vec::new()
+}
+
+pub(super) fn current_track(_: &Arc<Shared>, _: MediaTrackKind) -> Option<i32> {
+    None
 }

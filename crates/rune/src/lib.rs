@@ -228,7 +228,7 @@ pub use runtime::{Cx, ElementInfo, Env, MotionElement, Pick, Picked, Pose, Runti
 pub use shape::{LineCap, Path, Shape};
 pub use native_surface::{NativeSurface, SurfaceFit};
 pub use system_material::{MAX_NATIVE_MATERIALS, SystemMaterial};
-pub use video::{MediaRequest, MediaSource, Player, PlayerState, Video};
+pub use video::{MediaRequest, MediaSource, MediaTrack, MediaTrackKind, Player, PlayerState, Video};
 pub use recorder::{FakeMicrophone, Level, MicPermission, RecordFormat, Recorder, RecorderState, Recording};
 pub use text::{FontSmoothing, Icon, Link, LinkPaint, Span, TextCase, TextHighlight};
 pub use theme::Theme;

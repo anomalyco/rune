@@ -8,6 +8,7 @@ fn meta() -> Meta {
 fn new_videos_are_muted_paused_and_loading() {
     let v = Video::file("missing.mp4");
     assert!(v.muted());
+    assert!((v.volume() - 1.0).abs() < 1e-6);
     assert!(!v.looping());
     assert!(!v.is_playing());
     assert_eq!(v.rate(), 1.0);
@@ -15,7 +16,7 @@ fn new_videos_are_muted_paused_and_loading() {
     assert_eq!(v.duration(), None);
     assert_eq!(v.natural_size(), None);
     assert!(!v.is_audio());
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", all(target_os = "linux", any(feature = "linux-gstreamer", feature = "linux-libmpv", feature = "linux-libvlc"))))]
     assert_eq!(v.state(), PlayerState::Loading);
     assert_eq!(v.source(), &MediaSource::File("missing.mp4".into()));
 }
@@ -55,13 +56,31 @@ fn extensions_come_from_the_last_path_segment() {
 #[test]
 fn webm_video_fails_at_once() {
     let a = Player::url("https://example.com/clips/tap.webm?v=2");
-    let PlayerState::Failed(message) = a.state() else { panic!("{:?}", a.state()) };
     #[cfg(target_os = "macos")]
-    assert!(message.contains(".webm isn't supported on macOS"), "{message}");
-    #[cfg(not(target_os = "macos"))]
-    assert_eq!(message, "video playback isn't supported on this platform yet");
-    a.play();
-    assert!(!a.is_playing(), "a failed clip doesn't play");
+    {
+        let PlayerState::Failed(message) = a.state() else { panic!("{:?}", a.state()) };
+        assert!(message.contains(".webm isn't supported on macOS"), "{message}");
+        a.play();
+        assert!(!a.is_playing(), "a failed clip doesn't play");
+    }
+    #[cfg(all(target_os = "linux", any(feature = "linux-gstreamer", feature = "linux-libmpv", feature = "linux-libvlc")))]
+    {
+        // Linux probes asynchronously; a remote WebM stays Loading until the live backend fails.
+        match a.state() {
+            PlayerState::Loading => {}
+            PlayerState::Failed(message) => {
+                assert!(!message.contains("isn't supported on this platform"), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    #[cfg(not(any(target_os = "macos", all(target_os = "linux", any(feature = "linux-gstreamer", feature = "linux-libmpv", feature = "linux-libvlc")))))]
+    {
+        let PlayerState::Failed(message) = a.state() else { panic!("{:?}", a.state()) };
+        assert_eq!(message, "video playback isn't supported on this platform yet");
+        a.play();
+        assert!(!a.is_playing(), "a failed clip doesn't play");
+    }
 }
 
 #[test]
@@ -87,7 +106,17 @@ fn the_waker_hears_each_state_change_once() {
 /// one afterwards still delivers that failure, once.
 #[test]
 fn a_waker_set_after_a_failure_hears_it_once() {
+    #[cfg(target_os = "macos")]
     let a = Player::url("tap.ogv");
+    #[cfg(not(target_os = "macos"))]
+    let a = {
+        let a = Player::audio("missing.m4a");
+        // Unsupported platforms fail in `created`; Linux waits until open — force a failure.
+        if !matches!(a.shared.snapshot().state, PlayerState::Failed(_)) {
+            a.shared.ctl.lock().unwrap().fail("gone".into());
+        }
+        a
+    };
     assert!(matches!(a.shared.snapshot().state, PlayerState::Failed(_)));
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let seen = calls.clone();
@@ -141,7 +170,7 @@ fn handle_edits_are_shared_and_validated() {
     assert!(!v.muted());
     assert_eq!(v.time(), 0.0);
     v.play();
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", all(target_os = "linux", any(feature = "linux-gstreamer", feature = "linux-libmpv", feature = "linux-libvlc"))))]
     {
         assert!(other.is_playing());
         // Still loading: playing is intent until the clip opens.
@@ -249,12 +278,12 @@ fn the_last_handle_or_element_frees_the_player() {
     assert!(shared.upgrade().is_none());
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", all(target_os = "linux", any(feature = "linux-gstreamer", feature = "linux-libmpv", feature = "linux-libvlc"))))]
 fn fixture() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/rgbw.mp4")
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", all(target_os = "linux", any(feature = "linux-gstreamer", feature = "linux-libmpv", feature = "linux-libvlc"))))]
 fn sound(name: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
 }
@@ -269,9 +298,9 @@ fn failures_draw_a_placeholder_and_stop_drawing() {
     let mut rt = crate::Runtime::new(v.clone(), view, (32.0, 18.0), crate::Env::new(true, 2.0));
     rt.frame(0.0);
     let PlayerState::Failed(message) = v.state() else { panic!("{:?}", v.state()) };
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", all(target_os = "linux", any(feature = "linux-gstreamer", feature = "linux-libmpv", feature = "linux-libvlc"))))]
     assert!(message.contains("no such file"), "{message}");
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", all(target_os = "linux", any(feature = "linux-gstreamer", feature = "linux-libmpv", feature = "linux-libvlc")))))]
     assert_eq!(message, "video playback isn't supported on this platform yet");
     let frame = v.surface().latest().expect("placeholder frame");
     assert_eq!((frame.size, frame.format), ([32, 18], Format::Bgra));
@@ -281,7 +310,7 @@ fn failures_draw_a_placeholder_and_stop_drawing() {
 
 /// Headless audio opens on first read and never plays: no player, no sound. With no runtime
 /// stepping on its thread, time holds.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", all(target_os = "linux", any(feature = "linux-gstreamer", feature = "linux-libmpv", feature = "linux-libvlc"))))]
 #[test]
 fn headless_audio_opens_on_read_and_holds_time() {
     let a = Player::audio(sound("silence.m4a"));
@@ -302,6 +331,8 @@ fn headless_audio_opens_on_read_and_holds_time() {
     assert!(matches!(video.state(), PlayerState::Failed(e) if e.contains("no playable audio track")));
 }
 
+/// Pixel-accurate headless stills (macOS AVFoundation). Linux backends can open and clock a
+/// clip headless, but seek→SW-frame capture is not color-accurate enough for this fixture yet.
 #[cfg(target_os = "macos")]
 mod headless {
     use super::*;
@@ -379,6 +410,39 @@ mod headless {
         assert!((v.time() - 0.3).abs() < 1e-9, "0.3 + 2 x 0.5 wraps to 0.3: {}", v.time());
         near(centre(&render(&gpu, &mut rt)), [0, 255, 0], "looped");
     }
+}
+
+/// Linux: open, clock, and end headless without asserting pixel colors (still seek is approximate).
+#[cfg(all(target_os = "linux", any(feature = "linux-gstreamer", feature = "linux-libmpv", feature = "linux-libvlc")))]
+#[test]
+fn headless_linux_opens_and_clocks_without_pixel_checks() {
+    let v = Video::file(fixture());
+    let mut rt = crate::Runtime::new(v.clone(), view, (32.0, 18.0), crate::Env::new(true, 2.0));
+    rt.frame(0.0);
+    assert_eq!(v.state(), PlayerState::Ready);
+    assert_eq!(v.natural_size(), Some((64, 36)));
+    assert!((v.duration().unwrap() - 1.0).abs() < 1e-3);
+    assert!(!rt.frame(0.5), "a paused video requests no frames");
+
+    v.play();
+    assert!(rt.frame(0.0), "playing keeps frames coming");
+    assert!(rt.frame(0.3));
+    assert_eq!(v.state(), PlayerState::Playing);
+    assert!((v.time() - 0.3).abs() < 1e-9);
+    rt.frame(0.7);
+    assert_eq!(v.state(), PlayerState::Ended);
+    assert_eq!(v.time(), 1.0);
+    assert!(!rt.frame(0.1), "an ended video requests no frames");
+
+    v.seek(0.3);
+    rt.frame(0.0);
+    assert!((v.time() - 0.3).abs() < 1e-9);
+    v.set_looping(true);
+    v.set_rate(2.0);
+    v.play();
+    rt.frame(0.0);
+    rt.frame(0.5);
+    assert!((v.time() - 0.3).abs() < 1e-9, "0.3 + 2 x 0.5 wraps to 0.3: {}", v.time());
 }
 
 #[test]

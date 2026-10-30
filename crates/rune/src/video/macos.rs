@@ -72,6 +72,7 @@ struct Player {
     /// Rate last applied to AVPlayer (0 = paused).
     rate: f32,
     muted: bool,
+    volume: f32,
     ready: bool,
     created: Instant,
     /// When the last seek started, and where to.
@@ -97,6 +98,7 @@ impl Player {
             objects: Some(objects),
             rate: 0.0,
             muted: false,
+            volume: 1.0,
             ready: false,
             created: Instant::now(),
             seeking: None,
@@ -410,6 +412,25 @@ pub(super) fn decode(native: &mut Native, source: &MediaSource, headers: &[(Stri
     image(native.generator.as_ref().unwrap(), at)
 }
 
+/// Scrub preview: never takes `Native`, so a worker cannot stall live `pull`.
+pub(super) fn decode_preview_at(
+    source: &MediaSource,
+    headers: &[(String, String)],
+    at: f64,
+    max: u32,
+    cached: Option<((u32, u32), f64)>,
+) -> Result<(ByteFrame, ((u32, u32), f64)), String> {
+    let asset = asset(source, headers)?;
+    let info = match cached {
+        Some(c) => c,
+        None => {
+            let m = meta(&asset, Kind::Video)?;
+            (m.size.ok_or_else(|| "video track has no size".to_string())?, m.frame)
+        }
+    };
+    Ok((image(&generator(&asset, Some(max as f64)), at)?, info))
+}
+
 /// A clip's frame at `at` upright (as posters and headless runs show it), and as its buffer
 /// stores it (as the player hands it out) with how that turns upright.
 #[cfg(test)]
@@ -537,6 +558,11 @@ fn reconcile(p: &mut Player, c: &mut Control, now: Instant) {
         if p.muted != c.muted {
             o.player.setMuted(c.muted);
             p.muted = c.muted;
+        }
+        let vol = c.volume.clamp(0.0, 1.0);
+        if (p.volume - vol).abs() > 1e-4 {
+            o.player.setVolume(vol);
+            p.volume = vol;
         }
         if p.ready
             && let Some(t) = c.seek.take()
@@ -909,6 +935,14 @@ fn park(shared: &Arc<Shared>) {
         };
         drop(player);
     }
+}
+
+pub(super) fn list_tracks(_: &Arc<Shared>, _: MediaTrackKind) -> Vec<MediaTrack> {
+    Vec::new()
+}
+
+pub(super) fn current_track(_: &Arc<Shared>, _: MediaTrackKind) -> Option<i32> {
+    None
 }
 
 /// Parks `shared` and returns the clips to release: the oldest past `PARKED_PLAYERS`. A clip

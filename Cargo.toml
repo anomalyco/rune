@@ -29,6 +29,7 @@ members = [
     "examples/overlay-lab",
     "examples/lab",
     "examples/video-player",
+    "examples/video-player-extra",
     "examples/video-tiles",
     "examples/cursed-settings",
     "examples/drag-out",
