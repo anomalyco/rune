@@ -435,7 +435,7 @@ pub(crate) struct Node {
     pub label: Option<String>,
     pub vis: Visual,
     live: Vec<crate::live::Bound>,
-    pub text: Option<Box<TextSpec>>,
+    pub text: Option<crate::cold::SharedBox<TextSpec>>,
     pub text_layout: Option<Rc<Layout<Ink>>>,
     /// Where `text_layout` cut the text for `El::truncate` and its kin.
     pub(crate) elided: Option<Elision>,

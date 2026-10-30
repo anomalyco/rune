@@ -197,7 +197,7 @@ mod tests {
         fn memo(key: &str, children: Vec<El>) -> El {
             let mut root = el().key(key);
             let duplicate_keys = memo_children_have_duplicates(&root, &children);
-            root.memo_children = Some(std::rc::Rc::new(crate::memo::Shared { children, focused_input: false, duplicate_keys }));
+            root.memo_children = Some(std::rc::Rc::new(crate::memo::Shared { children, focused_input: false, duplicate_keys, has_virtual: false }));
             root
         }
         let clean_memo = || memo("a", vec![el().key("x"), el().key("y").child(el().key("z"))]);

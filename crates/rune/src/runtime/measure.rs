@@ -179,6 +179,9 @@ impl<S: 'static> Measurement<'_, S> {
     /// is the scroll viewport `el` is the content of, whether it sticks to the bottom, and its bound.
     #[allow(clippy::too_many_arguments)]
     fn window_tree(&mut self, el: &mut El, parent: &str, index: usize, scroll: Option<(&str, bool, f32)>, tx: &Tx, force_all: bool, bound: f32, inert: bool, group: Option<&str>) {
+        if !el.has_virtual {
+            return;
+        }
         el.expand_memo();
         let inert = inert || el.inert;
         let bound = crate::virtual_list::height_bound(&el.style, bound);

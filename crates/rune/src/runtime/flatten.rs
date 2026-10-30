@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use super::*;
 
 /// An `aspect_fit` element's first layout: it takes the free space along its parent's main axis
@@ -68,6 +70,169 @@ pub(super) fn node_path(parent: &str, key: Option<&str>, index: usize) -> String
     }
 }
 
+fn push_segment(path: &mut String, key: Option<&str>, index: usize) {
+    if !path.is_empty() {
+        path.push('/');
+    }
+    match key {
+        Some(k) => path.push_str(k),
+        None => {
+            use std::fmt::Write;
+            let _ = write!(path, "#{index}");
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ScrollXChild {
+    Single { vertical: bool },
+    Many { vertical: bool },
+}
+
+fn apply_scroll_x_child(style: &mut Style, sx: ScrollXChild) {
+    match sx {
+        ScrollXChild::Single { vertical } => unwrapped_width(style, vertical),
+        ScrollXChild::Many { vertical } => {
+            let w_full = style.size.width == Dimension::percent(1.0);
+            if style.size.width.is_auto() || w_full {
+                style.size.width = Dimension::max_content();
+                if w_full && style.min_size.width.is_auto() {
+                    style.min_size.width = percent(1.0);
+                }
+            }
+            style.flex_shrink = 0.0;
+            if vertical && style.align_self.is_none() {
+                style.align_self = Some(AlignSelf::FLEX_START);
+            }
+        }
+    }
+}
+
+fn prepare_text(
+    text: &mut Option<crate::cold::SharedBox<TextSpec>>,
+    input: Option<&InputSpec>,
+    scale: f32,
+) -> (bool, Option<u64>, bool) {
+    if let Some(t) = text && t.redacted {
+        // Rich links carry URLs and can expose them through hover, copy and tree children.
+        use zeroize::Zeroize;
+        let t: &mut TextSpec = t;
+        for link in &mut t.links {
+            link.id.zeroize();
+            if let Some(label) = &mut link.label { label.zeroize(); }
+        }
+        t.links.clear();
+        t.rings.clear();
+        t.selectable = false;
+        t.advance_in = None;
+        t.live = None;
+    }
+    if input.is_some_and(|i| i.edit.is_hidden_multiline()) && let Some(t) = text {
+        // The fixed mask stays one line even in a field narrower than twelve bullets.
+        if t.wrap { t.wrap = false; }
+    } else if input.is_none()
+        && let Some(t) = text
+        && t.redacted
+    {
+        t.case = None;
+        if !t.secure_revealed {
+            t.conceal();
+        }
+    }
+    if let Some(t) = text && t.live.is_some() {
+        assert!(input.is_none() && !t.redacted && !t.wrap && t.spans.is_empty() && t.reveal < 0.0 && !t.truncate,
+            "live_text requires plain single-line text; use truncate_fade for overflow");
+    }
+    if input.is_none()
+        && text.as_ref().is_some_and(|t| t.redacted || t.case.is_some() || !t.rings.is_empty())
+        && let Some(t) = text
+    {
+        t.apply_case();
+    }
+    if text.as_ref().is_some_and(|t| t.redacted || t.shape.is_none_or(|s| s.0 != scale.to_bits()))
+        && let Some(t) = text
+    {
+        t.key_shape(scale);
+    }
+    let measured = text.is_some();
+    let measure = text.as_ref().map(|t| t.shape.map_or(0, |s| s.1) ^ u64::from(t.wrap) ^ (u64::from(t.truncate || t.truncate_fade) << 1)
+        ^ ((t.max_lines as u64) << 2)
+        ^ (u64::from(input.is_some_and(|i| i.edit.is_revealed()) || t.secure_revealed) << 3)
+        ^ (u64::from(t.wrap_anywhere) << 4)
+        ^ t.advance_in.as_ref().map_or(0, |(run, at)| run.hash.rotate_left(3) ^ (*at as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)));
+    // Secure leaves remeasure without retaining a content-derived dictionary oracle.
+    let secure_measure = text.as_ref().is_some_and(|t| t.redacted);
+    let measure = if secure_measure { Some(0) } else { measure };
+    (measured, measure, secure_measure)
+}
+
+fn inherit_hover_within(
+    vis: &mut Visual,
+    above: Option<&crate::el::Anchor>,
+    parent: Option<usize>,
+    nodes: &[Node],
+) {
+    if vis.hover_within.is_none() {
+        vis.hover_within = above
+            .and_then(|a| nodes.iter().position(|n| n.key.as_ref() == Some(&a.key)))
+            .and_then(|j| nodes[j].vis.hover_within.clone())
+            .or_else(|| parent.and_then(|p| nodes[p].vis.hover_within.clone()));
+    }
+    if vis.hover_motion.is_none() {
+        vis.hover_motion = vis.hover_within.clone();
+    }
+}
+
+fn sync_taffy_node(
+    me: usize,
+    style: Cow<'_, Style>,
+    kids: &[taffy::NodeId],
+    (measured, measure, secure_measure): (bool, Option<u64>, bool),
+    taffy: &mut TaffyTree<usize>,
+    nodes: &mut [Node],
+    entries: &mut HashMap<String, LayoutEntry>,
+) -> taffy::NodeId {
+    let path = nodes[me].path.as_str();
+    let id = if let Some(entry) = entries.get_mut(path) {
+        let id = entry.id;
+        if taffy.style(id).unwrap() != style.as_ref() {
+            taffy.set_style(id, style.into_owned()).unwrap();
+        }
+        if !taffy.child_ids(id).eq(kids.iter().copied()) {
+            taffy.set_children(id, kids).unwrap();
+        }
+        // Context indices can move after insertion/reorder without invalidating measurements.
+        // Only text/style/scale changes invalidate the cached leaf result.
+        if entry.measure.is_some() != measured {
+            taffy.set_node_context(id, measured.then_some(me)).unwrap();
+        } else if measured {
+            *taffy.get_node_context_mut(id).unwrap() = me;
+        }
+        if secure_measure || entry.measure != measure {
+            taffy.mark_dirty(id).unwrap();
+        }
+        entry.measure = measure;
+        entry.used = true;
+        id
+    } else {
+        let style = style.into_owned();
+        let id = if !kids.is_empty() {
+            taffy.new_with_children(style, kids).unwrap()
+        } else if measured {
+            taffy.new_leaf_with_context(style, me).unwrap()
+        } else {
+            taffy.new_leaf(style).unwrap()
+        };
+        if measured && taffy.get_node_context(id).is_none() {
+            taffy.set_node_context(id, Some(me)).unwrap();
+        }
+        entries.insert(nodes[me].path.clone(), LayoutEntry { id, measure, used: true });
+        id
+    };
+    nodes[me].taffy = id;
+    id
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn flatten(
     el: El,
@@ -83,9 +248,29 @@ pub(super) fn flatten(
     entries: &mut HashMap<String, LayoutEntry>,
     scale: f32,
 ) -> taffy::NodeId {
-    let mut el = el;
-    el.expand_memo();
-    let path = node_path(parent_path, el.key.as_deref(), index);
+    let mut path_buf = String::with_capacity(parent_path.len() + 128);
+    path_buf.push_str(parent_path);
+    flatten_owned(el, parent, &mut path_buf, index, motion, in_row, parent_row, None, taffy, nodes, entries, scale)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn flatten_owned(
+    el: El,
+    parent: Option<usize>,
+    path_buf: &mut String,
+    index: usize,
+    motion: Spring,
+    in_row: RowLayout,
+    parent_row: bool,
+    parent_sx: Option<ScrollXChild>,
+    taffy: &mut TaffyTree<usize>,
+    nodes: &mut Vec<Node>,
+    entries: &mut HashMap<String, LayoutEntry>,
+    scale: f32,
+) -> taffy::NodeId {
+    let prev_len = path_buf.len();
+    push_segment(path_buf, el.key.as_deref(), index);
+    let path = path_buf.clone();
     let own_motion = el.motion;
     let motion = own_motion.unwrap_or(motion);
     let me = nodes.len();
@@ -113,11 +298,12 @@ pub(super) fn flatten(
         trace_name,
         role,
         label,
-        style,
-        vis,
+        mut style,
+        mut vis,
         live,
-        text,
+        mut text,
         children,
+        memo_children,
         on_press,
         on_double_press,
         on_secondary_press,
@@ -170,48 +356,12 @@ pub(super) fn flatten(
         inert,
         ..
     } = el;
-    let mut text = text;
-    if let Some(t) = &mut text && t.redacted {
-        // Rich links carry URLs and can expose them through hover, copy and tree children.
-        use zeroize::Zeroize;
-        for link in &mut t.links {
-            link.id.zeroize();
-            if let Some(label) = &mut link.label { label.zeroize(); }
-        }
-        t.links.clear();
-        t.rings.clear();
-        t.selectable = false;
-        t.advance_in = None;
-        t.live = None;
+    if let Some(sx) = parent_sx {
+        apply_scroll_x_child(&mut style, sx);
     }
-    if input.as_ref().is_some_and(|i| i.edit.is_hidden_multiline()) && let Some(t) = &mut text {
-        // The fixed mask stays one line even in a field narrower than twelve bullets.
-        t.wrap = false;
-    } else if input.is_none()
-        && let Some(t) = &mut text
-        && t.redacted
-    {
-        t.case = None;
-        if !t.secure_revealed {
-            t.conceal();
-        }
-    }
+    let text_meta = prepare_text(&mut text, input.as_deref(), scale);
     let inert = inert || parent.is_some_and(|p| nodes[p].inert);
-    let mut vis = vis;
-    if vis.hover_within.is_none() {
-        vis.hover_within = above.as_ref()
-            .and_then(|a| nodes.iter().position(|n| n.key.as_ref() == Some(&a.key)))
-            .and_then(|j| nodes[j].vis.hover_within.clone())
-            .or_else(|| parent.and_then(|p| nodes[p].vis.hover_within.clone()));
-    }
-    if vis.hover_motion.is_none() {
-        vis.hover_motion = vis.hover_within.clone();
-    }
-    if let Some(t) = &text && t.live.is_some() {
-        assert!(input.is_none() && !t.redacted && !t.wrap && t.spans.is_empty() && t.reveal < 0.0 && !t.truncate,
-            "live_text requires plain single-line text; use truncate_fade for overflow");
-    }
-    let mut style = style;
+    inherit_hover_within(&mut vis, above.as_ref(), parent, nodes);
     let pixel_aspect = vis.pixels.as_ref()
         .filter(|_| style.aspect_ratio.is_none() && style.size.width.is_auto() != style.size.height.is_auto())
         .map(pixel_ratio);
@@ -222,18 +372,20 @@ pub(super) fn flatten(
         let room = fit_room(&style, parent_row);
         Box::new((aspect_fit, std::mem::replace(&mut style, room)))
     });
-    let mut text = text;
-    if input.is_none() && let Some(t) = &mut text { t.apply_case(); }
-    if let Some(t) = &mut text { t.key_shape(scale); }
-    let measured = text.is_some();
-    let measure = text.as_ref().map(|t| t.shape.map_or(0, |s| s.1) ^ u64::from(t.wrap) ^ (u64::from(t.truncate || t.truncate_fade) << 1)
-        ^ ((t.max_lines as u64) << 2)
-        ^ (u64::from(input.as_ref().is_some_and(|i| i.edit.is_revealed()) || t.secure_revealed) << 3)
-        ^ (u64::from(t.wrap_anywhere) << 4)
-        ^ t.advance_in.as_ref().map_or(0, |(run, at)| run.hash.rotate_left(3) ^ (*at as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)));
-    // Secure leaves remeasure without retaining a content-derived dictionary oracle.
-    let secure_measure = text.as_ref().is_some_and(|t| t.redacted);
-    let measure = if secure_measure { Some(0) } else { measure };
+    let total_children = memo_children.as_ref().map_or(0, |m| m.children.len()) + children.len();
+    let child_sx = if scroll.is_some() && scroll_axes.x() {
+        if total_children == 1 {
+            style.flex_direction = FlexDirection::Row;
+            Some(ScrollXChild::Single { vertical: scroll_axes.y() })
+        } else {
+            if !scroll_axes.y() {
+                style.flex_direction = FlexDirection::Row;
+            }
+            Some(ScrollXChild::Many { vertical: scroll_axes.y() })
+        }
+    } else {
+        None
+    };
     nodes.push(Node {
         on_paste,
         on_window_focus,
@@ -241,7 +393,7 @@ pub(super) fn flatten(
         modal,
         looping,
         id: NodeId(0),
-        path: path.clone(),
+        path,
         key,
         trace_name,
         trace_namespace,
@@ -323,70 +475,184 @@ pub(super) fn flatten(
         RowLayout::Free if parent_is_stack => if animate_layout { RowLayout::Horizontal } else { RowLayout::Snaps },
         r => r,
     };
-    let mut children = children;
-    if scroll.is_some() && scroll_axes.x() {
-        if let [content] = children.as_mut_slice() {
-            style.flex_direction = FlexDirection::Row;
-            unwrapped_width(&mut content.style, scroll_axes.y());
-        } else {
-            if !scroll_axes.y() {
-                style.flex_direction = FlexDirection::Row;
-            }
-            for child in &mut children {
-                let w_full = child.style.size.width == Dimension::percent(1.0);
-                if child.style.size.width.is_auto() || w_full {
-                    child.style.size.width = Dimension::max_content();
-                    if w_full && child.style.min_size.width.is_auto() {
-                        child.style.min_size.width = percent(1.0);
-                    }
-                }
-                child.style.flex_shrink = 0.0;
-                if scroll_axes.y() && child.style.align_self.is_none() {
-                    child.style.align_self = Some(AlignSelf::FLEX_START);
-                }
-            }
-        }
-    }
     let row = matches!(style.flex_direction, FlexDirection::Row | FlexDirection::RowReverse);
-    let kids: Vec<taffy::NodeId> = children
-        .into_iter()
-        .enumerate()
-        .map(|(i, c)| flatten(c, Some(me), &path, i, motion, child_in_row, row, taffy, nodes, entries, scale))
-        .collect();
-    let id = if let Some(entry) = entries.get_mut(&path) {
-        let id = entry.id;
-        if taffy.style(id).unwrap() != &style {
-            taffy.set_style(id, style).unwrap();
+    let mut kids = Vec::with_capacity(total_children);
+    let shared_len = memo_children.as_ref().map_or(0, |m| m.children.len());
+    if let Some(shared) = &memo_children {
+        for (i, c) in shared.children.iter().enumerate() {
+            kids.push(flatten_ref(c, Some(me), path_buf, i, motion, child_in_row, row, child_sx, taffy, nodes, entries, scale));
         }
-        if !taffy.child_ids(id).eq(kids.iter().copied()) {
-            taffy.set_children(id, &kids).unwrap();
-        }
-        // Context indices can move after insertion/reorder without invalidating measurements.
-        // Only text/style/scale changes invalidate the cached leaf result.
-        if entry.measure.is_some() != measured {
-            taffy.set_node_context(id, measured.then_some(me)).unwrap();
-        } else if measured {
-            *taffy.get_node_context_mut(id).unwrap() = me;
-        }
-        if secure_measure || entry.measure != measure {
-            taffy.mark_dirty(id).unwrap();
-        }
-        entry.measure = measure;
-        entry.used = true;
-        id
-    } else if !kids.is_empty() {
-        taffy.new_with_children(style, &kids).unwrap()
-    } else if measured {
-        taffy.new_leaf_with_context(style, me).unwrap()
-    } else {
-        taffy.new_leaf(style).unwrap()
-    };
-    if !entries.contains_key(&path) {
-        if measured && taffy.get_node_context(id).is_none() {
-            taffy.set_node_context(id, Some(me)).unwrap();
-        }
-        entries.insert(path, LayoutEntry { id, measure, used: true });
     }
-    nodes[me].taffy = id;
-    id
+    for (j, c) in children.into_iter().enumerate() {
+        kids.push(flatten_owned(c, Some(me), path_buf, shared_len + j, motion, child_in_row, row, child_sx, taffy, nodes, entries, scale));
+    }
+    path_buf.truncate(prev_len);
+    sync_taffy_node(me, Cow::Owned(style), &kids, text_meta, taffy, nodes, entries)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn flatten_ref(
+    el: &El,
+    parent: Option<usize>,
+    path_buf: &mut String,
+    index: usize,
+    motion: Spring,
+    in_row: RowLayout,
+    parent_row: bool,
+    parent_sx: Option<ScrollXChild>,
+    taffy: &mut TaffyTree<usize>,
+    nodes: &mut Vec<Node>,
+    entries: &mut HashMap<String, LayoutEntry>,
+    scale: f32,
+) -> taffy::NodeId {
+    let prev_len = path_buf.len();
+    push_segment(path_buf, el.key.as_deref(), index);
+    let path = path_buf.clone();
+    let own_motion = el.motion;
+    let motion = own_motion.unwrap_or(motion);
+    let me = nodes.len();
+    let parent_is_stack = parent.is_some_and(|p| nodes[p].growth.is_some());
+    let animate_layout = el.animate_layout;
+    let in_row = if el.above.is_some() && (animate_layout || in_row == RowLayout::Horizontal) {
+        RowLayout::Free
+    } else if animate_layout && in_row == RowLayout::Snaps {
+        RowLayout::Horizontal
+    } else {
+        in_row
+    };
+    let instant_changes = el.instant_changes || parent.is_some_and(|p| nodes[p].instant_changes);
+    let trace_namespace = el.trace_namespace.or_else(|| parent.and_then(|p| nodes[p].trace_namespace));
+    let mut style: Cow<'_, Style> = Cow::Borrowed(&el.style);
+    if let Some(sx) = parent_sx {
+        apply_scroll_x_child(style.to_mut(), sx);
+    }
+    let mut text = el.text.clone();
+    let input = el.input.clone();
+    let text_meta = prepare_text(&mut text, input.as_deref(), scale);
+    let inert = el.inert || parent.is_some_and(|p| nodes[p].inert);
+    let mut vis = el.vis.clone();
+    inherit_hover_within(&mut vis, el.above.as_ref(), parent, nodes);
+    let pixel_aspect = vis.pixels.as_ref()
+        .filter(|_| style.aspect_ratio.is_none() && style.size.width.is_auto() != style.size.height.is_auto())
+        .map(pixel_ratio);
+    if let Some(ratio) = pixel_aspect.filter(|&r| r > 0.0) {
+        style.to_mut().aspect_ratio = Some(ratio);
+    }
+    let aspect_fit = if el.aspect_fit > 0.0 {
+        let room = fit_room(&style, parent_row);
+        let orig = std::mem::replace(&mut style, Cow::Owned(room)).into_owned();
+        Some(Box::new((el.aspect_fit, orig)))
+    } else {
+        None
+    };
+    let total_children = el.memo_children.as_ref().map_or(0, |m| m.children.len()) + el.children.len();
+    let child_sx = if el.scroll.is_some() && el.scroll_axes.x() {
+        if total_children == 1 {
+            style.to_mut().flex_direction = FlexDirection::Row;
+            Some(ScrollXChild::Single { vertical: el.scroll_axes.y() })
+        } else {
+            if !el.scroll_axes.y() {
+                style.to_mut().flex_direction = FlexDirection::Row;
+            }
+            Some(ScrollXChild::Many { vertical: el.scroll_axes.y() })
+        }
+    } else {
+        None
+    };
+    nodes.push(Node {
+        on_paste: el.on_paste.clone(),
+        on_window_focus: el.on_window_focus.clone(),
+        focus: el.focus.clone(),
+        modal: el.modal.clone(),
+        looping: el.looping.clone(),
+        id: NodeId(0),
+        path,
+        key: el.key.clone(),
+        trace_name: el.trace_name,
+        trace_namespace,
+        role: el.role,
+        label: el.label.clone(),
+        vis,
+        live: el.live.clone(),
+        text,
+        text_layout: None,
+        elided: None,
+        run_layout: None,
+        live_text_seen: None,
+        on_press: el.on_press.clone(),
+        on_double_press: el.on_double_press.clone(),
+        on_secondary_press: el.on_secondary_press.clone(),
+        on_hover: el.on_hover.clone(),
+        on_hover_change: el.on_hover_change.clone(),
+        hover_delay: el.hover_delay,
+        on_pointer_move: el.on_pointer_move.clone(),
+        gestures: el.gestures.clone(),
+        above: el.above.clone(),
+        on_drag: el.on_drag.clone(),
+        drag_out: el.drag_out.clone(),
+        drag_threshold: el.drag_threshold,
+        on_drag_start: el.on_drag_start.clone(),
+        on_drag_end: el.on_drag_end.clone(),
+        drop: el.drop.clone(),
+        motion,
+        opacity_motion: el.opacity_motion.clone(),
+        lead: el.lead,
+        width_leads: el.width_leads,
+        instant_changes,
+        transition: el.transition.clone(),
+        matched: el.matched.as_ref().map(|id| (id.clone(), own_motion)),
+        scroll: el.scroll,
+        scroll_axes: el.scroll_axes,
+        on_at_bottom: el.on_at_bottom.clone(),
+        on_far_from_bottom: el.on_far_from_bottom.clone(),
+        on_visible_rows: el.on_visible_rows.clone(),
+        on_layout: el.on_layout.clone(),
+        on_screen_layout: el.on_screen_layout.clone(),
+        on_drawn_layout: el.on_drawn_layout.clone(),
+        on_scroll_offset: el.on_scroll_offset.clone(),
+        sticky: el.sticky.clone(),
+        scroll_edges: el.scroll_edges,
+        growth: el.growth.clone(),
+        streaming: el.streaming,
+        whole: el.whole,
+        input,
+        cursor: el.cursor.clone(),
+        window_drag: el.window_drag,
+        ime_cursor: el.ime_cursor,
+        selection_group: el.selection_group,
+        selection_copy: el.selection_copy.clone(),
+        on_selection_change: el.on_selection_change.clone(),
+        a11y: el.a11y,
+        inert,
+        press_scale: el.press_scale,
+        static_scale: el.scale,
+        scale_track: false,
+        group_fade: false,
+        time_scale: el.time_scale,
+        pixel_aspect,
+        aspect_fit,
+        material: el.material,
+        in_row,
+        virtual_mount: el.virtual_mount,
+        parent,
+        taffy: taffy::NodeId::from(0u64),
+        target: [0.0; 4],
+        local: MRect::ZERO,
+        inset: [0.0; 4],
+        help: el.help.clone(),
+        help_cut: el.help_cut,
+        #[cfg(debug_assertions)]
+        scroll_source: el.scroll_source,
+    });
+    let child_in_row = match in_row {
+        RowLayout::Free if parent_is_stack => if animate_layout { RowLayout::Horizontal } else { RowLayout::Snaps },
+        r => r,
+    };
+    let row = matches!(style.flex_direction, FlexDirection::Row | FlexDirection::RowReverse);
+    let mut kids = Vec::with_capacity(total_children);
+    for (i, c) in el.all_children().enumerate() {
+        kids.push(flatten_ref(c, Some(me), path_buf, i, motion, child_in_row, row, child_sx, taffy, nodes, entries, scale));
+    }
+    path_buf.truncate(prev_len);
+    sync_taffy_node(me, style, &kids, text_meta, taffy, nodes, entries)
 }

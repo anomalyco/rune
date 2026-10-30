@@ -30,6 +30,7 @@ impl El {
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn virtualize(mut self, estimated_row_height: f32) -> Self {
         self.virtual_estimate = Some(estimated_row_height.max(1.0));
+        self.has_virtual = true;
         #[cfg(debug_assertions)]
         { self.virtual_source = Some(std::panic::Location::caller()); }
         self

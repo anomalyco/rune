@@ -579,11 +579,12 @@ pub struct El {
     pub(crate) style: Style,
     pub(crate) vis: Visual,
     pub(crate) live: Vec<crate::live::Bound>,
-    pub(crate) text: Option<Box<TextSpec>>,
+    pub(crate) text: Option<crate::cold::SharedBox<TextSpec>>,
     pub(crate) children: Vec<El>,
-    /// Children a [`memo`](crate::memo) shares with its cache, before `children`. Copied in
-    /// by [`El::expand_memo`] only when the element mounts.
+    /// Children a [`memo`](crate::memo) shares with its cache, before `children`.
     pub(crate) memo_children: Option<Rc<crate::memo::Shared>>,
+    /// Whether this element or anything under it uses `virtualize` or `virtual_rows`.
+    pub(crate) has_virtual: bool,
     pub(crate) on_press: Option<PressFn>,
     pub(crate) on_double_press: Option<PressFn>,
     pub(crate) on_secondary_press: Option<PointerFn>,
@@ -680,6 +681,7 @@ fn base(dir: FlexDirection) -> El {
         text: None,
         children: Vec::new(),
         memo_children: None,
+        has_virtual: false,
         on_press: None,
         on_double_press: None,
         on_secondary_press: None,
@@ -766,7 +768,7 @@ pub fn spacer() -> El {
 pub fn text(content: impl Into<String>) -> El {
     let mut e = base(FlexDirection::Row);
     e.role = "text";
-    e.text = Some(Box::new(TextSpec {
+    e.text = Some(crate::cold::SharedBox::new(TextSpec {
         content: content.into(),
         style: crate::tok::type_::BODY,
         color: Color::WHITE,
@@ -1308,11 +1310,14 @@ impl El {
         e
     }
     pub fn child(mut self, child: El) -> Self {
+        self.has_virtual |= child.has_virtual;
         self.children.push(child);
         self
     }
     pub fn children(mut self, children: impl IntoIterator<Item = El>) -> Self {
+        let start = self.children.len();
         self.children.extend(children);
+        self.has_virtual |= self.children[start..].iter().any(|c| c.has_virtual);
         self
     }
 
