@@ -47,6 +47,12 @@ mod float_on_open;
 pub use event_loop::run;
 pub(crate) use event_loop::run_windows;
 #[cfg(test)]
+#[path = "window/covered_tests.rs"]
+mod covered;
+#[cfg(all(test, target_os = "macos"))]
+#[path = "window/occluded_surface_tests.rs"]
+mod occluded_surface;
+#[cfg(test)]
 mod tests;
 
 pub(crate) enum WakeEvent {
@@ -667,27 +673,6 @@ impl HiddenPace {
     pub(crate) fn reset(&mut self) { *self = HiddenPace::default(); }
 }
 
-#[test]
-fn hidden_pace_renders_a_change_at_once_then_at_most_every_refresh() {
-    let t0 = Instant::now();
-    let mut pace = HiddenPace::default();
-    assert!(pace.changed(t0), "the first change renders at once");
-    pace.rendered(t0);
-    assert_eq!(pace.deadline(), None);
-    assert!(!pace.changed(t0 + Duration::from_millis(100)));
-    assert!(!pace.changed(t0 + Duration::from_millis(200)));
-    assert_eq!(pace.deadline(), Some(t0 + HIDDEN_REFRESH), "later ones wait for one render");
-    assert!(!pace.take_due(t0 + Duration::from_millis(249)));
-    assert!(pace.take_due(t0 + HIDDEN_REFRESH));
-    assert_eq!(pace.deadline(), None, "a due render asked for doesn't wake the loop again");
-    assert!(pace.changed(t0 + HIDDEN_REFRESH));
-    pace.rendered(t0 + HIDDEN_REFRESH);
-    assert_eq!(pace.deadline(), None);
-    assert!(pace.changed(t0 + Duration::from_secs(5)), "after a quiet spell, at once again");
-    pace.reset();
-    assert!(pace.changed(t0 + Duration::from_secs(5)));
-}
-
 /// Whether a timer asks for the frame after one just presented. Only a surface whose display
 /// link paces it (`next_frame` is its next tick) takes a timer due by then as a frame request;
 /// anywhere else the timer waits in `timer_deadline`, so it never turns the loop by itself.
@@ -785,160 +770,6 @@ pub(crate) fn acquire_checked(surface: &wgpu::Surface, device: &wgpu::Device, co
     }
 }
 
-#[test]
-fn missed_frames_never_poll() {
-    use wgpu::CurrentSurfaceTexture as S;
-    let now = Instant::now();
-    for status in [S::Occluded, S::Timeout, S::Outdated, S::Lost, S::Validation] {
-        let missed = Missed::of(status).err().expect("a miss");
-        for paced in [false, true] {
-            for wait in [Duration::ZERO, OCCLUDED_RETRY, Duration::from_secs(60)] {
-                // `NextFrame` has no Poll; a deadline at or before now would spin the same way.
-                let flow = match missed.next(paced, now, wait) {
-                    NextFrame::WaitUntil(at) => { assert!(at > now, "{missed:?} retries later, not now"); ControlFlow::WaitUntil(at) }
-                    NextFrame::Idle => ControlFlow::Wait,
-                };
-                assert_ne!(flow, ControlFlow::Poll, "{missed:?} (paced: {paced}) must not poll");
-            }
-        }
-    }
-    let occluded = |wait| Missed::Occluded.next(true, now, wait);
-    assert_eq!(occluded(Duration::ZERO), NextFrame::WaitUntil(now + OCCLUDED_RETRY), "the safety net is slow");
-    assert_eq!(occluded(Duration::from_secs(60)), NextFrame::WaitUntil(now + OCCLUDED_MAX));
-    assert_eq!(Missed::Timeout.next(true, now, Duration::ZERO), NextFrame::Idle, "a running display link retries on its tick");
-    assert_eq!(Missed::Timeout.next(false, now, Duration::ZERO), NextFrame::WaitUntil(now + TIMEOUT_RETRY));
-}
-
-/// A Metal surface whose window reports itself covered, with no window server needed: the layer's
-/// delegate stands in for the backing view, and is its own window.
-#[cfg(all(test, target_os = "macos"))]
-mod occluded_surface {
-    use super::*;
-    use std::sync::atomic::AtomicUsize;
-    use objc2_video::{ClassType, define_class, msg_send, rc::Retained, runtime::{AnyClass, AnyObject, NSObject}};
-
-    /// The fake window's `occlusionState`: 0 covered, 2 (`NSWindowOcclusionStateVisible`) shown.
-    static OCCLUSION: AtomicUsize = AtomicUsize::new(0);
-
-    define_class!(
-        #[unsafe(super(NSObject))]
-        #[name = "RuneFakeOccludedView"]
-        struct FakeView;
-
-        impl FakeView {
-            #[unsafe(method(window))]
-            fn window(&self) -> *const Self { self }
-
-            #[unsafe(method(occlusionState))]
-            fn occlusion_state(&self) -> usize { OCCLUSION.load(Ordering::Relaxed) }
-        }
-    );
-
-    /// An hour covered costs no failed `get_current_texture` (each leaks a texture id in
-    /// wgpu-core 30.0.1) and a re-check at most every two seconds; uncovered, it draws.
-    #[test]
-    fn an_occluded_surface_never_asks_wgpu_and_draws_once_visible() {
-        let view: Retained<FakeView> = unsafe { msg_send![FakeView::class(), new] };
-        let layer: Retained<AnyObject> = unsafe { msg_send![AnyClass::get(c"CAMetalLayer").expect("QuartzCore"), new] };
-        let _: () = unsafe { msg_send![&*layer, setDelegate: &*view] };
-        let instance = Gpu::instance();
-        let target = wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(Retained::as_ptr(&layer) as *mut std::ffi::c_void);
-        let surface = unsafe { instance.create_surface_unsafe(target) }.expect("a Metal layer surface");
-        let gpu = match Gpu::try_new(instance, Some(&surface)) {
-            Ok(gpu) => gpu,
-            Err(error) => return eprintln!("skipped: {error}"),
-        };
-        let Some((config, _)) = surface_config(&surface, &gpu.adapter, (64, 64), false) else {
-            return eprintln!("skipped: the adapter can't present to a Metal layer");
-        };
-        surface.configure(&gpu.device, &config);
-
-        OCCLUSION.store(0, Ordering::Relaxed);
-        assert!(unsafe { crate::macos::layer_occluded(&layer) });
-        let mut meter = SurfaceMeter::new("occluded", Arc::default());
-        let start = Instant::now();
-        let (mut at, mut wait, mut checks) = (start, OCCLUDED_RETRY, 0u64);
-        while at < start + Duration::from_secs(3600) {
-            if let Ok(_frame) = acquire(&surface, &gpu.device, &config, 1, &mut meter) { panic!("an occluded surface got a drawable"); }
-            checks += 1;
-            let NextFrame::WaitUntil(next) = Missed::Occluded.next(false, at, wait) else { panic!("occlusion re-checks on a deadline") };
-            wait = (wait * 2).min(OCCLUDED_MAX);
-            at = next;
-        }
-        let totals = meter.totals();
-        assert_eq!(totals.failed(), 0, "wgpu was asked for drawables it refuses as occluded");
-        assert_eq!(totals.skipped, checks);
-        assert!(checks <= 3600 / 2 + 3, "{checks} re-checks in an hour occluded");
-
-        OCCLUSION.store(2, Ordering::Relaxed);
-        let frame = acquire(&surface, &gpu.device, &config, 1, &mut meter).expect("a visible surface gets a drawable");
-        let target = frame.texture.create_view(&Default::default());
-        let mut encoder = gpu.device.create_command_encoder(&Default::default());
-        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &target, depth_slice: None, resolve_target: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
-            })],
-            ..Default::default()
-        });
-        gpu.queue.submit([encoder.finish()]);
-        gpu.queue.present(frame);
-        meter.presented();
-        assert_eq!((meter.totals().presents, meter.totals().failed()), (1, 0));
-    }
-
-    define_class!(
-        #[unsafe(super(NSObject))]
-        #[name = "RuneFakeCoveredView"]
-        struct CoveredView;
-
-        impl CoveredView {
-            #[unsafe(method(window))]
-            fn window(&self) -> *const Self { self }
-
-            #[unsafe(method(occlusionState))]
-            fn occlusion_state(&self) -> usize { 0 }
-        }
-    );
-
-    /// A window's first frame draws before the window server reports the window on screen:
-    /// `PresumeShown` gets it a drawable from wgpu, and puts the layer's own delegate back.
-    #[test]
-    fn a_presumed_shown_surface_gets_its_first_drawable_while_reported_covered() {
-        let view: Retained<CoveredView> = unsafe { msg_send![CoveredView::class(), new] };
-        let layer: Retained<AnyObject> = unsafe { msg_send![AnyClass::get(c"CAMetalLayer").expect("QuartzCore"), new] };
-        let _: () = unsafe { msg_send![&*layer, setDelegate: &*view] };
-        let instance = Gpu::instance();
-        let target = wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(Retained::as_ptr(&layer) as *mut std::ffi::c_void);
-        let surface = unsafe { instance.create_surface_unsafe(target) }.expect("a Metal layer surface");
-        let gpu = match Gpu::try_new(instance, Some(&surface)) {
-            Ok(gpu) => gpu,
-            Err(error) => return eprintln!("skipped: {error}"),
-        };
-        let Some((config, _)) = surface_config(&surface, &gpu.adapter, (64, 64), false) else {
-            return eprintln!("skipped: the adapter can't present to a Metal layer");
-        };
-        surface.configure(&gpu.device, &config);
-        let mut meter = SurfaceMeter::new("first", Arc::default());
-        assert!(acquire(&surface, &gpu.device, &config, 1, &mut meter).is_err(), "a covered window gets no drawable");
-
-        let shown = crate::macos::PresumeShown::new(&surface).expect("a Metal surface");
-        assert!(!crate::macos::surface_occluded(&surface));
-        let stand_in: *const AnyObject = unsafe { msg_send![&*layer, delegate] };
-        let null: *const AnyObject = unsafe { msg_send![AnyClass::get(c"NSNull").expect("Foundation"), null] };
-        let action: *const AnyObject = unsafe { msg_send![stand_in, actionForLayer: &*layer, forKey: std::ptr::null::<AnyObject>()] };
-        assert_eq!(action, null, "PresumeShown suppresses implicit Core Animation actions");
-        let frame = acquire(&surface, &gpu.device, &config, 1, &mut meter).expect("the first frame's drawable");
-        drop(frame);
-        drop(shown);
-
-        let delegate: *const AnyObject = unsafe { msg_send![&*layer, delegate] };
-        assert!(std::ptr::eq(delegate, Retained::as_ptr(&view).cast()), "the layer's delegate is back");
-        assert!(crate::macos::surface_occluded(&surface));
-        assert_eq!(meter.totals().failed(), 0, "wgpu was never asked while covered");
-    }
-}
-
 /// `setup`'s waker: `AppHandle::wake`, so a drain that also holds updates that changed nothing
 /// still polls and redraws for it.
 fn setup_waker<S: 'static>(shared: &Arc<crate::app::Shared<S>>) -> Waker {
@@ -953,105 +784,6 @@ fn setup_waker<S: 'static>(shared: &Arc<crate::app::Shared<S>>) -> Waker {
 /// Uncovering settles first, so that frame builds once and paints motion where it would have
 /// ended, as Core Animation's time-based motion has by the time a covered window shows again.
 pub(crate) fn covered_step<S: 'static>(rt: &mut Runtime<S>) { rt.hidden_wake(); }
-
-#[cfg(test)]
-mod covered {
-    use super::*;
-    use crate::{Cx, El, Env, Spring, el, text};
-    use std::cell::Cell;
-
-    thread_local! { static BUILDS: Cell<u32> = const { Cell::new(0) }; }
-
-    #[derive(Default)]
-    struct Chat { messages: u32, read: u32, polls: u32 }
-
-    fn view(chat: &Chat, _: &mut Cx<Chat>) -> El {
-        BUILDS.set(BUILDS.get() + 1);
-        el().child(text(format!("{} {}", chat.messages, chat.read)).key("n"))
-    }
-
-    fn shown_text(rt: &Runtime<Chat>) -> Option<String> {
-        rt.elements().into_iter().find(|e| e.key.as_deref() == Some("n")).and_then(|e| e.text)
-    }
-
-    /// A covered window whose state changes 100 times, from updates, their timers and a poll
-    /// that reads an inbox, builds no view and lays nothing out, while `poll` and the timers
-    /// still run. Uncovering builds once, with the latest state.
-    #[test]
-    fn a_covered_window_builds_nothing_until_it_uncovers() {
-        let mut rt = Runtime::new(Chat::default(), view, (200.0, 50.0), Env { system_dark: true, scale: 1.0 });
-        rt.poll = Some(|chat, _, _| { chat.polls += 1; let unread = chat.read < chat.messages; chat.read = chat.messages; unread });
-        let start = Instant::now();
-        rt.wall_start = Some(start);
-        rt.frame(0.0);
-        assert_eq!(shown_text(&rt).as_deref(), Some("0 0"));
-        // As the host does for `WindowEvent::Occluded(true)`.
-        rt.set_live_visible(false);
-        let (builds, commits, polls) = (BUILDS.get(), rt.stats.commits, rt.state.polls);
-        for k in 1..=100 {
-            rt.update(|chat, tx| { chat.messages += 1; tx.wake_after(Duration::from_millis(10)); });
-            covered_step(&mut rt);
-            // Its timer comes due before the next message.
-            rt.wall_start = Some(start - k * Duration::from_millis(20));
-            covered_step(&mut rt);
-        }
-        assert_eq!((rt.state.messages, rt.state.read), (100, 100), "updates and poll ran");
-        assert_eq!(rt.state.polls - polls, 200, "poll runs for every update and timer");
-        assert_eq!(rt.wake_deadline(), None, "due timers are spent on time");
-        assert_eq!(BUILDS.get() - builds, 0, "no view builds while covered");
-        assert_eq!(rt.stats.commits, commits, "no layout while covered");
-        assert!(rt.stale(), "the window is marked out of date");
-
-        // As the host does for `WindowEvent::Occluded(false)`, then its first frame.
-        rt.set_live_visible(true);
-        rt.settle_all();
-        rt.frame(1.0 / 120.0);
-        assert_eq!(BUILDS.get() - builds, 1, "uncovering builds once");
-        assert_eq!(shown_text(&rt).as_deref(), Some("100 100"), "with the latest state");
-    }
-
-    /// Queued input still runs its handlers while covered (a key into a covered window that's
-    /// still key), which takes a frame without drawing.
-    #[test]
-    fn a_covered_window_still_hears_queued_input() {
-        let mut rt = Runtime::new(Chat::default(), view, (200.0, 50.0), Env { system_dark: true, scale: 1.0 });
-        rt.frame(0.0);
-        rt.set_live_visible(false);
-        rt.window_focus(false);
-        assert!(rt.keys_queued());
-        covered_step(&mut rt);
-        assert!(!rt.has_pending_input(), "the focus change was delivered");
-    }
-
-    /// Motion running when the window is covered, and motion asked for while it's covered,
-    /// neither advances nor builds while covered; uncovering lands both in one frame, so
-    /// nothing plays out after.
-    #[test]
-    fn a_covered_window_lands_its_motion_when_it_uncovers() {
-        fn view(x: &f32, _: &mut Cx<f32>) -> El {
-            crate::col().child(el().key("box").absolute(*x, 0.0).size(10.0, 10.0))
-        }
-        let x = |rt: &Runtime<f32>| rt.presented("box").unwrap().0[0];
-        let mut rt = Runtime::new(0.0_f32, view, (100.0, 100.0), Env { system_dark: true, scale: 1.0 });
-        rt.frame(0.0);
-        rt.update(|x, tx| { *x = 80.0; tx.motion(Spring::new(0.3, 0.0)); });
-        rt.frame(1.0 / 120.0);
-        rt.frame(0.05);
-        let mid = x(&rt);
-        assert!(mid > 0.0 && mid < 80.0 && rt.animating, "in flight: {mid}");
-        rt.set_live_visible(false);
-        let commits = rt.stats.commits;
-        rt.update(|x, tx| { *x = 40.0; tx.motion(Spring::new(0.3, 0.0)); });
-        covered_step(&mut rt);
-        assert_eq!(x(&rt), mid, "nothing moves while covered");
-        assert_eq!(rt.stats.commits, commits, "or builds");
-        rt.set_live_visible(true);
-        rt.settle_all();
-        rt.frame(1.0 / 120.0);
-        assert_eq!(x(&rt), 40.0, "uncovering paints where the motion ends");
-        assert!(!rt.animating, "with nothing left to play");
-    }
-}
 
 /// Whether a drain of other threads' requests asks the window for a frame. A hidden launcher
 /// renders a change into its cached frame (paced); a shown launcher redraws for a change or
@@ -1153,38 +885,6 @@ pub(crate) fn backing_scale(window: &Window) -> f32 {
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn uses_drag_regions(chrome: Chrome, borderless: bool, panel: bool) -> bool {
     chrome.drag_regions && (borderless || chrome.full_size_content) && !panel
-}
-
-#[test]
-fn a_window_s_first_updates_can_register_on_a_later_window() {
-    use crate::{App, AppSpec, MenuItem, el};
-    type S = Vec<String>;
-    let apps: Vec<App<S>> = ["first", "second"].map(|title| App::new(AppSpec::new(title, (10.0, 10.0), Vec::new, |_, _| el()))).into();
-    let second = apps[1].handle();
-    apps[0].handle().update(move |s: &mut S, _| {
-        s.push(format!("{:?}", second.register_shortcut("ctrl+alt+shift+f18".parse().unwrap(), |_, _| {}).map(|_| ())));
-        s.push(format!("{:?}", second.set_menu([MenuItem::new("Item", |_: &mut S, _| {})])));
-    });
-    // As Host::new and Host::resumed: attach the guards, then drain the first updates.
-    let hosts = start_all(apps.into(), |_, app| {
-        let shortcuts = crate::shortcuts::Guard::attach(&app.shared, Arc::new(|| {}), true, false);
-        let menus = crate::native_menu::Guard::attach(&app.shared, true);
-        Some((app, shortcuts, menus, S::new()))
-    }, |(app, _, _, state)| for f in app.shared.take().updates { f(state, &mut Tx::default()); });
-    assert_eq!(hosts[0].as_ref().unwrap().3, ["Ok(())", "Ok(())"]);
-}
-
-#[test]
-fn drag_region_policy_preserves_titled_windows_and_panels() {
-    for enabled in [false, true] {
-        for full_size in [false, true] {
-            let chrome = Chrome { drag_regions: enabled, full_size_content: full_size, ..Chrome::DEFAULT };
-            assert_eq!(uses_drag_regions(chrome, false, false), enabled && full_size);
-            assert_eq!(uses_drag_regions(chrome, true, false), enabled);
-            assert!(!uses_drag_regions(chrome, false, true));
-            assert!(!uses_drag_regions(chrome, true, true));
-        }
-    }
 }
 
 #[cfg(target_os = "macos")]
