@@ -161,6 +161,11 @@ impl GrowTrack {
         }
     }
 
+    /// A fold shutting over what it held, which its clip folds away (`El::fold_glide`).
+    pub(crate) fn shutting_fold(&self) -> bool {
+        self.glide.is_some() && self.h > self.target + 0.01
+    }
+
     /// The row's `El::streaming`, `El::arrives_whole` and `El::fold_glide` (which streaming
     /// overrides) with the height at which its bottom leaves the window.
     pub(crate) fn set_kind(&mut self, streaming: bool, whole: bool, glide: Option<(Spring, f32)>) {

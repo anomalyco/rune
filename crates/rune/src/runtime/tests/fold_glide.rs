@@ -24,6 +24,9 @@ fn shut_secs(fold: bool) -> f32 {
     rt.dirty = true;
     for k in 1..240 {
         rt.frame(1.0 / 120.0);
+        if fold && k < 12 {
+            assert!(rt.row_mask.iter().any(|&m| m >= 0.0), "shutting, the row clips what it held");
+        }
         let below = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("below")).unwrap();
         if (below.rect[1] - 140.0).abs() < 0.5 {
             return k as f32 / 120.0;
