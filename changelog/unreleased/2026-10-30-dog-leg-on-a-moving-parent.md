@@ -1,0 +1,1 @@
+- The motion audit no longer reports a `dog-leg` for an element whose own move is straight against its moving parent, as a chevron that slides along its row while the list scrolls: its path bends on screen only by the parent's motion. An L-shaped move of its own, on a moving parent or a still one, is still reported.

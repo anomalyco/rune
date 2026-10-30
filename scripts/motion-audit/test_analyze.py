@@ -116,6 +116,17 @@ def main():
     assert not {"reversal", "dog-leg", "overshoot"} & set(kinds(straight)), "a straight eased move"
     ell = hold(at(100, 100), 5) + [at(x, 100) for x in ease(100, 200, 10)] + [at(200, y) for y in ease(100, 200, 10)] + hold(at(200, 200), 10)
     assert "dog-leg" in kinds(ell), "across, then down"
+    # a chevron sliding along its row as the list scrolls: across on the list, up with it.
+    list_y = ease(300, 200, 20) + [200] * 20
+    slide = [0] * 18 + ease(0, 100, 20) + [100] * 2
+    scroll = hold({**still, "root/list": (0, 300, 400, 100, 1), "root/list/chevron": (100, 310, 10, 10, 1)}, 5)
+    scroll += [{**still, "root/list": (0, y, 400, 100, 1), "root/list/chevron": (100 + x, y + 10, 10, 10, 1)} for y, x in zip(list_y, slide)]
+    assert "dog-leg" not in kinds(scroll + hold(scroll[-1], 10)), "a slide on a scrolling list"
+    # an L of its own on a moving list is still one.
+    ell_x, ell_y = ease(0, 100, 15) + [100] * 15, [0] * 15 + ease(0, 100, 15)
+    ell_on = [{**still, "root/list": (0, y, 400, 100, 1), "root/list/chevron": (100 + x, y + 10 + dy, 10, 10, 1)}
+              for y, x, dy in zip(ease(300, 200, 30), ell_x, ell_y)]
+    assert "dog-leg" in kinds(scroll[:5] + ell_on + hold(ell_on[-1], 10)), "across, then down, on a moving list"
     # a drift out and back that rests a frame where it turns is still one motion.
     drift = hold(at(100, 100), 5) + [at(x, 100) for x in ease(100, 97.5, 6)] + hold(at(97.5, 100), 2) + [at(x, 100) for x in ease(97.5, 100, 12)] + hold(at(100, 100), 10)
     assert "reversal" in kinds(drift), "out and back with a rest at the turn"

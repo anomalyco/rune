@@ -19,7 +19,8 @@ looks wrong:
   reversal         one motion heads the wrong way first, or goes out and comes back
   stall            one motion's speed drops for a frame and picks up again (a retarget that
                    lost part of its velocity)
-  dog-leg          a move's route is much longer than the straight line between its ends
+  dog-leg          a move's route is much longer than the straight line between its ends, on
+                   screen and against its parent
   latency          input whose first visible response comes frames later
   hitch            frame CPU over budget during motion
 
@@ -511,6 +512,14 @@ def analyze(path, script=None):
                 if not (hidden or held or rides or interrupted(k0, k1)):
                     route = sum(math.hypot(p[1] - q[1], p[2] - q[2]) for q, p in zip(pts, pts[1:]))
                     chord = math.hypot(pts[-1][1] - pts[0][1], pts[-1][2] - pts[0][2])
+                    # Its own move on a moving parent (a chevron sliding along a row as the list
+                    # scrolls) bends only by the parent's: straight against the parent is one path.
+                    if all(p[0] in ph for p in pts):
+                        rel = [(p[1] - ph[p[0]][1], p[2] - ph[p[0]][2]) for p in pts]
+                        own = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(rel, rel[1:]))
+                        bent = own > 1.2 * math.hypot(rel[-1][0] - rel[0][0], rel[-1][1] - rel[0][1])
+                        if own < route - 0.01 and (own <= JUMP_PT or not bent):
+                            route = chord
                     if chord > JUMP_PT and route > 1.2 * chord:
                         findings.append(dict(kind="dog-leg", element=e.name, frames=k1 - k0 + 1, longest=k1 - k0 + 1, at=f"{k0}–{k1}",
                                              detail=f"({pts[0][1]:.0f},{pts[0][2]:.0f}) → ({pts[-1][1]:.0f},{pts[-1][2]:.0f}) travels {route:.0f}pt for a {chord:.0f}pt move"))
