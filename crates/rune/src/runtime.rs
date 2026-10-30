@@ -246,6 +246,8 @@ pub(crate) mod memo_reuse;
 mod measure;
 #[path = "runtime/apply.rs"]
 mod apply;
+#[path = "runtime/apply_scratch.rs"]
+mod apply_scratch;
 #[path = "runtime/relayout.rs"]
 mod relayout;
 #[path = "runtime/virtual_window.rs"]
@@ -334,6 +336,7 @@ pub struct Runtime<S: 'static> {
     /// The last commit's node buffer, emptied, for the next flatten to fill: an app of a few
     /// thousand elements otherwise maps and faults in megabytes every commit.
     spare_nodes: Vec<Node>,
+    apply_scratch: apply_scratch::ApplyScratch,
     layout: TaffyTree<usize>,
     layout_entries: HashMap<String, LayoutEntry>,
     node_index: HashMap<NodeId, usize>,
@@ -733,6 +736,7 @@ impl<S: 'static> Runtime<S> {
             on_key: None,
             nodes: Vec::new(),
             spare_nodes: Vec::new(),
+            apply_scratch: Default::default(),
             layout: {
                 let mut tree = TaffyTree::new();
                 tree.disable_rounding();

@@ -11,7 +11,9 @@ impl<S: 'static> Runtime<S> {
         self.nodes.reserve(old.len());
         self.has_dissolve = false;
         self.has_cache = false;
-        let mut remap = vec![None; old.len()];
+        let mut remap = std::mem::take(&mut self.apply_scratch.remap);
+        remap.clear();
+        remap.resize(old.len(), None);
         self.node_index.clear();
         for (old_idx, mut n) in old.drain(..).enumerate() {
             if !self.scene.contains(n.id) {
@@ -35,6 +37,8 @@ impl<S: 'static> Runtime<S> {
         }
         self.spare_nodes = old;
         self.memo.on_prune(&remap);
+        remap.clear();
+        self.apply_scratch.remap = remap;
         self.virtuals.retain(|path, _| self.nodes.iter().any(|n| n.path == *path));
         self.refresh_modal_index();
         self.flying.retain(|(id, _)| self.node_index.contains_key(id));

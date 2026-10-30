@@ -19,7 +19,7 @@ pub(super) struct Measurement<'a, S: 'static> {
     /// The last commit's nodes. A pass that commits drops the text layouts of the ones it keeps.
     pub(super) nodes: &'a mut [Node],
     pub(super) committing: bool,
-    pub(super) spare_nodes: Vec<Node>,
+    pub(super) spare_nodes: &'a mut Vec<Node>,
     pub(super) text: &'a mut TextSystem,
     pub(super) layout: &'a mut TaffyTree<usize>,
     pub(super) layout_entries: &'a mut HashMap<String, LayoutEntry>,

@@ -82,7 +82,9 @@ impl<S: 'static> Measurement<'_, S> {
         self.anchor_virtuals();
         let quiet = self.quiet_rows();
         let mut taffy = std::mem::replace(self.layout, TaffyTree::with_capacity(0));
-        let mut nodes = std::mem::take(&mut self.spare_nodes);
+        let mut nodes = std::mem::take(self.spare_nodes);
+        nodes.clear();
+        nodes.reserve(self.nodes.len());
         nodes.extend(self.nodes.iter_mut().zip(quiet).map(|(n, quiet)| {
             // The new nodes lay their text out again; the cache then holds the only reference.
             n.text_layout = None;
@@ -98,8 +100,10 @@ impl<S: 'static> Measurement<'_, S> {
         for n in nodes.iter().filter(|n| n.text.as_ref().is_some_and(|t| t.redacted)) {
             taffy.mark_dirty(n.taffy).unwrap();
         }
-        let (layout, nodes) = self.solve(taffy, root, nodes);
+        let (layout, mut nodes) = self.solve(taffy, root, nodes);
         if self.measure_virtuals(&nodes, false) || self.windows_move() {
+            nodes.clear();
+            *self.spare_nodes = nodes;
             *self.layout = layout;
             return None;
         }

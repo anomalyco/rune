@@ -277,10 +277,10 @@ fn sync_taffy_node(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn flatten(
+pub(super) fn flatten_with_buf(
     el: El,
     parent: Option<usize>,
-    parent_path: &str,
+    path_buf: &mut String,
     index: usize,
     motion: Spring,
     in_row: RowLayout,
@@ -292,9 +292,10 @@ pub(super) fn flatten(
     scale: f32,
     memo_ctx: &mut memo_reuse::MemoFlattenCtx<'_>,
 ) -> taffy::NodeId {
-    let mut path_buf = String::with_capacity(parent_path.len() + 128);
-    path_buf.push_str(parent_path);
-    flatten_owned(el, parent, &mut path_buf, index, motion, in_row, parent_row, None, taffy, nodes, entries, scale, memo_ctx)
+    if path_buf.capacity() < path_buf.len() + 128 {
+        path_buf.reserve(128);
+    }
+    flatten_owned(el, parent, path_buf, index, motion, in_row, parent_row, None, taffy, nodes, entries, scale, memo_ctx)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -483,18 +484,22 @@ fn flatten_owned(
         r => r,
     };
     let row = matches!(style.flex_direction, FlexDirection::Row | FlexDirection::RowReverse);
-    let mut kids = Vec::with_capacity(total_children);
+    let kids_start = memo_ctx.kids.len();
+    memo_ctx.kids.reserve(total_children);
     let shared_len = memo_children.as_ref().map_or(0, |m| m.children.len());
     if let Some(shared) = &memo_children {
         for (i, c) in shared.children.iter().enumerate() {
-            kids.push(flatten_ref(c, Some(me), path_buf, i, motion, child_in_row, row, child_sx, taffy, nodes, entries, scale, memo_ctx));
+            let kid = flatten_ref(c, Some(me), path_buf, i, motion, child_in_row, row, child_sx, taffy, nodes, entries, scale, memo_ctx);
+            memo_ctx.kids.push(kid);
         }
     }
     for (j, c) in children.into_iter().enumerate() {
-        kids.push(flatten_owned(c, Some(me), path_buf, shared_len + j, motion, child_in_row, row, child_sx, taffy, nodes, entries, scale, memo_ctx));
+        let kid = flatten_owned(c, Some(me), path_buf, shared_len + j, motion, child_in_row, row, child_sx, taffy, nodes, entries, scale, memo_ctx);
+        memo_ctx.kids.push(kid);
     }
     path_buf.truncate(prev_len);
-    let id = sync_taffy_node(me, Cow::Owned(style), &kids, text_meta, taffy, nodes, entries);
+    let id = sync_taffy_node(me, Cow::Owned(style), &memo_ctx.kids[kids_start..], text_meta, taffy, nodes, entries);
+    memo_ctx.kids.truncate(kids_start);
     if let Some((built_id, inherited, hover_within)) = record_built {
         memo_ctx.pending.push(memo_reuse::PendingFlat {
             built_id,
@@ -683,12 +688,15 @@ fn flatten_ref(
         r => r,
     };
     let row = matches!(style.flex_direction, FlexDirection::Row | FlexDirection::RowReverse);
-    let mut kids = Vec::with_capacity(total_children);
+    let kids_start = memo_ctx.kids.len();
+    memo_ctx.kids.reserve(total_children);
     for (i, c) in el.all_children().enumerate() {
-        kids.push(flatten_ref(c, Some(me), path_buf, i, motion, child_in_row, row, child_sx, taffy, nodes, entries, scale, memo_ctx));
+        let kid = flatten_ref(c, Some(me), path_buf, i, motion, child_in_row, row, child_sx, taffy, nodes, entries, scale, memo_ctx);
+        memo_ctx.kids.push(kid);
     }
     path_buf.truncate(prev_len);
-    let id = sync_taffy_node(me, style, &kids, text_meta, taffy, nodes, entries);
+    let id = sync_taffy_node(me, style, &memo_ctx.kids[kids_start..], text_meta, taffy, nodes, entries);
+    memo_ctx.kids.truncate(kids_start);
     if let Some((built_id, inherited, hover_within)) = record_built {
         memo_ctx.pending.push(memo_reuse::PendingFlat {
             built_id,

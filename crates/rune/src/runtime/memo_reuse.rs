@@ -143,6 +143,7 @@ pub(super) struct MemoFlattenCtx<'a> {
     pub(super) committed: &'a HashMap<u64, FlattenedMemo>,
     pub(super) pending: Vec<PendingFlat>,
     pub(super) reused: Vec<ReusedSpan>,
+    pub(super) kids: &'a mut Vec<taffy::NodeId>,
 }
 
 fn opt_rc_eq<T: ?Sized>(a: &Option<Rc<T>>, b: &Option<Rc<T>>) -> bool {

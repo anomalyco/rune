@@ -55,7 +55,7 @@ impl<S: 'static> Runtime<S> {
             commits: self.commits,
             nodes: &mut self.nodes,
             committing,
-            spare_nodes: std::mem::take(&mut self.spare_nodes),
+            spare_nodes: &mut self.spare_nodes,
             text: &mut self.text,
             layout: &mut self.layout,
             layout_entries: &mut self.layout_entries,
@@ -170,7 +170,7 @@ impl<S: 'static> Measurement<'_, S> {
             if !self.measure_virtuals(&nodes, tx.settle) { break (layout, nodes, pending, reused); }
             memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused);
             nodes.clear();
-            self.spare_nodes = nodes;
+            *self.spare_nodes = nodes;
             reused.clear();
             self.memo.pending_scratch = pending;
             self.memo.reused_scratch = reused;
@@ -362,7 +362,8 @@ impl<S: 'static> Measurement<'_, S> {
         for entry in self.layout_entries.values_mut() {
             entry.used = false;
         }
-        let mut nodes = std::mem::take(&mut self.spare_nodes);
+        let mut nodes = std::mem::take(self.spare_nodes);
+        nodes.clear();
         nodes.reserve(self.nodes.len().max(32));
         // Root constraints are part of the retained style, not a dirty write after flattening.
         // A window that fits its content lays the root out at its natural height.
@@ -372,6 +373,10 @@ impl<S: 'static> Measurement<'_, S> {
             pending.clear();
             let mut reused = std::mem::take(&mut self.memo.reused_scratch);
             reused.clear();
+            let mut kids = std::mem::take(&mut self.memo.kids_scratch);
+            kids.clear();
+            let mut path_buf = std::mem::take(&mut self.memo.path_scratch);
+            path_buf.clear();
             let mut memo_ctx = memo_reuse::MemoFlattenCtx {
                 old_nodes: &mut *self.nodes,
                 old_present_len: self.memo.present_len,
@@ -379,9 +384,15 @@ impl<S: 'static> Measurement<'_, S> {
                 committed: &self.memo.flattened,
                 pending,
                 reused,
+                kids: &mut kids,
             };
-            let root_id = flatten(root, None, "", 0, motion::DEFAULT, RowLayout::Free, true, &mut taffy, &mut nodes, &mut self.layout_entries, scale, &mut memo_ctx);
-            (memo_ctx.pending, memo_ctx.reused, root_id)
+            let root_id = flatten_with_buf(root, None, &mut path_buf, 0, motion::DEFAULT, RowLayout::Free, true, &mut taffy, &mut nodes, &mut self.layout_entries, scale, &mut memo_ctx);
+            let (pending, reused) = (memo_ctx.pending, memo_ctx.reused);
+            kids.clear();
+            self.memo.kids_scratch = kids;
+            path_buf.clear();
+            self.memo.path_scratch = path_buf;
+            (pending, reused, root_id)
         };
         if self.committing { release_kept_layouts(self.nodes, &nodes, self.layout_entries, &taffy, self.text, &reused); }
         self.layout_entries.retain(|_, entry| {

@@ -711,8 +711,10 @@ fn move_path_preserves_allocations_and_matches_fresh_across_exits_focus_selectio
     let p_styled = path_ptr(&rt_m, "#0/styled-0/p");
     let p_long = path_ptr(&rt_m, "#0/long-list-memo/items/li-95/t");
 
-    // Non-committing `content_height()` must leave `rt_m.nodes` intact before the next commit.
+    // Non-committing `content_height()` must leave `rt_m.nodes` intact AND recycle `spare_nodes`.
     assert_eq!(rt_m.content_height(), rt_f.content_height(), "content_height matches");
+    assert!(rt_m.spare_nodes.capacity() >= rt_m.nodes.len(), "content_height recycled spare_nodes");
+    let (buf_a, buf_b) = (rt_m.nodes.as_ptr() as usize, rt_m.spare_nodes.as_ptr() as usize);
 
     for k in 0..4 {
         step_both(&mut rt_m, &mut rt_f, 1.0 / 120.0, &format!("steady-move-{k}"), |rt| {
@@ -720,6 +722,8 @@ fn move_path_preserves_allocations_and_matches_fresh_across_exits_focus_selectio
         });
         assert_eq!(path_ptr(&rt_m, "#0/styled-0/p"), p_styled, "styled memo path moved without reallocation");
         assert_eq!(path_ptr(&rt_m, "#0/long-list-memo/items/li-95/t"), p_long, "long-list node moved without reallocation");
+        let pair = (rt_m.nodes.as_ptr() as usize, rt_m.spare_nodes.as_ptr() as usize);
+        assert!(pair == (buf_a, buf_b) || pair == (buf_b, buf_a), "nodes and spare_nodes ping-pong without reallocating");
     }
 
     // Typing moves `cx.caret("editor")`, triggering `caret_moved` -> `discard_measured` -> re-measure

@@ -7,6 +7,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn apply(&mut self, measured: Measured, tx: &Tx) {
         let _apply_time = crate::frame_profile::Scope::new(crate::frame_profile::Phase::Apply);
         let Measured { layout: taffy, mut nodes, reduced_motion, time_scale, caret_read, memo_flattened, memo_reused, .. } = measured;
+        let mut scratch = std::mem::take(&mut self.apply_scratch);
         self.caret_watch = caret_read;
         let reduced_motion_unchanged = reduced_motion == self.reduced_motion;
         if !reduced_motion_unchanged {
@@ -19,10 +20,11 @@ impl<S: 'static> Runtime<S> {
         // Culling is not a model removal. Retire offscreen scene/growth state immediately;
         // re-entering historical rows mount settled and don't replay streaming words.
         if !self.virtual_culled.is_empty() {
-            let mut culled = vec![false; self.nodes.len()];
+            scratch.culled.clear();
+            scratch.culled.resize(self.nodes.len(), false);
             for (i, n) in self.nodes.iter().enumerate() {
-                if self.virtual_culled.contains(&n.path) || n.parent.is_some_and(|p| culled[p]) {
-                    culled[i] = true;
+                if self.virtual_culled.contains(&n.path) || n.parent.is_some_and(|p| scratch.culled[p]) {
+                    scratch.culled[i] = true;
                     self.scene.unmount(n.id);
                     self.grows.remove(&n.id);
                 }
@@ -56,7 +58,8 @@ impl<S: 'static> Runtime<S> {
                     || (n.input.is_none() && n.text.as_ref().is_some_and(|t| t.redacted && t.secure_revealed))
             })
             .map(|n| n.id).collect();
-        let mut concealed = Vec::new();
+        let mut concealed = std::mem::take(&mut scratch.concealed);
+        concealed.clear();
         let concealing = if !revealed.is_empty() {
             concealed.resize(nodes.len(), false);
             for (i, n) in nodes.iter().enumerate() {
@@ -87,7 +90,7 @@ impl<S: 'static> Runtime<S> {
 
         // Growth stacks: rows of a stack that existed before grow; a new stack mounts settled.
         for c in 0..nodes.len() {
-            if nodes[c].growth.is_none() { continue }
+            if nodes[c].cold.get().is_none_or(|nd| nd.growth.is_none()) { continue }
             let cid = nodes[c].id;
             let instant = instant || nodes[c].instant_changes;
             // A reader away from the tail is anchored using measured row heights. Land those
@@ -115,11 +118,17 @@ impl<S: 'static> Runtime<S> {
                 .and_then(|v| self.path_ids.get(&v.scroll_path))
                 .and_then(|id| self.scrolls.get(id)).is_some_and(|s| !s.pinned);
             let reading = reader && !revealed_now;
-            let rows: Vec<usize> = (c + 1..nodes.len()).filter(|&j| nodes[j].parent == Some(c)).collect();
+            scratch.rows.clear();
+            scratch.rows.extend((c + 1..nodes.len()).filter(|&j| nodes[j].parent == Some(c)));
+            let rows = &scratch.rows;
             let existed = self.stacks.contains_key(&cid) && !tx.settle;
             let mut stack = self.stacks.remove(&cid).unwrap_or_default();
-            let new_ids: Vec<NodeId> = rows.iter().map(|&j| nodes[j].id).collect();
-            let new_set: HashSet<NodeId> = new_ids.iter().copied().collect();
+            scratch.new_ids.clear();
+            scratch.new_ids.extend(rows.iter().map(|&j| nodes[j].id));
+            let new_ids = &scratch.new_ids;
+            scratch.new_set.clear();
+            scratch.new_set.extend(new_ids.iter().copied());
+            let new_set = &scratch.new_set;
             // Merge: keep leaving rows where they stood. In a virtual list, a row that drew
             // nothing, or any row when the change keeps none the reader could see (a filter),
             // leaves no space to close: the list's anchor already holds what shows (`set_keys`),
@@ -127,7 +136,9 @@ impl<S: 'static> Runtime<S> {
             let list = self.virtuals.get(&nodes[c].path);
             let is_virtual = list.is_some();
             let replaced = list.is_some_and(crate::virtual_list::VirtualList::replaced_view);
-            let mut order = Vec::with_capacity(new_ids.len() + 4);
+            let mut order = std::mem::take(&mut scratch.order);
+            order.clear();
+            order.reserve(new_ids.len() + 4);
             let mut ni = 0;
             for &old in &stack.order {
                 if new_set.contains(&old) {
@@ -180,7 +191,7 @@ impl<S: 'static> Runtime<S> {
             let pad_top = rows.first().map_or(stack.pad_top, |&j| nodes[j].target[1] - ctop);
             stack.pad_bottom = rows.last().map_or(nodes[c].target[3] - ctop - pad_top, |&j| nodes[c].target[3] - nodes[j].target[3]);
             stack.pad_top = pad_top;
-            for &j in &rows {
+            for &j in rows {
                 let id = nodes[j].id;
                 let mut h = nodes[j].target[3] - nodes[j].target[1];
                 stack.closing.remove(&id);
@@ -241,13 +252,14 @@ impl<S: 'static> Runtime<S> {
             stack.tops.retain(|id, _| new_set.contains(id) || stack.closing.contains_key(id));
             let animates = existed && !instant && !tx.relayout && !self.reduced_motion;
             stack.reorder.measure(animates, &stack.order, &order, stack.gap, |id| self.grows.get(&id).map(|g| g.h));
-            stack.order = order;
+            scratch.order = std::mem::replace(&mut stack.order, order);
             self.stacks.insert(cid, stack);
         }
 
         // Put nodes on their subtree's clock before this commit animates them.
         let time_scaled = self.time_scaled || nodes.iter().any(|n| n.time_scale != 1.0);
-        let mut time_scales = Vec::new();
+        let mut time_scales = std::mem::take(&mut scratch.time_scales);
+        time_scales.clear();
         if time_scaled { self.sync_time_scales(&nodes, &mut time_scales, false); }
 
         let can_skip_apply = !first && !tx.settle && !concealing && reduced_motion_unchanged && !self.scene.tracing();
@@ -255,12 +267,16 @@ impl<S: 'static> Runtime<S> {
         self.clean_apply_spans(&nodes, &memo_reused, can_skip_apply, &mut skip_spans);
         let unseen = self.unseen_before_and_after(&nodes, &skip_spans);
         // `El::matched` elements of this tree: (id, index, newly mounted).
-        let mut arrivals: Vec<(Rc<str>, usize, bool)> = Vec::new();
-        let mut mounted: Vec<bool> = Vec::new();
+        let mut arrivals = std::mem::take(&mut scratch.arrivals);
+        arrivals.clear();
+        let mut mounted = std::mem::take(&mut scratch.mounted);
+        mounted.clear();
         // Nodes this commit slid from where they were drawn, or under an ancestor that slid.
-        let mut slid: Vec<bool> = Vec::new();
+        let mut slid = std::mem::take(&mut scratch.slid);
+        slid.clear();
         // How far the top of each node's contents moved down in its growth row (drawn less new).
-        let mut top_moved: Vec<f32> = Vec::new();
+        let mut top_moved = std::mem::take(&mut scratch.top_moved);
+        top_moved.clear();
         let mut last = paint_tracks::LastBuild::default();
         let mut skip_cursor = 0usize;
         let mut i = 0usize;
@@ -573,15 +589,16 @@ impl<S: 'static> Runtime<S> {
         }
 
         if !arrivals.is_empty() || !self.matched.is_empty() {
-            self.match_elements(&nodes, arrivals, tx, instant);
+            self.match_elements(&nodes, &arrivals, tx, instant);
         }
+        arrivals.clear();
         if self.launches.pending() {
             self.launch_elements(&nodes, tx, instant);
         }
 
         // Scroll viewports: a new sticky viewport opens at the end.
         for (i, n) in nodes.iter().enumerate() {
-            if let Some(sp) = n.scroll {
+            if let Some(sp) = n.cold.get().and_then(|c| c.scroll) {
                 let e = self.scrolls.entry(n.id).or_insert(ScrollState {
                     offset: 0.0,
                     v: 0.0,
@@ -652,14 +669,20 @@ impl<S: 'static> Runtime<S> {
             }
         }
         if !any_gone {
-            old_nodes.clear();
+            old_nodes = apply_scratch::clear_old_nodes(old_nodes, &memo_reused, &mut scratch.moved_spans);
         } else {
-            let old_ids: Vec<NodeId> = old_nodes.iter().map(|n| n.id).collect();
+            scratch.old_ids.clear();
+            scratch.old_ids.extend(old_nodes.iter().map(|n| n.id));
+            let old_ids = &scratch.old_ids;
             // Only the nodes that left are moved out; the rest drop where they are.
-            let gone: Vec<usize> = (0..old_nodes.len()).filter(|&oi| !self.node_index.contains_key(&old_ids[oi])).collect();
-            let mut at = 0;
-            old_nodes.retain(|_| { at += 1; gone.binary_search(&(at - 1)).is_ok() });
-            for (oi, mut old) in gone.into_iter().zip(old_nodes.drain(..)) {
+            for (oi, mut old) in old_nodes.drain(..).enumerate() {
+                if old.is_moved_stub() {
+                    std::mem::forget(old);
+                    continue;
+                }
+                if self.node_index.contains_key(&old.id) {
+                    continue;
+                }
                 if !self.scene.contains(old.id) {
                     self.hover_pruned(&old);
                     continue;
@@ -733,6 +756,13 @@ impl<S: 'static> Runtime<S> {
             self.sync_time_scales(&nodes, &mut time_scales, true);
             self.time_scaled = time_scales.iter().any(|&k| k != 1.0);
         }
+        scratch.concealed = concealed;
+        scratch.time_scales = time_scales;
+        scratch.arrivals = arrivals;
+        scratch.mounted = mounted;
+        scratch.slid = slid;
+        scratch.top_moved = top_moved;
+        self.apply_scratch = scratch;
         self.nodes = nodes;
         self.memo.commit_flattened(&self.nodes, present_len, memo_flattened, memo_reused);
         skip_spans.clear();
