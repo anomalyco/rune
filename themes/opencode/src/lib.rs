@@ -263,6 +263,11 @@ mod tests {
             assert_eq!(linear.c.hover, rune::theme::srgb_equivalent(authored, linear.c.bg_base));
             assert_ne!(linear.c.hover.a, authored.a);
             assert!(std::ptr::eq(super::kit(dark), srgb), "windows blend in sRGB by default");
+            // Shadows too: light's floating elevation is `#0000000a 0px 8px 16px 0px, #00000014 …`.
+            if !dark {
+                let alphas: Vec<u8> = srgb.elevation.floating.iter().map(|s| (s.color.a * 255.0).round() as u8).collect();
+                assert_eq!(alphas[..3], [0x0a, 0x14, 0x1f], "sRGB blending paints the authored shadow alpha");
+            }
         }
     }
 

@@ -1899,6 +1899,9 @@ For static disabled styling, `El::dim(alpha)` distributes a fixed alpha to each 
 paint in the built subtree, including fills, strokes, text, icons, images and native surfaces.
 Call it after adding children. It neither changes inherited/hit-test opacity nor introduces
 layers. Rune-kit uses this for disabled controls; normal container `opacity` still isolates.
+A dimmed box with a solid fill fades as CSS `opacity` fades it: its outer shadows stay outside
+it, and its fill and gradient fade as one. Content drawn over it (a label, an icon) still fades
+on its own, so it shows a little of the faded fill through it where a layer would not.
 
 The manual kit-gallery `disabled_controls_gpu_cost` benchmark measures the whole GPU frame
 for disabled controls: leaf dimming allocates no layer targets or passes and matches a flat

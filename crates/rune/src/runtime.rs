@@ -6123,13 +6123,15 @@ impl<S: 'static> Runtime<S> {
                     Some(s) if stuck_k > 0.0 => (stuck_k, &s.shadows),
                     _ => (0.0, &[]),
                 };
-                // A box that paints itself solid hides the middle of its shadows (bands.rs).
-                let opaque = native_material.is_none() && blur_hole.is_none() && n.material.is_none() && o >= 1.0
-                    && n.vis.gradient.is_none() && n.vis.radial.is_none() && n.vis.surface.is_none()
-                    && !n.vis.shadows.is_empty() && self.color(n.id, P_FILL, n.vis.fill).a >= 1.0;
+                let solid = !n.vis.shadows.is_empty() && native_material.is_none() && blur_hole.is_none() && n.material.is_none()
+                    && self.color(n.id, P_FILL, n.vis.fill).a >= 1.0;
+                // A box that paints itself solid hides the middle of its shadows (bands.rs). Dimmed
+                // (`El::dim`), it leaves that middle clear, as CSS clips box-shadow to outside the box.
+                let opaque = solid && o >= 1.0 && n.vis.gradient.is_none() && n.vis.radial.is_none() && n.vis.surface.is_none();
+                let dim_hole = (solid && o < 1.0).then(|| crate::system_material::clamp_radius(radii, w, h) * if n.vis.continuous_corners { -1.0 } else { 1.0 });
                 let cast = shadow_paint::Caster {
                     rect: [r[0], r[1], w, h], radii, shape: if n.vis.continuous_corners { radii.map(|v| -v) } else { radii },
-                    k_px, scale: s, opacity: o, srgb, clip, fade, hole: native_material.or(blur_hole), opaque,
+                    k_px, scale: s, opacity: o, srgb, clip, fade, hole: native_material.or(blur_hole).or(dim_hole), opaque,
                 };
                 for (k, sh) in n.vis.shadows.iter().chain(stuck_shadows.1).enumerate() {
                     let c = if k >= n.vis.shadows.len() { sh.color.alpha(sh.color.a * stuck_shadows.0) }
@@ -6191,9 +6193,12 @@ impl<S: 'static> Runtime<S> {
                 });
                 let (bw, border, border_kind, border_uv, border_a) =
                     if n.vis.border_dash.is_some() { (0.0, [0.0; 4], KIND_RECT, [0.0; 4], 0.0) } else { (bw, border, border_kind, border_uv, border_a) };
+                // Dimmed, an opaque fill and its gradient draw as one opaque gradient, so they fade
+                // together as a layer at that opacity would (CSS `opacity`), not one through the other.
+                let flat = layered && o < 1.0 && base[3] >= 1.0 && n.vis.gradient.is_some();
                 if layered {
                     // Fill, gradient and overlays first, then the border on top, as in CSS.
-                    if fill[3] > 0.0005 {
+                    if fill[3] > 0.0005 && !flat {
                         self.instances.push(Instance {
                             rect: [r[0], r[1], w, h],
                             radii,
@@ -6206,8 +6211,9 @@ impl<S: 'static> Runtime<S> {
                         });
                     }
                     let g = n.vis.gradient.as_deref().copied().unwrap_or_default();
-                    let top = premul(self.color(n.id, P_GRADIENT[0], g[0]), o, srgb);
-                    let bottom = premul(self.color(n.id, P_GRADIENT[1], g[1]), o, srgb);
+                    let stop = |c| if flat { over(premul(c, 1.0, srgb), base).map(|v| v * o) } else { premul(c, o, srgb) };
+                    let top = stop(self.color(n.id, P_GRADIENT[0], g[0]));
+                    let bottom = stop(self.color(n.id, P_GRADIENT[1], g[1]));
                     if top[3] > 0.0005 || bottom[3] > 0.0005 {
                         self.instances.push(Instance {
                             rect: [r[0], r[1], w, h],

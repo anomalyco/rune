@@ -2142,7 +2142,9 @@ impl El {
         self
     }
     /// Dim each paint leaf in the currently built subtree, independently. Unlike `opacity`,
-    /// overlapping draws retain their individual coverage and no group layer is introduced.
+    /// overlapping draws retain their individual coverage and no group layer is introduced. A
+    /// box with a solid fill still fades as `opacity` would: its outer shadows stay outside it
+    /// and its fill and gradient fade as one.
     /// Call after adding children. Useful for static disabled styling; animation and hit-test
     /// opacity still belong to `opacity` / `live_opacity`.
     pub fn dim(mut self, alpha: f32) -> Self {

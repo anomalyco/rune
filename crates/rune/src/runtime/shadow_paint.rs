@@ -29,10 +29,11 @@ pub(super) fn push_shadow(out: &mut Vec<Instance>, sh: &crate::el::Shadow, c: Co
     let sradii = cast.radii.map(|v| if v > 0.0 { (v + sp).max(0.0) } else { 0.0 });
     let (clip, fade) = (cast.clip, crate::render::pack_fade(cast.fade, cast.clip, cast.clip));
     let fill = premul(c, cast.opacity, cast.srgb);
-    if sh.blur <= 0.0 {
+    let ring = sh.x == 0.0 && sh.y == 0.0;
+    // A crisp offset copy over a hole draws as the sharpest blurred shadow, which can leave one.
+    if sh.blur <= 0.0 && (ring || cast.hole.is_none()) {
         // A crisp shadow: a ring when it sits exactly around the box, else a solid
         // offset copy (hidden under an opaque element, as in CSS).
-        let ring = sh.x == 0.0 && sh.y == 0.0;
         if ring && sp <= 0.0 {
             return;
         }
@@ -48,7 +49,7 @@ pub(super) fn push_shadow(out: &mut Vec<Instance>, sh: &crate::el::Shadow, c: Co
         });
         return;
     }
-    // Over a native material or backdrop blur, the shadow leaves the interior clear:
+    // Over a native material, backdrop blur or dimmed box, the shadow leaves the interior clear:
     // `uv` holds the hole relative to the shadow's rect, `radii[3]` its radius.
     let (radii, uv) = match cast.hole {
         Some(hole) => ([sradii[0], sradii[1], sradii[2], hole], [x - rect[0], y - rect[1], w, h]),
