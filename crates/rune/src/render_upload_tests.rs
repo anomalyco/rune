@@ -297,3 +297,32 @@ fn batches_break_only_where_the_bound_page_changes() {
     })).collect();
     assert_eq!(batches, [(0..1, ('i', 0)), (1..4, ('i', 1)), (4..6, ('g', 1)), (6..8, ('i', 0)), (8..9, ('i', 1))]);
 }
+
+/// Frames whose instances only move keep their batches, and their effects see where they moved;
+/// a changed `params`, a longer list or a lost staging batches again.
+#[test]
+fn only_a_changed_params_or_length_batches_again() {
+    let gpu = Gpu::headless();
+    let (device, queue) = (&gpu.device, &gpu.queue);
+    let mut renderer = Renderer::new(device, OFFSCREEN_FORMAT);
+    let mut text = crate::text::TextSystem::new(&[], ("Inter", "Inter"));
+    let frame = |x: f32, page: f32, extra: usize| {
+        let mut list = vec![square(x, 0.0), Instance { params: [page, KIND_IMAGE, 0.0, 0.0], ..square(x, 8.0) },
+            Instance { params: [0.0, KIND_EFFECT, 0.0, 0.0], ..square(x, 16.0) }];
+        list.extend((0..extra).map(|i| square(i as f32, 24.0)));
+        list
+    };
+    let mut prepare = |renderer: &mut Renderer, list: &[Instance]| {
+        let runs = renderer.uploads.batch_runs;
+        renderer.prepare(device, queue, &mut text.atlas, list, SIZE);
+        let pages: Vec<_> = renderer.image_batches.iter().map(|(r, b)| (r.clone(), matches!(b, BatchBind::Image(1)))).collect();
+        (renderer.uploads.batch_runs - runs, pages, renderer.effects.iter().map(|(at, i)| (*at, i.rect[0])).collect::<Vec<_>>())
+    };
+    assert_eq!(prepare(&mut renderer, &frame(0.0, 1.0, 0)), (1, vec![(0..1, false), (1..3, true)], vec![(2, 0.0)]));
+    assert_eq!(prepare(&mut renderer, &frame(5.0, 1.0, 0)), (0, vec![(0..1, false), (1..3, true)], vec![(2, 5.0)]), "moved only");
+    assert_eq!(prepare(&mut renderer, &frame(5.0, 0.0, 0)), (1, vec![(0..3, false)], vec![(2, 5.0)]), "image page changed");
+    assert_eq!(prepare(&mut renderer, &frame(5.0, 0.0, 2)).0, 1, "longer");
+    renderer.uploads.forget_instances();
+    assert_eq!(prepare(&mut renderer, &frame(5.0, 0.0, 2)).0, 1, "forgotten");
+    assert_eq!(prepare(&mut renderer, &[]), (1, vec![], vec![]), "emptied");
+}
