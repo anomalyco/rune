@@ -34,13 +34,3 @@ pub(crate) fn native(queue: &wgpu::Queue) -> bool {
         false
     }
 }
-
-/// Says once, on `RUNE_GPU_BACKEND=metal`, that `what` needs wgpu-hal and does nothing there.
-pub(crate) fn inert(what: &'static str) {
-    #[cfg(feature = "metal-backend")]
-    if metal::enabled() {
-        metal::inert(what);
-    }
-    #[cfg(not(feature = "metal-backend"))]
-    let _ = what;
-}

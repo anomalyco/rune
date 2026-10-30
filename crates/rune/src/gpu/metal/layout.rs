@@ -54,6 +54,9 @@ pub(crate) struct GroupRaw {
     pub(super) stages: [StageBinds; 2],
     /// Storage buffers' bound lengths by binding, which the sizes buffer reports.
     pub(super) sizes: Vec<(u32, u32)>,
+    /// Owners of the textures it binds that this backend didn't make.
+    #[allow(dead_code, reason = "held, never read")]
+    owners: Vec<super::Owner>,
 }
 
 #[derive(Debug, Default)]
@@ -174,7 +177,9 @@ impl BindGroup {
                         binds.buffers.push(BufferBind { slot: slot.buffer.unwrap(), store, offset: b.offset, dynamic: dynamic_index });
                     }
                     wgpu::BindingResource::TextureView(v) => {
-                        binds.textures.push((slot.texture.unwrap(), v.as_custom::<MetalView>().expect("a Metal texture view").raw.raw.clone()));
+                        let view = &v.as_custom::<MetalView>().expect("a Metal texture view").raw;
+                        binds.textures.push((slot.texture.unwrap(), view.raw.clone()));
+                        group.owners.extend(view.owner.clone());
                     }
                     wgpu::BindingResource::Sampler(sampler) => {
                         let Some(msl::BindSamplerTarget::Resource(at)) = slot.sampler else { unreachable!() };

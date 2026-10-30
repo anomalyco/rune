@@ -18,8 +18,9 @@
 //! once their work has finished.
 //!
 //! Rune's layer tweaks (materials, present timing, transactions, occlusion) reach this backend's
-//! CAMetalLayer through `gpu::with_layer`. What needs wgpu-hal itself (native video surfaces) is
-//! inert here and says so once; compute, queries, render bundles and depth are not implemented.
+//! CAMetalLayer through `gpu::with_layer`. Video planes from CoreVideo wrap as textures
+//! (`texture_from_raw`) whose owner the bind groups and command buffers using them keep.
+//! Compute, queries, render bundles and depth are not implemented.
 
 pub(crate) mod bench;
 mod device;
@@ -39,19 +40,31 @@ mod surface;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashSet;
 use std::future::ready;
 use std::pin::Pin;
 
 use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice};
 use objc2_video::rc::Retained;
 use objc2_video::runtime::ProtocolObject;
-use parking_lot::Mutex;
 use wgpu::custom::*;
 
 pub(crate) use device::{MetalDevice, Shared};
 
 pub(crate) type Obj<P> = Retained<ProtocolObject<P>>;
+
+/// Keeps memory a texture made outside this backend reads valid, as long as the texture, its
+/// views, bind groups using them, or a command buffer using those is alive.
+pub(crate) type Owner = std::sync::Arc<dyn std::any::Any + Send + Sync>;
+
+/// The Metal device under `device`, when it's this backend's.
+pub(crate) fn raw_device(device: &wgpu::Device) -> Option<&ProtocolObject<dyn MTLDevice>> {
+    device.as_custom::<MetalDevice>().map(|d| &*d.shared.device)
+}
+
+/// A texture over `raw`, made on `raw_device`'s device and matching `desc`, which `owner` keeps valid.
+pub(crate) fn texture_from_raw(raw: Obj<dyn objc2_metal::MTLTexture>, desc: &wgpu::TextureDescriptor<'_>, owner: Owner) -> wgpu::Texture {
+    wgpu::Texture::from_custom(resource::MetalTexture::from_raw(raw, desc, owner), desc)
+}
 
 /// Whether `App::gpu_backend` or `RUNE_GPU_BACKEND=metal` asks for this backend.
 pub(crate) fn enabled() -> bool {
@@ -74,14 +87,6 @@ fn write_in_place(buffer: &wgpu::Buffer, offset: u64, data: &[u8]) -> bool {
 /// The CAMetalLayer a surface of this backend presents into.
 pub(crate) fn layer<'s>(surface: &'s wgpu::Surface<'_>) -> Option<&'s objc2_video::runtime::AnyObject> {
     surface.as_custom::<surface::MetalSurface>().map(|s| -> &objc2_video::runtime::AnyObject { s.layer() })
-}
-
-/// Says once per `what` that a wgpu-hal path does nothing on this backend.
-pub(crate) fn inert(what: &'static str) {
-    static SAID: Mutex<Option<HashSet<&'static str>>> = Mutex::new(None);
-    if SAID.lock().get_or_insert_with(HashSet::new).insert(what) {
-        eprintln!("rune: {what} is inert on RUNE_GPU_BACKEND=metal");
-    }
 }
 
 macro_rules! send_sync {

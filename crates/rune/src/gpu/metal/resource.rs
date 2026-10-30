@@ -14,7 +14,7 @@ use objc2_metal::{
 use wgpu::custom::*;
 
 use super::store::Store;
-use super::{Obj, Shared, send_sync};
+use super::{Obj, Owner, Shared, send_sync};
 
 pub(crate) fn pixel_format(format: wgpu::TextureFormat) -> MTLPixelFormat {
     use MTLPixelFormat as M;
@@ -87,6 +87,8 @@ pub(crate) struct TextureRaw {
     layers: u32,
     mips: u32,
     pub(super) drawable: bool,
+    /// What keeps a texture this backend didn't make valid (`texture_from_raw`).
+    owner: Option<Owner>,
 }
 
 #[derive(Debug)]
@@ -98,6 +100,8 @@ pub(crate) struct MetalTexture {
 pub(crate) struct ViewRaw {
     pub(super) raw: Obj<dyn MTLTexture>,
     pub(super) drawable: bool,
+    /// Its texture's owner, which bind groups and passes that use the view keep.
+    pub(super) owner: Option<Owner>,
 }
 
 #[derive(Debug)]
@@ -209,7 +213,7 @@ fn texture_type(dimension: wgpu::TextureViewDimension) -> MTLTextureType {
 impl TextureRaw {
     /// A drawable's texture, which a surface hands out for one frame.
     pub(super) fn drawable(raw: Obj<dyn MTLTexture>, format: wgpu::TextureFormat) -> Self {
-        TextureRaw { raw, format, dimension: wgpu::TextureDimension::D2, layers: 1, mips: 1, drawable: true }
+        TextureRaw { raw, format, dimension: wgpu::TextureDimension::D2, layers: 1, mips: 1, drawable: true, owner: None }
     }
 
     fn view_dimension(&self) -> wgpu::TextureViewDimension {
@@ -227,7 +231,14 @@ impl MetalTexture {
         assert_eq!(desc.sample_count, 1, "RUNE_GPU_BACKEND=metal: multisampled textures");
         let layers = if desc.dimension == wgpu::TextureDimension::D3 { 1 } else { desc.size.depth_or_array_layers };
         let raw = TextureRaw { raw: device_texture(device, desc, layers), format: desc.format, dimension: desc.dimension, layers,
-            mips: desc.mip_level_count, drawable: false };
+            mips: desc.mip_level_count, drawable: false, owner: None };
+        MetalTexture { raw: Arc::new(raw) }
+    }
+
+    /// Over `raw`, a texture made elsewhere that matches `desc`, kept valid by `owner`.
+    pub(crate) fn from_raw(raw: Obj<dyn MTLTexture>, desc: &wgpu::TextureDescriptor<'_>, owner: Owner) -> Self {
+        let raw = TextureRaw { raw, format: desc.format, dimension: desc.dimension, layers: desc.size.depth_or_array_layers,
+            mips: desc.mip_level_count, drawable: false, owner: Some(owner) };
         MetalTexture { raw: Arc::new(raw) }
     }
 }
@@ -279,7 +290,7 @@ impl TextureInterface for MetalTexture {
             unsafe { t.raw.newTextureViewWithPixelFormat_textureType_levels_slices(pixel_format(format), texture_type(dimension), levels, slices) }
                 .expect("a Metal texture view")
         };
-        DispatchTextureView::custom(MetalView { raw: Arc::new(ViewRaw { raw, drawable: t.drawable }) })
+        DispatchTextureView::custom(MetalView { raw: Arc::new(ViewRaw { raw, drawable: t.drawable, owner: t.owner.clone() }) })
     }
     fn destroy(&self) {}
 }

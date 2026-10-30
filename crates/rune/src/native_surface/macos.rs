@@ -177,11 +177,15 @@ impl PixelBuffer {
 pub(crate) struct Importer {
     cache: CFRetained<CVMetalTextureCache>,
     device: wgpu::Device,
+    /// Whether `device` is Rune's native Metal backend's rather than wgpu-hal's.
+    #[cfg_attr(not(feature = "metal-backend"), allow(dead_code))]
+    native: bool,
     #[cfg(test)]
     pub(super) live_planes: Arc<std::sync::atomic::AtomicUsize>,
 }
-// CVMetalTexture retains the IOSurface mapping. wgpu's drop guard owns it for as long as any
-// bind group or submitted command uses that plane, rather than merely retaining MTLTexture.
+// CVMetalTexture retains the IOSurface mapping. wgpu's drop guard, or on the native Metal
+// backend the texture's owner, keeps it for as long as any bind group or submitted command uses
+// that plane, rather than merely retaining MTLTexture.
 struct PlaneOwner {
     _texture: CFRetained<CVMetalTexture>,
     _buffer: PixelBuffer,
@@ -198,18 +202,30 @@ impl Drop for PlaneOwner {
 }
 impl Importer {
     pub fn new(device: &wgpu::Device) -> Result<Self, String> {
-        let Some(metal) = (unsafe { device.as_hal::<wgpu::hal::api::Metal>() }) else {
-            crate::gpu::inert("NativeSurface");
-            return Err("NativeSurface needs wgpu's Metal backend".into());
-        };
         let mut raw = null_mut();
-        check(
-            unsafe { CVMetalTextureCache::create(None, None, metal.raw_device(), None, NonNull::from(&mut raw)) },
-            "CVMetalTextureCacheCreate",
-        )?;
+        let mut create = |metal: &objc2_video::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>| {
+            check(unsafe { CVMetalTextureCache::create(None, None, metal, None, NonNull::from(&mut raw)) }, "CVMetalTextureCacheCreate")
+        };
+        let native = if let Some(metal) = unsafe { device.as_hal::<wgpu::hal::api::Metal>() } {
+            create(metal.raw_device())?;
+            false
+        } else {
+            #[cfg(feature = "metal-backend")]
+            let Some(metal) = crate::gpu::metal::raw_device(device) else {
+                return Err("NativeSurface needs a Metal device".into());
+            };
+            #[cfg(not(feature = "metal-backend"))]
+            return Err("NativeSurface needs wgpu's Metal backend".into());
+            #[cfg(feature = "metal-backend")]
+            {
+                create(metal)?;
+                true
+            }
+        };
         Ok(Self {
             cache: unsafe { CFRetained::from_raw(NonNull::new(raw).ok_or("null texture cache")?) },
             device: device.clone(),
+            native,
             #[cfg(test)]
             live_planes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
@@ -247,6 +263,10 @@ impl Importer {
             #[cfg(test)]
             self.live_planes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let desc = pipeline::descriptor(width, height, format);
+            #[cfg(feature = "metal-backend")]
+            if self.native {
+                return Ok(crate::gpu::metal::texture_from_raw(texture, &desc, std::sync::Arc::new(owner)));
+            }
             let hal = unsafe {
                 wgpu::hal::metal::Device::texture_from_raw(
                     texture,

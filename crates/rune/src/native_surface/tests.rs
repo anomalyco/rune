@@ -60,6 +60,20 @@ fn clear_pass<'e>(
         ..Default::default()
     })
 }
+/// A pixel test on wgpu, and with `metal-backend` on Rune's native Metal backend too.
+macro_rules! on_each_backend {
+    ($wgpu:ident, $metal:ident, $body:ident) => {
+        #[test]
+        fn $wgpu() {
+            $body(Gpu::headless_wgpu());
+        }
+        #[cfg(feature = "metal-backend")]
+        #[test]
+        fn $metal() {
+            $body(Gpu::new(crate::gpu::metal::instance(), None));
+        }
+    };
+}
 fn srgb(x: f32) -> u8 {
     let x = if x <= 0.0031308 { x * 12.92 } else { 1.055 * x.powf(1.0 / 2.4) - 0.055 };
     (x.clamp(0.0, 1.0) * 255.0).round() as u8
@@ -185,9 +199,8 @@ fn publish(s: &NativeSurface, b: ByteFrame, id: u64, native: bool) {
     s.push_bytes(b, id).unwrap();
 }
 
-#[test]
-fn queued_video_frames_then_readback() {
-    let gpu = Gpu::headless_wgpu();
+on_each_backend!(queued_video_frames_then_readback, queued_video_frames_then_readback_on_metal, queued_video_frames_then_readback_on);
+fn queued_video_frames_then_readback_on(gpu: Gpu) {
     let mut renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let surfaces: Vec<_> = (0..4).map(|_| NativeSurface::new()).collect();
     let (done, completed) = std::sync::mpsc::channel();
@@ -247,9 +260,8 @@ fn queued_video_frames_then_readback() {
     }
 }
 
-#[test]
-fn video_gpu_colour_sharpness_geometry_and_lifetime() {
-    let gpu = Gpu::headless_wgpu();
+on_each_backend!(video_gpu_colour_sharpness_geometry_and_lifetime, video_gpu_colour_sharpness_geometry_and_lifetime_on_metal, video_gpu_colour_sharpness_geometry_and_lifetime_on);
+fn video_gpu_colour_sharpness_geometry_and_lifetime_on(gpu: Gpu) {
     // Other renderers (including the parallel burst test) may own native planes.
     // Their lifetime must not affect this renderer's ownership assertions.
     #[cfg(target_os = "macos")]
@@ -536,9 +548,8 @@ fn assert_row_reversed(mirrored: &[u8], plain: &[u8], size: (u32, u32), what: &s
     }
 }
 
-#[test]
-fn mirrored_video_is_exact_cropped_centred_and_toggles_without_a_new_frame() {
-    let gpu = Gpu::headless_wgpu();
+on_each_backend!(mirrored_video_is_exact_cropped_centred_and_toggles_without_a_new_frame, mirrored_video_on_metal, mirrored_video_is_exact_cropped_centred_and_toggles_without_a_new_frame_on);
+fn mirrored_video_is_exact_cropped_centred_and_toggles_without_a_new_frame_on(gpu: Gpu) {
     let mut renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut id = 0;
     for native in [false, cfg!(target_os = "macos")] {
@@ -716,11 +727,10 @@ fn orientations_come_from_quarter_turn_transforms_only() {
     assert_eq!(buffer_pixel(Orient([0, 1, -1, 0]), [6, 4], 3, 0), (0, 0));
 }
 
-/// A buffer drawn with an orientation equals the same picture turned upright on the CPU, for
-/// every quarter turn and flip, at 1:1, magnified and shrunk, BGRA and NV12.
-#[test]
-fn oriented_frames_draw_like_frames_turned_upright() {
-    let gpu = Gpu::headless_wgpu();
+// A buffer drawn with an orientation equals the same picture turned upright on the CPU, for
+// every quarter turn and flip, at 1:1, magnified and shrunk, BGRA and NV12.
+on_each_backend!(oriented_frames_draw_like_frames_turned_upright, oriented_frames_on_metal, oriented_frames_draw_like_frames_turned_upright_on);
+fn oriented_frames_draw_like_frames_turned_upright_on(gpu: Gpu) {
     let mut renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut id = 0;
     for native in [false, cfg!(target_os = "macos")] {
@@ -746,17 +756,17 @@ fn oriented_frames_draw_like_frames_turned_upright() {
     }
 }
 
-/// A portrait clip stored sideways (display matrix rotate=90): its player buffers, drawn with
-/// the track's orientation, match the upright poster AVFoundation decodes, quadrant by quadrant.
+// A portrait clip stored sideways (display matrix rotate=90): its player buffers, drawn with
+// the track's orientation, match the upright poster AVFoundation decodes, quadrant by quadrant.
 #[cfg(target_os = "macos")]
-#[test]
-fn rotated_clip_buffers_draw_upright_like_its_poster() {
+on_each_backend!(rotated_clip_buffers_draw_upright_like_its_poster, rotated_clip_on_metal, rotated_clip_buffers_draw_upright_like_its_poster_on);
+#[cfg(target_os = "macos")]
+fn rotated_clip_buffers_draw_upright_like_its_poster_on(gpu: Gpu) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/quadrants-rot90.mp4");
     let (upright, raw, o) = crate::video::test_frames(&crate::MediaSource::File(path), 0.125).unwrap();
     assert_eq!((raw.width, raw.height), (64, 32), "stored landscape");
     assert_eq!((upright.width, upright.height), (32, 64), "shown portrait");
     assert!(o.swaps(), "{o:?}");
-    let gpu = Gpu::headless_wgpu();
     let mut renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);
     for native in [false, true] {
         let (oriented, poster) = (NativeSurface::new(), NativeSurface::new());
