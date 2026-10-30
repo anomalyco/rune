@@ -844,6 +844,7 @@ impl<S: 'static> Host<S> {
             fn_key,
             prime,
             launch_drawables,
+            _spot: crate::macos_traffic_lights::Spot::new(&window),
         };
         #[cfg(not(target_os = "macos"))]
         let native = Native::default();

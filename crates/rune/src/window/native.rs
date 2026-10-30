@@ -22,6 +22,8 @@ pub(super) struct Native {
     /// reports the new window on screen.
     pub(super) prime: u8,
     pub(super) launch_drawables: super::LaunchDrawables,
+    /// Forgets the window's traffic-light spot.
+    pub(super) _spot: crate::macos_traffic_lights::Spot,
 }
 
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]

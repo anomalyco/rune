@@ -25,6 +25,22 @@ thread_local! {
     static PLACING: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Drops its window's spot when the window goes, so a later window at the same address
+/// doesn't inherit it.
+pub(crate) struct Spot(usize);
+
+impl Spot {
+    pub(crate) fn new(window: &Window) -> Spot {
+        Spot(ns_window(window).map_or(0, |w| Retained::as_ptr(&w) as usize))
+    }
+}
+
+impl Drop for Spot {
+    fn drop(&mut self) {
+        let _ = SPOTS.try_with(|s| s.borrow_mut().remove(&self.0));
+    }
+}
+
 /// Electron's `trafficLightPosition`: the titlebar container grows to the buttons' height
 /// plus twice `y`, and the buttons sit `x, y` from the top-left at AppKit's own pitch.
 pub(crate) fn place(window: &Window, (x, y): (f32, f32)) {

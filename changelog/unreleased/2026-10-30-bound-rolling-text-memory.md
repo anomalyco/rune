@@ -1,0 +1,1 @@
+- `RollingText` now remembers at most 512 labels (and 256 KiB of text) per thread, dropping the least recently built; a label that comes back after that starts its roll over (t841).
