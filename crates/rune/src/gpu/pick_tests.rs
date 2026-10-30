@@ -1,4 +1,4 @@
-use super::{by_name, by_pci, dev_numbers, pci_address};
+use super::{by_card, by_name, by_pci, dev_numbers, pci_address};
 use std::path::Path;
 
 fn adapter(name: &str, backend: wgpu::Backend, pci: &str) -> wgpu::AdapterInfo {
@@ -50,4 +50,36 @@ fn an_adapter_that_cant_present_is_skipped() {
     assert_eq!(by_pci("0000:01:00.0", &adapters), None);
     assert_eq!(by_name("nvidia", &adapters), None);
     assert_eq!(by_name("RADEON", &adapters), Some(1));
+}
+
+fn card(name: &str, backend: wgpu::Backend, vendor: u32, device: u32) -> (wgpu::AdapterInfo, bool) {
+    (wgpu::AdapterInfo { vendor, device, ..adapter(name, backend, "") }, true)
+}
+
+#[test]
+fn windows_card_takes_dx12_before_vulkan_before_gl() {
+    let adapters = [
+        card("Intel(R) UHD Graphics 730", wgpu::Backend::Vulkan, 0x8086, 0x4692),
+        card("NVIDIA GeForce RTX 4070", wgpu::Backend::Vulkan, 0x10de, 0x2786),
+        card("NVIDIA GeForce RTX 4070", wgpu::Backend::Gl, 0x10de, 0x2786),
+        card("NVIDIA GeForce RTX 4070", wgpu::Backend::Dx12, 0x10de, 0x2786),
+        card("Intel(R) UHD Graphics 730", wgpu::Backend::Dx12, 0x8086, 0x4692),
+    ];
+    assert_eq!(by_card((0x10de, 0x2786), &adapters), Some(3), "DX12 before Vulkan and GL");
+    assert_eq!(by_card((0x8086, 0x4692), &adapters), Some(4));
+    assert_eq!(by_card((0x1002, 0x164e), &adapters), None, "a card no backend lists");
+    let no_dx12 = &adapters[..3];
+    assert_eq!(by_card((0x10de, 0x2786), no_dx12), Some(1), "Vulkan before GL (WGPU_BACKEND=vulkan,gl)");
+}
+
+#[test]
+fn windows_card_skips_unusable_and_unknown_adapters() {
+    let mut adapters = [
+        card("NVIDIA GeForce RTX 4070", wgpu::Backend::Dx12, 0x10de, 0x2786),
+        card("NVIDIA GeForce RTX 4070", wgpu::Backend::Vulkan, 0x10de, 0x2786),
+        card("Microsoft Basic Render Driver", wgpu::Backend::Dx12, 0, 0),
+    ];
+    adapters[0].1 = false;
+    assert_eq!(by_card((0x10de, 0x2786), &adapters), Some(1), "a DX12 adapter that can't present the surface");
+    assert_eq!(by_card((0, 0), &adapters), None, "no ids, no match");
 }

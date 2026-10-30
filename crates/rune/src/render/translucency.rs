@@ -21,8 +21,8 @@ pub(crate) fn serves(gpu: &crate::render::Gpu, surface: &wgpu::Surface<'_>, want
 }
 
 /// `pick`'s adapter when it composites translucent pixels on `surface`; otherwise the adapter
-/// on `instance` that does on the compositor's GPU (`gpu_pick`), then the lowest-power one that
-/// does, or `pick`'s adapter when none can.
+/// on `instance` that does on the compositor's GPU or Windows' card (`gpu::pick`), then the
+/// lowest-power one that does, or `pick`'s adapter when none can.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn prefer(instance: &wgpu::Instance, surface: &wgpu::Surface<'_>, pick: &crate::gpu::pick::Pick) -> wgpu::Adapter {
     if mode(surface, &pick.adapter).is_some() {
@@ -34,7 +34,7 @@ pub(crate) fn prefer(instance: &wgpu::Instance, surface: &wgpu::Surface<'_>, pic
         .collect();
     able.sort_by_key(|candidate| {
         let info = candidate.get_info();
-        (!pick.on_compositor_device(&info), power_rank(info.device_type))
+        (!pick.on_preferred_device(&info), power_rank(info.device_type), crate::gpu::pick::backend_rank(info.backend))
     });
     able.into_iter().next().unwrap_or_else(|| pick.adapter.clone())
 }

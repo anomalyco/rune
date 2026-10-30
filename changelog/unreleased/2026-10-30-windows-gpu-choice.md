@@ -1,0 +1,10 @@
+- **Windows takes the GPU Windows chooses for the app, on DX12.** Rune took the lowest-power
+  adapter, so on a desktop with an integrated GPU and a discrete card driving the monitor it drew
+  on the integrated one and every frame crossed to the card (a 240 Hz display's resize steps took
+  about 34 ms, against 3 ms on the card). Rune now takes the card DXGI lists first, which is the
+  one set for the app in Settings > Display > Graphics, else the system default; a laptop whose
+  panel hangs off its integrated GPU keeps it. Whatever picks the card, Windows takes it on DX12
+  before Vulkan, so translucent windows composite through DirectComposition on every
+  GPU and resizes keep their swapchain. `WGPU_BACKEND` (`dx12`, `vulkan`, comma-separated)
+  now limits the backends on desktop; `WGPU_ADAPTER_NAME` and `WGPU_POWER_PREF` still
+  choose the card, and `RUNE_GPU_LOG=1` prints the choice.

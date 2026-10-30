@@ -5,16 +5,26 @@
 //! drives its panel from the integrated GPU and offloads to the discrete one gets the integrated
 //! GPU, as before.
 //!
+//! On Windows the card is the one DXGI lists first, which is Windows' choice for the app: the
+//! GPU in Settings > Display > Graphics when the user set one, else the system default (on a
+//! desktop, the GPU driving the main display). The lowest-power adapter is often an integrated
+//! GPU whose every frame is copied to the discrete card the monitor hangs off. Whatever chose
+//! the card, Windows then takes it on DX12 before Vulkan (`backend_rank`).
+//!
 //! `WGPU_ADAPTER_NAME` (a case-insensitive part of the adapter's name) and `WGPU_POWER_PREF`
-//! (`low`, `high` or `none`) override the choice. Without them, and without a compositor device
-//! to match, Rune takes the lowest-power adapter. `RUNE_GPU_LOG=1` prints the choice and its
-//! reason; a machine with more than one GPU prints it anyway, once per process.
+//! (`low`, `high` or `none`) override the card, and `WGPU_BACKEND` (`dx12`, `vulkan`,
+//! comma-separated; desktop builds have no others) the backends Rune may use (`Gpu::instance`). Without them, and without a
+//! compositor device or Windows' choice to match, Rune takes the lowest-power adapter.
+//! `RUNE_GPU_LOG=1` prints the choice and its reason; a machine with more than one GPU prints it
+//! anyway, once per process.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Reason {
     EnvName,
     EnvPower,
     Compositor,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    Windows,
     LowPower,
 }
 
@@ -24,6 +34,7 @@ impl Reason {
             Reason::EnvName => "WGPU_ADAPTER_NAME",
             Reason::EnvPower => "WGPU_POWER_PREF",
             Reason::Compositor => "the compositor's GPU",
+            Reason::Windows => "Windows' GPU preference",
             Reason::LowPower => "lowest power",
         }
     }
@@ -34,6 +45,8 @@ pub(crate) struct Pick {
     pub reason: Reason,
     /// The compositor's main device as a PCI address, when it told us one.
     compositor: Option<String>,
+    /// Windows' card for the app as PCI (vendor, device) ids.
+    windows: Option<(u32, u32)>,
 }
 
 impl Pick {
@@ -42,9 +55,10 @@ impl Pick {
         matches!(self.reason, Reason::EnvName | Reason::EnvPower)
     }
 
-    /// Whether `info` is an adapter on the compositor's device.
-    pub fn on_compositor_device(&self, info: &wgpu::AdapterInfo) -> bool {
+    /// Whether `info` is an adapter on the compositor's device, or on Windows' card for the app.
+    pub fn on_preferred_device(&self, info: &wgpu::AdapterInfo) -> bool {
         self.compositor.as_deref().is_some_and(|pci| same_pci(pci, &info.device_pci_bus_id))
+            || self.windows.is_some_and(|card| card == (info.vendor, info.device))
     }
 }
 
@@ -60,13 +74,13 @@ pub(crate) fn pick(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>
         let found = by_name(&name, &infos);
         enumerated = Some(infos.len());
         match found {
-            Some(index) => return Ok(log(Pick { adapter: adapters.into_iter().nth(index).expect("index from this list"), reason: Reason::EnvName, compositor }, enumerated)),
+            Some(index) => return Ok(finish(instance, &usable, Pick { adapter: adapters.into_iter().nth(index).expect("index from this list"), reason: Reason::EnvName, compositor, windows: None }, enumerated)),
             None => eprintln!("rune: no GPU adapter matches WGPU_ADAPTER_NAME={name:?}; choosing as usual"),
         }
     }
     if let Some(power) = wgpu::PowerPreference::from_env() {
         let adapter = request(instance, surface, power)?;
-        return Ok(log(Pick { adapter, reason: Reason::EnvPower, compositor }, enumerated));
+        return Ok(finish(instance, &usable, Pick { adapter, reason: Reason::EnvPower, compositor, windows: None }, enumerated));
     }
     if let Some(pci) = compositor.as_deref() {
         let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
@@ -74,11 +88,54 @@ pub(crate) fn pick(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>
         enumerated = Some(infos.iter().filter(|(info, _)| info.device_type != wgpu::DeviceType::Cpu).count());
         if let Some(index) = by_pci(pci, &infos) {
             let adapter = adapters.into_iter().nth(index).expect("index from this list");
-            return Ok(log(Pick { adapter, reason: Reason::Compositor, compositor }, enumerated));
+            return Ok(log(Pick { adapter, reason: Reason::Compositor, compositor, windows: None }, enumerated));
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let order = windows_order();
+        enumerated = Some(order.len());
+        if let Some(&card) = order.first() {
+            let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
+            let infos: Vec<_> = adapters.iter().map(|a| (a.get_info(), usable(a))).collect();
+            if let Some(index) = by_card(card, &infos) {
+                let adapter = adapters.into_iter().nth(index).expect("index from this list");
+                return Ok(log(Pick { adapter, reason: Reason::Windows, compositor, windows: Some(card) }, enumerated));
+            }
         }
     }
     let adapter = request(instance, surface, wgpu::PowerPreference::LowPower)?;
-    Ok(log(Pick { adapter, reason: Reason::LowPower, compositor }, enumerated))
+    Ok(finish(instance, &usable, Pick { adapter, reason: Reason::LowPower, compositor, windows: None }, enumerated))
+}
+
+/// Logs `pick`, first moving it on Windows to its card's first backend (`by_card`):
+/// `request_adapter` and the name match take whichever backend lists the card first.
+fn finish(instance: &wgpu::Instance, usable: &dyn Fn(&wgpu::Adapter) -> bool, mut pick: Pick, enumerated: Option<usize>) -> Pick {
+    #[cfg(target_os = "windows")]
+    {
+        let info = pick.adapter.get_info();
+        let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
+        let infos: Vec<_> = adapters.iter().map(|a| (a.get_info(), usable(a))).collect();
+        if let Some(index) = by_card((info.vendor, info.device), &infos) {
+            pick.adapter = adapters.into_iter().nth(index).expect("index from this list");
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = (instance, usable, &mut pick);
+    log(pick, enumerated)
+}
+
+/// The hardware cards DXGI lists, in its order, as PCI (vendor, device) ids, read once per
+/// process on a DX12-only instance, so a `WGPU_BACKEND` without DX12 still gets Windows' card.
+#[cfg(target_os = "windows")]
+fn windows_order() -> &'static [(u32, u32)] {
+    static ORDER: std::sync::OnceLock<Vec<(u32, u32)>> = std::sync::OnceLock::new();
+    ORDER.get_or_init(|| {
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        descriptor.backends = wgpu::Backends::DX12;
+        pollster::block_on(wgpu::Instance::new(descriptor).enumerate_adapters(wgpu::Backends::DX12)).iter()
+            .map(|a| a.get_info()).filter(|i| i.device_type != wgpu::DeviceType::Cpu).map(|i| (i.vendor, i.device)).collect()
+    })
 }
 
 fn request(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, power_preference: wgpu::PowerPreference) -> Result<wgpu::Adapter, String> {
@@ -101,6 +158,28 @@ fn by_name(name: &str, adapters: &[(wgpu::AdapterInfo, bool)]) -> Option<usize> 
 fn by_pci(pci: &str, adapters: &[(wgpu::AdapterInfo, bool)]) -> Option<usize> {
     let on = |(info, usable): &(wgpu::AdapterInfo, bool)| *usable && same_pci(pci, &info.device_pci_bus_id);
     adapters.iter().position(|a| on(a) && a.0.backend == wgpu::Backend::Vulkan).or_else(|| adapters.iter().position(on))
+}
+
+/// The usable adapter on `card` (PCI vendor and device ids), on its lowest-ranked backend.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn by_card(card: (u32, u32), adapters: &[(wgpu::AdapterInfo, bool)]) -> Option<usize> {
+    if card == (0, 0) { return None; }
+    adapters.iter().enumerate()
+        .filter(|(_, (info, usable))| *usable && (info.vendor, info.device) == card)
+        .min_by_key(|(_, (info, _))| backend_rank(info.backend))
+        .map(|(index, _)| index)
+}
+
+/// Windows' backend order. DX12 surfaces composite alpha on every GPU (`translucency`) and resize
+/// their swapchain in place; Vulkan's are opaque on AMD's integrated GPUs and are rebuilt.
+/// Elsewhere only Vulkan and GL share a card, in the same order.
+pub(crate) fn backend_rank(backend: wgpu::Backend) -> u8 {
+    match backend {
+        wgpu::Backend::Dx12 => 0,
+        wgpu::Backend::Vulkan => 1,
+        wgpu::Backend::Gl => 2,
+        _ => 3,
+    }
 }
 
 fn same_pci(a: &str, b: &str) -> bool {

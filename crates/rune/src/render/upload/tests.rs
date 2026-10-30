@@ -226,12 +226,15 @@ fn a_device_asked_for_immediates_draws_with_them() {
     assert_eq!(Gpu::headless().device.limits().max_immediate_size, 0, "only when asked");
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
+        // A struct: wgpu's HLSL backend has no non-struct immediates yet (gfx-rs/wgpu#5683),
+        // so DX12 rejects `var<immediate> fill: vec4<f32>`.
         source: wgpu::ShaderSource::Wgsl("
-            var<immediate> fill: vec4<f32>;
+            struct Fill { color: vec4<f32> }
+            var<immediate> fill: Fill;
             @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
                 return vec4<f32>(vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u)) * 2.0 - 1.0, 0.0, 1.0);
             }
-            @fragment fn fs() -> @location(0) vec4<f32> { return fill; }
+            @fragment fn fs() -> @location(0) vec4<f32> { return fill.color; }
         ".into()),
     });
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[], immediate_size: 16 });
