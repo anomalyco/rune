@@ -608,6 +608,8 @@ app.run();
 
 A small app puts its first window, with content, on screen about 300 ms after `open` on Apple silicon.
 The full page, with the measurement method, is "Launch fast" on the docs site (`site/src/pages.tsx`).
+Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`); `scripts/app-audit <repo>` greps an
+app for the patterns it lists.
 
 - **`rune::prewarm_gpu()` first in `main`.** On macOS it makes the adapter, device and uber pipeline on a thread
   while AppKit starts; the first window or overlay opened at launch takes them, waiting if the thread is still

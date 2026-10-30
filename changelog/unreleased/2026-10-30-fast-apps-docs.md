@@ -1,0 +1,1 @@
+- Docs: a "Fast apps" page (rules with before and after snippets, the memo lesson) and `scripts/app-audit <repo>`, a quick grep for the slow patterns it lists; no API change.

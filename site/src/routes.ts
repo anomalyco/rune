@@ -25,6 +25,13 @@ export const routes: Route[] = [
       "How to get a Rune app's first window on screen in about 300 ms: prewarm_gpu, precompiled Metal shaders, a first frame at creation, deferred setup, a still first second, an idle window that draws nothing, a reused hidden window, and how to measure it.",
   },
   {
+    path: "/fast-apps",
+    label: "Fast apps",
+    title: "Fast apps · Rune",
+    description:
+      "How to keep a Rune app fast: a free main thread, long lists that build only what is on screen, memo keyed small, an idle window that draws nothing, cheap poll, bounded caches, and a script that audits a repo.",
+  },
+  {
     path: "/principles",
     label: "Principles",
     title: "Principles · Rune",

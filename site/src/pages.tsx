@@ -85,7 +85,7 @@ function CodeRefs({ refs }: { refs: CodeRef[] }) {
   )
 }
 
-function Pager({ prev, next }: { prev?: [string, string]; next?: [string, string] }) {
+export function Pager({ prev, next }: { prev?: [string, string]; next?: [string, string] }) {
   return (
     <nav className="doc-pager" aria-label="Pages">
       {prev ? <a href={withBase(prev[0])}>← {prev[1]}</a> : <span />}
@@ -482,7 +482,7 @@ export function HowItWorksView() {
   )
 }
 
-function Sample({ lang = "Rust", children }: { lang?: string; children: string }) {
+export function Sample({ lang = "Rust", children }: { lang?: string; children: string }) {
   return (
     <figure className="code-block">
       <figcaption className="code-head">
@@ -535,7 +535,8 @@ export function LaunchFastView() {
         </p>
         <p>
           Two of them need one line or nothing from the app. The rest is about what the app leaves out of its first
-          frame. The numbers are at the end.
+          frame. The numbers are at the end. Keeping the app fast after launch is on{" "}
+          <a href={withBase("/fast-apps")}>Fast apps</a>.
         </p>
       </PageHead>
 
@@ -870,7 +871,7 @@ export function LaunchFastView() {
         </div>
       </section>
 
-      <Pager prev={["/how-it-works", "How it works"]} next={["/architecture", "Architecture"]} />
+      <Pager prev={["/how-it-works", "How it works"]} next={["/fast-apps", "Fast apps"]} />
     </>
   )
 }
@@ -996,7 +997,7 @@ export function ArchitectureView() {
       </section>
       </div>
 
-      <Pager prev={["/launch-fast", "Launch fast"]} next={["/principles", "Principles"]} />
+      <Pager prev={["/fast-apps", "Fast apps"]} next={["/principles", "Principles"]} />
     </>
   )
 }
