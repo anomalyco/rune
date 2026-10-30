@@ -2,7 +2,6 @@
 //! runs: text measures as a fresh launch with those families would, memoized subtrees build
 //! again, and asking for the families already there rebuilds nothing.
 use std::cell::Cell;
-use std::sync::{Mutex, MutexGuard};
 
 use rune::text::TextSystem;
 use rune::{App, AppSpec, El, Env, Runtime, TextStyle, col, memo, row, text};
@@ -11,13 +10,6 @@ const INTER: &[u8] = include_bytes!("../assets/Inter-Regular.ttf");
 const PLEX: &[u8] = include_bytes!("../../../themes/opencode/assets/fonts/IBMPlexMono-Regular.ttf");
 const LAUNCH: (&str, &str) = ("Inter", "IBM Plex Mono");
 static APP_FONTS: &[&[u8]] = &[INTER, PLEX];
-
-/// `rune::text::measure` follows the process's latest fonts, so these tests take turns.
-static SERIAL: Mutex<()> = Mutex::new(());
-
-fn serial() -> MutexGuard<'static, ()> {
-    SERIAL.lock().unwrap_or_else(|e| e.into_inner())
-}
 
 thread_local! {
     static MEMO_BUILDS: Cell<u32> = const { Cell::new(0) };
@@ -62,7 +54,7 @@ fn switch(rt: &mut Runtime<()>, sans: &str, mono: &str) -> bool {
 
 #[test]
 fn a_switch_measures_like_a_fresh_launch_and_rebuilds_memoized_subtrees() {
-    let _serial = serial();
+    let _g = rune::text::with_families(LAUNCH.0, LAUNCH.1);
     let fresh = widths(&launch(("IBM Plex Mono", "Inter")));
     let mut rt = launch(LAUNCH);
     let before = widths(&rt);
@@ -86,7 +78,7 @@ fn a_switch_measures_like_a_fresh_launch_and_rebuilds_memoized_subtrees() {
 
 #[test]
 fn asking_for_the_families_already_there_rebuilds_nothing() {
-    let _serial = serial();
+    let _g = rune::text::with_families(LAUNCH.0, LAUNCH.1);
     let mut rt = launch(LAUNCH);
     rt.frame(1.0 / 120.0);
     let (builds, commits) = (MEMO_BUILDS.get(), rt.stats.commits);
@@ -98,7 +90,7 @@ fn asking_for_the_families_already_there_rebuilds_nothing() {
 
 #[test]
 fn every_runtime_on_the_thread_follows() {
-    let _serial = serial();
+    let _g = rune::text::with_families(LAUNCH.0, LAUNCH.1);
     let mut a = launch(LAUNCH);
     let mut b = launch(LAUNCH);
     let fresh = widths(&launch(("IBM Plex Mono", "IBM Plex Mono")));
@@ -110,7 +102,7 @@ fn every_runtime_on_the_thread_follows() {
 
 #[test]
 fn a_missing_family_falls_back_as_at_launch() {
-    let _serial = serial();
+    let _g = rune::text::with_families(LAUNCH.0, LAUNCH.1);
     let fresh = widths(&launch(("Rune Missing Family", "Rune Missing Mono")));
     let mut rt = launch(LAUNCH);
     switch(&mut rt, "Rune Missing Family", "Rune Missing Mono");
@@ -128,7 +120,7 @@ fn open_window() -> Runtime<()> {
 
 #[test]
 fn a_window_opened_after_a_switch_starts_in_the_new_families() {
-    let _serial = serial();
+    let _g = rune::text::with_families(LAUNCH.0, LAUNCH.1);
     let switched = ("IBM Plex Mono", "Inter");
     let fresh = widths(&launch(switched));
     let switched_width = rune::text::measure("Hamburgefonstiv 0123", &[], STYLE, None).0;
