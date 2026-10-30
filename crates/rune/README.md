@@ -661,6 +661,36 @@ The full page, with the measurement method, is "Launch fast" on the docs site (`
 
 Absolute times were high because the machine was busy; the differences are what matter.
 
+### Requests off the main thread (`rune::Latest`)
+
+A search box, a mention list or a path completer asks once per keystroke and wants only the newest
+answer. Doing it in the handler blocks the window for the whole round trip; debug builds warn when a
+handler or `poll` spends 8 ms waiting. `Latest<T>` runs the request on a worker and lands the newest
+answer:
+
+```rust
+// setup: the waker runs `poll` when an answer lands.
+s.results = Latest::new(waker).debounce(Duration::from_millis(60));
+// A handler, on every keystroke:
+s.results.request(query.clone(), |q| index.search(&q));
+// poll: true only when an answer landed.
+let Some(hits) = s.results.take() else { return false };
+s.hits = hits;
+true
+```
+
+- **Latest wins.** Each request supersedes the earlier ones. One that hasn't started never runs; one
+  already running finishes, and its answer is dropped, even if it finishes after the newer one.
+- **One wake per answer.** The waker fires once when an answer lands, and `take` returns it once, so
+  `poll` returns true once and an idle window stays idle. `is_pending` drives a spinner.
+- **Debounce** (optional) waits for that long without a newer request before starting one.
+- **No thread per request.** Up to four shared workers, started on demand, exit after ten idle
+  seconds. On the web the work runs on the main thread from `spawn_local`, after the debounce.
+- **Cancel** drops pending and running requests; dropping the `Latest` cancels it. State outlives a
+  closed window, so call `cancel` from `App::on_close` to stop requests on close.
+
+Only the closure runs on the worker; the answer reaches state in `poll`, on the UI thread.
+
 ### Relaunching a Mac app (`scripts/mac-app`, `rune-mac`)
 
 `cargo run` starts a bare binary: no bundle, so no icon, no links, no microphone prompt, and a

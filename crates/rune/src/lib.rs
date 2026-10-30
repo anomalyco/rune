@@ -134,6 +134,7 @@ mod key_diagnostics;
 #[cfg(test)]
 mod test_alloc;
 pub mod growth;
+mod latest;
 pub mod live;
 pub mod memo;
 pub mod motion_gate;
@@ -218,6 +219,7 @@ pub use el::{
     row, spacer, text, text_input,
 };
 pub use growth::{GROWTH, StreamEdge, edge};
+pub use latest::Latest;
 pub use live::{Live, LiveText, Tween};
 pub use memo::memo;
 pub use pixels::Pixels;
