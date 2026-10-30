@@ -107,8 +107,10 @@ pub(crate) fn report(setup: f64, init: f64, view: f64, total: f64) -> Option<Str
 }
 
 /// How long this process has run, from the system's record of its start.
-#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
-fn process_age() -> Option<Duration> {
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn process_age() -> Option<std::time::Duration> {
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+    use std::time::Duration;
     #[cfg(target_os = "macos")]
     {
         // SAFETY: `info` is a live, writable `proc_bsdinfo` of the size passed, and an all-zero

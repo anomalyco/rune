@@ -629,9 +629,16 @@ app for the patterns it lists.
   The first view build and layout run inside creation, right after the window-created callbacks, so keep the initial
   state, `view` and `on_window` cheap.
 - **Defer the rest to `on_ready`.** It runs once per native creation after the first frame is ready (for a
-  launcher, while hidden). Capture `app.handle()` and call `handle.update(|s, tx| ..)` there to start status
+  launcher, while hidden). A window that isn't on screen (covered, occluded, hidden or on another Space) doesn't
+  wait to draw: it runs at the first frame skipped for that, or a second after the window opens. Capture `app.handle()` and call `handle.update(|s, tx| ..)` there to start status
   items, HUDs, secondary windows, network and indexing; updates run on the UI thread even with no window showing.
   There is no state-level first-frame hook yet.
+- **A launcher can wait for readiness.** With `RUNE_READY_DIR` set, the process writes
+  `$RUNE_READY_DIR/<bundle id>.<pid>` (the main bundle's identifier on macOS, else the executable's name) right
+  after its first `on_ready` returns, and removes it when it exits normally. It's one line of JSON,
+  `{"pid":123,"bundle_id":"com.example.app","ready_ms":412,"rune":"0.1.0"}`, with `ready_ms` counted from the
+  process's start; the directory is made 0700 if it's missing. A process killed outright leaves its file, so treat
+  one whose PID isn't running as stale. Without the variable nothing is written.
 - **Keep the first second still.** Rune animates nothing then, so every frame is the app's. Land state that
   arrives right after launch (a system setting, a first network answer) with `tx.instant()`, or don't animate it.
   One settings window's launch fade drew about 85 frames in its first second instead of 4 to 8, and drawing back to

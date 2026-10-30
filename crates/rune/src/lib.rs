@@ -160,6 +160,8 @@ mod frame_profile;
 #[doc(hidden)]
 pub use frame_profile::{PHASES, take_frame_phases, thread_cpu_ms};
 mod perf_warn;
+#[cfg(not(target_arch = "wasm32"))]
+mod ready_signal;
 pub mod file_dialog;
 pub mod tray;
 mod open_url;

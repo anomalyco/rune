@@ -60,6 +60,8 @@ impl<S: 'static> Host<S> {
         if let Some(ready) = self.on_ready.as_mut() {
             crate::perf_warn::timed("on_ready", || ready(&self.native_handle));
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::ready_signal::ready();
     }
 
     pub(super) fn place(&mut self, event_loop: &ActiveEventLoop, request: crate::windows::PlaceRequest) {
