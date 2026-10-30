@@ -526,8 +526,13 @@ export const milestones: Milestone[] = [
   {
     id: "m5",
     title: "Web",
-    status: "later",
-    body: <p>The same apps in the browser over WebGPU, starting with live demos on this site.</p>,
+    status: "started",
+    body: (
+      <p>
+        The same apps in the browser over WebGPU, starting with live demos on this site. An experimental target builds
+        and runs today (<code>WEB.md</code>, <code>examples/web-hello</code>).
+      </p>
+    ),
   },
   {
     id: "m6",

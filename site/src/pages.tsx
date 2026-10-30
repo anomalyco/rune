@@ -184,10 +184,14 @@ const buildable: { title: string; text: ReactNode; status: Status; meta: string;
   },
   {
     title: "Web",
-    text: <>The same apps in a browser over WebGPU, starting with live demos on this site. There's no web build yet.</>,
-    status: "planned",
-    meta: "M5",
-    href: "/roadmap#m5",
+    text: (
+      <>
+        The same apps in a browser over WebGPU, in one canvas on the page's main thread. Experimental: Safari keyboard
+        checks, accessibility and a WebGL fallback are still to come.
+      </>
+    ),
+    status: "partly",
+    meta: "examples/web-hello",
   },
   {
     title: "iOS, then Android",
@@ -311,7 +315,7 @@ export function HomeView() {
         <SectionHead id="build" title="What you can build" aside="October 2026">
           <p>
             Native apps first, and anything that needs Rune's pixels without a window, since headless runs use the same
-            code. The web and phones are planned, not built.
+            code. The web build is experimental, and phones are planned.
           </p>
         </SectionHead>
         <ul className="index-list">
