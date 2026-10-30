@@ -183,7 +183,8 @@ impl MacWindowOptions {
     /// AppKit NSWindow.CollectionBehavior bit mask. Replaces the existing mask.
     pub fn collection_behavior(mut self, bits: usize) -> Self { self.collection_behavior = Some(bits); self }
     /// Requests NSWindowSharingNone; capture clients should also filter window_number().
-    /// false restores NSWindowSharingReadOnly. This is not a capture guarantee.
+    /// false restores NSWindowSharingReadOnly. This is not a capture guarantee. A nonactivating
+    /// panel applies it only while shown (see `OverlayOptions::exclude_from_capture`).
     pub fn exclude_from_capture(mut self, exclude: bool) -> Self { self.exclude_from_capture = Some(exclude); self }
     /// Rounds a transparent, borderless window or panel to `radius` points with a continuous
     /// (squircle) curve. The window's root layer clips everything it shows, Rune's drawing and

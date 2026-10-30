@@ -110,6 +110,10 @@ pub struct OverlayOptions {
     pub follow_pointer: bool,
     pub level: OverlayLevel,
     /// Native best effort, not a security boundary. Use the window number in capture filters.
+    /// Applies only while the overlay is shown: on macOS a hidden prewarmed panel stays ordered
+    /// in at alpha zero on every Space, and an excluded window there would blank every Space's
+    /// Mission Control thumbnail, so it turns capturable once a hide's fade-out finishes and
+    /// excluded again before the next show's alpha rises.
     /// `OverlayHandle::set_exclude_from_capture` changes it later.
     pub exclude_from_capture: bool,
     pub keys: KeyPolicy,

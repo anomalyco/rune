@@ -151,7 +151,9 @@ impl<T: 'static> OverlayHandle<T> {
     /// Result of the native capture-exclusion request. Linux reports Unsupported.
     pub fn capture_exclusion(&self) -> OverlaySupport { self.capabilities().capture_exclusion }
     pub fn capabilities(&self) -> crate::OverlayCapabilities { self.shared.native.lock().unwrap().1 }
-    /// Changes `OverlayOptions::exclude_from_capture` on the live window, shown or not.
+    /// Changes `OverlayOptions::exclude_from_capture` on the live window. It applies only while
+    /// the overlay is shown; set while hidden, it takes effect at the next show, so there is no
+    /// need to toggle it around show and hide.
     pub fn set_exclude_from_capture(&self, exclude: bool) { self.request(|q| q.exclude_from_capture = Some(exclude)); }
 
     /// The overlay's frame counts: redraws, presents, failed drawable acquisitions, loop turns

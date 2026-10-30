@@ -17,6 +17,7 @@ pub(crate) mod drop;
 pub(crate) mod help;
 #[doc(hidden)]
 pub mod panel_bridge;
+pub(crate) mod presence;
 pub(crate) mod traffic_lights;
 pub(crate) mod window_shape;
 
@@ -515,10 +516,17 @@ fn configure_native(window: &NSWindow, options: &crate::MacWindowOptions) {
         if let Some(bits) = options.collection_behavior {
             let _: () = msg_send![window, setCollectionBehavior: bits];
         }
-        if let Some(exclude) = options.exclude_from_capture {
-            let _: () = msg_send![window, setSharingType: if exclude { 0usize } else { 1usize }];
-        }
     }
+    if let Some(exclude) = options.exclude_from_capture { set_sharing(window, exclude); }
+}
+
+/// `sharingType` none keeps the window out of captures; read-only lets recorders see it.
+/// Captures follow every change, but on recent macOS the `sharingType` getter and
+/// CGWindowList's sharing state can keep reporting none after the first switch back, so
+/// neither confirms a toggle.
+fn set_sharing(window: &NSWindow, exclude: bool) {
+    // SAFETY: every caller runs on the AppKit main thread.
+    unsafe { let _: () = msg_send![window, setSharingType: if exclude { 0usize } else { 1usize }]; }
 }
 
 /// Orders a window front without making it key or activating the app.
@@ -536,7 +544,6 @@ pub(crate) struct Panel {
     monitors: RefCell<Option<MouseMonitors>>,
     pointer: Rc<PointerState>,
     options: OverlayOptions,
-    exclude_from_capture: Cell<bool>,
     follow_pointer: Cell<bool>,
     visible: Cell<bool>,
     pointer_poll: Cell<Option<Instant>>,
@@ -544,8 +551,9 @@ pub(crate) struct Panel {
     /// A fade in or out is running: the panel reads as visible until it finishes, so a
     /// fading-out overlay can still draw its exit.
     revealing: Rc<Cell<bool>>,
-    /// Bumped by every alpha change, so a finished fade-out orders out only if nothing came after.
-    fade: Rc<Cell<u64>>,
+    /// Shown or not, the fade generation, and the requested capture exclusion, applied only
+    /// while shown. A finished fade-out orders out only if nothing came after.
+    presence: Rc<Cell<crate::macos::presence::Presence>>,
     wake: Option<crate::Waker>,
     panel: objc2::rc::Retained<objc2_app_kit::NSPanel>,
     window: objc2::rc::Retained<objc2_app_kit::NSWindow>,
@@ -560,7 +568,9 @@ impl Panel {
     pub fn adopt_window(window: &winit::window::Window, size: (f32, f32), native: &crate::MacWindowOptions) -> Option<Panel> {
         let options = OverlayOptions { input: OverlayInput::All, keys: KeyPolicy::OnDemand, prewarm: native.launcher, ..Default::default() };
         let panel = Self::adopt_kind(window, crate::windows::PlaceRequest::at(size), true, &options, None, true)?;
-        configure_native(&panel.panel, native);
+        let mut native = native.clone();
+        if let Some(exclude) = native.exclude_from_capture.take() { panel.set_capture_exclusion(exclude); }
+        configure_native(&panel.panel, &native);
         Some(panel)
     }
 
@@ -598,9 +608,8 @@ impl Panel {
                     | NSWindowCollectionBehavior::CanJoinAllApplications,
             );
         }
-        let mut native = crate::MacWindowOptions::default().shadow(false)
+        let native = crate::MacWindowOptions::default().shadow(false)
             .level(match options.level { OverlayLevel::Status => 25, OverlayLevel::AboveStatus => 26, OverlayLevel::AboveOverlays => 27 });
-        if options.exclude_from_capture { native = native.exclude_from_capture(true); }
         configure_native(&panel, &native);
         if ordinary {
             panel.setTitle(&ns_window.title());
@@ -634,7 +643,7 @@ impl Panel {
             return None;
         }
         panel.setDelegate(unsafe { ns_window.delegate() }.as_deref());
-        Some(Panel { bridge, monitors: RefCell::new(None), pointer, options: options.clone(), exclude_from_capture: Cell::new(options.exclude_from_capture), follow_pointer: Cell::new(options.follow_pointer), visible: Cell::new(false), pointer_poll: Cell::new(None), warming, revealing, fade: Rc::default(), wake, panel, window: ns_window, view })
+        Some(Panel { bridge, monitors: RefCell::new(None), pointer, options: options.clone(), follow_pointer: Cell::new(options.follow_pointer), visible: Cell::new(false), pointer_poll: Cell::new(None), warming, revealing, presence: Rc::new(Cell::new(crate::macos::presence::Presence::new(options.exclude_from_capture))), wake, panel, window: ns_window, view })
     }
 
     /// On the primary screen (the one with the menu bar), in AppKit's bottom-left coordinates.
@@ -676,6 +685,8 @@ impl Panel {
         self.visible.set(true);
         self.refresh_monitors();
         self.pointer.observe(&self.panel, self.wake.as_ref());
+        // Excluded before any of it can be seen: before it orders in or its alpha rises.
+        let generation = self.update_presence(|p| p.show());
         if !self.options.prewarm && !self.panel.isVisible() {
             // SAFETY: AppKit calls on the main thread.
             unsafe {
@@ -683,15 +694,24 @@ impl Panel {
                 self.panel.orderFrontRegardless();
             }
         }
-        self.fade_to(1.0, fade, false);
+        self.fade_to(1.0, fade, false, generation);
     }
 
-    /// Animates the panel's alpha to `alpha` over `duration`, replacing any fade in flight,
-    /// then orders it out if `order_out` and nothing changed it since.
-    fn fade_to(&self, alpha: f64, duration: Duration, order_out: bool) {
+    /// Changes the panel's presence and applies the capture exclusion it now calls for.
+    fn update_presence<R>(&self, change: impl FnOnce(&mut crate::macos::presence::Presence) -> R) -> R {
+        let mut presence = self.presence.get();
+        let result = change(&mut presence);
+        self.presence.set(presence);
+        set_sharing(&self.panel, presence.excluded());
+        result
+    }
+
+    /// Animates the panel's alpha to `alpha` over `duration`, replacing any fade in flight.
+    /// A fade to zero is a hide: when it finishes with nothing after it, the panel is hidden,
+    /// drops its capture exclusion and, if `order_out`, orders out.
+    fn fade_to(&self, alpha: f64, duration: Duration, order_out: bool, generation: u64) {
         use objc2::runtime::{AnyClass, AnyObject};
-        let generation = self.fade.get() + 1;
-        self.fade.set(generation);
+        let hiding = alpha == 0.0;
         let fading = !duration.is_zero();
         self.revealing.set(fading);
         // SAFETY: AppKit calls on the main thread; the completion handler runs there too.
@@ -701,10 +721,14 @@ impl Panel {
                 let current: *mut AnyObject = msg_send![context, currentContext];
                 let _: () = msg_send![current, setDuration: duration.as_secs_f64()];
                 if fading {
-                    let (panel, fade, flag) = (self.panel.clone(), self.fade.clone(), self.revealing.clone());
-                    let done = block2::RcBlock::new(move || if fade.get() == generation {
+                    let (panel, presence, flag) = (self.panel.clone(), self.presence.clone(), self.revealing.clone());
+                    let done = block2::RcBlock::new(move || {
+                        let mut now = presence.get();
+                        if !now.fade_done(generation, hiding) { return; }
+                        presence.set(now);
                         flag.set(false);
                         if order_out { panel.orderOut(None) }
+                        if hiding { set_sharing(&panel, now.excluded()); }
                     });
                     let _: () = msg_send![current, setCompletionHandler: &*done];
                 }
@@ -756,26 +780,31 @@ impl Panel {
         // Clicks and scrolls go to the window below for the whole fade; `show` restores
         // hit-testing through `pointer.observe`.
         self.panel.setIgnoresMouseEvents(true);
+        // Shown until the fade-out finishes, so the exclusion holds while it can still be seen.
+        let mut presence = self.presence.get();
+        let generation = presence.hide(!fade.is_zero());
+        self.presence.set(presence);
         if self.options.prewarm {
-            self.fade_to(0.0, fade, false);
+            self.fade_to(0.0, fade, false, generation);
             unsafe { self.panel.resignKeyWindow(); }
         } else if fade.is_zero() {
-            self.fade.set(self.fade.get() + 1);
             self.panel.orderOut(None);
         } else {
             unsafe { self.panel.resignKeyWindow(); }
-            self.fade_to(0.0, fade, true);
+            self.fade_to(0.0, fade, true, generation);
         }
+        // Read-only once its alpha is zero: a hidden prewarm panel stays on every Space.
+        set_sharing(&self.panel, presence.excluded());
     }
 
     pub fn window_number(&self) -> u32 { unsafe { self.panel.windowNumber() as u32 } }
     pub fn capture_exclusion(&self) -> OverlaySupport {
-        if self.exclude_from_capture.get() { OverlaySupport::Requested } else { OverlaySupport::Unknown }
+        if self.presence.get().requested() { OverlaySupport::Requested } else { OverlaySupport::Unknown }
     }
-    /// `sharingType` none, or read-only so recorders see the panel again.
+    /// `sharingType` none while shown, or read-only so recorders see the panel again. Hidden,
+    /// the panel stays read-only and the request applies at its next show.
     pub fn set_capture_exclusion(&self, exclude: bool) -> OverlaySupport {
-        self.exclude_from_capture.set(exclude);
-        configure_native(&self.panel, &crate::MacWindowOptions::default().exclude_from_capture(exclude));
+        self.update_presence(|p| p.request(exclude));
         self.capture_exclusion()
     }
     pub fn global_pointer(&self) -> OverlaySupport {
