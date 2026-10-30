@@ -488,6 +488,7 @@ pub(crate) struct Node {
     growth: Option<Box<GrowthSpec>>,
     streaming: bool,
     whole: bool,
+    glide: Option<rune_motion::Spring>,
     input: Option<Box<InputSpec>>,
     cursor: Option<crate::el::Cursor>,
     window_drag: bool,

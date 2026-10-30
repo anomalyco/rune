@@ -1,0 +1,41 @@
+use super::*;
+use crate::el::GrowthSpec;
+
+/// A growth stack whose middle row is 600 pt open or 40 pt shut, with `El::fold_glide` or else
+/// `El::arrives_whole`.
+fn stack(open: bool, fold: bool) -> El {
+    let mut row = el().key("group").h(if open { 600.0 } else { 40.0 }).w_full();
+    row = if fold { row.fold_glide(rune_motion::Spring::new(0.18, 0.0)) } else { row.arrives_whole() };
+    col().key("root").child(col().key("stack").growth(GrowthSpec::default()).children([
+        el().key("above").h(100.0).w_full(),
+        row,
+        el().key("below").h(100.0).w_full(),
+    ]))
+}
+
+/// Seconds until the row shut from 600 pt is within half a point of shut, at 120 Hz.
+fn shut_secs(fold: bool) -> f32 {
+    fn folded(s: &(bool, bool), _: &mut Cx<(bool, bool)>) -> El {
+        stack(s.0, s.1)
+    }
+    let mut rt = Runtime::new((true, fold), folded, (400.0, 900.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    rt.state.0 = false;
+    rt.dirty = true;
+    for k in 1..240 {
+        rt.frame(1.0 / 120.0);
+        let below = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("below")).unwrap();
+        if (below.rect[1] - 140.0).abs() < 0.5 {
+            return k as f32 / 120.0;
+        }
+    }
+    panic!("still moving after 2 s");
+}
+
+#[test]
+fn a_fold_glide_row_folds_on_its_own_spring() {
+    let own = shut_secs(true);
+    let stack = shut_secs(false);
+    assert!(own < 0.3, "the row's own 0.18 s spring: {own} s");
+    assert!(stack > own + 0.2, "the stack's 0.32 s spring, stretched for the distance: {stack} s");
+}

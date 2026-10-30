@@ -23,4 +23,16 @@ impl El {
         self.whole = true;
         self
     }
+    /// A growth-stack row that folds open and shut, like a disclosure: its height changes glide
+    /// on its own `spring`, in place of the stack's, for the spring's own time however far
+    /// they go, keeping their velocity when a change reverses one mid-glide. A change taller
+    /// than the window moves only the window's height on the spring; the rest lands at once,
+    /// beyond the window: shutting, before the glide; opening, after it. Hold the row's header
+    /// with [`crate::Tx::keep_on_screen`] so the far edge is the one out of view. Implies
+    /// [`El::arrives_whole`].
+    pub fn fold_glide(mut self, spring: rune_motion::Spring) -> Self {
+        self.whole = true;
+        self.glide = Some(spring);
+        self
+    }
 }

@@ -380,6 +380,7 @@ pub(super) fn same_root_el(el: &El, built: &crate::memo::Built) -> bool {
         virtual_mount: _,
         streaming,
         whole,
+        glide,
         input,
         cursor,
         window_drag,
@@ -467,6 +468,7 @@ pub(super) fn same_root_el(el: &El, built: &crate::memo::Built) -> bool {
         && el.virtual_rows_version == *virtual_rows_version
         && el.streaming == *streaming
         && el.whole == *whole
+        && el.glide == *glide
         && el.input.is_none()
         && input.is_none()
         && el.cursor == *cursor

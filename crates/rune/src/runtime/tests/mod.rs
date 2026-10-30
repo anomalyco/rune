@@ -5,6 +5,7 @@ use crate::el::{col, el};
 mod app_ime;
 mod context_menu_key;
 mod event_markers;
+mod fold_glide;
 mod glyph_replay;
 mod group_opacity;
 mod id_pruning;
