@@ -279,7 +279,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn layout_moved(&mut self, reads: Option<LayoutReads>, nodes: Option<&[Node]>, force: bool) -> bool {
         let reads = reads.unwrap_or_else(|| std::mem::take(&mut self.layout_seen.reads));
         let nodes = nodes.unwrap_or(&self.nodes);
-        let keyed = Keyed::new(nodes);
+        let keyed = Keyed::new(nodes, reads.len());
         let now: Vec<Option<[f32; 4]>> = reads.iter().map(|r| self.layout_of(nodes, &keyed, &r.key)).collect();
         let boxes = reads.iter().any(|r| r.key == SELECTION).then(|| self.selection_boxes(nodes));
         let rects = &mut self.layout_seen.rects;
@@ -302,7 +302,7 @@ impl<S: 'static> Runtime<S> {
     /// current rect, since it re-runs anyway.
     pub(super) fn refresh_layout_seen(&mut self) {
         if self.layout_seen.rects.is_empty() { return; }
-        let keyed = Keyed::new(&self.nodes);
+        let keyed = Keyed::new(&self.nodes, self.layout_seen.rects.len());
         let now: Vec<_> = self.layout_seen.rects.keys().map(|k| self.layout_of(&self.nodes, &keyed, k)).collect();
         for (seen, rect) in self.layout_seen.rects.values_mut().zip(now) { *seen = rect; }
         if self.layout_seen.rects.contains_key(SELECTION) { self.layout_seen.rects.selection = self.selection_boxes(&self.nodes).into(); }
@@ -569,30 +569,40 @@ mod tests {
     }
 }
 
-/// Keyed nodes by key, so each read finds its node without scanning the whole tree.
+/// Keyed nodes by key, so each read finds its node without scanning the whole tree. A few
+/// reads scan instead: indexing every key of a large tree costs more than a handful of scans.
 struct Keyed<'a> {
-    /// Each key's first node.
-    first: HashMap<&'a str, u32>,
+    /// Each key's first node; none when reads scan.
+    first: Option<HashMap<&'a str, u32>>,
     /// The next node with the same key, or `u32::MAX`.
     next: Vec<u32>,
 }
 
+/// Reads up to this many scan the nodes rather than index them.
+const SCAN_READS: usize = 8;
+
 impl<'a> Keyed<'a> {
-    fn new(nodes: &'a [Node]) -> Self {
+    /// For `reads` lookups in `nodes`.
+    fn new(nodes: &'a [Node], reads: usize) -> Self {
+        if reads <= SCAN_READS { return Keyed { first: None, next: Vec::new() }; }
         let mut first = HashMap::default();
         let mut next = vec![u32::MAX; nodes.len()];
         for (i, n) in nodes.iter().enumerate().rev() {
             if let Some(key) = &n.key { next[i] = first.insert(key.as_str(), i as u32).unwrap_or(u32::MAX); }
         }
-        Keyed { first, next }
+        Keyed { first: Some(first), next }
     }
 
     /// The first node `selector` picks (see [`crate::flight::selects`]): its key is the
     /// selector or a tail of it after a `/`.
     fn first(&self, nodes: &[Node], selector: &str) -> Option<usize> {
-        let tails = std::iter::once(selector).chain(selector.match_indices('/').map(|(at, _)| &selector[at + 1..]));
-        tails.filter_map(|key| {
-            let mut i = *self.first.get(key)?;
+        let tails = || std::iter::once(selector).chain(selector.match_indices('/').map(|(at, _)| &selector[at + 1..]));
+        let Some(first) = &self.first else {
+            return nodes.iter().position(|n| n.key.as_deref().is_some_and(|key| tails().any(|t| t == key))
+                && crate::flight::selects(selector, &n.path, n.key.as_deref()));
+        };
+        tails().filter_map(|key| {
+            let mut i = *first.get(key)?;
             while i != u32::MAX {
                 let n = &nodes[i as usize];
                 if crate::flight::selects(selector, &n.path, n.key.as_deref()) { return Some(i as usize); }
