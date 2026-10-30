@@ -47,13 +47,18 @@ fn a_callback_blocked_past_its_cpu_time_warns_once_per_site() {
     assert!(log[0].starts_with("rune: `poll` blocked ") && log[0].contains("on the main thread: move IO off it with `rune::Latest` or a thread"), "{}", log[0]);
 }
 
+/// Computes 30 ms of this thread's CPU time. A machine too loaded to give the thread a quarter of
+/// a core makes that look blocked, as it would in an app, so the test skips then.
 #[test]
 fn a_callback_that_computes_is_not_a_stall() {
     take_log();
+    let (wall, cpu) = (Instant::now(), crate::frame_profile::cpu_ms().unwrap());
     let stall = Stall::start();
-    let until = Instant::now() + Duration::from_millis(30);
     let mut n = 0u64;
-    while Instant::now() < until { n = std::hint::black_box(n.wrapping_add(1)); }
+    while crate::frame_profile::cpu_ms().unwrap() - cpu < 30.0 { n = std::hint::black_box(n.wrapping_add(1)); }
+    if wall.elapsed() > Duration::from_millis(30 * STALL_CPU_RATIO as u64 / 2) {
+        return eprintln!("skipped: the thread got too little CPU to compute in time");
+    }
     stall.end(|| ("test-computing".into(), "`poll`".into()));
     let quick = Stall::start();
     quick.end(|| ("test-quick".into(), "`poll`".into()));
