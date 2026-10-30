@@ -304,7 +304,7 @@ impl Tx {
 
     /// Put `sans` and `mono` (CSS family lists, as `App::families` takes them) behind the
     /// `Family::Sans` and `Family::Mono` slots of every window and overlay, from the next
-    /// frame: a font picker. Each window drops what it shaped and measured in the old families
+    /// frame, and of those opened later: a font picker. Each window drops what it shaped and measured in the old families
     /// (memoized subtrees included), lays out again and draws one frame. A family that isn't
     /// registered or installed falls back as it would at launch. Asking for the families the
     /// slots already hold costs nothing. [`rune::text::measure`](crate::text::measure) follows

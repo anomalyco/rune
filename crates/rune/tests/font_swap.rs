@@ -5,11 +5,12 @@ use std::cell::Cell;
 use std::sync::{Mutex, MutexGuard};
 
 use rune::text::TextSystem;
-use rune::{El, Env, Runtime, TextStyle, col, memo, row, text};
+use rune::{App, AppSpec, El, Env, Runtime, TextStyle, col, memo, row, text};
 
 const INTER: &[u8] = include_bytes!("../assets/Inter-Regular.ttf");
 const PLEX: &[u8] = include_bytes!("../../../themes/opencode/assets/fonts/IBMPlexMono-Regular.ttf");
 const LAUNCH: (&str, &str) = ("Inter", "IBM Plex Mono");
+static APP_FONTS: &[&[u8]] = &[INTER, PLEX];
 
 /// `rune::text::measure` follows the process's latest fonts, so these tests take turns.
 static SERIAL: Mutex<()> = Mutex::new(());
@@ -115,4 +116,32 @@ fn a_missing_family_falls_back_as_at_launch() {
     switch(&mut rt, "Rune Missing Family", "Rune Missing Mono");
     assert_eq!(widths(&rt), fresh);
     assert!(widths(&rt).iter().all(|w| *w > 0.0));
+}
+
+/// A window of an app launched in `LAUNCH`, as a window opens it, before its first frame.
+fn open_window() -> Runtime<()> {
+    let mut spec = AppSpec::new("fonts", (600.0, 400.0), || (), view);
+    spec.fonts = APP_FONTS;
+    spec.families = LAUNCH;
+    App::new(spec).headless_runtime((600.0, 400.0), Env::new(true, 2.0))
+}
+
+#[test]
+fn a_window_opened_after_a_switch_starts_in_the_new_families() {
+    let _serial = serial();
+    let switched = ("IBM Plex Mono", "Inter");
+    let fresh = widths(&launch(switched));
+    let switched_width = rune::text::measure("Hamburgefonstiv 0123", &[], STYLE, None).0;
+    let mut first = open_window();
+    first.frame(0.0);
+    let launch_width = rune::text::measure("Hamburgefonstiv 0123", &[], STYLE, None).0;
+    assert!((launch_width - switched_width).abs() > 1.0, "the families measure apart");
+    switch(&mut first, switched.0, switched.1);
+    let mut second = open_window();
+    let (w, _) = rune::text::measure("Hamburgefonstiv 0123", &[], STYLE, None);
+    assert_eq!(w, switched_width, "measure stays in the chosen families before its first frame");
+    assert_eq!(second.font_families(), switched, "the new window starts in the chosen families");
+    second.frame(0.0);
+    assert_eq!(widths(&second), fresh);
+    assert_eq!(rune::text::measure("Hamburgefonstiv 0123", &[], STYLE, None).0, switched_width);
 }

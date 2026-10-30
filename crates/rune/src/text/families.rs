@@ -32,6 +32,18 @@ pub(super) fn slots(sans: &str, mono: &str) -> (String, String) {
 }
 
 impl TextSystem {
+    /// A window's or overlay's text system: in the families chosen for every window when the
+    /// app has chosen, else in `families`. Opening one after a switch then never sends
+    /// [`measure`](super::measure) back to the launch families.
+    pub(crate) fn for_window(fonts: &[&'static [u8]], families: (&str, &str)) -> Self {
+        CHOSEN.with_borrow(|(n, chosen)| {
+            let families = chosen.as_ref().map_or(families, |(sans, mono)| (sans.as_str(), mono.as_str()));
+            let mut text = TextSystem::new(fonts, families);
+            text.chosen = *n;
+            text
+        })
+    }
+
     /// The sans and mono slots' families (CSS lists), as [`TextSystem::new`] or
     /// [`Self::set_families`] named them.
     pub fn families(&self) -> (&str, &str) {

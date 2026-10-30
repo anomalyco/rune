@@ -136,7 +136,7 @@ pub fn extra_args() -> &'static [String] {
 }
 
 pub(crate) fn runtime_for<S: 'static>(spec: &AppSpec<S>, state: S, size: (f32, f32), env: Env, waker: Waker) -> Runtime<S> {
-    let text = TextSystem::new(spec.fonts, spec.families);
+    let text = TextSystem::for_window(spec.fonts, spec.families);
     let mut rt = Runtime::with_text(state, spec.view, size, env, text);
     rt.poll = spec.poll;
     rt.on_key = spec.on_key;

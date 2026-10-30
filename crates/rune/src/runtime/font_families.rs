@@ -5,8 +5,9 @@ use super::*;
 impl<S: 'static> Runtime<S> {
     /// Put `sans` and `mono` behind the `Family::Sans` and `Family::Mono` slots, as
     /// `Tx::set_font_families` does from a handler. Every runtime on this thread follows on its
-    /// next frame (all of an app's windows and overlays); this one drops what it shaped and
-    /// measured in the old families now. Asking for the families it already has costs nothing.
+    /// next frame (all of an app's windows and overlays), and windows opened later start in
+    /// them. This one drops what it shaped and measured in the old families now. Asking for the
+    /// families it already has costs nothing.
     pub fn set_font_families(&mut self, sans: &str, mono: &str) {
         crate::text::choose_families(sans, mono);
         self.follow_font_families();

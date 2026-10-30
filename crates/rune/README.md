@@ -1004,7 +1004,7 @@ matches a code block set in `Family::SystemMono`.
 
 `tx.set_font_families(sans, mono)` swaps what's behind the slots while the app runs, for a
 UI or code font picker; it takes the same lists as `AppSpec::families`. Every window and
-overlay follows on its next frame. Each drops the layouts it shaped in the old families,
+overlay follows on its next frame, and one opened later starts in them. Each drops the layouts it shaped in the old families,
 re-runs memoized subtrees, lays out again and draws one frame. `rune::text::measure` follows
 too. A cache of measured sizes outside Rune should key on `rune::text::font_epoch()`. A family
 that isn't installed falls back as it would at launch, and asking for the families the slots

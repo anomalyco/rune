@@ -347,7 +347,7 @@ impl<T: 'static> Overlay<T> {
         let ConfiguredOverlay { spec, options, on_key, on_created, poll, on_focus, compositor, setup, srgb_blend, macos_level, modifier_keys, animate_reveal } = configured.into();
         let shared = Arc::new(Shared { native: Mutex::default(), requests: Mutex::default(), availability: AtomicU8::new(0), wake: Mutex::new(None), stats: Arc::default() });
         let meter = crate::surface_stats::SurfaceMeter::new(spec.name, shared.stats.clone());
-        let text = TextSystem::new(app.fonts, app.families);
+        let text = TextSystem::for_window(app.fonts, app.families);
         let mut rt = Runtime::with_text(state, spec.view, spec.size, Env::default(), text);
         rt.set_srgb_blend(srgb_blend);
         rt.set_system_reduced_motion(crate::preferences::reduced_motion());
