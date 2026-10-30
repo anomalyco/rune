@@ -94,6 +94,57 @@ pub(super) fn markdown_diagrams(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     col().w(520.0).child(Markdown::new(DIAGRAMS).build(k))
 }
 
+/// What the lenient parser reads: an unclosed `[/…` label is a plain rectangle, a line that doesn't
+/// read is skipped; plus a class diagram and sequence `box` groups with a `rect` band.
+const LENIENT: &str = r#"```mermaid
+flowchart LR
+    A[List + count] --> B[/items split view]
+    B --> C[Details]
+    C --> D[Pause / Resume / Delete]
+    C -- --> D
+```
+
+```mermaid
+classDiagram
+    direction LR
+    class Shape {
+        <<trait>>
+        +area() f32
+    }
+    class Circle {
+        +radius f32
+    }
+    class Canvas {
+        +shapes Vec~Shape~
+        +draw()
+    }
+    Shape <|.. Circle
+    Canvas o-- "many" Shape : holds
+```
+
+```mermaid
+sequenceDiagram
+    box Front
+        actor U as User
+        participant A as App
+    end
+    box Back
+        participant S as Server
+    end
+    U->>A: open list
+    rect rgb(80, 140, 220)
+        A->>+S: fetch items
+        S-->>-A: 20 items
+    end
+    A-->>U: show list
+```
+"#;
+
+pub(super) fn markdown_lenient(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let style = MarkdownStyle::from_kit(k).diagram_max_width(560.0);
+    col().w(560.0).child(Markdown::new(LENIENT).style(style).build(k))
+}
+
 /// A table without an outline, with a dimmed header and figures that line up, and a diff whose
 /// line text is tinted too.
 const TABLE_STYLES: &str = "| Field | Compared |\n|---|---|\n| title | yes |\n| updatedAt | yes |\n| draft cursor | no |\n\n| Build | Files | Time | Size |\n|:--|--:|--:|--:|\n| debug | 1,204 | 41.8 s | 118.4 MB |\n| release | 1,204 | 71.0 s | 31.1 MB |\n| perf | 1,211 | 69.6 s | 33.7 MB |\n\n```diff\n@@ -3,3 +3,3 @@ fields:\n   title: compared\n-  draft: compared\n+  draft: ignored\n```\n";

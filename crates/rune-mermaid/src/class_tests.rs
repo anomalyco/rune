@@ -46,15 +46,19 @@ fn classes_members_stereotypes_namespaces_and_relations() {
 }
 
 #[test]
-fn malformed_class_diagrams_are_rejected() {
-    for src in [
-        "classDiagram",
-        "classDiagram\nclass Open {\n  +x",
-        "classDiagram\n}",
-        "classDiagram\njust garbage words here",
-    ] {
+fn only_sources_where_nothing_reads_are_rejected() {
+    for src in ["classDiagram", "classDiagram\n}", "classDiagram\njust garbage words here"] {
         assert!(crate::parse(src).is_none(), "{src:?}");
     }
+}
+
+#[test]
+fn a_statement_that_does_not_read_is_skipped_with_its_body() {
+    let c = cls("classDiagram\nclass Open {\n  +x");
+    assert_eq!(c.classes[0].fields, ["+x"], "an open class body closes at the end");
+    let c = cls("classDiagram\njust garbage words here\nclass Bad<<x {\n  +y\n}\nA --> B");
+    let ids: Vec<&str> = c.classes.iter().map(|k| k.id.as_str()).collect();
+    assert_eq!((ids, c.edges.len()), (vec!["A", "B"], 1));
 }
 
 #[test]

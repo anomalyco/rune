@@ -7,7 +7,7 @@ use rune::{Align, Color, TextStyle};
 use super::canvas::{
     Canvas, Measured, Scene, arrowhead, ellipse, fit, measure, over_color, rounded_rect,
 };
-use super::{DiagramStyle, MAX_ITEMS, adapt_fill, clean, clean_quoted, parse_color_spec};
+use super::{DiagramStyle, MAX_DEPTH, MAX_ITEMS, adapt_fill, clean, clean_quoted, parse_color_spec};
 
 #[derive(Debug)]
 pub(crate) struct Participant {
@@ -79,15 +79,21 @@ pub(crate) fn parse(_header: &str, body: &[&str]) -> Option<Sequence> {
         depth: 0,
         active_box: None,
     };
+    // A line that doesn't read is skipped; one past the bounds leaves the whole diagram as source.
     for line in body {
-        p.line(line)?;
-        if p.s.participants.len() > 40 || p.s.events.len() > MAX_ITEMS {
+        let (people, events) = (p.s.participants.len(), p.s.events.len());
+        if p.line(line).is_none() {
+            // Whatever the line added before it failed goes too.
+            p.s.participants.truncate(people);
+            p.s.events.truncate(events);
+            p.ids.retain(|_, &mut i| i < people);
+        }
+        if p.s.participants.len() > 40 || p.s.events.len() > MAX_ITEMS || p.depth > MAX_DEPTH {
             return None;
         }
     }
-    if p.active_box.is_some() || p.depth != 0 {
-        return None;
-    }
+    // Frames still open at the end close there.
+    p.s.events.extend((0..p.depth).map(|_| Event::End));
     (!p.s.participants.is_empty()).then_some(p.s)
 }
 
@@ -177,9 +183,8 @@ impl Parser {
     }
 
     fn declare(&mut self, rest: &str, actor: bool) -> Option<()> {
-        if rest.contains("@{") {
-            return None;
-        }
+        // v11 `participant A@{ "type": "database" }` draws as a plain participant.
+        let rest = rest.split_once("@{").map_or(rest, |(id, _)| id);
         let (id, label) = match rest.split_once(" as ") {
             Some((id, label)) => (id.trim(), clean_quoted(label)),
             None => (rest.trim(), clean_quoted(rest)),

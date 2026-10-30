@@ -64,14 +64,30 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<ClassDiagram> {
         class_defs: HashMap::new(),
         node_classes: HashMap::new(),
         node_styles: HashMap::new(),
+        skipping: false,
+        members: 0,
+        over: false,
     };
+    // A statement that doesn't read is skipped (with its `{ … }` body); one past the bounds leaves
+    // the whole diagram as source.
     for line in std::iter::once(header).chain(body.iter().copied()) {
         for stmt in statements(line) {
-            p.statement(stmt)?;
+            if p.skipping {
+                p.skipping = stmt != "}";
+            } else {
+                let (classes, edges) = (p.d.classes.len(), p.d.edges.len());
+                if p.statement(stmt).is_none() {
+                    if p.over {
+                        return None;
+                    }
+                    // Whatever the statement added before it failed goes too.
+                    p.d.classes.truncate(classes);
+                    p.d.edges.truncate(edges);
+                    p.ids.retain(|_, &mut i| i < classes);
+                    p.skipping = stmt.ends_with('{');
+                }
+            }
         }
-    }
-    if p.active_class.is_some() || p.active_ns.is_some() {
-        return None;
     }
     for (id, &idx) in &p.ids {
         let mut st = NodeStyle::default();
@@ -98,11 +114,17 @@ struct Parser {
     class_defs: HashMap<String, NodeStyle>,
     node_classes: HashMap<String, Vec<String>>,
     node_styles: HashMap<String, NodeStyle>,
+    /// Inside the body of a block that didn't read, until its `}`.
+    skipping: bool,
+    members: usize,
+    /// Set once the source goes past [`MAX_ITEMS`] (or four times that in members).
+    over: bool,
 }
 
 impl Parser {
-    fn budget(&self) -> Option<()> {
-        (self.d.classes.len() + self.d.edges.len() + self.d.namespaces.len() < MAX_ITEMS).then_some(())
+    fn budget(&mut self) -> Option<()> {
+        self.over |= self.d.classes.len() + self.d.edges.len() + self.d.namespaces.len() >= MAX_ITEMS;
+        (!self.over).then_some(())
     }
 
     fn statement(&mut self, s: &str) -> Option<()> {
@@ -112,7 +134,7 @@ impl Parser {
                 return Some(());
             }
             self.add_member(idx, s);
-            return Some(());
+            return (!self.over).then_some(());
         }
         if s == "}" {
             self.active_ns.take()?;
@@ -186,7 +208,7 @@ impl Parser {
                     let id = self.strip_class(lhs.trim())?;
                     let idx = self.ensure_class(&id)?;
                     self.add_member(idx, member.trim());
-                    return Some(());
+                    return (!self.over).then_some(());
                 }
                 return None;
             }
@@ -246,6 +268,8 @@ impl Parser {
             self.d.classes[idx].stereo = Some(clean(st));
             return;
         }
+        self.members += 1;
+        self.over |= self.members > MAX_ITEMS * 4;
         let cleaned = clean(&tilde_generics(t));
         if cleaned.contains('(') && cleaned.contains(')') {
             self.d.classes[idx].methods.push(cleaned);

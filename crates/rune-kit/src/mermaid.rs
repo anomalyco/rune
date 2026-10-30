@@ -5,8 +5,9 @@
 //! sequence diagrams (`sequenceDiagram` with participants, actors, `box` groups, `rect` bands,
 //! activations, notes and frames), state diagrams (`stateDiagram`/`stateDiagram-v2` with `[*]`,
 //! composite states and `<<choice>>`) and class diagrams (`classDiagram` with fields, methods,
-//! stereotypes, namespaces and UML relations). Anything outside the supported subset returns
-//! `None`, and [`crate::Markdown`] falls back to the code block.
+//! stereotypes, namespaces and UML relations). Lines that don't read are skipped and the rest
+//! draws; an unknown diagram type, or a source where nothing reads, returns `None`, and
+//! [`crate::Markdown`] falls back to the code block.
 
 use rune::El;
 

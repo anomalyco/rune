@@ -25,8 +25,11 @@
 //! `<<trait>>` / `<<enum>>` stereotypes, `namespace Name { … }`, and UML relationships `<|--`,
 //! `*--`, `o--`, `-->`, `..>`, `..|>`, `--` and `..` with labels and cardinalities.
 //!
-//! Anything else (gantt, pie, ER, timeline, gitGraph, mindmap, unknown statements or unbalanced
-//! brackets) is unsupported: [`render`] returns `None` so callers can show the source.
+//! **Leniency.** A statement that doesn't read is skipped and the rest still draws; a shape opener
+//! without its closer (`B[/items split view]`) is a plain rectangle holding the text as written;
+//! blocks left open close at the end. [`render`] returns `None`, so callers can show the source,
+//! only for a diagram type it doesn't know (gantt, pie, ER, timeline, gitGraph, mindmap, …), when
+//! nothing reads, or past the size bounds (400 items, nesting 8 deep).
 
 mod canvas;
 mod class;
@@ -162,6 +165,9 @@ pub(crate) struct Parsed {
 
 /// Diagrams bigger than this are left as source: they would be unreadable at markdown width.
 pub(crate) const MAX_ITEMS: usize = 400;
+
+/// How deep subgraphs, composite states, frames and other blocks may nest.
+pub(crate) const MAX_DEPTH: usize = 8;
 
 pub(crate) fn parse(src: &str) -> Option<Parsed> {
     let mut cleaned = Vec::new();

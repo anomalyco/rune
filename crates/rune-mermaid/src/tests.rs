@@ -141,9 +141,9 @@ fn the_biggest_allowed_charts_draw_in_bounded_time() {
 }
 
 #[test]
-fn repeated_create_falls_back_without_recursing() {
-    hostile(&format!("sequenceDiagram\n{}participant A\nA->>B: hi", "create ".repeat(100_000)), false);
-    hostile("sequenceDiagram\ncreate loop x\nA->>B: hi\nend", false);
+fn repeated_create_is_skipped_without_recursing() {
+    hostile(&format!("sequenceDiagram\n{}participant A\nA->>B: hi", "create ".repeat(100_000)), true);
+    hostile("sequenceDiagram\ncreate loop x\nA->>B: hi\nend", true);
     hostile("sequenceDiagram\ncreate participant A\nA->>B: hi", true);
     hostile("sequenceDiagram\nA->>B: hi\ncreate actor C as Carol\nB->>C: hello", true);
 }

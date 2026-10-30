@@ -73,22 +73,36 @@ fn notes_frames_boxes_and_explicit_activation() {
 }
 
 #[test]
-fn malformed_and_unsupported_input_is_rejected() {
-    for src in [
-        "sequenceDiagram",
-        "sequenceDiagram\nA something B",
-        "sequenceDiagram\n->>B: no sender",
-        "sequenceDiagram\nA->>: no receiver",
-        "sequenceDiagram\nend",
-        "sequenceDiagram\nelse x",
-        "sequenceDiagram\nloop unclosed\n  A->>B: hi",
-        "sequenceDiagram\nbox unclosed\n  participant A",
-        "sequenceDiagram\nNote sideways of A: x",
-        "sequenceDiagram\nNote over A no colon",
-        "sequenceDiagram\nparticipant A@{ \"type\": \"database\" }",
-    ] {
+fn only_sources_where_nothing_reads_are_rejected() {
+    for src in ["sequenceDiagram", "sequenceDiagram\nA something B", "sequenceDiagram\n->>B: no sender\nend\nelse x"] {
         assert!(crate::parse(src).is_none(), "{src:?}");
     }
+}
+
+#[test]
+fn a_line_that_does_not_read_is_skipped() {
+    let msgs = |src: &str| seq(src).events.iter().filter(|e| matches!(e, Event::Message(_))).count();
+    for src in [
+        "sequenceDiagram\nA something B\nA->>B: hi",
+        "sequenceDiagram\n->>B: no sender\nA->>B: hi",
+        "sequenceDiagram\nA->>: no receiver\nA->>B: hi",
+        "sequenceDiagram\nend\nelse x\nA->>B: hi",
+        "sequenceDiagram\nNote sideways of A: x\nNote over A no colon\nA->>B: hi",
+    ] {
+        assert_eq!(msgs(src), 1, "{src:?}");
+        assert_eq!(seq(src).participants.len(), 2, "a line that fails adds no participants: {src:?}");
+    }
+    let s = seq("sequenceDiagram\nloop unclosed\n  A->>B: hi\nbox unclosed\n  participant C");
+    assert!(matches!(s.events.last(), Some(Event::End)), "an open frame closes at the end");
+    assert_eq!(s.participants[2].group, Some(0));
+    let s = seq("sequenceDiagram\nparticipant A@{ \"type\": \"database\" }\nA->>B: hi");
+    assert_eq!(s.participants[0].label, "A");
+}
+
+#[test]
+fn nesting_past_the_bound_still_rejects() {
+    let deep = "loop x\n".repeat(crate::MAX_DEPTH + 1);
+    assert!(crate::parse(&format!("sequenceDiagram\n{deep}A->>B: hi")).is_none());
 }
 
 #[test]

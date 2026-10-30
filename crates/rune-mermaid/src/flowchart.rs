@@ -8,7 +8,7 @@ use super::canvas::{Canvas, Scene, fit, measure};
 use super::layered::{MAX_MINLEN, Spacing};
 use super::layered_draw::{ClusterSpec, Dir, DrawNode, Edge, Head, Line, NodeShape, layered_canvas, node_size};
 use super::{
-    Cur, DiagramStyle, Hover, EdgeStyle, MAX_ITEMS, NodeStyle, clean, clean_quoted,
+    Cur, DiagramStyle, Hover, EdgeStyle, MAX_DEPTH, MAX_ITEMS, NodeStyle, clean, clean_quoted,
     parse_edge_style_props, parse_style_props, statements,
 };
 
@@ -41,7 +41,8 @@ pub(crate) struct Flowchart {
 /// `header` is what follows `graph`/`flowchart` on its line; `body` the remaining lines.
 pub(crate) fn parse(header: &str, body: &[&str]) -> Option<Flowchart> {
     let (dir, rest) = header.trim_start().split_once(|c: char| c.is_whitespace() || c == ';').unwrap_or((header.trim(), ""));
-    let dir = Dir::parse(dir)?;
+    // A direction it doesn't know reads top-down.
+    let dir = Dir::parse(dir).unwrap_or(Dir::Down);
     let mut p = Parser {
         f: Flowchart { title: None, dir, nodes: Vec::new(), edges: Vec::new(), subgraphs: Vec::new() },
         ids: HashMap::new(),
@@ -51,14 +52,15 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<Flowchart> {
         node_styles: HashMap::new(),
         default_edge_style: EdgeStyle::default(),
         edge_styles: HashMap::new(),
+        over: false,
     };
+    // A statement that doesn't read is skipped; one past the bounds leaves the whole diagram as source.
     for line in std::iter::once(rest).chain(body.iter().copied()) {
         for stmt in statements(line) {
-            p.statement(stmt)?;
+            if p.statement(stmt).is_none() && p.over {
+                return None;
+            }
         }
-    }
-    if !p.stack.is_empty() {
-        return None;
     }
     for (id, &idx) in &p.ids {
         let mut st = NodeStyle::default();
@@ -150,9 +152,9 @@ struct Parser {
     node_styles: HashMap<String, NodeStyle>,
     default_edge_style: EdgeStyle,
     edge_styles: HashMap<usize, EdgeStyle>,
+    /// Set once the source goes past [`MAX_ITEMS`] or [`MAX_DEPTH`].
+    over: bool,
 }
-
-const MAX_DEPTH: usize = 8;
 
 struct Link {
     line: Line,
@@ -163,8 +165,9 @@ struct Link {
 }
 
 impl Parser {
-    fn budget(&self) -> Option<()> {
-        (self.f.nodes.len() + self.f.edges.len() + self.f.subgraphs.len() < MAX_ITEMS).then_some(())
+    fn budget(&mut self) -> Option<()> {
+        self.over |= self.f.nodes.len() + self.f.edges.len() + self.f.subgraphs.len() >= MAX_ITEMS;
+        (!self.over).then_some(())
     }
 
     fn statement(&mut self, s: &str) -> Option<()> {
@@ -185,6 +188,7 @@ impl Parser {
                 };
                 self.budget()?;
                 if self.stack.len() >= MAX_DEPTH {
+                    self.over = true;
                     return None;
                 }
                 self.f.subgraphs.push(Subgraph { id: sg_id, title, parent: self.stack.last().copied() });
@@ -255,19 +259,25 @@ impl Parser {
         Some(())
     }
 
+    /// `A --> B & C -.-> D`, read whole before anything is added, so a chain that doesn't read
+    /// leaves no stray nodes behind.
     fn chain(&mut self, s: &str) -> Option<()> {
         let mut c = Cur::new(s);
-        let mut left = self.group(&mut c)?;
+        let mut groups = vec![group(&mut c)?];
+        let mut links = Vec::new();
         loop {
             c.skip_ws();
             if c.done() {
-                return Some(());
+                break;
             }
-            let link = link(&mut c)?;
+            links.push(link(&mut c)?);
             c.skip_ws();
-            let right = self.group(&mut c)?;
-            for &from in &left {
-                for &to in &right {
+            groups.push(group(&mut c)?);
+        }
+        let groups: Vec<Vec<usize>> = groups.into_iter().map(|g| g.into_iter().map(|n| self.node(n)).collect()).collect::<Option<_>>()?;
+        for (link, pair) in links.iter().zip(groups.windows(2)) {
+            for &from in &pair[0] {
+                for &to in &pair[1] {
                     self.budget()?;
                     self.f.edges.push(Edge {
                         from,
@@ -281,27 +291,13 @@ impl Parser {
                     });
                 }
             }
-            left = right;
         }
+        Some(())
     }
 
-    fn group(&mut self, c: &mut Cur) -> Option<Vec<usize>> {
-        let mut v = vec![self.node(c)?];
-        loop {
-            c.skip_ws();
-            if !c.eat("&") {
-                return Some(v);
-            }
-            c.skip_ws();
-            v.push(self.node(c)?);
-        }
-    }
-
-    fn node(&mut self, c: &mut Cur) -> Option<usize> {
-        let id = ident(c)?;
-        let shape = shape(c)?;
-        if c.eat(":::") {
-            let cls = ident(c)?;
+    fn node(&mut self, r: NodeRef) -> Option<usize> {
+        let NodeRef { id, shape, class } = r;
+        if let Some(cls) = class {
             self.node_classes.entry(id.clone()).or_default().push(cls);
         }
         let cluster = self.stack.last().copied();
@@ -334,6 +330,32 @@ impl Parser {
         }
         Some(i)
     }
+}
+
+/// A node as written in a chain: its id, its shape and label if given, and a `:::class`.
+struct NodeRef {
+    id: String,
+    shape: Option<(Option<String>, NodeShape)>,
+    class: Option<String>,
+}
+
+fn group(c: &mut Cur) -> Option<Vec<NodeRef>> {
+    let mut v = vec![node_ref(c)?];
+    loop {
+        c.skip_ws();
+        if !c.eat("&") {
+            return Some(v);
+        }
+        c.skip_ws();
+        v.push(node_ref(c)?);
+    }
+}
+
+fn node_ref(c: &mut Cur) -> Option<NodeRef> {
+    let id = ident(c)?;
+    let shape = shape(c);
+    let class = if c.eat(":::") { Some(ident(c)?) } else { None };
+    Some(NodeRef { id, shape, class })
 }
 
 fn ident(c: &mut Cur) -> Option<String> {
@@ -450,44 +472,40 @@ fn find_unquoted(s: &str, needle: &str) -> Option<usize> {
     None
 }
 
-/// Mermaid v11 `@{ shape: cyl, label: "Postgres" }` node metadata.
+/// Mermaid v11 `@{ shape: cyl, label: "Postgres" }` node metadata. Shapes it doesn't know, and
+/// parts it can't read, leave a plain rectangle.
 fn parse_at_shape(c: &mut Cur) -> Option<(Option<String>, NodeShape)> {
     c.eat("@{");
     let end = find_close(c.rest(), "{", "}")?;
     let inner = &c.rest()[..end];
     let mut kind = NodeShape::Rect;
     let mut label = None;
-    let mut saw_key = false;
-    for part in split_top_commas(inner) {
-        let (k, v) = part.split_once(':')?;
-        saw_key = true;
+    for (k, v) in split_top_commas(inner).into_iter().filter_map(|part| part.split_once(':')) {
         let v = v.trim();
         match k.trim() {
-            "shape" => {
-                kind = match v.trim_matches('"').to_ascii_lowercase().as_str() {
-                    "rect" | "proc" | "process" | "doc" | "card" => NodeShape::Rect,
-                    "rounded" | "event" => NodeShape::Round,
-                    "stadium" | "pill" | "terminal" => NodeShape::Stadium,
-                    "subproc" | "subprocess" | "subroutine" | "fr-rect" => NodeShape::Subroutine,
-                    "cyl" | "cylinder" | "db" | "database" | "lin-cyl" => NodeShape::Cylinder,
-                    "circle" | "circ" | "sm-circ" | "dbl-circ" | "f-circ" => NodeShape::Circle,
-                    "diam" | "diamond" | "decision" => NodeShape::Diamond,
-                    "hex" | "hexagon" | "prepare" => NodeShape::Hexagon,
-                    "lean-r" | "lean-l" | "in-out" | "out-in" | "parallelogram" => NodeShape::Parallelogram,
-                    "trap-b" | "trap-t" | "trapezoid" | "manual" => NodeShape::Trapezoid,
-                    "odd" | "flag" => NodeShape::Asymmetric,
-                    _ => return None,
-                };
-            }
+            "shape" => kind = at_shape(&v.trim_matches('"').to_ascii_lowercase()),
             "label" => label = Some(clean_quoted(v)),
             _ => {}
         }
     }
-    if !saw_key {
-        return None;
-    }
     c.i += end + 1;
     Some((label, kind))
+}
+
+fn at_shape(name: &str) -> NodeShape {
+    match name {
+        "rounded" | "event" => NodeShape::Round,
+        "stadium" | "pill" | "terminal" => NodeShape::Stadium,
+        "subproc" | "subprocess" | "subroutine" | "fr-rect" => NodeShape::Subroutine,
+        "cyl" | "cylinder" | "db" | "database" | "lin-cyl" => NodeShape::Cylinder,
+        "circle" | "circ" | "sm-circ" | "dbl-circ" | "f-circ" => NodeShape::Circle,
+        "diam" | "diamond" | "decision" => NodeShape::Diamond,
+        "hex" | "hexagon" | "prepare" => NodeShape::Hexagon,
+        "lean-r" | "lean-l" | "in-out" | "out-in" | "parallelogram" => NodeShape::Parallelogram,
+        "trap-b" | "trap-t" | "trapezoid" | "manual" => NodeShape::Trapezoid,
+        "odd" | "flag" => NodeShape::Asymmetric,
+        _ => NodeShape::Rect,
+    }
 }
 
 fn split_top_commas(s: &str) -> Vec<&str> {
@@ -518,25 +536,35 @@ fn split_top_commas(s: &str) -> Vec<&str> {
     out
 }
 
-/// A node's bracketed label: `Some(None)` when there is none, `None` when it is malformed.
-fn shape(c: &mut Cur) -> Option<Option<(Option<String>, NodeShape)>> {
+/// A node's bracketed label and shape, `None` when it has none. An opener without its closer
+/// reads as a plain rectangle holding the text as written, so `[/route]` is the label `/route`.
+fn shape(c: &mut Cur) -> Option<(Option<String>, NodeShape)> {
+    let start = c.i;
+    if !c.rest().starts_with("@{") && !matches!(c.peek()?, '[' | '(' | '{' | '>') {
+        return None;
+    }
+    exact_shape(c).or_else(|| {
+        c.i = start;
+        Some(loose_shape(c))
+    })
+}
+
+fn exact_shape(c: &mut Cur) -> Option<(Option<String>, NodeShape)> {
     if c.rest().starts_with("@{") {
-        return parse_at_shape(c).map(Some);
+        return parse_at_shape(c);
     }
     for open in ["[/", "[\\"] {
-        if c.rest().starts_with(open) {
-            c.eat(open);
-            let rest = c.rest();
-            let end = find_unquoted(rest, "/]").into_iter().chain(find_unquoted(rest, "\\]")).min()?;
-            let same = rest[end..].starts_with(&open[1..]);
-            let label = clean_quoted(&rest[..end]);
-            c.i += end + 2;
-            return Some(Some((Some(label), if same { NodeShape::Parallelogram } else { NodeShape::Trapezoid })));
+        if c.eat(open) {
+            let end = find_close(c.rest(), "[", "]")?;
+            let inner = &c.rest()[..end];
+            let close = inner.chars().last().filter(|&ch| ch == '/' || ch == '\\')?;
+            let label = clean_quoted(&inner[..inner.len() - 1]);
+            c.i += end + 1;
+            let same = open.ends_with(close);
+            return Some((Some(label), if same { NodeShape::Parallelogram } else { NodeShape::Trapezoid }));
         }
     }
-    let Some(&(open, close, kind)) = SHAPES.iter().find(|(open, ..)| c.rest().starts_with(open)) else {
-        return Some(None);
-    };
+    let &(open, close, kind) = SHAPES.iter().find(|(open, ..)| c.rest().starts_with(open))?;
     c.eat(open);
     c.skip_ws();
     let label = if c.peek() == Some('"') {
@@ -554,7 +582,26 @@ fn shape(c: &mut Cur) -> Option<Option<(Option<String>, NodeShape)>> {
         c.i += end + close.len();
         label
     };
-    Some(Some((Some(clean(&label)), kind)))
+    Some((Some(clean(&label)), kind))
+}
+
+/// A rectangle from the opener's first bracket to its match, or to the end of the statement.
+fn loose_shape(c: &mut Cur) -> (Option<String>, NodeShape) {
+    let rest = c.rest();
+    let at = rest.starts_with("@{");
+    let (open, close) = match rest.chars().next() {
+        Some('(') => ("(", ")"),
+        Some('{') => ("{", "}"),
+        Some('>') => (">", "]"),
+        _ if at => ("{", "}"),
+        _ => ("[", "]"),
+    };
+    let skip = if at { 2 } else { 1 };
+    let body = &rest[skip..];
+    let (text, used) = find_close(body, open, close).map_or((body, rest.len()), |e| (&body[..e], skip + e + 1));
+    c.i += used;
+    let label = clean_quoted(text);
+    ((!at && !label.is_empty()).then_some(label), NodeShape::Rect)
 }
 
 fn run(c: &mut Cur) -> String {
