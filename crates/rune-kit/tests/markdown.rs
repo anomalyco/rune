@@ -511,7 +511,7 @@ fn a_mermaid_block_draws_a_diagram_or_falls_back_to_its_source() {
     for bad in ["pie title Pets\n  \"Dogs\": 3", "graph TD\nA[unclosed --> B", "sequenceDiagram\n  A->>"] {
         let rt = laid_out(&format!("```mermaid\n{bad}\n```\n"));
         let k = keys(&rt);
-        assert!(k.iter().any(|k| k == "source") && k.iter().any(|k| k == "hint") && !k.iter().any(|k| k == "diagram"), "{bad:?}: {k:?}");
+        assert!(k.iter().any(|k| k == "source") && !k.iter().any(|k| k == "hint") && !k.iter().any(|k| k == "diagram"), "{bad:?}: {k:?}");
     }
 
     // Until the fence closes, the source is a code block that grows in place.

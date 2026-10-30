@@ -126,6 +126,31 @@ fn malformed_and_unsupported_input_is_rejected() {
 }
 
 #[test]
+fn an_unclosed_lean_bracket_is_a_plain_label_starting_with_a_slash() {
+    let f = flow(
+        "flowchart LR\n  Rail[Sidebar Automations + count] --> Route[/automations split view]\n  Route --> Store[Per-server reactive schedule cache]\n  Store --> Act[Pause / Resume / Delete / Open session]",
+    );
+    let labels: Vec<(&str, NodeShape)> = f.nodes.iter().map(|n| (n.label.as_str(), n.shape)).collect();
+    assert_eq!(
+        labels,
+        vec![
+            ("Sidebar Automations + count", NodeShape::Rect),
+            ("/automations split view", NodeShape::Rect),
+            ("Per-server reactive schedule cache", NodeShape::Rect),
+            ("Pause / Resume / Delete / Open session", NodeShape::Rect),
+        ]
+    );
+    assert_eq!(edges(&f), vec![("Rail", "Route"), ("Route", "Store"), ("Store", "Act")]);
+}
+
+#[test]
+fn a_line_that_does_not_parse_is_dropped_and_the_rest_draws() {
+    let f = flow("graph TD\n  A[Start] --> B\n  B -- --> C\n  C{unclosed --> D\n  B --> E");
+    assert_eq!(edges(&f), vec![("A", "B"), ("B", "E")]);
+    assert!(!f.nodes.iter().any(|n| n.id == "C" || n.id == "D"), "a dropped line leaves no nodes behind");
+}
+
+#[test]
 fn every_prefix_of_a_source_parses_or_falls_back_without_panicking() {
     let src = "flowchart TD\n  A[Start] -->|go| B{Ok?}\n  B -- yes --> C([Done])\n  B -.->|no| A\n  subgraph s [Group]\n    C --> D[(Store)]\n  end";
     let paint = DiagramStyle::neutral(false);

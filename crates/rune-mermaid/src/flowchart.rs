@@ -103,10 +103,21 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<Flowchart> {
         class_defs: HashMap::new(),
         node_classes: HashMap::new(),
         node_styles: HashMap::new(),
+        over: false,
     };
     for line in std::iter::once(rest).chain(body.iter().copied()) {
         for stmt in statements(line) {
-            p.statement(stmt)?;
+            let (nodes, edges) = (p.f.nodes.len(), p.f.edges.len());
+            if p.statement(stmt).is_none() {
+                // Past a size or depth bound the chart falls back; a statement that doesn't
+                // parse is dropped whole and the rest still draws.
+                if p.over {
+                    return None;
+                }
+                p.f.nodes.truncate(nodes);
+                p.f.edges.truncate(edges);
+                p.ids.retain(|_, &mut i| i < nodes);
+            }
         }
     }
     for (id, &idx) in &p.ids {
@@ -133,6 +144,8 @@ struct Parser {
     class_defs: HashMap<String, NodeStyle>,
     node_classes: HashMap<String, Vec<String>>,
     node_styles: HashMap<String, NodeStyle>,
+    /// Set once a size or depth bound is hit, which fails the whole chart.
+    over: bool,
 }
 
 /// Subgraphs nest at most this deep.
@@ -149,8 +162,9 @@ struct Link {
 impl Parser {
     /// `None` once the chart already holds [`MAX_ITEMS`] nodes, edges and subgraphs, checked
     /// before each one is added so no single statement can build an unbounded amount.
-    fn budget(&self) -> Option<()> {
-        (self.f.nodes.len() + self.f.edges.len() + self.f.subgraphs.len() < MAX_ITEMS).then_some(())
+    fn budget(&mut self) -> Option<()> {
+        self.over |= self.f.nodes.len() + self.f.edges.len() + self.f.subgraphs.len() >= MAX_ITEMS;
+        (!self.over).then_some(())
     }
 
     fn statement(&mut self, s: &str) -> Option<()> {
@@ -164,6 +178,7 @@ impl Parser {
                 };
                 self.budget()?;
                 if self.stack.len() >= MAX_DEPTH {
+                    self.over = true;
                     return None;
                 }
                 self.f.subgraphs.push(Subgraph { title, parent: self.stack.last().copied() });
@@ -407,12 +422,14 @@ fn shape(c: &mut Cur) -> Option<Option<(String, NodeShape)>> {
     if c.rest().starts_with("@{") {
         return None;
     }
-    // `[/…/]`, `[\…\]` lean; `[/…\]`, `[\…/]` are trapezoids.
+    // `[/…/]`, `[\…\]` lean; `[/…\]`, `[\…/]` are trapezoids. With no closing `/]` or `\]`
+    // it is a plain `[…]` label that starts with the slash.
     for open in ["[/", "[\\"] {
-        if c.rest().starts_with(open) {
+        if let Some(rest) = c.rest().strip_prefix(open)
+            && let Some(end) = find_unquoted(rest, "/]").into_iter().chain(find_unquoted(rest, "\\]")).min()
+        {
             c.eat(open);
             let rest = c.rest();
-            let end = find_unquoted(rest, "/]").into_iter().chain(find_unquoted(rest, "\\]")).min()?;
             let same = rest[end..].starts_with(&open[1..]);
             let label = clean_quoted(&rest[..end]);
             c.i += end + 2;
