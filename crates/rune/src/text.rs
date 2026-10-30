@@ -45,6 +45,10 @@ mod rich_layout;
 pub(crate) use pill_chips::pill_chips;
 mod svg_path;
 mod trak;
+mod underline;
+mod line_metrics;
+pub use line_metrics::{last_line_fill, layout_height, stream_height_lag};
+pub(crate) use underline::underline_edges;
 pub use case::TextCase;
 pub use measure::{TextInk, advance, ink, measure};
 pub use rich_layout::RichLayoutOptions;
@@ -2411,28 +2415,6 @@ impl TextSystem {
     }
 }
 
-/// Layout height in device px: whole lines at the style's line height (an empty text still
-/// takes one line, like a browser).
-pub fn layout_height(l: &Layout<Ink>, style: TextStyle, scale: f32) -> f32 {
-    l.height().max(style.line_px() * scale).ceil()
-}
-
-/// Fraction of the final line occupied by ink advance, excluding hanging whitespace.
-/// Width and the layout use device pixels. No shaping or allocation occurs here.
-pub fn last_line_fill(l: &Layout<Ink>, width: f32) -> f32 {
-    let Some(line) = l.lines().next_back() else { return 0.0 };
-    let m = line.metrics();
-    ((m.advance - m.hanging_advance) / width.max(1.0)).clamp(0.0, 1.0)
-}
-
-/// Height held back while the last line fills (research/18 §7), in points.
-pub fn stream_height_lag(l: &Layout<Ink>, width: f32, scale: f32) -> f32 {
-    let Some(line) = l.lines().next_back() else { return 0.0 };
-    let cap = if l.len() == 1 { 0.52 } else { 0.82 };
-    let lag = line.metrics().line_height / scale * cap * (1.0 - last_line_fill(l, width));
-    (lag * 64.0).round() / 64.0
-}
-
 /// Breaks `layout` into lines, each paragraph indented by its block. A pill's chip that would
 /// end a line apart from its label, or run past the line's end, moves to the next line.
 fn break_lines_with_blocks(
@@ -2787,19 +2769,6 @@ pub(crate) fn move_line(layout: &Layout<Ink>, byte: usize, down: bool) -> Option
     let line = layout.get(if down { idx + 1 } else { idx - 1 })?;
     let m = line.metrics();
     Some(cursor_from_point(layout, bb.x0 as f32, (m.block_min_coord + m.block_max_coord) * 0.5).index())
-}
-
-/// An underline's left and right edges (device px) under layout x `a..b` of `line`, its text
-/// starting at `origin_x`. Both are on whole pixels, so runs that touch share an edge, and one
-/// that ends its line runs on to the text box's edge (its width rounded up): a link split into
-/// a text element a word meets the next word's line with no gap at the space (t942).
-pub(crate) fn underline_edges(line: &parley::Line<'_, Ink>, origin_x: f32, a: f32, b: f32) -> (f32, f32) {
-    let end = line.items().fold(0.0f32, |e, item| match item {
-        PositionedLayoutItem::GlyphRun(gr) => e.max(gr.offset() + gr.advance()),
-        PositionedLayoutItem::InlineBox(_) => e,
-    });
-    let r = if b >= end - 0.01 { (b - 1e-3).ceil() } else { b.round() };
-    ((origin_x + a.round()).round(), (origin_x + r).round())
 }
 
 /// Line boxes (`(BoundingBox, line_idx)`) covering bytes `a..b` of `layout`. When `pill_boxes`

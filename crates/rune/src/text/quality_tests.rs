@@ -710,7 +710,7 @@ fn underlines(words: &[&str]) -> Vec<(f32, f32)> {
     out
 }
 
-/// A link flowed a word an element (Seer's notes) underlines as one line: each word's line
+/// A link flowed a word an element underlines as one line: each word's line
 /// meets the next one's at the space, with no gap where an element's width rounds up (t942).
 #[test]
 fn underlined_words_in_a_row_meet_without_gaps() {
