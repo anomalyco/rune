@@ -569,7 +569,10 @@ impl<T: 'static> Overlay<T> {
                 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
                 if let Some(x11) = &self.x11 { x11.hide(); }
                 #[cfg(target_os = "windows")]
-                if let Some(native) = &mut self.native { native.hide(); }
+                {
+                    let _ = window;
+                    if let Some(native) = &mut self.native { native.hide(); }
+                }
                 #[cfg(target_os = "macos")]
                 if let Some(panel) = &self.panel {
                     panel.hide(fade);
@@ -750,7 +753,10 @@ impl<T: 'static> Overlay<T> {
         }
         let _ = fade;
         #[cfg(target_os = "windows")]
-        if let Some(native) = &mut self.native { native.show(); }
+        {
+            let _ = window;
+            if let Some(native) = &mut self.native { native.show(); }
+        }
         #[cfg(not(target_os = "windows"))]
         window.set_visible(true);
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
