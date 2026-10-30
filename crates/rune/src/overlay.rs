@@ -45,6 +45,8 @@ mod frame;
 use frame::{idle_after, render_frame, step};
 #[path = "overlay/placement.rs"]
 mod placement;
+#[path = "overlay/xwayland.rs"]
+mod xwayland;
 #[cfg(not(target_os = "macos"))]
 pub(crate) use placement::monitor_at;
 use placement::{monitor, position};
@@ -608,24 +610,6 @@ impl<T: 'static> Overlay<T> {
 
     #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
     fn layer(&mut self, _event_loop: &ActiveEventLoop) -> Option<Live> {
-        None
-    }
-
-    /// The compositor has no layer-shell (GNOME): an overlay that takes no input shows on
-    /// XWayland when there is one.
-    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-    fn xwayland(&mut self) -> Option<Live> {
-        if self.options.input.resolved(self.interactive) != OverlayInput::None || self.options.keys == KeyPolicy::OnDemand { return None; }
-        let surface = crate::x11::xwayland::XwaylandSurface::new(self.name, self.at, &self.options)?;
-        let scale = surface.scale();
-        self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities {
-            capture_exclusion: OverlaySupport::Unsupported, global_pointer: OverlaySupport::Unsupported, nonactivating_keys: OverlaySupport::Unsupported,
-        };
-        self.attach(Backing::Xwayland(surface), scale)
-    }
-
-    #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
-    fn xwayland(&mut self) -> Option<Live> {
         None
     }
 
