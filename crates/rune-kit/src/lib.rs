@@ -42,6 +42,7 @@ pub mod mermaid;
 #[cfg(feature = "markdown")]
 pub mod notes;
 mod overlay;
+pub mod popover;
 mod popup_list;
 mod radio;
 mod rolling_text;

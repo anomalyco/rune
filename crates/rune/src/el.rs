@@ -294,7 +294,7 @@ pub enum Align {
     End,
 }
 
-pub use crate::el_anchor::{Anchor, Side};
+pub use crate::el_anchor::{Anchor, Side, anchor_rect};
 pub use crate::el_text::TextSpec;
 pub(crate) use crate::el_text::Elide;
 

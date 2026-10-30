@@ -68,3 +68,20 @@ impl El {
         self
     }
 }
+
+/// Where an overlay of `size` (width, height) goes next to `trigger` (x0, y0, x1, y1) in a
+/// `window` of that size, as the rect (x0, y0, x1, y1) [`El::anchored`] would place it at: on
+/// `side` of the trigger, aligned along it, `gap` points away, flipped to the opposite side
+/// (and alignment) when it doesn't fit, then kept 8 points inside the window.
+///
+/// ```
+/// use rune::{Align, Side, anchor_rect};
+/// // A 100 x 80 menu under a trigger near the bottom of a 400 x 300 window flips above it.
+/// let r = anchor_rect([20.0, 250.0, 60.0, 270.0], (100.0, 80.0), Side::Bottom, Align::Start, 4.0, (400.0, 300.0));
+/// assert_eq!(r, [20.0, 166.0, 120.0, 246.0]);
+/// ```
+pub fn anchor_rect(trigger: [f32; 4], size: (f32, f32), side: Side, align: Align, gap: f32, window: (f32, f32)) -> [f32; 4] {
+    let a = Anchor { key: String::new(), side, align, gap, fit: false, unscaled: false };
+    let (x, y) = crate::runtime::anchor_position(&a, trigger, size, window);
+    [x, y, x + size.0, y + size.1]
+}

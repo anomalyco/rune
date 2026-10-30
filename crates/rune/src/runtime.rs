@@ -140,7 +140,8 @@ mod reveal;
 mod sticky;
 #[path = "runtime/anchor.rs"]
 mod anchor;
-use anchor::{anchor_index, anchor_position, step_up};
+pub(crate) use anchor::anchor_position;
+use anchor::{anchor_index, step_up};
 #[path = "runtime/motion_elements.rs"]
 mod motion_elements;
 pub use motion_elements::MotionElement;

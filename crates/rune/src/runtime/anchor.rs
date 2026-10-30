@@ -18,7 +18,7 @@ const MARGIN: f32 = 8.0;
 
 /// Where an anchored overlay of `size` goes next to `t` (x0, y0, x1, y1), flipped to the
 /// opposite side when it doesn't fit, then kept 8 points inside the viewport.
-pub(super) fn anchor_position(a: &Anchor, t: [f32; 4], size: (f32, f32), vp: (f32, f32)) -> (f32, f32) {
+pub(crate) fn anchor_position(a: &Anchor, t: [f32; 4], size: (f32, f32), vp: (f32, f32)) -> (f32, f32) {
     let (w, h) = size;
     let margin = MARGIN;
     let along = |lo: f32, hi: f32, len: f32| match a.align {

@@ -212,7 +212,7 @@ pub use color::{Color, oklch, oklcha};
 pub use compose::{Compositor, Frame};
 pub use edit::{Block, Ime, Key, KeyEvent, KeySide, MAX_LIST_LEVEL, Mark, MarkRange, Modifier, Mods, ParagraphInfo, RichStyle, TextEdit};
 pub use el::{
-    Align, Anchor, Cursor, CursorImage, Cycle, Drag, El, GrowthSpec, Outline, Phase, PillStyle, PointerEvent, PointerPress, RadialRadius, ScrollSpec, Shadow, Shell, Side, Tx, auto_grow, canvas, col, edit_access, effect, el, icon, rich,
+    Align, Anchor, Cursor, CursorImage, Cycle, Drag, El, GrowthSpec, Outline, Phase, PillStyle, PointerEvent, PointerPress, RadialRadius, ScrollSpec, Shadow, Shell, Side, Tx, anchor_rect, auto_grow, canvas, col, edit_access, effect, el, icon, rich,
     row, spacer, text, text_input,
 };
 pub use growth::{GROWTH, StreamEdge, edge};
