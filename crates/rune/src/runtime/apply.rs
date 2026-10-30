@@ -431,13 +431,14 @@ impl<S: 'static> Runtime<S> {
                     self.set_or_anim(id, prop::OPACITY, nodes[i].vis.opacity, spring_l, quiet);
                 }
             }
+            let rest_quiet = lands || !was_present || was_exiting || self.reduced_motion;
             let shift = nodes[i].vis.offset;
             if !slid.is_empty() && nodes[i].parent.is_some_and(|p| slid[p]) { slid[i] = true; }
             if nodes[i].looping.is_none() && !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Offset)
                 && (shift != [0.0; 2] || reorder_jump != 0.0 || self.scene.store().has(id, prop::OFFSET))
             {
                 let to = rune_motion::Vec2::new(shift[0], shift[1]);
-                if lands || !was_present || was_exiting || self.reduced_motion {
+                if rest_quiet {
                     self.scene.set(id, prop::OFFSET, to);
                 } else if self.scene.store().target(id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO) != to {
                     if row_jump != 0.0 {
@@ -448,42 +449,22 @@ impl<S: 'static> Runtime<S> {
                         if slid.is_empty() { slid.resize(nodes.len(), false); }
                         slid[i] = true;
                     }
-                    match nodes[i].vis.offset_motion.as_deref().copied() {
-                        Some(anim) => self.scene.animate(id, prop::OFFSET, to, anim),
-                        None => self.scene.animate(id, prop::OFFSET, to, spring_l),
-                    }
+                    self.scene.animate(id, prop::OFFSET, to, nodes[i].vis.offset_motion.as_deref().copied().unwrap_or_else(|| spring_l.into()));
                 } else if reorder_jump != 0.0 {
                     self.slide_reordered(id, reorder_jump, to, anim_l);
                     if slid.is_empty() { slid.resize(nodes.len(), false); }
                     slid[i] = true;
                 }
             }
-            let rest_quiet = lands || !was_present || was_exiting || self.reduced_motion;
             nodes[i].group_fade = self.set_group_rest(id, nodes[i].vis.group_opacity, nodes[i].opacity_motion.as_deref().copied(), spring_l, rest_quiet);
             let k = nodes[i].static_scale;
             nodes[i].scale_track = k != 1.0 || self.scene.store().has(id, P_SCALE);
             if nodes[i].scale_track {
-                if lands || !was_present || was_exiting || self.reduced_motion {
-                    self.scene.set(id, P_SCALE, k);
-                } else if self.scene.store().target(id, P_SCALE) != Some(k) {
-                    if !self.scene.store().has(id, P_SCALE) { self.scene.set(id, P_SCALE, 1.0); }
-                    match nodes[i].vis.scale_motion.as_deref().copied() {
-                        Some(anim) => self.scene.animate(id, P_SCALE, k, anim),
-                        None => self.scene.animate(id, P_SCALE, k, spring_l),
-                    }
-                }
+                self.snap_or_animate(id, P_SCALE, k, rest_quiet, 1.0, nodes[i].vis.scale_motion.as_deref().copied(), spring_l);
             }
             let turn = nodes[i].vis.rotate;
             if turn != 0.0 || self.scene.store().has(id, prop::ROTATION) {
-                if lands || !was_present || was_exiting || self.reduced_motion {
-                    self.scene.set(id, prop::ROTATION, turn);
-                } else if self.scene.store().target(id, prop::ROTATION) != Some(turn) {
-                    if !self.scene.store().has(id, prop::ROTATION) { self.scene.set(id, prop::ROTATION, 0.0); }
-                    match nodes[i].vis.rotate_motion.as_deref().copied() {
-                        Some(anim) => self.scene.animate(id, prop::ROTATION, turn, anim),
-                        None => self.scene.animate(id, prop::ROTATION, turn, spring_l),
-                    }
-                }
+                self.snap_or_animate(id, prop::ROTATION, turn, rest_quiet, 0.0, nodes[i].vis.rotate_motion.as_deref().copied(), spring_l);
             }
             let (instant, vis) = (instant || self.enters_unseen(&nodes, &unseen, i), &nodes[i].vis);
             if !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Blur)
@@ -817,5 +798,17 @@ impl<S: 'static> Runtime<S> {
         self.aspect_snap.clear();
         self.viewport_stepped = false;
         self.settle = false;
+    }
+
+    /// Sets `prop` to `to` when `quiet`, or animates it from `identity` when its target changed.
+    fn snap_or_animate<T: rune_motion::Animatable + PartialEq>(
+        &mut self, id: NodeId, prop: Prop<T>, to: T, quiet: bool, identity: T, motion: Option<Anim>, spring: Spring,
+    ) {
+        if quiet {
+            self.scene.set(id, prop, to);
+        } else if self.scene.store().target(id, prop) != Some(to) {
+            if !self.scene.store().has(id, prop) { self.scene.set(id, prop, identity); }
+            self.scene.animate(id, prop, to, motion.unwrap_or_else(|| spring.into()));
+        }
     }
 }
