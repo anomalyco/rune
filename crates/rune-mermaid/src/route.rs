@@ -84,9 +84,8 @@ impl<'a> Ctx<'a> {
     fn port_reach(&self, v: usize) -> f32 {
         let half = self.size(v)[0] / 2.0;
         let flat = match self.shapes[v] {
-            NodeShape::Rect | NodeShape::Round | NodeShape::Subroutine | NodeShape::Asymmetric => true,
-            NodeShape::Cylinder => !self.across,
-            _ => false,
+            NodeShape::Cylinder | NodeShape::LinedCylinder => !self.across,
+            s => s.flat(),
         };
         match self.shapes[v] {
             _ if flat => (half - 10.0).max(half * 0.5),

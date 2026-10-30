@@ -105,6 +105,13 @@ flowchart LR
 ```
 
 ```mermaid
+flowchart LR
+    a[setting.some_name] --> b[run_* + /go]
+    c[(store -> row)] --> d[Item.Worker]
+    d --> e[/api/v2/item]
+```
+
+```mermaid
 classDiagram
     direction LR
     class Shape {
@@ -143,6 +150,78 @@ sequenceDiagram
 pub(super) fn markdown_lenient(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     let style = MarkdownStyle::from_kit(k).diagram_max_width(560.0);
     col().w(560.0).child(Markdown::new(LENIENT).style(style).build(k))
+}
+
+/// Every Mermaid v11 flowchart shape, four to a row.
+const SHAPES: &str = r#"```mermaid
+flowchart LR
+    a1[rect] ~~~ a2(rounded) ~~~ a3([stadium]) ~~~ a4[[subproc]]
+    b1[(cyl)] ~~~ b2((circle)) ~~~ b3(((dbl-circ))) ~~~ b4>odd]
+    c1{diam} ~~~ c2{{hex}} ~~~ c3[/lean-r/] ~~~ c4[\lean-l\]
+    d1[/trap-b\] ~~~ d2[\trap-t/] ~~~ d3@{ shape: bang, label: "bang" } ~~~ d4@{ shape: cloud, label: "cloud" }
+    e1@{ shape: notch-rect, label: "card" } ~~~ e2@{ shape: hourglass, label: "collate" } ~~~ e3@{ shape: bolt, label: "com-link" } ~~~ e4@{ shape: delay, label: "delay" }
+    f1@{ shape: brace, label: "comment" } ~~~ f2@{ shape: brace-r, label: "brace-r" } ~~~ f3@{ shape: braces, label: "braces" } ~~~ f4@{ shape: text, label: "text" }
+    g1@{ shape: h-cyl, label: "h-cyl" } ~~~ g2@{ shape: lin-cyl, label: "lin-cyl" } ~~~ g3@{ shape: curv-trap, label: "display" } ~~~ g4@{ shape: div-rect, label: "div-rect" }
+    h1@{ shape: doc, label: "doc" } ~~~ h2@{ shape: lin-doc, label: "lin-doc" } ~~~ h3@{ shape: docs, label: "docs" } ~~~ h4@{ shape: tag-doc, label: "tag-doc" }
+    i1@{ shape: tri, label: "extract" } ~~~ i2@{ shape: flip-tri, label: "manual file" } ~~~ i3@{ shape: win-pane, label: "win-pane" } ~~~ i4@{ shape: lin-rect, label: "lin-rect" }
+    j1@{ shape: notch-pent, label: "loop limit" } ~~~ j2@{ shape: sl-rect, label: "manual input" } ~~~ j3@{ shape: st-rect, label: "processes" } ~~~ j4@{ shape: flag, label: "paper tape" }
+    k1@{ shape: bow-rect, label: "stored data" } ~~~ k2@{ shape: tag-rect, label: "tag-rect" } ~~~ k3@{ shape: sm-circ } ~~~ k4@{ shape: f-circ }
+    l1@{ shape: fr-circ } ~~~ l2@{ shape: cross-circ } ~~~ l3@{ shape: fork } ~~~ l4@{ shape: icon, form: circle, label: "icon" }
+```
+"#;
+
+pub(super) fn markdown_mermaid_shapes(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let style = MarkdownStyle::from_kit(k).diagram_max_width(560.0);
+    col().w(560.0).child(Markdown::new(SHAPES).style(style).build(k))
+}
+
+/// Sequence participant types, `create` and `destroy`, numbering from 10; and a state diagram with
+/// notes, concurrent regions, a fork and join and a choice.
+const FLOWS: &str = r#"```mermaid
+sequenceDiagram
+    autonumber 10
+    participant UI@{ "type": "boundary" }
+    participant Ctl@{ "type": "control" }
+    participant Db@{ "type": "database" }
+    participant Q@{ "type": "queue" }
+    UI->>Ctl: submit
+    Ctl->>Db: save
+    create participant Job
+    Ctl->>Job: start
+    Job->>Q: enqueue
+    destroy Job
+    Job-->>Ctl: done
+    Note over UI,Ctl: saved
+```
+
+```mermaid
+stateDiagram-v2
+    [*] --> Ready
+    state Ready {
+        [*] --> Idle
+        Idle --> Typing : key
+        --
+        [*] --> Offline
+        Offline --> Online : connect
+    }
+    Ready --> split
+    state split <<fork>>
+    split --> Save
+    split --> Sync
+    state merge <<join>>
+    Save --> merge
+    Sync --> merge
+    merge --> ok
+    state ok <<choice>>
+    ok --> [*] : fine
+    ok --> Ready : retry
+    note right of Save : writes to disk
+```
+"#;
+
+pub(super) fn markdown_mermaid_flows(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let style = MarkdownStyle::from_kit(k).diagram_max_width(560.0);
+    col().w(560.0).child(Markdown::new(FLOWS).style(style).build(k))
 }
 
 /// A table without an outline, with a dimmed header and figures that line up, and a diff whose

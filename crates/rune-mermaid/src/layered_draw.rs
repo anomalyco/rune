@@ -3,10 +3,12 @@
 
 use rune::{Align, Color, TextStyle};
 
-use super::canvas::{Canvas, Measured, Scene, arc, ellipse, fit, measure, over_color, room, rounded_rect};
+use super::canvas::{Canvas, Measured, Scene, ellipse, fit, measure, over_color, room, rounded_rect};
 use super::connector::{self, label_box, title_box};
 use super::layered::{GCluster, GEdge, Graph, Spacing, layout};
 use super::route::Ctx;
+use super::shape;
+pub(crate) use super::shape::{NodeShape, boundary, node_size, outline};
 use super::{DiagramStyle, EdgeStyle, Hover, NodeStyle};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,21 +29,6 @@ impl Dir {
             _ => None,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NodeShape {
-    Rect,
-    Round,
-    Stadium,
-    Subroutine,
-    Cylinder,
-    Circle,
-    Asymmetric,
-    Diamond,
-    Hexagon,
-    Parallelogram,
-    Trapezoid,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,81 +120,6 @@ impl DrawNode {
             | DrawNode::End { cluster }
             | DrawNode::Bar { cluster }
             | DrawNode::ClassBox { cluster, .. } => *cluster,
-        }
-    }
-}
-
-const PAD: [f32; 2] = [30.0, 22.0];
-
-pub(crate) fn node_size(shape: NodeShape, t: [f32; 2]) -> [f32; 2] {
-    let [w, h] = [t[0] + PAD[0], (t[1] + PAD[1]).max(40.0)];
-    match shape {
-        NodeShape::Rect | NodeShape::Round => [w.max(60.0), h],
-        NodeShape::Stadium | NodeShape::Hexagon => [w + h / 2.0, h],
-        NodeShape::Subroutine => [w + 16.0, h],
-        NodeShape::Asymmetric => [w + h / 3.0, h],
-        NodeShape::Cylinder => [w.max(60.0), h + 16.0],
-        NodeShape::Parallelogram | NodeShape::Trapezoid => [w + h * 0.6, h],
-        NodeShape::Circle => {
-            let d = (t[0] * t[0] + t[1] * t[1]).sqrt() + 20.0;
-            [d.max(48.0), d.max(48.0)]
-        }
-        NodeShape::Diamond => {
-            let a = t[0] / 2.0 + t[1] + 12.0;
-            let b = t[1] / 2.0 * a / (t[1] + 12.0) + 10.0;
-            [2.0 * a, (2.0 * b).max(40.0)]
-        }
-    }
-}
-
-/// Where the line from `c` toward `toward` leaves a node of `shape` and `size` centred at `c`.
-pub(crate) fn boundary(shape: NodeShape, c: [f32; 2], size: [f32; 2], toward: [f32; 2]) -> [f32; 2] {
-    let (dx, dy) = (toward[0] - c[0], toward[1] - c[1]);
-    if dx.abs() < 1e-3 && dy.abs() < 1e-3 {
-        return c;
-    }
-    let (a, b) = (size[0] / 2.0, size[1] / 2.0);
-    let t = match shape {
-        NodeShape::Circle => 1.0 / ((dx / a).powi(2) + (dy / b).powi(2)).sqrt(),
-        NodeShape::Diamond => 1.0 / (dx.abs() / a + dy.abs() / b),
-        _ => {
-            let tx = if dx.abs() > 1e-3 { a / dx.abs() } else { f32::MAX };
-            let ty = if dy.abs() > 1e-3 { b / dy.abs() } else { f32::MAX };
-            tx.min(ty)
-        }
-    };
-    let t = t.min(1.0);
-    [c[0] + dx * t, c[1] + dy * t]
-}
-
-pub(crate) fn outline(shape: NodeShape, c: [f32; 2], s: [f32; 2]) -> Vec<[f32; 2]> {
-    let (x0, y0, x1, y1) = (c[0] - s[0] / 2.0, c[1] - s[1] / 2.0, c[0] + s[0] / 2.0, c[1] + s[1] / 2.0);
-    let h = s[1];
-    match shape {
-        NodeShape::Rect | NodeShape::Subroutine => rounded_rect(x0, y0, x1, y1, 3.0),
-        NodeShape::Round => rounded_rect(x0, y0, x1, y1, 10.0),
-        NodeShape::Stadium => rounded_rect(x0, y0, x1, y1, h / 2.0),
-        NodeShape::Circle => ellipse(c, s[0] / 2.0, s[1] / 2.0),
-        NodeShape::Diamond => vec![[c[0], y0], [x1, c[1]], [c[0], y1], [x0, c[1]]],
-        NodeShape::Hexagon => {
-            let i = h / 4.0;
-            vec![[x0 + i, y0], [x1 - i, y0], [x1, c[1]], [x1 - i, y1], [x0 + i, y1], [x0, c[1]]]
-        }
-        NodeShape::Asymmetric => vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0 + h / 3.0, c[1]]],
-        NodeShape::Parallelogram => {
-            let k = h * 0.3;
-            vec![[x0 + k, y0], [x1, y0], [x1 - k, y1], [x0, y1]]
-        }
-        NodeShape::Trapezoid => {
-            let k = h * 0.3;
-            vec![[x0 + k, y0], [x1 - k, y0], [x1, y1], [x0, y1]]
-        }
-        NodeShape::Cylinder => {
-            let ry = 8.0;
-            let rx = s[0] / 2.0;
-            let mut pts = arc([c[0], y0 + ry], rx, ry, 180.0, 360.0, 20);
-            pts.extend(arc([c[0], y1 - ry], rx, ry, 0.0, 180.0, 20));
-            pts
         }
     }
 }
@@ -364,18 +276,7 @@ fn draw_node(c: &mut Canvas, node: &DrawNode, ctr: [f32; 2], paint: &DiagramStyl
         }
         DrawNode::Shape { shape, label, size, style, .. } => {
             let (fill, border, text_color) = style.resolve(paint);
-            c.shape(outline(*shape, ctr, *size), fill, border, 1.0);
-            let (x0, y0, x1, y1) = (ctr[0] - size[0] / 2.0, ctr[1] - size[1] / 2.0, ctr[0] + size[0] / 2.0, ctr[1] + size[1] / 2.0);
-            match shape {
-                NodeShape::Subroutine => {
-                    c.stroke(vec![[x0 + 8.0, y0], [x0 + 8.0, y1]], false, 1.0, border);
-                    c.stroke(vec![[x1 - 8.0, y0], [x1 - 8.0, y1]], false, 1.0, border);
-                }
-                NodeShape::Cylinder => c.stroke(arc([ctr[0], y0 + 8.0], size[0] / 2.0, 8.0, 0.0, 180.0, 20), false, 1.0, border),
-                _ => {}
-            }
-            let center = if *shape == NodeShape::Cylinder { [ctr[0], ctr[1] + 4.0] } else { ctr };
-            c.label(label, center, paint.font, text_color, Align::Center);
+            shape::draw(c, *shape, label, ctr, *size, [fill, border, text_color], paint);
         }
         DrawNode::ClassBox { stereo, name, fields, methods, size, style, .. } => {
             let (fill, border, text_color) = style.resolve(paint);

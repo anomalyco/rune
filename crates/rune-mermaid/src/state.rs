@@ -18,6 +18,7 @@ pub(crate) enum StateKind {
     End,
     Choice,
     Bar,
+    Note,
 }
 
 #[derive(Debug)]
@@ -35,6 +36,8 @@ pub(crate) struct StateNode {
 pub(crate) struct Composite {
     pub title: String,
     pub parent: Option<usize>,
+    /// One of a composite's concurrent regions, split by `--`.
+    pub region: bool,
 }
 
 #[derive(Debug)]
@@ -52,7 +55,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<StateDiagram> {
         ids: HashMap::new(),
         composite_ids: HashMap::new(),
         stack: Vec::new(),
-        in_note: false,
+        note: None,
         pseudo_seq: 0,
         class_defs: HashMap::new(),
         state_classes: HashMap::new(),
@@ -61,6 +64,12 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<StateDiagram> {
     };
     // A statement that doesn't read is skipped; one past the bounds leaves the whole diagram as source.
     for line in std::iter::once(header).chain(body.iter().copied()) {
+        if p.note.is_some() {
+            if p.note_line(line).is_none() && p.over {
+                return None;
+            }
+            continue;
+        }
         for stmt in statements(line) {
             let (states, edges) = (p.d.states.len(), p.d.edges.len());
             if p.statement(stmt).is_none() {
@@ -73,6 +82,10 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<StateDiagram> {
                 p.ids.retain(|_, &mut i| i < states);
             }
         }
+    }
+    // A note left open closes at the end.
+    if p.note.is_some() && p.note_line("end note").is_none() && p.over {
+        return None;
     }
     for (id, &idx) in &p.ids {
         let mut st = NodeStyle::default();
@@ -88,6 +101,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<StateDiagram> {
         }
         p.d.states[idx].style = st;
     }
+    p.resolve_composites();
     (!p.d.states.is_empty()).then_some(p.d)
 }
 
@@ -96,7 +110,8 @@ struct Parser {
     ids: HashMap<String, usize>,
     composite_ids: HashMap<String, usize>,
     stack: Vec<usize>,
-    in_note: bool,
+    /// A multi-line note being read: its state, side and lines so far.
+    note: Option<(String, Side, Vec<String>)>,
     pseudo_seq: usize,
     class_defs: HashMap<String, NodeStyle>,
     state_classes: HashMap<String, Vec<String>>,
@@ -111,19 +126,28 @@ impl Parser {
         (!self.over).then_some(())
     }
 
-    fn statement(&mut self, s: &str) -> Option<()> {
-        if self.in_note {
-            if s.eq_ignore_ascii_case("end note") {
-                self.in_note = false;
+    fn note_line(&mut self, line: &str) -> Option<()> {
+        let line = line.trim();
+        if !line.eq_ignore_ascii_case("end note") {
+            if let Some((_, _, lines)) = &mut self.note {
+                lines.push(line.to_owned());
             }
             return Some(());
         }
+        let (target, side, lines) = self.note.take()?;
+        self.add_note(&target, side, &lines.join("\n"))
+    }
+
+    fn statement(&mut self, s: &str) -> Option<()> {
         if s == "}" {
-            self.stack.pop()?;
+            let top = self.stack.pop()?;
+            if self.d.composites[top].region {
+                self.stack.pop();
+            }
             return Some(());
         }
         if s == "--" {
-            return (!self.stack.is_empty()).then_some(());
+            return self.divide();
         }
         let word = s.split(|c: char| c.is_whitespace() || c == ':').next().unwrap_or("");
         match word {
@@ -140,11 +164,7 @@ impl Parser {
                     self.d.dir = dir;
                 }
             }
-            "note" | "Note" => {
-                if !s.contains(':') {
-                    self.in_note = true;
-                }
-            }
+            "note" | "Note" => self.note(s[word.len()..].trim())?,
             "hide" | "accTitle" | "accDescr" => {}
             "classDef" => {
                 let rest = s["classDef".len()..].trim();
@@ -214,7 +234,7 @@ impl Parser {
             }
             // A composite whose name doesn't read still opens, so its `}` closes it and not its parent.
             let title = named.as_ref().map_or_else(|| clean_quoted(core), |(_, l)| l.clone());
-            self.d.composites.push(Composite { title, parent: self.stack.last().copied() });
+            self.d.composites.push(Composite { title, parent: self.stack.last().copied(), region: false });
             let cid = self.d.composites.len() - 1;
             if let Some((id, _)) = named {
                 self.composite_ids.insert(id.to_owned(), cid);
@@ -243,8 +263,8 @@ impl Parser {
         let to = self.endpoint(right_raw, false)?;
         self.budget()?;
         self.d.edges.push(Edge {
-            from,
-            to,
+            from: from[0],
+            to: to[0],
             label,
             line: Line::Solid,
             start: Head::None,
@@ -252,7 +272,46 @@ impl Parser {
             minlen: 1,
             style: EdgeStyle::default(),
         });
+        self.hold_regions(&from, &to);
         Some(())
+    }
+
+    /// Invisible edges that keep a composite's other regions beside the one an edge is drawn to,
+    /// for edges that run forward in the source; a back edge (`retry --> Ready`) holds nothing, so
+    /// breaking its cycle can't flip a region below what follows the composite.
+    fn hold_regions(&mut self, from: &[usize], to: &[usize]) {
+        let forward = from.iter().max() < to.iter().min();
+        if !forward {
+            return;
+        }
+        let pairs = from[1..].iter().map(|&f| (f, to[0])).chain(to[1..].iter().map(|&t| (from[0], t)));
+        for (from, to) in pairs.collect::<Vec<_>>() {
+            if self.budget().is_none() {
+                return;
+            }
+            self.d.edges.push(Edge {
+                from,
+                to,
+                label: None,
+                line: Line::Invisible,
+                start: Head::None,
+                end: Head::None,
+                minlen: 1,
+                style: EdgeStyle::default(),
+            });
+        }
+    }
+
+    /// Where an edge meets composite `cid`: it enters at the first state of each region and leaves
+    /// from the last, the first region's being the one drawn.
+    fn composite_ends(&self, cid: usize, leaving: bool) -> Vec<usize> {
+        let regions: Vec<usize> = (0..self.d.composites.len()).filter(|&r| self.d.composites[r].region && self.d.composites[r].parent == Some(cid)).collect();
+        let scopes = if regions.is_empty() { vec![cid] } else { regions };
+        let pick = |scope: usize| {
+            let mut members = (0..self.d.states.len()).filter(|&i| self.d.states[i].kind != StateKind::Note && self.within(self.d.states[i].cluster, scope));
+            if leaving { members.filter(|&i| self.d.states[i].kind != StateKind::Start).last() } else { members.next() }
+        };
+        scopes.into_iter().filter_map(pick).collect()
     }
 
     fn description(&mut self, s: &str) -> Option<()> {
@@ -283,7 +342,7 @@ impl Parser {
         }
     }
 
-    fn endpoint(&mut self, raw: &str, is_start: bool) -> Option<usize> {
+    fn endpoint(&mut self, raw: &str, is_start: bool) -> Option<Vec<usize>> {
         if raw == "[*]" {
             self.budget()?;
             self.pseudo_seq += 1;
@@ -291,18 +350,145 @@ impl Parser {
             let key = format!("__pseudo_{}_{}_{:?}", if is_start { "start" } else { "end" }, self.pseudo_seq, scope);
             let kind = if is_start { StateKind::Start } else { StateKind::End };
             self.d.states.push(StateNode { id: key, label: String::new(), desc: Vec::new(), kind, cluster: scope, style: NodeStyle::default() });
-            return Some(self.d.states.len() - 1);
+            return Some(vec![self.d.states.len() - 1]);
         }
         let id = self.strip_class(raw)?;
         if !valid_state_id(&id) {
             return None;
         }
-        if let Some(&cid) = self.composite_ids.get(&id)
-            && let Some(member) = self.d.states.iter().position(|st| st.cluster == Some(cid))
-        {
-            return Some(member);
+        if let Some(&cid) = self.composite_ids.get(&id) {
+            let ends = self.composite_ends(cid, is_start);
+            if !ends.is_empty() {
+                return Some(ends);
+            }
         }
-        self.ensure_state(&id)
+        Some(vec![self.ensure_state(&id)?])
+    }
+
+    /// A state named before its composite was declared (`[*] --> Busy`, then `state Busy {`) is
+    /// that composite: its edges move onto the composite as if named after it, and it goes.
+    fn resolve_composites(&mut self) {
+        let mut moves: HashMap<usize, (Vec<usize>, Vec<usize>)> = HashMap::new();
+        for (id, &cid) in &self.composite_ids {
+            let Some(&at) = self.ids.get(id) else { continue };
+            if self.within(self.d.states[at].cluster, cid) {
+                continue;
+            }
+            let (enter, leave) = (self.composite_ends(cid, false), self.composite_ends(cid, true));
+            if !enter.is_empty() && !leave.is_empty() {
+                moves.insert(at, (enter, leave));
+            }
+        }
+        if moves.is_empty() {
+            return;
+        }
+        for e in 0..self.d.edges.len() {
+            let (from, to) = (self.d.edges[e].from, self.d.edges[e].to);
+            let from = moves.get(&from).map_or_else(|| vec![from], |m| m.1.clone());
+            let to = moves.get(&to).map_or_else(|| vec![to], |m| m.0.clone());
+            (self.d.edges[e].from, self.d.edges[e].to) = (from[0], to[0]);
+            self.hold_regions(&from, &to);
+        }
+        let mut remap = Vec::with_capacity(self.d.states.len());
+        let mut kept = 0;
+        for i in 0..self.d.states.len() {
+            remap.push(kept);
+            kept += usize::from(!moves.contains_key(&i));
+        }
+        for e in &mut self.d.edges {
+            (e.from, e.to) = (remap[e.from], remap[e.to]);
+        }
+        let mut i = 0;
+        self.d.states.retain(|_| {
+            i += 1;
+            !moves.contains_key(&(i - 1))
+        });
+        self.ids.clear();
+    }
+
+    /// Whether `cluster` is composite `cid` or sits inside it.
+    fn within(&self, mut cluster: Option<usize>, cid: usize) -> bool {
+        for _ in 0..=MAX_DEPTH {
+            match cluster {
+                Some(c) if c == cid => return true,
+                Some(c) => cluster = self.d.composites[c].parent,
+                None => return false,
+            }
+        }
+        false
+    }
+
+    /// `--` inside a composite: what came before becomes its first region, and a new one opens.
+    fn divide(&mut self) -> Option<()> {
+        let &top = self.stack.last()?;
+        let parent = if self.d.composites[top].region {
+            self.stack.pop();
+            self.d.composites[top].parent?
+        } else {
+            let first = self.region(top)?;
+            for st in &mut self.d.states {
+                if st.cluster == Some(top) {
+                    st.cluster = Some(first);
+                }
+            }
+            for (i, c) in self.d.composites.iter_mut().enumerate() {
+                if i != first && c.parent == Some(top) {
+                    c.parent = Some(first);
+                }
+            }
+            top
+        };
+        let next = self.region(parent)?;
+        self.stack.push(next);
+        Some(())
+    }
+
+    fn region(&mut self, parent: usize) -> Option<usize> {
+        self.budget()?;
+        if self.stack.len() >= MAX_DEPTH {
+            self.over = true;
+            return None;
+        }
+        self.d.composites.push(Composite { title: String::new(), parent: Some(parent), region: true });
+        Some(self.d.composites.len() - 1)
+    }
+
+    /// `right of A : text` on one line, or `left of A` opening a note that `end note` closes.
+    fn note(&mut self, rest: &str) -> Option<()> {
+        let (place, text) = rest.split_once(':').map_or((rest, None), |(p, t)| (p.trim(), Some(t)));
+        let lower = place.to_ascii_lowercase();
+        let (side, target) = if let Some(t) = lower.strip_prefix("right of ") {
+            (Side::Right, &place[place.len() - t.len()..])
+        } else if let Some(t) = lower.strip_prefix("left of ") {
+            (Side::Left, &place[place.len() - t.len()..])
+        } else {
+            return None;
+        };
+        let target = target.trim();
+        if !valid_state_id(target) {
+            return None;
+        }
+        match text {
+            Some(t) => self.add_note(target, side, &clean_quoted(t)),
+            None => {
+                self.note = Some((target.to_owned(), side, Vec::new()));
+                Some(())
+            }
+        }
+    }
+
+    /// A note beside `target`, joined to it by a dotted line.
+    fn add_note(&mut self, target: &str, side: Side, text: &str) -> Option<()> {
+        let at = self.ensure_state(target)?;
+        self.budget()?;
+        let cluster = self.d.states[at].cluster;
+        let id = format!("__note_{}", self.d.states.len());
+        self.d.states.push(StateNode { id, label: text.to_owned(), desc: Vec::new(), kind: StateKind::Note, cluster, style: NodeStyle::default() });
+        let note = self.d.states.len() - 1;
+        let (from, to) = if side == Side::Left { (note, at) } else { (at, note) };
+        self.budget()?;
+        self.d.edges.push(Edge { from, to, label: None, line: Line::Dotted, start: Head::None, end: Head::None, minlen: 1, style: EdgeStyle::default() });
+        Some(())
     }
 
     fn ensure_state(&mut self, id: &str) -> Option<usize> {
@@ -326,6 +512,12 @@ impl Parser {
         self.ids.insert(id.to_owned(), idx);
         Some(idx)
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Side {
+    Left,
+    Right,
 }
 
 /// `"Label" as id`, `Label as id` or a bare `id`.
@@ -363,6 +555,10 @@ pub(crate) fn draw(d: &StateDiagram, paint: &DiagramStyle, hover: Option<(Hover,
                 cluster: s.cluster,
                 style: s.style,
             },
+            StateKind::Note => {
+                let label = measure(&s.label, paint.font);
+                DrawNode::Shape { shape: NodeShape::Note, size: node_size(NodeShape::Note, label.size), label, cluster: s.cluster, style: s.style }
+            }
             StateKind::Normal => {
                 let full = if s.desc.is_empty() { s.label.clone() } else { format!("{}\n{}", s.label, s.desc.join("\n")) };
                 let label = measure(&full, paint.font);

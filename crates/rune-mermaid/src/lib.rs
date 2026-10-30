@@ -4,8 +4,11 @@
 //!
 //! **Flowcharts** (`graph` or `flowchart`, directions `TD`/`TB`/`BT`/`LR`/`RL`): node shapes
 //! `[rect]`, `(rounded)`, `([stadium])`, `[[subroutine]]`, `[(cylinder)]`, `((circle))`,
-//! `>asymmetric]`, `{diamond}`, `{{hexagon}}`, `[/parallelogram/]`, `[/trapezoid\]` and v11
-//! `@{ shape: …, label: … }`; links `-->`, `---`, `-.->`, `==>`, `~~~`, `<-->`, `--o`, `--x`,
+//! `(((double circle)))`, `>asymmetric]`, `{diamond}`, `{{hexagon}}`, `[/lean right/]`,
+//! `[\lean left\]`, `[/trapezoid\]`, `[\inverted trapezoid/]`, and every v11
+//! `@{ shape: …, label: … }` name and alias (documents, stacked shapes, cylinders, braces,
+//! markers, bang, cloud and the rest; icons and images draw as their frame); edge ids
+//! (`A e1@--> B`, with `e1@{ … }` settings read and left out); links `-->`, `---`, `-.->`, `==>`, `~~~`, `<-->`, `--o`, `--x`,
 //! longer forms for longer links, labels as `-- text -->`, `-- "text" -->` or `-->|text|`; chains
 //! (`A --> B --> C`), `&` groups, quoted labels, `<br>` and `\n` breaks, nested `subgraph … end`
 //! (including edges to/from subgraph ids), node tints from `style`/`classDef`/`class`/`:::class`,
@@ -14,12 +17,15 @@
 //! **Sequence diagrams** (`sequenceDiagram`): `participant` and `actor` with `as` aliases;
 //! `box` participant column groups; `rect` highlight bands; messages `->`, `-->`, `->>`, `-->>`,
 //! `-x`, `--x`, `-)`, `--)`, `<<->>` and `<<-->>`, with `+`/`-` activation; `activate` and
-//! `deactivate`; `Note left of|right of|over A[,B]`; `autonumber`; and `loop`, `alt`/`else`,
-//! `opt`, `par`/`and`, `critical`/`option` and `break` frames.
+//! `deactivate`; `Note left of|right of|over A[,B]`; `autonumber [start [step]]` and
+//! `autonumber off`; `create` and `destroy`; v11 participant types (`@{ "type": "database" }`:
+//! boundary, control, entity, database, collections, queue); and `loop`, `alt`/`else`, `opt`,
+//! `par`/`and`, `critical`/`option` and `break` frames.
 //!
 //! **State diagrams** (`stateDiagram` or `stateDiagram-v2`): `direction TB|BT|LR|RL`, `[*]`
 //! start and end pseudostates, `state "Label" as id`, `state id <<choice>>` (`<<fork>>`,
-//! `<<join>>`), `id : description`, transitions `A --> B : label`, and composite `state Name { … }`.
+//! `<<join>>`), `id : description`, transitions `A --> B : label`, composite `state Name { … }`
+//! with `--` concurrent regions, and `note left of|right of` notes, on one line or up to `end note`.
 //!
 //! **Class diagrams** (`classDiagram`): `class Name { +field \n +method() }`, `Name : +member`,
 //! `<<trait>>` / `<<enum>>` stereotypes, `namespace Name { … }`, and UML relationships `<|--`,
@@ -40,6 +46,8 @@ mod layered;
 mod layered_draw;
 mod route;
 mod sequence;
+mod sequence_draw;
+mod shape;
 mod state;
 
 use std::cell::RefCell;

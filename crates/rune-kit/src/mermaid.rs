@@ -2,9 +2,10 @@
 //!
 //! Covers flowcharts (`graph`/`flowchart` in `TD`/`TB`/`BT`/`LR`/`RL` with subgraphs, all node
 //! shapes including `@{ shape: … }`, link styles and `style`/`classDef`/`linkStyle` tints),
-//! sequence diagrams (`sequenceDiagram` with participants, actors, `box` groups, `rect` bands,
-//! activations, notes and frames), state diagrams (`stateDiagram`/`stateDiagram-v2` with `[*]`,
-//! composite states and `<<choice>>`) and class diagrams (`classDiagram` with fields, methods,
+//! sequence diagrams (`sequenceDiagram` with participants and their v11 types, actors, `box`
+//! groups, `rect` bands, activations, notes, frames, `create`/`destroy` and `autonumber`), state
+//! diagrams (`stateDiagram`/`stateDiagram-v2` with `[*]`, composite states and `--` regions,
+//! notes, `<<choice>>` and `<<fork>>`/`<<join>>`) and class diagrams (`classDiagram` with fields, methods,
 //! stereotypes, namespaces and UML relations). Lines that don't read are skipped and the rest
 //! draws; an unknown diagram type, or a source where nothing reads, returns `None`, and
 //! [`crate::Markdown`] falls back to the code block.

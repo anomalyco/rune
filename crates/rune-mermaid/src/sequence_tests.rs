@@ -1,4 +1,5 @@
 use super::*;
+use crate::DiagramStyle;
 
 fn seq(src: &str) -> Sequence {
     match crate::parse(src).map(|p| p.diagram) {
@@ -13,8 +14,8 @@ fn participants_messages_and_activation() {
         "sequenceDiagram\n  autonumber\n  actor U as User\n  participant A as API server\n  U->>+A: GET /items\n  A-->>-U: 200 OK\n  A->B: plain\n  B-->A: dotted\n  A-xB: lost\n  B--)A: async\n  A<<->>B: both\n  A->>A: think",
     );
     assert!(s.autonumber);
-    let names: Vec<(&str, &str, bool)> = s.participants.iter().map(|p| (p.id.as_str(), p.label.as_str(), p.actor)).collect();
-    assert_eq!(names, [("U", "User", true), ("A", "API server", false), ("B", "B", false)]);
+    let names: Vec<(&str, &str, Kind)> = s.participants.iter().map(|p| (p.id.as_str(), p.label.as_str(), p.kind)).collect();
+    assert_eq!(names, [("U", "User", Kind::Actor), ("A", "API server", Kind::Box), ("B", "B", Kind::Box)]);
     let msgs: Vec<&Message> = s.events.iter().filter_map(|e| if let Event::Message(m) = e { Some(m) } else { None }).collect();
     assert_eq!((msgs[0].from, msgs[0].to, msgs[0].text.as_str(), msgs[0].activate), (0, 1, "GET /items", true));
     assert_eq!((msgs[1].dotted, msgs[1].tip, msgs[1].deactivate), (true, Tip::Filled, true));
@@ -97,6 +98,32 @@ fn a_line_that_does_not_read_is_skipped() {
     assert_eq!(s.participants[2].group, Some(0));
     let s = seq("sequenceDiagram\nparticipant A@{ \"type\": \"database\" }\nA->>B: hi");
     assert_eq!(s.participants[0].label, "A");
+}
+
+#[test]
+fn participant_types_draw_their_own_heads() {
+    let src = "sequenceDiagram\n  participant W@{ \"type\": \"boundary\" }\n  participant C@{ \"type\" : \"control\" }\n  participant E@{ \"type\": \"entity\" }\n  participant D@{ \"type\": \"database\" }\n  participant L@{ \"type\": \"collections\" }\n  participant Q@{ \"type\": \"queue\" }\n  participant P@{ \"type\": \"mystery\" }\n  W->>C: a\n  C->>E: b\n  E->>D: c\n  D->>L: d\n  L->>Q: e\n  Q->>P: f";
+    let s = seq(src);
+    let kinds: Vec<Kind> = s.participants.iter().map(|p| p.kind).collect();
+    assert_eq!(kinds, [Kind::Boundary, Kind::Control, Kind::Entity, Kind::Database, Kind::Collections, Kind::Queue, Kind::Box]);
+    assert!(draw(&s, &DiagramStyle::neutral(false)).is_some());
+}
+
+#[test]
+fn create_destroy_and_numbering() {
+    let s = seq(
+        "sequenceDiagram\n  autonumber 10 5\n  A->>B: hello\n  create participant C\n  B->>C: make\n  destroy C\n  C-->>B: bye\n  autonumber off\n  A->>B: quiet",
+    );
+    let has = |f: &dyn Fn(&Event) -> bool| s.events.iter().any(f);
+    assert!(has(&|e| matches!(e, Event::Number(Some((10, 5))))));
+    assert!(has(&|e| matches!(e, Event::Number(None))));
+    assert!(has(&|e| matches!(e, Event::Create(2))));
+    assert!(has(&|e| matches!(e, Event::Destroy(2))));
+    let paint = DiagramStyle::neutral(false);
+    let scene = draw(&s, &paint).unwrap();
+    let both = crate::scene("sequenceDiagram\n  A->>B: hello\n  B->>C: make\n  C-->>B: bye\n  A->>B: quiet", &paint, None).unwrap();
+    assert!(scene.size[1] > both.size[1], "the created head takes room of its own");
+    assert!(crate::parse("sequenceDiagram\n  autonumber many\n  A->>B: hi").is_some(), "an autonumber it can't read is skipped");
 }
 
 #[test]

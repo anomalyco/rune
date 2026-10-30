@@ -17,7 +17,7 @@ fn edges(f: &Flowchart) -> Vec<(&str, &str)> {
 #[test]
 fn directions_shapes_and_labels() {
     let f = flow(
-        "flowchart LR\n  A[Start] --> B(Round)\n  B --> C([Stadium]) --> D[[Sub]]\n  D --> E[(Database)] & F((Circle))\n  F --> G>Flag] --> H{Decide?} --> I{{Hex}}\n  I --> J[/Lean/] --> K[/Trap\\]",
+        "flowchart LR\n  A[Start] --> B(Round)\n  B --> C([Stadium]) --> D[[Sub]]\n  D --> E[(Database)] & F((Circle))\n  F --> G>Flag] --> H{Decide?} --> I{{Hex}}\n  I --> J[/Lean/] --> K[/Trap\\]\n  K --> L[\\Back\\] --> M[\\Top/] --> N(((Stop)))",
     );
     assert_eq!(f.dir, Dir::Right);
     let shapes: Vec<(&str, &str, NodeShape)> = f.nodes.iter().map(|n| (n.id.as_str(), n.label.as_str(), n.shape)).collect();
@@ -33,8 +33,11 @@ fn directions_shapes_and_labels() {
             ("G", "Flag", NodeShape::Asymmetric),
             ("H", "Decide?", NodeShape::Diamond),
             ("I", "Hex", NodeShape::Hexagon),
-            ("J", "Lean", NodeShape::Parallelogram),
-            ("K", "Trap", NodeShape::Trapezoid),
+            ("J", "Lean", NodeShape::LeanRight),
+            ("K", "Trap", NodeShape::TrapBottom),
+            ("L", "Back", NodeShape::LeanLeft),
+            ("M", "Top", NodeShape::TrapTop),
+            ("N", "Stop", NodeShape::DoubleCircle),
         ]
     );
     assert_eq!(edges(&f)[3..5], [("D", "E"), ("D", "F")], "`&` fans out");
@@ -57,6 +60,87 @@ fn v11_at_shapes_subgraph_endpoints_and_link_styles() {
     assert_eq!((store.shape, store.label.as_str()), (NodeShape::Cylinder, "AnimationStore"));
     assert!(f.edges[0].style.stroke.is_some());
     assert_eq!(f.edges[0].style.width, Some(2.0));
+}
+
+#[test]
+fn every_v11_shape_name_reads_and_draws() {
+    let names = [
+        ("rect", NodeShape::Rect),
+        ("event", NodeShape::Round),
+        ("pill", NodeShape::Stadium),
+        ("subproc", NodeShape::Subroutine),
+        ("db", NodeShape::Cylinder),
+        ("circ", NodeShape::Circle),
+        ("dbl-circ", NodeShape::DoubleCircle),
+        ("odd", NodeShape::Asymmetric),
+        ("question", NodeShape::Diamond),
+        ("prepare", NodeShape::Hexagon),
+        ("in-out", NodeShape::LeanRight),
+        ("out-in", NodeShape::LeanLeft),
+        ("priority", NodeShape::TrapBottom),
+        ("manual", NodeShape::TrapTop),
+        ("start", NodeShape::SmallCircle),
+        ("junction", NodeShape::FilledCircle),
+        ("stop", NodeShape::FramedCircle),
+        ("summary", NodeShape::CrossedCircle),
+        ("bang", NodeShape::Bang),
+        ("cloud", NodeShape::Cloud),
+        ("card", NodeShape::Card),
+        ("collate", NodeShape::Hourglass),
+        ("com-link", NodeShape::Bolt),
+        ("comment", NodeShape::BraceLeft),
+        ("brace-r", NodeShape::BraceRight),
+        ("braces", NodeShape::Braces),
+        ("delay", NodeShape::Delay),
+        ("das", NodeShape::HCylinder),
+        ("disk", NodeShape::LinedCylinder),
+        ("display", NodeShape::CurvedTrapezoid),
+        ("div-proc", NodeShape::DividedRect),
+        ("document", NodeShape::Document),
+        ("lin-doc", NodeShape::LinedDocument),
+        ("docs", NodeShape::Documents),
+        ("tag-doc", NodeShape::TaggedDocument),
+        ("extract", NodeShape::Triangle),
+        ("manual-file", NodeShape::FlippedTriangle),
+        ("join", NodeShape::Fork),
+        ("internal-storage", NodeShape::WindowPane),
+        ("shaded-process", NodeShape::LinedRect),
+        ("loop-limit", NodeShape::NotchedPentagon),
+        ("manual-input", NodeShape::SlopedRect),
+        ("processes", NodeShape::StackedRect),
+        ("paper-tape", NodeShape::Flag),
+        ("stored-data", NodeShape::BowRect),
+        ("tag-rect", NodeShape::TaggedRect),
+        ("text", NodeShape::Text),
+    ];
+    let mut src = String::from("flowchart TD\n");
+    for (i, (name, _)) in names.iter().enumerate() {
+        src += &format!("  n{i}@{{ shape: {name}, label: \"Step {i}\" }}\n");
+        if i > 0 {
+            src += &format!("  n{} --> n{i}\n", i - 1);
+        }
+    }
+    let f = flow(&src);
+    let got: Vec<NodeShape> = f.nodes.iter().map(|n| n.shape).collect();
+    let want: Vec<NodeShape> = names.iter().map(|&(_, s)| s).collect();
+    assert_eq!(got, want);
+    assert!(f.nodes.iter().all(|n| n.label.starts_with("Step ")));
+    assert!(crate::scene(&src, &DiagramStyle::neutral(false), None).is_some());
+}
+
+#[test]
+fn icons_and_images_draw_as_their_frame() {
+    let f = flow("flowchart TD\n  A@{ icon: \"fa:user\", form: \"circle\", label: \"User\" }\n  B@{ img: \"https://example.com/a.png\", label: \"Pic\" }\n  A --> B");
+    let nodes: Vec<(&str, NodeShape)> = f.nodes.iter().map(|n| (n.label.as_str(), n.shape)).collect();
+    assert_eq!(nodes, [("User", NodeShape::Circle), ("Pic", NodeShape::Rect)]);
+}
+
+#[test]
+fn named_edges_and_their_settings_add_no_nodes() {
+    let f = flow("flowchart LR\n  A e1@--> B\n  B e2@-.-> C\n  e1@{ animate: true }\n  e2@{ animation: fast }");
+    assert_eq!(edges(&f), [("A", "B"), ("B", "C")]);
+    assert_eq!(f.edges[1].line, Line::Dotted);
+    assert_eq!(f.nodes.len(), 3);
 }
 
 #[test]

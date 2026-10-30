@@ -1,6 +1,6 @@
 //! Flowcharts: the parser for `graph`/`flowchart` sources and their drawing on [`super::layered_draw`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rune::Color;
 
@@ -52,6 +52,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<Flowchart> {
         node_styles: HashMap::new(),
         default_edge_style: EdgeStyle::default(),
         edge_styles: HashMap::new(),
+        edge_ids: HashSet::new(),
         over: false,
     };
     // A statement that doesn't read is skipped; one past the bounds leaves the whole diagram as source.
@@ -152,11 +153,13 @@ struct Parser {
     node_styles: HashMap<String, NodeStyle>,
     default_edge_style: EdgeStyle,
     edge_styles: HashMap<usize, EdgeStyle>,
+    edge_ids: HashSet<String>,
     /// Set once the source goes past [`MAX_ITEMS`] or [`MAX_DEPTH`].
     over: bool,
 }
 
 struct Link {
+    id: Option<String>,
     line: Line,
     start: Head,
     end: Head,
@@ -263,6 +266,12 @@ impl Parser {
     /// leaves no stray nodes behind.
     fn chain(&mut self, s: &str) -> Option<()> {
         let mut c = Cur::new(s);
+        // `e1@{ animate: true }` sets how a named edge moves, which a still drawing leaves out.
+        if let Some((id, _)) = s.split_once("@{")
+            && self.edge_ids.contains(id.trim())
+        {
+            return Some(());
+        }
         let mut groups = vec![group(&mut c)?];
         let mut links = Vec::new();
         loop {
@@ -275,6 +284,7 @@ impl Parser {
             groups.push(group(&mut c)?);
         }
         let groups: Vec<Vec<usize>> = groups.into_iter().map(|g| g.into_iter().map(|n| self.node(n)).collect()).collect::<Option<_>>()?;
+        self.edge_ids.extend(links.iter().filter_map(|l| l.id.clone()));
         for (link, pair) in links.iter().zip(groups.windows(2)) {
             for &from in &pair[0] {
                 for &to in &pair[1] {
@@ -372,7 +382,7 @@ fn ident(c: &mut Cur) -> Option<String> {
 }
 
 const SHAPES: &[(&str, &str, NodeShape)] = &[
-    ("(((", ")))", NodeShape::Circle),
+    ("(((", ")))", NodeShape::DoubleCircle),
     ("([", "])", NodeShape::Stadium),
     ("[[", "]]", NodeShape::Subroutine),
     ("[(", ")]", NodeShape::Cylinder),
@@ -483,29 +493,21 @@ fn parse_at_shape(c: &mut Cur) -> Option<(Option<String>, NodeShape)> {
     for (k, v) in split_top_commas(inner).into_iter().filter_map(|part| part.split_once(':')) {
         let v = v.trim();
         match k.trim() {
-            "shape" => kind = at_shape(&v.trim_matches('"').to_ascii_lowercase()),
+            "shape" => kind = NodeShape::named(&v.trim_matches('"').to_ascii_lowercase()).unwrap_or(NodeShape::Rect),
             "label" => label = Some(clean_quoted(v)),
+            // Icons and images can't be fetched, so they draw as their frame with the label.
+            "form" if kind == NodeShape::Rect => {
+                kind = match v.trim_matches('"') {
+                    "circle" => NodeShape::Circle,
+                    "rounded" => NodeShape::Round,
+                    _ => NodeShape::Rect,
+                }
+            }
             _ => {}
         }
     }
     c.i += end + 1;
     Some((label, kind))
-}
-
-fn at_shape(name: &str) -> NodeShape {
-    match name {
-        "rounded" | "event" => NodeShape::Round,
-        "stadium" | "pill" | "terminal" => NodeShape::Stadium,
-        "subproc" | "subprocess" | "subroutine" | "fr-rect" => NodeShape::Subroutine,
-        "cyl" | "cylinder" | "db" | "database" | "lin-cyl" => NodeShape::Cylinder,
-        "circle" | "circ" | "sm-circ" | "dbl-circ" | "f-circ" => NodeShape::Circle,
-        "diam" | "diamond" | "decision" => NodeShape::Diamond,
-        "hex" | "hexagon" | "prepare" => NodeShape::Hexagon,
-        "lean-r" | "lean-l" | "in-out" | "out-in" | "parallelogram" => NodeShape::Parallelogram,
-        "trap-b" | "trap-t" | "trapezoid" | "manual" => NodeShape::Trapezoid,
-        "odd" | "flag" => NodeShape::Asymmetric,
-        _ => NodeShape::Rect,
-    }
 }
 
 fn split_top_commas(s: &str) -> Vec<&str> {
@@ -560,8 +562,13 @@ fn exact_shape(c: &mut Cur) -> Option<(Option<String>, NodeShape)> {
             let close = inner.chars().last().filter(|&ch| ch == '/' || ch == '\\')?;
             let label = clean_quoted(&inner[..inner.len() - 1]);
             c.i += end + 1;
-            let same = open.ends_with(close);
-            return Some((Some(label), if same { NodeShape::Parallelogram } else { NodeShape::Trapezoid }));
+            let kind = match (open, close) {
+                ("[/", '/') => NodeShape::LeanRight,
+                ("[/", _) => NodeShape::TrapBottom,
+                (_, '/') => NodeShape::TrapTop,
+                _ => NodeShape::LeanLeft,
+            };
+            return Some((Some(label), kind));
         }
     }
     let &(open, close, kind) = SHAPES.iter().find(|(open, ..)| c.rest().starts_with(open))?;
@@ -627,6 +634,12 @@ fn end_head(c: &mut Cur) -> Head {
 }
 
 fn link(c: &mut Cur) -> Option<Link> {
+    // A v11 edge id, `A e1@--> B`, names the edge for a later `e1@{ … }`.
+    let save = c.i;
+    let id = ident(c).filter(|_| c.eat("@") && matches!(c.peek(), Some('-' | '=' | '.' | '~' | '<' | 'o' | 'x')));
+    if id.is_none() {
+        c.i = save;
+    }
     let start = if c.eat("<") {
         Head::Arrow
     } else if matches!(c.peek(), Some('o' | 'x')) && matches!(c.peek2(), Some('-' | '=')) {
@@ -682,7 +695,7 @@ fn link(c: &mut Cur) -> Option<Link> {
     } else {
         c.i = save;
     }
-    Some(Link { line, start, end, minlen, label })
+    Some(Link { id, line, start, end, minlen, label })
 }
 
 const SPACING: Spacing = Spacing { node: 36.0, rank: 44.0, cluster: 14.0 };
