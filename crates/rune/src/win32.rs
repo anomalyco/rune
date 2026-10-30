@@ -13,6 +13,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_EX_TRANSPARENT,
 };
 
+mod pointer;
+
 fn hwnd(window: &winit::window::Window) -> Option<HWND> {
     let RawWindowHandle::Win32(h) = window.window_handle().ok()?.as_raw() else { return None };
     Some(h.hwnd.get() as HWND)
@@ -86,7 +88,7 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
 
 /// Per-window input owner; the shared low-level hook observes but never consumes events.
 pub(crate) struct OverlayWindow {
-    watch: Option<crate::win32_pointer::MouseWatch>,
+    watch: Option<crate::win32::pointer::MouseWatch>,
     wake: Option<crate::Waker>,
     input: Rc<Input>,
     observing: bool,
@@ -133,7 +135,7 @@ impl OverlayWindow {
 
     fn refresh_watch(&mut self) {
         if self.input.visible.get() && self.input.track() {
-            if self.watch.is_none() { self.watch = Some(crate::win32_pointer::MouseWatch::new(self.wake.clone())); }
+            if self.watch.is_none() { self.watch = Some(crate::win32::pointer::MouseWatch::new(self.wake.clone())); }
             if let Some(watch) = &self.watch { watch.geometry(self.input.hwnd, self.input.follow.get()); }
         } else { self.watch.take(); }
     }

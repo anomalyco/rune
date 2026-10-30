@@ -85,8 +85,6 @@ mod os_cursor;
 mod pointer_observer;
 #[cfg(target_os = "windows")]
 mod win32;
-#[cfg(target_os = "windows")]
-mod win32_pointer;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
