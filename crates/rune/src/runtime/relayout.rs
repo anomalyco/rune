@@ -80,11 +80,12 @@ impl<S: 'static> Measurement<'_, S> {
         self.anchor_virtuals();
         let quiet = self.quiet_rows();
         let mut taffy = std::mem::replace(self.layout, TaffyTree::with_capacity(0));
-        let nodes: Vec<Node> = self.nodes.iter_mut().zip(quiet).map(|(n, quiet)| {
+        let mut nodes = std::mem::take(&mut self.spare_nodes);
+        nodes.extend(self.nodes.iter_mut().zip(quiet).map(|(n, quiet)| {
             // The new nodes lay their text out again; the cache then holds the only reference.
             n.text_layout = None;
             Node { run_layout: None, elided: None, virtual_mount: quiet, ..n.clone() }
-        }).collect();
+        }));
         let root = nodes[0].taffy;
         let mut style = taffy.style(root).unwrap().clone();
         style.size = root_size(self.viewport, self.fit_height);

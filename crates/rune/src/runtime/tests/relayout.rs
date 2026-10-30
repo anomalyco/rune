@@ -63,6 +63,23 @@ fn a_resize_alone_lays_the_tree_out_again_without_the_view_as_a_full_commit_woul
     }
 }
 
+/// A resize lays out into the node buffer the last commit let go of, as a flatten does.
+#[test]
+fn a_resize_reuses_the_last_commits_node_buffer() {
+    let mut rt = Runtime::new(0, paragraphs, (700.0, 600.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    // The first commit let go of an empty buffer.
+    rt.invalidate();
+    rt.frame(1.0 / 120.0);
+    for w in [600.0, 420.0, 300.0] {
+        let (spare, last) = (rt.spare_nodes.as_ptr(), rt.nodes.as_ptr());
+        assert!(rt.spare_nodes.capacity() >= rt.nodes.len());
+        assert_eq!(resize(&mut rt, w, 2.0), 0, "at {w}");
+        assert_eq!(rt.nodes.as_ptr(), spare, "at {w}");
+        assert_eq!(rt.spare_nodes.as_ptr(), last, "at {w}");
+    }
+}
+
 #[test]
 fn a_resize_keeps_the_memos_the_view_built() {
     let mut rt = Runtime::new(0, paragraphs, (700.0, 600.0), Env::new(true, 2.0));
