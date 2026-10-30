@@ -43,6 +43,33 @@ fn a_fold_glide_row_folds_on_its_own_spring() {
     assert!(stack > own + 0.2, "the stack's 0.32 s spring, stretched for the distance: {stack} s");
 }
 
+/// The row's drawn top and height each frame of opening, in a 300 pt window with the stack
+/// drawn at `zoom`.
+fn opening(zoom: f32) -> Vec<(f32, f32)> {
+    fn folded(s: &(bool, f32), _: &mut Cx<(bool, f32)>) -> El {
+        col().key("zoom").scale(s.1).child(stack(s.0, true))
+    }
+    let mut rt = Runtime::new((false, zoom), folded, (400.0, 300.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    rt.frame(1.0 / 120.0);
+    rt.state.0 = true;
+    rt.dirty = true;
+    (0..60).map(|_| {
+        rt.frame(1.0 / 120.0);
+        let row = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("group")).unwrap();
+        (row.rect[1], row.rect[3])
+    }).collect()
+}
+
+#[test]
+fn a_zoomed_fold_moves_only_what_shows_of_it() {
+    let frames = opening(1.5);
+    let (top, full) = (frames[0].0, 600.0 * 1.5);
+    assert!(top < 300.0, "{frames:?}");
+    assert!(frames.iter().all(|&(y, h)| y + h <= 300.5 || h == full), "glides to the window's edge, then lands: {frames:?}");
+    assert!(frames[20].0 + frames[20].1 > 290.0 && frames[59].1 == full, "{frames:?}");
+}
+
 #[test]
 fn a_fold_moves_only_what_shows_of_it() {
     fn folded(open: &bool, _: &mut Cx<bool>) -> El {

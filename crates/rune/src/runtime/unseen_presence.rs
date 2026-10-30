@@ -18,12 +18,18 @@ impl<S: 'static> Runtime<S> {
         seen.iter().zip(&self.inh_scratch).map(|(&seen, h)| !seen || h.opacity < 1.0 / 512.0).collect()
     }
 
-    /// How tall growth row `id` can be before its bottom leaves the window, from where it last
-    /// drew (`El::fold_glide`); unbounded before it draws.
+    /// How tall growth row `id` can be, in its own points, before its bottom passes the bottom
+    /// of its clip (a scroll's viewport, the window), from where and how big it last drew
+    /// (`El::fold_glide`); unbounded before it draws.
     pub(super) fn fold_limit(&self, id: NodeId) -> f32 {
         if !self.built || self.drawn.len() != self.nodes.len() { return f32::INFINITY; }
         let Some(i) = self.nodes.iter().position(|n| n.id == id) else { return f32::INFINITY };
-        self.viewport.1 - self.drawn[i][1]
+        let Some(h) = self.grows.get(&id).map(|g| g.h).filter(|&h| h > 0.5) else { return f32::INFINITY };
+        let d = self.drawn[i];
+        let k = d[3] / h;
+        if !(k > 0.01) { return f32::INFINITY; }
+        let bottom = (self.screen_clip_of_parent(self.nodes[i].parent)[3] / self.env.scale).min(self.viewport.1);
+        h + (bottom - d[1] - d[3]) / k
     }
 
     /// Ends the exits that drew nothing last frame. A flight paints outside its clips, so it stays.

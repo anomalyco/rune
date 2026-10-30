@@ -2937,7 +2937,7 @@ impl<S: 'static> Runtime<S> {
         contains(shown, x, y)
     }
 
-    fn screen_clip_of_parent(&self, parent: Option<usize>) -> [f32; 4] {
+    pub(super) fn screen_clip_of_parent(&self, parent: Option<usize>) -> [f32; 4] {
         screen_clip_of(parent, &self.inh_scratch, &self.turn_scratch)
     }
 
