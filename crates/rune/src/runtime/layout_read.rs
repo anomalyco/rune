@@ -230,9 +230,6 @@ impl<S: 'static> Runtime<S> {
                 dy += st.offset as f32;
                 dx += st.x.offset as f32;
             }
-            if let Some(v) = self.virtuals.get(&nodes[p].path) {
-                dy -= v.before;
-            }
             up = nodes[p].parent.filter(|_| nodes[p].above.is_none());
         }
         if let Some(anc) = std::iter::successors(Some(i), |&p| nodes[p].parent).find(|&p| nodes[p].above.is_some())
