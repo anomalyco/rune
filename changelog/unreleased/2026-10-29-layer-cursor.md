@@ -1,0 +1,1 @@
+- **Wayland overlays set their cursor.** A layer-shell overlay never set one, so the pointer kept whatever cursor it arrived with, such as a terminal's I-beam over a card. It now shows the runtime's cursor through cursor-shape-v1, as a window does, and the arrow off its hit areas.

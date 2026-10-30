@@ -18,6 +18,8 @@ use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_surface::{self, WlSurface};
 use wayland_client::protocol::{wl_output::{self, WlOutput}, wl_seat::{self, WlSeat}, wl_pointer::{self, WlPointer}, wl_keyboard::{self, WlKeyboard}, wl_touch::{self, WlTouch}};
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
+use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::{Shape, WpCursorShapeDeviceV1};
+use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1::WpCursorShapeManagerV1;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1};
 
@@ -50,6 +52,12 @@ struct State {
     /// A finger on the surface acts as the primary button, so a tap is a click.
     touch: Option<WlTouch>,
     touch_id: Option<i32>,
+    /// `wp_cursor_shape_manager_v1` when the compositor has it, and its device for `pointer`.
+    shapes: Option<WpCursorShapeManagerV1>,
+    shape: Option<WpCursorShapeDeviceV1>,
+    /// The serial of the pointer's enter while it is over the surface, and the cursor set since.
+    entered: Option<u32>,
+    shown: Option<crate::el::Cursor>,
     keyboard: Option<WlKeyboard>,
     xkb: Option<xkbcommon::xkb::State>,
 }
@@ -70,11 +78,20 @@ impl State {
         let caps = self.capabilities.unwrap_or_else(wl_seat::Capability::empty);
         let pointer = self.want_pointer && caps.contains(wl_seat::Capability::Pointer);
         let keyboard = self.want_keys && caps.contains(wl_seat::Capability::Keyboard);
-        if pointer && self.pointer.is_none() { self.pointer = Some(seat.get_pointer(qh, ())); }
+        if pointer && self.pointer.is_none() {
+            let p = seat.get_pointer(qh, ());
+            self.shape = self.shapes.as_ref().map(|shapes| shapes.get_pointer(&p, qh, ()));
+            self.pointer = Some(p);
+        }
         let touch = self.want_pointer && caps.contains(wl_seat::Capability::Touch);
         if touch && self.touch.is_none() { self.touch = Some(seat.get_touch(qh, ())); }
         if keyboard && self.keyboard.is_none() { self.keyboard = Some(seat.get_keyboard(qh, ())); }
-        if !pointer && let Some(p) = self.pointer.take() { if p.version() >= 3 { p.release(); } self.pointer_inside = false; }
+        if !pointer && let Some(p) = self.pointer.take() {
+            if let Some(shape) = self.shape.take() { shape.destroy(); }
+            if p.version() >= 3 { p.release(); }
+            self.pointer_inside = false;
+            self.entered = None;
+        }
         if !touch && let Some(t) = self.touch.take() { if t.version() >= 3 { t.release(); } self.touch_id = None; }
         if !keyboard && let Some(k) = self.keyboard.take() { if k.version() >= 3 { k.release(); } self.xkb = None; self.keyboard_focus = false; }
     }
@@ -82,13 +99,17 @@ impl State {
 impl Dispatch<WlPointer, ()> for State {
     fn event(state: &mut Self, _: &WlPointer, event: wl_pointer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         match event {
-            wl_pointer::Event::Enter { surface, surface_x, surface_y, .. } => {
+            wl_pointer::Event::Enter { serial, surface, surface_x, surface_y } => {
                 state.pointer_inside = state.surface.as_ref() == Some(&surface);
+                // Until the surface sets a cursor, the pointer keeps the one it arrived with.
+                state.entered = state.pointer_inside.then_some(serial);
+                state.shown = None;
                 if state.pointer_inside { state.input.push(Input::Move(surface_x as f32, surface_y as f32)); }
             }
             wl_pointer::Event::Motion { surface_x, surface_y, .. } if state.pointer_inside => state.input.push(Input::Move(surface_x as f32, surface_y as f32)),
             wl_pointer::Event::Leave { surface, .. } if state.surface.as_ref() == Some(&surface) => {
                 state.pointer_inside = false;
+                state.entered = None;
                 state.input.push(Input::Leave);
             }
             wl_pointer::Event::Button { serial, button: 0x110, state: wayland_client::WEnum::Value(button), .. } if state.pointer_inside => {
@@ -212,6 +233,29 @@ impl Dispatch<WlRegion, ()> for State {
 impl Dispatch<ZwlrLayerShellV1, ()> for State {
     fn event(_: &mut Self, _: &ZwlrLayerShellV1, _: <ZwlrLayerShellV1 as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
 }
+impl Dispatch<WpCursorShapeManagerV1, ()> for State {
+    fn event(_: &mut Self, _: &WpCursorShapeManagerV1, _: <WpCursorShapeManagerV1 as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+}
+impl Dispatch<WpCursorShapeDeviceV1, ()> for State {
+    fn event(_: &mut Self, _: &WpCursorShapeDeviceV1, _: <WpCursorShapeDeviceV1 as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+}
+
+/// The cursor-shape-v1 shape for `c`, as `os_cursor` maps winit's. An image is the arrow.
+fn shape(c: crate::el::Cursor) -> Shape {
+    use crate::el::Cursor;
+    match c {
+        Cursor::Default | Cursor::Hidden | Cursor::Image(_) => Shape::Default,
+        Cursor::Pointer => Shape::Pointer,
+        Cursor::Text => Shape::Text,
+        Cursor::Grab => Shape::Grab,
+        Cursor::Grabbing => Shape::Grabbing,
+        Cursor::NotAllowed => Shape::NotAllowed,
+        Cursor::Move => Shape::Move,
+        Cursor::ResizeColumn => Shape::ColResize,
+        Cursor::ResizeRow => Shape::RowResize,
+        Cursor::Crosshair => Shape::Crosshair,
+    }
+}
 impl Dispatch<WlSurface, ()> for State {
     fn event(state: &mut Self, _: &WlSurface, event: wl_surface::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         if let wl_surface::Event::PreferredBufferScale { factor } = event {
@@ -332,7 +376,8 @@ impl LayerSurface {
         let layer = shell.get_layer_surface(&surface, output.as_ref(), Layer::Overlay, namespace.to_owned(), &qh, ());
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.set_exclusive_zone(0);
-        let state = State { surface: Some(surface.clone()), want_pointer, want_keys, ..State::default() };
+        let shapes = globals.bind::<WpCursorShapeManagerV1, _, _>(&qh, 1..=1, ()).ok();
+        let state = State { surface: Some(surface.clone()), want_pointer, want_keys, shapes, ..State::default() };
         let watch = wake.map(|wake| Watch::spawn(conn.backend().poll_fd().as_raw_fd(), wake));
         let mut this = LayerSurface { conn, registry, activation, seat_global, regions: std::cell::RefCell::new(Some(Vec::new())), compositor, output, seat, options: options.clone(), queue, state, layer, surface, display: display.display, watch };
         this.place(at);
@@ -422,6 +467,21 @@ impl LayerSurface {
 
     pub fn supports_keys(&self) -> bool { self.layer.version() >= 4 && self.seat.is_some() }
 
+    /// Shows `want` while the pointer is over the surface, once per change. Without
+    /// cursor-shape-v1 only `Cursor::Hidden` applies; others keep the cursor the pointer
+    /// arrived with, such as a terminal's I-beam.
+    pub fn set_cursor(&mut self, want: crate::el::Cursor) {
+        let (Some(serial), Some(pointer)) = (self.state.entered, &self.state.pointer) else { return };
+        if self.state.shown == Some(want) { return; }
+        match (want, &self.state.shape) {
+            (crate::el::Cursor::Hidden, _) => pointer.set_cursor(serial, None, 0, 0),
+            (want, Some(device)) => device.set_shape(serial, shape(want)),
+            (_, None) => return,
+        }
+        self.state.shown = Some(want);
+        let _ = self.queue.flush();
+    }
+
     /// Commit role state (placement) without a new buffer; wgpu's present commits buffers.
     pub fn commit(&mut self) {
         self.surface.commit();
@@ -465,6 +525,8 @@ impl LayerSurface {
 
 impl Drop for LayerSurface {
     fn drop(&mut self) {
+        if let Some(shape) = self.state.shape.take() { shape.destroy(); }
+        if let Some(shapes) = self.state.shapes.take() { shapes.destroy(); }
         if let Some(pointer) = self.state.pointer.take() && pointer.version() >= 3 { pointer.release(); }
         if let Some(touch) = self.state.touch.take() && touch.version() >= 3 { touch.release(); }
         if let Some(keyboard) = self.state.keyboard.take() && keyboard.version() >= 3 { keyboard.release(); }
