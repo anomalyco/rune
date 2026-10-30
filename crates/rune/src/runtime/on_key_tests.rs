@@ -1,7 +1,7 @@
 //! `El::on_key`, `El::icon_rotation`, `El::level` and `El::expanded`, `El::help_when_truncated`
 //! and `Tx::mods`: what a virtualised tree or table needs from the core.
 use super::*;
-use crate::{Cx, El, Env, Icon, Key, KeyEvent, Mods, PhysicalInput, TextEdit, TextStyle, col, el, icon, row, text, text_input};
+use crate::{Cx, El, Env, Icon, Key, KeyEvent, Mods, PhysicalInput, TextEdit, TextStyle, col, el, icon, row, text_input};
 
 #[derive(Default)]
 struct Keys {
@@ -248,7 +248,7 @@ fn a_truncation_tooltip_shows_only_while_the_text_is_cut() {
     fn view(s: &S, _: &mut Cx<S>) -> El {
         col().size(400.0, 100.0).child(
             row().size(s.w, 20.0).child(
-                text("A rather long file name.rs").key("cell").font(TextStyle::new(13.0, 400.0)).truncate().shrink().help_when_truncated("A rather long file name.rs"),
+                crate::text("A rather long file name.rs").key("cell").font(TextStyle::new(13.0, 400.0)).truncate().shrink().help_when_truncated("A rather long file name.rs"),
             ),
         )
     }
@@ -272,7 +272,7 @@ fn a_faded_text_that_runs_past_its_box_reads_as_cut() {
     fn view(s: &S, _: &mut Cx<S>) -> El {
         col().size(400.0, 100.0).child(
             row().size(s.w, 20.0).child(
-                text("A rather long file name.rs").key("cell").font(TextStyle::new(13.0, 400.0)).truncate_fade().shrink().help_when_truncated("A rather long file name.rs"),
+                crate::text("A rather long file name.rs").key("cell").font(TextStyle::new(13.0, 400.0)).truncate_fade().shrink().help_when_truncated("A rather long file name.rs"),
             ),
         )
     }
