@@ -2101,6 +2101,22 @@ impl<S: 'static> Runtime<S> {
         (at < target).then_some(at)
     }
 
+    /// A user or explicit scroll ends the holds and reveals that would pull the view back.
+    fn drop_scroll_holds(&mut self) {
+        self.keeps.clear();
+        self.scroll_reveals.clear();
+    }
+
+    /// Starts the text flights and launches handlers asked for this frame.
+    fn capture_flights(&mut self, tx: &mut Tx) {
+        for (source, target) in std::mem::take(&mut tx.text_flights) {
+            self.capture_text_flight(source, target);
+        }
+        for (source, target) in std::mem::take(&mut tx.launches) {
+            self.capture_launch(source, target);
+        }
+    }
+
     /// `elapsed` advances the logical clock when no wall clock drives it; `catch_up` steps
     /// running motion before the commit and `dt` steps all motion after it.
     fn frame_step(&mut self, elapsed: f64, catch_up: f64, dt: f64) -> bool {
@@ -2189,12 +2205,7 @@ impl<S: 'static> Runtime<S> {
             if routed { self.latch_playground(&mut tx); }
             if (ran || self.dirty || !tx.scroll_to.is_empty()) && routed {
                 if ran || self.dirty {
-                    for (source, target) in std::mem::take(&mut tx.text_flights) {
-                        self.capture_text_flight(source, target);
-                    }
-                    for (source, target) in std::mem::take(&mut tx.launches) {
-                        self.capture_launch(source, target);
-                    }
+                    self.capture_flights(&mut tx);
                     if self.settle { tx.settle(); }
                     self.settled |= tx.settle;
                     #[cfg(debug_assertions)]
@@ -2207,8 +2218,7 @@ impl<S: 'static> Runtime<S> {
                     ran = false;
                 }
                 if !tx.scroll_to.is_empty() {
-                    self.keeps.clear();
-                    self.scroll_reveals.clear();
+                    self.drop_scroll_holds();
                     for r in std::mem::take(&mut tx.scroll_to) {
                         self.reveal_row(&r, tx.instant);
                     }
@@ -2245,12 +2255,7 @@ impl<S: 'static> Runtime<S> {
         }
         self.release_files();
         self.schedule_wakes(tx.wakes.drain(..));
-        for (source, target) in std::mem::take(&mut tx.text_flights) {
-            self.capture_text_flight(source, target);
-        }
-        for (source, target) in std::mem::take(&mut tx.launches) {
-            self.capture_launch(source, target);
-        }
+        self.capture_flights(&mut tx);
         if self.caret_watch && self.caret_moved(None) { self.dirty = true; }
         let read_moved = self.layout_reads_moved();
         self.reuse.read_moved = read_moved;
@@ -2298,12 +2303,11 @@ impl<S: 'static> Runtime<S> {
         }
         let follow = std::mem::take(&mut self.caret_follow);
         let destination = !scroll_bottom.is_empty() || !scroll_pages.is_empty() || !scroll_offsets.is_empty();
-        if !scroll_to.is_empty() || !scroll_bottom.is_empty() || !scroll_pages.is_empty() || !scroll_offsets.is_empty() || follow {
-            self.keeps.clear();
-            self.scroll_reveals.clear();
+        if !scroll_to.is_empty() || destination || follow {
+            self.drop_scroll_holds();
         }
         for r in &scroll_to { self.reveal_row(r, tx.instant); }
-        if !scroll_bottom.is_empty() || !scroll_pages.is_empty() || !scroll_offsets.is_empty() || follow {
+        if destination || follow {
             self.step_scroll(0.0);
         }
         if follow { self.follow_caret(); }
@@ -2705,8 +2709,7 @@ impl<S: 'static> Runtime<S> {
     /// lands on its end follows it again.
     fn page_to(&mut self, i: usize, to: impl FnOnce(f64, f64, f64) -> f64) -> bool {
         self.release_hover_hold();
-        self.keeps.clear();
-        self.scroll_reveals.clear();
+        self.drop_scroll_holds();
         let (id, page, stick) = (self.nodes[i].id, f64::from(self.nodes[i].local.h * 0.9), self.nodes[i].scroll.is_some_and(|s| s.stick_bottom));
         let Some(st) = self.scrolls.get_mut(&id) else { return false };
         st.offset = to(st.offset, st.max, page).clamp(0.0, st.max);
@@ -3776,8 +3779,7 @@ impl<S: 'static> Runtime<S> {
     /// negative deltaY). Applied 1:1: the platform supplies its own momentum phases.
     pub fn wheel(&mut self, x: f32, y: f32, dy: f32) {
         self.release_hover_hold();
-        self.keeps.clear();
-        self.scroll_reveals.clear();
+        self.drop_scroll_holds();
         self.dismiss_help();
         let Some(id) = self.scroll_at(x, y) else { return };
         let stick = self.node_index.get(&id).and_then(|&i| self.nodes[i].scroll).is_some_and(|s| s.stick_bottom);
@@ -3797,8 +3799,7 @@ impl<S: 'static> Runtime<S> {
     /// the runtime decays it (for platforms without OS momentum and headless scripts).
     pub fn fling(&mut self, x: f32, y: f32, velocity: f32) {
         self.release_hover_hold();
-        self.keeps.clear();
-        self.scroll_reveals.clear();
+        self.drop_scroll_holds();
         self.dismiss_help();
         let Some(id) = self.scroll_at(x, y) else { return };
         if let Some(st) = self.scrolls.get_mut(&id) {
