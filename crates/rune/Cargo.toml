@@ -37,6 +37,10 @@ svg = ["dep:resvg"]
 # `Tray::new` returns `TrayError::Unsupported` on Linux and a Wayland session's global shortcuts
 # return `ShortcutError::Unsupported`; X11 shortcuts keep working. No effect on other platforms.
 dbus = ["dep:zbus", "dep:tokio", "dep:futures-util"]
+# macOS: a native Metal backend (research/34), used when `RUNE_GPU_BACKEND=metal` is set at
+# launch; wgpu's Metal backend stays the default. It plugs in through wgpu's `custom` backend,
+# which this feature turns on. No effect on other platforms.
+metal-backend = ["wgpu/custom", "dep:objc2-quartz-core", "dep:parking_lot", "dep:raw-window-metal"]
 
 [dependencies]
 procwatch = { path = "../procwatch", optional = true }
@@ -101,12 +105,15 @@ objc2-core-video = { version = "0.3", features = ["CVPixelBufferIOSurface", "obj
 # Unused by name: its default features give IOSurfaceRef the CF `Type` impl objc2-core-video needs.
 objc2-io-surface = "0.3"
 objc2-metal = "0.3"
+objc2-quartz-core = { version = "0.3.2", optional = true, default-features = false, features = ["std", "bitflags", "CALayer", "CAMetalLayer", "objc2-core-foundation", "objc2-core-graphics", "objc2-metal"] }
+parking_lot = { version = "0.12", optional = true }
+raw-window-metal = { version = "1.1", optional = true }
 block2-metal = { package = "block2", version = "0.6" }
 # Video playback (`Video`): AVPlayer, its video output and the poster/headless image generator.
 objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVAsset", "AVAssetImageGenerator", "AVAssetTrack", "AVMediaFormat", "AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "objc2-core-foundation", "objc2-core-graphics", "objc2-core-media", "objc2-core-video"] }
 objc2-core-media = { version = "0.3", default-features = false, features = ["std", "CMTime"] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGBitmapContext", "CGColorSpace", "CGContext", "CGImage"] }
-objc2-foundation-video = { package = "objc2-foundation", version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSObject", "NSString", "NSURL", "NSURLConnection", "NSURLRequest", "NSURLResponse"] }
+objc2-foundation-video = { package = "objc2-foundation", version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSObject", "NSRange", "NSString", "NSURL", "NSURLConnection", "NSURLRequest", "NSURLResponse"] }
 # Ogg and WebM audio (`ogg-audio`): pure-Rust demuxers and decoders.
 symphonia = { version = "0.5.5", optional = true, default-features = false, features = ["ogg", "vorbis", "mkv"] }
 opuscule = { version = "0.2.2", optional = true }
@@ -138,6 +145,10 @@ wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"]
 wgpu = { version = "~30.0.1", default-features = false, features = ["counters"] }
 # Thread and process CPU clocks in the overlay cost example.
 libc = "0.2"
+
+[[example]]
+name = "metal_dispatch"
+required-features = ["metal-backend"]
 
 [[example]]
 name = "tree_swap"

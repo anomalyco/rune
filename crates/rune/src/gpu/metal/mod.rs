@@ -1,0 +1,141 @@
+//! A native Metal backend behind `RUNE_GPU_BACKEND=metal` (research/34, phase 1), through wgpu's
+//! `custom` backend, so compositors and the frame loop keep calling wgpu types.
+//!
+//! Shaders stay WGSL: naga translates each pipeline's entry points to MSL with the pipeline
+//! layout's slots, as wgpu-hal does, minus its vertex pulling (vertex inputs use a vertex
+//! descriptor). Buffers are `MTLStorageModeShared`; textures are private.
+//!
+//! A command encoder records one `MTLCommandBuffer` with unretained references: everything it
+//! uses is kept alive until the queue's `MTLSharedEvent` reaches that buffer's value. A submit
+//! that drew into a drawable holds its buffer, and `Queue::present` presents the drawable on it
+//! and commits it, so a frame is one command buffer. `Queue::write_buffer` and `write_texture`
+//! stage through a blit buffer committed ahead of the next submit, as wgpu orders them. Map and
+//! work-done callbacks run from `Device::poll` and `Queue::submit` once their work has finished.
+//!
+//! Rune's layer tweaks (materials, present timing, transactions, occlusion) reach this backend's
+//! CAMetalLayer through `gpu::with_layer`. What needs wgpu-hal itself (native video surfaces) is
+//! inert here and says so once; compute, queries, render bundles and depth are not implemented.
+
+pub(crate) mod bench;
+mod device;
+mod encode;
+mod layout;
+mod pass;
+mod pipeline;
+mod resource;
+mod shader;
+#[cfg(test)]
+mod shader_tests;
+mod submit;
+mod surface;
+#[cfg(test)]
+mod tests;
+
+use std::collections::HashSet;
+use std::future::ready;
+use std::pin::Pin;
+
+use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice};
+use objc2_video::rc::Retained;
+use objc2_video::runtime::ProtocolObject;
+use parking_lot::Mutex;
+use wgpu::custom::*;
+
+pub(crate) use device::{MetalDevice, Shared};
+
+pub(crate) type Obj<P> = Retained<ProtocolObject<P>>;
+
+/// Whether `RUNE_GPU_BACKEND=metal` asks for this backend.
+pub(crate) fn enabled() -> bool {
+    std::env::var("RUNE_GPU_BACKEND").is_ok_and(|v| v == "metal")
+}
+
+pub(crate) fn instance() -> wgpu::Instance {
+    wgpu::Instance::from_custom(MetalInstance)
+}
+
+/// The CAMetalLayer a surface of this backend presents into.
+pub(crate) fn layer<'s>(surface: &'s wgpu::Surface<'_>) -> Option<&'s objc2_video::runtime::AnyObject> {
+    surface.as_custom::<surface::MetalSurface>().map(|s| -> &objc2_video::runtime::AnyObject { s.layer() })
+}
+
+/// Says once per `what` that a wgpu-hal path does nothing on this backend.
+pub(crate) fn inert(what: &'static str) {
+    static SAID: Mutex<Option<HashSet<&'static str>>> = Mutex::new(None);
+    if SAID.lock().get_or_insert_with(HashSet::new).insert(what) {
+        eprintln!("rune: {what} is inert on RUNE_GPU_BACKEND=metal");
+    }
+}
+
+macro_rules! send_sync {
+    ($($t:ty),*) => { $(
+        // SAFETY: Metal devices, queues, resources and events are thread-safe; command buffers,
+        // encoders and drawables are used by one thread at a time, as wgpu's handles are.
+        unsafe impl Send for $t {}
+        unsafe impl Sync for $t {}
+    )* };
+}
+pub(crate) use send_sync;
+
+#[derive(Debug)]
+struct MetalInstance;
+
+impl InstanceInterface for MetalInstance {
+    fn new(_: wgpu::InstanceDescriptor) -> Self { MetalInstance }
+    unsafe fn create_surface(&self, target: wgpu::SurfaceTargetUnsafe) -> Result<DispatchSurface, wgpu::CreateSurfaceError> {
+        Ok(unsafe { surface::create(target) })
+    }
+    fn request_adapter(&self, _: &wgpu::RequestAdapterOptions<'_, '_>) -> Pin<Box<dyn RequestAdapterFuture>> {
+        Box::pin(ready(Ok(DispatchAdapter::custom(MetalAdapter::new()))))
+    }
+    fn poll_all_devices(&self, _: bool) -> bool { true }
+    fn wgsl_language_features(&self) -> wgpu::WgslLanguageFeatures { wgpu::WgslLanguageFeatures::empty() }
+    fn enumerate_adapters(&self, _: wgpu::Backends) -> Pin<Box<dyn EnumerateAdapterFuture>> {
+        Box::pin(ready(vec![DispatchAdapter::custom(MetalAdapter::new())]))
+    }
+}
+
+#[derive(Debug)]
+struct MetalAdapter {
+    device: Obj<dyn MTLDevice>,
+}
+send_sync!(MetalAdapter);
+
+impl MetalAdapter {
+    fn new() -> Self {
+        MetalAdapter { device: MTLCreateSystemDefaultDevice().expect("RUNE_GPU_BACKEND=metal needs a Metal device") }
+    }
+}
+
+fn info(device: &ProtocolObject<dyn MTLDevice>) -> wgpu::AdapterInfo {
+    let kind = if device.hasUnifiedMemory() { wgpu::DeviceType::IntegratedGpu } else { wgpu::DeviceType::DiscreteGpu };
+    let mut info = wgpu::AdapterInfo::new(kind, wgpu::Backend::Metal);
+    info.name = device.name().to_string();
+    info.driver = "rune metal".into();
+    info
+}
+
+/// What a Metal GPU of the Apple or Mac 2 families can do, in wgpu's terms.
+fn limits() -> wgpu::Limits {
+    wgpu::Limits { max_texture_dimension_1d: 16384, max_texture_dimension_2d: 16384, max_buffer_size: 1 << 30, ..wgpu::Limits::default() }
+}
+
+impl AdapterInterface for MetalAdapter {
+    fn request_device(&self, desc: &wgpu::DeviceDescriptor<'_>) -> Pin<Box<dyn RequestDeviceFuture>> {
+        let (device, queue) = device::new(self.device.clone(), desc);
+        Box::pin(ready(Ok((DispatchDevice::custom(device), DispatchQueue::custom(queue)))))
+    }
+    fn is_surface_supported(&self, _: &DispatchSurface) -> bool { true }
+    fn features(&self) -> wgpu::Features { wgpu::Features::empty() }
+    fn limits(&self) -> wgpu::Limits { limits() }
+    fn downlevel_capabilities(&self) -> wgpu::DownlevelCapabilities { Default::default() }
+    fn get_info(&self) -> wgpu::AdapterInfo { info(&self.device) }
+    fn get_texture_format_features(&self, format: wgpu::TextureFormat) -> wgpu::TextureFormatFeatures {
+        use wgpu::TextureFormatFeatureFlags as F;
+        let float = format.sample_type(None, None).is_some_and(|t| matches!(t, wgpu::TextureSampleType::Float { .. }));
+        let flags = if float { F::FILTERABLE | F::BLENDABLE } else { F::empty() };
+        wgpu::TextureFormatFeatures { allowed_usages: wgpu::TextureUsages::all(), flags }
+    }
+    fn get_presentation_timestamp(&self) -> wgpu::PresentationTimestamp { wgpu::PresentationTimestamp(0) }
+    fn cooperative_matrix_properties(&self) -> Vec<wgpu::wgt::CooperativeMatrixProperties> { Vec::new() }
+}

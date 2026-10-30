@@ -78,7 +78,7 @@ fn srgb(x: f32) -> u8 {
 fn completion_worker_preserves_cpu_gpu_overlap() {
     use std::sync::mpsc::TryRecvError;
     use std::time::Duration;
-    let gpu = Gpu::headless();
+    let gpu = Gpu::headless_wgpu();
     let surface = NativeSurface::new();
     surface.push_bytes(synthetic(16, 16, 0), 1).unwrap();
     let mut renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);
@@ -187,7 +187,7 @@ fn publish(s: &NativeSurface, b: ByteFrame, id: u64, native: bool) {
 
 #[test]
 fn queued_video_frames_then_readback() {
-    let gpu = Gpu::headless();
+    let gpu = Gpu::headless_wgpu();
     let mut renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let surfaces: Vec<_> = (0..4).map(|_| NativeSurface::new()).collect();
     let (done, completed) = std::sync::mpsc::channel();
@@ -249,7 +249,7 @@ fn queued_video_frames_then_readback() {
 
 #[test]
 fn video_gpu_colour_sharpness_geometry_and_lifetime() {
-    let gpu = Gpu::new(Gpu::instance(), None);
+    let gpu = Gpu::headless_wgpu();
     // Other renderers (including the parallel burst test) may own native planes.
     // Their lifetime must not affect this renderer's ownership assertions.
     #[cfg(target_os = "macos")]
@@ -538,7 +538,7 @@ fn assert_row_reversed(mirrored: &[u8], plain: &[u8], size: (u32, u32), what: &s
 
 #[test]
 fn mirrored_video_is_exact_cropped_centred_and_toggles_without_a_new_frame() {
-    let gpu = Gpu::headless();
+    let gpu = Gpu::headless_wgpu();
     let mut renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut id = 0;
     for native in [false, cfg!(target_os = "macos")] {
@@ -720,7 +720,7 @@ fn orientations_come_from_quarter_turn_transforms_only() {
 /// every quarter turn and flip, at 1:1, magnified and shrunk, BGRA and NV12.
 #[test]
 fn oriented_frames_draw_like_frames_turned_upright() {
-    let gpu = Gpu::headless();
+    let gpu = Gpu::headless_wgpu();
     let mut renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut id = 0;
     for native in [false, cfg!(target_os = "macos")] {
@@ -756,7 +756,7 @@ fn rotated_clip_buffers_draw_upright_like_its_poster() {
     assert_eq!((raw.width, raw.height), (64, 32), "stored landscape");
     assert_eq!((upright.width, upright.height), (32, 64), "shown portrait");
     assert!(o.swaps(), "{o:?}");
-    let gpu = Gpu::headless();
+    let gpu = Gpu::headless_wgpu();
     let mut renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);
     for native in [false, true] {
         let (oriented, poster) = (NativeSurface::new(), NativeSurface::new());

@@ -119,6 +119,11 @@ pub mod live;
 pub mod memo;
 pub mod motion_gate;
 mod pixels;
+#[cfg(target_os = "macos")]
+mod gpu;
+#[cfg(all(target_os = "macos", feature = "metal-backend"))]
+#[doc(hidden)]
+pub use gpu::metal::bench::dispatch_overhead as __metal_dispatch_overhead;
 #[cfg(not(target_arch = "wasm32"))]
 mod gpu_pick;
 pub mod gpu_springs;

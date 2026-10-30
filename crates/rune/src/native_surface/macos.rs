@@ -198,8 +198,10 @@ impl Drop for PlaneOwner {
 }
 impl Importer {
     pub fn new(device: &wgpu::Device) -> Result<Self, String> {
-        let metal =
-            unsafe { device.as_hal::<wgpu::hal::api::Metal>() }.ok_or("NativeSurface needs the Metal backend")?;
+        let Some(metal) = (unsafe { device.as_hal::<wgpu::hal::api::Metal>() }) else {
+            crate::gpu::inert("NativeSurface");
+            return Err("NativeSurface needs wgpu's Metal backend".into());
+        };
         let mut raw = null_mut();
         check(
             unsafe { CVMetalTextureCache::create(None, None, metal.raw_device(), None, NonNull::from(&mut raw)) },

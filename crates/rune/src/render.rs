@@ -413,11 +413,24 @@ impl Gpu {
         Self::new(Self::instance(), None)
     }
 
+    /// A headless GPU on wgpu's backends, for tests of what needs wgpu-hal.
+    #[cfg(test)]
+    pub(crate) fn headless_wgpu() -> Gpu {
+        Self::new(Self::wgpu_instance(), None)
+    }
+
     /// Without `VALIDATION_INDIRECT_CALL`: Rune issues no indirect draws or dispatches, and the
     /// validation pipeline wgpu would build for them costs every device a shader compile (about
     /// 40 ms on a Mac's first launch after an install or update). Indirect draws a compositor
     /// records on Rune's device still work; wgpu just doesn't check their argument buffers.
     pub fn instance() -> wgpu::Instance {
+        #[cfg(all(target_os = "macos", feature = "metal-backend"))]
+        if crate::gpu::metal::enabled() { return crate::gpu::metal::instance(); }
+        Self::wgpu_instance()
+    }
+
+    /// wgpu's own backends, whatever `RUNE_GPU_BACKEND` says.
+    fn wgpu_instance() -> wgpu::Instance {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
