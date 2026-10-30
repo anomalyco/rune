@@ -65,7 +65,7 @@ use default_fonts::DEFAULT_FONTS;
 use fallback::Route;
 use glyph_emit::Face;
 use hidden_axes::hidden_axes;
-use layout_cache::{Cache, evict};
+use layout_cache::Cache;
 #[cfg(test)]
 use layout_cache::{STALE_ENTRY, STALE_TEXT};
 pub use icon::{Icon, icon_coverage};
@@ -1235,9 +1235,6 @@ fn mono_tab_stops(text: &str, spans: &[Span], mono_style: bool) -> Vec<(usize, u
 }
 
 impl TextSystem {
-    #[cfg(test)]
-    pub(crate) fn cached_layout_count(&self) -> usize { self.layouts.len() }
-
     /// `fonts` replaces the built-in Inter faces when non-empty on native. Web keeps its
     /// bundled sans and mono fallbacks, since there are no system fonts to discover.
     /// `families` names the sans and mono slots; others are selectable with `Family::Named`.
@@ -1409,17 +1406,6 @@ impl TextSystem {
             }
         }
         for c in self.color_glyphs.values_mut() { c.used = false; }
-    }
-
-    /// Keeps layouts used in the last two commits, and older ones, most recently used first,
-    /// while they fit in [`layout_cache::STALE_TEXT`].
-    pub fn end_commit(&mut self) {
-        let g = self.generation;
-        evict(&mut self.layouts, g);
-        let layouts = &self.layouts;
-        self.shapes.retain(|_, key| layouts.contains_key(key));
-        evict(&mut self.runs, g);
-        self.generation = g.wrapping_add(1);
     }
 
     /// `shape` is [`shape_key`] of the same text when the caller already has it.
@@ -1821,22 +1807,6 @@ impl TextSystem {
         let r = Rc::new(RunLayout::new(self.layout_rich(run.as_str(), &[], style, scale, None), run.as_str()));
         self.runs.insert(key, (r.clone(), g, run.as_str().len() as u32));
         r
-    }
-
-    /// A live run owns its latest layout; don't retain every timer tick in the commit cache.
-    pub(crate) fn layout_live(&mut self, text: &str, style: TextStyle, scale: f32) -> Rc<Layout<Ink>> {
-        let key = shape_key(text, &[], style, scale, false, &[]);
-        let cached = self.layouts.contains_key(&key);
-        let prev_shape = self.shapes.get(&key).copied();
-        let layout = self.layout_rich(text, &[], style, scale, None);
-        if !cached {
-            self.layouts.remove(&key);
-            match prev_shape {
-                Some(prev) => { self.shapes.insert(key, prev); }
-                None => { self.shapes.remove(&key); }
-            }
-        }
-        layout
     }
 
     /// Backgrounds and underlines for `spans` (device px, layout top-left at `origin`). Touching
