@@ -202,14 +202,14 @@ impl<S: 'static> Runtime<S> {
                         h = (h - crate::text::stream_height_lag(l, width, scale)).max(0.0);
                     }
                 }
-                let duration = tx.motion.map_or(0.0, |m| m.duration * 1.15);
+                let (duration, glide) = (tx.motion.map_or(0.0, |m| m.duration * 1.15), nodes[j].glide.map(|s| (s, self.fold_limit(id))));
                 let g = self.grows.entry(id).or_insert_with(|| {
                     if existed && !instant && !nodes[j].virtual_mount { GrowTrack { streaming, whole, duration, ..GrowTrack::settled(0.0) } } else { GrowTrack::settled(h) }
                 });
-                g.set_kind(streaming, whole, nodes[j].glide, self.viewport.1);
+                g.set_kind(streaming, whole, glide);
                 let snap_change = (instant || resized) && !streaming && (h - g.target).abs() > 1e-4;
                 if tx.settle || !existed || first || self.reduced_motion || snap_change || row_reading {
-                    *g = GrowTrack { streaming, whole, glide: g.glide, reach: g.reach, ..GrowTrack::settled(h) };
+                    *g = GrowTrack { streaming, whole, glide: g.glide, limit: g.limit, ..GrowTrack::settled(h) };
                     stack.pending_heights.remove(&id);
                 } else {
                     // Only a width/scale rewrap may shrink an active streaming row, including

@@ -124,16 +124,16 @@ pub struct GrowTrack {
     pub(crate) span: f32,
     /// `El::fold_glide`: this row's own spring, in place of the stack's.
     pub(crate) glide: Option<Spring>,
-    /// How far a glide moves on its spring: the window's height. A taller change lands the rest
-    /// at once, beyond the window.
-    pub(crate) reach: f32,
-    /// A glide opening farther than `reach`: where its spring stops before the row lands whole.
+    /// A glide's height at which the row's bottom leaves the window: the part of a change
+    /// beyond it lands at once, out of sight.
+    pub(crate) limit: f32,
+    /// A glide opening past `limit`: where its spring stops before the row lands whole.
     pub(crate) stage: Option<f32>,
 }
 
 impl GrowTrack {
     pub fn settled(h: f32) -> GrowTrack {
-        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, glide: None, reach: 0.0, stage: None }
+        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, glide: None, limit: f32::INFINITY, stage: None }
     }
 
     pub fn moving(&self) -> bool {
@@ -148,26 +148,27 @@ impl GrowTrack {
             self.target = target;
             self.span = (target - self.h).abs();
             self.stage = None;
-            if self.glide.is_some() && self.reach > 0.0 && self.span > self.reach {
-                // Only the window's height of a long fold shows moving: shutting, the far part
-                // goes first; opening, it lands once the spring has carried the near part.
-                if target < self.h {
-                    self.h = target + self.reach;
-                } else {
-                    self.stage = Some(self.h + self.reach);
+            if self.glide.is_some() {
+                // Only what shows of a long fold moves: shutting, the part below the window goes
+                // first; opening, it lands once the spring has carried the row to the window's edge.
+                if target < self.h && self.h > self.limit {
+                    self.h = self.limit.max(target);
+                } else if target > self.h && target > self.limit {
+                    self.stage = Some(self.limit.max(self.h));
                 }
-                self.span = self.reach;
+                self.span = (target - self.h).abs();
             }
         }
     }
 
     /// The row's `El::streaming`, `El::arrives_whole` and `El::fold_glide` (which streaming
-    /// overrides), and the window height that bounds a glide.
-    pub(crate) fn set_kind(&mut self, streaming: bool, whole: bool, glide: Option<Spring>, window_h: f32) {
+    /// overrides) with the height at which its bottom leaves the window.
+    pub(crate) fn set_kind(&mut self, streaming: bool, whole: bool, glide: Option<(Spring, f32)>) {
         self.streaming = streaming;
         self.whole = whole;
-        self.glide = glide.filter(|_| !streaming);
-        self.reach = window_h;
+        let glide = glide.filter(|_| !streaming);
+        self.glide = glide.map(|g| g.0);
+        self.limit = glide.map_or(f32::INFINITY, |g| g.1);
     }
 
     /// Advance one fixed substep.
@@ -177,7 +178,7 @@ impl GrowTrack {
         let aim = self.stage.unwrap_or(self.target);
         let rem = aim - self.h;
         if self.stage.is_some() && rem.abs() < 1.0 {
-            // The glide carried the window's height: the rest lands at once, out of view.
+            // The glide carried the row to the window's edge: the rest lands at once, out of view.
             self.h = self.target;
             self.v = 0.0;
             self.stage = None;
@@ -363,11 +364,11 @@ mod tests {
 
     const FOLD: Spring = Spring::new(0.18, 0.0);
 
-    /// A `fold_glide` row in a 900 pt window, stepped at 120 Hz on a slow stack spring and a
+    /// A `fold_glide` row whose bottom leaves the window at 900 pt, stepped at 120 Hz on a slow stack spring and a
     /// slow commit floor, neither of which may slow it: (seconds, height) per frame.
     fn fold(from: f32, to: f32, secs: f32) -> (GrowTrack, Vec<(f32, f32)>) {
         let mut t = GrowTrack { whole: true, duration: 1.0, ..GrowTrack::settled(from) };
-        t.set_kind(false, true, Some(FOLD), 900.0);
+        t.set_kind(false, true, Some((FOLD, 900.0)));
         t.retarget(to);
         let mut out = vec![(0.0, t.h)];
         for k in 1..=(secs * 120.0) as usize {
@@ -397,25 +398,25 @@ mod tests {
     }
 
     #[test]
-    fn a_fold_taller_than_the_window_moves_only_the_window() {
-        // Shutting: the part beyond the window goes first, then the window's height glides.
+    fn a_fold_past_the_window_moves_only_what_shows() {
+        // Shutting: the part below the window goes first, then what shows glides.
         let (t, hs) = fold(3040.0, 40.0, 0.5);
-        assert_eq!(hs[0].1, 940.0);
+        assert_eq!(hs[0].1, 900.0);
         assert!(at(&hs, FOLD.duration) < 40.0 + 18.0, "{}", at(&hs, FOLD.duration));
         assert!(!t.moving() && t.h == 40.0);
-        // Opening: the spring carries the window's height, then the rest lands at once.
+        // Opening: the spring carries the row to the window's edge, then the rest lands at once.
         let (t, hs) = fold(40.0, 3040.0, 0.5);
         assert!(!t.moving() && t.h == 3040.0);
-        let jump = hs.iter().position(|&(_, h)| h > 940.0).unwrap();
-        assert!(hs[jump - 1].1 > 938.0 && hs[jump].1 == 3040.0, "{:?}", &hs[jump - 2..=jump]);
-        assert!(at(&hs, FOLD.duration) > 940.0 - 18.0, "{}", at(&hs, FOLD.duration));
+        let jump = hs.iter().position(|&(_, h)| h > 900.0).unwrap();
+        assert!(hs[jump - 1].1 > 898.0 && hs[jump].1 == 3040.0, "{:?}", &hs[jump - 2..=jump]);
+        assert!(at(&hs, FOLD.duration) > 900.0 - 18.0, "{}", at(&hs, FOLD.duration));
         assert!(hs[jump].0 < 0.3, "lands in the spring's own time: {}", hs[jump].0);
     }
 
     #[test]
     fn a_fold_reversed_mid_glide_keeps_its_velocity() {
         let mut t = GrowTrack { whole: true, ..GrowTrack::settled(640.0) };
-        t.set_kind(false, true, Some(FOLD), 900.0);
+        t.set_kind(false, true, Some((FOLD, 900.0)));
         t.retarget(40.0);
         for _ in 0..12 {
             t.step(GROWTH, &edge::FEATHER, false);

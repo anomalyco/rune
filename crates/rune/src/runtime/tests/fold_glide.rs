@@ -39,3 +39,24 @@ fn a_fold_glide_row_folds_on_its_own_spring() {
     assert!(own < 0.3, "the row's own 0.18 s spring: {own} s");
     assert!(stack > own + 0.2, "the stack's 0.32 s spring, stretched for the distance: {stack} s");
 }
+
+#[test]
+fn a_fold_moves_only_what_shows_of_it() {
+    fn folded(open: &bool, _: &mut Cx<bool>) -> El {
+        stack(*open, true)
+    }
+    // The row starts 100 pt down a 300 pt window, so 200 pt of it shows.
+    let mut rt = Runtime::new(false, folded, (400.0, 300.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    rt.frame(1.0 / 120.0);
+    rt.state = true;
+    rt.dirty = true;
+    let mut heights = Vec::new();
+    for _ in 0..60 {
+        rt.frame(1.0 / 120.0);
+        let row = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("group")).unwrap();
+        heights.push(row.rect[3]);
+    }
+    assert!(heights.iter().all(|&h| h <= 200.5 || h == 600.0), "glides to the window's edge, then lands: {heights:?}");
+    assert!(heights[0] < 100.0 && heights[20] > 190.0 && heights[59] == 600.0, "{heights:?}");
+}

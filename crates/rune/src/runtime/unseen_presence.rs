@@ -18,6 +18,14 @@ impl<S: 'static> Runtime<S> {
         seen.iter().zip(&self.inh_scratch).map(|(&seen, h)| !seen || h.opacity < 1.0 / 512.0).collect()
     }
 
+    /// How tall growth row `id` can be before its bottom leaves the window, from where it last
+    /// drew (`El::fold_glide`); unbounded before it draws.
+    pub(super) fn fold_limit(&self, id: NodeId) -> f32 {
+        if !self.built || self.drawn.len() != self.nodes.len() { return f32::INFINITY; }
+        let Some(i) = self.nodes.iter().position(|n| n.id == id) else { return f32::INFINITY };
+        self.viewport.1 - self.drawn[i][1]
+    }
+
     /// Ends the exits that drew nothing last frame. A flight paints outside its clips, so it stays.
     pub(super) fn end_unseen_exits(&mut self) {
         if !self.built { return; }
