@@ -69,6 +69,24 @@ are zero and the title doesn't touch `document.title`. With `full_viewport` the 
 the visual viewport like Rune's own, so an ancestor with a `transform` or `filter` would
 become its containing block; mount it outside one.
 
+## Images
+
+`ImageCache::url` fetches an image and lets the browser decode it with its own codecs
+(`createImageBitmap`, off the main thread), so WebP, AVIF and anything else the browser reads
+work, turned upright by EXIF orientation. The pixels land through the same mip path as
+`ImageCache::rgba` and the cache's waker draws the frame. `ImageCache::file` does the same on
+web with its path as a URL relative to the page, so one call loads a bundled asset in both
+builds:
+
+```rust,ignore
+let logo = cache.file("assets/logo.webp", 48.0, env.scale); // disk on native, fetched on web
+let avatar = cache.url(&user.avatar_url, 32.0, env.scale);  // size and scale matter for SVG only
+```
+
+SVG (by `Content-Type` or a `.svg`/`.svgz` path) rasterizes with Rune's renderer at the size
+asked for. Images over 8192 pixels a side are refused before their pixels are read, and a
+failed request or a cross-origin image without CORS headers resolves to `Image::error`.
+
 ## Fonts and browser input
 
 Web includes Inter Regular and IBM Plex Mono Regular. There is no system-font discovery.

@@ -1649,11 +1649,15 @@ draws:
 let scale = env.scale; // the window's device pixels per point
 let mark = cache.svg(svg_bytes, 16.0, scale);               // fits 16 pt square, crisp at 2×
 let any = cache.load_mime(bytes, "image/svg+xml", 16.0, scale); // from a data URL's MIME type
-let file = cache.file("assets/logo.svg", 48.0, scale);      // read on the worker; not on web
+let file = cache.file("assets/logo.svg", 48.0, scale);      // read on the worker; fetched on web
+let photo = cache.url("https://example.com/p.avif", 96.0, scale); // web: the browser fetches and decodes
 ```
 
 `cache.file` treats `.svg` and `.svgz` paths (or SVG content) as vectors and decodes other
-files like `load`. `cache.load` recognises SVG by its content and rasterizes it at twice its
+files like `load`. On web, `cache.file` and `cache.url` fetch the URL (relative to the page) and
+let the browser decode it off the main thread, so WebP and AVIF work there; SVG still rasterizes
+through resvg. On native `cache.url` takes a path or `file:` URL only: Rune has no HTTP client,
+so fetch remote bytes yourself and call `load`. `cache.load` recognises SVG by its content and rasterizes it at twice its
 own size. SVG text needs fonts resvg isn't given, so convert text to paths. With the feature
 off, SVG images resolve to `Image::error`.
 
