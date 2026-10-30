@@ -896,7 +896,7 @@ impl El {
     /// On the root, receive native window activation/deactivation (not text-field focus).
     /// Also works on interactive overlays. Headless hosts may call Runtime::window_focus.
     pub fn on_window_focus<S: 'static>(mut self, f: impl Fn(&mut S, bool, &mut Tx) + 'static) -> Self {
-        self.on_window_focus = Some(Rc::new(move |s, focused, tx| f(s.cast::<S>().unwrap(), focused, tx)));
+        self.on_window_focus = Some(Rc::new(move |s, focused, tx| f(downcast::<S>(s), focused, tx)));
         self
     }
     /// Paint the latest text in this element's fixed layout box. `text("00:00")` reserves
@@ -915,7 +915,7 @@ impl El {
         self.on_paste = Some(PasteFn {
             rich: false,
             call: Rc::new(move |s, content, tx| {
-                content.has_plain() && { f(s.cast::<S>().unwrap(), content.text(), tx); true }
+                content.has_plain() && { f(downcast::<S>(s), content.text(), tx); true }
             }),
         });
         self
@@ -925,7 +925,7 @@ impl El {
     pub fn on_paste_content<S: 'static>(mut self, f: impl Fn(&mut S, &crate::ClipboardContent, &mut Tx) + 'static) -> Self {
         self.on_paste = Some(PasteFn {
             rich: true,
-            call: Rc::new(move |s, content, tx| { f(s.cast::<S>().unwrap(), content, tx); true }),
+            call: Rc::new(move |s, content, tx| { f(downcast::<S>(s), content, tx); true }),
         });
         self
     }
@@ -1033,7 +1033,7 @@ impl El {
     /// Called after a focused field's text changes, with the updated model available.
     pub fn on_input_change<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
         if let Some(input) = &mut self.input {
-            input.change = Some(Rc::new(move |s, tx| f(s.cast::<S>().expect("input change state type"), tx)));
+            input.change = Some(Rc::new(move |s, tx| f(downcast::<S>(s), tx)));
         }
         self
     }
@@ -1050,14 +1050,14 @@ impl El {
     /// ```
     pub fn on_input_paste<S: 'static>(mut self, f: impl Fn(&mut S, &crate::ClipboardContent, &mut Tx) -> bool + 'static) -> Self {
         if let Some(input) = &mut self.input {
-            input.paste = Some(Rc::new(move |s, content, tx| f(s.cast::<S>().expect("input paste state type"), content, tx)));
+            input.paste = Some(Rc::new(move |s, content, tx| f(downcast::<S>(s), content, tx)));
         }
         self
     }
     /// Handle a focused text field's key before the editor. Return true to consume it.
     pub fn on_input_key<S: 'static>(mut self, f: impl Fn(&mut S, &crate::KeyEvent, &mut Tx) -> bool + 'static) -> Self {
         if let Some(input) = &mut self.input {
-            input.key = Some(Rc::new(move |s, key, tx| f(s.cast::<S>().expect("input key state type"), key, tx)));
+            input.key = Some(Rc::new(move |s, key, tx| f(downcast::<S>(s), key, tx)));
         }
         self
     }
@@ -1080,7 +1080,7 @@ impl El {
     /// element's bottom-left.
     pub fn on_secondary_press<S: 'static>(mut self, f: impl Fn(&mut S, PointerPress, &mut Tx) + 'static) -> Self {
         self.on_secondary_press = Some(Rc::new(move |s, p, tx| {
-            f(s.cast::<S>().expect("secondary press state type"), p.window(), tx);
+            f(downcast::<S>(s), p.window(), tx);
         }));
         self
     }
@@ -1227,7 +1227,7 @@ impl El {
     /// Trap focus and make the background inert while mounted. Escape requests dismissal.
     pub fn modal<S: 'static>(mut self, click_outside: bool, dismiss: impl Fn(&mut S) + 'static) -> Self {
         self.modal = Some(ModalSpec { outside: click_outside,
-            dismiss: Rc::new(move |s, _| dismiss(s.cast::<S>().expect("modal state type"))) });
+            dismiss: Rc::new(move |s, _| dismiss(downcast::<S>(s))) });
         self
     }
     pub fn modal_click_outside(mut self, enabled: bool) -> Self {
@@ -1434,12 +1434,16 @@ impl El {
     /// viewport never overflows. Debug builds warn once per call site when a viewport inside a
     /// `.grow()` container resolves to 0 pt tall while its content is not.
     #[cfg_attr(debug_assertions, track_caller)]
-    pub fn scroll(mut self, spec: ScrollSpec) -> Self {
+    pub fn scroll(self, spec: ScrollSpec) -> Self {
+        self.viewport(spec, ScrollAxes::Y, taffy::Overflow::Hidden, taffy::Overflow::Scroll)
+    }
+    #[cfg_attr(debug_assertions, track_caller)]
+    fn viewport(mut self, spec: ScrollSpec, axes: ScrollAxes, x: taffy::Overflow, y: taffy::Overflow) -> Self {
         self.scroll = Some(spec);
-        self.scroll_axes = ScrollAxes::Y;
+        self.scroll_axes = axes;
         #[cfg(debug_assertions)]
         { self.scroll_source = Some(std::panic::Location::caller()); }
-        self.style.overflow = taffy::Point { x: taffy::Overflow::Hidden, y: taffy::Overflow::Scroll };
+        self.style.overflow = taffy::Point { x, y };
         self
     }
     /// A horizontal scroll viewport over its children: a filmstrip, a wide code block or
@@ -1460,13 +1464,8 @@ impl El {
     /// and [`Tx::scroll_into_view`] scrolls it to show a row. `El::virtualize` and
     /// `El::virtual_rows` window vertical lists only.
     #[cfg_attr(debug_assertions, track_caller)]
-    pub fn scroll_x(mut self) -> Self {
-        self.scroll = Some(ScrollSpec { stick_bottom: false });
-        self.scroll_axes = ScrollAxes::X;
-        #[cfg(debug_assertions)]
-        { self.scroll_source = Some(std::panic::Location::caller()); }
-        self.style.overflow = taffy::Point { x: taffy::Overflow::Scroll, y: taffy::Overflow::Hidden };
-        self
+    pub fn scroll_x(self) -> Self {
+        self.viewport(ScrollSpec { stick_bottom: false }, ScrollAxes::X, taffy::Overflow::Scroll, taffy::Overflow::Hidden)
     }
     /// A viewport that scrolls both ways over its children (a wide timeline, a large
     /// table): [`El::scroll`] and [`El::scroll_x`] together. A trackpad gesture moves it along
@@ -1475,13 +1474,9 @@ impl El {
     /// [`El::scroll`]. The content takes its natural width as in [`El::scroll_x`] and its
     /// natural height.
     #[cfg_attr(debug_assertions, track_caller)]
-    pub fn scroll_xy(mut self) -> Self {
-        self.scroll = Some(self.scroll.unwrap_or(ScrollSpec { stick_bottom: false }));
-        self.scroll_axes = ScrollAxes::Both;
-        #[cfg(debug_assertions)]
-        { self.scroll_source = Some(std::panic::Location::caller()); }
-        self.style.overflow = taffy::Point { x: taffy::Overflow::Scroll, y: taffy::Overflow::Scroll };
-        self
+    pub fn scroll_xy(self) -> Self {
+        let spec = self.scroll.unwrap_or(ScrollSpec { stick_bottom: false });
+        self.viewport(spec, ScrollAxes::Both, taffy::Overflow::Scroll, taffy::Overflow::Scroll)
     }
     /// On a scroll viewport, called with whether it shows its bottom (within a point): once
     /// after its first layout, then only when that changes, never per frame. Pair with

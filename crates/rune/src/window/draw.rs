@@ -12,22 +12,17 @@ impl<S: 'static> Host<S> {
         let Some(l) = self.win.as_mut() else { return };
         l.presented = None;
         let now = Instant::now();
-        let wait = l.occluded_wait;
         if missed == Missed::Occluded {
             // Covered or asleep with no notification yet: rest as if one came, and look
             // again on `retry`.
             l.occluded = true;
-            l.occluded_wait = (wait * 2).min(OCCLUDED_MAX);
             #[cfg(target_os = "macos")]
             l.set_live_resize(false);
             self.rt.set_live_visible(false);
             self.secure_input.set(false);
             self.idle = true;
         }
-        l.retry = match missed.next(l.paced(), now, wait) {
-            NextFrame::WaitUntil(at) => Some(at),
-            NextFrame::Idle => None,
-        };
+        l.retry = missed.retry(l.paced(), now, &mut l.occluded_wait);
         if l.retry.is_some() { l.stop_pacing(); }
         self.meter.set_pacing(l.pacing_state(missed != Missed::Occluded));
         // What this frame would have run still runs, without drawing (`covered_step`). Misses
@@ -116,17 +111,13 @@ impl<S: 'static> Host<S> {
         // The frame moves before the drawable is acquired, so it has the new size; never while
         // the user holds the window's edge in a live resize.
         if !hidden && !live_resize { self.step_frame(target.unwrap_or_else(Instant::now)); }
-        let (Some(l), Some((gpu, renderer, format))) = (self.win.as_mut(), self.gpu.as_mut()) else { return };
+        let (Some(l), Some((gpu, renderer))) = (self.win.as_mut(), self.gpu.as_mut()) else { return };
         #[cfg(target_os = "macos")]
         l.set_live_resize(resizing && live_resize);
         // Acquire before latching live values so a drawable wait cannot age the input.
         l.retry = None;
         if renderer.srgb_blend() != self.rt.srgb_blend() {
-            let Some(target) = reblend(&l.surface, &gpu.adapter, &gpu.device, &mut l.config, renderer, &mut self.rt) else { return };
-            *format = target;
-            if l.alpha.is_some() {
-                l.alpha = Some(crate::surface_alpha::AlphaSurface::new(&gpu.device, target, (l.config.width, l.config.height)));
-            }
+            if !reblend(&l.surface, gpu, &mut l.config, renderer, &mut l.alpha, &mut self.rt) { return }
         }
         #[cfg(target_os = "macos")]
         { self.rt.native_materials = l.materials.native(); }
@@ -216,11 +207,7 @@ impl<S: 'static> Host<S> {
         // A handler switched blending (`Tx::set_srgb_blend`): this drawable has the old format.
         let frame = if renderer.srgb_blend() != rt.srgb_blend() {
             drop(frame);
-            let Some(target) = reblend(&l.surface, &gpu.adapter, &gpu.device, &mut l.config, renderer, rt) else { return };
-            *format = target;
-            if l.alpha.is_some() {
-                l.alpha = Some(crate::surface_alpha::AlphaSurface::new(&gpu.device, target, (l.config.width, l.config.height)));
-            }
+            if !reblend(&l.surface, gpu, &mut l.config, renderer, &mut l.alpha, rt) { return }
             let frame = match acquire(&l.surface, &gpu.device, &l.config, 1, &mut self.meter) {
                 Ok(frame) => frame,
                 Err(_) if hidden => { l.retry = l.first_frame.missed(Instant::now(), &mut l.hidden_wait); self.frame_reports.skipped(); return; }

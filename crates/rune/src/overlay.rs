@@ -308,7 +308,7 @@ pub(crate) struct Overlay<T: 'static> {
     live: Option<Live>,
     cursor: Option<crate::os_cursor::OsCursor>,
     mods: winit::keyboard::ModifiersState,
-    renderer: Option<(Renderer, wgpu::TextureFormat)>,
+    renderer: Option<Renderer>,
     gpu: Option<Arc<Gpu>>,
     gpu_pool: Rc<RefCell<Weak<Gpu>>>,
     dark: bool,
@@ -868,13 +868,12 @@ impl<T: 'static> Overlay<T> {
         #[cfg(target_os = "macos")]
         crate::macos::pin_contents_top_left(&surface);
         let target_format = if self.rt.srgb_blend() { config.format.remove_srgb_suffix() } else { config.format };
-        if let Some((renderer, format)) = &mut self.renderer {
+        if let Some(renderer) = &mut self.renderer {
             crate::window::rebuild_renderer(&gpu.device, renderer, target_format, &mut self.rt);
-            *format = target_format;
         } else {
             let mut renderer = prewarmed.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
             crate::window::rebuild_renderer(&gpu.device, &mut renderer, target_format, &mut self.rt);
-            self.renderer = Some((renderer, target_format));
+            self.renderer = Some(renderer);
             self.rt.text.atlas.invalidate();
             self.rt.images.invalidate();
         }

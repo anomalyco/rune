@@ -405,7 +405,7 @@ impl<S: 'static> Host<S> {
                 rt.pointer_move(position.x as f32 / scale, position.y as f32 / scale);
                 // AppKit needs the drag session started inside this mouse-dragged event.
                 if let Some(start) = rt.take_drag_out() {
-                    let image = self.gpu.as_ref().filter(|_| start.item.drag_image().is_none()).and_then(|(gpu, renderer, _)|
+                    let image = self.gpu.as_ref().filter(|_| start.item.drag_image().is_none()).and_then(|(gpu, renderer)|
                         crate::drag_out::snapshot(gpu, renderer, (l.config.width, l.config.height), scale, rt.clear_color(), start.rect));
                     let (sink, path) = (rt.drag_end_sink(), start.path.clone());
                     let handle = self.native_handle.clone();

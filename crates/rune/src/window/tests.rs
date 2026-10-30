@@ -420,20 +420,26 @@ fn missed_frames_never_poll() {
         let missed = Missed::of(status).err().expect("a miss");
         for paced in [false, true] {
             for wait in [Duration::ZERO, OCCLUDED_RETRY, Duration::from_secs(60)] {
-                // `NextFrame` has no Poll; a deadline at or before now would spin the same way.
-                let flow = match missed.next(paced, now, wait) {
-                    NextFrame::WaitUntil(at) => { assert!(at > now, "{missed:?} retries later, not now"); ControlFlow::WaitUntil(at) }
-                    NextFrame::Idle => ControlFlow::Wait,
+                // A retry deadline at or before now would spin like a poll.
+                let flow = match missed.retry(paced, now, &mut { wait }) {
+                    Some(at) => { assert!(at > now, "{missed:?} retries later, not now"); ControlFlow::WaitUntil(at) }
+                    None => ControlFlow::Wait,
                 };
                 assert_ne!(flow, ControlFlow::Poll, "{missed:?} (paced: {paced}) must not poll");
             }
         }
     }
-    let occluded = |wait| Missed::Occluded.next(true, now, wait);
-    assert_eq!(occluded(Duration::ZERO), NextFrame::WaitUntil(now + OCCLUDED_RETRY), "the safety net is slow");
-    assert_eq!(occluded(Duration::from_secs(60)), NextFrame::WaitUntil(now + OCCLUDED_MAX));
-    assert_eq!(Missed::Timeout.next(true, now, Duration::ZERO), NextFrame::Idle, "a running display link retries on its tick");
-    assert_eq!(Missed::Timeout.next(false, now, Duration::ZERO), NextFrame::WaitUntil(now + TIMEOUT_RETRY));
+    let occluded = |mut wait| Missed::Occluded.retry(true, now, &mut wait);
+    assert_eq!(occluded(Duration::ZERO), Some(now + OCCLUDED_RETRY), "the safety net is slow");
+    assert_eq!(occluded(Duration::from_secs(60)), Some(now + OCCLUDED_MAX));
+    let mut zero = Duration::ZERO;
+    assert_eq!(Missed::Timeout.retry(true, now, &mut zero), None, "a running display link retries on its tick");
+    assert_eq!(Missed::Timeout.retry(false, now, &mut zero), Some(now + TIMEOUT_RETRY));
+    let mut wait = OCCLUDED_RETRY;
+    Missed::Occluded.retry(true, now, &mut wait);
+    assert_eq!(wait, OCCLUDED_RETRY * 2, "an occluded miss backs off");
+    Missed::Outdated.retry(true, now, &mut wait);
+    assert_eq!(wait, OCCLUDED_RETRY * 2, "other misses leave the backoff");
 }
 
 #[test]

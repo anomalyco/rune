@@ -49,9 +49,7 @@ fn an_occluded_surface_never_asks_wgpu_and_draws_once_visible() {
     while at < start + Duration::from_secs(3600) {
         if let Ok(_frame) = acquire(&surface, &gpu.device, &config, 1, &mut meter) { panic!("an occluded surface got a drawable"); }
         checks += 1;
-        let NextFrame::WaitUntil(next) = Missed::Occluded.next(false, at, wait) else { panic!("occlusion re-checks on a deadline") };
-        wait = (wait * 2).min(OCCLUDED_MAX);
-        at = next;
+        at = Missed::Occluded.retry(false, at, &mut wait).expect("occlusion re-checks on a deadline");
     }
     let totals = meter.totals();
     assert_eq!(totals.failed(), 0, "wgpu was asked for drawables it refuses as occluded");

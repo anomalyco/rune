@@ -100,7 +100,7 @@ impl<T: 'static> Overlay<T> {
         // Input waits for the retry too; `wake_due` runs due timers meanwhile.
         if !prewarm && self.backing_off(Instant::now()) { return false; }
         if !prewarm { self.retry = None; }
-        let (Some(live), Some((renderer, renderer_format)), Some(gpu)) = (self.live.as_mut(), self.renderer.as_mut(), self.gpu.as_ref()) else {
+        let (Some(live), Some(renderer), Some(gpu)) = (self.live.as_mut(), self.renderer.as_mut(), self.gpu.as_ref()) else {
             return false;
         };
         #[cfg(target_os = "macos")]
@@ -118,11 +118,7 @@ impl<T: 'static> Overlay<T> {
         // The present queue's vsync paces redraws where no display link does.
         if !prewarm { self.meter.redraw(paced || !cfg!(target_os = "macos")); }
         if renderer.srgb_blend() != self.rt.srgb_blend() {
-            let Some(target) = crate::window::reblend(&live.surface, &gpu.adapter, &gpu.device, &mut live.config, renderer, &mut self.rt) else { return false };
-            *renderer_format = target;
-            if live.alpha.is_some() {
-                live.alpha = Some(crate::surface_alpha::AlphaSurface::new(&gpu.device, target, (live.config.width, live.config.height)));
-            }
+            if !crate::window::reblend(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, &mut self.rt) { return false }
         }
         let frame = match crate::window::acquire_checked(&live.surface, &gpu.device, &live.config, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
             Ok(frame) => frame,
@@ -172,11 +168,7 @@ impl<T: 'static> Overlay<T> {
         // A handler switched blending (`Tx::set_srgb_blend`): this drawable has the old format.
         let frame = if renderer.srgb_blend() != self.rt.srgb_blend() {
             drop(frame);
-            let Some(target) = crate::window::reblend(&live.surface, &gpu.adapter, &gpu.device, &mut live.config, renderer, &mut self.rt) else { return false };
-            *renderer_format = target;
-            if live.alpha.is_some() {
-                live.alpha = Some(crate::surface_alpha::AlphaSurface::new(&gpu.device, target, (live.config.width, live.config.height)));
-            }
+            if !crate::window::reblend(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, &mut self.rt) { return false }
             match crate::window::acquire_checked(&live.surface, &gpu.device, &live.config, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
                 Ok(frame) => frame,
                 Err(missed) => {
@@ -190,10 +182,7 @@ impl<T: 'static> Overlay<T> {
             }
         } else { frame };
         let update_ms = if self.compositor.is_some() { now.elapsed().as_secs_f64() * 1000.0 } else { 0.0 };
-        self.rt.shell_request = None;
-        self.rt.ignore_minimize("an overlay");
-        // Overlays size through `OverlayHandle::resize`, not `Tx::resize_window`.
-        self.rt.window_frame = None;
+        super::input::drop_window_requests(&mut self.rt);
         self.clipboard.flush(&mut self.rt);
         // Publish the geometry just rendered, never a layout cached from the preceding frame.
         #[cfg(target_os = "macos")]
@@ -327,16 +316,16 @@ impl<T: 'static> Overlay<T> {
     }
 
     pub(super) fn warm_offscreen(&mut self, size: (u32, u32)) {
-        let (Some((renderer, format)), Some(gpu)) = (&mut self.renderer, &self.gpu) else { return };
+        let (Some(renderer), Some(gpu)) = (&mut self.renderer, &self.gpu) else { return };
         let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("overlay prewarm"), size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
             mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
-            format: *format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[],
+            format: renderer.format(), usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[],
         });
         let mut enc = gpu.device.create_command_encoder(&Default::default());
         render_frame(&mut Frame {
             device: &gpu.device, queue: &gpu.queue, encoder: &mut enc,
-            target: &target.create_view(&Default::default()), format: *format, size,
+            target: &target.create_view(&Default::default()), format: renderer.format(), size,
             dt: 0.0, update_ms: 0.0, rt: &mut self.rt, ui: renderer,
         }, &mut self.compositor);
         renderer.submit(&gpu.queue, enc);

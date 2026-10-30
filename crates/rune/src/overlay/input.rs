@@ -3,6 +3,14 @@
 
 use super::*;
 
+/// An overlay has no window to ask: whatever a step requested of one is dropped.
+pub(super) fn drop_window_requests<T: 'static>(rt: &mut Runtime<T>) {
+    rt.shell_request = None;
+    rt.ignore_minimize("an overlay");
+    // Overlays size through `OverlayHandle::resize`, not `Tx::resize_window`.
+    rt.window_frame = None;
+}
+
 impl<T: 'static> Overlay<T> {
     /// The runtime's cursor while the pointer is over a hit area of a shown overlay that takes
     /// input; the arrow once when it leaves, so `Cursor::Hidden` never outlives the overlay or
@@ -43,7 +51,7 @@ impl<T: 'static> Overlay<T> {
             return;
         };
         let image = match (&self.gpu, &self.renderer) {
-            (Some(gpu), Some((renderer, _))) if start.item.drag_image().is_none() =>
+            (Some(gpu), Some(renderer)) if start.item.drag_image().is_none() =>
                 crate::drag_out::snapshot(gpu, renderer, (config.width, config.height), *scale, self.rt.clear_color(), start.rect),
             _ => None,
         };
@@ -186,9 +194,7 @@ impl<T: 'static> Overlay<T> {
         if !polls_only { return self.commit_at(now); }
         self.rt.poll_hidden();
         if self.rt.has_pending_input() { return self.commit_at(now); }
-        self.rt.shell_request = None;
-        self.rt.ignore_minimize("an overlay");
-        self.rt.window_frame = None;
+        drop_window_requests(&mut self.rt);
         self.clipboard.flush(&mut self.rt);
         self.open_popup();
         if self.drawing() {
@@ -208,10 +214,7 @@ impl<T: 'static> Overlay<T> {
         } else {
             self.rt.frame(0.0);
         }
-        self.rt.shell_request = None;
-        self.rt.ignore_minimize("an overlay");
-        // Overlays size through `OverlayHandle::resize`, not `Tx::resize_window`.
-        self.rt.window_frame = None;
+        drop_window_requests(&mut self.rt);
         self.clipboard.flush(&mut self.rt);
         self.open_popup();
         if !self.drawing() && self.rt.stats.commits != commits { self.hidden_pace.rendered(now); }
@@ -261,21 +264,12 @@ impl<T: 'static> Overlay<T> {
     pub(super) fn missed(&mut self, missed: crate::window::Missed, paced: bool, stepped: bool) {
         let now = Instant::now();
         if stepped {
-            self.rt.shell_request = None;
-            self.rt.ignore_minimize("an overlay");
-            self.rt.window_frame = None;
+            drop_window_requests(&mut self.rt);
             self.clipboard.flush(&mut self.rt);
         } else {
             self.advance_at(now);
         }
-        let wait = self.occluded_wait;
-        if missed == crate::window::Missed::Occluded {
-            self.occluded_wait = (wait * 2).min(crate::window::OCCLUDED_MAX);
-        }
-        self.retry = match missed.next(paced, now, wait) {
-            crate::window::NextFrame::WaitUntil(at) => Some(at),
-            crate::window::NextFrame::Idle => None,
-        };
+        self.retry = missed.retry(paced, now, &mut self.occluded_wait);
         #[cfg(target_os = "macos")]
         if self.retry.is_some() && let Some(pacing) = self.live.as_mut().and_then(|l| l.pacing.as_mut()) { pacing.stop(); }
         let pacing = self.pacing_state(missed != crate::window::Missed::Occluded);

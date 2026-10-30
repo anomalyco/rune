@@ -73,15 +73,6 @@ pub(crate) enum Missed {
     Outdated,
 }
 
-/// How a host waits after a frame it couldn't draw. There is no `ControlFlow::Poll` here:
-/// retrying at once is what spins a core while a window is occluded or its displays sleep.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NextFrame {
-    WaitUntil(Instant),
-    /// Sleep until an event: a display tick, a notification, input or a timer.
-    Idle,
-}
-
 /// The first re-check of an occluded surface. Its occlusion notification usually redraws it
 /// first; this catches one that never arrives. Consecutive misses back off to `OCCLUDED_MAX`.
 pub(crate) const OCCLUDED_RETRY: Duration = Duration::from_millis(250);
@@ -102,15 +93,22 @@ impl Missed {
         }
     }
 
-    /// What follows a frame this surface couldn't draw. A display link that is still running
-    /// retries a timeout on its next tick. `occluded_wait` is the caller's backoff, held to
-    /// `OCCLUDED_RETRY..=OCCLUDED_MAX`.
-    pub(crate) fn next(self, paced: bool, now: Instant, occluded_wait: Duration) -> NextFrame {
+    /// When to try again after a frame this surface couldn't draw, or `None` to sleep until an
+    /// event (a display tick, a notification, input or a timer). There is no `ControlFlow::Poll`
+    /// here: retrying at once is what spins a core while a window is occluded or its displays
+    /// sleep. A display link that is still running retries a timeout on its next tick.
+    /// `occluded_wait` is the caller's backoff, held to `OCCLUDED_RETRY..=OCCLUDED_MAX`; an
+    /// occluded miss waits it out, then doubles it.
+    pub(crate) fn retry(self, paced: bool, now: Instant, occluded_wait: &mut Duration) -> Option<Instant> {
         match self {
-            Missed::Occluded => NextFrame::WaitUntil(now + occluded_wait.clamp(OCCLUDED_RETRY, OCCLUDED_MAX)),
-            Missed::Timeout if paced => NextFrame::Idle,
-            Missed::Timeout => NextFrame::WaitUntil(now + TIMEOUT_RETRY),
-            Missed::Outdated => NextFrame::WaitUntil(now + OCCLUDED_RETRY),
+            Missed::Occluded => {
+                let at = now + (*occluded_wait).clamp(OCCLUDED_RETRY, OCCLUDED_MAX);
+                *occluded_wait = (*occluded_wait * 2).min(OCCLUDED_MAX);
+                Some(at)
+            }
+            Missed::Timeout if paced => None,
+            Missed::Timeout => Some(now + TIMEOUT_RETRY),
+            Missed::Outdated => Some(now + OCCLUDED_RETRY),
         }
     }
 }

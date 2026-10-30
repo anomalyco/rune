@@ -582,6 +582,16 @@ impl TextEdit {
         })
     }
 
+    /// The start of the pill that ends at or contains `j`, when `j` is past its start.
+    fn pill_before(&self, j: usize) -> Option<usize> {
+        self.marks.iter().find(|m| m.mark.is_pill() && m.start < j && j <= m.end).map(|m| m.start)
+    }
+
+    /// The end of the pill that starts at or contains `j`, when `j` is before its end.
+    fn pill_after(&self, j: usize) -> Option<usize> {
+        self.marks.iter().find(|m| m.mark.is_pill() && m.start <= j && j < m.end).map(|m| m.end)
+    }
+
     fn prev_word(&self, i: usize) -> usize {
         if self.secure && !self.revealed {
             return 0;
@@ -589,17 +599,14 @@ impl TextEdit {
         let s = &self.text;
         let b = s.as_bytes();
         let mut j = i.min(b.len());
-        if let Some(m) = self.marks.iter().find(|m| m.mark.is_pill() && m.start < j && j <= m.end) {
-            return m.start;
-        }
-        while j > 0 && b[j - 1].is_ascii_whitespace() {
-            if let Some(m) = self.marks.iter().find(|m| m.mark.is_pill() && m.start < j && j <= m.end) {
-                return m.start;
+        loop {
+            if let Some(start) = self.pill_before(j) {
+                return start;
+            }
+            if j == 0 || !b[j - 1].is_ascii_whitespace() {
+                break;
             }
             j -= 1;
-        }
-        if let Some(m) = self.marks.iter().find(|m| m.mark.is_pill() && m.start < j && j <= m.end) {
-            return m.start;
         }
         while j > 0 && !b[j - 1].is_ascii_whitespace() {
             if self.marks.iter().any(|m| m.mark.is_pill() && m.end == j) {
@@ -617,17 +624,14 @@ impl TextEdit {
         let s = &self.text;
         let b = s.as_bytes();
         let mut j = i.min(b.len());
-        if let Some(m) = self.marks.iter().find(|m| m.mark.is_pill() && m.start <= j && j < m.end) {
-            return m.end;
-        }
-        while j < b.len() && b[j].is_ascii_whitespace() {
-            if let Some(m) = self.marks.iter().find(|m| m.mark.is_pill() && m.start <= j && j < m.end) {
-                return m.end;
+        loop {
+            if let Some(end) = self.pill_after(j) {
+                return end;
+            }
+            if j >= b.len() || !b[j].is_ascii_whitespace() {
+                break;
             }
             j += 1;
-        }
-        if let Some(m) = self.marks.iter().find(|m| m.mark.is_pill() && m.start <= j && j < m.end) {
-            return m.end;
         }
         while j < b.len() && !b[j].is_ascii_whitespace() {
             if self.marks.iter().any(|m| m.mark.is_pill() && m.start == j) {
@@ -745,12 +749,8 @@ impl TextEdit {
         }
     }
 
-    fn clamp_char_boundary(s: &str, mut idx: usize) -> usize {
-        idx = idx.min(s.len());
-        while idx > 0 && !s.is_char_boundary(idx) {
-            idx -= 1;
-        }
-        idx
+    fn clamp_char_boundary(s: &str, idx: usize) -> usize {
+        s.floor_char_boundary(idx)
     }
 
     /// Text typed, pasted or committed into this field. Single-line fields drop control

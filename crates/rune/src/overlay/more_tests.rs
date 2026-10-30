@@ -536,7 +536,7 @@ fn overlay_compositor_observes_prewarm_and_each_rendered_frame() {
         .compositor(Trace(trace.clone()));
     let (mut overlay, _) = Overlay::new(spec, 8.0, &app);
     let gpu = Arc::new(Gpu::headless());
-    overlay.renderer = Some((Renderer::new(&gpu.device, OFFSCREEN_FORMAT), OFFSCREEN_FORMAT));
+    overlay.renderer = Some(Renderer::new(&gpu.device, OFFSCREEN_FORMAT));
     overlay.gpu = Some(gpu.clone());
     overlay.rt.transparent = true;
     overlay.rt.frame(0.0);
@@ -548,7 +548,7 @@ fn overlay_compositor_observes_prewarm_and_each_rendered_frame() {
     for (width, more) in [(12.0, true), (20.0, false)] {
         overlay.rt.update(|s, tx| { *s = width; tx.instant(); });
         overlay.rt.frame(1.0 / 60.0);
-        let renderer = &mut overlay.renderer.as_mut().unwrap().0;
+        let renderer = &mut overlay.renderer.as_mut().unwrap();
         let mut enc = gpu.device.create_command_encoder(&Default::default());
         let animating = render_frame(&mut Frame {
             device: &gpu.device, queue: &gpu.queue, encoder: &mut enc, target: &target.view,

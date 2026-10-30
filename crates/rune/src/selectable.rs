@@ -85,9 +85,7 @@ pub(super) struct Held {
 
 /// The char boundary at or before byte `i` of `text`.
 pub(super) fn floor_boundary(text: &str, i: usize) -> usize {
-    let mut i = i.min(text.len());
-    while !text.is_char_boundary(i) { i -= 1; }
-    i
+    text.floor_char_boundary(i)
 }
 
 /// The char boundary before byte `i` (a boundary) of `text`.

@@ -242,16 +242,22 @@ impl El {
     pub fn truncate_head(self) -> Self {
         self.elide(Elide::Head)
     }
-    fn elide(mut self, elide: Elide) -> Self {
+    fn elide(self, elide: Elide) -> Self {
         // A field's caret and selection index its own text, which a cut would break.
         if self.input.is_some() { return self; }
-        if let Some(t) = &mut self.text {
+        self.one_line(|t| {
             t.truncate = true;
             t.elide = elide;
             t.truncate_fade = false;
+        })
+    }
+    /// One unwrapped line that shrinks with its parent; `cut` sets how an overflow is cut.
+    fn one_line(mut self, cut: impl FnOnce(&mut TextSpec)) -> Self {
+        if let Some(t) = &mut self.text {
             t.wrap = false;
             t.wrap_anywhere = false;
             t.max_lines = 0;
+            cut(t);
         }
         self.style.flex_shrink = 1.0;
         self.style.min_size.width = length(0.0);
@@ -277,18 +283,12 @@ impl El {
         self.truncate_fade_width(TRUNCATE_FADE_EM)
     }
     /// [`El::truncate_fade`] with a fade `em` ems wide.
-    pub fn truncate_fade_width(mut self, em: f32) -> Self {
-        if let Some(t) = &mut self.text {
+    pub fn truncate_fade_width(self, em: f32) -> Self {
+        self.one_line(|t| {
             t.truncate = false;
             t.truncate_fade = true;
             t.fade_em = em.max(0.0);
-            t.wrap = false;
-            t.wrap_anywhere = false;
-            t.max_lines = 0;
-        }
-        self.style.flex_shrink = 1.0;
-        self.style.min_size.width = length(0.0);
-        self
+        })
     }
     /// Streaming word reveal (see [`TextSpec::reveal`]).
     pub fn reveal(mut self, word_fade: f32) -> Self {

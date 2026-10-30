@@ -51,7 +51,7 @@ mod lifecycle;
 mod mac;
 mod pacing;
 pub(crate) use pacing::{
-    HiddenPace, Missed, NextFrame, OCCLUDED_MAX, OCCLUDED_RETRY, TIMEOUT_RETRY, TIMER_FRAME, acquire, acquire_checked,
+    HiddenPace, Missed, OCCLUDED_MAX, OCCLUDED_RETRY, TIMEOUT_RETRY, TIMER_FRAME, acquire, acquire_checked,
     timer_deadline, timer_wants_frame,
 };
 #[cfg(test)]
@@ -346,7 +346,7 @@ struct Host<S: 'static> {
     trace_frames: usize,
     meter: SurfaceMeter,
     win: Option<Win>,
-    gpu: Option<(Arc<Gpu>, Renderer, wgpu::TextureFormat)>,
+    gpu: Option<(Arc<Gpu>, Renderer)>,
     gpu_pool: Rc<RefCell<Weak<Gpu>>>,
     /// A window has shown before: the next one opens settled.
     shown: bool,
@@ -566,20 +566,24 @@ pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (
 }
 
 /// Follows a blend switch (`Tx::set_srgb_blend`) on a configured surface: reconfigures it for
-/// `rt`'s mode at its size and alpha mode, and rebuilds `renderer` when its target format
-/// changes. Returns the new target format, or `None` when the surface can't be configured.
+/// `rt`'s mode at its size and alpha mode, rebuilds `renderer` when its target format changes,
+/// and rebuilds the `alpha` pass (when there is one) for the new format. Returns false when the
+/// surface can't be configured.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-pub(crate) fn reblend<S: 'static>(surface: &wgpu::Surface, adapter: &wgpu::Adapter, device: &wgpu::Device,
-    config: &mut wgpu::SurfaceConfiguration, renderer: &mut Renderer, rt: &mut Runtime<S>) -> Option<wgpu::TextureFormat> {
+pub(crate) fn reblend<S: 'static>(surface: &wgpu::Surface, gpu: &Gpu, config: &mut wgpu::SurfaceConfiguration,
+    renderer: &mut Renderer, alpha: &mut Option<crate::surface_alpha::AlphaSurface>, rt: &mut Runtime<S>) -> bool {
     let srgb = rt.srgb_blend();
-    let (next, _) = surface_config(surface, adapter, (config.width, config.height), srgb)?;
+    let Some((next, _)) = surface_config(surface, &gpu.adapter, (config.width, config.height), srgb) else { return false };
     if (config.format, &config.view_formats) != (next.format, &next.view_formats) {
         (config.format, config.view_formats) = (next.format, next.view_formats);
-        surface.configure(device, config);
+        surface.configure(&gpu.device, config);
     }
     let target = if srgb { config.format.remove_srgb_suffix() } else { config.format };
-    rebuild_renderer(device, renderer, target, rt);
-    Some(target)
+    rebuild_renderer(&gpu.device, renderer, target, rt);
+    if alpha.is_some() {
+        *alpha = Some(crate::surface_alpha::AlphaSurface::new(&gpu.device, target, (config.width, config.height)));
+    }
+    true
 }
 
 /// Switches `renderer` to `target` when its format changed, keeping its atlases, layer targets
@@ -740,9 +744,9 @@ impl<S: 'static> Host<S> {
         }
         let mut prewarmed = None;
         let (gpu, surface) = match self.gpu.take() {
-            Some((gpu, renderer, format)) => {
+            Some((gpu, renderer)) => {
                 let surface = gpu.instance.create_surface(window.clone());
-                self.gpu = Some((gpu, renderer, format));
+                self.gpu = Some((gpu, renderer));
                 (None, surface.map_err(|e| e.to_string())?)
             }
             None => {
@@ -782,11 +786,10 @@ impl<S: 'static> Host<S> {
         if let Some(gpu) = gpu {
             let mut renderer = prewarmed.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
             renderer.set_srgb_blend(self.rt.srgb_blend());
-            self.gpu = Some((gpu, renderer, target_format));
+            self.gpu = Some((gpu, renderer));
         }
-        let (gpu, renderer, format) = self.gpu.as_mut().unwrap();
+        let (gpu, renderer) = self.gpu.as_mut().unwrap();
         rebuild_renderer(&gpu.device, renderer, target_format, &mut self.rt);
-        *format = target_format;
         surface.configure(&gpu.device, &config);
         #[cfg(target_os = "macos")]
         crate::macos::pin_contents_top_left(&surface);
