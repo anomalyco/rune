@@ -4,6 +4,7 @@
 use std::ffi::c_void;
 use std::sync::{Arc, OnceLock};
 
+use crate::compose::{Compositor, Frame};
 use crate::frame_clock::FrameClock;
 use crate::render::{Gpu, Renderer};
 use crate::runtime::{Env, Runtime, Waker};
@@ -53,6 +54,7 @@ pub struct LayerHost<S: 'static> {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     renderer: Renderer,
+    compositor: Option<Box<dyn Compositor<S>>>,
     rt: Runtime<S>,
     clock: FrameClock,
     suspended: bool,
@@ -109,10 +111,19 @@ impl<S: 'static> LayerHost<S> {
             surface,
             config,
             renderer,
+            compositor: None,
             rt,
             clock: FrameClock::new(now),
             suspended: viewport.0 <= 0.0 || viewport.1 <= 0.0,
         })
+    }
+
+    /// Attaches a custom [`Compositor`] (e.g. for [`El::effect`](crate::El::effect) shader passes)
+    /// and turns on `Runtime::track_marks` so `rt.marks` aligns with `rt.instances`.
+    pub fn with_compositor(mut self, compositor: impl Compositor<S>) -> Self {
+        self.rt.track_marks = true;
+        self.compositor = Some(Box::new(compositor));
+        self
     }
 
     pub fn runtime(&self) -> &Runtime<S> {
@@ -149,20 +160,22 @@ impl<S: 'static> LayerHost<S> {
             return EmbedFrame::default();
         }
         let t0 = Instant::now();
-        let (animating, _dt) = self.clock.advance(&mut self.rt, t0, false);
+        let (animating, dt) = self.clock.advance(&mut self.rt, t0, false);
+        let update_ms = t0.elapsed().as_secs_f64() * 1000.0;
         crate::clipboard::flush_memory(&mut self.rt);
         if self.rt.popup_menu().is_some() {
             self.rt.cancel_popups();
         }
         self.rt.refuse_file_dialog("native file dialogs are unsupported in embedded views");
 
+        let comp_animating = self.compositor.as_ref().is_some_and(|c| c.animating());
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface.configure(&self.gpu.device, &self.config);
                 return EmbedFrame { animating: true, ..EmbedFrame::default() };
             }
-            _ => return EmbedFrame { animating, ..EmbedFrame::default() },
+            _ => return EmbedFrame { animating: animating || comp_animating, ..EmbedFrame::default() },
         };
 
         let target = frame.texture.create_view(&wgpu::TextureViewDescriptor {
@@ -171,14 +184,32 @@ impl<S: 'static> LayerHost<S> {
         });
         self.renderer.upload_images(&self.gpu.device, &self.gpu.queue, &mut self.rt.images);
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
-        self.renderer.prepare(
-            &self.gpu.device,
-            &self.gpu.queue,
-            &mut self.rt.text.atlas,
-            &self.rt.instances,
-            (self.config.width, self.config.height),
-        );
-        self.renderer.draw(&mut encoder, &target, self.rt.clear_color());
+        let size = (self.config.width, self.config.height);
+        let format = self.renderer.format();
+        if let Some(comp) = &mut self.compositor {
+            let mut f = Frame {
+                device: &self.gpu.device,
+                queue: &self.gpu.queue,
+                encoder: &mut encoder,
+                target: &target,
+                format,
+                size,
+                dt,
+                update_ms,
+                rt: &mut self.rt,
+                ui: &mut self.renderer,
+            };
+            comp.render(&mut f);
+        } else {
+            self.renderer.prepare(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &mut self.rt.text.atlas,
+                &self.rt.instances,
+                size,
+            );
+            self.renderer.draw(&mut encoder, &target, self.rt.clear_color());
+        }
         self.renderer.submit(&self.gpu.queue, encoder);
         self.gpu.queue.present(frame);
 
@@ -187,12 +218,68 @@ impl<S: 'static> LayerHost<S> {
             let elapsed = self.rt.wall_start?.elapsed().as_secs_f64();
             Some((d - elapsed).max(0.0))
         });
-        let keep_ticking = animating || self.rt.has_pending_input() || self.rt.live_pending();
+        let comp_animating = self.compositor.as_ref().is_some_and(|c| c.animating());
+        let keep_ticking = animating || comp_animating || self.rt.has_pending_input() || self.rt.live_pending();
         EmbedFrame {
             drew: true,
             animating: keep_ticking,
             wake_after_secs,
             cpu_us,
         }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    use objc2_video::{
+        msg_send,
+        rc::Retained,
+        runtime::{AnyClass, AnyObject},
+    };
+
+    use super::LayerHost;
+    use crate::compose::{Compositor, Frame};
+    use crate::render::KIND_EFFECT;
+    use crate::tooling::AppSpec;
+    use crate::{Cx, El, col, effect};
+
+    struct MarkProbe(Arc<AtomicU32>);
+
+    impl Compositor<()> for MarkProbe {
+        fn render(&mut self, f: &mut Frame<'_, ()>) {
+            for (idx, inst) in f.rt.instances.iter().enumerate() {
+                if inst.params[1] == KIND_EFFECT {
+                    self.0.store(f.rt.marks.get(idx).copied().unwrap_or(0), Ordering::Relaxed);
+                }
+            }
+            f.draw_ui();
+        }
+    }
+
+    #[test]
+    fn layer_host_runs_compositor_with_tracked_marks() {
+        let layer: Retained<AnyObject> = unsafe { msg_send![AnyClass::get(c"CAMetalLayer").expect("QuartzCore"), new] };
+        let seen = Arc::new(AtomicU32::new(0));
+        let view = |_: &(), _: &mut Cx<()>| -> El { col().size(120.0, 80.0).child(effect(42).size(60.0, 20.0)) };
+        let spec = AppSpec::new("embed-test", (120.0, 80.0), || (), view);
+        let host = unsafe {
+            LayerHost::from_core_animation_layer(
+                Retained::as_ptr(&layer) as *mut std::ffi::c_void,
+                &spec,
+                (),
+                (120.0, 80.0),
+                2.0,
+                true,
+                Arc::new(|| {}),
+            )
+        };
+        let Ok(mut host) = host else { return };
+        host = host.with_compositor(MarkProbe(seen.clone()));
+        let out = host.frame();
+        assert!(out.drew);
+        assert_eq!(seen.load(Ordering::Relaxed), 42);
     }
 }
