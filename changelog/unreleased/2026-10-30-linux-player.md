@@ -6,9 +6,10 @@
   audio). Live sessions open `Meta` from the engine's duration/size. SW frames force opaque
   alpha — mpv's `bgr0` and VLC's RV32 leave the A byte uninitialized (often 0), and the video
   shader premultiplies by it. Headless `--snap` / scrub previews reuse the same live engine
-  (no `ffmpeg`/`ffprobe`). Off (the default), Linux reports unsupported like other non-macOS
-  platforms. Enable one of: `features = ["linux-gstreamer"]`, `["linux-libmpv"]`, or
-  `["linux-libvlc"]`.
+  (no `ffmpeg`/`ffprobe`); seek→still capture is best-effort on Linux (not pixel-golden yet —
+  windowed playback is the supported path). Off (the default), Linux reports unsupported like
+  other non-macOS platforms. Enable one of: `features = ["linux-gstreamer"]`,
+  `["linux-libmpv"]`, or `["linux-libvlc"]`.
 
 - **`Player::set_volume` / `volume`.** Linear gain `0.0`…`1.0` (default `1.0`), independent of
   mute, applied on macOS AVPlayer and the Linux backends.

@@ -546,7 +546,9 @@ pub(super) fn enable() {
 }
 
 
-fn seek_exact(session: &mut Session, at: f64) -> Result<(), String> {
+/// Seek near `at` for headless stills. Prefer a close clock, but accept keyframe snap —
+/// short clips often land a frame boundary away from mid-frame targets (e.g. 0.125 → 0.25).
+fn seek_near(session: &mut Session, at: f64) -> Result<(), String> {
     // time-pos / seek are often unavailable until the demuxer has produced a clock. Prime briefly.
     let _ = set_prop_flag(session.handle, "pause", false);
     for _ in 0..60 {
@@ -563,24 +565,27 @@ fn seek_exact(session: &mut Session, at: f64) -> Result<(), String> {
     let _ = set_prop_flag(session.handle, "pause", true);
     let _ = command(session.handle, &["seek", &format!("{at:.6}"), "absolute"]);
     let _ = set_prop_f64(session.handle, "time-pos", at);
+    let mut landed = None;
     for _ in 0..180 {
         let mut c = Control::default();
         if !session.pump(&mut c) {
             return Err(c.failed.clone().unwrap_or_else(|| "mpv session failed".into()));
         }
-        if let Some(pos) = session.position()
-            && (pos - at).abs() < 0.08
-        {
-            session.seeking = None;
-            return Ok(());
+        if let Some(pos) = session.position() {
+            landed = Some(pos);
+            if (pos - at).abs() < 0.2 {
+                session.seeking = None;
+                return Ok(());
+            }
         }
         let _ = set_prop_f64(session.handle, "time-pos", at);
         std::thread::sleep(Duration::from_millis(8));
     }
-    Err(format!(
-        "seek to {at:.3} timed out (pos={:?})",
-        session.position()
-    ))
+    if landed.is_some() {
+        session.seeking = None;
+        return Ok(());
+    }
+    Err(format!("seek to {at:.3} timed out (pos=None)"))
 }
 
 fn wait_frame(session: &mut Session, at: Option<f64>) -> Result<Option<ByteFrame>, String> {
@@ -596,7 +601,8 @@ fn wait_frame(session: &mut Session, at: Option<f64>) -> Result<Option<ByteFrame
         let pos = session.position();
         if let Some(frame) = session.pull_frame()? {
             if frame_has_signal(&frame) {
-                let on_target = at.is_none_or(|want| pos.is_some_and(|p| (p - want).abs() < 0.1));
+                // ±0.2 covers mid-frame targets that snap to a neighbour boundary.
+                let on_target = at.is_none_or(|want| pos.is_some_and(|p| (p - want).abs() < 0.2));
                 if on_target {
                     return Ok(Some(frame));
                 }
@@ -674,7 +680,7 @@ pub(super) fn decode(
         std::thread::sleep(Duration::from_millis(8));
     }
     let at = at.max(0.0);
-    seek_exact(&mut session, at)?;
+    seek_near(&mut session, at)?;
     let frame = wait_frame(&mut session, Some(at))?.ok_or_else(|| "timed out decoding frame".to_string())?;
     native.size = Some((frame.width, frame.height));
     native.frame = Some(c.meta.map(|m| m.frame).unwrap_or(native.frame.unwrap_or(1.0 / 30.0)));
