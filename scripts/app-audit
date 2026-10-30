@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Crude checklist for the slow patterns Rune's "Fast apps" page describes, over a repo's Rust files.
+# Usage: scripts/app-audit [--strict] <repo>
+# Prints one line per finding (check, file:line, source) and a count. Exits 0, or 1 with --strict
+# when there are findings. Heuristics only: a finding is a place to look, not a verdict.
+set -euo pipefail
+
+strict=0
+if [ "${1:-}" = "--strict" ]; then strict=1; shift; fi
+root="${1:-}"
+if [ -z "$root" ] || [ ! -d "$root" ]; then
+  echo "usage: scripts/app-audit [--strict] <repo>" >&2
+  exit 2
+fi
+command -v rg >/dev/null || { echo "app-audit: needs ripgrep (rg)" >&2; exit 2; }
+
+cd "$root"
+out=$(rg --files -g '*.rs' -g '!target' -g '!**/tests/**' -g '!tests.rs' -g '!*_tests.rs' -g '!**/benches/**' 2>/dev/null \
+  | LC_ALL=C sort \
+  | xargs awk '
+function trim(s) { sub(/^[ \t]+/, "", s); if (length(s) > 70) s = substr(s, 1, 70) "..."; return s }
+function hit(check, i) { printf "%s\t%s:%d\t%s\n", check, file, i, trim(L[i]) }
+function flush(   i, j, n, v, only, uses, win, cond, ms, evicts, entry) {
+  if (file == "") return
+  entry = 0; evicts = 0
+  for (i = 1; i <= N; i++) {
+    if (L[i] ~ /fn (view|poll|init)[ (<]|\.on_[a-z_]+\(/) entry = 1
+    if (L[i] ~ /retain|\.remove\(|\.pop|evict|\.clear\(\)|LruCache|truncate/) evicts = 1
+  }
+  for (i = 1; i <= N; i++) {
+    if (L[i] ~ /^[ \t]*\/\//) continue
+    if (L[i] ~ /\.virtualize\(/ && L[i] !~ /virtual_rows/) {
+      win = 0
+      for (j = i - 15; j <= i + 40; j++) if (j >= 1 && j <= N && L[j] ~ /\.child\(|\.children\(|\.extend\(|\.push\(/) win = 1
+      if (win) hit("virtualize over built rows", i)
+    }
+    if (entry && L[i] ~ /Command::new|UnixStream|TcpStream|reqwest::blocking|rusqlite|std::fs::read_to_string|fs::read_to_string/ \
+        && L[i] !~ /^[ \t]*use /) hit("blocking call near view/poll/init", i)
+    if (L[i] ~ /wake_after\(/ && match(L[i], /from_millis\([0-9]+\)/)) {
+      ms = substr(L[i], RSTART + 12, RLENGTH - 13) + 0
+      if (ms <= 33) {
+        cond = 0
+        for (j = i - 4; j <= i; j++) if (j >= 1 && L[j] ~ /(^|[^a-z_])(if|match|return)([^a-z_]|$)/) cond = 1
+        if (!cond) hit("wake_after <= 33 ms, unconditional", i)
+      }
+    }
+    if (L[i] ~ /\.layout\((&|"|format)/) {
+      if (L[i] ~ /\.layout\([^;]*\[[23]\]/ && L[i] !~ /\[[01]\]/) hit("layout rect read for one size", i)
+      else if (match(L[i], /let (mut )?[a-z_][a-z_0-9]* = .*\.layout\(/)) {
+        v = L[i]; sub(/^[ \t]*let (mut )?/, "", v); sub(/[^a-z_0-9].*/, "", v)
+        only = 1; uses = 0
+        for (j = i + 1; j <= i + 12 && j <= N; j++) {
+          n = L[j]
+          while (match(n, v "\\[[0-9]\\]")) {
+            uses++
+            if (substr(n, RSTART + length(v) + 1, 1) !~ /[23]/) only = 0
+            n = substr(n, RSTART + RLENGTH)
+          }
+        }
+        if (uses > 0 && only) hit("layout rect read for one size", i)
+      }
+    }
+    if (!evicts && L[i] ~ /static .*(HashMap|BTreeMap)/) hit("static map cache with no eviction in file", i)
+  }
+}
+FNR == 1 { flush(); file = FILENAME; N = 0; stop = 0 }
+{ if (!stop) { if ($0 ~ /#\[cfg\(test\)\]/) stop = 1; else L[++N] = $0 } }
+END { flush() }
+' 2>/dev/null || true)
+
+if [ -z "$out" ]; then
+  echo "app-audit: no findings"
+  exit 0
+fi
+printf '%s\n' "$out" | awk -F'\t' '{ printf "%-42s %-48s %s\n", $1, $2, $3 }'
+n=$(printf '%s\n' "$out" | wc -l | tr -d ' ')
+echo "app-audit: $n finding(s)"
+[ "$strict" = 1 ] && exit 1
+exit 0

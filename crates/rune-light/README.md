@@ -44,7 +44,7 @@ cargo build --profile perf -p rune-light --example light
 target/perf/examples/light bench
 ```
 
-`examples/reel.rs` renders a radiance-cascades reel that steps through the real GI buffers
+`examples/reel/` renders a radiance-cascades reel that steps through the real GI buffers
 (`reel render`, `reel stills T1,T2`, `reel bench`; outputs land in `demo/reel/`).
 
 `examples/live.rs` puts the flashlight and chat demos in a window (`cargo run --release -p rune-light --example live`;
@@ -146,7 +146,7 @@ Quílez/Aaltonen estimator where the ray grazes two occluders. It's never wrong 
 - `examples/light.rs` drives `crates/rune` and `crates/rune-light` directly; `examples/lab` drives the lights from a
   live `rune::Runtime` through the compositor hook (marked elements become occluders).
 - `LightRenderer::inspect()` exposes every intermediate GI buffer (field, media, each cascade merged and, with
-  `inspect = true`, unmerged) and `Timings` has per-cascade GPU times; `examples/reel.rs` visualises them.
+  `inspect = true`, unmerged) and `Timings` has per-cascade GPU times; `examples/reel/` visualises them.
 - GI is 2–3 ms for sparse layouts and more for dense ones: the bilinear fix traces four rays per direction, and C3's
   rays cross many card edges where the field is small (`reel bench`). Halving the cascade-0 directions, or temporal
   amortisation (which breaks strict determinism), are

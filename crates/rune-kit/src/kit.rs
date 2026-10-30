@@ -14,8 +14,10 @@ pub struct StateColors {
     pub icon: Color,
 }
 
-/// Semantic colours. Translucent tokens are already solved for the theme's blending (see
-/// `rune::theme::srgb_equivalent`). Hashable, as [`Type`] and [`Radius`] are, so a row can use
+/// Semantic colours. Translucent tokens are resolved for the blend mode of the window the kit
+/// was built for (`rune::theme::blends_srgb`): as authored when it blends in sRGB, the default,
+/// and solved over [`Kit::blend_over`] when it blends in linear light (see
+/// `rune::theme::for_blend`). Hashable, as [`Type`] and [`Radius`] are, so a row can use
 /// the tokens it reads as a `memo` version.
 #[derive(Clone, Copy, Debug, Hash)]
 pub struct Palette {
@@ -215,7 +217,9 @@ pub struct Kit {
     pub ty: Type,
     pub radius: Radius,
     pub motion: Motion,
-    /// The surface translucent colours are solved over (for sRGB-equivalent blending).
+    /// The surface translucent colours are solved over when the window blends in linear light
+    /// (`App::srgb_blend(false)`), so they look as they would blended in sRGB. None leaves
+    /// colours as they are in both modes.
     pub blend_over: Option<Color>,
     /// When set, zero-blur elevation layers (rings) take this palette colour as they are
     /// painted, so they follow token overrides made after the kit was built
@@ -246,10 +250,11 @@ impl Kit {
         crate::shadows(self, e, layers)
     }
 
-    /// `c` at opacity `a`, re-solved so linear-light blending gives the browser's sRGB result.
+    /// `c` at opacity `a`, as the browser blends it: unchanged in a window that blends in sRGB,
+    /// re-solved over `blend_over` in one that blends in linear light (`rune::theme::for_blend`).
     pub fn alpha(&self, c: Color, a: f32) -> Color {
         let ca = c.alpha(a);
-        self.blend_over.map_or(ca, |bg| rune::theme::srgb_equivalent(ca, bg))
+        self.blend_over.map_or(ca, |bg| rune::theme::for_blend(ca, bg))
     }
 
     /// The text selection highlight of the kit's fields. Pass it to `El::selection_color` on
@@ -258,12 +263,13 @@ impl Kit {
         self.alpha(self.c.text_accent, 0.3)
     }
 
-    /// A straight-alpha colour re-solved for the surface it is painted on.
+    /// A straight-alpha colour as painted on `backdrop`: re-solved for that surface when the
+    /// window blends in linear light, unchanged when it blends in sRGB.
     pub fn on(&self, c: Color, backdrop: Color) -> Color {
         if self.blend_over.is_none() {
             return c;
         }
-        rune::theme::srgb_equivalent(c, backdrop)
+        rune::theme::for_blend(c, backdrop)
     }
 
     /// `layers` as painted: rings recoloured by [`Kit::ring`] when the theme sets it.

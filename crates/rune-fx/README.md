@@ -59,7 +59,8 @@ fx.draw_layer(&mut pass, 0);              // or fx.draw_all(&mut pass, &layers, 
 `FxLayer` builders: `.at(time)`, `.seed(n)`, `.over()` / `.under()`, `.reduced(bool)`,
 `.source(slot, rect)`, `.opacity(k)` (also the pub field `opacity`, so struct
 literals need it).
-`layer.is_animating()` tells the frame loop whether to keep ticking.
+`layer.is_animating()` tells the frame loop whether to keep ticking; it is false for a layer that
+draws nothing (zero opacity or amplitude).
 
 For Rune effect slots, use `prepare_with_slots(device, queue, frame, slots)` with one
 `FxSlot::default().scale(site.scale).clip(i.clip, i.fade)` per layer. Missing entries default

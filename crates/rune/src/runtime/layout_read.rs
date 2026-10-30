@@ -25,6 +25,7 @@ use std::any::TypeId;
 use std::rc::Rc;
 
 use super::*;
+use super::key_index::{self, KeyIndex};
 
 #[path = "selection_rects.rs"]
 mod selection_rects;
@@ -140,7 +141,7 @@ impl std::ops::DerefMut for LayoutRects {
 #[derive(Default)]
 pub(crate) struct LayoutSeen {
     pub(crate) rects: LayoutRects,
-    reads: LayoutReads,
+    pub(super) reads: LayoutReads,
 }
 
 impl LayoutSeen {
@@ -230,14 +231,11 @@ impl<S: 'static> Runtime<S> {
                 dy += st.offset as f32;
                 dx += st.x.offset as f32;
             }
-            if let Some(v) = self.virtuals.get(&nodes[p].path) {
-                dy -= v.before;
-            }
             up = nodes[p].parent.filter(|_| nodes[p].above.is_none());
         }
         if let Some(anc) = std::iter::successors(Some(i), |&p| nodes[p].parent).find(|&p| nodes[p].above.is_some())
             && let Some(a) = &nodes[anc].above
-            && let Some(k) = nodes[..anc].iter().position(|n| n.key.as_ref() == Some(&a.key))
+            && let Some(k) = anchor_index(&nodes, anc, a)
         {
             let at = sticky::anchored_target(nodes, &self.scrolls, k, self.viewport);
             let (w, h) = (nodes[anc].target[2] - nodes[anc].target[0], nodes[anc].target[3] - nodes[anc].target[1]);
@@ -261,12 +259,16 @@ impl<S: 'static> Runtime<S> {
         [t[0] * k + turn, t[1] * k + turn, (t[2] - t[0]) * k, (t[3] - t[1]) * k]
     }
 
-    fn layout_of(&self, nodes: &[Node], key: &str) -> Option<[f32; 4]> {
+    fn layout_of(&self, nodes: &[Node], index: Option<&KeyIndex>, key: &str) -> Option<[f32; 4]> {
         if key == SELECTION { return None; }
-        if let Some(i) = nodes.iter().position(|n| crate::flight::selects(key, &n.path, n.key.as_deref())) {
+        let first = match index {
+            Some(index) => index.first(nodes, key),
+            None => key_index::scan_first(nodes, key),
+        };
+        if let Some(i) = first {
             return Some(self.laid_out(nodes, i));
         }
-        let (i, [x0, y0, x1, y1]) = self.highlight_target_in(nodes, None, key)?;
+        let (i, [x0, y0, x1, y1]) = self.highlight_target_with(nodes, index, None, key)?;
         let node_rect = self.laid_out(nodes, i);
         let t = nodes[i].target;
         Some([node_rect[0] + (x0 - t[0]), node_rect[1] + (y0 - t[1]), x1 - x0, y1 - y0])
@@ -278,8 +280,19 @@ impl<S: 'static> Runtime<S> {
     /// read's threshold adds up. Returns whether one moved.
     pub(super) fn layout_moved(&mut self, reads: Option<LayoutReads>, nodes: Option<&[Node]>, force: bool) -> bool {
         let reads = reads.unwrap_or_else(|| std::mem::take(&mut self.layout_seen.reads));
-        let nodes = nodes.unwrap_or(&self.nodes);
-        let now: Vec<Option<[f32; 4]>> = reads.iter().map(|r| self.layout_of(nodes, &r.key)).collect();
+        // A pass's own nodes are seen once; the current nodes are seen again every frame.
+        let own;
+        let (nodes, index) = match nodes {
+            Some(nodes) => {
+                own = (reads.len() > key_index::SCAN_READS).then(|| KeyIndex::of(nodes));
+                (nodes, own.as_ref())
+            }
+            None => {
+                self.key_index.prepare(&self.nodes, self.commit_gen, reads.len());
+                (&self.nodes[..], self.key_index.get(&self.nodes, self.commit_gen))
+            }
+        };
+        let now: Vec<Option<[f32; 4]>> = reads.iter().map(|r| self.layout_of(nodes, index, &r.key)).collect();
         let boxes = reads.iter().any(|r| r.key == SELECTION).then(|| self.selection_boxes(nodes));
         let rects = &mut self.layout_seen.rects;
         let changed = reads.iter().zip(&now).any(|(r, rect)| rects.get(&r.key).is_none_or(|old| r.moved(*old, *rect)))
@@ -301,7 +314,9 @@ impl<S: 'static> Runtime<S> {
     /// current rect, since it re-runs anyway.
     pub(super) fn refresh_layout_seen(&mut self) {
         if self.layout_seen.rects.is_empty() { return; }
-        let now: Vec<_> = self.layout_seen.rects.keys().map(|k| self.layout_of(&self.nodes, k)).collect();
+        self.key_index.prepare(&self.nodes, self.commit_gen, self.layout_seen.rects.len());
+        let index = self.key_index.get(&self.nodes, self.commit_gen);
+        let now: Vec<_> = self.layout_seen.rects.keys().map(|k| self.layout_of(&self.nodes, index, k)).collect();
         for (seen, rect) in self.layout_seen.rects.values_mut().zip(now) { *seen = rect; }
         if self.layout_seen.rects.contains_key(SELECTION) { self.layout_seen.rects.selection = self.selection_boxes(&self.nodes).into(); }
     }
@@ -330,7 +345,7 @@ impl<S: 'static> Runtime<S> {
                 settled = true;
                 break;
             }
-            self.layout = measured.layout;
+            self.discard_measured(measured);
             measured = self.measure(tx);
         }
         if !settled { self.layout_moved(Some(std::mem::take(&mut measured.layout_reads)), Some(&measured.nodes), true); }
@@ -387,10 +402,10 @@ impl<S: 'static> Runtime<S> {
         let mut queued = false;
         let quiet = !self.layout_feedback_open();
         let last = std::mem::take(&mut self.drawn_fired);
-        let mut fired = HashMap::with_capacity(last.len());
+        let mut fired = HashMap::with_capacity_and_hasher(last.len(), Default::default());
         for i in 0..self.nodes.len() {
             let n = &self.nodes[i];
-            if n.on_drawn_layout.is_none() || self.subtree_exiting(i) { continue; }
+            if n.handlers.get().is_none_or(|h| h.on_drawn_layout.is_none()) || self.subtree_exiting(i) { continue; }
             let Some(&drawn) = self.drawn.get(i) else { continue };
             let id = n.id;
             if self.rect_springing(i) {
@@ -422,17 +437,8 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn rect_springing(&self, i: usize) -> bool {
         let store = self.scene.store();
         let n = &self.nodes[i];
-        let step = |p: usize| {
-            if let Some(a) = &self.nodes[p].above
-                && let Some(j) = self.nodes[..p].iter().position(|n| n.key.as_ref() == Some(&a.key))
-            {
-                Some(j)
-            } else {
-                self.nodes[p].parent
-            }
-        };
         self.flights.iter().any(|f| f.lands(&n.path, n.key.as_deref()))
-            || std::iter::successors(Some(i), |&p| step(p)).any(|p| {
+            || std::iter::successors(Some(i), |&p| step_up(&self.nodes, p)).any(|p| {
                 let id = self.nodes[p].id;
                 store.is_animating(id, prop::FRAME) || store.is_animating(id, prop::TRAVEL) || store.is_animating(id, prop::PRESENCE)
                     || store.is_animating(id, prop::OFFSET) || store.is_animating(id, prop::SCALE) || store.is_animating(id, P_PRESS_SCALE)
@@ -448,11 +454,11 @@ impl<S: 'static> Runtime<S> {
     fn report_rects(&mut self, quiet: bool, screen: bool) -> bool {
         let last = std::mem::take(if screen { &mut self.screen_fired } else { &mut self.layout_fired });
         let (ox, oy) = if screen { self.window_origin } else { (0.0, 0.0) };
-        let mut fired = HashMap::with_capacity(last.len());
+        let mut fired = HashMap::with_capacity_and_hasher(last.len(), Default::default());
         let mut queued = false;
         for i in 0..self.nodes.len() {
             let n = &self.nodes[i];
-            if (if screen { n.on_screen_layout.is_none() } else { n.on_layout.is_none() }) || self.subtree_exiting(i) { continue; }
+            if n.handlers.get().is_none_or(|h| if screen { h.on_screen_layout.is_none() } else { h.on_layout.is_none() }) || self.subtree_exiting(i) { continue; }
             let id = n.id;
             let [x, y, w, h] = self.laid_out(&self.nodes, i);
             let r = [x + ox, y + oy, w, h];

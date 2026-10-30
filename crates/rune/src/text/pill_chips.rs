@@ -38,6 +38,7 @@ pub(crate) fn pill_chips(
                 starts.push((i, None));
             }
         }
+        let line_end = m.inline_min_coord + m.offset + m.advance - m.hanging_advance;
         for (i, lead) in starts {
             let Some(pill) = pills.get(i) else { continue };
             let id = PILL_BOX | (i as u64) << 1;
@@ -64,7 +65,7 @@ pub(crate) fn pill_chips(
                     continue;
                 }
                 let x1 = trail.filter(|t| (t.x - gr_x1).abs() < 1.0).map_or(gr_x1 + pad, |t| t.x + t.width - margin);
-                let x1 = if trail.is_none() { m.inline_min_coord + m.offset + m.advance - m.hanging_advance } else { x1 };
+                let x1 = if trail.is_none() { line_end } else { x1 };
                 let base = origin[1] + m.baseline;
                 let (top, bot) = ((base - asc - 1.0 * scale).round(), (base + desc + 1.0 * scale).round());
                 let x0 = gr_x0.min(m.inline_min_coord + m.offset);
@@ -88,12 +89,12 @@ pub(crate) fn pill_chips(
                 } else if rtl_lead {
                     lead.x + lead.width - margin
                 } else if trail.is_none() {
-                    m.inline_min_coord + m.offset + m.advance - m.hanging_advance
+                    line_end
                 } else {
                     gr_x1 + pad
                 }
             } else {
-                trail.map_or(m.inline_min_coord + m.offset + m.advance - m.hanging_advance, |t| t.x + t.width - margin)
+                trail.map_or(line_end, |t| t.x + t.width - margin)
             };
             if asc == 0.0 {
                 (asc, desc) = (size * scale * 0.95, size * scale * 0.25);

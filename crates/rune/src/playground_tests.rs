@@ -160,6 +160,10 @@ fn escape(rt: &mut Runtime<Real>) {
     rt.frame(1.0 / 60.0);
 }
 
+fn region(rt: &Runtime<Real>) -> Region {
+    rt.playground.as_ref().map_or(Region::List, |p| p.region())
+}
+
 fn is_open(rt: &Runtime<Real>) -> bool {
     rt.playground.as_ref().is_some_and(|p| p.is_open())
 }
@@ -207,7 +211,9 @@ fn the_stage_takes_escape_first() {
     escape(&mut rt);
     assert!(is_open(&rt), "the focused field took Escape");
     escape(&mut rt);
-    assert!(!is_open(&rt), "unhandled, Escape goes back");
+    assert!(is_open(&rt) && region(&rt) == Region::List, "unhandled in the stage, Escape gives the list the keyboard");
+    escape(&mut rt);
+    assert!(!is_open(&rt), "and from the list goes back");
     assert!(!rt.state.holds_escape);
 }
 
@@ -226,6 +232,7 @@ fn a_page_keeps_its_own_state_and_timer_while_open() {
     rt.frame(1.0 / 60.0);
     assert_eq!(shows(&rt, "lab"), "ticks 1 presses 0", "restart makes it again, polled at once");
     tap(&mut rt, "bump");
+    escape(&mut rt);
     escape(&mut rt);
     rt.update(|_, tx| tx.open_playground());
     rt.frame(1.0 / 60.0);
@@ -479,6 +486,7 @@ fn a_new_stage_forgets_what_the_pointer_held_in_the_old_one() {
     rt.frame(DT);
     assert!(own_state::<Tray>(&rt).hovering);
     rt.pointer_down(at.0, at.1);
+    press(&mut rt, Key::Escape);
     letter(&mut rt, "j");
     assert_eq!(selected(&rt), 0);
     rt.drag_files_leave();
@@ -604,3 +612,6 @@ mod chrome;
 
 #[path = "playground/stage_tests.rs"]
 mod stage_layout;
+
+#[path = "playground/widths_tests.rs"]
+mod widths_tests;

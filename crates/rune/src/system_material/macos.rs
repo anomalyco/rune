@@ -14,7 +14,7 @@ use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_video::rc::Retained;
 use objc2_video::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
 use objc2_video::{msg_send, sel};
-use std::{cell::Cell, ptr::NonNull, rc::Rc};
+use std::{cell::Cell, rc::Rc};
 
 /// The host view: flipped, so frames come straight from Rune's top-left points, and never hit,
 /// so clicks fall through to winit's view behind it in the hit-test order.
@@ -75,6 +75,12 @@ impl Materials {
 
     /// Whether this frame's elements should leave their interior to native views.
     pub(crate) fn native(&self) -> bool { self.active }
+
+    /// Whether `present` would only present: no material views to move with the drawable, and
+    /// the layer presents without transactions, so the present can happen on another thread.
+    pub(crate) fn presents_plainly(&self) -> bool {
+        !self.active && self.slots.iter().all(|s| s.shown.is_none()) && !self.flag.get().written()
+    }
 
     fn update_flag(&self, f: impl FnOnce(&mut PresentFlag) -> Option<bool>) -> Option<bool> {
         let mut flag = self.flag.get();
@@ -345,10 +351,5 @@ fn make_view(material: SystemMaterial, host: &AnyObject) -> Option<Slot> {
 
 /// The surface's CAMetalLayer, when it is one on Metal.
 fn metal_layer(surface: &wgpu::Surface<'_>) -> Option<Retained<AnyObject>> {
-    // SAFETY: only retains the layer wgpu presents into.
-    let hal = unsafe { surface.as_hal::<wgpu::hal::api::Metal>() }?;
-    let guard = hal.render_layer().lock();
-    let ptr = NonNull::new(Retained::as_ptr(&*guard).cast::<AnyObject>().cast_mut())?;
-    // SAFETY: a valid, live CAMetalLayer pointer.
-    unsafe { Retained::retain(ptr.as_ptr()) }
+    crate::gpu::with_layer(surface, |layer| objc2_video::Message::retain(layer))
 }

@@ -2,7 +2,7 @@
 //! and what a new stage leaves behind.
 
 use super::*;
-use crate::playground::{Nav, Request};
+use crate::playground::{FILTER, Nav, Region, Request};
 
 pub(crate) fn handler_states<'a, S: 'static>(state: &'a mut S, playground: &'a mut Option<Box<crate::playground::Live<S>>>) -> crate::states::States<'a> {
     match playground {
@@ -49,6 +49,7 @@ impl<S: 'static> Runtime<S> {
     /// Applies queued playground requests. Focus leaves the old stage first, while the states
     /// its fields were built for are still there; a replay keeps it in the side column.
     pub(super) fn apply_playground(&mut self) {
+        self.sync_region();
         let Some(playground) = &self.playground else { return };
         if !playground.has_pending() { return; }
         let swaps = playground.pending_swaps_stage();
@@ -96,22 +97,19 @@ impl<S: 'static> Runtime<S> {
         std::iter::successors(Some(i), |&j| self.nodes[j].parent).any(|j| self.nodes[j].key.as_deref().is_some_and(&is))
     }
 
-    /// The keyboard is on an element in the stage, which gets keys before the playground.
-    fn focus_on_stage(&self) -> bool {
-        !self.hover_focus && self.focused_index().is_some_and(|i| self.under(i, crate::playground::is_stage))
-    }
-
-    /// Keys nothing else took: Escape leaves an element in the stage, else goes Back.
+    /// Keys nothing else took: Escape gives the keyboard back to the list from the stage, else
+    /// goes Back.
     pub(super) fn playground_key(&mut self, ev: &KeyEvent, one: &mut Tx) -> bool {
         let plain = !ev.mods.cmd && !ev.mods.alt && !ev.mods.ctrl && !ev.mods.shift;
         if ev.key != crate::Key::Escape || !plain || !self.playground.as_ref().is_some_and(|p| p.is_open()) { return false; }
-        if self.focus_on_stage() { self.set_focus(None, true); } else { one.close_playground(); }
+        self.sync_region();
+        if self.playground.as_ref().is_some_and(|p| p.region() != Region::List) { self.to_list(); } else { one.close_playground(); }
         true
     }
 
     /// The playground's own keys, ahead of the stage's `on_key` and focus traversal: its
-    /// shortcut, and while it's open, moving between stories, triggers, and into and around the
-    /// side column. A focused text field, or element in the stage, keeps its keys.
+    /// shortcut, and while it's open, the keys of the column that has the keyboard (see
+    /// [`Region`]). A focused text field keeps its keys, and the stage all of its own.
     pub(super) fn playground_nav(&mut self, ev: &KeyEvent, one: &mut Tx) -> bool {
         let Some(playground) = &self.playground else { return false };
         if playground.is_shortcut(ev) {
@@ -120,11 +118,12 @@ impl<S: 'static> Runtime<S> {
         }
         // Ahead of fields too: route_key doesn't offer it again.
         if self.playground_typing() && let Some(f) = self.on_key && Tx::took(self.app_key(f, ev, one), one) { return true; }
-        let Some(playground) = &self.playground else { return false };
-        if !playground.is_open() || self.focused_input().is_some() || self.focus_on_stage() { return false; }
+        if !self.playground.as_ref().is_some_and(|p| p.is_open()) { return false; }
+        self.sync_region();
+        if self.focused_input().is_some() { return self.filter_key(ev, one); }
         if self.on_side_keys() {
             if matches!(ev.key, crate::Key::Escape | crate::Key::Tab) {
-                self.set_focus(None, true);
+                self.to_list();
                 return true;
             }
             if self.playground.as_mut().is_some_and(|p| p.side_key(ev, one)) { return true; }
@@ -132,30 +131,115 @@ impl<S: 'static> Runtime<S> {
         let Some(playground) = &self.playground else { return false };
         let side = self.playground_side();
         let at = self.focused.as_deref().filter(|_| !self.hover_focus).and_then(|f| side.iter().position(|p| p == f));
-        match playground.nav(ev, at.is_some()) {
+        match playground.nav(ev, playground.region()) {
             Nav::Pass => false,
+            Nav::Stay => true,
             Nav::Request(request) => {
                 let trigger = matches!(request, Request::Trigger(_) | Request::Replay);
                 if !(trigger && one.key_repeat) { one.playground.push(request); }
                 true
             }
             Nav::IntoSide => {
-                let Some(first) = side.first() else { return false };
-                self.set_focus(Some(first.clone()), true);
+                if let Some(first) = side.first() { self.set_focus(Some(first.clone()), true); }
+                self.give_region(Region::Side);
+                true
+            }
+            Nav::IntoStage => {
+                self.set_focus(None, true);
+                self.give_region(Region::Stage);
+                true
+            }
+            Nav::Filter => {
+                let Some(path) = self.key_path(FILTER) else { return false };
+                self.set_focus(Some(path), true);
                 true
             }
             Nav::OutOfSide => {
-                self.set_focus(None, true);
+                self.to_list();
                 true
             }
+            Nav::SideStep(_) if side.is_empty() => true,
             Nav::SideStep(by) => {
-                let (at, n) = (at.unwrap_or(0) as isize, side.len() as isize);
-                let path = side[(at + by).rem_euclid(n) as usize].clone();
+                let n = side.len() as isize;
+                let to = match at {
+                    Some(at) => (at as isize + by).rem_euclid(n),
+                    None if by > 0 => 0,
+                    None => n - 1,
+                };
+                let path = side[to as usize].clone();
                 self.set_focus(Some(path.clone()), true);
-                one.scroll_to.push((None, path));
+                one.scroll_to.push(crate::runtime::ScrollReveal::into_view(None, path));
                 true
             }
         }
+    }
+
+    /// Keys in a focused text field. In the list's filter, ↓ goes down into the matches, onto
+    /// the first; Return goes to the list on the first match, if the selection isn't one; and
+    /// Esc empties it, then goes to the list. Every other key edits it, and every other field
+    /// keeps all its keys.
+    fn filter_key(&mut self, ev: &KeyEvent, one: &mut Tx) -> bool {
+        use crate::Key::*;
+        let plain = !ev.mods.alt && !ev.mods.ctrl && !ev.mods.cmd && !ev.mods.shift;
+        if self.focused_index().and_then(|i| self.nodes[i].key.as_deref()) != Some(FILTER) || !plain { return false; }
+        let Some(playground) = &mut self.playground else { return false };
+        let to = match ev.key {
+            Escape if playground.clear_filter() => {
+                self.dirty = true;
+                return true;
+            }
+            Down => playground.first_shown(),
+            Enter => playground.first_match(),
+            Escape => None,
+            _ => return false,
+        };
+        if let Some(i) = to { one.playground.push(Request::Select(i)); }
+        self.set_focus(None, true);
+        true
+    }
+
+    /// The list takes the keyboard back: focus leaves the stage or the side column.
+    fn to_list(&mut self) {
+        self.set_focus(None, true);
+        self.give_region(Region::List);
+    }
+
+    /// Gives `region` the keyboard, redrawing the columns' focus.
+    fn give_region(&mut self, region: Region) {
+        let focused = self.focused.clone();
+        let Some(playground) = &mut self.playground else { return };
+        playground.see_focus(focused.as_deref());
+        if playground.set_region(region) { self.dirty = true; }
+    }
+
+    /// A press in the open playground gives its column the keyboard.
+    pub(super) fn playground_pointer_down(&mut self, x: f32) {
+        let width = self.viewport.0;
+        let Some(region) = self.playground.as_ref().filter(|p| p.is_open()).map(|p| p.region_at(x, width)) else { return };
+        self.give_region(region);
+    }
+
+    /// Focus that moved into a column since the last look gives that column the keyboard: a
+    /// field focused in the stage, Tab into the side column. Focus a hover moved (a menu-like
+    /// row under the pointer) is passed over, and so is focus leaving: the column keeps it.
+    fn sync_region(&mut self) {
+        let (focused, hover) = (self.focused.clone(), self.hover_focus);
+        let Some(playground) = &mut self.playground else { return };
+        if !playground.see_focus(focused.as_deref()) || hover { return; }
+        let Some(i) = self.focused_index() else { return };
+        let region = if self.under(i, |k| k == "playground-side") {
+            Region::Side
+        } else if self.under(i, crate::playground::is_stage) {
+            Region::Stage
+        } else {
+            Region::List
+        };
+        if self.playground.as_mut().is_some_and(|p| p.set_region(region)) { self.dirty = true; }
+    }
+
+    /// The path of the element keyed `key`.
+    fn key_path(&self, key: &str) -> Option<String> {
+        self.nodes.iter().find(|n| n.key.as_deref() == Some(key)).map(|n| n.path.clone())
     }
 
     /// Whether the stage's `on_key` gets every key first, through `playground_nav`.

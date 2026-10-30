@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use crate::states::{States, StatesRef};
 use crate::tok::{self, Theme, radius, type_};
-use crate::{Color, Cx, El, Icon, Key, KeyEvent, OverlaySpec, ScrollSpec, Shortcut, Tx, col, el, icon, row, spacer, text};
+use crate::{Color, Cx, El, Icon, Key, KeyEvent, OverlaySpec, ScrollSpec, Shortcut, Tx, col, el, icon, row, spacer, text, text_input};
 
 /// The bar's height when the playground is closed, hairline included.
 pub(crate) const BAR: f32 = 26.0;
@@ -24,27 +24,37 @@ const HEADER: f32 = 38.0;
 const BAND: f32 = 28.0;
 const ROW: f32 = 28.0;
 const CONTROL: f32 = 24.0;
+/// The story list's filter field.
+pub(crate) const FILTER: &str = "playground-filter";
+/// How far each level of the story list indents.
+const INDENT: f32 = 12.0;
 
 mod folds;
+mod list;
 mod live;
 mod nav;
 mod open;
+mod region;
 mod stage;
 mod story;
 mod testing;
+mod tree;
 mod variants;
 mod view;
+mod widths;
 
 pub(crate) use live::Live;
 use folds::Folds;
-use nav::Row;
+use widths::Widths;
 pub use open::slug;
+pub(crate) use region::Region;
 pub(crate) use stage::call;
 pub use stage::{Play, Stage, Step};
 use stage::{SCROLL_MARGIN, Staged, Trigger, View, trigger, trigger_tx};
 pub use story::Story;
 use story::OwnStory;
 pub(crate) use testing::stage_element;
+use tree::Row;
 
 /// A storybook for one window, given to [`App::playground`](crate::App::playground):
 ///
@@ -62,23 +72,41 @@ pub(crate) use testing::stage_element;
 /// that does: `Playground::new().trigger(.., |s, _| ..)` can't infer it (E0282).
 ///
 /// Its stories are the window's `AppSpec::scenes`, then its pages and [`Story`]s, listed under
-/// their groups: a `"Group/Name"` name puts a story in a group, and the groups keep the order
-/// they first appear in. Scenes without a group list under "Scenes", pages and stories under
-/// "Pages".
+/// their groups: a `"Group/Name"` name puts a story in a group, and each further `/` nests a
+/// group inside it (`"Sidebar/Filter buttons/Compact"`), indented a step, as deep as the path
+/// goes. Groups and stories keep the order they first appear in, scenes first, unless
+/// [`Playground::group_order`] names the top-level groups to list first;
+/// [`Playground::start_folded`] starts them folded. Scenes without a group list under
+/// "Scenes", pages and stories under "Pages". A filter field above the list (/ or a click
+/// focuses it) narrows it to the stories whose path has every word typed, with their groups
+/// unfolded: ↓ goes down into the matches, Return opens the first, and Esc clears it, then
+/// leaves.
 ///
 /// A scene opens as a fresh `AppSpec::init` with the scene fn applied (`App::init`'s closure
 /// isn't used), polled by `AppSpec::poll` but never given `AppSpec::setup`, so it gets no
 /// waker and starts nothing; with [`Playground::fresh`] it starts from the real state instead. Back drops every stage state and returns to the real one.
 ///
-/// Keys, while it's open: ↑↓ move along the list, group headers included, and J K between
-/// stories (⌘↑ ⌘↓ to the first and last). On a header, ← folds its group, → unfolds it and ↵
-/// toggles it, as a click on it does; groups stay folded while the app runs (see
-/// [`Playground::folds`] to keep them longer). R
-/// replays the story from the start, 1 to 9 pick its variant, a trigger's letter runs it, → or Tab move into the side
-/// column (↑↓ inside it, ←, Tab or Esc back out; side controls from `side_keys` get keys
-/// first, and only Tab and Esc leave them), and Esc or ⌘⇧D go back to the app. They come
-/// before the stage's `AppSpec::on_key`, except Esc, which the stage gets first. A focused
-/// text field keeps all its keys, and so does an element focused in the stage, until Esc.
+/// Keys, while it's open, go to one column at a time: the story list, the stage or the side
+/// column. Its selection takes the accent (a ring for the stage), and the hint under the side
+/// column lists its keys. A click in a column gives it the keyboard.
+///
+/// - **The list** (where it starts): ↑↓ move along it, group headers included, and J K between
+///   stories (⌘↑ ⌘↓ to the first and last). On a header ← folds its group, or goes to the group
+///   around it once folded, → unfolds it or steps in, and ↵ toggles it, as a click on it does;
+///   ← on a story goes to its group. Groups stay folded while the app runs (see
+///   [`Playground::folds`] to keep them longer). R replays the story from the start and a
+///   trigger's letter runs it. → on a story, or Tab, moves to the side column, ⇧Tab to the
+///   stage, and Esc or ⌘⇧D go back to the app.
+/// - **The side column**: ↑↓ move between its controls, 1 to 9 pick the story's variant, a
+///   trigger's letter runs it, and ←, Tab or Esc go back to the list. Side controls from
+///   `side_keys` get every key first, and only Tab and Esc leave them.
+/// - **The stage**: every key is the story's, through its focused element or the stage's
+///   `AppSpec::on_key`, and Esc it leaves goes back to the list.
+///
+/// Keys the list and side column leave, ⌘-chords and digits included, go to the stage's
+/// `on_key` too, so a story's shortcuts work wherever the keyboard is. From the list, Esc goes
+/// to it first, and [`Playground::typing`] gives it every key first. A focused text field
+/// keeps all its keys.
 pub struct Playground<S: 'static> {
     pages: Vec<Page<S>>,
     triggers: Vec<(&'static str, Trigger<S>)>,
@@ -95,6 +123,8 @@ pub struct Playground<S: 'static> {
     typing: Option<fn(&S) -> bool>,
     dark: Option<fn(&S) -> bool>,
     folds: Folds,
+    widths: Widths,
+    group_order: Vec<&'static str>,
 }
 
 impl<S: 'static> Default for Playground<S> {
@@ -123,6 +153,8 @@ impl<S: 'static> Playground<S> {
             typing: None,
             dark: None,
             folds: Folds::default(),
+            widths: Widths::default(),
+            group_order: Vec::new(),
         }
     }
 
@@ -295,9 +327,10 @@ enum Kind<S: 'static> {
     Own(Box<dyn OwnStory>),
 }
 
-/// A story's group and name, from its `"Group/Name"` path.
+/// A story's group and name, from its path: everything before the last `/` names its group
+/// (`"Sidebar/Filter buttons"`, a group inside "Sidebar"), the rest the story.
 fn split(path: &'static str, default: &'static str) -> (&'static str, &'static str) {
-    path.split_once('/').unwrap_or((default, path))
+    path.rsplit_once('/').unwrap_or((default, path))
 }
 
 /// What a handler asks of the playground (`Tx::open_playground`, its keys and its controls),
@@ -336,24 +369,45 @@ impl Request {
 /// What a key does in the open playground, for the runtime to carry out.
 pub(crate) enum Nav {
     Pass,
+    /// The playground's key, which does nothing here.
+    Stay,
     Request(Request),
     /// Focus the side column's first control.
     IntoSide,
+    /// The stage takes the keyboard.
+    IntoStage,
+    /// Focus the story list's filter field.
+    Filter,
     /// Focus leaves the side column.
     OutOfSide,
     /// Focus moves this many controls along the side column.
     SideStep(isize),
 }
 
-/// The playground's own controls' state. Its controls change the playground through requests.
-pub(crate) struct Controls;
+/// The playground's own controls' state: the story list's filter field and column widths. Its
+/// other controls change the playground through requests.
+pub(crate) struct Controls {
+    pub(crate) filter: crate::TextEdit,
+    pub(super) sidebar_w: f32,
+    pub(super) side_w: f32,
+    pub(super) save_widths: Option<Rc<dyn Fn(f32, f32)>>,
+}
+
+impl Default for Controls {
+    fn default() -> Self {
+        Self { filter: Default::default(), sidebar_w: SIDEBAR, side_w: SIDE, save_widths: None }
+    }
+}
 
 /// Shows `playground` in `rt`'s window when this run offers it: an enabled playground, in a
 /// window unless `RUNE_PLAYGROUND=0`, or wherever `--playground` asks for it, headless included,
 /// opened at the story it names, on the variant `--variant` names.
 pub(crate) fn attach<S: 'static>(rt: &mut crate::Runtime<S>, playground: Option<Playground<S>>, spec: &crate::AppSpec<S>, open: Option<Option<String>>, variant: Option<String>, windowed: bool) {
-    let Some(playground) = playground.filter(Playground::is_enabled) else { return };
+    let Some(mut playground) = playground.filter(Playground::is_enabled) else { return };
     if open.is_none() && (!windowed || hidden_by_env()) { return; }
+    if windowed && !cfg!(test) && playground.widths.load.is_none() && playground.widths.save.is_none() {
+        playground.widths = Widths::prefs(crate::tooling::app_id().unwrap_or(spec.title));
+    }
     let mut live = Live::new(playground, spec, windowed && cfg!(target_os = "macos"));
     if let Some(name) = open {
         live.open_at(name.as_deref(), variant.as_deref()).unwrap_or_else(|e| crate::tooling::die(&e));

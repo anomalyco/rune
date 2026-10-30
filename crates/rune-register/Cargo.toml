@@ -1,0 +1,10 @@
+[package]
+name = "rune-register"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Self-registration for apps: a module adds its stories, scenes or knob groups to a list with one line, so no central list needs editing."
+
+[dependencies]
+linkme = "0.3"

@@ -1,1 +1,0 @@
-- `Tx::replay_playground()` makes the open playground story again and runs its `r` trigger, as R does, and `Tx::playground_trigger(key)` runs one of its triggers, so a deep link can open a story and replay it.

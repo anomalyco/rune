@@ -21,13 +21,26 @@ pub(super) struct Keep {
     pub was: f32,
     /// When the element lives inside a virtual row: `(virtual_list_path, row_key, y_in_row)`.
     pub virtual_row: Option<(String, String, f32)>,
+    /// The element, or the header it's in, was stuck to the top: it stays there for the commit.
+    pub hold: Option<Hold>,
 }
 
-/// One `Tx::scroll_into_view` request that follows its target while the viewport's subtree moves.
+/// A header stuck to the top when a `Tx::keep_on_screen` commit started. Until the motion
+/// settles it sticks `inset` points below its viewport's top whether or not it's still sticky,
+/// bounded by the bottom of the growth row it's drawn in rather than its parent's new layout, so
+/// the rows under it fold up to it before the scroll moves, on the same frame.
+pub(super) struct Hold {
+    pub path: String,
+    pub inset: f32,
+}
+
+/// One `Tx::scroll_into_view` or `Tx::scroll_center` request that follows its target while the
+/// viewport's subtree moves.
 pub(super) struct Reveal {
     pub scope: Option<String>,
     pub key: String,
     pub viewport: String,
+    pub center: bool,
     /// Whether this reveal lands at the bottom of a `stick_bottom` viewport.
     pub at_end: bool,
 }
@@ -417,6 +430,10 @@ impl<S: 'static> Runtime<S> {
             });
             let Some(i) = found else { continue };
             let Some(s) = self.viewport_of(i) else { continue };
+            let hold = self.stuck_header(i, s).map(|h| Hold {
+                path: self.nodes[h].path.clone(),
+                inset: (self.drawn[h][1] - self.drawn[s][1]) / self.drawn_scale[s].max(1e-4),
+            });
             self.keeps.retain(|k| k.viewport != self.nodes[s].path);
             self.scroll_reveals.retain(|r| r.viewport != self.nodes[s].path);
             let virtual_row = std::iter::successors(Some(i), |&p| self.nodes[p].parent)
@@ -434,8 +451,73 @@ impl<S: 'static> Runtime<S> {
                 viewport: self.nodes[s].path.clone(),
                 was: self.drawn[i][1] - self.drawn[s][1],
                 virtual_row,
+                hold,
             });
         }
+    }
+
+    /// Node `i`, or the header holding it, if it's drawn stuck to the top of viewport `s`.
+    fn stuck_header(&self, i: usize, s: usize) -> Option<usize> {
+        if !self.has_sticky || self.stuck.len() != self.nodes.len() { return None; }
+        std::iter::successors(Some(i), |&p| self.nodes[p].parent)
+            .take_while(|&p| p != s)
+            .find(|&h| self.stuck[h] > 0.0 && self.sticky_of(h).is_some_and(|(edge, ..)| edge == StickyEdge::Top))
+    }
+
+    /// Whether a `Tx::keep_on_screen` holds a stuck header (`Hold`).
+    pub(super) fn holding(&self) -> bool {
+        self.keeps.iter().any(|k| k.hold.is_some())
+    }
+
+    fn hold_of(&self, i: usize) -> Option<&Hold> {
+        if self.keeps.is_empty() { return None; }
+        let path = &self.nodes[i].path;
+        self.keeps.iter().find_map(|k| k.hold.as_ref().filter(|h| h.path == *path))
+    }
+
+    /// Node `i`'s sticky edge, inset and whether the inset counts from its bottom: a `Hold`'s,
+    /// else its own.
+    pub(super) fn sticky_of(&self, i: usize) -> Option<(StickyEdge, f32, bool)> {
+        if let Some(h) = self.hold_of(i) { return Some((StickyEdge::Top, h.inset, false)); }
+        self.nodes[i].sticky.as_ref().and_then(|s| Some((s.edge?, s.inset, s.tail)))
+    }
+
+    /// The bands and box node `i` sticks within along `edge` (see `shift`), from its ancestors'
+    /// drawn places this frame, and the viewport it sticks to.
+    pub(super) fn sticky_frame_of(&self, i: usize, edge: StickyEdge) -> ([f32; 8], Option<usize>) {
+        let n = &self.nodes[i];
+        let mut frame = n.parent.map_or(UNBOUNDED, |pr| self.sticky_frame[pr]);
+        let horizontal = edge == StickyEdge::Left;
+        let mut ancestor = n.parent;
+        let mut viewport = None;
+        while let Some(a) = ancestor {
+            let nd = &self.nodes[a];
+            if nd.scroll.is_some() && if horizontal { nd.scroll_axes.x() } else { nd.scroll_axes.y() } {
+                viewport = Some(a);
+                break;
+            }
+            // A section nested inside a growth row must stop at that row's presented
+            // bottom, not its descendants' final layout height. Only sticky nodes
+            // need this ancestor walk; ordinary painting keeps its existing fast path.
+            if !horizontal && self.row_h[a] >= 0.0 {
+                frame[2] = frame[2].max(self.sticky_frame[a][2]);
+                frame[3] = frame[3].min(self.sticky_frame[a][3]);
+            }
+            ancestor = nd.parent;
+        }
+        // A held header's parent may have shrunk in the commit while the growth row it's drawn
+        // in folds: it stops at that row's drawn bottom, less what the row lays out below the
+        // parent, so it rests where its parent ends once the row settles.
+        if !horizontal && self.hold_of(i).is_some() && let Some(p) = n.parent {
+            let r = std::iter::successors(Some(p), |&a| self.nodes[a].parent)
+                .take_while(|&a| Some(a) != viewport)
+                .find(|&a| self.row_h[a] >= 0.0)
+                .unwrap_or(p);
+            let content_bottom = |a: usize| self.nodes[a].target[3] - self.nodes[a].inset[3];
+            frame[2] = f32::NEG_INFINITY;
+            frame[3] = self.sticky_frame[r][3] - (content_bottom(r) - content_bottom(p));
+        }
+        (frame, viewport)
     }
 
     /// Scrolls each kept element's viewport so the element's top lands where it showed before
@@ -512,25 +594,38 @@ impl<S: 'static> Runtime<S> {
             moved = true;
         }
         for r in &self.scroll_reveals {
-            let Some(i) = (0..self.nodes.len()).find(|&i| {
-                let n = &self.nodes[i];
-                n.named(&r.key) && !self.subtree_exiting(i)
-                    && n.parent.is_none_or(|p| super::in_scope(&self.nodes[p].path, r.scope.as_deref()))
-            }) else { continue };
+            let target = (0..self.nodes.len()).find(|&i| self.reveal_names(r, i))
+                .map(|i| (i, self.drawn[i][1], self.drawn[i][3]))
+                .or_else(|| {
+                    let (i, [_, y0, _, y1]) = self.highlight_target_in(&self.nodes, r.scope.as_deref(), &r.key)?;
+                    if self.subtree_exiting(i) { return None; }
+                    let scale = self.drawn_scale.get(i).copied().unwrap_or(1.0);
+                    let dy = (y0 - self.nodes[i].target[1]) * scale;
+                    Some((i, self.drawn[i][1] + dy, (y1 - y0).max(0.0) * scale))
+                });
+            let Some((i, drawn_top, drawn_h)) = target else { continue };
             let Some(s) = self.viewport_of(i).filter(|&s| self.nodes[s].path == r.viewport) else { continue };
             let scale = self.drawn_scale[s];
             if scale <= 1e-4 { continue; }
             let Some(cover) = self.stuck_cover(&r.viewport, &r.key) else { continue };
             let cover = cover / f64::from(scale);
-            let rel_top = f64::from((self.drawn[i][1] - self.drawn[s][1]) / scale) - cover;
-            let height = f64::from(self.drawn[i][3] / scale) + cover;
+            let rel_top = f64::from((drawn_top - self.drawn[s][1]) / scale) - cover;
+            let height = f64::from(drawn_h / scale) + cover;
             let viewport = f64::from(self.drawn[s][3] / scale);
             let margin = f64::from(self.nodes[s].scroll_edges.margin);
             let stick = self.nodes[s].scroll.is_some_and(|s| s.stick_bottom);
             let growing = self.scroll_stack(s).and_then(|c| self.stacks.get(&self.nodes[c].id)).is_some_and(|st| st.growing);
             let Some(st) = self.scrolls.get_mut(&self.nodes[s].id) else { continue };
             let top = st.offset + rel_top;
-            let to = scroll_edge::reveal(st.offset, top, height, viewport, margin).clamp(0.0, st.max);
+            let to = reveal::place(r.center, st.offset, top, height, viewport, margin).clamp(0.0, st.max);
+            // A `Tx::scroll_center` glide follows its target once the target moves.
+            if let Some(v) = st.glide {
+                if st.glide_to.is_none_or(|g| (to - g).abs() >= 1.0 / 64.0) {
+                    st.glide_to = Some(to);
+                    st.glide = Some(scroll_offset::retarget_v(st.offset, v, to));
+                }
+                continue;
+            }
             if (to - st.offset).abs() < 1.0 / 64.0 {
                 if growing { st.pinned = false; }
                 continue;
@@ -569,14 +664,30 @@ impl<S: 'static> Runtime<S> {
                 || self.grows.get(&n.id).is_some_and(|g| g.moving())
                 || self.scrolls.get(&n.id).is_some_and(|st| st.slack.moving()))
         });
+        let gliding = |viewport: &str| self.path_ids.get(viewport)
+            .and_then(|id| self.scrolls.get(id))
+            .is_some_and(|st| st.glide.is_some());
         keeps.retain(|k| animating(&k.viewport));
-        reveals.retain(|r| animating(&r.viewport) && self.nodes.iter().enumerate().any(|(i, n)| {
-            n.named(&r.key) && !self.subtree_exiting(i)
-                && n.parent.is_none_or(|p| super::in_scope(&self.nodes[p].path, r.scope.as_deref()))
-                && self.viewport_of(i).is_some_and(|s| self.nodes[s].path == r.viewport)
-        }));
+        // A glide keeps its reveal until it lands; otherwise a reveal lasts while its viewport's
+        // subtree moves with its target in it.
+        reveals.retain(|r| gliding(&r.viewport) || (animating(&r.viewport) && self.reveal_mounted(r)));
         self.keeps = keeps;
         self.scroll_reveals = reveals;
+    }
+
+    /// Whether node `i` is reveal `r`'s target element.
+    fn reveal_names(&self, r: &Reveal, i: usize) -> bool {
+        let n = &self.nodes[i];
+        n.named(&r.key) && !self.subtree_exiting(i)
+            && n.parent.is_none_or(|p| super::in_scope(&self.nodes[p].path, r.scope.as_deref()))
+    }
+
+    /// Whether reveal `r`'s target element or highlight is mounted in its viewport.
+    fn reveal_mounted(&self, r: &Reveal) -> bool {
+        let in_viewport = |i: usize| self.viewport_of(i).is_some_and(|s| self.nodes[s].path == r.viewport);
+        (0..self.nodes.len()).any(|i| self.reveal_names(r, i) && in_viewport(i))
+            || self.highlight_target_in(&self.nodes, r.scope.as_deref(), &r.key)
+                .is_some_and(|(i, _)| !self.subtree_exiting(i) && in_viewport(i))
     }
 
     /// What a reveal of row `key` in viewport `path` must leave to stuck headers: `None` when

@@ -19,8 +19,9 @@
 //!   rows are inserted or removed above it while the memo keeps the old handler.
 //! - **Live values and pixels** stay bound: a `Live`, `LiveText` or `Pixels` is a shared handle,
 //!   so a reused subtree shows its newest value or image without a rebuild.
-//! - **Environment.** The window's dark mode, scale, reduced-motion preference and system accent
-//!   (`Cx::accent`, `Cx::focus_color`) are part of every version, so changing any of them builds
+//! - **Environment.** The window's dark mode, scale, reduced-motion preference, system accent
+//!   (`Cx::accent`, `Cx::focus_color`) and blend mode (`theme::blends_srgb`, which theme
+//!   colours resolve by) are part of every version, so changing any of them builds
 //!   again. App state the closure reads (a theme, a locale, a selection) must be part of
 //!   `version`. For a text field that's the
 //!   `TextEdit` itself, which hashes its text, selection, composition and focus.
@@ -62,6 +63,63 @@ pub(crate) struct Shared {
     /// Whether two siblings anywhere among them share a key, so the per-commit key check can
     /// skip a memo without any.
     pub(crate) duplicate_keys: bool,
+    /// Whether any descendant uses `virtualize` or `virtual_rows`.
+    pub(crate) has_virtual: bool,
+    /// Whether every descendant can reuse its flattened `Node` and Taffy subtree across commits.
+    pub(crate) reusable: bool,
+}
+
+impl El {
+    /// Every child: those shared with a memo cache, then the element's own.
+    pub(crate) fn all_children(&self) -> impl Iterator<Item = &El> {
+        self.memo_children.iter().flat_map(|c| c.children.iter()).chain(&self.children)
+    }
+
+    /// Copies in the children shared with a memo cache, so the element owns all of them.
+    pub(crate) fn expand_memo(&mut self) {
+        self.memo_built = None;
+        if let Some(shared) = self.memo_children.take() {
+            self.has_virtual |= shared.has_virtual;
+            let shared = Rc::unwrap_or_clone(shared).children;
+            let own = std::mem::replace(&mut self.children, shared);
+            self.children.extend(own);
+        }
+    }
+}
+
+fn el_flatten_reusable(e: &El) -> bool {
+    e.virtual_estimate.is_none()
+        && e.growth.is_none()
+        && e.aspect_fit <= 0.0
+        && e.above.is_none()
+        && e.live.is_empty()
+        && e.input.is_none()
+        && e.handlers.get().is_none_or(|h| h.modal.is_none())
+        && !(e.scroll.is_some() && e.scroll_axes.x())
+        && e.text.as_ref().is_none_or(|t| !t.redacted && t.live.is_none())
+        && e.vis.pixels.as_ref().is_none_or(|_| {
+            e.style.aspect_ratio.is_some() || (e.style.size.width.is_auto() == e.style.size.height.is_auto())
+        })
+        && e.memo_children.as_ref().is_none_or(|m| m.reusable && !m.duplicate_keys)
+        && e.children.iter().all(el_flatten_reusable)
+}
+
+/// Precomputes `shape` on plain, non-input, non-cased text specs at `scale` while the freshly
+/// built subtree is still uniquely owned, so flattening never has to copy a shared `TextSpec`.
+fn prekey_text_shapes(el: &mut El, scale: f32) {
+    if el.input.is_none()
+        && let Some(t) = &el.text
+        && !t.redacted
+        && t.case.is_none()
+        && t.rings.is_empty()
+        && t.shape.is_none_or(|s| s.0 != scale.to_bits())
+        && let Some(t) = &mut el.text
+    {
+        t.key_shape(scale);
+    }
+    for child in &mut el.children {
+        prekey_text_shapes(child, scale);
+    }
 }
 
 /// Whether `el` or anything under it is a focused field.
@@ -71,25 +129,47 @@ pub(crate) fn has_focused_input(el: &El) -> bool {
         || el.children.iter().any(has_focused_input)
 }
 
-/// A built subtree: its root without children, and the children placeholders share.
-struct Built {
-    root: El,
-    children: Rc<Shared>,
+/// A built subtree: its root without children (or key, supplied per placeholder), and the
+/// children placeholders share.
+pub(crate) struct Built {
+    pub(crate) id: u64,
+    pub(crate) reusable: bool,
+    pub(crate) root: El,
+    pub(crate) children: Rc<Shared>,
 }
 
+static NEXT_BUILT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 impl Built {
-    fn new(mut el: El) -> Rc<Built> {
-        el.expand_memo();
-        let children = std::mem::take(&mut el.children);
-        let focused_input = children.iter().any(has_focused_input);
-        let duplicate_keys = crate::key_diagnostics::memo_children_have_duplicates(&el, &children);
-        Rc::new(Built { root: el, children: Rc::new(Shared { children, focused_input, duplicate_keys }) })
+    fn new(mut el: El, scale: f32) -> (Rc<Built>, String) {
+        let key = el.key.take().unwrap_or_default();
+        el.memo_built = None;
+        let shared = if el.children.is_empty() && let Some(shared) = el.memo_children.take() {
+            prekey_text_shapes(&mut el, scale);
+            shared
+        } else {
+            el.expand_memo();
+            prekey_text_shapes(&mut el, scale);
+            let children = std::mem::take(&mut el.children);
+            let focused_input = children.iter().any(has_focused_input);
+            let duplicate_keys = crate::key_diagnostics::memo_children_have_duplicates(&el, &children);
+            let has_virtual = children.iter().any(|c| c.has_virtual);
+            let reusable = !duplicate_keys && !has_virtual && children.iter().all(el_flatten_reusable);
+            Rc::new(Shared { children, focused_input, duplicate_keys, has_virtual, reusable })
+        };
+        el.has_virtual = el.virtual_estimate.is_some();
+        let reusable = shared.reusable && !shared.duplicate_keys && el_flatten_reusable(&el);
+        let id = NEXT_BUILT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        (Rc::new(Built { id, reusable, root: el, children: shared }), key)
     }
 
     /// The root, with its children shared rather than copied.
-    fn placeholder(&self) -> El {
+    fn placeholder(self: &Rc<Self>, key: String) -> El {
         let mut el = self.root.clone();
+        el.key = Some(key);
+        el.has_virtual |= self.children.has_virtual;
         el.memo_children = Some(self.children.clone());
+        el.memo_built = Some(self.clone());
         el
     }
 }
@@ -155,6 +235,13 @@ struct Entry {
 #[derive(Default)]
 pub(crate) struct MemoCache {
     entries: HashMap<Rc<str>, Entry>,
+    pub(crate) flattened: crate::runtime::HashMap<u64, crate::runtime::memo_reuse::FlattenedMemo>,
+    pub(crate) pending_scratch: Vec<crate::runtime::memo_reuse::PendingFlat>,
+    pub(crate) reused_scratch: Vec<crate::runtime::memo_reuse::ReusedSpan>,
+    pub(crate) skip_scratch: Vec<crate::runtime::memo_reuse::CleanApplySpan>,
+    pub(crate) kids_scratch: Vec<taffy::NodeId>,
+    pub(crate) path_scratch: String,
+    pub(crate) present_len: usize,
     pass: u64,
     #[cfg(test)]
     pub(crate) builds: usize,
@@ -163,6 +250,8 @@ pub(crate) struct MemoCache {
 impl MemoCache {
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
+        self.flattened.clear();
+        self.present_len = 0;
     }
 
     /// No memos, counting passes on from this cache's, for a build that must start from scratch.
@@ -179,13 +268,21 @@ impl MemoCache {
     /// Drops the memos no build since pass `since` (a [`MemoCache::next_pass`]) used: a commit
     /// keeps what any of its view builds used.
     pub(crate) fn keep_since(&mut self, since: u64) {
+        // A commit that didn't build the view used no memos, and drops none.
+        if self.pass < since { return; }
+        let before = self.entries.len();
         self.entries.retain(|_, e| e.pass >= since);
+        if self.entries.len() < before && !self.flattened.is_empty() {
+            let live: crate::runtime::HashSet<u64> = self.entries.values().map(|e| e.built.id).collect();
+            self.flattened.retain(|id, _| live.contains(id));
+        }
     }
 }
 
 struct Scope {
     cache: MemoCache,
     env: u64,
+    scale: f32,
     /// The ids of the memos whose closures are running, innermost last.
     path: Vec<Rc<str>>,
     /// The memos each running closure has created so far.
@@ -219,15 +316,19 @@ pub(crate) fn enter(
     env: crate::Env,
     accent: crate::SystemAccent,
     reduced_motion: bool,
+    srgb_blend: bool,
     caret: Option<(String, [f32; 4])>,
     layout: LayoutRects,
 ) -> Guard {
     cache.pass += 1;
     let accent = [accent.accent(env.system_dark), accent.focus(env.system_dark)].map(|c| [c.r, c.g, c.b, c.a].map(f32::to_bits));
-    let env = hash_of(&(env.system_dark, env.scale.to_bits(), reduced_motion, accent));
+    let scale = env.scale;
+    // Theme colours resolve per blend mode (`theme::blends_srgb`), so a switch rebuilds memos.
+    let env = hash_of(&(env.system_dark, scale.to_bits(), reduced_motion, accent, srgb_blend));
     let scope = Scope {
         cache,
         env,
+        scale,
         path: Vec::new(),
         nested: Vec::new(),
         reads: Vec::new(),
@@ -337,6 +438,16 @@ pub(crate) fn hash_of(v: &impl Hash) -> u64 {
     h.finish()
 }
 
+/// `el` keyed `key`; debug builds warn once per call site when it already had another key.
+#[cfg_attr(debug_assertions, track_caller)]
+fn keyed(el: El, key: String) -> El {
+    #[cfg(debug_assertions)]
+    if let Some(existing) = &el.key {
+        crate::perf_warn::memo_key_replaced(&key, existing, std::panic::Location::caller());
+    }
+    el.key(key)
+}
+
 /// The subtree `build` returns, keyed `id`, built again only when `version` (or the window's
 /// environment) differs from the last build's. Otherwise `build` isn't called and the
 /// previous subtree is reused, with the same node ids and state.
@@ -356,7 +467,7 @@ pub fn memo(id: impl Into<String>, version: impl Hash, build: impl FnOnce() -> E
     let key = id.into();
     let version = hash_of(&version);
     enum Step {
-        Reuse(El),
+        Reuse(Rc<Built>),
         Build { id: Rc<str>, version: u64, store: bool },
         Plain,
     }
@@ -373,25 +484,31 @@ pub fn memo(id: impl Into<String>, version: impl Hash, build: impl FnOnce() -> E
                 store = false;
             } else if e.version == version && e.reads.iter().all(|r| s.seen.holds(r)) {
                 e.pass = pass;
-                reused = Some((e.built.placeholder(), e.nested.clone(), e.reads.clone()));
+                for read in &e.reads {
+                    match read {
+                        Read::Caret(..) => s.replayed.caret = true,
+                        Read::Layout(k, _) => note_read(&mut s.replayed.layout, k, None),
+                        Read::LayoutWith(k, same, _) => note_read(&mut s.replayed.layout, k, Some(same.clone())),
+                        Read::Selection(_) => note_read(&mut s.replayed.layout, SELECTION, None),
+                    }
+                }
+                let parent_reads = if s.reads.is_empty() || e.reads.is_empty() { Vec::new() } else { e.reads.clone() };
+                let nested = if e.nested.is_empty() { Vec::new() } else { e.nested.clone() };
+                reused = Some((e.built.clone(), nested, parent_reads));
             }
         }
         let rc_id = || -> Rc<str> { name.into() };
-        if let Some((el, nested, reads)) = reused {
-            keep_nested(&mut s.cache, nested, pass);
-            s.note(&reads);
-            for read in reads {
-                match read {
-                    Read::Caret(..) => s.replayed.caret = true,
-                    Read::Layout(key, _) => note_read(&mut s.replayed.layout, &key, None),
-                    Read::LayoutWith(key, same, _) => note_read(&mut s.replayed.layout, &key, Some(same)),
-                    Read::Selection(_) => note_read(&mut s.replayed.layout, SELECTION, None),
-                }
+        if let Some((built, nested, reads)) = reused {
+            if !nested.is_empty() {
+                keep_nested(&mut s.cache, nested, pass);
+            }
+            if !reads.is_empty() {
+                s.note(&reads);
             }
             if let Some(parent) = s.nested.last_mut() {
                 parent.push(rc_id());
             }
-            return Step::Reuse(el);
+            return Step::Reuse(built);
         }
         let id = rc_id();
         if let Some(parent) = s.nested.last_mut() {
@@ -403,11 +520,11 @@ pub fn memo(id: impl Into<String>, version: impl Hash, build: impl FnOnce() -> E
         Step::Build { id, version, store }
     });
     let (id, version, store) = match step {
-        Step::Reuse(el) => return el,
-        Step::Plain => return build().key(key),
+        Step::Reuse(built) => return built.placeholder(key),
+        Step::Plain => return keyed(build(), key),
         Step::Build { id, version, store } => (id, version, store),
     };
-    let el = build().key(key);
+    let el = keyed(build(), key);
     SCOPES.with_borrow_mut(|scopes| {
         let Some(s) = scopes.last_mut() else { return el };
         s.path.pop();
@@ -421,8 +538,8 @@ pub fn memo(id: impl Into<String>, version: impl Hash, build: impl FnOnce() -> E
         if !store {
             return el;
         }
-        let built = Built::new(el);
-        let el = built.placeholder();
+        let (built, key) = Built::new(el, s.scale);
+        let el = built.placeholder(key);
         let pass = s.cache.pass;
         s.cache.entries.insert(id, Entry { version, built, reads, nested, pass });
         el
@@ -515,7 +632,7 @@ mod tests {
     #[test]
     fn a_view_panicking_inside_a_memo_leaves_no_scope_for_the_next_build() {
         let panicked = std::panic::catch_unwind(|| {
-            let _scope = enter(MemoCache::default(), Env::new(true, 1.0), crate::SystemAccent::DEFAULT, false, None, LayoutRects::default());
+            let _scope = enter(MemoCache::default(), Env::new(true, 1.0), crate::SystemAccent::DEFAULT, false, true, None, LayoutRects::default());
             memo("outer", 0, || memo("inner", 0, || panic!("view panicked")))
         });
         assert!(panicked.is_err());

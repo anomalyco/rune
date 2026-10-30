@@ -34,6 +34,11 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         "growth" => col().key("stack").w_full().growth(GrowthSpec::default())
             .children((0..s.rows).map(item)),
         "list" => col().w_full().children((0..s.rows).map(item)),
+        // Dense wrapped paragraphs: most of the frame's cost is visible glyphs.
+        "prose" => col().w_full().gap(12.0).padding(16.0).children((0..200).map(|i| {
+            text(format!("{i}. {}", PROSE.repeat(1 + i % 3))).key(format!("para-{i}"))
+                .font(rune::TextStyle::new(13.0, 400.0)).color(Color::WHITE).w_full()
+        })),
         other => panic!("unknown workload {other}"),
     };
     col().w_full().h_full().fill(Color::BLACK).child(
@@ -42,6 +47,9 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             .clip_fade(0.0, 12.0, 0.0, 12.0).child(content),
     )
 }
+
+const PROSE: &str = "Amber lantern orchard quiet harbor, copper meadow signal drift. Pebble willow \
+    ember tide under a juniper kestrel; nimbus opal prism and a quiet harbor beneath the lantern. ";
 
 const NAMES: &[&str] = &[
     "cpu_ms", "view_cpu_ms", "commit_cpu_ms", "layout_cpu_ms", "text_cpu_ms",
@@ -52,7 +60,7 @@ const NAMES: &[&str] = &[
 fn main() {
     let args: Vec<_> = std::env::args().collect();
     let value = |key: &str| args.iter().position(|a| a == key).and_then(|i| args.get(i + 1));
-    let workload = value("--workload").expect("--workload list|markdown|sticky|growth").clone();
+    let workload = value("--workload").expect("--workload list|markdown|sticky|growth|prose").clone();
     let frames: usize = value("--frames").map_or(480, |n| n.parse().unwrap());
     let fps: f64 = value("--fps").map_or(120.0, |n| n.parse().unwrap());
     assert!(frames > 0 && fps > 0.0);
@@ -64,7 +72,11 @@ fn main() {
          ```rust\nlet lantern = meadow(42);\n```\n\n"
     )).collect();
     let state = State { workload, rows: 1000, source, style: MarkdownStyle::neutral(true), views: Cell::new(0) };
-    let mut rt = Runtime::new(state, view, (760.0, 800.0), Env::new(true, 2.0));
+    let size = value("--size").map_or((760.0, 800.0), |v| {
+        let (w, h) = v.split_once('x').expect("--size WxH");
+        (w.parse().unwrap(), h.parse().unwrap())
+    });
+    let mut rt = Runtime::new(state, view, size, Env::new(true, 2.0));
     rt.frame(0.0);
     rt.pointer_move(380.0, 400.0);
     for _ in 0..120 { rt.frame(1.0 / fps); }

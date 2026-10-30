@@ -16,7 +16,7 @@ use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_surface::{self, WlSurface};
-use wayland_client::protocol::{wl_output::{self, WlOutput}, wl_seat::{self, WlSeat}, wl_pointer::{self, WlPointer}, wl_keyboard::{self, WlKeyboard}};
+use wayland_client::protocol::{wl_output::{self, WlOutput}, wl_seat::{self, WlSeat}, wl_pointer::{self, WlPointer}, wl_keyboard::{self, WlKeyboard}, wl_touch::{self, WlTouch}};
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::{Shape, WpCursorShapeDeviceV1};
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1::WpCursorShapeManagerV1;
@@ -29,7 +29,7 @@ use crate::runtime::Waker;
 use crate::{OverlayInput, OverlayOptions, OverlayPlacement};
 
 pub(crate) enum Input {
-    Move(f32, f32), Leave, Button(bool), Key(crate::KeyEvent), KeyUp(crate::KeyEvent),
+    Move(f32, f32), Leave, Button(bool), Secondary(bool), Key(crate::KeyEvent), KeyUp(crate::KeyEvent),
     Physical(crate::PhysicalInput, Option<crate::KeyEvent>),
 }
 
@@ -49,6 +49,9 @@ struct State {
     want_keys: bool,
     capabilities: Option<wl_seat::Capability>,
     pointer: Option<WlPointer>,
+    /// A finger on the surface acts as the primary button, so a tap is a click.
+    touch: Option<WlTouch>,
+    touch_id: Option<i32>,
     /// `wp_cursor_shape_manager_v1` when the compositor has it, and its device for `pointer`.
     shapes: Option<WpCursorShapeManagerV1>,
     shape: Option<WpCursorShapeDeviceV1>,
@@ -80,6 +83,8 @@ impl State {
             self.shape = self.shapes.as_ref().map(|shapes| shapes.get_pointer(&p, qh, ()));
             self.pointer = Some(p);
         }
+        let touch = self.want_pointer && caps.contains(wl_seat::Capability::Touch);
+        if touch && self.touch.is_none() { self.touch = Some(seat.get_touch(qh, ())); }
         if keyboard && self.keyboard.is_none() { self.keyboard = Some(seat.get_keyboard(qh, ())); }
         if !pointer && let Some(p) = self.pointer.take() {
             if let Some(shape) = self.shape.take() { shape.destroy(); }
@@ -87,6 +92,7 @@ impl State {
             self.pointer_inside = false;
             self.entered = None;
         }
+        if !touch && let Some(t) = self.touch.take() { if t.version() >= 3 { t.release(); } self.touch_id = None; }
         if !keyboard && let Some(k) = self.keyboard.take() { if k.version() >= 3 { k.release(); } self.xkb = None; self.keyboard_focus = false; }
     }
 }
@@ -113,6 +119,36 @@ impl Dispatch<WlPointer, ()> for State {
                 if pressed && let Some(xkb) = &state.xkb {
                     state.input.push(Input::Physical(crate::PhysicalInput::Modifiers(key_mods(xkb)), None));
                 }
+            }
+            // BTN_RIGHT: the secondary gesture, as a window's right button is.
+            wl_pointer::Event::Button { serial, button: 0x111, state: wayland_client::WEnum::Value(button), .. } if state.pointer_inside => {
+                state.press = Some(serial);
+                state.input.push(Input::Secondary(button == wl_pointer::ButtonState::Pressed));
+            }
+            _ => {}
+        }
+    }
+}
+impl Dispatch<WlTouch, ()> for State {
+    fn event(state: &mut Self, _: &WlTouch, event: wl_touch::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        match event {
+            wl_touch::Event::Down { serial, surface, id, x, y, .. } if state.touch_id.is_none() && state.surface.as_ref() == Some(&surface) => {
+                state.touch_id = Some(id);
+                state.press = Some(serial);
+                state.input.push(Input::Move(x as f32, y as f32));
+                state.input.push(Input::Button(true));
+            }
+            wl_touch::Event::Motion { id, x, y, .. } if state.touch_id == Some(id) => state.input.push(Input::Move(x as f32, y as f32)),
+            wl_touch::Event::Up { id, .. } if state.touch_id == Some(id) => {
+                state.touch_id = None;
+                state.input.push(Input::Button(false));
+                state.input.push(Input::Leave);
+            }
+            // The compositor took the touch (a system gesture): leave before releasing so it isn't a click.
+            wl_touch::Event::Cancel if state.touch_id.is_some() => {
+                state.touch_id = None;
+                state.input.push(Input::Leave);
+                state.input.push(Input::Button(false));
             }
             _ => {}
         }
@@ -492,6 +528,7 @@ impl Drop for LayerSurface {
         if let Some(shape) = self.state.shape.take() { shape.destroy(); }
         if let Some(shapes) = self.state.shapes.take() { shapes.destroy(); }
         if let Some(pointer) = self.state.pointer.take() && pointer.version() >= 3 { pointer.release(); }
+        if let Some(touch) = self.state.touch.take() && touch.version() >= 3 { touch.release(); }
         if let Some(keyboard) = self.state.keyboard.take() && keyboard.version() >= 3 { keyboard.release(); }
         if let Some(seat) = self.seat.take() && seat.version() >= 5 { seat.release(); }
         if let Some(output) = self.output.take() && output.version() >= 3 { output.release(); }

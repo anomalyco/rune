@@ -1,0 +1,1 @@
+- A page of rows prepended while a virtual list sits at its very top (its top padding showing) no longer pushes the reader's rows down as the new rows measure: the list anchors to the first visible row with a measured height, not a row still at its estimate.

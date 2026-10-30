@@ -99,6 +99,11 @@ impl LoopTrack {
         self.epoch += delta;
         self.amplitude.shift(delta);
     }
+    /// Moves a periodic loop `dt` further along its rhythm, for time its clock didn't see; a
+    /// loop still waiting starts `dt` sooner. Finite sequences keep their place.
+    pub fn advance(&mut self, dt: f64) {
+        if !matches!(self.spec.kind, LoopKind::Sequence(_)) { self.epoch -= dt; }
+    }
     /// Explicit settle/reduced motion lands finite sequences; periodic loops keep their phase.
     pub fn finish(&mut self) {
         if matches!(self.spec.kind, LoopKind::Sequence(_)) { self.finished = true; }

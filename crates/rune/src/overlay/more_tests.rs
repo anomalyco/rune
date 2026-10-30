@@ -536,7 +536,7 @@ fn overlay_compositor_observes_prewarm_and_each_rendered_frame() {
         .compositor(Trace(trace.clone()));
     let (mut overlay, _) = Overlay::new(spec, 8.0, &app);
     let gpu = Arc::new(Gpu::headless());
-    overlay.renderer = Some((Renderer::new(&gpu.device, OFFSCREEN_FORMAT), OFFSCREEN_FORMAT));
+    overlay.renderer = Some(Renderer::new(&gpu.device, OFFSCREEN_FORMAT));
     overlay.gpu = Some(gpu.clone());
     overlay.rt.transparent = true;
     overlay.rt.frame(0.0);
@@ -548,7 +548,7 @@ fn overlay_compositor_observes_prewarm_and_each_rendered_frame() {
     for (width, more) in [(12.0, true), (20.0, false)] {
         overlay.rt.update(|s, tx| { *s = width; tx.instant(); });
         overlay.rt.frame(1.0 / 60.0);
-        let renderer = &mut overlay.renderer.as_mut().unwrap().0;
+        let renderer = &mut overlay.renderer.as_mut().unwrap();
         let mut enc = gpu.device.create_command_encoder(&Default::default());
         let animating = render_frame(&mut Frame {
             device: &gpu.device, queue: &gpu.queue, encoder: &mut enc, target: &target.view,
@@ -600,4 +600,96 @@ fn a_hidden_overlay_still_runs_on_drag_end() {
     overlay.rt.drag_end_sink().borrow_mut().push(("#0/tile".into(), crate::DragOutcome::Copied));
     overlay.drag_ends_due();
     assert_eq!(overlay.rt.state.ended, [crate::DragOutcome::Copied]);
+}
+
+/// A card that arrives while the overlay is hidden, in the update that shows it, enters from
+/// the first visible frame with `animate_reveal`; without it the overlay shows settled.
+#[test]
+fn an_animated_reveal_lets_the_first_card_enter() {
+    fn view(card: &bool, _: &mut Cx<bool>) -> El {
+        let card = card.then(|| crate::el().key("card").size(100.0, 40.0).transition(crate::Transition::offset(0.0, -24.0)));
+        crate::el().children(card)
+    }
+    let app = AppSpec::new("stack", (200.0, 100.0), || false, view);
+    for animate in [true, false] {
+        let mut spec = OverlaySpec::new("stack", app.size, view).options(Default::default());
+        if animate { spec = spec.animate_reveal(); }
+        let (mut overlay, _) = Overlay::new(spec, false, &app);
+        overlay.rt.wall_start = None;
+        let start = Instant::now();
+        present(&mut overlay, start);
+        overlay.rt.update(|card, _| *card = true);
+        overlay.visible = true;
+        overlay.settle_before_reveal();
+        present(&mut overlay, start + Duration::from_secs(5));
+        let y = overlay.rt.presented("card").unwrap().0[1];
+        if animate {
+            assert!(y < -10.0 && overlay.rt.animating, "the first frame shows the card entering: y={y}");
+            present(&mut overlay, start + Duration::from_secs(5) + FRAME * 6);
+            let later = overlay.rt.presented("card").unwrap().0[1];
+            assert!(later > y, "and it moves: {y} then {later}");
+        } else {
+            assert_eq!(y, 0.0, "an ordinary show lands at rest");
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_turn_whose_frame_is_not_due_never_waits_on_the_present_thread() {
+    use crate::display_link::Opportunity;
+    let mut waits = 0;
+    assert_eq!(frame::claim(Some(Opportunity::Wait), || waits += 1), None);
+    assert_eq!(waits, 0);
+    let at = Instant::now();
+    assert_eq!(frame::claim(Some(Opportunity::Tick(at)), || waits += 1), Some(Some(at)));
+    assert_eq!(frame::claim(Some(Opportunity::Now), || waits += 1), Some(None));
+    assert_eq!(frame::claim(None, || waits += 1), Some(None));
+    assert_eq!(waits, 3);
+}
+
+#[test]
+fn a_runtime_at_rest_builds_nothing_while_its_compositor_animates() {
+    struct Spin;
+    impl Compositor<f32> for Spin {
+        fn render(&mut self, _: &mut Frame<'_, f32>) {}
+        fn animating(&self) -> bool { true }
+    }
+    let mut overlay = width_overlay("resting runtime");
+    overlay.compositor = Some(Box::new(Spin));
+    let start = Instant::now();
+    let (animating, _) = step(&mut overlay.rt, &mut overlay.clock, &overlay.compositor, start, false);
+    let idle = idle_after(&overlay.rt, animating, Some(start + FRAME));
+    assert!(idle && frame::rests(&overlay.rt, idle, false));
+    let (commits, instances, t) = (overlay.rt.stats.commits, overlay.rt.instances.len(), overlay.rt.t);
+    let (animating, dt) = frame::rest(&mut overlay.rt, &mut overlay.clock, &overlay.compositor, start + FRAME);
+    assert!(!animating);
+    assert!((dt - FRAME.as_secs_f64()).abs() < 1e-6, "the compositor still steps the frame's time: {dt}");
+    assert_eq!((overlay.rt.stats.commits, overlay.rt.instances.len()), (commits, instances));
+    assert!((overlay.rt.t - t - FRAME.as_secs_f64()).abs() < 1e-6, "a compositor reading `t` sees it move");
+    assert!(!frame::rests(&overlay.rt, false, false), "the runtime asked for the frame");
+    assert!(!frame::rests(&overlay.rt, idle, true), "something marked the overlay dirty");
+    overlay.rt.update(|width, _| *width = 20.0);
+    assert!(!frame::rests(&overlay.rt, idle, false), "state changed");
+    overlay.rt.frame(0.0);
+    overlay.rt.poll = Some(|_, _, _| false);
+    assert!(!frame::rests(&overlay.rt, idle, false), "a poll runs on every frame drawn");
+    overlay.rt.poll = None;
+    overlay.rt.update(|_, tx| tx.wake_after(std::time::Duration::from_secs(1)));
+    overlay.rt.frame(0.0);
+    assert!(!frame::rests(&overlay.rt, idle, false), "a timer is pending");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn an_overlay_reads_its_occlusion_once_a_turn() {
+    let mut overlay = width_overlay("occlusion once");
+    overlay.sync_occlusion();
+    assert!(overlay.occlusion_read && !overlay.occluded);
+    overlay.occluded = true;
+    overlay.sync_occlusion();
+    assert!(overlay.occluded, "the turn's reading isn't taken again");
+    overlay.occlusion_read = false;
+    overlay.sync_occlusion();
+    assert!(!overlay.occluded, "the next turn reads it again");
 }

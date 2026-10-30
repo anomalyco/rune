@@ -24,11 +24,9 @@ pub fn slug(path: &str) -> String {
 
 impl<S: 'static> Live<S> {
     /// The listed story called `name`: its path or just its name, matching case only if need
-    /// be, or its path's [`slug`].
+    /// be, or its path's [`slug`]. Where two match, the first in the list.
     pub(super) fn find(&self, name: &str) -> Option<usize> {
-        let mut listed = self.order.clone();
-        listed.sort_unstable();
-        self.find_in(name, &listed)
+        self.find_in(name, &self.order)
     }
 
     /// [`Live::find`] among `ids`, in order.
@@ -65,7 +63,7 @@ impl<S: 'static> Live<S> {
         let at = name.and_then(|n| self.find(n));
         if !self.open || at.is_some() {
             self.open = true;
-            if let Some(i) = at { self.reveal(i); }
+            if let Some(i) = at.or(self.folds.start.then_some(self.selected)) { self.reveal(i); }
             self.select(at.unwrap_or(self.selected), real);
         }
     }

@@ -1,4 +1,5 @@
-//! Native accessibility preference, sampled on host creation and focus changes.
+//! Native accessibility and appearance preferences, sampled when a host is created or focused
+//! (appearance also on each redraw, which a change asks for).
 //! Headless runtimes use their explicit Env instead.
 
 #[cfg(target_os = "macos")]
@@ -70,6 +71,31 @@ unsafe fn gnome_animations() -> Option<bool> {
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub(crate) fn reduced_motion() -> bool { false }
+
+/// The desktop's light or dark preference where winit reports none (Linux: the XDG desktop
+/// portal's `color-scheme`). None leaves the host's own default.
+#[cfg(all(target_os = "linux", feature = "dbus"))]
+pub(crate) fn dark() -> Option<bool> { crate::portal_appearance::dark() }
+
+#[cfg(not(all(target_os = "linux", feature = "dbus")))]
+pub(crate) fn dark() -> Option<bool> { None }
+
+/// [`dark`] for a window winit gives no theme; None leaves the window's appearance as it is.
+pub(crate) fn desktop_dark(window: &winit::window::Window) -> Option<bool> {
+    dark().filter(|_| window.theme().is_none())
+}
+
+/// A new window's appearance: `--theme` when given, else winit's theme, else [`desktop_dark`],
+/// else dark. On Linux a change of the desktop's preference redraws the window, which rereads it.
+pub(crate) fn window_dark(window: &std::sync::Arc<winit::window::Window>, theme: Option<&str>) -> bool {
+    #[cfg(all(target_os = "linux", feature = "dbus"))]
+    crate::portal_appearance::follow(window);
+    match theme {
+        Some("light") => false,
+        Some("dark") => true,
+        _ => window.theme().map_or_else(|| desktop_dark(window).unwrap_or(true), |t| t == winit::window::Theme::Dark),
+    }
+}
 
 /// macOS "Keyboard navigation" (Full Keyboard Access): when off, Tab visits only text fields
 /// and lists, as in AppKit. Windows and Linux always Tab through every control.

@@ -43,6 +43,7 @@ impl<S: 'static> Runtime<S> {
             Ime::Enabled | Ime::Disabled => {}
         }
         let state = match &mut self.playground {
+            Some(playground) if !playground.stage_hears(&self.state) => None,
             Some(playground) => playground.key_state(&mut self.state),
             None => Some(&mut self.state),
         };

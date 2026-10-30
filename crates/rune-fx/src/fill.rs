@@ -811,10 +811,15 @@ impl FillParams {
         FxCost { passes: 1, samples, alu, backdrop: self.needs_backdrop(), source: self.needs_source() }
     }
 
+    /// Whether the fill draws nothing on a shape of this rect, at any time.
+    pub(crate) fn draws_nothing(&self, r: Rect) -> bool {
+        !(self.intensity > 0.0) || !(self.border.is_finite() && self.border >= 0.0) || !(r.w > 0.0) || !(r.h > 0.0)
+    }
+
     /// Pack into `i` (kind is `KIND_FILL`); `None` when the fill draws nothing.
     pub(crate) fn pack(&self, i: &mut InstRaw, rm: bool, time: f32) -> Option<Rect> {
         let r = rect_of(i);
-        if !(self.intensity > 0.0) || !(self.border.is_finite() && self.border >= 0.0) || !(r.w > 0.0) || !(r.h > 0.0) {
+        if self.draws_nothing(r) {
             return None;
         }
         let fin = |x: f32, d: f32| if x.is_finite() { x } else { d };
@@ -985,6 +990,16 @@ mod tests {
             assert_eq!(bits(&a), bits(&b), "{} {}: same instance at any time", s.id, p.id);
             assert_eq!(da, db, "{} {}: same tables at any time", s.id, p.id);
         }
+    }
+
+    #[test]
+    fn invisible_fills_never_animate() {
+        for (s, p) in every_preset() {
+            let off = Fx::fill(FillParams { intensity: 0.0, ..p.fill() }).on(card()).seed(11);
+            assert!(!off.is_animating() && off.pack().is_none(), "{} {}", s.id, p.id);
+            assert!(!Fx::fill(p.fill()).on(card()).opacity(0.0).is_animating(), "{} {}", s.id, p.id);
+        }
+        assert!(every_preset().any(|(_, p)| p.fill().animates()));
     }
 
     #[test]

@@ -1,0 +1,16 @@
+diff --git a/src/device/queue.rs b/src/device/queue.rs
+index 1c0ac26..7c9c458 100644
+--- a/src/device/queue.rs
++++ b/src/device/queue.rs
+@@ -186,7 +186,10 @@ impl Queue {
+             pending
+         };
+ 
+-        if pending.is_empty() {
++        if pending.is_empty()
++            || (!needs_clear
++                && pending.iter().all(|p| p.usage.from == wgt::TextureUses::PRESENT))
++        {
+             // This assert checks that we don't return here if we encoded a
+             // clear operation for the texture, which would be a problem since
+             // we haven't done anything yet to ensure it stays alive. If we

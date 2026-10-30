@@ -197,7 +197,7 @@ mod tests {
         fn memo(key: &str, children: Vec<El>) -> El {
             let mut root = el().key(key);
             let duplicate_keys = memo_children_have_duplicates(&root, &children);
-            root.memo_children = Some(std::rc::Rc::new(crate::memo::Shared { children, focused_input: false, duplicate_keys }));
+            root.memo_children = Some(std::rc::Rc::new(crate::memo::Shared { children, focused_input: false, duplicate_keys, has_virtual: false, reusable: false }));
             root
         }
         let clean_memo = || memo("a", vec![el().key("x"), el().key("y").child(el().key("z"))]);
@@ -221,29 +221,17 @@ mod tests {
         assert!(!clean(&wide(true)));
     }
 
-    struct Counting;
-    thread_local! { static ALLOCS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
-    fn bump() { let _ = ALLOCS.try_with(|c| c.set(c.get() + 1)); }
-    // SAFETY: forwards to the system allocator, counting calls on this thread.
-    unsafe impl std::alloc::GlobalAlloc for Counting {
-        unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 { bump(); unsafe { std::alloc::System.alloc(l) } }
-        unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) { unsafe { std::alloc::System.dealloc(p, l) } }
-        unsafe fn realloc(&self, p: *mut u8, l: std::alloc::Layout, n: usize) -> *mut u8 { bump(); unsafe { std::alloc::System.realloc(p, l, n) } }
-    }
-    #[global_allocator]
-    static COUNTING: Counting = Counting;
-
     /// The per-commit repair of a 3,700-row tree without duplicates allocates nothing.
     #[test]
     fn repairing_a_tree_without_duplicates_allocates_nothing() {
         let row = |i: usize| el().key(format!("row:{i}")).children([el().key("title"), el().key("meta").child(el().key("time"))]);
         let mut tree = col().key("root").children([col().key("rows").children((0..3700).map(row)), el().key("footer")]);
         assert!(repair(&mut tree).is_empty());
-        let before = ALLOCS.with(std::cell::Cell::get);
+        let before = crate::test_alloc::allocs();
         let t = std::time::Instant::now();
         assert!(repair(&mut tree).is_empty());
         let elapsed = t.elapsed();
-        assert_eq!(ALLOCS.with(std::cell::Cell::get) - before, 0);
+        assert_eq!(crate::test_alloc::allocs() - before, 0);
         eprintln!("clean 3,700-row repair: {elapsed:?}");
     }
 

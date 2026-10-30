@@ -1,0 +1,1 @@
+- **Mermaid edge labels follow hover.** On flowcharts, state and class diagrams, a node's hover now lights its edges' labels too (text and backing, in the hover colour), and pointing at an edge (within 8 pt of its line) or at its label lights that edge and its label. Nodes still win where they overlap; nothing in the API changed (t1058).

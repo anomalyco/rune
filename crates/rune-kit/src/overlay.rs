@@ -39,12 +39,6 @@ impl Placement {
             Placement::RightStart => (Side::Right, Align::Start),
         }
     }
-
-    /// The point content grows from (the trigger side), for the 0.96 scale-in.
-    fn origin(self) -> Vec2 {
-        let (side, align) = self.split();
-        anchor_origin(side, align)
-    }
 }
 
 fn anchor_origin(side: Side, align: Align) -> Vec2 {
@@ -63,10 +57,6 @@ fn anchor_origin(side: Side, align: Align) -> Vec2 {
 
 /// Positions `content` next to the element keyed `anchor` and gives it the overlay entrance:
 /// fade plus 0.96 scale from the trigger side.
-pub(crate) fn anchor(k: &Kit, content: El, anchor: &str, placement: Placement, gap: f32) -> El {
-    anchor_with(k.motion.overlay, content, anchor, placement, gap)
-}
-
 pub(crate) fn anchor_at(k: &Kit, content: El, anchor: &str, side: Side, align: Align, gap: f32) -> El {
     fit(content, anchor, side, align, gap)
         .transition(Transition::scale_anchor(0.96, anchor_origin(side, align)))
@@ -77,7 +67,7 @@ fn anchor_with(motion: Spring, content: El, anchor: &str, placement: Placement, 
     let (side, align) = placement.split();
     content
         .anchored(anchor, side, align, gap)
-        .transition(Transition::scale_anchor(0.96, placement.origin()))
+        .transition(Transition::scale_anchor(0.96, anchor_origin(side, align)))
         .motion(motion)
 }
 
@@ -234,10 +224,7 @@ impl Popover {
             layer.push(s);
         }
         let (side, align) = self.placement.split();
-        let content = fit(raised(k, content, k.radius.md), &anchor_key, side, align, self.gutter)
-            .transition(Transition::scale_anchor(0.96, self.placement.origin()))
-            .motion(k.motion.overlay);
-        layer.push(content);
+        layer.push(anchor_at(k, raised(k, content, k.radius.md), &anchor_key, side, align, self.gutter));
         trigger
     }
 }
@@ -520,7 +507,7 @@ impl HoverCard {
             .min_w(200.0)
             .max_w(320.0)
             .child(col().padding(4.0).children(self.body));
-        layer.push(anchor(k, raised(k, content, k.radius.lg), &anchor_key, self.placement, 4.0));
+        layer.push(anchor_with(k.motion.overlay, raised(k, content, k.radius.lg), &anchor_key, self.placement, 4.0));
         trigger
     }
 }

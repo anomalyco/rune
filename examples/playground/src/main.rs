@@ -1,6 +1,8 @@
 //! A small preferences window with a playground (⌘⇧D): its scenes, a live page, a story with its
 //! own state and timer, and an overlay, grouped by type, with triggers, variants (1–9) and a
-//! side-column control. A click on a group's header folds it. "Every device" scrolls its stage,
+//! side-column control. "Controls" nests groups inside it by path ("Controls/Switches/Toggle")
+//! and comes first in the list. Every group starts folded but the open story's, and a click on
+//! a group's header folds or unfolds it; / filters the list. "Every device" scrolls its stage,
 //! and "Windows/Preferences" fills it edge to edge.
 //!
 //! `cargo run -p playground` shows the bar along the bottom; `-- --playground "Upload"` opens
@@ -106,6 +108,11 @@ fn devices(s: &Prefs, cx: &mut Cx<Prefs>) -> El {
 }
 
 fn switch_row(t: Theme, accent: Color, key: &str, label: &'static str, on: bool, flip: fn(&mut Prefs)) -> El {
+    switch(t, accent, key, label, on, flip)
+}
+
+/// A labelled switch on any state, `flip` turning it.
+fn switch<S: 'static>(t: Theme, accent: Color, key: &str, label: &'static str, on: bool, flip: fn(&mut S)) -> El {
     let (w, h, k) = (34.0, 20.0, 16.0);
     let knob = el().size(k, k).absolute(if on { w - k - 2.0 } else { 2.0 }, 2.0).radius(k / 2.0).fill(t.knob).shadow(1.0, 3.0, t.knob_shadow);
     row().key(key.to_owned()).w_full().h(44.0).px(12.0).center_y().justify_between()
@@ -113,7 +120,27 @@ fn switch_row(t: Theme, accent: Color, key: &str, label: &'static str, on: bool,
         .child(text(label).font(type_::BODY).color(t.text))
         .child(el().size(w, h).radius(h / 2.0).fill(if on { accent } else { t.control_off }).motion(motion::SNAPPY).child(knob))
         .role("switch").label(label)
-        .on_press(move |s: &mut Prefs| flip(s))
+        .on_press(move |s: &mut S| flip(s))
+}
+
+/// The "Controls/Switches" stories' own state: one switch.
+struct Switch {
+    on: bool,
+    dimmed: bool,
+    label: &'static str,
+}
+
+fn switch_story(s: &Switch, cx: &mut Cx<Switch>) -> El {
+    let t = tok::theme(cx.system_dark());
+    let accent = tok::accent(0, cx.system_dark());
+    col().w_full().h_full().center().child(
+        col().w(300.0).child(switch(t, accent, "switch", s.label, s.on, |s: &mut Switch| s.on = !s.on).opacity(if s.dimmed { 0.5 } else { 1.0 })),
+    )
+}
+
+/// The "Controls/Rows" stories: the devices list on its own.
+fn device_rows(devices: &'static [&'static str]) -> impl Fn() -> Prefs {
+    move || Prefs { devices: devices.to_vec(), ..init() }
 }
 
 /// The "Upload" story's own state: a pretend upload ticking along on a timer.
@@ -245,6 +272,19 @@ fn main() {
                         .variant("Synced", |_| {})
                         .variant("Failed", |s| { s.message = "Sync failed, retrying"; s.failed = true; }),
                 )
+                .story(
+                    Story::new("Controls/Switches/Toggle", || Switch { on: true, dimmed: false, label: "Sync across devices" }, switch_story)
+                        .trigger('t', "Flip", |s, _| s.on = !s.on)
+                        .variant("On", |_| {})
+                        .variant("Off", |s| s.on = false)
+                        .variant("Dimmed", |s| s.dimmed = true),
+                )
+                .story(Story::new("Controls/Switches/Long label", || Switch { on: false, dimmed: false, label: "Only sync over Wi-Fi when on battery" }, switch_story))
+                .story(Story::new("Controls/Rows/Two devices", device_rows(&["Studio desk", "Travel laptop"]), devices))
+                .story(Story::new("Controls/Rows/One device", device_rows(&["Studio desk"]), devices))
+                .story(Story::new("Controls/Rows/Long names", device_rows(&["Studio desk in the back office", "Travel laptop (borrowed for the conference)"]), devices))
+                .group_order(&["Controls"])
+                .start_folded(true)
                 .sizes(&[("Compact", (420.0, 300.0)), ("Wide", (900.0, 560.0))]),
         )
         .run();

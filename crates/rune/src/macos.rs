@@ -7,8 +7,18 @@ use objc2::rc::Retained;
 use objc2_app_kit::{NSEvent, NSPanel, NSWindow, NSResponder, NSScreen, NSView};
 use objc2_foundation::{NSObject, NSPoint, NSRect, NSSize};
 use crate::{DisplayTarget, KeyPolicy, OverlayInput, OverlayLevel, OverlayOptions, OverlaySupport};
-use crate::macos_cursor::set_ns_cursor;
+use crate::macos::cursor::set_ns_cursor;
 use std::{cell::{Cell, RefCell}, collections::VecDeque, rc::Rc, time::{Duration, Instant}};
+
+#[doc(hidden)]
+pub mod appearance;
+pub(crate) mod cursor;
+pub(crate) mod drop;
+pub(crate) mod help;
+#[doc(hidden)]
+pub mod panel_bridge;
+pub(crate) mod traffic_lights;
+pub(crate) mod window_shape;
 
 struct PanelFlags { keys: bool, warming: Rc<Cell<bool>>, revealing: Rc<Cell<bool>>, constrain: bool }
 
@@ -45,7 +55,7 @@ declare_class!(
         #[method(sendEvent:)]
         fn send_event(&self, event: &NSEvent) {
             // Without its view the panel would swallow this click and every later one.
-            if crate::macos_panel_bridge::reattach(self.as_super()) { eprintln!("rune: panel lost its view; reattached on input"); }
+            if crate::macos::panel_bridge::reattach(self.as_super()) { eprintln!("rune: panel lost its view; reattached on input"); }
             unsafe { let _: () = msg_send![super(self), sendEvent: event]; }
         }
     }
@@ -140,15 +150,9 @@ pub(crate) fn set_window_frame(window: &winit::window::Window, [x, y, w, h]: [f3
 /// window frame change and the frame drawn for it reach the screen together. Costs a
 /// wait for the GPU to schedule each frame, so it is on only while a frame moves.
 pub(crate) fn present_with_transaction(surface: &wgpu::Surface, on: bool) {
-    use objc2::runtime::{AnyObject, Bool};
+    use objc2_video::runtime::Bool;
     // SAFETY: a live CAMetalLayer, on the main thread, between frames.
-    unsafe {
-        let Some(hal) = surface.as_hal::<wgpu::hal::api::Metal>() else { return };
-        let layer = hal.render_layer().lock();
-        // wgpu's objc2 may be another version than ours; the object is the same.
-        let layer = &*std::ptr::from_ref(&**layer).cast::<AnyObject>();
-        let _: () = msg_send![layer, setPresentsWithTransaction: Bool::new(on)];
-    }
+    crate::gpu::with_layer(surface, |layer| unsafe { let _: () = objc2_video::msg_send![layer, setPresentsWithTransaction: Bool::new(on)]; });
 }
 
 /// Whether the user is dragging the window's edge.
@@ -173,16 +177,20 @@ fn top_left_gravity(contents_flipped: bool) -> &'static objc2::runtime::AnyObjec
 /// Pins the Metal layer's contents to the window's top left at their own size. A drawable that
 /// doesn't match the layer yet (a frame that isn't drawn in time for a resize) is clipped or
 /// leaves a strip, rather than stretched to the new size and snapped back a frame later.
+/// Also tags the contents sRGB, as AppKit's own drawing is, so the compositor colour-matches
+/// them to the display (untagged, a wide-gamut display shows them oversaturated). Either
+/// surface format holds sRGB-encoded values; wgpu's reconfigures keep the tag.
 pub(crate) fn pin_contents_top_left(surface: &wgpu::Surface) {
     use objc2::runtime::{AnyObject, Bool};
+    use objc2_core_graphics::{CGColorSpace, kCGColorSpaceSRGB};
     // SAFETY: a live CAMetalLayer, on the main thread, under wgpu's lock.
-    unsafe {
-        let Some(hal) = surface.as_hal::<wgpu::hal::api::Metal>() else { return };
-        let layer = hal.render_layer().lock();
-        let layer = &*std::ptr::from_ref(&**layer).cast::<AnyObject>();
+    crate::gpu::with_layer(surface, |video_layer| unsafe {
+        let layer = &*std::ptr::from_ref(video_layer).cast::<AnyObject>();
         let flipped: Bool = msg_send![layer, contentsAreFlipped];
         let _: () = msg_send![layer, setContentsGravity: top_left_gravity(flipped.as_bool())];
-    }
+        let Some(srgb) = CGColorSpace::with_name(Some(kCGColorSpaceSRGB)) else { return };
+        let _: () = objc2_video::msg_send![video_layer, setColorspace: &*srgb];
+    });
 }
 
 pub(crate) fn display_bounds(id: u32) -> [f64; 4] {
@@ -323,6 +331,11 @@ impl PointerState {
         if inside && self.hit(x, y) { set_ns_cursor(cursor); }
         else { self.cursor.set(None); set_ns_cursor(crate::el::Cursor::Default); }
     }
+    /// Whether a sample can tell the overlay anything: one passing every click through, holding
+    /// no press, showing no cursor and following nothing never reads the pointer.
+    fn wanted(&self) -> bool {
+        self.input.get() != OverlayInput::None || self.follow.get() || self.captured.get() || self.cursor.get().is_some()
+    }
     fn observe(&self, panel: &NSPanel, wake: Option<&crate::Waker>) {
         // SAFETY: monitors and frame publication run on AppKit's main thread.
         let pointer = unsafe { NSEvent::mouseLocation() };
@@ -394,12 +407,8 @@ pub(crate) fn window_occluded(window: &winit::window::Window) -> bool {
 /// occlusion state is checked before `nextDrawable`. Asking wgpu anyway costs a texture id that
 /// wgpu-core 30.0.1 never frees, so `acquire` asks this first.
 pub(crate) fn surface_occluded(surface: &wgpu::Surface<'_>) -> bool {
-    // SAFETY: only reads the layer wgpu presents into, under wgpu's own lock.
-    let Some(hal) = (unsafe { surface.as_hal::<wgpu::hal::api::Metal>() }) else { return false };
-    let layer = hal.render_layer().lock();
-    let layer = objc2_video::rc::Retained::as_ptr(&*layer).cast::<objc2_video::runtime::AnyObject>();
-    // SAFETY: a live CAMetalLayer, retained by the surface while the lock is held.
-    unsafe { layer_occluded(&*layer) }
+    // SAFETY: only reads the layer wgpu presents into, a CALayer, under wgpu's own lock.
+    crate::gpu::with_layer(surface, |layer| unsafe { layer_occluded(layer) }).unwrap_or(false)
 }
 
 /// `surface_occluded` for a layer: the same walk as wgpu-hal's `hosting_window`.
@@ -466,11 +475,10 @@ pub(crate) struct PresumeShown {
 impl PresumeShown {
     /// `None` off Metal.
     pub(crate) fn new(surface: &wgpu::Surface<'_>) -> Option<PresumeShown> {
-        use objc2_video::{ClassType, msg_send, rc::Retained, runtime::AnyObject};
-        // SAFETY: the layer is retained here and the lock released, so wgpu can take it to acquire.
-        let layer = unsafe { surface.as_hal::<wgpu::hal::api::Metal>() }?.render_layer().lock().clone();
-        // SAFETY: a CAMetalLayer is an object; only messages every CALayer answers are sent to it.
-        let layer: Retained<AnyObject> = unsafe { Retained::cast_unchecked(layer) };
+        use objc2_video::{ClassType, Message, msg_send, rc::Retained, runtime::AnyObject};
+        // The layer is retained here and the lock released, so wgpu can take it to acquire. Only
+        // messages every CALayer answers are sent to it.
+        let layer: Retained<AnyObject> = crate::gpu::with_layer(surface, |layer| layer.retain())?;
         // SAFETY: CALayer delegate reads and writes on the main thread (window creation).
         unsafe {
             let previous: Option<Retained<AnyObject>> = msg_send![&*layer, delegate];
@@ -495,7 +503,7 @@ fn occlusion_hidden(window: &NSWindow) -> bool {
 }
 
 pub(crate) fn configure_window(window: &winit::window::Window, options: &crate::MacWindowOptions) {
-    crate::macos_appearance::install();
+    crate::macos::appearance::install();
     if let Some(window) = ns_window(window) { configure_native(&window, options); }
 }
 
@@ -524,7 +532,7 @@ pub(crate) fn show_without_focus(window: &winit::window::Window) {
 /// into) moves into it, so clicks reach Rune through winit while the app never activates and
 /// the panel only becomes key on request. winit's own window stays hidden and gets its view back on drop.
 pub(crate) struct Panel {
-    bridge: Option<crate::macos_panel_bridge::Bridge>,
+    bridge: Option<crate::macos::panel_bridge::Bridge>,
     monitors: RefCell<Option<MouseMonitors>>,
     pointer: Rc<PointerState>,
     options: OverlayOptions,
@@ -559,7 +567,7 @@ impl Panel {
     fn adopt_kind(window: &winit::window::Window, at: crate::overlay::Placement, interactive: bool, options: &OverlayOptions, wake: Option<crate::Waker>, ordinary: bool) -> Option<Panel> {
         use objc2_app_kit::{NSBackingStoreType, NSColor, NSWindowCollectionBehavior, NSWindowStyleMask};
         let mtm = MainThreadMarker::new()?;
-        crate::macos_appearance::install();
+        crate::macos::appearance::install();
         let view = content_view(window)?;
         let ns_window = view.window()?;
         let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(at.size.0 as f64, at.size.1 as f64));
@@ -585,7 +593,9 @@ impl Panel {
                 NSWindowCollectionBehavior::CanJoinAllSpaces
                     | NSWindowCollectionBehavior::Stationary
                     | NSWindowCollectionBehavior::IgnoresCycle
-                    | NSWindowCollectionBehavior::FullScreenAuxiliary,
+                    | NSWindowCollectionBehavior::FullScreenAuxiliary
+                    // Over other apps' full-screen Spaces too (macOS 13+; earlier ignores the bit).
+                    | NSWindowCollectionBehavior::CanJoinAllApplications,
             );
         }
         let mut native = crate::MacWindowOptions::default().shadow(false)
@@ -616,8 +626,8 @@ impl Panel {
         ns_window.setContentView(None);
         panel.setContentView(Some(&view));
         let pointer = Rc::new(PointerState { input: Cell::new(options.input.resolved(interactive)), follow: Cell::new(options.follow_pointer), ..Default::default() });
-        let bridge = if ordinary { crate::macos_panel_bridge::Bridge::new_window(&ns_window, &panel, &view) }
-            else { crate::macos_panel_bridge::Bridge::new(&ns_window, &panel, &view, Some(pointer.clone())) };
+        let bridge = if ordinary { crate::macos::panel_bridge::Bridge::new_window(&ns_window, &panel, &view) }
+            else { crate::macos::panel_bridge::Bridge::new(&ns_window, &panel, &view, Some(pointer.clone())) };
         if bridge.is_none() {
             panel.setContentView(None);
             ns_window.setContentView(Some(&view));
@@ -650,8 +660,8 @@ impl Panel {
             (msg_send![&*self.panel, contentView], msg_send![&*self.view, window])
         };
         let attached = std::ptr::eq(content, &*self.view) && std::ptr::eq(window.cast::<NSPanel>(), &*self.panel);
-        if !attached && crate::macos_panel_bridge::reattach(&self.panel) { eprintln!("rune: panel lost its view; reattached"); }
-        if crate::macos_panel_bridge::take_reattached(&self.panel) { self.pointer.view_lost(); }
+        if !attached && crate::macos::panel_bridge::reattach(&self.panel) { eprintln!("rune: panel lost its view; reattached"); }
+        if crate::macos::panel_bridge::take_reattached(&self.panel) { self.pointer.view_lost(); }
     }
 
     /// Whether none of the panel is on screen: covered, or its displays asleep. Reads as
@@ -805,11 +815,11 @@ impl Panel {
         }
         false
     }
-    /// Once per event-loop turn: keeps the view and samples the pointer, through the timed
-    /// poll when it is due and `poll` allows it.
+    /// Once per event-loop turn: keeps the view (it hosts the layer the overlay draws into) and
+    /// samples the pointer, through the timed poll when it is due and `poll` allows it.
     pub fn observe_pointer(&self, now: Instant, poll: bool) {
         self.keep_view();
-        if self.visible.get() && !(poll && self.poll_pointer(now)) { self.pointer.observe(&self.panel, None); }
+        if self.visible.get() && self.pointer.wanted() && !(poll && self.poll_pointer(now)) { self.pointer.observe(&self.panel, None); }
     }
     pub fn set_input(&self, input: OverlayInput) {
         self.pointer.input.set(input);
@@ -925,6 +935,10 @@ mod tests {
             pin_contents_top_left(&surface);
             let gravity: Retained<objc2_foundation::NSString> = unsafe { msg_send_id![&*layer, contentsGravity] };
             assert_eq!(gravity.to_string(), if flipped { "bottomLeft" } else { "topLeft" }, "flipped: {flipped}");
+            let layer6 = unsafe { &*Retained::as_ptr(&layer).cast::<objc2_video::runtime::AnyObject>() };
+            let space: *mut objc2_core_graphics::CGColorSpace = unsafe { objc2_video::msg_send![layer6, colorspace] };
+            let name = objc2_core_graphics::CGColorSpace::name(unsafe { space.as_ref() }).map(|n| n.to_string());
+            assert_eq!(name.as_deref(), Some("kCGColorSpaceSRGB"), "the layer's contents are tagged sRGB");
             drop(surface);
         }
     }
@@ -951,6 +965,22 @@ mod tests {
             pointer.released(); // acknowledged even when Runtime input is disabled
             assert!(!pointer.captured.get(), "native release cannot depend on Runtime capture or mode");
             assert!(!pointer.hit(50.0, 50.0));
+        }
+    }
+
+    #[test]
+    fn a_click_through_overlay_that_follows_nothing_never_samples_the_pointer() {
+        let pointer = PointerState { input: Cell::new(OverlayInput::None), ..Default::default() };
+        assert!(!pointer.wanted());
+        pointer.follow.set(true);
+        assert!(pointer.wanted(), "following the pointer reads it");
+        pointer.follow.set(false);
+        pointer.captured.set(true);
+        assert!(pointer.wanted(), "a press it holds still needs its release");
+        pointer.captured.set(false);
+        for input in [OverlayInput::Regions, OverlayInput::All] {
+            pointer.input.set(input);
+            assert!(pointer.wanted());
         }
     }
 

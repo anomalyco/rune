@@ -6,14 +6,17 @@ license.workspace = true
 description = "Real-time lighting for Rune UIs: SDF soft shadows, bevel normals, god rays and radiance-cascade GI over the frame's analytic primitives."
 
 [dependencies]
+rune-staging = { path = "../rune-staging" }
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "metal", "wgsl"] }
 bytemuck = { version = "1.25", features = ["derive"] }
 
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+[target.'cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
 wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"] }
 
 [dev-dependencies]
 rune = { path = "../rune" }
 rune-fx = { path = "../rune-fx" }
 pollster = "1"
+# Live object counts for the bind group tests.
+wgpu = { version = "30", default-features = false, features = ["counters"] }
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita-notitle"] }

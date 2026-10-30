@@ -135,6 +135,7 @@ impl<S: 'static> Window<S> {
         let on_ime = app.on_ime;
         let native = std::mem::take(&mut app.macos_window);
         let (modifier_keys, tab_visits_controls, srgb_blend) = (app.modifier_keys, app.tab_visits_controls, app.srgb_blend);
+        let font_smoothing = app.font_smoothing;
         let titlebar_inset = if options.borderless { 0.0 } else { app.chrome.titlebar_inset() };
         let playground = app.playground.take();
         let (spec, state, shared) = app.into_parts(own.scene.as_deref());
@@ -149,6 +150,7 @@ impl<S: 'static> Window<S> {
         rt.set_modifier_keys(modifier_keys);
         rt.set_tab_visits_controls(tab_visits_controls);
         rt.set_srgb_blend(srgb_blend);
+        rt.set_font_smoothing(font_smoothing);
         rt.set_titlebar_inset(titlebar_inset);
         rt.transparent = options.transparent;
         rt.track_marks = comp.is_some();
@@ -321,7 +323,7 @@ impl<S: 'static> Member for Window<S> {
         self.shared.window_pending() || self.rt.shell_request.is_some() || self.handle.as_ref().is_some_and(WindowHandle::headless_pending)
     }
 
-    fn stale(&self) -> bool { self.rt.stale() }
+    fn stale(&self) -> bool { self.rt.stale() || self.rt.text.families_behind() }
     fn advance(&mut self, dt: f64) { self.rt.frame(dt); }
     fn focus(&mut self, focused: bool) { self.rt.window_focus(focused); }
 

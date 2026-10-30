@@ -43,23 +43,72 @@ export function openLink(url) {
     window.open(parsed.href, '_blank', 'noopener,noreferrer');
 }
 
-export function viewport(canvas, callback) {
+// `url` resolved against the page, and whether it stays on the page's origin.
+export function resolveLink(url) {
+    const parsed = new URL(url, document.baseURI);
+    if (!['https:', 'http:', 'mailto:'].includes(parsed.protocol)) throw new Error('Unsupported link scheme.');
+    return [parsed.href, parsed.origin === location.origin];
+}
+
+export function assignLink(href) {
+    location.assign(href);
+}
+
+// `url` (relative to the page) decoded by the browser's own codecs, which run off the main
+// thread: `[width, height, rgba]` with straight-alpha sRGB RGBA bytes, upright by EXIF. SVG comes
+// back as `[0, 0, bytes]` for Rune to rasterize. Images over `maxSide` a side are refused
+// before their pixels are read.
+export async function fetchImage(url, maxSide) {
+    const response = await fetch(new URL(url, document.baseURI));
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const blob = await response.blob();
+    const type = (response.headers.get('content-type') || blob.type).split(';')[0].trim().toLowerCase();
+    const path = response.url ? new URL(response.url).pathname : '';
+    if (type === 'image/svg+xml' || /\.svgz?$/i.test(path)) return [0, 0, new Uint8Array(await blob.arrayBuffer())];
+    const bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image', colorSpaceConversion: 'default' });
+    try {
+        const { width, height } = bitmap;
+        if (width > maxSide || height > maxSide) throw new Error(`${width}×${height} is over ${maxSide} pixels a side`);
+        const canvas = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(width, height)
+            : Object.assign(document.createElement('canvas'), { width, height });
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        context.drawImage(bitmap, 0, 0);
+        return [width, height, new Uint8Array(context.getImageData(0, 0, width, height).data.buffer)];
+    } finally {
+        bitmap.close();
+    }
+}
+
+export function viewport(canvas, callback, embedded) {
     const probe = document.createElement('div');
     probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';
     document.body.append(probe);
     const update = () => {
-        const v = window.visualViewport;
-        canvas.style.width = `${v?.width ?? innerWidth}px`;
-        canvas.style.height = `${v?.height ?? innerHeight}px`;
-        canvas.style.left = `${v?.offsetLeft ?? 0}px`;
-        canvas.style.top = `${v?.offsetTop ?? 0}px`;
+        if (!embedded) {
+            const v = window.visualViewport;
+            canvas.style.width = `${v?.width ?? innerWidth}px`;
+            canvas.style.height = `${v?.height ?? innerHeight}px`;
+            canvas.style.left = `${v?.offsetLeft ?? 0}px`;
+            canvas.style.top = `${v?.offsetTop ?? 0}px`;
+        }
         const s = getComputedStyle(probe);
-        callback(JSON.stringify({ kind: 'viewport', insets: [s.paddingTop, s.paddingRight, s.paddingBottom, s.paddingLeft].map(parseFloat) }));
+        callback(JSON.stringify({ kind: 'viewport', insets: embedded ? [0, 0, 0, 0] : [s.paddingTop, s.paddingRight, s.paddingBottom, s.paddingLeft].map(parseFloat) }));
     };
     const motion = matchMedia('(prefers-reduced-motion: reduce)');
     const reduced = () => callback(JSON.stringify({ kind: 'motion', reduced: motion.matches }));
     const focus = () => callback(JSON.stringify({ kind: 'focus', focused: document.hasFocus() }));
     const visibility = () => callback(JSON.stringify({ kind: 'visibility', visible: !document.hidden }));
+    let dprMedia = null;
+    const watchDpr = () => {
+        dprMedia?.removeEventListener('change', onDpr);
+        dprMedia = matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+        dprMedia.addEventListener('change', onDpr);
+    };
+    function onDpr() {
+        watchDpr();
+        callback(JSON.stringify({ kind: 'dpr', scale: window.devicePixelRatio || 1 }));
+    }
+    watchDpr();
     window.visualViewport?.addEventListener('resize', update);
     window.visualViewport?.addEventListener('scroll', update);
     window.addEventListener('resize', update);
@@ -70,6 +119,7 @@ export function viewport(canvas, callback) {
     // Mount is called while Rust is installing the shell; enter it only after installation.
     queueMicrotask(() => { update(); reduced(); focus(); visibility(); });
     return () => {
+        dprMedia?.removeEventListener('change', onDpr);
         window.visualViewport?.removeEventListener('resize', update);
         window.visualViewport?.removeEventListener('scroll', update);
         window.removeEventListener('resize', update);

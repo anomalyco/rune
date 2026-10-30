@@ -1,1 +1,0 @@
-- `Tx::launch` leaves from its source under an app zoom or a scrolled view when another commit landed earlier in the same frame (a state update or event just before the key that sends). It used to skip the zoom and scroll then, so the new row started off to one side, sometimes off-screen or right of where it rests.

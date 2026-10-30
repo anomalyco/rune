@@ -8,10 +8,12 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use std::{cell::{Cell, RefCell}, collections::VecDeque, rc::Rc};
 use crate::{OverlayInput, OverlayLevel, OverlayOptions, OverlaySupport};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SPI_GETWORKAREA, SetWindowLongPtrW, SetWindowPos, ShowWindow, SystemParametersInfoW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     WS_EX_TRANSPARENT,
 };
+
+mod pointer;
 
 fn hwnd(window: &winit::window::Window) -> Option<HWND> {
     let RawWindowHandle::Win32(h) = window.window_handle().ok()?.as_raw() else { return None };
@@ -86,7 +88,7 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
 
 /// Per-window input owner; the shared low-level hook observes but never consumes events.
 pub(crate) struct OverlayWindow {
-    watch: Option<crate::win32_pointer::MouseWatch>,
+    watch: Option<crate::win32::pointer::MouseWatch>,
     wake: Option<crate::Waker>,
     input: Rc<Input>,
     observing: bool,
@@ -96,11 +98,7 @@ impl OverlayWindow {
     pub fn new(window: &winit::window::Window, interactive: bool, options: &OverlayOptions, wake: Option<crate::Waker>) -> Option<Self> {
         let hwnd = hwnd(window)?;
         let mode = options.input.resolved(interactive);
-        prepare_overlay(window, mode == OverlayInput::All);
-        unsafe {
-            let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (style | WS_EX_LAYERED) as isize);
-        }
+        overlay_styles(hwnd, mode);
         let exclusion = if options.exclude_from_capture {
             if unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) } != 0 { OverlaySupport::Requested } else { OverlaySupport::Failed }
         } else { OverlaySupport::Unknown };
@@ -133,7 +131,7 @@ impl OverlayWindow {
 
     fn refresh_watch(&mut self) {
         if self.input.visible.get() && self.input.track() {
-            if self.watch.is_none() { self.watch = Some(crate::win32_pointer::MouseWatch::new(self.wake.clone())); }
+            if self.watch.is_none() { self.watch = Some(crate::win32::pointer::MouseWatch::new(self.wake.clone())); }
             if let Some(watch) = &self.watch { watch.geometry(self.input.hwnd, self.input.follow.get()); }
         } else { self.watch.take(); }
     }
@@ -149,8 +147,19 @@ impl OverlayWindow {
             if let Some(watch) = &self.watch { watch.observe((x, y)); }
         }
     }
+    /// Puts the window on screen without activating it, above other topmost windows. Rune shows
+    /// and hides overlays with Win32 calls alone: winit never sees either, and a winit
+    /// visibility change would also reset these styles.
     pub fn show(&mut self) {
+        let hwnd = self.input.hwnd;
+        overlay_styles(hwnd, self.input.input.get());
+        // SAFETY: Win32 calls on a live window owned by this thread.
+        unsafe {
+            ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
         self.input.visible.set(true);
+        raise_levels();
         if self.observing { return; }
         INPUTS.with(|inputs| inputs.borrow_mut().push(self.input.clone()));
         self.refresh_watch();
@@ -158,6 +167,8 @@ impl OverlayWindow {
         if let Some((x, y)) = pointer_position() { self.input.observe(POINT { x, y }); }
     }
     pub fn hide(&mut self) {
+        // SAFETY: a Win32 call on a live window owned by this thread.
+        unsafe { ShowWindow(self.input.hwnd, SW_HIDE); }
         self.input.visible.set(false);
         self.input.captured.set(false);
         self.watch.take();
@@ -174,30 +185,25 @@ impl Drop for OverlayWindow {
     }
 }
 
-/// Topmost tool window that never activates; unless `interactive`, every click goes through.
-pub(crate) fn prepare_overlay(window: &winit::window::Window, interactive: bool) {
-    let Some(hwnd) = hwnd(window) else { return };
-    let through = if interactive { 0 } else { WS_EX_TRANSPARENT | WS_EX_LAYERED };
+/// A layered, topmost tool window that never activates; unless `mode` takes every click, every
+/// click goes through (`Input::observe` lifts that over input regions).
+fn overlay_styles(hwnd: HWND, mode: OverlayInput) {
+    let through = if mode == OverlayInput::All { 0 } else { WS_EX_TRANSPARENT };
     // SAFETY: style changes on a live window owned by this thread.
     unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
-        let style = style | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | through;
-        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style as isize);
+        let next = style | WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | through;
+        if next != style { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next as isize); }
     }
 }
 
-/// Shows the overlay without activating it, above other topmost windows.
-pub(crate) fn show_overlay(window: &winit::window::Window) {
-    let Some(hwnd) = hwnd(window) else { return };
-    // SAFETY: Win32 calls on a live window owned by this thread.
-    unsafe {
-        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-    }
+/// Keeps shown overlays above one another by level.
+fn raise_levels() {
     let inputs = INPUTS.with(|inputs| inputs.borrow().clone());
     for level in [OverlayLevel::Status, OverlayLevel::AboveStatus, OverlayLevel::AboveOverlays] {
         for input in &inputs {
             if input.visible.get() && input.level == level {
+                // SAFETY: a Win32 call on a live window owned by this thread.
                 unsafe { SetWindowPos(input.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); }
             }
         }

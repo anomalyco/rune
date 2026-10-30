@@ -136,7 +136,7 @@ pub fn extra_args() -> &'static [String] {
 }
 
 pub(crate) fn runtime_for<S: 'static>(spec: &AppSpec<S>, state: S, size: (f32, f32), env: Env, waker: Waker) -> Runtime<S> {
-    let text = TextSystem::new(spec.fonts, spec.families);
+    let text = TextSystem::for_window(spec.fonts, spec.families);
     let mut rt = Runtime::with_text(state, spec.view, size, env, text);
     rt.poll = spec.poll;
     rt.on_key = spec.on_key;
@@ -156,7 +156,7 @@ pub(crate) fn runtime_for<S: 'static>(spec: &AppSpec<S>, state: S, size: (f32, f
 mod args;
 #[path = "tooling/crop.rs"]
 mod crop;
-pub use args::Args;
+pub use args::{Args, is_headless};
 pub(crate) use args::*;
 
 /// Opens the app's window and quits when it closes (`App` for other lifetimes), or renders
@@ -905,6 +905,10 @@ pub(crate) fn try_headless<S: 'static>(mut app: crate::app::App<S>, args: Args) 
 }
 
 pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, transparent: bool) {
+    // RUNE_HEADLESS_WAIT=SECS holds the run before it starts, so a sampling profiler can attach.
+    if let Some(secs) = std::env::var("RUNE_HEADLESS_WAIT").ok().and_then(|s| s.parse::<f64>().ok()) {
+        std::thread::sleep(std::time::Duration::from_secs_f64(secs));
+    }
     let chrome = app.chrome;
     let launched = Instant::now();
     if args.list_scenes {
@@ -918,7 +922,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         return crate::hot::snap_window(app, args);
     }
     let mut comp = app.compositor.take();
-    let srgb_blend = app.srgb_blend;
+    let (srgb_blend, font_smoothing) = (app.srgb_blend, app.font_smoothing);
     let (on_focus, on_ime) = (app.on_focus, app.on_ime);
     let on_reopen = app.on_reopen;
     let source = read_script(&args);
@@ -959,6 +963,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     rt.transparent = transparent;
     rt.fit_height = fit_height;
     rt.set_srgb_blend(srgb_blend);
+    rt.set_font_smoothing(font_smoothing);
     rt.set_modifier_keys(modifier_keys);
     rt.set_tab_visits_controls(tab_visits_controls);
     // Only limits the app set: the canvas opens at any size, below the default minimum too.
@@ -1001,7 +1006,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         trace.all = args.trace_all;
         trace
     });
-    rt.trace_channels = trace.as_ref().map(|_| HashMap::new());
+    rt.trace_channels = trace.as_ref().map(|_| Default::default());
     rt.scene.store_mut().audit_retargets(trace.is_some());
     let mut strip: Vec<Vec<u8>> = Vec::new();
     let crops_px: Vec<[u32; 4]> = args.crops.iter().map(|c| c.map(|v| (v * scale).round() as u32)).collect();
@@ -1067,7 +1072,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     }
 
     #[cfg(feature = "frame-profile")]
-    let mut profile = Vec::with_capacity(last_frame + 1);
+    let mut profile = crate::frame_profile::Log::new(last_frame + 1);
     for k in 0..=last_frame {
         #[cfg(feature = "frame-profile")]
         let (alloc0, commits0, cpu0) = {
@@ -1076,6 +1081,8 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         };
         let real_t = k as f64 * dt;
         let frame_start = Instant::now();
+        #[cfg(feature = "frame-profile")]
+        let events0 = next_ev;
         while next_ev < script.len() && script[next_ev].t <= real_t + 1e-9 {
             let e = &script[next_ev];
             next_ev += 1;
@@ -1210,9 +1217,11 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         if want_pixels { readback.submitted(); }
         let ms = frame_start.elapsed().as_secs_f64() * 1000.0;
         #[cfg(feature = "frame-profile")]
-        profile.push((crate::frame_profile::take(), update_ms, ms - update_ms,
-            procwatch::alloc::thread_allocations() - alloc0, rt.stats.commits - commits0, rt.stats.shaped, animating,
-            cpu0.map(|start| crate::frame_profile::cpu_ms().unwrap() - start)));
+        profile.push(crate::frame_profile::Row {
+            phases: crate::frame_profile::take(), update_ms, encode_ms: ms - update_ms, events: next_ev - events0,
+            allocations: procwatch::alloc::thread_allocations() - alloc0, commits: rt.stats.commits - commits0,
+            shaped: rt.stats.shaped, animating, cpu_ms: cpu0.map(|start| crate::frame_profile::cpu_ms().unwrap() - start),
+        });
         cpu_ms.push(ms);
         if k > 0 {
             if animating { anim_ms.push(ms) } else { rest_ms.push(ms) }
@@ -1275,26 +1284,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     };
     let mut sorted = cpu_ms.clone();
     #[cfg(feature = "frame-profile")]
-    {
-        const P: usize = crate::frame_profile::PHASES;
-        let rows = &profile[usize::from(profile.len() > 1)..];
-        let n = rows.len() as f64;
-        let avg = |f: fn(&([f64; 2 * P], f64, f64, u64, u64, u32, bool, Option<f64>)) -> f64| rows.iter().map(f).sum::<f64>() / n;
-        eprintln!("rune-frame-profile {}", json!({
-            "view_ms": avg(|r| r.0[0]), "commit_inclusive_ms": avg(|r| r.0[1]),
-            "layout_inclusive_ms": avg(|r| r.0[2]), "shape_ms": avg(|r| r.0[3]),
-            "paint_ms": avg(|r| r.0[4]), "apply_ms": avg(|r| r.0[5]), "update_ms": avg(|r| r.1), "encode_submit_ms": avg(|r| r.2),
-            "allocations": avg(|r| r.3 as f64), "commits": avg(|r| r.4 as f64),
-            "shaped": avg(|r| r.5 as f64), "animating_fraction": avg(|r| u8::from(r.6) as f64),
-            "thread_cpu_ms": rows[0].7.map(|_| avg(|r| r.7.unwrap())),
-            "view_cpu_ms": rows[0].7.map(|_| avg(|r| r.0[P])),
-            "commit_cpu_ms": rows[0].7.map(|_| avg(|r| r.0[P + 1])),
-            "layout_cpu_ms": rows[0].7.map(|_| avg(|r| r.0[P + 2])),
-            "shape_cpu_ms": rows[0].7.map(|_| avg(|r| r.0[P + 3])),
-            "paint_cpu_ms": rows[0].7.map(|_| avg(|r| r.0[P + 4])),
-            "apply_cpu_ms": rows[0].7.map(|_| avg(|r| r.0[P + 5])),
-        }));
-    }
+    profile.report();
     let steady: Vec<f64> = cpu_ms.iter().skip(1).copied().collect();
     let mean = if steady.is_empty() { cpu_ms[0] } else { steady.iter().sum::<f64>() / steady.len() as f64 };
     eprintln!(

@@ -3,8 +3,9 @@
 //!
 //! Off macOS every helper is a no-op: `remember_frame` returns true (so a `poll` that waits on it
 //! stops), `saved_size` returns `None`, `is_full_screen` returns false, and `toggle_full_screen`,
-//! `launch` and `busy` do nothing.
+//! `launch` and `busy` do nothing. `notify` posts nothing and reports `available() == false`.
 
+pub mod notify;
 mod quiet;
 pub use quiet::launch;
 
@@ -33,17 +34,24 @@ pub fn remember_frame(name: &str) -> bool {
     }
 }
 
+/// The key window, else the main window; null with neither.
+#[cfg(target_os = "macos")]
+unsafe fn key_window() -> *mut objc2::runtime::AnyObject {
+    use objc2::{class, msg_send, runtime::AnyObject};
+    unsafe {
+        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        let w: *mut AnyObject = msg_send![app, keyWindow];
+        if w.is_null() { msg_send![app, mainWindow] } else { w }
+    }
+}
+
 /// Takes the app's key window into macOS full screen, or back out (the green button's
 /// ⌃⌘F). Headless, with no window, it does nothing.
 pub fn toggle_full_screen() {
     #[cfg(target_os = "macos")]
     unsafe {
-        use objc2::{class, msg_send, runtime::AnyObject};
-        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-        let mut w: *mut AnyObject = msg_send![app, keyWindow];
-        if w.is_null() {
-            w = msg_send![app, mainWindow];
-        }
+        use objc2::{msg_send, runtime::AnyObject};
+        let w = key_window();
         if !w.is_null() {
             let _: () = msg_send![w, toggleFullScreen: std::ptr::null::<AnyObject>()];
         }
@@ -54,12 +62,8 @@ pub fn toggle_full_screen() {
 pub fn is_full_screen() -> bool {
     #[cfg(target_os = "macos")]
     unsafe {
-        use objc2::{class, msg_send, runtime::AnyObject};
-        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-        let mut w: *mut AnyObject = msg_send![app, keyWindow];
-        if w.is_null() {
-            w = msg_send![app, mainWindow];
-        }
+        use objc2::msg_send;
+        let w = key_window();
         if !w.is_null() {
             let mask: usize = msg_send![w, styleMask];
             // NSWindowStyleMaskFullScreen

@@ -3,7 +3,7 @@
 
 use rune::{El, Icon, TextStyle, Tx, col, el, icon, row, text};
 
-use crate::menu::{Modal, dismissal};
+use crate::menu::{Modal, dismissal, mount_dismiss};
 use crate::overlay::{Placement, fit_scroll, menu_anchor};
 use crate::{Kit, State, over, press_over, shadows};
 
@@ -144,10 +144,7 @@ impl Select {
         }
         let c = &k.c;
         let anchor_key = format!("{}-trigger", self.key);
-        let modal = self.dismiss.map(|(scrim, modal)| {
-            layer.push(scrim);
-            modal
-        });
+        let modal = mount_dismiss(self.dismiss, layer);
         // 12rem tall at most; consecutive options sit 2 points apart, headers flush.
         let mut list = col().key("rows").padding(4.0).items_stretch();
         let mut group: Option<&str> = None;

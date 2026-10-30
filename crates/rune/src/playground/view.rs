@@ -16,15 +16,24 @@ impl<S: 'static> Live<S> {
                 .child(root.w(viewport.0).h((viewport.1 - BAR).max(0.0)))
                 .child(self.bar_view(t));
         }
-        let stage_w = (viewport.0 - SIDEBAR - SIDE - 2.0).max(0.0);
+        let (sidebar_w, side_w) = self.widths(viewport.0);
+        let stage_w = (viewport.0 - sidebar_w - side_w - 2.0).max(0.0);
         let stage = self.stage(app, view, cx, (stage_w, viewport.1), t, dark);
-        let side = self.side(app, cx, t, dark, viewport.1);
+        let stage = match self.region {
+            // The stage has no selection to colour, so a ring inside its edge shows it has the
+            // keyboard. It takes no input, so presses reach the story under it.
+            Region::Stage => stage.child(el().key("playground-stage-ring").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).border(2.0, cx.focus_color())),
+            _ => stage,
+        };
+        let side = self.side(app, cx, t, dark, side_w, viewport.1);
         row().key("playground").w(viewport.0).h(viewport.1).fill(t.bg)
-            .child(self.sidebar(t, dark, cx.titlebar_inset(), viewport.1))
+            .child(self.sidebar(t, dark, cx.accent(), cx.titlebar_inset(), sidebar_w, viewport.1))
             .child(el().w(1.0).h(viewport.1).fill(t.separator))
             .child(stage)
             .child(el().w(1.0).h(viewport.1).fill(t.separator))
             .child(side)
+            .child(self.sidebar_edge(sidebar_w, viewport))
+            .child(self.side_edge(side_w, viewport))
     }
 
     fn bar_view(&self, t: Theme) -> El {
@@ -46,83 +55,14 @@ impl<S: 'static> Live<S> {
             )
     }
 
-    fn sidebar(&self, t: Theme, dark: bool, inset: f32, height: f32) -> El {
-        let back = row().key("playground-back").h(CONTROL).pl(4.0).pr(8.0).gap(2.0).center_y().radius(radius::SM)
-            .hover(t.hover).press(t.press)
-            .child(icon(&CHEVRON_LEFT, 16.0).color(t.text_secondary))
-            .child(text("Back").font(type_::LABEL).color(t.text))
-            .role("button").label("Back to the app")
-            .on_press_tx(|_: &mut Controls, tx: &mut Tx| tx.close_playground());
-        // Back sits at the list's text inset; where the window's own controls take the corner,
-        // it goes in the row under them.
-        let band = if inset > 0.0 { BAND } else { 0.0 };
-        let header = row().w(SIDEBAR).h(HEADER).pl(8.0).center_y().child(back);
-        let drag = (band > 0.0).then(|| el().w(SIDEBAR).h(band).window_drag());
-        // A scroll measures its first child, so the rows go in one content column.
-        let mut list = col().key("playground-rows").w_full();
-        for (n, entry) in self.rows().into_iter().enumerate() {
-            let (on, name, item) = match entry {
-                Row::Header(group, i) => {
-                    list = list.child(self.header_row(t, dark, group, i, n == 0));
-                    continue;
-                }
-                Row::Story(i) => (i == self.selected && self.header.is_none(), self.name(i), i),
-            };
-            // Stories with triggers move, so a quiet mark tells them apart.
-            let mark = self.has_triggers(item).then(|| [
-                spacer(),
-                icon(&MOTION, 12.0).key(format!("playground-motion-{item}")).color(tertiary(t)).ml(6.0),
-            ]);
-            list = list.child(
-                row().key(format!("playground-item-{item}")).w_full().h(ROW).px(8.0).center_y().radius(radius::MD)
-                    .fill(if on { selected(t, dark) } else { Color::TRANSPARENT })
-                    .hover(if on { selected(t, dark) } else { t.hover })
-                    .child(text(name).font(type_::BODY).color(if on || item == self.selected { t.text } else { t.text_secondary }).truncate())
-                    .children(mark.into_iter().flatten())
-                    .role("button").label(name)
-                    .on_press_tx(move |_: &mut Controls, tx: &mut Tx| tx.playground.push(Request::Select(item))),
-            );
-        }
-        if self.order.is_empty() {
-            list = list.child(text("No stories").font(type_::BODY).color(t.text_secondary).px(8.0).pt(4.0));
-        }
-        let list = col().key("playground-list").w(SIDEBAR).h(height - 2.0 * HEADER - band).px(8.0).pb(8.0)
-            .scroll(ScrollSpec { stick_bottom: false }).child(list);
-        col().w(SIDEBAR).h(height)
-            .children(drag)
-            .child(header)
-            .child(list)
-            .child(self.stage_controls(t, dark))
-    }
-
-    /// A group's header, keyed by its first story: a press selects it and folds or unfolds it.
-    fn header_row(&self, t: Theme, dark: bool, group: &'static str, first: usize, top: bool) -> El {
-        let on = self.header == Some(group);
-        let folded = self.folded.contains(&group);
-        let count = self.order.iter().filter(|&&i| self.group(i) == group).count();
-        let row = row().key(format!("playground-group-{first}")).w_full().h(24.0).px(8.0).gap(4.0).center_y().radius(radius::MD)
-            .fill(if on { selected(t, dark) } else { Color::TRANSPARENT })
-            .hover(if on { selected(t, dark) } else { t.hover })
-            .child(text(group).font(type_::SECTION).color(if on { t.text } else { t.text_secondary }).truncate())
-            .child(spacer())
-            .child(text(count.to_string()).key(format!("playground-count-{first}")).font(type_::LABEL).color(tertiary(t)))
-            .child(icon(if folded { &CHEVRON_RIGHT } else { &CHEVRON_DOWN }, 14.0).color(t.text_secondary))
-            .role("button").label(if folded { format!("Show {group}") } else { format!("Hide {group}") })
-            .on_press_tx(move |_: &mut Controls, tx: &mut Tx| {
-                tx.playground.push(Request::Header(group));
-                tx.playground.push(Request::Fold(group, None));
-            });
-        col().w_full().pt(if top { 2.0 } else { 10.0 }).pb(2.0).child(row)
-    }
-
     /// Along the sidebar's foot: the stage's size, motion and appearance.
-    fn stage_controls(&self, t: Theme, window_dark: bool) -> El {
+    pub(super) fn stage_controls(&self, t: Theme, window_dark: bool, sidebar_w: f32) -> El {
         let dark = self.dark.unwrap_or(window_dark);
         let (glyph, appearance) = if dark { (&MOON, "Dark appearance") } else { (&SUN, "Light appearance") };
         let theme = icon_button(t, "playground-theme", glyph, appearance, false, window_dark, Request::Dark(!dark));
         let reduce = icon_button(t, "playground-reduce-motion", &MOTION, "Reduce Motion", self.reduce_motion, window_dark, Request::ReduceMotion(!self.reduce_motion));
         let sizes = (!self.sizes.is_empty()).then(|| self.size_menu(t));
-        row().key("playground-stage-controls").w(SIDEBAR).h(HEADER).px(8.0).gap(2.0).center_y()
+        row().key("playground-stage-controls").w(sidebar_w).h(HEADER).px(8.0).gap(2.0).center_y()
             .children(sizes)
             .child(spacer())
             .child(reduce)
@@ -156,11 +96,11 @@ impl<S: 'static> Live<S> {
 
     /// The column right of the stage: the story's group and name, the app's controls for it,
     /// its triggers, and a key hint.
-    fn side(&self, app: &S, cx: &mut Cx<S>, t: Theme, dark: bool, height: f32) -> El {
+    fn side(&self, app: &S, cx: &mut Cx<S>, t: Theme, dark: bool, side_w: f32, height: f32) -> El {
         let i = self.selected;
         let title = (i < self.count()).then(|| {
             col().key("playground-title").px(4.0).gap(2.0)
-                .child(text(self.group(i)).font(type_::SECTION).color(t.text_secondary))
+                .child(text(self.group(i).replace('/', " › ")).font(type_::SECTION).color(t.text_secondary).truncate())
                 .child(text(self.name(i)).font(type_::TITLE).color(t.text).truncate())
         });
         // Keyed by story, not generation, so a replay keeps the keyboard on the control it's on.
@@ -171,13 +111,16 @@ impl<S: 'static> Live<S> {
         });
         let variants = self.variants();
         let at = self.variant_at();
+        // The control the keyboard is on takes the accent, as the list's selection does while
+        // the list has it; the picked variant stays grey.
+        let on_fill = super::list::focused(cx.accent());
         let picker = (!variants.is_empty()).then(|| {
             col().key("playground-variants").w_full().padding(4.0).gap(2.0).radius(radius::LG).fill(t.card).outline(1.0, 0.0, t.card_border)
                 .children(variants.iter().enumerate().take(9).map(|(n, &name)| {
                     let on = n == at;
                     row().key(format!("playground-variant-{n}")).w_full().h(ROW).px(4.0).gap(8.0).center_y().radius(radius::MD)
                         .fill(if on { selected(t, dark) } else { Color::TRANSPARENT })
-                        .focusable(true).focus_highlight(selected(t, dark)).press(t.press)
+                        .focusable(true).focus_highlight(on_fill).press(t.press)
                         .child(keycap(t, &(n + 1).to_string()))
                         .child(text(name).font(type_::BODY).color(if on { t.text } else { t.text_secondary }).truncate())
                         .role("button").label(name)
@@ -190,27 +133,39 @@ impl<S: 'static> Live<S> {
                 .children(triggers.iter().map(|&(key, label)| {
                     let request = if key == 'r' { Request::Replay } else { Request::Trigger(key) };
                     row().key(format!("playground-trigger-{key}")).w_full().h(ROW).px(4.0).gap(8.0).center_y().radius(radius::MD)
-                        .focusable(true).focus_highlight(selected(t, dark)).press(t.press)
+                        .focusable(true).focus_highlight(on_fill).press(t.press)
                         .child(keycap(t, &cap(key)))
                         .child(text(label).font(type_::BODY).color(t.text).truncate())
                         .role("button").label(label)
                         .on_press_tx(move |_: &mut Controls, tx: &mut Tx| tx.playground.push(request.clone()))
                 }))
         });
-        // No-break spaces keep each part whole when the hint wraps.
-        let hint = [
-            Some("↑↓\u{a0}stories".to_owned()),
-            match variants.len().min(9) { 0 => None, 1 => Some("1\u{a0}variant".into()), n => Some(format!("1–{n}\u{a0}variants")) },
-            (!triggers.is_empty()).then(|| "→\u{a0}triggers".into()),
-            Some("Esc\u{a0}back".into()),
-        ].into_iter().flatten().collect::<Vec<_>>().join("\u{a0}· ");
-        col().key("playground-side").w(SIDE).h(height).px(12.0).pt(12.0).pb(12.0).gap(12.0)
+        let hint = self.hint(variants.len(), slot.is_some() || !variants.is_empty() || !triggers.is_empty());
+        col().key("playground-side").w(side_w).h(height).px(12.0).pt(12.0).pb(12.0).gap(12.0)
             .children(title)
             .children(slot)
             .children(picker)
             .children(card)
             .child(spacer())
             .child(text(hint).key("playground-hint").font(type_::SECTION).color(t.text_secondary).px(4.0).wrap())
+    }
+
+    /// The keys of the column that has the keyboard, under the side column.
+    fn hint(&self, variants: usize, controls: bool) -> String {
+        let variants = match variants.min(9) { 0 => None, 1 => Some("1\u{a0}variant".into()), n => Some(format!("1–{n}\u{a0}variants")) };
+        let parts: Vec<Option<String>> = match self.region {
+            Region::List => vec![
+                Some("↑↓\u{a0}stories".into()),
+                Some("←→\u{a0}groups".into()),
+                Some("/\u{a0}filter".into()),
+                controls.then(|| "Tab\u{a0}controls".into()),
+                Some("Esc\u{a0}back".into()),
+            ],
+            Region::Side => vec![Some("↑↓\u{a0}controls".into()), variants, Some("Esc\u{a0}stories".into())],
+            Region::Stage => vec![Some("Keys go to the story".into()), Some("Esc\u{a0}stories".into())],
+        };
+        // No-break spaces keep each part whole when the hint wraps.
+        parts.into_iter().flatten().collect::<Vec<_>>().join("\u{a0}· ")
     }
 
     /// The app's controls for the open story, from `Playground::side` or `Story::side` (or
@@ -291,12 +246,12 @@ impl<S: 'static> Live<S> {
 }
 
 /// A selected row's fill, a step stronger in dark mode where the track is faint.
-fn selected(t: Theme, dark: bool) -> Color {
+pub(super) fn selected(t: Theme, dark: bool) -> Color {
     if dark { t.control_off } else { t.control_track }
 }
 
 /// Text a step quieter than secondary: the list's counts and motion marks.
-fn tertiary(t: Theme) -> Color {
+pub(super) fn tertiary(t: Theme) -> Color {
     t.text_secondary.mix(t.bg, 0.45)
 }
 
@@ -328,7 +283,7 @@ fn icon_button(t: Theme, key: &str, glyph: &'static Icon, label: &str, on: bool,
         .on_press_tx(move |_: &mut Controls, tx: &mut Tx| tx.playground.push(request.clone()))
 }
 
-static CHEVRON_LEFT: Icon = Icon {
+pub(super) static CHEVRON_LEFT: Icon = Icon {
     name: "playground-chevron-left",
     view: 16.0,
     body: r#"<path d="M9.5 4L5.5 8L9.5 12" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>"#,
@@ -340,13 +295,13 @@ static GRID: Icon = Icon {
     body: r#"<rect x="1" y="1" width="4" height="4" rx="1" fill="currentColor"/><rect x="7" y="1" width="4" height="4" rx="1" fill="currentColor"/><rect x="1" y="7" width="4" height="4" rx="1" fill="currentColor"/><rect x="7" y="7" width="4" height="4" rx="1" fill="currentColor"/>"#,
 };
 
-static CHEVRON_RIGHT: Icon = Icon {
+pub(super) static CHEVRON_RIGHT: Icon = Icon {
     name: "playground-chevron-right",
     view: 16.0,
     body: r#"<path d="M6.75 5L9.75 8L6.75 11" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>"#,
 };
 
-static CHEVRON_DOWN: Icon = Icon {
+pub(super) static CHEVRON_DOWN: Icon = Icon {
     name: "playground-chevron-down",
     view: 16.0,
     body: r#"<path d="M5 6.75L8 9.75L11 6.75" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>"#,
@@ -364,7 +319,7 @@ static MOON: Icon = Icon {
     body: r#"<path d="M13.25 9.5A5.5 5.5 0 0 1 6.5 2.75A5.5 5.5 0 1 0 13.25 9.5Z" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linejoin="round"/>"#,
 };
 
-static MOTION: Icon = Icon {
+pub(super) static MOTION: Icon = Icon {
     name: "playground-motion",
     view: 16.0,
     body: r#"<circle cx="10" cy="8" r="3.25" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M1.75 5.5H4.5M1.25 8H4M1.75 10.5H4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>"#,

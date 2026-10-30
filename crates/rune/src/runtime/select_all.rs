@@ -53,7 +53,7 @@ impl<S: 'static> Runtime<S> {
                 None => {
                     let path = self.end_path(h).to_owned();
                     self.select_span_ends(h, h);
-                    self.events.push(format!("select all {path}"));
+                    log_event!(self, "select all {path}");
                     return true;
                 }
                 Some(gp) if self.live(&gp).is_none() => {
@@ -64,7 +64,7 @@ impl<S: 'static> Runtime<S> {
                     let Some(first) = members.next() else { return false };
                     let last = members.last().unwrap_or(first);
                     self.select_span_ends(first, last);
-                    self.events.push(format!("select all {gp}"));
+                    log_event!(self, "select all {gp}");
                     return true;
                 }
                 Some(_) => {}
@@ -76,7 +76,7 @@ impl<S: 'static> Runtime<S> {
         {
             let path = self.nodes[u].path.clone();
             self.select_span_ends(first, last);
-            self.events.push(format!("select all {path}"));
+            log_event!(self, "select all {path}");
             return true;
         }
         let (first, last) = if self.nodes[u].selection_group {
@@ -87,7 +87,7 @@ impl<S: 'static> Runtime<S> {
             (u, u)
         };
         self.select_span(first, last);
-        self.events.push(format!("select all {}", self.nodes[u].path));
+        log_event!(self, "select all {}", self.nodes[u].path);
         true
     }
 }

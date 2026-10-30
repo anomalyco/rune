@@ -4,7 +4,7 @@ A Rust GPU UI framework (wgpu, winit) for apps that feel like SwiftUI on iOS at 
 
 ## Layout
 
-- `crates/rune`: layout, runtime, renderer, windows, overlays, dev tooling. `crates/rune-kit`: components. `crates/rune-motion`: springs and transitions. `crates/rune-fx`, `crates/rune-light`: effects. `crates/rune-ref`: reference renderer. `crates/procwatch`: an app's own memory and CPU (footprint, counting allocator, gauges, warnings, loopback JSON); libc only, no Rune dependency.
+- `crates/rune`: layout, runtime, renderer, windows, overlays, dev tooling. `crates/rune-kit`: components. `crates/rune-mermaid`: Mermaid diagrams (flowcharts, sequence and state diagrams). `crates/rune-motion`: springs and transitions. `crates/rune-fx`, `crates/rune-light`: effects. `crates/rune-ref`: reference renderer. `crates/procwatch`: an app's own memory and CPU (footprint, counting allocator, gauges, warnings, loopback JSON); libc only, no Rune dependency.
 - `examples/`: apps and labs. `themes/`: themes. `site/`: the docs site (see `site/README.md`).
 - `PLAN.md`: direction and milestones. `research/`: notes behind decisions. `demo/`: images the docs show.
 

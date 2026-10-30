@@ -176,6 +176,43 @@ fn settle_and_completion_events() {
 }
 
 #[test]
+fn removing_an_animating_track_completes_it_unfinished() {
+    let completions = |s: &AnimationStore| -> Vec<(u64, bool)> {
+        s.events().iter().filter_map(|e| match e {
+            MotionEvent::Completed { token, finished, .. } => Some((*token, *finished)),
+            _ => None,
+        }).collect()
+    };
+    let mut s = AnimationStore::new();
+    s.set(N, X, 0.0);
+    s.animate(N, X, 1.0, motion::SNAP.completion(21));
+    s.tick_at(0.02);
+    assert!(s.is_animating(N, X));
+    s.remove_node(N);
+    s.tick_at(0.03);
+    assert_eq!(completions(&s), [(21, false)], "the node unmounted mid-animation");
+
+    s.set(N, X, 0.0);
+    s.animate(N, X, 1.0, motion::SNAP.completion(22));
+    s.tick_at(0.04);
+    s.remove(N, X);
+    s.tick_at(0.05);
+    assert_eq!(completions(&s), [(22, false)], "the property's track went");
+
+    s.set(N, X, 0.0);
+    s.animate(N, X, 1.0, motion::SNAP.completion(23));
+    let mut done = Vec::new();
+    for k in 0..400 {
+        s.tick_at(0.06 + k as f64 / 120.0);
+        done.extend(completions(&s));
+    }
+    s.remove_node(N);
+    s.tick_at(10.0);
+    done.extend(completions(&s));
+    assert_eq!(done, [(23, true)], "a finished animation completes once");
+}
+
+#[test]
 fn fling_into_a_bound_hands_off_velocity_smoothly() {
     let mut s = AnimationStore::new();
     s.set(N, X, 0.0);

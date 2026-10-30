@@ -8,6 +8,9 @@ use crate::runtime::Runtime;
 
 pub trait Compositor<S: 'static>: 'static {
     /// Device features to request when the adapter has them (e.g. `TIMESTAMP_QUERY`).
+    /// `IMMEDIATES` also raises `max_immediate_size` to the adapter's (4 KB on Metal): per-draw
+    /// values set with `RenderPass::set_immediates` travel inside the pass, where a uniform
+    /// written through the queue or `Frame::write_buffer` costs the frame another command buffer.
     fn features(&self) -> wgpu::Features {
         wgpu::Features::empty()
     }
@@ -58,6 +61,13 @@ impl<S: 'static> Frame<'_, S> {
     /// encode their output to match (`FxRenderer::set_srgb_blend` in rune-fx).
     pub fn srgb_blend(&self) -> bool {
         self.ui.srgb_blend()
+    }
+
+    /// `queue.write_buffer` without its per-call staging buffer: `data` goes through Rune's
+    /// reused staging memory and lands in `buffer` at `offset` ahead of the commands recorded
+    /// into `encoder` after this call. `offset` and `data.len()` are multiples of 4.
+    pub fn write_buffer(&mut self, buffer: &wgpu::Buffer, offset: u64, data: &[u8]) {
+        self.ui.write_buffer(self.device, self.queue, self.encoder, buffer, offset, data);
     }
 
     /// The default frame: every instance into the target, cleared to the window colour.

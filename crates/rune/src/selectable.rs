@@ -85,9 +85,7 @@ pub(super) struct Held {
 
 /// The char boundary at or before byte `i` of `text`.
 pub(super) fn floor_boundary(text: &str, i: usize) -> usize {
-    let mut i = i.min(text.len());
-    while !text.is_char_boundary(i) { i -= 1; }
-    i
+    text.floor_char_boundary(i)
 }
 
 /// The char boundary before byte `i` (a boundary) of `text`.
@@ -405,11 +403,11 @@ impl<S: 'static> Runtime<S> {
         // A release is heard by whoever holds the selection, though it didn't change.
         let released = self.sel_heard.from.as_ref().is_some_and(|f| f.5 && !self.text_sel.dragging);
         self.sel_heard.from = Some(self.selection_from());
-        if self.sel_heard.by_path.is_empty() && !self.nodes.iter().any(|n| n.on_selection_change.is_some()) {
+        if self.sel_heard.by_path.is_empty() && !self.nodes.iter().any(|n| n.handlers.get().is_some_and(|h| h.on_selection_change.is_some())) {
             return Vec::new();
         }
         let watchers: Vec<usize> = (0..self.nodes.len())
-            .filter(|&i| self.nodes[i].on_selection_change.is_some() && !self.subtree_exiting(i) && self.allowed(i))
+            .filter(|&i| self.nodes[i].handlers.get().is_some_and(|h| h.on_selection_change.is_some()) && !self.subtree_exiting(i) && self.allowed(i))
             .collect();
         if watchers.is_empty() && self.sel_heard.by_path.is_empty() { return Vec::new(); }
         let mut selected: Vec<usize> = self.selection_ranges().into_iter().filter(|r| r.1 < r.2).map(|r| r.0).collect();
@@ -430,7 +428,7 @@ impl<S: 'static> Runtime<S> {
             return Vec::new();
         }
         let sel = (!selected.is_empty()).then(|| self.selection_snapshot()).flatten();
-        let (mut out, mut heard) = (Vec::new(), HashMap::new());
+        let (mut out, mut heard) = (Vec::new(), HashMap::default());
         for w in watchers {
             let path = self.nodes[w].path.clone();
             let now = sel.clone().filter(|_| selected.iter().any(|&j| inside(w, j)));
@@ -483,7 +481,7 @@ impl<S: 'static> Runtime<S> {
 
     /// What copying the selection puts on the clipboard: the nearest [`El::selection_copy`]
     /// around it says, else the text as drawn.
-    fn copy_text(&self) -> Option<String> {
+    pub(crate) fn copy_text(&self) -> Option<String> {
         if self.selection_spans_unmounted() {
             return self.copy_virtual_text();
         }
@@ -492,8 +490,8 @@ impl<S: 'static> Runtime<S> {
         let drawn = self.joined(&ranges);
         let around = |a: usize, j: usize| std::iter::successors(Some(j), |&p| self.nodes[p].parent).any(|p| p == a);
         let provider = std::iter::successors(Some(first), |&p| self.nodes[p].parent)
-            .find(|&p| self.nodes[p].selection_copy.is_some() && around(p, last));
-        if let Some(p) = provider && let Some(f) = self.nodes[p].selection_copy.clone() {
+            .find(|&p| self.nodes[p].handlers.selection_copy.is_some() && around(p, last));
+        if let Some(p) = provider && let Some(f) = self.nodes[p].handlers.selection_copy.clone() {
             let g = self.group_of(first);
             let texts = (p..self.nodes.len())
                 .take_while(|&j| around(p, j))
@@ -560,7 +558,7 @@ impl<S: 'static> Runtime<S> {
     /// pointer has.
     fn group_point(&self, g: usize, anchor: virtual_selection::EndRef, x: f32, y: f32) -> Option<(usize, usize)> {
         use virtual_selection::EndRef;
-        let mut boxes: Vec<_> = self.group_texts(g).into_iter().map(|j| (j, self.drawn_box(j))).collect();
+        let mut boxes: Vec<_> = self.group_texts(g).into_iter().map(|j| (j, self.drawn_box(j))).filter(|&(j, r)| self.shows(j, r)).collect();
         boxes.sort_by(|a, b| a.1[1].total_cmp(&b.1[1]));
         // Bands as (top, bottom, first text, last text), with their texts in `boxes[from..to]`.
         let mut bands: Vec<(f32, f32, usize, usize)> = Vec::new();
@@ -584,6 +582,17 @@ impl<S: 'static> Runtime<S> {
             (Some(a), _) => texts(a).max().map(|j| (j, self.content_of(j).len())),
             _ => None,
         }
+    }
+
+    /// Text `j`, drawn at `r` (x0, y0, x1, y1), shows inside the clips around it. Text clipped
+    /// out of sight can lie under the words that show (a folded part above them), and a drag
+    /// that reached it selected everything between it and the press.
+    fn shows(&self, j: usize, r: [f32; 4]) -> bool {
+        if self.inh_scratch.len() != self.nodes.len() || self.drawn.get(j).is_none_or(|d| d[2] <= 0.0 && d[3] <= 0.0) {
+            return true;
+        }
+        let c = self.screen_clip_of_parent(Some(j)).map(|v| v / self.env.scale);
+        r[0] < c[2] && c[0] < r[2] && r[1] < c[3] && c[1] < r[3]
     }
 
     /// A primary press on `target` (None: on nothing). On selectable text away from its links it
@@ -687,7 +696,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn selection_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
         let crate::Key::Command(c @ ('c' | 'a')) = ev.key else { return false };
         let m = ev.mods;
-        let plain = m.cmd && !m.shift && !m.alt && if cfg!(target_os = "macos") { !m.ctrl } else { !m.logo };
+        let plain = m.cmd && !m.shift && !m.alt && !(m.ctrl && m.logo);
         if !plain || self.focused_input().is_some() || (c == 'c' && self.text_sel.path.is_none()) { return false; }
         let holder = self.selection_holder_end();
         if holder.is_none() { self.clear_text_selection(); }
@@ -695,7 +704,7 @@ impl<S: 'static> Runtime<S> {
         let Some(h) = holder else { return false };
         let path = self.end_path(h).to_owned();
         let Some(text) = self.copy_text() else { return false };
-        self.events.push(format!("copy {path}"));
+        log_event!(self, "copy {path}");
         tx.copy(text);
         true
     }
@@ -705,14 +714,14 @@ impl<S: 'static> Runtime<S> {
     /// selection, as AppKit text does. False when the app's handler should run instead.
     pub(super) fn selection_menu(&mut self, path: &str, x: f32, y: f32) -> bool {
         let Some(i) = self.live(path) else { return false };
-        if !self.is_selectable(i) || self.nodes[i].on_secondary_press.is_some() { return false; }
+        if !self.is_selectable(i) || self.nodes[i].handlers.on_secondary_press.is_some() { return false; }
         if let Some(at) = self.text_index_at(i, x, y)
             && range_in(&self.selection_ranges(), i).is_none_or(|(a, b)| at < a || at >= b)
         {
             let content = self.content_of(i).to_owned();
             let (a, b) = self.unit_in(i, at, Unit::Word);
             self.text_sel = Held { path: Some(path.to_owned()), content, anchor: a, focus: b, far: None,
-                anchor_end: None, focus_end: None, mounted_between: HashMap::new(), between: 0,
+                anchor_end: None, focus_end: None, mounted_between: HashMap::default(), between: 0,
                 unit: Unit::Word, origin: (a, b), dragging: false, last: None, shift: self.text_sel.shift,
                 pick: std::mem::take(&mut self.text_sel.pick) };
             self.seal_between();
@@ -720,7 +729,7 @@ impl<S: 'static> Runtime<S> {
         let text = self.copy_text();
         let mut copy = crate::PopupItem::new("copy", "Copy").enabled(text.is_some());
         if let Ok(shortcut) = "cmd+c".parse::<crate::Shortcut>() { copy = copy.key_equivalent(shortcut); }
-        self.events.push(format!("selection menu {path}"));
+        log_event!(self, "selection menu {path}");
         self.popups.push_back(crate::popup_menu::Request {
             menu: crate::PopupMenu::new().item(copy),
             anchor: crate::PopupAnchor::Point(x, y),

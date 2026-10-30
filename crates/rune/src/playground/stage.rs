@@ -190,6 +190,13 @@ impl<S: 'static> Live<S> {
         }
     }
 
+    /// Whether the stage's `App::on_ime` hears the input method now: only while its column has
+    /// the keyboard, unless [`Playground::typing`] asks for every key: in the list, a letter may
+    /// be J, K or a trigger's.
+    pub(crate) fn stage_hears(&self, app: &S) -> bool {
+        !self.open || self.region == Region::Stage || self.typing(app)
+    }
+
     /// The state `AppSpec::on_key` gets: the stage's when it's an app state, none on a story
     /// with its own.
     pub(crate) fn key_state<'a>(&'a mut self, app: &'a mut S) -> Option<&'a mut S> {

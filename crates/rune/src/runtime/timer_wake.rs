@@ -34,7 +34,7 @@ impl<S: 'static> Runtime<S> {
     /// A resting wake's poll still stands for a frame it asked for that runs covered or misses
     /// its drawable: its timers count from it, and nothing polls again unless another came due.
     pub(crate) fn poll_hidden(&mut self) -> bool {
-        let now = self.wall_clock().unwrap_or(self.clock);
+        let now = self.now_clock();
         if self.timer_wake.asked.is_some() && self.wake_deadlines.first().is_none_or(|t| *t > now) {
             self.cancel_timer_frame();
             return self.needs_commit();
@@ -59,9 +59,9 @@ impl<S: 'static> Runtime<S> {
         let patched = self.patch_pending();
         let Some(poll) = self.poll else { return patched };
         let mut one = self.transaction();
-        let changed = app_call!(poll, &mut self.state, self.clock, &mut one);
+        let changed = self.idle_meter.polled(crate::perf_warn::timed("poll", || app_call!(poll, &mut self.state, self.clock, &mut one)));
         self.dirty |= changed;
-        let asks_frame = one.srgb_blend.is_some_and(|b| b != self.srgb_blend) || (one.blur && self.focused.is_some());
+        let asks_frame = one.srgb_blend.is_some_and(|b| b != self.srgb_blend) || one.font_smoothing.is_some_and(|m| m != self.text.smoothing) || self.changes_families(&one) || (one.blur && self.focused.is_some());
         self.latch_requests(&mut one);
         let stale = changed || one.frame_work() || patched || asks_frame;
         merge(&mut self.pending, one);
@@ -101,7 +101,8 @@ impl<S: 'static> Runtime<S> {
         self.schedule_wakes_from(polled, wakes);
     }
 
-    fn rests(&self) -> bool {
+    /// Nothing but a timer asks this runtime for a frame.
+    pub(crate) fn rests(&self) -> bool {
         #[cfg(feature = "hot")]
         if self.hot.is_some() { return false; }
         !self.animating && !self.stale() && !self.settle && self.loop_wake.is_none() && self.window_frame.is_none()

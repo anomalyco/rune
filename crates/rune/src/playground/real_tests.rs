@@ -56,14 +56,17 @@ fn keep_copies_the_stage_back_before_a_replay_a_switch_and_back() {
     open(&mut rt, "Still");
     tap(&mut rt, "inc");
     assert_eq!((shows(&rt, "count"), rt.state.count), ("count 6".into(), 5), "tuned on the stage only");
+    escape(&mut rt);
     letter(&mut rt, "r");
     assert_eq!((shows(&rt, "count"), rt.state.count), ("count 6".into(), 6), "kept, and the replay starts from it");
     tap(&mut rt, "inc");
+    escape(&mut rt);
     letter(&mut rt, "j");
     assert_eq!(rt.state.count, 7, "kept on a switch");
     letter(&mut rt, "k");
     assert_eq!(shows(&rt, "count"), "count 7", "which the next scene starts from");
     tap(&mut rt, "inc");
+    escape(&mut rt);
     escape(&mut rt);
     assert_eq!(rt.state.count, 8, "and on Back");
     assert_eq!(shows(&rt, "count"), "count 8");

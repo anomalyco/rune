@@ -86,6 +86,11 @@ pub(crate) struct PresentFlag {
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 impl PresentFlag {
+    /// Whether the layer presents with transactions.
+    pub(crate) fn written(&self) -> bool {
+        self.written
+    }
+
     /// A window frame animation started or stopped. The value to write, when it changed.
     pub(crate) fn moving(&mut self, on: bool) -> Option<bool> {
         self.moving = on;

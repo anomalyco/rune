@@ -87,10 +87,7 @@ impl<S: 'static> Runtime<S> {
         let s = self.env.scale;
         for (i, node) in self.nodes.iter().enumerate() {
             // `elements` steps up to an `El::above` target before the parent.
-            let up = match &node.above {
-                Some(a) => self.nodes[..i].iter().position(|m| m.key.as_ref() == Some(&a.key)).or(node.parent),
-                None => node.parent,
-            };
+            let up = step_up(&self.nodes, i);
             let mut flags = up.map_or(0, |u| down[u].1);
             let mut pass = flags;
             if intent(node) { pass |= MotionElement::LIVE; }
@@ -134,7 +131,7 @@ impl<S: 'static> Runtime<S> {
             }
             let loop_phase = self.loops.get(&node.id).map_or(f32::NAN, |l| {
                 flags |= MotionElement::LOOP;
-                if self.reduced_motion && !matches!(node.looping.map(|s| s.kind), Some(rune_motion::LoopKind::Sequence(_))) { 0.0 }
+                if self.reduced_motion && !matches!(node.looping.as_ref().map(|s| s.kind), Some(rune_motion::LoopKind::Sequence(_))) { 0.0 }
                 else { l.phase(self.scene.store().node_time(node.id)) as f32 }
             });
             let inh = self.inh_scratch.get(i);

@@ -1,1 +1,0 @@
-- Settled elements resnap to the pixel grid when the display scale changes, without waiting for an animation or hover update.

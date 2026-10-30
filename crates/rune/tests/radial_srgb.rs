@@ -236,7 +236,7 @@ fn srgb_blend_matches_css_and_core_animation_glow_reference() {
     }
 
     let (_, _, px_linear) = snap_app(
-        App::new(AppSpec::new("glow-lin", (240.0, 240.0), || (), shadow_glow_view)),
+        App::new(AppSpec::new("glow-lin", (240.0, 240.0), || (), shadow_glow_view)).srgb_blend(false),
         "glow-lin",
         &[],
     );

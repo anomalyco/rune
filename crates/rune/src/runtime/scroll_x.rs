@@ -98,8 +98,7 @@ impl<S: 'static> Runtime<S> {
     /// is over, and this delta starts the next. Without phases, a delta wholly on the other
     /// axis (Shift let go, a tilt, a second wheel) also starts a new gesture.
     pub(super) fn wheel_delta_arrived(&mut self, dx: f32, dy: f32) {
-        self.keeps.clear();
-        self.scroll_reveals.clear();
+        self.drop_scroll_holds();
         let now = self.now_clock();
         let queued = self.queue.iter().any(|a| matches!(a, Action::Wheel(..)));
         let l = &mut self.wheel_lock;
@@ -202,7 +201,7 @@ impl<S: 'static> Runtime<S> {
         st.x.v = 0.0;
         st.x.glide = None;
         st.direct = true;
-        self.events.push(format!("wheel-x {dx:.1}"));
+        log_event!(self, "wheel-x {dx:.1}");
         if st.x.offset != before { self.scroll_cancels_press(id); }
     }
 
@@ -220,7 +219,7 @@ impl<S: 'static> Runtime<S> {
         if let Some(st) = self.scrolls.get_mut(&id) {
             st.x.v = -vx;
             st.x.glide = None;
-            self.events.push(format!("fling-x {vx:.0}"));
+            log_event!(self, "fling-x {vx:.0}");
             if vx != 0.0 { self.scroll_cancels_press(id); }
         }
     }

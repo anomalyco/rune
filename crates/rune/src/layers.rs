@@ -42,6 +42,14 @@ pub(super) struct Layers {
     frame_stamp: u64,
 }
 
+impl Layers {
+    /// Makes every blurred layer write its blur uniforms again on its next prepare.
+    pub(super) fn forget_blur_uniforms(&mut self) {
+        let targets = self.targets.iter_mut().flatten().chain(&mut self.retained);
+        for blur in targets.filter_map(|t| t.blur.as_mut()) { blur.forget_uniforms(); }
+    }
+}
+
 impl Default for Layers {
     fn default() -> Self {
         Self {
@@ -191,6 +199,7 @@ impl Renderer {
     }
 
     pub(super) fn prepare_layers(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, instances: &[Instance], viewport: (u32, u32)) {
+        let staging = self.uploads.staging(device, queue);
         self.layers.viewport = viewport;
         let had_layers = !self.layers.plan.is_empty();
         for slot in &mut self.layers.targets {
@@ -346,7 +355,7 @@ impl Renderer {
             if (t.content_size[0] - l.bounds[2]).abs() > 0.5 || (t.content_size[1] - l.bounds[3]).abs() > 0.5 {
                 quad.uv = [0.0, 0.0, t.content_size[0], t.content_size[1]];
             }
-            queue.write_buffer(&t.quad, 0, bytemuck::bytes_of(&quad));
+            staging.write_buffer(&t.quad, 0, bytemuck::bytes_of(&quad));
             self.layers.targets[index] = Some(t);
         }
 
@@ -435,18 +444,18 @@ impl Renderer {
                     t.blur = Some(self.layers.blur.as_ref().unwrap().scratch(device, &t.texture));
                     self.layers.allocations += 1;
                 }
-                if t.blur.as_mut().unwrap().prepare(device, self.layers.blur.as_ref().unwrap(), queue,
+                if t.blur.as_mut().unwrap().prepare(device, self.layers.blur.as_ref().unwrap(), &staging,
                     [bounds[2], bounds[3]], sigma, self.layers.plan[index].blend == Blend::PlusLighter) {
                     self.layers.allocations += 1;
                 }
             } else { t.blur = None; }
-            queue.write_buffer(&t.projection, 0, bytemuck::cast_slice(&bounds));
+            staging.write_buffer(&t.projection, 0, bytemuck::cast_slice(&bounds));
             let l = &self.layers.plan[index];
             let mut quad = Instance::begin_layer(bounds, l.clip, LayerSpec {
                 opacity: l.opacity, blend: l.blend, ..Default::default() });
             if let Some((angle, pivot)) = l.turn { quad = quad.turned(angle, pivot); }
             quad.fade = l.fade;
-            queue.write_buffer(&t.quad, 0, bytemuck::bytes_of(&quad));
+            staging.write_buffer(&t.quad, 0, bytemuck::bytes_of(&quad));
         }
         if !self.layers.retained.is_empty() {
             let mut retained_bytes: u64 = self.layers.retained.iter().map(Self::target_bytes).sum();
@@ -569,6 +578,7 @@ impl Renderer {
     }
 
     pub(super) fn encode_layers_timed(&self, encoder: &mut wgpu::CommandEncoder, timestamps: Option<&wgpu::RenderPassTimestampWrites<'_>>, hook: &mut EffectBackdropHook<'_>) {
+        self.flush_uploads(encoder);
         let mut first = true;
         for (index, l) in self.layers.plan.iter().enumerate().rev() {
             if !l.needs_render { continue; }

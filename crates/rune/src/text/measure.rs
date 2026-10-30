@@ -13,7 +13,10 @@ pub use ink::{TextInk, ink};
 use crate::tok::TextStyle;
 
 struct Fonts {
+    /// Bumped by any change, of fonts or families.
     generation: u64,
+    /// The `generation` that last changed the fonts.
+    fonts_generation: u64,
     fonts: Vec<&'static [u8]>,
     families: (String, String),
 }
@@ -25,6 +28,7 @@ const EVICT_EVERY: u32 = 512;
 
 struct Measurer {
     generation: u64,
+    fonts_generation: u64,
     text: TextSystem,
     calls: u32,
 }
@@ -36,11 +40,30 @@ thread_local! {
 /// Called by every [`TextSystem::new`]; the next measurement uses these fonts.
 pub(super) fn note_fonts(fonts: &[&'static [u8]], families: (&str, &str)) {
     let Ok(mut slot) = FONTS.lock() else { return };
-    let same = slot.as_ref().is_some_and(|f| f.fonts == fonts && f.families.0 == families.0 && f.families.1 == families.1);
-    if !same {
-        let generation = slot.as_ref().map_or(1, |f| f.generation + 1);
-        *slot = Some(Fonts { generation, fonts: fonts.to_vec(), families: (families.0.to_owned(), families.1.to_owned()) });
+    let same_fonts = slot.as_ref().is_some_and(|f| f.fonts == fonts);
+    if same_fonts && slot.as_ref().is_some_and(|f| f.families.0 == families.0 && f.families.1 == families.1) {
+        return;
     }
+    let generation = slot.as_ref().map_or(1, |f| f.generation + 1);
+    let fonts_generation = match slot.as_ref() { Some(f) if same_fonts => f.fonts_generation, _ => generation };
+    let families = (families.0.to_owned(), families.1.to_owned());
+    *slot = Some(Fonts { generation, fonts_generation, fonts: fonts.to_vec(), families });
+}
+
+/// Called by [`TextSystem::set_families`]; the next measurement uses these families.
+pub(super) fn note_families(sans: &str, mono: &str) {
+    let Ok(mut slot) = FONTS.lock() else { return };
+    let Some(f) = slot.as_mut() else { return };
+    if f.families.0 != sans || f.families.1 != mono {
+        f.generation += 1;
+        f.families = (sans.to_owned(), mono.to_owned());
+    }
+}
+
+/// Changes whenever the fonts or families [`measure`] uses change, as when an app calls
+/// `Tx::set_font_families`. A cache of measured sizes mixes it into its key.
+pub fn font_epoch() -> u64 {
+    FONTS.lock().ok().and_then(|f| f.as_ref().map(|f| f.generation)).unwrap_or(0)
 }
 
 /// The size in points of `text` (with `spans`, as [`crate::rich`] takes them) set in `style`,
@@ -64,17 +87,26 @@ pub fn advance(text: &str, style: TextStyle) -> f32 {
 
 /// Runs `f` on this thread's text system, built from the fonts the app was given.
 pub(super) fn with_text<R>(f: impl FnOnce(&mut TextSystem) -> R) -> R {
-    let generation = || FONTS.lock().ok().and_then(|f| f.as_ref().map(|f| f.generation)).unwrap_or(0);
     MEASURER.with_borrow_mut(|m| {
-        let current = generation();
+        let current = font_epoch();
         if m.as_ref().is_none_or(|m| m.generation != current) {
-            let wanted = FONTS.lock().ok().and_then(|f| f.as_ref().map(|f| (f.fonts.clone(), f.families.clone())));
-            let text = match &wanted {
-                Some((fonts, (sans, mono))) => TextSystem::new(fonts, (sans, mono)),
-                None => TextSystem::default(),
-            };
-            // Building a text system notes its fonts, so read the generation it settled on.
-            *m = Some(Measurer { generation: generation(), text, calls: 0 });
+            let wanted = FONTS.lock().ok().and_then(|f| f.as_ref().map(|f| (f.fonts_generation, f.fonts.clone(), f.families.clone())));
+            match (m.as_mut(), &wanted) {
+                // Only the families changed: the loaded fonts stay.
+                (Some(m), Some((fonts_generation, _, (sans, mono)))) if m.fonts_generation == *fonts_generation => {
+                    m.text.set_families(sans, mono);
+                    m.generation = font_epoch();
+                }
+                _ => {
+                    let text = match &wanted {
+                        Some((_, fonts, (sans, mono))) => TextSystem::new(fonts, (sans, mono)),
+                        None => TextSystem::default(),
+                    };
+                    // Building a text system notes its fonts, so read the generation it settled on.
+                    let fonts_generation = FONTS.lock().ok().and_then(|f| f.as_ref().map(|f| f.fonts_generation)).unwrap_or(0);
+                    *m = Some(Measurer { generation: font_epoch(), fonts_generation, text, calls: 0 });
+                }
+            }
         }
         let m = m.as_mut().expect("set above");
         m.calls += 1;

@@ -76,7 +76,10 @@ enum Input {
     Rgba(u32, u32, Arc<[u8]>),
     Icon(std::path::PathBuf, u32),
     Svg(Arc<[u8]>, u32),
+    #[cfg(not(target_arch = "wasm32"))]
     File(std::path::PathBuf, u32),
+    /// `ImageCache::url`, and `ImageCache::file` on web.
+    Url(String, u32),
     /// A decoder that panics, standing in for a codec bug.
     #[cfg(test)]
     Panic,
@@ -99,8 +102,13 @@ impl Input {
                     decode(&bytes)
                 }
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            Input::Url(url, px) => Input::File(from_url::file_path(&url)?, px).decode(),
             #[cfg(target_arch = "wasm32")]
-            Input::Icon(..) | Input::File(..) => Err(ImageError("filesystem images are unsupported on web".into())),
+            Input::Icon(..) => Err(ImageError("filesystem images are unsupported on web".into())),
+            // Fetched asynchronously by `ImageCache::request`.
+            #[cfg(target_arch = "wasm32")]
+            Input::Url(url, _) => Err(ImageError(format!("{url}: fetched, not decoded"))),
             #[cfg(test)]
             Input::Panic => panic!("decoder bug"),
         }
@@ -182,7 +190,8 @@ impl ImageCache {
     /// An image file, read and decoded on the worker. `.svg` and `.svgz` files (or SVG content)
     /// rasterize like [`ImageCache::svg`]; other formats decode like [`ImageCache::load`], ignoring
     /// the size. Handles are shared by path, size and scale, so an edited file needs a new handle
-    /// once the old ones drop. Unsupported on web, where the image resolves to an error.
+    /// once the old ones drop. On web the path is a URL relative to the page, fetched as
+    /// [`ImageCache::url`] does, so `cache.file("assets/logo.webp", ..)` works in both builds.
     pub fn file(&self, path: impl AsRef<std::path::Path>, size_pt: f32, scale: f32) -> Image {
         let path = path.as_ref().to_path_buf();
         let px = icon_pixels(size_pt, scale);
@@ -191,7 +200,11 @@ impl ImageCache {
         hash.update(path.as_os_str().as_encoded_bytes());
         hash.update(&[0]);
         hash.update(&px.to_le_bytes());
-        self.request(*hash.finalize().as_bytes(), Input::File(path, px))
+        #[cfg(target_arch = "wasm32")]
+        let input = Input::Url(path.to_string_lossy().into_owned(), px);
+        #[cfg(not(target_arch = "wasm32"))]
+        let input = Input::File(path, px);
+        self.request(*hash.finalize().as_bytes(), input)
     }
 
     /// Straight-alpha sRGB RGBA8. Validation, premultiplication and mips happen off-thread.
@@ -246,7 +259,11 @@ impl ImageCache {
             let image = image.clone();
             let wake = self.wake.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                image.finish(input.decode());
+                let decoded = match input {
+                    Input::Url(url, px) => from_url::fetch(&url, px).await,
+                    input => input.decode(),
+                };
+                image.finish(decoded);
                 wake();
             });
         }
@@ -456,59 +473,89 @@ mod freedesktop {
 
 #[cfg(target_os = "macos")]
 fn macos_icon(path: &std::path::Path, px: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
-    use objc2::runtime::{AnyClass, AnyObject, Bool};
-    use objc2::rc::{Allocated, Retained};
-    use objc2::{msg_send, msg_send_id};
+    use objc2::runtime::{AnyObject, Bool};
+    use objc2::msg_send;
     use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
     let path = path.to_str().ok_or_else(|| ImageError("app icon path is not UTF-8".into()))?;
-    let class = |name: &str| AnyClass::get(name).ok_or_else(|| ImageError(format!("{name} is unavailable")));
-    let (workspace, bitmap, context, color_space) =
-        (class("NSWorkspace")?, class("NSBitmapImageRep")?, class("NSGraphicsContext")?, class("NSColorSpace")?);
+    let workspace = macos_class("NSWorkspace")?;
     objc2::rc::autoreleasepool(|_| unsafe {
         let workspace: *mut AnyObject = msg_send![workspace, sharedWorkspace];
         let icon: *mut AnyObject = msg_send![workspace, iconForFile: &*NSString::from_str(path)];
         if icon.is_null() { return Err(ImageError("NSWorkspace returned no icon".into())); }
+        let zero = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0));
+        // IconServices picks its rendition by the size asked for, and on macOS 26 and later a
+        // small size of an app without a modern icon is the "legacy" one: a shrunken tile in a
+        // grey frame. Draw at 256 pixels or more, then scale down.
+        let big = px.max(256);
+        // NSCompositingOperationCopy (1); a zero fromRect draws the whole best-fit representation.
+        let large = macos_bitmap(big, |_, rect| { let _: () = msg_send![icon, drawInRect: rect fromRect: zero operation: 1usize fraction: 1.0f64]; })?;
+        let small = if big == px { large } else {
+            macos_bitmap(px, |ctx, rect| {
+                // NSImageInterpolationHigh.
+                let _: () = msg_send![ctx, setImageInterpolation: 3usize];
+                let none: *mut AnyObject = std::ptr::null_mut();
+                let _: Bool = msg_send![large, drawInRect: rect fromRect: zero operation: 1usize fraction: 1.0f64 respectFlipped: Bool::NO hints: none];
+            })?
+        };
         let side = px as isize;
+        let data: *const u8 = msg_send![small, bitmapData];
+        let stride: isize = msg_send![small, bytesPerRow];
+        if data.is_null() || stride < side * 4 { return Err(ImageError("icon bitmap has no pixel data".into())); }
+        let mut out = Vec::with_capacity((px * px * 4) as usize);
+        for y in 0..side {
+            let row = std::slice::from_raw_parts(data.offset(y * stride), (side * 4) as usize);
+            for p in row.chunks_exact(4) {
+                let a = p[3];
+                let straight = |c: u8| if a == 0 { 0 } else { ((c as u32 * 255 + a as u32 / 2) / a as u32).min(255) as u8 };
+                out.extend_from_slice(&[straight(p[0]), straight(p[1]), straight(p[2]), a]);
+            }
+        }
+        Ok((px, px, out))
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_class(name: &str) -> Result<&'static objc2::runtime::AnyClass, ImageError> {
+    objc2::runtime::AnyClass::get(name).ok_or_else(|| ImageError(format!("{name} is unavailable")))
+}
+
+/// A `side`×`side` sRGB bitmap with `draw(context, rect)` run into it as the current context.
+/// Autoreleased: call inside an autorelease pool.
+#[cfg(target_os = "macos")]
+unsafe fn macos_bitmap(
+    side: u32,
+    draw: impl FnOnce(*mut objc2::runtime::AnyObject, objc2_foundation::NSRect),
+) -> Result<*mut objc2::runtime::AnyObject, ImageError> {
+    use objc2::runtime::{AnyObject, Bool};
+    use objc2::rc::{Allocated, Retained};
+    use objc2::{msg_send, msg_send_id};
+    use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+    let (bitmap, context, color_space) = (macos_class("NSBitmapImageRep")?, macos_class("NSGraphicsContext")?, macos_class("NSColorSpace")?);
+    let n = side as isize;
+    // SAFETY: AppKit bitmap and context calls on objects this function retains or that live in
+    // the caller's autorelease pool.
+    unsafe {
         let rep: Allocated<AnyObject> = msg_send_id![bitmap, alloc];
         let null: *mut *mut u8 = std::ptr::null_mut();
         // Default bitmapFormat is premultiplied alpha-last RGBA, the only layout AppKit draws into.
         let rep: Option<Retained<AnyObject>> = msg_send_id![rep,
-            initWithBitmapDataPlanes: null pixelsWide: side pixelsHigh: side bitsPerSample: 8isize
+            initWithBitmapDataPlanes: null pixelsWide: n pixelsHigh: n bitsPerSample: 8isize
             samplesPerPixel: 4isize hasAlpha: Bool::YES isPlanar: Bool::NO
             colorSpaceName: &*NSString::from_str("NSDeviceRGBColorSpace") bitmapFormat: 0usize
-            bytesPerRow: side * 4 bitsPerPixel: 32isize];
+            bytesPerRow: n * 4 bitsPerPixel: 32isize];
         let rep = rep.ok_or_else(|| ImageError("could not allocate an icon bitmap".into()))?;
         let srgb: *mut AnyObject = msg_send![color_space, sRGBColorSpace];
         let tagged: *mut AnyObject = msg_send![&*rep, bitmapImageRepByRetaggingWithColorSpace: srgb];
-        let tagged = if tagged.is_null() { Retained::as_ptr(&rep).cast_mut() } else { tagged };
+        let tagged = if tagged.is_null() { Retained::autorelease_return(rep) } else { tagged };
         let ctx: *mut AnyObject = msg_send![context, graphicsContextWithBitmapImageRep: tagged];
         if ctx.is_null() { return Err(ImageError("could not create an icon context".into())); }
         let _: () = msg_send![context, saveGraphicsState];
         let _: () = msg_send![context, setCurrentContext: ctx];
-        let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(px as f64, px as f64));
-        let zero = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0));
-        // NSCompositingOperationCopy (1); a zero fromRect draws the whole best-fit representation.
-        let _: () = msg_send![icon, drawInRect: rect fromRect: zero operation: 1usize fraction: 1.0f64];
+        draw(ctx, NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(side as f64, side as f64)));
         let _: () = msg_send![ctx, flushGraphics];
         let _: () = msg_send![context, restoreGraphicsState];
-        let data: *const u8 = msg_send![tagged, bitmapData];
-        let stride: isize = msg_send![tagged, bytesPerRow];
-        let result = if data.is_null() || stride < side * 4 {
-            Err(ImageError("icon bitmap has no pixel data".into()))
-        } else {
-            let mut out = Vec::with_capacity((px * px * 4) as usize);
-            for y in 0..side {
-                let row = std::slice::from_raw_parts(data.offset(y * stride), (side * 4) as usize);
-                for p in row.chunks_exact(4) {
-                    let a = p[3];
-                    let straight = |c: u8| if a == 0 { 0 } else { ((c as u32 * 255 + a as u32 / 2) / a as u32).min(255) as u8 };
-                    out.extend_from_slice(&[straight(p[0]), straight(p[1]), straight(p[2]), a]);
-                }
-            }
-            Ok((px, px, out))
-        };
-        result
-    })
+        Ok(tagged)
+    }
 }
 
 fn decode(bytes: &[u8]) -> Result<Decoded, ImageError> {
@@ -566,46 +613,110 @@ fn mip_chain(width: u32, height: u32, bytes: &[u8]) -> Result<Decoded, ImageErro
     if width == 0 || height == 0 || width > 8192 || height > 8192
         || bytes.len() != width as usize * height as usize * 4
     { return Err(ImageError("RGBA image dimensions or byte length are invalid".into())); }
-    let mut linear: Vec<[f32; 4]> = bytes.as_chunks::<4>().0.iter().map(|p| {
+    let srgb = &*SRGB;
+    // Mip 0 is the source with RGB premultiplied in linear light; an opaque pixel is unchanged.
+    let mut top = bytes.to_vec();
+    for p in top.as_chunks_mut::<4>().0 {
+        if p[3] == 255 { continue; }
         let a = p[3] as f32 / 255.0;
-        [crate::color::srgb_decode(p[0] as f32 / 255.0) * a,
-         crate::color::srgb_decode(p[1] as f32 / 255.0) * a,
-         crate::color::srgb_decode(p[2] as f32 / 255.0) * a, a]
-    }).collect();
-    let (mut w, mut h) = (width, height);
-    let mut mips = Vec::new();
-    loop {
-        let pixels = linear.iter().flat_map(|p| {
-            let a = byte(p[3]);
-            // Quantized alpha bounds premultiplied RGB, including fully transparent tails.
-            let rgb = [p[0], p[1], p[2]].map(|v| byte(crate::color::srgb_encode(v.min(a as f32 / 255.0))));
-            [rgb[0], rgb[1], rgb[2], a]
-        }).collect();
-        mips.push(Mip { width: w, height: h, pixels });
-        if w == 1 && h == 1 { break; }
-        let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
-        // Area resampling includes the last row/column of odd-sized sources. Work in
-        // linear premultiplied floats throughout; quantization happens only on upload data.
-        let mut next = Vec::with_capacity((nw * nh) as usize);
-        for y in 0..nh { for x in 0..nw {
-            let (x0, x1) = (x as f32 * w as f32 / nw as f32, (x + 1) as f32 * w as f32 / nw as f32);
-            let (y0, y1) = (y as f32 * h as f32 / nh as f32, (y + 1) as f32 * h as f32 / nh as f32);
-            let mut sum = [0.0; 4];
-            for sy in y0.floor() as u32..(y1.ceil() as u32).min(h) {
-                for sx in x0.floor() as u32..(x1.ceil() as u32).min(w) {
-                    let weight = ((sx + 1) as f32).min(x1) - (sx as f32).max(x0);
-                    let weight = weight * (((sy + 1) as f32).min(y1) - (sy as f32).max(y0));
-                    for c in 0..4 { sum[c] += linear[(sy * w + sx) as usize][c] * weight; }
-                }
-            }
-            next.push(sum.map(|v| v / ((x1 - x0) * (y1 - y0))));
-        }}
-        linear = next;
-        (w, h) = (nw, nh);
+        for c in 0..3 { p[c] = srgb.encode(srgb.decode[p[c] as usize] * a, p[3]); }
+    }
+    let mut mips = vec![Mip { width, height, pixels: top }];
+    // Mip 1 filters the straight source, so a translucent edge is premultiplied once, not
+    // quantized first. Each later mip filters the bytes of the one above it.
+    if width > 1 || height > 1 {
+        mips.push(downsample(width, height, bytes, |p| {
+            let a = p[3] as f32 / 255.0;
+            [srgb.decode[p[0] as usize] * a, srgb.decode[p[1] as usize] * a, srgb.decode[p[2] as usize] * a, a]
+        }));
+    }
+    while let Some(last) = mips.last().filter(|m| m.width > 1 || m.height > 1) {
+        let next = downsample(last.width, last.height, &last.pixels, |p| {
+            [srgb.decode[p[0] as usize], srgb.decode[p[1] as usize], srgb.decode[p[2] as usize], p[3] as f32 / 255.0]
+        });
+        mips.push(next);
     }
     Ok(Decoded { mips })
 }
+
+/// Halves `w`×`h` RGBA8 `src` by area, summing `linear` (premultiplied linear RGBA) of each
+/// source pixel. Area resampling includes the last row/column of odd-sized sources.
+fn downsample(w: u32, h: u32, src: &[u8], linear: impl Fn(&[u8; 4]) -> [f32; 4]) -> Mip {
+    let src = src.as_chunks::<4>().0;
+    let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+    let mut pixels = Vec::with_capacity(nw as usize * nh as usize * 4);
+    let mut emit = |sum: [f32; 4], area: f32| {
+        let [r, g, b, a] = sum.map(|v| v / area);
+        let a = byte(a);
+        pixels.extend_from_slice(&[SRGB.encode(r, a), SRGB.encode(g, a), SRGB.encode(b, a), a]);
+    };
+    if w % 2 == 0 && h % 2 == 0 {
+        // Each target pixel is exactly a 2×2 block.
+        let w = w as usize;
+        for y in 0..nh as usize { for x in 0..nw as usize {
+            let i = 2 * y * w + 2 * x;
+            let mut sum = [0.0; 4];
+            for p in [i, i + 1, i + w, i + w + 1].map(|i| linear(&src[i])) {
+                for c in 0..4 { sum[c] += p[c]; }
+            }
+            emit(sum, 4.0);
+        }}
+        return Mip { width: nw, height: nh, pixels };
+    }
+    for y in 0..nh { for x in 0..nw {
+        let (x0, x1) = (x as f32 * w as f32 / nw as f32, (x + 1) as f32 * w as f32 / nw as f32);
+        let (y0, y1) = (y as f32 * h as f32 / nh as f32, (y + 1) as f32 * h as f32 / nh as f32);
+        let mut sum = [0.0; 4];
+        for sy in y0.floor() as u32..(y1.ceil() as u32).min(h) {
+            for sx in x0.floor() as u32..(x1.ceil() as u32).min(w) {
+                let weight = ((sx + 1) as f32).min(x1) - (sx as f32).max(x0);
+                let weight = weight * (((sy + 1) as f32).min(y1) - (sy as f32).max(y0));
+                let p = linear(&src[(sy * w + sx) as usize]);
+                for c in 0..4 { sum[c] += p[c] * weight; }
+            }
+        }
+        emit(sum, (x1 - x0) * (y1 - y0));
+    }}
+    Mip { width: nw, height: nh, pixels }
+}
 fn byte(v: f32) -> u8 { (v.clamp(0.0, 1.0) * 255.0).round() as u8 }
+
+/// sRGB transfer tables, so mip generation runs no `powf` per pixel.
+struct Srgb {
+    /// Linear light of each sRGB byte.
+    decode: [f32; 256],
+    /// `up[k]`: the linear value at and above which the sRGB encoding rounds past byte `k`.
+    up: [f32; 256],
+    /// The byte at the low edge of each 1/`STEPS` of linear light. The curve's steepest
+    /// slope (12.92) crosses under one byte per step, so one `up` comparison finishes it.
+    coarse: [u8; STEPS + 1],
+}
+const STEPS: usize = 4096;
+static SRGB: std::sync::LazyLock<Srgb> = std::sync::LazyLock::new(|| {
+    let mut up: [f32; 256] = std::array::from_fn(|k| crate::color::srgb_decode((k as f32 + 0.5) / 255.0));
+    up[255] = f32::INFINITY;
+    Srgb {
+        decode: std::array::from_fn(|i| crate::color::srgb_decode(i as f32 / 255.0)),
+        coarse: std::array::from_fn(|i| up.partition_point(|&t| t <= i as f32 / STEPS as f32) as u8),
+        up,
+    }
+});
+impl Srgb {
+    /// The sRGB byte of premultiplied linear `v`, capped by its quantized alpha `a` so a pixel
+    /// whose alpha rounded to zero emits no light.
+    fn encode(&self, v: f32, a: u8) -> u8 {
+        let v = v.clamp(0.0, a as f32 / 255.0);
+        let b = self.coarse[(v * STEPS as f32) as usize];
+        b + u8::from(v >= self.up[b as usize])
+    }
+}
+
+#[path = "image_url.rs"]
+mod from_url;
+
+#[cfg(test)]
+#[path = "image_mip_tests.rs"]
+mod mip_tests;
 
 #[cfg(test)]
 mod tests {
@@ -815,5 +926,69 @@ mod tests {
         let pixels = &icon.decoded().unwrap().unwrap().mips[0].pixels;
         let opaque = pixels.chunks_exact(4).filter(|p| p[3] > 0).count();
         assert!(opaque > 64 * 64 / 4, "icon is mostly empty: {opaque} visible pixels");
+    }
+
+    /// A small icon is the large one scaled down, not a different (on macOS 26 and later, a
+    /// framed "legacy") rendition.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_small_app_icon_matches_the_large_one_scaled_down() {
+        let dir = std::env::temp_dir().join(format!("rune-icon-bundle-{}", std::process::id()));
+        let app = synthetic_app(&dir);
+        let small = app_icon_rgba(&app, 32).unwrap().2;
+        let large = app_icon_rgba(&app, 256).unwrap().2;
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut total, mut count) = (0u32, 0u32);
+        for y in 0..32 {
+            for x in 0..32 {
+                // Straight colour is noise where the icon is nearly transparent.
+                let solid = small[(y * 32 + x) * 4 + 3] >= 200;
+                for c in (if solid { 0 } else { 3 })..4 {
+                    let block: u32 = (0..8).flat_map(|dy| (0..8).map(move |dx| (dx, dy)))
+                        .map(|(dx, dy)| u32::from(large[((y * 8 + dy) * 256 + x * 8 + dx) * 4 + c])).sum();
+                    total += (block / 64).abs_diff(u32::from(small[(y * 32 + x) * 4 + c]));
+                    count += 1;
+                }
+            }
+        }
+        // The resampling filter rings on the tile's hard edge, so compare the mean, not the worst
+        // pixel. A different rendition (a framed or shrunken tile) differs across the whole icon.
+        let mean = total as f32 / count as f32;
+        assert!(mean < 12.0, "the 32 px icon differs from the 256 px one by {mean} on average");
+    }
+
+    /// A bundle whose only icon is a generated 256 px gradient, so the test does not depend on
+    /// the icons the installed macOS ships.
+    #[cfg(target_os = "macos")]
+    fn synthetic_app(dir: &std::path::Path) -> std::path::PathBuf {
+        let app = dir.join("Synthetic.app");
+        let resources = app.join("Contents/Resources");
+        std::fs::create_dir_all(&resources).unwrap();
+        std::fs::write(app.join("Contents/Info.plist"), concat!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>"#,
+            "<key>CFBundleIdentifier</key><string>dev.rune.synthetic-icon</string>",
+            "<key>CFBundleName</key><string>Synthetic</string>",
+            "<key>CFBundlePackageType</key><string>APPL</string>",
+            "<key>CFBundleIconFile</key><string>icon</string></dict></plist>",
+        )).unwrap();
+        let mut rgba = Vec::with_capacity(256 * 256 * 4);
+        for y in 0..256u32 {
+            for x in 0..256u32 {
+                let inside = (16..240).contains(&x) && (16..240).contains(&y);
+                rgba.extend_from_slice(&[x as u8, y as u8, (x + y) as u8 / 2, if inside { 255 } else { 0 }]);
+            }
+        }
+        let mut png = Vec::new();
+        let mut encoder = png::Encoder::new(&mut png, 256, 256);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header().unwrap().write_image_data(&rgba).unwrap();
+        let mut icns = b"icns".to_vec();
+        icns.extend_from_slice(&((png.len() as u32 + 16).to_be_bytes()));
+        icns.extend_from_slice(b"ic08");
+        icns.extend_from_slice(&((png.len() as u32 + 8).to_be_bytes()));
+        icns.extend_from_slice(&png);
+        std::fs::write(resources.join("icon.icns"), icns).unwrap();
+        app
     }
 }

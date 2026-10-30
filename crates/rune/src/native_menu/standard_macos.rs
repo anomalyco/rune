@@ -5,8 +5,8 @@
 //! these methods ⌘C would never reach Rune's own text editing. Main thread only.
 use super::{default_macos, standard::{self, KeyDown, Standard, ITEMS}};
 use crate::runtime::Unhandled;
-use std::{cell::Cell, ffi::{c_char, c_void}};
-use objc2::{ClassType, msg_send, runtime::{AnyClass, AnyObject, Bool, Sel}};
+use std::{cell::Cell, ffi::{c_char, c_void}, sync::Arc};
+use objc2::{ClassType, msg_send, rc::Retained, runtime::{AnyClass, AnyObject, Bool, Sel}};
 use objc2_app_kit::{NSApplication, NSEvent, NSEventModifierFlags, NSEventType, NSPanel, NSView, NSWindow, NSWindowButton};
 use objc2_foundation::{MainThreadMarker, NSObjectProtocol, NSPoint, NSProcessInfo, NSString};
 
@@ -15,8 +15,9 @@ thread_local! {
     /// Whether a window start has looked for winit's default menu yet.
     static CHECKED: Cell<bool> = const { Cell::new(false) };
     static HOOKED: Cell<bool> = const { Cell::new(false) };
-    /// What the key a standard item is handing Rune does if no handler takes it.
-    static UNHANDLED: Cell<Option<(char, Unhandled)>> = const { Cell::new(None) };
+    /// What the key a menu item is handing Rune does if no handler takes it: a standard item's
+    /// own ⌘-letter, or whatever key an app's `keys_first` item was picked by.
+    static UNHANDLED: Cell<Option<(Option<char>, Unhandled)>> = const { Cell::new(None) };
 }
 unsafe extern "C" {
     fn class_addMethod(class: *const AnyClass, selector: Sel, implementation: *const c_void, types: *const c_char) -> Bool;
@@ -37,10 +38,32 @@ pub(crate) fn install(opt_in: bool) {
 }
 
 /// The window host, for a key press it maps to `key`: what to do if no handler takes it, when
-/// a standard item is handing Rune that very key.
+/// a menu item is handing Rune that very key.
 pub(crate) fn take_unhandled(key: &crate::KeyEvent) -> Option<Unhandled> {
     let (c, then) = UNHANDLED.with(Cell::take)?;
-    (key.key == crate::Key::Command(c) && !key.mods.alt && !key.mods.ctrl).then_some(then)
+    c.is_none_or(|c| key.key == crate::Key::Command(c) && !key.mods.alt && !key.mods.ctrl).then_some(then)
+}
+
+/// An app's `keys_first` item picked by its key equivalent while a Rune window's view has the
+/// keyboard: the key goes to that view, so the window's handlers see it first, and `run`
+/// happens only if none takes it. False when a click picked the item, or the keyboard is
+/// elsewhere (another view, an overlay panel): the caller runs it.
+pub(super) fn defer_key(run: Arc<dyn Fn() + Send + Sync>) -> bool {
+    let (Some(mtm), Some(class)) = (MainThreadMarker::new(), AnyClass::get("WinitView")) else { return false };
+    // SAFETY: main thread (a menu action); the event, window and view are retained.
+    unsafe {
+        let app = NSApplication::sharedApplication(mtm);
+        let Some(event) = app.currentEvent().filter(|e| e.r#type() == NSEventType::KeyDown) else { return false };
+        let Some(window) = app.keyWindow().filter(|w| !w.isKindOfClass(NSPanel::class())) else { return false };
+        let Some(responder) = window.firstResponder().filter(|r| r.isKindOfClass(class)) else { return false };
+        let view: Retained<NSView> = Retained::cast(responder);
+        UNHANDLED.with(|u| u.set(Some((None, Unhandled::Menu(run.clone())))));
+        commit_composition(&view);
+        view.keyDown(&event);
+        // Nothing took the press (winit made no logical key of it): the item runs as before.
+        if UNHANDLED.with(Cell::take).is_some() { run(); }
+    }
+    true
 }
 
 /// After each window creation: winit registers its view class with the first window.
@@ -84,7 +107,7 @@ unsafe fn perform(view: &NSView, item: &Standard) {
         let current = NSApplication::sharedApplication(mtm).currentEvent().filter(|e| e.r#type() == NSEventType::KeyDown);
         let route = standard::route(item, button, current.as_deref().map(key_down).as_ref());
         // winit hands the press to the host synchronously, which takes this; clear it anyway.
-        UNHANDLED.with(|u| u.set(then.filter(|_| route.then_button).map(|then| (item.key, then))));
+        UNHANDLED.with(|u| u.set(then.filter(|_| route.then_button).map(|then| (Some(item.key), then))));
         commit_composition(view);
         match current.filter(|_| route.current) {
             Some(event) => view.keyDown(&event),

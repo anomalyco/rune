@@ -9,6 +9,7 @@ compile_error!("web does not support Rune's hot or native-file-dialog features; 
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 mod activation;
 mod app;
+mod app_icon;
 pub mod time;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
@@ -72,9 +73,7 @@ pub use popup_menu::{PopupAnchor, PopupItem, PopupMenu, PopupMenuError, popup_me
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 mod layer_shell;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-mod x11_overlay;
-#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-mod x11_pointer;
+mod x11;
 mod overlay;
 mod overlay_options;
 mod cursor;
@@ -84,30 +83,15 @@ mod os_cursor;
 mod pointer_observer;
 #[cfg(target_os = "windows")]
 mod win32;
-#[cfg(target_os = "windows")]
-mod win32_pointer;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
-mod macos_cursor;
-#[cfg(target_os = "macos")]
-mod macos_drop;
-#[cfg(target_os = "macos")]
-#[doc(hidden)]
-pub mod macos_panel_bridge;
-#[cfg(target_os = "macos")]
-#[doc(hidden)]
-pub mod macos_appearance;
-#[cfg(target_os = "macos")]
 mod display_link;
 #[cfg(target_os = "macos")]
-mod macos_help;
-#[cfg(target_os = "macos")]
-mod macos_traffic_lights;
-#[cfg(target_os = "macos")]
-mod macos_window_shape;
+mod main_queue;
 #[cfg(target_os = "macos")]
 mod fn_key;
+mod cold;
 pub mod color;
 pub mod compose;
 pub mod edit;
@@ -117,18 +101,37 @@ mod el_backdrop;
 mod el_child_exit;
 mod el_drop;
 mod el_effect;
+mod el_focus;
+mod el_handlers;
 mod el_pills;
 mod el_pixel_snap;
 mod el_ride_trailing;
 mod el_sticky;
+mod el_text;
 mod el_tx;
+mod el_visual;
+mod element_info;
+#[cfg(target_vendor = "apple")]
+pub mod embed;
 mod input_time;
 mod key_diagnostics;
+#[cfg(test)]
+mod test_alloc;
 pub mod growth;
+mod latest;
 pub mod live;
 pub mod memo;
 pub mod motion_gate;
 mod pixels;
+#[cfg(target_os = "macos")]
+mod gpu;
+#[cfg(all(target_os = "macos", feature = "metal-backend"))]
+#[doc(hidden)]
+pub use gpu::metal::bench::dispatch_overhead as __metal_dispatch_overhead;
+mod gpu_backend;
+pub use gpu_backend::GpuBackend;
+#[cfg(not(target_arch = "wasm32"))]
+mod gpu_pick;
 pub mod gpu_springs;
 pub mod image;
 #[cfg(feature = "hot")]
@@ -158,6 +161,9 @@ mod frame_profile;
 #[cfg(feature = "frame-profile")]
 #[doc(hidden)]
 pub use frame_profile::{PHASES, take_frame_phases, thread_cpu_ms};
+mod perf_warn;
+#[cfg(not(target_arch = "wasm32"))]
+mod ready_signal;
 pub mod file_dialog;
 pub mod tray;
 mod open_url;
@@ -177,15 +183,23 @@ mod frame_encoded;
 pub use frame_encoded::{FrameEncoded, FrameOutcome};
 pub use input_time::last_input;
 mod present_time;
+#[cfg(target_os = "macos")]
+mod present_worker;
 mod secure_input;
 pub mod clipboard;
 mod preferences;
+#[cfg(all(target_os = "linux", feature = "dbus"))]
+mod portal_appearance;
 mod accent;
 pub use accent::{SystemAccent, system_accent};
+pub use app_icon::set_app_icon;
 pub use clipboard::{ClipboardContent, ClipboardImage, ClipboardWrite, SecretCopy, SecretState};
 pub mod drag_out;
 pub use drag_out::{DragImage, DragItem, DragOperation, DragOutcome};
 pub mod windows;
+#[cfg(target_os = "macos")]
+#[doc(hidden)]
+pub use macos::{appearance as macos_appearance, panel_bridge as macos_panel_bridge};
 pub use window::WindowHandle;
 pub use windows::{AnyWindowSpec, ConfiguredWindowOptions, Display, MacWindowOptions, RunOptions, WindowOptions, WindowSpec};
 pub use winit::raw_window_handle;
@@ -201,6 +215,7 @@ pub use el::{
     row, spacer, text, text_input,
 };
 pub use growth::{GROWTH, StreamEdge, edge};
+pub use latest::Latest;
 pub use live::{Live, LiveText, Tween};
 pub use memo::memo;
 pub use pixels::Pixels;
@@ -217,8 +232,8 @@ pub use native_surface::{NativeSurface, SurfaceFit};
 pub use system_material::{MAX_NATIVE_MATERIALS, SystemMaterial};
 pub use video::{MediaRequest, MediaSource, Player, PlayerState, Video};
 pub use recorder::{FakeMicrophone, Level, MicPermission, RecordFormat, Recorder, RecorderState, Recording};
-pub use text::{Icon, Link, LinkPaint, Span, TextCase, TextHighlight};
+pub use text::{FontSmoothing, Icon, Link, LinkPaint, Span, TextCase, TextHighlight};
 pub use theme::Theme;
 pub use tok::{Family, OpticalSize, TextStyle};
-pub use tooling::{AppSpec, Chrome, extra_args, run, run_windows, run_windows_with, run_windows_with_args, run_with, set_app_id,
+pub use tooling::{AppSpec, Chrome, extra_args, is_headless, run, run_windows, run_windows_with, run_windows_with_args, run_with, set_app_id,
     try_run_windows_with, try_run_windows_with_args};

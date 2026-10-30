@@ -69,6 +69,7 @@ fn default_faces_keep_batch_c_pixels() {
     // Capture the existing sans/mono paths, including mono rich spans, at both densities.
     for scale in [1.0, 2.0] {
         let mut system = TextSystem::new(&[INTER, PLEX], ("Inter", "IBM Plex Mono"));
+        system.set_font_smoothing(rune::FontSmoothing::On);
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         for style in [TextStyle::new(13.0, 400.0), TextStyle::new(13.0, 400.0).mono()] {
             let spans = [Span { mono: true, ..Span::new(6, 10) }];
@@ -82,8 +83,8 @@ fn default_faces_keep_batch_c_pixels() {
             }
         }
         system.atlas.data.hash(&mut hash);
-        // Captured on batch C (a68df8f), before adding the named-family selector.
-        let expected = if scale == 1.0 { 8029160967625528053 } else { 2969448254494463802 };
+        // Re-baselined for `FontSmoothing::On` (CoreGraphics pipeline) once Calibrated was removed.
+        let expected = if scale == 1.0 { 17045220814369067823 } else { 10933675232581112092 };
         assert_eq!(hash.finish(), expected, "sans/mono pixels changed at {scale}×");
     }
 }

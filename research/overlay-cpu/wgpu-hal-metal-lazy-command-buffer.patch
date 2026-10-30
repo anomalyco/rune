@@ -1,0 +1,254 @@
+diff --git a/src/metal/command.rs b/src/metal/command.rs
+index ba41a63..5993441 100644
+--- a/src/metal/command.rs
++++ b/src/metal/command.rs
+@@ -153,6 +153,35 @@ impl Encoder<'_> {
+ }
+ 
+ impl super::CommandEncoder {
++    /// The Metal command buffer, made now if this encoding hasn't needed one yet.
++    fn cmd_buf(&mut self) -> Retained<ProtocolObject<dyn MTLCommandBuffer>> {
++        if self.raw_cmd_buf.is_none() {
++            assert!(self.begun);
++            let queue = &self.queue_shared.raw;
++            let retain_references = self.shared.settings.retain_command_buffer_references;
++            let relay = self.queue_shared.relay.get();
++            let label = self.label.as_deref();
++            let raw = autoreleasepool(move |_| {
++                let cmd_buf_ref = if retain_references {
++                    queue.commandBuffer()
++                } else {
++                    queue.commandBufferWithUnretainedReferences()
++                }
++                .unwrap();
++                if let Some(label) = label {
++                    cmd_buf_ref.setLabel(Some(&NSString::from_str(label)));
++                }
++                if let Some(relay) = relay {
++                    let expected = relay.next_release_value.load(atomic::Ordering::Acquire);
++                    cmd_buf_ref.encodeWaitForEvent_value(relay.event.as_ref(), expected);
++                }
++                cmd_buf_ref.to_owned()
++            });
++            self.raw_cmd_buf = Some(raw);
++        }
++        self.raw_cmd_buf.clone().unwrap()
++    }
++
+     pub fn raw_command_buffer(&self) -> Option<&ProtocolObject<dyn MTLCommandBuffer>> {
+         self.raw_cmd_buf.as_deref()
+     }
+@@ -161,7 +190,7 @@ impl super::CommandEncoder {
+         if self.state.blit.is_none() {
+             self.leave_acceleration_structure_builder();
+             debug_assert!(self.state.render.is_none() && self.state.compute.is_none());
+-            let cmd_buf = self.raw_cmd_buf.as_ref().unwrap();
++            let cmd_buf = &self.cmd_buf();
+ 
+             // This code path is currently unused since the written timestamp is always 0.
+             // We should see if we can get it working again, if not remove the code.
+@@ -271,7 +300,7 @@ impl super::CommandEncoder {
+                     && self.state.compute.is_none()
+                     && self.state.blit.is_none()
+             );
+-            let cmd_buf = self.raw_cmd_buf.as_ref().unwrap();
++            let cmd_buf = &self.cmd_buf();
+             autoreleasepool(|_| {
+                 self.state.acceleration_structure_builder =
+                     cmd_buf.accelerationStructureCommandEncoder().to_owned();
+@@ -500,32 +529,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
+             return Err(crate::DeviceError::Lost);
+         }
+ 
+-        let raw = autoreleasepool(move |_| {
+-            let cmd_buf_ref = if retain_references {
+-                queue.commandBuffer()
+-            } else {
+-                queue.commandBufferWithUnretainedReferences()
+-            }
+-            .unwrap();
+-            if let Some(label) = label {
+-                cmd_buf_ref.setLabel(Some(&NSString::from_str(label)));
+-            }
+-            // If strict event sync is enabled on this queue, gate the
+-            // CB on the relay event at the value the next submit will
+-            // signal. The CB pauses at the start until the relay fires.
+-            if let Some(relay) = relay {
+-                let expected = relay.next_release_value.load(atomic::Ordering::Acquire);
+-                cmd_buf_ref.encodeWaitForEvent_value(relay.event.as_ref(), expected);
+-            }
+-            cmd_buf_ref.to_owned()
+-        });
+-
+-        // Queries should either be closed out, or cleared in `discard_encoding`.
+-        // This assertion is here mainly to facilitate comparison with the other
+-        // backends, which clear in `begin_encoding` rather than `discard_encoding`.
+-        debug_assert!(self.state.pending_timer_queries.is_empty());
+-
+-        self.raw_cmd_buf = Some(raw);
++        let _ = (queue, retain_references, relay);
++        self.label = label.map(str::to_owned);
++        self.begun = true;
+ 
+         Ok(())
+     }
+@@ -542,7 +548,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+             encoder.endEncoding();
+         }
+         self.state.pending_timer_queries.clear();
+-        let had_command_buffer = self.raw_cmd_buf.is_some();
++        let had_command_buffer = std::mem::take(&mut self.begun);
+         // Clear the Option first so the underlying `metal::CommandBuffer` is
+         // dropped before we update the counter.
+         self.raw_cmd_buf = None;
+@@ -566,8 +572,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
+         debug_assert!(self.state.compute.is_none());
+         debug_assert!(self.state.pending_timer_queries.is_empty());
+ 
++        self.begun = false;
+         Ok(super::CommandBuffer {
+-            raw: self.raw_cmd_buf.take().unwrap(),
++            raw: self.raw_cmd_buf.take(),
+             queue_shared: Arc::clone(&self.queue_shared),
+         })
+     }
+@@ -1049,7 +1056,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+             if let Some(mv) = desc.multiview_mask {
+                 descriptor.setRenderTargetArrayLength(32 - mv.leading_zeros() as usize);
+             }
+-            let raw = self.raw_cmd_buf.as_ref().unwrap();
++            let raw = &self.cmd_buf();
+             let encoder = raw.renderCommandEncoderWithDescriptor(&descriptor).unwrap();
+             if let Some(mv) = desc.multiview_mask {
+                 // Most likely the API just wasn't thought about enough. It's not like they ever allow you
+@@ -1260,14 +1267,16 @@ impl crate::CommandEncoder for super::CommandEncoder {
+     unsafe fn begin_debug_marker(&mut self, group_label: &str) {
+         if let Some(encoder) = self.active_encoder() {
+             encoder.pushDebugGroup(&NSString::from_str(group_label));
+-        } else if let Some(ref buf) = self.raw_cmd_buf {
++        } else if self.begun {
++            let buf = self.cmd_buf();
+             buf.pushDebugGroup(&NSString::from_str(group_label));
+         }
+     }
+     unsafe fn end_debug_marker(&mut self) {
+         if let Some(encoder) = self.active_encoder() {
+             encoder.popDebugGroup();
+-        } else if let Some(ref buf) = self.raw_cmd_buf {
++        } else if self.begun {
++            let buf = self.cmd_buf();
+             buf.popDebugGroup();
+         }
+     }
+@@ -1689,7 +1698,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+         debug_assert!(self.state.compute.is_none());
+         debug_assert!(self.state.render.is_none());
+ 
+-        let raw = self.raw_cmd_buf.as_ref().unwrap();
++        let raw = &self.cmd_buf();
+ 
+         autoreleasepool(|_| {
+             // TimeStamp Queries and ComputePassDescriptor were both introduced in Metal 2.3 (macOS 11, iOS 14)
+@@ -1897,18 +1906,19 @@ impl crate::CommandEncoder for super::CommandEncoder {
+         command_buffers: &[&super::CommandBuffer],
+         dependencies: &[&super::AccelerationStructure],
+     ) {
+-        let Some(first_command_buffer) = command_buffers.first() else {
++        let Some(first_raw) = command_buffers.iter().find_map(|b| b.raw.as_ref()) else {
+             return;
+         };
+         let desc = MTLResidencySetDescriptor::new();
+-        desc.setLabel(first_command_buffer.raw.label().as_deref());
+-        let residency_set = first_command_buffer
+-            .raw
++        desc.setLabel(first_raw.label().as_deref());
++        let residency_set = first_raw
+             .device()
+             .newResidencySetWithDescriptor_error(&desc)
+             .unwrap();
+         for command_buffer in command_buffers {
+-            command_buffer.raw.useResidencySet(&residency_set);
++            if let Some(raw) = &command_buffer.raw {
++                raw.useResidencySet(&residency_set);
++            }
+         }
+         for dependency in dependencies {
+             residency_set.addAllocation(ProtocolObject::from_ref(&*dependency.raw));
+@@ -1965,7 +1975,8 @@ impl Drop for super::CommandBuffer {
+         // `command_buffer_created_not_submitted` is usually decremented when the command
+         // buffer is submitted. But if we're dropping a command buffer that was never
+         // submitted, we need to decrement the count here.
+-        let status = self.raw.status();
++        let Some(raw) = &self.raw else { return };
++        let status = raw.status();
+         if status == MTLCommandBufferStatus::NotEnqueued
+             || status == MTLCommandBufferStatus::Enqueued
+         {
+diff --git a/src/metal/device.rs b/src/metal/device.rs
+index d7287b9..9ba3335 100644
+--- a/src/metal/device.rs
++++ b/src/metal/device.rs
+@@ -773,6 +773,8 @@ impl crate::Device for super::Device {
+             shared: Arc::clone(&self.shared),
+             queue_shared: Arc::clone(&desc.queue.shared),
+             raw_cmd_buf: None,
++            begun: false,
++            label: None,
+             state: super::CommandState::default(),
+             temp: super::Temp::default(),
+             counters: Arc::clone(&self.counters),
+diff --git a/src/metal/mod.rs b/src/metal/mod.rs
+index e227590..831e0f0 100644
+--- a/src/metal/mod.rs
++++ b/src/metal/mod.rs
+@@ -741,8 +741,9 @@ impl crate::Queue for Queue {
+                     fence_sync.1.notify_all();
+                 });
+ 
+-                let raw = match command_buffers.last() {
+-                    Some(&cmd_buf) => cmd_buf.raw.clone(),
++                let last = command_buffers.iter().rev().find_map(|b| b.raw.clone());
++                let raw = match last.clone() {
++                    Some(raw) => raw,
+                     None => {
+                         // We do not bother adjusting `command_buffer_created_not_submitted`
+                         // because we immediately commit this buffer.
+@@ -775,14 +776,16 @@ impl crate::Queue for Queue {
+                 }
+ 
+                 // only return an extra one if it's extra
+-                match command_buffers.last() {
++                match last {
+                     Some(_) => None,
+                     None => Some(raw),
+                 }
+             };
+ 
+             for cmd_buffer in command_buffers {
+-                cmd_buffer.raw.commit();
++                if let Some(raw) = &cmd_buffer.raw {
++                    raw.commit();
++                }
+                 // One command buffer per `end_encoding` call moves from the
+                 // "created but not yet submitted" bucket into the submitted
+                 // set, so update the counter.
+@@ -1354,6 +1357,10 @@ pub struct CommandEncoder {
+     shared: Arc<AdapterShared>,
+     queue_shared: Arc<QueueShared>,
+     raw_cmd_buf: Option<Retained<ProtocolObject<dyn MTLCommandBuffer>>>,
++    /// Between `begin_encoding` and `end_encoding`/`discard_encoding`; the Metal command
++    /// buffer is made on first use, so an encoding that records nothing commits nothing.
++    begun: bool,
++    label: Option<String>,
+     state: CommandState,
+     temp: Temp,
+     counters: Arc<wgt::HalCounters>,
+@@ -1372,7 +1379,7 @@ unsafe impl Sync for CommandEncoder {}
+ 
+ #[derive(Debug)]
+ pub struct CommandBuffer {
+-    raw: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
++    raw: Option<Retained<ProtocolObject<dyn MTLCommandBuffer>>>,
+     queue_shared: Arc<QueueShared>,
+ }
+ 

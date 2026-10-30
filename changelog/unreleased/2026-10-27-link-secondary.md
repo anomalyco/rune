@@ -1,1 +1,0 @@
-- `El::on_link_secondary` and `Markdown::on_link_secondary` take a right-click (or macOS control-click) on a link's glyphs with its id and point, for a per-link menu. The link takes the press from ancestors' `on_secondary_press` and the text's Copy menu; elsewhere in the text they still get it.

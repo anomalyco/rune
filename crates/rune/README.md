@@ -78,11 +78,10 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     edges, so they have no seams. No atlas, so a shape can change every frame (`examples/shapes`).
     Translucent strokes blend twice where segments overlap at a joint; fills do not overlap.
   - Every instance has a soft-edge clip (`clip_soft`, `clip_fade`).
-  - Colour is premultiplied linear and drawn into an sRGB target by default (linear-light blending),
-    with a CoreText-calibrated luminance/scale glyph coverage exponent. Windows and overlays that want
-    CSS / Core Animation gamma-space compositing for faint glows, blurs, shadows, images and video over
-    dark canvases can opt into `.srgb_blend(true)` on `App`, `WindowSpec` or `ConfiguredOverlay`,
-    which encodes premultiplied colours in sRGB (`Color::premul_srgb`) and renders into a non-sRGB
+  - Windows blend in sRGB-encoded space by default, as Core Animation, CoreText and CSS do.
+    `.srgb_blend(false)` on `App`, `WindowSpec` or `ConfiguredOverlay` opts out into linear-light
+    blending (colour premultiplied in linear light, drawn into an sRGB target). sRGB blending
+    encodes premultiplied colours in sRGB (`Color::premul_srgb`) and renders into a non-sRGB
     target view (`format.remove_srgb_suffix()`). With a `Compositor`, `Frame::srgb_blend()` and `Frame::format` tell it which encoding and view its own passes must match.
     A runtime the app draws itself (`Runtime::with_text`, a headless snapshot) opts in with
     `Runtime::set_srgb_blend(true)`, then draws with `Renderer::set_srgb_blend(true)` into a
@@ -92,8 +91,27 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     changes its view).
   - The Retina scale is applied throughout.
 - **Text** (`text.rs`): Parley 0.12 lays out embedded Inter 4.1 (OFL, `assets/`). swash 0.2
-  rasterises unhinted, centered, .1-point-emboldened outlines into a 2048² R8 shelf atlas with four
-  horizontal subpixel positions, a 1 px zeroed border per glyph, and pixel-snapped baselines. The
+  outlines are rasterised through a port of CoreGraphics' glyph pipeline into a 2048² R8 shelf
+  atlas, at CoreGraphics' subpixel pen steps, with a 1 px zeroed border per glyph and
+  pixel-snapped baselines.
+  **Font smoothing** (`FontSmoothing`, `text/coretext_match.rs`) picks how glyphs are rasterised
+  and placed, app-wide with `App::new(spec).font_smoothing(FontSmoothing::Off)` (or
+  `WindowSpec::font_smoothing`), or while running with `Tx::set_font_smoothing(mode)`, which
+  rasterises the new mode's glyphs on the next frame (each mode keeps its own atlas entries, so a
+  switch back is free). Modes:
+  - `On`, the default on macOS: CoreText's text with font smoothing on. Apple's pipeline (pens
+    floored to CoreGraphics' subpixel step, which depends on the ppem: fifths of a device pixel
+    below 8⅓ ppem, quarters to 11.1, thirds to 16.7, halves to 33.3 and whole pixels above; coverage
+    drawn as is; sRGB blending; CoreGraphics' curve flattening and its y autohinter at 7–18 ppem)
+    plus font smoothing's outline dilation, a radius set by the ink's luminance and the device
+    ppem (`text/macos_smoothing.rs`, `ApplePipeline::SMOOTHED`).
+  - `Off`: what macOS browsers draw for `-webkit-font-smoothing: antialiased`, CoreText with font
+    smoothing off, and the default on every other platform (Linux, Windows, the web). Apple's
+    pipeline without the dilation (`ApplePipeline::UNSMOOTHED`); lighter than `On`.
+  Both work on every OS, since they are arithmetic on outlines. Blending is separate
+  (`srgb_blend`).
+  `cargo run -p rune --example coretext_compare [-- --smoothing on|off]` measures
+  each mode against CoreText references (`tests/coretext/`, `scripts/coretext-reference.sh`). The
   atlas recycles a two-page steady ping-pong pool across frames without zeroing 4 MiB buffers,
   spills to overflow pages when a single frame exceeds one page, and never caches an allocation
   failure as an empty glyph. Colors share the same atlas masks.
@@ -262,8 +280,10 @@ policy changes are applied in the same mutation phase.
 - **Icons** (`icon(&Icon, size)`): SVG icon bodies (as in `@opencode/ui`'s catalog) rasterised into
   the glyph atlas.
 - **Themes as data** (`theme.rs`): `Theme::from_json(src, dark)` reads named tokens (hex, rgba or
-  references, plus numbers). `"blend": {"mode": "srgb", "over": token}` re-solves translucent tokens so
-  linear-light blending matches a browser's sRGB blending (`srgb_equivalent`, `Theme::alpha`). An app's own theme lives
+  references, plus numbers). `"blend": {"mode": "srgb", "over": token}` says translucent tokens are
+  authored for a browser's sRGB blending: they resolve as authored in a window that blends in sRGB
+  (the default) and re-solved over `over` in one that blends in linear light, following the mode
+  of the window building the view (`theme::blends_srgb`, `theme::for_blend`, `Theme::alpha`). An app's own theme lives
   in the app; core ships only the format.
 - **Scrolling** (`.scroll(ScrollSpec { stick_bottom })`): a runtime-owned fractional offset, wheel 1:1,
   fling decay, and follow-the-end. A new viewport opens at its end on its first frame.
@@ -485,7 +505,7 @@ std::thread::spawn(move || {
     handle.update(|s, tx| ..); // change state on the UI thread; commits on the next frame
     handle.close();            // as the close button (on_close runs)
     handle.minimize();         // as the minimize button
-    handle.quit();             // run returns
+    handle.quit();             // run returns; on web, unmounts
 });
 app.run();
 ```
@@ -588,6 +608,8 @@ app.run();
 
 A small app puts its first window, with content, on screen about 300 ms after `open` on Apple silicon.
 The full page, with the measurement method, is "Launch fast" on the docs site (`site/src/pages.tsx`).
+Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`); `scripts/app-audit <repo>` greps an
+app for the patterns it lists.
 
 - **`rune::prewarm_gpu()` first in `main`.** On macOS it makes the adapter, device and uber pipeline on a thread
   while AppKit starts; the first window or overlay opened at launch takes them, waiting if the thread is still
@@ -607,9 +629,16 @@ The full page, with the measurement method, is "Launch fast" on the docs site (`
   The first view build and layout run inside creation, right after the window-created callbacks, so keep the initial
   state, `view` and `on_window` cheap.
 - **Defer the rest to `on_ready`.** It runs once per native creation after the first frame is ready (for a
-  launcher, while hidden). Capture `app.handle()` and call `handle.update(|s, tx| ..)` there to start status
+  launcher, while hidden). A window that isn't on screen (covered, occluded, hidden or on another Space) doesn't
+  wait to draw: it runs at the first frame skipped for that, or a second after the window opens. Capture `app.handle()` and call `handle.update(|s, tx| ..)` there to start status
   items, HUDs, secondary windows, network and indexing; updates run on the UI thread even with no window showing.
   There is no state-level first-frame hook yet.
+- **A launcher can wait for readiness.** With `RUNE_READY_DIR` set, the process writes
+  `$RUNE_READY_DIR/<bundle id>.<pid>` (the main bundle's identifier on macOS, else the executable's name) right
+  after its first `on_ready` returns, and removes it when it exits normally. It's one line of JSON,
+  `{"pid":123,"bundle_id":"com.example.app","ready_ms":412,"rune":"0.1.0"}`, with `ready_ms` counted from the
+  process's start; the directory is made 0700 if it's missing. A process killed outright leaves its file, so treat
+  one whose PID isn't running as stale. Without the variable nothing is written.
 - **Keep the first second still.** Rune animates nothing then, so every frame is the app's. Land state that
   arrives right after launch (a system setting, a first network answer) with `tx.instant()`, or don't animate it.
   One settings window's launch fade drew about 85 frames in its first second instead of 4 to 8, and drawing back to
@@ -640,6 +669,44 @@ The full page, with the measurement method, is "Launch fast" on the docs site (`
 | Cold shader cache, `Renderer::new` alone (10 rounds) | 232 | 85 |
 
 Absolute times were high because the machine was busy; the differences are what matter.
+
+### Requests off the main thread (`rune::Latest`)
+
+A search box, a mention list or a path completer asks once per keystroke and wants only the newest
+answer. Doing it in the handler blocks the window for the whole round trip; debug builds warn when a
+handler or `poll` spends 8 ms waiting. `Latest<T>` runs the request on a worker and lands the newest
+answer:
+
+```rust
+// init: build it once, with its debounce.
+results: Latest::default().debounce(Duration::from_millis(60)),
+// setup: the waker runs `poll` when an answer lands. Pending state and debounce stay.
+s.results.set_waker(waker);
+// A handler, on every keystroke:
+s.results.request(query.clone(), |q| index.search(&q));
+// poll: true only when an answer landed.
+let Some(hits) = s.results.take() else { return false };
+s.hits = hits;
+true
+```
+
+- **Latest wins.** Each request supersedes the earlier ones. One that hasn't started never runs; one
+  already running finishes, and its answer is dropped, even if it finishes after the newer one.
+- **One wake per answer.** The waker fires once when an answer lands, and `take` returns it once, so
+  `poll` returns true once and an idle window stays idle. `is_pending` drives a spinner.
+- **Skip without waking.** `request_opt(input, |q| -> Option<T>)` lands nothing when the work
+  returns `None` and doesn't wake the window. It still supersedes older requests, so their
+  answers stay dropped.
+- **Call it from `poll`.** `request_if_changed(&key, |k| ..)` does nothing when `key == ` the last
+  such request's key (`K: Clone + PartialEq`), so work isn't restarted nor its debounce pushed
+  back. `request`, `request_opt` and `cancel` forget the key.
+- **Debounce** (optional) waits for that long without a newer request before starting one.
+- **No thread per request.** Up to four shared workers, started on demand, exit after ten idle
+  seconds. On the web the work runs on the main thread from `spawn_local`, after the debounce.
+- **Cancel** drops pending and running requests; dropping the `Latest` cancels it. State outlives a
+  closed window, so call `cancel` from `App::on_close` to stop requests on close.
+
+Only the closure runs on the worker; the answer reaches state in `poll`, on the UI thread.
 
 ### Relaunching a Mac app (`scripts/mac-app`, `rune-mac`)
 
@@ -934,6 +1001,14 @@ font, name CSS's `ui-monospace` in it: `families: ("Inter", "ui-monospace")`. It
 the same families as `Family::SystemMono`, and the rest of the list follows it, so
 `"ui-monospace, Menlo"` falls back to Menlo where none is installed. Inline code then
 matches a code block set in `Family::SystemMono`.
+
+`tx.set_font_families(sans, mono)` swaps what's behind the slots while the app runs, for a
+UI or code font picker; it takes the same lists as `AppSpec::families`. Every window and
+overlay follows on its next frame, and one opened later starts in them. Each drops the layouts it shaped in the old families,
+re-runs memoized subtrees, lays out again and draws one frame. `rune::text::measure` follows
+too. A cache of measured sizes outside Rune should key on `rune::text::font_epoch()`. A family
+that isn't installed falls back as it would at launch, and asking for the families the slots
+already hold costs nothing.
 
 Optical sizing defaults to each run's point size, including rich spans with a
 different size. An explicit `opsz` variation wins over the default; `.optical_size`
@@ -1589,11 +1664,15 @@ draws:
 let scale = env.scale; // the window's device pixels per point
 let mark = cache.svg(svg_bytes, 16.0, scale);               // fits 16 pt square, crisp at 2×
 let any = cache.load_mime(bytes, "image/svg+xml", 16.0, scale); // from a data URL's MIME type
-let file = cache.file("assets/logo.svg", 48.0, scale);      // read on the worker; not on web
+let file = cache.file("assets/logo.svg", 48.0, scale);      // read on the worker; fetched on web
+let photo = cache.url("https://example.com/p.avif", 96.0, scale); // web: the browser fetches and decodes
 ```
 
 `cache.file` treats `.svg` and `.svgz` paths (or SVG content) as vectors and decodes other
-files like `load`. `cache.load` recognises SVG by its content and rasterizes it at twice its
+files like `load`. On web, `cache.file` and `cache.url` fetch the URL (relative to the page) and
+let the browser decode it off the main thread, so WebP and AVIF work there; SVG still rasterizes
+through resvg. On native `cache.url` takes a path or `file:` URL only: Rune has no HTTP client,
+so fetch remote bytes yourself and call `load`. `cache.load` recognises SVG by its content and rasterizes it at twice its
 own size. SVG text needs fonts resvg isn't given, so convert text to paths. With the feature
 off, SVG images resolve to `Image::error`.
 
@@ -1879,6 +1958,9 @@ For static disabled styling, `El::dim(alpha)` distributes a fixed alpha to each 
 paint in the built subtree, including fills, strokes, text, icons, images and native surfaces.
 Call it after adding children. It neither changes inherited/hit-test opacity nor introduces
 layers. Rune-kit uses this for disabled controls; normal container `opacity` still isolates.
+A dimmed box with a solid fill fades as CSS `opacity` fades it: its outer shadows stay outside
+it, and its fill and gradient fade as one. Content drawn over it (a label, an icon) still fades
+on its own, so it shows a little of the faded fill through it where a layer would not.
 
 The manual kit-gallery `disabled_controls_gpu_cost` benchmark measures the whole GPU frame
 for disabled controls: leaf dimming allocates no layer targets or passes and matches a flat
@@ -1960,7 +2042,8 @@ remain rectangular, including visually clipped corners. The 128-byte instance st
 in attribute 7 `fade[3]`.
 
 For a known opaque neutral backdrop, use `theme::srgb_equivalent(white.alpha(authored_alpha), bg)`
-to match AppKit's sRGB source-over in Rune's linear renderer. Recompute from the current authored
+to match AppKit's sRGB source-over in a window that blends in linear light (`srgb_blend(false)`);
+`theme::for_blend` applies it only in such a window. Recompute from the current authored
 alpha during animation. This changes only alpha and adds no GPU work. It is exact for neutral
 foreground/background pairs apart from quantization, but chromatic pairs are approximate;
 unknown/translucent backdrops, group opacity and overlapping paints require different math.
@@ -2247,7 +2330,8 @@ $L --desktop examples/launcher/backdrop.png --script examples/launcher/scripts/d
 
 `App::playground` is a storybook built into the window. ⌘⇧D (Ctrl+Shift+D off macOS) opens it;
 in debug builds a 26 pt bar along the bottom opens it too. Its stories are the app's scenes plus
-its own pages and `Story`s, grouped by the part before a `/` in their names. One shows at a time on
+its own pages and `Story`s, grouped by the path in their names: `"Sidebar/Filter buttons/Compact"`
+lists Compact in Filter buttons, a group inside Sidebar, indented a step. One shows at a time on
 a plain stage, live and interactive, with a column beside it for that story's controls and
 triggers.
 
@@ -2286,22 +2370,43 @@ App::new(spec).playground(
   make its stories in a loop, each capturing its row. In a hot build, views that are fns or
   closures capturing nothing are patched live; a closure that captures runs as built.
 - **Variants.** `Story::variant(name, |p| ..)` and `Playground::variant(scene, name, |s| ..)` list
-  variants in the side column; 1–9 pick one, which makes the state again on it. A story starts on
-  its first variant, and digits it has no variant for reach the stage.
-- **Keys.** ↑↓ walk the group headers and the stories that show, J K skip the headers, ⌘↑ ⌘↓ go
-  to the first and last. ← → ↵ on a header fold or unfold its group, as a click on it does.
-  Folded groups stay folded while the app runs; `Playground::folds(load, save)` keeps them from
-  one run to the next (in `rune::prefs::Prefs`, say).
-  → or Tab move into the side column and ← out of it, and Esc (after the stage has had it) or
-  ⌘⇧D leaves. The side column lists each variant's and trigger's key and ends with a hint.
+  variants in the side column; with the keyboard there, 1–9 pick one, which makes the state again
+  on it. A story starts on its first variant.
+- **Groups.** Each `/` in a story's path nests a group, as deep as the path goes, and every
+  level folds: click its header, or ← → ↵ on it. Folds last while the app runs;
+  `Playground::folds(load, save)` keeps them from one run to the next (in `rune::prefs::Prefs`,
+  say), each group by its path (`"Sidebar/Filter buttons"`). `Playground::start_folded(true)`
+  starts every group folded but the open story's, which unfold each time the playground opens,
+  a link at launch included; with it, `folds` saves the groups left open instead. Groups keep
+  the order they first appear in, scenes first; `Playground::group_order(&["Prototypes",
+  "Fixtures"])` lists those top-level groups first, scenes and stories alike.
+- **Filter.** A field over the list keeps the stories whose path has every word typed, and the
+  groups above them, unfolded. / or a click focuses it, and it edits as any field does. ↓ goes
+  down to the first match and gives the list the keyboard, where ↑ from the first match goes
+  back up; Return opens the first match; Esc clears it, then leaves.
+- **Keys.** The keyboard is in one column at a time, the list, the stage or the side column, and
+  a click in a column moves it there. The column that has it shows its selection in the accent
+  (the stage a ring), and the hint under the side column lists its keys.
+  - In the list, ↑↓ walk the headers and the stories that show, J K skip the headers, ⌘↑ ⌘↓ go
+    to the first and last. ← on a story goes to its group; on a header it folds the group, then
+    goes to the one around it. → unfolds a header, then steps into it. R replays and trigger
+    letters run. → on a story or Tab moves to the side column, ⇧Tab to the stage, and Esc (after
+    the stage has had it) or ⌘⇧D leaves.
+  - In the side column, ↑↓ move between controls, 1–9 pick a variant, trigger letters run, and
+    ←, Tab or Esc go back to the list.
+  - On the stage, keys are the story's: its focused element's, then the stage's `on_key`. Esc it
+    leaves goes back to the list.
+  - Keys the list and side column leave, ⌘-chords and digits included, go to the stage's
+    `on_key` wherever the keyboard is, so a story's shortcuts work as soon as it opens.
+
   `.shortcut(None)` turns the shortcut off; `tx.open_playground()` opens it from the app.
-  `Playground::typing(|s| ..)` gives the stage's `on_key` every key first, for a field drawn in
-  it.
+  `Playground::typing(|s| ..)` gives the stage's `on_key` every key first, wherever the keyboard
+  is, for a field drawn in it.
 - **Keys for side controls.** `Story::side_keys(view, key)` (or `Playground::side_keys(scene,
   view, key)`) is `.side(view)` for controls that take keys. → or Tab from the list puts the
   keyboard on them, `view` gets `active: true` while it's there to mark what the keys move,
-  and `key` gets each key first. Esc and Tab always leave; ← doesn't. Keys it leaves work as
-  elsewhere in the side column. For knobs it's one line:
+  and `key` gets each key first, only while the keyboard is there. Esc and Tab always leave; ←
+  doesn't. Keys it leaves work as elsewhere in the side column. For knobs it's one line:
   `.side_keys(|s, active, cx| rune_knobs::inline(&s.knobs, GROUPS, style(cx), lens, active), rune_knobs::side_key(GROUPS, lens))`,
   where ↑↓ pick a knob and ←→ step it.
 - **The real state.** `Playground::fresh(|real| ..)` starts scenes from the real state and
@@ -2374,14 +2479,15 @@ grouped list, and a knobs column) maps onto `App::playground` like this:
 | ------------------------------------------- | ---------------------------------------------------------------------- |
 | a story type implementing the trait         | `Story::new(name, init, view)`, or `Playground::page` for real state   |
 | a registered table of stories               | a loop of `Story::new(row.path, move \|\| .., move \|s, cx\| ..)`, closures capturing the row |
-| `group()` and `name()`                      | one name, `"Group/Name"`; groups keep the order they first appear in   |
+| `group()` and `name()`                      | one path, `"Group/Name"` or `"Group/Subgroup/Name"`; groups keep the order they first appear in, or `Playground::group_order` |
 | the story's keys (`Action`s)                | `Story::trigger(key, label, step)`, or `trigger_tx` for a `Fn(&mut S, &mut Tx)`; `'r'` runs after each replay |
 | timed steps after a key                     | `Play::after(secs, step)`, on the logical clock                        |
 | the knobs column                            | `.side(view)`: `rune_knobs::inline` fills the column's width; `actions` fits it, up to 300 pt |
 | keys for the knobs                          | `.side_keys(view, rune_knobs::side_key(groups, lens))`: ↑↓ pick a knob, ←→ step it, Esc leaves |
 | a choice knob flipped with 1–9              | `Story::variant(name, apply)`; 1–9 pick, and picking remakes the state |
 | setup from the app's state                  | `Story::from_real(name, derive, view)`, or `Playground::fresh`         |
-| collapsible groups                          | built in: click a header, or ← → ↵ on it; `Playground::folds(load, save)` keeps them between runs |
+| collapsible groups                          | built in at every level: click a header, or ← → ↵ on it; `Playground::folds(load, save)` keeps them between runs, `start_folded(true)` starts them folded |
+| a search field over the list                | built in: / focuses it, and it keeps the stories whose path matches    |
 | a key sheet                                 | built in: the side column shows each key beside its row, and a hint    |
 | open, leave, Esc, ⌘⇧D                       | built in: ⌘⇧D, Esc, Back, and `tx.open_playground()`                   |
 | a link to a story                           | `rune::playground::slug(path)`, and `tx.open_playground_at(slug, variant)` from `App::on_open_url` |

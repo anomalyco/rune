@@ -52,3 +52,46 @@ fn disabled_controls_produce_no_layer_scopes() {
         }
     }
 }
+
+/// A disabled contrast button on the page, as the browser draws `opacity: 0.4` over it: 40% of
+/// the fill under its sheen, and none of its shadows through it.
+#[test]
+fn a_disabled_contrast_button_fades_as_the_browser_does() {
+    use rune::color::srgb_encode;
+    use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
+    fn view(_: &(), cx: &mut Cx<()>) -> El {
+        let k = rune_theme_opencode::kit(cx.system_dark());
+        let b = Button::new("Unlock").variant(ButtonVariant::Contrast).control_size(ControlSize::Large).disabled(true).build(k);
+        col().w_full().h_full().fill(k.c.bg_base).padding(10.0).child(b.w(200.0))
+    }
+    let (w, h) = (220u32, 48u32);
+    let gpu = Gpu::headless();
+    for dark in [false, true] {
+        let mut rt = Runtime::new((), view, (w as f32, h as f32), Env { system_dark: dark, scale: 1.0 });
+        rt.set_srgb_blend(true);
+        rt.frame(0.0);
+        rt.settle_all();
+        rt.frame(0.0);
+        let format = OFFSCREEN_FORMAT.remove_srgb_suffix();
+        let mut renderer = Renderer::new(&gpu.device, format);
+        renderer.set_srgb_blend(true);
+        let target = Offscreen::with_format(&gpu.device, w, h, format);
+        renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (w, h));
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        renderer.draw(&mut encoder, &target.view, rt.clear_color());
+        target.copy(&mut encoder);
+        renderer.submit(&gpu.queue, encoder);
+        let px = target.read(&gpu.device);
+        let k = rune::theme::with_blend(true, || rune_theme_opencode::kit(dark));
+        let byte = |c: f32| (srgb_encode(c) * 255.0).round();
+        let (fill, page) = (byte(k.c.bg_contrast.r), byte(k.c.bg_base.r));
+        let mix = |fg: f32, bg: f32, a: f32| a * fg + (1.0 - a) * bg;
+        // Inside the left padding, clear of the label, from the top of the button down.
+        for y in [16u32, 24, 32] {
+            let t = (y as f32 + 0.5 - 10.0) / 28.0;
+            let want = mix(mix(255.0, fill, 0.2 * (1.0 - t)), page, 0.4);
+            let got = px[((y * w + 15) * 4) as usize] as f32;
+            assert!((got - want).abs() <= 1.5, "dark {dark}, row {y}: {got} vs the browser's {want:.1}");
+        }
+    }
+}

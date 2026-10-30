@@ -1,15 +1,21 @@
 //! `Tx::launch`: a sent message's new row starts on the composer's text at its own size and
 //! travels one smooth path into its slot in the scroll view.
-use rune::{Cx, El, Env, GrowthSpec, Key, KeyEvent, Runtime, ScrollSpec, TextEdit, TextStyle, Tx, col, text, text_input};
+use rune::{Cx, El, Env, GrowthSpec, Key, KeyEvent, Runtime, ScrollSpec, TextEdit, TextStyle, Transition, Tx, col, text, text_input};
 
-struct State { draft: TextEdit, sent: Vec<String>, relaunch: bool, zoom: f32, ticks: u32 }
+struct State { draft: TextEdit, sent: Vec<String>, relaunch: bool, zoom: f32, ticks: u32, tray: bool, swap: bool, into_body: bool, tail: bool }
 
 fn view(s: &State, _: &mut Cx<State>) -> El {
     let mut rows = col().w_full().growth(GrowthSpec::default());
-    for (i, m) in s.sent.iter().enumerate() {
-        rows = rows.child(col().key(format!("msg-{i}")).w_full().py(8.0).items_end().child(text(m.clone()).key("body")));
+    let mut order: Vec<usize> = (0..s.sent.len()).collect();
+    if s.swap && order.len() > 1 { let n = order.len(); order.swap(n - 2, n - 1); }
+    for i in order {
+        let m = &s.sent[i];
+        let row = col().key(format!("msg-{i}")).w_full().py(8.0).items_end().child(text(m.clone()).key("body"));
+        // A new row's container entering with it, as a queue appears with its first prompt.
+        let tray = || col().key("tray").w_full().transition(Transition::scale(0.9).combined(Transition::opacity()));
+        rows = rows.child(if s.tray && i == 2 { tray().child(row) } else { row });
     }
-    rows = rows.child(text(format!("{}", s.ticks)).key("ticks"));
+    rows = rows.child(text(if s.tail { format!("{}\nand\nthe\nrest", s.ticks) } else { format!("{}", s.ticks) }).key("ticks"));
     let page = col().w_full().h_full()
         .child(col().key("scroll").w_full().grow(1.0).shrink().scroll(ScrollSpec { stick_bottom: true }).child(rows))
         .child(text_input(&s.draft, TextStyle::new(14.0, 400.0)).key("composer").w_full().h(60.0)
@@ -18,7 +24,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 let last = if s.relaunch { s.sent.len() - 1 } else { s.sent.len() };
                 if !s.relaunch { s.sent.push(s.draft.text.clone()); }
                 s.draft.clear();
-                tx.launch("composer", format!("msg-{last}"));
+                tx.launch("composer", if s.into_body { format!("msg-{last}/body") } else { format!("msg-{last}") });
             }));
     if s.zoom == 1.0 { return page; }
     // An app-wide zoom, as a whole window scaled about its centre.
@@ -33,7 +39,7 @@ fn app_at(relaunch: bool, zoom: f32) -> Runtime<State> {
     let mut draft = TextEdit::new("third");
     draft.focused = true;
     let sent = vec!["first".to_string(), "second".to_string()];
-    let mut rt = Runtime::new(State { draft, sent, relaunch, zoom, ticks: 0 }, view, (400.0, 300.0), Env::new(true, 2.0));
+    let mut rt = Runtime::new(State { draft, sent, relaunch, zoom, ticks: 0, tray: false, swap: false, into_body: false, tail: false }, view, (400.0, 300.0), Env::new(true, 2.0));
     rt.frame(0.0);
     rt
 }
@@ -157,5 +163,86 @@ fn a_launch_after_another_commit_in_its_frame_still_leaves_from_the_source() {
         let at: Vec<f32> = frames.iter().map(|(r, _)| r[axis]).collect();
         let total = at[at.len() - 1] - at[0];
         assert!(at.windows(2).all(|w| (w[1] - w[0]) * total.signum() >= -0.01), "axis {axis} turns back: {at:?}");
+    }
+}
+
+#[test]
+fn a_launch_into_an_entering_container_keeps_the_zoom_above_it() {
+    // The container's entrance scale is dropped while the row flies; the app's still zoom above
+    // it is not, so the row flies at the size it lands at and doesn't snap when the entrance ends.
+    let zoom = 1.6;
+    let mut rt = app_at(false, zoom);
+    rt.update(|s, _| s.tray = true);
+    rt.frame(0.0);
+    let mut frames = send(&mut rt);
+    frames.extend((0..120).map(|_| { rt.frame(1.0 / 120.0); rect(&rt, "body", Some("third")) }));
+    for (f, (r, t)) in frames.iter().enumerate() {
+        assert!((r[2] - t[2] * zoom).abs() < 0.01 && (r[3] - t[3] * zoom).abs() < 0.01, "frame {f}: drawn at the zoom: {r:?} vs {t:?}");
+    }
+    for axis in 0..2 {
+        let at: Vec<f32> = frames.iter().map(|(r, _)| r[axis]).collect();
+        let total = at[at.len() - 1] - at[0];
+        for w in at.windows(2) {
+            assert!((w[1] - w[0]) * total.signum() >= -0.01, "axis {axis} turns back: {at:?}");
+            assert!((w[1] - w[0]).abs() <= total.abs().max(20.0) / 10.0, "axis {axis} snaps: {at:?}");
+        }
+    }
+}
+
+#[test]
+fn a_launch_whose_row_reorders_mid_flight_slides_and_lands_without_a_lurch() {
+    // 0.13 s into the flight the new row moves above the one before it, as a steer the server
+    // takes up moves above the Working row. The launch targets the row, or a text inside it.
+    for into_body in [false, true] {
+        let mut rt = app(false);
+        rt.update(|s, _| s.into_body = into_body);
+        rt.frame(0.0);
+        rt.key(KeyEvent { key: Key::Enter, mods: Default::default() });
+        let frames: Vec<_> = (0..180).map(|f| {
+            if f == 16 { rt.update(|s, _| s.swap = true); }
+            rt.frame(1.0 / 120.0);
+            let passed = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("msg-1")).unwrap().rect;
+            (rect(&rt, "body", Some("third")), passed)
+        }).collect();
+        let ((last, end), _) = frames[frames.len() - 1];
+        assert_eq!(last, end, "into_body {into_body}: lands on its slid place");
+        let body: Vec<[f32; 4]> = frames.iter().map(|f| f.0.0).collect();
+        let passed: Vec<[f32; 4]> = frames.iter().map(|f| f.1).collect();
+        for (name, at, axes) in [("body", &body, 0..2), ("the passed row", &passed, 1..2)] {
+            for axis in axes {
+                let at: Vec<f32> = at.iter().map(|r| r[axis]).collect();
+                let steps: Vec<f32> = at.windows(2).map(|w| w[1] - w[0]).collect();
+                for (k, w) in steps.windows(2).enumerate() {
+                    assert!((w[1] - w[0]).abs() <= 4.0, "into_body {into_body}: {name} axis {axis} lurches {} pt at frame {}: {at:?}", w[1] - w[0], k + 1);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_launch_reaimed_while_the_scroll_view_corrects_under_it_keeps_its_speed() {
+    // The rows below grow while it flies, so sticking to the bottom scrolls it: part of its
+    // speed comes from offsets outside the scene, which the re-aimed path has to carry on.
+    for (at, into_body) in [(6, false), (8, false), (12, false), (16, false), (8, true)] {
+        let mut rt = app(false);
+        rt.update(|s, _| { s.into_body = into_body; for k in 0..12 { s.sent.insert(0, format!("earlier {k}")); } });
+        for _ in 0..60 { rt.frame(1.0 / 120.0); }
+        rt.key(KeyEvent { key: Key::Enter, mods: Default::default() });
+        let body: Vec<[f32; 4]> = (0..40).map(|f| {
+            if f == 1 { rt.update(|s, _| s.tail = true); }
+            if f == at { rt.update(|s, _| s.swap = true); }
+            rt.frame(1.0 / 120.0);
+            rect(&rt, "body", Some("third")).0
+        }).collect();
+        for axis in 0..2 {
+            let steps: Vec<f32> = body.windows(2).map(|w| w[1][axis] - w[0][axis]).collect();
+            // How much its per-frame step changes: on the re-aim frame, between what the spring
+            // does on the frames either side, as a spring retargeted at its own speed would.
+            let change: Vec<f32> = steps.windows(2).map(|w| w[1] - w[0]).collect();
+            let (before, reaim, after) = (change[at - 3], change[at - 2], change[at - 1]);
+            assert!(reaim >= before.min(after) - 0.1 && reaim <= before.max(after) + 0.1,
+                "re-aimed at {at}, into_body {into_body}: axis {axis} step changes {before} then {reaim} then {after}: {steps:?}");
+        }
     }
 }

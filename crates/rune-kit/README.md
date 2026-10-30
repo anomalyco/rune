@@ -56,7 +56,8 @@ k.radius.sm = 3.0;
 ```
 
 Layers step OKLab lightness away from `bg`; borders, hover and press are `fg` at low alpha,
-solved over `bg` (`k.blend_over`). Secondary text uses OKLab with contrast floors of 4.5:1
+as a browser blends it (solved over `bg`, `k.blend_over`, when built in a window that blends in
+linear light). Secondary text uses OKLab with contrast floors of 4.5:1
 (muted) and 3:1 (faint), when the supplied foreground supports them. Focus rings are a neutral
 blue (set `k.c.border_focus` to change it), and elevation rings follow `k.c.border_base` when
 painted, so overriding border tokens after `from_palette` restyles them too. It uses neutral
@@ -71,8 +72,12 @@ typography and motion; override individual tokens as needed. The default glyph s
   Clear the point on close or selection; positioning uses Menu's viewport-aware anchor.
 - `.state(State::Hover | Pressed | Focus | Disabled)` forces a visual state (the stories'
   `data-state`); at rest the runtime drives hover and press.
-- Translucent tokens are solved for linear-light blending over `bg_base`; colours painted on
-  other surfaces (contrast buttons, accent switches) go through `Kit::on(colour, backdrop)`.
+- Translucent tokens are authored for sRGB blending, as a browser composites them, which is how
+  windows blend by default. In a window that blends in linear light (`srgb_blend(false)`) they
+  resolve re-solved over `bg_base` instead (`rune::theme::for_blend`): get the kit in the view,
+  where `rune::theme::blends_srgb` reports the window's mode, so a live `Tx::set_srgb_blend`
+  switch is followed. Colours painted on other surfaces (contrast buttons, accent switches) go
+  through `Kit::on(colour, backdrop)`.
 
 ## Components
 
@@ -294,11 +299,10 @@ source each time, and earlier blocks stay mounted.
   and file header lines. Set colours with `MarkdownStyle::diff` and `diff_hunk`. Line text
   keeps the body colour unless `diff_text(added, removed)` or `diff_text_tint(0.5)` (toward the
   theme's green and red) colours it.
-- **```` ```mermaid ````** (feature `mermaid`) draws flowcharts and sequence diagrams natively,
-  with no JS or webview, themed through `MarkdownStyle::diagram*`. Layout runs once per source
-  and is cached. Anything outside the supported subset (listed in `src/mermaid.rs`) shows as
-  its code block with a "Diagram not supported" hint. `rune_kit::mermaid::render(src, &style)`
-  draws one on its own.
+- **```` ```mermaid ````** (feature `mermaid`, backed by `rune-mermaid`) draws flowcharts,
+  sequence diagrams and state diagrams natively, with no JS or webview, themed through
+  `MarkdownStyle::diagram*`. Layout runs once per source and is cached. Anything outside the
+  supported subset (listed in `rune-mermaid`) shows as its plain code block. `rune_kit::mermaid::render(src, &style)` draws one on its own.
 - **`selectable(true)`** lets people select and copy the text as one selection: a drag runs from
   a paragraph through list items into a code block, Shift-click extends, Cmd+A selects the
   whole Markdown and Cmd+C copies the text as drawn, as a web browser does: a newline between

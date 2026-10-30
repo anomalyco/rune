@@ -61,8 +61,16 @@ fn glyphs_at(rt: &Runtime<S>, path: &str) -> Vec<(f32, f32)> {
         .map(|i| ((i.rect[0] + i.rect[2] / 2.0) / 2.0, (i.rect[1] + i.rect[3] / 2.0) / 2.0))
         .filter(|&(x, y)| x >= e.rect[0] && x <= e.rect[0] + e.rect[2] && y >= e.rect[1] && y <= e.rect[1] + e.rect[3])
         .collect();
-    out.sort_by(|a, b| ((a.1 / 10.0).round(), a.0).partial_cmp(&((b.1 / 10.0).round(), b.0)).unwrap());
-    out
+    // Rows by ink centre, a new row when the centre jumps by more than a third of a line: a
+    // tall glyph's centre sits a little higher than a short one's in every rasterizer.
+    out.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let mut row = (0, f32::NEG_INFINITY);
+    let mut rows: Vec<(usize, (f32, f32))> = out.into_iter().map(|g| {
+        if g.1 - row.1 > 6.0 { row = (row.0 + 1, g.1); }
+        (row.0, g)
+    }).collect();
+    rows.sort_by(|a, b| (a.0, a.1.0).partial_cmp(&(b.0, b.1.0)).unwrap());
+    rows.into_iter().map(|r| r.1).collect()
 }
 
 fn tick(rt: &mut Runtime<S>) { rt.frame(1.0 / 60.0); }

@@ -211,7 +211,7 @@ impl<S: 'static> Runtime<S> {
             return false;
         }
         let Some(c) = self.scroll_content(i) else { return false };
-        let stack = self.nodes[c].growth.and_then(|spec| Some((spec, self.stacks.get_mut(&self.nodes[c].id)?)));
+        let stack = self.nodes[c].growth.as_deref().copied().and_then(|spec| Some((spec, self.stacks.get_mut(&self.nodes[c].id)?)));
         let view = self.scene.presented(id).map(|p| p.rect.edges());
         let (Some((spec, stack)), Some(view), false) = (stack, view, self.reduced_motion) else {
             if let Some(st) = self.scrolls.get_mut(&id) { st.slack = Slack::landed(st.slack.window); }
@@ -272,16 +272,17 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn report_at_bottom(&mut self) {
         for i in 0..self.nodes.len() {
             let n = &self.nodes[i];
-            if (n.on_at_bottom.is_none() && n.on_far_from_bottom.is_none()) || self.subtree_exiting(i) { continue; }
+            let Some(h) = n.handlers.get().filter(|h| h.on_at_bottom.is_some() || h.on_far_from_bottom.is_some()) else { continue };
+            if self.subtree_exiting(i) { continue; }
             let Some(st) = self.scrolls.get_mut(&n.id) else { continue };
-            if n.on_at_bottom.is_some() {
+            if h.on_at_bottom.is_some() {
                 let at = st.offset >= st.max - AT_BOTTOM;
                 if st.at_bottom != Some(at) {
                     st.at_bottom = Some(at);
                     self.queue.push(Action::AtBottom(n.path.clone(), at));
                 }
             }
-            if let Some((min, _)) = &n.on_far_from_bottom {
+            if let Some((min, _)) = &h.on_far_from_bottom {
                 // Rows collapsing measure from the end they head for, glide or not.
                 let end = st.laid.map_or(st.max, |end| end.min(st.max));
                 let far = end - st.offset > f64::from(min.max(n.local.h));

@@ -1,21 +1,35 @@
-//! Which groups the list folds: kept while the app runs, and through [`Playground::folds`]'
-//! hooks from one run to the next.
+//! Which groups the list folds, at any level: kept while the app runs, and through
+//! [`Playground::folds`]' hooks from one run to the next.
 
 use super::*;
 
-/// [`Playground::folds`]' hooks. `load` runs once, when the playground first applies a request.
+/// [`Playground::folds`]' hooks, and [`Playground::start_folded`]. `load` runs once, when the
+/// playground first applies a request.
 #[derive(Default)]
 pub(super) struct Folds {
     load: Option<Box<dyn FnOnce() -> Vec<String>>>,
     save: Option<Box<dyn Fn(&[String])>>,
+    pub(super) start: bool,
 }
 
 impl<S: 'static> Playground<S> {
-    /// Keeps the folded groups from one run to the next. Without it they stay folded while the
-    /// app runs, closing and opening the playground included. `load` gives the names of the
-    /// groups folded last time, once, as the playground first opens; names it no longer has are
-    /// dropped. `save` gets the folded groups' names each time one folds or unfolds. With
-    /// [`Prefs`](crate::prefs::Prefs):
+    /// Every group starts folded, at every level, but the ones around the open story: each
+    /// time the playground opens, the open story's groups unfold, so a link through
+    /// [`Tx::open_playground_at`] at launch shows its story. Off by default, where every group
+    /// starts open and a folded one stays folded until it's unfolded. Worth it for a long,
+    /// deep list.
+    pub fn start_folded(mut self, on: bool) -> Self {
+        self.folds.start = on;
+        self
+    }
+
+    /// Keeps the folded groups from one run to the next. Without it, folds last while the app
+    /// runs, closing and opening the playground included. A group is named by its path,
+    /// `"Sidebar"` or `"Sidebar/Filter buttons"` for one inside it. `load` gives the names
+    /// saved last time, once, as the playground first opens; names it no longer has are
+    /// dropped. `save` gets the names each time a group folds or unfolds: the folded groups,
+    /// or with [`Playground::start_folded`] the unfolded ones, so a group added since starts
+    /// as the rest do. With [`Prefs`](crate::prefs::Prefs):
     ///
     /// ```ignore
     /// .folds(
@@ -24,7 +38,7 @@ impl<S: 'static> Playground<S> {
     /// )
     /// ```
     pub fn folds(mut self, load: impl Fn() -> Vec<String> + 'static, save: impl Fn(&[String]) + 'static) -> Self {
-        self.folds = Folds { load: Some(Box::new(load)), save: Some(Box::new(save)) };
+        self.folds = Folds { load: Some(Box::new(load)), save: Some(Box::new(save)), start: self.folds.start };
         self
     }
 }
@@ -34,9 +48,8 @@ impl<S: 'static> Live<S> {
     pub(super) fn load_folds(&mut self) {
         let Some(load) = self.folds.load.take() else { return };
         let names = load();
-        let mut groups: Vec<&'static str> = self.order.iter().map(|&i| self.group(i)).collect();
-        groups.dedup();
-        self.folded = groups.into_iter().filter(|g| names.iter().any(|n| n == g)).collect();
+        let start = self.folds.start;
+        self.folded = self.all_groups().into_iter().filter(|g| names.iter().any(|n| n == g) != start).collect();
     }
 
     /// Changes which groups are folded, and saves them if that changed them.
@@ -44,8 +57,11 @@ impl<S: 'static> Live<S> {
         let before = self.folded.clone();
         change(&mut self.folded);
         if self.folded == before { return; }
-        if let Some(save) = &self.folds.save {
-            save(&self.folded.iter().map(|g| (*g).to_owned()).collect::<Vec<_>>());
-        }
+        let Some(save) = &self.folds.save else { return };
+        let names: Vec<String> = match self.folds.start {
+            true => self.all_groups().into_iter().filter(|g| !self.folded.contains(g)).map(str::to_owned).collect(),
+            false => self.folded.iter().map(|g| (*g).to_owned()).collect(),
+        };
+        save(&names);
     }
 }

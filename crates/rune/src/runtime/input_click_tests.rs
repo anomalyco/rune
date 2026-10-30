@@ -493,3 +493,23 @@ fn custom_input_on_key_handler_resets_multiclick_history() {
     click(&mut rt, pt);
     assert_eq!(rt.state.single.anchor, rt.state.single.focus);
 }
+
+#[test]
+fn presses_land_on_targets_inside_a_scrolled_viewport() {
+    fn view(_: &Vec<usize>, _: &mut Cx<Vec<usize>>) -> El {
+        let rows = (0..10).map(|i| crate::el().key(format!("row{i}")).w_full().h(50.0).on_press(move |s: &mut Vec<usize>| s.push(i)));
+        col().size(200.0, 100.0).scroll(crate::ScrollSpec { stick_bottom: false }).child(col().w_full().children(rows))
+    }
+    let mut rt = Runtime::new(Vec::new(), view, (200.0, 100.0), Env { system_dark: true, scale: 1.0 });
+    rt.frame(0.0);
+    rt.pointer_move(100.0, 25.0);
+    rt.wheel(100.0, 25.0, -200.0);
+    for _ in 0..240 {
+        rt.frame(1.0 / 120.0);
+    }
+    rt.pointer_move(100.0, 25.0);
+    rt.pointer_down(100.0, 25.0);
+    rt.pointer_up(100.0, 25.0);
+    rt.frame(1.0 / 120.0);
+    assert_eq!(rt.state, [4]);
+}

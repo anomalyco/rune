@@ -36,8 +36,14 @@ pub(crate) struct Live<S: 'static> {
     pub(super) folded: Vec<&'static str>,
     /// [`Playground::folds`].
     pub(super) folds: Folds,
+    /// [`Playground::widths`].
+    pub(super) widths: Widths,
     /// The keyboard is on the open story's side controls, which take keys.
     pub(super) side_active: bool,
+    /// The column that has the keyboard.
+    pub(super) region: Region,
+    /// The focused element's path when the region last looked (see [`Live::see_focus`]).
+    pub(super) region_seen: Option<String>,
     pub(super) scene: Option<Box<Staged<S>>>,
     pub(super) owned: Vec<Option<Box<dyn Any>>>,
     pub(super) controls: Controls,
@@ -59,7 +65,8 @@ pub(crate) struct Live<S: 'static> {
 
 impl<S: 'static> Live<S> {
     pub(super) fn new(playground: Playground<S>, spec: &crate::AppSpec<S>, menu: bool) -> Self {
-        let Playground { pages, triggers, sides, stages, sizes, shortcut, bar, enabled: _, scenes: show, fresh, keep, variants, typing, dark: app_dark, folds } = playground;
+        let Playground { pages, triggers, sides, stages, sizes, shortcut, bar, enabled: _, scenes: show, fresh, keep, variants, typing, dark: app_dark, folds, mut widths, group_order } = playground;
+        let controls = Controls { save_widths: widths.save.take(), ..Controls::default() };
         let mut live = Live {
             owned: pages.iter().map(|_| None).collect(),
             pages,
@@ -85,9 +92,12 @@ impl<S: 'static> Live<S> {
             header: None,
             folded: Vec::new(),
             folds,
+            widths,
             side_active: false,
+            region: Region::List,
+            region_seen: None,
             scene: None,
-            controls: Controls,
+            controls,
             dark: None,
             size: 0,
             reduce_motion: false,
@@ -109,13 +119,10 @@ impl<S: 'static> Live<S> {
         live.variants = variants.into_iter().filter_map(|(name, variant, apply)| Some((scene(&live, name)?, variant, apply))).collect();
         live.variant = vec![0; live.count()];
         let listed: Vec<usize> = (0..live.count()).filter(|&i| live.scenes.get(i).is_none_or(|(name, _)| show.is_none_or(|show| show(name)))).collect();
-        let mut groups: Vec<&str> = Vec::new();
-        for &i in &listed {
-            let group = live.group(i);
-            if !groups.contains(&group) { groups.push(group); }
-        }
-        live.order = groups.iter().flat_map(|g| listed.iter().copied().filter(|&i| live.group(i) == *g)).collect();
+        live.order = live.tree_order(&listed, &group_order);
         live.selected = live.order.first().copied().unwrap_or(0);
+        if live.folds.start { live.folded = live.all_groups(); }
+        live.load_widths();
         live
     }
 
@@ -210,6 +217,7 @@ impl<S: 'static> Live<S> {
     pub(crate) fn apply(&mut self, clock: f64, real: &mut S) -> bool {
         self.now = clock;
         self.load_folds();
+        self.load_widths();
         let mut changed = false;
         for request in std::mem::take(&mut self.pending) {
             changed = true;
@@ -223,6 +231,7 @@ impl<S: 'static> Live<S> {
                 Request::Toggle if self.open => self.close(real),
                 Request::Toggle => {
                     self.open = true;
+                    if self.folds.start { self.reveal(self.selected); }
                     self.select(self.selected, real);
                 }
                 Request::Select(i) => {
@@ -245,31 +254,29 @@ impl<S: 'static> Live<S> {
             }
         }
         // Opened on a story whose group is folded, the header stands in for its row.
-        if self.open && self.header.is_none() && self.selected < self.count() && self.folded.contains(&self.group(self.selected)) {
-            self.header = Some(self.group(self.selected));
-        }
+        self.settle();
         changed
     }
 
+    /// Folds a group, unfolds it, or toggles it. A filter shows every match, so folds wait
+    /// until it's cleared. A selection whose row goes moves to the header that hid it.
     pub(super) fn fold(&mut self, group: &'static str, fold: Option<bool>) {
+        if !self.query().is_empty() { return; }
         let folded = self.folded.contains(&group);
         match fold.unwrap_or(!folded) {
-            true if !folded => {
-                self.refold(|f| f.push(group));
-                // The selected story's row goes, so its header takes the selection.
-                if self.header.is_none() && self.selected < self.count() && self.group(self.selected) == group { self.header = Some(group); }
-            }
+            true if !folded => self.refold(|f| f.push(group)),
             false => self.refold(|f| f.retain(|g| *g != group)),
             true => {}
         }
+        self.settle();
     }
 
-    /// Story `i`'s row becomes the list's selection, its group unfolded.
+    /// Story `i`'s row becomes the list's selection, its groups unfolded.
     pub(super) fn reveal(&mut self, i: usize) {
         self.header = None;
         if i < self.count() {
-            let group = self.group(i);
-            self.refold(|f| f.retain(|g| *g != group));
+            let groups = self.groups_of(i);
+            self.refold(|f| f.retain(|g| !groups.contains(g)));
         }
     }
 
@@ -289,6 +296,8 @@ impl<S: 'static> Live<S> {
         self.keep(real);
         self.open = false;
         self.header = None;
+        self.region = Region::List;
+        self.controls.filter = crate::TextEdit::default();
         self.variant.iter_mut().for_each(|v| *v = 0);
         self.scene = None;
         self.owned.iter_mut().for_each(|o| *o = None);

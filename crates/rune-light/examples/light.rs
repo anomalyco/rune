@@ -105,14 +105,13 @@ impl<'a> Ui<'a> {
         let style = TextStyle::new(size, weight);
         let mut quads = Vec::new();
         self.ts.glyphs(s, style, sc(), [(x * sc()).round(), (y * sc()).round()], &mut quads);
-        let gamma = rune::text::glyph_coverage_exponent(color, sc());
         for q in quads {
             self.text.push(Instance {
                 rect: q.rect,
                 radii: [0.0; 4],
                 fill: color.premul(1.0),
                 border: [0.0; 4],
-                params: [0.0, KIND_GLYPH, 0.0, gamma],
+                params: [0.0, KIND_GLYPH, 0.0, 1.0],
                 uv: [q.uv[0], q.uv[1], 0.0, 0.0],
                 clip: NO_CLIP,
                 fade: [0; 4],

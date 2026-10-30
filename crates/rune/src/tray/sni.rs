@@ -251,8 +251,7 @@ mod tests {
 
     #[test]
     fn the_icon_is_argb_in_network_order() {
-        let spec = TraySpec { id: "t".into(), title: "T".into(), tooltip: String::new(),
-            icon: super::super::TrayIcon { width: 1, height: 1, rgba: vec![1, 2, 3, 4] }, menu: Vec::new() };
+        let spec = TraySpec::new("t", "T", super::super::TrayIcon::rgba(1, 1, vec![1, 2, 3, 4]));
         assert_eq!(pixmaps(&spec), vec![(1, 1, vec![4, 1, 2, 3])]);
     }
 }

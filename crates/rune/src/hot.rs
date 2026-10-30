@@ -115,7 +115,7 @@ pub(crate) fn run_app<S: 'static>(app: crate::App<S>, mut args: Args) {
         for (name, _) in app.spec.scenes { println!("{name}"); }
         return;
     }
-    let (srgb_blend, modifier_keys) = (app.srgb_blend, app.modifier_keys);
+    let (srgb_blend, modifier_keys, font_smoothing) = (app.srgb_blend, app.modifier_keys, app.font_smoothing);
     let scene = args.scene.take();
     let (spec, state, _) = app.into_parts(scene.as_deref());
     let value = Box::new(state);
@@ -128,17 +128,17 @@ pub(crate) fn run_app<S: 'static>(app: crate::App<S>, mut args: Args) {
         on_key: Some(|s: &mut HostState, key, tx| (s.key)(s, key, tx)),
     };
     let state = HostState { value, spec: Box::new(spec), view: view_adapter::<S>, poll: poll_adapter::<S>, setup: setup_adapter::<S>, key: key_adapter::<S> };
-    run_host(shell, state, args, srgb_blend, modifier_keys);
+    run_host(shell, state, args, (srgb_blend, font_smoothing), modifier_keys);
 }
 
 #[inline(never)]
-fn run_host(spec: AppSpec<HostState>, state: HostState, args: Args, srgb_blend: bool, modifier_keys: bool) {
+fn run_host(spec: AppSpec<HostState>, state: HostState, args: Args, look: Look, modifier_keys: bool) {
     INITIAL.with(|slot| { assert!(slot.borrow().is_none()); *slot.borrow_mut() = Some(state); });
     if args.snap_on_patch.is_some() {
         let state = initial_state(&spec, args.scene.as_deref());
-        return headless(&spec, state, args, srgb_blend);
+        return headless(&spec, state, args, look);
     }
-    let mut app = crate::App::new(spec).srgb_blend(srgb_blend);
+    let mut app = crate::App::new(spec).font_smoothing(look.1).srgb_blend(look.0);
     app.modifier_keys = modifier_keys;
     if args.headless() { crate::tooling::headless(app, args); }
     else if let Err(error) = crate::window::run(app, args) { panic!("{error}"); }
@@ -148,9 +148,9 @@ fn run_host(spec: AppSpec<HostState>, state: HostState, args: Args, srgb_blend: 
 /// the same typed `Runtime<S>` a native window builds, so its view, poll and on_key patch the
 /// way they do on screen.
 pub(crate) fn snap_window<S: 'static>(app: crate::App<S>, args: Args) {
-    let srgb_blend = app.srgb_blend;
+    let look = (app.srgb_blend, app.font_smoothing);
     let (spec, state, _) = app.into_parts(args.scene.as_deref());
-    headless(&spec, state, args, srgb_blend);
+    headless(&spec, state, args, look);
 }
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
@@ -308,13 +308,17 @@ fn control_input<S: 'static>(rt: &mut crate::Runtime<S>, command: &Value) {
 /// `{"id":1,"tap":"login"}`, `{"id":2,"scroll":[800,400,100]}`,
 /// `{"id":3,"pause":true}`, `{"id":4,"step":0.05}`, or `{"id":5,"quit":true}`.
 /// Every request and patch publishes a PNG + JSON tree, then a flushed completion marker.
-fn headless<S: 'static>(spec: &AppSpec<S>, state: S, args: Args, srgb_blend: bool) {
+/// A window's blending (sRGB or not) and font smoothing.
+type Look = (bool, crate::FontSmoothing);
+
+fn headless<S: 'static>(spec: &AppSpec<S>, state: S, args: Args, (srgb_blend, font_smoothing): Look) {
     assert!(enabled(), "--snap-on-patch requires --hot or RUNE_HOT=1 (use scripts/rune-dev)");
     let size = args.size.unwrap_or(spec.size);
     let scale = args.scale.unwrap_or(2.0);
     let (wake, sleep) = std::sync::mpsc::channel();
     let mut rt = runtime_for(spec, state, size, Env { system_dark: args.theme.as_deref() != Some("light"), scale }, Arc::new(move || { let _ = wake.send(()); }));
     rt.set_srgb_blend(srgb_blend);
+    rt.set_font_smoothing(font_smoothing);
     let gpu = Gpu::new(Gpu::instance(), None);
     let target_format = if srgb_blend { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT };
     let mut renderer = Renderer::new(&gpu.device, target_format);

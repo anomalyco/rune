@@ -1,0 +1,1 @@
+- **`memo(id, ..)` warns in debug builds when its root already had a different key.** The memo still keys its root `id`, as before, but a closure returning `col().key("foo")` inside `memo("bar", ..)` now prints one stderr warning per call site saying `"foo"` was replaced, instead of silently breaking `find("foo")`. `RUNE_PERF_WARN=0` silences it; release builds are unchanged.
