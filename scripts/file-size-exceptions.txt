@@ -3,7 +3,6 @@
 crates/rune-kit/src/markdown.rs 1795
 crates/rune-kit/src/syntax/scan.rs 1694
 crates/rune-light/examples/reel.rs 1899
-crates/rune/src/edit.rs 2648
 crates/rune/src/el.rs 2953
 crates/rune/src/overlay.rs 1564
 crates/rune/src/runtime.rs 7428
