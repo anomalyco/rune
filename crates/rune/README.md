@@ -1935,6 +1935,14 @@ and its goldens are unchanged. `examples/lab` uses it to composite `rune-light` 
   `srgb_blend`, and `backdrop`. The hook runs with the scissor on the slot's clip rectangle, and the
   viewport and scissor are reset to the full target after it.
   One compositor serves any number of formats: build pipelines per `EffectSite::format`.
+- **Per-slot identity and payload.** `EffectSite::mark` is the slot's `El::effect` tag and
+  `EffectSite::data` its `El::effect_data([f32; 4])` payload, both carried in the slot's record, so
+  a compositor needs neither `Runtime::marks` nor its own copy of app state. A removed element keeps
+  its last-built payload through its exit transition, so an outgoing slot keeps drawing its own
+  content while its replacement enters beside it. Keep resources per mark and drop a mark's once a
+  frame passes without it (the example on `compose::Compositor`). The slot's rect and `scale`
+  follow `El::scale`, `El::offset` and a transition's scale and offset; under `El::rotate` the slot
+  stays upright inside a turned isolated layer, and Rune turns what the hook painted.
 - `render::CLIP_WGSL` is Rune's own clip maths as WGSL (`clip_alpha(p, clip, fade)` with `p` in
   window pixels, plus `sd_rounded`). Prepend it to a compositor shader and pass the slot's `clip`
   and `fade` words (`rune-fx` does this via `FxSlot::clip(i.clip, i.fade)` in `prepare_with_slots`), so the effect is cut

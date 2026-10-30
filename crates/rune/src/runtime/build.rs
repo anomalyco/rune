@@ -315,7 +315,7 @@ impl<S: 'static> Runtime<S> {
             let press_anchor = centre_to;
             let blur = pinh.blur + p.blur * sc;
             // An effect slot's bleed can reach into view from a rect outside it.
-            let filter_margin = blur * s * 3.0 + n.vis.effect.map_or(0.0, |(bleed, _)| bleed * sc * s);
+            let filter_margin = blur * s * 3.0 + n.vis.effect.map_or(0.0, |e| e.bleed * sc * s);
 
             let mut raw_edges = p.rect.edges();
             raw_edges[0] += pinh.dx;
@@ -1036,7 +1036,7 @@ impl<S: 'static> Runtime<S> {
                 }
                 if let Some(effect) = n.vis.effect {
                     let fade = crate::render::pack_fade(fade, clip, clip);
-                    faded_slot = paint_slots::push_effect(&mut self.instances, effect, ([r[0], r[1], w, h], radii, clip, fade), k_px, o);
+                    faded_slot = paint_slots::push_effect(&mut self.instances, (effect, mark), ([r[0], r[1], w, h], radii, clip, fade), k_px, o);
                 }
                 let focus_ring = if default_ring == Some(i) { Some(self.default_focus_ring()) }
                     else { self.focus_ring_visible(i).then_some(n.focus.ring).flatten() };

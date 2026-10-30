@@ -3,19 +3,19 @@
 use super::intersect;
 use crate::render::{Instance, KIND_BACKDROP_BLUR, KIND_EFFECT, LayerSpec, NO_CLIP};
 
-/// Pushes the effect slot `(bleed_pt, backdrop)` over `rect` with corner `radii`, clipped by
+/// Pushes the effect slot `effect` tagged `mark` over `rect` with corner `radii`, clipped by
 /// `clip` and the packed `fade`, at `k_px` device pixels per point and paint opacity `o`.
 /// A compositor paints whatever it likes at a slot, so a faded slot gets its own layer that
 /// applies the opacity, instead of a factor it could forget. Returns the index of that slot.
-pub(super) fn push_effect(instances: &mut Vec<Instance>, (bleed, backdrop): (f32, bool),
+pub(super) fn push_effect(instances: &mut Vec<Instance>, (effect, mark): (crate::el_effect::EffectSlot, u32),
     (rect, radii, clip, fade): ([f32; 4], [f32; 4], [f32; 4], [u32; 4]), k_px: f32, o: f32) -> Option<usize> {
     let slot = Instance {
         rect,
         radii,
         fill: [0.0, 0.0, 0.0, 1.0],
-        border: [0.0; 4],
-        params: [if backdrop { 1.0 } else { 0.0 }, KIND_EFFECT, bleed * k_px, k_px],
-        uv: [0.0; 4],
+        border: [(mark & 0xFFFF) as f32, (mark >> 16) as f32, 0.0, 0.0],
+        params: [if effect.backdrop { 1.0 } else { 0.0 }, KIND_EFFECT, effect.bleed * k_px, k_px],
+        uv: effect.data,
         clip,
         fade,
     };

@@ -64,6 +64,8 @@ impl<'a, 'p> ActivePass<'a, 'p> {
             let site = EffectSite {
                 index: at,
                 instance,
+                mark: super::effect_mark(instance),
+                data: instance.uv,
                 scale: instance.params[3],
                 format,
                 origin,

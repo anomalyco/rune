@@ -6,6 +6,31 @@
 use crate::render::{Instance, KIND_GLYPH, Renderer};
 use crate::runtime::Runtime;
 
+/// Draws a frame in place of Rune's default.
+///
+/// To paint custom content at `El::effect` slots, draw the frame with `Renderer::draw_with` and
+/// paint in its hook: it runs at each slot in painter order, inside the slot's isolated layers,
+/// so the slot's opacity (an exit fade included), clip and transform already apply. Keep
+/// resources per `EffectSite::mark`, read the slot's `EffectSite::data`, and drop a mark's
+/// resources once a frame passes without it:
+///
+/// ```ignore
+/// struct Hud { waves: HashMap<u32, Wave>, seen: HashSet<u32> }
+///
+/// impl Compositor<App> for Hud {
+///     fn render(&mut self, f: &mut Frame<'_, App>) {
+///         let (device, queue, clear) = (f.device, f.queue, f.rt.clear_color());
+///         f.ui.prepare(device, queue, &mut f.rt.text.atlas, &f.rt.instances, f.size);
+///         self.seen.clear();
+///         f.ui.draw_with(f.encoder, f.target, clear, &mut |pass, site| {
+///             self.seen.insert(site.mark);
+///             let wave = self.waves.entry(site.mark).or_insert_with(|| Wave::new(device));
+///             wave.draw(device, queue, pass, site, site.data);
+///         });
+///         self.waves.retain(|mark, _| self.seen.contains(mark));
+///     }
+/// }
+/// ```
 pub trait Compositor<S: 'static>: 'static {
     /// Device features to request when the adapter has them (e.g. `TIMESTAMP_QUERY`).
     /// `IMMEDIATES` also raises `max_immediate_size` to the adapter's (4 KB on Metal): per-draw

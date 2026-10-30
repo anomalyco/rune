@@ -56,8 +56,9 @@ pub const KIND_RADIAL: f32 = 11.0;
 /// when the slot requests a backdrop copy (`El::effect_backdrop(true)`), `params.z` the bleed past
 /// `rect` in device pixels and `params.w` the slot's scale in device pixels per point (`Env::scale`
 /// times any element or ancestor `scale` / `live_scale`). `fill[3]` is always 1: a faded slot is
-/// drawn in an isolated layer that applies its opacity. `Runtime::marks` carries its `El::effect`
-/// tag.
+/// drawn in an isolated layer that applies its opacity. `border[0]` and `border[1]` hold the low
+/// and high 16 bits of its `El::effect` tag as exact floats (`EffectSite::mark`), and `uv` its
+/// `El::effect_data` payload, bit for bit (`EffectSite::data`).
 pub const KIND_EFFECT: f32 = 12.0;
 /// A backdrop blur (`El::backdrop_blur`). Like an effect slot it rasterizes nothing itself in
 /// the uber shader; the renderer stops there, copies and blurs what is below, and draws the blur
@@ -120,6 +121,11 @@ pub struct EffectSite<'a> {
     pub index: u32,
     /// The slot's record (`KIND_EFFECT`): rect, radii, clip and fade.
     pub instance: &'a Instance,
+    /// The slot's `El::effect` tag, so a compositor can find the resources it keeps for it.
+    pub mark: u32,
+    /// The slot's `El::effect_data` payload, as the element was last built. A slot playing its
+    /// exit transition keeps the payload it had when it was removed.
+    pub data: [f32; 4],
     /// Device pixels per point at this slot (`instance.params[3]`: `Env::scale` times any
     /// element or ancestor `scale` / `live_scale`).
     pub scale: f32,
@@ -290,6 +296,11 @@ impl Instance {
     pub fn end_layer() -> Self {
         Self { params: [0.0, KIND_LAYER_END, 0.0, 0.0], ..Self::zeroed() }
     }
+}
+
+/// An effect slot's `El::effect` tag, from the two exact 16-bit floats in `border` (`KIND_EFFECT`).
+pub(crate) fn effect_mark(i: &Instance) -> u32 {
+    (i.border[0] as u32 & 0xFFFF) | (i.border[1] as u32 & 0xFFFF) << 16
 }
 
 /// Pack a 64-bit integer into four exact non-negative 16-bit integer floats (`0.0..=65535.0`).
@@ -883,7 +894,8 @@ impl Renderer {
                 None
             };
             pass.set_scissor_rect(x0, y0, x1 - x0, y1 - y0);
-            hook(EffectPhase::Draw(pass), &EffectSite { index: *at, instance, scale: instance.params[3], format, origin, size, in_layer: target.is_some(), srgb_blend: self.srgb_blend, backdrop });
+            hook(EffectPhase::Draw(pass), &EffectSite { index: *at, instance, mark: effect_mark(instance), data: instance.uv, scale: instance.params[3],
+                format, origin, size, in_layer: target.is_some(), srgb_blend: self.srgb_blend, backdrop });
             pass.set_viewport(0.0, 0.0, size[0] as f32, size[1] as f32, 0.0, 1.0);
             pass.set_scissor(pass.scissor(), size);
         }
