@@ -9,4 +9,6 @@
   now limits the backends on desktop; `WGPU_ADAPTER_NAME` and `WGPU_POWER_PREF` still
   choose the card, and `RUNE_GPU_LOG=1` prints the choice and, on Windows, how long after the
   process started the device was ready. The card order comes from DXGI directly (`windows`
-  0.62, which wgpu-hal already builds), so the choice adds no launch time.
+  0.62, which wgpu-hal already builds), so the choice adds no launch time. With a hardware
+  card and no `WGPU_BACKEND`, Windows loads DX12 alone, which saves loading Vulkan's driver
+  at launch (about 145 ms on a two-GPU desktop); `WGPU_BACKEND=vulkan` still runs on Vulkan.

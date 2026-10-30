@@ -129,6 +129,14 @@ fn on_card(instance: &wgpu::Instance, usable: &dyn Fn(&wgpu::Adapter) -> bool, c
     })
 }
 
+/// DX12 alone when DXGI lists a hardware card. Every card the picks above can land on is then
+/// on DX12 (`by_card` takes it first anyway), and loading Vulkan's driver too costs a launch
+/// about 120 ms. A card with a Vulkan driver but no D3D12 one runs on `WGPU_BACKEND=vulkan`.
+#[cfg(target_os = "windows")]
+pub(crate) fn windows_backends() -> Option<wgpu::Backends> {
+    (!windows_cards().is_empty()).then_some(wgpu::Backends::DX12)
+}
+
 /// The hardware cards DXGI lists, in its order, as PCI (vendor, device) ids, read once per
 /// process. DXGI's own list takes milliseconds; wgpu's DX12 enumeration opens a device on every
 /// card to read its features (350-400 ms on a two-GPU desktop, before the window could open),
