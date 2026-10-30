@@ -1,8 +1,18 @@
 //! Full-chrome video player lab. Title bar, play bar, keyboard shortcuts with a toast stack,
 //! seek hover preview, speed menu, volume, fullscreen chrome that auto-hides. Click the video
-//! to play/pause. Audio / video / subtitle tracks via the hamburger menu (Linux GStreamer).
+//! to play/pause. Audio / video / subtitle tracks via the hamburger menu (Linux backends).
 //!
-//! `cargo run -p video-player-extra -- clip.mkv`
+//! Pick one Linux backend (`gstreamer` or `libmpv`); macOS ignores both.
+//!
+//! ```text
+//! cargo run -p video-player-extra --features gstreamer -- clip.mkv
+//! cargo run -p video-player-extra --features libmpv -- clip.mkv
+//! ```
+
+#[cfg(all(target_os = "linux", not(any(feature = "gstreamer", feature = "libmpv"))))]
+compile_error!("pick a Linux Player backend: --features gstreamer  or  --features libmpv");
+#[cfg(all(feature = "gstreamer", feature = "libmpv"))]
+compile_error!("enable only one of --features gstreamer or --features libmpv");
 
 use rune::tok::type_;
 use rune::{

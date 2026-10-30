@@ -169,6 +169,10 @@ impl Session {
         }
         match kind {
             Kind::Video => {
+                // Software render API needs CPU frames; hw decoders often won't feed it.
+                if let Err(e) = set_option(handle, "hwdec", "no") {
+                    return destroy_on_err(handle, e);
+                }
                 if let Err(e) = set_option(handle, "vo", "libmpv") {
                     return destroy_on_err(handle, e);
                 }
@@ -349,18 +353,62 @@ impl Session {
                 }
             }
         }
-        if let (None, Some(w), Some(h)) = (
-            self.size,
-            get_prop_i64(self.handle, "dwidth"),
-            get_prop_i64(self.handle, "dheight"),
-        ) {
-            if w > 0 && h > 0 {
-                self.size = Some((w as u32, h as u32));
-                if c.size.is_none() {
-                    c.size = self.size;
+        self.sync_meta(c);
+    }
+
+    /// Leave Loading once mpv knows duration (and, for video, a size). Don't wait on the
+    /// ffmpeg poster — play often starts before that worker finishes, especially on long AV1.
+    fn sync_meta(&mut self, c: &mut Control) {
+        if let Some((w, h)) = self.video_size() {
+            self.size = Some((w, h));
+            if c.size.is_none() {
+                c.size = Some((w, h));
+            }
+        }
+        let Some(d) = get_prop_f64(self.handle, "duration").filter(|d| d.is_finite() && *d > 0.0) else {
+            return;
+        };
+        if c.duration.is_none() {
+            c.duration = Some(d);
+        }
+        if c.meta.is_none() {
+            let size = match self.kind {
+                Kind::Video => self.size.or(c.size),
+                Kind::Audio => None,
+            };
+            let frame = get_prop_f64(self.handle, "container-fps")
+                .filter(|f| f.is_finite() && *f > 0.0)
+                .map(|f| 1.0 / f)
+                .unwrap_or(1.0 / 30.0);
+            c.open(Ok(Meta { duration: d, size, frame }));
+        } else if let Some(meta) = c.meta.as_mut() {
+            meta.duration = d;
+            if meta.size.is_none() {
+                meta.size = self.size.or(c.size);
+                if meta.size.is_some() {
+                    c.size = meta.size;
                 }
             }
         }
+    }
+
+    fn video_size(&self) -> Option<(u32, u32)> {
+        if let Some(s) = self.size.filter(|(w, h)| *w > 0 && *h > 0) {
+            return Some(s);
+        }
+        for (wp, hp) in [
+            ("dwidth", "dheight"),
+            ("width", "height"),
+            ("video-params/w", "video-params/h"),
+        ] {
+            if let (Some(w), Some(h)) = (get_prop_i64(self.handle, wp), get_prop_i64(self.handle, hp))
+                && w > 0
+                && h > 0
+            {
+                return Some((w as u32, h as u32));
+            }
+        }
+        None
     }
 
     fn list_tracks(&self, kind: MediaTrackKind) -> Vec<MediaTrack> {
@@ -409,15 +457,21 @@ impl Session {
         if self.render.is_null() {
             return Ok(None);
         }
+        if self.size.is_none() {
+            self.size = self.video_size();
+        }
         unsafe { sys::mpv_render_context_update(self.render) };
         let (w, h) = match self.size {
             Some(s) if s.0 > 0 && s.1 > 0 => s,
             _ => return Ok(None),
         };
-        let mut pixels = vec![0u8; (w as usize) * (h as usize) * 4];
+        // mpv prefers 64-byte stride/pointer alignment for the SW path.
+        let stride = ((w as usize) * 4).next_multiple_of(64);
+        let mut pixels = vec![0u8; stride * (h as usize)];
         let mut size = [w as c_int, h as c_int];
-        let mut stride: usize = (w as usize) * 4;
-        // bgr0 is BGRA with ignored alpha in mpv's SW renderer.
+        let mut stride_param = stride;
+        // bgr0 is BGR + padding; the "0" byte is uninitialized (often 0). Our video
+        // shader premultiplies by alpha, so leave it 0 and the frame is invisible.
         let format = CString::new("bgr0").unwrap();
         let mut params = [
             sys::mpv_render_param {
@@ -430,7 +484,7 @@ impl Session {
             },
             sys::mpv_render_param {
                 type_: sys::mpv_render_param_type_MPV_RENDER_PARAM_SW_STRIDE,
-                data: &mut stride as *mut _ as *mut c_void,
+                data: &mut stride_param as *mut _ as *mut c_void,
             },
             sys::mpv_render_param {
                 type_: sys::mpv_render_param_type_MPV_RENDER_PARAM_SW_POINTER,
@@ -442,13 +496,24 @@ impl Session {
             },
         ];
         mpv_err(unsafe { sys::mpv_render_context_render(self.render, params.as_mut_ptr()) })?;
+        // Pack to tightly packed BGRA with opaque alpha for NativeSurface.
+        let row = (w as usize) * 4;
+        let mut packed = vec![0u8; row * (h as usize)];
+        for y in 0..(h as usize) {
+            let src = &pixels[y * stride..y * stride + row];
+            let dst = &mut packed[y * row..(y + 1) * row];
+            dst.copy_from_slice(src);
+            for px in dst.chunks_exact_mut(4) {
+                px[3] = 255;
+            }
+        }
         self.await_frame = None;
         Ok(Some(ByteFrame {
             width: w,
             height: h,
             format: Format::Bgra,
             color: ColorInfo { matrix: crate::native_surface::Matrix::Bt709, transfer: crate::native_surface::Transfer::Srgb },
-            planes: [pixels, Vec::new()],
+            planes: [packed, Vec::new()],
         }))
     }
 }
@@ -725,10 +790,23 @@ fn ensure_session(shared: &Arc<Shared>, native: &mut Native, c: &mut Control) ->
             if c.time > 0.0 {
                 let _ = command(session.handle, &["seek", &format!("{:.6}", c.time), "absolute"]);
             }
-            if !session.pump(c) {
-                return false;
+            // Drain early events so duration/size can show up before the first draw.
+            for _ in 0..32 {
+                if !session.pump(c) {
+                    return false;
+                }
+                session.sync_meta(c);
+                if c.opened() {
+                    break;
+                }
             }
             session.reconcile(c, Instant::now());
+            if let Some(size) = session.size {
+                native.size = Some(size);
+            }
+            // Live session owns frames now; don't wait on a poster to leave Loading.
+            native.poster_started = true;
+            native.poster_due = false;
             native.session = Some(session);
             true
         }

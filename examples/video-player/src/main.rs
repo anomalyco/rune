@@ -1,8 +1,19 @@
-//! Play a movie or audio file, or a URL. `cargo run -p video-player -- clip.mkv` opens a video
-//! looping with sound; tap the picture to pause or resume, drag the scrubber to seek. An audio
-//! file (mp3, m4a, wav, opus, …) shows a scrubber and waits for a tap on the bar area to play.
-//! With no argument it plays the four-frame test clip muted. `-- --snap out.png --at 0.6`
-//! renders the frame at 0.6 s headless.
+//! Play a movie or audio file, or a URL. Tap the picture to pause or resume, drag the scrubber to
+//! seek. An audio file (mp3, m4a, wav, opus, …) shows a scrubber and waits for a tap on the bar
+//! area to play. With no argument it plays the four-frame test clip muted.
+//! `-- --snap out.png --at 0.6` renders the frame at 0.6 s headless.
+//!
+//! On Linux pick one backend; macOS ignores both:
+//!
+//! ```text
+//! cargo run -p video-player --features gstreamer -- clip.mkv
+//! cargo run -p video-player --features libmpv -- clip.mkv
+//! ```
+
+#[cfg(all(target_os = "linux", not(any(feature = "gstreamer", feature = "libmpv"))))]
+compile_error!("pick a Linux Player backend: --features gstreamer  or  --features libmpv");
+#[cfg(all(feature = "gstreamer", feature = "libmpv"))]
+compile_error!("enable only one of --features gstreamer or --features libmpv");
 
 use rune::tok::{self, type_};
 use rune::{AppSpec, Cx, Drag, El, Phase, Player, PlayerState, SurfaceFit, Tx, Waker, col, el, text};

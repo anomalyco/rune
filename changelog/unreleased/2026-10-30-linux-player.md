@@ -1,9 +1,12 @@
 - **Linux video and audio playback (`linux-gstreamer` / `linux-libmpv`).** Opt-in, mutually
   exclusive features for live `Player` / `el().video` on Linux. `linux-gstreamer` uses GStreamer
   `playbin` (appsink BGRA + system audio). `linux-libmpv` uses libmpv (`vo=libmpv` software BGRA
-  render + mpv audio). Both need the matching runtime stack, and posters / headless `--snap` still
-  use `ffmpeg`/`ffprobe` on PATH. Off (the default), Linux reports unsupported like other
-  non-macOS platforms. Enable one of:
+  render + mpv audio; `hwdec=no` so the SW renderer gets CPU frames). Live libmpv sessions open
+  `Meta` from mpv duration/size instead of waiting on the ffmpeg poster (which play used to skip,
+  leaving the UI on Loading while audio ran). SW frames force opaque alpha — mpv's `bgr0` leaves
+  the A byte uninitialized (often 0), and the video shader premultiplies by it. Both need the
+  matching runtime stack, and posters / headless `--snap` still use `ffmpeg`/`ffprobe` on PATH.
+  Off (the default), Linux reports unsupported like other non-macOS platforms. Enable one of:
   `features = ["linux-gstreamer"]` or `features = ["linux-libmpv"]`.
 
 - **`Player::set_volume` / `volume`.** Linear gain `0.0`…`1.0` (default `1.0`), independent of
@@ -17,4 +20,5 @@
   call from a worker. Does not hold the live-player lock across decode.
 
 - **`video-player` / `video-player-extra` examples.** Scrubber and Linux-friendly open/unmute on
-  `video-player`; `video-player-extra` is a full-chrome lab. Both enable `linux-gstreamer`.
+  `video-player`; `video-player-extra` is a full-chrome lab. Pass exactly one of `--features
+  gstreamer` or `--features libmpv` (no default).
