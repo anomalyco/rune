@@ -29,6 +29,8 @@ use crate::windows::{AnyWindowSpec, Display, WindowOptions, WindowSpec};
 mod launch_drawables;
 #[cfg(target_os = "macos")]
 use launch_drawables::LaunchDrawables;
+mod native;
+use native::Native;
 mod win;
 use win::{FirstFrame, Win};
 mod draw;
@@ -830,22 +832,26 @@ impl<S: 'static> Host<S> {
         let full_screen = mac::FullScreenWatch::new(&window);
         #[cfg(target_os = "macos")]
         let prime = if visible && panel.is_none() { 2 } else { 0 };
-        self.win = Some(Win {
-            first_frame: FirstFrame::default(),
-            #[cfg(target_os = "macos")]
+        #[cfg(target_os = "macos")]
+        let native = Native {
             pacing: crate::display_link::DisplayLink::new(&window, self.frame_wake.clone()),
-            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-            activator: None,
-            #[cfg(target_os = "macos")]
             present,
-            #[cfg(target_os = "macos")]
             shadow,
+            panel,
+            materials: crate::system_material::macos::Materials::new(),
+            help: Default::default(),
+            full_screen,
+            fn_key,
+            prime,
+            launch_drawables,
+        };
+        #[cfg(not(target_os = "macos"))]
+        let native = Native::default();
+        self.win = Some(Win {
+            native,
+            first_frame: FirstFrame::default(),
             surface,
             config,
-            #[cfg(target_os = "macos")]
-            panel,
-            #[cfg(target_os = "macos")]
-            materials: crate::system_material::macos::Materials::new(),
             window,
             visible,
             occluded: false,
@@ -855,28 +861,18 @@ impl<S: 'static> Host<S> {
             hidden_pace: HiddenPace::default(),
             cursor: crate::os_cursor::OsCursor::new(event_loop),
             alpha,
-            #[cfg(target_os = "macos")]
-            help: Default::default(),
-            #[cfg(target_os = "macos")]
-            full_screen,
-            #[cfg(target_os = "macos")]
-            fn_key,
-            #[cfg(target_os = "macos")]
-            prime,
-            #[cfg(target_os = "macos")]
-            launch_drawables,
             quiet: false,
             presented: None,
         });
         if launcher { self.win.as_mut().unwrap().first_frame.prepare(); }
         self.apply_placement(event_loop);
         #[cfg(target_os = "macos")]
-        if visible && let Some(w) = &self.win && w.panel.is_some() { w.show(focus); }
+        if visible && let Some(w) = &self.win && w.native.panel.is_some() { w.show(focus); }
         if let Some(created) = self.on_created.take() { created(self.native_handle.clone()); }
         if let Some(on_window) = self.on_window.as_mut() { on_window(&self.native_handle); }
         if let (Some(w), Some((gpu, ..))) = (self.win.as_mut(), self.gpu.as_ref()) {
             #[cfg(target_os = "macos")]
-            if let Some(pacing) = &mut w.pacing { pacing.update_display(&w.window); }
+            if let Some(pacing) = &mut w.native.pacing { pacing.update_display(&w.window); }
             let size = w.window.inner_size();
             let scale = w.window.scale_factor() as f32;
             if size.width > 0 && size.height > 0 {
@@ -897,7 +893,7 @@ impl<S: 'static> Host<S> {
         let mut drew = false;
         #[cfg(target_os = "macos")]
         if visible && !self.rt.minimize_request && !self.finished && !event_loop.exiting()
-            && self.win.as_ref().is_some_and(|w| w.panel.is_none() && w.window.is_minimized() != Some(true))
+            && self.win.as_ref().is_some_and(|w| w.native.panel.is_none() && w.window.is_minimized() != Some(true))
         {
             let presents = self.meter.totals().presents;
             self.redraw();

@@ -2,26 +2,13 @@
 
 use super::*;
 
-/// The open window. Fields drop in order: the surface before its window.
+/// The open window. Fields drop in order: what's native to the OS, then the surface before its
+/// window.
 pub(super) struct Win {
+    pub(super) native: Native,
     pub(super) first_frame: FirstFrame,
-    #[cfg(target_os = "macos")]
-    pub(super) pacing: Option<crate::display_link::DisplayLink>,
-    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-    pub(super) activator: Option<crate::activation::Activator>,
-    /// Reports when each drawable reached the screen, while tracing or for `shadow`.
-    #[cfg(target_os = "macos")]
-    pub(super) present: Option<crate::present_time::metal::LayerHook>,
-    /// Re-samples a transparent window's system shadow once its new pixels land.
-    #[cfg(target_os = "macos")]
-    pub(super) shadow: Option<crate::macos_window_shape::Shadow>,
     pub(super) surface: wgpu::Surface<'static>,
     pub(super) config: wgpu::SurfaceConfiguration,
-    #[cfg(target_os = "macos")]
-    pub(super) panel: Option<crate::macos::Panel>,
-    /// `El::system_material` views behind the Metal layer.
-    #[cfg(target_os = "macos")]
-    pub(super) materials: crate::system_material::macos::Materials,
     pub(super) window: Arc<Window>,
     /// False while hidden (platforms that can hide a window keep it for the next open).
     pub(super) visible: bool,
@@ -37,20 +24,6 @@ pub(super) struct Win {
     pub(super) hidden_pace: HiddenPace,
     pub(super) cursor: crate::os_cursor::OsCursor,
     pub(super) alpha: Option<crate::surface_alpha::AlphaSurface>,
-    #[cfg(target_os = "macos")]
-    pub(super) help: crate::macos_help::NativeHelp,
-    #[cfg(target_os = "macos")]
-    /// Redraws on full screen changes.
-    pub(super) full_screen: mac::FullScreenWatch,
-    /// Fn presses, which winit doesn't send, while the app wants modifier keys.
-    #[cfg(target_os = "macos")]
-    pub(super) fn_key: Option<crate::fn_key::FnKey>,
-    /// Initial frames (`Host::try_create` and one follow-up) that may draw before AppKit
-    /// reports the new window on screen.
-    #[cfg(target_os = "macos")]
-    pub(super) prime: u8,
-    #[cfg(target_os = "macos")]
-    pub(super) launch_drawables: LaunchDrawables,
     /// Only a due timer asked for the next frame, which may then draw nothing new.
     pub(super) quiet: bool,
     /// The last frame presented, while the window rests.
@@ -67,7 +40,7 @@ impl Win {
         self.surface.configure(device, &self.config);
         if let Some(alpha) = &mut self.alpha { alpha.resize(device, (width, height)); }
         #[cfg(target_os = "macos")]
-        if let Some(shadow) = &self.shadow { shadow.redraw(); }
+        if let Some(shadow) = &self.native.shadow { shadow.redraw(); }
         true
     }
 }
@@ -199,8 +172,8 @@ impl Win {
     pub(super) fn show(&self, focus: bool) {
         #[cfg(target_os = "macos")]
         {
-            if let Some(shadow) = &self.shadow { shadow.shown(); }
-            if let Some(panel) = &self.panel {
+            if let Some(shadow) = &self.native.shadow { shadow.shown(); }
+            if let Some(panel) = &self.native.panel {
                 panel.show(std::time::Duration::ZERO);
                 if focus { panel.request_keys(); }
                 return;
@@ -215,23 +188,23 @@ impl Win {
         #[cfg(all(feature = "native-file-dialog", target_os = "linux"))]
         crate::file_dialog::window_focus(&self.window, false);
         #[cfg(target_os = "macos")]
-        if let Some(shadow) = &self.shadow { shadow.hidden(); }
+        if let Some(shadow) = &self.native.shadow { shadow.hidden(); }
         #[cfg(target_os = "macos")]
-        if let Some(panel) = &self.panel { panel.hide(std::time::Duration::ZERO); return; }
+        if let Some(panel) = &self.native.panel { panel.hide(std::time::Duration::ZERO); return; }
         self.window.set_visible(false);
     }
 
     /// Its last frame is on screen and nothing has asked for another since.
     pub(super) fn rests(&self) -> bool {
         #[cfg(target_os = "macos")]
-        if self.prime > 0 { return false; }
+        if self.native.prime > 0 { return false; }
         self.presented.is_some()
     }
 
     /// The display link's next tick after `now`, while it runs.
     pub(super) fn next_tick(&self, now: Instant) -> Option<Instant> {
         #[cfg(target_os = "macos")]
-        return self.pacing.as_ref().filter(|p| p.running()).map(|p| now + Duration::from_secs_f64(1.0 / p.refresh_hz()));
+        return self.native.pacing.as_ref().filter(|p| p.running()).map(|p| now + Duration::from_secs_f64(1.0 / p.refresh_hz()));
         #[cfg(not(target_os = "macos"))]
         { let _ = now; None }
     }
@@ -239,7 +212,7 @@ impl Win {
     /// Whether the display link drives redraws. Other platforms redraw on request.
     pub(super) fn paced(&self) -> bool {
         #[cfg(target_os = "macos")]
-        return self.pacing.as_ref().is_some_and(|p| p.running());
+        return self.native.pacing.as_ref().is_some_and(|p| p.running());
         #[cfg(not(target_os = "macos"))]
         false
     }
@@ -257,7 +230,7 @@ impl Win {
     /// What paces the window's frames, for its stats.
     pub(super) fn pacing_state(&self, moving: bool) -> Pacing {
         #[cfg(target_os = "macos")]
-        return crate::display_link::pacing(self.pacing.as_ref(), moving);
+        return crate::display_link::pacing(self.native.pacing.as_ref(), moving);
         #[cfg(not(target_os = "macos"))]
         if moving { Pacing::Vsync } else { Pacing::Idle }
     }
@@ -273,7 +246,7 @@ impl Win {
     /// as visible).
     #[cfg(target_os = "macos")]
     pub(super) fn natively_occluded(&self) -> bool {
-        match &self.panel {
+        match &self.native.panel {
             Some(panel) => panel.occluded(),
             None => crate::macos::window_occluded(&self.window),
         }
@@ -281,7 +254,7 @@ impl Win {
 
     pub(super) fn stop_pacing(&mut self) {
         #[cfg(target_os = "macos")]
-        if let Some(pacing) = &mut self.pacing { pacing.stop(); }
+        if let Some(pacing) = &mut self.native.pacing { pacing.stop(); }
         #[cfg(target_os = "macos")]
         self.present_with_transaction(false);
     }
@@ -289,19 +262,19 @@ impl Win {
     /// Presents drawables inside Core Animation transactions, while the frame moves.
     #[cfg(target_os = "macos")]
     pub(super) fn present_with_transaction(&mut self, on: bool) {
-        self.materials.set_moving(&self.surface, on);
+        self.native.materials.set_moving(&self.surface, on);
     }
 
     /// Presents the frame in the transaction that resizes the window while the user drags its
     /// edge. Before the drawable is acquired: wgpu reads `presentsWithTransaction` then.
     #[cfg(target_os = "macos")]
     pub(super) fn set_live_resize(&mut self, on: bool) {
-        self.materials.set_live(&self.window, &self.surface, on);
+        self.native.materials.set_live(&self.window, &self.surface, on);
     }
 
     pub(super) fn focus(&self) {
         #[cfg(target_os = "macos")]
-        if let Some(panel) = &self.panel { panel.request_keys(); return; }
+        if let Some(panel) = &self.native.panel { panel.request_keys(); return; }
         self.window.focus_window();
     }
 }

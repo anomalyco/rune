@@ -34,7 +34,7 @@ impl<S: 'static> Host<S> {
     #[cfg(target_os = "macos")]
     pub(super) fn fn_key(&mut self) {
         let Some(l) = &self.win else { return };
-        let Some(changes) = l.fn_key.as_ref().map(|f| f.take()) else { return };
+        let Some(changes) = l.native.fn_key.as_ref().map(|f| f.take()) else { return };
         let mut redraw = false;
         for pressed in changes {
             redraw |= self.rt.physical_with_fallback(crate::PhysicalInput::Key {
@@ -146,7 +146,7 @@ impl<S: 'static> Host<S> {
         if !matches!(event, WindowEvent::RedrawRequested) && let Some(w) = &mut self.win { w.quiet = false; }
         #[cfg(target_os = "macos")]
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } | WindowEvent::Occluded(_))
-            && let Some(w) = &mut self.win && let Some(pacing) = &mut w.pacing {
+            && let Some(w) = &mut self.win && let Some(pacing) = &mut w.native.pacing {
             pacing.update_display(&w.window);
         }
         if matches!(&event, WindowEvent::ScaleFactorChanged { .. }) { self.apply_placement(event_loop); }
@@ -154,7 +154,7 @@ impl<S: 'static> Host<S> {
             WindowEvent::Focused(focused) => {
                 if self.launcher() && self.win.as_ref().is_some_and(|w| !w.first_frame.notified) { return; }
                 #[cfg(target_os = "macos")]
-                if self.win.as_ref().and_then(|w| w.panel.as_ref()).is_some_and(|p| p.is_key() != focused) {
+                if self.win.as_ref().and_then(|w| w.native.panel.as_ref()).is_some_and(|p| p.is_key() != focused) {
                     // winit queues an initial false from its hidden source window before
                     // adoption. It must not dismiss an already-key panel on first open.
                     return;
@@ -180,7 +180,7 @@ impl<S: 'static> Host<S> {
                     self.rt.set_system_dark(dark);
                 }
                 #[cfg(target_os = "macos")]
-                if let Some(l) = self.win.as_ref().filter(|l| l.full_screen.take()) {
+                if let Some(l) = self.win.as_ref().filter(|l| l.native.full_screen.take()) {
                     self.rt.set_titlebar_inset(place_chrome(&l.window, self.chrome));
                 }
                 self.redraw();
@@ -254,7 +254,7 @@ impl<S: 'static> Host<S> {
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 #[cfg(target_os = "macos")]
-                if let Some(shadow) = &l.shadow { shadow.redraw(); }
+                if let Some(shadow) = &l.native.shadow { shadow.redraw(); }
                 let scale = scale_factor as f32;
                 let size = l.window.inner_size();
                 if size.width > 0 && size.height > 0 {
@@ -272,7 +272,7 @@ impl<S: 'static> Host<S> {
                 // Their native occlusion transitions must not settle or redraw a reveal.
                 if self.macos_window.launcher && cfg!(target_os = "macos") { return; }
                 #[cfg(target_os = "macos")]
-                { l.prime = 0; }
+                { l.native.prime = 0; }
                 let was_occluded = std::mem::replace(&mut l.occluded, occluded);
                 l.retry = None;
                 l.presented = None;
@@ -287,7 +287,7 @@ impl<S: 'static> Host<S> {
                 rt.set_titlebar_inset(place_chrome(&l.window, chrome));
                 // A window opened while the displays slept has no display link yet.
                 #[cfg(target_os = "macos")]
-                if l.pacing.is_none() { l.pacing = crate::display_link::DisplayLink::new(&l.window, self.frame_wake.clone()); }
+                if l.native.pacing.is_none() { l.native.pacing = crate::display_link::DisplayLink::new(&l.window, self.frame_wake.clone()); }
                 if was_occluded {
                     // Coming back paints the settled state in the first frame (guarantee 8).
                     rt.settle_all();

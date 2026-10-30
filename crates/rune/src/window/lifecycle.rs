@@ -220,7 +220,7 @@ impl<S: 'static> Host<S> {
         if let Some(w) = &mut self.win {
             w.first_frame.hide();
             #[cfg(target_os = "macos")]
-            { w.prime = 0; }
+            { w.native.prime = 0; }
         }
         self.secure_input.set(false);
         if !self.closes() { return; }
@@ -269,7 +269,7 @@ impl<S: 'static> Host<S> {
         if let Some(w) = &mut self.win {
             w.first_frame.hide();
             #[cfg(target_os = "macos")]
-            { w.prime = 0; }
+            { w.native.prime = 0; }
         }
         self.secure_input.set(false);
         self.ime_allowed = false;
@@ -348,10 +348,10 @@ impl<S: 'static> Host<S> {
         if is_wayland(event_loop) {
             match token {
                 Some(token) => {
-                    if w.activator.is_none() {
-                        w.activator = crate::activation::Activator::new(&w.window);
+                    if w.native.activator.is_none() {
+                        w.native.activator = crate::activation::Activator::new(&w.window);
                     }
-                    if let Some(a) = w.activator.as_mut() {
+                    if let Some(a) = w.native.activator.as_mut() {
                         a.activate(&token);
                     }
                 }
