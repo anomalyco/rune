@@ -246,8 +246,9 @@ impl<S: 'static> Runtime<S> {
                 pinh.group
             };
             // Loops and reveals run on the node's clock (`El::time_scale`).
-            let lnow = self.scene.store().node_time(n.id);
-            let loop_value = self.loops.get(&n.id).map(|l| l.sample_at(lnow, self.clock, self.reduced_motion));
+            let track = self.loops.get(&n.id);
+            let lnow = if track.is_some() { self.scene.store().node_time(n.id) } else { self.t };
+            let loop_value = track.map(|l| l.sample_at(lnow, self.clock, self.reduced_motion));
             if fades(n.looping.as_deref().copied()) && let Some(v) = loop_value {
                 own *= v;
             }
@@ -263,7 +264,7 @@ impl<S: 'static> Runtime<S> {
             let mut rounded = pinh.rounded;
             let has_press_scale = n.handlers.get().is_some_and(|h| h.press_scale.is_some());
             let press_k = if has_press_scale { self.scene.get(n.id, P_PRESS_SCALE).unwrap_or(1.0) } else { 1.0 };
-            let sequence = self.loops.get(&n.id)
+            let sequence = track
                 .filter(|_| matches!(n.looping.as_ref().map(|l| l.kind), Some(rune_motion::LoopKind::Sequence(_))));
             let static_k = if n.scale_track { self.scene.get(n.id, P_SCALE).unwrap_or(n.static_scale) } else { n.static_scale };
             let own_sc = p.transform.scale.x * press_k * static_k

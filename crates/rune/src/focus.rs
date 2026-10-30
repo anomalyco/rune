@@ -267,8 +267,10 @@ impl<S: 'static> Runtime<S> {
         // Use the same focus path as input events, then restore the old presentation
         // tree so apply can retain its exit visuals.
         std::mem::swap(&mut self.nodes, nodes);
+        self.nodes_replaced();
         let changed = self.set_focus(next, self.keyboard_focus);
         std::mem::swap(&mut self.nodes, nodes);
+        self.nodes_replaced();
         if self.input_click.dragging_path().is_some_and(|p| !nodes.iter().any(|n| n.path == p && !n.inert && n.input.is_some())) {
             self.input_click.drop_drag();
         }

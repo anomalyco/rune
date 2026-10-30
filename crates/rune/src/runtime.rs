@@ -83,6 +83,10 @@ mod layout_diagnostics;
 mod blend;
 #[path = "runtime/drag_out_host.rs"]
 mod drag_out_host;
+#[path = "runtime/exit_mask.rs"]
+mod exit_mask;
+#[path = "runtime/key_index.rs"]
+mod key_index;
 #[path = "runtime/system_settings.rs"]
 mod system_settings;
 #[path = "runtime/prune.rs"]
@@ -403,6 +407,8 @@ pub struct Runtime<S: 'static> {
     /// Sideways scroll of focused single-line fields, in points, keyed by node path.
     input_scroll: HashMap<String, f32>,
     dissolve_scratch: Vec<bool>,
+    exit_mask: exit_mask::ExitMask,
+    key_index: key_index::KeyIndex,
     has_dissolve: bool,
     cache_live_scratch: Vec<bool>,
     cache_check_scratch: Vec<bool>,
@@ -784,6 +790,8 @@ impl<S: 'static> Runtime<S> {
             layer_scratch: Vec::new(),
             input_scroll: HashMap::default(),
             dissolve_scratch: Vec::new(),
+            exit_mask: Default::default(),
+            key_index: Default::default(),
             has_dissolve: false,
             cache_live_scratch: Vec::new(),
             cache_check_scratch: Vec::new(),

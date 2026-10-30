@@ -677,6 +677,7 @@ impl<S: 'static> Runtime<S> {
             animating |= self.latch_live(self.take_live_wake());
             self.scene.present();
         }
+        self.begin_exit_mask();
         animating |= self.build();
         // Compensate drawn motion, leaving unrelated layout and growth springs alone.
         for _ in 0..3 {
@@ -689,6 +690,7 @@ impl<S: 'static> Runtime<S> {
         self.report_layout();
         // A report waits for the next frame: draw one to deliver it.
         animating |= self.report_drawn();
+        self.end_exit_mask();
         animating |= source(self.loops_active, AnimSource::LOOP);
         animating |= source(self.static_scale_settling || self.pixel_snap.easing(), AnimSource::SCALE_SETTLE);
         animating |= source(self.videos_active, AnimSource::VIDEO);

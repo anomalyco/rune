@@ -115,14 +115,6 @@ impl<S: 'static> Runtime<S> {
         screen_clip_of(parent, &self.inh_scratch, &self.turn_scratch)
     }
 
-    pub(super) fn subtree_exiting(&self, mut i: usize) -> bool {
-        loop {
-            if self.is_exiting(self.nodes[i].id) { return true; }
-            let Some(parent) = self.nodes[i].parent else { return false };
-            i = parent;
-        }
-    }
-
     /// Unmounted in this commit (an instant removal), though still listed until the next.
     pub(super) fn subtree_unmounted(&self, mut i: usize) -> bool {
         loop {

@@ -6,6 +6,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn prune_exited(&mut self) {
         // Fills last commit's spare buffer and keeps this one as the next spare: a few thousand
         // nodes would otherwise grow a fresh Vec, megabytes, on every frame a node exits.
+        self.nodes_replaced();
         let mut old = std::mem::replace(&mut self.nodes, std::mem::take(&mut self.spare_nodes));
         self.nodes.clear();
         self.nodes.reserve(old.len());

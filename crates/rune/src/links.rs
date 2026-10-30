@@ -398,15 +398,21 @@ impl<S: 'static> Runtime<S> {
     /// Unscrolled target rect `[x0, y0, x1, y1]` (in window points) and first node index for
     /// the highlight keyed `key` (or scoped `path/key`).
     pub(super) fn highlight_target_in(&self, nodes: &[Node], scope: Option<&str>, key: &str) -> Option<(usize, [f32; 4])> {
+        self.highlight_target_with(nodes, self.key_index_for(nodes), scope, key)
+    }
+
+    /// [`Self::highlight_target_in`], looking only at the nodes `index` lists for `key`.
+    pub(super) fn highlight_target_with(&self, nodes: &[Node], index: Option<&super::key_index::KeyIndex>, scope: Option<&str>, key: &str) -> Option<(usize, [f32; 4])> {
         let mut first_node = None;
         let mut union: Option<[f32; 4]> = None;
-        for (i, n) in nodes.iter().enumerate() {
+        let mut visit = |i: usize| {
+            let n = &nodes[i];
+            let Some(spec) = n.text.as_ref().filter(|t| !t.highlights.is_empty()) else { return };
             if !n.parent.is_none_or(|p| super::in_scope(&nodes[p].path, scope)) {
-                continue;
+                return;
             }
-            let Some(spec) = n.text.as_ref().filter(|t| !t.highlights.is_empty()) else { continue };
             let matches: Vec<_> = spec.highlights.iter().map(|h| h.key.as_deref().is_some_and(|hkey| {
-                crate::flight::selects(key, &format!("{}/{hkey}", n.path), Some(hkey))
+                crate::flight::selects_under(key, &n.path, hkey)
             })).collect();
             if matches.iter().any(|m| *m) {
                 for (k, r) in self.highlight_boxes_in(nodes, i, n.target, 1.0) {
@@ -416,6 +422,10 @@ impl<S: 'static> Runtime<S> {
                     }
                 }
             }
+        };
+        match index {
+            Some(index) => index.marked(key).into_iter().for_each(&mut visit),
+            None => (0..nodes.len()).for_each(&mut visit),
         }
         Some((first_node?, union?))
     }
@@ -425,7 +435,7 @@ impl<S: 'static> Runtime<S> {
         (0..self.nodes.len()).filter(|&i| !self.subtree_exiting(i)).find_map(|i| {
             let n = &self.nodes[i];
             let k = n.text.as_ref()?.highlights.iter().position(|h| {
-                h.key.as_deref().is_some_and(|hk| crate::flight::selects(key, &format!("{}/{hk}", n.path), Some(hk)))
+                h.key.as_deref().is_some_and(|hk| crate::flight::selects_under(key, &n.path, hk))
             })?;
             let (_, r) = self.highlight_boxes(i, self.drawn_box(i)).into_iter().find(|(j, _)| *j == k)?;
             Some(((r[0] + r[2]) * 0.5, (r[1] + r[3]) * 0.5))

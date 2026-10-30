@@ -101,6 +101,15 @@ pub(crate) fn selects(selector: &str, path: &str, key: Option<&str>) -> bool {
     scope.rsplit('/').all(|seg| keyed.next() == Some(seg))
 }
 
+/// Whether `selector` names a highlight keyed `key` in the text at `path`: [`selects`] for
+/// `{path}/{key}`, without building it.
+pub(crate) fn selects_under(selector: &str, path: &str, key: &str) -> bool {
+    if selector == key { return true; }
+    let Some(scope) = selector.strip_suffix(key).and_then(|s| s.strip_suffix('/')) else { return false };
+    let mut keyed = path.rsplit('/').filter(|seg| !seg.starts_with('#'));
+    scope.rsplit('/').all(|seg| keyed.next() == Some(seg))
+}
+
 /// Transform glyph geometry without changing its atlas footprint. Clip edges share the same
 /// transform; a soft inset handles lines that were only partly visible in the source editor.
 pub(crate) fn transformed(mut q: Instance, from: Rect, to: Rect, scale: f32, alpha: f32, clip: [f32; 4], fade: [f32; 4]) -> Instance {
