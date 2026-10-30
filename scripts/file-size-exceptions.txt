@@ -4,4 +4,3 @@ crates/rune-light/examples/reel.rs 1899
 crates/rune/src/el.rs 2953
 crates/rune/src/overlay.rs 1564
 crates/rune/src/runtime.rs 7414
-examples/kit-gallery/src/stories.rs 1613
