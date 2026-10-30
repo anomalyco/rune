@@ -98,11 +98,15 @@ fn an_answer_is_taken_once_and_each_landing_wakes_once() {
 #[test]
 fn debounce_runs_only_the_last_request_of_a_burst_after_a_quiet_wait() {
     let (waker, wakes) = counter();
-    let search = Latest::on(pool(), Some(waker)).debounce(Duration::from_millis(40));
+    // Long enough that a loaded test machine can't stretch the 10 ms gaps past it.
+    let quiet = Duration::from_millis(250);
+    let search = Latest::on(pool(), Some(waker)).debounce(quiet);
     let ran = Arc::new(Mutex::new(Vec::new()));
     let start = Instant::now();
+    let mut last = Duration::ZERO;
     for q in ["a", "ab", "abc"] {
         let ran = ran.clone();
+        last = start.elapsed();
         search.request(q, move |q| { ran.lock().unwrap().push((q, start.elapsed())); q });
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -110,8 +114,8 @@ fn debounce_runs_only_the_last_request_of_a_burst_after_a_quiet_wait() {
     assert_eq!(search.take(), Some("abc"));
     let ran = ran.lock().unwrap();
     assert_eq!(ran.iter().map(|(q, _)| *q).collect::<Vec<_>>(), ["abc"], "superseded requests never ran");
-    // Asked at about 20 ms, so it waits until about 60 ms: the debounce restarted on each key.
-    assert!(ran[0].1 >= Duration::from_millis(55), "started after the quiet wait: {:?}", ran[0].1);
+    // The wait restarted on each key, so it counts from the last request.
+    assert!(ran[0].1 >= last + quiet, "started after the quiet wait: {:?} (last asked at {last:?})", ran[0].1);
 }
 
 #[test]
