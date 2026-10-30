@@ -89,6 +89,7 @@ impl El {
 
 fn el_flatten_reusable(e: &El) -> bool {
     e.virtual_estimate.is_none()
+        && e.growth.is_none()
         && e.aspect_fit <= 0.0
         && e.above.is_none()
         && e.live.is_empty()
@@ -237,6 +238,7 @@ pub(crate) struct MemoCache {
     pub(crate) flattened: crate::runtime::HashMap<u64, crate::runtime::memo_reuse::FlattenedMemo>,
     pub(crate) pending_scratch: Vec<crate::runtime::memo_reuse::PendingFlat>,
     pub(crate) reused_scratch: Vec<crate::runtime::memo_reuse::ReusedSpan>,
+    pub(crate) skip_scratch: Vec<crate::runtime::memo_reuse::CleanApplySpan>,
     pub(crate) present_len: usize,
     pass: u64,
     #[cfg(test)]

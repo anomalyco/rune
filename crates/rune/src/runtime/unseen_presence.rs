@@ -72,11 +72,17 @@ impl<S: 'static> Runtime<S> {
 
     /// Per node of the new tree `nodes`: neither it nor anything under it drew in the last
     /// build, and none of its swept path lands in sight in this layout (in the window, inside
-    /// its clips). Empty when nothing qualifies.
-    pub(super) fn unseen_before_and_after(&self, nodes: &[Node]) -> Vec<bool> {
-        if !self.built || self.seen.len() != self.nodes.len() { return Vec::new(); }
+    /// its clips). Empty when nothing non-skipped qualifies.
+    pub(super) fn unseen_before_and_after(&self, nodes: &[Node], skip: &[memo_reuse::CleanApplySpan]) -> Vec<bool> {
+        if !self.built || self.seen.len() != self.nodes.len() || self.seen.iter().all(|&s| s) {
+            return Vec::new();
+        }
         let mut seen = self.seen.clone();
         mark_ancestors(&self.nodes, &mut seen);
+        let any_active_unseen = self.nodes.iter().zip(&seen).any(|(old, &s)| {
+            !s && self.node_index.get(&old.id).is_some_and(|&ni| !memo_reuse::is_in_clean_spans(skip, ni))
+        });
+        if !any_active_unseen { return Vec::new(); }
         let before: HashSet<NodeId> = self.nodes.iter().zip(&seen).filter(|(_, s)| !**s).map(|(n, _)| n.id).collect();
         if before.is_empty() { return Vec::new(); }
         let old_drawn: HashMap<NodeId, [f32; 4]> = self

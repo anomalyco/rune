@@ -8,7 +8,8 @@ impl<S: 'static> Runtime<S> {
         let _apply_time = crate::frame_profile::Scope::new(crate::frame_profile::Phase::Apply);
         let Measured { layout: taffy, mut nodes, reduced_motion, time_scale, caret_read, memo_flattened, memo_reused, .. } = measured;
         self.caret_watch = caret_read;
-        if reduced_motion != self.reduced_motion {
+        let reduced_motion_unchanged = reduced_motion == self.reduced_motion;
+        if !reduced_motion_unchanged {
             self.reduced_motion = reduced_motion;
             self.scene.set_reduced_motion(reduced_motion);
         }
@@ -55,16 +56,21 @@ impl<S: 'static> Runtime<S> {
                     || (n.input.is_none() && n.text.as_ref().is_some_and(|t| t.redacted && t.secure_revealed))
             })
             .map(|n| n.id).collect();
-        let mut concealed = vec![false; nodes.len()];
-        for (i, n) in nodes.iter().enumerate() {
-            let hidden_now = n.input.as_ref().is_some_and(|input| input.edit.is_hidden_multiline())
-                || (n.input.is_none() && n.text.as_ref().is_some_and(|t| t.redacted && !t.secure_revealed));
-            if hidden_now && revealed.contains(&n.id) {
-                concealed[i] = true;
+        let mut concealed = Vec::new();
+        let concealing = if !revealed.is_empty() {
+            concealed.resize(nodes.len(), false);
+            for (i, n) in nodes.iter().enumerate() {
+                let hidden_now = n.input.as_ref().is_some_and(|input| input.edit.is_hidden_multiline())
+                    || (n.input.is_none() && n.text.as_ref().is_some_and(|t| t.redacted && !t.secure_revealed));
+                if hidden_now && revealed.contains(&n.id) {
+                    concealed[i] = true;
+                }
             }
-        }
-        mark_ancestors(&nodes, &mut concealed);
-        let concealing = concealed.iter().any(|&hidden| hidden);
+            mark_ancestors(&nodes, &mut concealed);
+            concealed.iter().any(|&hidden| hidden)
+        } else {
+            false
+        };
         let instant = tx.instant || first || concealing;
         // An instant change lands what it changes; motion an earlier change set going keeps on.
         self.scene.keep_flights(tx.instant && !tx.settle && !first && !concealing);
@@ -72,8 +78,10 @@ impl<S: 'static> Runtime<S> {
         if self.fit_height && let Some(root) = nodes.first() { self.fit_window(root.local.h, tx, first); }
 
         // What drew nothing last frame has no exit to show (`unseen_presence.rs`).
-        let drew_nothing = self.drew_nothing();
-        let unseen_ids: HashSet<NodeId> = if self.virtuals.is_empty() { HashSet::default() } else {
+        let any_gone = self.nodes.iter().any(|o| !self.node_index.contains_key(&o.id));
+        let any_replaced = self.virtuals.values().any(crate::virtual_list::VirtualList::replaced_view);
+        let drew_nothing = if any_gone || any_replaced { self.drew_nothing() } else { Vec::new() };
+        let unseen_ids: HashSet<NodeId> = if self.virtuals.is_empty() || drew_nothing.is_empty() { HashSet::default() } else {
             self.nodes.iter().zip(&drew_nothing).filter(|&(_, &u)| u).map(|(n, _)| n.id).collect()
         };
 
@@ -243,16 +251,35 @@ impl<S: 'static> Runtime<S> {
         let mut time_scales = Vec::new();
         if time_scaled { self.sync_time_scales(&nodes, &mut time_scales, false); }
 
-        let unseen = self.unseen_before_and_after(&nodes);
+        let can_skip_apply = !first && !tx.settle && !concealing && reduced_motion_unchanged && !self.scene.tracing();
+        let mut skip_spans = std::mem::take(&mut self.memo.skip_scratch);
+        self.clean_apply_spans(&nodes, &memo_reused, can_skip_apply, &mut skip_spans);
+        let unseen = self.unseen_before_and_after(&nodes, &skip_spans);
         // `El::matched` elements of this tree: (id, index, newly mounted).
         let mut arrivals: Vec<(Rc<str>, usize, bool)> = Vec::new();
-        let mut mounted = vec![false; nodes.len()];
+        let mut mounted: Vec<bool> = Vec::new();
         // Nodes this commit slid from where they were drawn, or under an ancestor that slid.
-        let mut slid = vec![false; nodes.len()];
+        let mut slid: Vec<bool> = Vec::new();
         // How far the top of each node's contents moved down in its growth row (drawn less new).
-        let mut top_moved = vec![0.0f32; nodes.len()];
+        let mut top_moved: Vec<f32> = Vec::new();
         let mut last = paint_tracks::LastBuild::default();
-        for i in 0..nodes.len() {
+        let mut skip_cursor = 0usize;
+        let mut i = 0usize;
+        while i < nodes.len() {
+            while skip_cursor < skip_spans.len() && skip_spans[skip_cursor].new_start + skip_spans[skip_cursor].len <= i {
+                skip_cursor += 1;
+            }
+            if let Some(span) = skip_spans.get(skip_cursor).filter(|s| s.new_start == i) {
+                for k in 0..span.len {
+                    nodes[span.new_start + k].scale_track = self.nodes[span.old_start + k].scale_track;
+                }
+                last.advance(span.old_start + span.len);
+                i += span.len;
+                continue;
+            }
+            let cur_i = i;
+            i += 1;
+            let i = cur_i;
             let id = nodes[i].id;
             let parent_id = nodes[i].parent.map(|p| nodes[p].id);
             let spring_l = tx.motion.unwrap_or(nodes[i].motion);
@@ -297,8 +324,11 @@ impl<S: 'static> Runtime<S> {
                 }
                 // Growth carries a row's entrance; an explicit transition adds to it. Under
                 // `animate_layout`, contents new to a row already in place enter on their own.
-                mounted[i] = !was_present;
-                let rides_row = row_like || (nodes[i].in_row == RowLayout::Horizontal && nodes[i].parent.is_some_and(|p| mounted[p]));
+                if !was_present {
+                    if mounted.is_empty() { mounted.resize(nodes.len(), false); }
+                    mounted[i] = true;
+                }
+                let rides_row = row_like || (nodes[i].in_row == RowLayout::Horizontal && nodes[i].parent.is_some_and(|p| mounted.get(p).copied().unwrap_or(false)));
                 let quiet_row = rides_row
                     && nodes[i].transition.as_ref().is_none_or(|t| t.insertion == rune_motion::Effect::IDENTITY)
                     && !was_exiting
@@ -362,17 +392,22 @@ impl<S: 'static> Runtime<S> {
                     && let Some(p) = nodes[i].parent
                 {
                     if i == p + 1 && flying.is_none() && let Some(drawn) = self.scene.get(id, prop::FRAME) {
-                        top_moved[p] = drawn.y - scene_rect.y;
+                        let dy = drawn.y - scene_rect.y;
+                        if dy.abs() > 1.0 / 64.0 {
+                            if top_moved.is_empty() { top_moved.resize(nodes.len(), 0.0); }
+                            top_moved[p] = dy;
+                        }
                     }
-                    if top_moved[p].abs() > 1.0 / 64.0 && flying.is_none() {
-                        (row_jump, reorder_jump) = (top_moved[p], top_moved[p]);
+                    let tm = top_moved.get(p).copied().unwrap_or(0.0);
+                    if tm.abs() > 1.0 / 64.0 && flying.is_none() {
+                        (row_jump, reorder_jump) = (tm, tm);
                     }
                 }
                 if let Some(f) = flying {
                     // Keep a matched flight on its one screen path, even where a growth row
                     // owns its place; retarget it only if its layout moved, or an ancestor's
                     // under a slide its path doesn't ride, so an unrelated commit doesn't re-time it.
-                    if self.flying[f].1 != nodes[i].local || nodes[i].parent.is_some_and(|p| slid[p]) {
+                    if self.flying[f].1 != nodes[i].local || nodes[i].parent.is_some_and(|p| slid.get(p).copied().unwrap_or(false)) {
                         self.flying[f].1 = nodes[i].local;
                         // A growth row's instant vertical place would land the whole flight.
                         let la = if layout_anim.x == Anim::INSTANT || layout_anim.y == Anim::INSTANT { LayoutAnim::new(spring_l) } else { layout_anim };
@@ -398,7 +433,7 @@ impl<S: 'static> Runtime<S> {
                 }
             }
             let shift = nodes[i].vis.offset;
-            slid[i] = nodes[i].parent.is_some_and(|p| slid[p]);
+            if !slid.is_empty() && nodes[i].parent.is_some_and(|p| slid[p]) { slid[i] = true; }
             if nodes[i].looping.is_none() && !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Offset)
                 && (shift != [0.0; 2] || reorder_jump != 0.0 || self.scene.store().has(id, prop::OFFSET))
             {
@@ -411,6 +446,7 @@ impl<S: 'static> Runtime<S> {
                         // offset slides into its new place.
                         let now = self.scene.get(id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
                         self.scene.set(id, prop::OFFSET, rune_motion::Vec2::new(now.x, now.y + row_jump));
+                        if slid.is_empty() { slid.resize(nodes.len(), false); }
                         slid[i] = true;
                     }
                     match nodes[i].vis.offset_motion.as_deref().copied() {
@@ -419,6 +455,7 @@ impl<S: 'static> Runtime<S> {
                     }
                 } else if reorder_jump != 0.0 {
                     self.slide_reordered(id, reorder_jump, to, anim_l);
+                    if slid.is_empty() { slid.resize(nodes.len(), false); }
                     slid[i] = true;
                 }
             }
@@ -583,7 +620,7 @@ impl<S: 'static> Runtime<S> {
                     x: AxisScroll::default(),
                     told: None,
                 });
-                if concealed[i] {
+                if concealed.get(i).copied().unwrap_or(false) {
                     e.offset = 0.0;
                     e.v = 0.0;
                     e.max = 0.0;
@@ -608,8 +645,8 @@ impl<S: 'static> Runtime<S> {
         // Removed nodes stay mounted in `Scene` until their exit transition settles at opacity 0.
         let present_len = nodes.len();
         let mut old_nodes = std::mem::take(&mut self.nodes);
-        let old_ids: Vec<NodeId> = old_nodes.iter().map(|n| n.id).collect();
         for old in &old_nodes {
+            if old.live.is_empty() { continue; }
             if let Some(&i) = self.node_index.get(&old.id) {
                 let mut fill = None;
                 for bound in &mut nodes[i].live {
@@ -631,74 +668,79 @@ impl<S: 'static> Runtime<S> {
                 }
             }
         }
-        // Only the nodes that left are moved out; the rest drop where they are.
-        let gone: Vec<usize> = (0..old_nodes.len()).filter(|&oi| !self.node_index.contains_key(&old_ids[oi])).collect();
-        let mut at = 0;
-        old_nodes.retain(|_| { at += 1; gone.binary_search(&(at - 1)).is_ok() });
-        for (oi, mut old) in gone.into_iter().zip(old_nodes.drain(..)) {
-            if !self.scene.contains(old.id) {
-                self.hover_pruned(&old);
-                continue;
-            }
-            let old_parent_id = old.parent.and_then(|p| old_ids.get(p).copied());
-            let parent_remained_present =
-                old_parent_id.is_none_or(|pid| self.node_index.get(&pid).is_some_and(|&i| i < present_len));
-            if parent_remained_present {
-                let instant = instant || old_parent_id.and_then(|pid| self.node_index.get(&pid)).is_some_and(|&p| nodes[p].instant_changes);
-                if tx.settle || (instant && !self.is_exiting(old.id)) || drew_nothing.get(oi).copied().unwrap_or(false) {
-                    self.scene.unmount(old.id);
-                } else {
-                    if let Some(t) = old_parent_id.and_then(|pid| self.node_index.get(&pid)).and_then(|&p| nodes[p].vis.child_exit.as_deref().copied()) {
-                        self.scene.set_transition(old.id, t);
+        if !any_gone {
+            old_nodes.clear();
+        } else {
+            let old_ids: Vec<NodeId> = old_nodes.iter().map(|n| n.id).collect();
+            // Only the nodes that left are moved out; the rest drop where they are.
+            let gone: Vec<usize> = (0..old_nodes.len()).filter(|&oi| !self.node_index.contains_key(&old_ids[oi])).collect();
+            let mut at = 0;
+            old_nodes.retain(|_| { at += 1; gone.binary_search(&(at - 1)).is_ok() });
+            for (oi, mut old) in gone.into_iter().zip(old_nodes.drain(..)) {
+                if !self.scene.contains(old.id) {
+                    self.hover_pruned(&old);
+                    continue;
+                }
+                let old_parent_id = old.parent.and_then(|p| old_ids.get(p).copied());
+                let parent_remained_present =
+                    old_parent_id.is_none_or(|pid| self.node_index.get(&pid).is_some_and(|&i| i < present_len));
+                if parent_remained_present {
+                    let instant = instant || old_parent_id.and_then(|pid| self.node_index.get(&pid)).is_some_and(|&p| nodes[p].instant_changes);
+                    if tx.settle || (instant && !self.is_exiting(old.id)) || drew_nothing.get(oi).copied().unwrap_or(false) {
+                        self.scene.unmount(old.id);
+                    } else {
+                        if let Some(t) = old_parent_id.and_then(|pid| self.node_index.get(&pid)).and_then(|&p| nodes[p].vis.child_exit.as_deref().copied()) {
+                            self.scene.set_transition(old.id, t);
+                        }
+                        self.scene.remove(old.id);
                     }
+                } else if !tx.settle && self.flying.iter().any(|f| f.0 == old.id) {
+                    // A flight paints outside its ancestors, so it can't fade with an exiting one.
                     self.scene.remove(old.id);
                 }
-            } else if !tx.settle && self.flying.iter().any(|f| f.0 == old.id) {
-                // A flight paints outside its ancestors, so it can't fade with an exiting one.
-                self.scene.remove(old.id);
-            }
-            old.parent = old_parent_id.and_then(|pid| self.node_index.get(&pid).copied());
-            old.live.clear();
-            // Exit visuals outlive their model. Never call an accessor captured by
-            // a deleted row while normalizing a later focus change.
-            if let Some(input) = &mut old.input {
-                let was_revealed = input.edit.is_secure() && input.edit.is_revealed();
-                input.access = None;
-                input.key = None;
-                input.change = None;
-                input.edit.focused = false;
-                input.edit.clear_preedit();
-                input.edit.conceal();
-                if was_revealed && let Some(spec) = &mut old.text {
-                    spec.replace_content(input.edit.display().0);
-                    if input.edit.is_hidden_multiline() { spec.wrap = false; }
+                old.parent = old_parent_id.and_then(|pid| self.node_index.get(&pid).copied());
+                old.live.clear();
+                // Exit visuals outlive their model. Never call an accessor captured by
+                // a deleted row while normalizing a later focus change.
+                if let Some(input) = &mut old.input {
+                    let was_revealed = input.edit.is_secure() && input.edit.is_revealed();
+                    input.access = None;
+                    input.key = None;
+                    input.change = None;
+                    input.edit.focused = false;
+                    input.edit.clear_preedit();
+                    input.edit.conceal();
+                    if was_revealed && let Some(spec) = &mut old.text {
+                        spec.replace_content(input.edit.display().0);
+                        if input.edit.is_hidden_multiline() { spec.wrap = false; }
+                        let scale = self.env.scale;
+                        let w = (old.local.w - old.inset[0] - old.inset[2]).max(0.0);
+                        let wrap = spec.wrap.then_some(w * scale);
+                        old.text_layout = Some(self.text.layout_for_spec(spec, scale, wrap, line_alignment(spec)));
+                        old.elided = None;
+                    }
+                } else if let Some(spec) = &mut old.text
+                    && spec.redacted
+                    && spec.secure_revealed
+                {
+                    spec.conceal();
                     let scale = self.env.scale;
                     let w = (old.local.w - old.inset[0] - old.inset[2]).max(0.0);
                     let wrap = spec.wrap.then_some(w * scale);
-                    old.text_layout = Some(self.text.layout_for_spec(spec, scale, wrap, line_alignment(spec)));
-                    old.elided = None;
+                    let mut layout = self.text.layout_for_spec(spec, scale, wrap, line_alignment(spec));
+                    let mut elided = None;
+                    if spec.truncate && layout.full_width() > w * scale + 0.5 {
+                        let (cut, e) = truncated(&mut self.text, spec, scale, w * scale);
+                        (layout, elided) = (cut, Some(e));
+                    }
+                    old.text_layout = Some(layout);
+                    old.elided = elided;
                 }
-            } else if let Some(spec) = &mut old.text
-                && spec.redacted
-                && spec.secure_revealed
-            {
-                spec.conceal();
-                let scale = self.env.scale;
-                let w = (old.local.w - old.inset[0] - old.inset[2]).max(0.0);
-                let wrap = spec.wrap.then_some(w * scale);
-                let mut layout = self.text.layout_for_spec(spec, scale, wrap, line_alignment(spec));
-                let mut elided = None;
-                if spec.truncate && layout.full_width() > w * scale + 0.5 {
-                    let (cut, e) = truncated(&mut self.text, spec, scale, w * scale);
-                    (layout, elided) = (cut, Some(e));
-                }
-                old.text_layout = Some(layout);
-                old.elided = elided;
+                // A resize that laid the tree out again took the text layouts before the view ran.
+                if old.text_layout.is_none() { relayout::lay_out_text_in_place(&mut self.text, &mut old, self.env.scale); }
+                self.node_index.insert(old.id, nodes.len());
+                nodes.push(old);
             }
-            // A resize that laid the tree out again took the text layouts before the view ran.
-            if old.text_layout.is_none() { relayout::lay_out_text_in_place(&mut self.text, &mut old, self.env.scale); }
-            self.node_index.insert(old.id, nodes.len());
-            nodes.push(old);
         }
         self.spare_nodes = old_nodes;
 
@@ -710,10 +752,24 @@ impl<S: 'static> Runtime<S> {
         }
         self.nodes = nodes;
         self.memo.commit_flattened(&self.nodes, present_len, memo_flattened, memo_reused);
+        skip_spans.clear();
+        self.memo.skip_scratch = skip_spans;
         self.find_app_root();
         self.commit_gen = self.commit_gen.wrapping_add(1);
-        self.has_dissolve = self.nodes.iter().any(|n| n.vis.blend == crate::render::Blend::PlusLighter);
-        self.has_cache = self.nodes.iter().any(|n| n.vis.cache);
+        let (mut dissolve, mut cache, mut pix, mut drawn_ly, mut key_up, mut sticky, mut raise, mut any_loop) =
+            (false, false, false, false, false, false, false, false);
+        for n in &self.nodes {
+            dissolve |= n.vis.blend == crate::render::Blend::PlusLighter;
+            cache |= n.vis.cache;
+            pix |= n.pixel_aspect.is_some();
+            drawn_ly |= n.on_drawn_layout.is_some();
+            key_up |= n.focus.key_up.is_some();
+            sticky |= n.sticky.as_ref().is_some_and(|s| s.edge.is_some());
+            raise |= n.vis.raise;
+            any_loop |= n.looping.is_some();
+        }
+        self.has_dissolve = dissolve;
+        self.has_cache = cache;
         if !self.has_cache {
             if !self.node_caches.is_empty() { self.node_caches.clear(); }
             if !self.text.atlas.resident_caches.is_empty() { self.text.atlas.resident_caches.clear(); }
@@ -721,11 +777,11 @@ impl<S: 'static> Runtime<S> {
             self.node_caches.retain(|id, _| self.scene.contains(*id));
             self.text.atlas.resident_caches.retain(|id, _| self.scene.contains(NodeId(*id)));
         }
-        self.has_pixel_aspect = self.nodes.iter().any(|n| n.pixel_aspect.is_some());
-        self.has_drawn_layout = self.nodes.iter().any(|n| n.on_drawn_layout.is_some());
-        self.has_key_up = self.nodes.iter().any(|n| n.focus.key_up.is_some());
-        self.has_sticky = self.holding() || self.nodes.iter().any(|n| n.sticky.as_ref().is_some_and(|s| s.edge.is_some()));
-        self.has_raise = self.nodes.iter().any(|n| n.vis.raise);
+        self.has_pixel_aspect = pix;
+        self.has_drawn_layout = drawn_ly;
+        self.has_key_up = key_up;
+        self.has_sticky = self.holding() || sticky;
+        self.has_raise = raise;
         // A flight that left the tree stays lifted and covered while it exits, so it doesn't pop.
         self.flying.retain(|(id, _)| self.node_index.contains_key(id));
         self.launches.keep(&self.flying);
@@ -741,15 +797,17 @@ impl<S: 'static> Runtime<S> {
         self.loops.retain(|id, _| self.scene.contains(*id));
         self.catch_loops_up();
         self.static_scales.retain(|id, _| self.scene.contains(*id));
-        for n in &self.nodes {
-            let t = if time_scaled { self.scene.store().node_time(n.id) } else { self.t };
-            if let Some(&spec) = n.looping.as_deref() {
-                let start = self.loop_start(n.id, t);
-                let track = self.loops.entry(n.id).and_modify(|l| { l.retime(spec, t); l.enabled(true, t); })
-                    .or_insert_with(|| rune_motion::LoopTrack::new(spec, start));
-                if tx.settle || self.reduced_motion { track.finish(); }
-            } else if let Some(l) = self.loops.get_mut(&n.id) {
-                l.enabled(false, t);
+        if any_loop || !self.loops.is_empty() {
+            for n in &self.nodes {
+                let t = if time_scaled { self.scene.store().node_time(n.id) } else { self.t };
+                if let Some(&spec) = n.looping.as_deref() {
+                    let start = self.loop_start(n.id, t);
+                    let track = self.loops.entry(n.id).and_modify(|l| { l.retime(spec, t); l.enabled(true, t); })
+                        .or_insert_with(|| rune_motion::LoopTrack::new(spec, start));
+                    if tx.settle || self.reduced_motion { track.finish(); }
+                } else if let Some(l) = self.loops.get_mut(&n.id) {
+                    l.enabled(false, t);
+                }
             }
         }
         self.layout = taffy;
@@ -761,30 +819,4 @@ impl<S: 'static> Runtime<S> {
         self.viewport_stepped = false;
         self.settle = false;
     }
-
-    /// Runs each of `nodes` from `scales.len()` on at its `El::time_scale` times its parent's,
-    /// pushing the products onto `scales`. `exiting` nodes drop their own factor, which the app
-    /// can no longer change, and follow their parent's. A node whose clock changes keeps its
-    /// place: the store rebases its tracks, and its reveal words and loop shift by the same amount.
-    fn sync_time_scales(&mut self, nodes: &[Node], scales: &mut Vec<f32>, exiting: bool) {
-        for n in &nodes[scales.len()..] {
-            let own = if exiting { 1.0 } else { n.time_scale };
-            let k = own * n.parent.and_then(|p| scales.get(p).copied()).unwrap_or(1.0);
-            scales.push(k);
-            // Unmounted at once this commit: its clock went with it. (Present nodes not yet in
-            // the scene get theirs now, before their first tracks.)
-            if exiting && !self.scene.contains(n.id) { continue; }
-            let store = self.scene.store_mut();
-            let before = store.node_time(n.id);
-            store.set_node_time_scale(n.id, k);
-            let shift = store.node_time(n.id) - before;
-            if shift != 0.0 {
-                if let Some(st) = self.reveals.get_mut(&n.id) {
-                    for w in &mut st.words { w.1 += shift; }
-                }
-                if let Some(l) = self.loops.get_mut(&n.id) { l.shift(shift); }
-            }
-        }
-    }
-
 }

@@ -32,13 +32,16 @@ impl<S: 'static> Runtime<S> {
         // values they leave nothing to sample on a later visible frame.
         let mut sampled = false;
         for node in &self.nodes {
+            let text = node.text.as_ref().and_then(|t| t.live.as_ref()).map(|t| &t.source);
+            let pixels = node.vis.pixels.as_ref().map(|p| &p.source);
+            if node.live.is_empty() && text.is_none() && pixels.is_none() {
+                continue;
+            }
             // An element removed outright leaves the scene now but `nodes` only at the next
             // prune. Exiting elements and their children are still drawn, so their text and
             // pixels keep waking until the exit ends (commit already dropped their bindings).
             if !self.scene.contains(node.id) { continue; }
-            let text = node.text.as_ref().and_then(|t| t.live.as_ref()).map(|t| &t.source);
             sampled |= text.is_some() || !node.live.is_empty();
-            let pixels = node.vis.pixels.as_ref().map(|p| &p.source);
             for source in node.live.iter().map(|b| &b.source).chain(text).chain(pixels) {
                 if let Some(sub) = self.live_subscriptions.iter().find(|s| s.source_id == source.id()) {
                     sub.active.store(true, Ordering::Release);

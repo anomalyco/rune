@@ -36,8 +36,104 @@ pub(crate) struct ReusedSpan {
     pub(super) new_start: usize,
     pub(super) old_start: usize,
     pub(super) len: usize,
-    #[allow(dead_code)]
     pub(super) same_path: bool,
+}
+
+/// A contiguous sub-range of `nodes` (`new_start .. new_start + len`, from `old_start`) whose
+/// per-node `apply` diff is a guaranteed no-op.
+#[derive(Clone, Copy)]
+pub(crate) struct CleanApplySpan {
+    pub(super) new_start: usize,
+    pub(super) old_start: usize,
+    pub(super) len: usize,
+}
+
+pub(super) fn is_in_clean_spans(spans: &[CleanApplySpan], i: usize) -> bool {
+    let idx = spans.partition_point(|s| s.new_start <= i);
+    idx > 0 && {
+        let s = &spans[idx - 1];
+        i < s.new_start + s.len
+    }
+}
+
+impl<S: 'static> Runtime<S> {
+    fn node_clean_for_apply(&self, new_n: &Node, old_n: &Node, any_animating: bool) -> bool {
+        new_n.id == old_n.id
+            && new_n.local == old_n.local
+            && (!any_animating || !self.scene.store().is_node_animating(new_n.id))
+            && self.scene.phase(new_n.id) == Some(PresencePhase::Present)
+            && !old_n.group_fade
+            && new_n.matched.is_none()
+            && new_n.looping.is_none()
+            && (self.flying.is_empty() || !self.flying.iter().any(|f| f.0 == new_n.id))
+            && (self.aspect_snap.is_empty() || !self.aspect_snap.contains(&new_n.id))
+            && new_n.text.as_ref().is_none_or(|t| t.reveal < 0.0)
+    }
+
+    /// Fills `out` with the reused memo slices that can skip `apply`'s per-node diff loop.
+    pub(super) fn clean_apply_spans(
+        &self,
+        nodes: &[Node],
+        reused: &[ReusedSpan],
+        can_skip: bool,
+        out: &mut Vec<CleanApplySpan>,
+    ) {
+        out.clear();
+        if !can_skip || reused.is_empty() {
+            return;
+        }
+        out.reserve(reused.len());
+        let any_animating = self.scene.store().active_len() > 0;
+        for span in reused {
+            if !span.same_path || span.len == 0 || span.old_start + span.len > self.nodes.len() || span.new_start + span.len > nodes.len() {
+                continue;
+            }
+            let r_new = &nodes[span.new_start];
+            let r_old = &self.nodes[span.old_start];
+            if !self.scene.contains(r_new.id) || self.is_exiting(r_new.id) {
+                continue;
+            }
+            let mut scene_rect = r_new.local;
+            if let Some(v) = r_new.parent.and_then(|p| self.virtuals.get(&nodes[p].path)) {
+                scene_rect.y -= v.before;
+            }
+            let parent_top_clean = r_new.in_row != RowLayout::Snaps
+                || r_new.parent.is_none_or(|p| {
+                    nodes.get(p + 1).is_none_or(|first_sib| {
+                        let mut sr = first_sib.local;
+                        if let Some(v) = self.virtuals.get(&nodes[p].path) {
+                            sr.y -= v.before;
+                        }
+                        self.scene.get(first_sib.id, prop::FRAME) == Some(sr)
+                    })
+                });
+            let root_clean = self.node_clean_for_apply(r_new, r_old, any_animating)
+                && parent_top_clean
+                && r_new.parent.map(|p| nodes[p].id) == r_old.parent.map(|p| self.nodes[p].id)
+                && !self.virtuals.contains_key(&r_new.path)
+                && self.scene.get(r_new.id, prop::FRAME) == Some(scene_rect)
+                && self.reorder_jump(nodes, span.new_start) == 0.0
+                && !r_new.parent.and_then(|p| self.virtuals.get(&nodes[p].path)).is_some_and(crate::virtual_list::VirtualList::replaced_view);
+
+            if !root_clean && !self.flying.is_empty() {
+                continue;
+            }
+            let offset = if root_clean { 0 } else { 1 };
+            if offset >= span.len {
+                continue;
+            }
+            let interior_clean = (offset..span.len).all(|k| {
+                self.node_clean_for_apply(&nodes[span.new_start + k], &self.nodes[span.old_start + k], any_animating)
+            });
+            if interior_clean {
+                out.push(CleanApplySpan {
+                    new_start: span.new_start + offset,
+                    old_start: span.old_start + offset,
+                    len: span.len - offset,
+                });
+            }
+        }
+    }
 }
 
 pub(super) struct MemoFlattenCtx<'a> {

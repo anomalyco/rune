@@ -55,4 +55,29 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn loops_stepped(&mut self) {
         self.loop_clock.lead = 0.0;
     }
+
+    /// Runs each of `nodes` from `scales.len()` on at its `El::time_scale` times its parent's,
+    /// pushing the products onto `scales`. `exiting` nodes drop their own factor, which the app
+    /// can no longer change, and follow their parent's. A node whose clock changes keeps its
+    /// place: the store rebases its tracks, and its reveal words and loop shift by the same amount.
+    pub(super) fn sync_time_scales(&mut self, nodes: &[Node], scales: &mut Vec<f32>, exiting: bool) {
+        for n in &nodes[scales.len()..] {
+            let own = if exiting { 1.0 } else { n.time_scale };
+            let k = own * n.parent.and_then(|p| scales.get(p).copied()).unwrap_or(1.0);
+            scales.push(k);
+            // Unmounted at once this commit: its clock went with it. (Present nodes not yet in
+            // the scene get theirs now, before their first tracks.)
+            if exiting && !self.scene.contains(n.id) { continue; }
+            let store = self.scene.store_mut();
+            let before = store.node_time(n.id);
+            store.set_node_time_scale(n.id, k);
+            let shift = store.node_time(n.id) - before;
+            if shift != 0.0 {
+                if let Some(st) = self.reveals.get_mut(&n.id) {
+                    for w in &mut st.words { w.1 += shift; }
+                }
+                if let Some(l) = self.loops.get_mut(&n.id) { l.shift(shift); }
+            }
+        }
+    }
 }

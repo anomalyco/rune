@@ -20,6 +20,10 @@ impl LastBuild {
         self.next = at + 1;
         Some(at)
     }
+
+    pub(super) fn advance(&mut self, next: usize) {
+        self.next = next;
+    }
 }
 
 /// The colour a node's text or icon draws in.
