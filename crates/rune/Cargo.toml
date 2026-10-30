@@ -117,7 +117,7 @@ wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
-x11rb = { version = "0.13", features = ["shape", "xinput", "randr"] }
+x11rb = { version = "0.13", features = ["shape", "xinput", "randr", "allow-unsafe-code", "dl-libxcb"] }
 xkbcommon = "0.9"
 
 [target.'cfg(target_os = "windows")'.dependencies]

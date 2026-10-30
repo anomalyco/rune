@@ -71,6 +71,8 @@ impl<T: 'static> Overlay<T> {
                 self.rescale(&gpu, self.rt.env.scale);
             }
         }
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if let Some(Live { backing: Backing::Xwayland(surface), .. }) = self.live.as_ref() { surface.drain(); }
         self.apply_input();
         if self.live.is_none() || self.renderer.is_none() || self.gpu.is_none() {
             return false;

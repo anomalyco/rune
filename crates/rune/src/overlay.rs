@@ -6,6 +6,8 @@
 //!
 //! - Wayland: layer-shell (`layer_shell.rs`) with output-local input regions and a private
 //!   seat queue. Hidden means destroyed. No global pointer observation or capture exclusion.
+//!   Without layer-shell (GNOME), an overlay that takes no input shows on XWayland instead
+//!   (`x11/xwayland.rs`): an override-redirect ARGB window with an empty input shape.
 //! - X11: an override-redirect notification window, with an empty input shape unless
 //!   interactive.
 //! - macOS: winit's view moved into a non-activating `NSPanel` at status level on every space,
@@ -251,6 +253,9 @@ enum Backing {
     Window(Arc<Window>),
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     Layer(crate::layer_shell::LayerSurface),
+    /// Wayland without layer-shell: an X11 window on XWayland, for overlays that take no input.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    Xwayland(crate::x11::xwayland::XwaylandSurface),
 }
 
 /// A shown overlay. The wgpu surface drops before what it draws into.
@@ -472,7 +477,7 @@ impl<T: 'static> Overlay<T> {
     fn prepare(&mut self, event_loop: &ActiveEventLoop) {
         if self.live.is_some() { return; }
         self.resolve_size(event_loop);
-        let made = if crate::window::is_wayland(event_loop) { self.layer(event_loop) } else { self.window(event_loop) };
+        let made = if crate::window::is_wayland(event_loop) { self.layer(event_loop).or_else(|| self.xwayland()) } else { self.window(event_loop) };
         match made {
             Some(live) => {
                 self.live = Some(live);
@@ -570,7 +575,7 @@ impl<T: 'static> Overlay<T> {
                 window.set_visible(false);
             }
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-            Backing::Layer(_) => { self.live.take(); }
+            Backing::Layer(_) | Backing::Xwayland(_) => { self.live.take(); }
         }
     }
 
@@ -603,6 +608,24 @@ impl<T: 'static> Overlay<T> {
 
     #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
     fn layer(&mut self, _event_loop: &ActiveEventLoop) -> Option<Live> {
+        None
+    }
+
+    /// The compositor has no layer-shell (GNOME): an overlay that takes no input shows on
+    /// XWayland when there is one.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    fn xwayland(&mut self) -> Option<Live> {
+        if self.options.input.resolved(self.interactive) != OverlayInput::None || self.options.keys == KeyPolicy::OnDemand { return None; }
+        let surface = crate::x11::xwayland::XwaylandSurface::new(self.name, self.at, &self.options)?;
+        let scale = surface.scale();
+        self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities {
+            capture_exclusion: OverlaySupport::Unsupported, global_pointer: OverlaySupport::Unsupported, nonactivating_keys: OverlaySupport::Unsupported,
+        };
+        self.attach(Backing::Xwayland(surface), scale)
+    }
+
+    #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+    fn xwayland(&mut self) -> Option<Live> {
         None
     }
 
@@ -761,6 +784,8 @@ impl<T: 'static> Overlay<T> {
                 layer.place(self.at);
                 layer.commit();
             }
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            Backing::Xwayland(surface) => surface.place(self.at, &self.options),
         }
         if let Some(gpu) = self.gpu.clone() {
             let scale = live.scale;
@@ -832,6 +857,19 @@ impl<T: 'static> Overlay<T> {
                     let (display, window) = layer.raw_handles();
                     // SAFETY: the layer surface outlives this wgpu surface (`Live` drops the
                     // surface first), and winit keeps the display alive.
+                    unsafe {
+                        instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                            raw_display_handle: Some(display),
+                            raw_window_handle: window,
+                        })
+                    }
+                    .ok()
+                }
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                Backing::Xwayland(surface) => {
+                    let (display, window) = surface.raw_handles()?;
+                    // SAFETY: the X window and its connection outlive this wgpu surface (`Live`
+                    // drops the surface first).
                     unsafe {
                         instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
                             raw_display_handle: Some(display),
