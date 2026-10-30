@@ -44,9 +44,14 @@ metal-backend = ["wgpu/custom", "dep:objc2-quartz-core", "dep:parking_lot", "dep
 # Linux: live `Player` via GStreamer playbin + appsink. Needs GStreamer and the usual plugins at
 # runtime (`gstreamer`, `gst-plugins-base`, `gst-plugins-good`, plus `gst-libav` /
 # `gst-plugins-bad` for many codecs). Posters and headless `--snap` still use `ffmpeg`/`ffprobe`
-# on PATH. Off (the default), Linux reports unsupported like other non-macOS platforms. No effect
-# on macOS or Windows.
+# on PATH. Mutually exclusive with `linux-libmpv`. Off (the default), Linux reports unsupported
+# like other non-macOS platforms. No effect on macOS or Windows.
 linux-gstreamer = ["dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video", "dep:glib"]
+# Linux: live `Player` via libmpv (`vo=libmpv` + software BGRA render). Needs libmpv at link
+# time and a working mpv install for codecs. Posters and headless `--snap` still use
+# `ffmpeg`/`ffprobe` on PATH. Mutually exclusive with `linux-gstreamer`. No effect on macOS or
+# Windows.
+linux-libmpv = ["dep:libmpv2-sys"]
 
 [dependencies]
 procwatch = { path = "../procwatch", optional = true }
@@ -142,11 +147,12 @@ libloading = "0.8"
 zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service"], optional = true }
 tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"], optional = true }
 futures-util = { version = "0.3", optional = true }
-# Live `Player` on Linux (`linux-gstreamer`). Headless/posters still use ffmpeg on PATH.
+# Live `Player` on Linux (`linux-gstreamer` / `linux-libmpv`). Headless/posters still use ffmpeg.
 gstreamer = { version = "0.25", optional = true }
 gstreamer-app = { version = "0.25", optional = true }
 gstreamer-video = { version = "0.25", optional = true }
 glib = { version = "0.21", optional = true }
+libmpv2-sys = { version = "4", optional = true }
 
 [target.'cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
 wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"] }
