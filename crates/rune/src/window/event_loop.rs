@@ -52,6 +52,7 @@ fn run_configured(_: Factory, _: Args, _: bool) -> Result<(), String> {
 #[cfg(not(target_arch = "wasm32"))]
 fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), String> {
     let _ = accessory;
+    crate::perf_warn::launch::run_starts();
     #[cfg(target_os = "macos")]
     if !window_server_session() {
         crate::render::discard_prewarm();

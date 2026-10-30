@@ -59,7 +59,7 @@ impl<S: 'static> Runtime<S> {
         let patched = self.patch_pending();
         let Some(poll) = self.poll else { return patched };
         let mut one = self.transaction();
-        let changed = crate::perf_warn::timed("poll", || app_call!(poll, &mut self.state, self.clock, &mut one));
+        let changed = self.idle_meter.polled(crate::perf_warn::timed("poll", || app_call!(poll, &mut self.state, self.clock, &mut one)));
         self.dirty |= changed;
         let asks_frame = one.srgb_blend.is_some_and(|b| b != self.srgb_blend) || one.font_smoothing.is_some_and(|m| m != self.text.smoothing) || (one.blur && self.focused.is_some());
         self.latch_requests(&mut one);

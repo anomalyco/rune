@@ -41,6 +41,7 @@ impl<S: 'static> Host<S> {
         if self.float_on_open && !w.first_frame.notified { float_on_open::release(&w.window, &self.options, self.spec.min_size); }
         self.native_handle.native.ready.store(true, Ordering::Release);
         *self.shared.window_error.lock().unwrap() = None;
+        crate::perf_warn::launch::first_frame();
         if !std::mem::replace(&mut w.first_frame.notified, true)
             && let Some(ready) = self.on_ready.as_mut()
         {

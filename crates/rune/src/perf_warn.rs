@@ -1,6 +1,15 @@
 //! Debug-only warnings for app code that works but runs slow: a `virtualize` list that builds
-//! every row to mount a few, and a callback that blocks the main thread. Each warns once per
-//! site, on stderr; `RUNE_PERF_WARN=0` silences them. Release builds contain none of it.
+//! every row to mount a few, a callback that blocks the main thread, a `poll` that says it
+//! changed what shows when nothing did, a window that keeps drawing while idle, and a slow
+//! first frame. Each warns once per site, on stderr; `RUNE_PERF_WARN=0` silences them. Release
+//! builds contain none of it.
+
+mod idle;
+pub(crate) mod launch;
+
+#[cfg(debug_assertions)]
+pub(crate) use idle::Drawn;
+pub(crate) use idle::IdleMeter;
 
 #[cfg(debug_assertions)]
 use std::{collections::HashSet, sync::{Mutex, OnceLock}, time::Instant};

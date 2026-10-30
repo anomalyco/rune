@@ -467,7 +467,7 @@ impl<S: 'static> App<S> {
     }
 
     pub(crate) fn into_parts(self, scene: Option<&str>) -> (AppSpec<S>, S, Arc<Shared<S>>) {
-        let state = crate::perf_warn::timed("init", || match self.init {
+        let state = crate::perf_warn::launch::init(|| match self.init {
             Some(init) => crate::tooling::with_scene(&self.spec, init(), scene),
             None => crate::tooling::initial_state(&self.spec, scene),
         });

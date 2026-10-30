@@ -152,6 +152,8 @@ mod text_flights;
 mod hover;
 #[path = "runtime/timer_wake.rs"]
 mod timer_wake;
+#[path = "runtime/idle_meter.rs"]
+mod idle_meter;
 #[cfg(feature = "hot")]
 #[path = "runtime/hot_state.rs"]
 mod hot_state;
@@ -1057,6 +1059,7 @@ pub struct Runtime<S: 'static> {
     pub clock: f64,
     wake_deadlines: Vec<f64>,
     timer_wake: timer_wake::TimerWake,
+    idle_meter: crate::perf_warn::IdleMeter,
     /// Windowed runs read the clock from the wall instead of summing frame steps.
     pub wall_start: Option<crate::time::Instant>,
     /// Called for keys unhandled by the focused control; return true to consume it.
@@ -1492,6 +1495,7 @@ impl<S: 'static> Runtime<S> {
             clock: 0.0,
             wake_deadlines: Vec::new(),
             timer_wake: Default::default(),
+            idle_meter: Default::default(),
             wall_start: None,
             on_key: None,
             nodes: Vec::new(),
@@ -2151,12 +2155,13 @@ impl<S: 'static> Runtime<S> {
         self.keep_loops_on_clock(dt);
         let polled = self.timer_wake.frame_polled(self.wake_deadlines.first().is_some_and(|t| *t <= self.clock));
         let due = self.wake_deadlines.partition_point(|t| *t <= self.clock);
+        self.idle_frame_begins(polled || due > 0, live_woke);
         self.wake_deadlines.drain(..due);
         self.fire_hover_delays();
         if let Some(poll) = self.poll.filter(|_| !polled) {
             let mut one = self.transaction();
             // Scheduling does not imply a model change.
-            if crate::perf_warn::timed("poll", || app_call!(poll, &mut self.state, self.clock, &mut one)) {
+            if self.idle_meter.polled(crate::perf_warn::timed("poll", || app_call!(poll, &mut self.state, self.clock, &mut one))) {
                 ran = true;
             }
             merge(&mut tx, one);
@@ -2338,6 +2343,7 @@ impl<S: 'static> Runtime<S> {
         if self.time_scale <= 0.0 { self.anim_sources = 0; }
         if filling { self.anim_sources |= AnimSource::VIRTUAL_FILL; }
         self.animating = (animating && self.time_scale > 0.0) || filling;
+        self.idle_frame_ends();
         if !open_urls.is_empty() { self.open_urls(open_urls); }
         self.animating
     }
@@ -3038,6 +3044,7 @@ struct Measured {
 impl<S: 'static> Runtime<S> {
     fn commit(&mut self, tx: &Tx) {
         let _commit_time = crate::frame_profile::Scope::new(crate::frame_profile::Phase::Commit);
+        let _first_view = crate::perf_warn::launch::FirstView::start(self.commits == 0);
         self.apply_playground();
         COMMITS.set(COMMITS.get() + 1);
         self.last_commit_clock = self.clock;
