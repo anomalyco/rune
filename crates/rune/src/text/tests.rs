@@ -226,6 +226,22 @@ fn scripts_load_their_system_fonts_on_first_use() {
     assert_eq!(ts.scripts.count_ones() as usize, fallback::SCRIPT_FONTS.len());
 }
 
+/// Fonts fontconfig knows outside the scanned directories (NixOS keeps them in its store) are
+/// found too.
+#[cfg(target_os = "linux")]
+#[test]
+fn system_fonts_include_fontconfig_files() {
+    let Ok(out) = std::process::Command::new("fc-list").arg("--format=%{file}\n").output() else {
+        eprintln!("skipping: no fc-list");
+        return;
+    };
+    let found = system_font_files(&[""]);
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let font = [".ttf", ".otf", ".ttc", ".otc"].iter().any(|ext| line.to_lowercase().ends_with(ext));
+        assert!(!font || found.iter().any(|path| path.as_os_str() == line), "{line} not found");
+    }
+}
+
 #[test]
 fn plex_keyboard_symbols_use_real_glyphs() {
     const PLEX: &[u8] = include_bytes!("../../../../themes/opencode/assets/fonts/IBMPlexMono-Regular.ttf");

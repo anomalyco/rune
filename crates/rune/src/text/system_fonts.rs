@@ -21,8 +21,10 @@ pub(super) const SYMBOL_FONT_FILES: &[&str] = &["sfnsttf", "sfnsitalic", "apples
 pub(super) const SYMBOL_FAMILIES: &[&str] = &["Segoe UI Symbol", "Segoe UI Emoji"];
 #[cfg(windows)]
 pub(super) const SYMBOL_FONT_FILES: &[&str] = &["seguisym", "seguiemj"];
+// DejaVu Sans lacks ⎋ (U+238B), which DejaVu Sans Mono has; `dejavusans` loads both files.
 #[cfg(not(any(target_vendor = "apple", windows)))]
-pub(super) const SYMBOL_FAMILIES: &[&str] = &["DejaVu Sans", "Noto Sans Symbols2", "Noto Sans Symbols", "Noto Color Emoji"];
+pub(super) const SYMBOL_FAMILIES: &[&str] =
+    &["DejaVu Sans", "Noto Sans Symbols2", "Noto Sans Symbols", "DejaVu Sans Mono", "Noto Color Emoji"];
 #[cfg(not(any(target_vendor = "apple", windows)))]
 pub(super) const SYMBOL_FONT_FILES: &[&str] = &["dejavusans", "notosanssymbols", "notocoloremoji"];
 
@@ -113,7 +115,7 @@ pub(super) const CJK_FONT_FILES: [&str; 24] = [
 /// Makes text in scripts the app's fonts don't cover render instead of drawing tofu. Families
 /// the app registered beyond its sans and mono (`AppSpec::fonts`) come first, then the CJK fonts
 /// installed on the system (found by file name in the platform's font directories, including
-/// `$XDG_DATA_HOME/fonts` and `$XDG_DATA_DIRS/*/fonts`).
+/// `$XDG_DATA_HOME/fonts` and `$XDG_DATA_DIRS/*/fonts`, and on Linux every file `fc-list` names).
 pub(super) fn register_cjk_fallbacks(collection: &mut Collection, loaded: &mut LoadedFiles, registered: &[FamilyId], families: (&str, &str)) {
     let primary = [collection.family_id(families.0), collection.family_id(families.1)];
     let mut fallbacks: Vec<FamilyId> = Vec::new();
@@ -207,6 +209,7 @@ fn walk_font_dirs() -> Vec<(String, std::path::PathBuf)> {
         dirs.extend(data_dirs.split(':').filter(|d| !d.is_empty()).map(|d| std::path::Path::new(d).join("fonts")));
     }
     let mut found: Vec<(String, std::path::PathBuf)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     let mut stack = dirs;
     let mut visited = std::collections::HashSet::new();
     while let Some(dir) = stack.pop() {
@@ -220,12 +223,26 @@ fn walk_font_dirs() -> Vec<(String, std::path::PathBuf)> {
                 stack.push(path);
                 continue;
             }
-            let name = entry.file_name().to_string_lossy().to_lowercase();
-            let font = [".ttf", ".otf", ".ttc", ".otc"].iter().any(|ext| name.ends_with(ext));
-            if font {
-                found.push((name.replace([' ', '.'], ""), path));
+            if let Some(name) = font_file_name(&path) && seen.insert(path.clone()) {
+                found.push((name, path));
+            }
+        }
+    }
+    // Fontconfig knows fonts outside these directories, such as NixOS's store paths.
+    #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
+    if let Ok(out) = std::process::Command::new("fc-list").arg("--format=%{file}\n").output() {
+        for path in String::from_utf8_lossy(&out.stdout).lines().map(std::path::PathBuf::from) {
+            if let Some(name) = font_file_name(&path) && seen.insert(path.clone()) {
+                found.push((name, path));
             }
         }
     }
     found
+}
+
+/// `path`'s file name, lowercase without spaces and dots, when it's a font file Rune loads.
+#[cfg(not(target_arch = "wasm32"))]
+fn font_file_name(path: &std::path::Path) -> Option<String> {
+    let name = path.file_name()?.to_string_lossy().to_lowercase();
+    [".ttf", ".otf", ".ttc", ".otc"].iter().any(|ext| name.ends_with(ext)).then(|| name.replace([' ', '.'], ""))
 }
