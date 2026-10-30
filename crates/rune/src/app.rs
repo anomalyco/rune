@@ -58,6 +58,8 @@ pub struct App<S: 'static> {
     pub(crate) on_ready: Option<OnWindow>,
     pub(crate) on_frame_encoded: Option<crate::frame_encoded::OnFrameEncoded>,
     pub(crate) on_frame_drawn: Option<crate::frame_encoded::OnFrameDrawn<S>>,
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) same_tab_router: Option<Box<dyn Fn(&str) -> bool>>,
     pub(crate) macos_window: crate::MacWindowOptions,
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<S>>>,
     pub(crate) window_options: crate::WindowOptions,
@@ -99,6 +101,7 @@ impl<S: 'static> App<S> {
             on_ready: None,
             on_frame_encoded: None,
             on_frame_drawn: None,
+            same_tab_router: None,
             macos_window: crate::MacWindowOptions::default(),
             compositor: None,
             window_options: crate::WindowOptions::default(),
@@ -373,6 +376,15 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// On web, routes [`Tx::open_url_same_tab`] links inside a single-page app: `route` gets the
+    /// absolute URL of each link on the page's own origin and returns true when it handled it
+    /// (`history.pushState` and a render), or false to let the browser load it with
+    /// `location.assign`. Links to other origins always load. Ignored on native.
+    pub fn same_tab_router(mut self, route: impl Fn(&str) -> bool + 'static) -> Self {
+        self.same_tab_router = Some(Box::new(route));
+        self
+    }
+
     /// Runs on the UI thread each time the native window is created (again after a Wayland
     /// close or a GPU release): set its icon or native styles through
     /// `WindowHandle::with_raw_handle`.
@@ -587,7 +599,14 @@ impl<S: 'static> AppHandle<S> {
     }
 
     /// Quit the app: the window closes without `on_close`, and `run` returns.
+    ///
+    /// On web this unmounts the app: its loop stops, its GPU device is destroyed, its listeners
+    /// come off the page, the body style and title it changed go back, and the canvas Rune made
+    /// is removed, while one passed in with [`App::canvas_id`] stays, restyled as it was, for
+    /// its owner. Another app may start straight away; it mounts once this one has gone. An
+    /// app quit before it mounts never does.
     pub fn quit(&self) {
+        self.shared.quitting.store(true, Ordering::Release);
         self.request(|q| q.quit = true);
     }
 
@@ -686,6 +705,8 @@ pub(crate) struct Shared<S> {
     wake: Mutex<Option<crate::runtime::Waker>>,
     /// Published by the window host for `AppHandle::is_visible` / `window_error`.
     pub(crate) visible: AtomicBool,
+    /// `AppHandle::quit` was called, or the web app is ending.
+    pub(crate) quitting: AtomicBool,
     pub(crate) window_error: Mutex<Option<String>>,
 }
 
@@ -697,6 +718,7 @@ impl<S> Default for Shared<S> {
             requests: Mutex::default(),
             wake: Mutex::new(None),
             visible: AtomicBool::new(false),
+            quitting: AtomicBool::new(false),
             window_error: Mutex::new(None),
         }
     }

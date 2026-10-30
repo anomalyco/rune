@@ -6,6 +6,7 @@ use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{Ac
     platform::web::{EventLoopExtWebSys, WindowAttributesExtWebSys, WindowExtWebSys}, window::{Window, WindowId}};
 use crate::{App, Runtime, Env, render::{Gpu, Renderer}, time::Instant};
 mod input;
+mod page;
 pub(crate) mod platform;
 
 thread_local! { static INSETS: std::cell::Cell<[f32; 4]> = const { std::cell::Cell::new([0.0; 4]) }; }
@@ -19,6 +20,17 @@ pub fn open_url(url: &str) -> Result<(), String> {
     platform::open_link(&url).map_err(|e| format!("{e:?}"))
 }
 
+/// Open a link in this tab, as `Tx::open_url_same_tab` does: a link on the page's origin goes
+/// to the app's `App::same_tab_router` first, and the browser loads it with `location.assign`
+/// unless the router handled it. A link without a scheme (`/notes/42`) is relative to the page.
+pub fn open_url_same_tab(url: &str) -> Result<(), String> {
+    let url = crate::open_url::check_same_tab(url).map_err(|e| e.to_string())?;
+    let resolved = platform::resolve_link(&url).map_err(|e| format!("{e:?}"))?;
+    let href = resolved.get(0).as_string().unwrap_or_default();
+    if resolved.get(1).is_truthy() && page::route(&href) { return Ok(()); }
+    platform::assign_link(&href).map_err(|e| format!("{e:?}"))
+}
+
 #[derive(Clone, Copy)]
 enum Wake { Ready, App }
 
@@ -30,22 +42,38 @@ pub(crate) fn run<S: 'static>(app: App<S>) -> Result<(), String> {
         return Err("web does not support windowless apps or native window hooks".into());
     }
     console_error_panic_hook::set_once();
+    page::start(quitting(&app.shared), Box::new(move || spawn(app)))
+}
+
+fn quitting<S: 'static>(shared: &Arc<crate::app::Shared<S>>) -> Box<dyn Fn() -> bool> {
+    let shared = shared.clone();
+    Box::new(move || shared.quitting.load(Ordering::Acquire))
+}
+
+fn spawn<S: 'static>(mut app: App<S>) -> Result<(), String> {
+    if app.shared.quitting.load(Ordering::Acquire) { return Ok(()); }
     let event_loop = EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let proxy = event_loop.create_proxy();
-    event_loop.spawn_app(Browser { app: Some(app), proxy, window: None, embedded: false, owns_canvas: true,
-        pending: Rc::default(), running: Rc::default() });
+    let shared = app.shared.clone();
+    let wake = proxy.clone();
+    shared.connect(Arc::new(move || { let _ = wake.send_event(Wake::App); }));
+    page::occupy(quitting(&shared), app.same_tab_router.take());
+    event_loop.spawn_app(Browser { app: Some(app), shared, proxy, window: None, embedded: false, owns_canvas: true,
+        borrowed: page::Borrowed::default(), pending: Rc::default(), running: Rc::default() });
     Ok(())
 }
 
 struct Browser<S: 'static> {
     app: Option<App<S>>,
+    shared: Arc<crate::app::Shared<S>>,
     proxy: EventLoopProxy<Wake>,
     window: Option<Arc<Window>>,
     /// Inline in the page at its parent's width, rather than covering the viewport.
     embedded: bool,
     /// Rune made the canvas (no `App::canvas_id`), so it removes it when the app ends.
     owns_canvas: bool,
+    borrowed: page::Borrowed,
     pending: Rc<RefCell<Option<Result<(Gpu, wgpu::Surface<'static>), String>>>>,
     running: Rc<RefCell<Option<Running<S>>>>,
 }
@@ -69,6 +97,15 @@ struct Running<S: 'static> {
 }
 
 impl<S: 'static> Running<S> {
+    /// Ends the app: listeners off the page, then the GPU device, which the WebGPU backend
+    /// doesn't destroy on drop.
+    fn close(self) {
+        self.shared.visible.store(false, Ordering::Release);
+        let device = self.gpu.device.clone();
+        drop(self);
+        device.destroy();
+    }
+
     pub(super) fn resize_surface(&mut self, size: winit::dpi::PhysicalSize<u32>, scale: f32) {
         self.suspended = size.width == 0 || size.height == 0;
         if self.suspended { return; }
@@ -152,6 +189,13 @@ async fn gpu(canvas: web_sys::HtmlCanvasElement, features: wgpu::Features) -> Re
     }
 }
 
+impl<S: 'static> Browser<S> {
+    fn end(&self, event_loop: &ActiveEventLoop) {
+        self.shared.quitting.store(true, Ordering::Release);
+        event_loop.exit();
+    }
+}
+
 impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() { return; }
@@ -160,14 +204,14 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             Some(id) => {
                 let Some(el) = web_sys::window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id(id)) else {
                     error(&format!("canvas #{id} not found in document"), None, true);
-                    event_loop.exit();
+                    self.end(event_loop);
                     return;
                 };
                 match el.dyn_into::<web_sys::HtmlCanvasElement>() {
                     Ok(canvas) => Some(canvas),
                     Err(_) => {
                         error(&format!("element #{id} is not a <canvas>"), None, true);
-                        event_loop.exit();
+                        self.end(event_loop);
                         return;
                     }
                 }
@@ -176,6 +220,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         };
         self.owns_canvas = existing.is_none();
         self.embedded = app.web_inline();
+        if let Some(canvas) = &existing { self.borrowed.canvas(canvas); }
         let mut attrs = Window::default_attributes().with_title(app.spec.title).with_prevent_default(false);
         attrs = match &existing {
             Some(c) => attrs.with_canvas(Some(c.clone())).with_append(false),
@@ -183,7 +228,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         };
         let window = match event_loop.create_window(attrs) {
             Ok(window) => Arc::new(window),
-            Err(e) => { error(&e.to_string(), existing.as_ref(), self.embedded); event_loop.exit(); return; }
+            Err(e) => { error(&e.to_string(), existing.as_ref(), self.embedded); self.end(event_loop); return; }
         };
         let canvas = window.canvas().expect("winit web canvas");
         if !canvas.has_attribute("tabindex") {
@@ -198,6 +243,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             // No border/padding: winit's physical input and resize coordinates must match pixels.
             canvas.style().set_css_text("position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;outline:none;user-select:none;-webkit-user-select:none");
             if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+                self.borrowed.viewport(&document);
                 document.set_title(app.spec.title);
                 if let Some(body) = document.body() {
                     let style = body.style();
@@ -212,12 +258,18 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         let proxy = self.proxy.clone();
         self.window = Some(window);
         wasm_bindgen_futures::spawn_local(async move {
-            *pending.borrow_mut() = Some(gpu(canvas, features).await);
-            if proxy.send_event(Wake::Ready).is_err() { error("web event loop closed during GPU initialization", None, false); }
+            let result = gpu(canvas, features).await;
+            // A loop that has closed was quit while the GPU started.
+            if proxy.send_event(Wake::Ready).is_err() {
+                if let Ok((gpu, _)) = result { gpu.device.destroy(); }
+                return;
+            }
+            *pending.borrow_mut() = Some(result);
         });
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Wake) {
+        if self.shared.quitting.load(Ordering::Acquire) { self.end(event_loop); return; }
         let Some(window) = self.window.as_ref() else { return };
         if matches!(event, Wake::Ready) {
             let Some(result) = self.pending.borrow_mut().take() else { return };
@@ -225,7 +277,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 Ok(gpu) => gpu,
                 Err(e) => {
                     if let Some(app) = &self.app { *app.shared.window_error.lock().unwrap() = Some(e.clone()); }
-                    error(&e, window.canvas().as_ref(), self.embedded); event_loop.exit(); return;
+                    error(&e, window.canvas().as_ref(), self.embedded); self.end(event_loop); return;
                 }
             };
             let mut app = self.app.take().expect("one canvas initialization");
@@ -274,7 +326,6 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             rt.wall_start = Some(now);
             rt.open_urls_natively = true;
             rt.record_events = false;
-            shared.connect(wake.clone());
             let menus = crate::native_menu::Guard::attach(&shared, false);
             let shortcuts = crate::shortcuts::Guard::attach(&shared, wake.clone(), false, false);
             let mut clipboard = crate::clipboard::Client::default();
@@ -282,7 +333,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             shared.visible.store(true, Ordering::Release);
             let max_dim = gpu.device.limits().max_texture_dimension_2d.max(1);
             let Some(mut config) = surface.get_default_config(&gpu.adapter, size.width.clamp(1, max_dim), size.height.clamp(1, max_dim)) else {
-                error("WebGPU canvas has no supported configuration", window.canvas().as_ref(), self.embedded); event_loop.exit(); return;
+                error("WebGPU canvas has no supported configuration", window.canvas().as_ref(), self.embedded); self.end(event_loop); return;
             };
             config.present_mode = wgpu::PresentMode::Fifo;
             let caps = surface.get_capabilities(&gpu.adapter);
@@ -308,7 +359,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             r.shortcuts.drain();
             r.clipboard.receive(&mut r.rt);
             let requests = r.shared.take();
-            if requests.quit { event_loop.exit(); return; }
+            if requests.quit { self.end(event_loop); return; }
             if requests.window.as_ref().is_some_and(|r| !matches!(r, crate::app::WindowRequest::Open(_) | crate::app::WindowRequest::Show))
                 || requests.position.is_some() || requests.place.is_some() || requests.minimize {
                 web_sys::console::warn_1(&"Native window management is ignored on web.".into());
@@ -349,7 +400,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 r.sync_input(false);
                 r.cursor.apply(window, r.rt.cursor(), r.rt.pointer().is_some());
                 if !r.rt.surfaces.is_empty() {
-                    error("native video surfaces are unsupported on web", window.canvas().as_ref(), r.embedded); event_loop.exit(); return;
+                    error("native video surfaces are unsupported on web", window.canvas().as_ref(), r.embedded); self.end(event_loop); return;
                 }
                 if r.gpu.adapter.get_info().backend != wgpu::Backend::Gl && r.renderer.srgb_blend() != r.rt.srgb_blend() {
                     let format = if r.rt.srgb_blend() { r.config.format.remove_srgb_suffix() } else { r.config.format.add_srgb_suffix() };
@@ -361,7 +412,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 }
                 let frame = match r.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
-                    _ => { error("WebGPU canvas acquisition failed", window.canvas().as_ref(), r.embedded); event_loop.exit(); return; }
+                    _ => { error("WebGPU canvas acquisition failed", window.canvas().as_ref(), r.embedded); self.end(event_loop); return; }
                 };
                 let target = frame.texture.create_view(&wgpu::TextureViewDescriptor {
                     format: Some(r.renderer.format()), ..Default::default()
@@ -379,7 +430,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 r.renderer.submit(&r.gpu.queue, encoder);
                 window.pre_present_notify();
                 r.gpu.queue.present(frame);
-                if r.rt.shell_request.take().is_some() { event_loop.exit(); return; }
+                if r.rt.shell_request.take().is_some() { self.end(event_loop); return; }
                 if animating || r.rt.has_pending_input() || r.rt.live_pending() || r.compositor.as_ref().is_some_and(|c| c.animating()) {
                     window.request_redraw();
                 }
@@ -409,7 +460,13 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
     }
 
     fn exiting(&mut self, _: &ActiveEventLoop) {
-        if let Some(r) = self.running.borrow_mut().take() { r.shared.visible.store(false, Ordering::Release); }
-        if self.owns_canvas && let Some(canvas) = self.window.as_ref().and_then(|w| w.canvas()) { canvas.remove(); }
+        self.shared.quitting.store(true, Ordering::Release);
+        let running = self.running.borrow_mut().take();
+        if let Some(r) = running { r.close(); }
+        if let Some(Ok((gpu, _))) = self.pending.borrow_mut().take() { gpu.device.destroy(); }
+        if let Some(window) = self.window.take() && self.owns_canvas && let Some(canvas) = window.canvas() { canvas.remove(); }
+        std::mem::take(&mut self.borrowed).give_back();
+        INSETS.set([0.0; 4]);
+        page::vacate();
     }
 }

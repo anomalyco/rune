@@ -505,7 +505,7 @@ std::thread::spawn(move || {
     handle.update(|s, tx| ..); // change state on the UI thread; commits on the next frame
     handle.close();            // as the close button (on_close runs)
     handle.minimize();         // as the minimize button
-    handle.quit();             // run returns
+    handle.quit();             // run returns; on web, unmounts
 });
 app.run();
 ```

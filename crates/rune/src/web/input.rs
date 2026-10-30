@@ -48,7 +48,10 @@ impl Bridge {
             let Some(running) = running.upgrade() else { return };
             let event = zeroize::Zeroizing::new(event);
             if let Ok(mut event) = serde_json::from_str(&event) {
-                if let Some(r) = &mut *running.borrow_mut() { r.input_event(&mut event, &window); }
+                // A DOM event fired synchronously by page JavaScript Rune called mid-frame (a
+                // same-tab router tearing the route down) is dropped rather than re-entering.
+                let Ok(mut running) = running.try_borrow_mut() else { return };
+                if let Some(r) = &mut *running { r.input_event(&mut event, &window); }
                 window.request_redraw();
             }
         });

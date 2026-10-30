@@ -69,6 +69,17 @@ are zero and the title doesn't touch `document.title`. With `full_viewport` the 
 the visual viewport like Rune's own, so an ancestor with a `transform` or `filter` would
 become its containing block; mount it outside one.
 
+`AppHandle::quit` unmounts the app when its route goes away: the loop stops, the GPU device is
+destroyed, Rune's listeners come off the page, and the body style and title it changed go back.
+Rune removes a canvas it made; a passed-in canvas stays, with its own style and attributes
+back, for the page to remove. One app runs per page at a time. An app started while another is
+quitting mounts once that one has gone, so a route can swap apps in the same tick:
+
+```rust,ignore
+let handle = app.handle();           // keep it with the route
+App::new(spec).canvas_id("route-canvas").full_viewport().try_run()?; // after handle.quit()
+```
+
 ## Images
 
 `ImageCache::url` fetches an image and lets the browser decode it with its own codecs
@@ -116,7 +127,17 @@ without an asynchronous clipboard read. Secret-copy requests report failure beca
 browser cannot promise native clipboard-history exclusion or conditional timed clearing.
 
 `rune::web::open_url` accepts HTTP(S) and mail links and opens a tab with `noopener,noreferrer`.
-Call it from a user input handler. `Cx::safe_area()` returns top/right/bottom/left insets in
+Call it from a user input handler. `Tx::open_url_same_tab` (or `rune::web::open_url_same_tab`)
+replaces the page instead, and takes links relative to the page (`/notes/42`). A single-page
+app routes those itself with `App::same_tab_router`: it gets the absolute URL of each link on
+the page's origin and returns true when it handled it; otherwise, and for other origins, the
+browser loads the link with `location.assign`.
+
+```rust,ignore
+App::new(spec).same_tab_router(|href| router.push(href)) // true: routed with pushState
+tx.open_url_same_tab("/notes/42")?;                       // from a handler
+```
+ `Cx::safe_area()` returns top/right/bottom/left insets in
 points (zero on native). Apply them inside a full-canvas background. The canvas follows
 `visualViewport` when a software keyboard reduces the visible height. Keep the generated
 page's `viewport-fit=cover` meta tag and the textarea's 16 px font size.

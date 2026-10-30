@@ -43,6 +43,17 @@ export function openLink(url) {
     window.open(parsed.href, '_blank', 'noopener,noreferrer');
 }
 
+// `url` resolved against the page, and whether it stays on the page's origin.
+export function resolveLink(url) {
+    const parsed = new URL(url, document.baseURI);
+    if (!['https:', 'http:', 'mailto:'].includes(parsed.protocol)) throw new Error('Unsupported link scheme.');
+    return [parsed.href, parsed.origin === location.origin];
+}
+
+export function assignLink(href) {
+    location.assign(href);
+}
+
 // `url` (relative to the page) decoded by the browser's own codecs, which run off the main
 // thread: `[width, height, rgba]` with straight-alpha sRGB RGBA bytes, upright by EXIF. SVG comes
 // back as `[0, 0, bytes]` for Rune to rasterize. Images over `maxSide` a side are refused

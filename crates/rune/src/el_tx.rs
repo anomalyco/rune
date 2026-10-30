@@ -51,7 +51,7 @@ pub struct Tx {
     /// `Tx::drop_point`.
     pub(crate) drop_point: Option<PointerEvent>,
     pub(crate) title: Option<String>,
-    pub(crate) open_urls: Vec<String>,
+    pub(crate) open_urls: Vec<crate::open_url::Link>,
     pub(crate) trace: Option<TraceCalls>,
     pub(crate) popups: Vec<crate::popup_menu::Call>,
     pub(crate) file_dialogs: Vec<crate::file_dialog::Call>,
@@ -202,7 +202,17 @@ impl Tx {
     /// own) and malformed links are refused here with the reason and nothing opens. Headless
     /// runs and tests open nothing; read the requests with `Runtime::take_url_requests`.
     pub fn open_url(&mut self, url: &str) -> Result<(), crate::open_url::OpenUrlError> {
-        self.open_urls.push(crate::open_url::check(url)?);
+        self.open_urls.push(crate::open_url::Link { url: crate::open_url::check(url)?, same_tab: false });
+        Ok(())
+    }
+
+    /// `open_url`, but on web the link replaces this page instead of opening a tab: the app's
+    /// [`App::same_tab_router`](crate::App::same_tab_router) gets it first (a single-page app
+    /// routes it with `history.pushState`), else the browser loads it with `location.assign`.
+    /// On web a link without a scheme (`/notes/42`) is relative to the page. Native opens it as
+    /// `open_url` does, and headless runs record it with the others.
+    pub fn open_url_same_tab(&mut self, url: &str) -> Result<(), crate::open_url::OpenUrlError> {
+        self.open_urls.push(crate::open_url::Link { url: crate::open_url::check_same_tab(url)?, same_tab: true });
         Ok(())
     }
 

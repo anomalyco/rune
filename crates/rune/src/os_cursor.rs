@@ -38,8 +38,7 @@ pub(crate) struct OsCursor {
 
 impl OsCursor {
     pub(crate) fn new(event_loop: &ActiveEventLoop) -> Self {
-        let source = CustomCursor::from_rgba(vec![0u8; 4], 1, 1, 0, 0).expect("a 1x1 cursor image is valid");
-        OsCursor { applied: (false, Cursor::Default), scale: 0.0, transparent: event_loop.create_custom_cursor(source) }
+        OsCursor { applied: (false, Cursor::Default), scale: 0.0, transparent: transparent(event_loop) }
     }
 
     /// Applies `want` while the host is `active` (the pointer is over its window or its hit
@@ -75,6 +74,23 @@ impl OsCursor {
         #[cfg(target_os = "macos")]
         if let (true, Cursor::Image(image)) = self.applied { crate::macos::cursor::reassert(image); }
     }
+}
+
+/// A 1×1 clear cursor. On web it is made once per page and kept: winit makes a custom cursor
+/// asynchronously, and dropping one before it's ready leaves the browser calling a freed
+/// closure, as a web app unmounted just after it mounts would.
+fn transparent(event_loop: &ActiveEventLoop) -> CustomCursor {
+    let make = || {
+        let source = CustomCursor::from_rgba(vec![0u8; 4], 1, 1, 0, 0).expect("a 1x1 cursor image is valid");
+        event_loop.create_custom_cursor(source)
+    };
+    #[cfg(target_arch = "wasm32")]
+    {
+        thread_local! { static CLEAR: std::cell::OnceCell<CustomCursor> = const { std::cell::OnceCell::new() }; }
+        CLEAR.with(|clear| clear.get_or_init(make).clone())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    make()
 }
 
 fn holds_image(applied: (bool, Cursor)) -> bool {
