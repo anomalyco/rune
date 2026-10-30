@@ -1,10 +1,10 @@
 //! Presence nobody would see. A removed node that drew nothing last frame has no exit to show: it
 //! faded out already, sits under a parent that hid at once, or lies out of the window or its
 //! clips with everything it holds (a filtered list's rows scrolled out of view). It goes at
-//! once rather than fading where nothing shows, and what mounts under such a node, still out of
-//! sight, enters at once. Likewise a virtual row that a change mounted with
-//! its entrance but that landed out of view lands its entrance at once, and one nobody saw that
-//! a filter brings into view enters like the rows new to it.
+//! once rather than fading where nothing shows; what mounts under such a node, still out of
+//! sight, enters at once, and a node out of sight lands its colours. Likewise a virtual row that
+//! a change mounted with its entrance but that landed out of view lands its entrance at once,
+//! and one nobody saw that a filter brings into view enters like the rows new to it.
 use super::*;
 
 impl<S: 'static> Runtime<S> {
@@ -33,8 +33,8 @@ impl<S: 'static> Runtime<S> {
         h + (bottom - d[1] - d[3]) / k
     }
 
-    /// Node `i` of the commit mounts out of sight before and after (`unseen_before_and_after`),
-    /// so its entrance lands. A matched element still flies to its match.
+    /// Node `i` of the commit is out of sight before and after (`unseen_before_and_after`), so
+    /// its entrance, colours and blur land. A matched element still flies to its match.
     pub(super) fn enters_unseen(&self, nodes: &[Node], unseen: &[bool], i: usize) -> bool {
         unseen.get(i).copied().unwrap_or(false) && nodes[i].matched.is_none()
     }

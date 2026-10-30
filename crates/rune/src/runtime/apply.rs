@@ -485,7 +485,7 @@ impl<S: 'static> Runtime<S> {
                     }
                 }
             }
-            let vis = &nodes[i].vis;
+            let (instant, vis) = (instant || self.enters_unseen(&nodes, &unseen, i), &nodes[i].vis);
             if !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Blur)
                 && (vis.blur != 0.0 || self.scene.store().has(id, prop::BLUR))
             {
