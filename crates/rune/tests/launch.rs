@@ -2,7 +2,7 @@
 //! travels one smooth path into its slot in the scroll view.
 use rune::{Cx, El, Env, GrowthSpec, Key, KeyEvent, Runtime, ScrollSpec, TextEdit, TextStyle, Transition, Tx, col, text, text_input};
 
-struct State { draft: TextEdit, sent: Vec<String>, relaunch: bool, zoom: f32, ticks: u32, tray: bool, swap: bool, into_body: bool, tail: bool }
+struct State { draft: TextEdit, sent: Vec<String>, relaunch: bool, zoom: f32, ticks: u32, tray: bool, swap: bool, into_body: bool, tail: bool, gap: bool }
 
 fn view(s: &State, _: &mut Cx<State>) -> El {
     let mut rows = col().w_full().growth(GrowthSpec::default());
@@ -11,6 +11,8 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
     for i in order {
         let m = &s.sent[i];
         let row = col().key(format!("msg-{i}")).w_full().py(8.0).items_end().child(text(m.clone()).key("body"));
+        // The last row stops joining the one above: the gap over its text grows, and it with it.
+        let row = if s.gap && i + 1 == s.sent.len() { row.pt(20.0) } else { row };
         // A new row's container entering with it, as a queue appears with its first prompt.
         let tray = || col().key("tray").w_full().transition(Transition::scale(0.9).combined(Transition::opacity()));
         rows = rows.child(if s.tray && i == 2 { tray().child(row) } else { row });
@@ -39,7 +41,7 @@ fn app_at(relaunch: bool, zoom: f32) -> Runtime<State> {
     let mut draft = TextEdit::new("third");
     draft.focused = true;
     let sent = vec!["first".to_string(), "second".to_string()];
-    let mut rt = Runtime::new(State { draft, sent, relaunch, zoom, ticks: 0, tray: false, swap: false, into_body: false, tail: false }, view, (400.0, 300.0), Env::new(true, 2.0));
+    let mut rt = Runtime::new(State { draft, sent, relaunch, zoom, ticks: 0, tray: false, swap: false, into_body: false, tail: false, gap: false }, view, (400.0, 300.0), Env::new(true, 2.0));
     rt.frame(0.0);
     rt
 }
@@ -243,6 +245,27 @@ fn a_launch_reaimed_while_the_scroll_view_corrects_under_it_keeps_its_speed() {
             let (before, reaim, after) = (change[at - 3], change[at - 2], change[at - 1]);
             assert!(reaim >= before.min(after) - 0.1 && reaim <= before.max(after) + 0.1,
                 "re-aimed at {at}, into_body {into_body}: axis {axis} step changes {before} then {reaim} then {after}: {steps:?}");
+        }
+    }
+}
+
+#[test]
+fn a_landed_launch_whose_row_grows_a_gap_over_it_at_a_pinned_end_holds_still() {
+    // The row stops joining the one above: the gap over its text and its height grow by 12 pt,
+    // so the list scrolls 12 pt and the text keeps its place. Whether its flight has as good as
+    // landed (its springs settling) or ended, it doesn't sink and come back.
+    for at in [80, 100, 160] {
+        for into_body in [false, true] {
+            let mut rt = app(false);
+            rt.update(|s, _| { s.into_body = into_body; for k in 0..12 { s.sent.insert(0, format!("earlier {k}")); } });
+            for _ in 0..60 { rt.frame(1.0 / 120.0); }
+            rt.key(KeyEvent { key: Key::Enter, mods: Default::default() });
+            for _ in 0..at { rt.frame(1.0 / 120.0); }
+            let (y0, row0) = (rect(&rt, "body", Some("third")).0[1], rect(&rt, "msg-2", None).0[1]);
+            rt.update(|s, _| s.gap = true);
+            let ys: Vec<f32> = (0..120).map(|_| { rt.frame(1.0 / 120.0); rect(&rt, "body", Some("third")).0[1] }).collect();
+            assert!(ys.iter().all(|y| (y - y0).abs() <= 1.0 / 64.0), "at {at}, into_body {into_body}: the text moves from {y0}: {ys:?}");
+            assert!((rect(&rt, "msg-2", None).0[1] - (row0 - 12.0)).abs() < 0.01, "at {at}: the row rises by its gap");
         }
     }
 }

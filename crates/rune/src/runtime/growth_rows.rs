@@ -38,6 +38,9 @@ impl<S: 'static> Runtime<S> {
             }
             // The stack itself presents the rows' heights, which scrolling follows.
             self.row_h[ci] = y + stack.pad_bottom;
+            for (id, dy) in stack.slides.shifts() {
+                if let Some(&i) = self.node_index.get(&id) { self.row_dy[i] += dy; }
+            }
         }
     }
 }

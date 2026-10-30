@@ -222,6 +222,7 @@ impl<S: 'static> Runtime<S> {
                 if tx.settle || !existed || first || self.reduced_motion || snap_change || row_reading {
                     *g = GrowTrack { streaming, whole, glide: g.glide, limit: g.limit, ..GrowTrack::settled(h) };
                     stack.pending_heights.remove(&id);
+                    stack.slides.land(id);
                 } else {
                     // Only a width/scale rewrap may shrink an active streaming row, including
                     // when fresh text arrives in the same frame as the resize.
@@ -271,6 +272,10 @@ impl<S: 'static> Runtime<S> {
         arrivals.clear();
         let mut mounted = std::mem::take(&mut scratch.mounted);
         mounted.clear();
+        // A flight this commit would re-aim that has as good as landed lands instead and rides
+        // its parent, rather than set off again on a path that doesn't.
+        let landing = if self.flying.is_empty() { Vec::new() } else { self.landing_flights() };
+        let mut landed = false;
         // Nodes this commit slid from where they were drawn, or under an ancestor that slid.
         let mut slid = std::mem::take(&mut scratch.slid);
         slid.clear();
@@ -354,6 +359,13 @@ impl<S: 'static> Runtime<S> {
             self.scene.set_ride_trailing(id, nodes[i].vis.ride_trailing);
             // How far a growth or virtual row's place jumps in this commit (drawn minus new).
             let (mut row_jump, mut reorder_jump) = (0.0, 0.0);
+            if was_present && !was_exiting && !lands
+                && landing.contains(&id)
+                && self.flying.iter().any(|f| f.0 == id && (f.1 != nodes[i].local || nodes[i].parent.is_some_and(|p| slid.get(p).copied().unwrap_or(false))))
+            {
+                self.land_flight(id);
+                landed = true;
+            }
             if was_present {
                 // As in SwiftUI, a node leaves with the transition of its last render.
                 if !was_exiting {
@@ -415,7 +427,13 @@ impl<S: 'static> Runtime<S> {
                     }
                     let tm = top_moved.get(p).copied().unwrap_or(0.0);
                     if tm.abs() > 1.0 / 64.0 && flying.is_none() {
-                        (row_jump, reorder_jump) = (tm, tm);
+                        let left = self.slide_with_row(&nodes, p, id, tm);
+                        (row_jump, reorder_jump) = (left, left);
+                        // Sliding with its row, it still slid: a flight under it lands or re-aims.
+                        if left == 0.0 {
+                            if slid.is_empty() { slid.resize(nodes.len(), false); }
+                            slid[i] = true;
+                        }
                     }
                 }
                 if let Some(f) = flying {
@@ -800,7 +818,7 @@ impl<S: 'static> Runtime<S> {
         // A flight that left the tree stays lifted and covered while it exits, so it doesn't pop.
         self.flying.retain(|(id, _)| self.node_index.contains_key(id));
         self.launches.keep(&self.flying);
-        if self.nodes.len() > present_len || !self.flying.is_empty() || self.has_sticky || self.has_raise { self.update_layer_paint_order(); }
+        if self.nodes.len() > present_len || !self.flying.is_empty() || landed || self.has_sticky || self.has_raise { self.update_layer_paint_order(); }
         else { self.layer_paint_order.clear(); }
         self.built = false;
         self.virtuals.retain(|path, _| self.nodes.iter().any(|n| n.path == *path));

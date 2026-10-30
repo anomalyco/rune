@@ -849,14 +849,7 @@ impl Scene {
         if let Some(path) = n.path {
             return self.path_dual(i, path, self.parent_target_origin(i));
         }
-        let mut local = n.frame.edges().map(D::c);
-        self.lanes_dual(i, prop::FRAME.id, &mut local);
-        if n.parent == NONE {
-            return local;
-        }
-        let mut o = self.origin_dual(n.parent as usize);
-        o[0] = o[0].add(self.trail_dual(i));
-        core::array::from_fn(|k| local[k].add(o[k % 2]))
+        self.laid_dual(i)
     }
 
     /// Where node `i` is on its screen path, ending at its layout under parent origin `origin`.

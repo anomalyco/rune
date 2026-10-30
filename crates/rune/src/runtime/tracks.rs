@@ -105,6 +105,7 @@ impl<S: 'static> Runtime<S> {
                 stack.grown += (g.h - h0).max(0.0);
                 st_growing |= g.target > g.h + 1.0 / 128.0;
                 st_moving |= g.moving() || (g.h - h0).abs() > 1e-5;
+                st_moving |= stack.slides.step(*id, g, spec.spring, steps.min(240));
             }
             stack.order.retain(|id| {
                 let keep = !stack.closing.contains_key(id) || self.grows.get(id).is_some_and(|g| g.h > 0.01 || g.target > 0.0);
@@ -114,6 +115,7 @@ impl<S: 'static> Runtime<S> {
                 keep
             });
             stack.closing.retain(|id, _| stack.order.contains(id));
+            stack.slides.keep(&stack.order);
             stack.growing = st_growing;
             stack.moving = st_moving;
             // Keep the shared clock awake through the hold. No timer thread or remeasurement.

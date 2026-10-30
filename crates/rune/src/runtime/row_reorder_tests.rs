@@ -257,3 +257,32 @@ fn contents_whose_gap_in_their_row_changes_slide_from_where_they_were_drawn() {
     rt.frame(1.0 / 120.0);
     assert_eq!(at(&rt, "b-body"), ys0[0]);
 }
+
+/// A tall row, then a last row whose contents sit under a gap it fits around, in a list pinned to
+/// its end; the gap is the state.
+fn pinned_gap(&gap: &f32, _: &mut Cx<f32>) -> El {
+    let last = col().key("b").w_full().pt(gap)
+        .child(el().key("b-body").w_full().h(37.0).fill(Color::WHITE))
+        .child(el().key("b-foot").w_full().h(20.0).mt(4.0).fill(Color::WHITE));
+    let stack = col().key("stack").w_full().padding(12.0).gap(8.0).growth(GrowthSpec::default())
+        .child(el().key("a").w_full().h(400.0).fill(Color::WHITE)).child(last);
+    col().w_full().h_full().child(col().key("scroll").w_full().h(300.0).scroll(ScrollSpec { stick_bottom: true }).child(stack))
+}
+
+#[test]
+fn contents_whose_gap_opens_as_their_row_grows_at_a_pinned_end_hold_still() {
+    // The last steer stops joining the prompt above it: its gap and its height grow by 12 pt, so
+    // its row rises 12 pt and its contents keep their place on every frame.
+    let mut rt = Runtime::new(4.0f32, pinned_gap, (300.0, 300.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    for _ in 0..240 { rt.frame(1.0 / 120.0); }
+    let at = |rt: &Runtime<f32>, k: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(k) && !e.exiting).unwrap().rect[1];
+    let (row0, body0, foot0) = (at(&rt, "b"), at(&rt, "b-body"), at(&rt, "b-foot"));
+    rt.update(|s, _| *s = 16.0);
+    let frames: Vec<[f32; 3]> = (0..120).map(|_| { rt.frame(1.0 / 120.0); ["b", "b-body", "b-foot"].map(|k| at(&rt, k)) }).collect();
+    assert!(!rt.animating);
+    slides("b", row0, row0 - 12.0, &frames.iter().map(|f| f[0]).collect::<Vec<_>>(), 3.0);
+    for (f, ys) in frames.iter().enumerate() {
+        assert!((ys[1] - body0).abs() < 1.0 / 64.0 && (ys[2] - foot0).abs() < 1.0 / 64.0, "the contents move at frame {f}: {frames:?}");
+    }
+}

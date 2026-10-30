@@ -395,6 +395,7 @@ pub(super) struct Stack {
     /// Whether any row in the stack is still animating.
     pub(crate) moving: bool,
     pub(super) reorder: row_reorder::Reorder,
+    pub(super) slides: content_slide::ContentSlides,
 }
 
 pub(super) struct LayoutEntry {

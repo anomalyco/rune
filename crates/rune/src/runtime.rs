@@ -264,6 +264,8 @@ mod unseen_presence;
 mod row_reorder;
 #[path = "runtime/growth_rows.rs"]
 mod growth_rows;
+#[path = "runtime/content_slide.rs"]
+mod content_slide;
 mod elements;
 pub use elements::{ElementInfo, Pick, Picked, Pose};
 mod cache_layer;

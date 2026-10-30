@@ -67,6 +67,46 @@ impl Scene {
         self.set_frame_drawn(id, frame, anim.into(), [offset, velocity]);
     }
 
+    /// How far node `id`'s screen path draws its top-left corner from where its layout under
+    /// its parent's presented origin would, and how much faster it moves it (root space). None
+    /// without a path, or while the path still draws it at another size.
+    pub fn path_lead(&self, id: NodeId) -> Option<[Vec2; 2]> {
+        let i = self.slot(id)?;
+        let path = self.nodes[i].path?;
+        let (on, laid) = (self.path_dual(i, path, path.origin), self.laid_dual(i));
+        // The presented snap step: 1/64 of a device pixel.
+        let q = 1.0 / (64.0 * self.store.pixel_scale());
+        let size = |e: [D; 4], k: usize| e[k + 2].x - e[k].x;
+        if (0..2).any(|k| (size(on, k) - size(laid, k)).abs() > q) {
+            return None;
+        }
+        Some([Vec2::new(on[0].x - laid[0].x, on[1].x - laid[1].x), Vec2::new(on[0].v - laid[0].v, on[1].v - laid[1].v)])
+    }
+
+    /// Ends node `id`'s screen travel at its layout, as a path that has arrived ends: it then
+    /// shows under its parent's presented origin.
+    pub fn land_path(&mut self, id: NodeId) {
+        let Some(i) = self.slot(id) else { return };
+        let Some(path) = self.nodes[i].path else { return };
+        self.end_path(i);
+        self.track_set(i, prop::FRAME, path.end_local);
+        self.nodes[i].dirty = true;
+    }
+
+    /// Node `i`'s root-space edges from its layout under its parent's presented origin, as if
+    /// it had no screen path.
+    pub(super) fn laid_dual(&self, i: usize) -> [D; 4] {
+        let n = &self.nodes[i];
+        let mut local = n.frame.edges().map(D::c);
+        self.lanes_dual(i, prop::FRAME.id, &mut local);
+        if n.parent == NONE {
+            return local;
+        }
+        let mut o = self.origin_dual(n.parent as usize);
+        o[0] = o[0].add(self.trail_dual(i));
+        core::array::from_fn(|k| local[k].add(o[k % 2]))
+    }
+
     pub(super) fn start_path(&mut self, i: usize, start: [f32; 4], vel: [f32; 4], anim: LayoutAnim) {
         let end_local = self.nodes[i].frame;
         let po = self.parent_target_origin(i);

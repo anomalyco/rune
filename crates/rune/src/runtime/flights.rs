@@ -30,17 +30,18 @@ impl Launches {
     /// new path takes over, so the restart keeps its place and speed. It then flies on under
     /// the offsets it was last drawn under.
     pub(super) fn restart(&mut self, scene: &Scene, id: NodeId) -> [rune_motion::Vec2; 2] {
-        let none = [rune_motion::Vec2::ZERO; 2];
-        let Some(l) = self.flying.iter_mut().find(|l| l.id == id) else { return none };
-        let Some(last) = l.last else { return none };
-        let travel = scene.get(id, prop::TRAVEL).unwrap_or(rune_motion::Vec2::new(1.0, 1.0));
-        let rate = scene.store().sample_velocity(id, prop::TRAVEL).unwrap_or(rune_motion::Vec2::ZERO);
-        // Drawn under `offset + (shift - offset) * (1 - travel)`: its rate is the offset's drift
-        // times travel plus `(offset - shift) * rate`.
-        let axis = |k: usize, t: f32, r: f32| ((l.shift[k] - last[k]) * (1.0 - t), l.drift[k] * t + (last[k] - l.shift[k]) * r);
-        let ((ox, vx), (oy, vy)) = (axis(0, travel.x, rate.x), axis(1, travel.y, rate.y));
-        l.shift = last;
+        let Some(l) = self.flying.iter_mut().find(|l| l.id == id) else { return [rune_motion::Vec2::ZERO; 2] };
+        let ([ox, oy], [vx, vy]) = l.blend(scene);
+        if let Some(last) = l.last { l.shift = last; }
         [rune_motion::Vec2::new(ox, oy), rune_motion::Vec2::new(vx, vy)]
+    }
+
+    /// What launch `id`'s flight adds to the offsets outside the scene it is drawn under, and
+    /// how much faster that moves it than they do.
+    pub(super) fn lead(&self, scene: &Scene, id: NodeId) -> [rune_motion::Vec2; 2] {
+        let Some(l) = self.flying.iter().find(|l| l.id == id) else { return [rune_motion::Vec2::ZERO; 2] };
+        let ([ox, oy], [vx, vy]) = l.blend(scene);
+        [rune_motion::Vec2::new(ox, oy), rune_motion::Vec2::new(vx - l.drift[0], vy - l.drift[1])]
     }
 
     /// Drops launches that landed (left `flying`).
@@ -69,7 +70,45 @@ impl Launches {
     }
 }
 
+impl Launched {
+    /// What its flight adds to the offsets outside the scene it is drawn under, and how fast
+    /// that moves it. Drawn under `offset + (shift - offset) * (1 - travel)`: its rate is the
+    /// offset's drift times travel plus `(offset - shift) * rate`.
+    fn blend(&self, scene: &Scene) -> ([f32; 2], [f32; 2]) {
+        let Some(last) = self.last else { return ([0.0; 2], [0.0; 2]) };
+        let travel = scene.get(self.id, prop::TRAVEL).unwrap_or(rune_motion::Vec2::new(1.0, 1.0));
+        let rate = scene.store().sample_velocity(self.id, prop::TRAVEL).unwrap_or(rune_motion::Vec2::ZERO);
+        let (t, r) = ([travel.x, travel.y], [rate.x, rate.y]);
+        (
+            [0, 1].map(|k| (self.shift[k] - last[k]) * (1.0 - t[k])),
+            [0, 1].map(|k| self.drift[k] * t[k] + (last[k] - self.shift[k]) * r[k]),
+        )
+    }
+}
+
 impl<S: 'static> Runtime<S> {
+    /// Flights drawn within a quarter of a device pixel of where their layout would show them,
+    /// and moving under that a frame (60 Hz) faster than it: as good as landed, kept in the
+    /// air only by their springs' settle tails. They draw on the same pixels landed.
+    pub(super) fn landing_flights(&self) -> Vec<NodeId> {
+        let near = 0.25 / self.env.scale.max(1.0);
+        let within = |v: rune_motion::Vec2| v.x.abs().max(v.y.abs()) <= near;
+        self.flying.iter().map(|f| f.0).filter(|&id| {
+            let Some([p, v]) = self.scene.path_lead(id) else { return false };
+            let [bp, bv] = self.launches.lead(&self.scene, id);
+            let add = |a: rune_motion::Vec2, b: rune_motion::Vec2| rune_motion::Vec2::new(a.x + b.x, a.y + b.y);
+            let v = add(v, bv);
+            within(add(p, bp)) && within(rune_motion::Vec2::new(v.x / 60.0, v.y / 60.0))
+        }).collect()
+    }
+
+    /// Lands flight `id` at its layout, as if it had landed: it rides its parent from here.
+    pub(super) fn land_flight(&mut self, id: NodeId) {
+        self.flying.retain(|f| f.0 != id);
+        self.launches.keep(&self.flying);
+        self.scene.land_path(id);
+    }
+
     /// Shared-element motion (`El::matched`): each of the last commit's matched elements that
     /// left the tree hands its geometry, radius, fill and opacity to the element with its id that
     /// just mounted. Costs nothing without matched elements; else O(matched), plus one pass over
