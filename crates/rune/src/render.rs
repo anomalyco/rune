@@ -389,14 +389,29 @@ impl Gpu {
         let required_features = adapter.features() & optional_features;
         // A compositor that asks for immediates (`Compositor::features`) gets all the adapter has.
         let max_immediate_size = if required_features.contains(wgpu::Features::IMMEDIATES) { adapter.limits().max_immediate_size } else { 0 };
-        #[cfg(target_os = "ios")]
-        let base_limits = adapter.limits();
-        #[cfg(not(target_os = "ios"))]
-        let base_limits = wgpu::Limits::default();
+        let adapter_limits = adapter.limits();
+        let required_limits = if adapter_limits.max_inter_stage_shader_variables < wgpu::Limits::default().max_inter_stage_shader_variables
+            || adapter_limits.max_color_attachments < wgpu::Limits::default().max_color_attachments
+            || adapter_limits.max_compute_workgroup_storage_size < wgpu::Limits::default().max_compute_workgroup_storage_size
+        {
+            wgpu::Limits {
+                max_immediate_size,
+                ..wgpu::Limits::downlevel_defaults()
+                    .using_resolution(adapter_limits.clone())
+                    .using_alignment(adapter_limits)
+            }
+        } else {
+            wgpu::Limits {
+                max_immediate_size,
+                ..wgpu::Limits::default()
+                    .using_resolution(adapter_limits.clone())
+                    .using_alignment(adapter_limits)
+            }
+        };
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("rune"),
             required_features,
-            required_limits: wgpu::Limits { max_immediate_size, ..base_limits },
+            required_limits,
             experimental_features: Default::default(),
             memory_hints: wgpu::MemoryHints::Performance,
             trace: Default::default(),
