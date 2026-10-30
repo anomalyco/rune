@@ -10,10 +10,7 @@ pub(super) fn write_png(path: &Path, w: u32, h: u32, rgba: &[u8]) {
 fn downscale(src: &[u8], w: u32, h: u32, k: u32) -> Vec<u8> {
     let (ow, oh) = (w / k, h / k);
     let mut out = vec![0u8; (ow * oh * 4) as usize];
-    let lin = |v: u8| {
-        let c = v as f32 / 255.0;
-        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
-    };
+    let lin = |v: u8| rune::color::srgb_decode(v as f32 / 255.0);
     for y in 0..oh {
         for x in 0..ow {
             let mut acc = [0f32; 3];
