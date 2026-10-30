@@ -170,6 +170,8 @@ mod paint_slots;
 mod pixel_snap;
 mod soft_edges;
 use soft_edges::{in_fade, inherit_fade};
+#[path = "runtime/shadow_paint.rs"]
+mod shadow_paint;
 #[path = "runtime/shape_paint.rs"]
 mod shape_paint;
 use shape_paint::push_shape;
@@ -6125,7 +6127,10 @@ impl<S: 'static> Runtime<S> {
                 let opaque = native_material.is_none() && blur_hole.is_none() && n.material.is_none() && o >= 1.0
                     && n.vis.gradient.is_none() && n.vis.radial.is_none() && n.vis.surface.is_none()
                     && !n.vis.shadows.is_empty() && self.color(n.id, P_FILL, n.vis.fill).a >= 1.0;
-                let caster = ([r[0], r[1], w, h], if n.vis.continuous_corners { radii.map(|v| -v) } else { radii });
+                let cast = shadow_paint::Caster {
+                    rect: [r[0], r[1], w, h], radii, shape: if n.vis.continuous_corners { radii.map(|v| -v) } else { radii },
+                    k_px, scale: s, opacity: o, srgb, clip, fade, hole: native_material.or(blur_hole), opaque,
+                };
                 for (k, sh) in n.vis.shadows.iter().chain(stuck_shadows.1).enumerate() {
                     let c = if k >= n.vis.shadows.len() { sh.color.alpha(sh.color.a * stuck_shadows.0) }
                         else if k < P_SHADOWS.len() { self.color(n.id, P_SHADOWS[k], sh.color) } else { sh.color };
@@ -6133,49 +6138,7 @@ impl<S: 'static> Runtime<S> {
                         continue;
                     }
                     let sh = &if k < n.vis.shadows.len() { self.shadow_at(n.id, k, sh) } else { *sh };
-                    let sp = sh.spread * k_px;
-                    let rect = [r[0] + sh.x * k_px - sp, r[1] + sh.y * k_px - sp, w + 2.0 * sp, h + 2.0 * sp];
-                    let sradii = radii.map(|v| if v > 0.0 { (v + sp).max(0.0) } else { 0.0 });
-                    if sh.blur + blur <= 0.0 {
-                        // A crisp shadow: a ring when it sits exactly around the box, else a solid
-                        // offset copy (hidden under an opaque element, as in CSS).
-                        let ring = sh.x == 0.0 && sh.y == 0.0;
-                        if ring && sp <= 0.0 {
-                            continue;
-                        }
-                        self.instances.push(Instance {
-                            rect,
-                            radii: sradii,
-                            fill: if ring { [0.0; 4] } else { premul(c, o, srgb) },
-                            border: if ring { premul(c, o, srgb) } else { [0.0; 4] },
-                            params: [if ring { sp } else { 0.0 }, KIND_RECT, 0.0, 1.0],
-                            uv: [0.0; 4],
-                            clip,
-                            fade: crate::render::pack_fade(fade, clip, clip),
-                        });
-                        continue;
-                    }
-                    // Over a native material or backdrop blur, the shadow leaves the interior clear:
-                    // `uv` holds the hole relative to the shadow's rect, `radii[3]` its radius.
-                    let (radii, uv) = match native_material.or(blur_hole) {
-                        Some(hole) => ([sradii[0], sradii[1], sradii[2], hole], [r[0] - rect[0], r[1] - rect[1], w, h]),
-                        None => (sradii, [0.0; 4]),
-                    };
-                    let inst = Instance {
-                        rect,
-                        radii,
-                        fill: premul(c, o, srgb),
-                        border: [0.0; 4],
-                        params: [0.0, KIND_SHADOW, ((sh.blur + blur) * s * 0.5).max(0.5), 1.0],
-                        uv,
-                        clip,
-                        fade: crate::render::pack_fade(fade, clip, clip),
-                    };
-                    if opaque {
-                        bands::push_shadow(&mut self.instances, inst, caster.0, caster.1);
-                    } else {
-                        self.instances.push(inst);
-                    }
+                    shadow_paint::push_shadow(&mut self.instances, sh, c, &cast);
                 }
                 // Shadows keep circular corners; the element's own shapes take the sign, and
                 // negative radii draw continuous corners (shader.wgsl `sd_rounded`).
