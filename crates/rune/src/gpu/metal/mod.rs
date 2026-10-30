@@ -63,9 +63,12 @@ pub(crate) fn instance() -> wgpu::Instance {
     wgpu::Instance::from_custom(MetalInstance)
 }
 
+/// Whether `queue` is this backend's.
+pub(crate) fn owns(queue: &wgpu::Queue) -> bool { queue.as_custom::<submit::MetalQueue>().is_some() }
+
 /// Staging's in-place writer: a Metal buffer the GPU only reads takes writes into its storage.
 fn write_in_place(buffer: &wgpu::Buffer, offset: u64, data: &[u8]) -> bool {
-    buffer.as_custom::<resource::MetalBuffer>().is_some_and(|b| b.store.write_ahead(&b.shared, offset, data))
+    buffer.as_custom::<resource::MetalBuffer>().is_some_and(|b| b.store.write_ahead(&b.shared, offset, data, || true))
 }
 
 /// The CAMetalLayer a surface of this backend presents into.

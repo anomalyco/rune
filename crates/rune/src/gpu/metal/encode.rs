@@ -3,6 +3,7 @@
 
 use std::any::Any;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use objc2_foundation_video::NSRange;
 use objc2_metal::{MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLOrigin, MTLSize};
@@ -41,6 +42,7 @@ pub(super) struct Recorded {
     pub(super) cb: Obj<dyn MTLCommandBuffer>,
     pub(super) keep: Keep,
     pub(super) drawable: bool,
+    pub(super) shared: Arc<Shared>,
 }
 
 /// Pipeline caches: accepted and ignored.
@@ -50,8 +52,14 @@ pub(crate) struct Inert;
 send_sync!(Rec, Recorded);
 
 impl Rec {
+    /// The buffer, made on the first command: from then until it is submitted or dropped, the
+    /// encoder counts in `Shared::recording`, so read buffer storage only after this.
     pub(super) fn cb(&mut self) -> &ProtocolObject<dyn MTLCommandBuffer> {
-        self.cb.get_or_insert_with(|| self.shared.command_buffer())
+        if self.cb.is_none() {
+            self.shared.recording.fetch_add(1, Ordering::AcqRel);
+            self.cb = Some(self.shared.command_buffer());
+        }
+        self.cb.as_deref().unwrap()
     }
 
     /// Ends an open blit encoder, as a pass must before it starts.
@@ -78,7 +86,7 @@ impl Drop for Rec {
     /// buffer, reading their attachments, so the buffer goes before what it used.
     fn drop(&mut self) {
         self.end_blit();
-        self.cb = None;
+        if self.cb.take().is_some() { self.shared.recording.fetch_sub(1, Ordering::AcqRel); }
         self.shared.recycle(std::mem::take(&mut self.keep));
     }
 }
@@ -92,6 +100,25 @@ impl MetalEncoder {
 
 impl MetalCommandBuffer {
     pub(super) fn take(&self) -> Option<Recorded> { self.0.lock().take() }
+}
+
+impl Recorded {
+    /// No longer recording: submitted, or dropped unsubmitted.
+    pub(super) fn close(self) -> (Obj<dyn MTLCommandBuffer>, Keep) {
+        self.shared.recording.fetch_sub(1, Ordering::AcqRel);
+        (self.cb, self.keep)
+    }
+}
+
+impl Drop for MetalCommandBuffer {
+    fn drop(&mut self) {
+        if let Some(recorded) = self.0.get_mut().take() {
+            let shared = recorded.shared.clone();
+            let (cb, keep) = recorded.close();
+            drop(cb);
+            shared.recycle(keep);
+        }
+    }
 }
 
 fn origin(o: wgpu::Origin3d, z: u32) -> MTLOrigin { MTLOrigin { x: o.x as usize, y: o.y as usize, z: z as usize } }
@@ -152,18 +179,20 @@ fn buffer(buffer: &DispatchBuffer) -> &MetalBuffer { buffer.as_custom::<MetalBuf
 impl CommandEncoderInterface for MetalEncoder {
     fn copy_buffer_to_buffer(&self, source: &DispatchBuffer, from: wgpu::BufferAddress, destination: &DispatchBuffer,
         to: wgpu::BufferAddress, size: Option<wgpu::BufferAddress>) {
-        let (src, dst) = (buffer(source).raw(), buffer(destination).store.gpu_write());
-        let size = size.unwrap_or(src.size - from);
+        let size = size.unwrap_or_else(|| buffer(source).raw().size - from);
         if size == 0 { return }
         let mut rec = self.rec.lock();
+        rec.cb();
+        let (src, dst) = (buffer(source).raw(), buffer(destination).store.gpu_write());
         // SAFETY: wgpu validated both ranges.
         unsafe { rec.blit().copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(&src.raw, from as usize, &dst.raw, to as usize, size as usize) };
         rec.keep([src as _, dst as _]);
     }
     fn copy_buffer_to_texture(&self, source: wgpu::TexelCopyBufferInfo<'_>, destination: wgpu::TexelCopyTextureInfo<'_>, size: wgpu::Extent3d) {
         if size.width == 0 || size.height == 0 || size.depth_or_array_layers == 0 { return }
-        let (src, dst) = (source.buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").raw(), texture(&destination));
         let mut rec = self.rec.lock();
+        rec.cb();
+        let (src, dst) = (source.buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").raw(), texture(&destination));
         buffer_to_texture(rec.blit(), &src.raw, source.layout, &dst, destination.mip_level, destination.origin, size);
         rec.keep([src as _, dst as _]);
     }
@@ -198,7 +227,7 @@ impl CommandEncoderInterface for MetalEncoder {
     fn finish(&mut self) -> DispatchCommandBuffer {
         let mut rec = self.rec.lock();
         rec.end_blit();
-        let recorded = rec.cb.take().map(|cb| Recorded { cb, keep: std::mem::take(&mut rec.keep), drawable: rec.drawable });
+        let recorded = rec.cb.take().map(|cb| Recorded { cb, keep: std::mem::take(&mut rec.keep), drawable: rec.drawable, shared: rec.shared.clone() });
         DispatchCommandBuffer::custom(MetalCommandBuffer(Mutex::new(recorded)))
     }
     fn clear_texture(&self, _: &DispatchTexture, _: &wgpu::ImageSubresourceRange) {

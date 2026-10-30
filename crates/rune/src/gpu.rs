@@ -23,6 +23,18 @@ pub(crate) fn with_layer<R>(surface: &wgpu::Surface<'_>, f: impl FnOnce(&AnyObje
     None
 }
 
+/// Whether `queue` is Rune's native Metal backend's, where a frame's submit and present commit
+/// one command buffer, too cheap to hand to a present thread.
+pub(crate) fn native(queue: &wgpu::Queue) -> bool {
+    #[cfg(feature = "metal-backend")]
+    return metal::owns(queue);
+    #[cfg(not(feature = "metal-backend"))]
+    {
+        let _ = queue;
+        false
+    }
+}
+
 /// Says once, on `RUNE_GPU_BACKEND=metal`, that `what` needs wgpu-hal and does nothing there.
 pub(crate) fn inert(what: &'static str) {
     #[cfg(feature = "metal-backend")]

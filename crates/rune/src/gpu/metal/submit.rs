@@ -211,10 +211,13 @@ impl QueueInterface for MetalQueue {
     fn write_buffer(&self, buffer: &DispatchBuffer, offset: wgpu::BufferAddress, data: &[u8]) {
         if data.is_empty() { return }
         let store = &buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").store;
-        // Written now only if nothing recorded uses it: an encoder recorded earlier and
-        // submitted later must read these bytes too. Staged, it pins the storage, since a later
-        // swap would copy the rest without this write.
-        if !store.pinned() && store.write_idle(&self.0, offset, data) { return }
+        // Written now if nothing recorded uses the storage, or into a spare if only submitted
+        // work does: an encoder recorded earlier and submitted later must read these bytes too.
+        // Staged, it pins the storage, since a later swap would copy the rest without this write.
+        // An encoder counts in `recording` before it reads any storage, which it does under the
+        // store's lock, the one `may_swap` is asked under.
+        let idle = || self.0.recording.load(std::sync::atomic::Ordering::Acquire) == 0;
+        if store.write_ahead(&self.0, offset, data, idle) { return }
         let target = store.gpu_write();
         let staging = Arc::new(BufferRaw::with_bytes(&self.0, data));
         self.0.upload(|blit| {
@@ -243,8 +246,10 @@ impl QueueInterface for MetalQueue {
             for buffer in command_buffers {
                 let Some(recorded) = buffer.as_custom::<MetalCommandBuffer>().and_then(MetalCommandBuffer::take) else { continue };
                 Shared::flush_held(&mut st);
-                let value = self.0.stamp(&mut st, &recorded.cb, recorded.keep);
-                if recorded.drawable { st.held = Some((recorded.cb, value)); } else { recorded.cb.commit(); }
+                let drawable = recorded.drawable;
+                let (cb, keep) = recorded.close();
+                let value = self.0.stamp(&mut st, &cb, keep);
+                if drawable { st.held = Some((cb, value)); } else { cb.commit(); }
             }
             st.last
         };

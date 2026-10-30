@@ -248,27 +248,9 @@ fn bytemuck_cast(data: &[f32]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(data.as_ptr().cast(), std::mem::size_of_val(data)) }
 }
 
-#[cfg(target_os = "macos")]
-fn presume_visible() {
-    use std::ffi::{c_char, c_void};
-    unsafe extern "C" {
-        fn objc_getClass(name: *const c_char) -> *mut c_void;
-        fn sel_registerName(name: *const c_char) -> *mut c_void;
-        fn class_getInstanceMethod(class: *mut c_void, sel: *mut c_void) -> *mut c_void;
-        fn method_setImplementation(method: *mut c_void, imp: *const c_void) -> *const c_void;
-    }
-    extern "C" fn visible(_: *mut c_void, _: *mut c_void) -> usize { 1 << 1 }
-    // SAFETY: replaces -[NSWindow occlusionState] with one of the same signature.
-    unsafe {
-        let method = class_getInstanceMethod(objc_getClass(c"NSWindow".as_ptr()), sel_registerName(c"occlusionState".as_ptr()));
-        assert!(!method.is_null());
-        method_setImplementation(method, visible as *const c_void);
-    }
-}
-
 fn main() {
     #[cfg(target_os = "macos")]
-    if std::env::var_os("OVERLAY_PRESUME_VISIBLE").is_some() { presume_visible(); }
+    if std::env::var_os("OVERLAY_PRESUME_VISIBLE").is_some() { probe::presume_visible(); }
     #[cfg(target_os = "macos")]
     if let Some(mode) = std::env::var_os("OVERLAY_COUNT_METAL") {
         probe::count_metal();

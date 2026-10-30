@@ -96,11 +96,13 @@ impl Store {
     }
 
     /// Writes `data` at `offset` for the commands recorded from now on; those recorded before
-    /// keep reading the old bytes. False if the buffer is pinned, so the write must be staged.
-    pub(super) fn write_ahead(&self, shared: &Shared, offset: u64, data: &[u8]) -> bool {
+    /// keep reading the old bytes. False if the buffer is pinned, or if `may_swap`, asked under
+    /// the store's lock, says the old storage must take the write too, so it must be staged.
+    pub(super) fn write_ahead(&self, shared: &Shared, offset: u64, data: &[u8], may_swap: impl FnOnce() -> bool) -> bool {
         if self.pinned() { return false }
         if self.write_idle(shared, offset, data) { return true }
         let mut slots = self.slots.lock();
+        if !may_swap() { return false }
         let size = slots.current.size;
         let (next, held) = match slots.spares.iter().position(|(raw, _)| idle(raw)) {
             Some(i) => slots.spares.remove(i).expect("a spare"),

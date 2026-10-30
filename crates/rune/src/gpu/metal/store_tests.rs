@@ -139,3 +139,36 @@ fn a_queue_write_reaches_an_encoder_recorded_before_it() {
     let words: Vec<u32> = bytemuck::cast_slice(&read(&device, &out)).to_vec();
     assert_eq!(words, [[2u32; 4], [2; 4]].concat());
 }
+
+/// A queue write to a buffer only submitted work reads swaps in a spare instead of staging a copy
+/// of its own, so the frame after it stays one command buffer, and the submitted work still
+/// reads the old bytes.
+#[test]
+fn a_queue_write_behind_submitted_work_swaps_rather_than_stages() {
+    use objc2_metal::{MTLCommandBuffer, MTLDevice, MTLEvent, MTLSharedEvent};
+    use wgpu::BufferUsages as B;
+    let (device, queue) = gpu();
+    let shared = device.as_custom::<MetalDevice>().unwrap().shared.clone();
+    // Holds the GPU until the end, so the first copy is still waiting when the write comes.
+    let gate = shared.device.newSharedEvent().unwrap();
+    let wait = shared.command_buffer();
+    wait.encodeWaitForEvent_value(ProtocolObject::<dyn MTLEvent>::from_ref(&*gate), 1);
+    wait.commit();
+    let source = buffer(&device, 16, B::COPY_SRC | B::COPY_DST);
+    let out = buffer(&device, 32, B::COPY_DST | B::MAP_READ);
+    let copy = |at| {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.copy_buffer_to_buffer(&source, 0, &out, at, 16);
+        encoder.finish()
+    };
+    queue.write_buffer(&source, 0, bytemuck::cast_slice(&[1u32; 4]));
+    queue.submit([copy(0)]);
+    let before = shared.state.lock().last;
+    queue.write_buffer(&source, 0, bytemuck::cast_slice(&[2u32; 4]));
+    queue.submit([copy(16)]);
+    assert_eq!(shared.state.lock().last, before + 1, "no staged copy of its own");
+    assert_eq!(swaps(&source).1, 1, "the write swapped storage under the waiting copy");
+    gate.setSignaledValue(1);
+    let words: Vec<u32> = bytemuck::cast_slice(&read(&device, &out)).to_vec();
+    assert_eq!(words, [[1u32; 4], [2; 4]].concat());
+}

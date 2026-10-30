@@ -3,7 +3,7 @@
 use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 
 use objc2_metal::{MTLCommandQueue, MTLDevice, MTLLanguageVersion, MTLSharedEvent};
 use parking_lot::Mutex;
@@ -27,6 +27,9 @@ pub(crate) struct Shared {
     pub(super) state: Mutex<State>,
     /// Buffers alive, for `Device::get_internal_counters`.
     pub(super) buffers: Arc<AtomicIsize>,
+    /// Encoders that made a command buffer not yet submitted or dropped. While none has, every
+    /// recorded command that reads a buffer's storage was submitted.
+    pub(super) recording: AtomicUsize,
 }
 send_sync!(Shared);
 
@@ -44,6 +47,7 @@ pub(super) fn new(device: Obj<dyn MTLDevice>, desc: &wgpu::DeviceDescriptor<'_>)
         msl: msl_version(),
         state: Mutex::new(State::default()),
         buffers: Arc::default(),
+        recording: AtomicUsize::new(0),
         device,
     });
     let device = MetalDevice { shared: shared.clone(), features: desc.required_features, limits: desc.required_limits.clone() };
