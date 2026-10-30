@@ -193,13 +193,29 @@ pub(super) fn truncated(text: &mut TextSystem, spec: &TextSpec, scale: f32, max_
     (make(text, e), e)
 }
 
-/// Drops the text layouts of the last commit's nodes this pass flattened again, before
-/// measuring, so the layout cache holds the only reference to each and a width change re-breaks
-/// it in place rather than copying it. Nodes that leave keep theirs to draw their exit.
-pub(super) fn release_kept_layouts(old: &mut [Node], entries: &HashMap<String, LayoutEntry>) {
-    for o in old.iter_mut().filter(|o| o.text_layout.is_some()) {
-        if entries.get(&o.path).is_some_and(|e| e.used) { o.text_layout = None; }
+/// Drops the text layouts of the last commit's nodes this pass flattened again (`nodes`, laid
+/// out in `taffy`), before measuring, so the layout cache holds the only reference to each and a
+/// width change re-breaks it in place rather than copying it. Nodes that leave keep theirs to
+/// draw their exit. A text that was edited (typed into, streamed onto) tells the cache its old
+/// version's layouts are done; one replaced by unrelated text may be shown again.
+pub(super) fn release_kept_layouts(old: &mut [Node], nodes: &[Node], entries: &HashMap<String, LayoutEntry>, taffy: &TaffyTree<usize>, text: &mut TextSystem) {
+    for o in old.iter_mut() {
+        let (Some(was), Some(e)) = (o.text.as_deref(), entries.get(&o.path).filter(|e| e.used)) else { continue };
+        o.text_layout = None;
+        let now = taffy.get_node_context(e.id).and_then(|&i| nodes.get(i)).filter(|n| n.path == o.path).and_then(|n| n.text.as_deref());
+        if let (Some((_, shape)), Some(now)) = (was.shape, now) && now.shape != was.shape && edited(&was.content, &now.content) {
+            text.supersede(shape);
+        }
     }
+}
+
+/// Whether `now` reads as an edit of `was`: what they share at the start and end is at least
+/// half the longer one.
+pub(super) fn edited(was: &str, now: &str) -> bool {
+    let (a, b) = (was.as_bytes(), now.as_bytes());
+    let prefix = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    let suffix = a[prefix..].iter().rev().zip(b[prefix..].iter().rev()).take_while(|(x, y)| x == y).count();
+    a != b && 2 * (prefix + suffix) >= a.len().max(b.len())
 }
 
 /// Lays out the flattened tree in `room`, measuring text leaves. Not generic over the app state,

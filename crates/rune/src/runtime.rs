@@ -3342,7 +3342,7 @@ impl<S: 'static> Measurement<'_, S> {
         // A window that fits its content lays the root out at its natural height.
         root.style.size = relayout::root_size(self.viewport, self.fit_height);
         let root_id = flatten(root, None, "", 0, motion::DEFAULT, RowLayout::Free, true, &mut taffy, &mut nodes, &mut self.layout_entries, scale);
-        if self.committing { release_kept_layouts(self.nodes, self.layout_entries); }
+        if self.committing { release_kept_layouts(self.nodes, &nodes, self.layout_entries, &taffy, self.text); }
         self.layout_entries.retain(|_, entry| {
             if !entry.used { taffy.remove(entry.id).unwrap(); }
             entry.used

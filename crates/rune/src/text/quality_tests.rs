@@ -247,9 +247,9 @@ fn stale_layouts_stay_within_their_budget_newest_kept() {
     }
     // Two more, so even the last label is stale.
     for _ in 0..2 { text.end_commit(); }
-    let cost: usize = text.layouts.values().map(|e| e.2 as usize + STALE_ENTRY).sum();
-    assert!(cost <= STALE_TEXT, "{cost}");
-    assert!(cost > STALE_TEXT * 9 / 10, "{cost}");
+    let cost: usize = text.layouts.values().map(|e| e.cost as usize).sum();
+    assert!(cost <= STALE_BYTES, "{cost}");
+    assert!(cost > STALE_BYTES * 9 / 10, "{cost}");
     let key = |label: &str| text_hash(label, &[], style, 2.0, None);
     assert!(text.layouts.contains_key(&key(&labels[1199])));
     assert!(!text.layouts.contains_key(&key(&labels[0])));
@@ -268,9 +268,9 @@ fn a_view_over_the_budget_keeps_a_budget_of_its_layouts() {
         assert_eq!(text.layouts.len(), 1200, "the current and previous commits are never evicted");
     }
     text.end_commit();
-    let cost: usize = text.layouts.values().map(|e| e.2 as usize + STALE_ENTRY).sum();
-    assert!(cost <= STALE_TEXT, "{cost}");
-    assert!(cost > STALE_TEXT * 9 / 10, "{cost}");
+    let cost: usize = text.layouts.values().map(|e| e.cost as usize).sum();
+    assert!(cost <= STALE_BYTES, "{cost}");
+    assert!(cost > STALE_BYTES * 9 / 10, "{cost}");
     let kept = text.layouts.len();
     let shaped = text.shaped;
     show(&mut text);

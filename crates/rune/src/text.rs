@@ -3,7 +3,7 @@
 //!
 //! Invariants: layouts are in device pixels; every layout is cached by a 64-bit hash of
 //! (text, spans, style, scale, width), kept for two commits unused and then while a budget of
-//! stale text lasts (`STALE_TEXT`), least recently used out first; a width not cached re-breaks
+//! stale layouts lasts (`STALE_BYTES`), least recently used out first; a width not cached re-breaks
 //! a cached layout of the same text and style rather than shaping it again; glyph keys include
 //! the run's variation coordinates, so one variable font serves every weight.
 
@@ -65,9 +65,9 @@ use default_fonts::DEFAULT_FONTS;
 use fallback::Route;
 use glyph_emit::Face;
 use hidden_axes::hidden_axes;
-use layout_cache::Cache;
+use layout_cache::{Cache, Entry};
 #[cfg(test)]
-use layout_cache::{STALE_ENTRY, STALE_TEXT};
+use layout_cache::STALE_BYTES;
 pub use icon::{Icon, icon_coverage};
 use icon::rasterize_icon;
 use trak::{Trak, Traks, font_trak};
@@ -1139,6 +1139,8 @@ pub struct TextSystem {
     /// The `layouts` key of the latest layout of each shaping (see `layout_blocks_inner`), whose
     /// glyphs a new width re-breaks instead of shaping the text again.
     shapes: HashMap<u64, u64>,
+    /// Shapings whose text was edited this commit (see [`Self::supersede`]).
+    superseded: std::collections::HashSet<u64>,
     runs: Cache<RunLayout>,
     generation: u32,
     pub sans: String,
@@ -1266,6 +1268,7 @@ impl TextSystem {
             scale_cx: ScaleContext::new(),
             layouts: HashMap::new(),
             shapes: HashMap::new(),
+            superseded: Default::default(),
             runs: HashMap::new(),
             generation: 0,
             sans: if cfg!(target_arch = "wasm32") { format!("{}, Inter", families.0) } else { families.0.to_owned() },
@@ -1455,13 +1458,13 @@ impl TextSystem {
             }
         };
         if cache {
-            if let Some((l, used, _)) = self.layouts.get_mut(&key) {
+            if let Some(Entry { value: l, used, .. }) = self.layouts.get_mut(&key) {
                 *used = g;
                 // A width change re-breaks the newest layout, not one measured since at another.
                 self.shapes.entry(shape_key).or_insert(key);
                 return l.clone();
             }
-            if let Some(prev) = self.shapes.get(&shape_key).copied() && let Some((shaped, used, _)) = self.layouts.get(&prev) {
+            if let Some(prev) = self.shapes.get(&shape_key).copied() && let Some(Entry { value: shaped, used, .. }) = self.layouts.get(&prev) {
                 self.rebroken += 1;
                 let _break_time = crate::frame_profile::Scope::new(crate::frame_profile::Phase::Text);
                 // One this commit hasn't used and nothing else holds moves to the new width and
@@ -1471,7 +1474,7 @@ impl TextSystem {
                 let layout = Rc::make_mut(&mut l);
                 break_lines(layout);
                 layout.align(align, AlignmentOptions::default());
-                self.layouts.insert(key, (l.clone(), g, text.len() as u32));
+                self.layouts.insert(key, Entry::new(l.clone(), g, text.len(), shape_key));
                 self.shapes.insert(shape_key, key);
                 return l;
             }
@@ -1733,7 +1736,7 @@ impl TextSystem {
         layout.align(align, AlignmentOptions::default());
         let l = Rc::new(layout);
         if cache {
-            self.layouts.insert(key, (l.clone(), g, text.len() as u32));
+            self.layouts.insert(key, Entry::new(l.clone(), g, text.len(), shape_key));
             self.shapes.insert(shape_key, key);
         }
         if let Some(shared) = shared {
@@ -1800,12 +1803,12 @@ impl TextSystem {
     pub fn run_layout(&mut self, run: &Run, style: TextStyle, scale: f32) -> Rc<RunLayout> {
         let key = run.key(style, scale);
         let g = self.generation;
-        if let Some((r, used, _)) = self.runs.get_mut(&key) {
+        if let Some(Entry { value: r, used, .. }) = self.runs.get_mut(&key) {
             *used = g;
             return r.clone();
         }
         let r = Rc::new(RunLayout::new(self.layout_rich(run.as_str(), &[], style, scale, None), run.as_str()));
-        self.runs.insert(key, (r.clone(), g, run.as_str().len() as u32));
+        self.runs.insert(key, Entry::new(r.clone(), g, run.as_str().len(), 0));
         r
     }
 
