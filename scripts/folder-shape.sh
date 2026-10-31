@@ -5,7 +5,7 @@
 # Files directly in examples/, benches/ and bin/ are skipped (each is its own program).
 # Test files (*_tests.rs, *_test.rs, tests.rs, *.test.ts, ...) are not counted. The prefix is the stem
 # up to the first "_" or "-". Existing violations are listed in scripts/folder-shape-exceptions.txt
-# ("<key> <ceiling>", key is "<dir>/<prefix>_*" or "<dir>"); ceilings only go down.
+# ("<key> [ceiling]", key is "<dir>/<prefix>_*" or "<dir>/"; the ceiling is optional); ceilings only go down.
 # Usage: scripts/folder-shape.sh [--warn-only] [--update-exceptions [--allow-raise]]
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
@@ -54,15 +54,15 @@ for d, (stems, subs) in dirs.items():
         if len(group) >= (2 if base else FAM):
             found[f"{d}/{p}_*"] = (len(group), f"move into {p}/")
     if len(stems) > WARN:
-        found[d] = (len(stems), "group into capability subfolders")
+        found[d + "/"] = (len(stems), "group into capability subfolders")
 
 def load():
     out = {}
     if os.path.exists(EXC):
         for line in open(EXC):
             if line.strip() and not line.startswith("#"):
-                k, v = line.split()
-                out[k] = int(v)
+                parts = line.split()
+                out[parts[0]] = int(parts[1]) if len(parts) > 1 else 10**9
     return out
 
 exc = load()
