@@ -81,4 +81,4 @@ backpressure, not callback rate.
 
 `refresh-probe.m` then found the cause of the 60-Hz cap: Low Power Mode holds a
 ProMotion panel at 60 Hz while both display links and `NSScreen` still report
-120 Hz. `crates/rune/src/display_link.rs` paces submissions at that cap.
+120 Hz. `crates/rune/src/platform/display_link.rs` paces submissions at that cap.

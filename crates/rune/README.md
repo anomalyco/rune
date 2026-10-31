@@ -181,7 +181,7 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   while moving and re-rasterizes crisp at the resting scale after 0.1 s. A matched flight's own
   label keeps its rest size so it doesn't pop when it lands.
 - **Cached subtrees** (`.cache()`, `.cache_key(u64)`): rasterizes a settled subtree once into an
-  offscreen `Rgba16Float` layer texture (reusing the isolated-layer compositor in `layers.rs`) and
+  offscreen `Rgba16Float` layer texture (reusing the isolated-layer compositor in `render/layers.rs`) and
   composites that single quad on subsequent frames without re-emitting or re-drawing its
   descendants, including while an ancestor's `live_offset` or `live_scale` moves or scales it.
   - **Invalidation:** derived automatically from the subtree's relative draw output (primitives,
@@ -344,7 +344,7 @@ policy changes are applied in the same mutation phase.
   when nothing focused takes them. Virtual rows are vertical only. Platforms report wheels through
   `Runtime::wheel_xy` with `wheel_began` and `wheel_ended` around trackpad gestures, or
   `Runtime::wheel_event` with modifiers and phases; `Runtime::wheel` stays the vertical path.
-- **Canvas input** (`canvas_input.rs`): what an infinite canvas, map or image viewer needs.
+- **Canvas input** (`input/canvas_input.rs`): what an infinite canvas, map or image viewer needs.
   `.on_wheel(|s, e: WheelEvent, tx| -> bool)` hears wheel and trackpad deltas over the element
   before any scroll view does, innermost first up to the nearest scroll view, with `dx`, `dy`,
   the pointer in the element's own layout points (under any `live_scale`), `mods`, `phase`, `momentum` and `precise`.
@@ -539,7 +539,7 @@ app.run();
 - Activation: the first window takes the launcher's `XDG_ACTIVATION_TOKEN`/`DESKTOP_STARTUP_ID`
   and clears them from the environment. A new window gets a forwarded token through winit's
   `with_activation_token`. An open Wayland window is activated with `xdg_activation_v1` bound on
-  winit's own display (`activation.rs`), since winit 0.30 can't. Without a token Wayland can only
+  winit's own display (`platform/activation.rs`), since winit 0.30 can't. Without a token Wayland can only
   request attention (most compositors mark it urgent); X11, macOS and Windows use `focus_window`.
 - Headless tooling runs ignore window requests and apply updates before each frame.
 - `AppHandle::is_visible()` reports whether the window is on screen; `AppHandle::window_error()`
@@ -1902,7 +1902,7 @@ let clip = rune::Player::audio(note.path);
 - **Other platforms** (Linux, Windows, the web): `start` ends in `Failed("recording isn't
   supported on this platform")`.
 
-### Edge overlays (`App::overlay`, `overlay.rs`, `layer_shell.rs`)
+### Edge overlays (`App::overlay`, `overlay.rs`, `platform/layer_shell.rs`)
 
 `app.overlay(OverlaySpec { name, size, edge, margin, align, inset, interactive, view }, state)
 -> OverlayHandle<T>` adds a surface to that app's loop with its own state type: transparent,
@@ -1921,10 +1921,10 @@ of the primary display, centred or `inset` points from a side. Clicks pass throu
 - macOS: winit's view (and the Metal layer wgpu draws into) moves into a non-activating
   `NSPanel` (`NonactivatingPanel`, `becomesKeyOnlyIfNeeded`) at status level (25) on every
   Space incl. full-screen ones, ordered front with `orderFrontRegardless`; it ignores the mouse
-  unless interactive. Clicks still reach Rune through winit's view (`macos.rs`).
+  unless interactive. Clicks still reach Rune through winit's view (`platform/macos.rs`).
 - Windows: a topmost tool window with `WS_EX_NOACTIVATE` (plus `WS_EX_TRANSPARENT|WS_EX_LAYERED`
   unless interactive), shown with `SW_SHOWNOACTIVATE`; a bottom overlay sits above the taskbar
-  (`win32.rs`).
+  (`platform/win32.rs`).
 - Checked under headless sway (layer shell, and Xwayland for X11) and on macOS (panel level,
   bounds, hide and reshow). Windows builds are checked with `cargo xwin clippy` only.
 - `Tx::copy` works in overlays (a meeting capsule's Copy button).

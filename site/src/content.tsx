@@ -250,7 +250,7 @@ export const layers: Entry[] = [
     ],
     code: [
       at("crates/rune/src/runtime.rs", "Taffy on the node arena"),
-      at("crates/rune/src/virtual_list.rs", "visible rows only"),
+      at("crates/rune/src/el/virtual_list.rs", "visible rows only"),
     ],
   },
   {
@@ -342,9 +342,9 @@ export const layers: Entry[] = [
     ],
     code: [
       at("crates/rune/src/window.rs", "winit today"),
-      at("crates/rune/src/macos.rs"),
-      at("crates/rune/src/win32.rs", "overlays"),
-      at("crates/rune/src/layer_shell.rs", "Wayland overlays"),
+      at("crates/rune/src/platform/macos.rs"),
+      at("crates/rune/src/platform/win32.rs", "overlays"),
+      at("crates/rune/src/platform/layer_shell.rs", "Wayland overlays"),
     ],
   },
   {

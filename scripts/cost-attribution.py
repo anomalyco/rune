@@ -54,7 +54,7 @@ def owner_of_crate(crate, name):
     if crate.startswith("icu_") or crate in ("zerovec", "zerotrie", "yoke", "unicode_bidi", "unicode_script"):
         return "Parley"
     if crate == "rune":
-        return "Instrumentation (frame-profile clock)" if "frame_profile" in name else "Rune"
+        return "Instrumentation (frame-profile clock)" if "frame_profile" in name or "frame::profile" in name else "Rune"
     if crate in ("rune_kit", "pulldown_cmark"):
         return "Kit and Markdown"
     if crate == "layout_text_cost":

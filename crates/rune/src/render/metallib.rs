@@ -23,7 +23,7 @@
 //! Rune's own Metal backend (`metal-backend`) loads `uber_native.metallib` instead: the MSL that
 //! backend emits (vertex descriptors rather than wgpu-hal's vertex pulling), in MSL 3.0.
 
-include!("../uber_metallib_hash.rs");
+include!("uber_metallib_hash.rs");
 
 #[cfg(any(test, target_os = "macos"))]
 const UBER_METALLIB: &[u8] = include_bytes!("../uber.metallib");
@@ -485,7 +485,7 @@ mod tests {
             assert!(uber_abi_hash() == UBER_ABI_FNV64
                 && options_hash == UBER_MSL_OPTIONS_FNV64
                 && wgsl_hash == UBER_WGSL_BLAKE3,
-                "MSL is byte-identical; no Xcode or metallib regeneration needed. Paste these lines into crates/rune/src/uber_metallib_hash.rs:\n\
+                "MSL is byte-identical; no Xcode or metallib regeneration needed. Paste these lines into crates/rune/src/render/uber_metallib_hash.rs:\n\
 pub(super) const UBER_ABI_FNV64: u64 = 0x{:016x};\n\
 pub(super) const UBER_MSL_OPTIONS_FNV64: u64 = 0x{options_hash:016x};\n\
 pub(super) const UBER_WGSL_BLAKE3: &str = \"{wgsl_hash}\";", uber_abi_hash());

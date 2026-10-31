@@ -1,6 +1,6 @@
 #!/bin/sh
 # Regenerates crates/rune/src/uber.metallib (wgpu's Metal backend), crates/rune/src/uber_native.metallib
-# (Rune's own, `metal-backend`) and crates/rune/src/uber_metallib_hash.rs from
+# (Rune's own, `metal-backend`) and crates/rune/src/render/uber_metallib_hash.rs from
 # crates/rune/src/{clip,shader}.wgsl using wgpu::naga and Xcode's Metal toolchain.
 # App builds embed the committed uber.metallib and do not run xcrun.
 set -eu
@@ -59,7 +59,7 @@ xcrun -sdk macosx metal $native_flags -c "$tmp/native_vs.metal" -o "$tmp/native_
 xcrun -sdk macosx metal $native_flags -c "$tmp/native_fs.metal" -o "$tmp/native_fs.air"
 xcrun -sdk macosx metallib "$tmp/native_vs.air" "$tmp/native_fs.air" -o crates/rune/src/uber_native.metallib
 
-python3 - "$tmp" crates/rune/src/uber.metallib crates/rune/src/uber_metallib_hash.rs crates/rune/src/uber_native.metallib <<'PY'
+python3 - "$tmp" crates/rune/src/uber.metallib crates/rune/src/render/uber_metallib_hash.rs crates/rune/src/uber_native.metallib <<'PY'
 import pathlib, sys
 
 tmp = pathlib.Path(sys.argv[1])

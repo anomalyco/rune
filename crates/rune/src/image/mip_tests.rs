@@ -75,7 +75,7 @@ fn the_byte_mip_chain_matches_the_float_one_within_one_per_channel() {
 fn the_mip_chain_allocates_little_beyond_its_output() {
     let (w, h) = (512, 256);
     let src = synthetic(w, h);
-    let (mips, peak) = crate::test_alloc::peak(|| mip_chain(w, h, &src).unwrap());
+    let (mips, peak) = crate::tooling::test_alloc::peak(|| mip_chain(w, h, &src).unwrap());
     let output: usize = mips.mips.iter().map(|m| m.pixels.len()).sum();
     assert!(peak < output + output / 8, "peak {peak} bytes for {output} bytes of mips");
 }

@@ -166,13 +166,13 @@ fn compositor_buffer_writes_land_in_order_and_reuse_staging() {
     for frame in 0..12u32 {
         let buffers = live_buffers(device);
         let mut encoder = device.create_command_encoder(&Default::default());
-        let allocs = crate::test_alloc::allocs();
+        let allocs = crate::tooling::test_alloc::allocs();
         renderer.write_buffer(device, queue, &mut encoder, &uniforms, 0, bytemuck::cast_slice(&[frame; 4]));
-        let first = crate::test_alloc::allocs() - allocs;
+        let first = crate::tooling::test_alloc::allocs() - allocs;
         encoder.copy_buffer_to_buffer(&uniforms, 0, &readback, 0, 16);
-        let allocs = crate::test_alloc::allocs();
+        let allocs = crate::tooling::test_alloc::allocs();
         renderer.write_buffer(device, queue, &mut encoder, &uniforms, 0, bytemuck::cast_slice(&[frame + 100; 4]));
-        let second = crate::test_alloc::allocs() - allocs;
+        let second = crate::tooling::test_alloc::allocs() - allocs;
         encoder.copy_buffer_to_buffer(&uniforms, 0, &readback, 16, 16);
         let created = live_buffers(device) - buffers;
         renderer.submit(queue, encoder);

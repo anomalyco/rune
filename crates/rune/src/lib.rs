@@ -68,13 +68,11 @@ pub mod color;
 pub mod compose;
 pub mod edit;
 pub mod el;
-#[cfg(target_vendor = "apple")]
-pub mod embed;
-#[cfg(test)]
-mod test_alloc;
 mod platform;
 #[cfg(target_arch = "wasm32")]
 pub use platform::web;
+#[cfg(target_vendor = "apple")]
+pub use platform::embed;
 pub mod growth;
 mod latest;
 pub mod live;

@@ -496,6 +496,8 @@ pub(crate) mod headless_run;
 pub(crate) mod perf_warn;
 pub(crate) mod record;
 #[cfg(test)]
+pub(crate) mod test_alloc;
+#[cfg(test)]
 #[path = "tooling/window_tests.rs"]
 mod window_tests;
 

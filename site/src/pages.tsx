@@ -615,7 +615,7 @@ export function LaunchFastView() {
               <strong>"MSL is byte-identical; no Xcode or metallib regeneration needed"</strong> means only the
               fingerprint changed, for example after a comment edit or a descriptor change that generates the same
               Metal. Paste the three <code>pub(super) const</code> lines it prints into{" "}
-              <code>crates/rune/src/uber_metallib_hash.rs</code>.
+              <code>crates/rune/src/render/uber_metallib_hash.rs</code>.
             </li>
             <li>
               <strong>"generated MSL or Metal compile flags changed"</strong> or{" "}
