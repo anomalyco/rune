@@ -146,8 +146,8 @@ impl<S: 'static> Runtime<S> {
         match flips {
             Some(flips) => flips.iter().any(held),
             None => {
-                let captured = self.captured();
-                (0..self.nodes.len()).filter_map(|i| self.hover_flip(i, captured)).any(|f| held(&f))
+                let (captured, alone) = (self.captured(), self.hovered_alone());
+                (0..self.nodes.len()).filter_map(|i| self.hover_flip(i, captured, alone)).any(|f| held(&f))
             }
         }
     }
@@ -283,8 +283,18 @@ impl<S: 'static> Runtime<S> {
         self.capture.as_ref().map(|(p, _)| p.as_str()).or(self.secondary_capture.as_deref())
     }
 
-    /// Node `i`'s hover track, if it has one and isn't leaving.
-    fn hover_flip(&self, i: usize, captured: Option<&str>) -> Option<Flip> {
+    /// The innermost `hover_alone` element under the pointer: the elements around it show no
+    /// hover.
+    fn hovered_alone(&self) -> Option<usize> {
+        let (x, y) = self.pointer?;
+        (0..self.nodes.len())
+            .filter(|&i| self.nodes[i].vis.hover_alone && !self.is_exiting(self.nodes[i].id) && self.allowed(i) && self.node_contains(i, x, y))
+            .max_by_key(|&i| self.nodes[i].path.len())
+    }
+
+    /// Node `i`'s hover track, if it has one and isn't leaving. `alone`: the `hover_alone`
+    /// element under the pointer, which turns off the tracks of the elements around it.
+    fn hover_flip(&self, i: usize, captured: Option<&str>, alone: Option<usize>) -> Option<Flip> {
         let n = &self.nodes[i];
         if !(n.vis.hover.a > 0.0 || n.vis.hover_group) || self.is_exiting(n.id) { return None; }
         let inside = self.pointer.is_some_and(|(x, y)| self.node_contains(i, x, y));
@@ -293,7 +303,8 @@ impl<S: 'static> Runtime<S> {
         let allowed = self.allowed(i);
         // A held press stays hovered while it's inside, though a press scale shrank the drawn
         // rect away from the pointer. A group stays hovered while a descendant holds the press.
-        let on = allowed && (inside || held) && captured.is_none_or(|p| holds(&n.path, p));
+        let shadowed = alone.is_some_and(|a| a != i && holds(&n.path, &self.nodes[a].path));
+        let on = allowed && (inside || held) && !shadowed && captured.is_none_or(|p| holds(&n.path, p));
         // Like a native sidebar or menu: the highlight lands with the pointer and fades
         // briefly as it leaves.
         let anim = match n.hover_motion() {
@@ -311,12 +322,13 @@ impl<S: 'static> Runtime<S> {
         let mut changed = false;
         let mut flips = std::mem::take(&mut self.hover_hold.flips);
         let captured = self.capture.as_ref().map(|(p, _)| p.as_str()).or(self.secondary_capture.as_deref());
+        let alone = self.hovered_alone();
         for i in 0..self.nodes.len() {
             let n = &self.nodes[i];
             let press_scale = n.handlers.get().and_then(|h| h.press_scale);
             if n.vis.hover.a <= 0.0 && !n.vis.hover_group && n.vis.press.a <= 0.0 && press_scale.is_none() { continue; }
             if self.is_exiting(n.id) { continue; }
-            match self.hover_flip(i, captured) {
+            match self.hover_flip(i, captured, alone) {
                 Some(f) if f.changed => flips.push(f),
                 // Default hover animations inherit velocity and have no completion token.
                 // An unchanged target preserves its trajectory in the store already; avoid

@@ -77,3 +77,37 @@ fn inherited_hover_curves_leave_descendants_visuals_shared() {
         assert!(n.vis.cold.is_empty(), "{} keeps no cold visuals of its own", n.path);
     }
 }
+
+/// A face in a hoverable row: on the face only the face shows
+/// hover, and the row's wash and its group styles rest; back on the row they light again.
+/// The pointer moving between them only paints.
+#[test]
+fn a_hover_alone_child_keeps_the_row_around_it_unlit() {
+    struct S;
+    fn view(_: &S, _: &mut Cx<S>) -> El {
+        let face = el().key("face").size(20.0, 20.0).hover(Color::WHITE).hover_alone();
+        let row = crate::row().key("row").size(200.0, 30.0).hover(Color::WHITE)
+            .child(el().key("label").size(100.0, 30.0))
+            .child(el().key("dot").size(4.0, 4.0).fill(Color::WHITE).group_opacity(0.0, 1.0))
+            .child(face);
+        col().w_full().h_full().child(row)
+    }
+    let mut rt = Runtime::new(S, view, (240.0, 100.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let id = |rt: &Runtime<S>, key: &str| rt.nodes.iter().find(|n| n.path.rsplit('/').next() == Some(key)).map(|n| n.id).unwrap();
+    let lit = |rt: &Runtime<S>, key: &str| rt.scene.store().target(id(rt, key), P_HOVER).unwrap_or(0.0);
+    let commits = rt.stats.commits;
+
+    rt.pointer_move(50.0, 15.0);
+    rt.frame(1.0 / 120.0);
+    assert_eq!((lit(&rt, "row"), lit(&rt, "face")), (1.0, 0.0), "on the label the row lights");
+
+    rt.pointer_move(114.0, 10.0);
+    rt.frame(1.0 / 120.0);
+    assert_eq!((lit(&rt, "row"), lit(&rt, "face")), (0.0, 1.0), "on the face only the face lights");
+
+    rt.pointer_move(50.0, 15.0);
+    rt.frame(1.0 / 120.0);
+    assert_eq!((lit(&rt, "row"), lit(&rt, "face")), (1.0, 0.0), "back on the label the row lights again");
+    assert_eq!(rt.stats.commits, commits, "hover between them never commits");
+}

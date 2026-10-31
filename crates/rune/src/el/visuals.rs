@@ -382,6 +382,14 @@ impl El {
         self.vis.cold_mut().group_color = Some(c);
         self
     }
+    /// Hovering this element shows only its own hover: while the pointer is on it, the
+    /// elements it sits inside show no hover overlay and their `group_*` styles rest, as if the
+    /// pointer had left them. A face or button inside a hoverable row, for one. Paint only: it
+    /// changes no layout and needs no commit.
+    pub fn hover_alone(mut self) -> Self {
+        self.vis.cold_mut().hover_alone = true;
+        self
+    }
     /// Wall-clock opacity loop, using the shared loop engine and host wake deadline.
     pub fn cycle(self, c: Cycle) -> Self {
         self.looping(rune_motion::LoopSpec::cycle(c))
