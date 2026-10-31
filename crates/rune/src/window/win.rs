@@ -27,7 +27,7 @@ pub(super) struct Win {
     pub(super) hidden_wait: Duration,
     /// When a hidden launcher renders the changes it hasn't yet.
     pub(super) hidden_pace: HiddenPace,
-    pub(super) cursor: crate::os_cursor::OsCursor,
+    pub(super) cursor: crate::cursor::os::OsCursor,
     pub(super) alpha: Option<crate::render::surface_alpha::AlphaSurface>,
     /// Only a due timer asked for the next frame, which may then draw nothing new.
     pub(super) quiet: bool,

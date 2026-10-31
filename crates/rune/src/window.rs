@@ -282,7 +282,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
         self.cleanup(event_loop);
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        crate::os_cursor::make_pending(event_loop);
+        crate::cursor::os::make_pending(event_loop);
         let mut animating = false;
         for host in self.hosts.iter_mut().flatten() {
             animating |= host.about_to_wait(event_loop);
@@ -861,7 +861,7 @@ impl<S: 'static> Host<S> {
             occluded_wait: OCCLUDED_RETRY,
             hidden_wait: TIMEOUT_RETRY,
             hidden_pace: HiddenPace::default(),
-            cursor: crate::os_cursor::OsCursor::new(event_loop),
+            cursor: crate::cursor::os::OsCursor::new(event_loop),
             alpha,
             quiet: false,
             presented: None,

@@ -99,7 +99,7 @@ fn holds_image(applied: (bool, Cursor)) -> bool {
 
 /// Pixels per point in the OS cursors made for `window`.
 fn image_scale(window: &Window) -> f32 {
-    if cfg!(target_os = "macos") { crate::cursor_image::SOURCE_SCALE } else { window.scale_factor() as f32 }
+    if cfg!(target_os = "macos") { crate::cursor::image::SOURCE_SCALE } else { window.scale_factor() as f32 }
 }
 
 /// Makes the image cursors windows asked for since the loop last slept, and sets them.
@@ -119,7 +119,7 @@ mod images {
     use winit::window::{CursorIcon, CustomCursor, Window};
 
     use crate::cursor::CursorImage;
-    use crate::cursor_image::ImageCursors;
+    use crate::cursor::image::ImageCursors;
 
     thread_local! {
         static CURSORS: RefCell<ImageCursors<CustomCursor>> = const { RefCell::new(ImageCursors::new()) };

@@ -89,7 +89,7 @@ struct Running<S: 'static> {
     compositor: Option<Box<dyn crate::Compositor<S>>>,
     suspended: bool,
     embedded: bool,
-    cursor: crate::os_cursor::OsCursor,
+    cursor: crate::cursor::os::OsCursor,
     _menus: crate::native_menu::Guard<S>,
     shortcuts: crate::shortcuts::Guard,
     input: input::Bridge,
@@ -349,7 +349,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             surface.configure(&gpu.device, &config);
             let mut renderer = Renderer::new(&gpu.device, format);
             renderer.set_srgb_blend(!format.is_srgb());
-            let cursor = crate::os_cursor::OsCursor::new(event_loop);
+            let cursor = crate::cursor::os::OsCursor::new(event_loop);
             let input = input::Bridge::new(&window.canvas().unwrap(), Rc::downgrade(&self.running), window.clone(), self.embedded, fit_height);
             *self.running.borrow_mut() = Some(Running { gpu, surface, config, renderer, rt, shared, input, clipboard,
                 clock: crate::frame::clock::FrameClock::new(now), compositor, suspended: false, embedded: self.embedded,
@@ -440,7 +440,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        crate::os_cursor::make_pending(event_loop);
+        crate::cursor::os::make_pending(event_loop);
         let Ok(running) = self.running.try_borrow() else { return };
         let Some(r) = &*running else { return };
         event_loop.set_control_flow(match r.rt.wake_deadline() {

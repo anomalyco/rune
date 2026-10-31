@@ -73,8 +73,6 @@ mod layer_shell;
 mod x11;
 mod overlay;
 mod cursor;
-mod cursor_image;
-mod os_cursor;
 #[cfg(target_os = "windows")]
 mod win32;
 #[cfg(target_os = "macos")]

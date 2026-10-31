@@ -102,5 +102,5 @@ impl<T: Clone> ImageCursors<T> {
 }
 
 #[cfg(test)]
-#[path = "cursor_image_tests.rs"]
+#[path = "image_tests.rs"]
 mod tests;

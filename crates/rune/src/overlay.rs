@@ -315,7 +315,7 @@ pub(crate) struct Overlay<T: 'static> {
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     x11: Option<crate::x11::overlay::InputWindow>,
     live: Option<Live>,
-    cursor: Option<crate::os_cursor::OsCursor>,
+    cursor: Option<crate::cursor::os::OsCursor>,
     mods: winit::keyboard::ModifiersState,
     renderer: Option<Renderer>,
     gpu: Option<Arc<Gpu>>,
@@ -657,7 +657,7 @@ impl<T: 'static> Overlay<T> {
         crate::native_menu::adopt_standard_view();
         self.dark = window.theme().map_or_else(|| crate::preferences::desktop_dark(&window).unwrap_or(true), |t| t == winit::window::Theme::Dark);
         self.rt.set_system_dark(self.dark);
-        if self.cursor.is_none() { self.cursor = Some(crate::os_cursor::OsCursor::new(event_loop)); }
+        if self.cursor.is_none() { self.cursor = Some(crate::cursor::os::OsCursor::new(event_loop)); }
         let scale = crate::window::backing_scale(&window);
         // The surface first: on macOS it binds winit's view and its layer, which then move
         // into the panel.

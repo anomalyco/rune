@@ -10,7 +10,7 @@ use objc2::{msg_send, msg_send_id};
 use objc2_foundation::{NSObject, NSPoint, NSSize};
 
 use crate::cursor::CursorImage;
-use crate::cursor_image::{Decoded, ImageCursors, SOURCE_SCALE};
+use crate::cursor::image::{Decoded, ImageCursors, SOURCE_SCALE};
 use crate::el::Cursor;
 
 thread_local! {

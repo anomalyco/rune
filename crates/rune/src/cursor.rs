@@ -1,5 +1,8 @@
 //! The pointer's shape over an element.
 
+pub(crate) mod image;
+pub(crate) mod os;
+
 /// The pointer's shape over an element (CSS `cursor`). Elements without one inherit their
 /// nearest ancestor's; text fields default to [`Cursor::Text`], everything else to the arrow.
 ///
