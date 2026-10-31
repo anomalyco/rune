@@ -2,12 +2,6 @@
 use super::*;
 
 impl<S: 'static> Runtime<S> {
-    /// A window drag or titlebar double-click requested by the press just delivered. The shell
-    /// must act on it before returning from that press event.
-    pub fn take_titlebar_action(&mut self) -> Option<TitlebarAction> {
-        self.titlebar_action.take()
-    }
-
     /// Clock seconds now: the wall clock in a window (input arrives between frames), the
     /// virtual clock headless.
     pub(super) fn now_clock(&self) -> f64 {

@@ -181,6 +181,8 @@ impl<S: 'static> Runtime<S> {
             self.text_sel.dragging = false;
         }
         let Some(ti) = target else {
+            let now = self.now_clock();
+            self.titlebar.press_empty(now, x, y, self.double_click_interval);
             if self.focused.is_some() {
                 self.queue.push(Action::Blur);
             }
@@ -192,11 +194,7 @@ impl<S: 'static> Runtime<S> {
         let now = self.now_clock();
         let n = &self.nodes[ti];
         if n.window_drag && n.handlers.on_press.is_none() && n.handlers.on_double_press.is_none() && n.handlers.on_drag.is_none() && n.handlers.drag_out.is_none() && self.textbox_input(ti).is_none() {
-            let double = self.last_drag_press.is_some_and(|(t, px, py)| {
-                now - t <= self.double_click_interval && (x - px).abs() <= CLICK_SLOP && (y - py).abs() <= CLICK_SLOP
-            });
-            self.last_drag_press = if double { None } else { Some((now, x, y)) };
-            self.titlebar_action = Some(if double { TitlebarAction::DoubleClick } else { TitlebarAction::Drag });
+            self.titlebar.press_region(now, x, y, self.double_click_interval);
             if self.focused.is_some() {
                 self.queue.push(Action::Blur);
             }

@@ -1,0 +1,1 @@
+- macOS: a double click on an empty spot in a full-size-content titlebar now takes the titlebar double-click action (zoom, minimise or nothing, per System Settings), as a native titlebar does. AppKit already dragged the window from there, but the double click went nowhere unless the spot was a `.window_drag()` region. Windows using `Chrome::drag_regions` are unchanged.

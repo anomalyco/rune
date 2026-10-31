@@ -179,6 +179,8 @@ mod secondary;
 mod app_ime;
 #[path = "runtime/input/press_clicks.rs"]
 mod press_clicks;
+#[path = "runtime/input/titlebar.rs"]
+mod titlebar;
 #[path = "runtime/window_requests.rs"]
 mod window_requests;
 #[path = "runtime/paint/tracks.rs"]
@@ -699,8 +701,6 @@ pub struct Runtime<S: 'static> {
     pub ambient: Option<f32>,
     /// Where (window points) the current press started.
     press_at: (f32, f32),
-    /// The last press on a window drag region: when (clock seconds) and where.
-    last_drag_press: Option<(f64, f32, f32)>,
     /// The first of a possible double press: the element, its down time and point.
     last_press: Option<(String, f64, f32, f32)>,
     /// The press now held is the second of a double press.
@@ -712,7 +712,7 @@ pub struct Runtime<S: 'static> {
     press_moved: bool,
     /// A scroll under the held press cancelled it ([`Runtime::scroll_cancels_press`]).
     press_cancelled: bool,
-    titlebar_action: Option<TitlebarAction>,
+    titlebar: titlebar::Titlebar,
     /// Two presses closer than this (seconds) are a double press: the system setting on macOS
     /// and Windows, 0.5 elsewhere and headless.
     pub double_click_interval: f64,
@@ -980,14 +980,13 @@ impl<S: 'static> Runtime<S> {
             key_warnings: None,
             ambient: None,
             press_at: (0.0, 0.0),
-            last_drag_press: None,
             last_press: None,
             double_armed: false,
             press_clicks: Default::default(),
             press_down_t: 0.0,
             press_moved: false,
             press_cancelled: false,
-            titlebar_action: None,
+            titlebar: Default::default(),
             double_click_interval: 0.5,
             os_drag: true,
             drag_out_armed: false,

@@ -356,6 +356,30 @@ fn presses_on_a_window_drag_region_move_the_window_but_not_its_buttons() {
 }
 
 #[test]
+fn a_double_press_on_nothing_in_the_native_titlebar_band_takes_the_titlebar_action() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        col().size(200.0, 200.0).child(el().key("button").size(40.0, 40.0).on_press(|_: &mut ()| {}))
+    }
+    let mut rt = Runtime::new((), view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let double = |rt: &mut Runtime<()>, x: f32, y: f32| {
+        let mut actions = Vec::new();
+        for _ in 0..2 {
+            rt.pointer_move(x, y);
+            rt.pointer_down(x, y);
+            actions.push(rt.take_titlebar_action());
+            rt.pointer_up(x, y);
+        }
+        actions
+    };
+    assert_eq!(double(&mut rt, 100.0, 10.0), [None, None], "no native band, nothing to do");
+    rt.set_native_titlebar_band(28.0);
+    assert_eq!(double(&mut rt, 100.0, 10.0), [None, Some(TitlebarAction::DoubleClick)], "the system drags; Rune adds the double click");
+    assert_eq!(double(&mut rt, 100.0, 60.0), [None, None], "below the band");
+    assert_eq!(double(&mut rt, 20.0, 10.0), [None, None], "a button in the band keeps its presses");
+}
+
+#[test]
 fn hover_change_spans_descendants_and_holds_through_a_press() {
     type State = (Vec<bool>, u32, u32);
     fn view(_: &State, _: &mut Cx<State>) -> El {

@@ -119,6 +119,21 @@ pub fn titlebar_inset(window: &Window) -> f32 {
     (r.origin.x + r.size.width) as f32
 }
 
+/// How far down, in window points, AppKit moves the window itself from presses on the content
+/// view: a full-size-content titlebar the app didn't take over with drag regions. 0 in full
+/// screen and for standard titled, borderless and drag-region windows.
+pub fn native_titlebar_band(window: &Window) -> f32 {
+    let Some(win) = ns_window(window) else { return 0.0 };
+    let mask = win.styleMask();
+    if !mask.contains(NSWindowStyleMask::Titled | NSWindowStyleMask::FullSizeContentView) || mask.contains(NSWindowStyleMask::FullScreen) {
+        return 0.0;
+    }
+    if content_view(window).is_some_and(|v| v.class().name().starts_with("RuneDragRegions_")) { return 0.0; }
+    // SAFETY: reading the window's geometry on the main thread.
+    let content = unsafe { win.contentLayoutRect() };
+    (win.frame().size.height - content.size.height).max(0.0) as f32
+}
+
 pub fn double_click_interval() -> f64 {
     unsafe { NSEvent::doubleClickInterval() }
 }

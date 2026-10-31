@@ -85,7 +85,7 @@ impl<S: 'static> Runtime<S> {
         self.hover_pending.clear();
         self.forget_drop_targets();
         self.last_press = None;
-        self.last_drag_press = None;
+        self.titlebar.clear();
         self.double_armed = false;
         self.press_clicks.clear();
         let Some(playground) = &mut self.playground else { return };

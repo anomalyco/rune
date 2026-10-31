@@ -430,6 +430,8 @@ impl<S: 'static> Host<S> {
                         (ElementState::Pressed, true) => rt.secondary_down(x, y),
                         (ElementState::Released, true) => rt.secondary_up(x, y),
                         (ElementState::Pressed, false) => {
+                            #[cfg(target_os = "macos")]
+                            rt.set_native_titlebar_band(mac::native_titlebar_band(&l.window));
                             rt.pointer_down(x, y);
                             rt.physical_input(crate::PhysicalInput::Modifiers(map_mods(self.mods)));
                             // AppKit needs the drag started inside this mouse-down.
