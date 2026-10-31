@@ -101,6 +101,8 @@ pub struct RollingText {
     trailing: bool,
     stagger: f32,
     travel: f32,
+    exit: f32,
+    scale: f32,
 }
 
 impl RollingText {
@@ -121,6 +123,8 @@ impl RollingText {
             trailing: false,
             stagger: STAGGER,
             travel: 1.0,
+            exit: 1.0,
+            scale: 1.0,
         }
     }
     pub fn font(mut self, font: TextStyle) -> Self {
@@ -163,6 +167,18 @@ impl RollingText {
         self.travel = fraction.clamp(0.0, 1.0);
         self
     }
+    /// How long a leaving glyph takes, as a fraction of the roll (default 1). Below 1 the old
+    /// glyph is gone before the new one lands, so a short [`RollingText::travel`] doesn't show
+    /// both at once.
+    pub fn exit(mut self, fraction: f32) -> Self {
+        self.exit = fraction.clamp(0.2, 1.0);
+        self
+    }
+    /// The scale a rolling glyph shrinks to while it travels (default 1, 0.9 at the least).
+    pub fn scale(mut self, scale: f32) -> Self {
+        self.scale = scale.clamp(0.9, 1.0);
+        self
+    }
     /// The label sits against its trailing edge (right-aligned), so it widens to the left. The
     /// label and its glyphs ride their parent's trailing edge ([`El::ride_trailing`]), so new
     /// glyphs roll in where they come to rest and the glyphs that stay or leave hold their
@@ -180,8 +196,9 @@ impl RollingText {
         let from = if falling { self.from.opposite() } else { self.from };
         let edge = (font.line_px() * 0.12).max(1.0);
         // Glyphs leave the way this build rolls, whichever way they last did.
-        let push = roll(from, self.travel);
-        let exit = push.springs(SpringPair::new(self.spring, self.spring));
+        let push = roll(from, self.travel, self.scale);
+        let leave = Spring::new(self.spring.duration * self.exit, self.spring.bounce);
+        let exit = push.springs(SpringPair::new(self.spring, leave));
         // The fades sit in padding that negative margins take back out of layout, so the resting
         // glyphs (descenders included) are never faded but rolling glyphs and a growing or
         // shrinking edge stay soft. Glyphs slide on the row's own width-leading X spring. A
@@ -217,9 +234,9 @@ impl RollingText {
                 self.spring
             };
             let tr = if g.entered {
-                push.springs(SpringPair::new(spring, self.spring))
+                push.springs(SpringPair::new(spring, leave))
             } else {
-                Transition::asymmetric(Transition::identity(), push)
+                Transition::asymmetric(Transition::identity(), push).springs(SpringPair::new(self.spring, leave))
             };
             e = e.child(lead(
                 text(g.cluster)
@@ -235,12 +252,12 @@ impl RollingText {
     }
 }
 
-/// `Transition::push(edge)` over `travel` of the glyph's size: in from `edge`, out through the
-/// opposite one, fading.
-fn roll(edge: Edge, travel: f32) -> Transition {
+/// `Transition::push(edge)` over `travel` of the glyph's size, at `scale`: in from `edge`, out
+/// through the opposite one, fading.
+fn roll(edge: Edge, travel: f32, scale: f32) -> Transition {
     let e = |d: Edge| {
         let v = d.direction();
-        Effect { offset_fraction: Vec2::new(v.x * travel, v.y * travel), opacity: 0.0, ..Effect::IDENTITY }
+        Effect { offset_fraction: Vec2::new(v.x * travel, v.y * travel), opacity: 0.0, scale, ..Effect::IDENTITY }
     };
     Transition { insertion: e(edge), removal: e(edge.opposite()), ..Transition::push(edge) }
 }
