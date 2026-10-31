@@ -83,7 +83,7 @@ pub(super) fn submit_and_present<T: 'static>(live: &mut Live, renderer: &Rendere
     #[cfg(target_os = "macos")]
     {
         if !prewarm && live.materials.presents_plainly() && renderer.submits_plainly() && !crate::gpu::native(&gpu.queue) {
-            if live.present.is_none() { live.present = crate::present_worker::PresentWorker::spawn(); }
+            if live.present.is_none() { live.present = crate::frame::present_worker::PresentWorker::spawn(); }
             if let Some(worker) = &mut live.present {
                 let mut encoder = encoder;
                 renderer.before_submit(&mut encoder);

@@ -180,7 +180,7 @@ impl<S: 'static> Host<S> {
         let frame_time = target.unwrap_or(now);
         let presents_at = target;
         self.rt.window_resting = self.frame_anim.is_none() && self.rt.window_frame.is_none();
-        let target_ms = target.zip(self.trace_start).map(|(target, start)| crate::present_time::ms_since(start, target));
+        let target_ms = target.zip(self.trace_start).map(|(target, start)| crate::frame::present_time::ms_since(start, target));
         let rt = &mut self.rt;
         if hidden && l.first_frame.settles() { rt.settle_all(); }
         let (mut animating, dt) = if let Some((animating, dt, _)) = built {
@@ -289,7 +289,7 @@ impl<S: 'static> Host<S> {
             self.trace_frames += 1;
             if self.args.frames.is_some_and(|n| self.trace_frames >= n) {
                 // While the window still shows its last frames.
-                trace.settle_presents(crate::present_time::SETTLE);
+                trace.settle_presents(crate::frame::present_time::SETTLE);
                 self.finished = true;
                 return;
             }

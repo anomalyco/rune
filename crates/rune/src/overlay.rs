@@ -158,7 +158,7 @@ impl<T: 'static> OverlayHandle<T> {
 
     /// The overlay's frame counts: redraws, presents, failed drawable acquisitions, loop turns
     /// and pacing: current totals, and per-second rates updated once a second while it draws.
-    pub fn surface_stats(&self) -> crate::SurfaceStats { crate::surface_stats::read(&self.shared.stats) }
+    pub fn surface_stats(&self) -> crate::SurfaceStats { crate::frame::surface_stats::read(&self.shared.stats) }
 
     /// Reveal the overlay. Prewarmed macOS overlays refresh hidden changes before reveal,
     /// preserving motion elapsed since each commit, even when show arrives in a later turn.
@@ -266,7 +266,7 @@ enum Backing {
 struct Live {
     /// Presents plain frames off the event loop's thread; joined before the surface drops.
     #[cfg(target_os = "macos")]
-    present: Option<crate::present_worker::PresentWorker>,
+    present: Option<crate::frame::present_worker::PresentWorker>,
     #[cfg(target_os = "macos")]
     pacing: Option<crate::display_link::DisplayLink>,
     /// `El::system_material` views behind the Metal layer.
@@ -275,7 +275,7 @@ struct Live {
     /// Fn presses, which winit doesn't send, while the overlay wants modifier keys.
     #[cfg(target_os = "macos")]
     fn_key: Option<crate::fn_key::FnKey>,
-    alpha: Option<crate::surface_alpha::AlphaSurface>,
+    alpha: Option<crate::render::surface_alpha::AlphaSurface>,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     backing: Backing,
@@ -341,14 +341,14 @@ pub(crate) struct Overlay<T: 'static> {
     hidden_pace: crate::window::HiddenPace,
     #[cfg(target_os = "macos")]
     frame_wake: Option<Waker>,
-    meter: crate::surface_stats::SurfaceMeter,
+    meter: crate::frame::surface_stats::SurfaceMeter,
 }
 
 impl<T: 'static> Overlay<T> {
     pub(crate) fn new<S>(configured: impl Into<ConfiguredOverlay<T>>, state: T, app: &AppSpec<S>) -> (Self, OverlayHandle<T>) {
         let ConfiguredOverlay { spec, options, on_key, on_created, poll, on_focus, compositor, setup, srgb_blend, macos_level, modifier_keys, animate_reveal } = configured.into();
         let shared = Arc::new(Shared { native: Mutex::default(), requests: Mutex::default(), availability: AtomicU8::new(0), wake: Mutex::new(None), stats: Arc::default() });
-        let meter = crate::surface_stats::SurfaceMeter::new(spec.name, shared.stats.clone());
+        let meter = crate::frame::surface_stats::SurfaceMeter::new(spec.name, shared.stats.clone());
         let text = TextSystem::for_window(app.fonts, app.families);
         let mut rt = Runtime::with_text(state, spec.view, spec.size, Env::default(), text);
         rt.set_srgb_blend(srgb_blend);
@@ -877,7 +877,7 @@ impl<T: 'static> Overlay<T> {
             gpu.device.features().contains(features & gpu.adapter.features())
         }));
         // A shared device that can't composite this overlay's translucent pixels gets its own.
-        let reused = pooled.and_then(|gpu| make(&gpu.instance).filter(|s| crate::translucency::serves(&gpu, s, features, true)).map(|s| (gpu, s)));
+        let reused = pooled.and_then(|gpu| make(&gpu.instance).filter(|s| crate::render::translucency::serves(&gpu, s, features, true)).map(|s| (gpu, s)));
         let mut prewarmed = None;
         let surface = match reused {
             Some((gpu, surface)) => { self.gpu = Some(gpu); surface }
@@ -910,7 +910,7 @@ impl<T: 'static> Overlay<T> {
         // Core Animation composites premultiplied pixels even in wgpu's PostMultiplied mode;
         // other straight-alpha surfaces get the conversion pass.
         let alpha = (config.alpha_mode == wgpu::CompositeAlphaMode::PostMultiplied && gpu.adapter.get_info().backend != wgpu::Backend::Metal)
-            .then(|| crate::surface_alpha::AlphaSurface::new(&gpu.device, target_format, (config.width, config.height)));
+            .then(|| crate::render::surface_alpha::AlphaSurface::new(&gpu.device, target_format, (config.width, config.height)));
         self.rt.transparent = true;
         self.rt.set_viewport(self.at.size, scale);
         #[cfg(target_os = "macos")]

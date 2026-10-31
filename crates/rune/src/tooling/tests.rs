@@ -88,9 +88,9 @@ fn trace_annotations_reach_both_writers_once() {
 
 #[test]
 fn native_traces_add_target_and_present_times_without_changing_other_fields() {
-    struct Presents(std::sync::Mutex<Vec<crate::present_time::Presented>>);
-    impl crate::present_time::Source for Presents {
-        fn take(&self, out: &mut Vec<crate::present_time::Presented>) { out.append(&mut self.0.lock().unwrap()); }
+    struct Presents(std::sync::Mutex<Vec<crate::frame::present_time::Presented>>);
+    impl crate::frame::present_time::Source for Presents {
+        fn take(&self, out: &mut Vec<crate::frame::present_time::Presented>) { out.append(&mut self.0.lock().unwrap()); }
     }
     let view = |_: &bool, _: &mut Cx<bool>| crate::el().key("box").size(20.0, 20.0);
     let run = |name: &str, timed: bool| {
@@ -130,9 +130,9 @@ fn native_traces_add_target_and_present_times_without_changing_other_fields() {
     assert_eq!(frames[1]["target_ms"], 8.333);
     assert_eq!(frames[1]["present_ms"], 28.333);
     assert_eq!(frames[1]["present_dt_ms"], 8.333);
-    let summary = crate::present_time::Summary::of_trace(&timed).unwrap();
+    let summary = crate::frame::present_time::Summary::of_trace(&timed).unwrap();
     assert_eq!((summary.frames, summary.presented, summary.bunched, summary.missed), (3, 3, 0, 0));
-    assert!(crate::present_time::Summary::of_trace(&plain).is_none());
+    assert!(crate::frame::present_time::Summary::of_trace(&plain).is_none());
 }
 
 #[test]

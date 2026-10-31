@@ -7,7 +7,7 @@
 pub(super) struct Native {
     pub(super) pacing: Option<crate::display_link::DisplayLink>,
     /// Reports when each drawable reached the screen, while tracing or for `shadow`.
-    pub(super) present: Option<crate::present_time::metal::LayerHook>,
+    pub(super) present: Option<crate::frame::present_time::metal::LayerHook>,
     /// Re-samples a transparent window's system shadow once its new pixels land.
     pub(super) shadow: Option<crate::macos::window_shape::Shadow>,
     pub(super) panel: Option<crate::macos::Panel>,

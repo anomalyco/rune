@@ -64,7 +64,7 @@ impl<S: 'static> AnyHost for Host<S> {
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
         #[cfg(target_os = "macos")]
         if let Some(shadow) = self.win.as_ref().and_then(|w| w.native.shadow.as_ref()) { shadow.turn(); }
-        self.meter.turn(matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll), crate::surface_stats::slept(cause));
+        self.meter.turn(matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll), crate::frame::surface_stats::slept(cause));
         if matches!(cause, StartCause::ResumeTimeReached { .. }) && let Some(w) = &self.win { w.cursor.reassert(); }
         if let Some(w) = &mut self.win && let Some((retry, until)) = w.first_frame.deadline && retry <= Instant::now() {
             if until <= Instant::now() {

@@ -18,7 +18,7 @@ pub(crate) struct Trace {
     /// Trace every element, not only keyed and named ones (`--trace-all`).
     pub(crate) all: bool,
     /// Lines waiting for present times; `None` writes each frame at once.
-    presents: Option<crate::present_time::Presents>,
+    presents: Option<crate::frame::present_time::Presents>,
     /// The native surface's frame counts and `App::dev_stats`, printed when the trace closes.
     surface: Option<(std::sync::Arc<std::sync::Mutex<crate::SurfaceStats>>, Option<fn() -> String>)>,
 }
@@ -62,8 +62,8 @@ impl Trace {
     /// Holds each frame's line until its present time arrives from `source`, then writes
     /// it with `present_ms` and `present_dt_ms`. `start` is the trace clock's zero.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub(crate) fn record_presents(&mut self, source: std::sync::Arc<dyn crate::present_time::Source>, start: Instant) {
-        self.presents = Some(crate::present_time::Presents::new(source, start));
+    pub(crate) fn record_presents(&mut self, source: std::sync::Arc<dyn crate::frame::present_time::Source>, start: Instant) {
+        self.presents = Some(crate::frame::present_time::Presents::new(source, start));
     }
 
     /// Prints the surface's frame counts, and the app's own, when the trace closes.
@@ -247,13 +247,13 @@ impl Trace {
 impl Drop for Trace {
     fn drop(&mut self) {
         if let Some((stats, app)) = &self.surface {
-            eprintln!("rune: frames {}", crate::surface_stats::read(stats).summary());
+            eprintln!("rune: frames {}", crate::frame::surface_stats::read(stats).summary());
             if let Some(app) = app { eprintln!("rune: app {}", app()); }
         }
         if self.presents.is_none() { return; }
-        self.settle_presents(crate::present_time::SETTLE);
+        self.settle_presents(crate::frame::present_time::SETTLE);
         let _ = self.out.flush();
-        if let Some(summary) = std::fs::read_to_string(&self.path).ok().as_deref().and_then(crate::present_time::Summary::of_trace) {
+        if let Some(summary) = std::fs::read_to_string(&self.path).ok().as_deref().and_then(crate::frame::present_time::Summary::of_trace) {
             eprintln!("{summary}");
         }
     }

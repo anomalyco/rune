@@ -5,12 +5,14 @@ use bytemuck::{Pod, Zeroable};
 use crate::pixels::ImageAtlas;
 use crate::text::{ATLAS_SIZE, Atlas};
 
-mod layers;
+mod backdrop_blur;
 pub(crate) mod layer_blur;
+mod layers;
 mod metallib;
 mod pass;
 use pass::{ActivePass, Backdrop};
-mod backdrop_blur;
+pub(crate) mod surface_alpha;
+pub(crate) mod translucency;
 mod upload;
 pub use backdrop_blur::MAX_BACKDROP_BLURS;
 pub use layers::LayerStats;
@@ -388,7 +390,7 @@ impl Gpu {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
         let pick = crate::gpu::pick::pick(&instance, surface)?;
         let adapter = match surface {
-            Some(s) if translucent && !pick.from_env() => crate::translucency::prefer(&instance, s, &pick),
+            Some(s) if translucent && !pick.from_env() => crate::render::translucency::prefer(&instance, s, &pick),
             _ => pick.adapter,
         };
         let optional_features = wgpu::Features::TIMESTAMP_QUERY | wanted;
@@ -486,7 +488,7 @@ impl Gpu {
             return Ok((Self::try_for(instance, Some(&surface), wanted, translucent)?, surface, None));
         };
         let surface = surface(&early.instance)?;
-        if crate::translucency::serves(&early, &surface, wanted, translucent) {
+        if crate::render::translucency::serves(&early, &surface, wanted, translucent) {
             return Ok((early, surface, Some(renderer)));
         }
         let instance = early.instance.clone();
@@ -1119,6 +1121,7 @@ pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -
 
 #[cfg(test)]
 mod backdrop_tests;
+
 
 /// `prewarm_gpu` and how a window picks it up, on a bare Metal layer (no window server needed).
 #[cfg(all(test, target_os = "macos"))]

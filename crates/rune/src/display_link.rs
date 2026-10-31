@@ -45,8 +45,8 @@ const RETRY: Duration = Duration::from_secs(1);
 pub(crate) fn failure() -> Option<i32> { LAST_FAILURE.lock().unwrap().map(|(status, _)| status) }
 
 /// How a surface's frames are paced, from its display link (or the lack of one).
-pub(crate) fn pacing(link: Option<&DisplayLink>, moving: bool) -> crate::surface_stats::Pacing {
-    use crate::surface_stats::Pacing;
+pub(crate) fn pacing(link: Option<&DisplayLink>, moving: bool) -> crate::frame::surface_stats::Pacing {
+    use crate::frame::surface_stats::Pacing;
     match (link, failure()) {
         (Some(link), _) if link.running() => Pacing::DisplayLink,
         (None, Some(status)) => Pacing::Failed(status),

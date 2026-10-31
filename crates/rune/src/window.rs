@@ -21,7 +21,7 @@ use crate::edit::{Ime, Key};
 use crate::el::{Shell, Tx};
 use crate::render::{Gpu, Renderer};
 use crate::runtime::{Env, Runtime, TitlebarAction, Waker};
-use crate::surface_stats::{Pacing, SurfaceMeter, SurfaceStats};
+use crate::frame::surface_stats::{Pacing, SurfaceMeter, SurfaceStats};
 use crate::tooling::{AppSpec, Args, Chrome, runtime_for};
 use crate::windows::{AnyWindowSpec, Display, WindowOptions, WindowSpec};
 
@@ -376,7 +376,7 @@ struct Host<S: 'static> {
     frame_jump: Option<(f32, f32)>,
     /// Present times of every window this host opens while tracing.
     #[cfg(target_os = "macos")]
-    present_log: Option<Arc<crate::present_time::metal::Log>>,
+    present_log: Option<Arc<crate::frame::present_time::metal::Log>>,
     #[cfg(target_os = "macos")]
     frame_wake: Waker,
 }
@@ -565,7 +565,7 @@ pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (
     config.usage |= caps.usages & wgpu::TextureUsages::COPY_SRC;
     config.present_mode = wgpu::PresentMode::AutoVsync;
     config.desired_maximum_frame_latency = 2;
-    Some((config, crate::translucency::mode(surface, adapter)))
+    Some((config, crate::render::translucency::mode(surface, adapter)))
 }
 
 /// Follows a blend switch (`Tx::set_srgb_blend`) on a configured surface: reconfigures it for
@@ -574,7 +574,7 @@ pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (
 /// surface can't be configured.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn reblend<S: 'static>(surface: &wgpu::Surface, gpu: &Gpu, config: &mut wgpu::SurfaceConfiguration,
-    renderer: &mut Renderer, alpha: &mut Option<crate::surface_alpha::AlphaSurface>, rt: &mut Runtime<S>) -> bool {
+    renderer: &mut Renderer, alpha: &mut Option<crate::render::surface_alpha::AlphaSurface>, rt: &mut Runtime<S>) -> bool {
     let srgb = rt.srgb_blend();
     let Some((next, _)) = surface_config(surface, &gpu.adapter, (config.width, config.height), srgb) else { return false };
     if (config.format, &config.view_formats) != (next.format, &next.view_formats) {
@@ -584,7 +584,7 @@ pub(crate) fn reblend<S: 'static>(surface: &wgpu::Surface, gpu: &Gpu, config: &m
     let target = if srgb { config.format.remove_srgb_suffix() } else { config.format };
     rebuild_renderer(&gpu.device, renderer, target, rt);
     if alpha.is_some() {
-        *alpha = Some(crate::surface_alpha::AlphaSurface::new(&gpu.device, target, (config.width, config.height)));
+        *alpha = Some(crate::render::surface_alpha::AlphaSurface::new(&gpu.device, target, (config.width, config.height)));
     }
     true
 }
@@ -758,7 +758,7 @@ impl<S: 'static> Host<S> {
                 // A shared device that can't composite this window's translucent pixels gets its own.
                 let cached = self.gpu_pool.borrow().upgrade().and_then(|gpu| {
                     let surface = gpu.instance.create_surface(window.clone()).ok()?;
-                    crate::translucency::serves(&gpu, &surface, features, transparent).then_some((gpu, surface))
+                    crate::render::translucency::serves(&gpu, &surface, features, transparent).then_some((gpu, surface))
                 });
                 let (gpu, surface) = if let Some(cached) = cached {
                     cached
@@ -802,7 +802,7 @@ impl<S: 'static> Host<S> {
         // still composites premultiplied pixels. Other backends follow wgpu's straight-alpha contract.
         let alpha = (self.options.transparent && config.alpha_mode == wgpu::CompositeAlphaMode::PostMultiplied
             && gpu.adapter.get_info().backend != wgpu::Backend::Metal)
-            .then(|| crate::surface_alpha::AlphaSurface::new(&gpu.device, target_format, (config.width, config.height)));
+            .then(|| crate::render::surface_alpha::AlphaSurface::new(&gpu.device, target_format, (config.width, config.height)));
         let scale = window.scale_factor() as f32;
         self.rt.set_system_dark(crate::preferences::window_dark(&window, self.args.theme.as_deref()));
         self.rt.set_viewport((phys.width as f32 / scale, phys.height as f32 / scale), scale);
@@ -819,9 +819,9 @@ impl<S: 'static> Host<S> {
         let resamples = crate::macos::window_shape::resamples(&window, self.options.transparent);
         #[cfg(target_os = "macos")]
         let hook_log = self.present_log.clone()
-            .or_else(|| resamples.then(|| Arc::new(crate::present_time::metal::Log::untraced())));
+            .or_else(|| resamples.then(|| Arc::new(crate::frame::present_time::metal::Log::untraced())));
         #[cfg(target_os = "macos")]
-        let present = hook_log.clone().and_then(|log| crate::present_time::metal::LayerHook::attach(&surface, log));
+        let present = hook_log.clone().and_then(|log| crate::frame::present_time::metal::LayerHook::attach(&surface, log));
         #[cfg(target_os = "macos")]
         let shadow = hook_log.filter(|_| resamples && present.is_some())
             .and_then(|log| crate::macos::window_shape::Shadow::new(&window, log, visible || launcher));

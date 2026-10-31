@@ -118,15 +118,12 @@ pub mod image;
 #[cfg(feature = "hot")]
 pub mod hot;
 pub mod render;
-mod translucency;
 pub use render::MAX_BACKDROP_BLURS;
 pub use render::prewarm_gpu;
 mod record;
 mod headless_run;
 mod keycaps;
-mod surface_alpha;
-mod surface_stats;
-pub use surface_stats::{Pacing, SurfaceCounts, SurfaceStats};
+pub use frame::surface_stats::{Pacing, SurfaceCounts, SurfaceStats};
 pub mod native_surface;
 mod system_material;
 mod video;
@@ -159,9 +156,6 @@ mod drop_pointer;
 pub use frame::encoded::{FrameEncoded, FrameOutcome};
 mod frame;
 pub use input_time::last_input;
-mod present_time;
-#[cfg(target_os = "macos")]
-mod present_worker;
 mod secure_input;
 pub mod clipboard;
 mod preferences;

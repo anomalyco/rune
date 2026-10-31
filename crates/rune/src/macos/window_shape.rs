@@ -12,7 +12,7 @@
 //! presented handler reports it (`present_time::metal`). Calling earlier would sample the old
 //! pixels again; ordinary frames never call it.
 
-use crate::present_time::metal::{wake_main, Log};
+use crate::frame::present_time::metal::{wake_main, Log};
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;

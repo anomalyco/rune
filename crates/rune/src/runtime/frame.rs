@@ -271,7 +271,7 @@ impl<S: 'static> Runtime<S> {
 
     /// The native window or overlay's frame counts; `None` headless.
     pub fn surface_stats(&self) -> Option<crate::SurfaceStats> {
-        self.surface_stats.as_deref().map(crate::surface_stats::read)
+        self.surface_stats.as_deref().map(crate::frame::surface_stats::read)
     }
 
     /// When `poll` last ran, on `wake_deadline`'s clock.

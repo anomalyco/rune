@@ -56,7 +56,7 @@ impl WindowHandle {
     pub fn key(&self) -> &str { &self.key }
     /// The window's frame counts: redraws, presents, failed drawable acquisitions, loop turns
     /// and pacing: current totals, and per-second rates updated once a second while it draws.
-    pub fn surface_stats(&self) -> SurfaceStats { crate::surface_stats::read(&self.native.stats) }
+    pub fn surface_stats(&self) -> SurfaceStats { crate::frame::surface_stats::read(&self.native.stats) }
     pub(super) fn window(&self) -> Result<Arc<Window>, String> {
         self.native.window.lock().unwrap().upgrade().ok_or_else(|| "window is closed".into())
     }

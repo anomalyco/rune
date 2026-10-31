@@ -227,7 +227,7 @@ impl<S: 'static> Host<S> {
         self.close_hook();
         self.rt.set_live_visible(false);
         // While the window still shows its last frames.
-        if let Some(trace) = &mut self.trace { trace.settle_presents(crate::present_time::SETTLE); }
+        if let Some(trace) = &mut self.trace { trace.settle_presents(crate::frame::present_time::SETTLE); }
         if self.rt.shell_request.take() == Some(Shell::Quit) {
             self.popup.cancel(&mut self.rt);
             self.file_dialog.cancel(&mut self.rt);

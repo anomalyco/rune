@@ -137,7 +137,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     let (wp, hp) = ((size.0 * scale).round() as u32, (size.1 * scale).round() as u32);
     let mut target = Offscreen::with_format(&gpu.device, wp, hp, target_format);
     let mut readback = crate::record::Readback::new(&gpu.device, &target, crate::record::DEPTH);
-    let mut alpha = transparent.then(|| crate::surface_alpha::AlphaSurface::new(&gpu.device, target_format, (wp, hp)));
+    let mut alpha = transparent.then(|| crate::render::surface_alpha::AlphaSurface::new(&gpu.device, target_format, (wp, hp)));
     let mut overlay = (args.keys.is_some() || args.pointer).then(|| {
         let mut ov = crate::keycaps::Overlay::new(size, scale, args.keys, args.keys_theme, args.pointer);
         ov.set_srgb_blend(srgb_blend);
@@ -308,7 +308,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
             target_format = if rt.srgb_blend() { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT };
             crate::window::rebuild_renderer(&gpu.device, &mut renderer, target_format, &mut rt);
             target = Offscreen::with_format(&gpu.device, wp, hp, target_format);
-            if alpha.is_some() { alpha = Some(crate::surface_alpha::AlphaSurface::new(&gpu.device, target_format, (wp, hp))); }
+            if alpha.is_some() { alpha = Some(crate::render::surface_alpha::AlphaSurface::new(&gpu.device, target_format, (wp, hp))); }
             if let Some((ov, ui)) = overlay.as_mut() {
                 ov.set_srgb_blend(rt.srgb_blend());
                 ui.set_format(&gpu.device, target_format);

@@ -5,7 +5,7 @@ use super::*;
 
 impl<T: 'static> AnyHost for Overlay<T> {
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
-        self.meter.turn(matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll), crate::surface_stats::slept(cause));
+        self.meter.turn(matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll), crate::frame::surface_stats::slept(cause));
         #[cfg(target_os = "macos")]
         { self.occlusion_read = false; }
         if matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll) {
