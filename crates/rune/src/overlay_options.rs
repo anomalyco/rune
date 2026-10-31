@@ -83,8 +83,8 @@ pub enum OverlayInput {
     /// Preserve `OverlaySpec::interactive` (whole surface or complete pass-through).
     #[default]
     Legacy,
-    /// Pass every click through. Following remains available when enabled; use Regions
-    /// without `.hit()` elements for a hover-only canvas.
+    /// Pass every click through, and hear no hover. Following remains available when enabled;
+    /// use Regions without `.hit()` elements for a hover-only canvas.
     None,
     /// Only elements marked `El::hit()` intercept the pointer.
     Regions,

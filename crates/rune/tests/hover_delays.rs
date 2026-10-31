@@ -87,7 +87,7 @@ fn blur_cancels_pending_enters_and_ends_shown_hover_without_a_grace() {
     rt.frame(0.02);
     rt.window_focus(false);
     rt.frame(0.2);
-    assert!(rt.state.is_empty(), "a pending enter cannot open in a blurred window");
+    assert!(rt.state.is_empty(), "a pending enter cannot open under a still pointer once blurred");
     rt.window_focus(true);
     rt.pointer_move(8.0, 50.0);
     rt.frame(0.05);
@@ -95,6 +95,29 @@ fn blur_cancels_pending_enters_and_ends_shown_hover_without_a_grace() {
     rt.window_focus(false);
     rt.frame(0.0);
     assert_eq!(rt.state, [true, false], "blur ends even a hover with exit grace");
+}
+
+/// A window behind another still hears the pointer (macOS sends it moves too), so a tooltip
+/// or hover card opens there without a click first.
+#[test]
+fn a_move_over_a_window_that_isnt_key_starts_the_wait() {
+    let mut rt = app();
+    rt.window_focus(true);
+    rt.window_focus(false);
+    rt.pointer_move(8.0, 50.0);
+    rt.frame(0.03);
+    assert!(rt.state.is_empty(), "not yet");
+    rt.frame(0.015);
+    assert_eq!(rt.state, [true]);
+    rt.window_focus(true);
+    rt.window_focus(false);
+    rt.frame(0.0);
+    assert_eq!(rt.state, [true, false]);
+    rt.frame(0.2);
+    assert_eq!(rt.state, [true, false], "a still pointer doesn't reopen it");
+    rt.pointer_move(9.0, 50.0);
+    rt.frame(0.05);
+    assert_eq!(rt.state, [true, false, true], "the next move does");
 }
 
 #[test]

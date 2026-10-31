@@ -183,9 +183,9 @@ impl<S: 'static> Runtime<S> {
                 continue;
             };
             let shown = self.hover_shown.contains(&path);
-            // A held button, or a press until the pointer next moves, never starts the wait
-            // to report an enter.
-            let want = self.window_focused != Some(false) && self.hover_within.contains(&path)
+            // A held button, or a press or blur until the pointer next moves, never starts the
+            // wait to report an enter.
+            let want = self.hover_within.contains(&path)
                 && (shown || self.capture.is_none() && !self.hover_paused);
             let pending = self.hover_pending.iter().position(|p| p.0 == path);
             if want == shown {

@@ -537,7 +537,7 @@ pub struct Runtime<S: 'static> {
     hover_shown: Vec<String>,
     /// Delayed hover changes waiting out their delay: path, inside, due on the clock.
     hover_pending: Vec<(String, bool, f64)>,
-    /// A press stopped the waits to report an enter; the pointer's next move restarts them.
+    /// A press or blur stopped the waits to report an enter; the pointer's next move restarts them.
     hover_paused: bool,
     /// Hover waiting out layout motion under a still pointer.
     hover_hold: hover::HoverHold,

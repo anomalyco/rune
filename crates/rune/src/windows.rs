@@ -72,6 +72,7 @@ pub(crate) const DEFAULT_MIN_SIZE: (f32, f32) = (420.0, 400.0);
 pub struct WindowOptions {
     pub transparent: bool,
     pub borderless: bool,
+    /// Clicks, and so hover, pass to whatever is below.
     pub click_through: bool,
     pub always_on_top: bool,
     pub visible: bool,
