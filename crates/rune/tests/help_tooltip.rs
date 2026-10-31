@@ -1,8 +1,10 @@
 //! `El::help` tooltips where Rune draws them: the pointer resting on an element for
 //! `help_delay` shows its tooltip under it; a press, scroll or key hides it until the pointer
 //! leaves; leaving hides it; it follows its element; and it takes no hover or press.
-use rune::runtime::ElementInfo;
+mod support;
+
 use rune::{Cx, El, Env, Key, KeyEvent, Mods, Runtime, col, el, row};
+use support::find;
 
 #[derive(Default)]
 struct S { presses: u32, hovered: bool, inset: f32 }
@@ -26,13 +28,8 @@ fn runtime() -> Runtime<S> {
     rt
 }
 
-fn find(rt: &Runtime<S>, key: &str) -> ElementInfo {
-    rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("{key}"))
-}
-
 fn centre(rt: &Runtime<S>, key: &str) -> (f32, f32) {
-    let e = find(rt, key);
-    (e.rect[0] + e.rect[2] / 2.0, e.rect[1] + e.rect[3] / 2.0)
+    support::centre(&find(rt, key))
 }
 
 fn hover(rt: &mut Runtime<S>, key: &str) {

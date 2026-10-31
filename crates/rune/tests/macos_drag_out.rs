@@ -10,6 +10,9 @@
 fn main() {}
 
 #[cfg(target_os = "macos")]
+mod macos_support;
+
+#[cfg(target_os = "macos")]
 fn main() { mac::main() }
 
 #[cfg(target_os = "macos")]
@@ -17,8 +20,9 @@ mod mac {
     use std::sync::{Mutex, atomic::{AtomicUsize, Ordering}};
     use std::time::Duration;
     use objc2::{class, msg_send, msg_send_id, rc::Retained, runtime::{AnyObject, Bool}};
-    use objc2_foundation::{NSArray, NSPoint, NSRect, NSString};
+    use objc2_foundation::{NSArray, NSPoint, NSRect};
     use rune::*;
+    use crate::macos_support::{can_post_events, drag_pasteboard, on_main, release_real_button, wait};
 
     static PRESSES: AtomicUsize = AtomicUsize::new(0);
     static ENDED: Mutex<Vec<DragOutcome>> = Mutex::new(Vec::new());
@@ -29,20 +33,6 @@ mod mac {
             .on_press(|_: &mut ()| { PRESSES.fetch_add(1, Ordering::SeqCst); })
             .drag_out(|_: &()| FILE.lock().unwrap().clone().map(|f| DragItem::new().file(f)))
             .on_drag_end(|_: &mut (), outcome, _| ENDED.lock().unwrap().push(outcome))
-    }
-
-    fn on_main<R: Send + 'static>(handle: &AppHandle<()>, f: impl FnOnce() -> R + Send + 'static) -> R {
-        let (tx, rx) = std::sync::mpsc::channel();
-        handle.update(move |_, _| { let _ = tx.send(f()); });
-        rx.recv_timeout(Duration::from_secs(10)).expect("event thread stalled")
-    }
-
-    fn wait(what: &str, f: impl Fn() -> bool) {
-        for _ in 0..500 {
-            if f() { return; }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        panic!("timed out waiting for {what}");
     }
 
     /// Posts mouse events to the app's visible window: (NSEventType, x, y) in points from the
@@ -69,40 +59,6 @@ mod mac {
     const UP: usize = 2;
     const DRAGGED: usize = 6;
 
-    /// The drag pasteboard's first item: its file URL, and the path list Finder also reads.
-    fn drag_pasteboard() -> (Option<String>, Option<String>) {
-        unsafe {
-            let name = NSString::from_str("Apple CFPasteboard drag");
-            let board: *mut AnyObject = msg_send![class!(NSPasteboard), pasteboardWithName: &*name];
-            let url: Option<Retained<NSString>> = msg_send_id![board, stringForType: &*NSString::from_str("public.file-url")];
-            let names: Option<Retained<NSArray<NSString>>> = msg_send_id![board, propertyListForType: &*NSString::from_str("NSFilenamesPboardType")];
-            (url.map(|u| u.to_string()), names.and_then(|n| n.iter().next().map(|s| s.to_string())))
-        }
-    }
-
-    #[link(name = "CoreGraphics", kind = "framework")]
-    unsafe extern "C" {
-        fn CGEventCreate(source: *const std::ffi::c_void) -> *mut std::ffi::c_void;
-        fn CGEventGetLocation(event: *mut std::ffi::c_void) -> NSPoint;
-        fn CGEventCreateMouseEvent(source: *const std::ffi::c_void, kind: u32, at: NSPoint, button: u32) -> *mut std::ffi::c_void;
-        fn CGEventPost(tap: u32, event: *mut std::ffi::c_void);
-        fn CFRelease(object: *mut std::ffi::c_void);
-        fn CGPreflightPostEventAccess() -> bool;
-    }
-
-    /// AppKit tracks a running session from the window server, which never saw the posted
-    /// press; a real left-button release where the pointer is ends it.
-    fn release_real_button() {
-        unsafe {
-            let here = CGEventCreate(std::ptr::null());
-            let at = CGEventGetLocation(here);
-            CFRelease(here);
-            let up = CGEventCreateMouseEvent(std::ptr::null(), 2, at, 0);
-            CGEventPost(0, up);
-            CFRelease(up);
-        }
-    }
-
     /// Whether the session ended (it can't without Accessibility access to post a release).
     fn drive(handle: AppHandle<()>, file: std::path::PathBuf) -> bool {
         std::thread::sleep(Duration::from_millis(500));
@@ -120,7 +76,7 @@ mod mac {
         assert_eq!(names.as_deref(), Some(&*file.to_string_lossy()), "AppKit derives the path list Finder reads");
         assert_eq!(PRESSES.load(Ordering::SeqCst), 0, "a drag-out isn't a press");
         if ENDED.lock().unwrap().is_empty() {
-            if !unsafe { CGPreflightPostEventAccess() } {
+            if !can_post_events() {
                 println!("macos_drag_out: session started, pasteboard {url}; ending it needs a real button release, which this process may not post (no Accessibility access)");
                 return false;
             }

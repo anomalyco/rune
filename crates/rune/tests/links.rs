@@ -1,8 +1,11 @@
 //! Pressable spans in rich text: only a link's shaped glyph boxes take the pointer; it shows a
 //! hand, paints its hover and pressed looks, is a Tab stop pressed by Enter or Space, and is
 //! reported to tools with its role.
+mod support;
+
 use rune::runtime::ElementInfo;
 use rune::{Color, Cursor, Cx, El, Env, Key, KeyEvent, Link, LinkPaint, Mods, Runtime, Span, TextEdit, TextStyle, col, rich, text_input};
+use support::{centre, click, find};
 
 const TEXT: &str = "Hi @kit see docs and notes.md ok";
 const WRAPS: &str = "go to a very long link that wraps";
@@ -32,19 +35,6 @@ fn view(s: &S, _: &mut Cx<S>) -> El {
         .child(rich(WRAPS, Vec::new()).key("wrapped").font(style).w(90.0)
             .link(Link::new(at(WRAPS, "a very long link"), "long"))
             .on_link(|s: &mut S, id, _| s.opened.push(id.to_owned())))
-}
-
-fn find(rt: &Runtime<S>, key: &str) -> ElementInfo {
-    rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("{key}"))
-}
-
-fn centre(e: &ElementInfo) -> (f32, f32) { (e.rect[0] + e.rect[2] / 2.0, e.rect[1] + e.rect[3] / 2.0) }
-
-fn click(rt: &mut Runtime<S>, (x, y): (f32, f32)) {
-    rt.pointer_move(x, y);
-    rt.pointer_down(x, y);
-    rt.pointer_up(x, y);
-    rt.frame(1.0 / 60.0);
 }
 
 fn key(rt: &mut Runtime<S>, key: Key, shift: bool) {

@@ -1,7 +1,9 @@
 //! `El::inert`: a subtree that draws and lays out while the pointer and keyboard pass through.
-use rune::runtime::ElementInfo;
+mod support;
+
 use rune::tok::TextStyle;
 use rune::{Color, Cursor, Cx, El, Env, Key, KeyEvent, Mods, Runtime, TextEdit, el, text_input};
+use support::{click, find as info};
 
 #[derive(Default)]
 struct S {
@@ -29,21 +31,10 @@ fn view(s: &S, _: &mut Cx<S>) -> El {
         .child(if s.inert { doc.inert() } else { doc })
 }
 
-fn info(rt: &Runtime<S>, key: &str) -> ElementInfo {
-    rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("{key}"))
-}
-
 fn runtime(inert: bool) -> Runtime<S> {
     let mut rt = Runtime::new(S { inert, ..S::default() }, view, (200.0, 200.0), Env::default());
     rt.frame(0.0);
     rt
-}
-
-fn click(rt: &mut Runtime<S>, x: f32, y: f32) {
-    rt.pointer_move(x, y);
-    rt.pointer_down(x, y);
-    rt.pointer_up(x, y);
-    rt.frame(1.0 / 60.0);
 }
 
 fn tab(rt: &mut Runtime<S>) {
@@ -54,12 +45,12 @@ fn tab(rt: &mut Runtime<S>) {
 #[test]
 fn presses_hovers_and_cursors_fall_through_to_what_is_under() {
     let mut rt = runtime(false);
-    click(&mut rt, 20.0, 20.0);
+    click(&mut rt, (20.0, 20.0));
     assert_eq!(rt.state.log, ["button"], "without inert, the document takes the press");
     assert_eq!(rt.cursor(), Cursor::Pointer);
 
     let mut rt = runtime(true);
-    click(&mut rt, 20.0, 20.0);
+    click(&mut rt, (20.0, 20.0));
     assert_eq!(rt.state.log, ["canvas"], "the press goes to the canvas under the document");
     assert_eq!(rt.cursor(), Cursor::Crosshair, "with the canvas's cursor");
     assert!(rt.state.hover.contains(&("canvas", true)));

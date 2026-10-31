@@ -16,6 +16,9 @@
 fn main() {}
 
 #[cfg(target_os = "macos")]
+mod macos_support;
+
+#[cfg(target_os = "macos")]
 fn main() { mac::main() }
 
 #[cfg(target_os = "macos")]
@@ -25,6 +28,7 @@ mod mac {
     use objc2::{class, msg_send, msg_send_id, rc::Retained, runtime::{AnyObject, Bool}};
     use objc2_foundation::{NSArray, NSPoint, NSRect, NSString};
     use rune::*;
+    use crate::macos_support::{can_post_events, drag_pasteboard, on_main, release_real_button, wait, warp};
 
     static PRESSES: AtomicUsize = AtomicUsize::new(0);
     static STARTED: AtomicUsize = AtomicUsize::new(0);
@@ -60,32 +64,8 @@ mod mac {
         )
     }
 
-    fn on_main<R: Send + 'static>(handle: &AppHandle<()>, f: impl FnOnce() -> R + Send + 'static) -> R {
-        let (tx, rx) = std::sync::mpsc::channel();
-        handle.update(move |_, _| { let _ = tx.send(f()); });
-        rx.recv_timeout(Duration::from_secs(10)).expect("event thread stalled")
-    }
-
-    fn wait(what: &str, f: impl Fn() -> bool) {
-        for _ in 0..500 {
-            if f() { return; }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        panic!("timed out waiting for {what}");
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct CGPoint { x: f64, y: f64 }
-
     #[link(name = "CoreGraphics", kind = "framework")]
     unsafe extern "C" {
-        fn CGWarpMouseCursorPosition(point: CGPoint) -> i32;
-        fn CGEventCreate(source: *const std::ffi::c_void) -> *mut std::ffi::c_void;
-        fn CGEventGetLocation(event: *mut std::ffi::c_void) -> CGPoint;
-        fn CGEventCreateMouseEvent(source: *const std::ffi::c_void, kind: u32, at: CGPoint, button: u32) -> *mut std::ffi::c_void;
-        fn CGEventPost(tap: u32, event: *mut std::ffi::c_void);
-        fn CGPreflightPostEventAccess() -> bool;
         fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> *mut std::ffi::c_void;
         fn CGWindowLevelForKey(key: i32) -> i32;
         fn CFRelease(object: *mut std::ffi::c_void);
@@ -135,16 +115,6 @@ mod mac {
         }
     }
 
-    /// The drag pasteboard's first file URL.
-    fn drag_pasteboard() -> Option<String> {
-        unsafe {
-            let name = NSString::from_str("Apple CFPasteboard drag");
-            let board: *mut AnyObject = msg_send![class!(NSPasteboard), pasteboardWithName: &*name];
-            let url: Option<Retained<NSString>> = msg_send_id![board, stringForType: &*NSString::from_str("public.file-url")];
-            url.map(|u| u.to_string())
-        }
-    }
-
     /// On-screen windows at the dragging level, `[x, y, w, h]` in global top-left points.
     fn drag_windows() -> Vec<[f64; 4]> {
         unsafe {
@@ -174,19 +144,6 @@ mod mac {
         }
     }
 
-    /// AppKit tracks a running session from the window server, which never saw the posted
-    /// press; a real left-button release where the pointer is ends it.
-    fn release_real_button() {
-        unsafe {
-            let here = CGEventCreate(std::ptr::null());
-            let at = CGEventGetLocation(here);
-            CFRelease(here);
-            let up = CGEventCreateMouseEvent(std::ptr::null(), 2, at, 0);
-            CGEventPost(0, up);
-            CFRelease(up);
-        }
-    }
-
     /// Whether the session ended (it can't without Accessibility access to post a release).
     fn drive(handle: AppHandle<()>, overlay: OverlayHandle<()>, file: std::path::PathBuf) -> bool {
         wait("the overlay's panel", || overlay.window_number().is_some());
@@ -204,7 +161,7 @@ mod mac {
         let past = (press.0 + TRAVEL, press.1);
         on_main(&handle, move || {
             // The polled pointer agrees with the posted drag; the session follows it.
-            unsafe { CGWarpMouseCursorPosition(CGPoint { x: past.0, y: past.1 }); }
+            warp(past);
             post(number, &[(DOWN, press), (DRAGGED, (press.0 + TRAVEL / 2.0, press.1)), (DRAGGED, past)]);
         });
         wait("on_drag_start", || STARTED.load(Ordering::SeqCst) == 1);
@@ -212,7 +169,7 @@ mod mac {
         let name = file.file_name().unwrap().to_str().unwrap().to_owned();
         let mut url = None;
         for _ in 0..50 {
-            url = on_main(&handle, drag_pasteboard);
+            url = on_main(&handle, || drag_pasteboard().0);
             if url.as_deref().is_some_and(|u| u.ends_with(&name)) { break; }
             std::thread::sleep(Duration::from_millis(100));
         }
@@ -234,7 +191,7 @@ mod mac {
         assert_eq!(PRESSES.load(Ordering::SeqCst), 0, "a drag-out isn't a press");
 
         if ENDED.lock().unwrap().is_empty() {
-            if !unsafe { CGPreflightPostEventAccess() } {
+            if !can_post_events() {
                 println!("macos_overlay_drag_out: session started, image {image:?}, pasteboard {url}; ending it needs a real button release, which this process may not post (no Accessibility access)");
                 return false;
             }

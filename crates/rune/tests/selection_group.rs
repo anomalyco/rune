@@ -6,8 +6,10 @@
 //! further than the pointer, table rows select by band, inner groups stay their own, and a
 //! change to a text between the ends drops the selection. Elided texts select through their
 //! ellipsis, and a virtual row scrolling out drops the selection it holds.
-use rune::runtime::ElementInfo;
-use rune::{Cursor, Cx, Drag, El, Env, GrowthSpec, Key, KeyEvent, Link, Mods, PhysicalInput, Runtime, ScrollSpec, TextStyle, col, rich, row, text};
+mod support;
+
+use rune::{Cursor, Cx, Drag, El, Env, GrowthSpec, Link, Mods, PhysicalInput, Runtime, ScrollSpec, TextStyle, col, rich, row, text};
+use support::{click, command, drag, find, glyphs, glyphs_at, tick, wait};
 
 const A: &str = "first paragraph here";
 const ITEM: &str = "list item";
@@ -44,78 +46,10 @@ fn runtime() -> Runtime<S> {
     rt
 }
 
-fn find(rt: &Runtime<S>, key: &str) -> ElementInfo {
-    rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("{key}"))
-}
-
-/// Centres (points) of the glyphs drawn inside element `key`, in reading order by line.
-fn glyphs(rt: &Runtime<S>, key: &str) -> Vec<(f32, f32)> {
-    glyphs_at(rt, &find(rt, key).path)
-}
-
-/// [`glyphs`] for the element at `path`.
-fn glyphs_at(rt: &Runtime<S>, path: &str) -> Vec<(f32, f32)> {
-    let e = rt.elements().into_iter().find(|e| e.path == path).unwrap_or_else(|| panic!("{path}"));
-    let mut out: Vec<(f32, f32)> = rt.instances.iter()
-        .filter(|i| i.params[1] == rune::render::KIND_GLYPH)
-        .map(|i| ((i.rect[0] + i.rect[2] / 2.0) / 2.0, (i.rect[1] + i.rect[3] / 2.0) / 2.0))
-        .filter(|&(x, y)| x >= e.rect[0] && x <= e.rect[0] + e.rect[2] && y >= e.rect[1] && y <= e.rect[1] + e.rect[3])
-        .collect();
-    // Rows by ink centre, a new row when the centre jumps by more than a third of a line: a
-    // tall glyph's centre sits a little higher than a short one's in every rasterizer.
-    out.sort_by(|a, b| a.1.total_cmp(&b.1));
-    let mut row = (0, f32::NEG_INFINITY);
-    let mut rows: Vec<(usize, (f32, f32))> = out.into_iter().map(|g| {
-        if g.1 - row.1 > 6.0 { row = (row.0 + 1, g.1); }
-        (row.0, g)
-    }).collect();
-    rows.sort_by(|a, b| (a.0, a.1.0).partial_cmp(&(b.0, b.1.0)).unwrap());
-    rows.into_iter().map(|r| r.1).collect()
-}
-
-fn tick(rt: &mut Runtime<S>) { rt.frame(1.0 / 60.0); }
-fn wait(rt: &mut Runtime<S>) { rt.frame(1.0); }
-
-fn click(rt: &mut Runtime<S>, (x, y): (f32, f32)) {
-    rt.pointer_move(x, y);
-    rt.pointer_down(x, y);
-    rt.pointer_up(x, y);
-    tick(rt);
-}
-
-fn drag(rt: &mut Runtime<S>, (x0, y0): (f32, f32), (x1, y1): (f32, f32)) {
-    rt.pointer_move(x0, y0);
-    rt.pointer_down(x0, y0);
-    tick(rt);
-    for k in 1..=6 {
-        let f = k as f32 / 6.0;
-        rt.pointer_move(x0 + (x1 - x0) * f, y0 + (y1 - y0) * f);
-        tick(rt);
-    }
-    rt.pointer_up(x1, y1);
-    tick(rt);
-}
-
 /// A double-click at `from`, held and dragged to `to`: selects by words.
 fn word_drag(rt: &mut Runtime<S>, (x0, y0): (f32, f32), (x1, y1): (f32, f32)) {
-    rt.pointer_move(x0, y0);
-    rt.pointer_down(x0, y0);
-    rt.pointer_up(x0, y0);
-    tick(rt);
-    rt.pointer_down(x0, y0);
-    tick(rt);
-    for k in 1..=6 {
-        let f = k as f32 / 6.0;
-        rt.pointer_move(x0 + (x1 - x0) * f, y0 + (y1 - y0) * f);
-        tick(rt);
-    }
-    rt.pointer_up(x1, y1);
-    tick(rt);
-}
-
-fn command(rt: &mut Runtime<S>, c: char) {
-    rt.key(KeyEvent { key: Key::Command(c), mods: Mods { cmd: true, ..Mods::default() } });
-    tick(rt);
+    click(rt, (x0, y0));
+    drag(rt, (x0, y0), (x1, y1));
 }
 
 /// Just left of glyph `g`: a drag ending there stops before it.

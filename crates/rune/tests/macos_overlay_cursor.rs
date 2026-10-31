@@ -11,6 +11,9 @@
 fn main() {}
 
 #[cfg(target_os = "macos")]
+mod macos_support;
+
+#[cfg(target_os = "macos")]
 fn main() { mac::main() }
 
 #[cfg(target_os = "macos")]
@@ -21,9 +24,9 @@ mod mac {
     use objc2::{class, msg_send, msg_send_id, rc::Retained, runtime::{AnyObject, Bool}};
     use objc2_foundation::{NSArray, NSPoint, NSSize};
     use rune::*;
+    use crate::macos_support::{activate_helper, app_active, frontmost_pid, on_main, wait, warp};
 
     const HELPER: &str = "RUNE_OVERLAY_CURSOR_HELPER";
-    const CUA_DRIVER: &str = "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
     /// Where the overlay goes, in points from the primary display's top-left.
     const PANEL: [f32; 4] = [300.0, 300.0, 240.0, 120.0];
     /// The grabbable card inside it; the rest of the panel clicks through.
@@ -39,48 +42,6 @@ mod mac {
                 .hit()
                 .cursor(Cursor::Grab),
         )
-    }
-
-    fn on_main<T: Send + 'static>(handle: &AppHandle<()>, f: impl FnOnce() -> T + Send + 'static) -> T {
-        let (tx, rx) = std::sync::mpsc::channel();
-        handle.update(move |_, _| { let _ = tx.send(f()); });
-        rx.recv_timeout(Duration::from_secs(10)).expect("event thread stalled")
-    }
-
-    fn wait(what: &str, f: impl Fn() -> bool) {
-        let start = Instant::now();
-        while !f() {
-            assert!(start.elapsed() < Duration::from_secs(10), "timed out waiting for {what}");
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct CGPoint { x: f64, y: f64 }
-
-    #[link(name = "CoreGraphics", kind = "framework")]
-    unsafe extern "C" {
-        fn CGWarpMouseCursorPosition(point: CGPoint) -> i32;
-    }
-
-    fn warp((x, y): (f64, f64)) { unsafe { CGWarpMouseCursorPosition(CGPoint { x, y }); } }
-
-    fn app_active() -> bool {
-        unsafe {
-            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            let active: Bool = msg_send![app, isActive];
-            active.as_bool()
-        }
-    }
-
-    fn frontmost_pid() -> i32 {
-        unsafe {
-            let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
-            let app: *mut AnyObject = msg_send![workspace, frontmostApplication];
-            if app.is_null() { return 0 }
-            msg_send![app, processIdentifier]
-        }
     }
 
     /// The panel with CGWindowID `number`: (key, ignores mouse events).
@@ -118,29 +79,6 @@ mod mac {
             let arrow: *mut AnyObject = msg_send![class!(NSCursor), arrowCursor];
             (shape(current), shape(hand).expect("openHandCursor"), shape(arrow).expect("arrowCursor"))
         }
-    }
-
-    /// Hands the focus to the helper. macOS only lets the active app pass activation on, so
-    /// when nobody yields this falls back to CuaDriver's `bring_to_front`.
-    fn activate_helper(handle: &AppHandle<()>, pid: i32) {
-        wait("the helper to launch", || on_main(handle, move || unsafe {
-            let app: *mut AnyObject = msg_send![class!(NSRunningApplication), runningApplicationWithProcessIdentifier: pid];
-            !app.is_null() && { let done: Bool = msg_send![app, isFinishedLaunching]; done.as_bool() }
-        }));
-        on_main(handle, move || unsafe {
-            let app: *mut AnyObject = msg_send![class!(NSRunningApplication), runningApplicationWithProcessIdentifier: pid];
-            // NSApplicationActivateIgnoringOtherApps
-            let _: Bool = msg_send![app, activateWithOptions: 1usize << 1];
-        });
-        let helper_front = || on_main(handle, move || frontmost_pid() == pid);
-        let start = Instant::now();
-        while !helper_front() && start.elapsed() < Duration::from_secs(1) { std::thread::sleep(Duration::from_millis(20)); }
-        if !helper_front() {
-            let status = Command::new(CUA_DRIVER).arg("bring_to_front").arg(format!(r#"{{"pid":{pid}}}"#))
-                .stdout(std::process::Stdio::null()).status();
-            assert!(status.is_ok_and(|s| s.success()), "couldn't hand the focus to the helper (needs {CUA_DRIVER})");
-        }
-        wait("the helper to be frontmost", helper_front);
     }
 
     /// Waits for the window server's cursor to take `want`'s shape.

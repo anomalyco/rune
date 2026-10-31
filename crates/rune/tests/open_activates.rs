@@ -8,6 +8,9 @@
 fn main() {}
 
 #[cfg(target_os = "macos")]
+mod macos_support;
+
+#[cfg(target_os = "macos")]
 fn main() { mac::main() }
 
 #[cfg(target_os = "macos")]
@@ -15,47 +18,16 @@ mod mac {
     use std::process::Command;
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
-    use objc2::{class, msg_send, runtime::{AnyObject, Bool}};
+    use objc2::{class, msg_send, runtime::AnyObject};
     use objc2_foundation::NSString;
     use rune::*;
+    use crate::macos_support::{activate_helper, app_active, frontmost_pid, on_main, wait};
 
     const HELPER: &str = "RUNE_OPEN_ACTIVATES_HELPER";
-    const CUA_DRIVER: &str = "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
     const MAIN_TITLE: &str = "open activates main";
     const SETTINGS_TITLE: &str = "open activates settings";
 
     fn view<S>(_: &S, _: &mut Cx<S>) -> El { text("open activates") }
-
-    fn on_main<T: Send + 'static>(handle: &AppHandle<()>, f: impl FnOnce() -> T + Send + 'static) -> T {
-        let (tx, rx) = std::sync::mpsc::channel();
-        handle.update(move |_, _| { let _ = tx.send(f()); });
-        rx.recv_timeout(Duration::from_secs(10)).expect("event thread stalled")
-    }
-
-    fn wait(what: &str, f: impl Fn() -> bool) {
-        let start = Instant::now();
-        while !f() {
-            assert!(start.elapsed() < Duration::from_secs(10), "timed out waiting for {what}");
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
-
-    fn app_active() -> bool {
-        unsafe {
-            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            let active: Bool = msg_send![app, isActive];
-            active.as_bool()
-        }
-    }
-
-    fn frontmost_pid() -> i32 {
-        unsafe {
-            let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
-            let app: *mut AnyObject = msg_send![workspace, frontmostApplication];
-            if app.is_null() { return 0 }
-            msg_send![app, processIdentifier]
-        }
-    }
 
     /// The key window's title, if this app has a key window.
     fn key_title() -> Option<String> {
@@ -66,30 +38,6 @@ mod mac {
             let title: *mut NSString = msg_send![window, title];
             (!title.is_null()).then(|| (*title).to_string())
         }
-    }
-
-    /// Hands the focus to the helper. macOS only lets the active app pass activation on, so
-    /// when nobody yields (a fresh launch from a shell, or a stale frontmost process) this falls
-    /// back to CuaDriver's `bring_to_front`, which activates through accessibility.
-    fn activate_helper(handle: &AppHandle<()>, pid: i32) {
-        wait("the helper to launch", || on_main(handle, move || unsafe {
-            let app: *mut AnyObject = msg_send![class!(NSRunningApplication), runningApplicationWithProcessIdentifier: pid];
-            !app.is_null() && { let done: Bool = msg_send![app, isFinishedLaunching]; done.as_bool() }
-        }));
-        on_main(handle, move || unsafe {
-            let app: *mut AnyObject = msg_send![class!(NSRunningApplication), runningApplicationWithProcessIdentifier: pid];
-            // NSApplicationActivateIgnoringOtherApps
-            let _: Bool = msg_send![app, activateWithOptions: 1usize << 1];
-        });
-        let helper_front = || on_main(handle, move || frontmost_pid() == pid);
-        let start = Instant::now();
-        while !helper_front() && start.elapsed() < Duration::from_secs(1) { std::thread::sleep(Duration::from_millis(20)); }
-        if !helper_front() {
-            let status = Command::new(CUA_DRIVER).arg("bring_to_front").arg(format!(r#"{{"pid":{pid}}}"#))
-                .stdout(std::process::Stdio::null()).status();
-            assert!(status.is_ok_and(|s| s.success()), "couldn't hand the focus to the helper (needs {CUA_DRIVER})");
-        }
-        wait("the helper to be frontmost", helper_front);
     }
 
     /// The helper keeps the front. A key nonactivating panel can still make `isActive` report

@@ -24,9 +24,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use rune::compose::{Compositor, Frame};
-#[cfg(target_os = "macos")]
 #[path = "hud_probe/mod.rs"]
 mod probe;
+use probe::{metal_counts, process_counts, process_cpu_ms, thread_counts as main_counts, thread_cpu_ms};
 use rune::{App, AppSpec, Cx, El, OverlaySpec, RunOptions, WindowSpec, el};
 
 struct Counting;
@@ -50,21 +50,6 @@ static COUNTING: Counting = Counting;
 
 fn view(_: &(), _: &mut Cx<()>) -> El { el() }
 
-fn thread_cpu_ms() -> f64 {
-    let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-    // SAFETY: a live, writable timespec; the clock needs no handle.
-    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
-    t.tv_sec as f64 * 1e3 + t.tv_nsec as f64 / 1e6
-}
-
-fn process_cpu_ms() -> f64 {
-    // SAFETY: a zeroed rusage is valid, and getrusage only writes it.
-    let mut u: libc::rusage = unsafe { std::mem::zeroed() };
-    unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut u) };
-    let ms = |t: libc::timeval| t.tv_sec as f64 * 1e3 + t.tv_usec as f64 / 1e3;
-    ms(u.ru_utime) + ms(u.ru_stime)
-}
-
 fn env<T: std::str::FromStr>(name: &str, default: T) -> T {
     std::env::var(name).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
 }
@@ -75,35 +60,8 @@ struct Start { main: f64, process: f64, wall: Instant, frames: u64, allocs: u64,
 
 /// CPU ms of the present thread and of the display link's thread.
 fn side_threads() -> (f64, f64) {
-    #[cfg(target_os = "macos")]
-    {
-        let threads = probe::named_threads();
-        (probe::thread_ms(&threads, "rune present"), probe::thread_ms(&threads, "CVDisplayLink"))
-    }
-    #[cfg(not(target_os = "macos"))]
-    (0.0, 0.0)
-}
-
-fn process_counts() -> [u64; 3] {
-    #[cfg(target_os = "macos")]
-    return probe::process_counts();
-    #[cfg(not(target_os = "macos"))]
-    [0; 3]
-}
-
-/// The main thread's retired instructions and cycles, read on it.
-fn main_counts() -> [u64; 2] {
-    #[cfg(target_os = "macos")]
-    return probe::thread_counts();
-    #[cfg(not(target_os = "macos"))]
-    [0; 2]
-}
-
-fn metal_counts() -> [u64; 5] {
-    #[cfg(target_os = "macos")]
-    return probe::metal_counts();
-    #[cfg(not(target_os = "macos"))]
-    [0; 5]
+    let threads = probe::named_threads();
+    (probe::thread_ms(&threads, "rune present"), probe::thread_ms(&threads, "CVDisplayLink"))
 }
 
 struct Hud {
@@ -178,8 +136,8 @@ impl Compositor<()> for Hud {
         if self.writes > 0 && !self.immediates {
             let uniforms = self.uniforms.clone().expect("made with the pipeline");
             for _ in 0..self.writes {
-                if self.staged { f.write_buffer(&uniforms, 0, bytemuck_cast(&data)); }
-                else { f.queue.write_buffer(&uniforms, 0, bytemuck_cast(&data)); }
+                if self.staged { f.write_buffer(&uniforms, 0, bytemuck::cast_slice(&data)); }
+                else { f.queue.write_buffer(&uniforms, 0, bytemuck::cast_slice(&data)); }
             }
         }
         {
@@ -194,7 +152,7 @@ impl Compositor<()> for Hud {
             if let Some((pipeline, group)) = &self.pipeline {
                 pass.set_pipeline(pipeline);
                 if let Some(group) = group { pass.set_bind_group(0, group, &[]); }
-                if self.immediates { for _ in 0..self.writes { pass.set_immediates(0, bytemuck_cast(&data)); } }
+                if self.immediates { for _ in 0..self.writes { pass.set_immediates(0, bytemuck::cast_slice(&data)); } }
                 pass.draw(0..3, 0..1);
             }
         }
@@ -233,7 +191,6 @@ impl Compositor<()> for Hud {
                 println!("per_frame: command_buffers={:.2} render_encoders={:.2} blit_encoders={:.2} presents={:.2} completed_handlers={:.2}",
                     per(0), per(1), per(2), per(3), per(4));
             }
-            #[cfg(target_os = "macos")]
             for (label, n) in probe::LABELS.lock().unwrap().iter() { println!("  commits: {label}: {n}"); }
             std::process::exit(0);
         }
@@ -243,15 +200,8 @@ impl Compositor<()> for Hud {
     fn animating(&self) -> bool { true }
 }
 
-fn bytemuck_cast(data: &[f32]) -> &[u8] {
-    // SAFETY: f32 has no padding or invalid bit patterns as bytes.
-    unsafe { std::slice::from_raw_parts(data.as_ptr().cast(), std::mem::size_of_val(data)) }
-}
-
 fn main() {
-    #[cfg(target_os = "macos")]
     if std::env::var_os("OVERLAY_PRESUME_VISIBLE").is_some() { probe::presume_visible(); }
-    #[cfg(target_os = "macos")]
     if let Some(mode) = std::env::var_os("OVERLAY_COUNT_METAL") {
         probe::count_metal();
         probe::TALLY_LABELS.store(mode == "labels", Ordering::Relaxed);

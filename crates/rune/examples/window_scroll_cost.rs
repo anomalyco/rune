@@ -15,10 +15,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-#[cfg(target_os = "macos")]
 #[path = "hud_probe/mod.rs"]
-#[allow(dead_code)]
 mod probe;
+use probe::{process_cpu_ms, thread_cpu_ms};
 use rune::{App, AppSpec, Color, Cx, El, ScrollSpec, TextStyle, Tx, col, oklch, row, text};
 
 const SECTIONS: usize = 60;
@@ -51,37 +50,16 @@ fn poll(_: &mut (), t: f64, tx: &mut Tx) -> bool {
     false
 }
 
-fn thread_cpu_ms() -> f64 {
-    let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-    // SAFETY: a live, writable timespec; the clock needs no handle.
-    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
-    t.tv_sec as f64 * 1e3 + t.tv_nsec as f64 / 1e6
-}
-
-fn process_cpu_ms() -> f64 {
-    // SAFETY: a zeroed rusage is valid, and getrusage only writes it.
-    let mut u: libc::rusage = unsafe { std::mem::zeroed() };
-    unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut u) };
-    let ms = |t: libc::timeval| t.tv_sec as f64 * 1e3 + t.tv_usec as f64 / 1e3;
-    ms(u.ru_utime) + ms(u.ru_stime)
-}
-
 /// Process instructions, main-thread instructions, and Metal calls, so far.
 fn counts() -> ([u64; 3], [u64; 2], [u64; 5]) {
-    #[cfg(target_os = "macos")]
-    return (probe::process_counts(), probe::thread_counts(), probe::metal_counts());
-    #[cfg(not(target_os = "macos"))]
-    ([0; 3], [0; 2], [0; 5])
+    (probe::process_counts(), probe::thread_counts(), probe::metal_counts())
 }
 
 struct Start { main: f64, process: f64, wall: Instant, frames: u64, counts: ([u64; 3], [u64; 2], [u64; 5]) }
 
 fn main() {
-    #[cfg(target_os = "macos")]
-    {
-        if std::env::var_os("SCROLL_PRESUME_VISIBLE").is_some() { probe::presume_visible(); }
-        probe::count_metal();
-    }
+    if std::env::var_os("SCROLL_PRESUME_VISIBLE").is_some() { probe::presume_visible(); }
+    probe::count_metal();
     let seconds: f64 = std::env::var("SCROLL_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(12.0);
     let began = Instant::now();
     let frames = Rc::new(RefCell::new((0u64, None::<Start>)));

@@ -2,8 +2,10 @@
 //! triple-click a paragraph and Shift extends; Cmd+C copies, Cmd+A selects all and a right-click
 //! offers Copy. Selecting never moves layout, a press elsewhere clears it, links still open, and
 //! the highlight is drawn exactly as a text field's.
-use rune::runtime::ElementInfo;
-use rune::{Color, Cursor, Cx, El, Env, Key, KeyEvent, Link, Mods, PhysicalInput, Runtime, Span, TextEdit, TextStyle, col, el, rich, text, text_input};
+mod support;
+
+use rune::{Color, Cursor, Cx, El, Env, Link, Mods, PhysicalInput, Runtime, Span, TextEdit, TextStyle, col, el, rich, text, text_input};
+use support::{centre, click, command, drag, find, glyphs, tick, wait};
 
 const CMD: &str = "opencode --port 4096";
 const PARA: &str = "first line\nsecond line that wraps around";
@@ -34,54 +36,6 @@ fn runtime() -> Runtime<S> {
     rt.frame(0.0);
     rt
 }
-
-fn find(rt: &Runtime<S>, key: &str) -> ElementInfo {
-    rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("{key}"))
-}
-
-fn centre(e: &ElementInfo) -> (f32, f32) { (e.rect[0] + e.rect[2] / 2.0, e.rect[1] + e.rect[3] / 2.0) }
-
-/// Centres (points) of the glyphs drawn inside element `key`, in reading order by line.
-fn glyphs(rt: &Runtime<S>, key: &str) -> Vec<(f32, f32)> {
-    let e = find(rt, key);
-    let s = 2.0;
-    let mut out: Vec<(f32, f32)> = rt.instances.iter()
-        .filter(|i| i.params[1] == rune::render::KIND_GLYPH)
-        .map(|i| ((i.rect[0] + i.rect[2] / 2.0) / s, (i.rect[1] + i.rect[3] / 2.0) / s))
-        .filter(|&(x, y)| x >= e.rect[0] && x <= e.rect[0] + e.rect[2] && y >= e.rect[1] && y <= e.rect[1] + e.rect[3])
-        .collect();
-    out.sort_by(|a, b| ((a.1 / 10.0).round(), a.0).partial_cmp(&((b.1 / 10.0).round(), b.0)).unwrap());
-    out
-}
-
-fn tick(rt: &mut Runtime<S>) { rt.frame(1.0 / 60.0); }
-
-fn click(rt: &mut Runtime<S>, (x, y): (f32, f32)) {
-    rt.pointer_move(x, y);
-    rt.pointer_down(x, y);
-    rt.pointer_up(x, y);
-    tick(rt);
-}
-
-fn drag(rt: &mut Runtime<S>, (x0, y0): (f32, f32), (x1, y1): (f32, f32)) {
-    rt.pointer_move(x0, y0);
-    rt.pointer_down(x0, y0);
-    tick(rt);
-    for k in 1..=4 {
-        let f = k as f32 / 4.0;
-        rt.pointer_move(x0 + (x1 - x0) * f, y0 + (y1 - y0) * f);
-        tick(rt);
-    }
-    rt.pointer_up(x1, y1);
-    tick(rt);
-}
-
-fn command(rt: &mut Runtime<S>, c: char) {
-    rt.key(KeyEvent { key: Key::Command(c), mods: Mods { cmd: true, ..Mods::default() } });
-    tick(rt);
-}
-
-fn wait(rt: &mut Runtime<S>) { rt.frame(1.0); }
 
 fn rects(rt: &Runtime<S>) -> Vec<(Option<String>, [f32; 4])> {
     rt.elements().into_iter().map(|e| (e.key, e.rect)).collect()
