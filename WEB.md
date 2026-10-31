@@ -51,7 +51,9 @@ python3 -m http.server 8000 -d target/web   # then open http://localhost:8000
 WebGPU works over plain HTTP on `localhost`; from another machine the page needs HTTPS. In
 watch mode the script writes `reload.js`, which polls `.stamp` in the same folder and reloads
 when a build changes it, and the generated page cache-busts `app.js` and `app_bg.wasm`. A
-failed build leaves the page as it was. Reloading resets the app's state.
+failed build leaves the page as it was. Each build stages its files in `.next` and renames them
+into place, so a page loading mid-build gets one build's `app.js` and `app_bg.wasm`. Reloading
+resets the app's state.
 
 ## Your own page
 

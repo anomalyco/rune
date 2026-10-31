@@ -1,0 +1,1 @@
+- `scripts/web-build.sh` stages each build in `$out/.next` and renames the files into place, so a page that loads mid-build no longer mixes `app.js` and `app_bg.wasm` from different builds (a `LinkError`); `--dev` skips the gzip size report.

@@ -118,13 +118,25 @@ build_once() {
         echo "cargo finished but $artifact is missing. If cargo ran on another machine, set CARGO to a local cargo binary." >&2
         return 1
     fi
-    mkdir -p "$out"
-    wasm-bindgen --target web --out-dir "$out" --out-name app "$artifact" || return 1
+    # Build into a staging folder beside the output, then rename each file into place, so a
+    # page loading mid-build never gets app.js and app_bg.wasm from different builds.
+    local next="$out/.next"
+    rm -rf "$next"
+    mkdir -p "$next"
+    wasm-bindgen --target web --out-dir "$next" --out-name app "$artifact" || return 1
     if $opt; then
         wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-reference-types \
-            "$out/app_bg.wasm" -o "$out/app_bg.opt.wasm" || return 1
-        mv "$out/app_bg.opt.wasm" "$out/app_bg.wasm"
+            "$next/app_bg.wasm" -o "$next/app_bg.opt.wasm" || return 1
+        mv "$next/app_bg.opt.wasm" "$next/app_bg.wasm"
     fi
+    local entry
+    for entry in "$next"/*; do
+        if [[ -d $entry ]]; then
+            rm -rf "${out:?}/$(basename "$entry")"
+        fi
+        mv -f "$entry" "$out/"
+    done
+    rmdir "$next"
     if $html; then
         if [[ ! -e $out/index.html ]] || grep -qF "$marker" "$out/index.html"; then
             write_html
@@ -151,7 +163,7 @@ JS
     else
         rm -f "$out/reload.js" "$out/.stamp"
     fi
-    python3 -c 'import gzip,pathlib,sys; p=pathlib.Path(sys.argv[1]); b=p.read_bytes(); print(f"{p}: {len(b):,} bytes raw, {len(gzip.compress(b,mtime=0)):,} bytes gzip")' "$out/app_bg.wasm"
+    $dev || python3 -c 'import gzip,pathlib,sys; p=pathlib.Path(sys.argv[1]); b=p.read_bytes(); print(f"{p}: {len(b):,} bytes raw, {len(gzip.compress(b,mtime=0)):,} bytes gzip")' "$out/app_bg.wasm"
     echo "Built $profile in $((SECONDS - start)) s. Static folder: $out"
 }
 
