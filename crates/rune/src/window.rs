@@ -865,6 +865,7 @@ impl<S: 'static> Host<S> {
             cursor: crate::cursor::os::OsCursor::new(event_loop),
             alpha,
             quiet: false,
+            timer_frame: pacing::TimerFrame::default(),
             presented: None,
         });
         if launcher { self.win.as_mut().unwrap().first_frame.prepare(); }

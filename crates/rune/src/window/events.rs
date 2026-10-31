@@ -174,6 +174,7 @@ impl<S: 'static> Host<S> {
             WindowEvent::DroppedFile(path) => { self.files.file(path, true); return; }
             WindowEvent::HoveredFileCancelled => { self.files.steps.push(FileStep::Leave); return; }
             WindowEvent::RedrawRequested => {
+                if let Some(w) = &mut self.win { w.timer_frame = pacing::TimerFrame::default(); }
                 // A new accent or light/dark preference asks every window to redraw (`accent::watch`, `window_dark`).
                 self.rt.set_system_accent(crate::system_accent());
                 if self.args.theme.is_none() && let Some(dark) = self.win.as_ref().and_then(|l| crate::platform::preferences::desktop_dark(&l.window)) {
