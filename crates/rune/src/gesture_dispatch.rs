@@ -289,10 +289,13 @@ impl<S: 'static> Runtime<S> {
                 at = self.nodes[i].parent;
             }
         }
-        if chain.is_empty() {
-            // Nothing is focused: every element that hears releases is offered this one, the
-            // deepest first, confined to the open modal (a handler on any element, not only the root).
-            chain.extend((0..self.nodes.len()).rev().filter(|&i| self.allowed(i) && self.nodes[i].focus.key_up.is_some()));
+        // Nothing is focused, or focus rests on the open modal itself (where it lands on open):
+        // every element that hears releases is offered this one, the deepest first, confined to
+        // the modal, not only a handler on the root.
+        let at_rest = chain.is_empty() || (self.active_modal().is_some() && focused == self.active_modal() && pressed.is_none_or(|p| Some(p) == focused));
+        if at_rest {
+            let rest: Vec<usize> = (0..self.nodes.len()).rev().filter(|&i| !chain.contains(&i) && self.allowed(i) && self.nodes[i].focus.key_up.is_some()).collect();
+            chain.extend(rest);
         } else if pressed.is_some() && focused.is_some() && pressed != focused {
             // Keep shared ancestors (such as the root) after both focused elements.
             let mut shared = Vec::new();
@@ -375,19 +378,24 @@ mod tests {
         assert_eq!(rt.state.log, ["stage"]);
     }
 
+    fn pair(_: &Keys, _: &mut crate::Cx<Keys>) -> El {
+        el().w_full().h_full()
+            .child(el().key("a").size(40.0, 40.0).focusable(true).on_key_up(|s: &mut Keys, _, _| { s.log.push("a"); true }))
+            .child(el().key("b").size(40.0, 40.0).focusable(true).on_key_up(|s: &mut Keys, _, _| { s.log.push("b"); true }))
+    }
+
     #[test]
-    fn a_release_still_finds_the_nested_handler_after_focus_moves_between_down_and_up() {
-        let mut rt = Runtime::new(Keys::default(), stage, (100.0, 100.0), Env::new(true, 1.0));
+    fn a_release_goes_to_the_element_focused_at_the_press_even_after_focus_moves() {
+        let mut rt = Runtime::new(Keys::default(), pair, (100.0, 100.0), Env::new(true, 1.0));
         rt.frame(0.0);
+        let click = |rt: &mut Runtime<Keys>, k: &str| { let (x, y) = rt.find(k).unwrap(); rt.pointer_down(x, y); rt.pointer_up(x, y); rt.frame(0.0); };
+        click(&mut rt, "a");
         rt.key(up());
         rt.frame(0.0);
-        let (x, y) = rt.find("other").unwrap();
-        rt.pointer_down(x, y);
-        rt.pointer_up(x, y);
-        rt.frame(0.0);
+        click(&mut rt, "b");
         rt.key_up(up());
         rt.frame(0.0);
-        assert_eq!(rt.state.log, ["stage"], "focus on a sibling leaves the release to the ancestor-less stage handler");
+        assert_eq!(rt.state.log, ["a"]);
     }
 
     fn modal_view(_: &Keys, _: &mut crate::Cx<Keys>) -> El {
