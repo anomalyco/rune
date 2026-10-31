@@ -3,6 +3,8 @@
 # (inline #[cfg(test)] items are excluded; test-only files are measured separately).
 #   warn  > 800 non-test lines       error > 1500 non-test lines unless listed in
 #   warn  > 1000 lines in a test file or inline test module   scripts/file-size-exceptions.txt ("<path> <ceiling>")
+# Also runs scripts/folder-shape.sh (prefix families and folder breadth); its errors and warnings are
+# added to the summary line, and --update-exceptions refreshes both exception lists.
 # Usage: scripts/file-size.sh [--warn-only] [--update-exceptions [--allow-raise]]
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
@@ -99,6 +101,18 @@ while read -r p prod test maxtest; do
 done <<< "$rows"
 
 sort -rn "$out"
+shape_args=()
+[ "$update" -eq 1 ] && shape_args+=(--update-exceptions)
+[ "$raise" -eq 1 ] && shape_args+=(--allow-raise)
+shape_out=$(bash scripts/folder-shape.sh ${shape_args[@]+"${shape_args[@]}"} --warn-only)
+if [ "$update" -eq 0 ]; then
+  printf '%s\n' "$shape_out"
+  shape_sum=$(printf '%s\n' "$shape_out" | tail -1)
+  errors=$((errors + $(sed -n 's/.*errors: \([0-9]*\),.*/\1/p' <<< "$shape_sum")))
+  warns=$((warns + $(sed -n 's/.*warnings: \([0-9]*\)$/\1/p' <<< "$shape_sum")))
+else
+  printf '%s\n' "$shape_out"
+fi
 echo "over $SOFT: $oversoft, over $HARD: $overhard, errors: $errors, warnings: $warns"
 
 if [ "$update" -eq 1 ]; then
