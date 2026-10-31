@@ -32,7 +32,8 @@ impl<S: 'static> Runtime<S> {
     /// `committing` when the result is applied, so the last commit's text layouts can go.
     pub(super) fn measure_pass(&mut self, tx: &Tx, committing: bool) -> Measured {
         let _blend = crate::theme::scope(self.srgb_blend);
-        self.measurement(committing).finish(tx)
+        let selection = self.selection_by_path();
+        Measured { selection, ..self.measurement(committing).finish(tx) }
     }
 
     pub(super) fn measurement(&mut self, committing: bool) -> Measurement<'_, S> {
@@ -187,6 +188,7 @@ impl<S: 'static> Measurement<'_, S> {
             layout_reads: self.layout_reads,
             memo_flattened: Some(memo_pending),
             memo_reused,
+            selection: Vec::new(),
         }
     }
 

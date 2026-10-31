@@ -54,13 +54,17 @@ impl<S: 'static> Runtime<S> {
         // when the new layout moves them.
         let reads = self.layout_seen.reads.clone();
         let caret_read = self.caret_watch;
+        let selection = self.selection_by_path();
         let mut m = self.measurement(true);
         m.layout_reads = reads;
         m.caret_read = caret_read;
-        m.relayout().unwrap_or_else(|| {
-            self.refresh_layout_seen();
-            self.measure(tx)
-        })
+        match m.relayout() {
+            Some(measured) => Measured { selection, ..measured },
+            None => {
+                self.refresh_layout_seen();
+                self.measure(tx)
+            }
+        }
     }
 
     /// Whether this commit only resized the window: nothing the view reads changed since the
@@ -118,6 +122,7 @@ impl<S: 'static> Measurement<'_, S> {
             layout_reads: self.layout_reads,
             memo_flattened: None,
             memo_reused: Vec::new(),
+            selection: Vec::new(),
         })
     }
 

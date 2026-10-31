@@ -29,6 +29,9 @@ impl<S> Cx<S> {
     }
 }
 
+/// Bytes `a..b` of the text at a path.
+pub(crate) type SelectedRange = (String, usize, usize);
+
 /// Whether any box of `a` and `b` differs by more than half a point, or one has a box the
 /// other lacks.
 pub(crate) fn boxes_moved(a: &[[f32; 4]], b: &[[f32; 4]]) -> bool {
@@ -36,16 +39,25 @@ pub(crate) fn boxes_moved(a: &[[f32; 4]], b: &[[f32; 4]]) -> bool {
 }
 
 impl<S: 'static> Runtime<S> {
-    /// The selection's line boxes laid out in `nodes`, which may be a commit's new nodes: the
-    /// selected texts are found there by path.
-    pub(super) fn selection_boxes(&self, nodes: &[Node]) -> Vec<[f32; 4]> {
-        let ranges = self.selection_ranges();
-        if ranges.is_empty() { return Vec::new(); }
-        let current = std::ptr::eq(nodes, self.nodes.as_slice());
+    /// The selection's line boxes laid out in the last commit's nodes.
+    pub(super) fn selection_boxes(&self) -> Vec<[f32; 4]> {
         let mut out = Vec::new();
-        for (i, a, b) in ranges {
-            let j = if current { Some(i) } else { nodes.iter().position(|n| n.path == self.nodes[i].path) };
-            if let Some(j) = j { self.text_boxes(nodes, j, a, b, &mut out); }
+        for (i, a, b) in self.selection_ranges() { self.text_boxes(&self.nodes, i, a, b, &mut out); }
+        out
+    }
+
+    /// The selection's ranges by the path of each selected text. A measure reads them before it
+    /// runs: reusing a `memo` moves its nodes out of the last commit's, leaving placeholders
+    /// the selection can't be found in.
+    pub(crate) fn selection_by_path(&self) -> Vec<SelectedRange> {
+        self.selection_ranges().into_iter().map(|(i, a, b)| (self.nodes[i].path.clone(), a, b)).collect()
+    }
+
+    /// The line boxes of `ranges` laid out in a measure's `nodes`, found there by path.
+    pub(super) fn selection_boxes_in(&self, nodes: &[Node], ranges: &[SelectedRange]) -> Vec<[f32; 4]> {
+        let mut out = Vec::new();
+        for (path, a, b) in ranges {
+            if let Some(j) = nodes.iter().position(|n| n.path == *path) { self.text_boxes(nodes, j, *a, *b, &mut out); }
         }
         out
     }
@@ -71,6 +83,6 @@ impl<S: 'static> Runtime<S> {
     /// scrolling). That isn't layout feedback, so the view re-runs as for a state change.
     pub(super) fn selection_read_moved(&self) -> bool {
         let seen = &self.layout_seen.rects;
-        seen.contains_key(SELECTION) && boxes_moved(&seen.selection, &self.selection_boxes(&self.nodes))
+        seen.contains_key(SELECTION) && boxes_moved(&seen.selection, &self.selection_boxes())
     }
 }

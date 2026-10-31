@@ -32,7 +32,7 @@ use super::key_index::{self, KeyIndex};
 
 #[path = "selection_rects.rs"]
 mod selection_rects;
-pub(crate) use selection_rects::{SELECTION, boxes_moved};
+pub(crate) use selection_rects::{SELECTION, SelectedRange, boxes_moved};
 
 /// Extra measurements one commit may take while a read moves.
 const PASSES: usize = 2;
@@ -323,14 +323,14 @@ impl<S: 'static> Runtime<S> {
     /// `None`), by what each read depends on. When one moved, or when `force`, the next view
     /// gets the current rects; otherwise it keeps what the reads last saw, so drift below a
     /// read's threshold adds up. Returns whether one moved.
-    pub(super) fn layout_moved(&mut self, reads: Option<LayoutReads>, nodes: Option<&[Node]>, force: bool) -> bool {
+    pub(super) fn layout_moved(&mut self, reads: Option<LayoutReads>, pass: Option<(&[Node], &[SelectedRange])>, force: bool) -> bool {
         let reads = reads.unwrap_or_else(|| std::mem::take(&mut self.layout_seen.reads));
         #[cfg(debug_assertions)]
-        let nodes_given = nodes.is_some();
+        let nodes_given = pass.is_some();
         // A pass's own nodes are seen once; the current nodes are seen again every frame.
         let own;
-        let (nodes, index) = match nodes {
-            Some(nodes) => {
+        let (nodes, index) = match pass {
+            Some((nodes, _)) => {
                 own = (reads.len() > key_index::SCAN_READS).then(|| KeyIndex::of(nodes));
                 (nodes, own.as_ref())
             }
@@ -340,7 +340,10 @@ impl<S: 'static> Runtime<S> {
             }
         };
         let now: Vec<Option<[f32; 4]>> = reads.iter().map(|r| self.layout_of(nodes, index, &r.key)).collect();
-        let boxes = reads.iter().any(|r| r.key == SELECTION).then(|| self.selection_boxes(nodes));
+        let boxes = reads.iter().any(|r| r.key == SELECTION).then(|| match pass {
+            Some((nodes, ranges)) => self.selection_boxes_in(nodes, ranges),
+            None => self.selection_boxes(),
+        });
         let rects = &mut self.layout_seen.rects;
         let moved = reads.iter().zip(&now).position(|(r, rect)| rects.get(&r.key).is_none_or(|old| r.moved(*old, *rect)));
         let changed = moved.is_some() || boxes.as_ref().is_some_and(|b| boxes_moved(&rects.selection, b));
@@ -368,7 +371,7 @@ impl<S: 'static> Runtime<S> {
         let index = self.key_index.get(&self.nodes, self.commit_gen);
         let now: Vec<_> = self.layout_seen.rects.keys().map(|k| self.layout_of(&self.nodes, index, k)).collect();
         for (seen, rect) in self.layout_seen.rects.values_mut().zip(now) { *seen = rect; }
-        if self.layout_seen.rects.contains_key(SELECTION) { self.layout_seen.rects.selection = self.selection_boxes(&self.nodes).into(); }
+        if self.layout_seen.rects.contains_key(SELECTION) { self.layout_seen.rects.selection = self.selection_boxes().into(); }
     }
 
     /// Once a frame: whether a layout read moved, so the view re-runs. Scrolling reopens
@@ -391,14 +394,14 @@ impl<S: 'static> Runtime<S> {
         }
         let mut settled = false;
         for _ in 0..PASSES {
-            if !self.layout_moved(Some(std::mem::take(&mut measured.layout_reads)), Some(&measured.nodes), false) {
+            if !self.layout_moved(Some(std::mem::take(&mut measured.layout_reads)), Some((&measured.nodes, &measured.selection)), false) {
                 settled = true;
                 break;
             }
             self.discard_measured(measured);
             measured = self.measure(tx);
         }
-        if !settled { self.layout_moved(Some(std::mem::take(&mut measured.layout_reads)), Some(&measured.nodes), true); }
+        if !settled { self.layout_moved(Some(std::mem::take(&mut measured.layout_reads)), Some((&measured.nodes, &measured.selection)), true); }
         let LayoutSeen { rects, reads } = &mut self.layout_seen;
         rects.retain(|k, _| reads.iter().any(|r| r.key == *k));
         if !rects.contains_key(SELECTION) { rects.selection = Rc::default(); }

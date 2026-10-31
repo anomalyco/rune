@@ -56,6 +56,9 @@ pub(super) struct Measured {
     pub(super) layout_reads: layout_read::LayoutReads,
     pub(super) memo_flattened: Option<Vec<memo_reuse::PendingFlat>>,
     pub(super) memo_reused: Vec<memo_reuse::ReusedSpan>,
+    /// The selection as the measure began, before reused `memo` subtrees left the last
+    /// commit's nodes.
+    pub(super) selection: Vec<layout_read::SelectedRange>,
 }
 
 impl<S: 'static> Runtime<S> {
