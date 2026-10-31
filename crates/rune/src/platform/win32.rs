@@ -1,7 +1,7 @@
 //! Win32 pieces winit 0.30 doesn't expose, for overlays.
 
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use windows_sys::Win32::Foundation::{HWND, RECT};
+use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -9,7 +9,7 @@ use std::{cell::{Cell, RefCell}, collections::VecDeque, rc::Rc};
 use crate::{OverlayInput, OverlayLevel, OverlayOptions, OverlaySupport};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SPI_GETWORKAREA, SetWindowLongPtrW, SetWindowPos, ShowWindow, SystemParametersInfoW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     WS_EX_TRANSPARENT,
 };
 
@@ -234,9 +234,14 @@ fn raise_levels() {
     }
 }
 
-/// The bottom of the primary display's work area (above the taskbar), in physical pixels.
-pub(crate) fn work_area_bottom() -> Option<i32> {
-    let mut area = RECT { left: 0, top: 0, right: 0, bottom: 0 };
-    // SAFETY: SPI_GETWORKAREA writes one RECT.
-    (unsafe { SystemParametersInfoW(SPI_GETWORKAREA, 0, (&raw mut area).cast(), 0) } != 0).then_some(area.bottom)
+/// `monitor`'s work area (without its taskbar and app bars) as top and bottom, in physical
+/// desktop pixels.
+pub(crate) fn work_area(monitor: &winit::monitor::MonitorHandle) -> Option<(i32, i32)> {
+    use winit::platform::windows::MonitorHandleExtWindows;
+    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITORINFO};
+    // SAFETY: MONITORINFO is plain data; all zeros is valid before cbSize is set.
+    let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+    // SAFETY: GetMonitorInfoW fills `info`, whose cbSize says which struct it is.
+    (unsafe { GetMonitorInfoW(monitor.hmonitor() as _, &mut info) } != 0).then_some((info.rcWork.top, info.rcWork.bottom))
 }

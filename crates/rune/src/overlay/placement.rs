@@ -25,16 +25,14 @@ pub(super) fn position(event_loop: &ActiveEventLoop, at: Placement, options: &Ov
         Align::End => origin.x + area.width as i32 - w - px(at.inset),
     };
     #[allow(unused_mut)]
-    let mut bottom = origin.y + area.height as i32;
-    // Above the taskbar on Windows' primary display.
+    let (mut top, mut bottom) = (origin.y, origin.y + area.height as i32);
+    // Inside the taskbar and app bars of whichever Windows display it's on.
     #[cfg(target_os = "windows")]
-    if event_loop.primary_monitor().as_ref() == Some(&monitor)
-        && let Some(work) = crate::platform::win32::work_area_bottom()
-    {
-        bottom = work;
+    if let Some(work) = crate::platform::win32::work_area(&monitor) {
+        (top, bottom) = work;
     }
     let y = match at.edge {
-        ScreenEdge::Top => origin.y + px(at.margin),
+        ScreenEdge::Top => top + px(at.margin),
         ScreenEdge::Bottom => bottom - h - px(at.margin),
     };
     Some(PhysicalPosition::new(x, y))
