@@ -770,7 +770,10 @@ impl<S: 'static> Runtime<S> {
             } else {
                 visible
             };
-            if !skip_paint && effective_opacity > 0.001 && o > 0.001 && paint_visible {
+            let painted = !skip_paint && effective_opacity > 0.001 && o > 0.001 && paint_visible;
+            // Unpulled out of sight, a video still counts, so a scroll across a clip edge doesn't commit.
+            if !painted && let Some((surface, _)) = &n.vis.surface { video_signature = crate::video::fold_unpulled(video_signature, surface); }
+            if painted {
                 // Disabled styling is distributed to each authored paint leaf at build time.
                 // Keep this local to emission: it neither propagates to children nor opens scopes.
                 let o = o * n.vis.paint_alpha;
@@ -975,7 +978,7 @@ impl<S: 'static> Runtime<S> {
                     if let Some((surface, fit)) = &n.vis.surface {
                         if let Some(pulled) = surface.pull_video(video_clock, &self.live_wake) {
                             self.videos_active |= pulled.active;
-                            video_signature = video_signature.wrapping_mul(0x100_0000_01b3).wrapping_add(pulled.generation ^ surface.key() as u64);
+                            video_signature = crate::video::fold(video_signature, pulled.generation, surface.key());
                         }
                         self.surfaces.push(crate::native_surface::SurfaceDraw {
                             surface: surface.clone(), fit: *fit, before_instance: self.instances.len() as u32,

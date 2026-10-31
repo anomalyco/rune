@@ -379,6 +379,57 @@ mod headless {
         assert!((v.time() - 0.3).abs() < 1e-9, "0.3 + 2 x 0.5 wraps to 0.3: {}", v.time());
         near(centre(&render(&gpu, &mut rt)), [0, 255, 0], "looped");
     }
+
+    /// A playing clip scrolled out of its list and back commits nothing, and shows the frame
+    /// at the time it comes back, not the one it left on.
+    #[test]
+    fn a_playing_clip_scrolling_across_the_clip_edge_commits_nothing() {
+        let gpu = Gpu::new(Gpu::instance(), None);
+        let v = Video::file(fixture());
+        v.set_looping(true);
+        let mut rt = crate::Runtime::new(v.clone(), scrolled, (32.0, 18.0), crate::Env::new(true, 2.0));
+        v.play();
+        rt.frame(0.0);
+        rt.frame(0.1);
+        near(centre(&render(&gpu, &mut rt)), [255, 0, 0], "0.1 s");
+        let commits = rt.stats.commits;
+        rt.wheel(10.0, 10.0, -40.0);
+        rt.frame(0.1);
+        assert!(rt.surfaces.is_empty(), "scrolled out of sight");
+        rt.frame(0.4);
+        rt.wheel(10.0, 10.0, 40.0);
+        rt.frame(0.0);
+        assert_eq!(rt.surfaces.len(), 1, "back in sight");
+        near(centre(&render(&gpu, &mut rt)), [0, 0, 255], "0.6 s, pulled as it comes back");
+        assert_eq!(v.state(), PlayerState::Playing);
+        assert_eq!(rt.stats.commits, commits, "scrolling across the edge commits nothing");
+    }
+}
+
+/// The clip at the top of a list that scrolls it out of sight.
+fn scrolled(v: &Video, _: &mut crate::Cx<Video>) -> crate::El {
+    crate::col().key("list").w(32.0).h(18.0).scroll(crate::ScrollSpec { stick_bottom: false }).child(
+        crate::col().w_full()
+            .child(crate::el().key("clip").w(32.0).h(18.0).video(v, crate::SurfaceFit::Fit))
+            .child(crate::el().w_full().h(200.0)),
+    )
+}
+
+#[test]
+fn a_failed_clip_scrolling_across_the_clip_edge_commits_nothing() {
+    let v = Video::file("/nonexistent/clip.mp4");
+    let mut rt = crate::Runtime::new(v.clone(), scrolled, (32.0, 18.0), crate::Env::new(true, 2.0));
+    rt.frame(0.0);
+    rt.frame(0.1);
+    assert!(matches!(v.state(), PlayerState::Failed(_)));
+    let commits = rt.stats.commits;
+    for dy in [-40.0, 40.0, -40.0, 40.0] {
+        let shown = rt.surfaces.len();
+        rt.wheel(10.0, 10.0, dy);
+        rt.frame(0.1);
+        assert_ne!(rt.surfaces.len(), shown, "crossed the edge ({dy})");
+    }
+    assert_eq!(rt.stats.commits, commits, "scrolling across the edge commits nothing");
 }
 
 #[test]

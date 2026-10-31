@@ -424,6 +424,21 @@ pub(crate) struct Pulled {
     pub generation: u64,
 }
 
+/// Folds one drawn video's `generation` into a frame's signature, which changes, re-running
+/// views, only when some video's state does. Order-free, so paint order doesn't count.
+pub(crate) fn fold(signature: u64, generation: u64, key: usize) -> u64 {
+    signature.wrapping_add((generation ^ (key as u64).rotate_left(32)).wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(31))
+}
+
+/// [`fold`] for an element that isn't pulled this frame (out of sight, transparent): what it
+/// last heard, without pulling a frame. Nothing for a surface with no video.
+pub(crate) fn fold_unpulled(signature: u64, surface: &NativeSurface) -> u64 {
+    match surface.video() {
+        Some(video) => fold(signature, video.ctl.lock().unwrap().generation, surface.key()),
+        None => signature,
+    }
+}
+
 /// What `--tree` reports for a media element.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Snapshot {
