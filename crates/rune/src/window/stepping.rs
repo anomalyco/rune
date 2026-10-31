@@ -105,7 +105,7 @@ impl<S: 'static> Host<S> {
         self.rt.fit_held = false;
         let Some(mut request) = self.rt.window_frame.take() else { return };
         let (min, max) = self.options.size_limits(self.spec.min_size);
-        request.size = request.size.map(|size| crate::window_frame::clamp_size(size, min, max));
+        request.size = request.size.map(|size| crate::window::frame::clamp_size(size, min, max));
         if let Some(size) = request.size {
             self.spec.size = size;
             self.args.size = None;
@@ -113,7 +113,7 @@ impl<S: 'static> Host<S> {
         let Some(w) = &self.win else { return };
         #[cfg(target_os = "macos")]
         {
-            use crate::window_frame::{FrameAnim, snap, target};
+            use crate::window::frame::{FrameAnim, snap, target};
             let Some((frame, visible, scale)) = crate::macos::window_geometry(&w.window) else { return };
             // Resizing again mid-flight keeps the edge the first resize keeps.
             let base = self.frame_anim.map_or(frame, |a| a.to);
@@ -151,7 +151,7 @@ impl<S: 'static> Host<S> {
             let current = [position.x as f32, position.y as f32, outer.width as f32, outer.height as f32];
             let (origin, area) = (monitor.position(), monitor.size());
             let visible = [origin.x as f32, origin.y as f32, area.width as f32, area.height as f32];
-            let [x, y, ..] = crate::window_frame::target(current, size, request.center, visible);
+            let [x, y, ..] = crate::window::frame::target(current, size, request.center, visible);
             if [x, y] != [current[0], current[1]] {
                 window.set_outer_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
                 self.sync_origin();
@@ -167,7 +167,7 @@ impl<S: 'static> Host<S> {
         self.take_frame_request(now, true);
         #[cfg(target_os = "macos")]
         {
-            use crate::window_frame::snap;
+            use crate::window::frame::snap;
             // The window server shows a move on the first frame after an idle spell before the
             // frame drawn for it, leaving a stale strip. A request taken then starts here and
             // moves from the next frame.

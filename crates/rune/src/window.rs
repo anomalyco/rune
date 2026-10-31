@@ -45,6 +45,7 @@ mod any_host;
 mod event_loop;
 mod events;
 mod file_drop;
+pub(crate) mod frame;
 mod handle;
 pub use handle::WindowHandle;
 use handle::native_window_number;
@@ -80,7 +81,7 @@ pub(crate) enum WakeEvent {
     App(usize), Live(usize), Window(usize, WindowRequest), Focus(usize),
     Position(usize, (i32, i32)), Level(usize, bool),
     Place(usize, crate::windows::PlaceRequest),
-    Frame(usize, crate::window_frame::FrameRequest),
+    Frame(usize, crate::window::frame::FrameRequest),
     /// The app was reopened (macOS: its Dock icon clicked); for `Windows`, not one host.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Reopen,
@@ -366,7 +367,7 @@ struct Host<S: 'static> {
     wayland: bool,
     /// The window's frame moving to where a handler asked (`Tx::resize_window`), top-down
     /// screen points on the host's frame clock. macOS only; elsewhere frames change at once.
-    frame_anim: Option<crate::window_frame::FrameAnim>,
+    frame_anim: Option<crate::window::frame::FrameAnim>,
     /// The window origin `frame_anim` last set, to notice a drag mid-flight.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     frame_origin: Option<[f32; 2]>,
@@ -425,7 +426,7 @@ impl<S: 'static> Host<S> {
             // real scale makes.
             rt.fit_height = true;
             let (min, max) = options.size_limits(spec.min_size);
-            size = crate::window_frame::clamp_size((size.0, rt.content_height()), min, max);
+            size = crate::window::frame::clamp_size((size.0, rt.content_height()), min, max);
             rt.set_viewport(size, env.scale);
             spec.size = size;
             args.size = None;

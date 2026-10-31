@@ -157,7 +157,6 @@ pub mod tooling;
 mod window;
 mod reopen;
 mod drop_pointer;
-mod window_frame;
 pub use frame::encoded::{FrameEncoded, FrameOutcome};
 mod frame;
 pub use input_time::last_input;

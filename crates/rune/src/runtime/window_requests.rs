@@ -34,7 +34,7 @@ impl<S: 'static> Runtime<S> {
         let jump = first || tx.instant || tx.relayout || self.reduced_motion;
         // Only a macOS window and headless runs move the frame on a spring.
         if !jump && self.window_resting && (cfg!(target_os = "macos") || self.wall_start.is_none()) { self.fit_hold = true; }
-        let request = crate::window_frame::FrameRequest {
+        let request = crate::window::frame::FrameRequest {
             size: Some((self.viewport.0, height)), animate: !jump,
             spring: (!jump).then(|| tx.motion.unwrap_or(motion::DEFAULT)), center: false,
         };

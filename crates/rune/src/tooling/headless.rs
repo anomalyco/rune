@@ -115,7 +115,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     // Only limits the app set: the canvas opens at any size, below the default minimum too.
     let limits = (app_options.min_size.or(spec.min_size).unwrap_or((0.0, 0.0)), app_options.max_size);
     if fit_height {
-        let height = crate::window_frame::clamp_size((size.0, rt.content_height()), limits.0, limits.1).1;
+        let height = crate::window::frame::clamp_size((size.0, rt.content_height()), limits.0, limits.1).1;
         rt.set_viewport((size.0, height), scale);
     }
     if args.tree.is_some() { rt.key_warnings = Some(Vec::new()); }
@@ -458,9 +458,9 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
 
 /// Takes the size handlers asked for a headless window, inside the limits the app set; its
 /// viewport moves there on the virtual clock from `start`. Centring has nothing to centre on.
-fn take_window_frame<S>(rt: &mut Runtime<S>, anim: &mut Option<crate::window_frame::FrameAnim>, start: f64,
+fn take_window_frame<S>(rt: &mut Runtime<S>, anim: &mut Option<crate::window::frame::FrameAnim>, start: f64,
     (min, max): ((f32, f32), Option<(f32, f32)>)) {
-    use crate::window_frame::{FrameAnim, clamp_size};
+    use crate::window::frame::{FrameAnim, clamp_size};
     rt.fit_held = false;
     let Some(request) = rt.window_frame.take() else { return };
     let Some(size) = request.size else { return };
@@ -470,9 +470,9 @@ fn take_window_frame<S>(rt: &mut Runtime<S>, anim: &mut Option<crate::window_fra
 }
 
 /// Moves a headless window's viewport one frame along, before the frame lays out.
-fn step_window_frame<S>(rt: &mut Runtime<S>, anim: &mut Option<crate::window_frame::FrameAnim>, now: f64, scale: f32) {
+fn step_window_frame<S>(rt: &mut Runtime<S>, anim: &mut Option<crate::window::frame::FrameAnim>, now: f64, scale: f32) {
     let Some(moving) = *anim else { return };
-    let [_, _, w, h] = crate::window_frame::snap(moving.sample(now).0, scale);
+    let [_, _, w, h] = crate::window::frame::snap(moving.sample(now).0, scale);
     rt.step_viewport((w, h), scale);
     if moving.done(now) { *anim = None; }
 }

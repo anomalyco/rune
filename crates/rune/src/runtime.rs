@@ -617,7 +617,7 @@ pub struct Runtime<S: 'static> {
     file_dialog_answers: Vec<(u64, crate::file_dialog::AnswerFn)>,
     next_file_dialog: u64,
     /// A frame change for the window (`Tx::resize_window`), with its spring resolved.
-    pub(crate) window_frame: Option<crate::window_frame::FrameRequest>,
+    pub(crate) window_frame: Option<crate::window::frame::FrameRequest>,
     /// The window's title (`Tx::set_title`), from `AppSpec`'s.
     pub(crate) window_title: window_requests::Title,
     /// The window's height follows the root's natural height (`App::fit_content_height`).

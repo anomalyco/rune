@@ -55,7 +55,7 @@ pub struct Tx {
     pub(crate) trace: Option<TraceCalls>,
     pub(crate) popups: Vec<crate::popup_menu::Call>,
     pub(crate) file_dialogs: Vec<crate::file_dialog::Call>,
-    pub(crate) window_frame: Option<crate::window_frame::FrameRequest>,
+    pub(crate) window_frame: Option<crate::window::frame::FrameRequest>,
     /// The mouse button driving this press or drag (`Tx::button`).
     pub(crate) button: crate::PointerButton,
     /// Modifier keys held as the handler runs.
@@ -226,12 +226,12 @@ impl Tx {
     /// clock, so `--tree` and scripts see it; their frames keep the launch canvas size.
     /// Overlays ignore it: use `OverlayHandle::resize`.
     pub fn resize_window(&mut self, size: (f32, f32)) {
-        self.frame_request(crate::window_frame::FrameRequest { size: Some(size), animate: true, ..Default::default() });
+        self.frame_request(crate::window::frame::FrameRequest { size: Some(size), animate: true, ..Default::default() });
     }
 
     /// [`Tx::resize_window`] without the animation.
     pub fn resize_window_instant(&mut self, size: (f32, f32)) {
-        self.frame_request(crate::window_frame::FrameRequest { size: Some(size), ..Default::default() });
+        self.frame_request(crate::window::frame::FrameRequest { size: Some(size), ..Default::default() });
     }
 
     /// Centre the window on its screen as AppKit's `center` does: centred across, slightly
@@ -239,7 +239,7 @@ impl Tx {
     /// size, on the same spring; alone it jumps, or retargets a resize already moving.
     /// Wayland and headless runs ignore it.
     pub fn center_window(&mut self) {
-        self.frame_request(crate::window_frame::FrameRequest { center: true, ..Default::default() });
+        self.frame_request(crate::window::frame::FrameRequest { center: true, ..Default::default() });
     }
 
     /// Drop keyboard focus, as a click on empty space does: after this handler, nothing is
@@ -314,7 +314,7 @@ impl Tx {
         self.font_families = Some((sans.into(), mono.into()));
     }
 
-    fn frame_request(&mut self, request: crate::window_frame::FrameRequest) {
+    fn frame_request(&mut self, request: crate::window::frame::FrameRequest) {
         self.window_frame = Some(self.window_frame.unwrap_or_default().merge(request));
     }
 
