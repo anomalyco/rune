@@ -13,7 +13,7 @@ enum Width {
 
 use rune::{El, TextStyle, Tx, el, row, text};
 
-use crate::{Kit, State};
+use crate::{Badge, Kit, State};
 
 type Pick = Box<dyn Fn(usize) -> Box<dyn FnOnce(El) -> El>>;
 
@@ -22,6 +22,7 @@ pub struct SegmentedControl {
     selected: Option<usize>,
     width: Width,
     states: Vec<State>,
+    badges: Vec<Option<String>>,
     pick: Option<Pick>,
 }
 
@@ -32,6 +33,7 @@ impl SegmentedControl {
             selected,
             width: Width::Points(232.0),
             states: Vec::new(),
+            badges: Vec::new(),
             pick: None,
         }
     }
@@ -51,6 +53,14 @@ impl SegmentedControl {
             self.states.resize(i + 1, State::Rest);
         }
         self.states[i] = s;
+        self
+    }
+    /// A small badge after segment `i`'s label ("Fast", "New"), counted in its width.
+    pub fn badge(mut self, i: usize, label: impl Into<String>) -> Self {
+        if self.badges.len() <= i {
+            self.badges.resize(i + 1, None);
+        }
+        self.badges[i] = Some(label.into());
         self
     }
     pub fn on_pick<S: 'static>(mut self, f: impl Fn(&mut S, usize, &mut Tx) + Clone + 'static) -> Self {
@@ -104,18 +114,27 @@ impl SegmentedControl {
             if hovers {
                 label = label.group_color(c.text_base);
             }
+            let badge = self.badges.get(i).cloned().flatten();
+            let name = match &badge {
+                Some(b) => format!("{l}, {b}"),
+                None => l.clone(),
+            };
             let mut seg = row()
                 .key(format!("segment{i}"))
                 .role("radio")
                 .focusable(st != State::Disabled).focus_selected(on).focus_ring(2.0, 1.0, c.border_focus)
-                .label(l.clone())
+                .label(name)
                 .grow(1.0)
                 .shrink()
                 .h(28.0)
                 .px(12.0)
+                .gap(6.0)
                 .center()
                 .radius(6.0)
                 .child(label);
+            if let Some(b) = badge {
+                seg = seg.child(Badge::new(b).build(k).key("badge"));
+            }
             if self.width == Width::Fit {
                 seg = seg.grid_cell(i);
             }
