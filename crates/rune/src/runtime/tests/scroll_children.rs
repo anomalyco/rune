@@ -1,16 +1,17 @@
 use super::*;
 use crate::el::{GrowthSpec, ScrollSpec, row};
 
+fn fifty_rows_view(_: &(), _: &mut Cx<()>) -> El {
+    col()
+        .key("scroll")
+        .size(200.0, 200.0)
+        .scroll(ScrollSpec { stick_bottom: false })
+        .children((0..50).map(|i| row().key(format!("r{i}")).w_full().h(30.0)))
+}
+
 #[test]
 fn scroll_with_fifty_direct_row_children_scrolls_to_the_last_row() {
-    fn view(_: &(), _: &mut Cx<()>) -> El {
-        col()
-            .key("scroll")
-            .size(200.0, 200.0)
-            .scroll(ScrollSpec { stick_bottom: false })
-            .children((0..50).map(|i| row().key(format!("r{i}")).w_full().h(30.0)))
-    }
-    let mut rt = Runtime::new((), view, (200.0, 200.0), Env::new(true, 1.0));
+    let mut rt = Runtime::new((), fifty_rows_view, (200.0, 200.0), Env::new(true, 1.0));
     rt.frame(0.0);
     let last = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("r49")).unwrap();
     assert_eq!(last.rect[1], 1470.0);
@@ -74,14 +75,7 @@ fn stick_bottom_with_several_direct_children_stays_pinned_as_rows_arrive() {
 
 #[test]
 fn scroll_into_view_reaches_the_fortieth_direct_child() {
-    fn view(_: &(), _: &mut Cx<()>) -> El {
-        col()
-            .key("scroll")
-            .size(200.0, 200.0)
-            .scroll(ScrollSpec { stick_bottom: false })
-            .children((0..50).map(|i| row().key(format!("r{i}")).w_full().h(30.0)))
-    }
-    let mut rt = Runtime::new((), view, (200.0, 200.0), Env::new(true, 1.0));
+    let mut rt = Runtime::new((), fifty_rows_view, (200.0, 200.0), Env::new(true, 1.0));
     rt.frame(0.0);
     rt.update(|_, tx| tx.scroll_into_view("r39"));
     rt.frame(1.0 / 60.0);

@@ -292,6 +292,15 @@ impl TextEdit {
             .find_map(|m| (m.start <= a && b <= m.end).then(|| m.mark.link_url()).flatten())
     }
 
+    fn edit_pending_marks(&mut self, pos: usize, f: impl FnOnce(&mut Vec<Mark>)) {
+        if self.blocks.get(self.line_of_byte(pos)) == Some(&Block::Code) {
+            return;
+        }
+        let mut active = self.active_marks();
+        f(&mut active);
+        self.pending = Some(((self.anchor, self.focus), active));
+    }
+
     /// Toggle `mark` on the selection, or in the pending typing style when the selection is empty.
     /// Inside a [`Block::Code`] paragraph, inline marks do not apply, nor does a mark the field
     /// doesn't [allow](Self::allow_marks).
@@ -302,24 +311,19 @@ impl TextEdit {
         self.sync_invariants();
         let (a, b) = self.range();
         if a == b {
-            if mark.is_pill() {
-                return;
+            if !mark.is_pill() {
+                self.edit_pending_marks(a, |active| {
+                    if let Some(pos) = active.iter().position(|m| m.same_kind(&mark)) {
+                        if active[pos] == mark || matches!(mark, Mark::Link(ref u) if u.is_empty()) {
+                            active.remove(pos);
+                        } else {
+                            active[pos] = mark;
+                        }
+                    } else {
+                        active.push(mark);
+                    }
+                });
             }
-            let line_idx = self.line_of_byte(a);
-            if self.blocks.get(line_idx) == Some(&Block::Code) {
-                return;
-            }
-            let mut active = self.active_marks();
-            if let Some(pos) = active.iter().position(|m| m.same_kind(&mark)) {
-                if active[pos] == mark || matches!(mark, Mark::Link(ref u) if u.is_empty()) {
-                    active.remove(pos);
-                } else {
-                    active[pos] = mark;
-                }
-            } else {
-                active.push(mark);
-            }
-            self.pending = Some(((self.anchor, self.focus), active));
             return;
         }
         if self.range_has_mark(a, b, &mark) {
@@ -337,20 +341,15 @@ impl TextEdit {
         self.sync_invariants();
         let (a, b) = self.range();
         if a == b {
-            if mark.is_pill() {
-                return;
+            if !mark.is_pill() {
+                self.edit_pending_marks(a, |active| {
+                    if let Some(pos) = active.iter().position(|m| m.same_kind(&mark)) {
+                        active[pos] = mark;
+                    } else {
+                        active.push(mark);
+                    }
+                });
             }
-            let line_idx = self.line_of_byte(a);
-            if self.blocks.get(line_idx) == Some(&Block::Code) {
-                return;
-            }
-            let mut active = self.active_marks();
-            if let Some(pos) = active.iter().position(|m| m.same_kind(&mark)) {
-                active[pos] = mark;
-            } else {
-                active.push(mark);
-            }
-            self.pending = Some(((self.anchor, self.focus), active));
             return;
         }
         self.break_history_group();

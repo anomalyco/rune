@@ -107,7 +107,7 @@ impl std::fmt::Debug for ClipboardContent {
 /// carries the clipboard's other forms.
 pub const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 /// The most pixels a pasted image may have (64 MP, e.g. an 8K screenshot: 256 MiB of RGBA).
-pub(crate) const MAX_IMAGE_PIXELS: u64 = 64 * 1024 * 1024;
+const MAX_IMAGE_PIXELS: u64 = 64 * 1024 * 1024;
 
 pub(crate) fn valid_image_size(width: u32, height: u32) -> bool {
     width > 0 && height > 0 && u64::from(width) * u64::from(height) <= MAX_IMAGE_PIXELS
