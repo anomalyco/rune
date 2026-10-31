@@ -141,6 +141,9 @@ fn scroll_edge_fades_allocate_nothing_per_frame() {
 
 #[test]
 fn a_cached_ink_probe_allocates_nothing() {
+    // Initialize fonts before ink records its cache epoch, and keep other test threads'
+    // text systems from invalidating that epoch while we measure cache hits.
+    let _families = rune::text::with_families("Inter", "IBM Plex Mono");
     let style = rune::TextStyle::new(12.0, 400.0);
     let first = rune::text::ink("⌘K", style);
     assert!(first.is_some());
