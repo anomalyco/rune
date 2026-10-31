@@ -244,6 +244,8 @@ impl<T: 'static> Overlay<T> {
             if !self.frameless() && !self.backing_off(now) {
                 // Like the window host, poll once in the upcoming frame, after acquiring
                 // the drawable. A false poll result does not keep the display loop alive.
+                // Resting, it may draw nothing new (`Quiet`).
+                self.quiet.timer |= self.idle && !self.dirty;
                 self.dirty = true;
             } else {
                 // No frame will come to run it in time: a hidden, occluded or backing-off
@@ -288,7 +290,7 @@ impl<T: 'static> Overlay<T> {
     pub(super) fn backing_off(&self, now: Instant) -> bool { self.retry.is_some_and(|retry| retry > now) }
 
     /// What paces the overlay's frames, for its stats.
-    fn pacing_state(&self, moving: bool) -> crate::Pacing {
+    pub(super) fn pacing_state(&self, moving: bool) -> crate::Pacing {
         #[cfg(target_os = "macos")]
         return crate::platform::display_link::pacing(self.live.as_ref().and_then(|l| l.pacing.as_ref()), moving);
         #[cfg(not(target_os = "macos"))]

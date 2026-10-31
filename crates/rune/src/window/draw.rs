@@ -79,8 +79,15 @@ impl<S: 'static> Host<S> {
         }
         #[cfg(target_os = "macos")]
         let _prewarm = if hidden { l.native.panel.as_ref().map(|p| p.prewarm()) } else { None };
+        // Only a timer woke the resting window, so its frame may draw what's on screen. It
+        // decides that before starting the display link, which would draw it at once anyway.
         #[cfg(target_os = "macos")]
-        let target = if hidden || resizing { None } else if let Some(pacing) = &mut l.native.pacing {
+        let deferred = l.quiet && !hidden && !resizing && l.native.prime == 0
+            && l.native.pacing.as_ref().is_some_and(|p| p.defers_start(Instant::now()));
+        #[cfg(not(target_os = "macos"))]
+        let deferred = false;
+        #[cfg(target_os = "macos")]
+        let target = if hidden || resizing || deferred { None } else if let Some(pacing) = &mut l.native.pacing {
             if l.native.prime > 0 && !pacing.running() {
                 None
             } else {
@@ -105,7 +112,7 @@ impl<S: 'static> Host<S> {
         }
         #[cfg(not(target_os = "macos"))]
         let target: Option<Instant> = None;
-        if !hidden { self.meter.redraw(l.paced_for_stats()); }
+        if !hidden { self.meter.redraw(l.paced_for_stats() || deferred); }
         #[cfg(target_os = "macos")]
         let live_resize = !hidden && (resizing || crate::platform::macos::in_live_resize(&l.window));
         #[cfg(not(target_os = "macos"))]
@@ -135,8 +142,12 @@ impl<S: 'static> Host<S> {
             self.rt.window_resting = true;
             let (animating, dt) = self.clock.advance(&mut self.rt, target.unwrap_or(now), false);
             let rt = &mut self.rt;
+            #[cfg(target_os = "macos")]
+            let next_tick = if deferred { l.native.pacing.as_ref().map(|p| p.tick_after(now)) } else { l.next_tick(now) };
+            #[cfg(not(target_os = "macos"))]
+            let next_tick = l.next_tick(now);
             if renderer.srgb_blend() == rt.srgb_blend()
-                && l.presented.as_ref().is_some_and(|p| p.unchanged(rt, &l.config, animating, l.next_tick(now))) {
+                && l.presented.as_ref().is_some_and(|p| p.unchanged(rt, &l.config, animating, next_tick)) {
                 sync_platform(l, rt, &mut self.secure_input, &mut self.ime_allowed, &self.clipboard);
                 l.stop_pacing();
                 self.meter.set_pacing(l.pacing_state(false));
@@ -147,6 +158,9 @@ impl<S: 'static> Host<S> {
         } else {
             None
         };
+        // It draws: the link starts, and still says draw at once.
+        #[cfg(target_os = "macos")]
+        if deferred && let Some(pacing) = &mut l.native.pacing { let _ = pacing.next_frame(); }
         let frame = match acquire(&l.surface, &gpu.device, &l.config, 1, &mut self.meter) {
             Ok(frame) => frame,
             Err(_) if hidden => { l.retry = l.first_frame.missed(Instant::now(), &mut l.hidden_wait); self.frame_reports.skipped(); return; }

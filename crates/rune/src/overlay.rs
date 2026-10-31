@@ -340,6 +340,7 @@ pub(crate) struct Overlay<T: 'static> {
     idle: bool,
     /// After the last frame the runtime asked for no other; only the compositor animates.
     runtime_idle: bool,
+    quiet: frame::Quiet,
     clock: FrameClock,
     /// The panel is shown but none of it is on screen (covered, or the displays asleep).
     #[cfg(target_os = "macos")]
@@ -418,6 +419,7 @@ impl<T: 'static> Overlay<T> {
             dirty: true,
             idle: true,
             runtime_idle: false,
+            quiet: Default::default(),
             clock: FrameClock::new(Instant::now()),
             #[cfg(target_os = "macos")]
             occluded: false,
@@ -566,6 +568,7 @@ impl<T: 'static> Overlay<T> {
         if let Some(live) = &mut self.live && let Some(pacing) = &mut live.pacing { pacing.stop(); }
         self.rt.set_live_visible(false);
         self.retry = None;
+        self.quiet = Default::default();
     }
 
     /// Ends a fade-out that has run its course.

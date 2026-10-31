@@ -11,7 +11,7 @@ pub(super) fn composing<S: 'static>(comp: Option<&dyn Compositor<S>>) -> bool {
 /// taking a drawable; when it would draw these same pixels, nothing is acquired or presented.
 /// A compositor's frame lets the window rest but never counts as the same: it may draw
 /// differently from the same instances.
-pub(super) struct Presented {
+pub(crate) struct Presented {
     instances: Vec<crate::render::Instance>,
     clear: [f32; 4],
     size: (u32, u32),
@@ -36,7 +36,7 @@ impl Presented {
         idle
     }
 
-    pub(super) fn record<S: 'static>(this: &mut Option<Self>, rt: &Runtime<S>, config: &wgpu::SurfaceConfiguration, composed: bool) {
+    pub(crate) fn record<S: 'static>(this: &mut Option<Self>, rt: &Runtime<S>, config: &wgpu::SurfaceConfiguration, composed: bool) {
         let (clear, size, srgb, scale, transparent) = (rt.clear_color(), (config.width, config.height), rt.srgb_blend(), rt.env.scale, rt.transparent);
         let p = this.get_or_insert_with(|| Self {
             instances: Vec::new(), clear, size, format: config.format, srgb, scale, transparent, composed,
@@ -48,7 +48,7 @@ impl Presented {
     /// Whether a timer frame `rt` built before taking a drawable can go without one: nothing
     /// moves or waits, no timer wants the display link's next tick (`next_tick`), and it draws
     /// what this frame did.
-    pub(super) fn unchanged<S: 'static>(&self, rt: &Runtime<S>, config: &wgpu::SurfaceConfiguration, animating: bool,
+    pub(crate) fn unchanged<S: 'static>(&self, rt: &Runtime<S>, config: &wgpu::SurfaceConfiguration, animating: bool,
         next_tick: Option<crate::time::Instant>) -> bool {
         !animating && !rt.has_pending_input() && !rt.live_pending() && rt.window_frame.is_none()
             && !super::timer_wants_frame(rt, next_tick) && self.same(rt, config)

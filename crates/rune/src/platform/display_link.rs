@@ -173,6 +173,16 @@ impl DisplayLink {
         next
     }
 
+    /// Whether a frame that may draw nothing (a timer's, on a resting surface) can decide that
+    /// before starting the link: it's stopped, and `next_frame` would answer `Now` whenever
+    /// asked from here on, so starting it once the frame turns out to draw paces it the same.
+    pub(crate) fn defers_start(&self, now: Instant) -> bool {
+        defers_start(self.running, self.last_present, self.last_target, now, self.frame_period())
+    }
+
+    /// The tick after `now`, as if the link were running.
+    pub(crate) fn tick_after(&self, now: Instant) -> Instant { now + self.frame_period() }
+
     pub(crate) fn presented(&mut self, at: Instant) {
         self.last_present = Some(at);
     }
@@ -241,9 +251,33 @@ fn rested(last: Option<Instant>, last_target: Option<Instant>, now: Instant, per
         && last.is_none_or(|last| now.saturating_duration_since(last) >= period * 3 / 2)
 }
 
+/// A stopped link has no tick waiting (`stop` clears it), so a rested surface's next frame is
+/// `Now` until the link starts: deciding first costs it no pacing.
+fn defers_start(running: bool, last: Option<Instant>, last_target: Option<Instant>, now: Instant, period: Duration) -> bool {
+    !running && rested(last, last_target, now, period)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_frame_defers_starting_the_link_only_when_it_would_draw_at_once_anyway() {
+        let t = Instant::now();
+        let ms = |n| t + Duration::from_millis(n);
+        let period = Duration::from_millis(8);
+        // A timer 33 ms after the last frame: whenever it starts the link, it draws at once.
+        assert!(defers_start(false, Some(ms(100)), Some(ms(104)), ms(133), period));
+        for later in [133, 134, 150, 500] {
+            assert_eq!(opportunity(None, Some(ms(100)), Some(ms(104)), ms(later), period), Opportunity::Now);
+        }
+        assert!(defers_start(false, None, None, ms(0), period));
+        // The last frame may still be queued: start the link now and wait for its tick.
+        assert!(!defers_start(false, Some(ms(100)), Some(ms(100)), ms(105), period));
+        assert!(!defers_start(false, Some(ms(100)), Some(ms(130)), ms(120), period));
+        // A running link already paces the surface.
+        assert!(!defers_start(true, Some(ms(100)), Some(ms(104)), ms(133), period));
+    }
     #[test]
     fn late_frames_and_idle_restarts_cannot_catch_up_in_a_burst() {
         let t = Instant::now();

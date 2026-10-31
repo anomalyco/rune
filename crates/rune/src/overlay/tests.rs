@@ -603,4 +603,55 @@ fn overlay_live_values_resume_before_retained_reveal_and_stop_on_hide() {
 }
 
 
+/// A resting overlay's timer frame builds before it takes a drawable or a display tick: one
+/// whose poll changes state but nothing on screen draws nothing, and one that changes what
+/// it shows draws, with the step it already took.
+#[test]
+fn a_timer_frame_that_changes_nothing_on_screen_draws_nothing() {
+    #[derive(Default)]
+    struct S { polls: u32, width: f32, grow: bool }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        crate::el().child(crate::el().key("box").size(10.0 + s.width, 8.0).fill(crate::Color::WHITE))
+    }
+    fn poll(s: &mut S, _: f64, tx: &mut Tx) -> bool {
+        s.polls += 1;
+        if s.grow { s.width += 1.0; }
+        tx.wake_after(Duration::from_millis(33));
+        true
+    }
+    let app = AppSpec { poll: Some(poll), ..AppSpec::new("quiet timer", (100.0, 40.0), S::default, view) };
+    let (mut overlay, _) = Overlay::new(OverlaySpec::new("quiet timer", app.size, view).options(Default::default()), S::default(), &app);
+    overlay.rt.wall_start = None;
+    let config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: wgpu::TextureFormat::Bgra8UnormSrgb,
+        width: 200,
+        height: 80,
+        present_mode: wgpu::PresentMode::AutoVsync,
+        desired_maximum_frame_latency: 2,
+        alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied,
+        view_formats: vec![],
+        color_space: Default::default(),
+    };
+    let start = Instant::now();
+    present(&mut overlay, start);
+    assert!(overlay.idle, "only the timer asks for another frame");
+    let mut quiet = frame::Quiet::default();
+    quiet.presented(&overlay.rt, &config, false);
+    assert!(quiet.presented.is_none(), "a frame it doesn't rest on records nothing");
+    quiet.presented(&overlay.rt, &config, true);
+    let presented = quiet.presented.as_ref().unwrap();
+
+    let at = start + Duration::from_millis(33);
+    let polls = overlay.rt.state.polls;
+    assert_eq!(frame::quiet_step(&mut overlay.rt, &mut overlay.clock, presented, &config, at, Some(at + FRAME)), None);
+    assert_eq!(overlay.rt.state.polls, polls + 1, "the timer's poll ran");
+
+    overlay.rt.state.grow = true;
+    let at = at + Duration::from_millis(33);
+    assert!(frame::quiet_step(&mut overlay.rt, &mut overlay.clock, presented, &config, at, Some(at + FRAME)).is_some(),
+        "a poll that changes what's on screen draws");
+}
+
+
 include!("more_tests.rs");

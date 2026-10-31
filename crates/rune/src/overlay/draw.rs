@@ -25,6 +25,7 @@ impl<T: 'static> Overlay<T> {
     }
 
     pub(super) fn draw_frame(&mut self, prewarm: bool) -> bool {
+        let timer = std::mem::take(&mut self.quiet.timer);
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Some(Live { backing: Backing::Layer(layer), .. }) = self.live.as_mut() {
             let changes = layer.dispatch();
@@ -105,6 +106,29 @@ impl<T: 'static> Overlay<T> {
         let (Some(live), Some(renderer), Some(gpu)) = (self.live.as_mut(), self.renderer.as_mut(), self.gpu.as_ref()) else {
             return false;
         };
+        // Only a timer woke the resting overlay: build the frame first, and take neither a
+        // drawable nor a display tick when it draws what's on screen. The link, stopped, would
+        // draw it at once anyway (`defers_start`).
+        let quiet = self.quiet.presented.as_ref().filter(|_| timer && !prewarm && self.compositor.is_none()
+            && !self.rt.has_pending_input() && renderer.srgb_blend() == self.rt.srgb_blend());
+        #[cfg(target_os = "macos")]
+        let quiet = quiet.filter(|_| live.pacing.as_ref().is_none_or(|p| p.defers_start(Instant::now())));
+        let built = match quiet {
+            Some(presented) => {
+                let now = Instant::now();
+                #[cfg(target_os = "macos")]
+                { self.rt.native_materials = live.materials.native(); }
+                #[cfg(target_os = "macos")]
+                let next_tick = live.pacing.as_ref().map(|p| p.tick_after(now));
+                #[cfg(not(target_os = "macos"))]
+                let next_tick = None;
+                match frame::quiet_step(&mut self.rt, &mut self.clock, presented, &live.config, now, next_tick) {
+                    Some((animating, dt)) => Some((animating, dt, now)),
+                    None => return self.unchanged_frame(),
+                }
+            }
+            None => None,
+        };
         #[cfg(target_os = "macos")]
         let target = {
             let opportunity = if prewarm { None } else { live.pacing.as_mut().map(|p| p.next_frame()) };
@@ -133,14 +157,16 @@ impl<T: 'static> Overlay<T> {
                 return false;
             }
         };
-        let now = Instant::now();
+        let now = built.map_or_else(Instant::now, |(_, _, now)| now);
         #[cfg(not(target_os = "macos"))]
         let frame_time = now;
         #[cfg(target_os = "macos")]
         let frame_time = target.unwrap_or(now);
         #[cfg(target_os = "macos")]
         { self.rt.native_materials = live.materials.native(); }
-        let (mut animating, dt) = if !prewarm && frame::rests(&self.rt, self.runtime_idle, self.dirty) {
+        let (mut animating, dt) = if let Some((animating, dt, _)) = built {
+            (animating, dt)
+        } else if !prewarm && frame::rests(&self.rt, self.runtime_idle, self.dirty) {
             frame::rest(&mut self.rt, &mut self.clock, &self.compositor, frame_time)
         } else {
             step(&mut self.rt, &mut self.clock, &self.compositor, frame_time, prewarm)
@@ -220,6 +246,7 @@ impl<T: 'static> Overlay<T> {
         let next_tick = None;
         self.idle = idle_after(&self.rt, animating, next_tick);
         self.runtime_idle = !prewarm && idle_after(&self.rt, runtime_animating, next_tick);
+        self.quiet.presented(&self.rt, &live.config, !prewarm && self.idle && self.compositor.is_none());
         if !prewarm { self.occluded_wait = crate::window::OCCLUDED_RETRY; }
         // The display link wakes this overlay, never ControlFlow::Poll. Without one (it can't
         // be made while the displays sleep, or didn't start), a timer paces its motion.
@@ -247,12 +274,27 @@ impl<T: 'static> Overlay<T> {
         }
     }
 
+    /// A timer frame that would draw what's on screen: what a drawn frame does besides drawing.
+    fn unchanged_frame(&mut self) -> bool {
+        super::input::drop_window_requests(&mut self.rt);
+        self.clipboard.flush(&mut self.rt);
+        self.publish_regions();
+        self.meter.redraw(true);
+        self.dirty = false;
+        self.idle = true;
+        self.runtime_idle = true;
+        self.meter.set_pacing(self.pacing_state(false));
+        false
+    }
+
     /// Records whether the shown panel is on screen. Occluded, it stops its display link,
     /// ambient loops and live values; uncovered, it redraws once and resumes them.
     #[cfg(target_os = "macos")]
     pub(super) fn occluded(&mut self, occluded: bool) {
         self.occluded = occluded;
         self.idle = true;
+        // What it last presented may not be what shows once uncovered.
+        self.quiet = Default::default();
         if occluded {
             if let Some(live) = &mut self.live && let Some(pacing) = &mut live.pacing { pacing.stop(); }
             self.rt.set_live_visible(false);

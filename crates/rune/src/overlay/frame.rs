@@ -7,6 +7,7 @@ use crate::frame::clock::FrameClock;
 use crate::render::{Gpu, Renderer};
 use crate::runtime::Runtime;
 use crate::time::Instant;
+use crate::window::Presented;
 
 /// Whether nothing asks for the frame after one just presented. `next_tick` is the running
 /// display link's next tick, if one paces the overlay: a timer due by then counts as asking,
@@ -24,6 +25,33 @@ pub(super) fn step<T: 'static>(rt: &mut Runtime<T>, clock: &mut FrameClock, comp
         return (rt.frame(0.0), 0.0);
     }
     clock.advance(rt, frame_time, compositor.as_ref().is_some_and(|c| c.animating()))
+}
+
+/// What a shown overlay's last frame drew while it rests, and whether only a due timer asked
+/// for the next. That frame builds before it takes a drawable or starts the display link, and
+/// draws nothing when it would draw the same pixels: a poll that wakes on a timer and changes
+/// nothing on screen presents nothing.
+#[derive(Default)]
+pub(super) struct Quiet {
+    pub(super) timer: bool,
+    pub(super) presented: Option<Presented>,
+}
+
+impl Quiet {
+    /// After a frame presents: it rests on that frame, or its pixels are no longer known (a
+    /// prewarm frame, motion, a compositor).
+    pub(super) fn presented<T: 'static>(&mut self, rt: &Runtime<T>, config: &wgpu::SurfaceConfiguration, rests: bool) {
+        if rests { Presented::record(&mut self.presented, rt, config, false) } else { self.presented = None }
+    }
+}
+
+/// A resting overlay's timer frame, stepped before any drawable: `None` when it draws what
+/// `presented` shows and nothing asks for the next (`next_tick`: the display link's next tick,
+/// had it run), else the step's `(animating, dt)` to draw with.
+pub(super) fn quiet_step<T: 'static>(rt: &mut Runtime<T>, clock: &mut FrameClock, presented: &Presented,
+    config: &wgpu::SurfaceConfiguration, now: Instant, next_tick: Option<Instant>) -> Option<(bool, f64)> {
+    let (animating, dt) = step(rt, clock, &None, now, false);
+    (!presented.unchanged(rt, config, animating, next_tick)).then_some((animating, dt))
 }
 
 /// Whether a frame can leave the runtime as it is, drawing its last build again: after the
