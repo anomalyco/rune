@@ -120,6 +120,15 @@ fn skin(k: &Kit, v: ButtonVariant) -> Skin {
     }
 }
 
+impl Skin {
+    /// An open menu's trigger: the pressed fill alone. Hover and press overlays on top of it would
+    /// draw it lighter than pressed under the pointer, and brighter still while clicked to close.
+    fn hold_pressed(&mut self) {
+        self.fill = self.pressed;
+        (self.hover, self.pressed) = (Color::TRANSPARENT, Color::TRANSPARENT);
+    }
+}
+
 /// Paints `skin` on `e` for `state`. Rest leaves hover/press to the runtime.
 fn paint(k: &Kit, mut e: El, s: Skin, state: State, interactive: bool) -> El {
     e = e.focusable(interactive && state != State::Disabled).focus_ring(2.0, 2.5, k.c.border_focus);
@@ -273,7 +282,8 @@ impl Button {
         }
         self
     }
-    /// The trigger of an open menu or popover (`data-expanded`): ghost variants hold the pressed fill.
+    /// The trigger of an open menu or popover (`data-expanded`): ghost variants hold the pressed fill,
+    /// without hover or press overlays.
     pub fn expanded(mut self, on: bool) -> Self {
         self.expanded = on;
         self
@@ -314,7 +324,7 @@ impl Button {
         let ghostly =
             matches!(self.variant, ButtonVariant::Ghost | ButtonVariant::GhostMuted | ButtonVariant::GhostFaint);
         if self.expanded && ghostly && self.state != State::Disabled {
-            s.fill = s.pressed;
+            s.hold_pressed();
             if self.variant == ButtonVariant::GhostMuted {
                 (s.ink, s.icon) = (k.c.text_base, k.c.icon_base);
             }
@@ -485,7 +495,7 @@ impl IconButton {
             s.icon = k.c.icon_base;
         }
         if self.expanded && matches!(self.variant, IconButtonVariant::Ghost | IconButtonVariant::GhostMuted) {
-            s.fill = s.pressed;
+            s.hold_pressed();
             s.icon = if self.variant == IconButtonVariant::GhostMuted { k.c.icon_base } else { s.icon };
         }
         let ink = s.icon;

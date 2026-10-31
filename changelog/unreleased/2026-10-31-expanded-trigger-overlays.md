@@ -1,0 +1,1 @@
+- An expanded ghost `Button` or `IconButton` (the trigger of an open menu) draws the pressed fill alone: it no longer adds the hover overlay under the pointer, or the press overlay while clicked to close, so it stops brightening past pressed and holds one look while open.
