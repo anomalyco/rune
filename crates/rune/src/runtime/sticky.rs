@@ -651,6 +651,12 @@ impl<S: 'static> Runtime<S> {
         moved
     }
 
+    /// A user or explicit scroll ends the holds and reveals that would pull the view back.
+    pub(super) fn drop_scroll_holds(&mut self) {
+        self.keeps.clear();
+        self.scroll_reveals.clear();
+    }
+
     /// Colour, hover or decorative motion must not extend the anchor's lifetime.
     pub(super) fn finish_keeps(&mut self) {
         if self.keeps.is_empty() && self.scroll_reveals.is_empty() { return; }

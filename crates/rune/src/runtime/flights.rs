@@ -87,6 +87,16 @@ impl Launched {
 }
 
 impl<S: 'static> Runtime<S> {
+    /// Starts the text flights and launches handlers asked for this frame.
+    pub(super) fn capture_flights(&mut self, tx: &mut Tx) {
+        for (source, target) in std::mem::take(&mut tx.text_flights) {
+            self.capture_text_flight(source, target);
+        }
+        for (source, target) in std::mem::take(&mut tx.launches) {
+            self.capture_launch(source, target);
+        }
+    }
+
     /// Flights drawn within a quarter of a device pixel of where their layout would show them,
     /// and moving under that a frame (60 Hz) faster than it: as good as landed, kept in the
     /// air only by their springs' settle tails. They draw on the same pixels landed.

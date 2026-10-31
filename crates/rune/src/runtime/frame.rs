@@ -370,22 +370,6 @@ impl<S: 'static> Runtime<S> {
         (at < target).then_some(at)
     }
 
-    /// A user or explicit scroll ends the holds and reveals that would pull the view back.
-    pub(super) fn drop_scroll_holds(&mut self) {
-        self.keeps.clear();
-        self.scroll_reveals.clear();
-    }
-
-    /// Starts the text flights and launches handlers asked for this frame.
-    pub(super) fn capture_flights(&mut self, tx: &mut Tx) {
-        for (source, target) in std::mem::take(&mut tx.text_flights) {
-            self.capture_text_flight(source, target);
-        }
-        for (source, target) in std::mem::take(&mut tx.launches) {
-            self.capture_launch(source, target);
-        }
-    }
-
     /// `elapsed` advances the logical clock when no wall clock drives it; `catch_up` steps
     /// running motion before the commit and `dt` steps all motion after it.
     pub(super) fn frame_step(&mut self, elapsed: f64, catch_up: f64, dt: f64) -> bool {
