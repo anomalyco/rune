@@ -1338,7 +1338,17 @@ impl<S: 'static> Runtime<S> {
                         glyph_count += 1;
                     }
                     if let (Some(c), Some(inp)) = (caret, &n.input) {
-                        self.instances.push(rect_inst(c, premul(inp.caret, o, srgb), 0.0, clip, fade));
+                        let blinks = self.window_focused == Some(true) && self.surface_visible && !self.reduced_motion;
+                        let phase = self.caret_blink.phase(&n.path, &inp.edit, self.clock, blinks);
+                        if let Some(dt) = phase.wake {
+                            let wake = self.clock + dt;
+                            if self.loop_wake.is_none_or(|w| wake < w.0) {
+                                self.loop_wake = Some((wake, self.t + dt * self.time_scale as f64));
+                            }
+                        }
+                        if phase.shown {
+                            self.instances.push(rect_inst(c, premul(inp.caret, o, srgb), 0.0, clip, fade));
+                        }
                     }
                 }
             }
