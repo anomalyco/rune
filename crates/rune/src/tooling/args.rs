@@ -44,7 +44,7 @@ pub struct Args {
     pub(crate) at_mark: Option<String>,
     pub(crate) start_mark: Option<String>,
     /// `--keys [CORNER]`: keycaps for script keys and chords over dumped frames.
-    pub(crate) keys: Option<crate::keycaps::Corner>,
+    pub(crate) keys: Option<crate::input::keycaps::Corner>,
     /// `--keys-theme light|dark`; None (`auto`) follows the app's theme.
     pub(crate) keys_theme: Option<bool>,
     /// `--pointer`: a ripple where the script presses.
@@ -146,13 +146,13 @@ impl Args {
                     a.duration = Some(if v == "auto" { Length::Auto } else { Length::Seconds(num(&v)) });
                 }
                 "--keys" => {
-                    let corner = argv.get(i + 1).and_then(|v| crate::keycaps::Corner::parse(v));
+                    let corner = argv.get(i + 1).and_then(|v| crate::input::keycaps::Corner::parse(v));
                     if corner.is_some() { i += 1; }
                     a.keys = Some(corner.unwrap_or_default());
                 }
                 "--keys-theme" => {
                     let v = val(&mut i);
-                    a.keys_theme = crate::keycaps::parse_theme(&v).unwrap_or_else(|| die("--keys-theme is auto, light or dark"));
+                    a.keys_theme = crate::input::keycaps::parse_theme(&v).unwrap_or_else(|| die("--keys-theme is auto, light or dark"));
                 }
                 "--pointer" => a.pointer = true,
                 "--desktop" => a.desktop = Some(val(&mut i).into()),

@@ -21,7 +21,7 @@ pub(crate) struct Handlers {
     pub hover_delay: [f32; 2],
     pub on_pointer_move: Option<PointerFn>,
     /// `on_wheel`, `on_magnify` and the other canvas handlers (`canvas_input.rs`).
-    pub gestures: Option<Box<crate::canvas_input::CanvasInput>>,
+    pub gestures: Option<Box<crate::input::canvas_input::CanvasInput>>,
     pub on_drag: Option<DragFn>,
     pub drag_out: Option<DragOutFn>,
     pub drag_threshold: Option<f32>,

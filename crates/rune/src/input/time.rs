@@ -100,5 +100,5 @@ fn since_boot(now: Instant, uptime: f64, timestamp: f64) -> Instant {
 }
 
 #[cfg(test)]
-#[path = "input_time_tests.rs"]
+#[path = "time_tests.rs"]
 mod tests;

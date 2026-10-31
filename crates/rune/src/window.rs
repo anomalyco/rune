@@ -276,7 +276,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         if let Some(host) = self.hosts.iter_mut().flatten().find(|h| h.owns(id)) {
-            let _input = crate::input_time::arrived(&event);
+            let _input = crate::input::time::arrived(&event);
             host.window_event(event_loop, id, event);
         }
         self.cleanup(event_loop);
@@ -360,7 +360,7 @@ struct Host<S: 'static> {
     control_click: bool,
     files: FileDrop,
     clipboard: crate::clipboard::Client,
-    secure_input: crate::secure_input::SecureInput,
+    secure_input: crate::input::secure_input::SecureInput,
     ime_allowed: bool,
     comp: Option<Box<dyn Compositor<S>>>,
     #[cfg_attr(target_os = "macos", allow(dead_code))]
@@ -828,7 +828,7 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         if self.present_log.is_some() && present.is_none() { eprintln!("rune: trace: this surface reports no present times"); }
         #[cfg(target_os = "macos")]
-        let fn_key = if self.rt.modifier_keys() { crate::fn_key::FnKey::new(&window) } else { None };
+        let fn_key = if self.rt.modifier_keys() { crate::input::fn_key::FnKey::new(&window) } else { None };
         #[cfg(target_os = "macos")]
         let full_screen = mac::FullScreenWatch::new(&window);
         #[cfg(target_os = "macos")]

@@ -46,8 +46,8 @@ impl<S: 'static> Runtime<S> {
         if let Some(rows) = &v.selection.source {
             let state = playground_host::handler_states_ref(&self.state, self.playground.as_deref());
             let mut row = (rows.build)(state, r).key(key.clone());
-            if !crate::key_diagnostics::clean(&row) {
-                let _ = crate::key_diagnostics::repair_at(&mut row, &format!("{list_path}/{key}"));
+            if !crate::input::key_diagnostics::clean(&row) {
+                let _ = crate::input::key_diagnostics::repair_at(&mut row, &format!("{list_path}/{key}"));
             }
             collect_virtual_row_selection(
                 &row, list_path, key, r,

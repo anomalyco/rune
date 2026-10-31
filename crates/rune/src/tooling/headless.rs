@@ -139,7 +139,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     let mut readback = crate::record::Readback::new(&gpu.device, &target, crate::record::DEPTH);
     let mut alpha = transparent.then(|| crate::render::surface_alpha::AlphaSurface::new(&gpu.device, target_format, (wp, hp)));
     let mut overlay = (args.keys.is_some() || args.pointer).then(|| {
-        let mut ov = crate::keycaps::Overlay::new(size, scale, args.keys, args.keys_theme, args.pointer);
+        let mut ov = crate::input::keycaps::Overlay::new(size, scale, args.keys, args.keys_theme, args.pointer);
         ov.set_srgb_blend(srgb_blend);
         let mut ui = Renderer::new(&gpu.device, target_format);
         ui.set_srgb_blend(srgb_blend);

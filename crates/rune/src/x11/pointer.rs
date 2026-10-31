@@ -4,7 +4,7 @@ use x11rb::{connection::Connection, protocol::{Event, xinput::{ConnectionExt as 
 
 pub(crate) struct MouseWatch {
     connection: Arc<RustConnection>,
-    observer: Arc<crate::pointer_observer::Observer>,
+    observer: Arc<crate::input::pointer_observer::Observer>,
     running: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
     root: u32,
@@ -17,7 +17,7 @@ impl MouseWatch {
         connection.xinput_xi_select_events(root, &[EventMask { deviceid: Device::ALL_MASTER.into(), mask: vec![XIEventMask::RAW_MOTION] }]).ok()?.check().ok()?;
         connection.flush().ok()?;
         let connection = Arc::new(connection);
-        let observer = Arc::new(crate::pointer_observer::Observer::new(wake));
+        let observer = Arc::new(crate::input::pointer_observer::Observer::new(wake));
         let running = Arc::new(AtomicBool::new(true));
         let (reader, sample, active) = (connection.clone(), observer.clone(), running.clone());
         let thread = std::thread::spawn(move || {

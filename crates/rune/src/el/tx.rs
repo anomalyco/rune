@@ -6,6 +6,9 @@ use rune_motion::{Anim, Spring};
 
 use crate::el::*;
 
+mod keys;
+mod scroll;
+
 /// What a handler may say about the commit it causes.
 #[derive(Clone, Debug, Default)]
 pub struct Tx {

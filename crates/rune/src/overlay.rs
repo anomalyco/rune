@@ -274,7 +274,7 @@ struct Live {
     materials: crate::system_material::macos::Materials,
     /// Fn presses, which winit doesn't send, while the overlay wants modifier keys.
     #[cfg(target_os = "macos")]
-    fn_key: Option<crate::fn_key::FnKey>,
+    fn_key: Option<crate::input::fn_key::FnKey>,
     alpha: Option<crate::render::surface_alpha::AlphaSurface>,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
@@ -920,7 +920,7 @@ impl<T: 'static> Overlay<T> {
         });
         #[cfg(target_os = "macos")]
         let fn_key = match &backing {
-            Backing::Window(window) if self.rt.modifier_keys() => crate::fn_key::FnKey::new(window),
+            Backing::Window(window) if self.rt.modifier_keys() => crate::input::fn_key::FnKey::new(window),
             _ => None,
         };
         Some(Live {

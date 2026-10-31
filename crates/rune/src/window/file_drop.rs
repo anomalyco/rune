@@ -9,7 +9,7 @@ pub(super) struct FileDrop {
     /// What winit reported since the last pass, in order.
     pub(super) steps: Vec<FileStep>,
     /// Samples the pointer while the drag is over the window, and where it last was.
-    pub(super) pointer: Option<crate::drop_pointer::DropPointer>,
+    pub(super) pointer: Option<crate::input::drop_pointer::DropPointer>,
     pub(super) at: Option<(f32, f32)>,
 }
 

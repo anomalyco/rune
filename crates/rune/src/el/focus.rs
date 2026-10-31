@@ -5,7 +5,7 @@ use crate::el::Outline;
 
 #[derive(Clone)]
 pub(crate) struct FocusSpec {
-    pub physical: Option<crate::physical_input::Handler>,
+    pub physical: Option<crate::input::physical_input::Handler>,
     pub enabled: bool,
     pub order: i32,
     pub group: bool,

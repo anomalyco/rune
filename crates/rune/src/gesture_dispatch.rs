@@ -2,7 +2,7 @@
 //! pinch, rotation and smart magnify, extra mouse buttons to `on_press` and `on_drag`, and key
 //! releases to `on_key_up`.
 use super::*;
-use crate::canvas_input::CanvasInput;
+use crate::input::canvas_input::CanvasInput;
 use crate::{GesturePhase, MagnifyEvent, PointerButton, RotateEvent, WheelEvent};
 
 /// A trackpad gesture at a window point, queued for the handlers under it.

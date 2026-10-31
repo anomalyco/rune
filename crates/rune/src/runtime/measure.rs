@@ -137,10 +137,10 @@ impl<S: 'static> Measurement<'_, S> {
     pub(super) fn build_tree(&mut self, mut root: El, tx: &Tx, force_all: bool) -> El {
         // Two siblings with one key would share a layout node, which Taffy panics on. Rename the
         // later ones so every build, debug or release, lays out; --tree still lists them.
-        let duplicates = crate::key_diagnostics::repair(&mut root);
+        let duplicates = crate::input::key_diagnostics::repair(&mut root);
         match self.key_warnings.as_mut() {
             Some(warnings) => *warnings = duplicates.into_iter().map(|d| d.message).collect(),
-            None => crate::key_diagnostics::warn_once(&duplicates),
+            None => crate::input::key_diagnostics::warn_once(&duplicates),
         }
         // Index-built rows build here, so memos inside them share the view's cache. A window that
         // fits its content lays its root out at its natural height, which nothing bounds.
@@ -257,19 +257,19 @@ impl<S: 'static> Measurement<'_, S> {
                 };
                 // Rows sharing a key would share a height and a node: rename the later ones, as
                 // the view's siblings are, so the list still lays out.
-                let renamed = crate::key_diagnostics::rename_duplicates(keys.iter_mut());
+                let renamed = crate::input::key_diagnostics::rename_duplicates(keys.iter_mut());
                 if !renamed.is_empty() {
                     let duplicates: Vec<_> = renamed.iter().map(|(_, key)| {
                         let key = key.clone();
                         let message = format!("duplicate virtual row key {key:?} under {path:?}; give rows unique keys");
-                        crate::key_diagnostics::Duplicate { key, message }
+                        crate::input::key_diagnostics::Duplicate { key, message }
                     }).collect();
                     if source.is_none() {
                         for (i, _) in &renamed { el.children[*i].key = Some(keys[*i].clone()); }
                     }
                     match self.key_warnings.as_mut() {
                         Some(out) => out.extend(duplicates.into_iter().map(|d| d.message)),
-                        None => crate::key_diagnostics::warn_once(&duplicates),
+                        None => crate::input::key_diagnostics::warn_once(&duplicates),
                     }
                 }
                 // A reorder keeps each row where it was drawn, by its offset or by sliding it
@@ -437,11 +437,11 @@ impl<S: 'static> Measurement<'_, S> {
                 let key = &keys[i];
                 let mut row = (rows.build)(state, i).key(key.clone());
                 // The view's key repair ran before these rows existed.
-                if crate::key_diagnostics::clean(&row) { return row; }
-                let duplicates = crate::key_diagnostics::repair_at(&mut row, &format!("{path}/{key}"));
+                if crate::input::key_diagnostics::clean(&row) { return row; }
+                let duplicates = crate::input::key_diagnostics::repair_at(&mut row, &format!("{path}/{key}"));
                 match key_warnings.as_mut() {
                     Some(out) => out.extend(duplicates.into_iter().map(|d| d.message)),
-                    None => crate::key_diagnostics::warn_once(&duplicates),
+                    None => crate::input::key_diagnostics::warn_once(&duplicates),
                 }
                 row
             };

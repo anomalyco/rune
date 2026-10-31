@@ -689,7 +689,7 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
     let mut readback = crate::record::Readback::new(&gpu.device, &target, crate::record::DEPTH);
     let mut slots: Vec<Option<Slot>> = (0..n).map(|_| None).collect();
     let mut overlay = (args.keys.is_some() || args.pointer)
-        .then(|| (crate::keycaps::Overlay::new(size, scale, args.keys, args.keys_theme, args.pointer), Renderer::new(&gpu.device, OFFSCREEN_FORMAT)));
+        .then(|| (crate::input::keycaps::Overlay::new(size, scale, args.keys, args.keys_theme, args.pointer), Renderer::new(&gpu.device, OFFSCREEN_FORMAT)));
     let dark = args.theme.as_deref() != Some("light");
     let init_ms = t0.elapsed().as_secs_f64() * 1000.0;
 

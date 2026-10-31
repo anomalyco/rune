@@ -2,7 +2,7 @@
 //! records positions and wakes interested overlays; window styles are changed by the owner.
 use std::sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, Ordering}};
 use windows_sys::Win32::{Foundation::{LPARAM, LRESULT, POINT, RECT, WPARAM}, UI::WindowsAndMessaging::*};
-use crate::pointer_observer::Observer;
+use crate::input::pointer_observer::Observer;
 
 type Observers = Arc<Mutex<Vec<Arc<Observer>>>>;
 #[derive(Default)]

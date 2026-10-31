@@ -72,14 +72,14 @@ impl<S: 'static> Host<S> {
             queued = true;
             match step {
                 FileStep::Enter(paths) => {
-                    let pointer = crate::drop_pointer::DropPointer::new();
+                    let pointer = crate::input::drop_pointer::DropPointer::new();
                     f.at = pointer.sample(&l.window).or_else(|| self.rt.pointer());
                     f.pointer = Some(pointer);
                     self.rt.drag_files(paths, f.at);
                 }
                 FileStep::Drop(paths) => {
                     // A drop with no drag before it (Windows' WM_DROPFILES) samples too.
-                    let pointer = f.pointer.take().unwrap_or_else(crate::drop_pointer::DropPointer::new);
+                    let pointer = f.pointer.take().unwrap_or_else(crate::input::drop_pointer::DropPointer::new);
                     let at = pointer.sample(&l.window).or(f.at.take()).or_else(|| self.rt.pointer());
                     self.rt.drop_files(paths, at);
                 }

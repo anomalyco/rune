@@ -375,7 +375,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         if matches!(event, WindowEvent::Focused(_)) { return; }
         let mut running = self.running.borrow_mut();
         let (Some(window), Some(r)) = (&self.window, &mut *running) else { return };
-        let _input = crate::input_time::arrived(&event);
+        let _input = crate::input::time::arrived(&event);
         if r.window_input(&event, window) { window.request_redraw(); return; }
         match event {
             WindowEvent::Resized(size) => {

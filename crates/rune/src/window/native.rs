@@ -17,7 +17,7 @@ pub(super) struct Native {
     /// Redraws on full screen changes.
     pub(super) full_screen: super::mac::FullScreenWatch,
     /// Fn presses, which winit doesn't send, while the app wants modifier keys.
-    pub(super) fn_key: Option<crate::fn_key::FnKey>,
+    pub(super) fn_key: Option<crate::input::fn_key::FnKey>,
     /// Initial frames (`Host::try_create` and one follow-up) that may draw before AppKit
     /// reports the new window on screen.
     pub(super) prime: u8,

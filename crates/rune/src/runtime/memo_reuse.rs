@@ -216,8 +216,8 @@ fn same_visual(a: &Visual, b: &Visual) -> bool {
 }
 
 fn same_gestures(
-    a: &Option<Box<crate::canvas_input::CanvasInput>>,
-    b: &Option<Box<crate::canvas_input::CanvasInput>>,
+    a: &Option<Box<crate::input::canvas_input::CanvasInput>>,
+    b: &Option<Box<crate::input::canvas_input::CanvasInput>>,
 ) -> bool {
     match (a, b) {
         (None, None) => true,

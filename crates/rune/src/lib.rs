@@ -58,14 +58,11 @@ pub use playground::{Play, Playground, Stage, Step, Story};
 mod states;
 mod shortcuts;
 pub use shortcuts::{PhysicalKeyCode, Shortcut, ShortcutError, ShortcutId, modifier_keycaps};
-mod physical_input;
-pub use physical_input::PhysicalInput;
-mod canvas_input;
-pub use canvas_input::{GesturePhase, MagnifyEvent, PointerButton, RotateEvent, WheelEvent};
+pub use input::physical_input::PhysicalInput;
+pub use input::canvas_input::{GesturePhase, MagnifyEvent, PointerButton, RotateEvent, WheelEvent};
+mod input;
 mod layout_watch;
 pub use layout_watch::ScrollPos;
-mod tx_keys;
-mod tx_scroll;
 mod native_menu;
 pub use native_menu::{MenuError, MenuItem};
 mod popup_menu;
@@ -78,8 +75,6 @@ mod overlay;
 mod cursor;
 mod cursor_image;
 mod os_cursor;
-#[cfg(any(test, target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
-mod pointer_observer;
 #[cfg(target_os = "windows")]
 mod win32;
 #[cfg(target_os = "macos")]
@@ -88,8 +83,6 @@ mod macos;
 mod display_link;
 #[cfg(target_os = "macos")]
 mod main_queue;
-#[cfg(target_os = "macos")]
-mod fn_key;
 mod cold;
 pub mod color;
 pub mod compose;
@@ -98,8 +91,6 @@ pub mod el;
 mod element_info;
 #[cfg(target_vendor = "apple")]
 pub mod embed;
-mod input_time;
-mod key_diagnostics;
 #[cfg(test)]
 mod test_alloc;
 pub mod growth;
@@ -122,7 +113,6 @@ pub use render::MAX_BACKDROP_BLURS;
 pub use render::prewarm_gpu;
 mod record;
 mod headless_run;
-mod keycaps;
 pub use frame::surface_stats::{Pacing, SurfaceCounts, SurfaceStats};
 pub mod native_surface;
 mod system_material;
@@ -152,11 +142,9 @@ pub mod tok;
 pub mod tooling;
 mod window;
 mod reopen;
-mod drop_pointer;
 pub use frame::encoded::{FrameEncoded, FrameOutcome};
 mod frame;
-pub use input_time::last_input;
-mod secure_input;
+pub use input::time::last_input;
 pub mod clipboard;
 mod preferences;
 #[cfg(all(target_os = "linux", feature = "dbus"))]

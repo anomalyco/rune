@@ -63,7 +63,7 @@ pub(super) struct ActionQueue(Vec<Queued>);
 
 impl ActionQueue {
     /// Queues `action` stamped with the input being dispatched now, if any.
-    pub(super) fn push(&mut self, action: Action) { self.0.push(Queued { action, at: crate::input_time::current() }); }
+    pub(super) fn push(&mut self, action: Action) { self.0.push(Queued { action, at: crate::input::time::current() }); }
     /// Queues an action again with its own stamp.
     pub(super) fn push_queued(&mut self, queued: Queued) { self.0.push(queued); }
     /// Puts `queued` ahead of everything queued.

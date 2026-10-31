@@ -248,7 +248,7 @@ impl<S: 'static> Runtime<S> {
 
     pub(super) fn transaction(&self) -> Tx {
         Tx { trace: self.tracing().then(crate::el::TraceCalls::default), mods: self.held_mods, selection: self.selection_snapshot(),
-            input_time: crate::input_time::current(), ..Tx::default() }
+            input_time: crate::input::time::current(), ..Tx::default() }
     }
 
     /// A scalar from the actual draw path (e.g. `shell.width`). Values hold until resampled.
@@ -374,7 +374,7 @@ impl<S: 'static> Runtime<S> {
     /// running motion before the commit and `dt` steps all motion after it.
     pub(super) fn frame_step(&mut self, elapsed: f64, catch_up: f64, dt: f64) -> bool {
         // Each queued action runs with its own input's arrival time; nothing else has one.
-        let _input = crate::input_time::scope(None);
+        let _input = crate::input::time::scope(None);
         let mut live_woke = self.take_live_wake();
         // Another window may have switched the font families since this one's last frame.
         self.follow_font_families();
@@ -455,7 +455,7 @@ impl<S: 'static> Runtime<S> {
         let mut ran_other = ran;
         let mut pointer_hover = false;
         for Queued { action, at } in queue {
-            let _input = crate::input_time::scope(at);
+            let _input = crate::input::time::scope(at);
             pointer_hover |= matches!(action, Action::Hover(_));
             // State may have requested focus on a newly mounted field. Resolve the
             // new tree before routing this frame's text, not after it has gone to

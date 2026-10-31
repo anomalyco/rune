@@ -153,7 +153,7 @@ impl Built {
             prekey_text_shapes(&mut el, scale);
             let children = std::mem::take(&mut el.children);
             let focused_input = children.iter().any(has_focused_input);
-            let duplicate_keys = crate::key_diagnostics::memo_children_have_duplicates(&el, &children);
+            let duplicate_keys = crate::input::key_diagnostics::memo_children_have_duplicates(&el, &children);
             let has_virtual = children.iter().any(|c| c.has_virtual);
             let reusable = !duplicate_keys && !has_virtual && children.iter().all(el_flatten_reusable);
             Rc::new(Shared { children, focused_input, duplicate_keys, has_virtual, reusable })

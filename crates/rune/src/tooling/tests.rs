@@ -782,7 +782,7 @@ fn keycaps_draw_over_frames_but_never_enter_the_tree() {
     assert_eq!(keys.0, light.0, "auto caps follow the app's light background");
     assert_ne!(light.0, dark.0);
 
-    use crate::keycaps::Corner;
+    use crate::input::keycaps::Corner;
     let args = |v: &[&str]| Args::parse_from(v.iter().map(|s| (*s).into()).collect());
     assert_eq!(args(&["--keys", "--snap", "a.png"]).keys, Some(Corner::BottomLeft), "the corner is optional");
     assert_eq!(args(&["--keys", "top"]).keys, Some(Corner::Top));
