@@ -77,17 +77,17 @@ pub(crate) fn handler_state_ref<S: 'static>(state: &S) -> &dyn Any {
 }
 
 #[cfg(debug_assertions)]
-#[path = "runtime/layout_diagnostics.rs"]
+#[path = "runtime/commit/layout_diagnostics.rs"]
 mod layout_diagnostics;
-#[path = "runtime/blend.rs"]
+#[path = "runtime/paint/blend.rs"]
 mod blend;
-#[path = "runtime/commit_watch.rs"]
+#[path = "runtime/commit/watch.rs"]
 mod commit_watch;
-#[path = "runtime/commit_why.rs"]
+#[path = "runtime/commit/why.rs"]
 mod commit_why;
 #[path = "runtime/drag_out_host.rs"]
 mod drag_out_host;
-#[path = "runtime/exit_mask.rs"]
+#[path = "runtime/paint/exit_mask.rs"]
 mod exit_mask;
 #[path = "runtime/font_families.rs"]
 mod font_families;
@@ -95,106 +95,109 @@ mod font_families;
 mod key_index;
 #[path = "runtime/system_settings.rs"]
 mod system_settings;
-#[path = "runtime/prune.rs"]
+#[path = "runtime/commit/prune.rs"]
 mod prune;
 pub(crate) use blend::{glyph, glyph_uv_page, premul};
 
-#[path = "focus.rs"]
+#[path = "runtime/input/focus.rs"]
 mod focus;
-#[path = "physical_dispatch.rs"]
+#[path = "runtime/input/physical.rs"]
 mod physical_dispatch;
 #[cfg_attr(not(target_os = "macos"), allow(unused_imports))]
 pub(crate) use physical_dispatch::Unhandled;
-#[path = "modifier_keys.rs"]
+#[path = "runtime/input/modifier_keys.rs"]
 mod modifier_keys;
-#[path = "popup_dispatch.rs"]
+#[path = "runtime/input/popup.rs"]
 mod popup_dispatch;
-#[path = "file_dialog_dispatch.rs"]
+#[path = "runtime/input/file_dialog.rs"]
 mod file_dialog_dispatch;
-#[path = "drop_dispatch.rs"]
+#[path = "runtime/input/drop.rs"]
 mod drop_dispatch;
 #[path = "runtime/playground.rs"]
 mod playground_host;
-#[path = "runtime/scroll_bottom.rs"]
+#[path = "runtime/scroll/bottom.rs"]
 mod scroll_bottom;
-#[path = "runtime/caret.rs"]
+#[path = "runtime/selection/caret.rs"]
 mod caret;
 #[path = "runtime/event_log.rs"]
 pub(crate) mod event_log;
 #[path = "runtime/layout_read.rs"]
 pub(crate) mod layout_read;
-#[path = "links.rs"]
+#[path = "runtime/selection/links.rs"]
 mod links;
-#[path = "selectable.rs"]
+#[path = "runtime/selection/selectable.rs"]
 pub(crate) mod selectable;
+#[path = "runtime/selection/click.rs"]
 mod input_click;
-#[path = "help.rs"]
+#[path = "runtime/input/help.rs"]
 mod help;
-#[path = "runtime/scroll_edge.rs"]
+#[path = "runtime/scroll/edge.rs"]
 mod scroll_edge;
-#[path = "runtime/scroll_x.rs"]
+#[path = "runtime/scroll/x.rs"]
 mod scroll_x;
-#[path = "runtime/scroll_offset.rs"]
+#[path = "runtime/scroll/offset.rs"]
 mod scroll_offset;
-#[path = "runtime/reveal.rs"]
+#[path = "runtime/scroll/reveal.rs"]
 mod reveal;
-#[path = "runtime/scroll_anchor.rs"]
+#[path = "runtime/scroll/anchor.rs"]
 mod scroll_anchor;
-#[path = "runtime/sticky.rs"]
+#[path = "runtime/scroll/sticky.rs"]
 mod sticky;
 #[path = "runtime/anchor.rs"]
 mod anchor;
 pub(crate) use anchor::anchor_position;
 use anchor::{anchor_index, step_up};
-#[path = "runtime/motion_elements.rs"]
+#[path = "runtime/motion/motion_elements.rs"]
 mod motion_elements;
 pub use motion_elements::MotionElement;
-#[path = "runtime/live_latch.rs"]
+#[path = "runtime/motion/live_latch.rs"]
 mod live_latch;
-#[path = "runtime/loop_clock.rs"]
+#[path = "runtime/motion/loop_clock.rs"]
 mod loop_clock;
-#[path = "runtime/scroll_watch.rs"]
+#[path = "runtime/scroll/watch.rs"]
 mod scroll_watch;
-#[path = "gesture_dispatch.rs"]
+#[path = "runtime/input/gesture.rs"]
 mod gesture_dispatch;
-#[path = "runtime/flights.rs"]
+#[path = "runtime/motion/flights.rs"]
 mod flights;
-#[path = "runtime/text_flights.rs"]
+#[path = "runtime/paint/text_flights.rs"]
 mod text_flights;
-#[path = "runtime/hover.rs"]
+#[path = "runtime/input/hover.rs"]
 mod hover;
-#[path = "runtime/timer_wake.rs"]
+#[path = "runtime/motion/timer_wake.rs"]
 mod timer_wake;
-#[path = "runtime/idle_meter.rs"]
+#[path = "runtime/motion/idle_meter.rs"]
 mod idle_meter;
 #[cfg(feature = "hot")]
 #[path = "runtime/hot_state.rs"]
 mod hot_state;
-#[path = "runtime/props.rs"]
+#[path = "runtime/motion/props.rs"]
 mod props;
-#[path = "runtime/secondary.rs"]
+#[path = "runtime/input/secondary.rs"]
 mod secondary;
-#[path = "runtime/app_ime.rs"]
+#[path = "runtime/input/app_ime.rs"]
 mod app_ime;
-#[path = "runtime/press_clicks.rs"]
+#[path = "runtime/input/press_clicks.rs"]
 mod press_clicks;
 #[path = "runtime/window_requests.rs"]
 mod window_requests;
-#[path = "runtime/paint_tracks.rs"]
+#[path = "runtime/paint/tracks.rs"]
 mod paint_tracks;
-#[path = "runtime/action.rs"]
+#[path = "runtime/input/action.rs"]
 mod action;
 use action::*;
-#[path = "runtime/bands.rs"]
+#[path = "runtime/paint/bands.rs"]
 mod bands;
-#[path = "runtime/paint_slots.rs"]
+#[path = "runtime/paint/slots.rs"]
 mod paint_slots;
+#[path = "runtime/paint/pixel_snap.rs"]
 mod pixel_snap;
+#[path = "runtime/paint/soft_edges.rs"]
 mod soft_edges;
 use soft_edges::{in_fade, inherit_fade};
-#[path = "runtime/shadow_paint.rs"]
+#[path = "runtime/paint/shadow.rs"]
 mod shadow_paint;
-#[path = "runtime/shape_paint.rs"]
+#[path = "runtime/paint/shape.rs"]
 mod shape_paint;
 use shape_paint::push_shape;
 use props::*;
@@ -226,7 +229,8 @@ mod on_key_tests;
 #[cfg(test)]
 #[path = "live_only_tests.rs"]
 mod live_only_tests;
-#[path = "runtime/select_all.rs"] mod select_all;
+#[path = "runtime/selection/select_all.rs"]
+mod select_all;
 #[cfg(test)]
 #[path = "runtime/select_all_tests.rs"]
 mod select_all_tests;
@@ -242,48 +246,55 @@ mod pixel_snap_tests;
 mod size_tests;
 
 #[cfg(any(test, target_arch = "wasm32"))]
-#[path = "runtime/web_runtime.rs"]
+#[path = "runtime/web/runtime.rs"]
 pub(crate) mod web_runtime;
-#[path = "runtime/web_a11y.rs"]
+#[path = "runtime/web/a11y.rs"]
 pub(crate) mod web_a11y;
 
-#[path = "runtime/text_layout.rs"]
+#[path = "runtime/commit/text_layout.rs"]
 mod text_layout;
 use text_layout::*;
-#[path = "runtime/flatten.rs"]
+#[path = "runtime/commit/flatten.rs"]
 mod flatten;
 use flatten::*;
-#[path = "runtime/memo_reuse.rs"]
+#[path = "runtime/commit/memo_reuse.rs"]
 pub(crate) mod memo_reuse;
-#[path = "runtime/measure.rs"]
+#[path = "runtime/commit/measure.rs"]
 mod measure;
-#[path = "runtime/apply.rs"]
+#[path = "runtime/commit/apply.rs"]
 mod apply;
-#[path = "runtime/apply_scratch.rs"]
+#[path = "runtime/commit/apply_scratch.rs"]
 mod apply_scratch;
-#[path = "runtime/relayout.rs"]
+#[path = "runtime/commit/relayout.rs"]
 mod relayout;
-#[path = "runtime/virtual_window.rs"]
+#[path = "runtime/virtual/window.rs"]
 mod virtual_window;
-#[path = "runtime/unseen_presence.rs"]
+#[path = "runtime/motion/unseen_presence.rs"]
 mod unseen_presence;
-#[path = "runtime/row_reorder.rs"]
+#[path = "runtime/virtual/row_reorder.rs"]
 mod row_reorder;
-#[path = "runtime/growth_rows.rs"]
+#[path = "runtime/motion/growth_rows.rs"]
 mod growth_rows;
-#[path = "runtime/content_slide.rs"]
+#[path = "runtime/motion/content_slide.rs"]
 mod content_slide;
 mod elements;
 pub use elements::{ElementInfo, Pick, Picked, Pose};
+#[path = "runtime/paint/cache_layer.rs"]
 mod cache_layer;
 use cache_layer::{ActiveCache, NodeCache};
+#[path = "runtime/paint/helpers.rs"]
 mod paint_helpers;
 use paint_helpers::*;
+#[path = "runtime/input/hit.rs"]
 mod hit;
+#[path = "runtime/paint/build.rs"]
 mod build;
+#[path = "runtime/input/keys.rs"]
 mod keys;
+#[path = "runtime/input/pointer.rs"]
 mod pointer;
 use pointer::CLICK_SLOP;
+#[path = "runtime/motion/live_check.rs"]
 mod live_check;
 pub(crate) use live_check::fold_live;
 mod frame;
@@ -301,6 +312,7 @@ pub(crate) use commit_why::CommitWhy;
 pub(crate) use layout_read::window_read_key;
 pub(crate) use types::{AnimSource, Node};
 use types::{AxisScroll, Inh, LayoutEntry, NodeCold, RevealState, RowLayout, ScaleMotion, ScrollState, Stack};
+#[path = "runtime/motion/tracks.rs"]
 mod tracks;
 use tracks::{SCROLL_DECAY, mark_ancestors, scroll_offsets, word_starts};
 mod commit;

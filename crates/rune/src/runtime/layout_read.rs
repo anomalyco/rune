@@ -30,7 +30,7 @@ use std::rc::Rc;
 use super::*;
 use super::key_index::{self, KeyIndex};
 
-#[path = "selection_rects.rs"]
+#[path = "selection/rects.rs"]
 mod selection_rects;
 pub(crate) use selection_rects::{SELECTION, SelectedRange, boxes_moved};
 

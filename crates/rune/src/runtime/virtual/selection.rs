@@ -1,5 +1,5 @@
 //! Virtual-row text selection: pinned ends, identity-based endpoints, and pruning.
-#[path = "virtual_selection_collect.rs"]
+#[path = "selection_collect.rs"]
 mod collect;
 
 use std::collections::HashMap;

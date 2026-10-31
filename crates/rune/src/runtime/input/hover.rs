@@ -389,5 +389,5 @@ impl<S: 'static> Runtime<S> {
 }
 
 #[cfg(test)]
-#[path = "hover_tests.rs"]
+#[path = "../hover_tests.rs"]
 mod tests;

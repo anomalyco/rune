@@ -79,5 +79,5 @@ impl<S: 'static> Runtime<S> {
 }
 
 #[cfg(test)]
-#[path = "paint_tracks_tests.rs"]
+#[path = "../paint_tracks_tests.rs"]
 mod tests;

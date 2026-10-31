@@ -17,7 +17,7 @@
 use super::*;
 use std::ops::Range;
 
-#[path = "selection_toolbar.rs"]
+#[path = "toolbar.rs"]
 mod selection_toolbar;
 #[path = "text_selection.rs"]
 mod text_selection;
@@ -741,10 +741,10 @@ impl<S: 'static> Runtime<S> {
     }
 }
 
-#[path = "runtime/virtual_selection.rs"]
+#[path = "../virtual/selection.rs"]
 pub(crate) mod virtual_selection;
 #[cfg(test)]
-#[path = "runtime/virtual_selection_tests.rs"]
+#[path = "../virtual_selection_tests.rs"]
 mod virtual_selection_tests;
 
 #[cfg(test)]
