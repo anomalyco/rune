@@ -77,11 +77,11 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     let scale = args.scale.unwrap_or(2.0);
     let size = args.size.unwrap_or(app.spec.size);
     // Check the encoder before app initialization or GPU work.
-    let mut writer = crate::record::Writer::new(((size.0 * scale).round() as u32, (size.1 * scale).round() as u32));
+    let mut writer = crate::tooling::record::Writer::new(((size.0 * scale).round() as u32, (size.1 * scale).round() as u32));
     if let Some(path) = &args.video {
         writer.video(path, timeline.fps).unwrap_or_else(|e| die(&e));
     }
-    crate::headless_run::publish(crate::headless_run::HeadlessRun {
+    crate::tooling::headless_run::publish(crate::tooling::headless_run::HeadlessRun {
         script: args.script.clone(),
         events: script.iter().map(Ev::public).collect(),
         scale,
@@ -136,7 +136,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     renderer.set_srgb_blend(srgb_blend);
     let (wp, hp) = ((size.0 * scale).round() as u32, (size.1 * scale).round() as u32);
     let mut target = Offscreen::with_format(&gpu.device, wp, hp, target_format);
-    let mut readback = crate::record::Readback::new(&gpu.device, &target, crate::record::DEPTH);
+    let mut readback = crate::tooling::record::Readback::new(&gpu.device, &target, crate::tooling::record::DEPTH);
     let mut alpha = transparent.then(|| crate::render::surface_alpha::AlphaSurface::new(&gpu.device, target_format, (wp, hp)));
     let mut overlay = (args.keys.is_some() || args.pointer).then(|| {
         let mut ov = crate::input::keycaps::Overlay::new(size, scale, args.keys, args.keys_theme, args.pointer);

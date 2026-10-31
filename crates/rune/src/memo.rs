@@ -456,7 +456,7 @@ pub(crate) fn hash_of(v: &impl Hash) -> u64 {
 fn keyed(el: El, key: String) -> El {
     #[cfg(debug_assertions)]
     if let Some(existing) = &el.key {
-        crate::perf_warn::memo_key_replaced(&key, existing, std::panic::Location::caller());
+        crate::tooling::perf_warn::memo_key_replaced(&key, existing, std::panic::Location::caller());
     }
     el.key(key)
 }

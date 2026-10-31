@@ -46,7 +46,7 @@ impl<S: 'static> Host<S> {
         if self.float_on_open && !w.first_frame.notified { float_on_open::release(&w.window, &self.options, self.spec.min_size); }
         self.native_handle.native.ready.store(true, Ordering::Release);
         *self.shared.window_error.lock().unwrap() = None;
-        crate::perf_warn::launch::first_frame();
+        crate::tooling::perf_warn::launch::first_frame();
         w.first_frame.notified = true;
         if w.first_frame.take_ready() { self.run_on_ready(); }
         if reveal {
@@ -58,10 +58,10 @@ impl<S: 'static> Host<S> {
 
     fn run_on_ready(&mut self) {
         if let Some(ready) = self.on_ready.as_mut() {
-            crate::perf_warn::timed("on_ready", || ready(&self.native_handle));
+            crate::tooling::perf_warn::timed("on_ready", || ready(&self.native_handle));
         }
         #[cfg(not(target_arch = "wasm32"))]
-        crate::ready_signal::ready();
+        crate::platform::ready_signal::ready();
     }
 
     pub(super) fn place(&mut self, event_loop: &ActiveEventLoop, request: crate::windows::PlaceRequest) {

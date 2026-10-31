@@ -242,13 +242,13 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn run_action(&mut self, action: Action, tx: &mut Tx) -> bool {
         #[cfg(debug_assertions)]
         let (name, path, at) = (handler_name(&action), stall_path(&action).map(str::to_owned), self.handler_location(&action));
-        let stall = crate::perf_warn::Stall::start();
+        let stall = crate::tooling::perf_warn::Stall::start();
         let ran = self.dispatch_action(action, tx);
         #[cfg(debug_assertions)]
         if ran && name.starts_with("on_") { self.watch.meter.handler(name, path.as_deref(), at); }
         #[cfg(debug_assertions)]
         stall.end(|| match path {
-            Some(path) => (crate::perf_warn::handler_site(name, &path), format!("`{name}` on {path:?}")),
+            Some(path) => (crate::tooling::perf_warn::handler_site(name, &path), format!("`{name}` on {path:?}")),
             None => (name.to_owned(), format!("`{name}`")),
         });
         #[cfg(not(debug_assertions))]

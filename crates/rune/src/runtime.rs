@@ -345,8 +345,8 @@ pub struct Runtime<S: 'static> {
     pub clock: f64,
     wake_deadlines: Vec<f64>,
     timer_wake: timer_wake::TimerWake,
-    idle_meter: crate::perf_warn::IdleMeter,
-    watch: crate::perf_warn::Watch,
+    idle_meter: crate::tooling::perf_warn::IdleMeter,
+    watch: crate::tooling::perf_warn::Watch,
     /// Windowed runs read the clock from the wall instead of summing frame steps.
     pub wall_start: Option<crate::time::Instant>,
     /// Called for keys unhandled by the focused control; return true to consume it.

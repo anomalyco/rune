@@ -17,7 +17,7 @@ use crate::runtime::{Env, Runtime};
 use crate::tooling::{Args, Ev, Kind, Pos, Shot, Timeline, Trace, die};
 use crate::desktop::displays::VirtualDesktop;
 use crate::window::WakeEvent;
-use crate::headless_run::WindowFrame;
+use crate::tooling::headless_run::WindowFrame;
 use crate::{AnyWindowSpec, WindowHandle, WindowSpec};
 
 pub(crate) mod displays;
@@ -73,7 +73,7 @@ pub(crate) trait Member {
     fn pointer(&self) -> Option<(f32, f32)>;
     fn shortcut(&self, shortcut: &crate::Shortcut) -> Result<(), crate::ShortcutError>;
     /// How reopening the app sees it.
-    fn reopen_candidate(&self) -> crate::reopen::Candidate;
+    fn reopen_candidate(&self) -> crate::platform::reopen::Candidate;
     /// Runs `App::on_reopen`; true when it handled the reopen.
     fn reopen_hook(&mut self, has_visible_windows: bool) -> bool;
     /// Shows it in front with the keyboard, as the default reopen.
@@ -214,7 +214,7 @@ impl<S: 'static> Window<S> {
 
     fn hide(&mut self) {
         if !self.visible { return; }
-        self.hidden_at = Some(crate::reopen::stamp());
+        self.hidden_at = Some(crate::platform::reopen::stamp());
         self.rt.cancel_popups();
         self.rt.cancel_file_dialogs();
         self.rt.cancel_pointer();
@@ -355,8 +355,8 @@ impl<S: 'static> Member for Window<S> {
     fn pointer(&self) -> Option<(f32, f32)> { self.rt.pointer() }
     fn shortcut(&self, shortcut: &crate::Shortcut) -> Result<(), crate::ShortcutError> { self.shared.shortcuts.fire(shortcut) }
 
-    fn reopen_candidate(&self) -> crate::reopen::Candidate {
-        crate::reopen::Candidate {
+    fn reopen_candidate(&self) -> crate::platform::reopen::Candidate {
+        crate::platform::reopen::Candidate {
             reopenable: !self.finished && !self.panel,
             visible: self.visible,
             // A headless desktop has no Dock to minimize into.
@@ -601,13 +601,13 @@ impl Desk {
     /// activates the app with it in front.
     fn reopen(&mut self, accessory: bool, desktop: &VirtualDesktop, t: f64) {
         let candidates = |desk: &Self| -> Vec<_> { desk.members.iter().map(|m| m.reopen_candidate()).collect() };
-        let has_visible = crate::reopen::has_visible(&candidates(self));
+        let has_visible = crate::platform::reopen::has_visible(&candidates(self));
         let mut handled = false;
         for m in &mut self.members { handled |= m.reopen_hook(has_visible); }
         if handled || accessory { return; }
         // The default sees what the hooks did.
         self.drain(desktop, t);
-        if let Some(i) = crate::reopen::target(&candidates(self)) {
+        if let Some(i) = crate::platform::reopen::target(&candidates(self)) {
             let changes = self.members[i].reopen();
             self.apply(i, changes);
         }
@@ -642,7 +642,7 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
     let primary = desktop.primary().frame.map(|v| v as f32);
     let size = args.size.unwrap_or((primary[2], primary[3]));
     let frames_log = Arc::new(std::sync::Mutex::new(Vec::new()));
-    crate::headless_run::publish(crate::headless_run::HeadlessRun {
+    crate::tooling::headless_run::publish(crate::tooling::headless_run::HeadlessRun {
         script: args.script.clone(),
         events: script.iter().map(Ev::public).collect(),
         scale,
@@ -683,12 +683,12 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
     let (wp, hp) = pixels(size, scale, max).unwrap_or_else(|| die(&format!(
         "--desktop: the output, {}x{} points at --scale {scale}, must be 1 to {max} pixels a side", size.0, size.1)));
     let comp = Composite::new(&gpu, &backdrop, (wp, hp));
-    let mut writer = crate::record::Writer::new((wp, hp));
+    let mut writer = crate::tooling::record::Writer::new((wp, hp));
     if let Some(path) = &args.video {
         writer.video(path, fps).unwrap_or_else(|e| die(&e));
     }
     let target = Offscreen::new(&gpu.device, wp, hp);
-    let mut readback = crate::record::Readback::new(&gpu.device, &target, crate::record::DEPTH);
+    let mut readback = crate::tooling::record::Readback::new(&gpu.device, &target, crate::tooling::record::DEPTH);
     let mut slots: Vec<Option<Slot>> = (0..n).map(|_| None).collect();
     let mut overlay = (args.keys.is_some() || args.pointer)
         .then(|| (crate::input::keycaps::Overlay::new(size, scale, args.keys, args.keys_theme, args.pointer), Renderer::new(&gpu.device, OFFSCREEN_FORMAT)));

@@ -352,8 +352,8 @@ impl<T: 'static> Overlay<T> {
         let text = TextSystem::for_window(app.fonts, app.families);
         let mut rt = Runtime::with_text(state, spec.view, spec.size, Env::default(), text);
         rt.set_srgb_blend(srgb_blend);
-        rt.set_system_reduced_motion(crate::preferences::reduced_motion());
-        crate::accent::watch();
+        rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
+        crate::platform::accent::watch();
         rt.set_system_accent(crate::system_accent());
         rt.wall_start = Some(Instant::now());
         rt.native_overlay = true;
@@ -430,7 +430,7 @@ impl<T: 'static> Overlay<T> {
     fn show_fading(&mut self, event_loop: &ActiveEventLoop, fade: Duration) {
         if self.visible { return; }
         // Hidden, it missed the redraws a new accent asks for (`accent::watch`).
-        self.rt.set_system_dark(crate::preferences::dark().unwrap_or(self.dark));
+        self.rt.set_system_dark(crate::platform::preferences::dark().unwrap_or(self.dark));
         self.accent_changed(crate::system_accent());
         // Shown again mid fade-out: the window is still up with current pixels, and its motion
         // carries on rather than settling.
@@ -655,7 +655,7 @@ impl<T: 'static> Overlay<T> {
         let window = Arc::new(event_loop.create_window(attrs).ok()?);
         #[cfg(target_os = "macos")]
         crate::native_menu::adopt_standard_view();
-        self.dark = window.theme().map_or_else(|| crate::preferences::desktop_dark(&window).unwrap_or(true), |t| t == winit::window::Theme::Dark);
+        self.dark = window.theme().map_or_else(|| crate::platform::preferences::desktop_dark(&window).unwrap_or(true), |t| t == winit::window::Theme::Dark);
         self.rt.set_system_dark(self.dark);
         if self.cursor.is_none() { self.cursor = Some(crate::cursor::os::OsCursor::new(event_loop)); }
         let scale = crate::window::backing_scale(&window);

@@ -7,7 +7,6 @@
 compile_error!("web does not support Rune's hot or native-file-dialog features; disable them for wasm32");
 
 mod app;
-mod app_icon;
 pub mod time;
 /// The logical clock a scene fn (`AppSpec::scenes`) builds its state against. `--scene` starts
 /// at time zero.
@@ -57,8 +56,7 @@ pub use shortcuts::{PhysicalKeyCode, Shortcut, ShortcutError, ShortcutId, modifi
 pub use input::physical_input::PhysicalInput;
 pub use input::canvas_input::{GesturePhase, MagnifyEvent, PointerButton, RotateEvent, WheelEvent};
 mod input;
-mod layout_watch;
-pub use layout_watch::ScrollPos;
+pub use el::layout_watch::ScrollPos;
 mod native_menu;
 pub use native_menu::{MenuError, MenuItem};
 mod popup_menu;
@@ -70,7 +68,6 @@ pub mod color;
 pub mod compose;
 pub mod edit;
 pub mod el;
-mod element_info;
 #[cfg(target_vendor = "apple")]
 pub mod embed;
 #[cfg(test)]
@@ -96,8 +93,6 @@ pub mod hot;
 pub mod render;
 pub use render::MAX_BACKDROP_BLURS;
 pub use render::prewarm_gpu;
-mod record;
-mod headless_run;
 pub use frame::surface_stats::{Pacing, SurfaceCounts, SurfaceStats};
 pub mod native_surface;
 mod system_material;
@@ -110,9 +105,6 @@ mod flight;
 #[cfg(feature = "frame-profile")]
 #[doc(hidden)]
 pub use frame::profile::{PHASES, take_frame_phases, thread_cpu_ms};
-mod perf_warn;
-#[cfg(not(target_arch = "wasm32"))]
-mod ready_signal;
 pub mod file_dialog;
 pub mod tray;
 mod open_url;
@@ -123,15 +115,12 @@ pub mod theme;
 pub mod tok;
 pub mod tooling;
 mod window;
-mod reopen;
 pub use frame::encoded::{FrameEncoded, FrameOutcome};
 mod frame;
 pub use input::time::last_input;
 pub mod clipboard;
-mod preferences;
-mod accent;
-pub use accent::{SystemAccent, system_accent};
-pub use app_icon::set_app_icon;
+pub use platform::accent::{SystemAccent, system_accent};
+pub use platform::app_icon::set_app_icon;
 pub use clipboard::{ClipboardContent, ClipboardImage, ClipboardWrite, SecretCopy, SecretState};
 pub mod drag_out;
 pub use drag_out::{DragImage, DragItem, DragOperation, DragOutcome};

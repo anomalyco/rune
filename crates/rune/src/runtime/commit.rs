@@ -64,8 +64,8 @@ pub(super) struct Measured {
 impl<S: 'static> Runtime<S> {
     pub(super) fn commit(&mut self, tx: &Tx) {
         let _commit_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Commit);
-        let _first_view = crate::perf_warn::launch::FirstView::start(self.commits == 0);
-        let budget = crate::perf_warn::budget::Commit::start();
+        let _first_view = crate::tooling::perf_warn::launch::FirstView::start(self.commits == 0);
+        let budget = crate::tooling::perf_warn::budget::Commit::start();
         self.apply_playground();
         COMMITS.set(COMMITS.get() + 1);
         self.last_commit_clock = self.clock;

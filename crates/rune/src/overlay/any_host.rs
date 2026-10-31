@@ -115,7 +115,7 @@ impl<T: 'static> AnyHost for Overlay<T> {
                 self.dirty |= self.rt.physical_observation(crate::PhysicalInput::Modifiers(crate::window::map_mods(self.mods)));
             }
             WindowEvent::Focused(focused) => {
-                self.rt.set_system_reduced_motion(crate::preferences::reduced_motion());
+                self.rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
                 if !focused { self.rt.cancel_composition(); }
                 self.dirty = true;
             }

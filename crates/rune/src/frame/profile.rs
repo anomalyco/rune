@@ -52,7 +52,7 @@ mod enabled {
     }
     impl Drop for Scope {
         fn drop(&mut self) {
-            if crate::perf_warn::budget::on() { crate::perf_warn::budget::add(self.0, self.1.elapsed().as_secs_f64() * 1000.0); }
+            if crate::tooling::perf_warn::budget::on() { crate::tooling::perf_warn::budget::add(self.0, self.1.elapsed().as_secs_f64() * 1000.0); }
             TIMES.with(|times| {
                 let mut row = times.get();
                 row[self.0 as usize] += self.1.elapsed().as_secs_f64() * 1000.0;
@@ -167,12 +167,12 @@ pub(crate) struct Scope(Option<(Phase, crate::time::Instant)>);
 #[cfg(not(feature = "frame-profile"))]
 impl Scope {
     #[inline(always)]
-    pub(crate) fn new(phase: Phase) -> Self { Self(crate::perf_warn::budget::on().then(|| (phase, crate::time::Instant::now()))) }
+    pub(crate) fn new(phase: Phase) -> Self { Self(crate::tooling::perf_warn::budget::on().then(|| (phase, crate::time::Instant::now()))) }
 }
 #[cfg(not(feature = "frame-profile"))]
 impl Drop for Scope {
     #[inline(always)]
     fn drop(&mut self) {
-        if let Some((phase, start)) = self.0 { crate::perf_warn::budget::add(phase, start.elapsed().as_secs_f64() * 1000.0); }
+        if let Some((phase, start)) = self.0 { crate::tooling::perf_warn::budget::add(phase, start.elapsed().as_secs_f64() * 1000.0); }
     }
 }

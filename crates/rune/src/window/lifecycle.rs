@@ -258,7 +258,7 @@ impl<S: 'static> Host<S> {
     }
 
     pub(super) fn hide(&mut self, event_loop: &ActiveEventLoop) {
-        if self.win.as_ref().is_some_and(|w| w.visible) { self.hidden_at = Some(crate::reopen::stamp()); }
+        if self.win.as_ref().is_some_and(|w| w.visible) { self.hidden_at = Some(crate::platform::reopen::stamp()); }
         self.rt.minimize_request = false;
         self.land_frame();
         // Before the window can go: a hide need not report a blur. `about_to_wait` delivers it,

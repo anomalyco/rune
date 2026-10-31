@@ -12,7 +12,7 @@ use crate::render::write_png;
 use crate::runtime::{Cx, Env, Runtime, Waker};
 use crate::text::TextSystem;
 
-pub use crate::headless_run::{HeadlessRun, PointerAction, ScriptEvent, ScriptPoint, TimedEvent, WindowFrame, headless_run};
+pub use crate::tooling::headless_run::{HeadlessRun, PointerAction, ScriptEvent, ScriptPoint, TimedEvent, WindowFrame, headless_run};
 
 pub struct AppSpec<S: 'static> {
     pub title: &'static str,
@@ -492,6 +492,9 @@ pub(crate) fn file_input<S: 'static>(rt: &mut Runtime<S>, step: &FileStep, at: (
 #[cfg(test)]
 include!("tooling/parser_tests.rs");
 
+pub(crate) mod headless_run;
+pub(crate) mod perf_warn;
+pub(crate) mod record;
 #[cfg(test)]
 #[path = "tooling/window_tests.rs"]
 mod window_tests;

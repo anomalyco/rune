@@ -22,10 +22,10 @@ impl<S: 'static> AnyHost for Host<S> {
         self.file_dialog.cancel(&mut self.rt);
     }
 
-    fn reopen_candidate(&self) -> crate::reopen::Candidate {
+    fn reopen_candidate(&self) -> crate::platform::reopen::Candidate {
         let shown = self.win.as_ref().filter(|w| w.visible);
         let minimized = shown.is_some_and(|w| w.window.is_minimized() == Some(true));
-        crate::reopen::Candidate {
+        crate::platform::reopen::Candidate {
             reopenable: !self.finished && !self.macos_window.nonactivating_panel,
             visible: shown.is_some() && !minimized,
             minimized,
@@ -57,7 +57,7 @@ impl<S: 'static> AnyHost for Host<S> {
         self.shell(event_loop);
         // winit's focus does nothing while the window is still deminiaturizing.
         #[cfg(target_os = "macos")]
-        if let Some(w) = self.win.as_ref().filter(|w| w.visible) { crate::reopen::front(&w.window); }
+        if let Some(w) = self.win.as_ref().filter(|w| w.visible) { crate::platform::reopen::front(&w.window); }
         self.publish();
     }
 

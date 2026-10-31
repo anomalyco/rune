@@ -28,7 +28,7 @@ fn ready_in(dir: Option<&OsStr>) {
     let mut written = WRITTEN.lock().unwrap_or_else(|e| e.into_inner());
     if written.is_some() { return; }
     let Some(dir) = dir.filter(|dir| !dir.is_empty()) else { *written = Some(None); return };
-    let ready_ms = crate::perf_warn::launch::process_age().or_else(|| RUN.get().map(Instant::elapsed)).map_or(0, |age| age.as_millis() as u64);
+    let ready_ms = crate::tooling::perf_warn::launch::process_age().or_else(|| RUN.get().map(Instant::elapsed)).map_or(0, |age| age.as_millis() as u64);
     let signal = Signal { pid: std::process::id(), bundle_id: bundle_id(), ready_ms };
     *written = Some(match signal.write_in(Some(dir)) {
         Some(Ok(path)) => {

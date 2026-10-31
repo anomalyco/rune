@@ -106,7 +106,7 @@ pub(crate) trait AnyHost {
     /// False for hosts that must not keep the loop running alone (overlays).
     fn keeps_loop(&self) -> bool { true }
     /// How reopening the app sees it; overlays never come back.
-    fn reopen_candidate(&self) -> crate::reopen::Candidate { Default::default() }
+    fn reopen_candidate(&self) -> crate::platform::reopen::Candidate { Default::default() }
     /// Runs `App::on_reopen` as an update; true when it handled the reopen.
     fn reopen_hook(&mut self, _event_loop: &ActiveEventLoop, _has_visible_windows: bool) -> bool { false }
     /// Applies what was asked of it through its handle since the last wake, now rather than
@@ -162,20 +162,20 @@ impl Windows {
         let candidates = |hosts: &[Option<Box<dyn AnyHost>>]| -> Vec<_> {
             hosts.iter().map(|h| h.as_ref().map(|h| h.reopen_candidate()).unwrap_or_default()).collect()
         };
-        let has_visible = crate::reopen::has_visible(&candidates(&self.hosts));
+        let has_visible = crate::platform::reopen::has_visible(&candidates(&self.hosts));
         let mut handled = false;
         for host in self.hosts.iter_mut().flatten() {
             handled |= host.reopen_hook(event_loop, has_visible);
         }
         if handled || event_loop.exiting() { return; }
         #[cfg(target_os = "macos")]
-        if crate::reopen::accessory() { return; }
+        if crate::platform::reopen::accessory() { return; }
         // The default sees what the hooks did, to other windows too.
         for host in self.hosts.iter_mut().flatten() { host.apply_pending(event_loop); }
         if event_loop.exiting() { return; }
         #[cfg(target_os = "macos")]
-        crate::reopen::unhide();
-        if let Some(Some(host)) = crate::reopen::target(&candidates(&self.hosts)).and_then(|i| self.hosts.get_mut(i)) {
+        crate::platform::reopen::unhide();
+        if let Some(Some(host)) = crate::platform::reopen::target(&candidates(&self.hosts)).and_then(|i| self.hosts.get_mut(i)) {
             host.reopen(event_loop);
         }
     }
@@ -252,7 +252,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
         #[cfg(target_os = "macos")]
         {
             let proxy = self.proxy.clone();
-            crate::reopen::install(move || proxy.send_event(WakeEvent::Reopen).is_ok());
+            crate::platform::reopen::install(move || proxy.send_event(WakeEvent::Reopen).is_ok());
         }
         crate::open_url::incoming::settle();
         // A window opened at launch took it; a GPU kept for a later one would sit idle until then.
@@ -435,10 +435,10 @@ impl<S: 'static> Host<S> {
         rt.app_ime.hook = on_ime;
         rt.set_modifier_keys(modifier_keys);
         rt.set_srgb_blend(srgb_blend); rt.set_font_smoothing(font_smoothing);
-        rt.set_system_reduced_motion(crate::preferences::reduced_motion());
-        rt.set_full_keyboard_access(crate::preferences::full_keyboard_access());
+        rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
+        rt.set_full_keyboard_access(crate::platform::preferences::full_keyboard_access());
         rt.set_tab_visits_controls(tab_visits_controls);
-        crate::accent::watch();
+        crate::platform::accent::watch();
         rt.set_system_accent(crate::system_accent());
         rt.trace_channels = args.trace.as_ref().map(|_| Default::default());
         rt.set_live_waker(Arc::new(move || { let _ = live_proxy.send_event(WakeEvent::Live(slot)); }));
@@ -804,7 +804,7 @@ impl<S: 'static> Host<S> {
             && gpu.adapter.get_info().backend != wgpu::Backend::Metal)
             .then(|| crate::render::surface_alpha::AlphaSurface::new(&gpu.device, target_format, (config.width, config.height)));
         let scale = window.scale_factor() as f32;
-        self.rt.set_system_dark(crate::preferences::window_dark(&window, self.args.theme.as_deref()));
+        self.rt.set_system_dark(crate::platform::preferences::window_dark(&window, self.args.theme.as_deref()));
         self.rt.set_viewport((phys.width as f32 / scale, phys.height as f32 / scale), scale);
         if (self.shown || launcher) && !built {
             // Reopening paints the settled state in the first frame (guarantee 8).

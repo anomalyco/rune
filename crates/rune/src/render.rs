@@ -1093,7 +1093,7 @@ impl Offscreen {
         device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
         let out = {
             let data = slice.get_mapped_range().expect("mapped range");
-            crate::record::unpad(&data, self.width, self.height, self.padded_row)
+            crate::tooling::record::unpad(&data, self.width, self.height, self.padded_row)
         };
         self.buffer.unmap();
         out
