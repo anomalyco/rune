@@ -1,7 +1,7 @@
 //! What code sees of the [`El::selectable`](crate::El::selectable) text selection: the
 //! selection itself ([`TextSelection`], one [`SelectedText`] per text) and what an
 //! [`El::on_selection_change`](crate::El::on_selection_change) element hears
-//! ([`SelectionChange`]). The selection's state and behaviour are in `selectable.rs`.
+//! ([`SelectionChange`]). The selection's state and behaviour are in `runtime/selection/selectable.rs`.
 use std::ops::Range;
 use std::rc::Rc;
 

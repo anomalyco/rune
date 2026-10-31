@@ -36,7 +36,7 @@ pub(super) enum Action {
     Key { ev: KeyEvent, repeat: bool },
     KeyUp(KeyEvent),
     /// A wheel delta at window point (x, y) for the `on_wheel` handlers at the pointer,
-    /// innermost first (`gesture_dispatch.rs`).
+    /// innermost first (`runtime/input/gesture.rs`).
     Wheel(u64, Vec<String>, crate::WheelEvent),
     Gesture(Vec<String>, gesture_dispatch::Gesture),
     Ime(Ime),

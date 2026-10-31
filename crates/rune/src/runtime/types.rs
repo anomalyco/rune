@@ -358,13 +358,13 @@ pub(super) struct ScrollState {
     pub(super) slack: scroll_bottom::Slack,
     /// The horizontal axis of `El::scroll_x` and `El::scroll_xy`; all zero on a vertical one.
     pub(super) x: AxisScroll,
-    /// What `El::on_scroll_offset` was last told (`runtime/scroll_watch.rs`).
+    /// What `El::on_scroll_offset` was last told (`runtime/scroll/watch.rs`).
     pub(super) told: Option<crate::ScrollPos>,
     /// The spring `Tx::scroll_to_with` gave the running glide, on both axes; `GLIDE` when none.
     pub(super) spring: Option<rune_motion::Spring>,
     /// Frames left in which an app's instant scroll (`Tx::scroll_to_instant` and the like)
     /// counts as layout moving, so hover under a still pointer holds while an app steps its
-    /// own glide frame by frame (`runtime/hover.rs`).
+    /// own glide frame by frame (`runtime/input/hover.rs`).
     pub(super) nudged: u8,
 }
 

@@ -449,7 +449,7 @@ pub struct Runtime<S: 'static> {
     has_pixel_aspect: bool,
     has_drawn_layout: bool,
     has_key_up: bool,
-    /// Some element is `El::sticky_top` or `El::sticky_bottom` (see `sticky.rs`).
+    /// Some element is `El::sticky_top` or `El::sticky_bottom` (see `runtime/scroll/sticky.rs`).
     has_sticky: bool,
     /// Each node's sticky shift this frame (points), while `has_sticky`.
     stuck: Vec<f32>,
@@ -478,7 +478,7 @@ pub struct Runtime<S: 'static> {
     /// Per node: it drew inside its clip and the window in the last build.
     seen: Vec<bool>,
     scrolls: HashMap<NodeId, ScrollState>,
-    /// The axis the current wheel or trackpad gesture scrolls (`scroll_x.rs`).
+    /// The axis the current wheel or trackpad gesture scrolls (`runtime/scroll/x.rs`).
     wheel_lock: scroll_x::WheelLock,
     #[cfg(any(test, target_arch = "wasm32"))]
     web_scroll: Option<web_runtime::TouchScroll>,

@@ -1,4 +1,4 @@
-//! `El::pixel_snap`. The snapping itself is in `runtime/pixel_snap.rs`.
+//! `El::pixel_snap`. The snapping itself is in `runtime/paint/pixel_snap.rs`.
 use crate::el::El;
 
 impl El {

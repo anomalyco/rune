@@ -1,7 +1,7 @@
 //! Following where an element is: `El::on_layout` and `El::on_screen_layout` with its laid-out
 //! rect, `El::on_drawn_layout` with where a frame drew it, and on a scroll viewport
 //! `El::on_scroll_offset` with its offset in the frame that draws it. The runtime side is in
-//! `runtime/layout_read.rs` and `runtime/scroll_watch.rs`.
+//! `runtime/layout_read.rs` and `runtime/scroll/watch.rs`.
 use std::rc::Rc;
 
 use crate::states::downcast;

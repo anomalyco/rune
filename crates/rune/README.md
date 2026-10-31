@@ -301,7 +301,7 @@ policy changes are applied in the same mutation phase.
   `.scroll_edge_fade(w)` fades a viewport's top and bottom only while content is hidden under
   them (strength = hidden extent / 15 pt), and `.scroll_margin(pts)` stops revealed rows clear of it.
 - **Sticky headers and bars** (`.sticky_top(inset)`, `.sticky_bottom(inset)`, `.stuck_shadow(shadow)`,
-  `tx.keep_on_screen(key)`, `sticky.rs`): an element inside a vertical scroll viewport pins to the
+  `tx.keep_on_screen(key)`, `runtime/scroll/sticky.rs`): an element inside a vertical scroll viewport pins to the
   nearest scroll viewport's top or bottom edge (offset inward by `inset`) while its parent stays in
   view, and is pushed out by its parent's content box (inside the parent's padding) as the parent
   scrolls away, as CSS `position: sticky` does. Sticky children draw and hit-test above later normal

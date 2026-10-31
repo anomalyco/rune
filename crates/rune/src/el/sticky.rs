@@ -1,5 +1,5 @@
 //! Sticky elements: `El::sticky_top`, `El::sticky_top_showing`, `El::sticky_bottom`,
-//! `El::sticky_left` and `El::stuck_shadow`. The shifts are worked out in `runtime/sticky.rs`.
+//! `El::sticky_left` and `El::stuck_shadow`. The shifts are worked out in `runtime/scroll/sticky.rs`.
 use crate::el::El;
 use crate::el::Shadow;
 

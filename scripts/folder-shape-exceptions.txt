@@ -1,7 +1,2 @@
 # <key> <ceiling>: existing folder-shape violations (see scripts/folder-shape.sh). Ceilings only go down.
 # Refresh with scripts/folder-shape.sh --update-exceptions.
-crates/rune/src/runtime/ 78
-crates/rune/src/runtime/commit_* 2
-crates/rune/src/runtime/paint_* 3
-crates/rune/src/runtime/scroll_* 6
-crates/rune/src/runtime/virtual_* 3

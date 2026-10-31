@@ -1,6 +1,6 @@
 //! Input a canvas app needs beyond presses and scrolling: wheel deltas an element takes before
 //! any scroll view does, trackpad pinch, rotation and smart magnify, the middle and other mouse
-//! buttons, and key releases. Runtime dispatch is in `gesture_dispatch.rs`.
+//! buttons, and key releases. Runtime dispatch is in `runtime/input/gesture.rs`.
 use std::rc::Rc;
 
 use crate::{El, KeyEvent, Mods, Tx};

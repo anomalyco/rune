@@ -1,5 +1,5 @@
 //! Files dropped on an element from another app: `El::on_drop_files` and the hover, move
-//! and reject callbacks around it, and `Tx::drop_point`. `drop_dispatch.rs` routes the drag.
+//! and reject callbacks around it, and `Tx::drop_point`. `runtime/input/drop.rs` routes the drag.
 use std::rc::Rc;
 
 use crate::el::{El, PointerEvent, Tx};
