@@ -28,7 +28,7 @@ pub(super) struct Measurement<'a, S: 'static> {
     pub(super) memo: &'a mut crate::memo::MemoCache,
     pub(super) next_id: &'a mut u64,
     pub(super) scrolls: &'a mut HashMap<NodeId, ScrollState>,
-    pub(super) virtuals: &'a mut HashMap<String, crate::virtual_list::VirtualList>,
+    pub(super) virtuals: &'a mut HashMap<String, crate::el::virtual_list::VirtualList>,
     pub(super) virtual_culled: &'a mut HashSet<String>,
     pub(super) virtual_inputs: &'a mut HashMap<String, Box<InputSpec>>,
     pub(super) stats: &'a mut FrameStats,

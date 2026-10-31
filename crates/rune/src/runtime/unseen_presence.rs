@@ -56,7 +56,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Row `i` of the commit's `nodes`, kept by a change that replaced what the reader saw
-    /// ([`crate::virtual_list::VirtualList::replaced_view`]) but drawn nowhere before, enters
+    /// ([`crate::el::virtual_list::VirtualList::replaced_view`]) but drawn nowhere before, enters
     /// like the rows new to the view instead of appearing whole.
     pub(super) fn reenter_unseen_row(&mut self, nodes: &[Node], i: usize, unseen: &HashSet<NodeId>) {
         if !unseen.contains(&nodes[i].id) { return; }

@@ -40,6 +40,8 @@ mod sticky;
 mod text;
 mod text_spec;
 mod tx;
+pub(crate) mod virtual_list;
+pub(crate) mod virtual_rows;
 mod visual;
 mod visuals;
 
@@ -480,7 +482,7 @@ pub struct El {
     pub(crate) growth: Option<Box<GrowthSpec>>,
     pub(crate) virtual_estimate: Option<f32>,
     /// Rows `El::virtual_rows` builds at layout time, in place of `children`.
-    pub(crate) virtual_rows: Option<Rc<crate::virtual_rows::RowSource>>,
+    pub(crate) virtual_rows: Option<Rc<crate::el::virtual_rows::RowSource>>,
     /// [`El::virtual_rows_version`], hashed.
     pub(crate) virtual_rows_version: Option<u64>,
     pub(crate) virtual_mount: bool,

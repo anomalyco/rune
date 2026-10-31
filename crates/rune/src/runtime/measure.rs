@@ -200,7 +200,7 @@ impl<S: 'static> Measurement<'_, S> {
         at.or_else(|| self.nodes.iter().position(|n| n.path == path))
     }
 
-    /// `bound` is the most `el` can be tall (see [`crate::virtual_list::height_bound`]); `scroll`
+    /// `bound` is the most `el` can be tall (see [`crate::el::virtual_list::height_bound`]); `scroll`
     /// is the scroll viewport `el` is the content of, whether it sticks to the bottom, and its bound.
     #[allow(clippy::too_many_arguments)]
     fn window_tree(&mut self, el: &mut El, parent: &str, index: usize, scroll: Option<(&str, bool, f32)>, tx: &Tx, force_all: bool, bound: f32, inert: bool, group: Option<&str>) {
@@ -209,7 +209,7 @@ impl<S: 'static> Measurement<'_, S> {
         }
         el.expand_memo();
         let inert = inert || el.inert;
-        let bound = crate::virtual_list::height_bound(&el.style, bound);
+        let bound = crate::el::virtual_list::height_bound(&el.style, bound);
         let path = node_path(parent, el.key.as_deref(), index);
         if let Some(estimate) = el.virtual_estimate {
             assert!(el.growth.is_some(), "`.virtualize(..)` at {path:?} needs `.growth(GrowthSpec)` on the same element");
@@ -233,7 +233,7 @@ impl<S: 'static> Measurement<'_, S> {
             offset = (offset - v.top).max(0.0);
             v.pad_top = padding(el.style.padding.top);
             v.pad_bottom = padding(el.style.padding.bottom);
-            v.set_gap(crate::virtual_list::gap_y(&el.style));
+            v.set_gap(crate::el::virtual_list::gap_y(&el.style));
             let source = el.virtual_rows.take();
             let state = playground_host::handler_states_ref(self.state, self.playground);
             if source.is_some() {
@@ -303,7 +303,7 @@ impl<S: 'static> Measurement<'_, S> {
             el.style.padding.bottom = length(v.pad_bottom + v.after);
             self.populate_virtual_children(el, &path, source, inert, group);
         }
-        let bounds = crate::virtual_list::child_bounds(&el.style, el.scroll.is_some(), bound, &el.children);
+        let bounds = crate::el::virtual_list::child_bounds(&el.style, el.scroll.is_some(), bound, &el.children);
         let scroll = el.scroll.map(|s| (path.as_str(), s.stick_bottom, bound));
         let child_group = if el.selection_group { Some(path.as_str()) } else { group };
         for (i, child) in el.children.iter_mut().enumerate() {
@@ -417,7 +417,7 @@ impl<S: 'static> Measurement<'_, S> {
         &mut self,
         el: &mut El,
         path: &str,
-        source: Option<Rc<crate::virtual_rows::RowSource>>,
+        source: Option<Rc<crate::el::virtual_rows::RowSource>>,
         inert: bool,
         group: Option<&str>,
     ) {

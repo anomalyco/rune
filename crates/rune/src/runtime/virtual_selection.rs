@@ -62,12 +62,12 @@ pub(crate) struct OffscreenText {
     pub tab_before: bool,
 }
 
-/// Offscreen selection state retained on a [`crate::virtual_list::VirtualList`].
+/// Offscreen selection state retained on a [`crate::el::virtual_list::VirtualList`].
 #[derive(Default)]
 pub(crate) struct PinnedSelection {
     pub texts: Vec<OffscreenText>,
     pub copy_providers: Vec<(String, SelectionCopy)>,
-    pub source: Option<Rc<crate::virtual_rows::RowSource>>,
+    pub source: Option<Rc<crate::el::virtual_rows::RowSource>>,
     pub unmounted: HashMap<usize, El>,
     pub group_path: Option<String>,
     pub inert: bool,

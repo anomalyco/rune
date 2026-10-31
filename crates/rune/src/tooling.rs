@@ -468,7 +468,7 @@ pub(crate) fn load_script(script: &Value) -> Vec<Ev> {
 /// The script's displays and pointer, which headless `place()` resolves against. Without
 /// scripted displays, a `--desktop` run has one display the size of its output: `--size`, else
 /// the backdrop's pixels at `--scale`.
-pub(crate) fn desktop(args: &Args, script: Option<&Value>) -> crate::virtual_desktop::VirtualDesktop {
+pub(crate) fn desktop(args: &Args, script: Option<&Value>) -> crate::desktop::displays::VirtualDesktop {
     let scale = f64::from(args.scale.unwrap_or(2.0));
     let size = args.desktop.as_ref().map(|path| match args.size {
         Some((w, h)) => (f64::from(w), f64::from(h)),
@@ -477,7 +477,7 @@ pub(crate) fn desktop(args: &Args, script: Option<&Value>) -> crate::virtual_des
             (f64::from(w) / scale, f64::from(h) / scale)
         }
     });
-    crate::virtual_desktop::VirtualDesktop::from_script_sized(script, scale, size).unwrap_or_else(|e| die(&e))
+    crate::desktop::displays::VirtualDesktop::from_script_sized(script, scale, size).unwrap_or_else(|e| die(&e))
 }
 
 /// Feeds a script's file drag step to `rt`, at `at` in window points.

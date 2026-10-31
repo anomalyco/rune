@@ -15,10 +15,12 @@ use crate::el::Shell;
 use crate::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
 use crate::runtime::{Env, Runtime};
 use crate::tooling::{Args, Ev, Kind, Pos, Shot, Timeline, Trace, die};
-use crate::virtual_desktop::VirtualDesktop;
+use crate::desktop::displays::VirtualDesktop;
 use crate::window::WakeEvent;
 use crate::headless_run::WindowFrame;
 use crate::{AnyWindowSpec, WindowHandle, WindowSpec};
+
+pub(crate) mod displays;
 
 /// Corner radius of a titled window, in points.
 const RADIUS: f32 = 10.0;

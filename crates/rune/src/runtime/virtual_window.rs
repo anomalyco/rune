@@ -34,7 +34,7 @@ impl<S: 'static> Runtime<S> {
         queued
     }
 
-    pub(super) fn wants_window(&self, path: &str, v: &crate::virtual_list::VirtualList) -> bool {
+    pub(super) fn wants_window(&self, path: &str, v: &crate::el::virtual_list::VirtualList) -> bool {
         let Some(&i) = self.path_ids.get(path).and_then(|id| self.node_index.get(id)) else { return false };
         if self.subtree_exiting(i) { return false; }
         self.path_ids.get(&v.scroll_path).and_then(|id| self.scrolls.get(id))

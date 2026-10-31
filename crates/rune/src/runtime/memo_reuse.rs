@@ -113,7 +113,7 @@ impl<S: 'static> Runtime<S> {
                 && !self.virtuals.contains_key(&r_new.path)
                 && self.scene.get(r_new.id, prop::FRAME) == Some(scene_rect)
                 && self.reorder_jump(nodes, span.new_start) == 0.0
-                && !r_new.parent.and_then(|p| self.virtuals.get(&nodes[p].path)).is_some_and(crate::virtual_list::VirtualList::replaced_view);
+                && !r_new.parent.and_then(|p| self.virtuals.get(&nodes[p].path)).is_some_and(crate::el::virtual_list::VirtualList::replaced_view);
 
             if !root_clean && !self.flying.is_empty() {
                 continue;

@@ -82,7 +82,7 @@ impl<S: 'static> Runtime<S> {
 
         // What drew nothing last frame has no exit to show (`unseen_presence.rs`).
         let any_gone = self.nodes.iter().any(|o| !self.node_index.contains_key(&o.id));
-        let any_replaced = self.virtuals.values().any(crate::virtual_list::VirtualList::replaced_view);
+        let any_replaced = self.virtuals.values().any(crate::el::virtual_list::VirtualList::replaced_view);
         let drew_nothing = if any_gone || any_replaced { self.drew_nothing() } else { Vec::new() };
         let unseen_ids: HashSet<NodeId> = if self.virtuals.is_empty() || drew_nothing.is_empty() { HashSet::default() } else {
             self.nodes.iter().zip(&drew_nothing).filter(|&(_, &u)| u).map(|(n, _)| n.id).collect()
@@ -135,7 +135,7 @@ impl<S: 'static> Runtime<S> {
             // and the space would only push the rows the change brings in down, out of view.
             let list = self.virtuals.get(&nodes[c].path);
             let is_virtual = list.is_some();
-            let replaced = list.is_some_and(crate::virtual_list::VirtualList::replaced_view);
+            let replaced = list.is_some_and(crate::el::virtual_list::VirtualList::replaced_view);
             let mut order = std::mem::take(&mut scratch.order);
             order.clear();
             order.reserve(new_ids.len() + 4);
@@ -186,7 +186,7 @@ impl<S: 'static> Runtime<S> {
             }
             stack.width = width;
             stack.pending_heights.retain(|id, _| new_set.contains(id));
-            stack.gap = crate::virtual_list::gap_y(taffy.style(nodes[c].taffy).unwrap());
+            stack.gap = crate::el::virtual_list::gap_y(taffy.style(nodes[c].taffy).unwrap());
             // With every row gone, the leaving rows still stand below the stack's top padding.
             let pad_top = rows.first().map_or(stack.pad_top, |&j| nodes[j].target[1] - ctop);
             stack.pad_bottom = rows.last().map_or(nodes[c].target[3] - ctop - pad_top, |&j| nodes[c].target[3] - nodes[j].target[3]);

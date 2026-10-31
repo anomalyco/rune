@@ -472,7 +472,7 @@ pub struct Runtime<S: 'static> {
     web_scroll: Option<web_runtime::TouchScroll>,
     grows: HashMap<NodeId, GrowTrack>,
     stacks: HashMap<NodeId, Stack>,
-    pub(crate) virtuals: HashMap<String, crate::virtual_list::VirtualList>,
+    pub(crate) virtuals: HashMap<String, crate::el::virtual_list::VirtualList>,
     /// The memo pass the current commit's first view build was. Memos none of its builds used
     /// go once it applies.
     memo_since: u64,
