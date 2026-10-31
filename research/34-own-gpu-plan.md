@@ -324,6 +324,30 @@ standalone `wgpu::naga` (`wgsl` → `process_overrides` → `msl`) compiles ever
   beats or matches baseline; `.metallib` freshness and pixel-equivalence tests pass across
   `rune`, `rune-fx` and `rune-light`.
 
+#### Considered, not done: `MTLBinaryArchive`
+
+Measured on the native backend after step 4, on an M2-class Mac, with fresh processes and medians
+of 10 alternating runs. `Renderer::new` builds one uber pipeline per format, and that one pipeline
+is the whole cold cost: 89 ms with macOS's per-app shader cache cleared, 0.94 ms warm.
+
+- **Runtime archive, written by the app:** cold drops to 13.7 ms (9.2 ms of that is loading the
+  archive), but warm rises to 6.1 ms (5.2 ms load), and a first run that writes the archive costs
+  +38 ms. It only helps when macOS's cache is cold but ours is valid. macOS's cache survives
+  reboots, and the cases that empty it (first launch, OS or GPU driver update, shader change) also
+  leave our archive empty or stale. Archive hits don't refill macOS's cache, and
+  `FailOnBinaryArchiveMiss` doesn't count macOS's cache, so we can't tell when to skip it.
+  `MTLBinaryArchive.h` also advises against writing archives at runtime in shipping apps.
+- **Shipped archive, built offline with `metal-tt`** for its 18 default Apple GPU variants: 1.12 MB
+  for the windowed format alone, 2.63 MB for Rune's four formats. One-pipeline builds were
+  byte-identical, but four-pipeline builds came out different on each of five runs. `xz -9`
+  shrinks the variants to about 56 KB per format (60 KB for all four together), so per-format
+  compressed archives would add about 225 KB, at the cost of first-launch decompression, a marker
+  file and a background recompile to fill macOS's cache. That's too much for about 75 ms once per
+  install or OS update.
+- **Revisit if:** cold first launch becomes a measured complaint, `metal-tt` output becomes
+  deterministic, Apple shrinks offline archives, or many more pipelines move onto the startup path
+  and make the cold cost much larger.
+
 ## 5. Triggers to expand or abandon
 
 - **Abandon / roll back to `wgpu` + upstream patches** if: (a) Phase 0 misses its kill gate,
