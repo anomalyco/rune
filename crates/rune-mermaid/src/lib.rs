@@ -470,6 +470,88 @@ impl EdgeStyle {
     }
 }
 
+/// Accumulates `classDef`, `class` / `:::class`, and `style` rules and resolves a node's [`NodeStyle`].
+#[derive(Default)]
+pub(crate) struct StyleSheet {
+    defs: HashMap<String, NodeStyle>,
+    classes: HashMap<String, Vec<String>>,
+    inline: HashMap<String, NodeStyle>,
+}
+
+impl StyleSheet {
+    pub(crate) fn class_def(&mut self, rest: &str) -> Option<()> {
+        let (names, props) = rest.trim().split_once(char::is_whitespace)?;
+        let st = parse_style_props(props);
+        for name in names.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+            self.defs.insert(name.to_owned(), st);
+        }
+        Some(())
+    }
+
+    pub(crate) fn assign_classes(&mut self, rest: &str) -> Option<()> {
+        let (targets, classes) = rest.trim().split_once(char::is_whitespace)?;
+        let cls_list: Vec<&str> = classes.split(',').map(str::trim).filter(|c| !c.is_empty()).collect();
+        for id in targets.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+            for &cls in &cls_list {
+                self.add_class(id, cls);
+            }
+        }
+        Some(())
+    }
+
+    pub(crate) fn style(&mut self, rest: &str) -> Option<()> {
+        let (targets, props) = rest.trim().split_once(char::is_whitespace)?;
+        let st = parse_style_props(props);
+        for id in targets.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+            self.add_style(id, st);
+        }
+        Some(())
+    }
+
+    pub(crate) fn add_class(&mut self, id: &str, class: &str) {
+        if !id.is_empty() && !class.is_empty() {
+            self.classes.entry(id.to_owned()).or_default().push(class.to_owned());
+        }
+    }
+
+    pub(crate) fn add_style(&mut self, id: &str, st: NodeStyle) {
+        if !id.is_empty() {
+            let cur = self.inline.get(id).copied().unwrap_or_default();
+            self.inline.insert(id.to_owned(), cur.merge(st));
+        }
+    }
+
+    /// Strips a trailing `:::class` from `raw`, recording the class assignment.
+    pub(crate) fn strip_inline(&mut self, raw: &str) -> Option<String> {
+        match raw.split_once(":::") {
+            Some((id, cls)) => {
+                let (id, cls) = (id.trim(), cls.trim());
+                if id.is_empty() || cls.is_empty() {
+                    return None;
+                }
+                self.add_class(id, cls);
+                Some(id.to_owned())
+            }
+            None => Some(raw.trim().to_owned()),
+        }
+    }
+
+    pub(crate) fn get(&self, id: &str) -> NodeStyle {
+        let mut st = NodeStyle::default();
+        if let Some(classes) = self.classes.get(id) {
+            for cls in classes {
+                if let Some(&cs) = self.defs.get(cls) {
+                    st = st.merge(cs);
+                }
+            }
+        }
+        if let Some(&inline) = self.inline.get(id) {
+            st = st.merge(inline);
+        }
+        st
+    }
+}
+
 /// Adapts a user colour `c` into a subtle Oklab fill harmonious with `base`.
 pub(crate) fn adapt_fill(base: Color, c: Color, dark_lift: f32, light_drop: f32) -> Color {
     let base_l = base.to_oklab()[0];

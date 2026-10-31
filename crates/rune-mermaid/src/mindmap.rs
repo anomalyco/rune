@@ -4,7 +4,7 @@
 
 use rune::{Align, Color, TextStyle};
 
-use super::canvas::{Canvas, Measured, Scene, fit, measure_wrap, over_color, rounded_rect};
+use super::canvas::{Canvas, Measured, Scene, measure_wrap, over_color, rounded_rect};
 use super::chart::{bold, hue, ink, s_curve, soft, solid, strong};
 use super::shape::{self, NodeShape};
 use super::{DiagramStyle, MAX_DEPTH, MAX_ITEMS, clean_quoted};
@@ -187,8 +187,7 @@ pub(crate) fn draw(m: &Mindmap, paint: &DiagramStyle) -> Option<Scene> {
         let text = if node.depth == 0 { ink(fill) } else { paint.text };
         draw_node(&mut c, look(i, node.look), p, [fill, border, text], font(i));
     }
-    let scale = fit(c.width(), paint);
-    c.finish(scale)
+    c.finish_fit(paint)
 }
 
 /// A plain root is drawn rounded, so it reads as the centre.

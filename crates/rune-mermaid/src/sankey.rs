@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use rune::Align;
 
-use super::canvas::{Canvas, Scene, fit, measure, room};
+use super::canvas::{Canvas, Scene, measure, room};
 use super::chart::{hue, s_curve, small, solid};
 use super::pie::number;
 use super::{DiagramStyle, MAX_ITEMS, clean};
@@ -184,8 +184,7 @@ pub(crate) fn draw(s: &Sankey, paint: &DiagramStyle) -> Option<Scene> {
             c.label_at(&m, [x + NODE_W + 6.0, mid], note, paint.text, Align::Start);
         }
     }
-    let scale = fit(c.width(), paint);
-    c.finish(scale)
+    c.finish_fit(paint)
 }
 
 #[cfg(test)]

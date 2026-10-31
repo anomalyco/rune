@@ -6,12 +6,12 @@ use std::collections::HashMap;
 
 use rune::Align;
 
-use super::canvas::{Canvas, Measured, Scene, fit, measure_wrap, over_color, rounded_rect, unit};
+use super::canvas::{Canvas, Measured, Scene, measure_wrap, over_color, rounded_rect, unit};
 use super::connector::{connector, inset, label_box};
 use super::flowchart::{ident, link, shape};
 use super::layered_draw::{Edge, NodeShape, boundary, node_size};
 use super::shape as shapes;
-use super::{Cur, DiagramStyle, EdgeStyle, MAX_DEPTH, MAX_ITEMS, NodeStyle, clean_quoted, parse_style_props, statements, word};
+use super::{Cur, DiagramStyle, EdgeStyle, MAX_DEPTH, MAX_ITEMS, NodeStyle, StyleSheet, clean_quoted, statements, word};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Point {
@@ -63,9 +63,7 @@ struct Parser {
     d: BlockDiagram,
     ids: HashMap<String, usize>,
     stack: Vec<usize>,
-    classes: HashMap<String, NodeStyle>,
-    node_classes: Vec<(String, String)>,
-    styles: Vec<(String, NodeStyle)>,
+    styles: StyleSheet,
     over: bool,
 }
 
@@ -75,9 +73,7 @@ pub(crate) fn parse(body: &[&str]) -> Option<BlockDiagram> {
         d: BlockDiagram { blocks: vec![root], edges: Vec::new() },
         ids: HashMap::new(),
         stack: vec![0],
-        classes: HashMap::new(),
-        node_classes: Vec::new(),
-        styles: Vec::new(),
+        styles: StyleSheet::default(),
         over: false,
     };
     for &line in body {
@@ -88,16 +84,9 @@ pub(crate) fn parse(body: &[&str]) -> Option<BlockDiagram> {
             }
         }
     }
-    let Parser { mut d, ids, classes, node_classes, styles, .. } = p;
-    for (id, class) in node_classes {
-        if let (Some(&i), Some(st)) = (ids.get(&id), classes.get(&class)) {
-            d.blocks[i].style = d.blocks[i].style.merge(*st);
-        }
-    }
-    for (id, st) in styles {
-        if let Some(&i) = ids.get(&id) {
-            d.blocks[i].style = d.blocks[i].style.merge(st);
-        }
+    let Parser { mut d, ids, styles, .. } = p;
+    for (id, i) in ids {
+        d.blocks[i].style = styles.get(&id);
     }
     (d.blocks.len() > 1).then_some(d)
 }
@@ -135,21 +124,11 @@ impl Parser {
             self.d.blocks[i].kind = Kind::Group { columns: None, children: Vec::new() };
             self.stack.push(i);
         } else if let Some(rest) = word(s, "classDef") {
-            let (names, props) = rest.split_once(char::is_whitespace)?;
-            let st = parse_style_props(props);
-            for n in names.split(',') {
-                self.classes.insert(n.trim().to_owned(), st);
-            }
+            self.styles.class_def(rest)?;
         } else if let Some(rest) = word(s, "class") {
-            let (ids, class) = rest.split_once(char::is_whitespace)?;
-            for id in ids.split(',') {
-                self.node_classes.push((id.trim().to_owned(), class.trim().to_owned()));
-            }
+            self.styles.assign_classes(rest)?;
         } else if let Some(rest) = word(s, "style") {
-            let (ids, props) = rest.split_once(char::is_whitespace)?;
-            for id in ids.split(',') {
-                self.styles.push((id.trim().to_owned(), parse_style_props(props)));
-            }
+            self.styles.style(rest)?;
         } else if self.edges(s).is_none() {
             self.items(s)?;
         }
@@ -408,8 +387,7 @@ pub(crate) fn draw(d: &BlockDiagram, paint: &DiagramStyle) -> Option<Scene> {
             Kind::Space | Kind::Group { .. } => {}
         }
     }
-    let scale = fit(c.width(), paint);
-    c.finish(scale)
+    c.finish_fit(paint)
 }
 
 /// A block arrow's outline: a shaft with a head at one end (or both, for `x` and `y`).

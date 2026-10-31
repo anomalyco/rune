@@ -6,7 +6,7 @@ use crate::DiagramStyle;
 use crate::hover::{Hover, Spot, Trace};
 
 /// The card's padding on each side.
-pub(crate) const CARD_PAD: f32 = 16.0;
+const CARD_PAD: f32 = 16.0;
 
 /// The widest a diagram's drawing can be for its card to fit `paint.max_width`.
 pub(crate) fn room(paint: &DiagramStyle) -> f32 {
@@ -14,7 +14,7 @@ pub(crate) fn room(paint: &DiagramStyle) -> f32 {
 }
 
 /// How much a canvas `width` points wide is drawn at to fit its card in `paint.max_width`.
-pub(crate) fn fit(width: f32, paint: &DiagramStyle) -> f32 {
+fn fit(width: f32, paint: &DiagramStyle) -> f32 {
     if width <= room(paint) { 1.0 } else { (room(paint) / width).max(0.6) }
 }
 
@@ -189,6 +189,11 @@ impl Canvas {
     pub(crate) fn width(&self) -> f32 {
         let b = self.bounds();
         b[2] - b[0]
+    }
+
+    pub(crate) fn finish_fit(self, paint: &DiagramStyle) -> Option<Scene> {
+        let scale = fit(self.width(), paint);
+        self.finish(scale)
     }
 
     pub(crate) fn finish(self, scale: f32) -> Option<Scene> {

@@ -63,10 +63,8 @@ fn a_statement_that_does_not_read_is_skipped_with_its_body() {
 
 #[test]
 fn every_prefix_draws_or_falls_back_without_panicking() {
-    let src = "classDiagram\n  class A {\n    +i32 x\n    +run()\n  }\n  A --> B : calls";
-    let paint = DiagramStyle::neutral(false);
-    for (i, _) in src.char_indices() {
-        let _ = crate::scene(&src[..i], &paint, None);
-    }
-    assert!(crate::scene(src, &paint, None).is_some());
+    crate::tests::assert_prefixes_never_panic(
+        "classDiagram\n  class A {\n    +i32 x\n    +run()\n  }\n  A --> B : calls",
+        false,
+    );
 }

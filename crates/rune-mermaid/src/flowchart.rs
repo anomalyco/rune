@@ -4,12 +4,12 @@ use std::collections::{HashMap, HashSet};
 
 use rune::Color;
 
-use super::canvas::{Canvas, Scene, fit, measure};
+use super::canvas::{Canvas, Scene, measure};
 use super::layered::{MAX_MINLEN, Spacing};
 use super::layered_draw::{ClusterSpec, Dir, DrawNode, Edge, Head, Line, NodeShape, layered_canvas, node_size};
 use super::{
-    Cur, DiagramStyle, Hover, EdgeStyle, MAX_DEPTH, MAX_ITEMS, NodeStyle, clean, clean_quoted,
-    parse_edge_style_props, parse_style_props, statements,
+    Cur, DiagramStyle, EdgeStyle, Hover, MAX_DEPTH, MAX_ITEMS, NodeStyle, StyleSheet, clean, clean_quoted,
+    parse_edge_style_props, statements,
 };
 
 #[derive(Debug)]
@@ -47,9 +47,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<Flowchart> {
         f: Flowchart { title: None, dir, nodes: Vec::new(), edges: Vec::new(), subgraphs: Vec::new() },
         ids: HashMap::new(),
         stack: Vec::new(),
-        class_defs: HashMap::new(),
-        node_classes: HashMap::new(),
-        node_styles: HashMap::new(),
+        styles: StyleSheet::default(),
         default_edge_style: EdgeStyle::default(),
         edge_styles: HashMap::new(),
         edge_ids: HashSet::new(),
@@ -64,18 +62,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<Flowchart> {
         }
     }
     for (id, &idx) in &p.ids {
-        let mut st = NodeStyle::default();
-        if let Some(classes) = p.node_classes.get(id) {
-            for cls in classes {
-                if let Some(&cs) = p.class_defs.get(cls) {
-                    st = st.merge(cs);
-                }
-            }
-        }
-        if let Some(&inline) = p.node_styles.get(id) {
-            st = st.merge(inline);
-        }
-        p.f.nodes[idx].style = st;
+        p.f.nodes[idx].style = p.styles.get(id);
     }
     for (i, e) in p.f.edges.iter_mut().enumerate() {
         let mut st = p.default_edge_style;
@@ -148,9 +135,7 @@ struct Parser {
     f: Flowchart,
     ids: HashMap<String, usize>,
     stack: Vec<usize>,
-    class_defs: HashMap<String, NodeStyle>,
-    node_classes: HashMap<String, Vec<String>>,
-    node_styles: HashMap<String, NodeStyle>,
+    styles: StyleSheet,
     default_edge_style: EdgeStyle,
     edge_styles: HashMap<usize, EdgeStyle>,
     edge_ids: HashSet<String>,
@@ -215,32 +200,13 @@ impl Parser {
                 }
             }
             "classDef" => {
-                let rest = s["classDef".len()..].trim();
-                if let Some((names, props)) = rest.split_once(char::is_whitespace) {
-                    let st = parse_style_props(props);
-                    for name in names.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-                        self.class_defs.insert(name.to_owned(), st);
-                    }
-                }
+                let _ = self.styles.class_def(&s["classDef".len()..]);
             }
             "class" => {
-                let rest = s["class".len()..].trim();
-                if let Some((targets, classes)) = rest.split_once(char::is_whitespace) {
-                    let cls_list: Vec<String> = classes.split(',').map(|c| c.trim().to_owned()).filter(|c| !c.is_empty()).collect();
-                    for id in targets.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-                        self.node_classes.entry(id.to_owned()).or_default().extend(cls_list.iter().cloned());
-                    }
-                }
+                let _ = self.styles.assign_classes(&s["class".len()..]);
             }
             "style" => {
-                let rest = s["style".len()..].trim();
-                if let Some((targets, props)) = rest.split_once(char::is_whitespace) {
-                    let st = parse_style_props(props);
-                    for id in targets.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-                        let cur = self.node_styles.get(id).copied().unwrap_or_default();
-                        self.node_styles.insert(id.to_owned(), cur.merge(st));
-                    }
-                }
+                let _ = self.styles.style(&s["style".len()..]);
             }
             "linkStyle" => {
                 let rest = s["linkStyle".len()..].trim();
@@ -308,7 +274,7 @@ impl Parser {
     fn node(&mut self, r: NodeRef) -> Option<usize> {
         let NodeRef { id, shape, class } = r;
         if let Some(cls) = class {
-            self.node_classes.entry(id.clone()).or_default().push(cls);
+            self.styles.add_class(&id, &cls);
         }
         let cluster = self.stack.last().copied();
         let i = match self.ids.get(&id) {
@@ -701,9 +667,7 @@ pub(crate) fn link(c: &mut Cur) -> Option<Link> {
 const SPACING: Spacing = Spacing { node: 36.0, rank: 44.0, cluster: 14.0 };
 
 pub(crate) fn draw(f: &Flowchart, paint: &DiagramStyle, hover: Option<(Hover, Color)>) -> Option<Scene> {
-    let canvas = draw_canvas(f, paint, hover)?;
-    let scale = fit(canvas.width(), paint);
-    canvas.finish(scale)
+    draw_canvas(f, paint, hover)?.finish_fit(paint)
 }
 
 /// `f` drawn at full size, before [`Canvas::finish`].

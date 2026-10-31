@@ -157,3 +157,11 @@ fn dashes_stop_on_huge_and_non_finite_lengths() {
         assert!(c.ops.len() <= 20_000);
     }
 }
+
+pub(crate) fn assert_prefixes_never_panic(src: &str, dark: bool) {
+    let paint = DiagramStyle::neutral(dark);
+    for (i, _) in src.char_indices() {
+        let _ = scene(&src[..i], &paint, None);
+    }
+    assert!(scene(src, &paint, None).is_some());
+}

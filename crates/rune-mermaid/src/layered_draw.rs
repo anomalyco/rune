@@ -3,7 +3,8 @@
 
 use rune::{Align, Color, TextStyle};
 
-use super::canvas::{Canvas, Measured, Scene, ellipse, fit, measure, measure_wrap, over_color, room, rounded_rect};
+use super::canvas::{Canvas, Measured, Scene, ellipse, measure, measure_wrap, over_color, room, rounded_rect};
+use super::chart::{bold, small};
 use super::connector::{self, label_box, title_box};
 use super::layered::{GCluster, GEdge, Graph, Spacing, layout};
 use super::route::Ctx;
@@ -161,8 +162,7 @@ pub(crate) fn draw_layered(
     hover: Option<(Hover, Color)>,
 ) -> Option<Scene> {
     let canvas = layered_canvas(dir, nodes, edges, clusters, spacing, paint, hover)?;
-    let scale = fit(canvas.width(), paint);
-    canvas.finish(scale)
+    canvas.finish_fit(paint)
 }
 
 /// [`draw_layered`] at full size, before [`Canvas::finish`].
@@ -175,9 +175,9 @@ pub(crate) fn layered_canvas(
     paint: &DiagramStyle,
     hover: Option<(Hover, Color)>,
 ) -> Option<Canvas> {
-    let edge_font = TextStyle { size: paint.font.size - 1.0, line_height: paint.font.line_height - 2.0, ..paint.font };
+    let edge_font = small(paint);
     let labels: Vec<Option<Measured>> = edges.iter().map(|e| e.label.as_ref().map(|l| measure(l, edge_font))).collect();
-    let title_font = TextStyle { weight: 600.0, ..edge_font };
+    let title_font = bold(edge_font);
     let titles: Vec<Measured> = clusters.iter().map(|c| measure(&c.title, title_font)).collect();
     let fonts = Fonts { edge: edge_font, title: title_font };
     let parts = Parts { nodes, edges, clusters, labels: &labels, titles: &titles };

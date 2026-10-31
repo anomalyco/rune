@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use rune::{Align, Color};
 
-use super::canvas::{Canvas, Measured, Scene, ellipse, fit, measure, measure_wrap, over_color, room};
+use super::canvas::{Canvas, Measured, Scene, ellipse, measure, measure_wrap, over_color, room};
 use super::chart::{bold, small, soft, strong};
 use super::{DiagramStyle, MAX_ITEMS, clean, parse_color_spec, word};
 
@@ -181,8 +181,7 @@ pub(crate) fn draw(q: &Quadrant, paint: &DiagramStyle) -> Option<Scene> {
         let m = measure(&p.name, note);
         c.label_at(&m, [at[0] - m.size[0] / 2.0, at[1] + r + 3.0], note, paint.text, Align::Center);
     }
-    let scale = fit(c.width(), paint);
-    c.finish(scale)
+    c.finish_fit(paint)
 }
 
 #[cfg(test)]

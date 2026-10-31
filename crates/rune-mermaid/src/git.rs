@@ -5,7 +5,7 @@
 
 use rune::{Align, Color};
 
-use super::canvas::{Canvas, Measured, Scene, dist, ellipse, fit, lerp, measure, rounded_rect, unit};
+use super::canvas::{Canvas, Measured, Scene, dist, ellipse, lerp, measure, rounded_rect, unit};
 use super::chart::{bold, hue, ink, small, solid};
 use super::{DiagramStyle, MAX_ITEMS, clean, oklab_mix, statements};
 
@@ -302,8 +302,7 @@ pub(crate) fn draw(g: &GitGraph, paint: &DiagramStyle) -> Option<Scene> {
             c.label_at(tag, [o[0] + PAD[0], o[1] + PAD[1]], note, paint.text, Align::Start);
         }
     }
-    let scale = fit(c.width(), paint);
-    c.finish(scale)
+    c.finish_fit(paint)
 }
 
 /// `a` to `b` through corner `k`, rounded.

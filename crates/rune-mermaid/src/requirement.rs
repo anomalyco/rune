@@ -9,7 +9,7 @@ use rune::Color;
 use super::canvas::Scene;
 use super::layered::Spacing;
 use super::layered_draw::{Dir, DrawNode, Edge, Head, Line, class_box, draw_layered};
-use super::{DiagramStyle, EdgeStyle, Hover, MAX_ITEMS, NodeStyle, clean_quoted, parse_style_props, word};
+use super::{DiagramStyle, EdgeStyle, Hover, MAX_ITEMS, NodeStyle, StyleSheet, clean_quoted, parse_style_props, word};
 
 #[derive(Debug)]
 pub(crate) struct Req {
@@ -43,9 +43,7 @@ const RELATIONS: [&str; 7] = ["contains", "copies", "derives", "satisfies", "ver
 pub(crate) fn parse(body: &[&str]) -> Option<Requirements> {
     let mut d = Requirements { dir: Dir::Down, nodes: Vec::new(), edges: Vec::new() };
     let mut ids: HashMap<String, usize> = HashMap::new();
-    let mut classes: HashMap<String, NodeStyle> = HashMap::new();
-    let mut node_classes: Vec<(String, String)> = Vec::new();
-    let mut styles: Vec<(String, NodeStyle)> = Vec::new();
+    let mut styles = StyleSheet::default();
     let mut open: Option<usize> = None;
     for &l in body {
         if let Some(i) = open {
@@ -71,26 +69,27 @@ pub(crate) fn parse(body: &[&str]) -> Option<Requirements> {
         if let Some(rest) = word(l, "direction") {
             d.dir = Dir::parse(rest).unwrap_or(d.dir);
         } else if let Some(rest) = word(l, "classDef") {
-            if let Some((names, props)) = rest.split_once(char::is_whitespace) {
-                for n in names.split(',') {
-                    classes.insert(n.trim().to_owned(), parse_style_props(props));
-                }
-            }
+            let _ = styles.class_def(rest);
         } else if let Some(rest) = word(l, "class") {
             if let Some((names, class)) = rest.split_once(char::is_whitespace) {
-                node_classes.extend(names.split(',').map(|n| (clean_quoted(n), class.trim().to_owned())));
+                for n in names.split(',') {
+                    styles.add_class(&clean_quoted(n), class.trim());
+                }
             }
         } else if let Some(rest) = word(l, "style") {
             if let Some((names, props)) = rest.split_once(char::is_whitespace) {
-                styles.extend(names.split(',').map(|n| (clean_quoted(n), parse_style_props(props))));
+                let st = parse_style_props(props);
+                for n in names.split(',') {
+                    styles.add_style(&clean_quoted(n), st);
+                }
             }
         } else if let Some((kind, rest)) = KINDS.iter().find_map(|(w, k)| word(l, w).map(|r| (*k, r))) {
             let Some(name) = rest.strip_suffix('{').map(str::trim).filter(|n| !n.is_empty()) else { continue };
-            let i = node(&mut d, &mut ids, &mut node_classes, name);
+            let i = node(&mut d, &mut ids, &mut styles, name);
             d.nodes[i].kind = kind.to_owned();
             open = Some(i);
         } else if let Some((from, rel, to)) = relation(l) {
-            let (a, b) = (node(&mut d, &mut ids, &mut node_classes, from), node(&mut d, &mut ids, &mut node_classes, to));
+            let (a, b) = (node(&mut d, &mut ids, &mut styles, from), node(&mut d, &mut ids, &mut styles, to));
             let contains = rel == "contains";
             d.edges.push(Edge {
                 from: a,
@@ -107,21 +106,14 @@ pub(crate) fn parse(body: &[&str]) -> Option<Requirements> {
             return None;
         }
     }
-    for (name, class) in node_classes {
-        if let (Some(&i), Some(st)) = (ids.get(&name), classes.get(&class)) {
-            d.nodes[i].style = d.nodes[i].style.merge(*st);
-        }
-    }
-    for (name, st) in styles {
-        if let Some(&i) = ids.get(&name) {
-            d.nodes[i].style = d.nodes[i].style.merge(st);
-        }
+    for (name, i) in ids {
+        d.nodes[i].style = styles.get(&name);
     }
     (!d.nodes.is_empty()).then_some(d)
 }
 
 /// The node `name` (`"quoted"`, maybe with a `:::class`) names, added if it's new.
-fn node(d: &mut Requirements, ids: &mut HashMap<String, usize>, node_classes: &mut Vec<(String, String)>, name: &str) -> usize {
+fn node(d: &mut Requirements, ids: &mut HashMap<String, usize>, styles: &mut StyleSheet, name: &str) -> usize {
     let (name, class) = name.split_once(":::").map_or((name, None), |(n, c)| (n, Some(c.trim())));
     let name = clean_quoted(name);
     let i = *ids.entry(name.clone()).or_insert_with(|| {
@@ -129,7 +121,7 @@ fn node(d: &mut Requirements, ids: &mut HashMap<String, usize>, node_classes: &m
         d.nodes.len() - 1
     });
     if let Some(c) = class {
-        node_classes.push((d.nodes[i].name.clone(), c.to_owned()));
+        styles.add_class(&d.nodes[i].name, c);
     }
     i
 }

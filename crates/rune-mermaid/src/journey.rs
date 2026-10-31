@@ -3,7 +3,7 @@
 
 use rune::{Align, oklch};
 
-use super::canvas::{Canvas, Measured, Scene, arc, arrowhead, ellipse, fit, measure, measure_wrap, rounded_rect};
+use super::canvas::{Canvas, Measured, Scene, arc, arrowhead, ellipse, measure, measure_wrap, rounded_rect};
 use super::chart::{bold, dark, hue, ink, small, soft, solid, strong};
 use super::{DiagramStyle, MAX_ITEMS, clean, word};
 
@@ -131,8 +131,7 @@ pub(crate) fn draw(j: &Journey, paint: &DiagramStyle) -> Option<Scene> {
     let right = x_of(j.tasks.len() - 1) + COL + 12.0;
     c.stroke(vec![[-4.0, base], [right - 8.0, base]], false, 1.5, paint.line);
     c.fill(arrowhead([right, base], [1.0, 0.0], 9.0, 8.0), paint.line);
-    let scale = fit(c.width(), paint);
-    c.finish(scale)
+    c.finish_fit(paint)
 }
 
 fn draw_face(c: &mut Canvas, at: [f32; 2], score: f32, paint: &DiagramStyle) {

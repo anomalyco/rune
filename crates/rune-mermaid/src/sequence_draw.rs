@@ -2,7 +2,7 @@
 
 use rune::{Align, Color, TextStyle};
 
-use super::canvas::{Canvas, Measured, Scene, arrowhead, ellipse, fit, measure, over_color, rounded_rect};
+use super::canvas::{Canvas, Measured, Scene, arrowhead, ellipse, measure, over_color, rounded_rect};
 use super::sequence::{Event, Kind, NotePos, Sequence, Tip};
 use super::shape::{self, NodeShape};
 use super::{DiagramStyle, adapt_fill};
@@ -275,8 +275,7 @@ pub(crate) fn draw(s: &Sequence, paint: &DiagramStyle) -> Option<Scene> {
     for layer in [back, lifelines, bars, tabs, front, tops] {
         c.append(layer);
     }
-    let scale = fit(c.width(), paint);
-    c.finish(scale)
+    c.finish_fit(paint)
 }
 
 fn tip_len(t: Tip) -> f32 {

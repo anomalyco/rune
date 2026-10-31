@@ -7,7 +7,7 @@ use rune::Color;
 use super::canvas::Scene;
 use super::layered::Spacing;
 use super::layered_draw::{ClusterSpec, Dir, DrawNode, Edge, Head, Line, class_box, draw_layered};
-use super::{DiagramStyle, EdgeStyle, Hover, MAX_ITEMS, NodeStyle, clean, clean_quoted, parse_style_props, statements};
+use super::{DiagramStyle, EdgeStyle, Hover, MAX_ITEMS, NodeStyle, StyleSheet, clean, clean_quoted, statements};
 
 #[derive(Debug)]
 pub(crate) struct ClassNode {
@@ -61,9 +61,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<ClassDiagram> {
         ids: HashMap::new(),
         active_class: None,
         active_ns: None,
-        class_defs: HashMap::new(),
-        node_classes: HashMap::new(),
-        node_styles: HashMap::new(),
+        styles: StyleSheet::default(),
         skipping: false,
         members: 0,
         over: false,
@@ -90,18 +88,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<ClassDiagram> {
         }
     }
     for (id, &idx) in &p.ids {
-        let mut st = NodeStyle::default();
-        if let Some(classes) = p.node_classes.get(id) {
-            for cls in classes {
-                if let Some(&cs) = p.class_defs.get(cls) {
-                    st = st.merge(cs);
-                }
-            }
-        }
-        if let Some(&inline) = p.node_styles.get(id) {
-            st = st.merge(inline);
-        }
-        p.d.classes[idx].style = st;
+        p.d.classes[idx].style = p.styles.get(id);
     }
     (!p.d.classes.is_empty()).then_some(p.d)
 }
@@ -111,9 +98,7 @@ struct Parser {
     ids: HashMap<String, usize>,
     active_class: Option<usize>,
     active_ns: Option<usize>,
-    class_defs: HashMap<String, NodeStyle>,
-    node_classes: HashMap<String, Vec<String>>,
-    node_styles: HashMap<String, NodeStyle>,
+    styles: StyleSheet,
     /// Inside the body of a block that didn't read, until its `}`.
     skipping: bool,
     members: usize,
@@ -166,32 +151,19 @@ impl Parser {
             "class" => self.class_decl(s["class".len()..].trim())?,
             "note" | "Note" | "link" | "click" | "callback" | "accTitle" | "accDescr" => {}
             "classDef" => {
-                let rest = s["classDef".len()..].trim();
-                if let Some((names, props)) = rest.split_once(char::is_whitespace) {
-                    let st = parse_style_props(props);
-                    for name in names.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-                        self.class_defs.insert(name.to_owned(), st);
-                    }
-                }
+                let _ = self.styles.class_def(&s["classDef".len()..]);
             }
             "cssClass" => {
                 let rest = s["cssClass".len()..].trim();
                 if let Some((targets, cls)) = rest.rsplit_once(char::is_whitespace) {
-                    let cls = cls.trim().trim_matches('"').to_owned();
-                    for id in targets.trim().trim_matches('"').split(',').map(str::trim).filter(|n| !n.is_empty()) {
-                        self.node_classes.entry(id.to_owned()).or_default().push(cls.clone());
+                    let cls = cls.trim().trim_matches('"');
+                    for id in targets.trim().trim_matches('"').split(',').map(str::trim) {
+                        self.styles.add_class(id, cls);
                     }
                 }
             }
             "style" => {
-                let rest = s["style".len()..].trim();
-                if let Some((targets, props)) = rest.split_once(char::is_whitespace) {
-                    let st = parse_style_props(props);
-                    for id in targets.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-                        let cur = self.node_styles.get(id).copied().unwrap_or_default();
-                        self.node_styles.insert(id.to_owned(), cur.merge(st));
-                    }
-                }
+                let _ = self.styles.style(&s["style".len()..]);
             }
             _ if s.starts_with("<<") && s.contains(">>") => {
                 let end = s.find(">>")?;
@@ -205,7 +177,7 @@ impl Parser {
                     return Some(());
                 }
                 if let Some((lhs, member)) = s.split_once(':') {
-                    let id = self.strip_class(lhs.trim())?;
+                    let id = self.styles.strip_inline(lhs)?;
                     let idx = self.ensure_class(&id)?;
                     self.add_member(idx, member.trim());
                     return (!self.over).then_some(());
@@ -226,7 +198,7 @@ impl Parser {
         } else {
             (core, None)
         };
-        let core = self.strip_class(core)?;
+        let core = self.styles.strip_inline(core)?;
         let (id, label) = if let Some(b) = core.find('[')
             && core.ends_with(']')
         {
@@ -286,8 +258,8 @@ impl Parser {
         let (pos, &(tok, start_h, end_h, line)) = find_rel(lhs_rel)?;
         let (left_id, left_card) = parse_side(lhs_rel[..pos].trim(), true)?;
         let (right_id, right_card) = parse_side(lhs_rel[pos + tok.len()..].trim(), false)?;
-        let left_id = self.strip_class(&left_id)?;
-        let right_id = self.strip_class(&right_id)?;
+        let left_id = self.styles.strip_inline(&left_id)?;
+        let right_id = self.styles.strip_inline(&right_id)?;
         let from = self.ensure_class(&left_id)?;
         let to = self.ensure_class(&right_id)?;
         self.budget()?;
@@ -312,20 +284,6 @@ impl Parser {
         };
         self.d.edges.push(Edge { from, to, label, line, start, end, minlen: 1, style: EdgeStyle::default() });
         Some(())
-    }
-
-    fn strip_class(&mut self, raw: &str) -> Option<String> {
-        match raw.split_once(":::") {
-            Some((id, cls)) => {
-                let (id, cls) = (id.trim(), cls.trim());
-                if id.is_empty() || cls.is_empty() {
-                    return None;
-                }
-                self.node_classes.entry(id.to_owned()).or_default().push(cls.to_owned());
-                Some(id.to_owned())
-            }
-            None => Some(raw.trim().to_owned()),
-        }
     }
 
     fn ensure_class(&mut self, raw: &str) -> Option<usize> {

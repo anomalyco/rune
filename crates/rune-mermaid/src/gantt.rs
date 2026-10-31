@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use rune::{Align, TextStyle};
 
-use super::canvas::{Canvas, Measured, Scene, fit, measure, measure_wrap, over_color, room, rounded_rect};
+use super::canvas::{Canvas, Measured, Scene, measure, measure_wrap, over_color, room, rounded_rect};
 use super::chart::{axis_x, ink, soft, strong};
 use super::date::{self, DAY, Span, Step};
 use super::{DiagramStyle, MAX_ITEMS, clean, clean_quoted, oklab_mix, statements};
@@ -356,8 +356,7 @@ pub(crate) fn draw(g: &Gantt, paint: &DiagramStyle) -> Option<Scene> {
         };
         c.label_at(&m, [at.0, mid - m.size[1] / 2.0], small, at.1, Align::Start);
     }
-    let scale = fit(c.width(), paint);
-    c.finish(scale)
+    c.finish_fit(paint)
 }
 
 #[cfg(test)]

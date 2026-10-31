@@ -8,7 +8,7 @@ use rune::{Color, TextStyle};
 use super::canvas::{Measured, Scene, measure_wrap};
 use super::layered::Spacing;
 use super::layered_draw::{Dir, DrawNode, ENTITY_PAD, Edge, Head, Line, draw_layered, entity_row_h};
-use super::{DiagramStyle, EdgeStyle, Hover, MAX_ITEMS, NodeStyle, clean, clean_quoted, parse_style_props, statements};
+use super::{DiagramStyle, EdgeStyle, Hover, MAX_ITEMS, NodeStyle, StyleSheet, clean, clean_quoted, statements};
 
 #[derive(Debug)]
 pub(crate) struct Entity {
@@ -42,9 +42,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<ErDiagram> {
         ids: HashMap::new(),
         open: None,
         skipping: false,
-        class_defs: HashMap::new(),
-        node_classes: HashMap::new(),
-        node_styles: HashMap::new(),
+        styles: StyleSheet::default(),
         attrs: 0,
         over: false,
     };
@@ -67,16 +65,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<ErDiagram> {
         }
     }
     for (id, &idx) in &p.ids {
-        let mut st = NodeStyle::default();
-        for cls in p.node_classes.get(id).into_iter().flatten() {
-            if let Some(&cs) = p.class_defs.get(cls) {
-                st = st.merge(cs);
-            }
-        }
-        if let Some(&inline) = p.node_styles.get(id) {
-            st = st.merge(inline);
-        }
-        p.d.entities[idx].style = st;
+        p.d.entities[idx].style = p.styles.get(id);
     }
     (!p.d.entities.is_empty()).then_some(p.d)
 }
@@ -88,9 +77,7 @@ struct Parser {
     open: Option<usize>,
     /// Inside the body of a block that didn't read, until its `}`.
     skipping: bool,
-    class_defs: HashMap<String, NodeStyle>,
-    node_classes: HashMap<String, Vec<String>>,
-    node_styles: HashMap<String, NodeStyle>,
+    styles: StyleSheet,
     attrs: usize,
     over: bool,
 }
@@ -128,27 +115,18 @@ impl Parser {
             }
             "accTitle" | "accDescr" => return Some(()),
             "classDef" => {
-                let (names, props) = s["classDef".len()..].trim().split_once(char::is_whitespace)?;
-                let st = parse_style_props(props);
-                for name in names.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-                    self.class_defs.insert(name.to_owned(), st);
-                }
+                self.styles.class_def(&s["classDef".len()..])?;
                 return Some(());
             }
             "class" => {
                 let (ids, cls) = s["class".len()..].trim().rsplit_once(char::is_whitespace)?;
-                for id in ids.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-                    self.node_classes.entry(id.to_owned()).or_default().push(cls.trim().to_owned());
+                for id in ids.split(',').map(str::trim) {
+                    self.styles.add_class(id, cls.trim());
                 }
                 return Some(());
             }
             "style" => {
-                let (ids, props) = s["style".len()..].trim().split_once(char::is_whitespace)?;
-                let st = parse_style_props(props);
-                for id in ids.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-                    let cur = self.node_styles.get(id).copied().unwrap_or_default();
-                    self.node_styles.insert(id.to_owned(), cur.merge(st));
-                }
+                self.styles.style(&s["style".len()..])?;
                 return Some(());
             }
             _ => {}
@@ -207,8 +185,8 @@ impl Parser {
             _ if valid_id(id) => id,
             _ => return None,
         };
-        if let Some(cls) = class.filter(|c| !c.is_empty()) {
-            self.node_classes.entry(id.to_owned()).or_default().push(cls.to_owned());
+        if let Some(cls) = class {
+            self.styles.add_class(id, cls);
         }
         let idx = match self.ids.get(id) {
             Some(&i) => i,

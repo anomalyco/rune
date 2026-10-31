@@ -134,12 +134,10 @@ fn nesting_past_the_bound_still_rejects() {
 
 #[test]
 fn every_prefix_draws_or_falls_back_without_panicking() {
-    let src = "sequenceDiagram\n  autonumber\n  actor U as User\n  U->>+A: hi\n  loop retry\n    A->>B: call\n    B--xA: fail\n  end\n  Note left of U: waits\n  A-->>-U: done";
-    let paint = DiagramStyle::neutral(true);
-    for (i, _) in src.char_indices() {
-        let _ = crate::scene(&src[..i], &paint, None);
-    }
-    assert!(crate::scene(src, &paint, None).is_some());
+    crate::tests::assert_prefixes_never_panic(
+        "sequenceDiagram\n  autonumber\n  actor U as User\n  U->>+A: hi\n  loop retry\n    A->>B: call\n    B--xA: fail\n  end\n  Note left of U: waits\n  A-->>-U: done",
+        true,
+    );
 }
 
 #[test]

@@ -3,7 +3,7 @@
 
 use rune::Align;
 
-use super::canvas::{Canvas, Measured, Scene, arrowhead, fit, measure_wrap, room, rounded_rect};
+use super::canvas::{Canvas, Measured, Scene, arrowhead, measure_wrap, room, rounded_rect};
 use super::chart::{bold, hue, ink, small, soft, solid, strong};
 use super::{DiagramStyle, MAX_ITEMS, clean, word};
 
@@ -122,8 +122,7 @@ pub(crate) fn draw(t: &Timeline, paint: &DiagramStyle) -> Option<Scene> {
     let right = x_of(t.periods.len() - 1) + COL + 14.0;
     c.stroke(vec![[-6.0, line_y], [right - 8.0, line_y]], false, 2.0, paint.line);
     c.fill(arrowhead([right, line_y], [1.0, 0.0], 10.0, 9.0), paint.line);
-    let scale = fit(c.width(), paint);
-    c.finish(scale)
+    c.finish_fit(paint)
 }
 
 /// Periods down a line on the left, each with its events as chips flowing to its right.

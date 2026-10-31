@@ -8,7 +8,7 @@ use super::canvas::{Measured, Scene, measure};
 use super::layered::Spacing;
 use super::layered_draw::{ClusterSpec, Dir, DrawNode, Edge, Head, Line, NodeShape, draw_layered, node_size};
 use super::{
-    DiagramStyle, EdgeStyle, Hover, MAX_DEPTH, MAX_ITEMS, NodeStyle, clean_quoted, parse_style_props, statements,
+    DiagramStyle, EdgeStyle, Hover, MAX_DEPTH, MAX_ITEMS, NodeStyle, StyleSheet, clean_quoted, statements,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,9 +57,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<StateDiagram> {
         stack: Vec::new(),
         note: None,
         pseudo_seq: 0,
-        class_defs: HashMap::new(),
-        state_classes: HashMap::new(),
-        state_styles: HashMap::new(),
+        styles: StyleSheet::default(),
         over: false,
     };
     // A statement that doesn't read is skipped; one past the bounds leaves the whole diagram as source.
@@ -88,18 +86,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<StateDiagram> {
         return None;
     }
     for (id, &idx) in &p.ids {
-        let mut st = NodeStyle::default();
-        if let Some(classes) = p.state_classes.get(id) {
-            for cls in classes {
-                if let Some(&cs) = p.class_defs.get(cls) {
-                    st = st.merge(cs);
-                }
-            }
-        }
-        if let Some(&inline) = p.state_styles.get(id) {
-            st = st.merge(inline);
-        }
-        p.d.states[idx].style = st;
+        p.d.states[idx].style = p.styles.get(id);
     }
     p.resolve_composites();
     (!p.d.states.is_empty()).then_some(p.d)
@@ -113,9 +100,7 @@ struct Parser {
     /// A multi-line note being read: its state, side and lines so far.
     note: Option<(String, Side, Vec<String>)>,
     pseudo_seq: usize,
-    class_defs: HashMap<String, NodeStyle>,
-    state_classes: HashMap<String, Vec<String>>,
-    state_styles: HashMap<String, NodeStyle>,
+    styles: StyleSheet,
     /// Set once the source goes past [`MAX_ITEMS`] or [`MAX_DEPTH`].
     over: bool,
 }
@@ -167,32 +152,13 @@ impl Parser {
             "note" | "Note" => self.note(s[word.len()..].trim())?,
             "hide" | "accTitle" | "accDescr" => {}
             "classDef" => {
-                let rest = s["classDef".len()..].trim();
-                if let Some((names, props)) = rest.split_once(char::is_whitespace) {
-                    let st = parse_style_props(props);
-                    for name in names.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-                        self.class_defs.insert(name.to_owned(), st);
-                    }
-                }
+                let _ = self.styles.class_def(&s["classDef".len()..]);
             }
             "class" => {
-                let rest = s["class".len()..].trim();
-                if let Some((targets, classes)) = rest.split_once(char::is_whitespace) {
-                    let cls_list: Vec<String> = classes.split(',').map(|c| c.trim().to_owned()).filter(|c| !c.is_empty()).collect();
-                    for id in targets.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-                        self.state_classes.entry(id.to_owned()).or_default().extend(cls_list.iter().cloned());
-                    }
-                }
+                let _ = self.styles.assign_classes(&s["class".len()..]);
             }
             "style" => {
-                let rest = s["style".len()..].trim();
-                if let Some((targets, props)) = rest.split_once(char::is_whitespace) {
-                    let st = parse_style_props(props);
-                    for id in targets.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-                        let cur = self.state_styles.get(id).copied().unwrap_or_default();
-                        self.state_styles.insert(id.to_owned(), cur.merge(st));
-                    }
-                }
+                let _ = self.styles.style(&s["style".len()..]);
             }
             "state" => self.state_decl(s["state".len()..].trim())?,
             _ if s.contains("-->") => self.transition(s)?,
@@ -316,7 +282,7 @@ impl Parser {
 
     fn description(&mut self, s: &str) -> Option<()> {
         let (id, desc) = s.split_once(':')?;
-        let id = self.strip_class(id.trim())?;
+        let id = self.styles.strip_inline(id)?;
         if !valid_state_id(&id) {
             return None;
         }
@@ -326,20 +292,6 @@ impl Parser {
             self.d.states[idx].desc.push(text);
         }
         Some(())
-    }
-
-    fn strip_class(&mut self, raw: &str) -> Option<String> {
-        match raw.split_once(":::") {
-            Some((id, cls)) => {
-                let (id, cls) = (id.trim(), cls.trim());
-                if id.is_empty() || cls.is_empty() {
-                    return None;
-                }
-                self.state_classes.entry(id.to_owned()).or_default().push(cls.to_owned());
-                Some(id.to_owned())
-            }
-            None => Some(raw.to_owned()),
-        }
     }
 
     fn endpoint(&mut self, raw: &str, is_start: bool) -> Option<Vec<usize>> {
@@ -352,7 +304,7 @@ impl Parser {
             self.d.states.push(StateNode { id: key, label: String::new(), desc: Vec::new(), kind, cluster: scope, style: NodeStyle::default() });
             return Some(vec![self.d.states.len() - 1]);
         }
-        let id = self.strip_class(raw)?;
+        let id = self.styles.strip_inline(raw)?;
         if !valid_state_id(&id) {
             return None;
         }

@@ -3,7 +3,7 @@
 
 use rune::Align;
 
-use super::canvas::{Canvas, Measured, Scene, ellipse, fit, measure, measure_wrap, room};
+use super::canvas::{Canvas, Measured, Scene, ellipse, measure, measure_wrap, room};
 use super::chart::{axis_x, hue, small, solid};
 use super::pie::number;
 use super::{DiagramStyle, MAX_ITEMS, clean_quoted, word};
@@ -248,8 +248,7 @@ pub(crate) fn draw(x: &XyChart, paint: &DiagramStyle) -> Option<Scene> {
             c.shape(ellipse(p, 3.0, 3.0), color, paint.surface, 1.0);
         }
     }
-    let scale = fit(c.width(), paint);
-    c.finish(scale)
+    c.finish_fit(paint)
 }
 
 #[cfg(test)]
