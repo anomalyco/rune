@@ -3,6 +3,22 @@
 
 use super::*;
 
+mod timer_frame;
+pub(crate) use timer_frame::TIMER_FRAME;
+pub(super) use timer_frame::TimerFrame;
+
+impl TimerFrame {
+    pub(super) fn poll_runtime<S: 'static>(&mut self, rt: &mut Runtime<S>) -> bool {
+        if !self.poll() { return false; }
+        covered_step(rt);
+        true
+    }
+}
+
+#[cfg(test)]
+#[path = "pacing_tests.rs"]
+mod tests;
+
 /// The runtime's next timer, on the wall clock that started with the host.
 pub(crate) fn wall_wake_deadline<S>(rt: &Runtime<S>) -> Option<Instant> {
     rt.wall_start?.checked_add(Duration::try_from_secs_f64(rt.wake_deadline()?).ok()?)
@@ -79,8 +95,6 @@ pub(crate) const OCCLUDED_RETRY: Duration = Duration::from_millis(250);
 pub(crate) const OCCLUDED_MAX: Duration = Duration::from_secs(2);
 /// An unpaced surface's retry after a drawable timeout: about one frame.
 pub(crate) const TIMEOUT_RETRY: Duration = Duration::from_millis(16);
-/// Motion's frame interval when no display link paces a surface.
-pub(crate) const TIMER_FRAME: Duration = Duration::from_micros(16_667);
 
 impl Missed {
     pub(super) fn of(status: wgpu::CurrentSurfaceTexture) -> Result<wgpu::SurfaceTexture, Missed> {

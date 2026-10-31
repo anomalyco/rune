@@ -2,6 +2,13 @@
 
 use super::*;
 
+impl<S: 'static> Host<S> {
+    fn timer_deadline(&self) -> Option<Instant> {
+        let runtime = timer_deadline(&self.rt);
+        self.win.as_ref().map_or(runtime, |w| w.timer_frame.deadline(runtime))
+    }
+}
+
 impl<S: 'static> AnyHost for Host<S> {
     fn owns(&self, id: WindowId) -> bool {
         self.win.as_ref().is_some_and(|w| w.window.id() == id)
@@ -95,10 +102,13 @@ impl<S: 'static> AnyHost for Host<S> {
             w.window.request_redraw();
         }
         if matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll)
-            && timer_deadline(&self.rt).is_some_and(|deadline| deadline <= Instant::now())
+            && self.timer_deadline().is_some_and(|deadline| deadline <= Instant::now())
         {
             let hidden = self.win.as_ref().is_none_or(|w| !w.visible);
-            if hidden && !(launcher && self.hidden_launcher_renders()) {
+            if self.win.as_mut().is_some_and(|w| w.timer_frame.poll_runtime(&mut self.rt)) {
+                self.clipboard.flush(&mut self.rt);
+                self.shell(event_loop);
+            } else if hidden && !(launcher && self.hidden_launcher_renders()) {
                 // Hidden or windowless: poll and due timers run, and the view waits for the
                 // frame that shows the window. A launcher's cached frame follows, paced.
                 let changed = self.rt.hidden_wake();
@@ -122,6 +132,7 @@ impl<S: 'static> AnyHost for Host<S> {
                     None => true,
                 };
                 if frame && let Some(w) = &mut self.win {
+                    if self.wayland { w.timer_frame.requested(Instant::now()); }
                     w.quiet = true;
                     w.window.request_redraw();
                 }
@@ -137,7 +148,7 @@ impl<S: 'static> AnyHost for Host<S> {
         // The next display tick consumes due timers too. Leaving an overdue timer
         // armed while its redraw waits for that tick would spin the event loop. Without a
         // running link, a timer due sooner than a frame waits a frame (`timer_deadline`).
-        let runtime = timer_deadline(&self.rt).filter(|_| !self.win.as_ref().is_some_and(Win::paced));
+        let runtime = self.timer_deadline().filter(|_| !self.win.as_ref().is_some_and(Win::paced));
         let win = self.win.as_ref();
         runtime.into_iter()
             .chain(win.and_then(|w| w.first_frame.deadline.map(|(retry, _)| retry)))

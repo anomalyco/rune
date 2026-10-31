@@ -31,6 +31,7 @@ pub(super) struct Win {
     pub(super) alpha: Option<crate::render::surface_alpha::AlphaSurface>,
     /// Only a due timer asked for the next frame, which may then draw nothing new.
     pub(super) quiet: bool,
+    pub(super) timer_frame: pacing::TimerFrame,
     /// The last frame presented, while the window rests.
     pub(super) presented: Option<Presented>,
 }

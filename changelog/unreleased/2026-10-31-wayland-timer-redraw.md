@@ -1,0 +1,1 @@
+- Wayland windows keep polling background timers without spinning the event loop when the compositor withholds a requested redraw, and draw the latest state when frame callbacks resume.

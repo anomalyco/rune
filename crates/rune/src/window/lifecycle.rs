@@ -219,6 +219,7 @@ impl<S: 'static> Host<S> {
         self.rt.minimize_request = false;
         if let Some(w) = &mut self.win {
             w.first_frame.hide();
+            w.timer_frame = pacing::TimerFrame::default();
             #[cfg(target_os = "macos")]
             { w.native.prime = 0; }
         }
@@ -268,6 +269,7 @@ impl<S: 'static> Host<S> {
         self.rt.keys_lost();
         if let Some(w) = &mut self.win {
             w.first_frame.hide();
+            w.timer_frame = pacing::TimerFrame::default();
             #[cfg(target_os = "macos")]
             { w.native.prime = 0; }
         }
