@@ -242,7 +242,7 @@ impl<S: 'static> Runtime<S> {
         st.x.max = overflow.max(0.0);
         let mut moving = false;
         if st.x.glide.is_some() {
-            moving = scroll_offset::glide_axis(&mut st.x.offset, &mut st.x.glide, st.x.aim.min(st.x.max), dt);
+            moving = scroll_offset::glide_axis(st.glide_spring(), &mut st.x.offset, &mut st.x.glide, st.x.aim.min(st.x.max), dt);
         } else if st.x.v.abs() > 1.0 {
             let decay = (-SCROLL_DECAY * dt).exp();
             st.x.offset += f64::from(st.x.v * (1.0 - decay) / SCROLL_DECAY);

@@ -1,6 +1,6 @@
-//! `Tx::scroll_to`, `Tx::scroll_to_instant`, `Tx::scroll_to_x` and `Tx::scroll_to_y`: moving a
-//! viewport to an offset its app picked, gliding there or at once; and `Tx::scroll_key_to`,
-//! landing an element at a height in its viewport.
+//! `Tx::scroll_to`, `Tx::scroll_to_with`, `Tx::scroll_to_instant`, `Tx::scroll_to_x` and
+//! `Tx::scroll_to_y`: moving a viewport to an offset its app picked, gliding there or at once;
+//! and `Tx::scroll_key_to`, landing an element at a height in its viewport.
 use super::*;
 
 /// A request to move a viewport to an offset on one axis or both.
@@ -9,7 +9,8 @@ pub(crate) struct ScrollRequest {
     pub key: String,
     pub x: Option<f32>,
     pub y: Option<f32>,
-    pub animated: bool,
+    /// The spring it glides on, or None to jump.
+    pub glide: Option<Spring>,
     /// `key` names an element, and `y` is how far below the viewport's top its top lands
     /// (`Tx::scroll_key_to`).
     pub anchor: bool,
@@ -43,17 +44,18 @@ impl<S: 'static> Runtime<S> {
             let (id, axes) = (self.nodes[i].id, self.nodes[i].scroll_axes);
             let (view_w, view_h) = (f64::from(self.nodes[i].local.w), f64::from(self.nodes[i].local.h));
             let Some(st) = self.scrolls.get_mut(&id) else { continue };
-            let glide = r.animated && animate;
+            let glide = r.glide.filter(|_| animate);
+            if glide.is_some() { st.spring = glide; }
             if let Some(x) = r.x.filter(|_| axes.x()) {
                 let to = f64::from(x).max(0.0);
                 st.x.v = 0.0;
-                if glide && (to.min(st.x.max) - st.x.offset).abs() > 0.5 {
+                if let Some(spring) = glide && (to.min(st.x.max) - st.x.offset).abs() > 0.5 {
                     // A long trip cuts to a couple of viewports out first, as a glide to the bottom does.
                     let reach = scroll_bottom::GLIDE_REACH * view_w;
                     let end = to.min(st.x.max);
                     st.x.offset = st.x.offset.clamp(end - reach, end + reach);
                     st.x.aim = to;
-                    st.x.glide = Some(retarget_v(st.x.offset, st.x.glide.unwrap_or(0.0), end));
+                    st.x.glide = Some(retarget_v(spring, st.x.offset, st.x.glide.unwrap_or(0.0), end));
                 } else {
                     st.x.glide = None;
                     jumps.push((id, true, to));
@@ -62,12 +64,12 @@ impl<S: 'static> Runtime<S> {
             if let Some(y) = r.y.filter(|_| axes.y()) {
                 let to = f64::from(y).max(0.0);
                 st.v = 0.0;
-                if glide && (to.min(st.max) - st.offset).abs() > 0.5 {
+                if let Some(spring) = glide && (to.min(st.max) - st.offset).abs() > 0.5 {
                     let reach = scroll_bottom::GLIDE_REACH * view_h;
                     let end = to.min(st.max);
                     st.offset = st.offset.clamp(end - reach, end + reach);
                     st.glide_to = Some(to);
-                    st.glide = Some(retarget_v(st.offset, st.glide.unwrap_or(0.0), end));
+                    st.glide = Some(retarget_v(spring, st.offset, st.glide.unwrap_or(0.0), end));
                     st.shrink_glide = false;
                     st.pinned = false;
                 } else {
@@ -95,12 +97,14 @@ impl<S: 'static> Runtime<S> {
             let stick = self.nodes.iter().find(|n| n.id == id).and_then(|n| n.scroll).is_some_and(|s| s.stick_bottom);
             let Some(st) = self.scrolls.get_mut(&id) else { continue };
             st.direct = true;
+            let was = if horizontal { st.x.offset } else { st.offset };
             if horizontal {
                 st.x.offset = to.min(st.x.max);
             } else {
                 st.offset = to.min(st.max);
                 st.pinned = stick && st.offset >= st.max - 0.5;
             }
+            if (if horizontal { st.x.offset } else { st.offset } - was).abs() > 1e-3 { st.nudged = NUDGE_FRAMES; }
         }
     }
 
@@ -163,30 +167,32 @@ impl<S: 'static> Runtime<S> {
         } else if moving && !(held || st.shrink_cut || st.pinned || st.glide.is_some() || st.offset > overflow || st.offset - end <= 0.5) {
             st.glide = Some(0.0);
             st.glide_to = Some(end);
+            st.spring = None;
             st.shrink_glide = true;
         }
         moving.then_some(end)
     }
 }
 
-/// The speed a running glide at `offset` keeps when it's sent to `to`: all of it, unless that
-/// would carry it past `to` and back (a critically damped spring heading for its end faster
-/// than ω times the distance left overshoots), so a glide sent somewhere nearer stops there
-/// on one path instead of bouncing.
-pub(super) fn retarget_v(offset: f64, v: f32, to: f64) -> f32 {
+/// The speed a running glide at `offset` keeps when it's sent to `to` on `spring`: all of it,
+/// unless that would carry it past `to` and back (a critically damped spring heading for its
+/// end faster than ω times the distance left overshoots), so a glide sent somewhere nearer
+/// stops there on one path instead of bouncing. Retargets that keep their speed, as key
+/// repeat sending a glide one row on at a time does, run as one motion rather than steps.
+pub(super) fn retarget_v(spring: Spring, offset: f64, v: f32, to: f64) -> f32 {
     let d = (offset - to) as f32;
-    let most = motion::GLIDE.omega() * d.abs();
+    let most = spring.omega() * d.abs();
     if v * d < 0.0 && v.abs() > most { -d.signum() * most } else { v }
 }
 
 /// How near its end a glide lands, in points: its speed, in points a second, under 40 times that.
 const LAND: f32 = 0.1;
 
-/// Steps a glide on one axis toward `to` on `GLIDE`. Returns whether it is still moving.
-pub(super) fn glide_axis(offset: &mut f64, glide: &mut Option<f32>, to: f64, dt: f32) -> bool {
+/// Steps a glide on one axis toward `to` on `spring`. Returns whether it is still moving.
+pub(super) fn glide_axis(spring: Spring, offset: &mut f64, glide: &mut Option<f32>, to: f64, dt: f32) -> bool {
     let Some(v) = *glide else { return false };
     // Sample the displacement, not the absolute offset: f32 loses sub-point precision far down.
-    let (d, v) = motion::GLIDE.sample((*offset - to) as f32, v, 0.0, dt);
+    let (d, v) = spring.sample((*offset - to) as f32, v, 0.0, dt);
     // Lands under a tenth of a point out, so the last step is no bigger than the ones before it.
     if d.abs() < LAND && v.abs() < 40.0 * LAND {
         *offset = to;
@@ -196,4 +202,29 @@ pub(super) fn glide_axis(offset: &mut f64, glide: &mut Option<f32>, to: f64, dt:
     *offset = to + f64::from(d);
     *glide = Some(v);
     true
+}
+
+/// Frames an app's instant scroll holds hover for: the frame it lands and the next, so an app
+/// stepping its own glide each frame holds hover throughout, and hover resolves once at the
+/// pointer the frame after its last step.
+const NUDGE_FRAMES: u8 = 2;
+
+impl ScrollState {
+    /// The spring the running glide steps on.
+    pub(super) fn glide_spring(&self) -> Spring {
+        self.spring.unwrap_or(motion::GLIDE)
+    }
+}
+
+impl<S: 'static> Runtime<S> {
+    /// Counts down, once a frame, the frames an app's instant scrolls hold hover for. Returns
+    /// whether one still holds, which asks for the frame that lets go.
+    pub(super) fn step_nudges(&mut self) -> bool {
+        let mut held = false;
+        for st in self.scrolls.values_mut() {
+            st.nudged = st.nudged.saturating_sub(1);
+            held |= st.nudged > 0;
+        }
+        held
+    }
 }

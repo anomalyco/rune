@@ -67,6 +67,22 @@ fn a_wheel_scroll_still_hovers_each_row_it_brings_under_the_pointer() {
     assert!(shown(&rt).contains(&under), "{under}: {:?}", shown(&rt));
 }
 
+#[test]
+fn a_hover_a_glide_carried_out_of_view_lets_go_at_once() {
+    let mut rt = hovering();
+    let id = rt.nodes.iter().find(|n| n.named("r5")).unwrap().id;
+    rt.update(|_, tx| tx.scroll_to("scroll", 0.0, 400.0));
+    for f in 0..600 {
+        rt.frame(1.0 / 120.0);
+        if rt.scene.store().target(id, P_HOVER) == Some(0.0) {
+            assert!(rt.scrolls.values().all(|s| s.glide.is_none()), "frame {f}: the hold kept r5's hover through the glide");
+            assert!(!rt.scene.store().is_animating(id, P_HOVER), "r5, out of view, lands its leave instead of fading it unseen");
+            return;
+        }
+    }
+    panic!("r5 never let go of its hover");
+}
+
 /// Forty rows, each darkening while pressed and gliding twenty rows on when pressed.
 fn pressing(_: &(), _: &mut Cx<()>) -> El {
     let rows = col().key("rows").w_full().children((0..40).map(|k| crate::row().key(format!("r{k}")).w_full().h(20.0)
@@ -173,4 +189,36 @@ fn a_row_leaving_the_tree_under_a_held_glide_hears_the_pointer_leave() {
     }
     assert!(rt.state.contains(&(5, false)), "the row heard the leave before it was pruned: {:?}", rt.state);
     assert!(rt.hover_hold.held, "while the glide still holds hover");
+}
+
+/// Forty 20-point rows, each revealing an action on hover and recording its `on_hover_change`.
+fn logged_rows(_: &Vec<(usize, bool)>, _: &mut Cx<Vec<(usize, bool)>>) -> El {
+    let rows = col().key("rows").w_full().children((0..40).map(|k| crate::row().key(format!("r{k}")).w_full().h(20.0).hover_group()
+        .on_hover_change(move |s: &mut Vec<(usize, bool)>, inside, _| s.push((k, inside)))
+        .child(el().key(format!("a{k}")).size(10.0, 10.0).fill(Color::WHITE).group_opacity(0.0, 1.0))));
+    col().size(200.0, 200.0).child(col().key("scroll").size(200.0, 200.0).scroll(crate::ScrollSpec { stick_bottom: false }).child(rows))
+}
+
+#[test]
+fn an_app_stepping_its_own_glide_holds_a_still_pointers_hover_until_it_stops() {
+    let mut rt = Runtime::new(Vec::new(), logged_rows, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.pointer_move(100.0, 110.0);
+    rt.frame(1.0 / 120.0);
+    rt.frame(1.0 / 120.0);
+    assert_eq!(rt.state, [(5, true)]);
+    // The app glides 400 points itself, an instant scroll each frame.
+    let mut flashes = 0;
+    for f in 1..=100 {
+        rt.update(move |_, tx| tx.scroll_to_instant("scroll", 0.0, 4.0 * f as f32));
+        rt.frame(1.0 / 120.0);
+        let shown: Vec<String> = rt.elements().into_iter().filter(|e| e.key.as_ref().is_some_and(|k| k.starts_with('a')) && e.opacity > 0.0)
+            .filter_map(|e| e.key).collect();
+        flashes += usize::from(shown != ["a5"]);
+    }
+    let commits = rt.state.len() - 1;
+    assert_eq!((commits, flashes), (0, 0), "no hover commits or chrome under the still pointer mid-scroll: {:?}", rt.state);
+    for _ in 0..30 { rt.frame(1.0 / 120.0); }
+    assert_eq!(rt.state, [(5, true), (5, false), (25, true)], "once it stops, hover resolves once at the pointer");
+    assert!(!rt.hover_hold.held, "and lets go");
 }

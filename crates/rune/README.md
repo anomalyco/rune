@@ -125,8 +125,8 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   [coordinate spaces](#canvas-handlers-live-only-events-and-coordinate-spaces)). Scripts accept
   `secondary-down`, `secondary-up`, and `secondary-click`.
 - **Naming elements**: `Cx::layout`, `Tx::fly_text` and the `Tx` scroll requests
-  (`scroll_into_view`, `scroll_to_bottom`, `scroll_page`, `scroll_to`, `scroll_to_instant`,
-  `scroll_to_x`, `scroll_to_y`) take a key, which
+  (`scroll_into_view`, `scroll_to_bottom`, `scroll_page`, `scroll_to`, `scroll_to_with`,
+  `scroll_to_instant`, `scroll_to_x`, `scroll_to_y`) take a key, which
   matches the first element with it in tree order, or a key path such as `"inspector/label"`
   whose leading keys are the element's nearest keyed ancestors. Keys are one namespace, and
   rune-kit keys its parts (`label`, `value`, `icon`, `control`, …), so scope an app's own keys
@@ -334,8 +334,12 @@ policy changes are applied in the same mutation phase.
   then the plain wheel each scroll at once. Shift with a mouse wheel scrolls horizontally on
   Windows, Linux and the web; macOS turns the delta itself. `tx.scroll_into_view(key)` scrolls both
   axes, `.scroll_edge_fade(w)` fades the left and right edges, `tx.scroll_to(key, x, y)` glides a
-  viewport to an offset (clamped, rechecked as virtual rows measure, taken over by the wheel), and
-  `scroll_to_instant`, `scroll_to_x` and `scroll_to_y` jump there. Left and Right arrows don't scroll a viewport (text fields own them), and
+  viewport to an offset (clamped, rechecked as virtual rows measure, taken over by the wheel),
+  `tx.scroll_to_with(key, x, y, spring)` glides there on the app's spring, and
+  `scroll_to_instant`, `scroll_to_x` and `scroll_to_y` jump there. A request sent mid-glide keeps
+  its speed, so key repeat moving a selection a row at a time scrolls as one motion. A still
+  pointer's hover holds while an app steps its own glide with `scroll_to_instant` each frame,
+  and resolves once after. Left and Right arrows don't scroll a viewport (text fields own them), and
   Page Up and Page Down stay vertical; AppKit scrolls an `NSScrollView` with Left and Right only
   when nothing focused takes them. Virtual rows are vertical only. Platforms report wheels through
   `Runtime::wheel_xy` with `wheel_began` and `wheel_ended` around trackpad gestures, or

@@ -624,25 +624,7 @@ impl<S: 'static> Runtime<S> {
         // Scroll viewports: a new sticky viewport opens at the end.
         for (i, n) in nodes.iter().enumerate() {
             if let Some(sp) = n.cold.get().and_then(|c| c.scroll) {
-                let e = self.scrolls.entry(n.id).or_insert(ScrollState {
-                    offset: 0.0,
-                    v: 0.0,
-                    pinned: sp.stick_bottom,
-                    max: 0.0,
-                    direct: false,
-                    scrolling: false,
-                    glide: None,
-                    shrink_glide: false,
-                    shrink_cut: false,
-                    glide_to: None,
-                    laid: None,
-                    at_bottom: None,
-                    far_from_bottom: None,
-                    held: false,
-                    slack: Default::default(),
-                    x: AxisScroll::default(),
-                    told: None,
-                });
+                let e = self.scrolls.entry(n.id).or_insert(ScrollState { pinned: sp.stick_bottom, ..ScrollState::default() });
                 if concealed.get(i).copied().unwrap_or(false) {
                     e.offset = 0.0;
                     e.v = 0.0;

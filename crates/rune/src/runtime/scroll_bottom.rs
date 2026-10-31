@@ -55,7 +55,7 @@ pub(super) fn glide(st: &mut ScrollState, dt: f32) -> bool {
         st.glide_to = None;
         return false;
     }
-    let moving = scroll_offset::glide_axis(&mut st.offset, &mut st.glide, to, dt);
+    let moving = scroll_offset::glide_axis(st.glide_spring(), &mut st.offset, &mut st.glide, to, dt);
     if !moving { st.glide_to = None; }
     moving
 }
@@ -102,6 +102,7 @@ impl<S: 'static> Runtime<S> {
             if animated && !self.reduced_motion && !self.settled && st.max - start > 0.5 {
                 st.offset = start.max(st.max - GLIDE_REACH * view_h);
                 st.glide = Some(glide.unwrap_or(0.0));
+                st.spring = None;
                 st.shrink_glide = false;
                 st.pinned = false;
             } else {

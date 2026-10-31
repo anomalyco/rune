@@ -622,7 +622,7 @@ impl<S: 'static> Runtime<S> {
             if let Some(v) = st.glide {
                 if st.glide_to.is_none_or(|g| (to - g).abs() >= 1.0 / 64.0) {
                     st.glide_to = Some(to);
-                    st.glide = Some(scroll_offset::retarget_v(st.offset, v, to));
+                    st.glide = Some(scroll_offset::retarget_v(st.glide_spring(), st.offset, v, to));
                 }
                 continue;
             }

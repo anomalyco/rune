@@ -578,7 +578,7 @@ impl<S: 'static> Runtime<S> {
         let mut scroll_offsets = std::mem::take(&mut tx.scroll_offsets);
         if tx.instant {
             for (_, animated) in &mut scroll_bottom { *animated = false; }
-            for r in &mut scroll_offsets { r.animated = false; }
+            for r in &mut scroll_offsets { r.glide = None; }
         }
         let follow = std::mem::take(&mut self.caret_follow);
         let destination = !scroll_bottom.is_empty() || !scroll_pages.is_empty() || !scroll_offsets.is_empty();
@@ -698,6 +698,7 @@ impl<S: 'static> Runtime<S> {
         let mut source = |on: bool, bit: u16| { if on { sources |= bit; } on };
         animating |= source(self.step_growth(step as f32), AnimSource::GROWTH);
         animating |= source(self.step_scroll(step as f32), AnimSource::SCROLL);
+        animating |= source(self.step_nudges(), AnimSource::SCROLL);
         for stack in self.stacks.values_mut() { stack.grown = 0.0; }
         animating |= source(self.reveals_active(), AnimSource::REVEAL);
         // Values set from `on_scroll_offset` show in the frame that scrolled.

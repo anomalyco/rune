@@ -28,6 +28,12 @@ struct Flip { i: usize, id: NodeId, on: bool, anim: Anim, changed: bool, now: bo
 /// and those of them entering.
 type Within = (Vec<String>, Vec<usize>);
 
+/// Viewport `s` moves content under a still pointer on its own: a glide, an app's instant
+/// scrolls frame after frame (a glide it steps itself), or slack letting rows down.
+fn scroll_carries(s: &ScrollState) -> bool {
+    s.glide.is_some() || s.x.glide.is_some() || s.nudged > 0 || s.slack.moving()
+}
+
 /// `inner` is `outer` or inside it.
 fn holds(outer: &str, inner: &str) -> bool {
     inner == outer || inner.len() > outer.len() && inner.starts_with(outer) && inner.as_bytes()[outer.len()] == b'/'
@@ -227,9 +233,10 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Element `i` is carried by moving layout: a frame, offset or flight spring on it or an
-    /// ancestor, a growth stack moving its rows, or a viewport gliding where the app sent it or
-    /// letting rows down. A hand's scroll and live transforms aren't layout motion. Asked only
-    /// of elements whose hover would change, so a frame at rest walks nothing.
+    /// ancestor, a growth stack moving its rows, or a viewport gliding where the app sent it,
+    /// stepped by the app frame by frame, or letting rows down. A hand's scroll and live
+    /// transforms aren't layout motion. Asked only of elements whose hover would change, so a
+    /// frame at rest walks nothing.
     fn layout_carries(&self, i: usize) -> bool {
         let store = self.scene.store();
         let mut at = Some(i);
@@ -237,7 +244,7 @@ impl<S: 'static> Runtime<S> {
             let id = self.nodes[k].id;
             if store.is_animating(id, prop::FRAME) || store.is_animating(id, prop::OFFSET) || store.is_animating(id, prop::TRAVEL)
                 || self.stacks.get(&id).is_some_and(|s| s.moving) || self.grows.get(&id).is_some_and(|g| g.moving())
-                || self.scrolls.get(&id).is_some_and(|s| s.glide.is_some() || s.x.glide.is_some() || s.slack.moving())
+                || self.scrolls.get(&id).is_some_and(scroll_carries)
             {
                 return true;
             }
@@ -254,7 +261,7 @@ impl<S: 'static> Runtime<S> {
         !self.flying.is_empty()
             || self.stacks.values().any(|s| s.moving)
             || self.grows.values().any(|g| g.moving())
-            || self.scrolls.values().any(|s| s.glide.is_some() || s.x.glide.is_some() || s.slack.moving())
+            || self.scrolls.values().any(scroll_carries)
             || self.scene.store().active().any(|(_, p)| layout.contains(&p))
     }
 
@@ -349,10 +356,17 @@ impl<S: 'static> Runtime<S> {
             self.decide_hold(hovered, within.as_ref(), Some(&flips))
         });
         // A leave from an element turned inert lands now; the rest wait while layout holds hover.
+        // An element that drew nothing (a held hover whose row a glide carried out of view)
+        // lands it rather than fading where nobody sees.
+        let mut unseen: Option<Vec<bool>> = None;
         for f in flips.drain(..) {
             if held && !f.now { continue; }
             if paint_tracks::ready_from_rest(&mut self.scene, f.id, P_HOVER, 0.0, f.on as u8 as f32) {
-                self.scene.animate(f.id, P_HOVER, f.on as u8 as f32, f.anim);
+                if unseen.get_or_insert_with(|| self.drew_nothing()).get(f.i).copied().unwrap_or(false) {
+                    self.scene.set(f.id, P_HOVER, f.on as u8 as f32);
+                } else {
+                    self.scene.animate(f.id, P_HOVER, f.on as u8 as f32, f.anim);
+                }
             }
             changed = true;
         }

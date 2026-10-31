@@ -23,6 +23,7 @@ mod scroll_children;
 mod scroll_growth;
 mod scroll_hover;
 mod scroll_retarget;
+mod scroll_spring;
 mod secure_text;
 mod shimmer;
 mod springs;

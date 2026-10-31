@@ -318,7 +318,7 @@ impl Default for Inh {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(super) struct ScrollState {
     pub(super) offset: f64,
     pub(super) v: f32,
@@ -349,6 +349,12 @@ pub(super) struct ScrollState {
     pub(super) x: AxisScroll,
     /// What `El::on_scroll_offset` was last told (`runtime/scroll_watch.rs`).
     pub(super) told: Option<crate::ScrollPos>,
+    /// The spring `Tx::scroll_to_with` gave the running glide, on both axes; `GLIDE` when none.
+    pub(super) spring: Option<rune_motion::Spring>,
+    /// Frames left in which an app's instant scroll (`Tx::scroll_to_instant` and the like)
+    /// counts as layout moving, so hover under a still pointer holds while an app steps its
+    /// own glide frame by frame (`runtime/hover.rs`).
+    pub(super) nudged: u8,
 }
 
 /// A scroll viewport's horizontal offset, momentum velocity and limit (points).

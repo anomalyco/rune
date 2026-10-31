@@ -56,7 +56,8 @@ impl<S: 'static> Runtime<S> {
             let reach = scroll_bottom::GLIDE_REACH * viewport;
             st.offset = start.clamp(end - reach, end + reach);
             st.glide_to = Some(end);
-            st.glide = Some(scroll_offset::retarget_v(st.offset, v.unwrap_or(0.0), end));
+            st.glide = Some(scroll_offset::retarget_v(motion::GLIDE, st.offset, v.unwrap_or(0.0), end));
+            st.spring = None;
             st.shrink_glide = false;
             st.pinned = false;
             st.direct = true;
