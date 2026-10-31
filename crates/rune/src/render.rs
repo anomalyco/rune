@@ -465,6 +465,10 @@ impl Gpu {
         descriptor.flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
         // An HWND's DXGI swapchain is opaque only; DirectComposition composites alpha on every GPU.
         descriptor.backend_options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromVisual;
+        // FXC ships with Windows (d3dcompiler_47.dll in System32). wgpu's default looks for
+        // dxcompiler.dll on PATH, where another app's incompatible copy crashes the first
+        // shader compile (Hex #587).
+        descriptor.backend_options.dx12.shader_compiler = wgpu::Dx12Compiler::Fxc;
         wgpu::Instance::new(descriptor)
     }
 
