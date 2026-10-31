@@ -37,7 +37,7 @@ pub(super) struct Scratch {
 impl Pipeline {
     pub fn new(device: &wgpu::Device) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("layer gaussian"), source: wgpu::ShaderSource::Wgsl(include_str!("layer_blur.wgsl").into()),
+            label: Some("layer gaussian"), source: wgpu::ShaderSource::Wgsl(include_str!("../layer_blur.wgsl").into()),
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("gaussian inputs"), entries: &[

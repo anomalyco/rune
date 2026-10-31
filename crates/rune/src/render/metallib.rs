@@ -23,12 +23,12 @@
 //! Rune's own Metal backend (`metal-backend`) loads `uber_native.metallib` instead: the MSL that
 //! backend emits (vertex descriptors rather than wgpu-hal's vertex pulling), in MSL 3.0.
 
-include!("uber_metallib_hash.rs");
+include!("../uber_metallib_hash.rs");
 
 #[cfg(any(test, target_os = "macos"))]
-const UBER_METALLIB: &[u8] = include_bytes!("uber.metallib");
+const UBER_METALLIB: &[u8] = include_bytes!("../uber.metallib");
 #[cfg(all(target_os = "macos", feature = "metal-backend"))]
-const UBER_NATIVE_METALLIB: &[u8] = include_bytes!("uber_native.metallib");
+const UBER_NATIVE_METALLIB: &[u8] = include_bytes!("../uber_native.metallib");
 
 pub(super) const UBER_VERTEX_ATTRS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![
     0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4,
@@ -53,7 +53,7 @@ std::thread_local! {
 }
 
 pub(super) fn uber_wgsl() -> String {
-    format!("{}\n{}", super::CLIP_WGSL, include_str!("shader.wgsl"))
+    format!("{}\n{}", super::CLIP_WGSL, include_str!("../shader.wgsl"))
 }
 
 #[cfg(any(test, target_os = "macos"))]

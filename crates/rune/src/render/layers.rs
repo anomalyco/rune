@@ -12,16 +12,16 @@ pub const DEFAULT_CACHE_BUDGET: u64 = 64 * 1024 * 1024;
 const MAX_CACHE_DIM: u32 = 4096;
 
 #[cfg(test)]
-#[path = "runtime/layer_tests.rs"]
+#[path = "../runtime/layer_tests.rs"]
 mod tests;
 #[cfg(test)]
-#[path = "runtime/layer_cache_tests.rs"]
+#[path = "../runtime/layer_cache_tests.rs"]
 mod cache_tests;
 #[cfg(test)]
 #[path = "layer_filter_tests.rs"]
 mod filter_tests;
 #[cfg(test)]
-#[path = "runtime/rounded_clip_tests.rs"]
+#[path = "../runtime/rounded_clip_tests.rs"]
 mod rounded_clip_tests;
 #[cfg(test)]
 #[path = "continuous_corner_tests.rs"]

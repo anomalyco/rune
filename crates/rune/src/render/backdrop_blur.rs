@@ -128,7 +128,7 @@ impl BackdropBlur {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("backdrop blur"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("backdrop_blur.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../backdrop_blur.wgsl").into()),
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("backdrop blur"),
@@ -154,7 +154,7 @@ impl BackdropBlur {
         let (down, up) = (pass("fs_down"), pass("fs_up"));
         let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("backdrop blur composite"),
-            source: wgpu::ShaderSource::Wgsl(format!("{CLIP_WGSL}\n{}", include_str!("backdrop_composite.wgsl")).into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{CLIP_WGSL}\n{}", include_str!("../backdrop_composite.wgsl")).into()),
         });
         let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("backdrop blur composite"),

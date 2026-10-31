@@ -5,15 +5,11 @@ use bytemuck::{Pod, Zeroable};
 use crate::pixels::ImageAtlas;
 use crate::text::{ATLAS_SIZE, Atlas};
 
-#[path = "layers.rs"]
 mod layers;
-#[path = "layer_blur.rs"]
 pub(crate) mod layer_blur;
-#[path = "metallib.rs"]
 mod metallib;
 mod pass;
 use pass::{ActivePass, Backdrop};
-#[path = "backdrop_blur.rs"]
 mod backdrop_blur;
 mod upload;
 pub use backdrop_blur::MAX_BACKDROP_BLURS;
