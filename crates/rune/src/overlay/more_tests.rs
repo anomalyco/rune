@@ -65,7 +65,7 @@ fn overlay_input_switch_waits_for_owned_drag_release() {
 
 #[test]
 fn handle_requests_collapse_and_updates_keep_their_order() {
-    let shared = Arc::new(Shared::<u32> { native: Mutex::default(), requests: Mutex::default(), availability: AtomicU8::new(0), failure: Mutex::default(), wake: Mutex::new(None), stats: Arc::default() });
+    let shared = Arc::new(Shared::<u32> { native: Mutex::default(), requests: Mutex::default(), availability: AtomicU8::new(0), failure: Mutex::default(), surface: Mutex::default(), wake: Mutex::new(None), stats: Arc::default() });
     let handle = OverlayHandle { shared: shared.clone() };
     assert_eq!(handle.availability(), Availability::Unknown);
     handle.show();

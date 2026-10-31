@@ -162,6 +162,12 @@ impl OverlayWindow {
             IsWindowVisible(hwnd) != 0
         };
         if !visible { return Err("ShowWindow left the overlay window hidden".into()); }
+        let mut cloaked = 0u32;
+        // SAFETY: DWMWA_CLOAKED writes one u32 into `cloaked`.
+        let read = unsafe {
+            windows_sys::Win32::Graphics::Dwm::DwmGetWindowAttribute(hwnd, windows_sys::Win32::Graphics::Dwm::DWMWA_CLOAKED as u32, (&raw mut cloaked).cast(), 4)
+        };
+        if read >= 0 && cloaked != 0 { return Err(format!("Windows cloaked the overlay window (DWMWA_CLOAKED {cloaked:#x})")); }
         self.input.visible.set(true);
         raise_levels();
         if self.observing { return Ok(()); }

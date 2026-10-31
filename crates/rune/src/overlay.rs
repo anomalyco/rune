@@ -109,6 +109,8 @@ struct Shared<T> {
     availability: AtomicU8,
     /// Why the platform could not create or show the overlay, while it can't.
     failure: Mutex<Option<String>>,
+    /// What draws the overlay: backend, adapter and alpha mode, once its surface exists.
+    surface: Mutex<Option<String>>,
     /// The event loop's wake-up for this overlay; empty until the loop runs.
     wake: Mutex<Option<Waker>>,
     /// What the overlay's meter last published.
@@ -249,6 +251,12 @@ impl<T: 'static> OverlayHandle<T> {
         self.shared.failure.lock().unwrap().clone()
     }
 
+    /// What draws the overlay, such as `Dx12 on Intel(R) UHD Graphics (IntegratedGpu),
+    /// PreMultiplied`, once its surface exists; for logs.
+    pub fn surface_description(&self) -> Option<String> {
+        self.shared.surface.lock().unwrap().clone()
+    }
+
     fn request(&self, f: impl FnOnce(&mut Requests<T>)) {
         f(&mut self.shared.requests.lock().unwrap());
         self.shared.wake();
@@ -354,7 +362,7 @@ pub(crate) struct Overlay<T: 'static> {
 impl<T: 'static> Overlay<T> {
     pub(crate) fn new<S>(configured: impl Into<ConfiguredOverlay<T>>, state: T, app: &AppSpec<S>) -> (Self, OverlayHandle<T>) {
         let ConfiguredOverlay { spec, options, on_key, on_created, poll, on_focus, compositor, setup, srgb_blend, macos_level, modifier_keys, animate_reveal } = configured.into();
-        let shared = Arc::new(Shared { native: Mutex::default(), requests: Mutex::default(), availability: AtomicU8::new(0), failure: Mutex::default(), wake: Mutex::new(None), stats: Arc::default() });
+        let shared = Arc::new(Shared { native: Mutex::default(), requests: Mutex::default(), availability: AtomicU8::new(0), failure: Mutex::default(), surface: Mutex::default(), wake: Mutex::new(None), stats: Arc::default() });
         let meter = crate::frame::surface_stats::SurfaceMeter::new(spec.name, shared.stats.clone());
         let text = TextSystem::for_window(app.fonts, app.families);
         let mut rt = Runtime::with_text(state, spec.view, spec.size, Env::default(), text);
@@ -935,7 +943,19 @@ impl<T: 'static> Overlay<T> {
         let gpu = self.gpu.clone()?;
         let (w, h) = ((self.at.size.0 * scale).round() as u32, (self.at.size.1 * scale).round() as u32);
         let (mut config, translucent) = crate::window::surface_config(&surface, &gpu.adapter, (w, h), self.rt.srgb_blend())?;
-        if let Some(mode) = translucent { config.alpha_mode = mode } else { eprintln!("transparency unavailable for overlay {}; drawing it opaque", self.name) }
+        match translucent {
+            Some(mode) => config.alpha_mode = mode,
+            // Windows composites an overlay's pixels only through DirectComposition; drawn
+            // opaque on its window they never show.
+            None if cfg!(target_os = "windows") => {
+                let info = gpu.adapter.get_info();
+                self.fail(format!("{:?} on {} can't composite transparent pixels; Windows overlays need DX12 with DirectComposition", info.backend, info.name));
+                return None;
+            }
+            None => eprintln!("transparency unavailable for overlay {}; drawing it opaque", self.name),
+        }
+        let info = gpu.adapter.get_info();
+        *self.shared.surface.lock().unwrap() = Some(format!("{:?} on {} ({:?}), {:?}, {:?}", info.backend, info.name, info.device_type, config.alpha_mode, config.format));
         surface.configure(&gpu.device, &config);
         #[cfg(target_os = "macos")]
         crate::platform::macos::pin_contents_top_left(&surface);
