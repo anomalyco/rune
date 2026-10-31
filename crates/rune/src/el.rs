@@ -6,9 +6,9 @@ use rune_motion::{Anim, Spring, Transition};
 use taffy::prelude::*;
 
 use crate::color::Color;
-pub(crate) use crate::el_drop::{DropHoverFn, DropSpec};
+pub(crate) use crate::el::drop::{DropHoverFn, DropSpec};
 pub use crate::cursor::{Cursor, CursorImage};
-pub(crate) use crate::el_sticky::{Sticky, StickyEdge};
+pub(crate) use crate::el::sticky::{Sticky, StickyEdge};
 use crate::edit::TextEdit;
 use crate::growth::{GROWTH, StreamEdge, edge};
 use crate::shape::Shape;
@@ -17,15 +17,30 @@ pub(crate) use crate::clipboard::tx::{ClipboardRead, ReadFn};
 use crate::text::{Icon, Link, Span};
 use crate::tok::TextStyle;
 
-pub use crate::el_tx::{Shell, Tx};
-pub(crate) use crate::el_tx::{SelectRequest, TraceCalls};
+pub use crate::el::tx::{Shell, Tx};
+pub(crate) use crate::el::tx::{SelectRequest, TraceCalls};
 
+mod anchor;
+mod backdrop;
+mod child_exit;
+mod drop;
+mod effect;
+mod enter_delay;
+mod focus;
 mod growth;
+mod handler_set;
 mod handlers;
 mod layout;
 mod motion;
+mod pills;
+mod pixel_snap;
+mod ride_trailing;
 mod scroll;
+mod sticky;
 mod text;
+mod text_spec;
+mod tx;
+mod visual;
 mod visuals;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,9 +131,9 @@ pub(crate) struct A11y {
     pub secure: bool,
 }
 
-pub(crate) use crate::el_focus::FocusSpec;
-pub(crate) use crate::el_handlers::Handlers;
-pub use crate::el_visual::{Visual, VisualCold};
+pub(crate) use crate::el::focus::FocusSpec;
+pub(crate) use crate::el::handler_set::Handlers;
+pub use crate::el::visual::{Visual, VisualCold};
 
 #[derive(Clone)]
 pub(crate) struct ModalSpec {
@@ -295,9 +310,9 @@ pub enum Align {
     End,
 }
 
-pub use crate::el_anchor::{Anchor, Side, anchor_rect};
-pub use crate::el_text::TextSpec;
-pub(crate) use crate::el_text::Elide;
+pub use crate::el::anchor::{Anchor, Side, anchor_rect};
+pub use crate::el::text_spec::TextSpec;
+pub(crate) use crate::el::text_spec::Elide;
 
 /// [`El::on_link`]'s handler.
 #[derive(Clone)]

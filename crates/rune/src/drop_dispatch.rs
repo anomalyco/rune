@@ -3,7 +3,7 @@
 //! `El::on_drop_rejected_hover`.
 use super::*;
 use crate::el::{DropHoverFn, PointerEvent};
-use crate::el_drop::DropMoveFn;
+use crate::el::drop::DropMoveFn;
 use std::path::PathBuf;
 
 /// One step of a file drag over the window, queued for the next frame.

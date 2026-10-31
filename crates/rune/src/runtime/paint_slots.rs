@@ -7,7 +7,7 @@ use crate::render::{Instance, KIND_BACKDROP_BLUR, KIND_EFFECT, LayerSpec, NO_CLI
 /// `clip` and the packed `fade`, at `k_px` device pixels per point and paint opacity `o`.
 /// A compositor paints whatever it likes at a slot, so a faded slot gets its own layer that
 /// applies the opacity, instead of a factor it could forget. Returns the index of that slot.
-pub(super) fn push_effect(instances: &mut Vec<Instance>, (effect, mark): (crate::el_effect::EffectSlot, u32),
+pub(super) fn push_effect(instances: &mut Vec<Instance>, (effect, mark): (crate::el::effect::EffectSlot, u32),
     (rect, radii, clip, fade): ([f32; 4], [f32; 4], [f32; 4], [u32; 4]), k_px: f32, o: f32) -> Option<usize> {
     let slot = Instance {
         rect,

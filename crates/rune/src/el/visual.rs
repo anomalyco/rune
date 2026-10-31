@@ -42,7 +42,7 @@ pub struct VisualCold {
     /// How `pixels` keeps its aspect ratio; `None` stretches it to the rect.
     pub pixels_fit: Option<crate::SurfaceFit>,
     /// An effect slot (`El::effect`).
-    pub(crate) effect: Option<crate::el_effect::EffectSlot>,
+    pub(crate) effect: Option<crate::el::effect::EffectSlot>,
     /// Backdrop blur standard deviation in points (`El::backdrop_blur`); 0 is off.
     pub(crate) backdrop_blur: f32,
     /// The hover track's enter and exit curves (default: snappy spring both ways).

@@ -23,7 +23,7 @@ impl El {
             inp.decorations = spans;
             self.sync_input_rich();
         } else if let Some(t) = &mut self.text {
-            t.spans = crate::el_pills::with_pill_colors(&spans, &t.pills);
+            t.spans = crate::el::pills::with_pill_colors(&spans, &t.pills);
         }
         self
     }
