@@ -191,7 +191,7 @@ fn a_key_release_goes_to_the_focused_element_then_up_to_the_root() {
     rt.state.space = true;
     assert!(rt.key_up(space.clone()));
     rt.frame(1.0 / 60.0);
-    assert_eq!(rt.state.ups, [("root", Key::Text(" ".into()), Mods::default())], "with nothing focused, the root hears it");
+    assert_eq!(rt.state.ups, [("shape", Key::Text(" ".into()), Mods::default()), ("root", Key::Text(" ".into()), Mods::default())], "with nothing focused, every handler hears it, the deepest first");
     assert!(!rt.state.space);
 
     let (x, y) = rt.find("shape").unwrap();
