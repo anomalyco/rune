@@ -51,6 +51,8 @@ fn enabled() -> bool {
 #[cfg(debug_assertions)]
 fn warn_once(site: String, message: impl FnOnce() -> String) {
     static WARNED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+    #[cfg(test)]
+    let site = format!("{:?} {site}", std::thread::current().id());
     if !enabled() || !WARNED.lock().unwrap().get_or_insert_default().insert(site) { return }
     let message = format!("rune: {}. (debug builds only; RUNE_PERF_WARN=0 silences)", message());
     #[cfg(test)]
