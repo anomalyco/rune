@@ -656,12 +656,12 @@ impl AnimationStore {
         core::array::from_fn(|i| self.final_target(l0 + i))
     }
 
-    pub(crate) fn lane_values(&self, t: usize) -> &[f32] {
+    fn lane_values(&self, t: usize) -> &[f32] {
         let l0 = self.t_lane0[t] as usize;
         &self.l_value[l0..l0 + self.t_n[t] as usize]
     }
 
-    pub(crate) fn lane_velocities(&self, t: usize) -> &[f32] {
+    fn lane_velocities(&self, t: usize) -> &[f32] {
         let l0 = self.t_lane0[t] as usize;
         &self.l_vel[l0..l0 + self.t_n[t] as usize]
     }

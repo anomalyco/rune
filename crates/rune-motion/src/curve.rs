@@ -41,7 +41,7 @@ impl Curve {
         }
     }
 
-    pub(crate) fn default_blend(&self) -> Blend {
+    fn default_blend(&self) -> Blend {
         match self {
             Curve::Tween { .. } => Blend::Additive,
             _ => Blend::Merge,

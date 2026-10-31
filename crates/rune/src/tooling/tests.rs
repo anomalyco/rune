@@ -1,4 +1,5 @@
 use super::*;
+use crate::time::Instant;
 
 #[test]
 fn trace_annotations_from_hidden_poll_survive_idle_catch_up_once() {

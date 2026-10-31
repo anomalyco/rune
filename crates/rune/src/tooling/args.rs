@@ -216,7 +216,7 @@ pub fn is_headless() -> bool {
     *HEADLESS.get_or_init(|| Args::parse_process().headless())
 }
 
-pub(crate) const HELP: &str = "usage: <app> [window]
+const HELP: &str = "usage: <app> [window]
   --snap out.png        render offscreen (no window) at --at seconds
   --scene NAME          start from a named scene (--list-scenes)
   --playground [NAME]   open App::playground at launch, at a story; headless too
@@ -273,7 +273,7 @@ pub(crate) fn num(s: &str) -> f64 {
     s.trim().parse().unwrap_or_else(|_| die(&format!("not a number: {s}")))
 }
 
-pub(crate) fn positive(s: &str) -> Option<f32> {
+fn positive(s: &str) -> Option<f32> {
     s.trim().parse::<f32>().ok().filter(|v| v.is_finite() && *v > 0.0)
 }
 
