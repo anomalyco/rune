@@ -211,3 +211,24 @@ quoting the size of the gain.
 No spike was run for #1, because a safe version has to keep the old nodes readable through
 measure retries and apply's diffing, which makes it more than a scratch patch. Its upper bound
 comes from the commit samples above.
+
+## Tried, not landed: pooling node path strings
+
+After `154e4d33` (inherited `hover_motion_within` curves kept beside a node's visuals), a
+line-level profile of the 2,300-element card workload (`scroll_bench --workload card`) put
+commit at 58% of the frame step: flatten 34% of that (moving the 552-byte `Style` into
+`sync_taffy_node`, moving 1,152-byte `El` children out of their iterator, a `String`-keyed
+`layout_entries` lookup per node), apply 21% with `clear_old_nodes` about 29% of apply,
+`place` refilling `node_index` 2.4% of busy time and `release_kept_layouts`' path lookups
+3.2%. The patch tried was the cheapest of these: flatten reused the path strings of the
+nodes and layout entries the last build dropped (bounded to one per node, 256 bytes each).
+On the card, paired over 10 alternating rounds, allocations per commit fell from 9,989 to
+7,706 and instructions from 16.68 to 16.25 G (−2.6%). Commit p50 went from 2.10 to 1.83 ms in
+one run and 1.86 to 1.81 ms in another. On the board's long card it saved 3.5% of commit
+allocations, but instructions moved −0.02% and −0.85% in two runs, and the commit-frame
+median was mixed (9.38 → 8.97 ms, then 7.94 → 8.11 ms). That's because memo reuse there moves
+nodes instead of dropping them, so `clear_old_nodes` is about 1% of busy time. There, commit
+is 32% of busy time: the app's view 42% of it, solve 15%, flatten 13.5%, and every Rune-side
+candidate above is under 1% of busy time. Not worth the churn. Numbers come from an M4 Pro
+under load 30–40, compared by median with outliers kept, headless, so GPU upload and
+presentation are left out.
