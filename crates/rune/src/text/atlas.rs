@@ -19,7 +19,7 @@ pub(super) struct GlyphKey {
     pub(super) subpx: u8,
     /// The dilation radius in device px, as f32 bits.
     pub(super) dilation: u32,
-    /// The CoreGraphics pipeline's stages (`macos_smoothing::Smoothing::key`).
+    /// The CoreGraphics pipeline's stages (`macos::smoothing::Smoothing::key`).
     pub(super) apple: u8,
     /// Synthetic oblique, in degrees (0 for none).
     pub(super) skew: u8,

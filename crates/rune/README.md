@@ -104,7 +104,7 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     below 8⅓ ppem, quarters to 11.1, thirds to 16.7, halves to 33.3 and whole pixels above; coverage
     drawn as is; sRGB blending; CoreGraphics' curve flattening and its y autohinter at 7–18 ppem)
     plus font smoothing's outline dilation, a radius set by the ink's luminance and the device
-    ppem (`text/macos_smoothing.rs`, `ApplePipeline::SMOOTHED`).
+    ppem (`text/macos/smoothing.rs`, `ApplePipeline::SMOOTHED`).
   - `Off`: what macOS browsers draw for `-webkit-font-smoothing: antialiased`, CoreText with font
     smoothing off, and the default on every other platform (Linux, Windows, the web). Apple's
     pipeline without the dilation (`ApplePipeline::UNSMOOTHED`); lighter than `On`.

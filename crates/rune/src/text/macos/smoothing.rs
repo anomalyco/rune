@@ -16,12 +16,12 @@ use swash::FontRef;
 use swash::scale::ScaleContext;
 use swash::zeno::{Command, Format, Mask, Origin, PathData, Placement};
 
-use super::{Atlas, Rasterized, Span};
+use crate::text::{Atlas, Rasterized, Span};
 use crate::color::Color;
 
-#[path = "macos_flatten.rs"]
+#[path = "flatten.rs"]
 mod flatten;
-#[path = "macos_hint.rs"]
+#[path = "hint.rs"]
 mod hint;
 
 pub(crate) use flatten::flatten;
@@ -96,7 +96,7 @@ pub(crate) struct Smoothing {
 
 impl Default for Smoothing {
     fn default() -> Self {
-        Smoothing { pipeline: super::FontSmoothing::default().pipeline(), inks: Vec::new(), metrics: HashMap::new() }
+        Smoothing { pipeline: crate::text::FontSmoothing::default().pipeline(), inks: Vec::new(), metrics: HashMap::new() }
     }
 }
 
@@ -463,5 +463,5 @@ pub(crate) fn dilate(path: &[Cmd], dx: f64, dy: f64) -> Path {
 }
 
 #[cfg(test)]
-#[path = "macos_smoothing_tests.rs"]
+#[path = "smoothing_tests.rs"]
 mod tests;

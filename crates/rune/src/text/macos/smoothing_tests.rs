@@ -12,7 +12,7 @@ use swash::scale::ScaleContext;
 
 use super::*;
 
-const INTER: &[u8] = include_bytes!("../../assets/Inter-Regular.ttf");
+const INTER: &[u8] = include_bytes!("../../../assets/Inter-Regular.ttf");
 /// Corpus tiles: the pen sits at x = 8 and the baseline 24 px above the bottom edge.
 const TILE: (usize, usize) = (96, 112);
 
@@ -118,7 +118,7 @@ impl Stats {
 
 #[test]
 fn radius_matches_the_native_luminance_sweep() {
-    let sweep: Value = serde_json::from_str(include_str!("macos_smoothing_data/sweep.json")).unwrap();
+    let sweep: Value = serde_json::from_str(include_str!("smoothing_data/sweep.json")).unwrap();
     let steps = sweep["steps"].as_u64().unwrap();
     let ppem = sweep["ppem"].as_f64().unwrap();
     let transitions: Vec<(u64, f64)> = sweep["transitions"].as_array().unwrap().iter()
@@ -148,7 +148,7 @@ fn radius_grows_with_ppem_to_the_f32_cap() {
 
 #[test]
 fn dilation_matches_coregraphics_paths() {
-    let cases: Vec<Value> = serde_json::from_str(include_str!("macos_smoothing_data/dilation.json")).unwrap();
+    let cases: Vec<Value> = serde_json::from_str(include_str!("smoothing_data/dilation.json")).unwrap();
     let mut worst = 0.0f64;
     for c in &cases {
         let d = radius_for_bucket(c["ppem"].as_f64().unwrap(), luminance_bucket(rgb(&c["color"])));
@@ -170,7 +170,7 @@ fn native_metrics(rows: &[Value]) -> std::collections::BTreeMap<String, HintMetr
 
 #[test]
 fn autohint_matches_native_transforms() {
-    let rows: Vec<Value> = include_str!("macos_smoothing_data/hints.jsonl").lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let rows: Vec<Value> = include_str!("smoothing_data/hints.jsonl").lines().map(|l| serde_json::from_str(l).unwrap()).collect();
     let metrics = native_metrics(&rows);
     let (mut count, mut worst, mut mismatches) = (0, 0.0f64, 0);
     for r in &rows {
@@ -221,8 +221,8 @@ fn reference_tile(blob: &[u8], crop: &Value) -> Vec<u8> {
 /// ink) and off, at hinted and unhinted sizes and two phases.
 #[test]
 fn masks_match_coregraphics_within_three_levels() {
-    let index: Vec<Value> = serde_json::from_str(include_str!("macos_smoothing_data/masks.json")).unwrap();
-    let blob = include_bytes!("macos_smoothing_data/masks.bin");
+    let index: Vec<Value> = serde_json::from_str(include_str!("smoothing_data/masks.json")).unwrap();
+    let blob = include_bytes!("smoothing_data/masks.bin");
     let font = FontRef::from_index(INTER, 0).unwrap();
     let mut cx = ScaleContext::new();
     let metrics = truetype_metrics(font, &[], &mut cx);

@@ -47,8 +47,8 @@ mod hash;
 mod hidden_axes;
 mod icon;
 mod layout_cache;
-mod macos_smoothing;
-pub use macos_smoothing::ApplePipeline;
+mod macos;
+pub use macos::smoothing::ApplePipeline;
 mod measure;
 mod pill_chips;
 mod rich_layout;
@@ -171,7 +171,7 @@ pub struct TextSystem {
     /// The hidden-axis coordinates (`hidden_axes`) of the same first font.
     primary_axes: HashMap<(Family, u32, bool), Rc<[parley::FontVariation]>>,
     /// CoreGraphics' glyph pipeline for `smoothing`, and its per-ink state.
-    apple: macos_smoothing::Smoothing,
+    apple: macos::smoothing::Smoothing,
     pub(crate) glyph_cache: glyph_cache::GlyphCache,
 }
 

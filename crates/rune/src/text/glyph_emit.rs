@@ -158,7 +158,7 @@ impl TextSystem {
                     out.push(c.quad(gx, gy, ink, byte));
                     return Placed::Other;
                 }
-                let placed = self.apple.rasterize(&mut self.scale_cx, &mut self.atlas, macos_smoothing::Job {
+                let placed = self.apple.rasterize(&mut self.scale_cx, &mut self.atlas, macos::smoothing::Job {
                     font: font_ref, key: (key.font, key.index, key.coords), coords, glyph: glyph as u16, ppem: font_size,
                     phase_x: subpx as f32 / coretext_match::PHASES, radius, skew,
                 });
