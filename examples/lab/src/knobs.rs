@@ -46,56 +46,26 @@ impl Scene {
         self.idx() < 5
     }
 
-    pub fn id(self) -> &'static str {
+    fn meta(self) -> (&'static str, &'static str, &'static str) {
         match self {
-            Scene::Lamp => "lamp",
-            Scene::Flashlight => "flashlight",
-            Scene::Gi => "gi",
-            Scene::Keys => "keys",
-            Scene::GodRays => "godrays",
-            Scene::Glow => "glow",
-            Scene::Pulses => "pulses",
-            Scene::Electric => "electric",
-            Scene::Fire => "fire",
-            Scene::Motion => "motion",
-            Scene::Lens => "lens",
-            Scene::Extras => "extras",
+            Scene::Lamp => ("lamp", "Lamp", "Drag the lamp. Every bubble casts a soft shadow from the analytic field."),
+            Scene::Flashlight => ("flashlight", "Flashlight", "Move the pointer. The torch is held low and to the right, so shadows swing."),
+            Scene::Gi => ("gi", "Emissive light", "Glowing elements light their neighbours. Click the record button or the progress bar."),
+            Scene::Keys => ("keys", "Raised keys", "Move the pointer to sweep the light. Press a key."),
+            Scene::GodRays => ("godrays", "God rays", "Move the pointer. The light sits behind the grid and shines through the gaps."),
+            Scene::Glow => ("glow", "Glow", "Click the neon card to switch it off: lights cool, never cut."),
+            Scene::Pulses => ("pulses", "Pulses", "Click anywhere for a ripple. Press send to ping the inbox."),
+            Scene::Electric => ("electric", "Electricity", "Hover the charged button."),
+            Scene::Fire => ("fire", "Fire", "Flames, a plasma border and heat haze over a button."),
+            Scene::Motion => ("motion", "Motion blur", "Drag the card and fling it. It glides on a spring with shutter blur."),
+            Scene::Lens => ("lens", "Liquid glass", "Drag the glass over the page. Click anywhere for a shockwave."),
+            Scene::Extras => ("extras", "Extras", "Shimmer, sparkles, aurora and grain."),
         }
     }
 
-    pub fn title(self) -> &'static str {
-        match self {
-            Scene::Lamp => "Lamp",
-            Scene::Flashlight => "Flashlight",
-            Scene::Gi => "Emissive light",
-            Scene::Keys => "Raised keys",
-            Scene::GodRays => "God rays",
-            Scene::Glow => "Glow",
-            Scene::Pulses => "Pulses",
-            Scene::Electric => "Electricity",
-            Scene::Fire => "Fire",
-            Scene::Motion => "Motion blur",
-            Scene::Lens => "Liquid glass",
-            Scene::Extras => "Extras",
-        }
-    }
-
-    pub fn hint(self) -> &'static str {
-        match self {
-            Scene::Lamp => "Drag the lamp. Every bubble casts a soft shadow from the analytic field.",
-            Scene::Flashlight => "Move the pointer. The torch is held low and to the right, so shadows swing.",
-            Scene::Gi => "Glowing elements light their neighbours. Click the record button or the progress bar.",
-            Scene::Keys => "Move the pointer to sweep the light. Press a key.",
-            Scene::GodRays => "Move the pointer. The light sits behind the grid and shines through the gaps.",
-            Scene::Glow => "Click the neon card to switch it off: lights cool, never cut.",
-            Scene::Pulses => "Click anywhere for a ripple. Press send to ping the inbox.",
-            Scene::Electric => "Hover the charged button.",
-            Scene::Fire => "Flames, a plasma border and heat haze over a button.",
-            Scene::Motion => "Drag the card and fling it. It glides on a spring with shutter blur.",
-            Scene::Lens => "Drag the glass over the page. Click anywhere for a shockwave.",
-            Scene::Extras => "Shimmer, sparkles, aurora and grain.",
-        }
-    }
+    pub fn id(self) -> &'static str { self.meta().0 }
+    pub fn title(self) -> &'static str { self.meta().1 }
+    pub fn hint(self) -> &'static str { self.meta().2 }
 }
 
 #[derive(Clone, Copy, Debug)]

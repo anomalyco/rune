@@ -23,26 +23,18 @@ pub enum Page {
 pub const PAGES: [Page; 6] = [Page::General, Page::Appearance, Page::Network, Page::Security, Page::Accessibility, Page::Developer];
 
 impl Page {
-    pub fn title(self) -> &'static str {
+    fn meta(self) -> (&'static str, &'static str) {
         match self {
-            Page::General => "General",
-            Page::Appearance => "Appearance",
-            Page::Network => "Network",
-            Page::Security => "Security",
-            Page::Accessibility => "Accessibility",
-            Page::Developer => "Developer",
+            Page::General => ("General", "general"),
+            Page::Appearance => ("Appearance", "appearance"),
+            Page::Network => ("Network", "network"),
+            Page::Security => ("Security", "security"),
+            Page::Accessibility => ("Accessibility", "accessibility"),
+            Page::Developer => ("Developer", "developer"),
         }
     }
-    pub fn id(self) -> &'static str {
-        match self {
-            Page::General => "general",
-            Page::Appearance => "appearance",
-            Page::Network => "network",
-            Page::Security => "security",
-            Page::Accessibility => "accessibility",
-            Page::Developer => "developer",
-        }
-    }
+    pub fn title(self) -> &'static str { self.meta().0 }
+    pub fn id(self) -> &'static str { self.meta().1 }
 }
 
 pub const APPEARANCES: [&str; 3] = ["Light", "Dark", "Auto"];
