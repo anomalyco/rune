@@ -212,7 +212,7 @@ pub(crate) fn start<S: 'static>(mut spec: WindowSpec<S>, handle: Option<WindowHa
     crate::video::enable_playback();
     cx.overlays.append(&mut spec.app.overlays);
     let handle = handle.unwrap_or_else(|| WindowHandle::new(&spec.key));
-    let open_urls = crate::open_url_in::listen(&spec.app);
+    let open_urls = crate::open_url::incoming::listen(&spec.app);
     let mut host = Host::new(spec, handle, args, cx.proxy, cx.slot, cx.gpu, cx.wayland);
     (host.keeps_loop, host._open_urls) = (keeps_loop, open_urls);
     Some(Box::new(host))
@@ -254,7 +254,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
             let proxy = self.proxy.clone();
             crate::reopen::install(move || proxy.send_event(WakeEvent::Reopen).is_ok());
         }
-        crate::open_url_in::settle();
+        crate::open_url::incoming::settle();
         // A window opened at launch took it; a GPU kept for a later one would sit idle until then.
         crate::render::discard_prewarm();
         self.cleanup(event_loop);
@@ -328,7 +328,7 @@ struct Host<S: 'static> {
     on_close: Option<fn(&mut S, &mut Tx)>,
     on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
     /// Its place among the windows receiving links (`App::on_open_url`).
-    _open_urls: Option<crate::open_url_in::Listening>,
+    _open_urls: Option<crate::open_url::incoming::Listening>,
     /// When it last hid, in `reopen::stamp` order.
     hidden_at: Option<u64>,
     release_gpu: bool,

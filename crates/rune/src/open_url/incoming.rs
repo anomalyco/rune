@@ -248,5 +248,5 @@ mod mac {
 }
 
 #[cfg(test)]
-#[path = "open_url_in_tests.rs"]
+#[path = "incoming_tests.rs"]
 mod tests;

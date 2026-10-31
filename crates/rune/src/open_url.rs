@@ -10,6 +10,8 @@
 //! tests never open anything: they keep the requests for [`Runtime::take_url_requests`].
 use crate::Runtime;
 
+pub(crate) mod incoming;
+
 const MAX_LEN: usize = 8192;
 
 /// Why a link was refused or didn't open.

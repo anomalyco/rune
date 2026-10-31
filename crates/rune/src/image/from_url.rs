@@ -101,5 +101,5 @@ fn percent_decode(s: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-#[path = "image_url_tests.rs"]
+#[path = "from_url_tests.rs"]
 mod tests;

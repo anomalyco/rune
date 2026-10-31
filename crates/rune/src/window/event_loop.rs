@@ -77,7 +77,7 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     crate::app_icon::launched();
     let proxy = event_loop.create_proxy();
     let mut windows = Windows { factory: Some(factory), args, proxy, hosts: Vec::new(), gpu: Rc::default() };
-    crate::open_url_in::prepare();
+    crate::open_url::incoming::prepare();
     let result = event_loop.run_app(&mut windows);
     crate::render::discard_prewarm();
     crate::clipboard::shutdown(); // Also cover an event-loop error before `exiting`.

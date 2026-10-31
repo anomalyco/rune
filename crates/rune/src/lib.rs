@@ -147,7 +147,6 @@ mod ready_signal;
 pub mod file_dialog;
 pub mod tray;
 mod open_url;
-mod open_url_in;
 pub mod prefs;
 pub use open_url::OpenUrlError;
 pub mod text;

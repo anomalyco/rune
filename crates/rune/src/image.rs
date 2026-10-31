@@ -720,11 +720,9 @@ impl Srgb {
     }
 }
 
-#[path = "image_url.rs"]
 mod from_url;
 
 #[cfg(test)]
-#[path = "image_mip_tests.rs"]
 mod mip_tests;
 
 #[cfg(test)]
