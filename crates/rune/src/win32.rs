@@ -45,7 +45,7 @@ impl Input {
     fn hit(&self, point: (f32, f32)) -> bool {
         self.captured.get() || match self.input.get() {
             OverlayInput::All => true,
-            OverlayInput::Regions => self.regions.borrow().iter().any(|r| crate::overlay_options::contains(*r, point.0, point.1)),
+            OverlayInput::Regions => self.regions.borrow().iter().any(|r| crate::overlay::options::contains(*r, point.0, point.1)),
             _ => false,
         }
     }

@@ -99,10 +99,10 @@ impl XwaylandSurface {
             let p = self.connection.query_pointer(self.root).ok()?.reply().ok()?;
             p.same_screen.then_some((f64::from(p.root_x), f64::from(p.root_y)))
         }).flatten();
-        let monitor = &monitors[crate::overlay_options::choose_display(&bounds, primary, None, pointer)?];
+        let monitor = &monitors[crate::overlay::options::choose_display(&bounds, primary, None, pointer)?];
         let scale = self.scale;
         let area = (f32::from(monitor.width) / scale, f32::from(monitor.height) / scale);
-        let r = crate::overlay_options::local_rect(at, options.placement, area);
+        let r = crate::overlay::options::local_rect(at, options.placement, area);
         let px = |v: f32| (v * scale).round();
         let x = (f32::from(monitor.x) + px(r[0])).clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16;
         let y = (f32::from(monitor.y) + px(r[1])).clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16;

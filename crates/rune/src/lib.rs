@@ -75,7 +75,6 @@ mod layer_shell;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 mod x11;
 mod overlay;
-mod overlay_options;
 mod cursor;
 mod cursor_image;
 mod os_cursor;
@@ -186,7 +185,7 @@ pub use winit::raw_window_handle;
 
 pub use app::{App, AppHandle};
 pub use overlay::{Availability, OverlayHandle, OverlaySpec, ScreenEdge};
-pub use overlay_options::{ConfiguredOverlay, DisplayId, DisplayTarget, NativeDisplayId, KeyPolicy, OverlayCapabilities, OverlayCreated, OverlayInput, OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySupport};
+pub use overlay::options::{ConfiguredOverlay, DisplayId, DisplayTarget, NativeDisplayId, KeyPolicy, OverlayCapabilities, OverlayCreated, OverlayInput, OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySupport};
 pub use color::{Color, oklch, oklcha};
 pub use compose::{Compositor, Frame};
 pub use edit::{Block, Ime, Key, KeyEvent, KeySide, MAX_LIST_LEVEL, Mark, MarkRange, Modifier, Mods, ParagraphInfo, RichStyle, TextEdit};

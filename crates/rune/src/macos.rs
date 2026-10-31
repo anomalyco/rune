@@ -126,7 +126,7 @@ pub(crate) fn backing_scale(window: &winit::window::Window) -> Option<f32> {
         let r = s.frame();
         ([r.origin.x, r.origin.y, r.size.width, r.size.height], s.backingScaleFactor())
     }).collect();
-    let scale = crate::overlay_options::scale_under([f.origin.x, f.origin.y, f.size.width, f.size.height], &screens);
+    let scale = crate::overlay::options::scale_under([f.origin.x, f.origin.y, f.size.width, f.size.height], &screens);
     Some(scale.unwrap_or_else(|| ns.backingScaleFactor()) as f32)
 }
 
@@ -243,7 +243,7 @@ fn overlay_rect_on(at: crate::overlay::Placement, options: &OverlayOptions, prev
     }).or_else(|| screens.iter().find(|s| options.display == DisplayTarget::UnderPointer && previous == Some(screen_id(s))))
         .or_else(|| screens.iter().next())?;
     let frame = screen.frame();
-    let [x, y, w, h] = crate::overlay_options::local_rect(at, options.placement, (frame.size.width as f32, frame.size.height as f32));
+    let [x, y, w, h] = crate::overlay::options::local_rect(at, options.placement, (frame.size.width as f32, frame.size.height as f32));
     Some(NSRect::new(NSPoint::new(frame.origin.x + x as f64, frame.origin.y + frame.size.height - (y + h) as f64), NSSize::new(w as f64, h as f64)))
 }
 
@@ -280,7 +280,7 @@ impl PointerState {
     pub(crate) fn hit(&self, x: f32, y: f32) -> bool {
         self.captured.get() || match self.input.get() {
             OverlayInput::All => true,
-            OverlayInput::Regions => self.regions.borrow().iter().any(|r| crate::overlay_options::contains(*r, x, y)),
+            OverlayInput::Regions => self.regions.borrow().iter().any(|r| crate::overlay::options::contains(*r, x, y)),
             _ => false,
         }
     }

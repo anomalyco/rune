@@ -82,7 +82,7 @@ impl<S: 'static> Host<S> {
         if let Some(monitor) = crate::overlay::monitor_at(event_loop, &request.display, request.pointer) {
             let scale = monitor.scale_factor();
             let area = monitor.size();
-            let rect = crate::overlay_options::local_rect(crate::windows::PlaceRequest::at(self.rt.viewport), Some(request.placement),
+            let rect = crate::overlay::options::local_rect(crate::windows::PlaceRequest::at(self.rt.viewport), Some(request.placement),
                 (area.width as f32 / scale as f32, area.height as f32 / scale as f32));
             let origin = monitor.position();
             let _ = w.window.request_inner_size(LogicalSize::new(rect[2], rect[3]));

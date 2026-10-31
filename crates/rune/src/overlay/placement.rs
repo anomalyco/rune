@@ -14,7 +14,7 @@ pub(super) fn position(event_loop: &ActiveEventLoop, at: Placement, options: &Ov
     let scale = monitor.scale_factor();
     let (origin, area) = (monitor.position(), monitor.size());
     if options.placement.is_some() {
-        let r = crate::overlay_options::local_rect(at, options.placement, (area.width as f32 / scale as f32, area.height as f32 / scale as f32));
+        let r = crate::overlay::options::local_rect(at, options.placement, (area.width as f32 / scale as f32, area.height as f32 / scale as f32));
         return Some(PhysicalPosition::new(origin.x + (r[0] as f64 * scale).round() as i32, origin.y + (r[1] as f64 * scale).round() as i32));
     }
     let px = |v: f32| (v as f64 * scale).round() as i32;
@@ -68,6 +68,6 @@ pub(crate) fn monitor_at(event_loop: &ActiveEventLoop, target: &DisplayTarget, s
     let pointer = if *target == DisplayTarget::UnderPointer && !crate::window::is_wayland(event_loop) { crate::x11::overlay::pointer_position() } else { None };
     #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", target_arch = "wasm32"))]
     let pointer: Option<(i32, i32)> = None;
-    let i = crate::overlay_options::choose_display(&bounds, primary, requested, sampled.or(pointer).map(|(x, y)| (f64::from(x), f64::from(y))))?;
+    let i = crate::overlay::options::choose_display(&bounds, primary, requested, sampled.or(pointer).map(|(x, y)| (f64::from(x), f64::from(y))))?;
     Some(monitors[i].clone())
 }

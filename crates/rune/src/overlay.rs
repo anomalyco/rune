@@ -50,13 +50,13 @@ mod xwayland;
 #[cfg(not(target_os = "macos"))]
 pub(crate) use placement::monitor_at;
 use placement::{monitor, position};
-#[path = "overlay_requests.rs"]
 mod requests;
 use requests::{Requests, Update};
 #[path = "overlay/any_host.rs"]
 mod any_host;
 #[path = "overlay/input.rs"]
 mod input;
+pub(crate) mod options;
 
 /// The screen edge an overlay sits on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -800,7 +800,7 @@ impl<T: 'static> Overlay<T> {
         }
         if let Some(monitor) = monitor(event_loop, &self.options.display) {
             let area = monitor.size().to_logical::<f32>(monitor.scale_factor());
-            let rect = crate::overlay_options::local_rect(at, self.options.placement, (area.width, area.height));
+            let rect = crate::overlay::options::local_rect(at, self.options.placement, (area.width, area.height));
             self.at.size = (rect[2], rect[3]);
         }
     }

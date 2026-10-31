@@ -22,7 +22,7 @@ impl<T: 'static> Overlay<T> {
         let over = self.rt.pointer().is_some_and(|(x, y)| {
             x >= 0.0 && y >= 0.0 && x < self.at.size.0 && y < self.at.size.1
                 && (input != OverlayInput::Regions || self.rt.pointer_captured()
-                    || self.rt.hit_regions().iter().any(|r| crate::overlay_options::contains(*r, x, y)))
+                    || self.rt.hit_regions().iter().any(|r| crate::overlay::options::contains(*r, x, y)))
         });
         let active = self.visible && input != OverlayInput::None && over;
         let want = self.rt.cursor();

@@ -29,7 +29,7 @@ use crate::edit::{EditOutcome, Ime, KeyEvent};
 use crate::el::{Align, Drag, El, GrowthSpec, InputSpec, Phase, PointerEvent, ScrollSpec, Shell, TextSpec, Tx, Visual};
 use crate::growth::{GrowTrack, SUBSTEP};
 // Half-open, like overlays, NSPointInRect and PtInRect: a shared edge belongs to one side.
-use crate::overlay_options::contains;
+use crate::overlay::options::contains;
 use crate::flight::{TextFlight, transformed};
 use crate::render::{Instance, KIND_DASHED, KIND_EFFECT, KIND_GLYPH, KIND_GRADIENT, KIND_IMAGE, KIND_INSET, KIND_RADIAL, KIND_RECT, KIND_SEGMENT, KIND_SHADOW, KIND_TRIANGLE, NO_CLIP};
 use crate::shape::{LineCap, Op, Shape};
