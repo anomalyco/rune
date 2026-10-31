@@ -242,7 +242,11 @@ impl SurfaceRenderer {
         // Release an unsubmitted preparation before acquiring its replacement. Submitted
         // slots stay leased by their completion callbacks, including the deferred resolve.
         self.queries = None;
-        if !draws.is_empty() {
+        // GPU timestamps only for a surface someone observes: reading them back takes a second
+        // submission from the completion thread, which can race the window reconfiguring its
+        // surface on the main thread (wgpu then fails the reconfigure). CPU submit/complete
+        // notifications and `counts()` don't need them.
+        if draws.iter().any(|d| d.surface.observed()) {
             self.queries = self.timing_pool.as_ref().and_then(TimingPool::take);
         }
         self.cache.retain(|key, _| draws.iter().any(|d| d.surface.key() == *key));

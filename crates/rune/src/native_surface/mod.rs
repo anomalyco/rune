@@ -172,6 +172,10 @@ impl NativeSurface {
     pub fn set_waker(&self, waker: crate::Waker) {
         self.0.lock().unwrap().waker = Some(waker);
     }
+    /// Whether an observer wants this surface's frame timing (`set_observer`).
+    pub(crate) fn observed(&self) -> bool {
+        self.0.lock().unwrap().observer.is_some()
+    }
     pub fn set_observer(&self, observer: FrameObserver) {
         self.0.lock().unwrap().observer = Some(observer);
     }
