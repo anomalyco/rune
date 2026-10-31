@@ -129,7 +129,7 @@ pub(crate) struct Gap {
 }
 
 /// Highlights of 128 lines of one side, by line number.
-pub(crate) struct Chunk {
+struct Chunk {
     /// Byte offset of each line in the chunk's text, and one past the last.
     starts: Vec<u32>,
     hl: Rc<[Highlight]>,

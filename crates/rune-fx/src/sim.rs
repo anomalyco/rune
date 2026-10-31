@@ -6,7 +6,7 @@
 
 use crate::*;
 
-pub(crate) const DT: f32 = 1.0 / 60.0;
+const DT: f32 = 1.0 / 60.0;
 const JACOBI: usize = 14;
 /// Steps per frame while playing; beyond it the sim skips time instead of stalling the frame.
 const MAX_STEPS: usize = 4;
@@ -17,7 +17,7 @@ const SLOT: usize = 256;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub(crate) struct SimUniform {
+struct SimUniform {
     dims: [f32; 4],
     origin: [f32; 4],
     shape: [f32; 4],
@@ -68,14 +68,14 @@ fn schedule(prev: Option<f32>, target: f32, frozen: bool) -> (usize, f32, bool) 
     }
 }
 
-pub(crate) struct Grid {
+struct Grid {
     claim: Claim,
     n: [u32; 2],
-    pub views: [wgpu::TextureView; 2],
+    views: [wgpu::TextureView; 2],
     binds: [[wgpu::BindGroup; 7]; 2],
     uniforms: wgpu::Buffer,
     /// Which state texture holds the latest step.
-    pub cur: usize,
+    cur: usize,
     /// Sim time of `views[cur]`; None until the first step.
     t: Option<f32>,
     plan: Option<Plan>,
@@ -92,7 +92,7 @@ struct Plan {
 pub(crate) struct Sims {
     pipes: [wgpu::ComputePipeline; 6],
     bgl: wgpu::BindGroupLayout,
-    pub grids: Vec<Grid>,
+    grids: Vec<Grid>,
     frame: u64,
     /// One grid's step uniforms, reused across frames.
     bytes: Vec<u8>,

@@ -394,7 +394,7 @@ macro_rules! presets {
     };
 }
 
-pub(crate) static FILL_STYLES: &[StyleInfo] = &[
+static FILL_STYLES: &[StyleInfo] = &[
     StyleInfo {
         id: "liquid_metal",
         name: "Liquid metal",

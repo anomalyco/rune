@@ -84,7 +84,7 @@ impl Scene {
 
     /// Remembers built-in props' tracks on the node (custom props live only in the store), and
     /// marks it to present again if the track changed.
-    pub(super) fn record_track(&mut self, i: usize, p: PropId, id: TrackId, changed: bool) {
+    fn record_track(&mut self, i: usize, p: PropId, id: TrackId, changed: bool) {
         if let Some(slot) = self.nodes[i].tracks.get_mut(p.0 as usize) {
             *slot = Some(id);
         }

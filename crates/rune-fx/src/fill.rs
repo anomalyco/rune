@@ -47,7 +47,7 @@ impl Stops {
 }
 
 /// Linear sRGB to OKLab.
-pub(crate) fn oklab(c: Rgb) -> [f32; 3] {
+fn oklab(c: Rgb) -> [f32; 3] {
     let [r, g, b] = c.0;
     let l = 0.412_221_46 * r + 0.536_332_55 * g + 0.051_445_995 * b;
     let m = 0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b;
@@ -755,7 +755,7 @@ impl FillParams {
         }
     }
 
-    pub(crate) fn needs_source(&self) -> bool {
+    fn needs_source(&self) -> bool {
         match self.style {
             FillStyle::Dither(p) => p.input == FillInput::Image,
             FillStyle::Halftone(p) => p.input == FillInput::Image,

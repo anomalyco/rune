@@ -193,7 +193,7 @@ fn crow(c: &mut Canvas, h: Head, tip: [f32; 2], d: [f32; 2], width: f32, color: 
 }
 
 /// A loop off the node's right side; returns the left middle of where its label goes.
-pub(crate) fn self_loop(c: &mut Canvas, e: &Edge, ctr: [f32; 2], size: [f32; 2], paint: &DiagramStyle) -> [f32; 2] {
+fn self_loop(c: &mut Canvas, e: &Edge, ctr: [f32; 2], size: [f32; 2], paint: &DiagramStyle) -> [f32; 2] {
     let x = ctr[0] + size[0] / 2.0;
     let (a, b) = ([x, ctr[1] - size[1] / 4.0], [x, ctr[1] + size[1] / 4.0]);
     let mut path = [a, [x + 18.0, a[1] - 4.0], [x + 26.0, ctr[1]], [x + 18.0, b[1] + 4.0], b];

@@ -288,7 +288,7 @@ pub(crate) fn layer_clip_coverage(i: &Primitive, screen: [f32; 2]) -> f32 {
     clip * clamp(0.5 - sd(p, half, i.border))
 }
 
-pub(crate) fn clip_coverage(i: &Primitive, screen: [f32; 2]) -> f32 {
+fn clip_coverage(i: &Primitive, screen: [f32; 2]) -> f32 {
     let origin = i.fade_origin.unwrap_or(i.clip);
     let p = screen;
     let hard = [p[0] - i.clip[0], p[1] - i.clip[1], i.clip[2] - p[0], i.clip[3] - p[1]];

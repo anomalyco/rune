@@ -243,7 +243,7 @@ impl Default for PaneMotion {
 /// it holds until the pane is `fraction` from closed, then follows the spring's own state from
 /// there scaled by `1 / fraction`, which is exact; opening, it reaches 1 as the pane passes
 /// `fraction` open, on an ease-in close to the spring's start.
-pub(super) fn tail_fade(spring: Spring, fraction: f32, open: bool) -> Anim {
+fn tail_fade(spring: Spring, fraction: f32, open: bool) -> Anim {
     let step = 1.0 / 480.0;
     if open {
         // Opening, the pane passes `fraction` open early, on the steep start of the spring.

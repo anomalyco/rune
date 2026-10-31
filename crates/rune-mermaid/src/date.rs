@@ -2,9 +2,9 @@
 //! 1970-01-01 00:00. Dates read with a dayjs-style `dateFormat` and print with a d3-style
 //! `axisFormat`.
 
-pub(crate) const SEC: f64 = 1000.0;
-pub(crate) const MIN: f64 = 60.0 * SEC;
-pub(crate) const HOUR: f64 = 60.0 * MIN;
+const SEC: f64 = 1000.0;
+const MIN: f64 = 60.0 * SEC;
+const HOUR: f64 = 60.0 * MIN;
 pub(crate) const DAY: f64 = 24.0 * HOUR;
 
 /// Days from 1970-01-01 to `y-m-d` (proleptic Gregorian).
@@ -19,7 +19,7 @@ pub(crate) fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
 }
 
 /// `(year, month, day)` of a day number from [`days_from_civil`].
-pub(crate) fn civil_from_days(z: i64) -> (i64, u32, u32) {
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
@@ -42,19 +42,19 @@ fn days_in_month(y: i64, m: u32) -> u32 {
 
 /// A time's calendar fields.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Fields {
-    pub y: i64,
-    pub mo: u32,
-    pub d: u32,
-    pub h: u32,
-    pub mi: u32,
-    pub s: u32,
-    pub ms: u32,
+struct Fields {
+    y: i64,
+    mo: u32,
+    d: u32,
+    h: u32,
+    mi: u32,
+    s: u32,
+    ms: u32,
     /// 0 is Sunday.
-    pub wd: u32,
+    wd: u32,
 }
 
-pub(crate) fn fields(t: f64) -> Fields {
+fn fields(t: f64) -> Fields {
     let day = (t / DAY).floor();
     let (y, mo, d) = civil_from_days(day as i64);
     let rest = (t - day * DAY).max(0.0) as u64;
@@ -70,13 +70,13 @@ pub(crate) fn fields(t: f64) -> Fields {
     }
 }
 
-pub(crate) fn at(y: i64, mo: u32, d: u32, h: u32, mi: u32, s: u32, ms: u32) -> Option<f64> {
+fn at(y: i64, mo: u32, d: u32, h: u32, mi: u32, s: u32, ms: u32) -> Option<f64> {
     let ok = (1..=12).contains(&mo) && d >= 1 && d <= days_in_month(y, mo) && h < 24 && mi < 60 && s < 60 && (-9999..=9999).contains(&y);
     ok.then(|| days_from_civil(y, mo, d) as f64 * DAY + h as f64 * HOUR + mi as f64 * MIN + s as f64 * SEC + ms as f64)
 }
 
 /// `t` moved by `n` calendar months, keeping its day where the month has it.
-pub(crate) fn add_months(t: f64, n: i64) -> f64 {
+fn add_months(t: f64, n: i64) -> f64 {
     let f = fields(t);
     let m0 = f.y * 12 + f.mo as i64 - 1 + n;
     let (y, mo) = (m0.div_euclid(12), m0.rem_euclid(12) as u32 + 1);

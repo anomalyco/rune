@@ -142,7 +142,7 @@ pub(super) struct Source {
 }
 
 #[derive(Clone, PartialEq)]
-pub(super) enum Fence {
+enum Fence {
     /// A code block; its language as written, if it names one, and whether its closing fence
     /// has arrived.
     Plain(Option<Rc<str>>, bool),
@@ -571,7 +571,7 @@ pub(super) fn parse_doc(src: &str, autolink: bool) -> (Vec<Block>, Vec<Source>, 
     (blocks, b.sources, b.tasks, b.cuts, b.block_starts, maps)
 }
 
-pub(super) fn code_block(text: String, fence: &Fence) -> Block {
+fn code_block(text: String, fence: &Fence) -> Block {
     match fence {
         Fence::Plain(..) | Fence::Mermaid(false) => Block::Code(text),
         Fence::Diff => Block::Diff(text),

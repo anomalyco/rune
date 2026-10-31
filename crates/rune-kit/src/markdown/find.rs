@@ -298,7 +298,7 @@ fn map_vis_range(src: &str, segments: &[Seg], seg_idx: &mut usize, v_range: Rang
     ranges
 }
 
-pub(super) fn normalize_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
+fn normalize_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
     ranges.retain(|r| r.start < r.end);
     if ranges.len() <= 1 || ranges.windows(2).all(|w| w[0].end < w[1].start) {
         return ranges;

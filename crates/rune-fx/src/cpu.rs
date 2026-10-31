@@ -6,7 +6,7 @@ use crate::*;
 use std::f32::consts::{PI, TAU};
 
 #[inline]
-pub(crate) fn pcg(v: u32) -> u32 {
+fn pcg(v: u32) -> u32 {
     let s = v.wrapping_mul(747796405).wrapping_add(2891336453);
     let w = ((s >> ((s >> 28) + 4)) ^ s).wrapping_mul(277803737);
     (w >> 22) ^ w
@@ -16,7 +16,7 @@ pub(crate) fn hu(a: u32, b: u32) -> u32 {
     pcg(a ^ pcg(b.wrapping_add(0x9E3779B9)))
 }
 #[inline]
-pub(crate) fn u01(n: u32) -> f32 {
+fn u01(n: u32) -> f32 {
     (pcg(n) >> 8) as f32 * (1.0 / 16777216.0)
 }
 #[inline]
@@ -56,7 +56,7 @@ pub(crate) fn gnoise(x: f32, y: f32, per: i32, seed: u32) -> f32 {
     (ab + (cd - ab) * uy) * 1.41421
 }
 /// Multi-octave lateral displacement for bolts, ~[-1.6, 1.6].
-pub(crate) fn disp(x0: f32, t0: f32, per0: i32, seed: u32, oct: u32) -> f32 {
+fn disp(x0: f32, t0: f32, per0: i32, seed: u32, oct: u32) -> f32 {
     let (mut x, mut t, mut a, mut s, mut n, mut per) = (x0, t0, 1.0f32, 0.0f32, 0.0f32, per0);
     for o in 0..oct {
         s += a * gnoise(x, t, per, seed.wrapping_add(o * 101));
@@ -106,7 +106,7 @@ fn blur3(v: &[f32], radius: f32, wrap: bool) -> Vec<f32> {
     a
 }
 
-pub(crate) fn rrect_total(rect: Rect, r: f32) -> f32 {
+fn rrect_total(rect: Rect, r: f32) -> f32 {
     let r = r.clamp(0.0, rect.w.min(rect.h) * 0.5);
     let b = (rect.w * 0.5 - r, rect.h * 0.5 - r);
     4.0 * (b.1 + r * PI * 0.5 + b.0)

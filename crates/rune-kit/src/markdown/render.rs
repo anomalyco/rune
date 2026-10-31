@@ -57,7 +57,7 @@ pub(super) fn source_copy(src: &str, starts: &[usize], names: &[String], sel: &r
     Some(src.get(start..end)?.trim_end().to_owned())
 }
 
-pub(super) fn block_key(i: usize, keys: &[String], used: &mut Vec<String>) -> String {
+fn block_key(i: usize, keys: &[String], used: &mut Vec<String>) -> String {
     if let Some(k) = keys.get(i).filter(|k| !k.is_empty() && !used.iter().any(|u| u == *k)) {
         used.push(k.clone());
         return k.clone();
@@ -177,7 +177,7 @@ impl Renderer {
     }
 
     /// Resolves `hl` against [`MarkdownStyle`] into a [`TextHighlight`] for `range`.
-    pub(super) fn make_text_highlight(&self, idx: usize, range: Range<usize>, hl: &Highlight) -> TextHighlight {
+    fn make_text_highlight(&self, idx: usize, range: Range<usize>, hl: &Highlight) -> TextHighlight {
         let s = &self.s;
         let bg = hl.bg.unwrap_or(if hl.current { s.highlight_current_bg } else { s.highlight_bg });
         let fg = hl.fg.or(if hl.current { s.highlight_current_fg } else { s.highlight_fg });
@@ -193,7 +193,7 @@ impl Renderer {
         th
     }
 
-    pub(super) fn text_highlights_for(&self, text: &str, map: Option<&SpanMap>) -> Vec<TextHighlight> {
+    fn text_highlights_for(&self, text: &str, map: Option<&SpanMap>) -> Vec<TextHighlight> {
         let Some(map) = map.filter(|_| !self.highlights.is_empty()) else { return Vec::new() };
         let mut out = Vec::new();
         for (idx, (src_ranges, hl)) in self.highlights.iter().enumerate() {
@@ -322,7 +322,7 @@ impl Renderer {
         self.code(src, None, map)
     }
 
-    pub(super) fn task_item(&self, k: usize, item: &[Block], item_maps: &[BlockMap], item_idx: usize, checked: bool) -> El {
+    fn task_item(&self, k: usize, item: &[Block], item_maps: &[BlockMap], item_idx: usize, checked: bool) -> El {
         let t = &self.s.task;
         let interactive = self.on_task.is_some() && !self.tasks_read_only;
         let (fill, border) = if checked {

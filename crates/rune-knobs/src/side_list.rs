@@ -11,7 +11,7 @@ use crate::view::tool;
 use crate::icons;
 use crate::{Group, Knobs, Style};
 
-pub(crate) const PAGE_H: f32 = 34.0;
+const PAGE_H: f32 = 34.0;
 const GROUP_H: f32 = 30.0;
 /// How far a page's groups sit in from its header.
 const NEST: f32 = 12.0;

@@ -88,13 +88,13 @@ pub(crate) struct InstRaw {
     pub fade: [u32; 4],
 }
 
-pub(crate) const KIND_GLOW: usize = 0;
-pub(crate) const KIND_PULSE: usize = 1;
-pub(crate) const KIND_ELECTRIC: usize = 2;
-pub(crate) const KIND_FIRE: usize = 3;
-pub(crate) const KIND_DISTORT: usize = 4;
-pub(crate) const KIND_MOTION: usize = 5;
-pub(crate) const KIND_EXTRAS: usize = 6;
+const KIND_GLOW: usize = 0;
+const KIND_PULSE: usize = 1;
+const KIND_ELECTRIC: usize = 2;
+const KIND_FIRE: usize = 3;
+const KIND_DISTORT: usize = 4;
+const KIND_MOTION: usize = 5;
+const KIND_EXTRAS: usize = 6;
 pub(crate) const KIND_FILL: usize = 7;
 pub(crate) const KINDS: usize = 8;
 

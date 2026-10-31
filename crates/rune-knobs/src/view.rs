@@ -16,7 +16,7 @@ const INLINE_CARD_W: f32 = 220.0;
 const TAG: TextStyle = TextStyle::new(11.0, 550.0).lh(14.0);
 
 /// The smallest region under the point.
-pub(crate) fn region_at(rects: &[(&'static str, [f32; 4])], x: f32, y: f32) -> Option<&'static str> {
+fn region_at(rects: &[(&'static str, [f32; 4])], x: f32, y: f32) -> Option<&'static str> {
     rects
         .iter()
         .filter(|(_, r)| x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3])

@@ -289,7 +289,7 @@ impl FileDiff {
     }
 
     /// Word changes for each removed line followed by an added one, pairing them in order.
-    pub(crate) fn pair_words(&mut self) {
+    fn pair_words(&mut self) {
         for h in &mut self.hunks {
             let mut i = 0;
             while i < h.lines.len() {
