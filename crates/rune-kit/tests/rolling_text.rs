@@ -620,3 +620,41 @@ fn trailing_labels_in_a_sliding_row_never_reverse() {
         assert!(after < before - 5.0, "leads {leads}: the cost widens to the left by a digit: {before} → {after}");
     }
 }
+
+fn tuned(s: &(String, f32, f32), _cx: &mut Cx<(String, f32, f32)>) -> El {
+    let k = Kit::neutral(true);
+    rune::row().padding(20.0).child(RollingText::new("t", s.0.clone()).font(k.ty.mono).travel(s.1).stagger(s.2).build(&k))
+}
+
+/// The leaving "1"'s furthest travel and each entering digit's frame of first rest, for
+/// "11" → "22" at `travel` and `stagger`.
+fn roll_of(travel: f32, stagger: f32) -> (f32, Vec<usize>) {
+    let mut rt = Runtime::new(("11".to_string(), travel, stagger), tuned, (400.0, 120.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    let rest = cell(&rt, "1", false).unwrap()[1];
+    rt.update(|s, _| s.0 = "22".into());
+    let (mut far, mut landed) = (0.0f32, vec![usize::MAX; 2]);
+    for f in 0..120 {
+        rt.frame(1.0 / 120.0);
+        if let Some(r) = cell(&rt, "1", true) {
+            far = far.max((r[1] - rest).abs());
+        }
+        let twos: Vec<_> = rt.elements().into_iter().filter(|e| !e.exiting && e.text.as_deref() == Some("2")).collect();
+        for (i, e) in twos.iter().enumerate().take(2) {
+            if landed[i] == usize::MAX && (e.rect[1] - rest).abs() < 0.05 {
+                landed[i] = f;
+            }
+        }
+    }
+    (far, landed)
+}
+
+/// `travel` shortens how far rolling glyphs move; `stagger(0.0)` lands a number's digits together.
+#[test]
+fn travel_and_stagger_tune_the_roll() {
+    let (full, staggered) = roll_of(1.0, 0.03);
+    let (half, together) = roll_of(0.5, 0.0);
+    assert!(half < full * 0.6 && half > full * 0.3, "half travel moves about half as far: {half} vs {full}");
+    assert!(staggered[1] > staggered[0] + 2, "by default the second digit lands later: {staggered:?}");
+    assert!(together[1].abs_diff(together[0]) <= 1, "with no stagger both land together: {together:?}");
+}

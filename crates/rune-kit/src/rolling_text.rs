@@ -18,12 +18,12 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use rune::text::Run;
-use rune::{Color, Edge, El, Spring, SpringPair, TextStyle, Transition, row, text};
+use rune::{Color, Edge, Effect, El, Spring, SpringPair, TextStyle, Transition, Vec2, row, text};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::Kit;
 
-/// Extra spring duration per changed glyph, left to right.
+/// Extra spring duration per changed glyph, left to right (the default [`RollingText::stagger`]).
 const STAGGER: f32 = 0.03;
 /// The stagger stops growing after this many glyphs, so long replacements still land together.
 const STAGGER_CAP: usize = 6;
@@ -99,6 +99,8 @@ pub struct RollingText {
     from: Edge,
     value: Option<f64>,
     trailing: bool,
+    stagger: f32,
+    travel: f32,
 }
 
 impl RollingText {
@@ -117,6 +119,8 @@ impl RollingText {
             from: Edge::Bottom,
             value: None,
             trailing: false,
+            stagger: STAGGER,
+            travel: 1.0,
         }
     }
     pub fn font(mut self, font: TextStyle) -> Self {
@@ -146,6 +150,19 @@ impl RollingText {
         self.value = Some(value);
         self
     }
+    /// Extra spring duration per changed glyph, left to right, so a replacement ripples across
+    /// (default 0.03 s). 0 lands every changed glyph together, as a number should.
+    pub fn stagger(mut self, secs: f32) -> Self {
+        self.stagger = secs.max(0.0);
+        self
+    }
+    /// How far a rolling glyph travels, as a fraction of its line (default 1, a full line).
+    /// Shorter travel reads as a softer roll: the glyphs cross-fade over less distance, so less
+    /// of each is cut by the edge fade.
+    pub fn travel(mut self, fraction: f32) -> Self {
+        self.travel = fraction.clamp(0.0, 1.0);
+        self
+    }
     /// The label sits against its trailing edge (right-aligned), so it widens to the left. The
     /// label and its glyphs ride their parent's trailing edge ([`El::ride_trailing`]), so new
     /// glyphs roll in where they come to rest and the glyphs that stay or leave hold their
@@ -163,7 +180,7 @@ impl RollingText {
         let from = if falling { self.from.opposite() } else { self.from };
         let edge = (font.line_px() * 0.12).max(1.0);
         // Glyphs leave the way this build rolls, whichever way they last did.
-        let push = Transition::push(from);
+        let push = roll(from, self.travel);
         let exit = push.springs(SpringPair::new(self.spring, self.spring));
         // The fades sit in padding that negative margins take back out of layout, so the resting
         // glyphs (descenders included) are never faded but rolling glyphs and a growing or
@@ -193,7 +210,7 @@ impl RollingText {
         let mut rank = 0;
         for (g, (at, _)) in glyphs.into_iter().zip(self.text.grapheme_indices(true)) {
             let spring = if g.entered {
-                let s = Spring::new(self.spring.duration + STAGGER * rank.min(STAGGER_CAP) as f32, self.spring.bounce);
+                let s = Spring::new(self.spring.duration + self.stagger * rank.min(STAGGER_CAP) as f32, self.spring.bounce);
                 rank += 1;
                 s
             } else {
@@ -216,6 +233,16 @@ impl RollingText {
         }
         e
     }
+}
+
+/// `Transition::push(edge)` over `travel` of the glyph's size: in from `edge`, out through the
+/// opposite one, fading.
+fn roll(edge: Edge, travel: f32) -> Transition {
+    let e = |d: Edge| {
+        let v = d.direction();
+        Effect { offset_fraction: Vec2::new(v.x * travel, v.y * travel), opacity: 0.0, ..Effect::IDENTITY }
+    };
+    Transition { insertion: e(edge), removal: e(edge.opposite()), ..Transition::push(edge) }
 }
 
 struct Glyph {
