@@ -11,12 +11,10 @@ mod layers;
 pub(crate) mod layer_blur;
 #[path = "metallib.rs"]
 mod metallib;
-#[path = "render_pass.rs"]
 mod pass;
 use pass::{ActivePass, Backdrop};
 #[path = "backdrop_blur.rs"]
 mod backdrop_blur;
-#[path = "render_upload.rs"]
 mod upload;
 pub use backdrop_blur::MAX_BACKDROP_BLURS;
 pub use layers::LayerStats;
@@ -527,7 +525,6 @@ pub(crate) fn discard_prewarm() {
 }
 
 #[cfg(target_os = "macos")]
-#[path = "render_prewarm.rs"]
 mod prewarm;
 
 #[cfg(not(target_os = "macos"))]
@@ -1125,7 +1122,6 @@ pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -
 }
 
 #[cfg(test)]
-#[path = "render_backdrop_tests.rs"]
 mod backdrop_tests;
 
 /// `prewarm_gpu` and how a window picks it up, on a bare Metal layer (no window server needed).

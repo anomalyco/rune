@@ -389,5 +389,4 @@ impl Renderer {
 }
 
 #[cfg(test)]
-#[path = "render_upload_tests.rs"]
 mod tests;
