@@ -3,7 +3,7 @@
 //!
 //! Shaders stay WGSL: naga translates each pipeline's entry points to MSL with the pipeline
 //! layout's slots, as wgpu-hal does, minus its vertex pulling (vertex inputs use a vertex
-//! descriptor). Buffers are `MTLStorageModeShared`; textures are private.
+//! descriptor). The uber shader instead loads `uber_native.metallib`, that MSL precompiled. Buffers are `MTLStorageModeShared`; textures are private.
 //!
 //! A command encoder records one `MTLCommandBuffer` with unretained references: everything it
 //! uses is kept alive until the queue's `MTLSharedEvent` reaches that buffer's value. A submit
@@ -70,6 +70,25 @@ pub(crate) fn raw_device(device: &wgpu::Device) -> Option<&ProtocolObject<dyn MT
 /// A texture over `raw`, made on `raw_device`'s device and matching `desc`, which `owner` keeps valid.
 pub(crate) fn texture_from_raw(raw: Obj<dyn objc2_metal::MTLTexture>, desc: &wgpu::TextureDescriptor<'_>, owner: Owner) -> wgpu::Texture {
     wgpu::Texture::from_custom(resource::MetalTexture::from_raw(raw, desc, owner), desc)
+}
+
+/// Whether `module`, made on this backend, can make pipelines from all its entry points: false
+/// for a precompiled library Metal refused or that lacks one of them.
+pub(crate) fn module_ready(module: &wgpu::ShaderModule) -> bool {
+    module.as_custom::<shader::ShaderModule>().is_some_and(shader::ShaderModule::ready)
+}
+
+/// The MSL this backend compiles `wgsl`'s `vs` and `fs` to, in MSL `lang`, for a render
+/// pipeline whose one bind group has `entries`.
+#[cfg(test)]
+pub(crate) fn render_msl(wgsl: &str, entries: &[wgpu::BindGroupLayoutEntry], lang: (u8, u8)) -> [String; 2] {
+    let ir = shader::Ir::parse("render_msl", wgsl, wgpu::ShaderRuntimeChecks::checked());
+    let group = layout::BindGroupLayout::new(&wgpu::BindGroupLayoutDescriptor { label: None, entries });
+    let layout = layout::PipelineLayout::from_groups(&[Some(&group)], 0);
+    [(wgpu::naga::ShaderStage::Vertex, "vs", 0), (wgpu::naga::ShaderStage::Fragment, "fs", 1)].map(|(kind, entry, s)| {
+        let point = shader::Point { kind, entry: Some(entry), constants: &[] };
+        shader::translate(&ir, &point, &layout.raw.stages[s], false, lang).unwrap_or_else(|e| panic!("{e}")).source
+    })
 }
 
 /// Whether `App::gpu_backend` or `RUNE_GPU_BACKEND=metal` asks for this backend.

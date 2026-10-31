@@ -1155,7 +1155,12 @@ mod prewarm_tests {
             Err(error) => return eprintln!("skipped: {error}"),
         };
         let Some(renderer) = renderer else { return eprintln!("skipped: no GPU for the prewarm thread") };
-        assert!(gpu.device.features().contains(wgpu::Features::PASSTHROUGH_SHADERS));
+        // Rune's Metal backend loads its metallib without advertising passthrough.
+        #[cfg(feature = "metal-backend")]
+        let native = crate::gpu::metal::raw_device(&gpu.device).is_some();
+        #[cfg(not(feature = "metal-backend"))]
+        let native = false;
+        assert!(native || gpu.device.features().contains(wgpu::Features::PASSTHROUGH_SHADERS));
         assert_eq!(renderer.format, wgpu::TextureFormat::Bgra8Unorm);
         drop((renderer, gpu));
         let (_, _surface, again) = Gpu::for_surface(wgpu::Features::empty(), false, |i| surface(i, &layer)).expect("a second GPU");

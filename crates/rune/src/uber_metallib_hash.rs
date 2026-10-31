@@ -9,3 +9,7 @@ pub(super) const UBER_MSL_OPTIONS_FNV64: u64 = 0x0eaa2a2ef8dcd514;
 pub(super) const UBER_MSL_BLAKE3: &str = "a0afdeebd61eaedac218199a876051ac9c960df405aee08edfad46f2a4512f20";
 #[cfg(test)]
 pub(super) const UBER_METALLIB_FNV64: u64 = 0x4da6baabe0da38bb;
+#[cfg(all(test, target_os = "macos", feature = "metal-backend"))]
+pub(super) const UBER_NATIVE_MSL_BLAKE3: &str = "c7c8741b3d0325385cb656c2001ccc3d764f036f306ab7ef9d3f477d9dea41e1";
+#[cfg(all(test, target_os = "macos", feature = "metal-backend"))]
+pub(super) const UBER_NATIVE_METALLIB_FNV64: u64 = 0xd036c7ac40564831;

@@ -85,8 +85,8 @@ impl DeviceInterface for MetalDevice {
     fn create_shader_module(&self, desc: wgpu::ShaderModuleDescriptor<'_>, checks: wgpu::ShaderRuntimeChecks) -> DispatchShaderModule {
         DispatchShaderModule::custom(ShaderModule::new(desc, checks))
     }
-    unsafe fn create_shader_module_passthrough(&self, _: &wgpu::ShaderModuleDescriptorPassthrough<'_>) -> DispatchShaderModule {
-        unimplemented!("RUNE_GPU_BACKEND=metal doesn't offer PASSTHROUGH_SHADERS")
+    unsafe fn create_shader_module_passthrough(&self, desc: &wgpu::ShaderModuleDescriptorPassthrough<'_>) -> DispatchShaderModule {
+        DispatchShaderModule::custom(ShaderModule::passthrough(&self.shared, desc))
     }
     fn create_bind_group_layout(&self, desc: &wgpu::BindGroupLayoutDescriptor<'_>) -> DispatchBindGroupLayout {
         DispatchBindGroupLayout::custom(BindGroupLayout::new(desc))

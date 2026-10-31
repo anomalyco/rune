@@ -586,7 +586,8 @@ export function LaunchFastView() {
             commits the compiled library instead, as <code>crates/rune/src/uber.metallib</code> (about 33 KB), and on
             macOS loads it through wgpu's passthrough shader support. This skips WGSL parsing, validation, translation
             and Metal's compile on every launch. <code>Renderer::new</code> on a cold shader cache goes from 232 ms to
-            85 ms, and from 3.4 ms to 0.6 ms on a warm one.
+            85 ms, and from 3.4 ms to 0.6 ms on a warm one. Rune's own Metal backend loads{" "}
+            <code>uber_native.metallib</code> the same way, the Metal its translation emits, so it skips the same work.
           </p>
         </SectionHead>
         <div className="prose">
@@ -605,7 +606,8 @@ export function LaunchFastView() {
           <h3>Changing the shader</h3>
           <p>
             Edit <code>clip.wgsl</code> or <code>shader.wgsl</code>, then run{" "}
-            <code>cargo test -p rune --lib precompiled_uber_metallib_is_fresh</code> on a Mac. The test compares the
+            <code>cargo test -p rune --lib --features metal-backend precompiled_uber_metallib_is_fresh</code> on a Mac.
+            The test compares the
             library and the shader's fingerprints, and its failure message says what to do:
           </p>
           <ul>
@@ -619,8 +621,9 @@ export function LaunchFastView() {
               <strong>"generated MSL or Metal compile flags changed"</strong> or{" "}
               <strong>"does not match recorded hash"</strong> means the library is stale. Run{" "}
               <code>scripts/precompile-metal-shaders.sh</code>. It needs Xcode's Metal toolchain (
-              <code>xcrun -sdk macosx metal</code>), dumps the generated MSL, compiles it and rewrites both{" "}
-              <code>uber.metallib</code> and <code>uber_metallib_hash.rs</code>. Commit both files.
+              <code>xcrun -sdk macosx metal</code>), dumps the generated MSL, compiles it and rewrites{" "}
+              <code>uber.metallib</code>, <code>uber_native.metallib</code> and <code>uber_metallib_hash.rs</code>.
+              Commit all three.
             </li>
           </ul>
           <p>

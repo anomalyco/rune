@@ -19,11 +19,16 @@
 //! step in `newRenderPipelineStateWithDescriptor` remains cached by the macOS Metal shader cache.
 //! Supporting `MTLBinaryArchive` without forking `wgpu` would require `wgpu-hal` to wire
 //! `MTLRenderPipelineDescriptor.binaryArchives` through `RenderPipelineDescriptor::cache`.
+//!
+//! Rune's own Metal backend (`metal-backend`) loads `uber_native.metallib` instead: the MSL that
+//! backend emits (vertex descriptors rather than wgpu-hal's vertex pulling), in MSL 3.0.
 
 include!("uber_metallib_hash.rs");
 
 #[cfg(any(test, target_os = "macos"))]
 const UBER_METALLIB: &[u8] = include_bytes!("uber.metallib");
+#[cfg(all(target_os = "macos", feature = "metal-backend"))]
+const UBER_NATIVE_METALLIB: &[u8] = include_bytes!("uber_native.metallib");
 
 pub(super) const UBER_VERTEX_ATTRS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![
     0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4,
@@ -33,6 +38,13 @@ pub(super) const UBER_VERTEX_ATTRS: [wgpu::VertexAttribute; 8] = wgpu::vertex_at
 #[cfg(all(test, target_os = "macos"))]
 pub(super) const METAL_COMPILE_FLAGS: &str =
     "-std=macos-metal2.3 -mmacosx-version-min=11.0 -fpreserve-invariance -Wno-unused-const-variable -O2";
+
+/// Rune's Metal backend picks MSL 3.0 or later, so needs macOS 13.
+#[cfg(all(test, target_os = "macos", feature = "metal-backend"))]
+pub(super) const NATIVE_METAL_COMPILE_FLAGS: &str =
+    "-std=metal3.0 -mmacosx-version-min=13.0 -fpreserve-invariance -Wno-unused-const-variable -O2";
+#[cfg(all(test, target_os = "macos", feature = "metal-backend"))]
+const NATIVE_MSL_VERSION: (u8, u8) = (3, 0);
 
 #[cfg(target_os = "macos")]
 std::thread_local! {
@@ -133,7 +145,7 @@ pub(super) fn uber_shader_and_pipeline(
     let wgsl = uber_wgsl();
     #[cfg(target_os = "macos")]
     if metallib_enabled()
-        && let Some(result) = try_uber_metallib(device, &wgsl, UBER_METALLIB, UBER_WGSL_BLAKE3, &mut make_pipeline)
+        && let Some(result) = try_uber_metallib(device, &wgsl, uber_metallib(device), UBER_WGSL_BLAKE3, &mut make_pipeline)
     {
         METALLIB_LOADS.with(|n| n.set(n.get() + 1));
         return result;
@@ -159,6 +171,25 @@ pub(super) fn thread_loads() -> usize {
     METALLIB_LOADS.with(std::cell::Cell::get)
 }
 
+/// Whether `device` is Rune's own Metal backend's.
+#[cfg(target_os = "macos")]
+fn native(device: &wgpu::Device) -> bool {
+    #[cfg(feature = "metal-backend")]
+    { crate::gpu::metal::raw_device(device).is_some() }
+    #[cfg(not(feature = "metal-backend"))]
+    { let _ = device; false }
+}
+
+/// The library built for `device`'s backend.
+#[cfg(target_os = "macos")]
+fn uber_metallib(device: &wgpu::Device) -> &'static [u8] {
+    #[cfg(feature = "metal-backend")]
+    if native(device) { return UBER_NATIVE_METALLIB; }
+    #[cfg(not(feature = "metal-backend"))]
+    let _ = device;
+    UBER_METALLIB
+}
+
 #[cfg(target_os = "macos")]
 fn try_uber_metallib<T>(
     device: &wgpu::Device,
@@ -167,10 +198,11 @@ fn try_uber_metallib<T>(
     expected_wgsl_hash: &str,
     make_pipeline: impl FnOnce(&wgpu::ShaderModule) -> T,
 ) -> Option<(wgpu::ShaderModule, T)> {
-    if !device.features().contains(wgpu::Features::PASSTHROUGH_SHADERS) {
+    // Rune's backend takes a metallib without the feature, which promises arbitrary passthrough.
+    if !native(device) && !device.features().contains(wgpu::Features::PASSTHROUGH_SHADERS) {
         return None;
     }
-    if metallib != UBER_METALLIB || uber_abi_hash() != UBER_ABI_FNV64 {
+    if metallib != uber_metallib(device) || uber_abi_hash() != UBER_ABI_FNV64 {
         return None;
     }
     if uber_wgsl_hash(wgsl).to_hex().as_str() != expected_wgsl_hash {
@@ -203,6 +235,12 @@ fn try_uber_metallib<T>(
             ..Default::default()
         })
     };
+    // Rune's backend reports no errors to scopes, so check it loaded and has both functions.
+    #[cfg(feature = "metal-backend")]
+    if native(device) && !crate::gpu::metal::module_ready(&shader) {
+        let _ = (pollster::block_on(internal_scope.pop()), pollster::block_on(validation_scope.pop()));
+        return None;
+    }
     // Metal may load the library but reject an entry point or its AIR at pipeline creation.
     // Keep both scopes active through that operation, before retaining the shader for later use.
     let pipeline = make_pipeline(&shader);
@@ -366,6 +404,22 @@ fn uber_msl_hash(vs_msl: &str, fs_msl: &str) -> blake3::Hash {
     hasher.finalize()
 }
 
+/// The MSL Rune's Metal backend compiles the uber shader to, which `uber_native.metallib` holds.
+#[cfg(all(test, target_os = "macos", feature = "metal-backend"))]
+fn native_uber_msl(wgsl: &str) -> [String; 2] {
+    crate::gpu::metal::render_msl(wgsl, &uber_bind_entries(), NATIVE_MSL_VERSION)
+}
+
+#[cfg(all(test, target_os = "macos", feature = "metal-backend"))]
+fn native_uber_msl_hash([vs, fs]: &[String; 2]) -> blake3::Hash {
+    let mut hasher = blake3::Hasher::new();
+    for part in [NATIVE_METAL_COMPILE_FLAGS, vs, fs] {
+        hasher.update(part.as_bytes());
+        hasher.update(&[0]);
+    }
+    hasher.finalize()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,6 +442,14 @@ mod tests {
         println!("---BEGIN_OPTIONS_FNV64---\n{options_hash:016x}\n---END_OPTIONS_FNV64---");
         println!("---BEGIN_VS_MSL---\n{vs_msl}---END_VS_MSL---");
         println!("---BEGIN_FS_MSL---\n{fs_msl}---END_FS_MSL---");
+        #[cfg(feature = "metal-backend")]
+        {
+            let native = native_uber_msl(&wgsl);
+            println!("---BEGIN_NATIVE_MSL_BLAKE3---\n{}\n---END_NATIVE_MSL_BLAKE3---", native_uber_msl_hash(&native).to_hex());
+            println!("---BEGIN_NATIVE_METAL_FLAGS---\n{NATIVE_METAL_COMPILE_FLAGS}\n---END_NATIVE_METAL_FLAGS---");
+            println!("---BEGIN_NATIVE_VS_MSL---\n{}---END_NATIVE_VS_MSL---", native[0]);
+            println!("---BEGIN_NATIVE_FS_MSL---\n{}---END_NATIVE_FS_MSL---", native[1]);
+        }
     }
 
     #[test]
@@ -439,6 +501,14 @@ pub(super) const UBER_WGSL_BLAKE3: &str = \"{wgsl_hash}\";", uber_abi_hash());
                 uber_msl_hash(&vs_stride_changed, &fs_msl).to_hex().as_str(),
                 UBER_MSL_BLAKE3
             );
+        }
+        #[cfg(all(target_os = "macos", feature = "metal-backend"))]
+        {
+            assert!(UBER_NATIVE_METALLIB.starts_with(b"MTLB") && UBER_NATIVE_METALLIB.len() > 1024);
+            assert_eq!(fnv1a64(UBER_NATIVE_METALLIB), UBER_NATIVE_METALLIB_FNV64,
+                "crates/rune/src/uber_native.metallib does not match recorded hash; run scripts/precompile-metal-shaders.sh");
+            assert_eq!(native_uber_msl_hash(&native_uber_msl(&wgsl)).to_hex().as_str(), UBER_NATIVE_MSL_BLAKE3,
+                "the Metal backend's MSL or its compile flags changed; run scripts/precompile-metal-shaders.sh");
         }
         #[cfg(not(target_os = "macos"))]
         assert_eq!(uber_abi_hash(), UBER_ABI_FNV64,
@@ -543,6 +613,38 @@ pub(super) const UBER_WGSL_BLAKE3: &str = \"{wgsl_hash}\";", uber_abi_hash());
             "device without PASSTHROUGH_SHADERS must fall back"
         );
         let _r_fallback = Renderer::new(&no_pt_device, OFFSCREEN_FORMAT);
+    }
+
+    #[cfg(all(target_os = "macos", feature = "metal-backend"))]
+    #[test]
+    fn native_backend_loads_its_metallib_and_falls_back_cleanly() {
+        use super::super::{Gpu, OFFSCREEN_FORMAT, Renderer};
+
+        let gpu = Gpu::new(crate::gpu::metal::instance(), None);
+        let before = METALLIB_LOADS.with(std::cell::Cell::get);
+        let _on = with_metallib_enabled(true, || Renderer::new(&gpu.device, OFFSCREEN_FORMAT));
+        assert_eq!(METALLIB_LOADS.with(std::cell::Cell::get), before + 1, "Renderer::new must load uber_native.metallib");
+
+        let wgsl = uber_wgsl();
+        assert!(try_uber_metallib(&gpu.device, &wgsl, UBER_METALLIB, UBER_WGSL_BLAKE3, |_| ()).is_none(),
+            "wgpu-hal's vertex-pulling library must not load on Rune's backend");
+        let module = |bytes: &'static [u8], names: &'static [&'static str]| {
+            let entry_points: Vec<_> = names.iter()
+                .map(|n| wgpu::PassthroughShaderEntryPoint { name: std::borrow::Cow::Borrowed(*n), workgroup_size: (0, 0, 0) })
+                .collect();
+            // SAFETY: the backend only hands the bytes to Metal, which checks them.
+            let module = unsafe {
+                gpu.device.create_shader_module_passthrough(wgpu::ShaderModuleDescriptorPassthrough {
+                    entry_points: entry_points.into(),
+                    metallib: Some(std::borrow::Cow::Borrowed(bytes)),
+                    ..Default::default()
+                })
+            };
+            crate::gpu::metal::module_ready(&module)
+        };
+        assert!(module(UBER_NATIVE_METALLIB, &["vs", "fs"]));
+        assert!(!module(UBER_NATIVE_METALLIB, &["vs", "missing"]), "a missing function must fall back");
+        assert!(!module(b"MTLBcorrupt-payload", &["vs", "fs"]), "a library Metal refuses must fall back");
     }
 
     #[cfg(target_os = "macos")]
@@ -754,10 +856,12 @@ pub(super) const UBER_WGSL_BLAKE3: &str = \"{wgsl_hash}\";", uber_abi_hash());
                 "metallib and WGSL pixel output differed for format={format:?} srgb_blend={srgb_blend}"
             );
             #[cfg(feature = "metal-backend")]
-            assert!(
-                render_scene(&native, true, format, srgb_blend) == wgsl_pixels,
-                "Rune's Metal backend and wgpu's differed for format={format:?} srgb_blend={srgb_blend}"
-            );
+            for use_metallib in [true, false] {
+                assert!(
+                    render_scene(&native, use_metallib, format, srgb_blend) == wgsl_pixels,
+                    "Rune's Metal backend and wgpu's differed for format={format:?} srgb_blend={srgb_blend} metallib={use_metallib}"
+                );
+            }
         }
     }
 }

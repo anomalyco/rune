@@ -619,10 +619,12 @@ app for the patterns it lists.
 - **Precompiled Metal uber shader.** `crates/rune/src/uber.metallib` is loaded through wgpu's passthrough shaders,
   skipping WGSL translation and Metal's compile (`Renderer::new` 232 ms to 85 ms on a cold shader cache). The WGSL
   path is the fallback when the adapter lacks passthrough support, when `RUNE_DISABLE_METALLIB=1`, when the
-  fingerprint doesn't match or when Metal rejects the library. After editing `clip.wgsl` or `shader.wgsl`, run
-  `cargo test -p rune --lib precompiled_uber_metallib_is_fresh` on a Mac. If it says the MSL is byte-identical, paste
-  the printed lines into `uber_metallib_hash.rs`. If it says the MSL, flags or library hash changed, run
-  `scripts/precompile-metal-shaders.sh` (needs Xcode's Metal toolchain) and commit `uber.metallib` and
+  fingerprint doesn't match or when Metal rejects the library. Rune's own Metal backend (`metal-backend`) loads
+  `uber_native.metallib`, built from the MSL that backend emits (first `Renderer::new` 222 ms to 90 ms cold,
+  4.0 ms to 0.9 ms warm). After editing `clip.wgsl` or `shader.wgsl`, run
+  `cargo test -p rune --lib --features metal-backend precompiled_uber_metallib_is_fresh` on a Mac. If it says the MSL
+  is byte-identical, paste the printed lines into `uber_metallib_hash.rs`. If it says the MSL, flags or library hash
+  changed, run `scripts/precompile-metal-shaders.sh` (needs Xcode's Metal toolchain) and commit both libraries and
   `uber_metallib_hash.rs`. Effect, lighting and blur shaders and iOS aren't precompiled; binary archives would need
   wgpu support.
 - **The first frame draws during window creation** on macOS for visible windows (not launcher windows or panels).

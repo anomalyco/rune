@@ -123,20 +123,26 @@ impl BindGroupLayoutInterface for BindGroupLayout {}
 
 impl PipelineLayout {
     pub(crate) fn new(desc: &wgpu::PipelineLayoutDescriptor<'_>) -> Self {
+        let groups: Vec<_> = desc.bind_group_layouts.iter()
+            .map(|layout| layout.map(|l| l.as_custom::<BindGroupLayout>().expect("a Metal bind group layout")))
+            .collect();
+        Self::from_groups(&groups, desc.immediate_size)
+    }
+
+    pub(super) fn from_groups(groups: &[Option<&BindGroupLayout>], immediate_size: u32) -> Self {
         let mut counts = [Counts::default(); 3];
         let mut stages: [msl::EntryPointResources; 3] = Default::default();
         let mut storage = [false; 3];
-        if desc.immediate_size > 0 {
+        if immediate_size > 0 {
             for (s, resources) in stages.iter_mut().enumerate() {
                 resources.immediates_buffer = Some(counts[s].buffers);
                 counts[s].buffers += 1;
             }
         }
         let mut bases = Vec::new();
-        for (group, layout) in desc.bind_group_layouts.iter().enumerate() {
+        for (group, layout) in groups.iter().enumerate() {
             bases.push(counts);
             let Some(layout) = layout else { continue };
-            let layout = layout.as_custom::<BindGroupLayout>().expect("a Metal bind group layout");
             for entry in layout.entries.iter() {
                 let binding = naga::ResourceBinding { group: group as u32, binding: entry.binding };
                 for (s, stage) in STAGES.iter().enumerate() {
@@ -149,7 +155,7 @@ impl PipelineLayout {
         for s in 0..3 {
             if storage[s] { stages[s].sizes_buffer = Some(counts[s].buffers); }
         }
-        PipelineLayout { raw: Arc::new(LayoutRaw { bases, stages, immediates: desc.immediate_size }) }
+        PipelineLayout { raw: Arc::new(LayoutRaw { bases, stages, immediates: immediate_size }) }
     }
 }
 

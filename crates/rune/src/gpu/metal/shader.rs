@@ -1,12 +1,19 @@
 //! Shader modules stay naga IR until a pipeline names an entry point; then naga translates it
-//! to MSL with the pipeline layout's slots and Metal compiles it, as wgpu-hal does.
+//! to MSL with the pipeline layout's slots and Metal compiles it, as wgpu-hal does. A module
+//! from a precompiled `.metallib` (`create_shader_module_passthrough`) skips both: its
+//! functions are looked up by name, and must read no sizes buffer.
 
+use std::ffi::c_void;
 use std::future::ready;
 use std::pin::Pin;
+use std::ptr::NonNull;
 use std::sync::Arc;
 
-use objc2_foundation_video::NSString;
+use objc2_foundation_video::{NSError, NSString};
 use objc2_metal::{MTLCompileOptions, MTLDevice, MTLFunction, MTLLibrary};
+use objc2_video::msg_send;
+use objc2_video::rc::Retained;
+use objc2_video::runtime::{AnyObject, ProtocolObject};
 use wgpu::custom::*;
 use wgpu::naga::{
     self,
@@ -15,10 +22,19 @@ use wgpu::naga::{
     valid::{Capabilities, ValidationFlags, Validator},
 };
 
-use super::{Obj, Shared};
+use super::{Obj, Shared, send_sync};
 
 #[derive(Debug)]
-pub(crate) struct ShaderModule {
+pub(crate) enum ShaderModule {
+    Naga(Ir),
+    /// A precompiled library, or why Metal refused it, and its entry points' workgroup sizes.
+    Library { library: Result<Obj<dyn MTLLibrary>, String>, entries: Vec<(String, [u32; 3])> },
+}
+send_sync!(ShaderModule);
+
+/// A WGSL module, validated, and the runtime checks its MSL keeps.
+#[derive(Debug)]
+pub(crate) struct Ir {
     module: Arc<naga::Module>,
     info: Arc<naga::valid::ModuleInfo>,
     checks: wgpu::ShaderRuntimeChecks,
@@ -41,15 +57,72 @@ pub(super) struct Stage<'a> {
     pub(super) kind: naga::ShaderStage,
 }
 
-impl ShaderModule {
-    pub(crate) fn new(desc: wgpu::ShaderModuleDescriptor<'_>, checks: wgpu::ShaderRuntimeChecks) -> Self {
-        let label = desc.label.unwrap_or("shader");
-        let wgpu::ShaderSource::Wgsl(source) = desc.source else { unimplemented!("RUNE_GPU_BACKEND=metal: shaders other than WGSL") };
-        let module = naga::front::wgsl::parse_str(&source).unwrap_or_else(|e| panic!("{label}: {}", e.emit_to_string(&source)));
+/// The entry point a stage runs, named or the module's only one of its kind.
+pub(super) struct Point<'a> {
+    pub(super) kind: naga::ShaderStage,
+    pub(super) entry: Option<&'a str>,
+    pub(super) constants: &'a [(&'a str, f64)],
+}
+
+/// An entry point translated to MSL: the source, the function's name in it, and what `Compiled` keeps.
+pub(super) struct Msl {
+    pub(super) source: String,
+    pub(super) function: String,
+    pub(super) sized: Vec<naga::ResourceBinding>,
+    pub(super) workgroup: [u32; 3],
+}
+
+#[link(name = "System")]
+unsafe extern "C" {
+    fn dispatch_data_create(buffer: NonNull<c_void>, size: usize, queue: *mut c_void, destructor: *mut c_void) -> *mut AnyObject;
+    fn dispatch_release(object: *mut AnyObject);
+}
+
+impl Ir {
+    pub(super) fn parse(label: &str, source: &str, checks: wgpu::ShaderRuntimeChecks) -> Self {
+        let module = naga::front::wgsl::parse_str(source).unwrap_or_else(|e| panic!("{label}: {}", e.emit_to_string(source)));
         let info = Validator::new(ValidationFlags::all(), Capabilities::all())
             .validate(&module)
-            .unwrap_or_else(|e| panic!("{label}: {}", e.emit_to_string(&source)));
-        ShaderModule { module: Arc::new(module), info: Arc::new(info), checks }
+            .unwrap_or_else(|e| panic!("{label}: {}", e.emit_to_string(source)));
+        Ir { module: Arc::new(module), info: Arc::new(info), checks }
+    }
+}
+
+impl ShaderModule {
+    pub(crate) fn new(desc: wgpu::ShaderModuleDescriptor<'_>, checks: wgpu::ShaderRuntimeChecks) -> Self {
+        let wgpu::ShaderSource::Wgsl(source) = desc.source else { unimplemented!("RUNE_GPU_BACKEND=metal: shaders other than WGSL") };
+        ShaderModule::Naga(Ir::parse(desc.label.unwrap_or("shader"), &source, checks))
+    }
+
+    pub(crate) fn passthrough(shared: &Shared, desc: &wgpu::ShaderModuleDescriptorPassthrough<'_>) -> Self {
+        let bytes = desc.metallib.as_deref().expect("RUNE_GPU_BACKEND=metal: passthrough shaders other than a metallib");
+        let entries = desc.entry_points.iter().map(|e| (e.name.to_string(), [e.workgroup_size.0, e.workgroup_size.1, e.workgroup_size.2])).collect();
+        let library = NonNull::new(bytes.as_ptr().cast_mut()).ok_or_else(|| "an empty metallib".to_string()).and_then(|buffer| {
+            // SAFETY: dispatch copies `bytes` (the default destructor), and the data object is
+            // released after Metal has read it.
+            unsafe {
+                let data = dispatch_data_create(buffer.cast(), bytes.len(), std::ptr::null_mut(), std::ptr::null_mut());
+                assert!(!data.is_null(), "dispatch data for a metallib");
+                let library: Result<Retained<ProtocolObject<dyn MTLLibrary>>, Retained<NSError>> =
+                    msg_send![&*shared.device, newLibraryWithData: data, error: _];
+                dispatch_release(data);
+                library.map_err(|e| e.localizedDescription().to_string())
+            }
+        });
+        ShaderModule::Library { library, entries }
+    }
+
+    /// Whether every entry point can make a pipeline: a precompiled library loaded and holds
+    /// them all. A module from WGSL already passed validation.
+    pub(crate) fn ready(&self) -> bool {
+        match self {
+            ShaderModule::Naga(_) => true,
+            ShaderModule::Library { library: Ok(library), entries } => {
+                let names = library.functionNames();
+                entries.iter().all(|(name, _)| names.iter().any(|n| n.to_string() == *name))
+            }
+            ShaderModule::Library { library: Err(_), .. } => false,
+        }
     }
 }
 
@@ -61,56 +134,86 @@ impl ShaderModuleInterface for ShaderModule {
 
 pub(super) fn compile(shared: &Shared, stage: &Stage<'_>, resources: &msl::EntryPointResources, points: bool) -> Result<Compiled, String> {
     let shader = stage.module.as_custom::<ShaderModule>().expect("a Metal shader module");
-    let name = match stage.entry {
+    match shader {
+        ShaderModule::Naga(ir) => {
+            let (lang, version) = shared.msl;
+            let point = Point { kind: stage.kind, entry: stage.entry, constants: stage.constants };
+            let msl = translate(ir, &point, resources, points, lang)?;
+            let compile = MTLCompileOptions::new();
+            compile.setLanguageVersion(version);
+            compile.setPreserveInvariance(true);
+            let library = shared.device.newLibraryWithSource_options_error(&NSString::from_str(&msl.source), Some(&compile))
+                .map_err(|e| format!("{}: Metal: {}", msl.function, e.localizedDescription()))?;
+            let function = function(&library, &msl.function)?;
+            Ok(Compiled { function, sized: msl.sized, workgroup: msl.workgroup })
+        }
+        ShaderModule::Library { library, entries } => {
+            let library = library.as_ref().map_err(|e| format!("metallib: {e}"))?;
+            if resources.sizes_buffer.is_some() {
+                return Err("a precompiled library can't read storage buffers' sizes".into());
+            }
+            let (name, workgroup) = match stage.entry {
+                Some(name) => entries.iter().find(|(n, _)| n == name).ok_or_else(|| format!("no entry point {name}"))?,
+                None => match entries.as_slice() {
+                    [entry] => entry,
+                    _ => return Err(format!("no single {:?} entry point", stage.kind)),
+                },
+            };
+            Ok(Compiled { function: function(library, name)?, sized: Vec::new(), workgroup: *workgroup })
+        }
+    }
+}
+
+fn function(library: &ProtocolObject<dyn MTLLibrary>, name: &str) -> Result<Obj<dyn MTLFunction>, String> {
+    library.newFunctionWithName(&NSString::from_str(name)).ok_or_else(|| format!("no function {name}"))
+}
+
+/// Translates `point` to MSL `lang`, binding `resources`.
+pub(super) fn translate(ir: &Ir, point: &Point<'_>, resources: &msl::EntryPointResources, points: bool, lang: (u8, u8)) -> Result<Msl, String> {
+    let Ir { module, info, checks } = ir;
+    let name = match point.entry {
         Some(name) => name.to_string(),
         None => {
-            let mut eps = shader.module.entry_points.iter().filter(|e| e.stage == stage.kind);
+            let mut eps = module.entry_points.iter().filter(|e| e.stage == point.kind);
             match (eps.next(), eps.next()) {
                 (Some(ep), None) => ep.name.clone(),
-                _ => return Err(format!("no single {:?} entry point", stage.kind)),
+                _ => return Err(format!("no single {:?} entry point", point.kind)),
             }
         }
     };
-    let constants: naga::back::PipelineConstants = stage.constants.iter().map(|&(k, v)| (k.to_string(), v)).collect();
-    let (module, info) = process_overrides(&shader.module, &shader.info, Some((stage.kind, &name)), &constants)
+    let constants: naga::back::PipelineConstants = point.constants.iter().map(|&(k, v)| (k.to_string(), v)).collect();
+    let (module, info) = process_overrides(module, info, Some((point.kind, &name)), &constants)
         .map_err(|e| format!("{name}: overrides: {e:?}"))?;
-    let policy = if shader.checks.bounds_checks { BoundsCheckPolicy::Restrict } else { BoundsCheckPolicy::Unchecked };
-    let ((major, minor), version) = shared.msl;
+    let policy = if checks.bounds_checks { BoundsCheckPolicy::Restrict } else { BoundsCheckPolicy::Unchecked };
     let options = msl::Options {
-        lang_version: (major, minor),
+        lang_version: lang,
         inline_samplers: Default::default(),
         spirv_cross_compatibility: false,
         fake_missing_bindings: false,
         per_entry_point_map: msl::EntryPointResourceMap::from([(name.clone(), resources.clone())]),
         bounds_check_policies: BoundsCheckPolicies { index: policy, buffer: policy, image_load: policy, binding_array: BoundsCheckPolicy::Unchecked },
         zero_initialize_workgroup_memory: true,
-        force_loop_bounding: shader.checks.force_loop_bounding,
+        force_loop_bounding: checks.force_loop_bounding,
         task_dispatch_limits: None,
-        mesh_shader_primitive_indices_clamp: shader.checks.mesh_shader_primitive_indices_clamp,
-        emit_int_div_checks: shader.checks.int_div_checks,
-        ray_query_initialization_tracking: shader.checks.ray_query_initialization_tracking,
+        mesh_shader_primitive_indices_clamp: checks.mesh_shader_primitive_indices_clamp,
+        emit_int_div_checks: checks.int_div_checks,
+        ray_query_initialization_tracking: checks.ray_query_initialization_tracking,
     };
     let pipeline = msl::PipelineOptions {
-        entry_point: Some((stage.kind, name.clone())),
+        entry_point: Some((point.kind, name.clone())),
         allow_and_force_point_size: points,
         vertex_pulling_transform: false,
         vertex_buffer_mappings: Vec::new(),
         binding_array_length_map: Default::default(),
     };
     let (source, translated) = msl::write_string(&module, &info, &options, &pipeline).map_err(|e| format!("{name}: MSL: {e:?}"))?;
-    let compile = MTLCompileOptions::new();
-    compile.setLanguageVersion(version);
-    compile.setPreserveInvariance(true);
-    let library = shared.device.newLibraryWithSource_options_error(&NSString::from_str(&source), Some(&compile))
-        .map_err(|e| format!("{name}: Metal: {}", e.localizedDescription()))?;
-    let translated_name = translated.entry_point_names[0].as_ref().map_err(|e| format!("{name}: {e}"))?;
-    let function = library.newFunctionWithName(&NSString::from_str(translated_name)).ok_or_else(|| format!("{name}: no function {translated_name}"))?;
+    let function = translated.entry_point_names[0].as_ref().map_err(|e| format!("{name}: {e}"))?.clone();
     // The sizes buffer holds one length per global that needs it, in global order, as naga reads it.
     let sized = module.global_variables.iter()
         .filter(|(_, g)| matches!(g.space, naga::AddressSpace::Uniform | naga::AddressSpace::Storage { .. }))
         .filter(|(_, g)| module.types[g.ty].inner.needs_host_buffer_byte_size(&module.types))
         .filter_map(|(_, g)| g.binding)
         .collect();
-    let workgroup = module.entry_points.iter().find(|e| e.stage == stage.kind && e.name == name).map_or([1; 3], |e| e.workgroup_size);
-    Ok(Compiled { function, sized, workgroup })
+    let workgroup = module.entry_points.iter().find(|e| e.stage == point.kind && e.name == name).map_or([1; 3], |e| e.workgroup_size);
+    Ok(Msl { source, function, sized, workgroup })
 }
