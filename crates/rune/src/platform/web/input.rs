@@ -3,7 +3,7 @@ use wasm_bindgen::{JsCast, JsValue, prelude::*};
 use winit::event::{ElementState, MouseButton, TouchPhase};
 use winit::keyboard::ModifiersState;
 
-#[wasm_bindgen(module = "/src/web/bridge.js")]
+#[wasm_bindgen(module = "/src/platform/web/bridge.js")]
 extern "C" {
     fn mount(canvas: &web_sys::HtmlCanvasElement, callback: &js_sys::Function, embedded: bool, fit_height: bool) -> JsValue;
     fn sync(handle: &JsValue, key: &str, text: &str, base: usize, anchor: u32, focus: u32, secure: bool);

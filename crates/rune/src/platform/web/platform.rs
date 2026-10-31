@@ -1,6 +1,6 @@
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen(module = "/src/web/platform.js")]
+#[wasm_bindgen(module = "/src/platform/web/platform.js")]
 extern "C" {
     #[wasm_bindgen(js_name = writeClipboard)]
     pub(crate) fn write_clipboard(text: &str, html: &str, png: &[u8]) -> js_sys::Promise;
