@@ -125,6 +125,9 @@ impl Input {
     }
 }
 struct Job { image: Image, input: Input }
+/// Decoder threads per cache, at most one per core.
+#[cfg(not(target_arch = "wasm32"))]
+const DECODERS: usize = 4;
 
 /// Construct once during app setup. The cache deduplicates by content, not a path or pointer;
 /// dropping all handles releases decoded pixels. Dropping the cache stops its worker after
@@ -144,12 +147,18 @@ impl ImageCache {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(waker: crate::Waker) -> Self {
         let (jobs, receive) = mpsc::channel::<Job>();
-        std::thread::Builder::new().name("rune-images".into()).spawn(move || {
-            for job in receive {
-                job.image.finish(job.input.decode_caught());
-                waker();
-            }
-        }).expect("image worker");
+        // A session opening on several screenshots decodes them side by side, not one by one.
+        let receive = Arc::new(Mutex::new(receive));
+        for _ in 0..DECODERS.min(std::thread::available_parallelism().map_or(1, |n| n.get())) {
+            let (receive, waker) = (receive.clone(), waker.clone());
+            std::thread::Builder::new().name("rune-images".into()).spawn(move || {
+                loop {
+                    let Ok(job) = receive.lock().unwrap_or_else(|e| e.into_inner()).recv() else { return };
+                    job.image.finish(job.input.decode_caught());
+                    waker();
+                }
+            }).expect("image worker");
+        }
         Self { entries: Mutex::new(HashMap::new()), jobs }
     }
 
@@ -747,6 +756,19 @@ mod tests {
         let _subscription = image.pixels().source.subscribe(&wake);
         image.finish(mip_chain(2, 1, &[0, 0, 0, 255, 255, 255, 255, 255]));
         assert_eq!(*seen.lock().unwrap(), [(true, Some([2, 1]))]);
+    }
+
+    #[test]
+    fn a_small_image_queued_behind_a_large_one_decodes_without_waiting_for_it() {
+        if std::thread::available_parallelism().map_or(1, |n| n.get()) < 2 { return; }
+        let (tx, rx) = mpsc::channel();
+        let cache = ImageCache::new(Arc::new(move || { let _ = tx.send(()); }));
+        let large = cache.rgba(3000, 3000, vec![128; 3000 * 3000 * 4]);
+        let small = cache.rgba(1, 1, vec![20, 40, 60, 255]);
+        rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert!(small.is_ready() && !large.is_ready());
+        rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
+        assert!(large.is_ready());
     }
 
     #[test]
