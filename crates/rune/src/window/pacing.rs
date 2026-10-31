@@ -138,11 +138,11 @@ pub(crate) fn acquire_checked(surface: &wgpu::Surface, device: &wgpu::Device, co
         if let Err(missed) = status { meter.failed(missed); }
         match status {
             Err(Missed::Outdated) if reconfigures > 0 => {
-                surface.configure(device, config);
+                crate::gpu::configure(surface, device, config);
                 reconfigures -= 1;
             }
             Err(Missed::Outdated) => {
-                surface.configure(device, config);
+                crate::gpu::configure(surface, device, config);
                 return Err(Missed::Outdated);
             }
             other => return other,

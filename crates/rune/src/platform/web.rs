@@ -115,7 +115,7 @@ impl<S: 'static> Running<S> {
         if self.config.width != width || self.config.height != height {
             self.config.width = width;
             self.config.height = height;
-            self.surface.configure(&self.gpu.device, &self.config);
+            crate::gpu::configure(&self.surface, &self.gpu.device, &self.config);
         }
         self.rt.set_viewport((width as f32 / scale, height as f32 / scale), scale);
     }
@@ -346,7 +346,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             } else {
                 config.format
             };
-            surface.configure(&gpu.device, &config);
+            crate::gpu::configure(&surface, &gpu.device, &config);
             let mut renderer = Renderer::new(&gpu.device, format);
             renderer.set_srgb_blend(!format.is_srgb());
             let cursor = crate::cursor::os::OsCursor::new(event_loop);
@@ -406,7 +406,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                     let format = if r.rt.srgb_blend() { r.config.format.remove_srgb_suffix() } else { r.config.format.add_srgb_suffix() };
                     if format != r.config.format && !r.config.view_formats.contains(&format) {
                         r.config.view_formats.push(format);
-                        r.surface.configure(&r.gpu.device, &r.config);
+                        crate::gpu::configure(&r.surface, &r.gpu.device, &r.config);
                     }
                     crate::window::rebuild_renderer(&r.gpu.device, &mut r.renderer, format, &mut r.rt);
                 }

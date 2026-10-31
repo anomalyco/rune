@@ -316,7 +316,7 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         if !hidden && let Some(latency) = l.native.launch_drawables.settle(self.idle, now) {
             l.config.desired_maximum_frame_latency = latency;
-            l.surface.configure(&gpu.device, &l.config);
+            crate::gpu::configure(&l.surface, &gpu.device, &l.config);
         }
         if !hidden && (!self.idle || (self.trace.is_some() && self.args.frames.is_some())) {
             // Without a running display link, macOS hands out drawables faster than the

@@ -92,7 +92,7 @@ impl<S: 'static> LayerHost<S> {
         let srgb_blend = true;
         let (config, _) = crate::window::surface_config(&surface, &gpu.adapter, (px_w, px_h), srgb_blend)
             .ok_or_else(|| "CAMetalLayer has no supported wgpu surface configuration".to_owned())?;
-        surface.configure(&gpu.device, &config);
+        crate::gpu::configure(&surface, &gpu.device, &config);
         let target_format = config.format.remove_srgb_suffix();
         let mut renderer = Renderer::new(&gpu.device, target_format);
         renderer.set_srgb_blend(true);
@@ -149,7 +149,7 @@ impl<S: 'static> LayerHost<S> {
         if self.config.width != px_w || self.config.height != px_h {
             self.config.width = px_w;
             self.config.height = px_h;
-            self.surface.configure(&self.gpu.device, &self.config);
+            crate::gpu::configure(&self.surface, &self.gpu.device, &self.config);
         }
         self.rt.set_viewport((px_w as f32 / scale, px_h as f32 / scale), scale);
     }
@@ -172,7 +172,7 @@ impl<S: 'static> LayerHost<S> {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.gpu.device, &self.config);
+                crate::gpu::configure(&self.surface, &self.gpu.device, &self.config);
                 return EmbedFrame { animating: true, ..EmbedFrame::default() };
             }
             _ => return EmbedFrame { animating: animating || comp_animating, ..EmbedFrame::default() },

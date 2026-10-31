@@ -10,6 +10,33 @@ pub mod springs;
 
 #[cfg(target_os = "macos")]
 use objc2_video::runtime::AnyObject;
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
+/// `Surface::configure` waits for the GPU to go idle and then fails (an uncaptured validation
+/// error, so a panic) if another thread submitted meanwhile. It holds this lock, and so does
+/// every submit Rune makes off the thread that configures.
+static CONFIGURE: Mutex<()> = Mutex::new(());
+
+/// `surface.configure`, never while another of Rune's threads submits.
+pub(crate) fn configure(surface: &wgpu::Surface<'_>, device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) {
+    let _held = CONFIGURE.lock().unwrap_or_else(PoisonError::into_inner);
+    surface.configure(device, config);
+}
+
+/// Holds off `configure` for a submit off the configuring thread, waiting for one in progress.
+pub(crate) fn hold_configure() -> MutexGuard<'static, ()> {
+    CONFIGURE.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// `hold_configure` without waiting: `None` while a `configure` runs, on this thread too, since
+/// wgpu runs completion callbacks from inside `configure`.
+pub(crate) fn try_hold_configure() -> Option<MutexGuard<'static, ()>> {
+    match CONFIGURE.try_lock() {
+        Ok(held) => Some(held),
+        Err(std::sync::TryLockError::Poisoned(e)) => Some(e.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
+}
 
 /// Runs `f` on the CAMetalLayer `surface` presents into, under wgpu-hal's lock on wgpu's Metal
 /// backend. `None` when the surface is on neither backend.
