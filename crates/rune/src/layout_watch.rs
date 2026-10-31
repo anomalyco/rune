@@ -18,11 +18,28 @@ pub struct ScrollPos {
 
 impl El {
     /// Called with this element's laid-out rect `[x, y, w, h]` in window points, after scrolling
-    /// (as [`Cx::layout`](crate::Cx::layout) reads it): once after its first layout, then when it
-    /// moves or resizes by more than half a point. Never per animation frame: the rect is where
-    /// layout puts the element, not where its spring is on the way there.
+    /// (as [`Cx::window_layout`](crate::Cx::window_layout) reads it): once after its first
+    /// layout, then when it moves or resizes by more than half a point, which inside a scroll
+    /// viewport is every frame of a scroll. Never per animation frame: the rect is where layout
+    /// puts the element, not where its spring is on the way there. Each report is a state
+    /// change, so the view runs again, unless the handler says [`Tx::live_only`] (see
+    /// [`El::on_layout_tx`]).
     pub fn on_layout<S: 'static>(mut self, f: impl Fn(&mut S, [f32; 4]) + 'static) -> Self {
-        self.handlers.on_layout = Some(Rc::new(move |s, r| f(downcast::<S>(s), r)));
+        self.handlers.on_layout = Some(Rc::new(move |s, r, _| f(downcast::<S>(s), r)));
+        self
+    }
+    /// [`El::on_layout`] with a [`Tx`]. A handler that only moves live values (a marker beside
+    /// a scrolling row, by its own [`El::live_offset`]) says [`Tx::live_only`], and a scroll
+    /// runs no view.
+    ///
+    /// ```ignore
+    /// .on_layout_tx(|s: &mut Board, [_, y, _, _], tx| {
+    ///     s.marker_y.set(y);
+    ///     tx.live_only();
+    /// })
+    /// ```
+    pub fn on_layout_tx<S: 'static>(mut self, f: impl Fn(&mut S, [f32; 4], &mut Tx) + 'static) -> Self {
+        self.handlers.on_layout = Some(Rc::new(move |s, r, tx| f(downcast::<S>(s), r, tx)));
         self
     }
     /// [`El::on_layout`] in global screen points: `[x, y, w, h]` from the top-left of the

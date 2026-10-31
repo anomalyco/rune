@@ -77,9 +77,9 @@ fn seen(k: &Knobs, groups: &[Group]) -> BTreeSet<usize> {
     if !k.open {
         return BTreeSet::new();
     }
-    let Some(page) = rune::memo::layout("knobs-page") else { return BTreeSet::new() };
+    let Some(page) = rune::memo::window_layout("knobs-page") else { return BTreeSet::new() };
     let overlaps = |r: [f32; 4]| r[2] > 0.0 && r[3] > 0.0 && r[0] < page[0] + page[2] && r[0] + r[2] > page[0] && r[1] < page[1] + page[3] && r[1] + r[3] > page[1];
-    (0..groups.len()).filter(|&g| !groups[g].region.is_empty() && rune::memo::layout(groups[g].region).is_some_and(overlaps)).collect()
+    (0..groups.len()).filter(|&g| !groups[g].region.is_empty() && rune::memo::window_layout(groups[g].region).is_some_and(overlaps)).collect()
 }
 
 fn panel<S: 'static>(k: &Knobs, groups: &'static [Group], st: Style, lens: fn(&mut S) -> &mut Knobs, w: f32) -> El {

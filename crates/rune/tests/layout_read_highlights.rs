@@ -13,8 +13,8 @@ struct S {
 }
 
 fn view(s: &S, cx: &mut Cx<S>) -> El {
-    *s.seen.borrow_mut() = cx.layout(&format!("row{}/mark", s.hit_row));
-    *s.seen_rows.borrow_mut() = (0..s.extra_reads).map(|i| cx.layout(&format!("row{i}"))).collect();
+    *s.seen.borrow_mut() = cx.window_layout(&format!("row{}/mark", s.hit_row));
+    *s.seen_rows.borrow_mut() = (0..s.extra_reads).map(|i| cx.window_layout(&format!("row{i}"))).collect();
     let rows = (0..30).fold(col().w_full(), |c, i| {
         // Every row's text has a highlight keyed `mark`: the scoped read picks one row's.
         let body = text(format!("row {i} text with a mark in it"))

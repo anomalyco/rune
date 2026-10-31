@@ -2,7 +2,7 @@
 //! `Cold<Handlers>`, so elements without callbacks pay one pointer.
 use crate::cold::Empty;
 use crate::el::{
-    AtBottomFn, Cursor, DragEndFn, DragFn, DragOutFn, DrawnLayoutFn, DropSpec, LayoutFn, ModalSpec,
+    AtBottomFn, Cursor, DragEndFn, DragFn, DragOutFn, DropSpec, LayoutFn, LayoutTxFn, ModalSpec,
     PasteFn, PointerFn, PressFn, ScrollOffsetFn, SelectionChangeFn, SelectionCopy, VisibleRowsFn,
     WindowFocusFn,
 };
@@ -31,9 +31,9 @@ pub(crate) struct Handlers {
     pub on_at_bottom: Option<AtBottomFn>,
     pub on_far_from_bottom: Option<(f32, AtBottomFn)>,
     pub on_visible_rows: Option<VisibleRowsFn>,
-    pub on_layout: Option<LayoutFn>,
+    pub on_layout: Option<LayoutTxFn>,
     pub on_screen_layout: Option<LayoutFn>,
-    pub on_drawn_layout: Option<DrawnLayoutFn>,
+    pub on_drawn_layout: Option<LayoutTxFn>,
     pub on_scroll_offset: Option<ScrollOffsetFn>,
     pub selection_copy: Option<SelectionCopy>,
     pub on_selection_change: Option<SelectionChangeFn>,

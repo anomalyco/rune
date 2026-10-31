@@ -56,13 +56,13 @@ fn a_view_places_from_another_elements_rect_in_the_same_commit() {
     assert_eq!(rt.stats.commits, commits);
 }
 
-/// Rows in a scroll; a marker follows row 10 as it scrolls.
+/// Rows in a scroll; a marker outside it follows row 10 as it scrolls.
 fn scroll_view(s: &S, cx: &mut Cx<S>) -> El {
     s.views.set(s.views.get() + 1);
     let rows = (0..40).fold(col().w_full(), |c, i| c.child(el().key(format!("r{i}")).w_full().h(30.0)));
     let mut root = col().w_full().h_full()
         .child(col().key("scroll").w_full().h(300.0).scroll(ScrollSpec { stick_bottom: false }).child(rows));
-    if let Some([_, y, _, _]) = cx.layout("r10") {
+    if let Some([_, y, _, _]) = cx.window_layout("r10") {
         root = root.child(el().key("marker").absolute(0.0, y).size(10.0, 10.0));
     }
     root
@@ -239,20 +239,34 @@ fn a_focused_field_remounting_after_a_layout_read_does_not_steal_newer_focus() {
     assert!(rt.state.second.focused && !rt.state.first.focused);
 }
 
+/// How `sized_view` reads row 10.
+#[derive(Clone, Copy, Debug, Default)]
+enum Read {
+    #[default]
+    Size,
+    Rect,
+    Window,
+}
+
 #[derive(Default)]
 struct SizeRead {
-    size_only: bool,
+    read: Read,
     tall: bool,
     views: Cell<u32>,
 }
 
-/// Rows in a scroll; a bar below it echoes row 10's size, read with `layout_size` or `layout`.
+/// Rows in a scroll; a bar below it echoes row 10's size, read with `layout_size`, `layout`
+/// or `window_layout`.
 fn sized_view(s: &SizeRead, cx: &mut Cx<SizeRead>) -> El {
     s.views.set(s.views.get() + 1);
     let rows = (0..40).fold(col().w_full(), |c, i| {
         c.child(el().key(format!("r{i}")).w_full().h(if i == 10 && s.tall { 50.0 } else { 30.0 }))
     });
-    let size = if s.size_only { cx.layout_size("r10") } else { cx.layout("r10").map(|r| [r[2], r[3]]) };
+    let size = match s.read {
+        Read::Size => cx.layout_size("r10"),
+        Read::Rect => cx.layout("r10").map(|r| [r[2], r[3]]),
+        Read::Window => cx.window_layout("r10").map(|r| [r[2], r[3]]),
+    };
     let mut root = col().w_full().h_full()
         .child(col().key("scroll").w_full().h(300.0).scroll(ScrollSpec { stick_bottom: false }).child(rows));
     if let Some([w, h]) = size {
@@ -266,8 +280,8 @@ fn echo(rt: &Runtime<SizeRead>) -> [f32; 4] {
 }
 
 /// View runs and commits over 60 frames of a trackpad-like scroll, a wheel event a frame.
-fn scroll_runs(size_only: bool) -> (u32, u64) {
-    let mut rt = Runtime::new(SizeRead { size_only, ..SizeRead::default() }, sized_view, (300.0, 400.0), Env::new(true, 2.0));
+fn scroll_runs(read: Read) -> (u32, u64) {
+    let mut rt = Runtime::new(SizeRead { read, ..SizeRead::default() }, sized_view, (300.0, 400.0), Env::new(true, 2.0));
     rt.frame(0.0);
     for _ in 0..10 { rt.frame(1.0 / 120.0); }
     let (views, commits) = (rt.state.views.get(), rt.stats.commits);
@@ -282,17 +296,19 @@ fn scroll_runs(size_only: bool) -> (u32, u64) {
 }
 
 #[test]
-fn a_size_read_does_not_re_run_its_view_while_the_element_scrolls() {
-    let (size_views, size_commits) = scroll_runs(true);
-    let (rect_views, rect_commits) = scroll_runs(false);
-    eprintln!("60 scroll frames: layout_size {size_views} views, {size_commits} commits; layout {rect_views} views, {rect_commits} commits");
-    assert_eq!((size_views, size_commits), (0, 0), "position moves alone don't re-run a size read");
-    assert!(rect_views >= 50 && rect_commits >= 50, "a whole-rect read still follows the position ({rect_views} views)");
+fn only_a_window_read_re_runs_its_view_while_the_element_scrolls() {
+    let size = scroll_runs(Read::Size);
+    let rect = scroll_runs(Read::Rect);
+    let window = scroll_runs(Read::Window);
+    eprintln!("60 scroll frames (views, commits): layout_size {size:?}; layout {rect:?}; window_layout {window:?}");
+    assert_eq!(size, (0, 0), "position moves alone don't re-run a size read");
+    assert_eq!(rect, (0, 0), "a whole-rect read is unscrolled: a scroll doesn't move it");
+    assert!(window.0 >= 50 && window.1 >= 50, "a window read follows the scroll ({window:?})");
 }
 
 #[test]
 fn a_size_read_re_runs_its_view_when_the_element_resizes() {
-    let mut rt = Runtime::new(SizeRead { size_only: true, ..SizeRead::default() }, sized_view, (300.0, 400.0), Env::new(true, 2.0));
+    let mut rt = Runtime::new(SizeRead::default(), sized_view, (300.0, 400.0), Env::new(true, 2.0));
     rt.frame(0.0);
     assert_eq!(echo(&rt)[2..], [300.0, 30.0], "settled on the first frame");
 
@@ -343,7 +359,7 @@ struct Header {
 
 /// A header that turns solid once row 1 scrolls past the top of the window.
 fn header_view(s: &Header, cx: &mut Cx<Header>) -> El {
-    let past = cx.layout_with("r1", |r| r[1] < 0.0);
+    let past = cx.window_layout_with("r1", |r| r[1] < 0.0);
     s.seen.borrow_mut().push(past);
     let rows = (0..40).fold(col().w_full(), |c, i| c.child(el().key(format!("r{i}")).w_full().h(30.0)));
     let header = el().key(if past == Some(true) { "solid" } else { "clear" }).w_full().h(20.0);
@@ -497,7 +513,7 @@ fn capped_view(s: &S, cx: &mut Cx<S>) -> El {
     let mut root = col().w_full().h_full().items_start()
         .child(col().key("scroll").w_full().h(300.0).scroll(ScrollSpec { stick_bottom: false }).child(rows))
         .child(el().key("bar").w(s.width.max(10.0)).h(10.0).on_layout(move |s: &mut S, r| s.width = r[2] + grow_by));
-    if let Some([_, y, _, _]) = cx.layout("r10") {
+    if let Some([_, y, _, _]) = cx.window_layout("r10") {
         root = root.child(el().key("marker").absolute(0.0, y).size(10.0, 10.0));
     }
     root
@@ -514,4 +530,57 @@ fn the_first_scroll_frame_after_feedback_stops_still_moves_a_read() {
     rt.wheel(100.0, 100.0, -30.0);
     rt.frame(1.0 / 120.0);
     assert_eq!(find(&rt, "marker").target[1], find(&rt, "r10").rect[1], "followed on the first scroll frame");
+}
+
+#[derive(Default)]
+struct Board {
+    tall: bool,
+    builds: Cell<u32>,
+}
+
+/// A memo below a scrolling list shows `memo::layout` of row 10 inside it.
+fn board_view(s: &Board, _: &mut Cx<Board>) -> El {
+    let rows = (0..40).fold(col().w_full(), |c, i| {
+        c.child(el().key(format!("r{i}")).w_full().h(if i == 10 && s.tall { 50.0 } else { 30.0 }))
+    });
+    col().w_full().h_full()
+        .child(col().key("scroll").w_full().h(300.0).scroll(ScrollSpec { stick_bottom: false }).child(rows))
+        .child(rune::memo::memo("label", 0, || {
+            s.builds.set(s.builds.get() + 1);
+            text(format!("{:?}", rune::memo::layout("r10"))).key("label")
+        }))
+}
+
+#[test]
+fn a_memo_layout_read_inside_a_scrolled_viewport_commits_nothing_while_it_scrolls() {
+    let mut rt = Runtime::new(Board::default(), board_view, (300.0, 400.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    frames_of(&mut rt, 10);
+    let label = |rt: &Runtime<Board>| rt.elements().into_iter().find(|e| e.key.as_deref() == Some("label")).and_then(|e| e.text);
+    let r10 = |rt: &Runtime<Board>| rt.elements().into_iter().find(|e| e.key.as_deref() == Some("r10")).unwrap().rect;
+    assert_eq!(label(&rt).as_deref(), Some("Some([0.0, 300.0, 300.0, 30.0])"));
+    let (commits, builds) = (rt.stats.commits, rt.state.builds.get());
+
+    // A programmatic, animated scroll, then a wheel scroll.
+    rt.update_if(|_, tx| { tx.scroll_to_y("scroll", 200.0); false });
+    frames_of(&mut rt, 60);
+    assert_eq!(r10(&rt)[1], 100.0, "scrolled 200");
+    for _ in 0..60 {
+        rt.wheel(100.0, 100.0, -3.0);
+        rt.frame(1.0 / 120.0);
+    }
+    frames_of(&mut rt, 60);
+    assert!(r10(&rt)[1] < 0.0, "scrolled on: {:?}", r10(&rt));
+    assert_eq!((rt.stats.commits, rt.state.builds.get()), (commits, builds), "no commits, no builds");
+    assert_eq!(label(&rt).as_deref(), Some("Some([0.0, 300.0, 300.0, 30.0])"), "unscrolled");
+
+    // A real size change still rebuilds, in the commit that made it.
+    rt.update(|s, _| s.tall = true);
+    rt.frame(1.0 / 120.0);
+    assert_eq!(label(&rt).as_deref(), Some("Some([0.0, 300.0, 300.0, 50.0])"));
+    assert!(rt.state.builds.get() > builds);
+}
+
+fn frames_of<S: 'static>(rt: &mut Runtime<S>, n: usize) {
+    for _ in 0..n { rt.frame(1.0 / 120.0); }
 }

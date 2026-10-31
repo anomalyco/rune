@@ -42,8 +42,8 @@ pub(crate) fn overlay<S: 'static>(k: &Knobs, groups: &'static [Group], st: Style
     if !k.open {
         return l;
     }
-    let (ox, oy) = rune::memo::layout(key).map_or((0.0, 0.0), |r| (r[0], r[1]));
-    let rects: Vec<(&'static str, [f32; 4])> = groups.iter().filter_map(|g| rune::memo::layout(g.region).map(|r| (g.name, r))).collect();
+    let (ox, oy) = rune::memo::window_layout(key).map_or((0.0, 0.0), |r| (r[0], r[1]));
+    let rects: Vec<(&'static str, [f32; 4])> = groups.iter().filter_map(|g| rune::memo::window_layout(g.region).map(|r| (g.name, r))).collect();
     let picking = k.picking;
     if picking {
         let at = rects.clone();

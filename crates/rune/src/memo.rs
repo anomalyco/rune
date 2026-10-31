@@ -25,8 +25,9 @@
 //!   again. App state the closure reads (a theme, a locale, a selection) must be part of
 //!   `version`. For a text field that's the
 //!   `TextEdit` itself, which hashes its text, selection, composition and focus.
-//! - **`Cx` reads.** `Cx::layout`, `Cx::layout_with`, `Cx::layout_size` and `Cx::caret` called
-//!   inside the closure are recorded with what they returned. A reuse counts them as read
+//! - **`Cx` reads.** `Cx::layout`, `Cx::layout_with`, `Cx::layout_size`, `Cx::window_layout`,
+//!   `Cx::window_layout_with` and `Cx::caret` called inside the closure are recorded with
+//!   what they returned. A reuse counts them as read
 //!   again, so the view still re-runs when they move, and builds again when one returns
 //!   something else. They needn't be in `version`.
 //! - **Hot reload** (`rune/hot`) drops every cached subtree, so new code always builds.
@@ -51,7 +52,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
 
 use crate::El;
-use crate::runtime::layout_read::{LayoutRects, SELECTION, Same, boxes_moved, moved, note_read, seen_rect, size};
+use crate::runtime::layout_read::{LayoutRects, SELECTION, Same, boxes_moved, moved, note_read, seen_rect, size, window_key};
 
 /// The children a memo's placeholders share.
 #[derive(Clone)]
@@ -381,6 +382,18 @@ pub fn layout_with<T: PartialEq + 'static>(key: &str, f: impl Fn([f32; 4]) -> T 
 /// without taking [`Cx`](crate::Cx); `None` outside a view build.
 pub fn layout_size(key: &str) -> Option<[f32; 2]> {
     layout_with(key, size)
+}
+
+/// [`Cx::window_layout`](crate::Cx::window_layout) for a component that builds inside a view
+/// without taking [`Cx`](crate::Cx); `None` outside a view build.
+pub fn window_layout(key: &str) -> Option<[f32; 4]> {
+    layout(&window_key(key))
+}
+
+/// [`Cx::window_layout_with`](crate::Cx::window_layout_with) for a component that builds
+/// inside a view without taking [`Cx`](crate::Cx); `None` outside a view build.
+pub fn window_layout_with<T: PartialEq + 'static>(key: &str, f: impl Fn([f32; 4]) -> T + 'static) -> Option<T> {
+    layout_with(&window_key(key), f)
 }
 
 /// A layout read of `key` made without a `Cx`, counted toward the view and the memo building,
@@ -861,7 +874,7 @@ mod tests {
         let rows = (0..20).fold(col().w_full(), |c, i| c.child(el().key(format!("r{i}")).w_full().h(30.0)));
         col().size(300.0, 300.0).children([
             col().key("scroll").w_full().h(200.0).scroll(ScrollSpec { stick_bottom: false }).child(rows),
-            memo("label", 0, || counted(text(format!("{:?}", cx.layout("r3"))).key("label"))),
+            memo("label", 0, || counted(text(format!("{:?}", cx.window_layout("r3"))).key("label"))),
             text(format!("tick {}", s.ticks)).key("tick"),
         ])
     }

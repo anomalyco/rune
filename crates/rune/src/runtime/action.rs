@@ -101,6 +101,7 @@ pub(super) fn live_only_handler(action: &Action) -> Option<&'static str> {
     Some(match action {
         Action::WindowFocus(_) => "on_window_focus",
         Action::DrawnLayout(..) => "on_drawn_layout_tx",
+        Action::Layout(..) => "on_layout_tx",
         Action::PointerMove(..) => "on_pointer_move_local",
         Action::Hover(_) => "on_hover",
         Action::HoverChange(..) => "on_hover_change",
@@ -126,7 +127,7 @@ pub(super) fn live_only_handler(action: &Action) -> Option<&'static str> {
 #[cfg(debug_assertions)]
 pub(super) fn action_path(action: &Action) -> Option<&str> {
     match action {
-        Action::PointerMove(path, _) | Action::DrawnLayout(path, ..) | Action::Hover(path) | Action::HoverChange(path, _) | Action::SelectionChange(path, _) | Action::Press(path, _) | Action::DoublePress(path)
+        Action::PointerMove(path, _) | Action::DrawnLayout(path, ..) | Action::Layout(path, _) | Action::Hover(path) | Action::HoverChange(path, _) | Action::SelectionChange(path, _) | Action::Press(path, _) | Action::DoublePress(path)
         | Action::Link(path, _) | Action::LinkSecondary(path, ..) | Action::SecondaryPress(path, _) | Action::Drag(path, ..) | Action::DragStart(path)
         | Action::DragEnd(path, _) => Some(path),
         Action::Wheel(_, chain, _) | Action::Gesture(chain, _) => chain.first().map(String::as_str),
@@ -144,7 +145,6 @@ fn handler_name(action: &Action) -> &'static str {
         Action::AtBottom(..) => "on_at_bottom",
         Action::FarFromBottom(..) => "on_far_from_bottom",
         Action::VisibleRows(..) => "on_visible_rows",
-        Action::Layout(..) => "on_layout",
         Action::ScreenLayout(..) => "on_screen_layout",
         Action::Files(_) => "on_drop_files",
         Action::Ime(_) => "a text input's edit",
@@ -318,7 +318,7 @@ impl<S: 'static> Runtime<S> {
             }
             Action::Layout(path, rect) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_layout.clone()) else { return false };
-                f(states!(self), rect);
+                f(states!(self), rect, &mut one);
                 true
             }
             Action::ScreenLayout(path, rect) => {

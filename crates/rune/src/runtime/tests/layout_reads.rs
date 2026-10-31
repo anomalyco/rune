@@ -40,7 +40,7 @@ type Seen = std::rc::Rc<std::cell::RefCell<[Option<[f32; 4]>; 2]>>;
 /// A 200-point viewport over a hundred 40-point virtual rows, each with a keyed label 5 points
 /// down, reading where row 27 and its label lie.
 fn virtual_view(seen: &Seen, cx: &mut Cx<Seen>) -> El {
-    *seen.borrow_mut() = [cx.layout("r27"), cx.layout("r27/label")];
+    *seen.borrow_mut() = [cx.window_layout("r27"), cx.window_layout("r27/label")];
     let rows = col().key("rows").w_full().growth(crate::GrowthSpec::default())
         .virtual_rows(100, 40.0, |_: &Seen, i| format!("r{i}").into(), |_: &Seen, _| {
             col().w_full().h(40.0).pt(5.0).child(el().key("label").w(10.0).h(10.0))

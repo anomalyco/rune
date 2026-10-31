@@ -298,3 +298,53 @@ fn live_only_drag_keeps_capture_outside_the_moving_element() {
     assert_eq!(rt.state.phases, [Phase::Down, Phase::Move, Phase::Move, Phase::Up]);
     assert_eq!(rt.stats.commits, before);
 }
+
+/// A marker beside a scrolling list follows row 10 by its own live offset, set from
+/// `on_layout_tx`.
+struct Follow {
+    live: bool,
+    marker: Live<[f32; 2]>,
+    heard: usize,
+}
+
+fn follow_view(s: &Follow, _: &mut Cx<Follow>) -> El {
+    let rows = (0..40).fold(rune::col().w_full(), |c, i| {
+        let row = el().key(format!("r{i}")).w_full().h(30.0);
+        c.child(if i == 10 {
+            row.on_layout_tx(|s: &mut Follow, r, tx| {
+                s.heard += 1;
+                s.marker.set([0.0, r[1]]);
+                if s.live { tx.live_only(); }
+            })
+        } else { row })
+    });
+    rune::col().w_full().h_full()
+        .child(rune::col().key("list").w_full().h(300.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(rows))
+        .child(el().key("marker").pin(Some(0.0), Some(0.0), None, None).size(10.0, 10.0).live_offset(&s.marker))
+}
+
+fn follow(live: bool) -> (u64, usize, Runtime<Follow>) {
+    let mut rt = Runtime::new(Follow { live, marker: Live::new([0.0, 0.0]), heard: 0 }, follow_view, (300.0, 400.0), Env::new(true, 1.0));
+    rt.check_live_only(false);
+    for _ in 0..10 { rt.frame(1.0 / 120.0); }
+    let (commits, heard) = (rt.stats.commits, rt.state.heard);
+    for _ in 0..30 {
+        rt.wheel(100.0, 100.0, -3.0);
+        rt.frame(1.0 / 120.0);
+    }
+    rt.frame(1.0 / 120.0);
+    (rt.stats.commits - commits, rt.state.heard - heard, rt)
+}
+
+#[test]
+fn a_live_only_on_layout_tx_follows_a_scroll_without_re_running_the_view() {
+    let (commits, heard, rt) = follow(true);
+    assert!(heard >= 30, "heard every frame of the scroll: {heard}");
+    assert_eq!(commits, 0);
+    let row = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("r10")).unwrap().rect;
+    let marker = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("marker")).unwrap().rect;
+    assert_eq!(row[1], 210.0, "scrolled 90");
+    assert_eq!(marker[1], row[1], "the marker follows the row");
+    let (commits, heard, _) = follow(false);
+    assert!(commits >= 30 && heard >= 30, "without live_only each report re-runs the view: {commits}");
+}

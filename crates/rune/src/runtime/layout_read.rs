@@ -7,13 +7,16 @@
 //! the new rect something other than it gave the old one, so a size read doesn't re-run when
 //! the element only moves, and a "scrolled past the top" flag only when it flips.
 //!
-//! All of them see where layout puts an element (window points, after scrolling), never a frame of
-//! its spring, so they don't re-run through animations. A view reading something its own
+//! All of them see where layout puts an element, never a frame of its spring, so they don't
+//! re-run through animations. View reads see it unscrolled (window points with every viewport
+//! at its origin), so scrolling re-runs no view; `Cx::window_layout` and
+//! `Cx::window_layout_with` read it after scrolling, under a key no element can have
+//! ([`window_key`]), and handlers hear it after scrolling. A view reading something its own
 //! output resizes (its own size, say) can feed back into itself; that settles instead of
 //! looping:
 //! - Inside a commit, the view re-runs while what it read moved, at most [`PASSES`] more times.
 //!   The values it is given next are then the final layout's, so nothing re-runs by itself.
-//! - Between commits, only scrolling moves a laid-out rect, which re-runs readers next frame.
+//! - Between commits, only scrolling moves a window read, which re-runs readers next frame.
 //! - Commits caused only by layout reads or `on_layout`, with no scroll moving, count up; past
 //!   [`ECHOES`] in a row, reads and `on_layout` stop causing commits until anything else
 //!   commits or a scroll moves. Reads get the current rects at the next commit.
@@ -156,16 +159,20 @@ pub(crate) fn seen_rect(rects: &LayoutRects, key: &str) -> Option<[f32; 4]> {
 }
 
 impl<S> Cx<S> {
-    /// The laid-out rect `[x, y, w, h]` in window points, after scrolling, of the element keyed
-    /// `key` (or named by a key path such as `"msg-42/body"`, as `Tx::fly_text` takes), or
-    /// `None` when there is none. It is where layout puts the element, not a frame of its spring.
+    /// The laid-out rect `[x, y, w, h]` of the element keyed `key` (or named by a key path such
+    /// as `"msg-42/body"`, as `Tx::fly_text` takes), or `None` when there is none. It is where
+    /// layout puts the element, not a frame of its spring, in window points as if every scroll
+    /// viewport it sits in were scrolled to the top-left: scrolling doesn't move it, so a read
+    /// inside a scrolling list costs no view run per frame. Outside any scroll viewport that's
+    /// where the window shows it. A view that needs where the element is in the window now,
+    /// after scrolling (to float something outside the list over a row, say), reads
+    /// [`Self::window_layout`] instead.
     ///
-    /// A view that reads it re-runs when that rect moves or resizes past half a point: in the
-    /// same commit when the change comes from layout, the next frame when scrolling moved it.
-    /// Reading an element the view itself resizes (its own size, say) settles: the commit
-    /// re-runs the view at most twice more while the value moves, then keeps the last layout,
-    /// and layout reads alone can't keep causing commits. A view whose output never reaches a
-    /// fixed point gets a stale value rather than oscillating.
+    /// A view that reads it re-runs when that rect moves or resizes past half a point, in the
+    /// commit that moved it. Reading an element the view itself resizes (its own size, say)
+    /// settles: the commit re-runs the view at most twice more while the value moves, then
+    /// keeps the last layout, and layout reads alone can't keep causing commits. A view whose
+    /// output never reaches a fixed point gets a stale value rather than oscillating.
     ///
     /// A view that uses only part of the rect should read that part with [`Self::layout_size`]
     /// or [`Self::layout_with`], which don't re-run it while the part it uses holds.
@@ -179,9 +186,9 @@ impl<S> Cx<S> {
     /// `f` of the rect [`Self::layout`] returns, re-running the view only when `f` of the new
     /// rect differs from `f` of the old one (or the element appears or goes). Prefer it to
     /// `layout` whenever the view needs something that changes less often than the rect:
-    /// `layout_with("feed", |r| r[1] < 0.0)` re-runs a header on the frames the feed scrolls
-    /// past the top, not on every frame of the scroll. It settles on the first layout like
-    /// `layout`, so the first frame already has the right value.
+    /// `layout_with("card", |r| r[2] >= 400.0)` re-runs on the resizes that cross the
+    /// breakpoint, not on every resize. It settles on the first layout like `layout`, so the
+    /// first frame already has the right value.
     ///
     /// `f` runs again on each later layout until the view re-runs, so keep it cheap and pure.
     /// A function item or a closure that captures nothing costs no more than `layout`, and
@@ -198,12 +205,35 @@ impl<S> Cx<S> {
     }
 
     /// `[w, h]` of the rect [`Self::layout`] returns: [`Self::layout_with`] the size. Prefer it
-    /// whenever the view uses only the size, so an element inside a scrolling viewport doesn't
-    /// re-run the view every frame of the scroll; it re-runs when the width or height changes.
+    /// whenever the view uses only the size: it re-runs when the width or height changes, not
+    /// when the element only moves.
     pub fn layout_size(&self, key: &str) -> Option<[f32; 2]> {
         self.layout_with(key, size)
     }
+
+    /// [`Self::layout`] where the window shows the element now, after its viewports' scrolling.
+    /// A view that reads it re-runs the next frame a scroll moves the element past half a
+    /// point, so every frame of a scroll: read it only for what has to follow the scroll, and
+    /// prefer [`Self::window_layout_with`] for a value that changes less often.
+    pub fn window_layout(&self, key: &str) -> Option<[f32; 4]> {
+        self.layout(&window_key(key))
+    }
+
+    /// [`Self::layout_with`] of the rect [`Self::window_layout`] returns:
+    /// `window_layout_with("r1", |r| r[1] < 0.0)` re-runs a header on the frames row 1 scrolls
+    /// past the top of the window, not on every frame of the scroll.
+    pub fn window_layout_with<T: PartialEq + 'static>(&self, key: &str, f: impl Fn([f32; 4]) -> T + 'static) -> Option<T> {
+        self.layout_with(&window_key(key), f)
+    }
 }
+
+/// The layout-read key a window-position read of `key` is noted under.
+pub(crate) fn window_key(key: &str) -> String {
+    format!("{WINDOW}{key}")
+}
+
+/// The prefix of a window-position read's key, which no element key starts with.
+const WINDOW: &str = "\u{1}window:";
 
 /// `[w, h]` of `rect`.
 pub(crate) fn size(rect: [f32; 4]) -> [f32; 2] {
@@ -223,11 +253,19 @@ pub(crate) fn moved(a: Option<[f32; 4]>, b: Option<[f32; 4]>) -> bool {
 impl<S: 'static> Runtime<S> {
     /// Node `i`'s laid-out rect `[x, y, w, h]` in window points, after its viewports' scrolling.
     fn laid_out(&self, nodes: &[Node], i: usize) -> [f32; 4] {
+        self.placed(nodes, i, true)
+    }
+
+    /// [`Self::laid_out`], or when not `scrolled`, where it would be with every viewport
+    /// scrolled to its origin, which only a commit moves.
+    fn placed(&self, nodes: &[Node], i: usize, scrolled: bool) -> [f32; 4] {
+        let unscrolled;
+        let scrolls = if scrolled { &self.scrolls } else { unscrolled = HashMap::default(); &unscrolled };
         let t = nodes[i].target;
         let (mut dx, mut dy) = (0.0, 0.0);
-        let mut up = nodes[i].parent.filter(|_| nodes[i].above.is_none());
+        let mut up = nodes[i].parent.filter(|_| nodes[i].above.is_none() && scrolled);
         while let Some(p) = up {
-            if let Some(st) = self.scrolls.get(&nodes[p].id) {
+            if let Some(st) = scrolls.get(&nodes[p].id) {
                 dy += st.offset as f32;
                 dx += st.x.offset as f32;
             }
@@ -237,7 +275,7 @@ impl<S: 'static> Runtime<S> {
             && let Some(a) = &nodes[anc].above
             && let Some(k) = anchor_index(&nodes, anc, a)
         {
-            let at = sticky::anchored_target(nodes, &self.scrolls, k, self.viewport);
+            let at = sticky::anchored_target(nodes, scrolls, k, self.viewport);
             let (w, h) = (nodes[anc].target[2] - nodes[anc].target[0], nodes[anc].target[3] - nodes[anc].target[1]);
             let (ax, ay) = anchor_position(a, at, (w, h), self.viewport);
             dx -= ax - nodes[anc].target[0];
@@ -261,15 +299,16 @@ impl<S: 'static> Runtime<S> {
 
     fn layout_of(&self, nodes: &[Node], index: Option<&KeyIndex>, key: &str) -> Option<[f32; 4]> {
         if key == SELECTION { return None; }
+        let (key, scrolled) = key.strip_prefix(WINDOW).map_or((key, false), |key| (key, true));
         let first = match index {
             Some(index) => index.first(nodes, key),
             None => key_index::scan_first(nodes, key),
         };
         if let Some(i) = first {
-            return Some(self.laid_out(nodes, i));
+            return Some(self.placed(nodes, i, scrolled));
         }
         let (i, [x0, y0, x1, y1]) = self.highlight_target_with(nodes, index, None, key)?;
-        let node_rect = self.laid_out(nodes, i);
+        let node_rect = self.placed(nodes, i, scrolled);
         let t = nodes[i].target;
         Some([node_rect[0] + (x0 - t[0]), node_rect[1] + (y0 - t[1]), x1 - x0, y1 - y0])
     }

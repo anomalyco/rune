@@ -413,7 +413,7 @@ impl ScrollAxes {
 pub(crate) type AtBottomFn = Rc<dyn Fn(crate::states::States<'_>, bool)>;
 pub(crate) type VisibleRowsFn = Rc<dyn Fn(crate::states::States<'_>, std::ops::Range<usize>) -> bool>;
 pub(crate) type LayoutFn = Rc<dyn Fn(crate::states::States<'_>, [f32; 4])>;
-pub(crate) type DrawnLayoutFn = Rc<dyn Fn(crate::states::States<'_>, [f32; 4], &mut Tx)>;
+pub(crate) type LayoutTxFn = Rc<dyn Fn(crate::states::States<'_>, [f32; 4], &mut Tx)>;
 pub(crate) type ScrollOffsetFn = Rc<dyn Fn(crate::ScrollPos)>;
 pub(crate) type WindowFocusFn = Rc<dyn Fn(crate::states::States<'_>, bool, &mut Tx)>;
 

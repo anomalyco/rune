@@ -425,7 +425,7 @@ values, hit tests against where they put elements, and reports `on_drawn_layout`
 else the handler asked of its `Tx` (a scroll, a copy, `wake_after`) still happens. It works in
 `on_wheel`, `on_magnify`, `on_rotate`, `on_smart_magnify`, `on_drag`, `on_pointer_move_local`,
 `on_key`, `on_key_up`, a field's key handler, `on_physical_input`, the press and hover handlers,
-and `on_drawn_layout_tx`, so a toolbar that floats over the selection by its own live offset
+`on_layout_tx` and `on_drawn_layout_tx`, so a toolbar that floats over the selection by its own live offset
 follows a pan with no view re-run either. A handler that declines its event (returns false)
 takes its `live_only` back, and an event several handlers take is live-only only if each says
 so. It's the handler form of `Runtime::update_if` returning false, and the same rule holds:
@@ -471,9 +471,11 @@ top-left, which is what popups and context menus anchor to.
 | `on_pointer_move_local`, `on_secondary_press_local` | `PointerEvent::x`, `y` | local |
 | | `PointerEvent::window_x`, `window_y`, `window()` | window |
 | `on_pointer_move`, `on_secondary_press` | `PointerPress::x`, `y` | window |
-| `on_layout` | `[x, y, w, h]`, as laid out, after scrolling (before live values) | window |
+| `on_layout`, `on_layout_tx` | `[x, y, w, h]`, as laid out, after scrolling (before live values) | window |
 | `on_drawn_layout`, `on_drawn_layout_tx` | `[x, y, w, h]`, as drawn | window |
 | `on_screen_layout` | `[x, y, w, h]` | primary display |
+| `Cx::layout`, `layout_with`, `layout_size`, `memo::layout` (view reads) | `[x, y, w, h]`, as laid out, every scroll viewport at its origin, so a scroll doesn't re-run the view | window |
+| `Cx::window_layout`, `window_layout_with`, `memo::window_layout` | `[x, y, w, h]`, as laid out, after scrolling | window |
 | `context_menu`, `PopupAnchor::from(PointerPress)` | the anchor they take | window |
 
 `on_press`, `on_double_press`, `on_hover`, `on_hover_change`, `on_drop_files` and

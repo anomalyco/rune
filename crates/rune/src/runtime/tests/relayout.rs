@@ -277,7 +277,7 @@ fn a_layout_read_the_resize_leaves_alone_keeps_the_view() {
 fn a_resize_in_the_frame_a_scroll_moves_a_layout_read_runs_the_view() {
     fn view(_: &u32, cx: &mut Cx<u32>) -> El {
         ran();
-        let y = cx.layout("r5").map_or(-1.0, |r| r[1]);
+        let y = cx.window_layout("r5").map_or(-1.0, |r| r[1]);
         let rows = col().w_full().children((0..50).map(|k| el().key(format!("r{k}")).w(100.0).h(20.0)));
         col().w_full().children([
             col().key("scroll").w_full().h(200.0).scroll(crate::ScrollSpec { stick_bottom: false }).child(rows),

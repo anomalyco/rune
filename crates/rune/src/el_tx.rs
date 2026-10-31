@@ -323,7 +323,8 @@ impl Tx {
     /// re-run the view or lay it out. The frame still draws the new live values, hit tests
     /// against where they put elements, and reports [`El::on_drawn_layout`]. Whatever else the
     /// handler asked of its `Tx` (a scroll, a copy, `wake_after`) still happens. It works in
-    /// pointer, gesture, key, press and hover handlers and in [`El::on_drawn_layout_tx`].
+    /// pointer, gesture, key, press and hover handlers and in [`El::on_layout_tx`] and
+    /// [`El::on_drawn_layout_tx`].
     /// Editing, paste and file-drop actions still commit Rune's own changes. A handler that
     /// declines its event (returns false) takes it back, and an event several handlers take is
     /// live-only only if each says so. It's the handler form of

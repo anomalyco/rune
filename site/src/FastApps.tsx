@@ -72,7 +72,7 @@ fn poll(s: &mut App, _: f64, _: &mut Tx) -> bool {
 }`
 
 const rectBefore = `// Before: the view re-runs every frame the feed scrolls.
-let height = cx.layout("feed").map(|r| r[3]);`
+let height = cx.window_layout("feed").map(|r| r[3]);`
 
 const rectAfter = `// After: it re-runs when the height changes.
 let height = cx.layout_size("feed").map(|[_, h]| h);`
@@ -234,9 +234,10 @@ export function FastAppsView() {
       <section className="doc-section">
         <SectionHead id="reads" title="Read the size, not the rect">
           <p>
-            A view that calls <code>Cx::layout</code> re-runs when the rect moves past half a point, and inside a scroll
-            view the rect moves every frame. If you use only the size, read <code>Cx::layout_size</code>; for anything
-            else, <code>Cx::layout_with</code> re-runs the view only when your answer changes.
+            A view that calls <code>Cx::window_layout</code> re-runs when the rect moves past half a point, and inside a
+            scroll view it moves every frame. <code>Cx::layout</code> reads the rect unscrolled, so only a commit moves it.
+            If you use only the size, read <code>Cx::layout_size</code>; for anything else, <code>Cx::layout_with</code>{' '}
+            and <code>Cx::window_layout_with</code> re-run the view only when your answer changes.
           </p>
         </SectionHead>
         <Pair before={rectBefore} after={rectAfter} />
