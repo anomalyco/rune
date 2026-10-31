@@ -463,6 +463,9 @@ impl Gpu {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
+        // `WGPU_BACKEND` (wgpu's own: `dx12`, `vulkan`, `gl`…) narrows the backends, for an app
+        // whose NativeSurface frames come from Direct3D (they import only on DX12).
+        descriptor.backends = wgpu::Backends::from_env().unwrap_or(descriptor.backends);
         // An HWND's DXGI swapchain is opaque only; DirectComposition composites alpha on every GPU.
         descriptor.backend_options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromVisual;
         // FXC ships with Windows (d3dcompiler_47.dll in System32). wgpu's default looks for

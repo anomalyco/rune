@@ -130,6 +130,8 @@ x11rb = { version = "0.13", features = ["shape", "xinput", "randr", "allow-unsaf
 xkbcommon = "0.9"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+# NativeSurface's shared D3D textures (native_surface/win32.rs): the version wgpu-hal's DX12 backend uses.
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"] }
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_System_DataExchange", "Win32_System_Memory"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

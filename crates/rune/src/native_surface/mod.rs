@@ -1,11 +1,14 @@
-//! Latest-wins video frames. macOS imports IOSurface-backed CoreVideo buffers without a copy.
-//! CPU byte frames provide a portable source and a reference for headless verification.
+//! Latest-wins video frames. macOS imports IOSurface-backed CoreVideo buffers and Windows
+//! shared D3D textures without a copy. CPU byte frames provide a portable source and a
+//! reference for headless verification.
 
 #[cfg(test)]
 #[path = "tests.rs"]
 mod gpu_tests;
 #[cfg(target_os = "macos")]
 pub mod macos;
+#[cfg(target_os = "windows")]
+pub mod win32;
 mod pipeline;
 pub use pipeline::SurfaceRenderer;
 use std::sync::{Arc, Mutex};
@@ -57,6 +60,8 @@ pub(crate) enum Source {
     Bytes(ByteFrame),
     #[cfg(target_os = "macos")]
     PixelBuffer(macos::PixelBuffer),
+    #[cfg(target_os = "windows")]
+    Shared(win32::SharedTexture),
 }
 pub(crate) struct Frame {
     pub id: u64,
@@ -250,6 +255,13 @@ impl NativeSurface {
     pub(crate) fn push_oriented(&self, buffer: macos::PixelBuffer, frame_id: u64, orient: Orient) -> Result<(), String> {
         let (size, format, color) = buffer.info()?;
         self.replace(Frame { id: frame_id, source: Source::PixelBuffer(buffer), size, format, color, orient });
+        Ok(())
+    }
+    /// A frame in a shared D3D texture: latest-wins like `push_bytes`, imported without a copy.
+    #[cfg(target_os = "windows")]
+    pub fn push(&self, texture: win32::SharedTexture, frame_id: u64) -> Result<(), String> {
+        let (size, format, color) = texture.info()?;
+        self.replace(Frame { id: frame_id, source: Source::Shared(texture), size, format, color, orient: Orient::UP });
         Ok(())
     }
     fn replace(&self, frame: Frame) {

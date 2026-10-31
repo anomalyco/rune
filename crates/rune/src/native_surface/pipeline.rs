@@ -23,6 +23,9 @@ struct Uniforms {
 pub(crate) struct Imported {
     frame: Arc<Frame>,
     textures: [wgpu::Texture; 2],
+    /// Hands a shared texture back to its producer once no draw holds it.
+    #[cfg(target_os = "windows")]
+    release: Option<win32::Release>,
 }
 struct Prepared {
     drawn: std::sync::atomic::AtomicBool,
@@ -77,6 +80,8 @@ pub struct SurfaceRenderer {
     staging: Option<rune_staging::Staging>,
     #[cfg(target_os = "macos")]
     importer: Option<macos::Importer>,
+    #[cfg(target_os = "windows")]
+    importer: Option<win32::Importer>,
 }
 impl SurfaceRenderer {
     #[cfg(target_arch = "wasm32")]
@@ -162,6 +167,8 @@ impl SurfaceRenderer {
             srgb_blend: false,
             staging: None,
             #[cfg(target_os = "macos")]
+            importer: None,
+            #[cfg(target_os = "windows")]
             importer: None,
         }
     }
@@ -254,7 +261,13 @@ impl SurfaceRenderer {
             if changed {
                 match self.import(device, queue, frame) {
                     Ok(imported) => {
-                        self.cache.insert(key, Arc::new(imported));
+                        #[cfg(target_os = "windows")]
+                        let id = imported.frame.id;
+                        let _old = self.cache.insert(key, Arc::new(imported));
+                        #[cfg(target_os = "windows")]
+                        if let Some(r) = _old.as_ref().and_then(|old| old.release.as_ref()) {
+                            r.replaced_by(id);
+                        }
                         d.surface.0.lock().unwrap().error = None;
                     }
                     Err(e) => {
@@ -338,12 +351,18 @@ impl SurfaceRenderer {
         if let Some(i) = &self.importer {
             i.flush();
         }
+        #[cfg(target_os = "windows")]
+        if let Some(i) = &mut self.importer {
+            i.flush();
+        }
     }
 
     fn import(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: Arc<Frame>) -> Result<Imported, String> {
         if frame.size.iter().any(|v| *v > device.limits().max_texture_dimension_2d) {
             return Err("video dimensions exceed this GPU device's texture limit".into());
         }
+        #[cfg(target_os = "windows")]
+        let mut release = None;
         let textures = match &frame.source {
             Source::Bytes(b) => {
                 let a = upload(
@@ -374,8 +393,22 @@ impl SurfaceRenderer {
                     self.importer.as_ref().unwrap().import(b, frame.format, frame.size)
                 })?
             }
+            #[cfg(target_os = "windows")]
+            Source::Shared(t) => {
+                if self.importer.is_none() {
+                    self.importer = Some(win32::Importer::new(device)?);
+                }
+                let (textures, r) = self.importer.as_mut().unwrap().import(t, frame.id)?;
+                release = r;
+                textures
+            }
         };
-        Ok(Imported { frame, textures })
+        Ok(Imported {
+            frame,
+            textures,
+            #[cfg(target_os = "windows")]
+            release,
+        })
     }
     pub fn len(&self) -> usize {
         self.draws.len()
