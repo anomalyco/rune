@@ -296,8 +296,8 @@ impl<S: 'static> Runtime<S> {
         let on = allowed && (inside || held) && captured.is_none_or(|p| holds(&n.path, p));
         // Like a native sidebar or menu: the highlight lands with the pointer and fades
         // briefly as it leaves.
-        let anim = match n.vis.hover_motion.as_deref() {
-            Some(&(enter, exit)) => if on { enter } else { exit },
+        let anim = match n.hover_motion() {
+            Some((enter, exit)) => if on { enter } else { exit },
             None if on => Anim::INSTANT,
             None => rune_motion::Curve::tween(0.1, rune_motion::Easing::EASE_OUT).into(),
         };
@@ -322,7 +322,7 @@ impl<S: 'static> Runtime<S> {
                 // An unchanged target preserves its trajectory in the store already; avoid
                 // dirtying the scene node for that no-op. Custom animations may carry an
                 // explicit velocity, decay or token and must still reach the store.
-                Some(f) if n.vis.hover_motion.is_some() => {
+                Some(f) if n.hover_motion().is_some() => {
                     if !self.scene.store().has(f.id, P_HOVER) { self.scene.set(f.id, P_HOVER, 0.0); }
                     self.scene.animate(f.id, P_HOVER, f.on as u8 as f32, f.anim);
                 }

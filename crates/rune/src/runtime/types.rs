@@ -99,6 +99,9 @@ pub(crate) struct Node {
     pub(super) handlers: crate::cold::Cold<crate::el::Handlers>,
     pub(super) cold: crate::cold::Cold<NodeCold>,
     pub vis: Visual,
+    /// The hover curves of the nearest `El::hover_motion_within` at or above it (or above its
+    /// anchor). Kept here, not in `vis`, so inheriting them doesn't copy every node's visuals.
+    pub(super) hover_within: Option<Rc<(Anim, Anim)>>,
     /// Layout target in root space: x0, y0, x1, y1 in points.
     pub target: [f32; 4],
     /// Layout target in parent space.
@@ -172,6 +175,7 @@ impl Node {
             handlers: Default::default(),
             cold: Default::default(),
             vis: Visual::default(),
+            hover_within: None,
             target: old.target,
             local: old.local,
             inset: old.inset,
@@ -192,6 +196,13 @@ impl Node {
             ime_cursor: false,
             moved_stub: true,
         }
+    }
+
+    /// Its hover track's curves: its own `El::hover_motion`, else the inherited
+    /// `El::hover_motion_within` pair.
+    #[inline]
+    pub(super) fn hover_motion(&self) -> Option<(Anim, Anim)> {
+        self.vis.hover_motion.as_deref().or(self.hover_within.as_deref()).copied()
     }
 
     #[inline]

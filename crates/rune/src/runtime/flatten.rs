@@ -166,26 +166,20 @@ fn prepare_text(
     (measured, measure, secure_measure)
 }
 
+/// The `El::hover_motion_within` pair a node goes by: its own, else its anchor's, else its
+/// parent's.
 fn inherit_hover_within(
-    vis: &mut Visual,
+    vis: &Visual,
     above: Option<&crate::el::Anchor>,
     parent: Option<usize>,
     nodes: &[Node],
-) {
-    if vis.hover_within.is_none() {
-        let inherited = above
+) -> Option<Rc<(Anim, Anim)>> {
+    vis.hover_within.clone().or_else(|| {
+        above
             .and_then(|a| nodes.iter().position(|n| n.key.as_ref() == Some(&a.key)))
-            .and_then(|j| nodes[j].vis.hover_within.clone())
-            .or_else(|| parent.and_then(|p| nodes[p].vis.hover_within.clone()));
-        if inherited.is_some() {
-            vis.cold_mut().hover_within = inherited;
-        }
-    }
-    if vis.hover_motion.is_none()
-        && let Some(hw) = vis.hover_within.clone()
-    {
-        vis.cold_mut().hover_motion = Some(hw);
-    }
+            .and_then(|j| nodes[j].hover_within.clone())
+            .or_else(|| parent.and_then(|p| nodes[p].hover_within.clone()))
+    })
 }
 
 #[inline]
@@ -353,7 +347,7 @@ fn flatten_owned(
         role,
         label,
         mut style,
-        mut vis,
+        vis,
         live,
         mut text,
         children,
@@ -391,7 +385,7 @@ fn flatten_owned(
     }
     let text_meta = prepare_text(&mut text, input.as_deref(), scale);
     let inert = inert || parent.is_some_and(|p| nodes[p].inert);
-    inherit_hover_within(&mut vis, above.as_ref(), parent, nodes);
+    let hover_within = inherit_hover_within(&vis, above.as_ref(), parent, nodes);
     let pixel_aspect = vis.pixels.as_ref()
         .filter(|_| style.aspect_ratio.is_none() && style.size.width.is_auto() != style.size.height.is_auto())
         .map(pixel_ratio);
@@ -459,6 +453,7 @@ fn flatten_owned(
         handlers,
         cold,
         vis,
+        hover_within,
         target: [0.0; 4],
         local: MRect::ZERO,
         inset: [0.0; 4],
@@ -563,8 +558,8 @@ fn flatten_ref(
     let input = el.input.clone();
     let text_meta = prepare_text(&mut text, input.as_deref(), scale);
     let inert = el.inert || parent.is_some_and(|p| nodes[p].inert);
-    let mut vis = el.vis.clone();
-    inherit_hover_within(&mut vis, el.above.as_ref(), parent, nodes);
+    let vis = el.vis.clone();
+    let hover_within = inherit_hover_within(&vis, el.above.as_ref(), parent, nodes);
     let pixel_aspect = vis.pixels.as_ref()
         .filter(|_| style.aspect_ratio.is_none() && style.size.width.is_auto() != style.size.height.is_auto())
         .map(pixel_ratio);
@@ -663,6 +658,7 @@ fn flatten_ref(
         handlers: el.handlers.clone(),
         cold,
         vis,
+        hover_within,
         target: [0.0; 4],
         local: MRect::ZERO,
         inset: [0.0; 4],

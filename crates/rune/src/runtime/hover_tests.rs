@@ -63,3 +63,17 @@ fn unchanged_default_hover_does_not_dirty_scene_poses() {
             "only explicit animations may dirty poses for unchanged targets");
     }
 }
+
+#[test]
+fn inherited_hover_curves_leave_descendants_visuals_shared() {
+    let mut rt = Runtime::new(State { custom: true, growth: false, rows: 3 }, view, (240.0, 150.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|s, _| s.rows += 1);
+    rt.frame(1.0 / 120.0);
+    let rows: Vec<_> = rt.nodes.iter().filter(|n| n.path.rsplit('/').next().is_some_and(|k| k.starts_with("row-"))).collect();
+    assert_eq!(rows.len(), 4);
+    for n in rows {
+        assert!(n.hover_motion().is_some(), "{} goes by its group's curves", n.path);
+        assert!(n.vis.cold.is_empty(), "{} keeps no cold visuals of its own", n.path);
+    }
+}

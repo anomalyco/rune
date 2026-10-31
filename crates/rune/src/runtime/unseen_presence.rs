@@ -104,15 +104,9 @@ impl<S: 'static> Runtime<S> {
             !s && self.node_index.get(&old.id).is_some_and(|&ni| !memo_reuse::is_in_clean_spans(skip, ni))
         });
         if !any_active_unseen { return Vec::new(); }
-        let before: HashSet<NodeId> = self.nodes.iter().zip(&seen).filter(|(_, s)| !**s).map(|(n, _)| n.id).collect();
-        if before.is_empty() { return Vec::new(); }
-        let old_drawn: HashMap<NodeId, [f32; 4]> = self
-            .nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, old)| old.target[2] > old.target[0] || old.target[3] > old.target[1])
-            .map(|(old_i, old)| (old.id, self.drawn_edges(old_i)))
-            .collect();
+        // Each new node's place in the last build, found walking both trees in step.
+        let mut last = paint_tracks::LastBuild::default();
+        let olds: Vec<Option<usize>> = nodes.iter().map(|n| last.find(&self.nodes, n.id)).collect();
         // Room for shadows and blur, which draw past a node's rect.
         const MARGIN: f32 = 32.0;
         let window = [0.0, 0.0, self.viewport.0, self.viewport.1];
@@ -127,8 +121,9 @@ impl<S: 'static> Runtime<S> {
             };
             let t = n.target;
             let r = [t[0] - shift_max[0], t[1] - shift_max[1], t[2] - shift_min[0], t[3] - shift_min[1]];
-            let swept = match old_drawn.get(&n.id) {
-                Some(&b) => [b[0].min(r[0]), b[1].min(r[1]), b[2].max(r[2]), b[3].max(r[3])],
+            let drew = olds[i].filter(|&o| { let t = self.nodes[o].target; t[2] > t[0] || t[3] > t[1] });
+            let swept = match drew.map(|o| self.drawn_edges(o)) {
+                Some(b) => [b[0].min(r[0]), b[1].min(r[1]), b[2].max(r[2]), b[3].max(r[3])],
                 None => r,
             };
             after[i] |= swept[2] >= clip[0] - MARGIN && swept[0] <= clip[2] + MARGIN
@@ -157,11 +152,10 @@ impl<S: 'static> Runtime<S> {
         mark_ancestors(nodes, &mut after);
         // A node new under one nobody saw before or after (a ticking digit in a row scrolled out
         // of view) enters where nothing shows, so it lands at once too.
-        let old: HashSet<NodeId> = self.nodes.iter().map(|n| n.id).collect();
         let mut unseen = vec![false; nodes.len()];
         for (i, n) in nodes.iter().enumerate() {
-            let new_under_unseen = !old.contains(&n.id) && n.parent.is_some_and(|p| p < i && unseen[p]);
-            unseen[i] = !after[i] && (before.contains(&n.id) || new_under_unseen);
+            let new_under_unseen = olds[i].is_none() && n.parent.is_some_and(|p| p < i && unseen[p]);
+            unseen[i] = !after[i] && (olds[i].is_some_and(|o| !seen[o]) || new_under_unseen);
         }
         unseen
     }

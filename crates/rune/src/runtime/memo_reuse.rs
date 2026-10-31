@@ -452,7 +452,7 @@ pub(super) fn inherited_for(
     let instant_changes = parent.is_some_and(|p| nodes[p].instant_changes);
     let inert = parent.is_some_and(|p| nodes[p].inert);
     let trace_namespace = parent.and_then(|p| nodes[p].trace_namespace);
-    let hover_within = parent.and_then(|p| nodes[p].vis.hover_within.clone());
+    let hover_within = parent.and_then(|p| nodes[p].hover_within.clone());
     (
         InheritedFlatten {
             motion,
@@ -510,7 +510,8 @@ pub(super) fn try_reuse_memo(
         return None;
     }
     let (inherited, hover_within) = inherited_for(parent, nodes, motion, in_row, scale);
-    if flat.inherited != inherited || !opt_rc_eq(&flat.hover_within, &hover_within) {
+    // By value: a view that sets `hover_motion_within` above the memo builds a new pair each time.
+    if flat.inherited != inherited || flat.hover_within.as_deref() != hover_within.as_deref() {
         return None;
     }
     if el.key != old_slice[0].key || !same_root_el(el, built) {
