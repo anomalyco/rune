@@ -129,7 +129,7 @@ pub(crate) fn acquire_checked(surface: &wgpu::Surface, device: &wgpu::Device, co
     #[cfg(not(target_os = "macos"))]
     let _ = check_occlusion;
     #[cfg(target_os = "macos")]
-    if check_occlusion && crate::macos::surface_occluded(surface) {
+    if check_occlusion && crate::platform::macos::surface_occluded(surface) {
         meter.skipped();
         return Err(Missed::Occluded);
     }

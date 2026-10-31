@@ -6,7 +6,7 @@ impl Client {
     pub(super) fn read_for(&self, purpose: Purpose) {
         // Start the permission-sensitive operation before yielding the input handler.
         let forms = purpose.forms();
-        let promise = crate::web::platform::read_clipboard(forms != Forms::Text, forms == Forms::All, MAX_IMAGE_BYTES as u32);
+        let promise = crate::platform::web::platform::read_clipboard(forms != Forms::Text, forms == Forms::All, MAX_IMAGE_BYTES as u32);
         let (sender, wake) = (self.sender.clone(), self.wake.clone());
         wasm_bindgen_futures::spawn_local(async move {
             let content = match wasm_bindgen_futures::JsFuture::from(promise).await {
@@ -58,7 +58,7 @@ impl Client {
                 // The browser's Clipboard API takes plain text, HTML and PNG; RTF and files stay behind.
                 let content = copy.content();
                 let png = content.image().map_or(&[][..], ClipboardImage::png);
-                let promise = crate::web::platform::write_clipboard(content.text(), content.html().unwrap_or(""), png);
+                let promise = crate::platform::web::platform::write_clipboard(content.text(), content.html().unwrap_or(""), png);
                 wasm_bindgen_futures::spawn_local(async move {
                     if wasm_bindgen_futures::JsFuture::from(promise).await.is_err() {
                         web_sys::console::warn_1(&"Clipboard write denied by the browser.".into());

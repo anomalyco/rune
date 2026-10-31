@@ -23,7 +23,7 @@ impl FnKey {
     /// Watch Fn in the window showing winit's content view, which is the panel once one
     /// adopts it.
     pub(crate) fn new(window: &winit::window::Window) -> Option<Self> {
-        let view: Retained<NSView> = crate::macos::content_view(window)?;
+        let view: Retained<NSView> = crate::platform::macos::content_view(window)?;
         let changes = Rc::new(RefCell::new(Vec::new()));
         let seen = changes.clone();
         let handler = block2::RcBlock::new(move |event: *mut NSEvent| -> *mut NSEvent {

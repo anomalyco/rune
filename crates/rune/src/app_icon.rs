@@ -23,7 +23,7 @@ pub fn set_app_icon(bytes: impl Into<Vec<u8>>) -> Result<(), String> {
         let bytes = bytes.into();
         if decode(&bytes).is_none() { return Err("set_app_icon: the bytes aren't an image AppKit reads".into()); }
         *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = Some(bytes);
-        if LAUNCHED.load(Ordering::Acquire) { crate::main_queue::on_main(apply); }
+        if LAUNCHED.load(Ordering::Acquire) { crate::platform::main_queue::on_main(apply); }
     }
     #[cfg(not(target_os = "macos"))]
     let _ = bytes;
@@ -35,7 +35,7 @@ pub fn set_app_icon(bytes: impl Into<Vec<u8>>) -> Result<(), String> {
 #[cfg(target_os = "macos")]
 pub(crate) fn launched() {
     LAUNCHED.store(true, Ordering::Release);
-    crate::main_queue::on_main(apply);
+    crate::platform::main_queue::on_main(apply);
 }
 
 #[cfg(target_os = "macos")]

@@ -137,7 +137,7 @@ mod mac {
         let Some(mtm) = MainThreadMarker::new() else { return };
         #[allow(deprecated)]
         NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
-        if let Some(window) = crate::macos::ns_window(window) { window.makeKeyAndOrderFront(None); }
+        if let Some(window) = crate::platform::macos::ns_window(window) { window.makeKeyAndOrderFront(None); }
     }
 }
 

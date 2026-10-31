@@ -6,13 +6,9 @@
 #[cfg(all(target_arch = "wasm32", any(feature = "hot", feature = "native-file-dialog")))]
 compile_error!("web does not support Rune's hot or native-file-dialog features; disable them for wasm32");
 
-#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-mod activation;
 mod app;
 mod app_icon;
 pub mod time;
-#[cfg(target_arch = "wasm32")]
-pub mod web;
 /// The logical clock a scene fn (`AppSpec::scenes`) builds its state against. `--scene` starts
 /// at time zero.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -45,7 +41,7 @@ pub(crate) fn with_scene_clock<T>(clock: SceneClock, f: impl FnOnce() -> T) -> T
 /// compositor's answer; None off Wayland, before any press, or without `xdg_activation_v1`.
 pub fn press_activation_token(app_id: Option<&str>) -> Option<String> {
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-    return activation::press_token(app_id);
+    return platform::activation::press_token(app_id);
     #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
     {
         let _ = app_id;
@@ -67,20 +63,8 @@ mod native_menu;
 pub use native_menu::{MenuError, MenuItem};
 mod popup_menu;
 pub use popup_menu::{PopupAnchor, PopupItem, PopupMenu, PopupMenuError, popup_menu_supported};
-#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-mod layer_shell;
-#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-mod x11;
 mod overlay;
 mod cursor;
-#[cfg(target_os = "windows")]
-mod win32;
-#[cfg(target_os = "macos")]
-mod macos;
-#[cfg(target_os = "macos")]
-mod display_link;
-#[cfg(target_os = "macos")]
-mod main_queue;
 mod cold;
 pub mod color;
 pub mod compose;
@@ -91,6 +75,9 @@ mod element_info;
 pub mod embed;
 #[cfg(test)]
 mod test_alloc;
+mod platform;
+#[cfg(target_arch = "wasm32")]
+pub use platform::web;
 pub mod growth;
 mod latest;
 pub mod live;
@@ -142,8 +129,6 @@ mod frame;
 pub use input::time::last_input;
 pub mod clipboard;
 mod preferences;
-#[cfg(all(target_os = "linux", feature = "dbus"))]
-mod portal_appearance;
 mod accent;
 pub use accent::{SystemAccent, system_accent};
 pub use app_icon::set_app_icon;
@@ -153,7 +138,7 @@ pub use drag_out::{DragImage, DragItem, DragOperation, DragOutcome};
 pub mod windows;
 #[cfg(target_os = "macos")]
 #[doc(hidden)]
-pub use macos::{appearance as macos_appearance, panel_bridge as macos_panel_bridge};
+pub use platform::macos::{appearance as macos_appearance, panel_bridge as macos_panel_bridge};
 pub use window::WindowHandle;
 pub use windows::{AnyWindowSpec, ConfiguredWindowOptions, Display, MacWindowOptions, RunOptions, WindowOptions, WindowSpec};
 pub use winit::raw_window_handle;

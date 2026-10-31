@@ -44,7 +44,7 @@ declare_class!(
 /// `None`.
 pub(super) fn show(window: &Arc<Window>, show: Show, session: Rc<Session>, wake: Option<Waker>) -> bool {
     let Some(mtm) = MainThreadMarker::new() else { return false };
-    let Some(view) = crate::macos::content_view(window) else { return false };
+    let Some(view) = crate::platform::macos::content_view(window) else { return false };
     let mut ids = Vec::new();
     collect_ids(&show.menu, &mut ids);
     // SAFETY: NSObject initialization follows set_ivars, on the main thread.

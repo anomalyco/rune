@@ -69,7 +69,7 @@ impl Item {
 
 /// The content view of `window` takes drags of files, file promises and image data.
 pub(crate) fn install(window: &winit::window::Window) {
-    let Some(view) = crate::macos::content_view(window) else { return };
+    let Some(view) = crate::platform::macos::content_view(window) else { return };
     // SAFETY: main thread (windows are created there), on winit's live content view.
     unsafe {
         let base = view.class();
@@ -95,7 +95,7 @@ pub(crate) fn install(window: &winit::window::Window) {
 
 /// The steps of drags over `window` since the last call.
 pub(crate) fn take(window: &winit::window::Window) -> Vec<Step> {
-    let Some(view) = crate::macos::content_view(window) else { return Vec::new() };
+    let Some(view) = crate::platform::macos::content_view(window) else { return Vec::new() };
     let key = Retained::as_ptr(&view) as usize;
     DESTS.with(|d| d.borrow_mut().get_mut(&key).map(|d| std::mem::take(&mut d.steps)).unwrap_or_default())
 }

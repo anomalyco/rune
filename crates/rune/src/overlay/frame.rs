@@ -49,7 +49,7 @@ pub(super) fn rest<T: 'static>(rt: &mut Runtime<T>, clock: &mut FrameClock, comp
 /// opportunity is claimed before `settle` waits for the frame still on the present thread, so
 /// a turn that draws nothing (the loop's second look after a tick drew) never blocks on it.
 #[cfg(target_os = "macos")]
-pub(super) fn claim(opportunity: Option<crate::display_link::Opportunity>, settle: impl FnOnce()) -> Option<Option<Instant>> {
+pub(super) fn claim(opportunity: Option<crate::platform::display_link::Opportunity>, settle: impl FnOnce()) -> Option<Option<Instant>> {
     let target = match opportunity { Some(opportunity) => opportunity.target()?, None => None };
     settle();
     Some(target)

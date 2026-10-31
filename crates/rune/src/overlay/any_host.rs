@@ -168,7 +168,7 @@ impl<T: 'static> AnyHost for Overlay<T> {
         #[cfg(target_os = "windows")]
         if self.live.is_some() && let Some(point) = self.native.as_ref().and_then(|p| p.take_pointer()) && self.rt.pointer() != Some(point) {
             self.observe_pointer(point.0, point.1);
-            if let Some(point) = crate::win32::pointer_position() { self.follow_pointer(_event_loop, point); }
+            if let Some(point) = crate::platform::win32::pointer_position() { self.follow_pointer(_event_loop, point); }
         }
         // Covering or sleeping displays can come without an event the overlay sees.
         #[cfg(target_os = "macos")]

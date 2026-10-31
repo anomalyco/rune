@@ -55,7 +55,7 @@ pub(super) fn land(url: &str, fetched: Fetched, px: u32) -> Result<Decoded, Imag
 #[cfg(target_arch = "wasm32")]
 pub(super) async fn fetch(url: &str, px: u32) -> Result<Decoded, ImageError> {
     use wasm_bindgen::JsCast;
-    let reply = wasm_bindgen_futures::JsFuture::from(crate::web::platform::fetch_image(url, MAX_SIDE)).await.map_err(|e| {
+    let reply = wasm_bindgen_futures::JsFuture::from(crate::platform::web::platform::fetch_image(url, MAX_SIDE)).await.map_err(|e| {
         let why = e.dyn_ref::<js_sys::Error>().map_or_else(|| format!("{e:?}"), |e| String::from(e.message()));
         ImageError(format!("{url}: {why}"))
     })?;

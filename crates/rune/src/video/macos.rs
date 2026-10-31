@@ -1,7 +1,7 @@
 //! AVFoundation: AVPlayer + AVPlayerItemVideoOutput for windows, AVAssetImageGenerator for
 //! posters and headless frames, and a bare AVPlayer for audio.
 use super::*;
-use crate::main_queue::on_main;
+use crate::platform::main_queue::on_main;
 use crate::native_surface::Orient;
 use crate::native_surface::macos::PixelBuffer;
 use objc2_av_foundation::{

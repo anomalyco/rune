@@ -31,7 +31,7 @@ impl DropPointer {
     pub(crate) fn sample(&self, window: &Window) -> Option<(f32, f32)> {
         #[cfg(target_os = "macos")]
         {
-            let view = crate::macos::content_view(window)?;
+            let view = crate::platform::macos::content_view(window)?;
             let ns = view.window()?;
             // SAFETY: hosts run on AppKit's main thread.
             let p = view.convertPoint_fromView(unsafe { ns.mouseLocationOutsideOfEventStream() }, None);
@@ -40,7 +40,7 @@ impl DropPointer {
         }
         #[cfg(target_os = "windows")]
         {
-            let (x, y) = crate::win32::pointer_position()?;
+            let (x, y) = crate::platform::win32::pointer_position()?;
             return screen_to_window(window, (x, y));
         }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]

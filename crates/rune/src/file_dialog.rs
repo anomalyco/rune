@@ -275,7 +275,7 @@ impl Presenter {
         let Some((id, kind, options)) = rt.take_file_dialog() else { return false };
         #[cfg(all(feature = "native-file-dialog", target_os = "macos"))]
         {
-            self.sheet_parent = crate::macos::ns_window(window);
+            self.sheet_parent = crate::platform::macos::ns_window(window);
         }
         self.showing = Some((id, show_over(kind, options, window)));
         self.answer(rt)

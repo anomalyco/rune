@@ -6,7 +6,7 @@ use objc2::{msg_send, sel, ClassType};
 use objc2_app_kit::{NSEvent, NSPanel, NSWindowButton, NSWindowStyleMask};
 use objc2_foundation::{NSString, NSUserDefaults};
 use winit::window::Window;
-use crate::macos::{content_view, ns_window};
+use crate::platform::macos::{content_view, ns_window};
 
 #[cfg(test)]
 #[path = "mac_tests.rs"]

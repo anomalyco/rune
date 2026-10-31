@@ -31,7 +31,7 @@ struct Source { view: usize, panel: usize, ordinary: bool }
 
 thread_local! {
     static WINDOWS: RefCell<HashMap<usize, Source>> = RefCell::default();
-    static VIEWS: RefCell<HashMap<usize, Rc<crate::macos::PointerState>>> = RefCell::default();
+    static VIEWS: RefCell<HashMap<usize, Rc<crate::platform::macos::PointerState>>> = RefCell::default();
     /// Panels `reattach` has returned a view to, until their owner notices.
     static LOST: RefCell<HashSet<usize>> = RefCell::default();
 }
@@ -260,13 +260,13 @@ fn window_forwards() -> [(Sel, *const c_void); 15] {
 pub(crate) struct Bridge { source: usize, view: Option<usize> }
 impl Bridge {
     /// Main-thread only. The owner retains all three objects until after this bridge drops.
-    pub fn new(source: &NSWindow, panel: &NSPanel, view: &NSView, filter: Option<Rc<crate::macos::PointerState>>) -> Option<Self> {
+    pub fn new(source: &NSWindow, panel: &NSPanel, view: &NSView, filter: Option<Rc<crate::platform::macos::PointerState>>) -> Option<Self> {
         Self::new_kind(source, panel, view, filter, false)
     }
     pub fn new_window(source: &NSWindow, panel: &NSPanel, view: &NSView) -> Option<Self> {
         Self::new_kind(source, panel, view, None, true)
     }
-    fn new_kind(source: &NSWindow, panel: &NSPanel, view: &NSView, filter: Option<Rc<crate::macos::PointerState>>, ordinary: bool) -> Option<Self> {
+    fn new_kind(source: &NSWindow, panel: &NSPanel, view: &NSView, filter: Option<Rc<crate::platform::macos::PointerState>>, ordinary: bool) -> Option<Self> {
         use objc2::ClassType;
         // `-class` is the class winit declared, below any KVO subclass.
         let class: &AnyClass = unsafe { msg_send![source, class] };

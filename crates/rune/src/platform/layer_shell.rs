@@ -502,7 +502,7 @@ impl LayerSurface {
         if let Some(serial) = self.state.press.take()
             && let (Some(global), Some(seat)) = (self.activation, &self.seat)
         {
-            crate::activation::pressed(crate::activation::Press {
+            crate::platform::activation::pressed(crate::platform::activation::Press {
                 conn: self.conn.clone(),
                 registry: self.registry.clone(),
                 global,
@@ -532,7 +532,7 @@ impl Drop for LayerSurface {
         if let Some(keyboard) = self.state.keyboard.take() && keyboard.version() >= 3 { keyboard.release(); }
         if let Some(seat) = self.seat.take() && seat.version() >= 5 { seat.release(); }
         if let Some(output) = self.output.take() && output.version() >= 3 { output.release(); }
-        crate::activation::forget(&self.surface);
+        crate::platform::activation::forget(&self.surface);
         self.layer.destroy();
         self.surface.destroy();
         let _ = self.queue.flush();

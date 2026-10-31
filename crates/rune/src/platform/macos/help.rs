@@ -53,7 +53,7 @@ impl NativeHelp {
         let have: Vec<([f32; 4], &str)> = self.regions.iter().map(|g| (g.rect, g.text.as_str())).collect();
         let (stays, covered) = diff(&have, &want);
         if stays.iter().all(|&s| s) && covered.iter().all(|&c| c) { return; }
-        let Some(view) = crate::macos::content_view(window) else { return };
+        let Some(view) = crate::platform::macos::content_view(window) else { return };
         let (kept, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut self.regions).into_iter().zip(stays).partition(|(_, s)| *s);
         for (g, _) in gone {
             // SAFETY: an AppKit call on the main thread, before `g` drops the owner its tag names.

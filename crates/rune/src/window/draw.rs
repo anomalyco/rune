@@ -91,7 +91,7 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         let shown = if !hidden && l.native.prime > 0 {
             l.native.prime -= 1;
-            let Some(shown) = crate::macos::PresumeShown::new(&l.surface) else {
+            let Some(shown) = crate::platform::macos::PresumeShown::new(&l.surface) else {
                 self.meter.skipped();
                 self.missed_frame(Missed::Occluded, false);
                 return;
@@ -107,7 +107,7 @@ impl<S: 'static> Host<S> {
         let target: Option<Instant> = None;
         if !hidden { self.meter.redraw(l.paced_for_stats()); }
         #[cfg(target_os = "macos")]
-        let live_resize = !hidden && (resizing || crate::macos::in_live_resize(&l.window));
+        let live_resize = !hidden && (resizing || crate::platform::macos::in_live_resize(&l.window));
         #[cfg(not(target_os = "macos"))]
         let live_resize = resizing;
         // The frame moves before the drawable is acquired, so it has the new size; never while
@@ -157,7 +157,7 @@ impl<S: 'static> Host<S> {
             self.rt.set_live_visible(true);
             self.rt.settle_all();
             #[cfg(target_os = "macos")]
-            if l.native.pacing.is_none() { l.native.pacing = crate::display_link::DisplayLink::new(&l.window, self.frame_wake.clone()); }
+            if l.native.pacing.is_none() { l.native.pacing = crate::platform::display_link::DisplayLink::new(&l.window, self.frame_wake.clone()); }
         }
         #[cfg(target_os = "macos")]
         let mut drawable = l.native.present.as_ref().and(self.present_log.as_ref()).and_then(|log| log.acquired());
@@ -277,7 +277,7 @@ impl<S: 'static> Host<S> {
         if let Some(pacing) = &mut l.native.pacing { pacing.presented(submitted); }
         // A display link that couldn't be made while the displays slept: they're back.
         #[cfg(target_os = "macos")]
-        if !hidden && l.native.pacing.is_none() { l.native.pacing = crate::display_link::DisplayLink::retry(&l.window, self.frame_wake.clone()); }
+        if !hidden && l.native.pacing.is_none() { l.native.pacing = crate::platform::display_link::DisplayLink::retry(&l.window, self.frame_wake.clone()); }
         self.frame_reports.drawn(encoded, presents_at, now, update_ms);
         self.frame_reports.inspect(rt);
         if let Some(trace) = self.trace.as_mut() {

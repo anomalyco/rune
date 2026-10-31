@@ -113,7 +113,7 @@ impl<S> Cx<S> {
     /// Apply these inside a full-canvas root so backgrounds can extend to the screen edges.
     pub fn safe_area(&self) -> [f32; 4] {
         #[cfg(target_arch = "wasm32")]
-        { crate::web::safe_area() }
+        { crate::platform::web::safe_area() }
         #[cfg(not(target_arch = "wasm32"))]
         { [0.0; 4] }
     }

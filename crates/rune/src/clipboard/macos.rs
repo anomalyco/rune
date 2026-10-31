@@ -83,7 +83,7 @@ pub(super) fn read(pb: &NSPasteboard, all: bool) -> Option<ClipboardContent> {
 /// The path of each pasteboard item's file URL, in order.
 fn read_files(pb: &NSPasteboard) -> Vec<PathBuf> {
     let Some(items) = (unsafe { pb.pasteboardItems() }) else { return Vec::new() };
-    items.iter().filter_map(|item| unsafe { item.stringForType(NSPasteboardTypeFileURL) }.and_then(|url| crate::macos::drop::file_path(&url))).collect()
+    items.iter().filter_map(|item| unsafe { item.stringForType(NSPasteboardTypeFileURL) }.and_then(|url| crate::platform::macos::drop::file_path(&url))).collect()
 }
 
 /// TIFF for PNG bytes, through `NSBitmapImageRep`.

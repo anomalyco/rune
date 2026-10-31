@@ -16,7 +16,7 @@ use objc2_app_kit::{NSView, NSWindow, NSWindowButton, NSWindowStyleMask};
 use objc2_foundation::NSPoint;
 use winit::window::Window;
 
-use crate::macos::ns_window;
+use crate::platform::macos::ns_window;
 
 thread_local! {
     /// Each window's spot, by its `NSWindow` pointer, for the layout hook.

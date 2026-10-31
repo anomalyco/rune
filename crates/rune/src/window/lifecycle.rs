@@ -111,7 +111,7 @@ impl<S: 'static> Host<S> {
         }
         #[cfg(target_os = "macos")]
         if let Some(visible) = requests.dock {
-            crate::macos::set_dock_icon(visible);
+            crate::platform::macos::set_dock_icon(visible);
         }
         let shows = matches!(requests.window, Some(WindowRequest::Show | WindowRequest::Open(_)));
         let polled = wake && !quiet && self.poll_hidden(event_loop, shows);
@@ -349,7 +349,7 @@ impl<S: 'static> Host<S> {
             match token {
                 Some(token) => {
                     if w.native.activator.is_none() {
-                        w.native.activator = crate::activation::Activator::new(&w.window);
+                        w.native.activator = crate::platform::activation::Activator::new(&w.window);
                     }
                     if let Some(a) = w.native.activator.as_mut() {
                         a.activate(&token);

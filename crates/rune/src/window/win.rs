@@ -206,7 +206,7 @@ impl Win {
                 if focus { panel.request_keys(); }
                 return;
             }
-            if !focus { crate::macos::show_without_focus(&self.window); return; }
+            if !focus { crate::platform::macos::show_without_focus(&self.window); return; }
         }
         self.window.set_visible(true);
         if focus { self.window.focus_window(); }
@@ -258,7 +258,7 @@ impl Win {
     /// What paces the window's frames, for its stats.
     pub(super) fn pacing_state(&self, moving: bool) -> Pacing {
         #[cfg(target_os = "macos")]
-        return crate::display_link::pacing(self.native.pacing.as_ref(), moving);
+        return crate::platform::display_link::pacing(self.native.pacing.as_ref(), moving);
         #[cfg(not(target_os = "macos"))]
         if moving { Pacing::Vsync } else { Pacing::Idle }
     }
@@ -276,7 +276,7 @@ impl Win {
     pub(super) fn natively_occluded(&self) -> bool {
         match &self.native.panel {
             Some(panel) => panel.occluded(),
-            None => crate::macos::window_occluded(&self.window),
+            None => crate::platform::macos::window_occluded(&self.window),
         }
     }
 

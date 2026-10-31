@@ -33,7 +33,7 @@ impl<T: 'static> Overlay<T> {
                 return false;
             }
             for input in changes.input {
-                use crate::layer_shell::Input;
+                use crate::platform::layer_shell::Input;
                 match input {
                     Input::Move(x, y) => { self.dirty |= self.rt.observe_pointer(x, y); continue; }
                     Input::Leave => self.rt.pointer_leave(),
@@ -235,9 +235,9 @@ impl<T: 'static> Overlay<T> {
             // A display link that couldn't be made while the displays slept: they're back.
             if !prewarm && live.pacing.is_none() && let Some(wake) = &self.frame_wake {
                 let Backing::Window(window) = &live.backing;
-                live.pacing = crate::display_link::DisplayLink::retry(window, wake.clone());
+                live.pacing = crate::platform::display_link::DisplayLink::retry(window, wake.clone());
             }
-            if !prewarm { self.meter.set_pacing(crate::display_link::pacing(live.pacing.as_ref(), !idle)); }
+            if !prewarm { self.meter.set_pacing(crate::platform::display_link::pacing(live.pacing.as_ref(), !idle)); }
             false
         }
         #[cfg(not(target_os = "macos"))]
@@ -290,7 +290,7 @@ impl<T: 'static> Overlay<T> {
         let Backing::Window(window) = &live.backing;
         match &mut live.pacing {
             Some(pacing) => pacing.update_display(window),
-            None => live.pacing = crate::display_link::DisplayLink::new(window, wake.clone()),
+            None => live.pacing = crate::platform::display_link::DisplayLink::new(window, wake.clone()),
         }
     }
 

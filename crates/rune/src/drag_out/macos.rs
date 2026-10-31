@@ -127,7 +127,7 @@ pub(super) fn begin(window: &winit::window::Window, start: DragOutStart, picture
     let previous = LIVE.with(|live| live.take());
     drop(previous);
     let Some(mtm) = MainThreadMarker::new() else { return done(DragOutcome::Cancelled) };
-    let Some(view) = crate::macos::content_view(window) else { return done(DragOutcome::Cancelled) };
+    let Some(view) = crate::platform::macos::content_view(window) else { return done(DragOutcome::Cancelled) };
     let Some(event) = drag_event(mtm, &view) else { return done(DragOutcome::Cancelled) };
     // SAFETY: AppKit calls on the main thread with live objects; the source outlives the
     // session through LIVE.

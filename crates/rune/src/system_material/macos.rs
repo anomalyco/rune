@@ -92,7 +92,7 @@ impl Materials {
     /// A window frame animation started or stopped: it presents with transactions while it
     /// moves, and native materials keep them on after it lands.
     pub(crate) fn set_moving(&mut self, surface: &wgpu::Surface<'_>, on: bool) {
-        if let Some(on) = self.update_flag(|f| f.moving(on)) { crate::macos::present_with_transaction(surface, on); }
+        if let Some(on) = self.update_flag(|f| f.moving(on)) { crate::platform::macos::present_with_transaction(surface, on); }
     }
 
     /// The user started or stopped dragging the window's edge: each frame of the drag presents
@@ -100,12 +100,12 @@ impl Materials {
     /// turns it off as soon as they let go even if the window is idle afterwards.
     pub(crate) fn set_live(&mut self, window: &winit::window::Window, surface: &wgpu::Surface<'_>, on: bool) {
         if on && self.live_end.is_none()
-            && let (Some(win), Some(metal)) = (crate::macos::ns_window(window), metal_layer(surface))
+            && let (Some(win), Some(metal)) = (crate::platform::macos::ns_window(window), metal_layer(surface))
         {
             let win = unsafe { &*objc2::rc::Retained::as_ptr(&win).cast::<AnyObject>() };
             self.live_end = watch_live_end(win, &metal, self.flag.clone());
         }
-        if let Some(on) = self.update_flag(|f| f.live(on)) { crate::macos::present_with_transaction(surface, on); }
+        if let Some(on) = self.update_flag(|f| f.live(on)) { crate::platform::macos::present_with_transaction(surface, on); }
     }
 
     /// After a build: switches native views on when a transparent window's frame found material
@@ -116,16 +116,16 @@ impl Materials {
         if self.active && !found {
             // `present` hides the views in this frame's transaction; they stay for the next activation.
             self.active = false;
-            if let Some(on) = self.update_flag(|f| f.materials(false)) { crate::macos::present_with_transaction(surface, on); }
+            if let Some(on) = self.update_flag(|f| f.materials(false)) { crate::platform::macos::present_with_transaction(surface, on); }
             return false;
         }
         if self.active || !found || !transparent || self.mode == Mode::Off { return false; }
-        let Some(view) = crate::macos::content_view(window) else { return false };
+        let Some(view) = crate::platform::macos::content_view(window) else { return false };
         // SAFETY: winit's content view outlives this retain, which only adds a reference.
         let Some(view) = (unsafe { Retained::retain(objc2::rc::Retained::as_ptr(&view).cast::<AnyObject>().cast_mut()) }) else { return false };
         let Some(metal) = metal_layer(surface) else { return false };
         if self.mode != Mode::Unsynced && let Some(on) = self.update_flag(|f| f.materials(true)) {
-            crate::macos::present_with_transaction(surface, on);
+            crate::platform::macos::present_with_transaction(surface, on);
         }
         self.view = Some(view);
         self.metal = Some(metal);

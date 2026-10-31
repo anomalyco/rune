@@ -147,7 +147,7 @@ impl<S: 'static> Runtime<S> {
         for link in links {
             if self.open_urls_natively {
                 #[cfg(target_arch = "wasm32")]
-                let opened = if link.same_tab { crate::web::open_url_same_tab(&link.url).map_err(OpenUrlError::Failed) } else { open(&link.url) };
+                let opened = if link.same_tab { crate::platform::web::open_url_same_tab(&link.url).map_err(OpenUrlError::Failed) } else { open(&link.url) };
                 #[cfg(not(target_arch = "wasm32"))]
                 let opened = open(&link.url);
                 if let Err(e) = opened { eprintln!("rune: open_url({}): {e}", link.url); }
@@ -159,7 +159,7 @@ impl<S: 'static> Runtime<S> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn open(url: &str) -> Result<(), OpenUrlError> { crate::web::open_url(url).map_err(OpenUrlError::Failed) }
+fn open(url: &str) -> Result<(), OpenUrlError> { crate::platform::web::open_url(url).map_err(OpenUrlError::Failed) }
 
 #[cfg(target_os = "macos")]
 fn open(url: &str) -> Result<(), OpenUrlError> {

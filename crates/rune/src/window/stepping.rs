@@ -76,7 +76,7 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         {
             let _ = request.pointer;
-            crate::macos::place_window(&w.window, self.rt.viewport, request);
+            crate::platform::macos::place_window(&w.window, self.rt.viewport, request);
         }
         #[cfg(not(target_os = "macos"))]
         if let Some(monitor) = crate::overlay::monitor_at(event_loop, &request.display, request.pointer) {
@@ -114,10 +114,10 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         {
             use crate::window::frame::{FrameAnim, snap, target};
-            let Some((frame, visible, scale)) = crate::macos::window_geometry(&w.window) else { return };
+            let Some((frame, visible, scale)) = crate::platform::macos::window_geometry(&w.window) else { return };
             // Resizing again mid-flight keeps the edge the first resize keeps.
             let base = self.frame_anim.map_or(frame, |a| a.to);
-            let outer = request.size.and_then(|size| crate::macos::outer_size(&w.window, size));
+            let outer = request.size.and_then(|size| crate::platform::macos::outer_size(&w.window, size));
             let to = snap(target(base, outer, request.center, visible), scale);
             // Centring alone carries on with a resize already moving.
             let spring = request.spring.or(self.frame_anim.and_then(|a| a.spring).filter(|_| request.size.is_none()));
@@ -126,7 +126,7 @@ impl<S: 'static> Host<S> {
                 self.frame_origin = Some([frame[0], frame[1]]);
             } else {
                 self.frame_anim = None;
-                crate::macos::set_window_frame(&w.window, to);
+                crate::platform::macos::set_window_frame(&w.window, to);
                 self.sync_origin();
             }
         }
@@ -177,14 +177,14 @@ impl<S: 'static> Host<S> {
             w.present_with_transaction(moving);
             if resting { return; }
             let Some(anim) = self.frame_anim.as_mut() else { return };
-            let Some((frame, _, scale)) = crate::macos::window_geometry(&w.window) else { return };
+            let Some((frame, _, scale)) = crate::platform::macos::window_geometry(&w.window) else { return };
             // Someone dragged the window mid-flight: the drag wins. The window stays where they
             // put it and the size carries on from there.
             if let Some([x, y]) = self.frame_origin && ((frame[0] - x).abs() > 0.5 || (frame[1] - y).abs() > 0.5) {
                 anim.shift(frame[0] - x, frame[1] - y);
             }
             let rect = snap(anim.sample(now).0, scale);
-            crate::macos::set_window_frame(&w.window, rect);
+            crate::platform::macos::set_window_frame(&w.window, rect);
             self.frame_origin = Some([rect[0], rect[1]]);
             if anim.done(now) { self.frame_anim = None; }
             self.rt.set_titlebar_inset(place_chrome(&w.window, self.chrome));
@@ -206,7 +206,7 @@ impl<S: 'static> Host<S> {
         if let Some(w) = &mut self.win {
             w.present_with_transaction(false);
             w.set_live_resize(false);
-            if let Some(anim) = anim { crate::macos::set_window_frame(&w.window, anim.to); }
+            if let Some(anim) = anim { crate::platform::macos::set_window_frame(&w.window, anim.to); }
         }
         #[cfg(target_os = "macos")]
         self.sync_origin();

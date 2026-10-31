@@ -479,7 +479,7 @@ impl<S: 'static> App<S> {
         if let Some(argv) = self.argv.take() {
             let _ = Args::parse_from(argv);
         }
-        crate::web::run(self)
+        crate::platform::web::run(self)
     }
 
     #[cfg(not(target_arch = "wasm32"))]

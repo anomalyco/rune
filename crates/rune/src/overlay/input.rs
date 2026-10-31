@@ -290,7 +290,7 @@ impl<T: 'static> Overlay<T> {
     /// What paces the overlay's frames, for its stats.
     fn pacing_state(&self, moving: bool) -> crate::Pacing {
         #[cfg(target_os = "macos")]
-        return crate::display_link::pacing(self.live.as_ref().and_then(|l| l.pacing.as_ref()), moving);
+        return crate::platform::display_link::pacing(self.live.as_ref().and_then(|l| l.pacing.as_ref()), moving);
         #[cfg(not(target_os = "macos"))]
         if moving { crate::Pacing::Vsync } else { crate::Pacing::Idle }
     }

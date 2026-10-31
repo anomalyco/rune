@@ -42,7 +42,7 @@ fn an_occluded_surface_never_asks_wgpu_and_draws_once_visible() {
     surface.configure(&gpu.device, &config);
 
     OCCLUSION.store(0, Ordering::Relaxed);
-    assert!(unsafe { crate::macos::layer_occluded(&layer) });
+    assert!(unsafe { crate::platform::macos::layer_occluded(&layer) });
     let mut meter = SurfaceMeter::new("occluded", Arc::default());
     let start = Instant::now();
     let (mut at, mut wait, mut checks) = (start, OCCLUDED_RETRY, 0u64);
@@ -108,8 +108,8 @@ fn a_presumed_shown_surface_gets_its_first_drawable_while_reported_covered() {
     let mut meter = SurfaceMeter::new("first", Arc::default());
     assert!(acquire(&surface, &gpu.device, &config, 1, &mut meter).is_err(), "a covered window gets no drawable");
 
-    let shown = crate::macos::PresumeShown::new(&surface).expect("a Metal surface");
-    assert!(!crate::macos::surface_occluded(&surface));
+    let shown = crate::platform::macos::PresumeShown::new(&surface).expect("a Metal surface");
+    assert!(!crate::platform::macos::surface_occluded(&surface));
     let stand_in: *const AnyObject = unsafe { msg_send![&*layer, delegate] };
     let null: *const AnyObject = unsafe { msg_send![AnyClass::get(c"NSNull").expect("Foundation"), null] };
     let action: *const AnyObject = unsafe { msg_send![stand_in, actionForLayer: &*layer, forKey: std::ptr::null::<AnyObject>()] };
@@ -120,6 +120,6 @@ fn a_presumed_shown_surface_gets_its_first_drawable_while_reported_covered() {
 
     let delegate: *const AnyObject = unsafe { msg_send![&*layer, delegate] };
     assert!(std::ptr::eq(delegate, Retained::as_ptr(&view).cast()), "the layer's delegate is back");
-    assert!(crate::macos::surface_occluded(&surface));
+    assert!(crate::platform::macos::surface_occluded(&surface));
     assert_eq!(meter.totals().failed(), 0, "wgpu was never asked while covered");
 }

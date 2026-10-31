@@ -30,7 +30,7 @@ unsafe extern "C" {
 /// transparent and borderless. Runs on each native creation, after wgpu adds its layer.
 pub(crate) fn apply_corners(window: &winit::window::Window, options: &crate::MacWindowOptions, transparent: bool, borderless: bool) {
     let Some(radius) = options.corner_radius.filter(|_| transparent && borderless) else { return };
-    let Some(view) = crate::macos::content_view(window) else { return };
+    let Some(view) = crate::platform::macos::content_view(window) else { return };
     // SAFETY: AppKit and Core Animation calls on the main thread; the layer is the view's own.
     unsafe {
         let layer: *mut AnyObject = msg_send![&*view, layer];
@@ -83,7 +83,7 @@ impl Resample {
 
 /// Whether a window re-samples its shadow: transparent, with the system shadow on.
 pub(crate) fn resamples(window: &winit::window::Window, transparent: bool) -> bool {
-    transparent && crate::macos::ns_window(window).is_some_and(|w| w.hasShadow())
+    transparent && crate::platform::macos::ns_window(window).is_some_and(|w| w.hasShadow())
 }
 
 /// One window's shadow re-sampling, fed by its hooked layer's [`Log`].
@@ -98,7 +98,7 @@ pub(crate) struct Shadow {
 impl Shadow {
     /// `first`: the window is on screen (or prewarming) and its first frame is coming.
     pub(crate) fn new(window: &winit::window::Window, log: Arc<Log>, first: bool) -> Option<Self> {
-        let shadow = Shadow { window: crate::macos::ns_window(window)?, log, state: Cell::default(), last: Cell::new(0) };
+        let shadow = Shadow { window: crate::platform::macos::ns_window(window)?, log, state: Cell::default(), last: Cell::new(0) };
         if first { shadow.update(Resample::redraw); }
         Some(shadow)
     }

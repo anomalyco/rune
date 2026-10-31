@@ -27,7 +27,7 @@ fn native(image: CursorImage) -> Option<Retained<NSObject>> {
 /// winit's cursor back, turning the rects on, for any other cursor. `None` when the image is
 /// set; otherwise the cursor for winit, the arrow for an image that didn't decode.
 pub(crate) fn window_cursor(window: &winit::window::Window, next: Cursor) -> Option<Cursor> {
-    let Some(ns_window) = crate::macos::ns_window(window) else { return Some(next) };
+    let Some(ns_window) = crate::platform::macos::ns_window(window) else { return Some(next) };
     if let Cursor::Image(image) = next && let Some(cursor) = native(image) {
         // SAFETY: NSWindow and NSCursor on the main thread, where winit applies cursors.
         unsafe {
@@ -42,7 +42,7 @@ pub(crate) fn window_cursor(window: &winit::window::Window, next: Cursor) -> Opt
         let enabled: bool = msg_send![&*ns_window, areCursorRectsEnabled];
         if !enabled {
             let _: () = msg_send![&*ns_window, enableCursorRects];
-            if let Some(view) = crate::macos::content_view(window) { let _: () = msg_send![&*ns_window, invalidateCursorRectsForView: &*view]; }
+            if let Some(view) = crate::platform::macos::content_view(window) { let _: () = msg_send![&*ns_window, invalidateCursorRectsForView: &*view]; }
             // The rects come back on AppKit's next pass, and not at all once the pointer has
             // left: the image mustn't stay until then.
             set_ns_cursor(next);

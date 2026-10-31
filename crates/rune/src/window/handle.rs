@@ -123,7 +123,7 @@ impl WindowHandle {
 #[cfg(target_os = "macos")]
 pub(super) fn native_window_number(window: &Window) -> Option<u32> {
     // SAFETY: called on winit's event thread.
-    u32::try_from(unsafe { crate::macos::ns_window(window)?.windowNumber() }).ok().filter(|n| *n != 0)
+    u32::try_from(unsafe { crate::platform::macos::ns_window(window)?.windowNumber() }).ok().filter(|n| *n != 0)
 }
 #[cfg(not(target_os = "macos"))]
 pub(super) fn native_window_number(_: &Window) -> Option<u32> { None }

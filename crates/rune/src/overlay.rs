@@ -256,10 +256,10 @@ pub(crate) trait PendingOverlay: AnyHost {
 enum Backing {
     Window(Arc<Window>),
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-    Layer(crate::layer_shell::LayerSurface),
+    Layer(crate::platform::layer_shell::LayerSurface),
     /// Wayland without layer-shell: an X11 window on XWayland, for overlays that take no input.
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-    Xwayland(crate::x11::xwayland::XwaylandSurface),
+    Xwayland(crate::platform::x11::xwayland::XwaylandSurface),
 }
 
 /// A shown overlay. The wgpu surface drops before what it draws into.
@@ -268,7 +268,7 @@ struct Live {
     #[cfg(target_os = "macos")]
     present: Option<crate::frame::present_worker::PresentWorker>,
     #[cfg(target_os = "macos")]
-    pacing: Option<crate::display_link::DisplayLink>,
+    pacing: Option<crate::platform::display_link::DisplayLink>,
     /// `El::system_material` views behind the Metal layer.
     #[cfg(target_os = "macos")]
     materials: crate::system_material::macos::Materials,
@@ -309,11 +309,11 @@ pub(crate) struct Overlay<T: 'static> {
     /// The non-activating panel holding winit's view (macOS), kept with the window. Declared
     /// before the window so the view goes back to it first.
     #[cfg(target_os = "macos")]
-    panel: Option<crate::macos::Panel>,
+    panel: Option<crate::platform::macos::Panel>,
     #[cfg(target_os = "windows")]
-    native: Option<crate::win32::OverlayWindow>,
+    native: Option<crate::platform::win32::OverlayWindow>,
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-    x11: Option<crate::x11::overlay::InputWindow>,
+    x11: Option<crate::platform::x11::overlay::InputWindow>,
     live: Option<Live>,
     cursor: Option<crate::cursor::os::OsCursor>,
     mods: winit::keyboard::ModifiersState,
@@ -601,7 +601,7 @@ impl<T: 'static> Overlay<T> {
             _ => None,
         };
         let wake = self.shared.wake.lock().unwrap().clone();
-        let mut layer = crate::layer_shell::LayerSurface::new(display, self.name, self.at, self.interactive, &self.options, output, wake)?;
+        let mut layer = crate::platform::layer_shell::LayerSurface::new(display, self.name, self.at, self.interactive, &self.options, output, wake)?;
         layer.set_buffer_scale(scale);
         if let Some((w, h)) = layer.configured_size() {
             if w > 0 { self.at.size.0 = w as f32; }
@@ -665,7 +665,7 @@ impl<T: 'static> Overlay<T> {
         #[cfg(target_os = "macos")]
         {
             let wake = self.shared.wake.lock().unwrap().clone();
-            self.panel = Some(crate::macos::Panel::adopt(&window, self.at, self.interactive, &self.options, wake)?);
+            self.panel = Some(crate::platform::macos::Panel::adopt(&window, self.at, self.interactive, &self.options, wake)?);
             let panel = self.panel.as_ref().unwrap();
             if let Some(level) = self.macos_level { panel.set_level(level); }
             let native = (Some(panel.window_number()), crate::OverlayCapabilities {
@@ -678,7 +678,7 @@ impl<T: 'static> Overlay<T> {
             let _ = window.set_cursor_hittest(self.options.input.resolved(self.interactive) == OverlayInput::All);
             #[cfg(all(unix, not(target_os = "ios"), not(target_os = "android")))]
             {
-                self.x11 = crate::x11::overlay::InputWindow::new(&window, self.shared.wake.lock().unwrap().clone(), self.options.input.resolved(self.interactive), self.options.follow_pointer);
+                self.x11 = crate::platform::x11::overlay::InputWindow::new(&window, self.shared.wake.lock().unwrap().clone(), self.options.input.resolved(self.interactive), self.options.follow_pointer);
                 if self.options.input == OverlayInput::Regions && self.x11.is_none() { return None; }
                 self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities {
                     capture_exclusion: OverlaySupport::Unsupported, nonactivating_keys: OverlaySupport::Unsupported, global_pointer: OverlaySupport::Supported,
@@ -687,7 +687,7 @@ impl<T: 'static> Overlay<T> {
             #[cfg(target_os = "windows")]
             {
                 let wake = self.shared.wake.lock().unwrap().clone();
-                self.native = Some(crate::win32::OverlayWindow::new(&window, self.interactive, &self.options, wake)?);
+                self.native = Some(crate::platform::win32::OverlayWindow::new(&window, self.interactive, &self.options, wake)?);
                 self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities {
                     capture_exclusion: self.native.as_ref().unwrap().capture_exclusion(), nonactivating_keys: OverlaySupport::Unsupported, global_pointer: OverlaySupport::Supported,
                 };
@@ -794,7 +794,7 @@ impl<T: 'static> Overlay<T> {
     fn resolve_size(&mut self, event_loop: &ActiveEventLoop) {
         let at = Placement { size: self.canvas_size, ..self.at };
         #[cfg(target_os = "macos")]
-        if let Some(rect) = self.panel.as_ref().map_or_else(|| crate::macos::overlay_rect(at, &self.options), |panel| panel.rect(at, &self.options)) {
+        if let Some(rect) = self.panel.as_ref().map_or_else(|| crate::platform::macos::overlay_rect(at, &self.options), |panel| panel.rect(at, &self.options)) {
             self.at.size = (rect.size.width as f32, rect.size.height as f32);
             return;
         }
@@ -896,7 +896,7 @@ impl<T: 'static> Overlay<T> {
         if let Some(mode) = translucent { config.alpha_mode = mode } else { eprintln!("transparency unavailable for overlay {}; drawing it opaque", self.name) }
         surface.configure(&gpu.device, &config);
         #[cfg(target_os = "macos")]
-        crate::macos::pin_contents_top_left(&surface);
+        crate::platform::macos::pin_contents_top_left(&surface);
         let target_format = if self.rt.srgb_blend() { config.format.remove_srgb_suffix() } else { config.format };
         if let Some(renderer) = &mut self.renderer {
             crate::window::rebuild_renderer(&gpu.device, renderer, target_format, &mut self.rt);
@@ -916,7 +916,7 @@ impl<T: 'static> Overlay<T> {
         #[cfg(target_os = "macos")]
         let pacing = self.frame_wake.clone().and_then(|wake| {
             let Backing::Window(window) = &backing;
-            crate::display_link::DisplayLink::new(window, wake)
+            crate::platform::display_link::DisplayLink::new(window, wake)
         });
         #[cfg(target_os = "macos")]
         let fn_key = match &backing {

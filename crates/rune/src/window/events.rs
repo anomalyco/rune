@@ -50,7 +50,7 @@ impl<S: 'static> Host<S> {
     /// changes the drop target. Runs even while the window is covered, as queued input does.
     pub(super) fn flush_files(&mut self, event_loop: &ActiveEventLoop) {
         #[cfg(target_os = "macos")]
-        let appkit = self.win.as_ref().map(|l| crate::macos::drop::take(&l.window)).unwrap_or_default();
+        let appkit = self.win.as_ref().map(|l| crate::platform::macos::drop::take(&l.window)).unwrap_or_default();
         let Some(l) = self.win.as_ref().filter(|w| w.visible) else {
             self.files = FileDrop::default();
             return;
@@ -60,7 +60,7 @@ impl<S: 'static> Host<S> {
         // AppKit's drags say where they are at every step (`macos_drop`), so nothing samples.
         #[cfg(target_os = "macos")]
         for step in appkit {
-            use crate::macos::drop::Step;
+            use crate::platform::macos::drop::Step;
             queued |= match step {
                 Step::Enter(paths, at) => { self.rt.drag_files(paths, Some(at)); true }
                 Step::Move(at) => self.rt.drag_files_to(Some(at)),
@@ -244,7 +244,7 @@ impl<S: 'static> Host<S> {
                 // The user is dragging the edge. AppKit commits the new size when this returns,
                 // and a frame drawn later would leave the old one stretched to it until then.
                 #[cfg(target_os = "macos")]
-                if crate::macos::in_live_resize(&l.window) {
+                if crate::platform::macos::in_live_resize(&l.window) {
                     if self.frame_anim.take().is_some() { l.present_with_transaction(false); }
                     self.draw(true);
                     self.shell(event_loop);
@@ -287,7 +287,7 @@ impl<S: 'static> Host<S> {
                 rt.set_titlebar_inset(place_chrome(&l.window, chrome));
                 // A window opened while the displays slept has no display link yet.
                 #[cfg(target_os = "macos")]
-                if l.native.pacing.is_none() { l.native.pacing = crate::display_link::DisplayLink::new(&l.window, self.frame_wake.clone()); }
+                if l.native.pacing.is_none() { l.native.pacing = crate::platform::display_link::DisplayLink::new(&l.window, self.frame_wake.clone()); }
                 if was_occluded {
                     // Coming back paints the settled state in the first frame (guarantee 8).
                     rt.settle_all();

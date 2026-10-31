@@ -16,12 +16,12 @@ impl PlaceRequest {
         let mut request = Self { requested: display.clone(), display, placement, pointer: None };
         if request.display == crate::DisplayTarget::UnderPointer {
             #[cfg(target_os = "macos")]
-            { request.display = crate::macos::pointer_display().map_or(crate::DisplayTarget::Primary,
+            { request.display = crate::platform::macos::pointer_display().map_or(crate::DisplayTarget::Primary,
                 |id| crate::DisplayTarget::Native(crate::NativeDisplayId::MacOS(id))); }
             #[cfg(target_os = "windows")]
-            { request.pointer = crate::win32::pointer_position(); }
+            { request.pointer = crate::platform::win32::pointer_position(); }
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-            { request.pointer = crate::x11::overlay::pointer_position(); }
+            { request.pointer = crate::platform::x11::overlay::pointer_position(); }
         }
         request
     }
@@ -59,7 +59,7 @@ impl Display {
     /// logical coordinates. Keep the origin in this space; scale only local offsets.
     pub fn native_bounds(&self) -> [f64; 4] {
         #[cfg(target_os = "macos")]
-        if let Some(crate::NativeDisplayId::MacOS(id)) = self.native_id() { return crate::macos::display_bounds(id); }
+        if let Some(crate::NativeDisplayId::MacOS(id)) = self.native_id() { return crate::platform::macos::display_bounds(id); }
         let divisor = if matches!(self.native_id(), Some(crate::NativeDisplayId::Wayland(_))) { self.scale } else { 1.0 };
         [f64::from(self.position.0), f64::from(self.position.1), f64::from(self.size.0) / divisor, f64::from(self.size.1) / divisor]
     }

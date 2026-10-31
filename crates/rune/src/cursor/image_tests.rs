@@ -126,7 +126,7 @@ fn a_macos_image_cursor_is_sized_in_points() {
     use objc2::{msg_send, msg_send_id};
     use objc2_foundation::{NSPoint, NSSize};
     let d = decode(CursorImage::png(png(64, 40), [2.0, 30.0]), SOURCE_SCALE).unwrap();
-    let cursor = crate::macos::cursor::ns_cursor(&d).unwrap();
+    let cursor = crate::platform::macos::cursor::ns_cursor(&d).unwrap();
     // SAFETY: reading back AppKit objects made above.
     let (size, hot, pixels) = unsafe {
         let image: Retained<AnyObject> = msg_send_id![&*cursor, image];
