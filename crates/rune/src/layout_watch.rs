@@ -24,8 +24,11 @@ impl El {
     /// puts the element, not where its spring is on the way there. Each report is a state
     /// change, so the view runs again, unless the handler says [`Tx::live_only`] (see
     /// [`El::on_layout_tx`]).
+    #[track_caller]
     pub fn on_layout<S: 'static>(mut self, f: impl Fn(&mut S, [f32; 4]) + 'static) -> Self {
         self.handlers.on_layout = Some(Rc::new(move |s, r, _| f(downcast::<S>(s), r)));
+        #[cfg(debug_assertions)]
+        { self.handlers.sites.layout = Some(std::panic::Location::caller()); }
         self
     }
     /// [`El::on_layout`] with a [`Tx`]. A handler that only moves live values (a marker beside
@@ -38,8 +41,11 @@ impl El {
     ///     tx.live_only();
     /// })
     /// ```
+    #[track_caller]
     pub fn on_layout_tx<S: 'static>(mut self, f: impl Fn(&mut S, [f32; 4], &mut Tx) + 'static) -> Self {
         self.handlers.on_layout = Some(Rc::new(move |s, r, tx| f(downcast::<S>(s), r, tx)));
+        #[cfg(debug_assertions)]
+        { self.handlers.sites.layout = Some(std::panic::Location::caller()); }
         self
     }
     /// [`El::on_layout`] in global screen points: `[x, y, w, h]` from the top-left of the
@@ -66,8 +72,11 @@ impl El {
     /// something follows (a selection a toolbar floats over), not every node on a canvas: each
     /// report is a state change, so the view runs again, unless the handler says
     /// [`Tx::live_only`] (see [`El::on_drawn_layout_tx`]).
+    #[track_caller]
     pub fn on_drawn_layout<S: 'static>(mut self, f: impl Fn(&mut S, [f32; 4]) + 'static) -> Self {
         self.handlers.on_drawn_layout = Some(Rc::new(move |s, r, _| f(downcast::<S>(s), r)));
+        #[cfg(debug_assertions)]
+        { self.handlers.sites.drawn_layout = Some(std::panic::Location::caller()); }
         self
     }
     /// [`El::on_drawn_layout`] with a [`Tx`]. A toolbar that floats over a selection by its own
@@ -80,8 +89,11 @@ impl El {
     ///     tx.live_only();
     /// })
     /// ```
+    #[track_caller]
     pub fn on_drawn_layout_tx<S: 'static>(mut self, f: impl Fn(&mut S, [f32; 4], &mut Tx) + 'static) -> Self {
         self.handlers.on_drawn_layout = Some(Rc::new(move |s, r, tx| f(downcast::<S>(s), r, tx)));
+        #[cfg(debug_assertions)]
+        { self.handlers.sites.drawn_layout = Some(std::panic::Location::caller()); }
         self
     }
     /// On a scroll viewport: called with where it's scrolled to once it's first laid out, then in

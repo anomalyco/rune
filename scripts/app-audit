@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Crude checklist for the slow patterns Rune's "Fast apps" page describes, over a repo's Rust files.
+# Crude checklist for the slow patterns Rune's "Fast apps" page (and its "Smooth scrolling" section)
+# describes, over a repo's Rust files.
 # Usage: scripts/app-audit [--strict] <repo>
 # Prints one line per finding (check, file:line, source) and a count. Exits 0, or 1 with --strict
 # when there are findings. Heuristics only: a finding is a place to look, not a verdict.
@@ -19,6 +20,10 @@ out=$(rg --files -g '*.rs' -g '!target' -g '!**/tests/**' -g '!tests.rs' -g '!*_
   | LC_ALL=C sort \
   | xargs awk '
 function trim(s) { sub(/^[ \t]+/, "", s); if (length(s) > 70) s = substr(s, 1, 70) "..."; return s }
+function near(i, before, after, re,   j) {
+  for (j = i - before; j <= i + after; j++) if (j >= 1 && j <= N && L[j] ~ re) return 1
+  return 0
+}
 function hit(check, i) { printf "%s\t%s:%d\t%s\n", check, file, i, trim(L[i]) }
 function flush(   i, j, n, v, only, uses, win, cond, ms, evicts, entry) {
   if (file == "") return
@@ -61,6 +66,10 @@ function flush(   i, j, n, v, only, uses, win, cond, ms, evicts, entry) {
       }
     }
     if (!evicts && L[i] ~ /static .*(HashMap|BTreeMap)/) hit("static map cache with no eviction in file", i)
+    if (L[i] ~ /\.window_layout\(/) hit("window_layout read (re-runs each scroll frame)", i)
+    if (L[i] ~ /\.on_(layout|drawn_layout)(_tx)?(::<[^>]*>)?\(/ && !near(i, 0, 8, "live_only")) hit("layout handler without live_only", i)
+    if (L[i] ~ /\.on_hover(_change)?(::<[^>]*>)?\(/ && !near(i, 0, 6, "live_only")) hit("hover kept in state", i)
+    if (L[i] ~ /scroll_to_instant\(/ && near(i, 10, 10, "wake_after\\(")) hit("instant scroll stepped by wake_after", i)
   }
 }
 FNR == 1 { flush(); file = FILENAME; N = 0; stop = 0 }

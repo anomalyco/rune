@@ -101,11 +101,14 @@ impl El {
     /// changed state the view reads (so the view runs again), or `false` when it only updated
     /// bookkeeping (so scrolling through rows that don't change the view's output doesn't
     /// re-run the view).
+    #[track_caller]
     pub fn on_visible_rows<S: 'static>(
         mut self,
         f: impl Fn(&mut S, std::ops::Range<usize>) -> bool + 'static,
     ) -> Self {
         self.handlers.on_visible_rows = Some(Rc::new(move |s, r| f(downcast::<S>(s), r)));
+        #[cfg(debug_assertions)]
+        { self.handlers.sites.visible_rows = Some(std::panic::Location::caller()); }
         self
     }
 }

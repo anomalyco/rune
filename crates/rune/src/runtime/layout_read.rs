@@ -232,6 +232,12 @@ pub(crate) fn window_key(key: &str) -> String {
     format!("{WINDOW}{key}")
 }
 
+/// The element key a window-position read's key stands for, or `None` for an unscrolled read.
+#[cfg(debug_assertions)]
+pub(crate) fn window_read_key(key: &str) -> Option<&str> {
+    key.strip_prefix(WINDOW)
+}
+
 /// The prefix of a window-position read's key, which no element key starts with.
 const WINDOW: &str = "\u{1}window:";
 
@@ -319,6 +325,8 @@ impl<S: 'static> Runtime<S> {
     /// read's threshold adds up. Returns whether one moved.
     pub(super) fn layout_moved(&mut self, reads: Option<LayoutReads>, nodes: Option<&[Node]>, force: bool) -> bool {
         let reads = reads.unwrap_or_else(|| std::mem::take(&mut self.layout_seen.reads));
+        #[cfg(debug_assertions)]
+        let nodes_given = nodes.is_some();
         // A pass's own nodes are seen once; the current nodes are seen again every frame.
         let own;
         let (nodes, index) = match nodes {
@@ -334,8 +342,11 @@ impl<S: 'static> Runtime<S> {
         let now: Vec<Option<[f32; 4]>> = reads.iter().map(|r| self.layout_of(nodes, index, &r.key)).collect();
         let boxes = reads.iter().any(|r| r.key == SELECTION).then(|| self.selection_boxes(nodes));
         let rects = &mut self.layout_seen.rects;
-        let changed = reads.iter().zip(&now).any(|(r, rect)| rects.get(&r.key).is_none_or(|old| r.moved(*old, *rect)))
-            || boxes.as_ref().is_some_and(|b| boxes_moved(&rects.selection, b));
+        let moved = reads.iter().zip(&now).position(|(r, rect)| rects.get(&r.key).is_none_or(|old| r.moved(*old, *rect)));
+        let changed = moved.is_some() || boxes.as_ref().is_some_and(|b| boxes_moved(&rects.selection, b));
+        // The once-a-frame check names the read for the scroll warning.
+        #[cfg(debug_assertions)]
+        if !nodes_given && let Some(k) = moved { self.watch.meter.read(&reads[k].key); }
         if changed || force {
             if let Some(b) = boxes { rects.selection = b.into(); }
             for (r, rect) in reads.iter().zip(now) {
@@ -409,7 +420,8 @@ impl<S: 'static> Runtime<S> {
         }
     }
 
-    fn scrolling(&self) -> bool {
+    /// A hand, momentum, an instant scroll or a glide moves a viewport.
+    pub(super) fn scrolling(&self) -> bool {
         self.scrolls.values().any(|st| st.scrolling || st.direct || st.glide.is_some() || st.x.glide.is_some())
     }
 

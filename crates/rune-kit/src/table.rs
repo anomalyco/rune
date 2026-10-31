@@ -605,8 +605,11 @@ impl<S: 'static> Table<S> {
             .grow(1.0)
             .min_h(0.0)
             .scroll(ScrollSpec { stick_bottom: false })
-            .on_layout(move |s: &mut S, r: [f32; 4]| {
+            // Inside a scrolling page this reports every frame of the scroll; only a new height
+            // changes what the view reads.
+            .on_layout_tx(move |s: &mut S, r: [f32; 4], tx: &mut Tx| {
                 let st = get_mut(s);
+                if st.viewport == r[3] && st.row_height == style.row_height { tx.live_only(); }
                 st.viewport = r[3];
                 st.row_height = style.row_height;
             })
@@ -729,8 +732,8 @@ fn header_row<S: 'static>(
             .key(c.id.clone())
             .child(inner);
         let id = c.id.clone();
-        cell = cell.on_layout(move |s: &mut S, r: [f32; 4]| {
-            get_mut(s).laid_out.insert(id.clone(), r[2]);
+        cell = cell.on_layout_tx(move |s: &mut S, r: [f32; 4], tx: &mut Tx| {
+            if get_mut(s).laid_out.insert(id.clone(), r[2]) == Some(r[2]) { tx.live_only(); }
         });
         if c.sortable {
             let id = c.id.clone();

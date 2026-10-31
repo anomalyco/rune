@@ -612,7 +612,9 @@ impl<S: 'static> View<S> {
             t = pads.into_iter().fold(t, |t, r| t.uncopied(r));
         }
         let (get, cell) = (self.d.get_mut.clone(), format!("{row_key}.{}", side as u8));
-        let mut code = col().grow(1.0).min_w(0.0).pl(CODE_PAD.0).pr(CODE_PAD.1).child(t).on_hover_change(move |s: &mut S, inside, _| get(s).hover_text(side, &cell, inside));
+        let mut code = col().grow(1.0).min_w(0.0).pl(CODE_PAD.0).pr(CODE_PAD.1).child(t).on_hover_change(move |s: &mut S, inside, tx: &mut Tx| {
+            if !get(s).hover_text(side, &cell, inside) { tx.live_only(); }
+        });
         if c.no_newline {
             code = code.child(text("No newline at end of file").font(l.small).color(l.muted).opacity(0.6).key("eof").pb(2.0));
         }

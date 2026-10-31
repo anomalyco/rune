@@ -90,4 +90,16 @@ impl El {
         self.scroll_edges.margin = pts.max(0.0);
         self
     }
+    /// On a vertical scroll viewport, keep the row at the top of the view where it is when a
+    /// commit changes the content above it (rows inserted, removed, grown or reflowed by a new
+    /// width), as CSS `overflow-anchor: auto` does in a browser. The row is the first child
+    /// drawn in the view, or within a child that starts above the view, the first of its
+    /// children, and so on down. It holds only while the viewport is still and scrolled off
+    /// its top, and not following its bottom (`stick_bottom`): at the very top new content
+    /// above shows. A [`Tx::keep_on_screen`] in the same commit wins, and so does a scroll.
+    /// [`El::virtual_rows`] lists already keep their first visible row this way.
+    pub fn scroll_anchor(mut self) -> Self {
+        self.scroll_edges.anchor = true;
+        self
+    }
 }

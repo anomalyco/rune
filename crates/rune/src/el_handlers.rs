@@ -39,6 +39,25 @@ pub(crate) struct Handlers {
     pub on_selection_change: Option<SelectionChangeFn>,
     pub cursor: Option<Cursor>,
     pub press_scale: Option<f32>,
+    /// Debug builds: where the app set the handlers the commit warnings name.
+    #[cfg(debug_assertions)]
+    pub sites: HandlerSites,
+}
+
+#[cfg(debug_assertions)]
+type Site = Option<&'static std::panic::Location<'static>>;
+
+/// Where `on_hover`, `on_hover_change`, `on_pointer_move`, `on_layout`, `on_drawn_layout` and
+/// `on_visible_rows` were set.
+#[cfg(debug_assertions)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct HandlerSites {
+    pub hover: Site,
+    pub hover_change: Site,
+    pub pointer_move: Site,
+    pub layout: Site,
+    pub drawn_layout: Site,
+    pub visible_rows: Site,
 }
 
 impl Handlers {
@@ -96,5 +115,7 @@ impl Empty for Handlers {
         on_selection_change: None,
         cursor: None,
         press_scale: None,
+        #[cfg(debug_assertions)]
+        sites: HandlerSites { hover: None, hover_change: None, pointer_move: None, layout: None, drawn_layout: None, visible_rows: None },
     };
 }

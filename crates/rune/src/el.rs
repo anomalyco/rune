@@ -386,13 +386,16 @@ pub(crate) type SelectionCopy = Rc<dyn Fn(&crate::TextSelection) -> Option<Strin
 /// `El::on_selection_change`.
 pub(crate) type SelectionChangeFn = Rc<dyn Fn(crate::states::States<'_>, &crate::SelectionChange, &mut Tx)>;
 
-/// A scroll viewport's content-aware edges: `El::scroll_edge_fade` and `El::scroll_margin`.
+/// A scroll viewport's content-aware edges: `El::scroll_edge_fade`, `El::scroll_margin` and
+/// `El::scroll_anchor`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct ScrollEdges {
     /// Fade width (points) for the top and bottom edges; 0 for none.
     pub(crate) fade: f32,
     /// Space `Tx::scroll_into_view` leaves between a revealed row and the viewport's edge.
     pub(crate) margin: f32,
+    /// The viewport keeps its top row where it is when content above it changes.
+    pub(crate) anchor: bool,
 }
 
 /// The axes a scroll viewport moves on: `El::scroll` (vertical), `El::scroll_x`, `El::scroll_xy`.

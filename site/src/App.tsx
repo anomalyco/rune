@@ -67,6 +67,7 @@ function navGroups(pathname: string): NavGroup[] {
           spy("poll", "poll is cheap"),
           spy("reads", "Read the size"),
           spy("live-only", "live_only"),
+          spy("scrolling", "Smooth scrolling"),
           spy("caches", "Bounded caches"),
           spy("audit", "Audit a repo"),
         ]),

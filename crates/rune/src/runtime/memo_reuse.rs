@@ -286,6 +286,8 @@ fn same_handlers(
         on_selection_change,
         cursor,
         press_scale,
+        #[cfg(debug_assertions)]
+        sites: _,
     } = &**b;
     a.modal.is_none()
         && modal.is_none()

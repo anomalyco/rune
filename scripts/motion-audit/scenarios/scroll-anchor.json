@@ -1,0 +1,8 @@
+{
+  "events": [
+    { "t": 0.3, "type": "scroll", "key": "feed", "dy": -600, "dur": 0.4 },
+    { "t": 1.4, "type": "key", "name": "Enter" },
+    { "t": 2.4, "type": "key", "name": "Enter" },
+    { "t": 3.4, "type": "mark", "name": "end" }
+  ]
+}

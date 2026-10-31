@@ -305,8 +305,11 @@ impl El {
 
     /// Observe the pointer moving over this element, in window points, without making a native
     /// overlay input region. [`El::on_pointer_move_local`] gives the element's own points.
+    #[track_caller]
     pub fn on_pointer_move<S: 'static>(mut self, f: impl Fn(&mut S, PointerPress) + 'static) -> Self {
         self.handlers.on_pointer_move = Some(Rc::new(move |s, p, _| f(downcast::<S>(s), p.window())));
+        #[cfg(debug_assertions)]
+        { self.handlers.sites.pointer_move = Some(std::panic::Location::caller()); }
         self
     }
     /// [`El::on_pointer_move`] with the point in this element's own layout points as well as
@@ -320,14 +323,20 @@ impl El {
     ///     tx.live_only();
     /// })
     /// ```
+    #[track_caller]
     pub fn on_pointer_move_local<S: 'static>(mut self, f: impl Fn(&mut S, PointerEvent, &mut Tx) + 'static) -> Self {
         self.handlers.on_pointer_move = Some(Rc::new(move |s, p, tx| f(downcast::<S>(s), p, tx)));
+        #[cfg(debug_assertions)]
+        { self.handlers.sites.pointer_move = Some(std::panic::Location::caller()); }
         self
     }
 
     /// Called once when the pointer enters this hit target, not on animation frames.
+    #[track_caller]
     pub fn on_hover<S: 'static>(mut self, f: impl Fn(&mut S) + 'static) -> Self {
         self.handlers.on_hover = Some(Rc::new(move |s, _| f(downcast::<S>(s))));
+        #[cfg(debug_assertions)]
+        { self.handlers.sites.hover = Some(std::panic::Location::caller()); }
         self
     }
 
@@ -335,8 +344,11 @@ impl El {
     /// it leaves, descendants included (moving onto a child button is not a leave). It is not a
     /// hit target, so it never takes presses or hover from its children. A held press keeps the
     /// pointer inside until it releases.
+    #[track_caller]
     pub fn on_hover_change<S: 'static>(mut self, f: impl Fn(&mut S, bool, &mut Tx) + 'static) -> Self {
         self.handlers.on_hover_change = Some(Rc::new(move |s, inside, tx| f(downcast::<S>(s), inside, tx)));
+        #[cfg(debug_assertions)]
+        { self.handlers.sites.hover_change = Some(std::panic::Location::caller()); }
         self
     }
 

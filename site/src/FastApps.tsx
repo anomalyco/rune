@@ -102,6 +102,31 @@ fn remember(key: String, size: [f32; 2]) {
     })
 }`
 
+const hoverBefore = `// Before: every row the pointer crosses commits the view.
+row().on_hover_change(move |s: &mut Inbox, inside, _| s.hovered = inside.then_some(id))
+    .fill(if s.hovered == Some(id) { theme.hover } else { theme.row })`
+
+const hoverAfter = `// After: Rune paints the hover; no state, no commit.
+row().fill(theme.row).hover(theme.hover)`
+
+const glideBefore = `// Before: the app steps its own glide, one commit a frame.
+fn poll(s: &mut Reader, _: f64, tx: &mut Tx) -> bool {
+    if s.y == s.target { return false }
+    s.y += (s.target - s.y) * 0.2;
+    tx.scroll_to_instant("page", 0.0, s.y);
+    tx.wake_after(Duration::from_millis(16));
+    true
+}`
+
+const glideAfter = `// After: one request; Rune glides on its own clock.
+tx.scroll_to_with("page", 0.0, target, Spring::smooth(0.35, 0.0));`
+
+const anchorBefore = `// Before: older messages load above and push the one being read down.
+col().key("thread").scroll(ScrollSpec { stick_bottom: true }).child(messages(s))`
+
+const anchorAfter = `// After: the message at the top of the view stays put.
+col().key("thread").scroll(ScrollSpec { stick_bottom: true }).scroll_anchor().child(messages(s))`
+
 function Pair({ before, after }: { before: string; after: string }) {
   return (
     <div className="code-stack">
@@ -255,6 +280,65 @@ export function FastAppsView() {
       </section>
 
       <section className="doc-section">
+        <SectionHead id="scrolling" title="Smooth scrolling">
+          <p>
+            A scroll costs Rune no commit: it moves the content, mounts <code>virtual_rows</code> and paints{" "}
+            <code>El::hover</code> styles without running <code>view</code>. A frame that commits while a viewport
+            scrolls is the app's, and on a long page one commit can take more than the 8 ms a 120 Hz frame has.
+          </p>
+        </SectionHead>
+        <div className="prose">
+          <ul>
+            <li>
+              <code>poll</code> returns true only when visible state changed. To act on where a scroll stops, wait
+              until it has been still a moment with <code>Tx::wake_after</code>; follow it frame by frame with{" "}
+              <code>El::on_scroll_offset</code> and live values.
+            </li>
+            <li>
+              Hover is a style, not state: <code>El::hover</code>, <code>hover_group</code> and <code>group_*</code>{" "}
+              styles. A scroll moves rows under a still pointer, so state set from <code>on_hover_change</code> commits
+              for each one.
+            </li>
+            <li>
+              <code>on_layout</code> and <code>on_drawn_layout</code> report every frame of a scroll for an element
+              inside it. Use their <code>_tx</code> forms and say <code>Tx::live_only</code> when the handler only
+              moves live values or bookkeeping.
+            </li>
+            <li>
+              Read <code>Cx::layout_size</code> or <code>Cx::layout</code>, not <code>Cx::window_layout</code>, as
+              above.
+            </li>
+            <li>
+              Glide with <code>Tx::scroll_to_with</code> rather than an instant scroll stepped every frame.
+            </li>
+          </ul>
+        </div>
+        <Pair before={hoverBefore} after={hoverAfter} />
+        <Pair before={glideBefore} after={glideAfter} />
+        <div className="prose prose-after">
+          <p>
+            Debug builds name the source when one keeps committing through a scroll: <code>poll</code>, a handler with
+            its element and where it was set, or the layout read that moved. Each warns once, when it commits on 6 or
+            more frames and a quarter of a scroll's frames. They also warn when an app steps a viewport with an
+            instant scroll on 8 committing frames in a row, and when one hover handler commits for 8 different elements.
+          </p>
+          <p>
+            <code>RUNE_COMMIT_BUDGET_MS=8</code> prints a line for each commit over 8 ms, in any build, release
+            included, with where its time went (view, layout, text, apply) and what made the frame commit, at most
+            once a second.
+          </p>
+          <p>
+            <code>El::scroll_anchor()</code> keeps the reading position when content above it changes: rows load
+            above, an image grows, a new width reflows the text. On a scroll viewport it holds the row at the top of
+            the view across each commit, like CSS <code>overflow-anchor</code>, while the viewport is still, off its
+            top and not following its bottom. <code>virtual_rows</code> lists already do this;{" "}
+            <code>Tx::keep_on_screen</code> holds a chosen element for one commit.
+          </p>
+        </div>
+        <Pair before={anchorBefore} after={anchorAfter} />
+      </section>
+
+      <section className="doc-section">
         <SectionHead id="caches" title="Every cache has a bound">
           <p>
             A cache bounds its entries and its bytes, counting decoded pixels rather than encoded size, so a long
@@ -292,6 +376,11 @@ export function FastAppsView() {
             <li>
               A <code>static</code> map in a file with no <code>retain</code>, <code>remove</code> or{" "}
               <code>clear</code>.
+            </li>
+            <li>
+              <code>window_layout(</code>; <code>on_layout</code>, <code>on_drawn_layout</code>,{" "}
+              <code>on_hover</code> or <code>on_hover_change</code> with no <code>live_only</code> just after; and{" "}
+              <code>scroll_to_instant</code> near a <code>wake_after</code>.
             </li>
           </ul>
           <p>

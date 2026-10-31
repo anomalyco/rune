@@ -241,9 +241,11 @@ impl<S: 'static> Runtime<S> {
     /// Runs `action`'s handlers; debug builds warn when they block the main thread.
     pub(super) fn run_action(&mut self, action: Action, tx: &mut Tx) -> bool {
         #[cfg(debug_assertions)]
-        let (name, path) = (handler_name(&action), stall_path(&action).map(str::to_owned));
+        let (name, path, at) = (handler_name(&action), stall_path(&action).map(str::to_owned), self.handler_location(&action));
         let stall = crate::perf_warn::Stall::start();
         let ran = self.dispatch_action(action, tx);
+        #[cfg(debug_assertions)]
+        if ran && name.starts_with("on_") { self.watch.meter.handler(name, path.as_deref(), at); }
         #[cfg(debug_assertions)]
         stall.end(|| match path {
             Some(path) => (crate::perf_warn::handler_site(name, &path), format!("`{name}` on {path:?}")),
@@ -252,6 +254,21 @@ impl<S: 'static> Runtime<S> {
         #[cfg(not(debug_assertions))]
         stall.end(|| unreachable!());
         ran
+    }
+
+    /// Where the app set the handler `action` runs, for the commit warnings.
+    #[cfg(debug_assertions)]
+    fn handler_location(&self, action: &Action) -> Option<&'static std::panic::Location<'static>> {
+        let sites = |path: &str| self.node(path).map(|n| n.handlers.sites);
+        match action {
+            Action::Hover(p) => sites(p)?.hover,
+            Action::HoverChange(p, _) => sites(p)?.hover_change,
+            Action::PointerMove(p, _) => sites(p)?.pointer_move,
+            Action::Layout(p, _) => sites(p)?.layout,
+            Action::DrawnLayout(p, ..) => sites(p)?.drawn_layout,
+            Action::VisibleRows(p, _) => sites(p)?.visible_rows,
+            _ => None,
+        }
     }
 
     fn dispatch_action(&mut self, action: Action, tx: &mut Tx) -> bool {

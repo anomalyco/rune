@@ -62,6 +62,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn commit(&mut self, tx: &Tx) {
         let _commit_time = crate::frame_profile::Scope::new(crate::frame_profile::Phase::Commit);
         let _first_view = crate::perf_warn::launch::FirstView::start(self.commits == 0);
+        let budget = crate::perf_warn::budget::Commit::start();
         self.apply_playground();
         COMMITS.set(COMMITS.get() + 1);
         self.last_commit_clock = self.clock;
@@ -92,6 +93,7 @@ impl<S: 'static> Runtime<S> {
         self.memo.keep_since(self.memo_since);
         self.track_focused_rows();
         self.prune_text_selection();
+        budget.end(self.watch.cause);
     }
 
     /// Restores any nodes moved out of `self.nodes` and recycles `measured`'s buffers before a

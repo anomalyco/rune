@@ -996,8 +996,11 @@ impl<S: 'static, T: 'static> Tree<S, T> {
             .grow(1.0)
             .min_h(0.0)
             .scroll(ScrollSpec { stick_bottom: false })
-            .on_layout(move |s: &mut S, r: [f32; 4]| {
+            // Inside a scrolling page this reports every frame of the scroll; only a new height
+            // changes what the view reads.
+            .on_layout_tx(move |s: &mut S, r: [f32; 4], tx: &mut Tx| {
                 let m = get_mut(s);
+                if m.viewport == r[3] && m.row_height == style.row_height { tx.live_only(); }
                 m.viewport = r[3];
                 m.row_height = style.row_height;
             })

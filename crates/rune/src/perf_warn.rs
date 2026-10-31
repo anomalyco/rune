@@ -1,16 +1,29 @@
 //! Debug-only warnings for app code that works but runs slow: a `virtualize` list that builds
 //! every row to mount a few, a callback that blocks the main thread, a `poll` that says it
 //! changed what shows when nothing did, a window that keeps drawing while idle, a slow first
-//! frame, and (a mistake rather than slowness) a `memo` whose root already had another key.
-//! Each warns once per site, on stderr; `RUNE_PERF_WARN=0` silences them. Release builds contain
-//! none of it.
+//! frame, something that commits the view on most frames of a scroll, an app stepping its own
+//! scroll glide, and (a mistake rather than slowness) a `memo` whose root already had another
+//! key. Each warns once per site, on stderr; `RUNE_PERF_WARN=0` silences them. Release builds
+//! contain none of it. `budget` is the exception: an opt-in line per slow commit, in any build.
 
+pub(crate) mod budget;
+mod commits;
 mod idle;
 pub(crate) mod launch;
 
 #[cfg(debug_assertions)]
 pub(crate) use idle::Drawn;
 pub(crate) use idle::IdleMeter;
+pub(crate) use commits::CommitMeter;
+
+/// A window's commit watch: what the commit underway is for (`RUNE_COMMIT_BUDGET_MS` prints
+/// it), and the commit warnings' meters.
+#[derive(Default)]
+pub(crate) struct Watch {
+    /// `CommitWhy` bits for the commit underway; 0 for one outside a frame's checks.
+    pub cause: u16,
+    pub meter: CommitMeter,
+}
 
 #[cfg(debug_assertions)]
 use std::{collections::HashSet, sync::{Mutex, OnceLock}, time::Instant};
@@ -128,5 +141,7 @@ pub(crate) fn handler_site(name: &str, path: &str) -> String {
     format!("{name} {}", path.chars().filter(|c| !c.is_ascii_digit()).collect::<String>())
 }
 
+#[cfg(all(test, debug_assertions))]
+mod commits_tests;
 #[cfg(all(test, debug_assertions))]
 mod tests;

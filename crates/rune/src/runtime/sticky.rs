@@ -419,6 +419,7 @@ impl<S: 'static> Runtime<S> {
     /// Records where each `Tx::keep_on_screen` element showed on the last frame, before the
     /// commit moves it.
     pub(super) fn capture_keeps(&mut self, tx: &mut Tx) {
+        self.anchor_keeps(tx);
         if tx.keep_on_screen.is_empty() { return; }
         let keys = std::mem::take(&mut tx.keep_on_screen);
         // The last frame's rects describe these nodes only until a commit replaces them.

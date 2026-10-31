@@ -81,6 +81,8 @@ pub(crate) fn handler_state_ref<S: 'static>(state: &S) -> &dyn Any {
 mod layout_diagnostics;
 #[path = "runtime/blend.rs"]
 mod blend;
+#[path = "runtime/commit_watch.rs"]
+mod commit_watch;
 #[path = "runtime/commit_why.rs"]
 mod commit_why;
 #[path = "runtime/drag_out_host.rs"]
@@ -136,6 +138,8 @@ mod scroll_x;
 mod scroll_offset;
 #[path = "runtime/reveal.rs"]
 mod reveal;
+#[path = "runtime/scroll_anchor.rs"]
+mod scroll_anchor;
 #[path = "runtime/sticky.rs"]
 mod sticky;
 #[path = "runtime/anchor.rs"]
@@ -293,6 +297,8 @@ use turn::{Turn, compose_turn, open_turned_layer, screen_clip_of};
 mod types;
 pub use types::{FrameStats, TitlebarAction};
 pub(crate) use commit_why::CommitWhy;
+#[cfg(debug_assertions)]
+pub(crate) use layout_read::window_read_key;
 pub(crate) use types::{AnimSource, Node};
 use types::{AxisScroll, Inh, LayoutEntry, NodeCold, RevealState, RowLayout, ScaleMotion, ScrollState, Stack};
 mod tracks;
@@ -340,6 +346,7 @@ pub struct Runtime<S: 'static> {
     wake_deadlines: Vec<f64>,
     timer_wake: timer_wake::TimerWake,
     idle_meter: crate::perf_warn::IdleMeter,
+    watch: crate::perf_warn::Watch,
     /// Windowed runs read the clock from the wall instead of summing frame steps.
     pub wall_start: Option<crate::time::Instant>,
     /// Called for keys unhandled by the focused control; return true to consume it.
@@ -748,6 +755,7 @@ impl<S: 'static> Runtime<S> {
             wake_deadlines: Vec::new(),
             timer_wake: Default::default(),
             idle_meter: Default::default(),
+            watch: Default::default(),
             wall_start: None,
             on_key: None,
             nodes: Vec::new(),

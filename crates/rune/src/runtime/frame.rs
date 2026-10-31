@@ -389,6 +389,8 @@ impl<S: 'static> Runtime<S> {
         let mut tx = std::mem::take(&mut self.pending);
         let mut ran = false;
         let mut why = 0;
+        #[cfg(debug_assertions)]
+        let commits0 = self.commits;
         let shaped0 = self.text.shaped;
         self.settled = false;
         self.clock = self.wall_clock().unwrap_or(self.clock + elapsed);
@@ -424,6 +426,7 @@ impl<S: 'static> Runtime<S> {
             if self.idle_meter.polled(crate::perf_warn::timed("poll", || app_call!(poll, &mut self.state, self.clock, &mut one))) {
                 ran = true;
                 why |= CommitWhy::POLL;
+                self.watch.meter.poll();
             }
             merge(&mut tx, one);
         }
@@ -470,8 +473,7 @@ impl<S: 'static> Runtime<S> {
                     #[cfg(debug_assertions)]
                     let check = self.live_check.take().filter(|_| !ran_other && !self.dirty && !ran_layout);
                     self.capture_keeps(&mut tx);
-                    self.commit_why |= std::mem::take(&mut why) | CommitWhy::ROUTE | if self.dirty { CommitWhy::DIRTY } else { 0 };
-                    self.commit(&tx);
+                    self.commit_for(&tx, std::mem::take(&mut why) | CommitWhy::ROUTE | if self.dirty { CommitWhy::DIRTY } else { 0 });
                     #[cfg(debug_assertions)]
                     { self.compare_live_check(check); ran_other = false; }
                     self.apply_keeps();
@@ -541,9 +543,8 @@ impl<S: 'static> Runtime<S> {
             let check = self.live_check.take().filter(|_| !ran_other && !besides && !ran_layout && !read_moved);
             self.capture_keeps(&mut tx);
             let flag = |on: bool, bit: u16| if on { bit } else { 0 };
-            self.commit_why |= why | flag(self.dirty, CommitWhy::DIRTY) | flag(self.relayout, CommitWhy::RELAYOUT) | flag(self.settle, CommitWhy::SETTLE)
-                | flag(shifted, CommitWhy::VIRTUAL) | flag(ran_layout, CommitWhy::LAYOUT) | flag(read_moved, CommitWhy::READ);
-            self.commit(&tx);
+            self.commit_for(&tx, why | flag(self.dirty, CommitWhy::DIRTY) | flag(self.relayout, CommitWhy::RELAYOUT) | flag(self.settle, CommitWhy::SETTLE)
+                | flag(shifted, CommitWhy::VIRTUAL) | flag(ran_layout, CommitWhy::LAYOUT) | flag(read_moved, CommitWhy::READ));
             #[cfg(debug_assertions)]
             self.compare_live_check(check);
             self.apply_keeps();
@@ -568,6 +569,8 @@ impl<S: 'static> Runtime<S> {
             for (_, animated) in &mut scroll_bottom { *animated = false; }
             for r in &mut scroll_offsets { r.glide = None; }
         }
+        #[cfg(debug_assertions)]
+        self.watch_frame(commits0, scroll_offsets.iter().find(|r| r.glide.is_none()).map(|r| r.key.as_str()));
         let follow = std::mem::take(&mut self.caret_follow);
         let destination = !scroll_bottom.is_empty() || !scroll_pages.is_empty() || !scroll_offsets.is_empty();
         if !scroll_to.is_empty() || destination || follow {
