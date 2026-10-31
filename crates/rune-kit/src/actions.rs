@@ -1,6 +1,6 @@
 //! Button and IconButton (`@opencode/ui` actions/button, actions/icon-button).
 
-use rune::{Color, El, Icon, TextStyle, Tx, icon, row, text};
+use rune::{Color, El, Icon, Spring, TextStyle, Tx, icon, row, text};
 
 use crate::{Acts, ControlSize, Kit, RollingText, State, over, press_over, shadows};
 
@@ -122,11 +122,18 @@ fn skin(k: &Kit, v: ButtonVariant) -> Skin {
 
 impl Skin {
     /// An open menu's trigger: the pressed fill alone. Hover and press overlays on top of it would
-    /// draw it lighter than pressed under the pointer, and brighter still while clicked to close.
+    /// draw it lighter than pressed, and brighter still while clicked to close.
     fn hold_pressed(&mut self) {
         self.fill = self.pressed;
         (self.hover, self.pressed) = (Color::TRANSPARENT, Color::TRANSPARENT);
     }
+}
+
+/// The press that opens a menu draws the trigger pressed with the hover and press overlays. The
+/// menu takes the hover as it opens and the press lets go, so the held fill lands at once: easing
+/// in from clear, the trigger dimmed to nearly rest on release and brightened again.
+fn held_motion(e: El) -> El {
+    e.motion(Spring::NONE)
 }
 
 /// Paints `skin` on `e` for `state`. Rest leaves hover/press to the runtime.
@@ -323,7 +330,8 @@ impl Button {
         let mut s = skin(k, self.variant);
         let ghostly =
             matches!(self.variant, ButtonVariant::Ghost | ButtonVariant::GhostMuted | ButtonVariant::GhostFaint);
-        if self.expanded && ghostly && self.state != State::Disabled {
+        let held = self.expanded && ghostly && self.state != State::Disabled;
+        if held {
             s.hold_pressed();
             if self.variant == ButtonVariant::GhostMuted {
                 (s.ink, s.icon) = (k.c.text_base, k.c.icon_base);
@@ -350,6 +358,9 @@ impl Button {
             e = e.help(t);
         }
         e = paint(k, e, s, self.state, interactive);
+        if held {
+            e = held_motion(e);
+        }
         if let Some(i) = self.icon {
             let mut ic = icon(i, icon_size).key("icon").color(icon_c);
             if matches!(self.look, Label::Rolling(_)) { ic = ic.width_leads(); }
@@ -494,7 +505,8 @@ impl IconButton {
         if self.state == State::Pressed && self.variant == IconButtonVariant::GhostMuted {
             s.icon = k.c.icon_base;
         }
-        if self.expanded && matches!(self.variant, IconButtonVariant::Ghost | IconButtonVariant::GhostMuted) {
+        let held = self.expanded && matches!(self.variant, IconButtonVariant::Ghost | IconButtonVariant::GhostMuted);
+        if held {
             s.hold_pressed();
             s.icon = if self.variant == IconButtonVariant::GhostMuted { k.c.icon_base } else { s.icon };
         }
@@ -510,6 +522,9 @@ impl IconButton {
             e = e.help(t);
         }
         e = paint(k, e, s, self.state, true).child(icon(self.icon, glyph).key("icon").color(ink));
+        if held {
+            e = held_motion(e);
+        }
         if self.state == State::Disabled { e = e.dim(disabled_alpha); }
         self.acts.apply(e, enabled)
     }

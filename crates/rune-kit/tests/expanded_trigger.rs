@@ -1,4 +1,5 @@
-//! An open menu's ghost trigger holds the pressed fill: no hover or press overlay on top of it.
+//! An open menu's ghost trigger holds the pressed fill: it lands the moment the press opens the
+//! menu, with no hover or press overlay on top of it.
 use rune::{Cx, El, Env, Runtime, col};
 use rune_kit::*;
 
@@ -37,9 +38,12 @@ fn an_open_trigger_draws_the_pressed_fill_alone() {
         assert!(info(&rt).hover > 0.9, "{key}: a closed trigger shows hover");
 
         rt.pointer_down(cx, cy);
-        rt.pointer_up(cx, cy);
         settle(&mut rt);
+        rt.pointer_up(cx, cy);
+        rt.frame(1.0 / 60.0);
         assert!(rt.state, "{key}: the press opens it");
+        assert_eq!(info(&rt).fill, k.c.pressed, "{key}: the pressed fill lands on release, not easing in from clear");
+        settle(&mut rt);
         assert_eq!(info(&rt).fill, k.c.pressed, "{key}: an open trigger fills with pressed");
         let under_pointer = fills(&rt);
 
