@@ -22,7 +22,9 @@
 pub mod alloc;
 pub mod gauge;
 
-pub use gauge::{Gauge, Lease, gauges};
+pub use gauge::Gauge;
+pub use gauge::Lease;
+pub use gauge::gauges;
 
 use std::fmt::Write as _;
 use std::sync::Mutex;

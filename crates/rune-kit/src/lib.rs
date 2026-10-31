@@ -13,35 +13,33 @@
 //! and their content as a separate `El` that the view mounts at the root with [`root`], so it
 //! draws above later siblings and escapes clipping ancestors.
 
-mod budget;
-pub mod css;
-pub mod diff;
-pub mod glyphs;
-pub mod kit;
-mod neutral;
-mod palette;
-pub mod syntax;
-
 mod accordion;
 mod actions;
 mod badge;
+mod budget;
 mod card;
 mod checkbox;
 mod collapsible;
 mod combobox;
+pub mod css;
 mod dialog;
+pub mod diff;
 mod feedback;
 mod field;
+pub mod glyphs;
 mod keybind;
+pub mod kit;
 mod list;
 #[cfg(feature = "markdown")]
 pub mod markdown;
 mod menu;
 #[cfg(feature = "mermaid")]
 pub mod mermaid;
+mod neutral;
 #[cfg(feature = "markdown")]
 pub mod notes;
 mod overlay;
+mod palette;
 pub mod popover;
 mod popup_list;
 mod radio;
@@ -51,45 +49,113 @@ mod select;
 pub mod shell;
 mod shortcut_recorder;
 mod switch;
+pub mod syntax;
 mod table;
 mod text_input;
 mod toast;
 mod tree;
 
-pub use accordion::{Accordion, AccordionItem};
+pub use accordion::Accordion;
+pub use accordion::AccordionItem;
+pub use actions::Button;
 #[allow(deprecated)]
 pub use actions::ButtonSize;
-pub use actions::{Button, ButtonVariant, IconButton, IconButtonVariant};
-pub use badge::{Badge, BadgeVariant, Divider};
+pub use actions::ButtonVariant;
+pub use actions::IconButton;
+pub use actions::IconButtonVariant;
+pub use badge::Badge;
+pub use badge::BadgeVariant;
+pub use badge::Divider;
 pub use card::Card;
 pub use checkbox::Checkbox;
 pub use collapsible::Collapsible;
-pub use combobox::{Combobox, ComboboxOption, ComboboxState};
+pub use combobox::Combobox;
+pub use combobox::ComboboxOption;
+pub use combobox::ComboboxState;
 pub use dialog::Dialog;
-pub use feedback::{Loader, Progress, ProgressCircle, Spinner};
+pub use feedback::Loader;
+pub use feedback::Progress;
+pub use feedback::ProgressCircle;
+pub use feedback::Spinner;
 pub use field::Field;
-pub use keybind::{Keybind, KeybindVariant};
-pub use kit::{Elevation, Glyphs, Kit, Motion, Palette, Radius, StateColors, Type};
-pub use list::{List, ListItem};
+pub use keybind::Keybind;
+pub use keybind::KeybindVariant;
+pub use kit::Elevation;
+pub use kit::Glyphs;
+pub use kit::Kit;
+pub use kit::Motion;
+pub use kit::Palette;
+pub use kit::Radius;
+pub use kit::StateColors;
+pub use kit::Type;
+pub use list::List;
+pub use list::ListItem;
 #[cfg(feature = "markdown")]
-pub use markdown::{Case, Highlight, Markdown, MarkdownStyle};
-pub use menu::{Menu, MenuEntry, MenuItem, context_menu};
+pub use markdown::Case;
+#[cfg(feature = "markdown")]
+pub use markdown::Highlight;
+#[cfg(feature = "markdown")]
+pub use markdown::Markdown;
+#[cfg(feature = "markdown")]
+pub use markdown::MarkdownStyle;
+pub use menu::Menu;
+pub use menu::MenuEntry;
+pub use menu::MenuItem;
+pub use menu::context_menu;
 #[cfg(feature = "markdown")]
 pub use notes::Note;
-pub use overlay::{HoverCard, Placement, Popover, Tooltip, TooltipAppearance, TooltipStyle, body_text, overlay_text, scrim};
-pub use palette::{PaletteFocus, PaletteSeed};
-pub use popup_list::{PopupItem, PopupList};
-pub use radio::{RadioGroup, RadioItem};
+pub use overlay::HoverCard;
+pub use overlay::Placement;
+pub use overlay::Popover;
+pub use overlay::Tooltip;
+pub use overlay::TooltipAppearance;
+pub use overlay::TooltipStyle;
+pub use overlay::body_text;
+pub use overlay::overlay_text;
+pub use overlay::scrim;
+pub use palette::PaletteFocus;
+pub use palette::PaletteSeed;
+pub use popup_list::PopupItem;
+pub use popup_list::PopupList;
+pub use radio::RadioGroup;
+pub use radio::RadioItem;
 pub use rolling_text::RollingText;
 pub use segmented::SegmentedControl;
-pub use select::{Select, SelectAppearance};
-pub use shell::{Page, PaneState, Sidebar, SidebarHeader, SidebarRow, SidebarSection, SplitView, Toolbar};
-pub use shortcut_recorder::{ShortcutRecorder, ShortcutRecorderState, shortcut_error_message};
+pub use select::Select;
+pub use select::SelectAppearance;
+pub use shell::Page;
+pub use shell::PaneState;
+pub use shell::Sidebar;
+pub use shell::SidebarHeader;
+pub use shell::SidebarRow;
+pub use shell::SidebarSection;
+pub use shell::SplitView;
+pub use shell::Toolbar;
+pub use shortcut_recorder::ShortcutRecorder;
+pub use shortcut_recorder::ShortcutRecorderState;
+pub use shortcut_recorder::shortcut_error_message;
 pub use switch::Switch;
-pub use table::{Cell, SortDir, Table, TableColumn, TableState, TableStyle};
-pub use text_input::{TextArea, TextField, TextInput};
-pub use toast::{Toast, ToastRegion};
-pub use tree::{FileNode, FileTree, Tree, TreeItem, TreeKey, TreeModel, TreeRow, TreeStyle, file_icon, natural_cmp};
+pub use table::Cell;
+pub use table::SortDir;
+pub use table::Table;
+pub use table::TableColumn;
+pub use table::TableState;
+pub use table::TableStyle;
+pub use text_input::TextArea;
+pub use text_input::TextField;
+pub use text_input::TextInput;
+pub use toast::Toast;
+pub use toast::ToastRegion;
+pub use tree::FileNode;
+pub use tree::FileTree;
+pub use tree::Tree;
+pub use tree::TreeItem;
+pub use tree::TreeKey;
+pub use tree::TreeModel;
+pub use tree::TreeRow;
+pub use tree::TreeStyle;
+pub use tree::file_icon;
+pub use tree::natural_cmp;
 
 use rune::{Color, El, Shadow, Tx};
 

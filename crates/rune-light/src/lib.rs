@@ -20,7 +20,10 @@ mod gpu;
 mod render;
 mod targets;
 
-pub use glass::{Glass, GlassLight, GlassRenderer, GlassSettings};
+pub use glass::Glass;
+pub use glass::GlassLight;
+pub use glass::GlassRenderer;
+pub use glass::GlassSettings;
 use gpu::{BindCache, bgl, bind, compute, gi_section, layout, module, texture, tv};
 use targets::Targets;
 
