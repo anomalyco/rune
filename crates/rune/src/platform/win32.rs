@@ -95,16 +95,18 @@ pub(crate) struct OverlayWindow {
     exclusion: OverlaySupport,
 }
 impl OverlayWindow {
-    pub fn new(window: &winit::window::Window, interactive: bool, options: &OverlayOptions, wake: Option<crate::Waker>) -> Option<Self> {
-        let hwnd = hwnd(window)?;
+    pub fn new(window: &winit::window::Window, interactive: bool, options: &OverlayOptions, wake: Option<crate::Waker>) -> Result<Self, String> {
+        let hwnd = hwnd(window).ok_or("the overlay window has no Win32 handle")?;
         let mode = options.input.resolved(interactive);
-        overlay_styles(hwnd, mode);
+        overlay_styles(hwnd, mode)?;
         let exclusion = if options.exclude_from_capture {
             if unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) } != 0 { OverlaySupport::Requested } else { OverlaySupport::Failed }
         } else { OverlaySupport::Unknown };
         let input = Rc::new(Input { hwnd, regions: RefCell::default(), scale: Cell::new(window.scale_factor() as f32), clicks: RefCell::default(), captured: Cell::new(false), visible: Cell::new(false), input: Cell::new(mode), follow: Cell::new(options.follow_pointer), level: options.level });
-        if unsafe { SetWindowSubclass(hwnd, Some(subclass), 0x52554e45, Rc::as_ptr(&input) as usize) } == 0 { return None; }
-        Some(Self { input, observing: false, exclusion, watch: None, wake })
+        if unsafe { SetWindowSubclass(hwnd, Some(subclass), 0x52554e45, Rc::as_ptr(&input) as usize) } == 0 {
+            return Err(format!("SetWindowSubclass failed: {}", last_error()));
+        }
+        Ok(Self { input, observing: false, exclusion, watch: None, wake })
     }
     pub fn capture_exclusion(&self) -> OverlaySupport { self.exclusion }
     pub fn set_capture_exclusion(&mut self, exclude: bool) -> OverlaySupport {
@@ -149,22 +151,25 @@ impl OverlayWindow {
     }
     /// Puts the window on screen without activating it, above other topmost windows. Rune shows
     /// and hides overlays with Win32 calls alone: winit never sees either, and a winit
-    /// visibility change would also reset these styles.
-    pub fn show(&mut self) {
+    /// visibility change would also reset these styles. Errs when Windows leaves it hidden.
+    pub fn show(&mut self) -> Result<(), String> {
         let hwnd = self.input.hwnd;
-        overlay_styles(hwnd, self.input.input.get());
+        overlay_styles(hwnd, self.input.input.get())?;
         // SAFETY: Win32 calls on a live window owned by this thread.
-        unsafe {
+        let visible = unsafe {
             ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        }
+            IsWindowVisible(hwnd) != 0
+        };
+        if !visible { return Err("ShowWindow left the overlay window hidden".into()); }
         self.input.visible.set(true);
         raise_levels();
-        if self.observing { return; }
+        if self.observing { return Ok(()); }
         INPUTS.with(|inputs| inputs.borrow_mut().push(self.input.clone()));
         self.refresh_watch();
         self.observing = true;
         if let Some((x, y)) = pointer_position() { self.input.observe(POINT { x, y }); }
+        Ok(())
     }
     pub fn hide(&mut self) {
         // SAFETY: a Win32 call on a live window owned by this thread.
@@ -186,15 +191,28 @@ impl Drop for OverlayWindow {
 }
 
 /// A layered, topmost tool window that never activates; unless `mode` takes every click, every
-/// click goes through (`Input::observe` lifts that over input regions).
-fn overlay_styles(hwnd: HWND, mode: OverlayInput) {
+/// click goes through (`Input::observe` lifts that over input regions). Windows composes a
+/// layered window, its DirectComposition content included, only once it has layered
+/// attributes: without them it stays invisible however often it is shown (#510 in Hex).
+/// Opaque attributes leave the content's own alpha as the only transparency.
+fn overlay_styles(hwnd: HWND, mode: OverlayInput) -> Result<(), String> {
     let through = if mode == OverlayInput::All { 0 } else { WS_EX_TRANSPARENT };
     // SAFETY: style changes on a live window owned by this thread.
     unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
         let next = style | WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | through;
         if next != style { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next as isize); }
+        if SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA) == 0 {
+            return Err(format!("SetLayeredWindowAttributes failed: {}", last_error()));
+        }
     }
+    Ok(())
+}
+
+fn last_error() -> String {
+    // SAFETY: reads this thread's last Win32 error.
+    let code = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+    format!("Win32 error {code}")
 }
 
 /// Keeps shown overlays above one another by level.

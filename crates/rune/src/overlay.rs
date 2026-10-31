@@ -89,7 +89,7 @@ pub struct OverlaySpec<T: 'static> {
 pub enum Availability {
     Unknown,
     Available,
-    /// Wayland without layer-shell, or the surface couldn't be created.
+    /// Wayland without layer-shell, or its window, surface or show failed (`OverlayHandle::failure`).
     Unavailable,
 }
 
@@ -107,6 +107,8 @@ struct Shared<T> {
     native: Mutex<(Option<u32>, crate::OverlayCapabilities)>,
     requests: Mutex<Requests<T>>,
     availability: AtomicU8,
+    /// Why the platform could not create or show the overlay, while it can't.
+    failure: Mutex<Option<String>>,
     /// The event loop's wake-up for this overlay; empty until the loop runs.
     wake: Mutex<Option<Waker>>,
     /// What the overlay's meter last published.
@@ -242,6 +244,11 @@ impl<T: 'static> OverlayHandle<T> {
         }
     }
 
+    /// Why the overlay is `Unavailable`: the window, its GPU surface, or showing it failed.
+    pub fn failure(&self) -> Option<String> {
+        self.shared.failure.lock().unwrap().clone()
+    }
+
     fn request(&self, f: impl FnOnce(&mut Requests<T>)) {
         f(&mut self.shared.requests.lock().unwrap());
         self.shared.wake();
@@ -347,7 +354,7 @@ pub(crate) struct Overlay<T: 'static> {
 impl<T: 'static> Overlay<T> {
     pub(crate) fn new<S>(configured: impl Into<ConfiguredOverlay<T>>, state: T, app: &AppSpec<S>) -> (Self, OverlayHandle<T>) {
         let ConfiguredOverlay { spec, options, on_key, on_created, poll, on_focus, compositor, setup, srgb_blend, macos_level, modifier_keys, animate_reveal } = configured.into();
-        let shared = Arc::new(Shared { native: Mutex::default(), requests: Mutex::default(), availability: AtomicU8::new(0), wake: Mutex::new(None), stats: Arc::default() });
+        let shared = Arc::new(Shared { native: Mutex::default(), requests: Mutex::default(), availability: AtomicU8::new(0), failure: Mutex::default(), wake: Mutex::new(None), stats: Arc::default() });
         let meter = crate::frame::surface_stats::SurfaceMeter::new(spec.name, shared.stats.clone());
         let text = TextSystem::for_window(app.fonts, app.families);
         let mut rt = Runtime::with_text(state, spec.view, spec.size, Env::default(), text);
@@ -427,6 +434,13 @@ impl<T: 'static> Overlay<T> {
         self.shared.availability.store(v, Ordering::Release);
     }
 
+    /// Marks the overlay `Unavailable` and keeps why, for `OverlayHandle::failure`.
+    fn fail(&self, reason: String) {
+        eprintln!("rune: overlay {} can't show: {reason}", self.name);
+        *self.shared.failure.lock().unwrap() = Some(reason);
+        self.set_availability(Availability::Unavailable);
+    }
+
     fn show_fading(&mut self, event_loop: &ActiveEventLoop, fade: Duration) {
         if self.visible { return; }
         // Hidden, it missed the redraws a new accent asks for (`accent::watch`).
@@ -501,7 +515,11 @@ impl<T: 'static> Overlay<T> {
                     created(crate::OverlayCreated { window_number, capabilities });
                 }
             }
-            None => self.set_availability(Availability::Unavailable),
+            None => if self.shared.failure.lock().unwrap().is_none() {
+                self.fail("the platform could not create its window or surface".into());
+            } else {
+                self.set_availability(Availability::Unavailable);
+            },
         }
     }
 
@@ -652,7 +670,13 @@ impl<T: 'static> Overlay<T> {
             use winit::platform::macos::WindowAttributesExtMacOS;
             attrs = attrs.with_has_shadow(false);
         }
-        let window = Arc::new(event_loop.create_window(attrs).ok()?);
+        let window = match event_loop.create_window(attrs) {
+            Ok(window) => Arc::new(window),
+            Err(error) => {
+                self.fail(format!("could not create its window: {error}"));
+                return None;
+            }
+        };
         #[cfg(target_os = "macos")]
         crate::native_menu::adopt_standard_view();
         self.dark = window.theme().map_or_else(|| crate::platform::preferences::desktop_dark(&window).unwrap_or(true), |t| t == winit::window::Theme::Dark);
@@ -687,7 +711,13 @@ impl<T: 'static> Overlay<T> {
             #[cfg(target_os = "windows")]
             {
                 let wake = self.shared.wake.lock().unwrap().clone();
-                self.native = Some(crate::platform::win32::OverlayWindow::new(&window, self.interactive, &self.options, wake)?);
+                match crate::platform::win32::OverlayWindow::new(&window, self.interactive, &self.options, wake) {
+                    Ok(native) => self.native = Some(native),
+                    Err(error) => {
+                        self.fail(error);
+                        return None;
+                    }
+                }
                 self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities {
                     capture_exclusion: self.native.as_ref().unwrap().capture_exclusion(), nonactivating_keys: OverlaySupport::Unsupported, global_pointer: OverlaySupport::Supported,
                 };
@@ -757,7 +787,12 @@ impl<T: 'static> Overlay<T> {
         #[cfg(target_os = "windows")]
         {
             let _ = window;
-            if let Some(native) = &mut self.native { native.show(); }
+            if let Some(native) = &mut self.native {
+                match native.show() {
+                    Ok(()) => if self.shared.failure.lock().unwrap().take().is_some() { self.set_availability(Availability::Available) },
+                    Err(error) => self.fail(error),
+                }
+            }
         }
         #[cfg(not(target_os = "windows"))]
         window.set_visible(true);
@@ -882,7 +917,14 @@ impl<T: 'static> Overlay<T> {
         let surface = match reused {
             Some((gpu, surface)) => { self.gpu = Some(gpu); surface }
             None => {
-                let (gpu, surface, renderer) = Gpu::for_surface(features, true, |instance| make(instance).ok_or_else(String::new)).ok()?;
+                let made = Gpu::for_surface(features, true, |instance| make(instance).ok_or_else(|| "could not create its GPU surface".to_owned()));
+                let (gpu, surface, renderer) = match made {
+                    Ok(made) => made,
+                    Err(error) => {
+                        self.fail(error);
+                        return None;
+                    }
+                };
                 prewarmed = renderer;
                 let gpu = Arc::new(gpu);
                 *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
