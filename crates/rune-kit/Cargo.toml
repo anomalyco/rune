@@ -46,3 +46,6 @@ rune-theme-opencode = { path = "../../themes/opencode" }
 [[test]]
 name = "markdown_fixture"
 required-features = ["markdown", "mermaid"]
+
+[lints]
+workspace = true

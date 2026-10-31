@@ -7,3 +7,6 @@ license.workspace = true
 
 [dependencies]
 rune = { path = "../../crates/rune" }
+
+[lints]
+workspace = true

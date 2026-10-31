@@ -20,3 +20,6 @@ pollster = "1"
 # Live object counts for the bind group tests.
 wgpu = { version = "30", default-features = false, features = ["counters"] }
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita-notitle"] }
+
+[lints]
+workspace = true

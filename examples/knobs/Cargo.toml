@@ -12,3 +12,6 @@ rune-knobs = { path = "../../crates/rune-knobs" }
 default = ["panel"]
 # A real app turns this on only in its dev builds; shipped builds read each knob's default.
 panel = ["rune-knobs/panel"]
+
+[lints]
+workspace = true

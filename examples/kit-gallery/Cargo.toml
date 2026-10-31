@@ -12,3 +12,6 @@ rune-theme-opencode = { path = "../../themes/opencode" }
 
 [dev-dependencies]
 wgpu = { version = "30", default-features = false }
+
+[lints]
+workspace = true

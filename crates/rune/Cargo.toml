@@ -232,3 +232,6 @@ harness = false
 [[test]]
 name = "help_macos"
 harness = false
+
+[lints]
+workspace = true

@@ -7,3 +7,6 @@ description = "Native Mermaid diagrams for Rune: flowcharts, sequence diagrams a
 
 [dependencies]
 rune = { path = "../rune", default-features = false }
+
+[lints]
+workspace = true

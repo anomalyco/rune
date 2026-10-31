@@ -8,3 +8,6 @@ description = "Per-frame GPU uploads through reused staging memory, shared by Ru
 
 [dependencies]
 wgpu = { version = "30", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true

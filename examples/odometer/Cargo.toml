@@ -8,3 +8,6 @@ publish = false
 [dependencies]
 rune = { path = "../../crates/rune" }
 rune-kit = { path = "../../crates/rune-kit" }
+
+[lints]
+workspace = true

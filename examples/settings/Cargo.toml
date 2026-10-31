@@ -11,3 +11,6 @@ hot = ["rune/hot"]
 [dependencies]
 procwatch = { path = "../../crates/procwatch", optional = true }
 rune = { path = "../../crates/rune" }
+
+[lints]
+workspace = true

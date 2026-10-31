@@ -14,3 +14,6 @@ bytemuck = { version = "1.25", features = ["derive"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"] }
+
+[lints]
+workspace = true

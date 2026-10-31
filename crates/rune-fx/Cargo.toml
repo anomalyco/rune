@@ -19,3 +19,6 @@ rune = { path = "../rune" }
 rune-ref = { path = "../rune-ref" }
 ab_glyph = "0.2.32"
 png = "0.18"
+
+[lints]
+workspace = true

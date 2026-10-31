@@ -8,3 +8,6 @@ description = "Self-registration for apps: a module adds its stories, scenes or 
 
 [dependencies]
 linkme = "0.3"
+
+[lints]
+workspace = true

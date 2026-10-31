@@ -12,3 +12,6 @@ serde = ["dep:serde"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"], optional = true }
+
+[lints]
+workspace = true
