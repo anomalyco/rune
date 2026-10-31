@@ -306,3 +306,18 @@ fn an_empty_poll_has_run_every_callback() {
         assert!(ran.load(Ordering::SeqCst), "frame {frame}: the queue read empty before its callback ran");
     }
 }
+
+#[test]
+fn adapters_are_the_ones_wgpu_picks() {
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    descriptor.backends = wgpu::Backends::METAL;
+    let ours = instance();
+    let theirs = wgpu::Instance::new(descriptor);
+    for power_preference in [wgpu::PowerPreference::LowPower, wgpu::PowerPreference::HighPerformance] {
+        let options = wgpu::RequestAdapterOptions { power_preference, ..Default::default() };
+        let name = |instance: &wgpu::Instance| pollster::block_on(instance.request_adapter(&options)).unwrap().get_info().name;
+        assert_eq!(name(&ours), name(&theirs), "{power_preference:?}");
+    }
+    let count = |instance: &wgpu::Instance| pollster::block_on(instance.enumerate_adapters(wgpu::Backends::METAL)).len();
+    assert_eq!(count(&ours), count(&theirs));
+}

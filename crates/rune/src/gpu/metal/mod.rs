@@ -49,7 +49,7 @@ mod tests;
 use std::future::ready;
 use std::pin::Pin;
 
-use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice};
+use objc2_metal::{MTLCopyAllDevices, MTLDevice};
 use objc2_video::rc::Retained;
 use objc2_video::runtime::ProtocolObject;
 use wgpu::custom::*;
@@ -132,13 +132,14 @@ impl InstanceInterface for MetalInstance {
     unsafe fn create_surface(&self, target: wgpu::SurfaceTargetUnsafe) -> Result<DispatchSurface, wgpu::CreateSurfaceError> {
         Ok(unsafe { surface::create(target) })
     }
-    fn request_adapter(&self, _: &wgpu::RequestAdapterOptions<'_, '_>) -> Pin<Box<dyn RequestAdapterFuture>> {
-        Box::pin(ready(Ok(DispatchAdapter::custom(MetalAdapter::new()))))
+    fn request_adapter(&self, options: &wgpu::RequestAdapterOptions<'_, '_>) -> Pin<Box<dyn RequestAdapterFuture>> {
+        let device = preferred(devices(), options.power_preference).expect("RUNE_GPU_BACKEND=metal needs a Metal device");
+        Box::pin(ready(Ok(DispatchAdapter::custom(MetalAdapter { device }))))
     }
     fn poll_all_devices(&self, _: bool) -> bool { true }
     fn wgsl_language_features(&self) -> wgpu::WgslLanguageFeatures { wgpu::WgslLanguageFeatures::empty() }
     fn enumerate_adapters(&self, _: wgpu::Backends) -> Pin<Box<dyn EnumerateAdapterFuture>> {
-        Box::pin(ready(vec![DispatchAdapter::custom(MetalAdapter::new())]))
+        Box::pin(ready(devices().into_iter().map(|device| DispatchAdapter::custom(MetalAdapter { device })).collect()))
     }
 }
 
@@ -148,10 +149,19 @@ struct MetalAdapter {
 }
 send_sync!(MetalAdapter);
 
-impl MetalAdapter {
-    fn new() -> Self {
-        MetalAdapter { device: MTLCreateSystemDefaultDevice().expect("RUNE_GPU_BACKEND=metal needs a Metal device") }
-    }
+/// The Mac's GPUs, as wgpu-hal lists them. Not `MTLCreateSystemDefaultDevice`: to find the main
+/// display's GPU it connects to the window server, which costs a fresh process about 8 ms more
+/// (14 ms instead of 5.5 on an M-series Mac), on every headless run and on a launch's prewarm.
+fn devices() -> Vec<Obj<dyn MTLDevice>> {
+    MTLCopyAllDevices().to_vec()
+}
+
+/// The first integrated GPU, or for `HighPerformance` the first discrete one, else the first: the
+/// order wgpu ranks adapters in.
+fn preferred(devices: Vec<Obj<dyn MTLDevice>>, power: wgpu::PowerPreference) -> Option<Obj<dyn MTLDevice>> {
+    let integrated = power != wgpu::PowerPreference::HighPerformance;
+    let at = devices.iter().position(|d| d.hasUnifiedMemory() == integrated).unwrap_or(0);
+    devices.into_iter().nth(at)
 }
 
 fn info(device: &ProtocolObject<dyn MTLDevice>) -> wgpu::AdapterInfo {
