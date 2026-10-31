@@ -14,7 +14,8 @@ impl<S> Cx<S> {
     /// them. Empty (and allocating nothing) when nothing is selected or only a caret is placed.
     /// Boxes aren't clipped to their scroll viewport, so a view can tell when the selection has
     /// scrolled out of sight. Only mounted texts have boxes: the rows of a virtual list that
-    /// scrolled away have none.
+    /// scrolled away have none. Like [`Cx::layout`], boxes are layout points: an ancestor's
+    /// [`El::scale`](crate::El::scale) isn't applied.
     ///
     /// A view that reads it re-runs when a box appears, goes, or moves by more than half a
     /// point: in the same commit when layout moved it, the next frame when the selection

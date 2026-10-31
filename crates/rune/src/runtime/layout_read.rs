@@ -9,7 +9,8 @@
 //!
 //! All of them see where layout puts an element, never a frame of its spring, so they don't
 //! re-run through animations. View reads see it unscrolled (window points with every viewport
-//! at its origin), so scrolling re-runs no view; `Cx::window_layout` and
+//! at its origin), so scrolling re-runs no view. None of them apply an ancestor's visual
+//! transform (`El::scale`): they're layout points. `Cx::window_layout` and
 //! `Cx::window_layout_with` read it after scrolling, under a key no element can have
 //! ([`window_key`]), and handlers hear it after scrolling. A view reading something its own
 //! output resizes (its own size, say) can feed back into itself; that settles instead of
@@ -167,6 +168,12 @@ impl<S> Cx<S> {
     /// where the window shows it. A view that needs where the element is in the window now,
     /// after scrolling (to float something outside the list over a row, say), reads
     /// [`Self::window_layout`] instead.
+    ///
+    /// Window points here are layout points: a visual transform on an ancestor, such as
+    /// [`El::scale`](crate::El::scale), isn't applied, because layout keeps the unscaled size.
+    /// Under a scaled ancestor, map a rect through that ancestor's scale and origin yourself.
+    /// The same holds for every layout read, [`Self::selection_rects`], [`Self::caret`] and
+    /// [`El::on_layout`](crate::El::on_layout).
     ///
     /// A view that reads it re-runs when that rect moves or resizes past half a point, in the
     /// commit that moved it. Reading an element the view itself resizes (its own size, say)
