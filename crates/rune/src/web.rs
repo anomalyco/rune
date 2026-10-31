@@ -85,7 +85,7 @@ struct Running<S: 'static> {
     renderer: Renderer,
     rt: Runtime<S>,
     shared: Arc<crate::app::Shared<S>>,
-    clock: crate::frame_clock::FrameClock,
+    clock: crate::frame::clock::FrameClock,
     compositor: Option<Box<dyn crate::Compositor<S>>>,
     suspended: bool,
     embedded: bool,
@@ -352,7 +352,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             let cursor = crate::os_cursor::OsCursor::new(event_loop);
             let input = input::Bridge::new(&window.canvas().unwrap(), Rc::downgrade(&self.running), window.clone(), self.embedded, fit_height);
             *self.running.borrow_mut() = Some(Running { gpu, surface, config, renderer, rt, shared, input, clipboard,
-                clock: crate::frame_clock::FrameClock::new(now), compositor, suspended: false, embedded: self.embedded,
+                clock: crate::frame::clock::FrameClock::new(now), compositor, suspended: false, embedded: self.embedded,
                 cursor, _menus: menus, shortcuts });
         }
         if let Some(r) = &mut *self.running.borrow_mut() {

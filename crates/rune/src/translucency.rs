@@ -24,7 +24,7 @@ pub(crate) fn serves(gpu: &crate::render::Gpu, surface: &wgpu::Surface<'_>, want
 /// on `instance` that does on the compositor's GPU (`gpu_pick`), then the lowest-power one that
 /// does, or `pick`'s adapter when none can.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn prefer(instance: &wgpu::Instance, surface: &wgpu::Surface<'_>, pick: &crate::gpu_pick::Pick) -> wgpu::Adapter {
+pub(crate) fn prefer(instance: &wgpu::Instance, surface: &wgpu::Surface<'_>, pick: &crate::gpu::pick::Pick) -> wgpu::Adapter {
     if mode(surface, &pick.adapter).is_some() {
         return pick.adapter.clone();
     }

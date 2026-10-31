@@ -218,12 +218,12 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     }
 
     #[cfg(feature = "frame-profile")]
-    let mut profile = crate::frame_profile::Log::new(last_frame + 1);
+    let mut profile = crate::frame::profile::Log::new(last_frame + 1);
     for k in 0..=last_frame {
         #[cfg(feature = "frame-profile")]
         let (alloc0, commits0, cpu0) = {
-            crate::frame_profile::take();
-            (procwatch::alloc::thread_allocations(), rt.stats.commits, crate::frame_profile::cpu_ms())
+            crate::frame::profile::take();
+            (procwatch::alloc::thread_allocations(), rt.stats.commits, crate::frame::profile::cpu_ms())
         };
         let real_t = k as f64 * dt;
         let frame_start = Instant::now();
@@ -363,10 +363,10 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         if want_pixels { readback.submitted(); }
         let ms = frame_start.elapsed().as_secs_f64() * 1000.0;
         #[cfg(feature = "frame-profile")]
-        profile.push(crate::frame_profile::Row {
-            phases: crate::frame_profile::take(), update_ms, encode_ms: ms - update_ms, events: next_ev - events0,
+        profile.push(crate::frame::profile::Row {
+            phases: crate::frame::profile::take(), update_ms, encode_ms: ms - update_ms, events: next_ev - events0,
             allocations: procwatch::alloc::thread_allocations() - alloc0, commits: rt.stats.commits - commits0,
-            why: std::mem::take(&mut rt.commit_why), shaped: rt.stats.shaped, animating, cpu_ms: cpu0.map(|start| crate::frame_profile::cpu_ms().unwrap() - start),
+            why: std::mem::take(&mut rt.commit_why), shaped: rt.stats.shaped, animating, cpu_ms: cpu0.map(|start| crate::frame::profile::cpu_ms().unwrap() - start),
         });
         cpu_ms.push(ms);
         if k > 0 {

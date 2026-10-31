@@ -126,5 +126,5 @@ impl<S: 'static> FrameReports<S> {
 }
 
 #[cfg(test)]
-#[path = "frame_encoded_tests.rs"]
+#[path = "encoded_tests.rs"]
 mod tests;

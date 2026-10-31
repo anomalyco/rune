@@ -61,8 +61,8 @@ fn reel_part(name: &str) -> String {
 
 fn cases() -> Vec<Case> {
     let mut cases = vec![
-        case("rune uber", &["rune/src/clip.wgsl", "rune/src/shader.wgsl", "rune/src/gpu_springs.wgsl"],
-            format!("{CLIP}\n{}\n{}", include_str!("../../shader.wgsl"), include_str!("../../gpu_springs.wgsl"))),
+        case("rune uber", &["rune/src/clip.wgsl", "rune/src/shader.wgsl", "rune/src/gpu/springs.wgsl"],
+            format!("{CLIP}\n{}\n{}", include_str!("../../shader.wgsl"), include_str!("../springs.wgsl"))),
         case("rune backdrop blur", &["rune/src/backdrop_blur.wgsl"], include_str!("../../backdrop_blur.wgsl").into()),
         case("rune backdrop composite", &["rune/src/clip.wgsl", "rune/src/backdrop_composite.wgsl"],
             format!("{CLIP}\n{}", include_str!("../../backdrop_composite.wgsl"))),

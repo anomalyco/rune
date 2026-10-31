@@ -447,7 +447,7 @@ were recalled rather than re-read; each note marks which. Cite-check before rely
 - **Springs evaluated on the GPU.** Two notes reached this independently ([12], [17]): instances reference
   transform/clip/effect property nodes (Chromium's property trees) whose analytic spring tracks a shader evaluates,
   so an animating frame costs the CPU about one uniform write regardless of how many things move. Verified against
-  the CPU evaluator. Spiked as opt-in translation/opacity tracks in `crates/rune/src/gpu_springs.rs`.
+  the CPU evaluator. Spiked as opt-in translation/opacity tracks in `crates/rune/src/gpu/springs.rs`.
 - Liquid-glass lens in our own shader (SDF height field, refraction, dispersion, smooth-union morphing) ([12]).
 - Word-level FLIP when text reflows during a resize ([15]); Slug for scale-animated text ([12]).
 - Runtime-generated UI: an A2UI-shaped protocol (flat ids, separate data model, patches) on the command channel, with

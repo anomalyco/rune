@@ -101,7 +101,7 @@ impl Stall {
     pub(crate) fn start() -> Self {
         Stall {
             #[cfg(debug_assertions)]
-            start: if enabled() { crate::frame_profile::cpu_ms().map(|cpu| (Instant::now(), cpu)) } else { None },
+            start: if enabled() { crate::frame::profile::cpu_ms().map(|cpu| (Instant::now(), cpu)) } else { None },
         }
     }
 
@@ -114,7 +114,7 @@ impl Stall {
         if let Some((wall, cpu)) = self.start {
             let wall = wall.elapsed().as_secs_f64() * 1000.0;
             if wall <= STALL_MS { return }
-            let cpu = crate::frame_profile::cpu_ms().map_or(0.0, |now| now - cpu);
+            let cpu = crate::frame::profile::cpu_ms().map_or(0.0, |now| now - cpu);
             if wall <= STALL_CPU_RATIO * cpu { return }
             let (site, name) = what();
             warn_once(format!("stall {site}"), || format!(

@@ -313,7 +313,7 @@ fn overlay_resume_keeps_running_motion_and_starts_new_motion_fresh() {
         width(&overlay, "box")
     };
     // Running motion keeps real time up to the resume cap.
-    let (capped, _) = run(|_| {}, |_| {}, Duration::from_secs_f64(crate::frame_clock::MAX_GAP));
+    let (capped, _) = run(|_| {}, |_| {}, Duration::from_secs_f64(crate::frame::clock::MAX_GAP));
     type Case = (&'static str, fn(&mut Overlay<Pair>), fn(&mut Overlay<Pair>));
     let hidden: Case = ("hidden", |o| o.hide(), |o| o.visible = true);
     #[cfg(target_os = "macos")]
@@ -324,7 +324,7 @@ fn overlay_resume_keeps_running_motion_and_starts_new_motion_fresh() {
         let (a, b) = run(pause, resume, Duration::from_secs(3));
         // `b` sits beside `a`, so its edges snap to a different 1/64 pt grid than `fresh`.
         assert!((b - fresh).abs() < 0.02, "{what}: motion starting on the resume frame must not jump: b={b}, fresh={fresh}");
-        assert!(capped < 211.0 && (a - capped).abs() < 0.01, "{what}: running motion resumes {:?} along: a={a}, expected={capped}", crate::frame_clock::MAX_GAP);
+        assert!(capped < 211.0 && (a - capped).abs() < 0.01, "{what}: running motion resumes {:?} along: a={a}, expected={capped}", crate::frame::clock::MAX_GAP);
     }
     // A missed frame while covered or asleep polls but commits nothing, retained or not: `b`
     // starts on the first uncovered frame, as above.

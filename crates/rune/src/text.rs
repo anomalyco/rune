@@ -464,7 +464,7 @@ impl TextSystem {
             }
             if let Some(prev) = self.shapes.get(&shape_key).copied() && let Some(Entry { value: shaped, used, .. }) = self.layouts.get(&prev) {
                 self.rebroken += 1;
-                let _break_time = crate::frame_profile::Scope::new(crate::frame_profile::Phase::Text);
+                let _break_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Text);
                 // One this commit hasn't used and nothing else holds moves to the new width and
                 // re-breaks in place; otherwise the shaped runs are copied.
                 let (moves, mut l) = (*used != g && Rc::strong_count(shaped) == 1, shaped.clone());
@@ -478,7 +478,7 @@ impl TextSystem {
             }
         }
         self.shaped += 1;
-        let _shape_time = crate::frame_profile::Scope::new(crate::frame_profile::Phase::Text);
+        let _shape_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Text);
         let mono_style = matches!(style.family, Family::Mono | Family::SystemMono);
         let tabs = if text.contains('\t') { mono_tab_stops(text, spans, mono_style) } else { Vec::new() };
         let widen = if tabs.is_empty() { Vec::new() } else { self.mono_tab_widening(&tabs, spans, style, scale) };

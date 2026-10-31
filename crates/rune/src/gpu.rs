@@ -1,13 +1,19 @@
-//! The Metal backend under a surface: wgpu's own, or with `metal-backend` Rune's native one
+//! The GPU under a surface. On macOS, the Metal backend: wgpu's own, or with `metal-backend` Rune's native one
 //! (`metal`), which `RUNE_GPU_BACKEND=metal` selects.
 
-#[cfg(feature = "metal-backend")]
+pub(crate) mod backend;
+#[cfg(all(target_os = "macos", feature = "metal-backend"))]
 pub(crate) mod metal;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod pick;
+pub mod springs;
 
+#[cfg(target_os = "macos")]
 use objc2_video::runtime::AnyObject;
 
 /// Runs `f` on the CAMetalLayer `surface` presents into, under wgpu-hal's lock on wgpu's Metal
 /// backend. `None` when the surface is on neither backend.
+#[cfg(target_os = "macos")]
 pub(crate) fn with_layer<R>(surface: &wgpu::Surface<'_>, f: impl FnOnce(&AnyObject) -> R) -> Option<R> {
     // SAFETY: the layer is only borrowed, under wgpu's lock.
     if let Some(hal) = unsafe { surface.as_hal::<wgpu::hal::api::Metal>() } {
@@ -25,6 +31,7 @@ pub(crate) fn with_layer<R>(surface: &wgpu::Surface<'_>, f: impl FnOnce(&AnyObje
 
 /// Whether `queue` is Rune's native Metal backend's, where a frame's submit and present commit
 /// one command buffer, too cheap to hand to a present thread.
+#[cfg(target_os = "macos")]
 pub(crate) fn native(queue: &wgpu::Queue) -> bool {
     #[cfg(feature = "metal-backend")]
     return metal::owns(queue);

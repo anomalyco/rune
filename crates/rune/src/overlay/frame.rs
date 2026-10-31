@@ -3,7 +3,7 @@
 
 use super::{Backing, Live};
 use crate::compose::{Compositor, Frame};
-use crate::frame_clock::FrameClock;
+use crate::frame::clock::FrameClock;
 use crate::render::{Gpu, Renderer};
 use crate::runtime::Runtime;
 use crate::time::Instant;

@@ -5,7 +5,7 @@
 use std::cell::Cell;
 use std::sync::OnceLock;
 
-use crate::frame_profile::{PHASES, Phase};
+use crate::frame::profile::{PHASES, Phase};
 use crate::time::Instant;
 
 /// The budget in ms, when `RUNE_COMMIT_BUDGET_MS` sets one.

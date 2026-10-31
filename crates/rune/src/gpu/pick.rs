@@ -216,5 +216,5 @@ mod dmabuf {
 }
 
 #[cfg(test)]
-#[path = "gpu_pick_tests.rs"]
+#[path = "pick_tests.rs"]
 mod tests;

@@ -30,7 +30,7 @@ use winit::window::{Window, WindowId, WindowLevel};
 
 use crate::el::{Align, El, Tx};
 use crate::compose::{Compositor, Frame};
-use crate::frame_clock::FrameClock;
+use crate::frame::clock::FrameClock;
 use crate::render::{Gpu, Renderer};
 use crate::runtime::{Cx, Env, Runtime, Waker};
 use crate::text::TextSystem;

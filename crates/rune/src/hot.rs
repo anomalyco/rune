@@ -360,7 +360,7 @@ fn headless<S: 'static>(spec: &AppSpec<S>, state: S, args: Args, (srgb_blend, fo
         let before = rt.hot.as_ref().unwrap().seen;
         match fixed {
             Some(dt) => { rt.frame(dt); }
-            None => { crate::frame_clock::advance_by(&mut rt, elapsed); }
+            None => { crate::frame::clock::advance_by(&mut rt, elapsed); }
         }
         let generation = rt.hot.as_ref().unwrap().seen;
         if first || requested || before != generation {

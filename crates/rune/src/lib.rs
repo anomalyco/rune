@@ -109,16 +109,12 @@ pub mod live;
 pub mod memo;
 pub mod motion_gate;
 mod pixels;
-#[cfg(target_os = "macos")]
 mod gpu;
 #[cfg(all(target_os = "macos", feature = "metal-backend"))]
 #[doc(hidden)]
 pub use gpu::metal::bench::dispatch_overhead as __metal_dispatch_overhead;
-mod gpu_backend;
-pub use gpu_backend::GpuBackend;
-#[cfg(not(target_arch = "wasm32"))]
-mod gpu_pick;
-pub mod gpu_springs;
+pub use gpu::backend::GpuBackend;
+pub use gpu::springs as gpu_springs;
 pub mod image;
 #[cfg(feature = "hot")]
 pub mod hot;
@@ -143,10 +139,9 @@ mod virtual_rows;
 mod virtual_desktop;
 mod desktop;
 mod flight;
-mod frame_profile;
 #[cfg(feature = "frame-profile")]
 #[doc(hidden)]
-pub use frame_profile::{PHASES, take_frame_phases, thread_cpu_ms};
+pub use frame::profile::{PHASES, take_frame_phases, thread_cpu_ms};
 mod perf_warn;
 #[cfg(not(target_arch = "wasm32"))]
 mod ready_signal;
@@ -164,9 +159,8 @@ mod window;
 mod reopen;
 mod drop_pointer;
 mod window_frame;
-mod frame_clock;
-mod frame_encoded;
-pub use frame_encoded::{FrameEncoded, FrameOutcome};
+pub use frame::encoded::{FrameEncoded, FrameOutcome};
+mod frame;
 pub use input_time::last_input;
 mod present_time;
 #[cfg(target_os = "macos")]

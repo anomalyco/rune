@@ -169,7 +169,7 @@ impl<S: 'static> Measurement<'_, S> {
             height: if self.fit_height { AvailableSpace::MaxContent } else { AvailableSpace::Definite(self.viewport.1) },
         };
         {
-            let _layout_time = crate::frame_profile::Scope::new(crate::frame_profile::Phase::Layout);
+            let _layout_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Layout);
             compute_layout(&mut taffy, root_id, room, &nodes, &mut self.text, scale);
             // `aspect_fit` elements laid out filling their room; fix each at the largest box
             // at its ratio inside it and lay out again, so siblings and alignment follow.

@@ -217,7 +217,7 @@ struct CompHost {
     comp_animates: std::rc::Rc<std::cell::Cell<bool>>,
     frames: u32,
     /// Called where `draw` calls it.
-    reports: crate::frame_encoded::FrameReports<u32>,
+    reports: crate::frame::encoded::FrameReports<u32>,
 }
 
 impl CompHost {
@@ -250,7 +250,7 @@ impl CompHost {
     /// nothing, unless a compositor draws it. Returns whether it presented.
     fn frame(&mut self, quiet: bool) -> bool {
         let started = Instant::now();
-        let animating = self.rt.frame(crate::frame_clock::RESUME_STEP);
+        let animating = self.rt.frame(crate::frame::clock::RESUME_STEP);
         let update_ms = started.elapsed().as_secs_f64() * 1000.0;
         if quiet && self.comp.is_none() && self.presented.as_ref().is_some_and(|p| p.unchanged(&self.rt, &self.config, animating, None)) {
             self.reports.unchanged(None);
@@ -319,7 +319,7 @@ fn an_animating_compositor_draws_every_frame() {
 fn a_compositor_s_frame_never_counts_as_unchanged() {
     let mut host = CompHost::new(Some(false), still);
     host.rt.update(|_, _| {});
-    host.rt.frame(crate::frame_clock::RESUME_STEP);
+    host.rt.frame(crate::frame::clock::RESUME_STEP);
     let p = host.presented.as_ref().unwrap();
     assert!(!p.same(&host.rt, &host.config), "the same instances may composite differently");
     assert!(!p.unchanged(&host.rt, &host.config, false, None));
@@ -371,8 +371,8 @@ fn reporting_frames_changes_no_frame_skip_or_redraw() {
         let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let sink = log.clone();
         let mut host = CompHost::new(None, every_third);
-        let hook = hook.then(|| Box::new(move |f: &crate::FrameEncoded| sink.borrow_mut().push(f.outcome())) as crate::frame_encoded::OnFrameEncoded);
-        host.reports = crate::frame_encoded::FrameReports::new(hook, Some("main"));
+        let hook = hook.then(|| Box::new(move |f: &crate::FrameEncoded| sink.borrow_mut().push(f.outcome())) as crate::frame::encoded::OnFrameEncoded);
+        host.reports = crate::frame::encoded::FrameReports::new(hook, Some("main"));
         let mut steps = Vec::new();
         for i in 0..12 {
             let presented = if i % 5 == 0 { host.frame(false) } else { host.timer_wake() };

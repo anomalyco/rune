@@ -5,7 +5,7 @@ use super::*;
 impl<S: 'static> Runtime<S> {
     /// The mutation phase cannot accept an El or an unfinished measurement pass.
     pub(super) fn apply(&mut self, measured: Measured, tx: &Tx) {
-        let _apply_time = crate::frame_profile::Scope::new(crate::frame_profile::Phase::Apply);
+        let _apply_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Apply);
         let Measured { layout: taffy, mut nodes, reduced_motion, time_scale, caret_read, memo_flattened, memo_reused, .. } = measured;
         let mut scratch = std::mem::take(&mut self.apply_scratch);
         self.caret_watch = caret_read;

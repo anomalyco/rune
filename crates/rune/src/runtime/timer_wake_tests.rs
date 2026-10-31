@@ -33,7 +33,7 @@ fn runtime(app: App) -> Runtime<App> {
     rt.poll = Some(poll);
     rt.wall_start = Some(crate::time::Instant::now());
     rt.frame(0.0);
-    rt.frame(crate::frame_clock::RESUME_STEP);
+    rt.frame(crate::frame::clock::RESUME_STEP);
     assert!(!rt.animating);
     rt
 }
@@ -66,7 +66,7 @@ fn host_wake(rt: &mut Runtime<App>, shell: impl FnOnce(&mut Runtime<App>) -> boo
 /// A timer wake with nothing between it and its frame. Returns whether it drew.
 fn timer_wake(rt: &mut Runtime<App>) -> bool {
     if !host_wake(rt, |_| true) { return false; }
-    rt.frame(crate::frame_clock::RESUME_STEP);
+    rt.frame(crate::frame::clock::RESUME_STEP);
     true
 }
 
@@ -95,7 +95,7 @@ fn a_poll_stepping_every_frame_still_draws_every_frame() {
     assert_eq!(rt.state.polls - polls, 10, "the frames poll; the wakes don't poll first");
     // Steps reported as no change still take their frames, as before.
     rt.poll = Some(|s, _, tx| { s.polls += 1; tx.wake_after(Duration::ZERO); false });
-    rt.frame(crate::frame_clock::RESUME_STEP);
+    rt.frame(crate::frame::clock::RESUME_STEP);
     for _ in 0..5 { assert!(timer_wake(&mut rt)); }
     // A resting window's poll that starts stepping takes the next frame.
     let mut rt = runtime(App::default());
@@ -111,7 +111,7 @@ fn a_poll_stepping_every_frame_still_draws_every_frame() {
 fn motion_in_flight_takes_the_timer_s_frame() {
     let mut rt = runtime(App::default());
     rt.update(|s, _| s.width = 120.0);
-    rt.frame(crate::frame_clock::RESUME_STEP);
+    rt.frame(crate::frame::clock::RESUME_STEP);
     assert!(rt.animating, "the box springs to its new width");
     let polls = rt.state.polls;
     assert_eq!(rt.resting_wake(), None);
@@ -127,7 +127,7 @@ fn a_wake_before_the_timer_s_frame_gets_a_poll() {
     // `AppHandle::wake` lands before the frame (the display link is starting).
     rt.cancel_timer_frame();
     let armed = rt.wake_deadline().expect("the timer poll's own timer counts from it");
-    rt.frame(crate::frame_clock::RESUME_STEP);
+    rt.frame(crate::frame::clock::RESUME_STEP);
     assert_eq!(rt.state.polls, polls + 2, "the frame polls for the wake");
     assert_eq!(rt.wake_deadlines.first(), Some(&armed));
 }
@@ -141,7 +141,7 @@ fn a_timer_due_between_the_poll_and_its_frame_gets_the_frame_s_poll() {
     let polled = rt.clock;
     rt.schedule_wakes_from(polled, [Duration::from_millis(2)]);
     advance(&mut rt, 0.005);
-    rt.frame(crate::frame_clock::RESUME_STEP);
+    rt.frame(crate::frame::clock::RESUME_STEP);
     assert_eq!(rt.state.polls, polls + 2, "the later timer polls");
     assert!(rt.wake_deadlines.iter().all(|t| *t > rt.clock), "nothing due is left behind: {:?}", rt.wake_deadlines);
     assert!(rt.resting_wake().is_some(), "and the window rests again");
@@ -155,7 +155,7 @@ fn the_timer_s_frame_keeps_the_poll_s_time() {
     assert!(host_wake(&mut rt, |_| true));
     let polled = rt.clock;
     advance(&mut rt, 0.004);
-    rt.frame(crate::frame_clock::RESUME_STEP);
+    rt.frame(crate::frame::clock::RESUME_STEP);
     assert_eq!(rt.state.polls, polls + 1);
     assert!(rt.clock > polled);
     assert_eq!(rt.polled_at(), polled, "timers pace from the poll, not the frame");
@@ -169,7 +169,7 @@ fn a_timer_poll_that_leaves_work_for_the_frame_is_its_only_poll() {
     let polls = rt.state.polls;
     // The poll changes nothing, but a command the host runs after it does.
     assert!(host_wake(&mut rt, |rt| { rt.update(|s, _| s.width = 4.0); true }));
-    rt.frame(crate::frame_clock::RESUME_STEP);
+    rt.frame(crate::frame::clock::RESUME_STEP);
     assert_eq!(rt.state.polls, polls + 1, "the frame doesn't poll a second time");
 }
 
@@ -181,7 +181,7 @@ fn a_timer_poll_that_hides_the_window_asks_no_frame() {
     assert!(!host_wake(&mut rt, |_| false), "a keep-running window the poll closed");
     let polled = rt.clock;
     assert!((rt.wake_deadline().unwrap() - (polled + PERIOD.as_secs_f64())).abs() < 1e-9, "its timer still runs, hidden");
-    rt.frame(crate::frame_clock::RESUME_STEP);
+    rt.frame(crate::frame::clock::RESUME_STEP);
     assert_eq!(rt.state.polls, polls + 2, "the frame that shows it polls");
 
     // Hidden or shown after the frame was asked for: the next frame polls, and the timer runs.
@@ -192,7 +192,7 @@ fn a_timer_poll_that_hides_the_window_asks_no_frame() {
     let polled = rt.clock;
     rt.cancel_timer_frame();
     assert!((rt.wake_deadline().unwrap() - (polled + PERIOD.as_secs_f64())).abs() < 1e-9);
-    rt.frame(crate::frame_clock::RESUME_STEP);
+    rt.frame(crate::frame::clock::RESUME_STEP);
     assert_eq!(rt.state.polls, polls + 2);
 }
 
@@ -208,7 +208,7 @@ fn a_timer_frame_that_runs_covered_does_not_poll_again() {
     assert!(rt.hidden_wake(), "the poll's change is still to draw");
     assert_eq!(rt.state.polls, polls + 1, "one poll for the wake");
     assert!((rt.wake_deadline().unwrap() - (polled + PERIOD.as_secs_f64())).abs() < 1e-9, "its timer counts from the poll");
-    rt.frame(crate::frame_clock::RESUME_STEP);
+    rt.frame(crate::frame::clock::RESUME_STEP);
     assert_eq!(rt.state.polls, polls + 2, "the frame that draws next polls");
 
     // Another timer due by then still polls.

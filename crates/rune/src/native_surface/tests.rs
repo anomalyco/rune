@@ -461,8 +461,8 @@ fn video_gpu_colour_sharpness_geometry_and_lifetime_on(gpu: Gpu) {
 
     // A video pipeline switch must also restore the retained-springs bind group before
     // painting the border and child. Identity tracks should exactly match ordinary rendering.
-    let zero = crate::gpu_springs::Track::constant(0.0);
-    let node = crate::gpu_springs::Node { x: zero, y: zero, opacity: crate::gpu_springs::Track::constant(1.0) };
+    let zero = crate::gpu::springs::Track::constant(0.0);
+    let node = crate::gpu::springs::Node { x: zero, y: zero, opacity: crate::gpu::springs::Track::constant(1.0) };
     let mut sprung =
         crate::render::Renderer::with_springs(&gpu.device, OFFSCREEN_FORMAT, &[node], &vec![0; rt.instances.len()]);
     sprung.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (16, 8));

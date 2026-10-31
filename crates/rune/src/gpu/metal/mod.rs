@@ -93,7 +93,7 @@ pub(crate) fn render_msl(wgsl: &str, entries: &[wgpu::BindGroupLayoutEntry], lan
 
 /// Whether `App::gpu_backend` or `RUNE_GPU_BACKEND=metal` asks for this backend.
 pub(crate) fn enabled() -> bool {
-    crate::gpu_backend::current() == crate::GpuBackend::Metal
+    crate::gpu::backend::current() == crate::GpuBackend::Metal
 }
 
 pub(crate) fn instance() -> wgpu::Instance {

@@ -321,7 +321,7 @@ impl<S: 'static> Host<S> {
         // moves it. While the user drags the edge, it waits until they let go.
         #[cfg(target_os = "macos")]
         if !hidden && !live_resize && self.rt.window_frame.is_some() {
-            let shown = if std::mem::take(&mut self.rt.fit_held) { 0.0 } else { crate::frame_clock::RESUME_STEP };
+            let shown = if std::mem::take(&mut self.rt.fit_held) { 0.0 } else { crate::frame::clock::RESUME_STEP };
             self.take_frame_request(self.frame_secs(frame_time) - shown, true);
         }
     }

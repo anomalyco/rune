@@ -269,7 +269,7 @@ impl Renderer {
 
     /// One uniform write per presentation-only frame; use the display's target time.
     pub fn present_at(&self, queue: &wgpu::Queue, viewport: (u32, u32), time: f64) {
-        let t = crate::gpu_springs::split_time(time);
+        let t = crate::gpu::springs::split_time(time);
         let data = [viewport.0 as f32, viewport.1 as f32, t[0], t[1]];
         self.uploads.viewport.store(pack(viewport), Ordering::Relaxed);
         match &self.uploads.staging {
@@ -279,12 +279,12 @@ impl Renderer {
     }
 
     /// A retarget touches one node record; caller computes inherited position/velocity on CPU.
-    pub fn write_spring_node(&mut self, queue: &wgpu::Queue, id: usize, node: &crate::gpu_springs::Node) {
+    pub fn write_spring_node(&mut self, queue: &wgpu::Queue, id: usize, node: &crate::gpu::springs::Node) {
         let properties = self.springs.as_mut().expect("renderer has no GPU springs");
         assert!(id < properties.deadlines.len());
         properties.deadlines[id] = node.settle_at();
         properties.settle_at = properties.deadlines.iter().copied().fold(0.0, f64::max);
-        let offset = (id * std::mem::size_of::<crate::gpu_springs::Node>()) as u64;
+        let offset = (id * std::mem::size_of::<crate::gpu::springs::Node>()) as u64;
         match &self.uploads.staging {
             Some(s) => s.write_buffer(&properties.nodes, offset, bytemuck::bytes_of(node)),
             None => queue.write_buffer(&properties.nodes, offset, bytemuck::bytes_of(node)),

@@ -56,8 +56,8 @@ pub struct App<S: 'static> {
     pub(crate) windows: Vec<crate::AnyWindowSpec>,
     pub(crate) on_window: Option<OnWindow>,
     pub(crate) on_ready: Option<OnWindow>,
-    pub(crate) on_frame_encoded: Option<crate::frame_encoded::OnFrameEncoded>,
-    pub(crate) on_frame_drawn: Option<crate::frame_encoded::OnFrameDrawn<S>>,
+    pub(crate) on_frame_encoded: Option<crate::frame::encoded::OnFrameEncoded>,
+    pub(crate) on_frame_drawn: Option<crate::frame::encoded::OnFrameDrawn<S>>,
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) same_tab_router: Option<Box<dyn Fn(&str) -> bool>>,
     pub(crate) macos_window: crate::MacWindowOptions,
@@ -307,7 +307,7 @@ impl<S: 'static> App<S> {
     /// GPU the process makes from here on, and a `prewarm_gpu` already running on the other
     /// backend starts over on this one. Does nothing elsewhere.
     pub fn gpu_backend(self, backend: crate::GpuBackend) -> Self {
-        crate::gpu_backend::choose(backend);
+        crate::gpu::backend::choose(backend);
         self
     }
 

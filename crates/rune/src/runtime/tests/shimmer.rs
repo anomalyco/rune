@@ -257,7 +257,7 @@ fn window(rt: &mut Runtime<Shimmer>, secs: f64, events: &mut Vec<(f64, Ev)>, wor
                 }
             }
         };
-        let step = crate::frame_clock::split(gap, rt.animating);
+        let step = crate::frame::clock::split(gap, rt.animating);
         if !covered { rt.clock += (gap - step.total()).max(0.0); }
         rt.state.now = rt.clock + step.total();
         rt.invalidate();

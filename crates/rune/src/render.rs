@@ -392,7 +392,7 @@ impl Gpu {
     #[cfg(not(target_arch = "wasm32"))]
     fn try_for(instance: wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, wanted: wgpu::Features, translucent: bool) -> Result<Gpu, String> {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
-        let pick = crate::gpu_pick::pick(&instance, surface)?;
+        let pick = crate::gpu::pick::pick(&instance, surface)?;
         let adapter = match surface {
             Some(s) if translucent && !pick.from_env() => crate::translucency::prefer(&instance, s, &pick),
             _ => pick.adapter,
@@ -567,7 +567,7 @@ pub struct Renderer {
     instances: wgpu::Buffer,
     capacity: usize,
     count: u32,
-    springs: Option<crate::gpu_springs::Bindings>,
+    springs: Option<crate::gpu::springs::Bindings>,
     spring_instances: usize,
     layers: layers::Layers,
     srgb_blend: bool,
@@ -595,13 +595,13 @@ impl Renderer {
 
     /// Opt-in retained geometry. IDs map instances to shared translation/opacity nodes.
     /// Upload geometry once with `prepare`, then use `present_at` without rebuilding instances.
-    pub fn with_springs(device: &wgpu::Device, format: wgpu::TextureFormat, nodes: &[crate::gpu_springs::Node], ids: &[u32]) -> Renderer {
+    pub fn with_springs(device: &wgpu::Device, format: wgpu::TextureFormat, nodes: &[crate::gpu::springs::Node], ids: &[u32]) -> Renderer {
         Self::create(device, format, Some((nodes, ids)))
     }
 
-    fn create(device: &wgpu::Device, format: wgpu::TextureFormat, properties: Option<(&[crate::gpu_springs::Node], &[u32])>) -> Renderer {
+    fn create(device: &wgpu::Device, format: wgpu::TextureFormat, properties: Option<(&[crate::gpu::springs::Node], &[u32])>) -> Renderer {
         let spring_shader = if properties.is_some() {
-            let source = format!("{CLIP_WGSL}\n{}\n{}", include_str!("shader.wgsl"), crate::gpu_springs::SHADER);
+            let source = format!("{CLIP_WGSL}\n{}\n{}", include_str!("shader.wgsl"), crate::gpu::springs::SHADER);
             Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("uber"),
                 source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -622,7 +622,7 @@ impl Renderer {
         let atlas = Self::texture(device, "glyph atlas", wgpu::TextureFormat::R8Unorm, ATLAS_SIZE, ATLAS_SIZE);
         let stand_in = Self::image_texture(device, 1, 1);
         let bind_group = Self::bind_group(device, &bgl, &globals, &atlas, &stand_in, None);
-        let spring_layout = properties.map(|_| crate::gpu_springs::Bindings::layout(device));
+        let spring_layout = properties.map(|_| crate::gpu::springs::Bindings::layout(device));
         let layouts = [Some(&bgl), spring_layout.as_ref()];
         let layout = device.create_pipeline_layout(&metallib::uber_pipeline_layout(
             &layouts, properties.is_some(),
@@ -636,7 +636,7 @@ impl Renderer {
         let capacity = 256;
         let instances = Self::instance_buffer(device, capacity);
         let spring_instances = properties.map_or(0, |(_, ids)| ids.len());
-        let springs = properties.map(|(nodes, ids)| crate::gpu_springs::Bindings::new(device, spring_layout.as_ref().unwrap(), nodes, ids));
+        let springs = properties.map(|(nodes, ids)| crate::gpu::springs::Bindings::new(device, spring_layout.as_ref().unwrap(), nodes, ids));
         Renderer {
             surfaces: None,
             pipeline,

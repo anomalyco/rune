@@ -303,8 +303,8 @@ mod tests {
         rt.frame(0.0);
         assert_eq!(rt.images.pages.len(), 2);
         let gpu = Gpu::headless();
-        let zero = crate::gpu_springs::Track::constant(0.0);
-        let node = crate::gpu_springs::Node { x: zero, y: zero, opacity: crate::gpu_springs::Track::constant(1.0) };
+        let zero = crate::gpu::springs::Track::constant(0.0);
+        let node = crate::gpu::springs::Node { x: zero, y: zero, opacity: crate::gpu::springs::Track::constant(1.0) };
         let mut renderer = Renderer::with_springs(&gpu.device, OFFSCREEN_FORMAT, &[node], &vec![0; rt.instances.len()]);
         renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (8,8));
         renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);

@@ -3,7 +3,7 @@
 use bytemuck::{Pod, Zeroable};
 use rune_motion::Spring;
 
-pub const SHADER: &str = include_str!("gpu_springs.wgsl");
+pub const SHADER: &str = include_str!("springs.wgsl");
 
 pub fn split_time(time: f64) -> [f32; 2] {
     assert!(time.is_finite() && time >= 0.0 && time < 16_777_216.0);

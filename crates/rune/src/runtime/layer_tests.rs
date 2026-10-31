@@ -432,7 +432,7 @@ fn opacity_motion_samples_group_alpha_until_the_terminal_frame() {
 #[test]
 fn isolated_layers_preserve_image_video_spring_and_list_order() {
     use crate::native_surface::{ByteFrame, ColorInfo, Format, NativeSurface, SurfaceDraw, SurfaceFit};
-    use crate::gpu_springs::{Node, Track};
+    use crate::gpu::springs::{Node, Track};
     use crate::pixels::Pixels;
     let gpu = Gpu::headless();
     let bounds = [4.0, 4.0, 24.0, 8.0];
