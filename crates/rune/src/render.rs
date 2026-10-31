@@ -427,6 +427,7 @@ impl Gpu {
             trace: Default::default(),
         }))
         .map_err(|error| format!("no GPU device: {error}"))?;
+        crate::gpu::pick::log_ready();
         Ok(Gpu { instance, adapter, device, queue })
     }
 
@@ -452,6 +453,9 @@ impl Gpu {
     /// validation pipeline wgpu would build for them costs every device a shader compile (about
     /// 40 ms on a Mac's first launch after an install or update). Indirect draws a compositor
     /// records on Rune's device still work; wgpu just doesn't check their argument buffers.
+    /// `WGPU_BACKEND` (`dx12`, `vulkan`, comma-separated) limits the backends; a value naming
+    /// none is ignored. Without it, Windows with a hardware card loads DX12 alone
+    /// (`gpu::pick::windows_backends`).
     pub fn instance() -> wgpu::Instance {
         #[cfg(all(target_os = "macos", feature = "metal-backend"))]
         if crate::gpu::metal::enabled() { return crate::gpu::metal::instance(); }
@@ -463,6 +467,10 @@ impl Gpu {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
+        let backends = wgpu::Backends::from_env().filter(|b| !b.is_empty());
+        #[cfg(target_os = "windows")]
+        let backends = backends.or_else(crate::gpu::pick::windows_backends);
+        if let Some(backends) = backends { descriptor.backends = backends; }
         // An HWND's DXGI swapchain is opaque only; DirectComposition composites alpha on every GPU.
         descriptor.backend_options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromVisual;
         wgpu::Instance::new(descriptor)

@@ -2981,6 +2981,7 @@ dependencies = [
  "wgpu",
  "wgpu-core",
  "wgpu-hal",
+ "windows",
  "windows-sys 0.59.0",
  "winit",
  "x11rb",
