@@ -108,7 +108,7 @@ impl<S: 'static> Runtime<S> {
         !self.animating && !self.stale() && !self.settle && self.loop_wake.is_none() && self.window_frame.is_none()
             && self.hover_pending.is_empty() && !self.tooltip_waiting() && !self.drag_ends_pending()
             && self.drag_out_request.is_none() && !self.files_held() && !self.live_pending()
-            && self.surfaces.is_empty() && !self.steps_frames()
+            && self.surfaces.iter().all(|d| !d.surface.pulls()) && !self.steps_frames()
     }
 
     /// The last poll asked for the next frame (`wake_after(ZERO)`, due at once): it steps

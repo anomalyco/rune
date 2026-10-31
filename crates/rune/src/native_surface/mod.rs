@@ -155,6 +155,12 @@ impl NativeSurface {
         surface.0.lock().unwrap().video = Some(video);
         surface
     }
+    /// Whether a player pulls this surface's frames on the window's frames (`video::Player`),
+    /// so the window keeps drawing while it shows. A surface that is pushed frames wakes the
+    /// window per frame instead and lets it rest between them.
+    pub(crate) fn pulls(&self) -> bool {
+        self.0.lock().unwrap().video.is_some()
+    }
     pub(crate) fn video(&self) -> Option<Arc<crate::video::Shared>> {
         self.0.lock().unwrap().video.clone()
     }
