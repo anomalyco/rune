@@ -15,7 +15,7 @@ from collections import defaultdict
 
 WARN, HARD, FAM = 40, 60, 3
 EXC = "scripts/folder-shape-exceptions.txt"
-SRC = {".rs", ".ts", ".tsx", ".js", ".jsx", ".mjs"}
+SRC = {".rs", ".ts", ".tsx", ".swift"}
 PROGRAMS = {"examples", "benches", "bin"}  # each file is its own entry point, not a family
 args = sys.argv[1:]
 warn_only = "--warn-only" in args
