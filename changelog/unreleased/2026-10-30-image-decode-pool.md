@@ -1,0 +1,1 @@
+- **Images decode on up to four threads.** An `ImageCache` runs one decoder per core, up to four, instead of one, so a small image queued behind a large one no longer waits for it, and a view opening on several images decodes them side by side. Completion order between images is no longer the order they were queued.
