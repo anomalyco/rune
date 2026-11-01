@@ -307,9 +307,13 @@ fn a_long_fold_shut_from_its_stuck_header_at_the_end_is_one_motion() {
     // when the end held the row below, and leave the header to come down over it alone, so the
     // steps it covered landed out of sight. Now the steps slow as the header comes down, without
     // a dead stop, nothing moves faster than the fold's own spring, and nothing lands unseen.
-    for offset in [1100.0, 1150.0, 1200.0] {
+    // Down to a few points short of the end, where a frame's shut is more than the end has
+    // left to give, and the viewport clamps at its end before the header's hold moves it.
+    for short in [130.0, 80.0, 40.0, 20.0, 8.0] {
         let mut rt = Runtime::new((true, 100.0), held_section, (300.0, 200.0), Env::new(true, 1.0));
         rt.frame(0.0);
+        let max = rt.scrolls.values().next().unwrap().max as f32;
+        let offset = max - short;
         rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, offset));
         for _ in 0..4 { rt.frame(1.0 / 120.0); }
         rt.update(|s, tx| { s.0 = false; tx.keep_on_screen("hdr"); });

@@ -71,10 +71,13 @@ impl<S: 'static> Runtime<S> {
 
     /// A header giving way lands as its viewport's end comes within pinning distance: the end
     /// brings it the last fraction of a point, rather than the two trading it back and forth.
+    /// Short of that, a frame that shuts more than the end has left clamps the viewport at its
+    /// end before the hold moves it back; the hold stays.
     pub(super) fn end_takes_over(&mut self) {
         if self.fold_headers.is_empty() || self.keeps.is_empty() { return; }
         let giving: Vec<&String> = self.fold_headers.iter()
-            .filter(|(id, _)| self.grows.get(id).is_some_and(|g| g.give.is_some())).map(|(_, p)| p).collect();
+            .filter(|(id, _)| self.grows.get(id).is_some_and(|g| g.give.is_some_and(|share| (g.h - g.target) * (1.0 - share) < 0.5)))
+            .map(|(_, p)| p).collect();
         if giving.is_empty() { return; }
         let pinned = |viewport: &str| self.path_ids.get(viewport).and_then(|id| self.scrolls.get(id)).is_some_and(|st| st.pinned);
         let drop: Vec<usize> = self.keeps.iter().enumerate()
