@@ -27,13 +27,19 @@ pub use rune_mermaid::{DiagramStyle, Hover, may_draw, supported};
 /// `src` drawn as a diagram card with `style`'s diagram colours, or `None` when it is outside
 /// the supported subset.
 pub fn render(src: &str, style: &MarkdownStyle) -> Option<El> {
-    diagram(src, &style.diagram, false)
+    diagram(src, &style.diagram, false, false)
 }
 
-/// `streaming`: `src` is the complete lines of a fence still arriving, so what's new since the
-/// last build comes in on its own ([`rune_mermaid::render_streaming`]).
-pub(crate) fn diagram(src: &str, paint: &DiagramPaint, streaming: bool) -> Option<El> {
-    let render = if streaming { rune_mermaid::render_streaming } else { rune_mermaid::render_with_hover };
+/// `streaming`: the reply is still arriving, so what's new since the last build comes in on its
+/// own; `open`: `src` is the complete lines of a fence still arriving, so the diagram only grows
+/// ([`rune_mermaid::render_streaming`]) until the fence closes and it settles
+/// ([`rune_mermaid::render_streamed`]).
+pub(crate) fn diagram(src: &str, paint: &DiagramPaint, streaming: bool, open: bool) -> Option<El> {
+    let render = match (streaming, open) {
+        (false, _) => rune_mermaid::render_with_hover,
+        (true, true) => rune_mermaid::render_streaming,
+        (true, false) => rune_mermaid::render_streamed,
+    };
     render(
         src,
         &DiagramStyle {

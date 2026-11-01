@@ -171,14 +171,17 @@ pub(crate) fn draw_layered(
     paint: &DiagramStyle,
     hover: Option<(Hover, Color)>,
 ) -> Option<Scene> {
-    let canvas = layered_canvas(dir, nodes, edges, clusters, spacing, paint, hover)?;
+    let canvas = layered_canvas(dir, nodes, &[], edges, clusters, spacing, paint, hover)?;
     canvas.finish_fit(paint)
 }
 
-/// [`draw_layered`] at full size, before [`Canvas::finish`].
+/// [`draw_layered`] at full size, before [`Canvas::finish`], with each node's name in `ids`
+/// (empty: known by index) for a diagram streaming in to hold each node to where it was.
+#[allow(clippy::too_many_arguments, reason = "one layered diagram's whole drawing")]
 pub(crate) fn layered_canvas(
     dir: Dir,
     nodes: &[DrawNode],
+    ids: &[String],
     edges: &[Edge],
     clusters: &[ClusterSpec],
     spacing: &Spacing,
@@ -190,17 +193,20 @@ pub(crate) fn layered_canvas(
     let title_font = TextStyle { weight: 500.0, ..edge_font };
     let titles: Vec<Measured> = clusters.iter().map(|c| measure(&c.title, title_font)).collect();
     let fonts = Fonts { edge: edge_font, title: title_font };
-    let parts = Parts { nodes, edges, clusters, labels: &labels, titles: &titles };
+    let parts = Parts { nodes, ids, edges, clusters, labels: &labels, titles: &titles };
     let mut canvas = draw_in(dir, &parts, fonts, spacing, paint, hover)?;
     // The turn: a horizontal diagram that would shrink below `TURN_BELOW` of its size to fit
     // the card is drawn top-down instead, when that comes out narrower.
-    if canvas.width() > room(paint) / TURN_BELOW && matches!(dir, Dir::Right | Dir::Left) {
+    // A diagram streaming in that has turned stays turned.
+    let stay = super::steady::turned();
+    if (stay || canvas.width() > room(paint) / TURN_BELOW) && matches!(dir, Dir::Right | Dir::Left) {
         let down = draw_in(if dir == Dir::Right { Dir::Down } else { Dir::Up }, &parts, fonts, spacing, paint, hover)?;
-        if down.width() < canvas.width() {
+        if stay || down.width() < canvas.width() {
             canvas = down;
             canvas.turned = true;
         }
     }
+    super::steady::set_turned(canvas.turned);
     Some(canvas)
 }
 
@@ -212,6 +218,7 @@ struct Fonts {
 
 struct Parts<'a> {
     nodes: &'a [DrawNode],
+    ids: &'a [String],
     edges: &'a [Edge],
     clusters: &'a [ClusterSpec],
     labels: &'a [Option<Measured>],
@@ -219,7 +226,7 @@ struct Parts<'a> {
 }
 
 fn draw_in(dir: Dir, p: &Parts, fonts: Fonts, spacing: &Spacing, paint: &DiagramStyle, hover: Option<(Hover, Color)>) -> Option<Canvas> {
-    let Parts { nodes, edges, clusters, labels, titles } = *p;
+    let Parts { nodes, ids, edges, clusters, labels, titles } = *p;
     let across = matches!(dir, Dir::Right | Dir::Left);
     let ax = |s: [f32; 2]| if across { [s[1], s[0]] } else { s };
     let flip = matches!(dir, Dir::Up | Dir::Left);
@@ -248,6 +255,7 @@ fn draw_in(dir: Dir, p: &Parts, fonts: Fonts, spacing: &Spacing, paint: &Diagram
                 }
             })
             .collect(),
+        ids: ids.to_vec(),
     };
     let placed = layout(&graph, spacing)?;
     let pt = |p: [f32; 2]| if across { [p[1], p[0]] } else { p };

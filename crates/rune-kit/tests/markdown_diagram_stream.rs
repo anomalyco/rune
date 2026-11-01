@@ -1,5 +1,5 @@
 //! A ```` ```mermaid ```` fence streaming into [`Markdown`]: drawn from its complete lines,
-//! never shown as source first, and still when its fence closes.
+//! never shown as source first, and settling in one glide when its fence closes.
 
 use rune::runtime::ElementInfo;
 use rune::{Cx, El, Env, Runtime, col};
@@ -57,8 +57,9 @@ fn an_open_mermaid_fence_is_a_diagram_drawn_from_its_complete_lines() {
 }
 
 #[test]
-fn closing_the_fence_moves_nothing() {
+fn closing_the_fence_settles_the_diagram_in_one_glide_where_a_finished_one_lays_out() {
     let body = "```mermaid\ngraph LR\n  A[Start] --> B{Ready?}\n  B -->|yes| C[Ship]\n  B -->|no| D[Fix]\n  D --> B\n";
+    let closed = format!("{body}```\n");
     for still_streaming in [true, false] {
         let mut rt = Runtime::new((body.to_owned(), true), view, (600.0, 800.0), Env::new(true, 1.0));
         rt.frame(0.0);
@@ -66,15 +67,26 @@ fn closing_the_fence_moves_nothing() {
         let before = pieces(&rt);
         assert!(before.len() > 8, "{:?}", before.iter().map(|e| e.key.clone()).collect::<Vec<_>>());
         rt.update(|s, _| {
-            s.0.push_str("```\n");
+            s.0 = closed.clone();
             s.1 = still_streaming;
         });
         rt.frame(1.0 / 60.0);
+        let first = pieces(&rt);
+        settle(&mut rt);
         let after = pieces(&rt);
-        assert_eq!(before.len(), after.len());
-        for (b, a) in before.iter().zip(&after) {
-            assert_eq!((&b.path, b.rect, b.opacity), (&a.path, a.rect, a.opacity), "{:?} moved when the fence closed", b.key);
-            assert!(!a.moving, "{:?} animates", a.key);
+        let mut finished = Runtime::new((closed.clone(), still_streaming), view, (600.0, 800.0), Env::new(true, 1.0));
+        finished.frame(0.0);
+        settle(&mut finished);
+        let fresh = pieces(&finished);
+        assert_eq!((before.len(), first.len(), after.len()), (fresh.len(), fresh.len(), fresh.len()), "nothing comes or goes when the fence closes");
+        for (((b, f), a), want) in before.iter().zip(&first).zip(&after).zip(&fresh) {
+            assert_eq!((&b.path, &f.path, &a.path), (&want.path, &want.path, &want.path));
+            assert_eq!((b.opacity, f.opacity), (1.0, 1.0), "{:?} fades when the fence closes", b.key);
+            for i in 0..4 {
+                assert!((a.rect[i] - want.rect[i]).abs() < 0.5, "{:?} settles where a finished diagram lays it out: {:?} vs {:?}", a.key, a.rect, want.rect);
+                let (went, all) = ((f.rect[i] - b.rect[i]).abs(), (a.rect[i] - b.rect[i]).abs());
+                assert!(went <= all / 2.0 + 0.5, "{:?} glides rather than jumps: {:?} → {:?} → {:?}", a.key, b.rect, f.rect, a.rect);
+            }
         }
     }
 }

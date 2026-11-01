@@ -521,8 +521,9 @@ pub(crate) fn draw(d: &StateDiagram, paint: &DiagramStyle, hover: Option<(Hover,
         })
         .collect();
     let clusters: Vec<ClusterSpec> = d.composites.iter().map(|c| ClusterSpec { title: c.title.clone(), parent: c.parent }).collect();
-    let mut c = layered_canvas(d.dir, &nodes, &d.edges, &clusters, &SPACING, paint, hover)?;
-    c.names = Names::new(d.states.iter().map(|s| s.id.clone()).collect(), &d.edges, Vec::new());
+    let names = Names::new(d.states.iter().map(|s| s.id.clone()).collect(), &d.edges, Vec::new());
+    let mut c = layered_canvas(d.dir, &nodes, &names.nodes, &d.edges, &clusters, &SPACING, paint, hover)?;
+    c.names = names;
     c.finish_fit(paint)
 }
 

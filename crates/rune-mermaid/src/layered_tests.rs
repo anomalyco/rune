@@ -6,6 +6,7 @@ fn graph(n: usize, edges: &[(usize, usize)]) -> Graph {
         edges: edges.iter().map(|&(from, to)| GEdge { from, to, label: None, minlen: 1 }).collect(),
         node_cluster: vec![None; n],
         clusters: Vec::new(),
+        ids: Vec::new(),
     }
 }
 const SP: Spacing = Spacing { node: 30.0, rank: 40.0, cluster: 10.0 };

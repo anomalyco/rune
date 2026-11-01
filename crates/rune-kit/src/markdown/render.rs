@@ -333,7 +333,7 @@ impl Renderer {
             // The card sits in a bare holder, so a fence that draws nothing yet holds its place
             // and the card mounts into it (fading in) rather than the block turning into one.
             let holder = || col().w_full().transition(rune::Transition::none());
-            if let Some(d) = crate::mermaid::diagram(lines, &self.s.diagram, self.streaming) {
+            if let Some(d) = crate::mermaid::diagram(lines, &self.s.diagram, self.streaming, open) {
                 return holder().child(d.key("card"));
             }
             if open && self.streaming && crate::mermaid::may_draw(lines) {

@@ -692,8 +692,9 @@ pub(crate) fn draw_canvas(f: &Flowchart, paint: &DiagramStyle, hover: Option<(Ho
         })
         .collect();
     let clusters: Vec<ClusterSpec> = f.subgraphs.iter().map(|s| ClusterSpec { title: s.title.clone(), parent: s.parent }).collect();
-    let mut c = layered_canvas(f.dir, &nodes, &f.edges, &clusters, &SPACING, paint, hover)?;
-    c.names = names(f);
+    let names = names(f);
+    let mut c = layered_canvas(f.dir, &nodes, &names.nodes, &f.edges, &clusters, &SPACING, paint, hover)?;
+    c.names = names;
     Some(c)
 }
 

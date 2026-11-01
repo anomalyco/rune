@@ -226,8 +226,17 @@ impl Canvas {
         b[2] - b[0]
     }
 
+    /// What [`Self::finish`] draws: the bounds, from no further in than a streaming build's
+    /// last corner ([`crate::steady::origin`]).
+    fn drawn(&self) -> [f32; 4] {
+        let b = self.bounds();
+        let [left, top] = crate::steady::origin(b, self.turned);
+        [left, top, b[2], b[3]]
+    }
+
     pub(crate) fn finish_fit(self, paint: &DiagramStyle) -> Option<Scene> {
-        let scale = fit(self.width(), paint);
+        let b = self.drawn();
+        let scale = fit(b[2] - b[0], paint);
         self.finish(scale, paint)
     }
 
@@ -236,7 +245,7 @@ impl Canvas {
             return None;
         }
         crate::ink::flatten(&mut self.ops, &mut self.traces, paint.surface);
-        let b = self.bounds();
+        let b = self.drawn();
         // Drawn at full size and shrunk whole by `scale` (see [`Scene::el`]), so a diagram
         // growing past the room it has springs smaller instead of each label jumping a size.
         // Lines thin no further than 80%.

@@ -97,9 +97,11 @@
 //! what it is (a flowchart node by its id), so a diagram rebuilt as its source grows keeps what
 //! it has drawn. [`render_streaming`] brings each new one in on its own: nodes fade and grow in,
 //! edges and messages draw on from source to target with the arrowhead landing last, frames
-//! fade; anything already there glides to its new place. [`render`] and [`render_with_hover`]
-//! draw everything the frame it mounts. Both lay out the same source the same way, so a diagram
-//! that finishes streaming doesn't move.
+//! fade; anything already there glides to its new place. While it streams the diagram only grows:
+//! each build holds to the last one's ranks, order and places, so nothing doubles back and no gap
+//! closes. [`render_streamed`] lays the finished source out as [`render`] and
+//! [`render_with_hover`] do (they draw everything the frame it mounts), so a diagram settles in
+//! one glide once it has all arrived and doesn't move after.
 
 mod block;
 mod c4;
@@ -124,17 +126,17 @@ mod quadrant;
 mod requirement;
 mod route;
 mod sankey;
+mod scenes;
 mod sequence;
 mod sequence_draw;
 mod shape;
 mod state;
+mod steady;
 mod timeline;
 mod xychart;
 
-use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
 
 use rune::{Color, El, TextStyle, oklch, oklcha, tok};
 
@@ -209,43 +211,38 @@ pub fn render(src: &str, style: &DiagramStyle) -> Option<El> {
 /// or class diagram node; an edge, or its label, lights itself and its label whatever `hover` is
 /// short of [`Hover::Off`].
 pub fn render_with_hover(src: &str, style: &DiagramStyle, hover: Hover, color: Color) -> Option<El> {
-    render_inner(src, style, hover, color, false)
+    render_inner(src, style, hover, color, Mode::Still)
 }
 
 /// [`render_with_hover`] for a source still arriving (pass only its complete lines): each node,
 /// edge and frame new since the last build comes in on its own, and the rest glide into place.
+/// The diagram only grows: what's drawn keeps its order and place, as far as what's new leaves
+/// room, and no gap closes.
 pub fn render_streaming(src: &str, style: &DiagramStyle, hover: Hover, color: Color) -> Option<El> {
-    render_inner(src, style, hover, color, true)
+    render_inner(src, style, hover, color, Mode::Growing)
 }
 
-fn render_inner(src: &str, style: &DiagramStyle, hover: Hover, color: Color, streaming: bool) -> Option<El> {
+/// [`render_streaming`] for the whole source once it has all arrived: laid out as
+/// [`render_with_hover`] lays it out, so the diagram settles there in one glide, while what's
+/// new since the last build still comes in on its own.
+pub fn render_streamed(src: &str, style: &DiagramStyle, hover: Hover, color: Color) -> Option<El> {
+    render_inner(src, style, hover, color, Mode::Settled)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Laid out afresh and drawn the frame it mounts.
+    Still,
+    /// Laid out afresh; what's new comes in on its own.
+    Settled,
+    /// Held to the build one line shorter ([`steady`]); what's new comes in on its own.
+    Growing,
+}
+
+fn render_inner(src: &str, style: &DiagramStyle, hover: Hover, color: Color, mode: Mode) -> Option<El> {
     let hover = (hover != Hover::Off).then_some((hover, color));
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    src.hash(&mut h);
-    style.hash(&mut h);
-    hover.hash(&mut h);
-    // Layout measures labels in the app's fonts.
-    rune::text::font_epoch().hash(&mut h);
-    let key = h.finish();
-    let cached = SCENES.with_borrow(|c| c.map.get(&key).cloned());
-    let scene = match cached {
-        Some(s) => s,
-        None => {
-            // Defensive: a bug in layout must cost a diagram, not the app.
-            let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scene(src, style, hover))).ok().flatten().map(Rc::new);
-            SCENES.with_borrow_mut(|c| {
-                if c.order.len() >= CACHE_LEN
-                    && let Some(old) = c.order.pop_front()
-                {
-                    c.map.remove(&old);
-                }
-                c.order.push_back(key);
-                c.map.insert(key, built.clone());
-            });
-            built
-        }
-    };
-    scene.map(|s| s.el(style, streaming))
+    let scene = if mode == Mode::Growing { scenes::growing(src, style, hover) } else { scenes::built(src, style, hover, None).0 };
+    scene.map(|s| s.el(style, mode != Mode::Still))
 }
 
 /// Whether `src` parses as a supported diagram.
@@ -379,18 +376,6 @@ pub(crate) fn parse(src: &str) -> Option<Parsed> {
         _ => return None,
     };
     Some(Parsed { title: body_title.or(fm_title), diagram })
-}
-
-const CACHE_LEN: usize = 16;
-
-#[derive(Default)]
-struct Cache {
-    map: HashMap<u64, Option<Rc<Scene>>>,
-    order: VecDeque<u64>,
-}
-
-thread_local! {
-    static SCENES: RefCell<Cache> = RefCell::new(Cache::default());
 }
 
 pub(crate) fn scene(src: &str, paint: &DiagramStyle, hover: Option<(Hover, Color)>) -> Option<Scene> {
