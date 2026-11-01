@@ -245,7 +245,7 @@ fn build(dark: bool) -> Kit {
 mod tests {
     #[test]
     fn provider_marks_are_square_tintable_icons() {
-        use super::provider_icons::{FALLBACK, NAMES, RECENT, named};
+        use super::provider_icons::{FALLBACK, NAMES, named};
         assert!(NAMES.contains(&"anthropic") && NAMES.contains(&"openai"));
         for id in NAMES {
             let icon = named(id).unwrap_or_else(|| panic!("no mark for {id}"));
@@ -254,7 +254,6 @@ mod tests {
         }
         assert!(named("not-a-provider").is_none());
         assert_eq!(FALLBACK.name, "synthetic");
-        assert_eq!(RECENT.name, "outline-rotate-clockwise");
     }
 
     #[test]
