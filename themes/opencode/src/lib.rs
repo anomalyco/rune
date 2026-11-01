@@ -8,6 +8,7 @@
 //! ```
 
 pub mod icons;
+pub mod provider_icons;
 
 use std::sync::OnceLock;
 
@@ -242,6 +243,20 @@ fn build(dark: bool) -> Kit {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn provider_marks_are_square_tintable_icons() {
+        use super::provider_icons::{FALLBACK, NAMES, RECENT, named};
+        assert!(NAMES.contains(&"anthropic") && NAMES.contains(&"openai"));
+        for id in NAMES {
+            let icon = named(id).unwrap_or_else(|| panic!("no mark for {id}"));
+            assert_eq!(icon.name, *id);
+            assert!(icon.view > 0.0 && icon.body.contains("currentColor"), "{id} takes the text colour");
+        }
+        assert!(named("not-a-provider").is_none());
+        assert_eq!(FALLBACK.name, "synthetic");
+        assert_eq!(RECENT.name, "outline-rotate-clockwise");
+    }
+
     #[test]
     fn both_appearances_resolve() {
         for dark in [false, true] {
