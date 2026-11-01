@@ -237,6 +237,43 @@ impl<S: 'static> Runtime<S> {
         if self.playground.as_mut().is_some_and(|p| p.set_region(region)) { self.dirty = true; }
     }
 
+    /// Polls the open stage, then queues the keys its steps pressed ([`Play::press`]) behind
+    /// the input already waiting, so they route on this frame as a person's keys would.
+    ///
+    /// [`Play::press`]: crate::playground::Play::press
+    pub(super) fn poll_playground(&mut self, clock: f64, one: &mut Tx) -> bool {
+        let Some(playground) = &mut self.playground else { return false };
+        let ran = playground.poll_stage(clock, one);
+        for ev in playground.take_pressed() {
+            self.trace_event(format_args!("press {:?}", ev.key));
+            self.queue_key(ev, true);
+        }
+        ran
+    }
+
+    /// How many keys the playground's steps have pressed.
+    pub(crate) fn played_keys(&self) -> u64 {
+        self.playground.as_ref().map_or(0, |p| p.played)
+    }
+
+    /// Routes a key a step pressed as [`Runtime::route_key`] routes a person's, with the stage
+    /// holding the keyboard. Focus outside the stage (the list's filter, a side control) is set
+    /// aside for it, and the keyboard goes back where the person left it.
+    pub(super) fn route_stage_key(&mut self, ev: &KeyEvent, one: &mut Tx) -> bool {
+        let Some(region) = self.playground.as_ref().filter(|p| p.is_open()).map(|p| p.region()) else { return self.route_key(ev, false, one) };
+        let aside = self.focused_index().filter(|&i| !self.under(i, crate::playground::is_stage)).and_then(|_| self.focused.take());
+        if let Some(p) = &mut self.playground { p.set_region(Region::Stage); }
+        let took = self.route_key(ev, false, one);
+        let back = aside.filter(|_| self.focused.is_none());
+        let Some(p) = &mut self.playground else { return took };
+        p.set_region(region);
+        if let Some(path) = back {
+            p.see_focus(Some(&path));
+            self.focused = Some(path);
+        }
+        took
+    }
+
     /// The path of the element keyed `key`.
     fn key_path(&self, key: &str) -> Option<String> {
         self.nodes.iter().find(|n| n.key.as_deref() == Some(key)).map(|n| n.path.clone())

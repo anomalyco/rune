@@ -32,11 +32,12 @@ pub(super) type Queued<X> = Box<dyn FnOnce(&mut X, &mut Play<'_, X>)>;
 /// A story's view, or a scene's side view, of state `X`.
 pub(super) type View<X> = Box<dyn Fn(&X, &mut Cx<X>) -> El>;
 
-/// What a trigger's steps get beside their state: the frame's [`Tx`] (`Play` derefs to it) and
-/// [`Play::after`] for the steps that follow.
+/// What a trigger's steps get beside their state: the frame's [`Tx`] (`Play` derefs to it),
+/// [`Play::after`] for the steps that follow and [`Play::press`] for keys.
 pub struct Play<'a, X> {
     tx: &'a mut Tx,
     script: &'a mut Vec<(f64, Queued<X>)>,
+    pressed: &'a mut Vec<KeyEvent>,
     now: f64,
 }
 
@@ -58,6 +59,15 @@ impl<X> Play<'_, X> {
     /// When this step was due, on the runtime's clock.
     pub fn now(&self) -> f64 {
         self.now
+    }
+
+    /// Presses `key` on the stage, as a person would with the stage holding the keyboard: it
+    /// goes the way a real key does, through focus, `on_key` handlers and shortcuts, on the
+    /// frame this step runs, after the step's own changes. That frame counts as input, so a
+    /// scroll the key asks for moves as one under a hand does. Pass a [`Key`] for a plain key,
+    /// or a [`KeyEvent`] for one with modifiers.
+    pub fn press(&mut self, key: impl Into<KeyEvent>) {
+        self.pressed.push(key.into());
     }
 }
 
@@ -144,9 +154,9 @@ impl<X> Staged<X> {
         Staged { state, script: Vec::new() }
     }
 
-    /// Runs the steps due by `t`, earliest first, each seeing the time it was due. Asks for a
-    /// frame when the next one is due.
-    pub(super) fn run(&mut self, t: f64, tx: &mut Tx) -> bool {
+    /// Runs the steps due by `t`, earliest first, each seeing the time it was due, adding the
+    /// keys they press to `pressed`. Asks for a frame when the next one is due.
+    pub(super) fn run(&mut self, t: f64, tx: &mut Tx, pressed: &mut Vec<KeyEvent>) -> bool {
         // The clock is a running sum of frame times, so a step due on a frame can sit a rounding
         // error past it; without the slack a replay later in the clock lands a frame late.
         let t = t + DUE_SLACK;
@@ -156,7 +166,7 @@ impl<X> Staged<X> {
             let due = self.script.iter().enumerate().filter(|(_, (at, _))| *at <= t).min_by(|a, b| a.1.0.total_cmp(&b.1.0)).map(|(i, _)| i);
             let Some(i) = due else { break };
             let (at, step) = self.script.remove(i);
-            step(&mut self.state, &mut Play { tx: &mut *tx, script: &mut self.script, now: at });
+            step(&mut self.state, &mut Play { tx: &mut *tx, script: &mut self.script, pressed: &mut *pressed, now: at });
             ran = true;
         }
         if let Some(next) = self.script.iter().map(|(at, _)| *at).min_by(f64::total_cmp) {
@@ -218,6 +228,12 @@ impl<S: 'static> Live<S> {
         }
     }
 
+    /// The keys this frame's steps pressed, to route to the stage, counting them in `played`.
+    pub(crate) fn take_pressed(&mut self) -> Vec<KeyEvent> {
+        self.played += self.pressed.len() as u64;
+        std::mem::take(&mut self.pressed)
+    }
+
     pub(crate) fn polls(&self) -> bool {
         if !self.open { return false; }
         match (&self.scene, self.own()) {
@@ -228,17 +244,17 @@ impl<S: 'static> Live<S> {
     }
 
     /// Polls the stage's state after the app's own poll: its due steps, then `AppSpec::poll`
-    /// for a scene or the story's own.
+    /// for a scene or the story's own. The keys the steps press wait in [`Live::take_pressed`].
     pub(crate) fn poll_stage(&mut self, t: f64, tx: &mut Tx) -> bool {
         self.now = t;
         if !self.open { return false; }
         if let Some(scene) = &mut self.scene {
-            let ran = scene.run(t, tx);
+            let ran = scene.run(t, tx, &mut self.pressed);
             return self.poll.is_some_and(|poll| poll(&mut scene.state, t, tx)) || ran;
         }
         let Some(i) = self.selected.checked_sub(self.scenes.len()) else { return false };
         match (self.pages.get(i).map(|p| &p.kind), self.owned.get_mut(i).and_then(Option::as_mut)) {
-            (Some(Kind::Own(own)), Some(stage)) => own.poll(stage.as_mut(), t, tx),
+            (Some(Kind::Own(own)), Some(stage)) => own.poll(stage.as_mut(), t, tx, &mut self.pressed),
             _ => false,
         }
     }

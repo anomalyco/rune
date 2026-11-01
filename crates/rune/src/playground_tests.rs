@@ -613,5 +613,8 @@ mod chrome;
 #[path = "playground/stage_tests.rs"]
 mod stage_layout;
 
+#[path = "playground/press_tests.rs"]
+mod press;
+
 #[path = "playground/widths_tests.rs"]
 mod widths_tests;

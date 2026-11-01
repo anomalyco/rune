@@ -428,7 +428,7 @@ impl<S: 'static> Runtime<S> {
         if self.playground.as_ref().is_some_and(|p| p.polls()) {
             let mut one = self.transaction();
             let clock = self.clock;
-            if self.playground.as_mut().is_some_and(|p| p.poll_stage(clock, &mut one)) {
+            if self.poll_playground(clock, &mut one) {
                 ran = true;
                 why |= CommitWhy::POLL;
             }

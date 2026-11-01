@@ -2428,7 +2428,9 @@ App::new(spec).playground(
   a replay runs the same every time, headless included. `Play::clear()` drops every step still
   queued, a loop's next one included, so a trigger can take over from a running one:
   `play.clear(); play.after(0.2, ..)` runs only the new steps. It leaves the state and running
-  animations alone. J and K can't be trigger keys. `trigger_tx(key, label, |s, tx| ..)` takes a
+  animations alone. `play.press(Key::Down)` (or a `KeyEvent`, for modifiers) sends a real key on
+  the step's frame, as a person's with the stage holding the keyboard, so a replay that stands in
+  for a keypress counts as input to the motion gate. J and K can't be trigger keys. `trigger_tx(key, label, |s, tx| ..)` takes a
   step that needs only the `Tx`, such as a handler the app already has.
 - **Closures.** A story's `init`, `view`, `poll`, triggers, steps, variants and side view, and a
   scene's triggers, variants and side views, take closures as well as fns, so a story table can
@@ -2547,6 +2549,7 @@ grouped list, and a knobs column) maps onto `App::playground` like this:
 | `group()` and `name()`                      | one path, `"Group/Name"` or `"Group/Subgroup/Name"`; groups keep the order they first appear in, or `Playground::group_order` |
 | the story's keys (`Action`s)                | `Story::trigger(key, label, step)`, or `trigger_tx` for a `Fn(&mut S, &mut Tx)`; `'r'` runs after each replay |
 | timed steps after a key                     | `Play::after(secs, step)`, on the logical clock                        |
+| a step that presses a key                   | `Play::press(Key::Down)`: through focus and `on_key`, counted as input |
 | the knobs column                            | `.side(view)`: `rune_knobs::inline` fills the column's width; `actions` fits it, up to 300 pt |
 | keys for the knobs                          | `.side_keys(view, rune_knobs::side_key(groups, lens))`: ↑↓ pick a knob, ←→ step it, Esc leaves |
 | a choice knob flipped with 1–9              | `Story::variant(name, apply)`; 1–9 pick, and picking remakes the state |

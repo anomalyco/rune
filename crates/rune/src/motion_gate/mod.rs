@@ -65,10 +65,13 @@ impl<S: 'static> Run<S> {
         }
     }
 
-    /// Records one frame.
+    /// Records one frame. A key a playground story's step pressed on it (`Play::press`) is an
+    /// input there, as [`act`](Run::act)'s are.
     pub fn step(&mut self) {
         self.rt.commit_why = 0;
+        let played = self.rt.played_keys();
         let awake = self.rt.frame(self.dt);
+        if self.rt.played_keys() > played { self.rec.input("a story step's key"); }
         self.rec.awake.push(awake);
         let why = std::mem::take(&mut self.rt.commit_why);
         self.rec.commits(self.rt.scrolling(), why);

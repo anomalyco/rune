@@ -51,6 +51,10 @@ pub(crate) struct Live<S: 'static> {
     pub(super) size: usize,
     pub(super) reduce_motion: bool,
     pub(super) pending: Vec<Request>,
+    /// Keys the stage's steps pressed with [`Play::press`], until the runtime routes them.
+    pub(super) pressed: Vec<KeyEvent>,
+    /// How many keys steps have pressed, which a motion gate's run reads as input.
+    pub(crate) played: u64,
     /// The clock at the last commit or poll, which triggers start from.
     pub(super) now: f64,
     /// Bumped by every select and replay, so the new stage's elements start fresh: scroll
@@ -102,6 +106,8 @@ impl<S: 'static> Live<S> {
             size: 0,
             reduce_motion: false,
             pending: Vec::new(),
+            pressed: Vec::new(),
+            played: 0,
             now: 0.0,
             generation: 0,
             root: 0,

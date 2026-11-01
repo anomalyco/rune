@@ -252,16 +252,21 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub fn key(&mut self, ev: KeyEvent) {
+        self.queue_key(ev, false);
+    }
+
+    /// [`Runtime::key`]; `stage` routes it to the open playground's stage, for `Play::press`.
+    pub(super) fn queue_key(&mut self, ev: KeyEvent, stage: bool) {
         self.dismiss_help();
         // Escape during a drag cancels it and goes no further.
         if ev.key == crate::Key::Escape && self.cancel_drag() { return; }
-        self.queue.push(Action::Key { ev, repeat: false });
+        self.queue.push(Action::Key { ev, repeat: false, stage });
     }
 
     /// Queue an auto-repeat of a held key, as the OS sends after the first press. Handlers see
     /// `Tx::key_repeat` true for it.
     pub fn repeat_key(&mut self, ev: KeyEvent) {
-        self.queue.push(Action::Key { ev, repeat: true });
+        self.queue.push(Action::Key { ev, repeat: true, stage: false });
     }
 
     pub fn ime(&mut self, ev: Ime) {

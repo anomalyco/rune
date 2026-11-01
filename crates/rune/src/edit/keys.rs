@@ -123,6 +123,13 @@ impl KeyEvent {
     }
 }
 
+/// The key pressed with no modifiers.
+impl From<Key> for KeyEvent {
+    fn from(key: Key) -> Self {
+        KeyEvent { key, mods: Mods::default() }
+    }
+}
+
 impl Drop for KeyEvent {
     fn drop(&mut self) {
         if let Key::Text(text) = &mut self.key { text.zeroize(); }

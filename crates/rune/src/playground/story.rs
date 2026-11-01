@@ -154,7 +154,7 @@ pub(super) trait OwnStory {
     fn side_keys(&self) -> bool;
     /// Offers `ev` to its side controls; true when they took it.
     fn side_key(&self, stage: &mut dyn Any, ev: &KeyEvent, tx: &mut Tx) -> bool;
-    fn poll(&self, stage: &mut dyn Any, t: f64, tx: &mut Tx) -> bool;
+    fn poll(&self, stage: &mut dyn Any, t: f64, tx: &mut Tx, pressed: &mut Vec<KeyEvent>) -> bool;
     fn polls(&self, stage: &dyn Any) -> bool;
     /// Queues the trigger on `key` at `now`; false when there's none.
     fn trigger(&self, stage: &mut dyn Any, key: char, now: f64) -> bool;
@@ -200,9 +200,9 @@ impl<P: 'static> OwnStory for Story<P> {
     fn side_key(&self, stage: &mut dyn Any, ev: &KeyEvent, tx: &mut Tx) -> bool {
         self.side_key.as_ref().is_some_and(|key| key(&mut Self::staged_mut(stage).state, ev, tx))
     }
-    fn poll(&self, stage: &mut dyn Any, t: f64, tx: &mut Tx) -> bool {
+    fn poll(&self, stage: &mut dyn Any, t: f64, tx: &mut Tx, pressed: &mut Vec<KeyEvent>) -> bool {
         let stage = Self::staged_mut(stage);
-        let ran = stage.run(t, tx);
+        let ran = stage.run(t, tx, pressed);
         self.poll.as_ref().is_some_and(|poll| poll(&mut stage.state, t, tx)) || ran
     }
     fn polls(&self, stage: &dyn Any) -> bool {

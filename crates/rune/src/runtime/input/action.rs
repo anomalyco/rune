@@ -33,7 +33,8 @@ pub(super) enum Action {
     DragEnd(String, crate::DragOutcome),
     /// A file drag from another app moved, left, or dropped (`drop_dispatch`).
     Files(drop_dispatch::FileEvent),
-    Key { ev: KeyEvent, repeat: bool },
+    /// `stage`: a playground step pressed it, for the stage (`Play::press`).
+    Key { ev: KeyEvent, repeat: bool, stage: bool },
     KeyUp(KeyEvent),
     /// A wheel delta at window point (x, y) for the `on_wheel` handlers at the pointer,
     /// innermost first (`runtime/input/gesture.rs`).
@@ -417,10 +418,10 @@ impl<S: 'static> Runtime<S> {
                 true
             }
             Action::Files(event) => self.run_files(event, &mut one),
-            Action::Key { ev, repeat } => {
+            Action::Key { ev, repeat, stage } => {
                 if self.held_gate(None, Some(&ev.key), repeat) { return false; }
                 if ! matches!(ev.key, crate::Key::Modifier { .. }) { self.note_key_down(repeat); }
-                self.route_key(&ev, repeat, &mut one)
+                if stage { self.route_stage_key(&ev, &mut one) } else { self.route_key(&ev, repeat, &mut one) }
             }
             Action::KeyUp(ev) => self.route_key_up(&ev, &mut one),
             Action::Wheel(gesture, chain, ev) => self.run_wheel(gesture, chain, ev, &mut one),
