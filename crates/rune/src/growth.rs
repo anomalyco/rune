@@ -106,6 +106,18 @@ pub mod caps {
 
 pub const SUBSTEP: f32 = 1.0 / 240.0;
 
+/// How fast a fold's feather deepens once its edge starts moving (points per second): 28 pt in
+/// under 50 ms, so the edge softens as the spring picks up rather than in its first frame.
+const FOLD_FEATHER_GROW: f32 = 600.0;
+
+/// `El::fold_glide` and `El::fold_feather`: a fold's own spring and the depth of its moving
+/// edge's feather (the stack's `StreamEdge::mask_max` when `None`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FoldGlide {
+    pub spring: Spring,
+    pub feather: Option<f32>,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GrowTrack {
     pub h: f32,
@@ -124,6 +136,8 @@ pub struct GrowTrack {
     pub(crate) span: f32,
     /// `El::fold_glide`: this row's own spring, in place of the stack's.
     pub(crate) glide: Option<Spring>,
+    /// `El::fold_feather`: the glide's feather depth, in place of the stack edge's.
+    pub(crate) feather: Option<f32>,
     /// A glide's height at which the row's bottom leaves the window: the part of a change
     /// beyond it lands at once, out of sight.
     pub(crate) limit: f32,
@@ -133,7 +147,7 @@ pub struct GrowTrack {
 
 impl GrowTrack {
     pub fn settled(h: f32) -> GrowTrack {
-        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, glide: None, limit: f32::INFINITY, stage: None }
+        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, glide: None, feather: None, limit: f32::INFINITY, stage: None }
     }
 
     pub fn moving(&self) -> bool {
@@ -168,11 +182,12 @@ impl GrowTrack {
 
     /// The row's `El::streaming`, `El::arrives_whole` and `El::fold_glide` (which streaming
     /// overrides) with the height at which its bottom leaves the window.
-    pub(crate) fn set_kind(&mut self, streaming: bool, whole: bool, glide: Option<(Spring, f32)>) {
+    pub(crate) fn set_kind(&mut self, streaming: bool, whole: bool, glide: Option<(FoldGlide, f32)>) {
         self.streaming = streaming;
         self.whole = whole;
         let glide = glide.filter(|_| !streaming);
-        self.glide = glide.map(|g| g.0);
+        self.glide = glide.map(|g| g.0.spring);
+        self.feather = glide.and_then(|g| g.0.feather);
         self.limit = glide.map_or(f32::INFINITY, |g| g.1);
     }
 
@@ -244,8 +259,11 @@ impl GrowTrack {
             0.0
         };
         if self.glide.is_some() && !self.streaming {
-            // A fold's feather rides its spring, so it ends with the glide.
-            self.mask = edge.mask_max.min(1.5 * left);
+            // A fold's edge feathers both ways, opening and shutting: it softens as the spring
+            // picks up, holds through a reversal, and goes crisp as the glide lands.
+            let left = (self.target - self.h).abs();
+            let aim = if left > 0.25 { self.feather.unwrap_or(edge.mask_max).min(1.5 * left) } else { 0.0 };
+            self.mask = if aim > self.mask { (self.mask + FOLD_FEATHER_GROW * dt).min(aim) } else { aim };
         } else if aim > self.mask {
             self.mask = (self.mask + caps::MASK_GROW * dt).min(aim);
         } else {
@@ -373,7 +391,7 @@ mod tests {
     /// slow commit floor, neither of which may slow it: (seconds, height) per frame.
     fn fold(from: f32, to: f32, secs: f32) -> (GrowTrack, Vec<(f32, f32)>) {
         let mut t = GrowTrack { whole: true, duration: 1.0, ..GrowTrack::settled(from) };
-        t.set_kind(false, true, Some((FOLD, 900.0)));
+        t.set_kind(false, true, Some((FoldGlide { spring: FOLD, feather: None }, 900.0)));
         t.retarget(to);
         let mut out = vec![(0.0, t.h)];
         for k in 1..=(secs * 120.0) as usize {
@@ -419,9 +437,29 @@ mod tests {
     }
 
     #[test]
+    fn a_fold_feathers_its_moving_edge_both_ways() {
+        for (from, to) in [(40.0, 640.0), (640.0, 40.0)] {
+            let mut t = GrowTrack { whole: true, ..GrowTrack::settled(from) };
+            t.set_kind(false, true, Some((FoldGlide { spring: FOLD, feather: Some(20.0) }, f32::INFINITY)));
+            t.retarget(to);
+            let mut masks = Vec::new();
+            for _ in 0..120 {
+                t.step(GROWTH, &edge::FEATHER, false);
+                t.step(GROWTH, &edge::FEATHER, false);
+                masks.push(t.mask);
+            }
+            let peak = masks.iter().copied().fold(0.0, f32::max);
+            assert!((peak - 20.0).abs() < 1e-3, "{from} -> {to}: feathers to its own depth: {masks:?}");
+            assert!(masks[0] < 6.0, "{from} -> {to}: softens as the spring picks up: {masks:?}");
+            assert!(masks.windows(2).all(|w| (w[1] - w[0]).abs() < 6.0), "{from} -> {to}: no jump in depth: {masks:?}");
+            assert_eq!(*masks.last().unwrap(), 0.0, "{from} -> {to}: crisp at rest");
+        }
+    }
+
+    #[test]
     fn a_fold_reversed_mid_glide_keeps_its_velocity() {
         let mut t = GrowTrack { whole: true, ..GrowTrack::settled(640.0) };
-        t.set_kind(false, true, Some((FOLD, 900.0)));
+        t.set_kind(false, true, Some((FoldGlide { spring: FOLD, feather: None }, 900.0)));
         t.retarget(40.0);
         for _ in 0..12 {
             t.step(GROWTH, &edge::FEATHER, false);
@@ -432,9 +470,14 @@ mod tests {
         assert_eq!(t.h, h, "no jump");
         t.step(GROWTH, &edge::FEATHER, false);
         assert!(t.h < h, "carries on shutting for a moment: {h} -> {}", t.h);
+        let mut masks = vec![t.mask];
         for _ in 0..120 {
             t.step(GROWTH, &edge::FEATHER, false);
+            masks.push(t.mask);
         }
+        // The feather holds through the turn and thins as the glide lands.
+        assert!(masks.windows(2).all(|w| (w[1] - w[0]).abs() < 3.0), "{masks:?}");
+        assert_eq!(*masks.last().unwrap(), 0.0);
         assert!(!t.moving() && t.h == 640.0, "settles within 0.5 s: {} at {} pt/s", t.h, t.v);
     }
 

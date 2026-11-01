@@ -32,7 +32,18 @@ impl El {
     /// [`El::arrives_whole`].
     pub fn fold_glide(mut self, spring: rune_motion::Spring) -> Self {
         self.whole = true;
-        self.glide = Some(spring);
+        self.glide = Some(crate::growth::FoldGlide { spring, feather: self.glide.and_then(|g| g.feather) });
+        self
+    }
+    /// How deep, in points, a [`El::fold_glide`] row's moving bottom edge feathers as it folds
+    /// open or shut, in place of its stack's `StreamEdge::mask_max`. It deepens as the edge
+    /// starts moving and thins as it lands, so nothing is feathered at rest. Call after
+    /// `fold_glide`.
+    pub fn fold_feather(mut self, pt: f32) -> Self {
+        debug_assert!(self.glide.is_some(), "fold_feather without fold_glide");
+        if let Some(g) = &mut self.glide {
+            g.feather = Some(pt.max(0.0));
+        }
         self
     }
 }

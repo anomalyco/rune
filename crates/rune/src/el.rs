@@ -490,7 +490,7 @@ pub struct El {
     pub(crate) virtual_mount: bool,
     pub(crate) streaming: bool,
     pub(crate) whole: bool,
-    pub(crate) glide: Option<rune_motion::Spring>,
+    pub(crate) glide: Option<crate::growth::FoldGlide>,
     pub(crate) input: Option<Box<InputSpec>>,
     pub(crate) window_drag: bool,
     /// `El::ime_cursor`.

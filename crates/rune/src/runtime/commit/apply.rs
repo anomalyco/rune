@@ -220,7 +220,7 @@ impl<S: 'static> Runtime<S> {
                 g.set_kind(streaming, whole, glide);
                 let snap_change = (instant || resized) && !streaming && (h - g.target).abs() > 1e-4;
                 if tx.settle || !existed || first || self.reduced_motion || snap_change || row_reading {
-                    *g = GrowTrack { streaming, whole, glide: g.glide, limit: g.limit, ..GrowTrack::settled(h) };
+                    *g = GrowTrack { streaming, whole, glide: g.glide, feather: g.feather, limit: g.limit, ..GrowTrack::settled(h) };
                     stack.pending_heights.remove(&id);
                     stack.slides.land(id);
                 } else {

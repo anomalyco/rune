@@ -36,7 +36,7 @@ pub(crate) struct NodeCold {
     /// `El::sticky_top`, `El::sticky_bottom` and `El::stuck_shadow`.
     pub(super) sticky: Option<Box<crate::el::Sticky>>,
     pub(super) growth: Option<Box<GrowthSpec>>,
-    pub(super) glide: Option<rune_motion::Spring>,
+    pub(super) glide: Option<crate::growth::FoldGlide>,
     pub(super) a11y: crate::el::A11y,
     /// The image ratio this picture's layout took, when it sizes one side from its pixels.
     pub(super) pixel_aspect: Option<f32>,

@@ -192,3 +192,24 @@ fn keep_on_screen_holds_a_stuck_header_while_its_fold_shuts() {
     assert!(after[36] < 28.5, "it reaches the header on the fold's own spring: {after:?}");
     assert!(*after.last().unwrap() == 28.0 && rt.keeps.is_empty() && !rt.animating, "{after:?}");
 }
+
+/// A fold shutting from 600 pt feathers its moving bottom edge to its `fold_feather` depth,
+/// and nothing once it lands.
+#[test]
+fn a_fold_feathers_its_edge_shutting_too() {
+    fn folded(open: &bool, _: &mut Cx<bool>) -> El {
+        let row = el().key("group").h(if *open { 600.0 } else { 40.0 }).w_full().fold_glide(rune_motion::Spring::new(0.18, 0.0)).fold_feather(16.0);
+        col().key("root").child(col().key("stack").growth(GrowthSpec::default()).children([el().key("above").h(100.0).w_full(), row]))
+    }
+    let mut rt = Runtime::new(true, folded, (400.0, 900.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    rt.update(|s, _| *s = false);
+    let group = |rt: &Runtime<bool>| rt.nodes.iter().position(|n| n.named("group")).unwrap();
+    let masks: Vec<f32> = (0..60).map(|_| {
+        rt.frame(1.0 / 120.0);
+        rt.row_mask[group(&rt)]
+    }).collect();
+    let peak = masks.iter().copied().fold(0.0, f32::max);
+    assert!((peak - 16.0).abs() < 1e-3, "shutting, the moving edge feathers {peak} pt deep: {masks:?}");
+    assert!(masks.last().is_some_and(|&m| m < 0.0), "and nothing is feathered once it lands: {masks:?}");
+}
