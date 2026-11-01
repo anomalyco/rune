@@ -6,9 +6,12 @@
 //! their rectangles alone, so an edge's rectangles are cut back from every node's box and a node
 //! under the pointer always wins.
 
+use std::collections::HashMap;
+
 use rune::{Color, LineCap, Shape};
 
 use super::canvas::{Canvas, Op, dist, lerp, rounded_rect};
+use super::parts::{Kind, Part};
 
 /// What hovering a flowchart or state diagram node lights up.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -30,6 +33,8 @@ const ALL_EDGE_HITS: usize = 1200;
 
 pub(crate) struct Trace {
     pub ends: (usize, usize),
+    /// The edge it is, as its piece is keyed.
+    pub part: Option<Part>,
     pub ops: Vec<Op>,
     /// The line as drawn, for its hit rectangles.
     pub line: Vec<[f32; 2]>,
@@ -37,7 +42,8 @@ pub(crate) struct Trace {
     pub label: Option<(usize, [f32; 4])>,
 }
 
-/// One hover group: what it is (`node3`, `edge2.0`), where (`[x, y, w, h]`, finished), what it
+/// One hover group: what it is, keyed by the piece it lights (`hover:n:A`, `hover:e:A>B.0`, and
+/// `hover:e:A>B.t` over its label) so it stays that node or edge however the layout moves, where (`[x, y, w, h]`, finished), what it
 /// draws lit, and which labels it shows in the hover colour.
 pub(crate) struct Spot {
     pub key: String,
@@ -84,7 +90,8 @@ impl Canvas {
             ops.push(Op::Fill(pill.clone(), Color { a: lit.a * 0.14, ..lit }));
             ops.push(Op::Stroke { points: pill, closed: true, width: 1.0, cap: LineCap::Round, color: lit });
         }
-        self.traces.push(Trace { ends: (from, to), ops, line: path, label: label.map(|(i, g, _)| (i, g)) });
+        let part = self.current_part();
+        self.traces.push(Trace { ends: (from, to), part, ops, line: path, label: label.map(|(i, g, _)| (i, g)) });
     }
 
     /// Every hover group, edges first so a node's lit drawing lands over theirs.
@@ -101,19 +108,27 @@ impl Canvas {
         }).collect();
         let outline = |v: usize| Op::Stroke { points: self.regions[v].clone(), closed: true, width: 1.0, cap: LineCap::Round, color: lit };
         let mut spots = Vec::new();
+        let mut seen: HashMap<String, usize> = HashMap::new();
+        let mut key = |part: Part| {
+            let base = format!("hover:{}", self.part_key(&part).0);
+            let n = seen.entry(base.clone()).or_insert(0);
+            *n += 1;
+            if *n == 1 { base } else { format!("{base}~{}", *n - 1) }
+        };
         let mut budget = ALL_EDGE_HITS;
         for (k, t) in self.traces.iter().enumerate() {
+            let edge = key(t.part.clone().unwrap_or(Part::Index(Kind::Edge, k)));
             let shape = t.ops.iter().fold(Shape::new(), &paint);
             let labels: Vec<usize> = t.label.iter().map(|l| l.0).collect();
             let line: Vec<[f32; 2]> = t.line.iter().map(|&p| map(p)).collect();
             let mut hits = cut_away(line_hits(&line, EDGE_SLOP), &boxes);
             hits.truncate(budget);
             budget -= hits.len();
-            if let Some((_, g)) = t.label {
-                hits.push(rect([g[0], g[1]], [g[2], g[3]]));
-            }
             for (j, r) in hits.into_iter().enumerate() {
-                spots.push(Spot { key: format!("edge{k}.{j}"), rect: r, lit: shape.clone(), labels: labels.clone() });
+                spots.push(Spot { key: format!("{edge}.{j}"), rect: r, lit: shape.clone(), labels: labels.clone() });
+            }
+            if let Some((_, g)) = t.label {
+                spots.push(Spot { key: format!("{edge}.t"), rect: rect([g[0], g[1]], [g[2], g[3]]), lit: shape.clone(), labels: labels.clone() });
             }
         }
         for v in (0..self.regions.len()).filter(|&v| drawn(v)) {
@@ -130,7 +145,7 @@ impl Canvas {
             }
             let (lo, hi) = bounds(&self.regions[v]);
             let labels = mine.iter().filter_map(|t| t.label.map(|l| l.0)).collect();
-            spots.push(Spot { key: format!("node{v}"), rect: rect(lo, hi), lit: shape, labels });
+            spots.push(Spot { key: key(Part::Index(Kind::Node, v)), rect: rect(lo, hi), lit: shape, labels });
         }
         spots
     }

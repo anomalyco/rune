@@ -108,6 +108,20 @@ impl Canvas {
         self.marks.push((self.ops.len(), self.labels.len(), part));
     }
 
+    /// What `part` is keyed by, in its pieces and its hover groups alike.
+    pub(crate) fn part_key(&self, part: &Part) -> (String, Kind) {
+        let (key, kind) = self.names.key(part);
+        // Turned on its side, every edge takes a new route: a diagram streaming in glides its
+        // nodes to their new places and draws its edges on afresh, rather than bending the old
+        // lines into the new ones.
+        (if self.turned && kind == Kind::Edge { format!("{key}|v") } else { key }, kind)
+    }
+
+    /// The part drawn now: the one the last [`Canvas::part`] named.
+    pub(crate) fn current_part(&self) -> Option<Part> {
+        self.marks.last().and_then(|m| m.2.clone())
+    }
+
     /// The runs of drawing, in order: each run's part, its ops and its labels.
     pub(crate) fn runs(&self) -> Vec<(Option<&Part>, std::ops::Range<usize>, std::ops::Range<usize>)> {
         let mut out = Vec::new();
@@ -146,11 +160,8 @@ pub(crate) fn pieces(c: &Canvas, map: impl Fn([f32; 2]) -> [f32; 2], stroke: imp
     for (part, ops, labels) in c.runs() {
         let (key, kind) = match part {
             Some(p) => {
-                let (key, kind) = c.names.key(p);
-                // Turned on its side, every edge takes a new route: a diagram streaming in glides
-                // its nodes to their new places and draws its edges on afresh, rather than
-                // bending the old lines into the new ones.
-                (if c.turned && kind == Kind::Edge { format!("{key}|v") } else { key }, Some(kind))
+                let (key, kind) = c.part_key(p);
+                (key, Some(kind))
             }
             None => {
                 rest_runs += 1;

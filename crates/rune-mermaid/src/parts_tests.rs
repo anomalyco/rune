@@ -56,9 +56,9 @@ fn a_finished_diagram_shows_whole_the_frame_it_mounts() {
     rt.update(|s, _| s.0 = TWO.to_owned());
     rt.frame(0.0);
     // Everything but the hover groups, which stay unlit until hovered.
-    let shown: Vec<ElementInfo> = rt.elements().into_iter().filter(|e| e.key.as_deref().is_none_or(|k| !k.starts_with("edge") && !k.starts_with("node") && k != "lit")).collect();
+    let shown: Vec<ElementInfo> = rt.elements().into_iter().filter(|e| e.key.as_deref().is_none_or(|k| !k.starts_with("hover:") && k != "lit")).collect();
     assert!(find(&rt, "n:C").is_some() && find(&rt, "e:B>C").is_some());
-    for e in shown.iter().filter(|e| !e.path.contains("/node") && !e.path.contains("/edge")) {
+    for e in shown.iter().filter(|e| !e.path.contains("/hover:")) {
         assert_eq!((e.opacity, e.scale), (1.0, 1.0), "{:?} fades or grows in", e.key);
     }
     // A rebuild that adds a node shows it whole too, and moves nothing that was there.
