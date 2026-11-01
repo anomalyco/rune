@@ -450,17 +450,23 @@ def analyze(path, script=None):
             at_frame[e.id] = {st[0]: st for st in e.hist}
         return at_frame[e.id].get(k)
 
-    def carries(e, k, edge, step):
+    def carries(e, k, edge, step, entering):
         """Whether something `e` holds shows on frames k - 1 and k and moves there by `step` with
-        it, as a scroll's rows do when its content jumps though its visible part stays put."""
+        it, as a scroll's rows do when its content jumps though its visible part stays put. With
+        `entering`, also one it brings into view from just off it: content that teleports pops in
+        a row that didn't show the frame before."""
         if edge > 2:
             return False
         for c in kids.get(e.id, ()):
             a, b = at(c, k - 1), at(c, k)
-            if a and b and a[7] > 0 and b[7] > 0 and abs(b[edge] - a[edge] - step) < 0.25 \
-                    and abs(b[10 + edge] - a[10 + edge] - step) < 0.25:
-                return True
-            if a and b and carries(c, k, edge, step):
+            if not (a and b):
+                continue
+            if b[7] > 0 and abs(b[edge] - a[edge] - step) < 0.25:
+                if a[7] > 0 and abs(b[10 + edge] - a[10 + edge] - step) < 0.25:
+                    return True
+                if entering and a[7] == 0 and b[5] >= POP_OPACITY and not b[6] & BLANK:
+                    return True
+            if carries(c, k, edge, step, entering):
                 return True
         return False
 
@@ -479,7 +485,13 @@ def analyze(path, script=None):
                 if abs(step) < JUMP_PT:
                     continue
                 st, prev = h[i], h[i - 1]
-                if pressing[k] or st[6] & (4 | BLANK):
+                if pressing[k] or st[6] & BLANK:
+                    continue
+                # A scroll under a hand, or one gliding over frames, moves as it should. One that
+                # lands in a single frame with nothing asking for it is a teleport.
+                scrolling = (st[6] | prev[6]) & SCROLLING
+                hand = interrupted(k - 2, k)
+                if scrolling and hand:
                     continue
                 # A move nobody sees on either side isn't a jump: a loop wrapping while it's
                 # transparent or clipped away (a shimmer's sheen going back to its start).
@@ -493,14 +505,14 @@ def analyze(path, script=None):
                 # scroll offset, and nothing that shows moves, or it starts to glide from where
                 # it showed.
                 clipped = any(s[7] < 0.999 for s in (prev, st))
-                at_edge = edge if clipped and carries(e, k, edge, step) else 10 + edge
+                at_edge = edge if clipped and carries(e, k, edge, step, not hand) else 10 + edge
                 sd = lambda j: h[j][at_edge] - h[j - 1][at_edge] if 0 < j < len(h) and h[j][0] == h[j - 1][0] + 1 else 0.0
                 if abs(sd(i)) < JUMP_PT:
                     continue
                 before, after = sd(i - 1), sd(i + 1)
                 if abs(before) < 1.0 and abs(after) < 1.0:
                     kind = "sibling-jump" if any(els.get(e.parent) and p == e.parent for p in changed_parents.get(k, ())) else "jump"
-                elif abs(sd(i)) > 3 * max(abs(before), abs(after), 1.0):
+                elif not scrolling and abs(sd(i)) > 3 * max(abs(before), abs(after), 1.0):
                     kind = "step"
                 else:
                     continue

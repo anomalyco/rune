@@ -27,7 +27,7 @@ gliding inside a list that follows its end is judged against the list, not the s
 | `idle-frames`, `never-settles` | frames that animate with no visible change; motion still running at the end |
 | `pop-in`, `pop-out` | an element appears or disappears at full opacity and size with no transition |
 | `appear-then-jump` | mounts in one place, then moves there in a frame |
-| `jump`, `step`, `sibling-jump` | a one-frame change in position or size, on its own or next to something animating, seen on both frames and in what shows: the visible part in the window moves, or what the element holds that shows moves with it (a loop wrapping while transparent or clipped, or a fold dropping rows above the window with the scroll offset, is not one) |
+| `jump`, `step`, `sibling-jump` | a one-frame change in position or size, on its own or next to something animating, seen on both frames and in what shows: the visible part in the window moves, or what the element holds that shows moves with it, or it brings what it holds into view with no input (a scroll offset that lands in one frame with nothing asking for it; a loop wrapping while transparent or clipped, or a fold dropping rows above the window with the scroll offset, is not one) |
 | `overshoot`, `jiggle` | passes its target, or reverses direction more than once |
 | `latency`, `hitch` | input with no motion for several frames; a frame over budget |
 | `cut-exit` | unmounts partway through its fade: nothing leaves above opacity 0 |

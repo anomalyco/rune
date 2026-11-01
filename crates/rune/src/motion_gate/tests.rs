@@ -155,3 +155,41 @@ fn motion_inside_a_zoomed_scroll_is_judged_against_the_scroll() {
     let turns = paths(&wobble, &["reversal", "jiggle", "overshoot"]);
     assert!(turns.iter().any(|f| f.contains("row12")), "{turns:#?}");
 }
+
+/// A 300 pt list whose first row starts just under the viewport, below 300 pt of padding.
+fn padded(_: &(), _: &mut Cx<()>) -> El {
+    let rows = (0..20).fold(col().key("rows").w_full().pt(300.0), |c, i| c.child(el().key(format!("row{i}")).w_full().h(40.0).fill(oklch(0.3, 0.02, 250.0))));
+    col().w_full().h_full().child(col().key("list").w_full().h(300.0).scroll(crate::ScrollSpec { stick_bottom: false }).child(rows))
+}
+
+/// The jumps, jerks and steps `scroll` makes in the padded list, as the gate reports them.
+fn padded_jumps(scroll: fn(&mut Run<()>)) -> Vec<String> {
+    let mut r = Run::new(Runtime::new((), padded, (400.0, 400.0), Env::new(true, 1.0)), 120.0);
+    r.idle(0.5);
+    r.step();
+    scroll(&mut r);
+    r.play(1.0);
+    r.finish().into_iter().filter(|f| ["jump", "offset-jump", "jerk", "appear-then-jump"].contains(&f.kind)).map(|f| f.to_string()).collect()
+}
+
+#[test]
+fn a_scroll_that_teleports_a_row_into_view_with_no_input_jumps() {
+    // The offset jumps 40 pt with no hand on the app: the first row, just off screen, pops
+    // 40 pt into view, though nothing showed on both frames to be seen moving.
+    let instant = padded_jumps(|r| {
+        r.rt.update(|_, tx| tx.scroll_to_instant("list", 0.0, 40.0));
+        r.step();
+    });
+    assert_eq!(instant.len(), 1, "{instant:#?}");
+    assert!(instant[0].starts_with("jump") && instant[0].contains("rows"), "{instant:#?}");
+    // A wheel, a scroll a tap asks for and a glide bring it in as you'd expect.
+    let wheel = padded_jumps(|r| for _ in 0..4 { r.act("wheel", |rt| rt.wheel(200.0, 150.0, -10.0)) });
+    assert!(wheel.is_empty(), "{wheel:#?}");
+    let tapped = padded_jumps(|r| r.act("tap", |rt| rt.update(|_, tx| tx.scroll_to_instant("list", 0.0, 40.0))));
+    assert!(tapped.is_empty(), "{tapped:#?}");
+    let glide = padded_jumps(|r| {
+        r.rt.update(|_, tx| tx.scroll_to("list", 0.0, 40.0));
+        r.step();
+    });
+    assert!(glide.is_empty(), "{glide:#?}");
+}

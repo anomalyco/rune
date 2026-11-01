@@ -179,6 +179,16 @@ def main():
     # The content jumps 100 pt and the rows that show with it.
     shift = lambda dy: {**still, "root/list": (0, -600 + dy, 400, 2000, 1), "root/list/a": (0, 20 + dy, 400, 30, 1), "root/list/b": (0, 60 + dy, 400, 30, 1)}
     assert "jump" in kinds(hold(shift(0), 40) + hold(shift(100), 40), clips=view), "the content jumps with what shows of it"
+    # The offset jumps 40 pt with no input: the first row, just under the viewport, pops 40 pt
+    # into view, though nothing showed on both frames. Under a key, it's the key's scroll.
+    pad = lambda dy: {**still, "root/list": (0, -dy, 400, 1100, 1), "root/list/row": (0, 300 - dy, 400, 40, 1)}
+    padded = hold(pad(0), 40) + hold(pad(40), 40)
+    port, scroll = {"root/list": (0, 0, 400, 300)}, {"root/list": analyze.SCROLLING, "root/list/row": analyze.SCROLLING}
+    assert "jump" in kinds(padded, flags=scroll, clips=port), "content that teleports a row into view"
+    end = [{"t": 40 / 120, "type": "key", "name": "End"}]
+    assert not {"jump", "step"} & set(kinds(padded, end, flags=scroll, clips=port)), "a key's scroll"
+    glide = hold(pad(0), 40) + [pad(y) for y in ease(0, 40, 20)] + hold(pad(40), 20)
+    assert not {"jump", "step"} & set(kinds(glide, flags=scroll, clips=port)), "a scroll that glides"
 
     # one steady speed: a retarget that drops part of its speed for a frame stalls; one that
     # keeps its speed and only pulls harder toward a farther target doesn't.

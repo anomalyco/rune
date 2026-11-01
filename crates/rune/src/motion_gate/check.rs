@@ -28,7 +28,7 @@ pub const RULES: &[Rule] = &[
     Rule { kind: "pop-in", threshold: 0.5, means: "mounts at or above this opacity, at full size, with no fade, growth or scale (and no ancestor transitioning)" },
     Rule { kind: "pop-out", threshold: 0.5, means: "unmounts at or above this opacity: it vanished instead of leaving" },
     Rule { kind: "cut-exit", threshold: 0.05, means: "unmounts above this opacity, below pop-out's: a fade cut short" },
-    Rule { kind: "jump", threshold: 2.0, means: "an edge moves at least this many pt in one frame between still frames, where it shows (its visible part, or what it holds that shows, moves with it)" },
+    Rule { kind: "jump", threshold: 2.0, means: "an edge moves at least this many pt in one frame between still frames, where it shows (its visible part, or what it holds that shows, moves with it, or it brings what it holds into view with no input)" },
     Rule { kind: "offset-jump", threshold: 2.0, means: "a jump of a scroll's content: every row in it moved by the same delta in one frame" },
     Rule { kind: "appear-then-jump", threshold: 2.0, means: "mounts, then moves at least this many pt on its next frame" },
     Rule { kind: "jerk", threshold: 10.0, means: "a moving edge's per-frame step changes by more than this many pt from one frame to the next" },
@@ -409,12 +409,16 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
     };
     // How many of what `i` holds show on frames k - 1 and k and move there by `d` with it, as a
     // scroll's rows do when its content jumps though the content's visible part stays put.
-    let carried = |i: usize, k: usize, axis: usize, d: f32| -> usize {
+    // With `entering`, also those it brings into view from just off it with no input on the
+    // way: content that teleports pops in a row that didn't show the frame before.
+    let carried = |i: usize, k: usize, axis: usize, d: f32, entering: bool| -> usize {
         if axis >= 2 { return 0; }
+        let entering = entering && !input_between(k - 1, k);
         tr.iter().filter(|c| inside(&c.path, &tr[i].path)).filter(|c| {
             let (Some(a), Some(b)) = (c.at(k - 1), c.at(k)) else { return false };
-            seen(a, size) && seen(b, size) && (edge(b, axis) - edge(a, axis) - d).abs() < 0.25
-                && (shown_edge(b, axis, size) - shown_edge(a, axis, size) - d).abs() < 0.25
+            if !seen(b, size) || (edge(b, axis) - edge(a, axis) - d).abs() >= 0.25 { return false; }
+            if seen(a, size) { return (shown_edge(b, axis, size) - shown_edge(a, axis, size) - d).abs() < 0.25 }
+            entering && b.op >= rule("faint") && b.flags & INK != 0 && b.flags & (GROWING | EXITING) == 0
         }).count()
     };
     let mut geo: Vec<(usize, Finding)> = Vec::new();
@@ -429,18 +433,21 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
             // height with the scroll offset, and nothing that shows moves.
             let vd = |j: usize| if fs[j].0 == fs[j - 1].0 + 1 { shown_edge(&fs[j].1, axis, size) - shown_edge(&fs[j - 1].1, axis, size) } else { 0.0 };
             let clipped = |j: usize| area(&on_window(&fs[j].1.vis, size)) + 1.0 < area(&fs[j].1.rect);
-            let quiet = |j: usize| fs[j].1.flags & (SCROLLING | LIVE | VIRTUAL) != 0 || !seen(&fs[j].1, size) || fs[j].1.op < rule("faint");
+            let quiet = |j: usize| fs[j].1.flags & (LIVE | VIRTUAL) != 0 || !seen(&fs[j].1, size) || fs[j].1.op < rule("faint");
             for j in 1..fs.len() {
                 let Some(step) = d[j - 1] else { continue };
                 let k = fs[j].0;
                 if k <= rec.start || quiet(j) || quiet(j - 1) || fs[j].1.flags & GROWING != 0 && axis == 3 { continue; }
+                // A scroll under a hand, or one gliding over frames, moves as it should. One that
+                // lands in a single frame with nothing asking for it is a teleport.
+                let scrolling = (fs[j].1.flags | fs[j - 1].1.flags) & SCROLLING != 0;
                 let before = if j >= 2 { d[j - 2].unwrap_or(0.0) } else { 0.0 };
                 let after = d.get(j).copied().flatten().unwrap_or(0.0);
                 let name = short(&t.path);
-                let riders = || if clipped(j) || clipped(j - 1) { carried(i, k, axis, step) } else { 0 };
+                let riders = |entering| if clipped(j) || clipped(j - 1) { carried(i, k, axis, step, entering) } else { 0 };
                 if step.abs() >= rule("jump") && before.abs() < 0.5 && after.abs() < 0.5 {
-                    if riding(i, k, axis, step) || pushed(i, k, axis, step) { continue; }
-                    let riders = riders();
+                    if scrolling && input_between(k - 1, k) || riding(i, k, axis, step) || pushed(i, k, axis, step) { continue; }
+                    let riders = riders(true);
                     if vd(j).abs() < rule("jump") && riders == 0 { continue; }
                     let appeared = born(t) == Some(fs[j - 1].0) && fs[j - 1].0 > rec.start;
                     let scroll_content = axis == 1 && fs[j].1.rect[3] > fs[j].1.vis[3] + 1.0 && riders >= 3;
@@ -448,9 +455,9 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
                     geo.push((i, Finding { kind, element: name, frame: k,
                         detail: format!("{} {:.1} → {:.1} ({:+.1} pt) in one frame{}", AXES[axis], edge(&fs[j - 1].1, axis), edge(&fs[j].1, axis), step,
                             if scroll_content { format!(", carrying {riders} elements") } else { String::new() }) }));
-                } else if (step - before).abs() > rule("jerk") && before.abs() >= 0.5 && step.abs() >= 0.5 {
+                } else if !scrolling && (step - before).abs() > rule("jerk") && before.abs() >= 0.5 && step.abs() >= 0.5 {
                     if riding(i, k, axis, step) { continue; }
-                    if j >= 2 && (vd(j) - vd(j - 1)).abs() <= rule("jerk") && riders() == 0 { continue; }
+                    if j >= 2 && (vd(j) - vd(j - 1)).abs() <= rule("jerk") && riders(false) == 0 { continue; }
                     geo.push((i, Finding { kind: "jerk", element: name, frame: k,
                         detail: format!("{} step {:+.1} → {:+.1} pt/frame ({:.0} → {:.0} pt/s)", AXES[axis], before, step, before as f64 * rec.hz, step as f64 * rec.hz) }));
                 }
