@@ -189,3 +189,41 @@ fn motion_inside_a_scroll_is_judged_against_the_scroll() {
     assert_eq!(run(&wobble, 0, true), ["jiggle"], "against the scroll it wobbles");
     assert_eq!(run(&wobble, SCROLLING, true), ["jiggle"], "a scroll that moves doesn't excuse it");
 }
+
+/// A list's content, scrolled into a 400 pt viewport at the window's top, and rows in it: each
+/// track's rect per frame, its visible part the rect cut to the viewport.
+fn scrolled_list(tracks: Vec<(&str, Vec<[f32; 4]>)>) -> Recording {
+    let mut r = Recording::new((1000.0, 1000.0), 120.0);
+    r.frames = 60;
+    for (path, rects) in tracks {
+        let parent = path.rsplit_once('/').map(|(p, _)| r.tracks.iter().position(|t| t.path == p).unwrap());
+        let i = r.track(path, parent);
+        r.tracks[i].frames = rects.into_iter().enumerate().map(|(k, rect)| {
+            let (y0, y1) = (rect[1].max(0.0), (rect[1] + rect[3]).min(400.0));
+            let vis = [rect[0], y0, rect[2], (y1 - y0).max(0.0)];
+            (k, Snap { rect, vis, op: 1.0, scale: 1.0, flags: INK, phase: f32::NAN, scrolled: [0.0, 600.0] })
+        }).collect();
+    }
+    r
+}
+
+#[test]
+fn a_jump_is_what_shows_jumping() {
+    let at = |k: usize, a: [f32; 4], b: [f32; 4]| if k < 30 { a } else { b };
+    let still = |rect: [f32; 4]| vec![rect; 60];
+    // A row teleported 100 pt while it shows, the list still.
+    let list = still([0.0, -600.0, 100.0, 2000.0]);
+    let row: Vec<_> = (0..60).map(|k| at(k, [0.0, 100.0, 100.0, 40.0], [0.0, 200.0, 100.0, 40.0])).collect();
+    assert_eq!(kinds(&scrolled_list(vec![("list", list.clone()), ("list/row", row)])), ["jump"]);
+    // A fold drops 900 pt above the window with the offset: the content's top and height step,
+    // its visible part and the rows that show stay put.
+    let content: Vec<_> = (0..60).map(|k| at(k, [0.0, -1100.0, 100.0, 1500.0], [0.0, -200.0, 100.0, 600.0])).collect();
+    let fold: Vec<_> = (0..60).map(|k| at(k, [0.0, -900.0, 100.0, 1200.0], [0.0, 0.0, 100.0, 300.0])).collect();
+    let shown = |y: f32| still([0.0, y, 100.0, 40.0]);
+    let r = scrolled_list(vec![("list", content), ("list/fold", fold), ("list/fold/a", shown(100.0)), ("list/fold/b", shown(200.0)), ("list/c", shown(320.0))]);
+    assert!(kinds(&r).is_empty(), "{:?}", check(&r));
+    // The content jumps 100 pt and the rows that show jump with it: one offset jump.
+    let content: Vec<_> = (0..60).map(|k| at(k, [0.0, -600.0, 100.0, 2000.0], [0.0, -500.0, 100.0, 2000.0])).collect();
+    let row = |y: f32| (0..60).map(|k| at(k, [0.0, y, 100.0, 40.0], [0.0, y + 100.0, 100.0, 40.0])).collect::<Vec<_>>();
+    assert_eq!(kinds(&scrolled_list(vec![("list", content), ("list/a", row(0.0)), ("list/b", row(100.0)), ("list/c", row(200.0))])), ["offset-jump"]);
+}

@@ -418,3 +418,19 @@ fn a_fold_reopened_as_it_shuts_from_its_stuck_header_never_jumps() {
         }
     }
 }
+
+#[test]
+fn a_fold_shut_from_its_stuck_header_makes_no_jump_that_shows() {
+    // What drops above the window drops in one frame, with the scroll offset by as much: the
+    // fold's top and height step, but nothing that shows moves.
+    for after in [100.0, 300.0] {
+        let mut run = crate::motion_gate::Run::new(Runtime::new((true, after), held_section, (300.0, 200.0), Env::new(true, 1.0)), 120.0);
+        run.rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, 1100.0));
+        run.idle(0.1);
+        run.step();
+        run.act("shut", |rt| rt.update(|s, tx| { s.0 = false; tx.keep_on_screen("hdr"); }));
+        run.play(0.75);
+        let jumps: Vec<String> = run.finish().iter().filter(|f| ["jump", "jerk", "offset-jump"].contains(&f.kind)).map(|f| f.to_string()).collect();
+        assert!(jumps.is_empty(), "after {after}: {jumps:#?}");
+    }
+}

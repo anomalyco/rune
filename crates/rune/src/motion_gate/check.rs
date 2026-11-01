@@ -28,7 +28,7 @@ pub const RULES: &[Rule] = &[
     Rule { kind: "pop-in", threshold: 0.5, means: "mounts at or above this opacity, at full size, with no fade, growth or scale (and no ancestor transitioning)" },
     Rule { kind: "pop-out", threshold: 0.5, means: "unmounts at or above this opacity: it vanished instead of leaving" },
     Rule { kind: "cut-exit", threshold: 0.05, means: "unmounts above this opacity, below pop-out's: a fade cut short" },
-    Rule { kind: "jump", threshold: 2.0, means: "an edge moves at least this many pt in one frame between still frames" },
+    Rule { kind: "jump", threshold: 2.0, means: "an edge moves at least this many pt in one frame between still frames, where it shows (its visible part, or what it holds that shows, moves with it)" },
     Rule { kind: "offset-jump", threshold: 2.0, means: "a jump of a scroll's content: every row in it moved by the same delta in one frame" },
     Rule { kind: "appear-then-jump", threshold: 2.0, means: "mounts, then moves at least this many pt on its next frame" },
     Rule { kind: "jerk", threshold: 10.0, means: "a moving edge's per-frame step changes by more than this many pt from one frame to the next" },
@@ -251,6 +251,13 @@ fn edge(s: &Snap, axis: usize) -> f32 {
     s.rect[axis]
 }
 
+/// An edge of what shows: the visible part, in the window, where one wholly past the window's
+/// edge would come in. An edge its clips hide on both frames moves nobody can see.
+fn shown_edge(s: &Snap, axis: usize, size: (f32, f32)) -> f32 {
+    let r = on_window(&s.vis, size);
+    [r[0].min(size.0), r[1].min(size.1), r[2], r[3]][axis]
+}
+
 /// An edge against the content it scrolls with: a node gliding inside a list that follows its
 /// end makes one motion there, however the scroll adds to it on screen.
 fn own_edge(s: &Snap, axis: usize) -> f32 {
@@ -400,6 +407,16 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
             above || below
         })
     };
+    // How many of what `i` holds show on frames k - 1 and k and move there by `d` with it, as a
+    // scroll's rows do when its content jumps though the content's visible part stays put.
+    let carried = |i: usize, k: usize, axis: usize, d: f32| -> usize {
+        if axis >= 2 { return 0; }
+        tr.iter().filter(|c| inside(&c.path, &tr[i].path)).filter(|c| {
+            let (Some(a), Some(b)) = (c.at(k - 1), c.at(k)) else { return false };
+            seen(a, size) && seen(b, size) && (edge(b, axis) - edge(a, axis) - d).abs() < 0.25
+                && (shown_edge(b, axis, size) - shown_edge(a, axis, size) - d).abs() < 0.25
+        }).count()
+    };
     let mut geo: Vec<(usize, Finding)> = Vec::new();
     for (i, t) in tr.iter().enumerate() {
         if loops.contains(&i) || t.frames.len() < 3 { continue; }
@@ -407,6 +424,11 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
             // Deltas between consecutive frames, None across a gap.
             let fs = &t.frames;
             let d: Vec<Option<f32>> = (1..fs.len()).map(|j| (fs[j].0 == fs[j - 1].0 + 1).then(|| edge(&fs[j].1, axis) - edge(&fs[j - 1].1, axis))).collect();
+            // A jump or jerk is judged on what shows: the visible part moves with it, or what it
+            // holds that shows does. A fold dropping its rows above the window steps its top and
+            // height with the scroll offset, and nothing that shows moves.
+            let vd = |j: usize| if fs[j].0 == fs[j - 1].0 + 1 { shown_edge(&fs[j].1, axis, size) - shown_edge(&fs[j - 1].1, axis, size) } else { 0.0 };
+            let clipped = |j: usize| area(&on_window(&fs[j].1.vis, size)) + 1.0 < area(&fs[j].1.rect);
             let quiet = |j: usize| fs[j].1.flags & (SCROLLING | LIVE | VIRTUAL) != 0 || !seen(&fs[j].1, size) || fs[j].1.op < rule("faint");
             for j in 1..fs.len() {
                 let Some(step) = d[j - 1] else { continue };
@@ -415,11 +437,12 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
                 let before = if j >= 2 { d[j - 2].unwrap_or(0.0) } else { 0.0 };
                 let after = d.get(j).copied().flatten().unwrap_or(0.0);
                 let name = short(&t.path);
+                let riders = || if clipped(j) || clipped(j - 1) { carried(i, k, axis, step) } else { 0 };
                 if step.abs() >= rule("jump") && before.abs() < 0.5 && after.abs() < 0.5 {
                     if riding(i, k, axis, step) || pushed(i, k, axis, step) { continue; }
+                    let riders = riders();
+                    if vd(j).abs() < rule("jump") && riders == 0 { continue; }
                     let appeared = born(t) == Some(fs[j - 1].0) && fs[j - 1].0 > rec.start;
-                    let riders = tr.iter().filter(|c| c.path.starts_with(&t.path) && c.path.len() > t.path.len() && c.path.as_bytes()[t.path.len()] == b'/'
-                        && c.at(k).is_some_and(|s| seen(s, size))).count();
                     let scroll_content = axis == 1 && fs[j].1.rect[3] > fs[j].1.vis[3] + 1.0 && riders >= 3;
                     let kind = if appeared { "appear-then-jump" } else if scroll_content { "offset-jump" } else { "jump" };
                     geo.push((i, Finding { kind, element: name, frame: k,
@@ -427,6 +450,7 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
                             if scroll_content { format!(", carrying {riders} elements") } else { String::new() }) }));
                 } else if (step - before).abs() > rule("jerk") && before.abs() >= 0.5 && step.abs() >= 0.5 {
                     if riding(i, k, axis, step) { continue; }
+                    if j >= 2 && (vd(j) - vd(j - 1)).abs() <= rule("jerk") && riders() == 0 { continue; }
                     geo.push((i, Finding { kind: "jerk", element: name, frame: k,
                         detail: format!("{} step {:+.1} → {:+.1} pt/frame ({:.0} → {:.0} pt/s)", AXES[axis], before, step, before as f64 * rec.hz, step as f64 * rec.hz) }));
                 }

@@ -74,7 +74,8 @@ class El:
         self.born = None
         self.ever_drawn = False  # had area at some point (spacers never do)
         self.scrolled = (0.0, 0.0)  # how far scrolling carries it, x and y (the trace's `sc`)
-        # (frame, x, y, w, h, op, flags, visible-area-fraction, on-screen, scrolled x, scrolled y)
+        # (frame, x, y, w, h, op, flags, visible-area-fraction, on-screen, scrolled x, scrolled y,
+        #  shown x, y, w, h: the visible part in the window, as `shown`)
         self.hist = []
 
 
@@ -91,6 +92,12 @@ def visible_part(e, W, H):
     x0, y0 = max(r[0], 0), max(r[1], 0)
     x1, y1 = min(r[0] + r[2], W), min(r[1] + r[3], H)
     return [x0, y0, max(x1 - x0, 0), max(y1 - y0, 0)]
+
+
+def shown(vp, W, H):
+    """What shows, where one wholly past the window's edge would come in. Jumps and steps are
+    judged on it: an edge its clips hide on both frames moves nobody can see."""
+    return (min(vp[0], W), min(vp[1], H), vp[2], vp[3])
 
 
 def seen(e, W, H):
@@ -241,7 +248,7 @@ def analyze(path, script=None):
             e = els[id]
             vp = visible_part(e, W, H)
             frac = area(vp) / area(e.rect) if area(e.rect) > 0 else 0.0
-            e.hist.append((k, *e.rect, e.op, e.flags, frac, on_screen(e.rect, W, H), *e.scrolled))
+            e.hist.append((k, *e.rect, e.op, e.flags, frac, on_screen(e.rect, W, H), *e.scrolled, *shown(vp, W, H)))
             if e.flags & SCROLLING:
                 scrolled[k].add(e.name.rpartition("/")[0])
         q = fr.get("quality", {})
@@ -433,6 +440,30 @@ def analyze(path, script=None):
         for i, *_ in items:
             changed_parents[k].add(els[i].parent)
     pressing = [bool(fr.get("k")) for fr in frames]
+    kids = defaultdict(list)
+    for e in els.values():
+        kids[e.parent].append(e)
+    at_frame = {}
+
+    def at(e, k):
+        if e.id not in at_frame:
+            at_frame[e.id] = {st[0]: st for st in e.hist}
+        return at_frame[e.id].get(k)
+
+    def carries(e, k, edge, step):
+        """Whether something `e` holds shows on frames k - 1 and k and moves there by `step` with
+        it, as a scroll's rows do when its content jumps though its visible part stays put."""
+        if edge > 2:
+            return False
+        for c in kids.get(e.id, ()):
+            a, b = at(c, k - 1), at(c, k)
+            if a and b and a[7] > 0 and b[7] > 0 and abs(b[edge] - a[edge] - step) < 0.25 \
+                    and abs(b[10 + edge] - a[10 + edge] - step) < 0.25:
+                return True
+            if a and b and carries(c, k, edge, step):
+                return True
+        return False
+
     for e in els.values():
         h = e.hist
         if len(h) < 3 or e.id in loops:
@@ -457,11 +488,19 @@ def analyze(path, script=None):
                 intent = st[6] >> 8
                 if intent & (1 if label in "xy" else 2):
                     continue
-                before = d[i - 2] if i >= 2 else 0.0
-                after = d[i] if i < len(d) else 0.0
+                # Judged on what shows: its visible part moves, or what it holds that shows does.
+                # A fold dropping its rows above the window steps its top and height with the
+                # scroll offset, and nothing that shows moves, or it starts to glide from where
+                # it showed.
+                clipped = any(s[7] < 0.999 for s in (prev, st))
+                at_edge = edge if clipped and carries(e, k, edge, step) else 10 + edge
+                sd = lambda j: h[j][at_edge] - h[j - 1][at_edge] if 0 < j < len(h) and h[j][0] == h[j - 1][0] + 1 else 0.0
+                if abs(sd(i)) < JUMP_PT:
+                    continue
+                before, after = sd(i - 1), sd(i + 1)
                 if abs(before) < 1.0 and abs(after) < 1.0:
                     kind = "sibling-jump" if any(els.get(e.parent) and p == e.parent for p in changed_parents.get(k, ())) else "jump"
-                elif abs(step) > 3 * max(abs(before), abs(after), 1.0):
+                elif abs(sd(i)) > 3 * max(abs(before), abs(after), 1.0):
                     kind = "step"
                 else:
                     continue
@@ -471,7 +510,7 @@ def analyze(path, script=None):
                     if k in ph and k - 1 in ph and abs((ph[k][edge] - ph[k - 1][edge]) - step) < 0.5 and label in "xy":
                         continue  # rides its parent; the parent reports it
                 findings.append(dict(kind=kind, element=e.name, frames=1, longest=1, at=str(k),
-                                     detail=f"{label} {h[i - 1][edge]:.1f} → {st[edge]:.1f} ({step:+.1f}pt) in one frame; neighbours {before:+.1f}/{after:+.1f}"))
+                                     detail=f"{label} {prev[at_edge]:.1f} → {st[at_edge]:.1f} ({sd(i):+.1f}pt) in one frame; neighbours {before:+.1f}/{after:+.1f}"))
             # motion segments, against the scroll. A motion may rest a frame or two where it
             # turns (an out-and-back through its start), so up to SEG_GAP frames at rest don't
             # end one.

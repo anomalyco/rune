@@ -41,10 +41,11 @@ def sheen(wrap_from, wrap_to):
     return before + after
 
 
-def scene(frames, flags=None):
+def scene(frames, flags=None, clips=None):
     """A 120 Hz trace of named elements; each frame maps name -> (x, y, w, h, opacity), plus
     how far scrolling carries it as (x, y) when it scrolls, and a name missing from a frame is
-    gone. A name's parent is its longest named prefix."""
+    gone. A name's parent is its longest named prefix. `clips` maps a name to a window-space
+    clip (x0, y0, x1, y1) cutting the visible part of it and what it holds."""
     names = sorted({nm for fr in frames for nm in fr})
     ids = {nm: i + 1 for i, nm in enumerate(names)}
     def parent(nm):
@@ -59,7 +60,12 @@ def scene(frames, flags=None):
             if nm not in meta:
                 meta.add(nm)
                 out["m"].append({"id": ids[nm], "nm": nm, "pv": parent(nm)})
-            out["e"].append([ids[nm], x, y, w, h, op, 0, (flags or {}).get(nm, 0), x, y, w, h])
+            vis = [x, y, w, h]
+            for c in [c for p, c in (clips or {}).items() if nm == p or nm.startswith(p + "/")]:
+                x0, y0 = max(vis[0], c[0]), max(vis[1], c[1])
+                x1, y1 = min(vis[0] + vis[2], c[2]), min(vis[1] + vis[3], c[3])
+                vis = [x0, y0, max(x1 - x0, 0), max(y1 - y0, 0)]
+            out["e"].append([ids[nm], x, y, w, h, op, 0, (flags or {}).get(nm, 0), *vis])
             alive.add(nm)
         for nm in sorted(alive - set(fr)):
             out["g"].append(ids[nm])
@@ -71,8 +77,8 @@ def scene(frames, flags=None):
     return f.name
 
 
-def kinds(frames, events=None, flags=None):
-    path = scene(frames, flags)
+def kinds(frames, events=None, flags=None, clips=None):
+    path = scene(frames, flags, clips)
     try:
         return [f["kind"] for f in analyze.analyze(path, {"events": events} if events else None)["findings"]]
     finally:
@@ -147,6 +153,32 @@ def main():
     assert "jiggle" not in scrolling(wobble, told=False), "on screen it only ever rises"
     assert "jiggle" in scrolling(wobble), "against the scroll it wobbles"
     assert "jiggle" in scrolling(wobble, analyze.SCROLLING), "a scroll that moves doesn't excuse it"
+
+    # jumps are judged on what shows. A fold drops 900 pt above a 200 pt viewport in one frame
+    # with the scroll offset: the content's and the fold's tops and heights step, while what
+    # shows stays put.
+    view = {"root/list": (0, 0, 400, 200)}
+    def frame(content, fold, extra=None):
+        return {**still, "root/list": (0, *content, 1), "root/list/fold": (0, *fold, 1),
+                "root/list/fold/a": (0, 60, 400, 40, 1), "root/list/after": (0, 150, 400, 100, 1), **(extra or {})}
+    drop = hold(frame((-1100, 400, 1500), (-900, 400, 1200)), 40) + hold(frame((-200, 400, 600), (0, 400, 300)), 40)
+    found = set(kinds(drop, clips=view))
+    assert not {"jump", "step", "sibling-jump"} & found, f"nothing that shows moves: {found}"
+    # Shut from its stuck header, the fold drops its rows above the window and its top comes
+    # in from the window's edge, gliding down from where it showed.
+    def shut(top):
+        return {**still, "root/list": (0, top - 1100, 400, 1500, 1), "root/list/fold": (0, top, 400, 200 - top, 1),
+                "root/list/after": (0, 200, 400, 100, 1)}
+    glide = hold(shut(-900), 40) + [shut(t) for t in (13, 43, 73, 100, 120, 135, 145, 150)] + hold(shut(150), 40)
+    found = set(kinds(glide, clips=view))
+    assert not {"jump", "step", "sibling-jump"} & found, f"it glides from where it showed: {found}"
+    # A row that shows, teleported 100 pt in the scrolled list, jumps.
+    row = lambda y: {"root/list/fold/row": (0, y, 400, 30, 1)}
+    tele = hold(frame((-200, 400, 600), (0, 400, 300), row(20)), 40) + hold(frame((-200, 400, 600), (0, 400, 300), row(120)), 40)
+    assert "jump" in kinds(tele, clips=view), "a row that shows jumps"
+    # The content jumps 100 pt and the rows that show with it.
+    shift = lambda dy: {**still, "root/list": (0, -600 + dy, 400, 2000, 1), "root/list/a": (0, 20 + dy, 400, 30, 1), "root/list/b": (0, 60 + dy, 400, 30, 1)}
+    assert "jump" in kinds(hold(shift(0), 40) + hold(shift(100), 40), clips=view), "the content jumps with what shows of it"
 
     # one steady speed: a retarget that drops part of its speed for a frame stalls; one that
     # keeps its speed and only pulls harder toward a farther target doesn't.
