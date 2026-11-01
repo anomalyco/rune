@@ -1,0 +1,1 @@
+- `ElementInfo::scrolling` (and `MotionElement::SCROLLING`) is now true for content a glide carries (`Tx::scroll_to`, `scroll_to_with`, `scroll_to_bottom`), not only under a wheel, trackpad or its momentum. Motion checks that exempt scrolling content (jerk, jumps) now exempt a glide too.

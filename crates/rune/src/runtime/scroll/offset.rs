@@ -214,6 +214,12 @@ impl ScrollState {
     pub(super) fn glide_spring(&self) -> Spring {
         self.spring.unwrap_or(motion::GLIDE)
     }
+
+    /// A hand, its momentum or a glide is moving the content this frame: what
+    /// [`ElementInfo::scrolling`](crate::ElementInfo) reports for everything inside.
+    pub(crate) fn moving(&self) -> bool {
+        self.scrolling || self.glide.is_some() || self.x.glide.is_some()
+    }
 }
 
 impl<S: 'static> Runtime<S> {

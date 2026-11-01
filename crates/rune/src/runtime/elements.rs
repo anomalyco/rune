@@ -43,7 +43,8 @@ pub struct ElementInfo {
     pub revealing: bool,
     /// Inside a growth row whose height is moving: its visible part is being revealed.
     pub in_growing_row: bool,
-    /// This node is riding user-driven wheel/trackpad scrolling or its momentum.
+    /// This node is riding a scroll: a wheel or trackpad, its momentum, or a glide
+    /// (`Tx::scroll_to`, `scroll_to_with`, `scroll_to_bottom`).
     pub scrolling: bool,
     /// Invisible estimated extent of a virtual list, not a drawable surface.
     pub virtual_extent: bool,
@@ -232,7 +233,7 @@ impl<S: 'static> Runtime<S> {
                         || self.stacks.get(&parent.id).is_some_and(|s| s.moving)
                         || self.scrolls.get(&parent.id).is_some_and(|s| s.slack.moving() || s.glide.is_some());
                     live_intent |= intent(parent);
-                    scrolling |= self.scrolls.get(&parent.id).is_some_and(|s| s.scrolling);
+                    scrolling |= self.scrolls.get(&parent.id).is_some_and(ScrollState::moving);
                     in_growing_row |= self.grows.get(&parent.id).is_some_and(|g| g.moving());
                     a = step_up(&self.nodes, pi);
                 }

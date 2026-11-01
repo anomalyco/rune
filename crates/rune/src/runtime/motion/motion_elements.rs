@@ -91,7 +91,7 @@ impl<S: 'static> Runtime<S> {
             let mut flags = up.map_or(0, |u| down[u].1);
             let mut pass = flags;
             if intent(node) { pass |= MotionElement::LIVE; }
-            if self.scrolls.get(&node.id).is_some_and(|st| st.scrolling) { pass |= MotionElement::SCROLLING; }
+            if self.scrolls.get(&node.id).is_some_and(ScrollState::moving) { pass |= MotionElement::SCROLLING; }
             if self.grows.get(&node.id).is_some_and(|g| g.moving()) { pass |= MotionElement::GROWING; }
             let parent = node.parent.map(|p| down[p].0).filter(|&p| p != u32::MAX);
             let exiting = self.is_exiting(node.id) || node.parent.is_some_and(|p| down[p].2);

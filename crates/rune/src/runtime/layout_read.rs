@@ -431,8 +431,8 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// A hand, momentum, an instant scroll or a glide moves a viewport.
-    pub(super) fn scrolling(&self) -> bool {
-        self.scrolls.values().any(|st| st.scrolling || st.direct || st.glide.is_some() || st.x.glide.is_some())
+    pub(crate) fn scrolling(&self) -> bool {
+        self.scrolls.values().any(|st| st.direct || st.moving())
     }
 
     /// Queues `on_layout` and `on_screen_layout` for elements whose laid-out rect changed (or

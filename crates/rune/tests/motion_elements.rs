@@ -69,6 +69,30 @@ fn motion_elements_match_elements_through_a_scroll() {
 }
 
 #[test]
+fn a_glide_marks_the_content_it_carries_scrolling() {
+    let mut rt = Runtime::new(S { words: false }, view, (600.0, 900.0), Env::new(true, 2.0));
+    let mut out = Vec::new();
+    rt.frame(0.0);
+    rt.update(|_, tx| tx.scroll_to("scroll", 0.0, 400.0));
+    let y = |rt: &Runtime<S>| rt.elements().iter().find(|e| e.key.as_deref() == Some("row3")).map(|e| e.rect[1]).unwrap();
+    let (mut moved, mut last) = (0, y(&rt));
+    for f in 0..120 {
+        rt.frame(1.0 / 60.0);
+        agree(&rt, &mut out);
+        let now = y(&rt);
+        if (now - last).abs() > 0.01 {
+            moved += 1;
+            let row = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("row3")).unwrap();
+            // The frame it lands may close the last fraction of a point after the glide ends.
+            assert!(row.scrolling || (now - last).abs() < 0.5, "frame {f}: a row the glide carries {:.2} pt is scrolling", now - last);
+        }
+        last = now;
+    }
+    assert!(moved > 5, "it glided");
+    assert!(rt.elements().iter().all(|e| !e.scrolling), "and stops scrolling when it lands");
+}
+
+#[test]
 fn secure_text_hashes_to_zero() {
     let mut rt = Runtime::new(S { words: false }, secret, (300.0, 200.0), Env::new(true, 2.0));
     rt.frame(0.0);
