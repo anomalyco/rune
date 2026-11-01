@@ -710,6 +710,7 @@ impl<S: 'static> Runtime<S> {
             animating |= self.build();
         }
         self.finish_keeps();
+        animating |= self.write_drawn_rects();
         self.report_at_bottom();
         animating |= self.report_visible_rows();
         self.report_layout();

@@ -34,6 +34,8 @@ pub(crate) struct Handlers {
     pub on_layout: Option<LayoutTxFn>,
     pub on_screen_layout: Option<LayoutFn>,
     pub on_drawn_layout: Option<LayoutTxFn>,
+    /// `El::drawn_rect_into`: where each frame draws the element.
+    pub drawn_rect: Option<crate::Live<[f32; 4]>>,
     pub on_scroll_offset: Option<ScrollOffsetFn>,
     pub selection_copy: Option<SelectionCopy>,
     pub on_selection_change: Option<SelectionChangeFn>,
@@ -110,6 +112,7 @@ impl Empty for Handlers {
         on_layout: None,
         on_screen_layout: None,
         on_drawn_layout: None,
+        drawn_rect: None,
         on_scroll_offset: None,
         selection_copy: None,
         on_selection_change: None,

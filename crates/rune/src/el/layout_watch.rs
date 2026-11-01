@@ -96,6 +96,25 @@ impl El {
         { self.handlers.sites.drawn_layout = Some(std::panic::Location::caller()); }
         self
     }
+    /// Writes where each frame draws this element into `rect`: `[x, y, w, h]` in window points,
+    /// the rect [`El::on_drawn_layout`] reports, on every frame it moves, through a scroll, a
+    /// glide and its own or an ancestor's spring. It runs no handler and commits nothing, so a
+    /// scroll stays free of view runs. State code reads it with [`Live::get`](crate::Live::get)
+    /// when it needs to (where to open a popover). An element bound to `rect` (a highlight at
+    /// the window's top-left with [`El::live_rect`]) follows it a frame behind, since the rect
+    /// is known once the frame is drawn; to ride a scroll in the same frame, follow the offset
+    /// with [`El::on_scroll_offset`].
+    ///
+    /// ```ignore
+    /// let ring = Live::new([0.0; 4]);
+    /// row.drawn_rect_into(&ring);
+    /// // at the root, outside the scroll:
+    /// el().pin(Some(0.0), Some(0.0), None, None).live_rect(&ring).border(1.0, accent)
+    /// ```
+    pub fn drawn_rect_into(mut self, rect: &crate::Live<[f32; 4]>) -> Self {
+        self.handlers.drawn_rect = Some(rect.clone());
+        self
+    }
     /// On a scroll viewport: called with where it's scrolled to once it's first laid out, then in
     /// every frame that scrolling moves it or its content resizes, before that frame draws. A [`Live`](crate::Live) it
     /// sets shows in the same frame, so an element can follow the scroll exactly: a header that

@@ -794,7 +794,7 @@ impl<S: 'static> Runtime<S> {
                 sticky |= c.sticky.as_ref().is_some_and(|s| s.edge.is_some());
                 any_loop |= c.looping.is_some();
             }
-            drawn_ly |= n.handlers.get().is_some_and(|h| h.on_drawn_layout.is_some());
+            drawn_ly |= n.handlers.get().is_some_and(|h| h.on_drawn_layout.is_some() || h.drawn_rect.is_some());
             key_up |= n.focus.get().is_some_and(|f| f.key_up.is_some());
             raise |= n.vis.raise;
         }

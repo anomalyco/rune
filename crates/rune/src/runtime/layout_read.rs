@@ -506,6 +506,19 @@ impl<S: 'static> Runtime<S> {
         queued
     }
 
+    /// Writes each element's drawn rect to its `El::drawn_rect_into` value, on every frame it
+    /// moves (scrolls, glides and springs included), with no handler and no commit. True when
+    /// one this window binds changed, so the next frame shows what follows it.
+    pub(super) fn write_drawn_rects(&mut self) -> bool {
+        if !self.has_drawn_layout { return false; }
+        let mut wrote = false;
+        for (i, n) in self.nodes.iter().enumerate() {
+            let Some(live) = n.handlers.get().and_then(|h| h.drawn_rect.as_ref()) else { continue };
+            if let Some(&drawn) = self.drawn.get(i) && !self.subtree_exiting(i) { wrote |= live.set(drawn); }
+        }
+        wrote && self.live_pending()
+    }
+
     /// Whether a spring is moving node `i`'s drawn rect: its own, its anchor's, or an ancestor's.
     pub(super) fn rect_springing(&self, i: usize) -> bool {
         let store = self.scene.store();

@@ -281,6 +281,7 @@ fn same_handlers(
         on_layout,
         on_screen_layout,
         on_drawn_layout,
+        drawn_rect,
         on_scroll_offset,
         selection_copy,
         on_selection_change,
@@ -321,6 +322,11 @@ fn same_handlers(
         && opt_rc_eq(&a.on_layout, on_layout)
         && opt_rc_eq(&a.on_screen_layout, on_screen_layout)
         && opt_rc_eq(&a.on_drawn_layout, on_drawn_layout)
+        && match (&a.drawn_rect, drawn_rect) {
+            (None, None) => true,
+            (Some(la), Some(lb)) => std::sync::Arc::ptr_eq(&la.source, &lb.source),
+            _ => false,
+        }
         && opt_rc_eq(&a.on_scroll_offset, on_scroll_offset)
         && opt_rc_eq(&a.selection_copy, selection_copy)
         && opt_rc_eq(&a.on_selection_change, on_selection_change)
