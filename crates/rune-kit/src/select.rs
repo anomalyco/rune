@@ -6,9 +6,9 @@ use rune::{El, Icon, TextStyle, Tx, col, el, icon, row, text};
 use crate::menu::{Modal, dismissal, mount_dismiss};
 use crate::overlay::{Placement, fit_scroll, menu_anchor};
 
-/// The listbox's tallest: its 4-point padding, six 30-point rows (28 tall, 2 apart), and half
-/// of the seventh.
-const LISTBOX_MAX_HEIGHT: f32 = 4.0 + 6.0 * 30.0 + 14.0;
+/// The listbox's tallest: its 4-point padding, six 30-point rows (28 tall, 2 apart), and most
+/// of the seventh, whose label shows fading under the edge.
+const LISTBOX_MAX_HEIGHT: f32 = 4.0 + 6.0 * 30.0 + 22.0;
 use crate::{Kit, State, over, press_over, shadows};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -149,8 +149,8 @@ impl Select {
         let c = &k.c;
         let anchor_key = format!("{}-trigger", self.key);
         let modal = mount_dismiss(self.dismiss, layer);
-        // Six and a half rows tall at most, so a longer list shows its next row cut in half
-        // (with the edge fade) and reads as one that scrolls (hex#840); consecutive options
+        // About six and three-quarter rows tall at most, so a longer list shows its next row's label
+        // fading under the edge and reads as one that scrolls (hex#840); consecutive options
         // sit 2 points apart, headers flush.
         let mut list = col().key("rows").padding(4.0).items_stretch();
         let mut group: Option<&str> = None;

@@ -81,9 +81,9 @@ fn fit(content: El, anchor: &str, side: Side, align: Align, gap: f32) -> El {
     }
 }
 
-/// How far a dropdown's scrolling edge fades while rows are hidden under it: most of a row, so
+/// How far a dropdown's scrolling edge fades while rows are hidden under it: over half a row, so
 /// a list that scrolls reads as one even where the system hides scrollbars (hex#840).
-pub(crate) const LIST_SCROLL_FADE: f32 = 24.0;
+pub(crate) const LIST_SCROLL_FADE: f32 = 16.0;
 
 /// A dropdown's rows in a scroll viewport that shrinks with its fitted surface, so a list
 /// longer than the window has room for scrolls, its edges fading ([`LIST_SCROLL_FADE`]) while
