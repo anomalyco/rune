@@ -106,10 +106,11 @@ pub(super) fn load_families(collection: &mut Collection, files: &[&str], names: 
 
 /// File-name fragments (lowercase) of the CJK fonts desktops ship, most preferred first. Only
 /// these files are loaded, and only as fallbacks, so Latin text stays on the app's own fonts.
-pub(super) const CJK_FONT_FILES: [&str; 24] = [
+pub(super) const CJK_FONT_FILES: [&str; 26] = [
     "notosanscjk", "notosanssc", "notosansjp", "notosanstc", "notosanshk", "notosanskr", "sourcehansans",
-    "notoserifcjk", "sourcehanserif", "pingfang", "hiragino", "msyh", "yugoth", "meiryo", "malgun", "msjh",
-    "wqy", "wenquanyi", "droidsansfallback", "sarasa", "lxgw", "ukai", "uming", "simsun",
+    "notoserifcjk", "sourcehanserif", "pingfang", "hiragino", "applesdgothicneo", "msyh", "yugoth", "meiryo",
+    "malgun", "msjh", "wqy", "wenquanyi", "droidsansfallback", "sarasa", "lxgw", "ukai", "uming", "simsun",
+    "applegothic",
 ];
 
 /// Makes text in scripts the app's fonts don't cover render instead of drawing tofu. Families
@@ -125,7 +126,7 @@ pub(super) fn register_cjk_fallbacks(collection: &mut Collection, loaded: &mut L
         }
     }
     // Memory-mapped, so a 20 MB CJK collection costs a mapping, not a read.
-    for id in load_files(collection, loaded, system_font_files(&CJK_FONT_FILES).into_iter().take(8)) {
+    for id in load_files(collection, loaded, system_font_files(&CJK_FONT_FILES).into_iter().take(16)) {
         if !primary.contains(&Some(id)) && !fallbacks.contains(&id) {
             fallbacks.push(id);
         }
@@ -133,10 +134,21 @@ pub(super) fn register_cjk_fallbacks(collection: &mut Collection, loaded: &mut L
     if fallbacks.is_empty() {
         return;
     }
+    // Hangul tries Korean fonts first: a Chinese or Japanese font's few Hangul glyphs would
+    // otherwise mix designs within a word.
+    let korean = |collection: &mut Collection, id: &FamilyId| {
+        collection.family_name(*id).is_some_and(|name| KOREAN_FAMILIES.iter().any(|k| name.contains(k)))
+    };
+    let (mut hangul, others): (Vec<FamilyId>, Vec<FamilyId>) = fallbacks.iter().partition(|id| korean(collection, id));
+    hangul.extend(others);
     for script in CJK_SCRIPTS {
-        collection.append_fallbacks(FallbackKey::new(Script::from_bytes(*script), None), fallbacks.iter().copied());
+        let list = if *script == *b"Hang" { &hangul } else { &fallbacks };
+        collection.append_fallbacks(FallbackKey::new(Script::from_bytes(*script), None), list.iter().copied());
     }
 }
+
+/// Parts of the names of Korean font families, which Hangul prefers.
+const KOREAN_FAMILIES: [&str; 5] = ["SD Gothic", "Malgun", " KR", "AppleGothic", "Nanum"];
 
 /// The families each system font file added to the collection, so a file is loaded once.
 pub(super) type LoadedFiles = HashMap<std::path::PathBuf, Vec<FamilyId>>;
@@ -193,6 +205,15 @@ fn walk_font_dirs() -> Vec<(String, std::path::PathBuf)> {
     let mut dirs: Vec<std::path::PathBuf> = Vec::new();
     if cfg!(target_os = "macos") {
         dirs.extend(["/System/Library/Fonts", "/Library/Fonts"].map(Into::into));
+        // Fonts macOS installs as assets, PingFang among them since macOS 11 (Hex #820).
+        if let Ok(assets) = std::fs::read_dir("/System/Library/AssetsV2") {
+            dirs.extend(
+                assets
+                    .flatten()
+                    .filter(|entry| entry.file_name().to_string_lossy().starts_with("com_apple_MobileAsset_Font"))
+                    .map(|entry| entry.path()),
+            );
+        }
     } else if cfg!(target_os = "ios") {
         dirs.push("/System/Library/Fonts".into());
     } else if cfg!(windows) {
