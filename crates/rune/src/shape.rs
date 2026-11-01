@@ -6,7 +6,8 @@
 //! per segment (`KIND_SEGMENT`), a fill is ear-clipped into triangles (`KIND_TRIANGLE`) whose
 //! polygon-boundary edges are antialiased and whose interior edges are hard, so fills have no
 //! seams. Translucent strokes blend twice where neighbouring segments overlap at a joint; draw
-//! translucent areas as fills.
+//! translucent areas as fills. An element's opacity doesn't: while it is between 0 and 1, a
+//! shape of more than one piece paints through a layer that takes it once.
 
 use crate::color::Color;
 
@@ -124,6 +125,17 @@ impl Shape {
 
     pub fn is_empty(&self) -> bool {
         self.ops.is_empty()
+    }
+
+    /// Whether it draws more than one piece, so two can overlap: a stroke of two or more
+    /// segments (they meet at a joint), or more than one stroke or fill. Faded, overlapping
+    /// pieces blend twice where they meet, so a fade paints such a shape through a layer.
+    pub(crate) fn overlaps(&self) -> bool {
+        let pieces = |op: &Op| match op {
+            Op::Stroke { points, closed, .. } => if *closed { points.len() } else { points.len() - 1 },
+            Op::Fill { .. } => 1,
+        };
+        self.ops.iter().map(pieces).sum::<usize>() > 1
     }
 
     /// This shape drawn on to `t` (0 to 1), as SVG's `pathLength` trim draws a line: its strokes

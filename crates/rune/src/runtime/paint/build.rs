@@ -256,9 +256,11 @@ impl<S: 'static> Runtime<S> {
             let next = if tree_order { self.layer_paint_order.get(paint_index + 1).copied() } else { (i + 1 < n_nodes).then_some(i + 1) };
             let dissolve = self.has_dissolve && self.dissolve_scratch[i];
             let additive_parent = self.has_dissolve && n.parent.is_some_and(|p| self.dissolve_scratch[p]);
+            // A fading node with children, or a shape whose pieces overlap, takes its opacity
+            // once as a layer rather than each primitive taking it over the ones beneath.
             let mut isolate = effective_opacity > 0.001 && (p.blur > 0.0 || dissolve
                 || additive_parent || (own > 0.001 && own < 1.0
-                    && next.is_some_and(|j| self.nodes[j].parent == Some(i))));
+                    && (next.is_some_and(|j| self.nodes[j].parent == Some(i)) || n.vis.shape.as_ref().is_some_and(|s| s.overlaps()))));
             let (mut clip, mut fade) = (pinh.paint_clip, pinh.paint_fade);
             let mut fade_origin = pinh.paint_fade_origin;
             let mut rounded = pinh.rounded;
