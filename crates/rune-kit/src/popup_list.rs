@@ -293,7 +293,8 @@ impl<S: 'static> PopupList<S> {
             // A window too short for the list still shows one row to scroll.
             .min_h(if self.items.is_empty() { 0.0 } else { 28.0 })
             .scroll(ScrollSpec { stick_bottom: false })
-            .scroll_edge_fade(8.0)
+            .scroll_edge_fade(crate::overlay::LIST_SCROLL_FADE)
+            .scroll_margin(crate::overlay::LIST_SCROLL_FADE)
             .clip_soft(0.0)
             .child(rows);
         if let Some(label) = self.label.as_deref() {

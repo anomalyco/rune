@@ -81,11 +81,24 @@ fn fit(content: El, anchor: &str, side: Side, align: Align, gap: f32) -> El {
     }
 }
 
+/// How far a dropdown's scrolling edge fades while rows are hidden under it: most of a row, so
+/// a list that scrolls reads as one even where the system hides scrollbars (hex#840).
+pub(crate) const LIST_SCROLL_FADE: f32 = 24.0;
+
 /// A dropdown's rows in a scroll viewport that shrinks with its fitted surface, so a list
-/// longer than the window has room for scrolls, its edges fading while rows pass under them.
-/// Put it in a column with `.min_h(0.0)` up to the surface.
+/// longer than the window has room for scrolls, its edges fading ([`LIST_SCROLL_FADE`]) while
+/// rows pass under them; a row brought into view stops clear of the fade. Put it in a column
+/// with `.min_h(0.0)` up to the surface.
 pub(crate) fn fit_scroll(rows: El) -> El {
-    col().key("scroll").w_full().shrink().min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_edge_fade(8.0).child(rows)
+    col()
+        .key("scroll")
+        .w_full()
+        .shrink()
+        .min_h(0.0)
+        .scroll(ScrollSpec { stick_bottom: false })
+        .scroll_edge_fade(LIST_SCROLL_FADE)
+        .scroll_margin(LIST_SCROLL_FADE)
+        .child(rows)
 }
 
 /// Positions a menu surface next to `anchor` with no entrance: it is there on the next frame,
