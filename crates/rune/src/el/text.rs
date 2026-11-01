@@ -259,8 +259,8 @@ impl El {
             t.max_lines = 0;
             cut(t);
         }
-        self.style.flex_shrink = 1.0;
-        self.style.min_size.width = length(0.0);
+        self.style.set_flex_shrink(1.0);
+        self.style.set_min_width(length(0.0));
         self
     }
     /// Wrapped text that stops after `lines` lines, "…" ending the last when more would follow,

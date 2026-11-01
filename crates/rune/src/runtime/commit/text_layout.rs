@@ -212,8 +212,7 @@ pub(super) fn truncated(text: &mut TextSystem, spec: &TextSpec, scale: f32, max_
 pub(super) fn release_kept_layouts(
     old: &mut [Node],
     nodes: &[Node],
-    entries: &HashMap<String, LayoutEntry>,
-    taffy: &TaffyTree<usize>,
+    taffy: &LayoutEngine,
     text: &mut TextSystem,
     reused: &[memo_reuse::ReusedSpan],
 ) {
@@ -242,9 +241,9 @@ pub(super) fn release_kept_layouts(
         }
         let o = &mut old[oi];
         oi += 1;
-        let (Some(was), Some(e)) = (o.text.as_deref(), entries.get(&o.path).filter(|e| e.used)) else { continue };
+        let (Some(was), Some(now_idx)) = (o.text.as_deref(), taffy.mounted_node_index(o.id.0)) else { continue };
         o.text_layout = None;
-        let now = taffy.get_node_context(e.id).and_then(|&i| nodes.get(i)).filter(|n| n.path == o.path).and_then(|n| n.text.as_deref());
+        let now = nodes.get(now_idx).filter(|n| n.path == o.path).and_then(|n| n.text.as_deref());
         if let (Some((_, shape)), Some(now)) = (was.shape, now) && now.shape != was.shape && edited(&was.content, &now.content) {
             text.supersede(shape);
         }
@@ -262,44 +261,42 @@ pub(super) fn edited(was: &str, now: &str) -> bool {
 
 /// Lays out the flattened tree in `room`, measuring text leaves. Not generic over the app state,
 /// so Taffy's layout code is instantiated once, not once per `Runtime<S>`.
-pub(super) fn compute_layout(taffy: &mut TaffyTree<usize>, root: taffy::NodeId, room: Size<AvailableSpace>, nodes: &[Node], text: &mut TextSystem, scale: f32) {
-    taffy
-        .compute_layout_with_measure(root, room, |inputs, _id, ctx, style| {
-            taffy::compute_leaf_layout(inputs, style, |_, _| 0.0, |known, avail| {
-                let Some(&mut i) = ctx else { return Size::ZERO };
-                let spec = nodes[i].text.as_ref().unwrap();
-                let w = if spec.wrap {
-                    known.width.or(match avail.width {
-                        AvailableSpace::Definite(w) => Some(w),
-                        AvailableSpace::MinContent => Some(0.0),
-                        AvailableSpace::MaxContent => None,
-                    })
-                } else {
-                    None
-                };
-                if let Some((run, at)) = &spec.advance_in {
-                    let r = text.run_layout(run, spec.style, scale);
-                    if let Some(w) = r.advance(*at, scale) {
-                        return Size {
-                            width: known.width.unwrap_or(w),
-                            height: known.height.unwrap_or(layout_height(&r.layout, spec.style, scale) / scale),
-                        };
-                    }
+pub(super) fn compute_layout(taffy: &mut LayoutEngine, root: SlotId, room: Size<AvailableSpace>, nodes: &[Node], text: &mut TextSystem, scale: f32) {
+    taffy.compute_layout(root, room, |inputs, ctx, style| {
+        taffy::compute_leaf_layout(inputs, style, |_, _| 0.0, |known, avail| {
+            let Some(i) = ctx else { return Size::ZERO };
+            let spec = nodes[i].text.as_ref().unwrap();
+            let w = if spec.wrap {
+                known.width.or(match avail.width {
+                    AvailableSpace::Definite(w) => Some(w),
+                    AvailableSpace::MinContent => Some(0.0),
+                    AvailableSpace::MaxContent => None,
+                })
+            } else {
+                None
+            };
+            if let Some((run, at)) = &spec.advance_in {
+                let r = text.run_layout(run, spec.style, scale);
+                if let Some(w) = r.advance(*at, scale) {
+                    return Size {
+                        width: known.width.unwrap_or(w),
+                        height: known.height.unwrap_or(layout_height(&r.layout, spec.style, scale) / scale),
+                    };
                 }
-                let l = text.layout_for_spec(spec, scale, w.map(|w| w * scale), parley::Alignment::Start);
-                let mut lw = (l.full_width() / scale).ceil_to(scale);
-                if (spec.truncate || spec.truncate_fade || spec.max_lines > 0)
-                    && let AvailableSpace::Definite(a) = avail.width
-                {
-                    lw = lw.min(a);
-                }
-                Size {
-                    width: known.width.unwrap_or(lw),
-                    height: known.height.unwrap_or(clamped_height(&l, spec, scale) / scale),
-                }
-            })
+            }
+            let l = text.layout_for_spec(spec, scale, w.map(|w| w * scale), parley::Alignment::Start);
+            let mut lw = (l.full_width() / scale).ceil_to(scale);
+            if (spec.truncate || spec.truncate_fade || spec.max_lines > 0)
+                && let AvailableSpace::Definite(a) = avail.width
+            {
+                lw = lw.min(a);
+            }
+            Size {
+                width: known.width.unwrap_or(lw),
+                height: known.height.unwrap_or(clamped_height(&l, spec, scale) / scale),
+            }
         })
-        .unwrap();
+    });
 }
 
 /// The height (device px) of `l` as `spec` shows it: its first `max_lines` lines when set.

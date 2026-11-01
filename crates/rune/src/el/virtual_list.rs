@@ -3,7 +3,8 @@
 use std::cell::{Cell, Ref, RefCell};
 use std::ops::Range;
 
-use taffy::style::{Display, FlexDirection, FlexWrap, LengthPercentage, LengthPercentageAuto, Position, Style};
+use rune_taffy::CompactStyle;
+use taffy::style::{Display, FlexDirection, FlexWrap, LengthPercentage, LengthPercentageAuto, Position};
 
 use crate::El;
 use crate::runtime::{HashMap, HashSet};
@@ -74,18 +75,18 @@ pub(crate) struct VirtualList {
 /// measured viewport yet, mounts what its viewport can show rather than the window's height.
 /// Its own height in points wins; otherwise `avail`, what its parent leaves it. An estimate
 /// short of the laid-out height only costs a retry pass, which never presents a blank.
-pub(crate) fn height_bound(style: &Style, avail: f32) -> f32 {
-    let h = style.size.height.into_option().unwrap_or(avail);
-    let h = length(style.max_size.height).map_or(h, |m| h.min(m));
-    length(style.min_size.height).map_or(h, |m| h.max(m))
+pub(crate) fn height_bound(style: &CompactStyle, avail: f32) -> f32 {
+    let h = style.size().height.into_option().unwrap_or(avail);
+    let h = length(style.max_size().height).map_or(h, |m| h.min(m));
+    length(style.min_size().height).map_or(h, |m| h.max(m))
 }
 
 /// A column flex container's vertical gap in points; zero for non-column containers.
-pub(crate) fn gap_y(style: &Style) -> f32 {
-    let column = style.display == Display::Flex && style.flex_wrap == FlexWrap::NoWrap
-        && matches!(style.flex_direction, FlexDirection::Column | FlexDirection::ColumnReverse);
+pub(crate) fn gap_y(style: &CompactStyle) -> f32 {
+    let column = style.display() == Display::Flex && style.flex_wrap() == FlexWrap::NoWrap
+        && matches!(style.flex_direction(), FlexDirection::Column | FlexDirection::ColumnReverse);
     if !column { return 0.0; }
-    match style.gap.height.expand() {
+    match style.gap().height.expand() {
         taffy::style::ExpandedLengthPercentage::Length(x) => x,
         _ => 0.0,
     }
@@ -95,17 +96,18 @@ pub(crate) fn gap_y(style: &Style) -> f32 {
 /// and, in a column, what siblings of fixed height and gaps don't take. A scroll viewport's
 /// content is unbounded, as is an out-of-flow child not pinned to both its parent's top and
 /// bottom.
-pub(crate) fn child_bounds(style: &Style, scrolls: bool, bound: f32, children: &[El]) -> ChildBounds {
+pub(crate) fn child_bounds(style: &CompactStyle, scrolls: bool, bound: f32, children: &[El]) -> ChildBounds {
     if scrolls { return ChildBounds { outer: f32::INFINITY, inner: f32::INFINITY, fixed: 0.0, column: false } }
     let points = |p: LengthPercentage| match p.expand() {
         taffy::style::ExpandedLengthPercentage::Length(x) => x,
         _ => 0.0,
     };
-    let inner = bound - points(style.padding.top) - points(style.padding.bottom);
-    let column = style.display == Display::Flex && style.flex_wrap == FlexWrap::NoWrap
-        && matches!(style.flex_direction, FlexDirection::Column | FlexDirection::ColumnReverse);
+    let pad = style.padding();
+    let inner = bound - points(pad.top) - points(pad.bottom);
+    let column = style.display() == Display::Flex && style.flex_wrap() == FlexWrap::NoWrap
+        && matches!(style.flex_direction(), FlexDirection::Column | FlexDirection::ColumnReverse);
     if !column || children.len() < 2 { return ChildBounds { outer: bound, inner, fixed: 0.0, column: false } }
-    let gaps = points(style.gap.height) * children.iter().filter(|c| in_flow(&c.style)).count().saturating_sub(1) as f32;
+    let gaps = points(style.gap().height) * children.iter().filter(|c| in_flow(&c.style)).count().saturating_sub(1) as f32;
     ChildBounds { outer: bound, inner: inner - gaps, fixed: children.iter().map(|c| fixed_height(&c.style)).sum(), column }
 }
 
@@ -120,8 +122,9 @@ pub(crate) struct ChildBounds {
 impl ChildBounds {
     pub fn of(&self, child: &El) -> f32 {
         let style = &child.style;
-        let bound = if style.position == Position::Absolute {
-            match (length(style.inset.top), length(style.inset.bottom)) {
+        let bound = if style.position() == Position::Absolute {
+            let inset = style.inset();
+            match (length(inset.top), length(inset.bottom)) {
                 (Some(top), Some(bottom)) => self.outer - top - bottom,
                 _ => f32::INFINITY,
             }
@@ -141,18 +144,18 @@ fn length(d: LengthPercentageAuto) -> Option<f32> {
     }
 }
 
-fn in_flow(style: &Style) -> bool {
-    style.display != Display::None && style.position != Position::Absolute
+fn in_flow(style: &CompactStyle) -> bool {
+    style.display() != Display::None && style.position() != Position::Absolute
 }
 
 /// The height a column's child takes whatever the others need: its own height when it can't
 /// shrink, and its minimum.
-fn fixed_height(style: &Style) -> f32 {
+fn fixed_height(style: &CompactStyle) -> f32 {
     if !in_flow(style) { return 0.0 }
-    let min = length(style.min_size.height).unwrap_or(0.0);
-    if style.flex_shrink > 0.0 { return min }
-    let h = style.size.height.into_option().unwrap_or(0.0);
-    length(style.max_size.height).map_or(h, |m| h.min(m)).max(min)
+    let min = length(style.min_size().height).unwrap_or(0.0);
+    if style.flex_shrink() > 0.0 { return min }
+    let h = style.size().height.into_option().unwrap_or(0.0);
+    length(style.max_size().height).map_or(h, |m| h.min(m)).max(min)
 }
 
 /// How far ahead an index-built list keeps rows mounted, in viewports either side.

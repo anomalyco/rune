@@ -25,7 +25,7 @@ fn unique(shared: &[El], own: &[El], hashes: &mut Vec<u64>) -> bool {
     }
     hashes.clear();
     hashes.extend(keys.map(|k| {
-        let mut h = std::hash::DefaultHasher::new();
+        let mut h = rustc_hash::FxHasher::default();
         k.hash(&mut h);
         h.finish()
     }));

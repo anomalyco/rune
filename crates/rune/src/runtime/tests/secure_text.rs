@@ -362,9 +362,9 @@ fn wrap_anywhere_wraps_unbroken_tokens_keeps_word_breaks_and_lowers_min_content_
     const WORDS: &str = "alpha beta gamma delta epsilon zeta eta theta";
 
     let mut explicit = text("token");
-    explicit.style.flex_shrink = 0.25;
-    assert_eq!(explicit.wrap_anywhere().style.flex_shrink, 0.25);
-    assert_eq!(text("token").wrap_anywhere().style.flex_shrink, 0.0);
+    explicit.style.set_flex_shrink(0.25);
+    assert_eq!(explicit.wrap_anywhere().style.flex_shrink(), 0.25);
+    assert_eq!(text("token").wrap_anywhere().style.flex_shrink(), 0.0);
 
     fn view(_: &(), _: &mut Cx<()>) -> El {
         col()
@@ -678,7 +678,7 @@ fn secure_rich_labels_have_no_links_flights_or_retained_measure_hashes() {
     rt.frame(0.0);
     let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("secret")).unwrap();
     assert!(n.text.as_ref().unwrap().links.is_empty());
-    assert_eq!(rt.layout_entries[&n.path].measure, Some(0));
+    assert_eq!(rt.layout.measure_hash(n.id.0), Some(Some(0)));
     assert!(rt.element_is_secure(&n.path));
     assert!(!rt.element_is_secure("missing"));
     assert!(!crate::tooling::tree_json(&rt, 0.0).to_string().contains("fictional-"));

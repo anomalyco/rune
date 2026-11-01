@@ -3,7 +3,7 @@
 use std::rc::Rc;
 
 use rune_motion::{Anim, Spring, Transition};
-use taffy::prelude::*;
+use rune_taffy::prelude::*;
 
 use crate::color::Color;
 pub(crate) use crate::el::drop::{DropHoverFn, DropSpec};
@@ -456,7 +456,7 @@ pub struct El {
     pub(crate) virtual_source: Option<&'static std::panic::Location<'static>>,
     pub(crate) role: &'static str,
     pub(crate) label: Option<String>,
-    pub(crate) style: Style,
+    pub(crate) style: CompactStyle,
     pub(crate) vis: Visual,
     pub(crate) live: Vec<crate::live::Bound>,
     pub(crate) text: Option<crate::cold::SharedBox<TextSpec>>,
@@ -528,7 +528,7 @@ fn base(dir: FlexDirection) -> El {
         // Relative makes every element the containing block for its absolute children, so they
         // size and pin against their parent's padding box. Taffy's default (static) hands them
         // to the window instead, as CSS does.
-        style: Style { display: Display::Flex, flex_direction: dir, flex_shrink: 0.0, position: Position::Relative, ..Default::default() },
+        style: CompactStyle::rune_base(dir),
         vis: Visual::default(),
         live: Vec::new(),
         text: None,

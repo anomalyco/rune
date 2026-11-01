@@ -73,7 +73,7 @@ fn fit_bound(a: &Anchor, t: [f32; 4], len: f32, vp: (f32, f32)) -> Option<f32> {
 impl<S: 'static> Measurement<'_, S> {
     /// Places every node from `taffy`'s layout: ids, local and window rects, insets, and
     /// anchored overlays beside their anchors.
-    pub(super) fn place(&mut self, taffy: &TaffyTree<usize>, nodes: &mut [Node]) {
+    pub(super) fn place(&mut self, taffy: &LayoutEngine, nodes: &mut [Node]) {
         self.node_index.clear();
         self.node_index.reserve(nodes.len());
         for i in 0..nodes.len() {
@@ -85,33 +85,28 @@ impl<S: 'static> Measurement<'_, S> {
             };
             nodes[i].id = id;
             self.node_index.insert(id, i);
-            let l = taffy.layout(nodes[i].taffy).unwrap();
-            nodes[i].local = MRect::new(l.location.x, l.location.y, l.size.width, l.size.height);
+            let l = taffy.box_layout(nodes[i].taffy);
+            nodes[i].local = MRect::new(l.x, l.y, l.w, l.h);
             let (px, py) = nodes[i].parent.map_or((0.0, 0.0), |p| (nodes[p].target[0], nodes[p].target[1]));
-            let mut x = px + l.location.x;
-            let mut y = py + l.location.y;
+            let mut x = px + l.x;
+            let mut y = py + l.y;
             if let Some(a) = &nodes[i].above
                 && let Some(j) = anchor_index(&nodes, i, a)
             {
                 // Anchors inside scroll viewports sit where they are scrolled (and stuck) to.
                 let target = sticky::anchored_target(nodes, self.scrolls, j, self.viewport);
-                (x, y) = anchor_position(a, target, (l.size.width, l.size.height), self.viewport);
+                (x, y) = anchor_position(a, target, (l.w, l.h), self.viewport);
                 nodes[i].local.x = x - px;
                 nodes[i].local.y = y - py;
             }
-            nodes[i].target = [x, y, x + l.size.width, y + l.size.height];
-            nodes[i].inset = [
-                l.padding.left + l.border.left,
-                l.padding.top + l.border.top,
-                l.padding.right + l.border.right,
-                l.padding.bottom + l.border.bottom,
-            ];
+            nodes[i].target = [x, y, x + l.w, y + l.h];
+            nodes[i].inset = l.inset;
         }
     }
 
     /// Bounds each placed `anchored_fit` overlay that fits on neither side of its anchor to the
     /// larger room, through its style. True when any changed, so layout runs again.
-    pub(super) fn fit_anchored(&self, taffy: &mut TaffyTree<usize>, nodes: &[Node]) -> bool {
+    pub(super) fn fit_anchored(&self, taffy: &mut LayoutEngine, nodes: &[Node]) -> bool {
         let mut changed = false;
         for (i, n) in nodes.iter().enumerate() {
             let Some(a) = n.above.as_ref().filter(|a| a.fit) else { continue };
@@ -125,10 +120,17 @@ impl<S: 'static> Measurement<'_, S> {
             let vertical = matches!(a.side, Side::Top | Side::Bottom);
             let len = if vertical { n.local.h } else { n.local.w };
             let Some(bound) = fit_bound(a, target, len * k, self.viewport) else { continue };
-            let mut style = taffy.style(n.taffy).unwrap().clone();
-            let max = if vertical { &mut style.max_size.height } else { &mut style.max_size.width };
-            *max = length(bound / k);
-            taffy.set_style(n.taffy, style).unwrap();
+            let mut style = taffy.style(n.taffy).clone();
+            if vertical {
+                style.set_max_height(length(bound / k));
+            } else {
+                style.set_max_width(length(bound / k));
+            }
+            taffy.set_style_and_mark_ancestors(
+                n.taffy,
+                style,
+                std::iter::successors(n.parent, |&p| nodes[p].parent).map(|p| nodes[p].taffy),
+            );
             changed = true;
         }
         changed

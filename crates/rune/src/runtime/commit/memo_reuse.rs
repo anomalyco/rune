@@ -143,7 +143,8 @@ pub(super) struct MemoFlattenCtx<'a> {
     pub(super) committed: &'a HashMap<u64, FlattenedMemo>,
     pub(super) pending: Vec<PendingFlat>,
     pub(super) reused: Vec<ReusedSpan>,
-    pub(super) kids: &'a mut Vec<taffy::NodeId>,
+    pub(super) path_ids: &'a mut HashMap<String, NodeId>,
+    pub(super) next_id: &'a mut u64,
 }
 
 fn opt_rc_eq<T: ?Sized>(a: &Option<Rc<T>>, b: &Option<Rc<T>>) -> bool {
@@ -499,11 +500,10 @@ pub(super) fn try_reuse_memo(
     motion: Spring,
     in_row: RowLayout,
     scale: f32,
-    taffy: &mut TaffyTree<usize>,
+    taffy: &mut LayoutEngine,
     nodes: &mut Vec<Node>,
-    entries: &mut HashMap<String, LayoutEntry>,
     ctx: &mut MemoFlattenCtx<'_>,
-) -> Option<taffy::NodeId> {
+) -> Option<SlotId> {
     let built = el.memo_built.as_ref()?;
     if !built.reusable {
         return None;
@@ -525,7 +525,7 @@ pub(super) fn try_reuse_memo(
     if el.key != old_slice[0].key || !same_root_el(el, built) {
         return None;
     }
-    if !old_slice.iter().all(|old| !old.is_moved_stub() && entries.get(&old.path).is_some_and(|e| !e.used && e.id == old.taffy)) {
+    if !old_slice.iter().all(|old| !old.is_moved_stub() && taffy.can_reuse(old.id.0, old.taffy)) {
         return None;
     }
 
@@ -539,11 +539,7 @@ pub(super) fn try_reuse_memo(
         for k in 0..flat.len {
             let new_idx = new_start + k;
             let slot = &mut ctx.old_nodes[flat.start + k];
-            let entry = entries.get_mut(&slot.path).unwrap();
-            entry.used = true;
-            if entry.measure.is_some() {
-                *taffy.get_node_context_mut(slot.taffy).unwrap() = new_idx;
-            }
+            taffy.reuse_slot(slot.taffy, new_idx as u32);
             let stub = Node::moved_stub(slot);
             let mut n = std::mem::replace(slot, stub);
             n.text_layout = None;
@@ -561,11 +557,7 @@ pub(super) fn try_reuse_memo(
     } else if same_path {
         for (k, old) in old_slice.iter().enumerate() {
             let new_idx = new_start + k;
-            let entry = entries.get_mut(&old.path).unwrap();
-            entry.used = true;
-            if entry.measure.is_some() {
-                *taffy.get_node_context_mut(old.taffy).unwrap() = new_idx;
-            }
+            taffy.reuse_slot(old.taffy, new_idx as u32);
             let mut n = Node {
                 id: old.id,
                 text_layout: None,
@@ -595,33 +587,34 @@ pub(super) fn try_reuse_memo(
                 s.push_str(tail);
                 s
             };
-            if entries.get(&path).is_some_and(|e| e.used) {
+            if ctx.path_ids.get(&path).is_some_and(|id| taffy.is_used_this_commit(id.0)) {
                 return None;
             }
             rebased.push(path);
         }
-        if let Some(old_p) = taffy.parent(old_slice[0].taffy) {
-            let _ = taffy.remove_child(old_p, old_slice[0].taffy);
-        }
-        let moved_entries: Vec<LayoutEntry> = old_slice
-            .iter()
-            .map(|old| entries.remove(&old.path).unwrap())
-            .collect();
+        let mut new_ids = Vec::with_capacity(flat.len);
         for path in &rebased {
-            if let Some(stale) = entries.remove(path) {
-                let _ = taffy.set_children(stale.id, &[]);
-                taffy.remove(stale.id).unwrap();
-            }
+            let id = match ctx.path_ids.get(path.as_str()) {
+                Some(&id) => id,
+                None => {
+                    let id = NodeId(*ctx.next_id);
+                    *ctx.next_id += 1;
+                    ctx.path_ids.insert(path.clone(), id);
+                    id
+                }
+            };
+            new_ids.push(id);
         }
-        for (k, ((old, path), mut entry)) in old_slice.iter().zip(rebased).zip(moved_entries).enumerate() {
-            let new_idx = new_start + k;
-            entry.used = true;
-            if entry.measure.is_some() {
-                *taffy.get_node_context_mut(old.taffy).unwrap() = new_idx;
-            }
-            entries.insert(path.clone(), entry);
+        taffy.rekey_and_reuse_batch(
+            old_slice
+                .iter()
+                .zip(new_ids.iter())
+                .enumerate()
+                .map(|(k, (old, new_id))| (old.id.0, new_id.0, old.taffy, (new_start + k) as u32)),
+        );
+        for (k, ((old, path), id)) in old_slice.iter().zip(rebased).zip(new_ids).enumerate() {
             let mut n = Node {
-                id: NodeId(0),
+                id,
                 path,
                 text_layout: None,
                 elided: None,

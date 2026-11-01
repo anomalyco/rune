@@ -47,11 +47,11 @@
 //! keeps each unchanged node's measured size, so this is cheap while width and constraints hold.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use crate::El;
+use crate::runtime::HashMap;
 use crate::runtime::layout_read::{LayoutRects, SELECTION, Same, boxes_moved, moved, note_read, seen_rect, size, window_key};
 
 /// The children a memo's placeholders share.
@@ -99,7 +99,8 @@ fn el_flatten_reusable(e: &El) -> bool {
         && !(e.scroll.is_some() && e.scroll_axes.x())
         && e.text.as_ref().is_none_or(|t| !t.redacted && t.live.is_none())
         && e.vis.pixels.as_ref().is_none_or(|_| {
-            e.style.aspect_ratio.is_some() || (e.style.size.width.is_auto() == e.style.size.height.is_auto())
+            let sz = e.style.size();
+            e.style.aspect_ratio().is_some() || (sz.width.is_auto() == sz.height.is_auto())
         })
         && e.memo_children.as_ref().is_none_or(|m| m.reusable && !m.duplicate_keys)
         && e.children.iter().all(el_flatten_reusable)
@@ -240,7 +241,6 @@ pub(crate) struct MemoCache {
     pub(crate) pending_scratch: Vec<crate::runtime::memo_reuse::PendingFlat>,
     pub(crate) reused_scratch: Vec<crate::runtime::memo_reuse::ReusedSpan>,
     pub(crate) skip_scratch: Vec<crate::runtime::memo_reuse::CleanApplySpan>,
-    pub(crate) kids_scratch: Vec<taffy::NodeId>,
     pub(crate) path_scratch: String,
     pub(crate) present_len: usize,
     pass: u64,
@@ -446,7 +446,7 @@ impl Drop for Guard {
 }
 
 pub(crate) fn hash_of(v: &impl Hash) -> u64 {
-    let mut h = DefaultHasher::new();
+    let mut h = rustc_hash::FxHasher::default();
     v.hash(&mut h);
     h.finish()
 }

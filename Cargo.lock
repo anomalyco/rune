@@ -2961,6 +2961,7 @@ dependencies = [
  "rfd",
  "rune-motion",
  "rune-staging",
+ "rune-taffy",
  "rustc-demangle",
  "rustc-hash 2.1.3",
  "serde",
@@ -3097,6 +3098,13 @@ name = "rune-staging"
 version = "0.0.1"
 dependencies = [
  "wgpu",
+]
+
+[[package]]
+name = "rune-taffy"
+version = "0.0.1"
+dependencies = [
+ "taffy",
 ]
 
 [[package]]

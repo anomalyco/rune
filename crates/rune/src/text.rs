@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::hash::Hash;
+use crate::runtime::{HashMap as FxHashMap, HashSet as FxHashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -134,7 +135,7 @@ pub struct TextSystem {
     /// glyphs a new width re-breaks instead of shaping the text again.
     shapes: HashMap<u64, u64>,
     /// Shapings whose text was edited this commit (see [`Self::supersede`]).
-    superseded: std::collections::HashSet<u64>,
+    superseded: FxHashSet<u64>,
     runs: Cache<RunLayout>,
     generation: u32,
     /// The slots' families as named; `sans` and `mono` are the lists text asks for.
@@ -169,9 +170,9 @@ pub struct TextSystem {
     traks: Traks,
     pub(crate) smoothing: FontSmoothing,
     /// The `trak` table of the first font of a family slot at a weight, upright or italic.
-    primary_traks: HashMap<(Family, u32, bool), Option<Rc<Trak>>>,
+    primary_traks: FxHashMap<(Family, u32, bool), Option<Rc<Trak>>>,
     /// The hidden-axis coordinates (`hidden_axes`) of the same first font.
-    primary_axes: HashMap<(Family, u32, bool), Rc<[parley::FontVariation]>>,
+    primary_axes: FxHashMap<(Family, u32, bool), Rc<[parley::FontVariation]>>,
     /// CoreGraphics' glyph pipeline for `smoothing`, and its per-ink state.
     apple: macos::smoothing::Smoothing,
     pub(crate) glyph_cache: glyph_cache::GlyphCache,
@@ -267,10 +268,10 @@ impl TextSystem {
             font_cx: FontContext { collection, source_cache: SourceCache::default() },
             layout_cx: LayoutContext::new(),
             scale_cx: ScaleContext::new(),
-            layouts: HashMap::new(),
-            shapes: HashMap::new(),
+            layouts: Default::default(),
+            shapes: Default::default(),
             superseded: Default::default(),
-            runs: HashMap::new(),
+            runs: Default::default(),
             generation: 0,
             families: (families.0.to_owned(), families.1.to_owned()),
             chosen: 0,
@@ -292,8 +293,8 @@ impl TextSystem {
             coords_scratch: Vec::new(),
             traks: Traks::new(),
             smoothing: FontSmoothing::default(),
-            primary_traks: HashMap::new(),
-            primary_axes: HashMap::new(),
+            primary_traks: Default::default(),
+            primary_axes: Default::default(),
             apple: Default::default(),
             glyph_cache: Default::default(),
             glide: [0.0; 2],

@@ -130,8 +130,8 @@ fn walk_row_el<'a>(
     if !inert && let Some(f) = el.handlers.get().and_then(|h| h.selection_copy.as_ref()) {
         copy_providers.push((path.to_owned(), f.clone()));
     }
-    let is_row = el.style.display == Display::Flex
-        && matches!(el.style.flex_direction, FlexDirection::Row | FlexDirection::RowReverse);
+    let is_row = el.style.display() == Display::Flex
+        && matches!(el.style.flex_direction(), FlexDirection::Row | FlexDirection::RowReverse);
     let mut had_child_text = false;
     if !inert && el.input.is_none() && let Some(t) = &el.text && t.selectable && !t.redacted {
         let mut spec = TextSpec::clone(t);
@@ -444,7 +444,7 @@ impl<S: 'static> Runtime<S> {
             j == row_node
                 || std::iter::successors(self.nodes[j].parent, |&p| self.nodes[p].parent).any(|p| p == row_node)
         };
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = rustc_hash::FxHasher::default();
         for j in (row_node..self.nodes.len()).take_while(|&j| inside_row(j)) {
             if self.is_selectable(j)
                 && !self.subtree_exiting(j)
@@ -458,7 +458,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub(crate) fn between_hash_ends(&self, h: EndRef, f: EndRef) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = rustc_hash::FxHasher::default();
         let Some(g_path) = self.end_group_path(h).filter(|_| h != f) else {
             return hasher.finish();
         };

@@ -21,7 +21,7 @@ impl El {
         self.scroll_axes = axes;
         #[cfg(debug_assertions)]
         { self.scroll_source = Some(std::panic::Location::caller()); }
-        self.style.overflow = taffy::Point { x, y };
+        self.style.set_overflow(x, y);
         self
     }
     /// A horizontal scroll viewport over its children: a filmstrip, a wide code block or

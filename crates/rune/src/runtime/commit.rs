@@ -21,8 +21,7 @@ pub(super) struct Measurement<'a, S: 'static> {
     pub(super) committing: bool,
     pub(super) spare_nodes: &'a mut Vec<Node>,
     pub(super) text: &'a mut TextSystem,
-    pub(super) layout: &'a mut TaffyTree<usize>,
-    pub(super) layout_entries: &'a mut HashMap<String, LayoutEntry>,
+    pub(super) layout: &'a mut LayoutEngine,
     pub(super) node_index: &'a mut HashMap<NodeId, usize>,
     pub(super) path_ids: &'a mut HashMap<String, NodeId>,
     pub(super) memo: &'a mut crate::memo::MemoCache,
@@ -50,7 +49,7 @@ pub(super) struct Measurement<'a, S: 'static> {
 /// Owned result of completed measurement. Scene mutation consumes this once; retries never
 /// return it. Keeping this separate from El makes unmeasured views invalid commit inputs.
 pub(super) struct Measured {
-    pub(super) layout: TaffyTree<usize>,
+    pub(super) layout: LayoutEngine,
     pub(super) nodes: Vec<Node>,
     pub(super) reduced_motion: bool,
     pub(super) time_scale: f32,
@@ -125,11 +124,12 @@ impl<S: 'static> Runtime<S> {
 /// measures a max-content main size unwrapped (a column measures its height wrapped at the
 /// viewport's width). With vertical scrolling too it keeps its natural height instead of
 /// stretching to the viewport's.
-pub(super) fn unwrapped_width(style: &mut Style, vertical: bool) {
-    if style.size.width.is_auto() || style.size.width == Dimension::percent(1.0) {
-        style.size.width = Dimension::max_content();
-        if style.min_size.width.is_auto() { style.min_size.width = percent(1.0); }
+pub(super) fn unwrapped_width(style: &mut CompactStyle, vertical: bool) {
+    let w = style.size().width;
+    if w.is_auto() || w == Dimension::percent(1.0) {
+        style.set_width(Dimension::max_content());
+        if style.min_size().width.is_auto() { style.set_min_width(percent(1.0)); }
     }
-    style.flex_shrink = 0.0;
-    if vertical && style.align_self.is_none() { style.align_self = Some(AlignSelf::FLEX_START); }
+    style.set_flex_shrink(0.0);
+    if vertical && style.align_self().is_none() { style.set_align_self(Some(AlignSelf::FLEX_START)); }
 }

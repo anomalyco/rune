@@ -44,6 +44,8 @@ dbus = ["dep:zbus", "dep:tokio", "dep:futures-util"]
 # backend, which Rune turns on for Apple targets alone. No effect on other platforms: its crates
 # are Apple-only dependencies.
 metal-backend = ["dep:objc2-quartz-core", "dep:parking_lot", "dep:raw-window-metal", "dep:wgpu-naga-bridge"]
+# Use upstream `taffy::TaffyTree` instead of `rune_taffy::LayoutStore` for A/B benchmarks and parity checks.
+baseline-taffy = ["rune-taffy/baseline-taffy"]
 
 [dependencies]
 procwatch = { path = "../procwatch", optional = true }
@@ -51,6 +53,7 @@ subsecond = { version = "=0.7.10", optional = true }
 dioxus-devtools = { version = "=0.7.10", optional = true }
 rune-motion = { path = "../rune-motion" }
 rune-staging = { path = "../rune-staging" }
+rune-taffy = { path = "../rune-taffy" }
 # Allow backend patch fixes; headless pixel equivalence guards the precompiled Metal path.
 wgpu = { version = "~30.0.1", default-features = false, features = ["std", "parking_lot", "metal", "wgsl"] }
 # Keep Wayland client-side frames/buttons without the title font's ab_glyph/ttf-parser.
@@ -178,6 +181,10 @@ required-features = ["frame-profile"]
 
 [[example]]
 name = "long_note"
+required-features = ["frame-profile"]
+
+[[example]]
+name = "taffy_adapter_bench"
 required-features = ["frame-profile"]
 
 [[example]]

@@ -60,7 +60,6 @@ impl<S: 'static> Runtime<S> {
             spare_nodes: &mut self.spare_nodes,
             text: &mut self.text,
             layout: &mut self.layout,
-            layout_entries: &mut self.layout_entries,
             node_index: &mut self.node_index,
             path_ids: &mut self.path_ids,
             memo: &mut self.memo,
@@ -233,8 +232,9 @@ impl<S: 'static> Measurement<'_, S> {
             // A retry keeps the viewport the last pass measured; `self.nodes` is the last commit's.
             if !self.retry { v.viewport = height; }
             offset = (offset - v.top).max(0.0);
-            v.pad_top = padding(el.style.padding.top);
-            v.pad_bottom = padding(el.style.padding.bottom);
+            let el_pad = el.style.padding();
+            v.pad_top = padding(el_pad.top);
+            v.pad_bottom = padding(el_pad.bottom);
             v.set_gap(crate::el::virtual_list::gap_y(&el.style));
             let source = el.virtual_rows.take();
             let state = playground_host::handler_states_ref(self.state, self.playground);
@@ -308,20 +308,21 @@ impl<S: 'static> Measurement<'_, S> {
                 self.virtual_culled.insert(format!("{path}/{key}"));
             }
             v.shown = shown;
-            el.style.padding.top = length(v.pad_top + v.before);
-            el.style.padding.bottom = length(v.pad_bottom + v.after);
+            el.style.set_pad_top(v.pad_top + v.before);
+            el.style.set_pad_bottom(v.pad_bottom + v.after);
             self.populate_virtual_children(el, &path, source, inert, group);
         }
         let bounds = crate::el::virtual_list::child_bounds(&el.style, el.scroll.is_some(), bound, &el.children);
         let scroll = el.scroll.map(|s| (path.as_str(), s.stick_bottom, bound));
         let child_group = if el.selection_group { Some(path.as_str()) } else { group };
         for (i, child) in el.children.iter_mut().enumerate() {
+            if !child.has_virtual { continue; }
             let bound = bounds.of(child);
             self.window_tree(child, &path, i, scroll, tx, force_all, bound, inert, child_group);
         }
     }
 
-    fn measure_view(&mut self, tx: &Tx, force_all: bool) -> (TaffyTree<usize>, Vec<Node>, Vec<memo_reuse::PendingFlat>, Vec<memo_reuse::ReusedSpan>) {
+    fn measure_view(&mut self, tx: &Tx, force_all: bool) -> (LayoutEngine, Vec<Node>, Vec<memo_reuse::PendingFlat>, Vec<memo_reuse::ReusedSpan>) {
         let scale = self.env.scale;
         let fresh_cx = |this: &Self| Cx::<S> {
             env: this.env,
@@ -377,23 +378,19 @@ impl<S: 'static> Measurement<'_, S> {
         self.layout_reads = cx.layout_reads.take();
         for read in replayed.layout { layout_read::note_read_at(&mut self.layout_reads, &read.key, read.same, read.at); }
 
-        let mut taffy = std::mem::replace(self.layout, TaffyTree::with_capacity(0));
-        for entry in self.layout_entries.values_mut() {
-            entry.used = false;
-        }
+        let mut taffy = std::mem::replace(self.layout, LayoutEngine::with_capacity(0));
+        taffy.begin_commit();
         let mut nodes = std::mem::take(self.spare_nodes);
         nodes.clear();
         nodes.reserve(self.nodes.len().max(32));
         // Root constraints are part of the retained style, not a dirty write after flattening.
         // A window that fits its content lays the root out at its natural height.
-        root.style.size = relayout::root_size(self.viewport, self.fit_height);
+        root.style.set_size(relayout::root_size(self.viewport, self.fit_height));
         let (pending, reused, root_id) = {
             let mut pending = std::mem::take(&mut self.memo.pending_scratch);
             pending.clear();
             let mut reused = std::mem::take(&mut self.memo.reused_scratch);
             reused.clear();
-            let mut kids = std::mem::take(&mut self.memo.kids_scratch);
-            kids.clear();
             let mut path_buf = std::mem::take(&mut self.memo.path_scratch);
             path_buf.clear();
             let mut memo_ctx = memo_reuse::MemoFlattenCtx {
@@ -403,21 +400,17 @@ impl<S: 'static> Measurement<'_, S> {
                 committed: &self.memo.flattened,
                 pending,
                 reused,
-                kids: &mut kids,
+                path_ids: &mut *self.path_ids,
+                next_id: &mut *self.next_id,
             };
-            let root_id = flatten_with_buf(root, None, &mut path_buf, 0, motion::DEFAULT, RowLayout::Free, true, &mut taffy, &mut nodes, &mut self.layout_entries, scale, &mut memo_ctx);
+            let (root_id, _) = flatten_with_buf(root, None, &mut path_buf, 0, motion::DEFAULT, RowLayout::Free, true, &mut taffy, &mut nodes, scale, &mut memo_ctx);
             let (pending, reused) = (memo_ctx.pending, memo_ctx.reused);
-            kids.clear();
-            self.memo.kids_scratch = kids;
             path_buf.clear();
             self.memo.path_scratch = path_buf;
             (pending, reused, root_id)
         };
-        if self.committing { release_kept_layouts(self.nodes, &nodes, self.layout_entries, &taffy, self.text, &reused); }
-        self.layout_entries.retain(|_, entry| {
-            if !entry.used { taffy.remove(entry.id).unwrap(); }
-            entry.used
-        });
+        if self.committing { release_kept_layouts(self.nodes, &nodes, &taffy, self.text, &reused); }
+        taffy.finish_flatten();
         let (taffy, nodes) = self.solve(taffy, root_id, nodes);
         (taffy, nodes, pending, reused)
     }

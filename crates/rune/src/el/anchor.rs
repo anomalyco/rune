@@ -1,7 +1,5 @@
 //! Anchored overlays: `El::anchored`, `El::anchored_fit` and `El::above`. Where they go is
 //! worked out in `runtime/anchor.rs`.
-use taffy::prelude::*;
-
 use crate::el::{Align, El};
 
 /// Which side of its anchor an [`El::anchored`] overlay sits on.
@@ -42,7 +40,7 @@ impl El {
     /// [`El::scale`] replaces the inherited zoom; [`El::anchored_unscaled`] keeps it at window
     /// scale.
     pub fn anchored(mut self, key: impl Into<String>, side: Side, align: Align, gap: f32) -> Self {
-        self.style.position = Position::Absolute;
+        self.style.set_position_absolute();
         self.above = Some(Anchor { key: key.into(), side, align, gap, fit: false, unscaled: false });
         self
     }

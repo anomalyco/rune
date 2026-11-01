@@ -74,7 +74,7 @@ impl<S: 'static> Runtime<S> {
             && self.reuse.scale == self.env.scale && self.reuse.srgb == Some(self.srgb_blend)
             && self.playground.is_none() && !self.patch_pending()
             // Exiting nodes left the layout tree.
-            && self.layout_entries.len() == self.nodes.len()
+            && self.layout.live_count() == self.nodes.len()
             && self.nodes.iter().all(reusable)
     }
 }
@@ -85,7 +85,7 @@ impl<S: 'static> Measurement<'_, S> {
     fn relayout(mut self) -> Option<Measured> {
         self.anchor_virtuals();
         let quiet = self.quiet_rows();
-        let mut taffy = std::mem::replace(self.layout, TaffyTree::with_capacity(0));
+        let mut taffy = std::mem::replace(self.layout, LayoutEngine::with_capacity(0));
         let mut nodes = std::mem::take(self.spare_nodes);
         nodes.clear();
         nodes.reserve(self.nodes.len());
@@ -97,12 +97,15 @@ impl<S: 'static> Measurement<'_, S> {
             copy
         }));
         let root = nodes[0].taffy;
-        let mut style = taffy.style(root).unwrap().clone();
-        style.size = root_size(self.viewport, self.fit_height);
-        taffy.set_style(root, style).unwrap();
+        let mut style = taffy.style(root).clone();
+        style.set_size(root_size(self.viewport, self.fit_height));
+        taffy.set_style_and_mark_ancestors(root, style, std::iter::empty());
         // As flattening does: secure leaves don't keep a measurement.
         for n in nodes.iter().filter(|n| n.text.as_ref().is_some_and(|t| t.redacted)) {
-            taffy.mark_dirty(n.taffy).unwrap();
+            taffy.mark_dirty_and_ancestors(
+                n.taffy,
+                std::iter::successors(n.parent, |&p| nodes[p].parent).map(|p| nodes[p].taffy),
+            );
         }
         let (layout, mut nodes) = self.solve(taffy, root, nodes);
         if self.measure_virtuals(&nodes, false) || self.windows_move() {
@@ -162,7 +165,7 @@ impl<S: 'static> Measurement<'_, S> {
     }
 
     /// Lays `nodes` out from `root_id` at the viewport, places them, and lays out their text.
-    pub(super) fn solve(&mut self, mut taffy: TaffyTree<usize>, root_id: taffy::NodeId, mut nodes: Vec<Node>) -> (TaffyTree<usize>, Vec<Node>) {
+    pub(super) fn solve(&mut self, mut taffy: LayoutEngine, root_id: SlotId, mut nodes: Vec<Node>) -> (LayoutEngine, Vec<Node>) {
         let scale = self.env.scale;
         let room = Size {
             width: AvailableSpace::Definite(self.viewport.0),
@@ -176,8 +179,12 @@ impl<S: 'static> Measurement<'_, S> {
             let mut refit = false;
             for n in &nodes {
                 if let Some(fit) = &n.aspect_fit {
-                    let style = fitted(fit.0, &fit.1, taffy.layout(n.taffy).unwrap().size);
-                    taffy.set_style(n.taffy, style).unwrap();
+                    let style = fitted(fit.0, &fit.1, taffy.box_layout(n.taffy).size());
+                    taffy.set_style_and_mark_ancestors(
+                        n.taffy,
+                        style,
+                        std::iter::successors(n.parent, |&p| nodes[p].parent).map(|p| nodes[p].taffy),
+                    );
                     refit = true;
                 }
             }
@@ -193,7 +200,7 @@ impl<S: 'static> Measurement<'_, S> {
             self.place(&taffy, &mut nodes);
         }
         for n in nodes.iter_mut().filter(|n| n.text.is_some()) {
-            let w = (taffy.layout(n.taffy).unwrap().size.width - n.inset[0] - n.inset[2]).max(0.0);
+            let w = (taffy.box_layout(n.taffy).w - n.inset[0] - n.inset[2]).max(0.0);
             lay_out_text(&mut self.text, n, w, scale);
         }
 

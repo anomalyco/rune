@@ -1,7 +1,8 @@
 //! The shaped-layout caches' eviction: what stale text stays shaped between commits.
 
-use std::collections::HashMap;
 use std::rc::Rc;
+
+use crate::runtime::HashMap;
 
 use super::{Ink, Layout, TextStyle, TextSystem, shape_key};
 

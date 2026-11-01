@@ -5,11 +5,11 @@ use super::*;
 
 impl El {
     pub fn w(mut self, w: f32) -> Self {
-        self.style.size.width = length(w);
+        self.style.set_width(length(w));
         self
     }
     pub fn h(mut self, h: f32) -> Self {
-        self.style.size.height = length(h);
+        self.style.set_height(length(h));
         self
     }
     pub fn size(self, w: f32, h: f32) -> Self {
@@ -20,7 +20,7 @@ impl El {
     /// side already takes its image's ratio ([`pixels`](Self::pixels)); use this for video or
     /// any other box. Anything not positive removes it.
     pub fn aspect_ratio(mut self, ratio: f32) -> Self {
-        self.style.aspect_ratio = (ratio.is_finite() && ratio > 0.0).then_some(ratio);
+        self.style.set_aspect_ratio((ratio.is_finite() && ratio > 0.0).then_some(ratio));
         self
     }
     /// The largest box at `ratio` (width over height) that fits the room the element is given,
@@ -36,16 +36,16 @@ impl El {
         self
     }
     pub fn w_full(mut self) -> Self {
-        self.style.size.width = percent(1.0);
+        self.style.set_width(percent(1.0));
         self
     }
     /// Width as a fraction of the parent's (CSS `width: 40%` is `.w_frac(0.4)`).
     pub fn w_frac(mut self, f: f32) -> Self {
-        self.style.size.width = percent(f);
+        self.style.set_width(percent(f));
         self
     }
     pub fn h_full(mut self) -> Self {
-        self.style.size.height = percent(1.0);
+        self.style.set_height(percent(1.0));
         self
     }
     /// Take a `g` share of the free space along the parent's main axis (CSS `flex: g 1 0`).
@@ -58,144 +58,142 @@ impl El {
     /// A grown column that holds its own flex content also needs `.min_h(0.0)` (see
     /// [`El::min_h`]).
     pub fn grow(mut self, g: f32) -> Self {
-        self.style.flex_grow = g;
-        self.style.flex_shrink = 1.0;
-        self.style.flex_basis = length(0.0);
+        self.style.set_grow(g);
         self
     }
     pub fn padding(mut self, p: f32) -> Self {
-        self.style.padding = Rect { left: length(p), right: length(p), top: length(p), bottom: length(p) };
+        self.style.set_padding_all(p);
         self
     }
     pub fn px(mut self, p: f32) -> Self {
-        self.style.padding.left = length(p);
-        self.style.padding.right = length(p);
+        self.style.set_pad_left(p);
+        self.style.set_pad_right(p);
         self
     }
     pub fn py(mut self, p: f32) -> Self {
-        self.style.padding.top = length(p);
-        self.style.padding.bottom = length(p);
+        self.style.set_pad_top(p);
+        self.style.set_pad_bottom(p);
         self
     }
     pub fn pt(mut self, p: f32) -> Self {
-        self.style.padding.top = length(p);
+        self.style.set_pad_top(p);
         self
     }
     pub fn pb(mut self, p: f32) -> Self {
-        self.style.padding.bottom = length(p);
+        self.style.set_pad_bottom(p);
         self
     }
     pub fn pl(mut self, p: f32) -> Self {
-        self.style.padding.left = length(p);
+        self.style.set_pad_left(p);
         self
     }
     pub fn ml(mut self, m: f32) -> Self {
-        self.style.margin.left = length(m);
+        self.style.set_margin_left(m);
         self
     }
     pub fn mr(mut self, m: f32) -> Self {
-        self.style.margin.right = length(m);
+        self.style.set_margin_right(m);
         self
     }
     pub fn gap(mut self, g: f32) -> Self {
-        self.style.gap = Size { width: length(g), height: length(g) };
+        self.style.set_gap(g, g);
         self
     }
     /// Centre children on the cross axis.
     pub fn center_y(mut self) -> Self {
-        self.style.align_items = AlignItems::CENTER;
+        self.style.set_align_items(AlignItems::CENTER);
         self
     }
     pub fn center(mut self) -> Self {
-        self.style.align_items = AlignItems::CENTER;
-        self.style.justify_content = JustifyContent::CENTER;
+        self.style.set_align_items(AlignItems::CENTER);
+        self.style.set_justify_content(JustifyContent::CENTER);
         self
     }
     pub fn justify_between(mut self) -> Self {
-        self.style.justify_content = JustifyContent::SPACE_BETWEEN;
+        self.style.set_justify_content(JustifyContent::SPACE_BETWEEN);
         self
     }
     pub fn justify_end(mut self) -> Self {
-        self.style.justify_content = JustifyContent::FLEX_END;
+        self.style.set_justify_content(JustifyContent::FLEX_END);
         self
     }
     /// Wrap children onto new lines (CSS `flex-wrap: wrap`).
     pub fn flex_wrap(mut self) -> Self {
-        self.style.flex_wrap = FlexWrap::Wrap;
+        self.style.set_flex_wrap(FlexWrap::Wrap);
         self
     }
     /// Align children to the start of the cross axis (CSS `align-items: flex-start`).
     pub fn items_start(mut self) -> Self {
-        self.style.align_items = AlignItems::FLEX_START;
+        self.style.set_align_items(AlignItems::FLEX_START);
         self
     }
     /// Align children to the end of the cross axis (CSS `align-items: flex-end`).
     pub fn items_end(mut self) -> Self {
-        self.style.align_items = AlignItems::FLEX_END;
+        self.style.set_align_items(AlignItems::FLEX_END);
         self
     }
     /// Centre children on the cross axis (CSS `align-items: center`; same as `center_y`).
     pub fn items_center(mut self) -> Self {
-        self.style.align_items = AlignItems::CENTER;
+        self.style.set_align_items(AlignItems::CENTER);
         self
     }
     /// Stretch children across the cross axis (CSS `align-items: stretch`).
     pub fn items_stretch(mut self) -> Self {
-        self.style.align_items = AlignItems::STRETCH;
+        self.style.set_align_items(AlignItems::STRETCH);
         self
     }
     /// This element's own cross-axis alignment (CSS `align-self`).
     pub fn self_start(mut self) -> Self {
-        self.style.align_self = Some(AlignSelf::FLEX_START);
+        self.style.set_align_self(Some(AlignSelf::FLEX_START));
         self
     }
     pub fn self_center(mut self) -> Self {
-        self.style.align_self = Some(AlignSelf::CENTER);
+        self.style.set_align_self(Some(AlignSelf::CENTER));
         self
     }
     pub fn self_end(mut self) -> Self {
-        self.style.align_self = Some(AlignSelf::FLEX_END);
+        self.style.set_align_self(Some(AlignSelf::FLEX_END));
         self
     }
     pub fn self_stretch(mut self) -> Self {
-        self.style.align_self = Some(AlignSelf::STRETCH);
+        self.style.set_align_self(Some(AlignSelf::STRETCH));
         self
     }
     /// Pack children at the start of the main axis (CSS `justify-content: flex-start`).
     pub fn justify_start(mut self) -> Self {
-        self.style.justify_content = JustifyContent::FLEX_START;
+        self.style.set_justify_content(JustifyContent::FLEX_START);
         self
     }
     /// Centre children on the main axis (CSS `justify-content: center`).
     pub fn justify_center(mut self) -> Self {
-        self.style.justify_content = JustifyContent::CENTER;
+        self.style.set_justify_content(JustifyContent::CENTER);
         self
     }
     /// CSS `justify-content: space-around`.
     pub fn justify_around(mut self) -> Self {
-        self.style.justify_content = JustifyContent::SPACE_AROUND;
+        self.style.set_justify_content(JustifyContent::SPACE_AROUND);
         self
     }
     /// CSS `justify-content: space-evenly`.
     pub fn justify_evenly(mut self) -> Self {
-        self.style.justify_content = JustifyContent::SPACE_EVENLY;
+        self.style.set_justify_content(JustifyContent::SPACE_EVENLY);
         self
     }
     pub fn min_w(mut self, w: f32) -> Self {
-        self.style.min_size.width = length(w);
+        self.style.set_min_width(length(w));
         self
     }
     pub fn max_h(mut self, h: f32) -> Self {
-        self.style.max_size.height = length(h);
+        self.style.set_max_height(length(h));
         self
     }
     /// Separate row and column gaps (CSS `row-gap`, `column-gap`).
     pub fn gaps(mut self, row: f32, column: f32) -> Self {
-        self.style.gap = Size { width: length(column), height: length(row) };
+        self.style.set_gap(column, row);
         self
     }
     pub fn max_w(mut self, w: f32) -> Self {
-        self.style.max_size.width = length(w);
+        self.style.set_max_width(length(w));
         self
     }
     /// Minimum height in points.
@@ -211,66 +209,60 @@ impl El {
     /// )
     /// ```
     pub fn min_h(mut self, h: f32) -> Self {
-        self.style.min_size.height = length(h);
+        self.style.set_min_height(length(h));
         self
     }
     /// Left and right margin together (CSS `margin-inline`).
     pub fn mx(mut self, m: f32) -> Self {
-        self.style.margin.left = length(m);
-        self.style.margin.right = length(m);
+        self.style.set_margin_x(m);
         self
     }
     /// Top and bottom margin together (CSS `margin-block`).
     pub fn my(mut self, m: f32) -> Self {
-        self.style.margin.top = length(m);
-        self.style.margin.bottom = length(m);
+        self.style.set_margin_y(m);
         self
     }
     pub fn mt(mut self, m: f32) -> Self {
-        self.style.margin.top = length(m);
+        self.style.set_margin_top(m);
         self
     }
     pub fn mb(mut self, m: f32) -> Self {
-        self.style.margin.bottom = length(m);
+        self.style.set_margin_bottom(m);
         self
     }
     pub fn pr(mut self, p: f32) -> Self {
-        self.style.padding.right = length(p);
+        self.style.set_pad_right(p);
         self
     }
     /// Allow shrinking below content size along the parent's main axis.
     pub fn shrink(mut self) -> Self {
-        self.style.flex_shrink = 1.0;
-        self.style.min_size.width = length(0.0);
+        self.style.set_flex_shrink(1.0);
+        self.style.set_min_width(length(0.0));
         self
     }
     /// Lay children out in `n` equal columns, each as wide as the widest child needs (CSS
     /// `grid-template-columns: repeat(n, 1fr)`), or sharing the width the element is given.
     /// Children fill the cells in order unless placed with `grid_cell`.
     pub fn equal_columns(mut self, n: usize) -> Self {
-        self.style.display = Display::Grid;
-        self.style.grid_template_columns = vec![fr(1.0); n.max(1)];
+        self.style.set_equal_columns(n);
         self
     }
     /// Place this child of an `equal_columns` element in `column` (0-based) of the first row.
     /// Children in the same cell overlap in order, so a moving highlight can sit under a label.
     pub fn grid_cell(mut self, column: usize) -> Self {
-        self.style.grid_column = Line { start: line(column as i16 + 1), end: span(1) };
-        self.style.grid_row = Line { start: line(1), end: span(1) };
+        self.style.set_grid_cell(column);
         self
     }
     /// Out of flow, positioned at `left, top` inside the parent's padding box.
     pub fn absolute(mut self, left: f32, top: f32) -> Self {
-        self.style.position = Position::Absolute;
-        self.style.inset = Rect { left: length(left), top: length(top), right: auto(), bottom: auto() };
+        self.style.set_absolute_inset(Rect { left: length(left), top: length(top), right: auto(), bottom: auto() });
         self
     }
     /// Out of flow, pinned to the given edges of the parent's padding box (`None` leaves an
     /// edge free); pinning both opposite edges stretches the element between them.
     pub fn pin(mut self, left: Option<f32>, top: Option<f32>, right: Option<f32>, bottom: Option<f32>) -> Self {
         let edge = |v: Option<f32>| v.map_or(auto(), length);
-        self.style.position = Position::Absolute;
-        self.style.inset = Rect { left: edge(left), top: edge(top), right: edge(right), bottom: edge(bottom) };
+        self.style.set_absolute_inset(Rect { left: edge(left), top: edge(top), right: edge(right), bottom: edge(bottom) });
         self
     }
     /// The pointer's shape while it is over this element or a descendant that sets none.

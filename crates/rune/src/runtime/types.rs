@@ -41,7 +41,7 @@ pub(crate) struct NodeCold {
     /// The image ratio this picture's layout took, when it sizes one side from its pixels.
     pub(super) pixel_aspect: Option<f32>,
     /// `El::aspect_fit`: the ratio and the element's own style, which the fitted size replaces.
-    pub(super) aspect_fit: Option<Box<(f32, Style)>>,
+    pub(super) aspect_fit: Option<Box<(f32, CompactStyle)>>,
     pub(super) material: Option<crate::SystemMaterial>,
     /// `El::help`.
     pub(super) help: Option<String>,
@@ -89,7 +89,7 @@ pub(crate) struct Node {
     pub key: Option<String>,
     pub role: &'static str,
     pub parent: Option<usize>,
-    pub(super) taffy: taffy::NodeId,
+    pub(super) taffy: SlotId,
     pub text: Option<crate::cold::SharedBox<TextSpec>>,
     pub text_layout: Option<Rc<Layout<Ink>>>,
     /// Where `text_layout` cut the text for `El::truncate` and its kin.
@@ -416,12 +416,6 @@ pub(super) struct Stack {
     pub(crate) moving: bool,
     pub(super) reorder: row_reorder::Reorder,
     pub(super) slides: content_slide::ContentSlides,
-}
-
-pub(super) struct LayoutEntry {
-    pub(super) id: taffy::NodeId,
-    pub(super) measure: Option<u64>,
-    pub(super) used: bool,
 }
 
 /// What a press on a window drag region asks the shell to do, synchronously in that press.

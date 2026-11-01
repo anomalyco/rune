@@ -21,8 +21,7 @@ use rune_motion::{
     Anim, Corners, LayoutAnim, Mount, NodeId, NodeSpec, Phase as PresencePhase, Prop, PropClass, Rect as MRect, Scene,
     Spring, Transition, prop, snap::grid,
 };
-use taffy::prelude::*;
-use taffy::TraversePartialTree;
+use rune_taffy::prelude::*;
 
 use crate::color::{Color, over, srgb_encode};
 use crate::edit::{EditOutcome, Ime, KeyEvent};
@@ -322,7 +321,7 @@ pub(crate) use commit_why::CommitWhy;
 #[cfg(debug_assertions)]
 pub(crate) use layout_read::window_read_key;
 pub(crate) use types::{AnimSource, Node};
-use types::{AxisScroll, Inh, LayoutEntry, NodeCold, RevealState, RowLayout, ScaleMotion, ScrollState, Stack};
+use types::{AxisScroll, Inh, NodeCold, RevealState, RowLayout, ScaleMotion, ScrollState, Stack};
 #[path = "runtime/motion/tracks.rs"]
 mod tracks;
 use tracks::{SCROLL_DECAY, mark_ancestors, scroll_offsets, word_starts};
@@ -379,8 +378,7 @@ pub struct Runtime<S: 'static> {
     /// thousand elements otherwise maps and faults in megabytes every commit.
     spare_nodes: Vec<Node>,
     apply_scratch: apply_scratch::ApplyScratch,
-    layout: TaffyTree<usize>,
-    layout_entries: HashMap<String, LayoutEntry>,
+    layout: LayoutEngine,
     node_index: HashMap<NodeId, usize>,
     path_ids: HashMap<String, NodeId>,
     pub(crate) memo: crate::memo::MemoCache,
@@ -786,12 +784,7 @@ impl<S: 'static> Runtime<S> {
             nodes: Vec::new(),
             spare_nodes: Vec::new(),
             apply_scratch: Default::default(),
-            layout: {
-                let mut tree = TaffyTree::new();
-                tree.disable_rounding();
-                tree
-            },
-            layout_entries: HashMap::default(),
+            layout: LayoutEngine::new(),
             node_index: HashMap::default(),
             path_ids: HashMap::default(),
             memo: Default::default(),

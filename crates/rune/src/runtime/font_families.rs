@@ -31,9 +31,7 @@ impl<S: 'static> Runtime<S> {
             return false;
         }
         self.memo.clear();
-        for e in self.layout_entries.values().filter(|e| e.measure.is_some()) {
-            let _ = self.layout.mark_dirty(e.id);
-        }
+        self.layout.mark_all_dirty();
         self.dirty = true;
         self.relayout = true;
         true
