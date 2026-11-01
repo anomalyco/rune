@@ -379,7 +379,7 @@ impl<T: 'static> Overlay<T> {
             else if self.options.prewarm { self.prepare(event_loop); }
         }
         if requests.refollow && self.visible && let Some(point) = Self::sample_pointer(event_loop) {
-            self.move_to_pointer_display(event_loop, point);
+            self.refollow(event_loop, point);
         }
         self.apply_input();
         if self.visible {
