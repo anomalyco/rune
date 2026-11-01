@@ -378,6 +378,9 @@ impl<T: 'static> Overlay<T> {
             if layer_was_visible && requests.visible != Some(false) { self.show_fading(event_loop, Duration::ZERO); }
             else if self.options.prewarm { self.prepare(event_loop); }
         }
+        if requests.refollow && self.visible && let Some(point) = Self::sample_pointer(event_loop) {
+            self.move_to_pointer_display(event_loop, point);
+        }
         self.apply_input();
         if self.visible {
             #[cfg(target_os = "macos")]

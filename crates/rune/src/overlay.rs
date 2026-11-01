@@ -141,6 +141,11 @@ impl<T: 'static> OverlayHandle<T> {
     /// Takes effect on the next event-loop turn, or after the current owned drag releases.
     pub fn set_input(&self, input: OverlayInput) { self.request(|q| q.input = Some(input)); }
     pub fn set_follow_pointer(&self, follow: bool) { self.request(|q| q.follow_pointer = Some(follow)); }
+    /// Moves a shown [`DisplayTarget::UnderPointer`] overlay to the display under the pointer
+    /// now, when that's another display; at once, without taking focus. A caller's own pace
+    /// (a HUD's few checks a second) instead of `follow_pointer`'s pointer watch. Windows and
+    /// X11; elsewhere it does nothing.
+    pub fn refollow_pointer(&self) { self.request(|q| q.refollow = true); }
     /// None restores the spec's legacy edge placement.
     pub fn set_placement(&self, placement: Option<OverlayPlacement>) { self.request(|q| q.placement = Some(placement)); }
     pub fn set_display(&self, display: DisplayTarget) { self.request(|q| q.display = Some(display)); }
@@ -853,7 +858,30 @@ impl<T: 'static> Overlay<T> {
 
     #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
     fn follow_pointer(&mut self, event_loop: &ActiveEventLoop, point: (i32, i32)) {
-        if !self.options.follow_pointer || self.options.display != DisplayTarget::UnderPointer { return; }
+        if !self.options.follow_pointer { return; }
+        self.move_to_pointer_display(event_loop, point);
+    }
+
+    /// The pointer in desktop pixels, read now, where an overlay may follow it.
+    #[cfg(target_os = "windows")]
+    fn sample_pointer(_: &ActiveEventLoop) -> Option<(i32, i32)> {
+        crate::platform::win32::pointer_position()
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    fn sample_pointer(event_loop: &ActiveEventLoop) -> Option<(i32, i32)> {
+        (!crate::window::is_wayland(event_loop)).then(crate::platform::x11::overlay::pointer_position).flatten()
+    }
+
+    #[cfg(not(any(target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
+    fn sample_pointer(_: &ActiveEventLoop) -> Option<(i32, i32)> {
+        None
+    }
+
+    /// Moves a window-backed `UnderPointer` overlay to the display containing `point` when it
+    /// isn't there.
+    fn move_to_pointer_display(&mut self, event_loop: &ActiveEventLoop, point: (i32, i32)) {
+        if self.options.display != DisplayTarget::UnderPointer { return; }
         let Some(Backing::Window(window)) = self.live.as_ref().map(|l| &l.backing) else { return };
         let target = event_loop.available_monitors().find(|m| {
             let (p, s) = (m.position(), m.size());

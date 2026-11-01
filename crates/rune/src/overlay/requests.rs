@@ -13,6 +13,8 @@ pub(super) struct Requests<T> {
     pub placement: Option<Option<crate::OverlayPlacement>>,
     pub display: Option<crate::DisplayTarget>,
     pub request_keys: bool,
+    /// Move to the display under the pointer now (`OverlayHandle::refollow_pointer`).
+    pub refollow: bool,
     pub visible: Option<bool>,
     pub edge: Option<super::ScreenEdge>,
     pub margin: Option<f32>,
@@ -30,7 +32,7 @@ pub(super) struct Requests<T> {
 impl<T> Default for Requests<T> {
     fn default() -> Self {
         Requests {
-            input: None, follow_pointer: None, placement: None, display: None, request_keys: false, visible: None, edge: None,
+            input: None, follow_pointer: None, placement: None, display: None, request_keys: false, refollow: false, visible: None, edge: None,
             margin: None, align: None, size: None, fade: None, macos_level: None, exclude_from_capture: None, woken: false, updates: Vec::new(),
         }
     }
