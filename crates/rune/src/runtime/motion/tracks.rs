@@ -73,6 +73,7 @@ impl<S: 'static> Runtime<S> {
         self.grow_acc -= steps as f32 * SUBSTEP;
         let now = self.t;
         let mut moving = false;
+        let mut restored = Vec::new();
         for (cid, stack) in self.stacks.iter_mut() {
             let Some(&ci) = self.node_index.get(cid) else { continue };
             let Some(spec) = self.nodes[ci].growth.as_deref().copied() else { continue };
@@ -102,6 +103,8 @@ impl<S: 'static> Runtime<S> {
                     }
                     g.step(spec.spring, &spec.edge, carrying);
                 }
+                let r = std::mem::take(&mut g.restore);
+                if r > 0.0 { restored.push((ci, *id, r)); }
                 stack.grown += (g.h - h0).max(0.0);
                 st_growing |= g.target > g.h + 1.0 / 128.0;
                 st_moving |= g.moving() || (g.h - h0).abs() > 1e-5;
@@ -121,6 +124,7 @@ impl<S: 'static> Runtime<S> {
             // Keep the shared clock awake through the hold. No timer thread or remeasurement.
             moving |= st_moving;
         }
+        for (ci, id, r) in restored { self.restore_above(ci, id, r); }
         moving
     }
 

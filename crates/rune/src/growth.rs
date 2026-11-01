@@ -147,11 +147,14 @@ pub struct GrowTrack {
     /// bottom edge while it shuts under a held header (`hide_above`), and easing back as it
     /// turns around.
     pub(crate) slide: Option<(f32, f32)>,
+    /// Points of lifted contents put back above the row as its glide landed whole, for its
+    /// viewport's offset to take up (`Runtime::restore_above`).
+    pub(crate) restore: f32,
 }
 
 impl GrowTrack {
     pub fn settled(h: f32) -> GrowTrack {
-        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, glide: None, feather: None, limit: f32::INFINITY, stage: None, slide: None }
+        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, glide: None, feather: None, limit: f32::INFINITY, stage: None, slide: None, restore: 0.0 }
     }
 
     pub fn moving(&self) -> bool {
@@ -202,6 +205,20 @@ impl GrowTrack {
         cut
     }
 
+    /// A fold opening again while its contents draw lifted, its viewport pinned to its end so
+    /// it grows from its bottom: its spring stops `rise` points on, where its header has risen
+    /// back to the top and what its contents hid below has shown, its contents easing up as
+    /// much on the way; the rest then lands at once, all of it lifted, which the end takes up.
+    pub(crate) fn ride_up(&mut self, rise: f32) {
+        let (from, h) = (self.lift(), self.h);
+        let stage = (h + rise.max(0.0)).min(self.target);
+        let (d, end) = (stage - h, self.target - stage);
+        let b = if d > 1.0 / 64.0 { (end - from) / d } else { 0.0 };
+        self.slide = Some((if d > 1.0 / 64.0 { from - b * h } else { end }, b));
+        self.stage = Some(stage);
+        self.span = d;
+    }
+
     /// A fold shutting over what it held, which its clip folds away (`El::fold_glide`).
     pub(crate) fn shutting_fold(&self) -> bool {
         self.glide.is_some() && self.h > self.target + 0.01
@@ -225,7 +242,10 @@ impl GrowTrack {
         let aim = self.stage.unwrap_or(self.target);
         let rem = aim - self.h;
         if self.stage.is_some() && rem.abs() < 1.0 {
-            // The glide carried the row to the window's edge: the rest lands at once, out of view.
+            // The glide carried the row to the window's edge: the rest lands at once, out of view,
+            // and contents still lifted come back above it.
+            self.restore += self.lift();
+            self.slide = None;
             self.h = self.target;
             self.v = 0.0;
             self.stage = None;

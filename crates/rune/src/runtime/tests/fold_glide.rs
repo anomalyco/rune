@@ -299,3 +299,59 @@ fn a_fold_shut_from_its_stuck_header_mid_timeline_still_glides() {
     assert!(frames[4].keys().any(|k| k.starts_with("step-")), "the steps still show as it shuts: {:?}", frames[4]);
     assert_eq!(*after.last().unwrap(), 28.0);
 }
+
+/// Shuts the fold from its stuck header as `shut_from_stuck` does, then `at` frames later (0:
+/// in the same tick, before a frame draws) opens it again holding its top, and returns each
+/// frame's tops of the header, the rows around the fold and every step, from the shut on.
+fn reopen_from_stuck(after: f32, offset: f32, at: usize) -> Vec<HashMap<String, f32>> {
+    let mut rt = Runtime::new((true, after), held_section, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, offset));
+    for _ in 0..4 { rt.frame(1.0 / 120.0); }
+    rt.update(|s, tx| { s.0 = false; tx.keep_on_screen("hdr"); });
+    let mut frames = Vec::new();
+    for f in 0..at + 120 {
+        if f == at { rt.update(|s, tx| { s.0 = true; tx.keep_on_screen("turn"); }); }
+        rt.frame(1.0 / 120.0);
+        frames.push(rt.elements().into_iter().filter_map(|e| {
+            let k = e.key.clone()?;
+            (["hdr", "before", "after"].contains(&k.as_str()) || k.starts_with("step-")).then_some((k, e.rect[1]))
+        }).collect());
+    }
+    assert!(!rt.animating, "it settles");
+    let turn = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("turn")).unwrap();
+    assert_eq!(turn.rect[3], 28.0 + 40.0 * 28.0, "it ends fully open");
+    frames
+}
+
+/// The most anything with more than two points in view moved in one frame (a glide opening
+/// past the window lands the rest once its edge is within a point or so), and the frame.
+fn biggest_reopen_step(frames: &[HashMap<String, f32>]) -> (f32, usize, String) {
+    let mut most = (0.0, 0, String::new());
+    for (f, w) in frames.windows(2).enumerate() {
+        for (k, &y1) in &w[1] {
+            let Some(&y0) = w[0].get(k) else { continue };
+            let seen = |y: f32| y > -26.0 && y < 198.0;
+            if (seen(y0) || seen(y1)) && (y1 - y0).abs() > most.0 { most = ((y1 - y0).abs(), f + 1, k.clone()); }
+        }
+    }
+    most
+}
+
+#[test]
+fn a_fold_reopened_as_it_shuts_from_its_stuck_header_never_jumps() {
+    // At the end (the header comes down once the end holds the row below) and mid-timeline,
+    // opened again in the shut's own tick, while its contents ride up under the header, and
+    // once the header is coming down: nothing in view moves more than a frame's spring, and
+    // what was hidden above comes back above.
+    for (after, label) in [(100.0, "at the end"), (300.0, "mid-timeline")] {
+        for at in [0, 1, 3, 8, 16, 30] {
+            let frames = reopen_from_stuck(after, 1100.0, at);
+            let (most, f, key) = biggest_reopen_step(&frames);
+            assert!(most < 24.0, "{label}, reopened {at} frames in: {key} moves {most} pt in frame {f}: {:?} -> {:?}",
+                frames[f - 1].get(&key), frames[f].get(&key));
+            let last = frames.last().unwrap();
+            assert!(last.contains_key("step-0") && last["after"] > 0.0, "{label}, {at}: {last:?}");
+        }
+    }
+}
