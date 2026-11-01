@@ -146,8 +146,9 @@ impl Renderer {
             }
             let Some(rows) = page.dirty.take() else { continue };
             Self::write_rows(&staging, &self.images[index].as_ref().unwrap().0, &page.data, rows);
+            self.pixel_uploads += 1;
         }
-        if changed { self.images_changed(); }
+        if changed { self.images_changed(); self.pixel_uploads += 1; }
         self.refresh_layer_bindings(device);
     }
 
@@ -239,7 +240,8 @@ impl Renderer {
         let has_layers = self.uploads.has_layers;
         self.prepare_layers(device, queue, if has_layers { instances } else { &[] }, viewport);
         self.sync_resident_caches(&mut atlas.resident_caches);
-        if self.effects.iter().any(|(_, i)| i.params[0] != 0.0 || i.params[1] == KIND_BACKDROP_BLUR) {
+        // Effects read a pooled window-sized backdrop; a backdrop blur copies into its own.
+        if self.effects.iter().any(|(_, i)| i.params[1] != KIND_BACKDROP_BLUR && i.params[0] != 0.0) {
             self.ensure_backdrop(device, self.format, viewport);
             for index in 0..self.extra.len() {
                 self.ensure_backdrop(device, self.extra[index].0, viewport);
@@ -248,10 +250,13 @@ impl Renderer {
                 self.ensure_backdrop(device, layers::FORMAT, viewport);
             }
         }
-        self.prepare_backdrop_blur(device, queue, viewport);
+        self.prepare_backdrop_blur(device, queue, instances, viewport);
     }
 
     pub fn prepare_surfaces(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, draws: &[crate::native_surface::SurfaceDraw], viewport: (u32,u32)) {
+        self.surface_rects.clear();
+        self.surface_rects.extend(draws.iter().map(|d| (d.before_instance, [d.rect[0].max(d.clip[0]), d.rect[1].max(d.clip[1]),
+            (d.rect[0] + d.rect[2]).min(d.clip[2]), (d.rect[1] + d.rect[3]).min(d.clip[3])])));
         if !draws.is_empty() && self.surfaces.is_none() {
             let mut surfaces = crate::native_surface::SurfaceRenderer::new(device, self.format);
             surfaces.set_srgb_blend(self.srgb_blend);

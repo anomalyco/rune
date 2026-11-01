@@ -581,6 +581,12 @@ pub struct Renderer {
     /// Pipelines and pyramid for backdrop blur records, built on the first one.
     backdrop_blur: Option<backdrop_blur::BackdropBlur>,
     uploads: upload::Uploads,
+    /// Image atlas uploads so far: new pixels in a page change what an unchanged image instance
+    /// shows, which a cached backdrop blur over it must see (`prepare_backdrop_blur`).
+    pixel_uploads: u64,
+    /// Where this frame's native surfaces draw, `(before_instance, [x0, y0, x1, y1])`: their
+    /// frames change with no instance changing, so a backdrop blur over one is never cached.
+    surface_rects: Vec<(u32, [f32; 4])>,
 }
 
 impl Renderer {
@@ -663,6 +669,8 @@ impl Renderer {
             srgb_blend: false,
             effects: Vec::new(),
             backdrops: Vec::new(),
+            pixel_uploads: 0,
+            surface_rects: Vec::new(),
             backdrop_blur: None,
             uploads: Default::default(),
         }

@@ -93,16 +93,34 @@ impl<'a, 'p> ActivePass<'a, 'p> {
         copy: Option<[f32; 4]>,
         then: impl FnOnce(&mut wgpu::CommandEncoder, &'r Backdrop),
     ) -> Option<&'r Backdrop> {
+        let bd = renderer.backdrops.iter().find(|b| b.format == format)?;
+        self.split_into(&bd.texture, &bd.view, [0.0; 2], origin, size, in_layer, copy, |encoder| then(encoder, bd))?;
+        Some(bd)
+    }
+
+    /// `split`, copying into `texture` (`view` of it) with window point `offset` at its
+    /// origin instead of into a pooled backdrop, for a backdrop no bigger than the rect copied.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn split_into(
+        &mut self,
+        texture: &wgpu::Texture,
+        bd_view: &wgpu::TextureView,
+        offset: [f32; 2],
+        origin: [f32; 2],
+        size: [u32; 2],
+        in_layer: bool,
+        copy: Option<[f32; 4]>,
+        then: impl FnOnce(&mut wgpu::CommandEncoder),
+    ) -> Option<()> {
         let (encoder, view) = self.encoder.as_mut()?;
         if !view.texture().usage().contains(wgpu::TextureUsages::COPY_SRC) { return None; }
-        let bd = renderer.backdrops.iter().find(|b| b.format == format)?;
         drop(self.inner.take());
-        let (vw, vh) = (bd.texture.width(), bd.texture.height());
+        let (vw, vh) = (texture.width(), texture.height());
         if in_layer {
             let _clear = (*encoder).begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("backdrop clear"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &bd.view,
+                    view: bd_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
@@ -125,14 +143,14 @@ impl<'a, 'p> ActivePass<'a, 'p> {
                 (src_x, src_y, dst_x, dst_y, copy_w, copy_h)
             }
             Some(r) => {
-                let span = |lo: f32, hi: f32, o: f32, src: u32, dst: u32| {
-                    let lo = lo.floor().max(o.ceil()).max(0.0);
-                    let hi = hi.ceil().min(o + src as f32).min(dst as f32);
+                let span = |lo: f32, hi: f32, o: f32, src: u32, off: f32, dst: u32| {
+                    let lo = lo.floor().max(o.ceil()).max(off).max(0.0);
+                    let hi = hi.ceil().min(o + src as f32).min(off + dst as f32);
                     (lo, (hi - lo).max(0.0) as u32)
                 };
-                let (x, w) = span(r[0], r[2], origin[0], size[0].min(src_tex.width()), vw);
-                let (y, h) = span(r[1], r[3], origin[1], size[1].min(src_tex.height()), vh);
-                ((x - origin[0].ceil()) as u32, (y - origin[1].ceil()) as u32, x as u32, y as u32, w, h)
+                let (x, w) = span(r[0], r[2], origin[0], size[0].min(src_tex.width()), offset[0], vw);
+                let (y, h) = span(r[1], r[3], origin[1], size[1].min(src_tex.height()), offset[1], vh);
+                ((x - origin[0].ceil()) as u32, (y - origin[1].ceil()) as u32, (x - offset[0]) as u32, (y - offset[1]) as u32, w, h)
             }
         };
         if copy_w > 0 && copy_h > 0 {
@@ -144,7 +162,7 @@ impl<'a, 'p> ActivePass<'a, 'p> {
                     aspect: wgpu::TextureAspect::All,
                 },
                 wgpu::TexelCopyTextureInfo {
-                    texture: &bd.texture,
+                    texture,
                     mip_level: 0,
                     origin: wgpu::Origin3d { x: dst_x, y: dst_y, z: 0 },
                     aspect: wgpu::TextureAspect::All,
@@ -152,7 +170,7 @@ impl<'a, 'p> ActivePass<'a, 'p> {
                 wgpu::Extent3d { width: copy_w, height: copy_h, depth_or_array_layers: 1 },
             );
         }
-        then(&mut **encoder, bd);
+        then(&mut **encoder);
         let mut next = (*encoder).begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some(if in_layer { "isolated group" } else { "frame" }),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -173,7 +191,7 @@ impl<'a, 'p> ActivePass<'a, 'p> {
         next.set_viewport(0.0, 0.0, size[0] as f32, size[1] as f32, 0.0, 1.0);
         if let Some([x, y, w, h]) = self.scissor { next.set_scissor_rect(x, y, w, h); }
         self.inner = Some(PassInner::Owned(next));
-        Some(bd)
+        Some(())
     }
 }
 
@@ -215,7 +233,6 @@ impl Renderer {
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());
-        if let Some(blur) = &mut self.backdrop_blur { blur.bind_backdrop(device, format, &view); }
         if let Some(b) = self.backdrops.iter_mut().find(|b| b.format == format) {
             *b = Backdrop { format, texture, view };
         } else {
