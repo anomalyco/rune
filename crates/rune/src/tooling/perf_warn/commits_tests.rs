@@ -73,7 +73,7 @@ fn a_window_layout_read_through_a_scroll_names_the_read() {
     scroll(&mut rt, 20);
     let log: Vec<_> = take_log().into_iter().filter(|l| l.contains("of a scroll")).collect();
     assert_eq!(log.len(), 1, "{log:?}");
-    assert!(log[0].contains("`Cx::window_layout` read of \"r5\"") && log[0].contains("`Cx::layout_size`"), "{}", log[0]);
+    assert!(log[0].contains("`Cx::window_layout` read of \"r5\" at ") && log[0].contains("commits_tests.rs:") && log[0].contains("`Cx::layout_size`"), "{}", log[0]);
 }
 
 #[test]

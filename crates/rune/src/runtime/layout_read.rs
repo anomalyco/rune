@@ -98,6 +98,8 @@ pub(crate) struct LayoutRead {
     pub(crate) key: String,
     /// The `layout_with` function's check, or `None` for the whole rect (`Cx::layout`).
     pub(crate) same: Option<Same>,
+    /// Where the view called the `Cx` read, for the debug scroll-commit warning.
+    pub(crate) at: Option<&'static std::panic::Location<'static>>,
 }
 
 impl LayoutRead {
@@ -116,12 +118,17 @@ pub(crate) type LayoutReads = Vec<LayoutRead>;
 /// `layout_with` function once. A whole-rect read doesn't cover a function's read, since it
 /// ignores changes a function may see (a 0.4 pt resize, say).
 pub(crate) fn note_read(reads: &mut LayoutReads, key: &str, same: Option<Same>) {
+    note_read_at(reads, key, same, None);
+}
+
+/// [`note_read`] of a read made at `at`.
+pub(crate) fn note_read_at(reads: &mut LayoutReads, key: &str, same: Option<Same>, at: Option<&'static std::panic::Location<'static>>) {
     let counted = reads.iter().any(|r| r.key == key && match (&r.same, &same) {
         (None, None) => true,
         (Some(a), Some(b)) => a.is(b),
         _ => false,
     });
-    if !counted { reads.push(LayoutRead { key: key.to_owned(), same }); }
+    if !counted { reads.push(LayoutRead { key: key.to_owned(), same, at }); }
 }
 
 /// What each key a view read resolved to, as last given to the view, and the selection's line
@@ -183,8 +190,9 @@ impl<S> Cx<S> {
     ///
     /// A view that uses only part of the rect should read that part with [`Self::layout_size`]
     /// or [`Self::layout_with`], which don't re-run it while the part it uses holds.
+    #[track_caller]
     pub fn layout(&self, key: &str) -> Option<[f32; 4]> {
-        note_read(&mut self.layout_reads.borrow_mut(), key, None);
+        note_read_at(&mut self.layout_reads.borrow_mut(), key, None, Some(std::panic::Location::caller()));
         let rect = seen_rect(&self.layout, key);
         crate::memo::read_layout(key, rect);
         rect
@@ -202,18 +210,20 @@ impl<S> Cx<S> {
     /// reading it again in the same view counts once. A closure that captures something, or a
     /// `fn` pointer, isn't zero-sized: it costs an allocation per read, and each read counts
     /// (and is checked) separately, so keep those out of loops.
+    #[track_caller]
     pub fn layout_with<T: PartialEq + 'static>(&self, key: &str, f: impl Fn([f32; 4]) -> T + 'static) -> Option<T> {
         let rect = seen_rect(&self.layout, key);
         let value = rect.map(&f);
         let same = Same::new(f);
         crate::memo::read_layout_with(key, &same, rect);
-        note_read(&mut self.layout_reads.borrow_mut(), key, Some(same));
+        note_read_at(&mut self.layout_reads.borrow_mut(), key, Some(same), Some(std::panic::Location::caller()));
         value
     }
 
     /// `[w, h]` of the rect [`Self::layout`] returns: [`Self::layout_with`] the size. Prefer it
     /// whenever the view uses only the size: it re-runs when the width or height changes, not
     /// when the element only moves.
+    #[track_caller]
     pub fn layout_size(&self, key: &str) -> Option<[f32; 2]> {
         self.layout_with(key, size)
     }
@@ -222,6 +232,7 @@ impl<S> Cx<S> {
     /// A view that reads it re-runs the next frame a scroll moves the element past half a
     /// point, so every frame of a scroll: read it only for what has to follow the scroll, and
     /// prefer [`Self::window_layout_with`] for a value that changes less often.
+    #[track_caller]
     pub fn window_layout(&self, key: &str) -> Option<[f32; 4]> {
         self.layout(&window_key(key))
     }
@@ -229,6 +240,7 @@ impl<S> Cx<S> {
     /// [`Self::layout_with`] of the rect [`Self::window_layout`] returns:
     /// `window_layout_with("r1", |r| r[1] < 0.0)` re-runs a header on the frames row 1 scrolls
     /// past the top of the window, not on every frame of the scroll.
+    #[track_caller]
     pub fn window_layout_with<T: PartialEq + 'static>(&self, key: &str, f: impl Fn([f32; 4]) -> T + 'static) -> Option<T> {
         self.layout_with(&window_key(key), f)
     }
@@ -356,7 +368,7 @@ impl<S: 'static> Runtime<S> {
         let changed = moved.is_some() || boxes.as_ref().is_some_and(|b| boxes_moved(&rects.selection, b));
         // The once-a-frame check names the read for the scroll warning.
         #[cfg(debug_assertions)]
-        if !nodes_given && let Some(k) = moved { self.watch.meter.read(&reads[k].key); }
+        if !nodes_given && let Some(k) = moved { self.watch.meter.read(&reads[k].key, reads[k].at); }
         if changed || force {
             if let Some(b) = boxes { rects.selection = b.into(); }
             for (r, rect) in reads.iter().zip(now) {

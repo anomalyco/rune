@@ -375,7 +375,7 @@ impl<S: 'static> Measurement<'_, S> {
         // Reads made by memos this build reused count as made again.
         self.caret_read = cx.caret_read.get() || replayed.caret;
         self.layout_reads = cx.layout_reads.take();
-        for read in replayed.layout { layout_read::note_read(&mut self.layout_reads, &read.key, read.same); }
+        for read in replayed.layout { layout_read::note_read_at(&mut self.layout_reads, &read.key, read.same, read.at); }
 
         let mut taffy = std::mem::replace(self.layout, TaffyTree::with_capacity(0));
         for entry in self.layout_entries.values_mut() {

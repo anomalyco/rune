@@ -14,6 +14,7 @@ use std::fmt;
 
 use crate::ElementInfo;
 
+mod commits;
 mod loops;
 
 /// One finding kind, its threshold and what it means. The checker reads its numbers from here.
@@ -45,6 +46,7 @@ pub const RULES: &[Rule] = &[
     Rule { kind: "lands-unseen", threshold: 40.0, means: "travels at least this many pt in plain view, then its clip cuts it from view in one frame where it rests: it flew somewhere you can't see" },
     Rule { kind: "remount", threshold: 2.0, means: "words start leaving while the same words mount elsewhere within this many frames: one thing fades out at its old place as its copy fades in (its row lost its key)" },
     Rule { kind: "unpinned", threshold: 2.0, means: "a scroll pinned to its end has its content's bottom this many pt below the viewport with no input since: it stopped following" },
+    Rule { kind: "scroll-commit", threshold: 0.25, means: "the app ran its view (its `poll`, a handler or a layout read) on 6 or more of a scroll's frames and at least this share of them: a scroll needs no commit, so each one is a frame's whole view rebuilt mid-gesture" },
     Rule { kind: "twice", threshold: 0.0, means: "two siblings share one key (Rune's `#dup`), so one thing shows twice, as an optimistic copy beside the server's" },
 ];
 
@@ -127,11 +129,20 @@ pub struct Recording {
     /// The app rolls its live numbers, so a count or a clock ticking in place ("9s" → "10s") is
     /// a `text-swap` too. By default a tick passes.
     pub counts_roll: bool,
+    /// Per frame [`super::Run`] stepped: whether a viewport scrolled, and the app's reasons
+    /// for the view to run again (`CommitWhy` bits: its `poll`, a handler, a layout read).
+    scrolled: Vec<(bool, u16)>,
 }
 
 impl Recording {
     pub fn new(size: (f32, f32), hz: f64) -> Self {
         Recording { size, hz, ..Default::default() }
+    }
+
+    /// The frame just run: `scrolling` while a viewport moved, `why` its commits' reasons.
+    pub(crate) fn commits(&mut self, scrolling: bool, why: u16) {
+        use crate::runtime::CommitWhy as W;
+        self.scrolled.push((scrolling, why & (W::POLL | W::INPUT | W::LAYOUT | W::READ)));
     }
 
     fn track(&mut self, path: &str, parent: Option<usize>) -> usize {
@@ -571,6 +582,7 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
         }
     }
     loops::jumps(rec, &mut out);
+    commits::scroll_commits(rec, &mut out);
     // Words that leave as the same words mount: a row remounted under a new key.
     let window = rule("remount") as usize;
     let leaving = |i: usize, k: usize| {

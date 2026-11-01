@@ -62,7 +62,7 @@ impl<S> Cx<S> {
         self.caret_read.set(self.caret_read.get() || other.caret_read.get());
         let mut reads = self.layout_reads.borrow_mut();
         for read in other.layout_reads.into_inner() {
-            layout_read::note_read(&mut reads, &read.key, read.same);
+            layout_read::note_read_at(&mut reads, &read.key, read.same, read.at);
         }
     }
 

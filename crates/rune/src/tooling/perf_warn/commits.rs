@@ -101,10 +101,10 @@ impl CommitMeter {
         ));
     }
 
-    /// A view's layout read of `key` moved, so the view runs again.
+    /// A view's layout read of `key`, made at `at`, moved, so the view runs again.
     #[cfg(debug_assertions)]
-    pub(crate) fn read(&mut self, key: &str) {
-        self.meter.sources.push(Source { site: format!("read {key}"), cause: Cause::Read, subject: Some(key.to_owned()), at: None });
+    pub(crate) fn read(&mut self, key: &str, at: Option<&'static std::panic::Location<'static>>) {
+        self.meter.sources.push(Source { site: format!("read {key}"), cause: Cause::Read, subject: Some(key.to_owned()), at });
     }
 
     /// The frame's commits are done. `scrolling`: a hand, momentum or a glide moves a viewport;
@@ -158,9 +158,10 @@ fn message(s: &Source, count: u32, frames: u32) -> String {
              `El::on_scroll_offset` and live values"),
         Cause::Read => {
             let window = crate::runtime::window_read_key(subject);
+            let at = s.at.map_or_else(String::new, |at| format!(" at {at}"));
             let read = match window {
-                Some(key) => format!("the view's `Cx::window_layout` read of {key:?}"),
-                None => format!("the view's layout read of {subject:?}"),
+                Some(key) => format!("the view's `Cx::window_layout` read of {key:?}{at}"),
+                None => format!("the view's layout read of {subject:?}{at}"),
             };
             (format!("{read} moved and"),
              if window.is_some() { "read `Cx::layout_size` or `Cx::layout` (unscrolled) unless the view needs where the \

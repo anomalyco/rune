@@ -71,7 +71,8 @@ gates its own motion inside `cargo test`, on its real view and state, with `rune
 - `check` lists what a person would see go wrong in a `Recording`: `pop-in`, `pop-out`,
   `cut-exit`, `jump`, `offset-jump`, `appear-then-jump`, `jerk`, `reversal`, `overshoot`,
   `jiggle`, `text-swap`, `fade-snap`, `flicker`, `load-motion`, `never-settles`, `loop-jump`,
-  `wakes-after-end`, `lands-unseen`, `remount`, `unpinned` and `twice`. Thresholds and meanings are the `RULES` table. Elements are tracked by tree
+  `wakes-after-end`, `lands-unseen`, `remount`, `unpinned`, `twice` and `scroll-commit` (the
+  app ran its view through a scroll). Thresholds and meanings are the `RULES` table. Elements are tracked by tree
   path, so a keyed row keeps its identity however the rows around it change.
 - `gate(cells, ALLOW)` runs the app's cells (a name and a closure that records one) in parallel,
   checks them, and fails the test on any finding its allowlist doesn't cover. Each allowlist row

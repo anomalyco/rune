@@ -75,3 +75,35 @@ fn run_keeps_the_filtered_cells_in_order_and_flags_one_that_recorded_nothing() {
     assert!(cells[2].skipped && !cells[0].skipped);
     assert_eq!(report(&cells, &[], false, 0.0).failing, 1);
 }
+
+struct Feed {
+    polls_change: bool,
+}
+
+fn feed(_: &Feed, _: &mut Cx<Feed>) -> El {
+    let rows = (0..40).fold(col().w_full(), |c, i| c.child(el().key(format!("row{i}")).w_full().h(40.0).fill(oklch(0.3, 0.02, 250.0))));
+    col().w_full().h_full().child(col().key("feed").w_full().h(300.0).scroll(crate::ScrollSpec { stick_bottom: false }).child(rows))
+}
+
+fn scroll_cell(polls_change: bool) -> Recording {
+    let mut rt = Runtime::new(Feed { polls_change }, feed, (400.0, 300.0), Env::new(true, 1.0));
+    rt.poll = Some(|s, _, _| s.polls_change);
+    let mut r = Run::new(rt, 120.0);
+    r.idle(0.5);
+    r.step();
+    for _ in 0..30 {
+        r.act("wheel", |rt| rt.wheel(200.0, 150.0, -12.0));
+    }
+    r.play(0.5);
+    r.rec
+}
+
+#[test]
+fn an_app_that_runs_its_view_through_a_scroll_fails_the_gate() {
+    let still = scroll_cell(false);
+    assert!(!kinds(&still).contains(&"scroll-commit"), "{:?}", check(&still));
+    let busy = scroll_cell(true);
+    let f: Vec<_> = check(&busy).into_iter().filter(|f| f.kind == "scroll-commit").collect();
+    assert_eq!(f.len(), 1, "{f:?}");
+    assert!(f[0].detail.contains("(poll)"), "it names the cause: {}", f[0].detail);
+}
