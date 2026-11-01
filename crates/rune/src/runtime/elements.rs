@@ -46,9 +46,10 @@ pub struct ElementInfo {
     /// This node is riding a scroll: a wheel or trackpad, its momentum, or a glide
     /// (`Tx::scroll_to`, `scroll_to_with`, `scroll_to_bottom`).
     pub scrolling: bool,
-    /// How far its scroll viewports' offsets carry it this frame, x and y in points: `rect` sits
-    /// this much left and up of where it would unscrolled. Motion checks add it back, so they
-    /// judge an element against the content it scrolls with.
+    /// How far its scroll viewports' offsets carry it this frame, x and y in the window's points
+    /// (scaled and turned as `rect` is): `rect` sits this much left and up of where it would
+    /// unscrolled. Motion checks add it back, so they judge an element against the content it
+    /// scrolls with.
     pub scrolled: [f32; 2],
     /// Invisible estimated extent of a virtual list, not a drawable surface.
     pub virtual_extent: bool,
@@ -176,6 +177,17 @@ impl<S: 'static> Runtime<S> {
         self.nodes.iter().find(|n| n.path == path).is_some_and(Node::is_secure)
     }
 
+    /// What a move of `v` points inside node `i` (a scroll viewport's offset) comes to in the
+    /// window: scaled and turned as its children draw.
+    fn content_to_window(&self, i: usize, v: [f32; 2]) -> [f32; 2] {
+        let Some(h) = self.inh_scratch.get(i) else { return v };
+        let [x, y] = v.map(|c| c * h.scale);
+        match h.turn.checked_sub(1).and_then(|k| self.turn_scratch.get(k as usize)) {
+            Some(t) => [t.mat[0] * x + t.mat[1] * y, t.mat[2] * x + t.mat[3] * y],
+            None => [x, y],
+        }
+    }
+
     pub fn elements(&self) -> Vec<ElementInfo> {
         fn intent(n: &Node) -> u32 {
             n.live.iter().filter(|b| b.spring.is_none()).fold(0, |bits, b| bits | match b.property {
@@ -231,25 +243,41 @@ impl<S: 'static> Runtime<S> {
                         live_intent |= 4 | 16;
                     }
                 }
-                let mut a = step_up(&self.nodes, i);
-                while let Some(pi) = a {
-                    let parent = &self.nodes[pi];
-                    moving |= animating(parent.id)
-                        || self.stacks.get(&parent.id).is_some_and(|s| s.moving)
-                        || self.scrolls.get(&parent.id).is_some_and(|s| s.slack.moving() || s.glide.is_some());
-                    live_intent |= intent(parent);
-                    if let Some(st) = self.scrolls.get(&parent.id) {
-                        scrolling |= st.moving();
-                        scrolled = [scrolled[0] + st.drawn[0], scrolled[1] + st.drawn[1]];
+                // Offsets are in points inside the scroll viewport; `rect` is in the window, after
+                // every scale and turn above. Below a lift (a flight or launch drawn over the
+                // window), the scales holding still above it carry them, unturned.
+                let mut lifted = None;
+                let mut j = i;
+                loop {
+                    let to_window = |at: Option<usize>, v: [f32; 2]| match lifted {
+                        Some(k) => v.map(|c| c * k),
+                        None => at.map_or(v, |at| self.content_to_window(at, v)),
+                    };
+                    if j != i && let Some(st) = self.scrolls.get(&self.nodes[j].id) {
+                        let [x, y] = to_window(Some(j), st.drawn);
+                        scrolled = [scrolled[0] + x, scrolled[1] + y];
                     }
-                    in_growing_row |= self.grows.get(&parent.id).is_some_and(|g| g.moving());
-                    a = step_up(&self.nodes, pi);
-                }
-                // A launch, and what it carries, leaves under the offsets it launched against
-                // and takes on the scroll's only as it lands.
-                for j in std::iter::successors(Some(i), |&j| step_up(&self.nodes, j)) {
-                    let fix = self.launches.carried(&self.scene, self.nodes[j].id);
-                    scrolled = [scrolled[0] - fix[0], scrolled[1] - fix[1]];
+                    // A launch, and what it carries, leaves under the offsets it launched against
+                    // and takes on the scroll's only as it lands.
+                    let id = self.nodes[j].id;
+                    let parent = self.nodes[j].parent;
+                    let fix = self.launches.carried(&self.scene, id);
+                    if fix != [0.0; 2] {
+                        let k = parent.and_then(|p| self.inh_scratch.get(p)).map_or(1.0, |h| h.still.0);
+                        scrolled = [scrolled[0] - fix[0] * k, scrolled[1] - fix[1] * k];
+                    }
+                    if lifted.is_none() && self.flying.iter().any(|f| f.0 == id) {
+                        lifted = Some(parent.and_then(|p| self.inh_scratch.get(p)).map_or(1.0, |h| h.still.0));
+                    }
+                    let Some(pi) = step_up(&self.nodes, j) else { break };
+                    let p = &self.nodes[pi];
+                    moving |= animating(p.id)
+                        || self.stacks.get(&p.id).is_some_and(|s| s.moving)
+                        || self.scrolls.get(&p.id).is_some_and(|s| s.slack.moving() || s.glide.is_some());
+                    live_intent |= intent(p);
+                    scrolling |= self.scrolls.get(&p.id).is_some_and(ScrollState::moving);
+                    in_growing_row |= self.grows.get(&p.id).is_some_and(|g| g.moving());
+                    j = pi;
                 }
                 let secure = n.is_secure();
                 Some(ElementInfo {

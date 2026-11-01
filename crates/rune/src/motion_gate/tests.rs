@@ -107,3 +107,51 @@ fn an_app_that_runs_its_view_through_a_scroll_fails_the_gate() {
     assert_eq!(f.len(), 1, "{f:?}");
     assert!(f[0].detail.contains("(poll)"), "it names the cause: {}", f[0].detail);
 }
+
+/// Rows in a list drawn at 1.6×, each gliding on `spring` when the first drops by `drop`.
+#[derive(Clone, Copy)]
+struct Zoomed {
+    drop: f32,
+    spring: Spring,
+    down: bool,
+}
+
+fn zoomed(s: &Zoomed, _: &mut Cx<Zoomed>) -> El {
+    let ink = oklch(0.6, 0.15, 25.0);
+    let rows = (0..30).fold(col().key("rows").w_full(), |c, i| {
+        let row = el().key(format!("row{i}")).w_full().h(40.0).fill(ink).motion(s.spring);
+        c.child(if i == 0 && s.down { row.mt(s.drop) } else { row })
+    });
+    col().key("zoom").w_full().h_full().scale(1.6)
+        .child(col().key("feed").w_full().h_full().scroll(crate::ScrollSpec { stick_bottom: false }).child(rows))
+}
+
+fn zoomed_cell(drop: f32, spring: Spring) -> Recording {
+    let mut r = Run::new(Runtime::new(Zoomed { drop, spring, down: false }, zoomed, (600.0, 600.0), Env::new(true, 1.0)), 120.0);
+    r.rt.update(|_, tx| tx.scroll_to_instant("feed", 0.0, 200.0));
+    r.idle(0.5);
+    r.step();
+    // Data arriving, not a hand: an input would excuse a path that turns.
+    r.rt.update(|s, tx| { s.down = true; tx.scroll_to("feed", 0.0, 400.0); });
+    r.play(1.0);
+    r.rec
+}
+
+#[test]
+fn motion_inside_a_zoomed_scroll_is_judged_against_the_scroll() {
+    // A glide carries the rows up 200 pt, 320 pt on screen, while they glide 60 pt down the
+    // list: on screen they only rise, and against the list they only move down. Taking the
+    // scroll back at the list's own scale, not the window's, turns that into a dip and climb.
+    let paths = |rec: &Recording, kinds: &[&str]| -> Vec<String> {
+        check(rec).into_iter().filter(|f| kinds.contains(&f.kind)).map(|f| f.to_string()).collect()
+    };
+    let glide = zoomed_cell(60.0, Spring::new(0.2, 0.0));
+    let row = glide.tracks.iter().find(|t| t.path.ends_with("row12")).unwrap();
+    assert!(row.frames.windows(2).all(|w| w[1].1.rect[1] <= w[0].1.rect[1] + 0.01), "on screen it only rises");
+    let turns = paths(&glide, &["reversal", "jiggle", "overshoot"]);
+    assert!(turns.is_empty(), "{turns:#?}");
+    // A row that overshoots its place in the list still does, the scroll subtracted.
+    let wobble = zoomed_cell(60.0, Spring::new(0.3, 0.5));
+    let turns = paths(&wobble, &["reversal", "jiggle", "overshoot"]);
+    assert!(turns.iter().any(|f| f.contains("row12")), "{turns:#?}");
+}

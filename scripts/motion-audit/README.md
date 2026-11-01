@@ -16,7 +16,7 @@ python3 scripts/motion-audit/test_analyze.py        # analyze.py on synthetic tr
 motion-lint JSONL, and every trace now says why each frame animated (`quality.why`) and which
 tracks it sampled (`tk`: `[element id or path, property, active]`; inactive means settling).
 It also says how far scrolling carries each element when that changes (`sc`: `[id, x, y]` in
-points). The motion checks (overshoot, jiggle, reversal, stall, dog-leg) add it back, so a node
+window points, scaled and turned as its rect is). The motion checks (overshoot, jiggle, reversal, stall, dog-leg) add it back, so a node
 gliding inside a list that follows its end is judged against the list, not the screen.
 
 `analyze.py` reports, per trace:
