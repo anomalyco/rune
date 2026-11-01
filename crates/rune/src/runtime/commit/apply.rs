@@ -7,6 +7,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn apply(&mut self, measured: Measured, tx: &Tx) {
         let _apply_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Apply);
         let Measured { layout: taffy, mut nodes, reduced_motion, time_scale, caret_read, memo_flattened, memo_reused, .. } = measured;
+        if crate::tooling::interaction::active() { self.interaction_reused(&memo_reused); }
         let mut scratch = std::mem::take(&mut self.apply_scratch);
         self.caret_watch = caret_read;
         let reduced_motion_unchanged = reduced_motion == self.reduced_motion;

@@ -1,0 +1,244 @@
+//! Interaction timing: how long each input took to reach the screen, which page and control it
+//! was, and where the frame's time went, sent to a developer's local OpenTelemetry collector.
+//!
+//! Off unless `RUNE_PERF=1` or `OTEL_EXPORTER_OTLP_ENDPOINT` points at loopback (`gate`). Off,
+//! a frame checks one cached flag and nothing else runs: no clocks, threads or files.
+//!
+//! On, a frame whose input ran a handler (a press, key, edit, paste, wheel, drag, hover) is timed
+//! from the input's arrival to its present: `queue_wait` until the frame starts, `update` (the
+//! handlers, view, layout, text, paint and apply phases), `encode`, and `present_wait` until the
+//! display refresh it aims at. Its signature is a route (the page-sized keyed element around the
+//! control, and any open modal), the control's normalized path, and the action. Every timed
+//! interaction counts toward a per-signature histogram sent each minute (`ui.rollup`); one over
+//! [`SLOW_MS`] (`RUNE_PERF_SLOW_MS`) is sent at once as a `ui.interaction` trace with its phase
+//! split, commit reasons and the keyed subtrees its commits rebuilt. Key presses in a text field
+//! say `key_edit`, never which key.
+
+mod export;
+pub(crate) mod gate;
+mod names;
+mod rollup;
+
+use std::cell::Cell;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
+
+use crate::frame::profile::{PHASES, Phase};
+use crate::time::Instant;
+
+pub(crate) use names::{Name, Names};
+use rollup::Rollup;
+
+/// An interaction slower than this, input to present, or with this much work, is sent at once.
+pub(crate) const SLOW_MS: f64 = 1000.0 / 60.0;
+/// How often the histograms go out.
+const ROLLUP_EVERY: Duration = Duration::from_secs(60);
+/// Slow interactions sent per second at most; the rest still count in the rollup.
+const SLOW_PER_SECOND: u32 = 10;
+
+/// The `update` span's attribute for each [`Phase`].
+pub(crate) const PHASE_NAMES: [&str; PHASES] = ["rune.view_ms", "rune.commit_ms", "rune.layout_ms", "rune.text_ms", "rune.paint_ms", "rune.apply_ms"];
+
+thread_local! {
+    /// A timed frame is underway on this thread: phases time themselves into `TIMES`.
+    static ACTIVE: Cell<bool> = const { Cell::new(false) };
+    static TIMES: Cell<[f64; PHASES]> = const { Cell::new([0.0; PHASES]) };
+}
+
+/// Whether timing is on in this process.
+#[inline(always)]
+pub(crate) fn on() -> bool { gate::on() }
+
+/// Whether a timed frame is underway on this thread, so phases should time themselves.
+#[inline(always)]
+pub(crate) fn active() -> bool { ACTIVE.get() }
+
+/// Phase `phase` of the timed frame took `ms`.
+pub(crate) fn add(phase: Phase, ms: f64) {
+    let mut row = TIMES.get();
+    row[phase as usize] += ms;
+    TIMES.set(row);
+}
+
+fn slow_ms() -> f64 {
+    static MS: OnceLock<f64> = OnceLock::new();
+    *MS.get_or_init(|| std::env::var("RUNE_PERF_SLOW_MS").ok().and_then(|v| v.trim().parse().ok()).filter(|ms: &f64| *ms > 0.0).unwrap_or(SLOW_MS))
+}
+
+/// What one input action was, before the frame it lands in is built.
+pub(crate) struct Note {
+    pub route: Name,
+    pub control: Name,
+    pub action: &'static str,
+    /// Which of a frame's actions names it: a press or key over a scroll over a hover.
+    pub rank: u8,
+}
+
+/// A slow interaction, as sent.
+pub(crate) struct Slow {
+    pub route: Arc<str>,
+    pub control: Arc<str>,
+    pub action: &'static str,
+    pub arrived: Instant,
+    pub frame_start: Instant,
+    pub built: Instant,
+    pub submitted: Instant,
+    pub present: Instant,
+    pub handler_ms: f64,
+    pub phases: [f64; PHASES],
+    pub why: u16,
+    pub commits: u32,
+    pub shaped: u32,
+    pub nodes: usize,
+    pub reused: usize,
+    /// The keyed subtrees the frame's last commit rebuilt most nodes of, largest first.
+    pub rebuilt: Vec<(Arc<str>, usize)>,
+}
+
+/// One timed frame, from its first input handler until it presents.
+pub(crate) struct Timed {
+    pub arrived: Instant,
+    pub frame_start: Instant,
+    pub handler_ms: f64,
+    pub note: Note,
+    pub why: u16,
+    pub commits: u32,
+    pub built: Option<(Instant, [f64; PHASES], u32)>,
+}
+
+/// A window's interaction timing. Lives in the runtime's `perf_warn::Watch`.
+#[derive(Default)]
+pub(crate) struct Tracker {
+    pub names: Names,
+    rollup: Rollup,
+    rolled_since: Option<Instant>,
+    /// When the frame underway started, if input was queued for it.
+    frame_start: Option<Instant>,
+    pub timed: Option<Timed>,
+    /// The last commit's memo-reused node ranges (start, len), while a frame is timed.
+    pub reused: Vec<(usize, usize)>,
+    sent: (Option<Instant>, u32),
+}
+
+
+/// What finishing a timed frame decided.
+pub(crate) struct Finished {
+    pub timed: Timed,
+    pub built: Instant,
+    pub phases: [f64; PHASES],
+    pub shaped: u32,
+    pub submitted: Instant,
+    pub present: Instant,
+    /// Send it as a slow interaction.
+    pub slow: bool,
+}
+
+impl Tracker {
+    /// A frame starts; `queued` when input waits for it. A built frame no host presented
+    /// (a bare `Runtime`, a window that skipped drawing) ends at its build.
+    pub(crate) fn frame_begins(&mut self, queued: bool) -> Option<Finished> {
+        let left = self.timed.as_ref().and_then(|t| t.built).map(|(built, ..)| built);
+        let finished = left.and_then(|built| self.finish(built, None));
+        self.frame_start = queued.then(Instant::now);
+        finished
+    }
+
+    /// An input action ran its handlers: `at` is when its input arrived, `handler` how long
+    /// they took from `started`.
+    pub(crate) fn noted(&mut self, note: Note, at: Option<Instant>, started: Instant, handler: Duration) {
+        let frame_start = *self.frame_start.get_or_insert(started);
+        let arrived = at.unwrap_or(frame_start).min(frame_start);
+        match &mut self.timed {
+            Some(t) if t.built.is_none() => {
+                t.arrived = t.arrived.min(arrived);
+                t.handler_ms += handler.as_secs_f64() * 1000.0;
+                if note.rank > t.note.rank { t.note = note; }
+            }
+            _ => {
+                self.timed = Some(Timed { arrived, frame_start, handler_ms: handler.as_secs_f64() * 1000.0, note, why: 0, commits: 0, built: None });
+                TIMES.set([0.0; PHASES]);
+                ACTIVE.set(true);
+            }
+        }
+    }
+
+    /// A commit ran during a timed frame, for `why` (`CommitWhy` bits).
+    pub(crate) fn committed(&mut self, why: u16) {
+        if let Some(t) = self.timed.as_mut().filter(|t| t.built.is_none()) {
+            t.why |= why;
+            t.commits += 1;
+        }
+    }
+
+    /// The frame is built; `shaped` text runs it shaped.
+    pub(crate) fn built(&mut self, shaped: u32) {
+        self.frame_start = None;
+        let Some(t) = self.timed.as_mut().filter(|t| t.built.is_none()) else { return };
+        t.built = Some((Instant::now(), TIMES.replace([0.0; PHASES]), shaped));
+        ACTIVE.set(false);
+    }
+
+    /// The built frame was submitted at `submitted`, to show at `presents_at` when a display
+    /// link paced it. Counts it, and says whether to send it as slow.
+    pub(crate) fn finish(&mut self, submitted: Instant, presents_at: Option<Instant>) -> Option<Finished> {
+        let timed = self.timed.take_if(|t| t.built.is_some())?;
+        let (built, phases, shaped) = timed.built?;
+        let submitted = submitted.max(built);
+        let present = presents_at.map_or(submitted, |p| p.max(submitted));
+        let total = present.saturating_duration_since(timed.arrived).as_secs_f64() * 1000.0;
+        let work = submitted.saturating_duration_since(timed.frame_start).as_secs_f64() * 1000.0;
+        let over = total > slow_ms() || work > slow_ms();
+        self.rollup.add(&timed.note.route, &timed.note.control, timed.note.action, total, over);
+        let slow = over && self.allow(present);
+        self.rolled_since.get_or_insert(timed.arrived);
+        Some(Finished { timed, built, phases, shaped, submitted, present, slow })
+    }
+
+    fn allow(&mut self, now: Instant) -> bool {
+        match self.sent {
+            (Some(at), n) if now.saturating_duration_since(at) < Duration::from_secs(1) => {
+                self.sent.1 = n + 1;
+                n < SLOW_PER_SECOND
+            }
+            _ => {
+                self.sent = (Some(now), 1);
+                true
+            }
+        }
+    }
+
+    /// Sends the histograms when a minute has passed since the last, or `now` regardless.
+    pub(crate) fn roll(&mut self, force: bool) {
+        let Some(from) = self.rolled_since else { return };
+        let to = Instant::now();
+        if self.rollup.is_empty() || (!force && to.saturating_duration_since(from) < ROLLUP_EVERY) { return; }
+        export::send(export::Message::Rollup { rolls: self.rollup.take(), from, to });
+        self.rolled_since = None;
+    }
+}
+
+impl Drop for Tracker {
+    /// A window closing, or the app quitting, sends what it counted since the last rollup.
+    fn drop(&mut self) {
+        if self.rolled_since.is_none() { return; }
+        self.roll(true);
+        flush();
+    }
+}
+
+/// Sends a slow interaction.
+pub(crate) fn send(slow: Slow) {
+    #[cfg(test)]
+    return tests::SENT.with_borrow_mut(|sent| sent.push(slow));
+    #[cfg(not(test))]
+    export::send(export::Message::Slow(Box::new(slow)));
+}
+
+/// Waits up to a second for everything queued to reach the collector, before the process exits.
+pub(crate) fn flush() {
+    if on() { export::flush(Duration::from_secs(1)); }
+}
+
+#[cfg(test)]
+#[path = "interaction/tests.rs"]
+mod tests;

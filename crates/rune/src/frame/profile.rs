@@ -53,6 +53,7 @@ mod enabled {
     impl Drop for Scope {
         fn drop(&mut self) {
             if crate::tooling::perf_warn::budget::on() { crate::tooling::perf_warn::budget::add(self.0, self.1.elapsed().as_secs_f64() * 1000.0); }
+            if crate::tooling::interaction::active() { crate::tooling::interaction::add(self.0, self.1.elapsed().as_secs_f64() * 1000.0); }
             TIMES.with(|times| {
                 let mut row = times.get();
                 row[self.0 as usize] += self.1.elapsed().as_secs_f64() * 1000.0;
@@ -161,18 +162,24 @@ pub fn take_frame_phases() -> [f64; 2 * PHASES] { take() }
 pub fn thread_cpu_ms() -> f64 { cpu_ms().unwrap_or(0.0) }
 
 /// Without `frame-profile`, a phase is timed only for `RUNE_COMMIT_BUDGET_MS`
-/// (`perf_warn::budget`), and otherwise costs a cached flag.
+/// (`perf_warn::budget`) and in a frame interaction timing follows (`tooling::interaction`),
+/// and otherwise costs a cached flag and a thread-local one.
 #[cfg(not(feature = "frame-profile"))]
 pub(crate) struct Scope(Option<(Phase, crate::time::Instant)>);
 #[cfg(not(feature = "frame-profile"))]
 impl Scope {
     #[inline(always)]
-    pub(crate) fn new(phase: Phase) -> Self { Self(crate::tooling::perf_warn::budget::on().then(|| (phase, crate::time::Instant::now()))) }
+    pub(crate) fn new(phase: Phase) -> Self {
+        Self((crate::tooling::perf_warn::budget::on() || crate::tooling::interaction::active()).then(|| (phase, crate::time::Instant::now())))
+    }
 }
 #[cfg(not(feature = "frame-profile"))]
 impl Drop for Scope {
     #[inline(always)]
     fn drop(&mut self) {
-        if let Some((phase, start)) = self.0 { crate::tooling::perf_warn::budget::add(phase, start.elapsed().as_secs_f64() * 1000.0); }
+        let Some((phase, start)) = self.0 else { return };
+        let ms = start.elapsed().as_secs_f64() * 1000.0;
+        if crate::tooling::perf_warn::budget::on() { crate::tooling::perf_warn::budget::add(phase, ms); }
+        if crate::tooling::interaction::active() { crate::tooling::interaction::add(phase, ms); }
     }
 }

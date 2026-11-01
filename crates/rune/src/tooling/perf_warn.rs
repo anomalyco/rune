@@ -25,6 +25,8 @@ pub(crate) struct Watch {
     /// `CommitWhy` bits for the commit underway; 0 for one outside a frame's checks.
     pub cause: u16,
     pub meter: CommitMeter,
+    /// Interaction timing (`tooling::interaction`), when it's on.
+    pub interaction: crate::tooling::interaction::Tracker,
 }
 
 #[cfg(debug_assertions)]

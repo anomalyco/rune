@@ -254,6 +254,7 @@ fn headless_window(windows: Vec<crate::AnyWindowSpec>, displays: &[crate::Displa
         None => die("the app created no windows"),
     };
     if args.desktop.is_some() {
+        crate::tooling::interaction::gate::headless();
         crate::desktop::run(windows, index, args, options.accessory);
         return Ok(());
     }
@@ -493,6 +494,7 @@ pub(crate) fn file_input<S: 'static>(rt: &mut Runtime<S>, step: &FileStep, at: (
 include!("tooling/parser_tests.rs");
 
 pub(crate) mod headless_run;
+pub(crate) mod interaction;
 pub(crate) mod perf_warn;
 pub(crate) mod record;
 #[cfg(test)]

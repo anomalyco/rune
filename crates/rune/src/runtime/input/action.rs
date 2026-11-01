@@ -243,7 +243,9 @@ impl<S: 'static> Runtime<S> {
         #[cfg(debug_assertions)]
         let (name, path, at) = (handler_name(&action), stall_path(&action).map(str::to_owned), self.handler_location(&action));
         let stall = crate::tooling::perf_warn::Stall::start();
+        let timed = self.interaction_note(&action).map(|note| (note, crate::time::Instant::now()));
         let ran = self.dispatch_action(action, tx);
+        if ran && let Some((note, started)) = timed { self.interaction_ran(note, started); }
         #[cfg(debug_assertions)]
         if ran && name.starts_with("on_") { self.watch.meter.handler(name, path.as_deref(), at); }
         #[cfg(debug_assertions)]

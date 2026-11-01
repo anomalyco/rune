@@ -369,6 +369,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn frame_step(&mut self, elapsed: f64, catch_up: f64, dt: f64) -> bool {
         // Each queued action runs with its own input's arrival time; nothing else has one.
         let _input = crate::input::time::scope(None);
+        self.interaction_frame_begins();
         let mut live_woke = self.take_live_wake();
         // Another window may have switched the font families since this one's last frame.
         self.follow_font_families();
@@ -622,6 +623,7 @@ impl<S: 'static> Runtime<S> {
         if filling { self.anim_sources |= AnimSource::VIRTUAL_FILL; }
         self.animating = (animating && self.time_scale > 0.0) || filling;
         self.idle_frame_ends();
+        self.interaction_built();
         if !open_urls.is_empty() { self.open_urls(open_urls); }
         self.animating
     }

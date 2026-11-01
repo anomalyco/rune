@@ -67,6 +67,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     if args.snap_on_patch.is_some() {
         return crate::hot::snap_window(app, args);
     }
+    crate::tooling::interaction::gate::headless();
     let mut comp = app.compositor.take();
     let (srgb_blend, font_smoothing) = (app.srgb_blend, app.font_smoothing);
     let (on_focus, on_ime) = (app.on_focus, app.on_ime);
@@ -360,6 +361,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
             readback.copy(&mut enc, &target, shot);
         }
         renderer.submit(&gpu.queue, enc);
+        rt.interaction_presented(Instant::now(), None);
         if want_pixels { readback.submitted(); }
         let ms = frame_start.elapsed().as_secs_f64() * 1000.0;
         #[cfg(feature = "frame-profile")]
@@ -411,6 +413,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         }
     }
     for (shot, px) in readback.finish(&gpu.device) { deliver(shot, px); }
+    rt.interaction_flush();
     drop(deliver);
     let written = frames_written;
     if let Some(video) = writer.finish().unwrap_or_else(|e| die(&e)) {

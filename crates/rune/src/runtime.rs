@@ -85,6 +85,8 @@ mod blend;
 mod commit_watch;
 #[path = "runtime/commit/why.rs"]
 mod commit_why;
+#[path = "runtime/interaction.rs"]
+mod interaction_timing;
 #[path = "runtime/drag_out_host.rs"]
 mod drag_out_host;
 #[path = "runtime/paint/exit_mask.rs"]

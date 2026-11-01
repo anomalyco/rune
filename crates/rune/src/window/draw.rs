@@ -300,6 +300,7 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         if !hidden && l.native.pacing.is_none() { l.native.pacing = crate::platform::display_link::DisplayLink::retry(&l.window, self.frame_wake.clone()); }
         self.frame_reports.drawn(encoded, presents_at, now, update_ms);
+        rt.interaction_presented(submitted, presents_at);
         self.frame_reports.inspect(rt);
         if let Some(trace) = self.trace.as_mut() {
             // A frame count keeps the trace redrawing while idle, as below.
