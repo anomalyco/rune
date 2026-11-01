@@ -112,6 +112,8 @@ wgpu = { version = "~30.0.1", default-features = false, features = ["custom"] }
 objc2-foundation-video = { package = "objc2-foundation", version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSObject", "NSRange", "NSString", "NSURL", "NSURLConnection", "NSURLRequest", "NSURLResponse"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# Names for the interaction watchdog's stack samples (`tooling::interaction::stack`).
+rustc-demangle = "0.1"
 wgpu-hal = { version = "~30.0.1", default-features = false }
 wgpu-core = { version = "~30.0.1", default-features = false }
 objc2 = "0.5.2"

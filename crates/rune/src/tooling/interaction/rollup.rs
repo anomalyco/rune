@@ -18,6 +18,8 @@ pub(crate) struct Roll {
     pub action: &'static str,
     pub count: u32,
     pub slow: u32,
+    /// Slow only because the machine was too busy to run it (`Cause::SchedulerWait`).
+    pub contended: u32,
     pub max_ms: f64,
     buckets: [u32; BUCKETS],
 }
@@ -47,6 +49,11 @@ fn fx(s: &str) -> u64 {
     h.finish()
 }
 
+/// A hash of an interaction's signature.
+pub(crate) fn signature(route: &Name, control: &Name, action: &str) -> u64 {
+    route.hash ^ control.hash.rotate_left(21) ^ fx(action).rotate_left(42)
+}
+
 fn upper(i: usize) -> f64 { FIRST_MS * STEP.powi(i as i32) }
 
 #[derive(Default)]
@@ -55,13 +62,15 @@ pub(crate) struct Rollup {
 }
 
 impl Rollup {
-    pub(crate) fn add(&mut self, route: &Name, control: &Name, action: &'static str, ms: f64, slow: bool) {
-        let key = route.hash ^ control.hash.rotate_left(21) ^ fx(action).rotate_left(42);
-        let roll = self.rolls.entry(key).or_insert_with(|| Roll {
-            route: route.clone(), control: control.clone(), action, count: 0, slow: 0, max_ms: 0.0, buckets: [0; BUCKETS],
+    /// Counts one interaction taking `ms`, `slow` by the app's doing or `contended` by the
+    /// machine's.
+    pub(crate) fn add(&mut self, route: &Name, control: &Name, action: &'static str, ms: f64, slow: bool, contended: bool) {
+        let roll = self.rolls.entry(signature(route, control, action)).or_insert_with(|| Roll {
+            route: route.clone(), control: control.clone(), action, count: 0, slow: 0, contended: 0, max_ms: 0.0, buckets: [0; BUCKETS],
         });
         roll.count += 1;
         roll.slow += u32::from(slow);
+        roll.contended += u32::from(contended);
         roll.max_ms = roll.max_ms.max(ms);
         roll.buckets[bucket(ms)] += 1;
     }

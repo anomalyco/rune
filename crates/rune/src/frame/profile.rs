@@ -8,8 +8,7 @@ pub(crate) enum Phase { View, Commit, Layout, Text, Paint, Apply }
 pub const PHASES: usize = 6;
 
 /// CPU consumed by this thread, excluding time the scheduler runs other work. Debug builds
-/// time app callbacks with it for `perf_warn`.
-#[cfg(any(feature = "frame-profile", debug_assertions))]
+/// time app callbacks with it for `perf_warn`, and interaction timing its input frames.
 pub(crate) fn cpu_ms() -> Option<f64> {
     #[cfg(unix)]
     {

@@ -8,6 +8,8 @@ use crate::{Cx, El, Env, Ime, Runtime, TextEdit, TextStyle, col, el, text_input}
 
 thread_local! {
     pub(super) static SENT: RefCell<Vec<Slow>> = const { RefCell::new(Vec::new()) };
+    pub(super) static FRAMES: RefCell<Vec<SlowFrame>> = const { RefCell::new(Vec::new()) };
+    pub(super) static OVERLOADED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn norm(path: &str, keep: usize) -> String {
@@ -57,7 +59,7 @@ fn rollup_quantiles_land_within_a_bucket() {
     let mut names = Names::default();
     let (route, control) = (names.fixed("root"), names.fixed("save"));
     let mut rollup = Rollup::default();
-    for i in 1..=100 { rollup.add(&route, &control, "on_press", i as f64, i > 98); }
+    for i in 1..=100 { rollup.add(&route, &control, "on_press", i as f64, i > 98, false); }
     let rolls = rollup.take();
     assert_eq!(rolls.len(), 1);
     let r = &rolls[0];
@@ -96,6 +98,9 @@ fn runtime(slow: bool) -> Runtime<App> {
 
 fn force_on() { gate::force_on(); }
 
+fn s_route(rt: &mut Runtime<App>) -> Name { rt.interaction_tracker().names.route(Some("#0/settings"), None) }
+fn s_control(rt: &mut Runtime<App>) -> Name { rt.interaction_tracker().names.control("#0/settings/save-42") }
+
 fn click(rt: &mut Runtime<App>, key: &str) {
     let (x, y) = rt.find(key).unwrap();
     rt.pointer_down(x, y);
@@ -113,11 +118,34 @@ fn a_slow_click_names_its_page_and_control() {
     let s = &sent[0];
     assert_eq!((&*s.route, &*s.control, s.action), ("settings", "settings/save-*", "on_press"));
     assert!(s.handler_ms >= 25.0, "the handler's sleep is its time: {}", s.handler_ms);
+    let note = Note { route: s_route(&mut rt), control: s_control(&mut rt), action: "on_press", rank: 3 };
+    assert!(rt.interaction_tracker().breached(&note), "a slow signature is sampled sooner next time");
     assert!(s.commits >= 1 && s.why & crate::runtime::CommitWhy::INPUT != 0);
     assert!(s.phases[Phase::View as usize] > 0.0, "the view phase timed itself");
     assert!(s.present >= s.submitted && s.submitted >= s.built && s.built >= s.frame_start && s.frame_start >= s.arrived);
     assert_eq!(s.rebuilt.first().map(|r| &*r.0), Some("settings"), "nothing is memoized: the whole page rebuilt");
     assert!(!active(), "phases stop timing once the frame is built");
+}
+
+#[test]
+fn a_slow_click_says_whose_time_it_took() {
+    let mut rt = runtime(true);
+    click(&mut rt, "save-42");
+    let s = SENT.take().pop().unwrap();
+    assert_eq!(s.cause, Cause::Blocked, "the handler slept: little CPU on an idle machine");
+    assert!(s.cpu_ms.is_some_and(|cpu| cpu < 25.0), "the frame's CPU, without the sleep: {:?}", s.cpu_ms);
+    let rolls = rt.interaction_tracker().rollup.take();
+    assert_eq!((rolls[0].slow, rolls[0].contended), (1, 0));
+
+    OVERLOADED.set(true);
+    let mut rt = runtime(true);
+    click(&mut rt, "save-42");
+    OVERLOADED.set(false);
+    assert_eq!(SENT.take().pop().unwrap().cause, Cause::SchedulerWait, "on a busy machine, the same frame is the machine's");
+    let tracker = rt.interaction_tracker();
+    let rolls = tracker.rollup.take();
+    assert_eq!((rolls[0].slow, rolls[0].contended), (0, 1), "not counted against the app");
+    assert!(tracker.breached.is_empty(), "nor sampled sooner next time");
 }
 
 #[test]

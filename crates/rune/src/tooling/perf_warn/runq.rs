@@ -1,10 +1,13 @@
 //! Time a thread spent runnable but waiting for a core. A callback that was descheduled on a
-//! busy machine isn't blocked, so `Stall` takes that time out before it judges.
+//! busy machine isn't blocked, so `Stall` takes that time out before it judges. Interaction
+//! timing (`tooling::interaction`) asks [`overloaded`] in any build.
 
+#[cfg(debug_assertions)]
 use super::{STALL_CPU_RATIO, STALL_MS};
 
 /// How long the calling thread has waited in a run queue, in ms, since it started. Linux reads
 /// the scheduler's own count; other systems don't expose it per thread, so they get `None`.
+#[cfg(debug_assertions)]
 pub(crate) fn wait_ms() -> Option<f64> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
@@ -39,13 +42,14 @@ pub(crate) fn overloaded() -> bool {
 
 /// The wall ms a callback was blocked, or `None` when it wasn't. `wait` is the run-queue time
 /// it spent when known; without it, a `loaded` machine gets the benefit of the doubt.
+#[cfg(debug_assertions)]
 pub(crate) fn blocked_ms(wall: f64, cpu: f64, wait: Option<f64>, loaded: bool) -> Option<f64> {
     if wait.is_none() && loaded { return None }
     let blocked = wall - wait.unwrap_or(0.0).clamp(0.0, wall);
     (blocked > STALL_MS && blocked > STALL_CPU_RATIO * cpu).then_some(blocked)
 }
 
-#[cfg(test)]
+#[cfg(all(test, debug_assertions))]
 mod tests {
     use super::*;
 

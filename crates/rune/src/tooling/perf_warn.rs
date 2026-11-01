@@ -10,8 +10,7 @@ pub(crate) mod budget;
 mod commits;
 mod idle;
 pub(crate) mod launch;
-#[cfg(debug_assertions)]
-mod runq;
+pub(crate) mod runq;
 
 #[cfg(debug_assertions)]
 pub(crate) use idle::Drawn;

@@ -46,7 +46,9 @@ impl<S: 'static> Runtime<S> {
             None => names.fixed("window"),
         };
         let route = names.route(page, modal);
-        Some(Note { route, control, action: name, rank })
+        let note = Note { route, control, action: name, rank };
+        if self.watch.interaction.breached(&note) { interaction::hurry(); }
+        Some(note)
     }
 
     fn index_of(&self, path: &str) -> Option<usize> {
@@ -87,7 +89,8 @@ impl<S: 'static> Runtime<S> {
 
     /// The frame is built, ready for its host to draw.
     pub(super) fn interaction_built(&mut self) {
-        if interaction::active() { self.watch.interaction.built(self.stats.shaped); }
+        if !interaction::on() { return; }
+        if let Some(frame) = self.watch.interaction.built(self.stats.shaped, self.nodes.len()) { interaction::send_frame(frame); }
     }
 
     /// The host submitted the frame's commands at `submitted`, to show at `presents_at` when a
@@ -112,12 +115,13 @@ impl<S: 'static> Runtime<S> {
         if f.slow {
             let rebuilt = self.rebuilt_subtrees();
             let reused = self.watch.interaction.reused.iter().map(|r| r.1).sum();
-            let Finished { timed, built, phases, shaped, submitted, present, .. } = f;
+            let Finished { timed, built, phases, shaped, submitted, present, cause, .. } = f;
             interaction::send(Slow {
                 route: timed.note.route.text, control: timed.note.control.text, action: timed.note.action,
                 arrived: timed.arrived, frame_start: timed.frame_start, built, submitted, present,
                 handler_ms: timed.handler_ms, phases, why: timed.why, commits: timed.commits, shaped,
                 nodes: self.nodes.len(), reused, rebuilt,
+                cpu_ms: timed.cpu.1, cause: cause.unwrap_or(interaction::Cause::Queued), stacks: timed.stacks,
             });
         }
         self.watch.interaction.reused.clear();
