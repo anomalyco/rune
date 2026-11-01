@@ -46,6 +46,10 @@ pub struct ElementInfo {
     /// This node is riding a scroll: a wheel or trackpad, its momentum, or a glide
     /// (`Tx::scroll_to`, `scroll_to_with`, `scroll_to_bottom`).
     pub scrolling: bool,
+    /// How far its scroll viewports' offsets carry it this frame, x and y in points: `rect` sits
+    /// this much left and up of where it would unscrolled. Motion checks add it back, so they
+    /// judge an element against the content it scrolls with.
+    pub scrolled: [f32; 2],
     /// Invisible estimated extent of a virtual list, not a drawable surface.
     pub virtual_extent: bool,
     /// Property-specific intentional cuts for 1:1 live bindings (never smoothed bindings).
@@ -214,6 +218,7 @@ impl<S: 'static> Runtime<S> {
                 let revealing = flight.is_some() || self.reveals.get(&n.id).is_some_and(|r| !r.words.is_empty());
                 let mut in_growing_row = false;
                 let mut scrolling = false;
+                let mut scrolled = [0.0; 2];
                 let mut live_intent = intent(n);
                 // A group_opacity swap under an instant hover group is a deliberate cut (Beta's
                 // status/close swap), for it and what it contains: opacity and transition intent.
@@ -233,9 +238,18 @@ impl<S: 'static> Runtime<S> {
                         || self.stacks.get(&parent.id).is_some_and(|s| s.moving)
                         || self.scrolls.get(&parent.id).is_some_and(|s| s.slack.moving() || s.glide.is_some());
                     live_intent |= intent(parent);
-                    scrolling |= self.scrolls.get(&parent.id).is_some_and(ScrollState::moving);
+                    if let Some(st) = self.scrolls.get(&parent.id) {
+                        scrolling |= st.moving();
+                        scrolled = [scrolled[0] + st.drawn[0], scrolled[1] + st.drawn[1]];
+                    }
                     in_growing_row |= self.grows.get(&parent.id).is_some_and(|g| g.moving());
                     a = step_up(&self.nodes, pi);
+                }
+                // A launch, and what it carries, leaves under the offsets it launched against
+                // and takes on the scroll's only as it lands.
+                for j in std::iter::successors(Some(i), |&j| step_up(&self.nodes, j)) {
+                    let fix = self.launches.carried(&self.scene, self.nodes[j].id);
+                    scrolled = [scrolled[0] - fix[0], scrolled[1] - fix[1]];
                 }
                 let secure = n.is_secure();
                 Some(ElementInfo {
@@ -276,6 +290,7 @@ impl<S: 'static> Runtime<S> {
                     revealing,
                     in_growing_row,
                     scrolling,
+                    scrolled,
                     live_intent,
                     caret: self.caret_rect(&self.nodes, i),
                     drag_out: n.handlers.drag_out.is_some(),
@@ -309,7 +324,7 @@ impl<S: 'static> Runtime<S> {
                 hover: 0.0, press: 0.0, moving: true, parent: None,
                 visible: [r.x.max(c[0]), r.y.max(c[1]), (r.edges()[2].min(c[2]) - r.x.max(c[0])).max(0.0),
                     (r.edges()[3].min(c[3]) - r.y.max(c[1])).max(0.0)],
-                revealing: true, in_growing_row: false, scrolling: false, virtual_extent: false, live_intent: 0, caret: None, drag_out: false,
+                revealing: true, in_growing_row: false, scrolling: false, scrolled: [0.0; 2], virtual_extent: false, live_intent: 0, caret: None, drag_out: false,
                 help: None, selected: None, level: None, expanded: None, item_selected: false, stuck: 0.0,
             });
         }

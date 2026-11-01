@@ -93,4 +93,45 @@ mod tests {
         assert_eq!(told.get(), 2);
         assert_eq!(TOLD.with(|t| t.get()), ScrollPos { offset: [0.0, 10.0], max: [0.0, 800.0] });
     }
+
+    fn info<T>(rt: &Runtime<T>, key: &str) -> ElementInfo {
+        rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap()
+    }
+
+    #[test]
+    fn what_a_glide_carries_knows_how_far() {
+        let (mut rt, _) = rig();
+        let content0 = y(&rt, "content");
+        rt.update(|_, tx| tx.scroll_to("scroll", 0.0, 500.0));
+        for _ in 0..60 {
+            rt.frame(1.0 / 60.0);
+            let c = info(&rt, "content");
+            assert_eq!(c.rect[1] + c.scrolled[1], content0);
+            assert_eq!(info(&rt, "marker").scrolled, [0.0; 2], "outside the viewport");
+        }
+        assert_eq!(info(&rt, "content").scrolled, [0.0, 500.0]);
+    }
+
+    #[test]
+    fn what_a_pinned_end_carries_knows_how_far() {
+        // Content growing under a stuck bottom carries the rows up without a glide.
+        fn view(h: &f32, _: &mut Cx<f32>) -> El {
+            col().key("scroll").size(300.0, 200.0).scroll(ScrollSpec { stick_bottom: true })
+                .child(col().key("stack").w_full().growth(GrowthSpec::default())
+                    .child(el().key("lead").w_full().h(400.0))
+                    .child(el().key("grow").w_full().h(*h)))
+        }
+        let mut rt = Runtime::new(37.0, view, (300.0, 200.0), Env::default());
+        rt.frame(0.0);
+        rt.update(|h, _| *h = 230.0);
+        let mut seen = Vec::new();
+        for _ in 0..60 {
+            rt.frame(1.0 / 120.0);
+            let lead = info(&rt, "lead");
+            assert!((lead.rect[1] + lead.scrolled[1]).abs() < 0.01, "{lead:?}");
+            assert!(!lead.scrolling);
+            if seen.last() != Some(&lead.scrolled[1]) { seen.push(lead.scrolled[1]); }
+        }
+        assert!(seen.len() > 5, "the end followed over several frames: {seen:?}");
+    }
 }

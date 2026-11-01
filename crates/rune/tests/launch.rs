@@ -269,3 +269,36 @@ fn a_landed_launch_whose_row_grows_a_gap_over_it_at_a_pinned_end_holds_still() {
         }
     }
 }
+
+#[test]
+fn a_launch_is_judged_against_the_scroll_it_rides() {
+    // The rows below grow while it flies, so the pinned end scrolls under it. It leaves under
+    // the offsets it launched against and takes on the scroll as it lands, so against what it
+    // rides it makes one motion up into its slot, however the scroll adds to it on screen.
+    // Re-aimed mid-flight, its path takes over what the flight added to the offsets, and how
+    // much of the scroll it rides doesn't step.
+    for reaim in [None, Some(8)] {
+        let mut rt = app(false);
+        rt.update(|s, _| { for k in 0..12 { s.sent.insert(0, format!("earlier {k}")); } });
+        for _ in 0..60 { rt.frame(1.0 / 120.0); }
+        rt.key(KeyEvent { key: Key::Enter, mods: Default::default() });
+        let body = |rt: &Runtime<State>| rt.elements().into_iter().find(|e| e.key.as_deref() == Some("body") && e.text.as_deref() == Some("third")).unwrap();
+        let ys: Vec<f32> = (0..120).map(|f| {
+            if f == 1 { rt.update(|s, _| s.tail = true); }
+            if Some(f) == reaim { rt.update(|s, _| s.swap = true); }
+            rt.frame(1.0 / 120.0);
+            let e = body(&rt);
+            e.rect[1] + e.scrolled[1]
+        }).collect();
+        let scroll = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("scroll")).unwrap();
+        assert!(scroll.rect[1] + 1.0 < ys[0], "it starts below the list");
+        let steps: Vec<f32> = ys.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(steps.iter().all(|d| *d <= 0.01), "re-aimed at {reaim:?}, it never heads down: {ys:?}");
+        // Its slot a row up, the re-aim pulls it on 2 to 3 pt a frame faster; the offsets its
+        // flight added, folded into its path, would have stepped it 12 pt back.
+        assert!(steps.windows(2).all(|w| (w[1] - w[0]).abs() < 3.0), "re-aimed at {reaim:?}, no step in what it rides: {steps:?}");
+        assert!(ys[0] - ys[119] > 4.0, "it rises into its slot: {ys:?}");
+        let landed = body(&rt);
+        assert!(landed.scrolled[1] > 0.0, "landed, it rides the whole scroll: {:?}", landed.scrolled);
+    }
+}

@@ -42,8 +42,9 @@ def sheen(wrap_from, wrap_to):
 
 
 def scene(frames, flags=None):
-    """A 120 Hz trace of named elements; each frame maps name -> (x, y, w, h, opacity), and a
-    name missing from a frame is gone. A name's parent is its longest named prefix."""
+    """A 120 Hz trace of named elements; each frame maps name -> (x, y, w, h, opacity), plus
+    how far scrolling carries it as (x, y) when it scrolls, and a name missing from a frame is
+    gone. A name's parent is its longest named prefix."""
     names = sorted({nm for fr in frames for nm in fr})
     ids = {nm: i + 1 for i, nm in enumerate(names)}
     def parent(nm):
@@ -52,8 +53,9 @@ def scene(frames, flags=None):
     lines = [json.dumps({"width": 400, "height": 400, "hz": 120})]
     alive, meta = set(), set()
     for fr in frames:
-        out = {"e": [], "quality": {"animating": True}, "m": [], "g": []}
-        for nm, (x, y, w, h, op) in fr.items():
+        out = {"e": [], "quality": {"animating": True}, "m": [], "g": [], "sc": []}
+        for nm, (x, y, w, h, op, *sc) in fr.items():
+            out["sc"] += [[ids[nm], *sc[0]]] if sc else []
             if nm not in meta:
                 meta.add(nm)
                 out["m"].append({"id": ids[nm], "nm": nm, "pv": parent(nm)})
@@ -130,6 +132,21 @@ def main():
     # a drift out and back that rests a frame where it turns is still one motion.
     drift = hold(at(100, 100), 5) + [at(x, 100) for x in ease(100, 97.5, 6)] + hold(at(97.5, 100), 2) + [at(x, 100) for x in ease(97.5, 100, 12)] + hold(at(100, 100), 10)
     assert "reversal" in kinds(drift), "out and back with a rest at the turn"
+    # in a list following its growing end, 2 pt a frame up: judged against the scroll.
+    def scrolling(own, flags=0, told=True):
+        frames = []
+        for k in range(140):
+            t = min(max(k - 40, 0), 60)
+            frames.append({**still, "root/list/node": (100, 300 + own(t) - 2 * t, 40, 40, 1, *([(0, 2 * t)] if told else []))})
+        return kinds(frames, flags={"root/list/node": flags})
+    glide = lambda k: 60 * (1 - math.exp(-k / 8))
+    assert "reversal" in scrolling(glide, told=False), "on screen the glide and the scroll turn back"
+    assert not {"reversal", "jiggle", "overshoot", "stall"} & set(scrolling(glide)), "against the scroll it is one glide"
+    assert not {"reversal", "jiggle", "overshoot", "stall"} & set(scrolling(glide, analyze.SCROLLING))
+    wobble = lambda k: 2.5 * math.sin(k * 0.6)
+    assert "jiggle" not in scrolling(wobble, told=False), "on screen it only ever rises"
+    assert "jiggle" in scrolling(wobble), "against the scroll it wobbles"
+    assert "jiggle" in scrolling(wobble, analyze.SCROLLING), "a scroll that moves doesn't excuse it"
 
     # one steady speed: a retarget that drops part of its speed for a frame stalls; one that
     # keeps its speed and only pulls harder toward a farther target doesn't.

@@ -35,6 +35,7 @@ impl Default for ElementInfo {
             revealing: false,
             in_growing_row: false,
             scrolling: false,
+            scrolled: [0.0; 2],
             virtual_extent: false,
             live_intent: 0,
             caret: None,

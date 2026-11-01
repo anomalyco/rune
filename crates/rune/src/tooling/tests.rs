@@ -931,3 +931,29 @@ fn the_window_title_starts_from_the_spec_and_follows_set_title() {
 
 #[path = "playground_cli_tests.rs"]
 mod playground_cli;
+
+#[test]
+fn a_trace_says_how_far_scrolling_carries_an_element_when_that_changes() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        crate::col().key("scroll").size(100.0, 100.0).scroll(crate::ScrollSpec { stick_bottom: false })
+            .child(crate::el().key("row").w_full().h(400.0))
+    }
+    let mut rt = Runtime::new((), view, (100.0, 100.0), Env { scale: 1.0, system_dark: true });
+    rt.frame(0.0);
+    let path = std::env::temp_dir().join(format!("rune-trace-scrolled-{}.jsonl", std::process::id()));
+    {
+        let mut trace = Trace::open(&path, rt.viewport, 60.0, 1.0);
+        trace.frame(&mut rt, 0.0, 0.0);
+        rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, 30.0));
+        rt.frame(0.02);
+        trace.frame(&mut rt, 20.0, 0.0);
+        trace.frame(&mut rt, 40.0, 0.0);
+    }
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::remove_file(path).unwrap();
+    let lines: Vec<Value> = text.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    let row = lines[1]["m"].as_array().unwrap().iter().find(|m| m["nm"].as_str().unwrap().ends_with("row")).unwrap()["id"].clone();
+    assert!(lines[1].get("sc").is_none(), "nothing scrolled yet");
+    assert_eq!(lines[2]["sc"], json!([[row, 0.0, 30.0]]));
+    assert!(lines[3].get("sc").is_none(), "only when it changes");
+}

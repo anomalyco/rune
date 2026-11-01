@@ -63,7 +63,7 @@ def short(name, parts=3):
 
 
 class El:
-    __slots__ = ("id", "name", "parent", "rect", "op", "flags", "vis", "born", "hist", "ever_drawn")
+    __slots__ = ("id", "name", "parent", "rect", "op", "flags", "vis", "born", "hist", "ever_drawn", "scrolled")
 
     def __init__(self, id, name, parent):
         self.id, self.name, self.parent = id, name, parent
@@ -73,7 +73,9 @@ class El:
         self.vis = None
         self.born = None
         self.ever_drawn = False  # had area at some point (spacers never do)
-        self.hist = []  # (frame, x, y, w, h, op, flags, visible-area-fraction, on-screen)
+        self.scrolled = (0.0, 0.0)  # how far scrolling carries it, x and y (the trace's `sc`)
+        # (frame, x, y, w, h, op, flags, visible-area-fraction, on-screen, scrolled x, scrolled y)
+        self.hist = []
 
 
 def area(r):
@@ -145,11 +147,17 @@ def loop_ids(els, moved):
     return out
 
 
-def stalled(e, parent, edge, pts, travel):
+def unscrolled(h):
+    """History rows against the content they scroll with: a node gliding inside a list that
+    follows its end makes one motion there, however the scroll adds to it on screen."""
+    return [(st[0], st[1] + st[9], st[2] + st[10], *st[3:]) for st in h]
+
+
+def stalled(parent, edge, pts, travel):
     """The first frame of one motion (`pts`, consecutive history rows) whose speed along
     `travel` dips below both neighbours' and recovers, with the three speeds; one that rides
-    its parent is the parent's to report."""
-    ph = {x[0]: x for x in parent.hist} if parent else {}
+    its parent (`parent`, its rows) is the parent's to report."""
+    ph = {x[0]: x for x in parent}
     sign = math.copysign(1, travel)
     for m in range(2, len(pts) - 1):
         if pts[m + 1][0] - pts[m - 2][0] != 3:
@@ -221,16 +229,19 @@ def analyze(path, script=None):
                 if k > 0:
                     births[k].append(id)
             changed.add(id)
+        for id, sx, sy in fr.get("sc", []):
+            els[id].scrolled = (sx, sy)
         for id in fr.get("g", []):
             if id in alive:
                 alive.discard(id)
                 e = els[id]
+                e.scrolled = (0.0, 0.0)
                 deaths[k].append((id, e.rect, e.op, seen(e, W, H) and not e.flags & BLANK))
         for id in alive:
             e = els[id]
             vp = visible_part(e, W, H)
             frac = area(vp) / area(e.rect) if area(e.rect) > 0 else 0.0
-            e.hist.append((k, *e.rect, e.op, e.flags, frac, on_screen(e.rect, W, H)))
+            e.hist.append((k, *e.rect, e.op, e.flags, frac, on_screen(e.rect, W, H), *e.scrolled))
             if e.flags & SCROLLING:
                 scrolled[k].add(e.name.rpartition("/")[0])
         q = fr.get("quality", {})
@@ -389,7 +400,7 @@ def analyze(path, script=None):
             h = [x for x in e.hist if x[0] >= k][:3]
             if not h:
                 continue
-            k0, x, y, w, hh, op, flags, frac, ons = h[0]
+            k0, x, y, w, hh, op, flags, frac, ons = h[0][:9]
             # A viewport's content entering as it scrolls (a virtual list mounting the rows an
             # instant scroll lands on) is the scroll, which jumps already exempt, not a pop.
             if op < POP_OPACITY or frac == 0 or not ons or w * hh < 4 or flags & (SCROLLING | BLANK):
@@ -426,6 +437,8 @@ def analyze(path, script=None):
         h = e.hist
         if len(h) < 3 or e.id in loops:
             continue
+        mine = unscrolled(h)
+        theirs = unscrolled(parent.hist) if (parent := els.get(e.parent)) else []
         # Only report the outermost element of a group moving together.
         for edge, label in ((1, "x"), (2, "y"), (3, "w"), (4, "h")):
             d = [h[i][edge] - h[i - 1][edge] if h[i][0] == h[i - 1][0] + 1 else 0.0 for i in range(1, len(h))]
@@ -459,8 +472,10 @@ def analyze(path, script=None):
                         continue  # rides its parent; the parent reports it
                 findings.append(dict(kind=kind, element=e.name, frames=1, longest=1, at=str(k),
                                      detail=f"{label} {h[i - 1][edge]:.1f} → {st[edge]:.1f} ({step:+.1f}pt) in one frame; neighbours {before:+.1f}/{after:+.1f}"))
-            # motion segments. A motion may rest a frame or two where it turns (an out-and-back
-            # through its start), so up to SEG_GAP frames at rest don't end one.
+            # motion segments, against the scroll. A motion may rest a frame or two where it
+            # turns (an out-and-back through its start), so up to SEG_GAP frames at rest don't
+            # end one.
+            h = mine
             seg = []
             for i in range(1, len(h)):
                 moving = h[i][0] - h[i - 1][0] <= SEG_GAP + 1 and abs(h[i][edge] - h[i - 1][edge]) > 0.01
@@ -473,7 +488,7 @@ def analyze(path, script=None):
                     if all(h[j][5] <= 0.05 or not h[j][8] for j in seg):
                         seg = []
                         continue
-                    if any(pressing[h[j][0]] or h[j][6] & (4 | BLANK) for j in seg):
+                    if any(pressing[h[j][0]] or h[j][6] & BLANK for j in seg):
                         seg = []
                         continue
                     rest = vals[-1]
@@ -504,16 +519,19 @@ def analyze(path, script=None):
                             findings.append(dict(kind="reversal", element=e.name, frames=k1 - k0 + 1, longest=k1 - k0 + 1, at=f"{k0}–{k1}",
                                                  detail=what))
                     if len(findings) == found and abs(travel) > 0.5:
-                        stall = stalled(e, els.get(e.parent), edge, [h[seg[0] - 1]] + [h[j] for j in seg], travel)
+                        stall = stalled(theirs, edge, [h[seg[0] - 1]] + [h[j] for j in seg], travel)
                         if stall:
                             k, u = stall
                             findings.append(dict(kind="stall", element=e.name, frames=1, longest=1, at=str(k),
                                                  detail=f"{label} speed {u[0]:.1f} → {u[1]:.1f} → {u[2]:.1f} pt/frame ({start:.1f} → {rest:.1f})"))
                 if not moving:
                     seg = []
-        # One straight path: the top-left corner's route against its chord, per continuous move.
+            h = e.hist
+        # One straight path: the top-left corner's route against its chord, per continuous move,
+        # against the scroll.
+        h = mine
         seg = []
-        ph = {x[0]: x for x in parent.hist} if (parent := els.get(e.parent)) else {}
+        ph = {x[0]: x for x in theirs}
         for i in range(1, len(h) + 1):
             if i < len(h) and h[i][0] == h[i - 1][0] + 1 and (abs(h[i][1] - h[i - 1][1]) > 0.01 or abs(h[i][2] - h[i - 1][2]) > 0.01):
                 seg.append(i)

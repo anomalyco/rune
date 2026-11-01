@@ -1126,14 +1126,16 @@ impl<S: 'static> Runtime<S> {
             {
                 let offset = self.stuck_offset(i, p.rect.edges()[3]).unwrap_or(st.offset);
                 let held = self.bottom_offset(i, p.rect.edges()[3]).is_some_and(|b| (offset - b).abs() < 0.5);
-                dy -= grid(offset as f32 + st.slack.height(), s);
-                snap_rigid[1] -= grid(offset as f32 + st.slack.height(), s);
-                if let Some(st) = self.scrolls.get_mut(&self.nodes[i].id) { st.held = held; }
+                let drawn = grid(offset as f32 + st.slack.height(), s);
+                dy -= drawn;
+                snap_rigid[1] -= drawn;
+                if let Some(st) = self.scrolls.get_mut(&self.nodes[i].id) { (st.held, st.drawn[1]) = (held, drawn); }
             }
             let (mut scale, mut anchor, mut anchor_to, mut dx) = (sc, anchor, anchor_to, pinh.dx);
-            if n.scroll_axes.x() && let Some(st) = self.scrolls.get(&n.id) {
-                dx -= grid(st.x.offset as f32, s);
-                snap_rigid[0] -= grid(st.x.offset as f32, s);
+            if n.scroll_axes.x() && let Some(st) = self.scrolls.get_mut(&self.nodes[i].id) {
+                st.drawn[0] = grid(st.x.offset as f32, s);
+                dx -= st.drawn[0];
+                snap_rigid[0] -= st.drawn[0];
             }
             if open_cache && sc > 1e-4 {
                 dx += (r_exact[0] / s - rect_pt[0]) / sc;

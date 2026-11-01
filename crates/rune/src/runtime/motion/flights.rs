@@ -10,13 +10,17 @@ pub(super) struct Launches {
 }
 
 /// A launch in the air, the offsets outside the scene it was started against, the ones its
-/// last frame drew it under, and how fast they last moved between frames with no commit.
+/// last frame drew it under, and how fast they last moved between frames with no commit. Its
+/// re-aims folded `folded` of what its flight added to them into its path, when `1 - travel`
+/// was `folded_at`.
 struct Launched {
     id: NodeId,
     shift: [f32; 2],
     last: Option<[f32; 2]>,
     seen: (f64, u64),
     drift: [f32; 2],
+    folded: [f32; 2],
+    folded_at: [f32; 2],
 }
 
 impl Launches {
@@ -32,8 +36,20 @@ impl Launches {
     pub(super) fn restart(&mut self, scene: &Scene, id: NodeId) -> [rune_motion::Vec2; 2] {
         let Some(l) = self.flying.iter_mut().find(|l| l.id == id) else { return [rune_motion::Vec2::ZERO; 2] };
         let ([ox, oy], [vx, vy]) = l.blend(scene);
-        if let Some(last) = l.last { l.shift = last; }
+        if let Some(last) = l.last {
+            let carried = l.carried(scene);
+            let travel = scene.get(id, prop::TRAVEL).unwrap_or(rune_motion::Vec2::new(1.0, 1.0));
+            (l.folded, l.folded_at) = (carried, [1.0 - travel.x, 1.0 - travel.y]);
+            l.shift = last;
+        }
         [rune_motion::Vec2::new(ox, oy), rune_motion::Vec2::new(vx, vy)]
+    }
+
+    /// How much of the scroll under it launch `id` doesn't ride yet: what its flight adds to the
+    /// offsets outside the scene, and what its re-aims folded into its path, let go as it
+    /// travels. Without a launch, nothing.
+    pub(super) fn carried(&self, scene: &Scene, id: NodeId) -> [f32; 2] {
+        self.flying.iter().find(|l| l.id == id).map_or([0.0; 2], |l| l.carried(scene))
     }
 
     /// What launch `id`'s flight adds to the offsets outside the scene it is drawn under, and
@@ -71,6 +87,13 @@ impl Launches {
 }
 
 impl Launched {
+    fn carried(&self, scene: &Scene) -> [f32; 2] {
+        let travel = scene.get(self.id, prop::TRAVEL).unwrap_or(rune_motion::Vec2::new(1.0, 1.0));
+        let (blend, _) = self.blend(scene);
+        let left = [1.0 - travel.x, 1.0 - travel.y];
+        [0, 1].map(|k| blend[k] + if self.folded_at[k] > 1e-4 { self.folded[k] * (left[k] / self.folded_at[k]).clamp(0.0, 1.0) } else { 0.0 })
+    }
+
     /// What its flight adds to the offsets outside the scene it is drawn under, and how fast
     /// that moves it. Drawn under `offset + (shift - offset) * (1 - travel)`: its rate is the
     /// offset's drift times travel plus `(offset - shift) * rate`.
@@ -247,7 +270,7 @@ impl<S: 'static> Runtime<S> {
             self.flying.retain(|f| f.0 != to);
             self.flying.push((to, nodes[i].local));
             self.launches.flying.retain(|l| l.id != to);
-            self.launches.flying.push(Launched { id: to, shift, last: None, seen: (0.0, 0), drift: [0.0; 2] });
+            self.launches.flying.push(Launched { id: to, shift, last: None, seen: (0.0, 0), drift: [0.0; 2], folded: [0.0; 2], folded_at: [0.0; 2] });
         }
     }
 

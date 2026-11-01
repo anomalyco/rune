@@ -89,6 +89,8 @@ pub struct Snap {
     pub flags: u8,
     /// A loop's phase (0 to 1); NaN without one.
     pub phase: f32,
+    /// How far scrolling carries it, x and y ([`ElementInfo::scrolled`]).
+    pub scrolled: [f32; 2],
 }
 
 pub struct Track {
@@ -203,7 +205,7 @@ impl Recording {
             {
                 track.words.push((k, words.to_owned()));
             }
-            track.frames.push((k, Snap { rect: e.rect, vis: e.visible, op: e.opacity, scale: e.scale, flags, phase: e.loop_phase.map_or(f32::NAN, |p| p as f32) }));
+            track.frames.push((k, Snap { rect: e.rect, vis: e.visible, op: e.opacity, scale: e.scale, flags, phase: e.loop_phase.map_or(f32::NAN, |p| p as f32), scrolled: e.scrolled }));
         }
     }
 }
@@ -247,6 +249,12 @@ fn seen(s: &Snap, size: (f32, f32)) -> bool {
 
 fn edge(s: &Snap, axis: usize) -> f32 {
     s.rect[axis]
+}
+
+/// An edge against the content it scrolls with: a node gliding inside a list that follows its
+/// end makes one motion there, however the scroll adds to it on screen.
+fn own_edge(s: &Snap, axis: usize) -> f32 {
+    s.rect[axis] + s.scrolled.get(axis).copied().unwrap_or(0.0)
 }
 
 const AXES: [&str; 4] = ["x", "y", "w", "h"];
@@ -423,8 +431,9 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
                         detail: format!("{} step {:+.1} → {:+.1} pt/frame ({:.0} → {:.0} pt/s)", AXES[axis], before, step, before as f64 * rec.hz, step as f64 * rec.hz) }));
                 }
             }
-            // Motion segments: frames that move this edge, through the odd still frame at a
-            // turn (a spring's peak), until it rests three frames.
+            // Motion segments: frames that move this edge against its scroll, through the odd
+            // still frame at a turn (a spring's peak), until it rests three frames.
+            let d: Vec<Option<f32>> = (1..fs.len()).map(|j| (fs[j].0 == fs[j - 1].0 + 1).then(|| own_edge(&fs[j].1, axis) - own_edge(&fs[j - 1].1, axis))).collect();
             let moving = |j: usize| d[j - 1].is_some_and(|x| x.abs() > 0.01);
             let mut j = 1;
             while j < fs.len() {
@@ -439,9 +448,9 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
                 if b - a + 1 < 3 { continue; }
                 let seg = &fs[a - 1..=b];
                 let (k0, k1) = (seg[0].0, seg[seg.len() - 1].0);
-                if k1 <= rec.start || seg.iter().all(|f| !seen(&f.1, size) || f.1.op < rule("faint")) || seg.iter().any(|f| f.1.flags & (SCROLLING | LIVE | VIRTUAL) != 0) { continue; }
+                if k1 <= rec.start || seg.iter().all(|f| !seen(&f.1, size) || f.1.op < rule("faint")) || seg.iter().any(|f| f.1.flags & (LIVE | VIRTUAL) != 0) { continue; }
                 if input_between(k0 + 1, k1) { continue; } // retargeted mid-flight
-                let vals: Vec<f32> = seg.iter().map(|f| edge(&f.1, axis)).collect();
+                let vals: Vec<f32> = seg.iter().map(|f| own_edge(&f.1, axis)).collect();
                 let (start, rest) = (vals[0], vals[vals.len() - 1]);
                 let travel = rest - start;
                 let mut signs = Vec::new();

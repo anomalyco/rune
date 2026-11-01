@@ -12,6 +12,8 @@ pub(crate) struct Trace {
     ids: HashMap<String, u32>,
     described: HashMap<u32, (String, &'static str, &'static str)>,
     states: HashMap<u32, ([i64; 6], u32, [i64; 4])>,
+    /// Each element's `ElementInfo::scrolled` last written, in hundredths of a point (none: 0).
+    scrolled: HashMap<u32, [i64; 2]>,
     effects: HashMap<u32, [String; 2]>,
     channels: rune_motion::TraceChannels,
     path: PathBuf,
@@ -55,7 +57,7 @@ impl Trace {
         });
         if clock == "wall" { header["timestamp"] = "cpu-submit".into(); }
         let _ = writeln!(out, "{header}");
-        Trace { out, ids: HashMap::new(), described: HashMap::new(), states: HashMap::new(), effects: HashMap::new(),
+        Trace { out, ids: HashMap::new(), described: HashMap::new(), states: HashMap::new(), scrolled: HashMap::new(), effects: HashMap::new(),
             channels: Default::default(), path: path.clone(), all: false, presents: None, surface: None }
     }
 
@@ -95,6 +97,7 @@ impl Trace {
         let settled = rt.settled;
         let mut metas = Vec::new();
         let mut changed = Vec::new();
+        let mut scrolled = Vec::new();
         let mut seen = HashSet::new();
         // A virtual list's invisible estimated extent changes when rows are measured or the
         // window rebases. Record the actual row surfaces, not that bookkeeping rectangle.
@@ -155,6 +158,11 @@ impl Trace {
                 (f64::from(e.opacity) * 1000.0).round() as i64,
                 (f64::from(e.radius) * 100.0).round() as i64,
             ];
+            let sc = e.scrolled.map(|v| (f64::from(v) * 100.0).round() as i64);
+            if self.scrolled.get(&id).copied().unwrap_or_default() != sc {
+                scrolled.push(json!([id, r2(e.scrolled[0]), r2(e.scrolled[1])]));
+                if sc == [0; 2] { self.scrolled.remove(&id); } else { self.scrolled.insert(id, sc); }
+            }
             let state = (q, flags, e.visible.map(|v| (v * 100.0).round() as i64));
             if self.states.get(&id) != Some(&state) {
                 self.states.insert(id, state);
@@ -178,6 +186,7 @@ impl Trace {
         // A settle unmounts what it replaces at once: a cut (transition | opacity) at its last place.
         let mut cuts = Vec::new();
         for id in &gone {
+            self.scrolled.remove(id);
             if let Some(names) = self.effects.remove(id) {
                 for name in names { self.channels.remove(&name); }
             }
@@ -222,6 +231,10 @@ impl Trace {
         }
         if !gone.is_empty() {
             line["g"] = gone.into();
+        }
+        // How far scrolling carries each element, when that changed: [id, x, y] in points.
+        if !scrolled.is_empty() {
+            line["sc"] = scrolled.into();
         }
         if !cuts.is_empty() {
             line["ai"] = cuts.into();

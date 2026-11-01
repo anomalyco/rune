@@ -5,7 +5,7 @@ fn rec(tracks: Vec<(&str, Vec<(usize, [f32; 4], f32)>)>, frames: usize) -> Recor
     r.frames = frames;
     for (path, fs) in tracks {
         let i = r.track(path, None);
-        r.tracks[i].frames = fs.into_iter().map(|(k, rect, op)| (k, Snap { rect, vis: rect, op, scale: 1.0, flags: INK, phase: f32::NAN })).collect();
+        r.tracks[i].frames = fs.into_iter().map(|(k, rect, op)| (k, Snap { rect, vis: rect, op, scale: 1.0, flags: INK, phase: f32::NAN, scrolled: [0.0; 2] })).collect();
     }
     r
 }
@@ -160,6 +160,32 @@ fn where_counts_roll_a_ticking_count_is_a_text_swap_but_a_rolling_label_is_not()
     assert_eq!(kinds(&r), ["text-swap"], "a clock that snaps instead of rolling");
     // The label over its rolling glyphs reads "9s" then "10s" as its digits roll.
     let glyph = r.track("count/digit-1", Some(0));
-    r.tracks[glyph].frames = (0..60).map(|k| (k, Snap { rect: [0.0, 0.0, 8.0, 20.0], vis: [0.0, 0.0, 8.0, 20.0], op: 1.0, scale: 1.0, flags: INK, phase: f32::NAN })).collect();
+    r.tracks[glyph].frames = (0..60).map(|k| (k, Snap { rect: [0.0, 0.0, 8.0, 20.0], vis: [0.0, 0.0, 8.0, 20.0], op: 1.0, scale: 1.0, flags: INK, phase: f32::NAN, scrolled: [0.0; 2] })).collect();
     assert!(kinds(&r).is_empty());
+}
+
+#[test]
+fn motion_inside_a_scroll_is_judged_against_the_scroll() {
+    // A list follows its growing end, carrying its content up 2 pt a frame, while a node in it
+    // moves on its own. `scrolled` is how far the scroll carries the node.
+    let offset = |k: usize| 2.0 * k as f32;
+    let run = |own: &dyn Fn(usize) -> f32, flags: u8, told: bool| {
+        let fs: Vec<_> = (0..60).map(|k| (k, [0.0, 300.0 + own(k) - offset(k), 100.0, 40.0], 1.0)).collect();
+        let mut r = rec(vec![("list/node", fs)], 60);
+        for (k, f) in &mut r.tracks[0].frames {
+            f.flags |= flags;
+            if told { f.scrolled = [0.0, offset(*k)]; }
+        }
+        kinds(&r)
+    };
+    // Gliding down 60 pt: fast at first, so on screen it falls, then rises with the scroll.
+    let glide = |k: usize| 60.0 * (1.0 - (-(k as f32) / 8.0).exp());
+    assert_eq!(run(&glide, 0, false), ["reversal"], "on screen the glide and the scroll turn back");
+    assert!(run(&glide, 0, true).is_empty(), "against the scroll it is one glide");
+    assert!(run(&glide, SCROLLING, true).is_empty());
+    // Wobbling in place: on screen the scroll's 2 pt a frame hides the turns.
+    let wobble = |k: usize| 2.5 * (k as f32 * 0.6).sin();
+    assert!(run(&wobble, 0, false).is_empty(), "on screen it only ever rises");
+    assert_eq!(run(&wobble, 0, true), ["jiggle"], "against the scroll it wobbles");
+    assert_eq!(run(&wobble, SCROLLING, true), ["jiggle"], "a scroll that moves doesn't excuse it");
 }
