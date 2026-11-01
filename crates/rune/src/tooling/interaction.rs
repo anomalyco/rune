@@ -281,11 +281,13 @@ impl Tracker {
 }
 
 impl Drop for Tracker {
-    /// A window closing, or the app quitting, sends what it counted since the last rollup.
+    /// A window closing, or the app quitting, sends what it counted since the last rollup. It
+    /// doesn't wait for it to go: a closing window would freeze the app's other windows, and
+    /// macOS runs a main thread that just slept on a slower core for its next frames. The app's
+    /// event loop [`flush`]es once, as it exits.
     fn drop(&mut self) {
         if self.rolled_since.is_none() { return; }
         self.roll(true);
-        flush();
     }
 }
 
@@ -314,6 +316,7 @@ pub(crate) fn send(slow: Slow) {
 }
 
 /// Waits up to a second for everything queued to reach the collector, before the process exits.
+/// Returns at once when nothing was ever sent.
 pub(crate) fn flush() {
     if on() { export::flush(Duration::from_secs(1)); }
 }

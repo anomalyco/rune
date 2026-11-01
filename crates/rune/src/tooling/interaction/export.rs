@@ -34,12 +34,15 @@ pub(crate) fn send(message: Message) -> bool {
 
 /// Waits up to `limit` for everything queued to be posted, for a process about to exit.
 pub(crate) fn flush(limit: Duration) {
+    let Some(Some(out)) = OUT.get() else { return };
     let (done, wait) = std::sync::mpsc::sync_channel(1);
-    if send(Message::Flush(done)) { let _ = wait.recv_timeout(limit); }
+    if out.send(Message::Flush(done)).is_ok() { let _ = wait.recv_timeout(limit); }
 }
 
+/// The posting thread's queue, made by the first send.
+static OUT: OnceLock<Option<Sender<Message>>> = OnceLock::new();
+
 fn sender() -> Option<&'static Sender<Message>> {
-    static OUT: OnceLock<Option<Sender<Message>>> = OnceLock::new();
     OUT.get_or_init(|| {
         let to = super::gate::collector()?;
         let (out, messages) = channel::<Message>();
