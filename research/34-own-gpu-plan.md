@@ -643,8 +643,20 @@ text rows, scrolling at 600 pt/s) sampled at 7 s, about 400 frames in.
 
 **The claim does not hold in these workloads.** The two backends are within a few MB of each
 other everywhere, and neither gets near 330 MB, let alone 1.5 GB. Metal has about 3 MB less RSS;
-in the scrolling window it has about 6 MB more footprint,. I sampled only at 7 s, so growth over a longer run is
+in the scrolling window it has about 6 MB more footprint. I sampled only at 7 s, so growth over a longer run is
 not ruled out.
+
+**Where the reported gap most likely came from: an unpaced headless run.** A later headless
+scroll benchmark that submits frames as fast as it can (about 1,650 a second, 900 frames)
+reproduced it: 325 MB footprint on Metal against 1,956 MB on wgpu. The GPU can't keep up at that
+rate, so both runs take the same 0.55 s. Rune's Metal queue keeps Apple's default limit of 64
+command buffers in flight and blocks the next one at the start of encode. wgpu allows 2,048, so
+it never blocks and gets hundreds of frames ahead, each holding its own buffers. A window paces
+frames to the display, so neither queue fills there, which matches the tables above. The same
+wait is why such a run reports a higher `encode_ms` on Metal (0.35 ms against 0.19) while its
+frame CPU is lower (0.27 to 0.30 ms against 0.38). `encode_ms` is elapsed time, so in an unpaced
+run it mostly measures how far behind the GPU is; compare backends there with `thread_cpu_ms` or
+`cpu_ms`.
 
 Where the footprint goes (`footprint` by category, one run each):
 
