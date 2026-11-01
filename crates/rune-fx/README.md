@@ -160,14 +160,16 @@ Fx::fill(FlutedGlassParams { rib: 10.0, frost: 0.4, ..FlutedGlassParams::reeded(
 - Distortion and motion blur write replacement pixels with `a = 1` inside their mask.
 
 **Targets and blend modes**
-- One `FxRenderer` draws into any number of target formats: `add_format` builds the pipelines for
-  another one, and `draw_layer_in(pass, format, origin, layer)` draws into a pass of that format
+- One `FxRenderer` draws into any number of target formats: `add_format` adds another one, and `draw_layer_in(pass, format, origin, layer)` draws into a pass of that format
   whose top-left pixel is at `origin` in window pixels (a Rune effect slot's `EffectSite`: the
   frame target, or an isolated layer's `Rgba16Float` target, where the layer's opacity, blur and
   clip then apply). Effects are still shaded in window coordinates; pass `FxSlot::scale(site.scale)`
   so a zoomed slot (`scale` / `live_scale`) converts its device-pixel rect and lengths with its own
   device-px-per-pt factor, and `FxSlot::clip(i.clip, i.fade)` in `prepare_with_slots` so a slot outside an isolated layer
   is cut by rounded container corners and soft scroll-edge feathers (`CLIP_WGSL`).
+- Each effect family's pipeline for a format and blend is built the first time a frame draws
+  it (those one `prepare` needs build in parallel), so a renderer pays only for what it shows.
+  On a cold Metal shader cache that's 20 to 150 ms per pipeline.
 - `FxSlot::blend(FxBlend)` selects how a slot composites onto the target beneath it:
   `FxBlend::Normal` (default premultiplied source-over with additive light), `FxBlend::Multiply`,
   `FxBlend::Screen`, `FxBlend::Overlay`, or `FxBlend::SoftLight`. `Screen` uses

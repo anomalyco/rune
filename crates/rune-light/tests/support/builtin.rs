@@ -18,6 +18,7 @@ pub fn build_every_pipeline(gpu: &rune::render::Gpu) -> Vec<(&'static str, f64)>
     let (mut fx, t) = ms(|| rune_fx::FxRenderer::new(&gpu.device, format, Default::default()));
     out.push(("fx", t));
     out.push(("fx_layer_format", ms(|| fx.add_format(&gpu.device, wgpu::TextureFormat::Rgba16Float)).1));
+    out.push(("fx_every_pipeline", ms(|| fx.build_every_pipeline()).1));
     out.push(("fx_fire_sim", ms(|| fx.set_fire_sim(&gpu.device, true)).1));
     out.push(("light", ms(|| drop(rune_light::LightRenderer::new(&gpu.device, &gpu.queue, 256, 256, format))).1));
     out.push(("glass", ms(|| drop(rune_light::GlassRenderer::new(&gpu.device, 256, 256, format))).1));

@@ -17,6 +17,7 @@ mod cpu;
 mod fill;
 mod pack;
 mod params;
+mod pipes;
 mod renderer;
 mod sim;
 #[cfg(test)]

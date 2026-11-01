@@ -370,8 +370,8 @@ medians, M-class MacBook Pro). Cold means `com.apple.metal` was cleared before t
 | video | 201 ms | 22 ms | 1.1 ms | 0.2 ms |
 | transparent window (straight alpha) | 87 ms | 5 ms | 0.2 ms | 0.1 ms |
 | `Renderer::with_springs` | 305 ms | 81 ms | 3.3 ms | 0.2 ms |
-| `FxRenderer::new` | 3,627 ms | 1,260 ms | 32.5 ms | 1.2 ms |
-| `FxRenderer::add_format` | 1,283 ms | 1,263 ms | 15.1 ms | 0.8 ms |
+| `FxRenderer::new` (before lazy pipelines, below) | 3,627 ms | 1,260 ms | 32.5 ms | 1.2 ms |
+| `FxRenderer::add_format` (likewise) | 1,283 ms | 1,263 ms | 15.1 ms | 0.8 ms |
 | fire simulation | 1,207 ms | 101 ms | 2.0 ms | 0.2 ms |
 | `LightRenderer::new` | 1,389 ms | 127 ms | 5.7 ms | 0.6 ms |
 | `GlassRenderer::new` | 392 ms | 126 ms | 6.0 ms | 4.0 ms |
@@ -379,7 +379,8 @@ medians, M-class MacBook Pro). Cold means `com.apple.metal` was cleared before t
 Most of a cold pipeline is Metal's front end (MSL to AIR). Clearing only Metal's library cache
 cost a first layer blur 555 ms, and clearing only its function cache cost 45 ms. What remains is
 GPU code generation, which the precompiled library can't skip. That's why `add_format`, the same
-fx functions for another format, stays at 1.26 s cold. 1,669 readbacks across the rune, rune-fx
+fx functions for another format, stayed at 1.26 s cold (until rune-fx stopped building pipelines it
+hadn't drawn, below). 1,669 readbacks across the rune, rune-fx
 and rune-light tests were byte-identical with the library on and off. `settings` first pixels
 didn't change (it builds only the uber pipeline).
 
@@ -404,6 +405,51 @@ precompiled library also covers the uber shader, which compiled at runtime there
 
 The device library (`builtin_native_ios.metallib`) compiles from the same MSL but hasn't run on
 a phone yet.
+
+#### Done: rune-fx builds a pipeline the first time a frame draws it
+
+`FxRenderer::new` built every effect family (8) in both blends (16 pipelines), plus the mask
+pyramid's and the backdrop blur's three, serially on the calling thread, and `add_format` built the
+16 again for each extra format, whether or not the app ever drew those effects. After the library,
+what's left of a cold pipeline is GPU code generation, and none of it is shared: per pipeline, on a
+cold cache, glow 35 ms, pulse 31, electric 38, fire 74, distort 61, motion 21, extras 39 and fill
+152, and the screen blend and the `Rgba16Float` format each cost as much again as the first, since
+Apple GPUs blend in the fragment shader and each format is its own variant. Serially that's
+937 ms per format.
+
+Now each `(format, family, blend)` pipeline sits in a `OnceLock` and is built when a frame first
+needs it. `prepare` builds the ones its layers use for the frame's format, in parallel (scoped
+threads; Metal compiles concurrently, and wgpu's `Device` is `Send + Sync`), and a draw into
+another format builds its own on demand. The mask pyramid and backdrop blur passes wait for
+`build_mips` and the first frosted layer. The keys the precompiled library looks up don't change,
+so `builtin_shaders` (which now calls `FxRenderer::build_every_pipeline`) still finds all of them.
+
+Measured with `crates/rune-fx/examples/first_glow.rs` (`--profile perf`, fresh processes,
+10 alternating rounds, medians, an M4 Pro Mac mini, native Metal backend with the library): new
+renderer, `add_format(Rgba16Float)`, then prepare, draw, submit and read back one glow.
+
+| First glow | Cold, before | Cold, after | Warm, before | Warm, after |
+|---|---|---|---|---|
+| `FxRenderer::new` | 919 ms | 0.14 ms | 1.47 ms | 0.10 ms |
+| `FxRenderer::add_format` | 865 ms | 0.00 ms | 0.67 ms | 0.00 ms |
+| first frame (prepare, draw, read back) | 5.8 ms | 70.7 ms | 5.6 ms | 6.1 ms |
+| **total, `new` to pixels** | **1,799 ms** | **70.9 ms** | **7.9 ms** | **6.2 ms** |
+
+About half of the 70 ms is a fresh process's first pipeline warming Metal's compiler up; after a
+`Renderer::new` (as in an app) the same glow pipeline takes 40 to 50 ms cold. All 35 pipelines at
+once (`shader_first_use`'s `fx_every_pipeline`, both formats, in parallel) take 410 ms cold against
+1,796 ms for `new` plus `add_format` before; 16 pipelines on 16 threads take 217 ms, on 4 threads
+332 ms, serially 937 ms.
+
+- **Considered: compile everything in the background at `new` and wait only at first draw.** The
+  glow is ready just as fast (70 ms, it goes first), but it spends about 930 ms of compiler time
+  per format on effects an app may never show, competing with its launch.
+- **Considered: skip an effect until its pipeline is ready.** No frame would wait, but the first
+  frame would draw without the effect and then pop it in, and readbacks of a first frame would
+  change.
+- **Not split: the two blend states.** Screen blending (`One, OneMinusSrc`) needs the destination,
+  which only fixed-function blending gives without a backdrop copy, so it stays its own pipeline,
+  built only when a `FxBlend::Screen` slot draws.
 
 #### Considered, not done: `MTLBinaryArchive`
 

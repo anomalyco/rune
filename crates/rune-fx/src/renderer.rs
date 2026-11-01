@@ -1,26 +1,14 @@
-//! FxRenderer: one pipeline per effect family (built ahead of time), one storage buffer of
+//! FxRenderer: one pipeline per effect family (built at first draw, `pipes`), one storage buffer of
 //! instances, one of motion poses. `prepare` uploads and culls; `draw_layer` / `draw_all` encode
 //! into the caller's render pass (target must not be the backdrop texture).
 
 use crate::*;
 use crate::binds::BindSet;
+use crate::pipes::{Passes, Pipes, blend_index};
 use wgpu::util::DeviceExt;
 
 #[path = "renderer_prepare.rs"]
 mod prepare;
-
-const CLIP: &str = include_str!("../../rune/src/clip.wgsl");
-const COMMON: &str = include_str!("shaders/common.wgsl");
-const SOURCES: [(&str, &str); KINDS] = [
-    ("glow", include_str!("shaders/glow.wgsl")),
-    ("pulse", include_str!("shaders/pulse.wgsl")),
-    ("electric", include_str!("shaders/electric.wgsl")),
-    ("fire", include_str!("shaders/fire.wgsl")),
-    ("distort", include_str!("shaders/distort.wgsl")),
-    ("motion", include_str!("shaders/motion.wgsl")),
-    ("extras", include_str!("shaders/extras.wgsl")),
-    ("fill", include_str!("shaders/fill.wgsl")),
-];
 
 /// Everything one frame of effects needs.
 pub struct FxFrame<'a> {
@@ -161,12 +149,9 @@ impl BlurPyramid {
 }
 
 pub struct FxRenderer {
-    pipelines: Vec<[wgpu::RenderPipeline; 2]>,
+    /// The effect pipelines for the frame target's `format` and those `add_format` adds.
+    pipes: Pipes,
     format: wgpu::TextureFormat,
-    layout: wgpu::PipelineLayout,
-    modules: Vec<wgpu::ShaderModule>,
-    /// Pipelines for other target formats (`add_format`), one pair per effect family.
-    extra: Vec<(wgpu::TextureFormat, Vec<[wgpu::RenderPipeline; 2]>)>,
     srgb: Option<bool>,
     bgl0: wgpu::BindGroupLayout,
     bgl1: wgpu::BindGroupLayout,
@@ -185,11 +170,12 @@ pub struct FxRenderer {
     prepared: Vec<Option<Prepared>>,
     scratch: Vec<InstRaw>,
     scratch_xf: Vec<[f32; 4]>,
-    mip_pipeline: wgpu::RenderPipeline,
+    /// The mask pyramid's downsampler, built by the first `build_mips`.
+    mip: Passes<1>,
     mip_bgl: wgpu::BindGroupLayout,
     blur: Option<BlurPyramid>,
-    blur_down: wgpu::RenderPipeline,
-    blur_up: wgpu::RenderPipeline,
+    /// The backdrop blur's down and up passes, built by the first frame with a frosted layer.
+    blur_passes: Passes<2>,
     blur_bgl: wgpu::BindGroupLayout,
     blur_uniforms: wgpu::Buffer,
     blur_slot: usize,
@@ -255,14 +241,7 @@ impl FxRenderer {
                 usage: wgpu::BufferUsages::UNIFORM,
             })
         });
-        let modules: Vec<wgpu::ShaderModule> = SOURCES
-            .iter()
-            .map(|(name, src)| device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(name),
-                source: wgpu::ShaderSource::Wgsl(format!("{CLIP}\n{COMMON}\n{src}").into()),
-            }))
-            .collect();
-        let pipelines = Self::pipelines(device, &layout, &modules, format);
+        let pipes = Pipes::new(device, layout, format);
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("fx globals"),
             size: 16,
@@ -302,35 +281,7 @@ impl FxRenderer {
             bind_group_layouts: &[Some(&mip_bgl)],
             immediate_size: 0,
         });
-        let mip_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("fx mip"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mip.wgsl").into()),
-        });
-        let mip_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("fx mip"),
-            layout: Some(&mip_layout),
-            vertex: wgpu::VertexState {
-                module: &mip_module,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &mip_module,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: MaskPyramid::FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let mip = Passes::new(device, mip_layout, "fx mip", include_str!("shaders/mip.wgsl"), ["fs"], MaskPyramid::FORMAT);
 
         // Backdrop blur pyramid (frosted glass).
         let blur_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -347,30 +298,7 @@ impl FxRenderer {
             bind_group_layouts: &[Some(&blur_bgl)],
             immediate_size: 0,
         });
-        let blur_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("fx blur"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/blur.wgsl").into()),
-        });
-        let blur_pipe = |entry: &str| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(entry),
-                layout: Some(&blur_layout),
-                vertex: wgpu::VertexState { module: &blur_module, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
-                primitive: Default::default(),
-                depth_stencil: None,
-                multisample: Default::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &blur_module,
-                    entry_point: Some(entry),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: None, write_mask: wgpu::ColorWrites::ALL })],
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let blur_down = blur_pipe("fs_down");
-        let blur_up = blur_pipe("fs_up");
+        let blur_passes = Passes::new(device, blur_layout, "fx blur", include_str!("shaders/blur.wgsl"), ["fs_down", "fs_up"], wgpu::TextureFormat::Rgba16Float);
         let blur_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("fx blur params"),
             size: (BLUR_SLOTS * 256) as u64,
@@ -381,11 +309,8 @@ impl FxRenderer {
         let inst_cap = 64;
         let xform_cap = 4096;
         FxRenderer {
-            pipelines,
+            pipes,
             format,
-            layout,
-            modules,
-            extra: Vec::new(),
             srgb: None,
             bgl0,
             bgl1,
@@ -403,11 +328,10 @@ impl FxRenderer {
             prepared: Vec::new(),
             scratch: Vec::new(),
             scratch_xf: Vec::new(),
-            mip_pipeline,
+            mip,
             mip_bgl,
             blur: None,
-            blur_down,
-            blur_up,
+            blur_passes,
             blur_bgl,
             blur_uniforms,
             blur_slot: 0,
@@ -418,55 +342,26 @@ impl FxRenderer {
         }
     }
 
-    fn pipelines(device: &wgpu::Device, layout: &wgpu::PipelineLayout, modules: &[wgpu::ShaderModule], format: wgpu::TextureFormat) -> Vec<[wgpu::RenderPipeline; 2]> {
-        let blends = [
-            wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
-            wgpu::BlendState {
-                color: wgpu::BlendComponent {
-                    src_factor: wgpu::BlendFactor::One,
-                    dst_factor: wgpu::BlendFactor::OneMinusSrc,
-                    operation: wgpu::BlendOperation::Add,
-                },
-                alpha: wgpu::BlendComponent::OVER,
-            },
-        ];
-        modules
-            .iter()
-            .zip(SOURCES)
-            .map(|(module, (name, _))| {
-                blends.map(|blend| {
-                    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                        label: Some(name),
-                        layout: Some(layout),
-                        vertex: wgpu::VertexState { module, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
-                        primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleStrip, ..Default::default() },
-                        depth_stencil: None,
-                        multisample: Default::default(),
-                        fragment: Some(wgpu::FragmentState {
-                            module,
-                            entry_point: Some("fs"),
-                            compilation_options: Default::default(),
-                            targets: &[Some(wgpu::ColorTargetState {
-                                format,
-                                blend: Some(blend),
-                                write_mask: wgpu::ColorWrites::ALL,
-                            })],
-                        }),
-                        multiview_mask: None,
-                        cache: None,
-                    })
-                })
-            })
-            .collect()
+    /// Lets this renderer draw into targets of another format too, so one renderer serves a
+    /// window target and the `Rgba16Float` target of an isolated layer alike (`draw_layer_in`).
+    /// Each effect's pipeline for it is built the first time a layer draws into it.
+    pub fn add_format(&mut self, _device: &wgpu::Device, format: wgpu::TextureFormat) {
+        self.pipes.add(format);
     }
 
-    /// Builds the effect pipelines for another target format, once, so one renderer serves a
-    /// window target and the `Rgba16Float` target of an isolated layer alike (`draw_layer_in`).
-    pub fn add_format(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
-        if format != self.format && !self.extra.iter().any(|(f, _)| *f == format) {
-            let p = Self::pipelines(device, &self.layout, &self.modules, format);
-            self.extra.push((format, p));
-        }
+    /// Builds every pipeline: each effect's for every format added so far, the mask pyramid's
+    /// and the backdrop blur's. For the test that checks they're all precompiled.
+    #[doc(hidden)]
+    pub fn build_every_pipeline(&self) {
+        self.pipes.warm_all();
+        self.mip.get();
+        self.blur_passes.get();
+    }
+
+    /// How many effect pipelines are built so far, across formats. For tests.
+    #[doc(hidden)]
+    pub fn built_pipelines(&self) -> usize {
+        self.pipes.built()
     }
 
     /// Match the frame's blend mode (`rune::Frame::srgb_blend`): when true, the premultiplied
@@ -478,18 +373,8 @@ impl FxRenderer {
         self.srgb = Some(on);
     }
 
-    fn set_format(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
-        if format == self.format {
-            return;
-        }
-        if let Some((f, p)) = self.extra.iter_mut().find(|(f, _)| *f == format) {
-            std::mem::swap(&mut self.pipelines, p);
-            *f = self.format;
-        } else {
-            let p = Self::pipelines(device, &self.layout, &self.modules, format);
-            let old = std::mem::replace(&mut self.pipelines, p);
-            self.extra.push((self.format, old));
-        }
+    fn set_format(&mut self, format: wgpu::TextureFormat) {
+        self.pipes.add(format);
         self.format = format;
     }
 
@@ -543,17 +428,12 @@ impl FxRenderer {
     /// take the layer's opacity, blur and clip when it composites. Resets the viewport after.
     pub fn draw_layer_in(&self, pass: &mut wgpu::RenderPass<'_>, format: wgpu::TextureFormat, origin: [f32; 2], layer: usize) {
         let Some(Some(p)) = self.prepared.get(layer) else { return };
-        let pipelines = if format == self.format { &self.pipelines }
-            else { &self.extra.iter().find(|(f, _)| *f == format).expect("FxRenderer::add_format first").1 };
+        let target = self.pipes.target(format).expect("FxRenderer::add_format first");
         let shifted = origin != [0.0; 2];
         if shifted {
             pass.set_viewport(-origin[0], -origin[1], self.viewport[0] as f32, self.viewport[1] as f32, 0.0, 1.0);
         }
-        let blend_idx = match p.blend {
-            FxBlend::Screen => 1,
-            FxBlend::Normal | FxBlend::Multiply | FxBlend::Overlay | FxBlend::SoftLight => 0,
-        };
-        pass.set_pipeline(&pipelines[p.kind][blend_idx]);
+        pass.set_pipeline(self.pipes.get(target, p.kind, blend_index(p.blend)));
         pass.set_bind_group(0, self.bg0.as_ref().unwrap(), &[]);
         pass.set_bind_group(1, self.binds.get(p.bind), &[]);
         pass.draw(0..4, p.instance..p.instance + 1);
@@ -659,14 +539,15 @@ impl FxRenderer {
             pass.set_bind_group(0, bg, &[(slot * 256) as u32]);
             pass.draw(0..3, 0..1);
         };
+        let [blur_down, blur_up] = self.blur_passes.get();
         for m in 0..=n {
             let bg = if m == 0 { first } else { &pyr.down_binds[m - 1] };
-            run(&self.blur_down, &pyr.down[m], bg, base + m, m);
+            run(blur_down, &pyr.down[m], bg, base + m, m);
         }
         for m in (0..n).rev() {
             let (from_down, from_up) = &pyr.up_binds[m];
             let bg = if m + 1 == n { from_down } else { from_up.as_ref().unwrap() };
-            run(&self.blur_up, &pyr.up[m], bg, base + m, m);
+            run(blur_up, &pyr.up[m], bg, base + m, m);
         }
         true
     }
@@ -690,6 +571,7 @@ impl FxRenderer {
                 })
                 .collect()
         });
+        let [mip] = self.mip.get();
         for (lvl, bg) in (1..pyramid.mips).zip(binds) {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("fx mip"),
@@ -704,7 +586,7 @@ impl FxRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.mip_pipeline);
+            pass.set_pipeline(mip);
             pass.set_bind_group(0, bg, &[]);
             pass.draw(0..3, 0..1);
         }

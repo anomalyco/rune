@@ -13,7 +13,7 @@ impl FxRenderer {
     pub fn prepare_with_slots(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &FxFrame, slots: &[FxSlot]) -> FxStats {
         if let Some(srgb) = self.srgb {
             let target = if srgb { self.format.remove_srgb_suffix() } else { self.format.add_srgb_suffix() };
-            self.set_format(device, target);
+            self.set_format(target);
         }
         let mut stats = FxStats::default();
         self.scratch.clear();
@@ -30,8 +30,11 @@ impl FxRenderer {
             Fx::Fill(FillParams { style: FillStyle::FlutedGlass(p), .. }) => p.frost > 0.0,
             _ => false,
         };
-        if frame.layers.iter().any(wants_blur) && self.blur.as_ref().is_none_or(|b| b.size != frame.viewport) {
-            self.blur = Some(BlurPyramid::new(device, frame.viewport, &self.blur_bgl, &self.dummy, &self.sampler, &self.blur_uniforms));
+        if frame.layers.iter().any(wants_blur) {
+            self.blur_passes.get();
+            if self.blur.as_ref().is_none_or(|b| b.size != frame.viewport) {
+                self.blur = Some(BlurPyramid::new(device, frame.viewport, &self.blur_bgl, &self.dummy, &self.sampler, &self.blur_uniforms));
+            }
         }
         if let Some(sims) = self.sims.as_mut() {
             sims.begin_frame();
@@ -126,6 +129,7 @@ impl FxRenderer {
         }
         // Submitted now, ahead of the frame that draws them, as queue writes would be.
         staging.submit();
+        self.pipes.warm(self.format, self.prepared.iter().flatten().map(|p| (p.kind, blend_index(p.blend))));
         stats
     }
 
