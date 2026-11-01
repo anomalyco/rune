@@ -222,3 +222,49 @@ fn an_app_stepping_its_own_glide_holds_a_still_pointers_hover_until_it_stops() {
     assert_eq!(rt.state, [(5, true), (5, false), (25, true)], "once it stops, hover resolves once at the pointer");
     assert!(!rt.hover_hold.held, "and lets go");
 }
+
+/// What forty rows' hover handlers heard: `on_hover_change` and `on_hover`.
+#[derive(Default)]
+struct Heard {
+    changes: Vec<(usize, bool)>,
+    enters: Vec<usize>,
+}
+
+fn heard_rows(_: &Heard, _: &mut Cx<Heard>) -> El {
+    let rows = col().key("rows").w_full().children((0..40).map(|k| crate::row().key(format!("r{k}")).w_full().h(20.0)
+        .on_hover_change(move |s: &mut Heard, inside, _| s.changes.push((k, inside)))
+        .on_hover(move |s: &mut Heard| s.enters.push(k))));
+    col().size(200.0, 200.0).child(col().key("scroll").size(200.0, 200.0).scroll(crate::ScrollSpec { stick_bottom: false }).child(rows))
+}
+
+#[test]
+fn a_glide_to_an_offset_runs_no_hover_handler_under_a_still_pointer_until_it_lands() {
+    for spring in [None, Some(crate::Spring::new(0.18, 0.0))] {
+        let mut rt = Runtime::new(Heard::default(), heard_rows, (200.0, 200.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        rt.pointer_move(100.0, 110.0);
+        rt.frame(1.0 / 120.0);
+        rt.frame(1.0 / 120.0);
+        assert_eq!((&rt.state.changes[..], &rt.state.enters[..]), (&[(5, true)][..], &[5][..]));
+        rt.update_if(move |_, tx| {
+            match spring {
+                Some(spring) => tx.scroll_to_with("scroll", 0.0, 400.0, spring),
+                None => tx.scroll_to("scroll", 0.0, 400.0),
+            }
+            false
+        });
+        let commits = rt.stats.commits;
+        let mut frames = 0;
+        for _ in 0..600 {
+            rt.frame(1.0 / 120.0);
+            if rt.scrolls.values().all(|s| s.glide.is_none()) { break; }
+            frames += 1;
+        }
+        assert!(frames > 5, "{spring:?}: it glided");
+        assert_eq!(rt.stats.commits, commits, "{spring:?}: no hover handler ran mid-glide: {:?}", rt.state.changes);
+        for _ in 0..30 { rt.frame(1.0 / 120.0); }
+        assert_eq!(rt.state.changes, [(5, true), (5, false), (25, true)], "{spring:?}: once it lands, hover resolves once at the pointer");
+        assert_eq!(rt.state.enters, [5, 25], "{spring:?}");
+        assert!(!rt.hover_hold.held);
+    }
+}
