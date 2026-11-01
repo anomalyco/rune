@@ -574,6 +574,7 @@ impl<S: 'static> Runtime<S> {
     /// Compensate this frame's drawn displacement, in viewport coordinates. Sticky
     /// clamping may absorb part of a correction; the caller permits a bounded repaint.
     pub(super) fn follow_keeps(&mut self) -> bool {
+        self.end_takes_over();
         let mut moved = false;
         for k in &self.keeps {
             let Some(i) = self.nodes.iter().enumerate().position(|(i, n)| n.path == k.path && !self.subtree_exiting(i)) else { continue };

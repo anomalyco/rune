@@ -274,8 +274,8 @@ fn a_fold_shut_from_its_stuck_header_at_the_end_slides_up_under_it() {
     assert!(most < 24.0, "nothing that shows moves {most} pt in a frame (frame {at}): {:?}", &frames[at.saturating_sub(1)..=at]);
     let after: Vec<f32> = frames.iter().map(|f| f["after"]).collect();
     assert!(after.windows(2).all(|w| w[1] <= w[0] + 0.01), "the row below only rises: {after:?}");
-    // The steps that show ride up with the row below while the header holds, then hold still
-    // while the header comes down over them.
+    // The steps that show ride up with the row below the whole way, slowing as the header
+    // comes down over them.
     for w in frames.windows(2) {
         for (k, &y1) in w[1].iter().filter(|(k, _)| k.starts_with("step-")) {
             if let Some(&y0) = w[0].get(k) { assert!(y1 <= y0 + 0.01, "{k} moves down, {y0} to {y1}"); }
@@ -298,6 +298,59 @@ fn a_fold_shut_from_its_stuck_header_mid_timeline_still_glides() {
     assert!(after[2] > 100.0 && after[12] < 100.0 && after[40] < 28.5, "glides, rather than landing at once: {after:?}");
     assert!(frames[4].keys().any(|k| k.starts_with("step-")), "the steps still show as it shuts: {:?}", frames[4]);
     assert_eq!(*after.last().unwrap(), 28.0);
+}
+
+#[test]
+fn a_long_fold_shut_from_its_stuck_header_at_the_end_is_one_motion() {
+    // The rehearsal's long tool group: shut from its stuck header with the timeline's end just
+    // below the window. What shows used to ride the bottom edge up for 2 or 3 frames, stop dead
+    // when the end held the row below, and leave the header to come down over it alone, so the
+    // steps it covered landed out of sight. Now the steps slow as the header comes down, without
+    // a dead stop, nothing moves faster than the fold's own spring, and nothing lands unseen.
+    for offset in [1100.0, 1150.0, 1200.0] {
+        let mut rt = Runtime::new((true, 100.0), held_section, (300.0, 200.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, offset));
+        for _ in 0..4 { rt.frame(1.0 / 120.0); }
+        rt.update(|s, tx| { s.0 = false; tx.keep_on_screen("hdr"); });
+        // Each frame: the fold's height, and each element's top, visible height and height.
+        let mut frames: Vec<(f32, HashMap<String, (f32, f32, f32)>)> = Vec::new();
+        for _ in 0..120 {
+            rt.frame(1.0 / 120.0);
+            let els = rt.elements();
+            let turn = els.iter().find(|e| e.key.as_deref() == Some("turn")).unwrap().rect[3];
+            frames.push((turn, els.into_iter().filter_map(|e| {
+                let k = e.key.clone()?;
+                (k == "hdr" || k == "after" || k.starts_with("step-")).then_some((k, (e.rect[1], e.visible[3], e.rect[3])))
+            }).collect()));
+        }
+        assert!(!rt.animating, "{offset}: it settles");
+        let at = |f: usize, k: &str| frames[f].1.get(k).copied();
+        for f in 2..frames.len() {
+            let spring = (frames[f].0 - frames[f - 1].0).abs();
+            for (k, &(y, seen, _)) in &frames[f].1 {
+                let (Some((y1, seen1, _)), Some((y0, _, _))) = (at(f - 1, k), at(f - 2, k)) else { continue };
+                if seen < 0.5 && seen1 < 0.5 { continue; }
+                let (v0, v) = (y1 - y0, y - y1);
+                assert!(v.abs() <= spring + 0.5, "{offset}: {k} moves {v} pt in frame {f}, the fold {spring}");
+                // Still in view, it doesn't go from moving to stopped (or turn back) in a frame.
+                if seen > 0.5 && v0.abs() > 2.0 {
+                    assert!(v * v0.signum() >= 0.5 * v0.abs(), "{offset}: {k} goes from {v0} to {v} pt a frame in frame {f}");
+                }
+            }
+        }
+        // Nothing travels 40 pt in plain view and then drops out of it in one frame where it rests.
+        let last = &frames.last().unwrap().1;
+        for (k, &(rest, _, _)) in last.iter().filter(|(k, _)| k.starts_with("step-")) {
+            let mut travelled = 0.0;
+            for f in 1..frames.len() {
+                let (Some((y0, seen0, h)), Some((y, seen, _))) = (at(f - 1, k), at(f, k)) else { continue };
+                if seen0 >= h - 0.5 { travelled += (y - y0).abs(); }
+                assert!(!(travelled >= 40.0 && seen0 > h * 0.5 && seen < 0.5 && (y - rest).abs() < 0.5),
+                    "{offset}: {k} travels {travelled} pt in view, then is cut from view where it rests in frame {f}");
+            }
+        }
+    }
 }
 
 /// Shuts the fold from its stuck header as `shut_from_stuck` does, then `at` frames later (0:

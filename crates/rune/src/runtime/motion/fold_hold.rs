@@ -2,8 +2,10 @@
 //! `Tx::keep_on_screen`. Most of what it held may sit above that header, out of sight: that part
 //! goes at once, with the viewport's offset dropping by as much so nothing on screen moves, and
 //! the contents left ride the fold's bottom edge (`GrowTrack::hide_above`). What shows then
-//! slides up under the header on the fold's spring, the rows below rising with it, and once
-//! the viewport's end holds them there the header comes down over the rest instead. Opened
+//! slides up under the header on the fold's spring, the rows below rising with it. When the
+//! viewport's end will stop them short, the header gives way from the start instead, coming
+//! down a fixed share of each point the fold shuts by (`give_way`), so the bottom edge eases
+//! into its rest as the header comes down over the rest, and the two land together. Opened
 //! again before it lands, the contents ride back down, and what went above comes back there
 //! as the glide lands (`restore_above`), again with the offset taking it up; at a pinned end,
 //! it grows from its bottom instead, the header rising back to the top (`ride_from_end`).
@@ -38,18 +40,76 @@ impl<S: 'static> Runtime<S> {
         if let Some(to) = st.glide_to.as_mut() { *to = (*to - cut).max(0.0); }
     }
 
-    /// Row `j` of the commit's `nodes`, a fold opening again while its contents draw lifted,
-    /// in growth stack `c`: with its viewport pinned to its end, the holds on it, in it or above
-    /// it let go, so it grows from its bottom with the end held and its contents still, rather
-    /// than pushing the end down and then snapping its header up as it lands.
-    pub(super) fn ride_from_end(&mut self, nodes: &[Node], c: usize, j: usize) {
+    /// Folds `held` (id, points cut below the window) in growth stack `c` of the commit's
+    /// `nodes` just shut under their held headers. Riding their bottom edges up, what shows would
+    /// meet the viewport's end, stop dead and leave the header to come down the rest on its own:
+    /// instead each header comes down the share of the fold's travel the end can't take, so the
+    /// bottom slides `slack` points over the whole shut, on the same spring.
+    pub(super) fn give_way(&mut self, nodes: &[Node], c: usize, held: &[(NodeId, f32)]) {
         let Some(s) = std::iter::successors(nodes[c].parent, |&p| nodes[p].parent)
             .find(|&p| nodes[p].scroll.is_some() && nodes[p].scroll_axes.y()) else { return };
-        if !self.scrolls.get(&nodes[s].id).is_some_and(|st| st.pinned) { return; }
+        let Some(st) = self.scrolls.get(&nodes[s].id) else { return };
+        // How far the content's end sits below the viewport's bottom once the cuts land.
+        let slack = (st.max - st.offset) as f32 - held.iter().map(|&(_, below)| below).sum::<f32>();
+        let travel: f32 = held.iter().filter_map(|(id, _)| self.grows.get(id)).map(|g| g.h - g.target).sum();
+        if travel <= 1.0 || slack >= travel { return; }
+        let share = 1.0 - slack.max(0.0) / travel;
+        for (id, _) in held {
+            if let Some(g) = self.grows.get_mut(id) { g.give = Some(share); }
+        }
+    }
+
+    /// Fold `row`, shutting under its held header with `GrowTrack::give`, shut `d` points
+    /// further times its share: the hold on its header expects it that much lower.
+    pub(super) fn lower_hold(&mut self, row: NodeId, d: f32) {
+        let Some(header) = self.fold_headers.get(&row) else { return };
+        for k in self.keeps.iter_mut().filter(|k| k.hold.as_ref().is_some_and(|h| h.path == *header)) {
+            let scale = self.nodes.iter().position(|n| n.path == k.viewport).and_then(|s| self.drawn_scale.get(s).copied()).unwrap_or(1.0);
+            k.was += d * scale;
+        }
+    }
+
+    /// A header giving way lands as its viewport's end comes within pinning distance: the end
+    /// brings it the last fraction of a point, rather than the two trading it back and forth.
+    pub(super) fn end_takes_over(&mut self) {
+        if self.fold_headers.is_empty() || self.keeps.is_empty() { return; }
+        let giving: Vec<&String> = self.fold_headers.iter()
+            .filter(|(id, _)| self.grows.get(id).is_some_and(|g| g.give.is_some())).map(|(_, p)| p).collect();
+        if giving.is_empty() { return; }
+        let pinned = |viewport: &str| self.path_ids.get(viewport).and_then(|id| self.scrolls.get(id)).is_some_and(|st| st.pinned);
+        let drop: Vec<usize> = self.keeps.iter().enumerate()
+            .filter(|(_, k)| k.hold.as_ref().is_some_and(|h| giving.contains(&&h.path)) && pinned(&k.viewport)).map(|(i, _)| i).collect();
+        for i in drop.into_iter().rev() { self.keeps.remove(i); }
+    }
+
+    /// Row `j` of the commit's `nodes`, a fold opening again while its contents draw lifted,
+    /// in growth stack `c`: with its viewport pinned to its end, or its header giving way to it
+    /// (`giving`), the holds on it, in it or above it let go, so it grows from its bottom with
+    /// the end (or, short of it, the row below) held and its contents still, rather than pushing
+    /// the end down and then snapping its header up as it lands.
+    pub(super) fn ride_from_end(&mut self, nodes: &[Node], c: usize, j: usize, giving: bool) {
+        let Some(s) = std::iter::successors(nodes[c].parent, |&p| nodes[p].parent)
+            .find(|&p| nodes[p].scroll.is_some() && nodes[p].scroll_axes.y()) else { return };
+        let pinned = self.scrolls.get(&nodes[s].id).is_some_and(|st| st.pinned);
+        if !pinned && !giving { return; }
         let mut end = j + 1;
         while end < nodes.len() && nodes[end].parent.is_some_and(|p| p >= j) { end += 1; }
         let viewport = &nodes[s].path;
         self.keeps.retain(|k| k.viewport != *viewport || nodes.iter().position(|n| n.path == k.path).is_none_or(|i| i >= end));
+        if !pinned && self.drawn.len() == self.nodes.len()
+            && let Some(below) = nodes.get(end).filter(|n| n.path.starts_with(viewport.as_str()))
+            && let Some(i) = self.nodes.iter().position(|n| n.id == below.id)
+            && let Some(v) = self.nodes.iter().position(|n| n.id == nodes[s].id)
+        {
+            self.keeps.retain(|k| k.viewport != *viewport);
+            self.keeps.push(crate::runtime::sticky::Keep {
+                path: below.path.clone(),
+                viewport: viewport.clone(),
+                was: self.drawn[i][1] - self.drawn[v][1],
+                virtual_row: None,
+                hold: None,
+            });
+        }
         // How far below the viewport's top the fold's top showed: its header rises that far.
         let shown = (self.drawn.len() == self.nodes.len()).then(|| {
             let row = self.nodes.iter().position(|n| n.id == nodes[j].id)?;

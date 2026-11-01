@@ -73,7 +73,7 @@ impl<S: 'static> Runtime<S> {
         self.grow_acc -= steps as f32 * SUBSTEP;
         let now = self.t;
         let mut moving = false;
-        let mut restored = Vec::new();
+        let (mut restored, mut gave) = (Vec::new(), Vec::new());
         for (cid, stack) in self.stacks.iter_mut() {
             let Some(&ci) = self.node_index.get(cid) else { continue };
             let Some(spec) = self.nodes[ci].growth.as_deref().copied() else { continue };
@@ -105,6 +105,8 @@ impl<S: 'static> Runtime<S> {
                 }
                 let r = std::mem::take(&mut g.restore);
                 if r > 0.0 { restored.push((ci, *id, r)); }
+                if let Some(share) = g.give { gave.push((*id, (h0 - g.h) * share)); }
+                if !g.moving() { g.give = None; }
                 stack.grown += (g.h - h0).max(0.0);
                 st_growing |= g.target > g.h + 1.0 / 128.0;
                 st_moving |= g.moving() || (g.h - h0).abs() > 1e-5;
@@ -125,6 +127,7 @@ impl<S: 'static> Runtime<S> {
             moving |= st_moving;
         }
         for (ci, id, r) in restored { self.restore_above(ci, id, r); }
+        for (id, d) in gave { self.lower_hold(id, d); }
         moving
     }
 

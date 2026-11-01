@@ -191,7 +191,7 @@ impl<S: 'static> Runtime<S> {
             let pad_top = rows.first().map_or(stack.pad_top, |&j| nodes[j].target[1] - ctop);
             stack.pad_bottom = rows.last().map_or(nodes[c].target[3] - ctop - pad_top, |&j| nodes[c].target[3] - nodes[j].target[3]);
             stack.pad_top = pad_top;
-            let (mut hidden_cut, mut reopened) = (0.0, Vec::new());
+            let (mut hidden_cut, mut reopened, mut held) = (0.0, Vec::new(), Vec::new());
             for &j in rows {
                 let id = nodes[j].id;
                 let mut h = nodes[j].target[3] - nodes[j].target[1];
@@ -235,9 +235,11 @@ impl<S: 'static> Runtime<S> {
                         stack.pending_heights.remove(&id);
                         if (t - g.target).abs() > 1e-4 { g.duration = duration; }
                         let shutting = t < g.target - 1e-4;
-                        if t > g.target + 1e-4 && g.lift() > 0.0 { reopened.push(j); }
+                        if t > g.target + 1e-4 && g.lift() > 0.0 { reopened.push((j, g.give.is_some())); }
+                        let before = g.h;
                         g.retarget(t);
                         if let Some((above, header)) = hidden.filter(|_| shutting && g.shutting_fold()) {
+                            held.push((id, before - g.h));
                             hidden_cut += g.hide_above(above);
                             self.fold_headers.insert(id, header);
                         }
@@ -245,7 +247,8 @@ impl<S: 'static> Runtime<S> {
                 }
             }
             if hidden_cut > 0.0 { self.scroll_by_cut(&nodes, c, hidden_cut); }
-            for j in reopened.drain(..) { self.ride_from_end(&nodes, c, j); }
+            if !held.is_empty() { self.give_way(&nodes, c, &std::mem::take(&mut held)); }
+            for (j, giving) in reopened.drain(..) { self.ride_from_end(&nodes, c, j, giving); }
             if let Some(&last) = rows.last()
                 && !self.scene.contains(nodes[last].id)
                 && let Some(s) = std::iter::successors(nodes[c].parent, |&p| nodes[p].parent)

@@ -150,11 +150,14 @@ pub struct GrowTrack {
     /// Points of lifted contents put back above the row as its glide landed whole, for its
     /// viewport's offset to take up (`Runtime::restore_above`).
     pub(crate) restore: f32,
+    /// The share of each point it shuts by that a header held over it comes down, when the
+    /// viewport's end will stop its bottom short (`Runtime::give_way`).
+    pub(crate) give: Option<f32>,
 }
 
 impl GrowTrack {
     pub fn settled(h: f32) -> GrowTrack {
-        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, glide: None, feather: None, limit: f32::INFINITY, stage: None, slide: None, restore: 0.0 }
+        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, glide: None, feather: None, limit: f32::INFINITY, stage: None, slide: None, restore: 0.0, give: None }
     }
 
     pub fn moving(&self) -> bool {
@@ -170,6 +173,7 @@ impl GrowTrack {
             self.target = target;
             self.span = (target - self.h).abs();
             self.stage = None;
+            self.give = None;
             if self.glide.is_some() {
                 // Only what shows of a long fold moves: shutting, the part below the window goes
                 // first; opening, it lands once the spring has carried the row to the window's edge.
