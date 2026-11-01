@@ -11,13 +11,16 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde_json::{Value, json};
 
 use super::rollup::Roll;
-use super::{PHASE_NAMES, Slow};
+use super::{PHASE_NAMES, Slow, SlowFrame, Stacks};
 use crate::time::Instant;
 
 pub(crate) enum Message {
     /// Unit tests keep slow interactions (`tests::SENT`) rather than send them.
     #[cfg_attr(test, allow(dead_code))]
     Slow(Box<Slow>),
+    /// Unit tests keep slow frames (`tests::FRAMES`) rather than send them.
+    #[cfg_attr(test, allow(dead_code))]
+    Frame(Box<SlowFrame>),
     /// Every signature's counts over `[from, to]`.
     Rollup { rolls: Vec<Roll>, from: Instant, to: Instant },
     /// Answers once everything sent before it is posted.
@@ -50,6 +53,7 @@ fn sender() -> Option<&'static Sender<Message>> {
                 for m in std::iter::once(first).chain(messages.try_iter()) {
                     match m {
                         Message::Slow(slow) => spans.extend(slow_spans(&slow)),
+                        Message::Frame(frame) => spans.push(frame_span(&frame)),
                         Message::Rollup { rolls, from, to } => spans.extend(rolls.iter().map(|r| roll_span(r, from, to))),
                         Message::Flush(done) => flushed.push(done),
                     }
@@ -103,6 +107,9 @@ pub(crate) fn slow_spans(s: &Slow) -> Vec<Value> {
     for (i, (key, n)) in s.rebuilt.iter().enumerate().take(3) {
         attrs.push(kv(["rune.rebuilt.0", "rune.rebuilt.1", "rune.rebuilt.2"][i], format!("{key} ({n})").into()));
     }
+    attrs.push(kv("rune.cause", s.cause.name().into()));
+    if let Some(cpu) = s.cpu_ms { attrs.push(kv("rune.cpu_ms", round(cpu).into())); }
+    if let Some(stacks) = &s.stacks { stack_attrs(stacks, &mut attrs); }
     let mut out = vec![span(trace, root, None, "ui.interaction", s.arrived, s.present, attrs)];
     let mut update = vec![kv("rune.handler_ms", round(s.handler_ms).into())];
     for (name, ms) in PHASE_NAMES.iter().zip(s.phases) {
@@ -119,6 +126,31 @@ pub(crate) fn slow_spans(s: &Slow) -> Vec<Value> {
     out
 }
 
+/// A slow frame no input caused: its work, why it committed, and where its time went.
+pub(crate) fn frame_span(f: &SlowFrame) -> Value {
+    let trace = (u128::from(id()) << 64) | u128::from(id());
+    let mut attrs = vec![
+        kv("rune.work_ms", ms(f.start, f.built).into()),
+        kv("rune.nodes", (f.nodes as u64).into()),
+        kv("rune.cause", f.cause.name().into()),
+    ];
+    let why = crate::runtime::CommitWhy::names(f.why);
+    if !why.is_empty() { attrs.push(kv("rune.commit_why", why.join(",").into())); }
+    stack_attrs(&f.stacks, &mut attrs);
+    span(trace, id(), None, "ui.frame", f.start, f.built, attrs)
+}
+
+/// The watchdog's samples: how many, how many found the thread waiting, the functions they
+/// were in (`fn (n/N)`), and one sample's stack, innermost first, a line a frame.
+fn stack_attrs(s: &Stacks, attrs: &mut Vec<Value>) {
+    attrs.push(kv("rune.samples", u64::from(s.taken).into()));
+    attrs.push(kv("rune.samples_waiting", u64::from(s.waiting).into()));
+    for (i, (name, n)) in s.hot.iter().enumerate().take(3) {
+        attrs.push(kv(["rune.hot.0", "rune.hot.1", "rune.hot.2"][i], format!("{name} ({n}/{})", s.taken).into()));
+    }
+    if !s.stack.is_empty() { attrs.push(kv("rune.stack", s.stack.join("\n").into())); }
+}
+
 pub(crate) fn roll_span(r: &Roll, from: Instant, to: Instant) -> Value {
     let trace = (u128::from(id()) << 64) | u128::from(id());
     span(trace, id(), None, "ui.rollup", from, to, vec![
@@ -127,6 +159,7 @@ pub(crate) fn roll_span(r: &Roll, from: Instant, to: Instant) -> Value {
         kv("rune.action", r.action.into()),
         kv("rune.count", u64::from(r.count).into()),
         kv("rune.slow", u64::from(r.slow).into()),
+        kv("rune.scheduler_wait", u64::from(r.contended).into()),
         kv("rune.p50_ms", round(r.quantile(0.5)).into()),
         kv("rune.p98_ms", round(r.quantile(0.98)).into()),
         kv("rune.max_ms", round(r.max_ms).into()),

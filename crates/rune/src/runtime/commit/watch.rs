@@ -6,7 +6,7 @@ impl<S: 'static> Runtime<S> {
     /// A frame's commit for `why` (`CommitWhy` bits).
     pub(super) fn commit_for(&mut self, tx: &Tx, why: u16) {
         self.commit_why |= why;
-        if crate::tooling::interaction::active() { self.watch.interaction.committed(why); }
+        if crate::tooling::interaction::on() { self.watch.interaction.committed(why); }
         self.watch.cause = why;
         self.commit(tx);
         self.watch.cause = 0;
