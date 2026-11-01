@@ -218,15 +218,6 @@ impl FileDiff {
         f
     }
 
-    /// Attach the whole old and new texts to a parsed diff, so the unchanged ranges between its
-    /// hunks can be expanded. One side is enough (unchanged lines read the same on both);
-    /// the trailing range after the last hunk needs the side it counts lines on.
-    pub fn with_texts(mut self, old: Option<&str>, new: Option<&str>) -> FileDiff {
-        self.old_text = old.map(|t| Rc::new(Source::new(t)));
-        self.new_text = new.map(|t| Rc::new(Source::new(t)));
-        self
-    }
-
     /// The path to show: the new one, or the old one for a deleted file.
     pub fn path(&self) -> &str {
         self.new_path.as_deref().or(self.old_path.as_deref()).unwrap_or("")

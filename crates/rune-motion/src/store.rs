@@ -532,11 +532,6 @@ impl AnimationStore {
         true
     }
 
-    /// The velocities at the last tick for a track, as raw lanes.
-    pub fn velocities_of(&self, id: TrackId) -> Option<&[f32]> {
-        self.contains(id).then(|| self.lane_velocities(id.index as usize))
-    }
-
     /// Is the track currently animating?
     pub fn is_active(&self, id: TrackId) -> bool {
         self.contains(id) && self.t_slot[id.index as usize] != NONE
@@ -659,11 +654,6 @@ impl AnimationStore {
     fn lane_values(&self, t: usize) -> &[f32] {
         let l0 = self.t_lane0[t] as usize;
         &self.l_value[l0..l0 + self.t_n[t] as usize]
-    }
-
-    fn lane_velocities(&self, t: usize) -> &[f32] {
-        let l0 = self.t_lane0[t] as usize;
-        &self.l_vel[l0..l0 + self.t_n[t] as usize]
     }
 
     pub(crate) fn set_raw(&mut self, t: u32, values: &[f32]) {

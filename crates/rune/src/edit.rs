@@ -197,10 +197,6 @@ impl TextEdit {
         self
     }
 
-    pub fn set_rich(&mut self, rich: bool) {
-        self.rich = rich;
-    }
-
     pub fn is_rich(&self) -> bool {
         self.rich
     }

@@ -38,10 +38,6 @@ impl Level {
     pub fn meter(&self) -> f32 {
         to_meter(self.rms_db)
     }
-    /// The peak for a level bar, on `meter`'s scale.
-    pub fn peak_meter(&self) -> f32 {
-        to_meter(self.peak_db)
-    }
 }
 
 fn to_meter(db: f32) -> f32 {

@@ -866,11 +866,6 @@ impl DiffState {
     pub(crate) fn columns(&self) -> u32 {
         self.columns
     }
-
-    /// The key of `file`'s header row, for `Tx::scroll_into_view`.
-    pub fn file_key(&self, file: usize) -> Option<&str> {
-        self.file_rows.get(file).map(|&r| self.keys[r as usize].as_str())
-    }
 }
 
 /// The unchanged ranges before each hunk of `f` and after its last.

@@ -142,8 +142,6 @@ pub struct SplitView {
     frame: f32,
     in_panel: bool,
     padding: [f32; 2],
-    slide: bool,
-    header: Option<El>,
     motion: PaneMotion,
     peek: Option<SidebarPeek>,
     reduced: bool,
@@ -162,8 +160,6 @@ impl SplitView {
             frame: 8.0,
             in_panel: false,
             padding: [0.0; 2],
-            slide: false,
-            header: None,
             motion: PaneMotion::new(),
             peek: None,
             reduced: false,
@@ -220,19 +216,6 @@ impl SplitView {
         self.padding = [start.max(0.0), end.max(0.0)];
         self
     }
-    /// The sidebar's contents keep their place against its trailing edge as it opens and
-    /// closes, so they slide with it instead of being uncovered in place. A peeking sidebar
-    /// always slides.
-    pub fn slide_sidebar_contents(mut self) -> Self {
-        self.slide = true;
-        self
-    }
-    /// An element in the sidebar's title bar row, past the traffic lights: an account or
-    /// workspace switcher, say.
-    pub fn sidebar_header(mut self, e: El) -> Self {
-        self.header = Some(e);
-        self
-    }
     /// How the panes open and close. Both move on the spring for the sidebar's width (the
     /// inspector's without one), so they move as one.
     pub fn pane_motion(mut self, m: PaneMotion) -> Self {
@@ -254,7 +237,7 @@ impl SplitView {
         self
     }
 
-    pub fn build(mut self, k: &Kit) -> El {
+    pub fn build(self, k: &Kit) -> El {
         let c = &k.c;
         let t = self.toggle;
         let side = t.side();
@@ -273,7 +256,6 @@ impl SplitView {
         let mut overlay = None;
         let mut zones = Vec::new();
         let mut clears = Vec::new();
-        let header = self.header.take();
         let sidebar = self.sidebar.map(|mut p| {
             let s = p.state;
             let open = s.is_open();
@@ -340,13 +322,10 @@ impl SplitView {
                 .center_y()
                 .window_drag()
                 .child(el().key("sidebar-titlebar-clear").w((clear - self.padding[0]).max(0.0)).motion(spring));
-            if let Some(h) = header {
-                band = band.child(row().key("sidebar-header-slot").grow(1.0).min_w(0.0).center_y().child(h));
-            }
             if toggle && t.in_header {
                 band = band.child(el().key("sidebar-spacer").grow(1.0)).child(el().key("sidebar-toggle-slot").w(side).ml(8.0));
             }
-            let content = Contents { pad: self.padding, slide: self.slide || peek.is_some(), peek, band: Some(band) };
+            let content = Contents { pad: self.padding, slide: peek.is_some(), peek, band: Some(band) };
             dock(&d, "sidebar-pane", p, true, content)
         });
         let toolbar = self

@@ -35,10 +35,6 @@ impl Tx {
     pub fn scroll_center_in(&mut self, scope: impl Into<String>, key: impl Into<String>) {
         self.scroll_to.push(crate::runtime::ScrollReveal::center(Some(scope.into()), key.into(), true));
     }
-    /// [`Tx::scroll_center`] without the glide.
-    pub fn scroll_center_instant(&mut self, key: impl Into<String>) {
-        self.scroll_to.push(crate::runtime::ScrollReveal::center(None, key.into(), false));
-    }
     /// [`Tx::scroll_center_in`] without the glide.
     pub fn scroll_center_in_instant(&mut self, scope: impl Into<String>, key: impl Into<String>) {
         self.scroll_to.push(crate::runtime::ScrollReveal::center(Some(scope.into()), key.into(), false));

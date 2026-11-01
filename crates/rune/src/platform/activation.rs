@@ -1,19 +1,14 @@
 //! Focusing an already-mapped Wayland window with a forwarded XDG activation token. winit 0.30
 //! uses a token only while creating a window (`focus_window` is a no-op on Wayland), so this
 //! binds `xdg_activation_v1` on winit's own display connection, in a private queue, and
-//! activates winit's surface. Also the other direction: a token made from the latest pointer
-//! press on a layer-shell overlay, for another app to take focus with.
-
-use std::cell::RefCell;
+//! activates winit's surface.
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use wayland_backend::client::{Backend, ObjectId};
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_registry::WlRegistry;
-use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
-use wayland_protocols::xdg::activation::v1::client::xdg_activation_token_v1::{self, XdgActivationTokenV1};
 use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1::XdgActivationV1;
 use winit::window::Window;
 
@@ -89,62 +84,4 @@ impl Drop for Activator {
         self.activation.destroy();
         let _ = self.queue.flush();
     }
-}
-
-/// The latest pointer button event on a layer-shell overlay: what a token for it needs.
-#[derive(Clone)]
-pub(crate) struct Press {
-    pub conn: Connection,
-    pub registry: WlRegistry,
-    /// The `xdg_activation_v1` global's name.
-    pub global: u32,
-    pub seat: WlSeat,
-    pub surface: WlSurface,
-    pub serial: u32,
-}
-
-thread_local! {
-    static PRESS: RefCell<Option<Press>> = const { RefCell::new(None) };
-}
-
-pub(crate) fn pressed(press: Press) { PRESS.with(|p| *p.borrow_mut() = Some(press)); }
-
-/// The surface is going away; a token can no longer name it.
-pub(crate) fn forget(surface: &WlSurface) {
-    PRESS.with(|p| {
-        let mut p = p.borrow_mut();
-        if p.as_ref().is_some_and(|press| &press.surface == surface) { *p = None; }
-    });
-}
-
-#[derive(Default)]
-struct Token(Option<String>);
-
-impl Dispatch<XdgActivationV1, ()> for Token {
-    fn event(_: &mut Self, _: &XdgActivationV1, _: <XdgActivationV1 as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
-
-impl Dispatch<XdgActivationTokenV1, ()> for Token {
-    fn event(state: &mut Self, _: &XdgActivationTokenV1, event: xdg_activation_token_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
-        if let xdg_activation_token_v1::Event::Done { token } = event { state.0 = Some(token); }
-    }
-}
-
-/// Asks the compositor for a token from the latest press, blocking for its answer.
-pub(crate) fn press_token(app_id: Option<&str>) -> Option<String> {
-    let press = PRESS.with(|p| p.borrow().clone())?;
-    let mut queue = press.conn.new_event_queue::<Token>();
-    let qh = queue.handle();
-    let activation = press.registry.bind::<XdgActivationV1, _, _>(press.global, 1, &qh, ());
-    let request = activation.get_activation_token(&qh, ());
-    request.set_serial(press.serial, &press.seat);
-    request.set_surface(&press.surface);
-    if let Some(app_id) = app_id.filter(|a| !a.is_empty()) { request.set_app_id(app_id.to_owned()); }
-    request.commit();
-    let mut token = Token::default();
-    let answered = queue.roundtrip(&mut token).is_ok();
-    request.destroy();
-    activation.destroy();
-    let _ = queue.flush();
-    token.0.filter(|_| answered)
 }

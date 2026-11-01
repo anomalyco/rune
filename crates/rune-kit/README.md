@@ -259,7 +259,7 @@ draws Markdown tables with the same font, padding and rules.
 ## Markdown
 
 Feature `markdown`: `Markdown::new(src).build(&kit)`, or without a kit
-`Markdown::new(src).render(&MarkdownStyle::neutral(dark))` (also `MarkdownStyle::from_seed`).
+`Markdown::new(src).render(&MarkdownStyle::neutral(dark))`.
 It renders CommonMark plus GFM tables, and is built for streaming: re-render with the longer
 source each time, and earlier blocks stay mounted.
 
@@ -347,8 +347,7 @@ DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
   under them (`rune_kit::syntax`, swappable with `set_highlighter`). Tabs line up at
   four-column stops and copy as tabs.
 - **Unchanged ranges** between hunks fold into a row that opens 20 lines up, 20 down, or all
-  (`expand`). A parsed patch has no whole files, so its folds only open after
-  `FileDiff::with_texts`.
+  (`expand`). A parsed patch has no whole files, so only diffs built from two texts have folds that open.
 - **Files** have a header with the path, a rename arrow, +/− counts, a collapse chevron and
   an app slot (`header_actions`). The header of the file in view sticks to the top.
 - **Annotations** are the app's widgets under a line, keyed by file, side and line, such as

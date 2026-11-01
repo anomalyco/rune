@@ -49,8 +49,4 @@ impl<S: 'static> Runtime<S> {
         self.discard_measured(measured);
         height.ceil_to(self.env.scale).max(1.0)
     }
-
-    pub fn set_fit_content_height(&mut self, on: bool) {
-        self.fit_height = on;
-    }
 }

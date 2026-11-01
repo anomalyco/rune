@@ -419,9 +419,6 @@ pub enum DistortParams {
 }
 
 impl DistortParams {
-    pub fn heat_haze() -> Self {
-        DistortParams::HeatHaze { height: 40.0, scale: 14.0, speed: 2.2, amount: 1.6, whole_shape: false }
-    }
     pub fn shockwave(at: [f32; 2], t0: f32) -> Self {
         DistortParams::Shockwave { at, reach: 160.0, width: 14.0, amount: 9.0, chroma: 0.35, t0, duration: 0.9 }
     }

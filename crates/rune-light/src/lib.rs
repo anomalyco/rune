@@ -739,9 +739,4 @@ impl LightRenderer {
             field_size: self.field_size,
         }
     }
-
-    /// The surface buffer: x own signed distance, yz outward gradient, w top z (output resolution).
-    pub fn surface_view(&self) -> &wgpu::TextureView {
-        &self.t.gb0
-    }
 }

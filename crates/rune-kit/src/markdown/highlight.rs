@@ -36,10 +36,6 @@ impl Highlight {
         self.current = current;
         self
     }
-    /// Whether this highlight uses the active/current match style.
-    pub fn is_current(&self) -> bool {
-        self.current
-    }
     /// Overrides the rounded background colour behind the highlighted glyphs.
     pub fn bg(mut self, c: Color) -> Self {
         self.bg = Some(c);

@@ -92,7 +92,6 @@ pub mod flags {
     pub const SCROLLING: u32 = 4;
     pub const CLIPPED: u32 = 8;
     pub const FILTERED: u32 = 16;
-    pub const OCCLUDED: u32 = 32;
     /// Draws nothing and holds nothing: a hit or hover zone, a spacer.
     pub const BLANK: u32 = 64;
 }

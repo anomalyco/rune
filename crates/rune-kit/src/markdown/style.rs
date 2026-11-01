@@ -3,11 +3,10 @@
 use rune::{Icon, Spring};
 
 use super::*;
-use crate::PaletteSeed;
 use crate::palette::tint;
 
 /// How markdown looks. [`MarkdownStyle::from_kit`] takes every colour and font from the kit's
-/// tokens, [`MarkdownStyle::neutral`] and [`MarkdownStyle::from_seed`] need no kit; each builder
+/// tokens, [`MarkdownStyle::neutral`] needs no kit; each builder
 /// overrides one thing.
 #[derive(Clone, Debug)]
 pub struct MarkdownStyle {
@@ -206,10 +205,6 @@ impl MarkdownStyle {
     /// Rune's neutral light or dark look ([`Kit::neutral`]'s tokens), for apps without a kit.
     pub fn neutral(dark: bool) -> MarkdownStyle {
         MarkdownStyle::from_kit(&Kit::neutral(dark))
-    }
-    /// Derived from three colours, the way [`Kit::from_palette`] derives a kit.
-    pub fn from_seed(seed: PaletteSeed) -> MarkdownStyle {
-        MarkdownStyle::from_kit(&Kit::from_palette(seed))
     }
     /// Body, heading (levels 1 to 3 and the muted level 4+) and emphasis colour.
     pub fn text(mut self, c: Color) -> Self {

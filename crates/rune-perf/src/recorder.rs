@@ -45,7 +45,6 @@ impl Recorder {
     }
 
     pub fn dropped_samples(&self) -> u64 { self.health.dropped.load(Relaxed) }
-    pub fn write_errors(&self) -> u64 { self.health.errors.load(Relaxed) }
 
     /// Call off the UI thread. Cancels lock waits; drains queued frames if already recording.
     pub fn shutdown(mut self) -> std::thread::Result<()> {

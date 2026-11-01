@@ -338,17 +338,3 @@ pub(crate) fn with_scene_clock<T>(clock: SceneClock, f: impl FnOnce() -> T) -> T
     SCENE_CLOCK.set(before);
     out
 }
-
-/// An XDG activation token from the latest pointer press on a Wayland overlay, for another app
-/// to take focus with: a notification server's `ActivationToken` before `ActionInvoked`. Call it
-/// from the press's handler. `app_id` names the app that will use it. Blocks for the
-/// compositor's answer; None off Wayland, before any press, or without `xdg_activation_v1`.
-pub fn press_activation_token(app_id: Option<&str>) -> Option<String> {
-    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-    return platform::activation::press_token(app_id);
-    #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
-    {
-        let _ = app_id;
-        None
-    }
-}

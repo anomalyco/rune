@@ -43,7 +43,6 @@ struct State {
     surface: Option<WlSurface>,
     pointer_inside: bool,
     /// The serial of the latest button event over the surface, until `dispatch` records it.
-    press: Option<u32>,
     keyboard_focus: bool,
     want_pointer: bool,
     want_keys: bool,
@@ -112,8 +111,7 @@ impl Dispatch<WlPointer, ()> for State {
                 state.entered = None;
                 state.input.push(Input::Leave);
             }
-            wl_pointer::Event::Button { serial, button: 0x110, state: wayland_client::WEnum::Value(button), .. } if state.pointer_inside => {
-                state.press = Some(serial);
+            wl_pointer::Event::Button { button: 0x110, state: wayland_client::WEnum::Value(button), .. } if state.pointer_inside => {
                 let pressed = button == wl_pointer::ButtonState::Pressed;
                 state.input.push(Input::Button(pressed));
                 if pressed && let Some(xkb) = &state.xkb {
@@ -121,8 +119,7 @@ impl Dispatch<WlPointer, ()> for State {
                 }
             }
             // BTN_RIGHT: the secondary gesture, as a window's right button is.
-            wl_pointer::Event::Button { serial, button: 0x111, state: wayland_client::WEnum::Value(button), .. } if state.pointer_inside => {
-                state.press = Some(serial);
+            wl_pointer::Event::Button { button: 0x111, state: wayland_client::WEnum::Value(button), .. } if state.pointer_inside => {
                 state.input.push(Input::Secondary(button == wl_pointer::ButtonState::Pressed));
             }
             _ => {}
@@ -132,9 +129,8 @@ impl Dispatch<WlPointer, ()> for State {
 impl Dispatch<WlTouch, ()> for State {
     fn event(state: &mut Self, _: &WlTouch, event: wl_touch::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         match event {
-            wl_touch::Event::Down { serial, surface, id, x, y, .. } if state.touch_id.is_none() && state.surface.as_ref() == Some(&surface) => {
+            wl_touch::Event::Down { surface, id, x, y, .. } if state.touch_id.is_none() && state.surface.as_ref() == Some(&surface) => {
                 state.touch_id = Some(id);
-                state.press = Some(serial);
                 state.input.push(Input::Move(x as f32, y as f32));
                 state.input.push(Input::Button(true));
             }
@@ -326,10 +322,7 @@ pub(crate) struct Changes {
 }
 
 pub(crate) struct LayerSurface {
-    conn: Connection,
     registry: WlRegistry,
-    /// `xdg_activation_v1`, for tokens from presses.
-    activation: Option<u32>,
     seat_global: Option<(u32, u32)>,
     regions: std::cell::RefCell<Option<Vec<[i32; 4]>>>,
     compositor: WlCompositor,
@@ -366,7 +359,6 @@ impl LayerSurface {
         let registry = globals.registry().clone();
         let seat_global = globals.contents().with_list(|list| list.iter().find(|g| g.interface == "wl_seat").map(|g| (g.name, g.version.min(8))));
         let seat = if want_pointer || want_keys { seat_global.map(|(name, version)| registry.bind::<WlSeat, _, _>(name, version, &qh, ())) } else { None };
-        let activation = globals.contents().with_list(|list| list.iter().find(|g| g.interface == "xdg_activation_v1").map(|g| g.name));
         let surface = compositor.create_surface(&qh, ());
         let region = compositor.create_region(&qh, ());
         surface.set_input_region(Some(&region));
@@ -379,7 +371,7 @@ impl LayerSurface {
         let shapes = globals.bind::<WpCursorShapeManagerV1, _, _>(&qh, 1..=1, ()).ok();
         let state = State { surface: Some(surface.clone()), want_pointer, want_keys, shapes, ..State::default() };
         let watch = wake.map(|wake| Watch::spawn(conn.backend().poll_fd().as_raw_fd(), wake));
-        let mut this = LayerSurface { conn, registry, activation, seat_global, regions: std::cell::RefCell::new(Some(Vec::new())), compositor, output, seat, options: options.clone(), queue, state, layer, surface, display: display.display, watch };
+        let mut this = LayerSurface { registry, seat_global, regions: std::cell::RefCell::new(Some(Vec::new())), compositor, output, seat, options: options.clone(), queue, state, layer, surface, display: display.display, watch };
         this.place(at);
         this.surface.commit();
         while this.state.configured.is_none() && !this.state.closed {
@@ -499,18 +491,6 @@ impl LayerSurface {
         let _ = self.queue.dispatch_pending(&mut self.state);
         let _ = self.queue.flush();
         if let Some(watch) = &self.watch { watch.turned(); }
-        if let Some(serial) = self.state.press.take()
-            && let (Some(global), Some(seat)) = (self.activation, &self.seat)
-        {
-            crate::platform::activation::pressed(crate::platform::activation::Press {
-                conn: self.conn.clone(),
-                registry: self.registry.clone(),
-                global,
-                seat: seat.clone(),
-                surface: self.surface.clone(),
-                serial,
-            });
-        }
         Changes { size: self.state.configured.take(), input: std::mem::take(&mut self.state.input), scale: self.state.scale.take(), closed: self.state.closed }
     }
 
@@ -532,7 +512,6 @@ impl Drop for LayerSurface {
         if let Some(keyboard) = self.state.keyboard.take() && keyboard.version() >= 3 { keyboard.release(); }
         if let Some(seat) = self.seat.take() && seat.version() >= 5 { seat.release(); }
         if let Some(output) = self.output.take() && output.version() >= 3 { output.release(); }
-        crate::platform::activation::forget(&self.surface);
         self.layer.destroy();
         self.surface.destroy();
         let _ = self.queue.flush();

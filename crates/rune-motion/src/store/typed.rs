@@ -60,19 +60,6 @@ impl AnimationStore {
         }
     }
 
-    /// Sets `from` immediately, then animates to `to` (an explicit entrance).
-    pub fn animate_from<T: Animatable>(
-        &mut self,
-        node: NodeId,
-        prop: Prop<T>,
-        from: T,
-        to: T,
-        anim: impl Into<Anim>,
-    ) -> TrackId {
-        self.set(node, prop, from);
-        self.animate(node, prop, to, anim)
-    }
-
     /// Animates with an explicit per-lane starting velocity (gesture handoff).
     pub fn animate_with_velocity<T: Animatable>(
         &mut self,

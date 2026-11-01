@@ -57,9 +57,6 @@ impl PopupItem {
     pub fn label(&self) -> &str {
         &self.label
     }
-    pub fn is_disabled(&self) -> bool {
-        self.disabled
-    }
 }
 
 impl From<&PopupItem> for PopupItem {

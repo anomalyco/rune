@@ -309,8 +309,7 @@ impl Markdown {
         self.render(&style)
     }
 
-    /// Builds with `style`, for apps without a [`Kit`] (see [`MarkdownStyle::neutral`] and
-    /// [`MarkdownStyle::from_seed`]).
+    /// Builds with `style`, for apps without a [`Kit`] (see [`MarkdownStyle::neutral`]).
     pub fn render(self, style: &MarkdownStyle) -> El {
         let (blocks, sources, tasks, starts, maps) = match (self.autolink, self.streaming) {
             (true, false) => doc_cached(&self.src),
