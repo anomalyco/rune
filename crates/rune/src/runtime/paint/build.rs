@@ -1114,6 +1114,8 @@ impl<S: 'static> Runtime<S> {
             let mask = self.row_mask[i];
             if mask >= 0.0 {
                 clip[3] = clip[3].min(r[3]);
+                // A fold's lifted contents (`GrowTrack::hide_above`) never draw above its top.
+                if self.row_lifts.iter().any(|&(ri, _)| ri == i) { clip[1] = clip[1].max(r[1]); }
                 inherit_fade(&mut fade, &mut fade_origin, r, [0.0, 0.0, 0.0, mask * s]);
             }
             let mut dy = pinh.dy;

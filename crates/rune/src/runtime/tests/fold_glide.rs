@@ -302,7 +302,8 @@ fn a_fold_shut_from_its_stuck_header_mid_timeline_still_glides() {
 
 /// Shuts the fold from its stuck header as `shut_from_stuck` does, then `at` frames later (0:
 /// in the same tick, before a frame draws) opens it again holding its top, and returns each
-/// frame's tops of the header, the rows around the fold and every step, from the shut on.
+/// frame's tops of the header, the rows around the fold and every step, from the shut on. No
+/// step ever shows above the header.
 fn reopen_from_stuck(after: f32, offset: f32, at: usize) -> Vec<HashMap<String, f32>> {
     let mut rt = Runtime::new((true, after), held_section, (300.0, 200.0), Env::new(true, 1.0));
     rt.frame(0.0);
@@ -313,7 +314,12 @@ fn reopen_from_stuck(after: f32, offset: f32, at: usize) -> Vec<HashMap<String, 
     for f in 0..at + 120 {
         if f == at { rt.update(|s, tx| { s.0 = true; tx.keep_on_screen("turn"); }); }
         rt.frame(1.0 / 120.0);
-        frames.push(rt.elements().into_iter().filter_map(|e| {
+        let els = rt.elements();
+        let hdr = els.iter().find(|e| e.key.as_deref() == Some("hdr")).unwrap().rect[1];
+        for e in els.iter().filter(|e| e.key.as_deref().is_some_and(|k| k.starts_with("step-")) && e.visible[3] > 0.5) {
+            assert!(e.visible[1] >= hdr - 0.5, "frame {f}: {:?} shows from {} above the header at {hdr}", e.key, e.visible[1]);
+        }
+        frames.push(els.into_iter().filter_map(|e| {
             let k = e.key.clone()?;
             (["hdr", "before", "after"].contains(&k.as_str()) || k.starts_with("step-")).then_some((k, e.rect[1]))
         }).collect());
