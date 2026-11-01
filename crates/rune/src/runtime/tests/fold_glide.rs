@@ -213,3 +213,89 @@ fn a_fold_feathers_its_edge_shutting_too() {
     assert!((peak - 16.0).abs() < 1e-3, "shutting, the moving edge feathers {peak} pt deep: {masks:?}");
     assert!(masks.last().is_some_and(|&m| m < 0.0), "and nothing is feathered once it lands: {masks:?}");
 }
+
+/// A fold of 40 steps under a sticky 28 pt header, between a 200 pt row above and a row `after`
+/// points tall below, in a 200 pt scroll.
+fn held_section(s: &(bool, f32), _: &mut Cx<(bool, f32)>) -> El {
+    let mut group = col().key("group").w_full().child(el().key("hdr").w_full().h(28.0).sticky_top(0.0));
+    if s.0 {
+        group = group.child(col().key("steps").w_full().children((0..40).map(|k| el().key(format!("step-{k}")).w_full().h(28.0))));
+    }
+    let stack = col().key("stack").w_full().growth(GrowthSpec::default()).children([
+        el().key("before").w_full().h(200.0),
+        col().key("turn").w_full().fold_glide(rune_motion::Spring::new(0.18, 0.0)).child(group),
+        el().key("after").w_full().h(s.1),
+    ]);
+    col().key("scroll").size(300.0, 200.0).scroll(ScrollSpec { stick_bottom: true }).child(stack)
+}
+
+/// Shuts the fold from its stuck header with the timeline scrolled to `offset`, holding the
+/// header, and returns each frame's tops of the header, the rows around the fold and every step
+/// that draws in the window.
+fn shut_from_stuck(after: f32, offset: f32) -> Vec<HashMap<String, f32>> {
+    let mut rt = Runtime::new((true, after), held_section, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, offset));
+    for _ in 0..4 { rt.frame(1.0 / 120.0); }
+    let hdr = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("hdr")).unwrap();
+    assert!(hdr.rect[1] == 0.0 && hdr.stuck > 400.0, "{hdr:?}");
+    rt.update(|s, tx| { s.0 = false; tx.keep_on_screen("hdr"); });
+    let frames = (0..90).map(|_| {
+        rt.frame(1.0 / 120.0);
+        rt.elements().into_iter().filter_map(|e| {
+            let k = e.key.clone()?;
+            let shows = e.rect[1] < 200.0 && e.rect[1] + e.rect[3] > 28.0;
+            (["hdr", "before", "after"].contains(&k.as_str()) || (k.starts_with("step-") && shows)).then_some((k, e.rect[1]))
+        }).collect()
+    }).collect();
+    assert!(!rt.animating && rt.keeps.is_empty());
+    frames
+}
+
+/// The most anything that shows moved in one frame, and the frame.
+fn biggest_step(frames: &[HashMap<String, f32>]) -> (f32, usize) {
+    let mut most = (0.0, 0);
+    for (f, w) in frames.windows(2).enumerate() {
+        for (k, &y1) in &w[1] {
+            let Some(&y0) = w[0].get(k) else { continue };
+            let seen = |y: f32| y > -28.0 && y < 200.0;
+            if (seen(y0) || seen(y1)) && (y1 - y0).abs() > most.0 { most = ((y1 - y0).abs(), f + 1); }
+        }
+    }
+    most
+}
+
+#[test]
+fn a_fold_shut_from_its_stuck_header_at_the_end_slides_up_under_it() {
+    // 1,120 pt of steps, the header stuck at the top, the last steps and the row below in view:
+    // shut, the timeline ends 128 pt down what it shows, so the header comes down to 72.
+    let frames = shut_from_stuck(100.0, 1100.0);
+    let (most, at) = biggest_step(&frames);
+    assert!(most < 24.0, "nothing that shows moves {most} pt in a frame (frame {at}): {:?}", &frames[at.saturating_sub(1)..=at]);
+    let after: Vec<f32> = frames.iter().map(|f| f["after"]).collect();
+    assert!(after.windows(2).all(|w| w[1] <= w[0] + 0.01), "the row below only rises: {after:?}");
+    // The steps that show ride up with the row below while the header holds, then hold still
+    // while the header comes down over them.
+    for w in frames.windows(2) {
+        for (k, &y1) in w[1].iter().filter(|(k, _)| k.starts_with("step-")) {
+            if let Some(&y0) = w[0].get(k) { assert!(y1 <= y0 + 0.01, "{k} moves down, {y0} to {y1}"); }
+        }
+    }
+    let last = frames.last().unwrap();
+    assert_eq!((last["hdr"], last["after"], last["before"]), (72.0, 100.0, -128.0));
+    assert!(frames[40]["hdr"] > 71.0, "it lands on the fold's own spring: {:?}", frames[40]);
+}
+
+#[test]
+fn a_fold_shut_from_its_stuck_header_mid_timeline_still_glides() {
+    // The rows below fill the window: the header stays, and what shows slides up under it on
+    // the fold's spring with the row below, instead of vanishing.
+    let frames = shut_from_stuck(300.0, 1100.0);
+    let (most, at) = biggest_step(&frames);
+    assert!(most < 24.0, "nothing that shows moves {most} pt in a frame (frame {at}): {:?}", &frames[at.saturating_sub(1)..=at]);
+    assert!(frames.iter().all(|f| f["hdr"].abs() < 0.01), "the header holds");
+    let after: Vec<f32> = frames.iter().map(|f| f["after"]).collect();
+    assert!(after[2] > 100.0 && after[12] < 100.0 && after[40] < 28.5, "glides, rather than landing at once: {after:?}");
+    assert!(frames[4].keys().any(|k| k.starts_with("step-")), "the steps still show as it shuts: {:?}", frames[4]);
+    assert_eq!(*after.last().unwrap(), 28.0);
+}

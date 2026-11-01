@@ -12,6 +12,7 @@ impl<S: 'static> Runtime<S> {
         self.row_h.resize(n_nodes, -1.0);
         self.row_mask.clear();
         self.row_mask.resize(n_nodes, -1.0);
+        self.row_lifts.clear();
         for (cid, stack) in &self.stacks {
             let Some(&ci) = self.node_index.get(cid) else { continue };
             let Some(spec) = self.nodes[ci].growth.as_deref().copied() else { continue };
@@ -33,6 +34,10 @@ impl<S: 'static> Runtime<S> {
                     if spec.edge.clip && (g.h < g.target - 0.01 || g.mask > 0.01 || withheld > 0.01 || rewrap || g.shutting_fold()) {
                         self.row_mask[ri] = g.mask.max(withheld.min(spec.edge.floor)).max(if rewrap { spec.edge.floor } else { 0.0 });
                     }
+                    let lift = g.lift();
+                    if lift > 0.0 {
+                        self.row_lifts.push((ri, lift));
+                    }
                 }
                 y = cur + g.h;
             }
@@ -41,6 +46,21 @@ impl<S: 'static> Runtime<S> {
             for (id, dy) in stack.slides.shifts() {
                 if let Some(&i) = self.node_index.get(&id) { self.row_dy[i] += dy; }
             }
+        }
+        // A fold's lifted contents (`GrowTrack::hide_above`) draw that far up inside it, all but
+        // the header it shuts under.
+        for &(ri, lift) in &self.row_lifts {
+            let mut k = ri + 1;
+            while k < n_nodes && self.nodes[k].parent.is_some_and(|p| p >= ri) {
+                if self.nodes[k].parent == Some(ri) { self.row_dy[k] -= lift; }
+                k += 1;
+            }
+            let header = self.fold_headers.get(&self.nodes[ri].id).and_then(|p| self.path_ids.get(p)).and_then(|id| self.node_index.get(id));
+            if let Some(&h) = header.filter(|&&h| h > ri && h < k) { self.row_dy[h] += lift; }
+        }
+        if !self.fold_headers.is_empty() {
+            let lifted: Vec<NodeId> = self.row_lifts.iter().map(|&(ri, _)| self.nodes[ri].id).collect();
+            self.fold_headers.retain(|id, _| lifted.contains(id));
         }
     }
 }

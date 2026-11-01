@@ -143,11 +143,15 @@ pub struct GrowTrack {
     pub(crate) limit: f32,
     /// A glide opening past `limit`: where its spring stops before the row lands whole.
     pub(crate) stage: Option<f32>,
+    /// A glide whose contents draw `a + b × h` points up from their layout (`lift`): riding its
+    /// bottom edge while it shuts under a held header (`hide_above`), and easing back as it
+    /// turns around.
+    pub(crate) slide: Option<(f32, f32)>,
 }
 
 impl GrowTrack {
     pub fn settled(h: f32) -> GrowTrack {
-        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, glide: None, feather: None, limit: f32::INFINITY, stage: None }
+        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, glide: None, feather: None, limit: f32::INFINITY, stage: None, slide: None }
     }
 
     pub fn moving(&self) -> bool {
@@ -156,6 +160,7 @@ impl GrowTrack {
 
     pub fn retarget(&mut self, target: f32) {
         if (target - self.target).abs() > 1e-4 {
+            let lift = self.lift();
             if !self.moving() {
                 self.age = 0.0;
             }
@@ -172,7 +177,29 @@ impl GrowTrack {
                 }
                 self.span = (target - self.h).abs();
             }
+            // Lifted contents ease back to their layout over what's left of the glide.
+            let d = target - self.h;
+            self.slide = (lift > 1.0 / 64.0 && d.abs() > 1.0 / 64.0).then(|| (lift * target / d, -lift / d));
         }
+    }
+
+    /// How far up from their layout the row's contents draw.
+    pub(crate) fn lift(&self) -> f32 {
+        self.slide.map_or(0.0, |(a, b)| (a + b * self.h).max(0.0))
+    }
+
+    /// A fold shutting under a header held stuck to its viewport's top, with `above` points of
+    /// it hidden above that header: those go at once, out of sight, and its contents ride its
+    /// bottom edge from here, so what shows slides up under the header on the fold's spring
+    /// rather than racing past. Returns the points cut, which the viewport's offset drops by so
+    /// nothing on screen moves.
+    pub(crate) fn hide_above(&mut self, above: f32) -> f32 {
+        let pinned = self.lift() + self.h;
+        let cut = above.min(self.h - self.target).max(0.0);
+        self.h -= cut;
+        self.span = (self.target - self.h).abs();
+        self.slide = Some((pinned, -1.0));
+        cut
     }
 
     /// A fold shutting over what it held, which its clip folds away (`El::fold_glide`).
@@ -261,13 +288,18 @@ impl GrowTrack {
         if self.glide.is_some() && !self.streaming {
             // A fold's edge feathers both ways, opening and shutting: it softens as the spring
             // picks up, holds through a reversal, and goes crisp as the glide lands.
+            // Contents riding the bottom edge (`hide_above`) aren't cut by it: nothing to soften.
             let left = (self.target - self.h).abs();
-            let aim = if left > 0.25 { self.feather.unwrap_or(edge.mask_max).min(1.5 * left) } else { 0.0 };
+            let riding = self.slide.is_some_and(|(_, b)| b == -1.0);
+            let aim = if left > 0.25 && !riding { self.feather.unwrap_or(edge.mask_max).min(1.5 * left) } else { 0.0 };
             self.mask = if aim > self.mask { (self.mask + FOLD_FEATHER_GROW * dt).min(aim) } else { aim };
         } else if aim > self.mask {
             self.mask = (self.mask + caps::MASK_GROW * dt).min(aim);
         } else {
             self.mask = (self.mask - edge.shrink * dt).max(aim);
+        }
+        if !self.moving() {
+            self.slide = None;
         }
     }
 }
