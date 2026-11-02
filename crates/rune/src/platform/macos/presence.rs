@@ -1,7 +1,7 @@
 //! Whether a panel belongs on screen, and whether its capture exclusion is applied.
 //!
 //! Panels join every Space. An excluded window can blank Mission Control's thumbnails even at
-//! alpha zero, and resetting sharing alone is not a reliable way to remove it from captures.
+//! alpha zero, and sharing readbacks can remain stale after a reset.
 //! Every hidden panel therefore orders out, including prewarmed panels. Its view, surface and
 //! cached pixels stay alive. Exclusion holds from show until the hide's fade finishes; ordering
 //! out precedes restoring sharing. A show during a fade invalidates its stale completion.

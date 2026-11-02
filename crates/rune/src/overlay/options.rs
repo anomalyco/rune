@@ -110,17 +110,16 @@ pub struct OverlayOptions {
     pub follow_pointer: bool,
     pub level: OverlayLevel,
     /// Native best effort, not a security boundary. Use the window number in capture filters.
-    /// Applies only while the overlay is shown: on macOS a hidden prewarmed panel stays ordered
-    /// in at alpha zero on every Space, and an excluded window there would blank every Space's
-    /// Mission Control thumbnail, so it turns capturable once a hide's fade-out finishes and
-    /// excluded again before the next show's alpha rises.
+    /// Applies only while shown, including the exit fade. On macOS, hidden panels order out
+    /// before restoring sharing, even when prewarmed: alpha zero and a sharing reset alone
+    /// must not leave an excluded window on every Space. Exclusion resumes before ordering in.
     /// `OverlayHandle::set_exclude_from_capture` changes it later.
     pub exclude_from_capture: bool,
     pub keys: KeyPolicy,
     pub input: OverlayInput,
     /// Create and warm a hidden native host on the event thread at startup. Desktop hosts
     /// retain their window and GPU surface across hide/show; Wayland must recreate on hide.
-    /// macOS keeps the pre-rendered panel ordered in at alpha zero, with input disabled.
+    /// macOS orders the panel in at alpha zero only for a scoped prewarm, then orders it out.
     /// Initial preparation settles the view. Later reveals refresh content, geometry and
     /// live values while preserving motion elapsed since each hidden commit. Hidden motion
     /// catches up on poll/reveal without driving a frame loop.
