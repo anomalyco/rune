@@ -5,8 +5,8 @@
 //!
 //! Cells under what travels (an element moving on a frame and the next or last, the step in line
 //! with its motion) at any frame of the event, a loop, a live binding or words that change are
-//! skipped, as are cells an element marked with the matching `El::motion_intent` covers. A
-//! region `snap` or `changes-twice` needs no element there to have changed on its frame (each
+//! skipped, as are Rune's own tooltip (`El::help`) and cells an element marked with the matching
+//! `El::motion_intent` covers. A region `snap` or `changes-twice` needs no element there to have changed on its frame (each
 //! element's own rules report those) and a `snap` no `Tx::instant` commit; a region `flash` is
 //! reported unless an element's `flash` or `flicker` there already is.
 
@@ -71,6 +71,7 @@ fn guard(rec: &Recording, loops: &HashSet<usize>, k: usize, (w, h): (usize, usiz
         if marked(t, k, "snap") { span(CUT, &mut mark); }
         if marked(t, k, "changes-twice") { span(STEP, &mut mark); }
     }
+    for tip in [k - 1, k].iter().filter_map(|&j| rec.tips.get(j).copied().flatten()) { mark(tip, CELL, BLOCKED); }
     m
 }
 

@@ -95,6 +95,8 @@ fn sample<S>(rt: &mut Runtime<S>, rec: &mut Recording, raster: &mut Raster, grid
     rec.sample_with(&els, Some(&paints));
     let grid = grid.unwrap_or_else(|| raster.of(rt, rec.size));
     rec.grid(Some(grid));
+    rec.tips.resize(rec.frames.saturating_sub(1), None);
+    rec.tips.push(rt.help_tooltip().map(|t| t.1));
 }
 
 /// Records a runtime someone else steps, as headless `rune` does under `RUNE_MOTION_GATE`:
