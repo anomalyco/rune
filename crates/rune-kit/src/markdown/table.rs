@@ -307,11 +307,13 @@ impl Renderer {
         for (j, (natural, min)) in cols.natural.iter().zip(&cols.min).enumerate() {
             let inl = cells.get(j).unwrap_or(&empty);
             let align = t.align.get(j).copied().unwrap_or_default();
-            let content = rich(inl.text.clone(), self.spans(inl, font.size))
-                .font(font)
-                .color(color)
-                .align(align)
-                .reveal(self.reveal)
+            let content = self
+                .with_reveal(
+                    rich(inl.text.clone(), self.spans(inl, font.size))
+                        .font(font)
+                        .color(color)
+                        .align(align),
+                )
                 .w_full();
             // Full width: each column's share of the row is its share of the natural width, so
             // a wider row widens columns in proportion and a narrower one shrinks them as

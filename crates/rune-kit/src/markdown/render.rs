@@ -223,8 +223,18 @@ impl Renderer {
         inl.spans.iter().filter(|s| matches!(s.2, Style::CodePad)).fold(e, |e, s| e.uncopied(s.0..s.1))
     }
 
+    pub(super) fn with_reveal(&self, e: El) -> El {
+        if self.reveal >= 0.0 {
+            e.reveal(self.reveal)
+        } else if self.streaming {
+            e.reveal(0.0)
+        } else {
+            e
+        }
+    }
+
     pub(super) fn para(&self, inl: &Inline, map: Option<&SpanMap>, style: TextStyle, color: Color) -> El {
-        let e = rich(inl.text.clone(), self.spans(inl, style.size)).font(style).color(color).reveal(self.reveal).w_full();
+        let e = self.with_reveal(rich(inl.text.clone(), self.spans(inl, style.size)).font(style).color(color)).w_full();
         self.select_inline(e, inl, map)
     }
 
@@ -257,7 +267,7 @@ impl Renderer {
     pub(super) fn code(&self, code: &str, source: Option<&Source>, map: Option<&SpanMap>) -> El {
         let s = &self.s;
         let highlights = self.text_highlights_for(code, map);
-        let body = tabbed(code, self.syntax_spans(code, source), highlights, s.code_block).font(s.code_block).color(s.text).reveal(self.reveal);
+        let body = self.with_reveal(tabbed(code, self.syntax_spans(code, source), highlights, s.code_block).font(s.code_block).color(s.text));
         let frame = col().w_full().radius(6.0).fill(s.code_block_fill).border(0.5, s.code_block_border);
         if self.scroll_wide {
             // The text sizes to its longest line inside the viewport, which scrolls under the
@@ -312,7 +322,7 @@ impl Renderer {
                 .key(format!("l{n}"))
                 .w_full()
                 .px(s.code_block_pad[0])
-                .child(self.select(tabbed(shown, Vec::new(), line_hl, s.code_block).font(s.code_block).color(color).wrap().reveal(self.reveal).w_full()));
+                .child(self.select(self.with_reveal(tabbed(shown, Vec::new(), line_hl, s.code_block).font(s.code_block).color(color).wrap()).w_full()));
             if let Some(t) = tint {
                 r = r.fill(t);
             }
@@ -439,7 +449,7 @@ impl Renderer {
                             .key(format!("i{k}"))
                             .w_full()
                             .child(
-                                text(marker).font(s.body).color(s.muted).w(s.list_indent).align(Align::Center).reveal(self.reveal),
+                                self.with_reveal(text(marker).font(s.body).color(s.muted).w(s.list_indent).align(Align::Center)),
                             )
                             .child(self.blocks(item, imap, &[], false).grow(1.0).shrink()),
                     );

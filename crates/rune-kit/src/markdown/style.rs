@@ -411,3 +411,115 @@ impl MarkdownStyle {
         self
     }
 }
+
+#[inline]
+fn f32_bits(x: f32) -> u32 {
+    if x == 0.0 { 0 } else { x.to_bits() }
+}
+
+impl std::hash::Hash for MarkdownStyle {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let MarkdownStyle {
+            text,
+            muted,
+            accent,
+            link_underline,
+            code_bg,
+            code_block_fill,
+            code_block_border,
+            quote_rule,
+            rule,
+            body,
+            headings,
+            code_block,
+            inline_code_scale,
+            inline_code_weight,
+            inline_code_pad,
+            code_block_pad,
+            list_indent,
+            list_gap,
+            strong_weight,
+            table_outline,
+            table_rule,
+            table_head_fill,
+            table_head_text,
+            table_head_rule,
+            table_head_weight,
+            table_min_column,
+            table_tabular,
+            table_font,
+            table_pad,
+            table_flush_left,
+            ref table_frame,
+            ref table_body,
+            table_head_pad,
+            table_full_width,
+            table_margin,
+            diff_add,
+            diff_remove,
+            diff_add_text,
+            diff_remove_text,
+            diff_hues,
+            diff_hunk,
+            syntax,
+            highlight,
+            selection,
+            highlight_bg,
+            highlight_fg,
+            highlight_ring,
+            highlight_current_bg,
+            highlight_current_fg,
+            highlight_current_ring,
+            task,
+            diagram,
+        } = *self;
+        (text, muted, accent, link_underline, code_bg, code_block_fill, code_block_border, quote_rule, rule).hash(state);
+        (body, headings, code_block).hash(state);
+        [inline_code_scale, inline_code_weight, inline_code_pad, code_block_pad[0], code_block_pad[1], list_indent, list_gap, strong_weight, table_min_column]
+            .map(f32_bits)
+            .hash(state);
+        (table_outline, table_rule, table_head_fill, table_head_text, table_head_rule, table_head_weight.map(f32_bits), table_tabular, table_font).hash(state);
+        ([f32_bits(table_pad[0]), f32_bits(table_pad[1])], table_flush_left, table_head_pad.map(|p| p.map(f32_bits)), table_full_width, table_margin.map(f32_bits)).hash(state);
+        table_frame.map(|TableFrame { fill, ring, pad }| (fill, ring, f32_bits(pad))).hash(state);
+        match table_body {
+            None => 0u8.hash(state),
+            Some(TableBody { fill, radius, shadows }) => {
+                1u8.hash(state);
+                (fill, f32_bits(*radius), shadows.len()).hash(state);
+                for rune::Shadow { x, y, blur, spread, color, inset } in shadows {
+                    ([f32_bits(*x), f32_bits(*y), f32_bits(*blur), f32_bits(*spread)], color, inset).hash(state);
+                }
+            }
+        }
+        (diff_add, diff_remove, diff_add_text, diff_remove_text, diff_hues, diff_hunk, syntax, highlight, selection).hash(state);
+        (
+            highlight_bg,
+            highlight_fg,
+            highlight_ring.map(|(c, w)| (c, f32_bits(w))),
+            highlight_current_bg,
+            highlight_current_fg,
+            highlight_current_ring.map(|(c, w)| (c, f32_bits(w))),
+        )
+            .hash(state);
+        let TaskPaint { fill_on, border_on, border_off, hover, focus_ring, mark, check, radius, motion } = task;
+        (fill_on, border_on, border_off, hover, focus_ring, mark, check as *const Icon as usize, f32_bits(radius), f32_bits(motion.duration), f32_bits(motion.bounce)).hash(state);
+        let DiagramPaint {
+            text,
+            muted,
+            surface,
+            surface_border,
+            node_fill,
+            node_border,
+            line,
+            cluster_fill,
+            note_fill,
+            note_border,
+            font,
+            max_width,
+            hover,
+            hover_neighbours,
+        } = diagram;
+        (text, muted, surface, surface_border, node_fill, node_border, line, cluster_fill, note_fill, note_border).hash(state);
+        (font, f32_bits(max_width), hover, hover_neighbours).hash(state);
+    }
+}

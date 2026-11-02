@@ -153,9 +153,14 @@ pub struct Markdown {
     highlighter: Highlighter,
 }
 
+#[cfg(test)]
+thread_local! {
+    static RENDERS: Cell<usize> = const { Cell::new(0) };
+}
+
 impl Markdown {
     pub fn new(src: impl Into<String>) -> Markdown {
-        Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: 0.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_ring: None,
+        Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_ring: None,
             on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, highlighter: Highlighter::builtin() }
     }
     /// Highlight UTF-8 byte ranges of the Markdown source string (see [`find`]).
@@ -212,7 +217,7 @@ impl Markdown {
     }
     /// Streaming word reveal in seconds (see [`El::reveal`]); 0 shows words at once.
     pub fn reveal(mut self, word_fade: f32) -> Self {
-        self.reveal = word_fade;
+        self.reveal = word_fade.max(0.0);
         self
     }
     /// The source is still arriving: a table's last row, with no newline after it yet, is left
@@ -311,6 +316,35 @@ impl Markdown {
 
     /// Builds with `style`, for apps without a [`Kit`] (see [`MarkdownStyle::neutral`]).
     pub fn render(self, style: &MarkdownStyle) -> El {
+        let can_cache = !self.streaming
+            && self.on_link.is_none()
+            && self.on_link_secondary.is_none()
+            && self.link_look.is_none()
+            && self.link_ring.is_none()
+            && self.on_task.is_none()
+            && !(self.selectable && self.copy_source)
+            && self.highlighter.is_builtin()
+            && !(cfg!(feature = "mermaid") && self.src.contains("mermaid"));
+        if can_cache {
+            let h = rune::memo::digest(&(
+                &self.src,
+                style,
+                &self.block_keys,
+                &self.highlights,
+                self.autolink,
+                self.reveal.to_bits(),
+                self.tasks_read_only,
+                self.selectable,
+                self.scroll_wide,
+            ));
+            return rune::memo::cached(h, || self.render_uncached(style));
+        }
+        self.render_uncached(style)
+    }
+
+    fn render_uncached(self, style: &MarkdownStyle) -> El {
+        #[cfg(test)]
+        RENDERS.with(|n| n.set(n.get() + 1));
         let (blocks, sources, tasks, starts, maps) = match (self.autolink, self.streaming) {
             (true, false) => doc_cached(&self.src),
             (true, true) => stream_cached(&self.src),

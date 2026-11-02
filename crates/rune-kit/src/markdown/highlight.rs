@@ -64,6 +64,13 @@ impl Highlight {
     }
 }
 
+impl std::hash::Hash for Highlight {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let Highlight { current, bg, fg, ring, key } = self;
+        (current, bg, fg, ring.map(|(c, w)| (c, if w == 0.0 { 0 } else { w.to_bits() })), key).hash(state);
+    }
+}
+
 /// An item accepted by [`Markdown::highlights`]: a `Range<usize>`, a match `Vec<Range<usize>>`
 /// from [`find`], or either paired with a [`Highlight`] (by value or reference).
 pub trait HighlightItem: Sized {

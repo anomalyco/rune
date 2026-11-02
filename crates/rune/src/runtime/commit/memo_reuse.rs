@@ -67,7 +67,9 @@ impl<S: 'static> Runtime<S> {
             && new_n.cold.get().is_none_or(|c| c.matched.is_none() && c.looping.is_none())
             && (self.flying.is_empty() || !self.flying.iter().any(|f| f.0 == new_n.id))
             && (self.aspect_snap.is_empty() || !self.aspect_snap.contains(&new_n.id))
-            && new_n.text.as_ref().is_none_or(|t| t.reveal < 0.0)
+            && new_n.text.as_ref().is_none_or(|t| {
+                t.reveal < 0.0 || self.reveals.get(&new_n.id).is_some_and(|r| r.words.is_empty() && r.len == t.content.len())
+            })
     }
 
     /// Fills `out` with the reused memo slices that can skip `apply`'s per-node diff loop.

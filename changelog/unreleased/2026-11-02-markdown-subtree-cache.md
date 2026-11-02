@@ -1,0 +1,1 @@
+- `Markdown::render` (and `Markdown::build`) now caches its built and flattened subtree across commits when rendered without link, task or custom highlighter closures, skipping element construction, flattening and `apply` on unchanged documents without an explicit `memo` wrapper. `MarkdownStyle` and `Highlight` implement `Hash`.
