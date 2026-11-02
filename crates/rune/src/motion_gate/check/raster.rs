@@ -104,7 +104,12 @@ fn draws(q: &Instance) -> Vec<Draw> {
             out.push(Draw { bottom: Some(q.uv), ..solid(q.fill, 1.0) });
         }
     } else if kind == KIND_GLYPH {
-        out.push(solid(q.fill, 0.35));
+        // A filtered glyph (`uv.zw` its texel span) can carry a one-texel transparent apron that
+        // an icon drops on the pixel grid (`icon_inst`): leave it out, so a glyph covers the
+        // same cells on and off the grid.
+        let apron = if q.uv[2] > 2.0 && q.uv[3] > 2.0 { [q.rect[2] / q.uv[2], q.rect[3] / q.uv[3]] } else { [0.0; 2] };
+        let core = [outer[0] + apron[0], outer[1] + apron[1], outer[2] - apron[0], outer[3] - apron[1]];
+        out.push(Draw { outer: core, ..solid(q.fill, 0.35) });
     } else if kind == KIND_RADIAL {
         let t = (q.params[3] % 2.0 - q.params[0] % 2.0).abs().clamp(0.0, 1.0);
         out.push(solid(lerp(q.fill, q.border, 0.5), t));
@@ -255,6 +260,22 @@ mod tests {
         end.params[1] = KIND_LAYER_END;
         let half = rasterize(&[layer, rect([0.0, 0.0, 96.0, 96.0], red, 1.0), end], (48.0, 48.0), 2.0);
         assert!((half.color(0).r - 0.5).abs() < 0.02, "{:?}", half.color(0));
+    }
+
+    #[test]
+    fn an_icon_covers_the_same_cells_on_the_pixel_grid_as_off_it() {
+        // `icon_inst`: on the grid it loads its 16 texels directly; off it, the quad and its
+        // span grow by one transparent texel each side for filtering.
+        let glyph = |r: [f32; 4], span: f32| Instance {
+            rect: r, fill: Color::WHITE.premul(1.0), params: [0.0, KIND_GLYPH, 0.0, 1.0], uv: [0.0, 0.0, span, span],
+            clip: [-1e9, -1e9, 1e9, 1e9], ..Instance::zeroed()
+        };
+        let on = rasterize(&[glyph([48.0, 24.0, 16.0, 16.0], 0.0)], (96.0, 72.0), 1.0);
+        let off = rasterize(&[glyph([47.0, 23.0, 18.0, 18.0], 18.0)], (96.0, 72.0), 1.0);
+        for i in 0..on.w * on.h {
+            let (a, b) = (on.lab(i)[0], off.lab(i)[0]);
+            assert!((a - b).abs() < 0.01, "cell {i}: {a} on the grid, {b} off it");
+        }
     }
 
     #[test]
