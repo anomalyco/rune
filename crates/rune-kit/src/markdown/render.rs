@@ -363,7 +363,7 @@ impl Renderer {
             .radius(t.radius)
             .fill(fill)
             .border(1.0, border)
-            .motion(t.motion)
+            .token_motion(t.motion)
             .focus_ring(1.0, 0.0, t.focus_ring)
             .child(icon(t.check, 10.0).key("mark").color(t.mark).opacity(if checked { 1.0 } else { 0.0 }));
         if interactive {

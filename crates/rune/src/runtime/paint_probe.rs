@@ -61,6 +61,7 @@ impl<S: 'static> Runtime<S> {
                 rank: self.paint_rank.as_ref().and_then(|r| r.get(i)).copied().unwrap_or(i as u32),
                 intent,
                 instant: n.instant_changes,
+                at_once: crate::motion_gate::check::paint::at_once(v.instant_motion, v.blur_motion.as_deref().map(|a| a.curve == rune_motion::Curve::Instant)),
                 pointer,
             };
             out.entry((n.path.clone(), self.subtree_exiting(i))).or_insert(paint);

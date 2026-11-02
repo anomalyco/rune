@@ -41,6 +41,10 @@
 //! `changes-twice` find a property or a region that steps, blinks or changes twice. An input
 //! ([`Run::act`]), a hover or press highlight landing, a `Tx::instant` commit,
 //! `El::instant_changes` and `El::motion_intent` marks keep a deliberate change from counting.
+//! So does `El::motion(Spring::NONE)` written on the element itself, for the properties that
+//! spring governs there (colours but text, corners, shadow, blur; `El::blur_motion(Spring::NONE)`
+//! for blur alone). A `Spring::NONE` it inherits, takes from a theme or token
+//! (`El::token_motion`) or gets under Reduce Motion marks nothing, since no one chose it there.
 
 pub mod check;
 mod gate;
@@ -214,3 +218,5 @@ mod tests;
 mod loop_tests;
 #[cfg(test)]
 mod paint_tests;
+#[cfg(test)]
+mod spring_none_tests;

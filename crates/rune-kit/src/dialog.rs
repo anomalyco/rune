@@ -54,10 +54,10 @@ impl Dialog {
             .w_full().max_w(self.width).radius(6.0).fill(k.c.layer_01)
             .child(row().key("header").w_full().padding(16.0).items_start().child(title).child(dismiss))
             .child(body)
-            .motion(k.motion.overlay), &k.elevation.overlay);
+            .token_motion(k.motion.overlay), &k.elevation.overlay);
         let panel = close(panel).modal_click_outside(self.outside);
         layer.push(el().key(format!("{}-scrim", self.key)).absolute(0.0, 0.0).w_full().h_full()
-            .fill(k.c.scrim).motion(k.motion.overlay));
+            .fill(k.c.scrim).token_motion(k.motion.overlay));
         layer.push(el().key(format!("{}-layer", self.key)).absolute(0.0, 0.0).w_full().h_full().padding(16.0).center().child(panel));
     }
 }

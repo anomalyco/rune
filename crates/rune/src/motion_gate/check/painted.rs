@@ -3,8 +3,9 @@
 //! paint order against what it overlaps (`z-order`). A colour that springs or fades has no
 //! one-frame step and passes. Changes an input asked for on its frame, a hover or press highlight
 //! landing (it lands with the pointer, even on content sliding under a still one), a
-//! `Tx::instant` commit, an `El::instant_changes` element, and a matching `El::motion_intent`
-//! mark are the design.
+//! `Tx::instant` commit, an `El::instant_changes` element, a matching `El::motion_intent` mark,
+//! and a `motion(Spring::NONE)` written on the element itself (for what that spring governs) are
+//! the design.
 
 use std::collections::{HashMap, HashSet};
 
@@ -74,8 +75,9 @@ pub fn painted(rec: &Recording, loops: &HashSet<usize>) -> Vec<(usize, Finding)>
             (k >= rec.start && shows(s, rec.size) && !p.instant).then_some((s, p))
         }).collect();
         if at.iter().all(Option::is_none) { continue; }
-        for ch in CHANNELS {
-            let vals: Vec<Option<series::V>> = at.iter().map(|x| x.map(|(_, p)| (ch.embed)(p))).collect();
+        for (c, ch) in CHANNELS.iter().enumerate() {
+            // An element's own `motion(Spring::NONE)` lands what it governs at once by design.
+            let vals: Vec<Option<series::V>> = at.iter().map(|x| x.filter(|(_, p)| !p.at_once(c)).map(|(_, p)| (ch.embed)(p))).collect();
             let w = |k: usize| -> f32 {
                 let one = |j: usize| at.get(j).copied().flatten().map_or(0.0, |(s, p)| (ch.weight)(p, &on_window(&s.vis, rec.size)) * s.op.min(1.0));
                 one(k).max(one(k.wrapping_sub(1)))

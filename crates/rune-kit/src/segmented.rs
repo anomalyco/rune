@@ -82,7 +82,7 @@ impl SegmentedControl {
                 .radius(6.0)
                 .fill(c.bg_base)
                 .box_shadow(rune::Shadow { spread: 0.5, color: c.border_strong, ..Default::default() })
-                .motion(k.motion.control)
+                .token_motion(k.motion.control)
         };
         match (self.selected, self.width) {
             (Some(sel), Width::Points(w)) => {

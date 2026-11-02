@@ -75,6 +75,9 @@ pub struct VisualCold {
     pub(crate) enter_delay: f32,
     /// `El::motion_intent`: authored motion traits inherited by this subtree.
     pub(crate) motion_intent: crate::el::motion::MotionIntent,
+    /// `El::motion(Spring::NONE)` written on this element itself, not inherited or from a
+    /// token: what that spring governs here lands at once by design.
+    pub(crate) instant_motion: bool,
 }
 
 impl Empty for VisualCold {
@@ -112,6 +115,7 @@ impl Empty for VisualCold {
         child_exit: None,
         enter_delay: 0.0,
         motion_intent: crate::el::motion::MotionIntent::NONE,
+        instant_motion: false,
     };
 }
 

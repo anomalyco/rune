@@ -94,7 +94,7 @@ impl Accordion {
                 .corners([top, top, bottom, bottom])
                 .fill(if item.state == State::Hover { c.hover } else { c.bg_base })
                 .border(1.0, c.border_base)
-                .motion(k.motion.control)
+                .token_motion(k.motion.control)
                 .child(text(item.title).key("title").font(k.ty.text_small).color(c.text_base));
             if item.state == State::Rest {
                 trigger = trigger.hover(c.hover);

@@ -25,7 +25,7 @@ fn shell(k: &Kit, e: El, sheen: [f32; 2], state: State, invalid: bool, focused: 
         .radius(k.radius.md)
         .fill(if hover { over(c.hover, c.bg_base) } else { c.bg_base })
         .gradient(k.light(sheen[0]), k.light(sheen[1]))
-        .motion(k.motion.control);
+        .token_motion(k.motion.control);
     if state == State::Disabled {
         return shadows(k, e, &k.elevation.button_neutral).dim(0.5);
     }

@@ -80,9 +80,27 @@ impl El {
 
     /// The spring for this subtree's layout and colour changes (inherited).
     /// Presence uses the transition's own enter/exit springs.
+    ///
+    /// [`Spring::NONE`] written here lands this element's changes at once, and motion checks
+    /// (`rune::motion_gate`) take that as the design for the properties it governs on this
+    /// element: its fill, border, shadow, gradient and outline colours, corners, shadow and
+    /// blur. Not for its children, which inherit the spring but not the mark. A spring from a
+    /// theme or token goes through [`token_motion`](Self::token_motion) instead.
     pub fn motion(mut self, s: Spring) -> Self {
-        self.motion = Some(s);
+        self.set_motion(s, s == Spring::NONE);
         self
+    }
+    /// [`motion`](Self::motion) with a spring a theme or token chose rather than this element:
+    /// a [`Spring::NONE`] here still lands at once, but motion checks still report what snaps.
+    pub fn token_motion(mut self, s: Spring) -> Self {
+        self.set_motion(s, false);
+        self
+    }
+    fn set_motion(&mut self, s: Spring, authored_instant: bool) {
+        self.motion = Some(s);
+        if authored_instant || self.vis.instant_motion {
+            self.vis.cold_mut().instant_motion = authored_instant;
+        }
     }
     /// Shift this element and its subtree by `(x, y)` points without moving it in layout:
     /// siblings keep their places, and hit tests follow the shift. A change springs on the

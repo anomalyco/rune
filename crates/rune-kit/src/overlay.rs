@@ -60,7 +60,7 @@ fn anchor_origin(side: Side, align: Align) -> Vec2 {
 pub(crate) fn anchor_at(k: &Kit, content: El, anchor: &str, side: Side, align: Align, gap: f32) -> El {
     fit(content, anchor, side, align, gap)
         .transition(Transition::scale_anchor(0.96, anchor_origin(side, align)))
-        .motion(k.motion.overlay)
+        .token_motion(k.motion.overlay)
 }
 
 fn anchor_with(motion: Spring, content: El, anchor: &str, placement: Placement, gap: f32) -> El {
@@ -68,7 +68,7 @@ fn anchor_with(motion: Spring, content: El, anchor: &str, placement: Placement, 
     content
         .anchored(anchor, side, align, gap)
         .transition(Transition::scale_anchor(0.96, anchor_origin(side, align)))
-        .motion(motion)
+        .token_motion(motion)
 }
 
 /// A dropdown surface above or below its anchor is at most as tall as the window leaves it
@@ -112,7 +112,7 @@ pub(crate) fn menu_anchor(k: &Kit, content: El, anchor: &str, placement: Placeme
         springs: SpringPair::new(tokens::INSTANT, Spring::new(0.25, 0.0)),
         ..Transition::identity()
     };
-    fit(content, anchor, side, align, gap).transition(fade).motion(k.motion.overlay)
+    fit(content, anchor, side, align, gap).transition(fade).token_motion(k.motion.overlay)
 }
 
 /// A transparent full-window press target under an open overlay: pressing outside closes it.

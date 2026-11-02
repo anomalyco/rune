@@ -68,7 +68,7 @@ impl RadioItem {
             .fill(if hover { over(overlay, base) } else { base })
             .gradient(sheen, k.light(0.0))
             .box_shadow(Shadow { spread: 0.5, color: ring, inset: true, ..Shadow::default() })
-            .motion(k.motion.control);
+            .token_motion(k.motion.control);
         control = control.focus_ring(2.0, 1.0, c.border_focus);
         if self.checked {
             let dot = c.knob_on;

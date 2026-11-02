@@ -42,6 +42,9 @@ pub struct Paint {
     pub intent: u16,
     /// It or its parent changes at once by design (`El::instant_changes`).
     pub instant: bool,
+    /// Channels (a bit per index in [`CHANNELS`]) it lands at once by design: those its own
+    /// `El::motion(Spring::NONE)` or `El::blur_motion(Spring::NONE)` governs (see [`at_once`]).
+    pub at_once: u16,
     /// How hovered and how pressed it shows, 0 to 1. A highlight lands with the pointer by
     /// design, so a fill that steps with these isn't a snap.
     pub pointer: [f32; 2],
@@ -49,11 +52,16 @@ pub struct Paint {
 
 impl Default for Paint {
     fn default() -> Self {
-        Paint { colors: [Color::TRANSPARENT; COLORS], sizes: [0.0; SIZES], gradient_end: Color::TRANSPARENT, effect: None, image: None, rank: 0, intent: 0, instant: false, pointer: [0.0; 2] }
+        Paint { colors: [Color::TRANSPARENT; COLORS], sizes: [0.0; SIZES], gradient_end: Color::TRANSPARENT, effect: None, image: None, rank: 0, intent: 0, instant: false, at_once: 0, pointer: [0.0; 2] }
     }
 }
 
 impl Paint {
+    /// Whether channel `i` of [`CHANNELS`] lands at once on it by design.
+    pub fn at_once(&self, i: usize) -> bool {
+        self.at_once & (1 << i) != 0
+    }
+
     pub fn intends(&self, any: MotionIntent) -> bool {
         self.intent & any.bits() != 0
     }
@@ -175,6 +183,19 @@ pub const CHANNELS: &[Channel] = &[
     }, weight: |_, r| if area(r) >= 16.0 { 1.0 } else { 0.0 } },
     Channel { name: "image", embed: |p| p.image.map_or([0.0; 6], |(id, g)| token(id.wrapping_mul(31).wrapping_add(g))), weight: |_, r| if area(r) >= 16.0 { 1.0 } else { 0.0 } },
 ];
+
+/// The [`Paint::at_once`] bits for an element whose own `El::motion` is `Spring::NONE`
+/// (`motion`) and whose own blur curve is instant (`blur`; `Some(false)` when it has a curve of
+/// its own that isn't). Its colours, corners and shadow land on that spring, and its blur too
+/// unless it has its own curve; text colour keeps a short fade, and border width, backdrop
+/// blur, effect and image don't spring at all.
+pub fn at_once(motion: bool, blur: Option<bool>) -> u16 {
+    let sprung: &[&str] = &["fill", "border", "shadow", "gradient", "outline", "radius", "shadow-blur"];
+    let blurs = blur.unwrap_or(motion);
+    CHANNELS.iter().enumerate()
+        .filter(|(_, c)| motion && sprung.contains(&c.name) || blurs && c.name == "blur")
+        .fold(0, |bits, (i, _)| bits | 1 << i)
+}
 
 /// The colour a channel shows, for evidence: its swatch.
 pub fn swatch(p: &Paint, channel: &str) -> Option<Color> {

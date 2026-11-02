@@ -89,7 +89,7 @@ impl Checkbox {
             .radius(k.radius.sm)
             .fill(fill)
             .border(1.0, border)
-            .motion(k.motion.control)
+            .token_motion(k.motion.control)
             .child(mark.key("mark").color(c.std_icon).opacity(if on { 1.0 } else { 0.0 }));
         if self.state == State::Rest {
             control = control.hover(c.surface_hover);
