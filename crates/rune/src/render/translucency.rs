@@ -29,7 +29,11 @@ pub(crate) fn serves(gpu: &crate::render::Gpu, surface: &wgpu::Surface<'_>, want
 
 /// `pick`'s adapter when it composites translucent pixels on `surface`; otherwise the adapter
 /// on `instance` that does on the compositor's GPU (`gpu_pick`), then the lowest-power one that
-/// does, or `pick`'s adapter when none can.
+/// does, or `pick`'s adapter when none can. When the compositor named its GPU, no other GPU is
+/// a candidate: its buffers can't be shown there. NVIDIA's X11 driver reports only opaque alpha
+/// for an XWayland overlay, and an integrated GPU that claims premultiplied alpha on the same
+/// window can't make a swapchain on an XWayland that NVIDIA drives (hex#982); the overlay
+/// draws opaque on the compositor's GPU instead.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn prefer(instance: &wgpu::Instance, surface: &wgpu::Surface<'_>, pick: &crate::gpu::pick::Pick) -> wgpu::Adapter {
     if mode(surface, &pick.adapter).is_some() {
@@ -37,7 +41,11 @@ pub(crate) fn prefer(instance: &wgpu::Instance, surface: &wgpu::Surface<'_>, pic
     }
     let mut able: Vec<_> = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()))
         .into_iter()
-        .filter(|candidate| candidate.is_surface_supported(surface) && mode(surface, candidate).is_some())
+        .filter(|candidate| {
+            candidate.is_surface_supported(surface)
+                && mode(surface, candidate).is_some()
+                && (!pick.knows_compositor() || pick.on_compositor_device(&candidate.get_info()))
+        })
         .collect();
     able.sort_by_key(|candidate| {
         let info = candidate.get_info();

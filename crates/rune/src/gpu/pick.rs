@@ -42,6 +42,11 @@ impl Pick {
         matches!(self.reason, Reason::EnvName | Reason::EnvPower)
     }
 
+    /// Whether the compositor told us its main device.
+    pub fn knows_compositor(&self) -> bool {
+        self.compositor.is_some()
+    }
+
     /// Whether `info` is an adapter on the compositor's device.
     pub fn on_compositor_device(&self, info: &wgpu::AdapterInfo) -> bool {
         self.compositor.as_deref().is_some_and(|pci| same_pci(pci, &info.device_pci_bus_id))

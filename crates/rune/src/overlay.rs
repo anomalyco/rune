@@ -986,6 +986,9 @@ impl<T: 'static> Overlay<T> {
                     }
                 };
                 prewarmed = renderer;
+                // A new device: the renderer from an earlier show holds the old device's
+                // buffers and textures, so it is rebuilt here (with the atlases) below.
+                self.renderer = None;
                 let gpu = Arc::new(gpu);
                 *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
                 self.gpu = Some(gpu);
@@ -1008,7 +1011,16 @@ impl<T: 'static> Overlay<T> {
         }
         let info = gpu.adapter.get_info();
         *self.shared.surface.lock().unwrap() = Some(format!("{:?} on {} ({:?}), {:?}, {:?}", info.backend, info.name, info.device_type, config.alpha_mode, config.format));
+        // A surface the driver can't make a swapchain for fails this overlay, not the app:
+        // wgpu's default handler panics on the error.
+        #[cfg(not(target_arch = "wasm32"))]
+        let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
         surface.configure(&gpu.device, &config);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(error) = pollster::block_on(scope.pop()) {
+            self.fail(format!("could not configure its surface on {} ({:?}): {error}", info.name, info.backend));
+            return None;
+        }
         #[cfg(target_os = "macos")]
         crate::platform::macos::pin_contents_top_left(&surface);
         let target_format = if self.rt.srgb_blend() { config.format.remove_srgb_suffix() } else { config.format };
