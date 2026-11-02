@@ -34,6 +34,17 @@ impl Scene {
         self.store.get(id, prop).or_else(|| self.base::<T>(i, prop.id))
     }
 
+    /// True when `id` is [`Phase::Present`] at `frame` with no screen-space path and no active track.
+    #[inline]
+    pub fn is_resting_at(&self, id: NodeId, frame: Rect) -> bool {
+        let Some(i) = self.slot(id) else { return false };
+        let n = &self.nodes[i];
+        n.phase == Phase::Present
+            && n.path.is_none()
+            && self.values(i, prop::FRAME.id).map_or(n.frame, Rect::read_lanes) == frame
+            && (self.store.active_len() == 0 || !self.store.is_node_animating(id))
+    }
+
     pub(super) fn ensure_prop<T: Animatable>(&mut self, i: usize, p: Prop<T>) {
         if !self.has_track(i, p)
             && let Some(base) = self.base::<T>(i, p.id)
@@ -95,5 +106,37 @@ impl Scene {
         if self.trace.is_some() {
             self.intents.push((id, bits, seconds));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_resting_at_tracks_presence_frame_and_active_animations() {
+        let mut s = Scene::new();
+        let id = NodeId(1);
+        let r0 = Rect::new(0.0, 0.0, 40.0, 20.0);
+        let r1 = Rect::new(10.0, 0.0, 40.0, 20.0);
+        assert!(!s.is_resting_at(id, r0));
+
+        s.insert(id, NodeSpec::new(r0), Mount::Initial);
+        assert!(s.is_resting_at(id, r0));
+        assert!(!s.is_resting_at(id, r1));
+
+        s.set_frame(id, r1, Spring::SMOOTH);
+        assert!(!s.is_resting_at(id, r0));
+        assert!(!s.is_resting_at(id, r1), "still springing toward r1");
+        s.frame_at(5.0);
+        assert!(s.is_resting_at(id, r1));
+
+        s.animate(id, prop::OPACITY, 0.5, Spring::SMOOTH);
+        assert!(!s.is_resting_at(id, r1), "active property track blocks resting fast path");
+        s.frame_at(10.0);
+        assert!(s.is_resting_at(id, r1));
+
+        s.remove(id);
+        assert!(!s.is_resting_at(id, r1), "exiting node is not resting");
     }
 }

@@ -63,12 +63,13 @@ pub use line_metrics::{last_line_fill, layout_height, stream_height_lag};
 pub(crate) use underline::underline_edges;
 pub use case::TextCase;
 pub use hash::text_hash;
-pub(crate) use hash::shape_key;
+pub(crate) use hash::{elide_key, shape_key};
 pub(crate) use families::choose_families;
 pub use measure::{FamiliesGuard, TextInk, advance, font_epoch, ink, measure, measure_with, with_families};
 pub use rich_layout::RichLayoutOptions;
 pub use run::{Run, RunLayout};
 pub(crate) use case::Source as CaseSource;
+pub(crate) use layout_cache::CachedElision;
 
 use default_fonts::DEFAULT_FONTS;
 use fallback::Route;
@@ -130,13 +131,14 @@ pub struct TextSystem {
     font_cx: FontContext,
     layout_cx: LayoutContext<Ink>,
     scale_cx: ScaleContext,
-    layouts: Cache<Layout<Ink>>,
+    layouts: Cache<Rc<Layout<Ink>>>,
     /// The `layouts` key of the latest layout of each shaping (see `layout_blocks_inner`), whose
     /// glyphs a new width re-breaks instead of shaping the text again.
     shapes: HashMap<u64, u64>,
     /// Shapings whose text was edited this commit (see [`Self::supersede`]).
     superseded: FxHashSet<u64>,
-    runs: Cache<RunLayout>,
+    elisions: Cache<CachedElision>,
+    runs: Cache<Rc<RunLayout>>,
     generation: u32,
     /// The slots' families as named; `sans` and `mono` are the lists text asks for.
     families: (String, String),
@@ -271,6 +273,7 @@ impl TextSystem {
             layouts: Default::default(),
             shapes: Default::default(),
             superseded: Default::default(),
+            elisions: Default::default(),
             runs: Default::default(),
             generation: 0,
             families: (families.0.to_owned(), families.1.to_owned()),
@@ -433,10 +436,21 @@ impl TextSystem {
     ) -> Rc<Layout<Ink>> {
         let shared = (!cache).then(|| std::mem::replace(&mut self.layout_cx, LayoutContext::new()));
         let has_indented_blocks = blocks.iter().any(|&b| b != crate::edit::Block::Paragraph);
+        // Shaping depends on the text, spans, style, scale, overflow-wrap and pills; line
+        // breaking adds the width, alignment and block indents. A layout cached at one width
+        // is re-broken at another rather than shaped again.
+        let shape_key = shape.unwrap_or_else(|| shape_key(text, spans, style, scale, wrap_anywhere, pills));
+        let key = hash::break_key(shape_key, max_width, align, has_indented_blocks.then_some(blocks));
+        let g = self.generation;
+        if cache && let Some(Entry { value: l, used, .. }) = self.layouts.get_mut(&key) {
+            *used = g;
+            // A width change re-breaks the newest layout, not one measured since at another.
+            self.shapes.entry(shape_key).or_insert(key);
+            return l.clone();
+        }
         // Each pill's label range, and the room before and after it in device px; boxes keep
         // the pill's index in their id, so ranges that fail the checks keep no chip.
         let pm = PillMetrics::new(style.size);
-        let raw_pills = pills;
         let pills: Vec<(usize, std::ops::Range<usize>, u32, u32)> = pills
             .iter()
             .enumerate()
@@ -448,12 +462,6 @@ impl TextSystem {
                 !r.is_empty() && text.is_char_boundary(r.start) && text.is_char_boundary(r.end) && !text.as_bytes()[r.clone()].contains(&b'\n')
             })
             .collect();
-        // Shaping depends on the text, spans, style, scale, overflow-wrap and pills; line
-        // breaking adds the width, alignment and block indents. A layout cached at one width
-        // is re-broken at another rather than shaped again.
-        let shape_key = shape.unwrap_or_else(|| shape_key(text, spans, style, scale, wrap_anywhere, raw_pills));
-        let key = hash::break_key(shape_key, max_width, align, has_indented_blocks.then_some(blocks));
-        let g = self.generation;
         let break_lines = |layout: &mut Layout<Ink>| {
             if has_indented_blocks || !pills.is_empty() {
                 break_lines_with_blocks(layout, blocks, style.size, scale, max_width);
@@ -461,27 +469,22 @@ impl TextSystem {
                 layout.break_all_lines(max_width);
             }
         };
-        if cache {
-            if let Some(Entry { value: l, used, .. }) = self.layouts.get_mut(&key) {
-                *used = g;
-                // A width change re-breaks the newest layout, not one measured since at another.
-                self.shapes.entry(shape_key).or_insert(key);
-                return l.clone();
-            }
-            if let Some(prev) = self.shapes.get(&shape_key).copied() && let Some(Entry { value: shaped, used, .. }) = self.layouts.get(&prev) {
-                self.rebroken += 1;
-                let _break_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Text);
-                // One this commit hasn't used and nothing else holds moves to the new width and
-                // re-breaks in place; otherwise the shaped runs are copied.
-                let (moves, mut l) = (*used != g && Rc::strong_count(shaped) == 1, shaped.clone());
-                if moves { self.layouts.remove(&prev); self.glyph_cache.forget(&l); }
-                let layout = Rc::make_mut(&mut l);
-                break_lines(layout);
-                layout.align(align, AlignmentOptions::default());
-                self.layouts.insert(key, Entry::new(l.clone(), g, text.len(), shape_key));
-                self.shapes.insert(shape_key, key);
-                return l;
-            }
+        if cache
+            && let Some(prev) = self.shapes.get(&shape_key).copied()
+            && let Some(Entry { value: shaped, used, .. }) = self.layouts.get(&prev)
+        {
+            self.rebroken += 1;
+            let _break_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Text);
+            // One this commit hasn't used and nothing else holds moves to the new width and
+            // re-breaks in place; otherwise the shaped runs are copied.
+            let (moves, mut l) = (*used != g && Rc::strong_count(shaped) == 1, shaped.clone());
+            if moves { self.layouts.remove(&prev); self.glyph_cache.forget(&l); }
+            let layout = Rc::make_mut(&mut l);
+            break_lines(layout);
+            layout.align(align, AlignmentOptions::default());
+            self.layouts.insert(key, Entry::new(l.clone(), g, text.len(), shape_key));
+            self.shapes.insert(shape_key, key);
+            return l;
         }
         self.shaped += 1;
         let _shape_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Text);
@@ -801,19 +804,6 @@ impl TextSystem {
     pub fn measure(&mut self, text: &str, style: TextStyle, scale: f32) -> (f32, f32) {
         let l = self.layout_rich(text, &[], style, scale, None);
         (l.full_width().ceil() / scale, layout_height(&l, style, scale) / scale)
-    }
-
-    /// `run` shaped as one line in `style`, cached as [`Self::end_commit`] keeps layouts.
-    pub fn run_layout(&mut self, run: &Run, style: TextStyle, scale: f32) -> Rc<RunLayout> {
-        let key = run.key(style, scale);
-        let g = self.generation;
-        if let Some(Entry { value: r, used, .. }) = self.runs.get_mut(&key) {
-            *used = g;
-            return r.clone();
-        }
-        let r = Rc::new(RunLayout::new(self.layout_rich(run.as_str(), &[], style, scale, None), run.as_str()));
-        self.runs.insert(key, Entry::new(r.clone(), g, run.as_str().len(), 0));
-        r
     }
 
     /// The atlas quad for `icon` at `px` device pixels square, top-left at `origin`.

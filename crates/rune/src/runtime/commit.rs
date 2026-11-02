@@ -59,6 +59,7 @@ pub(super) struct Measured {
     pub(super) layout_reads: layout_read::LayoutReads,
     pub(super) memo_flattened: Option<Vec<memo_reuse::PendingFlat>>,
     pub(super) memo_reused: Vec<memo_reuse::ReusedSpan>,
+    pub(super) taken_paths: Vec<(u32, u32)>,
     /// The selection as the measure began, before reused `memo` subtrees left the last
     /// commit's nodes.
     pub(super) selection: Vec<layout_read::SelectedRange>,
@@ -106,7 +107,7 @@ impl<S: 'static> Runtime<S> {
     /// Restores any nodes moved out of `self.nodes` and recycles `measured`'s buffers before a
     /// commit pass re-measures.
     pub(super) fn discard_measured(&mut self, mut measured: Measured) {
-        memo_reuse::restore_moved_nodes(&mut self.nodes, &mut measured.nodes, &measured.memo_reused);
+        memo_reuse::restore_moved_nodes(&mut self.nodes, &mut measured.nodes, &measured.memo_reused, &measured.taken_paths);
         measured.nodes.clear();
         self.spare_nodes = measured.nodes;
         if let Some(mut pending) = measured.memo_flattened {
@@ -115,6 +116,8 @@ impl<S: 'static> Runtime<S> {
         }
         measured.memo_reused.clear();
         self.memo.reused_scratch = measured.memo_reused;
+        measured.taken_paths.clear();
+        self.memo.taken_paths_scratch = measured.taken_paths;
         self.layout = measured.layout;
     }
 }

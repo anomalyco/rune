@@ -96,14 +96,18 @@ impl<S: 'static> Runtime<S> {
                 continue;
             }
             let mut scene_rect = r_new.local;
-            if let Some(v) = r_new.parent.and_then(|p| self.virtuals.get(&nodes[p].path)) {
+            if !self.virtuals.is_empty()
+                && let Some(v) = r_new.parent.and_then(|p| self.virtuals.get(&nodes[p].path))
+            {
                 scene_rect.y -= v.before;
             }
             let parent_top_clean = r_new.in_row != RowLayout::Snaps
                 || r_new.parent.is_none_or(|p| {
                     nodes.get(p + 1).is_none_or(|first_sib| {
                         let mut sr = first_sib.local;
-                        if let Some(v) = self.virtuals.get(&nodes[p].path) {
+                        if !self.virtuals.is_empty()
+                            && let Some(v) = self.virtuals.get(&nodes[p].path)
+                        {
                             sr.y -= v.before;
                         }
                         self.scene.get(first_sib.id, prop::FRAME) == Some(sr)
@@ -112,10 +116,11 @@ impl<S: 'static> Runtime<S> {
             let root_clean = self.node_clean_for_apply(r_new, r_old, any_animating)
                 && parent_top_clean
                 && r_new.parent.map(|p| nodes[p].id) == r_old.parent.map(|p| self.nodes[p].id)
-                && !self.virtuals.contains_key(&r_new.path)
-                && self.scene.get(r_new.id, prop::FRAME) == Some(scene_rect)
-                && self.reorder_jump(nodes, span.new_start) == 0.0
-                && !r_new.parent.and_then(|p| self.virtuals.get(&nodes[p].path)).is_some_and(crate::el::virtual_list::VirtualList::replaced_view);
+                && (self.virtuals.is_empty() || !self.virtuals.contains_key(&r_new.path))
+                && self.scene.is_resting_at(r_new.id, scene_rect)
+                && (self.stacks.is_empty() || self.reorder_jump(nodes, span.new_start) == 0.0)
+                && (self.virtuals.is_empty()
+                    || !r_new.parent.and_then(|p| self.virtuals.get(&nodes[p].path)).is_some_and(crate::el::virtual_list::VirtualList::replaced_view));
 
             if !root_clean && !self.flying.is_empty() {
                 continue;
@@ -147,10 +152,13 @@ impl<S: 'static> Runtime<S> {
 pub(super) struct MemoFlattenCtx<'a> {
     pub(super) old_nodes: &'a mut [Node],
     pub(super) old_present_len: usize,
+    pub(super) old_node_index: &'a HashMap<NodeId, usize>,
+    pub(super) old_cursor: usize,
     pub(super) committing: bool,
     pub(super) committed: &'a HashMap<u64, FlattenedMemo>,
     pub(super) pending: Vec<PendingFlat>,
     pub(super) reused: Vec<ReusedSpan>,
+    pub(super) taken_paths: Vec<(u32, u32)>,
     pub(super) path_ids: &'a mut HashMap<String, NodeId>,
     pub(super) next_id: &'a mut u64,
 }
@@ -209,7 +217,7 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
         && a.motion_intent == *motion_intent && a.instant_motion == *instant_motion
 }
 
-fn same_visual(a: &Visual, b: &Visual) -> bool {
+pub(super) fn same_visual(a: &Visual, b: &Visual) -> bool {
     let Visual {
         fill, border, hover, press, radius, offset, border_width, opacity, paint_alpha, blur,
         rotate, mark, hit, continuous_corners, blend, hover_group, cache, raise,
@@ -523,7 +531,7 @@ pub(super) fn try_reuse_memo(
         return None;
     }
     let old_slice = &ctx.old_nodes[flat.start..end];
-    if old_slice[0].is_moved_stub() || old_slice[0].id != flat.root_id || old_slice[flat.len - 1].id != flat.last_id {
+    if old_slice[0].is_moved_stub() || old_slice[0].path.is_empty() || old_slice[0].id != flat.root_id || old_slice[flat.len - 1].id != flat.last_id {
         return None;
     }
     let (inherited, hover_within) = inherited_for(parent, nodes, motion, in_row, scale);
@@ -534,7 +542,7 @@ pub(super) fn try_reuse_memo(
     if el.key != old_slice[0].key || !same_root_el(el, built) {
         return None;
     }
-    if !old_slice.iter().all(|old| !old.is_moved_stub() && taffy.can_reuse(old.id.0, old.taffy)) {
+    if !old_slice.iter().all(|old| !old.is_moved_stub() && !old.path.is_empty() && taffy.can_reuse(old.id.0, old.taffy)) {
         return None;
     }
 
@@ -641,6 +649,9 @@ pub(super) fn try_reuse_memo(
         }
     }
 
+    if same_path {
+        ctx.old_cursor = end;
+    }
     ctx.pending.push(PendingFlat {
         built_id: built.id,
         start: new_start,
@@ -658,9 +669,17 @@ pub(super) fn try_reuse_memo(
     Some(root_taffy)
 }
 
-/// Puts `moved` slices back into `old_nodes` with their pre-pass geometry and flags before a
-/// virtual-window retry or a layout-read, focus or caret re-measure runs again.
-pub(super) fn restore_moved_nodes(old_nodes: &mut [Node], nodes: &mut [Node], reused: &[ReusedSpan]) {
+/// Puts `moved` slices and individually taken paths back into `old_nodes` with their pre-pass
+/// geometry and flags before a virtual-window retry or a layout-read, focus or caret re-measure.
+pub(super) fn restore_moved_nodes(
+    old_nodes: &mut [Node],
+    nodes: &mut [Node],
+    reused: &[ReusedSpan],
+    taken_paths: &[(u32, u32)],
+) {
+    for &(oi, ni) in taken_paths {
+        old_nodes[oi as usize].path = std::mem::take(&mut nodes[ni as usize].path);
+    }
     for span in reused.iter().filter(|s| s.moved) {
         for k in 0..span.len {
             let stub = &old_nodes[span.old_start + k];
@@ -688,8 +707,11 @@ impl crate::memo::MemoCache {
         present_len: usize,
         pending: Option<Vec<PendingFlat>>,
         mut reused: Vec<ReusedSpan>,
+        mut taken_paths: Vec<(u32, u32)>,
     ) {
         self.present_len = present_len;
+        taken_paths.clear();
+        self.taken_paths_scratch = taken_paths;
         let Some(mut pending) = pending else {
             reused.clear();
             self.reused_scratch = reused;

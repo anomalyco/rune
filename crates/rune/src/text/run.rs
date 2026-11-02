@@ -120,3 +120,18 @@ impl RunLayout {
         Some(((self.graphemes[i + 1].1 - self.graphemes[i].1) / scale).max(0.0))
     }
 }
+
+impl super::TextSystem {
+    /// `run` shaped as one line in `style`, cached as [`Self::end_commit`] keeps layouts.
+    pub fn run_layout(&mut self, run: &Run, style: TextStyle, scale: f32) -> Rc<RunLayout> {
+        let key = run.key(style, scale);
+        let g = self.generation;
+        if let Some(super::Entry { value: r, used, .. }) = self.runs.get_mut(&key) {
+            *used = g;
+            return r.clone();
+        }
+        let r = Rc::new(RunLayout::new(self.layout_rich(run.as_str(), &[], style, scale, None), run.as_str()));
+        self.runs.insert(key, super::Entry::new(r.clone(), g, run.as_str().len(), 0));
+        r
+    }
+}

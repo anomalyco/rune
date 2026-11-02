@@ -74,6 +74,20 @@ pub(crate) fn break_key(shape: u64, max_width: Option<f32>, align: parley::Align
     h.finish()
 }
 
+/// A truncated or line-clamped cut of `shape` at `max_width`.
+pub(crate) fn elide_key(
+    shape: u64,
+    mode: u8,
+    param: usize,
+    max_width: f32,
+    align: parley::Alignment,
+    blocks: Option<&[crate::edit::Block]>,
+) -> u64 {
+    let mut h = KeyHasher::default();
+    (shape, mode, param, max_width.to_bits(), align as u8, blocks).hash(&mut h);
+    h.finish()
+}
+
 /// A run's text hashed alone, so each style and scale only mixes it in (see [`super::Run`]).
 pub(super) fn run_hash(text: &str) -> u64 {
     let mut h = KeyHasher::default();

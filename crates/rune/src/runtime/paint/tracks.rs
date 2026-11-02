@@ -61,10 +61,14 @@ impl<S: 'static> Runtime<S> {
     /// Commits `to` on paint property `p` of node `id`, which last drew `from` (None if it's
     /// new). Without a track a node draws its own value (`Runtime::color`, `shadow_at`), so it
     /// needs none until the value changes, and a commit that leaves it changes nothing.
+    #[inline]
     pub(super) fn commit_paint<T: rune_motion::Animatable + PartialEq>(&mut self, id: NodeId, p: Prop<T>, from: Option<T>, to: T, s: Spring, instant: bool) {
-        let tracked = self.scene.store().has(id, p);
-        if from == Some(to) && !(instant && tracked) {
+        if !instant && from == Some(to) {
             // Its track, if any, already heads to `to`: nothing else moves this property.
+            return;
+        }
+        let tracked = self.scene.store().has(id, p);
+        if from == Some(to) && !tracked {
             return;
         }
         if !tracked {
@@ -76,6 +80,91 @@ impl<S: 'static> Runtime<S> {
         self.set_or_anim(id, p, to, s, instant);
     }
 
+    pub(super) fn commit_cold_paint(
+        &mut self,
+        id: NodeId,
+        vis: &Visual,
+        old: Option<usize>,
+        spring_c: Spring,
+        spring_l: Spring,
+        instant: bool,
+    ) {
+        fn prev_vis<'a>(old_nodes: &'a [Node], vis: &'a Visual, old: Option<usize>) -> Option<&'a Visual> {
+            let o = old?;
+            Some(if old_nodes[o].is_moved_stub() { vis } else { &old_nodes[o].vis })
+        }
+        for (k, sh) in vis.shadows.iter().take(P_SHADOWS.len()).enumerate() {
+            let was = prev_vis(&self.nodes, vis, old).and_then(|o| o.shadows.get(k).copied());
+            self.commit_paint(id, P_SHADOWS[k], was.map(|w| w.color), sh.color, spring_c, instant);
+            self.commit_paint(id, P_SHADOW_GEO[k], was.map(|w| shadow_geo(&w)), shadow_geo(sh), spring_l, instant);
+        }
+        let prev_shadows = prev_vis(&self.nodes, vis, old).map_or(0, |o| o.shadows.len()).min(P_SHADOWS.len());
+        for k in vis.shadows.len()..prev_shadows {
+            self.scene.store_mut().remove(id, P_SHADOWS[k]);
+            self.scene.store_mut().remove(id, P_SHADOW_GEO[k]);
+        }
+        if let Some(&g) = vis.gradient.as_deref() {
+            let was = prev_vis(&self.nodes, vis, old).and_then(|o| o.gradient.as_deref().copied());
+            self.commit_paint(id, P_GRADIENT[0], was.map(|w| w[0]), g[0], spring_c, instant);
+            self.commit_paint(id, P_GRADIENT[1], was.map(|w| w[1]), g[1], spring_c, instant);
+        }
+        if let Some(rg) = &vis.radial {
+            for (k, &(_, c)) in rg.stops.iter().take(P_RADIAL.len()).enumerate() {
+                let was = prev_vis(&self.nodes, vis, old).and_then(|o| o.radial.as_ref()?.stops.get(k).map(|s| s.1));
+                self.commit_paint(id, P_RADIAL[k], was, c, spring_c, instant);
+            }
+        }
+        if let Some(ol) = vis.outline {
+            let was = prev_vis(&self.nodes, vis, old).and_then(|o| o.outline.map(|w| w.color));
+            self.commit_paint(id, P_OUTLINE, was, ol.color, spring_c, instant);
+        }
+    }
+
+    /// True when `nodes[i]` has the same parent, frame, visual, text colour, transition and
+    /// resting scene state as `self.nodes[old]`, so `apply`'s per-node diff has nothing to move.
+    pub(super) fn unchanged_node_resting(
+        &self,
+        nodes: &[Node],
+        i: usize,
+        old: Option<usize>,
+        scene_rect: MRect,
+        parent_virtual: Option<&crate::el::virtual_list::VirtualList>,
+    ) -> bool {
+        let Some(o_idx) = old else { return false };
+        let o = &self.nodes[o_idx];
+        if o.is_moved_stub() {
+            return false;
+        }
+        let n = &nodes[i];
+        let plain_cold = |nd: &Node| {
+            nd.cold.get().is_none_or(|c| {
+                c.matched.is_none()
+                    && c.looping.is_none()
+                    && c.live.is_empty()
+                    && c.transition.is_none()
+                    && c.opacity_motion.is_none()
+            })
+        };
+        n.local == o.local
+            && !o.scale_track
+            && n.static_scale == 1.0
+            && !o.group_fade
+            && n.parent.map(|p| nodes[p].id) == o.parent.map(|p| self.nodes[p].id)
+            && plain_cold(n)
+            && plain_cold(o)
+            && (self.flying.is_empty() || !self.flying.iter().any(|f| f.0 == n.id))
+            && (self.aspect_snap.is_empty() || !self.aspect_snap.contains(&n.id))
+            && !parent_virtual.is_some_and(crate::el::virtual_list::VirtualList::replaced_view)
+            && memo_reuse::same_visual(&n.vis, &o.vis)
+            && text_color(n) == text_color(o)
+            && n.text.as_ref().is_none_or(|t| {
+                t.reveal < 0.0 || self.reveals.get(&n.id).is_some_and(|r| r.words.is_empty() && r.len == t.content.len())
+            })
+            && self.scene.is_resting_at(n.id, scene_rect)
+            && (self.stacks.is_empty()
+                || n.parent.is_none_or(|p| nodes[p].growth.is_none())
+                || self.reorder_jump(nodes, i) == 0.0)
+    }
 }
 
 #[cfg(test)]

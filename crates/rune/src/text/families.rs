@@ -67,6 +67,7 @@ impl TextSystem {
         self.layouts.clear();
         self.shapes.clear();
         self.superseded.clear();
+        self.elisions.clear();
         self.runs.clear();
         self.primary_traks.clear();
         self.primary_axes.clear();

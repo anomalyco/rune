@@ -102,11 +102,48 @@ fn push_segment(path: &mut String, key: Option<&str>, index: usize) {
 }
 
 #[inline]
-fn resolve_path_and_id(path_buf: &str, memo_ctx: &mut memo_reuse::MemoFlattenCtx<'_>) -> (String, NodeId) {
-    let path = path_buf.to_owned();
-    if let Some(&id) = memo_ctx.path_ids.get(path_buf) {
-        return (path, id);
+fn can_take_old_path(old: &Node, path_buf: &str) -> bool {
+    !path_buf.is_empty()
+        && !old.is_moved_stub()
+        && old.path == path_buf
+        && old.input.is_none()
+        && old.focus.get().is_none_or(|f| f.return_to.is_none())
+}
+
+#[inline]
+fn resolve_path_and_id(
+    path_buf: &str,
+    new_idx: usize,
+    memo_ctx: &mut memo_reuse::MemoFlattenCtx<'_>,
+) -> (String, NodeId) {
+    let old_limit = memo_ctx.old_present_len.min(memo_ctx.old_nodes.len());
+    if memo_ctx.committing && memo_ctx.old_cursor < old_limit {
+        let oi = memo_ctx.old_cursor;
+        if can_take_old_path(&memo_ctx.old_nodes[oi], path_buf) {
+            let old = &mut memo_ctx.old_nodes[oi];
+            let id = old.id;
+            let path = std::mem::take(&mut old.path);
+            memo_ctx.taken_paths.push((oi as u32, new_idx as u32));
+            memo_ctx.old_cursor = oi + 1;
+            return (path, id);
+        }
     }
+    if let Some(&id) = memo_ctx.path_ids.get(path_buf) {
+        if memo_ctx.committing
+            && let Some(&oi) = memo_ctx.old_node_index.get(&id)
+            && oi < old_limit
+            && memo_ctx.old_nodes[oi].id == id
+            && can_take_old_path(&memo_ctx.old_nodes[oi], path_buf)
+        {
+            let old = &mut memo_ctx.old_nodes[oi];
+            let path = std::mem::take(&mut old.path);
+            memo_ctx.taken_paths.push((oi as u32, new_idx as u32));
+            memo_ctx.old_cursor = oi + 1;
+            return (path, id);
+        }
+        return (path_buf.to_owned(), id);
+    }
+    let path = path_buf.to_owned();
     let id = NodeId(*memo_ctx.next_id);
     *memo_ctx.next_id += 1;
     memo_ctx.path_ids.insert(path.clone(), id);
@@ -298,10 +335,10 @@ fn flatten_owned(
     }).flatten();
     let prev_len = path_buf.len();
     push_segment(path_buf, el.key.as_deref(), index);
-    let (path, id) = resolve_path_and_id(path_buf, memo_ctx);
+    let me = nodes.len();
+    let (path, id) = resolve_path_and_id(path_buf, me, memo_ctx);
     let own_motion = el.motion;
     let motion = own_motion.unwrap_or(motion);
-    let me = nodes.len();
     let parent_is_stack = parent.is_some_and(|p| nodes[p].growth.is_some());
     let animate_layout = el.animate_layout;
     let in_row = if el.above.is_some() && (animate_layout || in_row == RowLayout::Horizontal) {
@@ -517,10 +554,10 @@ fn flatten_ref(
     }).flatten();
     let prev_len = path_buf.len();
     push_segment(path_buf, el.key.as_deref(), index);
-    let (path, id) = resolve_path_and_id(path_buf, memo_ctx);
+    let me = nodes.len();
+    let (path, id) = resolve_path_and_id(path_buf, me, memo_ctx);
     let own_motion = el.motion;
     let motion = own_motion.unwrap_or(motion);
-    let me = nodes.len();
     let parent_is_stack = parent.is_some_and(|p| nodes[p].growth.is_some());
     let animate_layout = el.animate_layout;
     let in_row = if el.above.is_some() && (animate_layout || in_row == RowLayout::Horizontal) {

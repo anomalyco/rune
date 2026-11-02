@@ -223,6 +223,7 @@ pub(crate) struct Replayed {
 }
 
 struct Entry {
+    id: Rc<str>,
     version: u64,
     built: Rc<Built>,
     key: Option<String>,
@@ -245,7 +246,10 @@ pub(crate) struct MemoCache {
     pub(crate) reused_scratch: Vec<crate::runtime::memo_reuse::ReusedSpan>,
     pub(crate) skip_scratch: Vec<crate::runtime::memo_reuse::CleanApplySpan>,
     pub(crate) split_scratch: Vec<bool>,
+    pub(crate) taken_paths_scratch: Vec<(u32, u32)>,
     pub(crate) path_scratch: String,
+    id_scratch: String,
+    pure_counts: HashMap<(u64, u64, u64), u32>,
     nested_scratch: Vec<(Rc<str>, u64)>,
     pub(crate) present_len: usize,
     pass: u64,
@@ -295,7 +299,6 @@ struct Scope {
     env: u64,
     scale: f32,
     virtual_row: u64,
-    pure_counts: HashMap<(u64, u64, u64), u32>,
     /// The ids of the memos whose closures are running, innermost last.
     path: Vec<Rc<str>>,
     /// The memos each running closure has created so far.
@@ -334,6 +337,7 @@ pub(crate) fn enter(
     layout: LayoutRects,
 ) -> Guard {
     cache.pass += 1;
+    cache.pure_counts.clear();
     let accent = [accent.accent(env.system_dark), accent.focus(env.system_dark)].map(|c| [c.r, c.g, c.b, c.a].map(f32::to_bits));
     let scale = env.scale;
     // Theme colours resolve per blend mode (`theme::blends_srgb`), so a switch rebuilds memos.
@@ -343,7 +347,6 @@ pub(crate) fn enter(
         env,
         scale,
         virtual_row: 0,
-        pure_counts: HashMap::default(),
         path: Vec::new(),
         nested: Vec::new(),
         reads: Vec::new(),
@@ -554,9 +557,18 @@ pub fn memo(id: impl Into<String>, version: impl Hash, build: impl FnOnce() -> E
     let step = SCOPES.with_borrow_mut(|scopes| {
         let Some(s) = scopes.last_mut() else { return Step::Plain };
         let version = hash_of(&(version, s.env));
-        let nested_id = s.path.last().map(|p| format!("{p}/{key}"));
-        let name = nested_id.as_deref().unwrap_or(&key);
+        let name: &str = if let Some(p) = s.path.last() {
+            s.cache.id_scratch.clear();
+            s.cache.id_scratch.reserve(p.len() + 1 + key.len());
+            s.cache.id_scratch.push_str(p);
+            s.cache.id_scratch.push('/');
+            s.cache.id_scratch.push_str(&key);
+            &s.cache.id_scratch
+        } else {
+            &key
+        };
         let pass = s.cache.pass;
+        let has_parent = !s.nested.is_empty();
         let mut reused = None;
         let mut store = true;
         if let Some(e) = s.cache.entries.get_mut(name) {
@@ -575,11 +587,10 @@ pub fn memo(id: impl Into<String>, version: impl Hash, build: impl FnOnce() -> E
                 }
                 let parent_reads = if s.reads.is_empty() || e.reads.is_empty() { Vec::new() } else { e.reads.clone() };
                 s.cache.nested_scratch.extend(e.nested.iter().map(|id| (id.clone(), s.virtual_row)));
-                reused = Some((e.built.clone(), parent_reads));
+                reused = Some((has_parent.then(|| e.id.clone()), e.built.clone(), parent_reads));
             }
         }
-        let rc_id = || -> Rc<str> { name.into() };
-        if let Some((built, reads)) = reused {
+        if let Some((parent_id, built, reads)) = reused {
             if !s.cache.nested_scratch.is_empty() {
                 let mut scratch = std::mem::take(&mut s.cache.nested_scratch);
                 keep_nested_rows(&mut s.cache, &mut scratch, pass);
@@ -588,12 +599,12 @@ pub fn memo(id: impl Into<String>, version: impl Hash, build: impl FnOnce() -> E
             if !reads.is_empty() {
                 s.note(&reads);
             }
-            if let Some(parent) = s.nested.last_mut() {
-                parent.push(rc_id());
+            if let (Some(parent), Some(id)) = (s.nested.last_mut(), parent_id) {
+                parent.push(id);
             }
             return Step::Reuse(built);
         }
-        let id = rc_id();
+        let id: Rc<str> = name.into();
         if let Some(parent) = s.nested.last_mut() {
             parent.push(id.clone());
         }
@@ -625,7 +636,8 @@ pub fn memo(id: impl Into<String>, version: impl Hash, build: impl FnOnce() -> E
         let el = built.placeholder(key.clone());
         let pass = s.cache.pass;
         let virtual_row = s.virtual_row;
-        s.cache.entries.insert(id, Entry { version, built, key, reads, nested, pass, virtual_row });
+        let entry_id = id.clone();
+        s.cache.entries.insert(id, Entry { id: entry_id, version, built, key, reads, nested, pass, virtual_row });
         el
     })
 }
@@ -650,17 +662,25 @@ pub fn cached((h1, h2): (u64, u64), build: impl FnOnce() -> El) -> El {
     let step = SCOPES.with_borrow_mut(|scopes| {
         let Some(s) = scopes.last_mut() else { return Step::Plain };
         let occ = *s
+            .cache
             .pure_counts
             .entry((s.virtual_row, h1, h2))
             .and_modify(|c| *c += 1)
             .or_insert(0);
         let version = hash_of(&(h1, h2, s.env));
-        let raw_id = format!("\0{}:{h1:016x}:{h2:016x}:{occ}", s.virtual_row);
-        let nested_id = s.path.last().map(|p| format!("{p}/{raw_id}"));
-        let name = nested_id.as_deref().unwrap_or(&raw_id);
+        {
+            use std::fmt::Write;
+            s.cache.id_scratch.clear();
+            if let Some(p) = s.path.last() {
+                s.cache.id_scratch.push_str(p);
+                s.cache.id_scratch.push('/');
+            }
+            let _ = write!(s.cache.id_scratch, "\0{}:{h1:016x}:{h2:016x}:{occ}", s.virtual_row);
+        }
         let pass = s.cache.pass;
+        let has_parent = !s.nested.is_empty();
         let mut reused = None;
-        if let Some(e) = s.cache.entries.get_mut(name)
+        if let Some(e) = s.cache.entries.get_mut(s.cache.id_scratch.as_str())
             && e.pass != pass
             && e.version == version
             && e.reads.iter().all(|r| s.seen.holds(r))
@@ -677,10 +697,9 @@ pub fn cached((h1, h2): (u64, u64), build: impl FnOnce() -> El) -> El {
             }
             let parent_reads = if s.reads.is_empty() || e.reads.is_empty() { Vec::new() } else { e.reads.clone() };
             s.cache.nested_scratch.extend(e.nested.iter().map(|id| (id.clone(), s.virtual_row)));
-            reused = Some((e.built.clone(), e.key.clone(), parent_reads));
+            reused = Some((has_parent.then(|| e.id.clone()), e.built.clone(), e.key.clone(), parent_reads));
         }
-        let rc_id = || -> Rc<str> { name.into() };
-        if let Some((built, key, reads)) = reused {
+        if let Some((parent_id, built, key, reads)) = reused {
             if !s.cache.nested_scratch.is_empty() {
                 let mut scratch = std::mem::take(&mut s.cache.nested_scratch);
                 keep_nested_rows(&mut s.cache, &mut scratch, pass);
@@ -689,12 +708,12 @@ pub fn cached((h1, h2): (u64, u64), build: impl FnOnce() -> El) -> El {
             if !reads.is_empty() {
                 s.note(&reads);
             }
-            if let Some(parent) = s.nested.last_mut() {
-                parent.push(rc_id());
+            if let (Some(parent), Some(id)) = (s.nested.last_mut(), parent_id) {
+                parent.push(id);
             }
             return Step::Reuse(built, key);
         }
-        let id = rc_id();
+        let id: Rc<str> = s.cache.id_scratch.as_str().into();
         if let Some(parent) = s.nested.last_mut() {
             parent.push(id.clone());
         }
@@ -723,7 +742,8 @@ pub fn cached((h1, h2): (u64, u64), build: impl FnOnce() -> El) -> El {
         let el = built.placeholder(key.clone());
         let pass = s.cache.pass;
         let virtual_row = s.virtual_row;
-        s.cache.entries.insert(id, Entry { version, built, key, reads, nested, pass, virtual_row });
+        let entry_id = id.clone();
+        s.cache.entries.insert(id, Entry { id: entry_id, version, built, key, reads, nested, pass, virtual_row });
         el
     })
 }

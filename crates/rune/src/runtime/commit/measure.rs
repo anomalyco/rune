@@ -170,21 +170,23 @@ impl<S: 'static> Measurement<'_, S> {
     }
 
     pub(super) fn finish_from(mut self, tx: &Tx, mut passes: usize) -> Measured {
-        let (layout, nodes, memo_pending, memo_reused) = loop {
+        let (layout, nodes, memo_pending, memo_reused, taken_paths) = loop {
             passes += 1;
             self.retry = passes > 1;
             self.virtual_culled.clear();
             self.virtual_inputs.clear();
             // Degenerate zero-height runs fall back to a full measurement instead of
             // an unbounded retry loop. Normal transcripts need one pass.
-            let (layout, mut nodes, pending, mut reused) = self.measure_view(tx, passes > 8);
-            if !self.measure_virtuals(&nodes, tx.settle) { break (layout, nodes, pending, reused); }
-            memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused);
+            let (layout, mut nodes, pending, mut reused, mut taken) = self.measure_view(tx, passes > 8);
+            if !self.measure_virtuals(&nodes, tx.settle) { break (layout, nodes, pending, reused, taken); }
+            memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused, &taken);
             nodes.clear();
             *self.spare_nodes = nodes;
             reused.clear();
+            taken.clear();
             self.memo.pending_scratch = pending;
             self.memo.reused_scratch = reused;
+            self.memo.taken_paths_scratch = taken;
             *self.layout = layout;
         };
         // Exiting virtual subtrees still use their origin and measured extent while
@@ -198,6 +200,7 @@ impl<S: 'static> Measurement<'_, S> {
             layout_reads: self.layout_reads,
             memo_flattened: Some(memo_pending),
             memo_reused,
+            taken_paths,
             selection: Vec::new(),
         }
     }
@@ -331,7 +334,7 @@ impl<S: 'static> Measurement<'_, S> {
         }
     }
 
-    fn measure_view(&mut self, tx: &Tx, force_all: bool) -> (LayoutEngine, Vec<Node>, Vec<memo_reuse::PendingFlat>, Vec<memo_reuse::ReusedSpan>) {
+    fn measure_view(&mut self, tx: &Tx, force_all: bool) -> (LayoutEngine, Vec<Node>, Vec<memo_reuse::PendingFlat>, Vec<memo_reuse::ReusedSpan>, Vec<(u32, u32)>) {
         let scale = self.env.scale;
         let fresh_cx = |this: &Self| Cx::<S> {
             env: this.env,
@@ -395,33 +398,38 @@ impl<S: 'static> Measurement<'_, S> {
         // Root constraints are part of the retained style, not a dirty write after flattening.
         // A window that fits its content lays the root out at its natural height.
         root.style.set_size(relayout::root_size(self.viewport, self.fit_height));
-        let (pending, reused, root_id) = {
+        let (pending, reused, taken_paths, root_id) = {
             let mut pending = std::mem::take(&mut self.memo.pending_scratch);
             pending.clear();
             let mut reused = std::mem::take(&mut self.memo.reused_scratch);
             reused.clear();
+            let mut taken_paths = std::mem::take(&mut self.memo.taken_paths_scratch);
+            taken_paths.clear();
             let mut path_buf = std::mem::take(&mut self.memo.path_scratch);
             path_buf.clear();
             let mut memo_ctx = memo_reuse::MemoFlattenCtx {
                 old_nodes: &mut *self.nodes,
                 old_present_len: self.memo.present_len,
+                old_node_index: &*self.node_index,
+                old_cursor: 0,
                 committing: self.committing,
                 committed: &self.memo.flattened,
                 pending,
                 reused,
+                taken_paths,
                 path_ids: &mut *self.path_ids,
                 next_id: &mut *self.next_id,
             };
             let (root_id, _) = flatten_with_buf(root, None, &mut path_buf, 0, motion::DEFAULT, RowLayout::Free, true, &mut taffy, &mut nodes, scale, &mut memo_ctx);
-            let (pending, reused) = (memo_ctx.pending, memo_ctx.reused);
+            let (pending, reused, taken_paths) = (memo_ctx.pending, memo_ctx.reused, memo_ctx.taken_paths);
             path_buf.clear();
             self.memo.path_scratch = path_buf;
-            (pending, reused, root_id)
+            (pending, reused, taken_paths, root_id)
         };
         if self.committing { release_kept_layouts(self.nodes, &nodes, &taffy, self.text, &reused); }
         taffy.finish_flatten();
         let (taffy, nodes) = self.solve(taffy, root_id, nodes);
-        (taffy, nodes, pending, reused)
+        (taffy, nodes, pending, reused, taken_paths)
     }
 
     pub(super) fn populate_virtual_children(

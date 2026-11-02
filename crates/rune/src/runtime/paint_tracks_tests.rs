@@ -81,3 +81,74 @@ fn an_instant_colour_change_lands_without_a_track() {
     assert_eq!(rt.color(n.id, P_FILL, n.vis.fill), Color::BLACK);
     assert_eq!(rt.scene.store().track_len(), 0);
 }
+
+#[test]
+fn rebuilding_reuses_node_paths_and_restores_on_layout_retry() {
+    #[derive(Default)]
+    struct RetryState { open: bool, tick: u32 }
+    fn retry_view(s: &RetryState, cx: &mut Cx<RetryState>) -> El {
+        let measured = cx.layout_size("box").map_or(10.0, |[w, _]| w * 0.5);
+        let mut sheet = crate::row().key("sheet").w(60.0).h(40.0);
+        if s.open {
+            sheet = sheet
+                .child(el().key("btn").w(30.0).h(20.0).focusable(true))
+                .child(el().size(0.0, 0.0).focus_return("anchor"));
+        }
+        col().w_full().h_full()
+            .child(el().key("box").w(if s.tick == 0 { 80.0 } else { 120.0 }).h(measured).child(text(format!("{}", s.tick))))
+            .child(el().key("anchor").w(40.0).h(20.0).focusable(true))
+            .child(sheet)
+    }
+    let mut rt = Runtime::new(RetryState { open: true, tick: 0 }, retry_view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let ptr0 = rt.nodes.iter().find(|n| n.key.as_deref() == Some("anchor")).unwrap().path.as_ptr();
+    rt.invalidate();
+    rt.frame(1.0 / 120.0);
+    let ptr1 = rt.nodes.iter().find(|n| n.key.as_deref() == Some("anchor")).unwrap().path.as_ptr();
+    assert_eq!(ptr0, ptr1, "steady-state rebuild moves the previous commit's path String in place");
+
+    // Trigger both a layout-read settle retry (`tick = 1` changes `box` width) and `return_focus_to`
+    // under `sheet` (whose own path was moved on the previous commit).
+    let btn_path = rt.nodes.iter().find(|n| n.key.as_deref() == Some("btn")).unwrap().path.clone();
+    rt.focused = Some(btn_path);
+    rt.update(|s, _| { s.open = false; s.tick = 1; });
+    rt.frame(1.0 / 120.0);
+    let anchor_path = rt.nodes.iter().find(|n| n.key.as_deref() == Some("anchor")).unwrap().path.clone();
+    assert_eq!(rt.focused.as_deref(), Some(anchor_path.as_str()));
+}
+
+#[test]
+fn changing_one_sibling_skips_resting_siblings_without_drift() {
+    struct SibState { active: usize }
+    fn sib_view(s: &SibState, _: &mut Cx<SibState>) -> El {
+        col().w_full().h_full().children((0..8).map(|i| {
+            let fg = if i == s.active { Color::WHITE } else { Color::BLACK };
+            el().key(format!("r-{i}")).w_full().h(20.0).fill(fg).hover(fg.alpha(0.2)).focusable(true)
+                .child(text(format!("item {i}")).color(fg))
+        }))
+    }
+    let mut rt = Runtime::new(SibState { active: 0 }, sib_view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    while rt.frame(1.0 / 120.0) {}
+    rt.pointer_move(20.0, 70.0); // hover row 3
+    rt.frame(1.0 / 120.0);
+    while rt.frame(1.0 / 120.0) {}
+
+    rt.update(|s, _| s.active = 5);
+    rt.frame(1.0 / 120.0);
+    let r5 = rt.nodes.iter().find(|n| n.key.as_deref() == Some("r-5")).unwrap().id;
+    let r2 = rt.nodes.iter().find(|n| n.key.as_deref() == Some("r-2")).unwrap().id;
+    assert!(rt.scene.store().is_node_animating(r5), "changed sibling animates its colour");
+    assert!(!rt.scene.store().is_node_animating(r2), "unchanged sibling stays at rest with no track");
+    while rt.frame(1.0 / 120.0) {}
+
+    let mut fresh = Runtime::new(SibState { active: 5 }, sib_view, (200.0, 200.0), Env::new(true, 1.0));
+    fresh.frame(0.0);
+    while fresh.frame(1.0 / 120.0) {}
+    for k in 0..8 {
+        let key = format!("r-{k}");
+        let na = rt.nodes.iter().find(|n| n.key.as_deref() == Some(key.as_str())).unwrap();
+        let nb = fresh.nodes.iter().find(|n| n.key.as_deref() == Some(key.as_str())).unwrap();
+        assert_eq!(rt.color(na.id, P_FILL, na.vis.fill), fresh.color(nb.id, P_FILL, nb.vis.fill));
+    }
+}

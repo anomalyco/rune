@@ -9,8 +9,15 @@ use super::{Ink, Layout, TextStyle, TextSystem, shape_key};
 /// Shaped text by hash.
 pub(super) type Cache<T> = HashMap<u64, Entry<T>>;
 
+#[derive(Clone)]
+pub(crate) struct CachedElision {
+    pub(crate) layout: Rc<Layout<Ink>>,
+    pub(crate) head: usize,
+    pub(crate) tail: usize,
+}
+
 pub(super) struct Entry<T> {
-    pub(super) value: Rc<T>,
+    pub(super) value: T,
     /// The commit generation it was last used in.
     pub(super) used: u32,
     /// About how many heap bytes it holds.
@@ -20,7 +27,7 @@ pub(super) struct Entry<T> {
 }
 
 impl<T> Entry<T> {
-    pub(super) fn new(value: Rc<T>, used: u32, text_len: usize, shape: u64) -> Self {
+    pub(super) fn new(value: T, used: u32, text_len: usize, shape: u64) -> Self {
         let cost = (text_len * LAYOUT_PER_BYTE + LAYOUT_BASE).min(u32::MAX as usize) as u32;
         Entry { value, used, cost, shape }
     }
@@ -79,13 +86,29 @@ impl TextSystem {
         if !self.superseded.is_empty() {
             let gone = &self.superseded;
             self.layouts.retain(|_, e| e.used == g || !gone.contains(&e.shape));
+            self.elisions.retain(|_, e| e.used == g || !gone.contains(&e.shape));
             self.superseded.clear();
         }
         evict(&mut self.layouts, g);
         let layouts = &self.layouts;
         self.shapes.retain(|_, key| layouts.contains_key(key));
+        evict(&mut self.elisions, g);
         evict(&mut self.runs, g);
         self.generation = g.wrapping_add(1);
+    }
+
+    #[inline]
+    pub(crate) fn get_elision(&mut self, key: u64) -> Option<CachedElision> {
+        let g = self.generation;
+        let e = self.elisions.get_mut(&key)?;
+        e.used = g;
+        Some(e.value.clone())
+    }
+
+    #[inline]
+    pub(crate) fn insert_elision(&mut self, key: u64, shape: u64, drawn_len: usize, value: CachedElision) {
+        let g = self.generation;
+        self.elisions.insert(key, Entry::new(value, g, drawn_len, shape));
     }
 
     /// A live run owns its latest layout; don't retain every timer tick in the commit cache.
@@ -106,4 +129,7 @@ impl TextSystem {
 
     #[cfg(test)]
     pub(crate) fn cached_layout_count(&self) -> usize { self.layouts.len() }
+
+    #[cfg(test)]
+    pub(crate) fn cached_elision_count(&self) -> usize { self.elisions.len() }
 }

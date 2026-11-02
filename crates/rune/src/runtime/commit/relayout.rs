@@ -144,7 +144,7 @@ impl<S: 'static> Measurement<'_, S> {
         }
         let (layout, mut nodes) = self.solve(taffy, root, nodes);
         if self.measure_virtuals(&nodes, false) || self.windows_move() {
-            memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused);
+            memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused, &[]);
             reused.clear();
             self.memo.reused_scratch = reused;
             nodes.clear();
@@ -163,6 +163,7 @@ impl<S: 'static> Measurement<'_, S> {
             layout_reads: self.layout_reads,
             memo_flattened: None,
             memo_reused: reused,
+            taken_paths: Vec::new(),
             selection: Vec::new(),
         })
     }

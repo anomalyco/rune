@@ -6,7 +6,7 @@ impl<S: 'static> Runtime<S> {
     /// The mutation phase cannot accept an El or an unfinished measurement pass.
     pub(super) fn apply(&mut self, measured: Measured, tx: &Tx) {
         let _apply_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Apply);
-        let Measured { layout: mut taffy, mut nodes, reduced_motion, time_scale, caret_read, memo_flattened, memo_reused, .. } = measured;
+        let Measured { layout: mut taffy, mut nodes, reduced_motion, time_scale, caret_read, memo_flattened, memo_reused, taken_paths, .. } = measured;
         if crate::tooling::interaction::active() { self.interaction_reused(&memo_reused); }
         let mut scratch = std::mem::take(&mut self.apply_scratch);
         self.caret_watch = caret_read;
@@ -297,6 +297,7 @@ impl<S: 'static> Runtime<S> {
         // How far the top of each node's contents moved down in its growth row (drawn less new).
         let mut top_moved = std::mem::take(&mut scratch.top_moved);
         top_moved.clear();
+        let has_virtuals = !self.virtuals.is_empty();
         let mut last = paint_tracks::LastBuild::default();
         let mut skip_cursor = 0usize;
         let mut i = 0usize;
@@ -316,6 +317,24 @@ impl<S: 'static> Runtime<S> {
             i += 1;
             let i = cur_i;
             let id = nodes[i].id;
+            let mut scene_rect = nodes[i].local;
+            let parent_virtual = if has_virtuals {
+                nodes[i].parent.and_then(|p| self.virtuals.get(&nodes[p].path))
+            } else {
+                None
+            };
+            if let Some(v) = parent_virtual {
+                scene_rect.y -= v.before;
+            }
+            let old = last.find(&self.nodes, id);
+            if can_skip_apply
+                && slid.is_empty()
+                && top_moved.is_empty()
+                && self.unchanged_node_resting(&nodes, i, old, scene_rect, parent_virtual)
+            {
+                continue;
+            }
+            let is_virtual = has_virtuals && self.virtuals.contains_key(&nodes[i].path);
             let parent_id = nodes[i].parent.map(|p| nodes[p].id);
             let spring_l = tx.motion.unwrap_or(nodes[i].motion);
             let anim_l: Anim = tx.motion_curve.unwrap_or_else(|| spring_l.into());
@@ -327,12 +346,8 @@ impl<S: 'static> Runtime<S> {
             // its own entrance and exit, and colours, stay with the commit.
             let enters_at_once = instant || nodes[i].parent.is_some_and(|p| nodes[p].instant_changes);
             let lands = instant || nodes[i].instant_changes;
-            let layout_instant = lands || row_like || tx.relayout || self.virtuals.contains_key(&nodes[i].path)
-                || self.aspect_snap.contains(&id);
-            let mut scene_rect = nodes[i].local;
-            if let Some(v) = nodes[i].parent.and_then(|p| self.virtuals.get(&nodes[p].path)) {
-                scene_rect.y -= v.before;
-            }
+            let layout_instant = lands || row_like || tx.relayout || is_virtual
+                || (!self.aspect_snap.is_empty() && self.aspect_snap.contains(&id));
 
             let was_present = self.scene.contains(id);
             let was_exiting = self.is_exiting(id);
@@ -386,8 +401,8 @@ impl<S: 'static> Runtime<S> {
                 if !was_exiting {
                     self.scene.set_transition(id, nodes[i].transition.as_deref().copied().unwrap_or_else(Transition::opacity));
                 }
-                let stack_row = nodes[i].parent.is_some_and(|p| nodes[p].growth.is_some()) || self.virtuals.contains_key(&nodes[i].path)
-                    || (nodes[i].in_row == RowLayout::Horizontal && !self.aspect_snap.contains(&id));
+                let stack_row = nodes[i].parent.is_some_and(|p| nodes[p].growth.is_some()) || is_virtual
+                    || (nodes[i].in_row == RowLayout::Horizontal && (self.aspect_snap.is_empty() || !self.aspect_snap.contains(&id)));
                 // A window's own resize step moves content at rest with the window; motion
                 // already running retargets on its spring.
                 let follows_window = tx.window_step && !self.flying.iter().any(|f| f.0 == id)
@@ -530,7 +545,6 @@ impl<S: 'static> Runtime<S> {
                     self.scene.animate(id, prop::BLUR, vis.blur, anim);
                 } else { self.set_or_anim(id, prop::BLUR, vis.blur, spring_l, instant || !was_present); }
             }
-            let old = last.find(&self.nodes, id);
             if !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Fill) {
                 self.commit_paint(id, P_FILL, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.fill), vis.fill, spring_c, instant);
             }
@@ -563,29 +577,7 @@ impl<S: 'static> Runtime<S> {
                 self.commit_paint(id, P_PRESS_C, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.press), vis.press, spring_c, instant);
             }
             if !vis.cold.is_empty() || paint_tracks::prev_node(&self.nodes, &nodes, old, i).is_some_and(|o| !o.vis.cold.is_empty()) {
-                for (k, sh) in vis.shadows.iter().take(P_SHADOWS.len()).enumerate() {
-                    let was = paint_tracks::prev_node(&self.nodes, &nodes, old, i).and_then(|o| o.vis.shadows.get(k).copied());
-                    self.commit_paint(id, P_SHADOWS[k], was.map(|w| w.color), sh.color, spring_c, instant);
-                    self.commit_paint(id, P_SHADOW_GEO[k], was.map(|w| paint_tracks::shadow_geo(&w)), paint_tracks::shadow_geo(sh), spring_l, instant);
-                }
-                for k in vis.shadows.len()..paint_tracks::prev_node(&self.nodes, &nodes, old, i).map_or(0, |o| o.vis.shadows.len()).min(P_SHADOWS.len()) {
-                    self.scene.store_mut().remove(id, P_SHADOWS[k]);
-                    self.scene.store_mut().remove(id, P_SHADOW_GEO[k]);
-                }
-                if let Some(&g) = vis.gradient.as_deref() {
-                    let was = paint_tracks::prev_node(&self.nodes, &nodes, old, i).and_then(|o| o.vis.gradient.as_deref().copied());
-                    self.commit_paint(id, P_GRADIENT[0], was.map(|w| w[0]), g[0], spring_c, instant);
-                    self.commit_paint(id, P_GRADIENT[1], was.map(|w| w[1]), g[1], spring_c, instant);
-                }
-                if let Some(rg) = &vis.radial {
-                    for (k, &(_, c)) in rg.stops.iter().take(P_RADIAL.len()).enumerate() {
-                        let was = paint_tracks::prev_node(&self.nodes, &nodes, old, i).and_then(|o| o.vis.radial.as_ref()?.stops.get(k).map(|s| s.1));
-                        self.commit_paint(id, P_RADIAL[k], was, c, spring_c, instant);
-                    }
-                }
-                if let Some(ol) = vis.outline {
-                    self.commit_paint(id, P_OUTLINE, paint_tracks::prev_node(&self.nodes, &nodes, old, i).and_then(|o| o.vis.outline.map(|w| w.color)), ol.color, spring_c, instant);
-                }
+                self.commit_cold_paint(id, vis, old, spring_c, spring_l, instant);
             }
 
             // Streaming word reveal.
@@ -786,7 +778,7 @@ impl<S: 'static> Runtime<S> {
         scratch.top_moved = top_moved;
         self.apply_scratch = scratch;
         self.nodes = nodes;
-        self.memo.commit_flattened(&self.nodes, present_len, memo_flattened, memo_reused);
+        self.memo.commit_flattened(&self.nodes, present_len, memo_flattened, memo_reused, taken_paths);
         skip_spans.clear();
         self.memo.skip_scratch = skip_spans;
         self.find_app_root();
@@ -825,7 +817,9 @@ impl<S: 'static> Runtime<S> {
         if self.nodes.len() > present_len || !self.flying.is_empty() || landed || self.has_sticky || self.has_raise { self.update_layer_paint_order(); }
         else { self.layer_paint_order.clear(); }
         self.built = false;
-        self.virtuals.retain(|path, _| self.nodes.iter().any(|n| n.path == *path));
+        if !self.virtuals.is_empty() {
+            self.virtuals.retain(|path, _| self.nodes.iter().any(|n| n.path == *path));
+        }
         self.prune_path_ids();
         self.subscribe_live();
         self.refresh_modal_index();

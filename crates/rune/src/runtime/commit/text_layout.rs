@@ -140,10 +140,20 @@ impl Elision {
 
     /// `spans` moved onto the drawn string.
     pub(super) fn spans(self, spans: &[crate::text::Span]) -> Vec<crate::text::Span> {
-        spans.iter().map(|sp| {
+        let mut out = Vec::with_capacity(spans.len());
+        self.spans_into(spans, &mut out);
+        out
+    }
+
+    pub(super) fn spans_into(self, spans: &[crate::text::Span], out: &mut Vec<crate::text::Span>) {
+        out.clear();
+        if spans.is_empty() {
+            return;
+        }
+        out.extend(spans.iter().map(|sp| {
             let (start, end) = self.mark(sp.start as usize, sp.end as usize, false);
             crate::text::Span { start: start as u32, end: end as u32, ..sp.clone() }
-        }).collect()
+        }));
     }
 
     /// `rings` moved onto the drawn string.
@@ -171,11 +181,28 @@ impl Elision {
     }
 }
 
+fn spec_elide_keys(spec: &TextSpec, scale: f32, mode: u8, param: usize, max_w: f32, align: parley::Alignment) -> Option<(u64, u64)> {
+    if spec.redacted {
+        return None;
+    }
+    let shape = spec.shape_key(scale).unwrap_or_else(|| {
+        crate::text::shape_key(&spec.content, &spec.spans, spec.style, scale, spec.wrap_anywhere, &spec.pills)
+    });
+    let blocks = spec.blocks.iter().any(|&b| b != crate::edit::Block::Paragraph).then_some(spec.blocks.as_slice());
+    Some((shape, crate::text::elide_key(shape, mode, param, max_w, align, blocks)))
+}
+
 /// `spec`'s content cut to fit `max_w` device px with an ellipsis, keeping as many whole
 /// graphemes as fit at the start, the end or both ends (half each) as its `elide` says.
 /// Whitespace graphemes beside the ellipsis are dropped whole.
 pub(super) fn truncated(text: &mut TextSystem, spec: &TextSpec, scale: f32, max_w: f32) -> (Rc<Layout<Ink>>, Elision) {
     use unicode_segmentation::UnicodeSegmentation;
+    let keys = spec_elide_keys(spec, scale, 0, spec.elide as usize, max_w, parley::Alignment::Start);
+    if let Some((_, key)) = keys
+        && let Some(hit) = text.get_elision(key)
+    {
+        return (hit.layout, Elision { head: hit.head, tail: hit.tail });
+    }
     let content = spec.content.as_str();
     let bounds: Vec<usize> = content.grapheme_indices(true).map(|(i, _)| i).chain([content.len()]).collect();
     let n = bounds.len() - 1;
@@ -191,17 +218,50 @@ pub(super) fn truncated(text: &mut TextSystem, spec: &TextSpec, scale: f32, max_
         while tail < n && blank(tail) { tail += 1; }
         Elision { head: bounds[head], tail: bounds[tail] }
     };
-    let make = |text: &mut TextSystem, e: Elision| {
-        let s = zeroize::Zeroizing::new([&content[..e.head], Elision::ELLIPSIS, &content[e.tail..]].concat());
-        text.layout_blocks_inner(&s, &e.spans(&spec.spans), &spec.blocks, &[], spec.style, scale, None, parley::Alignment::Start, spec.wrap_anywhere, !spec.redacted)
+    let mut str_buf = if spec.redacted { String::new() } else { String::with_capacity(content.len() + Elision::ELLIPSIS.len()) };
+    let mut span_buf = Vec::new();
+    let mut make = |text: &mut TextSystem, e: Elision| {
+        e.spans_into(&spec.spans, &mut span_buf);
+        if spec.redacted {
+            let s = zeroize::Zeroizing::new([&content[..e.head], Elision::ELLIPSIS, &content[e.tail..]].concat());
+            text.layout_blocks_inner(&s, &span_buf, &spec.blocks, &[], spec.style, scale, None, parley::Alignment::Start, spec.wrap_anywhere, false)
+        } else {
+            str_buf.clear();
+            str_buf.push_str(&content[..e.head]);
+            str_buf.push_str(Elision::ELLIPSIS);
+            str_buf.push_str(&content[e.tail..]);
+            text.layout_blocks_inner(&str_buf, &span_buf, &spec.blocks, &[], spec.style, scale, None, parley::Alignment::Start, spec.wrap_anywhere, true)
+        }
     };
     let (mut lo, mut hi) = (0usize, n);
+    let mut best: Option<(usize, Rc<Layout<Ink>>, Elision)> = None;
     while lo < hi {
         let mid = (lo + hi).div_ceil(2);
-        if make(text, cut(mid)).full_width() <= max_w + 0.5 { lo = mid } else { hi = mid - 1 }
+        let e = cut(mid);
+        let l = make(text, e);
+        if l.full_width() <= max_w + 0.5 {
+            lo = mid;
+            best = Some((mid, l, e));
+        } else {
+            hi = mid - 1;
+        }
     }
-    let e = cut(lo);
-    (make(text, e), e)
+    let (layout, e) = match best {
+        Some((k, l, e)) if k == lo => (l, e),
+        _ => {
+            let e = cut(lo);
+            (make(text, e), e)
+        }
+    };
+    if let Some((shape, key)) = keys {
+        text.insert_elision(
+            key,
+            shape,
+            e.drawn_len(content.len()),
+            crate::text::CachedElision { layout: layout.clone(), head: e.head, tail: e.tail },
+        );
+    }
+    (layout, e)
 }
 
 /// Drops the text layouts of the last commit's nodes this pass flattened again (`nodes`, laid
@@ -243,7 +303,7 @@ pub(super) fn release_kept_layouts(
         oi += 1;
         let (Some(was), Some(now_idx)) = (o.text.as_deref(), taffy.mounted_node_index(o.id.0)) else { continue };
         o.text_layout = None;
-        let now = nodes.get(now_idx).filter(|n| n.path == o.path).and_then(|n| n.text.as_deref());
+        let now = nodes.get(now_idx).filter(|n| n.id == o.id).and_then(|n| n.text.as_deref());
         if let (Some((_, shape)), Some(now)) = (was.shape, now) && now.shape != was.shape && edited(&was.content, &now.content) {
             text.supersede(shape);
         }
@@ -323,6 +383,13 @@ pub(super) fn clamped(text: &mut TextSystem, spec: &TextSpec, scale: f32, max_w:
     if lines == 0 || full.len() <= lines && last_line_width(full, lines) <= max_w + 0.5 {
         return None;
     }
+    let align = line_alignment(spec);
+    let keys = spec_elide_keys(spec, scale, 1, lines, max_w, align);
+    if let Some((_, key)) = keys
+        && let Some(hit) = text.get_elision(key)
+    {
+        return Some((hit.layout, Elision { head: hit.head, tail: hit.tail }));
+    }
     let content = spec.content.as_str();
     // The cut falls in the last shown line or the next, whose first word may fill the last.
     let start = full.lines().nth(lines.min(full.len()).max(1) - 1)?.text_range().start.min(content.len());
@@ -334,16 +401,48 @@ pub(super) fn clamped(text: &mut TextSystem, spec: &TextSpec, scale: f32, max_w:
         let head = if k == 0 { content[..start].trim_end().len() } else { bounds[k] };
         Elision { head, tail: content.len() }
     };
-    let make = |text: &mut TextSystem, e: Elision| {
-        let s = zeroize::Zeroizing::new([&content[..e.head], Elision::ELLIPSIS].concat());
-        text.layout_blocks_inner(&s, &e.spans(&spec.spans), &spec.blocks, &[], spec.style, scale, Some(max_w), line_alignment(spec), spec.wrap_anywhere, !spec.redacted)
+    let mut str_buf = if spec.redacted { String::new() } else { String::with_capacity(end + Elision::ELLIPSIS.len()) };
+    let mut span_buf = Vec::new();
+    let mut make = |text: &mut TextSystem, e: Elision| {
+        e.spans_into(&spec.spans, &mut span_buf);
+        if spec.redacted {
+            let s = zeroize::Zeroizing::new([&content[..e.head], Elision::ELLIPSIS].concat());
+            text.layout_blocks_inner(&s, &span_buf, &spec.blocks, &[], spec.style, scale, Some(max_w), align, spec.wrap_anywhere, false)
+        } else {
+            str_buf.clear();
+            str_buf.push_str(&content[..e.head]);
+            str_buf.push_str(Elision::ELLIPSIS);
+            text.layout_blocks_inner(&str_buf, &span_buf, &spec.blocks, &[], spec.style, scale, Some(max_w), align, spec.wrap_anywhere, true)
+        }
     };
     let fits = |l: &Layout<Ink>| l.len() <= lines && last_line_width(l, lines) <= max_w + 0.5;
     let (mut lo, mut hi) = (0usize, bounds.len() - 1);
+    let mut best: Option<(usize, Rc<Layout<Ink>>, Elision)> = None;
     while lo < hi {
         let mid = (lo + hi).div_ceil(2);
-        if fits(&make(text, cut(mid))) { lo = mid } else { hi = mid - 1 }
+        let e = cut(mid);
+        let l = make(text, e);
+        if fits(&l) {
+            lo = mid;
+            best = Some((mid, l, e));
+        } else {
+            hi = mid - 1;
+        }
     }
-    let e = cut(lo);
-    Some((make(text, e), e))
+    let (layout, e) = match best {
+        Some((k, l, e)) if k == lo => (l, e),
+        _ => {
+            let e = cut(lo);
+            (make(text, e), e)
+        }
+    };
+    if let Some((shape, key)) = keys {
+        text.insert_elision(
+            key,
+            shape,
+            e.drawn_len(content.len()),
+            crate::text::CachedElision { layout: layout.clone(), head: e.head, tail: e.tail },
+        );
+    }
+    Some((layout, e))
 }

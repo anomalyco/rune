@@ -206,3 +206,17 @@ fn a_text_field_ignores_the_clamp_and_truncation() {
         rt.frame(1.1);
     }
 }
+
+#[test]
+fn clamped_elision_cache_reuses_cut_across_commits() {
+    let mut rt = clamp(TITLE, 2, Some((9, 25)), 180.0);
+    let (_, cut0, lines0, _) = drawn(&rt);
+    assert_eq!(lines0, 2);
+    assert!(cut0.is_some());
+    assert_eq!(rt.text.cached_elision_count(), 1);
+    let shaped_before = rt.text.shaped;
+    rt.invalidate();
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.text.shaped, shaped_before, "repeat commit reuses cached clamped cut");
+    assert_eq!(drawn(&rt).1, cut0);
+}

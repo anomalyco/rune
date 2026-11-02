@@ -209,3 +209,34 @@ fn elision_maps_ranges_across_the_cut() {
     assert_eq!(e.mark(4, 8, false), (5, 7), "starting after the cut's first byte: not the ellipsis");
     assert_eq!(e.mark(1, 7, false), (1, 6));
 }
+
+#[test]
+fn elision_cache_reuses_cut_evicts_superseded_and_bypasses_secure() {
+    fn view(s: &String, _: &mut Cx<String>) -> El {
+        col().w_full().child(crate::text(s.as_str()).key("t").font(style()).truncate_middle())
+    }
+    let mut rt = Runtime::new(PATH.to_owned(), view, (140.0, 40.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    let cut0 = rt.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap().elided;
+    assert!(cut0.is_some());
+    assert_eq!(rt.text.cached_elision_count(), 1);
+    let shaped_before = rt.text.shaped;
+    rt.invalidate();
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.text.shaped, shaped_before, "repeat commit reuses cached truncated cut");
+    assert_eq!(rt.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap().elided, cut0);
+
+    // Editing the string supersedes the old shaping and drops its cached cut on end_commit.
+    rt.update(|s, _| s.push_str("/extra_leaf_module.rs"));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.text.cached_elision_count(), 1, "superseded cut is replaced rather than accumulating");
+
+    // Redacted (`secure`) text never enters the elision cache.
+    fn secure_view(s: &String, _: &mut Cx<String>) -> El {
+        col().w_full().child(crate::text(s.as_str()).key("t").font(style()).secure().revealed(true).truncate())
+    }
+    let mut sec = Runtime::new(PATH.to_owned(), secure_view, (140.0, 40.0), Env::new(true, 2.0));
+    sec.frame(0.0);
+    assert!(sec.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap().elided.is_some());
+    assert_eq!(sec.text.cached_elision_count(), 0, "redacted text bypasses elision cache");
+}

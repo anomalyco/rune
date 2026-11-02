@@ -24,7 +24,9 @@ impl<S: 'static> Runtime<S> {
         while end < nodes.len() && nodes[end].parent.is_some_and(|p| p >= j) { end += 1; }
         let header = (j + 1..end).find(|&i| nodes[i].path == hold.path)?;
         if to > nodes[header].target[3] - nodes[j].target[1] + 0.5 { return None; }
-        let was = self.nodes.iter().position(|n| n.path == hold.path)?;
+        let header_id = nodes[header].id;
+        let was = self.nodes.iter().position(|n| n.id == header_id)
+            .or_else(|| (self.built_ids.len() == self.stuck.len()).then(|| self.built_ids.iter().position(|&id| id == header_id)).flatten())?;
         Some((self.stuck[was], hold.path.clone())).filter(|&(s, _)| s > 0.5)
     }
 

@@ -424,10 +424,13 @@ impl<S: 'static> Measurement<'_, S> {
                         let mut memo_ctx = memo_reuse::MemoFlattenCtx {
                             old_nodes: &mut *self.nodes,
                             old_present_len: 0,
+                            old_node_index: &*self.node_index,
+                            old_cursor: 0,
                             committing: self.committing,
                             committed: &empty_committed,
                             pending,
                             reused,
+                            taken_paths: Vec::new(),
                             path_ids: &mut *self.path_ids,
                             next_id: &mut *self.next_id,
                         };
@@ -523,7 +526,7 @@ impl<S: 'static> Measurement<'_, S> {
         let root_id = nodes[0].taffy;
         let (layout, mut nodes) = self.solve(taffy, root_id, nodes);
         if self.measure_virtuals(&nodes, false) {
-            memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused);
+            memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused, &[]);
             nodes.clear();
             *self.spare_nodes = nodes;
             pending.clear();
@@ -542,6 +545,7 @@ impl<S: 'static> Measurement<'_, S> {
             layout_reads: self.layout_reads,
             memo_flattened: Some(pending),
             memo_reused: reused,
+            taken_paths: Vec::new(),
             selection: Vec::new(),
         })
     }
