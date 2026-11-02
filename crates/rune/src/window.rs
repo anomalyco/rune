@@ -569,6 +569,32 @@ pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (
     Some((config, crate::render::translucency::mode(surface, adapter)))
 }
 
+/// Configures `surface`, returning wgpu's error instead of panicking in its default handler,
+/// so a surface the driver refuses (an overlay's XWayland window on NVIDIA, hex#979) costs
+/// only its owner. The message names the configuration for logs.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn configure(surface: &wgpu::Surface, device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Result<(), String> {
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    surface.configure(device, config);
+    let error = pollster::block_on(internal.pop()).or(pollster::block_on(validation.pop()));
+    match error {
+        None => Ok(()),
+        Some(error) => {
+            let text = error.to_string();
+            let cause = text.lines().map(str::trim).filter(|line| !line.is_empty() && *line != "Caused by:").collect::<Vec<_>>().join(": ");
+            Err(format!("{cause} ({}x{}, {:?}, {:?}, {:?})", config.width, config.height, config.format, config.alpha_mode, config.present_mode))
+        }
+    }
+}
+
+/// The browser reports surface errors asynchronously; there is nothing to catch here.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn configure(surface: &wgpu::Surface, device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Result<(), String> {
+    surface.configure(device, config);
+    Ok(())
+}
+
 /// Follows a blend switch (`Tx::set_srgb_blend`) on a configured surface: reconfigures it for
 /// `rt`'s mode at its size and alpha mode, rebuilds `renderer` when its target format changes,
 /// and rebuilds the `alpha` pass (when there is one) for the new format. Returns false when the
@@ -580,7 +606,10 @@ pub(crate) fn reblend<S: 'static>(surface: &wgpu::Surface, gpu: &Gpu, config: &m
     let Some((next, _)) = surface_config(surface, &gpu.adapter, (config.width, config.height), srgb) else { return false };
     if (config.format, &config.view_formats) != (next.format, &next.view_formats) {
         (config.format, config.view_formats) = (next.format, next.view_formats);
-        surface.configure(&gpu.device, config);
+        if let Err(error) = configure(surface, &gpu.device, config) {
+            eprintln!("rune: could not reconfigure a surface for a blend switch: {error}");
+            return false;
+        }
     }
     let target = if srgb { config.format.remove_srgb_suffix() } else { config.format };
     rebuild_renderer(&gpu.device, renderer, target, rt);

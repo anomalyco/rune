@@ -473,3 +473,41 @@ fn drag_region_policy_preserves_titled_windows_and_panels() {
         }
     }
 }
+
+/// A surface that refuses its configuration reports it as an error its owner can drop, not a
+/// panic in wgpu's default handler that takes the app's every window with it (hex#979).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_refused_surface_configuration_is_an_error_not_a_panic() {
+    use std::num::NonZeroU32;
+    use std::ptr::NonNull;
+    use winit::raw_window_handle::{RawDisplayHandle, RawWindowHandle, XcbDisplayHandle, XcbWindowHandle};
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    descriptor.backends = wgpu::Backends::NOOP;
+    descriptor.backend_options.noop.enable = true;
+    let instance = wgpu::Instance::new(descriptor);
+    // The noop backend takes any handle and reports no capabilities, so configuring fails.
+    let surface = unsafe {
+        instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+            raw_display_handle: Some(RawDisplayHandle::Xcb(XcbDisplayHandle::new(Some(NonNull::dangling()), 0))),
+            raw_window_handle: RawWindowHandle::Xcb(XcbWindowHandle::new(NonZeroU32::new(1).unwrap())),
+        })
+    }
+    .unwrap();
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
+    let (device, _queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+    let config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: wgpu::TextureFormat::Bgra8UnormSrgb,
+        width: 200,
+        height: 80,
+        present_mode: wgpu::PresentMode::AutoVsync,
+        desired_maximum_frame_latency: 2,
+        alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied,
+        view_formats: vec![],
+        color_space: Default::default(),
+    };
+    let error = configure(&surface, &device, &config).unwrap_err();
+    assert!(error.starts_with("Validation Error: In Surface::configure"), "{error}");
+    assert!(error.ends_with("(200x80, Bgra8UnormSrgb, PreMultiplied, AutoVsync)"), "{error}");
+}

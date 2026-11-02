@@ -186,7 +186,7 @@ impl SurfaceMeter {
         match missed {
             Missed::Occluded => self.totals.occluded += 1,
             Missed::Timeout => self.totals.timeouts += 1,
-            Missed::Outdated => self.totals.outdated += 1,
+            Missed::Outdated | Missed::Unconfigured => self.totals.outdated += 1,
         }
         self.tick(Instant::now());
     }

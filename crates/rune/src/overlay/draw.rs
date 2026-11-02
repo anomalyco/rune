@@ -144,11 +144,12 @@ impl<T: 'static> Overlay<T> {
         // The present queue's vsync paces redraws where no display link does.
         if !prewarm { self.meter.redraw(paced || !cfg!(target_os = "macos")); }
         if renderer.srgb_blend() != self.rt.srgb_blend() {
-            if !crate::window::reblend(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, &mut self.rt) { return false }
+            if !crate::window::reblend(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, &mut self.rt) { self.surface_refused("its GPU surface refused a new configuration".into()); return false }
         }
         let frame = match crate::window::acquire_checked(&live.surface, &gpu.device, &live.config, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
             Ok(frame) => frame,
             Err(missed) => {
+                if missed == crate::window::Missed::Unconfigured { self.surface_refused("its GPU surface refused a new configuration".into()); return false; }
                 if !prewarm {
                     #[cfg(target_os = "macos")]
                     if missed == crate::window::Missed::Occluded { self.set_occluded(true); }
@@ -184,6 +185,7 @@ impl<T: 'static> Overlay<T> {
                     Ok(frame) => frame,
                     // Returning true turned the loop with ControlFlow::Poll; wait like any miss.
                     Err(missed) => {
+                        if missed == crate::window::Missed::Unconfigured { self.surface_refused("its GPU surface refused a new configuration".into()); return false; }
                         if !prewarm {
                             if missed == crate::window::Missed::Occluded { self.set_occluded(true); }
                             self.missed(missed, paced, true);
@@ -196,10 +198,11 @@ impl<T: 'static> Overlay<T> {
         // A handler switched blending (`Tx::set_srgb_blend`): this drawable has the old format.
         let frame = if renderer.srgb_blend() != self.rt.srgb_blend() {
             drop(frame);
-            if !crate::window::reblend(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, &mut self.rt) { return false }
+            if !crate::window::reblend(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, &mut self.rt) { self.surface_refused("its GPU surface refused a new configuration".into()); return false }
             match crate::window::acquire_checked(&live.surface, &gpu.device, &live.config, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
                 Ok(frame) => frame,
                 Err(missed) => {
+                    if missed == crate::window::Missed::Unconfigured { self.surface_refused("its GPU surface refused a new configuration".into()); return false; }
                     if !prewarm {
                         #[cfg(target_os = "macos")]
                         if missed == crate::window::Missed::Occluded { self.set_occluded(true); }

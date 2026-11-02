@@ -163,6 +163,10 @@ wgpu = { version = "~30.0.1", default-features = false, features = ["counters"] 
 # Thread and process CPU clocks in the overlay cost example.
 libc = "0.2"
 
+# A GPU-free device whose surfaces refuse every configuration, for `window::configure`'s test.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+wgpu = { version = "~30.0.1", default-features = false, features = ["noop"] }
+
 [[example]]
 name = "metal_dispatch"
 required-features = ["metal-backend"]

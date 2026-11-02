@@ -71,6 +71,9 @@ pub(crate) enum Missed {
     Timeout,
     /// Outdated or lost, and reconfiguring didn't bring it back.
     Outdated,
+    /// The surface refused its configuration. wgpu panics on its next drawable, so its owner
+    /// must drop it.
+    Unconfigured,
 }
 
 /// The first re-check of an occluded surface. Its occlusion notification usually redraws it
@@ -108,7 +111,7 @@ impl Missed {
             }
             Missed::Timeout if paced => None,
             Missed::Timeout => Some(now + TIMEOUT_RETRY),
-            Missed::Outdated => Some(now + OCCLUDED_RETRY),
+            Missed::Outdated | Missed::Unconfigured => Some(now + OCCLUDED_RETRY),
         }
     }
 }
@@ -137,13 +140,23 @@ pub(crate) fn acquire_checked(surface: &wgpu::Surface, device: &wgpu::Device, co
         let status = Missed::of(surface.get_current_texture());
         if let Err(missed) = status { meter.failed(missed); }
         match status {
+            // A surface that won't take its configuration again is reported rather than
+            // panicking in wgpu's default error handler.
             Err(Missed::Outdated) if reconfigures > 0 => {
-                surface.configure(device, config);
+                if let Err(error) = super::configure(surface, device, config) {
+                    eprintln!("rune: a surface refused its configuration: {error}");
+                    return Err(Missed::Unconfigured);
+                }
                 reconfigures -= 1;
             }
             Err(Missed::Outdated) => {
-                surface.configure(device, config);
-                return Err(Missed::Outdated);
+                return Err(match super::configure(surface, device, config) {
+                    Ok(()) => Missed::Outdated,
+                    Err(error) => {
+                        eprintln!("rune: a surface refused its configuration: {error}");
+                        Missed::Unconfigured
+                    }
+                });
             }
             other => return other,
         }

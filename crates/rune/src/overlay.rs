@@ -470,15 +470,20 @@ impl<T: 'static> Overlay<T> {
         let fading = self.fading_out.take().is_some();
         let size = self.at.size;
         self.resolve_size(event_loop);
-        if self.live.is_none() { self.prepare(event_loop); }
+        if self.live.is_none() {
+            self.prepare(event_loop);
+            if self.shared.failure.lock().unwrap().is_some() { return; }
+        }
         if self.live.is_none() { return; }
         self.resume_live();
         if size != self.at.size { self.resized(event_loop); }
+        if self.live.is_none() { return; }
         if !fading { self.settle_before_reveal(); }
         if let Some(Backing::Window(window)) = self.live.as_ref().map(|l| &l.backing) {
             let window = window.clone();
             self.place_window(event_loop, &window);
             if let Some(gpu) = self.gpu.clone() { self.rescale(&gpu, crate::window::backing_scale(&window)); }
+            if self.live.is_none() { return; }
             // Retained alpha-zero hosts already have pixels. A hidden update must reach
             // the surface before exposing it, rather than flashing the old frame.
             if !fading { self.refresh_for_reveal_at(Instant::now()); }
@@ -518,11 +523,14 @@ impl<T: 'static> Overlay<T> {
         match made {
             Some(live) => {
                 self.live = Some(live);
+                // An earlier attempt's failure no longer holds.
+                self.shared.failure.lock().unwrap().take();
                 // The surface was made before the panel was adopted and placed; its display's
                 // scale is known now, before `warm` draws.
                 if let Some(Backing::Window(window)) = self.live.as_ref().map(|l| &l.backing) && let Some(gpu) = self.gpu.clone() {
                     let scale = crate::window::backing_scale(window);
                     self.rescale(&gpu, scale);
+                    if self.shared.failure.lock().unwrap().is_some() { return; }
                 }
                 self.set_availability(Availability::Available);
                 if !self.animate_reveal { self.rt.settle_all(); }
@@ -1008,7 +1016,12 @@ impl<T: 'static> Overlay<T> {
         }
         let info = gpu.adapter.get_info();
         *self.shared.surface.lock().unwrap() = Some(format!("{:?} on {} ({:?}), {:?}, {:?}", info.backend, info.name, info.device_type, config.alpha_mode, config.format));
-        surface.configure(&gpu.device, &config);
+        // A surface the driver refuses costs this overlay alone, never the app's other windows
+        // (hex#979). The surface drops before its backing.
+        if let Err(error) = crate::window::configure(&surface, &gpu.device, &config) {
+            self.fail(format!("could not configure its GPU surface on {:?} {}: {error}", info.backend, info.name));
+            return None;
+        }
         #[cfg(target_os = "macos")]
         crate::platform::macos::pin_contents_top_left(&surface);
         let target_format = if self.rt.srgb_blend() { config.format.remove_srgb_suffix() } else { config.format };
@@ -1059,7 +1072,10 @@ impl<T: 'static> Overlay<T> {
         live.config.width = (self.at.size.0 * scale).round().max(1.0) as u32;
         live.config.height = (self.at.size.1 * scale).round().max(1.0) as u32;
         live.settle();
-        live.surface.configure(&gpu.device, &live.config);
+        if let Err(error) = crate::window::configure(&live.surface, &gpu.device, &live.config) {
+            self.surface_refused(format!("could not resize its GPU surface: {error}"));
+            return;
+        }
         if let Some(alpha) = &mut live.alpha {
             alpha.resize(&gpu.device, (live.config.width, live.config.height));
         }
@@ -1072,6 +1088,21 @@ impl<T: 'static> Drop for Overlay<T> {
     fn drop(&mut self) {
         *self.shared.native.lock().unwrap() = Default::default();
         self.set_availability(Availability::Unavailable);
+        self.release();
+    }
+}
+
+impl<T: 'static> Overlay<T> {
+    /// Its surface refused a new configuration: the overlay hides and drops it, so wgpu never
+    /// panics on its next drawable. The next show tries a new one.
+    pub(super) fn surface_refused(&mut self, reason: String) {
+        self.hide();
+        self.release();
+        self.fail(reason);
+    }
+
+    /// Drops the surface and every native owner of its window; the next show makes new ones.
+    fn release(&mut self) {
         // The surface must disappear before returning the adopted view or removing subclasses.
         // Keep winit's Window alive until after those native owners have unwound, too.
         let backing = self.live.take().map(|live| {
