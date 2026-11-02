@@ -564,6 +564,14 @@ def analyze(path, script=None):
             seg = []
             for i in range(1, len(h)):
                 boundary = retargeted(e, h[i][0], 1 << (edge - 1))
+                if boundary and i >= 2 and i + 1 < len(h):
+                    pts = h[i - 2:i + 2]
+                    travel = pts[-1][edge] - pts[0][edge]
+                    stall = stalled(theirs, edge, pts, travel) if abs(travel) > 0.5 else None
+                    if stall:
+                        k, speeds = stall
+                        findings.append(dict(kind="stall", element=e.name, frames=1, longest=1, at=str(k),
+                                             detail=f"{label} speed {speeds[0]:.1f} → {speeds[1]:.1f} → {speeds[2]:.1f} pt/frame at a retarget"))
                 changed = h[i][0] - h[i - 1][0] <= SEG_GAP + 1 and abs(h[i][edge] - h[i - 1][edge]) > 0.01
                 moving = changed and not boundary
                 if moving:
