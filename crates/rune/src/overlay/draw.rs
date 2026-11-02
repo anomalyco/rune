@@ -278,6 +278,11 @@ impl<T: 'static> Overlay<T> {
     fn unchanged_frame(&mut self) -> bool {
         super::input::drop_window_requests(&mut self.rt);
         self.clipboard.flush(&mut self.rt);
+        // Hit regions paint nothing, so a frame can change only them (a full-screen drawing
+        // surface turning on); no presentation follows to commit them.
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if self.publish_regions() && let Some(Live { backing: Backing::Layer(layer), .. }) = &mut self.live { layer.commit(); }
+        #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
         self.publish_regions();
         self.meter.redraw(true);
         self.dirty = false;

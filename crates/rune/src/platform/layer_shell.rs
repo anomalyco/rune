@@ -417,7 +417,8 @@ impl LayerSurface {
 
     pub fn configured_size(&self) -> Option<(u32, u32)> { self.state.configured }
 
-    pub fn input_regions(&self, regions: &[[f32; 4]], interactive: bool) {
+    /// Sets the surface's pending input region; true when it changed, so it waits for a commit.
+    pub fn input_regions(&self, regions: &[[f32; 4]], interactive: bool) -> bool {
         let next = match self.options.input.resolved(interactive) {
             OverlayInput::All => None,
             OverlayInput::Regions => Some(regions.iter().filter_map(|r| {
@@ -427,7 +428,7 @@ impl LayerSurface {
             }).collect()),
             _ => Some(Vec::new()),
         };
-        if *self.regions.borrow() == next { return; }
+        if *self.regions.borrow() == next { return false; }
         if let Some(rects) = &next {
             let region = self.compositor.create_region(&self.queue.handle(), ());
             for &[x, y, w, h] in rects { region.add(x, y, w, h); }
@@ -437,7 +438,9 @@ impl LayerSurface {
             self.surface.set_input_region(None);
         }
         *self.regions.borrow_mut() = next;
-        // No commit here: the following wgpu presentation commits input and pixels together.
+        // No commit here: a drawn frame's presentation commits input and pixels together, and a
+        // frame that draws nothing commits it alone (`Overlay::unchanged_frame`).
+        true
     }
 
     pub fn set_input(&mut self, input: OverlayInput) {
