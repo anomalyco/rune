@@ -27,6 +27,7 @@ use crate::tok::{Family, OpticalSize, TextStyle};
 
 mod atlas;
 mod case;
+mod colr;
 mod cursor;
 mod decorations;
 mod families;
@@ -158,6 +159,7 @@ pub struct TextSystem {
     font_files: LoadedFiles,
     pub atlas: Atlas,
     color_glyphs: GlyphMap<ColorGlyph>,
+    colr: colr::Foreground,
     color_pixels: Vec<crate::pixels::Pixels>,
     color_bytes: usize,
     /// Layouts shaped, a running count (shaping work counter for perf gates).
@@ -286,6 +288,7 @@ impl TextSystem {
             font_files,
             atlas: Atlas::new(),
             color_glyphs: GlyphMap::default(),
+            colr: colr::Foreground::default(),
             color_pixels: Vec::new(),
             color_bytes: 0,
             shaped: 0,
@@ -368,7 +371,10 @@ impl TextSystem {
 
     /// The colours the next glyphs draw in (`spans` by `Ink`). On macOS they choose each
     /// glyph's dilation, so glyphs in light and dark inks rasterize separately.
-    pub fn set_glyph_inks(&mut self, element: Color, spans: &[Span]) { self.apple.set_inks(element, spans); }
+    pub fn set_glyph_inks(&mut self, element: Color, spans: &[Span]) {
+        self.apple.set_inks(element, spans);
+        self.colr.set_inks(element, spans);
+    }
 
     /// How glyphs rasterise and place ([`FontSmoothing`]).
     pub fn font_smoothing(&self) -> FontSmoothing { self.smoothing }
@@ -411,6 +417,7 @@ impl TextSystem {
                     c.index = self.color_pixels.len() as u32;
                     self.color_bytes += c.w as usize * c.h as usize * 4;
                 }
+                self.colr.retain(self.color_glyphs.keys());
             }
         }
         for c in self.color_glyphs.values_mut() { c.used = false; }

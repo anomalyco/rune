@@ -106,9 +106,19 @@ fn candidates(output: &str) -> Vec<(String, std::path::PathBuf)> {
 fn supported_color_format(colr: Option<&[u8]>, bitmap: bool, svg: bool) -> bool {
     bitmap
         || match colr {
-            Some(table) => table.get(2..4).is_some_and(|records| records != [0, 0]),
+            Some(table) => {
+                table.get(2..4).is_some_and(|records| records != [0, 0]) || paints(table)
+            }
             None => !svg,
         }
+}
+
+fn paints(table: &[u8]) -> bool {
+    use skrifa::raw::FontRead;
+    skrifa::raw::tables::colr::Colr::read(skrifa::raw::FontData::new(table))
+        .ok()
+        .and_then(|colr| colr.base_glyph_list()?.ok())
+        .is_some_and(|list| list.num_base_glyph_paint_records() > 0)
 }
 
 #[cfg(test)]

@@ -129,6 +129,7 @@ impl TextSystem {
             dilation: (radius as f32).to_bits(),
             apple: self.apple.key(),
             skew,
+            ink: 0,
         };
         let entry = match self.atlas.map.get(&key) {
             Some(&e) => {
@@ -140,6 +141,7 @@ impl TextSystem {
             None => {
                 // Colour glyphs sit on whole pixels and ignore emboldening and obliques.
                 let color_key = GlyphKey { subpx: 0, subpy: 0, dilation: 0, apple: 0, skew: 0, ..key };
+                let mut color_key = self.colr.key(color_key, ink);
                 if let Some(c) = self.color_glyphs.get_mut(&color_key) {
                     c.used = true;
                     out.push(c.quad(gx, gy, glide, ink, byte));
@@ -155,7 +157,19 @@ impl TextSystem {
                     .hint(false)
                     .normalized_coords(coords.iter().copied())
                     .build();
-                if let Some((pixels, at)) = rasterize_color(&mut scaler, glyph as u16) {
+                let mut found = rasterize_color(&mut scaler, glyph as u16);
+                if found.is_none() && scaler.has_color_outlines() {
+                    let foreground = self.colr.ink(ink);
+                    found = colr::rasterize(font.data.as_ref(), font.index, glyph, font_size, coords, foreground).map(|image| {
+                        if image.foreground {
+                            color_key = self.colr.learn(color_key, ink);
+                        }
+                        let pixels = crate::pixels::Pixels::new();
+                        pixels.set(image.placement.width, image.placement.height, image.rgba);
+                        (pixels, image.placement)
+                    });
+                }
+                if let Some((pixels, at)) = found {
                     self.color_bytes = self.color_bytes.saturating_add((at.width as usize) * (at.height as usize) * 4);
                     self.color_pixels.push(pixels);
                     let index = self.color_pixels.len() as u32;

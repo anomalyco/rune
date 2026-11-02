@@ -367,7 +367,7 @@ fn atlas_capacity_never_overwrites_current_or_pinned_placements() {
 #[test]
 fn atlas_eviction_preserves_cached_empty_outlines() {
     let mut atlas = Atlas::new();
-    let key = GlyphKey { font: 0, index: 0, glyph: 0, size: 0, coords: 0, subpx: 0, subpy: 0, dilation: 0, apple: 0, skew: 0 };
+    let key = GlyphKey { font: 0, index: 0, glyph: 0, size: 0, coords: 0, subpx: 0, subpy: 0, dilation: 0, apple: 0, skew: 0, ink: 0 };
     atlas.map.insert(key, None);
     atlas.icons.insert((0, 0), None);
     atlas.evict_page(0);
@@ -378,7 +378,7 @@ fn atlas_eviction_preserves_cached_empty_outlines() {
 #[test]
 fn colour_budget_retires_unused_scales_without_flushing_active_images() {
     let mut text = TextSystem::default();
-    let key = GlyphKey { font: 0, index: 0, glyph: 0, size: 0, coords: 0, subpx: 0, subpy: 0, dilation: 0, apple: 0, skew: 0 };
+    let key = GlyphKey { font: 0, index: 0, glyph: 0, size: 0, coords: 0, subpx: 0, subpy: 0, dilation: 0, apple: 0, skew: 0, ink: 0 };
     let pixels = crate::pixels::Pixels::new();
     pixels.set(1, 1, vec![255; 4]);
     text.color_pixels = vec![pixels.clone(), pixels];

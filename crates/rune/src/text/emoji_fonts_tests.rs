@@ -99,3 +99,51 @@ fn registered_symbol_emoji_cannot_bypass_the_format_guard() {
     collection.register_fonts(Blob::new(Arc::new(crate::text::DEFAULT_FONTS[0])), None);
     assert!(retain_usable_fonts(&mut collection, &mut cache, "Inter"));
 }
+
+#[test]
+fn colrv1_paint_records_make_a_face_eligible() {
+    const TEST_GLYPHS: &[u8] = include_bytes!("../../tests/colr/test_glyphs-glyf_colr_1.ttf");
+    const NOTO: &[u8] = include_bytes!("../../tests/colr/Noto-COLRv1-grinning.ttf");
+    let colr = |font| {
+        FontRef::from_index(font, 0)
+            .unwrap()
+            .table(swash::tag_from_bytes(b"COLR"))
+            .unwrap()
+            .to_vec()
+    };
+    let noto = colr(NOTO);
+    assert_eq!(noto[..4], [0, 1, 0, 0]);
+    assert!(supported_color_format(Some(&noto), false, false));
+    assert!(supported_color_format(
+        Some(&colr(TEST_GLYPHS)),
+        false,
+        true
+    ));
+    let mut no_paints = noto.clone();
+    no_paints[14..18].copy_from_slice(&[0; 4]);
+    assert!(!supported_color_format(Some(&no_paints), false, false));
+    assert!(!supported_color_format(Some(&noto[..20]), false, false));
+    assert!(!supported_color_format(None, false, true));
+    let mut collection = Collection::new(CollectionOptions {
+        shared: false,
+        system_fonts: false,
+    });
+    collection.register_fonts(
+        Blob::new(Arc::new(NOTO)),
+        Some(parley::fontique::FontInfoOverride {
+            family_name: Some("Noto Color Emoji"),
+            ..Default::default()
+        }),
+    );
+    let mut cache = SourceCache::default();
+    assert!(retain_usable_fonts(
+        &mut collection,
+        &mut cache,
+        "Noto Color Emoji"
+    ));
+    assert!(
+        collection
+            .family_by_name("Noto Color Emoji")
+            .is_some_and(|family| !family.fonts().is_empty())
+    );
+}

@@ -25,6 +25,7 @@ pub(super) struct GlyphKey {
     pub(super) apple: u8,
     /// Synthetic oblique, in degrees (0 for none).
     pub(super) skew: u8,
+    pub(super) ink: u32,
 }
 
 #[derive(Clone, Copy)]
