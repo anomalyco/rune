@@ -105,6 +105,11 @@ pub(crate) fn icon_inst(
     }
 }
 
+/// An icon instance's place in the atlas (`uv.xy` and page), which no text glyph shares.
+pub(crate) fn apron_key(i: &Instance) -> [u32; 3] {
+    [i.uv[0].to_bits(), i.uv[1].to_bits(), i.params[2].to_bits()]
+}
+
 pub(crate) fn premul(c: Color, opacity: f32, srgb: bool) -> [f32; 4] {
     if srgb { c.premul_srgb(opacity) } else { c.premul(opacity) }
 }

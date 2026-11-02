@@ -98,7 +98,7 @@ mod key_index;
 mod system_settings;
 #[path = "runtime/commit/prune.rs"]
 mod prune;
-pub(crate) use blend::{glyph, icon_inst, premul};
+pub(crate) use blend::{apron_key, glyph, icon_inst, premul};
 
 #[path = "runtime/input/focus.rs"]
 mod focus;
@@ -668,6 +668,9 @@ pub struct Runtime<S: 'static> {
     /// Each node's place in the paint order, kept by the frame build while `Some` (the motion
     /// gate's `z-order`).
     pub(crate) paint_rank: Option<Vec<u32>>,
+    /// While `paint_rank` is kept: this frame's icons drawn through their transparent one-texel
+    /// apron (`icon_inst` off the pixel grid), by atlas place (`apron_key`), for the gate's raster.
+    pub(crate) icon_aprons: Vec<[u32; 3]>,
     /// This frame's commit landed every track (`Tx::settle`): a deliberate cut.
     pub settled: bool,
     /// Input markers for traces and headless tests, at most `event_log::CAP` of them unread.
@@ -962,6 +965,7 @@ impl<S: 'static> Runtime<S> {
             anim_sources: 0,
             commit_why: 0,
             paint_rank: None,
+            icon_aprons: Vec::new(),
             settled: false,
             events: Vec::new(),
             record_events: true,

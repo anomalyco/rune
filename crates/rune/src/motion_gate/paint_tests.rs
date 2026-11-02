@@ -188,6 +188,30 @@ fn a_tooltip_showing_after_its_rest_is_no_region_snap() {
     assert!(!f.iter().any(|f| f.element.ends_with("(pixels)")), "{f:#?}");
 }
 
+#[test]
+fn an_icon_gliding_off_the_pixel_grid_marks_its_apron_and_shows_no_region_flash() {
+    // Mid-glide an icon off the pixel grid samples a transparent texel past each edge
+    // (`icon_inst`) and drops it whenever it lands on a whole pixel; the raster leaves that
+    // apron out, so the icon inks the same cells either way.
+    fn at(x: &f32, _: &mut Cx<f32>) -> El {
+        static DOT: crate::Icon = crate::Icon { name: "test-dot", view: 16.0, body: r#"<rect x="2" y="2" width="12" height="12" fill="currentColor"/>"# };
+        let dot = crate::icon(&DOT, 16.0).key("dot").color(Color::WHITE).absolute(40.0, 40.0).offset(*x, 0.0).motion(Spring::new(1.2, 0.0));
+        col().w_full().h_full().fill(oklch(0.18, 0.01, 250.0)).child(dot)
+    }
+    let mut r = Run::new(Runtime::new(0.0, at, (200.0, 120.0), Env::new(true, 1.0)), 120.0);
+    r.idle(0.5);
+    r.step();
+    r.rt.update(|x, _| *x = 60.0);
+    let mut aproned = false;
+    for _ in 0..240 {
+        r.step();
+        aproned |= !r.rt.icon_aprons.is_empty();
+    }
+    assert!(aproned, "the icon glides off the pixel grid");
+    let f = r.finish();
+    assert!(!f.iter().any(|f| f.element.ends_with("(pixels)")), "{f:#?}");
+}
+
 impl Run<S> {
     fn play_and_check(&mut self) -> Vec<Finding> {
         self.play(1.0);

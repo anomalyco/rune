@@ -88,7 +88,7 @@ fn lerp(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t)
 }
 
-fn draws(q: &Instance) -> Vec<Draw> {
+fn draws(q: &Instance, apron: bool) -> Vec<Draw> {
     let kind = q.params[1];
     let outer = boxed(q.rect);
     let solid = |color: [f32; 4], density: f32| Draw { outer, hole: None, density, color, bottom: None };
@@ -104,11 +104,10 @@ fn draws(q: &Instance) -> Vec<Draw> {
             out.push(Draw { bottom: Some(q.uv), ..solid(q.fill, 1.0) });
         }
     } else if kind == KIND_GLYPH {
-        // A filtered glyph (`uv.zw` its texel span) can carry a one-texel transparent apron that
-        // an icon drops on the pixel grid (`icon_inst`): leave it out, so a glyph covers the
-        // same cells on and off the grid.
-        let apron = if q.uv[2] > 2.0 && q.uv[3] > 2.0 { [q.rect[2] / q.uv[2], q.rect[3] / q.uv[3]] } else { [0.0; 2] };
-        let core = [outer[0] + apron[0], outer[1] + apron[1], outer[2] - apron[0], outer[3] - apron[1]];
+        // Off the pixel grid an icon samples one transparent texel past each edge, which it
+        // drops on the grid (`icon_inst`): leave that apron out, so it covers the same cells.
+        let t = if apron && q.uv[2] > 2.0 && q.uv[3] > 2.0 { [q.rect[2] / q.uv[2], q.rect[3] / q.uv[3]] } else { [0.0; 2] };
+        let core = [outer[0] + t[0], outer[1] + t[1], outer[2] - t[0], outer[3] - t[1]];
         out.push(Draw { outer: core, ..solid(q.fill, 0.35) });
     } else if kind == KIND_RADIAL {
         let t = (q.params[3] % 2.0 - q.params[0] % 2.0).abs().clamp(0.0, 1.0);
@@ -153,6 +152,11 @@ struct Scope {
 
 /// Rasterizes `instances` (device pixels, `scale` per point) for a window `size` points across.
 pub fn rasterize(instances: &[Instance], size: (f32, f32), scale: f32) -> Grid {
+    rasterize_with(instances, size, scale, &[])
+}
+
+/// [`rasterize`], knowing which glyphs are icons drawn through their apron (`apron_key`).
+pub(crate) fn rasterize_with(instances: &[Instance], size: (f32, f32), scale: f32, aprons: &[[u32; 3]]) -> Grid {
     let (w, h) = dims(size);
     let px = CELL * scale;
     let full = [f32::NEG_INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::INFINITY];
@@ -177,7 +181,8 @@ pub fn rasterize(instances: &[Instance], size: (f32, f32), scale: f32) -> Grid {
         }
         let clip = meet(stack.last().unwrap().clip, q.clip);
         let cells = &mut stack.last_mut().unwrap().cells;
-        for d in draws(q) {
+        let apron = kind == KIND_GLYPH && aprons.contains(&crate::runtime::apron_key(q));
+        for d in draws(q, apron) {
             if d.color[3] <= 1e-4 || d.density <= 0.0 { continue; }
             let b = meet(d.outer, clip);
             if b[2] <= b[0] || b[3] <= b[1] { continue; }
@@ -267,15 +272,19 @@ mod tests {
         // `icon_inst`: on the grid it loads its 16 texels directly; off it, the quad and its
         // span grow by one transparent texel each side for filtering.
         let glyph = |r: [f32; 4], span: f32| Instance {
-            rect: r, fill: Color::WHITE.premul(1.0), params: [0.0, KIND_GLYPH, 0.0, 1.0], uv: [0.0, 0.0, span, span],
+            rect: r, fill: Color::WHITE.premul(1.0), params: [0.0, KIND_GLYPH, 0.0, 1.0], uv: [7.0, 9.0, span, span],
             clip: [-1e9, -1e9, 1e9, 1e9], ..Instance::zeroed()
         };
-        let on = rasterize(&[glyph([48.0, 24.0, 16.0, 16.0], 0.0)], (96.0, 72.0), 1.0);
-        let off = rasterize(&[glyph([47.0, 23.0, 18.0, 18.0], 18.0)], (96.0, 72.0), 1.0);
-        for i in 0..on.w * on.h {
-            let (a, b) = (on.lab(i)[0], off.lab(i)[0]);
+        let (on, off) = (glyph([48.0, 24.0, 16.0, 16.0], 0.0), glyph([47.0, 23.0, 18.0, 18.0], 18.0));
+        let aprons = [crate::runtime::apron_key(&off)];
+        let (a, b) = (rasterize_with(&[on], (96.0, 72.0), 1.0, &aprons), rasterize_with(&[off], (96.0, 72.0), 1.0, &aprons));
+        let ink = |g: &Grid| (0..g.w * g.h).map(|i| g.lab(i)[0]).collect::<Vec<_>>();
+        for (i, (a, b)) in ink(&a).iter().zip(ink(&b)).enumerate() {
             assert!((a - b).abs() < 0.01, "cell {i}: {a} on the grid, {b} off it");
         }
+        // A zoomed text glyph's span is its own texels, with no apron: all of it is ink.
+        let whole = rasterize(&[off], (96.0, 72.0), 1.0);
+        assert!(ink(&whole) != ink(&b), "only an icon's apron is left out");
     }
 
     #[test]
