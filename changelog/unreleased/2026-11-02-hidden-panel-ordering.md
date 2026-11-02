@@ -1,0 +1,1 @@
+- macOS overlays and launcher panels now leave every Space when hidden, including after prewarming and a completed fade. Their surfaces and cached pixels stay ready for the next show. This avoids relying on a sharing-type reset to protect Mission Control thumbnails after an overlay has been excluded from recordings.

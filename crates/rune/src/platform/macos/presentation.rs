@@ -5,8 +5,17 @@ use objc2::msg_send;
 use super::{Panel, set_sharing};
 use super::presence::Presence;
 
-pub(crate) struct Prewarm(Rc<Cell<bool>>);
-impl Drop for Prewarm { fn drop(&mut self) { self.0.set(false); } }
+pub(crate) struct Prewarm {
+    warming: Rc<Cell<bool>>,
+    presence: Rc<Cell<Presence>>,
+    panel: objc2::rc::Retained<objc2_app_kit::NSPanel>,
+}
+impl Drop for Prewarm {
+    fn drop(&mut self) {
+        self.warming.set(false);
+        if !self.presence.get().ordered() { self.panel.orderOut(None); }
+    }
+}
 
 impl Panel {
     /// Reveals the panel, fading its alpha in over `fade` (instantly when zero).
@@ -17,14 +26,14 @@ impl Panel {
         self.pointer.observe(&self.panel, self.wake.as_ref());
         // Excluded before any of it can be seen: before it orders in or its alpha rises.
         let generation = self.update_presence(|p| p.show());
-        if !self.options.prewarm && !self.panel.isVisible() {
+        if !self.panel.isVisible() {
             // SAFETY: AppKit calls on the main thread.
             unsafe {
                 if !fade.is_zero() { self.panel.setAlphaValue(0.0); }
                 self.panel.orderFrontRegardless();
             }
         }
-        self.fade_to(1.0, fade, false, generation);
+        self.fade_to(1.0, fade, generation);
     }
 
     /// Changes the panel's presence and applies the capture exclusion it now calls for.
@@ -38,8 +47,8 @@ impl Panel {
 
     /// Animates the panel's alpha to `alpha` over `duration`, replacing any fade in flight.
     /// A fade to zero is a hide: when it finishes with nothing after it, the panel is hidden,
-    /// drops its capture exclusion and, if `order_out`, orders out.
-    fn fade_to(&self, alpha: f64, duration: Duration, order_out: bool, generation: u64) {
+    /// orders out before restoring sharing. Prewarm keeps the surface, not window ordering.
+    fn fade_to(&self, alpha: f64, duration: Duration, generation: u64) {
         use objc2::runtime::{AnyClass, AnyObject};
         let hiding = alpha == 0.0;
         let fading = !duration.is_zero();
@@ -57,7 +66,7 @@ impl Panel {
                         if !now.fade_done(generation, hiding) { return; }
                         presence.set(now);
                         flag.set(false);
-                        if order_out { panel.orderOut(None) }
+                        if !now.ordered() { panel.orderOut(None); }
                         if hiding { set_sharing(&panel, now.excluded()); }
                     });
                     let _: () = msg_send![current, setCompletionHandler: &*done];
@@ -68,7 +77,7 @@ impl Panel {
             }
             if duration.is_zero() {
                 self.panel.setAlphaValue(alpha);
-                if order_out { self.panel.orderOut(None); }
+                if !self.presence.get().ordered() { self.panel.orderOut(None); }
             }
         }
     }
@@ -79,7 +88,7 @@ impl Panel {
         self.panel.setIgnoresMouseEvents(true);
         if !self.panel.isVisible() { unsafe { self.panel.orderFrontRegardless() }; }
         self.warming.set(true);
-        Prewarm(self.warming.clone())
+        Prewarm { warming: self.warming.clone(), presence: self.presence.clone(), panel: self.panel.clone() }
     }
 
     /// Hides the panel, fading its alpha out over `fade` (instantly when zero). Input stops at once.
@@ -103,16 +112,9 @@ impl Panel {
         let mut presence = self.presence.get();
         let generation = presence.hide(!fade.is_zero());
         self.presence.set(presence);
-        if self.options.prewarm {
-            self.fade_to(0.0, fade, false, generation);
-            unsafe { self.panel.resignKeyWindow(); }
-        } else if fade.is_zero() {
-            self.panel.orderOut(None);
-        } else {
-            unsafe { self.panel.resignKeyWindow(); }
-            self.fade_to(0.0, fade, true, generation);
-        }
-        // Read-only once its alpha is zero: a hidden prewarm panel stays on every Space.
+        self.fade_to(0.0, fade, generation);
+        unsafe { self.panel.resignKeyWindow(); }
+        // Already ordered out for an immediate hide; a fade keeps exclusion until completion.
         set_sharing(&self.panel, presence.excluded());
     }
 
