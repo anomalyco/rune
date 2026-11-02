@@ -470,6 +470,40 @@ def analyze(path, script=None):
                 return True
         return False
 
+    # Source/layout goals, not sampled spring positions. A streamed update can choose another
+    # destination without a key. Judge each destination separately; jumps still span updates.
+    goals = [{row[0]: row[1:] for row in fr.get("retarget", [])} for fr in frames]
+
+    def retargeted(e, k, mask):
+        own = True
+        while e:
+            change = goals[k].get(e.id)
+            if change and change[0 if own else 1] & mask:
+                return True
+            own = False
+            e = els.get(e.parent)
+        return False
+
+    def braking(e, h, seg, edge, vals):
+        """A retarget preserves incoming velocity. Its first turn is braking, not a wind-up,
+        only while each step slows in the direction it was already travelling. A second turn,
+        a fresh acceleration away, or motion starting from rest still fails the usual checks."""
+        first = seg[0]
+        if first < 2 or not retargeted(e, h[first][0], 1 << (edge - 1)):
+            return vals
+        incoming = h[first - 1][edge] - h[first - 2][edge]
+        if abs(incoming) <= 0.05 or incoming * (vals[-1] - vals[0]) >= 0:
+            return vals
+        speed = abs(incoming)
+        for i, (a, b) in enumerate(zip(vals, vals[1:])):
+            step = b - a
+            if step * incoming < 0:
+                return vals[i:]
+            if abs(step) > speed + 0.05:
+                return vals
+            speed = abs(step)
+        return vals
+
     for e in els.values():
         h = e.hist
         if len(h) < 3 or e.id in loops:
@@ -529,13 +563,16 @@ def analyze(path, script=None):
             h = mine
             seg = []
             for i in range(1, len(h)):
-                moving = h[i][0] - h[i - 1][0] <= SEG_GAP + 1 and abs(h[i][edge] - h[i - 1][edge]) > 0.01
+                boundary = retargeted(e, h[i][0], 1 << (edge - 1))
+                changed = h[i][0] - h[i - 1][0] <= SEG_GAP + 1 and abs(h[i][edge] - h[i - 1][edge]) > 0.01
+                moving = changed and not boundary
                 if moving:
                     seg.append(i)
-                elif seg and h[i][0] - h[seg[-1]][0] <= SEG_GAP and i < len(h) - 1:
+                elif not boundary and seg and h[i][0] - h[seg[-1]][0] <= SEG_GAP and i < len(h) - 1:
                     continue
                 if (not moving or i == len(h) - 1) and len(seg) >= 4:
                     vals = [h[seg[0] - 1][edge]] + [h[j][edge] for j in seg]
+                    vals = braking(e, h, seg, edge, vals)
                     if all(h[j][5] <= 0.05 or not h[j][8] for j in seg):
                         seg = []
                         continue
@@ -576,7 +613,7 @@ def analyze(path, script=None):
                             findings.append(dict(kind="stall", element=e.name, frames=1, longest=1, at=str(k),
                                                  detail=f"{label} speed {u[0]:.1f} → {u[1]:.1f} → {u[2]:.1f} pt/frame ({start:.1f} → {rest:.1f})"))
                 if not moving:
-                    seg = []
+                    seg = [i] if boundary and changed else []
             h = e.hist
         # One straight path: the top-left corner's route against its chord, per continuous move,
         # against the scroll.
@@ -584,7 +621,9 @@ def analyze(path, script=None):
         seg = []
         ph = {x[0]: x for x in theirs}
         for i in range(1, len(h) + 1):
-            if i < len(h) and h[i][0] == h[i - 1][0] + 1 and (abs(h[i][1] - h[i - 1][1]) > 0.01 or abs(h[i][2] - h[i - 1][2]) > 0.01):
+            boundary = i < len(h) and retargeted(e, h[i][0], 3)
+            changed = i < len(h) and h[i][0] == h[i - 1][0] + 1 and (abs(h[i][1] - h[i - 1][1]) > 0.01 or abs(h[i][2] - h[i - 1][2]) > 0.01)
+            if changed and not boundary:
                 seg.append(i)
                 continue
             if len(seg) >= 4:
@@ -608,7 +647,7 @@ def analyze(path, script=None):
                     if chord > JUMP_PT and route > 1.2 * chord:
                         findings.append(dict(kind="dog-leg", element=e.name, frames=k1 - k0 + 1, longest=k1 - k0 + 1, at=f"{k0}–{k1}",
                                              detail=f"({pts[0][1]:.0f},{pts[0][2]:.0f}) → ({pts[-1][1]:.0f},{pts[-1][2]:.0f}) travels {route:.0f}pt for a {chord:.0f}pt move"))
-            seg = []
+            seg = [i] if boundary and changed else []
 
     # latency: input to first visible change
     for k, ev in inputs:

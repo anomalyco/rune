@@ -246,9 +246,8 @@ impl Canvas {
         }
         crate::ink::flatten(&mut self.ops, &mut self.traces, paint.surface);
         let b = self.drawn();
-        // Drawn at full size and shrunk whole by `scale` (see [`Scene::el`]), so a diagram
-        // growing past the room it has springs smaller instead of each label jumping a size.
-        // Lines thin no further than 80%.
+        // Store full-size drawing; Scene::el fits each destination before animating it.
+        // Labels scale without changing font metrics. Lines thin no further than 80%.
         let pad = 1.0 / scale;
         let map = |p: [f32; 2]| [p[0] - b[0] + pad, p[1] - b[1] + pad];
         let stroke = |w: f32| w * scale.max(0.8) / scale;
@@ -316,9 +315,12 @@ impl Scene {
     pub(crate) fn el(&self, paint: &DiagramStyle, streaming: bool) -> El {
         let [w, h] = self.full;
         let still = |t: Transition| if streaming { t } else { Transition::none() };
-        let mut body = el().key("fit").absolute(0.0, 0.0).size(w, h).origin(0.0, 0.0).scale(self.scale).transition(Transition::none());
+        // Fit destinations before springing them. Multiplying a springing canvas size by a
+        // second, shrinking scale spring makes edges overshoot and reverse between updates.
+        let scale = self.scale;
+        let mut body = el().key("fit").absolute(0.0, 0.0).size(self.size[0], self.size[1]).transition(Transition::none());
         for p in &self.pieces {
-            body = body.child(p.el(streaming));
+            body = body.child(p.el(streaming, scale));
         }
         let label = |l: &Label, color: Color| {
             // A point of slack so rounding never breaks a measured line.
@@ -328,7 +330,7 @@ impl Scene {
         // Labels and hover groups are placed by offset, as pieces are ([`Piece::el`]).
         for (l, (key, kind)) in self.labels.iter().zip(&self.label_keys) {
             let (enter, delay) = kind.map_or((Transition::opacity(), 0.0), |k| k.label_enter());
-            let mut t = label(l, l.color).absolute(0.0, 0.0).offset(l.at[0] - 1.0, l.at[1]).key(key.clone()).transition(still(enter));
+            let mut t = label(l, l.color).absolute(0.0, 0.0).offset((l.at[0] - 1.0) * scale, l.at[1] * scale).origin(0.0, 0.0).scale(scale).key(key.clone()).transition(still(enter));
             if streaming && delay > 0.0 {
                 t = t.enter_delay(delay);
             }
@@ -340,8 +342,10 @@ impl Scene {
         for s in &self.hovers {
             let r = s.rect;
             let mut glow = el()
-                .absolute(-r[0], -r[1])
+                .absolute(-r[0] * scale, -r[1] * scale)
                 .size(w, h)
+                .origin(0.0, 0.0)
+                .scale(scale)
                 .group_opacity(0.0, 1.0)
                 .instant_changes()
                 .transition(Transition::none())
@@ -352,7 +356,7 @@ impl Scene {
                 }
             }
             let exit = if streaming { Transition { insertion: rune::Effect::IDENTITY, ..Transition::opacity() } } else { Transition::none() };
-            body = body.child(el().key(s.key.clone()).absolute(0.0, 0.0).offset(r[0], r[1]).size(r[2], r[3]).hover_group().transition(exit).child(glow));
+            body = body.child(el().key(s.key.clone()).absolute(0.0, 0.0).offset(r[0] * scale, r[1] * scale).size(r[2] * scale, r[3] * scale).hover_group().transition(exit).child(glow));
         }
         let mut card = col()
             .w_full()

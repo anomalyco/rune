@@ -217,13 +217,13 @@ fn piece(ops: &[Op], key: String, kind: Option<Kind>, map: &impl Fn([f32; 2]) ->
 impl Piece {
     /// Placed by offset, not layout: a reply's growth row snaps the layout of what it holds,
     /// but an offset still springs, so a piece glides to its new place there too.
-    pub(crate) fn el(&self, streaming: bool) -> rune::El {
+    pub(crate) fn el(&self, streaming: bool, scale: f32) -> rune::El {
         let enter = match self.kind {
             Some(k) if streaming => k.enter(),
             None if streaming => Transition::opacity(),
             _ => Transition::none(),
         };
-        canvas(self.shape.clone()).key(self.key.clone()).absolute(0.0, 0.0).offset(self.at[0], self.at[1]).size(self.size[0], self.size[1]).transition(enter)
+        canvas(self.shape.clone()).key(self.key.clone()).absolute(0.0, 0.0).offset(self.at[0] * scale, self.at[1] * scale).size(self.size[0] * scale, self.size[1] * scale).transition(enter)
     }
 }
 
