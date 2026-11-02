@@ -145,8 +145,7 @@ pub struct TextSystem {
     pub sans: String,
     pub mono: String,
     symbol_families: Vec<&'static str>,
-    /// The colour emoji family among `symbol_families`.
-    emoji: Option<&'static str>,
+    emoji: Vec<String>,
     /// The installed math families, once a text has needed them.
     math: Option<Vec<&'static str>>,
     /// The installed `Family::SystemMono` families, once a text has needed them.
@@ -260,7 +259,7 @@ impl TextSystem {
         let mut font_files = LoadedFiles::new();
         register_cjk_fallbacks(&mut collection, &mut font_files, &registered, families);
         let symbol_families = load_families(&mut collection, SYMBOL_FONT_FILES, SYMBOL_FAMILIES);
-        let emoji = symbol_families.iter().copied().find(|f| f.contains("Emoji"));
+        let emoji = system_fonts::load_emoji(&mut collection, &symbol_families);
         #[cfg(target_arch = "wasm32")]
         let families = if fonts.is_empty() { ("Inter", "IBM Plex Mono") } else { families };
         let (sans, mono) = families::slots(families.0, families.1);
@@ -572,7 +571,7 @@ impl TextSystem {
             self.system_mono();
         }
         let math = self.math.as_deref().unwrap_or(&[]);
-        let emoji = self.emoji.as_slice();
+        let emoji = self.emoji.iter().map(String::as_str).collect::<Vec<_>>();
         let system = self.system_mono.as_deref().unwrap_or_default();
         let with_symbols = |primary| {
             family_list(primary, system, self.sans.as_str())
@@ -600,7 +599,7 @@ impl TextSystem {
         let mut stacks: [Option<Vec<FontFamilyName<'_>>>; 4] = Default::default();
         let mut routed = Vec::new();
         for (range, route) in routes {
-            let fonts = match route { Route::Math => math, Route::Emoji => emoji };
+            let fonts = match route { Route::Math => math, Route::Emoji => emoji.as_slice() };
             if fonts.is_empty() {
                 continue;
             }

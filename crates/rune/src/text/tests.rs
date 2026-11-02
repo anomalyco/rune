@@ -359,7 +359,7 @@ fn routes_merge_math_and_emoji_presentation() {
 #[test]
 fn emoji_presentation_selector_draws_in_colour() {
     let mut ts = TextSystem::default();
-    if ts.emoji.is_none() {
+    if system_font_files(&["notocoloremoji", "applecoloremoji", "seguiemj"]).is_empty() {
         eprintln!("skipping: no colour emoji font installed");
         return;
     }
@@ -424,7 +424,7 @@ fn keyboard_symbol_fallbacks_match_cap_height() {
 #[test]
 fn emoji_draw_as_colour_images_beside_text() {
     let mut ts = TextSystem::default();
-    if ts.emoji.is_none() {
+    if system_font_files(&["notocoloremoji", "applecoloremoji", "seguiemj"]).is_empty() {
         eprintln!("skipping: no colour emoji font installed");
         return;
     }

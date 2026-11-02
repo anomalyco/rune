@@ -72,6 +72,7 @@ rustc-hash = "2"
 zeroize = "1.8"
 half = "2"
 unicode-segmentation = "1.13"
+icu_properties = "2.3"
 resvg = { version = "0.45", default-features = false, optional = true }
 
 [target.'cfg(all(unix, not(target_os = "linux")))'.dependencies]
