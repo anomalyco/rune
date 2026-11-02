@@ -17,6 +17,7 @@ impl<S: 'static> Runtime<S> {
         }
         self.text.begin_frame_pinned(pinned_pages);
         self.marks.clear();
+        self.icon_aprons.clear();
         self.surfaces.clear();
         self.materials.clear();
         self.hits.clear();
