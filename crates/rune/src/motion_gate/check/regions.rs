@@ -139,7 +139,10 @@ pub fn regions(rec: &Recording, loops: &HashSet<usize>, found: &[Finding]) -> Ve
                 "snap" => format!("{} → {}", hex(k - 1), hex(k)),
                 _ => format!("{} → {} → {}", hex(e.span.0), hex(k), hex(e.span.1)),
             };
-            let who = top(rec, k - 1, &rect).or_else(|| top(rec, k, &rect)).map_or_else(|| "window".into(), |t| short(&t.path));
+            // The top surface there before or after, whichever changed on the frame.
+            let (was, now) = (top(rec, k - 1, &rect), top(rec, k, &rect));
+            let changed = |t: &&Track| t.at(k - 1).map(|s| (s.rect, s.op)) != t.at(k).map(|s| (s.rect, s.op)) || painted_differs(t, k);
+            let who = was.filter(changed).or(now.filter(changed)).or(was).or(now).map_or_else(|| "window".into(), |t| short(&t.path));
             out.push(Finding { kind, element: format!("{who} (pixels)"), frame: k,
                 detail: format!("{} cells ({:.0}×{:.0} pt at {:.0},{:.0}) {colors} over frames {}–{}", region.len(), rect[2], rect[3], rect[0], rect[1], e.span.0, e.span.1) });
         }
