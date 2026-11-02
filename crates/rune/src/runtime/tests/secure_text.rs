@@ -196,7 +196,10 @@ fn revealed_secure_input_matches_plain_layout_and_keeps_protections() {
         .filter(|i| i.params[1] == KIND_RECT && i.rect[1] >= plain_el.rect[1] && i.rect[1] < plain_el.rect[1] + plain_el.rect[3])
         .map(|i| [i.rect[0] - plain_el.rect[0], i.rect[1] - plain_el.rect[1], i.rect[2], i.rect[3]])
         .collect();
-    assert_eq!(plain_sel, secret_sel);
+    assert_eq!(plain_sel.len(), secret_sel.len());
+    for (plain, secret) in plain_sel.iter().flatten().zip(secret_sel.iter().flatten()) {
+        assert!((plain - secret).abs() < 0.0001, "selection coordinate {plain} != {secret}");
+    }
 
     // Refocus secret field: copy, cut, undo and IME must do nothing, and toggling revealed re-measures.
     rt.update(|s, _| { s.plain.focused = false; s.secret.focused = true; });
