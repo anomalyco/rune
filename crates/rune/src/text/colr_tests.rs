@@ -29,11 +29,19 @@ fn glyph(font: &[u8], ch: u32) -> u32 {
 }
 
 fn render(ch: u32, ink: u32) -> Image {
-    rasterize(TEST_GLYPHS, 0, glyph(TEST_GLYPHS, ch), PPEM, &[], ink).unwrap()
+    render_at(ch, ink, PPEM)
+}
+
+fn render_at(ch: u32, ink: u32, ppem: f32) -> Image {
+    rasterize(TEST_GLYPHS, 0, glyph(TEST_GLYPHS, ch), ppem, &[], ink).unwrap()
 }
 
 fn at(image: &Image, x: f32, y: f32) -> [u8; 4] {
-    let s = PPEM / 1000.0;
+    sample(image, PPEM, x, y)
+}
+
+fn sample(image: &Image, ppem: f32, x: f32, y: f32) -> [u8; 4] {
+    let s = ppem / 1000.0;
     let p = image.placement;
     let col = (x * s - p.left as f32).floor() as u32;
     let row = (p.top as f32 - y * s).floor() as u32;
@@ -144,6 +152,73 @@ fn sweep_gradients_run_counter_clockwise_on_the_design_grid() {
     assert_color(at(&sweep, 645.0, 745.0), mix(BLUE, RED, f), 255);
     assert_color(at(&sweep, 535.0, 795.0), SLATE, 255);
     assert_color(at(&sweep, 695.0, 565.0), SLATE, 255);
+}
+
+#[test]
+fn repeat_spans_the_colour_line_between_its_first_and_last_stops() {
+    const PPEM_LARGE: f32 = 400.0;
+    let stops_02_08 = render_at(0xF0101, BLUE_INK, PPEM_LARGE);
+    assert_color(
+        sample(&stops_02_08, PPEM_LARGE, 500.0, 600.0),
+        mix(RED, BLUE, 0.5),
+        255,
+    );
+    assert_color(
+        sample(&stops_02_08, PPEM_LARGE, 820.0, 600.0),
+        mix(RED, BLUE, 1.0 / 6.0),
+        255,
+    );
+    assert_color(
+        sample(&stops_02_08, PPEM_LARGE, 180.0, 600.0),
+        mix(RED, BLUE, 5.0 / 6.0),
+        255,
+    );
+    let stops_0_15 = render_at(0xF0102, BLUE_INK, PPEM_LARGE);
+    assert_color(
+        sample(&stops_0_15, PPEM_LARGE, 860.0, 600.0),
+        mix(RED, BLUE, 0.95 / 1.5),
+        255,
+    );
+    let stops_05_15 = render_at(0xF0103, BLUE_INK, PPEM_LARGE);
+    assert_color(
+        sample(&stops_05_15, PPEM_LARGE, 820.0, 600.0),
+        mix(RED, BLUE, 0.4),
+        255,
+    );
+    assert_color(
+        sample(&stops_05_15, PPEM_LARGE, 180.0, 600.0),
+        mix(RED, BLUE, 0.6),
+        255,
+    );
+}
+
+#[test]
+fn sweeps_across_zero_degrees_do_not_wrap() {
+    const PPEM_LARGE: f32 = 400.0;
+    let on_arc = |deg: f32| {
+        let a = deg.to_radians();
+        (500.0 + 320.0 * a.cos(), 600.0 + 320.0 * a.sin())
+    };
+    let check = |image: &Image, deg: f32, rgb: [u8; 3]| {
+        let (x, y) = on_arc(deg);
+        assert_color(sample(image, PPEM_LARGE, x, y), rgb, 255);
+    };
+    let forward = render_at(0xF0209, BLUE_INK, PPEM_LARGE);
+    check(
+        &forward,
+        350.0,
+        mix(BLUE, RED, (350.0 - 340.8333) / 28.3333),
+    );
+    check(&forward, 330.0, mix(LINEN, BLUE, (330.0 - 312.5) / 28.3333));
+    check(&forward, 20.0, LINEN);
+    check(&forward, 200.0, LINEN);
+    let reverse = render_at(0xF020A, BLUE_INK, PPEM_LARGE);
+    check(
+        &reverse,
+        350.0,
+        mix(BLUE, RED, (369.1667 - 350.0) / 28.3333),
+    );
+    check(&reverse, 20.0, SLATE);
 }
 
 #[test]
