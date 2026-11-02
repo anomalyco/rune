@@ -33,7 +33,7 @@ mod handler_set;
 mod handlers;
 mod layout;
 pub(crate) mod layout_watch;
-mod motion;
+pub mod motion;
 mod pills;
 mod pixel_snap;
 mod ride_trailing;

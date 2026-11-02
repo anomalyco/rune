@@ -62,6 +62,23 @@ fn a_box_that_mounts_with_no_transition_pops_in_unless_allowed() {
 }
 
 #[test]
+fn allow_rows_cap_what_they_cover_and_report_when_unused() {
+    let f = |el: &str| Finding { kind: "flash", element: el.into(), frame: 3, detail: String::new() };
+    let cells = [
+        Cell { name: "island-auto/dark".into(), frames: 10, skipped: false, findings: vec![f("plate"), f("plate")] },
+        Cell { name: "parks/dark".into(), frames: 10, skipped: false, findings: vec![] },
+    ];
+    let one = [AllowRow::new("flash", "plate", "island-auto|island-click", "the plate's hand-off").max(1)];
+    let r = report_rows(&cells, &one, false, 0.0);
+    assert_eq!((r.failing, r.allowed, r.unused), (1, 1, 0));
+    assert!(r.text.contains("past its allow row's max of 1"), "{}", r.text);
+    let rows = [AllowRow::new("", "plate", "island-auto", "any kind"), AllowRow::new("jump", "x", "parks", "stale"), AllowRow::new("jump", "x", "game", "not run")];
+    let r = report_rows(&cells, &rows, false, 0.0);
+    assert_eq!((r.failing, r.allowed, r.unused), (0, 2, 1), "only a row whose cells ran counts as unused");
+    assert!(r.text.contains("unused allow row (\"jump\", \"x\", \"parks\")"), "{}", r.text);
+}
+
+#[test]
 fn run_keeps_the_filtered_cells_in_order_and_flags_one_that_recorded_nothing() {
     let jobs: Vec<(String, Job)> = vec![
         ("move/wide".into(), Box::new(|| cell(|s, _| s.right = true))),

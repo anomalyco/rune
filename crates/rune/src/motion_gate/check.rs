@@ -11,12 +11,22 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::sync::Arc;
 
 use crate::ElementInfo;
 
 mod commits;
+mod evidence;
 mod kicks;
 mod loops;
+pub mod paint;
+mod painted;
+pub mod raster;
+mod regions;
+mod series;
+
+pub use evidence::{dump, sheet};
+use paint::Paint;
 
 /// One finding kind, its threshold and what it means. The checker reads its numbers from here.
 pub struct Rule {
@@ -49,6 +59,9 @@ pub const RULES: &[Rule] = &[
     Rule { kind: "remount", threshold: 2.0, means: "words start leaving while the same words mount elsewhere within this many frames: one thing fades out at its old place as its copy fades in (its row lost its key)" },
     Rule { kind: "unpinned", threshold: 2.0, means: "a scroll pinned to its end has its content's bottom this many pt below the viewport with no input since: it stopped following" },
     Rule { kind: "scroll-commit", threshold: 0.25, means: "the app ran its view (its `poll`, a handler or a layout read) on 6 or more of a scroll's frames and at least this share of them: a scroll needs no commit, so each one is a frame's whole view rebuilt mid-gesture" },
+    Rule { kind: "snap", threshold: 1.0, means: "a painted property steps by at least this in one frame between frames that hold still, with no input, `Tx::instant` commit or mark asking for it: a colour by OKLab ΔE 0.08 (weighted by the area that shows and its opacity), a corner by 3 pt, a blur by 2 pt, a border by 1 pt, a new image, or two surfaces trading places (z-order). `(pixels)`: a region of the composited window, where no element changed" },
+    Rule { kind: "flash", threshold: 0.5, means: "a painted property (or a region of the window) steps out by at least this and comes at least halfway back within 0.4 s, or drifts out and snaps back: a surface that drops out for a frame, or blinks before what replaces it fades in" },
+    Rule { kind: "changes-twice", threshold: 0.25, means: "a painted property (or region) changes, rests from 2 frames to this many seconds, then carries on the same way with no input between: one change landed as two" },
     Rule { kind: "twice", threshold: 0.0, means: "two siblings share one key (Rune's `#dup`), so one thing shows twice, as an optimistic copy beside the server's" },
 ];
 
@@ -103,11 +116,19 @@ pub struct Track {
     pub text: Option<String>,
     /// Its words each time they changed, from the frame they showed.
     pub words: Vec<(usize, String)>,
+    /// What it painted on each of `frames` (empty when the recording has no paint).
+    pub paint: Vec<Option<Paint>>,
 }
 
 impl Track {
     fn at(&self, k: usize) -> Option<&Snap> {
         self.frames.binary_search_by_key(&k, |f| f.0).ok().map(|i| &self.frames[i].1)
+    }
+
+    /// What it painted on frame `k`.
+    pub fn paint_at(&self, k: usize) -> Option<&Paint> {
+        let i = self.frames.binary_search_by_key(&k, |f| f.0).ok()?;
+        self.paint.get(i)?.as_ref()
     }
 }
 
@@ -136,6 +157,10 @@ pub struct Recording {
     /// Per frame [`super::Run`] stepped: whether a viewport scrolled, and the app's reasons
     /// for the view to run again (`CommitWhy` bits: its `poll`, a handler, a layout read).
     scrolled: Vec<(bool, u16)>,
+    /// Per frame: a commit landed at once (`Tx::instant`), so what it changed steps by design.
+    pub instant: Vec<bool>,
+    /// Per frame: the composited window in cells ([`raster`]), shared while it's unchanged.
+    pub grids: Vec<Option<Arc<raster::Grid>>>,
 }
 
 impl Recording {
@@ -147,6 +172,13 @@ impl Recording {
     pub(crate) fn commits(&mut self, scrolling: bool, why: u16) {
         use crate::runtime::CommitWhy as W;
         self.scrolled.push((scrolling, why & (W::POLL | W::INPUT | W::LAYOUT | W::READ)));
+        self.instant.push(why & W::INSTANT != 0);
+    }
+
+    /// The frame just sampled's composited window.
+    pub fn grid(&mut self, grid: Option<Arc<raster::Grid>>) {
+        self.grids.resize(self.frames.saturating_sub(1), None);
+        self.grids.push(grid);
     }
 
     fn track(&mut self, path: &str, parent: Option<usize>) -> usize {
@@ -154,7 +186,7 @@ impl Recording {
             return i;
         }
         let i = self.tracks.len();
-        self.tracks.push(Track { path: path.to_owned(), parent, frames: Vec::new(), text: None, words: Vec::new() });
+        self.tracks.push(Track { path: path.to_owned(), parent, frames: Vec::new(), text: None, words: Vec::new(), paint: Vec::new() });
         self.index.insert(path.to_owned(), i);
         i
     }
@@ -165,6 +197,12 @@ impl Recording {
 
     /// Takes one frame of the element tree.
     pub fn sample(&mut self, els: &[ElementInfo]) {
+        self.sample_with(els, None);
+    }
+
+    /// Takes one frame of the element tree and what each element painted, by path and whether
+    /// it's leaving (`Runtime::paints`).
+    pub(crate) fn sample_with(&mut self, els: &[ElementInfo], paints: Option<&crate::runtime::HashMap<(String, bool), Paint>>) {
         let k = self.frames;
         self.frames += 1;
         // An element exiting beside a live one at the same path (a key re-added mid-exit) is
@@ -208,6 +246,10 @@ impl Recording {
                 track.words.push((k, words.to_owned()));
             }
             track.frames.push((k, Snap { rect: e.rect, vis: e.visible, op: e.opacity, scale: e.scale, flags, phase: e.loop_phase.map_or(f32::NAN, |p| p as f32), scrolled: e.scrolled }));
+            if let Some(paints) = paints {
+                track.paint.resize(track.frames.len() - 1, None);
+                track.paint.push(paints.get(&(e.path.clone(), e.exiting)).cloned());
+            }
         }
     }
 }
@@ -425,7 +467,7 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
             entering && b.op >= rule("faint") && b.flags & INK != 0 && b.flags & (GROWING | EXITING) == 0
         }).count()
     };
-    let mut geo: Vec<(usize, Finding)> = Vec::new();
+    let mut geo: Vec<(usize, Finding)> = painted::painted(rec, &loops);
     for (i, t) in tr.iter().enumerate() {
         if loops.contains(&i) || t.frames.len() < 3 { continue; }
         for axis in 0..4 {
@@ -576,7 +618,7 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
         let mut p = tr[*i].parent;
         let mut dup = false;
         while let Some(j) = p {
-            if ["reversal", "overshoot", "jiggle", "flicker", "jerk", "fade-snap"].contains(&f.kind) && (0..=2).any(|o| reported.contains(&(j, f.kind, f.frame.saturating_sub(o))) || reported.contains(&(j, f.kind, f.frame + o))) {
+            if ["reversal", "overshoot", "jiggle", "flicker", "jerk", "fade-snap", "snap", "flash", "changes-twice"].contains(&f.kind) && (0..=2).any(|o| reported.contains(&(j, f.kind, f.frame.saturating_sub(o))) || reported.contains(&(j, f.kind, f.frame + o))) {
                 dup = true;
                 break;
             }
@@ -716,55 +758,11 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
     // A load swaps the page in on its frame: what mounts, unmounts or moves then is the swap.
     out.retain(|f| !(["pop-in", "pop-out", "jump", "offset-jump", "appear-then-jump", "fade-snap"].contains(&f.kind)
         && rec.loads.iter().any(|&l| f.frame >= l && f.frame <= l + 2)));
+    painted::intended(rec, &mut out);
+    let pixels = regions::regions(rec, &loops, &out);
+    out.extend(pixels);
     out.sort_by_key(|f| (f.frame, f.kind));
     out
-}
-
-/// Frames `from..to` of every track whose path contains `filter`, one line per frame:
-/// `frame rect visible opacity flags`. For reading a finding's neighbourhood.
-pub fn dump(rec: &Recording, filter: &str, from: usize, to: usize) -> String {
-    let mut out = String::new();
-    for t in rec.tracks.iter().filter(|t| t.path.contains(filter)) {
-        out += &format!("{}\n", t.path);
-        for (k, s) in t.frames.iter().filter(|f| f.0 >= from && f.0 < to) {
-            out += &format!("  {k:4} [{:7.1} {:7.1} {:6.1} {:6.1}] vis [{:6.1} {:6.1} {:6.1} {:6.1}] op {:.3} sc {:.3} {:02b}\n",
-                s.rect[0], s.rect[1], s.rect[2], s.rect[3], s.vis[0], s.vis[1], s.vis[2], s.vis[3], s.op, s.scale, s.flags);
-        }
-    }
-    out
-}
-
-/// A contact strip of frames `at-4..=at+4`: every element's visible rect as an outline, as
-/// strong as its opacity, `focus`'s in red. Secondary evidence: the findings are the gate.
-pub fn sheet(rec: &Recording, at: usize, focus: &str) -> ::image::RgbImage {
-    const Z: f32 = 0.25;
-    let (w, h) = ((rec.size.0 * Z) as u32, (rec.size.1 * Z) as u32);
-    let frames: Vec<usize> = (at.saturating_sub(4)..=at + 4).filter(|&k| k < rec.frames).collect();
-    let gap = 6;
-    let mut img = ::image::RgbImage::from_pixel((w + gap) * frames.len() as u32, h, ::image::Rgb([16, 18, 22]));
-    for (col, &k) in frames.iter().enumerate() {
-        let x0 = col as u32 * (w + gap);
-        if k == at {
-            for x in x0..x0 + w { img.put_pixel(x, 0, ::image::Rgb([255, 210, 80])); }
-        }
-        for t in &rec.tracks {
-            let Some(s) = t.at(k) else { continue };
-            let hot = !focus.is_empty() && t.path.contains(focus);
-            let a = s.op.clamp(0.0, 1.0) * if hot { 1.0 } else { 0.5 };
-            let ink = if hot { [255.0, 70.0, 70.0] } else { [200.0, 205.0, 215.0] };
-            let [x, y, rw, rh] = s.vis.map(|v| v * Z);
-            if rw < 1.0 || rh < 1.0 { continue; }
-            let mut plot = |px: f32, py: f32| {
-                let (px, py) = (px as u32, py as u32);
-                if px >= w || py >= h { return; }
-                let p = img.get_pixel_mut(x0 + px, py);
-                for c in 0..3 { p.0[c] = (p.0[c] as f32 * (1.0 - a) + ink[c] * a) as u8; }
-            };
-            for i in 0..rw as u32 { plot(x + i as f32, y); plot(x + i as f32, y + rh - 1.0); }
-            for i in 0..rh as u32 { plot(x, y + i as f32); plot(x + rw - 1.0, y + i as f32); }
-        }
-    }
-    img
 }
 
 fn last_seg(path: &str) -> &str {

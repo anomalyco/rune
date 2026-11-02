@@ -1,6 +1,7 @@
 #!/bin/sh
 # Records a motion trace of every element (--trace-all) for each scenario below, at 120 fps on
-# the virtual clock, plus the final element tree. Then scripts/motion-audit/analyze.py reads them.
+# the virtual clock, plus the final element tree and what rune::motion_gate finds (<name>.gate.txt).
+# Then scripts/motion-audit/analyze.py reads them.
 # Run from the repo root: scripts/motion-audit/run.sh [out-dir] (default target/motion-audit).
 set -e
 O=${1:-target/motion-audit}
@@ -20,7 +21,7 @@ run() {
   name=$1; secs=$2; shift 2
   frames=$(python3 -c "print(int($secs * $FPS))")
   echo "== $name ($frames frames)"
-  "$@" --fps $FPS --frames "$frames" --trace-all --trace "$O/$name.jsonl" --tree "$O/$name-end.json"
+  RUNE_MOTION_GATE="$O/$name.gate.txt" "$@" --fps $FPS --frames "$frames" --trace-all --trace "$O/$name.jsonl" --tree "$O/$name-end.json"
 }
 
 run todo-add-remove   4.4 $B/todo --script $S/todo-add-remove.json

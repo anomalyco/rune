@@ -113,6 +113,7 @@ pub use el::effect;
 pub use el::el;
 pub use el::icon;
 pub use el::layout_watch::ScrollPos;
+pub use el::motion::MotionIntent;
 pub use el::rich;
 pub use el::row;
 pub use el::spacer;

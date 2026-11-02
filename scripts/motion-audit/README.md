@@ -77,9 +77,25 @@ gates its own motion inside `cargo test`, on its real view and state, with `rune
   `wakes-after-end`, `lands-unseen`, `remount`, `unpinned`, `twice` and `scroll-commit` (the
   app ran its view through a scroll). Thresholds and meanings are the `RULES` table. Elements are tracked by tree
   path, so a keyed row keeps its identity however the rows around it change.
-- `gate(cells, ALLOW)` runs the app's cells (a name and a closure that records one) in parallel,
-  checks them, and fails the test on any finding its allowlist doesn't cover. Each allowlist row
-  is `(kind, element contains, cell contains, why)`, and needs its reason.
+- Beside geometry and opacity, `check` follows everything an element paints (fill, border,
+  text, shadow, gradient and outline colours in OKLab, corners, border width, blurs, effect
+  payload, image and paint order) and the composited window as a grid of cells: `snap` (a
+  one-frame step between still frames), `flash` (it steps away and comes back, or drifts and
+  snaps back) and `changes-twice` (it changes, rests, then carries on). A colour counts by how
+  far it moves in OKLab and how much of it shows. The grid is a CPU raster of the painter
+  stream, or real frames through `Run::pixels`; a region finding is named after the surface
+  that changed, with ` (pixels)`. An input, a hover or press highlight landing, a
+  `Tx::instant` commit, `El::instant_changes` and `El::motion_intent` (`BOUNCE`, `KICK`,
+  `STEP`, `CUT`, `PULSE`, `TYPING`, …) mark a change as the design. Mark authored motion where
+  it's written rather than allowing it.
+- `gate_rows(cells, ALLOW)` runs the app's cells (a name and a closure that records one) in
+  parallel, checks them, and fails the test on any finding its allowlist doesn't cover. Each
+  row is `AllowRow::new(kind, element contains, cells, why)`, needs its reason, scopes to the
+  cells it names (`"island-auto|island-click"`) and caps what it covers with `.max(n)`. A
+  whole run lists rows that matched nothing, so stale ones come out. `gate(cells, ALLOW)` takes
+  the older `(kind, element, cell, why)` tuples.
+- Headless `rune` records the same checks with `RUNE_MOTION_GATE=<path>` (`run.sh` writes
+  `<name>.gate.txt` per scenario), and an app stepping its own runtime can use `Sampler`.
 
 The app keeps its scenarios, its circumstance matrix (cell names like `send/pinned/long/wide`)
 and its allowlist; Rune keeps the checker and the runner. The module docs show a whole test.
@@ -93,9 +109,12 @@ scripts/motion-audit/gate --dump 'send/pinned/long/wide|composer|120|160' -- -p 
 scripts/motion-audit/gate --sheet 'send/pinned/long/wide|134|composer' -- -p my-app motion_gate
 ```
 
-`--dump` writes one cell's tracks frame by frame (rect, visible rect, opacity, scale, flags);
+`--dump` writes one cell's tracks frame by frame (rect, visible rect, opacity, scale, flags,
+and each painted property);
 `--sheet` writes a PNG strip of the frames around one, every element outlined as strongly as
-its opacity and the named one in red. Both are evidence for reading a finding; the findings
+its opacity and the named one in red. An empty cell part (`'|composer|120|160'`) matches any
+cell, and headless `rune` writes both beside its `RUNE_MOTION_GATE` report. Both are evidence
+for reading a finding; the findings
 are the gate. `MOTION_GATE_OUT` names the report (default `$TMPDIR/motion-gate`), and
 `MOTION_GATE_WRAP` runs the test under a command prefix.
 

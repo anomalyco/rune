@@ -154,6 +154,8 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         trace
     });
     rt.trace_channels = trace.as_ref().map(|_| Default::default());
+    let gate_out = std::env::var_os("RUNE_MOTION_GATE").map(std::path::PathBuf::from);
+    let mut gate = gate_out.as_ref().map(|_| crate::motion_gate::Sampler::new(&mut rt, fps as f64));
     rt.scene.store_mut().audit_retargets(trace.is_some());
     let mut strip: Vec<Vec<u8>> = Vec::new();
     let crops_px: Vec<[u32; 4]> = args.crops.iter().map(|c| c.map(|v| (v * scale).round() as u32)).collect();
@@ -233,6 +235,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         while next_ev < script.len() && script[next_ev].t <= real_t + 1e-9 {
             let e = &script[next_ev];
             next_ev += 1;
+            if let Some(g) = gate.as_mut() && !matches!(e.kind, Kind::Mark(_)) { g.input("script"); }
             let (x, y) = match &e.pos {
                 Pos::Xy(x, y) => (*x, *y),
                 Pos::Key(key) => rt.find(key).unwrap_or_else(|| die(&format!("script: no element with key {key:?}"))),
@@ -286,6 +289,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         if !idle { step_window_frame(&mut rt, &mut frame_anim, real_t, scale); }
         rt.window_resting = frame_anim.is_none() && rt.window_frame.is_none();
         let step = if k == 0 { 0.0 } else { dt };
+        if let Some(g) = gate.as_mut() { g.before(&mut rt); }
         let mut animating = rt.frame(step);
         rt.open_popup_headless();
         // As on macOS, a frame change this commit asked for starts with the springs it
@@ -382,6 +386,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         if let Some(tr) = trace.as_mut() {
             tr.frame(&mut rt, real_t * 1000.0, ms);
         }
+        if let Some(g) = gate.as_mut() { g.frame(&mut rt, animating); }
         if first_pixels {
             let wait = Instant::now();
             let done = readback.finish(&gpu.device);
@@ -422,6 +427,11 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     gpu.device.poll(wgpu::PollType::wait_indefinitely()).ok();
 
     if let Some(p) = &args.strip { write_strip(p, &strip, (wp, hp), &crops_px, gap, args.cols); }
+    if let (Some(g), Some(p)) = (gate, &gate_out) {
+        crate::motion_gate::evidence("", &g.rec, Some(p.display().to_string()));
+        let text: String = crate::motion_gate::check(&g.rec).iter().map(|f| format!("{f}\n")).collect();
+        std::fs::write(p, text).unwrap_or_else(|e| die(&format!("{}: {e}", p.display())));
+    }
 
     if frames > 0 {
         let wall = wall.elapsed().as_secs_f64();

@@ -2,7 +2,82 @@
 
 use super::*;
 
+/// Authored motion traits for [`El::motion_intent`], inherited by descendants. Motion checks
+/// (`rune::motion_gate` and `--trace`) read these marks so deliberate overshoots, kicks, shakes
+/// and discrete typing cuts pass without broad allowlist rules.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct MotionIntent(u16);
+
+impl MotionIntent {
+    pub const NONE: Self = Self(0);
+    /// Deliberately passes its rest value and settles back (a bouncy spring or elastic curve).
+    pub const OVERSHOOT: Self = Self(1 << 0);
+    /// Deliberate wind-up, anticipation or out-and-back bump (`reversal`).
+    pub const RECOIL: Self = Self(1 << 1);
+    /// Deliberate shake or oscillation (`jiggle`, `reversal`).
+    pub const JIGGLE: Self = Self(1 << 2);
+    /// Deliberate sudden launch velocity or multi-rate lead (`jerk`).
+    pub const IMPULSE: Self = Self(1 << 3);
+    /// Deliberate discrete step without transition (`jump`, `appear-then-jump`, `snap`).
+    pub const STEP: Self = Self(1 << 4);
+    /// Deliberate instant mount, unmount or swap (`pop-in`, `pop-out`, `cut-exit`, `fade-snap`, `text-swap`, `snap`).
+    pub const CUT: Self = Self(1 << 5);
+    /// Deliberate brief flash or dip-and-recover (`flicker`, `flash`).
+    pub const PULSE: Self = Self(1 << 6);
+
+    /// A bouncy or elastic element (`OVERSHOOT | RECOIL | JIGGLE`).
+    pub const BOUNCE: Self = Self(Self::OVERSHOOT.0 | Self::RECOIL.0 | Self::JIGGLE.0);
+    /// A ballistic launch or impact (`BOUNCE | IMPULSE`).
+    pub const KICK: Self = Self(Self::BOUNCE.0 | Self::IMPULSE.0);
+    /// Discrete typing: keycaps, typed runs, carets and placeholders (`STEP | CUT`).
+    pub const TYPING: Self = Self(Self::STEP.0 | Self::CUT.0);
+
+    #[inline]
+    pub const fn bits(self) -> u16 {
+        self.0
+    }
+
+    #[inline]
+    pub const fn from_bits(bits: u16) -> Self {
+        Self(bits)
+    }
+
+    #[inline]
+    pub const fn contains(self, other: Self) -> bool {
+        (self.0 & other.0) == other.0
+    }
+
+    #[inline]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+}
+
+impl std::ops::BitOr for MotionIntent {
+    type Output = Self;
+    #[inline]
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl std::ops::BitOrAssign for MotionIntent {
+    #[inline]
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+
 impl El {
+    /// Marks deliberate motion traits (`OVERSHOOT`, `KICK`, `JIGGLE`, `STEP`, `CUT`, `PULSE`) on
+    /// this element and its subtree so motion checks treat them as authored rather than bugs.
+    pub fn motion_intent(mut self, intent: MotionIntent) -> Self {
+        if intent != MotionIntent::NONE {
+            self.vis.cold_mut().motion_intent |= intent;
+        }
+        self
+    }
+
     /// The spring for this subtree's layout and colour changes (inherited).
     /// Presence uses the transition's own enter/exit springs.
     pub fn motion(mut self, s: Spring) -> Self {

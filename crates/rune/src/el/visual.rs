@@ -73,6 +73,8 @@ pub struct VisualCold {
     pub(crate) child_exit: Option<Box<Transition>>,
     /// `El::enter_delay`: seconds a new element holds its insertion effect before entering.
     pub(crate) enter_delay: f32,
+    /// `El::motion_intent`: authored motion traits inherited by this subtree.
+    pub(crate) motion_intent: crate::el::motion::MotionIntent,
 }
 
 impl Empty for VisualCold {
@@ -109,6 +111,7 @@ impl Empty for VisualCold {
         rotate_motion: None,
         child_exit: None,
         enter_delay: 0.0,
+        motion_intent: crate::el::motion::MotionIntent::NONE,
     };
 }
 
