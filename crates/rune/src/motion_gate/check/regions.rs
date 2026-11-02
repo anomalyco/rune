@@ -3,12 +3,12 @@
 //! one frame before what replaces it fades in, a layer's opacity, a clip, two elements trading
 //! places. A region is reported at the top element painting it the frame before.
 //!
-//! Cells under what travels (an element moving on this frame and the next or last, the step in
-//! line with its motion), a loop, a live binding or words that change are skipped, as are cells
-//! an element marked with the matching `El::motion_intent` covers. A region `snap` needs no
-//! element there to have changed on its frame (each element's own rules report those) and no
-//! `Tx::instant` commit; a region `flash` is reported unless an element's `flash` or `flicker`
-//! there already is.
+//! Cells under what travels (an element moving on a frame and the next or last, the step in line
+//! with its motion) at any frame of the event, a loop, a live binding or words that change are
+//! skipped, as are cells an element marked with the matching `El::motion_intent` covers. A
+//! region `snap` or `changes-twice` needs no element there to have changed on its frame (each
+//! element's own rules report those) and a `snap` no `Tx::instant` commit; a region `flash` is
+//! reported unless an element's `flash` or `flicker` there already is.
 
 use std::collections::{HashMap, HashSet};
 
@@ -109,9 +109,17 @@ pub fn regions(rec: &Recording, loops: &HashSet<usize>, found: &[Finding]) -> Ve
         let (kind, k) = key;
         if k <= rec.start || input_in(k.saturating_sub(1), k) || rec.loads.iter().any(|&l| k >= l && k <= l + 2) { continue; }
         if kind == "snap" && rec.instant.get(k) == Some(&true) { continue; }
-        let m = guards.entry(k).or_insert_with(|| guard(rec, loops, k, (w, h)));
-        let veto = BLOCKED | match kind { "flash" => PULSE, "snap" => CUT | CHANGED, _ => STEP };
-        let cells: HashMap<usize, &series::Event> = hits[&key].iter().filter(|(i, e)| m[*i] & veto == 0 && !(kind == "changes-twice" && input_in(e.span.0, e.span.1))).map(|(i, e)| (*i, e)).collect();
+        // A cell is vetoed by what holds anywhere in its event's frames (something travelling
+        // across it shows out and back), and by an element changing there on the frame itself.
+        let frames = |e: &series::Event| e.span.0.max(1).min(k)..=e.span.1.max(k);
+        for (_, e) in &hits[&key] {
+            for j in frames(e) { guards.entry(j).or_insert_with(|| guard(rec, loops, j, (w, h))); }
+        }
+        let veto = BLOCKED | match kind { "flash" => PULSE, "snap" => CUT, _ => STEP };
+        let vetoed = |i: usize, e: &series::Event| {
+            kind != "flash" && guards[&k][i] & CHANGED != 0 || frames(e).any(|j| guards[&j][i] & veto != 0)
+        };
+        let cells: HashMap<usize, &series::Event> = hits[&key].iter().filter(|(i, e)| !vetoed(*i, e) && !(kind == "changes-twice" && input_in(e.span.0, e.span.1))).map(|(i, e)| (*i, e)).collect();
         // Connected regions of two cells or more.
         let mut seen: HashSet<usize> = HashSet::new();
         let mut starts: Vec<usize> = cells.keys().copied().collect();
