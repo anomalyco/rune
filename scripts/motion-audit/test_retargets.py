@@ -48,6 +48,9 @@ class Retargets(unittest.TestCase):
     def test_a_jump_on_the_retarget_frame_still_fails(self):
         self.assertIn("jump", self.findings([40, 40, 40, 100, 100, 100], {3: 1}))
 
+    def test_a_retarget_that_loses_velocity_still_fails(self):
+        self.assertIn("stall", self.findings([40, 43, 46, 46.2, 49.2, 52.2, 55.2], {3: 1}))
+
 
 if __name__ == "__main__":
     unittest.main()
