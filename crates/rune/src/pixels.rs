@@ -84,6 +84,11 @@ impl Pixels {
         (frame.width, frame.height)
     }
 
+    pub(crate) fn signature(&self) -> (u64, u64) {
+        let frame = self.frame.lock().unwrap();
+        (self.id, frame.generation)
+    }
+
     #[cfg(test)]
     pub(crate) fn rgba(&self) -> Vec<u8> {
         self.frame.lock().unwrap().rgba.clone()
