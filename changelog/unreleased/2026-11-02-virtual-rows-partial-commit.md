@@ -1,0 +1,1 @@
+- Scrolling an `El::virtual_rows` list (or filling its overscan) with app state unchanged no longer re-runs the view or rebuilds rows already mounted: non-list subtrees and staying rows move straight into the commit's node buffer and only newly entering rows build, falling back to the view when a layout or caret read moves. No API change.

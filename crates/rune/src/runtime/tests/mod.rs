@@ -21,6 +21,7 @@ mod picture_scale;
 mod pointer_drag;
 mod pointer_hit;
 mod relayout;
+mod remount;
 mod scroll_carried;
 mod scroll_children;
 mod scroll_growth;

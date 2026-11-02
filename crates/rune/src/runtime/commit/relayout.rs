@@ -36,7 +36,7 @@ pub(super) fn root_size(viewport: (f32, f32), fit_height: bool) -> Size<Dimensio
 /// Whether a commit can lay `n` out again as it is. Layout rewrites the styles of
 /// `aspect_fit` elements and fitted anchored overlays, and live bindings and pictures change
 /// their nodes between commits.
-fn reusable(n: &Node) -> bool {
+pub(super) fn reusable(n: &Node) -> bool {
     n.cold.get().is_none_or(|c| {
         c.aspect_fit.is_none() && c.above.as_ref().is_none_or(|a| !a.fit) && c.live.is_empty() && c.pixel_aspect.is_none()
     })
@@ -44,27 +44,47 @@ fn reusable(n: &Node) -> bool {
 
 impl<S: 'static> Runtime<S> {
     /// Measures a commit: lays the last tree out again when only the viewport changed since it
-    /// was built, else runs the view.
+    /// was built, remounts virtual rows alone when only their window moved, else runs the view.
     pub(super) fn measure_commit(&mut self, tx: &Tx) -> Measured {
-        if !self.resize_only(tx) {
-            self.refresh_layout_seen();
-            return self.measure(tx);
+        if self.resize_only(tx) {
+            // The view keeps what it last read; `settle_layout_reads` and the caret check run it
+            // when the new layout moves them.
+            let reads = self.layout_seen.reads.clone();
+            let caret_read = self.caret_watch;
+            let selection = self.selection_by_path();
+            let mut m = self.measurement(true);
+            m.layout_reads = reads;
+            m.caret_read = caret_read;
+            return match m.relayout() {
+                Some(measured) => Measured { selection, ..measured },
+                None => {
+                    self.refresh_layout_seen();
+                    self.measure(tx)
+                }
+            };
         }
-        // The view keeps what it last read; `settle_layout_reads` and the caret check run it
-        // when the new layout moves them.
-        let reads = self.layout_seen.reads.clone();
-        let caret_read = self.caret_watch;
-        let selection = self.selection_by_path();
-        let mut m = self.measurement(true);
-        m.layout_reads = reads;
-        m.caret_read = caret_read;
-        match m.relayout() {
-            Some(measured) => Measured { selection, ..measured },
-            None => {
-                self.refresh_layout_seen();
-                self.measure(tx)
-            }
+        if self.virtual_only(tx) {
+            let _blend = crate::theme::scope(self.srgb_blend);
+            let reads = self.layout_seen.reads.clone();
+            let caret_read = self.caret_watch;
+            let selection = self.selection_by_path();
+            let mut m = self.measurement(true);
+            m.layout_reads = reads;
+            m.caret_read = caret_read;
+            return match m.remount_virtuals() {
+                commit::remount::RemountOutcome::Measured(measured) => Measured { selection, ..measured },
+                commit::remount::RemountOutcome::Retry => {
+                    self.refresh_layout_seen();
+                    self.measure_retry(tx)
+                }
+                commit::remount::RemountOutcome::Fallback => {
+                    self.refresh_layout_seen();
+                    self.measure(tx)
+                }
+            };
         }
+        self.refresh_layout_seen();
+        self.measure(tx)
     }
 
     /// Whether this commit only resized the window: nothing the view reads changed since the

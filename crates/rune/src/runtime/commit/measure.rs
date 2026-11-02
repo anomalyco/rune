@@ -29,6 +29,12 @@ impl<S: 'static> Runtime<S> {
         self.measure_pass(tx, true)
     }
 
+    pub(super) fn measure_retry(&mut self, tx: &Tx) -> Measured {
+        let _blend = crate::theme::scope(self.srgb_blend);
+        let selection = self.selection_by_path();
+        Measured { selection, ..self.measurement(true).finish_from(tx, 1) }
+    }
+
     /// `committing` when the result is applied, so the last commit's text layouts can go.
     pub(super) fn measure_pass(&mut self, tx: &Tx, committing: bool) -> Measured {
         let _blend = crate::theme::scope(self.srgb_blend);
@@ -159,8 +165,11 @@ impl<S: 'static> Measurement<'_, S> {
         }
     }
 
-    pub(super) fn finish(mut self, tx: &Tx) -> Measured {
-        let mut passes = 0;
+    pub(super) fn finish(self, tx: &Tx) -> Measured {
+        self.finish_from(tx, 0)
+    }
+
+    pub(super) fn finish_from(mut self, tx: &Tx, mut passes: usize) -> Measured {
         let (layout, nodes, memo_pending, memo_reused) = loop {
             passes += 1;
             self.retry = passes > 1;
@@ -437,7 +446,8 @@ impl<S: 'static> Measurement<'_, S> {
             let keys = &v.keys;
             let mut build = |i: usize| {
                 let key = &keys[i];
-                let mut row = (rows.build)(state, i).key(key.clone());
+                let tag = crate::memo::virtual_row_tag(path, key);
+                let mut row = crate::memo::in_virtual_row(tag, || (rows.build)(state, i)).key(key.clone());
                 // The view's key repair ran before these rows existed.
                 if crate::input::key_diagnostics::clean(&row) { return row; }
                 let duplicates = crate::input::key_diagnostics::repair_at(&mut row, &format!("{path}/{key}"));

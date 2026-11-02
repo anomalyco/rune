@@ -1,6 +1,8 @@
 //! View-to-scene commit orchestration (`Runtime::commit`, `Measurement`, `Measured`).
 use super::*;
 
+pub(super) mod remount;
+
 /// Measurement capabilities: text/layout caches and virtual geometry only. In particular this
 /// type has no Scene, growth tracks, reveal tracks, draw instances, or mutable app state.
 pub(super) struct Measurement<'a, S: 'static> {

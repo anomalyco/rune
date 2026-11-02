@@ -231,6 +231,8 @@ struct Entry {
     nested: Vec<Rc<str>>,
     /// The view build that last used it.
     pass: u64,
+    /// `0` when built in `view`, else [`virtual_row_tag`] of the `virtual_rows` row that built it.
+    virtual_row: u64,
 }
 
 /// One window's cached subtrees.
@@ -261,6 +263,11 @@ impl MemoCache {
         MemoCache { pass: self.pass, ..MemoCache::default() }
     }
 
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
     /// The pass the next view build will be.
     pub(crate) fn next_pass(&self) -> u64 {
         self.pass + 1
@@ -284,6 +291,7 @@ struct Scope {
     cache: MemoCache,
     env: u64,
     scale: f32,
+    virtual_row: u64,
     /// The ids of the memos whose closures are running, innermost last.
     path: Vec<Rc<str>>,
     /// The memos each running closure has created so far.
@@ -330,6 +338,7 @@ pub(crate) fn enter(
         cache,
         env,
         scale,
+        virtual_row: 0,
         path: Vec::new(),
         nested: Vec::new(),
         reads: Vec::new(),
@@ -338,6 +347,57 @@ pub(crate) fn enter(
     };
     SCOPES.with_borrow_mut(|s| s.push(scope));
     Guard(true)
+}
+
+pub(crate) fn virtual_row_tag(list_path: &str, row_key: &str) -> u64 {
+    hash_of(&(list_path, row_key)).max(1)
+}
+
+pub(crate) fn in_virtual_row<R>(tag: u64, f: impl FnOnce() -> R) -> R {
+    struct Reset(Option<u64>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            if let Some(prev) = self.0 {
+                SCOPES.with_borrow_mut(|scopes| {
+                    if let Some(s) = scopes.last_mut() {
+                        s.virtual_row = prev;
+                    }
+                });
+            }
+        }
+    }
+    let prev = SCOPES.with_borrow_mut(|scopes| {
+        scopes.last_mut().map(|s| std::mem::replace(&mut s.virtual_row, tag))
+    });
+    let _reset = Reset(prev);
+    f()
+}
+
+/// [`enter`] for a commit that skips running `view` and builds only newly entering virtual rows,
+/// keeping memos built in `view` (`virtual_row == 0`) or in rows `kept_rows` stays mounted on.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn enter_partial(
+    mut cache: MemoCache,
+    kept_rows: &crate::runtime::HashSet<u64>,
+    env: crate::Env,
+    accent: crate::SystemAccent,
+    reduced_motion: bool,
+    srgb_blend: bool,
+    caret: Option<(String, [f32; 4])>,
+    layout: LayoutRects,
+) -> Guard {
+    let next = cache.pass + 1;
+    let mut nested = Vec::new();
+    for e in cache.entries.values_mut() {
+        if e.virtual_row == 0 || kept_rows.contains(&e.virtual_row) {
+            e.pass = next;
+            nested.extend(e.nested.iter().map(|id| (id.clone(), e.virtual_row)));
+        }
+    }
+    if !nested.is_empty() {
+        keep_nested_rows(&mut cache, nested, next);
+    }
+    enter(cache, env, accent, reduced_motion, srgb_blend, caret, layout)
 }
 
 /// Records a `Cx::caret` read for the memo building, if any.
@@ -497,6 +557,7 @@ pub fn memo(id: impl Into<String>, version: impl Hash, build: impl FnOnce() -> E
                 store = false;
             } else if e.version == version && e.reads.iter().all(|r| s.seen.holds(r)) {
                 e.pass = pass;
+                e.virtual_row = s.virtual_row;
                 for read in &e.reads {
                     match read {
                         Read::Caret(..) => s.replayed.caret = true,
@@ -513,7 +574,8 @@ pub fn memo(id: impl Into<String>, version: impl Hash, build: impl FnOnce() -> E
         let rc_id = || -> Rc<str> { name.into() };
         if let Some((built, nested, reads)) = reused {
             if !nested.is_empty() {
-                keep_nested(&mut s.cache, nested, pass);
+                let row = s.virtual_row;
+                keep_nested(&mut s.cache, nested, pass, row);
             }
             if !reads.is_empty() {
                 s.note(&reads);
@@ -554,19 +616,25 @@ pub fn memo(id: impl Into<String>, version: impl Hash, build: impl FnOnce() -> E
         let (built, key) = Built::new(el, s.scale);
         let el = built.placeholder(key);
         let pass = s.cache.pass;
-        s.cache.entries.insert(id, Entry { version, built, reads, nested, pass });
+        let virtual_row = s.virtual_row;
+        s.cache.entries.insert(id, Entry { version, built, reads, nested, pass, virtual_row });
         el
     })
 }
 
 /// Marks the memos built inside a reused one as used, so they survive to its next build.
-fn keep_nested(cache: &mut MemoCache, mut ids: Vec<Rc<str>>, pass: u64) {
-    while let Some(id) = ids.pop() {
+fn keep_nested(cache: &mut MemoCache, ids: Vec<Rc<str>>, pass: u64, virtual_row: u64) {
+    keep_nested_rows(cache, ids.into_iter().map(|id| (id, virtual_row)).collect(), pass);
+}
+
+fn keep_nested_rows(cache: &mut MemoCache, mut ids: Vec<(Rc<str>, u64)>, pass: u64) {
+    while let Some((id, virtual_row)) = ids.pop() {
         if let Some(e) = cache.entries.get_mut(&id)
             && e.pass != pass
         {
             e.pass = pass;
-            ids.extend(e.nested.iter().cloned());
+            e.virtual_row = virtual_row;
+            ids.extend(e.nested.iter().map(|nested| (nested.clone(), virtual_row)));
         }
     }
 }
