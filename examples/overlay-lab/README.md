@@ -76,8 +76,8 @@ does not guarantee ordering among peers. Native status/status+1 levels are macOS
 - The pill uses `AboveOverlays` (macOS 27), above the picker's `AboveStatus` (26). Both use
   CanJoinAllSpaces, FullScreenAuxiliary and Stationary. Wayland ordering remains compositor-owned.
 - Desktop hide retains the native window, GPU surface and renderer. With `prewarm`, macOS
-  keeps the panel ordered in at alpha zero with input disabled and a frame rendered into its
-  actual surface. An unchanged show only restores input and alpha; stale hidden changes render
+  renders a frame into the panel's actual surface at alpha zero, then orders it out.
+  An unchanged show orders it back in and restores input and alpha; stale hidden changes render
    before reveal, preserving elapsed motion from hidden commits (see below).
    Hidden hosts have no pointer observers or draw loop. Wayland recreates its
   layer after hide.
