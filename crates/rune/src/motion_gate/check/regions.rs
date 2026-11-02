@@ -55,7 +55,9 @@ fn guard(rec: &Recording, loops: &HashSet<usize>, k: usize, (w, h): (usize, usiz
         let (d0, d1, d2) = (step(pp, p), step(p, c), step(c, nx));
         let born_or_gone = p.is_some() != c.is_some();
         let faded = p.zip(c).is_some_and(|(a, b)| (a.op - b.op).abs() > 0.001);
-        if born_or_gone || d1 > 0.25 || faded || painted_differs(t, k) {
+        // Any motion counts: pixel snapping draws a glide's last fractions of a point as an
+        // occasional whole-pixel step, which is the glide, not a region changing on its own.
+        if born_or_gone || d1 > 0.01 || faded || painted_differs(t, k) {
             for s in [p, c].into_iter().flatten() { mark(s.vis, pad, CHANGED); }
         }
         let shown: Vec<&Snap> = [p, c].into_iter().flatten().filter(|s| s.op > 0.02).collect();

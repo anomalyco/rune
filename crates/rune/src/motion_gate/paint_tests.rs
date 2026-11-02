@@ -151,6 +151,25 @@ fn a_highlight_landing_on_a_row_that_slides_under_a_still_pointer_is_no_snap() {
     assert!(!f.iter().any(|f| f.detail.starts_with("fill")), "{f:?}");
 }
 
+#[test]
+fn a_list_settling_its_scroll_steps_whole_pixels_and_no_region_snaps() {
+    // The scroll snaps as one rounded translation, so over a glide's last fractions of a point
+    // the rows step a whole pixel now and then: that's the glide, not a snap.
+    fn list(_: &(), _: &mut Cx<()>) -> El {
+        let shade = |k: usize| if k % 2 == 0 { oklch(0.3, 0.02, 250.0) } else { oklch(0.7, 0.02, 250.0) };
+        let rows = col().key("rows").w_full().children((0..60).map(|k| el().key(format!("row-{k}")).w_full().h(13.0).fill(shade(k))));
+        let board = col().key("board").w_full().h(300.0).scroll(ScrollSpec { stick_bottom: false }).child(rows);
+        col().w_full().h_full().fill(oklch(0.18, 0.01, 250.0)).child(board)
+    }
+    let mut r = Run::new(Runtime::new((), list, (400.0, 400.0), Env::new(true, 1.0)), 120.0);
+    r.idle(0.5);
+    r.step();
+    r.rt.update(|_, tx| tx.scroll_to_with("board", 0.0, 301.3, Spring::new(0.6, 0.0)));
+    r.play(1.5);
+    let f = r.finish();
+    assert!(!f.iter().any(|f| f.element.ends_with("(pixels)")), "{f:#?}");
+}
+
 impl Run<S> {
     fn play_and_check(&mut self) -> Vec<Finding> {
         self.play(1.0);
