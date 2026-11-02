@@ -67,7 +67,7 @@ macro_rules! on_each_backend {
         fn $wgpu() {
             $body(Gpu::headless_wgpu());
         }
-        #[cfg(feature = "metal-backend")]
+        #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
         #[test]
         fn $metal() {
             $body(Gpu::new(crate::gpu::metal::instance(), None));
