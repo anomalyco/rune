@@ -29,7 +29,10 @@ pub(crate) fn serves(gpu: &crate::render::Gpu, surface: &wgpu::Surface<'_>, want
 
 /// `pick`'s adapter when it composites translucent pixels on `surface`; otherwise the adapter
 /// on `instance` that does on the compositor's GPU (`gpu_pick`), then the lowest-power one that
-/// does, or `pick`'s adapter when none can.
+/// does, or `pick`'s adapter when none can. When the compositor named its GPU, adapters on
+/// others are never candidates, however their drivers answer: on GNOME with an NVIDIA card, whose
+/// XWayland surfaces are opaque only, RADV and lavapipe claim premultiplied alpha for an overlay's
+/// XWayland window but can't make its swapchain (hex#979, #982). It draws opaque there instead.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn prefer(instance: &wgpu::Instance, surface: &wgpu::Surface<'_>, pick: &crate::gpu::pick::Pick) -> wgpu::Adapter {
     if mode(surface, &pick.adapter).is_some() {
@@ -37,7 +40,7 @@ pub(crate) fn prefer(instance: &wgpu::Instance, surface: &wgpu::Surface<'_>, pic
     }
     let mut able: Vec<_> = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()))
         .into_iter()
-        .filter(|candidate| candidate.is_surface_supported(surface) && mode(surface, candidate).is_some())
+        .filter(|candidate| pick.shows(&candidate.get_info()) && candidate.is_surface_supported(surface) && mode(surface, candidate).is_some())
         .collect();
     able.sort_by_key(|candidate| {
         let info = candidate.get_info();

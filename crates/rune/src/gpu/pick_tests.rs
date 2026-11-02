@@ -1,4 +1,4 @@
-use super::{by_name, by_pci, dev_numbers, pci_address};
+use super::{by_name, by_pci, dev_numbers, pci_address, shows};
 use std::path::Path;
 
 fn adapter(name: &str, backend: wgpu::Backend, pci: &str) -> wgpu::AdapterInfo {
@@ -50,4 +50,15 @@ fn an_adapter_that_cant_present_is_skipped() {
     assert_eq!(by_pci("0000:01:00.0", &adapters), None);
     assert_eq!(by_name("nvidia", &adapters), None);
     assert_eq!(by_name("RADEON", &adapters), Some(1));
+}
+
+/// Once the compositor names its GPU, only that GPU's buffers can be shown: an integrated GPU
+/// or lavapipe (no PCI device) never takes an overlay on GNOME + NVIDIA (hex#979, #982).
+#[test]
+fn only_the_compositors_gpu_shows_once_it_named_one() {
+    assert!(shows(Some("0000:01:00.0"), "0000:01:00.0"));
+    assert!(!shows(Some("0000:01:00.0"), "0000:7c:00.0"));
+    assert!(!shows(Some("0000:01:00.0"), ""));
+    assert!(shows(None, "0000:7c:00.0"));
+    assert!(shows(None, ""));
 }

@@ -976,11 +976,12 @@ impl<T: 'static> Overlay<T> {
             }
         };
         let features = self.compositor.as_ref().map_or(wgpu::Features::empty(), |c| c.features());
-        let pooled = self.gpu.clone().or_else(|| self.gpu_pool.borrow().upgrade().filter(|gpu| {
+        // The overlay's own device was already the best for its surface, translucent or not; a
+        // device shared from another overlay must composite this one's translucent pixels.
+        let pooled = self.gpu.clone().map(|gpu| (gpu, false)).or_else(|| self.gpu_pool.borrow().upgrade().filter(|gpu| {
             gpu.device.features().contains(features & gpu.adapter.features())
-        }));
-        // A shared device that can't composite this overlay's translucent pixels gets its own.
-        let reused = pooled.and_then(|gpu| make(&gpu.instance).filter(|s| crate::render::translucency::serves(&gpu, s, features, true)).map(|s| (gpu, s)));
+        }).map(|gpu| (gpu, true)));
+        let reused = pooled.and_then(|(gpu, translucent)| make(&gpu.instance).filter(|s| crate::render::translucency::serves(&gpu, s, features, translucent)).map(|s| (gpu, s)));
         let mut prewarmed = None;
         let surface = match reused {
             Some((gpu, surface)) => { self.gpu = Some(gpu); surface }
@@ -994,6 +995,8 @@ impl<T: 'static> Overlay<T> {
                     }
                 };
                 prewarmed = renderer;
+                // The old renderer's buffers live on the old device; a new one is made below.
+                self.renderer = None;
                 let gpu = Arc::new(gpu);
                 *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
                 self.gpu = Some(gpu);

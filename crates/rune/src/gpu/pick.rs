@@ -46,6 +46,17 @@ impl Pick {
     pub fn on_compositor_device(&self, info: &wgpu::AdapterInfo) -> bool {
         self.compositor.as_deref().is_some_and(|pci| same_pci(pci, &info.device_pci_bus_id))
     }
+
+    /// Whether the compositor can show `info`'s buffers: any adapter's when it named no device,
+    /// otherwise only its own device's.
+    pub fn shows(&self, info: &wgpu::AdapterInfo) -> bool {
+        shows(self.compositor.as_deref(), &info.device_pci_bus_id)
+    }
+}
+
+/// `Pick::shows` for an adapter on PCI device `pci`.
+fn shows(compositor: Option<&str>, pci: &str) -> bool {
+    compositor.is_none_or(|compositor| same_pci(compositor, pci))
 }
 
 /// The adapter for `surface` (or for offscreen work without one), by the order in the module

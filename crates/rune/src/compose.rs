@@ -42,6 +42,8 @@ pub trait Compositor<S: 'static>: 'static {
 
     /// Draws the frame into `f.target`. Runs after `Runtime::frame` built the instances, in the
     /// window and headless alike. Nothing has been recorded yet; `El::pixels` images are uploaded.
+    /// `f.device` can change between frames (an overlay shown again on another GPU): keep
+    /// resources made on it with the device they belong to.
     fn render(&mut self, f: &mut Frame<'_, S>);
 
     /// True while something the compositor draws moves on its own: the window keeps its display
