@@ -2549,7 +2549,7 @@ grouped list, and a knobs column) maps onto `App::playground` like this:
 | `group()` and `name()`                      | one path, `"Group/Name"` or `"Group/Subgroup/Name"`; groups keep the order they first appear in, or `Playground::group_order` |
 | the story's keys (`Action`s)                | `Story::trigger(key, label, step)`, or `trigger_tx` for a `Fn(&mut S, &mut Tx)`; `'r'` runs after each replay |
 | timed steps after a key                     | `Play::after(secs, step)`, on the logical clock                        |
-| a step that presses a key                   | `Play::press(Key::Down)`: through focus and `on_key`, counted as input |
+| a step that presses a key                   | `Play::press(Key::Down)`: through focus and `on_key`, counted as input; a letter reaches the app, not the story's triggers |
 | the knobs column                            | `.side(view)`: `rune_knobs::inline` fills the column's width; `actions` fits it, up to 300 pt |
 | keys for the knobs                          | `.side_keys(view, rune_knobs::side_key(groups, lens))`: ↑↓ pick a knob, ←→ step it, Esc leaves |
 | a choice knob flipped with 1–9              | `Story::variant(name, apply)`; 1–9 pick, and picking remakes the state |

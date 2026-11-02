@@ -65,7 +65,9 @@ impl<X> Play<'_, X> {
     /// goes the way a real key does, through focus, `on_key` handlers and shortcuts, on the
     /// frame this step runs, after the step's own changes. That frame counts as input, so a
     /// scroll the key asks for moves as one under a hand does. Pass a [`Key`] for a plain key,
-    /// or a [`KeyEvent`] for one with modifiers.
+    /// or a [`KeyEvent`] for one with modifiers. It stands in for a person's key in the app, so
+    /// a letter reaches the app and not the story's triggers: a step that wants another
+    /// trigger's behaviour calls that code directly.
     pub fn press(&mut self, key: impl Into<KeyEvent>) {
         self.pressed.push(key.into());
     }

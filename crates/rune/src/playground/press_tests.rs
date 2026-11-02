@@ -94,3 +94,32 @@ fn a_scroll_a_pressed_key_asks_for_isnt_reported_as_input_less() {
     let pressed = jumps("Keys/Pressed");
     assert!(pressed.is_empty(), "{pressed:#?}");
 }
+
+#[derive(Default)]
+struct Long;
+
+fn long(_: &Long, _: &mut Cx<Long>) -> El {
+    let rows = (0..40).map(|i| el().key(format!("line{i}")).w_full().h(40.0));
+    col().w_full().h_full().child(col().key("page").w_full().h(300.0).scroll(ScrollSpec { stick_bottom: false }).child(col().w_full().children(rows)))
+}
+
+/// How far the scroll view keyed `key` has carried its content, from its first child.
+fn scrolled(rt: &Runtime<List>, key: &str) -> f32 {
+    let all = rt.elements();
+    let at = all.iter().position(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("no {key}"));
+    all.iter().find(|e| e.parent == Some(at)).expect("its content").scrolled[1]
+}
+
+#[test]
+fn a_pressed_page_key_pages_the_stage_not_the_story_list() {
+    let story = Story::new("Pages/Long", Long::default, long).trigger('r', "Page down", |_, play| play.after(0.1, |_, play| play.press(Key::PageDown)));
+    // Enough stories that the list overflows too, and comes first in the tree.
+    let playground = (0..60).fold(Playground::new().enabled(true), |p, i| p.story(Story::new(Box::leak(format!("Filler/Story {i}").into_boxed_str()), Long::default, long))).story(story);
+    let mut rt = App::new(AppSpec::new("press", SIZE, List::default, list)).playground(playground).headless_runtime(SIZE, Env::new(false, 1.0));
+    rt.frame(0.0);
+    rt.open_playground("Pages/Long", None);
+    let list_at = scrolled(&rt, "playground-list");
+    for _ in 0..30 { rt.frame(1.0 / 60.0); }
+    assert_eq!(scrolled(&rt, "page"), 270.0, "a page is 90% of the stage's view");
+    assert_eq!(scrolled(&rt, "playground-list"), list_at, "the story list stays put");
+}

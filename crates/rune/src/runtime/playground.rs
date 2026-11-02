@@ -93,7 +93,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Whether node `i` or an ancestor has a key `is` takes.
-    fn under(&self, i: usize, is: impl Fn(&str) -> bool) -> bool {
+    pub(super) fn under(&self, i: usize, is: impl Fn(&str) -> bool) -> bool {
         std::iter::successors(Some(i), |&j| self.nodes[j].parent).any(|j| self.nodes[j].key.as_deref().is_some_and(&is))
     }
 
@@ -262,8 +262,12 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn route_stage_key(&mut self, ev: &KeyEvent, one: &mut Tx) -> bool {
         let Some(region) = self.playground.as_ref().filter(|p| p.is_open()).map(|p| p.region()) else { return self.route_key(ev, false, one) };
         let aside = self.focused_index().filter(|&i| !self.under(i, crate::playground::is_stage)).and_then(|_| self.focused.take());
-        if let Some(p) = &mut self.playground { p.set_region(Region::Stage); }
+        if let Some(p) = &mut self.playground {
+            p.set_region(Region::Stage);
+            p.pressing = true;
+        }
         let took = self.route_key(ev, false, one);
+        if let Some(p) = &mut self.playground { p.pressing = false; }
         let back = aside.filter(|_| self.focused.is_none());
         let Some(p) = &mut self.playground else { return took };
         p.set_region(region);
