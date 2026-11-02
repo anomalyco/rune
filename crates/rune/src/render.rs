@@ -655,9 +655,16 @@ pub struct Renderer {
     /// Pipelines and pyramid for backdrop blur records, built on the first one.
     backdrop_blur: Option<backdrop_blur::BackdropBlur>,
     uploads: upload::Uploads,
+    /// Unique to this renderer, so to the device it was made on (`Frame::device_key`).
+    device_key: crate::compose::DeviceKey,
 }
 
 impl Renderer {
+    /// `Frame::device_key`: a renderer belongs to one device, and a new device gets a new one.
+    pub fn device_key(&self) -> crate::compose::DeviceKey {
+        self.device_key
+    }
+
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Renderer {
         Self::create(device, format, None)
     }
@@ -739,6 +746,7 @@ impl Renderer {
             backdrops: Vec::new(),
             backdrop_blur: None,
             uploads: Default::default(),
+            device_key: crate::compose::DeviceKey::next(),
         }
     }
 
