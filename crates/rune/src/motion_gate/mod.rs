@@ -5,9 +5,11 @@
 //! An app lists cells, one scenario in one circumstance each, and runs them in a test:
 //!
 //! ```ignore
-//! use rune::motion_gate::{self, Allow, Job, Run};
+//! use rune::motion_gate::{self, AllowRow, Job, Run};
 //!
-//! const ALLOW: &[Allow] = &[("fade-snap", "badge", "", "the badge swaps at once, by design")];
+//! const ALLOW: &[AllowRow] = &[
+//!     AllowRow::new("fade-snap", "badge", "add-row", "the badge swaps at once, by design").max(1),
+//! ];
 //!
 //! fn add_row() -> motion_gate::Recording {
 //!     let mut r = Run::new(Runtime::new(State::default(), view, (800.0, 600.0), Env::new(true, 1.0)), 120.0);
@@ -20,7 +22,7 @@
 //!
 //! #[test]
 //! fn motion_gate() {
-//!     motion_gate::gate(vec![("add-row/wide".into(), Box::new(add_row) as Job)], ALLOW);
+//!     motion_gate::gate_rows(vec![("add-row/wide".into(), Box::new(add_row) as Job)], ALLOW);
 //! }
 //! ```
 //!
@@ -37,8 +39,8 @@
 //! order), and the composited window as a grid of cells a few points across: a CPU raster of
 //! the painter stream, or a GPU frame through [`Run::pixels`]. `snap`, `flash` and
 //! `changes-twice` find a property or a region that steps, blinks or changes twice. An input
-//! ([`Run::act`]), a `Tx::instant` commit, `El::instant_changes` and `El::motion_intent` marks
-//! keep a deliberate change from counting.
+//! ([`Run::act`]), a hover or press highlight landing, a `Tx::instant` commit,
+//! `El::instant_changes` and `El::motion_intent` marks keep a deliberate change from counting.
 
 pub mod check;
 mod gate;
