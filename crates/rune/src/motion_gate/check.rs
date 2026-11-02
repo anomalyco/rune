@@ -161,6 +161,9 @@ pub struct Recording {
     pub instant: Vec<bool>,
     /// Per frame: the composited window in cells ([`raster`]), shared while it's unchanged.
     pub grids: Vec<Option<Arc<raster::Grid>>>,
+    /// Per frame: the box (x y w h, points) of the tooltip Rune drew for `El::help`, which
+    /// shows and hides at once after a rest, as AppKit's does.
+    pub tips: Vec<Option<[f32; 4]>>,
 }
 
 impl Recording {

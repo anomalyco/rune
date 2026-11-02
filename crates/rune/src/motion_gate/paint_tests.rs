@@ -170,6 +170,24 @@ fn a_list_settling_its_scroll_steps_whole_pixels_and_no_region_snaps() {
     assert!(!f.iter().any(|f| f.element.ends_with("(pixels)")), "{f:#?}");
 }
 
+#[test]
+fn a_tooltip_showing_after_its_rest_is_no_region_snap() {
+    // Rune's own tooltip lands at once after the pointer rests, as AppKit's does, with no input
+    // on that frame.
+    fn button(_: &(), _: &mut Cx<()>) -> El {
+        let b = el().key("b").absolute(40.0, 40.0).size(28.0, 28.0).fill(oklch(0.3, 0.02, 250.0)).help("Stop dictation ⇧⌘M");
+        col().w_full().h_full().fill(oklch(0.18, 0.01, 250.0)).child(b)
+    }
+    let mut r = Run::new(Runtime::new((), button, (400.0, 400.0), Env::new(true, 1.0)), 120.0);
+    r.idle(0.5);
+    r.step();
+    r.act("point at the button", |rt| rt.pointer_move(54.0, 54.0));
+    r.play(1.0);
+    assert!(r.rt.help_tooltip().is_some(), "the tooltip shows");
+    let f = r.finish();
+    assert!(!f.iter().any(|f| f.element.ends_with("(pixels)")), "{f:#?}");
+}
+
 impl Run<S> {
     fn play_and_check(&mut self) -> Vec<Finding> {
         self.play(1.0);
