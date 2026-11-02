@@ -4,9 +4,10 @@
 //! places. A region is reported at the top element painting it the frame before.
 //!
 //! Cells under what travels (an element moving on a frame and the next or last, the step in line
-//! with its motion) at any frame of the event, a loop, a live binding or words that change are
-//! skipped, as are Rune's own tooltip (`El::help`) and cells an element marked with the matching
-//! `El::motion_intent` covers. A region `snap` or `changes-twice` needs no element there to have changed on its frame (each
+//! with its motion) at any frame of the event, a loop, a live binding or words that change (a
+//! field's too, set without a key as dictation does) are skipped, as are Rune's own tooltip
+//! (`El::help`) and cells an element marked with the matching `El::motion_intent` covers. A
+//! region `snap` or `changes-twice` needs no element there to have changed on its frame (each
 //! element's own rules report those) and a `snap` no `Tx::instant` commit; a region `flash` is
 //! reported unless an element's `flash` or `flicker` there already is.
 
@@ -64,7 +65,7 @@ fn guard(rec: &Recording, loops: &HashSet<usize>, k: usize, (w, h): (usize, usiz
         if shown.is_empty() { continue; }
         let around = d0.max(d2);
         let travelling = d1 > 0.25 && around > 0.25 && d1 <= 3.0 * around + 2.0;
-        let words = t.words.iter().any(|w| w.0 + 1 >= k && w.0 <= k + 1);
+        let words = t.words.iter().chain(&t.edits).any(|w| w.0 + 1 >= k && w.0 <= k + 1);
         let live = shown.iter().any(|s| s.flags & LIVE != 0);
         if travelling || words || live || loops.contains(&i) { span(BLOCKED, &mut mark); }
         if marked(t, k, "flash") { span(PULSE, &mut mark); }

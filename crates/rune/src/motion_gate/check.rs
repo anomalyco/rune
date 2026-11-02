@@ -116,6 +116,9 @@ pub struct Track {
     pub text: Option<String>,
     /// Its words each time they changed, from the frame they showed.
     pub words: Vec<(usize, String)>,
+    /// A field's own words each time they changed (typed, pasted, set or cleared), which
+    /// `words` leaves out.
+    pub edits: Vec<(usize, String)>,
     /// What it painted on each of `frames` (empty when the recording has no paint).
     pub paint: Vec<Option<Paint>>,
 }
@@ -189,7 +192,7 @@ impl Recording {
             return i;
         }
         let i = self.tracks.len();
-        self.tracks.push(Track { path: path.to_owned(), parent, frames: Vec::new(), text: None, words: Vec::new(), paint: Vec::new() });
+        self.tracks.push(Track { path: path.to_owned(), parent, frames: Vec::new(), text: None, words: Vec::new(), edits: Vec::new(), paint: Vec::new() });
         self.index.insert(path.to_owned(), i);
         i
     }
@@ -247,6 +250,10 @@ impl Recording {
                 && track.words.last().is_none_or(|w| w.1 != words)
             {
                 track.words.push((k, words.to_owned()));
+            }
+            if e.focusable && e.role != "link" {
+                let words = e.text.as_deref().unwrap_or("");
+                if track.edits.last().map_or(!words.is_empty(), |w| w.1 != words) { track.edits.push((k, words.to_owned())); }
             }
             track.frames.push((k, Snap { rect: e.rect, vis: e.visible, op: e.opacity, scale: e.scale, flags, phase: e.loop_phase.map_or(f32::NAN, |p| p as f32), scrolled: e.scrolled }));
             if let Some(paints) = paints {
