@@ -104,6 +104,29 @@ pub mod caps {
     pub const APPROACH_MIN: f32 = 3.0;
 }
 
+/// A streaming row's climb (`El::streaming`): one critically damped follower whose stiffness
+/// tracks how fast its target has been rising, so a slow stream creeps on steadily between
+/// words and lines, a fast one keeps up, and the speed never kicks up from rest per arrival.
+/// It trails by `2 × rate / ω` (`2 × TRAIL` once the rate sets ω), held back under the feather.
+pub mod pace {
+    /// Seconds the arrival rate is averaged over.
+    pub const WINDOW: f32 = 0.5;
+    /// Half the points a steady stream's climb trails its text by.
+    pub const TRAIL: f32 = 4.0;
+    /// Least stiffness (1/s) while the stream runs: a slow one creeps rather than stopping.
+    pub const MIN: f32 = 2.5;
+    /// Least stiffness once the stream has ended, reached over [`LAND_RAMP`] seconds, so the
+    /// last of it lands in under half a second.
+    pub const LAND: f32 = 18.0;
+    pub const LAND_RAMP: f32 = 0.15;
+    /// Least speed (points per second) once the stream has ended: it stops rather than creeps.
+    pub const LAND_MIN: f32 = 8.0;
+    /// Most stiffness, for the fastest stream.
+    pub const MAX: f32 = 40.0;
+    /// Hardest change of speed (points per second squared).
+    pub const ACCEL: f32 = 6000.0;
+}
+
 pub const SUBSTEP: f32 = 1.0 / 240.0;
 
 /// How fast a fold's feather deepens once its edge starts moving (points per second): 28 pt in
@@ -153,11 +176,17 @@ pub struct GrowTrack {
     /// The share of each point it shuts by that a header held over it comes down, when the
     /// viewport's end will stop its bottom short (`Runtime::give_way`).
     pub(crate) give: Option<f32>,
+    /// Climbing on the stream's [`pace`]: from its first streaming frame until it rests.
+    pub(crate) paced: bool,
+    /// Points per second the target has been rising at, averaged over [`pace::WINDOW`].
+    pub(crate) rate: f32,
+    /// Seconds a paced climb has gone on since its stream ended.
+    pub(crate) ended: f32,
 }
 
 impl GrowTrack {
     pub fn settled(h: f32) -> GrowTrack {
-        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, glide: None, feather: None, limit: f32::INFINITY, stage: None, slide: None, restore: 0.0, give: None }
+        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, glide: None, feather: None, limit: f32::INFINITY, stage: None, slide: None, restore: 0.0, give: None, paced: false, rate: 0.0, ended: 0.0 }
     }
 
     pub fn moving(&self) -> bool {
@@ -169,6 +198,9 @@ impl GrowTrack {
             let lift = self.lift();
             if !self.moving() {
                 self.age = 0.0;
+            }
+            if self.streaming {
+                self.rate += (target - self.target).max(0.0) / pace::WINDOW;
             }
             self.target = target;
             self.span = (target - self.h).abs();
@@ -232,6 +264,7 @@ impl GrowTrack {
     /// overrides) with the height at which its bottom leaves the window.
     pub(crate) fn set_kind(&mut self, streaming: bool, whole: bool, glide: Option<(FoldGlide, f32)>) {
         self.streaming = streaming;
+        self.paced |= streaming;
         self.whole = whole;
         let glide = glide.filter(|_| !streaming);
         self.glide = glide.map(|g| g.0.spring);
@@ -256,6 +289,8 @@ impl GrowTrack {
         } else if rem.abs() <= 1.0 / 128.0 && self.v.abs() < 0.5 {
             self.h = self.target;
             self.v = 0.0;
+        } else if self.paced && rem > 0.0 {
+            self.climb(rem, carrying_tail);
         } else if let Some(own) = self.glide.filter(|_| !self.streaming) {
             // A fold: its own spring for its own time, however far, from the velocity it has.
             let (x, v) = own.sample(self.h, self.v, aim, dt);
@@ -322,9 +357,40 @@ impl GrowTrack {
         } else {
             self.mask = (self.mask - edge.shrink * dt).max(aim);
         }
+        self.rate *= (-dt / pace::WINDOW).exp();
         if !self.moving() {
             self.slide = None;
+            if !self.streaming {
+                self.paced = false;
+                self.rate = 0.0;
+                self.ended = 0.0;
+            }
         }
+    }
+
+    /// One substep of a streaming row's climb `rem` points short of its target (see [`pace`]).
+    fn climb(&mut self, rem: f32, carrying_tail: bool) {
+        let dt = SUBSTEP;
+        self.ended = if self.streaming { 0.0 } else { self.ended + dt };
+        let landing = (self.ended / pace::LAND_RAMP).min(1.0);
+        let w = (self.rate / pace::TRAIL).clamp(pace::MIN + (pace::LAND - pace::MIN) * landing, pace::MAX);
+        let a = (w * w * rem - 2.0 * w * self.v).clamp(-pace::ACCEL, pace::ACCEL);
+        let mut cap = if rem > caps::LONG_DISTANCE { caps::MAX_LONG } else { caps::MAX };
+        if carrying_tail {
+            cap = cap.min(caps::CARRYING_TAIL);
+        }
+        // No faster than braking at ACCEL still stops on the target. Once the stream has ended,
+        // no slower than LAND_MIN, so the last of it lands rather than crawling; while it runs,
+        // no floor, which would outrun a reveal rising a fraction of a point a word.
+        let v = (self.v + a * dt).max(pace::LAND_MIN * landing).min(cap.min((2.0 * pace::ACCEL * rem).sqrt()));
+        if v * dt >= rem {
+            self.h = self.target;
+            self.v = 0.0;
+        } else {
+            self.h += v * dt;
+            self.v = v;
+        }
+        self.age += dt;
     }
 }
 

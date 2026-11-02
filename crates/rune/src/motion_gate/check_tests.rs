@@ -26,6 +26,25 @@ fn a_spring_passes_and_a_snap_jumps() {
     assert_eq!(kinds(&rec(vec![("a", lurch)], 60)), ["jerk"]);
 }
 
+/// Climbing 3 pt per word, a word every 0.3 s: as kicks that glide out and rest, or one glide.
+#[test]
+fn a_climb_in_kicks_is_stop_start_and_a_steady_one_passes() {
+    let n = 600;
+    // Drawn rects move in 1/128 pt steps.
+    let path = |y: fn(usize) -> f32| -> Vec<_> { (0..n).map(|k| (k, [0.0, ((500.0 - y(k)) * 128.0).round() / 128.0, 100.0, 40.0], 1.0)).collect() };
+    let mut kicks = rec(vec![("reply", path(|k| 3.0 * (k / 36) as f32 + 3.0 * (1.0 - (-((k % 36) as f32) / 3.0).exp())))], n);
+    for k in (0..n).step_by(36) { kicks.inputs.push((k, "event".into())); }
+    assert!(kinds(&kicks).contains(&"stop-start"), "{:?}", kinds(&kicks));
+    let steady = rec(vec![("reply", path(|k| k.min(480) as f32 / 12.0))], n);
+    assert!(kinds(&steady).is_empty(), "{:?}", kinds(&steady));
+    // The last of a glide creeping in under a pixel a frame rests between steps, but isn't kicking.
+    let creep = rec(vec![("reply", path(|k| 3.0 - 3.0 * (-(k as f32) / 240.0).exp()))], n);
+    assert!(!kinds(&creep).contains(&"stop-start"), "{:?}", kinds(&creep));
+    // Each kick answering a hand on the app is that hand's.
+    for i in &mut kicks.inputs { i.1 = "tap".into(); }
+    assert!(!kinds(&kicks).contains(&"stop-start"));
+}
+
 #[test]
 fn an_instant_toggle_is_reported_where_the_height_changed() {
     let group: Vec<_> = (0..60).map(|k| (k, [0.0, 100.0, 100.0, if k < 30 { 28.0 } else { 84.0 }], 1.0)).collect();
@@ -41,6 +60,9 @@ fn an_instant_toggle_is_reported_where_the_height_changed() {
 fn pops_overshoot_reversal_and_flicker() {
     let pop: Vec<_> = (20..60).map(|k| (k, [0.0, 0.0, 100.0, 40.0], 1.0)).collect();
     assert_eq!(kinds(&rec(vec![("a", pop)], 60)), ["pop-in"]);
+    // A row mounting a sliver tall that opens slowly grows in.
+    let opens: Vec<_> = (20..60).map(|k| (k, [0.0, 0.0, 100.0, 0.4 + 0.1 * (k - 20) as f32], 1.0)).collect();
+    assert!(kinds(&rec(vec![("a", opens)], 60)).is_empty());
     let gone: Vec<_> = (0..20).map(|k| (k, [0.0, 0.0, 100.0, 40.0], 1.0)).collect();
     assert_eq!(kinds(&rec(vec![("a", gone)], 60)), ["pop-out"]);
     let over: Vec<_> = (0..60).map(|k| { let t = k as f32 / 8.0; (k, [0.0, 100.0 + 100.0 * (1.0 - (-t).exp() * (t * 1.5).cos()), 100.0, 40.0], 1.0) }).collect();
@@ -68,6 +90,12 @@ fn words_that_swap_in_place_are_a_text_swap_but_a_ticking_count_is_not() {
     assert_eq!(with(&[(0, "Read backoff.ts"), (30, "Grep retryBudget")]), ["text-swap"]);
     assert!(with(&[(0, "9s"), (30, "10s")]).is_empty(), "a clock ticks");
     assert!(with(&[(0, "Looks"), (30, "Looks right")]).is_empty(), "streaming words grow");
+    // A streaming link's box widens with its next word.
+    let link: Vec<_> = (0..60).map(|k| (k, [0.0, 0.0, if k < 30 { 40.0 } else { 85.0 }, 20.0], 1.0)).collect();
+    let mut r = rec(vec![("a", link)], 60);
+    assert_eq!(kinds(&r), ["jump"]);
+    r.tracks[0].words = vec![(0, "health".into()), (30, "health check".into())];
+    assert!(kinds(&r).is_empty(), "{:?}", kinds(&r));
 }
 
 #[test]

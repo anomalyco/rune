@@ -15,6 +15,7 @@ use std::fmt;
 use crate::ElementInfo;
 
 mod commits;
+mod kicks;
 mod loops;
 
 /// One finding kind, its threshold and what it means. The checker reads its numbers from here.
@@ -32,6 +33,7 @@ pub const RULES: &[Rule] = &[
     Rule { kind: "offset-jump", threshold: 2.0, means: "a jump of a scroll's content: every row in it moved by the same delta in one frame" },
     Rule { kind: "appear-then-jump", threshold: 2.0, means: "mounts, then moves at least this many pt on its next frame" },
     Rule { kind: "jerk", threshold: 10.0, means: "a moving edge's per-frame step changes by more than this many pt from one frame to the next" },
+    Rule { kind: "stop-start", threshold: 3.0, means: "a travelling edge rests (under 0.5 s) and sets off again the same way this many times in 2 s, with no input but data arriving: it moves in kicks, not one glide" },
     Rule { kind: "reversal", threshold: 1.0, means: "a travelling edge heads this many pt the wrong way and turns back, with no input mid-flight (one monotonic path)" },
     Rule { kind: "overshoot", threshold: 1.0, means: "passes where it comes to rest by this many pt (bounce 0)" },
     Rule { kind: "jiggle", threshold: 1.0, means: "an edge reverses twice or more within one motion, over at least this many pt" },
@@ -199,8 +201,8 @@ impl Recording {
             }
             track.parent = parent.or(track.parent);
             if track.text.is_none() { track.text = e.text.clone().filter(|t| !t.is_empty()); }
-            // A field's words change as they're typed.
-            if let Some(words) = e.text.as_deref().filter(|t| !t.is_empty() && !e.focusable)
+            // A field's words change as they're typed (a link's words are its own).
+            if let Some(words) = e.text.as_deref().filter(|t| !t.is_empty() && (!e.focusable || e.role == "link"))
                 && track.words.last().is_none_or(|w| w.1 != words)
             {
                 track.words.push((k, words.to_owned()));
@@ -363,7 +365,9 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
             let next: Vec<Snap> = (k + 1..=k + 2).filter_map(|j| t.at(j).copied()).collect();
             let grows = next.iter().any(|s| (s.op - first.op).abs() > 0.01 || (s.scale - first.scale).abs() > 0.002
                 || (s.rect[2] - first.rect[2]).abs() > 0.5 || (s.rect[3] - first.rect[3]).abs() > 0.5
-                || (s.vis[2] - first.vis[2]).abs() > 0.5 || (s.vis[3] - first.vis[3]).abs() > 0.5);
+                || (s.vis[2] - first.vis[2]).abs() > 0.5 || (s.vis[3] - first.vis[3]).abs() > 0.5)
+                // A row mounting under a point tall that grows open, however gently it starts.
+                || first.rect[3] < 1.0 && (k + 1..=k + (0.25 * rec.hz) as usize).filter_map(|j| t.at(j)).any(|s| s.rect[3] >= 1.0);
             if grows || transitioning(i, k, k + 2) {
                 continue;
             }
@@ -434,6 +438,8 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
             let vd = |j: usize| if fs[j].0 == fs[j - 1].0 + 1 { shown_edge(&fs[j].1, axis, size) - shown_edge(&fs[j - 1].1, axis, size) } else { 0.0 };
             let clipped = |j: usize| area(&on_window(&fs[j].1.vis, size)) + 1.0 < area(&fs[j].1.rect);
             let quiet = |j: usize| fs[j].1.flags & (LIVE | VIRTUAL) != 0 || !seen(&fs[j].1, size) || fs[j].1.op < rule("faint");
+            // The box of words still arriving (a streaming link's) takes each new word at once.
+            let grew = |k: usize| t.words.iter().position(|w| w.0 == k).is_some_and(|p| p > 0 && t.words[p].1.starts_with(t.words[p - 1].1.as_str()));
             for j in 1..fs.len() {
                 let Some(step) = d[j - 1] else { continue };
                 let k = fs[j].0;
@@ -446,7 +452,7 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
                 let name = short(&t.path);
                 let riders = |entering| if clipped(j) || clipped(j - 1) { carried(i, k, axis, step, entering) } else { 0 };
                 if step.abs() >= rule("jump") && before.abs() < 0.5 && after.abs() < 0.5 {
-                    if scrolling && input_between(k - 1, k) || riding(i, k, axis, step) || pushed(i, k, axis, step) { continue; }
+                    if scrolling && input_between(k - 1, k) || riding(i, k, axis, step) || pushed(i, k, axis, step) || grew(k) { continue; }
                     let riders = riders(true);
                     if vd(j).abs() < rule("jump") && riders == 0 { continue; }
                     let appeared = born(t) == Some(fs[j - 1].0) && fs[j - 1].0 > rec.start;
@@ -623,6 +629,7 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
     }
     loops::jumps(rec, &mut out);
     commits::scroll_commits(rec, &mut out);
+    kicks::kicks(rec, &loops, &mut out);
     // Words that leave as the same words mount: a row remounted under a new key.
     let window = rule("remount") as usize;
     let leaving = |i: usize, k: usize| {

@@ -30,6 +30,7 @@ mod scroll_spring;
 mod secure_text;
 mod shimmer;
 mod springs;
+mod stream_pace;
 mod text_glide;
 mod text_keys;
 mod text_rebreak;

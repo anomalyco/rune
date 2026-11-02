@@ -52,6 +52,8 @@ fn an_open_span_never_shows_its_markers() {
         "# Heading with **bold**\n\nSee https://example.com/a_b_c and 2 * 3 = 6, snake_case_name.",
         "- item **one**\n- item `two`\n\n> quoted *em*",
         "| a | **b** |\n|---|---|\n| `c` | *d* |",
+        "See [the **docs**](https://example.com/a_b \"t\") and ![a chart](x.png), then *[more](y)*.",
+        "- [ ] todo\n- [x] done",
     ] {
         let whole = shown(&parse(doc));
         for src in prefixes(doc) {
@@ -74,6 +76,20 @@ fn an_open_span_draws_as_it_will_end() {
     assert_eq!(shown(&blocks), format!("Run {PAD}cargo te"), "no padding after a span still arriving");
     let Block::Table(t) = &stream("| a | b |\n|---|---|\n| c | **d")[0] else { panic!() };
     assert_eq!(t.rows[0][1].spans.iter().map(|s| s.2).collect::<Vec<_>>(), [Style::Strong], "in a cell still arriving");
+}
+
+#[test]
+fn a_link_still_arriving_draws_as_a_link() {
+    for src in ["see [the do", "see [the docs]", "see [the docs](", "see [the docs](https://ex", "see [the docs](https://example.com \"Ti"] {
+        let blocks = stream(src);
+        assert_eq!(shown(&blocks), if src.ends_with("do") { "see the do" } else { "see the docs" }, "{src:?}");
+        assert_eq!(styled(&blocks, Style::Link), [if src.ends_with("do") { "the do" } else { "the docs" }], "{src:?}");
+    }
+    assert_eq!(styled(&stream("[**bold"), Style::Strong), ["bold"], "an open span inside its text");
+    assert_eq!(shown(&stream("see ![a ch")), "see a ch", "an image shows its alt text");
+    // A `[` that isn't a link's shows as written once that's known, and a word's own never hides.
+    assert_eq!(shown(&stream("cite [1] here")), "cite [1] here");
+    assert_eq!(shown(&stream("xs[0")), "xs[0");
 }
 
 #[test]

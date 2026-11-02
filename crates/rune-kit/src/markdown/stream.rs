@@ -5,6 +5,9 @@
 //!   already styled: its closers are added at the end for the parse. Only an opener at a word's
 //!   start counts (`2 * 3` and `snake_case` stay text), `~` counts only as `~~`, and a parse
 //!   that would still show a marker falls back to the source as written.
+//! - A link still arriving draws as a link: `[text` and `[text](https://ex` are parsed with their
+//!   `](…)` or `)` added, so its brackets never show. A `[` that turns out not to start a link
+//!   (`[x] done`, `[1]`) shows as written once the next character after its `]` says so.
 //! - A run of markers at the very end, which may yet open or close a span (`and **`), is left
 //!   out until the next character says which.
 //! - A trailing `|` line that isn't a table yet is left out until it is one, or until the line
@@ -99,7 +102,9 @@ struct Patch {
     code: bool,
 }
 
-/// An opener waiting for its closer: where it starts (in the run), its character and length.
+/// An opener waiting for its closer: where it starts (in the run), its character and length. A
+/// link's text is `[` (with its `!` for an image); once in its destination, its character is
+/// what the destination still needs, `(`, or the quote of a title still arriving.
 struct Open {
     at: usize,
     ch: u8,
@@ -136,6 +141,48 @@ fn close_tail(run: &str, base: usize, scope: Scope) -> Option<Patch> {
                     None => {
                         code = Some((i, n));
                         break;
+                    }
+                }
+            }
+            // At the very end: hidden while it may still open an image.
+            b'!' if i + 1 == b.len() && word_start(run[..i].chars().next_back()) => {
+                cut = i;
+                break;
+            }
+            b'[' if word_start(run[..i].chars().next_back()) => {
+                let at = if i > 0 && b[i - 1] == b'!' { i - 1 } else { i };
+                stack.push(Open { at, ch: b'[', n: i + 1 - at });
+                i += 1;
+            }
+            b']' => {
+                let Some(p) = stack.iter().rposition(|o| o.ch == b'[') else {
+                    i += 1;
+                    continue;
+                };
+                match b.get(i + 1) {
+                    // At the very end: hidden while it may still go on to `](`.
+                    None => {
+                        cut = i;
+                        break;
+                    }
+                    Some(b'(') => match run[i + 2..].find(')') {
+                        Some(j) => {
+                            stack.truncate(p);
+                            i += 2 + j + 1;
+                        }
+                        None => {
+                            stack.truncate(p + 1);
+                            let title = run[i + 2..].split_once(char::is_whitespace).map(|t| t.1.trim_start());
+                            stack[p].ch = match title.and_then(|t| t.bytes().next()) {
+                                Some(q @ (b'"' | b'\'')) if !title.is_some_and(|t| t.len() > 1 && t.ends_with(q as char)) => q,
+                                _ => b'(',
+                            };
+                            break;
+                        }
+                    },
+                    _ => {
+                        stack.remove(p);
+                        i += 1;
                     }
                 }
             }
@@ -183,9 +230,14 @@ fn close_tail(run: &str, base: usize, scope: Scope) -> Option<Patch> {
             cut = content;
         }
     }
-    // An opener with nothing after it yet is left out with what follows.
+    // An opener with nothing after it yet is left out with what follows, as is a `[x` that may
+    // be a task's box.
     if code.is_none() {
-        while let Some(o) = stack.last().filter(|o| run[..cut].trim_end().len() <= o.at + o.n) {
+        let empty = |o: &Open, cut: usize| {
+            let rest = run.get(o.at + o.n..cut).unwrap_or("").trim_end();
+            rest.is_empty() || (o.ch == b'[' && o.n == 1 && (rest == "x" || rest == "X"))
+        };
+        while let Some(o) = stack.last().filter(|o| empty(o, cut)) {
             cut = o.at;
             stack.pop();
         }
@@ -201,7 +253,12 @@ fn close_tail(run: &str, base: usize, scope: Scope) -> Option<Patch> {
         markers.push(base + at..base + at + n);
     }
     for o in stack.iter().rev() {
-        closers.extend(std::iter::repeat_n(o.ch as char, o.n));
+        match o.ch {
+            b'[' => closers.push_str("]()"),
+            b'(' => closers.push(')'),
+            q @ (b'"' | b'\'') => closers.extend([q as char, ')']),
+            ch => closers.extend(std::iter::repeat_n(ch as char, o.n)),
+        }
         markers.push(base + o.at..base + o.at + o.n);
     }
     (cut < run.len() || !closers.is_empty()).then_some(Patch { cut: base + cut, closers, markers, code: code.is_some() })
