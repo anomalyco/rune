@@ -2,10 +2,12 @@ use super::Presence;
 
 #[test]
 fn a_prewarmed_panel_is_not_excluded_until_it_shows() {
-    // Prewarm orders the panel in at alpha zero without touching its presence.
+    // A scoped prewarm orders in only for acquisition and orders out on drop.
     let mut p = Presence::new(true);
+    assert!(!p.ordered());
     assert!(p.requested() && !p.excluded(), "a hidden prewarmed panel would blank every Space's thumbnail");
     let g = p.show();
+    assert!(p.ordered());
     assert!(p.excluded(), "applied before the alpha starts rising");
     assert!(p.fade_done(g, false));
     assert!(p.excluded());
@@ -16,6 +18,7 @@ fn a_hide_without_a_fade_drops_the_exclusion_at_once() {
     let mut p = Presence::new(true);
     p.show();
     p.hide(false);
+    assert!(!p.ordered(), "resetting sharing alone cannot remove a panel from Spaces");
     assert!(!p.excluded() && p.requested());
 }
 
@@ -24,8 +27,10 @@ fn a_fading_hide_keeps_the_exclusion_until_its_fade_finishes() {
     let mut p = Presence::new(true);
     p.show();
     let g = p.hide(true);
+    assert!(p.ordered(), "keep the fade on screen");
     assert!(p.excluded(), "the fade-out is still on screen");
     assert!(p.fade_done(g, true));
+    assert!(!p.ordered(), "order out before restoring sharing");
     assert!(!p.excluded());
 }
 
@@ -36,6 +41,7 @@ fn a_show_during_a_fade_out_wins() {
     let out = p.hide(true);
     let back = p.show();
     assert!(!p.fade_done(out, true), "the replaced fade-out's completion is stale");
+    assert!(p.ordered(), "a stale completion must not order out the new show");
     assert!(p.excluded());
     assert!(p.fade_done(back, false));
     assert!(p.excluded());
@@ -89,6 +95,7 @@ fn excluded_iff_shown_and_requested_across_every_sequence() {
                     Step::Request(on) => { p.request(on); requested = on; }
                 }
                 assert_eq!(p.excluded(), shown && requested, "{:?}", sequence.iter().map(|&i| steps[i]).collect::<Vec<_>>());
+                assert_eq!(p.ordered(), shown, "hidden panels must leave Spaces regardless of their sharing history");
                 assert_eq!(p.requested(), requested);
             }
         }

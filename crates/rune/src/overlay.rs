@@ -588,9 +588,9 @@ impl<T: 'static> Overlay<T> {
         self.quiet = Default::default();
     }
 
-    /// Ends a fade-out that has run its course.
+    /// Finishes native hiding too: AppKit's completion may stall while displays sleep.
     fn end_fade_out(&mut self, now: Instant) {
-        if self.fading_out.is_some_and(|end| end <= now) { self.stop_drawing(); }
+        if self.fading_out.is_some_and(|end| end <= now) { self.hide(); }
     }
 
     fn hide_fading(&mut self, fade: Duration) {

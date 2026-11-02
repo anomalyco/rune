@@ -1,11 +1,10 @@
-//! Whether a panel counts as shown, and so whether its capture exclusion is applied.
+//! Whether a panel belongs on screen, and whether its capture exclusion is applied.
 //!
-//! A prewarmed panel stays ordered in at alpha zero while hidden, so its show is instant. Panels
-//! join every Space, and macOS blanks a Space's Mission Control thumbnail while a window with
-//! `sharingType` none is on it, even a transparent one. So the exclusion an app requests is
-//! applied only while the panel is shown: from `show` (before its alpha starts rising) until a
-//! hide's fade-out finishes. A show during that fade bumps the generation, so the stale fade's
-//! completion changes nothing.
+//! Panels join every Space. An excluded window can blank Mission Control's thumbnails even at
+//! alpha zero, and resetting sharing alone is not a reliable way to remove it from captures.
+//! Every hidden panel therefore orders out, including prewarmed panels. Its view, surface and
+//! cached pixels stay alive. Exclusion holds from show until the hide's fade finishes; ordering
+//! out precedes restoring sharing. A show during a fade invalidates its stale completion.
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct Presence {
@@ -23,6 +22,9 @@ impl Presence {
 
     /// Whether `sharingType` should be none now; read-only otherwise.
     pub(crate) fn excluded(self) -> bool { self.requested && self.shown }
+
+    /// Outside a scoped prewarm acquisition, only a shown or fading-out panel is ordered in.
+    pub(crate) fn ordered(self) -> bool { self.shown }
 
     pub(crate) fn request(&mut self, exclude: bool) { self.requested = exclude; }
 
