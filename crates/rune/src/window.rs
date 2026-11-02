@@ -580,7 +580,7 @@ pub(crate) fn reblend<S: 'static>(surface: &wgpu::Surface, gpu: &Gpu, config: &m
     let Some((next, _)) = surface_config(surface, &gpu.adapter, (config.width, config.height), srgb) else { return false };
     if (config.format, &config.view_formats) != (next.format, &next.view_formats) {
         (config.format, config.view_formats) = (next.format, next.view_formats);
-        surface.configure(&gpu.device, config);
+        crate::gpu::configure(surface, &gpu.device, config);
     }
     let target = if srgb { config.format.remove_srgb_suffix() } else { config.format };
     rebuild_renderer(&gpu.device, renderer, target, rt);
@@ -794,7 +794,7 @@ impl<S: 'static> Host<S> {
         }
         let (gpu, renderer) = self.gpu.as_mut().unwrap();
         rebuild_renderer(&gpu.device, renderer, target_format, &mut self.rt);
-        surface.configure(&gpu.device, &config);
+        crate::gpu::configure(&surface, &gpu.device, &config);
         #[cfg(target_os = "macos")]
         crate::platform::macos::pin_contents_top_left(&surface);
         #[cfg(target_os = "macos")]

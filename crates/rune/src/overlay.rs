@@ -1008,7 +1008,7 @@ impl<T: 'static> Overlay<T> {
         }
         let info = gpu.adapter.get_info();
         *self.shared.surface.lock().unwrap() = Some(format!("{:?} on {} ({:?}), {:?}, {:?}", info.backend, info.name, info.device_type, config.alpha_mode, config.format));
-        surface.configure(&gpu.device, &config);
+        crate::gpu::configure(&surface, &gpu.device, &config);
         #[cfg(target_os = "macos")]
         crate::platform::macos::pin_contents_top_left(&surface);
         let target_format = if self.rt.srgb_blend() { config.format.remove_srgb_suffix() } else { config.format };
@@ -1059,7 +1059,7 @@ impl<T: 'static> Overlay<T> {
         live.config.width = (self.at.size.0 * scale).round().max(1.0) as u32;
         live.config.height = (self.at.size.1 * scale).round().max(1.0) as u32;
         live.settle();
-        live.surface.configure(&gpu.device, &live.config);
+        crate::gpu::configure(&live.surface, &gpu.device, &live.config);
         if let Some(alpha) = &mut live.alpha {
             alpha.resize(&gpu.device, (live.config.width, live.config.height));
         }

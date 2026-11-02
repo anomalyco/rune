@@ -189,6 +189,48 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
     }
     panic!("the snatch write lock never returned while GPU work was pending: {outcomes:?}");
 }
+/// `Surface::configure` waits for the GPU to go idle and fails when another thread submitted
+/// meanwhile. A frame that completes during it parks its timestamp resolve instead of
+/// submitting, so the queue stays empty, and the resolve goes out once `configure` returns.
+#[test]
+fn timestamp_resolve_waits_out_a_surface_configure() {
+    use std::time::{Duration, Instant};
+    let gpu = Gpu::headless_wgpu();
+    if !gpu.device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+        eprintln!("no TIMESTAMP_QUERY: frames resolve no timestamps");
+        return;
+    }
+    let surface = NativeSurface::new();
+    surface.push_bytes(synthetic(16, 16, 0), 1).unwrap();
+    let (done, completion) = std::sync::mpsc::channel();
+    surface.set_observer(Arc::new(move |t| {
+        if t.completed_at.is_some() {
+            let _ = done.send(t);
+        }
+    }));
+    let mut renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let target = Offscreen::new(&gpu.device, 16, 16);
+    let configuring = crate::gpu::hold_configure();
+    renderer.prepare(&gpu.device, &gpu.queue, &[draw(&surface, [0.0, 0.0, 16.0, 16.0])], (16, 16));
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    {
+        let mut pass = clear_pass(&mut encoder, &target.view, wgpu::Color::BLACK, renderer.timestamp_writes());
+        renderer.draw(&mut pass, 0);
+    }
+    renderer.submit(&gpu.queue, encoder);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while renderer.parked.is_empty() {
+        assert!(Instant::now() < deadline, "the completed frame never parked its resolve");
+        gpu.device.poll(wgpu::PollType::Poll).unwrap();
+        std::thread::yield_now();
+    }
+    assert_eq!(gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap(), wgpu::PollStatus::QueueEmpty,
+        "nothing may be submitted while a surface configures");
+    assert!(completion.try_recv().is_err(), "timing arrived before its resolve was submitted");
+    drop(configuring);
+    let t = completion.recv_timeout(Duration::from_secs(10)).expect("timing after the configure");
+    assert!(t.gpu_end_seconds.unwrap() >= t.gpu_start_seconds.unwrap());
+}
 fn publish(s: &NativeSurface, b: ByteFrame, id: u64, native: bool) {
     #[cfg(target_os = "macos")]
     if native {

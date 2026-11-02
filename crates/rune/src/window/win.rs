@@ -48,7 +48,7 @@ impl Win {
         if (self.config.width, self.config.height) == (width, height) { return false; }
         self.config.width = width;
         self.config.height = height;
-        self.surface.configure(device, &self.config);
+        crate::gpu::configure(&self.surface, device, &self.config);
         if let Some(alpha) = &mut self.alpha { alpha.resize(device, (width, height)); }
         #[cfg(target_os = "macos")]
         if let Some(shadow) = &self.native.shadow { shadow.redraw(); }

@@ -56,6 +56,32 @@ impl Drop for TimingSlot {
     }
 }
 
+/// Timestamp resolves that finished frames hand over while a surface configures. They run in
+/// wgpu's completion callbacks, on whichever thread polled, so they submit only when they can
+/// hold off `configure` (`gpu::try_hold_configure`), and park here otherwise for the
+/// completion thread to submit.
+#[derive(Clone, Default)]
+pub(super) struct Parked(Arc<std::sync::Mutex<Vec<(wgpu::Queue, wgpu::CommandBuffer)>>>);
+impl Parked {
+    fn submit(&self, queue: &wgpu::Queue, commands: wgpu::CommandBuffer) {
+        match crate::gpu::try_hold_configure() {
+            Some(_held) => drop(queue.submit([commands])),
+            None => self.0.lock().unwrap().push((queue.clone(), commands)),
+        }
+    }
+    pub(super) fn is_empty(&self) -> bool {
+        self.0.lock().unwrap().is_empty()
+    }
+    fn flush(&self) {
+        let parked = std::mem::take(&mut *self.0.lock().unwrap());
+        if parked.is_empty() { return; }
+        let _held = crate::gpu::hold_configure();
+        for (queue, commands) in parked {
+            queue.submit([commands]);
+        }
+    }
+}
+
 /// Standalone pipeline, also used by Rune's renderer. A frame must be submitted through `submit`
 /// for timing notifications; texture lifetimes are safe even with ordinary wgpu submission.
 pub struct SurfaceRenderer {
@@ -63,6 +89,7 @@ pub struct SurfaceRenderer {
     timing_pool: Option<Arc<TimingPool>>,
     queries: Option<Arc<TimingSlot>>,
     queries_used: std::sync::atomic::AtomicBool,
+    pub(super) parked: Parked,
     pub(super) completion: std::sync::mpsc::SyncSender<()>,
     pipeline: wgpu::RenderPipeline,
     format: wgpu::TextureFormat,
@@ -98,6 +125,8 @@ impl SurfaceRenderer {
         });
         let (completion, receiver) = std::sync::mpsc::sync_channel(1);
         let poll_device = device.clone();
+        let parked = Parked::default();
+        let poll_parked = parked.clone();
         std::thread::Builder::new()
             .name("rune-video-completion".into())
             .spawn(move || {
@@ -106,8 +135,9 @@ impl SurfaceRenderer {
                 // Wakeups are coalesced; the final frame still completes after the window goes idle.
                 while receiver.recv().is_ok() {
                     loop {
+                        poll_parked.flush();
                         match poll_device.poll(wgpu::PollType::Poll) {
-                            Ok(wgpu::PollStatus::QueueEmpty) => break,
+                            Ok(wgpu::PollStatus::QueueEmpty) if poll_parked.is_empty() => break,
                             Ok(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
                             Err(_) => return,
                         }
@@ -150,6 +180,7 @@ impl SurfaceRenderer {
             timing_pool,
             queries: None,
             queries_used: std::sync::atomic::AtomicBool::new(false),
+            parked,
             completion,
             pipeline,
             format,
@@ -490,6 +521,7 @@ impl SurfaceRenderer {
             let device = self.device.clone();
             let queue = queue.clone();
             let completion = self.completion.clone();
+            let parked = self.parked.clone();
             // Metal counter resolves can race the render pass's final fragment sample when
             // encoded into the same command buffer. Resolve after its completion fence; this
             // is timestamp metadata only, never a readback or wait on the video pixel path.
@@ -522,7 +554,7 @@ impl SurfaceRenderer {
                         s.report(t);
                     }
                 });
-                queue.submit([timestamps.finish()]);
+                parked.submit(&queue, timestamps.finish());
                 let _ = completion.try_send(());
             });
         } else {

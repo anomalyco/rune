@@ -332,7 +332,7 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         if !hidden && let Some(latency) = l.native.launch_drawables.settle(self.idle, now) {
             l.config.desired_maximum_frame_latency = latency;
-            l.surface.configure(&gpu.device, &l.config);
+            crate::gpu::configure(&l.surface, &gpu.device, &l.config);
         }
         #[cfg(target_os = "windows")]
         if self.idle && steady {
