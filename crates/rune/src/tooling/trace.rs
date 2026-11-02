@@ -15,6 +15,7 @@ pub(crate) struct Trace {
     /// Each element's `ElementInfo::scrolled` last written, in hundredths of a point (none: 0).
     scrolled: HashMap<u32, [i64; 2]>,
     effects: HashMap<u32, [String; 2]>,
+    goals: HashMap<u32, [i64; 7]>,
     channels: rune_motion::TraceChannels,
     path: PathBuf,
     /// Trace every element, not only keyed and named ones (`--trace-all`).
@@ -58,7 +59,7 @@ impl Trace {
         if clock == "wall" { header["timestamp"] = "cpu-submit".into(); }
         let _ = writeln!(out, "{header}");
         Trace { out, ids: HashMap::new(), described: HashMap::new(), states: HashMap::new(), scrolled: HashMap::new(), effects: HashMap::new(),
-            channels: Default::default(), path: path.clone(), all: false, presents: None, surface: None }
+            goals: HashMap::new(), channels: Default::default(), path: path.clone(), all: false, presents: None, surface: None }
     }
 
     /// Holds each frame's line until its present time arrives from `source`, then writes
@@ -199,6 +200,22 @@ impl Trace {
         }
 
         let mut line = json!({ "t": (t_ms * 1000.0).round() / 1000.0, "n": 1 });
+        // A fresh destination ends a trajectory, even when it came from streamed data rather
+        // than a key. Keep this separate from input: it never excuses a jump or lost velocity.
+        let mut goals = Vec::new();
+        for (path, goal) in rt.trace_goals() {
+            let Some(&id) = self.ids.get(path) else { continue };
+            let q = goal.map(|v| (f64::from(v) * 10000.0).round() as i64);
+            if let Some(old) = self.goals.insert(id, q) {
+                let scale = u8::from(old[6] != q[6]) * 15;
+                let position = u8::from(old[0] != q[0] || old[4] != q[4])
+                    | u8::from(old[1] != q[1] || old[5] != q[5]) * 2;
+                let own = position | scale | u8::from(old[2] != q[2]) * 4 | u8::from(old[3] != q[3]) * 8;
+                if own != 0 { goals.push(json!([id, own, position | scale])); }
+            }
+        }
+        self.goals.retain(|id, _| seen.contains(id));
+        if !goals.is_empty() { line["retarget"] = goals.into(); }
         // motion-lint's touch count: motion under a held press follows the hand.
         if rt.pressing() {
             line["k"] = 1.into();

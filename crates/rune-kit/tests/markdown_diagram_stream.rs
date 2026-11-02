@@ -104,3 +104,26 @@ fn a_finished_diagram_shows_whole_the_frame_it_mounts() {
         assert_eq!((e.opacity, e.scale), (1.0, 1.0), "{:?} fades or grows in", e.key);
     }
 }
+
+#[test]
+fn fitting_and_settling_a_streamed_diagram_never_bloats_its_canvas() {
+    let body = "```mermaid\nflowchart LR\n  Drop[Socket drops] --> R1[Retry at once]\n  R1 -->|ok| On[Online]\n  R1 -->|fails| R2[Back off 1 s]\n  R2 -->|ok| On\n  R2 -->|fails| Off[Offline]\n  Off -->|retry| R2\n";
+    let mut rt = Runtime::new((String::new(), true), view, (768.0, 800.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    for line in body.split_inclusive('\n') {
+        rt.update(|s, _| s.0.push_str(line));
+        for _ in 0..20 { rt.frame(1.0 / 120.0); }
+    }
+    settle(&mut rt);
+    let width = |rt: &Runtime<Doc>| rt.elements().into_iter().find(|e| e.key.as_deref() == Some("fit")).unwrap().rect[2];
+    let before = width(&rt);
+    rt.update(|s, _| s.0.push_str("```\n"));
+    let mut widths = Vec::new();
+    for _ in 0..120 {
+        rt.frame(1.0 / 120.0);
+        widths.push(width(&rt));
+    }
+    let end = *widths.last().unwrap();
+    let peak = widths.into_iter().fold(before, f32::max);
+    assert!(peak <= before.max(end) + 0.5, "the fit and size must share one destination: {before} → {peak} → {end}");
+}

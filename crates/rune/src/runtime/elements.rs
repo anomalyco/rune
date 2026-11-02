@@ -132,6 +132,11 @@ impl Pose {
 }
 
 impl<S: 'static> Runtime<S> {
+    /// Authored geometry goals, before scroll and spring sampling, in parent space.
+    pub(crate) fn trace_goals(&self) -> impl Iterator<Item = (&str, [f32; 7])> {
+        self.nodes.iter().map(|n| (n.path.as_str(), [n.local.x, n.local.y, n.local.w, n.local.h, n.vis.offset[0], n.vis.offset[1], n.static_scale]))
+    }
+
     /// Tracks the last tick sampled, by element path and property name: what spent this
     /// frame animating. Tracks of nodes no longer in the tree report their node id.
     pub(crate) fn touched_tracks(&self) -> Vec<(String, &'static str, bool)> {
