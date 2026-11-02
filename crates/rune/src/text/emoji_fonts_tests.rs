@@ -22,3 +22,13 @@ fn missing_color_fonts_keep_a_monochrome_fallback() {
     );
     assert!(candidates("broken\n\t/fonts/x\tTrue\nx\trelative.ttf\tTrue\n").is_empty());
 }
+
+#[test]
+fn unsupported_color_formats_do_not_hide_outline_fallback() {
+    assert!(supported_color_format(None, false, false));
+    assert!(supported_color_format(Some(&[0, 0]), false, false));
+    assert!(!supported_color_format(Some(&[0, 1]), false, false));
+    assert!(!supported_color_format(Some(&[0]), false, false));
+    assert!(!supported_color_format(None, false, true));
+    assert!(supported_color_format(Some(&[0, 1]), true, false));
+}

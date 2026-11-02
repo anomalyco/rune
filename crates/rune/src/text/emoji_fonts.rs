@@ -13,7 +13,12 @@ pub(in crate::text) fn load_emoji(collection: &mut Collection, symbols: &[&str])
                 .ok()
                 .filter(|out| out.status.success())
                 .and_then(|out| String::from_utf8(out.stdout).ok())
-                .map(|out| candidates(&out))
+                .map(|out| {
+                    candidates(&out)
+                        .into_iter()
+                        .filter(|(_, file)| usable_font(file))
+                        .collect()
+                })
                 .unwrap_or_default()
         }) {
             collection.load_fonts_from_paths([file]);
@@ -57,6 +62,36 @@ fn candidates(output: &str) -> Vec<(String, std::path::PathBuf)> {
     }
     colors.extend(monochrome);
     colors
+}
+
+#[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
+fn usable_font(path: &std::path::Path) -> bool {
+    let Ok(data) = std::fs::read(path) else {
+        return false;
+    };
+    let Some(fonts) = swash::FontDataRef::new(&data) else {
+        return false;
+    };
+    fonts.fonts().any(|font| {
+        supported_color_format(
+            font.table(swash::tag_from_bytes(b"COLR")),
+            font.table(swash::tag_from_bytes(b"CBDT")).is_some()
+                || font.table(swash::tag_from_bytes(b"sbix")).is_some(),
+            font.table(swash::tag_from_bytes(b"SVG ")).is_some(),
+        )
+    })
+}
+
+#[cfg(any(
+    test,
+    all(unix, not(target_vendor = "apple"), not(target_os = "android"))
+))]
+fn supported_color_format(colr: Option<&[u8]>, bitmap: bool, svg: bool) -> bool {
+    bitmap
+        || match colr {
+            Some(table) => table.get(..2) == Some(&[0, 0]),
+            None => !svg,
+        }
 }
 
 #[cfg(test)]
