@@ -567,7 +567,9 @@ def analyze(path, script=None):
                 if boundary and i >= 2 and i + 1 < len(h):
                     pts = h[i - 2:i + 2]
                     travel = pts[-1][edge] - pts[0][edge]
-                    stall = stalled(theirs, edge, pts, travel) if abs(travel) > 0.5 else None
+                    visible = all(p[5] > 0.05 and p[7] > 0 and p[8] and not p[6] & BLANK for p in pts)
+                    instant = any(pressing[p[0]] or (p[6] >> 8) & (1 if edge <= 2 else 2) for p in pts)
+                    stall = stalled(theirs, edge, pts, travel) if visible and not instant and abs(travel) > 0.5 else None
                     if stall:
                         k, speeds = stall
                         findings.append(dict(kind="stall", element=e.name, frames=1, longest=1, at=str(k),
