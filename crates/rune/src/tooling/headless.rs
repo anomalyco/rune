@@ -428,6 +428,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
 
     if let Some(p) = &args.strip { write_strip(p, &strip, (wp, hp), &crops_px, gap, args.cols); }
     if let (Some(g), Some(p)) = (gate, &gate_out) {
+        crate::motion_gate::evidence("", &g.rec, Some(p.display().to_string()));
         let text: String = crate::motion_gate::check(&g.rec).iter().map(|f| format!("{f}\n")).collect();
         std::fs::write(p, text).unwrap_or_else(|e| die(&format!("{}: {e}", p.display())));
     }

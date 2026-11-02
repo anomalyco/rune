@@ -2,7 +2,7 @@
 //! a real runtime: each catches what it should and passes the deliberate version.
 use super::*;
 use crate::el::motion::MotionIntent;
-use crate::{Cx, El, Env, Transition, col, el, oklch};
+use crate::{Color, Cx, El, Env, ScrollSpec, Spring, Transition, col, el, oklch};
 
 #[derive(Clone, Copy, Default)]
 struct S {
@@ -129,6 +129,26 @@ fn a_surface_that_blinks_for_one_frame_flashes_unless_marked_a_pulse() {
     r.step();
     blink(&mut r);
     assert_eq!(flashes(r.play_and_check()), Vec::<String>::new());
+}
+
+#[test]
+fn a_highlight_landing_on_a_row_that_slides_under_a_still_pointer_is_no_snap() {
+    fn list(_: &(), _: &mut Cx<()>) -> El {
+        let row = |k: usize| el().key(format!("row-{k}")).w_full().h(40.0).fill(oklch(0.26, 0.015, 250.0)).hover(Color::WHITE.alpha(0.06));
+        let rows = col().key("rows").w_full().children((0..30).map(row));
+        let board = col().key("board").w_full().h(300.0).scroll(ScrollSpec { stick_bottom: false }).child(rows);
+        col().w_full().h_full().fill(oklch(0.18, 0.01, 250.0)).child(board)
+    }
+    let mut r = Run::new(Runtime::new((), list, (400.0, 400.0), Env::new(true, 1.0)), 120.0);
+    r.rt.pointer_move(200.0, 150.0);
+    r.idle(0.5);
+    r.step();
+    r.rt.update(|_, tx| tx.scroll_to_with("board", 0.0, 400.0, Spring::new(0.3, 0.0)));
+    r.play(1.0);
+    let landed = r.rec.tracks.iter().filter(|t| (1..r.rec.frames).any(|k| t.paint_at(k).zip(t.paint_at(k - 1)).is_some_and(|(p, q)| p.pointer[0] == 1.0 && q.pointer[0] == 0.0))).count();
+    assert!(landed >= 1, "the highlight never lands");
+    let f = r.finish();
+    assert!(!f.iter().any(|f| f.detail.starts_with("fill")), "{f:?}");
 }
 
 impl Run<S> {

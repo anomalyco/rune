@@ -29,7 +29,8 @@
 //! report, `MOTION_GATE_ALLOWED` lists allowed findings too, `MOTION_GATE_DUMP=<cell>|<path
 //! part>[|from|to]` writes those tracks' frames to `MOTION_GATE_OUT`.dump, and
 //! `MOTION_GATE_SHEET=<cell>|<frame>[|<path part>]` writes a contact strip of the frames around
-//! `frame` to `MOTION_GATE_OUT`.sheet.png.
+//! `frame` to `MOTION_GATE_OUT`.sheet.png. An empty cell part matches any cell, and headless
+//! `rune` under `RUNE_MOTION_GATE` writes them beside its report.
 //!
 //! Beside geometry and opacity, each element's painted properties are followed frame by frame
 //! (its colours in OKLab, corners, blurs, shadow, effect payload, image and place in the paint
@@ -44,6 +45,7 @@ mod gate;
 
 pub use check::{Finding, RULES, Recording, Rule, Snap, Track, check, dump, rule, sheet, short};
 pub use gate::{Allow, AllowRow, Cell, Job, Report, allowed, gate, gate_rows, report, report_rows, run};
+pub(crate) use gate::evidence;
 
 use std::sync::Arc;
 

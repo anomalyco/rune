@@ -116,11 +116,13 @@ pub fn events(vals: &[Option<V>], tune: &Tune, weight: &dyn Fn(usize) -> f32) ->
         let ((a1, b1), (a2, b2)) = (w[0], w[1]);
         let rest = a2 - b1 - 1;
         if rest < tune.rest.0 || rest > tune.rest.1 || (a1..=b2).any(|j| vals[j].is_none()) { continue; }
-        let (v0, v1, v2) = (vals[a1 - 1].unwrap(), vals[b1].unwrap(), vals[b2].unwrap());
-        let (first, second) = (dist(&v0, &v1), dist(&v1, &v2));
+        // The second change counts from where the rest ends: a slow tail that creeps on below
+        // `still` and then lands is one change.
+        let (v0, v1, r, v2) = (vals[a1 - 1].unwrap(), vals[b1].unwrap(), vals[a2 - 1].unwrap(), vals[b2].unwrap());
+        let (first, second) = (dist(&v0, &v1), dist(&r, &v2));
         let wk = weight(a2);
         if first * wk < tune.flash || second * wk < tune.flash { continue; }
-        let dot: f32 = (0..6).map(|i| (v1[i] - v0[i]) * (v2[i] - v1[i])).sum();
+        let dot: f32 = (0..6).map(|i| (v1[i] - v0[i]) * (v2[i] - r[i])).sum();
         // Each half one step, so neither is a transition: those are `snap`'s alone.
         if dot > 0.7 * first * second && !(taken[a2] || out.iter().any(|e| e.k == a1 || e.k == a2)) {
             out.push(Event { kind: "changes-twice", k: a2, span: (a1 - 1, b2), size: first + second });
@@ -200,6 +202,16 @@ mod tests {
         xs.extend(ease(1.0, 2.0, 8));
         xs.extend([2.0; 4]);
         assert_eq!(run(&xs), ["changes-twice"]);
+    }
+
+    #[test]
+    fn a_tail_that_creeps_then_lands_changes_once() {
+        let mut xs = vec![0.0; 3];
+        xs.extend(ease(0.0, 1.0, 8));
+        xs.extend((1..=14).map(|i| 1.0 + 0.009 * i as f32));
+        let last = *xs.last().unwrap();
+        xs.extend([last + 0.4; 6]);
+        assert!(run(&xs).is_empty(), "{:?}", run(&xs));
     }
 
     #[test]

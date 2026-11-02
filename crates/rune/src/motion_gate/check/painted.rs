@@ -1,8 +1,10 @@
 //! `snap`, `flash` and `changes-twice` on what an element paints: each colour, corner, blur,
 //! shadow, effect payload and image it presents (see [`paint::CHANNELS`]), and its place in the
 //! paint order against what it overlaps (`z-order`). A colour that springs or fades has no
-//! one-frame step and passes. Changes an input asked for on its frame, a `Tx::instant` commit,
-//! an `El::instant_changes` element, and a matching `El::motion_intent` mark are the design.
+//! one-frame step and passes. Changes an input asked for on its frame, a hover or press highlight
+//! landing (it lands with the pointer, even on content sliding under a still one), a
+//! `Tx::instant` commit, an `El::instant_changes` element, and a matching `El::motion_intent`
+//! mark are the design.
 
 use std::collections::{HashMap, HashSet};
 
@@ -78,12 +80,16 @@ pub fn painted(rec: &Recording, loops: &HashSet<usize>) -> Vec<(usize, Finding)>
                 let one = |j: usize| at.get(j).copied().flatten().map_or(0.0, |(s, p)| (ch.weight)(p, &on_window(&s.vis, rec.size)) * s.op.min(1.0));
                 one(k).max(one(k.wrapping_sub(1)))
             };
+            // A hover or press highlight landing, even on content that slid under a still pointer.
+            let pointer = |a: usize, b: usize| {
+                ch.name == "fill" && (a.max(1)..=b).any(|j| at[j].zip(at[j - 1]).is_some_and(|((_, p), (_, q))| p.pointer != q.pointer))
+            };
             for e in series::events(&vals, &tune, &w) {
                 let k = e.k;
                 let skip = match e.kind {
-                    "snap" => input_in(k.saturating_sub(1), k) > 0 || rec.instant.get(k) == Some(&true),
-                    "flash" => input_in(e.span.0 + 1, e.span.1) >= 2,
-                    _ => input_in(e.span.0 + 1, e.span.1) > 0,
+                    "snap" => input_in(k.saturating_sub(1), k) > 0 || rec.instant.get(k) == Some(&true) || pointer(k, k),
+                    "flash" => input_in(e.span.0 + 1, e.span.1) >= 2 || pointer(e.span.0 + 1, e.span.1),
+                    _ => input_in(e.span.0 + 1, e.span.1) > 0 || pointer(e.span.0 + 1, e.span.1),
                 };
                 if skip || marked(t, k, e.kind) || rec.loads.iter().any(|&l| k >= l && k <= l + 2) { continue; }
                 let v = |j: usize| at.get(j).copied().flatten().map_or_else(|| "–".into(), |(_, p)| paint::value(p, ch.name));

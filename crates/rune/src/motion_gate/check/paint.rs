@@ -42,11 +42,14 @@ pub struct Paint {
     pub intent: u16,
     /// It or its parent changes at once by design (`El::instant_changes`).
     pub instant: bool,
+    /// How hovered and how pressed it shows, 0 to 1. A highlight lands with the pointer by
+    /// design, so a fill that steps with these isn't a snap.
+    pub pointer: [f32; 2],
 }
 
 impl Default for Paint {
     fn default() -> Self {
-        Paint { colors: [Color::TRANSPARENT; COLORS], sizes: [0.0; SIZES], gradient_end: Color::TRANSPARENT, effect: None, image: None, rank: 0, intent: 0, instant: false }
+        Paint { colors: [Color::TRANSPARENT; COLORS], sizes: [0.0; SIZES], gradient_end: Color::TRANSPARENT, effect: None, image: None, rank: 0, intent: 0, instant: false, pointer: [0.0; 2] }
     }
 }
 

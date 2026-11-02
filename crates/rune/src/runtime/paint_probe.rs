@@ -12,14 +12,17 @@ impl<S: 'static> Runtime<S> {
             let Some(p) = self.scene.presented(n.id) else { continue };
             let v = &n.vis;
             let mut overlay = Color::TRANSPARENT;
+            let mut pointer = [0.0; 2];
             let mut over_c = |c: Color, k: f32| {
                 if k > 0.0 && c.a > 0.0 { overlay = unpremul(over(c.premul(k), overlay.premul(1.0))); }
             };
             if v.hover.a > 0.0 || self.scene.store().is_animating(n.id, P_HOVER_C) {
-                over_c(self.color(n.id, P_HOVER_C, v.hover), self.scene.get(n.id, P_HOVER).unwrap_or(0.0).clamp(0.0, 1.0));
+                pointer[0] = self.scene.get(n.id, P_HOVER).unwrap_or(0.0).clamp(0.0, 1.0);
+                over_c(self.color(n.id, P_HOVER_C, v.hover), pointer[0]);
             }
             if v.press.a > 0.0 || self.scene.store().is_animating(n.id, P_PRESS_C) {
-                over_c(self.color(n.id, P_PRESS_C, v.press), self.scene.get(n.id, P_PRESS).unwrap_or(0.0).clamp(0.0, 1.0));
+                pointer[1] = self.scene.get(n.id, P_PRESS).unwrap_or(0.0).clamp(0.0, 1.0);
+                over_c(self.color(n.id, P_PRESS_C, v.press), pointer[1]);
             }
             let base = self.color(n.id, P_FILL, v.fill);
             let fill = unpremul(over(overlay.premul(1.0), base.premul(1.0)));
@@ -58,6 +61,7 @@ impl<S: 'static> Runtime<S> {
                 rank: self.paint_rank.as_ref().and_then(|r| r.get(i)).copied().unwrap_or(i as u32),
                 intent,
                 instant: n.instant_changes,
+                pointer,
             };
             out.entry((n.path.clone(), self.subtree_exiting(i))).or_insert(paint);
         }

@@ -84,7 +84,7 @@ pub fn run(cells: Vec<(String, Job)>, filter: &str) -> Vec<Cell> {
                 .spawn_scoped(scope, || loop {
                     let Some((i, (name, job))) = jobs.lock().unwrap().pop() else { break };
                     let rec = job();
-                    evidence(&name, &rec);
+                    evidence(&name, &rec, std::env::var("MOTION_GATE_OUT").ok());
                     let cell = Cell { skipped: rec.frames < 10, frames: rec.frames, findings: check(&rec), name };
                     out.lock().unwrap().push((i, cell));
                 })
@@ -96,12 +96,13 @@ pub fn run(cells: Vec<(String, Job)>, filter: &str) -> Vec<Cell> {
     cells.into_iter().map(|c| c.1).collect()
 }
 
-fn evidence(cell: &str, rec: &Recording) {
-    let out = std::env::var("MOTION_GATE_OUT").ok();
+/// Writes the evidence `MOTION_GATE_DUMP` and `MOTION_GATE_SHEET` ask for when their cell part
+/// is `cell` or empty, beside `out`.
+pub(crate) fn evidence(cell: &str, rec: &Recording, out: Option<String>) {
     if let Ok(spec) = std::env::var("MOTION_GATE_DUMP") {
         let mut p = spec.split('|');
         if let (Some(c), Some(path)) = (p.next(), p.next())
-            && c == cell
+            && (c.is_empty() || c == cell)
         {
             let from = p.next().and_then(|x| x.parse().ok()).unwrap_or(0);
             let to = p.next().and_then(|x| x.parse().ok()).unwrap_or(usize::MAX);
@@ -115,7 +116,7 @@ fn evidence(cell: &str, rec: &Recording) {
     if let Ok(spec) = std::env::var("MOTION_GATE_SHEET") {
         let mut p = spec.split('|');
         if let (Some(c), Some(Ok(at))) = (p.next(), p.next().map(str::parse))
-            && c == cell
+            && (c.is_empty() || c == cell)
         {
             let out = out.unwrap_or_else(|| std::env::temp_dir().join("motion-gate").display().to_string());
             sheet(rec, at, p.next().unwrap_or("")).save(format!("{out}.sheet.png")).unwrap();
