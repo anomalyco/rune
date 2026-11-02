@@ -13,6 +13,8 @@ pub(super) enum Route {
     /// Mathematical Alphanumeric Symbols: one math font for a whole formula, so bold, italic
     /// and script letters don't mix designs when an earlier fallback covers a few of them.
     Math,
+    /// A grapheme asking for emoji presentation with `U+FE0F` (`❤️`, `☀️`, `✔️`): the colour
+    /// emoji font first, so a text font with a plain `❤` doesn't take it.
     Emoji,
 }
 
@@ -103,9 +105,11 @@ pub(super) fn routes(text: &str) -> Vec<(Range<usize>, Route)> {
         Some((last, r)) if *r == route && last.end == range.start => last.end = range.end,
         _ => out.push((range, route)),
     };
+    let emoji_presentation = CodePointSetData::new::<EmojiPresentation>();
+    // Whole graphemes, so a ZWJ sequence with an `FE0F` inside keeps one font.
     for (i, g) in text.grapheme_indices(true) {
         if !g.contains('\u{FE0E}') && (g.contains('\u{FE0F}')
-            || g.chars().any(|ch| CodePointSetData::new::<EmojiPresentation>().contains(ch))
+            || g.chars().any(|ch| emoji_presentation.contains(ch))
             || (g.ends_with('\u{20E3}') && g.chars().count() == 2
                 && g.starts_with(['#', '*', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9']))) {
             push(i..i + g.len(), Route::Emoji);
@@ -119,7 +123,6 @@ pub(super) fn routes(text: &str) -> Vec<(Range<usize>, Route)> {
     }
     out
 }
-
 
 #[cfg(test)]
 #[path = "emoji_tests.rs"]

@@ -145,6 +145,7 @@ pub struct TextSystem {
     pub sans: String,
     pub mono: String,
     symbol_families: Vec<&'static str>,
+    /// The colour emoji family among `symbol_families`.
     emoji: Vec<String>,
     /// The installed math families, once a text has needed them.
     math: Option<Vec<&'static str>>,
@@ -258,13 +259,14 @@ impl TextSystem {
         }
         let mut font_files = LoadedFiles::new();
         register_cjk_fallbacks(&mut collection, &mut font_files, &registered, families);
-        let symbol_families = load_families(&mut collection, SYMBOL_FONT_FILES, SYMBOL_FAMILIES);
-        let emoji = system_fonts::load_emoji(&mut collection, &symbol_families);
+        let mut symbol_families = load_families(&mut collection, SYMBOL_FONT_FILES, SYMBOL_FAMILIES);
+        let mut source_cache = SourceCache::default();
+        let emoji = system_fonts::load_emoji(&mut collection, &mut source_cache, &mut symbol_families);
         #[cfg(target_arch = "wasm32")]
         let families = if fonts.is_empty() { ("Inter", "IBM Plex Mono") } else { families };
         let (sans, mono) = families::slots(families.0, families.1);
         TextSystem {
-            font_cx: FontContext { collection, source_cache: SourceCache::default() },
+            font_cx: FontContext { collection, source_cache },
             layout_cx: LayoutContext::new(),
             scale_cx: ScaleContext::new(),
             layouts: Default::default(),

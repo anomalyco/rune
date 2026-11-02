@@ -1,6 +1,10 @@
 use super::*;
 
-pub(in crate::text) fn load_emoji(collection: &mut Collection, symbols: &[&str]) -> Vec<String> {
+pub(in crate::text) fn load_emoji(
+    collection: &mut Collection,
+    source_cache: &mut SourceCache,
+    symbols: &mut Vec<&'static str>,
+) -> Vec<String> {
     let mut names = Vec::new();
     #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
     {
@@ -13,26 +17,61 @@ pub(in crate::text) fn load_emoji(collection: &mut Collection, symbols: &[&str])
                 .ok()
                 .filter(|out| out.status.success())
                 .and_then(|out| String::from_utf8(out.stdout).ok())
-                .map(|out| {
-                    candidates(&out)
-                        .into_iter()
-                        .filter(|(_, file)| usable_font(file))
-                        .collect()
-                })
+                .map(|out| candidates(&out))
                 .unwrap_or_default()
         }) {
-            collection.load_fonts_from_paths([file]);
-            if collection.family_id(family).is_some() && !names.contains(family) {
+            let loaded = collection.family_by_name(family).is_some_and(|info| {
+                info.fonts().iter().any(|font| {
+                    matches!(font.source().kind(),
+                    parley::fontique::SourceKind::Path(path) if path.as_ref() == file.as_path())
+                })
+            });
+            if !loaded {
+                collection.load_fonts_from_paths([file]);
+            }
+            if retain_usable_fonts(collection, source_cache, family) && !names.contains(family) {
                 names.push(family.clone());
             }
         }
     }
+    symbols.retain(|family| {
+        !family.contains("Emoji") || retain_usable_fonts(collection, source_cache, family)
+    });
     for family in symbols.iter().filter(|name| name.contains("Emoji")) {
         if !names.iter().any(|name| name == family) {
             names.push((*family).to_owned());
         }
     }
     names
+}
+
+fn retain_usable_fonts(
+    collection: &mut Collection,
+    source_cache: &mut SourceCache,
+    name: &str,
+) -> bool {
+    let Some(family) = collection.family_by_name(name) else {
+        return false;
+    };
+    let mut usable = false;
+    for font in family.fonts() {
+        let supported = font.load(Some(source_cache)).is_some_and(|data| {
+            FontRef::from_index(data.as_ref(), font.index() as usize).is_some_and(|face| {
+                supported_color_format(
+                    face.table(swash::tag_from_bytes(b"COLR")),
+                    face.table(swash::tag_from_bytes(b"CBDT")).is_some()
+                        || face.table(swash::tag_from_bytes(b"sbix")).is_some(),
+                    face.table(swash::tag_from_bytes(b"SVG ")).is_some(),
+                )
+            })
+        });
+        if supported {
+            usable = true;
+        } else {
+            collection.unregister_font(family.id(), font.width(), font.style(), font.weight());
+        }
+    }
+    usable
 }
 
 #[cfg(any(
@@ -64,32 +103,10 @@ fn candidates(output: &str) -> Vec<(String, std::path::PathBuf)> {
     colors
 }
 
-#[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
-fn usable_font(path: &std::path::Path) -> bool {
-    let Ok(data) = std::fs::read(path) else {
-        return false;
-    };
-    let Some(fonts) = swash::FontDataRef::new(&data) else {
-        return false;
-    };
-    fonts.fonts().any(|font| {
-        supported_color_format(
-            font.table(swash::tag_from_bytes(b"COLR")),
-            font.table(swash::tag_from_bytes(b"CBDT")).is_some()
-                || font.table(swash::tag_from_bytes(b"sbix")).is_some(),
-            font.table(swash::tag_from_bytes(b"SVG ")).is_some(),
-        )
-    })
-}
-
-#[cfg(any(
-    test,
-    all(unix, not(target_vendor = "apple"), not(target_os = "android"))
-))]
 fn supported_color_format(colr: Option<&[u8]>, bitmap: bool, svg: bool) -> bool {
     bitmap
         || match colr {
-            Some(table) => table.get(..2) == Some(&[0, 0]),
+            Some(table) => table.get(2..4).is_some_and(|records| records != [0, 0]),
             None => !svg,
         }
 }
