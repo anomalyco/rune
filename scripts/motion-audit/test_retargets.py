@@ -8,10 +8,10 @@ from test_analyze import scene
 
 
 class Retargets(unittest.TestCase):
-    def findings(self, xs, goals=None, parent=None):
-        frames = [{"root": (0, 0, 400, 400, 1), "root/piece": (x, 40, 10, 10, 1)} for x in xs]
+    def findings(self, xs, goals=None, parent=None, opacity=1, flags=None):
+        frames = [{"root": (0, 0, 400, 400, 1), "root/piece": (x, 40, 10, 10, opacity)} for x in xs]
         frames = [frames[0]] * 80 + frames + [frames[-1]] * 80
-        path = scene(frames)
+        path = scene(frames, flags=flags)
         try:
             with open(path) as f:
                 rows = [json.loads(line) for line in f]
@@ -50,6 +50,11 @@ class Retargets(unittest.TestCase):
 
     def test_a_retarget_that_loses_velocity_still_fails(self):
         self.assertIn("stall", self.findings([40, 43, 46, 46.2, 49.2, 52.2, 55.2], {3: 1}))
+
+    def test_invisible_or_intentionally_instant_retargets_are_not_stalls(self):
+        xs = [40, 43, 46, 46.2, 49.2, 52.2, 55.2]
+        self.assertNotIn("stall", self.findings(xs, {3: 1}, opacity=0))
+        self.assertNotIn("stall", self.findings(xs, {3: 1}, flags={"root/piece": 1 << 8}))
 
 
 if __name__ == "__main__":
