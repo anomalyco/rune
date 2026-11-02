@@ -212,6 +212,25 @@ fn an_icon_gliding_off_the_pixel_grid_marks_its_apron_and_shows_no_region_flash(
     assert!(!f.iter().any(|f| f.element.ends_with("(pixels)")), "{f:#?}");
 }
 
+#[test]
+fn words_set_in_a_field_without_a_key_are_no_region_snap() {
+    // Dictation puts its words at the caret from a poll, with no key: a field's words land at
+    // once, typed or not.
+    fn form(s: &crate::TextEdit, _: &mut Cx<crate::TextEdit>) -> El {
+        let field = crate::text_input(s, crate::TextStyle::new(14.0, 400.0)).key("prompt").size(360.0, 60.0).on_edit(|s: &mut crate::TextEdit| s);
+        col().w_full().h_full().padding(20.0).fill(oklch(0.18, 0.01, 250.0)).child(field)
+    }
+    let mut r = Run::new(Runtime::new(crate::TextEdit::new(""), form, (400.0, 120.0), Env::new(true, 1.0)), 120.0);
+    r.idle(0.5);
+    r.step();
+    r.rt.update(|s, _| s.insert("Can you also check the reconnect jitter?"));
+    r.play(0.5);
+    r.rt.update(|s, _| *s = crate::TextEdit::new(""));
+    r.play(0.5);
+    let f = r.finish();
+    assert!(!f.iter().any(|f| f.element.ends_with("(pixels)")), "{f:#?}");
+}
+
 impl Run<S> {
     fn play_and_check(&mut self) -> Vec<Finding> {
         self.play(1.0);
