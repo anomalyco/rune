@@ -60,7 +60,6 @@ impl From<Allow> for AllowRow {
     }
 }
 
-
 /// Why `f` in `cell` is allowed, if a row of `allow` matches it.
 pub fn allowed(allow: &[Allow], f: &Finding, cell: &str) -> Option<&'static str> {
     allow.iter().map(|&a| AllowRow::from(a)).find(|r| r.matches(f, cell)).map(|r| r.why)
@@ -145,6 +144,11 @@ pub fn report(cells: &[Cell], allow: &[Allow], list_allowed: bool, secs: f32) ->
 /// [`report`] with [`AllowRow`]s. A row covers findings up to its `max`; past it they fail.
 /// Rows that matched nothing in the cells they scope are listed as unused.
 pub fn report_rows(cells: &[Cell], rows: &[AllowRow], list_allowed: bool, secs: f32) -> Report {
+    report_with(cells, rows, list_allowed, true, secs)
+}
+
+/// `whole`: every cell ran, so a row that matched nothing is worth listing.
+fn report_with(cells: &[Cell], rows: &[AllowRow], list_allowed: bool, whole: bool, secs: f32) -> Report {
     let mut used = vec![0usize; rows.len()];
     let mut text = String::new();
     let (mut failing, mut allowed_n) = (0, 0);
@@ -177,7 +181,7 @@ pub fn report_rows(cells: &[Cell], rows: &[AllowRow], list_allowed: bool, secs: 
         }
     }
     let ran = |r: &AllowRow| cells.iter().any(|c| !c.skipped && r.in_cell(&c.name));
-    let unused: Vec<&AllowRow> = rows.iter().zip(&used).filter(|(r, n)| **n == 0 && ran(r)).map(|(r, _)| r).collect();
+    let unused: Vec<&AllowRow> = rows.iter().zip(&used).filter(|(r, n)| whole && **n == 0 && ran(r)).map(|(r, _)| r).collect();
     for r in &unused {
         text += &format!("unused allow row (\"{}\", \"{}\", \"{}\"): {}\n", r.kind, r.element, r.cell, r.why);
     }
@@ -192,7 +196,8 @@ pub fn report_rows(cells: &[Cell], rows: &[AllowRow], list_allowed: bool, secs: 
 }
 
 /// The gate as a test: runs the cells `MOTION_GATE` keeps, writes the report to
-/// `MOTION_GATE_OUT`, and panics with it when a finding isn't allowed.
+/// `MOTION_GATE_OUT`, and panics with it when a finding isn't allowed. Unused allow rows are
+/// listed only when `MOTION_GATE` is unset, since a filtered run leaves most rows idle.
 pub fn gate(cells: Vec<(String, Job)>, allow: &[Allow]) {
     gate_rows(cells, &rows(allow));
 }
@@ -202,7 +207,7 @@ pub fn gate_rows(cells: Vec<(String, Job)>, allow: &[AllowRow]) {
     let filter = std::env::var("MOTION_GATE").unwrap_or_default();
     let started = Instant::now();
     let cells = run(cells, &filter);
-    let r = report_rows(&cells, allow, std::env::var_os("MOTION_GATE_ALLOWED").is_some(), started.elapsed().as_secs_f32());
+    let r = report_with(&cells, allow, std::env::var_os("MOTION_GATE_ALLOWED").is_some(), filter.is_empty(), started.elapsed().as_secs_f32());
     if let Ok(path) = std::env::var("MOTION_GATE_OUT") {
         std::fs::write(path, &r.text).unwrap();
     }
