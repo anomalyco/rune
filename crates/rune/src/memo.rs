@@ -244,6 +244,7 @@ pub(crate) struct MemoCache {
     pub(crate) pending_scratch: Vec<crate::runtime::memo_reuse::PendingFlat>,
     pub(crate) reused_scratch: Vec<crate::runtime::memo_reuse::ReusedSpan>,
     pub(crate) skip_scratch: Vec<crate::runtime::memo_reuse::CleanApplySpan>,
+    pub(crate) split_scratch: Vec<bool>,
     pub(crate) path_scratch: String,
     nested_scratch: Vec<(Rc<str>, u64)>,
     pub(crate) present_len: usize,

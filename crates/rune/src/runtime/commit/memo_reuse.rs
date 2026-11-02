@@ -128,11 +128,17 @@ impl<S: 'static> Runtime<S> {
                 self.node_clean_for_apply(&nodes[span.new_start + k], &self.nodes[span.old_start + k], any_animating)
             });
             if interior_clean {
-                out.push(CleanApplySpan {
-                    new_start: span.new_start + offset,
-                    old_start: span.old_start + offset,
-                    len: span.len - offset,
-                });
+                let new_start = span.new_start + offset;
+                let old_start = span.old_start + offset;
+                let len = span.len - offset;
+                if let Some(last) = out.last_mut()
+                    && last.new_start + last.len == new_start
+                    && last.old_start + last.len == old_start
+                {
+                    last.len += len;
+                } else {
+                    out.push(CleanApplySpan { new_start, old_start, len });
+                }
             }
         }
     }

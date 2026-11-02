@@ -361,3 +361,52 @@ fn a_resize_refits_aspect_fit_elements_as_a_full_commit_would() {
         assert_eq!(layout(&rt), layout(&full), "at {w}");
     }
 }
+
+/// Moving `Node`s on resize skips cloning paths/specs, keeps a fixed-width sidebar's scene rects
+/// and focused `TextEdit` intact, and restores moved nodes cleanly if a virtual window shifts.
+#[test]
+fn a_resize_moves_nodes_keeps_inputs_and_restores_on_virtual_window_fallback() {
+    struct App {
+        edit: TextEdit,
+    }
+    fn view(s: &App, _: &mut Cx<App>) -> El {
+        ran();
+        let side = col().key("side").w(180.0).h_full().children(
+            (0..20).map(|i| row().key(format!("s{i}")).w_full().h(24.0).child(text(format!("Item {i}")))),
+        );
+        let list = col().key("rows").w_full().growth(crate::el::GrowthSpec::default()).virtual_rows(
+            200,
+            32.0,
+            |_: &App, i| std::borrow::Cow::Owned(format!("r{i}")),
+            |_: &App, i| text(format!("{i}: {}", "wrapping row prose ".repeat(1 + i % 3))).w_full().wrap(),
+        );
+        row().w_full().h_full().children([
+            side,
+            col().key("main").grow(1.0).h_full().children([
+                text_input(&s.edit, TextStyle::new(14.0, 400.0)).key("composer").w_full().h(36.0).on_edit(|a: &mut App| &mut a.edit),
+                col().key("scroll").w_full().grow(1.0).min_h(0.0).scroll(crate::ScrollSpec { stick_bottom: false }).child(list),
+            ]),
+        ])
+    }
+    let mut edit = TextEdit::new("draft");
+    edit.focused = true;
+    let mut rt = Runtime::new(App { edit: edit.clone() }, view, (800.0, 600.0), Env::new(true, 2.0));
+    let mut full = Runtime::new(App { edit }, view, (800.0, 600.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    full.frame(0.0);
+    rt.wheel(400.0, 300.0, -600.0);
+    full.wheel(400.0, 300.0, -600.0);
+    rt.frame(1.0 / 120.0);
+    full.frame(1.0 / 120.0);
+
+    // Narrow steps keep the window (0 view runs); a huge jump shifts the window and falls back cleanly.
+    for &(w, h) in &[(760.0, 600.0), (700.0, 600.0), (420.0, 1200.0), (780.0, 600.0)] {
+        rt.set_viewport((w, h), 2.0);
+        rt.frame(1.0 / 120.0);
+        full.reuse.scale = f32::NAN;
+        full.set_viewport((w, h), 2.0);
+        full.frame(1.0 / 120.0);
+        assert_eq!(shown(&rt), shown(&full), "at {w}x{h}");
+        assert_eq!(rt.focused.as_deref(), Some("#0/main/composer"));
+    }
+}
