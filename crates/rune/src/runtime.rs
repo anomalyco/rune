@@ -286,6 +286,8 @@ mod fold_hold;
 #[path = "runtime/motion/content_slide.rs"]
 mod content_slide;
 mod elements;
+#[path = "runtime/paint_probe.rs"]
+mod paint_probe;
 pub use elements::{ElementInfo, Pick, Picked, Pose};
 #[path = "runtime/paint/cache_layer.rs"]
 mod cache_layer;
@@ -663,6 +665,9 @@ pub struct Runtime<S: 'static> {
     pub(crate) anim_sources: u16,
     /// Why this frame committed, as [`commit_why::CommitWhy`] bits, until the frame log takes them.
     pub(crate) commit_why: u16,
+    /// Each node's place in the paint order, kept by the frame build while `Some` (the motion
+    /// gate's `z-order`).
+    pub(crate) paint_rank: Option<Vec<u32>>,
     /// This frame's commit landed every track (`Tx::settle`): a deliberate cut.
     pub settled: bool,
     /// Input markers for traces and headless tests, at most `event_log::CAP` of them unread.
@@ -956,6 +961,7 @@ impl<S: 'static> Runtime<S> {
             animating: false,
             anim_sources: 0,
             commit_why: 0,
+            paint_rank: None,
             settled: false,
             events: Vec::new(),
             record_events: true,

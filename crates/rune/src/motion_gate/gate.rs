@@ -20,9 +20,54 @@ pub struct Cell {
     pub skipped: bool,
 }
 
+/// An allowlist row: a finding that is the design. `kind` matches exactly ("" for any),
+/// `element` as a substring, and `cell` as a substring or any of several joined by `|`
+/// (`"island-auto|island-click"`). `max` caps how many findings it covers in a run, so a
+/// row written for one finding doesn't quietly cover the next ten. Prefer an
+/// `El::motion_intent` mark where the motion is written to a row here.
+#[derive(Clone, Copy, Debug)]
+pub struct AllowRow {
+    pub kind: &'static str,
+    pub element: &'static str,
+    pub cell: &'static str,
+    pub why: &'static str,
+    pub max: Option<usize>,
+}
+
+impl AllowRow {
+    pub const fn new(kind: &'static str, element: &'static str, cell: &'static str, why: &'static str) -> Self {
+        AllowRow { kind, element, cell, why, max: None }
+    }
+
+    /// Covers at most `n` findings in a run; the rest fail.
+    pub const fn max(mut self, n: usize) -> Self {
+        self.max = Some(n);
+        self
+    }
+
+    pub fn matches(&self, f: &Finding, cell: &str) -> bool {
+        (self.kind.is_empty() || f.kind == self.kind) && f.element.contains(self.element) && self.in_cell(cell)
+    }
+
+    fn in_cell(&self, cell: &str) -> bool {
+        self.cell.split('|').any(|c| cell.contains(c))
+    }
+}
+
+impl From<Allow> for AllowRow {
+    fn from((kind, element, cell, why): Allow) -> Self {
+        AllowRow::new(kind, element, cell, why)
+    }
+}
+
+
 /// Why `f` in `cell` is allowed, if a row of `allow` matches it.
 pub fn allowed(allow: &[Allow], f: &Finding, cell: &str) -> Option<&'static str> {
-    allow.iter().find(|a| f.kind == a.0 && f.element.contains(a.1) && cell.contains(a.2)).map(|a| a.3)
+    allow.iter().map(|&a| AllowRow::from(a)).find(|r| r.matches(f, cell)).map(|r| r.why)
+}
+
+fn rows(allow: &[Allow]) -> Vec<AllowRow> {
+    allow.iter().map(|&a| a.into()).collect()
 }
 
 /// Runs every cell whose name contains `filter`, in parallel on large stacks, and checks each
@@ -88,50 +133,76 @@ pub struct Report {
     /// Findings that aren't allowed, plus skipped cells.
     pub failing: usize,
     pub allowed: usize,
+    /// Allow rows that matched nothing in the cells they scope.
+    pub unused: usize,
 }
 
 /// Reads `cells` against `allow`; `list_allowed` lists allowed findings too.
 pub fn report(cells: &[Cell], allow: &[Allow], list_allowed: bool, secs: f32) -> Report {
+    report_rows(cells, &rows(allow), list_allowed, secs)
+}
+
+/// [`report`] with [`AllowRow`]s. A row covers findings up to its `max`; past it they fail.
+/// Rows that matched nothing in the cells they scope are listed as unused.
+pub fn report_rows(cells: &[Cell], rows: &[AllowRow], list_allowed: bool, secs: f32) -> Report {
+    let mut used = vec![0usize; rows.len()];
     let mut text = String::new();
     let (mut failing, mut allowed_n) = (0, 0);
+    let mut failed_kinds: Vec<&str> = Vec::new();
     for c in cells {
         if c.skipped {
             failing += 1;
             text += &format!("SKIP {} (its setup didn't apply)\n", c.name);
         }
         for f in &c.findings {
-            match allowed(allow, f, &c.name) {
-                Some(why) => {
+            let row = rows.iter().position(|r| r.matches(f, &c.name));
+            let over = row.and_then(|i| {
+                used[i] += 1;
+                rows[i].max.filter(|&m| used[i] > m)
+            });
+            match (row, over) {
+                (Some(i), None) => {
                     allowed_n += 1;
                     if list_allowed {
-                        text += &format!("allowed  {}  in {}  ({why})\n", f, c.name);
+                        text += &format!("allowed  {}  in {}  ({})\n", f, c.name, rows[i].why);
                     }
                 }
-                None => {
+                _ => {
                     failing += 1;
-                    text += &format!("{}  in {}\n", f, c.name);
+                    failed_kinds.push(f.kind);
+                    let past = over.map_or(String::new(), |m| format!("  (past its allow row's max of {m})"));
+                    text += &format!("{}  in {}{past}\n", f, c.name);
                 }
             }
         }
     }
+    let ran = |r: &AllowRow| cells.iter().any(|c| !c.skipped && r.in_cell(&c.name));
+    let unused: Vec<&AllowRow> = rows.iter().zip(&used).filter(|(r, n)| **n == 0 && ran(r)).map(|(r, _)| r).collect();
+    for r in &unused {
+        text += &format!("unused allow row (\"{}\", \"{}\", \"{}\"): {}\n", r.kind, r.element, r.cell, r.why);
+    }
     let frames: usize = cells.iter().map(|c| c.frames).sum();
-    let summary = format!("motion gate: {} cells, {frames} frames, {failing} findings ({allowed_n} allowed) in {secs:.1} s\n", cells.len());
-    let mut kinds: Vec<&str> = cells.iter().flat_map(|c| c.findings.iter().filter(|f| allowed(allow, f, &c.name).is_none()).map(|f| f.kind)).collect();
-    kinds.sort();
-    kinds.dedup();
-    for r in RULES.iter().filter(|r| kinds.contains(&r.kind)) {
+    let summary = format!("motion gate: {} cells, {frames} frames, {failing} findings ({allowed_n} allowed, {} unused allow rows) in {secs:.1} s\n", cells.len(), unused.len());
+    failed_kinds.sort();
+    failed_kinds.dedup();
+    for r in RULES.iter().filter(|r| failed_kinds.contains(&r.kind)) {
         text += &format!("  {}: {} ({})\n", r.kind, r.means, r.threshold);
     }
-    Report { text: summary.clone() + &text, summary, failing, allowed: allowed_n }
+    Report { text: summary.clone() + &text, summary, failing, allowed: allowed_n, unused: unused.len() }
 }
 
 /// The gate as a test: runs the cells `MOTION_GATE` keeps, writes the report to
 /// `MOTION_GATE_OUT`, and panics with it when a finding isn't allowed.
 pub fn gate(cells: Vec<(String, Job)>, allow: &[Allow]) {
+    gate_rows(cells, &rows(allow));
+}
+
+/// [`gate`] with [`AllowRow`]s (cell scopes and match caps).
+pub fn gate_rows(cells: Vec<(String, Job)>, allow: &[AllowRow]) {
     let filter = std::env::var("MOTION_GATE").unwrap_or_default();
     let started = Instant::now();
     let cells = run(cells, &filter);
-    let r = report(&cells, allow, std::env::var_os("MOTION_GATE_ALLOWED").is_some(), started.elapsed().as_secs_f32());
+    let r = report_rows(&cells, allow, std::env::var_os("MOTION_GATE_ALLOWED").is_some(), started.elapsed().as_secs_f32());
     if let Ok(path) = std::env::var("MOTION_GATE_OUT") {
         std::fs::write(path, &r.text).unwrap();
     }

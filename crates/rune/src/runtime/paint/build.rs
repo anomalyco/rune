@@ -102,6 +102,10 @@ impl<S: 'static> Runtime<S> {
         self.pixel_snap.begin_frame(self.t, [vp[2], vp[3]]);
         for paint_index in 0..n_nodes {
             let i = if tree_order { self.layer_paint_order[paint_index] } else { paint_index };
+            if let Some(rank) = self.paint_rank.as_mut() {
+                rank.resize(n_nodes, 0);
+                rank[i] = paint_index as u32;
+            }
             let node_id = self.nodes[i].id;
             let node_parent = self.nodes[i].parent;
             // A flight paints outside every ancestor's layer, above the whole window.

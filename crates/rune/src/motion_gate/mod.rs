@@ -30,22 +30,39 @@
 //! part>[|from|to]` writes those tracks' frames to `MOTION_GATE_OUT`.dump, and
 //! `MOTION_GATE_SHEET=<cell>|<frame>[|<path part>]` writes a contact strip of the frames around
 //! `frame` to `MOTION_GATE_OUT`.sheet.png.
+//!
+//! Beside geometry and opacity, each element's painted properties are followed frame by frame
+//! (its colours in OKLab, corners, blurs, shadow, effect payload, image and place in the paint
+//! order), and the composited window as a grid of cells a few points across: a CPU raster of
+//! the painter stream, or a GPU frame through [`Run::pixels`]. `snap`, `flash` and
+//! `changes-twice` find a property or a region that steps, blinks or changes twice. An input
+//! ([`Run::act`]), a `Tx::instant` commit, `El::instant_changes` and `El::motion_intent` marks
+//! keep a deliberate change from counting.
 
 pub mod check;
 mod gate;
 
 pub use check::{Finding, RULES, Recording, Rule, Snap, Track, check, dump, rule, sheet, short};
-pub use gate::{Allow, Cell, Job, Report, allowed, gate, report, run};
+pub use gate::{Allow, AllowRow, Cell, Job, Report, allowed, gate, gate_rows, report, report_rows, run};
+
+use std::sync::Arc;
 
 use crate::{ElementInfo, Runtime};
 
+/// A frame's pixels, for [`Run::pixels`]: width, height and 8-bit sRGB RGBA rows.
+pub type Pixels = (u32, u32, Vec<u8>);
+
 /// A runtime being recorded: every [`step`](Run::step) frames it on the virtual clock and samples
-/// its element tree into `rec`.
+/// its element tree, what each element paints and the composited window into `rec`.
 pub struct Run<S: 'static> {
     pub rt: Runtime<S>,
     pub rec: Recording,
     /// Seconds per frame.
     pub dt: f64,
+    /// Reads a drawn frame for the region checks in place of the CPU raster ([`Run::pixels`]).
+    draw: Option<Box<dyn FnMut(&mut Runtime<S>) -> Option<Pixels>>>,
+    /// The last frame's painter stream (hashed) and its raster, reused while it's unchanged.
+    last: Option<(u64, Arc<check::raster::Grid>)>,
 }
 
 impl<S: 'static> Run<S> {
@@ -53,9 +70,33 @@ impl<S: 'static> Run<S> {
     /// [`idle`](Run::idle) and set the scene up, then the first [`step`](Run::step) is the settled
     /// start the first action changes.
     pub fn new(mut rt: Runtime<S>, hz: f64) -> Self {
+        rt.paint_rank = Some(Vec::new());
         rt.frame(0.0);
         let rec = Recording::new(rt.viewport, hz);
-        Run { rt, rec, dt: 1.0 / hz }
+        Run { rt, rec, dt: 1.0 / hz, draw: None, last: None }
+    }
+
+    /// Reads each recorded frame's pixels with `draw` (a GPU render of the runtime) for the
+    /// region checks, in place of rasterizing its painter stream on the CPU. `None` from it
+    /// falls back to the raster for that frame.
+    pub fn pixels(&mut self, draw: impl FnMut(&mut Runtime<S>) -> Option<Pixels> + 'static) {
+        self.draw = Some(Box::new(draw));
+    }
+
+    fn grid(&mut self) -> Arc<check::raster::Grid> {
+        if let Some(draw) = self.draw.as_mut()
+            && let Some((w, h, rgba)) = draw(&mut self.rt)
+        {
+            return Arc::new(check::raster::from_pixels(&rgba, w, h, self.rec.size));
+        }
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        bytemuck::cast_slice::<_, u8>(&self.rt.instances).hash(&mut hasher);
+        let key = hasher.finish();
+        if let Some((k, g)) = &self.last && *k == key { return g.clone(); }
+        let g = Arc::new(check::raster::rasterize(&self.rt.instances, self.rec.size, self.rt.env.scale));
+        self.last = Some((key, g.clone()));
+        g
     }
 
     /// Steps `secs` unrecorded (setting up, before the run).
@@ -76,7 +117,10 @@ impl<S: 'static> Run<S> {
         let why = std::mem::take(&mut self.rt.commit_why);
         self.rec.commits(self.rt.scrolling(), why);
         let els: Vec<ElementInfo> = self.rt.elements();
-        self.rec.sample(&els);
+        let paints = self.rt.paints();
+        self.rec.sample_with(&els, Some(&paints));
+        let grid = self.grid();
+        self.rec.grid(Some(grid));
     }
 
     pub fn step_n(&mut self, n: usize) {

@@ -24,7 +24,9 @@ impl CommitWhy {
     pub const VIRTUAL: u16 = 128;
     /// A key or IME event had to see the state an earlier handler left before routing.
     pub const ROUTE: u16 = 256;
-    pub const NAMES: [&'static str; 9] = ["poll", "input", "layout", "read", "dirty", "relayout", "settle", "virtual", "route"];
+    /// A commit landed at once (`Tx::instant`): what it changed didn't animate, by design.
+    pub const INSTANT: u16 = 512;
+    pub const NAMES: [&'static str; 10] = ["poll", "input", "layout", "read", "dirty", "relayout", "settle", "virtual", "route", "instant"];
 
     pub fn names(bits: u16) -> Vec<&'static str> {
         Self::NAMES.iter().enumerate().filter(|(i, _)| bits & (1 << i) != 0).map(|(_, n)| *n).collect()

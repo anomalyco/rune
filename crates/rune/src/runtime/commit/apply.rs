@@ -76,6 +76,7 @@ impl<S: 'static> Runtime<S> {
             false
         };
         let instant = tx.instant || first || concealing;
+        if tx.instant && !first { self.commit_why |= crate::runtime::CommitWhy::INSTANT; }
         // An instant change lands what it changes; motion an earlier change set going keeps on.
         self.scene.keep_flights(tx.instant && !tx.settle && !first && !concealing);
         let now = self.t;
