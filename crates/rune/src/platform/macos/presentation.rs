@@ -26,6 +26,7 @@ impl Panel {
         self.pointer.observe(&self.panel, self.wake.as_ref());
         // Excluded before any of it can be seen: before it orders in or its alpha rises.
         let generation = self.update_presence(|p| p.show());
+        self.rejoin_spaces();
         if !self.panel.isVisible() {
             // SAFETY: AppKit calls on the main thread.
             unsafe {
@@ -34,6 +35,27 @@ impl Panel {
             }
         }
         self.fade_to(1.0, fade, generation);
+    }
+
+    /// Puts a panel that joins every Space back on all of them before it orders in. After the
+    /// app's activation policy changes (its Dock icon shown or hidden), the window server can
+    /// tie such a panel to one Space while AppKit still reports the old mask, and setting the
+    /// same mask again changes nothing. Clearing it and setting it back makes the window
+    /// server apply it again. A panel still shown on another Space orders out first, so `show`
+    /// orders it back in on this one.
+    fn rejoin_spaces(&self) {
+        use objc2_app_kit::NSWindowCollectionBehavior as Behavior;
+        // SAFETY: AppKit calls on the main thread.
+        unsafe {
+            let behavior = self.panel.collectionBehavior();
+            if !behavior.contains(Behavior::CanJoinAllSpaces) { return; }
+            if self.panel.isVisible() {
+                if self.panel.isOnActiveSpace() { return; }
+                self.panel.orderOut(None);
+            }
+            self.panel.setCollectionBehavior(Behavior::Default);
+            self.panel.setCollectionBehavior(behavior);
+        }
     }
 
     /// Changes the panel's presence and applies the capture exclusion it now calls for.
