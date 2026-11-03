@@ -3,7 +3,8 @@
 //! track above or below jumps there, so a list scrolls without a wheel or a trackpad. It rides
 //! the scroll through live values, so scrolling never rebuilds the view.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use rune::{El, Live, Phase, ScrollPos, col, el};
@@ -17,6 +18,36 @@ const THUMB: f32 = 6.0;
 const INSET: f32 = 2.0;
 /// The shortest the thumb gets, however long the content.
 const MIN_THUMB: f32 = 24.0;
+
+/// The most scroll bars kept between views; past it they're all dropped, and each comes back on
+/// its next commit.
+const KEPT: usize = 256;
+
+/// What one scroll bar keeps across rebuilds: where its viewport stands and the two live rects
+/// that follow it. Kept so a rebuild hands the same values to the new view, which then sets
+/// equal values and wakes nothing.
+#[derive(Clone)]
+struct Bar {
+    pos: Rc<Cell<ScrollPos>>,
+    track: Live<[f32; 4]>,
+    thumb: Live<[f32; 4]>,
+}
+
+thread_local! {
+    static BARS: RefCell<HashMap<String, Bar>> = RefCell::new(HashMap::new());
+}
+
+fn kept(area: &str) -> Bar {
+    BARS.with(|bars| {
+        let mut bars = bars.borrow_mut();
+        if bars.len() >= KEPT && !bars.contains_key(area) { bars.clear(); }
+        bars.entry(area.to_owned()).or_insert_with(|| Bar {
+            pos: Rc::new(Cell::new(ScrollPos::default())),
+            track: Live::new([0.0; 4]),
+            thumb: Live::new([0.0; 4]),
+        }).clone()
+    })
+}
 
 /// The thumb's top and length on a track `track` points long, for a viewport scrolled to `at`.
 fn thumb(at: ScrollPos, track: f32) -> (f32, f32) {
@@ -37,10 +68,10 @@ fn offset_at(at: ScrollPos, track: f32, top: f32) -> f32 {
 /// with a key, in a column keyed `area` with a scroll bar over its right edge. Size the column
 /// as the viewport would be sized, and let the viewport fill it (`.grow(1.0)` or `.shrink()`
 /// with `.min_h(0.0)`). The bar takes the viewport's `on_scroll_offset`. It shows only while
-/// the content overflows; until then the edge presses through to the content.
+/// the content overflows; until then the edge presses through to the content. Its state is
+/// kept by `area` on this thread, so give each bar its own.
 pub fn scroll_bar(k: &Kit, area: &str, key: &str, viewport: El) -> El {
-    let pos = Rc::new(Cell::new(ScrollPos::default()));
-    let (track, bar) = (Live::new([0.0f32; 4]), Live::new([0.0f32; 4]));
+    let Bar { pos, track, thumb: bar } = kept(area);
     let watch = {
         let (pos, track, bar) = (pos.clone(), track.clone(), bar.clone());
         move |at: ScrollPos| {
@@ -127,6 +158,17 @@ mod tests {
         rt.pointer_up(x, 5.0);
         rt.frame(1.0 / 60.0);
         assert_eq!(top(&rt), 0.0, "pressing the track's top jumps there");
+    }
+
+    #[test]
+    fn a_still_view_stops_asking_for_frames() {
+        let mut rt = rune::Runtime::new(20usize, view, (200.0, 100.0), rune::Env::new(true, 1.0));
+        rt.set_live_waker(std::sync::Arc::new(|| {}));
+        for _ in 0..60 { rt.frame(1.0 / 60.0); }
+        rt.invalidate();
+        for _ in 0..60 { rt.frame(1.0 / 60.0); }
+        let wants: Vec<_> = (0..5).map(|_| (rt.frame(1.0 / 60.0), rt.live_pending())).collect();
+        assert_eq!(wants, vec![(false, false); 5]);
     }
 
     #[test]
