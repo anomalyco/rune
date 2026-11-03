@@ -161,7 +161,11 @@ impl<S: 'static> Runtime<S> {
         } else if st.max > 0.0 {
             Some((st.max.min(end) + lag).max(0.0))
         } else {
-            None
+            // Content that fits the viewport's layout can still reach past its presented bottom
+            // while the viewport grows toward it (a composer shrinking after a send): follow it
+            // from there, not from when the layout overflows, which landed the gap in one frame.
+            let at = self.scroll_overflow(i).min(end) + lag;
+            (at > 0.0).then_some(at)
         }
     }
 
@@ -982,6 +986,28 @@ mod tests {
             }
             assert!(ys.windows(2).all(|w| w[1] >= w[0] - 0.01), "rows={rows}: r0 moved up: {ys:?}");
             assert!((*ys.last().unwrap()).abs() < 0.05, "rows={rows}: r0 rests at the top: {:?}", ys.last());
+        }
+    }
+
+    /// Rows that fit the list's layout but grow past its bottom while the composer shrinks
+    /// under it start following from the first point past it, with no kick.
+    #[test]
+    fn rows_crossing_into_overflow_as_the_composer_shrinks_start_smoothly() {
+        for lines in [2, 3] {
+            let mut edit = crate::TextEdit::new(&vec!["line"; lines].join("\n"));
+            edit.focused = true;
+            let mut rt = chat(Chat { rows: 5, composer: Some(edit), sends: true, ..Default::default() });
+            let mut ys = vec![rects(&rt)["r0"][1]];
+            enter(&mut rt);
+            for _ in 0..240 {
+                rt.frame(1.0 / 120.0);
+                ys.push(rects(&rt)["r0"][1]);
+            }
+            assert!(*ys.last().unwrap() < -5.0, "lines={lines}: the rows overflowed: {ys:?}");
+            let steps: Vec<f32> = ys.windows(2).map(|w| w[1] - w[0]).collect();
+            for w in steps.windows(2) {
+                assert!((w[1] - w[0]).abs() < 1.5, "lines={lines}: r0's speed kicks {} pt a frame: {ys:?}", w[1] - w[0]);
+            }
         }
     }
 }
