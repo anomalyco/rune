@@ -117,9 +117,9 @@ impl El {
         self.handlers.drawn_rect = Some(rect.clone());
         self
     }
-    /// On a scroll viewport: called with where it's scrolled to once it's first laid out, after
-    /// each commit that gives it a new handler, then in every frame that scrolling moves it or
-    /// it or its content resizes, before that frame draws. A [`Live`](crate::Live) it
+    /// On a scroll viewport: called with where it's scrolled to once it's first laid out, in
+    /// the frame that draws a commit giving it a new handler, and in every frame that scrolling
+    /// moves it, or it or its content resizes, before that frame draws. A [`Live`](crate::Live) it
     /// sets shows in the same frame, so an element can follow the scroll exactly: a header that
     /// shrinks as the page scrolls, or a shadow that fades in past the top. It can't change
     /// state; set live values from it.
