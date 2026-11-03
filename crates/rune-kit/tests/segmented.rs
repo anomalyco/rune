@@ -69,3 +69,25 @@ fn a_select_trigger_is_the_closed_field_without_a_listbox() {
     assert_eq!(rect(&rt, "model-trigger")[2], 200.0);
     assert!(rt.elements().iter().all(|e| e.role != "listbox"), "open turns the chevron but builds no listbox");
 }
+
+fn badged(selected: &usize, _: &mut Cx<usize>) -> El {
+    rune::row().child(
+        SegmentedControl::new(&["Keep ready", "Release when idle"], Some(*selected)).badge(0, "Fast").fit().build(&Kit::neutral(true)).key("seg"),
+    )
+}
+
+#[test]
+fn a_badge_sits_after_its_segments_label_and_counts_in_the_fitted_width() {
+    let mut rt = Runtime::new(0usize, badged, (600.0, 100.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let elements = rt.elements();
+    let text = |t: &str| elements.iter().find(|e| e.text.as_deref() == Some(t)).unwrap_or_else(|| panic!("no {t}")).rect;
+    let (label, fast, badge, segment) = (text("Keep ready"), text("Fast"), rect(&rt, "badge"), rect(&rt, "segment0"));
+    assert!(badge[0] >= label[0] + label[2], "the badge follows the label: {badge:?} vs {label:?}");
+    assert!(fast[0] >= badge[0] && fast[0] + fast[2] <= badge[0] + badge[2] + 0.01, "the badge's text isn't cut");
+    assert!(badge[0] + badge[2] <= segment[0] + segment[2] - 12.0 + 0.01, "the badge stays inside the padding");
+    assert!((segment[2] - rect(&rt, "segment1")[2]).abs() < 0.01, "segments stay equal");
+    let radio = elements.iter().find(|e| e.key.as_deref() == Some("segment0")).unwrap();
+    assert_eq!(radio.label.as_deref(), Some("Keep ready, Fast"));
+    assert!(elements.iter().filter(|e| e.key.as_deref() == Some("badge")).count() == 1, "only the badged segment has one");
+}
