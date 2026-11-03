@@ -5,15 +5,17 @@
 use super::*;
 
 impl<S: 'static> Runtime<S> {
-    /// Calls each viewport's `on_scroll_offset` whose offset or extent moved, or that is new;
-    /// true when it called any.
+    /// Calls each viewport's `on_scroll_offset` whose offset or extent moved, that is new, or
+    /// whose handler is; true when it called any.
     pub(super) fn tell_scroll_offsets(&mut self) -> bool {
         let mut calls = Vec::new();
         for n in &self.nodes {
             let Some(f) = n.handlers.get().and_then(|h| h.on_scroll_offset.as_ref()) else { continue };
             let Some(st) = self.scrolls.get_mut(&n.id) else { continue };
-            let at = crate::ScrollPos { offset: [st.x.offset as f32, st.offset as f32 + st.slack.height()], max: [st.x.max as f32, st.max as f32] };
-            if st.told.replace(at) != Some(at) { calls.push((f.clone(), at)); }
+            let at = crate::ScrollPos { offset: [st.x.offset as f32, st.offset as f32 + st.slack.height()], max: [st.x.max as f32, st.max as f32],
+                viewport: [n.local.w, n.local.h] };
+            let by = Rc::as_ptr(f) as *const () as usize;
+            if st.told.replace(at) != Some(at) || std::mem::replace(&mut st.told_by, by) != by { calls.push((f.clone(), at)); }
         }
         for (f, at) in &calls { f(*at); }
         !calls.is_empty()
@@ -91,7 +93,20 @@ mod tests {
         rt.frame(1.0 / 60.0);
         rt.frame(1.0 / 60.0);
         assert_eq!(told.get(), 2);
-        assert_eq!(TOLD.with(|t| t.get()), ScrollPos { offset: [0.0, 10.0], max: [0.0, 800.0] });
+        assert_eq!(TOLD.with(|t| t.get()), ScrollPos { offset: [0.0, 10.0], max: [0.0, 800.0], viewport: [300.0, 200.0] });
+    }
+
+    #[test]
+    fn a_rebuilt_handler_hears_where_the_viewport_stands_before_the_next_frame() {
+        let (mut rt, told) = rig();
+        rt.wheel(100.0, 100.0, -30.0);
+        rt.frame(1.0 / 60.0);
+        let before = told.get();
+        rt.update(|_, _| {});
+        assert_eq!(told.get(), before + 1, "the commit told the new handler");
+        assert_eq!(TOLD.with(|t| t.get()).offset, [0.0, 30.0]);
+        rt.frame(1.0 / 60.0);
+        assert_eq!(told.get(), before + 1, "and the frame after didn't again");
     }
 
     fn info<T>(rt: &Runtime<T>, key: &str) -> ElementInfo {

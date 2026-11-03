@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use rune::{El, Icon, PointerPress, TextStyle, Tx, col, el, icon, row, text};
 
-use crate::overlay::{Placement, fit_scroll, menu_anchor, scrim};
+use crate::overlay::{Placement, fit_scroll_bar, menu_anchor, scrim};
 use crate::{Acts, Kit, State, shadows};
 
 /// A menu at a secondary-press position. Store the point from `El::on_secondary_press`
@@ -307,7 +307,7 @@ impl Menu {
                 }
             });
         }
-        frame.child(fit_scroll(list))
+        frame.child(fit_scroll_bar(k, &self.key, list))
     }
 
     pub fn build(mut self, k: &Kit, layer: &mut Vec<El>) -> El {

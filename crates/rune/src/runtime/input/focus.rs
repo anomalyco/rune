@@ -8,6 +8,9 @@ const VERTICAL_ROLES: [&str; 4] = ["menu", "listbox", "list", "tree"];
 const TYPE_SELECT_ROLES: [&str; 5] = ["menu", "listbox", "list", "tree", "tablist"];
 /// Without Full Keyboard Access, Tab still visits lists inside these groups.
 const LIST_ROLES: [&str; 4] = ["listbox", "list", "tree", "grid"];
+/// Groups where Page Up and Page Down move by the items their scroll view shows; elsewhere the
+/// keys page the scroll view itself.
+const PAGED_ROLES: [&str; 2] = ["menu", "listbox"];
 /// Tables and outlines stop at their ends (NSTableView); menus, popups and segments wrap.
 const CLAMPED_ROLES: [&str; 3] = ["list", "tree", "grid"];
 /// AppKit's type-select resets after this long without a key.
@@ -373,10 +376,12 @@ impl<S: 'static> Runtime<S> {
             let forward = matches!(ev.key, Key::Down) || (!vertical && ev.key == Key::Right);
             let items: Vec<_> = (0..self.nodes.len()).filter(|&j| self.can_focus(j) && self.group(j) == Some(g)).collect();
             let pos = items.iter().position(|&j| j == i).unwrap();
-            let next = if backward || forward || matches!(ev.key, Key::Home | Key::End) {
+            let page = matches!(ev.key, Key::PageUp | Key::PageDown) && PAGED_ROLES.contains(&self.nodes[g].role);
+            let next = if backward || forward || page || matches!(ev.key, Key::Home | Key::End) {
                 self.typeahead.0.clear();
                 Some(match ev.key {
                     Key::Home => 0, Key::End => items.len() - 1,
+                    Key::PageUp | Key::PageDown => self.page_item(&items, pos, ev.key == Key::PageDown),
                     // A highlight the user cannot see yet appears where it is (a popup's checked
                     // item, else the first) before arrows move it; Up from nothing is the last.
                     _ if self.nodes[i].focus.highlight.is_some() && !shown =>
@@ -444,6 +449,25 @@ impl<S: 'static> Runtime<S> {
         if !self.focused_index().is_some_and(|j| self.allowed(j)) {
             let target = self.tab_order().first().map(|&j| self.nodes[j].path.clone()).unwrap_or(path);
             self.set_focus(Some(target), self.keyboard_focus);
+        }
+    }
+
+    /// The item Page Down (or Up) moves to from `items[pos]`: the farthest one still inside a
+    /// viewport's height of it, as a list's highlight pages in AppKit, at least one item on and
+    /// stopping at the ends. Without a scroll view around it, the last (or first).
+    fn page_item(&self, items: &[usize], pos: usize, down: bool) -> usize {
+        let at = &self.nodes[items[pos]];
+        let page = std::iter::successors(at.parent, |&p| self.nodes[p].parent)
+            .find(|&p| self.nodes[p].scroll.is_some()).map_or(f32::INFINITY, |v| self.nodes[v].local.h);
+        let within = |j: &usize| {
+            let n = &self.nodes[items[*j]];
+            if down { n.target[3] - at.target[1] <= page + 0.5 } else { at.target[3] - n.target[1] <= page + 0.5 }
+        };
+        let far = if down { (pos..items.len()).take_while(within).last() } else { (0..=pos).rev().take_while(within).last() };
+        match far.filter(|&j| j != pos) {
+            Some(j) => j,
+            None if down => (pos + 1).min(items.len() - 1),
+            None => pos.saturating_sub(1),
         }
     }
 
@@ -1318,5 +1342,29 @@ mod tests {
         assert_eq!(rt.state.modals, 0);
         assert!(!rt.has_focus());
         assert_eq!(rt.state.app, 0, "repeats never fall through to the app after a dismissal");
+    }
+
+    #[test]
+    fn page_keys_move_a_scrolling_listbox_highlight_by_what_it_shows() {
+        fn view(_: &(), _: &mut Cx<()>) -> El {
+            col().size(200.0, 300.0).child(col().key("scroll").w_full().h(100.0).scroll(crate::ScrollSpec { stick_bottom: false })
+                .child(col().key("list").role("listbox").focus_group()
+                    .children((0..20).map(|i| el().key(format!("item{i}")).w_full().h(20.0).focusable(true).role("option")))))
+        }
+        let mut rt = Runtime::new((), view, (200.0, 300.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        rt.set_focus(Some(rt.nodes.iter().find(|n| n.key.as_deref() == Some("item0")).unwrap().path.clone()), true);
+        rt.frame(0.0);
+        let shown = |rt: &Runtime<()>, key: &str| {
+            let e = rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap();
+            e.rect[1] >= -0.5 && e.rect[1] + e.rect[3] <= 100.5
+        };
+        for (key, want) in [(Key::PageDown, "item4"), (Key::PageDown, "item8"), (Key::PageUp, "item4"), (Key::End, "item19"),
+            (Key::PageDown, "item19"), (Key::PageUp, "item15"), (Key::Home, "item0"), (Key::PageUp, "item0")] {
+            press(&mut rt, key.clone());
+            for _ in 0..30 { rt.frame(1.0 / 60.0); }
+            assert_eq!(focused(&rt), want, "after {key:?}");
+            assert!(shown(&rt, want), "{want} scrolled into view");
+        }
     }
 }

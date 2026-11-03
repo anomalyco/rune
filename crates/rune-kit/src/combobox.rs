@@ -152,6 +152,7 @@ impl<S: 'static> Combobox<S> {
         let active = self.state.active_index(&self.options, &choices);
         let access = self.access.clone();
         let key_access = self.access.clone();
+        let page = ((self.max_height / 28.0) as usize).saturating_sub(1).max(1);
         let options = self.options.clone();
         let choose = self.choose.clone();
         let change_access = self.access.clone();
@@ -192,6 +193,27 @@ impl<S: 'static> Combobox<S> {
                     return true;
                 }
                 let control = ev.mods.ctrl && !ev.mods.shift;
+                // Page Up and Down move by the rows the list shows, stopping at the ends; Home
+                // and End jump there while the search is empty, else they move the caret.
+                let jump = match &ev.key {
+                    Key::PageDown | Key::PageUp | Key::Home | Key::End if ev.mods.cmd || ev.mods.ctrl || ev.mods.shift => None,
+                    Key::PageDown => Some(page as isize),
+                    Key::PageUp => Some(-(page as isize)),
+                    Key::End if state.search.text.is_empty() => Some(isize::MAX),
+                    Key::Home if state.search.text.is_empty() => Some(isize::MIN),
+                    _ => None,
+                };
+                if let Some(jump) = jump {
+                    if !enabled.is_empty() {
+                        let index = active.and_then(|i| enabled.iter().position(|v| *v == i)).unwrap_or(0) as isize;
+                        let next = index.saturating_add(jump).clamp(0, enabled.len() as isize - 1) as usize;
+                        let id = options[enabled[next]].id.clone();
+                        tx.scroll_into_view(format!("{key}-option-{id}"));
+                        state.active = Some(id);
+                        state.query = state.search.text.clone();
+                    }
+                    return true;
+                }
                 let delta = match &ev.key {
                     Key::Down if !ev.mods.cmd && !ev.mods.ctrl => 1,
                     Key::Up if !ev.mods.cmd && !ev.mods.ctrl => -1,

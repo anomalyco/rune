@@ -8,12 +8,14 @@ use crate::states::downcast;
 use crate::{El, Tx};
 
 /// Where a scroll viewport is scrolled to, for [`El::on_scroll_offset`]: `offset` points from
-/// the top-left of its content, `[x, y]`, out of the `max` it can scroll on each axis.
+/// the top-left of its content, `[x, y]`, out of the `max` it can scroll on each axis, in a
+/// viewport `viewport` points wide and tall.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ScrollPos {
     pub offset: [f32; 2],
     pub max: [f32; 2],
+    pub viewport: [f32; 2],
 }
 
 impl El {
@@ -115,8 +117,9 @@ impl El {
         self.handlers.drawn_rect = Some(rect.clone());
         self
     }
-    /// On a scroll viewport: called with where it's scrolled to once it's first laid out, then in
-    /// every frame that scrolling moves it or its content resizes, before that frame draws. A [`Live`](crate::Live) it
+    /// On a scroll viewport: called with where it's scrolled to once it's first laid out, after
+    /// each commit that gives it a new handler, then in every frame that scrolling moves it or
+    /// it or its content resizes, before that frame draws. A [`Live`](crate::Live) it
     /// sets shows in the same frame, so an element can follow the scroll exactly: a header that
     /// shrinks as the page scrolls, or a shadow that fades in past the top. It can't change
     /// state; set live values from it.

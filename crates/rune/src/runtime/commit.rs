@@ -97,6 +97,8 @@ impl<S: 'static> Runtime<S> {
             measured = self.settle_layout_reads(measured, tx);
         }
         self.apply(measured, tx);
+        // A rebuilt view's scroll watchers hear where their viewports stand before any input.
+        self.tell_scroll_offsets();
         self.scene.keep_flights(false);
         self.memo.keep_since(self.memo_since);
         self.track_focused_rows();

@@ -33,6 +33,12 @@ impl El {
         self.handlers.on_drag = Some(Rc::new(move |s, d, tx| f(downcast::<S>(s), d, tx)));
         self
     }
+    /// [`El::on_drag`] for a component that doesn't read the app's state (a scroll bar that
+    /// only scrolls through its `Tx`), so it works in any app.
+    pub fn on_drag_any(mut self, f: impl Fn(&mut Drag, &mut Tx) + 'static) -> Self {
+        self.handlers.on_drag = Some(Rc::new(move |_, d, tx| f(d, tx)));
+        self
+    }
     /// Drag this element out of the window into another app, as a file, image or text. Once
     /// the pointer travels [`crate::drag_out::DRAG_THRESHOLD`] from the press, `f` reads the
     /// state and returns what to carry (`None`: no drag this time, the press stays a press),

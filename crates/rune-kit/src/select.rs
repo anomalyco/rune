@@ -4,7 +4,7 @@
 use rune::{El, Icon, TextStyle, Tx, col, el, icon, row, text};
 
 use crate::menu::{Modal, dismissal, mount_dismiss};
-use crate::overlay::{Placement, fit_scroll, menu_anchor};
+use crate::overlay::{Placement, fit_scroll_bar, menu_anchor};
 
 /// The listbox's tallest: its 4-point padding, six 30-point rows (28 tall, 2 apart), and most
 /// of the seventh, whose label shows fading under the edge.
@@ -209,7 +209,7 @@ impl Select {
                 .max_w(368.0)
                 .radius(6.0)
                 .fill(c.layer_01)
-                .child(col().key("listbox").role("listbox").focus_group().max_h(LISTBOX_MAX_HEIGHT).min_h(0.0).shrink().child(fit_scroll(list))),
+                .child(col().key("listbox").role("listbox").focus_group().max_h(LISTBOX_MAX_HEIGHT).min_h(0.0).shrink().child(fit_scroll_bar(k, &self.key, list))),
             &k.elevation.floating,
         );
         if let Some(modal) = modal {

@@ -303,7 +303,7 @@ impl<S: 'static> PopupList<S> {
             .w_full()
             .shrink()
             .min_h(0.0)
-            .child(viewport)
+            .child(crate::scroll_bar(k, &format!("{}-scroll-area", self.key), "viewport", viewport).w_full().shrink().min_h(0.0))
             .child(
                 el().key("empty")
                     .h(if empty { 28.0 } else { 0.0 })
