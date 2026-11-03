@@ -201,20 +201,48 @@ fn key_event(state: &xkbcommon::xkb::State, key: u32) -> Option<crate::KeyEvent>
     let code = xkb::Keycode::new(key + 8);
     let symbol = state.key_get_one_sym(code).raw();
     let mods = key_mods(state);
-    let key = match symbol {
-        0xff1b => crate::Key::Escape, 0xff0d => crate::Key::Enter, 0xff08 => crate::Key::Backspace,
-        0xffff => crate::Key::Delete, 0xff09 | 0xfe20 => crate::Key::Tab,
-        0xff50 => crate::Key::Home, 0xff57 => crate::Key::End, 0xff55 => crate::Key::PageUp, 0xff56 => crate::Key::PageDown,
-        0xff51 => crate::Key::Left, 0xff52 => crate::Key::Up, 0xff53 => crate::Key::Right, 0xff54 => crate::Key::Down,
-        0xffbe..=0xffd5 => crate::Key::Function((symbol - 0xffbe + 1) as u8),
-        0xff67 => crate::Key::ContextMenu,
-        _ => {
+    let key = match named_keysym(symbol) {
+        Some(key) => key,
+        None => {
             let text = state.key_get_utf8(code);
             if mods.cmd { crate::Key::Command(char::from_u32(xkb::keysym_to_utf32(state.key_get_one_sym(code)))?.to_ascii_lowercase()) }
             else if !text.is_empty() && !text.chars().any(char::is_control) { crate::Key::Text(text) } else { return None; }
         }
     };
     Some(crate::KeyEvent { key, mods })
+}
+
+/// The named key an XKB keysym is, or None for one that types (or nothing Rune names).
+fn named_keysym(symbol: u32) -> Option<crate::Key> {
+    Some(match symbol {
+        0xff1b => crate::Key::Escape, 0xff0d => crate::Key::Enter, 0xff08 => crate::Key::Backspace,
+        0xffff => crate::Key::Delete, 0xff09 | 0xfe20 => crate::Key::Tab,
+        0xff50 => crate::Key::Home, 0xff57 => crate::Key::End, 0xff55 => crate::Key::PageUp, 0xff56 => crate::Key::PageDown,
+        0xff51 => crate::Key::Left, 0xff52 => crate::Key::Up, 0xff53 => crate::Key::Right, 0xff54 => crate::Key::Down,
+        0xffbe..=0xffd5 => crate::Key::Function((symbol - 0xffbe + 1) as u8),
+        0xff67 => crate::Key::ContextMenu,
+        0xff63 => crate::Key::Insert, 0xff61 | 0xff15 => crate::Key::PrintScreen,
+        0xff14 => crate::Key::ScrollLock, 0xff13 | 0xff6b => crate::Key::Pause,
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::named_keysym;
+    use crate::Key;
+
+    #[test]
+    fn special_keysyms_are_named_keys() {
+        for (symbol, key) in [
+            (0xff14, Key::ScrollLock), (0xff13, Key::Pause), (0xff6b, Key::Pause), (0xff67, Key::ContextMenu),
+            (0xff61, Key::PrintScreen), (0xff15, Key::PrintScreen), (0xff63, Key::Insert),
+            (0xffbe, Key::Function(1)), (0xffd5, Key::Function(24)), (0xff55, Key::PageUp),
+        ] {
+            assert_eq!(named_keysym(symbol), Some(key), "keysym {symbol:#x}");
+        }
+        assert_eq!(named_keysym(0x61), None);
+    }
 }
 
 impl Dispatch<WlRegistry, GlobalListContents> for State {

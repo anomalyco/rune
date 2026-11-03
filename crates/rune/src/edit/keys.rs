@@ -31,6 +31,15 @@ pub enum Key {
     PageUp,
     /// Page Down, as `PageUp` the other way.
     PageDown,
+    /// Insert (Help on older Mac keyboards). Text fields ignore it; apps can bind it.
+    Insert,
+    /// Print Screen (SysRq). Text fields ignore it; apps can bind it. Windows sends it only
+    /// on release, so its press and release arrive together.
+    PrintScreen,
+    /// Scroll Lock. Text fields ignore it; apps can bind it.
+    ScrollLock,
+    /// Pause (Break). Text fields ignore it; apps can bind it.
+    Pause,
     Escape,
     Tab,
     /// Any character typed with Cmd (Ctrl off macOS), lowercased: a letter ("a", "c", "v"), a

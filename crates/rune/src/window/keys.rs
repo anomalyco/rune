@@ -23,6 +23,10 @@ pub(crate) fn map_key(key: &WKey, m: ModifiersState) -> Option<KeyEvent> {
             NamedKey::End => Key::End,
             NamedKey::PageUp => Key::PageUp,
             NamedKey::PageDown => Key::PageDown,
+            NamedKey::Insert => Key::Insert,
+            NamedKey::PrintScreen => Key::PrintScreen,
+            NamedKey::ScrollLock => Key::ScrollLock,
+            NamedKey::Pause => Key::Pause,
             NamedKey::Escape => Key::Escape,
             NamedKey::Tab => Key::Tab,
             NamedKey::Space => Key::Text(" ".into()),
@@ -79,4 +83,19 @@ pub(crate) fn key_base(event: &winit::event::KeyEvent) -> Option<char> {
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     { let _ = event; None }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keys_that_type_nothing_reach_handlers() {
+        for (named, key) in [
+            (NamedKey::ScrollLock, Key::ScrollLock), (NamedKey::Pause, Key::Pause), (NamedKey::ContextMenu, Key::ContextMenu),
+            (NamedKey::PrintScreen, Key::PrintScreen), (NamedKey::Insert, Key::Insert),
+        ] {
+            assert_eq!(map_key(&WKey::Named(named), ModifiersState::empty()).map(|ev| ev.key.clone()), Some(key));
+        }
+    }
 }
