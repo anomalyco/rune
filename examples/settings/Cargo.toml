@@ -7,6 +7,7 @@ license.workspace = true
 [features]
 frame-profile = ["rune/frame-profile", "dep:procwatch"]
 hot = ["rune/hot"]
+strobe = ["rune/strobe"]
 
 [dependencies]
 procwatch = { path = "../../crates/procwatch", optional = true }

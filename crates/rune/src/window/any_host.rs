@@ -8,6 +8,10 @@ impl<S: 'static> AnyHost for Host<S> {
     }
     fn finished(&self) -> bool { self.finished }
     fn keeps_loop(&self) -> bool { self.keeps_loop }
+    #[cfg(feature = "strobe")]
+    fn strobe(&mut self) -> Option<&mut dyn crate::strobe::Surface> { Some(self) }
+    #[cfg(feature = "strobe")]
+    fn strobe_ref(&self) -> Option<&dyn crate::strobe::Surface> { Some(self) }
     fn terminate(&mut self) {
         // Once: a window that already closed ran its hook then.
         if self.finished || !self.closes() { return; }

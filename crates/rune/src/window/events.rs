@@ -136,6 +136,8 @@ impl<S: 'static> Host<S> {
                 self.shell(event_loop);
             }
             WakeEvent::Reopen => {}
+            #[cfg(feature = "strobe")]
+            WakeEvent::Strobe => {}
         }
     }
 

@@ -212,6 +212,8 @@ impl<S: 'static> Host<S> {
         } else {
             self.clock.advance(rt, frame_time, composing(self.comp.as_deref()))
         };
+        #[cfg(feature = "strobe")]
+        crate::strobe::built();
         #[cfg(target_os = "macos")]
         let frame = if l.native.materials.update(rt.transparent, !rt.materials.is_empty(), &l.window, &l.surface) {
             // This drawable presents without the views: build again natively into a new one.
@@ -276,6 +278,8 @@ impl<S: 'static> Host<S> {
             renderer.draw(&mut enc, target, rt.clear_color());
         }
         if let Some(alpha) = &l.alpha { alpha.draw(&mut enc, &view); }
+        #[cfg(feature = "strobe")]
+        crate::strobe::encoded();
         renderer.submit(&gpu.queue, enc);
         let encoded = self.frame_reports.stamp();
         l.window.pre_present_notify();
@@ -283,6 +287,10 @@ impl<S: 'static> Host<S> {
         l.native.materials.present(&rt.materials, rt.env.scale, || gpu.queue.present(frame));
         #[cfg(not(target_os = "macos"))]
         gpu.queue.present(frame);
+        #[cfg(feature = "strobe")]
+        if !hidden { crate::strobe::presented(self.native_handle.key(), rt.instances.len()); }
+        #[cfg(all(feature = "strobe", target_os = "macos"))]
+        if !hidden && let Some(log) = &self.present_log { crate::strobe::record::drawable(self.native_handle.key(), drawable, log); }
         #[cfg(target_os = "macos")]
         if let Some(shadow) = &l.native.shadow { shadow.presented(); }
         // The frame landed with this present; later ones needn't wait for a transaction.

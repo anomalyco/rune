@@ -60,6 +60,8 @@ pub struct Args {
     pub(crate) crop_key: Option<String>,
     /// `--whole-window`: `--snap` with `--playground` takes the whole window, not just the stage.
     pub(crate) whole_window: bool,
+    /// `--strobe`: run headless, serving the strobe bridge at `STROBE_BRIDGE` (feature `strobe`).
+    pub(crate) strobe: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -176,6 +178,7 @@ impl Args {
                 "--window" => a.window = Some(val(&mut i)),
                 "--list-windows" => a.list_windows = true,
                 "--chrome" => a.chrome_overlay = true,
+                "--strobe" => a.strobe = true,
                 "-h" | "--help" => {
                     eprintln!("{HELP}");
                     std::process::exit(0);
@@ -203,6 +206,7 @@ impl Args {
             || self.first_pixels
             || self.list_windows
             || self.desktop.is_some()
+            || self.strobe
     }
 }
 
@@ -262,6 +266,8 @@ const HELP: &str = "usage: <app> [window]
   --window KEY         select a window for headless tools (run_windows, App::window)
   --list-windows       list window keys using a deterministic virtual display
   --chrome              draw where macOS puts the traffic lights; list elements overlapping them
+  --strobe              run headless on a virtual clock, driven by the strobe tool at
+                        STROBE_BRIDGE (needs Rune's strobe feature)
   other arguments are passed to the app (rune::tooling::extra_args)";
 
 pub(crate) fn die(msg: &str) -> ! {

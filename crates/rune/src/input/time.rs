@@ -56,6 +56,14 @@ impl Kind {
     }
 }
 
+/// A scope for dispatching input that arrives now with no winit event (the strobe bridge's keys).
+#[cfg(feature = "strobe")]
+pub(crate) fn arrived_now() -> Scope {
+    let now = Instant::now();
+    LAST.with(|c| c.set(Some(now)));
+    scope(Some(now))
+}
+
 /// A scope for dispatching `event` when it is input, holding when it arrived: on macOS the
 /// timestamp of the `NSEvent` AppKit is dispatching, when it is that kind of event; else now.
 pub(crate) fn arrived(event: &winit::event::WindowEvent) -> Option<Scope> {

@@ -286,6 +286,9 @@ mod fold_hold;
 #[path = "runtime/motion/content_slide.rs"]
 mod content_slide;
 mod elements;
+#[cfg(feature = "strobe")]
+#[path = "strobe/runtime_view.rs"]
+mod strobe_view;
 #[path = "runtime/paint_probe.rs"]
 mod paint_probe;
 pub use elements::{ElementInfo, Pick, Picked, Pose};

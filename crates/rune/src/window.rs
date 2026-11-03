@@ -63,6 +63,9 @@ pub(crate) use pacing::HIDDEN_REFRESH;
 #[cfg(test)]
 use pacing::wall_wake_deadline;
 mod stepping;
+#[cfg(feature = "strobe")]
+#[path = "strobe/window_host.rs"]
+mod strobe_host;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 mod float_on_open;
 #[cfg(not(target_arch = "wasm32"))]
@@ -86,6 +89,9 @@ pub(crate) enum WakeEvent {
     /// The app was reopened (macOS: its Dock icon clicked); for `Windows`, not one host.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Reopen,
+    /// The strobe bridge's reader queued a request.
+    #[cfg(feature = "strobe")]
+    Strobe,
 }
 
 /// What `Windows` needs of a host, whatever its state type: an app window or an overlay.
@@ -115,6 +121,11 @@ pub(crate) trait AnyHost {
     fn apply_pending(&mut self, _event_loop: &ActiveEventLoop) {}
     /// Shows, restores and activates it as the default reopen.
     fn reopen(&mut self, _event_loop: &ActiveEventLoop) {}
+    /// What the strobe bridge drives and reads of it.
+    #[cfg(feature = "strobe")]
+    fn strobe(&mut self) -> Option<&mut dyn crate::strobe::Surface> { None }
+    #[cfg(feature = "strobe")]
+    fn strobe_ref(&self) -> Option<&dyn crate::strobe::Surface> { None }
 }
 
 /// Builds every host, attaching its shortcut and menu guards, before any resumes: a window's
@@ -221,12 +232,18 @@ pub(crate) fn start<S: 'static>(mut spec: WindowSpec<S>, handle: Option<WindowHa
 
 impl ApplicationHandler<WakeEvent> for Windows {
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
+        #[cfg(feature = "strobe")]
+        crate::strobe::window::turn_begin();
         for host in self.hosts.iter_mut().flatten() { host.new_events(event_loop, cause); }
         // Before resumed there are no hosts to clean up.
         if self.factory.is_none() { self.cleanup(event_loop); }
     }
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let Some(factory) = self.factory.take() else { return };
+        // Before the first windows draw: strobe times launch to the first frame, and the requests
+        // it sends wait for this callback, so they find the windows built.
+        #[cfg(feature = "strobe")]
+        crate::strobe::window::connect(&self.proxy);
         let primary = event_loop.primary_monitor();
         let displays: Vec<_> = event_loop.available_monitors().map(|m| Display {
             id: Some(crate::DisplayId::from_monitor(m.clone(), is_wayland(event_loop))),
@@ -269,6 +286,12 @@ impl ApplicationHandler<WakeEvent> for Windows {
                 self.cleanup(event_loop);
                 return;
             }
+            #[cfg(feature = "strobe")]
+            WakeEvent::Strobe => {
+                crate::strobe::window::serve(&mut self.hosts, event_loop);
+                self.cleanup(event_loop);
+                return;
+            }
         };
         if let Some(Some(host)) = self.hosts.get_mut(slot) {
             host.user_event(event_loop, event);
@@ -291,6 +314,8 @@ impl ApplicationHandler<WakeEvent> for Windows {
         // Layer surfaces have no redraw events: keep turning while one animates (its vsync
         // paces the loop). Hosts whose only motion is an ambient loop sleep until its next step.
         let deadline = self.hosts.iter().flatten().filter_map(|host| host.wake_deadline()).min();
+        #[cfg(feature = "strobe")]
+        let deadline = crate::strobe::window::turn_end(&mut self.hosts, event_loop, deadline);
         event_loop.set_control_flow(if animating { ControlFlow::Poll }
             else { deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil) });
     }
@@ -303,6 +328,8 @@ impl ApplicationHandler<WakeEvent> for Windows {
         for host in self.hosts.iter_mut().flatten() { host.cancel_menus(); }
         // Surfaces go while winit's display connection is still open (layer surfaces live on it).
         self.hosts.clear();
+        #[cfg(feature = "strobe")]
+        crate::strobe::window::exiting();
         crate::clipboard::shutdown();
     }
 }
@@ -404,6 +431,9 @@ impl<S: 'static> Host<S> {
         let on_reopen = app.on_reopen;
         #[cfg(target_os = "macos")]
         let present_log = args.trace.as_ref().map(|_| Arc::default());
+        // The strobe bridge reads when frames reach the screen from the same hook.
+        #[cfg(all(target_os = "macos", feature = "strobe"))]
+        let present_log = present_log.or_else(|| crate::strobe::Endpoint::from_env().map(|_| Arc::default()));
         let mut app = app;
         let comp = app.compositor.take();
         let (on_focus, on_ime) = (app.on_focus, app.on_ime);

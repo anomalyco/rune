@@ -201,6 +201,11 @@ impl<T: 'static> AnyHost for Overlay<T> {
         false
     }
 
+    #[cfg(feature = "strobe")]
+    fn strobe(&mut self) -> Option<&mut dyn crate::strobe::Surface> { Some(self) }
+    #[cfg(feature = "strobe")]
+    fn strobe_ref(&self) -> Option<&dyn crate::strobe::Surface> { Some(self) }
+
     fn cancel_menus(&mut self) { self.popup.cancel(&mut self.rt); }
 }
 

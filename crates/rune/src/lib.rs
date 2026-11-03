@@ -5,6 +5,8 @@
 
 #[cfg(all(target_arch = "wasm32", any(feature = "hot", feature = "native-file-dialog")))]
 compile_error!("web does not support Rune's hot or native-file-dialog features; disable them for wasm32");
+#[cfg(all(target_arch = "wasm32", feature = "strobe"))]
+compile_error!("the strobe bridge drives native windows; disable Rune's strobe feature for wasm32");
 
 mod app;
 mod cold;
@@ -24,6 +26,8 @@ mod popup_menu;
 mod recorder;
 mod shortcuts;
 mod states;
+#[cfg(feature = "strobe")]
+mod strobe;
 mod system_material;
 mod video;
 mod window;

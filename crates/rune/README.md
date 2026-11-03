@@ -2391,6 +2391,75 @@ $L --desktop examples/launcher/backdrop.png --script examples/launcher/scripts/d
   fields. Without `--trace` nothing changes. Capture on a display, not headless:
   `cargo run --profile perf -p rune --example pacing -- --native --trace pacing.jsonl --frames 240`.
 
+### strobe bridge (feature `strobe`)
+
+The strobe performance tool drives and measures a native app the way it drives a browser page:
+it clicks, types and waits on elements, and reads per-frame timings, through a bridge Rune
+implements once (`src/strobe/`). Strobe stays generic; the protocol is its native bridge v1.
+
+- **Enable**: the app forwards the feature, `strobe = ["rune/strobe"]`, and strobe builds it with
+  `--features strobe` (`cargo build -p settings --features strobe` for the Settings example). Off,
+  nothing is compiled. On, with `STROBE_BRIDGE` unset, no thread or socket exists, and each frame
+  hook is a thread-local flag check.
+- **Connect**: strobe launches the app with `STROBE_BRIDGE=127.0.0.1:<port>` and
+  `STROBE_BRIDGE_TOKEN`. As the event loop starts, before the first windows draw, the app connects (one TCP connection,
+  `TCP_NODELAY`, newline-delimited JSON) and says hello with the token, `mode: "window"`, whether
+  it is a debug build, and the clock (`qpc`, `mach` or `monotonic`; every `*_ns` is that clock in
+  nanoseconds). A reader thread parses requests and wakes the event loop with a user event; the
+  UI thread alone touches UI state; a writer thread sends replies. When strobe disconnects, the
+  app keeps running.
+- **Ops**: `info` (adapter, and every window and overlay: key, kind, HWND on Windows, visible,
+  occluded, size, scale, present mode, refresh), `query`, `wait`, `click`, `move`, `down`, `up`,
+  `hover`, `wheel`, `scroll`, `type`, `press`, `window` (show, hide, focus, close), `mark`,
+  `run.begin`, `run.end`, `snapshot`, `step` (headless) and `quit`. Requests run one at a time,
+  in order.
+- **Selectors**: an element key or key-path suffix (`"slider/knob"`), `role=…`, `text=…` (label
+  or text, substring unless `exact`), a `:focus` suffix, or `{"selector", "text", "exact"}`. Only
+  visible elements match: drawn with area, effective opacity above 0.01, not exiting, inside the
+  window. The first in tree order wins.
+- **Input**: pointer input enters as the winit events the OS sends, through the host's own
+  `window_event`; keys (whose winit events can't be built outside winit) take the same steps as
+  its keyboard branch, with US-layout physical keys and `Tx::key_base`. Nothing goes through
+  `SendInput`, and focus never moves. `input_ns` is stamped as each event enters the runtime. A
+  click's release waits for the frame its press drew; `scroll` delivers one wheel step per
+  presented frame at `speed` points per second, like a trackpad. `press` chords use `Shortcut`'s
+  names; `ControlOrMeta` is Cmd on macOS and Ctrl elsewhere. Wheel and scroll deltas are positive
+  down, as a browser's `deltaY`.
+- **Waits**: `until` is a selector, `"frame"` (the surface's next presented frame) or `"idle"`:
+  no surface animates, has pending input, stale state, live values waiting, a frame in flight or
+  (Windows) the steady refresh hold, and no frame lands, for 300 ms. A job's next look is a
+  deadline on the event loop, so nothing polls; it runs in a wake the turn sends, so the
+  redraws its input asks for come at once. `wait` replies `{at_ns, frame_seq, already}`: the
+  commit time and number of the surface's frame that met a selector (for `"frame"`, its
+  submission; for `"idle"`, when the quiet began), and whether it was met when the request came.
+- **Runs**: `run.begin` clears a 65,536-row ring allocated when the bridge connects; every frame a
+  window or overlay presents adds `[seq, surface, tid, begin_ns, cpu_end_ns, submit_ns,
+  present_ns, input_ns, input_kind]` (`surface` indexes `surface_keys`). `begin_ns` is the event-loop turn's
+  start, `cpu_end_ns` when encoding finished, `submit_ns` when `present` returned, `input_ns` the
+  earliest bridge input the frame reflects and `input_kind` what it was (1 a press, key or move,
+  2 a wheel or scroll step, 0 none). `present_ns` comes from the Metal `presentedTime`
+  hook on macOS windows, filled at `run.end`, and is 0 elsewhere (strobe takes it from the OS).
+  `run.end` reports `work`: `wall_ms` sums turns that built a frame or ran a phase, without the
+  bridge's own time or time blocked for a drawable (`acquire_ms`); `cpu_ms` is the UI thread's
+  CPU over the run without the bridge's (Windows counts cycles with `QueryThreadCycleTime`,
+  converted at a measured rate); `view_ms`, `layout_ms` (commit, diff and layout), `text_ms`,
+  `paint_ms` and `encode_ms` are exclusive, and `other_ms` is the rest of `wall_ms`. `counts` has
+  frames, commits, elements (the main window's tree), `glyphs_shaped` (text layouts shaped),
+  `instances_max` and `frames_dropped_from_ring`; `surfaces` has each surface's `SurfaceCounts`
+  over the run.
+- **Close and quit**: `window` `close` sends the window's close event, so an app that keeps
+  running in a tray keeps running; strobe hears `{"event":"closed"}` for each surface that goes
+  and `{"event":"quit"}` as the loop ends. `quit` takes the app's quit path (`Tx::quit`).
+- **Headless** (`--strobe`): `app --strobe` (with the feature and `STROBE_BRIDGE` set) renders the
+  main window offscreen on a virtual clock and serves the same protocol with `mode: "headless"`.
+  The clock moves only while a request waits: waits, frame steps, delays and timeouts are
+  virtual, and `step` advances it by `frames` or `seconds`. Inputs go to the runtime as the
+  headless script player sends them. Nothing is read back except for `snapshot`, so timings
+  leave out presentation, the drawable wait and display pacing; `present_ns` is 0, `surfaces`
+  counts are zero, and `window` is unsupported. An app's strobe profile selects it with `args`:
+  `"headless": { "args": ["--strobe"] }` (with whatever an app's own CLI puts in front of Rune's
+  arguments).
+
 ## Playground
 
 `App::playground` is a storybook built into the window. ⌘⇧D (Ctrl+Shift+D off macOS) opens it;
