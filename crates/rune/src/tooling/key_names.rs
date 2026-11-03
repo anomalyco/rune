@@ -17,6 +17,10 @@ pub(crate) fn key_named(name: &str) -> Option<Key> {
         "Escape" => Key::Escape,
         "Tab" => Key::Tab,
         "ContextMenu" => Key::ContextMenu,
+        "Insert" => Key::Insert,
+        "PrintScreen" => Key::PrintScreen,
+        "ScrollLock" => Key::ScrollLock,
+        "Pause" => Key::Pause,
         f if f.len() > 1 && f.starts_with('F') && f[1..].parse::<u8>().is_ok_and(|n| (1..=24).contains(&n)) => {
             Key::Function(f[1..].parse().unwrap())
         }
