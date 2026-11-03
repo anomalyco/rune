@@ -7,10 +7,21 @@ impl<T: 'static> Overlay<T> {
     /// Draws a frame if one is due; true while it needs more (animating).
     pub(super) fn draw(&mut self) -> bool {
         self.end_fade_out(Instant::now());
-        if !self.drawing() { return false; }
+        if !self.drawing() {
+            self.drain_hidden();
+            return false;
+        }
         let more = self.draw_frame(false);
         self.open_popup();
         more
+    }
+
+    /// A layer surface kept while hidden (prewarmed, not shown yet) still hears the compositor.
+    fn drain_hidden(&mut self) {
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if let Some(Live { backing: Backing::Layer(layer), .. }) = self.live.as_mut() && layer.drain() {
+            self.hide();
+        }
     }
 
     /// Opens the pop-up menu a handler asked for over the overlay's panel. A hidden or occluded

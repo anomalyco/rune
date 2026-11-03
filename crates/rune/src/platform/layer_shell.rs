@@ -491,10 +491,24 @@ impl LayerSurface {
 
     /// Handles what the compositor sent since the last call (winit reads the socket).
     pub fn dispatch(&mut self) -> Changes {
+        self.turn();
+        Changes { size: self.state.configured.take(), input: std::mem::take(&mut self.state.input), scale: self.state.scale.take(), closed: self.state.closed }
+    }
+
+    /// Handles what the compositor sent to a hidden surface and drops its input, keeping size
+    /// and scale for the next `dispatch`; true once the compositor closed it. libwayland frees
+    /// an undispatched event without closing its fd, so a queue left alone leaks every
+    /// `wl_keyboard.keymap` (each virtual keyboard a paste tool makes sends a few).
+    pub fn drain(&mut self) -> bool {
+        self.turn();
+        self.state.input.clear();
+        self.state.closed
+    }
+
+    fn turn(&mut self) {
         let _ = self.queue.dispatch_pending(&mut self.state);
         let _ = self.queue.flush();
         if let Some(watch) = &self.watch { watch.turned(); }
-        Changes { size: self.state.configured.take(), input: std::mem::take(&mut self.state.input), scale: self.state.scale.take(), closed: self.state.closed }
     }
 
     pub fn raw_handles(&self) -> (RawDisplayHandle, RawWindowHandle) {
