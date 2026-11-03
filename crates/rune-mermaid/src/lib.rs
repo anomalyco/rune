@@ -158,10 +158,8 @@ pub struct DiagramStyle {
     pub note_border: Color,
     pub font: TextStyle,
     pub max_width: f32,
-    /// The least a diagram wider than [`Self::max_width`] shrinks to (0.6 by default). Past it,
-    /// the card shows the middle and fades out at its sides. `0.0` always fits the whole
-    /// diagram in.
-    pub min_scale: f32,
+    /// Set with [`Self::min_scale`].
+    min_scale: f32,
 }
 
 impl Hash for DiagramStyle {
@@ -205,6 +203,14 @@ impl DiagramStyle {
             max_width: 680.0,
             min_scale: 0.6,
         }
+    }
+
+    /// The least a diagram wider than [`Self::max_width`] shrinks to (0.6 by default). Past it,
+    /// the card shows the middle and fades out at its sides. `0.0` always fits the whole
+    /// diagram in.
+    pub fn min_scale(mut self, k: f32) -> Self {
+        self.min_scale = k.clamp(0.0, 1.0);
+        self
     }
 }
 
