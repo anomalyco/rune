@@ -190,7 +190,8 @@ pub struct Instance {
     /// x0, y0, x1, y1
     pub clip: [f32; 4],
     /// Attribute 7 is Uint32x4; the instance ABI stays 128 bytes (8 × vec4).
-    /// [0] = pack2x16float(left, top), [1] = pack2x16float(right, bottom) widths.
+    /// [0] = pack2x16float(left, top), [1] = pack2x16float(right, bottom) widths; a negative
+    /// width ramps linearly, a positive one on smoothstep.
     /// [2] = pack4x8unorm(clamp(inward origin→clip distance / width, 0, 1)), LTRB.
     /// [3] = signed uniform f32 clip-radius bits or tagged mixed radii (`pack_clip_radii`).
     /// The rounded rectangle is `clip`; fade widths never occupy this word.
@@ -201,17 +202,20 @@ pub struct Instance {
 const _: () = assert!(std::mem::size_of::<Instance>() == 128);
 
 pub fn pack_fade(width: [f32; 4], origin: [f32; 4], clip: [f32; 4]) -> [u32; 4] {
-    let halves = width.map(|w| half::f16::from_f32(w.clamp(0.0, 65504.0)).to_bits() as u32);
+    // A negative width is a linear ramp of that width (`El::clip_fade_linear`).
+    let halves = width.map(|w| half::f16::from_f32(w.clamp(-65504.0, 65504.0)).to_bits() as u32);
     let mut offsets = 0;
     for edge in 0..4 {
         let distance = if edge < 2 { clip[edge] - origin[edge] } else { origin[edge] - clip[edge] };
-        let offset = if width[edge] > 0.0 { (distance / width[edge]).clamp(0.0, 1.0) } else { 0.0 };
+        let w = width[edge].abs();
+        let offset = if w > 0.0 { (distance / w).clamp(0.0, 1.0) } else { 0.0 };
         offsets |= ((offset * 255.0 + 0.5) as u32) << (edge * 8);
     }
     [halves[0] | (halves[1] << 16), halves[2] | (halves[3] << 16), offsets, 0]
 }
 
-/// Decode widths and normalized origin offsets for tools inspecting the instance stream.
+/// Decode widths and normalized origin offsets for tools inspecting the instance stream. A
+/// negative width is a linear ramp.
 pub fn unpack_fade(fade: [u32; 4]) -> ([f32; 4], [f32; 4]) {
     (std::array::from_fn(|e| half::f16::from_bits((fade[e / 2] >> ((e % 2) * 16)) as u16).to_f32()),
      std::array::from_fn(|e| ((fade[2] >> (e * 8)) & 255) as f32 / 255.0))

@@ -32,11 +32,16 @@ fn sd_rounded(p: vec2<f32>, half: vec2<f32>, radii: vec4<f32>) -> f32 {
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r;
 }
 
+// A soft edge's coverage `d` in from it: smoothstep over `fade`, linear over `-fade` when it's
+// negative (`El::clip_fade_linear`), and a hard, anti-aliased edge at zero.
 fn ramp(d: f32, fade: f32) -> f32 {
-    if (fade <= 0.0) {
+    if (fade == 0.0) {
         return clamp(d + 0.5, 0.0, 1.0);
     }
-    let x = clamp(d / fade, 0.0, 1.0);
+    let x = clamp(d / abs(fade), 0.0, 1.0);
+    if (fade < 0.0) {
+        return x;
+    }
     return x * x * (3.0 - 2.0 * x);
 }
 
@@ -66,7 +71,7 @@ fn clip_alpha(p: vec2<f32>, c: vec4<f32>, packed: vec4<u32>) -> f32 {
         if offset[edge] >= 1.0 {
             a = ramp(hard[edge], 0.0);
         } else if offset[edge] > 0.0 {
-            a = min(ramp(hard[edge], 0.0), ramp(hard[edge] + offset[edge] * f[edge], f[edge]));
+            a = min(ramp(hard[edge], 0.0), ramp(hard[edge] + offset[edge] * abs(f[edge]), f[edge]));
         }
         alpha *= a;
     }

@@ -200,3 +200,26 @@ fn nested_row_text_keeps_full_alpha_in_the_middle_of_a_faded_list() {
         assert!(alpha(&faded[top.clone()]) < alpha(&plain[top]), "the ancestor fade still acts at the list edge");
     }
 }
+
+#[test]
+fn a_linear_fade_falls_in_proportion_to_distance_from_the_edge() {
+    fn faded(linear: &bool, _: &mut Cx<bool>) -> El {
+        let content = el().size(100.0, 100.0).fill(Color::WHITE);
+        let clip = col().size(100.0, 100.0);
+        if *linear { clip.clip_fade_linear(0.0, 0.0, 0.0, 40.0) } else { clip.clip_fade(0.0, 0.0, 0.0, 40.0) }.child(content)
+    }
+    let gpu = Gpu::headless();
+    let mut linear = Runtime::new(true, faded, (100.0, 100.0), Env::new(true, 1.0));
+    let mut smooth = Runtime::new(false, faded, (100.0, 100.0), Env::new(true, 1.0));
+    linear.frame(0.0); smooth.frame(0.0);
+    let bottom = |rt: &Runtime<bool>| rt.instances.iter().map(|i| rune::render::unpack_fade(i.fade).0[3]).find(|&w| w != 0.0);
+    assert_eq!((bottom(&linear), bottom(&smooth)), (Some(-40.0), Some(40.0)), "a linear width packs negative");
+    let (lin, eased) = (pixels(&gpu, &mut linear, (100, 100)), pixels(&gpu, &mut smooth, (100, 100)));
+    // Row `y` has its centre 99.5 - y in from the bottom edge.
+    for (y, x) in [(89, 0.2625), (79, 0.5125), (69, 0.7625)] {
+        let a = alpha(&lin, 100, 50, y);
+        assert!((f32::from(a) - x * 255.0).abs() <= 2.0, "row {y}: {a}, want {}", x * 255.0);
+    }
+    assert!(alpha(&eased, 100, 50, 89) < alpha(&lin, 100, 50, 89) - 20, "smoothstep stays lower near the edge");
+    assert_eq!(alpha(&lin, 100, 50, 50), 255, "whole above the ramp");
+}

@@ -25,7 +25,8 @@ pub struct VisualCold {
     pub border_dash_phase: f32,
     pub shadows: Vec<Shadow>,
     pub blur_motion: Option<Box<Anim>>,
-    /// Soft clip of children to this rect: fade widths left, top, right, bottom.
+    /// Soft clip of children to this rect: fade widths left, top, right, bottom. A negative
+    /// width ramps linearly (`El::clip_fade_linear`).
     pub clip: Option<[f32; 4]>,
     /// Rounded clip of this element and its subtree, applied after subtree filters.
     pub clip_radius: Option<f32>,

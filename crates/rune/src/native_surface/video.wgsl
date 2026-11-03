@@ -35,8 +35,10 @@ fn sample_linear(uv: vec2<f32>) -> vec4<f32> {
     return convert(textureSampleLevel(plane0, filtering, uv, 0.0), textureSampleLevel(plane1, filtering, uv, 0.0).rg);
 }
 fn ramp(d: f32, width: f32) -> f32 {
-    if width <= 0.0 { return clamp(d + 0.5, 0.0, 1.0); }
-    let x = clamp(d / width, 0.0, 1.0); return x*x*(3.0-2.0*x);
+    if width == 0.0 { return clamp(d + 0.5, 0.0, 1.0); }
+    let x = clamp(d / abs(width), 0.0, 1.0);
+    if width < 0.0 { return x; }
+    return x*x*(3.0-2.0*x);
 }
 @fragment fn fs(i: Out) -> @location(0) vec4<f32> {
     let p = i.pos.xy + u.viewport.zw;
@@ -82,7 +84,7 @@ fn ramp(d: f32, width: f32) -> f32 {
         if offset[edge] >= 1.0 {
             a = ramp(hard[edge], 0.0);
         } else if offset[edge] > 0.0 {
-            a = min(ramp(hard[edge], 0.0), ramp(hard[edge] + offset[edge] * fade[edge], fade[edge]));
+            a = min(ramp(hard[edge], 0.0), ramp(hard[edge] + offset[edge] * abs(fade[edge]), fade[edge]));
         }
         clip *= a;
     }

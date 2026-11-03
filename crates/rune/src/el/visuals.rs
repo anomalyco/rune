@@ -342,7 +342,14 @@ impl El {
     }
     /// Soft clip with a fade width per side (left, top, right, bottom).
     pub fn clip_fade(mut self, left: f32, top: f32, right: f32, bottom: f32) -> Self {
-        self.vis.cold_mut().clip = Some([left, top, right, bottom]);
+        self.vis.cold_mut().clip = Some([left, top, right, bottom].map(|w| w.max(0.0)));
+        self
+    }
+    /// [`Self::clip_fade`] with linear ramps: alpha falls in proportion to distance, from whole
+    /// `width` in from each side to nothing at it, rather than easing at both ends. A mask that
+    /// runs straight into an edge, such as a transcript fading into the top of a composer.
+    pub fn clip_fade_linear(mut self, left: f32, top: f32, right: f32, bottom: f32) -> Self {
+        self.vis.cold_mut().clip = Some([left, top, right, bottom].map(|w| -w.max(0.0)));
         self
     }
     /// Track hover for descendants' `group_*` styles (see [`Visual::hover_group`]).

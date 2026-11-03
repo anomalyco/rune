@@ -661,7 +661,7 @@ impl<S: 'static> Runtime<S> {
             // image over its placeholder fill, a label over its bubble) the one beneath shows
             // through the fade, and the stack brightens or darkens towards the edge. A stack that
             // reaches into a soft edge composites as one layer, which takes the fade once.
-            if !isolate && visible && effective_opacity > 0.001 && fade.iter().any(|&f| f > 0.0)
+            if !isolate && visible && effective_opacity > 0.001 && fade.iter().any(|&f| f != 0.0)
                 && in_fade([r[0], r[1], r[0] + w, r[1] + h], clip, fade, fade_origin)
             {
                 let v = &n.vis;

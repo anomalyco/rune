@@ -1,0 +1,1 @@
+- `El::clip_fade_linear` is `clip_fade` with linear ramps: alpha falls in proportion to distance from each side, for a mask that runs straight into an edge such as the top of a composer. It packs as a negative fade width, so `clip_fade` now clamps its widths at zero.

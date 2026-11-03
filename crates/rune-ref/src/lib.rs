@@ -114,7 +114,8 @@ impl Scene {
                 || (!matches!(p.params[1] as u32, 9 | 12) && (p.rect[2] <= 0.0 || p.rect[3] <= 0.0))
                 || p.rect[2] < 0.0
                 || p.rect[3] < 0.0
-                || p.radii.iter().chain(p.fade.iter()).any(|v| *v < 0.0)
+                // A negative fade width is a linear ramp.
+                || p.radii.iter().any(|v| *v < 0.0)
                 || !(0..=4).chain([8, 9, 10, 11, 12]).any(|k| p.params[1] == k as f32)
                 // A glyph's params[0] is a signed turn; negative is counter-clockwise.
                 || (p.params[0] < 0.0 && p.params[1] != 2.0)

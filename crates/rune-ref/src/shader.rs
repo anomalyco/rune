@@ -40,11 +40,11 @@ fn sd_continuous(p: [f32; 2], h: [f32; 2], r: f32) -> f32 {
     sqrtf(v[0] * v[0] + v[1] * v[1]) - e * g
 }
 fn ramp(d: f32, fade: f32) -> f32 {
-    if fade <= 0.0 {
+    if fade == 0.0 {
         return clamp(d + 0.5);
     }
-    let x = clamp(d / fade);
-    x * x * (3.0 - 2.0 * x)
+    let x = clamp(d / fade.abs());
+    if fade < 0.0 { x } else { x * x * (3.0 - 2.0 * x) }
 }
 fn erf(x: f32) -> f32 {
     let s = if x > 0.0 {
@@ -293,12 +293,13 @@ fn clip_coverage(i: &Primitive, screen: [f32; 2]) -> f32 {
     let p = screen;
     let hard = [p[0] - i.clip[0], p[1] - i.clip[1], i.clip[2] - p[0], i.clip[3] - p[1]];
     (0..4).map(|edge| {
-        let width = half::f16::from_f32(i.fade[edge].clamp(0.0, 65504.0)).to_f32();
+        let width = half::f16::from_f32(i.fade[edge].clamp(-65504.0, 65504.0)).to_f32();
         let distance = if edge < 2 { i.clip[edge] - origin[edge] } else { origin[edge] - i.clip[edge] };
-        let offset = if i.fade[edge] > 0.0 { (distance / i.fade[edge]).clamp(0.0, 1.0) } else { 0.0 };
+        let w = i.fade[edge].abs();
+        let offset = if w > 0.0 { (distance / w).clamp(0.0, 1.0) } else { 0.0 };
         let offset = libm::floorf(offset * 255.0 + 0.5) / 255.0;
         if offset >= 1.0 { ramp(hard[edge], 0.0) }
-        else if offset > 0.0 { ramp(hard[edge], 0.0).min(ramp(hard[edge] + offset * width, width)) }
+        else if offset > 0.0 { ramp(hard[edge], 0.0).min(ramp(hard[edge] + offset * width.abs(), width)) }
         else { ramp(hard[edge], width) }
     }).product()
 }
@@ -306,6 +307,15 @@ fn clip_coverage(i: &Primitive, screen: [f32; 2]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_negative_fade_ramps_linearly_and_a_positive_one_eases() {
+        for (d, linear) in [(0.0, 0.0), (4.0, 0.25), (8.0, 0.5), (12.0, 0.75), (16.0, 1.0), (20.0, 1.0)] {
+            assert!((ramp(d, -16.0) - linear).abs() < 1e-6, "linear at {d}: {}", ramp(d, -16.0));
+        }
+        assert!((ramp(4.0, 16.0) - 0.15625).abs() < 1e-6, "smoothstep a quarter in");
+        assert_eq!(ramp(8.0, 16.0), ramp(8.0, -16.0), "both are half way at the middle");
+    }
 
     // Walking the ring's centre line clockwise, arc length grows by the distance walked and
     // comes back round to zero after exactly the line's length.
