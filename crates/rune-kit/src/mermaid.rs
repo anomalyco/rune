@@ -42,21 +42,7 @@ pub(crate) fn diagram(src: &str, paint: &DiagramPaint, streaming: bool, open: bo
     };
     render(
         src,
-        &DiagramStyle {
-            text: paint.text,
-            muted: paint.muted,
-            surface: paint.surface,
-            surface_border: paint.surface_border,
-            node_fill: paint.node_fill,
-            node_border: paint.node_border,
-            line: paint.line,
-            cluster_fill: paint.cluster_fill,
-            note_fill: paint.note_fill,
-            note_border: paint.note_border,
-            font: paint.font,
-            max_width: paint.max_width,
-            min_scale: paint.min_scale,
-        },
+        &style(paint),
         match (paint.hover.a > 0.0, paint.hover_neighbours) {
             (false, _) => Hover::Off,
             (true, false) => Hover::Edges,
@@ -64,4 +50,22 @@ pub(crate) fn diagram(src: &str, paint: &DiagramPaint, streaming: bool, open: bo
         },
         paint.hover,
     )
+}
+
+/// `paint` as `rune_mermaid`'s style.
+fn style(paint: &DiagramPaint) -> DiagramStyle {
+    let mut s = DiagramStyle::neutral(false).min_scale(paint.min_scale);
+    s.text = paint.text;
+    s.muted = paint.muted;
+    s.surface = paint.surface;
+    s.surface_border = paint.surface_border;
+    s.node_fill = paint.node_fill;
+    s.node_border = paint.node_border;
+    s.line = paint.line;
+    s.cluster_fill = paint.cluster_fill;
+    s.note_fill = paint.note_fill;
+    s.note_border = paint.note_border;
+    s.font = paint.font;
+    s.max_width = paint.max_width;
+    s
 }

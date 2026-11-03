@@ -40,7 +40,7 @@ fn each_drawn_diagram_comes_to_the_frame_with_its_place_and_source() {
     }
 }
 
-const WIDE: &str = "```mermaid\nsequenceDiagram\n  participant S as Slack workspace\n  participant T as Slack thread worker\n  participant C as Console core service\n  participant O as OpenCode in the bot\n  participant G as Console gateway\n  participant H as Honeycomb account\n  S->>T: a mention arrives in the thread\n  T->>C: is the integration gateway flag on?\n  O->>G: call honeycomb.query with the key\n  G->>H: forward the query\n```\n";
+const WIDE: &str = "```mermaid\nsequenceDiagram\n  participant B as Browser on a laptop\n  participant E as Edge cache in front\n  participant A as Auth service cluster\n  participant P as Payments API server\n  participant W as Billing worker pool\n  participant S as Search index shard\n  B->>E: a request arrives at the edge\n  E->>A: is this session token still valid?\n  P->>W: enqueue the invoice with the scope\n  W->>S: index the invoice\n```\n";
 
 fn wide_view(min: &Option<f32>, _: &mut Cx<Option<f32>>) -> El {
     let style = MarkdownStyle::neutral(true).diagram_max_width(420.0);
