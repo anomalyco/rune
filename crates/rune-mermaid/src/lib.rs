@@ -158,6 +158,10 @@ pub struct DiagramStyle {
     pub note_border: Color,
     pub font: TextStyle,
     pub max_width: f32,
+    /// The least a diagram wider than [`Self::max_width`] shrinks to (0.6 by default). Past it,
+    /// the card shows the middle and fades out at its sides. `0.0` always fits the whole
+    /// diagram in.
+    pub min_scale: f32,
 }
 
 impl Hash for DiagramStyle {
@@ -178,6 +182,7 @@ impl Hash for DiagramStyle {
         self.font.hash(state);
         let bits = if self.max_width == 0.0 { 0 } else if self.max_width.is_nan() { f32::NAN.to_bits() } else { self.max_width.to_bits() };
         bits.hash(state);
+        self.min_scale.to_bits().hash(state);
     }
 }
 
@@ -198,6 +203,7 @@ impl DiagramStyle {
             note_border: oklch(if dark { 0.4 } else { 0.85 }, 0.08, 80.0),
             font: TextStyle::new(13.0, 400.0).lh(18.0),
             max_width: 680.0,
+            min_scale: 0.6,
         }
     }
 }

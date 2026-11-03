@@ -25,6 +25,9 @@ pub(super) struct Renderer {
     /// The next of `tasks`, advanced at each list item in document order.
     pub(super) next_task: Cell<usize>,
     pub(super) current_block_key: RefCell<Rc<str>>,
+    /// `Markdown::diagram_frame`.
+    #[cfg(feature = "mermaid")]
+    pub(super) diagram_frame: Option<FrameWire>,
 }
 
 /// The keys [`Renderer::blocks`] gives `n` blocks.
@@ -335,7 +338,9 @@ impl Renderer {
     /// (or for a type it doesn't draw), its source as a code block. While [`Renderer::streaming`],
     /// a fence whose header may yet draw shows nothing until it does, so the source never
     /// flashes before the diagram.
-    pub(super) fn mermaid(&self, src: &str, source: Option<&Source>, map: Option<&SpanMap>) -> El {
+    pub(super) fn mermaid(&self, src: &str, source: Option<&Source>, map: Option<&SpanMap>, index: usize) -> El {
+        #[cfg(not(feature = "mermaid"))]
+        let _ = index;
         #[cfg(feature = "mermaid")]
         {
             let open = source.is_some_and(|s| s.open);
@@ -344,7 +349,12 @@ impl Renderer {
             // and the card mounts into it (fading in) rather than the block turning into one.
             let holder = || col().w_full().transition(rune::Transition::none());
             if let Some(d) = crate::mermaid::diagram(lines, &self.s.diagram, self.streaming, open) {
-                return holder().child(d.key("card"));
+                let card = d.key("card");
+                let card = match &self.diagram_frame {
+                    Some(f) => f(card, &DiagramFrame { index, source: lines, open }),
+                    None => card,
+                };
+                return holder().child(card);
             }
             if open && self.streaming && crate::mermaid::may_draw(lines) {
                 return holder();
@@ -417,7 +427,7 @@ impl Renderer {
             Block::Mermaid(src) => {
                 let n = self.next_source.get();
                 self.next_source.set(n + 1);
-                self.mermaid(src, self.sources.get(n).filter(|s| s.len == src.len()), code_map)
+                self.mermaid(src, self.sources.get(n).filter(|s| s.len == src.len()), code_map, n)
             }
             Block::Table(t) => {
                 let (head_maps, row_maps) = match map {

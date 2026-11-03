@@ -14,9 +14,10 @@ pub(crate) fn room(paint: &DiagramStyle) -> f32 {
     paint.max_width - 2.0 * CARD_PAD - 2.0
 }
 
-/// How much a canvas `width` points wide is drawn at to fit its card in `paint.max_width`.
+/// How much a canvas `width` points wide is drawn at to fit its card in `paint.max_width`, down
+/// to `paint.min_scale`.
 fn fit(width: f32, paint: &DiagramStyle) -> f32 {
-    if width <= room(paint) { 1.0 } else { (room(paint) / width).max(0.6) }
+    if width <= room(paint) { 1.0 } else { (room(paint) / width).max(paint.min_scale.clamp(0.0, 1.0)) }
 }
 
 /// Text measured for a diagram: its size, and whether it wraps at [`WRAP`].
@@ -368,6 +369,11 @@ impl Scene {
             .clip_rounded(6.0)
             .animate_layout()
             .transition(still(Transition::opacity()));
+        if self.size[0] > room(paint) + 0.5 {
+            // Shrunk as far as `min_scale` lets it and still too wide: its sides fade out under
+            // the card's padding rather than stopping at a hard edge.
+            card = card.clip_fade(CARD_PAD, 0.0, CARD_PAD, 0.0);
+        }
         if let Some(title) = &self.title {
             let tf = TextStyle { size: paint.font.size + 1.0, line_height: paint.font.line_height + 2.0, weight: 600.0, ..paint.font };
             card = card.gap(12.0).child(text(title.clone()).key("title").font(tf).color(paint.text).transition(still(Transition::opacity())));

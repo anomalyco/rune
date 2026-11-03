@@ -92,6 +92,8 @@ pub use list::List;
 pub use list::ListItem;
 #[cfg(feature = "markdown")]
 pub use markdown::Case;
+#[cfg(feature = "mermaid")]
+pub use markdown::DiagramFrame;
 #[cfg(feature = "markdown")]
 pub use markdown::Highlight;
 #[cfg(feature = "markdown")]

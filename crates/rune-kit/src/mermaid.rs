@@ -55,6 +55,7 @@ pub(crate) fn diagram(src: &str, paint: &DiagramPaint, streaming: bool, open: bo
             note_border: paint.note_border,
             font: paint.font,
             max_width: paint.max_width,
+            min_scale: paint.min_scale,
         },
         match (paint.hover.a > 0.0, paint.hover_neighbours) {
             (false, _) => Hover::Off,

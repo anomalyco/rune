@@ -131,6 +131,22 @@ pub struct Table {
 }
 
 type TaskWire = Rc<dyn Fn(El, Rc<str>, usize, bool) -> El>;
+#[cfg(feature = "mermaid")]
+type FrameWire = Rc<dyn Fn(El, &DiagramFrame<'_>) -> El>;
+
+/// A diagram [`Markdown::diagram_frame`] is wrapping.
+#[cfg(feature = "mermaid")]
+#[non_exhaustive]
+pub struct DiagramFrame<'a> {
+    /// Its place among the document's fenced blocks (code and diagrams), counted from 0. A
+    /// stream only adds blocks after it, so this stays put while the reply arrives.
+    pub index: usize,
+    /// The lines it draws: the whole fence, or while the fence is still arriving, its
+    /// complete lines.
+    pub source: &'a str,
+    /// The fence is still arriving.
+    pub open: bool,
+}
 
 /// Markdown source as an element. See the module docs for cost and keys.
 pub struct Markdown {
@@ -151,6 +167,8 @@ pub struct Markdown {
     copy_source: bool,
     scroll_wide: bool,
     highlighter: Highlighter,
+    #[cfg(feature = "mermaid")]
+    diagram_frame: Option<FrameWire>,
 }
 
 #[cfg(test)]
@@ -161,7 +179,9 @@ thread_local! {
 impl Markdown {
     pub fn new(src: impl Into<String>) -> Markdown {
         Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_ring: None,
-            on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, highlighter: Highlighter::builtin() }
+            on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, highlighter: Highlighter::builtin(),
+            #[cfg(feature = "mermaid")]
+            diagram_frame: None }
     }
     /// Highlight UTF-8 byte ranges of the Markdown source string (see [`find`]).
     ///
@@ -287,6 +307,19 @@ impl Markdown {
         self
     }
 
+    /// Draws `f(card, frame)` in place of each diagram's card, so an app can put its own
+    /// controls on it (a button that opens it larger) or key it. Fences that draw as their
+    /// source, or nothing yet while streaming, don't come here.
+    ///
+    /// ```ignore
+    /// Markdown::new(src).diagram_frame(|card, d| col().key(format!("diagram-{}", d.index)).child(card).child(open_button(d.source)))
+    /// ```
+    #[cfg(feature = "mermaid")]
+    pub fn diagram_frame(mut self, f: impl Fn(El, &DiagramFrame<'_>) -> El + 'static) -> Self {
+        self.diagram_frame = Some(Rc::new(f));
+        self
+    }
+
     /// Colours code blocks with `f` instead of the built-in scanners: it gets a fence's language
     /// as written (its info string's first word; `None` for an indented block or a bare fence)
     /// and the code, and returns byte ranges of the code with a token kind, which the style's
@@ -360,7 +393,9 @@ impl Markdown {
         let r = Renderer { s: style.clone(), highlights: self.highlights, reveal: self.reveal, streaming: self.streaming, on_link: self.on_link, on_link_secondary: self.on_link_secondary, link_look: self.link_look, link_ring: self.link_ring,
             on_task: self.on_task, tasks_read_only: self.tasks_read_only, selectable: self.selectable, scroll_wide: self.scroll_wide,
             highlighter: self.highlighter, sources, next_source: Cell::new(0), tasks, next_task: Cell::new(0),
-            current_block_key: RefCell::new("b0".into()) };
+            current_block_key: RefCell::new("b0".into()),
+            #[cfg(feature = "mermaid")]
+            diagram_frame: self.diagram_frame };
         let root = r.blocks(&blocks, &maps, &keys, true).selection_group(self.selectable);
         if !(self.selectable && self.copy_source) { return root; }
         let names: Rc<[String]> = rendered_keys(blocks.len(), &keys).into();
