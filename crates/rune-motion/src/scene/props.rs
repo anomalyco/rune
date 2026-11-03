@@ -16,6 +16,19 @@ impl Scene {
         self.intent(id, bits, anim.curve.logical_duration());
     }
 
+    /// Puts the node at `frame` now, ending any motion toward another: a frame a live value
+    /// drives, set after this frame stepped, still draws in it.
+    pub fn land_frame(&mut self, id: NodeId, frame: Rect) {
+        let Some(i) = self.slot(id) else { return };
+        let old = self.nodes[i].frame;
+        if old == frame && self.nodes[i].path.is_none() && !self.store.is_animating(id, prop::FRAME) { return; }
+        if frame.w != old.w { self.rebase_trailing(i, frame.w - old.w); }
+        self.end_path(i);
+        self.nodes[i].frame = frame;
+        self.track_set(i, prop::FRAME, frame);
+        self.nodes[i].dirty = true;
+    }
+
     /// Sets a property immediately (direct manipulation).
     pub fn set<T: Animatable>(&mut self, id: NodeId, prop: Prop<T>, value: T) {
         if self.in_flight_to(id, prop, value) {

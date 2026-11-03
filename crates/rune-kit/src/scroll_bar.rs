@@ -172,6 +172,33 @@ mod tests {
     }
 
     #[test]
+    fn new_content_moves_the_thumb_at_once() {
+        let mut rt = rune::Runtime::new(20usize, view, (200.0, 100.0), rune::Env::new(true, 1.0));
+        rt.set_live_waker(std::sync::Arc::new(|| {}));
+        for _ in 0..60 { rt.frame(1.0 / 60.0); }
+        rt.update(|rows, tx| { *rows = 40; tx.instant(); });
+        rt.frame(1.0 / 120.0);
+        let moving: Vec<_> = rt.elements().into_iter().filter(|e| e.moving).map(|e| e.path).collect();
+        assert!(moving.is_empty(), "{moving:?}");
+        assert_eq!(rect(&rt, "thumb")[3], 24.0f32.max(96.0 * 100.0 / 800.0));
+    }
+
+    #[test]
+    fn a_new_bar_lands_at_once() {
+        fn shown(rows: &usize, cx: &mut rune::Cx<usize>) -> El {
+            if *rows == 0 { col().size(200.0, 100.0) } else { view(rows, cx) }
+        }
+        let mut rt = rune::Runtime::new(0usize, shown, (200.0, 100.0), rune::Env::new(true, 1.0));
+        rt.set_live_waker(std::sync::Arc::new(|| {}));
+        for _ in 0..60 { rt.frame(1.0 / 60.0); }
+        rt.update(|rows, tx| { *rows = 40; tx.instant(); });
+        rt.frame(1.0 / 120.0);
+        let moving: Vec<_> = rt.elements().into_iter().filter(|e| e.moving).map(|e| e.path).collect();
+        assert!(moving.is_empty(), "{moving:?}");
+        assert_eq!(rect(&rt, "thumb")[3], 24.0);
+    }
+
+    #[test]
     fn content_that_fits_shows_no_bar_and_presses_through() {
         let mut rt = rune::Runtime::new(3usize, view, (200.0, 100.0), rune::Env::new(true, 1.0));
         rt.frame(0.0);

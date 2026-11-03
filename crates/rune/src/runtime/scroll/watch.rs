@@ -111,6 +111,31 @@ mod tests {
         assert_eq!(told.get(), before + 1, "and the frame after didn't again");
     }
 
+    #[test]
+    fn a_live_rect_set_from_the_offset_lands_in_the_frame_that_mounts_it() {
+        struct On { on: bool, bar: Live<[f32; 4]> }
+        fn view(s: &On, _: &mut Cx<On>) -> El {
+            let mut root = col().size(200.0, 100.0);
+            if s.on {
+                let bar = s.bar.clone();
+                root = root
+                    .child(col().size(200.0, 100.0).scroll(ScrollSpec { stick_bottom: false })
+                        .on_scroll_offset(move |at: ScrollPos| { bar.set([10.0, 5.0, 6.0, at.max[1] / 10.0]); })
+                        .child(el().w_full().h(400.0)))
+                    .child(el().key("bar").absolute(0.0, 0.0).live_rect(&s.bar).fill(Color::WHITE));
+            }
+            root
+        }
+        let mut rt = Runtime::new(On { on: false, bar: Live::new([0.0; 4]) }, view, (200.0, 100.0), Env::default());
+        rt.set_live_waker(std::sync::Arc::new(|| {}));
+        rt.frame(0.0);
+        rt.update(|s, tx| { s.on = true; tx.instant(); });
+        rt.frame(1.0 / 120.0);
+        let bar = info(&rt, "bar");
+        assert_eq!(bar.rect, [10.0, 5.0, 6.0, 30.0]);
+        assert!(!bar.moving);
+    }
+
     fn info<T>(rt: &Runtime<T>, key: &str) -> ElementInfo {
         rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap()
     }

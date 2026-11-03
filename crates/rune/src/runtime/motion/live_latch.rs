@@ -106,8 +106,11 @@ impl<S: 'static> Runtime<S> {
                     }
                     Property::Rect => {
                         let [x, y, w, h] = <[f32; 4]>::decode(bits);
-                        self.scene.set_frame(node.id, MRect::new(x, y, w.max(0.0), h.max(0.0)),
-                            spring.map_or(LayoutAnim::INSTANT, LayoutAnim::new));
+                        let frame = MRect::new(x, y, w.max(0.0), h.max(0.0));
+                        match spring {
+                            Some(spring) => self.scene.set_frame(node.id, frame, LayoutAnim::new(spring)),
+                            None => self.scene.land_frame(node.id, frame),
+                        }
                     }
                 }
             }
