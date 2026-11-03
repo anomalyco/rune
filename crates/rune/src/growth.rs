@@ -24,6 +24,9 @@ pub struct StreamEdge {
     pub duration: f32,
     /// Clip the row at its presented height (else content overflows while it grows).
     pub clip: bool,
+    /// A streaming row, and its catch-up once the stream ends, draws past its presented height,
+    /// unclipped and unmasked, into space the app keeps below it; other rows still clip.
+    pub overflow: bool,
     /// Word fade-in duration in seconds (0 = words appear at once).
     pub word_fade: f32,
 }
@@ -38,6 +41,7 @@ pub mod edge {
         catch_up: 1.0,
         duration: 1.0,
         clip: true,
+        overflow: false,
         word_fade: 0.18,
     };
     pub const FAST_FEATHER: StreamEdge = StreamEdge {
@@ -48,6 +52,7 @@ pub mod edge {
         catch_up: 2.4,
         duration: 0.55,
         clip: true,
+        overflow: false,
         word_fade: 0.18,
     };
     pub const NO_MASK: StreamEdge = StreamEdge {
@@ -58,6 +63,7 @@ pub mod edge {
         catch_up: 1.0,
         duration: 1.0,
         clip: false,
+        overflow: false,
         word_fade: 0.0,
     };
     pub const WORD_FADE: StreamEdge = StreamEdge {
@@ -68,6 +74,7 @@ pub mod edge {
         catch_up: 1.0,
         duration: 1.0,
         clip: false,
+        overflow: false,
         word_fade: 0.36,
     };
     pub const ALL: [StreamEdge; 4] = [FEATHER, FAST_FEATHER, NO_MASK, WORD_FADE];
