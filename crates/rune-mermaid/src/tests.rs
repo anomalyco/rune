@@ -165,3 +165,19 @@ pub(crate) fn assert_prefixes_never_panic(src: &str, dark: bool) {
     }
     assert!(scene(src, &paint, None).is_some());
 }
+
+/// Seven lanes with long names: wider than a 420-point column even at 60%.
+const WIDE_SEQUENCE: &str = "sequenceDiagram\n  autonumber\n  participant S as Slack workspace\n  participant T as Slack thread worker\n  participant C as Console core service\n  participant O as OpenCode in the bot\n  participant G as Console gateway\n  participant H as Honeycomb account\n  participant L as Long-running audit log\n  S->>T: a mention arrives in the thread\n  T->>C: is the integration gateway flag on?\n  C-->>T: yes, here is the service account\n  T->>O: build the turn with its key\n  O->>G: call honeycomb.query with the key\n  G->>H: forward the query\n  H-->>G: rows\n  G->>L: record the call\n  G-->>O: rows\n  O-->>T: the reply";
+
+#[test]
+fn min_scale_zero_fits_any_width() {
+    let narrow = DiagramStyle { max_width: 420.0, ..DiagramStyle::neutral(true) };
+    let room = super::canvas::room(&narrow);
+    let floored = scene(WIDE_SEQUENCE, &narrow, None).expect("draws");
+    assert!((floored.scale - 0.6).abs() < 1e-4 && floored.size[0] > room, "by default it stops at 60%: {} at {}", floored.size[0], floored.scale);
+    let fits = scene(WIDE_SEQUENCE, &DiagramStyle { min_scale: 0.0, ..narrow }, None).expect("draws");
+    assert!(fits.size[0] <= room + 2.01, "min_scale 0 fits the room {room}: {}", fits.size[0]);
+    assert!(fits.scale < 0.6 && (fits.full[1] * fits.scale - fits.size[1]).abs() < 0.01, "it shrinks evenly: {}", fits.scale);
+    let roomy = DiagramStyle { max_width: 4000.0, min_scale: 0.0, ..narrow };
+    assert_eq!(scene(WIDE_SEQUENCE, &roomy, None).expect("draws").scale, 1.0, "never grows past full size");
+}

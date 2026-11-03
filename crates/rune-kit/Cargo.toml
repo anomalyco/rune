@@ -51,5 +51,9 @@ required-features = ["markdown", "mermaid"]
 name = "markdown_diagram_stream"
 required-features = ["markdown", "mermaid"]
 
+[[test]]
+name = "markdown_diagram_frame"
+required-features = ["markdown", "mermaid"]
+
 [lints]
 workspace = true

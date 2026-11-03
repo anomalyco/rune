@@ -113,6 +113,7 @@ pub(crate) struct DiagramPaint {
     pub note_border: Color,
     pub font: TextStyle,
     pub max_width: f32,
+    pub min_scale: f32,
     pub hover: Color,
     pub hover_neighbours: bool,
 }
@@ -197,6 +198,7 @@ impl MarkdownStyle {
                 note_border: c.warning.border,
                 font: TextStyle { size: 13.0, line_height: 18.0, ..k.ty.body },
                 max_width: 680.0,
+                min_scale: 0.6,
                 hover: k.alpha(c.text_base, 0.9),
                 hover_neighbours: false,
             },
@@ -371,6 +373,13 @@ impl MarkdownStyle {
         self.diagram.max_width = points.max(120.0);
         self
     }
+    /// The least a diagram wider than [`Self::diagram_max_width`] shrinks to (0.6 by default).
+    /// Past it, the card shows the middle and its sides fade out. `0.0` always fits the whole
+    /// diagram in, however small that draws it.
+    pub fn diagram_min_scale(mut self, k: f32) -> Self {
+        self.diagram.min_scale = k.clamp(0.0, 1.0);
+        self
+    }
     /// What lights up while the pointer is over a flowchart or state diagram node: its edges and
     /// their labels in `color` (the text colour by default; transparent turns it off), and with
     /// `neighbours` its outline and the outlines of the nodes they reach. Pointing at an edge or
@@ -516,10 +525,11 @@ impl std::hash::Hash for MarkdownStyle {
             note_border,
             font,
             max_width,
+            min_scale,
             hover,
             hover_neighbours,
         } = diagram;
         (text, muted, surface, surface_border, node_fill, node_border, line, cluster_fill, note_fill, note_border).hash(state);
-        (font, f32_bits(max_width), hover, hover_neighbours).hash(state);
+        (font, f32_bits(max_width), f32_bits(min_scale), hover, hover_neighbours).hash(state);
     }
 }
