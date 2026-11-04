@@ -301,7 +301,7 @@ impl Kit {
     /// offsets through live values with zero view rebuilds per scroll frame.
     #[track_caller]
     pub fn scroll_bar(&self, viewport: El) -> El {
-        crate::scroll_bar::wrap(self, viewport, std::panic::Location::caller())
+        crate::scroll_bar::wrap(crate::ScrollBarStyle::from_kit(self), viewport, std::panic::Location::caller())
     }
 }
 

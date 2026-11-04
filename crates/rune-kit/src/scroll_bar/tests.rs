@@ -355,6 +355,45 @@ fn the_thumb_widens_under_the_pointer_and_while_held_without_a_view_run() {
 }
 
 #[test]
+fn a_styled_thumb_takes_its_colours_and_widths_at_rest_and_under_the_pointer() {
+    thread_local! {
+        static STYLED_RUNS: Cell<usize> = const { Cell::new(0) };
+    }
+    const RED: rune::Color = rune::Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 };
+    const BLUE: rune::Color = rune::Color { r: 0.0, g: 0.0, b: 1.0, a: 1.0 };
+    fn styled(_: &(), _: &mut rune::Cx<()>) -> El {
+        STYLED_RUNS.set(STYLED_RUNS.get() + 1);
+        let style = ScrollBarStyle::neutral(true).thumb(RED).thumb_hover(BLUE).width(4.0).hover_width(12.0);
+        col().size(200.0, 100.0).child(
+            col()
+                .key("scroll")
+                .w_full()
+                .h(100.0)
+                .scroll(rune::ScrollSpec { stick_bottom: false })
+                .child(col().children((0..20).map(|i| el().key(format!("row{i}")).w_full().h(20.0))))
+                .scroll_bar_styled(style),
+        )
+    }
+    let mut rt = rune::Runtime::new((), styled, (200.0, 100.0), rune::Env::new(true, 1.0));
+    rt.set_system_scroll_bars(ScrollBars::Always);
+    rt.check_live_only(false);
+    frames(&mut rt, 2);
+    let runs = STYLED_RUNS.get();
+    let rest = info(&rt, "thumb");
+    assert_eq!((rest.rect[0], rest.rect[2], rest.fill), (194.0, 4.0, RED), "thin and red at rest, 2 points in");
+    assert_eq!(rect(&rt, "scroll-bar")[2], 16.0, "the press strip widens to hold the widest thumb");
+
+    rt.pointer_move(185.0, 10.0);
+    frames(&mut rt, 30);
+    let hovered = info(&rt, "thumb");
+    assert_eq!((hovered.rect[0], hovered.rect[2], hovered.fill), (186.0, 12.0, BLUE), "wide and blue over the bar");
+    rt.pointer_move(150.0, 10.0);
+    frames(&mut rt, 30);
+    assert_eq!(info(&rt, "thumb").fill, RED, "red again off it");
+    assert_eq!(STYLED_RUNS.get(), runs, "hovering never runs the view");
+}
+
+#[test]
 fn the_pointer_at_the_right_edge_brings_up_an_overlay_bar() {
     let mut rt = rune::Runtime::new(20usize, hover_view, (200.0, 100.0), rune::Env::new(true, 1.0));
     rt.check_live_only(false);

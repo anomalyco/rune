@@ -7,6 +7,7 @@
 //! there under the "Click in the scroll bar to" preference ([`rune::system_scroller_jumps`];
 //! Option-click does the other). When the content grows or shrinks the thumb glides to its new
 //! length. All of it runs through live values, so scrolling never rebuilds the view.
+//! [`ScrollBarStyle`] sets the thumb's colour and width, at rest and under the pointer.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -14,12 +15,12 @@ use std::panic::Location;
 use std::rc::Rc;
 use std::time::Duration;
 
-use rune::{El, Live, Phase, PointerEvent, ScrollPos, Spring, col, el};
+use rune::{Color, El, Live, Phase, PointerEvent, ScrollPos, Spring, col, el};
 
 use crate::Kit;
 
 /// The strip along the right edge that takes presses: wider than the thumb, for an easier aim,
-/// and wide enough for the thumb under the pointer.
+/// and wide enough for the thumb under the pointer (wider still for a wider styled thumb).
 const TRACK: f32 = 14.0;
 /// The thumb's gap from the viewport's right edge.
 const EDGE: f32 = 2.0;
@@ -37,7 +38,7 @@ const MIN_THUMB: f32 = 24.0;
 const HOLD: Duration = Duration::from_millis(750);
 const ENTER: Spring = Spring::new(0.14, 0.0);
 const LEAVE: Spring = Spring::new(0.28, 0.0);
-/// The thumb widening under the pointer, and gliding to a new length when the content's changes.
+/// The thumb widening and changing colour under the pointer, and gliding to a new length when the content's changes.
 const WIDEN: Spring = Spring::new(0.12, 0.0);
 const PULSE_SPAN: f64 = 0.75 + 0.35;
 /// How long a length glide runs, through which the scrolls that follow it (a feed keeping to its
@@ -50,6 +51,66 @@ const PAGE_EVERY: Duration = Duration::from_millis(60);
 /// The most scroll bars kept between views; past it they're all dropped, and each comes back on
 /// its next commit.
 const KEPT: usize = 256;
+
+/// How a scroll bar's thumb looks, at rest and while the pointer is over the bar or holds the
+/// thumb: `viewport.scroll_bar_styled(ScrollBarStyle::from_kit(&k).thumb_hover(k.c.border_hover))`.
+/// Built from a kit by [`ScrollBarStyle::from_kit`], or without one by
+/// [`ScrollBarStyle::neutral`]; each builder overrides one thing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScrollBarStyle {
+    thumb: Color,
+    thumb_hover: Color,
+    width: f32,
+    hover_width: f32,
+}
+
+impl ScrollBarStyle {
+    /// The kit's thumb: `border_base` and 6 points wide at rest, `border_strong` and 10 points
+    /// under the pointer.
+    pub fn from_kit(k: &Kit) -> Self {
+        Self { thumb: k.c.border_base, thumb_hover: k.c.border_strong, width: THUMB, hover_width: THUMB_HOVER }
+    }
+
+    /// The kit's thumb on Rune's neutral light or dark tokens, for apps without a kit.
+    pub fn neutral(dark: bool) -> Self {
+        Self::from_kit(&Kit::neutral(dark))
+    }
+
+    /// The thumb's colour at rest.
+    pub fn thumb(mut self, c: Color) -> Self {
+        self.thumb = c;
+        self
+    }
+
+    /// The thumb's colour while the pointer is over the bar or holds the thumb.
+    pub fn thumb_hover(mut self, c: Color) -> Self {
+        self.thumb_hover = c;
+        self
+    }
+
+    /// The thumb's width at rest, in points.
+    pub fn width(mut self, w: f32) -> Self {
+        self.width = w.max(1.0);
+        self
+    }
+
+    /// The thumb's width while the pointer is over the bar or holds the thumb; the same as
+    /// [`Self::width`] for a thumb that doesn't widen.
+    pub fn hover_width(mut self, w: f32) -> Self {
+        self.hover_width = w.max(1.0);
+        self
+    }
+
+    /// The widest the thumb gets.
+    fn widest(&self) -> f32 {
+        self.width.max(self.hover_width)
+    }
+
+    /// The press strip: [`TRACK`], or wider for a thumb too wide to sit in it.
+    fn track(&self) -> f32 {
+        TRACK.max(self.widest() + 2.0 * EDGE)
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BarState {
@@ -75,6 +136,8 @@ struct Bar {
     over: Cell<bool>,
     pulse_until: Cell<f64>,
     glide_until: Cell<f64>,
+    /// The style the last view built the bar with; `None` until the first.
+    style: Cell<Option<ScrollBarStyle>>,
     last_now: Cell<f64>,
     track: Live<[f32; 4]>,
     /// Where the thumb runs on the track, as wide as it gets. It glides with the thumb's length,
@@ -82,6 +145,7 @@ struct Bar {
     slot: Live<[f32; 4]>,
     /// The thumb drawn in its slot, against the slot's right edge.
     thumb: Live<[f32; 4]>,
+    fill: Live<Color>,
     opacity: Live<f32>,
 }
 
@@ -107,10 +171,12 @@ fn kept(area: &str) -> Rc<Bar> {
                     over: Cell::new(false),
                     pulse_until: Cell::new(-1.0),
                     glide_until: Cell::new(-1.0),
+                    style: Cell::new(None),
                     last_now: Cell::new(0.0),
                     track: Live::new([0.0; 4]),
                     slot: Live::new([0.0; 4]),
                     thumb: Live::new([0.0; 4]),
+                    fill: Live::new(Color::TRANSPARENT),
                     opacity: Live::new(1.0),
                 })
             })
@@ -146,15 +212,47 @@ impl Bar {
         self.over.get() || self.dragging.get()
     }
 
-    /// The thumb as wide as the pointer makes it, `h` long.
-    fn thumb_rect(&self, h: f32) -> [f32; 4] {
-        let w = if self.wide() { THUMB_HOVER } else { THUMB };
-        [THUMB_HOVER - w, 0.0, w, h]
+    fn style(&self) -> ScrollBarStyle {
+        self.style.get().unwrap_or_else(|| ScrollBarStyle::neutral(true))
     }
 
-    /// Widens or narrows the thumb after the pointer or a press changed.
+    /// The thumb as wide as the pointer makes it, `h` long.
+    fn thumb_rect(&self, h: f32) -> [f32; 4] {
+        let style = self.style();
+        let w = if self.wide() { style.hover_width } else { style.width };
+        [style.widest() - w, 0.0, w, h]
+    }
+
+    fn thumb_fill(&self) -> Color {
+        let style = self.style();
+        if self.wide() { style.thumb_hover } else { style.thumb }
+    }
+
+    /// Widens or narrows the thumb, and changes its colour, after the pointer or a press changed.
     fn widen(&self) {
         self.thumb.set(self.thumb_rect(self.thumb.get()[3]));
+        self.fill.set(self.thumb_fill());
+    }
+
+    /// Takes the style a view built the bar with; a new one lands at once.
+    fn restyle(&self, style: ScrollBarStyle) {
+        if self.style.replace(Some(style)) == Some(style) {
+            return;
+        }
+        self.fill.snap(self.thumb_fill());
+        let at = self.pos.get();
+        let (len, shows) = track_len(at);
+        let (top, h) = thumb(at, len.max(0.0));
+        let h = if shows { h } else { 0.0 };
+        self.track.snap([at.viewport[0] - style.track(), INSET, style.track(), if shows { len } else { 0.0 }]);
+        self.slot.snap(self.slot_rect(top, h));
+        self.thumb.snap(self.thumb_rect(h));
+    }
+
+    /// Where a thumb at `top`, `h` long, runs on the track.
+    fn slot_rect(&self, top: f32, h: f32) -> [f32; 4] {
+        let style = self.style();
+        [style.track() - EDGE - style.widest(), top, style.widest(), h]
     }
 
     /// An overlay bar stays up while the thumb is held or the pointer is at its edge.
@@ -177,9 +275,10 @@ impl Bar {
     fn point(&self, p: Option<PointerEvent>) {
         let at = self.pos.get();
         let (len, shows) = track_len(at);
-        let w = at.viewport[0];
-        let near = shows && p.is_some_and(|p| p.x >= w - REVEAL && p.x <= w && (INSET..=INSET + len).contains(&p.y));
-        let over = near && p.is_some_and(|p| p.x >= w - TRACK);
+        let (w, track) = (at.viewport[0], self.style().track());
+        let near = shows
+            && p.is_some_and(|p| p.x >= w - REVEAL.max(track) && p.x <= w && (INSET..=INSET + len).contains(&p.y));
+        let over = near && p.is_some_and(|p| p.x >= w - track);
         if self.over.replace(over) != over {
             self.widen();
         }
@@ -196,7 +295,8 @@ impl Bar {
         let (scrolled, instant, now) = rune::scroll_watch_state();
         self.last_now.set(now);
         let (len, shows) = track_len(at);
-        self.track.set([at.viewport[0] - TRACK, INSET, TRACK, if shows { len } else { 0.0 }]);
+        let track = self.style().track();
+        self.track.set([at.viewport[0] - track, INSET, track, if shows { len } else { 0.0 }]);
         let (top, h) = thumb(at, len.max(0.0));
         let h = if shows { h } else { 0.0 };
         let (state, opacity, pulse_until) = (&self.state, &self.opacity, &self.pulse_until);
@@ -219,7 +319,7 @@ impl Bar {
         if cut {
             self.glide_until.set(-1.0);
         }
-        let slot = [TRACK - EDGE - THUMB_HOVER, top, THUMB_HOVER, h];
+        let slot = self.slot_rect(top, h);
         let to = |live: &Live<[f32; 4]>, rect| if glides { live.set(rect) } else { live.snap(rect) };
         to(&self.slot, slot);
         // A scroll leaves the thumb's width alone, so it doesn't cut a widening short.
@@ -348,18 +448,27 @@ impl Bar {
 pub trait ScrollBar {
     #[track_caller]
     fn scroll_bar(self, k: &Kit) -> El;
+
+    /// [`ScrollBar::scroll_bar`] with the thumb drawn in `style`.
+    #[track_caller]
+    fn scroll_bar_styled(self, style: ScrollBarStyle) -> El;
 }
 
 impl ScrollBar for El {
     #[track_caller]
     fn scroll_bar(self, k: &Kit) -> El {
-        wrap(k, self, Location::caller())
+        wrap(ScrollBarStyle::from_kit(k), self, Location::caller())
+    }
+
+    #[track_caller]
+    fn scroll_bar_styled(self, style: ScrollBarStyle) -> El {
+        wrap(style, self, Location::caller())
     }
 }
 
-pub(crate) fn wrap(k: &Kit, viewport: El, site: &'static Location<'static>) -> El {
+pub(crate) fn wrap(style: ScrollBarStyle, viewport: El, site: &'static Location<'static>) -> El {
     let (area, key, outer, viewport) = viewport.wrap_scroll_area((site.file(), site.line(), site.column()));
-    attach(k, &area, &key, outer, viewport)
+    attach(style, &area, &key, outer, viewport)
 }
 
 /// `scroll_bar(&k, "rows-area", "scroll", viewport)`: `viewport`, a vertical scroll viewport
@@ -368,13 +477,14 @@ pub(crate) fn wrap(k: &Kit, viewport: El, site: &'static Location<'static>) -> E
 /// (`.grow(1.0)` or `.shrink()` with `.min_h(0.0)`), or call [`ScrollBar::scroll_bar`] /
 /// [`Kit::scroll_bar`] directly on the sized viewport.
 pub fn scroll_bar(k: &Kit, area: &str, key: &str, viewport: El) -> El {
-    attach(k, area, key, col().key(area), viewport.key(key))
+    attach(ScrollBarStyle::from_kit(k), area, key, col().key(area), viewport.key(key))
 }
 
-fn attach(k: &Kit, area: &str, key: &str, outer: El, viewport: El) -> El {
+fn attach(style: ScrollBarStyle, area: &str, key: &str, outer: El, viewport: El) -> El {
     let overlay = rune::system_scroll_bars().is_overlay(rune::system_scroller_overlay());
     let jumps = rune::system_scroller_jumps();
     let bar = kept(area);
+    bar.restyle(style);
     let target = format!("{area}/{key}");
     let (watch, moved, left, drag) = (bar.clone(), bar.clone(), bar.clone(), bar.clone());
     outer
@@ -402,8 +512,8 @@ fn attach(k: &Kit, area: &str, key: &str, outer: El, viewport: El) -> El {
                         el().key("thumb")
                             .absolute(0.0, 0.0)
                             .live_rect(bar.thumb.smooth(WIDEN))
-                            .radius(THUMB_HOVER / 2.0)
-                            .fill(k.c.border_base),
+                            .radius(style.widest() / 2.0)
+                            .live_fill(bar.fill.smooth(WIDEN)),
                     ),
                 ),
         )

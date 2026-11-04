@@ -124,6 +124,7 @@ pub use radio::RadioGroup;
 pub use radio::RadioItem;
 pub use rolling_text::RollingText;
 pub use scroll_bar::ScrollBar;
+pub use scroll_bar::ScrollBarStyle;
 pub use scroll_bar::scroll_bar;
 pub use segmented::SegmentedControl;
 pub use select::Select;
