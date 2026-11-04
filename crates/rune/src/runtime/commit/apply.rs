@@ -592,8 +592,10 @@ impl<S: 'static> Runtime<S> {
                     len: if mounted_late { 0 } else { content.len() },
                     words: Vec::new(),
                     fade,
+                    wipe: 0.0,
                 });
                 st.fade = fade;
+                st.wipe = if self.reduced_motion { 0.0 } else { spec.reveal_wipe };
                 if instant || (!was_present && nodes[i].virtual_mount) || content.len() < st.len || !content.is_char_boundary(st.len) {
                     st.len = content.len();
                     st.words.clear();

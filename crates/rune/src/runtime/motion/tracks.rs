@@ -4,6 +4,9 @@ use super::*;
 /// Scroll momentum decay (iOS normal: 0.998 per ms).
 pub(super) const SCROLL_DECAY: f32 = 2.002;
 
+/// The longest a word wipe holds back a glyph, in seconds, so a long word still lands.
+const WIPE_MAX: f64 = 0.3;
+
 fn ease_out(x: f32) -> f32 {
     let x = x.clamp(0.0, 1.0);
     1.0 - (1.0 - x) * (1.0 - x) * (1.0 - x)
@@ -217,7 +220,7 @@ impl<S: 'static> Runtime<S> {
         let mut any = false;
         for (id, st) in self.reveals.iter_mut() {
             let now = store.node_time(*id);
-            let fade = st.fade as f64;
+            let fade = st.fade as f64 + if st.wipe > 0.0 { WIPE_MAX } else { 0.0 };
             // Words fully shown leave the list (only from the front, which keeps lookups valid).
             let done = st.words.iter().take_while(|w| now - w.1 >= fade).count();
             if done > 0 && done == st.words.len() {
@@ -229,14 +232,29 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub(super) fn reveal_alpha(st: &RevealState, byte: u32, now: f64) -> f32 {
-        let i = st.words.partition_point(|w| w.0 <= byte);
+        Self::reveal_alpha_at(st, Self::reveal_word(st, byte), now, 0.0)
+    }
+
+    /// The fading word `byte` belongs to, as an index past it into `st.words` (0: shown).
+    pub(super) fn reveal_word(st: &RevealState, byte: u32) -> usize {
+        st.words.partition_point(|w| w.0 <= byte)
+    }
+
+    /// A glyph's alpha in word `i` (from [`Self::reveal_word`]), `dx` points into the word. A
+    /// wipe starts each glyph's fade as the wipe reaches it and ramps it linearly, so the word's
+    /// soft edge sweeps left to right; without one the word eases in as a whole.
+    pub(super) fn reveal_alpha_at(st: &RevealState, i: usize, now: f64, dx: f32) -> f32 {
         if i == 0 {
             return 1.0;
         }
-        let t0 = st.words[i - 1].1;
+        let mut t0 = st.words[i - 1].1;
+        if st.wipe > 0.0 {
+            t0 += (f64::from(dx.max(0.0)) / f64::from(st.wipe)).min(WIPE_MAX);
+        }
         if st.fade <= 0.0 {
             return if now >= t0 { 1.0 } else { 0.0 };
         }
-        ease_out(((now - t0) / st.fade as f64) as f32)
+        let k = (((now - t0) / st.fade as f64) as f32).clamp(0.0, 1.0);
+        if st.wipe > 0.0 { k } else { ease_out(k) }
     }
 }

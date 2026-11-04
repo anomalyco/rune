@@ -602,6 +602,7 @@ pub fn text(content: impl Into<String>) -> El {
         spans: Vec::new(),
         wrap: false,
         reveal: -1.0,
+        reveal_wipe: 0.0,
         truncate: false,
         elide: Elide::End,
         max_lines: 0,

@@ -394,6 +394,8 @@ pub(super) struct RevealState {
     /// (word start byte, start time) for words still fading.
     pub(super) words: Vec<(u32, f64)>,
     pub(super) fade: f32,
+    /// The wipe's speed in points per second (`TextSpec::reveal_wipe`); 0 fades a word as one.
+    pub(super) wipe: f32,
 }
 
 #[derive(Clone, Debug, Default)]

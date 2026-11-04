@@ -297,6 +297,14 @@ impl El {
         }
         self
     }
+    /// With [`El::reveal`], wipes each arriving word in from left to right: a glyph starts its
+    /// fade once the wipe, moving at `points_per_sec`, reaches it (0: the word fades as one).
+    pub fn reveal_wipe(mut self, points_per_sec: f32) -> Self {
+        if let Some(t) = &mut self.text {
+            t.reveal_wipe = points_per_sec.max(0.0);
+        }
+        self
+    }
     /// Keep a text field to one line: long text scrolls sideways under the caret instead of
     /// wrapping. Fields are multi-line by default.
     pub fn single_line(mut self) -> Self {

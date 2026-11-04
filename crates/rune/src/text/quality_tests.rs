@@ -559,6 +559,37 @@ fn span_ring_without_background_is_empty_and_reveal_fades_the_chip() {
 }
 
 #[test]
+fn reveal_wipe_fades_a_word_in_from_left_to_right() {
+    use crate::render::KIND_GLYPH;
+    use crate::{Cx, El, Env, Runtime, col, text};
+    fn view(s: &(String, f32), _: &mut Cx<(String, f32)>) -> El {
+        col().key("root").streaming(true).child(text(&s.0).key("body").wrap().w(400.0).reveal(0.1).reveal_wipe(s.1))
+    }
+    // The new word's glyphs by x, with their alpha, `at` seconds after it arrives.
+    fn word(wipe: f32, at: f64) -> Vec<(f32, f32)> {
+        let mut rt = Runtime::new(("one".to_string(), wipe), view, (420.0, 80.0), Env::new(false, 1.0));
+        rt.frame(0.0);
+        let before = rt.instances.iter().filter(|i| i.params[1] == KIND_GLYPH).count();
+        rt.state.0.push_str(" wipewipe");
+        rt.invalidate();
+        rt.frame(0.001);
+        rt.frame(0.001 + at);
+        let mut g: Vec<(f32, f32)> = rt.instances.iter().filter(|i| i.params[1] == KIND_GLYPH).map(|i| (i.rect[0], i.fill[3])).collect();
+        g.sort_by(|a, b| a.0.total_cmp(&b.0));
+        g.split_off(before.min(g.len()))
+    }
+    let wiping = word(400.0, 0.06);
+    assert!(wiping.len() >= 2, "the new word draws some glyphs mid-wipe: {wiping:?}");
+    let (first, last) = (wiping[0], wiping[wiping.len() - 1]);
+    assert!(first.1 > last.1 + 0.2, "its left glyphs are further in than its right ones: {wiping:?}");
+    assert!(wiping.windows(2).all(|w| w[0].1 >= w[1].1 - 1e-4), "alpha falls left to right: {wiping:?}");
+    let fading = word(0.0, 0.06);
+    assert!(fading.windows(2).all(|w| (w[0].1 - w[1].1).abs() < 1e-4), "without a wipe the word fades as one: {fading:?}");
+    let done = word(400.0, 0.6);
+    assert!(done.len() == 8 && done.iter().all(|g| g.1 >= 0.999), "the wipe lands every glyph: {done:?}");
+}
+
+#[test]
 fn span_ring_draws_inset_border_on_light_page_merges_runs_wraps_and_stays_on_hover() {
     use crate::render::{Gpu, KIND_RECT, OFFSCREEN_FORMAT, Offscreen, Renderer};
     use crate::{Cx, El, Env, Link, LinkPaint, Runtime, col, rich};

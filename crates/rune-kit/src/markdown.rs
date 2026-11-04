@@ -156,6 +156,7 @@ pub struct Markdown {
     highlights: Vec<(Vec<Range<usize>>, Highlight)>,
     autolink: bool,
     reveal: f32,
+    reveal_wipe: f32,
     streaming: bool,
     on_link: Option<LinkWire>,
     on_link_secondary: Option<LinkWire>,
@@ -179,7 +180,7 @@ thread_local! {
 
 impl Markdown {
     pub fn new(src: impl Into<String>) -> Markdown {
-        Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_help: None, link_ring: None,
+        Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, reveal_wipe: 0.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_help: None, link_ring: None,
             on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, highlighter: Highlighter::builtin(),
             #[cfg(feature = "mermaid")]
             diagram_frame: None }
@@ -239,6 +240,12 @@ impl Markdown {
     /// Streaming word reveal in seconds (see [`El::reveal`]); 0 shows words at once.
     pub fn reveal(mut self, word_fade: f32) -> Self {
         self.reveal = word_fade.max(0.0);
+        self
+    }
+    /// Wipes each revealing word in from left to right at `points_per_sec` (see
+    /// [`El::reveal_wipe`]); 0 fades a word as one.
+    pub fn reveal_wipe(mut self, points_per_sec: f32) -> Self {
+        self.reveal_wipe = points_per_sec.max(0.0);
         self
     }
     /// The source is still arriving: a table's last row, with no newline after it yet, is left
@@ -368,6 +375,7 @@ impl Markdown {
                 &self.highlights,
                 self.autolink,
                 self.reveal.to_bits(),
+                self.reveal_wipe.to_bits(),
                 self.tasks_read_only,
                 self.selectable,
                 self.scroll_wide,
@@ -392,7 +400,7 @@ impl Markdown {
             starts.iter().map(|at| self.block_keys.iter().find(|(offset, _)| offset == at)
                 .map_or_else(String::new, |(_, key)| key.clone())).collect::<Vec<_>>()
         };
-        let r = Renderer { s: style.clone(), highlights: self.highlights, reveal: self.reveal, streaming: self.streaming, on_link: self.on_link, on_link_secondary: self.on_link_secondary, link_look: self.link_look, link_help: self.link_help, link_ring: self.link_ring,
+        let r = Renderer { s: style.clone(), highlights: self.highlights, reveal: self.reveal, reveal_wipe: self.reveal_wipe, streaming: self.streaming, on_link: self.on_link, on_link_secondary: self.on_link_secondary, link_look: self.link_look, link_help: self.link_help, link_ring: self.link_ring,
             on_task: self.on_task, tasks_read_only: self.tasks_read_only, selectable: self.selectable, scroll_wide: self.scroll_wide,
             highlighter: self.highlighter, sources, next_source: Cell::new(0), tasks, next_task: Cell::new(0),
             current_block_key: RefCell::new("b0".into()),

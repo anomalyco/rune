@@ -1,0 +1,1 @@
+- Streaming text can wipe each arriving word in from left to right: `El::reveal_wipe(points_per_sec)` and `Markdown::reveal_wipe` start each glyph's fade as the wipe reaches it and ramp it linearly (0, the default, keeps the whole-word fade).

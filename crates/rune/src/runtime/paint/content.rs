@@ -336,10 +336,27 @@ impl<S: 'static> Runtime<S> {
             self.text.set_glide([0.0; 2]);
             let base = premul(color, o, srgb);
             let lands = self.flights.iter().any(|f| f.lands(&n.path, n.key.as_deref()));
-            for q in if lands { &[][..] } else { &self.glyph_scratch[..] } {
-                let [x0, y0] = if zoom == 1.0 && origin == r_origin { [q.rect[0], q.rect[1]] } else {
+            let at = |q: &crate::text::GlyphQuad| -> [f32; 2] {
+                if zoom == 1.0 && origin == r_origin { [q.rect[0], q.rect[1]] } else {
                     std::array::from_fn(|k| origin[k] + (q.rect[k] - r_origin[k]) * zoom)
-                };
+                }
+            };
+            // A wipe measures each glyph from its word's leftmost glyph on the same line (glyphs
+            // don't come in reading order): (word, line top, left).
+            let mut wipe_from: Vec<(usize, f32, f32)> = Vec::new();
+            if let Some(st) = reveal.filter(|st| st.wipe > 0.0) && !lands {
+                for q in &self.glyph_scratch {
+                    let w = Self::reveal_word(st, q.byte);
+                    if w == 0 { continue; }
+                    let [x, y] = at(q);
+                    match wipe_from.iter_mut().find(|e| e.0 == w && (e.1 - y).abs() <= 0.5) {
+                        Some(e) => e.2 = e.2.min(x),
+                        None => wipe_from.push((w, y, x)),
+                    }
+                }
+            }
+            for q in if lands { &[][..] } else { &self.glyph_scratch[..] } {
+                let [x0, y0] = at(q);
                 let (x1, y1) = (x0 + q.rect[2] * zoom, y0 + q.rect[3] * zoom);
                 // Wholly outside the clip, a glyph draws nothing: a long line in an
                 // `El::scroll_x` skips the glyphs scrolled out of sight.
@@ -364,7 +381,9 @@ impl<S: 'static> Runtime<S> {
                     f = premul(c, o, srgb);
                 }
                 if let Some(st) = reveal {
-                    let a = Self::reveal_alpha(st, q.byte, self.scene.store().node_time(n.id));
+                    let w = Self::reveal_word(st, q.byte);
+                    let dx = wipe_from.iter().find(|e| e.0 == w && (e.1 - y0).abs() <= 0.5).map_or(0.0, |e| (x0 - e.2) / s);
+                    let a = Self::reveal_alpha_at(st, w, self.scene.store().node_time(n.id), dx);
                     if a <= 0.0 {
                         continue;
                     }
