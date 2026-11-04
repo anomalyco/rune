@@ -197,7 +197,9 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// While hidden, the overlay holds no GPU surface, swapchain or renderer, nor a share of the
     /// GPU device, which goes with the last surface on it. Prewarmed, it makes only its window
     /// at startup (so `on_created` and capture exclusion still come then); each show makes the
-    /// surface, and each hide drops it. A show then waits for the surface (a few milliseconds),
+    /// surface, and each hide drops it. Windows makes and drops the window with the surface too,
+    /// so a hidden overlay there has no window at all (game capture tools took a hidden
+    /// display-sized one for a game). A show then waits for the surface (a few milliseconds),
     /// and with no other surface on a device, for a new device and its pipelines too (over
     /// half a second on some Windows PCs). For overlays that show rarely and cover a display,
     /// such as a drawing layer or a picker: hidden, their swapchains hold tens of megabytes,

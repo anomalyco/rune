@@ -15,7 +15,8 @@
 //!   observing pointer movement even through transparent regions, ordered front without key
 //!   focus unless explicitly requested. Its window number is available for capture filters.
 //! - Windows: a topmost tool window with `WS_EX_NOACTIVATE` (plus `WS_EX_TRANSPARENT` and
-//!   `WS_EX_LAYERED` unless interactive), shown with `SW_SHOWNOACTIVATE`.
+//!   `WS_EX_LAYERED` unless interactive), shown with `SW_SHOWNOACTIVATE`. With
+//!   `release_gpu_when_hidden`, hidden means destroyed there too.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -551,8 +552,9 @@ impl<T: 'static> Overlay<T> {
         if self.live.is_some() { return; }
         let surface = showing || !self.defers_gpu();
         let wayland = crate::window::is_wayland(event_loop);
-        // A Wayland overlay's window is its surface: both wait.
-        if wayland && !surface { return; }
+        // A Wayland overlay's window is its surface, and a Windows one that gives its GPU back
+        // is made for each show (`park`): both wait.
+        if (wayland || cfg!(target_os = "windows")) && !surface { return; }
         self.resolve_size(event_loop);
         let made = if wayland {
             self.layer(event_loop).or_else(|| self.xwayland())
@@ -851,16 +853,23 @@ impl<T: 'static> Overlay<T> {
 
     /// `release_gpu_when_hidden`: the hidden overlay gives back its surface, swapchain and
     /// renderer, and its hold on the GPU device, which goes with the last surface on it. The
-    /// window stays parked.
+    /// window stays parked, except on Windows, where it goes too: a hidden topmost window,
+    /// often display-sized, in a process that draws with DXGI is enough for game capture
+    /// tools such as NVIDIA's Instant Replay to take the app for the running game.
     fn park(&mut self) {
         if !self.defers_gpu() || !matches!(self.live.as_ref().map(|l| &l.backing), Some(Backing::Window(_))) { return; }
-        let Some(Live { alpha, surface, backing, .. }) = self.live.take() else { return };
-        // The surface goes before the device that made it and the window it draws into.
-        drop(alpha);
-        drop(surface);
+        #[cfg(target_os = "windows")]
+        self.release();
+        #[cfg(not(target_os = "windows"))]
+        {
+            let Some(Live { alpha, surface, backing, .. }) = self.live.take() else { return };
+            // The surface goes before the device that made it and the window it draws into.
+            drop(alpha);
+            drop(surface);
+            self.parked = Some(backing);
+        }
         self.renderer = None;
         self.gpu = None;
-        self.parked = Some(backing);
         *self.shared.surface.lock().unwrap() = None;
     }
 
