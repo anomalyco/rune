@@ -162,7 +162,8 @@
                 {
                   "actions": [
                     "increment",
-                    "decrement"
+                    "decrement",
+                    "set-value"
                   ],
                   "key": "sidebar-grip",
                   "name": "Resize sidebar",

@@ -1,6 +1,6 @@
 //! The app shell: sidebar sections and rows, split panes and their grips, toolbar and page.
 
-use rune::accesskit::Action;
+use rune::accesskit::{Action, ActionData};
 use rune::{Cx, El, Key, col};
 use rune_kit::shell::{Page, PaneState, RowStatus, Sidebar, SidebarRow, SidebarSection, SplitView, Toolbar};
 use rune_kit::*;
@@ -52,7 +52,7 @@ fn the_shell_reads_its_landmarks_sections_rows_and_grip() {
     let grip = node(&tree, "sidebar-grip");
     assert_eq!(said(grip), ("splitter", "Resize sidebar"));
     assert_eq!(grip["range"], serde_json::json!([240.0, 180.0, 420.0, 8.0]));
-    assert!(can(grip, "increment") && !can(grip, "focus"), "a reader resizes the pane; Tab skips the grip");
+    assert!(can(grip, "increment") && can(grip, "set-value") && !can(grip, "focus"), "a reader resizes the pane; Tab skips the grip");
     let toggle = node(&tree, "sidebar-toggle");
     assert_eq!(said(toggle), ("button", "Hide sidebar"));
     assert!(has(toggle, "expanded"));
@@ -61,6 +61,9 @@ fn the_shell_reads_its_landmarks_sections_rows_and_grip() {
 
     assert!(act(&mut rt, "sidebar-grip", Action::Increment));
     assert_eq!(rt.state.sidebar.width(), 248.0);
+    assert!(rt.accessibility_action("sidebar-grip", Action::SetValue, Some(ActionData::NumericValue(304.0))));
+    settle(&mut rt);
+    assert_eq!(rt.state.sidebar.width(), 304.0, "a reader sets the width in grip steps");
     assert!(act(&mut rt, "row0", Action::Click));
     assert_eq!(rt.state.picked, Some(0));
     act(&mut rt, "row0", Action::Focus);
