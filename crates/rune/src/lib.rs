@@ -47,6 +47,7 @@ pub mod native_surface;
 pub mod playground;
 pub mod prefs;
 pub mod render;
+pub mod rewind;
 pub mod runtime;
 pub mod shape;
 pub mod text;
