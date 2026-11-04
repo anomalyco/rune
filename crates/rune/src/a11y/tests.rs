@@ -176,6 +176,27 @@ fn updates_send_only_what_changed_and_nothing_while_inactive() {
     assert!(rt.a11y_update().is_none());
 }
 
+/// A window closed and opened again keeps its runtime but gets a new adapter, which AccessKit
+/// may already hold active (AT-SPI turned on): its first update must hold the whole tree, or
+/// AccessKit panics building the tree from it.
+#[test]
+fn a_reopened_surface_gets_the_whole_tree() {
+    let mut rt = form_rt();
+    let mut first = crate::AccessibilityLink::new();
+    first.activate();
+    assert!(first.service(&mut rt, "Form").expect("activated").tree.is_some());
+    let toggle = request(&rt, "wifi", Ak::Click, None);
+    rt.a11y_action(&toggle);
+    rt.frame(0.0);
+    assert!(first.service(&mut rt, "Form").expect("the switch changed").tree.is_none());
+    drop(first);
+    let mut second = crate::AccessibilityLink::new();
+    rt.frame(0.0);
+    assert!(second.service(&mut rt, "Form").is_none(), "nothing before the new client asks");
+    second.activate();
+    assert!(second.service(&mut rt, "Form").expect("activated").tree.is_some());
+}
+
 #[derive(Default)]
 struct List {
     rows: usize,
