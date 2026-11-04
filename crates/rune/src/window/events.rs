@@ -524,4 +524,5 @@ fn touch_promoted() -> bool {
 }
 
 #[cfg(not(target_os = "windows"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn touch_promoted() -> bool { false }
