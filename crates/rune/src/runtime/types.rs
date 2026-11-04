@@ -396,6 +396,45 @@ pub(super) struct RevealState {
     pub(super) fade: f32,
     /// The wipe's speed in points per second (`TextSpec::reveal_wipe`); 0 fades a word as one.
     pub(super) wipe: f32,
+    /// The wipe's schedule, set as paint first sees each word's place.
+    pub(super) sweep: std::cell::RefCell<Sweep>,
+}
+
+/// One soft edge sweeping along streamed text in reading order: it reaches each word's left edge
+/// no sooner than the word arrives, never runs ahead of itself, and jumps to the next line's start
+/// once a line is done, so two edges never overlap.
+#[derive(Clone, Debug, Default)]
+pub(super) struct Sweep {
+    /// Where the front last reached: (time, x, line top, line bottom), in points in the text.
+    pub(super) front: Option<(f64, f32, f32, f32)>,
+    /// The word the front last left (its start byte).
+    pub(super) front_word: Option<u32>,
+    pub(super) words: Vec<SweepWord>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SweepWord {
+    pub(super) byte: u32,
+    /// When the front reaches the word's left edge.
+    pub(super) at: f64,
+    /// Points per second across it, faster while the front trails the stream.
+    pub(super) speed: f32,
+    /// When its last glyph is fully in.
+    pub(super) done: f64,
+}
+
+impl Sweep {
+    pub(super) fn word(&self, byte: u32) -> Option<&SweepWord> {
+        self.words.iter().rev().find(|w| w.byte == byte)
+    }
+
+    pub(super) fn shift(&mut self, dt: f64) {
+        if let Some(f) = &mut self.front { f.0 += dt; }
+        for w in &mut self.words {
+            w.at += dt;
+            w.done += dt;
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]

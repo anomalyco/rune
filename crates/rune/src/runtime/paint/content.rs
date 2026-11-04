@@ -341,21 +341,41 @@ impl<S: 'static> Runtime<S> {
                     std::array::from_fn(|k| origin[k] + (q.rect[k] - r_origin[k]) * zoom)
                 }
             };
-            // A wipe measures each glyph from its word's leftmost glyph on the same line (glyphs
-            // don't come in reading order, and a tall one's top sits above a short one's, so a
-            // line is the glyphs overlapping the first one seen): (word, top, bottom, left).
-            let mut wipe_from: Vec<(usize, f32, f32, f32)> = Vec::new();
-            let same_line = |e: &(usize, f32, f32, f32), w: usize, y: f32, h: f32| e.0 == w && y < e.2 && y + h > e.1;
+            // A line wipe places each fading word's pieces, one per line it sits on (glyphs don't
+            // come in reading order, and a tall glyph's top sits above a short one's, so a line is
+            // the glyphs overlapping the first one seen), in points from the text's origin:
+            // (word, top, bottom, left, right, points of the word before this piece).
+            let local = |q: &crate::text::GlyphQuad| -> [f32; 4] {
+                [(q.rect[0] - r_origin[0]) / s, (q.rect[1] - r_origin[1]) / s, q.rect[2] / s, q.rect[3] / s]
+            };
+            let mut pieces: Vec<(usize, f32, f32, f32, f32, f32)> = Vec::new();
+            let same_line = |e: &(usize, f32, f32, f32, f32, f32), w: usize, y: f32, h: f32| e.0 == w && y < e.2 && y + h > e.1;
             if let Some(st) = reveal.filter(|st| st.wipe > 0.0) && !lands {
                 for q in &self.glyph_scratch {
                     let w = Self::reveal_word(st, q.byte);
                     if w == 0 { continue; }
-                    let [x, y] = at(q);
-                    let h = q.rect[3] * zoom;
-                    match wipe_from.iter_mut().find(|e| same_line(e, w, y, h)) {
-                        Some(e) => e.3 = e.3.min(x),
-                        None => wipe_from.push((w, y, y + h, x)),
+                    let [x, y, gw, h] = local(q);
+                    match pieces.iter_mut().find(|e| same_line(e, w, y, h)) {
+                        Some(e) => {
+                            e.3 = e.3.min(x);
+                            e.4 = e.4.max(x + gw);
+                        }
+                        None => pieces.push((w, y, y + h, x, x + gw, 0.0)),
                     }
+                }
+                pieces.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+                let mut k = 0;
+                while k < pieces.len() {
+                    let w = pieces[k].0;
+                    let n = pieces[k..].iter().take_while(|e| e.0 == w).count();
+                    let mut run = 0.0;
+                    for e in &mut pieces[k..k + n] {
+                        e.5 = run;
+                        run += e.4 - e.3;
+                    }
+                    let e = pieces[k];
+                    Self::reveal_place(st, w, e.3, e.1, e.2, run);
+                    k += n;
                 }
             }
             for q in if lands { &[][..] } else { &self.glyph_scratch[..] } {
@@ -385,7 +405,8 @@ impl<S: 'static> Runtime<S> {
                 }
                 if let Some(st) = reveal {
                     let w = Self::reveal_word(st, q.byte);
-                    let dx = wipe_from.iter().find(|e| same_line(e, w, y0, y1 - y0)).map_or(0.0, |e| (x0 - e.3) / s);
+                    let [lx, ly, _, lh] = local(q);
+                    let dx = pieces.iter().find(|e| same_line(e, w, ly, lh)).map_or(0.0, |e| e.5 + lx - e.3);
                     let a = Self::reveal_alpha_at(st, w, self.scene.store().node_time(n.id), dx);
                     if a <= 0.0 {
                         continue;

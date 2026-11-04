@@ -593,12 +593,14 @@ impl<S: 'static> Runtime<S> {
                     words: Vec::new(),
                     fade,
                     wipe: 0.0,
+                    sweep: Default::default(),
                 });
                 st.fade = fade;
                 st.wipe = if self.reduced_motion { 0.0 } else { spec.reveal_wipe };
                 if instant || (!was_present && nodes[i].virtual_mount) || content.len() < st.len || !content.is_char_boundary(st.len) {
                     st.len = content.len();
                     st.words.clear();
+                    *st.sweep.get_mut() = Default::default();
                 } else if content.len() > st.len && fade > 0.0 {
                     let mut starts = Vec::new();
                     word_starts(content, st.len, &mut starts);

@@ -559,7 +559,7 @@ fn span_ring_without_background_is_empty_and_reveal_fades_the_chip() {
 }
 
 #[test]
-fn reveal_wipe_fades_a_word_in_from_left_to_right() {
+fn reveal_wipe_sweeps_one_edge_along_the_line() {
     use crate::render::KIND_GLYPH;
     use crate::{Cx, El, Env, Runtime, col, text};
     fn view(s: &(String, f32), _: &mut Cx<(String, f32)>) -> El {
@@ -570,7 +570,7 @@ fn reveal_wipe_fades_a_word_in_from_left_to_right() {
         let mut rt = Runtime::new(("one".to_string(), wipe), view, (420.0, 80.0), Env::new(false, 1.0));
         rt.frame(0.0);
         let before = rt.instances.iter().filter(|i| i.params[1] == KIND_GLYPH).count();
-        rt.state.0.push_str(" swellhello");
+        rt.state.0.push_str(" swellhello quickbrown fox");
         rt.invalidate();
         rt.frame(0.001);
         rt.frame(0.001 + at);
@@ -578,15 +578,17 @@ fn reveal_wipe_fades_a_word_in_from_left_to_right() {
         g.sort_by(|a, b| a.0.total_cmp(&b.0));
         g.split_off(before.min(g.len()))
     }
-    let wiping = word(400.0, 0.06);
-    assert!(wiping.len() >= 2, "the new word draws some glyphs mid-wipe: {wiping:?}");
+    let wiping = word(400.0, 0.12);
+    assert!(wiping.len() >= 2, "the new words draw some glyphs mid-wipe: {wiping:?}");
     let (first, last) = (wiping[0], wiping[wiping.len() - 1]);
-    assert!(first.1 > last.1 + 0.2, "its left glyphs are further in than its right ones: {wiping:?}");
-    assert!(wiping.windows(2).all(|w| w[0].1 >= w[1].1 - 1e-4), "alpha falls left to right: {wiping:?}");
+    assert!(first.1 > last.1 + 0.2, "the left glyphs are further in than the right ones: {wiping:?}");
+    // One edge across all three words: no later word starts before the one ahead of it is in.
+    assert!(wiping.windows(2).all(|w| w[0].1 >= w[1].1 - 1e-4), "alpha falls left to right along the line: {wiping:?}");
     let fading = word(0.0, 0.06);
-    assert!(fading.windows(2).all(|w| (w[0].1 - w[1].1).abs() < 1e-4), "without a wipe the word fades as one: {fading:?}");
-    let done = word(400.0, 0.6);
-    assert!(done.len() == 10 && done.iter().all(|g| g.1 >= 0.999), "the wipe lands every glyph: {done:?}");
+    let steps = fading.windows(2).filter(|w| (w[0].1 - w[1].1).abs() > 1e-4).count();
+    assert!(steps == 2, "without a wipe each of the three words fades as one: {fading:?}");
+    let done = word(400.0, 1.0);
+    assert!(done.len() == 23 && done.iter().all(|g| g.1 >= 0.999), "the wipe lands every glyph: {done:?}");
 }
 
 #[test]
