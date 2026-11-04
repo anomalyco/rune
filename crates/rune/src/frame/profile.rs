@@ -29,16 +29,10 @@ mod enabled {
 
     pub(crate) struct Scope(Phase, Instant, Option<f64>);
     impl Scope {
-        pub(crate) fn new(phase: Phase) -> Self {
-            #[cfg(feature = "strobe")]
-            crate::strobe::phase_enter(phase);
-            Self(phase, Instant::now(), cpu_ms())
-        }
+        pub(crate) fn new(phase: Phase) -> Self { Self(phase, Instant::now(), cpu_ms()) }
     }
     impl Drop for Scope {
         fn drop(&mut self) {
-            #[cfg(feature = "strobe")]
-            crate::strobe::phase_exit();
             if crate::tooling::perf_warn::budget::on() { crate::tooling::perf_warn::budget::add(self.0, self.1.elapsed().as_secs_f64() * 1000.0); }
             if crate::tooling::interaction::active() { crate::tooling::interaction::add(self.0, self.1.elapsed().as_secs_f64() * 1000.0); }
             TIMES.with(|times| {
@@ -157,8 +151,6 @@ pub(crate) struct Scope(Option<(Phase, crate::time::Instant)>);
 impl Scope {
     #[inline(always)]
     pub(crate) fn new(phase: Phase) -> Self {
-        #[cfg(feature = "strobe")]
-        crate::strobe::phase_enter(phase);
         Self((crate::tooling::perf_warn::budget::on() || crate::tooling::interaction::active()).then(|| (phase, crate::time::Instant::now())))
     }
 }
@@ -166,8 +158,6 @@ impl Scope {
 impl Drop for Scope {
     #[inline(always)]
     fn drop(&mut self) {
-        #[cfg(feature = "strobe")]
-        crate::strobe::phase_exit();
         let Some((phase, start)) = self.0 else { return };
         let ms = start.elapsed().as_secs_f64() * 1000.0;
         if crate::tooling::perf_warn::budget::on() { crate::tooling::perf_warn::budget::add(phase, ms); }

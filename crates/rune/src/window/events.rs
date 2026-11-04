@@ -135,9 +135,36 @@ impl<S: 'static> Host<S> {
                 if let Some(w) = self.win.as_ref().filter(|w| w.visible) { w.window.request_redraw(); }
                 self.shell(event_loop);
             }
+            WakeEvent::A11y(_) => self.a11y_receive(),
             WakeEvent::Reopen => {}
-            #[cfg(feature = "strobe")]
-            WakeEvent::Strobe => {}
+        }
+    }
+
+    /// Runs what assistive clients asked; an action draws the frame that runs it.
+    fn a11y_receive(&mut self) {
+        let Some(w) = self.win.as_mut() else { return };
+        let Some(adapter) = w.a11y.as_mut() else { return };
+        if adapter.receive(&mut self.rt, self.spec.title) { w.window.request_redraw(); }
+    }
+
+    /// Sends the tree's changes at the end of the turn, after its frames.
+    pub(super) fn a11y_turn(&mut self) {
+        let Some(adapter) = self.win.as_mut().and_then(|w| w.a11y.as_mut()) else { return };
+        adapter.sync(&mut self.rt);
+    }
+
+    /// The window's focus and place, which the accessibility adapter reports.
+    fn a11y_window_event(&mut self, event: &WindowEvent) {
+        let Some(w) = self.win.as_mut() else { return };
+        let Some(adapter) = w.a11y.as_mut() else { return };
+        match event {
+            WindowEvent::Focused(focused) => adapter.focus(*focused),
+            WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
+                let rect = |p: winit::dpi::PhysicalPosition<i32>, s: winit::dpi::PhysicalSize<u32>| [f64::from(p.x), f64::from(p.y), f64::from(s.width), f64::from(s.height)];
+                let (Ok(outer), Ok(inner)) = (w.window.outer_position(), w.window.inner_position()) else { return };
+                adapter.bounds(rect(outer, w.window.outer_size()), rect(inner, w.window.inner_size()));
+            }
+            _ => {}
         }
     }
 
@@ -145,6 +172,7 @@ impl<S: 'static> Host<S> {
         if self.win.as_ref().is_none_or(|w| w.window.id() != id) {
             return;
         }
+        self.a11y_window_event(&event);
         if !matches!(event, WindowEvent::RedrawRequested) && let Some(w) = &mut self.win { w.quiet = false; }
         #[cfg(target_os = "macos")]
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } | WindowEvent::Occluded(_))

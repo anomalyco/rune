@@ -5,7 +5,7 @@
 /// Nanoseconds on the host's monotonic clock: Windows `QueryPerformanceCounter` scaled with
 /// 128-bit math, `mach_absolute_time` through its timebase, else `CLOCK_MONOTONIC`.
 #[cfg(not(target_arch = "wasm32"))]
-#[cfg_attr(not(any(feature = "strobe", windows)), allow(dead_code))]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn now_ns() -> u64 {
     #[cfg(windows)]
     {

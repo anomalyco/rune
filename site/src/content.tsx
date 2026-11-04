@@ -88,6 +88,7 @@ export const principles: Entry[] = [
     ],
     code: [
       at("crates/rune/src/edit.rs", "text input and IME"),
+      at("crates/rune/src/a11y/tree.rs", "the accessibility tree (AccessKit)"),
       at("crates/rune/src/theme.rs", "themes as data"),
       at("themes/opencode", "OpenCode's theme"),
     ],
@@ -345,6 +346,7 @@ export const layers: Entry[] = [
       at("crates/rune/src/platform/macos.rs"),
       at("crates/rune/src/platform/win32.rs", "overlays"),
       at("crates/rune/src/platform/layer_shell.rs", "Wayland overlays"),
+      at("crates/rune/src/a11y/mod.rs", "UI Automation, NSAccessibility and AT-SPI adapters"),
     ],
   },
   {

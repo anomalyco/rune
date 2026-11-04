@@ -71,7 +71,7 @@ impl crate::cold::Empty for NodeCold {
         sticky: None,
         growth: None,
         glide: None,
-        a11y: crate::el::A11y { level: None, expanded: None, secure: false },
+        a11y: crate::el::A11y::EMPTY,
         pixel_aspect: None,
         aspect_fit: None,
         material: None,

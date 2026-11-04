@@ -137,11 +137,7 @@ pub(crate) fn acquire_checked(surface: &wgpu::Surface, device: &wgpu::Device, co
         return Err(Missed::Occluded);
     }
     loop {
-        #[cfg(feature = "strobe")]
-        crate::strobe::record::wait_begin();
         let status = Missed::of(surface.get_current_texture());
-        #[cfg(feature = "strobe")]
-        crate::strobe::record::wait_end();
         if let Err(missed) = status { meter.failed(missed); }
         match status {
             // A surface that won't take its configuration again is reported rather than

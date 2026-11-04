@@ -298,24 +298,14 @@ pub(crate) fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>
 /// Draws the last frame's instances again offscreen and reads back `rect` (window points), so
 /// the drag shows what the user grabbed. `None` for formats it can't read back.
 pub(crate) fn snapshot(gpu: &crate::render::Gpu, renderer: &crate::render::Renderer, size: (u32, u32), scale: f32, clear: [f32; 4], rect: [f32; 4]) -> Option<DragImage> {
-    let px = crop(rect, scale, size)?;
-    let [x, y, w, h] = px;
-    let rgba = read_pixels(gpu, renderer, size, clear, px)?;
-    let mut image = DragImage::rgba(w, h, &rgba)?.size(w as f32 / scale, h as f32 / scale);
-    // The crop rounds out to whole pixels, so the image sits exactly over what was drawn.
-    image.placement = Placement::At(x as f32 / scale, y as f32 / scale);
-    Some(image)
-}
-
-/// Draws the last frame's instances again into a `size` target and reads back the `[x, y, w,
-/// h]` pixels of it as straight RGBA. `None` for formats it can't read back.
-pub(crate) fn read_pixels(gpu: &crate::render::Gpu, renderer: &crate::render::Renderer, size: (u32, u32), clear: [f32; 4], [x, y, w, h]: [u32; 4]) -> Option<Vec<u8>> {
     let format = renderer.format();
     let bgra = match format {
         wgpu::TextureFormat::Bgra8UnormSrgb | wgpu::TextureFormat::Bgra8Unorm => true,
         wgpu::TextureFormat::Rgba8UnormSrgb | wgpu::TextureFormat::Rgba8Unorm => false,
         _ => return None,
     };
+    let px = crop(rect, scale, size)?;
+    let [x, y, w, h] = px;
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("drag image"),
         size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
@@ -355,7 +345,10 @@ pub(crate) fn read_pixels(gpu: &crate::render::Gpu, renderer: &crate::render::Re
     }
     buffer.unmap();
     to_straight_rgba(&mut rgba, bgra);
-    Some(rgba)
+    let mut image = DragImage::rgba(w, h, &rgba)?.size(w as f32 / scale, h as f32 / scale);
+    // The crop rounds out to whole pixels, so the image sits exactly over what was drawn.
+    image.placement = Placement::At(x as f32 / scale, y as f32 / scale);
+    Some(image)
 }
 
 /// `rect` (points) in device pixels, clamped to the frame: x, y, w, h. `None` when empty.

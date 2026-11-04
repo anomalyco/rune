@@ -63,9 +63,6 @@ pub(crate) use pacing::HIDDEN_REFRESH;
 #[cfg(test)]
 use pacing::wall_wake_deadline;
 mod stepping;
-#[cfg(feature = "strobe")]
-#[path = "strobe/window_host.rs"]
-mod strobe_host;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 mod float_on_open;
 #[cfg(not(target_arch = "wasm32"))]
@@ -89,9 +86,10 @@ pub(crate) enum WakeEvent {
     /// The app was reopened (macOS: its Dock icon clicked); for `Windows`, not one host.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Reopen,
-    /// The strobe bridge's reader queued a request.
-    #[cfg(feature = "strobe")]
-    Strobe,
+    /// An assistive client asked something of a surface's accessibility tree (`crate::a11y`):
+    /// the host answers at the end of the turn this wakes.
+    #[cfg_attr(not(feature = "accessibility"), allow(dead_code))]
+    A11y(usize),
 }
 
 /// What `Windows` needs of a host, whatever its state type: an app window or an overlay.
@@ -121,11 +119,6 @@ pub(crate) trait AnyHost {
     fn apply_pending(&mut self, _event_loop: &ActiveEventLoop) {}
     /// Shows, restores and activates it as the default reopen.
     fn reopen(&mut self, _event_loop: &ActiveEventLoop) {}
-    /// What the strobe bridge drives and reads of it.
-    #[cfg(feature = "strobe")]
-    fn strobe(&mut self) -> Option<&mut dyn crate::strobe::Surface> { None }
-    #[cfg(feature = "strobe")]
-    fn strobe_ref(&self) -> Option<&dyn crate::strobe::Surface> { None }
 }
 
 /// Builds every host, attaching its shortcut and menu guards, before any resumes: a window's
@@ -232,18 +225,12 @@ pub(crate) fn start<S: 'static>(mut spec: WindowSpec<S>, handle: Option<WindowHa
 
 impl ApplicationHandler<WakeEvent> for Windows {
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
-        #[cfg(feature = "strobe")]
-        crate::strobe::window::turn_begin();
         for host in self.hosts.iter_mut().flatten() { host.new_events(event_loop, cause); }
         // Before resumed there are no hosts to clean up.
         if self.factory.is_none() { self.cleanup(event_loop); }
     }
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let Some(factory) = self.factory.take() else { return };
-        // Before the first windows draw: strobe times launch to the first frame, and the requests
-        // it sends wait for this callback, so they find the windows built.
-        #[cfg(feature = "strobe")]
-        crate::strobe::window::connect(&self.proxy);
         let primary = event_loop.primary_monitor();
         let displays: Vec<_> = event_loop.available_monitors().map(|m| Display {
             id: Some(crate::DisplayId::from_monitor(m.clone(), is_wayland(event_loop))),
@@ -280,15 +267,10 @@ impl ApplicationHandler<WakeEvent> for Windows {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
         let slot = match &event {
             WakeEvent::DisplayTick(i) | WakeEvent::App(i) | WakeEvent::Live(i) | WakeEvent::Window(i, _) | WakeEvent::Focus(i)
-                | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _) => *i,
+                | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
+                | WakeEvent::A11y(i) => *i,
             WakeEvent::Reopen => {
                 self.reopen(event_loop);
-                self.cleanup(event_loop);
-                return;
-            }
-            #[cfg(feature = "strobe")]
-            WakeEvent::Strobe => {
-                crate::strobe::window::serve(&mut self.hosts, event_loop);
                 self.cleanup(event_loop);
                 return;
             }
@@ -314,8 +296,6 @@ impl ApplicationHandler<WakeEvent> for Windows {
         // Layer surfaces have no redraw events: keep turning while one animates (its vsync
         // paces the loop). Hosts whose only motion is an ambient loop sleep until its next step.
         let deadline = self.hosts.iter().flatten().filter_map(|host| host.wake_deadline()).min();
-        #[cfg(feature = "strobe")]
-        let deadline = crate::strobe::window::turn_end(&mut self.hosts, event_loop, deadline);
         event_loop.set_control_flow(if animating { ControlFlow::Poll }
             else { deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil) });
     }
@@ -328,8 +308,6 @@ impl ApplicationHandler<WakeEvent> for Windows {
         for host in self.hosts.iter_mut().flatten() { host.cancel_menus(); }
         // Surfaces go while winit's display connection is still open (layer surfaces live on it).
         self.hosts.clear();
-        #[cfg(feature = "strobe")]
-        crate::strobe::window::exiting();
         crate::clipboard::shutdown();
     }
 }
@@ -431,9 +409,6 @@ impl<S: 'static> Host<S> {
         let on_reopen = app.on_reopen;
         #[cfg(target_os = "macos")]
         let present_log = args.trace.as_ref().map(|_| Arc::default());
-        // The strobe bridge reads when frames reach the screen from the same hook.
-        #[cfg(all(target_os = "macos", feature = "strobe"))]
-        let present_log = present_log.or_else(|| crate::strobe::Endpoint::from_env().map(|_| Arc::default()));
         let mut app = app;
         let comp = app.compositor.take();
         let (on_focus, on_ime) = (app.on_focus, app.on_ime);
@@ -773,6 +748,11 @@ impl<S: 'static> Host<S> {
             attrs = attrs.with_titlebar_transparent(true).with_title_hidden(true).with_fullsize_content_view(true);
         }
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
+        // First, before anything observes the view (macOS) or an assistive client asks.
+        let a11y = {
+            let handle = self.native_handle.clone();
+            crate::a11y::Adapter::new(&window, Arc::new(move || handle.send(WakeEvent::A11y)))
+        };
         #[cfg(target_os = "macos")]
         crate::native_menu::adopt_standard_view();
         #[cfg(target_os = "macos")]
@@ -911,6 +891,7 @@ impl<S: 'static> Host<S> {
         #[cfg(not(target_os = "macos"))]
         let native = Native::default();
         self.win = Some(Win {
+            a11y,
             native,
             first_frame: FirstFrame::opened(Instant::now()),
             surface,

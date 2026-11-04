@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["dbus", "embedded-fonts", "metal-backend", "ogg-audio", "svg"]
+default = ["accessibility", "dbus", "embedded-fonts", "metal-backend", "ogg-audio", "svg"]
 # On web, bundle Inter (Regular, Medium, SemiBold) and IBM Plex Mono as built-in fallback fonts.
 # Disable when AppSpec::fonts supplies the app's own fonts to omit the bytes from the wasm.
 # Native builds always bundle Inter.
@@ -44,14 +44,17 @@ dbus = ["dep:zbus", "dep:tokio", "dep:futures-util"]
 # backend, which Rune turns on for Apple targets alone. No effect on other platforms: its crates
 # are Apple-only dependencies.
 metal-backend = ["dep:objc2-quartz-core", "dep:parking_lot", "dep:raw-window-metal", "dep:wgpu-naga-bridge"]
-# The strobe bridge: with `STROBE_BRIDGE` set, the app connects to the strobe performance tool,
-# which drives its windows and overlays through Rune's input path and reads per-frame timings
-# (README, "strobe bridge"). Off, nothing is compiled; on with the variable unset, nothing runs.
-strobe = []
+# Every window and overlay exposes its elements to the OS accessibility API through AccessKit:
+# UI Automation on Windows, NSAccessibility on macOS, AT-SPI on Linux (README, "Accessibility").
+# Nothing is built until an assistive client asks. Off, the platform adapters aren't compiled;
+# `Runtime::accessibility_tree` and `--tree` still report the tree.
+accessibility = ["dep:accesskit_windows", "dep:accesskit_macos", "dep:accesskit_unix"]
 # Use upstream `taffy::TaffyTree` instead of `rune_taffy::LayoutStore` for A/B benchmarks and parity checks.
 baseline-taffy = ["rune-taffy/baseline-taffy"]
 
 [dependencies]
+# The accessibility tree's types; the platform adapters below come with `accessibility`.
+accesskit = "0.25.2"
 procwatch = { path = "../procwatch", optional = true }
 subsecond = { version = "=0.7.10", optional = true }
 dioxus-devtools = { version = "=0.7.10", optional = true }
@@ -119,6 +122,7 @@ wgpu = { version = "~30.0.1", default-features = false, features = ["custom"] }
 objc2-foundation-video = { package = "objc2-foundation", version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSObject", "NSRange", "NSString", "NSURL", "NSURLConnection", "NSURLRequest", "NSURLResponse"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+accesskit_macos = { version = "0.27.2", optional = true }
 # Names for the interaction watchdog's stack samples (`tooling::interaction::stack`).
 rustc-demangle = "0.1"
 wgpu-hal = { version = "~30.0.1", default-features = false }
@@ -149,9 +153,12 @@ x11rb = { version = "0.13", features = ["shape", "xinput", "randr", "allow-unsaf
 xkbcommon = "0.9"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_System_Performance", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_System_DataExchange", "Win32_System_Memory"] }
+accesskit_windows = { version = "0.35.2", optional = true }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Accessibility", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_System_Performance", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_System_DataExchange", "Win32_System_Memory"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# AT-SPI over D-Bus on its own async-io thread, started only when the desktop's accessibility bus is on.
+accesskit_unix = { version = "0.24.1", optional = true }
 libc = "0.2"
 libloading = "0.8"
 zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service"], optional = true }
@@ -168,6 +175,10 @@ log = "0.4"
 wgpu = { version = "~30.0.1", default-features = false, features = ["counters"] }
 # Thread and process CPU clocks in the overlay cost example.
 libc = "0.2"
+
+# A UI Automation client for `tests/accessibility_windows.rs`.
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Accessibility"] }
 
 # A GPU-free device whose surfaces refuse every configuration, for `window::configure`'s test.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
@@ -215,6 +226,14 @@ harness = false
 
 [[test]]
 name = "macos_window_corners"
+harness = false
+
+[[test]]
+name = "accessibility_macos"
+harness = false
+
+[[test]]
+name = "accessibility_windows"
 harness = false
 
 [[test]]

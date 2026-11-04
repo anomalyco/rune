@@ -159,7 +159,8 @@ impl<T: 'static> AnyHost for Overlay<T> {
         // A fading-out overlay takes no input; it only draws its exit.
         if !self.visible {
             self.hidden_input();
-            return self.draw();
+            let more = self.draw();
+            return self.a11y_turn() || more;
         }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Some(live) = &self.live && let Some(x11) = &self.x11 && let Some((point, desktop)) = x11.take_pointer(live.scale) {
@@ -195,19 +196,28 @@ impl<T: 'static> AnyHost for Overlay<T> {
         }
         let more = self.draw();
         self.apply_cursor();
-        more
+        self.a11y_turn() || more
     }
 
     fn keeps_loop(&self) -> bool {
         false
     }
 
-    #[cfg(feature = "strobe")]
-    fn strobe(&mut self) -> Option<&mut dyn crate::strobe::Surface> { Some(self) }
-    #[cfg(feature = "strobe")]
-    fn strobe_ref(&self) -> Option<&dyn crate::strobe::Surface> { Some(self) }
-
     fn cancel_menus(&mut self) { self.popup.cancel(&mut self.rt); }
+}
+
+impl<T: 'static> Overlay<T> {
+    /// Answers what assistive clients asked of the overlay and sends its tree's changes. An
+    /// action draws the frame that runs it.
+    fn a11y_turn(&mut self) -> bool {
+        let Some(adapter) = self.live.as_mut().and_then(|l| l.a11y.as_mut()) else { return false };
+        let queued = adapter.service(&mut self.rt, self.name);
+        if queued {
+            self.dirty = true;
+            self.idle = false;
+        }
+        queued
+    }
 }
 
 impl<T: 'static> PendingOverlay for Overlay<T> {

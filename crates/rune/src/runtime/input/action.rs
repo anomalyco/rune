@@ -48,6 +48,8 @@ pub(super) enum Action {
     FileDialog(u64, crate::file_dialog::FileDialogResult),
     Focus(String, f32, f32),
     Blur,
+    /// What assistive technology asked of an element (`a11y/actions.rs`).
+    A11y(String, A11yAct),
 }
 
 /// A queued action and when the input that queued it arrived (`Tx::input_time`): the arrival
@@ -474,6 +476,7 @@ impl<S: 'static> Runtime<S> {
                 self.set_focus(None, self.keyboard_focus);
                 true
             }
+            Action::A11y(path, act) => self.run_a11y(path, act, &mut one),
         };
         let live_only = std::mem::take(&mut one.live_only);
         if live_only && live_label.is_some() {

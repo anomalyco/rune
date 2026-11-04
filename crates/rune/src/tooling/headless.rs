@@ -55,10 +55,6 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     if let Some(secs) = std::env::var("RUNE_HEADLESS_WAIT").ok().and_then(|s| s.parse::<f64>().ok()) {
         std::thread::sleep(std::time::Duration::from_secs_f64(secs));
     }
-    #[cfg(feature = "strobe")]
-    if args.strobe { return crate::strobe::headless::run(app, args, transparent); }
-    #[cfg(not(feature = "strobe"))]
-    if args.strobe { die("--strobe needs Rune's strobe feature (an app forwards it: strobe = [\"rune/strobe\"])"); }
     let chrome = app.chrome;
     let launched = Instant::now();
     if args.list_scenes {

@@ -5,9 +5,8 @@
 
 #[cfg(all(target_arch = "wasm32", any(feature = "hot", feature = "native-file-dialog")))]
 compile_error!("web does not support Rune's hot or native-file-dialog features; disable them for wasm32");
-#[cfg(all(target_arch = "wasm32", feature = "strobe"))]
-compile_error!("the strobe bridge drives native windows; disable Rune's strobe feature for wasm32");
 
+mod a11y;
 mod app;
 mod cold;
 mod cursor;
@@ -26,8 +25,6 @@ mod popup_menu;
 mod recorder;
 mod shortcuts;
 mod states;
-#[cfg(feature = "strobe")]
-mod strobe;
 mod system_material;
 mod video;
 mod window;
@@ -60,6 +57,8 @@ pub mod tooling;
 pub mod tray;
 pub mod windows;
 
+/// AccessKit's types, for [`Runtime::accessibility_tree`] and [`Runtime::accessibility_action`].
+pub use accesskit;
 pub use app::App;
 pub use app::AppHandle;
 pub use clipboard::ClipboardContent;
@@ -97,6 +96,7 @@ pub use el::Cycle;
 pub use el::Drag;
 pub use el::El;
 pub use el::GrowthSpec;
+pub use el::LiveRegion;
 pub use el::Outline;
 pub use el::Phase;
 pub use el::PillStyle;

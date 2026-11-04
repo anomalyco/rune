@@ -15,7 +15,8 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         .font(type_::TITLE).color(t.text);
     let knob = el().key("knob").size(18.0, 18.0).radius(9.0).fill(t.knob)
         .absolute(if s.on { 18.0 } else { 2.0 }, 2.0);
-    let switch = el().key("switch").role("switch").size(38.0, 22.0).radius(11.0)
+    // Screen readers hear "Lights, switch, on": the label names it, `checked` says its state.
+    let switch = el().key("switch").role("switch").label("Lights").checked(s.on).focusable(true).size(38.0, 22.0).radius(11.0)
         .fill(if s.on { tok::accent(0, true) } else { t.control_off })
         .motion(motion::SNAPPY)
         .on_press(|s: &mut State| s.on = !s.on)

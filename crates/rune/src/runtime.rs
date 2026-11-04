@@ -286,9 +286,18 @@ mod fold_hold;
 #[path = "runtime/motion/content_slide.rs"]
 mod content_slide;
 mod elements;
-#[cfg(feature = "strobe")]
-#[path = "strobe/runtime_view.rs"]
-mod strobe_view;
+#[path = "a11y/tree.rs"]
+pub(crate) mod a11y_tree;
+#[path = "a11y/node.rs"]
+mod a11y_node;
+#[path = "a11y/text.rs"]
+mod a11y_text;
+#[path = "a11y/actions.rs"]
+mod a11y_actions;
+use a11y_actions::A11yAct;
+#[cfg(test)]
+#[path = "a11y/tests.rs"]
+mod a11y_tests;
 #[path = "runtime/paint_probe.rs"]
 mod paint_probe;
 pub use elements::{ElementInfo, Pick, Picked, Pose};
@@ -750,6 +759,8 @@ pub struct Runtime<S: 'static> {
     drag_ends: crate::drag_out::DragEnds,
     /// Drag-outs whose `on_drag_start` ran and whose `on_drag_end` hasn't yet.
     drags_open: usize,
+    /// The accessibility tree, while an assistive client listens (`a11y/tree.rs`).
+    a11y: Option<Box<a11y_tree::A11yTree>>,
 }
 
 impl<S: 'static> Runtime<S> {
@@ -1012,6 +1023,7 @@ impl<S: 'static> Runtime<S> {
             drag_out_request: None,
             drag_ends: Default::default(),
             drags_open: 0,
+            a11y: None,
         }
     }
 }

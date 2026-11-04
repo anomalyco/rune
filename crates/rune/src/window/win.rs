@@ -9,6 +9,8 @@ pub(super) const READY_FALLBACK: Duration = Duration::from_secs(1);
 /// The open window. Fields drop in order: what's native to the OS, then the surface before its
 /// window.
 pub(super) struct Win {
+    /// The OS accessibility adapter, which goes before the window it answers for.
+    pub(super) a11y: Option<crate::a11y::Adapter>,
     #[cfg_attr(not(any(target_os = "macos", all(unix, not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
     pub(super) native: Native,
     pub(super) first_frame: FirstFrame,

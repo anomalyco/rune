@@ -291,6 +291,12 @@ impl<S: 'static> Runtime<S> {
         self.links.focus = None;
     }
 
+    /// The focused text's focused link, if any (it may not be in range for that text).
+    pub(super) fn link_focus(&self) -> Option<usize> { self.links.focus }
+
+    /// Focuses link `k` of the text about to take focus, as Tab into it does.
+    pub(super) fn set_link_focus(&mut self, k: usize) { self.links.focus = Some(k); }
+
     /// Whether focused node `i` has a link focused, which takes Return.
     pub(super) fn link_focused(&self, i: usize) -> bool {
         self.links.focus.is_some_and(|k| k < self.link_count(i))

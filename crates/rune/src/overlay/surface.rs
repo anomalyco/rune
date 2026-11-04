@@ -6,6 +6,12 @@ use super::*;
 impl<T: 'static> Overlay<T> {
     /// Creates the wgpu surface (and the GPU device, if this is the first surface).
     pub(super) fn attach(&mut self, backing: Backing, scale: f32) -> Option<Live> {
+        // First, before the surface binds the view (macOS may observe it).
+        let a11y = self.shared.wake.lock().unwrap().clone().and_then(|wake| match &backing {
+            Backing::Window(window) => crate::a11y::Adapter::new(window, wake),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            Backing::Layer(_) | Backing::Xwayland(_) => crate::a11y::Adapter::windowless(wake),
+        });
         #[cfg(target_os = "macos")]
         let moved = self.panel.as_ref().map(|p| p.raw_handles());
         let make = |instance: &wgpu::Instance| -> Option<wgpu::Surface<'static>> {
@@ -141,7 +147,7 @@ impl<T: 'static> Overlay<T> {
             fn_key,
             #[cfg(target_os = "macos")]
             present: None,
-            alpha, surface, config, backing, scale,
+            a11y, alpha, surface, config, backing, scale,
         })
     }
 

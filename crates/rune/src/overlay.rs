@@ -38,9 +38,6 @@ use crate::tooling::AppSpec;
 use crate::window::{AnyHost, WakeEvent};
 use crate::{ConfiguredOverlay, DisplayTarget, KeyPolicy, OverlayInput, OverlayOptions, OverlayPlacement, OverlaySupport};
 
-#[cfg(feature = "strobe")]
-#[path = "strobe/overlay_host.rs"]
-mod strobe_host;
 #[path = "overlay/draw.rs"]
 mod draw;
 #[path = "overlay/frame.rs"]
@@ -288,6 +285,8 @@ enum Backing {
 
 /// A shown overlay. The wgpu surface drops before what it draws into.
 struct Live {
+    /// The OS accessibility adapter for this surface.
+    a11y: Option<crate::a11y::Adapter>,
     /// Presents plain frames off the event loop's thread; joined before the surface drops.
     #[cfg(target_os = "macos")]
     present: Option<crate::frame::present_worker::PresentWorker>,

@@ -20,6 +20,7 @@ use crate::tok::TextStyle;
 pub use crate::el::tx::{Shell, Tx};
 pub(crate) use crate::el::tx::{SelectRequest, TraceCalls};
 
+mod a11y;
 mod anchor;
 mod backdrop;
 mod child_exit;
@@ -127,13 +128,8 @@ pub(crate) type DragOutFn = Rc<dyn Fn(crate::states::StatesRef<'_>) -> Option<cr
 pub(crate) type DragEndFn = Rc<dyn Fn(crate::states::States<'_>, crate::DragOutcome, &mut Tx)>;
 pub(crate) type EditFn = Rc<dyn for<'a> Fn(crate::states::States<'a>) -> &'a mut TextEdit>;
 
-/// Accessibility state beyond role and label (`El::level`, `El::expanded`, `El::secure`).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct A11y {
-    pub level: Option<u32>,
-    pub expanded: Option<bool>,
-    pub secure: bool,
-}
+pub(crate) use crate::el::a11y::{A11y, Checked};
+pub use crate::el::a11y::LiveRegion;
 
 pub(crate) use crate::el::focus::FocusSpec;
 pub(crate) use crate::el::handler_set::Handlers;

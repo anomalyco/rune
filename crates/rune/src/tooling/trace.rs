@@ -377,6 +377,7 @@ pub(crate) fn tree_json<S>(rt: &Runtime<S>, real_t: f64) -> Value {
     if let Some(dialog) = rt.file_dialog_json() { tree["fileDialog"] = dialog; }
     if let Some(title) = rt.window_title.current() { tree["title"] = title.into(); }
     if let Some((text, rect)) = rt.help_tooltip() { tree["tooltip"] = json!({ "text": text, "rect": rect.map(r2) }); }
+    tree["accessibility"] = crate::a11y::dump::json(&rt.accessibility_tree(), false);
     tree
 }
 

@@ -184,7 +184,7 @@ impl<S: 'static> Runtime<S> {
 
     /// What a move of `v` points inside node `i` (a scroll viewport's offset) comes to in the
     /// window: scaled and turned as its children draw.
-    fn content_to_window(&self, i: usize, v: [f32; 2]) -> [f32; 2] {
+    pub(super) fn content_to_window(&self, i: usize, v: [f32; 2]) -> [f32; 2] {
         let Some(h) = self.inh_scratch.get(i) else { return v };
         let [x, y] = v.map(|c| c * h.scale);
         match h.turn.checked_sub(1).and_then(|k| self.turn_scratch.get(k as usize)) {

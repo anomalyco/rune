@@ -654,7 +654,7 @@ fn flatten_ref(
             sticky: el.sticky.clone(),
             growth: el.growth.clone(),
             glide: el.glide,
-            a11y: el.a11y,
+            a11y: el.a11y.clone(),
             pixel_aspect,
             aspect_fit,
             material: el.material,

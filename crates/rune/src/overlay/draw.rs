@@ -183,8 +183,6 @@ impl<T: 'static> Overlay<T> {
         } else {
             step(&mut self.rt, &mut self.clock, &self.compositor, frame_time, prewarm)
         };
-        #[cfg(feature = "strobe")]
-        crate::strobe::built();
         #[cfg(target_os = "macos")]
         let frame = {
             let Backing::Window(window) = &live.backing;
@@ -253,13 +251,9 @@ impl<T: 'static> Overlay<T> {
         if let Some(alpha) = &live.alpha {
             alpha.draw(&mut enc, &view);
         }
-        #[cfg(feature = "strobe")]
-        crate::strobe::encoded();
         frame::submit_and_present(live, renderer, gpu, &self.rt, enc, frame, prewarm);
         crate::render::gpu_events::presented();
         if !prewarm { self.meter.presented(); }
-        #[cfg(feature = "strobe")]
-        if !prewarm { crate::strobe::presented(self.name, self.rt.instances.len()); }
         self.dirty = false;
         #[cfg(target_os = "macos")]
         let next_tick = live.pacing.as_ref().filter(|p| !prewarm && p.running()).map(|p| Instant::now() + Duration::from_secs_f64(1.0 / p.refresh_hz()));
