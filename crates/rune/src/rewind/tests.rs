@@ -58,6 +58,15 @@ fn nothing_records_or_allocates_until_a_recorder_is_attached() {
 }
 
 #[test]
+fn a_poll_can_attach_the_recorder() {
+    let mut rt = app(Rewind::new());
+    rt.poll = Some(|s, _, tx| { if s.y == 0.0 { s.y = 1.0; tx.record_rewind(Some(&s.rewind)); true } else { false } });
+    frames(&mut rt, 3);
+    assert!(rt.rewind().is_some());
+    assert!(rt.state.rewind.frames() > 0);
+}
+
+#[test]
 fn records_each_frame_and_stops_when_detached() {
     let mut rt = app(Rewind::new());
     record(&mut rt);
