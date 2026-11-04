@@ -5,7 +5,7 @@ use super::*;
 pub(super) const SCROLL_DECAY: f32 = 2.002;
 
 /// How far, in seconds, the line wipe may trail the stream before it speeds up to catch it.
-const WIPE_LAG: f64 = 0.12;
+const WIPE_LAG: f64 = 0.06;
 /// A wiping word paint never placed (scrolled away) is done this long after it arrived.
 const WIPE_UNSEEN: f64 = 1.0;
 
@@ -259,9 +259,9 @@ impl<S: 'static> Runtime<S> {
         if st.wipe > 0.0 && st.fade > 0.0
             && let Some(w) = st.sweep.borrow().word(byte).copied()
         {
-            let edge = (st.fade * st.wipe).max(1.0);
+            // Each glyph ramps in over the same time, so a fast edge is a wider one, never a pop.
             let start = w.at + f64::from(dx.max(0.0) / w.speed);
-            return (((now - start) * f64::from(w.speed / edge)) as f32).clamp(0.0, 1.0);
+            return (((now - start) / st.fade as f64) as f32).clamp(0.0, 1.0);
         }
         if st.fade <= 0.0 {
             return if now >= t0 { 1.0 } else { 0.0 };
@@ -280,7 +280,6 @@ impl<S: 'static> Runtime<S> {
             return;
         }
         let base = st.wipe.max(1.0);
-        let edge = f64::from((st.fade * st.wipe).max(1.0) / base);
         let behind = sw.front_word.is_some_and(|b| byte < b);
         let at = match sw.front {
             None => arrived,
@@ -290,10 +289,11 @@ impl<S: 'static> Runtime<S> {
             }
             Some((tf, ..)) => arrived.max(tf),
         };
+        // Trailing the stream, the edge crosses the word fast enough to be level with it again.
         let finish = arrived + 2.0 * WIPE_LAG;
-        let speed = if at + f64::from(width / base) <= finish { base } else { (width / (finish - at).max(0.03) as f32).max(base) };
+        let speed = if at + f64::from(width / base) <= finish { base } else { (width / (finish - at).max(0.004) as f32).max(base) };
         let end = at + f64::from(width / speed);
-        sw.words.push(crate::runtime::types::SweepWord { byte, at, speed, done: end + edge * f64::from(base / speed) });
+        sw.words.push(crate::runtime::types::SweepWord { byte, at, speed, done: end + st.fade as f64 });
         if !behind {
             sw.front = Some((end, left + width, top, bottom));
             sw.front_word = Some(byte);
