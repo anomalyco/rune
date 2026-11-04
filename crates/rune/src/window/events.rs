@@ -430,6 +430,10 @@ impl<S: 'static> Host<S> {
                         (ElementState::Pressed, true) => rt.secondary_down(x, y),
                         (ElementState::Released, true) => rt.secondary_up(x, y),
                         (ElementState::Pressed, false) => {
+                            if let Some(edge) = l.resize_edge(rt) {
+                                if let Err(error) = l.window.drag_resize_window(edge) { eprintln!("rune: window resize unavailable: {error}"); }
+                                return;
+                            }
                             #[cfg(target_os = "macos")]
                             rt.set_native_titlebar_band(mac::native_titlebar_band(&l.window));
                             rt.pointer_down(x, y);
@@ -439,7 +443,7 @@ impl<S: 'static> Host<S> {
                                 Some(TitlebarAction::Drag) => {
                                     let _ = l.window.drag_window();
                                 }
-                                Some(TitlebarAction::DoubleClick) => titlebar_double_click(&l.window),
+                                Some(TitlebarAction::DoubleClick) => shell_requests::titlebar_double_click(&l.window),
                                 None => {}
                             }
                         }

@@ -21,7 +21,7 @@ use std::time::Duration;
 use crate::time::Instant;
 
 use winit::event_loop::ActiveEventLoop;
-use winit::window::{CursorIcon, CustomCursor, Window};
+use winit::window::{CursorIcon, CustomCursor, ResizeDirection, Window};
 
 use crate::el::Cursor;
 
@@ -30,6 +30,7 @@ pub(crate) const REASSERT: Duration = Duration::from_millis(50);
 
 pub(crate) struct OsCursor {
     applied: (bool, Cursor),
+    resize: Option<ResizeDirection>,
     /// The scale an image cursor was last made at: a window moving to a display with another
     /// scale makes it again.
     scale: f32,
@@ -38,7 +39,15 @@ pub(crate) struct OsCursor {
 
 impl OsCursor {
     pub(crate) fn new(event_loop: &ActiveEventLoop) -> Self {
-        OsCursor { applied: (false, Cursor::Default), scale: 0.0, transparent: transparent(event_loop) }
+        OsCursor { applied: (false, Cursor::Default), resize: None, scale: 0.0, transparent: transparent(event_loop) }
+    }
+
+    /// Window chrome owns the cursor until the next content cursor is applied.
+    pub(crate) fn apply_resize(&mut self, window: &Arc<Window>, edge: ResizeDirection) {
+        if self.resize.replace(edge) == Some(edge) { return; }
+        #[cfg(not(target_os = "macos"))]
+        images::forget(window);
+        window.set_cursor(CursorIcon::from(edge));
     }
 
     /// Applies `want` while the host is `active` (the pointer is over its window or its hit
@@ -48,7 +57,8 @@ impl OsCursor {
     pub(crate) fn apply(&mut self, window: &Arc<Window>, want: Cursor, active: bool) {
         let scale = image_scale(window);
         let rescaled = active && matches!(want, Cursor::Image(_)) && std::mem::replace(&mut self.scale, scale) != scale;
-        let Some(next) = next(&mut self.applied, want, active).or(rescaled.then_some(want)) else {
+        let left_edge = self.resize.take().is_some();
+        let Some(next) = next(&mut self.applied, want, active).or((rescaled || left_edge).then_some(self.applied.1)) else {
             self.reassert();
             return;
         };

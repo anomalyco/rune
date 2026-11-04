@@ -18,6 +18,10 @@ fn window_frame_requests_take_the_change_spring() {
     rt.update(|_, tx| { tx.resize_window((1.0, 2.0)); tx.center_window(); });
     let request = rt.window_frame.take().unwrap();
     assert_eq!((request.size, request.center), (Some((1.0, 2.0)), true));
+    rt.update(|_, tx| tx.toggle_maximize());
+    assert!(rt.window_frame.unwrap().toggle_maximize);
+    rt.update(|_, tx| tx.toggle_maximize());
+    assert!(!rt.window_frame.take().unwrap().toggle_maximize, "two toggles before the shell acts cancel");
 }
 
 #[test]

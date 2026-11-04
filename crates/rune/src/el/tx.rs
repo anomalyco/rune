@@ -185,13 +185,18 @@ impl Tx {
         self.shell = Some(Shell::Quit);
     }
 
-    /// Minimize this window after this handler, as its minimize button would (winit's
-    /// `set_minimized` off macOS). Does nothing (logging in debug builds) where a window
-    /// can't minimize: an overlay, a panel or launcher, a borderless window, or one without a
-    /// minimize button.
+    /// Minimize this window after this handler. On Windows and Linux this also works for
+    /// borderless app windows. Hidden windows, overlays, panels, launchers and windows
+    /// without minimize support ignore it (logging in debug builds).
     /// A close or quit asked in the same change wins.
     pub fn minimize(&mut self) {
         self.minimize = true;
+    }
+
+    /// Maximize this window after this handler, or restore its previous size if maximized.
+    /// Works with or without a title bar. Hidden windows, overlays and panels ignore it.
+    pub fn toggle_maximize(&mut self) {
+        self.frame_request(crate::window::frame::FrameRequest { toggle_maximize: true, ..Default::default() });
     }
 
     /// Set this window's title after this handler, in its title bar and the Window menu. The

@@ -111,6 +111,11 @@ impl<S: 'static> Host<S> {
             self.args.size = None;
         }
         let Some(w) = &self.win else { return };
+        if request.toggle_maximize && w.visible && !self.options.click_through && !self.macos_window.nonactivating_panel {
+            shell_requests::toggle_maximize(&w.window);
+            return;
+        }
+        if request.size.is_none() && !request.center { return; }
         #[cfg(target_os = "macos")]
         {
             use crate::window::frame::{FrameAnim, snap, target};
