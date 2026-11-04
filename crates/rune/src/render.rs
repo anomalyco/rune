@@ -7,6 +7,7 @@ use crate::text::{ATLAS_SIZE, Atlas};
 
 mod backdrop_blur;
 mod first_use;
+pub(crate) mod gpu_events;
 pub(crate) mod layer_blur;
 mod layers;
 mod metallib;
@@ -554,6 +555,7 @@ impl Gpu {
         let Some((early, renderer)) = early.filter(|(gpu, _)| crate::gpu::backend::serves(&gpu.device, wanted)) else {
             let instance = Self::instance_for(wanted);
             let surface = surface(&instance)?;
+            gpu_events::starting();
             return Ok((Self::try_for(instance, Some(&surface), wanted, translucent)?, surface, None));
         };
         let surface = surface(&early.instance)?;
@@ -562,6 +564,7 @@ impl Gpu {
         }
         let instance = early.instance.clone();
         drop((renderer, early));
+        gpu_events::starting();
         Ok((Self::try_for(instance, Some(&surface), wanted, translucent)?, surface, None))
     }
 }

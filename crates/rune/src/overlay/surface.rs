@@ -191,7 +191,7 @@ impl<T: 'static> Overlay<T> {
             drop(alpha);
             drop(surface);
             backing
-        });
+        }).or_else(|| self.parked.take());
         #[cfg(target_os = "macos")]
         self.panel.take();
         #[cfg(target_os = "windows")]

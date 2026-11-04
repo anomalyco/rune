@@ -118,7 +118,8 @@ pub struct OverlayOptions {
     pub keys: KeyPolicy,
     pub input: OverlayInput,
     /// Create and warm a hidden native host on the event thread at startup. Desktop hosts
-    /// retain their window and GPU surface across hide/show; Wayland must recreate on hide.
+    /// retain their window and GPU surface across hide/show (unless
+    /// `ConfiguredOverlay::release_gpu_when_hidden`); Wayland must recreate on hide.
     /// macOS orders the panel in at alpha zero only for a scoped prewarm, then orders it out.
     /// Initial preparation settles the view. Later reveals refresh content, geometry and
     /// live values while preserving motion elapsed since each hidden commit. Hidden motion
@@ -140,6 +141,7 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub(crate) macos_level: Option<isize>,
     pub(crate) modifier_keys: bool,
     pub(crate) animate_reveal: bool,
+    pub(crate) release_hidden: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -185,6 +187,17 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// first visible frame, such as a notification stack's first card entering. By default
     /// an unretained overlay shows settled, at its target.
     pub fn animate_reveal(mut self) -> Self { self.animate_reveal = true; self }
+    /// While hidden, the overlay holds no GPU surface, swapchain or renderer, nor a share of the
+    /// GPU device, which goes with the last surface on it. Prewarmed, it makes only its window
+    /// at startup (so `on_created` and capture exclusion still come then); each show makes the
+    /// surface, and each hide drops it. A show then waits for the surface (a few milliseconds),
+    /// and with no other surface on a device, for a new device and its pipelines too (over
+    /// half a second on some Windows PCs). For overlays that show rarely and cover a display,
+    /// such as a drawing layer or a picker: hidden, their swapchains hold tens of megabytes,
+    /// and an app whose only surfaces they are holds no GPU device until one shows. By default a
+    /// prewarmed overlay makes its surface at startup and keeps it, so it shows at once. macOS
+    /// ignores it: a prewarmed panel retains its pixels at alpha zero.
+    pub fn release_gpu_when_hidden(mut self) -> Self { self.release_hidden = true; self }
     /// The macOS window level (`NSWindow.Level`, e.g. 3 for `.floating`), in place of
     /// `OverlayOptions::level`; `OverlayHandle::set_macos_level` changes it later. At any
     /// level a macOS overlay goes exactly where it's placed, over the menu bar too.
@@ -197,7 +210,7 @@ impl<T: 'static> OverlaySpec<T> {
     }
 
     pub fn options(self, options: OverlayOptions) -> ConfiguredOverlay<T> {
-        ConfiguredOverlay { spec: self, options, on_key: None, on_created: None, poll: None, on_focus: None, compositor: None, setup: None, srgb_blend: true, macos_level: None, modifier_keys: false, animate_reveal: false }
+        ConfiguredOverlay { spec: self, options, on_key: None, on_created: None, poll: None, on_focus: None, compositor: None, setup: None, srgb_blend: true, macos_level: None, modifier_keys: false, animate_reveal: false, release_hidden: false }
     }
 }
 

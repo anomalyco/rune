@@ -44,7 +44,7 @@ impl<T: 'static> AnyHost for Overlay<T> {
     }
 
     fn owns(&self, id: WindowId) -> bool {
-        let window = match self.live.as_ref().map(|l| &l.backing) {
+        let window = match self.live.as_ref().map(|l| &l.backing).or(self.parked.as_ref()) {
             Some(Backing::Window(w)) => Some(w),
             _ => None,
         };

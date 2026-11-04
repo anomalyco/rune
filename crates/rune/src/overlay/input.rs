@@ -363,7 +363,7 @@ impl<T: 'static> Overlay<T> {
                 }
             }
         }
-        if self.options.prewarm && self.shared.availability.load(Ordering::Acquire) == 0 { self.prepare(event_loop); }
+        if self.options.prewarm && self.shared.availability.load(Ordering::Acquire) == 0 { self.prepare(event_loop, false); }
         if let Some(level) = requests.macos_level {
             self.macos_level = Some(level);
             #[cfg(target_os = "macos")]
@@ -378,7 +378,7 @@ impl<T: 'static> Overlay<T> {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if recreate_layer && self.live.is_none() {
             if layer_was_visible && requests.visible != Some(false) { self.show_fading(event_loop, Duration::ZERO); }
-            else if self.options.prewarm { self.prepare(event_loop); }
+            else if self.options.prewarm { self.prepare(event_loop, false); }
         }
         if requests.refollow && self.visible && let Some(point) = Self::sample_pointer(event_loop) {
             self.refollow(event_loop, point);

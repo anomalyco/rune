@@ -256,6 +256,7 @@ impl<T: 'static> Overlay<T> {
         #[cfg(feature = "strobe")]
         crate::strobe::encoded();
         frame::submit_and_present(live, renderer, gpu, &self.rt, enc, frame, prewarm);
+        crate::render::gpu_events::presented();
         if !prewarm { self.meter.presented(); }
         #[cfg(feature = "strobe")]
         if !prewarm { crate::strobe::presented(self.name, self.rt.instances.len()); }

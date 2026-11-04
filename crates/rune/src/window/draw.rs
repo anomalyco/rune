@@ -287,6 +287,7 @@ impl<S: 'static> Host<S> {
         l.native.materials.present(&rt.materials, rt.env.scale, || gpu.queue.present(frame));
         #[cfg(not(target_os = "macos"))]
         gpu.queue.present(frame);
+        crate::render::gpu_events::presented();
         #[cfg(feature = "strobe")]
         if !hidden { crate::strobe::presented(self.native_handle.key(), rt.instances.len()); }
         #[cfg(all(feature = "strobe", target_os = "macos"))]

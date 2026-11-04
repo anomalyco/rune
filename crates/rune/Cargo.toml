@@ -208,6 +208,10 @@ name = "launcher_wakes"
 harness = false
 
 [[test]]
+name = "overlay_gpu_lifecycle"
+harness = false
+
+[[test]]
 name = "macos_window_corners"
 harness = false
 

@@ -339,6 +339,11 @@ pub(crate) struct Overlay<T: 'static> {
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     x11: Option<crate::platform::x11::overlay::InputWindow>,
     live: Option<Live>,
+    /// The native window while it has no GPU surface: just made, or hidden with
+    /// `release_gpu_when_hidden`. Windows and X11 only.
+    parked: Option<Backing>,
+    /// `ConfiguredOverlay::release_gpu_when_hidden`.
+    release_hidden: bool,
     cursor: Option<crate::cursor::os::OsCursor>,
     mods: winit::keyboard::ModifiersState,
     renderer: Option<Renderer>,
@@ -373,7 +378,7 @@ pub(crate) struct Overlay<T: 'static> {
 
 impl<T: 'static> Overlay<T> {
     pub(crate) fn new<S>(configured: impl Into<ConfiguredOverlay<T>>, state: T, app: &AppSpec<S>) -> (Self, OverlayHandle<T>) {
-        let ConfiguredOverlay { spec, options, on_key, on_created, poll, on_focus, compositor, setup, srgb_blend, macos_level, modifier_keys, animate_reveal } = configured.into();
+        let ConfiguredOverlay { spec, options, on_key, on_created, poll, on_focus, compositor, setup, srgb_blend, macos_level, modifier_keys, animate_reveal, release_hidden } = configured.into();
         let shared = Arc::new(Shared { native: Mutex::default(), requests: Mutex::default(), availability: AtomicU8::new(0), failure: Mutex::default(), surface: Mutex::default(), wake: Mutex::new(None), stats: Arc::default() });
         let meter = crate::frame::surface_stats::SurfaceMeter::new(spec.name, shared.stats.clone());
         let text = TextSystem::for_window(app.fonts, app.families);
@@ -415,6 +420,8 @@ impl<T: 'static> Overlay<T> {
             popup: Default::default(),
             compositor,
             live: None,
+            parked: None,
+            release_hidden,
             cursor: None,
             #[cfg(target_os = "macos")]
             panel: None,
@@ -474,7 +481,7 @@ impl<T: 'static> Overlay<T> {
         let size = self.at.size;
         self.resolve_size(event_loop);
         if self.live.is_none() {
-            self.prepare(event_loop);
+            self.prepare(event_loop, true);
             if self.shared.failure.lock().unwrap().is_some() { return; }
         }
         if self.live.is_none() { return; }
@@ -519,10 +526,29 @@ impl<T: 'static> Overlay<T> {
         self.dirty = true;
     }
 
-    fn prepare(&mut self, event_loop: &ActiveEventLoop) {
+    /// Makes the overlay's native window and GPU surface: at startup for a prewarmed overlay
+    /// (`showing` false), or for the show. A prewarmed `release_gpu_when_hidden` overlay makes
+    /// only its window at startup and parks it; its surface, and the GPU device for the first,
+    /// wait for the show.
+    fn prepare(&mut self, event_loop: &ActiveEventLoop, showing: bool) {
         if self.live.is_some() { return; }
+        let surface = showing || !self.defers_gpu();
+        let wayland = crate::window::is_wayland(event_loop);
+        // A Wayland overlay's window is its surface: both wait.
+        if wayland && !surface { return; }
         self.resolve_size(event_loop);
-        let made = if crate::window::is_wayland(event_loop) { self.layer(event_loop).or_else(|| self.xwayland()) } else { self.window(event_loop) };
+        let made = if wayland {
+            self.layer(event_loop).or_else(|| self.xwayland())
+        } else if self.parked.is_some() || self.window(event_loop).is_some() {
+            // macOS made the surface with its panel; elsewhere the window waits in `parked`.
+            match self.live.take() {
+                Some(live) => Some(live),
+                None if surface => self.unpark(),
+                None => return self.ready(showing),
+            }
+        } else {
+            None
+        };
         match made {
             Some(live) => {
                 self.live = Some(live);
@@ -535,21 +561,28 @@ impl<T: 'static> Overlay<T> {
                     self.rescale(&gpu, scale);
                     if self.shared.failure.lock().unwrap().is_some() { return; }
                 }
-                self.set_availability(Availability::Available);
-                if !self.animate_reveal { self.rt.settle_all(); }
-                self.dirty = true;
-                self.idle = true;
-                if self.options.prewarm { self.warm(); }
-                if let Some(created) = self.on_created.take() {
-                    let (window_number, capabilities) = *self.shared.native.lock().unwrap();
-                    created(crate::OverlayCreated { window_number, capabilities });
-                }
+                self.ready(showing);
             }
             None => if self.shared.failure.lock().unwrap().is_none() {
                 self.fail("the platform could not create its window or surface".into());
             } else {
                 self.set_availability(Availability::Unavailable);
             },
+        }
+    }
+
+    /// The window exists, with its surface or parked: the overlay can show. A prewarmed one
+    /// warms what it has (parked, only the view); one that makes its surface for each show
+    /// draws its own first frame instead.
+    fn ready(&mut self, showing: bool) {
+        self.set_availability(Availability::Available);
+        if !self.animate_reveal { self.rt.settle_all(); }
+        self.dirty = true;
+        self.idle = true;
+        if self.options.prewarm && !(showing && self.defers_gpu()) { self.warm(); }
+        if let Some(created) = self.on_created.take() {
+            let (window_number, capabilities) = *self.shared.native.lock().unwrap();
+            created(crate::OverlayCreated { window_number, capabilities });
         }
     }
 
@@ -634,6 +667,7 @@ impl<T: 'static> Overlay<T> {
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             Backing::Layer(_) | Backing::Xwayland(_) => { self.live.take(); }
         }
+        self.park();
     }
 
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -668,7 +702,9 @@ impl<T: 'static> Overlay<T> {
         None
     }
 
-    fn window(&mut self, event_loop: &ActiveEventLoop) -> Option<Live> {
+    /// Makes the native window: on macOS with its GPU surface (`live`), which binds winit's view
+    /// before the view moves into the panel; elsewhere without one (`parked`).
+    fn window(&mut self, event_loop: &ActiveEventLoop) -> Option<()> {
         let mut attrs = Window::default_attributes()
             .with_title(self.name)
             .with_inner_size(LogicalSize::new(self.at.size.0 as f64, self.at.size.1 as f64))
@@ -713,10 +749,10 @@ impl<T: 'static> Overlay<T> {
         self.dark = window.theme().map_or_else(|| crate::platform::preferences::desktop_dark(&window).unwrap_or(true), |t| t == winit::window::Theme::Dark);
         self.rt.set_system_dark(self.dark);
         if self.cursor.is_none() { self.cursor = Some(crate::cursor::os::OsCursor::new(event_loop)); }
-        let scale = crate::window::backing_scale(&window);
         // The surface first: on macOS it binds winit's view and its layer, which then move
         // into the panel.
-        let live = self.attach(Backing::Window(window.clone()), scale)?;
+        #[cfg(target_os = "macos")]
+        let live = self.attach(Backing::Window(window.clone()), crate::window::backing_scale(&window))?;
         #[cfg(target_os = "macos")]
         {
             let wake = self.shared.wake.lock().unwrap().clone();
@@ -755,7 +791,38 @@ impl<T: 'static> Overlay<T> {
             }
         }
         self.place_window(event_loop, &window);
-        Some(live)
+        #[cfg(target_os = "macos")]
+        { self.live = Some(live); }
+        #[cfg(not(target_os = "macos"))]
+        { self.parked = Some(Backing::Window(window)); }
+        Some(())
+    }
+
+    /// The parked window's GPU surface, and the device for the first surface. Failing, the
+    /// window stays parked for the next show to try again.
+    fn unpark(&mut self) -> Option<Live> {
+        let Some(Backing::Window(window)) = self.parked.take() else { return None };
+        let live = self.attach(Backing::Window(window.clone()), crate::window::backing_scale(&window));
+        if live.is_none() { self.parked = Some(Backing::Window(window)); }
+        live
+    }
+
+    /// `release_gpu_when_hidden`, which macOS ignores: its prewarmed panels retain their pixels.
+    fn defers_gpu(&self) -> bool { self.release_hidden && !cfg!(target_os = "macos") }
+
+    /// `release_gpu_when_hidden`: the hidden overlay gives back its surface, swapchain and
+    /// renderer, and its hold on the GPU device, which goes with the last surface on it. The
+    /// window stays parked.
+    fn park(&mut self) {
+        if !self.defers_gpu() || !matches!(self.live.as_ref().map(|l| &l.backing), Some(Backing::Window(_))) { return; }
+        let Some(Live { alpha, surface, backing, .. }) = self.live.take() else { return };
+        // The surface goes before the device that made it and the window it draws into.
+        drop(alpha);
+        drop(surface);
+        self.renderer = None;
+        self.gpu = None;
+        self.parked = Some(backing);
+        *self.shared.surface.lock().unwrap() = None;
     }
 
     /// Moving the window under a still pointer (`place`, `set_placement`, a resize that keeps
@@ -832,6 +899,12 @@ impl<T: 'static> Overlay<T> {
     }
 
     fn resized(&mut self, event_loop: &ActiveEventLoop) {
+        // A parked window takes the size now; its surface is made at it.
+        if let Some(Backing::Window(w)) = &self.parked {
+            let w = w.clone();
+            let _ = w.request_inner_size(LogicalSize::new(self.at.size.0 as f64, self.at.size.1 as f64));
+            return self.place_window(event_loop, &w);
+        }
         let Some(live) = self.live.as_mut() else { return };
         match &mut live.backing {
             Backing::Window(w) => {
