@@ -1,0 +1,6 @@
+[
+  { "t": 0.25, "type": "move", "key": "item-3" },
+  { "t": 0.6, "type": "move", "key": "thumb" },
+  { "t": 1.4, "type": "move", "key": "item-3" },
+  { "t": 3.2, "type": "mark", "name": "end" }
+]

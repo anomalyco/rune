@@ -1,0 +1,5 @@
+[
+  { "t": 0.3, "type": "tap", "key": "more" },
+  { "t": 1.3, "type": "tap", "key": "more" },
+  { "t": 2.4, "type": "mark", "name": "end" }
+]
