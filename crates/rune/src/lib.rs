@@ -274,6 +274,7 @@ pub use runtime::SelectedText;
 pub use runtime::SelectionChange;
 pub use runtime::TextSelection;
 pub use runtime::TitlebarAction;
+pub use runtime::TouchPhase;
 pub use runtime::Waker;
 pub use runtime::commit_generation;
 #[doc(hidden)]

@@ -22,22 +22,10 @@ pub(super) struct Bridge {
     _callback: Closure<dyn FnMut(String)>,
     dispose_viewport: js_sys::Function,
     mods: ModifiersState,
-    touch: Option<Touch>,
     mirror: crate::runtime::web_runtime::Mirror,
     a11y: crate::runtime::web_a11y::A11yMirror,
     copy_cache: String,
     fit_height: bool,
-}
-struct Touch {
-    id: u64,
-    scroll: Option<crate::NodeId>,
-    origin: (f32, f32),
-    last: (f32, f32),
-    at: Instant,
-    velocity: f32,
-    pan: bool,
-    /// The pan moves a horizontal viewport (picked when it starts).
-    horizontal: bool,
 }
 
 impl Bridge {
@@ -58,7 +46,7 @@ impl Bridge {
         let dispose_viewport = platform::viewport(canvas, callback.as_ref().unchecked_ref(), embedded);
         let handle = mount(canvas, callback.as_ref().unchecked_ref(), embedded, fit_height);
         Self { handle, _callback: callback, dispose_viewport, mods: ModifiersState::empty(),
-            touch: None, mirror: Default::default(), a11y: Default::default(),
+            mirror: Default::default(), a11y: Default::default(),
             copy_cache: String::new(), fit_height }
     }
 }
@@ -96,7 +84,7 @@ impl<S: 'static> Running<S> {
             Some("dpr") => {
                 let size = window.inner_size();
                 let scale = event["scale"].as_f64().unwrap_or_else(|| window.scale_factor()).max(0.5) as f32;
-                self.resize_surface(size, scale);
+                self.resize_surface(window, size, scale);
             }
             Some("motion") => self.rt.set_system_reduced_motion(event["reduced"].as_bool().unwrap_or(false)),
             Some("focus") => self.rt.window_focus(event["focused"].as_bool().unwrap_or(false)),
@@ -135,15 +123,15 @@ impl<S: 'static> Running<S> {
         let mut immediate = false;
         match event {
             WindowEvent::ModifiersChanged(mods) => { self.input.mods = mods.state(); return false; }
-            WindowEvent::CursorMoved { position, .. } if self.input.touch.is_none() => {
+            WindowEvent::CursorMoved { position, .. } if !self.rt.touching() => {
                 self.rt.pointer_move(position.x as f32 / scale, position.y as f32 / scale);
                 self.cursor.apply(window, self.rt.cursor(), true);
             }
-            WindowEvent::CursorLeft { .. } if self.input.touch.is_none() => {
+            WindowEvent::CursorLeft { .. } if !self.rt.touching() => {
                 self.rt.pointer_leave();
                 self.cursor.apply(window, crate::el::Cursor::Default, false);
             }
-            WindowEvent::MouseInput { button, state, .. } if self.input.touch.is_none() => {
+            WindowEvent::MouseInput { button, state, .. } if !self.rt.touching() => {
                 immediate = true;
                 let Some((x, y)) = self.rt.pointer() else { return false };
                 match (button, state) {
@@ -184,43 +172,9 @@ impl<S: 'static> Running<S> {
                 }
             }
             WindowEvent::Touch(touch) if !self.input.fit_height => {
-                let point = (touch.location.x as f32 / scale, touch.location.y as f32 / scale);
-                match touch.phase {
-                    TouchPhase::Started if self.input.touch.is_none() => {
-                        self.input.touch = Some(Touch { id: touch.id, scroll: self.rt.web_touch_start(point.0, point.1),
-                            origin: point, last: point, at: Instant::now(), velocity: 0.0, pan: false, horizontal: false });
-                    }
-                    TouchPhase::Moved => {
-                        let Some(t) = &mut self.input.touch else { return false };
-                        if t.id != touch.id { return false; }
-                        let (dx, dy) = (point.0 - t.origin.0, point.1 - t.origin.1);
-                        if !t.pan && dx.hypot(dy) > 8.0 {
-                            t.pan = true;
-                            (t.scroll, t.horizontal) = self.rt.web_touch_pan(t.origin.0, t.origin.1, dx.abs() > dy.abs(), t.scroll);
-                        }
-                        let horizontal = t.horizontal;
-                        let along = move |p: (f32, f32)| if horizontal { p.0 } else { p.1 };
-                        let now = Instant::now();
-                        let dt = now.duration_since(t.at).as_secs_f32();
-                        if dt > 0.0 { t.velocity = (along(point) - along(t.last)) / dt; }
-                        if t.pan { if let Some(id) = t.scroll { self.rt.web_touch_move(id, along(point) - along(t.origin)); } }
-                        t.last = point; t.at = now;
-                    }
-                    TouchPhase::Ended | TouchPhase::Cancelled => {
-                        if self.input.touch.as_ref().is_none_or(|t| t.id != touch.id) { return false; }
-                        let t = self.input.touch.take().unwrap();
-                        let velocity = if t.pan && touch.phase == TouchPhase::Ended && t.at.elapsed().as_millis() < 100 { t.velocity } else { 0.0 };
-                        self.rt.web_touch_end(t.scroll, velocity);
-                        if !t.pan && touch.phase == TouchPhase::Ended {
-                            self.rt.pointer_down(point.0, point.1);
-                            self.rt.pointer_up(point.0, point.1);
-                            activate = true;
-                            immediate = true;
-                        }
-                        self.rt.pointer_leave();
-                    }
-                    _ => return false,
-                }
+                crate::window::touch(&mut self.rt, touch, scale);
+                // A tap is a user activation: links, the clipboard and focus act before the handler returns.
+                if matches!(touch.phase, TouchPhase::Ended) { activate = true; immediate = true; }
             }
             _ => return false,
         }

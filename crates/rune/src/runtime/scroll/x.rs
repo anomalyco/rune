@@ -73,7 +73,6 @@ pub(crate) fn wheel_delta(delta: winit::event::MouseScrollDelta, scale: f32, shi
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) const SHIFT_TURNS_WHEEL: bool = !cfg!(target_os = "macos");
 
-#[cfg(any(test, target_arch = "wasm32"))]
 impl ScrollState {
     /// The offset, velocity and limit on one axis.
     pub(super) fn axis(&mut self, horizontal: bool) -> (&mut f64, &mut f32, f64) {
@@ -236,8 +235,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn step_scroll_x(&mut self, i: usize, dt: f32) -> bool {
         let id = self.nodes[i].id;
         let overflow = self.scroll_overflow_x(i);
-        #[cfg(target_arch = "wasm32")]
-        if let Some(active) = self.web_step_scroll(id, overflow, dt, true) { return active; }
+        if let Some(active) = self.step_touch_scroll(id, overflow, dt, true) { return active; }
         let Some(st) = self.scrolls.get_mut(&id) else { return false };
         st.x.max = overflow.max(0.0);
         let mut moving = false;

@@ -1,0 +1,1 @@
+- **Web canvases size correctly under an emulated device scale.** When the canvas size the browser reports disagrees with the canvas's CSS box times the scale by more than a couple of pixels, the surface is sized from the box. Chromium reports CSS pixels there under an emulated scale (Playwright), which drew an embedded canvas at half size and 2× zoom.

@@ -232,6 +232,10 @@ impl<S: 'static> Host<S> {
         let rt = &mut self.rt;
         let scale = l.window.scale_factor() as f32;
         let chrome = self.chrome;
+        // A finger presses through `WindowEvent::Touch`; the mouse events a system makes up
+        // from it (Windows promotes touches) would press a second time.
+        if matches!(event, WindowEvent::CursorMoved { .. } | WindowEvent::CursorLeft { .. } | WindowEvent::MouseInput { .. })
+            && (rt.touching() || touch_promoted()) { return; }
         match event {
             WindowEvent::Moved(_) => {
                 // winit queues `ScaleFactorChanged` in `kCFRunLoopDefaultMode`, which waits
@@ -453,6 +457,10 @@ impl<S: 'static> Host<S> {
                 rt.pointer_leave();
                 l.window.request_redraw();
             }
+            WindowEvent::Touch(touch) => {
+                crate::window::touch(rt, &touch, scale);
+                l.window.request_redraw();
+            }
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
                 if state == ElementState::Pressed {
                     self.control_click = cfg!(target_os = "macos") && self.mods.control_key();
@@ -503,3 +511,18 @@ impl<S: 'static> Host<S> {
         }
     }
 }
+
+/// Whether the mouse message being handled is one Windows made up from a touch or a pen
+/// (`GetMessageExtraInfo` carries `MI_WP_SIGNATURE`). winit handles the message inside the
+/// window procedure, so the extra info is still the message's own.
+#[cfg(target_os = "windows")]
+fn touch_promoted() -> bool {
+    const MI_WP_SIGNATURE: u32 = 0xFF51_5700;
+    // SAFETY: reads the calling thread's current message info; no pointers involved.
+    let info = unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetMessageExtraInfo() } as u32;
+    info & 0xFFFF_FF00 == MI_WP_SIGNATURE
+}
+
+#[cfg(not(target_os = "windows"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn touch_promoted() -> bool { false }

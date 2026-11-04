@@ -163,6 +163,11 @@ mod scroll_watch;
 pub use scroll_watch::scroll_watch_state;
 #[path = "runtime/input/gesture.rs"]
 mod gesture_dispatch;
+#[path = "runtime/input/touch.rs"]
+mod touch_input;
+pub use touch_input::TouchPhase;
+#[path = "runtime/scroll/touch.rs"]
+mod scroll_touch;
 #[path = "runtime/motion/flights.rs"]
 mod flights;
 #[path = "runtime/paint/text_flights.rs"]
@@ -510,8 +515,8 @@ pub struct Runtime<S: 'static> {
     scrolls: HashMap<NodeId, ScrollState>,
     /// The axis the current wheel or trackpad gesture scrolls (`runtime/scroll/x.rs`).
     wheel_lock: scroll_x::WheelLock,
-    #[cfg(any(test, target_arch = "wasm32"))]
-    web_scroll: Option<web_runtime::TouchScroll>,
+    /// The finger that is down and the viewport a touch holds (`runtime/input/touch.rs`).
+    touch: touch_input::Touch,
     grows: HashMap<NodeId, GrowTrack>,
     stacks: HashMap<NodeId, Stack>,
     pub(crate) virtuals: HashMap<String, crate::el::virtual_list::VirtualList>,
@@ -890,8 +895,7 @@ impl<S: 'static> Runtime<S> {
             seen: Vec::new(),
             scrolls: HashMap::default(),
             wheel_lock: Default::default(),
-            #[cfg(any(test, target_arch = "wasm32"))]
-            web_scroll: None,
+            touch: Default::default(),
             grows: HashMap::default(),
             stacks: HashMap::default(),
             virtuals: HashMap::default(),
