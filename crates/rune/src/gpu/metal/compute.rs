@@ -167,6 +167,8 @@ impl ComputePassInterface for MetalComputePass {
         if self.pipeline.as_ref().is_some_and(|p| Arc::ptr_eq(p, next)) { return }
         if self.pipeline.as_ref().is_none_or(|p| !Arc::ptr_eq(&p.layout, &next.layout)) {
             self.dirty = self.bound();
+            // Zeroed for a new layout, as wgpu-core does.
+            self.immediates.clear();
             self.immediates.resize(next.layout.immediates as usize, 0);
             self.immediates_dirty = true;
         }

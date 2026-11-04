@@ -182,6 +182,94 @@ fn a_scene_matches_wgpus_pixel_for_pixel() {
     assert!(mask == want_mask, "mask differs from wgpu's at {:?}", mask.iter().zip(&want_mask).position(|(a, b)| a != b));
 }
 
+const IMMEDIATE_SCENE: &str = r#"
+struct I { offset: vec2<f32>, scale: f32, alpha: f32, tint: vec4<f32> };
+var<immediate> i: I;
+@group(0) @binding(0) var<uniform> base: vec4<f32>;
+
+@vertex fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+    let corner = vec2<f32>(f32(vi & 1u), f32(vi >> 1u));
+    let xy = i.offset + corner * i.scale;
+    return vec4<f32>(xy.x * 2.0 - 1.0, 1.0 - xy.y * 2.0, 0.0, 1.0);
+}
+
+@fragment fn fs() -> @location(0) vec4<f32> {
+    return vec4<f32>(base.rgb * i.tint.rgb, i.alpha);
+}
+"#;
+
+/// Two quads whose immediates both stages read beside a bind group (so the group's slots sit
+/// after the immediates'), the second changing only part of them. Returns the target, read back.
+fn immediate_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<u8> {
+    use wgpu::{BufferUsages as B, ShaderStages as S, TextureUsages as T};
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("immediates"), source: wgpu::ShaderSource::Wgsl(IMMEDIATE_SCENE.into()) });
+    let group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[wgpu::BindGroupLayoutEntry {
+        binding: 0, visibility: S::FRAGMENT, count: None,
+        ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+    }] });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&group_layout)], immediate_size: 32 });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("immediates"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+        fragment: Some(wgpu::FragmentState { module: &module, entry_point: Some("fs"), compilation_options: Default::default(), targets: &[
+            Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba8Unorm, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL }),
+        ] }),
+        primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleStrip, ..Default::default() },
+        depth_stencil: None,
+        multisample: Default::default(),
+        multiview_mask: None,
+        cache: None,
+    });
+    let uniform = buffer(device, 16, B::UNIFORM | B::COPY_DST);
+    queue.write_buffer(&uniform, 0, bytemuck::cast_slice(&[1.0f32, 0.8, 0.5, 1.0]));
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &group_layout, entries: &[
+        wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
+    ] });
+    let target = texture(device, wgpu::TextureFormat::Rgba8Unorm, (W, H), T::RENDER_ATTACHMENT | T::COPY_SRC);
+    let view = target.create_view(&Default::default());
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, resolve_target: None, depth_slice: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.2, b: 0.3, a: 1.0 }), store: wgpu::StoreOp::Store } })],
+            ..Default::default()
+        });
+        // The group before the pipeline: it lands after the immediates' slot.
+        pass.set_bind_group(0, &group, &[]);
+        pass.set_pipeline(&pipeline);
+        pass.set_immediates(0, bytemuck::cast_slice(&[0.1f32, 0.1, 0.4, 0.9, 0.2, 1.0, 0.6, 1.0]));
+        pass.draw(0..4, 0..1);
+        // Only the offset and the tint's first channel change.
+        pass.set_immediates(0, bytemuck::cast_slice(&[0.5f32, 0.4]));
+        pass.set_immediates(16, bytemuck::cast_slice(&[0.9f32]));
+        pass.draw(0..4, 0..1);
+    }
+    let out = buffer(device, 256 * u64::from(H), B::COPY_DST | B::MAP_READ);
+    copy_out(&mut encoder, &target, &out);
+    queue.submit([encoder.finish()]);
+    read(device, &out)
+}
+
+#[test]
+fn immediates_match_wgpus_pixel_for_pixel() {
+    let adapter = pollster::block_on(instance().request_adapter(&Default::default())).unwrap();
+    assert!(adapter.features().contains(wgpu::Features::IMMEDIATES));
+    assert_eq!(adapter.limits().max_immediate_size, 4096, "what setVertexBytes takes");
+    let (device, queue) = gpu();
+    let pixels = immediate_scene(&device, &queue);
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    descriptor.backends = wgpu::Backends::METAL;
+    let theirs = pollster::block_on(wgpu::Instance::new(descriptor).request_adapter(&Default::default())).unwrap();
+    let desc = wgpu::DeviceDescriptor { required_features: wgpu::Features::IMMEDIATES, required_limits: theirs.limits(), ..Default::default() };
+    let (wgpu_device, wgpu_queue) = pollster::block_on(theirs.request_device(&desc)).unwrap();
+    let want = immediate_scene(&wgpu_device, &wgpu_queue);
+    let at = |x: u32, y: u32| (y * 256 + x * 4) as usize;
+    assert_ne!(pixels[at(10, 6)..at(10, 6) + 4], [26, 51, 77, 255], "the first quad drew");
+    assert_ne!(pixels[at(40, 20)..at(40, 20) + 4], pixels[at(10, 6)..at(10, 6) + 4], "the second, in another tint");
+    assert!(pixels == want, "differs from wgpu's at {:?}", pixels.iter().zip(&want).position(|(a, b)| a != b));
+}
+
 #[test]
 fn a_frame_is_one_command_buffer_and_writes_land() {
     let (device, queue) = gpu();

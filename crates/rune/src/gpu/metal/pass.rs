@@ -207,6 +207,8 @@ impl RenderPassInterface for MetalPass {
         self.raw.setTriangleFillMode(next.fill);
         if relayout {
             self.dirty = self.groups.iter().enumerate().filter(|(_, g)| g.is_some()).fold(0, |m, (i, _)| m | 1 << i);
+            // Zeroed for a new layout, as wgpu-core does.
+            self.immediates.clear();
             self.immediates.resize(next.layout.immediates as usize, 0);
             self.immediates_dirty = true;
         }

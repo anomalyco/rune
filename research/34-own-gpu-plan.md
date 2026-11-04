@@ -51,7 +51,7 @@ targets only, so Linux, Windows, web and iOS builds compile what they did before
 Where the native backend falls short of wgpu, a defaulted app either falls back or fails loudly:
 
 - A compositor whose `Compositor::features` asks for something the backend doesn't offer (it
-  offers `TIMESTAMP_QUERY`) gets a wgpu device for that window or headless run, said once.
+  offers `TIMESTAMP_QUERY` and `IMMEDIATES`) gets a wgpu device for that window or headless run, said once.
 - Pipelines made with `layout: None` derive their layout from the shaders, as wgpu-core does.
 - Depth and stencil, multisampling, more than four colour targets, indirect draws and
   dispatches, render bundles, occlusion and pipeline-statistics queries, timestamps written

@@ -22,7 +22,8 @@
 //! Rune's layer tweaks (materials, present timing, transactions, occlusion) reach this backend's
 //! CAMetalLayer through `gpu::with_layer`. Video planes from CoreVideo wrap as textures
 //! (`texture_from_raw`) whose owner the bind groups and command buffers using them keep.
-//! Compute passes, and timestamps at pass boundaries (`TIMESTAMP_QUERY`), are as wgpu-hal's.
+//! Compute passes, timestamps at pass boundaries (`TIMESTAMP_QUERY`), and immediates
+//! (`IMMEDIATES`, set as inline vertex and fragment bytes, up to Metal's 4 KB) are as wgpu-hal's.
 //! New textures read as zero, as wgpu promises. A pipeline without a layout derives one from
 //! its shaders, as wgpu-core does (`derive`). Other queries, render bundles, indirect commands,
 //! depth and multisampling are not implemented: they panic naming the way back to wgpu
@@ -109,7 +110,10 @@ pub(crate) fn builtin_misses() -> usize { builtin::misses() }
 
 /// The wgpu features this backend can offer: a compositor that wants others draws with wgpu
 /// unless the app or `RUNE_GPU_BACKEND` asked for this backend (`backend::wgpu_for`).
-pub(crate) const FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY;
+pub(crate) const FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY.union(wgpu::Features::IMMEDIATES);
+
+/// The most immediate data a pipeline takes: what `setVertexBytes` and `setFragmentBytes` copy.
+const MAX_IMMEDIATE_SIZE: u32 = 4096;
 
 /// Whether `adapter` is this backend's.
 pub(crate) fn owns_adapter(adapter: &wgpu::Adapter) -> bool { adapter.as_custom::<MetalAdapter>().is_some() }
@@ -208,7 +212,10 @@ fn info(device: &ProtocolObject<dyn MTLDevice>) -> wgpu::AdapterInfo {
 
 /// What a Metal GPU of the Apple or Mac 2 families can do, in wgpu's terms.
 fn limits() -> wgpu::Limits {
-    wgpu::Limits { max_texture_dimension_1d: 16384, max_texture_dimension_2d: 16384, max_buffer_size: 1 << 30, ..wgpu::Limits::default() }
+    wgpu::Limits {
+        max_texture_dimension_1d: 16384, max_texture_dimension_2d: 16384, max_buffer_size: 1 << 30, max_immediate_size: MAX_IMMEDIATE_SIZE,
+        ..wgpu::Limits::default()
+    }
 }
 
 impl AdapterInterface for MetalAdapter {
@@ -218,7 +225,7 @@ impl AdapterInterface for MetalAdapter {
     }
     fn is_surface_supported(&self, _: &DispatchSurface) -> bool { true }
     fn features(&self) -> wgpu::Features {
-        if query::supported(&self.device) { FEATURES } else { wgpu::Features::empty() }
+        if query::supported(&self.device) { FEATURES } else { FEATURES - wgpu::Features::TIMESTAMP_QUERY }
     }
     fn limits(&self) -> wgpu::Limits { limits() }
     fn downlevel_capabilities(&self) -> wgpu::DownlevelCapabilities { Default::default() }

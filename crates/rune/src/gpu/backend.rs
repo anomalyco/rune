@@ -90,6 +90,17 @@ pub(crate) fn native(device: &wgpu::Device) -> bool {
     }
 }
 
+/// Features a device on `adapter` gets whether or not a compositor asks: all the native backend
+/// offers, which cost it nothing, so a prewarmed device serves any compositor it can draw for.
+pub(crate) fn free_features(adapter: &wgpu::Adapter) -> wgpu::Features {
+    #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
+    if crate::gpu::metal::owns_adapter(adapter) {
+        return crate::gpu::metal::FEATURES;
+    }
+    let _ = adapter;
+    wgpu::Features::empty()
+}
+
 /// The features the last compositor that fell back to wgpu wanted and the native backend lacks.
 #[cfg_attr(not(all(target_vendor = "apple", feature = "metal-backend")), allow(dead_code))]
 static MISSING: std::sync::Mutex<wgpu::Features> = std::sync::Mutex::new(wgpu::Features::empty());

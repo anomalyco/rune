@@ -223,7 +223,12 @@ fn a_device_asked_for_immediates_draws_with_them() {
     let device = &gpu.device;
     if !device.features().contains(wgpu::Features::IMMEDIATES) { return; }
     assert!(device.limits().max_immediate_size >= 16, "the limit came with the feature");
-    assert_eq!(Gpu::headless().device.limits().max_immediate_size, 0, "only when asked");
+    let plain = Gpu::headless();
+    if crate::gpu::backend::native(&plain.device) {
+        assert!(plain.device.features().contains(wgpu::Features::IMMEDIATES), "free on the native backend, so always there");
+    } else {
+        assert_eq!(plain.device.limits().max_immediate_size, 0, "only when asked");
+    }
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
         source: wgpu::ShaderSource::Wgsl("

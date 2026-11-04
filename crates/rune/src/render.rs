@@ -439,7 +439,7 @@ impl Gpu {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn device_on(adapter: &wgpu::Adapter, wanted: wgpu::Features) -> Result<(wgpu::Device, wgpu::Queue), String> {
-        let optional_features = wgpu::Features::TIMESTAMP_QUERY | wanted;
+        let optional_features = wgpu::Features::TIMESTAMP_QUERY | wanted | crate::gpu::backend::free_features(adapter);
         // Precompiled uber shaders: a metallib on macOS, DXBC on Windows.
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         let optional_features = optional_features | wgpu::Features::PASSTHROUGH_SHADERS;
@@ -1363,7 +1363,7 @@ mod prewarm_tests {
         let renderer = Renderer::new(&early.device, wgpu::TextureFormat::Bgra8UnormSrgb);
         let layer = layer();
         let mut made = 0;
-        let wanted = wgpu::Features::IMMEDIATES;
+        let wanted = wgpu::Features::POLYGON_MODE_LINE;
         let (gpu, _surface, renderer) = Gpu::for_surface_from(Some((early, renderer)), wanted, false, |i| { made += 1; surface(i, &layer) })
             .expect("a wgpu GPU");
         assert_eq!(made, 1);
@@ -1375,5 +1375,26 @@ mod prewarm_tests {
         assert!(crate::gpu::backend::describe(&Gpu::headless().device).ends_with("(the default)"));
         assert!(!crate::gpu::backend::serves(&Gpu::headless().device, wanted));
         assert!(crate::gpu::backend::serves(&Gpu::headless().device, wgpu::Features::TIMESTAMP_QUERY));
+    }
+
+    /// A compositor wanting immediates keeps the native backend and the prewarmed device, which
+    /// has them whether or not anything asked, with the adapter's immediate size.
+    #[cfg(feature = "metal-backend")]
+    #[test]
+    fn a_compositor_wanting_immediates_keeps_the_native_backend_and_the_prewarmed_gpu() {
+        if !crate::gpu::metal::enabled() || std::env::var_os("RUNE_GPU_BACKEND").is_some() {
+            return eprintln!("skipped: the native backend isn't the default here");
+        }
+        let early = Gpu::headless();
+        let renderer = Renderer::new(&early.device, wgpu::TextureFormat::Bgra8UnormSrgb);
+        let layer = layer();
+        let wanted = wgpu::Features::IMMEDIATES;
+        let (gpu, _surface, kept) = Gpu::for_surface_from(Some((early, renderer)), wanted, false, |i| surface(i, &layer)).expect("a GPU");
+        assert!(kept.is_some(), "the prewarmed renderer");
+        assert!(crate::gpu::metal::raw_device(&gpu.device).is_some(), "the native backend's device");
+        assert!(gpu.device.features().contains(wanted));
+        assert_eq!(gpu.device.limits().max_immediate_size, 4096);
+        let described = crate::gpu::backend::describe(&gpu.device);
+        assert!(described.starts_with("Rune's Metal backend on ") && described.ends_with("(the default)"), "{described}");
     }
 }
