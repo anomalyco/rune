@@ -4,8 +4,6 @@ use super::*;
 /// Scroll momentum decay (iOS normal: 0.998 per ms).
 pub(super) const SCROLL_DECAY: f32 = 2.002;
 
-/// How far behind the newest word, in seconds of its own travel, the line wipe's front aims to run.
-const WIPE_LAG: f32 = 0.08;
 /// How quickly the front's speed follows its aim (time constant, seconds), so it never jerks.
 const WIPE_EASE: f32 = 0.06;
 /// A wiping word paint never placed (scrolled away) is done this long after it arrived.
@@ -228,7 +226,7 @@ impl<S: 'static> Runtime<S> {
             let edge = (st.fade * st.wipe).max(1.0);
             let sweep = st.sweep.get_mut();
             if st.wipe > 0.0 {
-                Self::sweep_step(sweep, now, st.wipe.max(1.0), edge);
+                Self::sweep_step(sweep, now, st.wipe.max(1.0), edge, st.trail);
             }
             // Words fully shown leave the list (only from the front, which keeps lookups valid).
             let done = st.words.iter().take_while(|w| if st.wipe > 0.0 {
@@ -299,9 +297,9 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Moves the wipe's front on to `now`: at the wipe's own speed, or faster while it trails the
-    /// run's end by more than [`WIPE_LAG`] of travel, its speed easing toward that aim. It stops
+    /// run's end by more than `trail` seconds of travel, its speed easing toward that aim. It stops
     /// once the last word's glyphs are fully in.
-    fn sweep_step(sw: &mut crate::runtime::types::Sweep, now: f64, base: f32, edge: f32) {
+    fn sweep_step(sw: &mut crate::runtime::types::Sweep, now: f64, base: f32, edge: f32, trail: f32) {
         let dt = sw.last.map_or(0.0, |t| (now - t).clamp(0.0, 0.1) as f32);
         sw.last = Some(now);
         let target = sw.end + edge;
@@ -309,7 +307,7 @@ impl<S: 'static> Runtime<S> {
             sw.speed = 0.0;
             return;
         }
-        let aim = base.max((target - sw.front) / WIPE_LAG);
+        let aim = base.max((target - sw.front) / trail.max(0.01));
         if sw.speed <= 0.0 { sw.speed = base; }
         sw.speed += (aim - sw.speed) * (1.0 - (-dt / WIPE_EASE).exp());
         sw.front = (sw.front + sw.speed * dt).min(target);

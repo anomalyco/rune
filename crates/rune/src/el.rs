@@ -603,6 +603,7 @@ pub fn text(content: impl Into<String>) -> El {
         wrap: false,
         reveal: -1.0,
         reveal_wipe: 0.0,
+        reveal_wipe_trail: 0.08,
         truncate: false,
         elide: Elide::End,
         max_lines: 0,

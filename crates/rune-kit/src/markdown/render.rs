@@ -7,7 +7,7 @@ pub(super) struct Renderer {
     pub(super) s: MarkdownStyle,
     pub(super) highlights: Vec<(Vec<Range<usize>>, Highlight)>,
     pub(super) reveal: f32,
-    pub(super) reveal_wipe: f32,
+    pub(super) reveal_wipe: (f32, f32),
     pub(super) streaming: bool,
     pub(super) on_link: Option<LinkWire>,
     pub(super) on_link_secondary: Option<LinkWire>,
@@ -230,7 +230,7 @@ impl Renderer {
 
     pub(super) fn with_reveal(&self, e: El) -> El {
         if self.reveal >= 0.0 {
-            e.reveal(self.reveal).reveal_wipe(self.reveal_wipe)
+            e.reveal(self.reveal).reveal_wipe(self.reveal_wipe.0, self.reveal_wipe.1)
         } else if self.streaming {
             e.reveal(0.0)
         } else {

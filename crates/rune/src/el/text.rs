@@ -297,11 +297,13 @@ impl El {
         }
         self
     }
-    /// With [`El::reveal`], wipes each arriving word in from left to right: a glyph starts its
-    /// fade once the wipe, moving at `points_per_sec`, reaches it (0: the word fades as one).
-    pub fn reveal_wipe(mut self, points_per_sec: f32) -> Self {
+    /// With [`El::reveal`], one soft edge sweeps the arriving words in along their lines in
+    /// reading order, `points_per_sec` while it keeps up and easing faster when it trails the
+    /// newest word by more than `trail` seconds of travel (0 speed: each word fades as one).
+    pub fn reveal_wipe(mut self, points_per_sec: f32, trail: f32) -> Self {
         if let Some(t) = &mut self.text {
             t.reveal_wipe = points_per_sec.max(0.0);
+            t.reveal_wipe_trail = trail.max(0.01);
         }
         self
     }

@@ -16,10 +16,11 @@ pub struct TextSpec {
     /// Streaming word reveal: words that arrive after mount fade in over this many seconds
     /// (negative: no reveal tracking).
     pub reveal: f32,
-    /// Streaming word wipe: each glyph of a revealing word starts its fade later by its distance
-    /// into the word over this speed, in points per second, so the word wipes in left to right
-    /// (0: the whole word fades at once). See [`El::reveal_wipe`](crate::El::reveal_wipe).
+    /// Streaming line wipe's speed in points per second, and how far it may trail the newest
+    /// word, in seconds of travel, before it speeds up (0 speed: each word fades as one). See
+    /// [`El::reveal_wipe`](crate::El::reveal_wipe).
     pub(crate) reveal_wipe: f32,
+    pub(crate) reveal_wipe_trail: f32,
     /// One line, cut with an ellipsis when wider than the element.
     pub truncate: bool,
     /// Which part `truncate` cuts (see [`El::truncate_middle`](crate::El::truncate_middle)).

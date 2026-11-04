@@ -593,10 +593,12 @@ impl<S: 'static> Runtime<S> {
                     words: Vec::new(),
                     fade,
                     wipe: 0.0,
+                    trail: 0.08,
                     sweep: Default::default(),
                 });
                 st.fade = fade;
                 st.wipe = if self.reduced_motion { 0.0 } else { spec.reveal_wipe };
+                st.trail = spec.reveal_wipe_trail;
                 if instant || (!was_present && nodes[i].virtual_mount) || content.len() < st.len || !content.is_char_boundary(st.len) {
                     st.len = content.len();
                     st.words.clear();

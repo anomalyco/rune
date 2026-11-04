@@ -396,6 +396,8 @@ pub(super) struct RevealState {
     pub(super) fade: f32,
     /// The wipe's speed in points per second (`TextSpec::reveal_wipe`); 0 fades a word as one.
     pub(super) wipe: f32,
+    /// Seconds of travel the wipe may trail the newest word before it speeds up.
+    pub(super) trail: f32,
     /// The wipe's schedule, set as paint first sees each word's place.
     pub(super) sweep: std::cell::RefCell<Sweep>,
 }

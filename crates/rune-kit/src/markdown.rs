@@ -156,7 +156,7 @@ pub struct Markdown {
     highlights: Vec<(Vec<Range<usize>>, Highlight)>,
     autolink: bool,
     reveal: f32,
-    reveal_wipe: f32,
+    reveal_wipe: (f32, f32),
     streaming: bool,
     on_link: Option<LinkWire>,
     on_link_secondary: Option<LinkWire>,
@@ -180,7 +180,7 @@ thread_local! {
 
 impl Markdown {
     pub fn new(src: impl Into<String>) -> Markdown {
-        Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, reveal_wipe: 0.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_help: None, link_ring: None,
+        Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, reveal_wipe: (0.0, 0.08), streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_help: None, link_ring: None,
             on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, highlighter: Highlighter::builtin(),
             #[cfg(feature = "mermaid")]
             diagram_frame: None }
@@ -242,10 +242,10 @@ impl Markdown {
         self.reveal = word_fade.max(0.0);
         self
     }
-    /// Wipes each revealing word in from left to right at `points_per_sec` (see
-    /// [`El::reveal_wipe`]); 0 fades a word as one.
-    pub fn reveal_wipe(mut self, points_per_sec: f32) -> Self {
-        self.reveal_wipe = points_per_sec.max(0.0);
+    /// Sweeps one soft edge along the revealing lines (see [`El::reveal_wipe`]); 0 speed fades
+    /// each word as one.
+    pub fn reveal_wipe(mut self, points_per_sec: f32, trail: f32) -> Self {
+        self.reveal_wipe = (points_per_sec.max(0.0), trail);
         self
     }
     /// The source is still arriving: a table's last row, with no newline after it yet, is left
@@ -375,7 +375,7 @@ impl Markdown {
                 &self.highlights,
                 self.autolink,
                 self.reveal.to_bits(),
-                self.reveal_wipe.to_bits(),
+                (self.reveal_wipe.0.to_bits(), self.reveal_wipe.1.to_bits()),
                 self.tasks_read_only,
                 self.selectable,
                 self.scroll_wide,

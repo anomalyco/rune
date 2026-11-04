@@ -563,7 +563,7 @@ fn reveal_wipe_sweeps_one_edge_along_the_line() {
     use crate::render::KIND_GLYPH;
     use crate::{Cx, El, Env, Runtime, col, text};
     fn view(s: &(String, f32), _: &mut Cx<(String, f32)>) -> El {
-        col().key("root").streaming(true).child(text(&s.0).key("body").wrap().w(400.0).reveal(0.1).reveal_wipe(s.1))
+        col().key("root").streaming(true).child(text(&s.0).key("body").wrap().w(400.0).reveal(0.1).reveal_wipe(s.1, 0.08))
     }
     // The new word's glyphs by x, with their alpha, `at` seconds after it arrives.
     fn word(wipe: f32, at: f64) -> Vec<(f32, f32)> {
