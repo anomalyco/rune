@@ -1,0 +1,1 @@
+- **`rune_kit::ScrollBar` behaves like a macOS scroller.** Wrapping a viewport with `.scroll_bar(&k)` lays it out exactly as the bare viewport: the wrapper takes the viewport's overflow, so its content no longer grows ancestors that have no `min_h` (drop any `.h(0.0)` workaround).

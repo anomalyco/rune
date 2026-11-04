@@ -212,6 +212,20 @@ fn compact_style_setters_match_taffy_style() {
     }
 }
 
+#[test]
+fn a_taken_box_placement_keeps_the_overflow_on_the_wrapper() {
+    for cold in [false, true] {
+        let mut cs = CompactStyle::rune_base(FlexDirection::Column);
+        cs.set_overflow(Overflow::Hidden, Overflow::Scroll);
+        if cold {
+            cs.set_aspect_ratio(Some(2.0));
+        }
+        let outer = cs.take_box_placement();
+        assert_eq!(outer.overflow(), Point { x: Overflow::Hidden, y: Overflow::Scroll }, "cold {cold}");
+        assert_eq!(cs.overflow(), Point { x: Overflow::Hidden, y: Overflow::Scroll }, "cold {cold}");
+    }
+}
+
 #[derive(Clone)]
 struct SpecNode {
     key: u64,

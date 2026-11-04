@@ -318,7 +318,9 @@ impl CompactStyle {
     }
 
     /// Moves this style's outer box sizing and placement onto a fresh column wrapper style and
-    /// resets this style's outer box to fill that column (`flex: 1 1 auto`, `min_size: 0`).
+    /// resets this style's outer box to fill that column (`flex: 1 1 auto`, `min_size: 0`). The
+    /// wrapper keeps the overflow too, so a scroll viewport's wrapper is a scroll container: its
+    /// automatic minimum size is zero and its content doesn't size the ancestors around it.
     pub fn take_box_placement(&mut self) -> Self {
         if self.extra.is_none() {
             let hidden = (self.mode_flags & MODE_DISPLAY_MASK) == encode_display(Display::None);
@@ -331,6 +333,7 @@ impl CompactStyle {
                 | (if hidden { encode_display(Display::None) } else { encode_display(Display::Flex) })
                 | (self.mode_flags & (MODE_POS_MASK | MODE_BASIS_ZERO));
             outer.align_self_u8 = self.align_self_u8;
+            outer.box_flags = (outer.box_flags & 0x0F) | (self.box_flags & 0xF0);
 
             self.vals[..6].fill(0);
             self.len_tags = (self.len_tags & 0xF000) | 0b0000_1010_0000_1010;
@@ -349,6 +352,7 @@ impl CompactStyle {
         let outer = Style {
             display: if s.display == Display::None { Display::None } else { Display::Flex },
             flex_direction: FlexDirection::Column,
+            overflow: s.overflow,
             flex_shrink: s.flex_shrink,
             flex_grow: s.flex_grow,
             flex_basis: s.flex_basis,
