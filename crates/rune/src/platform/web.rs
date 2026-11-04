@@ -106,7 +106,8 @@ impl<S: 'static> Running<S> {
         device.destroy();
     }
 
-    pub(super) fn resize_surface(&mut self, size: winit::dpi::PhysicalSize<u32>, scale: f32) {
+    pub(super) fn resize_surface(&mut self, window: &Window, size: winit::dpi::PhysicalSize<u32>, scale: f32) {
+        let size = window.canvas().map_or(size, |c| canvas_physical(&c, size, scale));
         self.suspended = size.width == 0 || size.height == 0;
         if self.suspended { return; }
         let max_dim = self.gpu.device.limits().max_texture_dimension_2d.max(1);
@@ -134,6 +135,17 @@ impl<S: 'static> Running<S> {
             let _ = canvas.style().set_property("height", &format!("{h}px"));
         }
     }
+}
+
+/// The canvas's size in device pixels: its CSS box times `scale` when the browser's own
+/// `devicePixelContentBoxSize` (what winit reports) disagrees, as Chromium's emulated device
+/// scale does by reporting CSS pixels. Trusting it would lay out at a fraction of the box.
+fn canvas_physical(canvas: &web_sys::HtmlCanvasElement, reported: winit::dpi::PhysicalSize<u32>, scale: f32) -> winit::dpi::PhysicalSize<u32> {
+    let rect = canvas.get_bounding_client_rect();
+    let (w, h) = (rect.width() as f32, rect.height() as f32);
+    if w <= 0.0 || h <= 0.0 { return reported; }
+    let fix = |got: u32, css: f32| { let want = (css * scale).round().max(1.0); if (got as f32 - want).abs() > scale.ceil() + 1.0 { want as u32 } else { got } };
+    winit::dpi::PhysicalSize::new(fix(reported.width, w), fix(reported.height, h))
 }
 
 fn error(message: &str, target: Option<&web_sys::HtmlCanvasElement>, embedded: bool) {
@@ -287,8 +299,11 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             let tab_visits_controls = app.tab_visits_controls;
             let playground = app.playground.take();
             let (spec, state, shared) = app.into_parts(None);
-            let mut size = window.inner_size();
             let scale = window.scale_factor() as f32;
+            let mut size = window.inner_size();
+            if size.width > 0 && let Some(c) = window.canvas() {
+                size.width = canvas_physical(&c, size, scale).width;
+            }
             if size.width == 0 {
                 if let Some(c) = window.canvas() {
                     let cw = c.client_width().max(1) as f32;
@@ -379,11 +394,11 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         if r.window_input(&event, window) { window.request_redraw(); return; }
         match event {
             WindowEvent::Resized(size) => {
-                r.resize_surface(size, window.scale_factor() as f32);
+                r.resize_surface(window, size, window.scale_factor() as f32);
                 window.request_redraw();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                r.resize_surface(window.inner_size(), scale_factor as f32);
+                r.resize_surface(window, window.inner_size(), scale_factor as f32);
                 window.request_redraw();
             }
             WindowEvent::ThemeChanged(theme) => { r.rt.set_system_dark(theme == winit::window::Theme::Dark); window.request_redraw(); }

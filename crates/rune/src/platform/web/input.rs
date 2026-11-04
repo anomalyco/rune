@@ -96,7 +96,7 @@ impl<S: 'static> Running<S> {
             Some("dpr") => {
                 let size = window.inner_size();
                 let scale = event["scale"].as_f64().unwrap_or_else(|| window.scale_factor()).max(0.5) as f32;
-                self.resize_surface(size, scale);
+                self.resize_surface(window, size, scale);
             }
             Some("motion") => self.rt.set_system_reduced_motion(event["reduced"].as_bool().unwrap_or(false)),
             Some("focus") => self.rt.window_focus(event["focused"].as_bool().unwrap_or(false)),
