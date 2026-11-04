@@ -289,8 +289,10 @@ impl Bar {
         }
     }
 
-    /// Follows the viewport to `at`, from its `on_scroll_offset`.
-    fn follow(&self, at: ScrollPos, overlay: bool) {
+    /// Follows the viewport to `at`, from its `on_scroll_offset`, at the size it's drawn at, so
+    /// the track keeps to it every frame a layout spring resizes it.
+    fn follow(&self, mut at: ScrollPos, overlay: bool) {
+        at.viewport = at.drawn;
         let prev_at = self.pos.replace(at);
         let (scrolled, instant, now) = rune::scroll_watch_state();
         self.last_now.set(now);

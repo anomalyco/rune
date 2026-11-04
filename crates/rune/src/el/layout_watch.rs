@@ -9,13 +9,16 @@ use crate::{El, Tx};
 
 /// Where a scroll viewport is scrolled to, for [`El::on_scroll_offset`]: `offset` points from
 /// the top-left of its content, `[x, y]`, out of the `max` it can scroll on each axis, in a
-/// viewport `viewport` points wide and tall.
+/// viewport `viewport` points wide and tall. `drawn` is the size the frame draws the viewport
+/// at: `viewport` at rest, and where its size has got to while a layout spring resizes it, so
+/// the handler hears every frame of that.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ScrollPos {
     pub offset: [f32; 2],
     pub max: [f32; 2],
     pub viewport: [f32; 2],
+    pub drawn: [f32; 2],
 }
 
 impl El {

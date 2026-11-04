@@ -672,3 +672,53 @@ fn scroll_bar_motion_gate() {
         ),
     ], &[]);
 }
+
+thread_local! {
+    static PANE_RUNS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// A 200-point pane whose viewport takes what a composer below it leaves.
+fn composer_pane(composer: &f32, _: &mut rune::Cx<f32>) -> El {
+    PANE_RUNS.set(PANE_RUNS.get() + 1);
+    let k = Kit::neutral(true);
+    col()
+        .size(200.0, 200.0)
+        .child(
+            col()
+                .key("scroll")
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .scroll(rune::ScrollSpec { stick_bottom: false })
+                .child(col().children((0..40).map(|i| el().key(format!("row{i}")).w_full().h(20.0))))
+                .scroll_bar(&k),
+        )
+        .child(el().key("composer").w_full().h(*composer))
+}
+
+#[test]
+fn the_bar_follows_the_viewport_while_its_height_animates() {
+    let mut rt = rune::Runtime::new(40.0f32, composer_pane, (200.0, 200.0), rune::Env::new(true, 1.0));
+    rt.set_system_scroll_bars(ScrollBars::Always);
+    rt.set_live_waker(std::sync::Arc::new(|| {}));
+    frames(&mut rt, 30);
+    rt.wheel(100.0, 50.0, -10_000.0);
+    frames(&mut rt, 60);
+    rt.update(|h, _| *h = 95.0);
+    let (mut runs, mut between) = (0, 0);
+    for i in 0..60 {
+        rt.frame(1.0 / 60.0);
+        if i == 0 {
+            runs = PANE_RUNS.get();
+        }
+        let (vp, track, thumb) = (rect(&rt, "scroll"), rect(&rt, "scroll-bar"), rect(&rt, "thumb"));
+        let bottom = vp[1] + vp[3];
+        assert!((track[1] + track[3] - (bottom - INSET)).abs() < 0.05, "the track ends {INSET} above the viewport's drawn bottom: {track:?} in {vp:?}");
+        assert!(thumb[1] + thumb[3] <= bottom - INSET + 0.05, "the thumb stays on it: {thumb:?} in {vp:?}");
+        between += usize::from(105.0 < vp[3] && vp[3] < 160.0);
+    }
+    assert!(between > 5, "the viewport's height animated over several frames ({between})");
+    frames(&mut rt, 120);
+    assert_eq!(rect(&rt, "scroll-bar")[3], 105.0 - 2.0 * INSET);
+    assert_eq!(PANE_RUNS.get(), runs, "following it never runs the view");
+}
