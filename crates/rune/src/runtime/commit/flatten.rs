@@ -188,6 +188,7 @@ fn prepare_text(
         for link in &mut t.links {
             link.id.zeroize();
             if let Some(label) = &mut link.label { label.zeroize(); }
+            if let Some(help) = &mut link.help { help.zeroize(); }
         }
         t.links.clear();
         t.rings.clear();

@@ -366,6 +366,7 @@ impl<S: 'static> Runtime<S> {
                     level: None,
                     expanded: None,
                     item_selected: false,
+                    help: l.help.clone(),
                     ..text.clone()
                 });
             }

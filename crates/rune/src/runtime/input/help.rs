@@ -2,7 +2,8 @@
 //! they take no hover or press from anything. The pointer resting on one for `help_delay`
 //! shows its tooltip under the element; a press, scroll or key hides it until the pointer
 //! leaves the element, as does the pointer leaving. The tooltip draws over everything and
-//! follows its element while that moves under the pointer.
+//! follows its element while that moves under the pointer. A text's links can carry their own
+//! help (`Link::help`), hit-tested on their glyphs and shown under the link.
 //!
 //! A macOS window shows AppKit's own tooltips instead (`set_native_help`): the host registers
 //! [`Runtime::help_regions`] with its view and AppKit owns the delay, look and hiding.
@@ -10,10 +11,12 @@ use super::*;
 
 #[derive(Default)]
 pub(super) struct HelpState {
-    /// This frame's help elements: (node, visible rect in points, `hits.len()` before it).
-    hits: Vec<(NodeId, [f32; 4], usize)>,
-    /// The help element under the pointer and when (clock seconds) the pointer reached it.
-    target: Option<(String, f64)>,
+    /// This frame's help elements: (node, visible rect in points, `hits.len()` before it, the
+    /// link of its text when the help is that link's).
+    hits: Vec<(NodeId, [f32; 4], usize, Option<usize>)>,
+    /// The help element (and link) under the pointer and when (clock seconds) the pointer
+    /// reached it.
+    target: Option<(String, Option<usize>, f64)>,
     /// A press, scroll or key hid its tooltip until the pointer leaves it.
     dismissed: bool,
     /// The deadline already asked for, so each rest schedules one wake.
@@ -66,7 +69,28 @@ impl<S: 'static> Runtime<S> {
     /// after the first `seq` hits.
     pub(super) fn push_help_hit(&mut self, i: usize, rect: [f32; 4], seq: usize) {
         if rect[2] > rect[0] && rect[3] > rect[1] {
-            self.help.hits.push((self.nodes[i].id, rect, seq));
+            self.help.hits.push((self.nodes[i].id, rect, seq, None));
+        }
+    }
+
+    /// During `build`: the line boxes of node `i`'s links that have help, for border box
+    /// `rect` and clipped to `clip` (points, x0 y0 x1 y1), after the first `seq` hits.
+    pub(super) fn push_link_help_hits(&mut self, i: usize, rect: [f32; 4], clip: [f32; 4], seq: usize) {
+        let Some(t) = self.nodes[i].text.as_ref() else { return };
+        if !t.links.iter().any(|l| l.help.is_some()) { return; }
+        let id = self.nodes[i].id;
+        for (k, r) in self.link_boxes(i, rect) {
+            if self.nodes[i].text.as_ref().and_then(|t| t.links.get(k)).is_none_or(|l| l.help.is_none()) { continue; }
+            let c = [r[0].max(clip[0]), r[1].max(clip[1]), r[2].min(clip[2]), r[3].min(clip[3])];
+            if c[2] > c[0] && c[3] > c[1] { self.help.hits.push((id, c, seq, Some(k))); }
+        }
+    }
+
+    /// The help text of node `i`, or of its link `link`.
+    fn help_text(&self, i: usize, link: Option<usize>) -> Option<&String> {
+        match link {
+            Some(k) => self.nodes[i].text.as_ref()?.links.get(k)?.help.as_ref(),
+            None => self.nodes[i].help.as_ref(),
         }
     }
 
@@ -82,8 +106,8 @@ impl<S: 'static> Runtime<S> {
 
     /// The help element under (x, y): the topmost one, unless something interactive drawn over
     /// it (not inside it) is there too.
-    fn help_at(&self, x: f32, y: f32) -> Option<usize> {
-        let &(id, _, seq) = self.help.hits.iter().rev().find(|&&(id, r, _)| self.hit_contains(id, r, x, y))?;
+    fn help_at(&self, x: f32, y: f32) -> Option<(usize, Option<usize>)> {
+        let &(id, _, seq, link) = self.help.hits.iter().rev().find(|&&(id, r, _, _)| self.hit_contains(id, r, x, y))?;
         let h = *self.node_index.get(&id)?;
         if self.subtree_exiting(h) || !self.allowed(h) { return None; }
         let over = self.hits.iter().enumerate().rev().find(|&(_, &(id, r))| self.hit_contains(id, r, x, y));
@@ -94,15 +118,15 @@ impl<S: 'static> Runtime<S> {
         {
             return None;
         }
-        Some(h)
+        Some((h, link))
     }
 
     /// Whether moving the pointer to (x, y) changes the help element under it, so a host that
     /// skips frames for unchanged pixels still starts or ends a tooltip's wait.
     pub(super) fn help_target_changes(&self, x: f32, y: f32) -> bool {
         if self.help.native || self.help.hits.is_empty() && self.help.target.is_none() { return false; }
-        let at = self.help_at(x, y).map(|i| self.nodes[i].path.as_str());
-        at != self.help.target.as_ref().map(|(p, _)| p.as_str())
+        let at = self.help_at(x, y).map(|(i, k)| (self.nodes[i].path.as_str(), k));
+        at != self.help.target.as_ref().map(|(p, k, _)| (p.as_str(), *k))
     }
 
     /// The parts of help element `h`'s rect `r` that nothing interactive drawn over it (not
@@ -125,9 +149,9 @@ impl<S: 'static> Runtime<S> {
         if self.help.native {
             // Nothing behind a modal, and only where nothing else is drawn over the element.
             let mut regions = Vec::new();
-            for &(id, r, seq) in &self.help.hits {
+            for &(id, r, seq, link) in &self.help.hits {
                 let Some(&i) = self.node_index.get(&id) else { continue };
-                let Some(text) = &self.nodes[i].help else { continue };
+                let Some(text) = self.help_text(i, link) else { continue };
                 if self.subtree_exiting(i) || !self.allowed(i) { continue; }
                 regions.extend(self.unoccluded(i, r, seq).into_iter().map(|p| (p, text.clone())));
             }
@@ -139,17 +163,17 @@ impl<S: 'static> Runtime<S> {
         // While moving layout holds hover, the tooltip keeps its element, and nothing sliding
         // under the pointer starts a wait.
         let under = match self.held_hover() {
-            Some(_) => self.help.target.as_ref().and_then(|(p, _)| self.hover_live(p)).filter(|_| pointer.is_some()),
+            Some(_) => self.help.target.as_ref().and_then(|(p, k, _)| Some((self.hover_live(p)?, *k))).filter(|_| pointer.is_some()),
             None => pointer.and_then(|(x, y)| self.help_at(x, y)),
         };
-        let path = under.map(|i| self.nodes[i].path.clone());
-        if path.as_deref() != self.help.target.as_ref().map(|(p, _)| p.as_str()) {
-            self.help.target = path.map(|p| (p, self.clock));
+        let at = under.map(|(i, k)| (self.nodes[i].path.as_str(), k));
+        if at != self.help.target.as_ref().map(|(p, k, _)| (p.as_str(), *k)) {
+            self.help.target = under.map(|(i, k)| (self.nodes[i].path.clone(), k, self.clock));
             self.help.dismissed = false;
             self.help.scheduled = None;
         }
         self.help.tip = None;
-        let (Some(i), Some((_, since))) = (under, self.help.target.clone()) else { return };
+        let (Some((i, link)), Some((_, _, since))) = (under, self.help.target.clone()) else { return };
         if self.help.dismissed { return; }
         let due = since + self.help_delay;
         if self.clock + 1e-6 < due {
@@ -159,13 +183,16 @@ impl<S: 'static> Runtime<S> {
             }
             return;
         }
-        let Some(text) = self.nodes[i].help.clone() else { return };
-        self.draw_tooltip(i, text);
+        let Some(text) = self.help_text(i, link).cloned() else { return };
+        let e = self.drawn_box(i);
+        let anchor = link.and_then(|k| self.link_boxes(i, e).into_iter().filter(|(j, _)| *j == k).map(|(_, r)| r)
+            .reduce(|u, r| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
+        self.draw_tooltip(anchor.unwrap_or(e), text);
     }
 
-    /// Draws `text` in a tooltip under node `i` where it was drawn this frame (above it when
+    /// Draws `text` in a tooltip under box `e` (window points, x0 y0 x1 y1; above it when
     /// there's no room below), kept inside the window.
-    fn draw_tooltip(&mut self, i: usize, text: String) {
+    fn draw_tooltip(&mut self, e: [f32; 4], text: String) {
         let s = self.env.scale;
         let dark = self.backdrop_dark().unwrap_or(self.env.system_dark);
         let grey = |v: f32| Color { r: v, g: v, b: v, a: 1.0 };
@@ -178,7 +205,6 @@ impl<S: 'static> Runtime<S> {
         let layout = self.text.layout_rich(&text, &[], style, s, Some(MAX_W * s));
         let (tw, th) = ((layout.full_width() / s).ceil(), (layout.height() / s).ceil());
         let (w, h) = (tw + 2.0 * PAD[0], th + 2.0 * PAD[1]);
-        let e = self.drawn_box(i);
         let (vw, vh) = self.viewport;
         let mut y = e[3] + GAP;
         if y + h > vh - MARGIN && e[1] - GAP - h >= MARGIN { y = e[1] - GAP - h; }
@@ -270,5 +296,48 @@ mod tests {
         rt.frame(rt.help_delay);
         assert!(rt.help_tooltip().is_some());
         assert!(rt.observe_pointer(150.0, 150.0), "off it hides the tooltip");
+    }
+
+    fn linked(k: &f32, _: &mut Cx<f32>) -> El {
+        let label = crate::text("MMMM MMMM")
+            .font(crate::TextStyle::new(16.0, 400.0))
+            .link(crate::Link::new(0..4, "a"))
+            .link(crate::Link::new(5..9, "b").help("Goes to b"))
+            .on_link(|_: &mut f32, _, _| {});
+        el().w_full().h_full().child(el().pin(Some(10.0), Some(10.0), None, None).scale(*k).child(label))
+    }
+
+    /// Rests on (x, y) past the delay and returns the tooltip shown.
+    fn rest(rt: &mut Runtime<f32>, x: f32, y: f32) -> Option<(String, [f32; 4])> {
+        rt.pointer_move(x, y);
+        rt.frame(1.0 / 60.0);
+        rt.frame(rt.help_delay + 0.1);
+        rt.help_tooltip().map(|(t, r)| (t.to_owned(), r))
+    }
+
+    #[test]
+    fn a_link_shows_its_own_help_under_its_glyphs() {
+        for k in [1.0, 1.6] {
+            let mut rt = Runtime::new(k, linked, (400.0, 300.0), Env::new(true, 2.0));
+            rt.frame(0.0);
+            let i = rt.nodes.iter().position(|n| n.text.is_some()).unwrap();
+            let boxes = rt.link_boxes(i, rt.drawn_box(i));
+            let b = boxes.iter().find(|(j, _)| *j == 1).unwrap().1;
+            let a = boxes.iter().find(|(j, _)| *j == 0).unwrap().1;
+            assert!(rest(&mut rt, (a[0] + a[2]) * 0.5, (a[1] + a[3]) * 0.5).is_none(), "zoom {k}: a link without help shows none");
+            let (text, r) = rest(&mut rt, (b[0] + b[2]) * 0.5, (b[1] + b[3]) * 0.5).expect("tip on the link");
+            assert_eq!(text, "Goes to b");
+            assert!(r[1] >= b[3] && r[0] < b[2] && r[0] + r[2] > b[0], "zoom {k}: tip {r:?} sits under the link {b:?}");
+            assert!(rest(&mut rt, 300.0, 250.0).is_none(), "leaving hides it");
+        }
+    }
+
+    #[test]
+    fn native_regions_carry_a_links_help() {
+        let mut rt = Runtime::new(1.0, linked, (400.0, 300.0), Env::new(true, 2.0));
+        rt.help.native = true;
+        rt.frame(0.0);
+        let texts: Vec<&str> = rt.help_regions().iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(texts, ["Goes to b"]);
     }
 }

@@ -5,6 +5,7 @@ use rune::PointerPress;
 pub(super) type LinkWire = Rc<dyn Fn(El) -> El>;
 pub(super) type LinkLook = Rc<dyn Fn(&str) -> Option<(Span, LinkPaint)>>;
 pub(super) type LinkRing = Rc<dyn Fn(&str) -> Option<(Color, f32)>>;
+pub(super) type LinkHelp = Rc<dyn Fn(&str) -> Option<String>>;
 
 impl Markdown {
     /// Called with a link's destination when it is clicked, or pressed with Enter or Space
@@ -55,6 +56,13 @@ impl Markdown {
         self.link_ring = Some(Rc::new(f));
         self
     }
+    /// A tooltip for links by destination (`None`: none), shown after the hover delay while
+    /// the pointer rests on the link ([`Link::help`]): where it goes, say. Links take it only
+    /// with a handler ([`Self::on_link`] or [`Self::on_link_secondary`]).
+    pub fn link_help(mut self, f: impl Fn(&str) -> Option<String> + 'static) -> Self {
+        self.link_help = Some(Rc::new(f));
+        self
+    }
 }
 
 impl Renderer {
@@ -81,7 +89,8 @@ impl Renderer {
         if inl.links.is_empty() || (self.on_link.is_none() && self.on_link_secondary.is_none()) { return e; }
         let default = LinkPaint::new().underline(self.s.accent);
         let hover = |url: &str| self.link_look.as_ref().and_then(|f| f(url)).map_or(default, |l| l.1);
-        let e = inl.links.iter().fold(e, |e, (a, b, url)| e.link(Link::new(*a..*b, url.clone()).hover(hover(url))));
+        let help = |url: &str| self.link_help.as_ref().and_then(|f| f(url)).unwrap_or_default();
+        let e = inl.links.iter().fold(e, |e, (a, b, url)| e.link(Link::new(*a..*b, url.clone()).hover(hover(url)).help(help(url))));
         let e = match &self.on_link { Some(f) => f(e), None => e };
         match &self.on_link_secondary { Some(f) => f(e), None => e }
     }

@@ -227,6 +227,10 @@ impl<S: 'static> Runtime<S> {
             let r = [rect_pt[0].max(c[0] / s), rect_pt[1].max(c[1] / s), rect_pt[2].min(c[2] / s), rect_pt[3].min(c[3] / s)];
             self.push_help_hit(i, r, hits_before);
         }
+        if self.nodes[i].text.as_ref().is_some_and(|t| t.links.iter().any(|l| l.help.is_some())) && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible {
+            let c = if self.nodes[i].parent.is_some() { pinh_clip } else { NO_CLIP };
+            self.push_link_help_hits(i, rect_pt, [c[0] / s, c[1] / s, c[2] / s, c[3] / s], hits_before);
+        }
         if self.nodes[i].handlers.get().is_some_and(|h| h.drop.is_some()) && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible {
             let c = if self.nodes[i].parent.is_some() { pinh_clip } else { NO_CLIP };
             let r = [rect_pt[0].max(c[0] / s), rect_pt[1].max(c[1] / s), rect_pt[2].min(c[2] / s), rect_pt[3].min(c[3] / s)];

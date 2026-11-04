@@ -204,6 +204,7 @@ pub struct Link {
     pub(crate) hover: LinkPaint,
     pub(crate) pressed: Option<LinkPaint>,
     pub(crate) focused: Option<LinkPaint>,
+    pub(crate) help: Option<String>,
 }
 
 impl Link {
@@ -218,6 +219,7 @@ impl Link {
             hover: LinkPaint::default(),
             pressed: None,
             focused: None,
+            help: None,
         }
     }
     /// Accessibility role, such as "button" for a file chip.
@@ -244,6 +246,14 @@ impl Link {
     /// its text colour when that is empty.
     pub fn focused(mut self, paint: LinkPaint) -> Self {
         self.focused = Some(paint);
+        self
+    }
+    /// A tooltip for this link alone, as [`El::help`](crate::El::help) is for an element:
+    /// shown after the hover delay while the pointer rests on the link's glyphs, and hidden
+    /// by a press, scroll, key or the pointer leaving them. An empty string sets none.
+    pub fn help(mut self, text: impl Into<String>) -> Self {
+        let text = text.into();
+        self.help = (!text.is_empty()).then_some(text);
         self
     }
 }

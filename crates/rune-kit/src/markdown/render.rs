@@ -11,6 +11,7 @@ pub(super) struct Renderer {
     pub(super) on_link: Option<LinkWire>,
     pub(super) on_link_secondary: Option<LinkWire>,
     pub(super) link_look: Option<LinkLook>,
+    pub(super) link_help: Option<LinkHelp>,
     pub(super) on_task: Option<TaskWire>,
     pub(super) tasks_read_only: bool,
     pub(super) link_ring: Option<LinkRing>,

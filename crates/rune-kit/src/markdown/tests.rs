@@ -19,7 +19,7 @@ fn spans_with(src: &str, style: &MarkdownStyle, highlighter: Highlighter) -> Vec
         }
     }
     let (blocks, sources, tasks, _, _) = doc_cached(src);
-    let r = Renderer { s: style.clone(), highlights: Vec::new(), reveal: 0.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_ring: None, on_task: None,
+    let r = Renderer { s: style.clone(), highlights: Vec::new(), reveal: 0.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_help: None, link_ring: None, on_task: None,
         tasks_read_only: false, selectable: false, scroll_wide: false, highlighter, sources: sources.clone(),
         next_source: Cell::new(0), tasks, next_task: Cell::new(0), current_block_key: RefCell::new("b0".into()),
         #[cfg(feature = "mermaid")] diagram_frame: None };
@@ -272,7 +272,7 @@ fn link_spans_come_before_inner_inline_styles_so_bold_em_and_code_keep_theirs() 
     });
     let (blocks, sources, tasks, _, _) = doc_cached("[**bold** *em* `code` plain](session:1)");
     let Block::Para(inl) = &blocks[0] else { panic!() };
-    let r = Renderer { s: style.clone(), highlights: Vec::new(), reveal: 0.0, streaming: false, on_link: None, on_link_secondary: None, link_look: Some(look), link_ring: None, on_task: None,
+    let r = Renderer { s: style.clone(), highlights: Vec::new(), reveal: 0.0, streaming: false, on_link: None, on_link_secondary: None, link_look: Some(look), link_help: None, link_ring: None, on_task: None,
         tasks_read_only: false, selectable: false, scroll_wide: false, highlighter: Highlighter::builtin(), sources,
         next_source: Cell::new(0), tasks, next_task: Cell::new(0), current_block_key: RefCell::new("b0".into()),
         #[cfg(feature = "mermaid")] diagram_frame: None };
@@ -359,4 +359,23 @@ fn pure_markdown_caches_its_built_subtree_keeps_paths_and_invalidates_on_change(
     rt.update(|s, _| s.accent = Color { r: 0.2, g: 0.6, b: 1.0, a: 1.0 });
     rt.frame(1.0 / 120.0);
     assert_eq!(RENDERS.with(Cell::get), 3);
+}
+
+#[test]
+fn link_help_gives_each_link_its_own_tooltip() {
+    use rune::{Cx, Env, Runtime};
+
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        Markdown::new("See [the docs](https://example.com/docs) or [here](notes)")
+            .on_link(|_: &mut (), _| {})
+            .link_help(|url| url.starts_with("https:").then(|| url.trim_start_matches("https://").to_owned()))
+            .render(&MarkdownStyle::neutral(true))
+    }
+    let mut rt = Runtime::new((), view, (400.0, 200.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    let links: Vec<(Option<String>, Option<String>)> = rt.elements().into_iter().filter(|e| e.role == "link").map(|e| (e.key, e.help)).collect();
+    assert_eq!(links, [
+        (Some("https://example.com/docs".into()), Some("example.com/docs".into())),
+        (Some("notes".into()), None),
+    ]);
 }
