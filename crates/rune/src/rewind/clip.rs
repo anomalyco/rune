@@ -8,6 +8,7 @@ const STRIDE: usize = 64;
 
 /// One element as a frame presented it: `[x, y, w, h]` in points and opacity.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Shot {
     pub rect: [f32; 4],
     pub opacity: f32,
@@ -28,6 +29,7 @@ impl Shot {
 
 /// An element whose rect or opacity changed in a frame.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Change {
     /// The element's id in this clip (stable for its whole run).
     pub id: u32,
