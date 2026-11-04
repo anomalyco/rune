@@ -373,8 +373,7 @@ impl<S: 'static> Runtime<S> {
                         e.5 = run;
                         run += e.4 - e.3;
                     }
-                    let e = pieces[k];
-                    Self::reveal_place(st, w, e.3, e.1, e.2, run);
+                    Self::reveal_place(st, w, run);
                     k += n;
                 }
             }

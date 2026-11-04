@@ -573,12 +573,15 @@ fn reveal_wipe_sweeps_one_edge_along_the_line() {
         rt.state.0.push_str(" swellhello quickbrown fox");
         rt.invalidate();
         rt.frame(0.001);
-        rt.frame(0.001 + at);
+        // Steps of a 60 Hz display (`frame` takes the time since the last one).
+        for _ in 0..(at * 60.0).round() as usize {
+            rt.frame(1.0 / 60.0);
+        }
         let mut g: Vec<(f32, f32)> = rt.instances.iter().filter(|i| i.params[1] == KIND_GLYPH).map(|i| (i.rect[0], i.fill[3])).collect();
         g.sort_by(|a, b| a.0.total_cmp(&b.0));
         g.split_off(before.min(g.len()))
     }
-    let wiping = word(400.0, 0.12);
+    let wiping = word(400.0, 0.07);
     assert!(wiping.len() >= 2, "the new words draw some glyphs mid-wipe: {wiping:?}");
     let (first, last) = (wiping[0], wiping[wiping.len() - 1]);
     assert!(first.1 > last.1 + 0.2, "the left glyphs are further in than the right ones: {wiping:?}");

@@ -4,8 +4,10 @@ use super::*;
 /// Scroll momentum decay (iOS normal: 0.998 per ms).
 pub(super) const SCROLL_DECAY: f32 = 2.002;
 
-/// How far, in seconds, the line wipe may trail the stream before it speeds up to catch it.
-const WIPE_LAG: f64 = 0.06;
+/// How far behind the newest word, in seconds of its own travel, the line wipe's front aims to run.
+const WIPE_LAG: f32 = 0.08;
+/// How quickly the front's speed follows its aim (time constant, seconds), so it never jerks.
+const WIPE_EASE: f32 = 0.06;
 /// A wiping word paint never placed (scrolled away) is done this long after it arrived.
 const WIPE_UNSEEN: f64 = 1.0;
 
@@ -223,16 +225,20 @@ impl<S: 'static> Runtime<S> {
         for (id, st) in self.reveals.iter_mut() {
             let now = store.node_time(*id);
             let fade = st.fade as f64;
+            let edge = (st.fade * st.wipe).max(1.0);
             let sweep = st.sweep.get_mut();
+            if st.wipe > 0.0 {
+                Self::sweep_step(sweep, now, st.wipe.max(1.0), edge);
+            }
             // Words fully shown leave the list (only from the front, which keeps lookups valid).
             let done = st.words.iter().take_while(|w| if st.wipe > 0.0 {
-                sweep.word(w.0).map_or(now - w.1 >= fade + WIPE_UNSEEN, |s| now >= s.done)
+                sweep.word(w.0).map_or(now - w.1 >= fade + WIPE_UNSEEN, |(p, wd)| sweep.front >= p + wd + edge)
             } else {
                 now - w.1 >= fade
             }).count();
             if done > 0 && done == st.words.len() {
                 st.words.clear();
-                sweep.words.clear();
+                *sweep = Default::default();
             }
             any |= !st.words.is_empty() && store.node_time_scale(*id) > 0.0;
         }
@@ -249,19 +255,19 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// A glyph's alpha in word `i` (from [`Self::reveal_word`]), `dx` points into the word along
-    /// the wipe. A wiping glyph ramps in linearly once the line's edge reaches it; without a
-    /// wipe (or before paint has placed the word) the word eases in as a whole.
+    /// the run. A wiping glyph ramps in as the line's edge passes it; without a wipe (or before
+    /// paint has placed the word) the word eases in as a whole.
     pub(super) fn reveal_alpha_at(st: &RevealState, i: usize, now: f64, dx: f32) -> f32 {
         if i == 0 {
             return 1.0;
         }
         let (byte, t0) = st.words[i - 1];
-        if st.wipe > 0.0 && st.fade > 0.0
-            && let Some(w) = st.sweep.borrow().word(byte).copied()
-        {
-            // Each glyph ramps in over the same time, so a fast edge is a wider one, never a pop.
-            let start = w.at + f64::from(dx.max(0.0) / w.speed);
-            return (((now - start) / st.fade as f64) as f32).clamp(0.0, 1.0);
+        if st.wipe > 0.0 && st.fade > 0.0 {
+            let sw = st.sweep.borrow();
+            if let Some((p, _)) = sw.word(byte) {
+                let edge = (st.fade * st.wipe).max(1.0);
+                return ((sw.front - p - dx.max(0.0)) / edge).clamp(0.0, 1.0);
+            }
         }
         if st.fade <= 0.0 {
             return if now >= t0 { 1.0 } else { 0.0 };
@@ -269,35 +275,44 @@ impl<S: 'static> Runtime<S> {
         ease_out(((now - t0) / st.fade as f64) as f32)
     }
 
-    /// Schedules word `i`, newly placed by paint at `left` on the line `top..bottom`, `width`
-    /// points wide, on the line wipe: its edge reaches the word once the edge has crossed the words
-    /// before it (no sooner than the word arrives), jumping to a new line's start, and speeds up
-    /// while it trails the stream by more than [`WIPE_LAG`].
-    pub(super) fn reveal_place(st: &RevealState, i: usize, left: f32, top: f32, bottom: f32, width: f32) {
-        let (byte, arrived) = st.words[i - 1];
+    /// Lays word `i`, newly placed by paint and `width` points wide over all its lines, onto the
+    /// end of the wipe's run. A word placed behind one already on the run (scrolled into view
+    /// late) shows at once.
+    pub(super) fn reveal_place(st: &RevealState, i: usize, width: f32) {
+        let byte = st.words[i - 1].0;
+        let edge = (st.fade * st.wipe).max(1.0);
         let mut sw = st.sweep.borrow_mut();
         if sw.word(byte).is_some() {
             return;
         }
-        let base = st.wipe.max(1.0);
-        let behind = sw.front_word.is_some_and(|b| byte < b);
-        let at = match sw.front {
-            None => arrived,
-            Some(_) if behind => arrived,
-            Some((tf, xf, t, b)) if top < b && bottom > t && left >= xf - 0.5 => {
-                arrived.max((tf + f64::from((left - xf) / base)).min(arrived + WIPE_LAG)).max(tf)
-            }
-            Some((tf, ..)) => arrived.max(tf),
-        };
-        // Trailing the stream, the edge crosses the word fast enough to be level with it again.
-        let finish = arrived + 2.0 * WIPE_LAG;
-        let speed = if at + f64::from(width / base) <= finish { base } else { (width / (finish - at).max(0.004) as f32).max(base) };
-        let end = at + f64::from(width / speed);
-        sw.words.push(crate::runtime::types::SweepWord { byte, at, speed, done: end + st.fade as f64 });
-        if !behind {
-            sw.front = Some((end, left + width, top, bottom));
-            sw.front_word = Some(byte);
+        if sw.words.last().is_some_and(|w| byte < w.0) {
+            let p = sw.front - width - edge;
+            sw.words.push((byte, p, width));
+            return;
         }
+        if sw.words.is_empty() {
+            sw.front = sw.end;
+        }
+        let p = sw.end;
+        sw.words.push((byte, p, width));
+        sw.end = p + width;
+    }
+
+    /// Moves the wipe's front on to `now`: at the wipe's own speed, or faster while it trails the
+    /// run's end by more than [`WIPE_LAG`] of travel, its speed easing toward that aim. It stops
+    /// once the last word's glyphs are fully in.
+    fn sweep_step(sw: &mut crate::runtime::types::Sweep, now: f64, base: f32, edge: f32) {
+        let dt = sw.last.map_or(0.0, |t| (now - t).clamp(0.0, 0.1) as f32);
+        sw.last = Some(now);
+        let target = sw.end + edge;
+        if sw.words.is_empty() || sw.front >= target {
+            sw.speed = 0.0;
+            return;
+        }
+        let aim = base.max((target - sw.front) / WIPE_LAG);
+        if sw.speed <= 0.0 { sw.speed = base; }
+        sw.speed += (aim - sw.speed) * (1.0 - (-dt / WIPE_EASE).exp());
+        sw.front = (sw.front + sw.speed * dt).min(target);
     }
 
 }

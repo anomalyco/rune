@@ -400,40 +400,30 @@ pub(super) struct RevealState {
     pub(super) sweep: std::cell::RefCell<Sweep>,
 }
 
-/// One soft edge sweeping along streamed text in reading order: it reaches each word's left edge
-/// no sooner than the word arrives, never runs ahead of itself, and jumps to the next line's start
-/// once a line is done, so two edges never overlap.
+/// One soft edge gliding along streamed text in reading order. Each word paint places takes the
+/// next stretch of a single run of points (its lines laid end to end), and the edge's front moves
+/// along that run at a smooth speed that eases up while it trails the newest word, so a new line
+/// carries straight on from the end of the last.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Sweep {
-    /// Where the front last reached: (time, x, line top, line bottom), in points in the text.
-    pub(super) front: Option<(f64, f32, f32, f32)>,
-    /// The word the front last left (its start byte).
-    pub(super) front_word: Option<u32>,
-    pub(super) words: Vec<SweepWord>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(super) struct SweepWord {
-    pub(super) byte: u32,
-    /// When the front reaches the word's left edge.
-    pub(super) at: f64,
-    /// Points per second across it, faster while the front trails the stream.
+    /// The edge's front along the run, in points, and its speed in points per second.
+    pub(super) front: f32,
     pub(super) speed: f32,
-    /// When its last glyph is fully in.
-    pub(super) done: f64,
+    /// The run's end: past the last word placed.
+    pub(super) end: f32,
+    /// When the front last moved (node time).
+    pub(super) last: Option<f64>,
+    /// (word start byte, where it starts on the run, its width).
+    pub(super) words: Vec<(u32, f32, f32)>,
 }
 
 impl Sweep {
-    pub(super) fn word(&self, byte: u32) -> Option<&SweepWord> {
-        self.words.iter().rev().find(|w| w.byte == byte)
+    pub(super) fn word(&self, byte: u32) -> Option<(f32, f32)> {
+        self.words.iter().rev().find(|w| w.0 == byte).map(|w| (w.1, w.2))
     }
 
     pub(super) fn shift(&mut self, dt: f64) {
-        if let Some(f) = &mut self.front { f.0 += dt; }
-        for w in &mut self.words {
-            w.at += dt;
-            w.done += dt;
-        }
+        if let Some(t) = &mut self.last { *t += dt; }
     }
 }
 
