@@ -152,32 +152,36 @@ impl Scrub {
         Keyed::Handled
     }
 
-    /// The scrubber over the whole window, or nothing while closed. Lay it over the app's view
-    /// at the window's origin, and pause the app's subtree (`El::time_scale(0.0)`) while it
-    /// shows, not the window's clock: the scrubber itself still animates. `lens` finds this
-    /// state in the app's; Send (the button, or Return in the note) calls `on_send`.
+    /// The scrubber over the whole window, or nothing while closed. Lay it over the app's view;
+    /// it lines its outlines up with the window wherever it sits, so a story can show it on a
+    /// stage. Pause the app's subtree (`El::time_scale(0.0)`) while it shows, not the window's
+    /// clock: the scrubber itself still animates. `lens` finds this state in the app's; Send
+    /// (the button, or Return in the note) calls `on_send`.
     pub fn view<S: 'static>(&self, lens: fn(&mut S) -> &mut Scrub, on_send: fn(&mut S, Sent, &mut Tx)) -> El {
         let Some(clip) = &self.clip else { return el() };
-        let (w, _) = clip.viewport();
+        let (vw, vh) = clip.viewport();
+        let [ox, oy, w, _] = crate::memo::layout_with("rewind", |r| r.map(|v| (v * 2.0).round() / 2.0)).unwrap_or([0.0, 0.0, vw, vh]);
         let changes = clip.changes(self.frame);
         // The live view under it keeps changing; dimmed, the recorded frame reads over it.
-        let mut layer = el().key("rewind").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        let layer = el().key("rewind").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
             .child(el().key("rewind-dim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(Color::BLACK.alpha(0.55))
                 .on_press(move |s: &mut S| lens(s).picked = None));
+        // Recorded frames: they land where they were, never springing between steps.
+        let mut marks = el().key("rewind-marks").absolute(-ox, -oy).size(vw, vh).motion(crate::Spring::NONE);
         for (id, shot) in clip.frame(self.frame) {
             if changes.iter().any(|c| c.id == id) { continue; }
             let r = shot.rect;
-            layer = layer.child(el().key(format!("rewind-el-{id}")).absolute(r[0], r[1]).size(r[2].max(1.0), r[3].max(1.0))
+            marks = marks.child(el().key(format!("rewind-el-{id}")).absolute(r[0], r[1]).size(r[2].max(1.0), r[3].max(1.0))
                 .border(0.5, Color::WHITE.alpha(0.08 + 0.14 * shot.opacity.clamp(0.0, 1.0))));
         }
-        if let Some(id) = self.picked { layer = layer.children(self.path_view(clip, id)); }
-        for c in changes.iter().rev() { layer = layer.children(outline(c, lens)); }
+        if let Some(id) = self.picked { marks = marks.children(self.path_view(clip, id)); }
+        for c in changes.iter().rev() { marks = marks.children(outline(c, lens)); }
         if let Some(id) = self.picked.filter(|id| !changes.iter().any(|c| c.id == *id))
             && let Some((_, s)) = clip.frame(self.frame).into_iter().find(|(i, _)| *i == id)
         {
-            layer = layer.child(el().key("rewind-picked").absolute(s.rect[0], s.rect[1]).size(s.rect[2].max(1.0), s.rect[3].max(1.0)).border(1.0, Color::WHITE.alpha(0.7)));
+            marks = marks.child(el().key("rewind-picked").absolute(s.rect[0], s.rect[1]).size(s.rect[2].max(1.0), s.rect[3].max(1.0)).border(1.0, Color::WHITE.alpha(0.7)));
         }
-        layer.child(self.bar(clip, w, &changes, lens, on_send))
+        layer.child(marks).child(self.bar(clip, w, &changes, lens, on_send))
     }
 
     fn path_view(&self, clip: &Clip, id: u32) -> Vec<El> {
