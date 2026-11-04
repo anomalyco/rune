@@ -570,7 +570,7 @@ fn reveal_wipe_fades_a_word_in_from_left_to_right() {
         let mut rt = Runtime::new(("one".to_string(), wipe), view, (420.0, 80.0), Env::new(false, 1.0));
         rt.frame(0.0);
         let before = rt.instances.iter().filter(|i| i.params[1] == KIND_GLYPH).count();
-        rt.state.0.push_str(" wipewipe");
+        rt.state.0.push_str(" swellhello");
         rt.invalidate();
         rt.frame(0.001);
         rt.frame(0.001 + at);
@@ -586,7 +586,7 @@ fn reveal_wipe_fades_a_word_in_from_left_to_right() {
     let fading = word(0.0, 0.06);
     assert!(fading.windows(2).all(|w| (w[0].1 - w[1].1).abs() < 1e-4), "without a wipe the word fades as one: {fading:?}");
     let done = word(400.0, 0.6);
-    assert!(done.len() == 8 && done.iter().all(|g| g.1 >= 0.999), "the wipe lands every glyph: {done:?}");
+    assert!(done.len() == 10 && done.iter().all(|g| g.1 >= 0.999), "the wipe lands every glyph: {done:?}");
 }
 
 #[test]
