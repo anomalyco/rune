@@ -73,7 +73,6 @@ pub(crate) fn wheel_delta(delta: winit::event::MouseScrollDelta, scale: f32, shi
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) const SHIFT_TURNS_WHEEL: bool = !cfg!(target_os = "macos");
 
-#[cfg(any(test, target_arch = "wasm32"))]
 impl ScrollState {
     /// The offset, velocity and limit on one axis.
     pub(super) fn axis(&mut self, horizontal: bool) -> (&mut f64, &mut f32, f64) {
