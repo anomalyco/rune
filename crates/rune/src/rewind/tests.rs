@@ -114,6 +114,21 @@ fn a_one_frame_jump_is_found_and_labelled() {
 }
 
 #[test]
+fn a_one_frame_blip_out_and_back_is_a_jump() {
+    let mut rt = app(Rewind::new());
+    record(&mut rt);
+    frames(&mut rt, 10);
+    jump(&mut rt, 9.0);
+    rt.frame(1.0 / 60.0);
+    jump(&mut rt, 0.0);
+    frames(&mut rt, 10);
+    let clip = rt.state.rewind.freeze();
+    let jumps: Vec<usize> = (0..clip.len()).filter(|&k| clip.has_jump(k)).collect();
+    assert_eq!(jumps.len(), 1, "only the frame it went out in: {jumps:?}");
+    assert_eq!(clip.changes(jumps[0])[0].label(), "title ↓9.0 pt");
+}
+
+#[test]
 fn smooth_motion_is_not_a_jump() {
     let mut rt = app(Rewind::new());
     record(&mut rt);

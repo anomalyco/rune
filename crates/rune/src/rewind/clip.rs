@@ -106,7 +106,8 @@ impl Clip {
         let n = self.len();
         let mut state: Vec<Option<Q>> = base.to_vec();
         state.resize(self.names.len(), None);
-        let mut moved: Vec<Vec<(u32, f32)>> = Vec::with_capacity(n);
+        // Per frame: each element that moved, how far, and where it was before and after.
+        let mut moved: Vec<Vec<(u32, f32, Shot, Shot)>> = Vec::with_capacity(n);
         self.activity = Vec::with_capacity(n);
         for k in 0..n {
             if k % STRIDE == 0 {
@@ -124,7 +125,7 @@ impl Clip {
                 state[i] = Some(q);
                 if let Some(b) = before {
                     let d = Shot::of(&b).distance(&Shot::of(&q));
-                    if d > 0.0 { frame.push((id, d)); most = most.max(d); }
+                    if d > 0.0 { frame.push((id, d, Shot::of(&b), Shot::of(&q))); most = most.max(d); }
                     faded |= b[4] != q[4];
                 }
             });
@@ -132,11 +133,13 @@ impl Clip {
             self.activity.push(if most == 0.0 && faded { 0.25 } else { most });
             moved.push(frame);
         }
-        let of = |frame: Option<&Vec<(u32, f32)>>, id: u32| frame.and_then(|f| f.iter().find(|m| m.0 == id)).map_or(0.0, |m| m.1);
+        let find = |k: usize, id: u32| moved.get(k).and_then(|f| f.iter().find(|m| m.0 == id));
         self.jumps = (0..n).map(|k| {
-            moved[k].iter().filter(|&&(id, d)| {
-                let near = of(k.checked_sub(1).and_then(|p| moved.get(p)), id).max(of(moved.get(k + 1), id));
-                d >= 4.0 && d > 2.5 * near
+            moved[k].iter().filter(|&&(id, d, was, _)| {
+                let near = k.checked_sub(1).and_then(|p| find(p, id)).map_or(0.0, |m| m.1).max(find(k + 1, id).map_or(0.0, |m| m.1));
+                // A blip: out in this frame and straight back in the next.
+                let back = find(k + 1, id).is_some_and(|m| m.3.distance(&was) < 0.5);
+                d >= 4.0 && (d > 2.5 * near || back)
             }).map(|m| m.0).collect()
         }).collect();
     }
