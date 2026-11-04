@@ -123,7 +123,7 @@ impl<S: 'static> Runtime<S> {
                     // `"row/mark"` names an element or highlight inside unmounted row `row`.
                     key.match_indices('/').find_map(|(at, _)| v.index_of(&key[..at]))
                 })?;
-                let row_key = &v.keys[index];
+                let row_key = &v.keys.key(index);
                 let top = f64::from(v.top + v.pad_top + v.prefix(index));
                 let height = f64::from(v.height(row_key));
                 let end = f64::from(v.top + v.pad_top + v.prefix(v.keys.len()) + v.pad_bottom);

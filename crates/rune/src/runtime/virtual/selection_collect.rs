@@ -43,9 +43,10 @@ impl<S: 'static> Runtime<S> {
     ) {
         let Some(v) = self.virtuals.get(list_path) else { return };
         let Some(key) = v.keys.get(r) else { return };
+        let key = key.as_ref();
         if let Some(rows) = &v.selection.source {
             let state = playground_host::handler_states_ref(&self.state, self.playground.as_deref());
-            let mut row = (rows.build)(state, r).key(key.clone());
+            let mut row = (rows.build)(state, r).key(key.to_owned());
             if !crate::input::key_diagnostics::clean(&row) {
                 let _ = crate::input::key_diagnostics::repair_at(&mut row, &format!("{list_path}/{key}"));
             }
@@ -70,7 +71,7 @@ impl<S: 'static> Runtime<S> {
         if v.range.contains(&r) || r >= v.keys.len() {
             return;
         }
-        let row_key = v.keys[r].clone();
+        let row_key = v.keys.key(r).into_owned();
         let already = v.selection.texts.iter().any(|t| t.row_key == row_key);
         let (mut texts, mut providers) = (Vec::new(), Vec::new());
         if !already {
@@ -230,7 +231,7 @@ impl<S: 'static> Runtime<S> {
 
             for r in row_start..=row_end {
                 if v.range.contains(&r) {
-                    let row_path = format!("{list_path}/{}", v.keys[r]);
+                    let row_path = format!("{list_path}/{}", v.keys.key(r));
                     let Some(row_node) = (list_node + 1..=list_end)
                         .find(|&j| self.nodes[j].parent == Some(list_node) && self.nodes[j].path == row_path)
                     else { continue };
@@ -246,7 +247,7 @@ impl<S: 'static> Runtime<S> {
                     if hit_cap { break; }
                 } else {
                     prev_mounted = None;
-                    let row_key = &v.keys[r];
+                    let row_key = &v.keys.key(r);
                     let mut built_texts = Vec::new();
                     let row_texts: Vec<&OffscreenText> = if v.selection.texts.iter().any(|t| &t.row_key == row_key) {
                         v.selection.texts.iter().filter(|t| &t.row_key == row_key).collect()
@@ -342,7 +343,7 @@ impl<S: 'static> Runtime<S> {
             for r in 0..count {
                 let range = self.virtuals[&list_path].range.clone();
                 if range.contains(&r) {
-                    let row_path = format!("{list_path}/{}", self.virtuals[&list_path].keys[r]);
+                    let row_path = format!("{list_path}/{}", self.virtuals[&list_path].keys.key(r));
                     if let Some(j) = (list_node + 1..self.nodes.len())
                         .take_while(|&j| inside(&self.nodes, j))
                         .filter(|&j| {
@@ -403,7 +404,7 @@ impl<S: 'static> Runtime<S> {
             for r in (0..count).rev() {
                 let range = self.virtuals[&list_path].range.clone();
                 if range.contains(&r) {
-                    let row_path = format!("{list_path}/{}", self.virtuals[&list_path].keys[r]);
+                    let row_path = format!("{list_path}/{}", self.virtuals[&list_path].keys.key(r));
                     if let Some(j) = (list_node + 1..=list_end)
                         .filter(|&j| {
                             (self.nodes[j].path == row_path
@@ -513,9 +514,10 @@ impl<S: 'static> Runtime<S> {
             let mut candidate_rows: Vec<usize> = (0..count)
                 .filter(|r| !range.contains(r))
                 .filter(|&r| {
-                    let rk = &v.keys[r];
+                    let rk = v.keys.key(r);
+                    let rk = rk.as_ref();
                     selector == rk
-                        || selector.strip_prefix(rk.as_str()).is_some_and(|s| s.starts_with('/'))
+                        || selector.strip_prefix(rk).is_some_and(|s| s.starts_with('/'))
                         || selector.rsplit('/').any(|seg| seg == rk)
                 })
                 .collect();
@@ -548,8 +550,8 @@ impl<S: 'static> Runtime<S> {
                         }
                     }
                     SelectRequest::All(_) => {
-                        let row_path = format!("{list_path}/{}", self.virtuals[&list_path].keys[r]);
-                        let row_key = &self.virtuals[&list_path].keys[r];
+                        let row_path = format!("{list_path}/{}", self.virtuals[&list_path].keys.key(r));
+                        let row_key = &self.virtuals[&list_path].keys.key(r);
                         let row_matches = row_path == selector || crate::flight::selects(selector, &row_path, Some(row_key));
                         let matching: Vec<&OffscreenText> = if row_matches {
                             texts.iter().collect()

@@ -477,7 +477,10 @@ impl<S: 'static> Runtime<S> {
                 }
             }
             if let Some(v) = self.virtuals.get(&list_path) && r1 < v.keys.len() {
-                v.keys[r0..=r1].hash(&mut hasher);
+                match &v.keys {
+                    crate::el::virtual_list::RowKeys::Stored(keys) => keys[r0..=r1].hash(&mut hasher),
+                    crate::el::virtual_list::RowKeys::Positional(_) => (r0, r1).hash(&mut hasher),
+                }
             }
             return hasher.finish();
         }
@@ -525,7 +528,7 @@ impl<S: 'static> Runtime<S> {
             let range = v.range.clone();
             let keys: Vec<String> = ((r0 + 1)..r1)
                 .filter(|r| range.contains(r))
-                .filter_map(|r| v.keys.get(r).cloned())
+                .filter_map(|r| v.keys.get(r).map(std::borrow::Cow::into_owned))
                 .collect();
             for key in keys {
                 if let Some(hash) = self.mounted_row_hash(&list_path, &key, &g_path) {
@@ -550,7 +553,7 @@ impl<S: 'static> Runtime<S> {
             let range = v.range.clone();
             let keys: Vec<String> = ((r0 + 1)..r1)
                 .filter(|r| range.contains(r))
-                .filter_map(|r| v.keys.get(r).cloned())
+                .filter_map(|r| v.keys.get(r).map(std::borrow::Cow::into_owned))
                 .collect();
             for key in keys {
                 if let Some(hash) = self.mounted_row_hash(&list_path, &key, &g_path) {

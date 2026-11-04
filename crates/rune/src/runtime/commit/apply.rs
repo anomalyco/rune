@@ -38,7 +38,7 @@ impl<S: 'static> Runtime<S> {
             }
         }
         for v in self.virtuals.values_mut() {
-            v.shown = v.keys[v.range.clone()].iter().cloned().collect();
+            v.shown = v.range.clone().map(|i| v.keys.key(i).into_owned()).collect();
         }
         // A row scrolled into view mounts settled with its subtree. Content added later under a
         // row already on screen is a live change and keeps its own entrance.

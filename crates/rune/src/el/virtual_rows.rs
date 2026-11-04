@@ -84,12 +84,44 @@ impl El {
         self.virtualize(estimated_row_height)
     }
 
+    /// [`El::virtual_rows`] keyed by position: row `i`'s key is `i` in decimal (`"0"`, `"1"`, ..),
+    /// so layout keeps nothing per row and never asks for a key. A commit then costs the rows it
+    /// mounts whatever `count` is, the first one and one that changes `count` included, so a
+    /// list can grow by thousands of rows a frame at millions of rows (a file still loading).
+    ///
+    /// Positions are the identity: a row keeps its measured height and its place on screen by
+    /// index, a count that grows or shrinks keeps the rows above the change where they were, and
+    /// `Tx::scroll_into_view(i.to_string())` reaches row `i`. Reordering or replacing the items
+    /// keeps every key, so the rows show the new items where the old ones were, with no motion;
+    /// a [`memo`](crate::memo) inside `build` must version what its row shows, not only `i`.
+    /// Use [`El::virtual_rows`] when rows should follow their items as they move.
+    ///
+    /// ```ignore
+    /// col().scroll_xy().grow(1.0).child(
+    ///     col().key("rows").growth(GrowthSpec::default()).virtual_rows_positional(s.rows, 36.0,
+    ///         |s: &App, i| memo(i.to_string(), (s.revision, s.order), || grid_row(s, i))),
+    /// )
+    /// ```
+    pub fn virtual_rows_positional<S: 'static>(
+        mut self,
+        count: usize,
+        estimated_row_height: f32,
+        build: impl Fn(&S, usize) -> El + 'static,
+    ) -> Self {
+        let mut rows = RowSource::new(count, |_: &S, i| Cow::Owned(i.to_string()), build);
+        rows.positional = true;
+        self.virtual_rows = Some(Rc::new(rows));
+        self.virtualize(estimated_row_height)
+    }
+
     /// Tells [`El::virtual_rows`] its keys are those of the last commit that gave the same
     /// `version`, so layout skips calling `key` for every row to find out. A list of tens of
     /// thousands of rows then commits in time independent of its length. Change `version`
     /// whenever rows are reordered, replaced or any row's key changes while the row count stays
     /// the same (a change in `count` is always detected without a bump); with a stale version on
-    /// an in-place change the rows keep their old keys.
+    /// an in-place change the rows keep their old keys. The first commit, a version change and a
+    /// change in `count` still call `key` for every row and store every key, a third of a second
+    /// at a million rows; [`El::virtual_rows_positional`] keeps nothing per row.
     pub fn virtual_rows_version(mut self, version: impl std::hash::Hash) -> Self {
         self.virtual_rows_version = Some(crate::memo::hash_of(&version));
         self
@@ -119,6 +151,8 @@ pub(crate) type BuildFn = dyn Fn(crate::states::StatesRef<'_>, usize) -> El;
 /// The rows of an index-built list, built at layout time from the window's state.
 pub(crate) struct RowSource {
     pub(crate) count: usize,
+    /// Keyed by index ([`El::virtual_rows_positional`]): layout never calls `key`.
+    pub(crate) positional: bool,
     pub(crate) key: Box<KeyFn>,
     pub(crate) build: Box<BuildFn>,
 }
@@ -139,6 +173,7 @@ impl RowSource {
     ) -> Self {
         RowSource {
             count,
+            positional: false,
             key: Box::new(key_fn(move |s, i| key(state::<S>(s), i))),
             build: Box::new(move |s, i| build(state::<S>(s), i)),
         }
@@ -876,6 +911,71 @@ mod tests {
         rt.frame(1.0 / 60.0);
         assert!(rt.find("r2000").is_some(), "an appended row mounts at the pinned tail");
         assert_eq!(BUILDS.get(), first + 1, "and only it builds");
+    }
+
+    /// `(count, tick)`: positional rows 20 points tall, row 3 60, in a 400-point viewport.
+    type Pos = (usize, u32);
+
+    fn positional_view(s: &Pos, _: &mut Cx<Pos>) -> El {
+        col().w_full().h_full().child(
+            col().key("scroll").w_full().grow(1.0).scroll(ScrollSpec { stick_bottom: false }).child(
+                col().key("rows").w_full().growth(GrowthSpec::default()).virtual_rows_positional(s.0, 20.0, |s: &Pos, i| {
+                    BUILT.with_borrow_mut(|b| b.push(i));
+                    text(format!("{} {i}", s.1)).h(if i == 3 { 60.0 } else { 20.0 })
+                })),
+        )
+    }
+
+    fn positional(count: usize) -> Runtime<Pos> {
+        let mut rt = Runtime::new((count, 0), positional_view, (300.0, 400.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        rt
+    }
+
+    #[test]
+    fn positional_rows_commit_in_time_independent_of_their_count() {
+        // Keying every row would take seconds at this count; positional rows store nothing per row.
+        let start = Instant::now();
+        let mut rt = positional(100_000_000);
+        let first = built();
+        assert!(!first.is_empty() && first.len() < 100 && first[0] == 0, "only the window builds: {first:?}");
+        for _ in 0..10 {
+            rt.state.0 += 1000;
+            commit(&mut rt);
+        }
+        assert!(start.elapsed().as_secs_f32() < 2.0, "a first commit and ten growths took {:?}", start.elapsed());
+        assert!(built().iter().all(|&i| i < 100), "growing below the window builds nothing new");
+        assert!(rt.find("rows/0").is_some(), "row 0 is keyed 0");
+    }
+
+    #[test]
+    fn positional_rows_keep_the_reader_in_place_as_the_count_changes() {
+        let mut rt = positional(1000);
+        rt.wheel(150.0, 200.0, -4000.0);
+        until_idle(&mut rt);
+        let before = visible(&rt);
+        assert!(before[0].0.parse::<usize>().unwrap() > 100, "scrolled down: {before:?}");
+        rt.state.0 += 5000;
+        commit(&mut rt);
+        assert_eq!(visible(&rt), before, "rows appended below the reader leave the view alone");
+        rt.state.0 = 10;
+        commit(&mut rt);
+        let shown: Vec<_> = visible(&rt).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(shown, (0..10).map(|i| i.to_string()).collect::<Vec<_>>(), "a count shrunk below the offset shows what is left");
+    }
+
+    #[test]
+    fn positional_rows_keep_measured_heights_by_index_and_reveal_by_index() {
+        let mut rt = positional(100_000);
+        until_idle(&mut rt);
+        let v = &rt.virtuals["#0/scroll/rows"];
+        assert_eq!(v.prefix(10), 9.0 * 20.0 + 60.0, "row 3's measured height counts");
+        assert_eq!(v.prefix(100_000), 99_999.0 * 20.0 + 60.0);
+        rt.update(|_, tx| tx.scroll_into_view("54321"));
+        for _ in 0..3 { rt.frame(1.0 / 120.0); }
+        assert!(visible(&rt).iter().any(|(k, _)| k == "54321"), "{:?}", visible(&rt));
+        let v = &rt.virtuals["#0/scroll/rows"];
+        assert_eq!(v.height("3"), 60.0, "a row scrolled away keeps its height");
     }
 
     /// `cargo test -p rune --profile perf --lib virtual_rows_time -- --ignored --nocapture`

@@ -258,15 +258,21 @@ impl<S: 'static> Measurement<'_, S> {
             }
             v.indexed = source.is_some();
             let version = el.virtual_rows_version.filter(|_| source.is_some());
+            let positional = source.as_ref().is_some_and(|rows| rows.positional);
             let same = match &source {
-                Some(rows) => rows.count == v.keys.len()
-                    && (self.state_unchanged || (version.is_some() && version == v.keys_version) || (0..rows.count).all(|i| (rows.key)(state, i) == v.keys[i])),
+                Some(rows) if rows.positional => v.keys == crate::el::virtual_list::RowKeys::Positional(rows.count),
+                Some(rows) => rows.count == v.keys.len() && !v.keys.is_positional()
+                    && (self.state_unchanged || (version.is_some() && version == v.keys_version) || (0..rows.count).all(|i| (rows.key)(state, i) == v.keys.key(i))),
                 None => v.same_keys(el.children.iter().map(|c| c.key.as_deref())),
             };
             v.keys_version = version;
-            // Most commits keep the same rows; only a change pays for sets of every key.
+            // Most commits keep the same rows; only a change pays for sets of every key, and a
+            // positional list pays for none.
             let anchor = if same {
                 if pinned { None } else { v.first_visible(offset, |_| true) }
+            } else if positional {
+                let count = source.as_ref().map_or(0, |rows| rows.count);
+                v.set_count(count, self.commits, (!pinned).then_some(offset))
             } else {
                 let mut keys: Vec<_> = match &source {
                     Some(rows) => (0..rows.count).map(|i| (rows.key)(state, i).into_owned()).collect(),
@@ -457,9 +463,9 @@ impl<S: 'static> Measurement<'_, S> {
             let key_warnings = &mut *self.key_warnings;
             let keys = &v.keys;
             let mut build = |i: usize| {
-                let key = &keys[i];
-                let tag = crate::memo::virtual_row_tag(path, key);
-                let mut row = crate::memo::in_virtual_row(tag, || (rows.build)(state, i)).key(key.clone());
+                let key = keys.key(i);
+                let tag = crate::memo::virtual_row_tag(path, &key);
+                let mut row = crate::memo::in_virtual_row(tag, || (rows.build)(state, i)).key(key.clone().into_owned());
                 // The view's key repair ran before these rows existed.
                 if crate::input::key_diagnostics::clean(&row) { return row; }
                 let duplicates = crate::input::key_diagnostics::repair_at(&mut row, &format!("{path}/{key}"));
@@ -482,7 +488,7 @@ impl<S: 'static> Measurement<'_, S> {
                 collect_virtual_inputs(&row, path, i, inert, self.virtual_inputs);
                 if pinned.contains(&i) {
                     selectable::virtual_selection::collect_virtual_row_selection(
-                        &row, path, &v.keys[i], i, list_group.as_deref(), inert,
+                        &row, path, &v.keys.key(i), i, list_group.as_deref(), inert,
                         &mut v.selection.texts, &mut v.selection.copy_providers,
                     );
                 }
@@ -491,7 +497,7 @@ impl<S: 'static> Measurement<'_, S> {
                 if Some(i) == focused { continue; }
                 let row = build(i);
                 selectable::virtual_selection::collect_virtual_row_selection(
-                    &row, path, &v.keys[i], i, list_group.as_deref(), inert,
+                    &row, path, &v.keys.key(i), i, list_group.as_deref(), inert,
                     &mut v.selection.texts, &mut v.selection.copy_providers,
                 );
             }
@@ -521,7 +527,7 @@ impl<S: 'static> Measurement<'_, S> {
                     collect_virtual_inputs(&child, path, i, inert, self.virtual_inputs);
                     if pinned.contains(&i) {
                         selectable::virtual_selection::collect_virtual_row_selection(
-                            &child, path, &v.keys[i], i, list_group.as_deref(), inert,
+                            &child, path, &v.keys.key(i), i, list_group.as_deref(), inert,
                             &mut v.selection.texts, &mut v.selection.copy_providers,
                         );
                     }
@@ -557,7 +563,7 @@ impl<S: 'static> Runtime<S> {
             } else {
                 let matches = |k: &str| rest == k || rest.strip_prefix(k).is_some_and(|t| t.starts_with('/'));
                 if !v.focused_row.as_deref().is_some_and(matches) {
-                    v.focused_row = v.keys.iter().find(|k| matches(k)).cloned();
+                    v.focused_row = v.keys.row_under(rest);
                 }
             }
         }

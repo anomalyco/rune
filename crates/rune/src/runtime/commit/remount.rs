@@ -254,7 +254,8 @@ impl<S: 'static> Measurement<'_, S> {
         for plan in &plans {
             let keys = &self.virtuals[&plan.path].keys;
             for row_i in plan.range.clone() {
-                let key = &keys[row_i];
+                let key = keys.key(row_i);
+                let key = key.as_ref();
                 if plan.mounted_rows.contains_key(key) {
                     kept_rows.insert(crate::memo::virtual_row_tag(&plan.path, key));
                 }
@@ -277,13 +278,13 @@ impl<S: 'static> Measurement<'_, S> {
         for plan in &mut plans {
             let v = self.virtuals.get_mut(&plan.path).unwrap();
             if let Some(i) = plan.focused {
-                let row = build_indexed_row(&plan.rows, state, &plan.path, &v.keys[i], i, self.key_warnings);
+                let row = build_indexed_row(&plan.rows, state, &plan.path, &v.keys.key(i), i, self.key_warnings);
                 measure::collect_virtual_inputs(&row, &plan.path, i, plan.inert, self.virtual_inputs);
                 if plan.pinned.contains(&i) {
                     selectable::virtual_selection::collect_virtual_row_selection(
                         &row,
                         &plan.path,
-                        &v.keys[i],
+                        &v.keys.key(i),
                         i,
                         plan.list_group.as_deref(),
                         plan.inert,
@@ -296,11 +297,11 @@ impl<S: 'static> Measurement<'_, S> {
                 if Some(i) == plan.focused {
                     continue;
                 }
-                let row = build_indexed_row(&plan.rows, state, &plan.path, &v.keys[i], i, self.key_warnings);
+                let row = build_indexed_row(&plan.rows, state, &plan.path, &v.keys.key(i), i, self.key_warnings);
                 selectable::virtual_selection::collect_virtual_row_selection(
                     &row,
                     &plan.path,
-                    &v.keys[i],
+                    &v.keys.key(i),
                     i,
                     plan.list_group.as_deref(),
                     plan.inert,
@@ -309,7 +310,8 @@ impl<S: 'static> Measurement<'_, S> {
                 );
             }
             for (pos, row_i) in plan.range.clone().enumerate() {
-                let key = &v.keys[row_i];
+                let key = v.keys.key(row_i);
+                let key = key.as_ref();
                 if !plan.mounted_rows.contains_key(key) {
                     let row = build_indexed_row(&plan.rows, state, &plan.path, key, row_i, self.key_warnings);
                     if row.has_virtual {
@@ -452,7 +454,7 @@ impl<S: 'static> Measurement<'_, S> {
                         row_slots.push(kid_slot);
                         any_row_dirty |= kid_dirty;
                     } else {
-                        let &(rs, re) = &plan.mounted_rows[&keys[row_i]];
+                        let &(rs, re) = &plan.mounted_rows[keys.key(row_i).as_ref()];
                         let row_taffy = self.nodes[rs].taffy;
                         move_slice(
                             self.nodes,

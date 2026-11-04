@@ -1,6 +1,8 @@
 //! Virtual row bookkeeping. Only geometry outside the mounted window is estimated.
 
+use std::borrow::Cow;
 use std::cell::{Cell, Ref, RefCell};
+use std::collections::BTreeMap;
 use std::ops::Range;
 
 use rune_taffy::CompactStyle;
@@ -17,13 +19,86 @@ struct Row {
     height: Option<f32>,
 }
 
+/// A virtual list's row keys, in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RowKeys {
+    /// Keys the view gave, one per row.
+    Stored(Vec<String>),
+    /// `count` rows keyed by their index ([`El::virtual_rows_positional`](crate::El::virtual_rows_positional)):
+    /// row `i`'s key is `i` in decimal, and nothing is stored per row.
+    Positional(usize),
+}
+
+impl Default for RowKeys {
+    fn default() -> Self {
+        RowKeys::Stored(Vec::new())
+    }
+}
+
+impl RowKeys {
+    pub fn len(&self) -> usize {
+        match self {
+            RowKeys::Stored(keys) => keys.len(),
+            RowKeys::Positional(count) => *count,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn is_positional(&self) -> bool {
+        matches!(self, RowKeys::Positional(_))
+    }
+
+    /// Row `i`'s key, if there is a row `i`.
+    pub fn get(&self, i: usize) -> Option<Cow<'_, str>> {
+        match self {
+            RowKeys::Stored(keys) => keys.get(i).map(|k| Cow::Borrowed(k.as_str())),
+            RowKeys::Positional(count) => (i < *count).then(|| Cow::Owned(i.to_string())),
+        }
+    }
+
+    /// Row `i`'s key. Panics past the last row, as indexing does.
+    pub fn key(&self, i: usize) -> Cow<'_, str> {
+        self.get(i).unwrap_or_else(|| panic!("virtual row {i} out of {}", self.len()))
+    }
+
+    /// The row a positional key names: its index, written as [`RowKeys::key`] writes it.
+    fn position(key: &str, count: usize) -> Option<usize> {
+        let canonical = key == "0" || (!key.is_empty() && !key.starts_with('0') && key.bytes().all(|b| b.is_ascii_digit()));
+        canonical.then(|| key.parse::<usize>().ok()).flatten().filter(|&i| i < count)
+    }
+
+    /// The row whose key `path` (a path below the list, without the list's own path) starts with.
+    pub fn row_under(&self, path: &str) -> Option<String> {
+        let matches = |k: &str| path == k || path.strip_prefix(k).is_some_and(|t| t.starts_with('/'));
+        match self {
+            RowKeys::Stored(keys) => keys.iter().find(|k| matches(k)).cloned(),
+            RowKeys::Positional(count) => {
+                let first = path.split('/').next().unwrap_or(path);
+                RowKeys::position(first, *count).map(|i| i.to_string())
+            }
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct VirtualList {
-    /// Row keys in order; replace them with [`VirtualList::set_keys`].
-    pub keys: Vec<String>,
+    /// Row keys in order; replace them with [`VirtualList::set_keys`] or
+    /// [`VirtualList::set_count`].
+    pub keys: RowKeys,
+    /// Stored keys' rows by key. Positional rows keep nothing per row.
     rows: HashMap<String, Row>,
-    /// The commit each row in `keys` first appeared in.
+    /// The commit each stored row first appeared in.
     born: Vec<u64>,
+    /// Positional rows from this index on were born at this commit, the last that added rows;
+    /// rows before it are older.
+    grew: (usize, u64),
+    /// Positional rows' measured heights where they differ from the estimate, by index.
+    tall: BTreeMap<usize, f32>,
+    /// Running totals of `tall`'s differences from the estimate, rebuilt with `sums`.
+    tall_sums: RefCell<Vec<(usize, f64)>>,
     /// `keys` changed since the frame began ([`VirtualList::frame_begins`]).
     keys_fresh: bool,
     /// The last change to `keys` kept a row the reader could see.
@@ -31,7 +106,7 @@ pub(crate) struct VirtualList {
     /// Rows mounted with their insertion transition and not yet drawn; the runtime lands the
     /// ones that drew nothing (`runtime/unseen_presence.rs`).
     pub entering: HashSet<String>,
-    /// Each row's height, measured or estimated, in `keys` order.
+    /// Each stored row's height, measured or estimated, in `keys` order.
     row_heights: Vec<f32>,
     /// Running totals of `row_heights` (one longer), rebuilt when one changes. Every frame reads
     /// them, so a long list doesn't hash every key to find its window.
@@ -169,25 +244,63 @@ const INDEXED_BUDGET: f32 = 0.5;
 
 impl VirtualList {
     pub fn height(&self, key: &str) -> f32 {
-        self.rows.get(key).and_then(|r| r.height).unwrap_or(self.estimate)
+        match &self.keys {
+            RowKeys::Stored(_) => self.rows.get(key).and_then(|r| r.height).unwrap_or(self.estimate),
+            RowKeys::Positional(count) => RowKeys::position(key, *count).map_or(self.estimate, |i| self.height_at(i)),
+        }
+    }
+
+    /// Row `i`'s height, measured or estimated.
+    fn height_at(&self, i: usize) -> f32 {
+        match &self.keys {
+            RowKeys::Stored(_) => self.row_heights[i],
+            RowKeys::Positional(_) => self.tall.get(&i).copied().unwrap_or(self.estimate),
+        }
+    }
+
+    /// Whether row `i` has been laid out. Positional rows keep only the heights that differ from
+    /// the estimate, so one the last commit mounted counts as measured too.
+    fn measured(&self, i: usize) -> bool {
+        match &self.keys {
+            RowKeys::Stored(keys) => self.rows[&keys[i]].height.is_some(),
+            RowKeys::Positional(_) => self.tall.contains_key(&i) || self.shown.contains(i.to_string().as_str()),
+        }
     }
 
     pub fn has(&self, key: &str) -> bool {
-        self.rows.contains_key(key)
+        self.index_of(key).is_some()
     }
 
     pub fn index_of(&self, key: &str) -> Option<usize> {
-        self.rows.get(key).map(|r| r.index)
+        match &self.keys {
+            RowKeys::Stored(_) => self.rows.get(key).map(|r| r.index),
+            RowKeys::Positional(count) => RowKeys::position(key, *count),
+        }
+    }
+
+    /// The commit row `i` first appeared in, or one before it for positional rows older than the
+    /// last that were added.
+    fn born(&self, i: usize) -> u64 {
+        match &self.keys {
+            RowKeys::Stored(_) => self.born[i],
+            RowKeys::Positional(_) => if i >= self.grew.0 { self.grew.1 } else { 0 },
+        }
     }
 
     /// Whether row `i`, mounting in `commit`, skips its insertion transition. A row scrolled into
     /// view was there all along, so it does. One new to the rows enters as an insertion, and so
     /// does one that a change to the rows this frame (a filter, a sort) mounts: the rows it
-    /// replaces leave with their exits. Rows mounting with their transition are noted in
-    /// `entering`, and the runtime lands the ones that drew out of view, so only what shows fades.
+    /// replaces leave with their exits. A positional row is new only when the count grew past it.
+    /// Rows mounting with their transition are noted in `entering`, and the runtime lands the
+    /// ones that drew out of view, so only what shows fades.
     pub fn mounts_quietly(&mut self, i: usize, commit: u64) -> bool {
-        let quiet = self.born[i] < commit && !(self.keys_fresh && !self.shown.contains(&self.keys[i]));
-        if !quiet { self.entering.insert(self.keys[i].clone()); }
+        let born_before = self.born(i) < commit;
+        let key = self.keys.key(i);
+        let quiet = born_before && (self.keys.is_positional() || !(self.keys_fresh && !self.shown.contains(key.as_ref())));
+        if !quiet {
+            let key = key.into_owned();
+            self.entering.insert(key);
+        }
         quiet
     }
 
@@ -206,7 +319,8 @@ impl VirtualList {
 
     /// Whether the rows are exactly `keys`, in order.
     pub fn same_keys<'a>(&self, keys: impl ExactSizeIterator<Item = Option<&'a str>>) -> bool {
-        keys.len() == self.keys.len() && keys.zip(&self.keys).all(|(a, b)| a == Some(b.as_str()))
+        let RowKeys::Stored(own) = &self.keys else { return false };
+        keys.len() == own.len() && keys.zip(own).all(|(a, b)| a == Some(b.as_str()))
     }
 
     /// Replaces the rows. Keys that stay keep their measured height and birth; new ones are born
@@ -226,23 +340,65 @@ impl VirtualList {
         // A change that keeps none of the rows in view (a filter) leaves nothing to hold.
         let anchor = offset.and_then(|offset| self.first_visible(offset, |k| rows.contains_key(k)))
             .filter(|(_, top)| offset.is_some_and(|offset| *top < offset + self.viewport));
-        if keys != self.keys {
+        let changed = match &self.keys {
+            RowKeys::Stored(old) => *old != keys,
+            RowKeys::Positional(_) => true,
+        };
+        if changed {
             self.keys_fresh = true;
-            self.held = if offset.is_some() { anchor.is_some() } else { self.keys.iter().any(|k| rows.contains_key(k)) };
+            self.held = if offset.is_some() { anchor.is_some() } else { (0..self.keys.len()).any(|i| rows.contains_key(self.keys.key(i).as_ref())) };
         }
         self.rows = rows;
         self.born = born;
-        self.keys = keys;
+        self.keys = RowKeys::Stored(keys);
         self.row_heights = heights;
+        self.tall.clear();
         self.sums_stale.set(true);
         self.reported_visible = None;
         anchor
     }
 
+    /// Makes the rows `count` positional rows: row `i` keyed `i`. Rows that stay keep their
+    /// heights and the rest are born at `commit`, at a cost independent of `count`. Returns the
+    /// anchor as [`set_keys`](Self::set_keys) does.
+    pub fn set_count(&mut self, count: usize, commit: u64, offset: Option<f32>) -> Option<(String, f32)> {
+        let positional = self.keys.is_positional();
+        let kept = if positional { self.keys.len().min(count) } else { 0 };
+        let anchor = offset.and_then(|offset| {
+            let first = self.rows_above(offset);
+            let top = self.pad_top + self.sum(first);
+            (first < kept && top < offset + self.viewport).then(|| (first.to_string(), top))
+        });
+        if self.keys != RowKeys::Positional(count) {
+            self.keys_fresh = true;
+            self.held = if offset.is_some() { anchor.is_some() } else { kept > 0 };
+        }
+        if !positional {
+            self.rows = HashMap::default();
+            self.born = Vec::new();
+            self.row_heights = Vec::new();
+            self.grew = (0, commit);
+        } else if count > self.keys.len() {
+            self.grew = (self.keys.len(), commit);
+        }
+        self.tall.split_off(&count);
+        self.keys = RowKeys::Positional(count);
+        self.sums_stale.set(true);
+        self.reported_visible = None;
+        anchor
+    }
+
+    /// Sets the height unmeasured rows are taken to be. A positional row measured at exactly the
+    /// old estimate is taken to be the new one.
     pub fn set_estimate(&mut self, estimate: f32) {
         if estimate != self.estimate {
             self.estimate = estimate;
-            self.row_heights = self.keys.iter().map(|k| self.height(k)).collect();
+            match &self.keys {
+                RowKeys::Stored(keys) => {
+                    self.row_heights = keys.iter().map(|k| self.rows.get(k).and_then(|r| r.height).unwrap_or(estimate)).collect();
+                }
+                RowKeys::Positional(_) => self.tall.retain(|_, h| *h != estimate),
+            }
             self.sums_stale.set(true);
         }
     }
@@ -255,6 +411,14 @@ impl VirtualList {
     }
 
     pub fn set_height(&mut self, key: &str, height: f32) {
+        if let RowKeys::Positional(count) = self.keys {
+            let Some(i) = RowKeys::position(key, count) else { return };
+            if self.height_at(i) != height {
+                self.sums_stale.set(true);
+            }
+            if height == self.estimate { self.tall.remove(&i); } else { self.tall.insert(i, height); }
+            return;
+        }
         let Some(row) = self.rows.get_mut(key) else { return };
         row.height = Some(height);
         let i = row.index;
@@ -264,6 +428,7 @@ impl VirtualList {
         }
     }
 
+    /// Stored rows' running totals of `row_heights` and gaps, one longer than the rows.
     fn sums(&self) -> Ref<'_, Vec<f32>> {
         if self.sums_stale.replace(false) || self.sums.borrow().len() != self.row_heights.len() + 1 {
             let mut sums = self.sums.borrow_mut();
@@ -278,23 +443,58 @@ impl VirtualList {
         self.sums.borrow()
     }
 
+    /// Positional rows' running totals of how much taller than the estimate the rows in `tall` are.
+    fn tall_sums(&self) -> Ref<'_, Vec<(usize, f64)>> {
+        if self.sums_stale.replace(false) {
+            let mut sums = self.tall_sums.borrow_mut();
+            sums.clear();
+            let mut extra = 0.0;
+            for (&i, &h) in &self.tall {
+                extra += f64::from(h - self.estimate);
+                sums.push((i, extra));
+            }
+        }
+        self.tall_sums.borrow()
+    }
+
+    /// The heights and gaps of the rows above row `i`: its top below the first row's.
+    fn sum(&self, i: usize) -> f32 {
+        match self.keys {
+            RowKeys::Stored(_) => self.sums()[i],
+            RowKeys::Positional(_) => {
+                let sums = self.tall_sums();
+                let above = sums.partition_point(|&(j, _)| j < i);
+                let extra = if above == 0 { 0.0 } else { sums[above - 1].1 };
+                (i as f64 * f64::from(self.estimate + self.gap) + extra) as f32
+            }
+        }
+    }
+
+    /// How many rows end at or above `y`: the index of the first row still showing at `y`.
+    fn rows_above(&self, y: f32) -> usize {
+        partition(self.keys.len(), |i| self.pad_top + self.sum(i + 1) - self.gap <= y)
+    }
+
+    /// How many rows start above `y`.
+    fn rows_starting_above(&self, y: f32) -> usize {
+        partition(self.keys.len(), |i| self.pad_top + self.sum(i) < y)
+    }
+
     pub fn prefix(&self, end: usize) -> f32 {
-        let sums = self.sums();
-        if end == 0 || end < self.keys.len() { sums[end] } else { sums[end] - self.gap }
+        if end == 0 || end < self.keys.len() { self.sum(end) } else { self.sum(end) - self.gap }
     }
 
     /// The bottom of the first `end` rows (without the gap after row `end - 1`).
     pub fn row_end(&self, end: usize) -> f32 {
-        if end == 0 { 0.0 } else { self.sums()[end] - self.gap }
+        if end == 0 { 0.0 } else { self.sum(end) - self.gap }
     }
 
     /// The first row still visible at `offset`, among those `keep` accepts, and its top.
     pub fn first_visible(&self, offset: f32, keep: impl Fn(&str) -> bool) -> Option<(String, f32)> {
-        let sums = self.sums();
-        let first = sums[1..].partition_point(|&s| self.pad_top + s - self.gap <= offset);
+        let first = self.rows_above(offset);
         (first..self.keys.len())
-            .find(|&i| keep(&self.keys[i]))
-            .map(|i| (self.keys[i].clone(), self.pad_top + sums[i]))
+            .find(|&i| keep(&self.keys.key(i)))
+            .map(|i| (self.keys.key(i).into_owned(), self.pad_top + self.sum(i)))
     }
 
     /// The furthest the rows can scroll: their extent less the viewport.
@@ -308,9 +508,8 @@ impl VirtualList {
             return 0..0;
         }
         let offset = if pinned { self.max_offset() } else { offset.clamp(0.0, self.max_offset()) };
-        let sums = self.sums();
-        let start = sums[1..].partition_point(|&s| self.pad_top + s - self.gap <= offset);
-        let end = sums[..self.keys.len()].partition_point(|&s| self.pad_top + s < offset + self.viewport).max(start);
+        let start = self.rows_above(offset);
+        let end = self.rows_starting_above(offset + self.viewport).max(start);
         start..end
     }
 
@@ -320,37 +519,34 @@ impl VirtualList {
     pub fn select(&mut self, offset: f32, pinned: bool, budget: Option<&HashSet<String>>) {
         let offset = if pinned { self.max_offset() } else { offset.min(self.max_offset()) };
         let (start, end) = self.overscan(offset);
-        let (mut start, mut end) = {
-            let sums = self.sums();
-            if let Some(shown) = budget.filter(|_| !pinned) {
-                let mounted = |k: &str| shown.contains(k);
-                // The viewport's own rows always mount; the overscan takes new rows up to a budget.
-                let first = sums[1..].partition_point(|&s| self.pad_top + s - self.gap <= offset).max(start);
-                let last = sums[..self.keys.len()].partition_point(|&s| self.pad_top + s < offset + self.viewport).max(first);
-                let budget = self.viewport * INDEXED_BUDGET;
-                let mut spent = 0.0;
-                let mut from = first;
-                while from > start {
-                    let i = from - 1;
-                    if !mounted(&self.keys[i]) {
-                        if spent >= budget { break; }
-                        spent += self.row_heights[i] + self.gap;
-                    }
-                    from = i;
+        let (mut start, mut end) = if let Some(shown) = budget.filter(|_| !pinned) {
+            let mounted = |i: usize| shown.contains(self.keys.key(i).as_ref());
+            // The viewport's own rows always mount; the overscan takes new rows up to a budget.
+            let first = self.rows_above(offset).max(start);
+            let last = self.rows_starting_above(offset + self.viewport).max(first);
+            let budget = self.viewport * INDEXED_BUDGET;
+            let mut spent = 0.0;
+            let mut from = first;
+            while from > start {
+                let i = from - 1;
+                if !mounted(i) {
+                    if spent >= budget { break; }
+                    spent += self.height_at(i) + self.gap;
                 }
-                let mut spent = 0.0;
-                let mut to = last.min(end);
-                while to < end {
-                    if !mounted(&self.keys[to]) {
-                        if spent >= budget { break; }
-                        spent += self.row_heights[to] + self.gap;
-                    }
-                    to += 1;
-                }
-                (from, to.max(from))
-            } else {
-                (start, end)
+                from = i;
             }
+            let mut spent = 0.0;
+            let mut to = last.min(end);
+            while to < end {
+                if !mounted(to) {
+                    if spent >= budget { break; }
+                    spent += self.height_at(to) + self.gap;
+                }
+                to += 1;
+            }
+            (from, to.max(from))
+        } else {
+            (start, end)
         };
         // Rows drawn in the viewport stay while motion still shows them where layout has moved
         // them out (rows below a fold gliding open), within an overscan of the window.
@@ -387,9 +583,8 @@ impl VirtualList {
 
     fn anchor_at(&self, offset: f32) -> Option<(String, f32)> {
         let range = self.visible_range(offset, false);
-        let sums = self.sums();
-        range.into_iter().find(|&i| self.rows[&self.keys[i]].height.is_some())
-            .map(|i| (self.keys[i].clone(), self.pad_top + sums[i]))
+        range.into_iter().find(|&i| self.measured(i))
+            .map(|i| (self.keys.key(i).into_owned(), self.pad_top + self.sum(i)))
             .or_else(|| self.first_visible(offset, |_| true))
     }
 
@@ -398,9 +593,7 @@ impl VirtualList {
     fn overscan(&self, offset: f32) -> (usize, usize) {
         let lo = offset - self.viewport * OVERSCAN;
         let hi = offset + self.viewport * (1.0 + OVERSCAN);
-        let sums = self.sums();
-        let start = sums[1..].partition_point(|&s| self.pad_top + s - self.gap <= lo);
-        (start, sums[..self.keys.len()].partition_point(|&s| self.pad_top + s < hi))
+        (self.rows_above(lo), self.rows_starting_above(hi))
     }
 
     /// How tall the mounted rows outside the overscan around `offset` are: rows that grew since
@@ -428,6 +621,16 @@ impl VirtualList {
         (self.range.start > 0 && offset < top + edge)
             || (self.range.end < self.keys.len() && offset + self.viewport > bottom - edge)
     }
+}
+
+/// The number of leading indices in `0..n` that `pred` holds for, as `partition_point` counts.
+fn partition(n: usize, pred: impl Fn(usize) -> bool) -> usize {
+    let (mut lo, mut hi) = (0, n);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if pred(mid) { lo = mid + 1 } else { hi = mid }
+    }
+    lo
 }
 
 #[cfg(test)]
