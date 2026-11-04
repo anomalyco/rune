@@ -195,6 +195,7 @@ impl<S: 'static> Runtime<S> {
         if let Some(mode) = tx.font_smoothing.take() { self.set_font_smoothing(mode); }
         if let Some((sans, mono)) = tx.font_families.take() { self.set_font_families(&sans, &mono); }
         if let Some(srgb) = tx.srgb_blend.take() { self.set_srgb_blend(srgb); }
+        if let Some(rewind) = tx.rewind.take() { self.rewind = rewind; }
         if std::mem::take(&mut tx.blur) {
             if self.focused.is_some() {
                 self.set_focus(None, self.keyboard_focus);
@@ -728,6 +729,7 @@ impl<S: 'static> Runtime<S> {
         // A report waits for the next frame: draw one to deliver it.
         animating |= self.report_drawn();
         self.end_exit_mask();
+        self.record_rewind();
         animating |= source(self.loops_active, AnimSource::LOOP);
         animating |= source(self.static_scale_settling || self.pixel_snap.easing(), AnimSource::SCALE_SETTLE);
         animating |= source(self.videos_active, AnimSource::VIDEO);
