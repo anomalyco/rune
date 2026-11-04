@@ -236,8 +236,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn step_scroll_x(&mut self, i: usize, dt: f32) -> bool {
         let id = self.nodes[i].id;
         let overflow = self.scroll_overflow_x(i);
-        #[cfg(target_arch = "wasm32")]
-        if let Some(active) = self.web_step_scroll(id, overflow, dt, true) { return active; }
+        if let Some(active) = self.step_touch_scroll(id, overflow, dt, true) { return active; }
         let Some(st) = self.scrolls.get_mut(&id) else { return false };
         st.x.max = overflow.max(0.0);
         let mut moving = false;

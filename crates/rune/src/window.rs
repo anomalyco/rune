@@ -718,6 +718,20 @@ fn gesture_phase(phase: TouchPhase) -> crate::GesturePhase {
     }
 }
 
+/// Hands a winit touch (a finger, or a pen where the system reports it as one) to the runtime
+/// in window points, timed on a clock that starts with the first touch.
+pub(crate) fn touch<S: 'static>(rt: &mut crate::Runtime<S>, touch: &winit::event::Touch, scale: f32) {
+    static START: std::sync::OnceLock<crate::time::Instant> = std::sync::OnceLock::new();
+    let phase = match touch.phase {
+        TouchPhase::Started => crate::TouchPhase::Started,
+        TouchPhase::Moved => crate::TouchPhase::Moved,
+        TouchPhase::Ended => crate::TouchPhase::Ended,
+        TouchPhase::Cancelled => crate::TouchPhase::Cancelled,
+    };
+    let time = START.get_or_init(crate::time::Instant::now).elapsed().as_secs_f64();
+    rt.touch(touch.id, phase, touch.location.x as f32 / scale, touch.location.y as f32 / scale, time);
+}
+
 impl<S: 'static> Host<S> {
 
     #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(unused_variables))]
