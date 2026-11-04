@@ -322,6 +322,15 @@ impl El {
         { self.handlers.sites.pointer_move = Some(std::panic::Location::caller()); }
         self
     }
+    /// [`El::on_pointer_move_local`] for a component that doesn't read the app's state (a scroll
+    /// bar that widens under the pointer), so it works in any app.
+    #[track_caller]
+    pub fn on_pointer_move_any(mut self, f: impl Fn(PointerEvent, &mut Tx) + 'static) -> Self {
+        self.handlers.on_pointer_move = Some(Rc::new(move |_, p, tx| f(p, tx)));
+        #[cfg(debug_assertions)]
+        { self.handlers.sites.pointer_move = Some(std::panic::Location::caller()); }
+        self
+    }
 
     /// Called once when the pointer enters this hit target, not on animation frames.
     #[track_caller]
@@ -339,6 +348,14 @@ impl El {
     #[track_caller]
     pub fn on_hover_change<S: 'static>(mut self, f: impl Fn(&mut S, bool, &mut Tx) + 'static) -> Self {
         self.handlers.on_hover_change = Some(Rc::new(move |s, inside, tx| f(downcast::<S>(s), inside, tx)));
+        #[cfg(debug_assertions)]
+        { self.handlers.sites.hover_change = Some(std::panic::Location::caller()); }
+        self
+    }
+    /// [`El::on_hover_change`] for a component that doesn't read the app's state.
+    #[track_caller]
+    pub fn on_hover_change_any(mut self, f: impl Fn(bool, &mut Tx) + 'static) -> Self {
+        self.handlers.on_hover_change = Some(Rc::new(move |_, inside, tx| f(inside, tx)));
         #[cfg(debug_assertions)]
         { self.handlers.sites.hover_change = Some(std::panic::Location::caller()); }
         self

@@ -245,12 +245,100 @@ fn scrolling_and_dragging_the_bar_run_zero_view_commits_and_chain_existing_watch
     }
     assert!(opacity(&rt, "thumb") > 0.99, "stays visible while thumb is held");
     rt.pointer_up(x, y0 + 36.0);
+    // The pointer still at the edge would keep it up.
+    rt.pointer_move(100.0, y0 + 36.0);
     for _ in 0..90 {
         rt.frame(1.0 / 60.0);
     }
     assert_eq!(opacity(&rt, "thumb"), 0.0, "fades out after thumb release");
     assert_eq!(VIEW_RUNS.load(Ordering::Relaxed), 1, "zero view re-runs across wheel scroll, drag and fade");
     assert_eq!(rune::commit_generation(), gen0, "zero commits across wheel scroll, drag and fade");
+}
+
+thread_local! {
+    static HOVER_RUNS: Cell<usize> = const { Cell::new(0) };
+}
+
+fn hover_view(rows: &usize, cx: &mut rune::Cx<usize>) -> El {
+    HOVER_RUNS.set(HOVER_RUNS.get() + 1);
+    view(rows, cx)
+}
+
+fn frames<S>(rt: &mut rune::Runtime<S>, n: usize) {
+    for _ in 0..n {
+        rt.frame(1.0 / 60.0);
+    }
+}
+
+#[test]
+fn the_thumb_widens_under_the_pointer_and_while_held_without_a_view_run() {
+    let mut rt = rune::Runtime::new(20usize, hover_view, (200.0, 100.0), rune::Env::new(true, 1.0));
+    rt.set_system_scroll_bars(ScrollBars::Always);
+    rt.check_live_only(false);
+    frames(&mut rt, 2);
+    let (runs, generation) = (HOVER_RUNS.get(), rune::commit_generation());
+    let rest = rect(&rt, "thumb");
+    assert_eq!((rest[0], rest[2]), (192.0, THUMB), "a thin thumb 2 points in from the edge");
+
+    rt.pointer_move(195.0, 10.0);
+    frames(&mut rt, 30);
+    let wide = rect(&rt, "thumb");
+    assert_eq!((wide[0], wide[2]), (188.0, THUMB_HOVER), "wider over the bar, still 2 points in");
+    assert_eq!((wide[1], wide[3]), (rest[1], rest[3]));
+    rt.pointer_move(170.0, 10.0);
+    frames(&mut rt, 30);
+    assert_eq!(rect(&rt, "thumb")[2], THUMB, "thin again once the pointer leaves the bar");
+
+    rt.pointer_move(195.0, 10.0);
+    rt.pointer_down(195.0, 10.0);
+    rt.pointer_move(100.0, 30.0);
+    frames(&mut rt, 30);
+    assert_eq!(rect(&rt, "thumb")[2], THUMB_HOVER, "a held thumb stays wide off the bar");
+    rt.pointer_up(100.0, 30.0);
+    frames(&mut rt, 30);
+    assert_eq!(rect(&rt, "thumb")[2], THUMB, "and narrows on release");
+
+    rt.pointer_move(195.0, 10.0);
+    frames(&mut rt, 30);
+    rt.pointer_leave();
+    frames(&mut rt, 30);
+    assert_eq!(rect(&rt, "thumb")[2], THUMB, "the pointer leaving the window leaves the bar");
+    assert_eq!(HOVER_RUNS.get(), runs, "hovering never runs the view");
+    assert_eq!(rune::commit_generation(), generation, "or commits");
+}
+
+#[test]
+fn the_pointer_at_the_right_edge_brings_up_an_overlay_bar() {
+    let mut rt = rune::Runtime::new(20usize, hover_view, (200.0, 100.0), rune::Env::new(true, 1.0));
+    rt.check_live_only(false);
+    frames(&mut rt, 2);
+    let (runs, generation) = (HOVER_RUNS.get(), rune::commit_generation());
+    assert_eq!(opacity(&rt, "thumb"), 0.0);
+    rt.pointer_move(150.0, 50.0);
+    frames(&mut rt, 20);
+    assert_eq!(opacity(&rt, "thumb"), 0.0, "the middle of the viewport doesn't bring it up");
+
+    rt.pointer_move(184.0, 50.0);
+    frames(&mut rt, 20);
+    assert!(opacity(&rt, "thumb") > 0.95, "the pointer near the edge does");
+    assert_eq!(rect(&rt, "thumb")[2], THUMB, "near the bar, not over it");
+    rt.wheel(100.0, 50.0, -20.0);
+    frames(&mut rt, 150);
+    assert!(opacity(&rt, "thumb") > 0.99, "it stays up while the pointer waits there, through a scroll");
+
+    rt.pointer_move(150.0, 50.0);
+    frames(&mut rt, 20);
+    assert!(opacity(&rt, "thumb") > 0.99, "and holds a moment after it leaves");
+    frames(&mut rt, 120);
+    assert_eq!(opacity(&rt, "thumb"), 0.0, "then fades out");
+
+    rt.pointer_move(196.0, 50.0);
+    frames(&mut rt, 20);
+    rt.pointer_leave();
+    frames(&mut rt, 150);
+    assert_eq!(opacity(&rt, "thumb"), 0.0, "leaving the window lets it go");
+    assert_eq!(HOVER_RUNS.get(), runs, "bringing it up never runs the view");
+    assert_eq!(rune::commit_generation(), generation, "or commits");
 }
 
 #[test]
@@ -420,6 +508,28 @@ fn scroll_bar_motion_gate() {
                 r.play(0.6);
                 r.act("when-scrolling", |rt| rt.set_system_scroll_bars(ScrollBars::WhenScrolling));
                 r.play(1.2);
+                r.rec
+            }),
+        ),
+        (
+            "scroll-bar/hover-widen-and-edge-reveal".into(),
+            Box::new(|| {
+                let mut r = Run::new(rune::Runtime::new(24usize, view, (200.0, 100.0), rune::Env::new(true, 1.0)), 120.0);
+                r.idle(0.3);
+                r.act("near-edge", |rt| rt.pointer_move(184.0, 50.0));
+                r.play(0.5);
+                r.act("over-bar", |rt| rt.pointer_move(195.0, 10.0));
+                r.play(0.4);
+                r.act("off-bar", |rt| rt.pointer_move(170.0, 10.0));
+                r.play(0.4);
+                r.act("away", |rt| rt.pointer_move(100.0, 50.0));
+                r.play(1.6);
+                r.act("always", |rt| rt.set_system_scroll_bars(ScrollBars::Always));
+                r.play(0.4);
+                r.act("over-always", |rt| rt.pointer_move(195.0, 10.0));
+                r.play(0.4);
+                r.act("away-always", |rt| rt.pointer_move(100.0, 50.0));
+                r.play(0.4);
                 r.rec
             }),
         ),

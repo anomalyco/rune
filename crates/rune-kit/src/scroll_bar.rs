@@ -12,21 +12,31 @@ use std::panic::Location;
 use std::rc::Rc;
 use std::time::Duration;
 
-use rune::{El, Live, Phase, ScrollPos, Spring, col, el};
+use rune::{El, Live, Phase, PointerEvent, ScrollPos, Spring, col, el};
 
 use crate::Kit;
 
-/// The strip along the right edge that takes presses: wider than the thumb, for an easier aim.
-const TRACK: f32 = 10.0;
+/// The strip along the right edge that takes presses: wider than the thumb, for an easier aim,
+/// and wide enough for the thumb under the pointer.
+const TRACK: f32 = 14.0;
+/// The thumb's gap from the viewport's right edge.
+const EDGE: f32 = 2.0;
 const THUMB: f32 = 6.0;
+/// How wide the thumb grows while the pointer is over the bar or holds it.
+const THUMB_HOVER: f32 = 10.0;
+/// How far in from the right edge the pointer reveals an overlay bar.
+const REVEAL: f32 = 20.0;
 /// The track's gap from the viewport's top and bottom.
 const INSET: f32 = 2.0;
 /// The shortest the thumb gets, however long the content.
 const MIN_THUMB: f32 = 24.0;
-/// How long an overlay scroll bar stays up after the last scroll or thumb release.
+/// How long an overlay scroll bar stays up after the last scroll, thumb release or the pointer
+/// leaving its edge.
 const HOLD: Duration = Duration::from_millis(750);
 const ENTER: Spring = Spring::new(0.14, 0.0);
 const LEAVE: Spring = Spring::new(0.28, 0.0);
+/// The thumb widening under the pointer.
+const WIDEN: Spring = Spring::new(0.12, 0.0);
 const PULSE_SPAN: f64 = 0.75 + 0.35;
 
 /// The most scroll bars kept between views; past it they're all dropped, and each comes back on
@@ -42,25 +52,32 @@ enum BarState {
 }
 
 /// What one scroll bar keeps across rebuilds: where its viewport stands, its visibility state,
-/// and the live rects and opacity that follow it. Kept per `(runtime_id, area)` so a rebuild
-/// hands the same live sources to the new view without disturbing in-flight pulses.
-#[derive(Clone)]
+/// where the pointer is, and the live rects and opacity that follow them. Kept per
+/// `(runtime_id, area)` so a rebuild hands the same live sources to the new view without
+/// disturbing in-flight pulses.
 struct Bar {
-    pos: Rc<Cell<ScrollPos>>,
-    state: Rc<Cell<BarState>>,
-    dragging: Rc<Cell<bool>>,
-    pulse_until: Rc<Cell<f64>>,
-    last_now: Rc<Cell<f64>>,
+    pos: Cell<ScrollPos>,
+    state: Cell<BarState>,
+    dragging: Cell<bool>,
+    /// The pointer is near the right edge, where it reveals an overlay bar.
+    near: Cell<bool>,
+    /// The pointer is over the track.
+    over: Cell<bool>,
+    pulse_until: Cell<f64>,
+    last_now: Cell<f64>,
     track: Live<[f32; 4]>,
+    /// Where the thumb runs on the track, as wide as it gets.
+    slot: Live<[f32; 4]>,
+    /// The thumb drawn in its slot, against the slot's right edge.
     thumb: Live<[f32; 4]>,
     opacity: Live<f32>,
 }
 
 thread_local! {
-    static BARS: RefCell<HashMap<(u64, String), Bar>> = RefCell::new(HashMap::new());
+    static BARS: RefCell<HashMap<(u64, String), Rc<Bar>>> = RefCell::new(HashMap::new());
 }
 
-fn kept(area: &str) -> Bar {
+fn kept(area: &str) -> Rc<Bar> {
     let id = (rune::current_runtime_id(), area.to_owned());
     BARS.with(|bars| {
         let mut bars = bars.borrow_mut();
@@ -68,15 +85,20 @@ fn kept(area: &str) -> Bar {
             bars.clear();
         }
         bars.entry(id)
-            .or_insert_with(|| Bar {
-                pos: Rc::new(Cell::new(ScrollPos::default())),
-                state: Rc::new(Cell::new(BarState::Uninit)),
-                dragging: Rc::new(Cell::new(false)),
-                pulse_until: Rc::new(Cell::new(-1.0)),
-                last_now: Rc::new(Cell::new(0.0)),
-                track: Live::new([0.0; 4]),
-                thumb: Live::new([0.0; 4]),
-                opacity: Live::new(1.0),
+            .or_insert_with(|| {
+                Rc::new(Bar {
+                    pos: Cell::new(ScrollPos::default()),
+                    state: Cell::new(BarState::Uninit),
+                    dragging: Cell::new(false),
+                    near: Cell::new(false),
+                    over: Cell::new(false),
+                    pulse_until: Cell::new(-1.0),
+                    last_now: Cell::new(0.0),
+                    track: Live::new([0.0; 4]),
+                    slot: Live::new([0.0; 4]),
+                    thumb: Live::new([0.0; 4]),
+                    opacity: Live::new(1.0),
+                })
             })
             .clone()
     })
@@ -99,12 +121,173 @@ fn offset_at(at: ScrollPos, track: f32, top: f32) -> f32 {
     (top / travel * at.max[1]).clamp(0.0, at.max[1])
 }
 
+/// The track's length for a viewport at `at`, and whether a bar shows on it at all.
+fn track_len(at: ScrollPos) -> (f32, bool) {
+    let len = at.viewport[1] - 2.0 * INSET;
+    (len, at.max[1] > 0.5 && len >= MIN_THUMB)
+}
+
+impl Bar {
+    fn wide(&self) -> bool {
+        self.over.get() || self.dragging.get()
+    }
+
+    /// The thumb as wide as the pointer makes it, `h` long.
+    fn thumb_rect(&self, h: f32) -> [f32; 4] {
+        let w = if self.wide() { THUMB_HOVER } else { THUMB };
+        [THUMB_HOVER - w, 0.0, w, h]
+    }
+
+    /// Widens or narrows the thumb after the pointer or a press changed.
+    fn widen(&self) {
+        self.thumb.set(self.thumb_rect(self.thumb.get()[3]));
+    }
+
+    /// An overlay bar stays up while the thumb is held or the pointer is at its edge.
+    fn hold(&self) {
+        if self.state.get() == BarState::Overlay {
+            self.opacity.set(1.0);
+            self.pulse_until.set(f64::INFINITY);
+        }
+    }
+
+    /// Once neither holds it, an overlay bar fades out after [`HOLD`].
+    fn let_go(&self) {
+        if self.state.get() == BarState::Overlay && !self.dragging.get() && !self.near.get() {
+            self.opacity.pulse(1.0, 0.0, HOLD);
+            self.pulse_until.set(self.last_now.get() + PULSE_SPAN);
+        }
+    }
+
+    /// The pointer at `p` in the bar's area, or gone from it.
+    fn point(&self, p: Option<PointerEvent>) {
+        let at = self.pos.get();
+        let (len, shows) = track_len(at);
+        let w = at.viewport[0];
+        let near = shows && p.is_some_and(|p| p.x >= w - REVEAL && p.x <= w && (INSET..=INSET + len).contains(&p.y));
+        let over = near && p.is_some_and(|p| p.x >= w - TRACK);
+        if self.over.replace(over) != over {
+            self.widen();
+        }
+        match (self.near.replace(near), near) {
+            (false, true) => self.hold(),
+            (true, false) => self.let_go(),
+            _ => {}
+        }
+    }
+
+    /// Follows the viewport to `at`, from its `on_scroll_offset`.
+    fn follow(&self, at: ScrollPos, overlay: bool) {
+        let prev_at = self.pos.replace(at);
+        let (scrolled, instant, now) = rune::scroll_watch_state();
+        self.last_now.set(now);
+        let (len, shows) = track_len(at);
+        self.track.set([at.viewport[0] - TRACK, INSET, TRACK, if shows { len } else { 0.0 }]);
+        let (top, h) = thumb(at, len.max(0.0));
+        let h = if shows { h } else { 0.0 };
+        self.slot.set([TRACK - EDGE - THUMB_HOVER, top, THUMB_HOVER, h]);
+        // A scroll leaves the thumb's width alone, so it doesn't cut a widening short.
+        if self.thumb.get()[3] != h {
+            self.thumb.snap(self.thumb_rect(h));
+        }
+
+        let (state, opacity, pulse_until) = (&self.state, &self.opacity, &self.pulse_until);
+        let prev = state.get();
+        if !shows {
+            if prev != BarState::NoOverflow || pulse_until.get() >= 0.0 {
+                opacity.snap(1.0);
+                pulse_until.set(-1.0);
+                state.set(BarState::NoOverflow);
+            }
+            return;
+        }
+        if !overlay {
+            if prev == BarState::Overlay && !instant {
+                opacity.set(1.0);
+            } else if prev != BarState::Always {
+                opacity.snap(1.0);
+            }
+            pulse_until.set(-1.0);
+            state.set(BarState::Always);
+            return;
+        }
+        state.set(BarState::Overlay);
+        if self.dragging.get() || self.near.get() {
+            self.hold();
+            return;
+        }
+        if prev == BarState::Always {
+            if scrolled && !instant {
+                opacity.pulse(1.0, 0.0, HOLD);
+                pulse_until.set(now + PULSE_SPAN);
+            } else if instant {
+                opacity.snap(0.0);
+                pulse_until.set(-1.0);
+            } else {
+                opacity.set(0.0);
+                pulse_until.set(-1.0);
+            }
+            return;
+        }
+        if prev != BarState::Overlay {
+            if scrolled && !instant {
+                opacity.pulse(1.0, 0.0, HOLD);
+                pulse_until.set(now + PULSE_SPAN);
+            } else {
+                opacity.snap(0.0);
+                pulse_until.set(-1.0);
+            }
+            return;
+        }
+        let extent_changed =
+            (prev_at.max[1] - at.max[1]).abs() > 0.5 || (prev_at.viewport[1] - at.viewport[1]).abs() > 0.5;
+        if scrolled && !instant {
+            opacity.pulse(1.0, 0.0, HOLD);
+            pulse_until.set(now + PULSE_SPAN);
+        } else if (scrolled || extent_changed) && instant && now < pulse_until.get() {
+            opacity.pulse(1.0, 0.0, HOLD);
+            pulse_until.set(now + PULSE_SPAN);
+        }
+    }
+
+    /// The thumb or track pressed, dragged or released; `target` is the viewport's path.
+    fn drag(&self, target: &str, d: &mut rune::Drag, tx: &mut rune::Tx) {
+        tx.live_only();
+        let at = self.pos.get();
+        let (len, shows) = track_len(at);
+        if !shows {
+            if self.dragging.replace(false) {
+                self.widen();
+            }
+            return;
+        }
+        let (top, h) = thumb(at, len);
+        // A press on the thumb holds it where it was caught; one on the track centres it there.
+        if d.phase == Phase::Down {
+            d.data = if (top..=top + h).contains(&d.y) { d.y - top } else { h / 2.0 };
+            self.dragging.set(true);
+            self.hold();
+            self.widen();
+        }
+        if d.phase == Phase::Up {
+            if self.dragging.replace(false) {
+                self.widen();
+                self.let_go();
+            }
+            return;
+        }
+        tx.scroll_to_instant(target, at.offset[0], offset_at(at, len, d.y - d.data));
+    }
+}
+
 /// Opts any vertical scroll viewport ([`El::scroll`]) into a `rune-kit` scroll bar in one call:
 /// `viewport.scroll_bar(&k)` (or `k.scroll_bar(viewport)`).
 ///
 /// The wrapper takes the viewport's outer sizing and placement so it drops straight into the
 /// parent layout, keeps the viewport's key and existing [`El::on_scroll_offset`] handler, and
-/// drives the indicator through live values with zero view commits per scroll frame.
+/// drives the indicator through live values with zero view commits per scroll frame. The thumb
+/// widens while the pointer is over the bar, and the pointer at the right edge brings up an
+/// overlay bar.
 pub trait ScrollBar {
     #[track_caller]
     fn scroll_bar(self, k: &Kit) -> El;
@@ -133,131 +316,38 @@ pub fn scroll_bar(k: &Kit, area: &str, key: &str, viewport: El) -> El {
 
 fn attach(k: &Kit, area: &str, key: &str, outer: El, viewport: El) -> El {
     let overlay = rune::system_scroll_bars().is_overlay(rune::system_scroller_overlay());
-    let Bar { pos, state, dragging, pulse_until, last_now, track, thumb: bar, opacity } = kept(area);
-    let watch = {
-        let (pos, state, dragging, pulse_until, last_now, track, bar, opacity) = (
-            pos.clone(),
-            state.clone(),
-            dragging.clone(),
-            pulse_until.clone(),
-            last_now.clone(),
-            track.clone(),
-            bar.clone(),
-            opacity.clone(),
-        );
-        move |at: ScrollPos| {
-            let prev_at = pos.replace(at);
-            let (scrolled, instant, now) = rune::scroll_watch_state();
-            last_now.set(now);
-            let len = at.viewport[1] - 2.0 * INSET;
-            let shows = at.max[1] > 0.5 && len >= MIN_THUMB;
-            track.set([at.viewport[0] - TRACK, INSET, TRACK, if shows { len } else { 0.0 }]);
-            let (top, h) = thumb(at, len.max(0.0));
-            bar.set([(TRACK - THUMB) / 2.0, top, THUMB, if shows { h } else { 0.0 }]);
-
-            let prev = state.get();
-            if !shows {
-                if prev != BarState::NoOverflow || pulse_until.get() >= 0.0 {
-                    opacity.snap(1.0);
-                    pulse_until.set(-1.0);
-                    state.set(BarState::NoOverflow);
-                }
-                return;
-            }
-            if !overlay {
-                if prev == BarState::Overlay && !instant {
-                    opacity.set(1.0);
-                } else if prev != BarState::Always {
-                    opacity.snap(1.0);
-                }
-                pulse_until.set(-1.0);
-                state.set(BarState::Always);
-                return;
-            }
-            state.set(BarState::Overlay);
-            if dragging.get() {
-                opacity.set(1.0);
-                pulse_until.set(f64::INFINITY);
-                return;
-            }
-            if prev == BarState::Always {
-                if scrolled && !instant {
-                    opacity.pulse(1.0, 0.0, HOLD);
-                    pulse_until.set(now + PULSE_SPAN);
-                } else if instant {
-                    opacity.snap(0.0);
-                    pulse_until.set(-1.0);
-                } else {
-                    opacity.set(0.0);
-                    pulse_until.set(-1.0);
-                }
-                return;
-            }
-            if prev != BarState::Overlay {
-                if scrolled && !instant {
-                    opacity.pulse(1.0, 0.0, HOLD);
-                    pulse_until.set(now + PULSE_SPAN);
-                } else {
-                    opacity.snap(0.0);
-                    pulse_until.set(-1.0);
-                }
-                return;
-            }
-            let extent_changed = (prev_at.max[1] - at.max[1]).abs() > 0.5
-                || (prev_at.viewport[1] - at.viewport[1]).abs() > 0.5;
-            if scrolled && !instant {
-                opacity.pulse(1.0, 0.0, HOLD);
-                pulse_until.set(now + PULSE_SPAN);
-            } else if (scrolled || extent_changed) && instant && now < pulse_until.get() {
-                opacity.pulse(1.0, 0.0, HOLD);
-                pulse_until.set(now + PULSE_SPAN);
-            }
-        }
-    };
+    let bar = kept(area);
     let target = format!("{area}/{key}");
-    let drag = {
-        let opacity = opacity.clone();
-        move |d: &mut rune::Drag, tx: &mut rune::Tx| {
-            let at = pos.get();
-            let len = at.viewport[1] - 2.0 * INSET;
-            if at.max[1] <= 0.5 || len < MIN_THUMB {
-                dragging.set(false);
-                tx.live_only();
-                return;
-            }
-            let (top, h) = thumb(at, len);
-            // A press on the thumb holds it where it was caught; one on the track centres it there.
-            if d.phase == Phase::Down {
-                d.data = if (top..=top + h).contains(&d.y) { d.y - top } else { h / 2.0 };
-                dragging.set(true);
-                if state.get() == BarState::Overlay {
-                    opacity.set(1.0);
-                    pulse_until.set(f64::INFINITY);
-                }
-            }
-            if d.phase == Phase::Up {
-                if dragging.replace(false) && state.get() == BarState::Overlay {
-                    opacity.pulse(1.0, 0.0, HOLD);
-                    pulse_until.set(last_now.get() + PULSE_SPAN);
-                }
-                tx.live_only();
-                return;
-            }
-            tx.live_only();
-            tx.scroll_to_instant(target.as_str(), at.offset[0], offset_at(at, len, d.y - d.data));
-        }
-    };
+    let (watch, moved, left, drag) = (bar.clone(), bar.clone(), bar.clone(), bar.clone());
     outer
-        .child(viewport.chain_scroll_offset(watch))
+        .on_pointer_move_any(move |p, tx| {
+            tx.live_only();
+            moved.point(Some(p));
+        })
+        .on_hover_change_any(move |inside, tx| {
+            tx.live_only();
+            if !inside {
+                left.point(None);
+            }
+        })
+        .child(viewport.chain_scroll_offset(move |at| watch.follow(at, overlay)))
         .child(
             el().key("scroll-bar")
                 .absolute(0.0, 0.0)
-                .live_rect(&track)
-                .live_opacity(opacity.smooth(ENTER).rest(LEAVE))
-                .on_drag_any(drag)
+                .live_rect(&bar.track)
+                .live_opacity(bar.opacity.smooth(ENTER).rest(LEAVE))
+                .on_drag_any(move |d, tx| drag.drag(&target, d, tx))
                 // The scroll view it drags already scrolls for assistive technology.
                 .a11y_hidden()
-                .child(el().key("thumb").absolute(0.0, 0.0).live_rect(&bar).radius(THUMB / 2.0).fill(k.c.border_base)),
+                .child(
+                    el().key("thumb-slot").absolute(0.0, 0.0).live_rect(&bar.slot).child(
+                        el().key("thumb")
+                            .absolute(0.0, 0.0)
+                            .live_rect(bar.thumb.smooth(WIDEN))
+                            .radius(THUMB_HOVER / 2.0)
+                            .fill(k.c.border_base),
+                    ),
+                ),
         )
 }
 
