@@ -140,7 +140,11 @@ impl<T: LiveValue> Clone for Live<T> {
 }
 impl<T: LiveValue> Live<T> {
     pub fn new(value: T) -> Self {
-        assert!(AtomicU128::is_lock_free(), "Rune Live requires lock-free 128-bit atomics on this CPU");
+        // Wasm without the atomics feature has one thread, so portable-atomic's fallback can't tear.
+        assert!(
+            cfg!(all(target_family = "wasm", not(target_feature = "atomics"))) || AtomicU128::is_lock_free(),
+            "Rune Live requires lock-free 128-bit atomics on this CPU"
+        );
         Self { source: Source::new(value.encode().unwrap_or(0)), _t: PhantomData }
     }
     /// Returns whether the published bit pattern changed. No allocation, including first use
