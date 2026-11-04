@@ -69,14 +69,30 @@ pub(crate) fn current() -> GpuBackend {
     resolve(env().as_deref(), chosen())
 }
 
-/// What `RUNE_GPU_LOG` calls the backend that draws.
-pub(crate) fn label() -> &'static str {
+/// What `RUNE_GPU_LOG` calls the backend `adapter` is on.
+pub(crate) fn label(adapter: &wgpu::Adapter) -> &'static str {
     #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
-    if current() == GpuBackend::Metal {
+    if crate::gpu::metal::owns_adapter(adapter) {
         return "rune backend";
     }
+    let _ = adapter;
     "wgpu"
 }
+
+/// Whether `device` is the native Metal backend's.
+pub(crate) fn native(device: &wgpu::Device) -> bool {
+    #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
+    return crate::gpu::metal::raw_device(device).is_some();
+    #[cfg(not(all(target_vendor = "apple", feature = "metal-backend")))]
+    {
+        let _ = device;
+        false
+    }
+}
+
+/// The features the last compositor that fell back to wgpu wanted and the native backend lacks.
+#[cfg_attr(not(all(target_vendor = "apple", feature = "metal-backend")), allow(dead_code))]
+static MISSING: std::sync::Mutex<wgpu::Features> = std::sync::Mutex::new(wgpu::Features::empty());
 
 /// Whether a GPU for a compositor that wants `wanted` draws with wgpu instead of the native
 /// backend: only when the native backend is the default, neither the app nor the environment
@@ -87,12 +103,50 @@ pub(crate) fn wgpu_for(wanted: wgpu::Features) -> bool {
     {
         let missing = wanted - crate::gpu::metal::FEATURES;
         if !missing.is_empty() && DEFAULT == GpuBackend::Metal && defaulted(env().as_deref(), chosen()) {
+            *MISSING.lock().unwrap_or_else(|e| e.into_inner()) = missing;
             static SAID: std::sync::Once = std::sync::Once::new();
-            SAID.call_once(|| eprintln!("rune: the compositor wants {missing:?}, which Rune's Metal backend lacks; drawing with wgpu"));
+            SAID.call_once(|| eprintln!("rune: the compositor wants {missing}, which Rune's Metal backend lacks; drawing with wgpu"));
             return true;
         }
     }
     false
+}
+
+/// Which backend draws on `device`, on which GPU, and why, for an app's log: "Rune's Metal
+/// backend on Apple M4 (the default)", or "wgpu Metal on Apple M4 (a compositor wants
+/// POLYGON_MODE_LINE, which Rune's Metal backend lacks)". A window's compositor gets its device in
+/// `compose::Frame::device`. `RUNE_GPU_LOG=1` prints it for each window and overlay GPU Rune makes.
+pub fn describe(device: &wgpu::Device) -> String {
+    let info = device.adapter_info();
+    let backend = if native(device) { "Rune's Metal backend".to_string() } else { format!("wgpu {:?}", info.backend) };
+    let why = reason(native(device));
+    if why.is_empty() { format!("{backend} on {}", info.name) } else { format!("{backend} on {} ({why})", info.name) }
+}
+
+/// Why the backend is the native one (`native`) or wgpu's; empty where wgpu is the only one.
+fn reason(native: bool) -> String {
+    #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
+    {
+        let (env, chosen) = (env(), chosen());
+        let missing = *MISSING.lock().unwrap_or_else(|e| e.into_inner());
+        return match (native, env.as_deref(), chosen) {
+            (true, Some("metal"), _) => "RUNE_GPU_BACKEND=metal".into(),
+            (true, _, Some(GpuBackend::Metal)) => "App::gpu_backend chose it".into(),
+            (true, ..) => "the default".into(),
+            (false, Some("wgpu"), _) => "RUNE_GPU_BACKEND=wgpu".into(),
+            (false, _, Some(GpuBackend::Wgpu)) => "App::gpu_backend chose it".into(),
+            (false, ..) if DEFAULT == GpuBackend::Wgpu => "the default here".into(),
+            (false, ..) if !missing.is_empty() => format!("a compositor wants {missing}, which Rune's Metal backend lacks"),
+            (false, ..) => String::new(),
+        };
+    }
+    #[cfg(all(target_vendor = "apple", not(feature = "metal-backend")))]
+    return if native { String::new() } else { "Rune's metal-backend feature is off".into() };
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        let _ = native;
+        String::new()
+    }
 }
 
 /// Whether a GPU on `device` serves a compositor that wants `wanted`: false for a native

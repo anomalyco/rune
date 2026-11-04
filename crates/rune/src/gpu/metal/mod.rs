@@ -111,6 +111,9 @@ pub(crate) fn builtin_misses() -> usize { builtin::misses() }
 /// unless the app or `RUNE_GPU_BACKEND` asked for this backend (`backend::wgpu_for`).
 pub(crate) const FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY;
 
+/// Whether `adapter` is this backend's.
+pub(crate) fn owns_adapter(adapter: &wgpu::Adapter) -> bool { adapter.as_custom::<MetalAdapter>().is_some() }
+
 /// Whether this backend draws: the default, unless `App::gpu_backend` or `RUNE_GPU_BACKEND`
 /// picks wgpu.
 pub(crate) fn enabled() -> bool {

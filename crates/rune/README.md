@@ -626,7 +626,9 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   it adds the feature). An app that opts out with `App::gpu_backend(GpuBackend::Wgpu)` calls
   `rune::prewarm_gpu_on(GpuBackend::Wgpu)` instead, which chooses the backend and then starts the thread, so it
   doesn't start on the native backend and start over when `App::gpu_backend` runs; that call afterwards changes
-  nothing. `RUNE_GPU_BACKEND=wgpu` or `=metal` overrides both without a rebuild.
+  nothing. `RUNE_GPU_BACKEND=wgpu` or `=metal` overrides both without a rebuild. A compositor whose
+  `Compositor::features` asks for more than the native backend offers draws with wgpu instead, every frame: log
+  `rune::describe_gpu(frame.device)` once to see which backend a window got and why, or set `RUNE_GPU_LOG=1`.
 - **Precompiled Metal uber shader.** `crates/rune/src/uber.metallib` is loaded through wgpu's passthrough shaders,
   skipping WGSL translation and Metal's compile (`Renderer::new` 232 ms to 85 ms on a cold shader cache). The WGSL
   path is the fallback when the adapter lacks passthrough support, when `RUNE_DISABLE_METALLIB=1`, when the

@@ -566,6 +566,16 @@ impl Gpu {
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn for_surface_from<'w>(early: Option<(Gpu, Renderer)>, wanted: wgpu::Features, translucent: bool,
         surface: impl FnOnce(&wgpu::Instance) -> Result<wgpu::Surface<'w>, String>) -> Result<(Gpu, wgpu::Surface<'w>, Option<Renderer>), String> {
+        let made = Self::surface_gpu_from(early, wanted, translucent, surface)?;
+        if std::env::var_os("RUNE_GPU_LOG").is_some_and(|v| v != "0") {
+            eprintln!("rune: a surface draws with {}", crate::gpu::backend::describe(&made.0.device));
+        }
+        Ok(made)
+    }
+
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    fn surface_gpu_from<'w>(early: Option<(Gpu, Renderer)>, wanted: wgpu::Features, translucent: bool,
+        surface: impl FnOnce(&wgpu::Instance) -> Result<wgpu::Surface<'w>, String>) -> Result<(Gpu, wgpu::Surface<'w>, Option<Renderer>), String> {
         // A prewarmed native Metal GPU lacking a wanted feature is dropped before it makes a surface.
         let Some((early, renderer)) = early.filter(|(gpu, _)| crate::gpu::backend::serves(&gpu.device, wanted)) else {
             let instance = Self::instance_for(wanted);
@@ -1360,6 +1370,9 @@ mod prewarm_tests {
         assert!(renderer.is_none());
         assert!(crate::gpu::metal::raw_device(&gpu.device).is_none(), "wgpu's device");
         assert!(gpu.device.features().contains(wanted));
+        let described = crate::gpu::backend::describe(&gpu.device);
+        assert!(described.starts_with("wgpu Metal on ") && described.contains("which Rune's Metal backend lacks"), "{described}");
+        assert!(crate::gpu::backend::describe(&Gpu::headless().device).ends_with("(the default)"));
         assert!(!crate::gpu::backend::serves(&Gpu::headless().device, wanted));
         assert!(crate::gpu::backend::serves(&Gpu::headless().device, wgpu::Features::TIMESTAMP_QUERY));
     }

@@ -146,6 +146,7 @@ pub use frame::surface_stats::Pacing;
 pub use frame::surface_stats::SurfaceCounts;
 pub use frame::surface_stats::SurfaceStats;
 pub use gpu::backend::GpuBackend;
+pub use gpu::backend::describe as describe_gpu;
 #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
 #[doc(hidden)]
 pub use gpu::metal::bench::dispatch_overhead as __metal_dispatch_overhead;
