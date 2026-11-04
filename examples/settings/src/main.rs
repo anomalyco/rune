@@ -146,7 +146,7 @@ fn section<const N: usize>(p: Paint, key: &str, title: &str, rows: [El; N]) -> E
     for (i, r) in rows.into_iter().enumerate() {
         card = card.child(r);
         if i + 1 < N {
-            card = card.child(el().key(format!("sep{i}")).h(p.hair).ml(space::S3).mr(space::S3).fill(p.t.separator));
+            card = card.child(el().key(format!("sep{i}")).h(p.hair).ml(space::S3).mr(space::S3).fill(p.t.separator).a11y_hidden());
         }
     }
     col()
@@ -165,7 +165,7 @@ fn setting_row(p: Paint, key: &str, label: &str, on_press: Option<fn(&mut Settin
         .justify_between()
         .radius(radius::MD)
         .label(label)
-        .child(text(label).key("label").font(type_::BODY).color(p.t.text))
+        .child(text(label).key("label").font(type_::BODY).color(p.t.text).a11y_hidden())
         .child(control);
     if let Some(f) = on_press {
         r = r.hover(p.t.hover).press(p.t.press).on_press(f);
@@ -174,7 +174,7 @@ fn setting_row(p: Paint, key: &str, label: &str, on_press: Option<fn(&mut Settin
 }
 
 fn toggle_row(p: Paint, key: &str, label: &str, on: bool, flip: fn(&mut Settings)) -> El {
-    setting_row(p, key, label, Some(flip), toggle(p, on)).role("toggle")
+    setting_row(p, key, label, Some(flip), toggle(p, on).a11y_hidden()).role("switch").checked(on)
 }
 
 fn toggle(p: Paint, on: bool) -> El {
@@ -211,6 +211,7 @@ fn segmented(p: Paint, current: Appearance) -> El {
             el().key(name)
                 .role("segment")
                 .label(name)
+                .checked(selected)
                 .size(seg, h - 2.0 * pad)
                 .center()
                 .radius(radius::SM)
@@ -223,7 +224,8 @@ fn segmented(p: Paint, current: Appearance) -> El {
                     text(name)
                         .key("label")
                         .font(type_::LABEL)
-                        .color(if selected { p.t.text } else { p.t.text_secondary }),
+                        .color(if selected { p.t.text } else { p.t.text_secondary })
+                        .a11y_hidden(),
                 ),
         );
     }
@@ -242,7 +244,8 @@ fn segmented(p: Paint, current: Appearance) -> El {
                 .fill(p.t.indicator)
                 .shadow(1.0, 3.0, p.t.shadow)
                 .shadow(0.0, 0.5, p.t.edge)
-                .lead(motion::LEAD, motion::DEFAULT),
+                .lead(motion::LEAD, motion::DEFAULT)
+                .a11y_hidden(),
         )
         .child(segs)
 }
@@ -250,20 +253,22 @@ fn segmented(p: Paint, current: Appearance) -> El {
 fn swatches(p: Paint, current: usize, dark: bool) -> El {
     let (d, gap, ring_w) = (18.0, 12.0, 2.0);
     let ring = d + 2.0 * (ring_w + 2.0);
-    let mut r = row().key("swatches").gap(gap).motion(motion::SNAPPY);
+    let mut r = row().key("swatches").role("radiogroup").label("Accent colour").gap(gap).motion(motion::SNAPPY);
     r = r.child(
         el().key("ring")
             .size(ring, ring)
             .absolute(current as f32 * (d + gap) - (ring - d) / 2.0, -(ring - d) / 2.0)
             .radius(ring / 2.0)
             .border(ring_w, p.accent)
-            .lead(Spring::new(0.22, 0.0), Spring::new(0.28, 0.0)),
+            .lead(Spring::new(0.22, 0.0), Spring::new(0.28, 0.0))
+            .a11y_hidden(),
     );
     for i in 0..6 {
         r = r.child(
             el().key(tok::ACCENT_NAMES[i])
-                .role("swatch")
+                .role("radio")
                 .label(tok::ACCENT_NAMES[i])
+                .checked(i == current)
                 .size(d, d)
                 .radius(d / 2.0)
                 .fill(tok::accent(i, dark))
@@ -285,6 +290,9 @@ fn speed_control(p: Paint, v: f32) -> El {
         .child(
             el().key("slider")
                 .role("slider")
+                .label("Animation speed")
+                .range_value(f64::from(speed_of(v)), 0.5, 2.0)
+                .a11y_value(format!("{:.2}×", speed_of(v)))
                 .size(w, h)
                 .motion(motion::SNAPPY)
                 .on_drag(move |s: &mut Settings, d: &mut Drag, tx| match d.phase {
@@ -309,14 +317,16 @@ fn speed_control(p: Paint, v: f32) -> El {
                         .size(w, bar)
                         .absolute(0.0, (h - bar) / 2.0)
                         .radius(bar / 2.0)
-                        .fill(p.t.control_off),
+                        .fill(p.t.control_off)
+                        .a11y_hidden(),
                 )
                 .child(
                     el().key("fill")
                         .size(k / 2.0 + v * travel, bar)
                         .absolute(0.0, (h - bar) / 2.0)
                         .radius(bar / 2.0)
-                        .fill(p.accent),
+                        .fill(p.accent)
+                        .a11y_hidden(),
                 )
                 .child(
                     el().key("knob")
@@ -325,7 +335,8 @@ fn speed_control(p: Paint, v: f32) -> El {
                         .radius(k / 2.0)
                         .fill(p.t.knob)
                         .shadow(1.0, 3.0, p.t.knob_shadow)
-                        .shadow(0.0, 0.5, p.t.edge),
+                        .shadow(0.0, 0.5, p.t.edge)
+                        .a11y_hidden(),
                 ),
         )
         .child(
@@ -334,7 +345,8 @@ fn speed_control(p: Paint, v: f32) -> El {
                 .w(40.0)
                 .font(type_::MONO_CAPTION)
                 .color(p.t.text_secondary)
-                .align(Align::End),
+                .align(Align::End)
+                .a11y_hidden(),
         )
 }
 
