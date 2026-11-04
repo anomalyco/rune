@@ -7,7 +7,8 @@
 //! - Wayland: layer-shell (`layer_shell.rs`) with output-local input regions and a private
 //!   seat queue. Hidden means destroyed. No global pointer observation or capture exclusion.
 //!   Without layer-shell (GNOME), an overlay that takes no input shows on XWayland instead
-//!   (`x11/xwayland.rs`): an override-redirect ARGB window with an empty input shape.
+//!   (`x11/xwayland.rs`): an override-redirect ARGB window with an empty input shape. One that
+//!   takes the pointer does too when its host opts in (`OverlayOptions::xwayland_input`).
 //! - X11: an override-redirect notification window, with an empty input shape unless
 //!   interactive.
 //! - macOS: winit's view moved into a non-activating `NSPanel` at status level on every space,
@@ -165,6 +166,9 @@ impl<T: 'static> OverlayHandle<T> {
     /// the overlay is shown; set while hidden, it takes effect at the next show, so there is no
     /// need to toggle it around show and hide.
     pub fn set_exclude_from_capture(&self, exclude: bool) { self.request(|q| q.exclude_from_capture = Some(exclude)); }
+    /// Changes `OverlayOptions::xwayland_input`. It applies when the surface is next made, so
+    /// a call before `show` in the same turn covers that show.
+    pub fn set_xwayland_input(&self, allow: bool) { self.request(|q| q.xwayland_input = Some(allow)); }
 
     /// The overlay's frame counts: redraws, presents, failed drawable acquisitions, loop turns
     /// and pacing: current totals, and per-second rates updated once a second while it draws.
@@ -278,7 +282,8 @@ enum Backing {
     Window(Arc<Window>),
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     Layer(crate::platform::layer_shell::LayerSurface),
-    /// Wayland without layer-shell: an X11 window on XWayland, for overlays that take no input.
+    /// Wayland without layer-shell: an X11 window on XWayland, for overlays that take no input
+    /// or whose host opted in to pointer input there.
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     Xwayland(crate::platform::x11::xwayland::XwaylandSurface),
 }

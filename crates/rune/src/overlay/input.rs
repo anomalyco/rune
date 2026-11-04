@@ -102,6 +102,12 @@ impl<T: 'static> Overlay<T> {
 
     /// True when a layer surface's input region changed and waits for a commit.
     pub(super) fn publish_regions(&mut self) -> bool {
+        // An X11 window's input shape applies at once, with no commit to wait for.
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if let Some(Live { backing: Backing::Xwayland(surface), .. }) = &mut self.live {
+            surface.regions(self.rt.hit_regions());
+            return false;
+        }
         let Some(live) = &self.live else { return false };
         #[cfg(target_os = "macos")]
         if let Some(panel) = &self.panel { panel.set_regions(self.rt.hit_regions()); }
@@ -131,7 +137,11 @@ impl<T: 'static> Overlay<T> {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         {
             if let Some(x11) = &mut self.x11 { x11.set_input(resolved); }
-            if let Some(Live { backing: Backing::Layer(layer), .. }) = &mut self.live { layer.set_input(resolved); }
+            match &mut self.live {
+                Some(Live { backing: Backing::Layer(layer), .. }) => layer.set_input(resolved),
+                Some(Live { backing: Backing::Xwayland(surface), .. }) => surface.set_input(resolved),
+                _ => {}
+            }
         }
         self.publish_regions();
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -313,6 +323,7 @@ impl<T: 'static> Overlay<T> {
         if let Some(input) = requests.input { self.pending_input = Some(input); }
         self.apply_input();
         if let Some(exclude) = requests.exclude_from_capture { self.set_capture_exclusion(exclude); }
+        if let Some(allow) = requests.xwayland_input { self.options.xwayland_input = allow; }
         if let Some(follow) = requests.follow_pointer {
             self.options.follow_pointer = follow;
             #[cfg(target_os = "macos")]

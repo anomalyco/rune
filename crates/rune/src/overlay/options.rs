@@ -125,6 +125,13 @@ pub struct OverlayOptions {
     /// live values while preserving motion elapsed since each hidden commit. Hidden motion
     /// catches up on poll/reveal without driving a frame loop.
     pub prewarm: bool,
+    /// Wayland without layer-shell (GNOME): lets an overlay that takes pointer input show on
+    /// XWayland, as an override-redirect window that takes clicks in its input shape and never
+    /// keyboard focus. Off by default: connecting starts XWayland on GNOME, so a host opts in
+    /// explicitly, having checked that it already runs. `KeyPolicy::OnDemand` overlays still
+    /// can't use it. Read when the surface is made, at each show on Wayland;
+    /// `OverlayHandle::set_xwayland_input` changes it.
+    pub xwayland_input: bool,
 }
 
 /// Keeps existing exhaustive `OverlaySpec` literals source compatible.

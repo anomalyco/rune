@@ -720,3 +720,14 @@ fn release_gpu_after_counts_from_the_hide() {
     overlay.release_due(at);
     assert_eq!(overlay.release_at, None);
 }
+
+#[test]
+fn only_an_opted_in_overlay_takes_the_pointer_on_xwayland() {
+    use super::xwayland::xwayland_allowed;
+    assert!(xwayland_allowed(OverlayInput::None, KeyPolicy::None, false), "a HUD always may");
+    assert!(!xwayland_allowed(OverlayInput::All, KeyPolicy::None, false), "off by default");
+    assert!(!xwayland_allowed(OverlayInput::Regions, KeyPolicy::None, false));
+    assert!(xwayland_allowed(OverlayInput::All, KeyPolicy::None, true));
+    assert!(xwayland_allowed(OverlayInput::Regions, KeyPolicy::None, true));
+    assert!(!xwayland_allowed(OverlayInput::All, KeyPolicy::OnDemand, true), "never keys");
+}

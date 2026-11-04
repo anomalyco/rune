@@ -24,6 +24,31 @@ impl<T: 'static> Overlay<T> {
         }
     }
 
+    /// One input event a layer or XWayland surface read on its own connection.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    fn surface_input(&mut self, input: crate::platform::layer_shell::Input) {
+        use crate::platform::layer_shell::Input;
+        match input {
+            Input::Move(x, y) => { self.dirty |= self.rt.observe_pointer(x, y); return; }
+            Input::Leave => self.rt.pointer_leave(),
+            Input::Button(down) => if let Some((x, y)) = self.rt.pointer() {
+                if down { self.rt.pointer_down(x, y); } else { self.rt.pointer_up(x, y); }
+            },
+            Input::Secondary(down) => if let Some((x, y)) = self.rt.pointer() { if down { self.rt.secondary_down(x, y) } else { self.rt.secondary_up(x, y) } },
+            Input::Key(key) => self.rt.key(key),
+            Input::KeyUp(key) => {
+                self.dirty |= self.rt.key_up(key);
+                return;
+            }
+            Input::Physical(event, fallback) => {
+                let keep = matches!(event, crate::PhysicalInput::Key { pressed: true, .. }) || self.rt.wants_key_up();
+                self.dirty |= self.rt.physical_with_fallback(event, fallback.filter(|_| keep));
+                return;
+            }
+        }
+        self.dirty = true;
+    }
+
     /// Opens the pop-up menu a handler asked for over the overlay's panel. A hidden or occluded
     /// overlay answers `None`, committed with its next frame. One anchored to an element waits
     /// for the frame that commits what changed since the last.
@@ -44,28 +69,7 @@ impl<T: 'static> Overlay<T> {
                 self.hide();
                 return false;
             }
-            for input in changes.input {
-                use crate::platform::layer_shell::Input;
-                match input {
-                    Input::Move(x, y) => { self.dirty |= self.rt.observe_pointer(x, y); continue; }
-                    Input::Leave => self.rt.pointer_leave(),
-                    Input::Button(down) => if let Some((x, y)) = self.rt.pointer() {
-                        if down { self.rt.pointer_down(x, y); } else { self.rt.pointer_up(x, y); }
-                    },
-                    Input::Secondary(down) => if let Some((x, y)) = self.rt.pointer() { if down { self.rt.secondary_down(x, y) } else { self.rt.secondary_up(x, y) } },
-                    Input::Key(key) => self.rt.key(key),
-                    Input::KeyUp(key) => {
-                        self.dirty |= self.rt.key_up(key);
-                        continue;
-                    }
-                    Input::Physical(event, fallback) => {
-                        let keep = matches!(event, crate::PhysicalInput::Key { pressed: true, .. }) || self.rt.wants_key_up();
-                        self.dirty |= self.rt.physical_with_fallback(event, fallback.filter(|_| keep));
-                        continue;
-                    }
-                }
-                self.dirty = true;
-            }
+            for input in changes.input { self.surface_input(input); }
             if let Some((w, h)) = changes.size {
                 let size = (if w == 0 { self.at.size.0 } else { w as f32 }, if h == 0 { self.at.size.1 } else { h as f32 });
                 if size != self.at.size {
@@ -84,7 +88,10 @@ impl<T: 'static> Overlay<T> {
             }
         }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if let Some(Live { backing: Backing::Xwayland(surface), .. }) = self.live.as_ref() { surface.drain(); }
+        if let Some(Live { backing: Backing::Xwayland(surface), .. }) = self.live.as_mut() {
+            let input = surface.dispatch();
+            for input in input { self.surface_input(input); }
+        }
         self.apply_input();
         if self.live.is_none() || self.renderer.is_none() || self.gpu.is_none() {
             return false;

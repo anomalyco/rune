@@ -302,8 +302,9 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for State {
 
 /// Wakes the event loop when the compositor writes to the display. winit turns its loop only
 /// for its own queue's events, so input for this surface's queue (a click on an idle overlay)
-/// would otherwise wait for an unrelated wake.
-struct Watch {
+/// would otherwise wait for an unrelated wake. An XWayland overlay watches its X connection
+/// the same way.
+pub(crate) struct Watch {
     stop: Arc<AtomicBool>,
     /// How many times the overlay has dispatched, so the watcher waits for the loop to read
     /// what woke it instead of spinning on a socket that stays readable until then.
@@ -311,14 +312,16 @@ struct Watch {
 }
 
 impl Watch {
-    fn spawn(fd: RawFd, wake: Waker) -> Watch {
+    pub(crate) fn spawn(fd: RawFd, wake: Waker) -> Watch {
         let stop = Arc::new(AtomicBool::new(false));
         let turns = Arc::new((Mutex::new(0u64), Condvar::new()));
         let (stopped, seen) = (stop.clone(), turns.clone());
         let _ = std::thread::Builder::new().name("rune-layer-watch".into()).spawn(move || {
             while !stopped.load(Ordering::Relaxed) {
                 let mut poll = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
-                // SAFETY: one pollfd for winit's display socket, which outlives the event loop.
+                // SAFETY: one pollfd for a display socket. winit's outlives the event loop; an
+                // XWayland surface drops its watch before closing its connection, so at worst a
+                // reused descriptor wakes the loop once more before this thread stops.
                 if unsafe { libc::poll(&mut poll, 1, 250) } <= 0 { continue; }
                 let (count, turned) = &*seen;
                 let before = *count.lock().unwrap();
@@ -329,7 +332,7 @@ impl Watch {
         Watch { stop, turns }
     }
 
-    fn turned(&self) {
+    pub(crate) fn turned(&self) {
         let (count, turned) = &*self.turns;
         *count.lock().unwrap() += 1;
         turned.notify_all();
