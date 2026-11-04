@@ -158,9 +158,18 @@ impl Scrub {
     /// state in the app's; Send (the button, or Return in the note) calls `on_send`.
     pub fn view<S: 'static>(&self, lens: fn(&mut S) -> &mut Scrub, on_send: fn(&mut S, Sent, &mut Tx)) -> El {
         let Some(clip) = &self.clip else { return el() };
-        let (w, h) = clip.viewport();
+        let (w, _) = clip.viewport();
         let changes = clip.changes(self.frame);
-        let mut layer = el().key("rewind").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0));
+        // The live view under it keeps changing; dimmed, the recorded frame reads over it.
+        let mut layer = el().key("rewind").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+            .child(el().key("rewind-dim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(Color::BLACK.alpha(0.55))
+                .on_press(move |s: &mut S| lens(s).picked = None));
+        for (id, shot) in clip.frame(self.frame) {
+            if changes.iter().any(|c| c.id == id) { continue; }
+            let r = shot.rect;
+            layer = layer.child(el().key(format!("rewind-el-{id}")).absolute(r[0], r[1]).size(r[2].max(1.0), r[3].max(1.0))
+                .border(0.5, Color::WHITE.alpha(0.08 + 0.14 * shot.opacity.clamp(0.0, 1.0))));
+        }
         if let Some(id) = self.picked { layer = layer.children(self.path_view(clip, id)); }
         for c in changes.iter().rev() { layer = layer.children(outline(c, lens)); }
         if let Some(id) = self.picked.filter(|id| !changes.iter().any(|c| c.id == *id))
@@ -168,7 +177,6 @@ impl Scrub {
         {
             layer = layer.child(el().key("rewind-picked").absolute(s.rect[0], s.rect[1]).size(s.rect[2].max(1.0), s.rect[3].max(1.0)).border(1.0, Color::WHITE.alpha(0.7)));
         }
-        let _ = h;
         layer.child(self.bar(clip, w, &changes, lens, on_send))
     }
 
