@@ -176,6 +176,7 @@ impl<S: 'static> Runtime<S> {
             let laid = if axes.y() { self.ease_to_shrunk_end(i, overflow) } else { None };
             let Some(st) = self.scrolls.get_mut(&id) else { continue };
             st.scrolling = st.direct || st.v.abs() > 1.0 || st.x.v.abs() > 1.0;
+            st.by_hand |= st.scrolling;
             st.direct = false;
             st.max = overflow.max(0.0);
             if st.pinned && sp.stick_bottom {

@@ -337,6 +337,9 @@ pub(super) struct ScrollState {
     pub(super) max: f64,
     pub(super) direct: bool,
     pub(super) scrolling: bool,
+    /// A hand (the wheel, keys, a drag, their momentum) or an app's instant jump moved it since
+    /// `El::on_scroll_offset` was last told; not following its bottom, a glide or an anchor.
+    pub(super) by_hand: bool,
     /// Velocity of a glide to the bottom (`Tx::scroll_to_bottom`) or to `glide_to`
     /// (`Tx::scroll_to`) while one runs.
     pub(super) glide: Option<f32>,

@@ -1,0 +1,1 @@
+- **An overlay scroll bar shows only when a hand scrolls.** `rune_kit::ScrollBar` no longer flashes while a stick-to-bottom viewport follows content as it streams in, while `Tx::scroll_to_bottom` or another glide carries it, or while an anchor holds what's on screen; the wheel, keys, a drag, their momentum, `Tx::scroll_page` and instant jumps still show it.

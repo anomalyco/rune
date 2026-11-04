@@ -577,6 +577,49 @@ mod tests {
     }
 
     #[test]
+    fn following_the_end_and_gliding_to_it_dont_show_an_overlay_bar() {
+        fn feed(rows: &usize, _: &mut rune::Cx<usize>) -> El {
+            let k = Kit::neutral(true);
+            col().size(200.0, 100.0).child(
+                col()
+                    .key("feed")
+                    .w_full()
+                    .h(100.0)
+                    .scroll(rune::ScrollSpec { stick_bottom: true })
+                    .child(col().children((0..*rows).map(|i| el().key(format!("row{i}")).w_full().h(20.0))))
+                    .scroll_bar(&k),
+            )
+        }
+        let mut rt = rune::Runtime::new(20usize, feed, (200.0, 100.0), rune::Env::new(true, 1.0));
+        rt.set_live_waker(std::sync::Arc::new(|| {}));
+        for _ in 0..60 {
+            rt.frame(1.0 / 60.0);
+        }
+        for _ in 0..30 {
+            rt.update(|rows, _| *rows += 1);
+            for _ in 0..4 {
+                rt.frame(1.0 / 60.0);
+                assert_eq!(opacity(&rt, "thumb"), 0.0, "following the end as rows arrive isn't a scroll");
+            }
+        }
+        rt.wheel(100.0, 50.0, 400.0);
+        for _ in 0..150 {
+            rt.frame(1.0 / 60.0);
+        }
+        assert_eq!(opacity(&rt, "thumb"), 0.0, "rested after the wheel");
+        rt.update(|_, tx| tx.scroll_to_bottom("feed"));
+        for _ in 0..90 {
+            rt.frame(1.0 / 60.0);
+            assert_eq!(opacity(&rt, "thumb"), 0.0, "a glide to the end isn't a hand scroll");
+        }
+        rt.update(|_, tx| tx.scroll_page("feed", -1));
+        for _ in 0..20 {
+            rt.frame(1.0 / 60.0);
+        }
+        assert!(opacity(&rt, "thumb") > 0.95, "paging is");
+    }
+
+    #[test]
     fn content_that_fits_shows_no_bar_and_presses_through() {
         let mut rt = rune::Runtime::new(3usize, view, (200.0, 100.0), rune::Env::new(true, 1.0));
         rt.frame(0.0);

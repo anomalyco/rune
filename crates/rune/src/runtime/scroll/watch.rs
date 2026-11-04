@@ -8,8 +8,10 @@ thread_local! {
     static SCROLL_WATCH_STATE: std::cell::Cell<(bool, bool, f64)> = const { std::cell::Cell::new((false, false, 0.0)) };
 }
 
-/// Inside an [`El::on_scroll_offset`](crate::El::on_scroll_offset) callback: whether this
-/// viewport's scroll offset moved (`scrolled`), whether this frame ran an instant or settled
+/// Inside an [`El::on_scroll_offset`](crate::El::on_scroll_offset) callback: whether a hand
+/// moved this viewport's scroll offset (`scrolled`: the wheel, keys, a drag, their momentum or
+/// an app's instant jump, but not following its bottom as content grows, a glide such as
+/// `Tx::scroll_to_bottom`, or an anchor holding what's on screen), whether this frame ran an instant or settled
 /// commit (`instant`), and the scene's animation clock (`now`).
 #[doc(hidden)]
 pub fn scroll_watch_state() -> (bool, bool, f64) {
@@ -28,11 +30,12 @@ impl<S: 'static> Runtime<S> {
             let at = crate::ScrollPos { offset: [st.x.offset as f32, st.offset as f32 + st.slack.height()], max: [st.x.max as f32, st.max as f32],
                 viewport: [n.local.w, n.local.h] };
             let by = Rc::as_ptr(f) as *const () as usize;
+            let by_hand = std::mem::take(&mut st.by_hand);
             let prev = st.told.replace(at);
             let changed = prev != Some(at);
             let new_handler = std::mem::replace(&mut st.told_by, by) != by;
             if changed || new_handler {
-                let scrolled = prev.is_some_and(|old| (old.offset[0] - at.offset[0]).abs() > 0.01 || (old.offset[1] - at.offset[1]).abs() > 0.01);
+                let scrolled = by_hand && prev.is_some_and(|old| (old.offset[0] - at.offset[0]).abs() > 0.01 || (old.offset[1] - at.offset[1]).abs() > 0.01);
                 calls.push((f.clone(), at, scrolled));
             }
         }

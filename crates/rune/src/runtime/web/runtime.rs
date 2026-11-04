@@ -364,6 +364,7 @@ impl<S: 'static> Runtime<S> {
         if horizontal { st.x.max = overflow.max(0.0); } else { st.max = overflow.max(0.0); }
         let v = *st.axis(horizontal).1;
         st.scrolling = dragging || v.abs() > 1.0;
+        st.by_hand |= st.scrolling;
         if dragging { return Some(false); }
         st.direct = false;
         let (offset, v, max) = st.axis(horizontal);
