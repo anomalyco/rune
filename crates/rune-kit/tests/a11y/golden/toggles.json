@@ -1,0 +1,60 @@
+{
+  "children": [
+    {
+      "actions": [
+        "click",
+        "focus"
+      ],
+      "description": "Keep files in step",
+      "key": "sync",
+      "name": "Sync",
+      "role": "check-box",
+      "states": [
+        "unchecked"
+      ]
+    },
+    {
+      "actions": [
+        "focus"
+      ],
+      "key": "some",
+      "name": "Some",
+      "role": "check-box",
+      "states": [
+        "mixed"
+      ]
+    },
+    {
+      "key": "locked",
+      "name": "Locked",
+      "role": "check-box",
+      "states": [
+        "disabled",
+        "checked"
+      ]
+    },
+    {
+      "actions": [
+        "click",
+        "focus"
+      ],
+      "description": "Join known networks",
+      "key": "wifi",
+      "name": "Wi-Fi",
+      "role": "switch",
+      "states": [
+        "unchecked"
+      ]
+    },
+    {
+      "key": "airplane",
+      "name": "Airplane",
+      "role": "switch",
+      "states": [
+        "disabled",
+        "checked"
+      ]
+    }
+  ],
+  "role": "window"
+}

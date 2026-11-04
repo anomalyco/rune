@@ -1,0 +1,46 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "name": "Build failed",
+                  "role": "label"
+                }
+              ],
+              "key": "title",
+              "role": "group"
+            },
+            {
+              "key": "description",
+              "name": "3 tests failed on Linux",
+              "role": "label"
+            },
+            {
+              "children": [
+                {
+                  "actions": [
+                    "focus"
+                  ],
+                  "name": "Retry",
+                  "role": "button"
+                }
+              ],
+              "key": "actions",
+              "role": "group"
+            }
+          ],
+          "key": "body",
+          "role": "group"
+        }
+      ],
+      "key": "card",
+      "name": "Build failed",
+      "role": "group"
+    }
+  ],
+  "role": "window"
+}

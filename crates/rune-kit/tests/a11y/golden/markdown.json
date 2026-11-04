@@ -1,0 +1,241 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "key": "b0",
+          "level": 1,
+          "name": "Release notes",
+          "role": "heading"
+        },
+        {
+          "actions": [
+            "focus"
+          ],
+          "children": [
+            {
+              "actions": [
+                "click",
+                "focus"
+              ],
+              "key": "https://example.com/guide",
+              "name": "the guide",
+              "role": "link",
+              "url": "https://example.com/guide"
+            }
+          ],
+          "key": "b1",
+          "name": "Read the guide first.",
+          "role": "label"
+        },
+        {
+          "key": "b2",
+          "level": 2,
+          "name": "Changes",
+          "role": "heading"
+        },
+        {
+          "children": [
+            {
+              "actions": [
+                "click",
+                "focus"
+              ],
+              "children": [
+                {
+                  "key": "b0",
+                  "name": "tests pass",
+                  "role": "label"
+                }
+              ],
+              "key": "i0",
+              "name": "tests pass",
+              "position": 1,
+              "role": "check-box",
+              "states": [
+                "checked"
+              ]
+            },
+            {
+              "actions": [
+                "click",
+                "focus"
+              ],
+              "children": [
+                {
+                  "key": "b0",
+                  "name": "docs",
+                  "role": "label"
+                }
+              ],
+              "key": "i1",
+              "name": "docs",
+              "position": 2,
+              "role": "check-box",
+              "states": [
+                "unchecked"
+              ]
+            }
+          ],
+          "key": "b3",
+          "role": "list",
+          "setSize": 2
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "key": "b0",
+                  "name": "Faster start",
+                  "role": "label"
+                }
+              ],
+              "key": "i0",
+              "name": "Faster start",
+              "position": 1,
+              "role": "list-item"
+            },
+            {
+              "children": [
+                {
+                  "key": "b0",
+                  "name": "Smaller downloads",
+                  "role": "label"
+                }
+              ],
+              "key": "i1",
+              "name": "Smaller downloads",
+              "position": 2,
+              "role": "list-item"
+            }
+          ],
+          "key": "b4",
+          "role": "list",
+          "setSize": 2
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "key": "b0",
+                  "name": "Update",
+                  "role": "label"
+                }
+              ],
+              "key": "i0",
+              "name": "Update",
+              "position": 1,
+              "role": "list-item"
+            },
+            {
+              "children": [
+                {
+                  "key": "b0",
+                  "name": "Restart",
+                  "role": "label"
+                }
+              ],
+              "key": "i1",
+              "name": "Restart",
+              "position": 2,
+              "role": "list-item"
+            }
+          ],
+          "key": "b5",
+          "role": "list",
+          "setSize": 2
+        },
+        {
+          "children": [
+            {
+              "name": "fn main() {}",
+              "role": "label"
+            }
+          ],
+          "key": "b6",
+          "role": "code"
+        },
+        {
+          "children": [
+            {
+              "key": "b0",
+              "name": "Quoted advice.",
+              "role": "label"
+            }
+          ],
+          "key": "b7",
+          "role": "blockquote"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "name": "Name",
+                      "role": "label"
+                    }
+                  ],
+                  "key": "c0",
+                  "name": "Name",
+                  "role": "column-header"
+                },
+                {
+                  "children": [
+                    {
+                      "name": "Size",
+                      "role": "label"
+                    }
+                  ],
+                  "key": "c1",
+                  "name": "Size",
+                  "role": "column-header"
+                }
+              ],
+              "key": "th",
+              "name": "Name Size",
+              "role": "row"
+            },
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "name": "app",
+                      "role": "label"
+                    }
+                  ],
+                  "key": "c0",
+                  "name": "app",
+                  "role": "cell"
+                },
+                {
+                  "children": [
+                    {
+                      "name": "4 MB",
+                      "role": "label"
+                    }
+                  ],
+                  "key": "c1",
+                  "name": "4 MB",
+                  "role": "cell"
+                }
+              ],
+              "key": "r0",
+              "name": "app 4 MB",
+              "role": "row"
+            }
+          ],
+          "key": "b8",
+          "role": "table"
+        }
+      ],
+      "key": "doc",
+      "role": "group"
+    }
+  ],
+  "role": "window"
+}

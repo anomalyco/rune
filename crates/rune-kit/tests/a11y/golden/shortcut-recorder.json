@@ -1,0 +1,35 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "actions": [
+            "click",
+            "focus"
+          ],
+          "key": "show",
+          "name": "Show window",
+          "role": "button",
+          "value": "Record shortcut"
+        }
+      ],
+      "key": "show-field",
+      "role": "group"
+    },
+    {
+      "children": [
+        {
+          "key": "plain",
+          "name": "Record shortcut",
+          "role": "button",
+          "states": [
+            "disabled"
+          ]
+        }
+      ],
+      "key": "plain-field",
+      "role": "group"
+    }
+  ],
+  "role": "window"
+}

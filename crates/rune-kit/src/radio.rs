@@ -99,14 +99,16 @@ impl RadioItem {
             let color = if disabled { c.text_faint } else { c.text_muted };
             words = words.child(text(d.clone()).key("description").font(k.ty.small.lh(11.0)).color(color));
         }
+        // Checked follows `focus_selected`; the label and description say what the words do.
         let root = row()
             .role("radio")
             .label(self.label)
+            .description(self.description.unwrap_or_default())
             .gap(8.0)
             .items_start()
-            .child(el().key("stack").size(16.0, 20.0).child(control))
-            .child(words);
-        self.acts.apply(root.focusable(!disabled).focus_selected(self.checked), !disabled)
+            .child(el().key("stack").size(16.0, 20.0).child(control).a11y_hidden())
+            .child(words.a11y_hidden());
+        self.acts.apply(root.focusable(!disabled).focus_selected(self.checked).disabled(disabled), !disabled)
     }
 }
 
@@ -146,22 +148,27 @@ impl RadioGroup {
     pub fn build(self, k: &Kit) -> El {
         let c = &k.c;
         let mut root = col().role("radiogroup").focus_group().gap(8.0);
+        // The group's name and description say its label and the line under it.
         if let Some(l) = &self.label {
-            root =
-                root.label(l.clone()).child(text(l.clone()).key("label").font(k.ty.small.lh(11.0)).color(c.text_faint));
+            root = root
+                .label(l.clone())
+                .child(text(l.clone()).key("label").font(k.ty.small.lh(11.0)).color(c.text_faint).a11y_hidden());
         }
         if let Some(d) = &self.description {
-            root = root.child(text(d.clone()).key("description").font(k.ty.small.lh(13.2)).color(c.text_faint));
+            root = root
+                .description(d.clone())
+                .child(text(d.clone()).key("description").font(k.ty.small.lh(13.2)).color(c.text_faint).a11y_hidden());
         }
         let mut items = col().key("items").gap(12.0);
+        let n = self.items.len();
         for (i, mut item) in self.items.into_iter().enumerate() {
             if self.disabled {
                 item = item.disabled(true);
             }
             item.invalid = self.invalid;
-            items = items.child(item.build(k).key(format!("item{i}")));
+            items = items.child(item.build(k).key(format!("item{i}")).position_in_set(i + 1, n));
         }
-        root.child(items)
+        root.child(items).disabled(self.disabled)
     }
 }
 

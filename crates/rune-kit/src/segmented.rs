@@ -23,6 +23,7 @@ pub struct SegmentedControl {
     width: Width,
     states: Vec<State>,
     pick: Option<Pick>,
+    label: Option<String>,
 }
 
 impl SegmentedControl {
@@ -33,7 +34,13 @@ impl SegmentedControl {
             width: Width::Points(232.0),
             states: Vec::new(),
             pick: None,
+            label: None,
         }
+    }
+    /// The accessible name of the choice the segments make ("View").
+    pub fn label(mut self, l: impl Into<String>) -> Self {
+        self.label = Some(l.into());
+        self
     }
     /// Width in points (default 232); `None` fills the parent.
     pub fn width(mut self, w: Option<f32>) -> Self {
@@ -71,6 +78,9 @@ impl SegmentedControl {
                 color: c.border_base,
                 ..Default::default()
             });
+        if let Some(l) = self.label {
+            root = root.label(l);
+        }
         root = match self.width {
             Width::Points(w) => root.w(w),
             Width::Fill => root.w_full(),
@@ -83,6 +93,7 @@ impl SegmentedControl {
                 .fill(c.bg_base)
                 .box_shadow(rune::Shadow { spread: 0.5, color: c.border_strong, ..Default::default() })
                 .token_motion(k.motion.control)
+                .a11y_hidden()
         };
         match (self.selected, self.width) {
             (Some(sel), Width::Points(w)) => {
@@ -100,7 +111,7 @@ impl SegmentedControl {
             // An unselected segment lights under the pointer on the first frame and fades as it
             // leaves (the runtime's default hover motion); the selected one already reads raised.
             let hovers = st == State::Rest && !on && self.pick.is_some();
-            let mut label = text(l.clone()).key("label").font(font).color(ink).truncate();
+            let mut label = text(l.clone()).key("label").font(font).color(ink).truncate().a11y_hidden();
             if hovers {
                 label = label.group_color(c.text_base);
             }
@@ -108,7 +119,9 @@ impl SegmentedControl {
                 .key(format!("segment{i}"))
                 .role("radio")
                 .focusable(st != State::Disabled).focus_selected(on).focus_ring(2.0, 1.0, c.border_focus)
+                .disabled(st == State::Disabled)
                 .label(l.clone())
+                .position_in_set(i + 1, n)
                 .grow(1.0)
                 .shrink()
                 .h(28.0)

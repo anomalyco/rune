@@ -47,7 +47,7 @@ fn disabled_controls_produce_no_layer_scopes() {
             assert!(!rt.instances.is_empty(), "case {case} must paint");
             assert!(rt.instances.iter().all(|i| i.params[1] != KIND_LAYER && i.params[1] != KIND_LAYER_END),
                 "case {case} dark={dark}: disabled styling introduced a scope");
-            if case == 9 { assert!(rt.elements().iter().any(|e| e.role == "menuitem")); }
+            if case == 9 { assert!(rt.elements().iter().any(|e| e.role == "menuitemcheckbox")); }
             if case == 10 { assert!(rt.elements().iter().any(|e| e.role == "option")); }
         }
     }

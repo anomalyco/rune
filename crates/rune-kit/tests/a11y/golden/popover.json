@@ -1,0 +1,100 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "actions": [
+                "click",
+                "focus",
+                "collapse"
+              ],
+              "key": "share-button",
+              "name": "Share",
+              "role": "button",
+              "states": [
+                "focused",
+                "expanded"
+              ]
+            }
+          ],
+          "key": "share-trigger",
+          "role": "group"
+        },
+        {
+          "children": [
+            {
+              "actions": [
+                "focus"
+              ],
+              "description": "Saves to disk",
+              "key": "save",
+              "name": "Save",
+              "role": "button"
+            }
+          ],
+          "key": "tip-trigger",
+          "role": "group"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "key": "title",
+                  "name": "Share",
+                  "role": "label"
+                },
+                {
+                  "actions": [
+                    "click",
+                    "focus"
+                  ],
+                  "key": "close",
+                  "name": "Close",
+                  "role": "button"
+                }
+              ],
+              "key": "header",
+              "role": "group"
+            },
+            {
+              "children": [
+                {
+                  "name": "Anyone with the link can view",
+                  "role": "label"
+                }
+              ],
+              "key": "description",
+              "role": "group"
+            },
+            {
+              "children": [
+                {
+                  "key": "link",
+                  "name": "example.com/f/1",
+                  "role": "label"
+                }
+              ],
+              "key": "body",
+              "role": "group"
+            }
+          ],
+          "description": "Anyone with the link can view",
+          "key": "share-content",
+          "name": "Share",
+          "role": "dialog"
+        },
+        {
+          "key": "tip-tooltip",
+          "name": "Saves to disk",
+          "role": "tooltip"
+        }
+      ],
+      "key": "kit-root",
+      "role": "group"
+    }
+  ],
+  "role": "window"
+}

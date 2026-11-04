@@ -82,10 +82,15 @@ impl Accordion {
             let (first, last) = (i == 0, i + 1 == n);
             let bottom = if last && !item.expanded { r } else { 0.0 };
             let top = if first { r } else { 0.0 };
+            let enabled = item.state != State::Disabled;
             let mut trigger = row()
                 .key("trigger")
                 .role("button")
                 .label(item.title.clone())
+                .expanded(item.expanded)
+                .focusable(enabled)
+                .focus_ring(2.0, -2.0, c.border_focus)
+                .disabled(!enabled)
                 .h(32.0)
                 .px(12.0)
                 .py(8.0)
@@ -95,11 +100,10 @@ impl Accordion {
                 .fill(if item.state == State::Hover { c.hover } else { c.bg_base })
                 .border(1.0, c.border_base)
                 .token_motion(k.motion.control)
-                .child(text(item.title).key("title").font(k.ty.text_small).color(c.text_base));
+                .child(text(item.title.clone()).key("title").font(k.ty.text_small).color(c.text_base).a11y_hidden());
             if item.state == State::Rest {
                 trigger = trigger.hover(c.hover);
             }
-            let enabled = item.state != State::Disabled;
             let trigger = item.acts.apply(trigger, enabled);
             let mut e = col().key(format!("item{i}")).items_stretch().child(trigger);
             if i > 0 {
@@ -113,6 +117,8 @@ impl Accordion {
                     col().key("content-clip").clip_soft(0.0).child(
                         col()
                             .key("content")
+                            .role("region")
+                            .label(item.title)
                             .corners([0.0, 0.0, b, b])
                             .fill(c.layer_01)
                             .border(1.0, c.border_base)

@@ -1,0 +1,34 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "actions": [
+            "click",
+            "focus",
+            "expand"
+          ],
+          "key": "fruit-trigger",
+          "name": "Fruit",
+          "role": "combo-box",
+          "states": [
+            "collapsed"
+          ],
+          "value": "Pear"
+        },
+        {
+          "key": "size-trigger",
+          "name": "Size",
+          "role": "combo-box",
+          "states": [
+            "disabled",
+            "collapsed"
+          ]
+        }
+      ],
+      "key": "kit-root",
+      "role": "group"
+    }
+  ],
+  "role": "window"
+}

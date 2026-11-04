@@ -94,11 +94,12 @@ impl List {
     pub fn build(self, k: &Kit) -> El {
         let c = &k.c;
         let item_font = TextStyle::new(14.0, 500.0).lh(21.0);
-        let mut root = col().role("list").w_full().gap(12.0);
+        let mut root = col().w_full().gap(12.0);
         if let Some((edit, placeholder)) = &self.search {
             let mut input = text_input(edit, TextStyle::new(14.0, 400.0).lh(20.0))
                 .single_line()
                 .key("input")
+                .label(placeholder.clone())
                 .grow(1.0)
                 .shrink()
                 .color(c.text_strong)
@@ -121,9 +122,10 @@ impl List {
                 ),
             );
         }
-        let mut scroll = col().key("scroll").w_full().gap(12.0);
+        let mut scroll = col().key("scroll").role("list").w_full().gap(12.0);
         // Rows with an action are one Tab stop; arrows move between them (AppKit lists).
-        if self.items.iter().any(|i| !i.actions.is_empty()) {
+        let listbox = self.items.iter().any(|i| !i.actions.is_empty());
+        if listbox {
             scroll = scroll.role("listbox").focus_group();
         }
         if self.items.is_empty() && self.add.is_none() {
@@ -138,6 +140,17 @@ impl List {
             );
         }
         let n = self.items.len();
+        // Each row's place in its group of consecutive rows, which a reader counts as one set.
+        let mut places = vec![(0, 0); n];
+        let mut start = 0;
+        for i in 1..=n {
+            if i == n || self.items[i].group != self.items[start].group {
+                for (k, j) in (start..i).enumerate() {
+                    places[j] = (k + 1, i - start);
+                }
+                start = i;
+            }
+        }
         let mut group_el: Option<(Option<String>, El)> = None;
         let mut groups = Vec::new();
         for (i, item) in self.items.into_iter().enumerate() {
@@ -147,11 +160,12 @@ impl List {
                 }
                 let mut g = col().key(format!("group{i}")).w_full();
                 if let Some(name) = &item.group {
+                    g = g.role("group").label(name.clone());
                     g =
                         g.child(
                             row().key("header").w_full().pt(8.0).pb(8.0).pl(8.0).pr(12.0).fill(c.surface_raised).child(
                                 text(name.clone()).font(TextStyle::new(14.0, 500.0).lh(21.0)).color(c.text_weak),
-                            ),
+                            ).a11y_hidden(),
                         );
                 }
                 group_el = Some((item.group.clone(), g));
@@ -160,15 +174,16 @@ impl List {
             let pressable = !item.actions.is_empty();
             let mut r = row()
                 .key(format!("item{i}"))
-                .role("option")
+                .role(if listbox { "option" } else { "listitem" })
                 .label(item.label.clone())
+                .position_in_set(places[i].0, places[i].1)
                 .w_full()
                 .px(8.0)
                 .py(6.0)
                 .center_y()
                 .radius(k.radius.md)
                 .gap(4.0)
-                .child(text(item.label).font(item_font).color(c.text_strong).shrink().truncate());
+                .child(text(item.label).font(item_font).color(c.text_strong).shrink().truncate().a11y_hidden());
             if item.selected {
                 r = r.child(icon(k.glyph.check_small, 16.0).color(c.std_icon_strong));
             }
@@ -187,7 +202,7 @@ impl List {
             }
             if self.divider && i + 1 < n {
                 r = r
-                    .child(el().key("divider").h(1.0).pin(Some(16.0), None, Some(16.0), Some(0.0)).fill(c.border_weak));
+                    .child(el().key("divider").h(1.0).pin(Some(16.0), None, Some(16.0), Some(0.0)).fill(c.border_weak).a11y_hidden());
             }
             for a in item.actions {
                 r = a(r);

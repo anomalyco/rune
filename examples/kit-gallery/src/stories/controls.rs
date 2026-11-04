@@ -64,25 +64,25 @@ pub(super) fn button_all_states(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
 // IconButton
 
 pub(super) fn icon_button_playground(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
-    row().child(IconButton::new(&ic::PLUS).build(k))
+    row().child(IconButton::new(&ic::PLUS).label("Add").build(k))
 }
 
 pub(super) fn icon_button_variants(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     use IconButtonVariant::*;
     flex(12.0)
-        .child(IconButton::new(&ic::PLUS).variant(Neutral).build(k))
-        .child(IconButton::new(&ic::PLUS).variant(Contrast).build(k))
-        .child(IconButton::new(&ic::ARROW_UP).variant(Submit).build(k))
-        .child(IconButton::new(&ic::PLUS).variant(Ghost).build(k))
+        .child(IconButton::new(&ic::PLUS).label("Add").variant(Neutral).build(k))
+        .child(IconButton::new(&ic::PLUS).label("Add").variant(Contrast).build(k))
+        .child(IconButton::new(&ic::ARROW_UP).label("Send").variant(Submit).build(k))
+        .child(IconButton::new(&ic::PLUS).label("Add").variant(Ghost).build(k))
 }
 
 pub(super) fn icon_button_sizes(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     flex(12.0)
-        .child(IconButton::new(&ic::PLUS).control_size(ControlSize::Mini).build(k))
-        .child(IconButton::new(&ic::PLUS).control_size(ControlSize::Small).build(k))
-        .child(IconButton::new(&ic::PLUS).build(k))
-        .child(IconButton::new(&ic::PLUS).control_size(ControlSize::Large).build(k))
-        .child(IconButton::new(&ic::PLUS).control_size(ControlSize::ExtraLarge).build(k))
+        .child(IconButton::new(&ic::PLUS).label("Add").control_size(ControlSize::Mini).build(k))
+        .child(IconButton::new(&ic::PLUS).label("Add").control_size(ControlSize::Small).build(k))
+        .child(IconButton::new(&ic::PLUS).label("Add").build(k))
+        .child(IconButton::new(&ic::PLUS).label("Add").control_size(ControlSize::Large).build(k))
+        .child(IconButton::new(&ic::PLUS).label("Add").control_size(ControlSize::ExtraLarge).build(k))
 }
 
 pub(super) fn icon_button_all_states(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
@@ -92,7 +92,7 @@ pub(super) fn icon_button_all_states(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     for (name, v) in variants {
         let mut r = row().gap(8.0).flex_wrap();
         for (state, st) in STATES {
-            r = r.child(IconButton::new(&ic::PLUS).variant(v).state(st).build(k).key(format!("{name}-{state}")));
+            r = r.child(IconButton::new(&ic::PLUS).label("Add").variant(v).state(st).build(k).key(format!("{name}-{state}")));
         }
         c = c.child(col().gap(8.0).child(caption(k, &title_case(name))).child(r));
     }

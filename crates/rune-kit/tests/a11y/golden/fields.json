@@ -1,0 +1,138 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "actions": [
+                "click",
+                "focus",
+                "set-value",
+                "replace-selected-text",
+                "set-text-selection"
+              ],
+              "key": "input",
+              "name": "Search files",
+              "placeholder": "Search files",
+              "role": "text-input",
+              "value": ""
+            }
+          ],
+          "key": "value",
+          "role": "group"
+        },
+        {
+          "key": "action",
+          "name": "Clear",
+          "role": "button"
+        }
+      ],
+      "key": "search",
+      "role": "group"
+    },
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "key": "input",
+              "name": "Email",
+              "placeholder": "you@example.com",
+              "role": "text-input",
+              "states": [
+                "disabled",
+                "read-only"
+              ],
+              "value": ""
+            }
+          ],
+          "key": "value",
+          "role": "group"
+        }
+      ],
+      "key": "email",
+      "role": "group"
+    },
+    {
+      "children": [
+        {
+          "actions": [
+            "click",
+            "focus",
+            "set-value",
+            "replace-selected-text",
+            "set-text-selection"
+          ],
+          "key": "input",
+          "name": "Notes",
+          "role": "multiline-text-input",
+          "value": ""
+        }
+      ],
+      "key": "notes",
+      "role": "group"
+    },
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "actions": [
+                "click",
+                "focus",
+                "set-value",
+                "replace-selected-text",
+                "set-text-selection"
+              ],
+              "description": "Name is taken",
+              "key": "input",
+              "name": "Name",
+              "role": "text-input",
+              "value": ""
+            }
+          ],
+          "key": "wrapper",
+          "role": "group"
+        },
+        {
+          "key": "error",
+          "name": "Name is taken",
+          "role": "label",
+          "states": [
+            "live-assertive"
+          ]
+        }
+      ],
+      "key": "name",
+      "role": "group"
+    },
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "actions": [
+                "click"
+              ],
+              "key": "input",
+              "name": "Token",
+              "role": "text-input",
+              "states": [
+                "read-only"
+              ],
+              "value": ""
+            }
+          ],
+          "key": "value",
+          "role": "group"
+        }
+      ],
+      "description": "From your account page. Kept in the keychain",
+      "key": "token",
+      "name": "Token",
+      "role": "group"
+    }
+  ],
+  "role": "window"
+}

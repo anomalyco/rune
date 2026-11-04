@@ -1,0 +1,103 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "actions": [
+                    "click",
+                    "focus"
+                  ],
+                  "key": "item0",
+                  "name": "Inbox",
+                  "position": 1,
+                  "role": "list-box-option",
+                  "states": [
+                    "unselected"
+                  ]
+                },
+                {
+                  "actions": [
+                    "click",
+                    "focus"
+                  ],
+                  "key": "item1",
+                  "name": "Drafts",
+                  "position": 2,
+                  "role": "list-box-option",
+                  "states": [
+                    "selected"
+                  ]
+                }
+              ],
+              "key": "group0",
+              "name": "Mail",
+              "role": "group",
+              "setSize": 2
+            },
+            {
+              "children": [
+                {
+                  "actions": [
+                    "click",
+                    "focus"
+                  ],
+                  "key": "item2",
+                  "name": "Sent",
+                  "position": 1,
+                  "role": "list-box-option",
+                  "states": [
+                    "unselected"
+                  ]
+                }
+              ],
+              "key": "group2",
+              "name": "Other",
+              "role": "group",
+              "setSize": 1
+            }
+          ],
+          "key": "scroll",
+          "role": "list-box"
+        }
+      ],
+      "key": "mail",
+      "role": "group"
+    },
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "key": "item0",
+                  "name": "Read only",
+                  "position": 1,
+                  "role": "list-item"
+                },
+                {
+                  "key": "item1",
+                  "name": "Rows",
+                  "position": 2,
+                  "role": "list-item"
+                }
+              ],
+              "key": "group0",
+              "role": "group",
+              "setSize": 2
+            }
+          ],
+          "key": "scroll",
+          "role": "list"
+        }
+      ],
+      "key": "plain",
+      "role": "group"
+    }
+  ],
+  "role": "window"
+}

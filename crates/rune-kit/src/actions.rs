@@ -201,10 +201,23 @@ pub struct Button {
     size: Size,
     icon: Option<&'static Icon>,
     state: State,
-    expanded: bool,
+    expanded: Option<bool>,
     help: Option<String>,
     shortcut: Option<String>,
     acts: Acts,
+}
+
+/// What assistive technology reads for a button besides its label: its tooltip text as the
+/// description, its shortcut, and whether the menu or popover it opens is open.
+fn describe(e: El, help: Option<&str>, shortcut: Option<&str>, expanded: Option<bool>) -> El {
+    let mut e = e.description(help.unwrap_or_default());
+    if let Some(s) = shortcut.map(format_shortcut).filter(|s| !s.is_empty()) {
+        e = e.shortcut_hint(s);
+    }
+    match expanded {
+        Some(open) => e.expanded(open),
+        None => e,
+    }
 }
 
 impl Button {
@@ -216,7 +229,7 @@ impl Button {
             size: Size::Control(ControlSize::Regular),
             icon: None,
             state: State::Rest,
-            expanded: false,
+            expanded: None,
             help: None,
             shortcut: None,
             acts: Acts::default(),
@@ -273,19 +286,20 @@ impl Button {
         }
         self
     }
-    /// The trigger of an open menu or popover (`data-expanded`): ghost variants hold the pressed fill.
+    /// The trigger of a menu or popover (`data-expanded`), open or not: ghost variants hold the
+    /// pressed fill while open, and assistive technology reads it as expanded or collapsed.
     pub fn expanded(mut self, on: bool) -> Self {
-        self.expanded = on;
+        self.expanded = Some(on);
         self
     }
-    /// Tooltip text shown after the hover delay (`El::help`).
+    /// Tooltip text shown after the hover delay (`El::help`), and the accessible description.
     pub fn help(mut self, text: impl Into<String>) -> Self {
         self.help = Some(text.into());
         self
     }
     /// A shortcut hint appended to the button's tooltip (e.g. `"Lock  ⌘L"`), formatted like
-    /// [`MenuItem::shortcut`](crate::MenuItem::shortcut). Accepts display strings (`"⌘L"`) or
-    /// accelerator strings (`"cmd+l"`).
+    /// [`MenuItem::shortcut`](crate::MenuItem::shortcut), and read by assistive technology.
+    /// Accepts display strings (`"⌘L"`) or accelerator strings (`"cmd+l"`).
     pub fn shortcut(mut self, s: impl Into<String>) -> Self {
         self.shortcut = Some(s.into());
         self
@@ -313,7 +327,7 @@ impl Button {
         let mut s = skin(k, self.variant);
         let ghostly =
             matches!(self.variant, ButtonVariant::Ghost | ButtonVariant::GhostMuted | ButtonVariant::GhostFaint);
-        if self.expanded && ghostly && self.state != State::Disabled {
+        if self.expanded == Some(true) && ghostly && self.state != State::Disabled {
             s.fill = s.pressed;
             if self.variant == ButtonVariant::GhostMuted {
                 (s.ink, s.icon) = (k.c.text_base, k.c.icon_base);
@@ -339,22 +353,24 @@ impl Button {
         if let Some(t) = tip {
             e = e.help(t);
         }
+        e = describe(e, self.help.as_deref(), self.shortcut.as_deref(), self.expanded);
         e = paint(k, e, s, self.state, interactive);
+        // The label says what the icon and text inside show: they stay out of the tree.
         if let Some(i) = self.icon {
-            let mut ic = icon(i, icon_size).key("icon").color(icon_c);
+            let mut ic = icon(i, icon_size).key("icon").color(icon_c).a11y_hidden();
             if matches!(self.look, Label::Rolling(_)) { ic = ic.width_leads(); }
             e = e.child(ic);
         }
         e = match self.look {
-            Label::Text => e.child(text(self.label).key("label").font(font).color(ink)),
+            Label::Text => e.child(text(self.label).key("label").font(font).color(ink).a11y_hidden()),
             // The button's edges spring on the label's own curve, so the padding holds while
             // the label grows or shrinks.
             Label::Rolling(key) => e.motion(RollingText::SPRING).width_leads()
-                .child(RollingText::new(key, self.label).font(font).color(ink).build(k)),
-            Label::Custom(f) => e.child(f(font, ink)),
+                .child(RollingText::new(key, self.label).font(font).color(ink).build(k).a11y_hidden()),
+            Label::Custom(f) => e.child(f(font, ink).a11y_hidden()),
         };
         if self.state == State::Disabled { e = e.dim(disabled_alpha); }
-        self.acts.apply(e, enabled)
+        self.acts.apply(e.disabled(!enabled), enabled)
     }
 }
 
@@ -374,7 +390,7 @@ pub struct IconButton {
     variant: IconButtonVariant,
     size: Size,
     state: State,
-    expanded: bool,
+    expanded: Option<bool>,
     label: Option<String>,
     help: Option<String>,
     shortcut: Option<String>,
@@ -388,7 +404,7 @@ impl IconButton {
             variant: IconButtonVariant::Neutral,
             size: Size::Control(ControlSize::Regular),
             state: State::Rest,
-            expanded: false,
+            expanded: None,
             label: None,
             help: None,
             shortcut: None,
@@ -420,17 +436,20 @@ impl IconButton {
         }
         self
     }
+    /// The trigger of a menu or popover, open or not (see [`Button::expanded`]).
     pub fn expanded(mut self, on: bool) -> Self {
-        self.expanded = on;
+        self.expanded = Some(on);
         self
     }
-    /// Accessible name (the web's `aria-label`).
+    /// The accessible name (the web's `aria-label`): what the button does, as "Close" or
+    /// "Add file". An icon says nothing to a screen reader, so give every icon button one,
+    /// here or through [`Self::help`].
     pub fn label(mut self, l: impl Into<String>) -> Self {
         self.label = Some(l.into());
         self
     }
     /// Tooltip text shown after the hover delay (`El::help`). Also supplies the accessible
-    /// label when [`Self::label`] was not set.
+    /// label when [`Self::label`] was not set, and the description when it was.
     pub fn help(mut self, text: impl Into<String>) -> Self {
         self.help = Some(text.into());
         self
@@ -484,7 +503,7 @@ impl IconButton {
         if self.state == State::Pressed && self.variant == IconButtonVariant::GhostMuted {
             s.icon = k.c.icon_base;
         }
-        if self.expanded && matches!(self.variant, IconButtonVariant::Ghost | IconButtonVariant::GhostMuted) {
+        if self.expanded == Some(true) && matches!(self.variant, IconButtonVariant::Ghost | IconButtonVariant::GhostMuted) {
             s.fill = s.pressed;
             s.icon = if self.variant == IconButtonVariant::GhostMuted { k.c.icon_base } else { s.icon };
         }
@@ -493,14 +512,17 @@ impl IconButton {
         let enabled = self.state != State::Disabled;
         let tip = compose_help(self.help.as_deref(), self.label.as_deref(), self.shortcut.as_deref());
         let mut e = row().role("button").size(side, side).center().radius(radius);
+        // A help text that names the button isn't read twice as its description.
+        let description = self.label.is_some().then_some(self.help.as_deref()).flatten();
+        e = describe(e, description, self.shortcut.as_deref(), self.expanded);
         if let Some(l) = self.label.or(self.help) {
             e = e.label(l);
         }
         if let Some(t) = tip {
             e = e.help(t);
         }
-        e = paint(k, e, s, self.state, true).child(icon(self.icon, glyph).key("icon").color(ink));
+        e = paint(k, e, s, self.state, true).child(icon(self.icon, glyph).key("icon").color(ink).a11y_hidden());
         if self.state == State::Disabled { e = e.dim(disabled_alpha); }
-        self.acts.apply(e, enabled)
+        self.acts.apply(e.disabled(!enabled), enabled)
     }
 }

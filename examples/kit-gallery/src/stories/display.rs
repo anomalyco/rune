@@ -298,6 +298,7 @@ pub(super) fn segmented_controlled(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
         .items_start()
         .child(
             SegmentedControl::new(&["List", "Grid", "Board"], Some(sel))
+                .label("View")
                 .on_pick(|s: &mut G, i: usize, _: &mut Tx| {
                     s.pick.insert("seg".into(), i.to_string());
                 })

@@ -1,0 +1,101 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "actions": [
+                "click",
+                "focus"
+              ],
+              "key": "item0",
+              "name": "Light",
+              "position": 1,
+              "role": "radio-button",
+              "states": [
+                "checked"
+              ]
+            },
+            {
+              "actions": [
+                "click",
+                "focus"
+              ],
+              "description": "Easier at night",
+              "key": "item1",
+              "name": "Dark",
+              "position": 2,
+              "role": "radio-button",
+              "states": [
+                "unchecked"
+              ]
+            },
+            {
+              "key": "item2",
+              "name": "Auto",
+              "position": 3,
+              "role": "radio-button",
+              "states": [
+                "disabled",
+                "unchecked"
+              ]
+            }
+          ],
+          "key": "items",
+          "role": "group",
+          "setSize": 3
+        }
+      ],
+      "description": "How windows look",
+      "key": "theme",
+      "name": "Theme",
+      "role": "radio-group"
+    },
+    {
+      "children": [
+        {
+          "actions": [
+            "click",
+            "focus"
+          ],
+          "key": "segment0",
+          "name": "Day",
+          "position": 1,
+          "role": "radio-button",
+          "states": [
+            "checked"
+          ]
+        },
+        {
+          "actions": [
+            "click",
+            "focus"
+          ],
+          "key": "segment1",
+          "name": "Week",
+          "position": 2,
+          "role": "radio-button",
+          "states": [
+            "unchecked"
+          ]
+        },
+        {
+          "key": "segment2",
+          "name": "Month",
+          "position": 3,
+          "role": "radio-button",
+          "states": [
+            "disabled",
+            "unchecked"
+          ]
+        }
+      ],
+      "key": "range",
+      "name": "Range",
+      "role": "radio-group",
+      "setSize": 3
+    }
+  ],
+  "role": "window"
+}

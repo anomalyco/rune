@@ -1,0 +1,64 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "actions": [
+                "click",
+                "focus",
+                "expand"
+              ],
+              "key": "trigger",
+              "name": "General",
+              "role": "button",
+              "states": [
+                "collapsed"
+              ]
+            }
+          ],
+          "key": "item0",
+          "role": "group"
+        },
+        {
+          "children": [
+            {
+              "key": "trigger",
+              "name": "Advanced",
+              "role": "button",
+              "states": [
+                "disabled",
+                "collapsed"
+              ]
+            }
+          ],
+          "key": "item1",
+          "role": "group"
+        }
+      ],
+      "key": "accordion",
+      "role": "group"
+    },
+    {
+      "children": [
+        {
+          "actions": [
+            "click",
+            "focus",
+            "expand"
+          ],
+          "key": "trigger",
+          "name": "Details",
+          "role": "button",
+          "states": [
+            "collapsed"
+          ]
+        }
+      ],
+      "key": "details",
+      "role": "group"
+    }
+  ],
+  "role": "window"
+}

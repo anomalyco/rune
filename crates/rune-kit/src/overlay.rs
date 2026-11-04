@@ -145,6 +145,7 @@ pub struct Popover {
     key: String,
     trigger: Option<El>,
     title: Option<String>,
+    label: Option<String>,
     description: Option<String>,
     body: Vec<El>,
     open: bool,
@@ -161,6 +162,7 @@ impl Popover {
             key: key.into(),
             trigger: None,
             title: None,
+            label: None,
             description: None,
             body: Vec::new(),
             open: false,
@@ -183,6 +185,11 @@ impl Popover {
     }
     pub fn title(mut self, t: impl Into<String>) -> Self {
         self.title = Some(t.into());
+        self
+    }
+    /// The accessible name of a popover without a [`Self::title`] ("Emoji", "Search models").
+    pub fn label(mut self, l: impl Into<String>) -> Self {
+        self.label = Some(l.into());
         self
     }
     pub fn description(mut self, d: impl Into<String>) -> Self {
@@ -215,12 +222,18 @@ impl Popover {
     pub fn build(self, k: &Kit, layer: &mut Vec<El>) -> El {
         let c = &k.c;
         let anchor_key = format!("{}-trigger", self.key);
-        let trigger = row().key(anchor_key.clone()).role("button").children(self.trigger);
+        // The trigger (a button) reads as open or closed; the wrapper only anchors the content.
+        let open = self.open;
+        let trigger = row().key(anchor_key.clone()).children(self.trigger.map(|t| t.expanded(open)));
         if !self.open {
             return trigger;
         }
         let mut content = col().key(format!("{}-content", self.key)).role("dialog")
+            .description(self.description.clone().unwrap_or_default())
             .focus_return(&anchor_key).min_w(200.0).max_w(320.0);
+        if let Some(l) = &self.label {
+            content = content.label(l.clone());
+        }
         if let Some(t) = &self.title {
             let close = IconButton::new(k.glyph.close)
                 .variant(IconButtonVariant::Ghost)
@@ -461,21 +474,33 @@ impl Tooltip {
     /// Builds with `style` instead of a kit's tokens (the appearance is then up to the style).
     pub fn render(self, style: &TooltipStyle, layer: &mut Vec<El>) -> El {
         let anchor_key = format!("{}-trigger", self.key);
-        let trigger = row().key(anchor_key.clone()).children(self.trigger);
         if !self.open {
-            return trigger;
+            return row().key(anchor_key).children(self.trigger);
         }
+        // While it shows, the tooltip's text describes its trigger (ARIA `aria-describedby`).
+        let words: Vec<&str> = self.value.iter().filter_map(|c| match c {
+            Content::Text(s, _) => Some(s.as_str()),
+            Content::El(_) => None,
+        }).collect();
+        let described = words.join(" ");
+        let named = described.clone();
+        let trigger = row().key(anchor_key.clone())
+            .children(self.trigger.map(|t| if described.is_empty() { t } else { t.description(described) }));
         let value = self.value.into_iter().map(|c| match c {
             // Wrapping text may shrink below its one-line width, so it wraps inside the box.
             Content::El(e) if style.max_w.is_some() && e.wraps() => e.shrink(),
             Content::El(e) => e,
             Content::Text(s, look) => {
                 let (font, ink) = look.unwrap_or((style.font, style.ink));
-                let t = text(s).font(font).color(ink);
+                // The tooltip's name reads it.
+                let t = text(s).font(font).color(ink).a11y_hidden();
                 if style.max_w.is_some() { t.wrap().shrink() } else { t }
             }
         });
         let mut body = row().key(format!("{}-tooltip", self.key)).role("tooltip").center_y().gap(6.0).children(value);
+        if !named.is_empty() {
+            body = body.label(named);
+        }
         if let Some(w) = style.max_w {
             body = body.max_w(w);
         }

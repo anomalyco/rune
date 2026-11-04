@@ -208,6 +208,7 @@ impl SidebarHeader {
             .center_y()
             .shrink()
             .child(text(self.title.clone()).font(k.ty.text_xsmall_medium).color(c.text_muted).truncate().shrink());
+        let counted = self.count.as_ref().map(|n| format!("{n} items")).unwrap_or_default();
         if let Some(n) = self.count {
             title = title.child(text(n).key("count").font(k.ty.text_xsmall_medium).color(c.text_faint));
         }
@@ -215,29 +216,27 @@ impl SidebarHeader {
             let glyph = if collapsed { k.glyph.triangle_right } else { k.glyph.triangle_down };
             title = title.child(icon(glyph, 12.0).key("disclosure").color(c.icon_faint));
         }
-        let label = match self.collapsed {
-            Some(true) => format!("{}, collapsed", self.title),
-            Some(false) if self.toggle.is_some() => format!("{}, expanded", self.title),
-            _ => self.title,
-        };
+        // Its title names it, the count describes it, and a reader hears it expanded or collapsed.
         let mut header = row()
             .key("section-header")
-            .label(label)
+            .label(self.title)
+            .description(counted)
             .w_full()
             .h(ROW_HEIGHT)
             .pt(4.0)
             .px(INSET)
             .center_y()
             .radius(k.radius.md)
-            .child(title)
-            .child(el().key("spacer").grow(1.0));
+            .child(title.a11y_hidden())
+            .child(el().key("spacer").grow(1.0).a11y_hidden());
         if let Some(a) = self.action {
             header = header.child(a);
         }
         match self.toggle {
             // Pointer only: in the list's focus group the arrows step through rows, and with
             // selection following focus they would toggle the section as they passed.
-            Some(toggle) => k.interactive(toggle(header)).role("button").hover_motion(Anim::INSTANT, Anim::INSTANT).focusable(false),
+            Some(toggle) => k.interactive(toggle(header)).role("button").expanded(!self.collapsed.unwrap_or(false))
+                .hover_motion(Anim::INSTANT, Anim::INSTANT).focusable(false),
             None => header.role("heading"),
         }
     }
@@ -290,7 +289,8 @@ impl SidebarSection {
     }
 
     pub fn build(self, k: &Kit) -> El {
-        let mut s = col().key(self.key).role("group").w_full().gap(2.0).motion(k.motion.disclosure).child(self.header.build(k));
+        let title = self.header.title.clone();
+        let mut s = col().key(self.key).role("group").label(title).w_full().gap(2.0).motion(k.motion.disclosure).child(self.header.build(k));
         if !self.collapsed {
             s = s.children(self.rows);
         }
@@ -315,6 +315,7 @@ pub enum RowStatus {
 struct Reordering {
     state: Reorder,
     index: usize,
+    count: usize,
     bind: Box<dyn FnOnce(El) -> El>,
 }
 
@@ -496,7 +497,7 @@ impl SidebarRow {
                 }
             })
         });
-        self.reorder = Some(Reordering { state: *state, index, bind });
+        self.reorder = Some(Reordering { state: *state, index, count, bind });
         self
     }
     /// Edits the label in place, in the field bound to `edit` (`access` finds it in the app's
@@ -539,8 +540,17 @@ impl SidebarRow {
             _ => self.label.clone(),
         };
         let focusable = !renaming && !self.select_only;
+        // The row's name and description say what its texts, badge and status mark show.
+        let status_words = match &self.status {
+            Some(RowStatus::Busy) => Some("Working"),
+            Some(RowStatus::Attention) => Some("Needs attention"),
+            Some(RowStatus::Unread) => Some("Unread"),
+            _ => None,
+        };
+        let said: Vec<&str> = [self.detail.as_deref(), self.badge.as_deref(), status_words].into_iter().flatten().collect();
         let mut r = row()
             .label(name)
+            .description(said.join(", "))
             .w_full()
             .h(height)
             .pl(INSET + self.depth as f32 * INDENT)
@@ -561,8 +571,8 @@ impl SidebarRow {
             r = r.fill(c.pressed);
         }
         let lead = match (self.avatar, self.icon) {
-            (Some(a), _) => Some(row().key("avatar").size(16.0, 16.0).center().child(a)),
-            (None, Some(i)) => Some(icon(i, 16.0).key("icon").color(glyph)),
+            (Some(a), _) => Some(row().key("avatar").size(16.0, 16.0).center().child(a).a11y_hidden()),
+            (None, Some(i)) => Some(icon(i, 16.0).key("icon").color(glyph).a11y_hidden()),
             _ => None,
         };
         let has_lead = lead.is_some();
@@ -578,24 +588,25 @@ impl SidebarRow {
                     .color(c.text_base)
                     .caret(c.text_base, k.selection()),
             ),
-            None => text(self.label).key("label").font(font).color(ink).truncate().grow(1.0).shrink(),
+            None => text(self.label).key("label").font(font).color(ink).truncate().grow(1.0).shrink().a11y_hidden(),
         };
         r = match self.subtitle {
             // Two lines: the lead and the label, then the subtitle under the label.
             Some(sub) => {
                 let first = row().key("line1").w_full().gap(6.0).center_y().children(lead).child(label);
-                let second = text(sub).key("subtitle").font(sub_font).color(self.subtitle_color.unwrap_or(c.text_faint)).truncate().w_full();
+                let second = text(sub).key("subtitle").font(sub_font).color(self.subtitle_color.unwrap_or(c.text_faint)).truncate().w_full().a11y_hidden();
                 let second = row().key("line2").w_full().pl(if has_lead { 16.0 + 6.0 } else { 0.0 }).child(second);
                 r.child(col().key("lines").grow(1.0).shrink().min_w(0.0).child(first).child(second))
             }
             None => r.children(lead).child(label),
         };
         if let Some(d) = self.detail {
-            r = r.child(text(d).key("detail").font(k.ty.small).color(c.text_faint));
+            r = r.child(text(d).key("detail").font(k.ty.small).color(c.text_faint).a11y_hidden());
         }
         if let Some(b) = self.badge {
             r = r.child(
                 row()
+                    .a11y_hidden()
                     .key("badge")
                     .h(16.0)
                     .px(5.0)
@@ -618,7 +629,7 @@ impl SidebarRow {
             });
             let mut slot = row().key("status").size(20.0, 20.0).center();
             if let Some(st) = status {
-                let st = row().key("status-mark").size(20.0, 20.0).center().child(st);
+                let st = row().key("status-mark").size(20.0, 20.0).center().child(st).a11y_hidden();
                 slot = slot.child(if self.close.is_some() { st.group_opacity(1.0, 0.0) } else { st });
             }
             if let Some(bind) = self.close {
@@ -633,7 +644,7 @@ impl SidebarRow {
         }
         if let Some(re) = self.reorder {
             let lifted = re.state.dragging() == Some(re.index);
-            r = r.offset(0.0, re.state.shift(re.index));
+            r = r.position_in_set(re.index + 1, re.count).offset(0.0, re.state.shift(re.index));
             if lifted {
                 // Follows the pointer exactly; the rest of the list springs around it.
                 // Opaque, on the window's deep background, so the rows it passes don't show through.

@@ -1,0 +1,74 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "key": "title",
+                          "name": "Settings",
+                          "role": "label"
+                        }
+                      ],
+                      "key": "center",
+                      "role": "group"
+                    },
+                    {
+                      "children": [
+                        {
+                          "actions": [
+                            "focus"
+                          ],
+                          "name": "Back",
+                          "role": "button"
+                        }
+                      ],
+                      "key": "leading",
+                      "role": "group"
+                    },
+                    {
+                      "key": "trailing",
+                      "role": "group"
+                    }
+                  ],
+                  "key": "toolbar",
+                  "name": "Settings",
+                  "role": "toolbar"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "key": "settings",
+                          "role": "group"
+                        }
+                      ],
+                      "key": "main-pane",
+                      "role": "main"
+                    }
+                  ],
+                  "key": "main-row",
+                  "role": "group"
+                }
+              ],
+              "key": "main-column",
+              "role": "group"
+            }
+          ],
+          "key": "split",
+          "role": "group"
+        }
+      ],
+      "key": "shell",
+      "role": "group"
+    }
+  ],
+  "role": "window"
+}

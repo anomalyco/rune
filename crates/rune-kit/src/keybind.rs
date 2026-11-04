@@ -45,6 +45,7 @@ impl Keybind {
                     .radius(2.0)
                     .fill(fill)
                     .child(text(keycap(key)).font(font).color(ink))
+                    .a11y_hidden()
             },
         ))
     }

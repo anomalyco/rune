@@ -323,11 +323,13 @@ fn fnv1a(s: &str) -> u32 {
 
 fn draw_facts(key: &str, rows: &[(String, String)], k: &Kit) -> El {
     let c = &k.c;
-    let mut list = col().key(key).w_full().radius(8.0).fill(c.layer_02).border(1.0, c.border_weak).px(14.0).py(6.0);
+    let mut list = col().key(key).role("list").w_full().radius(8.0).fill(c.layer_02).border(1.0, c.border_weak).px(14.0).py(6.0);
     for (idx, (label, val)) in rows.iter().enumerate() {
         if idx > 0 {
             list = list.child(el().w_full().h(1.0).fill(c.border_weak));
         }
+        // Read as "Label: value", not the upper-cased label a letter at a time.
+        let said = format!("{label}: {}", val.trim().replace(['{', '}'], ""));
         let val_key = format!("v-{:08x}", fnv1a(val));
         let (st, rest) = split_leading_status(val);
         let mut right = row()
@@ -349,13 +351,16 @@ fn draw_facts(key: &str, rows: &[(String, String)], k: &Kit) -> El {
         list = list.child(
             row()
                 .key(format!("fact-{idx}"))
+                .role("listitem")
+                .label(said)
+                .position_in_set(idx + 1, rows.len())
                 .w_full()
                 .py(7.0)
                 .center_y()
                 .gap(16.0)
-                .child(text(label.to_uppercase()).font(CAPS).color(c.text_muted))
+                .child(text(label.to_uppercase()).font(CAPS).color(c.text_muted).a11y_hidden())
                 .child(spacer())
-                .child(right),
+                .child(right.a11y_hidden()),
         );
     }
     list
@@ -368,6 +373,8 @@ fn draw_compare(key: &str, sides: &[(String, String)], k: &Kit) -> El {
         let accent = if idx == 0 { c.danger.fg } else { c.success.fg };
         let pane = col()
             .key(format!("side-{idx}"))
+            .role("group")
+            .label(label.clone())
             .grow(1.0)
             .shrink()
             .padding(12.0)
@@ -380,7 +387,8 @@ fn draw_compare(key: &str, sides: &[(String, String)], k: &Kit) -> El {
                     .gap(6.0)
                     .center_y()
                     .child(el().w(6.0).h(6.0).radius(3.0).fill(accent))
-                    .child(text(label.to_uppercase()).font(CAPS).color(accent)),
+                    .child(text(label.to_uppercase()).font(CAPS).color(accent))
+                    .a11y_hidden(),
             )
             .child(text(body).wrap().font(CELL).color(c.text_base));
         grid = grid.child(pane);
@@ -394,15 +402,18 @@ fn draw_steps(key: &str, steps: &[StepRow], k: &Kit) -> El {
         .iter()
         .filter(|s| matches!(s.status.to_ascii_lowercase().as_str(), "built" | "done" | "shipped" | "merged"))
         .count();
+    let summary = format!("{built} of {} built", steps.len());
     let mut wrap = col()
         .key(key)
+        .role("list")
+        .label(summary.clone())
         .w_full()
         .padding(12.0)
         .gap(8.0)
         .radius(8.0)
         .fill(c.layer_02)
         .border(1.0, c.border_weak)
-        .child(text(format!("{built} of {} built", steps.len())).font(CAPS).color(c.text_muted));
+        .child(text(summary).font(CAPS).color(c.text_muted).a11y_hidden());
     for (idx, step) in steps.iter().enumerate() {
         let tone = status_color(&step.status, k);
         let done = matches!(step.status.to_ascii_lowercase().as_str(), "built" | "done" | "shipped" | "merged");
@@ -411,15 +422,23 @@ fn draw_steps(key: &str, steps: &[StepRow], k: &Kit) -> El {
         } else {
             el().w(9.0).h(9.0).radius(4.5).border(1.5, tone)
         };
+        // The dot's colour says the status; the row says it in words.
+        let said = match &step.note {
+            Some(note) => format!("{}, {}, {note}", step.title, step.status),
+            None => format!("{}, {}", step.title, step.status),
+        };
         let mut r = row()
             .key(format!("step-{idx}"))
+            .role("listitem")
+            .label(said)
+            .position_in_set(idx + 1, steps.len())
             .w_full()
             .gap(9.0)
             .center_y()
             .child(dot)
-            .child(text(&step.title).font(TextStyle::new(13.5, 540.0)).color(c.text_base));
+            .child(text(&step.title).font(TextStyle::new(13.5, 540.0)).color(c.text_base).a11y_hidden());
         if let Some(note) = &step.note {
-            r = r.child(spacer()).child(text(note).font(k.ty.ui).color(c.text_muted));
+            r = r.child(spacer()).child(text(note).font(k.ty.ui).color(c.text_muted).a11y_hidden());
         }
         wrap = wrap.child(r);
     }
@@ -467,22 +486,26 @@ fn draw_size(key: &str, size: &SizeBar, k: &Kit) -> El {
         legend = legend.child(spacer()).child(text(files).font(CAPS).color(c.text_muted));
     }
 
+    // The bar's blocks draw the legend's shares; the legend reads them.
     col()
         .key(key)
+        .role("group")
+        .label("Change size")
         .w_full()
         .padding(12.0)
         .gap(8.0)
         .radius(8.0)
         .fill(c.layer_02)
         .border(1.0, c.border_weak)
-        .child(blocks)
+        .child(blocks.a11y_hidden())
         .child(legend)
 }
 
 fn draw_code(key: &str, title: Option<&str>, marks: &[RangeInclusive<usize>], lines: &[String], k: &Kit) -> El {
     let c = &k.c;
-    let mut card = col().key(key).w_full().radius(8.0).fill(c.bg_deep).border(1.0, c.border_weak);
+    let mut card = col().key(key).role("code").w_full().radius(8.0).fill(c.bg_deep).border(1.0, c.border_weak);
     if let Some(title) = title {
+        card = card.label(title);
         card = card
             .child(
                 row().w_full().px(12.0).py(7.0).fill(c.layer_02).child(text(title).font(k.ty.ui).color(c.text_muted)),
@@ -514,7 +537,7 @@ fn draw_code(key: &str, title: Option<&str>, marks: &[RangeInclusive<usize>], li
                 .center_y()
                 .fill(bg)
                 .child(el().w(2.5).h(15.0).radius(1.0).fill(bar))
-                .child(text(format!("{line_no:>2}")).font(CODE).color(c.text_muted))
+                .child(text(format!("{line_no:>2}")).font(CODE).color(c.text_muted).a11y_hidden())
                 .child(text(raw).font(CODE).color(ink)),
         );
     }
@@ -525,11 +548,13 @@ fn draw_callout(key: &str, label: Option<&str>, body: &str, k: &Kit) -> El {
     let c = &k.c;
     let mut inner = col().grow(1.0).shrink().gap(4.0);
     if let Some(label) = label {
-        inner = inner.child(text(label.to_uppercase()).font(CAPS).color(c.info.fg));
+        inner = inner.child(text(label.to_uppercase()).font(CAPS).color(c.info.fg).a11y_hidden());
     }
     inner = inner.child(Markdown::new(body).build(k));
     row()
         .key(key)
+        .role("note")
+        .label(label.unwrap_or("Note"))
         .w_full()
         .padding(10.0)
         .gap(10.0)

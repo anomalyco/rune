@@ -1,0 +1,158 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "actions": [
+                "click",
+                "focus",
+                "collapse"
+              ],
+              "key": "model-value-trigger",
+              "name": "Model",
+              "role": "combo-box",
+              "states": [
+                "expanded"
+              ],
+              "value": "Fast"
+            }
+          ],
+          "key": "model-trigger",
+          "role": "group"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "actions": [
+                                "click",
+                                "focus",
+                                "set-value",
+                                "replace-selected-text",
+                                "set-text-selection"
+                              ],
+                              "activeDescendant": "model-option-fast",
+                              "key": "input",
+                              "name": "Search Model",
+                              "placeholder": "Search",
+                              "role": "text-input",
+                              "states": [
+                                "focused"
+                              ],
+                              "value": ""
+                            }
+                          ],
+                          "key": "value",
+                          "role": "group"
+                        }
+                      ],
+                      "key": "search",
+                      "role": "group"
+                    }
+                  ],
+                  "key": "header",
+                  "role": "group"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "actions": [
+                                "scroll-up",
+                                "scroll-down",
+                                "set-scroll-offset"
+                              ],
+                              "children": [
+                                {
+                                  "actions": [
+                                    "scroll-into-view"
+                                  ],
+                                  "children": [
+                                    {
+                                      "actions": [
+                                        "click",
+                                        "scroll-into-view"
+                                      ],
+                                      "key": "model-option-fast",
+                                      "name": "Fast",
+                                      "position": 1,
+                                      "role": "list-box-option",
+                                      "states": [
+                                        "selected"
+                                      ]
+                                    },
+                                    {
+                                      "actions": [
+                                        "click",
+                                        "scroll-into-view"
+                                      ],
+                                      "key": "model-option-smart",
+                                      "name": "Smart",
+                                      "position": 2,
+                                      "role": "list-box-option"
+                                    },
+                                    {
+                                      "actions": [
+                                        "scroll-into-view"
+                                      ],
+                                      "key": "model-option-late",
+                                      "name": "Retired model",
+                                      "position": 3,
+                                      "role": "list-box-option",
+                                      "states": [
+                                        "disabled"
+                                      ]
+                                    }
+                                  ],
+                                  "key": "rows",
+                                  "role": "group",
+                                  "setSize": 3
+                                }
+                              ],
+                              "key": "viewport",
+                              "name": "Model",
+                              "role": "list-box",
+                              "states": [
+                                "clips"
+                              ]
+                            }
+                          ],
+                          "key": "model-scroll-area",
+                          "role": "group"
+                        }
+                      ],
+                      "key": "list",
+                      "role": "group"
+                    }
+                  ],
+                  "key": "results",
+                  "role": "group"
+                }
+              ],
+              "key": "body",
+              "role": "group"
+            }
+          ],
+          "key": "model-content",
+          "name": "Model",
+          "role": "dialog"
+        }
+      ],
+      "key": "kit-root",
+      "role": "group"
+    }
+  ],
+  "role": "window"
+}

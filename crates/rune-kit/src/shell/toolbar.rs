@@ -64,6 +64,9 @@ impl Toolbar {
         let pl = self.pad.unwrap_or(PAD);
         let mut band =
             row().key("toolbar").role("toolbar").w_full().h(TOOLBAR_HEIGHT).pl(pl).pr(PAD).gap(8.0).center_y().window_drag();
+        if let Some(t) = &self.title {
+            band = band.label(t.clone());
+        }
         let center = match (self.center, self.title) {
             (Some(e), _) => Some(e),
             (None, Some(t)) => Some(text(t).key("title").font(k.ty.ui_medium).color(c.text_base).truncate()),
@@ -80,7 +83,7 @@ impl Toolbar {
             // The leading slot gives way first, so a long title truncates instead of pushing the
             // trailing controls off the band.
             .child(row().key("leading").gap(4.0).center_y().shrink().min_w(0.0).children(self.leading))
-            .child(row().key("spacer").grow(1.0))
+            .child(row().key("spacer").grow(1.0).a11y_hidden())
             .child(row().key("trailing").gap(4.0).center_y().children(self.trailing));
         if let Some(m) = self.material {
             band = band.system_material(m).fill(c.bg_base);

@@ -1,0 +1,254 @@
+{
+  "children": [
+    {
+      "actions": [
+        "focus"
+      ],
+      "activeDescendant": "f1",
+      "children": [
+        {
+          "children": [
+            {
+              "actions": [
+                "click"
+              ],
+              "children": [
+                {
+                  "key": "resize",
+                  "name": "Resize Name",
+                  "role": "splitter"
+                }
+              ],
+              "key": "name",
+              "name": "Name",
+              "role": "column-header"
+            },
+            {
+              "key": "size",
+              "name": "Size",
+              "role": "column-header"
+            }
+          ],
+          "key": "header",
+          "name": "Name Size",
+          "role": "row"
+        },
+        {
+          "actions": [
+            "scroll-up",
+            "scroll-down",
+            "set-scroll-offset"
+          ],
+          "children": [
+            {
+              "actions": [
+                "scroll-into-view"
+              ],
+              "children": [
+                {
+                  "actions": [
+                    "click",
+                    "scroll-into-view"
+                  ],
+                  "children": [
+                    {
+                      "actions": [
+                        "scroll-into-view"
+                      ],
+                      "children": [
+                        {
+                          "actions": [
+                            "scroll-into-view"
+                          ],
+                          "name": "alpha.rs",
+                          "role": "label"
+                        }
+                      ],
+                      "key": "name",
+                      "name": "alpha.rs",
+                      "role": "grid-cell"
+                    },
+                    {
+                      "actions": [
+                        "scroll-into-view"
+                      ],
+                      "children": [
+                        {
+                          "actions": [
+                            "scroll-into-view"
+                          ],
+                          "name": "1 KB",
+                          "role": "label"
+                        }
+                      ],
+                      "key": "size",
+                      "name": "1 KB",
+                      "role": "grid-cell"
+                    }
+                  ],
+                  "key": "f0",
+                  "name": "alpha.rs 1 KB",
+                  "position": 1,
+                  "role": "row"
+                },
+                {
+                  "actions": [
+                    "click",
+                    "scroll-into-view"
+                  ],
+                  "children": [
+                    {
+                      "actions": [
+                        "scroll-into-view"
+                      ],
+                      "children": [
+                        {
+                          "actions": [
+                            "scroll-into-view"
+                          ],
+                          "name": "beta.rs",
+                          "role": "label"
+                        }
+                      ],
+                      "key": "name",
+                      "name": "beta.rs",
+                      "role": "grid-cell"
+                    },
+                    {
+                      "actions": [
+                        "scroll-into-view"
+                      ],
+                      "children": [
+                        {
+                          "actions": [
+                            "scroll-into-view"
+                          ],
+                          "name": "2 KB",
+                          "role": "label"
+                        }
+                      ],
+                      "key": "size",
+                      "name": "2 KB",
+                      "role": "grid-cell"
+                    }
+                  ],
+                  "key": "f1",
+                  "name": "beta.rs 2 KB",
+                  "position": 2,
+                  "role": "row",
+                  "states": [
+                    "selected"
+                  ]
+                },
+                {
+                  "actions": [
+                    "click",
+                    "scroll-into-view"
+                  ],
+                  "children": [
+                    {
+                      "actions": [
+                        "scroll-into-view"
+                      ],
+                      "children": [
+                        {
+                          "actions": [
+                            "scroll-into-view"
+                          ],
+                          "name": "gamma.rs",
+                          "role": "label"
+                        }
+                      ],
+                      "key": "name",
+                      "name": "gamma.rs",
+                      "role": "grid-cell"
+                    },
+                    {
+                      "actions": [
+                        "scroll-into-view"
+                      ],
+                      "children": [
+                        {
+                          "actions": [
+                            "scroll-into-view"
+                          ],
+                          "name": "3 KB",
+                          "role": "label"
+                        }
+                      ],
+                      "key": "size",
+                      "name": "3 KB",
+                      "role": "grid-cell"
+                    }
+                  ],
+                  "key": "f2",
+                  "name": "gamma.rs 3 KB",
+                  "position": 3,
+                  "role": "row"
+                },
+                {
+                  "actions": [
+                    "click",
+                    "scroll-into-view"
+                  ],
+                  "children": [
+                    {
+                      "actions": [
+                        "scroll-into-view"
+                      ],
+                      "children": [
+                        {
+                          "actions": [
+                            "scroll-into-view"
+                          ],
+                          "name": "delta.rs",
+                          "role": "label"
+                        }
+                      ],
+                      "key": "name",
+                      "name": "delta.rs",
+                      "role": "grid-cell"
+                    },
+                    {
+                      "actions": [
+                        "scroll-into-view"
+                      ],
+                      "children": [
+                        {
+                          "actions": [
+                            "scroll-into-view"
+                          ],
+                          "name": "4 KB",
+                          "role": "label"
+                        }
+                      ],
+                      "key": "size",
+                      "name": "4 KB",
+                      "role": "grid-cell"
+                    }
+                  ],
+                  "key": "f3",
+                  "name": "delta.rs 4 KB",
+                  "position": 4,
+                  "role": "row"
+                }
+              ],
+              "key": "rows",
+              "role": "group",
+              "setSize": 4
+            }
+          ],
+          "key": "viewport",
+          "role": "scroll-view",
+          "states": [
+            "clips"
+          ]
+        }
+      ],
+      "key": "table",
+      "name": "Files",
+      "role": "grid"
+    }
+  ],
+  "role": "window"
+}

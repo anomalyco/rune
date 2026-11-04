@@ -210,7 +210,9 @@ impl RollingText {
                     .font(font)
                     .advance_in(&run, at)
                     .color(color)
-                    .motion(spring),
+                    .motion(spring)
+                    // The row's label reads the whole text; a reader never hears it a glyph at a time.
+                    .a11y_hidden(),
             )
             .transition(tr));
         }

@@ -1,0 +1,92 @@
+{
+  "children": [
+    {
+      "actions": [
+        "focus"
+      ],
+      "activeDescendant": "src",
+      "children": [
+        {
+          "actions": [
+            "scroll-up",
+            "scroll-down",
+            "set-scroll-offset"
+          ],
+          "children": [
+            {
+              "actions": [
+                "scroll-into-view"
+              ],
+              "children": [
+                {
+                  "actions": [
+                    "click",
+                    "collapse",
+                    "scroll-into-view"
+                  ],
+                  "key": "src",
+                  "level": 1,
+                  "name": "src",
+                  "position": 1,
+                  "role": "tree-item",
+                  "states": [
+                    "expanded",
+                    "selected"
+                  ]
+                },
+                {
+                  "actions": [
+                    "click",
+                    "scroll-into-view"
+                  ],
+                  "description": "3 added, 1 removed, M",
+                  "key": "src/lib.rs",
+                  "level": 2,
+                  "name": "lib.rs",
+                  "position": 2,
+                  "role": "tree-item"
+                },
+                {
+                  "actions": [
+                    "click",
+                    "scroll-into-view"
+                  ],
+                  "description": "3 added, 1 removed, M",
+                  "key": "src/main.rs",
+                  "level": 2,
+                  "name": "main.rs",
+                  "position": 3,
+                  "role": "tree-item"
+                },
+                {
+                  "actions": [
+                    "click",
+                    "scroll-into-view"
+                  ],
+                  "description": "3 added, 1 removed, M",
+                  "key": "README.md",
+                  "level": 1,
+                  "name": "README.md",
+                  "position": 4,
+                  "role": "tree-item"
+                }
+              ],
+              "key": "rows",
+              "role": "group",
+              "setSize": 4
+            }
+          ],
+          "key": "viewport",
+          "role": "scroll-view",
+          "states": [
+            "clips"
+          ]
+        }
+      ],
+      "key": "files",
+      "name": "Files",
+      "role": "tree"
+    }
+  ],
+  "role": "window"
+}

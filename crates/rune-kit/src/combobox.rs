@@ -89,6 +89,7 @@ pub struct Combobox<S> {
     trigger: Option<El>,
     disabled: bool,
     animate_filtering: bool,
+    label: Option<String>,
 }
 impl<S: 'static> Combobox<S> {
     pub fn new(key: impl Into<String>, state: &ComboboxState, options: &[ComboboxOption],
@@ -96,8 +97,11 @@ impl<S: 'static> Combobox<S> {
         Self { key: key.into(), state: state.clone(), options: Rc::new(options.to_vec()), access: Rc::new(access),
             choose: None, current: None, placeholder: String::new(), search_placeholder: "Search".into(),
             empty: "No results".into(), width: 280.0, max_height: 192.0, placement: Placement::BottomStart,
-            trigger: None, disabled: false, animate_filtering: false }
+            trigger: None, disabled: false, animate_filtering: false, label: None }
     }
+    /// The accessible name: what the choice is for ("Model"). The chosen option is read as its
+    /// value; without it the placeholder names the field.
+    pub fn label(mut self, text: impl Into<String>) -> Self { self.label = Some(text.into()); self }
     pub fn current(mut self, id: Option<&str>) -> Self { self.current = id.map(str::to_owned); self }
     pub fn placeholder(mut self, text: impl Into<String>) -> Self { self.placeholder = text.into(); self }
     pub fn search_placeholder(mut self, text: impl Into<String>) -> Self { self.search_placeholder = text.into(); self }
@@ -125,10 +129,11 @@ impl<S: 'static> Combobox<S> {
         let current = self.current.clone();
         let key = self.key.clone();
         let open_key = key.clone();
+        let name = self.label.clone().unwrap_or_else(|| self.placeholder.clone());
         let mut trigger = match self.trigger {
             Some(trigger) => trigger,
             None => Select::new::<&str>(format!("{}-value", self.key), &[])
-                .current(selected.map(|o| o.label.as_str())).placeholder(self.placeholder)
+                .current(selected.map(|o| o.label.as_str())).placeholder(self.placeholder).label(name.clone())
                 .appearance(SelectAppearance::Field).width(self.width).disabled(self.disabled)
                 .trigger(k),
         };
@@ -143,7 +148,7 @@ impl<S: 'static> Combobox<S> {
                 if state.open && let Some(id) = &current { tx.scroll_into_view(format!("{open_key}-option-{id}")); }
             });
         }
-        let mut popover = Popover::new(&self.key).trigger(trigger).placement(self.placement).padding(0.0)
+        let mut popover = Popover::new(&self.key).trigger(trigger).label(name.clone()).placement(self.placement).padding(0.0)
             .open(self.state.open && !self.disabled);
         let access = self.access.clone();
         popover = popover.on_close(move |s: &mut S| access(s).close());
@@ -161,7 +166,8 @@ impl<S: 'static> Combobox<S> {
         // The search field sits borderless over a divider: the open popover is its frame, and the
         // caret shows its focus.
         let mut field = TextInput::new(&self.state.search).plain().leading_icon(k.glyph.search).height(36.0)
-            .width(None).placeholder(self.search_placeholder);
+            .width(None).placeholder(self.search_placeholder).label(if name.is_empty() { "Search".to_owned() } else { format!("Search {name}") })
+            .active_descendant(active.map(|i| format!("{}-option-{}", self.key, self.options[i].id)));
         // Without it, an edit's commit is instant: the filtered rows and the height land with the text.
         if self.animate_filtering { field = field.animate_edit_layout(); }
         let field = field
@@ -248,6 +254,7 @@ impl<S: 'static> Combobox<S> {
         let choose_access = self.access;
         let choose = self.choose;
         let list = PopupList::new(&self.key, "")
+            .label(name)
             .max_height(self.max_height)
             .items(items)
             .active(active_pos)
@@ -269,7 +276,7 @@ impl<S: 'static> Combobox<S> {
         let results = col().key("results").w_full().padding(4.0).shrink().min_h(0.0).child(list);
         let body = col().w(self.width).shrink().min_h(0.0)
             .child(row().key("header").w_full().px(4.0).child(field))
-            .child(el().key("divider").w_full().h(1.0).fill(k.c.border_weak))
+            .child(el().key("divider").w_full().h(1.0).fill(k.c.border_weak).a11y_hidden())
             .child(results);
         popover.child(body).build(k, layer)
     }

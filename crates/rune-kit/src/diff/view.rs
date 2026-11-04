@@ -505,7 +505,7 @@ impl<S: 'static> View<S> {
     }
 
     fn bar(&self, kind: LineKind) -> El {
-        let b = col().key("bar").w(BAR).self_stretch();
+        let b = col().key("bar").w(BAR).self_stretch().a11y_hidden();
         match self.look.tints(kind) {
             Some(t) => b.fill(t.bar),
             None => b,
@@ -518,7 +518,7 @@ impl<S: 'static> View<S> {
     fn number(&self, st: &DiffState, i: usize, f: usize, n: Option<u32>, side: Side, kind: LineKind, selected: bool, digits: u32) -> El {
         let l = &self.look;
         let unified = st.mode() == DiffMode::Unified;
-        let mut c = row().w(l.number_w(digits)).min_h(LINE_H).self_stretch().px(8.0).justify_end().items_start();
+        let mut c = row().w(l.number_w(digits)).min_h(LINE_H).self_stretch().px(8.0).justify_end().items_start().a11y_hidden();
         if !unified {
             c = c.fill(l.gutter_fill(kind, selected));
         }
@@ -724,7 +724,7 @@ impl<S: 'static> View<S> {
             .hover(l.hover)
             .cursor(Cursor::Pointer)
             .role("button")
-            .label(if collapsed { "Expand file" } else { "Collapse file" })
+            .label(if collapsed { "Expand file" } else { "Collapse file" }).expanded(!collapsed)
             .child(icon(if collapsed { l.triangle_right } else { l.triangle_down }, 16.0).color(l.muted))
             .on_press_tx(move |s: &mut S, tx| {
                 let st = get(s);
@@ -758,7 +758,7 @@ impl<S: 'static> View<S> {
         {
             inner = inner.child(text(format!("{a} → {b}")).font(l.small).color(l.faint).key("mode"));
         }
-        inner = inner.child(row().key("space").grow(1.0));
+        inner = inner.child(row().key("space").grow(1.0).a11y_hidden());
         let (adds, dels) = (file.additions(), file.deletions());
         if adds > 0 {
             inner = inner.child(text(format!("+{adds}")).font(l.small).color(l.add.count).key("adds"));
@@ -774,7 +774,7 @@ impl<S: 'static> View<S> {
             label.push_str(&format!(", renamed from {a}"));
         }
         label.push_str(&format!(", {adds} added, {dels} removed"));
-        let line = |key: &'static str, c: Color| col().key(key).w_full().h(1.0).fill(c);
+        let line = |key: &'static str, c: Color| col().key(key).w_full().h(1.0).fill(c).a11y_hidden();
         let mut h = col().w_full().h(HEADER_H).fill(l.header_bg).role("heading").label(label);
         // In the list, as wide as the view and held to its left edge while the code scrolls
         // sideways, so the counts and actions stay in sight.

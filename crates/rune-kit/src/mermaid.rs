@@ -40,7 +40,7 @@ pub(crate) fn diagram(src: &str, paint: &DiagramPaint, streaming: bool, open: bo
         (true, true) => rune_mermaid::render_streaming,
         (true, false) => rune_mermaid::render_streamed,
     };
-    render(
+    let card = render(
         src,
         &style(paint),
         match (paint.hover.a > 0.0, paint.hover_neighbours) {
@@ -49,7 +49,34 @@ pub(crate) fn diagram(src: &str, paint: &DiagramPaint, streaming: bool, open: bo
             (true, true) => Hover::Neighbours,
         },
         paint.hover,
-    )
+    )?;
+    // A drawing says nothing to a screen reader: it reads the diagram's kind, then its source.
+    Some(card.role("figure").label(kind(src)).description(src.trim()))
+}
+
+/// What a diagram's first word says it is, as a reader names it.
+fn kind(src: &str) -> &'static str {
+    let first = src.split_whitespace().find(|w| !w.starts_with("%%")).unwrap_or("");
+    match first.trim_end_matches("-beta").trim_end_matches("-v2") {
+        "graph" | "flowchart" => "Flowchart",
+        "sequenceDiagram" => "Sequence diagram",
+        "stateDiagram" => "State diagram",
+        "classDiagram" => "Class diagram",
+        "erDiagram" => "Entity relationship diagram",
+        "gantt" => "Gantt chart",
+        "pie" => "Pie chart",
+        "mindmap" => "Mind map",
+        "timeline" => "Timeline",
+        "journey" => "User journey",
+        "gitGraph" => "Git graph",
+        "quadrantChart" => "Quadrant chart",
+        "xychart" => "XY chart",
+        "sankey" => "Sankey diagram",
+        "block" => "Block diagram",
+        "requirementDiagram" => "Requirement diagram",
+        c if c.starts_with("C4") => "C4 diagram",
+        _ => "Diagram",
+    }
 }
 
 /// `paint` as `rune_mermaid`'s style.

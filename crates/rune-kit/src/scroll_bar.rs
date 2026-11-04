@@ -103,6 +103,8 @@ pub fn scroll_bar(k: &Kit, area: &str, key: &str, viewport: El) -> El {
                 .absolute(0.0, 0.0)
                 .live_rect(&track)
                 .on_drag_any(drag)
+                // The scroll view it drags already scrolls for assistive technology.
+                .a11y_hidden()
                 .child(el().key("thumb").absolute(0.0, 0.0).live_rect(&bar).radius(THUMB / 2.0).fill(k.c.border_base)),
         )
 }

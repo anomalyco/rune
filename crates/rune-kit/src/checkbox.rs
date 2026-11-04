@@ -94,10 +94,17 @@ impl Checkbox {
         if self.state == State::Rest {
             control = control.hover(c.surface_hover);
         }
-        let mut root = row().role("checkbox").gap(12.0).center_y().child(control.focus_ring(1.0, 0.0, c.border_active));
+        let disabled = self.state == State::Disabled;
+        let mut root = row().role("checkbox").gap(12.0).center_y()
+            .child(control.focus_ring(1.0, 0.0, c.border_active).a11y_hidden());
+        root = if self.indeterminate { root.checked_mixed() } else { root.checked(self.checked) };
+        if let Some(d) = &self.description {
+            root = root.description(d.clone());
+        }
         if let Some(l) = &self.label {
             root = root.label(l.clone());
-            let mut content = col().key("content");
+            // The label and description above say it.
+            let mut content = col().key("content").a11y_hidden();
             if !self.hide_label {
                 content = content.child(text(l.clone()).key("label").font(k.ty.text_small.lh(24.0)).color(c.std_text));
             }
@@ -107,6 +114,6 @@ impl Checkbox {
             }
             root = root.child(content);
         }
-        self.acts.apply(root.focusable(self.state != State::Disabled), self.state != State::Disabled)
+        self.acts.apply(root.focusable(!disabled).disabled(disabled), !disabled)
     }
 }

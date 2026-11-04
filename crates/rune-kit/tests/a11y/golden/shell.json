@@ -1,0 +1,272 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "key": "sidebar-titlebar",
+                      "role": "group"
+                    },
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "actions": [
+                                "scroll-up",
+                                "scroll-down",
+                                "set-scroll-offset"
+                              ],
+                              "children": [
+                                {
+                                  "actions": [
+                                    "scroll-into-view"
+                                  ],
+                                  "children": [
+                                    {
+                                      "actions": [
+                                        "scroll-into-view"
+                                      ],
+                                      "children": [
+                                        {
+                                          "actions": [
+                                            "click",
+                                            "collapse",
+                                            "scroll-into-view"
+                                          ],
+                                          "description": "3 items",
+                                          "key": "section-header",
+                                          "name": "Today",
+                                          "role": "button",
+                                          "states": [
+                                            "expanded"
+                                          ]
+                                        },
+                                        {
+                                          "actions": [
+                                            "click",
+                                            "focus",
+                                            "scroll-into-view"
+                                          ],
+                                          "description": "2m, 3",
+                                          "key": "row0",
+                                          "name": "Alpha",
+                                          "role": "list-item",
+                                          "states": [
+                                            "unselected"
+                                          ]
+                                        },
+                                        {
+                                          "actions": [
+                                            "click",
+                                            "focus",
+                                            "scroll-into-view"
+                                          ],
+                                          "children": [
+                                            {
+                                              "actions": [
+                                                "scroll-into-view"
+                                              ],
+                                              "children": [
+                                                {
+                                                  "actions": [
+                                                    "scroll-into-view"
+                                                  ],
+                                                  "key": "line1",
+                                                  "role": "group"
+                                                },
+                                                {
+                                                  "actions": [
+                                                    "scroll-into-view"
+                                                  ],
+                                                  "key": "line2",
+                                                  "role": "group"
+                                                }
+                                              ],
+                                              "key": "lines",
+                                              "role": "group"
+                                            },
+                                            {
+                                              "actions": [
+                                                "scroll-into-view"
+                                              ],
+                                              "key": "status",
+                                              "role": "group"
+                                            }
+                                          ],
+                                          "description": "Working",
+                                          "key": "row1",
+                                          "name": "Bravo, bravo@example.com",
+                                          "role": "list-item",
+                                          "states": [
+                                            "selected"
+                                          ]
+                                        },
+                                        {
+                                          "actions": [
+                                            "click",
+                                            "focus",
+                                            "scroll-into-view"
+                                          ],
+                                          "children": [
+                                            {
+                                              "actions": [
+                                                "scroll-into-view"
+                                              ],
+                                              "key": "status",
+                                              "role": "group"
+                                            }
+                                          ],
+                                          "description": "Unread",
+                                          "key": "row2",
+                                          "name": "Charlie",
+                                          "role": "list-item",
+                                          "states": [
+                                            "unselected"
+                                          ]
+                                        }
+                                      ],
+                                      "key": "Today",
+                                      "name": "Today",
+                                      "role": "group"
+                                    }
+                                  ],
+                                  "key": "sidebar-list",
+                                  "name": "Sessions",
+                                  "role": "list"
+                                }
+                              ],
+                              "key": "sidebar-scroll",
+                              "role": "scroll-view",
+                              "states": [
+                                "clips"
+                              ]
+                            }
+                          ],
+                          "key": "sidebar",
+                          "role": "group"
+                        }
+                      ],
+                      "key": "pane-body",
+                      "role": "group"
+                    }
+                  ],
+                  "key": "pane-content",
+                  "role": "group"
+                },
+                {
+                  "actions": [
+                    "increment",
+                    "decrement"
+                  ],
+                  "key": "sidebar-grip",
+                  "name": "Resize sidebar",
+                  "range": [
+                    240.0,
+                    180.0,
+                    420.0,
+                    8.0
+                  ],
+                  "role": "splitter"
+                }
+              ],
+              "key": "sidebar-pane",
+              "name": "Sidebar",
+              "role": "region"
+            },
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "key": "title",
+                          "name": "Project",
+                          "role": "label"
+                        }
+                      ],
+                      "key": "center",
+                      "role": "group"
+                    },
+                    {
+                      "key": "leading",
+                      "role": "group"
+                    },
+                    {
+                      "children": [
+                        {
+                          "actions": [
+                            "focus"
+                          ],
+                          "name": "Share",
+                          "role": "button"
+                        }
+                      ],
+                      "key": "trailing",
+                      "role": "group"
+                    }
+                  ],
+                  "key": "toolbar",
+                  "name": "Project",
+                  "role": "toolbar"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "actions": [
+                                "focus"
+                              ],
+                              "name": "Run",
+                              "role": "button"
+                            }
+                          ],
+                          "key": "body",
+                          "role": "group"
+                        }
+                      ],
+                      "key": "main-pane",
+                      "role": "main"
+                    }
+                  ],
+                  "key": "main-row",
+                  "role": "group"
+                }
+              ],
+              "key": "main-column",
+              "role": "group"
+            }
+          ],
+          "key": "split",
+          "role": "group"
+        },
+        {
+          "actions": [
+            "click",
+            "focus",
+            "collapse"
+          ],
+          "description": "Hide sidebar",
+          "key": "sidebar-toggle",
+          "name": "Hide sidebar",
+          "role": "button",
+          "states": [
+            "expanded"
+          ]
+        }
+      ],
+      "key": "shell",
+      "role": "group"
+    }
+  ],
+  "role": "window"
+}

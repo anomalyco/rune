@@ -38,7 +38,7 @@ impl Spinner {
             }
             let a = if outer { 0.15 } else { 0.4 };
             e = e.child(
-                el().key(format!("sq{i}")).size(3.0 * u, 3.0 * u).absolute(x * u, y * u).radius(u).fill(ink)
+                el().key(format!("sq{i}")).size(3.0 * u, 3.0 * u).absolute(x * u, y * u).radius(u).fill(ink).a11y_hidden()
                     // Web chooses random 1–2 s periods and 0–1.5 s delays at module load.
                     // A fixed per-cell seed preserves that timing range in replays/goldens.
                     .looping(rune_motion::LoopSpec::opacity(1.0 + ((i * 37) % 101) as f64 / 100.0,
@@ -96,6 +96,17 @@ impl Default for Loader {
     }
 }
 
+/// A progress indicator's value for assistive technology: the fraction done, read as a percentage.
+fn report(e: El, value: Option<f32>) -> El {
+    match value {
+        Some(v) => {
+            let v = v.clamp(0.0, 1.0);
+            e.range_value((f64::from(v) * 1e4).round() / 1e4, 0.0, 1.0).a11y_value(format!("{}%", (v * 100.0).round()))
+        }
+        None => e,
+    }
+}
+
 /// A linear progress bar with an optional label and value label (`Progress`).
 pub struct Progress {
     label: Option<String>,
@@ -131,8 +142,9 @@ impl Progress {
                     text(format!("{}%", (v * 100.0).round())).key("value").font(k.ty.text_small).color(c.text_weak),
                 );
             }
-            root = root.child(header);
+            root = root.child(header.a11y_hidden());
         }
+        root = report(root, self.value);
         let mut track = row()
             .key("track")
             .w_full()
@@ -147,7 +159,7 @@ impl Progress {
             // A quarter-width segment crosses the whole track, then wraps from the left.
             None => fill.w_frac(0.25).looping(rune_motion::LoopSpec::slide(1.4, [-1.0, 0.0], [4.0, 0.0])),
         });
-        root.child(track.key("track"))
+        root.child(track.key("track").a11y_hidden())
     }
 }
 
@@ -155,20 +167,30 @@ impl Progress {
 pub struct ProgressCircle {
     value: f32,
     size: f32,
+    label: Option<String>,
 }
 
 impl ProgressCircle {
     pub fn new(value: f32) -> ProgressCircle {
-        ProgressCircle { value, size: 16.0 }
+        ProgressCircle { value, size: 16.0, label: None }
     }
     pub fn size(mut self, s: f32) -> Self {
         self.size = s;
         self
     }
+    /// The accessible name: what is progressing ("Upload").
+    pub fn label(mut self, l: impl Into<String>) -> Self {
+        self.label = Some(l.into());
+        self
+    }
     pub fn build(self, k: &Kit) -> El {
         let ink = k.c.icon_muted;
-        el().role("progressbar")
-            .size(self.size, self.size)
+        let e = report(el().role("progressbar"), Some(self.value));
+        let e = match self.label {
+            Some(l) => e.label(l),
+            None => e,
+        };
+        e.size(self.size, self.size)
             .child(icon(&RING, self.size).absolute(0.0, 0.0).color(ink).opacity(0.2))
             .child(icon(arc_icon(self.value), self.size).absolute(0.0, 0.0).color(ink))
     }

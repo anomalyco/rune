@@ -112,9 +112,20 @@ impl EditActs {
     }
 }
 
+/// What assistive technology reads for a field's editor: its name (the label, else the
+/// placeholder), a description, and whether it can be used.
+fn name_field(e: El, label: Option<&str>, placeholder: &str, description: Option<&str>, disabled: bool) -> El {
+    let e = match label.filter(|l| !l.is_empty()).or(Some(placeholder).filter(|p| !p.is_empty())) {
+        Some(name) => e.label(name),
+        None => e,
+    };
+    e.description(description.unwrap_or_default()).disabled(disabled)
+}
+
 /// A single-line field: `TextInput::new(&s.name).placeholder("Name").on_edit(|s: &mut S| &mut s.name)`.
 pub struct TextInput {
     edit: TextEdit,
+    label: Option<String>,
     placeholder: String,
     large: bool,
     style: Option<TextStyle>,
@@ -127,6 +138,7 @@ pub struct TextInput {
     copy: bool,
     clear: bool,
     invalid: bool,
+    active: Option<String>,
     state: State,
     edits: EditActs,
     copy_acts: Acts,
@@ -157,6 +169,7 @@ impl TextInput {
     pub fn new(edit: &TextEdit) -> TextInput {
         TextInput {
             edit: edit.clone(),
+            label: None,
             placeholder: String::new(),
             large: false,
             style: None,
@@ -169,6 +182,7 @@ impl TextInput {
             copy: false,
             clear: false,
             invalid: false,
+            active: None,
             state: State::Rest,
             edits: EditActs::default(),
             copy_acts: Acts::default(),
@@ -176,6 +190,12 @@ impl TextInput {
     }
     pub fn placeholder(mut self, p: impl Into<String>) -> Self {
         self.placeholder = p.into();
+        self
+    }
+    /// The accessible name ("Search", "Email"), when no visible label names the field. Without
+    /// it the placeholder names it.
+    pub fn label(mut self, l: impl Into<String>) -> Self {
+        self.label = Some(l.into());
         self
     }
     /// `appearance="large"`: 32 points tall.
@@ -241,6 +261,12 @@ impl TextInput {
         self.invalid = i;
         self
     }
+    /// The suggestion this field's arrow keys highlight, by its key (`aria-activedescendant`):
+    /// focus stays in the field and a screen reader reads the highlighted row.
+    pub fn active_descendant(mut self, key: Option<impl Into<String>>) -> Self {
+        self.active = key.map(Into::into);
+        self
+    }
     pub fn state(mut self, s: State) -> Self {
         self.state = s;
         self
@@ -284,17 +310,21 @@ impl TextInput {
             .rich_style(kit_rich_style(k))
             .placeholder(self.placeholder.clone(), hint)
             .caret(ink, k.selection());
+        let mut field = name_field(field, self.label.as_deref(), &self.placeholder, None, disabled).invalid(self.invalid);
+        if let Some(key) = self.active.clone() {
+            field = field.active_descendant(key);
+        }
         let field = self.edits.apply(field, disabled);
         let mut value = row().key("value").grow(1.0).shrink().gap(6.0).center_y();
         if let Some(i) = self.leading {
-            value = value.child(el().key("leading").pl(8.0).center().child(icon(i, self.leading_size).color(c.icon_muted)));
+            value = value.child(el().key("leading").pl(8.0).center().child(icon(i, self.leading_size).color(c.icon_muted)).a11y_hidden());
         } else {
             value = value.child(el().w(2.0));
         }
         value = value.child(field);
+        // The editor inside carries the name; the box only routes presses to it.
         let mut e = row()
             .role("textbox")
-            .label(self.placeholder.clone())
             .h(height)
             .pr(8.0)
             .gap(8.0)
@@ -317,7 +347,8 @@ impl TextInput {
                 .self_center()
                 .center()
                 .radius(radius)
-                .child(icon(glyph, 16.0).color(c.icon_muted));
+                .child(icon(glyph, 16.0).color(c.icon_muted))
+                .disabled(disabled);
             if self.clear {
                 b = b.mr(-8.0);
             }
@@ -336,6 +367,7 @@ impl TextInput {
 /// A multi-line field (`Textarea`): 80 points tall at least, 13/1.35 type, 8 points of padding.
 pub struct TextArea {
     edit: TextEdit,
+    label: Option<String>,
     placeholder: String,
     width: Option<f32>,
     rows: usize,
@@ -365,6 +397,7 @@ impl TextArea {
     pub fn new(edit: &TextEdit) -> TextArea {
         TextArea {
             edit: edit.clone(),
+            label: None,
             placeholder: String::new(),
             width: Some(280.0),
             rows: 3,
@@ -377,6 +410,11 @@ impl TextArea {
     }
     pub fn placeholder(mut self, p: impl Into<String>) -> Self {
         self.placeholder = p.into();
+        self
+    }
+    /// The accessible name, as [`TextInput::label`].
+    pub fn label(mut self, l: impl Into<String>) -> Self {
+        self.label = Some(l.into());
         self
     }
     pub fn width(mut self, w: Option<f32>) -> Self {
@@ -456,9 +494,10 @@ impl TextArea {
             .rich_style(kit_rich_style(k))
             .placeholder(self.placeholder.clone(), hint)
             .caret(ink, k.selection());
+        let field = name_field(field, self.label.as_deref(), &self.placeholder, None, disabled);
         let field = self.edits.apply(field, disabled);
         let line = style.line_px();
-        let mut e = col().role("textbox").label(self.placeholder.clone()).padding(8.0);
+        let mut e = col().role("textbox").padding(8.0);
         e = if let Some((min_rows, max_rows)) = self.grow {
             let viewport = rune::auto_grow(field, min_rows, max_rows);
             e.child(match self.max_height {
@@ -580,6 +619,8 @@ impl TextField {
             .placeholder(self.placeholder.clone(), c.text_weak)
             .caret(c.text_strong, k.selection());
         let field = if self.multiline { field } else { field.single_line() };
+        // The error describes the editor; the label above names it.
+        let field = name_field(field, Some(self.label.as_str()), &self.placeholder, self.error.as_deref(), self.state == State::Disabled);
         let field = self.edits.apply(field, self.state == State::Disabled);
         let mut wrapper = row()
             .key("wrapper")
@@ -606,19 +647,22 @@ impl TextField {
                 .center()
                 .radius(k.radius.md)
                 .hover(c.hover)
-                .child(icon(k.glyph.copy, 16.0).color(c.std_icon));
+                .child(icon(k.glyph.copy, 16.0).color(c.std_icon))
+                .disabled(self.state == State::Disabled);
             if self.state != State::Disabled {
                 b = self.copy_acts.apply(b.hit().hover(c.hover).press(crate::press_over(c.hover, c.pressed)), true);
             }
             wrapper = wrapper.pr(4.0).child(b);
         }
-        let mut root = col().role("textbox").label(self.label.clone()).gap(8.0).w_full();
+        let mut root = col().role("textbox").gap(8.0).w_full();
         if !self.hide_label {
-            root = root.child(text(self.label.clone()).key("label").font(k.ty.text_xsmall_medium).color(c.text_weak));
+            root = root.child(text(self.label.clone()).key("label").font(k.ty.text_xsmall_medium).color(c.text_weak).a11y_hidden());
         }
         root = root.child(wrapper);
         if let Some(e) = &self.error {
-            root = root.child(text(e.clone()).key("error").font(k.ty.text_xsmall_medium).color(c.danger.fg));
+            // Announced as it appears, and read again as the field's description.
+            root = root.child(text(e.clone()).key("error").font(k.ty.text_xsmall_medium).color(c.danger.fg)
+                .live_region(rune::LiveRegion::Assertive));
         }
         if self.state == State::Disabled { root.dim(0.5) } else { root }
     }

@@ -1,0 +1,58 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "actions": [
+                        "click",
+                        "focus"
+                      ],
+                      "key": "close",
+                      "name": "Close",
+                      "role": "button"
+                    }
+                  ],
+                  "key": "top",
+                  "role": "group"
+                },
+                {
+                  "children": [
+                    {
+                      "actions": [
+                        "click",
+                        "focus"
+                      ],
+                      "name": "Undo",
+                      "role": "button"
+                    }
+                  ],
+                  "key": "actions",
+                  "role": "group"
+                }
+              ],
+              "description": "3 files written",
+              "key": "saved",
+              "name": "Saved",
+              "role": "status",
+              "states": [
+                "live-polite"
+              ]
+            }
+          ],
+          "key": "toast-region",
+          "name": "Notifications",
+          "role": "region"
+        }
+      ],
+      "key": "kit-root",
+      "role": "group"
+    }
+  ],
+  "role": "window"
+}

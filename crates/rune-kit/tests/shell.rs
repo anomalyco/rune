@@ -268,7 +268,8 @@ fn roles_and_labels_describe_the_shell() {
     let role = |key: &str| all.iter().find(|e| e.key.as_deref() == Some(key)).map(|e| (e.role, e.label.clone()));
     assert_eq!(role("sidebar-list"), Some(("list", Some("Sessions".into()))));
     assert_eq!(role("row2"), Some(("listitem", Some("Charlie".into()))));
-    assert_eq!(role("section-header"), Some(("button", Some("Today, expanded".into()))));
+    assert_eq!(role("section-header"), Some(("button", Some("Today".into()))));
+    assert_eq!(all.iter().find(|e| e.key.as_deref() == Some("section-header")).unwrap().expanded, Some(true));
     assert_eq!(role("toolbar").map(|r| r.0), Some("toolbar"));
     assert_eq!(role("sidebar-grip"), Some(("separator", Some("Resize sidebar".into()))));
     assert_eq!(role("sidebar-toggle"), Some(("button", Some("Hide sidebar".into()))));
@@ -283,7 +284,7 @@ fn roles_and_labels_describe_the_shell() {
     rt.pointer_up(x, y);
     settle(&mut rt);
     assert!(rt.state.collapsed);
-    assert_eq!(find(&rt, "section-header").label.as_deref(), Some("Today, collapsed"));
+    assert_eq!(find(&rt, "section-header").expanded, Some(false), "the header reads collapsed");
     assert!(rt.find("row0").is_none(), "a collapsed section hides its rows");
 }
 

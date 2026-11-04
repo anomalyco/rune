@@ -321,7 +321,8 @@ impl Scene {
         let scale = self.scale;
         let mut body = el().key("fit").absolute(0.0, 0.0).size(self.size[0], self.size[1]).transition(Transition::none());
         for p in &self.pieces {
-            body = body.child(p.el(streaming, scale));
+            // Shapes and lines draw what the labels and the figure's description say.
+            body = body.child(p.el(streaming, scale).a11y_hidden());
         }
         let label = |l: &Label, color: Color| {
             // A point of slack so rounding never breaks a measured line.
@@ -357,7 +358,7 @@ impl Scene {
                 }
             }
             let exit = if streaming { Transition { insertion: rune::Effect::IDENTITY, ..Transition::opacity() } } else { Transition::none() };
-            body = body.child(el().key(s.key.clone()).absolute(0.0, 0.0).offset(r[0] * scale, r[1] * scale).size(r[2] * scale, r[3] * scale).hover_group().transition(exit).child(glow));
+            body = body.child(el().key(s.key.clone()).absolute(0.0, 0.0).offset(r[0] * scale, r[1] * scale).size(r[2] * scale, r[3] * scale).hover_group().transition(exit).child(glow).a11y_hidden());
         }
         let mut card = col()
             .w_full()

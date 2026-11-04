@@ -38,6 +38,8 @@ required-features = ["markdown", "frame-profile"]
 
 [dev-dependencies]
 procwatch = { path = "../procwatch" }
+# The accessibility tree tests read and write `Runtime::accessibility_json` (tests/a11y).
+serde_json = "1"
 # Reference rasteriser for the built-in glyphs (tests/glyphs.rs).
 resvg = { version = "0.45", default-features = false }
 # The fixture goldens render with the OpenCode theme's tokens and fonts (tests/markdown_fixture.rs).

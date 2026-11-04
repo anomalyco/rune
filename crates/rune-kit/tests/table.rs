@@ -77,6 +77,15 @@ fn header(rt: &Runtime<App>, id: &str) -> ElementInfo {
     find(rt, |e| e.role == "columnheader" && e.key.as_deref() == Some(id)).remove(0)
 }
 
+/// How assistive technology hears column `id` sorted: "ascending", "descending" or "".
+fn sort_read(rt: &Runtime<App>, id: &str) -> String {
+    fn walk(v: &serde_json::Value, id: &str) -> Option<String> {
+        if v["role"] == "column-header" && v["key"] == id { return Some(v["sort"].as_str().unwrap_or("").to_owned()); }
+        v["children"].as_array()?.iter().find_map(|c| walk(c, id))
+    }
+    walk(&rt.accessibility_json(), id).unwrap_or_default()
+}
+
 fn press_with(rt: &mut Runtime<App>, key: Key, mods: Mods) {
     rt.key(KeyEvent { key, mods });
     rt.frame(0.0);
@@ -153,12 +162,14 @@ fn a_header_click_sorts_and_shows_the_direction() {
     click(&mut rt, r[0] + 20.0, r[1] + r[3] * 0.5);
     assert_eq!(rt.state.sorts, [("size".to_owned(), SortDir::Ascending)]);
     assert_eq!(rt.state.table.sort(), Some(("size", SortDir::Ascending)));
-    assert_eq!(header(&rt, "size").label.as_deref(), Some("Size, sorted ascending"));
+    assert_eq!(header(&rt, "size").label.as_deref(), Some("Size"));
+    assert_eq!(sort_read(&rt, "size"), "ascending");
     assert!(rt.state.files.windows(2).all(|w| w[0].size <= w[1].size));
     click(&mut rt, r[0] + 20.0, r[1] + r[3] * 0.5);
     assert_eq!(rt.state.table.sort(), Some(("size", SortDir::Descending)));
-    assert_eq!(header(&rt, "size").label.as_deref(), Some("Size, sorted descending"));
+    assert_eq!(sort_read(&rt, "size"), "descending");
     assert_eq!(header(&rt, "name").label.as_deref(), Some("Name"));
+    assert_eq!(sort_read(&rt, "name"), "");
     let r = header(&rt, "kind").rect;
     click(&mut rt, r[0] + 20.0, r[1] + r[3] * 0.5);
     assert_eq!(rt.state.sorts.len(), 2, "a column that doesn't sort ignores clicks");

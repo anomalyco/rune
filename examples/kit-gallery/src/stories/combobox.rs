@@ -17,7 +17,7 @@ pub(super) fn animated_filter(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
 fn models(s: &G, animate: bool) -> Combobox<G> {
     let options: Vec<_> = (0..200).map(|i| ComboboxOption::new(format!("model-{i}"), format!("Model {i:03}"))).collect();
     Combobox::new("model", &s.combo, &options, |s: &mut G| &mut s.combo)
-        .placeholder("Choose model").current(s.pick.get("model").map(String::as_str))
+        .label("Model").placeholder("Choose model").current(s.pick.get("model").map(String::as_str))
         .animate_filtering(animate)
         .on_choose(|s, id, _| { s.pick.insert("model".into(), id.into()); })
 }

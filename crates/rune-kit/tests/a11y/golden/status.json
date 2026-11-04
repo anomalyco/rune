@@ -1,0 +1,62 @@
+{
+  "children": [
+    {
+      "key": "beta",
+      "name": "Beta",
+      "role": "status",
+      "states": [
+        "live-polite"
+      ]
+    },
+    {
+      "key": "keys",
+      "name": "Ctrl K",
+      "role": "group"
+    },
+    {
+      "key": "spinner",
+      "name": "Loading",
+      "role": "progress-indicator"
+    },
+    {
+      "key": "loader",
+      "name": "Loading",
+      "role": "progress-indicator"
+    },
+    {
+      "key": "upload",
+      "name": "Upload",
+      "range": [
+        0.4,
+        0.0,
+        1.0,
+        null
+      ],
+      "role": "progress-indicator",
+      "value": "40%"
+    },
+    {
+      "key": "indexing",
+      "name": "Indexing",
+      "role": "progress-indicator"
+    },
+    {
+      "key": "ring",
+      "name": "Sync",
+      "range": [
+        0.25,
+        0.0,
+        1.0,
+        null
+      ],
+      "role": "progress-indicator",
+      "value": "25%"
+    },
+    {
+      "key": "count",
+      "name": "0 files",
+      "role": "label"
+    }
+  ],
+  "role": "window"
+}

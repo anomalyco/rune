@@ -1,0 +1,124 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "actions": [
+                    "scroll-up",
+                    "scroll-down",
+                    "set-scroll-offset"
+                  ],
+                  "children": [
+                    {
+                      "actions": [
+                        "scroll-into-view"
+                      ],
+                      "children": [
+                        {
+                          "actions": [
+                            "click",
+                            "focus",
+                            "scroll-into-view"
+                          ],
+                          "key": "file-item0",
+                          "name": "New",
+                          "role": "menu-item",
+                          "states": [
+                            "focused"
+                          ]
+                        },
+                        {
+                          "actions": [
+                            "click",
+                            "focus",
+                            "scroll-into-view"
+                          ],
+                          "key": "file-item1",
+                          "name": "Word wrap",
+                          "role": "menu-item-check-box",
+                          "states": [
+                            "unchecked"
+                          ]
+                        },
+                        {
+                          "actions": [
+                            "scroll-into-view"
+                          ],
+                          "key": "file-item2",
+                          "name": "Revert",
+                          "role": "menu-item",
+                          "states": [
+                            "disabled"
+                          ]
+                        },
+                        {
+                          "actions": [
+                            "scroll-into-view"
+                          ],
+                          "children": [
+                            {
+                              "actions": [
+                                "scroll-into-view"
+                              ],
+                              "name": "Share",
+                              "role": "label"
+                            }
+                          ],
+                          "key": "label4",
+                          "role": "group"
+                        },
+                        {
+                          "actions": [
+                            "focus",
+                            "scroll-into-view"
+                          ],
+                          "description": "New",
+                          "key": "file-item5",
+                          "name": "Publish",
+                          "role": "menu-item"
+                        },
+                        {
+                          "actions": [
+                            "focus",
+                            "scroll-into-view"
+                          ],
+                          "key": "file-item6",
+                          "name": "Export",
+                          "role": "menu-item",
+                          "states": [
+                            "collapsed"
+                          ]
+                        }
+                      ],
+                      "key": "rows",
+                      "role": "group"
+                    }
+                  ],
+                  "key": "scroll",
+                  "role": "scroll-view",
+                  "states": [
+                    "clips"
+                  ]
+                }
+              ],
+              "key": "file-scroll-area",
+              "role": "group"
+            }
+          ],
+          "key": "file-menu",
+          "role": "menu",
+          "states": [
+            "modal"
+          ]
+        }
+      ],
+      "key": "kit-root",
+      "role": "group"
+    }
+  ],
+  "role": "window"
+}

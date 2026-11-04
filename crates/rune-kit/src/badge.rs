@@ -54,7 +54,8 @@ impl Badge {
             (16.0, 4.0, 2.0, TextStyle { line_height: 11.0, ..k.ty.small_medium })
         };
         let e = row().role("status").label(self.label.clone()).center().gap(4.0).h(h).px(px).radius(radius).fill(fill);
-        let e = e.child(text(self.label).font(font).color(ink));
+        // A status: assistive technology announces a change to its label, politely.
+        let e = e.child(text(self.label).font(font).color(ink).a11y_hidden());
         match border {
             Some(b) => e.border(0.5, b),
             None => e,

@@ -83,7 +83,8 @@ impl Switch {
         } else {
             control
         };
-        let mut root = row().role("switch").gap(8.0).center_y();
+        // The switch's label, description and on state say what its text and track show.
+        let mut root = row().role("switch").checked(self.checked).gap(8.0).center_y();
         if let Some(l) = &self.label {
             root = root.label(l.clone());
             if !self.hide_label {
@@ -92,14 +93,16 @@ impl Switch {
                 } else {
                     (TextStyle { line_height: 16.0, ..k.ty.small }, c.text_faint)
                 };
-                root = root.child(text(l.clone()).key("label").font(font).color(color));
+                root = root.child(text(l.clone()).key("label").font(font).color(color).a11y_hidden());
             }
         }
         if let Some(d) = &self.description {
-            root = root.child(text(d.clone()).key("description").font(k.ty.text_xsmall.lh(15.6)).color(c.std_text));
+            root = root
+                .description(d.clone())
+                .child(text(d.clone()).key("description").font(k.ty.text_xsmall.lh(15.6)).color(c.std_text).a11y_hidden());
         }
-        root = root.child(control.key("control").focus_ring(2.0, 1.0, c.border_focus));
-        self.acts.apply(root.focusable(!disabled), !disabled)
+        root = root.child(control.key("control").focus_ring(2.0, 1.0, c.border_focus).a11y_hidden());
+        self.acts.apply(root.focusable(!disabled).disabled(disabled), !disabled)
     }
 
     fn compact_control(&self, k: &Kit) -> El {

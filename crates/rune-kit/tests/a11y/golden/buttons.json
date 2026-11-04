@@ -1,0 +1,70 @@
+{
+  "children": [
+    {
+      "actions": [
+        "click",
+        "focus"
+      ],
+      "description": "Write the file to disk",
+      "key": "save",
+      "name": "Save",
+      "role": "button"
+    },
+    {
+      "actions": [
+        "click",
+        "focus",
+        "expand"
+      ],
+      "key": "menu",
+      "name": "Add",
+      "role": "button",
+      "states": [
+        "collapsed"
+      ]
+    },
+    {
+      "key": "off",
+      "name": "Unavailable",
+      "role": "button",
+      "states": [
+        "disabled"
+      ]
+    },
+    {
+      "key": "busy",
+      "name": "Saving",
+      "role": "button",
+      "states": [
+        "disabled"
+      ]
+    },
+    {
+      "actions": [
+        "click",
+        "focus"
+      ],
+      "description": "Close the panel",
+      "key": "close",
+      "name": "Close",
+      "role": "button"
+    },
+    {
+      "actions": [
+        "focus"
+      ],
+      "key": "copy",
+      "name": "Copy",
+      "role": "button"
+    },
+    {
+      "key": "copy-off",
+      "name": "Copy link",
+      "role": "button",
+      "states": [
+        "disabled"
+      ]
+    }
+  ],
+  "role": "window"
+}

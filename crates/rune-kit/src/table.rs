@@ -623,6 +623,10 @@ impl<S: 'static> Table<S> {
         if let Some(n) = name {
             root = root.label(n);
         }
+        // Focus stays on the table; the row under the cursor is what a screen reader follows.
+        if let Some(id) = &state.cursor {
+            root = root.active_descendant(id.clone());
+        }
         root
             .on_key(move |s: &mut S, ev: &KeyEvent, tx: &mut Tx| {
                 let n = len(s);
@@ -706,15 +710,10 @@ fn header_row<S: 'static>(
         .role("row")
         .w_full()
         .h(style.header_height)
-        .child(el().key("rule").pin(Some(0.0), None, Some(0.0), Some(0.0)).h(1.0).fill(style.rule));
+        .child(el().key("rule").pin(Some(0.0), None, Some(0.0), Some(0.0)).h(1.0).fill(style.rule).a11y_hidden());
     let last = columns.len().saturating_sub(1);
     for (j, c) in columns.iter().enumerate() {
         let sorted = state.sort().filter(|(id, _)| *id == c.id).map(|(_, d)| d);
-        let label = match sorted {
-            Some(SortDir::Ascending) => format!("{}, sorted ascending", c.title),
-            Some(SortDir::Descending) => format!("{}, sorted descending", c.title),
-            None => c.title.clone(),
-        };
         let title = text(c.title.clone())
             .key("title")
             .font(style.header_font)
@@ -723,12 +722,12 @@ fn header_row<S: 'static>(
             .shrink()
             .min_w(0.0)
             .help_when_truncated(c.title.clone());
-        let mut inner = row().key("inner").gap(2.0).center_y().min_w(0.0).shrink().child(title);
+        let mut inner = row().key("inner").gap(2.0).center_y().min_w(0.0).shrink().child(title).a11y_hidden();
         if let Some(d) = sorted {
             let glyph = if d == SortDir::Ascending { k.glyph.chevron_up } else { k.glyph.chevron_down };
             inner = inner.child(icon(glyph, 14.0).key("sort").color(style.text));
         }
-        let mut cell = justify(sized(row().role("columnheader").label(label).h_full().px(style.cell_pad).center_y(), c, sizes[j]), c.align)
+        let mut cell = justify(sized(row().role("columnheader").label(c.title.clone()).sorted(sorted.map(|d| d == SortDir::Ascending)).h_full().px(style.cell_pad).center_y(), c, sizes[j]), c.align)
             .key(c.id.clone())
             .child(inner);
         let id = c.id.clone();
@@ -750,7 +749,7 @@ fn header_row<S: 'static>(
         if c.resizable {
             cell = cell.child(resize_handle(c.clone(), get_mut, style.rule, j == last));
         } else if j != last {
-            cell = cell.child(el().key("rule").pin(None, Some(8.0), Some(0.0), Some(8.0)).w(1.0).fill(style.rule));
+            cell = cell.child(el().key("rule").pin(None, Some(8.0), Some(0.0), Some(8.0)).w(1.0).fill(style.rule).a11y_hidden());
         }
         h = h.child(cell);
     }
@@ -762,9 +761,9 @@ fn header_row<S: 'static>(
 fn resize_handle<S: 'static>(c: TableColumn, get_mut: fn(&mut S) -> &mut TableState, rule: Color, last: bool) -> El {
     let id = c.id.clone();
     let reset = c.id.clone();
-    let line = el().key("line").w(1.0).h_full().fill(if last { Color::TRANSPARENT } else { rule });
+    let line = el().key("line").w(1.0).h_full().fill(if last { Color::TRANSPARENT } else { rule }).a11y_hidden();
     row()
-        .key("resize")
+        .key("resize").role("separator")
         .label(format!("Resize {}", c.title))
         .pin(None, Some(6.0), Some(-4.0), Some(6.0))
         .w(9.0)

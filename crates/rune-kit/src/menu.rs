@@ -11,7 +11,8 @@ use crate::{Acts, Kit, State, shadows};
 /// A menu at a secondary-press position. Store the point from `El::on_secondary_press`
 /// in app state; clear it in `on_close` and item callbacks. Uses Menu's flipping anchor.
 pub fn context_menu(key: impl Into<String>, trigger: El, point: Option<PointerPress>) -> Menu {
-    let menu = Menu::new(key).trigger(trigger).open(point.is_some());
+    let mut menu = Menu::new(key).trigger(trigger).open(point.is_some());
+    menu.context = true;
     match point {
         Some(p) => menu.at(p.x, p.y),
         None => menu,
@@ -115,7 +116,8 @@ impl MenuItem {
         } else {
             (k.ty.ui_compact, c.text_base)
         };
-        let mut content = row().key("content").grow(1.0).shrink().gap(8.0).center_y();
+        // The item's label, shortcut, badge and check say what this row shows.
+        let mut content = row().key("content").grow(1.0).shrink().gap(8.0).center_y().a11y_hidden();
         if let Some(l) = self.lead {
             content = content.child(l);
         }
@@ -125,11 +127,23 @@ impl MenuItem {
         content = content.child(text(self.label.clone()).key("label").font(font).color(ink).truncate());
         let mut e = row()
             .key(key.clone())
-            .role("menuitem")
+            .role(if self.checked.is_some() { "menuitemcheckbox" } else { "menuitem" })
             .label(self.label)
             .radius(if standard { k.radius.sm } else { 4.0 })
             .gap(8.0)
             .center_y();
+        if let Some(on) = self.checked {
+            e = e.checked(on);
+        }
+        if let Some(s) = &self.shortcut {
+            e = e.shortcut_hint(s.clone());
+        }
+        if let Some(b) = &self.badge {
+            e = e.description(b.clone());
+        }
+        if let Some((_, open)) = &self.sub {
+            e = e.expanded(*open);
+        }
         e = if standard { e.px(8.0).py(4.0) } else { e.h(28.0).pl(12.0).pr(6.0) };
         if highlighted {
             e = e.fill(hover);
@@ -140,11 +154,12 @@ impl MenuItem {
         e = e.child(content);
         if let Some(s) = self.shortcut {
             let st = TextStyle { line_height: 11.0, ..k.ty.small_medium };
-            e = e.child(text(s).key("shortcut").font(st).color(c.text_faint));
+            e = e.child(text(s).key("shortcut").font(st).color(c.text_faint).a11y_hidden());
         }
         if let Some(b) = self.badge {
             e = e.child(
                 row()
+                    .a11y_hidden()
                     .key("badge")
                     .h(16.0)
                     .px(4.0)
@@ -159,10 +174,10 @@ impl MenuItem {
             let mark = icon(k.glyph.check_small, 14.0)
                 .color(if standard { c.std_icon } else { c.icon_base })
                 .opacity(if on { 1.0 } else { 0.0 });
-            e = e.child(el().key("indicator").size(16.0, 16.0).center().child(mark));
+            e = e.child(el().key("indicator").size(16.0, 16.0).center().child(mark).a11y_hidden());
         }
         if let Some((entries, open)) = self.sub {
-            e = e.child(icon(k.glyph.caret_right, 16.0).key("chevron").color(if standard {
+            e = e.child(icon(k.glyph.caret_right, 16.0).key("chevron").a11y_hidden().color(if standard {
                 c.std_icon
             } else {
                 c.text_faint
@@ -179,7 +194,7 @@ impl MenuItem {
             e = e.dim(0.5);
         }
         // A popup opens on its checked item (NSPopUpButton).
-        self.acts.apply(e.focusable(!disabled).focus_selected(self.checked == Some(true)), !disabled)
+        self.acts.apply(e.focusable(!disabled).focus_selected(self.checked == Some(true)).disabled(disabled), !disabled)
     }
 }
 
@@ -194,6 +209,8 @@ pub struct Menu {
     gutter: f32,
     min_width: f32,
     at: Option<(f32, f32)>,
+    /// A context menu: its trigger is the area it opens over, not a button that opens it.
+    context: bool,
     dismiss: Option<(El, Modal)>,
 }
 
@@ -228,6 +245,7 @@ impl Menu {
             gutter: 6.0,
             min_width: 160.0,
             at: None,
+            context: false,
             dismiss: None,
         }
     }
@@ -295,7 +313,7 @@ impl Menu {
                 MenuEntry::Item(item) => item.build(k, standard, format!("{}-item{i}", self.key), layer),
                 MenuEntry::Separator => {
                     let (m, color) = if standard { (4.0, c.border_weak) } else { (2.0, c.border_muted) };
-                    el().key(format!("sep{i}")).h(1.0).mt(m).mb(m).ml(-m).mr(-m).fill(color)
+                    el().key(format!("sep{i}")).h(1.0).mt(m).mb(m).ml(-m).mr(-m).fill(color).a11y_hidden()
                 }
                 MenuEntry::Label(l) => {
                     let e = row().key(format!("label{i}")).center_y();
@@ -312,7 +330,10 @@ impl Menu {
 
     pub fn build(mut self, k: &Kit, layer: &mut Vec<El>) -> El {
         let anchor_key = format!("{}-trigger", self.key);
-        let trigger = row().key(anchor_key.clone()).children(self.trigger.take());
+        // A dropdown's trigger reads as open or closed; a context menu's is just where it opened.
+        let open = self.open;
+        let pointer = self.context || self.at.is_some();
+        let trigger = row().key(anchor_key.clone()).children(self.trigger.take().map(|t| if pointer { t } else { t.expanded(open) }));
         if !self.open {
             return trigger;
         }

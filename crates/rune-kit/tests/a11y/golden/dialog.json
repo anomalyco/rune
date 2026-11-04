@@ -1,0 +1,69 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "name": "Delete file?",
+                      "role": "label"
+                    },
+                    {
+                      "name": "This can't be undone.",
+                      "role": "label"
+                    },
+                    {
+                      "actions": [
+                        "click",
+                        "focus"
+                      ],
+                      "key": "close",
+                      "name": "Close",
+                      "role": "button",
+                      "states": [
+                        "focused"
+                      ]
+                    }
+                  ],
+                  "key": "header",
+                  "role": "group"
+                },
+                {
+                  "children": [
+                    {
+                      "actions": [
+                        "click",
+                        "focus"
+                      ],
+                      "key": "confirm-delete",
+                      "name": "Delete",
+                      "role": "button"
+                    }
+                  ],
+                  "key": "body",
+                  "role": "group"
+                }
+              ],
+              "description": "This can't be undone.",
+              "key": "confirm-dialog",
+              "name": "Delete file?",
+              "role": "dialog",
+              "states": [
+                "modal"
+              ]
+            }
+          ],
+          "key": "confirm-layer",
+          "role": "group"
+        }
+      ],
+      "key": "kit-root",
+      "role": "group"
+    }
+  ],
+  "role": "window"
+}

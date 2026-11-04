@@ -58,19 +58,21 @@ impl Toast {
 
     pub fn build(self, k: &Kit) -> El {
         let c = &k.c;
-        let mut content = col().key("content").grow(1.0).shrink().gap(4.0).child(
+        // The status's name and description read the title and the line under it.
+        let mut content = col().key("content").grow(1.0).shrink().gap(4.0).a11y_hidden().child(
             text(self.title.clone())
                 .key("title")
                 .font(TextStyle { line_height: 20.0, ..k.ty.ui_medium })
                 .color(c.text_base)
                 .truncate(),
         );
+        let described = self.description.clone().unwrap_or_default();
         if let Some(d) = self.description {
             content = content.child(text(d).key("description").font(k.ty.ui).color(c.text_muted).wrap().w_full());
         }
         let mut top = row().key("top").w_full().gap(12.0).items_start();
         if let Some(i) = self.icon {
-            top = top.child(el().key("icon").size(16.0, 20.0).center().child(i));
+            top = top.child(el().key("icon").size(16.0, 20.0).center().child(i).a11y_hidden());
         }
         top = top.child(content);
         if let Some(a) = self.close {
@@ -81,6 +83,8 @@ impl Toast {
                 .size(20.0, 20.0)
                 .center()
                 .radius(4.0)
+                .focusable(true)
+                .focus_ring(2.0, 0.0, c.border_focus)
                 .hover(c.hover)
                 .press(press_over(c.hover, c.pressed))
                 .child(icon(k.glyph.close, 16.0).color(c.icon_muted));
@@ -90,6 +94,7 @@ impl Toast {
             .key(self.key)
             .role("status")
             .label(self.title)
+            .description(described)
             .w(320.0)
             .padding(12.0)
             .gap(12.0)

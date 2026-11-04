@@ -1,0 +1,41 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "key": "n:A.t0",
+                      "name": "Start",
+                      "role": "label"
+                    },
+                    {
+                      "key": "n:B.t0",
+                      "name": "Stop",
+                      "role": "label"
+                    }
+                  ],
+                  "key": "fit",
+                  "role": "group"
+                }
+              ],
+              "key": "diagram",
+              "role": "group"
+            }
+          ],
+          "description": "graph TD\n  A[Start] --> B[Stop]",
+          "key": "card",
+          "name": "Flowchart",
+          "role": "figure"
+        }
+      ],
+      "key": "b0",
+      "role": "group"
+    }
+  ],
+  "role": "window"
+}

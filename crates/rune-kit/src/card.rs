@@ -48,7 +48,7 @@ impl Card {
         let has_title = self.title.is_some();
         // The 2 point accent rule runs 8 points in from the card's top and bottom edges; the
         // copy sits in the card's 10/12/10/10 padding beside it.
-        let rule = el().key("rule").w(2.0).mt(8.0).mb(8.0).radius(2.0).fill(accent);
+        let rule = el().key("rule").w(2.0).mt(8.0).mb(8.0).radius(2.0).fill(accent).a11y_hidden();
         let mut root = col().key("body").grow(1.0).shrink().pt(10.0).pb(10.0).pl(8.0).pr(12.0);
         if has_title {
             root = root.gap(8.0);
@@ -67,7 +67,7 @@ impl Card {
                     .key("title")
                     .gap(8.0)
                     .center_y()
-                    .child(el().size(16.0, 16.0).center().child(icon(glyph, 14.0).color(color)))
+                    .child(el().size(16.0, 16.0).center().child(icon(glyph, 14.0).color(color)).a11y_hidden())
                     .child(text(t).font(k.ty.body_medium).color(c.text_base)),
             );
         }

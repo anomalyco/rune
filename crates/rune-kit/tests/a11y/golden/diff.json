@@ -1,0 +1,246 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "actions": [
+            "scroll-up",
+            "scroll-down",
+            "set-scroll-offset"
+          ],
+          "children": [
+            {
+              "actions": [
+                "scroll-into-view"
+              ],
+              "children": [
+                {
+                  "actions": [
+                    "scroll-into-view"
+                  ],
+                  "children": [
+                    {
+                      "actions": [
+                        "scroll-into-view"
+                      ],
+                      "children": [
+                        {
+                          "actions": [
+                            "click",
+                            "collapse",
+                            "scroll-into-view"
+                          ],
+                          "key": "toggle",
+                          "name": "Collapse file",
+                          "role": "button",
+                          "states": [
+                            "expanded"
+                          ]
+                        },
+                        {
+                          "actions": [
+                            "scroll-into-view"
+                          ],
+                          "children": [
+                            {
+                              "actions": [
+                                "scroll-into-view"
+                              ],
+                              "key": "new",
+                              "name": "src/main.rs",
+                              "role": "label"
+                            }
+                          ],
+                          "key": "path",
+                          "role": "group"
+                        },
+                        {
+                          "actions": [
+                            "scroll-into-view"
+                          ],
+                          "key": "adds",
+                          "name": "+1",
+                          "role": "label"
+                        },
+                        {
+                          "actions": [
+                            "scroll-into-view"
+                          ],
+                          "key": "dels",
+                          "name": "−1",
+                          "role": "label"
+                        }
+                      ],
+                      "key": "inner",
+                      "role": "group"
+                    }
+                  ],
+                  "key": "df0",
+                  "name": "src/main.rs, 1 added, 1 removed",
+                  "position": 1,
+                  "role": "heading"
+                },
+                {
+                  "actions": [
+                    "scroll-into-view"
+                  ],
+                  "children": [
+                    {
+                      "actions": [
+                        "scroll-into-view"
+                      ],
+                      "key": "gutter",
+                      "role": "group"
+                    },
+                    {
+                      "actions": [
+                        "scroll-into-view"
+                      ],
+                      "children": [
+                        {
+                          "actions": [
+                            "scroll-into-view"
+                          ],
+                          "key": "text",
+                          "name": "fn main() {",
+                          "role": "label"
+                        }
+                      ],
+                      "key": "code",
+                      "role": "group"
+                    }
+                  ],
+                  "key": "df0.c1",
+                  "name": "unchanged line 1: fn main() {",
+                  "position": 2,
+                  "role": "list-item"
+                },
+                {
+                  "actions": [
+                    "scroll-into-view"
+                  ],
+                  "children": [
+                    {
+                      "actions": [
+                        "scroll-into-view"
+                      ],
+                      "key": "gutter",
+                      "role": "group"
+                    },
+                    {
+                      "actions": [
+                        "scroll-into-view"
+                      ],
+                      "children": [
+                        {
+                          "actions": [
+                            "scroll-into-view"
+                          ],
+                          "key": "text",
+                          "name": "    println!(\"hi\");",
+                          "role": "label"
+                        }
+                      ],
+                      "key": "code",
+                      "role": "group"
+                    }
+                  ],
+                  "key": "df0.o2",
+                  "name": "removed line 2:     println!(\"hi\");",
+                  "position": 3,
+                  "role": "list-item"
+                },
+                {
+                  "actions": [
+                    "scroll-into-view"
+                  ],
+                  "children": [
+                    {
+                      "actions": [
+                        "scroll-into-view"
+                      ],
+                      "key": "gutter",
+                      "role": "group"
+                    },
+                    {
+                      "actions": [
+                        "scroll-into-view"
+                      ],
+                      "children": [
+                        {
+                          "actions": [
+                            "scroll-into-view"
+                          ],
+                          "key": "text",
+                          "name": "    println!(\"hello\");",
+                          "role": "label"
+                        }
+                      ],
+                      "key": "code",
+                      "role": "group"
+                    }
+                  ],
+                  "key": "df0.n2",
+                  "name": "added line 2:     println!(\"hello\");",
+                  "position": 4,
+                  "role": "list-item"
+                },
+                {
+                  "actions": [
+                    "scroll-into-view"
+                  ],
+                  "children": [
+                    {
+                      "actions": [
+                        "scroll-into-view"
+                      ],
+                      "key": "gutter",
+                      "role": "group"
+                    },
+                    {
+                      "actions": [
+                        "scroll-into-view"
+                      ],
+                      "children": [
+                        {
+                          "actions": [
+                            "scroll-into-view"
+                          ],
+                          "key": "text",
+                          "name": "}",
+                          "role": "label"
+                        }
+                      ],
+                      "key": "code",
+                      "role": "group"
+                    }
+                  ],
+                  "key": "df0.c3",
+                  "name": "unchanged line 3: }",
+                  "position": 5,
+                  "role": "list-item"
+                }
+              ],
+              "key": "rows",
+              "name": "Diff",
+              "role": "list",
+              "setSize": 5
+            }
+          ],
+          "key": "scroll",
+          "role": "scroll-view",
+          "states": [
+            "clips"
+          ]
+        }
+      ],
+      "key": "diff",
+      "role": "group"
+    },
+    {
+      "name": "end",
+      "role": "label"
+    }
+  ],
+  "role": "window"
+}

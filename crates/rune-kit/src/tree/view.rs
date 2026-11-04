@@ -102,6 +102,14 @@ impl TreeItem {
         if let Some(open) = r.expanded {
             e = e.expanded(open);
         }
+        // What the trailing counts and badge show, said in words; the glyphs and dot stay out.
+        let mut said = Vec::new();
+        if let Some((add, del)) = self.changes {
+            if add > 0 { said.push(format!("{add} added")); }
+            if del > 0 { said.push(format!("{del} removed")); }
+        }
+        said.extend(self.badge.clone());
+        e = e.description(said.join(", "));
         e = if r.selected { e.fill(style.selected) } else { e.hover(c.hover) };
         if r.cursor && r.multi {
             e = e.outline(1.0, -1.0, c.border_focus);
@@ -109,10 +117,10 @@ impl TreeItem {
         if style.guides {
             for level in 0..r.depth {
                 let x = pad + level as f32 * style.indent + chevron_w * 0.5 - 0.5;
-                e = e.child(el().key(format!("guide{level}")).pin(Some(x), Some(0.0), None, Some(0.0)).w(1.0).fill(style.guide));
+                e = e.child(el().key(format!("guide{level}")).pin(Some(x), Some(0.0), None, Some(0.0)).w(1.0).fill(style.guide).a11y_hidden());
             }
         }
-        let chevron = el().key("chevron").size(chevron_w, chevron_w).center();
+        let chevron = el().key("chevron").size(chevron_w, chevron_w).center().a11y_hidden();
         e = e.child(match r.expanded {
             Some(open) => chevron.child(
                 icon(k.glyph.chevron_down, 16.0)
@@ -124,7 +132,7 @@ impl TreeItem {
             None => chevron,
         });
         if let Some(i) = self.icon {
-            e = e.child(icon(i, 16.0).key("icon").color(self.icon_color.unwrap_or(c.icon_muted)));
+            e = e.child(icon(i, 16.0).key("icon").color(self.icon_color.unwrap_or(c.icon_muted)).a11y_hidden());
         }
         let color = self.label_color.unwrap_or(c.text_base);
         let font = k.ty.ui;
@@ -136,9 +144,9 @@ impl TreeItem {
             .unwrap_or_default();
         let full = self.label.clone();
         let label = if spans.is_empty() { text(self.label) } else { rich(self.label, spans) };
-        e = e.child(label.key("label").font(font).color(color).grow(1.0).shrink().min_w(0.0).truncate().help_when_truncated(full));
+        e = e.child(label.key("label").font(font).color(color).grow(1.0).shrink().min_w(0.0).truncate().help_when_truncated(full).a11y_hidden());
         if let Some((add, del)) = self.changes {
-            let mut counts = row().key("changes").gap(4.0).center_y();
+            let mut counts = row().key("changes").gap(4.0).center_y().a11y_hidden();
             let f = k.ty.text_xsmall.features("'tnum' 1");
             if add > 0 {
                 counts = counts.child(text(format!("+{add}")).key("added").font(f).color(c.success.icon));
@@ -149,10 +157,10 @@ impl TreeItem {
             e = e.child(counts);
         }
         if let Some(b) = self.badge {
-            e = e.child(text(b).key("badge").font(k.ty.text_xsmall_medium).color(c.text_muted));
+            e = e.child(text(b).key("badge").font(k.ty.text_xsmall_medium).color(c.text_muted).a11y_hidden());
         }
         if let Some(d) = self.dot {
-            e = e.child(el().key("dot").size(6.0, 6.0).radius(3.0).fill(d).ml(5.0).mr(5.0));
+            e = e.child(el().key("dot").size(6.0, 6.0).radius(3.0).fill(d).ml(5.0).mr(5.0).a11y_hidden());
         }
         e.children(self.trailing)
     }
@@ -280,6 +288,7 @@ impl<S: 'static, T: 'static> Tree<S, T> {
             }
             e
         };
+        let cursor = model.cursor.map(|c| model.nodes[c].id.clone());
         let rows = col()
             .key("rows")
             .w_full()
@@ -312,6 +321,10 @@ impl<S: 'static, T: 'static> Tree<S, T> {
             .w_full();
         if let Some(n) = name {
             root = root.label(n);
+        }
+        // Focus stays on the tree; the row under the cursor is what a screen reader follows.
+        if let Some(id) = cursor {
+            root = root.active_descendant(id);
         }
         root
             .on_key(move |s: &mut S, ev: &KeyEvent, tx: &mut Tx| {

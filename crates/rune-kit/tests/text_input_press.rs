@@ -393,7 +393,8 @@ fn a_plain_field_draws_no_box_but_still_focuses_on_a_press_anywhere_and_types() 
         }).count()
     };
     let plain = info(&rt, "plain");
-    assert_eq!((plain.role, plain.label.as_deref()), ("textbox", Some("Type a command")), "a11y role and label unchanged");
+    assert_eq!(plain.role, "textbox", "a11y role unchanged");
+    assert_eq!(by_path(&rt, "plain/value/input").label.as_deref(), Some("Type a command"), "the editor carries the name");
     assert_eq!(plain.fill.a, 0.0, "no fill");
     assert!(info(&rt, "boxed").fill.a > 0.0);
     assert_eq!(ink(&rt, "plain"), 0, "unfocused plain draws no box, shadow or border");

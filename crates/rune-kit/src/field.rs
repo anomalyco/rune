@@ -47,18 +47,23 @@ impl Field {
 
     pub fn build(self, k: &Kit) -> El {
         let c = &k.c;
+        // A group named by the label and described by the help text around the control, which
+        // a reader hears on entering it.
         let mut root = col().role("group").gap(8.0).w_full().items_start();
+        let help: Vec<&str> = [self.prefix.as_deref(), self.suffix.as_deref()].into_iter().flatten().collect();
+        root = root.description(help.join(". "));
         if let Some(l) = self.label {
+            root = root.label(l.clone());
             let mut lab = row().key("label").w_full().min_h(16.0).gap(4.0).center_y().child(
                 text(l).key("text").font(rune::TextStyle { line_height: 16.0, ..k.ty.ui_medium }).color(c.text_base),
             );
             if self.info {
-                lab = lab.child(icon(&INFO, 16.0).key("info").color(c.icon_muted));
+                lab = lab.child(icon(&INFO, 16.0).key("info").color(c.icon_muted).a11y_hidden());
             }
-            root = root.child(lab);
+            root = root.child(lab.a11y_hidden());
         }
         let aside =
-            |key: &str, s: String| text(s).key(key).w_full().min_h(11.0).font(k.ty.small.lh(11.0)).color(c.text_muted);
+            |key: &str, s: String| text(s).key(key).w_full().min_h(11.0).font(k.ty.small.lh(11.0)).color(c.text_muted).a11y_hidden();
         if let Some(p) = self.prefix {
             root = root.child(aside("prefix", p));
         }

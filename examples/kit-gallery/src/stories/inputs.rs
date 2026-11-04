@@ -165,6 +165,7 @@ const FRUITS: [&str; 5] = ["Apple", "Banana", "Cherry", "Date", "Elderberry"];
 fn fruit_select(s: &G, key: &'static str) -> Select {
     let current = s.pick.get(key).cloned();
     Select::new(key, &FRUITS)
+        .label("Fruit")
         .placeholder("Pick a fruit")
         .current(current.as_deref())
         .open(is_open(s, key))
@@ -186,6 +187,7 @@ pub(super) fn select_grouped(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     let current = s.pick.get("select").cloned();
     row().child(
         Select::grouped("select", &cities)
+            .label("City")
             .placeholder("Pick a fruit")
             .current(current.as_deref())
             .open(is_open(s, "select"))

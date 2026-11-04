@@ -1,0 +1,62 @@
+{
+  "children": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "key": "fact-0",
+              "name": "Status: done shipped",
+              "position": 1,
+              "role": "list-item"
+            },
+            {
+              "key": "fact-1",
+              "name": "Owner: Ada",
+              "position": 2,
+              "role": "list-item"
+            }
+          ],
+          "key": "note/p0",
+          "role": "list",
+          "setSize": 2
+        },
+        {
+          "children": [
+            {
+              "key": "step-0",
+              "name": "Parser, built, fast path",
+              "position": 1,
+              "role": "list-item"
+            },
+            {
+              "key": "step-1",
+              "name": "Docs, todo",
+              "position": 2,
+              "role": "list-item"
+            }
+          ],
+          "key": "note/p1",
+          "name": "1 of 2 built",
+          "role": "list",
+          "setSize": 2
+        },
+        {
+          "children": [
+            {
+              "key": "b0",
+              "name": "Back up first.",
+              "role": "label"
+            }
+          ],
+          "key": "note/p2",
+          "name": "warning",
+          "role": "note"
+        }
+      ],
+      "key": "note",
+      "role": "group"
+    }
+  ],
+  "role": "window"
+}

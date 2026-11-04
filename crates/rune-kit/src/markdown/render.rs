@@ -272,7 +272,7 @@ impl Renderer {
         let s = &self.s;
         let highlights = self.text_highlights_for(code, map);
         let body = self.with_reveal(tabbed(code, self.syntax_spans(code, source), highlights, s.code_block).font(s.code_block).color(s.text));
-        let frame = col().w_full().radius(6.0).fill(s.code_block_fill).border(0.5, s.code_block_border);
+        let frame = col().role("code").w_full().radius(6.0).fill(s.code_block_fill).border(0.5, s.code_block_border);
         if self.scroll_wide {
             // The text sizes to its longest line inside the viewport, which scrolls under the
             // padding so lines run to the frame's edge.
@@ -299,7 +299,7 @@ impl Renderer {
     pub(super) fn diff(&self, src: &str, map: Option<&SpanMap>) -> El {
         let s = &self.s;
         let all_hl = self.text_highlights_for(src, map);
-        let mut c = col().w_full().py(s.code_block_pad[1]).radius(6.0).fill(s.code_block_fill).border(0.5, s.code_block_border);
+        let mut c = col().role("code").w_full().py(s.code_block_pad[1]).radius(6.0).fill(s.code_block_fill).border(0.5, s.code_block_border);
         let mut line_start = 0usize;
         for (n, line) in src.split('\n').enumerate() {
             let line_end = line_start + line.len();
@@ -366,7 +366,7 @@ impl Renderer {
         self.code(src, source, map)
     }
 
-    fn task_item(&self, k: usize, item: &[Block], item_maps: &[BlockMap], item_idx: usize, checked: bool) -> El {
+    fn task_item(&self, (k, n): (usize, usize), item: &[Block], item_maps: &[BlockMap], item_idx: usize, checked: bool) -> El {
         let t = &self.s.task;
         let interactive = self.on_task.is_some() && !self.tasks_read_only;
         let (fill, border) = if checked {
@@ -386,7 +386,8 @@ impl Renderer {
             .border(1.0, border)
             .token_motion(t.motion)
             .focus_ring(1.0, 0.0, t.focus_ring)
-            .child(icon(t.check, 10.0).key("mark").color(t.mark).opacity(if checked { 1.0 } else { 0.0 }));
+            .child(icon(t.check, 10.0).key("mark").color(t.mark).opacity(if checked { 1.0 } else { 0.0 }))
+            .a11y_hidden();
         if interactive {
             control = control.hover(t.hover);
         }
@@ -394,6 +395,9 @@ impl Renderer {
             .key(format!("i{k}"))
             .role("checkbox")
             .label(item_label(item))
+            .checked(checked)
+            .read_only(!interactive)
+            .position_in_set(k + 1, n)
             .focus_selected(checked)
             .focusable(interactive)
             .w_full()
@@ -442,25 +446,29 @@ impl Renderer {
                     BlockMap::List(m) => m.as_slice(),
                     _ => &[][..],
                 };
-                let mut c = col().w_full().gap(s.list_gap);
+                let mut c = col().role("list").w_full().gap(s.list_gap);
+                let n = items.len();
                 for (k, item) in items.iter().enumerate() {
                     let imap = item_maps.get(k).map_or(&[][..], Vec::as_slice);
                     let task_idx = self.next_task.get();
                     self.next_task.set(task_idx + 1);
                     if let Some((checked, marker_offset)) = self.tasks.get(task_idx).copied().flatten() {
-                        c = c.child(self.task_item(k, item, imap, marker_offset, checked));
+                        c = c.child(self.task_item((k, n), item, imap, marker_offset, checked));
                         continue;
                     }
                     let marker = match start {
                         Some(n) => format!("{}.", n + k as u64),
                         None => "•".into(),
                     };
+                    // The item's place in the list says what its marker shows.
                     c = c.child(
                         row()
                             .key(format!("i{k}"))
+                            .role("listitem")
+                            .position_in_set(k + 1, n)
                             .w_full()
                             .child(
-                                self.with_reveal(text(marker).font(s.body).color(s.muted).w(s.list_indent).align(Align::Center)),
+                                self.with_reveal(text(marker).font(s.body).color(s.muted).w(s.list_indent).align(Align::Center)).a11y_hidden(),
                             )
                             .child(self.blocks(item, imap, &[], false).grow(1.0).shrink()),
                     );
@@ -473,6 +481,7 @@ impl Renderer {
                     _ => &[][..],
                 };
                 row()
+                    .role("blockquote")
                     .w_full()
                     .child(el().w(2.0).h_full().radius(1.0).fill(s.quote_rule))
                     .child(self.blocks(inner, inner_maps, &[], false).grow(1.0).shrink().pl(12.0))

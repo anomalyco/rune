@@ -117,12 +117,16 @@ pub struct ShortcutRecorder<S> {
     width: f32,
     disabled: bool,
     unmodified: bool,
+    label: Option<String>,
 }
 impl<S: 'static> ShortcutRecorder<S> {
     pub fn new(key: impl Into<String>, state: &ShortcutRecorderState,
         access: impl for<'a> Fn(&'a mut S) -> &'a mut ShortcutRecorderState + 'static) -> Self {
-        Self { key: key.into(), state: state.clone(), access: Rc::new(access), change: None, message: Box::new(shortcut_error_message), width: 240.0, disabled: false, unmodified: false }
+        Self { key: key.into(), state: state.clone(), access: Rc::new(access), change: None, message: Box::new(shortcut_error_message), width: 240.0, disabled: false, unmodified: false, label: None }
     }
+    /// The accessible name: what the shortcut does ("Show window"). Assistive technology then
+    /// reads the recorded keys as its value. Without it the keys (or "Record shortcut") name it.
+    pub fn label(mut self, l: impl Into<String>) -> Self { self.label = Some(l.into()); self }
     pub fn on_change(mut self, change: impl Fn(&mut S, Option<&Shortcut>, &mut Tx) -> Result<(), ShortcutError> + 'static) -> Self {
         self.change = Some(Rc::new(change)); self
     }
@@ -142,13 +146,20 @@ impl<S: 'static> ShortcutRecorder<S> {
         let placeholder = if self.state.recording { "Press shortcut" } else { "Record shortcut" };
         let border = if self.state.error.is_some() { k.c.danger.border }
             else if self.state.recording { k.c.border_focus } else { k.c.border_base };
+        let keys = if labels.is_empty() { placeholder.to_owned() } else { labels.join(" ") };
         let mut control = row().key(&self.key).role("button")
-            .label(if labels.is_empty() { placeholder.into() } else { labels.join(" ") })
             .w(self.width).h(32.0).px(8.0).center_y().radius(k.radius.md)
-            .fill(k.c.bg_base).border(1.0, border).focusable(!self.disabled)
+            .fill(k.c.bg_base).border(1.0, border).focusable(!self.disabled).disabled(self.disabled)
             .focus_ring(2.0, 2.0, k.c.border_focus);
-        control = control.child(if labels.is_empty() { text(placeholder).font(k.ty.ui_compact).color(k.c.text_faint) }
-            else { Keybind::new(&labels).build(k) });
+        control = match self.label {
+            Some(name) => control.label(name).a11y_value(keys),
+            None => control.label(keys),
+        };
+        if self.state.recording {
+            control = control.description("Press a shortcut. Escape cancels; Backspace clears.");
+        }
+        control = control.child((if labels.is_empty() { text(placeholder).font(k.ty.ui_compact).color(k.c.text_faint) }
+            else { Keybind::new(&labels).build(k) }).a11y_hidden());
         if !self.disabled {
             let access = self.access.clone();
             control = control.on_press(move |s: &mut S| access(s).begin());
@@ -179,7 +190,8 @@ impl<S: 'static> ShortcutRecorder<S> {
         }
         let mut root = col().key(format!("{}-field", self.key)).gap(4.0).child(control);
         if let Some(error) = &self.state.error {
-            root = root.child(text((self.message)(error, self.state.refused.as_ref())).font(k.ty.small_medium).color(k.c.danger.fg));
+            root = root.child(text((self.message)(error, self.state.refused.as_ref())).key("error").role("alert")
+                .font(k.ty.small_medium).color(k.c.danger.fg));
         }
         root
     }

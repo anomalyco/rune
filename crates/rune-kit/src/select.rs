@@ -30,6 +30,7 @@ pub struct Select {
     width: f32,
     current: Option<String>,
     placeholder: String,
+    name: Option<String>,
     open: bool,
     invalid: bool,
     state: State,
@@ -50,6 +51,7 @@ impl Select {
             width: 280.0,
             current: None,
             placeholder: String::new(),
+            name: None,
             open: false,
             invalid: false,
             state: State::Rest,
@@ -83,6 +85,12 @@ impl Select {
     }
     pub fn placeholder(mut self, p: impl Into<String>) -> Self {
         self.placeholder = p.into();
+        self
+    }
+    /// The accessible name: what the choice is for ("Model"). Assistive technology reads the
+    /// chosen option as its value. Without it the placeholder names the select.
+    pub fn label(mut self, l: impl Into<String>) -> Self {
+        self.name = Some(l.into());
         self
     }
     pub fn open(mut self, o: bool) -> Self {
@@ -155,6 +163,7 @@ impl Select {
         let mut list = col().key("rows").padding(4.0).items_stretch();
         let mut group: Option<&str> = None;
         let mut after_item = false;
+        let count = self.options.len();
         for (i, (g, o)) in self.options.iter().enumerate() {
             if g.as_deref() != group {
                 group = g.as_deref();
@@ -176,6 +185,7 @@ impl Select {
                 .role("option")
                 .focusable(true).focus_selected(selected)
                 .label(o.clone())
+                .position_in_set(i + 1, count)
                 .h(28.0)
                 .pl(12.0)
                 .pr(6.0)
@@ -184,11 +194,14 @@ impl Select {
                 .radius(4.0)
                 .mt(if after_item { 2.0 } else { 0.0 })
                 .child(
-                    text(o.clone()).key("label").font(k.ty.ui_compact).color(c.text_base).grow(1.0).shrink().truncate(),
+                    text(o.clone()).key("label").font(k.ty.ui_compact).color(c.text_base).grow(1.0).shrink().truncate().a11y_hidden(),
                 )
-                .child(el().key("indicator").size(16.0, 16.0).center().child(
+                .child(el().key("indicator").size(16.0, 16.0).center().a11y_hidden().child(
                     icon(k.glyph.check_small, 14.0).color(c.icon_base).opacity(if selected { 1.0 } else { 0.0 }),
                 ));
+            if let Some(d) = self.details.get(i).cloned().flatten() {
+                item = item.description(d);
+            }
             if self.highlighted.as_deref() == Some(o.as_str()) {
                 item = item.fill(c.hover);
             } else {
@@ -204,12 +217,15 @@ impl Select {
             k,
             col()
                 .key(format!("{}-content", self.key))
+                // Modal, so a reader hears a dialog: it's named as the select is.
+                .label(self.name.clone().unwrap_or_else(|| self.placeholder.clone()))
                 .focus_return(&anchor_key)
                 .min_w(160.0)
                 .max_w(368.0)
                 .radius(6.0)
                 .fill(c.layer_01)
-                .child(col().key("listbox").role("listbox").focus_group().max_h(LISTBOX_MAX_HEIGHT).min_h(0.0).shrink().child(fit_scroll_bar(k, &self.key, list))),
+                .child(col().key("listbox").role("listbox").label(self.name.clone().unwrap_or_else(|| self.placeholder.clone()))
+                    .focus_group().max_h(LISTBOX_MAX_HEIGHT).min_h(0.0).shrink().child(fit_scroll_bar(k, &self.key, list))),
             &k.elevation.floating,
         );
         if let Some(modal) = modal {
@@ -230,8 +246,15 @@ impl Select {
             None => (self.placeholder.clone(), if red { c.danger.fg } else { c.text_faint }),
         };
         let chevron: &'static Icon = if self.open { k.glyph.chevron_up } else { k.glyph.chevron_down };
-        let mut trigger = row().key(anchor_key.clone()).role("combobox").label(label.clone()).center_y()
+        // Named for what it chooses, its value the chosen option; the text and chevron inside
+        // show the same.
+        let name = self.name.clone().unwrap_or_else(|| self.placeholder.clone());
+        let mut trigger = row().key(anchor_key.clone()).role("combobox").label(name)
+            .expanded(self.open).disabled(disabled).center_y()
             .focusable(!disabled).focus_ring(1.0, 0.0, c.border_focus);
+        if let Some(v) = &self.current {
+            trigger = trigger.a11y_value(v.clone());
+        }
         trigger = match self.appearance {
             SelectAppearance::Inline => {
                 let font = TextStyle { line_height: 16.0, ..k.ty.ui_medium };
@@ -243,8 +266,8 @@ impl Select {
                     .py(4.0)
                     .gap(4.0)
                     .radius(k.radius.sm)
-                    .child(text(label).key("value").font(font).color(ink).truncate())
-                    .child(icon(chevron, 16.0).key("chevron").color(c.icon_muted));
+                    .child(text(label).key("value").font(font).color(ink).truncate().a11y_hidden())
+                    .child(icon(chevron, 16.0).key("chevron").color(c.icon_muted).a11y_hidden());
                 if hover {
                     t = t.fill(c.hover);
                 } else if self.state == State::Pressed {
@@ -269,10 +292,11 @@ impl Select {
                             .grow(1.0)
                             .shrink()
                             .pl(8.0)
-                            .child(text(label).font(k.ty.ui_compact).color(ink).truncate()),
+                            .child(text(label).font(k.ty.ui_compact).color(ink).truncate())
+                            .a11y_hidden(),
                     )
                     .child(
-                        el().size(20.0, 20.0).center().child(icon(chevron, 16.0).key("chevron").color(c.icon_muted)),
+                        el().size(20.0, 20.0).center().child(icon(chevron, 16.0).key("chevron").color(c.icon_muted)).a11y_hidden(),
                     );
                 if self.invalid && !disabled {
                     t = t.outline(1.0, 0.0, c.danger.fg);
