@@ -676,6 +676,7 @@ impl<S: 'static> Runtime<S> {
                         match previous.property {
                             crate::live::Property::Offset => self.scene.set(old.id, prop::OFFSET, rune_motion::Vec2::ZERO),
                             crate::live::Property::Scale => self.scene.set(old.id, prop::SCALE, 1.0),
+                            crate::live::Property::Trim => { self.scene.store_mut().remove(old.id, P_TRIM); }
                             _ => {}
                         }
                     }

@@ -846,6 +846,12 @@ impl El {
     pub fn live_scale(mut self, value: impl Into<crate::live::Binding<f32>>) -> Self {
         self.bind_live(crate::live::Bound::new(value, crate::live::Property::Scale)); self
     }
+    /// Bind the [start, end] span of a shape's strokes that draws, as fractions (0 to 1) of
+    /// their combined length, as [`Shape::trimmed`](crate::Shape::trimmed) cuts them. A
+    /// [`Tween`](crate::Tween) runs a countdown ring or a travelling dash without rebuilding.
+    pub fn live_trim(mut self, value: impl Into<crate::live::Binding<[f32; 2]>>) -> Self {
+        self.bind_live(crate::live::Bound::new(value, crate::live::Property::Trim)); self
+    }
     pub fn live_fill(mut self, value: impl Into<crate::live::Binding<Color>>) -> Self {
         self.bind_live(crate::live::Bound::new(value, crate::live::Property::Fill)); self
     }

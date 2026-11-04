@@ -67,7 +67,11 @@ impl<S: 'static> Runtime<S> {
                 Some([vw, vh]) => ([r[0], r[1]], [w / vw, h / vh]),
                 None => ([r[0] + (w - w_exact) * 0.5, r[1] + (h - h_exact) * 0.5], [k_px, k_px]),
             };
-            if draw < 1.0 {
+            if let Some(t) = self.scene.get(node_id, P_TRIM) {
+                // A presence draw traces the trimmed span on from its start.
+                let end = t.x + (t.y - t.x) * draw;
+                push_shape(&mut self.instances, &shape.trimmed(t.x, end), origin, k, k_px, o, srgb, clip, fade);
+            } else if draw < 1.0 {
                 push_shape(&mut self.instances, &shape.drawn(draw), origin, k, k_px, o, srgb, clip, fade);
             } else {
                 push_shape(&mut self.instances, shape, origin, k, k_px, o, srgb, clip, fade);

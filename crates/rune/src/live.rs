@@ -224,7 +224,7 @@ pub(crate) enum LatchOp {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Property { Opacity, Offset, Scale, Fill, Rect, Blur }
+pub(crate) enum Property { Opacity, Offset, Scale, Fill, Rect, Blur, Trim }
 #[derive(Clone)]
 pub(crate) struct Bound {
     pub source: Arc<Source>,

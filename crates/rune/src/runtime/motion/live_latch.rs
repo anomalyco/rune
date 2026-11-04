@@ -140,6 +140,11 @@ impl<S: 'static> Runtime<S> {
                         |b| { let [x, y] = <[f32; 2]>::decode(b); rune_motion::Vec2::new(x, y) }, op,
                         |_, _| false,
                     ),
+                    Property::Trim => apply(
+                        &mut self.scene, node.id, P_TRIM, enter, leave,
+                        |b| { let [s, e] = <[f32; 2]>::decode(b); rune_motion::Vec2::new(s, e) }, op,
+                        |_, _| false,
+                    ),
                     Property::Fill => {
                         let bits = match op {
                             LatchOp::Snap(b) | LatchOp::Set(b) | LatchOp::Pulse { rest: b, .. } => b,
