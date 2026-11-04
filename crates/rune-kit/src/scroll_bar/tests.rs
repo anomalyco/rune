@@ -95,12 +95,59 @@ fn dragging_the_thumb_and_pressing_the_track_scroll_the_viewport() {
     rt.pointer_up(x, 82.0);
     rt.frame(1.0 / 60.0);
     assert_eq!(top(&rt), -300.0, "the thumb dragged to the track's end shows the content's");
+    rt.set_system_scroller_jumps(true);
+    rt.frame(1.0 / 60.0);
     rt.pointer_move(x, 5.0);
     rt.pointer_down(x, 5.0);
     rt.pointer_up(x, 5.0);
     rt.frame(1.0 / 60.0);
-    assert_eq!(top(&rt), 0.0, "pressing the track's top jumps there");
+    assert_eq!(top(&rt), 0.0, "set to jump to the spot, pressing the track's top jumps there");
     assert!(rt.live_only_warnings().is_empty(), "{:#?}", rt.live_only_warnings());
+}
+
+#[test]
+fn a_track_press_pages_toward_itself_while_held_and_option_jumps() {
+    let alt = |rt: &mut rune::Runtime<usize>, down: bool| {
+        rt.physical_input(rune::PhysicalInput::Modifiers(rune::Mods { alt: down, ..Default::default() }))
+    };
+    let press = |jumps: bool, option: bool, hold: usize| {
+        let mut rt = rune::Runtime::new(20usize, hover_view, (200.0, 100.0), rune::Env::new(true, 1.0));
+        rt.set_system_scroll_bars(ScrollBars::Always);
+        rt.set_system_scroller_jumps(jumps);
+        rt.check_live_only(false);
+        frames(&mut rt, 2);
+        let (runs, generation) = (HOVER_RUNS.get(), rune::commit_generation());
+        alt(&mut rt, option);
+        rt.pointer_move(195.0, 95.0);
+        rt.pointer_down(195.0, 95.0);
+        frames(&mut rt, hold);
+        rt.pointer_up(195.0, 95.0);
+        alt(&mut rt, false);
+        frames(&mut rt, 30);
+        assert_eq!((HOVER_RUNS.get(), rune::commit_generation()), (runs, generation), "paging never runs the view");
+        assert!(rt.live_only_warnings().is_empty(), "{:#?}", rt.live_only_warnings());
+        top(&rt)
+    };
+    assert_eq!(press(false, false, 1), -90.0, "a click below the thumb pages down once, 90% of the viewport");
+    assert_eq!(press(false, false, 12), -90.0, "and waits before paging again");
+    assert_eq!(press(false, false, 60), -300.0, "held, it pages on to the end");
+    assert_eq!(press(false, true, 1), -300.0, "Option-click jumps to the spot");
+    assert_eq!(press(true, false, 1), -300.0, "as a click does when set to jump");
+    assert_eq!(press(true, true, 1), -90.0, "where Option-click pages");
+
+    // Held above the thumb, paging stops once the thumb reaches the pointer.
+    let mut rt = rune::Runtime::new(40usize, view, (200.0, 100.0), rune::Env::new(true, 1.0));
+    rt.set_system_scroll_bars(ScrollBars::Always);
+    frames(&mut rt, 2);
+    rt.wheel(100.0, 50.0, -10_000.0);
+    frames(&mut rt, 60);
+    assert_eq!(top(&rt), -700.0);
+    rt.pointer_move(195.0, 40.0);
+    rt.pointer_down(195.0, 40.0);
+    frames(&mut rt, 120);
+    let thumb = rect(&rt, "thumb");
+    assert!(thumb[1] <= 40.0 && 40.0 <= thumb[1] + thumb[3], "the thumb stops under the pointer: {thumb:?}");
+    rt.pointer_up(195.0, 40.0);
 }
 
 #[test]

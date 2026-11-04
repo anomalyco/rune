@@ -29,6 +29,8 @@ pub(super) enum Action {
     LinkSecondary(String, usize, PointerEvent),
     SecondaryPress(String, PointerEvent),
     Drag(String, Drag, crate::PointerButton),
+    /// A held press's drag hearing the pointer again (`Tx::drag_repeat_after`).
+    DragRepeat(String, Drag, crate::PointerButton),
     DragStart(String),
     DragEnd(String, crate::DragOutcome),
     /// A file drag from another app moved, left, or dropped (`drop_dispatch`).
@@ -114,7 +116,7 @@ pub(super) fn live_only_handler(action: &Action) -> Option<&'static str> {
         Action::Link(..) => "on_link",
         Action::LinkSecondary(..) => "on_link_secondary",
         Action::SecondaryPress(..) => "on_secondary_press",
-        Action::Drag(..) => "on_drag",
+        Action::Drag(..) | Action::DragRepeat(..) => "on_drag",
         Action::DragStart(_) => "on_drag_start",
         Action::DragEnd(..) => "on_drag_end",
         Action::Key { .. } => "on_key",
@@ -131,7 +133,7 @@ pub(super) fn live_only_handler(action: &Action) -> Option<&'static str> {
 pub(super) fn action_path(action: &Action) -> Option<&str> {
     match action {
         Action::PointerMove(path, _) | Action::DrawnLayout(path, ..) | Action::Layout(path, _) | Action::Hover(path) | Action::HoverChange(path, _) | Action::SelectionChange(path, _) | Action::Press(path, _) | Action::DoublePress(path)
-        | Action::Link(path, _) | Action::LinkSecondary(path, ..) | Action::SecondaryPress(path, _) | Action::Drag(path, ..) | Action::DragStart(path)
+        | Action::Link(path, _) | Action::LinkSecondary(path, ..) | Action::SecondaryPress(path, _) | Action::Drag(path, ..) | Action::DragRepeat(path, ..) | Action::DragStart(path)
         | Action::DragEnd(path, _) => Some(path),
         Action::Wheel(_, chain, _) | Action::Gesture(chain, _) => chain.first().map(String::as_str),
         _ => None,
@@ -287,6 +289,7 @@ impl<S: 'static> Runtime<S> {
         });
         #[cfg(not(debug_assertions))]
         let live_label = live_only_handler(&action);
+        let repeat = matches!(action, Action::DragRepeat(..));
         let ran = match action {
             Action::WindowFocus(focused) => {
                 if !focused { self.held = None; }
@@ -395,15 +398,19 @@ impl<S: 'static> Runtime<S> {
                 f(states!(self), point, &mut one);
                 true
             }
-            Action::Drag(path, mut d, button) => {
+            Action::Drag(path, mut d, button) | Action::DragRepeat(path, mut d, button) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_drag.clone()) else { return false };
                 if d.phase == Phase::Move {
                     one.instant = true;
                 }
                 one.button = button;
+                one.drag_repeat = repeat;
                 d.data = if d.phase == Phase::Down { 0.0 } else { self.drag_data };
                 f(states!(self), &mut d, &mut one);
                 self.drag_data = d.data;
+                if let Some(after) = one.drag_repeat_after.take() {
+                    self.arm_press_repeat(&path, after);
+                }
                 if d.phase != Phase::Move {
                     log_event!(self, "drag {:?} {path}", d.phase);
                 }

@@ -476,3 +476,43 @@ fn a_drag_counts_its_run_of_clicks() {
     rt.frame(0.1);
     assert!(rt.state.contains(&(Phase::Up, 0)), "on_double_press still runs: {:?}", rt.state);
 }
+
+#[test]
+fn a_held_press_hears_its_drag_again_until_released() {
+    type State = Vec<(Phase, bool, f32)>;
+    fn view(_: &State, _: &mut Cx<State>) -> El {
+        el().key("pill").size(100.0, 40.0).on_drag(|s: &mut State, d, tx| {
+            s.push((d.phase, tx.drag_repeat(), d.x));
+            if d.phase == Phase::Down || tx.drag_repeat() {
+                tx.drag_repeat_after(std::time::Duration::from_millis(if tx.drag_repeat() { 50 } else { 300 }));
+            }
+        })
+    }
+    let repeats = |rt: &Runtime<State>| rt.state.iter().filter(|e| e.1).count();
+    let mut rt = Runtime::new(Vec::new(), view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.pointer_move(10.0, 10.0);
+    rt.pointer_down(10.0, 10.0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state, vec![(Phase::Down, false, 10.0)]);
+    assert!(rt.wake_deadline().is_some(), "a still window wakes for the repeat");
+    for _ in 0..15 { rt.frame(1.0 / 60.0); }
+    assert_eq!(repeats(&rt), 0, "not before the delay");
+    for _ in 0..4 { rt.frame(1.0 / 60.0); }
+    assert_eq!(repeats(&rt), 1);
+    assert_eq!(rt.state.last(), Some(&(Phase::Move, true, 10.0)), "a still pointer is heard again");
+
+    rt.pointer_move(30.0, 10.0);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.contains(&(Phase::Move, false, 30.0)), "the hand's move isn't a repeat");
+    for _ in 0..12 { rt.frame(1.0 / 60.0); }
+    assert!(repeats(&rt) >= 4, "then every interval: {:?}", rt.state);
+    assert_eq!(rt.state.last().map(|e| (e.1, e.2)), Some((true, 30.0)), "where the pointer is now");
+
+    rt.pointer_up(30.0, 10.0);
+    rt.frame(1.0 / 60.0);
+    let heard = rt.state.len();
+    for _ in 0..30 { rt.frame(1.0 / 60.0); }
+    assert_eq!(rt.state.len(), heard, "the release ends it");
+    assert_eq!(rt.state.last().map(|e| e.0), Some(Phase::Up));
+}

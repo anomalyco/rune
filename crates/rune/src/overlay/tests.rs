@@ -246,6 +246,7 @@ fn a_hidden_overlay_takes_a_scroll_bar_change_and_redraws_before_reveal() {
     let always = crate::platform::scroll_bars::SystemScrollBars {
         bars: crate::ScrollBars::Always,
         scroller_overlay: false,
+        jump_to_click: false,
     };
     overlay.scroll_bars_changed(always);
     assert_eq!(overlay.rt.system_scroll_bars_state(), always);

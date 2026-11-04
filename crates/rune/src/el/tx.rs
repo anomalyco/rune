@@ -7,6 +7,7 @@ use rune_motion::{Anim, Spring};
 use crate::el::*;
 
 mod keys;
+mod press;
 mod scroll;
 
 /// What a handler may say about the commit it causes.
@@ -14,6 +15,10 @@ mod scroll;
 pub struct Tx {
     pub(crate) shortcut_activation_token: Option<String>,
     pub(crate) key_repeat: bool,
+    /// `Tx::drag_repeat`.
+    pub(crate) drag_repeat: bool,
+    /// `Tx::drag_repeat_after`.
+    pub(crate) drag_repeat_after: Option<std::time::Duration>,
     /// `Tx::input_time`.
     pub(crate) input_time: Option<crate::time::Instant>,
     pub(crate) physical_key: Option<crate::PhysicalKeyCode>,

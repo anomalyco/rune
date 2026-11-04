@@ -102,6 +102,7 @@ impl<S: 'static> Runtime<S> {
         let button = std::mem::take(&mut self.capture_button);
         self.queue.push(Action::Drag(path, d, button));
         self.capture = None;
+        self.end_press_repeat();
         self.capture_inside = false;
         self.double_armed = false;
         self.drag_out_armed = false;
@@ -280,6 +281,7 @@ impl<S: 'static> Runtime<S> {
         let selected = self.selected_by_drag();
         self.text_sel.dragging = false;
         let input_capture = self.input_click.end_press();
+        self.end_press_repeat();
         let Some((path, d)) = self.capture.take() else { return };
         let button = std::mem::take(&mut self.capture_button);
         self.refresh_hover_within();

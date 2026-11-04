@@ -206,6 +206,7 @@ pub use platform::scroll_bars::ScrollBars;
 #[doc(hidden)]
 pub use platform::scroll_bars::current_runtime_id;
 pub use platform::scroll_bars::system_scroll_bars;
+pub use platform::scroll_bars::system_scroller_jumps;
 pub use platform::scroll_bars::system_scroller_overlay;
 #[cfg(target_arch = "wasm32")]
 pub use platform::web;

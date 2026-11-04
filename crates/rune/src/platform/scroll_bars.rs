@@ -1,6 +1,8 @@
-//! The user's "Show scroll bars" preference and pointing-device scroller style.
+//! The user's "Show scroll bars" and "Click in the scroll bar to" preferences, and the
+//! pointing-device scroller style.
 //!
-//! macOS reads `AppleShowScrollBars` and `NSScroller.preferredScrollerStyle`, and follows
+//! macOS reads `AppleShowScrollBars`, `AppleScrollerPagingBehavior` and
+//! `NSScroller.preferredScrollerStyle`, and follows
 //! `NSPreferredScrollerStyleDidChangeNotification` while windows are open; iOS always uses
 //! overlay scroll bars; other platforms and headless runs default to [`ScrollBars::WhenScrolling`].
 
@@ -44,10 +46,12 @@ impl ScrollBars {
 pub(crate) struct SystemScrollBars {
     pub bars: ScrollBars,
     pub scroller_overlay: bool,
+    /// A click in the track jumps to the spot clicked instead of paging toward it.
+    pub jump_to_click: bool,
 }
 
 impl SystemScrollBars {
-    pub const DEFAULT: Self = Self { bars: ScrollBars::WhenScrolling, scroller_overlay: true };
+    pub const DEFAULT: Self = Self { bars: ScrollBars::WhenScrolling, scroller_overlay: true, jump_to_click: false };
 
     pub const fn is_overlay(self) -> bool {
         self.bars.is_overlay(self.scroller_overlay)
@@ -117,6 +121,14 @@ pub fn system_scroller_overlay() -> bool {
     scoped().unwrap_or_else(current).scroller_overlay
 }
 
+/// Whether a click in a scroll bar's track jumps to the spot clicked rather than paging toward
+/// it (System Settings › Appearance › "Click in the scroll bar to"): the building window's setting
+/// inside a view, or `AppleScrollerPagingBehavior` on macOS (`false`, paging, elsewhere and
+/// headless). Option-click does the other.
+pub fn system_scroller_jumps() -> bool {
+    scoped().unwrap_or_else(current).jump_to_click
+}
+
 pub(crate) fn current() -> SystemScrollBars {
     #[cfg(target_os = "macos")]
     return mac::current();
@@ -174,9 +186,12 @@ mod mac {
                 .stringForKey(&NSString::from_str("AppleShowScrollBars"))
                 .map(|s| s.to_string());
             let style: isize = msg_send![class!(NSScroller), preferredScrollerStyle];
+            let jump_to_click = NSUserDefaults::standardUserDefaults()
+                .boolForKey(&NSString::from_str("AppleScrollerPagingBehavior"));
             SystemScrollBars {
                 bars: parse_show_scroll_bars(pref.as_deref()),
                 scroller_overlay: style == OVERLAY_STYLE,
+                jump_to_click,
             }
         }
     }

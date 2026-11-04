@@ -28,7 +28,7 @@ impl<S: 'static> Runtime<S> {
             Action::Paste(..) => ("paste", 3, focused),
             Action::Files(_) => ("on_drop_files", 3, None),
             Action::DragStart(p) => ("on_drag_start", 2, Some(p)),
-            Action::Drag(p, ..) => ("on_drag", 2, Some(p)),
+            Action::Drag(p, ..) | Action::DragRepeat(p, ..) => ("on_drag", 2, Some(p)),
             Action::DragEnd(p, _) => ("on_drag_end", 2, Some(p)),
             Action::Wheel(_, chain, _) => ("on_wheel", 2, chain.first().map(String::as_str)),
             Action::Gesture(chain, _) => ("gesture", 2, chain.first().map(String::as_str)),

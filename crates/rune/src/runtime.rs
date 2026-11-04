@@ -184,6 +184,8 @@ mod secondary;
 mod app_ime;
 #[path = "runtime/input/press_clicks.rs"]
 mod press_clicks;
+#[path = "runtime/input/press_repeat.rs"]
+mod press_repeat;
 #[path = "runtime/input/titlebar.rs"]
 mod titlebar;
 #[path = "runtime/window_requests.rs"]
@@ -742,6 +744,8 @@ pub struct Runtime<S: 'static> {
     double_armed: bool,
     /// The presses counted into `Drag::clicks`.
     press_clicks: press_clicks::PressClicks,
+    /// The held press's drag repeat (`Tx::drag_repeat_after`).
+    press_repeat: press_repeat::PressRepeat,
     press_down_t: f64,
     /// The held press has travelled past the click slop: it isn't a click of a double press.
     press_moved: bool,
@@ -1021,6 +1025,7 @@ impl<S: 'static> Runtime<S> {
             last_press: None,
             double_armed: false,
             press_clicks: Default::default(),
+            press_repeat: Default::default(),
             press_down_t: 0.0,
             press_moved: false,
             press_cancelled: false,

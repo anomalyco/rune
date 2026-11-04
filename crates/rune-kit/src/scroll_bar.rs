@@ -3,8 +3,10 @@
 //! preference ([`rune::ScrollBars`]): always shown when overflowing under `Always` (or `Automatic`
 //! with a mouse), and overlaid while scrolling then faded out at rest under `WhenScrolling` (or
 //! `Automatic` with a trackpad, and always on iOS). Dragging the thumb scrolls it, and pressing
-//! the track above or below jumps there, all through live values so scrolling never rebuilds the
-//! view.
+//! the track above or below pages toward the press, again and again while it's held, or jumps
+//! there under the "Click in the scroll bar to" preference ([`rune::system_scroller_jumps`];
+//! Option-click does the other). All of it runs through live values, so scrolling never rebuilds
+//! the view.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -38,6 +40,9 @@ const LEAVE: Spring = Spring::new(0.28, 0.0);
 /// The thumb widening under the pointer.
 const WIDEN: Spring = Spring::new(0.12, 0.0);
 const PULSE_SPAN: f64 = 0.75 + 0.35;
+/// How long a held track press waits before paging again, then how often it pages.
+const PAGE_DELAY: Duration = Duration::from_millis(300);
+const PAGE_EVERY: Duration = Duration::from_millis(60);
 
 /// The most scroll bars kept between views; past it they're all dropped, and each comes back on
 /// its next commit.
@@ -59,6 +64,8 @@ struct Bar {
     pos: Cell<ScrollPos>,
     state: Cell<BarState>,
     dragging: Cell<bool>,
+    /// A held track press pages up (-1) or down (1); 0 otherwise.
+    paging: Cell<i32>,
     /// The pointer is near the right edge, where it reveals an overlay bar.
     near: Cell<bool>,
     /// The pointer is over the track.
@@ -90,6 +97,7 @@ fn kept(area: &str) -> Rc<Bar> {
                     pos: Cell::new(ScrollPos::default()),
                     state: Cell::new(BarState::Uninit),
                     dragging: Cell::new(false),
+                    paging: Cell::new(0),
                     near: Cell::new(false),
                     over: Cell::new(false),
                     pulse_until: Cell::new(-1.0),
@@ -250,29 +258,52 @@ impl Bar {
         }
     }
 
-    /// The thumb or track pressed, dragged or released; `target` is the viewport's path.
-    fn drag(&self, target: &str, d: &mut rune::Drag, tx: &mut rune::Tx) {
+    /// The thumb or track pressed, dragged or released; `target` is the viewport's path, and
+    /// `jumps` says a track press jumps to the spot rather than paging toward it.
+    fn drag(&self, target: &str, jumps: bool, d: &mut rune::Drag, tx: &mut rune::Tx) {
         tx.live_only();
         let at = self.pos.get();
         let (len, shows) = track_len(at);
         if !shows {
+            self.paging.set(0);
             if self.dragging.replace(false) {
                 self.widen();
             }
             return;
         }
         let (top, h) = thumb(at, len);
-        // A press on the thumb holds it where it was caught; one on the track centres it there.
         if d.phase == Phase::Down {
-            d.data = if (top..=top + h).contains(&d.y) { d.y - top } else { h / 2.0 };
             self.dragging.set(true);
             self.hold();
             self.widen();
+            let on_thumb = (top..=top + h).contains(&d.y);
+            // A track press pages toward itself, or with Option (or the preference) jumps there.
+            if !on_thumb && jumps == tx.mods().alt {
+                let toward = if d.y < top { -1 } else { 1 };
+                self.paging.set(toward);
+                tx.scroll_page(target, toward);
+                tx.drag_repeat_after(PAGE_DELAY);
+                return;
+            }
+            // A press on the thumb holds it where it was caught; a jump centres it there.
+            d.data = if on_thumb { d.y - top } else { h / 2.0 };
         }
         if d.phase == Phase::Up {
+            self.paging.set(0);
             if self.dragging.replace(false) {
                 self.widen();
                 self.let_go();
+            }
+            return;
+        }
+        let toward = self.paging.get();
+        if toward != 0 {
+            // Paging goes on while held, until the thumb reaches the pointer.
+            if tx.drag_repeat() {
+                tx.drag_repeat_after(PAGE_EVERY);
+                if (toward < 0 && d.y < top) || (toward > 0 && d.y > top + h) {
+                    tx.scroll_page(target, toward);
+                }
             }
             return;
         }
@@ -316,6 +347,7 @@ pub fn scroll_bar(k: &Kit, area: &str, key: &str, viewport: El) -> El {
 
 fn attach(k: &Kit, area: &str, key: &str, outer: El, viewport: El) -> El {
     let overlay = rune::system_scroll_bars().is_overlay(rune::system_scroller_overlay());
+    let jumps = rune::system_scroller_jumps();
     let bar = kept(area);
     let target = format!("{area}/{key}");
     let (watch, moved, left, drag) = (bar.clone(), bar.clone(), bar.clone(), bar.clone());
@@ -336,7 +368,7 @@ fn attach(k: &Kit, area: &str, key: &str, outer: El, viewport: El) -> El {
                 .absolute(0.0, 0.0)
                 .live_rect(&bar.track)
                 .live_opacity(bar.opacity.smooth(ENTER).rest(LEAVE))
-                .on_drag_any(move |d, tx| drag.drag(&target, d, tx))
+                .on_drag_any(move |d, tx| drag.drag(&target, jumps, d, tx))
                 // The scroll view it drags already scrolls for assistive technology.
                 .a11y_hidden()
                 .child(

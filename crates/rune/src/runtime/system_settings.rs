@@ -112,6 +112,20 @@ impl<S: 'static> Runtime<S> {
         self.scroll_bars.state.scroller_overlay
     }
 
+    /// Whether a click in a scroll bar's track jumps to the spot clicked (`true`) or pages toward
+    /// it (`false`), as [`crate::system_scroller_jumps`] reports. Native macOS windows set it from
+    /// `AppleScrollerPagingBehavior`; headless runs default to paging. A change re-runs the view.
+    pub fn set_system_scroller_jumps(&mut self, jumps: bool) {
+        self.set_system_scroll_bars_state(crate::platform::scroll_bars::SystemScrollBars {
+            jump_to_click: jumps,
+            ..self.scroll_bars.state
+        });
+    }
+
+    pub fn system_scroller_jumps(&self) -> bool {
+        self.scroll_bars.state.jump_to_click
+    }
+
     /// Whether scroll bars currently overlay and fade out at rest (`true` for
     /// [`ScrollBars::WhenScrolling`](crate::ScrollBars::WhenScrolling), `false` for
     /// [`ScrollBars::Always`](crate::ScrollBars::Always), and [`Self::system_scroller_overlay`]
