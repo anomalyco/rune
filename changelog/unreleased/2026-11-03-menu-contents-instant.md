@@ -1,0 +1,1 @@
+- Menu and submenu contents appear fully opaque on the first frame, so item highlights respond immediately even inside scroll-bar wrappers; closing still fades the surface.

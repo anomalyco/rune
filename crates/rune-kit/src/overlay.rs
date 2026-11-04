@@ -118,7 +118,13 @@ pub(crate) fn menu_anchor(k: &Kit, content: El, anchor: &str, placement: Placeme
         springs: SpringPair::new(tokens::INSTANT, Spring::new(0.25, 0.0)),
         ..Transition::identity()
     };
-    fit(content, anchor, side, align, gap).transition(fade).token_motion(k.motion.overlay)
+    // The surface's identity entrance alone does not suppress nested default fades.
+    // Land its contents too, so rows are opaque and hit-testable on the first frame.
+    fit(content, anchor, side, align, gap)
+        .transition(fade)
+        .instant_changes()
+        .motion_intent(rune::MotionIntent::CUT)
+        .token_motion(k.motion.overlay)
 }
 
 /// A transparent full-window press target under an open overlay: pressing outside closes it.
