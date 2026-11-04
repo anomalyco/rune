@@ -53,6 +53,7 @@ mod autolink;
 mod cache;
 mod find;
 mod highlight;
+mod interrupt;
 mod links;
 mod parser;
 mod render;

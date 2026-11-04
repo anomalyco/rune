@@ -404,7 +404,8 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
         tail: Tail::None,
     };
     let opts = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS;
-    for (ev, range) in Parser::new_ext(src, opts).into_offset_iter() {
+    let mut events = super::interrupt::list_interrupts(src, Parser::new_ext(src, opts).into_offset_iter());
+    while let Some((ev, range)) = events.next() {
         let starts_block = matches!(
             ev,
             Event::Start(
@@ -415,7 +416,9 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
             b.flush_inline();
             let at = src[..range.start].rfind('\n').map_or(0, |i| i + 1);
             b.root_start = at;
-            b.cuts.push(Cut { at, blocks: b.stack[0].1.len(), sources: b.sources.len(), tasks: b.tasks.len() });
+            if !events.made() {
+                b.cuts.push(Cut { at, blocks: b.stack[0].1.len(), sources: b.sources.len(), tasks: b.tasks.len() });
+            }
         }
         b.tail = match &ev {
             Event::Start(Tag::Paragraph | Tag::Item) => Tail::Inline(range.start, Scope::Para),
