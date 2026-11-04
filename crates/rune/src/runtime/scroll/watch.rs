@@ -4,10 +4,23 @@
 //! glide runs, which is too late for something that rides the scroll.
 use super::*;
 
+thread_local! {
+    static SCROLL_WATCH_STATE: std::cell::Cell<(bool, bool, f64)> = const { std::cell::Cell::new((false, false, 0.0)) };
+}
+
+/// Inside an [`El::on_scroll_offset`](crate::El::on_scroll_offset) callback: whether this
+/// viewport's scroll offset moved (`scrolled`), whether this frame ran an instant or settled
+/// commit (`instant`), and the scene's animation clock (`now`).
+#[doc(hidden)]
+pub fn scroll_watch_state() -> (bool, bool, f64) {
+    SCROLL_WATCH_STATE.get()
+}
+
 impl<S: 'static> Runtime<S> {
     /// Calls each viewport's `on_scroll_offset` whose offset or extent moved, that is new, or
     /// whose handler is; true when it called any.
-    pub(super) fn tell_scroll_offsets(&mut self) -> bool {
+    pub(super) fn tell_scroll_offsets(&mut self, instant: bool) -> bool {
+        let now = self.t;
         let mut calls = Vec::new();
         for n in &self.nodes {
             let Some(f) = n.handlers.get().and_then(|h| h.on_scroll_offset.as_ref()) else { continue };
@@ -15,9 +28,19 @@ impl<S: 'static> Runtime<S> {
             let at = crate::ScrollPos { offset: [st.x.offset as f32, st.offset as f32 + st.slack.height()], max: [st.x.max as f32, st.max as f32],
                 viewport: [n.local.w, n.local.h] };
             let by = Rc::as_ptr(f) as *const () as usize;
-            if st.told.replace(at) != Some(at) || std::mem::replace(&mut st.told_by, by) != by { calls.push((f.clone(), at)); }
+            let prev = st.told.replace(at);
+            let changed = prev != Some(at);
+            let new_handler = std::mem::replace(&mut st.told_by, by) != by;
+            if changed || new_handler {
+                let scrolled = prev.is_some_and(|old| (old.offset[0] - at.offset[0]).abs() > 0.01 || (old.offset[1] - at.offset[1]).abs() > 0.01);
+                calls.push((f.clone(), at, scrolled));
+            }
         }
-        for (f, at) in &calls { f(*at); }
+        for (f, at, scrolled) in &calls {
+            let prev_ctx = SCROLL_WATCH_STATE.replace((*scrolled, instant, now));
+            f(*at);
+            SCROLL_WATCH_STATE.set(prev_ctx);
+        }
         !calls.is_empty()
     }
 }

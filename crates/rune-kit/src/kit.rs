@@ -295,6 +295,14 @@ impl Kit {
     pub fn dark_a(&self, a: f32) -> Color {
         self.alpha(self.c.black, a)
     }
+
+    /// Wraps `viewport` (an [`El::scroll`](rune::El::scroll) element) with a vertical scroll bar
+    /// over its right edge that follows the system "Show scroll bars" preference and rides scroll
+    /// offsets through live values with zero view rebuilds per scroll frame.
+    #[track_caller]
+    pub fn scroll_bar(&self, viewport: El) -> El {
+        crate::scroll_bar::wrap(self, viewport, std::panic::Location::caller())
+    }
 }
 
 #[cfg(test)]

@@ -23,7 +23,7 @@ impl<T: LiveValue> Tween<T> {
     }
 }
 impl<T: LiveValue> From<&Tween<T>> for Binding<T> {
-    fn from(tween: &Tween<T>) -> Self { Self { live: tween.live.clone(), spring: None } }
+    fn from(tween: &Tween<T>) -> Self { Self { live: tween.live.clone(), spring: None, rest_spring: None } }
 }
 
 struct Linear {
@@ -147,20 +147,76 @@ impl<T: LiveValue> Live<T> {
     /// on a producer thread. Concurrent producers publish whole values, never torn lanes.
     pub fn set(&self, value: T) -> bool {
         let Some(bits) = value.encode() else { return false };
-        if self.source.value.swap(bits, Ordering::AcqRel) == bits { return false; }
+        let s = self.source.seq.load(Ordering::Acquire);
+        if s & KIND_MASK == KIND_SET {
+            if self.source.value.swap(bits, Ordering::AcqRel) == bits { return false; }
+            self.source.notify();
+            return true;
+        }
+        let prev = self.source.value.swap(bits, Ordering::AcqRel);
+        if s & KIND_MASK == KIND_SNAP && prev == bits {
+            return false;
+        }
+        self.source.bump_seq(KIND_SET);
+        self.source.notify();
+        true
+    }
+    /// Publishes `value` to land immediately on bound elements without running a
+    /// [`Self::smooth`] spring, cancelling any running or delayed motion on that property.
+    pub fn snap(&self, value: T) -> bool {
+        let Some(bits) = value.encode() else { return false };
+        let s = self.source.seq.load(Ordering::Acquire);
+        let prev = self.source.value.swap(bits, Ordering::AcqRel);
+        if s & KIND_MASK == KIND_SNAP && prev == bits { return false; }
+        self.source.bump_seq(KIND_SNAP);
+        self.source.notify();
+        true
+    }
+    /// Moves smoothed bindings to `active`, holds for `hold` while the window sleeps, then moves
+    /// to `rest`. [`Self::get`] and unsmoothed bindings read `rest`.
+    pub fn pulse(&self, active: T, rest: T, hold: std::time::Duration) -> bool {
+        let (Some(active_bits), Some(rest_bits)) = (active.encode(), rest.encode()) else { return false };
+        self.source.value.store(rest_bits, Ordering::Release);
+        self.source.active.store(active_bits, Ordering::Release);
+        let nanos = hold.as_nanos().min(u64::MAX as u128) as u64;
+        self.source.hold_ns.store(nanos, Ordering::Release);
+        self.source.bump_seq(KIND_PULSE);
         self.source.notify();
         true
     }
     pub fn get(&self) -> T { T::decode(self.source.value.load(Ordering::Acquire)) }
     /// Smooth this binding with an interruptible rune-motion spring; the source stays 1:1.
     pub fn smooth(&self, spring: Spring) -> Binding<T> {
-        Binding { live: self.clone(), spring: Some(spring) }
+        Binding { live: self.clone(), spring: Some(spring), rest_spring: None }
     }
 }
 
-pub struct Binding<T: LiveValue> { live: Live<T>, spring: Option<Spring> }
+pub struct Binding<T: LiveValue> {
+    live: Live<T>,
+    spring: Option<Spring>,
+    rest_spring: Option<Spring>,
+}
+impl<T: LiveValue> Binding<T> {
+    /// Use `leave` when returning to a [`Live::pulse`]'s resting value or moving downward.
+    pub fn rest(mut self, leave: Spring) -> Self {
+        self.rest_spring = Some(leave);
+        self
+    }
+}
 impl<T: LiveValue> From<&Live<T>> for Binding<T> {
-    fn from(live: &Live<T>) -> Self { Self { live: live.clone(), spring: None } }
+    fn from(live: &Live<T>) -> Self { Self { live: live.clone(), spring: None, rest_spring: None } }
+}
+
+const KIND_MASK: u64 = 0b11;
+const KIND_SET: u64 = 0;
+const KIND_SNAP: u64 = 1;
+const KIND_PULSE: u64 = 2;
+
+#[derive(Clone, Copy)]
+pub(crate) enum LatchOp {
+    Snap(u128),
+    Set(u128),
+    Pulse { active: u128, rest: u128, hold: f64 },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -170,25 +226,47 @@ pub(crate) struct Bound {
     pub source: Arc<Source>,
     pub property: Property,
     pub spring: Option<Spring>,
-    pub seen: Option<u128>,
+    pub rest_spring: Option<Spring>,
+    pub seen: Option<(u128, u64)>,
 }
 impl Bound {
     pub fn new<T: LiveValue>(binding: impl Into<Binding<T>>, property: Property) -> Self {
         let b = binding.into();
-        Self { source: b.live.source, property, spring: b.spring, seen: None }
+        Self { source: b.live.source, property, spring: b.spring, rest_spring: b.rest_spring, seen: None }
     }
     pub fn attach(&self, clock: &Arc<()>, now: f64) {
         if let Some(linear) = &self.source.linear { linear.start(clock, now); }
     }
-    pub fn read(&mut self, clock: &Arc<()>, now: f64) -> (Option<u128>, bool) {
-        let bits = self.source.value.load(Ordering::Acquire);
-        let (bits, active) = match &self.source.linear {
-            Some(linear) => linear.sample(bits, now - linear.start(clock, now)),
-            None => (bits, false),
+    pub fn read(&mut self, clock: &Arc<()>, now: f64) -> (Option<LatchOp>, bool) {
+        let mut seq = self.source.seq.load(Ordering::Acquire);
+        let mut bits = self.source.value.load(Ordering::Acquire);
+        let seq2 = self.source.seq.load(Ordering::Acquire);
+        if seq2 != seq {
+            seq = seq2;
+            bits = self.source.value.load(Ordering::Acquire);
+        }
+        if let Some(linear) = &self.source.linear {
+            let (bits, active) = linear.sample(bits, now - linear.start(clock, now));
+            if self.seen == Some((bits, seq)) { return (None, active); }
+            self.seen = Some((bits, seq));
+            return (Some(LatchOp::Snap(bits)), active);
+        }
+        let initial = self.seen.is_none();
+        if self.seen == Some((bits, seq)) { return (None, false); }
+        self.seen = Some((bits, seq));
+        if initial {
+            return (Some(LatchOp::Snap(bits)), false);
+        }
+        let op = match seq & KIND_MASK {
+            KIND_SNAP => LatchOp::Snap(bits),
+            KIND_SET => LatchOp::Set(bits),
+            _ => LatchOp::Pulse {
+                active: self.source.active.load(Ordering::Acquire),
+                rest: bits,
+                hold: self.source.hold_ns.load(Ordering::Acquire) as f64 * 1e-9,
+            },
         };
-        if self.seen == Some(bits) { return (None, active); }
-        self.seen = Some(bits);
-        (Some(bits), active)
+        (Some(op), false)
     }
 }
 
@@ -223,13 +301,33 @@ pub(crate) struct Source {
     linear: Option<Linear>,
     id: u64,
     value: AtomicU128,
+    active: AtomicU128,
+    hold_ns: AtomicU64,
+    seq: AtomicU64,
     listeners: AtomicPtr<Listener>,
 }
 impl Source {
     pub(crate) fn new(value: u128) -> Arc<Self> {
         static NEXT: AtomicU64 = AtomicU64::new(1);
-        Arc::new(Self { id: NEXT.fetch_add(1, Ordering::Relaxed), value: AtomicU128::new(value),
-            listeners: AtomicPtr::new(std::ptr::null_mut()), linear: None })
+        Arc::new(Self {
+            id: NEXT.fetch_add(1, Ordering::Relaxed),
+            value: AtomicU128::new(value),
+            active: AtomicU128::new(0),
+            hold_ns: AtomicU64::new(0),
+            seq: AtomicU64::new(0),
+            listeners: AtomicPtr::new(std::ptr::null_mut()),
+            linear: None,
+        })
+    }
+    fn bump_seq(&self, kind: u64) {
+        let mut cur = self.seq.load(Ordering::Relaxed);
+        loop {
+            let next = (((cur >> 2) + 1) << 2) | kind;
+            match self.seq.compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Relaxed) {
+                Ok(_) => return,
+                Err(actual) => cur = actual,
+            }
+        }
     }
     // Append-only immutable list: no reclamation can race a publisher. One cell per
     // source/runtime pair (not per view rebuild); all cells reclaimed with the source.

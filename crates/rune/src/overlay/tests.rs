@@ -237,6 +237,22 @@ fn a_hidden_overlay_takes_a_new_accent_and_redraws_before_reveal() {
 }
 
 #[test]
+fn a_hidden_overlay_takes_a_scroll_bar_change_and_redraws_before_reveal() {
+    let mut overlay = width_overlay("scroll-bars");
+    present(&mut overlay, Instant::now());
+    assert!(!overlay.visible && !overlay.dirty);
+    overlay.scroll_bars_changed(overlay.rt.system_scroll_bars_state());
+    assert!(!overlay.dirty, "the same scroll-bar preference redraws nothing");
+    let always = crate::platform::scroll_bars::SystemScrollBars {
+        bars: crate::ScrollBars::Always,
+        scroller_overlay: false,
+    };
+    overlay.scroll_bars_changed(always);
+    assert_eq!(overlay.rt.system_scroll_bars_state(), always);
+    assert!(overlay.dirty, "a retained surface redraws for the new scroll-bar style before reveal");
+}
+
+#[test]
 fn a_hidden_overlay_takes_a_theme_change_and_redraws_before_reveal() {
     let mut overlay = width_overlay("theme");
     present(&mut overlay, Instant::now());

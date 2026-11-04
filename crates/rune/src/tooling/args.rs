@@ -14,6 +14,7 @@ pub struct Args {
     pub size: Option<(f32, f32)>,
     pub scale: Option<f32>,
     pub theme: Option<String>,
+    pub scroll_bars: Option<crate::ScrollBars>,
     pub script: Option<PathBuf>,
     pub frames: Option<usize>,
     pub start: f64,
@@ -131,6 +132,7 @@ impl Args {
                 "--size" => a.size = Some(parse_size(&val(&mut i)).unwrap_or_else(|e| die(&e))),
                 "--scale" => a.scale = Some(parse_scale(&val(&mut i)).unwrap_or_else(|e| die(&e))),
                 "--theme" => a.theme = Some(val(&mut i)),
+                "--scroll-bars" => a.scroll_bars = Some(parse_scroll_bars(&val(&mut i)).unwrap_or_else(|e| die(&e))),
                 "--script" => a.script = Some(val(&mut i).into()),
                 "--frames" => a.frames = Some(num(&val(&mut i)) as usize),
                 "--start" => {
@@ -230,6 +232,7 @@ const HELP: &str = "usage: <app> [window]
                         mark:NAME or mark:NAME+0.5 for a script mark's time (also --start)
   --size WxH            viewport in points      --scale N   device scale (default 2)
   --theme dark|light    system appearance
+  --scroll-bars MODE    scroll bars: when-scrolling (headless default), always, automatic
   --script FILE.json    timestamped input, replayed headless (move/down/up/tap/drag, keys,
                         {\"focus\":false}); a key with \"repeat\":true is a held key's auto-repeat;
                         {\"type\":\"mark\",\"name\":N} marks a time;
@@ -285,4 +288,13 @@ pub(crate) fn parse_size(v: &str) -> Result<(f32, f32), String> {
 
 pub(crate) fn parse_scale(v: &str) -> Result<f32, String> {
     positive(v).ok_or_else(|| format!("--scale is a number above 0: {v}"))
+}
+
+pub(crate) fn parse_scroll_bars(v: &str) -> Result<crate::ScrollBars, String> {
+    match v.trim() {
+        "always" => Ok(crate::ScrollBars::Always),
+        "when-scrolling" => Ok(crate::ScrollBars::WhenScrolling),
+        "automatic" | "auto" => Ok(crate::ScrollBars::Automatic),
+        _ => Err(format!("--scroll-bars is when-scrolling, always or automatic: {v}")),
+    }
 }

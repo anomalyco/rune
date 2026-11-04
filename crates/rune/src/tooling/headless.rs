@@ -113,6 +113,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     rt.set_font_smoothing(font_smoothing);
     rt.set_modifier_keys(modifier_keys);
     rt.set_tab_visits_controls(tab_visits_controls);
+    if let Some(bars) = args.scroll_bars { rt.set_system_scroll_bars(bars); }
     // Only limits the app set: the canvas opens at any size, below the default minimum too.
     let limits = (app_options.min_size.or(spec.min_size).unwrap_or((0.0, 0.0)), app_options.max_size);
     if fit_height {

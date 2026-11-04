@@ -32,8 +32,9 @@ impl<S: 'static> Host<S> {
 
     pub(super) fn show(&mut self, event_loop: &ActiveEventLoop) {
         if self.launcher() { self.reveal_launcher(event_loop); return; }
-        // Hidden, it may have missed a new accent's redraw: build with the current one.
+        // Hidden, it may have missed a new accent's or scroller style's redraw: build with the current ones.
         self.rt.set_system_accent(crate::system_accent());
+        self.rt.set_system_scroll_bars_state(crate::platform::scroll_bars::current().with_override(self.args.scroll_bars));
         let built = self.win.as_ref().is_some_and(|w| !w.visible) && self.build_for_show();
         self.apply_placement(event_loop);
         let Some(w) = self.win.as_mut() else { self.create(event_loop, None, false); return };

@@ -31,6 +31,7 @@ impl<S: 'static> Runtime<S> {
 
     pub(super) fn measure_retry(&mut self, tx: &Tx) -> Measured {
         let _blend = crate::theme::scope(self.srgb_blend);
+        let _bars = crate::platform::scroll_bars::scope(self.scroll_bars.state, self.scroll_bars.runtime_id);
         let selection = self.selection_by_path();
         Measured { selection, ..self.measurement(true).finish_from(tx, 1) }
     }
@@ -38,6 +39,7 @@ impl<S: 'static> Runtime<S> {
     /// `committing` when the result is applied, so the last commit's text layouts can go.
     pub(super) fn measure_pass(&mut self, tx: &Tx, committing: bool) -> Measured {
         let _blend = crate::theme::scope(self.srgb_blend);
+        let _bars = crate::platform::scroll_bars::scope(self.scroll_bars.state, self.scroll_bars.runtime_id);
         let selection = self.selection_by_path();
         Measured { selection, ..self.measurement(committing).finish(tx) }
     }
@@ -54,6 +56,7 @@ impl<S: 'static> Runtime<S> {
             system_reduced_motion: self.system_reduced_motion,
             titlebar_inset: self.titlebar_inset,
             system_accent: self.system_accent,
+            system_scroll_bars: self.scroll_bars.state,
             reduced_motion: self.reduced_motion,
             time_scale: self.time_scale,
             caret: self.caret.clone(),
@@ -340,6 +343,7 @@ impl<S: 'static> Measurement<'_, S> {
             env: this.env,
             titlebar_inset: this.titlebar_inset,
             system_accent: this.system_accent,
+            system_scroll_bars: this.system_scroll_bars,
             system_reduced_motion: this.system_reduced_motion,
             reduced_motion: this.system_reduced_motion,
             time_scale: this.time_scale,

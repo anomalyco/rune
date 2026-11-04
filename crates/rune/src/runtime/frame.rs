@@ -617,7 +617,8 @@ impl<S: 'static> Runtime<S> {
         }
         self.fit_held = std::mem::take(&mut self.fit_hold);
         let dt = if self.fit_held { 0.0 } else { dt };
-        let animating = self.step_motion(dt) || live_animating;
+        let instant_scroll = tx.instant || self.settled;
+        let animating = self.step_motion(dt, instant_scroll) || live_animating;
         self.stats.shaped = self.text.shaped - shaped0;
         let filling = self.virtual_filling();
         if live_animating { self.anim_sources |= AnimSource::LIVE; }
@@ -648,7 +649,7 @@ impl<S: 'static> Runtime<S> {
         self.step_scroll(step as f32);
     }
 
-    pub(super) fn step_motion(&mut self, dt: f64) -> bool {
+    pub(super) fn step_motion(&mut self, dt: f64, instant_scroll: bool) -> bool {
         self.loops_stepped();
         let step = dt * self.time_scale as f64;
         self.slack_dt = std::mem::take(&mut self.caught_up) + step as f32;
@@ -676,7 +677,7 @@ impl<S: 'static> Runtime<S> {
         let (mut animating, exited) = (out.animating, !out.exited.is_empty());
         // Tracks that only wait for a delayed start (`El::enter_delay`, a delayed `Anim`)
         // draw nothing new until it: sleep, and wake for it after the build.
-        let waits = if animating { self.scene.store().waiting_until() } else { None };
+        let mut waits = if animating { self.scene.store().waiting_until() } else { None };
         if waits.is_some() { animating = false; }
         let mut sources = if animating { AnimSource::TRACKS } else { 0 };
         if exited {
@@ -702,10 +703,16 @@ impl<S: 'static> Runtime<S> {
         for stack in self.stacks.values_mut() { stack.grown = 0.0; }
         animating |= source(self.reveals_active(), AnimSource::REVEAL);
         // Values set from `on_scroll_offset` show in the frame that scrolled.
-        if self.tell_scroll_offsets() {
-            animating |= self.latch_live(self.take_live_wake());
+        if self.tell_scroll_offsets(instant_scroll) {
+            let live = self.latch_live(self.take_live_wake());
+            if live { sources |= AnimSource::LIVE; }
+            let running = self.scene.store().running();
+            waits = running.then(|| self.scene.store().waiting_until()).flatten();
+            if running && waits.is_none() { sources |= AnimSource::TRACKS; } else { sources &= !AnimSource::TRACKS; }
+            animating = sources != 0;
             self.scene.present();
         }
+        let mut source = |on: bool, bit: u16| { if on { sources |= bit; } on };
         self.begin_exit_mask();
         animating |= self.build();
         // Compensate drawn motion, leaving unrelated layout and growth springs alone.

@@ -316,4 +316,83 @@ impl CompactStyle {
         let v = LengthPercentageAuto::length(m);
         self.modify_cold(|s| { s.margin.top = v; s.margin.bottom = v; });
     }
+
+    /// Moves this style's outer box sizing and placement onto a fresh column wrapper style and
+    /// resets this style's outer box to fill that column (`flex: 1 1 auto`, `min_size: 0`).
+    pub fn take_box_placement(&mut self) -> Self {
+        if self.extra.is_none() {
+            let hidden = (self.mode_flags & MODE_DISPLAY_MASK) == encode_display(Display::None);
+            let mut outer = Self::rune_base(FlexDirection::Column);
+            outer.vals[..6].copy_from_slice(&self.vals[..6]);
+            outer.len_tags = (outer.len_tags & !0x0FFF) | (self.len_tags & 0x0FFF);
+            outer.flex_grow_bf16 = self.flex_grow_bf16;
+            outer.flex_shrink_bf16 = self.flex_shrink_bf16;
+            outer.mode_flags = (outer.mode_flags & !(MODE_DISPLAY_MASK | MODE_POS_MASK | MODE_BASIS_ZERO))
+                | (if hidden { encode_display(Display::None) } else { encode_display(Display::Flex) })
+                | (self.mode_flags & (MODE_POS_MASK | MODE_BASIS_ZERO));
+            outer.align_self_u8 = self.align_self_u8;
+
+            self.vals[..6].fill(0);
+            self.len_tags = (self.len_tags & 0xF000) | 0b0000_1010_0000_1010;
+            self.flex_grow_bf16 = ONE_BF16;
+            self.flex_shrink_bf16 = ONE_BF16;
+            self.mode_flags = (self.mode_flags & !(MODE_DISPLAY_MASK | MODE_POS_MASK | MODE_BASIS_ZERO))
+                | encode_display(Display::Flex)
+                | (1 << MODE_POS_SHIFT);
+            self.align_self_u8 = ALIGN_SELF_NONE;
+            return outer;
+        }
+        let mut s = match self.extra.take() {
+            Some(b) => *b,
+            None => self.to_style(),
+        };
+        let outer = Style {
+            display: if s.display == Display::None { Display::None } else { Display::Flex },
+            flex_direction: FlexDirection::Column,
+            flex_shrink: s.flex_shrink,
+            flex_grow: s.flex_grow,
+            flex_basis: s.flex_basis,
+            position: s.position,
+            inset: s.inset,
+            size: s.size,
+            min_size: s.min_size,
+            max_size: s.max_size,
+            margin: s.margin,
+            align_self: s.align_self,
+            justify_self: s.justify_self,
+            aspect_ratio: s.aspect_ratio,
+            grid_row: s.grid_row,
+            grid_column: s.grid_column,
+            ..Style::DEFAULT
+        };
+        if s.display == Display::None {
+            s.display = Display::Flex;
+        }
+        s.position = Position::Relative;
+        s.inset = Rect {
+            left: LengthPercentageAuto::AUTO,
+            right: LengthPercentageAuto::AUTO,
+            top: LengthPercentageAuto::AUTO,
+            bottom: LengthPercentageAuto::AUTO,
+        };
+        s.size = Size { width: Dimension::AUTO, height: Dimension::AUTO };
+        s.min_size = Size { width: LengthPercentageAuto::ZERO, height: LengthPercentageAuto::ZERO };
+        s.max_size = Size { width: LengthPercentageAuto::AUTO, height: LengthPercentageAuto::AUTO };
+        s.margin = Rect {
+            left: LengthPercentageAuto::ZERO,
+            right: LengthPercentageAuto::ZERO,
+            top: LengthPercentageAuto::ZERO,
+            bottom: LengthPercentageAuto::ZERO,
+        };
+        s.flex_grow = 1.0;
+        s.flex_shrink = 1.0;
+        s.flex_basis = Dimension::AUTO;
+        s.align_self = None;
+        s.justify_self = None;
+        s.aspect_ratio = None;
+        s.grid_row = Line { start: GridPlacement::Auto, end: GridPlacement::Auto };
+        s.grid_column = Line { start: GridPlacement::Auto, end: GridPlacement::Auto };
+        *self = Self::from_style(s);
+        Self::from_style(outer)
+    }
 }

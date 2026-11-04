@@ -98,8 +98,9 @@ impl<T: 'static> AnyHost for Overlay<T> {
                 }
             }
             WindowEvent::RedrawRequested | WindowEvent::Resized(_) => {
-                // A new accent asks every window to redraw (`accent::watch`).
+                // A new accent or scroller style asks every window to redraw (`accent::watch`, `scroll_bars::watch`).
                 self.accent_changed(crate::system_accent());
+                self.scroll_bars_changed(crate::platform::scroll_bars::current());
                 self.dirty = true;
             }
             WindowEvent::CursorMoved { position, .. } if self.options.input.resolved(self.interactive) != OverlayInput::None => {
@@ -117,6 +118,7 @@ impl<T: 'static> AnyHost for Overlay<T> {
             }
             WindowEvent::Focused(focused) => {
                 self.rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
+                self.scroll_bars_changed(crate::platform::scroll_bars::reread());
                 if !focused { self.rt.cancel_composition(); }
                 self.dirty = true;
             }

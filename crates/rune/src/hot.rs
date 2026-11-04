@@ -319,6 +319,7 @@ fn headless<S: 'static>(spec: &AppSpec<S>, state: S, args: Args, (srgb_blend, fo
     let mut rt = runtime_for(spec, state, size, Env { system_dark: args.theme.as_deref() != Some("light"), scale }, Arc::new(move || { let _ = wake.send(()); }));
     rt.set_srgb_blend(srgb_blend);
     rt.set_font_smoothing(font_smoothing);
+    if let Some(bars) = args.scroll_bars { rt.set_system_scroll_bars(bars); }
     let gpu = Gpu::new(Gpu::instance(), None);
     let target_format = if srgb_blend { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT };
     let mut renderer = Renderer::new(&gpu.device, target_format);

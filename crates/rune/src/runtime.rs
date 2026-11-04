@@ -157,6 +157,8 @@ mod live_latch;
 mod loop_clock;
 #[path = "runtime/scroll/watch.rs"]
 mod scroll_watch;
+#[doc(hidden)]
+pub use scroll_watch::scroll_watch_state;
 #[path = "runtime/input/gesture.rs"]
 mod gesture_dispatch;
 #[path = "runtime/motion/flights.rs"]
@@ -374,6 +376,7 @@ pub struct Runtime<S: 'static> {
     system_reduced_motion: bool,
     titlebar_inset: f32,
     system_accent: crate::SystemAccent,
+    scroll_bars: system_settings::ScrollBarHost,
     pub time_scale: f32,
     /// Called at the start of every frame with the clock; return true when state changed (new data).
     pub poll: Option<fn(&mut S, f64, &mut Tx) -> bool>,
@@ -794,6 +797,7 @@ impl<S: 'static> Runtime<S> {
             system_reduced_motion: false,
             titlebar_inset: 0.0,
             system_accent: crate::SystemAccent::DEFAULT,
+            scroll_bars: Default::default(),
             time_scale: 1.0,
             poll: None,
             clock: 0.0,

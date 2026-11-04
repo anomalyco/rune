@@ -200,6 +200,11 @@ pub use platform::macos::appearance as macos_appearance;
 #[cfg(target_os = "macos")]
 #[doc(hidden)]
 pub use platform::macos::panel_bridge as macos_panel_bridge;
+pub use platform::scroll_bars::ScrollBars;
+#[doc(hidden)]
+pub use platform::scroll_bars::current_runtime_id;
+pub use platform::scroll_bars::system_scroll_bars;
+pub use platform::scroll_bars::system_scroller_overlay;
 #[cfg(target_arch = "wasm32")]
 pub use platform::web;
 pub use playground::Play;
@@ -268,6 +273,8 @@ pub use runtime::TextSelection;
 pub use runtime::TitlebarAction;
 pub use runtime::Waker;
 pub use runtime::commit_generation;
+#[doc(hidden)]
+pub use runtime::scroll_watch_state;
 pub use shape::LineCap;
 pub use shape::Path;
 pub use shape::Shape;

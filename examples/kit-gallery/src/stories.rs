@@ -199,6 +199,7 @@ stories! {
     "rune-text--truncate-middle" => text_truncate_middle,
     "rune-dialog--fit" => dialog_fit,
     "rune-popup-list--composer" => popup_list_composer,
+    "rune-scroll-bar--basic" => scroll_bar_basic,
 }
 
 fn popup_list_composer(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
@@ -384,4 +385,38 @@ fn text_truncate_middle(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
         .child(path(160.0, El::truncate_middle, "Middle"))
         .child(path(240.0, El::truncate, "End"))
         .child(path(240.0, El::truncate_head, "Head"))
+}
+
+fn scroll_bar_basic(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    col()
+        .key("panel")
+        .w(360.0)
+        .h(260.0)
+        .radius(k.radius.md)
+        .fill(k.c.layer_01)
+        .border(1.0, k.c.border_weak)
+        .clip_soft(k.radius.md)
+        .child(
+            col()
+                .key("feed")
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .padding(8.0)
+                .gap(4.0)
+                .scroll(rune::ScrollSpec { stick_bottom: false })
+                .children((0..24).map(|i| {
+                    row()
+                        .key(format!("item-{i}"))
+                        .w_full()
+                        .h(32.0)
+                        .px(10.0)
+                        .center_y()
+                        .justify_between()
+                        .radius(k.radius.sm)
+                        .child(text(format!("Build step {:02}", i + 1)).font(k.ty.ui_compact).color(k.c.text_base))
+                        .child(text(format!("{} ms", 12 + i * 7)).font(k.ty.small).color(k.c.text_muted))
+                }))
+                .scroll_bar(k),
+        )
 }

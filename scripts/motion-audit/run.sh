@@ -31,6 +31,7 @@ run settings-slider   3.0 $B/settings --script examples/settings/scripts/slider.
 run settings-hover    3.0 $B/settings --script examples/settings/scripts/hover.json
 run gallery-combobox  3.0 $B/kit-gallery --scene rune-combobox--searchable --script examples/kit-gallery/scripts/combobox.json
 run gallery-combobox-animated 3.0 $B/kit-gallery --scene rune-combobox--animated-filter --script examples/kit-gallery/scripts/combobox-animated-filter.json
+run gallery-scroll-bar 4.0 $B/kit-gallery --scene rune-scroll-bar--basic --script $S/gallery-scroll-bar.json
 run gallery-modal     5.5 $B/kit-gallery --scene motion-focus-modal --script examples/kit-gallery/scripts/motion-focus-modal.json
 run gallery-stagger-list 3.0 $B/kit-gallery --scene motion-stagger-list --script examples/kit-gallery/scripts/motion-stagger-list.json
 run gallery-mermaid-stream 4.5 $B/kit-gallery --scene rune-markdown--mermaid-streaming --size 1100x1400 --script $S/gallery-mermaid-stream.json

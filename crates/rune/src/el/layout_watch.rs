@@ -133,4 +133,16 @@ impl El {
         self.handlers.on_scroll_offset = Some(Rc::new(f));
         self
     }
+
+    #[doc(hidden)]
+    pub fn chain_scroll_offset(mut self, f: impl Fn(ScrollPos) + 'static) -> Self {
+        self.handlers.on_scroll_offset = Some(match self.handlers.get_mut_if_some().and_then(|h| h.on_scroll_offset.take()) {
+            Some(prev) => Rc::new(move |at| {
+                prev(at);
+                f(at);
+            }),
+            None => Rc::new(f),
+        });
+        self
+    }
 }

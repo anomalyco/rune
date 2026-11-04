@@ -388,6 +388,8 @@ impl<T: 'static> Overlay<T> {
         rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
         crate::platform::accent::watch();
         rt.set_system_accent(crate::system_accent());
+        crate::platform::scroll_bars::watch();
+        rt.set_system_scroll_bars_state(crate::platform::scroll_bars::current());
         rt.wall_start = Some(Instant::now());
         rt.native_overlay = true;
         rt.set_os_drag(crate::drag_out::SUPPORTED);
@@ -477,6 +479,7 @@ impl<T: 'static> Overlay<T> {
         // Hidden, it missed the redraws a new accent asks for (`accent::watch`).
         self.rt.set_system_dark(crate::platform::preferences::dark().unwrap_or(self.dark));
         self.accent_changed(crate::system_accent());
+        self.scroll_bars_changed(crate::platform::scroll_bars::current());
         // Shown again mid fade-out: the window is still up with current pixels, and its motion
         // carries on rather than settling.
         let fading = self.fading_out.take().is_some();
@@ -520,6 +523,12 @@ impl<T: 'static> Overlay<T> {
     fn accent_changed(&mut self, accent: crate::SystemAccent) {
         if accent == self.rt.system_accent() { return; }
         self.rt.set_system_accent(accent);
+        self.dirty = true;
+    }
+
+    fn scroll_bars_changed(&mut self, bars: crate::platform::scroll_bars::SystemScrollBars) {
+        if bars == self.rt.system_scroll_bars_state() { return; }
+        self.rt.set_system_scroll_bars_state(bars);
         self.dirty = true;
     }
 

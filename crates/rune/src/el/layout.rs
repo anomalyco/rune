@@ -358,4 +358,24 @@ impl El {
         }
         self
     }
+
+    #[doc(hidden)]
+    pub fn wrap_scroll_area(mut self, fallback_site: (&'static str, u32, u32)) -> (String, String, Self, Self) {
+        let key = self.key.clone().unwrap_or_else(|| {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            fallback_site.hash(&mut h);
+            let v = h.finish();
+            let k = format!("scroll-{:08x}", (v ^ (v >> 32)) as u32);
+            self.key = Some(k.clone());
+            k
+        });
+        let area = format!("{key}-scroll-area");
+        let mut outer = col().key(area.clone());
+        outer.style = self.style.take_box_placement();
+        outer.aspect_fit = std::mem::replace(&mut self.aspect_fit, 0.0);
+        outer.above = self.above.take();
+        outer.transition = self.transition.take();
+        (area, key, outer, self)
+    }
 }

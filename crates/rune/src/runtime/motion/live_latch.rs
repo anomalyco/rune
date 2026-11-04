@@ -81,35 +81,85 @@ impl<S: 'static> Runtime<S> {
             }
             let Some(cold) = node.cold.get_mut_if_some() else { continue };
             for bound in &mut cold.live {
-                let initial = bound.seen.is_none();
-                let (bits, active) = bound.read(&self.live_clock, self.clock);
+                let (op, active) = bound.read(&self.live_clock, self.clock);
                 self.live_dirty |= active;
-                let Some(bits) = bits else { continue };
-                let spring = if initial { None } else { bound.spring };
-                use crate::live::{LiveValue, Property};
-                fn apply<T: rune_motion::Animatable>(scene: &mut Scene, id: NodeId, prop: Prop<T>, value: T, spring: Option<Spring>) {
-                    if let Some(spring) = spring { scene.animate(id, prop, value, spring); }
-                    else { scene.set(id, prop, value); }
+                let Some(op) = op else { continue };
+                let (enter, leave) = (bound.spring, bound.rest_spring);
+                use crate::live::{LatchOp, LiveValue, Property};
+                fn apply<T: rune_motion::Animatable + Copy>(
+                    scene: &mut Scene,
+                    id: NodeId,
+                    prop: Prop<T>,
+                    enter: Option<Spring>,
+                    leave: Option<Spring>,
+                    decode: impl Fn(u128) -> T,
+                    op: LatchOp,
+                    choose_leave: impl Fn(Option<T>, T) -> bool,
+                ) {
+                    match op {
+                        LatchOp::Snap(bits) => scene.set(id, prop, decode(bits)),
+                        LatchOp::Set(bits) => {
+                            let v = decode(bits);
+                            let spring = if choose_leave(scene.get(id, prop), v) { leave.or(enter) } else { enter };
+                            match spring {
+                                Some(s) => scene.animate(id, prop, v, s),
+                                None => scene.set(id, prop, v),
+                            }
+                        }
+                        LatchOp::Pulse { active, rest, hold } => {
+                            let rest_v = decode(rest);
+                            let Some(enter_s) = enter else {
+                                scene.set(id, prop, rest_v);
+                                return;
+                            };
+                            let active_v = decode(active);
+                            let leave_s = leave.unwrap_or(enter_s);
+                            scene.animate(id, prop, active_v, enter_s);
+                            scene.animate(id, prop, rest_v, rune_motion::Anim { delay: (hold as f32).max(1e-4), ..leave_s.into() });
+                        }
+                    }
                 }
                 match bound.property {
-                    Property::Opacity => apply(&mut self.scene, node.id, prop::OPACITY, f32::decode(bits).clamp(0.0, 1.0), spring),
-                    Property::Blur => apply(&mut self.scene, node.id, prop::BLUR, f32::decode(bits).max(0.0), spring),
-                    Property::Scale => apply(&mut self.scene, node.id, prop::SCALE, f32::decode(bits).max(0.0), spring),
-                    Property::Offset => {
-                        let [x, y] = <[f32; 2]>::decode(bits);
-                        apply(&mut self.scene, node.id, prop::OFFSET, rune_motion::Vec2::new(x, y), spring);
-                    }
+                    Property::Opacity => apply(
+                        &mut self.scene, node.id, prop::OPACITY, enter, leave,
+                        |b| f32::decode(b).clamp(0.0, 1.0), op,
+                        |cur, to| cur.is_some_and(|c| to < c),
+                    ),
+                    Property::Blur => apply(
+                        &mut self.scene, node.id, prop::BLUR, enter, leave,
+                        |b| f32::decode(b).max(0.0), op,
+                        |cur, to| cur.is_some_and(|c| to < c),
+                    ),
+                    Property::Scale => apply(
+                        &mut self.scene, node.id, prop::SCALE, enter, leave,
+                        |b| f32::decode(b).max(0.0), op,
+                        |cur, to| cur.is_some_and(|c| to < c),
+                    ),
+                    Property::Offset => apply(
+                        &mut self.scene, node.id, prop::OFFSET, enter, leave,
+                        |b| { let [x, y] = <[f32; 2]>::decode(b); rune_motion::Vec2::new(x, y) }, op,
+                        |_, _| false,
+                    ),
                     Property::Fill => {
+                        let bits = match op {
+                            LatchOp::Snap(b) | LatchOp::Set(b) | LatchOp::Pulse { rest: b, .. } => b,
+                        };
                         // The renderer uses the exact authored colour after its track settles.
                         node.vis.fill = Color::decode(bits);
-                        apply(&mut self.scene, node.id, P_FILL, node.vis.fill, spring);
+                        apply(&mut self.scene, node.id, P_FILL, enter, leave, Color::decode, op, |_, _| false);
                     }
                     Property::Rect => {
-                        let [x, y, w, h] = <[f32; 4]>::decode(bits);
-                        let frame = MRect::new(x, y, w.max(0.0), h.max(0.0));
-                        match spring {
-                            Some(spring) => self.scene.set_frame(node.id, frame, LayoutAnim::new(spring)),
-                            None => self.scene.land_frame(node.id, frame),
+                        let frame_of = |b| {
+                            let [x, y, w, h] = <[f32; 4]>::decode(b);
+                            MRect::new(x, y, w.max(0.0), h.max(0.0))
+                        };
+                        match (op, enter) {
+                            (LatchOp::Snap(b) | LatchOp::Pulse { rest: b, .. }, _) | (LatchOp::Set(b), None) => {
+                                self.scene.land_frame(node.id, frame_of(b));
+                            }
+                            (LatchOp::Set(b), Some(spring)) => {
+                                self.scene.set_frame(node.id, frame_of(b), LayoutAnim::new(spring));
+                            }
                         }
                     }
                 }

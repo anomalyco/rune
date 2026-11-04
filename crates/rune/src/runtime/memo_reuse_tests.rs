@@ -132,7 +132,8 @@ fn card_body(i: usize, ver: u32, use_memo: bool) -> El {
                 el().key("badge").size(10.0, 10.0).radius(5.0).fill(Color { r: 0.3, g: 0.7, b: 0.9, a: 1.0 }).group_opacity(0.6, 1.0),
                 text(title).key("title").font(TextStyle::new(14.0, 600.0)).color(Color::WHITE).grow(1.0).shrink().truncate(),
                 maybe_memo(use_memo, "nested-pill", ver, || {
-                    row().padding(4.0).radius(4.0).fill(Color::WHITE.alpha(0.08))
+                    let overlay = crate::system_scroll_bars().is_overlay(crate::system_scroller_overlay());
+                    row().padding(if overlay { 4.0 } else { 6.0 }).radius(4.0).fill(Color::WHITE.alpha(0.08))
                         .child(text(format!("#{ver}")).key("v").font(TextStyle::new(11.0, 500.0)))
                 }),
             ]),
@@ -328,6 +329,16 @@ fn hover_press_focus_selection_env_blend_and_hot_clear_match_fresh_build() {
     step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "accent", |rt| {
         let c = Color { r: 0.9, g: 0.3, b: 0.4, a: 1.0 };
         rt.set_system_accent(SystemAccent::new(c, c));
+    });
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "scroll-bars-always", |rt| {
+        rt.set_system_scroll_bars(crate::ScrollBars::Always);
+    });
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "scroll-bars-auto-pad", |rt| {
+        rt.set_system_scroll_bars(crate::ScrollBars::Automatic);
+        rt.set_system_scroller_overlay(true);
+    });
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "scroll-bars-auto-mouse", |rt| {
+        rt.set_system_scroller_overlay(false);
     });
     step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "reduced-motion", |rt| rt.set_system_reduced_motion(true));
 

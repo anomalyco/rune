@@ -1,7 +1,24 @@
-//! The host's system settings: appearance, accent, titlebar inset, keyboard access and
-//! reduced motion.
+//! The host's system settings: appearance, accent, scroll bars, titlebar inset, keyboard access
+//! and reduced motion.
+
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::*;
+
+pub(super) struct ScrollBarHost {
+    pub(super) state: crate::platform::scroll_bars::SystemScrollBars,
+    pub(super) runtime_id: u64,
+}
+
+impl Default for ScrollBarHost {
+    fn default() -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+        Self {
+            state: Default::default(),
+            runtime_id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+        }
+    }
+}
 
 impl<S: 'static> Runtime<S> {
     pub fn set_system_dark(&mut self, dark: bool) {
@@ -54,5 +71,52 @@ impl<S: 'static> Runtime<S> {
     /// Host accessibility preference; false by default in a headless runtime.
     pub fn system_reduced_motion(&self) -> bool {
         self.system_reduced_motion
+    }
+
+    pub(crate) fn system_scroll_bars_state(&self) -> crate::platform::scroll_bars::SystemScrollBars {
+        self.scroll_bars.state
+    }
+
+    pub(crate) fn set_system_scroll_bars_state(&mut self, next: crate::platform::scroll_bars::SystemScrollBars) {
+        if next != self.scroll_bars.state {
+            self.scroll_bars.state = next;
+            self.dirty = true;
+        }
+    }
+
+    /// What [`Cx::scroll_bars`] reports. Native macOS windows set it from `AppleShowScrollBars` and
+    /// `NSPreferredScrollerStyleDidChangeNotification`; a change re-runs the view and its memos.
+    /// Headless runs default to [`ScrollBars::WhenScrolling`](crate::ScrollBars::WhenScrolling).
+    pub fn set_system_scroll_bars(&mut self, bars: crate::ScrollBars) {
+        self.set_system_scroll_bars_state(crate::platform::scroll_bars::SystemScrollBars {
+            bars,
+            ..self.scroll_bars.state
+        });
+    }
+
+    pub fn system_scroll_bars(&self) -> crate::ScrollBars {
+        self.scroll_bars.state.bars
+    }
+
+    /// Whether the connected pointing device prefers overlay scroll bars under
+    /// [`ScrollBars::Automatic`](crate::ScrollBars::Automatic) (`true` for a trackpad or touch
+    /// surface, `false` for a mouse). Headless runs default to `true`.
+    pub fn set_system_scroller_overlay(&mut self, overlay: bool) {
+        self.set_system_scroll_bars_state(crate::platform::scroll_bars::SystemScrollBars {
+            scroller_overlay: overlay,
+            ..self.scroll_bars.state
+        });
+    }
+
+    pub fn system_scroller_overlay(&self) -> bool {
+        self.scroll_bars.state.scroller_overlay
+    }
+
+    /// Whether scroll bars currently overlay and fade out at rest (`true` for
+    /// [`ScrollBars::WhenScrolling`](crate::ScrollBars::WhenScrolling), `false` for
+    /// [`ScrollBars::Always`](crate::ScrollBars::Always), and [`Self::system_scroller_overlay`]
+    /// for [`ScrollBars::Automatic`](crate::ScrollBars::Automatic); always `true` on iOS).
+    pub fn overlay_scroll_bars(&self) -> bool {
+        self.scroll_bars.state.is_overlay()
     }
 }

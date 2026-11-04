@@ -34,6 +34,7 @@ pub struct Cx<S> {
     pub(super) env: Env,
     pub(super) titlebar_inset: f32,
     pub(super) system_accent: crate::SystemAccent,
+    pub(super) system_scroll_bars: crate::platform::scroll_bars::SystemScrollBars,
     pub(super) system_reduced_motion: bool,
     pub(super) reduced_motion: bool,
     pub(super) time_scale: f32,
@@ -48,6 +49,7 @@ impl<S> Cx<S> {
     pub(crate) fn retype<T>(&self) -> Cx<T> {
         Cx {
             env: self.env, titlebar_inset: self.titlebar_inset, system_accent: self.system_accent,
+            system_scroll_bars: self.system_scroll_bars,
             system_reduced_motion: self.system_reduced_motion, reduced_motion: self.reduced_motion, time_scale: self.time_scale,
             caret: self.caret.clone(), caret_read: self.caret_read.clone(),
             layout: self.layout.clone(), layout_reads: self.layout_reads.clone(), _s: PhantomData,
@@ -120,6 +122,19 @@ impl<S> Cx<S> {
     /// The host's OS accessibility preference, independent of this commit's override.
     pub fn system_reduced_motion(&self) -> bool {
         self.system_reduced_motion
+    }
+    /// The user's "Show scroll bars" preference (System Settings › Appearance on macOS;
+    /// [`ScrollBars::WhenScrolling`](crate::ScrollBars::WhenScrolling) elsewhere and headless).
+    /// The view and its memos re-run when it changes.
+    pub fn scroll_bars(&self) -> crate::ScrollBars {
+        self.system_scroll_bars.bars
+    }
+    /// Whether scroll bars currently overlay and fade out at rest (`true` for
+    /// [`ScrollBars::WhenScrolling`](crate::ScrollBars::WhenScrolling), `false` for
+    /// [`ScrollBars::Always`](crate::ScrollBars::Always), and `NSScroller.preferredScrollerStyle`
+    /// under [`ScrollBars::Automatic`](crate::ScrollBars::Automatic); always `true` on iOS).
+    pub fn overlay_scroll_bars(&self) -> bool {
+        self.system_scroll_bars.is_overlay()
     }
     /// Whether this commit reduces motion: the host preference, or the view's override from
     /// [`Self::reduced_motion`]. Pass it to builders that pick a different motion under it.

@@ -204,8 +204,9 @@ impl<S: 'static> Host<S> {
             WindowEvent::DroppedFile(path) => { self.files.file(path, true); return; }
             WindowEvent::HoveredFileCancelled => { self.files.steps.push(FileStep::Leave); return; }
             WindowEvent::RedrawRequested => {
-                // A new accent or light/dark preference asks every window to redraw (`accent::watch`, `window_dark`).
+                // A new accent, scroller style or light/dark preference asks every window to redraw.
                 self.rt.set_system_accent(crate::system_accent());
+                self.rt.set_system_scroll_bars_state(crate::platform::scroll_bars::current().with_override(self.args.scroll_bars));
                 if self.args.theme.is_none() && let Some(dark) = self.win.as_ref().and_then(|l| crate::platform::preferences::desktop_dark(&l.window)) {
                     self.rt.set_system_dark(dark);
                 }
@@ -341,6 +342,7 @@ impl<S: 'static> Host<S> {
             WindowEvent::Focused(focused) => {
                 rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
                 rt.set_full_keyboard_access(crate::platform::preferences::full_keyboard_access());
+                rt.set_system_scroll_bars_state(crate::platform::scroll_bars::reread().with_override(self.args.scroll_bars));
                 self.secure_input.set(focused && l.visible && !l.occluded && rt.has_secure_focus());
                 rt.set_titlebar_inset(place_chrome(&l.window, chrome));
                 if !focused {

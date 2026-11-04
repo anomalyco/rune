@@ -65,6 +65,7 @@ impl<S: 'static> Runtime<S> {
         }
         if self.virtual_only(tx) {
             let _blend = crate::theme::scope(self.srgb_blend);
+            let _bars = crate::platform::scroll_bars::scope(self.scroll_bars.state, self.scroll_bars.runtime_id);
             let reads = self.layout_seen.reads.clone();
             let caret_read = self.caret_watch;
             let selection = self.selection_by_path();

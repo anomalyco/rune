@@ -446,6 +446,8 @@ impl<S: 'static> Host<S> {
         rt.set_tab_visits_controls(tab_visits_controls);
         crate::platform::accent::watch();
         rt.set_system_accent(crate::system_accent());
+        crate::platform::scroll_bars::watch();
+        rt.set_system_scroll_bars_state(crate::platform::scroll_bars::current().with_override(args.scroll_bars));
         rt.trace_channels = args.trace.as_ref().map(|_| Default::default());
         rt.set_live_waker(Arc::new(move || { let _ = live_proxy.send_event(WakeEvent::Live(slot)); }));
         rt.set_live_visible(false);

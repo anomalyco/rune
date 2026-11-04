@@ -232,3 +232,30 @@ fn a_new_system_accent_rebuilds_the_view_and_its_memos() {
     rt.frame(5.0);
     assert_eq!((w(&rt, "accent"), w(&rt, "ring")), (20.0, 70.0));
 }
+
+#[test]
+fn a_new_system_scroll_bar_setting_rebuilds_the_view_and_its_memos() {
+    fn view(_: &(), cx: &mut Cx<()>) -> El {
+        let overlay = cx.overlay_scroll_bars();
+        crate::row().size(300.0, 40.0)
+            .child(el().key("cx").size(if overlay { 20.0 } else { 80.0 }, 10.0))
+            .child(crate::memo("memo", 0, || {
+                let scoped = crate::system_scroll_bars().is_overlay(crate::system_scroller_overlay());
+                el().size(if scoped { 30.0 } else { 90.0 }, 10.0)
+            }))
+    }
+    let mut rt = Runtime::new((), view, (300.0, 40.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let w = |rt: &Runtime<()>, key: &str| rt.presented(key).unwrap().0[2];
+    assert_eq!((w(&rt, "cx"), w(&rt, "memo")), (20.0, 30.0), "headless defaults to WhenScrolling");
+    rt.set_system_scroll_bars(crate::ScrollBars::Always);
+    rt.frame(5.0);
+    assert_eq!((w(&rt, "cx"), w(&rt, "memo")), (80.0, 90.0));
+    rt.set_system_scroll_bars(crate::ScrollBars::Automatic);
+    rt.set_system_scroller_overlay(true);
+    rt.frame(5.0);
+    assert_eq!((w(&rt, "cx"), w(&rt, "memo")), (20.0, 30.0));
+    rt.set_system_scroller_overlay(false);
+    rt.frame(5.0);
+    assert_eq!((w(&rt, "cx"), w(&rt, "memo")), (80.0, 90.0));
+}

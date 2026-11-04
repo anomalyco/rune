@@ -135,6 +135,7 @@ impl<S: 'static> Window<S> {
         rt.app_ime.hook = on_ime;
         rt.set_modifier_keys(modifier_keys);
         rt.set_tab_visits_controls(tab_visits_controls);
+        if let Some(bars) = own.scroll_bars.or(args.scroll_bars) { rt.set_system_scroll_bars(bars); }
         rt.set_srgb_blend(srgb_blend);
         rt.set_font_smoothing(font_smoothing);
         rt.set_titlebar_inset(titlebar_inset);
