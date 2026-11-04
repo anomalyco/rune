@@ -103,12 +103,12 @@ pub(super) fn uber_primitive() -> wgpu::PrimitiveState {
 
 // Descriptor values shared with Renderer::create, not their source spelling or labels.
 // WGSL, generated MSL, and the actual Naga options have separate fingerprints below.
-#[cfg(any(test, target_os = "macos"))]
-fn uber_abi_hash() -> u64 {
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
+pub(super) fn uber_abi_hash() -> u64 {
     layout_hash(&uber_bind_entries(), &uber_vertex_layout(), uber_primitive())
 }
 
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
 fn layout_hash(entries: &[wgpu::BindGroupLayoutEntry], vertex: &wgpu::VertexBufferLayout<'_>, primitive: wgpu::PrimitiveState) -> u64 {
     // The normal uber pipeline has one group; use a placeholder instead of hashing opaque GPU
     // handle IDs. The springs pipeline has a second group and never uses this library.
@@ -117,13 +117,13 @@ fn layout_hash(entries: &[wgpu::BindGroupLayoutEntry], vertex: &wgpu::VertexBuff
     descriptor_hash(entries, vertex, primitive, &layout)
 }
 
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
 fn descriptor_hash(entries: &[wgpu::BindGroupLayoutEntry], vertex: &wgpu::VertexBufferLayout<'_>, primitive: wgpu::PrimitiveState, layout: &wgpu::PipelineLayoutDescriptor<'_>) -> u64 {
     fnv1a64(format!("{entries:?}|{}|{}|{vertex:?}|{primitive:?}",
         layout.bind_group_layouts.len(), layout.immediate_size).as_bytes())
 }
 
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
 fn fnv1a64(bytes: &[u8]) -> u64 {
     let mut h = 0xcbf29ce484222325u64;
     for &b in bytes {
@@ -141,19 +141,23 @@ fn wgsl_shader(device: &wgpu::Device, wgsl: &str) -> wgpu::ShaderModule {
 
 pub(super) fn uber_shader_and_pipeline(
     device: &wgpu::Device,
-    mut make_pipeline: impl FnMut(&wgpu::ShaderModule) -> wgpu::RenderPipeline,
-) -> (wgpu::ShaderModule, wgpu::RenderPipeline) {
+    mut make_pipeline: impl FnMut(&super::dxbc::Shaders) -> wgpu::RenderPipeline,
+) -> (super::dxbc::Shaders, wgpu::RenderPipeline) {
     let wgsl = uber_wgsl();
     #[cfg(target_os = "macos")]
     if metallib_enabled()
-        && let Some(result) = try_uber_metallib(device, &wgsl, uber_metallib(device), UBER_WGSL_BLAKE3, &mut make_pipeline)
+        && let Some((shader, pipeline)) = try_uber_metallib(device, &wgsl, uber_metallib(device), UBER_WGSL_BLAKE3, |shader| make_pipeline(&super::dxbc::Shaders::one(shader.clone())))
     {
         METALLIB_LOADS.with(|n| n.set(n.get() + 1));
+        return (super::dxbc::Shaders::one(shader), pipeline);
+    }
+    #[cfg(target_os = "windows")]
+    if let Some(result) = super::dxbc::uber(device, &wgsl, &mut make_pipeline) {
         return result;
     }
-    let shader = wgsl_shader(device, &wgsl);
-    let pipeline = make_pipeline(&shader);
-    (shader, pipeline)
+    let shaders = super::dxbc::Shaders::one(wgsl_shader(device, &wgsl));
+    let pipeline = make_pipeline(&shaders);
+    (shaders, pipeline)
 }
 
 #[cfg(target_os = "macos")]
@@ -673,9 +677,14 @@ pub(super) const UBER_WGSL_BLAKE3: &str = \"{wgsl_hash}\";", uber_abi_hash());
             "a failed pipeline must not retain the passthrough shader");
     }
 
-    #[cfg(target_os = "macos")]
+    /// The precompiled uber shader (a metallib on macOS, DXBC on Windows) and WGSL draw the same pixels.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
     fn metallib_and_wgsl_render_identical_pixels() {
+        #[cfg(target_os = "macos")]
+        use super::with_metallib_enabled as with_precompiled;
+        #[cfg(target_os = "windows")]
+        use super::super::dxbc::with_dxbc_enabled as with_precompiled;
         use super::super::{
             Blend, Gpu, Instance, KIND_GLYPH, KIND_GRADIENT, KIND_IMAGE, KIND_INSET, KIND_RECT,
             KIND_SEGMENT, KIND_SHADOW, KIND_TRIANGLE, LayerSpec, NO_CLIP, OFFSCREEN_FORMAT,
@@ -688,12 +697,12 @@ pub(super) const UBER_WGSL_BLAKE3: &str = \"{wgsl_hash}\";", uber_abi_hash());
         use bytemuck::Zeroable;
 
         let gpu = Gpu::headless_wgpu();
-        #[cfg(feature = "metal-backend")]
+        #[cfg(all(target_os = "macos", feature = "metal-backend"))]
         let native = Gpu::new(crate::gpu::metal::instance(), None);
         let (width, height) = (160u32, 120u32);
 
         let render_scene = |gpu: &Gpu, use_metallib: bool, format: wgpu::TextureFormat, srgb_blend: bool| {
-            with_metallib_enabled(use_metallib, || {
+            with_precompiled(use_metallib, || {
                 let mut renderer = Renderer::new(&gpu.device, format);
                 renderer.set_srgb_blend(srgb_blend);
 
@@ -856,7 +865,7 @@ pub(super) const UBER_WGSL_BLAKE3: &str = \"{wgsl_hash}\";", uber_abi_hash());
                 metallib_pixels, wgsl_pixels,
                 "metallib and WGSL pixel output differed for format={format:?} srgb_blend={srgb_blend}"
             );
-            #[cfg(feature = "metal-backend")]
+            #[cfg(all(target_os = "macos", feature = "metal-backend"))]
             for use_metallib in [true, false] {
                 assert!(
                     render_scene(&native, use_metallib, format, srgb_blend) == wgsl_pixels,

@@ -238,6 +238,7 @@ impl<T: 'static> Overlay<T> {
 
     pub(super) fn wake_due(&mut self, now: Instant) {
         self.end_fade_out(now);
+        self.release_due(now);
         // Paced to a frame interval: a hidden or covered overlay's poll that keeps asking for
         // the next frame runs once a frame, however often other events turn the loop.
         let deadline = crate::window::timer_deadline(&self.rt);

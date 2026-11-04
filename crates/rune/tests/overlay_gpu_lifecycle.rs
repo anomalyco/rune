@@ -1,8 +1,9 @@
 //! A prewarmed overlay on Windows and X11 makes its window at startup and no GPU surface, nor
 //! device, until it shows; with `release_gpu_when_hidden` each hide gives the surface back,
-//! and the device with the last surface on it, and the next show makes them again. Prints how
-//! long each show waits for its surface and first present, and the process's private memory
-//! along the way. Opens overlays, so it only runs with RUNE_GUI_TESTS=1 in a desktop session.
+//! and the device with the last surface on it, and `release_gpu_after` does so once the overlay
+//! stayed hidden that long. `warm_gpu` makes the device ahead of a show, which takes it. Prints
+//! how long each show waits for its first present, and the process's private memory along the
+//! way. Opens overlays, so it only runs with RUNE_GUI_TESTS=1 in a desktop session.
 
 #[cfg(target_os = "macos")]
 fn main() {}
@@ -18,38 +19,39 @@ mod lazy {
     use rune::*;
 
     static STARTS: AtomicUsize = AtomicUsize::new(0);
-    static DREW: Mutex<Option<Instant>> = Mutex::new(None);
 
     fn view(_: &(), _: &mut Cx<()>) -> El { el().w_full().h_full().fill(oklcha(0.6, 0.2, 250.0, 0.2)) }
     fn hud(_: &(), _: &mut Cx<()>) -> El { el().size(200.0, 40.0).fill(oklcha(0.2, 0.0, 0.0, 0.6)).radius(20.0) }
 
-    fn wait(what: &str, limit: Duration, f: impl Fn() -> bool) -> Option<Duration> {
+    fn wait(limit: Duration, f: impl Fn() -> bool) -> Option<Duration> {
         let start = Instant::now();
         while !f() {
-            if start.elapsed() > limit { eprintln!("timed out waiting for {what}"); return None; }
+            if start.elapsed() > limit { return None; }
             std::thread::sleep(Duration::from_micros(200));
         }
         Some(start.elapsed())
     }
 
-    /// The time from `show` to the surface existing and to its first present.
-    fn show<T>(name: &str, overlay: &OverlayHandle<T>) -> (Duration, Option<Duration>) {
+    /// The time from `show` to the overlay's first present; a locked session may present
+    /// nothing, and then the surface is what's checked.
+    fn show<T>(name: &str, overlay: &OverlayHandle<T>, results: &mut Vec<(String, Option<f64>)>) {
         let presents = overlay.surface_stats().totals.presents;
-        let start = Instant::now();
         overlay.show();
-        let made = wait(&format!("{name}'s surface"), Duration::from_secs(10), || overlay.surface_description().is_some())
-            .unwrap_or_else(|| panic!("{name} made no surface: {:?}", overlay.failure()));
-        // A locked session may present nothing; the surface is what the test checks.
-        let presented = wait(&format!("{name}'s present"), Duration::from_secs(2), || overlay.surface_stats().totals.presents > presents)
-            .map(|_| start.elapsed());
-        println!("{name}: surface {:.1} ms, first present {}", ms(made), presented.map_or("none".into(), |p| format!("{:.1} ms", ms(p))));
-        (made, presented)
+        let presented = wait(Duration::from_secs(5), || overlay.surface_stats().totals.presents > presents);
+        assert!(wait(Duration::from_secs(5), || overlay.surface_description().is_some()).is_some(), "{name} made no surface: {:?}", overlay.failure());
+        let ms = presented.map(|d| d.as_secs_f64() * 1000.0);
+        println!("{name}: first present {}", ms.map_or("none".into(), |ms| format!("{ms:.1} ms")));
+        results.push((name.to_owned(), ms));
     }
 
     fn hide<T>(name: &str, overlay: &OverlayHandle<T>, released: bool) {
         overlay.hide();
-        std::thread::sleep(Duration::from_millis(100));
-        assert_eq!(overlay.surface_description().is_none(), released, "{name}: hidden, its surface is {}", if released { "released" } else { "kept" });
+        if released {
+            assert!(wait(Duration::from_secs(2), || overlay.surface_description().is_none()).is_some(), "{name}: hidden, its surface is released");
+        } else {
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(overlay.surface_description().is_some(), "{name}: hidden, its surface is kept");
+        }
     }
 
     #[cfg(target_os = "windows")]
@@ -76,13 +78,8 @@ mod lazy {
             println!("overlay_gpu_lifecycle: skipped (set RUNE_GUI_TESTS=1 in a desktop session)");
             return;
         }
-        std::thread::spawn(|| { std::thread::sleep(Duration::from_secs(90)); eprintln!("timeout"); std::process::exit(2) });
-        on_gpu(|event| {
-            match event {
-                GpuEvent::Starting => { STARTS.fetch_add(1, Ordering::SeqCst); }
-                GpuEvent::Drew => { *DREW.lock().unwrap() = Some(Instant::now()); }
-            }
-        });
+        std::thread::spawn(|| { std::thread::sleep(Duration::from_secs(120)); eprintln!("timeout"); std::process::exit(2) });
+        on_gpu(|event| if event == GpuEvent::Starting { STARTS.fetch_add(1, Ordering::SeqCst); });
         let mut app = App::new(AppSpec::new("overlay gpu lifecycle", (100.0, 100.0), || (), view)).args(Vec::new()).windowless();
         let created = Arc::new(AtomicUsize::new(0));
         let seen = created.clone();
@@ -90,43 +87,67 @@ mod lazy {
             .options(OverlayOptions { placement: Some(OverlayPlacement::FullScreen), prewarm: true, ..Default::default() })
             .release_gpu_when_hidden()
             .on_created(move |_| { seen.fetch_add(1, Ordering::SeqCst); }), ());
-        let small = app.overlay(OverlaySpec::new("kept hud", (200.0, 40.0), hud), ());
+        let idle_release = Duration::from_millis(800);
+        let small = app.overlay(OverlaySpec::new("hud", (200.0, 40.0), hud).options(OverlayOptions { prewarm: true, ..Default::default() }).release_gpu_after(idle_release), ());
         let handle = app.handle();
         let result = Arc::new(Mutex::new(None));
         let out = result.clone();
         std::thread::spawn(move || {
-            let run = std::panic::catch_unwind(|| {
-                wait("startup", Duration::from_secs(10), || full.availability() == Availability::Available).expect("the prewarmed window");
-                std::thread::sleep(Duration::from_millis(500));
+            let run = std::panic::catch_unwind(move || {
+                let mut r = Vec::new();
+                wait(Duration::from_secs(10), || full.availability() == Availability::Available).expect("the prewarmed window");
+                // The GPU probe runs as the event loop starts.
+                std::thread::sleep(Duration::from_millis(1500));
                 assert_eq!(created.load(Ordering::SeqCst), 1, "on_created runs at startup");
                 assert!(full.surface_description().is_none(), "a hidden prewarmed overlay has no surface");
                 assert_eq!(STARTS.load(Ordering::SeqCst), 0, "nothing shown, no GPU device");
                 let idle = private_mb();
 
-                let (cold, _) = show("first show, new device", &full);
+                show("full screen, first show of the process", &full, &mut r);
                 assert_eq!(STARTS.load(Ordering::SeqCst), 1);
                 println!("  {}", full.surface_description().unwrap());
                 let shown = private_mb();
                 hide("full screen", &full, true);
-                std::thread::sleep(Duration::from_millis(400));
+                std::thread::sleep(Duration::from_millis(500));
                 let released = private_mb();
 
-                let (again, _) = show("second show, device released in between", &full);
+                show("full screen, no device", &full, &mut r);
                 assert_eq!(STARTS.load(Ordering::SeqCst), 2, "the released device is made again");
                 hide("full screen", &full, true);
+                std::thread::sleep(Duration::from_millis(300));
 
-                let (hud_cold, _) = show("kept overlay, new device", &small);
-                let (warm, _) = show("full screen on the kept overlay's device", &full);
-                assert_eq!(STARTS.load(Ordering::SeqCst), 3, "the full-screen overlay shares the kept overlay's device");
+                warm_gpu(wgpu::Features::empty());
+                std::thread::sleep(Duration::from_millis(800));
+                show("full screen, warmed 800 ms ahead", &full, &mut r);
+                assert_eq!(STARTS.load(Ordering::SeqCst), 3, "the show takes the warmed device");
                 hide("full screen", &full, true);
-                hide("kept overlay", &small, false);
-                let (hud_warm, _) = show("kept overlay, shown again", &small);
-                hide("kept overlay", &small, false);
+                std::thread::sleep(Duration::from_millis(300));
+
+                warm_gpu(wgpu::Features::empty());
+                show("full screen, warmed at the show", &full, &mut r);
+                assert_eq!(STARTS.load(Ordering::SeqCst), 4);
+                hide("full screen", &full, true);
+                std::thread::sleep(Duration::from_millis(300));
+
+                show("hud, no device", &small, &mut r);
+                hide("hud", &small, false);
+                show("hud, shown again within release_gpu_after", &small, &mut r);
+                hide("hud", &small, false);
+                warm_gpu(wgpu::Features::empty());
+                assert_eq!(STARTS.load(Ordering::SeqCst), 5, "warm_gpu makes nothing while the hud holds the device");
+                show("full screen, on the hud's device", &full, &mut r);
+                assert_eq!(STARTS.load(Ordering::SeqCst), 5, "the full-screen overlay shares the hud's device");
+                hide("full screen", &full, true);
+                std::thread::sleep(idle_release + Duration::from_millis(500));
+                assert!(small.surface_description().is_none(), "the hud gave its surface back after release_gpu_after");
+                show("hud, after release_gpu_after", &small, &mut r);
+                assert_eq!(STARTS.load(Ordering::SeqCst), 6);
+                hide("hud", &small, false);
                 assert!(full.failure().is_none() && small.failure().is_none(), "{:?} {:?}", full.failure(), small.failure());
-                assert!(DREW.lock().unwrap().is_some() || std::env::var_os("RUNE_LOCKED").is_some(), "a frame presented");
                 println!("private memory: hidden at startup {idle:.0} MB, full screen shown {shown:.0} MB, hidden again {released:.0} MB");
-                println!("surface ready after show (ms): cold {:.1}, again {:.1}, on a kept device {:.1}; kept overlay cold {:.1}, again {:.1}",
-                    ms(cold), ms(again), ms(warm), ms(hud_cold), ms(hud_warm));
+                println!("| show | first present |");
+                println!("| --- | --- |");
+                for (name, ms) in r { println!("| {name} | {} |", ms.map_or("none".into(), |ms| format!("{ms:.0} ms"))); }
             });
             *out.lock().unwrap() = Some(run.is_ok());
             handle.quit();
@@ -135,6 +156,4 @@ mod lazy {
         assert_eq!(*result.lock().unwrap(), Some(true), "overlay_gpu_lifecycle failed");
         println!("overlay_gpu_lifecycle: ok");
     }
-
-    fn ms(d: Duration) -> f64 { d.as_secs_f64() * 1000.0 }
 }

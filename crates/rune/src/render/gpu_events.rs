@@ -10,8 +10,8 @@ pub enum GpuEvent {
     /// Rune is about to make a GPU device: for the first window or overlay that draws, or for
     /// one that draws after the last device went with its surfaces.
     Starting,
-    /// A window or overlay presented its first frame since the last `Starting`: the driver made
-    /// a device, a surface and a frame.
+    /// The first frame since the last `Starting` drew: a window's or overlay's present, or the
+    /// pass `warm_gpu` runs on the device it makes.
     Drew,
 }
 

@@ -24,7 +24,8 @@ impl<T: 'static> AnyHost for Overlay<T> {
         #[cfg(target_os = "macos")]
         let deadline = deadline.into_iter().chain(self.panel.as_ref().filter(|_| !self.occluded).and_then(|p| p.pointer_deadline())).min();
         deadline.into_iter().chain(self.retry.filter(|_| self.drawing())).chain(self.fading_out)
-            .chain(self.hidden_pace.deadline().filter(|_| !self.drawing())).min()
+            .chain(self.hidden_pace.deadline().filter(|_| !self.drawing()))
+            .chain(self.release_at.filter(|_| !self.drawing())).min()
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {

@@ -693,3 +693,30 @@ fn an_overlay_reads_its_occlusion_once_a_turn() {
     overlay.sync_occlusion();
     assert!(!overlay.occluded, "the next turn reads it again");
 }
+
+/// A hidden overlay with `release_gpu_after` gives its GPU surface back that long after the hide
+/// (macOS keeps it): the loop wakes then, and a second hide doesn't push the time back.
+#[test]
+fn release_gpu_after_counts_from_the_hide() {
+    use std::time::Duration;
+    fn view(_: &(), _: &mut Cx<()>) -> El { crate::el() }
+    let app = AppSpec::new("release after", (20.0, 20.0), || (), view);
+    let spec = OverlaySpec::new("release after", app.size, view).options(Default::default()).release_gpu_after(Duration::from_secs(5));
+    let (mut overlay, _) = Overlay::new(spec, (), &app);
+    overlay.visible = true;
+    let before = Instant::now();
+    overlay.hide();
+    if cfg!(target_os = "macos") {
+        assert_eq!(overlay.release_at, None);
+        return;
+    }
+    let at = overlay.release_at.expect("the release waits for its time");
+    assert!(at >= before + Duration::from_secs(5));
+    assert_eq!(overlay.wake_deadline(), Some(at), "the loop wakes for it");
+    overlay.hide();
+    assert_eq!(overlay.release_at, Some(at), "hiding a hidden overlay keeps the time");
+    overlay.release_due(at - Duration::from_millis(1));
+    assert_eq!(overlay.release_at, Some(at), "not before its time");
+    overlay.release_due(at);
+    assert_eq!(overlay.release_at, None);
+}

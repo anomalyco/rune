@@ -61,6 +61,7 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     }
     // While AppKit starts up.
     crate::render::prewarm_gpu();
+    crate::render::probe_gpu();
     #[allow(unused_mut)]
     let mut builder = EventLoop::<WakeEvent>::with_user_event();
     #[cfg(target_os = "macos")]

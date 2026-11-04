@@ -342,8 +342,10 @@ pub(crate) struct Overlay<T: 'static> {
     /// The native window while it has no GPU surface: just made, or hidden with
     /// `release_gpu_when_hidden`. Windows and X11 only.
     parked: Option<Backing>,
-    /// `ConfiguredOverlay::release_gpu_when_hidden`.
-    release_hidden: bool,
+    /// `ConfiguredOverlay::release_gpu_when_hidden` (zero) or `release_gpu_after`.
+    release_after: Option<Duration>,
+    /// When a hidden overlay with `release_after` gives its GPU surface back.
+    release_at: Option<Instant>,
     cursor: Option<crate::cursor::os::OsCursor>,
     mods: winit::keyboard::ModifiersState,
     renderer: Option<Renderer>,
@@ -378,7 +380,7 @@ pub(crate) struct Overlay<T: 'static> {
 
 impl<T: 'static> Overlay<T> {
     pub(crate) fn new<S>(configured: impl Into<ConfiguredOverlay<T>>, state: T, app: &AppSpec<S>) -> (Self, OverlayHandle<T>) {
-        let ConfiguredOverlay { spec, options, on_key, on_created, poll, on_focus, compositor, setup, srgb_blend, macos_level, modifier_keys, animate_reveal, release_hidden } = configured.into();
+        let ConfiguredOverlay { spec, options, on_key, on_created, poll, on_focus, compositor, setup, srgb_blend, macos_level, modifier_keys, animate_reveal, release_after } = configured.into();
         let shared = Arc::new(Shared { native: Mutex::default(), requests: Mutex::default(), availability: AtomicU8::new(0), failure: Mutex::default(), surface: Mutex::default(), wake: Mutex::new(None), stats: Arc::default() });
         let meter = crate::frame::surface_stats::SurfaceMeter::new(spec.name, shared.stats.clone());
         let text = TextSystem::for_window(app.fonts, app.families);
@@ -421,7 +423,8 @@ impl<T: 'static> Overlay<T> {
             compositor,
             live: None,
             parked: None,
-            release_hidden,
+            release_after,
+            release_at: None,
             cursor: None,
             #[cfg(target_os = "macos")]
             panel: None,
@@ -500,6 +503,7 @@ impl<T: 'static> Overlay<T> {
             self.show_window(&window, fade);
         }
         self.visible = true;
+        self.release_at = None;
         self.hidden_pace.reset();
         self.occluded_wait = crate::window::OCCLUDED_RETRY;
         // Shown onto sleeping displays or under another window, the panel stays occluded.
@@ -635,6 +639,7 @@ impl<T: 'static> Overlay<T> {
         #[cfg(target_os = "macos")]
         self.fn_key();
         if self.options.keys == KeyPolicy::OnDemand { self.rt.keys_lost(); }
+        let was_shown = self.visible || self.fading_out.is_some();
         // Only macOS fades the window; elsewhere it goes at once, and so does drawing.
         let fading = cfg!(target_os = "macos") && !fade.is_zero() && (self.visible || self.fading_out.is_some());
         if fading {
@@ -647,7 +652,10 @@ impl<T: 'static> Overlay<T> {
         self.rt.cancel_pointer();
         self.apply_cursor();
         self.hidden_input();
-        let Some(live) = &self.live else { return };
+        let Some(live) = &self.live else {
+            if was_shown { self.hidden_release(Instant::now()); }
+            return;
+        };
         match &live.backing {
             Backing::Window(window) => {
                 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -667,7 +675,7 @@ impl<T: 'static> Overlay<T> {
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             Backing::Layer(_) | Backing::Xwayland(_) => { self.live.take(); }
         }
-        self.park();
+        if was_shown { self.hidden_release(Instant::now()); }
     }
 
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -807,8 +815,26 @@ impl<T: 'static> Overlay<T> {
         live
     }
 
-    /// `release_gpu_when_hidden`, which macOS ignores: its prewarmed panels retain their pixels.
-    fn defers_gpu(&self) -> bool { self.release_hidden && !cfg!(target_os = "macos") }
+    /// `release_gpu_when_hidden` or `release_gpu_after`, which macOS ignores: its prewarmed
+    /// panels retain their pixels.
+    fn defers_gpu(&self) -> bool { self.release_after.is_some() && !cfg!(target_os = "macos") }
+
+    /// Just hidden: gives the GPU surface back now, or schedules it for `release_gpu_after`.
+    fn hidden_release(&mut self, now: Instant) {
+        if !self.defers_gpu() { return; }
+        match self.release_after {
+            Some(after) if !after.is_zero() => self.release_at = Some(now + after),
+            _ => self.park(),
+        }
+    }
+
+    /// `release_gpu_after`'s time came while the overlay stayed hidden.
+    pub(super) fn release_due(&mut self, now: Instant) {
+        if self.release_at.is_some_and(|at| at <= now) && !self.drawing() {
+            self.release_at = None;
+            self.park();
+        }
+    }
 
     /// `release_gpu_when_hidden`: the hidden overlay gives back its surface, swapchain and
     /// renderer, and its hold on the GPU device, which goes with the last surface on it. The

@@ -6,6 +6,7 @@ use crate::pixels::ImageAtlas;
 use crate::text::{ATLAS_SIZE, Atlas};
 
 mod backdrop_blur;
+mod dxbc;
 mod first_use;
 pub(crate) mod gpu_events;
 pub(crate) mod layer_blur;
@@ -394,8 +395,19 @@ impl Gpu {
     /// Like `try_with_features`, preferring for a `translucent` surface `translucency::prefer`'s adapter.
     #[cfg(not(target_arch = "wasm32"))]
     fn try_for(instance: wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, wanted: wgpu::Features, translucent: bool) -> Result<Gpu, String> {
+        Self::try_picked(instance, surface, wanted, translucent, false)
+    }
+
+    /// A device for a surface not made yet (`warm_gpu`): on the adapter a surface would get.
+    #[cfg(not(any(target_arch = "wasm32", target_os = "macos")))]
+    fn try_for_display(instance: wgpu::Instance, wanted: wgpu::Features) -> Result<Gpu, String> {
+        Self::try_picked(instance, None, wanted, false, true)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn try_picked(instance: wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, wanted: wgpu::Features, translucent: bool, presented: bool) -> Result<Gpu, String> {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
-        let pick = crate::gpu::pick::pick(&instance, surface)?;
+        let pick = crate::gpu::pick::pick(&instance, surface, presented)?;
         let adapter = match surface {
             Some(s) if translucent && !pick.from_env() => crate::render::translucency::prefer(&instance, s, &pick),
             _ => pick.adapter,
@@ -428,7 +440,8 @@ impl Gpu {
     #[cfg(not(target_arch = "wasm32"))]
     fn device_on(adapter: &wgpu::Adapter, wanted: wgpu::Features) -> Result<(wgpu::Device, wgpu::Queue), String> {
         let optional_features = wgpu::Features::TIMESTAMP_QUERY | wanted;
-        #[cfg(target_os = "macos")]
+        // Precompiled uber shaders: a metallib on macOS, DXBC on Windows.
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         let optional_features = optional_features | wgpu::Features::PASSTHROUGH_SHADERS;
         let required_features = adapter.features() & optional_features;
         // A compositor that asks for immediates (`Compositor::features`) gets all the adapter has.
@@ -505,16 +518,18 @@ impl Gpu {
     /// Vulkan instance loads every GPU's Vulkan driver, where a broken one (Intel's, on a hybrid
     /// laptop) crashed the process before its first window (Hex #662). Vulkan only when no DX12
     /// adapter exists.
+    /// Whether a DX12 adapter exists is asked once per process (`probe_gpu`): asking makes a
+    /// device on every adapter, over 100 ms.
     #[cfg(target_os = "windows")]
     fn wgpu_instance() -> wgpu::Instance {
+        static DX12: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
-        let dx12 = Self::wgpu_instance_on(wgpu::Backends::DX12);
-        if !pollster::block_on(dx12.enumerate_adapters(wgpu::Backends::DX12)).is_empty() {
-            dx12
-        } else {
-            eprintln!("rune: no DX12 adapter; drawing with Vulkan");
-            Self::wgpu_instance_on(wgpu::Backends::VULKAN)
-        }
+        let dx12 = *DX12.get_or_init(|| {
+            let found = !pollster::block_on(Self::wgpu_instance_on(wgpu::Backends::DX12).enumerate_adapters(wgpu::Backends::DX12)).is_empty();
+            if !found { eprintln!("rune: no DX12 adapter; drawing with Vulkan"); }
+            found
+        });
+        Self::wgpu_instance_on(if dx12 { wgpu::Backends::DX12 } else { wgpu::Backends::VULKAN })
     }
 
     /// wgpu's own backends, whatever `RUNE_GPU_BACKEND` says.
@@ -617,13 +632,20 @@ pub(crate) fn discard_prewarm() {
 #[cfg(target_os = "macos")]
 mod prewarm;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+#[path = "render/warm.rs"]
+mod prewarm;
+
+#[cfg(target_arch = "wasm32")]
 mod prewarm {
     pub(super) fn start() {}
     pub(super) fn take() -> Option<(super::Gpu, super::Renderer)> { None }
-    #[cfg_attr(test, allow(dead_code))]
     pub(super) fn discard() {}
 }
+
+mod warmup;
+pub use warmup::{warm_gpu, warm_gpu_with};
+pub(crate) use warmup::{probe_gpu, surface_gpu};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BatchBind {
@@ -637,7 +659,7 @@ pub struct Renderer {
     surfaces: Option<crate::native_surface::SurfaceRenderer>,
     pipeline: wgpu::RenderPipeline,
     format: wgpu::TextureFormat,
-    shader: wgpu::ShaderModule,
+    shader: dxbc::Shaders,
     layout: wgpu::PipelineLayout,
     vertex_entry: &'static str,
     /// Pipelines for other target formats a compositor draws into (`add_format`).
@@ -722,9 +744,9 @@ impl Renderer {
             &layouts, properties.is_some(),
         ));
         let vertex_entry = if properties.is_some() { "vs_springs" } else { "vs" };
-        let make_pipeline = |shader: &wgpu::ShaderModule| Self::pipeline(device, &layout, shader, format, vertex_entry, Blend::SourceOver);
+        let make_pipeline = |shader: &dxbc::Shaders| Self::pipeline(device, &layout, shader, format, vertex_entry, Blend::SourceOver);
         let (shader, pipeline) = match spring_shader {
-            Some(shader) => { let pipeline = make_pipeline(&shader); (shader, pipeline) }
+            Some(shader) => { let shader = dxbc::Shaders::one(shader); let pipeline = make_pipeline(&shader); (shader, pipeline) }
             None => metallib::uber_shader_and_pipeline(device, make_pipeline),
         };
         let capacity = 256;
@@ -764,7 +786,7 @@ impl Renderer {
     fn pipeline(
         device: &wgpu::Device,
         layout: &wgpu::PipelineLayout,
-        shader: &wgpu::ShaderModule,
+        shader: &dxbc::Shaders,
         format: wgpu::TextureFormat,
         vertex_entry: &str,
         blend: Blend,
@@ -773,7 +795,7 @@ impl Renderer {
             label: Some("uber"),
             layout: Some(layout),
             vertex: wgpu::VertexState {
-                module: shader,
+                module: &shader.vertex,
                 entry_point: Some(vertex_entry),
                 compilation_options: Default::default(),
                 buffers: &[Some(metallib::uber_vertex_layout())],
@@ -782,7 +804,7 @@ impl Renderer {
             depth_stencil: None,
             multisample: Default::default(),
             fragment: Some(wgpu::FragmentState {
-                module: shader,
+                module: &shader.fragment,
                 entry_point: Some("fs"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {

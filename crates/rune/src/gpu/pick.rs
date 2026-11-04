@@ -69,9 +69,9 @@ fn shows(compositor: Option<&str>, pci: &str) -> bool {
     compositor.is_none_or(|compositor| same_pci(compositor, pci))
 }
 
-/// The adapter for `surface` (or for offscreen work without one), by the order in the module
-/// docs.
-pub(crate) fn pick(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) -> Result<Pick, String> {
+/// The adapter for `surface` (or for offscreen work without one, unless it's for a surface not
+/// made yet: `presented`), by the order in the module docs.
+pub(crate) fn pick(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, presented: bool) -> Result<Pick, String> {
     let usable = |adapter: &wgpu::Adapter| surface.is_none_or(|s| adapter.is_surface_supported(s));
     let compositor = compositor_pci();
     let mut enumerated = None;
@@ -99,7 +99,7 @@ pub(crate) fn pick(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>
         }
     }
     // Only a surface is presented; offscreen work (tests, snapshots) keeps the lowest-power GPU.
-    let displays = if surface.is_some() { display_devices() } else { Vec::new() };
+    let displays = if surface.is_some() || presented { display_devices() } else { Vec::new() };
     if !displays.is_empty() {
         let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
         let infos: Vec<_> = adapters.iter().map(|a| (a.get_info(), usable(a))).collect();

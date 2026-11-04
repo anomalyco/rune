@@ -141,7 +141,7 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub(crate) macos_level: Option<isize>,
     pub(crate) modifier_keys: bool,
     pub(crate) animate_reveal: bool,
-    pub(crate) release_hidden: bool,
+    pub(crate) release_after: Option<std::time::Duration>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -197,7 +197,11 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// and an app whose only surfaces they are holds no GPU device until one shows. By default a
     /// prewarmed overlay makes its surface at startup and keeps it, so it shows at once. macOS
     /// ignores it: a prewarmed panel retains its pixels at alpha zero.
-    pub fn release_gpu_when_hidden(mut self) -> Self { self.release_hidden = true; self }
+    pub fn release_gpu_when_hidden(mut self) -> Self { self.release_after = Some(std::time::Duration::ZERO); self }
+    /// `release_gpu_when_hidden`, once the overlay has stayed hidden for `after`: shows in
+    /// a burst (a HUD across a few dictations) keep their surface and show at once, and an app
+    /// at rest gives the device back. A prewarmed one still makes its surface only to show.
+    pub fn release_gpu_after(mut self, after: std::time::Duration) -> Self { self.release_after = Some(after); self }
     /// The macOS window level (`NSWindow.Level`, e.g. 3 for `.floating`), in place of
     /// `OverlayOptions::level`; `OverlayHandle::set_macos_level` changes it later. At any
     /// level a macOS overlay goes exactly where it's placed, over the menu bar too.
@@ -210,7 +214,7 @@ impl<T: 'static> OverlaySpec<T> {
     }
 
     pub fn options(self, options: OverlayOptions) -> ConfiguredOverlay<T> {
-        ConfiguredOverlay { spec: self, options, on_key: None, on_created: None, poll: None, on_focus: None, compositor: None, setup: None, srgb_blend: true, macos_level: None, modifier_keys: false, animate_reveal: false, release_hidden: false }
+        ConfiguredOverlay { spec: self, options, on_key: None, on_created: None, poll: None, on_focus: None, compositor: None, setup: None, srgb_blend: true, macos_level: None, modifier_keys: false, animate_reveal: false, release_after: None }
     }
 }
 

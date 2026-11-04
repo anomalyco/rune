@@ -827,6 +827,7 @@ impl<S: 'static> Host<S> {
                     prewarmed = renderer;
                     let gpu = Arc::new(gpu);
                     *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
+                    crate::render::surface_gpu(&gpu);
                     (gpu, surface)
                 };
                 (Some(gpu), surface)

@@ -77,6 +77,7 @@ impl<T: 'static> Overlay<T> {
                 self.renderer = None;
                 let gpu = Arc::new(gpu);
                 *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
+                crate::render::surface_gpu(&gpu);
                 self.gpu = Some(gpu);
                 surface
             }
