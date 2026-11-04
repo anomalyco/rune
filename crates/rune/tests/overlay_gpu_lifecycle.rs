@@ -1,5 +1,6 @@
-//! A prewarmed overlay on Windows and X11 makes its window at startup and no GPU surface, nor
-//! device, until it shows; with `release_gpu_when_hidden` each hide gives the surface back,
+//! A prewarmed overlay with `release_gpu_when_hidden` makes its window at startup on X11, and
+//! nothing on Windows, and no GPU surface, nor device, until it shows; each hide gives the
+//! surface back (and on Windows the window),
 //! and the device with the last surface on it, and `release_gpu_after` does so once the overlay
 //! stayed hidden that long. `warm_gpu` makes the device ahead of a show, which takes it. Prints
 //! how long each show waits for its first present, and the process's private memory along the
@@ -95,10 +96,15 @@ mod lazy {
         std::thread::spawn(move || {
             let run = std::panic::catch_unwind(move || {
                 let mut r = Vec::new();
-                wait(Duration::from_secs(10), || full.availability() == Availability::Available).expect("the prewarmed window");
-                // The GPU probe runs as the event loop starts.
-                std::thread::sleep(Duration::from_millis(1500));
-                assert_eq!(created.load(Ordering::SeqCst), 1, "on_created runs at startup");
+                if cfg!(target_os = "windows") {
+                    std::thread::sleep(Duration::from_millis(1500));
+                    assert_eq!(created.load(Ordering::SeqCst), 0, "a hidden overlay has no window on Windows");
+                } else {
+                    wait(Duration::from_secs(10), || full.availability() == Availability::Available).expect("the prewarmed window");
+                    // The GPU probe runs as the event loop starts.
+                    std::thread::sleep(Duration::from_millis(1500));
+                    assert_eq!(created.load(Ordering::SeqCst), 1, "on_created runs at startup");
+                }
                 assert!(full.surface_description().is_none(), "a hidden prewarmed overlay has no surface");
                 assert_eq!(STARTS.load(Ordering::SeqCst), 0, "nothing shown, no GPU device");
                 let idle = private_mb();

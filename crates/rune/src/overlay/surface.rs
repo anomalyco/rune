@@ -193,7 +193,11 @@ impl<T: 'static> Overlay<T> {
     pub(super) fn release(&mut self) {
         // The surface must disappear before returning the adopted view or removing subclasses.
         // Keep winit's Window alive until after those native owners have unwound, too.
-        let backing = self.live.take().map(|live| {
+        #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+        let backing = self.live.take().map(|mut live| {
+            // The present worker joins, and the display link stops, before the surface goes.
+            #[cfg(target_os = "macos")]
+            { live.present.take(); live.pacing.take(); }
             let Live { alpha, surface, backing, .. } = live;
             drop(alpha);
             drop(surface);
@@ -206,5 +210,7 @@ impl<T: 'static> Overlay<T> {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         self.x11.take();
         drop(backing);
+        self.announced = false;
+        self.shared.native.lock().unwrap().0 = None;
     }
 }

@@ -139,7 +139,7 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub spec: OverlaySpec<T>,
     pub options: OverlayOptions,
     pub on_key: Option<fn(&mut T, &crate::KeyEvent, &mut crate::Tx) -> bool>,
-    pub on_created: Option<Box<dyn FnOnce(OverlayCreated)>>,
+    pub on_created: Option<Box<dyn FnMut(OverlayCreated)>>,
     pub(crate) poll: Option<fn(&mut T, f64, &mut crate::Tx) -> bool>,
     pub(crate) on_focus: Option<fn(&mut T, bool, &mut crate::Tx)>,
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<T>>>,
@@ -187,29 +187,33 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// Waking a shown overlay draws a frame, which polls; a hidden one runs a frame without
     /// drawing. Headless runs don't create overlays, so they don't call it.
     pub fn setup(mut self, f: fn(&mut T, crate::Waker)) -> Self { self.setup = Some(f); self }
-    /// Called once on the event thread after native creation, before the first show.
+    /// Called on the event thread after native creation, before the first show, and again for
+    /// each window made later (Windows and macOS make a new one for each show with
+    /// `release_gpu_when_hidden`), so a window number in a capture filter stays current.
     /// Use `prewarm: true` to create at startup rather than waiting for `show()`.
-    pub fn on_created(mut self, f: impl FnOnce(OverlayCreated) + 'static) -> Self { self.on_created = Some(Box::new(f)); self }
+    pub fn on_created(mut self, f: impl FnMut(OverlayCreated) + 'static) -> Self { self.on_created = Some(Box::new(f)); self }
     /// Showing doesn't settle motion: what the state started while hidden plays from the
     /// first visible frame, such as a notification stack's first card entering. By default
     /// an unretained overlay shows settled, at its target.
     pub fn animate_reveal(mut self) -> Self { self.animate_reveal = true; self }
     /// While hidden, the overlay holds no GPU surface, swapchain or renderer, nor a share of the
-    /// GPU device, which goes with the last surface on it. Prewarmed, it makes only its window
-    /// at startup (so `on_created` and capture exclusion still come then); each show makes the
-    /// surface, and each hide drops it. Windows makes and drops the window with the surface too,
-    /// so a hidden overlay there has no window at all (game capture tools took a hidden
-    /// display-sized one for a game). A show then waits for the surface (a few milliseconds),
-    /// and with no other surface on a device, for a new device and its pipelines too (over
-    /// half a second on some Windows PCs). For overlays that show rarely and cover a display,
-    /// such as a drawing layer or a picker: hidden, their swapchains hold tens of megabytes,
-    /// and an app whose only surfaces they are holds no GPU device until one shows. By default a
-    /// prewarmed overlay makes its surface at startup and keeps it, so it shows at once. macOS
-    /// ignores it: a prewarmed panel retains its pixels at alpha zero.
+    /// GPU device, which goes with the last surface on it. Each show makes the surface, and each
+    /// hide drops it. On Windows and macOS the window comes and goes with it, and a prewarmed
+    /// one makes nothing at startup, so a hidden overlay there has no window at all (NVIDIA's
+    /// Instant Replay took a hidden display-sized window for a game on Windows, and macOS 27's
+    /// Mission Control lost its Space thumbnails to hidden screen-sized panels). On X11 a
+    /// prewarmed one makes only its window at startup and keeps it. A show then waits for the
+    /// surface (a few milliseconds), and with no other surface on a device, for a new device and
+    /// its pipelines too (over half a second on some Windows PCs). For overlays that show rarely
+    /// and cover a display, such as a drawing layer or a picker: hidden, their swapchains hold
+    /// tens of megabytes, and an app whose only surfaces they are holds no GPU device until one
+    /// shows. By default a prewarmed overlay makes its surface at startup and keeps it, so it
+    /// shows at once.
     pub fn release_gpu_when_hidden(mut self) -> Self { self.release_after = Some(std::time::Duration::ZERO); self }
     /// `release_gpu_when_hidden`, once the overlay has stayed hidden for `after`: shows in
     /// a burst (a HUD across a few dictations) keep their surface and show at once, and an app
     /// at rest gives the device back. A prewarmed one still makes its surface only to show.
+    /// macOS ignores it: a prewarmed panel retains its pixels at alpha zero.
     pub fn release_gpu_after(mut self, after: std::time::Duration) -> Self { self.release_after = Some(after); self }
     /// The macOS window level (`NSWindow.Level`, e.g. 3 for `.floating`), in place of
     /// `OverlayOptions::level`; `OverlayHandle::set_macos_level` changes it later. At any

@@ -15,8 +15,8 @@
 //!   observing pointer movement even through transparent regions, ordered front without key
 //!   focus unless explicitly requested. Its window number is available for capture filters.
 //! - Windows: a topmost tool window with `WS_EX_NOACTIVATE` (plus `WS_EX_TRANSPARENT` and
-//!   `WS_EX_LAYERED` unless interactive), shown with `SW_SHOWNOACTIVATE`. With
-//!   `release_gpu_when_hidden`, hidden means destroyed there too.
+//!   `WS_EX_LAYERED` unless interactive), shown with `SW_SHOWNOACTIVATE`.
+//! - With `release_gpu_when_hidden`, hidden means destroyed on Windows and macOS too.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -157,7 +157,7 @@ impl<T: 'static> OverlayHandle<T> {
     pub fn request_keys(&self) { self.request(|q| q.request_keys = true); }
 
     /// macOS panel CGWindowID for an explicit ScreenCaptureKit exclusion filter. Available
-    /// at native creation (see `on_created`/`prewarm`), stable across hide/show until drop.
+    /// at native creation (see `on_created`/`prewarm`); a new one with each window made.
     pub fn window_number(&self) -> Option<u32> { self.shared.native.lock().unwrap().0 }
 
     /// Result of the native capture-exclusion request. Linux reports Unsupported.
@@ -312,7 +312,9 @@ struct Live {
 }
 
 pub(crate) struct Overlay<T: 'static> {
-    on_created: Option<Box<dyn FnOnce(crate::OverlayCreated)>>,
+    on_created: Option<Box<dyn FnMut(crate::OverlayCreated)>>,
+    /// `on_created` heard of the current native window; a released one is announced again.
+    announced: bool,
     setup: Option<fn(&mut T, Waker)>,
     pending_input: Option<OverlayInput>,
     visible: bool,
@@ -411,6 +413,7 @@ impl<T: 'static> Overlay<T> {
         }));
         let overlay = Overlay {
             on_created,
+            announced: false,
             setup,
             pending_input: None,
             visible: false,
@@ -552,9 +555,11 @@ impl<T: 'static> Overlay<T> {
         if self.live.is_some() { return; }
         let surface = showing || !self.defers_gpu();
         let wayland = crate::window::is_wayland(event_loop);
-        // A Wayland overlay's window is its surface, and a Windows one that gives its GPU back
-        // is made for each show (`park`): both wait.
-        if (wayland || cfg!(target_os = "windows")) && !surface { return; }
+        // Only an X11 window waits parked for its surface. A Wayland overlay's window is its
+        // surface, and a Windows or macOS one that gives its GPU back is made for each show
+        // (`park`): both wait.
+        let parks = cfg!(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))) && !wayland;
+        if !surface && !parks { return; }
         self.resolve_size(event_loop);
         let made = if wayland {
             self.layer(event_loop).or_else(|| self.xwayland())
@@ -599,7 +604,8 @@ impl<T: 'static> Overlay<T> {
         self.dirty = true;
         self.idle = true;
         if self.options.prewarm && !(showing && self.defers_gpu()) { self.warm(); }
-        if let Some(created) = self.on_created.take() {
+        if !self.announced && let Some(created) = &mut self.on_created {
+            self.announced = true;
             let (window_number, capabilities) = *self.shared.native.lock().unwrap();
             created(crate::OverlayCreated { window_number, capabilities });
         }
@@ -618,8 +624,9 @@ impl<T: 'static> Overlay<T> {
         if !self.retained() && !self.animate_reveal { self.rt.settle_all(); }
     }
 
-    /// macOS keeps a prewarmed host's alpha-zero surface, and its pixels, while hidden.
-    fn retained(&self) -> bool { cfg!(target_os = "macos") && self.options.prewarm }
+    /// macOS keeps a prewarmed host's alpha-zero surface, and its pixels, while hidden, unless
+    /// it gives its GPU back.
+    fn retained(&self) -> bool { cfg!(target_os = "macos") && self.options.prewarm && !self.defers_gpu() }
 
     fn refresh_for_reveal_at(&mut self, now: Instant) {
         if self.retained() && (self.dirty || self.rt.animating) {
@@ -830,13 +837,16 @@ impl<T: 'static> Overlay<T> {
         live
     }
 
-    /// `release_gpu_when_hidden` or `release_gpu_after`, which macOS ignores: its prewarmed
-    /// panels retain their pixels.
-    fn defers_gpu(&self) -> bool { self.release_after.is_some() && !cfg!(target_os = "macos") }
+    /// `release_gpu_when_hidden` or `release_gpu_after`. macOS honours only the first: a
+    /// prewarmed panel with `release_gpu_after` (a HUD) retains its pixels.
+    fn defers_gpu(&self) -> bool {
+        if cfg!(target_os = "macos") { self.release_after == Some(Duration::ZERO) } else { self.release_after.is_some() }
+    }
 
-    /// Just hidden: gives the GPU surface back now, or schedules it for `release_gpu_after`.
+    /// Just hidden: gives the GPU surface back now, or schedules it for `release_gpu_after`. A
+    /// macOS fade-out keeps it until the fade ends (`end_fade_out` hides again).
     fn hidden_release(&mut self, now: Instant) {
-        if !self.defers_gpu() { return; }
+        if !self.defers_gpu() || self.fading_out.is_some() { return; }
         match self.release_after {
             Some(after) if !after.is_zero() => self.release_at = Some(now + after),
             _ => self.park(),
@@ -853,14 +863,16 @@ impl<T: 'static> Overlay<T> {
 
     /// `release_gpu_when_hidden`: the hidden overlay gives back its surface, swapchain and
     /// renderer, and its hold on the GPU device, which goes with the last surface on it. The
-    /// window stays parked, except on Windows, where it goes too: a hidden topmost window,
-    /// often display-sized, in a process that draws with DXGI is enough for game capture
-    /// tools such as NVIDIA's Instant Replay to take the app for the running game.
+    /// window stays parked on X11 only. On Windows a hidden topmost window, often
+    /// display-sized, in a process that draws with DXGI is enough for game capture tools such
+    /// as NVIDIA's Instant Replay to take the app for the running game; on macOS 27 hidden
+    /// screen-sized panels that join every Space empty Mission Control's Space thumbnails.
+    /// There the window goes too, and the next show makes a new one.
     fn park(&mut self) {
         if !self.defers_gpu() || !matches!(self.live.as_ref().map(|l| &l.backing), Some(Backing::Window(_))) { return; }
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         self.release();
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
             let Some(Live { alpha, surface, backing, .. }) = self.live.take() else { return };
             // The surface goes before the device that made it and the window it draws into.
