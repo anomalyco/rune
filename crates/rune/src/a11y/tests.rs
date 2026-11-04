@@ -349,7 +349,7 @@ struct Big {
 }
 
 fn big(s: &Big, _: &mut Cx<Big>) -> El {
-    col().key("big").w_full().scroll(ScrollSpec { stick_bottom: false }).children(s.on.iter().enumerate().map(|(i, on)| {
+    col().key("big").w_full().h(600.0).scroll(ScrollSpec { stick_bottom: false }).children(s.on.iter().enumerate().map(|(i, on)| {
         row().key(format!("r{i}")).role("listitem").h(24.0).gap(8.0)
             .child(row().key("check").role("checkbox").checked(*on).focusable(true).size(16.0, 16.0)
                 .on_press(move |s: &mut Big| s.on[i] = !s.on[i]))
@@ -374,12 +374,14 @@ fn a11y_cost() {
     let incremental: Vec<f64> = (0..30).map(|i| { toggle(&mut rt, i); time(&mut || { rt.a11y_update(); }) }).collect();
     let idle: Vec<f64> = (0..30).map(|_| time(&mut || { rt.a11y_update(); })).collect();
     rt.pointer_move(100.0, 100.0);
-    let scroll: Vec<f64> = (0..30).map(|_| {
-        rt.wheel_event(crate::WheelEvent::new(0.0, 24.0).at(100.0, 100.0));
-        rt.frame(1.0 / 60.0);
+    let scroll: Vec<f64> = (1..=30).map(|k| {
+        rt.wheel_event(crate::WheelEvent::new(0.0, -24.0).precise(true).at(100.0, 100.0));
+        rt.frame(10.0 + k as f64 / 60.0);
         let commits = rt.commits;
-        let t = time(&mut || { rt.a11y_update(); });
+        let mut sent = None;
+        let t = time(&mut || { sent = rt.a11y_update().map(|u| u.nodes.len()); });
         assert_eq!(rt.commits, commits);
+        assert!(sent.is_some_and(|n| n > 0), "a scroll sends its viewports");
         t
     }).collect();
     let nodes = rt.accessibility_tree().nodes.len();
@@ -433,7 +435,8 @@ fn updates_report_structure_and_motion_beyond_accesskit_events() {
     rt.update(|s, _| s.rows = 200);
     for _ in 0..4 { rt.frame(0.0); }
     rt.a11y_update();
-    rt.wheel_event(crate::WheelEvent::new(0.0, 30.0).at(50.0, 50.0));
+    rt.wheel_event(crate::WheelEvent::new(0.0, -30.0).precise(true).at(50.0, 50.0));
     rt.frame(1.0 / 60.0);
-    if rt.a11y_update().is_some() { assert!(rt.a11y_changes().moved, "a scroll moves boxes"); }
+    assert!(rt.a11y_update().is_some(), "a scroll sends its viewport");
+    assert!(rt.a11y_changes().moved, "a scroll moves boxes");
 }
