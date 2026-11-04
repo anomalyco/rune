@@ -5,8 +5,8 @@
 //! `Automatic` with a trackpad, and always on iOS). Dragging the thumb scrolls it, and pressing
 //! the track above or below pages toward the press, again and again while it's held, or jumps
 //! there under the "Click in the scroll bar to" preference ([`rune::system_scroller_jumps`];
-//! Option-click does the other). All of it runs through live values, so scrolling never rebuilds
-//! the view.
+//! Option-click does the other). When the content grows or shrinks the thumb glides to its new
+//! length. All of it runs through live values, so scrolling never rebuilds the view.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -37,9 +37,12 @@ const MIN_THUMB: f32 = 24.0;
 const HOLD: Duration = Duration::from_millis(750);
 const ENTER: Spring = Spring::new(0.14, 0.0);
 const LEAVE: Spring = Spring::new(0.28, 0.0);
-/// The thumb widening under the pointer.
+/// The thumb widening under the pointer, and gliding to a new length when the content's changes.
 const WIDEN: Spring = Spring::new(0.12, 0.0);
 const PULSE_SPAN: f64 = 0.75 + 0.35;
+/// How long a length glide runs, through which the scrolls that follow it (a feed keeping to its
+/// end) glide too rather than cutting it short.
+const GLIDE_SPAN: f64 = 0.5;
 /// How long a held track press waits before paging again, then how often it pages.
 const PAGE_DELAY: Duration = Duration::from_millis(300);
 const PAGE_EVERY: Duration = Duration::from_millis(60);
@@ -71,9 +74,11 @@ struct Bar {
     /// The pointer is over the track.
     over: Cell<bool>,
     pulse_until: Cell<f64>,
+    glide_until: Cell<f64>,
     last_now: Cell<f64>,
     track: Live<[f32; 4]>,
-    /// Where the thumb runs on the track, as wide as it gets.
+    /// Where the thumb runs on the track, as wide as it gets. It glides with the thumb's length,
+    /// on the same spring, so the thumb stays in it.
     slot: Live<[f32; 4]>,
     /// The thumb drawn in its slot, against the slot's right edge.
     thumb: Live<[f32; 4]>,
@@ -101,6 +106,7 @@ fn kept(area: &str) -> Rc<Bar> {
                     near: Cell::new(false),
                     over: Cell::new(false),
                     pulse_until: Cell::new(-1.0),
+                    glide_until: Cell::new(-1.0),
                     last_now: Cell::new(0.0),
                     track: Live::new([0.0; 4]),
                     slot: Live::new([0.0; 4]),
@@ -193,14 +199,34 @@ impl Bar {
         self.track.set([at.viewport[0] - TRACK, INSET, TRACK, if shows { len } else { 0.0 }]);
         let (top, h) = thumb(at, len.max(0.0));
         let h = if shows { h } else { 0.0 };
-        self.slot.set([TRACK - EDGE - THUMB_HOVER, top, THUMB_HOVER, h]);
-        // A scroll leaves the thumb's width alone, so it doesn't cut a widening short.
-        if self.thumb.get()[3] != h {
-            self.thumb.snap(self.thumb_rect(h));
-        }
-
         let (state, opacity, pulse_until) = (&self.state, &self.opacity, &self.pulse_until);
         let prev = state.get();
+        // A shown bar glides when its content changes length; the hand, an instant change, a
+        // resize or a bar appearing moves it at once.
+        let resized = (prev_at.viewport[1] - at.viewport[1]).abs() > 0.5;
+        let lengthened = !resized && (prev_at.max[1] - at.max[1]).abs() > 0.5;
+        let gliding = now < self.glide_until.get();
+        let glides = shows
+            && !scrolled
+            && !instant
+            && !resized
+            && (lengthened || gliding)
+            && matches!(prev, BarState::Always | BarState::Overlay);
+        if glides && lengthened {
+            self.glide_until.set(now + GLIDE_SPAN);
+        }
+        let cut = gliding && !glides;
+        if cut {
+            self.glide_until.set(-1.0);
+        }
+        let slot = [TRACK - EDGE - THUMB_HOVER, top, THUMB_HOVER, h];
+        let to = |live: &Live<[f32; 4]>, rect| if glides { live.set(rect) } else { live.snap(rect) };
+        to(&self.slot, slot);
+        // A scroll leaves the thumb's width alone, so it doesn't cut a widening short.
+        if cut || self.thumb.get()[3] != h {
+            to(&self.thumb, self.thumb_rect(h));
+        }
+
         if !shows {
             if prev != BarState::NoOverflow || pulse_until.get() >= 0.0 {
                 opacity.snap(1.0);
@@ -372,7 +398,7 @@ fn attach(k: &Kit, area: &str, key: &str, outer: El, viewport: El) -> El {
                 // The scroll view it drags already scrolls for assistive technology.
                 .a11y_hidden()
                 .child(
-                    el().key("thumb-slot").absolute(0.0, 0.0).live_rect(&bar.slot).child(
+                    el().key("thumb-slot").absolute(0.0, 0.0).live_rect(bar.slot.smooth(WIDEN)).child(
                         el().key("thumb")
                             .absolute(0.0, 0.0)
                             .live_rect(bar.thumb.smooth(WIDEN))

@@ -456,6 +456,43 @@ fn new_content_moves_the_thumb_at_once() {
 }
 
 #[test]
+fn the_thumb_glides_to_a_new_length_without_a_view_run() {
+    let mut rt = rune::Runtime::new(10usize, hover_view, (200.0, 100.0), rune::Env::new(true, 1.0));
+    rt.set_system_scroll_bars(ScrollBars::Always);
+    rt.check_live_only(false);
+    frames(&mut rt, 30);
+    assert_eq!(rect(&rt, "thumb")[3], 48.0, "half the content shown, half the track");
+    rt.update(|rows, _| *rows = 20);
+    frames(&mut rt, 3);
+    let runs = HOVER_RUNS.get();
+    let (drawn, slot) = (rect(&rt, "thumb"), rect(&rt, "thumb-slot"));
+    assert!(24.0 < drawn[3] && drawn[3] < 48.0, "on its way: {drawn:?}");
+    assert_eq!(drawn[3], slot[3], "the thumb fills its slot as both glide");
+    assert!(info(&rt, "thumb").moving);
+    frames(&mut rt, 60);
+    assert_eq!(rect(&rt, "thumb")[3], 24.0, "then rests at its new length");
+    assert_eq!(HOVER_RUNS.get(), runs, "the glide never runs the view");
+
+    rt.update(|rows, _| *rows = 10);
+    frames(&mut rt, 3);
+    rt.wheel(100.0, 50.0, -40.0);
+    rt.frame(1.0 / 60.0);
+    let drawn = rect(&rt, "thumb");
+    assert!((drawn[1] - thumb_at(&rt)).abs() < 0.01 && drawn[3] == 48.0, "a hand scroll lands the glide at once: {drawn:?}");
+    frames(&mut rt, 60);
+    rt.wheel(100.0, 50.0, -10.0);
+    for _ in 0..30 {
+        rt.frame(1.0 / 60.0);
+        let (drawn, shown) = (rect(&rt, "thumb")[1], thumb_at(&rt));
+        assert!((drawn - shown).abs() < 0.01, "with no glide running the thumb keeps up with the scroll: {drawn} vs {shown}");
+    }
+}
+
+fn thumb_at<S>(rt: &rune::Runtime<S>) -> f32 {
+    2.0 + thumb(at(-top(rt), 100.0, 100.0), 96.0).0
+}
+
+#[test]
 fn a_new_bar_lands_at_once() {
     fn shown(rows: &usize, cx: &mut rune::Cx<usize>) -> El {
         if *rows == 0 { col().size(200.0, 100.0) } else { view(rows, cx) }
@@ -577,6 +614,20 @@ fn scroll_bar_motion_gate() {
                 r.play(0.4);
                 r.act("away-always", |rt| rt.pointer_move(100.0, 50.0));
                 r.play(0.4);
+                r.rec
+            }),
+        ),
+        (
+            "scroll-bar/length-glide".into(),
+            Box::new(|| {
+                let mut rt = rune::Runtime::new(10usize, view, (200.0, 100.0), rune::Env::new(true, 1.0));
+                rt.set_system_scroll_bars(ScrollBars::Always);
+                let mut r = Run::new(rt, 120.0);
+                r.idle(0.3);
+                r.act("grow", |rt| rt.update(|rows, _| *rows = 20));
+                r.play(0.6);
+                r.act("shrink", |rt| rt.update(|rows, _| *rows = 12));
+                r.play(0.6);
                 r.rec
             }),
         ),
