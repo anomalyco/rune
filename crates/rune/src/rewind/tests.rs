@@ -7,6 +7,8 @@ struct S {
     rewind: Rewind,
     scrub: Scrub,
     sent: Vec<Sent>,
+    /// Where the scrubber's stage sits in the window.
+    inset: f32,
 }
 
 fn view(s: &S, _: &mut Cx<S>) -> El {
@@ -15,11 +17,12 @@ fn view(s: &S, _: &mut Cx<S>) -> El {
         .child(el().key("still").absolute(200.0, 200.0).size(40.0, 40.0).fill(crate::Color::WHITE));
     el().size(400.0, 300.0)
         .child(app.time_scale(if s.scrub.is_open() { 0.0 } else { 1.0 }))
-        .child(s.scrub.view(|s: &mut S| &mut s.scrub, |s: &mut S, sent: Sent, _: &mut Tx| s.sent.push(sent)))
+        .child(el().absolute(s.inset, s.inset).size(400.0 - s.inset, 300.0 - s.inset)
+            .child(s.scrub.view(|s: &mut S| &mut s.scrub, |s: &mut S, sent: Sent, _: &mut Tx| s.sent.push(sent))))
 }
 
 fn app(rewind: Rewind) -> Runtime<S> {
-    let state = S { y: 0.0, rewind, scrub: Scrub::default(), sent: Vec::new() };
+    let state = S { y: 0.0, rewind, scrub: Scrub::default(), sent: Vec::new(), inset: 0.0 };
     let mut rt = Runtime::new(state, view, (400.0, 300.0), Env::new(true, 1.0));
     rt.frame(0.0);
     rt
@@ -190,6 +193,23 @@ fn the_scrubber_draws_the_moved_element_and_sends_from_its_button() {
     rt.frame(1.0 / 60.0);
     assert_eq!(rt.state.sent.len(), 1, "send at {x},{y}: {:?}", rt.elements().iter().filter(|e| e.key.as_deref().is_some_and(|k| k.starts_with("rewind-"))).map(|e| (e.key.clone(), e.rect)).collect::<Vec<_>>());
     assert_eq!(rt.state.sent[0].note(), "title jumps");
+}
+
+#[test]
+fn a_scrubber_on_an_inset_stage_still_outlines_where_the_window_drew() {
+    let mut rt = app(Rewind::new());
+    rt.update(|s, tx| { s.inset = 50.0; tx.instant(); });
+    record(&mut rt);
+    frames(&mut rt, 5);
+    jump(&mut rt, 30.0);
+    frames(&mut rt, 5);
+    rt.update(|s, _| { let r = s.rewind.clone(); s.scrub.open(&r); });
+    frames(&mut rt, 2);
+    let id = rt.state.scrub.clip().unwrap().changes(rt.state.scrub.frame())[0].id;
+    let rect = rt.elements().iter().find(|e| e.key.as_deref() == Some(&format!("rewind-box-{id}"))).unwrap().rect;
+    assert_eq!(rect, [10.0, 30.0, 100.0, 20.0]);
+    let bar = rt.elements().iter().find(|e| e.key.as_deref() == Some("rewind-bar")).map(|e| e.rect);
+    assert!(bar.is_none_or(|b| b[0] >= 50.0), "the bar stays on the stage: {bar:?}");
 }
 
 #[test]
