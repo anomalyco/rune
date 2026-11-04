@@ -608,7 +608,9 @@ impl<S: 'static> Runtime<S> {
         }
         #[cfg(test)]
         if let Some(publish) = tests::MID_FRAME.with(|hook| hook.borrow_mut().take()) { publish(); }
-        let live_animating = self.latch_live(live_woke);
+        // Poll and input can publish after the initial wake read without committing. Sample
+        // those values now, but retain the wake: a picture may still need next frame's layout.
+        let live_animating = self.latch_live(live_woke || self.live_pending());
         if let Some(trace) = tx.trace.take() {
             for event in trace.events { self.trace_event(event); }
             for (name, kind, value) in trace.channels { self.trace_channel(name, kind, value); }

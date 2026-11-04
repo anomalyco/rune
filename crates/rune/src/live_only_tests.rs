@@ -169,6 +169,36 @@ fn live_only_does_not_cancel_poll_update_or_later_event_commits() {
 }
 
 #[test]
+fn live_values_published_by_poll_draw_in_that_frame_after_a_scroll_callback() {
+    fn view(pan: &Live<[f32; 2]>, _: &mut Cx<Live<[f32; 2]>>) -> El {
+        let follow = pan.clone();
+        el().size(200.0, 200.0)
+            .child(el().key("scroll").size(100.0, 100.0)
+                .scroll(crate::ScrollSpec { stick_bottom: false })
+                .on_scroll_offset(move |at| { follow.set([at.offset[1], 0.0]); })
+                .child(el().size(100.0, 1000.0)))
+            .child(el().key("marker").absolute(0.0, 0.0).size(10.0, 10.0).live_offset(pan))
+    }
+    let mut rt = Runtime::new(Live::new([0.0, 0.0]), view, (200.0, 200.0), Env::default());
+    rt.frame(0.0);
+    rt.wheel(50.0, 50.0, -20.0);
+    rt.frame(1.0 / 60.0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.get(), [20.0, 0.0]);
+    assert!(!rt.live_pending(), "the scroll callback's publication was already drawn");
+    let commits = rt.stats.commits;
+    // A scroll-triggered animation continues through Live values, without rebuilding its view.
+    rt.poll = Some(|pan, _, _| { pan.set([pan.get()[0] + 5.0, 0.0]); false });
+    for frame in 1..=4 {
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.state.get()[0], 20.0 + frame as f32 * 5.0);
+        let marker = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("marker")).unwrap();
+        assert_eq!(marker.rect[0], 20.0 + frame as f32 * 5.0, "poll's position in frame {frame}");
+        assert_eq!(rt.stats.commits, commits, "live animation does not rebuild the view");
+    }
+}
+
+#[test]
 fn debug_check_does_not_blame_live_only_for_layout_feedback_before_a_key() {
     let mut rt = app(false);
     rt.frame(0.5);
