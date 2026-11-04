@@ -168,7 +168,7 @@ fn setting_row(p: Paint, key: &str, label: &str, on_press: Option<fn(&mut Settin
         .child(text(label).key("label").font(type_::BODY).color(p.t.text).a11y_hidden())
         .child(control);
     if let Some(f) = on_press {
-        r = r.hover(p.t.hover).press(p.t.press).on_press(f);
+        r = r.hover(p.t.hover).press(p.t.press).focusable(true).on_press(f);
     }
     r
 }
@@ -212,6 +212,7 @@ fn segmented(p: Paint, current: Appearance) -> El {
                 .role("segment")
                 .label(name)
                 .checked(selected)
+                .focusable(true)
                 .size(seg, h - 2.0 * pad)
                 .center()
                 .radius(radius::SM)
@@ -269,6 +270,7 @@ fn swatches(p: Paint, current: usize, dark: bool) -> El {
                 .role("radio")
                 .label(tok::ACCENT_NAMES[i])
                 .checked(i == current)
+                .focusable(true)
                 .size(d, d)
                 .radius(d / 2.0)
                 .fill(tok::accent(i, dark))
@@ -291,8 +293,11 @@ fn speed_control(p: Paint, v: f32) -> El {
             el().key("slider")
                 .role("slider")
                 .label("Animation speed")
-                .range_value(f64::from(speed_of(v)), 0.5, 2.0)
+                // The slider's position, in twentieths; it reads as the speed it gives.
+                .range_value(f64::from(v), 0.0, 1.0)
+                .range_step(0.05)
                 .a11y_value(format!("{:.2}×", speed_of(v)))
+                .on_step(|s: &mut Settings, steps, _| s.speed = (s.speed + steps as f32 * 0.05).clamp(0.0, 1.0))
                 .size(w, h)
                 .motion(motion::SNAPPY)
                 .on_drag(move |s: &mut Settings, d: &mut Drag, tx| match d.phase {

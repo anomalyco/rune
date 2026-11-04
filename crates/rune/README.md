@@ -2229,7 +2229,8 @@ feature (`crate::a11y`, `runtime/a11y`).
   describes its element unless it repeats the name; `description("")` turns that off.
 - **Actions** run the handlers a pointer or keyboard user reaches: click presses
   (`on_press`), focus focuses, increment and decrement step (`on_step`), set value and text
-  selection edit through the field's editor (so `on_input_change` runs), expand and collapse
+  selection edit through the field's editor (so `on_input_change` runs), set value on a slider
+  with a `range_step` steps it that many times toward the number, expand and collapse
   press a disclosure, show context menu calls `on_secondary_press`, and scroll requests move
   the viewport. They skip hit testing, so a test that wants the pointer's path posts pointer
   input instead.

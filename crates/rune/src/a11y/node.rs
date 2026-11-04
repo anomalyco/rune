@@ -213,6 +213,7 @@ impl<S: 'static> Runtime<S> {
             if n.focus.step.is_some() {
                 node.add_action(Ak::Increment);
                 node.add_action(Ak::Decrement);
+                if more.and_then(|m| m.range).is_some_and(|r| r.step.is_some_and(|s| s > 0.0)) { node.add_action(Ak::SetValue); }
             }
             if input.is_some_and(|i| i.access.is_some()) {
                 node.add_action(Ak::SetValue);

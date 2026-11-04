@@ -123,7 +123,7 @@ pub(super) fn hash_str(s: &str) -> u64 {
 }
 
 /// Folds `v` into `h`, order-sensitively.
-pub(super) fn mix(h: u64, v: u64) -> u64 { (h.rotate_left(5) ^ v).wrapping_mul(0x51_7cc1_b727_220a_95) }
+pub(super) fn mix(h: u64, v: u64) -> u64 { (h.rotate_left(5) ^ v).wrapping_mul(0x517c_c1b7_2722_0a95) }
 
 pub(super) fn round(v: f32) -> f64 { (f64::from(v) * 32.0).round() / 32.0 }
 

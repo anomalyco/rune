@@ -127,6 +127,10 @@ fn actions_run_the_same_handlers_as_pointer_and_keys() {
         rt.frame(0.0);
     }
     assert_eq!(rt.state.level, 3);
+    let to_seven = request(&rt, "volume", Ak::SetValue, Some(ActionData::NumericValue(7.2)));
+    assert!(rt.a11y_action(&to_seven), "a slider with a step takes a number");
+    rt.frame(0.0);
+    assert_eq!(rt.state.level, 7, "set as steps through on_step, rounded to a step");
     let set = request(&rt, "name", Ak::SetValue, Some(ActionData::Value("Ada".into())));
     assert!(rt.a11y_action(&set));
     rt.frame(0.0);

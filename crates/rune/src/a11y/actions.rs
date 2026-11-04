@@ -68,6 +68,17 @@ impl<S: 'static> Runtime<S> {
                 Some(ActionData::Value(v)) => Action::A11y(path, A11yAct::SetValue(v.to_string())),
                 _ => return false,
             },
+            // A slider with a stated step takes a number as that many steps from its value.
+            (Ak::SetValue, None) if steps => {
+                let Some(ActionData::NumericValue(target)) = request.data else { return false };
+                let Some(delta) = n.a11y.more.as_deref().and_then(|m| m.range).and_then(|r| {
+                    let step = r.step.filter(|s| *s > 0.0)?;
+                    let target = target.clamp(r.min.min(r.max), r.max.max(r.min));
+                    Some(((target - r.value) / step).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32)
+                }) else { return false };
+                if delta == 0 { return false; }
+                Action::A11y(path, A11yAct::Step(delta))
+            }
             (Ak::ReplaceSelectedText, None) if editable => match &request.data {
                 Some(ActionData::Value(v)) => Action::A11y(path, A11yAct::Replace(v.to_string())),
                 _ => return false,
