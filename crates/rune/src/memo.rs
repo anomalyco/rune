@@ -54,6 +54,9 @@ use crate::El;
 use crate::runtime::HashMap;
 use crate::runtime::layout_read::{LayoutRects, SELECTION, Same, boxes_moved, moved, note_read, seen_rect, size, window_key};
 
+pub(crate) mod snapshot;
+pub use snapshot::snapshot;
+
 /// The children a memo's placeholders share.
 #[derive(Clone)]
 pub(crate) struct Shared {

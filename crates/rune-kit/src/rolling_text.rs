@@ -36,7 +36,7 @@ const MAX_LABELS: usize = 512;
 /// Cluster text (and key) bytes remembered per thread.
 const MAX_BYTES: usize = 256 * 1024;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Memory {
     clusters: Vec<(String, u64)>,
     next: u64,
@@ -242,6 +242,12 @@ fn keys(key: &str, text: &str, value: Option<f64>, trailing: bool) -> (Vec<Glyph
         if known {
             *bytes -= mem.bytes(key);
         }
+        // A discarded layout/focus/virtual-row pass must not consume this change's entrance
+        // or direction. Every build in the commit compares with the same previous label.
+        let previous = rune::memo::snapshot(key, mem);
+        mem.clusters.clone_from(&previous.clusters);
+        mem.next = previous.next;
+        mem.value = previous.value;
         let new: Vec<&str> = text.graphemes(true).collect();
         let old: Vec<&str> = mem.clusters.iter().map(|(c, _)| c.as_str()).collect();
         let matched = diff(&old, &new, trailing);

@@ -72,6 +72,7 @@ impl<S: 'static> Runtime<S> {
         let _first_view = crate::tooling::perf_warn::launch::FirstView::start(self.commits == 0);
         let budget = crate::tooling::perf_warn::budget::Commit::start();
         self.apply_playground();
+        let _history = crate::memo::snapshot::enter();
         COMMITS.set(COMMITS.get() + 1);
         self.last_commit_clock = self.clock;
         self.memo_since = self.memo.next_pass();
