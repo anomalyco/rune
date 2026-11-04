@@ -3385,6 +3385,7 @@ dependencies = [
  "rune",
  "rune-mermaid",
  "rune-motion",
+ "rune-ref",
  "rune-theme-opencode",
  "serde_json",
  "unicode-segmentation",

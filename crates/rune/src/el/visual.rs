@@ -79,6 +79,9 @@ pub struct VisualCold {
     /// `El::motion(Spring::NONE)` written on this element itself, not inherited or from a
     /// token: what that spring governs here lands at once by design.
     pub(crate) instant_motion: bool,
+    /// A scroll area's wrapper (`El::wrap_scroll_area`): rectangular clips and fades set on it
+    /// go to its first child, the viewport, so what it draws beside that stays whole.
+    pub(crate) clip_to_content: bool,
 }
 
 impl Empty for VisualCold {
@@ -117,6 +120,7 @@ impl Empty for VisualCold {
         enter_delay: 0.0,
         motion_intent: crate::el::motion::MotionIntent::NONE,
         instant_motion: false,
+        clip_to_content: false,
     };
 }
 

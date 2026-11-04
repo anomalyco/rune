@@ -393,6 +393,7 @@ impl El {
         outer.aspect_fit = std::mem::replace(&mut self.aspect_fit, 0.0);
         outer.above = self.above.take();
         outer.transition = self.transition.take();
+        outer.vis.cold_mut().clip_to_content = true;
         (area, key, outer, self)
     }
 }

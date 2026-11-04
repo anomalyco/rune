@@ -446,7 +446,8 @@ impl Bar {
 /// parent layout, keeps the viewport's key and existing [`El::on_scroll_offset`] handler, and
 /// drives the indicator through live values with zero view commits per scroll frame. The thumb
 /// widens while the pointer is over the bar, and the pointer at the right edge brings up an
-/// overlay bar.
+/// overlay bar. A clip or fade set on what it returns (`clip_fade_linear`) reaches the viewport,
+/// and the bar draws whole above it.
 pub trait ScrollBar {
     #[track_caller]
     fn scroll_bar(self, k: &Kit) -> El;

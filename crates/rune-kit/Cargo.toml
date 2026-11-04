@@ -42,6 +42,8 @@ procwatch = { path = "../procwatch" }
 serde_json = "1"
 # Reference rasteriser for the built-in glyphs (tests/glyphs.rs).
 resvg = { version = "0.45", default-features = false }
+# The scroll bar's fade test rasterises its frame with the reference renderer (tests/scroll_bar_fade.rs).
+rune-ref = { path = "../rune-ref", features = ["gpu"] }
 # The fixture goldens render with the OpenCode theme's tokens and fonts (tests/markdown_fixture.rs).
 rune-theme-opencode = { path = "../../themes/opencode" }
 
