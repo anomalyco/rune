@@ -4,6 +4,8 @@ use super::*;
 use crate::{TextEdit, TextStyle, memo, row, text, text_input};
 use std::cell::Cell;
 
+mod live;
+
 thread_local! {
     static VIEWS: Cell<u32> = const { Cell::new(0) };
     static MEMOS: Cell<u32> = const { Cell::new(0) };

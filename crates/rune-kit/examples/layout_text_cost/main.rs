@@ -14,6 +14,8 @@
 //! - `md-same`: the Markdown note; each frame re-runs the view with nothing changed.
 //! - `vlist-resize`: the note's blocks as `virtual_rows` of Markdown, scrolled to the middle, as
 //!   a notes reader shows them; each frame steps the width as `md-resize` does.
+//! - `md-resize-live`, `vlist-resize-live`: the same resize workloads with one always-mounted
+//!   live-bound overlay, to catch a binding disabling retained-tree relayout.
 //! - `md-open`: the first frame of a fresh runtime showing the Markdown note (every text shaped).
 //! - `md-virtual`: the Markdown note's blocks as `virtual_rows`, scrolled 40 pt a frame, so the
 //!   mounted window shifts every frame or two.
@@ -40,6 +42,7 @@
 mod probe;
 
 use std::borrow::Cow;
+use std::cell::Cell;
 
 use rune::text::TextSystem;
 use rune::{Color, Cx, El, Env, GrowthSpec, Ime, Runtime, ScrollSpec, TextEdit, TextStyle, col, row, text, text_input};
@@ -48,8 +51,13 @@ use rune_kit::{Badge, Button, ButtonVariant, Card, Kit, Markdown, MarkdownStyle,
 #[global_allocator]
 static ALLOC: probe::Probe = probe::Probe;
 
-const CASES: &[&str] = &["stack", "stack-same", "list", "edit", "md-resize", "md-same", "md-open", "md-virtual", "md-beside", "tree", "vlist-resize", "memo-chat"];
-const METRICS: &[&str] = &["cpu_ms", "view_ms", "commit_ms", "layout_ms", "text_ms", "paint_ms", "apply_ms", "allocs", "alloc_bytes", "shaped", "rebroken", "nodes"];
+const CASES: &[&str] = &["stack", "stack-same", "list", "edit", "md-resize", "md-resize-live", "md-same", "md-open", "md-virtual", "md-beside", "tree", "vlist-resize", "vlist-resize-live", "memo-chat"];
+const METRICS: &[&str] = &["cpu_ms", "view_ms", "commit_ms", "layout_ms", "text_ms", "paint_ms", "apply_ms", "allocs", "alloc_bytes", "shaped", "rebroken", "nodes", "view_runs"];
+thread_local! {
+    static VIEWS: Cell<usize> = const { Cell::new(0) };
+    static LIVE_OVERLAY: rune::Live<[f32; 2]> = rune::Live::new([4.0, 8.0]);
+}
+fn view_ran() { VIEWS.set(VIEWS.get() + 1); }
 const BG: Color = Color { r: 0.008, g: 0.008, b: 0.009, a: 1.0 };
 const WORDS: &[&str] = &["amber", "lantern", "orchard", "quiet", "harbor", "copper", "meadow", "signal", "drift",
     "pebble", "willow", "ember", "tide", "cinder", "fable", "glacier", "hollow", "juniper", "kestrel", "lumen",
@@ -136,6 +144,7 @@ const ROWS: usize = 8;
 struct Stack { kit: Kit, on: Vec<bool>, labels: Vec<(String, String)> }
 
 fn stack_view(s: &Stack, _: &mut Cx<Stack>) -> El {
+    view_ran();
     let k = &s.kit;
     let cards = (0..CARDS).map(|c| {
         let mut card = Card::new().title(format!("Section {c}"), None).description(s.labels[c * ROWS].1.clone());
@@ -175,6 +184,7 @@ fn list_row(s: &List, i: usize) -> El {
 }
 
 fn list_view(s: &List, _: &mut Cx<List>) -> El {
+    view_ran();
     scroller(col().key("rows").w_full().px(8.0).growth(GrowthSpec::default())
         .virtual_rows(s.titles.len(), ROW_H, |s: &List, i| Cow::Borrowed(s.keys[i].as_str()), list_row))
 }
@@ -193,6 +203,7 @@ struct Edit { note: TextEdit }
 fn edit_style() -> TextStyle { TextStyle::new(15.0, 400.0).lh(22.0) }
 
 fn edit_view(s: &Edit, _: &mut Cx<Edit>) -> El {
+    view_ran();
     scroller(col().w_full().px(32.0).py(24.0)
         .child(text_input(&s.note, edit_style()).key("editor").w_full().on_edit(|s: &mut Edit| &mut s.note)
             .on_submit(|s: &mut Edit, _| s.note.insert("\n"))))
@@ -203,6 +214,7 @@ fn edit_view(s: &Edit, _: &mut Cx<Edit>) -> El {
 struct Md { src: String, style: MarkdownStyle }
 
 fn md_view(s: &Md, _: &mut Cx<Md>) -> El {
+    view_ran();
     scroller(col().w_full().px(32.0).py(24.0).child(Markdown::new(s.src.as_str()).render(&s.style)))
 }
 
@@ -211,6 +223,7 @@ fn md_view(s: &Md, _: &mut Cx<Md>) -> El {
 struct MdRows { blocks: Vec<String>, keys: Vec<String>, side: Option<String>, style: MarkdownStyle }
 
 fn md_rows_view(s: &MdRows, _: &mut Cx<MdRows>) -> El {
+    view_ran();
     let list = col().key("blocks").w_full().px(32.0).growth(GrowthSpec::default()).virtual_rows(
         s.blocks.len(), 60.0,
         |s: &MdRows, i| Cow::Borrowed(s.keys[i].as_str()),
@@ -237,6 +250,7 @@ const CELLS: usize = 20;
 struct Tree { counts: Vec<u32>, labels: Vec<String> }
 
 fn tree_view(s: &Tree, cx: &mut Cx<Tree>) -> El {
+    view_ran();
     let w = cx.layout_size("g0").map_or(0.0, |[w, _]| w);
     let groups = (0..GROUPS).map(|g| {
         let cells = (0..CELLS).map(|c| {
@@ -264,12 +278,21 @@ fn tree_state() -> Tree {
 struct Blocks { blocks: Vec<String>, keys: Vec<String>, style: MarkdownStyle }
 
 fn blocks_view(s: &Blocks, _: &mut Cx<Blocks>) -> El {
+    view_ran();
     scroller(col().key("rows").w_full().px(32.0).py(24.0).gap(12.0).growth(GrowthSpec::default())
         .virtual_rows(s.blocks.len(), 60.0, |s: &Blocks, i| Cow::Borrowed(s.keys[i].as_str()),
             |s: &Blocks, i| Markdown::new(s.blocks[i].as_str()).render(&s.style)))
 }
 
 // memo-chat
+
+fn live_overlay(root: El) -> El {
+    LIVE_OVERLAY.with(|live| root.child(rune::el().key("live-overlay").absolute(0.0, 0.0).size(6.0, 40.0)
+        .fill(Color::WHITE).live_offset(live)))
+}
+
+fn md_live_view(s: &Md, cx: &mut Cx<Md>) -> El { live_overlay(md_view(s, cx)) }
+fn blocks_live_view(s: &Blocks, cx: &mut Cx<Blocks>) -> El { live_overlay(blocks_view(s, cx)) }
 
 const SIDE_ROWS: usize = 300;
 const CHAT_ROWS: usize = 200;
@@ -308,6 +331,7 @@ fn memo_side_row(r: &SideRow, i: usize, picked: bool, k: &Kit) -> El {
 }
 
 fn memo_chat_view(s: &MemoChat, _: &mut Cx<MemoChat>) -> El {
+    view_ran();
     let sidebar = col().key("sidebar").w(260.0).h_full().child(
         col().key("side-scroll").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(
             col().key("side-rows").w_full().px(8.0).py(8.0).gap(2.0).growth(GrowthSpec::default()).virtualize(36.0)
@@ -397,6 +421,7 @@ fn runtime<S: 'static>(state: S, view: fn(&S, &mut Cx<S>) -> El, size: (f32, f32
 /// Times `input` and the one frame that follows it, under case `tag`.
 fn timed<S: 'static>(rt: &mut Runtime<S>, tag: u32, input: impl FnOnce(&mut Runtime<S>)) -> Vec<f64> {
     rune::take_frame_phases();
+    let views0 = VIEWS.get();
     let (shaped0, rebroken0, allocs0, bytes0) = (rt.text.shaped, rt.text.rebroken, probe::allocations(), probe::allocated_bytes());
     probe::TAG.store(tag, std::sync::atomic::Ordering::Relaxed);
     let cpu0 = rune::thread_cpu_ms();
@@ -409,7 +434,7 @@ fn timed<S: 'static>(rt: &mut Runtime<S>, tag: u32, input: impl FnOnce(&mut Runt
     let p = rune::take_frame_phases();
     let q = rune::PHASES;
     vec![cpu, p[q], p[q + 1], p[q + 2], p[q + 3], p[q + 4], p[q + 5], allocs as f64, bytes as f64,
-        (rt.text.shaped - shaped0) as f64, (rt.text.rebroken - rebroken0) as f64, rt.stats.layout_nodes as f64]
+        (rt.text.shaped - shaped0) as f64, (rt.text.rebroken - rebroken0) as f64, rt.stats.layout_nodes as f64, (VIEWS.get() - views0) as f64]
 }
 
 fn report(case: &str, rows: &[Vec<f64>]) {
@@ -469,8 +494,9 @@ fn run(case: &str, tag: u32, kb: usize, meta: &mut Vec<String>) -> Vec<Vec<f64>>
             meta.push(census(&rt, case, heap0));
             (0..60).map(|_| timed(&mut rt, tag, |rt| rt.ime(Ime::Commit("w".into())))).collect()
         }
-        "md-resize" | "md-same" => {
-            let mut rt = runtime(Md { src, style: MarkdownStyle::neutral(true) }, md_view, (900.0, 900.0));
+        "md-resize" | "md-resize-live" | "md-same" => {
+            let view = if case == "md-resize-live" { md_live_view } else { md_view };
+            let mut rt = runtime(Md { src, style: MarkdownStyle::neutral(true) }, view, (900.0, 900.0));
             probe::snapshot(tag);
             meta.push(census(&rt, case, heap0));
             if case == "md-same" {
@@ -480,10 +506,11 @@ fn run(case: &str, tag: u32, kb: usize, meta: &mut Vec<String>) -> Vec<Vec<f64>>
                 widths.map(|w| timed(&mut rt, tag, |rt| rt.set_viewport((w, 900.0), 2.0))).collect()
             }
         }
-        "vlist-resize" => {
+        "vlist-resize" | "vlist-resize-live" => {
             let blocks: Vec<String> = src.split("\n\n").filter(|b| !b.trim().is_empty()).map(String::from).collect();
             let keys = (0..blocks.len()).map(|i| format!("b{i}")).collect();
-            let mut rt = runtime(Blocks { blocks, keys, style: MarkdownStyle::neutral(true) }, blocks_view, (900.0, 900.0));
+            let view = if case == "vlist-resize-live" { blocks_live_view } else { blocks_view };
+            let mut rt = runtime(Blocks { blocks, keys, style: MarkdownStyle::neutral(true) }, view, (900.0, 900.0));
             rt.pointer_move(450.0, 450.0);
             for _ in 0..40 { rt.wheel(450.0, 450.0, -400.0); rt.frame(1.0 / 120.0); }
             settle(&mut rt);

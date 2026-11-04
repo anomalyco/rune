@@ -34,11 +34,12 @@ pub(super) fn root_size(viewport: (f32, f32), fit_height: bool) -> Size<Dimensio
 }
 
 /// Whether a commit can lay `n` out again as it is. Layout rewrites the styles of
-/// `aspect_fit` elements and fitted anchored overlays, and live bindings and pictures change
-/// their nodes between commits.
+/// `aspect_fit` elements and fitted anchored overlays, and pictures can change their aspect.
+/// Live bindings only own scene properties: moving the node retains their sources, sampled
+/// values and exact fill, while `apply` leaves their scene tracks alone.
 pub(super) fn reusable(n: &Node) -> bool {
     n.cold.get().is_none_or(|c| {
-        c.aspect_fit.is_none() && c.above.as_ref().is_none_or(|a| !a.fit) && c.live.is_empty() && c.pixel_aspect.is_none()
+        c.aspect_fit.is_none() && c.above.as_ref().is_none_or(|a| !a.fit) && c.pixel_aspect.is_none()
     })
 }
 
