@@ -1,4 +1,4 @@
-use super::{by_name, by_pci, dev_numbers, pci_address, shows};
+use super::{by_display, by_name, by_pci, dev_numbers, pci_address, pci_ids, power_rank, shows};
 use std::path::Path;
 
 fn adapter(name: &str, backend: wgpu::Backend, pci: &str) -> wgpu::AdapterInfo {
@@ -61,4 +61,44 @@ fn only_the_compositors_gpu_shows_once_it_named_one() {
     assert!(!shows(Some("0000:01:00.0"), ""));
     assert!(shows(None, "0000:7c:00.0"));
     assert!(shows(None, ""));
+}
+
+#[test]
+fn low_power_order_puts_integrated_first_and_software_last() {
+    use wgpu::DeviceType::*;
+    let mut devices = [Cpu, DiscreteGpu, Other, IntegratedGpu, VirtualGpu];
+    devices.sort_by_key(|d| power_rank(*d));
+    assert_eq!(devices, [IntegratedGpu, DiscreteGpu, VirtualGpu, Other, Cpu]);
+}
+
+#[test]
+fn a_pci_hardware_id_gives_its_vendor_and_device() {
+    assert_eq!(pci_ids("PCI\\VEN_10DE&DEV_2C05&SUBSYS_205E1458&REV_A1"), Some((0x10de, 0x2c05)));
+    assert_eq!(pci_ids("pci\\ven_1002&dev_13c0&subsys_d0001458&rev_c9"), Some((0x1002, 0x13c0)));
+    assert_eq!(pci_ids("SWD\\RemoteDisplayEnum"), None, "a remote display");
+    assert_eq!(pci_ids("PCI\\VEN_10DE"), None);
+    assert_eq!(pci_ids(""), None);
+}
+
+fn gpu(name: &str, device_type: wgpu::DeviceType, vendor: u32, device: u32) -> wgpu::AdapterInfo {
+    wgpu::AdapterInfo { name: name.into(), vendor, device, ..wgpu::AdapterInfo::new(device_type, wgpu::Backend::Dx12) }
+}
+
+/// A desktop whose monitors are on its discrete card draws there, not on the integrated GPU no
+/// display hangs off; a laptop whose panel is on the integrated GPU keeps it.
+#[test]
+fn the_lowest_power_gpu_driving_a_display_is_picked() {
+    use wgpu::DeviceType::*;
+    let adapters = [
+        (gpu("NVIDIA GeForce RTX 5070 Ti", DiscreteGpu, 0x10de, 0x2c05), true),
+        (gpu("AMD Radeon(TM) Graphics", IntegratedGpu, 0x1002, 0x13c0), true),
+        (gpu("Microsoft Basic Render Driver", Cpu, 0x1414, 0x8c), true),
+    ];
+    assert_eq!(by_display(&[(0x10de, 0x2c05)], &adapters), Some(0), "only the discrete card drives a display");
+    assert_eq!(by_display(&[(0x10de, 0x2c05), (0x1002, 0x13c0)], &adapters), Some(1), "both do");
+    assert_eq!(by_display(&[(0x1002, 0x13c0)], &adapters), Some(1), "a laptop panel");
+    assert_eq!(by_display(&[(0x1414, 0x8c)], &adapters), None, "never the software adapter");
+    assert_eq!(by_display(&[(0x8086, 0x56a0)], &adapters), None, "no adapter drives it");
+    let cant_present = [(adapters[0].0.clone(), false), adapters[1].clone()];
+    assert_eq!(by_display(&[(0x10de, 0x2c05)], &cant_present), None);
 }

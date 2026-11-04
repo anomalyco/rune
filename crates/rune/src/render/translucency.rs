@@ -52,7 +52,7 @@ pub(crate) fn prefer(instance: &wgpu::Instance, surface: &wgpu::Surface<'_>, pic
         .collect();
     able.sort_by_key(|candidate| {
         let info = candidate.get_info();
-        (!pick.on_compositor_device(&info), power_rank(info.device_type))
+        (!pick.on_compositor_device(&info), crate::gpu::pick::power_rank(info.device_type))
     });
     able.into_iter().next().unwrap_or_else(|| pick.adapter.clone())
 }
@@ -64,28 +64,8 @@ fn takes_over(pick: wgpu::DeviceType, candidate: wgpu::DeviceType) -> bool {
     candidate != wgpu::DeviceType::Cpu || pick == wgpu::DeviceType::Cpu
 }
 
-/// `PowerPreference::LowPower`'s order; a software adapter comes last.
-#[cfg(not(target_arch = "wasm32"))]
-fn power_rank(device: wgpu::DeviceType) -> u8 {
-    match device {
-        wgpu::DeviceType::IntegratedGpu => 0,
-        wgpu::DeviceType::DiscreteGpu => 1,
-        wgpu::DeviceType::VirtualGpu => 2,
-        wgpu::DeviceType::Other => 3,
-        wgpu::DeviceType::Cpu => 4,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn low_power_order_puts_integrated_first_and_software_last() {
-        use wgpu::DeviceType::*;
-        let mut devices = [Cpu, DiscreteGpu, Other, IntegratedGpu, VirtualGpu];
-        devices.sort_by_key(|d| super::power_rank(*d));
-        assert_eq!(devices, [IntegratedGpu, DiscreteGpu, VirtualGpu, Other, Cpu]);
-    }
-
     /// lavapipe never takes a translucent overlay from a hardware adapter (hex#1216), but a
     /// hardware adapter may still take one from software, and GPUs from each other.
     #[test]

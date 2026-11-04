@@ -452,7 +452,11 @@ impl Gpu {
             required_features,
             required_limits,
             experimental_features: Default::default(),
-            memory_hints: wgpu::MemoryHints::Performance,
+            // `Performance` suballocates from 128 MB device and 64 MB host blocks, so a device
+            // that holds a few atlases commits about 190 MB more than it uses: process memory on
+            // an integrated GPU, and on Windows on a discrete one too. Rune keeps and reuses its
+            // buffers and textures, so the smaller blocks only cost a few more heaps.
+            memory_hints: wgpu::MemoryHints::MemoryUsage,
             trace: Default::default(),
         }))
         .map_err(|error| format!("no GPU device: {error}"))
