@@ -226,6 +226,9 @@ mod timer_wake_tests;
 #[path = "runtime/truncate_tests.rs"]
 mod truncate_tests;
 #[cfg(test)]
+#[path = "runtime/truncate_fade_tests.rs"]
+mod truncate_fade_tests;
+#[cfg(test)]
 #[path = "runtime/line_clamp_tests.rs"]
 mod line_clamp_tests;
 #[cfg(test)]

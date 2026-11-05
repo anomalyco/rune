@@ -1098,7 +1098,7 @@ impl<S: 'static> Runtime<S> {
             for instance in &mut self.instances[first_instance..] {
                 instance.fade = packed_fade;
             }
-            self.clip_text_instances(i, first_instance, r, sc, clip, fade, fade_origin);
+            self.clip_text_instances(i, first_instance, (r, r_exact), sc, clip, fade, fade_origin);
             let n = &self.nodes[i];
             if let Some((_, radii)) = rounded {
                 for instance in &mut self.instances[primitive_start..] { instance.round_clip_corners(radii); }
