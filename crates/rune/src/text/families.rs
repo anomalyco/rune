@@ -64,6 +64,13 @@ impl TextSystem {
         self.families = (sans.to_owned(), mono.to_owned());
         (self.sans, self.mono) = slots(sans, mono);
         self.slot_system_mono = names_system_mono(sans) || names_system_mono(mono);
+        self.drop_shaped();
+        true
+    }
+
+    /// Drops every layout, run and measurement shaped so far, for new families or a new
+    /// language. Glyphs stay in the atlas under their own font's key until they age out.
+    pub(super) fn drop_shaped(&mut self) {
         self.layouts.clear();
         self.shapes.clear();
         self.superseded.clear();
@@ -72,7 +79,6 @@ impl TextSystem {
         self.primary_traks.clear();
         self.primary_axes.clear();
         self.glyph_cache.clear();
-        true
     }
 
     /// Whether families were chosen since this text system last followed them.

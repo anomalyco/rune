@@ -3,9 +3,6 @@
 
 use super::*;
 
-/// Scripts the app's own families usually lack: Han, kana, Hangul and Bopomofo.
-const CJK_SCRIPTS: [&[u8; 4]; 5] = [b"Hani", b"Hira", b"Kana", b"Hang", b"Bopo"];
-
 // Common-script symbols can inherit the script of adjacent letters. Put these families at
 // the end of the requested family list, rather than registering only a Zyyy fallback.
 // On macOS the system font comes first: its keyboard symbols (⌘⇧⏎⌫⎋⌥⌃) sit on the baseline at
@@ -106,9 +103,16 @@ pub(super) fn load_families(collection: &mut Collection, files: &[&str], names: 
 
 /// File-name fragments (lowercase) of the CJK fonts desktops ship, most preferred first. Only
 /// these files are loaded, and only as fallbacks, so Latin text stays on the app's own fonts.
-pub(super) const CJK_FONT_FILES: [&str; 26] = [
+/// macOS names Hiragino Sans's files in Japanese (`ヒラギノ角ゴシック W3.ttc`), in either Unicode
+/// form.
+pub(super) const CJK_FONT_FILES: [&str; 30] = [
     "notosanscjk", "notosanssc", "notosansjp", "notosanstc", "notosanshk", "notosanskr", "sourcehansans",
-    "notoserifcjk", "sourcehanserif", "pingfang", "hiragino", "applesdgothicneo", "msyh", "yugoth", "meiryo",
+    "notoserifcjk", "sourcehanserif", "pingfang", "hiragino",
+    "\u{30d2}\u{30e9}\u{30ae}\u{30ce}\u{89d2}\u{30b4}\u{30b7}\u{30c3}\u{30af}w3",
+    "\u{30d2}\u{30e9}\u{30ad}\u{3099}\u{30ce}\u{89d2}\u{30b3}\u{3099}\u{30b7}\u{30c3}\u{30af}w3",
+    "\u{30d2}\u{30e9}\u{30ae}\u{30ce}\u{89d2}\u{30b4}\u{30b7}\u{30c3}\u{30af}w6",
+    "\u{30d2}\u{30e9}\u{30ad}\u{3099}\u{30ce}\u{89d2}\u{30b3}\u{3099}\u{30b7}\u{30c3}\u{30af}w6",
+    "applesdgothicneo", "msyh", "yugoth", "meiryo",
     "malgun", "msjh", "wqy", "wenquanyi", "droidsansfallback", "sarasa", "lxgw", "ukai", "uming", "simsun",
     "applegothic",
 ];
@@ -134,21 +138,8 @@ pub(super) fn register_cjk_fallbacks(collection: &mut Collection, loaded: &mut L
     if fallbacks.is_empty() {
         return;
     }
-    // Hangul tries Korean fonts first: a Chinese or Japanese font's few Hangul glyphs would
-    // otherwise mix designs within a word.
-    let korean = |collection: &mut Collection, id: &FamilyId| {
-        collection.family_name(*id).is_some_and(|name| KOREAN_FAMILIES.iter().any(|k| name.contains(k)))
-    };
-    let (mut hangul, others): (Vec<FamilyId>, Vec<FamilyId>) = fallbacks.iter().partition(|id| korean(collection, id));
-    hangul.extend(others);
-    for script in CJK_SCRIPTS {
-        let list = if *script == *b"Hang" { &hangul } else { &fallbacks };
-        collection.append_fallbacks(FallbackKey::new(Script::from_bytes(*script), None), list.iter().copied());
-    }
+    super::language::register(collection, &fallbacks);
 }
-
-/// Parts of the names of Korean font families, which Hangul prefers.
-const KOREAN_FAMILIES: [&str; 5] = ["SD Gothic", "Malgun", " KR", "AppleGothic", "Nanum"];
 
 /// The families each system font file added to the collection, so a file is loaded once.
 pub(super) type LoadedFiles = HashMap<std::path::PathBuf, Vec<FamilyId>>;

@@ -45,6 +45,35 @@ fn hangul_kana_and_han_fall_back_to_installed_fonts() {
     }
 }
 
+/// Han text falls back to the language's fonts: with Japanese and Simplified Chinese fonts both
+/// installed, `ja` and `zh` draw the same characters from different fonts (Hex #1382: Japanese
+/// interface text was drawn in a Chinese font's forms).
+#[test]
+fn han_text_falls_back_to_the_languages_font() {
+    let japanese = !system_font_files(&["notosanscjkjp", "notosansjp", "yugoth", "meiryo", "hiragino"]).is_empty();
+    let chinese = !system_font_files(&["notosanscjksc", "notosanssc", "msyh", "pingfang"]).is_empty();
+    if !(japanese && chinese) {
+        eprintln!("skipping: needs a Japanese and a Simplified Chinese font");
+        return;
+    }
+    let fonts = |tag: &str| {
+        let mut ts = TextSystem::default();
+        ts.set_language(parley::fontique::Language::parse(tag).ok());
+        let layout = ts.layout_rich("直骨", &[], TextStyle::new(13.0, 400.0), 2.0, None);
+        let mut fonts = Vec::new();
+        for line in layout.lines() {
+            for item in line.items() {
+                if let PositionedLayoutItem::GlyphRun(run) = item {
+                    let font = run.run().font();
+                    fonts.push((font.data.id(), font.index));
+                }
+            }
+        }
+        fonts
+    };
+    assert_ne!(fonts("ja"), fonts("zh"));
+}
+
 /// A tab shapes as a space: no missing-glyph box, and the same advance.
 #[test]
 fn a_tab_draws_as_a_space() {

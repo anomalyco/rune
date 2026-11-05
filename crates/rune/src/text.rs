@@ -30,6 +30,8 @@ mod case;
 mod cursor;
 mod decorations;
 mod families;
+mod language;
+pub use language::set_language;
 mod line_break;
 mod span;
 mod system_fonts;
@@ -144,6 +146,9 @@ pub struct TextSystem {
     families: (String, String),
     /// The `choose_families` change these slots follow.
     chosen: u64,
+    /// The language text shapes in, and the `set_language` change it follows.
+    language: Option<parley::fontique::Language>,
+    language_epoch: u64,
     pub sans: String,
     pub mono: String,
     symbol_families: Vec<&'static str>,
@@ -278,6 +283,8 @@ impl TextSystem {
             generation: 0,
             families: (families.0.to_owned(), families.1.to_owned()),
             chosen: 0,
+            language: None,
+            language_epoch: 0,
             sans, mono,
             symbol_families,
             emoji,
@@ -434,6 +441,7 @@ impl TextSystem {
         wrap_anywhere: bool,
         cache: bool,
     ) -> Rc<Layout<Ink>> {
+        self.follow_language();
         let shared = (!cache).then(|| std::mem::replace(&mut self.layout_cx, LayoutContext::new()));
         let has_indented_blocks = blocks.iter().any(|&b| b != crate::edit::Block::Paragraph);
         // Shaping depends on the text, spans, style, scale, overflow-wrap and pills; line
@@ -598,6 +606,7 @@ impl TextSystem {
             }
         };
         let mono = with_symbols(self.mono.as_str());
+        let language = self.language;
         // Routed clusters try their fallback first, then the run's own stack (mono spans included).
         // Each of the four {math, emoji} × {sans, mono} stacks is built at most once.
         let mut stacks: [Option<Vec<FontFamilyName<'_>>>; 4] = Default::default();
@@ -624,6 +633,7 @@ impl TextSystem {
         let build = |lcx: &mut LayoutContext<Ink>, fcx: &mut FontContext, exact: &Spacings, widen: &Spacings| {
             let mut b = lcx.ranged_builder(fcx, text, scale, true);
             b.push_default(FontFamily::from(sans.as_slice()));
+            b.push_default(StyleProperty::Locale(language));
             b.push_default(StyleProperty::FontSize(style.size));
             b.push_default(StyleProperty::FontWeight(FontWeight::new(style.weight)));
             if style.italic {
