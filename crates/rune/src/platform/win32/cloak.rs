@@ -22,6 +22,11 @@ impl Cloak {
 
     pub(crate) fn held(&self) -> bool { self.until.get().is_some() }
 
+    /// Moves a held cloak's deadline, as when making the GPU took part of it.
+    pub(crate) fn extend(&self, until: Instant) {
+        if self.held() { self.until.set(Some(until)); }
+    }
+
     /// When the cloak gives up on a frame.
     pub(crate) fn deadline(&self) -> Option<Instant> { self.until.get() }
 

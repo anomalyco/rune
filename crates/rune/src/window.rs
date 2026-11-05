@@ -917,6 +917,9 @@ impl<S: 'static> Host<S> {
             launch_drawables,
             _spot: crate::platform::macos::traffic_lights::Spot::new(&window),
         };
+        // Making the GPU and surface took part of the cloak's wait; the frame gets all of it.
+        #[cfg(target_os = "windows")]
+        cloak.extend(Instant::now() + win::READY_FALLBACK);
         #[cfg(target_os = "windows")]
         let native = Native { cloak };
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
