@@ -155,8 +155,8 @@ impl Scrub {
         changed
     }
 
-    #[cfg(test)]
-    pub(crate) fn skip_motion(&mut self) {
+    /// Jumps the opening or closing motion to its end: for Reduce Motion, and tests.
+    pub fn settle(&mut self) {
         let long_ago = Instant::now().checked_sub(std::time::Duration::from_secs(5));
         if self.opened.is_some() { self.opened = long_ago; }
         if self.closed.is_some() { self.closed = long_ago; }

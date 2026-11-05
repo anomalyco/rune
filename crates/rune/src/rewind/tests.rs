@@ -176,7 +176,7 @@ fn freezing_pauses_recording_and_the_keys_step_select_and_resume() {
     assert_eq!(rewind.frames(), held, "nothing records while frozen");
     assert!(matches!(rt.state.scrub.key(&press(Key::Escape, false)), Keyed::Closed));
     assert!(!rt.state.scrub.is_open() && rewind.is_paused(), "the step back isn't recorded");
-    rt.update(|s, tx| { s.scrub.skip_motion(); s.scrub.poll(tx); });
+    rt.update(|s, tx| { s.scrub.settle(); s.scrub.poll(tx); });
     assert!(!rewind.is_paused());
     frames(&mut rt, 5);
     assert_eq!(rewind.frames(), held + 5);
@@ -189,7 +189,7 @@ fn the_scrubber_draws_the_moved_element_and_sends_from_its_button() {
     frames(&mut rt, 5);
     jump(&mut rt, 30.0);
     frames(&mut rt, 5);
-    rt.update(|s, _| { let r = s.rewind.clone(); s.scrub.open(&r); s.scrub.skip_motion(); s.scrub.set_note("title jumps"); });
+    rt.update(|s, _| { let r = s.rewind.clone(); s.scrub.open(&r); s.scrub.settle(); s.scrub.set_note("title jumps"); });
     frames(&mut rt, 60);
     let els = rt.elements();
     let find = |key: &str| els.iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("no {key}")).rect;
@@ -215,7 +215,7 @@ fn a_scrubber_on_an_inset_stage_still_outlines_where_the_window_drew() {
     frames(&mut rt, 5);
     jump(&mut rt, 30.0);
     frames(&mut rt, 5);
-    rt.update(|s, _| { let r = s.rewind.clone(); s.scrub.open(&r); s.scrub.skip_motion(); });
+    rt.update(|s, _| { let r = s.rewind.clone(); s.scrub.open(&r); s.scrub.settle(); });
     frames(&mut rt, 60);
     let id = rt.state.scrub.clip().unwrap().changes(rt.state.scrub.frame())[0].id;
     let rect = |key: &str| rt.elements().iter().find(|e| e.key.as_deref() == Some(key)).unwrap().rect;
@@ -267,7 +267,7 @@ fn opening_slows_the_app_to_a_stop_and_steps_it_back_above_the_bar() {
     assert!(rt.elements().iter().all(|e| e.key.as_deref() != Some("rewind-bar")), "the bar waits for the slow-down");
     rt.update(|s, tx| { woke = s.scrub.poll(tx); });
     assert!(woke, "an opening one rebuilds the view");
-    rt.update(|s, _| s.scrub.skip_motion());
+    rt.update(|s, _| s.scrub.settle());
     rt.update(|s, tx| { s.scrub.poll(tx); });
     frames(&mut rt, 60);
     assert_eq!(rt.state.scrub.app_speed(), 0.0);
@@ -278,6 +278,6 @@ fn opening_slows_the_app_to_a_stop_and_steps_it_back_above_the_bar() {
     assert!(stage_foot <= bar[1], "the stage clears the bar: {stage_foot} {bar:?}");
     rt.update(|s, _| { s.scrub.close(); });
     assert!(rt.state.scrub.app_speed() < 0.1, "it picks up speed from a stop");
-    rt.update(|s, _| s.scrub.skip_motion());
+    rt.update(|s, _| s.scrub.settle());
     assert_eq!(rt.state.scrub.app_speed(), 1.0);
 }
