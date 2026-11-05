@@ -600,18 +600,27 @@ impl<S: 'static> Runtime<S> {
                 } else if content.len() > st.len && fade > 0.0 {
                     let mut starts = Vec::new();
                     word_starts(content, st.len, &mut starts);
-                    // A word continuing across the old end keeps its time.
-                    let mut tn = st.words.last().map_or(now, |w| w.1.max(now));
-                    let pending = st.words.iter().filter(|w| w.1 > now).count() + starts.len();
+                    // A word continuing across the old end keeps its time. New words wait behind
+                    // every streaming text's newest word, taken in reading order, so one edge moves
+                    // down the page: a chunk spanning several paragraphs or list items fades them
+                    // one after another, never all at once.
+                    let own = st.words.last().map_or(now, |w| w.1.max(now));
+                    let chain = if time_scaled { now } else { self.reveal_chain.max(now) };
+                    let queued = ((chain - now) / 0.0055) as usize;
+                    let pending = st.words.iter().filter(|w| w.1 > now).count() + starts.len() + queued;
                     let stagger = if self.reduced_motion {
                         0.0
                     } else {
                         let k = (pending as f32 / 24.0).clamp(0.0, 1.0);
                         (0.020 + (0.0055 - 0.020) * k) as f64
                     };
+                    let mut tn = if chain > own { chain + stagger } else { own };
                     for b in starts {
                         st.words.push((b, tn));
                         tn += stagger;
+                    }
+                    if !time_scaled && let Some(last) = st.words.last() {
+                        self.reveal_chain = self.reveal_chain.max(last.1);
                     }
                     st.len = content.len();
                 } else {

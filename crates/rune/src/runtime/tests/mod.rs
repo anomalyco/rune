@@ -22,6 +22,7 @@ mod pointer_drag;
 mod pointer_hit;
 mod relayout;
 mod remount;
+mod reveal_chain;
 mod scroll_carried;
 mod scroll_children;
 mod scroll_growth;
