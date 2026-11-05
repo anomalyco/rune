@@ -1,0 +1,1 @@
+- **`truncate_fade` labels that fit no longer fade.** Snapping a box's edges to whole pixels could leave it up to a pixel narrower than the text it was sized for (often under `El::scale`), and that sliver turned on the full 1.5 em fade, so "Skill, Shell" read "Skill, Shel". A text now fades only when it runs past its exact box, and one that fits isn't clipped by the snapped edge.
