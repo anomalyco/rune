@@ -192,11 +192,12 @@ impl<T: 'static> OverlayHandle<T> {
         self.request(|q| { q.visible = Some(true); q.fade = Some(duration); });
     }
 
-    /// Like `hide`, fading the window's alpha out over `duration` on macOS before it orders
-    /// out. Input stops at once, but the overlay keeps drawing until the fade ends, so motion
-    /// started in the same turn (an exit transition, a poll stepping its own animation) plays
-    /// out during it. Showing again cancels the fade, and that motion carries on from where it
-    /// is. Elsewhere the overlay hides at once.
+    /// Like `hide`, fading the window's alpha out over `duration` on macOS and Windows before
+    /// it goes. Input stops at once, but the overlay keeps drawing until the fade ends, so
+    /// motion started in the same turn (an exit transition, a poll stepping its own animation)
+    /// plays out during it, and frames still queued for the screen reach it. A GPU surface
+    /// given back while hidden goes only once the fade ends. Showing again cancels the fade,
+    /// and that motion carries on from where it is. Elsewhere the overlay hides at once.
     pub fn fade_out(&self, duration: Duration) {
         self.request(|q| { q.visible = Some(false); q.fade = Some(duration); });
     }
@@ -322,6 +323,9 @@ pub(crate) struct Overlay<T: 'static> {
     /// When a fade-out started by `OverlayHandle::fade_out` ends. Until then the hidden
     /// overlay takes no input but keeps drawing, and isn't treated as occluded.
     fading_out: Option<Instant>,
+    /// How long the fade-out ending at `fading_out` lasts, for its alpha (Windows).
+    #[cfg(target_os = "windows")]
+    fade_length: Duration,
     options: OverlayOptions,
     canvas_size: (f32, f32),
     name: &'static str,
@@ -419,6 +423,8 @@ impl<T: 'static> Overlay<T> {
             visible: false,
             animate_reveal,
             fading_out: None,
+            #[cfg(target_os = "windows")]
+            fade_length: Duration::ZERO,
             options,
             canvas_size: spec.size,
             name: spec.name,
@@ -650,9 +656,13 @@ impl<T: 'static> Overlay<T> {
         self.quiet = Default::default();
     }
 
-    /// Finishes native hiding too: AppKit's completion may stall while displays sleep.
+    /// Finishes native hiding too: AppKit's completion may stall while displays sleep. On
+    /// Windows, steps the window's alpha until then.
     fn end_fade_out(&mut self, now: Instant) {
-        if self.fading_out.is_some_and(|end| end <= now) { self.hide(); }
+        let Some(end) = self.fading_out else { return };
+        if end <= now { return self.hide(); }
+        #[cfg(target_os = "windows")]
+        if let Some(native) = &self.native { native.fade(fade_alpha(end, self.fade_length, now)); }
     }
 
     fn hide_fading(&mut self, fade: Duration) {
@@ -662,10 +672,12 @@ impl<T: 'static> Overlay<T> {
         self.fn_key();
         if self.options.keys == KeyPolicy::OnDemand { self.rt.keys_lost(); }
         let was_shown = self.visible || self.fading_out.is_some();
-        // Only macOS fades the window; elsewhere it goes at once, and so does drawing.
-        let fading = cfg!(target_os = "macos") && !fade.is_zero() && (self.visible || self.fading_out.is_some());
+        // Only macOS and Windows fade the window; elsewhere it goes at once, and so does drawing.
+        let fading = cfg!(any(target_os = "macos", target_os = "windows")) && !fade.is_zero() && (self.visible || self.fading_out.is_some());
         if fading {
             self.fading_out = Some(Instant::now() + fade);
+            #[cfg(target_os = "windows")]
+            { self.fade_length = fade; }
         } else {
             self.stop_drawing();
         }
@@ -682,10 +694,13 @@ impl<T: 'static> Overlay<T> {
             Backing::Window(window) => {
                 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
                 if let Some(x11) = &self.x11 { x11.hide(); }
+                // A fading window stays up; `end_fade_out` steps its alpha, then hides it.
                 #[cfg(target_os = "windows")]
                 {
                     let _ = window;
-                    if let Some(native) = &mut self.native { native.hide(); }
+                    if let Some(native) = &mut self.native {
+                        if fading { native.fade(255) } else { native.hide() }
+                    }
                 }
                 #[cfg(target_os = "macos")]
                 if let Some(panel) = &self.panel {
@@ -844,7 +859,8 @@ impl<T: 'static> Overlay<T> {
     }
 
     /// Just hidden: gives the GPU surface back now, or schedules it for `release_gpu_after`. A
-    /// macOS fade-out keeps it until the fade ends (`end_fade_out` hides again).
+    /// fade-out keeps it until the fade ends (`end_fade_out` hides again), so the exit plays
+    /// out on the window and its last frames reach the screen first.
     fn hidden_release(&mut self, now: Instant) {
         if !self.defers_gpu() || self.fading_out.is_some() { return; }
         match self.release_after {
@@ -1069,3 +1085,11 @@ mod surface;
 #[cfg(test)]
 #[path = "overlay/tests.rs"]
 mod tests;
+
+/// A Windows overlay's alpha (255 opaque) at `now`, fading out linearly over `length` until `end`.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn fade_alpha(end: Instant, length: Duration, now: Instant) -> u8 {
+    if length.is_zero() { return 0; }
+    let left = end.saturating_duration_since(now).as_secs_f64() / length.as_secs_f64();
+    (left.clamp(0.0, 1.0) * 255.0).round() as u8
+}

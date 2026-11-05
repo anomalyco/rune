@@ -23,6 +23,9 @@ impl<T: 'static> AnyHost for Overlay<T> {
         let deadline = deadline.filter(|_| !self.live.as_ref().and_then(|l| l.pacing.as_ref()).is_some_and(|p| p.running()));
         #[cfg(target_os = "macos")]
         let deadline = deadline.into_iter().chain(self.panel.as_ref().filter(|_| !self.occluded).and_then(|p| p.pointer_deadline())).min();
+        // A Windows fade-out steps its alpha once a frame.
+        #[cfg(target_os = "windows")]
+        let deadline = deadline.into_iter().chain(self.fading_out.map(|end| end.min(Instant::now() + crate::window::TIMER_FRAME))).min();
         deadline.into_iter().chain(self.retry.filter(|_| self.drawing())).chain(self.fading_out)
             .chain(self.hidden_pace.deadline().filter(|_| !self.drawing()))
             .chain(self.release_at.filter(|_| !self.drawing())).min()
