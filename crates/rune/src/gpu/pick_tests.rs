@@ -84,10 +84,11 @@ fn gpu(name: &str, device_type: wgpu::DeviceType, vendor: u32, device: u32) -> w
     wgpu::AdapterInfo { name: name.into(), vendor, device, ..wgpu::AdapterInfo::new(device_type, wgpu::Backend::Dx12) }
 }
 
-/// A desktop whose monitors are on its discrete card draws there, not on the integrated GPU no
-/// display hangs off; a laptop whose panel is on the integrated GPU keeps it.
+/// A desktop or laptop whose primary monitor is on its discrete card draws there, not on the
+/// integrated GPU (hex#1268); a laptop whose primary display is its panel on the integrated GPU
+/// keeps it.
 #[test]
-fn the_lowest_power_gpu_driving_a_display_is_picked() {
+fn the_gpu_driving_the_primary_display_is_picked() {
     use wgpu::DeviceType::*;
     let adapters = [
         (gpu("NVIDIA GeForce RTX 5070 Ti", DiscreteGpu, 0x10de, 0x2c05), true),
@@ -95,7 +96,9 @@ fn the_lowest_power_gpu_driving_a_display_is_picked() {
         (gpu("Microsoft Basic Render Driver", Cpu, 0x1414, 0x8c), true),
     ];
     assert_eq!(by_display(&[(0x10de, 0x2c05)], &adapters), Some(0), "only the discrete card drives a display");
-    assert_eq!(by_display(&[(0x10de, 0x2c05), (0x1002, 0x13c0)], &adapters), Some(1), "both do");
+    assert_eq!(by_display(&[(0x10de, 0x2c05), (0x1002, 0x13c0)], &adapters), Some(0), "both do: the primary display's");
+    assert_eq!(by_display(&[(0x1002, 0x13c0), (0x10de, 0x2c05)], &adapters), Some(1), "the laptop panel is primary");
+    assert_eq!(by_display(&[(0x8086, 0x56a0), (0x10de, 0x2c05)], &adapters), Some(0), "the primary display's GPU has no adapter: the next display's");
     assert_eq!(by_display(&[(0x1002, 0x13c0)], &adapters), Some(1), "a laptop panel");
     assert_eq!(by_display(&[(0x1414, 0x8c)], &adapters), None, "never the software adapter");
     assert_eq!(by_display(&[(0x8086, 0x56a0)], &adapters), None, "no adapter drives it");

@@ -1,7 +1,9 @@
 //! `warm_gpu` away from macOS: a GPU device and Rune's renderer made on a thread ahead of a
 //! surface that may show soon, and the slot the next surface takes them from (`Gpu::for_surface`).
 //! Unclaimed, they go after `LINGER`, so an app that warms on a hint and then shows nothing
-//! holds no device for long.
+//! holds no device for long. A hidden overlay that gives its surface back parks its device and
+//! renderer here too (`park`), for `PARKED` rather than `LINGER`: an overlay shown for each
+//! dictation takes the same device every time instead of making one per show (hex#1268).
 
 use super::{Gpu, Renderer};
 use std::sync::{Arc, Condvar, Mutex, Weak};
@@ -9,6 +11,9 @@ use std::time::{Duration, Instant};
 
 /// How long a warmed device waits for a surface, from the last `warm_gpu`.
 pub(super) const LINGER: Duration = Duration::from_secs(30);
+
+/// How long a parked device waits for the next surface.
+pub(crate) const PARKED: Duration = Duration::from_secs(5 * 60);
 
 /// The format overlays and windows draw in on Windows and Linux (`surface_config`, after
 /// `srgb_blend` drops the sRGB suffix); a surface in another one rebuilds the pipeline.
@@ -82,19 +87,40 @@ pub(super) fn warm(features: wgpu::Features, prepare: Option<Box<dyn FnOnce(&wgp
         let until = *until;
         *state = State::Ready { warmed, until };
         SLOT.changed.notify_all();
-        // Wait for a surface to take it, or let it go once nothing asked for it in `LINGER`.
-        loop {
-            let State::Ready { until, .. } = &*state else { return };
-            let now = Instant::now();
-            if now >= *until { break; }
-            let wait = *until - now;
-            state = SLOT.changed.wait_timeout(state, wait).unwrap_or_else(|e| e.into_inner()).0;
-        }
-        let expired = std::mem::take(&mut *state);
-        drop(state);
-        drop(expired);
+        wait_for_surface(state);
     });
     if spawned.is_err() { *lock(&SLOT.state) = State::Idle; }
+}
+
+/// Keeps what's ready for a surface to take, or lets it go once nothing asked for it by its
+/// time (which `warm` may push back).
+fn wait_for_surface(mut state: std::sync::MutexGuard<'_, State>) {
+    loop {
+        let State::Ready { until, .. } = &*state else { return };
+        let now = Instant::now();
+        if now >= *until { break; }
+        let wait = *until - now;
+        state = SLOT.changed.wait_timeout(state, wait).unwrap_or_else(|e| e.into_inner()).0;
+    }
+    let expired = std::mem::take(&mut *state);
+    drop(state);
+    drop(expired);
+}
+
+/// A hidden overlay's device and renderer, its surface already dropped, for the next surface to
+/// take within `linger`. The device first finishes its work, so what the dropped surface and
+/// its swapchain left is freed now rather than whenever the device next runs. When something
+/// already waits in the slot, this one goes.
+pub(crate) fn park(gpu: Gpu, renderer: Renderer, linger: Duration) {
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    if renderer.surfaces.is_some() { return; }
+    let mut state = lock(&SLOT.state);
+    if !matches!(*state, State::Idle) { return; }
+    *state = State::Ready { warmed: Warmed(gpu, renderer), until: Instant::now() + linger };
+    SLOT.changed.notify_all();
+    drop(state);
+    let spawned = std::thread::Builder::new().name("rune-gpu-parked".into()).spawn(|| wait_for_surface(lock(&SLOT.state)));
+    if spawned.is_err() { discard(); }
 }
 
 /// A device for a future surface on a GPU that drives a display, with the renderer, and one

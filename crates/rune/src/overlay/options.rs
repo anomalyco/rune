@@ -196,19 +196,20 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// first visible frame, such as a notification stack's first card entering. By default
     /// an unretained overlay shows settled, at its target.
     pub fn animate_reveal(mut self) -> Self { self.animate_reveal = true; self }
-    /// While hidden, the overlay holds no GPU surface, swapchain or renderer, nor a share of the
-    /// GPU device, which goes with the last surface on it. Each show makes the surface, and each
-    /// hide drops it. On Windows and macOS the window comes and goes with it, and a prewarmed
-    /// one makes nothing at startup, so a hidden overlay there has no window at all (NVIDIA's
-    /// Instant Replay took a hidden display-sized window for a game on Windows, and macOS 27's
-    /// Mission Control lost its Space thumbnails to hidden screen-sized panels). On X11 a
-    /// prewarmed one makes only its window at startup and keeps it. A show then waits for the
-    /// surface (a few milliseconds), and with no other surface on a device, for a new device and
-    /// its pipelines too (over half a second on some Windows PCs). For overlays that show rarely
-    /// and cover a display, such as a drawing layer or a picker: hidden, their swapchains hold
-    /// tens of megabytes, and an app whose only surfaces they are holds no GPU device until one
-    /// shows. By default a prewarmed overlay makes its surface at startup and keeps it, so it
-    /// shows at once.
+    /// While hidden, the overlay holds no GPU surface, swapchain or renderer. Each show makes the
+    /// surface, and each hide drops it. Away from macOS, the GPU device and renderer then wait
+    /// five minutes for the next surface (a window's or overlay's) before they go, so an overlay
+    /// shown often (a HUD on each dictation) keeps one device rather than making one per show
+    /// (hex#1268). On Windows and macOS the window comes and goes with the surface, and a
+    /// prewarmed one makes nothing at startup, so a hidden overlay there has no window at all
+    /// (NVIDIA's Instant Replay took a hidden display-sized window for a game on Windows, and
+    /// macOS 27's Mission Control lost its Space thumbnails to hidden screen-sized panels). On X11
+    /// a prewarmed one makes only its window at startup and keeps it. A show then waits for the
+    /// surface (a few milliseconds), and with no device to take, for a new device and its
+    /// pipelines too (over half a second on some Windows PCs). For overlays that show rarely and
+    /// cover a display, such as a drawing layer or a picker: hidden, their swapchains hold tens
+    /// of megabytes. By default a prewarmed overlay makes its surface at startup and keeps it,
+    /// so it shows at once.
     pub fn release_gpu_when_hidden(mut self) -> Self { self.release_after = Some(std::time::Duration::ZERO); self }
     /// `release_gpu_when_hidden`, once the overlay has stayed hidden for `after`: shows in
     /// a burst (a HUD across a few dictations) keep their surface and show at once, and an app

@@ -9,6 +9,15 @@ pub(crate) fn surface_gpu(gpu: &std::sync::Arc<super::Gpu>) {
     let _ = gpu;
 }
 
+/// A hidden overlay's device and renderer, its surface dropped, for the next window's or
+/// overlay's surface to take (`warm::park`). macOS drops them: its prewarmed panels keep theirs.
+pub(crate) fn park_gpu(gpu: super::Gpu, renderer: super::Renderer) {
+    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+    super::prewarm::park(gpu, renderer, super::prewarm::PARKED);
+    #[cfg(any(target_os = "macos", target_arch = "wasm32"))]
+    drop((renderer, gpu));
+}
+
 /// Starts making, on a thread, the GPU device and Rune's renderer the next window or overlay
 /// surface would make, so a show soon after (a tray app's HUD, on its shortcut's first key)
 /// doesn't wait for them on the UI thread. That surface takes them, waiting for the thread if

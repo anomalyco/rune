@@ -1,8 +1,8 @@
 //! A prewarmed overlay with `release_gpu_when_hidden` makes its window at startup on X11, and
 //! nothing on Windows, and no GPU surface, nor device, until it shows; each hide gives the
-//! surface back (and on Windows the window),
-//! and the device with the last surface on it, and `release_gpu_after` does so once the overlay
-//! stayed hidden that long. `warm_gpu` makes the device ahead of a show, which takes it. Prints
+//! surface back (and on Windows the window), and `release_gpu_after` does so once the overlay
+//! stayed hidden that long. The device waits for the next show, which takes it rather than
+//! making another (hex#1268). Prints
 //! how long each show waits for its first present, and the process's private memory along the
 //! way. Opens overlays, so it only runs with RUNE_GUI_TESTS=1 in a desktop session.
 
@@ -117,21 +117,21 @@ mod lazy {
                 std::thread::sleep(Duration::from_millis(500));
                 let released = private_mb();
 
-                show("full screen, no device", &full, &mut r);
-                assert_eq!(STARTS.load(Ordering::SeqCst), 2, "the released device is made again");
+                show("full screen, on the parked device", &full, &mut r);
+                assert_eq!(STARTS.load(Ordering::SeqCst), 1, "the next show takes the parked device");
                 hide("full screen", &full, true);
                 std::thread::sleep(Duration::from_millis(300));
 
                 warm_gpu(wgpu::Features::empty());
                 std::thread::sleep(Duration::from_millis(800));
                 show("full screen, warmed 800 ms ahead", &full, &mut r);
-                assert_eq!(STARTS.load(Ordering::SeqCst), 3, "the show takes the warmed device");
+                assert_eq!(STARTS.load(Ordering::SeqCst), 1, "warm_gpu makes nothing while a device waits");
                 hide("full screen", &full, true);
                 std::thread::sleep(Duration::from_millis(300));
 
                 warm_gpu(wgpu::Features::empty());
                 show("full screen, warmed at the show", &full, &mut r);
-                assert_eq!(STARTS.load(Ordering::SeqCst), 4);
+                assert_eq!(STARTS.load(Ordering::SeqCst), 1);
                 hide("full screen", &full, true);
                 std::thread::sleep(Duration::from_millis(300));
 
@@ -140,14 +140,14 @@ mod lazy {
                 show("hud, shown again within release_gpu_after", &small, &mut r);
                 hide("hud", &small, false);
                 warm_gpu(wgpu::Features::empty());
-                assert_eq!(STARTS.load(Ordering::SeqCst), 5, "warm_gpu makes nothing while the hud holds the device");
+                assert_eq!(STARTS.load(Ordering::SeqCst), 1, "warm_gpu makes nothing while the hud holds the device");
                 show("full screen, on the hud's device", &full, &mut r);
-                assert_eq!(STARTS.load(Ordering::SeqCst), 5, "the full-screen overlay shares the hud's device");
+                assert_eq!(STARTS.load(Ordering::SeqCst), 1, "the full-screen overlay shares the hud's device");
                 hide("full screen", &full, true);
                 std::thread::sleep(idle_release + Duration::from_millis(500));
                 assert!(small.surface_description().is_none(), "the hud gave its surface back after release_gpu_after");
                 show("hud, after release_gpu_after", &small, &mut r);
-                assert_eq!(STARTS.load(Ordering::SeqCst), 6);
+                assert_eq!(STARTS.load(Ordering::SeqCst), 1, "the hud takes the device it parked");
                 hide("hud", &small, false);
                 assert!(full.failure().is_none() && small.failure().is_none(), "{:?} {:?}", full.failure(), small.failure());
                 println!("private memory: hidden at startup {idle:.0} MB, full screen shown {shown:.0} MB, hidden again {released:.0} MB");
