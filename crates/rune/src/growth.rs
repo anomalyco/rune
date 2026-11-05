@@ -274,6 +274,11 @@ impl GrowTrack {
         self.paced |= streaming;
         self.whole = whole;
         let glide = glide.filter(|_| !streaming);
+        if glide.is_none() {
+            // A glide's stop at the window's edge goes with it: the row it hands over to carries
+            // on from where it is, rather than landing the rest at once.
+            self.stage = None;
+        }
         self.glide = glide.map(|g| g.0.spring);
         self.feather = glide.and_then(|g| g.0.feather);
         self.limit = glide.map_or(f32::INFINITY, |g| g.1);
@@ -563,6 +568,24 @@ mod tests {
         assert!(hs[jump - 1].1 > 898.0 && hs[jump].1 == 3040.0, "{:?}", &hs[jump - 2..=jump]);
         assert!(at(&hs, FOLD.duration) > 900.0 - 18.0, "{}", at(&hs, FOLD.duration));
         assert!(hs[jump].0 < 0.3, "lands in the spring's own time: {}", hs[jump].0);
+    }
+
+    #[test]
+    fn a_glide_handed_to_a_whole_row_mid_way_carries_on() {
+        let mut t = GrowTrack { whole: true, ..GrowTrack::settled(40.0) };
+        t.set_kind(false, true, Some((FoldGlide { spring: FOLD, feather: None }, 200.0)));
+        t.retarget(640.0);
+        for _ in 0..10 {
+            t.step(GROWTH, &edge::FEATHER, false);
+        }
+        t.set_kind(false, true, None);
+        let mut prev = t.h;
+        while t.moving() {
+            t.step(GROWTH, &edge::FEATHER, false);
+            assert!(t.h - prev < 20.0, "a step of {} pt at {}", t.h - prev, t.h);
+            prev = t.h;
+        }
+        assert!((t.h - 640.0).abs() < 0.01, "{}", t.h);
     }
 
     #[test]
