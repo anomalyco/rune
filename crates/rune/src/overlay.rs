@@ -878,7 +878,8 @@ impl<T: 'static> Overlay<T> {
     }
 
     /// `release_gpu_when_hidden`: the hidden overlay gives back its surface, swapchain and
-    /// renderer, and its hold on the GPU device, which goes with the last surface on it. The
+    /// renderer, and its hold on the GPU device, which waits a while for the next surface
+    /// (`render::park_gpu`) once no other surface draws with it. The
     /// window stays parked on X11 only. On Windows a hidden topmost window, often
     /// display-sized, in a process that draws with DXGI is enough for game capture tools such
     /// as NVIDIA's Instant Replay to take the app for the running game; on macOS 27 hidden
@@ -896,8 +897,11 @@ impl<T: 'static> Overlay<T> {
             drop(surface);
             self.parked = Some(backing);
         }
-        self.renderer = None;
-        self.gpu = None;
+        // The device goes to the next surface rather than with this one (hex#1268); one another
+        // surface still draws with stays there.
+        if let (Some(gpu), Some(renderer)) = (self.gpu.take(), self.renderer.take()) && let Ok(gpu) = Arc::try_unwrap(gpu) {
+            crate::render::park_gpu(gpu, renderer);
+        }
         *self.shared.surface.lock().unwrap() = None;
     }
 

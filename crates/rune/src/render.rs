@@ -539,7 +539,18 @@ impl Gpu {
         Self::wgpu_instance_on(wgpu::Backends::all())
     }
 
+    /// One instance per set of backends for the whole process: a new one per device was a new
+    /// DXGI factory and adapter list each time a window or overlay made a device (hex#1268).
     fn wgpu_instance_on(backends: wgpu::Backends) -> wgpu::Instance {
+        static MADE: std::sync::Mutex<Vec<(wgpu::Backends, wgpu::Instance)>> = std::sync::Mutex::new(Vec::new());
+        let mut made = MADE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((_, instance)) = made.iter().find(|(made, _)| *made == backends) { return instance.clone(); }
+        let instance = Self::new_wgpu_instance(backends);
+        made.push((backends, instance.clone()));
+        instance
+    }
+
+    fn new_wgpu_instance(backends: wgpu::Backends) -> wgpu::Instance {
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.backends = backends;
         descriptor.flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
@@ -655,7 +666,7 @@ mod prewarm {
 
 mod warmup;
 pub use warmup::{warm_gpu, warm_gpu_with};
-pub(crate) use warmup::{probe_gpu, surface_gpu};
+pub(crate) use warmup::{park_gpu, probe_gpu, surface_gpu};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BatchBind {

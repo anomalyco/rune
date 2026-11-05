@@ -5,8 +5,11 @@
 //! drives its panel from the integrated GPU and offloads to the discrete one gets the integrated
 //! GPU, as before.
 //!
-//! On Windows, a window's or overlay's surface gets the lowest-power adapter that drives a
-//! display; offscreen work keeps the lowest-power one. A swapchain on a GPU
+//! On Windows, a window's or overlay's surface gets the adapter that drives the primary display
+//! (the one with the taskbar), else the next display's; offscreen work keeps the lowest-power
+//! one. On a hybrid laptop whose monitors hang off the discrete GPU, that's the discrete GPU,
+//! for the main window and the HUD alike: an AMD integrated GPU presenting the HUD across to
+//! them grew the process by gigabytes over an hour of dictation (hex#1268). A swapchain on a GPU
 //! that drives none (a desktop's unused integrated GPU beside the discrete card the monitors
 //! hang off) is presented across adapters: each one costs the display GPU's driver a device of
 //! its own (about 37 threads with the NVIDIA driver, one of them waking 64 times a second) and
@@ -33,7 +36,7 @@ impl Reason {
             Reason::EnvName => "WGPU_ADAPTER_NAME",
             Reason::EnvPower => "WGPU_POWER_PREF",
             Reason::Compositor => "the compositor's GPU",
-            Reason::Display => "lowest power of the GPUs driving a display",
+            Reason::Display => "the GPU driving the primary display",
             Reason::LowPower => "lowest power",
         }
     }
@@ -135,14 +138,12 @@ fn by_pci(pci: &str, adapters: &[(wgpu::AdapterInfo, bool)]) -> Option<usize> {
     adapters.iter().position(|a| on(a) && a.0.backend == wgpu::Backend::Vulkan).or_else(|| adapters.iter().position(on))
 }
 
-/// The lowest-power usable adapter whose PCI vendor and device IDs are among `displays`.
+/// The usable hardware adapter for the first of `displays` (PCI vendor and device IDs, the
+/// primary display's first) that has one.
 fn by_display(displays: &[(u32, u32)], adapters: &[(wgpu::AdapterInfo, bool)]) -> Option<usize> {
-    adapters
-        .iter()
-        .enumerate()
-        .filter(|(_, (info, usable))| *usable && info.device_type != wgpu::DeviceType::Cpu && displays.contains(&(info.vendor, info.device)))
-        .min_by_key(|(_, (info, _))| power_rank(info.device_type))
-        .map(|(index, _)| index)
+    displays.iter().find_map(|ids| {
+        adapters.iter().position(|(info, usable)| *usable && info.device_type != wgpu::DeviceType::Cpu && (info.vendor, info.device) == *ids)
+    })
 }
 
 /// `PowerPreference::LowPower`'s order; a software adapter comes last.
@@ -156,10 +157,11 @@ pub(crate) fn power_rank(device: wgpu::DeviceType) -> u8 {
     }
 }
 
-/// The PCI vendor and device IDs of the GPUs driving a display on the desktop.
+/// The PCI vendor and device IDs of the GPUs driving a display on the desktop, the primary
+/// display's first.
 #[cfg(target_os = "windows")]
 fn display_devices() -> Vec<(u32, u32)> {
-    use windows_sys::Win32::Graphics::Gdi::{DISPLAY_DEVICE_ATTACHED_TO_DESKTOP, DISPLAY_DEVICEW, EnumDisplayDevicesW};
+    use windows_sys::Win32::Graphics::Gdi::{DISPLAY_DEVICE_ATTACHED_TO_DESKTOP, DISPLAY_DEVICE_PRIMARY_DEVICE, DISPLAY_DEVICEW, EnumDisplayDevicesW};
     let mut found = Vec::new();
     for index in 0.. {
         let mut device = DISPLAY_DEVICEW { cb: std::mem::size_of::<DISPLAY_DEVICEW>() as u32, ..unsafe { std::mem::zeroed() } };
@@ -167,7 +169,13 @@ fn display_devices() -> Vec<(u32, u32)> {
         if unsafe { EnumDisplayDevicesW(std::ptr::null(), index, &mut device, 0) } == 0 { break; }
         if device.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP == 0 { continue; }
         let len = device.DeviceID.iter().position(|&c| c == 0).unwrap_or(device.DeviceID.len());
-        if let Some(ids) = pci_ids(&String::from_utf16_lossy(&device.DeviceID[..len])) && !found.contains(&ids) { found.push(ids); }
+        let Some(ids) = pci_ids(&String::from_utf16_lossy(&device.DeviceID[..len])) else { continue };
+        if device.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE != 0 {
+            found.retain(|other| *other != ids);
+            found.insert(0, ids);
+        } else if !found.contains(&ids) {
+            found.push(ids);
+        }
     }
     found
 }

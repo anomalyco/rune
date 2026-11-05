@@ -225,6 +225,10 @@ name = "overlay_gpu_lifecycle"
 harness = false
 
 [[test]]
+name = "overlay_soak"
+harness = false
+
+[[test]]
 name = "macos_window_corners"
 harness = false
 
