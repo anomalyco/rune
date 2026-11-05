@@ -293,6 +293,12 @@ impl<S: 'static> Host<S> {
             && gpu.device.poll(wgpu::PollType::wait_indefinitely()).is_ok() {
             l.first_frame.ready = true;
         }
+        // The window shows once the GPU has finished the frame it presents.
+        #[cfg(target_os = "windows")]
+        if l.native.cloak.held() {
+            let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+            l.native.cloak.lift(&l.window);
+        }
         let submitted = Instant::now();
         self.meter.presented();
         #[cfg(target_os = "macos")]

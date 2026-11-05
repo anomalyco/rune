@@ -66,6 +66,8 @@ impl<S: 'static> AnyHost for Host<S> {
         if let Some(shadow) = self.win.as_ref().and_then(|w| w.native.shadow.as_ref()) { shadow.turn(); }
         self.meter.turn(matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll), crate::frame::surface_stats::slept(cause));
         if matches!(cause, StartCause::ResumeTimeReached { .. }) && let Some(w) = &self.win { w.cursor.reassert(); }
+        #[cfg(target_os = "windows")]
+        if let Some(w) = &self.win { w.native.cloak.lift_if_due(&w.window, Instant::now()); }
         if let Some(w) = &mut self.win && let Some((retry, until)) = w.first_frame.deadline && retry <= Instant::now() {
             if until <= Instant::now() {
                 let notified = w.first_frame.notified;
@@ -142,6 +144,7 @@ impl<S: 'static> AnyHost for Host<S> {
         runtime.into_iter()
             .chain(win.and_then(|w| w.first_frame.deadline.map(|(retry, _)| retry)))
             .chain(win.and_then(|w| w.first_frame.ready_deadline()))
+            .chain(win.and_then(Win::cloak_deadline))
             .chain(win.and_then(|w| w.retry))
             .chain(win.filter(|w| !w.visible).and_then(|w| w.hidden_pace.deadline()))
             .chain(self.files.pointer.as_ref().filter(|_| win.is_some_and(|w| w.visible)).map(|_| Instant::now() + DROP_SAMPLE))

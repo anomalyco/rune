@@ -1,5 +1,6 @@
 //! What a window holds per OS: on macOS its display link, present hook, panel and native
-//! views; on Linux desktops its activation helper; elsewhere nothing.
+//! views; on Linux desktops its activation helper; on Windows its first-frame cloak; elsewhere
+//! nothing.
 
 /// Dropped before the surface and the window, so its AppKit observers and views go while both
 /// still exist.
@@ -32,6 +33,13 @@ pub(super) struct Native {
     pub(super) activator: Option<crate::platform::activation::Activator>,
 }
 
-#[cfg(not(any(target_os = "macos", all(unix, not(target_os = "ios"), not(target_os = "android")))))]
+#[cfg(target_os = "windows")]
+#[derive(Default)]
+pub(super) struct Native {
+    /// Holds a window that's just been shown off screen until its frame lands.
+    pub(super) cloak: crate::platform::win32::Cloak,
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))))]
 #[derive(Default)]
 pub(super) struct Native;

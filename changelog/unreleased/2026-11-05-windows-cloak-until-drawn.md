@@ -1,0 +1,1 @@
+- **A Windows window no longer flashes white when it opens or is shown again.** It stays cloaked (on screen to DWM, invisible to the user) until its first frame has presented, or for a second at most when no frame comes.
