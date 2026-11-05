@@ -13,7 +13,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_EX_TRANSPARENT,
 };
 
+mod dpi_drag;
 mod pointer;
+
+pub(crate) use dpi_drag::follow_suggested_rect;
 
 fn hwnd(window: &winit::window::Window) -> Option<HWND> {
     let RawWindowHandle::Win32(h) = window.window_handle().ok()?.as_raw() else { return None };

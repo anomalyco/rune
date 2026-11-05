@@ -764,6 +764,8 @@ impl<S: 'static> Host<S> {
             attrs = attrs.with_titlebar_transparent(true).with_title_hidden(true).with_fullsize_content_view(true);
         }
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
+        #[cfg(target_os = "windows")]
+        crate::platform::win32::follow_suggested_rect(&window);
         // First, before anything observes the view (macOS) or an assistive client asks.
         let a11y = {
             let handle = self.native_handle.clone();

@@ -107,9 +107,29 @@ pub(crate) fn snap(rect: [f32; 4], scale: f32) -> [f32; 4] {
     rect.map(|v| (v * scale).round() / scale)
 }
 
+/// The drawable size a window takes when its scale changes from `from` to `to` and it keeps its
+/// logical size, rounded as winit rounds it. Windows sends `ScaleFactorChanged` before it resizes
+/// the window, so its `inner_size` is still the old scale's then.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn rescaled(size: (u32, u32), from: f64, to: f64) -> (u32, u32) {
+    let scale = |v: u32| (f64::from(v) / from * to).round() as u32;
+    (scale(size.0), scale(size.1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scale_change_keeps_the_logical_size() {
+        // 980 x 760 points, dragged from a 150% laptop to a 100% display and back.
+        assert_eq!(rescaled((1470, 1140), 1.5, 1.0), (980, 760));
+        assert_eq!(rescaled((980, 760), 1.0, 1.5), (1470, 1140));
+        // Odd scales round to the nearest pixel, and a round trip lands where it began.
+        assert_eq!(rescaled((1225, 950), 1.25, 1.75), (1715, 1330));
+        assert_eq!(rescaled(rescaled((1225, 950), 1.25, 1.75), 1.75, 1.25), (1225, 950));
+        assert_eq!(rescaled((1001, 777), 1.0, 1.25), (1251, 971));
+    }
 
     const SCREEN: [f32; 4] = [0.0, 33.0, 1728.0, 1084.0];
 

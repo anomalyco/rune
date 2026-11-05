@@ -292,6 +292,12 @@ impl<S: 'static> Host<S> {
                 if let Some(shadow) = &l.native.shadow { shadow.redraw(); }
                 let scale = scale_factor as f32;
                 let size = l.window.inner_size();
+                // Still the old scale's size: Windows resizes the window after this event.
+                #[cfg(target_os = "windows")]
+                let size = {
+                    let (width, height) = crate::window::frame::rescaled((size.width, size.height), f64::from(rt.env.scale), scale_factor);
+                    winit::dpi::PhysicalSize::new(width, height)
+                };
                 if size.width > 0 && size.height > 0 {
                     let resized = l.resize_surface(&gpu.device, size);
                     let viewport = (size.width as f32 / scale, size.height as f32 / scale);
