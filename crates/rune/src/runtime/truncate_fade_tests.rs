@@ -16,7 +16,7 @@ fn view(s: &S, _: &mut Cx<S>) -> El {
 }
 
 /// The widest right-edge fade on the label's glyphs, in device px.
-fn fade(rt: &Runtime<S>) -> f32 {
+fn fade<T>(rt: &Runtime<T>) -> f32 {
     rt.instances.iter()
         .filter(|i| i.params[1] == crate::render::KIND_GLYPH)
         .map(|i| crate::render::unpack_fade(i.fade).0[2])
@@ -52,5 +52,32 @@ fn a_label_cut_short_still_fades() {
             rt.frame(0.0);
             assert!(fade(&rt) > 0.0, "{scale}x, zoom {zoom}");
         }
+    }
+}
+
+/// A label in a row that springs to its new layout (`El::animate_layout`).
+fn growing(label: &&'static str, _: &mut Cx<&'static str>) -> El {
+    row().w(400.0).h(40.0).child(
+        text(*label).key("label").font(TextStyle::new(13.0, 500.0)).truncate_fade().shrink().animate_layout(),
+    )
+}
+
+#[test]
+fn a_label_that_fits_its_layout_never_fades_while_its_box_grows_to_it() {
+    for scale in [1.0, 2.0] {
+        let mut rt = Runtime::new("Read", growing, (400.0, 40.0), Env::new(true, scale));
+        for _ in 0..60 { rt.frame(1.0 / 60.0); }
+        rt.update(|s, _| *s = "Read, Shell");
+        let mut grew = false;
+        for f in 0..60 {
+            rt.frame(1.0 / 120.0);
+            let label = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("label")).unwrap();
+            grew |= label.rect[2] + 1.0 < label.target[2];
+            assert_eq!(fade(&rt), 0.0, "{scale}x frame {f}: drawn {:?}, laid out {:?}", label.rect, label.target);
+            let right = rt.instances.iter().filter(|i| i.params[1] == crate::render::KIND_GLYPH)
+                .map(|i| i.clip[2] - (i.rect[0] + i.rect[2])).fold(f32::MAX, f32::min);
+            assert!(right >= -1.0, "{scale}x frame {f}: a glyph ends {} px past its clip", -right);
+        }
+        assert!(grew, "{scale}x: the box should spring wider over frames");
     }
 }

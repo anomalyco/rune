@@ -410,11 +410,15 @@ impl<S: 'static> Runtime<S> {
             let mut widths = fade;
             let mut origins = fade_origin;
             // Layout width already includes display scale `s`; bounds also include the
-            // element/ancestor transform `sc`. Compare both after that transform. Snapping each
-            // edge to a whole pixel can leave the box up to a pixel narrower than the text it
-            // was sized to fit, so a text that fits its exact box doesn't fade, and isn't clipped.
+            // element/ancestor transform `sc`. Compare both after that transform. A text fades
+            // only when it runs past its laid-out box and the box drawn now: snapping each edge
+            // to a whole pixel can leave the drawn box a sliver short, and a box springing to a
+            // new layout (`animate_layout`, a flight) is short until it lands. A text that fits
+            // isn't clipped by either.
             let exact = r_exact[2] - r_exact[0] - ins[0] - ins[2];
-            let overflows = layout.full_width() * sc > (bounds[2] - bounds[0]).max(exact) + 0.5 * sc;
+            let laid_out = (n.local.w - n.inset[0] - n.inset[2]).max(0.0) * s;
+            let overflows = layout.full_width() > laid_out + 0.5
+                && layout.full_width() * sc > (bounds[2] - bounds[0]).max(exact) + 0.5 * sc;
             if !overflows {
                 bounds[2] = bounds[2].max(bounds[0] + exact.max(layout.full_width() * sc));
             }
