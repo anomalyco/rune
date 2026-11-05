@@ -176,7 +176,7 @@ fn freezing_pauses_recording_and_the_keys_step_select_and_resume() {
     assert_eq!(rewind.frames(), held, "nothing records while frozen");
     assert!(matches!(rt.state.scrub.key(&press(Key::Escape, false)), Keyed::Closed));
     assert!(!rt.state.scrub.is_open() && rewind.is_paused(), "the step back isn't recorded");
-    rt.update(|s, tx| { s.scrub.settle(); s.scrub.poll(tx); });
+    rt.update(|s, tx| { s.scrub.settle(); s.scrub.poll(0.0, tx); });
     assert!(!rewind.is_paused());
     frames(&mut rt, 5);
     assert_eq!(rewind.frames(), held + 5);
@@ -260,15 +260,17 @@ fn opening_slows_the_app_to_a_stop_and_steps_it_back_above_the_bar() {
     jump(&mut rt, 30.0);
     frames(&mut rt, 5);
     let mut woke = true;
-    rt.update(|s, tx| { woke = s.scrub.poll(tx); });
+    rt.update(|s, tx| { woke = s.scrub.poll(0.0, tx); });
     assert!(!woke, "a closed scrubber asks for nothing");
     rt.update(|s, _| { let r = s.rewind.clone(); s.scrub.open(&r); });
     assert!(rt.state.scrub.app_speed() > 0.9, "it starts at full speed");
     assert!(rt.elements().iter().all(|e| e.key.as_deref() != Some("rewind-bar")), "the bar waits for the slow-down");
-    rt.update(|s, tx| { woke = s.scrub.poll(tx); });
+    rt.update(|s, tx| { s.scrub.poll(10.0, tx); });
+    rt.update(|s, tx| { woke = s.scrub.poll(10.3, tx); });
     assert!(woke, "an opening one rebuilds the view");
-    rt.update(|s, _| s.scrub.settle());
-    rt.update(|s, tx| { s.scrub.poll(tx); });
+    let speed = rt.state.scrub.app_speed();
+    assert!(speed > 0.0 && speed < 0.5, "it slows on the window's clock: {speed}");
+    rt.update(|s, tx| { s.scrub.poll(11.0, tx); });
     frames(&mut rt, 60);
     assert_eq!(rt.state.scrub.app_speed(), 0.0);
     let rect = |key: &str| rt.elements().iter().find(|e| e.key.as_deref() == Some(key)).unwrap().rect;
@@ -278,6 +280,7 @@ fn opening_slows_the_app_to_a_stop_and_steps_it_back_above_the_bar() {
     assert!(stage_foot <= bar[1], "the stage clears the bar: {stage_foot} {bar:?}");
     rt.update(|s, _| { s.scrub.close(); });
     assert!(rt.state.scrub.app_speed() < 0.1, "it picks up speed from a stop");
-    rt.update(|s, _| s.scrub.settle());
+    rt.update(|s, tx| { s.scrub.poll(12.0, tx); s.scrub.poll(13.0, tx); });
     assert_eq!(rt.state.scrub.app_speed(), 1.0);
+    assert!(!rt.state.rewind.is_paused(), "recording resumes once it's back in place");
 }

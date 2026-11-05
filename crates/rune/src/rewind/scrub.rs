@@ -6,8 +6,6 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::time::Instant;
-
 use crate::edit::{Key, KeyEvent};
 use crate::tok::{self, type_};
 use crate::{Color, El, Tx, col, el, row, spacer, text, text_input};
@@ -48,10 +46,12 @@ pub struct Scrub {
     anchor: Option<usize>,
     picked: Option<u32>,
     note: crate::TextEdit,
-    /// When it opened, for the slow-down.
-    opened: Option<Instant>,
-    /// When it closed, for the speed-up.
-    closed: Option<Instant>,
+    /// Opening or closing is under way.
+    moving: bool,
+    /// On the window's clock, when it opened or closed (stamped by the next [`Scrub::poll`]).
+    since: Option<f64>,
+    /// The window's clock at the last poll.
+    now: f64,
     /// The app's speed the view last showed ([`Scrub::poll`]).
     shown: Option<f32>,
 }
@@ -108,59 +108,61 @@ impl Scrub {
         self.anchor = None;
         self.picked = None;
         self.note = crate::TextEdit::default();
-        self.opened = Some(Instant::now());
-        self.closed = None;
+        self.moving = true;
+        self.since = None;
     }
 
     /// Hides the scrubber. Recording resumes once the window is back in place ([`Scrub::poll`]),
     /// so the step back isn't in it.
     pub fn close(&mut self) {
-        if self.clip.take().is_some() { self.closed = Some(Instant::now()); }
-        self.opened = None;
+        if self.clip.take().is_some() {
+            self.moving = true;
+            self.since = None;
+        }
     }
 
     /// How fast the app runs under [`Scrub::stage`]: easing from 1 to 0 as it opens (the
     /// recording already stopped, so the slow-down isn't in it) and back up as it closes.
     pub fn app_speed(&self) -> f32 {
-        let since = |t: Option<Instant>| t.map(|t| t.elapsed().as_secs_f64());
         if self.clip.is_some() {
-            let p = since(self.opened).map_or(1.0, |t| (t / SLOW_S).min(1.0));
+            let p = (self.elapsed() / SLOW_S).min(1.0);
             return ((1.0 - p) * (1.0 - p)) as f32;
         }
-        let p = since(self.closed).map_or(1.0, |t| (t / RESUME_S).min(1.0));
+        let p = (self.elapsed() / RESUME_S).min(1.0);
         (p * p) as f32
     }
 
-    /// Whether the window has stepped back onto the stage yet.
-    fn shrunk(&self) -> bool {
-        self.clip.is_some() && self.opened.is_none_or(|t| t.elapsed().as_secs_f64() >= SHRINK_S)
+    /// Seconds since it opened or closed; endless once the motion's done.
+    fn elapsed(&self) -> f64 {
+        if !self.moving { return f64::INFINITY; }
+        self.since.map_or(0.0, |t| (self.now - t).max(0.0))
     }
+
+    /// Whether the window has stepped back onto the stage yet.
+    fn shrunk(&self) -> bool { self.clip.is_some() && self.elapsed() >= SHRINK_S }
 
     /// Whether the window is still settling back after closing.
-    fn settling(&self) -> bool {
-        self.clip.is_none() && self.closed.is_some_and(|t| t.elapsed().as_secs_f64() < SETTLE_S)
-    }
+    fn settling(&self) -> bool { self.clip.is_none() && self.elapsed() < SETTLE_S }
 
-    /// Call from the app's poll: while the scrubber opens or closes it asks for a frame each
-    /// display refresh, it resumes recording once closed and settled, and it's true whenever
-    /// the view should be built again.
-    pub fn poll(&mut self, tx: &mut Tx) -> bool {
-        if self.clip.is_none() && !self.settling() && let Some(rewind) = self.rewind.take() { rewind.resume(); }
-        let now = (self.app_speed(), self.shrunk(), self.settling());
-        let moving = !matches!(now, (0.0, true, _) | (1.0, false, false));
-        if moving { tx.wake_after(std::time::Duration::ZERO); }
-        let key = now.0 + if now.1 { 2.0 } else { 0.0 } + if now.2 { 4.0 } else { 0.0 };
+    /// Call from the app's poll with its clock: while the scrubber opens or closes it asks for a
+    /// frame each display refresh, it resumes recording once closed and settled, and it's true
+    /// whenever the view should be built again.
+    pub fn poll(&mut self, now: f64, tx: &mut Tx) -> bool {
+        self.now = now;
+        if self.moving {
+            let since = *self.since.get_or_insert(now);
+            if now - since >= if self.clip.is_some() { SLOW_S } else { SETTLE_S } { self.moving = false; }
+        }
+        if self.clip.is_none() && !self.moving && let Some(rewind) = self.rewind.take() { rewind.resume(); }
+        if self.moving { tx.wake_after(std::time::Duration::ZERO); }
+        let key = self.app_speed() + if self.shrunk() { 2.0 } else { 0.0 } + if self.settling() { 4.0 } else { 0.0 };
         let changed = self.shown.unwrap_or(1.0) != key;
         self.shown = Some(key);
         changed
     }
 
     /// Jumps the opening or closing motion to its end: for Reduce Motion, and tests.
-    pub fn settle(&mut self) {
-        let long_ago = Instant::now().checked_sub(std::time::Duration::from_secs(5));
-        if self.opened.is_some() { self.opened = long_ago; }
-        if self.closed.is_some() { self.closed = long_ago; }
-    }
+    pub fn settle(&mut self) { self.moving = false; }
 
     pub fn is_open(&self) -> bool { self.clip.is_some() }
 
