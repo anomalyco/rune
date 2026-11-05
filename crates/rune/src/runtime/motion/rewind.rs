@@ -1,5 +1,6 @@
 //! Feeds an attached [`Rewind`](crate::rewind::Rewind) each frame: every keyed or trace-named
-//! element on screen, its drawn rect and opacity (ancestors included).
+//! element on screen, its drawn rect and opacity (ancestors included), but not the scrubber's
+//! own (keys starting `rewind`).
 
 use super::*;
 
@@ -12,6 +13,7 @@ impl<S: 'static> Runtime<S> {
         if self.drawn.len() == self.nodes.len() && self.inh_scratch.len() == self.nodes.len() {
             for (i, n) in self.nodes.iter().enumerate() {
                 if n.key.is_none() && n.trace_name.is_none() { continue; }
+                if n.key.as_deref().is_some_and(|k| k.starts_with("rewind")) { continue; }
                 if !self.seen.get(i).copied().unwrap_or(true) { continue; }
                 let q = crate::rewind::quantize(self.drawn[i], self.inh_scratch[i].opacity);
                 tape.sample(n.id.0, q, || n.trace_name.map_or_else(|| n.key.clone().unwrap_or_else(|| n.path.clone()), str::to_owned));
