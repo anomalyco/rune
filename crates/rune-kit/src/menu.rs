@@ -38,6 +38,7 @@ pub struct MenuItem {
     shortcut: Option<String>,
     badge: Option<String>,
     description: Option<String>,
+    danger: bool,
     /// Checkbox and radio items: whether the indicator shows.
     checked: Option<bool>,
     sub: Option<(Vec<MenuEntry>, bool)>,
@@ -54,6 +55,7 @@ impl MenuItem {
             shortcut: None,
             badge: None,
             description: None,
+            danger: false,
             checked: None,
             sub: None,
             state: State::Rest,
@@ -81,6 +83,11 @@ impl MenuItem {
     /// A faint second line under the label, such as what a choice does. The item grows to fit it.
     pub fn description(mut self, d: impl Into<String>) -> Self {
         self.description = Some(d.into());
+        self
+    }
+    /// A destructive choice: the label and icon take the danger ink.
+    pub fn danger(mut self, on: bool) -> Self {
+        self.danger = on;
         self
     }
     /// A checkbox or radio item, showing the check when `on`.
@@ -123,13 +130,21 @@ impl MenuItem {
         } else {
             (k.ty.ui_compact, c.text_base)
         };
+        let danger = self.danger && !disabled;
+        let ink = if danger { c.danger.fg } else { ink };
         // The item's label, shortcut, badge and check say what this row shows.
         let mut content = row().key("content").grow(1.0).shrink().gap(8.0).center_y().a11y_hidden();
         if let Some(l) = self.lead {
             content = content.child(l);
         }
         if let Some(i) = self.icon {
-            content = content.child(icon(i, 14.0).key("icon").color(if standard { c.std_icon } else { c.icon_base }));
+            content = content.child(icon(i, 14.0).key("icon").color(if danger {
+                c.danger.fg
+            } else if standard {
+                c.std_icon
+            } else {
+                c.icon_base
+            }));
         }
         let label = text(self.label.clone()).key("label").font(font).color(ink).truncate();
         content = match &self.description {
