@@ -37,6 +37,7 @@ pub struct MenuItem {
     lead: Option<El>,
     shortcut: Option<String>,
     badge: Option<String>,
+    description: Option<String>,
     /// Checkbox and radio items: whether the indicator shows.
     checked: Option<bool>,
     sub: Option<(Vec<MenuEntry>, bool)>,
@@ -52,6 +53,7 @@ impl MenuItem {
             lead: None,
             shortcut: None,
             badge: None,
+            description: None,
             checked: None,
             sub: None,
             state: State::Rest,
@@ -74,6 +76,11 @@ impl MenuItem {
     }
     pub fn badge(mut self, b: impl Into<String>) -> Self {
         self.badge = Some(b.into());
+        self
+    }
+    /// A faint second line under the label, such as what a choice does. The item grows to fit it.
+    pub fn description(mut self, d: impl Into<String>) -> Self {
+        self.description = Some(d.into());
         self
     }
     /// A checkbox or radio item, showing the check when `on`.
@@ -124,7 +131,18 @@ impl MenuItem {
         if let Some(i) = self.icon {
             content = content.child(icon(i, 14.0).key("icon").color(if standard { c.std_icon } else { c.icon_base }));
         }
-        content = content.child(text(self.label.clone()).key("label").font(font).color(ink).truncate());
+        let label = text(self.label.clone()).key("label").font(font).color(ink).truncate();
+        content = match &self.description {
+            Some(d) => {
+                let (font, ink) = if standard { (k.ty.text_xsmall, c.text_weak) } else { (k.ty.small, c.text_faint) };
+                content.child(
+                    col().key("text").grow(1.0).shrink().gap(2.0).child(label).child(
+                        text(d.clone()).key("description").font(font).color(ink).truncate(),
+                    ),
+                )
+            }
+            None => content.child(label),
+        };
         let mut e = row()
             .key(key.clone())
             .role(if self.checked.is_some() { "menuitemcheckbox" } else { "menuitem" })
@@ -138,13 +156,19 @@ impl MenuItem {
         if let Some(s) = &self.shortcut {
             e = e.shortcut_hint(s.clone());
         }
-        if let Some(b) = &self.badge {
-            e = e.description(b.clone());
+        match (&self.description, &self.badge) {
+            (Some(d), Some(b)) => e = e.description(format!("{d}, {b}")),
+            (Some(d), None) | (None, Some(d)) => e = e.description(d.clone()),
+            (None, None) => {}
         }
         if let Some((_, open)) = &self.sub {
             e = e.expanded(*open);
         }
-        e = if standard { e.px(8.0).py(4.0) } else { e.h(28.0).pl(12.0).pr(6.0) };
+        e = match (standard, self.description.is_some()) {
+            (true, _) => e.px(8.0).py(4.0),
+            (false, false) => e.h(28.0).pl(12.0).pr(6.0),
+            (false, true) => e.min_h(28.0).py(6.0).pl(12.0).pr(6.0),
+        };
         if highlighted {
             e = e.fill(hover);
         } else if !disabled {

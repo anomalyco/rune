@@ -1,0 +1,1 @@
+- **`MenuItem::description` adds a faint second line under an item's label**, such as what a choice does; the item grows to fit it, a disabled item dims both lines, and assistive technology reads it as the item's description. Items without one are unchanged.
