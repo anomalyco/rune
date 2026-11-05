@@ -150,7 +150,7 @@ impl Scrub {
         let moving = !matches!(now, (0.0, true, _) | (1.0, false, false));
         if moving { tx.wake_after(std::time::Duration::ZERO); }
         let key = now.0 + if now.1 { 2.0 } else { 0.0 } + if now.2 { 4.0 } else { 0.0 };
-        let changed = self.shown != Some(key);
+        let changed = self.shown.unwrap_or(1.0) != key;
         self.shown = Some(key);
         changed
     }

@@ -259,12 +259,14 @@ fn opening_slows_the_app_to_a_stop_and_steps_it_back_above_the_bar() {
     frames(&mut rt, 5);
     jump(&mut rt, 30.0);
     frames(&mut rt, 5);
+    let mut woke = true;
+    rt.update(|s, tx| { woke = s.scrub.poll(tx); });
+    assert!(!woke, "a closed scrubber asks for nothing");
     rt.update(|s, _| { let r = s.rewind.clone(); s.scrub.open(&r); });
     assert!(rt.state.scrub.app_speed() > 0.9, "it starts at full speed");
     assert!(rt.elements().iter().all(|e| e.key.as_deref() != Some("rewind-bar")), "the bar waits for the slow-down");
-    let mut woke = false;
     rt.update(|s, tx| { woke = s.scrub.poll(tx); });
-    assert!(woke, "the first poll rebuilds the view");
+    assert!(woke, "an opening one rebuilds the view");
     rt.update(|s, _| s.scrub.skip_motion());
     rt.update(|s, tx| { s.scrub.poll(tx); });
     frames(&mut rt, 60);
