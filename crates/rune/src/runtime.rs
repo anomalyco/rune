@@ -534,6 +534,8 @@ pub struct Runtime<S: 'static> {
     /// Fresh view accessors for focused text fields omitted by virtualization.
     virtual_inputs: HashMap<String, Box<InputSpec>>,
     reveals: HashMap<NodeId, RevealState>,
+    /// When the newest streamed word of any text starts fading: the next text's words follow it.
+    reveal_chain: f64,
     flights: Vec<TextFlight>,
     /// Per node index this frame: presented row top dy, row height override, and bottom feather mask.
     row_dy: Vec<f32>,
@@ -907,6 +909,7 @@ impl<S: 'static> Runtime<S> {
             reuse: Default::default(),
             virtual_inputs: HashMap::default(),
             reveals: HashMap::default(),
+            reveal_chain: 0.0,
             flights: Vec::new(),
             launches: Default::default(),
             pixel_snap: Default::default(),
