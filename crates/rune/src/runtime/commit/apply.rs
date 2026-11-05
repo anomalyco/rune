@@ -603,9 +603,12 @@ impl<S: 'static> Runtime<S> {
                     // A word continuing across the old end keeps its time. New words wait behind
                     // every streaming text's newest word, taken in reading order, so one edge moves
                     // down the page: a chunk spanning several paragraphs or list items fades them
-                    // one after another, never all at once.
+                    // one after another, never all at once. Only while the newest word is still
+                    // fading: texts mounting at once behind a long run (a remount, a restored
+                    // turn) fade together as before, never waiting through still frames.
                     let own = st.words.last().map_or(now, |w| w.1.max(now));
-                    let chain = if time_scaled { now } else { self.reveal_chain.max(now) };
+                    let chained = !time_scaled && self.reveal_chain - now <= f64::from(fade);
+                    let chain = if chained { self.reveal_chain.max(now) } else { now };
                     let queued = ((chain - now) / 0.0055) as usize;
                     let pending = st.words.iter().filter(|w| w.1 > now).count() + starts.len() + queued;
                     let stagger = if self.reduced_motion {

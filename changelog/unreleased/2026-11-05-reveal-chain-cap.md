@@ -1,0 +1,1 @@
+- **Streamed words chain across texts only while the newest word is still fading.** Texts that mount together behind a run longer than a fade, such as a remount or a restored turn, fade together as they did before the reveal chain, so they never wait through still frames and then pop.

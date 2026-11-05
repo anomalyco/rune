@@ -68,3 +68,16 @@ fn once_everything_has_shown_a_new_paragraph_starts_at_once() {
     let (first, _) = times(&rt, "p1").unwrap();
     assert!((first - rt.t).abs() < 0.02, "no wait once nothing is fading: starts {first}, now {}", rt.t);
 }
+
+/// Texts mounting together behind a run longer than a fade (a remount, a restored turn) fade
+/// together, as before, rather than one after another through still frames.
+#[test]
+fn texts_behind_a_long_run_fade_together() {
+    let mut rt = runtime();
+    rt.state.paras = vec![words(120), words(120), words(120)];
+    rt.invalidate();
+    rt.frame(1.0 / 60.0);
+    let [a, b, c] = ["p0", "p1", "p2"].map(|k| times(&rt, k).unwrap_or_else(|| panic!("{k} reveals")));
+    assert!(a.1 - a.0 > 0.3, "the first paragraph's run outlasts a fade: {a:?}");
+    assert!(b.0 < a.1 && c.0 < a.1, "the rest don't wait for it: {a:?} {b:?} {c:?}");
+}
