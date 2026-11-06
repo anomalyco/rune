@@ -118,7 +118,7 @@ fn named_label(name: &str) -> Option<String> {
     let mac = cfg!(target_os = "macos");
     Some(match name {
         "escape" => if mac { "⎋" } else { "Esc" }, "enter" => if mac { "↩" } else { "Return" },
-        "space" => "Space", "tab" => if mac { "⇥" } else { "Tab" }, "backspace" => "⌫",
+        "space" => "Space", "tab" => if mac { "⇥" } else { "Tab" }, "backspace" => if mac { "⌫" } else { "Backspace" },
         "delete" => if mac { "⌦" } else { "Delete" }, "insert" => "Insert",
         "home" => if mac { "↖" } else { "Home" }, "end" => if mac { "↘" } else { "End" },
         "pageup" => if mac { "⇞" } else { "Page Up" }, "pagedown" => if mac { "⇟" } else { "Page Down" },

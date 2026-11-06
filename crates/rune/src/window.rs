@@ -94,6 +94,9 @@ pub(crate) enum WakeEvent {
     /// the host answers at the end of the turn this wakes.
     #[cfg_attr(not(feature = "accessibility"), allow(dead_code))]
     A11y(usize),
+    /// A native menu's modal loop holds the event loop: run its idle turn (`Windows::turn`).
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    Turn,
 }
 
 /// What `Windows` needs of a host, whatever its state type: an app window or an overlay.
@@ -278,6 +281,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
                 self.cleanup(event_loop);
                 return;
             }
+            WakeEvent::Turn => return self.turn(event_loop),
         };
         if let Some(Some(host)) = self.hosts.get_mut(slot) {
             host.user_event(event_loop, event);

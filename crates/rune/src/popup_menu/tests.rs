@@ -254,6 +254,6 @@ fn a_menu_a_pick_asks_for_waits_for_the_element_the_pick_mounts() {
 }
 
 #[test]
-fn support_is_macos_only() {
+fn support_is_macos_and_windows() {
     assert_eq!(popup_menu_supported(), cfg!(any(target_os = "macos", target_os = "windows")));
 }

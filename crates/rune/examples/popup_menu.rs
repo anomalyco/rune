@@ -15,7 +15,7 @@ fn theme_title(id: &str) -> &'static str {
 fn context_menu() -> PopupMenu {
     PopupMenu::new()
         .item(PopupItem::new("copy", "Copy").symbol("doc.on.doc")
-            .key_equivalent(if cfg!(target_os = "macos") { "cmd+c" } else { "ctrl+c" }.parse().unwrap()))
+            .key_equivalent("mod+c".parse().unwrap()))
         .item(PopupItem::new("paste", "Paste").enabled(false))
         .separator()
         .submenu("Share", PopupMenu::new().item(PopupItem::new("mail", "Mail")).item(PopupItem::new("messages", "Messages")))

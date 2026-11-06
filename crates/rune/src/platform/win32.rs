@@ -14,6 +14,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 mod cloak;
+pub(crate) mod dark_mode;
 mod dpi_drag;
 mod frame;
 mod pointer;
