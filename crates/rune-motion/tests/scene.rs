@@ -368,6 +368,20 @@ fn a_child_mounted_after_its_parent_visibly_arrives_enters_on_its_own() {
 }
 
 #[test]
+fn an_entrance_that_changes_nothing_lands_at_once() {
+    let mut s = Scene::new();
+    s.insert(NodeId(1), spec(0.0, 0.0, 1.0, 1.0), Mount::Initial);
+    s.frame_at(0.0);
+    let id = NodeId(46);
+    let spring = SpringPair::new(Spring::new(0.3, 0.0), Spring::new(0.3, 0.0));
+    s.insert(id, spec(0.0, 0.0, 100.0, 40.0).transition(Transition::identity().springs(spring)), Mount::Animated);
+    s.set_time(1.0 / HZ);
+    let out = s.frame();
+    assert!(!out.animating, "no presence spring runs for an identity insertion");
+    assert_eq!(s.phase(id), Some(Phase::Present));
+}
+
+#[test]
 fn a_child_mounted_late_in_its_parents_entrance_enters_on_its_own() {
     let mut s = Scene::new();
     let (p, c) = (NodeId(44), NodeId(45));

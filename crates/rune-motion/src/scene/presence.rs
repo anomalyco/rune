@@ -47,8 +47,9 @@ impl Scene {
             Phase::Entering => self.presence_now(parent as usize) < 0.5,
             Phase::Exiting { .. } => true,
         };
-        let animate = mount == Mount::Animated && !rides_parent;
         let ins = spec.transition.insertion.kit_rules(false);
+        // An entrance that changes nothing on screen (an identity insertion) has nothing to play.
+        let animate = mount == Mount::Animated && !rides_parent && !ins.shows_nothing();
         let node = Node {
             id,
             parent,

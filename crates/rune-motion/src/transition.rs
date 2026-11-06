@@ -139,6 +139,12 @@ impl Effect {
     /// Kit's rules, enforced: scale in [0.9, 1.1] (never to or from 0; down to
     /// [`SMALL_SCALE_FLOOR`] with `small_scale`), blur sigma ≤ 4 pt, no blur on anything that
     /// travels (sliding content stays sharp), and nothing leaves at full opacity.
+    /// Whether the node looks the same absent as present: no fade, scale, offset, blur, reveal
+    /// or drawing (the anchor alone moves nothing).
+    pub fn shows_nothing(&self) -> bool {
+        Effect { anchor: Effect::IDENTITY.anchor, small_scale: false, ..*self } == Effect::IDENTITY
+    }
+
     pub fn kit_rules(mut self, removal: bool) -> Effect {
         let floor = if self.small_scale { SMALL_SCALE_FLOOR } else { 0.9 };
         self.scale = self.scale.clamp(floor, 1.1);

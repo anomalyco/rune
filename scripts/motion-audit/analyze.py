@@ -290,6 +290,9 @@ def analyze(path, script=None):
         return min(bisect.bisect_left(t_ms, t * 1000.0 - 0.01), n - 1)
 
     input_frames = sorted({frame_of(t) for a in acts for t in a["times"]} | {k for k, _ in inputs})
+    # A wheel step or fling sets the scroll's speed itself, so what moves with the scroll without
+    # riding it (a scroll bar's thumb) slows and picks up with the hand, not at a lost retarget.
+    wheeled = {k for k, ev in inputs if ev.startswith(("wheel", "fling"))}
 
     def interrupted(k0, k1):
         """An input landed mid-motion (a retarget may turn it around)."""
@@ -618,7 +621,7 @@ def analyze(path, script=None):
                                                  detail=what))
                     if len(findings) == found and abs(travel) > 0.5:
                         stall = stalled(theirs, edge, [h[seg[0] - 1]] + [h[j] for j in seg], travel)
-                        if stall:
+                        if stall and not wheeled & {stall[0] - 1, stall[0], stall[0] + 1}:
                             k, u = stall
                             findings.append(dict(kind="stall", element=e.name, frames=1, longest=1, at=str(k),
                                                  detail=f"{label} speed {u[0]:.1f} → {u[1]:.1f} → {u[2]:.1f} pt/frame ({start:.1f} → {rest:.1f})"))

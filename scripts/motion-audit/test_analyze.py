@@ -45,8 +45,9 @@ def scene(frames, flags=None, clips=None):
     """A 120 Hz trace of named elements; each frame maps name -> (x, y, w, h, opacity), plus
     how far scrolling carries it as (x, y) when it scrolls, and a name missing from a frame is
     gone. A name's parent is its longest named prefix. `clips` maps a name to a window-space
-    clip (x0, y0, x1, y1) cutting the visible part of it and what it holds."""
-    names = sorted({nm for fr in frames for nm in fr})
+    clip (x0, y0, x1, y1) cutting the visible part of it and what it holds. A frame's "@ev"
+    lists the inputs the app recorded in it ("wheel 3.0")."""
+    names = sorted({nm for fr in frames for nm in fr if nm != "@ev"})
     ids = {nm: i + 1 for i, nm in enumerate(names)}
     def parent(nm):
         cut = [nm[:j] for j in range(len(nm)) if nm[j] == "/" and nm[:j] in ids]
@@ -54,7 +55,8 @@ def scene(frames, flags=None, clips=None):
     lines = [json.dumps({"width": 400, "height": 400, "hz": 120})]
     alive, meta = set(), set()
     for fr in frames:
-        out = {"e": [], "quality": {"animating": True}, "m": [], "g": [], "sc": []}
+        out = {"e": [], "quality": {"animating": True}, "m": [], "g": [], "sc": [], "ev": fr.get("@ev", [])}
+        fr = {nm: v for nm, v in fr.items() if nm != "@ev"}
         for nm, (x, y, w, h, op, *sc) in fr.items():
             out["sc"] += [[ids[nm], *sc[0]]] if sc else []
             if nm not in meta:
@@ -207,6 +209,12 @@ def main():
     retarget, _ = spring(first[-1], v, 240.0, 60)
     assert "stall" not in kinds(hold(at(100, 100), 5) + [at(x, 100) for x in first + retarget] + hold(at(retarget[-1], 100), 10)), "a retarget at its own speed"
     assert "stall" not in kinds(straight), "a straight eased move"
+    # A scroll bar's thumb follows the wheel: a wheel that slows to a stop and a fling that
+    # picks it up again is the hand's speed, not a lost retarget.
+    wheeled = [{**at(x, 100), "@ev": [f"wheel {v:.1f}"]} for x, v in zip(dip[:9], range(9, 0, -1))]
+    wheeled[8]["@ev"] = ["fling 1800"]
+    flung = hold(at(100, 100), 5) + wheeled + [at(x, 100) for x in dip[9:]] + hold(at(dip[-1], 100), 10)
+    assert "stall" not in kinds(flung), "the thumb slows and picks up with the wheel"
 
     # nothing unmounts above opacity 0.
     half = hold({**still, "root/chip": (10, 10, 50, 20, 1)}, 5) + [{**still, "root/chip": (10, 10, 50, 20, op)} for op in ease(1, 0.4, 6)] + hold(still, 10)
