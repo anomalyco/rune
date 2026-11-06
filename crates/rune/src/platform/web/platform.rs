@@ -19,5 +19,8 @@ extern "C" {
     /// Resolves to the `Uint8Array` body of `url`, relative to the page.
     #[wasm_bindgen(js_name = fetchBytes)]
     pub(crate) fn fetch_bytes(url: &str) -> js_sys::Promise;
+    /// Resolves in a later task, letting the browser draw and handle input in between.
+    #[wasm_bindgen(js_name = nextTask)]
+    pub(crate) fn next_task() -> js_sys::Promise;
     pub(super) fn viewport(canvas: &web_sys::HtmlCanvasElement, callback: &js_sys::Function, embedded: bool) -> js_sys::Function;
 }

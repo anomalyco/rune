@@ -1,0 +1,1 @@
+- **On web, image mips no longer block the page.** A fetched image's mip chain is built a slice at a time with a task between slices, and each image in a task of its own, instead of in one long task on the main thread; on a throttled phone that took Lighthouse's Total Blocking Time for a page with seven screenshots from about 500 ms to about 100 ms.
