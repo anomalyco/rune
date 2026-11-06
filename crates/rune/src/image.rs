@@ -254,6 +254,10 @@ impl ImageCache {
     }
 
     fn request(&self, id: ImageId, input: Input) -> Image {
+        self.request_set(id, input, None)
+    }
+
+    fn request_set(&self, id: ImageId, input: Input, srcset: Option<Arc<str>>) -> Image {
         let mut entries = self.entries.lock().unwrap();
         if let Some(state) = entries.get(&id).and_then(Weak::upgrade) { return Image(state); }
         entries.retain(|_, value| value.strong_count() > 0);
@@ -263,7 +267,7 @@ impl ImageCache {
             Input::File(path, _) => Some(path.to_string_lossy().into()),
             _ => None,
         };
-        let image = Image(Arc::new(State { id, pixels: crate::Pixels::from_url(url), decoded: OnceLock::new() }));
+        let image = Image(Arc::new(State { id, pixels: crate::Pixels::from_url(url, srcset), decoded: OnceLock::new() }));
         entries.insert(id, Arc::downgrade(&image.0));
         #[cfg(not(target_arch = "wasm32"))]
         if self.jobs.send(Job { image: image.clone(), input }).is_err() {

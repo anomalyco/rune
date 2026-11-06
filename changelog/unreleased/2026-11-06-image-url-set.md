@@ -1,0 +1,1 @@
+- **`ImageCache::url_set` loads one image in several sizes, as an HTML `srcset`.** It fetches the narrowest file at least as wide as the image shows, so a phone gets the small one; `Pixels::source_set` lists them all, and `--html` writes them as `srcset` with `sizes` taken from each exported width.

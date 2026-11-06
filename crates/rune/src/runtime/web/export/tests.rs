@@ -64,8 +64,8 @@ fn folds_widths_into_media_rules_and_hides_what_a_width_lacks() {
 
 #[test]
 fn a_node_missing_at_a_wider_width_is_hidden_there() {
-    let narrow = vec![ExportNode { path: "0".into(), depth: 0, tag: "div", attrs: String::new(), inner: String::new(), decls: vec![] },
-        ExportNode { path: "0.1".into(), depth: 1, tag: "p", attrs: String::new(), inner: "x".into(), decls: vec![("color", "#fff".into())] }];
+    let narrow = vec![ExportNode { path: "0".into(), depth: 0, tag: "div", attrs: String::new(), inner: String::new(), decls: vec![], width: 100.0 },
+        ExportNode { path: "0.1".into(), depth: 1, tag: "p", attrs: String::new(), inner: "x".into(), decls: vec![("color", "#fff".into())], width: 100.0 }];
     let wide = vec![narrow[0].clone()];
     let (body, css) = page(&[(360.0, narrow), (800.0, wide)]);
     assert_eq!(body, "<div data-rune-static><p class=\"a0 b0\">x</p></div>");
@@ -88,4 +88,12 @@ fn radial_gradients_scale_with_the_box_and_soft_clips_become_masks() {
     let decl = |prop: &str| nodes.iter().flat_map(|n| &n.decls).find(|d| d.0 == prop).map(|d| d.1.clone()).unwrap_or_default();
     assert_eq!(decl("background"), "radial-gradient(50% 50% at 50% 50%,#00000000 58%,#000000 100%),#000000");
     assert_eq!(decl("mask-image"), "linear-gradient(to right,transparent 0,#000 40px,#000 100%)");
+}
+
+#[test]
+fn an_image_source_set_gets_sizes_from_every_width() {
+    let img = |w: f32| ExportNode { path: "0.0".into(), depth: 1, tag: "img", attrs: " src=\"a-640.avif\" srcset=\"a-640.avif 640w, a-1280.avif 1280w\"".into(), inner: String::new(), decls: vec![], width: w };
+    let root = ExportNode { path: "0".into(), depth: 0, tag: "div", attrs: String::new(), inner: String::new(), decls: vec![], width: 0.0 };
+    let (body, _) = page(&[(360.0, vec![root.clone(), img(328.0)]), (1000.0, vec![root, img(500.0)])]);
+    assert!(body.contains(" sizes=\"(min-width:1000px) 50vw,92vw\">"), "{body}");
 }

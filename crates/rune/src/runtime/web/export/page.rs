@@ -85,13 +85,26 @@ pub(crate) fn page(widths: &[(f32, Vec<ExportNode>)]) -> (String, String) {
         while open.len() > node.depth { let _ = write!(body, "</{}>", open.pop().unwrap()); }
         let class = if cls.is_empty() { String::new() } else { format!(" class=\"{}\"", cls.join(" ")) };
         let root = if node.depth == 0 { " data-rune-static" } else { "" };
-        let _ = write!(body, "<{}{root}{class}{}>", node.tag, node.attrs);
+        let sizes = if node.attrs.contains(" srcset=") { sizes(node, widths, &by_path) } else { String::new() };
+        let _ = write!(body, "<{}{root}{class}{}{sizes}>", node.tag, node.attrs);
         if node.tag == "img" { continue; }
         body.push_str(&node.inner);
         open.push(node.tag);
     }
     while let Some(tag) = open.pop() { let _ = write!(body, "</{tag}>"); }
     (body, css)
+}
+
+/// An image's `sizes`: the share of the viewport it took at each width, widest first, so the
+/// browser picks a `srcset` file for the width it shows at.
+fn sizes(node: &ExportNode, widths: &[(f32, Vec<ExportNode>)], by_path: &[HashMap<&str, &ExportNode>]) -> String {
+    let vw = |k: usize| by_path[k].get(node.path.as_str()).map(|n| (n.width / widths[k].0 * 100.0).ceil());
+    let mut parts: Vec<String> = Vec::new();
+    for k in (1..widths.len()).rev() {
+        if let Some(v) = vw(k) { parts.push(format!("(min-width:{}px) {v}vw", widths[k].0)); }
+    }
+    parts.push(format!("{}vw", vw(0).unwrap_or(100.0)));
+    format!(" sizes=\"{}\"", parts.join(","))
 }
 
 fn base36(mut n: usize) -> String {
