@@ -25,6 +25,11 @@ done
 # Build with the toolchain's own cargo rather than a `cargo` wrapper on PATH, which may run
 # the build on another machine and leave no wasm here. Set CARGO to choose a cargo binary.
 cargo=${CARGO:-$(rustup which cargo 2>/dev/null || command -v cargo)}
+# Calling the toolchain's cargo directly skips rustup's proxy, so pin the toolchain for the
+# rustc it runs too: build scripts compile outside the repo, where rust-toolchain.toml can't reach.
+if [[ -z ${RUSTUP_TOOLCHAIN:-} ]] && toolchain=$(rustup show active-toolchain 2>/dev/null); then
+    export RUSTUP_TOOLCHAIN=${toolchain%% *}
+fi
 meta=$("$cargo" metadata --format-version 1 --no-deps)
 selection=$(python3 -c '
 import json,sys
