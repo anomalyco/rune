@@ -166,20 +166,23 @@ fn canvas_physical(canvas: &web_sys::HtmlCanvasElement, reported: winit::dpi::Ph
     winit::dpi::PhysicalSize::new(fix(reported.width, w), fix(reported.height, h))
 }
 
-fn error(message: &str, target: Option<&web_sys::HtmlCanvasElement>, embedded: bool) {
+/// Reports `message` to the console, and on screen unless the app is the page: a document's
+/// static HTML is a working page, and an opaque overlay would cover the page a reader can still
+/// read and scroll. Ending the app leaves that page as the browser found it.
+fn error(message: &str, target: Option<&web_sys::HtmlCanvasElement>, embedded: bool, document: bool) {
     web_sys::console::error_1(&message.into());
-    if let Some(document) = web_sys::window().and_then(|w| w.document()) {
-        if let Ok(label) = document.create_element("pre") {
-            label.set_text_content(Some(message));
-            if embedded && let Some(canvas) = target && let Some(parent) = canvas.parent_element() {
-                let _ = label.set_attribute("style", "margin:0;padding:16px;white-space:pre-wrap;background:Canvas;color:CanvasText;border:1px solid #444;border-radius:8px");
-                let _ = parent.insert_before(&label, Some(canvas));
-                return;
-            }
-            if let Some(body) = document.body() {
-                let _ = label.set_attribute("style", "position:fixed;inset:0;z-index:1;padding:24px;white-space:pre-wrap;background:Canvas;color:CanvasText");
-                let _ = body.append_child(&label);
-            }
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else { return };
+    if document && doc.query_selector("[data-rune-static]").ok().flatten().is_some() { return; }
+    if let Ok(label) = doc.create_element("pre") {
+        label.set_text_content(Some(message));
+        if embedded && let Some(canvas) = target && let Some(parent) = canvas.parent_element() {
+            let _ = label.set_attribute("style", "margin:0;padding:16px;white-space:pre-wrap;background:Canvas;color:CanvasText;border:1px solid #444;border-radius:8px");
+            let _ = parent.insert_before(&label, Some(canvas));
+            return;
+        }
+        if let Some(body) = doc.body() {
+            let _ = label.set_attribute("style", "position:fixed;inset:0;z-index:1;padding:24px;white-space:pre-wrap;background:Canvas;color:CanvasText");
+            let _ = body.append_child(&label);
         }
     }
 }
@@ -230,17 +233,19 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() { return; }
         let app = self.app.as_ref().expect("app before canvas");
+        self.document = app.web_document;
+        self.embedded = app.web_inline() && !self.document;
         let existing = match &app.canvas_id {
             Some(id) => {
                 let Some(el) = web_sys::window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id(id)) else {
-                    error(&format!("canvas #{id} not found in document"), None, true);
+                    error(&format!("canvas #{id} not found in document"), None, true, self.document);
                     self.end(event_loop);
                     return;
                 };
                 match el.dyn_into::<web_sys::HtmlCanvasElement>() {
                     Ok(canvas) => Some(canvas),
                     Err(_) => {
-                        error(&format!("element #{id} is not a <canvas>"), None, true);
+                        error(&format!("element #{id} is not a <canvas>"), None, true, self.document);
                         self.end(event_loop);
                         return;
                     }
@@ -249,8 +254,6 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             None => None,
         };
         self.owns_canvas = existing.is_none();
-        self.document = app.web_document;
-        self.embedded = app.web_inline() && !self.document;
         if let Some(canvas) = &existing { self.borrowed.canvas(canvas); }
         // Not `active`: winit would focus the canvas before it's styled, and a browser scrolls a
         // focused element into view, so a page landed at its foot. The bridge focuses a
@@ -262,7 +265,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         };
         let window = match event_loop.create_window(attrs) {
             Ok(window) => Arc::new(window),
-            Err(e) => { error(&e.to_string(), existing.as_ref(), self.embedded); self.end(event_loop); return; }
+            Err(e) => { error(&e.to_string(), existing.as_ref(), self.embedded, self.document); self.end(event_loop); return; }
         };
         let canvas = window.canvas().expect("winit web canvas");
         if !canvas.has_attribute("tabindex") {
@@ -332,7 +335,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 Ok(gpu) => gpu,
                 Err(e) => {
                     if let Some(app) = &self.app { *app.shared.window_error.lock().unwrap() = Some(e.clone()); }
-                    error(&e, window.canvas().as_ref(), self.embedded); self.end(event_loop); return;
+                    error(&e, window.canvas().as_ref(), self.embedded, self.document); self.end(event_loop); return;
                 }
             };
             let mut app = self.app.take().expect("one canvas initialization");
@@ -388,7 +391,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             shared.visible.store(true, Ordering::Release);
             let max_dim = gpu.device.limits().max_texture_dimension_2d.max(1);
             let Some(mut config) = surface.get_default_config(&gpu.adapter, size.width.clamp(1, max_dim), size.height.clamp(1, max_dim)) else {
-                error("WebGPU canvas has no supported configuration", window.canvas().as_ref(), self.embedded); self.end(event_loop); return;
+                error("WebGPU canvas has no supported configuration", window.canvas().as_ref(), self.embedded, self.document); self.end(event_loop); return;
             };
             config.present_mode = wgpu::PresentMode::Fifo;
             let caps = surface.get_capabilities(&gpu.adapter);
@@ -457,7 +460,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 r.sync_input(false);
                 r.cursor.apply(window, r.rt.cursor(), r.rt.pointer().is_some());
                 if !r.rt.surfaces.is_empty() {
-                    error("native video surfaces are unsupported on web", window.canvas().as_ref(), r.embedded); self.end(event_loop); return;
+                    error("native video surfaces are unsupported on web", window.canvas().as_ref(), r.embedded, r.document); self.end(event_loop); return;
                 }
                 if r.gpu.adapter.get_info().backend != wgpu::Backend::Gl && r.renderer.srgb_blend() != r.rt.srgb_blend() {
                     let format = if r.rt.srgb_blend() { r.config.format.remove_srgb_suffix() } else { r.config.format.add_srgb_suffix() };
@@ -469,7 +472,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 }
                 let frame = match r.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
-                    _ => { error("WebGPU canvas acquisition failed", window.canvas().as_ref(), r.embedded); self.end(event_loop); return; }
+                    _ => { error("WebGPU canvas acquisition failed", window.canvas().as_ref(), r.embedded, r.document); self.end(event_loop); return; }
                 };
                 let target = frame.texture.create_view(&wgpu::TextureViewDescriptor {
                     format: Some(r.renderer.format()), ..Default::default()

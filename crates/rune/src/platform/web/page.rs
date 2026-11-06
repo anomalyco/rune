@@ -46,7 +46,7 @@ pub(super) fn vacate() {
     let next = PAGE.with_borrow_mut(|page| { page.live = None; page.router = None; page.next.take() });
     if let Some((_, start)) = next {
         wasm_bindgen_futures::spawn_local(async move {
-            if let Err(e) = start() { super::error(&e, None, false); }
+            if let Err(e) = start() { super::error(&e, None, false, false); }
         });
     }
 }
