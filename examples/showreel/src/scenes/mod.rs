@@ -6,4 +6,5 @@ pub mod keys;
 pub mod pricing;
 pub mod shock;
 pub mod tabs;
+pub mod type_;
 pub mod word;

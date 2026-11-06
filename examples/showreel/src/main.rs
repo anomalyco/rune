@@ -22,6 +22,7 @@ pub enum Scene {
     Shock,
     Keys,
     Tabs,
+    Type,
 }
 
 #[derive(Default)]
@@ -43,6 +44,7 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
         Scene::Shock => scenes::shock::view(s, cx),
         Scene::Keys => scenes::keys::view(s, cx),
         Scene::Tabs => scenes::tabs::view(s, cx),
+        Scene::Type => scenes::type_::view(s, cx),
     }
 }
 
@@ -59,6 +61,7 @@ fn main() {
             ("shock", |s| s.scene = Scene::Shock),
             ("keys", |s| s.scene = Scene::Keys),
             ("tabs", |s| s.scene = Scene::Tabs),
+            ("type", |s| s.scene = Scene::Type),
         ],
         fonts: &[
             include_bytes!("../../../crates/rune/assets/Inter-Regular.ttf"),
