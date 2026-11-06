@@ -107,12 +107,12 @@ impl<S: 'static> Runtime<S> {
         }
         if n.a11y.hidden { attrs.push_str(" aria-hidden=\"true\""); }
         let mut decls = css::layout(&self.layout.style(n.taffy).to_style(), i == 0);
-        css::paint(&n.vis, &mut decls);
+        let [x0, y0, x1, y1] = n.target;
+        css::paint(&n.vis, (x1 - x0, y1 - y0), &mut decls);
         if let Some(spec) = n.text.as_deref() {
             css::text(spec, &mut decls);
             inner = css::text_html(spec);
         } else if let Some(shape) = n.vis.cold.shape.as_deref() {
-            let [x0, y0, x1, y1] = n.target;
             inner = css::svg(shape, (x1 - x0, y1 - y0));
         }
         if tag == "img" {

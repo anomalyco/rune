@@ -71,3 +71,21 @@ fn a_node_missing_at_a_wider_width_is_hidden_there() {
     assert_eq!(body, "<div data-rune-static><p class=\"a0 b0\">x</p></div>");
     assert!(css.ends_with(".a0{color:#fff;display:flex}@media (min-width:800px){.b0{display:none}}"), "{css}");
 }
+
+#[test]
+fn radial_gradients_scale_with_the_box_and_soft_clips_become_masks() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let black = crate::Color::BLACK;
+        crate::col().key("root").w_full().role("main")
+            .child(crate::col().key("vignette").w(200.0).h(100.0).fill(black)
+                .radial_gradient([0.5, 0.5], [100.0, 50.0], [(0.58, crate::Color::TRANSPARENT), (1.0, black)]))
+            .child(crate::row().key("trace").w(200.0).h(20.0).clip_fade_linear(40.0, 0.0, 0.0, 0.0)
+                .child(crate::text("x")))
+    }
+    let mut rt = Runtime::new((), view, (400.0, 600.0), Env::default());
+    rt.page_mode();
+    let nodes = taken(&mut rt, 400.0);
+    let decl = |prop: &str| nodes.iter().flat_map(|n| &n.decls).find(|d| d.0 == prop).map(|d| d.1.clone()).unwrap_or_default();
+    assert_eq!(decl("background"), "radial-gradient(50% 50% at 50% 50%,#00000000 58%,#000000 100%),#000000");
+    assert_eq!(decl("mask-image"), "linear-gradient(to right,transparent 0,#000 40px,#000 100%)");
+}

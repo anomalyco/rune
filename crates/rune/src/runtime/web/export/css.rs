@@ -6,7 +6,7 @@ use taffy::style::{CompactLength, Display, FlexDirection, FlexWrap, Overflow, Po
 
 use super::escape;
 use crate::color::Color;
-use crate::el::{TextSpec, Visual};
+use crate::el::{GradientGeometry, RadialGradient, TextSpec, Visual};
 
 pub(super) type Decls = Vec<(&'static str, String)>;
 
@@ -136,13 +136,17 @@ pub(super) fn layout(s: &Style, root: bool) -> Decls {
     d
 }
 
-/// Fill, gradient, border, corners, shadows, opacity and blurs.
-pub(super) fn paint(v: &Visual, d: &mut Decls) {
-    if let Some(g) = v.cold.gradient.as_deref() {
-        d.push(("background", format!("linear-gradient({},{})", color(g[0]), color(g[1]))));
-    } else if v.fill.a > 0.0 {
-        d.push(("background", color(v.fill)));
-    }
+/// Fill, gradients, border, corners, shadows, opacity, blurs and soft clips, for an element
+/// `size` points big.
+pub(super) fn paint(v: &Visual, size: (f32, f32), d: &mut Decls) {
+    // Rune paints the fill, then the vertical gradient, then the radial or angled one: CSS lists
+    // background layers top first, with the colour last.
+    let mut layers: Vec<String> = Vec::new();
+    if let Some(r) = v.cold.radial.as_deref() { layers.push(gradient(r, size)); }
+    if let Some(g) = v.cold.gradient.as_deref() { layers.push(format!("linear-gradient({},{})", color(g[0]), color(g[1]))); }
+    if v.fill.a > 0.0 { layers.push(color(v.fill)); }
+    if !layers.is_empty() { d.push(("background", layers.join(","))); }
+    if let Some(clip) = v.cold.clip { mask(clip, d); }
     let r = v.radius;
     if r.iter().any(|&c| c > 0.0) {
         let value = if r.iter().all(|&c| c == r[0]) { px(r[0]) } else { r.map(px).join(" ") };
@@ -169,6 +173,47 @@ pub(super) fn paint(v: &Visual, d: &mut Decls) {
     }
     if v.cold.backdrop_blur > 0.0 { d.push(("backdrop-filter", format!("blur({})", px(v.cold.backdrop_blur)))); }
     if v.blur > 0.0 { d.push(("filter", format!("blur({})", px(v.blur)))); }
+}
+
+/// A radial gradient's radii as percentages of the box, so it scales with the box between the
+/// widths the page was taken at.
+fn gradient(r: &RadialGradient, (w, h): (f32, f32)) -> String {
+    let stops: Vec<String> = r.stops.iter().map(|&(t, c)| format!("{} {}%", color(c), num(t * 100.0))).collect();
+    match r.geometry {
+        GradientGeometry::Radial { center, radius } => {
+            let pct = |r: f32, side: f32| if side > 0.0 { format!("{}%", num(r / side * 100.0)) } else { px(r) };
+            format!("radial-gradient({} {} at {}% {}%,{})", pct(radius[0], w), pct(radius[1], h),
+                num(center[0] * 100.0), num(center[1] * 100.0), stops.join(","))
+        }
+        GradientGeometry::Linear { angle } => format!("linear-gradient({}deg,{})", num(angle.to_degrees()), stops.join(",")),
+    }
+}
+
+/// A soft clip as a mask: one ramp per axis, intersected. Rune eases a positive width and ramps a
+/// negative one linearly; CSS ramps both, which meet at the middle of the fade.
+fn mask([l, t, r, b]: [f32; 4], d: &mut Decls) {
+    let ramp = |to: &str, a: f32, z: f32| -> Option<String> {
+        if a == 0.0 && z == 0.0 { return None; }
+        let side = |w: f32, from_end: bool| -> Vec<String> {
+            let at = |p: f32| if from_end { format!("calc(100% - {})", px(p)) } else { px(p) };
+            let edge = if from_end { "100%" } else { "0" };
+            let mut s = vec![format!("transparent {edge}"), format!("#000 {}", at(w.abs()))];
+            if from_end { s.reverse(); }
+            s
+        };
+        let mut stops = if a != 0.0 { side(a, false) } else { vec!["#000 0".to_owned()] };
+        stops.extend(if z != 0.0 { side(z, true) } else { vec!["#000 100%".to_owned()] });
+        Some(format!("linear-gradient(to {to},{})", stops.join(",")))
+    };
+    let layers: Vec<String> = [ramp("right", l, r), ramp("bottom", t, b)].into_iter().flatten().collect();
+    if layers.is_empty() { return; }
+    let image = layers.join(",");
+    d.push(("-webkit-mask-image", image.clone()));
+    d.push(("mask-image", image));
+    if layers.len() == 2 {
+        d.push(("-webkit-mask-composite", "source-in".into()));
+        d.push(("mask-composite", "intersect".into()));
+    }
 }
 
 fn family(f: crate::tok::Family) -> String {
