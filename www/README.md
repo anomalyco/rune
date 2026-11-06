@@ -34,6 +34,16 @@ hashed assets for a year; images, fonts and the live panel's files for a day, th
 AVIF and WebP at the widths the page shows, into `public/img/`, and writes `src/images.json` with each one's size so
 every image has its box before it loads. Add an image by adding it to the list in `scripts/images.ts`.
 
+The metal, glass and light stills are drawn by `examples/site-scenes`, which runs rune-fx and rune-light headless at
+2x over a frame Rune draws. Their PNGs aren't committed, only the cut images, so render them before `bun run images`:
+
+```sh
+cargo run --release -p site-scenes            # all three, into target/site-scenes/
+cargo run --release -p site-scenes -- --only glass --t 2.5
+```
+
+`--t` is the effect clock in seconds; the liquid metal's flow and the light's sway depend on it.
+
 `bun run icons` draws the favicons, app icons and `og.png` from the wordmark's pixels in `src/brand/pixels.ts`.
 
 Code on the page is cut from Rune's source at build time (`scripts/snippets.ts`, the same way as the docs site), so a

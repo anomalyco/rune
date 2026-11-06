@@ -33,52 +33,28 @@
       1100
     ]
   },
-  "glow": {
-    "width": 1280,
-    "height": 720,
+  "metal": {
+    "width": 1920,
+    "height": 1080,
     "widths": [
-      560,
-      1120
+      760,
+      1520
     ]
   },
-  "liquid-metal": {
-    "width": 1280,
-    "height": 720,
+  "glass": {
+    "width": 1440,
+    "height": 810,
     "widths": [
-      560,
-      1120
+      380,
+      760
     ]
   },
-  "fluted-glass": {
-    "width": 1280,
-    "height": 720,
+  "light": {
+    "width": 1440,
+    "height": 810,
     "widths": [
-      560,
-      1120
-    ]
-  },
-  "raised-light": {
-    "width": 1960,
-    "height": 1102,
-    "widths": [
-      560,
-      1120
-    ]
-  },
-  "electric": {
-    "width": 1280,
-    "height": 720,
-    "widths": [
-      560,
-      1120
-    ]
-  },
-  "rust-diff": {
-    "width": 1800,
-    "height": 1012,
-    "widths": [
-      560,
-      1120
+      380,
+      760
     ]
   }
 }

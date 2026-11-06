@@ -355,16 +355,6 @@ h1, h2 { margin: 0; font-weight: 500; text-wrap: balance; }
   width: 100%;
   height: 100%;
   object-fit: cover;
-  object-position: top;
-}
-.shot-frame.is-faded img { mask-image: linear-gradient(#000 72%, transparent); }
-.shot-frame::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  box-shadow: inset 0 0 0 1px var(--line);
-  pointer-events: none;
 }
 .shot figcaption {
   margin-top: var(--space-2);
@@ -531,18 +521,40 @@ h1, h2 { margin: 0; font-weight: 500; text-wrap: balance; }
   .pl-step { flex-direction: row; align-items: baseline; justify-content: space-between; min-height: 0; }
 }
 
-/* Renderer gallery and OpenCode screens: two up, one up on a phone. */
-.gallery, .screens {
+/* OpenCode screens: two up, one up on a phone. */
+.screens {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-6) var(--space-5);
+  gap: var(--space-5);
   margin-top: var(--space-6);
 }
-.screens { gap: var(--space-5); }
 .screen { margin: 0; }
 .screen.is-main { grid-column: 1 / -1; }
+
+/* Renderer gallery: one large render beside two small ones. The renders are lit on the page's own black, so they fade
+   out at the edges instead of sitting in frames. */
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-5);
+  margin-top: var(--space-6);
+}
+.gallery .shot-frame {
+  mask-image: radial-gradient(closest-side, #000 58%, transparent);
+}
+.gallery figcaption { margin-top: 0; text-align: center; }
+.gallery .is-hero {
+  grid-column: span 2;
+  grid-row: span 2;
+  display: flex;
+  flex-direction: column;
+}
+.gallery .is-hero .shot-frame { flex: 1; aspect-ratio: auto; }
+.gallery .is-hero img { position: absolute; inset: 0; }
 @media (max-width: 760px) {
-  .gallery, .screens { grid-template-columns: minmax(0, 1fr); }
+  .screens, .gallery { grid-template-columns: minmax(0, 1fr); }
+  .gallery .is-hero { grid-column: auto; grid-row: auto; }
+  .gallery .is-hero .shot-frame { aspect-ratio: 16 / 9; }
 }
 
 /* Agents */

@@ -111,18 +111,12 @@ function Home() {
         <Pipeline />
       </Section>
 
-      <Section id="renderer" title="Text, light, glass and metal all come out of the same renderer." wide>
-        <p className="intro">
-          The effects are GPU shaders drawn live, not pictures. Text is shaped and drawn by Rune too, with its weight
-          calibrated against Core Text.
-        </p>
+      <Section id="renderer" title="Metal, glass and light are drawn by the same renderer." wide>
+        <p className="intro">They're GPU shaders, drawn live. These stills come straight out of Rune.</p>
         <div className="gallery">
-          <Shot name="glow" alt="Glowing controls: a soft purple button, a neon card, a recording light, a spectrum-edged field and blooming text" caption="Glow: lights cool, never cut" />
-          <Shot name="liquid-metal" alt="Chrome, gold, rose gold and gunmetal shapes with flowing reflections, and metal borders" caption="Liquid metal, also as a border" />
-          <Shot name="fluted-glass" alt="Four fluted glass panels, reeded, fine, frosted and wide, over coloured shapes and text" caption="Fluted glass over moving content" />
-          <Shot name="raised-light" alt="A dark synth panel with glossy knobs and raised keys under a soft light, three keys lit orange" caption="Raised controls under one light" />
-          <Shot name="electric" alt="An electric arc forking between two terminals, a card with current running round its border, and a calmly charged button" caption="Electricity: arcs fork and cool" />
-          <Shot name="rust-diff" alt="A split diff of a Rust file, adding jitter to a retry backoff, with the changed words highlighted" caption="Rust diffs, split, down to the word" fade />
+          <Shot name="metal" alt="A ball of liquid chrome on black, reflecting a cool studio light" caption="Liquid metal" sizes="(max-width: 760px) calc(100vw - 48px), 740px" hero />
+          <Shot name="glass" alt="A frosted glass tile over a blue disc, sharp beside the glass and soft through it" caption="Frosted glass" />
+          <Shot name="light" alt="Nine raised keys under one soft light, the middle one lit blue" caption="Raised keys under one light" />
         </div>
       </Section>
 
@@ -195,13 +189,18 @@ function Home() {
   )
 }
 
-/** A gallery tile: every tile is 16:9, so a row lines up. `fade` softens the bottom edge of a render that runs on past
- *  the crop. */
-function Shot({ name, alt, caption, fade = false }: { name: Parameters<typeof Picture>[0]["name"]; alt: string; caption: string; fade?: boolean }) {
+/** A gallery tile. The `hero` tile spans two rows beside the others. */
+function Shot({
+  name,
+  alt,
+  caption,
+  sizes = "(max-width: 760px) calc(100vw - 48px), 360px",
+  hero = false,
+}: { name: Parameters<typeof Picture>[0]["name"]; alt: string; caption: string; sizes?: string; hero?: boolean }) {
   return (
-    <figure className="shot">
-      <div className={fade ? "shot-frame is-faded" : "shot-frame"}>
-        <Picture name={name} alt={alt} sizes="(max-width: 760px) calc(100vw - 48px), 548px" />
+    <figure className={hero ? "shot is-hero" : "shot"}>
+      <div className="shot-frame">
+        <Picture name={name} alt={alt} sizes={sizes} />
       </div>
       <figcaption>{caption}</figcaption>
     </figure>
