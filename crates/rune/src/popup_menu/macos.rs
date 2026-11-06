@@ -55,7 +55,7 @@ pub(super) fn show(window: &Arc<Window>, show: Show, session: Rc<Session>, wake:
     unsafe { menu.setMinimumWidth(show.min_width.max(0.0) as f64) };
     let at = NSPoint::new(show.at.0 as f64, show.at.1 as f64);
     run_later(move || {
-        if session.cancelled.get() { return; }
+        if !session.begin() { return; }
         // A close or hide in the same turn as the request, after the host handed it over.
         let picked = if view.window().is_some_and(|w| w.isVisible()) {
             *session.tracking.borrow_mut() = Some(menu.clone());
@@ -70,9 +70,7 @@ pub(super) fn show(window: &Arc<Window>, show: Show, session: Rc<Session>, wake:
         } else { None };
         clear_targets(&menu);
         drop((menu, target));
-        if session.cancelled.get() { return; }
-        *session.answer.borrow_mut() = Some(picked);
-        if let Some(wake) = wake { wake(); }
+        if session.resolve(picked) && let Some(wake) = wake { wake(); }
     });
     true
 }
