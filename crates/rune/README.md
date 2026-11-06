@@ -256,6 +256,26 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   (`Some('a')` for ⌥A, which types `å`), for bindings by letter that follow the layout, as
   macOS's key bindings do; `None` where winit can't say (the web, iOS) and with no physical
   origin.
+
+  `Mods::cmd` is the primary shortcut modifier, reported with its key: ⌘ on macOS (with
+  `logo`), Ctrl elsewhere (with `ctrl`). So Ctrl+W on Windows is `{ cmd, ctrl }`, and a test
+  such as `cmd && !ctrl` never passes there. Bind shortcuts with a `Chord` instead, which
+  resolves both sides to the keys held on the platform:
+
+  ```rust
+  let reopen = Chord::parse("mod+shift+t")?;          // ⇧⌘T on macOS, Ctrl+Shift+T elsewhere
+  let next = Chord::parse("ctrl+tab")?;               // ⌃⇥ on macOS (a literal Control), Ctrl+Tab elsewhere
+  let home = Keybind::new("mod+b").on(KeyPlatform::Windows, "alt+home");
+  if reopen.matches_tx(ev, tx) { /* … */ }
+  reopen.label();                                     // "⇧⌘T" or "Ctrl+Shift+T"
+  ```
+
+  `mod` is the primary modifier; `ctrl`, `alt`, `shift` and `super` (`cmd`, `win`) are keys.
+  Off macOS Ctrl is the primary, so "mod+b" and "ctrl+b" are the same chord there
+  (`Chord::same_keys` finds such clashes); give one of them another chord on that platform
+  with `Keybind::on`. A character chord names the key unshifted ("mod+shift+[") and
+  `matches_tx` follows the layout through `tx.key_base()`. `Display` writes the canonical
+  string back for settings files, and `Keybind` parses alternatives ("mod+t, mod+n").
 - **Periodic motion**: `.looping(rune_motion::LoopSpec::opacity(..))` or `LoopSpec::rotation(period)`
   (icon quads). Tracks use animation time, preserve phase when retimed and only request frames
   while visible through ancestor clips. Removal uses the existing spring presence fade. Reduced
@@ -2344,8 +2364,8 @@ $L --desktop examples/launcher/backdrop.png --script examples/launcher/scripts/d
   resize delivers it (content at rest follows; unlike `Tx::resize_window`). The canvas keeps its
   size, so grow only after shrinking to see the whole window.
 - **Chords**: `{"type": "shortcut", "chord": "cmd+space"}` is the user pressing a chord
-  system-wide. Register it with `App::global_shortcut` or `register_shortcut`. Only its
-  shortcut handler runs, exactly as when the OS delivers it: it never reaches `on_key`,
+  system-wide (`mod+space` is ⌘ on macOS and Ctrl elsewhere, as in a `Chord`). Register it
+  with `App::global_shortcut` or `register_shortcut`. Only its shortcut handler runs, exactly as when the OS delivers it: it never reaches `on_key`,
   focused controls or physical-input handlers, even when the window is key. An unregistered
   chord fails the script. The older `{"shortcut": "cmd+k"}` has the same semantics. To send
   a window key instead, use `{"type": "key", "cmd": true, "name": " "}`.

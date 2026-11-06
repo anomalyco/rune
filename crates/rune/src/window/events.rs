@@ -387,7 +387,7 @@ impl<S: 'static> Host<S> {
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
                 let pressed = event.state == ElementState::Pressed;
                 // A release's logical key only matters to `on_key_up` handlers.
-                let logical = (pressed || rt.wants_key_up()).then(|| map_key(&event.logical_key, self.mods)).flatten();
+                let logical = (pressed || rt.wants_key_up()).then(|| map_key_event(&event, self.mods)).flatten();
                 let mut redraw = false;
                 // A menu item handing Rune its key: it acts after, if no handler takes it.
                 let unhandled = crate::native_menu::take_unhandled(logical.as_ref().filter(|_| pressed));

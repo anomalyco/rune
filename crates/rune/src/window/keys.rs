@@ -69,6 +69,19 @@ pub(crate) fn map_key(key: &WKey, m: ModifiersState) -> Option<KeyEvent> {
     Some(KeyEvent { key, mods })
 }
 
+/// `map_key` for a window's key event. Windows names no logical key for a chord whose
+/// modifiers type nothing on the layout, such as Ctrl+Alt+B on US English (Ctrl+Alt is AltGr
+/// there); it still arrives as a chord on the character the key types unmodified.
+pub(crate) fn map_key_event(event: &winit::event::KeyEvent, m: ModifiersState) -> Option<KeyEvent> {
+    if let Some(ev) = map_key(&event.logical_key, m) { return Some(ev); }
+    let WKey::Unidentified(_) = event.logical_key else { return None };
+    let mods = map_mods(m);
+    if !(mods.cmd || mods.ctrl) { return None; }
+    let c = key_base(event).filter(|c| !c.is_control() && *c != ' ')?;
+    let key = if mods.cmd { Key::Command(c.to_ascii_lowercase()) } else { Key::Text(c.to_string()) };
+    Some(KeyEvent { key, mods })
+}
+
 /// The character `event`'s key types under the current layout with no modifiers, for
 /// `Tx::key_base`.
 pub(crate) fn key_base(event: &winit::event::KeyEvent) -> Option<char> {
