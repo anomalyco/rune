@@ -1,0 +1,634 @@
+/* Rune's home page. Tokens in system/tokens.css; everything sits on the 4 px grid. */
+*, *::before, *::after { box-sizing: border-box; }
+html {
+  background: var(--bg);
+  color: var(--fg);
+  font: var(--text-16);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-size-adjust: 100%;
+  scroll-padding-top: var(--space-8);
+}
+body { margin: 0; }
+a { color: inherit; }
+img { display: block; max-width: 100%; height: auto; }
+code { font: var(--mono-13); }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: var(--radius-1); }
+::selection { background: color-mix(in oklch, var(--ink) 40%, transparent); }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.skip {
+  position: absolute;
+  left: var(--space-4);
+  top: -48px;
+  z-index: 10;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-2);
+  background: var(--fg);
+  color: var(--bg);
+  font: var(--text-14);
+  text-decoration: none;
+}
+.skip:focus { top: var(--space-2); }
+
+/* Frame: one column, 1120 wide, 24 px gutters (16 under 400). */
+.topbar, main, .footer {
+  width: 100%;
+  max-width: calc(var(--content) + 2 * var(--space-5));
+  margin: 0 auto;
+  padding-inline: var(--space-5);
+}
+@media (max-width: 400px) {
+  .topbar, main, .footer { padding-inline: var(--space-4); }
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--topbar);
+}
+.brand { display: flex; align-items: center; height: 28px; text-decoration: none; }
+.topnav { display: flex; gap: var(--space-5); font: var(--text-14); }
+.topnav a { color: var(--fg-2); text-decoration: none; transition: color 100ms; }
+@media (hover: hover) and (pointer: fine) {
+  .topnav a:hover { color: var(--fg); transition-duration: 0ms; }
+}
+
+/* Wordmark, ᚱUNE (src/brand): pixel letters at whole pixels a cell, 2 in the bar and up to 12 in the masthead. */
+.wordmark {
+  position: relative;
+  display: block;
+  width: calc(var(--cells) * 2px);
+  color: var(--ink);
+}
+.wordmark svg { display: block; width: 100%; height: 100%; fill: currentColor; }
+.wordmark-glint { fill: oklch(0.97 0.035 245); }
+.wordmark-rune.is-lit { fill: oklch(0.97 0.035 245); }
+.masthead { container-type: inline-size; }
+.masthead .wordmark {
+  width: min(calc(var(--cells) * 10px), 100%);
+  width: min(calc(var(--cells) * 10px), round(down, 100cqw / var(--cells), 1px) * var(--cells));
+}
+
+/* Hero: the claim on the left, the live panel on the right; stacked under 1000. */
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 520px);
+  gap: var(--space-8);
+  align-items: center;
+  padding: var(--space-8) 0 calc(var(--space-9) + var(--space-6));
+}
+h1, h2 { margin: 0; font-weight: 500; text-wrap: balance; }
+.hero h1 {
+  margin-top: var(--space-7);
+  max-width: 16em;
+  font-size: 40px;
+  line-height: 48px;
+  letter-spacing: -0.025em;
+}
+.lede {
+  max-width: var(--measure);
+  margin: var(--space-5) 0 0;
+  font: var(--text-16);
+  font-size: 18px;
+  line-height: 28px;
+  color: var(--fg-2);
+  text-wrap: pretty;
+}
+.actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-6); }
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 40px;
+  padding: 0 var(--space-4);
+  border-radius: 20px;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--fg);
+  font: var(--text-14);
+  font-weight: 500;
+  text-decoration: none;
+  transition: background-color 100ms;
+}
+.button.is-primary { background: var(--fg); color: var(--bg); box-shadow: none; }
+@media (hover: hover) and (pointer: fine) {
+  .button:hover { background: var(--surface-3); transition-duration: 0ms; }
+  .button.is-primary:hover { background: #fff; }
+}
+.button:active { scale: 0.98; }
+@media (max-width: 1000px) {
+  .hero { grid-template-columns: minmax(0, 1fr); gap: var(--space-7); padding-top: var(--space-6); }
+}
+@media (max-width: 560px) {
+  .hero h1 { margin-top: var(--space-6); font-size: 36px; line-height: 44px; }
+  .lede { font-size: 16px; line-height: 26px; }
+}
+
+/* The live panel: Rune's canvas under an HTML copy of its first frame, in one 320 px box. */
+.live { margin: 0; }
+.live-stage {
+  position: relative;
+  height: 320px;
+  border-radius: var(--radius-2);
+  background: #000;
+  overflow: hidden;
+  container-type: inline-size;
+}
+/* Rune sizes the canvas to the card's height. The frame centres it where the poster's card sits, by transform so the
+   resize isn't a layout shift, and holds Rune's screen-reader mirror to the canvas's box. The outline goes on top. */
+.live-stage::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px var(--line);
+  pointer-events: none;
+}
+.live-frame { position: absolute; inset-inline: 0; top: 50%; translate: 0 -50%; }
+.live-canvas { display: block; width: 100%; height: 320px; }
+.poster {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: #000;
+  transition: opacity 200ms var(--ease-out);
+}
+.live[data-phase="live"] .poster { opacity: 0; pointer-events: none; }
+.live-caption {
+  margin-top: var(--space-3);
+  font: var(--text-13);
+  color: var(--fg-3);
+}
+/* The card's numbers are web-showcase's: 376 wide, or the stage less 16 down to 280 with 20 px padding. */
+.pc-card {
+  --pad: 32px;
+  width: clamp(280px, 100cqw - 16px, 376px);
+  padding: var(--pad);
+  border-radius: 20px;
+  background: oklch(0.17 0.006 265);
+  box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  font-family: Inter, var(--font-sans);
+}
+@container (max-width: 391px) { .pc-card { --pad: 20px; } }
+.pc-line { display: flex; align-items: center; height: 36px; }
+.pc-label { flex: 1; font-size: 14px; color: oklch(0.72 0.008 265); }
+.pc-switch {
+  position: relative;
+  width: 44px;
+  height: 26px;
+  border-radius: 13px;
+  background: var(--ink);
+}
+.pc-knob, .pc-puck {
+  position: absolute;
+  border-radius: 50%;
+  background: oklch(0.985 0 0);
+}
+.pc-knob { left: 20px; top: 2px; width: 22px; height: 22px; box-shadow: 0 1px 3px oklch(0 0 0 / 0.3); }
+.pc-picker {
+  position: relative;
+  display: flex;
+  width: min(270px, 100% - 70px);
+  height: 32px;
+  padding: 3px;
+  border-radius: 16px;
+  background: oklch(1 0 0 / 0.05);
+}
+.pc-thumb {
+  position: absolute;
+  left: calc(3px + (100% - 6px) * 2 / 3);
+  top: 3px;
+  width: calc((100% - 6px) / 3);
+  height: 26px;
+  border-radius: 13px;
+  background: oklch(1 0 0 / 0.12);
+}
+.pc-seg {
+  position: relative;
+  flex: 1;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 500;
+  color: oklch(0.72 0.008 265);
+}
+.pc-seg.is-on { color: oklch(0.955 0.003 265); }
+.pc-track { position: relative; height: 28px; margin-top: 8px; }
+.pc-rail {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 13px;
+  height: 2px;
+  border-radius: 1px;
+  background: oklch(1 0 0 / 0.085);
+}
+.pc-stop {
+  position: absolute;
+  top: 12px;
+  width: 4px;
+  height: 4px;
+  border-radius: 2px;
+  background: oklch(1 0 0 / 0.22);
+}
+.pc-puck { left: 0; top: 0; width: 28px; height: 28px; box-shadow: 0 2px 8px oklch(0 0 0 / 0.5); }
+
+/* Sections. Off-screen ones skip layout and paint until they come near (content-visibility), which also clips their
+   paint to the box: the bottom padding leaves room for shadows and glows, and the gap between sections stays 96. */
+.section, .cta {
+  padding-block: var(--space-8) var(--space-6);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 1000px;
+}
+.section h2, .cta h2 {
+  max-width: 22em;
+  font-size: 28px;
+  line-height: 36px;
+  letter-spacing: var(--track-28);
+}
+.intro {
+  max-width: var(--measure);
+  margin: var(--space-4) 0 0;
+  color: var(--fg-2);
+  text-wrap: pretty;
+}
+.intro code, .facts code, .shot figcaption code { font: var(--mono-13); color: var(--fg); }
+@media (max-width: 560px) {
+  .section, .cta { padding-top: var(--space-6); }
+  .section h2, .cta h2 { font-size: 24px; line-height: 32px; }
+}
+
+/* Entrances: below-the-fold sections fade up once as they arrive (src/motion/reveal.ts). */
+[data-reveal] { transition: opacity 300ms var(--ease-out), translate 300ms var(--ease-out), filter 300ms var(--ease-out); }
+[data-reveal="out"] { opacity: 0; translate: 0 8px; filter: blur(4px); }
+@media (prefers-reduced-motion: reduce) {
+  [data-reveal] { transition: opacity 150ms linear; }
+  [data-reveal="out"] { translate: none; filter: none; }
+}
+
+/* Code */
+.code-block {
+  min-width: 0;
+  margin: var(--space-6) 0 0;
+  border-radius: var(--radius-2);
+  background: var(--surface-1);
+  box-shadow: inset 0 0 0 1px var(--line);
+  overflow: hidden;
+}
+.code-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  box-shadow: inset 0 -1px var(--line);
+  font: var(--mono-12);
+  color: var(--fg-3);
+}
+.code-head a { min-width: 0; overflow-wrap: anywhere; color: var(--fg-2); text-decoration: none; }
+.code-lines { color: var(--fg-3); }
+.code-lang { flex: none; }
+@media (hover: hover) and (pointer: fine) {
+  .code-head a:hover { color: var(--fg); }
+}
+.code {
+  margin: 0;
+  padding: var(--space-4);
+  overflow-x: auto;
+  font: var(--mono-12);
+  line-height: 20px;
+  color: var(--fg);
+  tab-size: 4;
+  /* Lines cut off at the right fade instead of ending on a hard edge. */
+  mask-image: linear-gradient(to right, #000 calc(100% - var(--space-5)), transparent);
+}
+.code code { font: inherit; }
+.code:focus-visible { outline-offset: -2px; }
+.tk-k { color: var(--code-keyword); }
+.tk-s, .tk-n { color: var(--code-string); }
+.tk-f, .tk-a { color: var(--code-call); }
+.tk-c { color: var(--fg-3); }
+.tk-p { color: var(--fg-2); }
+
+/* Views: the code beside what it draws. */
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--space-5);
+  align-items: start;
+  margin-top: var(--space-6);
+}
+.split .code-block { margin: 0; }
+@media (max-width: 860px) {
+  .split { grid-template-columns: minmax(0, 1fr); }
+  .split .shot { max-width: 320px; }
+}
+.shot { margin: 0; }
+.screen img {
+  width: 100%;
+  border-radius: var(--radius-2);
+  outline: 1px solid var(--line);
+  outline-offset: -1px;
+}
+.shot-frame {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-2);
+  overflow: hidden;
+}
+.shot-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+}
+.shot-frame.is-faded img { mask-image: linear-gradient(#000 72%, transparent); }
+.shot-frame::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px var(--line);
+  pointer-events: none;
+}
+.shot figcaption {
+  margin-top: var(--space-2);
+  font: var(--text-13);
+  color: var(--fg-3);
+}
+
+/* Demos */
+.demo { margin: var(--space-6) 0 0; }
+.demo-caption {
+  margin-top: var(--space-3);
+  max-width: var(--measure);
+  font: var(--text-13);
+  color: var(--fg-3);
+  text-wrap: pretty;
+}
+.demo-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-5);
+  margin-top: var(--space-4);
+}
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 18px;
+  background: var(--surface-2);
+}
+.segmented button {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  height: 30px;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: 15px;
+  background: transparent;
+  color: var(--fg-2);
+  font: var(--text-13);
+  font-weight: 500;
+  line-height: 30px;
+  cursor: pointer;
+  transition: background-color 100ms, color 100ms;
+}
+.segmented button[aria-checked="true"] { background: var(--surface-3); color: var(--fg); }
+.seg-note { font: var(--mono-12); line-height: 30px; color: var(--fg-3); }
+@media (hover: hover) and (pointer: fine) {
+  .segmented button:hover { color: var(--fg); transition-duration: 0ms; }
+}
+@media (max-width: 400px) { .seg-note { display: none; } }
+.check { display: inline-flex; align-items: center; gap: var(--space-2); font: var(--text-14); color: var(--fg-2); cursor: pointer; }
+.check input { width: 16px; height: 16px; margin: 0; accent-color: var(--ink); }
+
+/* Spring demo: a track you click or throw along, and a trace of the puck's position over the last 2.4 s. */
+.sd-stage {
+  position: relative;
+  height: 72px;
+  padding: 0 16px;
+  border-radius: var(--radius-2);
+  background: var(--surface-1);
+  box-shadow: inset 0 0 0 1px var(--line);
+  touch-action: pan-y;
+  cursor: pointer;
+  user-select: none;
+}
+.sd-rail {
+  position: absolute;
+  left: 32px;
+  right: 32px;
+  top: 35px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--surface-3);
+}
+.sd-stop {
+  position: absolute;
+  top: -1px;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  border-radius: 2px;
+  background: var(--line-2);
+}
+.sd-puck {
+  position: absolute;
+  left: 16px;
+  top: 20px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--fg);
+  box-shadow: 0 2px 8px oklch(0 0 0 / 0.5), 0 0 0 4px color-mix(in oklch, var(--ink) 25%, transparent);
+  cursor: grab;
+  will-change: transform;
+}
+.sd-puck:active { cursor: grabbing; }
+.sd-trace {
+  display: block;
+  width: 100%;
+  height: 96px;
+  margin-top: var(--space-2);
+  /* The oldest samples cool into the left edge. */
+  mask-image: linear-gradient(to right, transparent, #000 25%);
+}
+
+/* The frame's path: seven steps on a wire, a light running along it (src/sections/Pipeline.tsx). */
+.pipeline { margin: var(--space-6) 0 0; }
+.pl {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  cursor: pointer;
+}
+.pl-wire {
+  position: absolute;
+  background: var(--line-2);
+}
+.pl-comet {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 1;
+  width: 64px;
+  height: 64px;
+  margin: -32px 0 0 -32px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, oklch(0.97 0.035 245), color-mix(in oklch, var(--ink) 60%, transparent) 20%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+.pl-step {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-height: 96px;
+  padding: var(--space-3);
+  border-radius: var(--radius-2);
+  background: oklch(0.15 0.004 265);
+  box-shadow: inset 0 0 0 1px var(--line);
+  isolation: isolate;
+}
+.pl-heat {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: color-mix(in oklch, var(--ink) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--ink) 70%, transparent), 0 0 24px color-mix(in oklch, var(--ink) 35%, transparent);
+  opacity: 0;
+}
+.pl-name { font: var(--text-14); font-weight: 500; }
+.pl-note { font: var(--mono-12); color: var(--fg-3); overflow-wrap: anywhere; }
+@media (max-width: 860px) {
+  .pl { grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
+  .pl-step { flex-direction: row; align-items: baseline; justify-content: space-between; min-height: 0; }
+}
+
+/* Renderer gallery and OpenCode screens: two up, one up on a phone. */
+.gallery, .screens {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-6) var(--space-5);
+  margin-top: var(--space-6);
+}
+.screens { gap: var(--space-5); }
+.screen { margin: 0; }
+.screen.is-main { grid-column: 1 / -1; }
+@media (max-width: 760px) {
+  .gallery, .screens { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Agents */
+.facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-5);
+  margin: var(--space-6) 0 0;
+  padding: 0;
+  list-style: none;
+  font: var(--text-14);
+  color: var(--fg-2);
+}
+.facts strong { display: block; margin-bottom: var(--space-1); color: var(--fg); font-weight: 500; }
+@media (max-width: 860px) {
+  .facts { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Platforms */
+.platforms {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin: var(--space-6) 0 0;
+  padding: 0;
+  list-style: none;
+  border-radius: var(--radius-2);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.platform {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4);
+}
+.platform + .platform { box-shadow: inset 1px 0 var(--line); }
+.platform-name { font: var(--text-16); font-weight: 500; }
+.platform-note { font: var(--text-13); color: var(--fg-3); }
+@media (max-width: 860px) {
+  .platforms { grid-template-columns: minmax(0, 1fr); }
+  .platform { flex-direction: row; align-items: baseline; justify-content: space-between; gap: var(--space-4); }
+  .platform + .platform { box-shadow: inset 0 1px var(--line); }
+  .platform-note { text-align: right; }
+}
+
+/* Call to action */
+.cta { padding-bottom: var(--space-9); }
+.copyline {
+  position: relative;
+  display: flex;
+  align-items: center;
+  max-width: 52rem;
+  margin-top: var(--space-6);
+  border-radius: var(--radius-2);
+  background: var(--surface-1);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.copyline .code { flex: 1; min-width: 0; padding-block: var(--space-3); }
+.copy {
+  flex: none;
+  height: 28px;
+  margin-right: var(--space-2);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: 14px;
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font: var(--text-12);
+  font-weight: 500;
+  cursor: pointer;
+}
+@media (hover: hover) and (pointer: fine) {
+  .copy:hover { color: var(--fg); background: var(--surface-3); }
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-5);
+  padding-block: var(--space-6);
+  box-shadow: 0 -1px var(--line);
+  font: var(--text-13);
+  color: var(--fg-3);
+}
+.footer a { color: var(--fg-2); }
+
+.notfound { padding: var(--space-9) 0; min-height: 60vh; }
+.notfound h1 { font-size: 40px; line-height: 48px; letter-spacing: -0.025em; }
+.notfound .lede a { color: var(--fg); }

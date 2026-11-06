@@ -1,0 +1,6 @@
+node_modules/
+dist/
+dist-ssr/
+.cloudflare/
+# Built from examples/web-showcase by CI (and by hand, see README); never committed.
+public/live/

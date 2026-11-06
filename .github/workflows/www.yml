@@ -1,0 +1,73 @@
+name: www
+
+# Deploys the public page in www/. dev deploys https://dev.anoma.ly/rune, production deploys https://anoma.ly/rune.
+# The hero's live panel is examples/web-showcase built to wasm here, so Rune and the example trigger a deploy too.
+on:
+  push:
+    branches: [dev, production]
+    paths:
+      - "www/**"
+      - "examples/web-showcase/**"
+      - "crates/**"
+      - "scripts/web-build.sh"
+      - "Cargo.lock"
+      - ".github/workflows/www.yml"
+
+concurrency:
+  group: www-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  BINARYEN_VERSION: "133"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: www
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: www-wasm
+      - name: wasm-bindgen version from Cargo.lock
+        id: bindgen
+        working-directory: .
+        run: echo "version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ steps.bindgen.outputs.version }}
+      - uses: actions/cache@v4
+        id: binaryen
+        with:
+          path: ~/.binaryen
+          key: binaryen-${{ env.BINARYEN_VERSION }}
+      - name: Install binaryen
+        if: steps.binaryen.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.binaryen
+          curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/version_$BINARYEN_VERSION/binaryen-version_$BINARYEN_VERSION-x86_64-linux.tar.gz" \
+            | tar -xz -C ~/.binaryen --strip-components=1
+      - run: echo "$HOME/.binaryen/bin" >> "$GITHUB_PATH"
+      - name: Build the live panel
+        working-directory: .
+        run: |
+          scripts/web-build.sh web-showcase --out www/public/live --no-html --opt
+          rm -f www/public/live/*.d.ts
+          ls -l www/public/live
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run deploy:${{ github.ref_name == 'production' && 'production' || 'dev' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
