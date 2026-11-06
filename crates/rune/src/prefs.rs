@@ -9,8 +9,9 @@
 //!
 //! The file is `prefs.json` in `~/Library/Application Support/<app id>` on macOS and iOS,
 //! `%APPDATA%\<app id>` on Windows and `$XDG_CONFIG_HOME/<app id>` (else `~/.config/<app id>`)
-//! elsewhere. `RUNE_PREFS_DIR` replaces the config directory, so a headless run or a test
-//! script keeps its settings apart from the real ones. [`Prefs::memory`] keeps nothing on disk.
+//! elsewhere: [`crate::dirs::AppDirs::config`]. `RUNE_PREFS_DIR` replaces the config directory,
+//! and `RUNE_DIRS_ROOT` puts it at `<root>/config`, so a headless run or a test script keeps its
+//! settings apart from the real ones. [`Prefs::memory`] keeps nothing on disk.
 //!
 //! Every `set` and `remove` rewrites the file whole through a temporary file and a rename, so a
 //! crash leaves the old settings or the new, never half. Nothing runs in the background and
@@ -143,7 +144,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     result
 }
 
-fn sanitize(app_id: &str) -> String {
+pub(crate) fn sanitize(app_id: &str) -> String {
     let id: String = app_id.trim().chars()
         .map(|c| if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
         .collect();
@@ -155,14 +156,7 @@ fn sanitize(app_id: &str) -> String {
 fn config_dir(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
     let set = |k: &str| var(k).filter(|v| !v.is_empty()).map(PathBuf::from);
     if let Some(dir) = set("RUNE_PREFS_DIR") { return Some(dir); }
-    #[cfg(target_arch = "wasm32")]
-    { None }
-    #[cfg(all(not(target_arch = "wasm32"), any(target_os = "macos", target_os = "ios")))]
-    { set("HOME").map(|h| h.join("Library").join("Application Support")) }
-    #[cfg(all(not(target_arch = "wasm32"), target_os = "windows"))]
-    { set("APPDATA") }
-    #[cfg(all(not(target_arch = "wasm32"), not(any(target_os = "macos", target_os = "ios", target_os = "windows"))))]
-    { set("XDG_CONFIG_HOME").filter(|p| p.is_absolute()).or_else(|| set("HOME").map(|h| h.join(".config"))) }
+    crate::dirs::config_base(&var)
 }
 
 #[cfg(test)]

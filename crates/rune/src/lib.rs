@@ -32,6 +32,7 @@ mod window;
 pub mod clipboard;
 pub mod color;
 pub mod compose;
+pub mod dirs;
 pub mod drag_out;
 pub mod edit;
 pub mod el;
