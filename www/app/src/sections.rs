@@ -35,12 +35,17 @@ pub struct Picture<'a> {
 }
 
 impl Picture<'_> {
-    /// The file for the width it shows at, from every size there is.
+    /// The file for the width it shows at, from every size there is. It plans for at most 2.2
+    /// times its box: past that the extra pixels of a larger file are bytes the browser decodes
+    /// and Rune mip-maps and uploads on the main thread, and a 345-point phone tile at `@3x`
+    /// can't tell 760 pixels from 1520.
     fn image(&self, images: Option<&ImageCache>, cx: &Cx<State>) -> Option<Image> {
         let shown = cx.layout_size(self.name).map_or(self.pt, |s| s[0]);
+        let scale = cx.env().scale.max(1.0);
+        let plan = shown.min(shown * 2.2 / scale);
         let urls: Vec<(String, u32)> = self.widths.iter().map(|&w| (format!("img/{}-{w}.avif", self.name), w)).collect();
         let sources: Vec<(&str, u32)> = urls.iter().map(|(u, w)| (u.as_str(), *w)).collect();
-        images.map(|c| c.url_set(&sources, shown, cx.env().scale))
+        images.map(|c| c.url_set(&sources, plan, scale))
     }
 
     /// The image as an element, `fit` into its box.
@@ -153,6 +158,9 @@ pub fn gallery(cx: &Cx<State>, images: Option<&ImageCache>, bp: Bp) -> El {
     section("renderer", "Metal, glass and light are drawn by the same renderer.", bp)
         .child(intro("renderer-p", "They're GPU shaders, drawn live. These stills come straight out of Rune."))
         .child(body)
+        // The pictures are megabytes to read back and upload: they're asked for when the section
+        // comes on screen, not while the reader is still on the hero.
+        .on_visible(|s: &mut State, on: bool, _: &mut Tx| if on { s.seen.insert("renderer"); })
 }
 
 fn screen(cx: &Cx<State>, images: Option<&ImageCache>, p: &Picture) -> El {
@@ -170,6 +178,7 @@ pub fn opencode(cx: &Cx<State>, images: Option<&ImageCache>, bp: Bp) -> El {
     section("opencode", "OpenCode's desktop app is the test Rune is built against.", bp)
         .child(intro("opencode-p", "Rune's first big job is rebuilding OpenCode's desktop app and raising its bar: long streaming sessions, markdown and code, window chrome and scroll momentum. These screens are drawn by Rune."))
         .child(col().key("screens").w_full().gap(24.0).mt(32.0).child(screen(cx, images, &SESSION)).child(pair))
+        .on_visible(|s: &mut State, on: bool, _: &mut Tx| if on { s.seen.insert("opencode"); })
 }
 
 const FACTS: [(&str, &str); 3] = [

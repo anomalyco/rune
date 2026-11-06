@@ -145,10 +145,6 @@ pub(crate) fn align_name(align: crate::el::Align) -> &'static str {
 
 fn round1(v: f32) -> f32 { (v * 10.0).round() / 10.0 }
 
-fn rect4(b: [f32; 4]) -> [f32; 4] {
-    [round1(b[0]), round1(b[1]), round1((b[2] - b[0]).max(0.0)), round1((b[3] - b[1]).max(0.0))]
-}
-
 pub(crate) fn clean_slice(spec: &crate::el::TextSpec, a: usize, b: usize) -> String {
     let a = a.min(spec.content.len());
     let b = b.min(spec.content.len()).max(a);
@@ -226,6 +222,17 @@ impl<S: 'static> Runtime<S> {
         j
     }
 
+    /// Every node's [`Self::subtree_end`], in one reverse pass: a node's children always come
+    /// after it, so each subtree's end is known before the parent that extends to it. Walking the
+    /// parent chain per node instead costs a page's depth per node on every mirror build.
+    fn subtree_ends(&self) -> Vec<usize> {
+        let mut ends: Vec<usize> = (1..=self.nodes.len()).collect();
+        for i in (0..self.nodes.len()).rev() {
+            if let Some(p) = self.nodes[i].parent { ends[p] = ends[p].max(ends[i]); }
+        }
+        ends
+    }
+
     pub(crate) fn descendant_label(&self, root: usize, end: usize) -> String {
         let mut parts = Vec::new();
         for j in root..end {
@@ -248,18 +255,21 @@ impl<S: 'static> Runtime<S> {
         serde_json::to_string(&values).unwrap_or_else(|_| "[]".into())
     }
 
-    /// Node `i`'s drawn box in the mirror's coordinates: the band's, plus its offset in a page.
+    /// Node `i`'s drawn box in the mirror's coordinates: the band's, plus where the band starts in
+    /// the document. The offset is added in `f64` and rounded once, so a fractional device-pixel
+    /// scroll offset can't round the same document position two ways between frames.
     fn mirror_rect(&self, i: usize) -> [f32; 4] {
-        let mut b = self.drawn_box(i);
-        let dy = self.page_offset();
-        b[1] += dy;
-        b[3] += dy;
-        rect4(b)
+        let b = self.drawn_box(i);
+        let dy = f64::from(self.page_offset());
+        let top = f64::from(b[1]) + dy;
+        let bottom = f64::from(b[3]) + dy;
+        [round1(b[0]), round1(top as f32), round1((b[2] - b[0]).max(0.0)), round1((bottom - top).max(0.0) as f32)]
     }
 
     pub(crate) fn web_a11y_items(&self) -> Vec<A11yItem> {
         let mut out: Vec<A11yItem> = Vec::new();
         let mut last_flow_parent: Option<usize> = None;
+        let ends = self.subtree_ends();
         // Open containers: (end of their node subtree, their item index).
         let mut open: Vec<(usize, usize)> = Vec::new();
         let mut i = 0;
@@ -267,7 +277,7 @@ impl<S: 'static> Runtime<S> {
             while open.last().is_some_and(|&(end, _)| i >= end) { open.pop(); }
             let parent = open.last().map(|&(_, item)| item);
             let n = &self.nodes[i];
-            let end = self.subtree_end(i);
+            let end = ends[i];
             if !self.allowed(i) || self.subtree_exiting(i) || n.vis.opacity <= 0.01 || n.a11y.hidden
                 || matches!(n.role, "none" | "presentation")
             {

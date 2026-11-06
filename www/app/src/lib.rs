@@ -3,6 +3,7 @@
 //! the band in view. `--html` exports the same tree as the static first frame, so the page reads
 //! before the wasm arrives and without it.
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use rune::time::Instant;
@@ -41,6 +42,9 @@ pub struct State {
     pipeline: pipeline::Pipeline,
     glints: Glints,
     images: Option<ImageCache>,
+    /// The sections whose pictures the reader has reached: below-the-fold files are asked for
+    /// then, so a first scroll isn't competing with seven decodes and uploads.
+    seen: HashSet<&'static str>,
     copied_until: Option<f64>,
     /// The frame's time, in seconds since start, and when it was read.
     clock: (f64, Instant),
@@ -56,6 +60,7 @@ impl State {
             pipeline: pipeline::Pipeline::default(),
             glints: Glints::default(),
             images: None,
+            seen: HashSet::new(),
             copied_until: None,
             clock: (0.0, Instant::now()),
             not_found: not_found(),
@@ -133,8 +138,12 @@ fn home(s: &State, cx: &Cx<State>, bp: Bp, reduced: bool) -> El {
         .child(memo("retarget", bp, sections::retarget_code));
     let frame = sections::frame_intro(bp).child(pipeline::pipeline(&s.pipeline, cx.layout_size("pl"), bp, reduced));
     let (hello, _hello) = ready(images, cx, &[&HELLO]);
-    let (gallery, _gallery) = ready(images, cx, &[&METAL, &GLASS, &LIGHT]);
-    let (shots, _shots) = ready(images, cx, &[&SESSION, &HOME, &STREAMING]);
+    // The rest of the page's pictures arrive when their section does; an export outside a browser
+    // has every file on disk and writes them all.
+    let eager = cfg!(not(target_arch = "wasm32"));
+    let shown = |name: &str| eager || s.seen.contains(name);
+    let (gallery, _gallery) = if shown("renderer") { ready(images, cx, &[&METAL, &GLASS, &LIGHT]) } else { (Vec::new(), Vec::new()) };
+    let (shots, _shots) = if shown("opencode") { ready(images, cx, &[&SESSION, &HOME, &STREAMING]) } else { (Vec::new(), Vec::new()) };
     col().w_full()
         .child(hero::hero(s, cx, bp, glow))
         .child(memo("views", (bp, hello), || sections::views(cx, images, bp)))

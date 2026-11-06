@@ -318,7 +318,11 @@ export function syncA11y(h, json) {
         }
         const parent = item.a === undefined ? null : items[item.a];
         const parentEl = item.a === undefined ? h.a11y : els[item.a];
-        el.style.cssText = itemStyle(h, item, parent ? parent.r : [0, 0]);
+        // Writing `cssText` invalidates the node's style and its layout: only do it when the
+        // mirror's item actually moved or changed, so one animating element never rewrites a whole
+        // page's worth of nodes mid-scroll.
+        const css = itemStyle(h, item, parent ? parent.r : [0, 0]);
+        if (el._css !== css) { el._css = css; el.style.cssText = css; }
         if (item.i) el.id = item.i; else el.removeAttribute('id');
         if (tag === 'button') {
             if (item.x === true || item.x === false) el.setAttribute('aria-expanded', String(item.x));
