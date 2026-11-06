@@ -1,0 +1,1 @@
+- **`--html` keeps `El::wrap_anywhere`.** Exported text that wraps anywhere gets `overflow-wrap: anywhere`, so a long path or URL breaks inside the word as it does on the canvas instead of running over its neighbours.
