@@ -22,7 +22,7 @@ fn spans_with(src: &str, style: &MarkdownStyle, highlighter: Highlighter) -> Vec
     let r = Renderer { s: style.clone(), highlights: Vec::new(), reveal: 0.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_help: None, link_ring: None, on_task: None,
         tasks_read_only: false, selectable: false, scroll_wide: false, highlighter, sources: sources.clone(),
         next_source: Cell::new(0), tasks, next_task: Cell::new(0), current_block_key: RefCell::new("b0".into()),
-        #[cfg(feature = "mermaid")] diagram_frame: None };
+        #[cfg(feature = "mermaid")] diagram_frame: None, code_frame: None, flow: Cell::default() };
     let mut found = Vec::new();
     codes(&blocks, &mut found);
     assert_eq!(found.len(), sources.len(), "one source per code block");
@@ -275,7 +275,7 @@ fn link_spans_come_before_inner_inline_styles_so_bold_em_and_code_keep_theirs() 
     let r = Renderer { s: style.clone(), highlights: Vec::new(), reveal: 0.0, streaming: false, on_link: None, on_link_secondary: None, link_look: Some(look), link_help: None, link_ring: None, on_task: None,
         tasks_read_only: false, selectable: false, scroll_wide: false, highlighter: Highlighter::builtin(), sources,
         next_source: Cell::new(0), tasks, next_task: Cell::new(0), current_block_key: RefCell::new("b0".into()),
-        #[cfg(feature = "mermaid")] diagram_frame: None };
+        #[cfg(feature = "mermaid")] diagram_frame: None, code_frame: None, flow: Cell::default() };
     let spans = r.spans(inl, style.body.size);
     // The link span is first so `flatten_spans` applies inner Strong/Em/Code over it.
     assert_eq!((spans[0].start, spans[0].end, spans[0].color, spans[0].weight, spans[0].bg, spans[0].bg_pad), (0, inl.text.len() as u32, Some(Color::WHITE), Some(500.0), Some(bg), 3.0));
