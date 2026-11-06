@@ -5,6 +5,12 @@ A native GPU-rendered Rust UI framework for macOS, Windows, Linux and the web, w
 Every app can run headless, so an agent can render to PNG, dump the element tree and drive it with scripted input.
 
 <p align="center">
+  <a href="demo/rune.mp4">
+    <img src="demo/rune-poster.png" alt="Rune in motion: real apps, rune-kit components and GPU effects" width="100%">
+  </a>
+</p>
+
+<p align="center">
   <img src="demo/opencode/session-top.png" alt="A coding agent app built with Rune" width="100%">
 </p>
 
