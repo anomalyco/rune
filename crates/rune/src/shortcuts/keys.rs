@@ -127,9 +127,16 @@ fn named_label(name: &str) -> Option<String> {
         _ => return None,
     }.into())
 }
+/// The character `key` types unshifted on a US layout: 'a', '7', '['. None for keys that type
+/// no single printable character (F1, Space, arrows).
+pub(crate) fn us_char(key: PhysicalKeyCode) -> Option<char> {
+    let mut chars = us_label(name(key)?).chars();
+    chars.next().filter(|_| chars.next().is_none())
+}
+
 /// "k" draws as "K", as on a keycap. A character whose capital isn't one character ("ß"), or
 /// doesn't lower-case back to it (Turkish "ı" → "I" → "i"), stays.
-fn capital(label: String) -> String {
+pub(crate) fn capital(label: String) -> String {
     let mut chars = label.chars();
     let (Some(c), None) = (chars.next(), chars.next()) else { return label };
     let mut upper = c.to_uppercase();

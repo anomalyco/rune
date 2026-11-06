@@ -397,7 +397,7 @@ impl<S: 'static> Host<S> {
                     }, logical, key_base(&event), unhandled);
                 } else if let Some(ev) = logical {
                     if !pressed { redraw = rt.key_up(ev); }
-                    else if ev.key == Key::Command('v') && rt.accepts_paste() { self.clipboard.read(rt); }
+                    else if ev.edit_command() == Some('v') && rt.accepts_paste() { self.clipboard.read(rt); }
                     else if event.repeat { rt.repeat_key(ev); }
                     else { rt.key(ev); }
                     redraw |= pressed;

@@ -150,7 +150,7 @@ impl<S: 'static> Runtime<S> {
                 ran
             }
             Some(Fallback { key, base, unhandled }) => {
-                if key.key == crate::Key::Command('v') && self.accepts_paste() {
+                if key.edit_command() == Some('v') && self.accepts_paste() {
                     // Capture the target in event order, before another queued click can
                     // change focus. An empty/image clipboard still consumes the command.
                     self.paste_request = Some(self.paste_target());

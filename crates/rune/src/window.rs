@@ -17,7 +17,7 @@ use winit::raw_window_handle::HasWindowHandle;
 use crate::app::{Shared, WindowRequest};
 use crate::compose::{Compositor, Frame};
 use crate::frame::clock::FrameClock;
-use crate::edit::{Ime, Key};
+use crate::edit::Ime;
 use crate::el::{Shell, Tx};
 use crate::render::{Gpu, Renderer};
 use crate::runtime::{Env, Runtime, TitlebarAction, Waker};
@@ -44,8 +44,6 @@ use platform_sync::sync_platform;
 mod shell_requests;
 mod keys;
 pub(crate) use keys::{key_base, map_key_event, map_mods};
-#[cfg(target_arch = "wasm32")]
-pub(crate) use keys::map_key;
 mod any_host;
 mod event_loop;
 mod events;

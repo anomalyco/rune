@@ -1,7 +1,68 @@
-//! How a `Chord` reads: canonical text for settings files, and keycaps per platform.
+//! How a `Chord` reads: the names a chord string uses, canonical text for settings files, and
+//! keycaps per platform. One table per kind of name drives parsing, `Display` and labels.
 use std::fmt;
 
 use super::chord::{Chord, ChordKey, ChordMod, KeyPlatform};
+use crate::Key;
+
+/// Each modifier's names, the canonical one first, and its keycap on macOS and elsewhere, in
+/// the order `Display` writes them. Super's keycap reads "Win" on Windows.
+const MODS: &[(ChordMod, &[&str], &str, &str)] = &[
+    (ChordMod::Primary, &["mod", "primary"], "⌘", "Ctrl"),
+    (ChordMod::Ctrl, &["ctrl", "control"], "⌃", "Ctrl"),
+    (ChordMod::Alt, &["alt", "option", "opt"], "⌥", "Alt"),
+    (ChordMod::Shift, &["shift"], "⇧", "Shift"),
+    (ChordMod::Super, &["super", "cmd", "command", "meta", "win", "logo"], "⌘", "Super"),
+];
+
+/// Each named key: the `Key` it arrives as, its names, the canonical one first, and its keycap
+/// on macOS and elsewhere.
+const KEYS: &[(ChordKey, Key, &[&str], &str, &str)] = &[
+    (ChordKey::Enter, Key::Enter, &["enter", "return"], "↩", "Enter"),
+    (ChordKey::Tab, Key::Tab, &["tab"], "⇥", "Tab"),
+    (ChordKey::Escape, Key::Escape, &["escape", "esc"], "⎋", "Esc"),
+    (ChordKey::Backspace, Key::Backspace, &["backspace"], "⌫", "Backspace"),
+    (ChordKey::Delete, Key::Delete, &["delete", "del"], "⌦", "Delete"),
+    (ChordKey::Insert, Key::Insert, &["insert", "ins"], "Insert", "Insert"),
+    (ChordKey::Home, Key::Home, &["home"], "↖", "Home"),
+    (ChordKey::End, Key::End, &["end"], "↘", "End"),
+    (ChordKey::PageUp, Key::PageUp, &["pageup", "pgup"], "⇞", "Page Up"),
+    (ChordKey::PageDown, Key::PageDown, &["pagedown", "pgdn"], "⇟", "Page Down"),
+    (ChordKey::Left, Key::Left, &["left", "arrowleft"], "←", "←"),
+    (ChordKey::Right, Key::Right, &["right", "arrowright"], "→", "→"),
+    (ChordKey::Up, Key::Up, &["up", "arrowup"], "↑", "↑"),
+    (ChordKey::Down, Key::Down, &["down", "arrowdown"], "↓", "↓"),
+    (ChordKey::ContextMenu, Key::ContextMenu, &["contextmenu", "menu"], "Menu", "Menu"),
+    (ChordKey::PrintScreen, Key::PrintScreen, &["printscreen", "prtsc"], "Print Screen", "Print Screen"),
+    (ChordKey::ScrollLock, Key::ScrollLock, &["scrolllock"], "Scroll Lock", "Scroll Lock"),
+    (ChordKey::Pause, Key::Pause, &["pause", "break"], "Pause", "Pause"),
+];
+
+/// Characters a chord string can also name. `Display` writes the name only for the ones the
+/// syntax itself uses (space, "+", ","); the rest read as themselves.
+const CHARS: &[(char, &str)] = &[
+    (' ', "space"), ('+', "plus"), (',', "comma"), ('-', "minus"), ('=', "equal"), ('.', "period"),
+    ('/', "slash"), ('\\', "backslash"), ('`', "backquote"), (';', "semicolon"), ('\'', "quote"),
+    ('[', "bracketleft"), (']', "bracketright"),
+];
+
+pub(super) fn modifier_named(name: &str) -> Option<ChordMod> {
+    MODS.iter().find(|m| m.1.contains(&name)).map(|m| m.0)
+}
+
+pub(super) fn key_named_word(name: &str) -> Option<ChordKey> {
+    KEYS.iter().find(|k| k.2.contains(&name)).map(|k| k.0)
+}
+
+pub(super) fn char_named(name: &str) -> Option<char> {
+    CHARS.iter().find(|c| c.1 == name).map(|c| c.0)
+}
+
+/// The named chord key `key` is.
+pub(super) fn named(key: &Key) -> Option<ChordKey> {
+    if let Key::Function(n) = key { return Some(ChordKey::Function(*n)); }
+    KEYS.iter().find(|k| k.1 == *key).map(|k| k.0)
+}
 
 impl Chord {
     /// How the chord reads here: "⇧⌘T" on macOS, "Ctrl+Shift+T" on Windows and Linux.
@@ -16,43 +77,21 @@ impl Chord {
     /// One label per key, modifiers first, for drawing each as a keycap.
     pub fn keycaps_on(&self, platform: KeyPlatform) -> Vec<String> {
         let mac = platform == KeyPlatform::Mac;
-        let mut caps: Vec<String> = self.mods_on(platform).into_iter().map(|m| match (m, platform) {
-            (ChordMod::Ctrl, KeyPlatform::Mac) => "⌃",
-            (ChordMod::Alt, KeyPlatform::Mac) => "⌥",
-            (ChordMod::Shift, KeyPlatform::Mac) => "⇧",
-            (ChordMod::Primary | ChordMod::Super, KeyPlatform::Mac) => "⌘",
-            (ChordMod::Primary | ChordMod::Ctrl, _) => "Ctrl",
-            (ChordMod::Alt, _) => "Alt",
-            (ChordMod::Shift, _) => "Shift",
-            (ChordMod::Super, KeyPlatform::Windows) => "Win",
-            (ChordMod::Super, _) => "Super",
-        }.to_owned()).collect();
-        caps.push(key_label(self.key(), mac));
+        let mut caps: Vec<String> = self.mods_on(platform).into_iter().map(|m| {
+            let &(_, _, glyph, word) = MODS.iter().find(|row| row.0 == m).expect("every modifier has a row");
+            match (m, platform) {
+                (_, KeyPlatform::Mac) => glyph,
+                (ChordMod::Super, KeyPlatform::Windows) => "Win",
+                _ => word,
+            }.to_owned()
+        }).collect();
+        caps.push(match self.key() {
+            ChordKey::Char(' ') => "Space".into(),
+            ChordKey::Char(c) => crate::shortcuts::capital(c.to_string()),
+            ChordKey::Function(n) => format!("F{n}"),
+            key => KEYS.iter().find(|k| k.0 == key).map_or_else(String::new, |k| if mac { k.3 } else { k.4 }.to_owned()),
+        });
         caps
-    }
-}
-
-fn key_label(key: ChordKey, mac: bool) -> String {
-    let word = |glyph: &str, word: &str| if mac { glyph.to_owned() } else { word.to_owned() };
-    match key {
-        ChordKey::Char(' ') => "Space".into(),
-        ChordKey::Char(c) => c.to_uppercase().collect(),
-        ChordKey::Enter => word("↩", "Enter"),
-        ChordKey::Tab => word("⇥", "Tab"),
-        ChordKey::Escape => word("⎋", "Esc"),
-        ChordKey::Backspace => word("⌫", "Backspace"),
-        ChordKey::Delete => word("⌦", "Delete"),
-        ChordKey::Insert => "Insert".into(),
-        ChordKey::Home => word("↖", "Home"),
-        ChordKey::End => word("↘", "End"),
-        ChordKey::PageUp => word("⇞", "Page Up"),
-        ChordKey::PageDown => word("⇟", "Page Down"),
-        ChordKey::Left => "←".into(),
-        ChordKey::Right => "→".into(),
-        ChordKey::Up => "↑".into(),
-        ChordKey::Down => "↓".into(),
-        ChordKey::Function(n) => format!("F{n}"),
-        ChordKey::ContextMenu => "Menu".into(),
     }
 }
 
@@ -60,30 +99,14 @@ fn key_label(key: ChordKey, mac: bool) -> String {
 /// then the key ("mod+shift+t", "ctrl+tab", "mod+comma").
 impl fmt::Display for Chord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (m, name) in [(ChordMod::Primary, "mod"), (ChordMod::Ctrl, "ctrl"), (ChordMod::Alt, "alt"), (ChordMod::Shift, "shift"), (ChordMod::Super, "super")] {
-            if self.has(m) { write!(f, "{name}+")?; }
+        for (m, names, ..) in MODS {
+            if self.has(*m) { write!(f, "{}+", names[0])?; }
         }
         match self.key() {
-            ChordKey::Char(' ') => f.write_str("space"),
-            ChordKey::Char('+') => f.write_str("plus"),
-            ChordKey::Char(',') => f.write_str("comma"),
+            ChordKey::Char(c @ (' ' | '+' | ',')) => f.write_str(CHARS.iter().find(|n| n.0 == c).map_or("", |n| n.1)),
             ChordKey::Char(c) => write!(f, "{c}"),
-            ChordKey::Enter => f.write_str("enter"),
-            ChordKey::Tab => f.write_str("tab"),
-            ChordKey::Escape => f.write_str("escape"),
-            ChordKey::Backspace => f.write_str("backspace"),
-            ChordKey::Delete => f.write_str("delete"),
-            ChordKey::Insert => f.write_str("insert"),
-            ChordKey::Home => f.write_str("home"),
-            ChordKey::End => f.write_str("end"),
-            ChordKey::PageUp => f.write_str("pageup"),
-            ChordKey::PageDown => f.write_str("pagedown"),
-            ChordKey::Left => f.write_str("left"),
-            ChordKey::Right => f.write_str("right"),
-            ChordKey::Up => f.write_str("up"),
-            ChordKey::Down => f.write_str("down"),
             ChordKey::Function(n) => write!(f, "f{n}"),
-            ChordKey::ContextMenu => f.write_str("contextmenu"),
+            key => f.write_str(KEYS.iter().find(|k| k.0 == key).map_or("", |k| k.2[0])),
         }
     }
 }

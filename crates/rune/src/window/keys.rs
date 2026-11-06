@@ -57,13 +57,13 @@ pub(crate) fn map_key(key: &WKey, m: ModifiersState) -> Option<KeyEvent> {
             NamedKey::ContextMenu => Key::ContextMenu,
             _ => return None,
         },
-        WKey::Character(c) => {
-            if mods.cmd {
-                Key::Command(c.chars().next()?.to_ascii_lowercase())
-            } else {
-                Key::Text(c.to_string())
-            }
+        // Windows treats Left Ctrl + Left Alt as AltGr: a character typed with both is text
+        // ("@" on a German layout's Q), not a chord. A chord that types nothing comes through
+        // `map_key_event`'s fallback instead.
+        WKey::Character(c) if mods.cmd && !(cfg!(target_os = "windows") && mods.ctrl && mods.alt) => {
+            Key::Command(c.chars().next()?.to_ascii_lowercase())
         }
+        WKey::Character(c) => Key::Text(c.to_string()),
         _ => return None,
     };
     Some(KeyEvent { key, mods })
@@ -71,9 +71,25 @@ pub(crate) fn map_key(key: &WKey, m: ModifiersState) -> Option<KeyEvent> {
 
 /// `map_key` for a window's key event. Windows names no logical key for a chord whose
 /// modifiers type nothing on the layout, such as Ctrl+Alt+B on US English (Ctrl+Alt is AltGr
-/// there); it still arrives as a chord on the character the key types unmodified.
+/// there); it still arrives as a chord on the character the key types unmodified. Off macOS, a
+/// chord on a key that types a non-ASCII character (Ctrl+М on a Russian layout, Ctrl+Ü on a
+/// German one) arrives as the US key in its place, `Command('v')`, as Windows' own shortcuts
+/// follow the key's Latin virtual key and macOS's switch to a Latin layout under ⌘: Ctrl+V
+/// pastes on every layout.
 pub(crate) fn map_key_event(event: &winit::event::KeyEvent, m: ModifiersState) -> Option<KeyEvent> {
-    if let Some(ev) = map_key(&event.logical_key, m) { return Some(ev); }
+    let mut ev = map_key(&event.logical_key, m).or_else(|| unidentified(event, m))?;
+    if !cfg!(target_os = "macos")
+        && let Key::Command(c) = ev.key
+        && !c.is_ascii()
+        && let winit::keyboard::PhysicalKey::Code(code) = event.physical_key
+        && let Some(us) = crate::shortcuts::us_char(code)
+    {
+        ev.key = Key::Command(us);
+    }
+    Some(ev)
+}
+
+fn unidentified(event: &winit::event::KeyEvent, m: ModifiersState) -> Option<KeyEvent> {
     let WKey::Unidentified(_) = event.logical_key else { return None };
     let mods = map_mods(m);
     if !(mods.cmd || mods.ctrl) { return None; }

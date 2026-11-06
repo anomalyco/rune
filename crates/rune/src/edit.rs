@@ -243,8 +243,8 @@ impl TextEdit {
 
     /// The mark a rich field's `⌘B`, `⌘I` or `⌘U` toggles, if this field takes that chord.
     pub(crate) fn format_chord(&self, ev: &KeyEvent) -> Option<Mark> {
-        let Key::Command(c) = ev.key else { return None };
-        if ev.mods.shift || ev.mods.alt || !self.rich || self.secure {
+        let c = ev.edit_command()?;
+        if ev.mods.shift || !self.rich || self.secure {
             return None;
         }
         let mark = match c {
