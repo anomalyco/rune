@@ -21,6 +21,8 @@ pub(crate) mod reopen;
 pub(crate) mod scroll_bars;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod web_math;
 #[cfg(target_os = "windows")]
 pub(crate) mod win32;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]

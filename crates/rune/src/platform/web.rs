@@ -5,6 +5,7 @@ use wasm_bindgen::JsCast;
 use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     platform::web::{EventLoopExtWebSys, WindowAttributesExtWebSys, WindowExtWebSys}, window::{Window, WindowId}};
 use crate::{App, Runtime, Env, render::{Gpu, Renderer}, time::Instant};
+use super::web_math;
 mod input;
 mod page;
 pub(crate) mod platform;
@@ -333,21 +334,13 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             let playground = app.playground.take();
             let (spec, state, shared) = app.into_parts(None);
             let scale = window.scale_factor() as f32;
-            let mut size = window.inner_size();
-            if size.width > 0 && let Some(c) = window.canvas() {
-                size.width = canvas_physical(&c, size, scale).width;
-            }
-            if size.width == 0 {
-                if let Some(c) = window.canvas() {
-                    let cw = c.client_width().max(1) as f32;
-                    size.width = (cw * scale).round().max(1.0) as u32;
-                } else {
-                    size.width = (spec.size.0 * scale).round().max(1.0) as u32;
-                }
-            }
-            if size.height == 0 {
-                size.height = (spec.size.1 * scale).round().max(1.0) as u32;
-            }
+            // Both sides from the canvas's own box: a browser that reports the box in CSS pixels
+            // (Chromium's emulated device scale) would otherwise leave the height at the CSS
+            // height, which its style stretches back over the screen: a 2× vertical stretch.
+            let inner = window.inner_size();
+            let css = window.canvas().map_or((0.0, 0.0), |c| (c.client_width().max(0) as f32, c.client_height().max(0) as f32));
+            let fixed = web_math::fix_canvas_size(css, (inner.width, inner.height), spec.size, scale, fit_height);
+            let mut size = winit::dpi::PhysicalSize::new(fixed.0, fixed.1);
             let dark = web_sys::window().and_then(|w| w.match_media("(prefers-color-scheme: dark)").ok().flatten()).is_some_and(|q| q.matches());
             let proxy = self.proxy.clone();
             let wake: crate::Waker = Arc::new(move || { let _ = proxy.send_event(Wake::App); });
