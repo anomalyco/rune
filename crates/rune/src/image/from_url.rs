@@ -34,24 +34,23 @@ impl ImageCache {
     /// One image in several sizes, as an HTML `srcset`: `sources` are `(url, width in pixels)`,
     /// and this loads the narrowest at least `size_pt × scale` pixels wide (or the widest), as
     /// [`ImageCache::url`]. Pass the width the image shows at, so a phone fetches the small
-    /// file. A page export (`--html`) writes every source, so the browser picks one too.
+    /// file; images are shared by the file chosen, so a window resizing within one file's range
+    /// loads nothing new. An `--html` export writes every source, so the browser picks one
+    /// too. SVG sources rasterize at their listed width.
     pub fn url_set(&self, sources: &[(&str, u32)], size_pt: f32, scale: f32) -> Image {
         let need = (size_pt * scale).ceil();
         let mut sorted = sources.to_vec();
         sorted.sort_by_key(|s| s.1);
-        let Some(&(url, _)) = sorted.iter().find(|s| s.1 as f32 >= need).or(sorted.last()) else {
+        let Some(&(url, width)) = sorted.iter().find(|s| s.1 as f32 >= need).or(sorted.last()) else {
             return self.url("", size_pt, scale);
         };
         let srcset: String = sorted.iter().map(|(u, w)| format!("{u} {w}w")).collect::<Vec<_>>().join(", ");
-        let px = icon_pixels(size_pt, scale);
         let mut hash = blake3::Hasher::new();
         hash.update(b"rune-url-set\0");
         hash.update(url.as_bytes());
         hash.update(&[0]);
         hash.update(srcset.as_bytes());
-        hash.update(&[0]);
-        hash.update(&px.to_le_bytes());
-        self.request_set(*hash.finalize().as_bytes(), Input::Url(url.to_owned(), px), Some(srcset.into()))
+        self.request_set(*hash.finalize().as_bytes(), Input::Url(url.to_owned(), width.max(1)), Some(srcset.into()))
     }
 }
 
