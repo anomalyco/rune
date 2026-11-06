@@ -1,0 +1,1 @@
+- **A page's static export is hidden two frames after Rune's first, not removed with it.** `runepresent` fires on Rune's first frame as before; the export then leaves the layout, find and accessibility tree but stays in the document, so a browser keeps the page's largest contentful paint and a phone that hadn't painted the page yet still does.
