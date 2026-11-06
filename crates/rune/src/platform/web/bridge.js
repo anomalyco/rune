@@ -352,13 +352,21 @@ export function syncPage(h, height, focused) {
     h.a11y.style.height = `${height}px`;
 }
 
-// Rune's first frame is on screen. A page drops its static export (`[data-rune-static]`) for
-// the live mirror, keeping the section that was at the top of the window where it was, and
-// the canvas announces `runepresent`.
+// Rune's first frame is on screen: the canvas announces `runepresent`, and a page swaps its
+// static export (`[data-rune-static]`) for the live mirror, keeping the section that was at
+// the top of the window where it was. The export is hidden, not removed: removing the
+// element a browser counted as the largest contentful paint takes the metric away. It goes
+// two frames later (the canvas covers it by then), as a phone may not have painted the page
+// before Rune's first frame, and content never painted can't count at all.
 export function presented(h) {
     if (h.disposed || h.presented) return;
     h.presented = true;
-    const parts = h.page ? [...document.querySelectorAll('[data-rune-static]')] : [];
+    h.canvas.dispatchEvent(new CustomEvent('runepresent', { bubbles: true }));
+    if (h.page) requestAnimationFrame(() => requestAnimationFrame(() => { if (!h.disposed) dropStatic(h); }));
+}
+
+function dropStatic(h) {
+    const parts = [...document.querySelectorAll('[data-rune-static]')];
     const exported = parts.find((el) => el.tagName !== 'STYLE');
     if (exported) {
         let anchor = null, offset = 0;
@@ -368,11 +376,20 @@ export function presented(h) {
                 if (r.bottom > 0) { anchor = el.id; offset = r.top; break; }
             }
         }
-        for (const el of parts) el.remove();
+        for (const el of parts) {
+            if (el.tagName === 'STYLE') { el.remove(); continue; }
+            // Out of the page's flow, find, focus and accessibility tree, its ids the mirror's.
+            el.style.cssText = 'position:absolute;top:0;left:0;width:0;height:0;overflow:hidden;visibility:hidden;';
+            el.inert = true;
+            el.setAttribute('aria-hidden', 'true');
+            el.removeAttribute('id');
+            for (const named of el.querySelectorAll('[id]')) named.removeAttribute('id');
+            el.removeAttribute('data-rune-static');
+            el.setAttribute('data-rune-static-hidden', '');
+        }
         const live = anchor && h.a11y.querySelector(`#${CSS.escape(anchor)}`);
         if (live) window.scrollTo({ top: window.scrollY + live.getBoundingClientRect().top - offset, behavior: 'instant' });
     }
-    h.canvas.dispatchEvent(new CustomEvent('runepresent', { bubbles: true }));
 }
 
 export function activate(h) {
