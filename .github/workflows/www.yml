@@ -1,30 +1,40 @@
 name: www
 
-# Deploys the public page in www/. dev deploys https://dev.anoma.ly/rune, production deploys https://anoma.ly/rune.
-# The hero's live panel is examples/web-showcase built to wasm here, so Rune and the example trigger a deploy too.
+# The public page in www/ is the Rune app in www/app. CI builds it to wasm, has the native build write its static
+# HTML (`--html`), and deploys: dev to https://dev.anoma.ly/rune, production to https://anoma.ly/rune. Pull requests
+# build the dev page and deploy nothing. Rune itself is the page, so a change under crates/ triggers it too.
 on:
   push:
     branches: [dev, production]
     paths:
       - "www/**"
-      - "examples/web-showcase/**"
       - "crates/**"
       - "scripts/web-build.sh"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/www.yml"
+  pull_request:
+    paths:
+      - "www/**"
+      - "crates/**"
+      - "scripts/web-build.sh"
+      - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/www.yml"
 
 concurrency:
-  group: www-${{ github.ref_name }}
-  cancel-in-progress: false
+  group: www-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 env:
   BINARYEN_VERSION: "133"
+  MODE: ${{ github.ref_name == 'production' && 'production' || 'dev' }}
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -38,7 +48,8 @@ jobs:
           components: rust-src
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: www-wasm
+          shared-key: www
+          save-if: ${{ github.event_name == 'push' }}
       - name: wasm-bindgen version from Cargo.lock
         id: bindgen
         working-directory: .
@@ -58,18 +69,19 @@ jobs:
           curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/version_$BINARYEN_VERSION/binaryen-version_$BINARYEN_VERSION-x86_64-linux.tar.gz" \
             | tar -xz -C ~/.binaryen --strip-components=1
       - run: echo "$HOME/.binaryen/bin" >> "$GITHUB_PATH"
-      - name: Build the live panel
-        working-directory: .
-        run: |
-          scripts/web-build.sh web-showcase --out www/public/live --no-html --opt
-          rm -f www/public/live/*.d.ts
-          ls -l www/public/live
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      - run: bun run deploy:${{ github.ref_name == 'production' && 'production' || 'dev' }}
+      # The native app (tests and the `--html` export) links winit's keyboard library.
+      - name: Native libraries
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev
+      - name: Test the page
+        working-directory: .
+        run: cargo test -p rune-www
+      - name: Build
+        run: bun run build --mode "$MODE"
+      - name: Deploy
+        if: github.event_name == 'push'
+        run: bunx cf deploy --prebuilt --mode "$MODE"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

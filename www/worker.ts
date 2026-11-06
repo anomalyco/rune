@@ -39,7 +39,7 @@ export default {
     if (location?.startsWith("/")) headers.set("Location", withBase(location))
     if (path.startsWith("/assets/")) {
       headers.set("Cache-Control", "public, max-age=31536000, immutable")
-    } else if (/^\/(img|fonts|live)\//.test(path)) {
+    } else if (/^\/(img|fonts)\//.test(path)) {
       headers.set("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800")
     }
     headers.set("X-Content-Type-Options", "nosniff")

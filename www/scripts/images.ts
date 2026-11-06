@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
-// `bun run images`: cuts the page's images from Rune's own renders in demo/ into AVIF and WebP at the sizes the page
-// shows them, into public/img/, and writes src/images.json with each image's size so every <img> is sized up front.
-// Needs ImageMagick 7 with AVIF and WebP. The outputs are committed, so a build never needs it.
-import { mkdirSync, rmSync, statSync, writeFileSync } from "node:fs"
+// `bun run images`: cuts the page's images from Rune's own renders in demo/ into AVIF at the sizes the page shows
+// them, into public/img/. The widths and aspect ratios here match the `Picture`s in app/src/sections.rs.
+// Needs ImageMagick 7 with AVIF. The outputs are committed, so a build never needs it.
+import { mkdirSync, rmSync, statSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { $ } from "bun"
 
@@ -25,24 +25,19 @@ export const specs: Record<string, Spec> = {
   light: { src: "target/site-scenes/light.png", crop: [240, 135, 1440, 810], widths: [380, 760], smooth: true },
 }
 
-const manifest: Record<string, { width: number; height: number; widths: number[] }> = {}
 rmSync(out, { recursive: true, force: true })
 mkdirSync(out, { recursive: true })
 let bytes = 0
 for (const [name, spec] of Object.entries(specs)) {
   const src = join(repo, spec.src)
   const crop = spec.crop ? ["-crop", `${spec.crop[2]}x${spec.crop[3]}+${spec.crop[0]}+${spec.crop[1]}`, "+repage"] : []
-  const [w0, h0] = spec.crop ? [spec.crop[2], spec.crop[3]] : (await $`magick identify -format "%w %h" ${src}`.text()).split(" ").map(Number)
-  const widths = spec.widths.filter(w => w <= w0!)
+  const w0 = spec.crop ? spec.crop[2] : Number(await $`magick identify -format "%w" ${src}`.text())
+  const widths = spec.widths.filter(w => w <= w0)
   for (const w of widths) {
-    const formats = spec.smooth ? ([["avif", 70, 10], ["webp", 90, 8]] as const) : ([["avif", 52, 8], ["webp", 80, 8]] as const)
-    for (const [ext, quality, depth] of formats) {
-      const file = join(out, `${name}-${w}.${ext}`)
-      await $`magick ${src} ${crop} -resize ${w}x -strip -depth ${depth} -quality ${quality} ${file}`.quiet()
-      bytes += statSync(file).size
-    }
+    const [quality, depth] = spec.smooth ? [70, 10] : [52, 8]
+    const file = join(out, `${name}-${w}.avif`)
+    await $`magick ${src} ${crop} -resize ${w}x -strip -depth ${depth} -quality ${quality} ${file}`.quiet()
+    bytes += statSync(file).size
   }
-  manifest[name] = { width: w0!, height: h0!, widths }
 }
-writeFileSync(join(www, "src", "images.json"), `${JSON.stringify(manifest, null, 2)}\n`)
 console.log(`${Object.keys(specs).length} images, ${(bytes / 1024).toFixed(0)} KB → public/img/`)

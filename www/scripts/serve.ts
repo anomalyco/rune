@@ -27,7 +27,7 @@ const ASSETS = {
 }
 
 // Cloudflare compresses text and wasm on the way out; do the same so timings here are close to the real thing.
-const squeezable = /^(text\/|application\/(javascript|json|wasm|manifest\+json)|image\/svg)/
+const squeezable = /^(text\/|application\/(javascript|json|wasm|manifest\+json)|image\/(svg|x-icon)|font\/(ttf|otf))/
 const squeezed = new Map<string, Buffer>()
 
 const server = Bun.serve({

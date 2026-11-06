@@ -1,6 +1,5 @@
 node_modules/
 dist/
-dist-ssr/
 .cloudflare/
-# Built from examples/web-showcase by CI (and by hand, see README); never committed.
-public/live/
+# Built by scripts/build.ts from www/app; never committed.
+src/wasm/
