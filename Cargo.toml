@@ -18,6 +18,7 @@ members = [
     "themes/opencode",
     "examples/hello",
     "examples/web-hello",
+    "examples/web-showcase",
     "examples/todo",
     "examples/settings",
     "examples/playground",

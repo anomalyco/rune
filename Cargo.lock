@@ -4618,6 +4618,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "web-showcase"
+version = "0.0.1"
+dependencies = [
+ "rune",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "web-sys"
 version = "0.3.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
