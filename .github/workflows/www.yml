@@ -41,11 +41,14 @@ jobs:
         working-directory: www
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-          # Installed up front: otherwise rustup fetches it mid-build from parallel rustc calls, which race and fail.
-          components: rust-src
+      # rust-toolchain.toml picks the toolchain. rust-src is installed up front: otherwise rustup fetches it mid-build
+      # from parallel rustc calls, which race and fail.
+      - name: Rust toolchain
+        working-directory: .
+        run: |
+          rustup toolchain install
+          rustup target add wasm32-unknown-unknown
+          rustup component add rust-src
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: www
