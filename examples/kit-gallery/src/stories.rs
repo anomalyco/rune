@@ -14,9 +14,9 @@ mod inputs;
 mod markdown;
 mod overlays;
 
-use controls::{button_all_states, button_icon, button_playground, button_sizes, button_variants, checkbox_basic, checkbox_custom_icon, checkbox_hidden_label, checkbox_states, icon_button_all_states, icon_button_playground, icon_button_sizes, icon_button_variants, radio_basic, radio_controlled, radio_states, switch_appearances, switch_basic, switch_hidden_label, switch_sizes, switch_states};
+use controls::{button_all_states, button_icon, button_playground, button_sizes, button_variants, checkbox_basic, checkbox_custom_icon, checkbox_hidden_label, checkbox_states, icon_button_all_states, icon_button_playground, icon_button_sizes, icon_button_variants, radio_basic, radio_controlled, radio_states, switch_appearances, switch_basic, switch_hidden_label, switch_sizes, switch_states, switch_web};
 use display::{accordion_basic, accordion_multiple, accordion_single, badge_accent, badge_appearances, badge_basic, badge_high_contrast, badge_subtle, card_error, card_info, card_normal, card_success, card_warning, collapsible_basic, collapsible_ghost, keybind_all, keybind_multiple, keybind_playground, keybind_symbols, keybind_variants, list_active_icon, list_basic, list_divider, list_empty, list_grouped, list_no_search, list_with_add, loader_basic, loader_sizes, progress_basic, progress_indeterminate, progress_no_label, rolling_text_basic, scroll_view_thumb, segmented_basic, segmented_controlled, spinner_basic, spinner_sizes};
-use inputs::{field_direct_child, field_invalid, field_text_input, field_textarea, select_disabled, select_grouped, select_invalid, select_playground, select_with_field, text_input_appearances, text_input_controlled, text_input_copy, text_input_playground, text_input_states, text_input_with_field, textarea_controlled, textarea_playground, textarea_states, textarea_with_field};
+use inputs::{field_direct_child, field_invalid, field_text_input, field_textarea, select_disabled, select_grouped, select_invalid, select_playground, select_states, select_with_field, text_input_appearances, text_input_controlled, text_input_copy, text_input_playground, text_input_states, text_input_with_field, textarea_controlled, textarea_playground, textarea_states, textarea_with_field};
 use markdown::{
     markdown_basic, markdown_code, markdown_diagrams, markdown_lenient, markdown_mermaid_charts, markdown_mermaid_data, markdown_mermaid_flows, markdown_mermaid_git, markdown_mermaid_hover, markdown_mermaid_maps, markdown_mermaid_shapes, markdown_mermaid_streaming, markdown_mermaid_systems, markdown_stream_tail, markdown_streaming, markdown_table_styles,
     markdown_walkthrough,
@@ -55,6 +55,7 @@ const OPENED: &[(&str, &str)] = &[
     ("ui-menu--appearances", "both"),
     ("ui-select--playground", "select"),
     ("ui-select--grouped", "select"),
+    ("rune-select--states", "select"),
     ("components-popover--basic", "popover"),
     ("components-popover--controlled", "popover"),
     ("components-hover-card--basic", "card"),
@@ -100,6 +101,7 @@ stories! {
     "ui-switch--appearances" => switch_appearances,
     "ui-switch--states" => switch_states,
     "ui-switch--hidden-label" => switch_hidden_label,
+    "rune-switch--web" => switch_web,
     "ui-checkbox--basic" => checkbox_basic,
     "ui-checkbox--states" => checkbox_states,
     "ui-checkbox--custom-icon" => checkbox_custom_icon,
@@ -126,6 +128,7 @@ stories! {
     "ui-select--invalid" => select_invalid,
     "ui-select--disabled" => select_disabled,
     "ui-select--with-field" => select_with_field,
+    "rune-select--states" => select_states,
     "components-popover--basic" => popover_basic,
     "components-popover--controlled" => popover_controlled,
     "ui-menu--basic" => menu_basic,

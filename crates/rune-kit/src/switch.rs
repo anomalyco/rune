@@ -1,4 +1,5 @@
-//! Switch (`@opencode/ui` forms/switch): compact (default) and standard appearances.
+//! Switch (`@opencode/ui` forms/switch): compact (default, drawn as an NSSwitch), the compact
+//! look as the web draws it ([`Switch::web`]), and the standard appearance.
 
 use rune::{El, TextStyle, Tx, el, row, text};
 
@@ -8,6 +9,7 @@ pub struct Switch {
     label: Option<String>,
     checked: bool,
     standard: bool,
+    web: bool,
     size: ControlSize,
     hide_label: bool,
     description: Option<String>,
@@ -21,6 +23,7 @@ impl Switch {
             label: None,
             checked,
             standard: false,
+            web: false,
             size: ControlSize::Mini,
             hide_label: false,
             description: None,
@@ -44,6 +47,13 @@ impl Switch {
     /// The older, larger look (`appearance="standard"`).
     pub fn standard(mut self) -> Self {
         self.standard = true;
+        self
+    }
+    /// The compact appearance as `@opencode/ui` draws it on the web (switch.css:20-152): a 24 x 16
+    /// track with 4 point corners and a 12 point thumb with 2 point corners, 2 points in, that
+    /// moves 8 points when on. Under the pointer the thumb grows a point towards the middle.
+    pub fn web(mut self) -> Self {
+        self.web = true;
         self
     }
     /// The track and knob of an `NSSwitch` of this size on macOS 27: Mini (36 × 16, the size
@@ -76,7 +86,11 @@ impl Switch {
         let c = &k.c;
         let hover = self.state == State::Hover;
         let disabled = self.state == State::Disabled;
-        let control = if self.standard { self.standard_control(k, hover) } else { self.compact_control(k) };
+        let control = match (self.standard, self.web) {
+            (true, _) => self.standard_control(k, hover),
+            (false, true) => self.web_control(k),
+            (false, false) => self.compact_control(k),
+        };
         let control = if disabled && !self.standard { control.dim(0.5) } else { control };
         let control = if self.state == State::Focus && !self.standard {
             control.outline(2.0, 1.0, c.border_focus)
@@ -145,6 +159,38 @@ impl Switch {
         let fill = if hover { over(overlay, base) } else { base };
         let mut track = el().size(tw, th).radius(th / 2.0).fill(fill).gradient(k.light(0.0), sheen_bottom);
         if !hover && self.state == State::Rest {
+            track = track.hover(overlay);
+        }
+        shadows(k, track, elevation).motion(k.motion.control).child(thumb)
+    }
+
+    /// switch.css:20-61 at rest, :89-99 under the pointer, :106-140 on.
+    fn web_control(&self, k: &Kit) -> El {
+        let c = &k.c;
+        let hover = self.state == State::Hover;
+        let (base, sheen_bottom, elevation, knob) = if self.checked {
+            (c.bg_accent, k.light_on(0.1, c.bg_accent), &k.elevation.switch_on, c.knob_on)
+        } else {
+            (c.layer_04, k.light_on(0.2, c.layer_04), &k.elevation.switch_off, c.knob)
+        };
+        let overlay = if self.checked { k.on(c.contrast_hover, c.bg_accent) } else { c.hover };
+        let (w, radius) = if hover { (13.0, 3.0) } else { (12.0, 2.0) };
+        let x = 2.0 + if self.checked { 24.0 - 4.0 - w } else { 0.0 };
+        let thumb = shadows(
+            k,
+            el().key("thumb")
+                .size(w, 12.0)
+                .absolute(x, 2.0)
+                .radius(radius)
+                .fill(knob)
+                .gradient(k.on(c.depth_top, knob), k.on(c.depth_bottom, knob))
+                .border(0.5, k.on(c.depth_top, knob)),
+            &k.elevation.elements,
+        )
+        .motion(k.motion.control);
+        let fill = if hover { over(overlay, base) } else { base };
+        let mut track = el().size(24.0, 16.0).radius(4.0).fill(fill).gradient(k.light(0.0), sheen_bottom);
+        if self.state == State::Rest {
             track = track.hover(overlay);
         }
         shadows(k, track, elevation).motion(k.motion.control).child(thumb)

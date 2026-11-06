@@ -209,6 +209,26 @@ pub(super) fn select_disabled(_: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     row().child(Select::new("select", &FRUITS).current(Some("Cherry")).disabled(true).build(k, layer))
 }
 
+/// Both triggers in every state, forced, and an open field with its listbox: the inline trigger's
+/// rest, hover, open and disabled; the 280 x 28 field's rest, hover, keyboard focus, open,
+/// invalid and disabled.
+pub(super) fn select_states(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
+    let pick = |key: &'static str, st: State| Select::new(key, &FRUITS).label("Fruit").placeholder("Pick a fruit").current(Some("Banana")).state(st);
+    let line = |name: &str, e: El| row().gap(16.0).center_y().child(text(name.to_owned()).font(k.ty.small).color(k.c.text_faint).w(72.0)).child(e);
+    let field = |key: &'static str, st: State| pick(key, st).appearance(SelectAppearance::Field);
+    col().gap(10.0)
+        .child(line("Inline", pick("i1", State::Rest).trigger(k)))
+        .child(line("Hover", pick("i2", State::Hover).trigger(k)))
+        .child(line("Open", pick("i3", State::Rest).open(true).trigger(k)))
+        .child(line("Disabled", pick("i4", State::Rest).disabled(true).trigger(k)))
+        .child(line("Field", field("f1", State::Rest).trigger(k)))
+        .child(line("Hover", field("f2", State::Hover).trigger(k)))
+        .child(line("Focus", field("f3", State::Focus).trigger(k)))
+        .child(line("Invalid", field("f4", State::Rest).invalid(true).trigger(k)))
+        .child(line("Disabled", field("f5", State::Rest).disabled(true).trigger(k)))
+        .child(line("Open", fruit_select(s, "select").appearance(SelectAppearance::Field).build(k, layer)))
+}
+
 pub(super) fn select_with_field(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     grid(0.0, 280.0).child(
         Field::new()

@@ -16,23 +16,23 @@ fn kit_rich_style(k: &Kit) -> RichStyle {
     }
 }
 
-/// Shared shell painting: sheen over the base, button elevation, hover overlay, focus/invalid
-/// outline, disabled dimming.
-fn shell(k: &Kit, e: El, sheen: [f32; 2], state: State, invalid: bool, focused: bool) -> El {
+/// Shared shell painting (text-input.css:5-75, textarea.css): the base fill, input elevation,
+/// hover overlay, a 1 point focus or invalid ring just inside the box in place of the shadow,
+/// disabled dimming.
+fn shell(k: &Kit, e: El, state: State, invalid: bool, focused: bool) -> El {
     let c = &k.c;
     let hover = state == State::Hover && !invalid && !focused;
     let mut e = e
         .radius(k.radius.md)
         .fill(if hover { over(c.hover, c.bg_base) } else { c.bg_base })
-        .gradient(k.light(sheen[0]), k.light(sheen[1]))
         .token_motion(k.motion.control);
     if state == State::Disabled {
         return shadows(k, e, &k.elevation.button_neutral).dim(0.5);
     }
     if invalid {
-        e = e.outline(1.0, 0.0, c.danger.fg);
+        e = e.outline(1.0, -1.0, c.danger.fg);
     } else if focused || state == State::Focus {
-        e = e.outline(1.0, 0.0, c.border_focus);
+        e = e.outline(1.0, -1.0, c.border_focus);
     } else {
         e = shadows(k, e, &k.elevation.button_neutral);
         if state == State::Rest {
@@ -360,7 +360,7 @@ impl TextInput {
         if self.plain {
             return if disabled { e.dim(0.5) } else { e };
         }
-        shell(k, e, [0.06, 0.02], self.state, self.invalid && !disabled, self.edit.focused && !disabled)
+        shell(k, e, self.state, self.invalid && !disabled, self.edit.focused && !disabled)
     }
 }
 
@@ -524,7 +524,7 @@ impl TextArea {
             Some(w) => e.w(w),
             None => e.w_full(),
         };
-        shell(k, e, [0.02, 0.0], self.state, self.invalid && !disabled, self.edit.focused && !disabled)
+        shell(k, e, self.state, self.invalid && !disabled, self.edit.focused && !disabled)
     }
 }
 
