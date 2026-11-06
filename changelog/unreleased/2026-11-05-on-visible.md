@@ -1,0 +1,1 @@
+- `El::on_visible` tells an element when it comes on screen and when it leaves (half of it showing, or it covering half the window), after scroll viewports and a web page's own scroll, as `IntersectionObserver` does: play a demo when the reader reaches it, stop a loop nobody sees.

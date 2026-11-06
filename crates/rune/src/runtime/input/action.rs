@@ -22,6 +22,8 @@ pub(super) enum Action {
     ScreenLayout(String, [f32; 4]),
     /// `El::on_drawn_layout`; true when only a live value, scroll or animation moved it.
     DrawnLayout(String, [f32; 4], bool),
+    /// `El::on_visible`: the element came on screen or left it.
+    Visible(String, bool),
     Press(String, crate::PointerButton),
     DoublePress(String),
     Link(String, usize),
@@ -106,6 +108,7 @@ pub(super) fn live_only_handler(action: &Action) -> Option<&'static str> {
     Some(match action {
         Action::WindowFocus(_) => "on_window_focus",
         Action::DrawnLayout(..) => "on_drawn_layout_tx",
+        Action::Visible(..) => "on_visible",
         Action::Layout(..) => "on_layout_tx",
         Action::PointerMove(..) => "on_pointer_move_local",
         Action::Hover(_) => "on_hover",
@@ -134,7 +137,7 @@ pub(super) fn action_path(action: &Action) -> Option<&str> {
     match action {
         Action::PointerMove(path, _) | Action::DrawnLayout(path, ..) | Action::Layout(path, _) | Action::Hover(path) | Action::HoverChange(path, _) | Action::SelectionChange(path, _) | Action::Press(path, _) | Action::DoublePress(path)
         | Action::Link(path, _) | Action::LinkSecondary(path, ..) | Action::SecondaryPress(path, _) | Action::Drag(path, ..) | Action::DragRepeat(path, ..) | Action::DragStart(path)
-        | Action::DragEnd(path, _) => Some(path),
+        | Action::DragEnd(path, _) | Action::Visible(path, _) => Some(path),
         Action::Wheel(_, chain, _) | Action::Gesture(chain, _) => chain.first().map(String::as_str),
         _ => None,
     }
@@ -355,6 +358,11 @@ impl<S: 'static> Runtime<S> {
             Action::DrawnLayout(path, rect, _) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_drawn_layout.clone()) else { return false };
                 f(states!(self), rect, &mut one);
+                true
+            }
+            Action::Visible(path, on) => {
+                let Some(f) = self.node(&path).and_then(|n| n.handlers.on_visible.clone()) else { return false };
+                f(states!(self), on, &mut one);
                 true
             }
             Action::Hover(path) => {
