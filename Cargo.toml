@@ -30,6 +30,7 @@ members = [
     "examples/overlay",
     "examples/overlay-lab",
     "examples/lab",
+    "examples/showreel",
     "examples/video-player",
     "examples/video-tiles",
     "examples/cursed-settings",

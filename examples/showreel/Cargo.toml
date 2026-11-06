@@ -1,0 +1,15 @@
+[package]
+name = "showreel"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+rune = { path = "../../crates/rune" }
+rune-motion = { path = "../../crates/rune-motion" }
+rune-fx = { path = "../../crates/rune-fx" }
+wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "metal", "wgsl"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"] }
