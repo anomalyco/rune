@@ -36,7 +36,7 @@ impl<S: 'static> Runtime<S> {
         if !jump && self.window_resting && (cfg!(target_os = "macos") || self.wall_start.is_none()) { self.fit_hold = true; }
         let request = crate::window::frame::FrameRequest {
             size: Some((self.viewport.0, height)), animate: !jump,
-            spring: (!jump).then(|| tx.motion.unwrap_or(motion::DEFAULT)), center: false,
+            spring: (!jump).then(|| tx.motion.unwrap_or(motion::DEFAULT)), ..Default::default()
         };
         self.window_frame = Some(self.window_frame.unwrap_or_default().merge(request));
     }

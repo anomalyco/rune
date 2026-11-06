@@ -691,13 +691,6 @@ fn place_chrome(window: &Window, chrome: Chrome) -> f32 {
     }
 }
 
-fn titlebar_double_click(window: &Window) {
-    #[cfg(target_os = "macos")]
-    mac::titlebar_double_click(window);
-    #[cfg(not(target_os = "macos"))]
-    window.set_maximized(!window.is_maximized());
-}
-
 pub(crate) fn pointer_button(button: MouseButton) -> crate::PointerButton {
     match button {
         MouseButton::Left => crate::PointerButton::Primary,
@@ -743,6 +736,11 @@ impl<S: 'static> Host<S> {
         let visible = !launcher && (self.started || self.options.visible);
         #[allow(unused_mut)]
         let mut attrs = self.options.attributes(self.rt.window_title.current().unwrap_or(self.spec.title), size, self.spec.min_size, visible).with_active(focus);
+        #[cfg(target_os = "windows")]
+        if self.borderless_controls() {
+            use winit::platform::windows::WindowAttributesExtWindows;
+            attrs = attrs.with_undecorated_shadow(true);
+        }
         #[cfg(target_os = "macos")]
         if self.macos_window.nonactivating_panel { attrs = attrs.with_visible(false).with_active(false); }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -938,6 +936,7 @@ impl<S: 'static> Host<S> {
             hidden_wait: TIMEOUT_RETRY,
             hidden_pace: HiddenPace::default(),
             cursor: crate::cursor::os::OsCursor::new(event_loop),
+            resize_edges: self.borderless_controls() && self.options.resizable,
             alpha,
             quiet: false,
             presented: None,

@@ -71,6 +71,8 @@ pub(crate) const DEFAULT_MIN_SIZE: (f32, f32) = (420.0, 400.0);
 #[derive(Clone, Debug)]
 pub struct WindowOptions {
     pub transparent: bool,
+    /// Remove the system frame. On Windows and Linux a resizable borderless app window
+    /// can be resized from its edges and corners. On Windows it keeps the system shadow.
     pub borderless: bool,
     /// Clicks, and so hover, pass to whatever is below.
     pub click_through: bool,

@@ -30,6 +30,7 @@ pub(super) struct Win {
     /// When a hidden launcher renders the changes it hasn't yet.
     pub(super) hidden_pace: HiddenPace,
     pub(super) cursor: crate::cursor::os::OsCursor,
+    pub(super) resize_edges: bool,
     pub(super) alpha: Option<crate::render::surface_alpha::AlphaSurface>,
     /// Only a due timer asked for the next frame, which may then draw nothing new.
     pub(super) quiet: bool,
