@@ -27,6 +27,10 @@ pub struct Pixels {
     url: Option<Arc<str>>,
     /// The candidates `ImageCache::url_set` chose `url` from, as an HTML `srcset`.
     srcset: Option<Arc<str>>,
+    /// The `ImageCache` entry these pixels came from, so the cache still finds it while
+    /// anything draws them, and a view that asks for the image again on its next build gets it
+    /// back instead of fetching it anew.
+    keep: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 
 impl std::fmt::Debug for Pixels {
@@ -51,11 +55,17 @@ impl Pixels {
             source: crate::live::Source::new(0),
             url: None,
             srcset: None,
+            keep: None,
         }
     }
 
     pub(crate) fn from_url(url: Option<Arc<str>>, srcset: Option<Arc<str>>) -> Pixels {
         Pixels { url, srcset, ..Pixels::new() }
+    }
+
+    pub(crate) fn keeping(mut self, keep: Arc<dyn std::any::Any + Send + Sync>) -> Pixels {
+        self.keep = Some(keep);
+        self
     }
 
     /// The URL ([`ImageCache::url`](crate::ImageCache::url)) or path
