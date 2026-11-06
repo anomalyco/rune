@@ -26,6 +26,7 @@ mod recorder;
 mod shortcuts;
 mod states;
 mod system_material;
+mod titlebar;
 mod video;
 mod window;
 
@@ -299,6 +300,8 @@ pub use text::Span;
 pub use text::TextCase;
 pub use text::TextHighlight;
 pub use theme::Theme;
+pub use titlebar::ChromeInsets;
+pub use titlebar::Titlebar;
 pub use tok::Family;
 pub use tok::OpticalSize;
 pub use tok::TextStyle;

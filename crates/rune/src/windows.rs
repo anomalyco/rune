@@ -245,6 +245,8 @@ impl<S> WindowSpec<S> {
     }
     /// Configure this window's frame, including headless traffic-light placement.
     pub fn chrome(mut self, chrome: crate::Chrome) -> Self { self.app = self.app.chrome(chrome); self }
+    /// This window draws its own titlebar, like `App::titlebar`.
+    pub fn titlebar(mut self, titlebar: crate::Titlebar) -> Self { self.app = self.app.titlebar(titlebar); self }
     /// Composite this window's translucent fills, blurs, shadows, images and video in sRGB
     /// (gamma) space instead of linear light, matching CSS and Core Animation. With a
     /// `Compositor`, `Frame::srgb_blend` says which encoding its passes must match.

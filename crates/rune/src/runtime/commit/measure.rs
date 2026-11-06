@@ -55,6 +55,8 @@ impl<S: 'static> Runtime<S> {
             fit_height: self.fit_height,
             system_reduced_motion: self.system_reduced_motion,
             titlebar_inset: self.titlebar_inset,
+            chrome: self.titlebar.insets,
+            caption: self.titlebar.caption,
             system_accent: self.system_accent,
             system_scroll_bars: self.scroll_bars.state,
             reduced_motion: self.reduced_motion,
@@ -162,10 +164,14 @@ impl<S: 'static> Measurement<'_, S> {
     /// The app's view, or with the playground attached, the view it composes (the bar, or the
     /// playground around its stage).
     fn root_view(&self, cx: &mut Cx<S>) -> El {
-        match self.playground {
+        let root = match self.playground {
             Some(playground) => playground.view(self.state, self.view, cx, self.viewport),
             None => crate::playground::call(self.view, self.state, cx),
-        }
+        };
+        // The Windows caption buttons go over everything the view drew, as its root's last child.
+        let Some(caption) = &self.caption else { return root };
+        let symbol = cx.caption_color.unwrap_or(if self.env.system_dark { Color::WHITE } else { Color::BLACK });
+        root.child(crate::titlebar::buttons(caption, symbol, self.env.scale))
     }
 
     pub(super) fn finish(self, tx: &Tx) -> Measured {
@@ -342,6 +348,8 @@ impl<S: 'static> Measurement<'_, S> {
         let fresh_cx = |this: &Self| Cx::<S> {
             env: this.env,
             titlebar_inset: this.titlebar_inset,
+            chrome: this.chrome,
+            caption_color: None,
             system_accent: this.system_accent,
             system_scroll_bars: this.system_scroll_bars,
             system_reduced_motion: this.system_reduced_motion,

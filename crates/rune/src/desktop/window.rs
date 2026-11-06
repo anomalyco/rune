@@ -122,7 +122,7 @@ impl<S: 'static> Window<S> {
         let native = std::mem::take(&mut app.macos_window);
         let (modifier_keys, tab_visits_controls, srgb_blend) = (app.modifier_keys, app.tab_visits_controls, app.srgb_blend);
         let font_smoothing = app.font_smoothing;
-        let titlebar_inset = if options.borderless { 0.0 } else { app.chrome.titlebar_inset() };
+        let (chrome, titlebar) = (app.chrome, app.titlebar);
         let playground = app.playground.take();
         let (spec, state, shared) = app.into_parts(own.scene.as_deref());
         let shortcuts = crate::shortcuts::Guard::attach(&shared, Arc::new(|| {}), true, false);
@@ -138,7 +138,7 @@ impl<S: 'static> Window<S> {
         if let Some(bars) = own.scroll_bars.or(args.scroll_bars) { rt.set_system_scroll_bars(bars); }
         rt.set_srgb_blend(srgb_blend);
         rt.set_font_smoothing(font_smoothing);
-        rt.set_titlebar_inset(titlebar_inset);
+        rt.headless_chrome(chrome, titlebar, options.borderless);
         rt.transparent = options.transparent;
         rt.track_marks = comp.is_some();
         if selected && args.tree.is_some() { rt.key_warnings = Some(Vec::new()); }
