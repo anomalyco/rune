@@ -13,3 +13,5 @@ demo/**/*-strip.png
 !demo/opencode/switch-strip.png
 /captures/
 /.lab-output/
+__pycache__/
+*.pyc
