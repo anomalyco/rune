@@ -93,6 +93,21 @@ fn radial_gradients_scale_with_the_box_and_soft_clips_become_masks() {
 }
 
 #[test]
+fn text_that_wraps_anywhere_breaks_inside_a_long_word() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        crate::row().key("root").w_full().role("main")
+            .child(crate::text("crates/rune-motion/tests/spring.rs:124").key("path").wrap_anywhere().shrink())
+            .child(crate::text("words that wrap at spaces").key("prose").wrap())
+    }
+    let mut rt = Runtime::new((), view, (400.0, 600.0), Env::default());
+    rt.page_mode();
+    let nodes = taken(&mut rt, 120.0);
+    let decls = |text: &str| nodes.iter().find(|n| n.inner.starts_with(text)).map(|n| n.decls.clone()).unwrap_or_default();
+    assert!(decls("crates/").contains(&("overflow-wrap", "anywhere".into())), "{:?}", decls("crates/"));
+    assert!(!decls("words").iter().any(|d| d.0 == "overflow-wrap"));
+}
+
+#[test]
 fn an_image_source_set_gets_sizes_from_every_width() {
     let img = |w: f32| ExportNode { path: "0.0".into(), depth: 1, tag: "img", attrs: " src=\"a-640.avif\" srcset=\"a-640.avif 640w, a-1280.avif 1280w\"".into(), inner: String::new(), decls: vec![], width: w, text: false };
     let root = ExportNode { path: "0".into(), depth: 0, tag: "div", attrs: String::new(), inner: String::new(), decls: vec![], width: 0.0, text: false };

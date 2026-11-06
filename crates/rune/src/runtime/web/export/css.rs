@@ -247,6 +247,7 @@ pub(super) fn text(spec: &TextSpec, d: &mut Decls) {
         d.push(("text-overflow", "ellipsis".into()));
     } else {
         d.push(("white-space", if spec.wrap { "pre-wrap" } else { "pre" }.into()));
+        if spec.wrap_anywhere { d.push(("overflow-wrap", "anywhere".into())); }
     }
 }
 
