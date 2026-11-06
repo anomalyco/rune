@@ -9,9 +9,9 @@ use std::fmt::Write;
 use super::*;
 use crate::runtime::web_a11y::{anchor_id, container_tag};
 
-#[path = "export_css.rs"]
+#[path = "export/css.rs"]
 mod css;
-#[path = "export_page.rs"]
+#[path = "export/page.rs"]
 mod page;
 pub(crate) use page::page;
 
@@ -128,5 +128,5 @@ impl<S: 'static> Runtime<S> {
 }
 
 #[cfg(test)]
-#[path = "export_tests.rs"]
+#[path = "export/tests.rs"]
 mod tests;
