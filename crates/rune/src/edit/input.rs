@@ -221,15 +221,17 @@ impl TextEdit {
                 let i = if line { self.line_edge(layout, true) } else if word { self.next_word(self.focus) } else { next_char(&self.text, self.focus) };
                 self.move_h(i, m.shift);
             }
-            Key::Home => self.set(0, m.shift),
-            Key::End => {
-                let n = self.text.len();
-                self.set(n, m.shift)
+            // Home and End go to the text's ends on macOS. Elsewhere they go to the line's
+            // edge, and with Ctrl to the text's ends.
+            Key::Home | Key::End => {
+                let end = ev.key == Key::End;
+                let i = if cfg!(target_os = "macos") || m.ctrl { if end { self.text.len() } else { 0 } } else { self.line_edge(layout, end) };
+                self.set(i, m.shift)
             }
             Key::Up | Key::Down => {
                 let down = ev.key == Key::Down;
                 let n = self.text.len();
-                let i = if m.cmd || (self.secure && !self.revealed) {
+                let i = if line || (self.secure && !self.revealed) {
                     if down { n } else { 0 }
                 } else if let Some(l) = layout {
                     match crate::text::move_line(l, self.display_index(self.focus), down) {
@@ -253,21 +255,23 @@ impl TextEdit {
                     self.set_caret(i);
                 }
             }
-            Key::Command(c) => match c {
-                'z' if m.shift => self.redo(),
-                'z' => self.undo(),
-                'a' => {
+            // Only the plain chord: with another modifier it's the app's (Ctrl+Alt+Z).
+            Key::Command(_) => match ev.edit_command() {
+                Some('z') if m.shift => self.redo(),
+                Some('z') => self.undo(),
+                Some('y') if !cfg!(target_os = "macos") => self.redo(),
+                Some('a') => {
                     self.anchor = 0;
                     self.focus = self.text.len();
                     self.pending = None;
                 }
-                'b' | 'i' | 'u' => {
+                Some('b' | 'i' | 'u') => {
                     if let Some(mark) = self.format_chord(ev) {
                         self.toggle_mark(mark);
                     }
                 }
-                'c' if !self.secure => out.copy = Some(self.selected().to_owned()),
-                'x' if !self.secure => {
+                Some('c') if !self.secure => out.copy = Some(self.selected().to_owned()),
+                Some('x') if !self.secure => {
                     out.copy = Some(self.selected().to_owned());
                     self.insert("");
                 }

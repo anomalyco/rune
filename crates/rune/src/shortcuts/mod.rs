@@ -7,6 +7,7 @@ mod layout_macos;
 #[cfg(all(test, target_os = "macos"))]
 pub(crate) use layout_macos::force as force_layout;
 pub use keys::{PhysicalKeyCode, modifier_keycaps};
+pub(crate) use keys::{capital, us_char};
 mod service;
 #[cfg(target_os = "macos")]
 mod macos;

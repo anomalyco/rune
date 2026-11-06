@@ -238,7 +238,7 @@ impl<S: 'static> Running<S> {
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
                 immediate = true;
                 let pressed = event.state == ElementState::Pressed;
-                let mut logical = (pressed || self.rt.wants_key_up()).then(|| crate::window::map_key(&event.logical_key, self.input.mods)).flatten();
+                let mut logical = (pressed || self.rt.wants_key_up()).then(|| crate::window::map_key_event(&event, self.input.mods)).flatten();
                 if let Some(key) = &mut logical {
                     key.mods = modifiers(self.input.mods);
                     if key.mods.cmd && let crate::Key::Text(text) = &key.key && text != " " && text.chars().count() == 1 {

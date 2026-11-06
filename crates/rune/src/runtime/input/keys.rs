@@ -52,17 +52,19 @@ impl<S: 'static> Runtime<S> {
         let input_handles = match &ev.key {
             crate::edit::Key::Function(_) | crate::edit::Key::ContextMenu | crate::edit::Key::Tab | crate::edit::Key::PageUp | crate::edit::Key::PageDown
             | crate::edit::Key::Insert | crate::edit::Key::PrintScreen | crate::edit::Key::ScrollLock | crate::edit::Key::Pause => false,
-            crate::edit::Key::Command(c) => {
-                matches!(c, 'a' | 'c' | 'x' | 'z')
-                    || (matches!(c, 'b' | 'i' | 'u') && self.focused_input().is_some_and(|i| i.edit.format_chord(ev).is_some()))
-            }
+            crate::edit::Key::Command(_) => match ev.edit_command() {
+                Some('a' | 'c' | 'x' | 'z') => true,
+                Some('y') => !cfg!(target_os = "macos"),
+                Some('b' | 'i' | 'u') => self.focused_input().is_some_and(|i| i.edit.format_chord(ev).is_some()),
+                _ => false,
+            },
             _ => !ev.is_command_chord() || ev.control_binding().is_some(),
         };
         if input_handles {
             let layout = self.focused_layout();
             // A rich field copies its selection's formatting too, read before a cut removes it.
             let mut html = None;
-            let copies = matches!(ev.key, crate::edit::Key::Command('c' | 'x'));
+            let copies = matches!(ev.edit_command(), Some('c' | 'x'));
             let handled = self.with_focused(|e| {
                 if copies && e.is_rich() && !e.is_secure() {
                     html = Some(e.selected_html()).filter(|h| !h.is_empty());

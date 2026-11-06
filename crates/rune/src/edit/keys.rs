@@ -54,9 +54,13 @@ pub enum Key {
     Escape,
     Tab,
     /// Any character typed with Cmd (Ctrl off macOS), lowercased: a letter ("a", "c", "v"), a
-    /// digit (⌘1) or punctuation (⌘,). `mods` still says whether Shift, Option or Ctrl were
+    /// digit (⌘1) or punctuation (⌘,). Off macOS, a key that types a non-ASCII character
+    /// arrives as the US key in its place, so Ctrl+V on a Russian layout is `Command('v')`
+    /// (`Tx::key_base` still says "м"). `mods` still says whether Shift, Option or Ctrl were
     /// held too. Space is the exception: Cmd-Space arrives natively as `Text(" ")` with
-    /// `mods.cmd` (scripts send `Command(' ')`); no other native `Text` comes with `mods.cmd`.
+    /// `mods.cmd` (scripts send `Command(' ')`). The other native `Text` with `mods.cmd` is a
+    /// character typed with Left Ctrl + Left Alt on Windows, which is AltGr there ("@" on a
+    /// German layout's Q): it inserts, and `Chord::matches_tx` still finds "ctrl+alt+q".
     /// [`KeyEvent::is_command`] matches either form.
     Command(char),
     /// A function key, F1 through F24. Text fields ignore it; apps can bind it.
@@ -133,6 +137,15 @@ impl KeyEvent {
     pub(crate) fn is_command_chord(&self) -> bool {
         let m = self.mods;
         matches!(self.key, Key::Text(_)) && (m.cmd || m.ctrl) && (cfg!(target_os = "macos") || !m.alt)
+    }
+
+    /// The standard edit command this is (paste, copy, cut, select all, undo, redo, format):
+    /// `Key::Command(c)` with the primary modifier alone, ⌘ on macOS and Ctrl elsewhere, or
+    /// Shift too for ⇧⌘Z. Another modifier (Ctrl+Alt+V, ⌃⌘C, Ctrl+Shift+V) makes it an
+    /// app's chord, which reaches `on_key` instead.
+    pub(crate) fn edit_command(&self) -> Option<char> {
+        let Key::Command(c) = self.key else { return None };
+        (crate::input::chord::primary_alone(self.mods) && (c == 'z' || !self.mods.shift)).then_some(c)
     }
     /// A macOS Control-letter text binding (Ctrl-A, Ctrl-E, Ctrl-K, …), as in every AppKit field.
     pub(crate) fn control_binding(&self) -> Option<char> {

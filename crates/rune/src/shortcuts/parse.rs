@@ -7,11 +7,11 @@ pub(super) const SHIFT: u8 = 4;
 pub(super) const SUPER: u8 = 8;
 const PRIMARY_NAME: u8 = 16;
 
-/// A validated, layout-independent accelerator. cmd/command/logo/meta are aliases for super;
-/// option is alt; mod (primary) is super on macOS and ctrl elsewhere, as in a
-/// [`Chord`](crate::Chord), and is stored as that key. Stored keys are physical US
-/// positions. Windows resolves these to virtual keys at registration; Wayland's portal may
-/// rebind the preferred trigger.
+/// A validated, layout-independent accelerator. cmd/command/logo/meta/win are aliases for
+/// super; option/opt is alt; mod (primary) is super on macOS and ctrl elsewhere, as in a
+/// [`Chord`](crate::Chord), and is stored as that key; plus is the key that types "+" on a US
+/// layout (equal). Stored keys are physical US positions. Windows resolves these to virtual
+/// keys at registration; Wayland's portal may rebind the preferred trigger.
 /// Display uses ctrl+alt+shift+super order, lowercase keys and normalized aliases.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Shortcut {
@@ -21,7 +21,12 @@ pub struct Shortcut {
 
 impl FromStr for Shortcut {
     type Err = ShortcutError;
-    fn from_str(input: &str) -> Result<Self, Self::Err> {
+    fn from_str(input: &str) -> Result<Self, Self::Err> { Self::parse_on(input, crate::KeyPlatform::current()) }
+}
+
+impl Shortcut {
+    /// `str::parse` with `mod` resolved for `platform`: super on macOS, ctrl elsewhere.
+    pub fn parse_on(input: &str, platform: crate::KeyPlatform) -> Result<Self, ShortcutError> {
         let invalid = || ShortcutError::InvalidAccelerator(input.into());
         let mut mods = 0;
         // Names given, to refuse a repeat; "mod" is its own name, so "mod+ctrl" is ⌃⌘ on
@@ -32,10 +37,10 @@ impl FromStr for Shortcut {
             let part = part.trim().to_ascii_lowercase();
             let (name, modifier) = match part.as_str() {
                 "ctrl" | "control" => (CTRL, CTRL),
-                "alt" | "option" => (ALT, ALT),
+                "alt" | "option" | "opt" => (ALT, ALT),
                 "shift" => (SHIFT, SHIFT),
-                "cmd" | "command" | "super" | "meta" | "logo" => (SUPER, SUPER),
-                "mod" | "primary" => (PRIMARY_NAME, if cfg!(target_os = "macos") { SUPER } else { CTRL }),
+                "cmd" | "command" | "super" | "meta" | "logo" | "win" => (SUPER, SUPER),
+                "mod" | "primary" => (PRIMARY_NAME, if platform == crate::KeyPlatform::Mac { SUPER } else { CTRL }),
                 _ => (0, 0),
             };
             if modifier != 0 {
@@ -48,7 +53,7 @@ impl FromStr for Shortcut {
                     "esc" => "escape", "return" | "numpadenter" => "enter", "spacebar" => "space",
                     "arrowleft" => "left", "arrowright" => "right", "arrowup" => "up", "arrowdown" => "down",
                     "del" => "delete", "ins" => "insert", "pgup" => "pageup", "pgdn" => "pagedown",
-                    "-" => "minus", "=" => "equal", "," => "comma", "." => "period", "/" => "slash",
+                    "-" => "minus", "=" | "plus" => "equal", "," => "comma", "." => "period", "/" => "slash",
                     ";" => "semicolon", "'" => "quote", "[" => "bracketleft", "]" => "bracketright",
                     "\\" => "backslash", "`" => "backquote",
                     name => name
