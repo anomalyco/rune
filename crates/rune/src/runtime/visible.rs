@@ -22,11 +22,14 @@ impl<S: 'static> Runtime<S> {
         let last = std::mem::take(&mut self.visible_fired);
         let mut seen = HashMap::with_capacity_and_hasher(last.len(), Default::default());
         let mut queued = false;
+        // A page draws a band that starts above the window and ends below it; what's on screen is
+        // the window inside the band, not the band.
+        let (top, view) = self.page_window();
         for i in 0..self.nodes.len() {
             let n = &self.nodes[i];
             if n.handlers.get().is_none_or(|h| h.on_visible.is_none()) || self.subtree_exiting(i) { continue; }
             let Some(&drawn) = self.drawn.get(i) else { continue };
-            let on = on_screen(drawn, self.viewport);
+            let on = on_screen([drawn[0], drawn[1] - top, drawn[2], drawn[3]], (self.viewport.0, view));
             seen.insert(n.id, on);
             if last.get(&n.id).copied().unwrap_or(false) != on {
                 let path = n.path.clone();

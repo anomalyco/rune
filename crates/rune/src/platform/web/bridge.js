@@ -66,12 +66,16 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     const a11y = document.createElement('div');
     a11y.setAttribute('data-rune-a11y', '');
     a11y.setAttribute('role', 'document');
+    let band = null;
     if (page) {
-        // In the body's flow, as tall as the content, so the page scrolls it; the canvas under
-        // it draws the band in view. Its rects are in document coordinates. Text running past a
-        // horizontal scroller's edge is clipped at the page's, so it can't widen the page (a
-        // phone would zoom out to fit it). Vertical pans are the page's; a horizontal scroller
-        // inside it takes its own.
+        // The canvas is a band of the page, not a window fixed to the screen: clipped to the
+        // page's own height, in the document's flow, so the browser's compositor scrolls the
+        // pixels Rune drew rather than moving a fixed layer at a frame's delay.
+        band = document.createElement('div');
+        band.setAttribute('data-rune-band', '');
+        band.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:0;overflow:hidden;overflow:clip;pointer-events:none;';
+        canvas.replaceWith(band);
+        band.append(canvas);
         a11y.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:0;overflow-x:clip;pointer-events:none;z-index:1;color:transparent;touch-action:pan-y pinch-zoom;';
         const style = document.createElement('style');
         style.textContent = PAGE_CSS;
@@ -88,7 +92,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     const h = { canvas, textarea, password, a11y, a11yNodes: new Map(), field: textarea, key: '', base: 0, value: '',
         copyText: '', composing: false, composition: '', shift: false, listeners: [], syncing: false, disposed: false,
         embedded, fitHeight, page, focused: false, presented: false, swapped: false, touchDown: false,
-        lastScrollAt: 0, staticTimer: 0, scrollEls: new Map() };
+        lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band };
     const send = event => {
         const message = JSON.stringify(event);
         if (h.syncing) queueMicrotask(() => { if (!h.disposed) callback(message); });
@@ -378,6 +382,9 @@ export function syncA11y(h, json) {
 export function syncPage(h, height, focused) {
     h.focused = focused;
     h.a11y.style.height = `${height}px`;
+    // The clipper is as tall as the page, so the band's overscan past the document's end is
+    // clipped instead of making the page scrollable past its foot.
+    if (h.band && h.band.style.height !== `${height}px`) h.band.style.height = `${height}px`;
 }
 
 // A horizontal viewport Rune scrolled itself (a wheel, a key): move the mirror's container to
@@ -467,6 +474,8 @@ export function destroy(h) {
     for (const remove of h.listeners) remove();
     h.password.value = ''; h.textarea.value = ''; h.copyText = '';
     h.a11yNodes.clear();
+    h.scrollEls.clear();
     h.a11y.remove();
+    h.band?.remove();
     h.password.remove(); h.textarea.remove();
 }

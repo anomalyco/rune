@@ -62,8 +62,7 @@ impl Bridge {
                 // A DOM event fired synchronously by page JavaScript Rune called mid-frame (a
                 // same-tab router tearing the route down) is dropped rather than re-entering.
                 let Ok(mut running) = running.try_borrow_mut() else { return };
-                if let Some(r) = &mut *running { r.input_event(&mut event, &window); }
-                window.request_redraw();
+                if let Some(r) = &mut *running && r.input_event(&mut event, &window) { window.request_redraw(); }
             }
         });
         // A page's canvas is sized by its style and reports no safe area: the page lays out
@@ -118,7 +117,9 @@ impl<S: 'static> Running<S> {
         if focus { activate(&self.input.handle); }
     }
 
-    pub(super) fn input_event(&mut self, event: &mut serde_json::Value, window: &Arc<Window>) {
+    /// Handles one DOM event. Returns whether a frame must be drawn: a page's scroll only draws
+    /// when it moves the band (the browser's compositor scrolls the pixels Rune already drew).
+    pub(super) fn input_event(&mut self, event: &mut serde_json::Value, window: &Arc<Window>) -> bool {
         let mut activate = false;
         match event["kind"].as_str() {
             Some("viewport") => {
@@ -127,7 +128,7 @@ impl<S: 'static> Running<S> {
                 // A phone reports the visual viewport on every scroll frame as its toolbar moves;
                 // when neither the safe area nor the largest viewport moved, there's nothing to do.
                 let moved = LARGE_VIEWPORT.replace(h) != h;
-                if INSETS.replace(insets) == insets && !moved { return; }
+                if INSETS.replace(insets) == insets && !moved { return false; }
                 if moved { self.resize_surface(window, window.inner_size(), window.scale_factor() as f32); }
                 self.rt.invalidate();
             }
@@ -140,7 +141,7 @@ impl<S: 'static> Running<S> {
             Some("focus") => self.rt.window_focus(event["focused"].as_bool().unwrap_or(false)),
             Some("visibility") => {
                 self.shared.visible.store(event["visible"].as_bool().unwrap_or(false), Ordering::Release);
-                return;
+                return false;
             }
             Some("edit" | "selection" | "preedit") => self.rt.web_edit(event),
             Some("sync") => self.input.mirror.key.clear(), // Composition's final sync was deferred by the DOM.
@@ -161,25 +162,27 @@ impl<S: 'static> Running<S> {
             // The page scrolled: draw the band in view, and hover what is now under the pointer.
             // The redraw that follows the event draws it; nothing commits.
             Some("scroll") => {
-                if self.rt.set_page_scroll(event["y"].as_f64().unwrap_or(0.0) as f32)
-                    && let Some((x, y)) = self.rt.pointer().filter(|_| !self.rt.touching())
-                {
-                    self.rt.pointer_move(x, y);
+                let before = self.rt.page_scroll_y();
+                let moved = self.rt.set_page_scroll(event["y"].as_f64().unwrap_or(0.0) as f32);
+                // The pointer keeps its place on screen while the band moves under it.
+                let turned = self.rt.page_scroll_y() - before;
+                if turned != 0.0 && let Some((x, y)) = self.rt.pointer().filter(|_| !self.rt.touching()) {
+                    self.rt.pointer_move(x, y + turned);
                 }
-                return;
+                return moved;
             }
             // A page's horizontal viewport scrolled natively, by the browser's own compositor.
             Some("scroll_x") => {
                 let path = event["path"].as_str().unwrap_or_default();
                 let x = event["x"].as_f64().unwrap_or(0.0) as f32;
-                self.rt.set_page_scroll_x(path, x);
-                return;
+                return self.rt.set_page_scroll_x(path, x);
             }
             // The pointer is over mirrored text or a link, which takes it from the canvas.
             Some("hover") => {
+                // The mirror's pointer is in window points; the canvas draws the band.
                 let (x, y) = (event["x"].as_f64().unwrap_or(0.0) as f32, event["y"].as_f64().unwrap_or(0.0) as f32);
-                if !self.rt.touching() { self.rt.pointer_move(x, y); }
-                return;
+                if !self.rt.touching() { self.rt.pointer_move(x, y + self.rt.page_window().0); }
+                return false;
             }
             _ => {}
         }
@@ -188,6 +191,7 @@ impl<S: 'static> Running<S> {
         self.apply_frame_requests(window);
         self.clipboard.flush(&mut self.rt);
         self.sync_input(activate);
+        true
     }
 
     pub(super) fn window_input(&mut self, event: &WindowEvent, window: &Arc<Window>) -> bool {

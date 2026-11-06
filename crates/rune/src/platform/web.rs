@@ -6,6 +6,10 @@ use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{Ac
     platform::web::{EventLoopExtWebSys, WindowAttributesExtWebSys, WindowExtWebSys}, window::{Window, WindowId}};
 use crate::{App, Runtime, Env, render::{Gpu, Renderer}, time::Instant};
 use super::web_math;
+
+/// The overscan a page's canvas carries above and below the window, in CSS points: the distance
+/// the browser's compositor can scroll before Rune has to draw a new band.
+const SKIRT: f32 = 256.0;
 mod input;
 mod page;
 pub(crate) mod platform;
@@ -104,6 +108,8 @@ struct Running<S: 'static> {
     document: bool,
     /// The first frame is on screen.
     presented: bool,
+    /// Where the canvas was last put in the document (a page's band top), in points.
+    band: Option<f32>,
     cursor: crate::cursor::os::OsCursor,
     _menus: crate::native_menu::Guard<S>,
     shortcuts: crate::shortcuts::Guard,
@@ -122,10 +128,16 @@ impl<S: 'static> Running<S> {
     }
 
     pub(super) fn resize_surface(&mut self, window: &Window, size: winit::dpi::PhysicalSize<u32>, scale: f32) {
+        let max_dim = self.gpu.device.limits().max_texture_dimension_2d.max(1);
+        if self.document {
+            // The canvas covers a band of the page: size it before the box is measured.
+            let (view, band) = band_css(window, scale, max_dim);
+            set_band_height(window, band);
+            self.rt.set_band(band, view);
+        }
         let size = window.canvas().map_or(size, |c| canvas_physical(&c, size, scale));
         self.suspended = size.width == 0 || size.height == 0;
         if self.suspended { return; }
-        let max_dim = self.gpu.device.limits().max_texture_dimension_2d.max(1);
         let next = (size.width.min(max_dim), size.height.min(max_dim));
         let (kept, reconfigure) = web_math::should_reconfigure_surface((self.config.width, self.config.height), next, self.document);
         if reconfigure {
@@ -133,7 +145,20 @@ impl<S: 'static> Running<S> {
             self.config.height = kept.1;
             self.surface.configure(&self.gpu.device, &self.config);
         }
-        self.rt.set_viewport((kept.0 as f32 / scale, kept.1 as f32 / scale), scale);
+        self.rt.set_viewport((next.0 as f32 / scale, next.1 as f32 / scale), scale);
+    }
+
+    /// Puts a page's canvas where the band it just drew starts in the document. The browser's
+    /// compositor scrolls those pixels itself, at its own rate, until the window nears the band's
+    /// edge and the next frame draws a new one.
+    fn sync_band(&mut self, window: &Window) {
+        if !self.document { return; }
+        let top = self.rt.page_offset();
+        if self.band == Some(top) { return; }
+        self.band = Some(top);
+        if let Some(canvas) = window.canvas() {
+            let _ = canvas.style().set_property("transform", &format!("translate3d(0,{top}px,0)"));
+        }
     }
 
     pub(super) fn apply_frame_requests(&mut self, window: &Window) {
@@ -151,6 +176,29 @@ impl<S: 'static> Running<S> {
             && let Some(canvas) = window.canvas()
         {
             let _ = canvas.style().set_property("height", &format!("{h}px"));
+        }
+    }
+}
+
+/// A page's band in CSS points: `view`, how much of the document the window shows at once, and
+/// `band`, the canvas that covers it. The view height is the *largest* viewport (`100lvh`), so a
+/// phone's toolbar coming and going never changes the band. The skirt is clamped so the texture
+/// stays inside the device's limit; a viewport already at the limit has no skirt.
+fn band_css(window: &Window, scale: f32, max_dim: u32) -> (f32, f32) {
+    let scale = scale.max(1e-3);
+    let reported = large_viewport();
+    let view = if reported > 0.0 { reported } else { window.inner_size().height as f32 / scale };
+    let max = max_dim as f32 / scale;
+    let band = (view + 2.0 * SKIRT).min(max.max(view));
+    (view, band)
+}
+
+/// The canvas's CSS height is its band, in points.
+fn set_band_height(window: &Window, band: f32) {
+    if let Some(canvas) = window.canvas() {
+        let height = format!("{band}px");
+        if canvas.style().get_property_value("height").unwrap_or_default() != height {
+            let _ = canvas.style().set_property("height", &height);
         }
     }
 }
@@ -272,12 +320,12 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             let _ = canvas.set_attribute("tabindex", "0");
         }
         if self.document {
-            // The browser scrolls the page under a canvas fixed to the layout viewport, which
-            // draws the band in view; vertical pans and pinches stay the browser's. Its height is
-            // the *largest* viewport (`100lvh`), so Safari's toolbar collapsing and expanding
-            // never resizes it: no ResizeObserver event and no surface configured again mid-scroll.
+            // The browser scrolls the page over a canvas that is part of the document, not fixed
+            // to the screen: the compositor moves the pixels Rune drew at the display's own rate,
+            // and a frame is only drawn when the window nears the band's edge. Rune puts it in a
+            // clipper as tall as the page (the bridge) and translates it to `page.top`.
             let _ = canvas.set_attribute("tabindex", "-1");
-            canvas.style().set_css_text("position:fixed;left:0;top:0;width:100%;height:100%;height:100lvh;display:block;touch-action:pan-y pinch-zoom;outline:none;user-select:none;-webkit-user-select:none");
+            canvas.style().set_css_text("position:absolute;left:0;top:0;width:100%;display:block;transform:translate3d(0,0,0);will-change:transform;pointer-events:auto;touch-action:pan-y pinch-zoom;outline:none;user-select:none;-webkit-user-select:none");
             if let Some(document) = web_sys::window().and_then(|w| w.document()) {
                 self.borrowed.viewport(&document);
                 document.set_title(app.spec.title);
@@ -347,6 +395,17 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             let playground = app.playground.take();
             let (spec, state, shared) = app.into_parts(None);
             let scale = window.scale_factor() as f32;
+            let document = self.document;
+            // A page's canvas is its band: the visible height plus a skirt of overscan, sized
+            // before the box is measured so the first frame is that tall.
+            let band = if document {
+                let max_dim = gpu.device.limits().max_texture_dimension_2d.max(1);
+                let (view, band) = band_css(window, scale, max_dim);
+                set_band_height(window, band);
+                Some((view, band))
+            } else {
+                None
+            };
             // Both sides from the canvas's own box: a browser that reports the box in CSS pixels
             // (Chromium's emulated device scale) would otherwise leave the height at the CSS
             // height, which its style stretches back over the screen: a 2× vertical stretch.
@@ -359,10 +418,10 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             let wake: crate::Waker = Arc::new(move || { let _ = proxy.send_event(Wake::App); });
             let mut rt = crate::tooling::runtime_for(&spec, state, (size.width as f32 / scale, size.height as f32 / scale), Env::new(dark, scale), wake.clone());
             crate::playground::attach(&mut rt, playground, &spec, None, None, true);
-            let document = self.document;
-            if document {
+            if let Some((view, band)) = band {
                 rt.page_mode();
-                rt.set_viewport((size.width as f32 / scale, size.height as f32 / scale), scale);
+                rt.set_band(band, view);
+                rt.set_viewport((size.width as f32 / scale, band), scale);
             } else if fit_height {
                 rt.fit_height = true;
                 let w = (size.width as f32 / scale).max(1.0);
@@ -412,7 +471,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 input::Mode { embedded: self.embedded, fit_height, document });
             *self.running.borrow_mut() = Some(Running { gpu, surface, config, renderer, rt, shared, input, clipboard,
                 clock: crate::frame::clock::FrameClock::new(now), compositor, suspended: false, embedded: self.embedded,
-                document, presented: false,
+                document, presented: false, band: None,
                 cursor, _menus: menus, shortcuts });
         }
         if let Some(r) = &mut *self.running.borrow_mut() {
@@ -489,6 +548,8 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 }
                 r.renderer.submit(&r.gpu.queue, encoder);
                 window.pre_present_notify();
+                // In the same commit as the frame: the canvas moves to where this frame drew it.
+                r.sync_band(window);
                 r.gpu.queue.present(frame);
                 if !r.presented {
                     r.presented = true;
