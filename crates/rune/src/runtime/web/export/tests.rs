@@ -96,6 +96,9 @@ fn radial_gradients_scale_with_the_box_and_soft_clips_become_masks() {
 fn an_image_source_set_gets_sizes_from_every_width() {
     let img = |w: f32| ExportNode { path: "0.0".into(), depth: 1, tag: "img", attrs: " src=\"a-640.avif\" srcset=\"a-640.avif 640w, a-1280.avif 1280w\"".into(), inner: String::new(), decls: vec![], width: w, text: false };
     let root = ExportNode { path: "0".into(), depth: 0, tag: "div", attrs: String::new(), inner: String::new(), decls: vec![], width: 0.0, text: false };
-    let (body, _) = page(&[(360.0, vec![root.clone(), img(328.0)]), (1000.0, vec![root, img(500.0)])]);
+    let (body, css) = page(&[(360.0, vec![root.clone(), img(328.0)]), (1000.0, vec![root, img(500.0)])]);
     assert!(body.contains(" sizes=\"(min-width:1000px) 50vw,92vw\">"), "{body}");
+    // The `height` attribute is the size it was laid out at; at any other width its class's
+    // `aspect-ratio` or height decides, so the reset sits under every class (`:where`).
+    assert!(css.contains(":where([data-rune-static]) img{height:auto}"), "{css}");
 }

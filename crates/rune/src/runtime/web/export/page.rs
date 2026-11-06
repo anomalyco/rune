@@ -9,7 +9,7 @@ use super::ExportNode;
 
 /// The rule every exported element starts from: a Rune element is a flex row, positioned, with
 /// its border inside its size. A text element (class `t`) holds inline runs instead.
-pub(crate) const BASE_CSS: &str = "[data-rune-static],[data-rune-static] *{box-sizing:border-box;display:flex;position:relative;margin:0;padding:0;min-width:0;border:0 solid transparent}[data-rune-static] a{color:inherit;text-decoration:none}[data-rune-static] .t>*{display:inline;position:static}[data-rune-static] img{display:block}[data-rune-static] svg{display:block;position:absolute;inset:0}";
+pub(crate) const BASE_CSS: &str = "[data-rune-static],[data-rune-static] *{box-sizing:border-box;display:flex;position:relative;margin:0;padding:0;min-width:0;border:0 solid transparent}[data-rune-static] a{color:inherit;text-decoration:none}[data-rune-static] .t>*{display:inline;position:static}[data-rune-static] img{display:block}:where([data-rune-static]) img{height:auto}[data-rune-static] svg{display:block;position:absolute;inset:0}";
 
 /// The value a property takes where a width sets nothing, matching `BASE_CSS`.
 fn initial(prop: &str) -> &'static str {
