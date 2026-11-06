@@ -127,7 +127,7 @@ impl<T: 'static> AnyHost for Overlay<T> {
             }
             WindowEvent::KeyboardInput { event, .. } if self.options.keys == KeyPolicy::OnDemand => {
                 let pressed = event.state.is_pressed();
-                let fallback = (pressed || self.rt.wants_key_up()).then(|| crate::window::map_key(&event.logical_key, self.mods)).flatten();
+                let fallback = (pressed || self.rt.wants_key_up()).then(|| crate::window::map_key_event(&event, self.mods)).flatten();
                 if let winit::keyboard::PhysicalKey::Code(key) = event.physical_key {
                     self.dirty |= self.rt.physical_then(crate::PhysicalInput::Key {
                         key, mods: crate::window::map_mods(self.mods), pressed, repeat: event.repeat,

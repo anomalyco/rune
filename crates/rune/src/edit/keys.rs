@@ -1,15 +1,26 @@
 //! Key events as the shell hands them to handlers and the focused field.
 use zeroize::Zeroize;
 
+/// The modifiers held with a key. `shift`, `alt`, `ctrl` and `logo` are keys; `cmd` is the
+/// platform's primary shortcut modifier, reported alongside its key: ⌘ on macOS (with `logo`)
+/// and Ctrl elsewhere (with `ctrl`), so Ctrl+W on Windows is `{ cmd, ctrl }`. A test of
+/// `cmd && !ctrl` therefore never passes off macOS. Match shortcuts with a
+/// [`Chord`](crate::Chord) ("mod+w", "ctrl+tab") rather than by comparing flags.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Mods {
     pub shift: bool,
-    /// Cmd on macOS, Ctrl elsewhere.
+    /// The primary shortcut modifier: ⌘ on macOS, Ctrl elsewhere (the web reports either).
     pub cmd: bool,
     pub alt: bool,
+    /// The Control key, on every platform; off macOS `cmd` is set with it.
     pub ctrl: bool,
     /// The Super/Windows key (Command on macOS, where `cmd` also reports it).
     pub logo: bool,
+}
+
+impl Mods {
+    /// Whether the platform's primary shortcut modifier is held: `cmd`.
+    pub fn primary(self) -> bool { self.cmd }
 }
 
 /// A logical key. More keys may come, so a `match` needs a `_` arm.

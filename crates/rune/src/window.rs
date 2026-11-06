@@ -43,7 +43,9 @@ mod platform_sync;
 use platform_sync::sync_platform;
 mod shell_requests;
 mod keys;
-pub(crate) use keys::{key_base, map_key, map_mods};
+pub(crate) use keys::{key_base, map_key_event, map_mods};
+#[cfg(target_arch = "wasm32")]
+pub(crate) use keys::map_key;
 mod any_host;
 mod event_loop;
 mod events;
