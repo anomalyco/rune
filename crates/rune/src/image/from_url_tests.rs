@@ -63,6 +63,7 @@ fn a_source_set_loads_the_narrowest_wide_enough_and_keeps_every_size() {
     let phone = cache.url_set(&sources, 300.0, 2.0);
     assert_eq!(phone.pixels().source_url(), Some("https://example.com/a-640.avif"));
     assert_eq!(phone.pixels().source_set(), Some("https://example.com/a-640.avif 640w, https://example.com/a-1280.avif 1280w"));
+    assert!(Arc::ptr_eq(&phone.0, &cache.url_set(&sources, 310.0, 2.0).0), "one handle per chosen file");
     assert_eq!(cache.url_set(&sources, 400.0, 2.0).pixels().source_url(), Some("https://example.com/a-1280.avif"));
     assert_eq!(cache.url_set(&sources, 900.0, 2.0).pixels().source_url(), Some("https://example.com/a-1280.avif"), "the widest when none is wide enough");
     assert_eq!(cache.url("https://example.com/a-640.avif", 300.0, 2.0).pixels().source_set(), None);
