@@ -33,6 +33,9 @@ pub fn commit_generation() -> u64 {
 pub struct Cx<S> {
     pub(super) env: Env,
     pub(super) titlebar_inset: f32,
+    pub(super) chrome: crate::ChromeInsets,
+    /// `Cx::caption_color`, read once the view returns.
+    pub(super) caption_color: Option<Color>,
     pub(super) system_accent: crate::SystemAccent,
     pub(super) system_scroll_bars: crate::platform::scroll_bars::SystemScrollBars,
     pub(super) system_reduced_motion: bool,
@@ -48,7 +51,8 @@ pub struct Cx<S> {
 impl<S> Cx<S> {
     pub(crate) fn retype<T>(&self) -> Cx<T> {
         Cx {
-            env: self.env, titlebar_inset: self.titlebar_inset, system_accent: self.system_accent,
+            env: self.env, titlebar_inset: self.titlebar_inset, chrome: self.chrome, caption_color: self.caption_color,
+            system_accent: self.system_accent,
             system_scroll_bars: self.system_scroll_bars,
             system_reduced_motion: self.system_reduced_motion, reduced_motion: self.reduced_motion, time_scale: self.time_scale,
             caret: self.caret.clone(), caret_read: self.caret_read.clone(),
@@ -61,6 +65,7 @@ impl<S> Cx<S> {
     pub(crate) fn absorb<T>(&mut self, other: Cx<T>) {
         self.reduced_motion = other.reduced_motion;
         self.time_scale = other.time_scale;
+        self.caption_color = other.caption_color;
         self.caret_read.set(self.caret_read.get() || other.caret_read.get());
         let mut reads = self.layout_reads.borrow_mut();
         for read in other.layout_reads.into_inner() {
@@ -98,6 +103,21 @@ impl<S> Cx<S> {
     /// it needs it in its version.
     pub fn titlebar_inset(&self) -> f32 {
         self.titlebar_inset
+    }
+    /// What the window's own controls take of a titlebar the app draws (`App::titlebar`):
+    /// the macOS traffic lights at the leading edge, the Windows caption buttons at the
+    /// trailing edge, and the band's height. Zero where the native frame stays. Keep the
+    /// titlebar's own controls clear of both ends. Headless runs report what this platform's
+    /// window would.
+    pub fn chrome_insets(&self) -> crate::ChromeInsets {
+        self.chrome
+    }
+    /// The colour of the Windows caption buttons' symbols (Electron's `titleBarOverlay`
+    /// `symbolColor`), for a titlebar whose colours follow the app's theme rather than the
+    /// system's light or dark setting: by default black in light mode, white in dark. Their
+    /// hover and press washes are this colour at 10% and 20%; close turns red either way.
+    pub fn caption_color(&mut self, color: Color) {
+        self.caption_color = Some(color);
     }
     /// The user's accent colour (System Settings › Appearance on macOS) for this window's
     /// appearance, [`SystemAccent::DEFAULT`](crate::SystemAccent::DEFAULT)'s blue elsewhere and

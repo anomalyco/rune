@@ -183,6 +183,9 @@ impl<S: 'static> Host<S> {
     /// opens the pop-up menu it asked for, if the window is still there to open it over.
     pub(super) fn shell(&mut self, event_loop: &ActiveEventLoop) {
         self.show_title();
+        if self.rt.take_toggle_maximized() && let Some(w) = self.win.as_ref().filter(|w| w.visible) {
+            w.window.set_maximized(!w.window.is_maximized());
+        }
         for _ in 0..8 {
             let minimize = std::mem::take(&mut self.rt.minimize_request);
             match self.rt.shell_request.take() {

@@ -29,6 +29,8 @@ use crate::windows::{AnyWindowSpec, Display, WindowOptions, WindowSpec};
 mod launch_drawables;
 #[cfg(target_os = "macos")]
 use launch_drawables::LaunchDrawables;
+mod chrome;
+use chrome::{place_chrome, sync_chrome, titlebar_double_click};
 mod native;
 use native::Native;
 mod win;
@@ -316,6 +318,8 @@ use file_drop::{DROP_SAMPLE, FileDrop, FileStep};
 
 struct Host<S: 'static> {
     chrome: Chrome,
+    /// `App::titlebar`, unless the window is borderless.
+    titlebar: Option<crate::Titlebar>,
     options: WindowOptions,
     placement: Option<crate::windows::PlaceRequest>,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -412,6 +416,10 @@ impl<S: 'static> Host<S> {
         let mut app = app;
         let comp = app.compositor.take();
         let (on_focus, on_ime) = (app.on_focus, app.on_ime);
+        let titlebar = app.titlebar.filter(|_| !options.borderless);
+        #[cfg(target_os = "macos")]
+        let chrome = titlebar.map_or(app.chrome, |t| t.mac_chrome(app.chrome));
+        #[cfg(not(target_os = "macos"))]
         let chrome = app.chrome;
         let (srgb_blend, font_smoothing) = (app.srgb_blend, app.font_smoothing);
         let modifier_keys = app.modifier_keys;
@@ -469,6 +477,7 @@ impl<S: 'static> Host<S> {
         let menus = crate::native_menu::Guard::attach(&shared, false);
         Host {
             chrome,
+            titlebar,
             options,
             placement: None,
             macos_window,
@@ -675,29 +684,6 @@ fn uses_drag_regions(chrome: Chrome, borderless: bool, panel: bool) -> bool {
     chrome.drag_regions && (borderless || chrome.full_size_content) && !panel
 }
 
-/// Places the traffic lights and returns `Cx::titlebar_inset`.
-fn place_chrome(window: &Window, chrome: Chrome) -> f32 {
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(p) = chrome.traffic_lights {
-            crate::platform::macos::traffic_lights::place(window, p);
-        }
-        mac::titlebar_inset(window)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (window, chrome);
-        0.0
-    }
-}
-
-fn titlebar_double_click(window: &Window) {
-    #[cfg(target_os = "macos")]
-    mac::titlebar_double_click(window);
-    #[cfg(not(target_os = "macos"))]
-    window.set_maximized(!window.is_maximized());
-}
-
 pub(crate) fn pointer_button(button: MouseButton) -> crate::PointerButton {
     match button {
         MouseButton::Left => crate::PointerButton::Primary,
@@ -770,6 +756,9 @@ impl<S: 'static> Host<S> {
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
         #[cfg(target_os = "windows")]
         crate::platform::win32::follow_suggested_rect(&window);
+        // Before it shows, so the title bar never appears.
+        #[cfg(target_os = "windows")]
+        let frame = self.titlebar.and_then(|t| crate::platform::win32::CustomFrame::install(&window, t.height()));
         #[cfg(target_os = "windows")]
         let cloak = crate::platform::win32::Cloak::default();
         #[cfg(target_os = "windows")]
@@ -921,7 +910,7 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "windows")]
         cloak.extend(Instant::now() + win::READY_FALLBACK);
         #[cfg(target_os = "windows")]
-        let native = Native { cloak };
+        let native = Native { cloak, frame };
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let native = Native::default();
         self.win = Some(Win {
@@ -961,7 +950,7 @@ impl<S: 'static> Host<S> {
                 w.resize_surface(&gpu.device, size);
                 self.rt.set_viewport((size.width as f32 / scale, size.height as f32 / scale), scale);
             }
-            self.rt.set_titlebar_inset(place_chrome(&w.window, self.chrome));
+            sync_chrome(&mut self.rt, w, self.chrome, self.titlebar);
             if let Some(origin) = screen_origin(&w.window) {
                 self.rt.set_window_origin(origin);
             }

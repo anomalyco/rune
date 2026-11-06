@@ -28,6 +28,7 @@ impl<S: 'static> Runtime<S> {
         self.keyboard_focus = false;
         self.dismiss_help();
         self.secondary_capture = self.secondary_target(x, y).map(str::to_owned);
+        self.secondary_region_down(x, y, self.secondary_capture.is_some());
         let i = self.secondary_capture.as_ref().and_then(|p| self.nodes.iter().position(|n| &n.path == p));
         self.secondary_link_down(i, x, y);
     }
@@ -35,6 +36,7 @@ impl<S: 'static> Runtime<S> {
     pub fn secondary_up(&mut self, x: f32, y: f32) {
         self.pointer = Some((x, y));
         let down_link = self.take_secondary_link();
+        self.secondary_region_up(x, y);
         if let Some(path) = self.secondary_capture.take()
             && self.secondary_target(x, y) == Some(path.as_str())
         {

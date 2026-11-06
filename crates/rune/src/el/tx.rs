@@ -56,6 +56,8 @@ pub struct Tx {
     pub(crate) wakes: Vec<std::time::Duration>,
     pub(crate) shell: Option<Shell>,
     pub(crate) minimize: bool,
+    /// `Tx::toggle_maximized`.
+    pub(crate) toggle_maximized: bool,
     /// `Tx::drop_point`.
     pub(crate) drop_point: Option<PointerEvent>,
     pub(crate) title: Option<String>,
@@ -199,6 +201,12 @@ impl Tx {
     /// A close or quit asked in the same change wins.
     pub fn minimize(&mut self) {
         self.minimize = true;
+    }
+
+    /// Maximize this window after this handler, or restore it when it is maximized, as its
+    /// maximize button would (macOS zooms). Does nothing for overlays and headless runs.
+    pub fn toggle_maximized(&mut self) {
+        self.toggle_maximized = true;
     }
 
     /// Set this window's title after this handler, in its title bar and the Window menu. The

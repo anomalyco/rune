@@ -915,6 +915,17 @@ rune::App::new(spec).fit_content_height().run();
   `traffic_lights: Some((x, y))` places the close button's top-left at `x, y` points (Electron's
   `trafficLightPosition`). Rune places the buttons again after every resize, scale change, focus change
   and un-occlusion. On Windows and Linux both options do nothing; the system titlebar stays.
+- **`App::titlebar` / `WindowSpec::titlebar`** (`Titlebar::new(height)`): the app draws its own
+  titlebar `height` points tall and the window keeps its controls over it. macOS gets a full-size
+  content view with drag regions and the traffic lights centred in the band (unless
+  `Chrome::traffic_lights` places them). Windows loses its native title bar but keeps resize edges,
+  Aero Snap, the snap layouts flyout over maximize, the window menu (Alt+Space, or a right-click on a
+  `.window_drag()` region) and its animations; Rune draws the caption buttons over the trailing edge
+  (Electron's `titleBarOverlay`: 46 points wide, close turns red), as elements named Minimize,
+  Maximize or Restore, and Close for assistive technology. `Cx::chrome_insets()` says what the
+  controls take (`leading`, `trailing`, `height`; zero where the native frame stays, as on Linux),
+  `Cx::caption_color(c)` colours the caption symbols for an app theme, and `Tx::toggle_maximized()`
+  maximizes or restores. See `examples/custom_titlebar.rs`.
 - **`AppSpec::new(title, size, init, view)`** fills every other field with its default; literals
   that set a few more end with `..AppSpec::new(..)`. Window chrome lives on the builders, keeping
   existing exhaustive `AppSpec` literals source-compatible.

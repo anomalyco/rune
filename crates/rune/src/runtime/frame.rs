@@ -160,6 +160,7 @@ impl<S: 'static> Runtime<S> {
         self.run_pick_reads(tx);
         self.shell_request = self.shell_request.max(tx.shell.take());
         self.minimize_request |= std::mem::take(&mut tx.minimize);
+        self.titlebar.toggle_maximized |= std::mem::take(&mut tx.toggle_maximized);
         self.latch_playground(tx);
         if !tx.open_urls.is_empty() { self.open_urls(std::mem::take(&mut tx.open_urls)); }
         if std::mem::take(&mut tx.clear_secret) {

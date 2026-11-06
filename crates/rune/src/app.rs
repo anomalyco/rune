@@ -42,6 +42,7 @@ pub(crate) type OnWindow = Box<dyn FnMut(&crate::WindowHandle)>;
 pub struct App<S: 'static> {
     pub(crate) spec: AppSpec<S>,
     pub(crate) chrome: crate::Chrome,
+    pub(crate) titlebar: Option<crate::Titlebar>,
     init: Option<Box<dyn FnOnce() -> S>>,
     argv: Option<Vec<String>>,
     pub(crate) open: bool,
@@ -91,6 +92,7 @@ impl<S: 'static> App<S> {
         App {
             spec,
             chrome: crate::Chrome::DEFAULT,
+            titlebar: None,
             init: None,
             argv: None,
             open: true,
@@ -151,6 +153,15 @@ impl<S: 'static> App<S> {
     /// Configure this window's frame. Overlays retain their own native behaviour.
     pub fn chrome(mut self, chrome: crate::Chrome) -> Self {
         self.chrome = chrome;
+        self
+    }
+
+    /// Draw this window's titlebar in the view, `Titlebar::height` points tall, with the
+    /// window's own controls over it (see [`crate::Titlebar`]): macOS keeps its traffic lights,
+    /// Windows gets caption buttons Rune draws, and `Cx::chrome_insets` says what they take.
+    /// Mark the band `.window_drag()`.
+    pub fn titlebar(mut self, titlebar: crate::Titlebar) -> Self {
+        self.titlebar = Some(titlebar);
         self
     }
 
