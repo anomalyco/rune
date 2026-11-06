@@ -282,20 +282,33 @@ impl ImageCache {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let image = image.clone();
+            // The task holds the image weakly, so a request dropped before it runs (a view's
+            // guess, replaced in the same frame once layout knows the size) fetches nothing,
+            // and one dropped while its bytes download is never decoded.
+            let weak = Arc::downgrade(&image.0);
             let wake = self.wake.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let decoded = match input {
-                    Input::Url(url, px) => from_url::fetch(&url, px).await,
+                    Input::Url(url, px) => {
+                        if !wanted(&weak) { return; }
+                        let fetched = from_url::fetch(&url).await;
+                        if !wanted(&weak) { return; }
+                        fetched.and_then(|fetched| from_url::land(&url, fetched, px))
+                    }
                     input => input.decode(),
                 };
-                image.finish(decoded);
+                let Some(state) = weak.upgrade() else { return };
+                Image::new(state).finish(decoded);
                 wake();
             });
         }
         image
     }
 }
+
+/// Whether anything still holds the image a fetch is for.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+fn wanted(state: &std::sync::Weak<State>) -> bool { state.strong_count() > 0 }
 
 fn icon_pixels(size_pt: f32, scale: f32) -> u32 {
     let px = (size_pt * scale).ceil();
@@ -801,6 +814,17 @@ mod tests {
         let invalid = cache.load(vec![0, 1, 2]);
         rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
         assert!(invalid.error().is_some());
+    }
+
+    #[test]
+    fn a_fetch_is_wanted_while_a_handle_or_its_drawn_pixels_live() {
+        let image = Image::new(Arc::new(State { id: [0; 32], pixels: crate::Pixels::new(), decoded: OnceLock::new() }));
+        let weak = Arc::downgrade(&image.0);
+        let drawn = image.pixels().clone();
+        drop(image);
+        assert!(wanted(&weak), "an element still draws it");
+        drop(drawn);
+        assert!(!wanted(&weak), "a guess replaced before its fetch runs fetches nothing");
     }
 
     #[test]

@@ -1,0 +1,1 @@
+- **On web, an image request dropped before it loads costs nothing.** `ImageCache::url` and `url_set` hold the image weakly while it fetches, so a view's first guess at a size, replaced in the same frame once layout knows the real one, no longer downloads and decodes a second file, and a request dropped mid-download isn't decoded.

@@ -75,7 +75,7 @@ pub(super) fn land(url: &str, fetched: Fetched, px: u32) -> Result<Decoded, Imag
 
 /// Fetch and decode `url` in the browser.
 #[cfg(target_arch = "wasm32")]
-pub(super) async fn fetch(url: &str, px: u32) -> Result<Decoded, ImageError> {
+pub(super) async fn fetch(url: &str) -> Result<Fetched, ImageError> {
     use wasm_bindgen::JsCast;
     let reply = wasm_bindgen_futures::JsFuture::from(crate::platform::web::platform::fetch_image(url, MAX_SIDE)).await.map_err(|e| {
         let why = e.dyn_ref::<js_sys::Error>().map_or_else(|| format!("{e:?}"), |e| String::from(e.message()));
@@ -84,8 +84,7 @@ pub(super) async fn fetch(url: &str, px: u32) -> Result<Decoded, ImageError> {
     let reply: js_sys::Array = reply.unchecked_into();
     let side = |i| reply.get(i).as_f64().unwrap_or(0.0) as u32;
     let bytes = reply.get(2).unchecked_into::<js_sys::Uint8Array>().to_vec();
-    let fetched = if side(0) == 0 { Fetched::Svg(bytes) } else { Fetched::Rgba(side(0), side(1), bytes) };
-    land(url, fetched, px)
+    Ok(if side(0) == 0 { Fetched::Svg(bytes) } else { Fetched::Rgba(side(0), side(1), bytes) })
 }
 
 /// The file a native `url` names: a path with no scheme, or a `file:` URL.
