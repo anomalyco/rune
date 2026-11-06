@@ -12,6 +12,7 @@ on:
       - "scripts/web-build.sh"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
       - ".github/workflows/www.yml"
   pull_request:
     paths:
@@ -20,6 +21,7 @@ on:
       - "scripts/web-build.sh"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
       - ".github/workflows/www.yml"
 
 concurrency:
