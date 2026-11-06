@@ -5,13 +5,14 @@
 //!
 //! - macOS: an `NSMenu` popped up in the window's view, overlays included. Rune keeps drawing
 //!   while the menu tracks: frames, display-link pacing and animations keep running.
-//! - Windows: a `TrackPopupMenuEx` menu owned by the window. It drops down below an element
-//!   anchor, as Windows menus do, and Rune keeps drawing while it tracks.
+//! - Windows: a `TrackPopupMenuEx` menu owned by the window, light or dark as the window's
+//!   content is. It drops down below an element anchor, as Windows menus do, and Rune keeps
+//!   drawing while it tracks: frames, wakes, timers and overlays.
 //! - Other platforms: [`popup_menu_supported`] is false and the callback gets `None` at once.
 //! - Headless runs: the menu stays open in `--tree` (`popupMenu`) until a script's
 //!   `{"type": "menu-pick", "id": "dark"}` or `{"type": "menu-cancel"}` answers it.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -23,13 +24,33 @@ use crate::{PointerPress, Runtime, Shortcut, Tx};
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+use macos as host;
 #[cfg(target_os = "windows")]
 mod win32;
+#[cfg(target_os = "windows")]
+use win32 as host;
+
+/// Platforms without native menus: nothing opens, so every request answers `None` at once.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+mod host {
+    use super::{Arc, Rc, Session, Show, Waker, Window};
+    pub(super) const SUPPORTED: bool = false;
+    pub(super) type Tracking = ();
+    pub(super) fn show(_: &Arc<Window>, _: Show, _: Rc<Session>, _: Option<Waker>) -> bool { false }
+    pub(super) fn stop(session: &Session, _: bool) { session.tracking.take(); }
+    pub(super) fn scheme(_: bool) {}
+    pub(super) fn start(_: Waker) {}
+}
 
 /// Whether this platform shows native pop-up menus (macOS and Windows). Where it doesn't,
 /// [`Tx::popup_menu`] calls back with `None` straight away, so an app can draw its own menu
 /// instead.
-pub fn popup_menu_supported() -> bool { cfg!(any(target_os = "macos", target_os = "windows")) }
+pub fn popup_menu_supported() -> bool { host::SUPPORTED }
+
+/// The event loop starts. `turn` runs its idle turn (due timers, overlays), for a platform whose
+/// menus hold the event loop in a modal loop of their own while they track.
+pub(crate) fn start(turn: Waker) { host::start(turn); }
 
 /// One choice in a [`PopupMenu`]: enabled and unchecked unless set.
 #[derive(Clone, Debug, PartialEq)]
@@ -289,9 +310,11 @@ pub(crate) enum Phase {
 #[derive(Default)]
 pub(crate) struct Session {
     phase: RefCell<Phase>,
-    /// The menu while it tracks, to cancel it.
-    #[cfg(target_os = "macos")]
-    pub tracking: RefCell<Option<objc2::rc::Retained<objc2_app_kit::NSMenu>>>,
+    /// The platform's hold on the menu while it tracks, to stop it.
+    pub tracking: RefCell<host::Tracking>,
+    /// Where the pointer was over the window as the menu closed, in window points, for a
+    /// platform that sends no pointer move until the pointer moves again.
+    pub pointer: Cell<Option<(f32, f32)>>,
 }
 
 impl Session {
@@ -318,11 +341,15 @@ impl Session {
     #[cfg(test)]
     pub(crate) fn is_cancelled(&self) -> bool { *self.phase.borrow() == Phase::Cancelled }
 
-    /// The answer of a `Resolved` menu.
-    fn answer(&self) -> Option<Option<String>> {
-        match &*self.phase.borrow() {
-            Phase::Resolved(picked) => Some(picked.clone()),
-            _ => None,
+    /// The answer of a `Resolved` menu, once: the session is `Cancelled` after.
+    fn take_answer(&self) -> Option<Option<String>> {
+        let mut phase = self.phase.borrow_mut();
+        match std::mem::replace(&mut *phase, Phase::Cancelled) {
+            Phase::Resolved(picked) => Some(picked),
+            other => {
+                *phase = other;
+                None
+            }
         }
     }
 }
@@ -332,7 +359,6 @@ impl Session {
 #[derive(Default)]
 pub(crate) struct Presenter {
     session: Option<Rc<Session>>,
-    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
     wake: Option<Waker>,
 }
 
@@ -341,14 +367,17 @@ impl Presenter {
 
     pub(crate) fn connect(&mut self, wake: Waker) { self.wake = Some(wake); }
 
-    /// Runs the callback of a menu that closed since the last event. True when one ran.
+    /// Runs the callback of a menu that closed since the last event. True when one ran. The
+    /// pointer the menu released is back where the menu left it, so a click that doesn't move
+    /// it first still lands.
     pub(crate) fn answer<S: 'static>(&mut self, rt: &mut Runtime<S>) -> bool {
-        let Some(picked) = self.session.as_ref().and_then(|s| s.answer()) else { return false };
-        self.session = None;
+        let Some(picked) = self.session.as_ref().and_then(|s| s.take_answer()) else { return false };
+        let pointer = self.session.take().and_then(|s| s.pointer.get());
         if let Err(error) = rt.resolve_popup(picked.as_deref()) {
             eprintln!("rune: {error}");
             let _ = rt.resolve_popup(None);
         }
+        if let Some((x, y)) = pointer && rt.pointer().is_none() { rt.pointer_move(x, y); }
         true
     }
 
@@ -363,20 +392,15 @@ impl Presenter {
             if window.is_some() && paints && rt.popup_waits_for_layout() { return true; }
             let Some(show) = rt.take_popup() else { return redraw };
             redraw = true;
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
             if let (Some(show), Some(window)) = (show, window) {
+                // As dark as what the window draws, which may not be the system's appearance.
+                host::scheme(rt.backdrop_dark().unwrap_or(rt.env.system_dark));
                 let session = Rc::new(Session::default());
-                #[cfg(target_os = "macos")]
-                let shown = macos::show(window, show, session.clone(), self.wake.clone());
-                #[cfg(target_os = "windows")]
-                let shown = win32::show(window, show, session.clone(), self.wake.clone());
-                if shown {
+                if host::show(window, show, session.clone(), self.wake.clone()) {
                     self.session = Some(session);
                     return true;
                 }
             }
-            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-            let _ = (window, show);
             let _ = rt.resolve_popup(None);
         }
     }
@@ -392,15 +416,7 @@ impl Presenter {
     fn stop(&mut self) {
         let Some(session) = self.session.take() else { return };
         let tracking = session.cancel();
-        #[cfg(target_os = "macos")]
-        if let Some(menu) = session.tracking.borrow_mut().take() {
-            // SAFETY: the host's (main) thread. The tracking loop ends once this handler returns.
-            unsafe { menu.cancelTrackingWithoutAnimation() };
-        }
-        #[cfg(target_os = "windows")]
-        if tracking { win32::end(); }
-        #[cfg(not(target_os = "windows"))]
-        let _ = tracking;
+        host::stop(&session, tracking);
     }
 }
 

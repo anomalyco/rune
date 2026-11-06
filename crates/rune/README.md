@@ -1644,10 +1644,13 @@ row().key("theme").child(text(theme_title(&s.theme)))
   springs, the display link and `AppHandle::update` keep running while it's open. The pointer's
   press, capture and hover are released before it opens. Windows uses `TrackPopupMenuEx`, opened
   from a message posted to the window after winit's handler returns, so Rune keeps drawing
-  there too. It follows Windows placement: the menu drops down below an element anchor (flipping
-  up clear of it near the screen's bottom edge) whether or not an item is `selected`, opens
-  with its top-left at a point, and sizes itself to its items; `.symbol` doesn't show. Keyboard
-  navigation and dismissal by a click outside (answered `None`) are the system's. Elsewhere
+  there too: frames, wakes, `wake_after` timers and overlays. It follows Windows placement: the
+  menu drops down below an element anchor (flipping up clear of it near the screen's bottom
+  edge) whether or not an item is `selected`, opens with its top-left at a point, and sizes
+  itself to its items; `.symbol` doesn't show. Menus are dark or light as the window's content
+  is (Windows 10 1903 and later), whatever the system's appearance. Keyboard navigation and
+  dismissal by a click outside (answered `None`) are the system's, overlays included. A click
+  right after the menu closes lands where the pointer is, moved or not. Elsewhere
   `popup_menu_supported()` is false and `on_pick` gets `None` on the next frame, so keep an
   in-app fallback for those platforms. `cargo run -p rune --example popup_menu` shows both kinds.
 - **Headless**: `--tree` has a `popupMenu` object (items, anchor, `selected`, `queued`) while a

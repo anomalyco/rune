@@ -77,6 +77,8 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     #[cfg(target_os = "macos")]
     crate::platform::app_icon::launched();
     let proxy = event_loop.create_proxy();
+    let turn = proxy.clone();
+    crate::popup_menu::start(std::sync::Arc::new(move || { let _ = turn.send_event(WakeEvent::Turn); }));
     let mut windows = Windows { factory: Some(factory), args, proxy, hosts: Vec::new(), gpu: Rc::default() };
     crate::open_url::incoming::prepare();
     let result = event_loop.run_app(&mut windows);
@@ -86,6 +88,24 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     crate::clipboard::shutdown(); // Also cover an event-loop error before `exiting`.
     crate::platform::ready_signal::clear();
     result.map_err(|error| format!("run: {error}"))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Windows {
+    /// The idle turn winit runs between its message loops, run while a native menu's modal
+    /// loop holds winit's (`WakeEvent::Turn`): hosts whose timers are due resume, then
+    /// `about_to_wait` draws overlays, answers assistive clients and sets the next wake.
+    pub(super) fn turn(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        use winit::application::ApplicationHandler;
+        let now = std::time::Instant::now();
+        for host in self.hosts.iter_mut().flatten() {
+            if let Some(due) = host.wake_deadline().filter(|&due| due <= now) {
+                host.new_events(event_loop, winit::event::StartCause::ResumeTimeReached { start: due, requested_resume: due });
+            }
+        }
+        self.about_to_wait(event_loop);
+        self.cleanup(event_loop);
+    }
 }
 
 #[test]

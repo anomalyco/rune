@@ -15,6 +15,25 @@ use winit::window::Window;
 use super::{Entry, PopupMenu, Session, Show};
 use crate::runtime::Waker;
 
+pub(super) const SUPPORTED: bool = true;
+
+/// The menu while it tracks, to cancel it.
+pub(super) type Tracking = Option<Retained<NSMenu>>;
+
+/// Stops the menu tracking in `session`, if it is.
+pub(super) fn stop(session: &Session, _tracking: bool) {
+    if let Some(menu) = session.tracking.borrow_mut().take() {
+        // SAFETY: the host's (main) thread. The tracking loop ends once this handler returns.
+        unsafe { menu.cancelTrackingWithoutAnimation() };
+    }
+}
+
+/// An `NSMenu` takes its appearance from the view it pops up in.
+pub(super) fn scheme(_dark: bool) {}
+
+/// winit's run-loop observers keep running while a menu tracks, so nothing asks for turns.
+pub(super) fn start(_turn: Waker) {}
+
 /// Every item's id, by tag, and the one picked.
 struct Picks { ids: Vec<String>, picked: RefCell<Option<String>> }
 
