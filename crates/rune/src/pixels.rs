@@ -25,6 +25,8 @@ pub struct Pixels {
     pub(crate) source: Arc<crate::live::Source>,
     /// The URL or path an `ImageCache` loaded it from.
     url: Option<Arc<str>>,
+    /// The candidates `ImageCache::url_set` chose `url` from, as an HTML `srcset`.
+    srcset: Option<Arc<str>>,
 }
 
 impl std::fmt::Debug for Pixels {
@@ -48,11 +50,12 @@ impl Pixels {
             frame: Arc::new(Mutex::new(Frame { width: 0, height: 0, rgba: Vec::new(), generation: 0, mips: None })),
             source: crate::live::Source::new(0),
             url: None,
+            srcset: None,
         }
     }
 
-    pub(crate) fn from_url(url: Option<Arc<str>>) -> Pixels {
-        Pixels { url, ..Pixels::new() }
+    pub(crate) fn from_url(url: Option<Arc<str>>, srcset: Option<Arc<str>>) -> Pixels {
+        Pixels { url, srcset, ..Pixels::new() }
     }
 
     /// The URL ([`ImageCache::url`](crate::ImageCache::url)) or path
@@ -60,6 +63,12 @@ impl Pixels {
     /// a page export can point an `<img>` at it.
     pub fn source_url(&self) -> Option<&str> {
         self.url.as_deref()
+    }
+
+    /// For an image from [`ImageCache::url_set`](crate::ImageCache::url_set), every size it
+    /// chose from, as an HTML `srcset` (`"a-640.avif 640w, a-1280.avif 1280w"`).
+    pub fn source_set(&self) -> Option<&str> {
+        self.srcset.as_deref()
     }
 
     /// Replaces the image: `rgba` is `width * height` straight-alpha sRGB pixels, rows top

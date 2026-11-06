@@ -27,6 +27,8 @@ pub(crate) struct ExportNode {
     pub inner: String,
     /// CSS declarations, property then value.
     pub decls: Vec<(&'static str, String)>,
+    /// Laid-out width in points, which an image's `sizes` follows across widths.
+    pub width: f32,
 }
 
 pub(crate) fn escape(s: &str) -> String {
@@ -75,7 +77,8 @@ impl<S: 'static> Runtime<S> {
         let mut inner = String::new();
         let href = n.a11y.more.as_ref().and_then(|m| m.href.clone());
         let label = n.label.as_deref().filter(|s| !s.trim().is_empty());
-        let pixels_url = n.vis.cold.pixels.as_ref().and_then(|p| p.source_url()).filter(|_| i + 1 == self.subtree_end(i));
+        let pixels = n.vis.cold.pixels.as_ref().filter(|_| i + 1 == self.subtree_end(i));
+        let pixels_url = pixels.and_then(|p| p.source_url());
         let tag: &'static str = if let Some(t) = container_tag(n.role) {
             t
         } else if href.is_some() {
@@ -99,6 +102,8 @@ impl<S: 'static> Runtime<S> {
             let [x0, y0, x1, y1] = n.target;
             let _ = write!(attrs, " src=\"{}\" alt=\"{}\" width=\"{}\" height=\"{}\" decoding=\"async\"",
                 escape(url), escape(label.unwrap_or("")), (x1 - x0).round(), (y1 - y0).round());
+            // `page` adds `sizes`, which needs every width.
+            if let Some(set) = pixels.and_then(|p| p.source_set()) { let _ = write!(attrs, " srcset=\"{}\"", escape(set)); }
             // Images below the first screen wait until the reader scrolls near them.
             if y0 > 900.0 { attrs.push_str(" loading=\"lazy\""); }
         } else if let Some(l) = label.filter(|_| n.text.is_none() && tag != "a") {
@@ -123,7 +128,7 @@ impl<S: 'static> Runtime<S> {
             };
             decls.push(("object-fit", fit.into()));
         }
-        ExportNode { path: n.path.clone(), depth, tag, attrs, inner, decls }
+        ExportNode { path: n.path.clone(), depth, tag, attrs, inner, decls, width: x1 - x0 }
     }
 }
 
