@@ -279,7 +279,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
                 self.cleanup(event_loop);
                 return;
             }
-            WakeEvent::Turn => return self.turn(event_loop),
+            WakeEvent::Turn => { #[cfg(not(target_arch = "wasm32"))] self.turn(event_loop); return; }
         };
         if let Some(Some(host)) = self.hosts.get_mut(slot) {
             host.user_event(event_loop, event);
