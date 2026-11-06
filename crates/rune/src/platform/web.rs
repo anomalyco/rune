@@ -243,7 +243,10 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         self.document = app.web_document;
         self.embedded = app.web_inline() && !self.document;
         if let Some(canvas) = &existing { self.borrowed.canvas(canvas); }
-        let mut attrs = Window::default_attributes().with_title(app.spec.title).with_prevent_default(false);
+        // Not `active`: winit would focus the canvas before it's styled, and a browser scrolls a
+        // focused element into view, so a page landed at its foot. The bridge focuses a
+        // full-window canvas itself, without scrolling.
+        let mut attrs = Window::default_attributes().with_title(app.spec.title).with_prevent_default(false).with_active(false);
         attrs = match &existing {
             Some(c) => attrs.with_canvas(Some(c.clone())).with_append(false),
             None => attrs.with_append(true),
