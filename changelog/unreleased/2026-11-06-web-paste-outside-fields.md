@@ -1,0 +1,1 @@
+- **Paste outside a Rune field is the browser's again.** The hidden text input no longer cancels a paste or keeps typed text while no Rune field has the keyboard.
