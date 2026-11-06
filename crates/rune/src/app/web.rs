@@ -32,11 +32,13 @@ impl<S: 'static> App<S> {
 
     /// On web, make the app the page: the root lays out at its natural height for the
     /// viewport's width and the browser scrolls it like any document, with its own momentum,
-    /// keys, anchors, find-in-page and zoom. The canvas stays fixed at the viewport's size and
-    /// draws the band the page is scrolled to, and a semantic DOM mirror as tall as the content
-    /// carries the scroll, the text, the headings, landmarks and real `<a href>` links. Give the
-    /// root no fixed or `fill` height. Elsewhere it acts like [`Self::fit_content_height`], and
-    /// `--html` exports it as the page's static first frame.
+    /// keys, anchors, find-in-page and zoom. The canvas is a band of the document that scrolls
+    /// with it, drawn tall enough to cover the window plus a little overscan at each end, so the
+    /// browser's compositor moves the pixels Rune drew and a frame is drawn only when the window
+    /// nears the band's edge; a semantic DOM mirror as tall as the content carries the scroll, the
+    /// text, the headings, landmarks and real `<a href>` links. Give the root no fixed or `fill`
+    /// height. Elsewhere it acts like [`Self::fit_content_height`], and `--html` exports it as the
+    /// page's static first frame.
     pub fn web_document(mut self) -> Self {
         self.web_document = true;
         self.fit_content_height = true;
