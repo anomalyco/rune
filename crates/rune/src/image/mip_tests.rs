@@ -79,3 +79,23 @@ fn the_mip_chain_allocates_little_beyond_its_output() {
     let output: usize = mips.mips.iter().map(|m| m.pixels.len()).sum();
     assert!(peak < output + output / 8, "peak {peak} bytes for {output} bytes of mips");
 }
+
+/// Built a slice at a time, as on the browser's main thread, the chain is the same.
+#[test]
+fn a_mip_chain_built_in_slices_matches_one_built_whole() {
+    for (w, h) in [(1, 1), (3, 1), (17, 9), (64, 64), (257, 131)] {
+        let src = synthetic(w, h);
+        let whole = mip_chain(w, h, &src).unwrap().mips;
+        for budget in [1, 7, 100, 5000] {
+            let mut steps = mips::MipSteps::new(w, h, &src).unwrap();
+            let mut slices = 1;
+            while !steps.step(budget) { slices += 1; }
+            let sliced = steps.finish().mips;
+            assert_eq!(sliced.len(), whole.len(), "{w}x{h} by {budget}: mip count");
+            for (level, (s, o)) in sliced.iter().zip(&whole).enumerate() {
+                assert!((s.width, s.height, &s.pixels) == (o.width, o.height, &o.pixels), "{w}x{h} by {budget}: mip {level} differs");
+            }
+            if h >= 4 && budget == 1 { assert!(slices > 1, "{w}x{h}: one row per slice takes several"); }
+        }
+    }
+}

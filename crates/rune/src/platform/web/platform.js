@@ -57,8 +57,15 @@ export function assignLink(href) {
 // `url` (relative to the page) decoded by the browser's own codecs, which run off the main
 // thread: `[width, height, rgba]` with straight-alpha sRGB RGBA bytes, upright by EXIF. SVG comes
 // back as `[0, 0, bytes]` for Rune to rasterize. Images over `maxSide` a side are refused
-// before their pixels are read.
+// before their pixels are read. It resolves in a task of its own, so Rune's work on one image
+// (its mips) never runs in the same long task as another's or a frame's.
 export async function fetchImage(url, maxSide) {
+    const reply = await readImage(url, maxSide);
+    await nextTask();
+    return reply;
+}
+
+async function readImage(url, maxSide) {
     const response = await fetch(new URL(url, document.baseURI));
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const blob = await response.blob();
@@ -77,6 +84,10 @@ export async function fetchImage(url, maxSide) {
     } finally {
         bitmap.close();
     }
+}
+
+export function nextTask() {
+    return globalThis.scheduler?.yield ? globalThis.scheduler.yield() : new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 export async function fetchBytes(url) {

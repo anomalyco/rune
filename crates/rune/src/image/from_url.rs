@@ -64,7 +64,7 @@ pub(super) enum Fetched {
 }
 
 /// The mips for a fetched image, or why not, naming the URL.
-#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn land(url: &str, fetched: Fetched, px: u32) -> Result<Decoded, ImageError> {
     match fetched {
         Fetched::Rgba(w, h, bytes) => mip_chain(w, h, &bytes),
@@ -73,7 +73,26 @@ pub(super) fn land(url: &str, fetched: Fetched, px: u32) -> Result<Decoded, Imag
     .map_err(|e| ImageError(format!("{url}: {e}")))
 }
 
-/// Fetch and decode `url` in the browser.
+/// [`land`] on the browser's main thread, where frames draw too: the mips are built a slice at
+/// a time with a task between slices, so no slice holds a frame or input up for long.
+#[cfg(target_arch = "wasm32")]
+pub(super) async fn land_in_slices(url: &str, fetched: Fetched, px: u32) -> Result<Decoded, ImageError> {
+    /// About a few milliseconds of mip work on a phone.
+    const SLICE: usize = 1 << 15;
+    let named = |e: ImageError| ImageError(format!("{url}: {e}"));
+    let (w, h, bytes) = match fetched {
+        Fetched::Rgba(w, h, bytes) => (w, h, bytes),
+        Fetched::Svg(bytes) => svg_rgba(&bytes, px).map_err(named)?,
+    };
+    let mut steps = super::mips::MipSteps::new(w, h, &bytes).map_err(named)?;
+    while !steps.step(SLICE) {
+        let _ = wasm_bindgen_futures::JsFuture::from(crate::platform::web::platform::next_task()).await;
+    }
+    Ok(steps.finish())
+}
+
+/// Fetch and decode `url` in the browser, resolving in a task of its own so each image's mips
+/// are a separate piece of main-thread work.
 #[cfg(target_arch = "wasm32")]
 pub(super) async fn fetch(url: &str) -> Result<Fetched, ImageError> {
     use wasm_bindgen::JsCast;
