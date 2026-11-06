@@ -43,7 +43,8 @@ const SCROLL_KEYS = [' ', 'PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'Arrow
 // over its transparent text. The page can restyle both.
 const PAGE_CSS = `[data-rune-a11y] :focus-visible{outline:2px solid var(--rune-focus,Highlight);outline-offset:2px;border-radius:4px}
 [data-rune-a11y] ::selection{background:var(--rune-selection,rgba(80,150,255,.35));color:transparent}
-[data-rune-a11y] a,[data-rune-a11y] button{color:transparent;-webkit-tap-highlight-color:transparent}`;
+[data-rune-a11y] a,[data-rune-a11y] button{color:transparent;-webkit-tap-highlight-color:transparent}
+[data-rune-a11y] [data-rune-scroll-x]::-webkit-scrollbar{display:none}`;
 
 export function mount(canvas, callback, embedded, fitHeight, page) {
     const textarea = document.createElement('textarea');
@@ -69,8 +70,9 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         // In the body's flow, as tall as the content, so the page scrolls it; the canvas under
         // it draws the band in view. Its rects are in document coordinates. Text running past a
         // horizontal scroller's edge is clipped at the page's, so it can't widen the page (a
-        // phone would zoom out to fit it).
-        a11y.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:0;overflow-x:clip;pointer-events:none;z-index:1;color:transparent;';
+        // phone would zoom out to fit it). Vertical pans are the page's; a horizontal scroller
+        // inside it takes its own.
+        a11y.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:0;overflow-x:clip;pointer-events:none;z-index:1;color:transparent;touch-action:pan-y pinch-zoom;';
         const style = document.createElement('style');
         style.textContent = PAGE_CSS;
         a11y.append(style);
@@ -86,7 +88,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     const h = { canvas, textarea, password, a11y, a11yNodes: new Map(), field: textarea, key: '', base: 0, value: '',
         copyText: '', composing: false, composition: '', shift: false, listeners: [], syncing: false, disposed: false,
         embedded, fitHeight, page, focused: false, presented: false, swapped: false, touchDown: false,
-        lastScrollAt: 0, staticTimer: 0 };
+        lastScrollAt: 0, staticTimer: 0, scrollEls: new Map() };
     const send = event => {
         const message = JSON.stringify(event);
         if (h.syncing) queueMicrotask(() => { if (!h.disposed) callback(message); });
@@ -243,7 +245,7 @@ function webLink(url) {
     return url.startsWith('https://') || url.startsWith('http://') || url.startsWith('mailto:');
 }
 
-const TAGS = { heading: null, button: 'button', link: 'a', image: 'div', text: 'p' };
+const TAGS = { heading: null, button: 'button', link: 'a', image: 'div', text: 'p', scroll_x: 'div' };
 
 function family(name) {
     if (name === 'sans') return 'var(--rune-sans,sans-serif)';
@@ -283,6 +285,10 @@ function itemStyle(h, item, origin) {
     const [x, y, w, bh] = item.r;
     let css = `position:absolute;left:${x - origin[0]}px;top:${y - origin[1]}px;width:${w}px;height:${bh}px;margin:0;padding:0;border:0;background:transparent;color:transparent;`;
     if (item.k === 'group') return css + 'overflow:visible;list-style:none;pointer-events:none;';
+    // A page's horizontal scroller: the browser scrolls it natively, so a flick inside a code
+    // block scrolls the block at the compositor's rate while a vertical drag still scrolls the
+    // page.
+    if (item.k === 'scroll_x') return css + 'overflow-x:auto;overflow-y:hidden;pointer-events:auto;touch-action:pan-x pan-y pinch-zoom;scrollbar-width:none;';
     if (item.k === 'link') return css + 'display:block;overflow:hidden;text-decoration:none;cursor:pointer;pointer-events:auto;font:14px/1.25 sans-serif;';
     if (item.k === 'image' || item.k === 'button') return css + 'overflow:hidden;pointer-events:none;font:14px/1.25 sans-serif;';
     const fs = item.s || 14;
@@ -314,6 +320,15 @@ export function syncA11y(h, json) {
                 });
             }
             if (item.k === 'image') el.setAttribute('role', 'img');
+            if (item.k === 'scroll_x') {
+                el.setAttribute('data-rune-scroll-x', '');
+                // The browser scrolls this container itself; Rune draws the content where the
+                // container says it is.
+                el.addEventListener('scroll', () => {
+                    const path = el._path;
+                    if (path && !h.disposed) h.send({ kind: 'scroll_x', path, x: el.scrollLeft });
+                }, { passive: true });
+            }
             h.a11yNodes.set(key, el);
         }
         const parent = item.a === undefined ? null : items[item.a];
@@ -334,21 +349,24 @@ export function syncA11y(h, json) {
             el.href = item.h;
             if (!h.page && webLink(item.h)) { el.target = '_blank'; el.rel = 'noopener noreferrer'; }
         }
-        const sig = item.k === 'group' || item.k === 'image' ? '' : item.u?.length ? JSON.stringify(item.u) : item.t ?? '';
-        if (item.k !== 'group' && el._sig !== sig) {
+        const container = item.k === 'group' || item.k === 'scroll_x';
+        if (item.k === 'scroll_x' && el._path !== item.p) { el._path = item.p; h.scrollEls.set(item.p, el); }
+        const sig = container || item.k === 'image' ? '' : item.u?.length ? JSON.stringify(item.u) : item.t ?? '';
+        if (!container && el._sig !== sig) {
             el._sig = sig;
             el.replaceChildren();
             if (item.u?.length) runs(h, el, item);
             else if (item.k !== 'image') el.textContent = item.t ?? '';
         }
         els.push(el);
-        if (item.k === 'group' && !cursors.has(el)) cursors.set(el, el.firstElementChild);
+        if (container && !cursors.has(el)) cursors.set(el, el.firstElementChild);
         const cursor = cursors.get(parentEl) ?? null;
         if (cursor !== el) parentEl.insertBefore(el, cursor);
         else cursors.set(parentEl, cursor.nextElementSibling);
     }
     for (const [key, el] of h.a11yNodes) {
         if (!seen.has(key)) {
+            if (el._path && h.scrollEls.get(el._path) === el) h.scrollEls.delete(el._path);
             el.remove();
             h.a11yNodes.delete(key);
         }
@@ -360,6 +378,14 @@ export function syncA11y(h, json) {
 export function syncPage(h, height, focused) {
     h.focused = focused;
     h.a11y.style.height = `${height}px`;
+}
+
+// A horizontal viewport Rune scrolled itself (a wheel, a key): move the mirror's container to
+// match, so the two stay the same text. The container's own scroll event echoes back the same
+// offset, which Rune ignores.
+export function syncScrollX(h, path, x) {
+    const el = h.scrollEls.get(path);
+    if (el && Math.abs(el.scrollLeft - x) > 0.5) el.scrollLeft = x;
 }
 
 // Rune's first frame is on screen: the canvas announces `runepresent`, and a page swaps its
@@ -420,6 +446,9 @@ function deferStatic(h) {
 }
 
 export function activate(h) {
+    // A page's canvas is `tabindex="-1"`: focusing it on a tap would only drop the reader's text
+    // selection or a link's focus. An input that took the keyboard still gets it.
+    if (h.page && !h.key) return;
     const field = h.key ? h.field : h.canvas;
     if (h.key) field.inputMode = 'text';
     if (document.activeElement !== field) field.focus({ preventScroll: true });

@@ -41,6 +41,22 @@ impl<S: 'static> Runtime<S> {
         true
     }
 
+    /// Draw a horizontal viewport at `path` scrolled `x` points from its content's left edge. A
+    /// page's horizontal viewports are the browser's: it scrolls its own mirror's container and
+    /// tells Rune where it went. Returns whether the content moved (the next frame draws it).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) fn set_page_scroll_x(&mut self, path: &str, x: f32) -> bool {
+        if !self.page.on || !x.is_finite() { return false; }
+        let Some(i) = self.live(path) else { return false };
+        let Some(st) = self.scrolls.get_mut(&self.nodes[i].id) else { return false };
+        let offset = f64::from(x.max(0.0)).min(st.x.max.max(0.0));
+        if (st.x.offset - offset).abs() < 0.01 { return false; }
+        st.x.offset = offset;
+        st.x.v = 0.0;
+        st.x.glide = None;
+        true
+    }
+
     /// What the root hands its subtree in the paint pass: the band's offset as a rigid scroll.
     pub(super) fn root_inh(&self) -> Inh {
         let mut inh = Inh::default();

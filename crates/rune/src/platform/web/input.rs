@@ -11,6 +11,8 @@ extern "C" {
     fn sync_copy(handle: &JsValue, text: &str);
     #[wasm_bindgen(js_name = syncA11y)]
     fn sync_a11y(handle: &JsValue, json: &str);
+    #[wasm_bindgen(js_name = syncScrollX)]
+    fn sync_scroll_x(handle: &JsValue, path: &str, x: f32);
     fn activate(handle: &JsValue);
     #[wasm_bindgen(js_name = syncPage)]
     fn sync_page(handle: &JsValue, height: f32, focused: bool);
@@ -44,6 +46,8 @@ pub(super) struct Bridge {
     document: bool,
     /// The page height and control focus the page last heard.
     page: Option<(f32, bool)>,
+    /// The horizontal offsets the mirror's containers were last set to.
+    scroll_x: Vec<(String, f32)>,
 }
 
 impl Bridge {
@@ -68,7 +72,7 @@ impl Bridge {
         let handle = mount(canvas, callback.as_ref().unchecked_ref(), embedded, fit_height, document);
         Self { handle, _callback: callback, dispose_viewport, mods: ModifiersState::empty(),
             mirror: Default::default(), a11y: Default::default(),
-            copy_cache: String::new(), fit_height, document, page: None }
+            copy_cache: String::new(), fit_height, document, page: None, scroll_x: Vec::new() }
     }
 
     /// The first frame is on screen: a page swaps its static export for the live mirror.
@@ -101,6 +105,15 @@ impl<S: 'static> Running<S> {
                 self.input.page = Some(page);
                 sync_page(&self.input.handle, page.0, page.1);
             }
+            // A horizontal viewport Rune scrolled (a wheel or a key on desktop) moves the mirror's
+            // container to match; one the browser scrolled already says where it is.
+            let handle = &self.input.handle;
+            let next = self.rt.page_scroll_x();
+            for (path, x) in &next {
+                let known = self.input.scroll_x.iter().find(|(p, _)| p == path).map(|(_, x)| *x);
+                if known.is_none_or(|known| (known - x).abs() > 0.5) { sync_scroll_x(handle, path, *x); }
+            }
+            self.input.scroll_x = next;
         }
         if focus { activate(&self.input.handle); }
     }
@@ -153,6 +166,13 @@ impl<S: 'static> Running<S> {
                 {
                     self.rt.pointer_move(x, y);
                 }
+                return;
+            }
+            // A page's horizontal viewport scrolled natively, by the browser's own compositor.
+            Some("scroll_x") => {
+                let path = event["path"].as_str().unwrap_or_default();
+                let x = event["x"].as_f64().unwrap_or(0.0) as f32;
+                self.rt.set_page_scroll_x(path, x);
                 return;
             }
             // The pointer is over mirrored text or a link, which takes it from the canvas.
@@ -232,8 +252,13 @@ impl<S: 'static> Running<S> {
             // touch; taps and horizontal drags stay Rune's.
             WindowEvent::Touch(touch) => {
                 crate::window::touch(&mut self.rt, touch, scale);
-                // A tap is a user activation: links, the clipboard and focus act before the handler returns.
-                if matches!(touch.phase, TouchPhase::Ended) { activate = true; immediate = true; }
+                // A tap is a user activation: links, the clipboard and focus act before the handler
+                // returns. In a page only a tap that left something focused needs it; anything else
+                // would focus the canvas and drop the reader's selection.
+                if matches!(touch.phase, TouchPhase::Ended) {
+                    activate = !self.input.document || self.rt.has_focus();
+                    immediate = true;
+                }
             }
             _ => return false,
         }

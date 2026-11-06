@@ -129,9 +129,39 @@ fn fractional_scroll_offsets_never_rewrite_a_page_mirror() {
     }
 }
 
+/// A page with a wide code snippet in a horizontal viewport, as a site puts one.
+fn strip(_: &(), _: &mut Cx<()>) -> El {
+    crate::col().w_full().role("main")
+        .child(crate::row().key("scroll").w(200.0).h(40.0).scroll_x()
+            .child(crate::text("fn main() { println!(\"hello\"); }").key("code").w(600.0).h(40.0)
+                .font(crate::tok::type_::BODY).selectable(true)))
+}
+
 #[test]
-fn href_presses_open_absolute_urls() {
-    let mut rt = Runtime::new((), page, (480.0, 300.0), Env::default());
+fn a_page_mirrors_a_horizontal_viewport_as_a_scroller_the_browser_scrolls() {
+    let mut rt = Runtime::new((), strip, (400.0, 300.0), Env::default());
+    rt.page_mode();
+    rt.frame(0.0);
+    let items = rt.web_a11y_items();
+    let scroll = items.iter().find(|i| i.kind == "scroll_x").expect("the strip mirrors as a scroller");
+    assert_eq!((scroll.tag, scroll.rect[0], scroll.rect[2]), (Some("div"), 0.0, 200.0));
+    let code = items.iter().find(|i| i.text.contains("println")).expect("the code still mirrors");
+    let placed = code.rect[0];
+    let mut mirror = A11yMirror::default();
+    assert!(rt.web_a11y(&mut mirror).is_some());
+
+    let path = scroll.path.clone();
+    assert!(rt.set_page_scroll_x(&path, 120.0), "the browser scrolled the strip");
+    rt.frame(0.0);
+    assert!(rt.web_a11y(&mut mirror).is_none(), "the container's own scroll leaves the mirror alone");
+    let after = rt.web_a11y_items();
+    let code = after.iter().find(|i| i.text.contains("println")).expect("the code still mirrors");
+    assert_eq!(code.rect[0], placed, "the text keeps its place inside the scroller");
+    assert!(!rt.set_page_scroll_x(&path, 120.0), "the same offset is no change");
+}
+
+#[test]
+fn href_presses_open_absolute_urls() {    let mut rt = Runtime::new((), page, (480.0, 300.0), Env::default());
     rt.frame(0.0);
     let gh = rt.nodes.iter().find(|n| n.key.as_deref() == Some("gh")).unwrap().path.clone();
     assert_eq!(rt.nodes.iter().find(|n| n.key.as_deref() == Some("gh")).unwrap().role, "link");
