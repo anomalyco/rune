@@ -6,8 +6,8 @@
     <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#000000" />
     <!--robots-->
-    <title>Rune</title>
-    <meta name="description" content="Rune is a Rust UI framework with its own GPU renderer, text, layout and springs." />
+    <title>__TITLE__</title>
+    <meta name="description" content="__DESCRIPTION__" />
     <link rel="canonical" href="__URL__" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Rune" />
@@ -29,12 +29,26 @@
     <link rel="apple-touch-icon" href="%BASE_URL%apple-touch-icon.png" />
     <link rel="manifest" href="%BASE_URL%site.webmanifest" />
     <link rel="alternate" type="text/plain" href="%BASE_URL%llms.txt" title="llms.txt" />
-    <link rel="preload" href="%BASE_URL%fonts/geist.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="preload" href="%BASE_URL%fonts/geist-mono.woff2" as="font" type="font/woff2" crossorigin />
+    <!-- Rune reads the same files, so the page and the canvas share one download. -->
+    <link rel="preload" href="%BASE_URL%fonts/geist.ttf" as="font" type="font/ttf" crossorigin />
+    <link rel="preload" href="%BASE_URL%fonts/geist-mono.ttf" as="font" type="font/ttf" crossorigin />
+    <style>
+      @font-face { font-family: "Geist"; src: url("/fonts/geist.ttf") format("truetype"); font-weight: 100 900; font-display: swap; }
+      @font-face { font-family: "Geist Mono"; src: url("/fonts/geist-mono.ttf") format("truetype"); font-weight: 100 900; font-display: swap; }
+      :root {
+        --rune-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        --rune-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+      }
+      html { background: #000; color: #ededed; font: 400 16px/24px var(--rune-sans); -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-size-adjust: 100%; }
+      body { margin: 0; }
+      :focus-visible { outline: 2px solid oklch(0.74 0.14 245); outline-offset: 2px; border-radius: 4px; }
+      ::selection { background: oklch(0.74 0.14 245 / 0.4); }
+    </style>
+    <!-- rune:css -->
     <!--jsonld-->
   </head>
   <body>
-    <div id="root"><!--app--></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <!-- rune:body -->
+    <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -19,6 +19,7 @@ members = [
     "examples/hello",
     "examples/web-hello",
     "examples/web-showcase",
+    "www/app",
     "examples/todo",
     "examples/settings",
     "examples/playground",

@@ -1,0 +1,25 @@
+[package]
+name = "rune-www"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+description = "Rune's home page, drawn by Rune."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "rune-www"
+path = "src/main.rs"
+
+[dependencies]
+rune = { path = "../../crates/rune", default-features = false }
+rune-kit = { path = "../../crates/rune-kit" }
+rune-motion = { path = "../../crates/rune-motion" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+
+[lints]
+workspace = true
