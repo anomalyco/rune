@@ -141,7 +141,7 @@ impl<S: 'static> Running<S> {
             Some("focus") => self.rt.window_focus(event["focused"].as_bool().unwrap_or(false)),
             Some("visibility") => {
                 self.shared.visible.store(event["visible"].as_bool().unwrap_or(false), Ordering::Release);
-                return false;
+                return true;
             }
             Some("edit" | "selection" | "preedit") => self.rt.web_edit(event),
             Some("sync") => self.input.mirror.key.clear(), // Composition's final sync was deferred by the DOM.
@@ -179,10 +179,11 @@ impl<S: 'static> Running<S> {
             }
             // The pointer is over mirrored text or a link, which takes it from the canvas.
             Some("hover") => {
+                if self.rt.touching() { return false; }
                 // The mirror's pointer is in window points; the canvas draws the band.
                 let (x, y) = (event["x"].as_f64().unwrap_or(0.0) as f32, event["y"].as_f64().unwrap_or(0.0) as f32);
-                if !self.rt.touching() { self.rt.pointer_move(x, y + self.rt.page_window().0); }
-                return false;
+                self.rt.pointer_move(x, y + self.rt.page_window().0);
+                return true;
             }
             _ => {}
         }
