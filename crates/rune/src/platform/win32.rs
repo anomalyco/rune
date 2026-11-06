@@ -20,7 +20,7 @@ mod pointer;
 pub(crate) use cloak::Cloak;
 pub(crate) use dpi_drag::follow_suggested_rect;
 
-fn hwnd(window: &winit::window::Window) -> Option<HWND> {
+pub(crate) fn hwnd(window: &winit::window::Window) -> Option<HWND> {
     let RawWindowHandle::Win32(h) = window.window_handle().ok()?.as_raw() else { return None };
     Some(h.hwnd.get() as HWND)
 }

@@ -184,9 +184,9 @@ fn a_window_going_away_answers_every_waiting_menu_none_once() {
     assert_eq!(rt.state.picks, [None, None, None]);
     assert_eq!(rt.popup_menu(), None);
     assert!(!rt.popup_open);
-    assert!(showing.cancelled.get(), "a tracking menu stops, and one not yet up never opens");
+    assert!(showing.is_cancelled(), "a tracking menu stops, and one not yet up never opens");
 
-    *showing.answer.borrow_mut() = Some(Some("dark".into()));
+    showing.resolve(Some("dark".into()));
     assert!(!presenter.answer(&mut rt), "a late answer doesn't call back a second time");
     presenter.cancel(&mut rt);
     assert_eq!(rt.state.picks, [None, None, None]);
@@ -255,5 +255,5 @@ fn a_menu_a_pick_asks_for_waits_for_the_element_the_pick_mounts() {
 
 #[test]
 fn support_is_macos_only() {
-    assert_eq!(popup_menu_supported(), cfg!(target_os = "macos"));
+    assert_eq!(popup_menu_supported(), cfg!(any(target_os = "macos", target_os = "windows")));
 }

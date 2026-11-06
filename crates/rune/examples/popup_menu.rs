@@ -1,6 +1,7 @@
 //! Native pop-up menus: a settings-style picker that opens over its button with the current
-//! choice under the pointer, and a context menu on secondary press. Off macOS both answer
-//! `None` straight away. Headless: `--script` with `{"type":"menu-pick","id":"dark"}`.
+//! choice under the pointer (on Windows it drops down below the button), and a context menu on
+//! secondary press. Off macOS and Windows both answer `None` straight away. Headless:
+//! `--script` with `{"type":"menu-pick","id":"dark"}`.
 use rune::*;
 
 struct State { theme: String, last: String }
@@ -13,7 +14,8 @@ fn theme_title(id: &str) -> &'static str {
 
 fn context_menu() -> PopupMenu {
     PopupMenu::new()
-        .item(PopupItem::new("copy", "Copy").symbol("doc.on.doc").key_equivalent("cmd+c".parse().unwrap()))
+        .item(PopupItem::new("copy", "Copy").symbol("doc.on.doc")
+            .key_equivalent(if cfg!(target_os = "macos") { "cmd+c" } else { "ctrl+c" }.parse().unwrap()))
         .item(PopupItem::new("paste", "Paste").enabled(false))
         .separator()
         .submenu("Share", PopupMenu::new().item(PopupItem::new("mail", "Mail")).item(PopupItem::new("messages", "Messages")))
