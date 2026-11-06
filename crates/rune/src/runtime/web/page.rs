@@ -28,11 +28,14 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Draw the band starting `y` points down the document (rounded to device pixels, so text
-    /// keeps its grid). Returns whether the band moved; the next frame draws it.
+    /// keeps its grid). Returns whether the band moved; the next frame draws it. `y` is the
+    /// browser's own `scrollY`, which goes negative while a phone rubber-bands past the top and
+    /// past the document's end at the bottom: the band follows it either way, so the page bounces
+    /// with the finger rather than stopping at the first pixel.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn set_page_scroll(&mut self, y: f32) -> bool {
         let s = self.env.scale.max(1e-3);
-        let y = (y.max(0.0) * s).round() / s;
+        let y = if y.is_finite() { (y * s).round() / s } else { 0.0 };
         if !self.page.on || y == self.page.scroll { return false; }
         self.page.scroll = y;
         true

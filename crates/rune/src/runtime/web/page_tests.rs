@@ -31,6 +31,27 @@ fn a_page_lays_out_at_its_height_and_draws_the_band_it_is_scrolled_to() {
 }
 
 #[test]
+fn negative_scroll_rubber_bands_the_page_downward() {
+    fn doc(_: &u32, _: &mut Cx<u32>) -> El {
+        crate::col().w_full()
+            .child(crate::text("Top of the page").key("top").w_full().h(300.0))
+            .child(crate::col().key("bottom").w_full().h(600.0))
+    }
+    let mut rt = Runtime::new(0u32, doc, (400.0, 200.0), Env::default());
+    rt.page_mode();
+    rt.frame(0.0);
+    // Pulling down at the top reports a negative `scrollY`; the band follows it, as the browser's
+    // own scroll indicator does, instead of stopping dead at the first pixel.
+    assert!(rt.set_page_scroll(-60.0));
+    rt.frame(0.0);
+    assert_eq!(rt.page_offset(), -60.0);
+    assert_eq!(rt.drawn_box(1)[1], 60.0, "the page rides down with the bounce");
+    let items = rt.web_a11y_items();
+    let top = items.iter().find(|i| i.text.contains("Top of the page")).expect("the heading mirrors");
+    assert_eq!(top.rect[1], 0.0, "the mirror keeps its document position");
+}
+
+#[test]
 fn page_scroll_is_ignored_outside_page_mode() {
     let mut rt = Runtime::new(0u32, tall, (400.0, 200.0), Env::default());
     rt.frame(0.0);
