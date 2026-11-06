@@ -8,8 +8,8 @@ use std::fmt::Write;
 use super::ExportNode;
 
 /// The rule every exported element starts from: a Rune element is a flex row, positioned, with
-/// its border inside its size.
-pub(crate) const BASE_CSS: &str = "[data-rune-static],[data-rune-static] *{box-sizing:border-box;display:flex;position:relative;margin:0;padding:0;min-width:0;border:0 solid transparent}[data-rune-static] a{color:inherit;text-decoration:none}[data-rune-static] img{display:block}[data-rune-static] svg{display:block;position:absolute;inset:0}";
+/// its border inside its size. A text element (class `t`) holds inline runs instead.
+pub(crate) const BASE_CSS: &str = "[data-rune-static],[data-rune-static] *{box-sizing:border-box;display:flex;position:relative;margin:0;padding:0;min-width:0;border:0 solid transparent}[data-rune-static] a{color:inherit;text-decoration:none}[data-rune-static] .t>*{display:inline;position:static}[data-rune-static] img{display:block}[data-rune-static] svg{display:block;position:absolute;inset:0}";
 
 /// The value a property takes where a width sets nothing, matching `BASE_CSS`.
 fn initial(prop: &str) -> &'static str {
@@ -83,7 +83,8 @@ pub(crate) fn page(widths: &[(f32, Vec<ExportNode>)]) -> (String, String) {
     let mut open: Vec<&'static str> = Vec::new();
     for (node, cls) in primary.iter().zip(&node_classes) {
         while open.len() > node.depth { let _ = write!(body, "</{}>", open.pop().unwrap()); }
-        let class = if cls.is_empty() { String::new() } else { format!(" class=\"{}\"", cls.join(" ")) };
+        let names: Vec<&str> = node.text.then_some("t").into_iter().chain(cls.iter().map(String::as_str)).collect();
+        let class = if names.is_empty() { String::new() } else { format!(" class=\"{}\"", names.join(" ")) };
         let root = if node.depth == 0 { " data-rune-static" } else { "" };
         let sizes = if node.attrs.contains(" srcset=") { sizes(node, widths, &by_path) } else { String::new() };
         let _ = write!(body, "<{}{root}{class}{}{sizes}>", node.tag, node.attrs);
