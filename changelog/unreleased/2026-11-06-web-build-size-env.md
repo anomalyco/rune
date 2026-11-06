@@ -1,0 +1,1 @@
+- `scripts/web-build.sh` takes `CARGO_PROFILE_RELEASE_OPT_LEVEL` and `CARGO_PROFILE_RELEASE_LTO` from the environment, so a site can trade build time for size (`z` and `fat` cut the Rune site's wasm by about a tenth); the defaults stay `s` and `thin`.
