@@ -433,6 +433,7 @@ impl<S: 'static> Measurement<'_, S> {
                             taken_paths: Vec::new(),
                             path_ids: &mut *self.path_ids,
                             next_id: &mut *self.next_id,
+                            foreground: self.defaults.foreground,
                         };
                         let (kid_slot, kid_dirty) = flatten_with_buf(
                             row_el,
@@ -541,6 +542,7 @@ impl<S: 'static> Measurement<'_, S> {
             nodes,
             reduced_motion: self.reduced_motion,
             time_scale: self.time_scale,
+            defaults: self.defaults,
             caret_read: self.caret_read,
             layout_reads: self.layout_reads,
             memo_flattened: Some(pending),

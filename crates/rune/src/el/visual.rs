@@ -33,6 +33,9 @@ pub struct VisualCold {
     /// Per-corner clip radii override (`[tl, tr, br, bl]`, in points).
     pub(crate) clip_corners: Option<[f32; 4]>,
     pub icon: Option<(&'static Icon, Color)>,
+    /// The icon's colour came from `El::color`; without it the icon takes the window's
+    /// foreground (`Cx::foreground`) when the view sets one.
+    pub(crate) icon_inked: bool,
     /// Vertical linear gradient (top, bottom) painted over the fill, under hover/press overlays.
     pub gradient: Option<Box<[Color; 2]>>,
     /// Radial or angled linear gradient painted over the fill, under hover/press overlays.
@@ -97,6 +100,7 @@ impl Empty for VisualCold {
         clip_radius: None,
         clip_corners: None,
         icon: None,
+        icon_inked: false,
         gradient: None,
         radial: None,
         outline: None,

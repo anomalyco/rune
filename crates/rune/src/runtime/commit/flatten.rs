@@ -234,6 +234,34 @@ fn prepare_text(
     (measure, secure_measure)
 }
 
+/// Text, an icon, and a text field's placeholder, caret and selection that weren't given a
+/// colour take the window's foreground ([`Cx::foreground`]), as CSS text takes `color`.
+fn take_foreground(
+    text: &mut Option<crate::cold::SharedBox<TextSpec>>,
+    input: Option<&mut InputSpec>,
+    vis: &mut Visual,
+    foreground: Option<Color>,
+) {
+    let Some(fg) = foreground else { return };
+    if let Some(t) = text && !t.inked && t.color != fg {
+        t.color = fg;
+    }
+    if let Some(i) = input {
+        if !i.placeholder_inked {
+            i.placeholder_color = fg.alpha(0.4);
+        }
+        if !i.caret_inked {
+            i.caret = fg;
+            if i.selection == crate::el::DEFAULT_SELECTION {
+                i.selection = fg.alpha(0.2);
+            }
+        }
+    }
+    if !vis.icon_inked && vis.icon.is_some_and(|(_, c)| c != fg) && let Some((_, c)) = &mut vis.cold_mut().icon {
+        *c = fg;
+    }
+}
+
 /// The `El::hover_motion_within` pair a node goes by: its own, else its anchor's, else its
 /// parent's.
 fn inherit_hover_within(
@@ -331,7 +359,7 @@ fn flatten_owned(
     }
     let record_built = parent_sx.is_none().then(|| {
         let built = el.memo_built.as_ref().filter(|b| b.reusable && memo_reuse::same_root_el(&el, b))?;
-        let (inherited, hover_within) = memo_reuse::inherited_for(parent, nodes, motion, in_row, scale);
+        let (inherited, hover_within) = memo_reuse::inherited_for(parent, nodes, motion, in_row, scale, memo_ctx.foreground);
         Some((built.id, inherited, hover_within))
     }).flatten();
     let prev_len = path_buf.len();
@@ -363,7 +391,7 @@ fn flatten_owned(
         role,
         label,
         mut style,
-        vis,
+        mut vis,
         live,
         mut text,
         children,
@@ -382,7 +410,7 @@ fn flatten_owned(
         streaming,
         whole,
         glide,
-        input,
+        mut input,
         window_drag,
         ime_cursor,
         scale: static_scale,
@@ -400,6 +428,7 @@ fn flatten_owned(
         apply_scroll_x_child(&mut style, sx);
     }
     let (measure, secure_measure) = prepare_text(&mut text, input.as_deref(), scale);
+    take_foreground(&mut text, input.as_deref_mut(), &mut vis, memo_ctx.foreground);
     let inert = inert || parent.is_some_and(|p| nodes[p].inert);
     let hover_within = inherit_hover_within(&vis, above.as_ref(), parent, nodes);
     let pixel_aspect = vis.pixels.as_ref()
@@ -550,7 +579,7 @@ fn flatten_ref(
     }
     let record_built = parent_sx.is_none().then(|| {
         let built = el.memo_built.as_ref().filter(|b| b.reusable && memo_reuse::same_root_el(el, b))?;
-        let (inherited, hover_within) = memo_reuse::inherited_for(parent, nodes, motion, in_row, scale);
+        let (inherited, hover_within) = memo_reuse::inherited_for(parent, nodes, motion, in_row, scale, memo_ctx.foreground);
         Some((built.id, inherited, hover_within))
     }).flatten();
     let prev_len = path_buf.len();
@@ -575,10 +604,11 @@ fn flatten_ref(
         apply_scroll_x_child(style.to_mut(), sx);
     }
     let mut text = el.text.clone();
-    let input = el.input.clone();
+    let mut input = el.input.clone();
     let (measure, secure_measure) = prepare_text(&mut text, input.as_deref(), scale);
     let inert = el.inert || parent.is_some_and(|p| nodes[p].inert);
-    let vis = el.vis.clone();
+    let mut vis = el.vis.clone();
+    take_foreground(&mut text, input.as_deref_mut(), &mut vis, memo_ctx.foreground);
     let hover_within = inherit_hover_within(&vis, el.above.as_ref(), parent, nodes);
     let pixel_aspect = vis.pixels.as_ref()
         .filter(|_| {

@@ -12,6 +12,8 @@ pub(crate) struct InheritedFlatten {
     pub(super) inert: bool,
     pub(super) trace_namespace: Option<(&'static str, &'static str)>,
     pub(super) scale_bits: u32,
+    /// The window's foreground (`Cx::foreground`), which a memo's uncoloured text took.
+    pub(super) foreground: Option<Color>,
 }
 
 pub(crate) struct FlattenedMemo {
@@ -161,6 +163,8 @@ pub(super) struct MemoFlattenCtx<'a> {
     pub(super) taken_paths: Vec<(u32, u32)>,
     pub(super) path_ids: &'a mut HashMap<String, NodeId>,
     pub(super) next_id: &'a mut u64,
+    /// What text, icons and text fields without their own colour draw in (`Cx::foreground`).
+    pub(super) foreground: Option<Color>,
 }
 
 fn opt_rc_eq<T: ?Sized>(a: &Option<Rc<T>>, b: &Option<Rc<T>>) -> bool {
@@ -182,7 +186,7 @@ fn opt_box_eq<T: PartialEq>(a: &Option<Box<T>>, b: &Option<Box<T>>) -> bool {
 fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> bool {
     let crate::el::VisualCold {
         surface, surface_place, border_bottom, border_dash, border_dash_phase, shadows, blur_motion,
-        clip, clip_radius, clip_corners, icon, gradient, radial, outline, shape,
+        clip, clip_radius, clip_corners, icon, icon_inked, gradient, radial, outline, shape,
         pixels, pixels_fit, effect, backdrop_blur, hover_motion, hover_within,
         group_opacity, group_color, hover_alone, icon_turn, cache_key, offset_motion, scale_motion,
         origin, rotate_motion, child_exit, enter_delay, motion_intent, instant_motion, clip_to_content,
@@ -200,6 +204,7 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
             (Some((ia, ca)), Some((ib, cb))) => std::ptr::eq(*ia, *ib) && ca == cb,
             _ => false,
         }
+        && a.icon_inked == *icon_inked
         && opt_box_eq(&a.gradient, gradient) && opt_box_eq(&a.radial, radial)
         && a.outline == *outline && opt_rc_eq(&a.shape, shape)
         && match (&a.pixels, pixels) {
@@ -476,6 +481,7 @@ pub(super) fn inherited_for(
     motion: Spring,
     in_row: RowLayout,
     scale: f32,
+    foreground: Option<Color>,
 ) -> (InheritedFlatten, Option<Rc<(Anim, Anim)>>) {
     let parent_is_stack = parent.is_some_and(|p| nodes[p].growth.is_some());
     let instant_changes = parent.is_some_and(|p| nodes[p].instant_changes);
@@ -491,6 +497,7 @@ pub(super) fn inherited_for(
             inert,
             trace_namespace,
             scale_bits: scale.to_bits(),
+            foreground,
         },
         hover_within,
     )
@@ -537,7 +544,7 @@ pub(super) fn try_reuse_memo(
     if old_slice[0].is_moved_stub() || old_slice[0].path.is_empty() || old_slice[0].id != flat.root_id || old_slice[flat.len - 1].id != flat.last_id {
         return None;
     }
-    let (inherited, hover_within) = inherited_for(parent, nodes, motion, in_row, scale);
+    let (inherited, hover_within) = inherited_for(parent, nodes, motion, in_row, scale, ctx.foreground);
     // By value: a view that sets `hover_motion_within` above the memo builds a new pair each time.
     if flat.inherited != inherited || flat.hover_within.as_deref() != hover_within.as_deref() {
         return None;

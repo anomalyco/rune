@@ -168,7 +168,7 @@ impl Default for GrowthSpec {
 }
 
 /// The selection highlight until [`El::selection_color`] or [`El::caret`] sets one.
-const DEFAULT_SELECTION: Color = Color { r: 1.0, g: 1.0, b: 1.0, a: 0.2 };
+pub(crate) const DEFAULT_SELECTION: Color = Color { r: 1.0, g: 1.0, b: 1.0, a: 0.2 };
 
 /// A text field bound to a [`TextEdit`] in app state.
 #[derive(Clone)]
@@ -182,6 +182,10 @@ pub struct InputSpec {
     pub selection: Color,
     /// One unwrapped line that scrolls sideways to keep the caret visible, like `<input>`.
     pub single_line: bool,
+    /// `placeholder_color`, and `caret` with `selection`, came from [`El::placeholder`] and
+    /// [`El::caret`]; the others follow the window's foreground ([`Cx::foreground`](crate::Cx::foreground)).
+    pub(crate) placeholder_inked: bool,
+    pub(crate) caret_inked: bool,
     pub(crate) revealed_override: Option<bool>,
     pub(crate) decorations: Vec<Span>,
     pub(crate) rich_style: crate::edit::RichStyle,
@@ -598,6 +602,7 @@ pub fn text(content: impl Into<String>) -> El {
         content: content.into(),
         style: crate::tok::type_::BODY,
         color: Color::WHITE,
+        inked: false,
         align: Align::Start,
         spans: Vec::new(),
         wrap: false,
@@ -691,6 +696,8 @@ pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
         caret: Color::WHITE,
         selection: DEFAULT_SELECTION,
         single_line: false,
+        placeholder_inked: false,
+        caret_inked: false,
         revealed_override: None,
         decorations: Vec::new(),
         rich_style: crate::edit::RichStyle::default(),
@@ -1075,6 +1082,17 @@ impl El {
     /// control with no ring of its own draws the default one (see [`El::no_focus_ring`]).
     pub fn focus_ring(mut self, width: f32, offset: f32, color: Color) -> Self {
         self.focus.ring = Some(Outline { width, offset, color });
+        self.focus.within = false;
+        self.focus.ring_off = false;
+        self
+    }
+    /// A ring drawn while focus is on this element or anywhere inside it, whether the pointer or
+    /// the keyboard put it there, as CSS `:focus-within` draws a text field's box: e.g.
+    /// `focus_within_ring(1.0, -1.0, c)` for `outline: 1px solid; outline-offset: -1px`, a ring
+    /// just inside the border box. It isn't a Tab stop by itself.
+    pub fn focus_within_ring(mut self, width: f32, offset: f32, color: Color) -> Self {
+        self.focus.ring = Some(Outline { width, offset, color });
+        self.focus.within = true;
         self.focus.ring_off = false;
         self
     }
@@ -1082,14 +1100,16 @@ impl El {
     /// that shows focus its own way (a fill, an outline it animates) sets it on itself or on
     /// the child that would draw the ring.
     ///
-    /// Without it, a `focusable` element focused from the keyboard draws AppKit's ring when
-    /// neither it nor a child (short of another focusable) sets `focus_ring`: 3 points wide
-    /// in [`Cx::focus_color`](crate::Cx::focus_color), just outside its border box, following
+    /// Without it, a `focusable` element focused from the keyboard draws the default ring when
+    /// neither it nor a child (short of another focusable) sets `focus_ring`: the view's
+    /// [`Cx::focus_ring`](crate::Cx::focus_ring), else AppKit's, 3 points wide in
+    /// [`Cx::focus_color`](crate::Cx::focus_color), just outside its border box, following
     /// its corner radii. Text fields, focused links, `focus_highlight` rows and the items of a `menu`,
     /// `listbox`, `list`, `tree` or `grid` group draw none, as in AppKit: their caret,
     /// highlight or selection shows focus.
     pub fn no_focus_ring(mut self) -> Self {
         self.focus.ring = None;
+        self.focus.within = false;
         self.focus.ring_off = true;
         self
     }
@@ -1197,9 +1217,11 @@ impl El {
     pub fn color(mut self, c: Color) -> Self {
         if let Some(t) = &mut self.text {
             t.color = c;
+            t.inked = true;
         }
         if let Some(cold) = self.vis.cold.get_mut_if_some() && let Some((_, ic)) = &mut cold.icon {
             *ic = c;
+            cold.icon_inked = true;
         }
         if self.input.is_some() {
             self.sync_input_rich();

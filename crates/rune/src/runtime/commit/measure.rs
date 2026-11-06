@@ -61,6 +61,7 @@ impl<S: 'static> Runtime<S> {
             system_scroll_bars: self.scroll_bars.state,
             reduced_motion: self.reduced_motion,
             time_scale: self.time_scale,
+            defaults: self.defaults,
             caret: self.caret.clone(),
             caret_read: false,
             layout_seen: self.layout_seen.rects.clone(),
@@ -205,6 +206,7 @@ impl<S: 'static> Measurement<'_, S> {
             nodes,
             reduced_motion: self.reduced_motion,
             time_scale: self.time_scale,
+            defaults: self.defaults,
             caret_read: self.caret_read,
             layout_reads: self.layout_reads,
             memo_flattened: Some(memo_pending),
@@ -355,6 +357,7 @@ impl<S: 'static> Measurement<'_, S> {
             system_reduced_motion: this.system_reduced_motion,
             reduced_motion: this.system_reduced_motion,
             time_scale: this.time_scale,
+            defaults: Default::default(),
             caret: this.caret.clone(),
             caret_read: std::cell::Cell::new(false),
             layout: this.layout_seen.clone(),
@@ -397,6 +400,7 @@ impl<S: 'static> Measurement<'_, S> {
         *self.memo = memo;
         self.reduced_motion = cx.reduced_motion;
         self.time_scale = cx.time_scale;
+        self.defaults = cx.defaults;
         // Reads made by memos this build reused count as made again.
         self.caret_read = cx.caret_read.get() || replayed.caret;
         self.layout_reads = cx.layout_reads.take();
@@ -431,6 +435,7 @@ impl<S: 'static> Measurement<'_, S> {
                 taken_paths,
                 path_ids: &mut *self.path_ids,
                 next_id: &mut *self.next_id,
+                foreground: self.defaults.foreground,
             };
             let (root_id, _) = flatten_with_buf(root, None, &mut path_buf, 0, motion::DEFAULT, RowLayout::Free, true, &mut taffy, &mut nodes, scale, &mut memo_ctx);
             let (pending, reused, taken_paths) = (memo_ctx.pending, memo_ctx.reused, memo_ctx.taken_paths);
