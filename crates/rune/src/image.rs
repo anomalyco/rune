@@ -257,7 +257,13 @@ impl ImageCache {
         let mut entries = self.entries.lock().unwrap();
         if let Some(state) = entries.get(&id).and_then(Weak::upgrade) { return Image(state); }
         entries.retain(|_, value| value.strong_count() > 0);
-        let image = Image(Arc::new(State { id, pixels: crate::Pixels::new(), decoded: OnceLock::new() }));
+        let url: Option<Arc<str>> = match &input {
+            Input::Url(url, _) => Some(url.as_str().into()),
+            #[cfg(not(target_arch = "wasm32"))]
+            Input::File(path, _) => Some(path.to_string_lossy().into()),
+            _ => None,
+        };
+        let image = Image(Arc::new(State { id, pixels: crate::Pixels::from_url(url), decoded: OnceLock::new() }));
         entries.insert(id, Arc::downgrade(&image.0));
         #[cfg(not(target_arch = "wasm32"))]
         if self.jobs.send(Job { image: image.clone(), input }).is_err() {
@@ -721,6 +727,8 @@ impl Srgb {
 }
 
 mod from_url;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use from_url::font_file;
 
 #[cfg(test)]
 mod mip_tests;

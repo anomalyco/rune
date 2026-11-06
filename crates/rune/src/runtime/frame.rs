@@ -9,8 +9,8 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub fn set_viewport(&mut self, viewport: (f32, f32), scale: f32) {
-        // Someone resized a window that fits its content: it goes back to the content's height.
-        if self.fit_height && self.window_resting && (self.fit_asked.unwrap_or(self.viewport.1) - viewport.1).abs() > 0.5 {
+        // Someone resized a window that fits its content (not a page's band): back to its height.
+        if self.fit_height && !self.page.on && self.window_resting && (self.fit_asked.unwrap_or(self.viewport.1) - viewport.1).abs() > 0.5 {
             self.fit_asked = None;
             self.relayout = true;
             self.viewport_stepped = false;

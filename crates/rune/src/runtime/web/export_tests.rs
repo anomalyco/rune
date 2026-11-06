@@ -1,0 +1,73 @@
+use super::*;
+
+fn site(_: &(), cx: &mut Cx<()>) -> El {
+    let wide = cx.layout_size("root").is_some_and(|s| s[0] >= 700.0);
+    let cards = if wide { crate::row() } else { crate::col() };
+    crate::col().key("root").w_full().role("main").fill(crate::color::hex("#0b0d12").unwrap()).padding(24.0).gap(16.0)
+        .child(crate::text("Rune").key("title").role("heading").level(1).font(crate::tok::type_::TITLE).color(crate::Color::WHITE))
+        .child(crate::rich("Read the <docs> & more.", vec![]).font(crate::tok::type_::BODY)
+            .link(crate::Link::new(9..15, "https://example.com/docs?a=1&b=2")))
+        .child(cards.key("views").role("region").label("Views").gap(12.0)
+            .child(crate::col().key("a").grow(1.0).radius(12.0).border(1.0, crate::color::hex("#2a2f3a").unwrap()).child(crate::text("Plain Rust")))
+            .child(crate::col().key("b").grow(1.0).child(crate::text("Tested")))
+            .children(wide.then(|| crate::col().key("c").grow(1.0).child(crate::text("Wide only")))))
+        .child(crate::row().key("gh").href("https://github.com/example/rune").child(crate::text("GitHub")))
+        .child(crate::col().key("idle").opacity(0.0).child(crate::text("Hidden")))
+}
+
+fn taken(rt: &mut Runtime<()>, w: f32) -> Vec<ExportNode> {
+    rt.set_viewport((w, 600.0), 2.0);
+    rt.frame(0.0);
+    rt.frame(0.0);
+    rt.export_nodes()
+}
+
+#[test]
+fn exports_landmarks_headings_links_and_text_with_their_css() {
+    let mut rt = Runtime::new((), site, (400.0, 600.0), Env::default());
+    rt.page_mode();
+    let nodes = taken(&mut rt, 400.0);
+    let tags: Vec<&str> = nodes.iter().map(|n| n.tag).collect();
+    assert_eq!(tags[..2], ["main", "h1"]);
+    assert!(nodes.iter().any(|n| n.tag == "section" && n.attrs.contains("id=\"views\"")), "{tags:?}");
+    let link = nodes.iter().find(|n| n.tag == "a").expect("href element");
+    assert!(link.attrs.contains("href=\"https://github.com/example/rune\"") && link.attrs.contains("id=\"gh\""));
+    let lede = nodes.iter().find(|n| n.inner.contains("docs")).expect("rich text");
+    assert_eq!(lede.inner, "Read the <a href=\"https://example.com/docs?a=1&amp;b=2\">&lt;docs&gt;</a> &amp; more.");
+    assert!(!nodes.iter().any(|n| n.inner.contains("Hidden")), "an invisible subtree is left out");
+    let root = &nodes[0].decls;
+    assert!(root.contains(&("flex-direction", "column".into())) && root.contains(&("width", "100%".into())));
+    assert!(root.contains(&("padding", "24px".into())) && root.contains(&("row-gap", "16px".into())));
+    let card = nodes.iter().find(|n| n.path.ends_with("a") && n.decls.iter().any(|d| d.0 == "border-radius")).expect("card");
+    assert!(card.decls.contains(&("border-radius", "12px".into())));
+    assert!(card.decls.iter().any(|d| d.0 == "box-shadow" && d.1.starts_with("inset 0 0 0 1px")), "a paint-only border is an inset shadow");
+    let title = &nodes[1];
+    assert!(title.decls.contains(&("color", "#ffffff".into())) && title.decls.iter().any(|d| d.0 == "font-size"));
+}
+
+#[test]
+fn folds_widths_into_media_rules_and_hides_what_a_width_lacks() {
+    let mut rt = Runtime::new((), site, (400.0, 600.0), Env::default());
+    rt.page_mode();
+    let narrow = taken(&mut rt, 400.0);
+    let wide = taken(&mut rt, 900.0);
+    let (body, css) = page(&[(400.0, narrow), (900.0, wide.clone())]);
+    assert!(body.starts_with("<main data-rune-static"));
+    assert!(css.starts_with(page::BASE_CSS));
+    let media = css.split_once("@media (min-width:900px){").expect("a wide block").1;
+    assert!(media.contains("flex-direction:row"), "{media}");
+    assert!(!body.contains("Wide only"), "the body is the narrowest tree: {body}");
+    assert!(wide.iter().any(|n| n.inner == "Wide only"));
+    let opened = body.matches('<').count() - body.matches("</").count();
+    assert_eq!(opened, body.matches("</").count(), "every element closes: {body}");
+}
+
+#[test]
+fn a_node_missing_at_a_wider_width_is_hidden_there() {
+    let narrow = vec![ExportNode { path: "0".into(), depth: 0, tag: "div", attrs: String::new(), inner: String::new(), decls: vec![] },
+        ExportNode { path: "0.1".into(), depth: 1, tag: "p", attrs: String::new(), inner: "x".into(), decls: vec![("color", "#fff".into())] }];
+    let wide = vec![narrow[0].clone()];
+    let (body, css) = page(&[(360.0, narrow), (800.0, wide)]);
+    assert_eq!(body, "<div data-rune-static><p class=\"a0 b0\">x</p></div>");
+    assert!(css.ends_with(".a0{color:#fff;display:flex}@media (min-width:800px){.b0{display:none}}"), "{css}");
+}

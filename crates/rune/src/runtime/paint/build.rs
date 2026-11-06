@@ -136,7 +136,7 @@ impl<S: 'static> Runtime<S> {
             }
             let n = &self.nodes[i];
             let Some(p) = self.scene.presented(n.id) else { continue };
-            let mut pinh = n.parent.map_or(Inh::default(), |pr| self.inh_scratch[pr]);
+            let mut pinh = n.parent.map_or_else(|| self.root_inh(), |pr| self.inh_scratch[pr]);
             pinh.dy += self.row_dy[i];
             pinh.snap.rigid[1] += self.row_dy[i];
             if let Some(a) = &n.above

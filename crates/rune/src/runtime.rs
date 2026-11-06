@@ -270,6 +270,10 @@ mod size_tests;
 pub(crate) mod web_runtime;
 #[path = "runtime/web/a11y.rs"]
 pub(crate) mod web_a11y;
+#[path = "runtime/web/page.rs"]
+pub(crate) mod web_page;
+#[path = "runtime/web/export.rs"]
+pub(crate) mod web_export;
 
 #[path = "runtime/commit/text_layout.rs"]
 mod text_layout;
@@ -682,6 +686,8 @@ pub struct Runtime<S: 'static> {
     pub(crate) fit_height: bool,
     /// The content height last asked of the window.
     fit_asked: Option<f32>,
+    /// The band of a taller document the window draws (`App::web_document`).
+    pub(crate) page: web_page::Page,
     /// A fitting window at rest asked to move: this frame shows the commit's motion at its
     /// start, as the window can't move until the next frame.
     fit_hold: bool,
@@ -993,6 +999,7 @@ impl<S: 'static> Runtime<S> {
             window_title: Default::default(),
             fit_height: false,
             fit_asked: None,
+            page: Default::default(),
             fit_hold: false,
             fit_held: false,
             window_resting: false,

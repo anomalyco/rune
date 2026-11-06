@@ -1,0 +1,1 @@
+- On web, a `fit_content_height` canvas now forwards touches to Rune (it ignored them, so taps on its controls did nothing), and a fit-height window no longer lays out again when only the visible band's height changes.

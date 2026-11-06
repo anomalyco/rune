@@ -5,16 +5,31 @@ use winit::keyboard::ModifiersState;
 
 #[wasm_bindgen(module = "/src/platform/web/bridge.js")]
 extern "C" {
-    fn mount(canvas: &web_sys::HtmlCanvasElement, callback: &js_sys::Function, embedded: bool, fit_height: bool) -> JsValue;
+    fn mount(canvas: &web_sys::HtmlCanvasElement, callback: &js_sys::Function, embedded: bool, fit_height: bool, document: bool) -> JsValue;
     fn sync(handle: &JsValue, key: &str, text: &str, base: usize, anchor: u32, focus: u32, secure: bool);
     #[wasm_bindgen(js_name = syncCopy)]
     fn sync_copy(handle: &JsValue, text: &str);
     #[wasm_bindgen(js_name = syncA11y)]
     fn sync_a11y(handle: &JsValue, json: &str);
     fn activate(handle: &JsValue);
+    #[wasm_bindgen(js_name = syncPage)]
+    fn sync_page(handle: &JsValue, height: f32, focused: bool);
+    #[wasm_bindgen(js_name = presented)]
+    fn presented_js(handle: &JsValue);
     fn destroy(handle: &JsValue);
     #[wasm_bindgen(js_name = pastedImage)]
     fn pasted_image(handle: &JsValue, max: u32) -> js_sys::Promise;
+}
+
+/// How the canvas sits in the page.
+#[derive(Clone, Copy)]
+pub(super) struct Mode {
+    /// Inline at its parent's width.
+    pub embedded: bool,
+    /// As tall as its content: vertical wheel and pans belong to the page.
+    pub fit_height: bool,
+    /// The app is the page (`App::web_document`).
+    pub document: bool,
 }
 
 pub(super) struct Bridge {
@@ -26,12 +41,16 @@ pub(super) struct Bridge {
     a11y: crate::runtime::web_a11y::A11yMirror,
     copy_cache: String,
     fit_height: bool,
+    document: bool,
+    /// The page height and control focus the page last heard.
+    page: Option<(f32, bool)>,
 }
 
 impl Bridge {
     pub(super) fn new<S: 'static>(canvas: &web_sys::HtmlCanvasElement,
         running: std::rc::Weak<RefCell<Option<Running<S>>>>, window: Arc<Window>,
-        embedded: bool, fit_height: bool) -> Self {
+        mode: Mode) -> Self {
+        let Mode { embedded, fit_height, document } = mode;
         let callback = Closure::new(move |event: String| {
             let Some(running) = running.upgrade() else { return };
             let event = zeroize::Zeroizing::new(event);
@@ -43,12 +62,17 @@ impl Bridge {
                 window.request_redraw();
             }
         });
-        let dispose_viewport = platform::viewport(canvas, callback.as_ref().unchecked_ref(), embedded);
-        let handle = mount(canvas, callback.as_ref().unchecked_ref(), embedded, fit_height);
+        // A page's canvas is sized by its style and reports no safe area: the page lays out
+        // around the notch itself.
+        let dispose_viewport = platform::viewport(canvas, callback.as_ref().unchecked_ref(), embedded || document);
+        let handle = mount(canvas, callback.as_ref().unchecked_ref(), embedded, fit_height, document);
         Self { handle, _callback: callback, dispose_viewport, mods: ModifiersState::empty(),
             mirror: Default::default(), a11y: Default::default(),
-            copy_cache: String::new(), fit_height }
+            copy_cache: String::new(), fit_height, document, page: None }
     }
+
+    /// The first frame is on screen: a page swaps its static export for the live mirror.
+    pub(super) fn presented(&self) { presented_js(&self.handle); }
 }
 impl Drop for Bridge {
     fn drop(&mut self) {
@@ -70,6 +94,13 @@ impl<S: 'static> Running<S> {
         }
         if let Some(json) = self.rt.web_a11y(&mut self.input.a11y) {
             sync_a11y(&self.input.handle, json);
+        }
+        if self.input.document {
+            let page = (self.rt.page_height().ceil(), self.rt.has_focus());
+            if self.input.page != Some(page) {
+                self.input.page = Some(page);
+                sync_page(&self.input.handle, page.0, page.1);
+            }
         }
         if focus { activate(&self.input.handle); }
     }
@@ -108,6 +139,22 @@ impl<S: 'static> Running<S> {
             }
             Some("key") => activate = self.rt.web_key(event),
             Some("a11y_press" | "a11y_link") => { let _ = self.rt.web_a11y_action(event); }
+            // The page scrolled: draw the band in view, and hover what is now under the pointer.
+            // The redraw that follows the event draws it; nothing commits.
+            Some("scroll") => {
+                if self.rt.set_page_scroll(event["y"].as_f64().unwrap_or(0.0) as f32)
+                    && let Some((x, y)) = self.rt.pointer().filter(|_| !self.rt.touching())
+                {
+                    self.rt.pointer_move(x, y);
+                }
+                return;
+            }
+            // The pointer is over mirrored text or a link, which takes it from the canvas.
+            Some("hover") => {
+                let (x, y) = (event["x"].as_f64().unwrap_or(0.0) as f32, event["y"].as_f64().unwrap_or(0.0) as f32);
+                if !self.rt.touching() { self.rt.pointer_move(x, y); }
+                return;
+            }
             _ => {}
         }
         // Commit within the DOM event: clipboard, link and soft-keyboard APIs need activation.
@@ -146,13 +193,17 @@ impl<S: 'static> Running<S> {
             WindowEvent::MouseWheel { delta, .. } => {
                 let Some((x, y)) = self.rt.pointer() else { return false };
                 let (dx, dy) = crate::runtime::wheel_delta(*delta, scale, self.input.mods.shift_key());
-                if self.input.mods.control_key() { return self.rt.pinch_wheel(x, y, dy); }
+                // A page's pinch is the browser's zoom.
+                if self.input.mods.control_key() { return !self.input.document && self.rt.pinch_wheel(x, y, dy); }
                 // On a content-sized embedded canvas, vertical wheel belongs to the page unless
                 // a horizontal strip is being scrolled.
                 if self.input.fit_height && dx.abs() <= dy.abs() { return false; }
                 let precise = matches!(delta, winit::event::MouseScrollDelta::PixelDelta(_));
                 self.rt.wheel_event(crate::WheelEvent::new(dx, dy).at(x, y).mods(modifiers(self.input.mods)).precise(precise));
             }
+            // A page's Tab is the browser's, through the mirror's links and buttons.
+            WindowEvent::KeyboardInput { event, .. }
+                if self.input.document && event.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Tab) => return false,
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
                 immediate = true;
                 let pressed = event.state == ElementState::Pressed;
@@ -171,7 +222,9 @@ impl<S: 'static> Running<S> {
                     if pressed { self.rt.key(key); } else { self.rt.key_up(key); }
                 }
             }
-            WindowEvent::Touch(touch) if !self.input.fit_height => {
+            // On a canvas as tall as its content the browser takes vertical pans and cancels the
+            // touch; taps and horizontal drags stay Rune's.
+            WindowEvent::Touch(touch) => {
                 crate::window::touch(&mut self.rt, touch, scale);
                 // A tap is a user activation: links, the clipboard and focus act before the handler returns.
                 if matches!(touch.phase, TouchPhase::Ended) { activate = true; immediate = true; }

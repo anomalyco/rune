@@ -16,5 +16,8 @@ extern "C" {
     /// Resolves to `[width, height, Uint8Array]`: straight sRGB RGBA, or `[0, 0, svg bytes]`.
     #[wasm_bindgen(js_name = fetchImage)]
     pub(crate) fn fetch_image(url: &str, max_side: u32) -> js_sys::Promise;
+    /// Resolves to the `Uint8Array` body of `url`, relative to the page.
+    #[wasm_bindgen(js_name = fetchBytes)]
+    pub(crate) fn fetch_bytes(url: &str) -> js_sys::Promise;
     pub(super) fn viewport(canvas: &web_sys::HtmlCanvasElement, callback: &js_sys::Function, embedded: bool) -> js_sys::Function;
 }
