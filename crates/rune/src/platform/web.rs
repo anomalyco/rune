@@ -59,7 +59,7 @@ fn spawn<S: 'static>(mut app: App<S>) -> Result<(), String> {
     let wake = proxy.clone();
     shared.connect(Arc::new(move || { let _ = wake.send_event(Wake::App); }));
     page::occupy(quitting(&shared), app.same_tab_router.take());
-    event_loop.spawn_app(Browser { app: Some(app), shared, proxy, window: None, embedded: false, owns_canvas: true,
+    event_loop.spawn_app(Browser { app: Some(app), shared, proxy, window: None, embedded: false, document: false, owns_canvas: true,
         borrowed: page::Borrowed::default(), pending: Rc::default(), running: Rc::default() });
     Ok(())
 }
@@ -71,10 +71,13 @@ struct Browser<S: 'static> {
     window: Option<Arc<Window>>,
     /// Inline in the page at its parent's width, rather than covering the viewport.
     embedded: bool,
+    /// The app is the page (`App::web_document`): the browser scrolls it.
+    document: bool,
     /// Rune made the canvas (no `App::canvas_id`), so it removes it when the app ends.
     owns_canvas: bool,
     borrowed: page::Borrowed,
-    pending: Rc<RefCell<Option<Result<(Gpu, wgpu::Surface<'static>), String>>>>,
+    /// The GPU, and the bytes of `App::font_url`'s fonts that loaded.
+    pending: Rc<RefCell<Option<(Result<(Gpu, wgpu::Surface<'static>), String>, Vec<Vec<u8>>)>>>,
     running: Rc<RefCell<Option<Running<S>>>>,
 }
 
@@ -89,6 +92,9 @@ struct Running<S: 'static> {
     compositor: Option<Box<dyn crate::Compositor<S>>>,
     suspended: bool,
     embedded: bool,
+    document: bool,
+    /// The first frame is on screen.
+    presented: bool,
     cursor: crate::cursor::os::OsCursor,
     _menus: crate::native_menu::Guard<S>,
     shortcuts: crate::shortcuts::Guard,
@@ -128,7 +134,10 @@ impl<S: 'static> Running<S> {
         {
             doc.set_title(title);
         }
-        if let Some(req) = self.rt.window_frame.take()
+        // A page's height is the mirror's, which `sync_input` keeps; the canvas stays the band.
+        if self.document {
+            self.rt.window_frame = None;
+        } else if let Some(req) = self.rt.window_frame.take()
             && let Some((_, h)) = req.size
             && let Some(canvas) = window.canvas()
         {
@@ -231,7 +240,8 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             None => None,
         };
         self.owns_canvas = existing.is_none();
-        self.embedded = app.web_inline();
+        self.document = app.web_document;
+        self.embedded = app.web_inline() && !self.document;
         if let Some(canvas) = &existing { self.borrowed.canvas(canvas); }
         let mut attrs = Window::default_attributes().with_title(app.spec.title).with_prevent_default(false);
         attrs = match &existing {
@@ -246,7 +256,17 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         if !canvas.has_attribute("tabindex") {
             let _ = canvas.set_attribute("tabindex", "0");
         }
-        if self.embedded {
+        if self.document {
+            // The browser scrolls the page under a canvas fixed to the layout viewport, which
+            // draws the band in view; vertical pans and pinches stay the browser's.
+            let _ = canvas.set_attribute("tabindex", "-1");
+            canvas.style().set_css_text("position:fixed;left:0;top:0;width:100%;height:100%;display:block;touch-action:pan-y pinch-zoom;outline:none;user-select:none;-webkit-user-select:none");
+            if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+                self.borrowed.viewport(&document);
+                document.set_title(app.spec.title);
+                if let Some(body) = document.body() { let _ = body.style().set_property("margin", "0"); }
+            }
+        } else if self.embedded {
             let touch = if app.fit_content_height { "pan-y" } else { "none" };
             canvas.style().set_css_text(&format!(
                 "display:block;width:100%;touch-action:{touch};outline:none;user-select:none;-webkit-user-select:none"
@@ -268,15 +288,24 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         let features = app.compositor.as_ref().map_or(wgpu::Features::empty(), |c| c.features());
         let pending = self.pending.clone();
         let proxy = self.proxy.clone();
+        // The fonts download while the GPU starts.
+        let fonts: Vec<_> = app.font_urls.iter().map(|url| (url.clone(), platform::fetch_bytes(url))).collect();
         self.window = Some(window);
         wasm_bindgen_futures::spawn_local(async move {
             let result = gpu(canvas, features).await;
+            let mut loaded = Vec::new();
+            for (url, font) in fonts {
+                match wasm_bindgen_futures::JsFuture::from(font).await {
+                    Ok(bytes) => loaded.push(js_sys::Uint8Array::new(&bytes).to_vec()),
+                    Err(e) => web_sys::console::warn_2(&format!("rune: font {url} did not load:").into(), &e),
+                }
+            }
             // A loop that has closed was quit while the GPU started.
             if proxy.send_event(Wake::Ready).is_err() {
                 if let Ok((gpu, _)) = result { gpu.device.destroy(); }
                 return;
             }
-            *pending.borrow_mut() = Some(result);
+            *pending.borrow_mut() = Some((result, loaded));
         });
     }
 
@@ -284,7 +313,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         if self.shared.quitting.load(Ordering::Acquire) { self.end(event_loop); return; }
         let Some(window) = self.window.as_ref() else { return };
         if matches!(event, Wake::Ready) {
-            let Some(result) = self.pending.borrow_mut().take() else { return };
+            let Some((result, fonts)) = self.pending.borrow_mut().take() else { return };
             let (gpu, surface) = match result {
                 Ok(gpu) => gpu,
                 Err(e) => {
@@ -293,6 +322,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 }
             };
             let mut app = self.app.take().expect("one canvas initialization");
+            for bytes in fonts { app.spec.fonts = crate::app::with_font(app.spec.fonts, bytes); }
             let compositor = app.compositor.take();
             let (on_focus, modifier_keys, srgb_blend) = (app.on_focus, app.modifier_keys, app.srgb_blend);
             let (font_smoothing, fit_height) = (app.font_smoothing, app.fit_content_height);
@@ -320,7 +350,11 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             let wake: crate::Waker = Arc::new(move || { let _ = proxy.send_event(Wake::App); });
             let mut rt = crate::tooling::runtime_for(&spec, state, (size.width as f32 / scale, size.height as f32 / scale), Env::new(dark, scale), wake.clone());
             crate::playground::attach(&mut rt, playground, &spec, None, None, true);
-            if fit_height {
+            let document = self.document;
+            if document {
+                rt.page_mode();
+                rt.set_viewport((size.width as f32 / scale, size.height as f32 / scale), scale);
+            } else if fit_height {
                 rt.fit_height = true;
                 let w = (size.width as f32 / scale).max(1.0);
                 rt.set_viewport((w, spec.size.1), scale);
@@ -365,9 +399,11 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             let mut renderer = Renderer::new(&gpu.device, format);
             renderer.set_srgb_blend(!format.is_srgb());
             let cursor = crate::cursor::os::OsCursor::new(event_loop);
-            let input = input::Bridge::new(&window.canvas().unwrap(), Rc::downgrade(&self.running), window.clone(), self.embedded, fit_height);
+            let input = input::Bridge::new(&window.canvas().unwrap(), Rc::downgrade(&self.running), window.clone(),
+                input::Mode { embedded: self.embedded, fit_height, document });
             *self.running.borrow_mut() = Some(Running { gpu, surface, config, renderer, rt, shared, input, clipboard,
                 clock: crate::frame::clock::FrameClock::new(now), compositor, suspended: false, embedded: self.embedded,
+                document, presented: false,
                 cursor, _menus: menus, shortcuts });
         }
         if let Some(r) = &mut *self.running.borrow_mut() {
@@ -445,6 +481,10 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 r.renderer.submit(&r.gpu.queue, encoder);
                 window.pre_present_notify();
                 r.gpu.queue.present(frame);
+                if !r.presented {
+                    r.presented = true;
+                    r.input.presented();
+                }
                 if r.rt.shell_request.take().is_some() { self.end(event_loop); return; }
                 if animating || r.rt.has_pending_input() || r.rt.live_pending() || r.compositor.as_ref().is_some_and(|c| c.animating()) {
                     window.request_redraw();
@@ -478,7 +518,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         self.shared.quitting.store(true, Ordering::Release);
         let running = self.running.borrow_mut().take();
         if let Some(r) = running { r.close(); }
-        if let Some(Ok((gpu, _))) = self.pending.borrow_mut().take() { gpu.device.destroy(); }
+        if let Some((Ok((gpu, _)), _)) = self.pending.borrow_mut().take() { gpu.device.destroy(); }
         if let Some(window) = self.window.take() && self.owns_canvas && let Some(canvas) = window.canvas() { canvas.remove(); }
         std::mem::take(&mut self.borrowed).give_back();
         INSETS.set([0.0; 4]);

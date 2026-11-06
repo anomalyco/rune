@@ -157,6 +157,8 @@ mod crop;
 mod eased_input;
 #[path = "tooling/headless.rs"]
 mod headless;
+#[path = "tooling/html.rs"]
+pub(crate) mod html;
 #[path = "tooling/key_names.rs"]
 mod key_names;
 #[path = "tooling/script.rs"]

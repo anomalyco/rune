@@ -28,6 +28,11 @@ use std::sync::{Arc, Mutex};
 use crate::el::Tx;
 use crate::tooling::{AppSpec, Args};
 
+#[path = "app/web.rs"]
+mod web;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use web::with_font;
+
 type Update<S> = Box<dyn FnOnce(&mut S, &mut Tx) -> bool + Send>;
 /// `App::on_window`'s hook, run after each native window creation.
 pub(crate) type OnWindow = Box<dyn FnMut(&crate::WindowHandle)>;
@@ -66,6 +71,10 @@ pub struct App<S: 'static> {
     pub(crate) canvas_id: Option<String>,
     pub(crate) full_viewport: bool,
     pub(crate) fit_content_height: bool,
+    pub(crate) web_document: bool,
+    /// `App::font_url`'s fonts, which a web app fetches before its first frame.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) font_urls: Vec<String>,
     pub(crate) float_on_open: bool,
     pub(crate) modifier_keys: bool,
     pub(crate) tab_visits_controls: bool,
@@ -108,6 +117,9 @@ impl<S: 'static> App<S> {
             canvas_id: None,
             full_viewport: false,
             fit_content_height: false,
+            web_document: false,
+            #[cfg(target_arch = "wasm32")]
+            font_urls: Vec::new(),
             float_on_open: false,
             modifier_keys: false,
             tab_visits_controls: false,
@@ -155,25 +167,6 @@ impl<S: 'static> App<S> {
     /// `Tx::resize_window`. Give the root no fixed or `fill` height. Users still set the width.
     pub fn fit_content_height(mut self) -> Self {
         self.fit_content_height = true;
-        self
-    }
-
-    /// Mount onto an existing `<canvas id="…">` in the web document instead of appending a
-    /// full-viewport canvas and locking `document.body`. The canvas sits inline in the page at
-    /// its parent's width: pair with [`Self::fit_content_height`] to embed a Rune view in a
-    /// scrollable page, or add [`Self::full_viewport`] to cover the screen. Ignored on native.
-    pub fn canvas_id(mut self, id: impl Into<String>) -> Self {
-        self.canvas_id = Some(id.into());
-        self
-    }
-
-    /// On web, cover the browser viewport even when [`Self::canvas_id`] names the canvas, as an
-    /// app without one does: the canvas is fixed to the visual viewport, the body stops
-    /// scrolling, `Cx::safe_area` reports the page's insets and the title sets
-    /// `document.title`. For a single-page app that mounts Rune full screen in a route's own
-    /// `<canvas>`. [`Self::fit_content_height`] wins over it. Ignored on native.
-    pub fn full_viewport(mut self) -> Self {
-        self.full_viewport = true;
         self
     }
 

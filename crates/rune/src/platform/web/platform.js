@@ -79,6 +79,12 @@ export async function fetchImage(url, maxSide) {
     }
 }
 
+export async function fetchBytes(url) {
+    const response = await fetch(new URL(url, document.baseURI));
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return new Uint8Array(await response.arrayBuffer());
+}
+
 export function viewport(canvas, callback, embedded) {
     const probe = document.createElement('div');
     probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';

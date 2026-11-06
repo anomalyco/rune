@@ -51,5 +51,7 @@ fn the_cache_loads_a_url_once_and_wakes_when_it_lands() {
     assert_eq!(cache.url(&format!("file://{}", path.display()), 16.0, 2.0).wait(), Ok([3, 2]));
     let remote = cache.url("https://example.com/dot.png", 16.0, 2.0);
     assert!(remote.wait().unwrap_err().0.contains("ImageCache::load"));
+    assert_eq!(remote.pixels().source_url(), Some("https://example.com/dot.png"), "the URL stays readable for a page export");
+    assert_eq!(cache.rgba(1, 1, vec![0; 4]).pixels().source_url(), None);
     std::fs::remove_dir_all(&dir).unwrap();
 }

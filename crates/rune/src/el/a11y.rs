@@ -49,6 +49,8 @@ pub(crate) struct A11yMore {
     pub read_only: bool,
     /// `El::sorted`: ascending or descending.
     pub sorted: Option<bool>,
+    /// `El::href`: the URL this element links to.
+    pub href: Option<String>,
 }
 
 /// Accessibility state beyond role and label (`El::level`, `El::expanded`, `El::secure`, and
@@ -76,6 +78,27 @@ impl A11y {
 }
 
 impl El {
+    /// Make this element a link to `url`, as an HTML `<a href>` is: its role is `"link"`, a
+    /// press opens `url` with [`Tx::open_url`](crate::Tx::open_url), and on web the semantic
+    /// mirror puts a real `<a href>` over it, so middle-click, ⌘-click, "Copy Link", the
+    /// keyboard and crawlers treat it as one. A static page export (`--html`) writes it as one
+    /// too. `url` may be relative to the page (`/docs`) or a fragment (`#install`); natively
+    /// those don't open. Its label is its text unless [`El::label`] sets one.
+    pub fn href(mut self, url: impl Into<String>) -> Self {
+        let url = url.into();
+        self.a11y.more().href = Some(url.clone());
+        self.role = "link";
+        self.handlers.on_press = Some(std::rc::Rc::new(move |_, tx: &mut crate::Tx| {
+            if url.contains(':') { let _ = tx.open_url(&url); }
+        }));
+        self
+    }
+
+    /// The URL [`El::href`] set.
+    pub fn link_url(&self) -> Option<&str> {
+        self.a11y.more.as_ref()?.href.as_deref()
+    }
+
     /// A longer explanation than the label, read after it (ARIA `aria-description`): what a
     /// setting does, or the shortcut a button has. The label stays short. Without one, an
     /// [`El::help`] tooltip describes the element; `description("")` turns that off.

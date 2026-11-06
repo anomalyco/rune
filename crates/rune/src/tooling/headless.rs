@@ -30,6 +30,7 @@ pub fn headless<S: 'static>(app: crate::app::App<S>, args: Args) {
 /// `headless`, returning the error when a window whose own arguments aren't headless can't open.
 pub(crate) fn try_headless<S: 'static>(mut app: crate::app::App<S>, args: Args) -> Result<(), String> {
     crate::render::discard_prewarm();
+    if args.html.is_some() { return crate::tooling::html::export(app, &args); }
     if app.windows.is_empty() && args.desktop.is_none() {
         if args.list_windows { println!("main"); return Ok(()); }
         if args.window.as_deref().is_some_and(|key| key != "main") {

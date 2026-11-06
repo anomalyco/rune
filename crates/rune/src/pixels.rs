@@ -23,6 +23,8 @@ pub struct Pixels {
     frame: Arc<Mutex<Frame>>,
     /// Wakes the windows and overlays whose scene shows this image.
     pub(crate) source: Arc<crate::live::Source>,
+    /// The URL or path an `ImageCache` loaded it from.
+    url: Option<Arc<str>>,
 }
 
 impl std::fmt::Debug for Pixels {
@@ -45,7 +47,19 @@ impl Pixels {
             id: NEXT.fetch_add(1, Ordering::Relaxed),
             frame: Arc::new(Mutex::new(Frame { width: 0, height: 0, rgba: Vec::new(), generation: 0, mips: None })),
             source: crate::live::Source::new(0),
+            url: None,
         }
+    }
+
+    pub(crate) fn from_url(url: Option<Arc<str>>) -> Pixels {
+        Pixels { url, ..Pixels::new() }
+    }
+
+    /// The URL ([`ImageCache::url`](crate::ImageCache::url)) or path
+    /// ([`ImageCache::file`](crate::ImageCache::file)) the image was loaded from, as given, so
+    /// a page export can point an `<img>` at it.
+    pub fn source_url(&self) -> Option<&str> {
+        self.url.as_deref()
     }
 
     /// Replaces the image: `rgba` is `width * height` straight-alpha sRGB pixels, rows top
