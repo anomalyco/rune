@@ -33,15 +33,22 @@ struct State {
 
 /// A cheap shared handle. Pending images paint nothing until their worker wakes the app.
 #[derive(Clone)]
-pub struct Image(Arc<State>);
+pub struct Image(Arc<State>, crate::Pixels);
 impl std::fmt::Debug for Image {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Image").field("id", &self.id()).field("size", &self.size()).finish()
     }
 }
 impl Image {
-    /// The shared static pixel handle, ready to pass to `El::pixels` after decoding.
-    pub fn pixels(&self) -> &crate::Pixels { &self.0.pixels }
+    /// A handle on `state`, whose pixels keep it in the cache while drawn.
+    fn new(state: Arc<State>) -> Image {
+        let pixels = state.pixels.clone().keeping(state.clone());
+        Image(state, pixels)
+    }
+
+    /// The shared static pixel handle, ready to pass to `El::pixels` after decoding. While
+    /// any clone of it lives (an element drawing it), the cache hands back this image.
+    pub fn pixels(&self) -> &crate::Pixels { &self.1 }
     pub fn id(&self) -> ImageId { self.0.id }
     pub fn size(&self) -> Option<[u32; 2]> {
         let mip = self.decoded()?.ok()?.mips.first()?;
@@ -259,7 +266,7 @@ impl ImageCache {
 
     fn request_set(&self, id: ImageId, input: Input, srcset: Option<Arc<str>>) -> Image {
         let mut entries = self.entries.lock().unwrap();
-        if let Some(state) = entries.get(&id).and_then(Weak::upgrade) { return Image(state); }
+        if let Some(state) = entries.get(&id).and_then(Weak::upgrade) { return Image::new(state); }
         entries.retain(|_, value| value.strong_count() > 0);
         let url: Option<Arc<str>> = match &input {
             Input::Url(url, _) => Some(url.as_str().into()),
@@ -267,7 +274,7 @@ impl ImageCache {
             Input::File(path, _) => Some(path.to_string_lossy().into()),
             _ => None,
         };
-        let image = Image(Arc::new(State { id, pixels: crate::Pixels::from_url(url, srcset), decoded: OnceLock::new() }));
+        let image = Image::new(Arc::new(State { id, pixels: crate::Pixels::from_url(url, srcset), decoded: OnceLock::new() }));
         entries.insert(id, Arc::downgrade(&image.0));
         #[cfg(not(target_arch = "wasm32"))]
         if self.jobs.send(Job { image: image.clone(), input }).is_err() {
@@ -757,7 +764,7 @@ mod tests {
 
     #[test]
     fn decoded_pixels_wake_windows_only_once_the_image_reports_ready() {
-        let image = Image(Arc::new(State { id: [0; 32], pixels: crate::Pixels::new(), decoded: OnceLock::new() }));
+        let image = Image::new(Arc::new(State { id: [0; 32], pixels: crate::Pixels::new(), decoded: OnceLock::new() }));
         let seen = Arc::new(Mutex::new(Vec::new()));
         let (probe, record) = (image.clone(), seen.clone());
         let wake = crate::live::Wake::new(Arc::new(move || {
@@ -794,6 +801,28 @@ mod tests {
         let invalid = cache.load(vec![0, 1, 2]);
         rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
         assert!(invalid.error().is_some());
+    }
+
+    #[test]
+    fn drawn_pixels_keep_their_image_cached_after_the_handle_drops() {
+        let (tx, rx) = mpsc::channel();
+        let cache = ImageCache::new(Arc::new(move || { tx.send(()).unwrap(); }));
+        let image = cache.rgba(1, 1, vec![20, 40, 60, 255]);
+        rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        // A view keeps only the pixels in its element, then asks again on the next build.
+        let drawn = image.pixels().clone();
+        let first = Arc::downgrade(&image.0);
+        drop(image);
+        let again = cache.rgba(1, 1, vec![20, 40, 60, 255]);
+        assert!(std::ptr::eq(first.as_ptr(), Arc::as_ptr(&again.0)), "the same entry, not a new request");
+        assert!(again.is_ready());
+        drop((again, drawn));
+        // The worker drops its own handle just after it wakes us.
+        for _ in 0..200 {
+            if first.upgrade().is_none() { break }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(first.upgrade().is_none(), "nothing left draws it, so it's released");
     }
 
     #[test]

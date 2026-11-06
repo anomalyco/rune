@@ -1,0 +1,1 @@
+- **An image stays cached while anything draws it.** `Image::pixels` now keeps its `ImageCache` entry alive, so a view that asks for `cache.url(..)` on each build, keeping only the element, gets the same image back instead of fetching it again; on web that loop refetched every image and drew about ten frames a second at rest.
