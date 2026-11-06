@@ -13,6 +13,9 @@ pub(crate) struct FocusSpec {
     pub reveal_selected: bool,
     pub preserve_on_press: crate::runtime::selectable::OnPress,
     pub ring: Option<Outline>,
+    /// `focus_within_ring`: `ring` shows while focus is on this element or inside it, from
+    /// the pointer or the keyboard.
+    pub within: bool,
     /// `no_focus_ring`: no default ring on this control, and none from this element.
     pub ring_off: bool,
     /// `default_button`: Return presses it.
@@ -40,6 +43,7 @@ impl crate::cold::Empty for FocusSpec {
         reveal_selected: false,
         preserve_on_press: crate::runtime::selectable::OnPress { focus: false, selection: false },
         ring: None,
+        within: false,
         ring_off: false,
         default: false,
         highlight: None,

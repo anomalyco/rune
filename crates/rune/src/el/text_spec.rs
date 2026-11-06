@@ -9,6 +9,9 @@ pub struct TextSpec {
     pub content: String,
     pub style: TextStyle,
     pub color: Color,
+    /// `color` came from [`El::color`](crate::El::color); without it the text takes the
+    /// window's foreground ([`Cx::foreground`](crate::Cx::foreground)) when the view sets one.
+    pub(crate) inked: bool,
     pub align: Align,
     pub spans: Vec<Span>,
     /// Wrap at the element's width (its height follows the text).

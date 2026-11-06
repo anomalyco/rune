@@ -15,6 +15,15 @@ impl Default for Env {
     fn default() -> Self { Self::new(true, 1.0) }
 }
 
+/// What a view declares for the elements that don't style themselves.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct ViewDefaults {
+    /// [`Cx::foreground`].
+    pub(crate) foreground: Option<Color>,
+    /// [`Cx::focus_ring`].
+    pub(crate) focus_ring: Option<crate::el::Outline>,
+}
+
 /// Wakes the shell from another thread (new data arrived); a no-op headless.
 pub type Waker = Arc<dyn Fn() + Send + Sync>;
 
@@ -36,6 +45,8 @@ pub struct Cx<S> {
     pub(super) chrome: crate::ChromeInsets,
     /// `Cx::caption_color`, read once the view returns.
     pub(super) caption_color: Option<Color>,
+    /// `Cx::foreground` and `Cx::focus_ring`, read once the view returns.
+    pub(super) defaults: ViewDefaults,
     pub(super) system_accent: crate::SystemAccent,
     pub(super) system_scroll_bars: crate::platform::scroll_bars::SystemScrollBars,
     pub(super) system_reduced_motion: bool,
@@ -52,6 +63,7 @@ impl<S> Cx<S> {
     pub(crate) fn retype<T>(&self) -> Cx<T> {
         Cx {
             env: self.env, titlebar_inset: self.titlebar_inset, chrome: self.chrome, caption_color: self.caption_color,
+            defaults: self.defaults,
             system_accent: self.system_accent,
             system_scroll_bars: self.system_scroll_bars,
             system_reduced_motion: self.system_reduced_motion, reduced_motion: self.reduced_motion, time_scale: self.time_scale,
@@ -66,6 +78,7 @@ impl<S> Cx<S> {
         self.reduced_motion = other.reduced_motion;
         self.time_scale = other.time_scale;
         self.caption_color = other.caption_color;
+        self.defaults = other.defaults;
         self.caret_read.set(self.caret_read.get() || other.caret_read.get());
         let mut reads = self.layout_reads.borrow_mut();
         for read in other.layout_reads.into_inner() {
@@ -118,6 +131,22 @@ impl<S> Cx<S> {
     /// hover and press washes are this colour at 10% and 20%; close turns red either way.
     pub fn caption_color(&mut self, color: Color) {
         self.caption_color = Some(color);
+    }
+    /// The theme's text colour, as CSS `color` on the page: text, icons and text fields that
+    /// aren't given a colour (`El::color`, `El::placeholder`, `El::caret`) draw in it, the
+    /// placeholder at 40% and the selection at 20%, so a field left uncoloured stays readable in
+    /// a light theme. Without it they draw white. Set it on every run of the view; a `memo`
+    /// whose text takes it rebuilds when it changes.
+    pub fn foreground(&mut self, color: Color) {
+        self.defaults.foreground = Some(color);
+    }
+    /// The keyboard focus ring a focusable element draws when it doesn't set its own
+    /// ([`El::focus_ring`](crate::El::focus_ring)), in place of AppKit's: `width` points wide,
+    /// `offset` points outside its border box, following its corner radii, e.g. `2.0, 2.5` for
+    /// CSS `outline: 2px solid; outline-offset: 2.5px`. It shows only for keyboard focus, as
+    /// `:focus-visible` does. Set it on every run of the view.
+    pub fn focus_ring(&mut self, width: f32, offset: f32, color: Color) {
+        self.defaults.focus_ring = Some(crate::el::Outline { width, offset, color });
     }
     /// The user's accent colour (System Settings › Appearance on macOS) for this window's
     /// appearance, [`SystemAccent::DEFAULT`](crate::SystemAccent::DEFAULT)'s blue elsewhere and

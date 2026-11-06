@@ -348,6 +348,7 @@ impl El {
         if let Some(i) = &mut self.input {
             i.placeholder = s.into();
             i.placeholder_color = c;
+            i.placeholder_inked = true;
         }
         self
     }
@@ -355,6 +356,7 @@ impl El {
         if let Some(i) = &mut self.input {
             i.caret = caret;
             i.selection = selection;
+            i.caret_inked = true;
         }
         self
     }

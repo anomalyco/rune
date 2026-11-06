@@ -396,6 +396,9 @@ pub struct Runtime<S: 'static> {
     system_accent: crate::SystemAccent,
     scroll_bars: system_settings::ScrollBarHost,
     pub time_scale: f32,
+    /// The last view's `Cx::foreground` and `Cx::focus_ring`, for rows built after it and the
+    /// rings painted until the next.
+    defaults: cx::ViewDefaults,
     /// Called at the start of every frame with the clock; return true when state changed (new data).
     pub poll: Option<fn(&mut S, f64, &mut Tx) -> bool>,
     /// Seconds since the first frame, unscaled (virtual when headless).
@@ -827,6 +830,7 @@ impl<S: 'static> Runtime<S> {
             system_accent: crate::SystemAccent::DEFAULT,
             scroll_bars: Default::default(),
             time_scale: 1.0,
+            defaults: Default::default(),
             poll: None,
             clock: 0.0,
             wake_deadlines: Vec::new(),

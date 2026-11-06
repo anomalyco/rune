@@ -137,6 +137,11 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn highlight_visible(&self, i: usize) -> bool {
         (self.keyboard_focus || self.hover_focus) && self.focused.as_deref() == Some(&self.nodes[i].path)
     }
+    /// Focus is on node `i` or inside it (CSS `:focus-within`), however it got there.
+    pub(super) fn focus_within(&self, i: usize) -> bool {
+        let path = self.nodes[i].path.as_str();
+        self.focused.as_deref().is_some_and(|f| f.strip_prefix(path).is_some_and(|rest| rest.is_empty() || rest.starts_with('/')))
+    }
     pub(super) fn focus_ring_visible(&self, mut i: usize) -> bool {
         if !self.keyboard_focus { return false; }
         loop {
@@ -161,9 +166,10 @@ impl<S: 'static> Runtime<S> {
             .any(|(j, m)| (m.focus.ring.is_some() || m.focus.ring_off) && self.focus_ring_visible(j));
         (!own).then_some(i)
     }
-    /// AppKit's focus ring: 3 points just outside the border box.
+    /// The view's `Cx::focus_ring`, else AppKit's: 3 points just outside the border box.
     pub(super) fn default_focus_ring(&self) -> crate::el::Outline {
-        crate::el::Outline { width: 3.0, offset: 0.0, color: self.system_accent.focus(self.env.system_dark) }
+        self.defaults.focus_ring
+            .unwrap_or(crate::el::Outline { width: 3.0, offset: 0.0, color: self.system_accent.focus(self.env.system_dark) })
     }
     pub(super) fn set_focus(&mut self, path: Option<String>, keyboard: bool) -> bool {
         self.input_click.on_focus_change(path.as_deref());

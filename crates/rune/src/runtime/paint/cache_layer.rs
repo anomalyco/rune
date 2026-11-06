@@ -52,6 +52,10 @@ impl<S: 'static> Runtime<S> {
             self.focused.hash(&mut h);
             self.keyboard_focus.hash(&mut h);
             self.hover_focus.hash(&mut h);
+            if let Some(ring) = self.defaults.focus_ring {
+                let c = ring.color;
+                [ring.width, ring.offset, c.r, c.g, c.b, c.a].map(f32::to_bits).hash(&mut h);
+            }
             (self.srgb_blend, self.text.smoothing, self.text.families()).hash(&mut h);
             h.write_u32(s.to_bits());
             sel_ranges.hash(&mut h);
