@@ -18,10 +18,21 @@ pub struct MarkdownStyle {
     pub(super) code_block_fill: Color,
     pub(super) code_block_border: Color,
     pub(super) quote_rule: Color,
+    pub(super) quote: QuoteLook,
     pub(super) rule: Color,
     pub(super) body: TextStyle,
-    pub(super) headings: [TextStyle; 3],
+    /// Levels 1 to 3, then 4 and deeper.
+    pub(super) headings: [TextStyle; 4],
     pub(super) code_block: TextStyle,
+    /// Code blocks' text where the highlighter leaves it (the body text colour by default).
+    pub(super) code_text: Option<Color>,
+    /// Shell fences' own look (see [`MarkdownStyle::shell_code`]).
+    pub(super) shell: Option<ShellLook>,
+    pub(super) link_hover: Option<Color>,
+    pub(super) list_outside: bool,
+    /// Nested lists' indent: bullets, then numbers (`None`: [`MarkdownStyle::list`]'s).
+    pub(super) list_nested: Option<[f32; 2]>,
+    pub(super) table_align: bool,
     pub(super) inline_code_scale: f32,
     pub(super) inline_code_weight: f32,
     pub(super) inline_code_pad: f32,
@@ -74,12 +85,34 @@ pub(super) struct TaskPaint {
     pub(super) fill_on: Color,
     pub(super) border_on: Color,
     pub(super) border_off: Color,
+    pub(super) fill_off: Color,
     pub(super) hover: Color,
     pub(super) focus_ring: Color,
     pub(super) mark: Color,
     pub(super) check: &'static Icon,
     pub(super) radius: f32,
     pub(super) motion: Spring,
+    /// The box's side, its left edge in the list's marker column, and its top below the
+    /// item's (`None`: centred on the first line).
+    pub(super) size: f32,
+    pub(super) left: f32,
+    pub(super) top: Option<f32>,
+}
+
+/// A block quote's rule and text (see [`MarkdownStyle::quote`]).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct QuoteLook {
+    pub(super) width: f32,
+    pub(super) pad: f32,
+    pub(super) text: Option<Color>,
+}
+
+/// Shell fences' frame and text (see [`MarkdownStyle::shell_code`]).
+#[derive(Clone, Copy, Debug, Hash)]
+pub(super) struct ShellLook {
+    pub(super) fill: Color,
+    pub(super) border: Color,
+    pub(super) text: Color,
 }
 
 /// A table's rounded frame (see [`MarkdownStyle::table_frame`]).
@@ -132,10 +165,17 @@ impl MarkdownStyle {
             code_block_fill: c.layer_01,
             code_block_border: c.border_muted,
             quote_rule: c.layer_03,
+            quote: QuoteLook { width: 2.0, pad: 12.0, text: None },
             rule: c.border_base,
             body,
-            headings: [heading(17.0, 24.0), heading(15.0, 24.0), heading(13.0, 20.0)],
+            headings: [heading(17.0, 24.0), heading(15.0, 24.0), heading(13.0, 20.0), heading(13.0, 20.0)],
             code_block: TextStyle { size: 13.0, line_height: 20.0, ..k.ty.mono },
+            code_text: None,
+            shell: None,
+            link_hover: None,
+            list_outside: false,
+            list_nested: None,
+            table_align: true,
             inline_code_scale: 0.9,
             inline_code_weight: 400.0,
             inline_code_pad: 3.5,
@@ -178,12 +218,16 @@ impl MarkdownStyle {
                 fill_on: c.surface_weak,
                 border_on: c.std_border,
                 border_off: c.border_weak,
+                fill_off: Color::TRANSPARENT,
                 hover: c.surface_hover,
                 focus_ring: c.border_active,
                 mark: c.std_icon,
                 check: k.glyph.check,
                 radius: k.radius.sm,
                 motion: k.motion.control,
+                size: 16.0,
+                left: 8.0,
+                top: None,
             },
             diagram: DiagramPaint {
                 text: c.text_base,
@@ -254,6 +298,54 @@ impl MarkdownStyle {
         self.quote_rule = c;
         self
     }
+    /// A block quote's rule, `width` points wide in `rule`, `pad` points before its text, and
+    /// the text's colour (2, 12 and the body text colour by default).
+    pub fn quote(mut self, rule: Color, width: f32, pad: f32, text: Color) -> Self {
+        self.quote_rule = rule;
+        self.quote = QuoteLook { width: width.max(0.0), pad: pad.max(0.0), text: Some(text) };
+        self
+    }
+    /// The colour of a link under the pointer, underlined in it (the link colour by default).
+    pub fn link_hover(mut self, c: Color) -> Self {
+        self.link_hover = Some(c);
+        self
+    }
+    /// Code blocks' text where the highlighter leaves it uncoloured (the body text colour by
+    /// default).
+    pub fn code_block_text(mut self, c: Color) -> Self {
+        self.code_text = Some(c);
+        self
+    }
+    /// Fences in a shell language (`bash`, `sh`, `shell`, `zsh`, `fish`, `console`,
+    /// `terminal`) on `fill` with a `border`, their text all in `text` with no syntax colours,
+    /// as a web page that styles a command apart from code.
+    pub fn shell_code(mut self, fill: Color, border: Color, text: Color) -> Self {
+        self.shell = Some(ShellLook { fill, border, text });
+        self
+    }
+    /// List markers end where the item's text starts, numbers and bullets alike, as CSS's
+    /// `list-style-position: outside` puts them, rather than centred in the marker column.
+    pub fn list_markers_outside(mut self, on: bool) -> Self {
+        self.list_outside = on;
+        self
+    }
+    /// The marker column of a list inside a list item: `bullets` for bulleted lists and
+    /// `numbers` for numbered ones (the top level's [`Self::list`] indent by default).
+    pub fn list_nested_indent(mut self, bullets: f32, numbers: f32) -> Self {
+        self.list_nested = Some([bullets.max(0.0), numbers.max(0.0)]);
+        self
+    }
+    /// Task list checkboxes: `size` points square with corner `radius`, their left edge `left`
+    /// points into the marker column and their top `top` below the item's (`None`: centred on
+    /// its first line). Checked, they fill `fill_on` with a `mark` in it; unchecked, they fill
+    /// `fill_off` inside a `border_off` outline. 16 points, 8 in and centred by default.
+    #[allow(clippy::too_many_arguments)]
+    pub fn task_checkbox(mut self, size: f32, radius: f32, left: f32, top: Option<f32>, fill_on: Color, mark: Color, fill_off: Color, border_off: Color) -> Self {
+        let t = &mut self.task;
+        (t.size, t.radius, t.left, t.top) = (size.max(0.0), radius.max(0.0), left.max(0.0), top);
+        (t.fill_on, t.border_on, t.mark, t.fill_off, t.border_off) = (fill_on, fill_on, mark, fill_off, border_off);
+        self
+    }
     pub fn rule(mut self, c: Color) -> Self {
         self.rule = c;
         self
@@ -263,9 +355,14 @@ impl MarkdownStyle {
         self.body = f;
         self
     }
-    /// The font of heading `level` (1 to 3; level 4 and deeper share 3).
+    /// The font of heading `level` (1 to 4; level 5 and deeper share 4). Level 3 sets 4 too,
+    /// so a style that sets levels 1 to 3 keeps 4 and deeper in level 3's font.
     pub fn heading_font(mut self, level: u8, f: TextStyle) -> Self {
-        self.headings[(level.clamp(1, 3) - 1) as usize] = f;
+        let i = (level.clamp(1, 4) - 1) as usize;
+        self.headings[i] = f;
+        if i == 2 {
+            self.headings[3] = f;
+        }
         self
     }
     /// Code blocks and diffs. Inline code is set in the app's mono slot, so keep this on
@@ -437,10 +534,17 @@ impl std::hash::Hash for MarkdownStyle {
             code_block_fill,
             code_block_border,
             quote_rule,
+            quote,
             rule,
             body,
             headings,
             code_block,
+            code_text,
+            shell,
+            link_hover,
+            list_outside,
+            list_nested,
+            table_align,
             inline_code_scale,
             inline_code_weight,
             inline_code_pad,
@@ -483,7 +587,8 @@ impl std::hash::Hash for MarkdownStyle {
             diagram,
         } = *self;
         (text, muted, accent, link_underline, code_bg, code_block_fill, code_block_border, quote_rule, rule).hash(state);
-        (body, headings, code_block).hash(state);
+        (body, headings, code_block, code_text, shell, link_hover, list_outside, list_nested.map(|n| n.map(f32_bits)), table_align).hash(state);
+        (f32_bits(quote.width), f32_bits(quote.pad), quote.text).hash(state);
         [inline_code_scale, inline_code_weight, inline_code_pad, code_block_pad[0], code_block_pad[1], list_indent, list_gap, strong_weight, table_min_column]
             .map(f32_bits)
             .hash(state);
@@ -510,8 +615,9 @@ impl std::hash::Hash for MarkdownStyle {
             highlight_current_ring.map(|(c, w)| (c, f32_bits(w))),
         )
             .hash(state);
-        let TaskPaint { fill_on, border_on, border_off, hover, focus_ring, mark, check, radius, motion } = task;
-        (fill_on, border_on, border_off, hover, focus_ring, mark, check as *const Icon as usize, f32_bits(radius), f32_bits(motion.duration), f32_bits(motion.bounce)).hash(state);
+        let TaskPaint { fill_on, border_on, border_off, fill_off, hover, focus_ring, mark, check, radius, motion, size, left, top } = task;
+        (fill_on, border_on, border_off, fill_off, hover, focus_ring, mark, check as *const Icon as usize, f32_bits(radius), f32_bits(motion.duration), f32_bits(motion.bounce)).hash(state);
+        (f32_bits(size), f32_bits(left), top.map(f32_bits)).hash(state);
         let DiagramPaint {
             text,
             muted,

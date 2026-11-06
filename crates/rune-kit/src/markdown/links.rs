@@ -87,7 +87,10 @@ impl Renderer {
             }
         }
         if inl.links.is_empty() || (self.on_link.is_none() && self.on_link_secondary.is_none()) { return e; }
-        let default = LinkPaint::new().underline(self.s.accent);
+        let default = match self.s.link_hover {
+            Some(c) => LinkPaint::new().color(c).underline(c),
+            None => LinkPaint::new().underline(self.s.accent),
+        };
         let hover = |url: &str| self.link_look.as_ref().and_then(|f| f(url)).map_or(default, |l| l.1);
         let help = |url: &str| self.link_help.as_ref().and_then(|f| f(url)).unwrap_or_default();
         let e = inl.links.iter().fold(e, |e, (a, b, url)| e.link(Link::new(*a..*b, url.clone()).hover(hover(url)).help(help(url))));

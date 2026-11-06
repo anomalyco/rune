@@ -134,6 +134,21 @@ pub struct Table {
 type TaskWire = Rc<dyn Fn(El, Rc<str>, usize, bool) -> El>;
 #[cfg(feature = "mermaid")]
 type FrameWire = Rc<dyn Fn(El, &DiagramFrame<'_>) -> El>;
+type CodeWire = Rc<dyn Fn(El, &CodeFrame<'_>) -> El>;
+
+/// A code block [`Markdown::code_frame`] is wrapping.
+#[non_exhaustive]
+pub struct CodeFrame<'a> {
+    /// Its place among the document's fenced blocks (code and diagrams), counted from 0, as
+    /// a diagram's frame counts them. A stream only adds blocks after it.
+    pub index: usize,
+    /// The code it shows.
+    pub source: &'a str,
+    /// The fence's language as written (its info string's first word), if it has one.
+    pub language: Option<&'a str>,
+    /// The fence is still arriving.
+    pub open: bool,
+}
 
 /// A diagram [`Markdown::diagram_frame`] is wrapping.
 #[cfg(feature = "mermaid")]
@@ -171,6 +186,7 @@ pub struct Markdown {
     highlighter: Highlighter,
     #[cfg(feature = "mermaid")]
     diagram_frame: Option<FrameWire>,
+    code_frame: Option<CodeWire>,
 }
 
 #[cfg(test)]
@@ -183,7 +199,7 @@ impl Markdown {
         Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_help: None, link_ring: None,
             on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, highlighter: Highlighter::builtin(),
             #[cfg(feature = "mermaid")]
-            diagram_frame: None }
+            diagram_frame: None, code_frame: None }
     }
     /// Highlight UTF-8 byte ranges of the Markdown source string (see [`find`]).
     ///
@@ -322,6 +338,18 @@ impl Markdown {
         self
     }
 
+    /// Draws `f(card, frame)` in place of each code block's card, so an app can put its own
+    /// controls on it (a Copy button). Diagrams that draw as their source and diff fences don't
+    /// come here.
+    ///
+    /// ```ignore
+    /// Markdown::new(src).code_frame(|card, c| col().key(format!("code-{}", c.index)).child(card).child(copy_button(c.source)))
+    /// ```
+    pub fn code_frame(mut self, f: impl Fn(El, &CodeFrame<'_>) -> El + 'static) -> Self {
+        self.code_frame = Some(Rc::new(f));
+        self
+    }
+
     /// Colours code blocks with `f` instead of the built-in scanners: it gets a fence's language
     /// as written (its info string's first word; `None` for an indented block or a bare fence)
     /// and the code, and returns byte ranges of the code with a token kind, which the style's
@@ -360,6 +388,7 @@ impl Markdown {
             && self.on_task.is_none()
             && !(self.selectable && self.copy_source)
             && self.highlighter.is_builtin()
+            && self.code_frame.is_none()
             && !(cfg!(feature = "mermaid") && self.src.contains("mermaid"));
         if can_cache {
             let h = rune::memo::digest(&(
@@ -398,7 +427,7 @@ impl Markdown {
             highlighter: self.highlighter, sources, next_source: Cell::new(0), tasks, next_task: Cell::new(0),
             current_block_key: RefCell::new("b0".into()),
             #[cfg(feature = "mermaid")]
-            diagram_frame: self.diagram_frame };
+            diagram_frame: self.diagram_frame, code_frame: self.code_frame, flow: Cell::default() };
         let root = r.blocks(&blocks, &maps, &keys, true).selection_group(self.selectable);
         if !(self.selectable && self.copy_source) { return root; }
         let names: Rc<[String]> = rendered_keys(blocks.len(), &keys).into();

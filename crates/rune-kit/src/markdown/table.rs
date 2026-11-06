@@ -162,6 +162,12 @@ impl MarkdownStyle {
         self.table_full_width = on;
         self
     }
+    /// Whether cells follow their column's `:-:` and `--:` alignment (on by default). Off, every
+    /// cell starts at its column's left, as a web table whose CSS sets `text-align: start`.
+    pub fn table_column_align(mut self, on: bool) -> Self {
+        self.table_align = on;
+        self
+    }
     /// The space above and below a table (12 and 16 points by default). Like the other blocks'
     /// margins, it collapses with the space a neighbour wants, taking the larger.
     pub fn table_margin(mut self, top: f32, bottom: f32) -> Self {
@@ -306,7 +312,7 @@ impl Renderer {
         let mut r = row().role("row").w_full();
         for (j, (natural, min)) in cols.natural.iter().zip(&cols.min).enumerate() {
             let inl = cells.get(j).unwrap_or(&empty);
-            let align = t.align.get(j).copied().unwrap_or_default();
+            let align = if self.s.table_align { t.align.get(j).copied().unwrap_or_default() } else { Align::Start };
             let content = self
                 .with_reveal(
                     rich(inl.text.clone(), self.spans(inl, font.size))
