@@ -342,3 +342,14 @@ pub(super) fn rolling_text_basic(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
         .child(line("Count", RollingText::new("count-sans", count.clone()).font(big).from(Edge::Top).build(k)))
         .child(line("", RollingText::new("count-mono", count).font(big.mono()).from(Edge::Top).build(k)))
 }
+
+/// `ScrollBarStyle::scroll_view`: the `@opencode/ui` ScrollView thumb, hidden at rest and shown while
+/// the pointer is over the list or it scrolls.
+pub(super) fn scroll_view_thumb(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let rows = (1..=24).map(|i| row().key(format!("row{i}")).h(28.0).px(12.0).center_y()
+        .child(text(format!("Row {i}")).font(k.ty.ui_compact).color(k.c.text_base)));
+    col().key("list").w(240.0).h(180.0).radius(k.radius.md).fill(k.c.bg_base).border(1.0, k.c.border_weak)
+        .scroll(rune::ScrollSpec { stick_bottom: false })
+        .child(col().children(rows))
+        .scroll_bar_styled(ScrollBarStyle::scroll_view(k))
+}
