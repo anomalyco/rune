@@ -85,7 +85,8 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     }
     const h = { canvas, textarea, password, a11y, a11yNodes: new Map(), field: textarea, key: '', base: 0, value: '',
         copyText: '', composing: false, composition: '', shift: false, listeners: [], syncing: false, disposed: false,
-        embedded, fitHeight, page, focused: false, presented: false };
+        embedded, fitHeight, page, focused: false, presented: false, swapped: false, touchDown: false,
+        lastScrollAt: 0, staticTimer: 0 };
     const send = event => {
         const message = JSON.stringify(event);
         if (h.syncing) queueMicrotask(() => { if (!h.disposed) callback(message); });
@@ -185,8 +186,13 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         if (!browserShortcut(event)) event.preventDefault();
     });
     if (page) {
-        const scrolled = () => send({ kind: 'scroll', y: window.scrollY });
+        const scrolled = () => { h.lastScrollAt = performance.now(); send({ kind: 'scroll', y: window.scrollY }); };
         listen(window, 'scroll', scrolled, { passive: true });
+        // A finger down or a page still coasting moves the export's layout under the reader; the
+        // swap to the live mirror waits for it (see `dropStatic`).
+        listen(window, 'touchstart', () => { h.touchDown = true; deferStatic(h); }, { passive: true });
+        listen(window, 'touchend', () => { h.touchDown = false; deferStatic(h); }, { passive: true });
+        listen(window, 'touchcancel', () => { h.touchDown = false; deferStatic(h); }, { passive: true });
         // Mirrored text and links take the pointer from the canvas; hover still reaches Rune.
         listen(a11y, 'pointermove', event => {
             if (event.pointerType === 'mouse') send({ kind: 'hover', x: event.clientX, y: event.clientY });
@@ -366,30 +372,47 @@ export function presented(h) {
 }
 
 function dropStatic(h) {
+    if (h.disposed || h.swapped) return;
     const parts = [...document.querySelectorAll('[data-rune-static]')];
     const exported = parts.find((el) => el.tagName !== 'STYLE');
-    if (exported) {
-        let anchor = null, offset = 0;
-        if (window.scrollY > 0) {
-            for (const el of exported.querySelectorAll('[id]')) {
-                const r = el.getBoundingClientRect();
-                if (r.bottom > 0) { anchor = el.id; offset = r.top; break; }
-            }
+    if (!exported) { h.swapped = true; return; }
+    // A finger is down, or the page is still coasting: hiding the export would take it out of the
+    // page's flow under a scroll that is under way, and iOS stops momentum dead when the scroll
+    // position moves underneath it. The touchend or the next scroll arms the retry.
+    if (h.touchDown) return;
+    if (performance.now() - h.lastScrollAt < 120) { deferStatic(h); return; }
+    h.swapped = true;
+    let anchor = null, offset = 0;
+    if (window.scrollY > 0) {
+        for (const el of exported.querySelectorAll('[id]')) {
+            const r = el.getBoundingClientRect();
+            if (r.bottom > 0) { anchor = el.id; offset = r.top; break; }
         }
-        for (const el of parts) {
-            if (el.tagName === 'STYLE') { el.remove(); continue; }
-            // Out of the page's flow, find, focus and accessibility tree, its ids the mirror's.
-            el.style.cssText = 'position:absolute;top:0;left:0;width:0;height:0;overflow:hidden;visibility:hidden;';
-            el.inert = true;
-            el.setAttribute('aria-hidden', 'true');
-            el.removeAttribute('id');
-            for (const named of el.querySelectorAll('[id]')) named.removeAttribute('id');
-            el.removeAttribute('data-rune-static');
-            el.setAttribute('data-rune-static-hidden', '');
-        }
-        const live = anchor && h.a11y.querySelector(`#${CSS.escape(anchor)}`);
-        if (live) window.scrollTo({ top: window.scrollY + live.getBoundingClientRect().top - offset, behavior: 'instant' });
     }
+    for (const el of parts) {
+        if (el.tagName === 'STYLE') { el.remove(); continue; }
+        // Out of the page's flow, find, focus and accessibility tree, its ids the mirror's.
+        el.style.cssText = 'position:absolute;top:0;left:0;width:0;height:0;overflow:hidden;visibility:hidden;';
+        el.inert = true;
+        el.setAttribute('aria-hidden', 'true');
+        el.removeAttribute('id');
+        for (const named of el.querySelectorAll('[id]')) named.removeAttribute('id');
+        el.removeAttribute('data-rune-static');
+        el.setAttribute('data-rune-static-hidden', '');
+    }
+    const live = anchor && h.a11y.querySelector(`#${CSS.escape(anchor)}`);
+    if (live) {
+        const delta = live.getBoundingClientRect().top - offset;
+        // The export's CSS and the live layout differ by a pixel or two here and there; taking the
+        // page's scroll for that would stop a flick for nothing.
+        if (Math.abs(delta) > 2) window.scrollTo({ top: window.scrollY + delta, behavior: 'instant' });
+    }
+}
+
+// Swaps once the page has settled. Only a scroll or a touch arms it, so a still page doesn't poll.
+function deferStatic(h) {
+    if (h.staticTimer || h.swapped || !h.presented || h.disposed) return;
+    h.staticTimer = setTimeout(() => { h.staticTimer = 0; if (!h.disposed) dropStatic(h); }, 150);
 }
 
 export function activate(h) {
@@ -407,6 +430,7 @@ export async function pastedImage(h, max) {
 export function destroy(h) {
     h.disposed = true;
     h.image = undefined;
+    clearTimeout(h.staticTimer);
     for (const remove of h.listeners) remove();
     h.password.value = ''; h.textarea.value = ''; h.copyText = '';
     h.a11yNodes.clear();
