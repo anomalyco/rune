@@ -67,8 +67,10 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     a11y.setAttribute('role', 'document');
     if (page) {
         // In the body's flow, as tall as the content, so the page scrolls it; the canvas under
-        // it draws the band in view. Its rects are in document coordinates.
-        a11y.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:0;pointer-events:none;z-index:1;color:transparent;';
+        // it draws the band in view. Its rects are in document coordinates. Text running past a
+        // horizontal scroller's edge is clipped at the page's, so it can't widen the page (a
+        // phone would zoom out to fit it).
+        a11y.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:0;overflow-x:clip;pointer-events:none;z-index:1;color:transparent;';
         const style = document.createElement('style');
         style.textContent = PAGE_CSS;
         a11y.append(style);
