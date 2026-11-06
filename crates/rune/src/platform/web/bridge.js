@@ -105,7 +105,11 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     }
     const key = (name, event = {}) => send({ kind: 'key', key: name, code: event.code ?? '', shift: !!event.shiftKey,
         ctrl: !!event.ctrlKey, alt: !!event.altKey, meta: !!event.metaKey, repeat: !!event.repeat });
-    listen(textarea, 'input', event => changed(h.composing || event.isComposing));
+    listen(textarea, 'input', event => {
+        // No Rune field has the keyboard: nothing to edit, so the field stays empty.
+        if (!h.key) { textarea.value = ''; return; }
+        changed(h.composing || event.isComposing);
+    });
     listen(textarea, 'compositionstart', () => { h.composing = true; h.composition = ''; });
     listen(textarea, 'compositionupdate', event => {
         h.composition = event.data ?? '';
@@ -123,6 +127,8 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     });
     for (const field of [textarea, password]) {
         listen(field, 'paste', event => {
+            // Only a paste into a Rune field is Rune's; the browser keeps the rest.
+            if (!h.key) return;
             event.preventDefault();
             const data = event.clipboardData;
             h.image = field === textarea ? [...(data?.items ?? [])].find(i => i.kind === 'file' && i.type === 'image/png')?.getAsFile() ?? undefined : undefined;
