@@ -251,7 +251,7 @@ impl Select {
         let name = self.name.clone().unwrap_or_else(|| self.placeholder.clone());
         let mut trigger = row().key(anchor_key.clone()).role("combobox").label(name)
             .expanded(self.open).disabled(disabled).center_y()
-            .focusable(!disabled).focus_ring(1.0, 0.0, c.border_focus);
+            .focusable(!disabled);
         if let Some(v) = &self.current {
             trigger = trigger.a11y_value(v.clone());
         }
@@ -259,7 +259,9 @@ impl Select {
             SelectAppearance::Inline => {
                 let font = TextStyle { line_height: 16.0, ..k.ty.ui_medium };
                 let hover = self.state == State::Hover || self.open;
+                // `outline: none` (select.css:193-205): the inline trigger shows no ring.
                 let mut t = trigger
+                    .no_focus_ring()
                     .h(24.0)
                     .pl(8.0)
                     .pr(4.0)
@@ -285,7 +287,6 @@ impl Select {
                     .gap(8.0)
                     .radius(k.radius.md)
                     .fill(if self.open || self.state == State::Hover { over(c.hover, c.bg_base) } else { c.bg_base })
-                    .gradient(k.light(0.02), k.light(0.0))
                     .child(
                         row()
                             .key("value")
@@ -298,12 +299,15 @@ impl Select {
                     .child(
                         el().size(20.0, 20.0).center().child(icon(chevron, 16.0).key("chevron").color(c.icon_muted)).a11y_hidden(),
                     );
+                // select.css:34-35, 100-108: a 1 point ring just inside the box, in place of the
+                // shadow, while focus is in the closed field (`:focus-within`) or it's invalid.
                 if self.invalid && !disabled {
-                    t = t.outline(1.0, 0.0, c.danger.fg);
+                    t = t.outline(1.0, -1.0, c.danger.fg).no_focus_ring();
                 } else if self.state == State::Focus && !self.open {
-                    t = t.outline(1.0, 0.0, c.border_focus);
+                    t = t.outline(1.0, -1.0, c.border_focus).no_focus_ring();
                 } else {
                     t = shadows(k, t, &k.elevation.button_neutral);
+                    t = if self.open { t.no_focus_ring() } else { t.focus_within_ring(1.0, -1.0, c.border_focus) };
                     if self.state == State::Rest && !self.open {
                         t = t.hover(c.hover);
                     }

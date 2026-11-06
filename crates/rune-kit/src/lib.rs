@@ -233,13 +233,18 @@ pub(crate) fn press_over(hover: Color, pressed: Color) -> Color {
     pressed.alpha(a)
 }
 
-/// Source-over of straight-alpha colours (for forced states and static layering).
+/// Source-over of straight-alpha colours (for forced states and static layering), mixed as the
+/// window blends the same layers: in sRGB, as a browser does, in a window that blends in sRGB
+/// (the default), else in linear light.
 pub(crate) fn over(top: Color, bottom: Color) -> Color {
     let a = top.a + bottom.a * (1.0 - top.a);
     if a <= 0.0 {
         return Color::TRANSPARENT;
     }
-    let mix = |t: f32, b: f32| (t * top.a + b * bottom.a * (1.0 - top.a)) / a;
+    let srgb = rune::theme::blends_srgb();
+    let (enc, dec): (fn(f32) -> f32, fn(f32) -> f32) =
+        if srgb { (rune::theme::srgb_encode, rune::theme::srgb_decode) } else { (|c| c, |c| c) };
+    let mix = |t: f32, b: f32| dec((enc(t) * top.a + enc(b) * bottom.a * (1.0 - top.a)) / a);
     Color { r: mix(top.r, bottom.r), g: mix(top.g, bottom.g), b: mix(top.b, bottom.b), a }
 }
 

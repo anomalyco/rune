@@ -141,6 +141,21 @@ pub(super) fn switch_sizes(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
     }))
 }
 
+/// The compact switch as the web draws it (`Switch::web`): off and on, at rest, hovered,
+/// keyboard-focused and disabled.
+pub(super) fn switch_web(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let states = [("Rest", State::Rest), ("Hover", State::Hover), ("Focus", State::Focus), ("Disabled", State::Disabled)];
+    col().gap(12.0)
+        .child(row().gap(12.0).center_y().child(caption(k, "Live").w(80.0))
+            .child(Switch::new(s.is("web")).web().label("Web").hide_label().on_toggle(flip("web")).build(k)))
+        .children(states.into_iter().map(|(name, st)| {
+            row().gap(16.0).center_y()
+                .child(caption(k, name).w(80.0))
+                .child(Switch::new(false).web().state(st).build(k))
+                .child(Switch::new(true).web().state(st).build(k))
+        }))
+}
+
 pub(super) fn switch_hidden_label(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
     row().child(Switch::new(on_by_default(s, "sw")).label("Hidden label").hide_label().on_toggle(flip("sw")).build(k))
 }
