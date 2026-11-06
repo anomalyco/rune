@@ -527,6 +527,19 @@ fn the_thumb_glides_to_a_new_length_without_a_view_run() {
     }
 }
 
+#[test]
+fn a_hidden_overlay_thumb_lands_its_new_length_at_once() {
+    let mut rt = rune::Runtime::new(10usize, view, (200.0, 100.0), rune::Env::new(true, 1.0));
+    rt.set_live_waker(std::sync::Arc::new(|| {}));
+    frames(&mut rt, 30);
+    assert_eq!(opacity(&rt, "scroll-bar"), 0.0, "an overlay bar at rest is hidden");
+    rt.update(|rows, _| *rows = 20);
+    rt.frame(1.0 / 60.0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rect(&rt, "thumb")[3], 24.0, "no glide runs while nobody can see it");
+    assert!(!info(&rt, "thumb").moving && !info(&rt, "thumb-slot").moving);
+}
+
 fn thumb_at<S>(rt: &rune::Runtime<S>) -> f32 {
     2.0 + thumb(at(-top(rt), 100.0, 100.0), 96.0).0
 }

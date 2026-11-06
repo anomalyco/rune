@@ -304,16 +304,17 @@ impl Bar {
         let (state, opacity, pulse_until) = (&self.state, &self.opacity, &self.pulse_until);
         let prev = state.get();
         // A shown bar glides when its content changes length; the hand, an instant change, a
-        // resize or a bar appearing moves it at once.
+        // resize or a bar appearing moves it at once, and so does a hidden overlay bar, whose
+        // glide nobody would see.
         let resized = (prev_at.viewport[1] - at.viewport[1]).abs() > 0.5;
         let lengthened = !resized && (prev_at.max[1] - at.max[1]).abs() > 0.5;
         let gliding = now < self.glide_until.get();
-        let glides = shows
-            && !scrolled
-            && !instant
-            && !resized
-            && (lengthened || gliding)
-            && matches!(prev, BarState::Always | BarState::Overlay);
+        let seen = match prev {
+            BarState::Always => true,
+            BarState::Overlay => now < self.pulse_until.get(),
+            _ => false,
+        };
+        let glides = shows && !scrolled && !instant && !resized && (lengthened || gliding) && seen;
         if glides && lengthened {
             self.glide_until.set(now + GLIDE_SPAN);
         }

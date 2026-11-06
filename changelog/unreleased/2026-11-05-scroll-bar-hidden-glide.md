@@ -1,0 +1,1 @@
+- **A hidden overlay scroll bar no longer animates.** When content grew or shrank under an overlay bar at rest (faded out), its thumb glided to the new length for about a second while nobody could see it, so the window kept drawing frames and motion audits flagged invisible work. A hidden bar's thumb now lands its new length at once; a shown bar still glides.
