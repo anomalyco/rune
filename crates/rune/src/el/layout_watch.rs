@@ -101,6 +101,16 @@ impl El {
         { self.handlers.sites.drawn_layout = Some(std::panic::Location::caller()); }
         self
     }
+    /// Called with `true` when this element comes on screen and `false` when it leaves, as a
+    /// web page's `IntersectionObserver` reports: on screen is half of it showing in the window
+    /// (or it covering half the window), where the frame drew it after scroll viewports and a
+    /// web page's own scroll ([`App::web_document`](crate::App::web_document)). It starts off
+    /// screen, so the first report is the first time it shows. Use it to play a demo when the
+    /// reader reaches it, or to stop a loop nobody can see.
+    pub fn on_visible<S: 'static>(mut self, f: impl Fn(&mut S, bool, &mut Tx) + 'static) -> Self {
+        self.handlers.on_visible = Some(Rc::new(move |s, on, tx| f(downcast::<S>(s), on, tx)));
+        self
+    }
     /// Writes where each frame draws this element into `rect`: `[x, y, w, h]` in window points,
     /// the rect [`El::on_drawn_layout`] reports, on every frame it moves, through a scroll, a
     /// glide and its own or an ancestor's spring. It runs no handler and commits nothing, so a

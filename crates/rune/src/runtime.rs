@@ -124,6 +124,8 @@ mod caret;
 pub(crate) mod event_log;
 #[path = "runtime/layout_read.rs"]
 pub(crate) mod layout_read;
+#[path = "runtime/visible.rs"]
+mod visible;
 #[path = "runtime/selection/links.rs"]
 mod links;
 #[path = "runtime/selection/selectable.rs"]
@@ -625,6 +627,8 @@ pub struct Runtime<S: 'static> {
     screen_fired: HashMap<NodeId, [f32; 4]>,
     /// (Drawn rect, laid-out rect) last sent to each element's `El::on_drawn_layout`.
     drawn_fired: HashMap<NodeId, ([f32; 4], [f32; 4])>,
+    /// Whether each element with `El::on_visible` was last on screen.
+    visible_fired: HashMap<NodeId, bool>,
     /// The window's content top-left in global screen points, as its host last saw it.
     window_origin: (f32, f32),
     /// Commits in a row caused only by layout feedback (see `layout_read`).
@@ -967,6 +971,7 @@ impl<S: 'static> Runtime<S> {
             layout_fired: HashMap::default(),
             screen_fired: HashMap::default(),
             drawn_fired: HashMap::default(),
+            visible_fired: HashMap::default(),
             window_origin: (0.0, 0.0),
             layout_echoes: 0,
             caret_follow: false,

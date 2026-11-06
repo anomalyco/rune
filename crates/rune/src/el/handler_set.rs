@@ -34,6 +34,8 @@ pub(crate) struct Handlers {
     pub on_layout: Option<LayoutTxFn>,
     pub on_screen_layout: Option<LayoutFn>,
     pub on_drawn_layout: Option<LayoutTxFn>,
+    /// `El::on_visible`: the element came on screen (`true`) or left it.
+    pub on_visible: Option<WindowFocusFn>,
     /// `El::drawn_rect_into`: where each frame draws the element.
     pub drawn_rect: Option<crate::Live<[f32; 4]>>,
     pub on_scroll_offset: Option<ScrollOffsetFn>,
@@ -112,6 +114,7 @@ impl Empty for Handlers {
         on_layout: None,
         on_screen_layout: None,
         on_drawn_layout: None,
+        on_visible: None,
         drawn_rect: None,
         on_scroll_offset: None,
         selection_copy: None,
