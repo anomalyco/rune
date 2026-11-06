@@ -1,0 +1,1 @@
+- `scripts/web-build.sh` release builds remap the cargo home and home folder in source paths (`--remap-path-prefix`), so a published `app_bg.wasm` no longer carries the builder's home folder in its panic messages. It changes `RUSTFLAGS`, so the first release build after updating rebuilds every dependency.

@@ -66,6 +66,9 @@ else
     build=(--release)
     export CARGO_PROFILE_RELEASE_OPT_LEVEL=s CARGO_PROFILE_RELEASE_LTO=thin CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
         CARGO_PROFILE_RELEASE_DEBUG=0 CARGO_PROFILE_RELEASE_STRIP=debuginfo
+    # Panic messages carry source paths; keep the builder's home folder out of a wasm meant for the public.
+    # rustc applies the last matching prefix, so the narrower cargo home comes after the home folder.
+    export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$HOME=/home --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
 fi
 args=(--lib)
 artifact="$target/wasm32-unknown-unknown/$profile/${name//-/_}.wasm"
