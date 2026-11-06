@@ -34,6 +34,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+          # Installed up front: otherwise rustup fetches it mid-build from parallel rustc calls, which race and fail.
+          components: rust-src
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: www-wasm
