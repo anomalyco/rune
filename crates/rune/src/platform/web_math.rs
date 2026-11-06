@@ -25,6 +25,16 @@ pub(crate) fn fix_canvas_size(css: (f32, f32), reported: (u32, u32), spec: (f32,
     size
 }
 
+/// The surface's next size and whether it needs configuring again. `current` is the size it is
+/// configured at. A page (`document`) never shrinks its surface: a phone's toolbar expanding
+/// shrinks the viewport for a moment mid-scroll, and a web surface configured again destroys and
+/// reallocates its swapchain textures in the GPU process right then.
+pub(crate) fn should_reconfigure_surface(current: (u32, u32), next: (u32, u32), document: bool) -> ((u32, u32), bool) {
+    if next.0 == 0 || next.1 == 0 || next == current { return (current, false); }
+    if document && next.0 == current.0 && next.1 < current.1 { return (current, false); }
+    (next, true)
+}
+
 #[cfg(test)]
 #[path = "web_math_tests.rs"]
 mod tests;

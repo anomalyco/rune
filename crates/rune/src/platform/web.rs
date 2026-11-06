@@ -10,9 +10,17 @@ mod input;
 mod page;
 pub(crate) mod platform;
 
-thread_local! { static INSETS: std::cell::Cell<[f32; 4]> = const { std::cell::Cell::new([0.0; 4]) }; }
+thread_local! {
+    static INSETS: std::cell::Cell<[f32; 4]> = const { std::cell::Cell::new([0.0; 4]) };
+    /// The largest viewport's height in CSS points (`100lvh`): a page's band is sized from it so
+    /// a phone's toolbar coming and going never changes the band.
+    static LARGE_VIEWPORT: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+}
 
 pub(crate) fn safe_area() -> [f32; 4] { INSETS.get() }
+
+/// The largest viewport's height in CSS points, or 0 before the browser has reported one.
+pub(crate) fn large_viewport() -> f32 { LARGE_VIEWPORT.get() }
 
 /// Open an HTTP(S) or mail link in a new browser tab. Call from a user input handler;
 /// browser popup policy applies. The new page receives no opener or referrer.
@@ -118,14 +126,14 @@ impl<S: 'static> Running<S> {
         self.suspended = size.width == 0 || size.height == 0;
         if self.suspended { return; }
         let max_dim = self.gpu.device.limits().max_texture_dimension_2d.max(1);
-        let width = size.width.min(max_dim);
-        let height = size.height.min(max_dim);
-        if self.config.width != width || self.config.height != height {
-            self.config.width = width;
-            self.config.height = height;
+        let next = (size.width.min(max_dim), size.height.min(max_dim));
+        let (kept, reconfigure) = web_math::should_reconfigure_surface((self.config.width, self.config.height), next, self.document);
+        if reconfigure {
+            self.config.width = kept.0;
+            self.config.height = kept.1;
             self.surface.configure(&self.gpu.device, &self.config);
         }
-        self.rt.set_viewport((width as f32 / scale, height as f32 / scale), scale);
+        self.rt.set_viewport((kept.0 as f32 / scale, kept.1 as f32 / scale), scale);
     }
 
     pub(super) fn apply_frame_requests(&mut self, window: &Window) {
@@ -262,9 +270,11 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         }
         if self.document {
             // The browser scrolls the page under a canvas fixed to the layout viewport, which
-            // draws the band in view; vertical pans and pinches stay the browser's.
+            // draws the band in view; vertical pans and pinches stay the browser's. Its height is
+            // the *largest* viewport (`100lvh`), so Safari's toolbar collapsing and expanding
+            // never resizes it: no ResizeObserver event and no surface configured again mid-scroll.
             let _ = canvas.set_attribute("tabindex", "-1");
-            canvas.style().set_css_text("position:fixed;left:0;top:0;width:100%;height:100%;display:block;touch-action:pan-y pinch-zoom;outline:none;user-select:none;-webkit-user-select:none");
+            canvas.style().set_css_text("position:fixed;left:0;top:0;width:100%;height:100%;height:100lvh;display:block;touch-action:pan-y pinch-zoom;outline:none;user-select:none;-webkit-user-select:none");
             if let Some(document) = web_sys::window().and_then(|w| w.document()) {
                 self.borrowed.viewport(&document);
                 document.set_title(app.spec.title);
@@ -518,6 +528,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         if let Some(window) = self.window.take() && self.owns_canvas && let Some(canvas) = window.canvas() { canvas.remove(); }
         std::mem::take(&mut self.borrowed).give_back();
         INSETS.set([0.0; 4]);
+        LARGE_VIEWPORT.set(0.0);
         page::vacate();
     }
 }

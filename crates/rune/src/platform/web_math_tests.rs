@@ -32,3 +32,22 @@ fn a_size_the_box_agrees_with_is_left_alone() {
     // The box's fractional width at 1.5× rounds to a pixel the browser may report ±1.
     assert_eq!(fix_canvas_size((1001.0, 700.0), (1502, 1050), (1200.0, 900.0), 1.5, false), (1502, 1050));
 }
+
+#[test]
+fn a_page_surface_never_shrinks_for_a_toolbar() {
+    let phone = (1179, 2556);
+    // Safari's toolbar expanding shrinks the viewport while the page is scrolling.
+    assert_eq!(should_reconfigure_surface(phone, (1179, 2400), true), (phone, false));
+    // Collapsing again lands on the size it already has.
+    assert_eq!(should_reconfigure_surface(phone, phone, true), (phone, false));
+    // A rotation has a new width, and does reconfigure.
+    assert_eq!(should_reconfigure_surface(phone, (2556, 1179), true), ((2556, 1179), true));
+}
+
+#[test]
+fn other_windows_reconfigure_on_every_size_change() {
+    assert_eq!(should_reconfigure_surface((800, 600), (800, 500), false), ((800, 500), true));
+    assert_eq!(should_reconfigure_surface((800, 600), (800, 600), false), ((800, 600), false));
+    // A window hidden to nothing keeps its surface until it has a size again.
+    assert_eq!(should_reconfigure_surface((800, 600), (0, 0), false), ((800, 600), false));
+}

@@ -110,7 +110,13 @@ impl<S: 'static> Running<S> {
         match event["kind"].as_str() {
             Some("viewport") => {
                 let insets = std::array::from_fn(|i| event["insets"][i].as_f64().unwrap_or(0.0).max(0.0) as f32);
-                if INSETS.replace(insets) != insets { self.rt.invalidate(); }
+                let h = event["h"].as_f64().unwrap_or(0.0).max(0.0) as f32;
+                // A phone reports the visual viewport on every scroll frame as its toolbar moves;
+                // when neither the safe area nor the largest viewport moved, there's nothing to do.
+                let moved = LARGE_VIEWPORT.replace(h) != h;
+                if INSETS.replace(insets) == insets && !moved { return; }
+                if moved { self.resize_surface(window, window.inner_size(), window.scale_factor() as f32); }
+                self.rt.invalidate();
             }
             Some("dpr") => {
                 let size = window.inner_size();

@@ -100,6 +100,11 @@ export function viewport(canvas, callback, embedded) {
     const probe = document.createElement('div');
     probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';
     document.body.append(probe);
+    // The largest viewport: on iOS Safari `100lvh` is the viewport with the toolbar collapsed, so
+    // a canvas or band sized from it doesn't change as the toolbar comes and goes mid-scroll.
+    const largest = document.createElement('div');
+    largest.style.cssText = 'position:fixed;top:0;left:0;width:0;height:100lvh;visibility:hidden;pointer-events:none';
+    document.body.append(largest);
     const update = () => {
         if (!embedded) {
             const v = window.visualViewport;
@@ -109,7 +114,8 @@ export function viewport(canvas, callback, embedded) {
             canvas.style.top = `${v?.offsetTop ?? 0}px`;
         }
         const s = getComputedStyle(probe);
-        callback(JSON.stringify({ kind: 'viewport', insets: embedded ? [0, 0, 0, 0] : [s.paddingTop, s.paddingRight, s.paddingBottom, s.paddingLeft].map(parseFloat) }));
+        callback(JSON.stringify({ kind: 'viewport', h: largest.offsetHeight || innerHeight,
+            insets: embedded ? [0, 0, 0, 0] : [s.paddingTop, s.paddingRight, s.paddingBottom, s.paddingLeft].map(parseFloat) }));
     };
     const motion = matchMedia('(prefers-reduced-motion: reduce)');
     const reduced = () => callback(JSON.stringify({ kind: 'motion', reduced: motion.matches }));
@@ -145,5 +151,6 @@ export function viewport(canvas, callback, embedded) {
         window.removeEventListener('blur', focus);
         document.removeEventListener('visibilitychange', visibility);
         probe.remove();
+        largest.remove();
     };
 }
