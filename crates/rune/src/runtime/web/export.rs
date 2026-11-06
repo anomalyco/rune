@@ -29,6 +29,8 @@ pub(crate) struct ExportNode {
     pub decls: Vec<(&'static str, String)>,
     /// Laid-out width in points, which an image's `sizes` follows across widths.
     pub width: f32,
+    /// A text element: its children are inline runs, not elements.
+    pub text: bool,
 }
 
 pub(crate) fn escape(s: &str) -> String {
@@ -128,7 +130,7 @@ impl<S: 'static> Runtime<S> {
             };
             decls.push(("object-fit", fit.into()));
         }
-        ExportNode { path: n.path.clone(), depth, tag, attrs, inner, decls, width: x1 - x0 }
+        ExportNode { path: n.path.clone(), depth, tag, attrs, inner, decls, width: x1 - x0, text: n.text.is_some() }
     }
 }
 

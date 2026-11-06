@@ -58,17 +58,19 @@ fn folds_widths_into_media_rules_and_hides_what_a_width_lacks() {
     assert!(media.contains("flex-direction:row"), "{media}");
     assert!(!body.contains("Wide only"), "the body is the narrowest tree: {body}");
     assert!(wide.iter().any(|n| n.inner == "Wide only"));
+    assert!(css.contains(".t>*{display:inline"), "a text element's runs stay inline: {css}");
+    assert!(body.contains("<p class=\"t"), "{body}");
     let opened = body.matches('<').count() - body.matches("</").count();
     assert_eq!(opened, body.matches("</").count(), "every element closes: {body}");
 }
 
 #[test]
 fn a_node_missing_at_a_wider_width_is_hidden_there() {
-    let narrow = vec![ExportNode { path: "0".into(), depth: 0, tag: "div", attrs: String::new(), inner: String::new(), decls: vec![], width: 100.0 },
-        ExportNode { path: "0.1".into(), depth: 1, tag: "p", attrs: String::new(), inner: "x".into(), decls: vec![("color", "#fff".into())], width: 100.0 }];
+    let narrow = vec![ExportNode { path: "0".into(), depth: 0, tag: "div", attrs: String::new(), inner: String::new(), decls: vec![], width: 100.0, text: false },
+        ExportNode { path: "0.1".into(), depth: 1, tag: "p", attrs: String::new(), inner: "x".into(), decls: vec![("color", "#fff".into())], width: 100.0, text: true }];
     let wide = vec![narrow[0].clone()];
     let (body, css) = page(&[(360.0, narrow), (800.0, wide)]);
-    assert_eq!(body, "<div data-rune-static><p class=\"a0 b0\">x</p></div>");
+    assert_eq!(body, "<div data-rune-static><p class=\"t a0 b0\">x</p></div>");
     assert!(css.ends_with(".a0{color:#fff;display:flex}@media (min-width:800px){.b0{display:none}}"), "{css}");
 }
 
@@ -92,8 +94,8 @@ fn radial_gradients_scale_with_the_box_and_soft_clips_become_masks() {
 
 #[test]
 fn an_image_source_set_gets_sizes_from_every_width() {
-    let img = |w: f32| ExportNode { path: "0.0".into(), depth: 1, tag: "img", attrs: " src=\"a-640.avif\" srcset=\"a-640.avif 640w, a-1280.avif 1280w\"".into(), inner: String::new(), decls: vec![], width: w };
-    let root = ExportNode { path: "0".into(), depth: 0, tag: "div", attrs: String::new(), inner: String::new(), decls: vec![], width: 0.0 };
+    let img = |w: f32| ExportNode { path: "0.0".into(), depth: 1, tag: "img", attrs: " src=\"a-640.avif\" srcset=\"a-640.avif 640w, a-1280.avif 1280w\"".into(), inner: String::new(), decls: vec![], width: w, text: false };
+    let root = ExportNode { path: "0".into(), depth: 0, tag: "div", attrs: String::new(), inner: String::new(), decls: vec![], width: 0.0, text: false };
     let (body, _) = page(&[(360.0, vec![root.clone(), img(328.0)]), (1000.0, vec![root, img(500.0)])]);
     assert!(body.contains(" sizes=\"(min-width:1000px) 50vw,92vw\">"), "{body}");
 }

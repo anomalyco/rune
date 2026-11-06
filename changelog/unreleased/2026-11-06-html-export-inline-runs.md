@@ -1,0 +1,1 @@
+- **`--html` keeps a text element's runs inline.** Styled spans and links inside a paragraph used to take the exported elements' flex layout and stack one per line; a text element now carries class `t`, whose children lay out inline.
