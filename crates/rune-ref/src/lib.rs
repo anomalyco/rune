@@ -115,7 +115,9 @@ impl Scene {
                 || p.rect[2] < 0.0
                 || p.rect[3] < 0.0
                 // A negative fade width is a linear ramp.
-                || p.radii.iter().any(|v| *v < 0.0)
+                // A layer's `radii` are its hole, whose centre may lie anywhere.
+                || (p.params[1] != 8.0 && p.radii.iter().any(|v| *v < 0.0))
+                || (p.params[1] == 8.0 && p.params[3] == 0.0 && (p.radii[2] < 0.0 || p.radii[3] < p.radii[2]))
                 || !(0..=4).chain([8, 9, 10, 11, 12]).any(|k| p.params[1] == k as f32)
                 // A glyph's params[0] is a signed turn; negative is counter-clockwise.
                 || (p.params[0] < 0.0 && p.params[1] != 2.0)
@@ -212,6 +214,7 @@ impl Frame {
                     }
                 }
                 if p.params[3] == 0.0 && p.fill[3] == 1.0 && p.params[0] == 0.0 && p.params[2] == 0.0 && p.clip == NO_CLIP && p.border == [0.0; 4]
+                    && p.radii[3] == 0.0
                     && p.turn.is_none()
                 {
                     Self::render_range(width, height, rgba, owners.as_deref_mut(), scene, cursor + 1, close);

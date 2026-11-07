@@ -92,6 +92,9 @@ struct Layer {
     free: bool,
     /// For a free layer, the edges of its contents that can reach the window.
     frame: [f32; 4],
+    /// The round hole its composite cuts (`El::cutout_circle`): centre, then the radii it's clear
+    /// within and whole from, in window device pixels; zeros for none.
+    hole: [f32; 4],
 }
 
 /// The upright bounds of edges `r` turned `angle` radians clockwise about `p`.
@@ -263,6 +266,8 @@ impl Renderer {
                     turn,
                     free,
                     frame,
+                    // A cached scope's `radii` name its node instead.
+                    hole: if cache.is_some() { [0.0; 4] } else { i.radii },
                 });
             } else if i.params[1] == KIND_LAYER_END {
                 let at = self.layers.stack.pop().expect("unbalanced layer end");
@@ -401,7 +406,7 @@ impl Renderer {
             }
             let l = &self.layers.plan[index];
             if cache_target.is_none() && l.opacity == 1.0 && l.blend == Blend::SourceOver && !additive_parent
-                && l.blur == 0.0 && l.fade[3] == 0 && l.clip == NO_CLIP && l.turn.is_none() {
+                && l.blur == 0.0 && l.fade[3] == 0 && l.clip == NO_CLIP && l.turn.is_none() && l.hole[3] == 0.0 {
                 self.layers.targets[index] = None;
                 continue;
             }
@@ -455,6 +460,7 @@ impl Renderer {
                 opacity: l.opacity, blend: l.blend, ..Default::default() });
             if let Some((angle, pivot)) = l.turn { quad = quad.turned(angle, pivot); }
             quad.fade = l.fade;
+            quad.radii = l.hole;
             staging.write_buffer(&t.quad, 0, bytemuck::bytes_of(&quad));
         }
         if !self.layers.retained.is_empty() {

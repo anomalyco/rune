@@ -343,6 +343,13 @@ fn box_cov(p: vec2<f32>, half: vec2<f32>, radii: vec4<f32>) -> f32 {
     return clamp(0.5 - sd_rounded(p, half, radii), 0.0, 1.0);
 }
 
+// A layer composite's round hole (`El::cutout_circle`): centre `h.xy`, clear within `h.z`, whole
+// from `h.w`, linear between and at least a pixel wide; none when `h.w` is zero.
+fn hole_alpha(p: vec2<f32>, h: vec4<f32>) -> f32 {
+    if (h.w <= 0.0) { return 1.0; }
+    return clamp((length(p - h.xy) - (h.z + h.w) * 0.5) / max(h.w - h.z, 1.0) + 0.5, 0.0, 1.0);
+}
+
 // A texel of a layer `size` pixels across; transparent outside it.
 fn layer_texel(t: vec2<i32>, size: vec2<f32>) -> vec4<f32> {
     if (any(t < vec2<i32>(0)) || any(t >= vec2<i32>(size))) { return vec4<f32>(0.0); }
@@ -387,7 +394,7 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
         // Float intermediates accumulate One/One without saturation. Clamp before applying
         // this scope's opacity so nesting preserves plus-lighter's bounded coverage.
         return select(color, clamp(color, vec4(0.0), vec4(1.0)), i.params.x == 1.0) * i.fill.a
-            * clip_alpha(i.pos.xy + projection.xy, i.clip, i.fade);
+            * clip_alpha(screen, i.clip, i.fade) * hole_alpha(screen, i.radii);
     }
     let kind = i.params.y;
     if (kind > 11.5) { discard; }

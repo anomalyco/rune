@@ -318,11 +318,19 @@ pub(crate) fn fragment(i: &Primitive, atlas: &Atlas, screen: [f32; 2]) -> [f32; 
 }
 
 pub(crate) fn layer_clip_coverage(i: &Primitive, screen: [f32; 2]) -> f32 {
-    let clip = clip_coverage(i, screen);
+    let clip = clip_coverage(i, screen) * if i.params[3] == 0.0 { hole_alpha(screen, i.radii) } else { 1.0 };
     if i.border == [0.0; 4] { return clip; }
     let half = [(i.clip[2] - i.clip[0]) * 0.5, (i.clip[3] - i.clip[1]) * 0.5];
     let p = [screen[0] - i.clip[0] - half[0], screen[1] - i.clip[1] - half[1]];
     clip * clamp(0.5 - sd(p, half, i.border))
+}
+
+/// A layer's round hole (`El::cutout_circle`): centre `h[0..2]`, clear within `h[2]`, whole from
+/// `h[3]`, linear between and at least a pixel wide; none when `h[3]` is zero.
+fn hole_alpha(p: [f32; 2], h: [f32; 4]) -> f32 {
+    if h[3] <= 0.0 { return 1.0; }
+    let (dx, dy) = (p[0] - h[0], p[1] - h[1]);
+    clamp((sqrtf(dx * dx + dy * dy) - (h[2] + h[3]) * 0.5) / (h[3] - h[2]).max(1.0) + 0.5)
 }
 
 fn clip_coverage(i: &Primitive, screen: [f32; 2]) -> f32 {

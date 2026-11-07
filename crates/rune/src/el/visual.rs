@@ -34,6 +34,9 @@ pub struct VisualCold {
     pub clip_radius: Option<f32>,
     /// Per-corner clip radii override (`[tl, tr, br, bl]`, in points).
     pub(crate) clip_corners: Option<[f32; 4]>,
+    /// A round hole through this element and its subtree (`El::cutout_circle`): centre x and y
+    /// from the element's top-left, and the radii it's clear within and whole from, in points.
+    pub(crate) cutout: Option<[f32; 4]>,
     pub icon: Option<(&'static Icon, Color)>,
     /// The icon's colour came from `El::color`; without it the icon takes the window's
     /// foreground (`Cx::foreground`) when the view sets one.
@@ -106,6 +109,7 @@ impl Empty for VisualCold {
         clip: None,
         clip_radius: None,
         clip_corners: None,
+        cutout: None,
         icon: None,
         icon_inked: false,
         gradient: None,
