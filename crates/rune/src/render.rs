@@ -530,8 +530,6 @@ impl Gpu {
         static DX12: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
         let dx12 = *DX12.get_or_init(|| {
-            // Enumerating DX12 adapters creates a temporary device on each, which is why this
-            // waits for a real GPU use instead of running as the event loop starts.
             let found = !pollster::block_on(Self::wgpu_instance_on(wgpu::Backends::DX12).enumerate_adapters(wgpu::Backends::DX12)).is_empty();
             if !found { eprintln!("rune: no DX12 adapter; drawing with Vulkan"); }
             found
