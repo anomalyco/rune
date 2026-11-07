@@ -25,11 +25,13 @@ pub(crate) use caption::{BUTTONS_KEY, FRAME_KEY, frame};
 ///   the trailing edge at the band's height, as Electron's `titleBarOverlay` does.
 /// - **Elsewhere:** the native frame stays and [`ChromeInsets`] is zero.
 ///
-/// `Cx::titlebar_height` changes the height while the app runs, as a UI zoom does. A
-/// borderless window has no titlebar to replace, and ignores it.
+/// `Cx::titlebar_height` changes the height while the app runs, as a UI zoom does, and
+/// `Cx::set_titlebar` the whole titlebar, as a switch between layouts does. A borderless window
+/// has no titlebar to replace, and ignores it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Titlebar {
     height: f32,
+    traffic_lights: Option<(f32, f32)>,
 }
 
 impl Titlebar {
@@ -37,25 +39,56 @@ impl Titlebar {
     pub const CAPTION_BUTTON_WIDTH: f32 = 46.0;
 
     pub const fn new(height: f32) -> Self {
-        Self { height }
+        Self { height, traffic_lights: None }
+    }
+
+    /// macOS: the close button's top-left, in points from the window's top-left, for this
+    /// titlebar (Electron's `trafficLightPosition`), in place of `Chrome::traffic_lights` and
+    /// the band's middle. Ignored elsewhere and in full screen.
+    pub const fn traffic_lights(mut self, x: f32, y: f32) -> Self {
+        self.traffic_lights = Some((x, y));
+        self
     }
 
     pub fn height(&self) -> f32 {
         self.height
     }
 
+    /// Where [`Self::traffic_lights`] put the close button, if it did.
+    pub fn traffic_lights_origin(&self) -> Option<(f32, f32)> {
+        self.traffic_lights
+    }
+
     /// The frame macOS draws for this titlebar over `chrome`: full-size content, drag regions
-    /// only, and the traffic lights in the band's middle unless the app placed them.
+    /// only, and the traffic lights where this titlebar or the app placed them, else in the
+    /// band's middle.
     pub(crate) fn mac_chrome(&self, chrome: Chrome) -> Chrome {
         let y = ((self.height - Chrome::TRAFFIC_LIGHT) / 2.0).max(0.0).round();
-        Chrome { full_size_content: true, drag_regions: true, traffic_lights: chrome.traffic_lights.or(Some((16.0, y))) }
+        let lights = self.traffic_lights.or(chrome.traffic_lights).or(Some((16.0, y)));
+        Chrome { full_size_content: true, drag_regions: true, traffic_lights: lights }
+    }
+}
+
+/// What the view set of the window's titlebar on its last run: `Cx::set_titlebar`, then
+/// `Cx::titlebar_height` over it. Empty keeps `App::titlebar`'s.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct TitlebarSet {
+    pub titlebar: Option<Titlebar>,
+    pub height: Option<f32>,
+}
+
+impl TitlebarSet {
+    /// The titlebar the window draws in place of the app's `base`.
+    pub(crate) fn over(self, base: Titlebar) -> Titlebar {
+        let titlebar = self.titlebar.unwrap_or(base);
+        self.height.map_or(titlebar, |height| Titlebar { height, ..titlebar })
     }
 }
 
 /// What the window's own controls take of the app's titlebar, in points
 /// (`Cx::chrome_insets`). The view re-runs when it changes: entering or leaving full screen,
-/// a scale change, `Cx::titlebar_height`. Memos rebuild with it too, so a `memo` closure that
-/// reads it needs nothing in its version.
+/// a scale change, `Cx::titlebar_height`, `Cx::set_titlebar`. Memos rebuild with it too, so a
+/// `memo` closure that reads it needs nothing in its version.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct ChromeInsets {

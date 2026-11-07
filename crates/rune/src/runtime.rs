@@ -635,6 +635,8 @@ pub struct Runtime<S: 'static> {
     visible_fired: HashMap<NodeId, bool>,
     /// The window's content top-left in global screen points, as its host last saw it.
     window_origin: (f32, f32),
+    /// The window's content top-left in desktop pixels, as its host last saw it (`Drag::screen_point`).
+    window_pixels: Option<(i32, i32)>,
     /// Commits in a row caused only by layout feedback (see `layout_read`).
     layout_echoes: u32,
     /// An edit ran this frame: keep the caret in its scroll viewport after the commit.
@@ -978,6 +980,7 @@ impl<S: 'static> Runtime<S> {
             drawn_fired: HashMap::default(),
             visible_fired: HashMap::default(),
             window_origin: (0.0, 0.0),
+            window_pixels: None,
             layout_echoes: 0,
             caret_follow: false,
             links: Default::default(),

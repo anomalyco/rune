@@ -544,7 +544,7 @@ impl<S: 'static> Measurement<'_, S> {
             reduced_motion: self.reduced_motion,
             time_scale: self.time_scale,
             defaults: self.defaults,
-            titlebar_height: self.titlebar_height,
+            titlebar: self.titlebar,
             caret_read: self.caret_read,
             layout_reads: self.layout_reads,
             memo_flattened: Some(pending),

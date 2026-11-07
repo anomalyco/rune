@@ -193,9 +193,7 @@ impl<S: 'static> Host<S> {
             let scale = w.window.scale_factor() as f32;
             self.rt.step_viewport((size.width as f32 / scale, size.height as f32 / scale), scale);
             // In this frame's layout, not the next one when `Moved` arrives.
-            if let Some(origin) = screen_origin(&w.window) {
-                self.rt.set_window_origin(origin);
-            }
+            sync_screen_origin(&mut self.rt, &w.window);
         }
     }
 

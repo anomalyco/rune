@@ -276,7 +276,16 @@ impl El {
     /// minimises it as the system's titlebar setting says. Hit targets inside it (buttons,
     /// fields) keep their presses.
     pub fn window_drag(mut self) -> Self {
-        self.window_drag = true;
+        self.window_drag = WindowDrag::Drag;
+        self
+    }
+    /// A part of a `.window_drag()` band that keeps its presses: a press, double press or
+    /// secondary click on it, or on a bare child of it, neither moves, zooms nor opens the menu
+    /// of the window. Controls (`on_press`, `on_drag`, focusable elements, text fields) already
+    /// keep theirs; this is for the parts between them, such as the gaps of a toolbar group.
+    /// Like any hit target, it takes presses from what lies under it.
+    pub fn no_window_drag(mut self) -> Self {
+        self.window_drag = WindowDrag::NoDrag;
         self
     }
     /// The caret of an editor the app draws itself rather than with `text_input`: while this

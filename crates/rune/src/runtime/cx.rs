@@ -47,8 +47,8 @@ pub struct Cx<S> {
     pub(super) caption_color: Option<Color>,
     /// `Cx::foreground` and `Cx::focus_ring`, read once the view returns.
     pub(super) defaults: ViewDefaults,
-    /// `Cx::titlebar_height`, read once the view returns.
-    pub(super) titlebar_height: Option<f32>,
+    /// `Cx::set_titlebar` and `Cx::titlebar_height`, read once the view returns.
+    pub(super) titlebar: crate::titlebar::TitlebarSet,
     pub(super) system_accent: crate::SystemAccent,
     pub(super) system_scroll_bars: crate::platform::scroll_bars::SystemScrollBars,
     pub(super) system_reduced_motion: bool,
@@ -70,7 +70,7 @@ impl<S> Cx<S> {
         Cx {
             env: self.env, titlebar_inset: self.titlebar_inset, chrome: self.chrome, caption_color: self.caption_color,
             defaults: self.defaults,
-            titlebar_height: self.titlebar_height,
+            titlebar: self.titlebar,
             system_accent: self.system_accent,
             system_scroll_bars: self.system_scroll_bars,
             system_reduced_motion: self.system_reduced_motion, reduced_motion: self.reduced_motion, time_scale: self.time_scale,
@@ -81,7 +81,7 @@ impl<S> Cx<S> {
 
     /// Takes back a [`Self::retype`]d context a nested view ran with: its overrides, and the
     /// caret and layout reads it added. The window's chrome stays the outer view's: a staged
-    /// story's `caption_color` or `titlebar_height` isn't the window's.
+    /// story's `caption_color` or titlebar isn't the window's.
     pub fn absorb<T>(&mut self, other: Cx<T>) {
         self.reduced_motion = other.reduced_motion;
         self.time_scale = other.time_scale;
@@ -108,7 +108,7 @@ impl<S> Cx<S> {
         self.reduced_motion = other.reduced_motion;
         self.time_scale = other.time_scale;
         self.caption_color = other.caption_color;
-        self.titlebar_height = other.titlebar_height;
+        self.titlebar = other.titlebar;
         self.caret_read = other.caret_read;
         self.layout_reads = other.layout_reads;
     }
@@ -163,13 +163,23 @@ impl<S> Cx<S> {
     /// `Titlebar::new`'s while the view keeps setting it: a band that scales with the app's UI
     /// zoom, as Electron's `setTitleBarOverlay({ height })` does. The Windows caption buttons
     /// take it (their width stays), macOS centres the traffic lights in it unless
-    /// `Chrome::traffic_lights` places them, and [`Self::chrome_insets`] reports it from the
-    /// next frame on, so the buttons line up with the app's row at every zoom: for a 44 point
-    /// row, `cx.titlebar_height(44.0 * zoom.max(1.0))` keeps the row 44 points tall zoomed out,
-    /// as Electron apps size their `titleBarOverlay`. Insets are window points: a view that
-    /// scales its content by a zoom divides them by it.
+    /// `Titlebar::traffic_lights` or `Chrome::traffic_lights` places them, and
+    /// [`Self::chrome_insets`] reports it from the next frame on, so the buttons line up with
+    /// the app's row at every zoom: for a 44 point row, `cx.titlebar_height(44.0 * zoom.max(1.0))`
+    /// keeps the row 44 points tall zoomed out, as Electron apps size their `titleBarOverlay`.
+    /// Insets are window points: a view that scales its content by a zoom divides them by it.
+    /// Over [`Self::set_titlebar`], it sets that titlebar's height.
     pub fn titlebar_height(&mut self, points: f32) {
-        self.titlebar_height = Some(points.max(1.0));
+        self.titlebar.height = Some(points.max(1.0));
+    }
+    /// The titlebar the app draws (`App::titlebar`), in place of the app's while the view keeps
+    /// setting it: its height and, on macOS, where the traffic lights sit
+    /// (`Titlebar::traffic_lights`), for a switch between layouts whose titlebars differ. The
+    /// window moves the traffic lights and resizes the Windows caption buttons to it, and
+    /// [`Self::chrome_insets`] and [`Self::titlebar_inset`] report the new controls from the
+    /// next frame on. A window without `App::titlebar` keeps its native frame.
+    pub fn set_titlebar(&mut self, titlebar: crate::Titlebar) {
+        self.titlebar.titlebar = Some(titlebar);
     }
     /// The user's accent colour (System Settings › Appearance on macOS) for this window's
     /// appearance, [`SystemAccent::DEFAULT`](crate::SystemAccent::DEFAULT)'s blue elsewhere and

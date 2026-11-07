@@ -923,6 +923,7 @@ impl<T: 'static> Overlay<T> {
 
     /// Tells the runtime where the overlay's content is on screen (see `El::on_screen_layout`).
     fn sync_origin(&mut self, window: &Window) {
+        self.rt.set_window_pixels(window.inner_position().ok().map(|p| (p.x, p.y)));
         if let Some(origin) = crate::window::screen_origin(window) { self.origin_moved(origin); }
     }
 

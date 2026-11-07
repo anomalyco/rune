@@ -50,7 +50,7 @@ impl<S: 'static> Runtime<S> {
         if has_drag && drag_move {
             let (dx, dy) = (x - self.press_at.0, y - self.press_at.1);
             let [lx, ly] = self.to_local(i, x, y);
-            let d = Drag { phase: Phase::Move, x: lx, y: ly, dx, dy, ..d };
+            let d = Drag { phase: Phase::Move, x: lx, y: ly, dx, dy, window: [x, y], screen: self.screen_at(x, y), ..d };
             self.queue.push(Action::Drag(path, d, self.capture_button));
         }
     }
@@ -71,6 +71,17 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub(crate) fn pointer_captured(&self) -> bool { self.capture.is_some() || self.secondary_capture.is_some() }
+
+    /// The host's window content top-left in desktop pixels; `None` where it has none.
+    pub(crate) fn set_window_pixels(&mut self, pixels: Option<(i32, i32)>) {
+        self.window_pixels = pixels;
+    }
+
+    /// (x, y) window points in desktop pixels (`Drag::screen_point`).
+    pub(super) fn screen_at(&self, x: f32, y: f32) -> Option<(i32, i32)> {
+        let s = self.env.scale;
+        self.window_pixels.map(|(px, py)| (px + (x * s).round() as i32, py + (y * s).round() as i32))
+    }
 
     /// The host moved its window by (dx, dy) points under a still pointer. Keep the pointer and
     /// a held press's origin in window points, so a drag that moves its own window still reports
@@ -103,7 +114,7 @@ impl<S: 'static> Runtime<S> {
         let (x, y) = self.pointer.unwrap_or(self.press_at);
         let [lx, ly] = self.to_local(i, x, y);
         let (dx, dy) = (x - self.press_at.0, y - self.press_at.1);
-        let (path, d) = (path.clone(), Drag { phase: Phase::Up, x: lx, y: ly, dx, dy, cancelled: true, ..*d });
+        let (path, d) = (path.clone(), Drag { phase: Phase::Up, x: lx, y: ly, dx, dy, cancelled: true, window: [x, y], screen: self.screen_at(x, y), ..*d });
         let button = std::mem::take(&mut self.capture_button);
         self.queue.push(Action::Drag(path, d, button));
         self.capture = None;
@@ -251,6 +262,8 @@ impl<S: 'static> Runtime<S> {
             data: 0.0,
             clicks,
             cancelled: false,
+            window: [x, y],
+            screen: self.screen_at(x, y),
         };
         let path = n.path.clone();
         self.drag_out_armed = self.drags_out(n);
@@ -304,7 +317,7 @@ impl<S: 'static> Runtime<S> {
         if has_drag {
             let (dx, dy) = (x - self.press_at.0, y - self.press_at.1);
             let [lx, ly] = self.to_local(i, x, y);
-            self.queue.push(Action::Drag(path.clone(), Drag { phase: Phase::Up, x: lx, y: ly, dx, dy, ..d }, button));
+            self.queue.push(Action::Drag(path.clone(), Drag { phase: Phase::Up, x: lx, y: ly, dx, dy, window: [x, y], screen: self.screen_at(x, y), ..d }, button));
         }
         self.link_up(&path, x, y);
         if has_press && self.capture_inside && !selected {

@@ -171,6 +171,8 @@ impl<S: 'static> Runtime<S> {
             data: 0.0,
             clicks: u32::from(clicks),
             cancelled: false,
+            window: [x, y],
+            screen: self.screen_at(x, y),
         };
         self.capture = Some((path, d));
         self.capture_button = crate::PointerButton::Primary;

@@ -21,22 +21,23 @@ pub(super) fn place_chrome(window: &Window, chrome: Chrome) -> f32 {
     }
 }
 
-/// The frame the window draws for the app's `chrome` and `titlebar` at `height`
-/// (`Cx::titlebar_height`, else the titlebar's own): on macOS a titlebar is a full-size content
-/// view with the traffic lights in the band's middle unless the app placed them.
-pub(super) fn frame_chrome(chrome: Chrome, titlebar: Option<crate::Titlebar>, height: Option<f32>) -> Chrome {
+/// The frame the window draws for the app's `chrome` and `titlebar` as the view `set` it
+/// (`Cx::set_titlebar`, `Cx::titlebar_height`): on macOS a titlebar is a full-size content
+/// view with the traffic lights where the titlebar or the app placed them, else in the band's
+/// middle.
+pub(super) fn frame_chrome(chrome: Chrome, titlebar: Option<crate::Titlebar>, set: crate::titlebar::TitlebarSet) -> Chrome {
     #[cfg(target_os = "macos")]
-    return titlebar.map(|t| height.map_or(t, crate::Titlebar::new)).map_or(chrome, |t| t.mac_chrome(chrome));
+    return titlebar.map(|t| set.over(t)).map_or(chrome, |t| t.mac_chrome(chrome));
     #[cfg(not(target_os = "macos"))]
-    { let _ = (titlebar, height); chrome }
+    { let _ = (titlebar, set); chrome }
 }
 
 /// Places the traffic lights, and tells the runtime what the window's controls take of the
 /// titlebar and which caption buttons to draw over it. A change re-runs the view.
 pub(super) fn sync_chrome<S: 'static>(rt: &mut Runtime<S>, w: &Win, chrome: Chrome, titlebar: Option<crate::Titlebar>) {
-    let leading = place_chrome(&w.window, frame_chrome(chrome, titlebar, rt.titlebar_height()));
+    let leading = place_chrome(&w.window, frame_chrome(chrome, titlebar, rt.titlebar_set()));
     rt.set_titlebar_inset(leading);
-    let height = titlebar.map(|t| rt.titlebar_height().unwrap_or(t.height()));
+    let height = titlebar.map(|t| rt.titlebar_set().over(t).height());
     let caption = caption(w, height);
     let scale = w.window.scale_factor() as f32;
     let height = height.filter(|_| custom_frame(w)).unwrap_or(0.0);
