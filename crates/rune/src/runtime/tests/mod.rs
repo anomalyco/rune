@@ -21,6 +21,7 @@ mod one_snap;
 mod picture_scale;
 mod pointer_drag;
 mod pointer_hit;
+mod press_moving;
 mod relayout;
 mod remount;
 mod reveal_chain;
