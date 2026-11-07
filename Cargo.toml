@@ -12,6 +12,7 @@ members = [
     "crates/rune-register",
     "crates/rune-knobs",
     "crates/rune-mac",
+    "crates/rune-notify",
     "crates/rune-mermaid",
     "crates/rune-perf",
     "crates/rune-taffy",
