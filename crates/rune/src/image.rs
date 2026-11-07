@@ -429,7 +429,7 @@ fn linux_icon(path: &std::path::Path, px: u32) -> Result<(u32, u32, Vec<u8>), Im
 /// An SVG scaled to fit `px` square, keeping its aspect ratio, as straight-alpha sRGB RGBA8.
 /// `px == 0` rasterizes at twice the drawing's own size, at most 4096 pixels per side.
 #[cfg(feature = "svg")]
-fn svg_rgba(bytes: &[u8], px: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
+pub(crate) fn svg_rgba(bytes: &[u8], px: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
     use resvg::{tiny_skia, usvg};
     if bytes.len() > 32 << 20 { return Err(ImageError("SVG is too large".into())); }
     let tree = usvg::Tree::from_data(bytes, &usvg::Options::default()).map_err(|e| ImageError(format!("SVG: {e}")))?;
@@ -446,7 +446,7 @@ fn svg_rgba(bytes: &[u8], px: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
 }
 
 #[cfg(not(feature = "svg"))]
-fn svg_rgba(_: &[u8], _: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
+pub(crate) fn svg_rgba(_: &[u8], _: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
     Err(ImageError("SVG images need rune's `svg` feature".into()))
 }
 

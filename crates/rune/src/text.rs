@@ -27,6 +27,7 @@ use crate::tok::{Family, OpticalSize, TextStyle};
 
 mod atlas;
 mod case;
+mod color_icon;
 mod cursor;
 mod decorations;
 mod families;
@@ -167,6 +168,7 @@ pub struct TextSystem {
     color_glyphs: GlyphMap<ColorGlyph>,
     color_pixels: Vec<crate::pixels::Pixels>,
     color_bytes: usize,
+    color_icons: color_icon::ColorIcons,
     /// Layouts shaped, a running count (shaping work counter for perf gates).
     pub shaped: u32,
     /// Layouts re-broken at a new width from an earlier shaping, a running count.
@@ -297,6 +299,7 @@ impl TextSystem {
             color_glyphs: GlyphMap::default(),
             color_pixels: Vec::new(),
             color_bytes: 0,
+            color_icons: color_icon::ColorIcons::default(),
             shaped: 0,
             rebroken: 0,
             cluster_scratch: Vec::new(),
@@ -423,6 +426,7 @@ impl TextSystem {
             }
         }
         for c in self.color_glyphs.values_mut() { c.used = false; }
+        self.color_icons.begin_frame();
     }
 
     /// `shape` is [`shape_key`] of the same text when the caller already has it.
