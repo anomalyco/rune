@@ -20,7 +20,7 @@ cargo run -p motion-bento --profile perf -- --seed 7 --duration 30 --intensity 1
 | `--duration S` | 20 | Seconds of chaos. The window quits a second later. Rune's headless runs read it too. |
 | `--intensity X` | 1 | Scales the rate of taps: 2 is twice as many. |
 | `--variant NAME` | `default` | Spring tuning: `default`, `bouncy` or `stiff`. |
-| `--metrics PATH` | | Write the frame meter's JSON when the run ends. |
+| `--metrics PATH` | | Write the frame meter's JSON when the run ends (a headless run: at `--duration` + 1 s). |
 | `--hud` | off | Show the frame meter from the start. `H` toggles it. |
 | `--stay` | off | Keep the window open after the schedule ends. |
 | `--emit-script PATH` | | Write the schedule as a Rune headless script and exit. |

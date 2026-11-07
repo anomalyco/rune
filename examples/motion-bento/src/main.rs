@@ -113,7 +113,8 @@ fn poll(s: &mut State, t: f64, tx: &mut Tx) -> bool {
         s.ended = true;
         METER.with(|m| m.borrow_mut().as_mut().map(Meter::end));
     }
-    let headless = rune::is_headless();
+    // Not `rune::is_headless()`: it reads the process's arguments, where `--variant` is ours.
+    let headless = rune::tooling::headless_run().is_some();
     if !headless && !cfg.stay {
         if t >= cfg.duration + 1.0 {
             s.write_metrics();
@@ -121,6 +122,9 @@ fn poll(s: &mut State, t: f64, tx: &mut Tx) -> bool {
         } else if s.ended || t >= cfg.duration {
             tx.wake_after(Duration::from_secs_f64((cfg.duration + 1.0 - t).max(0.0)));
         }
+    }
+    if headless && t >= cfg.duration + 1.0 {
+        s.write_metrics();
     }
     if s.hud && !headless && t - s.hud_at >= 0.25 {
         s.hud_at = t;
