@@ -196,6 +196,12 @@ impl<S: 'static> Runtime<S> {
                 self.scene.set(to, prop::OPACITY, o);
                 self.scene.animate(to, prop::OPACITY, nodes[i].vis.opacity, spring);
             }
+            // Its content mounted with it and flies as part of what was seen, so none of it fades
+            // in on its own (each fresh level under a present parent otherwise would).
+            for j in i + 1..nodes.len() {
+                if !std::iter::successors(nodes[j].parent, |&p| nodes[p].parent).any(|p| p == i) { break; }
+                self.scene.enter_now(nodes[j].id);
+            }
             self.flying.retain(|f| f.0 != to);
             self.flying.push((to, nodes[i].local));
             self.launches.unclipped.retain(|&id| id != to);

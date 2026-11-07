@@ -1,0 +1,1 @@
+- **A matched element's content flies with it at full strength.** Content that mounts with a matched element arriving in a new parent shows at once instead of playing its own enter fades, which ran by alternate levels under the flight. Kit's `TabStrip` tabs moving from a titlebar into a sidebar no longer fly with a faint pill, avatar and title.

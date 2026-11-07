@@ -270,3 +270,30 @@ fn reduced_motion_fades_the_old_one_with_the_parent_it_leaves_with() {
     }
     assert!(sampled, "the fade was sampled");
 }
+
+/// A tile two parents deep in content, in the left box or, zoomed, in the right box.
+fn nested(zoomed: &bool, _: &mut Cx<bool>) -> El {
+    let tile = |size: f32| {
+        el().key("tile").matched("tile").size(size, size).fill(Color::WHITE)
+            .child(row().key("pill").w_full().h(20.0).child(el().key("mark").size(8.0, 8.0).child(el().key("dot").size(4.0, 4.0).fill(Color::BLACK))))
+    };
+    let mut left = el().key("left").size(100.0, 200.0);
+    let mut right = el().key("right").size(200.0, 200.0);
+    if *zoomed { right = right.child(tile(160.0)) } else { left = left.child(tile(40.0)) }
+    row().size(300.0, 200.0).child(left).child(right)
+}
+
+#[test]
+fn a_flights_content_flies_with_it_without_fading_in() {
+    let mut rt = Runtime::new(false, nested, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|zoomed, _| *zoomed = true);
+    for frame in 0..12 {
+        rt.frame(1.0 / 120.0);
+        assert!(moving(&rt), "still in flight");
+        for key in ["tile", "pill", "mark", "dot"] {
+            let o = rt.elements().iter().find(|e| e.key.as_deref() == Some(key)).map_or(0.0, |e| e.opacity);
+            assert!(o > 0.999, "frame {frame}: {key} drawn at {o:.3}");
+        }
+    }
+}
