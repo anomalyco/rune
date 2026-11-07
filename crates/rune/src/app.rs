@@ -400,8 +400,10 @@ impl<S: 'static> App<S> {
     /// hid last (closed with `keep_running`, or hidden), else the main window. It never brings
     /// back a launcher or other nonactivating panel, a window that closed for good, or anything
     /// in an accessory app. With several windows, every window's hook runs, in window order,
-    /// and any true skips the default. Never called on other platforms. Headless scripts
-    /// deliver it with `{"reopen": true}`.
+    /// and any true skips the default. Windows: runs when the app is launched again without a
+    /// link while it runs, once `rune::single_instance` made it the app's one process; the
+    /// default then also brings the front window forward, restored. Never called on other
+    /// platforms. Headless scripts deliver it with `{"reopen": true}`.
     pub fn on_reopen(mut self, f: fn(&mut S, bool, &mut Tx) -> bool) -> Self {
         self.on_reopen = Some(f);
         self
@@ -415,8 +417,13 @@ impl<S: 'static> App<S> {
     /// validate it before acting on it. Bringing a window forward is up to the app
     /// (`AppHandle::open`). The app's bundle must declare the scheme (`CFBundleURLTypes`, see
     /// the README). With several windows whose apps have the hook, the first still running
-    /// receives links. Never called on other platforms (Windows and Linux pass links to a new
-    /// process as arguments).
+    /// receives links.
+    ///
+    /// Windows: the links among the launch arguments (`scheme://…`), as Windows passes a link to
+    /// the process it starts, and with `rune::single_instance` the links of every later launch,
+    /// which that launch hands to this process instead of opening a window. The app registers its
+    /// scheme itself (`HKEY_CURRENT_USER\Software\Classes\<scheme>`, usually at install). Never
+    /// called on other platforms (Linux passes links to a new process as arguments).
     pub fn on_open_url(mut self, f: fn(&mut S, &str, &mut Tx)) -> Self {
         self.on_open_url = Some(f);
         self
