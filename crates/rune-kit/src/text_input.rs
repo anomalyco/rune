@@ -306,6 +306,7 @@ impl TextInput {
             .key("input")
             .grow(1.0)
             .shrink()
+            .min_w(0.0)
             .color(ink)
             .rich_style(kit_rich_style(k))
             .placeholder(self.placeholder.clone(), hint)
@@ -315,7 +316,9 @@ impl TextInput {
             field = field.active_descendant(key);
         }
         let field = self.edits.apply(field, disabled);
-        let mut value = row().key("value").grow(1.0).shrink().gap(6.0).center_y();
+        // The value stops at the box's padding: a placeholder or value longer than the box is cut
+        // there, as an `input` cuts its own text, rather than running on to the border.
+        let mut value = row().key("value").grow(1.0).shrink().min_w(0.0).gap(6.0).center_y().clip_rounded(0.0);
         if let Some(i) = self.leading {
             value = value.child(el().key("leading").pl(8.0).center().child(icon(i, self.leading_size).color(c.icon_muted)).a11y_hidden());
         } else {

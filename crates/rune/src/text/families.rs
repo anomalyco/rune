@@ -61,6 +61,8 @@ impl TextSystem {
             return false;
         }
         measure::note_families(sans, mono);
+        self.load_installed(sans);
+        self.load_installed(mono);
         self.families = (sans.to_owned(), mono.to_owned());
         (self.sans, self.mono) = slots(sans, mono);
         self.slot_system_mono = names_system_mono(sans) || names_system_mono(mono);

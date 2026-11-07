@@ -27,7 +27,9 @@ pub enum Family {
     #[default]
     Sans,
     Mono,
-    /// A literal font family name, not a CSS list. Falls back to the sans slot if missing.
+    /// A font family by name, registered or installed (an installed one loads on first use),
+    /// falling back to the sans slot if missing. With a comma it is a CSS family list, its
+    /// families tried in order before the sans slot: `"Iosevka", JetBrains Mono`.
     Named(&'static str),
     /// The platform's monospaced UI font, loaded from the system on first use, never bundled:
     /// SF Mono on macOS (AppKit's `monospacedSystemFont`, Menlo before it existed), Cascadia

@@ -107,7 +107,7 @@ pub(crate) use glyph_emit::GLIDE_PHASES;
 use line_break::break_lines_with_blocks;
 use span::PILL_BOX;
 use system_fonts::{
-    LoadedFiles, SYMBOL_FAMILIES, SYMBOL_FONT_FILES, family_list, load_families, load_system_mono, names_system_mono,
+    LoadedFiles, SYMBOL_FAMILIES, SYMBOL_FONT_FILES, family_list, load_families, load_installed, load_system_mono, named_list, names_system_mono,
     register_cjk_fallbacks, register_script_fallbacks,
 };
 #[cfg(any(test, not(target_arch = "wasm32")))]
@@ -170,6 +170,8 @@ pub struct TextSystem {
     /// Bit `i` is set once `fallback::SCRIPT_FONTS[i]` has been looked up.
     scripts: u64,
     font_files: LoadedFiles,
+    /// Installed families looked up by name (`load_installed`), lowercase.
+    installed: std::collections::HashSet<String>,
     pub atlas: Atlas,
     color_glyphs: GlyphMap<ColorGlyph>,
     color_pixels: Vec<crate::pixels::Pixels>,
@@ -281,7 +283,7 @@ impl TextSystem {
         #[cfg(target_arch = "wasm32")]
         let families = if fonts.is_empty() { ("Inter", "IBM Plex Mono") } else { families };
         let (sans, mono) = families::slots(families.0, families.1);
-        TextSystem {
+        let mut text = TextSystem {
             font_cx: FontContext { collection, source_cache: SourceCache::default() },
             layout_cx: LayoutContext::new(),
             scale_cx: ScaleContext::new(),
@@ -303,6 +305,7 @@ impl TextSystem {
             slot_system_mono: names_system_mono(families.0) || names_system_mono(families.1),
             scripts: 0,
             font_files,
+            installed: Default::default(),
             atlas: Atlas::new(),
             color_glyphs: GlyphMap::default(),
             color_pixels: Vec::new(),
@@ -320,7 +323,10 @@ impl TextSystem {
             windows: Default::default(),
             glyph_cache: Default::default(),
             glide: [0.0; 2],
-        }
+        };
+        text.load_installed(families.0);
+        text.load_installed(families.1);
+        text
     }
 
     /// The `trak` table of the font text in `family` at `weight` shapes with first.
@@ -356,6 +362,9 @@ impl TextSystem {
         if family == Family::SystemMono || self.slot_system_mono {
             self.system_mono();
         }
+        if let Family::Named(list) = family {
+            self.load_installed(list);
+        }
         let system = self.system_mono.as_deref().unwrap_or_default();
         let named = |list: &str| -> Vec<String> {
             family_list(list, system, &self.sans)
@@ -366,7 +375,7 @@ impl TextSystem {
         let names = match family {
             Family::Sans => named(&self.sans),
             Family::Mono => named(&self.mono),
-            Family::Named(name) => std::iter::once(name.to_owned()).chain(named(&self.sans)).collect(),
+            Family::Named(list) => named_list(list).into_iter().filter_map(|f| match f { FontFamilyName::Named(name) => Some(name.into_owned()), _ => None }).chain(named(&self.sans)).collect(),
             Family::SystemMono => system.iter().cloned().chain(named(&self.mono)).collect(),
         };
         let mut query = self.font_cx.collection.query(&mut self.font_cx.source_cache);
@@ -377,6 +386,12 @@ impl TextSystem {
     }
 
     /// The installed `Family::SystemMono` families, loading them the first time.
+    /// Loads the installed families CSS family list `list` names that aren't registered, by
+    /// name, so a slot or `Family::Named` can be any font on the system.
+    pub(crate) fn load_installed(&mut self, list: &str) {
+        load_installed(&mut self.font_cx.collection, &mut self.font_files, &mut self.installed, list);
+    }
+
     fn system_mono(&mut self) -> &[String] {
         let (collection, loaded) = (&mut self.font_cx.collection, &mut self.font_files);
         self.system_mono.get_or_insert_with(|| load_system_mono(collection, loaded))
@@ -624,6 +639,9 @@ impl TextSystem {
         if style.family == Family::SystemMono || self.slot_system_mono {
             self.system_mono();
         }
+        if let Family::Named(list) = style.family {
+            self.load_installed(list);
+        }
         let math = self.math.as_deref().unwrap_or(&[]);
         let emoji = self.emoji.as_slice();
         let system = self.system_mono.as_deref().unwrap_or_default();
@@ -636,9 +654,9 @@ impl TextSystem {
         let sans = match style.family {
             Family::Sans => with_symbols(self.sans.as_str()),
             Family::Mono => with_symbols(self.mono.as_str()),
-            Family::Named(name) => {
+            Family::Named(list) => {
                 let mut families = with_symbols(self.sans.as_str());
-                families.insert(0, FontFamilyName::named(name));
+                families.splice(0..0, named_list(list));
                 families
             }
             Family::SystemMono => {

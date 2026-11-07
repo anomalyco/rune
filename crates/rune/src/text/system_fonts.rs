@@ -141,6 +141,57 @@ pub(super) fn register_cjk_fallbacks(collection: &mut Collection, loaded: &mut L
     super::language::register(collection, &fallbacks);
 }
 
+/// The files of the installed family `name` (any of its names, case aside), found through the
+/// platform's own list of fonts: DirectWrite's system collection on Windows, CoreText on macOS
+/// and fontconfig on Linux. The lookup runs in a collection of its own, so the app's collection
+/// gains only the files of the families text asks for, and its own families still come first.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn installed_family_files(name: &str) -> Vec<std::path::PathBuf> {
+    use parley::fontique::{CollectionOptions, SourceKind};
+    thread_local! {
+        static SYSTEM: std::cell::RefCell<Option<Collection>> = const { std::cell::RefCell::new(None) };
+    }
+    SYSTEM.with_borrow_mut(|system| {
+        let system = system.get_or_insert_with(|| Collection::new(CollectionOptions { shared: false, system_fonts: true }));
+        let Some(family) = system.family_by_name(name) else { return Vec::new() };
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        for font in family.fonts() {
+            if let SourceKind::Path(path) = &font.source().kind
+                && !files.iter().any(|f| f.as_path() == path.as_ref())
+            {
+                files.push(path.to_path_buf());
+            }
+        }
+        files
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(super) fn installed_family_files(_: &str) -> Vec<std::path::PathBuf> { Vec::new() }
+
+/// Loads the installed families the CSS family list `list` names that the collection lacks,
+/// each looked up once (`tried`).
+pub(super) fn load_installed(collection: &mut Collection, loaded: &mut LoadedFiles, tried: &mut std::collections::HashSet<String>, list: &str) -> bool {
+    let mut added = false;
+    for family in named_list(list) {
+        let FontFamilyName::Named(name) = family else { continue };
+        if collection.family_id(&name).is_some() || !tried.insert(name.to_lowercase()) {
+            continue;
+        }
+        added |= !load_files(collection, loaded, installed_family_files(&name)).is_empty();
+    }
+    added
+}
+
+/// `Family::Named`'s families: one literal name, or a CSS list when it has a comma.
+pub(super) fn named_list(list: &str) -> Vec<FontFamilyName<'_>> {
+    if list.contains(',') {
+        FontFamilyName::parse_css_list(list).flatten().collect()
+    } else {
+        vec![FontFamilyName::named(list)]
+    }
+}
+
 /// The families each system font file added to the collection, so a file is loaded once.
 pub(super) type LoadedFiles = HashMap<std::path::PathBuf, Vec<FamilyId>>;
 
