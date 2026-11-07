@@ -418,8 +418,10 @@ impl<S: 'static> App<S> {
     /// for one a covered, minimised or occluded window, or a drawable that never came, kept
     /// from drawing. For logging frame timing: pair [`FrameEncoded::at`](crate::FrameEncoded::at)
     /// with `Tx::input_time` for input latency. It changes nothing about when or what the window
-    /// draws; without it, each frame checks an `Option`. Desktop windows only: headless runs,
-    /// overlays and the web never call it.
+    /// draws; without it, each frame checks an `Option`. A single-window headless run reports
+    /// every frame on its virtual clock as `Drawn`, with wall-clock instants and `refresh_hz` at
+    /// its `--fps`, so an app's own meter reads its build and encode costs there too. Overlays,
+    /// multi-window headless runs and the web never call it.
     pub fn on_frame_encoded(mut self, f: impl FnMut(&crate::FrameEncoded) + 'static) -> Self {
         self.on_frame_encoded = Some(Box::new(f));
         self

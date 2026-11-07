@@ -227,6 +227,25 @@ fn duration_and_out_select_headless_png_output_unless_native() {
 }
 
 #[test]
+fn headless_runs_report_each_frame_to_on_frame_encoded() {
+    let _turn = HEADLESS.lock().unwrap_or_else(|e| e.into_inner());
+    let snap = std::env::temp_dir().join(format!("rune-encoded-{}.png", std::process::id()));
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let log = seen.clone();
+    let app = crate::App::new(AppSpec::new("encoded", (8.0, 8.0), || (), |_, _| crate::el())).on_frame_encoded(move |f| {
+        log.borrow_mut().push((f.seq(), f.outcome(), f.window().map(str::to_owned), f.refresh_hz(), f.started().is_some(), f.update_ms(), f.encode_ms()));
+    });
+    headless(app, Args { snap: Some(snap.clone()), at: Some(0.1), fps: 30.0, scale: Some(1.0), ..Default::default() });
+    std::fs::remove_file(snap).unwrap();
+    let seen = seen.borrow();
+    assert_eq!(seen.len(), 4, "frames 0 to 3 at 30 fps: {seen:?}");
+    for (i, (seq, outcome, window, hz, started, update, encode)) in seen.iter().enumerate() {
+        assert_eq!((*seq, *outcome, window.as_deref(), *hz, *started), (i as u64, crate::FrameOutcome::Drawn, Some("main"), Some(30.0), true));
+        assert!(update.is_some_and(|ms| ms >= 0.0) && encode.is_some_and(|ms| ms >= 0.0));
+    }
+}
+
+#[test]
 fn single_window_snapshots_honor_transparency_and_physical_size() {
     let _turn = HEADLESS.lock().unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("rune-window-options-{}", std::process::id()));
