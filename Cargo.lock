@@ -2076,6 +2076,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "motion-bento"
+version = "0.0.1"
+dependencies = [
+ "motion-bento-chaos",
+ "rune",
+ "rune-kit",
+]
+
+[[package]]
+name = "motion-bento-chaos"
+version = "0.0.1"
+dependencies = [
+ "procwatch",
+]
+
+[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

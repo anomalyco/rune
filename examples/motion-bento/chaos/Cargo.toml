@@ -1,0 +1,13 @@
+[package]
+name = "motion-bento-chaos"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "The motion bento's shared parts: the seeded chaos schedule, the tiles' logical state, the springs and colours, and the frame meter. No UI framework."
+
+[dependencies]
+procwatch = { path = "../../../crates/procwatch" }
+
+[lints]
+workspace = true
