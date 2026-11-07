@@ -252,7 +252,10 @@ mod tests {
         for id in NAMES {
             let icon = named(id).unwrap_or_else(|| panic!("no mark for {id}"));
             assert_eq!(icon.name, *id);
-            assert!(icon.view > 0.0 && icon.body.contains("currentColor"), "{id} takes the text colour");
+            // A few marks paint in their own colours, as Desktop draws them.
+            let paints = icon.body.contains("currentColor") || icon.body.contains("fill=\"#");
+            assert!(icon.view > 0.0 && paints, "{id} takes the text colour or its own");
+            assert!(!icon.body.contains("transform") && !icon.body.contains("<g"), "{id} is flat");
         }
         assert!(named("not-a-provider").is_none());
         assert_eq!(FALLBACK.name, "synthetic");
