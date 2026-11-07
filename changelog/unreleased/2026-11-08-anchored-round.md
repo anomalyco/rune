@@ -1,0 +1,1 @@
+- **`El::anchored_round` puts an anchored overlay at whole points, as Kobalte's popper places a web menu.** Kobalte rounds Floating UI's position with `Math.round`, so a menu 4 pt under a trigger that sits at half a point (y 141.5) draws at 142; without it Rune's drew at 141.5, which lands a device pixel higher at 1.25× and 1.5×. Overlays that don't call it place as before.

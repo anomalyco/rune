@@ -21,6 +21,8 @@ pub struct Anchor {
     pub fit: bool,
     /// [`El::anchored_unscaled`]: at window scale, not its anchor's zoom.
     pub unscaled: bool,
+    /// [`El::anchored_round`]: at whole points.
+    pub round: bool,
 }
 
 impl El {
@@ -41,7 +43,7 @@ impl El {
     /// scale.
     pub fn anchored(mut self, key: impl Into<String>, side: Side, align: Align, gap: f32) -> Self {
         self.style.set_position_absolute();
-        self.above = Some(Anchor { key: key.into(), side, align, gap, fit: false, unscaled: false });
+        self.above = Some(Anchor { key: key.into(), side, align, gap, fit: false, unscaled: false, round: false });
         self
     }
     /// [`El::anchored`], sized to the window as Floating UI's `size` middleware sizes a
@@ -65,6 +67,15 @@ impl El {
         }
         self
     }
+    /// Put this [`El::anchored`] overlay at whole points, rounding where it goes as Kobalte's
+    /// popper rounds Floating UI's position (`Math.round` on x and y), so a menu under a trigger
+    /// at half a point lands where a web menu does. Call it after `anchored`.
+    pub fn anchored_round(mut self) -> Self {
+        if let Some(a) = &mut self.above {
+            a.round = true;
+        }
+        self
+    }
 }
 
 /// Where an overlay of `size` (width, height) goes next to `trigger` (x0, y0, x1, y1) in a
@@ -79,7 +90,7 @@ impl El {
 /// assert_eq!(r, [20.0, 166.0, 120.0, 246.0]);
 /// ```
 pub fn anchor_rect(trigger: [f32; 4], size: (f32, f32), side: Side, align: Align, gap: f32, window: (f32, f32)) -> [f32; 4] {
-    let a = Anchor { key: String::new(), side, align, gap, fit: false, unscaled: false };
+    let a = Anchor { key: String::new(), side, align, gap, fit: false, unscaled: false, round: false };
     let (x, y) = crate::runtime::anchor_position(&a, trigger, size, window);
     [x, y, x + size.0, y + size.1]
 }
