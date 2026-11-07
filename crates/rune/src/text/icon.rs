@@ -5,7 +5,9 @@ use swash::zeno::{Cap, Fill, Join, Mask, Stroke, Transform};
 
 use super::{Atlas, Rasterized, svg_path};
 
-/// An SVG icon body as found in `@opencode/ui`'s catalog: elements inside a square viewBox.
+/// An SVG icon body as found in `@opencode/ui`'s catalog: elements inside a square viewBox,
+/// drawn in its element's colour. A body that names its own colours (`fill="#…"`, gradients),
+/// such as a file-type badge, draws in them instead, as full SVG (groups, transforms, `use`).
 #[derive(Debug)]
 pub struct Icon {
     pub name: &'static str,
