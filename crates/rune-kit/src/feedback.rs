@@ -1,13 +1,22 @@
 //! Spinner, Loader, Progress and ProgressCircle (`@opencode/ui` components/spinner,
 //! feedback/loader, components/progress, feedback/progress-circle).
 //!
-//! Renderer-owned loops share Rune's deterministic clock and cool through presence on removal.
+//! Renderer-owned loops cool through presence on removal; the spinner's run on the wall clock,
+//! so every spinner on screen keeps one phase.
 
 use rune::{Color, El, Icon, col, el, icon, row, spacer, text};
 
 use crate::Kit;
 
-/// The 4×4 pulse grid: corners hidden, outer squares dim (0.15), inner squares 0.4.
+mod radar;
+
+/// Soft Radar, the activity spinner (`Spinner`, `spinner-radar.ts`): a 5×5 grid of 2-unit dots
+/// on a 3-unit pitch in a 16-unit box, whose lit head sweeps clockwise around each square ring
+/// every 1.8 s, leaving a fading trail, with the centre dot steady at 0.64. Unlit dots rest at
+/// 0.2. Every spinner shares the wall clock's phase, so all of them on screen sweep together, and
+/// under reduced motion each dot holds the pose a fifth of the way into its loop, as Desktop's
+/// do. 18 points by default; Desktop's `ActivityRing` is 14 and its session progress indicator 16,
+/// both in `icon_muted`.
 pub struct Spinner {
     size: f32,
     color: Option<Color>,
@@ -21,29 +30,22 @@ impl Spinner {
         self.size = s;
         self
     }
+    /// The dots' ink (CSS `currentColor`); `std_text` by default.
     pub fn color(mut self, c: Color) -> Self {
         self.color = Some(c);
         self
     }
     pub fn build(self, k: &Kit) -> El {
         let ink = self.color.unwrap_or(k.c.std_text);
-        let u = self.size / 15.0;
+        let u = self.size / 16.0;
         let mut e = el().role("progressbar").label("Loading").size(self.size, self.size);
-        for i in 0..16 {
-            let (x, y) = ((i % 4) as f32 * 4.0, (i / 4) as f32 * 4.0);
-            let corner = matches!(i, 0 | 3 | 12 | 15);
-            let outer = matches!(i, 1 | 2 | 4 | 7 | 8 | 11 | 13 | 14);
-            if corner {
-                continue;
-            }
-            let a = if outer { 0.15 } else { 0.4 };
-            e = e.child(
-                el().key(format!("sq{i}")).size(3.0 * u, 3.0 * u).absolute(x * u, y * u).radius(u).fill(ink).a11y_hidden()
-                    // Web chooses random 1–2 s periods and 0–1.5 s delays at module load.
-                    // A fixed per-cell seed preserves that timing range in replays/goldens.
-                    .looping(rune_motion::LoopSpec::opacity(1.0 + ((i * 37) % 101) as f64 / 100.0,
-                        ((i * 53) % 101) as f64 * 0.015, a, if outer { 0.35 } else { 1.0 })),
-            );
+        for (i, d) in radar::dots().iter().enumerate() {
+            let side = d.size * u;
+            let dot = el().key(format!("d{i}")).absolute(d.x * u, d.y * u).size(side, side).radius(side * 0.24).fill(ink).a11y_hidden();
+            e = e.child(match d.cycle {
+                Some(c) => dot.cycle(c),
+                None => dot.opacity(d.still),
+            });
         }
         e
     }
@@ -67,21 +69,29 @@ static ARC: Icon = Icon {
     body: r#"<path d="M8 2A6 6 0 0 1 13.258 10.89" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>"#,
 };
 
-/// The v2 loader: a faint ring with a third-arc (`Loader`), 16 points by default.
+/// The v2 loader, for loading that isn't AI activity (`Loader`): a 2-unit ring at 0.2 with a
+/// third of it, round-capped from 12 o'clock, turning once every 900 ms; it stops at 12 o'clock
+/// under reduced motion. 16 points by default, in `icon_muted`.
 pub struct Loader {
     size: f32,
+    color: Option<Color>,
 }
 
 impl Loader {
     pub fn new() -> Loader {
-        Loader { size: 16.0 }
+        Loader { size: 16.0, color: None }
     }
     pub fn size(mut self, s: f32) -> Self {
         self.size = s;
         self
     }
+    /// The ring's ink (CSS `currentColor`); `icon_muted` by default.
+    pub fn color(mut self, c: Color) -> Self {
+        self.color = Some(c);
+        self
+    }
     pub fn build(self, k: &Kit) -> El {
-        let ink = k.c.icon_muted;
+        let ink = self.color.unwrap_or(k.c.icon_muted);
         el().role("progressbar")
             .label("Loading")
             .size(self.size, self.size)
