@@ -92,6 +92,9 @@ pub mod flags {
     pub const SCROLLING: u32 = 4;
     pub const CLIPPED: u32 = 8;
     pub const FILTERED: u32 = 16;
+    /// Runs a loop of its own (`El::looping`: a spinner, a sheen, a busy ring's dots), whose
+    /// wraps and turns are its design, however briefly it shows.
+    pub const LOOPING: u32 = 32;
     /// Draws nothing and holds nothing: a hit or hover zone, a spacer.
     pub const BLANK: u32 = 64;
 }

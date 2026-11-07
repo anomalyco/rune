@@ -150,6 +150,7 @@ impl Trace {
                 | if e.scrolling { F::SCROLLING } else { 0 }
                 | if clipped { F::CLIPPED } else { 0 }
                 | if blank.contains(e.path.as_str()) { F::BLANK } else { 0 }
+                | if e.loop_phase.is_some() { F::LOOPING } else { 0 }
                 | intent << 8;
             let q = [
                 (f64::from(x) * 100.0).round() as i64,
