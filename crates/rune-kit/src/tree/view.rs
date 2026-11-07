@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::f32::consts::FRAC_PI_2;
 use std::rc::Rc;
 
-use rune::{Color, El, GrowthSpec, Icon, KeyEvent, ScrollSpec, Span, Tx, col, el, icon, rich, row, text};
+use rune::{Color, El, GrowthSpec, Icon, KeyEvent, ScrollSpec, Span, TextStyle, Tx, col, el, icon, rich, row, text};
 
 use crate::Kit;
 
@@ -36,7 +36,9 @@ impl TreeItem {
             trailing: Vec::new(),
         }
     }
-    /// A file tree's row: the node's name and its folder or file icon ([`super::file_icon`]).
+    /// A file tree's row: the node's name and its folder or file icon ([`super::file_icon`]). A
+    /// tree styled [`TreeStyle::chevron_only_folders`] leaves the folder icon out. A
+    /// tree styled [`TreeStyle::chevron_only_folders`] leaves the folder icon out.
     pub fn file<D>(node: &FileNode<D>, row: &TreeRow) -> TreeItem {
         TreeItem::new(node.name.clone()).icon(node.icon(row.expanded == Some(true)))
     }
@@ -95,9 +97,9 @@ impl TreeItem {
             .h(style.row_height)
             .pl(pad + r.depth as f32 * style.indent)
             .pr(pad)
-            .gap(4.0)
+            .gap(style.gap)
             .center_y()
-            .radius(k.radius.sm)
+            .radius(style.radius)
             .motion(k.motion.control);
         if let Some(open) = r.expanded {
             e = e.expanded(open);
@@ -110,32 +112,43 @@ impl TreeItem {
         }
         said.extend(self.badge.clone());
         e = e.description(said.join(", "));
-        e = if r.selected { e.fill(style.selected) } else { e.hover(c.hover) };
+        e = if r.selected { e.fill(style.selected) } else { e.hover(style.hover) };
         if r.cursor && r.multi {
             e = e.outline(1.0, -1.0, c.border_focus);
         }
         if style.guides {
             for level in 0..r.depth {
                 let x = pad + level as f32 * style.indent + chevron_w * 0.5 - 0.5;
-                e = e.child(el().key(format!("guide{level}")).pin(Some(x), Some(0.0), None, Some(0.0)).w(1.0).fill(style.guide).a11y_hidden());
+                let mut guide = el().key(format!("guide{level}")).pin(Some(x), Some(0.0), None, Some(0.0)).w(1.0).fill(style.guide).a11y_hidden();
+                if let Some(o) = style.guides_hover {
+                    guide = guide.group_opacity(0.0, o);
+                }
+                e = e.child(guide);
             }
         }
+        let folder = r.expanded.is_some();
+        // A file's icon takes the chevron's lane in a chevron-only tree.
+        let icon_in_lane = style.chevron_only && !folder && self.icon.is_some();
         let chevron = el().key("chevron").size(chevron_w, chevron_w).center().a11y_hidden();
-        e = e.child(match r.expanded {
-            Some(open) => chevron.child(
-                icon(k.glyph.chevron_down, 16.0)
-                    .key("glyph")
-                    .color(c.icon_muted)
-                    .icon_rotation(if open { 0.0 } else { -FRAC_PI_2 })
-                    .motion(k.motion.control),
-            ),
-            None => chevron,
-        });
-        if let Some(i) = self.icon {
+        if let Some(open) = r.expanded {
+            e = e.child(
+                chevron.child(
+                    icon(style.chevron.unwrap_or(k.glyph.chevron_down), 16.0)
+                        .key("glyph")
+                        .color(if r.selected { style.chevron_selected } else { style.chevron_rest })
+                        .icon_rotation(if open { 0.0 } else { -FRAC_PI_2 })
+                        .motion(k.motion.control)
+                        .offset(0.0, style.chevron_nudge),
+                ),
+            );
+        } else if !icon_in_lane {
+            e = e.child(chevron);
+        }
+        if let Some(i) = self.icon.filter(|_| !(style.chevron_only && folder)) {
             e = e.child(icon(i, 16.0).key("icon").color(self.icon_color.unwrap_or(c.icon_muted)).a11y_hidden());
         }
-        let color = self.label_color.unwrap_or(c.text_base);
-        let font = k.ty.ui;
+        let color = self.label_color.unwrap_or(if r.selected { style.label_selected } else { style.label_rest });
+        let font = style.label;
         let spans = self
             .highlight
             .as_deref()
@@ -144,7 +157,12 @@ impl TreeItem {
             .unwrap_or_default();
         let full = self.label.clone();
         let label = if spans.is_empty() { text(self.label) } else { rich(self.label, spans) };
-        e = e.child(label.key("label").font(font).color(color).grow(1.0).shrink().min_w(0.0).truncate().help_when_truncated(full).a11y_hidden());
+        let label = label.key("label").font(font).color(color).grow(1.0).shrink().min_w(0.0);
+        let label = match style.label_fade {
+            Some(w) => label.truncate_fade_width(w / font.size.max(1.0)),
+            None => label.truncate(),
+        };
+        e = e.child(label.help_when_truncated(full).a11y_hidden());
         if let Some((add, del)) = self.changes {
             let mut counts = row().key("changes").gap(4.0).center_y().a11y_hidden();
             let f = k.ty.text_xsmall.features("'tnum' 1");
@@ -176,7 +194,8 @@ fn find_ci(s: &str, q: &str) -> Option<(usize, usize)> {
     sl.find(&ql).map(|a| (a, a + ql.len()))
 }
 
-/// A tree's metrics and colours. [`TreeStyle::from_kit`] takes them from the theme.
+/// A tree's metrics and colours. [`TreeStyle::from_kit`] takes them from the theme; the builder
+/// methods set the rest (an editor's file tree, say, with folders that show only a chevron).
 #[derive(Clone, Copy, Debug)]
 pub struct TreeStyle {
     pub row_height: f32,
@@ -188,6 +207,19 @@ pub struct TreeStyle {
     pub guides: bool,
     pub guide: Color,
     pub selected: Color,
+    hover: Color,
+    gap: f32,
+    radius: f32,
+    label: TextStyle,
+    label_rest: Color,
+    label_selected: Color,
+    label_fade: Option<f32>,
+    chevron_only: bool,
+    chevron: Option<&'static Icon>,
+    chevron_nudge: f32,
+    chevron_rest: Color,
+    chevron_selected: Color,
+    guides_hover: Option<f32>,
 }
 
 impl TreeStyle {
@@ -199,7 +231,77 @@ impl TreeStyle {
             guides: true,
             guide: k.c.border_muted,
             selected: k.alpha(k.c.text_accent, if k.dark { 0.24 } else { 0.2 }),
+            hover: k.c.hover,
+            gap: 4.0,
+            radius: k.radius.sm,
+            label: k.ty.ui,
+            label_rest: k.c.text_base,
+            label_selected: k.c.text_base,
+            label_fade: None,
+            chevron_only: false,
+            chevron: None,
+            chevron_nudge: 0.0,
+            chevron_rest: k.c.icon_muted,
+            chevron_selected: k.c.icon_muted,
+            guides_hover: None,
         }
+    }
+    /// The overlay a row shows under the pointer (the theme's hover colour by default). A
+    /// selected row keeps its selected fill instead.
+    pub fn hover(mut self, c: Color) -> Self {
+        self.hover = c;
+        self
+    }
+    /// Space between the chevron, the icon and the label (4 points by default).
+    pub fn gap(mut self, gap: f32) -> Self {
+        self.gap = gap;
+        self
+    }
+    /// The rows' corner radius (the theme's small radius by default).
+    pub fn radius(mut self, r: f32) -> Self {
+        self.radius = r;
+        self
+    }
+    /// The labels' font, and their colour at rest and on a selected row (the theme's UI font in
+    /// its text colour by default). A [`TreeItem::label_color`] still wins.
+    pub fn label(mut self, font: TextStyle, rest: Color, selected: Color) -> Self {
+        (self.label, self.label_rest, self.label_selected) = (font, rest, selected);
+        self
+    }
+    /// A label too long for its row fades out over its last `width` points instead of ending in
+    /// an ellipsis.
+    pub fn fade_long_labels(mut self, width: f32) -> Self {
+        self.label_fade = Some(width.max(0.0));
+        self
+    }
+    /// Folders show only their chevron, and a file's icon takes the chevron's place, as a file
+    /// tree whose folders need no glyph of their own does. Off, every row keeps a chevron lane
+    /// and folders show their folder icon ([`TreeItem::file`]).
+    pub fn chevron_only_folders(mut self, on: bool) -> Self {
+        self.chevron_only = on;
+        self
+    }
+    /// The disclosure glyph, drawn as it is on an open folder and turned a quarter
+    /// anticlockwise on a closed one (the theme's `chevron_down` by default).
+    pub fn chevron(mut self, glyph: &'static Icon) -> Self {
+        self.chevron = Some(glyph);
+        self
+    }
+    /// The chevron's colour at rest and on a selected row (the theme's muted icon colour for both
+    /// by default).
+    pub fn chevron_colors(mut self, rest: Color, selected: Color) -> Self {
+        (self.chevron_rest, self.chevron_selected) = (rest, selected);
+        self
+    }
+    /// Moves the chevron down `dy` points, open or closed, to sit on the label's baseline.
+    pub fn chevron_nudge(mut self, dy: f32) -> Self {
+        self.chevron_nudge = dy;
+        self
+    }
+    /// The indent guides hide until the pointer is over the tree, then show at `opacity`.
+    pub fn guides_on_hover(mut self, opacity: f32) -> Self {
+        self.guides_hover = Some(opacity.clamp(0.0, 1.0));
+        self
     }
 }
 
@@ -321,6 +423,9 @@ impl<S: 'static, T: 'static> Tree<S, T> {
             .w_full();
         if let Some(n) = name {
             root = root.label(n);
+        }
+        if style.guides_hover.is_some() {
+            root = root.hover_group();
         }
         // Focus stays on the tree; the row under the cursor is what a screen reader follows.
         if let Some(id) = cursor {
