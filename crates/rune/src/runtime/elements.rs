@@ -327,7 +327,7 @@ impl<S: 'static> Runtime<S> {
                     live_intent,
                     caret: self.caret_rect(&self.nodes, i),
                     drag_out: n.handlers.drag_out.is_some(),
-                    help: n.help.as_ref().filter(|_| !n.help_cut || n.text_cut(s)).cloned(),
+                    help: n.help.as_deref().filter(|_| !n.help_cut || n.text_cut(s)).map(|h| crate::el::help_words(h).into_owned()),
                     selected: n.text.as_ref().filter(|t| t.selectable && !secure).and_then(|t| {
                         let (a, b) = selectable::range_in(&sel_ranges, i)?;
                         t.copy_slice(a as u32, b as u32)

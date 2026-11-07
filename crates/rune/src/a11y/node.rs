@@ -144,8 +144,9 @@ impl<S: 'static> Runtime<S> {
         let name = label.or(text.filter(|_| !secure).map(|t| t.source_text()));
         let help = n.help.as_deref()
             .filter(|_| !n.help_cut || n.text_cut(self.env.scale))
-            .filter(|h| name.is_none_or(|name| !h.trim().starts_with(name.trim())));
-        match more.and_then(|m| m.description.as_deref()).or(help) {
+            .filter(|h| name.is_none_or(|name| !h.trim().starts_with(name.trim())))
+            .map(crate::el::help_words);
+        match more.and_then(|m| m.description.as_deref()).or(help.as_deref()) {
             Some(d) if !d.is_empty() => node.set_description(d),
             _ => {}
         }

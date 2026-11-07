@@ -134,6 +134,9 @@ pub(crate) mod selectable;
 mod input_click;
 #[path = "runtime/input/help.rs"]
 mod help;
+#[path = "runtime/input/help_look.rs"]
+mod help_look;
+pub use help_look::HelpLook;
 #[path = "runtime/scroll/edge.rs"]
 mod scroll_edge;
 #[path = "runtime/scroll/x.rs"]
@@ -785,7 +788,8 @@ pub struct Runtime<S: 'static> {
     pub double_click_interval: f64,
     /// How long (seconds) the pointer rests on an `El::help` element before its tooltip shows:
     /// the system's hover time on Windows, 0.5 elsewhere and headless. macOS windows use
-    /// AppKit's own tooltips.
+    /// AppKit's own tooltips, unless the view sets its own look (`Cx::help_look`), whose delay
+    /// may replace this one.
     pub help_delay: f64,
     /// The host starts OS drags, so `drag_out` elements start one (headless tools act as one).
     os_drag: bool,

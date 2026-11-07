@@ -299,6 +299,8 @@ pub struct TooltipStyle {
     ink: Color,
     shadows: Vec<Shadow>,
     motion: Spring,
+    /// A keybind's keys (`keybind-v2` neutral): their fill and label colour.
+    keys: (Color, Color),
 }
 
 impl TooltipStyle {
@@ -311,15 +313,16 @@ impl TooltipStyle {
             radius: 4.0,
             padding: (6.0, 5.0),
             max_w: None,
-            font: k.ty.small_medium,
+            font: tabular(k.ty.small_medium),
             ink: c.text_base,
             shadows: k.shadow_layers(&k.elevation.floating).collect(),
             motion: k.motion.overlay,
+            keys: (c.layer_03, c.text_muted),
         };
         match appearance {
             TooltipAppearance::Compact => base,
             TooltipAppearance::Large => {
-                TooltipStyle { padding: (12.0, 12.0), font: TextStyle { weight: 530.0, ..k.ty.ui_compact }, ..base }
+                TooltipStyle { padding: (12.0, 12.0), font: tabular(TextStyle { weight: 530.0, ..k.ty.ui_compact }), ..base }
             }
             TooltipAppearance::Standard => TooltipStyle {
                 fill: c.surface_float,
@@ -388,6 +391,37 @@ impl TooltipStyle {
     pub fn text_color(&self) -> Color {
         self.ink
     }
+    /// This look for Rune's own [`El::help`](rune::El::help) tooltips
+    /// ([`Cx::help_look`](rune::Cx::help_look)), placed and timed as `@opencode/ui`'s
+    /// `Tooltip` sets Kobalte's: 4 pt from its element, 8 pt inside the window, after 400 ms,
+    /// and at once within 300 ms of the last one hiding. Its keycaps are `keybind-v2`'s
+    /// neutral keys: 14 pt, 4 pt in, 2 pt corners and 2 pt apart, 6 pt after the text, their
+    /// labels in uppercase 11/530.
+    pub fn help_look(&self) -> rune::HelpLook {
+        let (ring_w, ring) = self.border.unwrap_or((0.0, Color::TRANSPARENT));
+        let key = TextStyle::new(11.0, 530.0).lh(11.0).tracking(0.05).features("'tnum' 1, 'lnum' 1");
+        rune::HelpLook::system(false)
+            .fill(self.fill)
+            .ink(self.ink)
+            .ring(ring_w, ring)
+            .radius(self.radius)
+            .padding(self.padding.0, self.padding.1)
+            .font(self.font)
+            .max_width(self.max_w)
+            .shadows(self.shadows.iter().copied())
+            .gap(4.0)
+            .margin(8.0)
+            .delay(0.4)
+            .skip_delay(0.3)
+            .keycaps(self.keys.0, self.keys.1, TextStyle { family: self.font.family, ..key }, true)
+            .keycap_shape(14.0, 4.0, 2.0, 2.0, 6.0)
+    }
+}
+
+/// Compact and large tooltips set their figures tabular (`tooltip.css`), unless the type
+/// already sets its own features.
+fn tabular(t: TextStyle) -> TextStyle {
+    if t.features.is_empty() { t.features("'tnum' 1") } else { t }
 }
 
 /// A tooltip: `Tooltip::new("save-tip").trigger(btn).text(&kit, "Save").open(hovered).build(&kit, &mut layer)`,
@@ -456,14 +490,10 @@ impl Tooltip {
 
     /// The tooltip's type for its appearance (use it for extra spans).
     pub fn font(&self, k: &Kit) -> TextStyle {
-        match self.appearance {
-            TooltipAppearance::Compact => k.ty.small_medium,
-            TooltipAppearance::Standard => k.ty.text_small_medium,
-            TooltipAppearance::Large => TextStyle { weight: 530.0, ..k.ty.ui_compact },
-        }
+        TooltipStyle::from_kit(k, self.appearance).font
     }
     pub fn ink(&self, k: &Kit) -> Color {
-        if self.appearance == TooltipAppearance::Standard { k.c.text_invert_strong } else { k.c.text_base }
+        TooltipStyle::from_kit(k, self.appearance).ink
     }
 
     pub fn build(self, k: &Kit, layer: &mut Vec<El>) -> El {

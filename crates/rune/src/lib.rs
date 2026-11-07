@@ -275,6 +275,7 @@ pub use rune_motion::Velocity;
 pub use runtime::Cx;
 pub use runtime::ElementInfo;
 pub use runtime::Env;
+pub use runtime::HelpLook;
 pub use runtime::MotionElement;
 pub use runtime::Pick;
 pub use runtime::Picked;
