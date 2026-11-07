@@ -27,7 +27,7 @@ fn shell(k: &Kit, e: El, state: State, invalid: bool, focused: bool) -> El {
         .fill(if hover { over(c.hover, c.bg_base) } else { c.bg_base })
         .token_motion(k.motion.control);
     if state == State::Disabled {
-        return shadows(k, e, &k.elevation.button_neutral).dim(0.5);
+        return shadows(k, e, &k.elevation.button_neutral).layer_opacity(0.5);
     }
     if invalid {
         e = e.outline(1.0, -1.0, c.danger.fg);
@@ -358,7 +358,7 @@ impl TextInput {
             e = e.child(b);
         }
         if self.plain {
-            return if disabled { e.dim(0.5) } else { e };
+            return if disabled { e.layer_opacity(0.5) } else { e };
         }
         shell(k, e, self.state, self.invalid && !disabled, self.edit.focused && !disabled)
     }
@@ -664,6 +664,6 @@ impl TextField {
             root = root.child(text(e.clone()).key("error").font(k.ty.text_xsmall_medium).color(c.danger.fg)
                 .live_region(rune::LiveRegion::Assertive));
         }
-        if self.state == State::Disabled { root.dim(0.5) } else { root }
+        if self.state == State::Disabled { root.layer_opacity(0.5) } else { root }
     }
 }

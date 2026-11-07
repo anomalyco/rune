@@ -147,6 +147,8 @@ pub struct Visual {
     pub opacity: f32,
     /// Static alpha of this element's own paint; never inherited or isolated.
     pub paint_alpha: f32,
+    /// `El::layer_opacity`: static alpha its whole subtree composites at, as one layer.
+    pub(crate) layer_opacity: f32,
     pub blur: f32,
     /// `El::rotate`, in radians clockwise.
     pub(crate) rotate: f32,
@@ -198,6 +200,7 @@ impl Default for Visual {
             border_width: 0.0,
             opacity: 1.0,
             paint_alpha: 1.0,
+            layer_opacity: 1.0,
             blur: 0.0,
             rotate: 0.0,
             mark: 0,

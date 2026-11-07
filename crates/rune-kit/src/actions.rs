@@ -370,7 +370,7 @@ impl Button {
                 .child(RollingText::new(key, self.label).font(font).color(ink).build(k).a11y_hidden()),
             Label::Custom(f) => e.child(f(font, ink).a11y_hidden()),
         };
-        if self.state == State::Disabled { e = e.dim(disabled_alpha); }
+        if self.state == State::Disabled { e = e.layer_opacity(disabled_alpha); }
         self.acts.apply(e.disabled(!enabled), enabled)
     }
 }
@@ -523,7 +523,7 @@ impl IconButton {
             e = e.help(t);
         }
         e = paint(k, e, s, self.state, true).child(icon(self.icon, glyph).key("icon").color(ink).a11y_hidden());
-        if self.state == State::Disabled { e = e.dim(disabled_alpha); }
+        if self.state == State::Disabled { e = e.layer_opacity(disabled_alpha); }
         self.acts.apply(e.disabled(!enabled), enabled)
     }
 }

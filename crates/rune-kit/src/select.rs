@@ -316,7 +316,7 @@ impl Select {
             }
         };
         if disabled {
-            return trigger.dim(0.5);
+            return trigger.layer_opacity(0.5);
         }
         if let Some(f) = self.toggle.take() {
             trigger = f(trigger);

@@ -167,7 +167,8 @@ pub(super) fn paint(v: &Visual, size: (f32, f32), d: &mut Decls) {
         shadows.push(format!("{inset}{} {} {} {} {}", px(s.x), px(s.y), px(s.blur), px(s.spread), color(s.color)));
     }
     if !shadows.is_empty() { d.push(("box-shadow", shadows.join(","))); }
-    if v.opacity < 0.999 { d.push(("opacity", num(v.opacity))); }
+    let opacity = v.opacity * v.layer_opacity;
+    if opacity < 0.999 { d.push(("opacity", num(opacity))); }
     if v.cold.clip.is_some() || v.cold.clip_radius.is_some() {
         if !d.iter().any(|(p, _)| p.starts_with("overflow")) { d.push(("overflow", "hidden".into())); }
     }

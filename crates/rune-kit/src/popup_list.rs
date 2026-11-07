@@ -265,7 +265,7 @@ impl<S: 'static> PopupList<S> {
                 item = item.child(trailing.clone());
             }
             if option.disabled {
-                item = item.dim(0.5).disabled(true).on_press(|_: &mut S| {});
+                item = item.layer_opacity(0.5).disabled(true).on_press(|_: &mut S| {});
             } else {
                 if let Some(on_active) = &self.on_active {
                     let on_active = on_active.clone();

@@ -26,7 +26,10 @@ impl<S: 'static> Runtime<S> {
             }
             let base = self.color(n.id, P_FILL, v.fill);
             let fill = unpremul(over(overlay.premul(1.0), base.premul(1.0)));
-            let k = v.paint_alpha;
+            // Static fades, as they show: its own `dim` and the layer opacity of it and every
+            // element it sits in.
+            let k = v.paint_alpha
+                * std::iter::successors(Some(i), |&j| self.nodes[j].parent).map(|j| self.nodes[j].vis.layer_opacity).product::<f32>();
             let mut colors = [Color::TRANSPARENT; 6];
             colors[C_FILL] = fill.alpha(fill.a * k);
             if v.border_width > 0.0 { colors[C_BORDER] = self.color(n.id, P_BORDER, v.border).alpha_times(k); }

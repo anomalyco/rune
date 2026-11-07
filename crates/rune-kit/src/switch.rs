@@ -91,7 +91,7 @@ impl Switch {
             (false, true) => self.web_control(k),
             (false, false) => self.compact_control(k),
         };
-        let control = if disabled && !self.standard { control.dim(0.5) } else { control };
+        let control = if disabled && !self.standard { control.layer_opacity(0.5) } else { control };
         let control = if self.state == State::Focus && !self.standard {
             control.outline(2.0, 1.0, c.border_focus)
         } else {

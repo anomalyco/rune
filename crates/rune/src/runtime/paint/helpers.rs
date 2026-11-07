@@ -223,6 +223,21 @@ pub(super) fn fades(looping: Option<rune_motion::LoopSpec>) -> bool {
     matches!(looping.map(|l| l.kind), Some(rune_motion::LoopKind::Opacity { .. } | rune_motion::LoopKind::OpacityCycle(_) | rune_motion::LoopKind::Sequence(_)))
 }
 
+/// How many separate things node `n` paints itself (fill, border, gradient, shape, image,
+/// shadows, words), which can lie one over another.
+pub(super) fn own_paints(n: &Node) -> usize {
+    let v = &n.vis;
+    [
+        v.fill.a > 0.0,
+        v.border_width > 0.0 && (v.border.a > 0.0 || v.border_bottom.is_some()),
+        v.gradient.is_some() || v.radial.is_some() || v.surface.is_some(),
+        v.shape.is_some(),
+        v.pixels.is_some(),
+        !v.shadows.is_empty(),
+        n.text.is_some(),
+    ].into_iter().filter(|&b| b).count()
+}
+
 /// `rect` (x, y, w, h) magnified `k` times from `r_origin` to `origin`.
 pub(super) fn scale_about(rect: [f32; 4], origin: [f32; 2], r_origin: [f32; 2], k: f32) -> [f32; 4] {
     [origin[0] + (rect[0] - r_origin[0]) * k, origin[1] + (rect[1] - r_origin[1]) * k, rect[2] * k, rect[3] * k]

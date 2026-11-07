@@ -226,13 +226,13 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
 
 pub(super) fn same_visual(a: &Visual, b: &Visual) -> bool {
     let Visual {
-        fill, border, hover, press, radius, offset, border_width, opacity, paint_alpha, blur,
+        fill, border, hover, press, radius, offset, border_width, opacity, paint_alpha, layer_opacity, blur,
         rotate, mark, hit, continuous_corners, blend, hover_group, cache, raise,
         no_pixel_snap, ride_trailing, cold,
     } = b;
     a.fill == *fill && a.border == *border && a.hover == *hover && a.press == *press
         && a.radius == *radius && a.offset == *offset && a.border_width == *border_width
-        && a.opacity == *opacity && a.paint_alpha == *paint_alpha && a.blur == *blur
+        && a.opacity == *opacity && a.paint_alpha == *paint_alpha && a.layer_opacity == *layer_opacity && a.blur == *blur
         && a.rotate == *rotate && a.mark == *mark && a.hit == *hit
         && a.continuous_corners == *continuous_corners && a.blend == *blend
         && a.hover_group == *hover_group && a.cache == *cache && a.raise == *raise
