@@ -7,6 +7,7 @@
 //! rune_kit::Button::new("Save").build(k)
 //! ```
 
+pub mod app_icons;
 pub mod file_icons;
 pub mod icons;
 pub mod provider_icons;
