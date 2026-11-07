@@ -3,7 +3,7 @@
 use motion_bento_chaos::Action;
 use motion_bento_chaos::look::{color, grid, lch};
 use motion_bento_chaos::model::{CHIPS, DOCK, DOCK_KEYS, ENERGY_BARS, FILES, VISIT_MAX};
-use rune::{El, Transition, col, el, row, spacer, text};
+use rune::{El, Transition, col, el, memo, row, spacer, text};
 use rune_kit::{Kit, RollingText};
 
 use crate::State;
@@ -15,15 +15,15 @@ pub fn dock(s: &State, k: &Kit) -> El {
     let body_h = dock_h() - 2.0 * grid::TILE_PAD - 34.0;
     let mut dock = row().key("dock").w_full().h(dock_h()).gap(grid::GAP);
     for i in 0..DOCK.len() {
-        let (aside, body) = match i {
-            0 => energy(s, k, body_h),
-            1 => chips(s, k),
-            2 => orb(s, k, body_h),
-            3 => transfers(s, k),
-            _ => visitors(s, k, body_h),
-        };
         let focused = s.m.focus == i;
-        dock = dock.child(
+        dock = dock.child(memo(DOCK_KEYS[i], (focused, version(s, i)), || {
+            let (aside, body) = match i {
+                0 => energy(s, k, body_h),
+                1 => chips(s, k),
+                2 => orb(s, k, body_h),
+                3 => transfers(s, k),
+                _ => visitors(s, k, body_h),
+            };
             tile(DOCK_KEYS[i], DOCK[i], aside, body)
                 .grow(if focused { grid::DOCK_FOCUS } else { 1.0 })
                 .w(0.0)
@@ -31,10 +31,22 @@ pub fn dock(s: &State, k: &Kit) -> El {
                 .fill(c(if focused { color::TILE_FOCUS } else { color::TILE }))
                 .border(1.0, c(if focused { color::ACCENT.alpha(0.45) } else { color::EDGE }))
                 .clip_rounded(grid::RADIUS)
-                .on_press(move |s: &mut State| s.act(Action::Focus(i as u8))),
-        );
+                .on_press(move |s: &mut State| s.act(Action::Focus(i as u8)))
+        }));
     }
     dock
+}
+
+/// What dock tile `i` shows of the model, as a memo version: f32s by their bits.
+fn version(s: &State, i: usize) -> Vec<u32> {
+    let m = &s.m;
+    match i {
+        0 => m.energy.iter().map(|v| v.to_bits()).chain([m.kwh_tenths]).collect(),
+        1 => m.chips.iter().map(|&c| c as u32).chain([m.chips_open as u32]).collect(),
+        2 => [m.orb.size, m.orb.hue, m.orb.round, m.orb.turn].map(f32::to_bits).to_vec(),
+        3 => m.transfers.map(f32::to_bits).to_vec(),
+        _ => m.visits.iter().flat_map(|v| [v.id, v.count]).chain([m.visitors]).collect(),
+    }
 }
 
 pub fn dock_h() -> f32 {

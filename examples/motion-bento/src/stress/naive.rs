@@ -1,24 +1,14 @@
-//! Stress mode's view: the wall of controls under a header with the load and, with `--hud`, the
-//! frame-time HUD. What the wall shows comes from `motion_bento_chaos::stress`; this only draws it.
+//! `--naive`: the whole wall built again every frame, as a first port draws it. Every number,
+//! bar and colour that moves reruns the view and commits the whole tree.
 
-use motion_bento_chaos::hud::{BUDGET_60, BUDGET_120, GRAPH, GRAPH_MAX, Readout, grade};
+use motion_bento_chaos::hud::{BUDGET_60, BUDGET_120, GRAPH, GRAPH_MAX, Readout};
 use motion_bento_chaos::look::{Lch, color, grid, lch};
 use motion_bento_chaos::stress::{self, Cell, HEADER, Metrics, Wall, lh};
 use rune::{El, Transition, col, el, row, spacer, text};
 
+use super::{GRAPH_H, GRAPH_W, HUD_W, KNOB, OVER, SWITCH_OFF, grade_color};
 use crate::State;
 use crate::style::{c, caption, font, nums, spring};
-
-const SWITCH_OFF: Lch = lch(0.44, 0.012, 258.0);
-const KNOB: Lch = lch(0.98, 0.0, 0.0);
-const OVER: Lch = lch(0.66, 0.2, 25.0);
-const HUD_W: f32 = 660.0;
-const GRAPH_W: f32 = 300.0;
-const GRAPH_H: f32 = 92.0;
-
-pub fn grade_color(ms: f32) -> Lch {
-    [color::GOOD, color::WARM, OVER][grade(ms)]
-}
 
 pub fn view(s: &State, wall: &Wall) -> El {
     let mut root = el().w(grid::WIDTH).h(grid::HEIGHT).fill(c(color::BG)).child(header(s, wall));

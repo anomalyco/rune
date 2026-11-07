@@ -28,6 +28,9 @@ pub struct Config {
     pub frames: Option<PathBuf>,
     /// Draw the stress HUD from this measured run's frames CSV instead of this run's own.
     pub hud_from: Option<PathBuf>,
+    /// Build the whole view every frame, as a first port does, instead of each framework's
+    /// idiomatic way (memoised cards and live values in Rune, per-card entities in GPUI).
+    pub naive: bool,
 }
 
 impl Default for Config {
@@ -44,6 +47,7 @@ impl Default for Config {
             load: None,
             frames: None,
             hud_from: None,
+            naive: false,
         }
     }
 }
@@ -101,6 +105,7 @@ impl Config {
                 }
                 "--hud" => config.hud = true,
                 "--stay" => config.stay = true,
+                "--naive" => config.naive = true,
                 _ => rest.push(arg),
             }
         }
@@ -136,8 +141,9 @@ mod tests {
     #[test]
     fn takes_its_own_flags_and_keeps_the_rest() {
         let (c, rest) =
-            Config::parse(args("bento --seed 9 --snap a.png --intensity=2 --duration 4 --hud --at 1")).unwrap();
+            Config::parse(args("bento --seed 9 --snap a.png --intensity=2 --duration 4 --hud --naive --at 1")).unwrap();
         assert_eq!(c.seed, 9);
+        assert!(c.naive);
         assert_eq!(c.intensity, 2.0);
         assert_eq!(c.duration, 4.0);
         assert!(c.hud);

@@ -27,6 +27,7 @@ cargo run -p motion-bento --profile perf -- --seed 7 --duration 30 --intensity 1
 | `--load N` | | Stress mode: a wall of N live controls instead of the bento. |
 | `--ramp A:B` | | Stress mode, growing from A to B controls by ×√2 a step. Sets `--duration` unless given. |
 | `--hold S` | 2.5 | Seconds a ramp spends at each step. |
+| `--naive` | off | Stress mode: build the whole wall again every frame instead of binding live values. |
 | `--frames PATH` | | Write every frame as CSV when the run ends: show time, load, build, work, start, and CPU time since the frame before (thread and process). |
 | `--hud-from PATH` | | Stress mode: the HUD replays a `--frames` CSV from an earlier run, so a capture run shows what a clean run measured at the same moment. |
 
@@ -45,6 +46,11 @@ motion-bento --seed 7 --ramp 32:1024 --frames ramp.csv --snap end.png --at 29.6 
 ```
 
 With `--hud`, the header shows a frame-time readout and graph against the 120 Hz and 60 Hz budgets.
+
+The wall is built the way a Rune app should build it (`src/stress/live.rs`): each card's inside is
+a `memo` built once per size, and its reading, bars, switch, progress and colours are `Live`
+values that `poll` sets, so the view runs and commits only when the wall reshuffles or grows.
+`--naive` (`src/stress/naive.rs`) rebuilds every card every frame, as a first port would.
 
 ## Headless
 
