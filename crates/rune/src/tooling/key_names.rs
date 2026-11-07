@@ -29,10 +29,14 @@ pub(crate) fn key_named(name: &str) -> Option<Key> {
     })
 }
 
-/// A script step's modifier flags.
+/// A script step's modifier flags. `"cmd"` is the primary shortcut modifier, held as the shell
+/// reports it: with Super on macOS and with Ctrl elsewhere, so a script's "mod+k" works on every
+/// platform.
 pub(crate) fn script_mods(e: &serde_json::Value) -> crate::Mods {
     let flag = |k: &str| e[k].as_bool().unwrap_or(false);
-    crate::Mods { shift: flag("shift"), cmd: flag("cmd"), alt: flag("alt"), ctrl: flag("ctrl"), logo: flag("logo") }
+    let cmd = flag("cmd");
+    let mac = cfg!(target_os = "macos");
+    crate::Mods { shift: flag("shift"), cmd, alt: flag("alt"), ctrl: flag("ctrl") || (cmd && !mac), logo: flag("logo") || (cmd && mac) }
 }
 
 /// A script key's `Tx::key_base`: its `"base"`, else a one-character name typed without Shift
