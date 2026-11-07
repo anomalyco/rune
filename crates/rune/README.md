@@ -2350,7 +2350,8 @@ $L --desktop examples/launcher/backdrop.png --script examples/launcher/scripts/d
 ```
 
 - **Scripts** are timestamped `move`, `down`, `up`, `tap` (`hold`), `double-click` (`hold`,
-  `gap`, default 0.15 s between presses) and `drag` (`dx`, `dy`, `dur`) events, at `x,y` in points or at an element by `key` (or a path suffix such as `slider/knob`).
+  `gap`, default 0.15 s between presses) and `drag` (`dx`, `dy`, `dur`) events, at `x,y` in points or at an element by `key` (or a path of keys such as `slider/knob`, where elements without keys
+  between them don't count).
   `{"reopen": true}` reopens the app, as a click on its Dock icon (see "App lifetime").
   `menu-pick` (with an `id`) and `menu-cancel` answer an open pop-up menu, `file-dialog` (with
   a `path`) and `file-dialog-cancel` an open file dialog (see "File dialogs"). `drag_files` and
