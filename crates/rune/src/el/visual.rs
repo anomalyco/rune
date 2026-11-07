@@ -43,6 +43,8 @@ pub struct VisualCold {
     /// The icon's colour came from `El::color`; without it the icon takes the window's
     /// foreground (`Cx::foreground`) when the view sets one.
     pub(crate) icon_inked: bool,
+    /// A colour icon draws as its silhouette in the icon's colour (`El::icon_one_color`).
+    pub(crate) icon_one_color: bool,
     /// Vertical linear gradient (top, bottom) painted over the fill, under hover/press overlays.
     pub gradient: Option<Box<[Color; 2]>>,
     /// Radial or angled linear gradient painted over the fill, under hover/press overlays.
@@ -115,6 +117,7 @@ impl Empty for VisualCold {
         cutout: None,
         icon: None,
         icon_inked: false,
+        icon_one_color: false,
         gradient: None,
         radial: None,
         outline: None,
