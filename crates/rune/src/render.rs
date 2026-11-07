@@ -522,8 +522,9 @@ impl Gpu {
     /// Vulkan instance loads every GPU's Vulkan driver, where a broken one (Intel's, on a hybrid
     /// laptop) crashed the process before its first window (Hex #662). Vulkan only when no DX12
     /// adapter exists.
-    /// Whether a DX12 adapter exists is asked once per process (`probe_gpu`): asking makes a
-    /// device on every adapter, over 100 ms.
+    /// The choice is made on the first GPU use in the process, not at launch, so a windowless
+    /// app (a tray app before it draws anything) touches no GPU: asking whether a DX12 adapter
+    /// exists makes a device on every adapter, over 100 ms.
     #[cfg(target_os = "windows")]
     fn wgpu_instance() -> wgpu::Instance {
         static DX12: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -670,7 +671,7 @@ mod prewarm {
 
 mod warmup;
 pub use warmup::{warm_gpu, warm_gpu_with};
-pub(crate) use warmup::{park_gpu, probe_gpu, surface_gpu};
+pub(crate) use warmup::{park_gpu, surface_gpu};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BatchBind {
