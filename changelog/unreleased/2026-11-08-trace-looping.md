@@ -1,0 +1,1 @@
+- **A trace marks an element that runs a loop of its own** (`El::looping`: a spinner, a sheen, a busy ring's dots) with the `LOOPING` flag, and `scripts/motion-audit` takes its wraps and turns as its design however briefly it shows, where it knew only loops that lived 60 frames: a spinner in a row the command palette shows for a moment no longer fails `expect: instant`.

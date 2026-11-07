@@ -54,6 +54,7 @@ STALL_SHARE = 0.25
 MIN_AREA = 1.0
 ANIMATED = 1  # flags: a motion of its own (a spring, a stack, a loop) moves it this frame
 SCROLLING = 4  # flags: under a scroll viewport whose offset moved this frame
+LOOPING = 32  # flags: runs a loop of its own (a spinner, a sheen, a busy ring's dots)
 BLANK = 64  # flags: draws nothing and holds nothing (a hit or hover zone, a spacer)
 SETTLE_TAIL_MS = 250.0  # a motion's own sub-visible tail after it hides what it moves
 
@@ -144,6 +145,8 @@ def loop_ids(els, moved):
                 group_busy[els[id].parent].add(j)
     life = {e.id: len(e.hist) for e in els.values()}
     out = {id for id in busy if life.get(id, 0) >= 60 and len(busy[id]) >= 0.5 * life[id]}
+    # One the trace marks as running a loop of its own is one however briefly it shows.
+    out |= {e.id for e in els.values() if any(st[6] & LOOPING for st in e.hist)}
     groups = {p for p, ks in group_busy.items() if p in life and life[p] >= 60 and len(ks) >= 0.5 * life[p]}
     out |= {e.id for e in els.values() if e.parent in groups}
     # What a loop carries moves with it.
