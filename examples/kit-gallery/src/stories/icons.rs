@@ -42,14 +42,14 @@ pub(super) fn file_icon_samples(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
         .iter()
         .map(|&(path, dir)| {
             let glyph = if dir { file_icons::folder(path, false) } else { file_icons::file(path) };
-            row().gap(8.0).center_y().child(icon(glyph, 16.0)).child(name(k, path))
+            row().gap(8.0).center_y().child(icon(glyph, 16.0).color(k.c.text_base)).child(name(k, path))
         })
         .collect();
     grid(120.0, 12.0, cells)
 }
 
-pub(super) fn file_icon_folder(_: &G, _: &Kit, _: &mut Vec<El>) -> El {
-    row().child(icon(file_icons::folder("src", true), 16.0))
+pub(super) fn file_icon_folder(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    row().child(icon(file_icons::folder("src", true), 16.0).color(k.c.text_base))
 }
 
 pub(super) fn icon_gallery(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
@@ -83,7 +83,7 @@ pub(super) fn icon_catalog(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
 
 /// Every FileIcon badge and folder icon.
 pub(super) fn file_icon_catalog(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
-    let cells = file_icons::all().iter().map(|i| row().gap(8.0).center_y().child(icon(i, 16.0)).child(name(k, i.name))).collect();
+    let cells = file_icons::all().iter().map(|i| row().gap(8.0).center_y().child(icon(i, 16.0).color(k.c.text_base)).child(name(k, i.name))).collect();
     grid(128.0, 8.0, cells)
 }
 
