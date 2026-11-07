@@ -3,11 +3,13 @@ name = "rune-mac"
 version = "0.0.1"
 edition.workspace = true
 license.workspace = true
-description = "Small macOS helpers for Rune apps: a remembered window frame, full screen, quiet relaunches with scripts/mac-app, and system notifications."
+description = "Small macOS helpers for Rune apps: a remembered window frame, full screen, quiet relaunches with scripts/mac-app, and system notifications (rune-notify)."
+
+[dependencies]
+rune-notify = { path = "../rune-notify" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5.2"
-block2 = "0.5"
 
 [lints]
 workspace = true

@@ -1,0 +1,250 @@
+//! Toast notifications (`Windows.UI.Notifications`) for an app without a package: the process
+//! takes its `AppUserModelID`, and `HKEY_CURRENT_USER\Software\Classes\AppUserModelId\<id>`
+//! names it, so its toasts show the app's name and icon. A click raises the toast's `Activated`
+//! event in the process that posted it, which hands it to `on_click`'s handler.
+
+use std::sync::Mutex;
+
+use windows::Data::Xml::Dom::XmlDocument;
+use windows::Foundation::TypedEventHandler;
+use windows::UI::Notifications::{ToastActivatedEventArgs, ToastNotification, ToastNotificationManager};
+use windows::Win32::Foundation::{HWND, LPARAM};
+use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId};
+use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
+use windows::Win32::UI::WindowsAndMessaging::{
+    BringWindowToTop, EnumWindows, GW_OWNER, GWL_EXSTYLE, GetForegroundWindow, GetWindow, GetWindowLongW, GetWindowThreadProcessId,
+    IsIconic, IsWindowVisible, SW_RESTORE, SW_SHOW, SetForegroundWindow, ShowWindow, WS_EX_TOOLWINDOW,
+};
+use windows::core::{BOOL, HSTRING, IInspectable, Interface, Ref};
+
+use super::{Click, Identity, Notification};
+
+/// Every toast this process posts goes in one group, so `remove` finds it by its tag.
+const GROUP: &str = "rune";
+/// Toasts kept alive for their click handlers; the oldest goes first.
+const KEEP: usize = 64;
+/// Windows caps a toast's tag at 64 characters.
+const TAG_MAX: usize = 64;
+
+static APP_ID: Mutex<Option<String>> = Mutex::new(None);
+
+struct Posted {
+    id: String,
+    tag: String,
+    /// Held so its `Activated` handler stays wired.
+    _toast: ToastNotification,
+}
+
+static POSTED: Mutex<Vec<Posted>> = Mutex::new(Vec::new());
+
+fn app_id() -> Option<String> {
+    APP_ID.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+pub(super) fn registered() -> bool {
+    app_id().is_some()
+}
+
+pub(super) fn register(identity: &Identity) -> Result<(), String> {
+    if identity.id.is_empty() || identity.id.contains('\\') {
+        return Err(format!("not an app id: {:?}", identity.id));
+    }
+    // SAFETY: the HSTRING outlives the call, which copies it.
+    unsafe { SetCurrentProcessExplicitAppUserModelID(&HSTRING::from(&identity.id)) }.map_err(|e| format!("SetCurrentProcessExplicitAppUserModelID: {e}"))?;
+    let key = windows_registry::CURRENT_USER
+        .create(format!("Software\\Classes\\AppUserModelId\\{}", identity.id))
+        .map_err(|e| format!("AppUserModelId key: {e}"))?;
+    let name = if identity.name.is_empty() { &identity.id } else { &identity.name };
+    key.set_string("DisplayName", name).map_err(|e| format!("DisplayName: {e}"))?;
+    match &identity.icon {
+        Some(icon) => key.set_string("IconUri", icon.to_string_lossy()).map_err(|e| format!("IconUri: {e}"))?,
+        None => {
+            _ = key.remove_value("IconUri");
+        }
+    }
+    *APP_ID.lock().unwrap_or_else(|e| e.into_inner()) = Some(identity.id.clone());
+    Ok(())
+}
+
+pub(super) fn post(n: &Notification) -> bool {
+    let Some(app) = app_id() else { return false };
+    let tag = tag(&n.id);
+    match show(&app, n, &tag) {
+        Ok(toast) => {
+            let mut posted = POSTED.lock().unwrap_or_else(|e| e.into_inner());
+            posted.retain(|p| p.tag != tag);
+            if posted.len() >= KEEP {
+                posted.remove(0);
+            }
+            posted.push(Posted { id: n.id.clone(), tag, _toast: toast });
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+fn show(app: &str, n: &Notification, tag: &str) -> windows::core::Result<ToastNotification> {
+    let doc = XmlDocument::new()?;
+    doc.LoadXml(&HSTRING::from(xml(n)))?;
+    let toast = ToastNotification::CreateToastNotification(&doc)?;
+    toast.SetTag(&HSTRING::from(tag))?;
+    toast.SetGroup(&HSTRING::from(GROUP))?;
+    toast.Activated(&TypedEventHandler::new(|sender: Ref<ToastNotification>, args: Ref<IInspectable>| {
+        let tag = sender.ok()?.Tag()?.to_string_lossy();
+        let arguments = args.ok()?.cast::<ToastActivatedEventArgs>()?.Arguments()?.to_string_lossy();
+        let id = POSTED.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|p| p.tag == tag).map_or(tag, |p| p.id.clone());
+        super::deliver(Click { id, info: decode(&arguments) });
+        Ok(())
+    }))?;
+    ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(app))?.Show(&toast)?;
+    Ok(toast)
+}
+
+pub(super) fn remove(ids: &[&str]) {
+    let Some(app) = app_id() else { return };
+    let Ok(history) = ToastNotificationManager::History() else { return };
+    let mut posted = POSTED.lock().unwrap_or_else(|e| e.into_inner());
+    for id in ids {
+        let tag = tag(id);
+        _ = history.RemoveGroupedTagWithId(&HSTRING::from(&tag), &HSTRING::from(GROUP), &HSTRING::from(&app));
+        posted.retain(|p| p.tag != tag);
+    }
+}
+
+pub(super) fn app_focused() -> bool {
+    // SAFETY: plain reads of the foreground window and its owner.
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.is_invalid() {
+            return false;
+        }
+        let mut pid = 0;
+        GetWindowThreadProcessId(fg, Some(&mut pid));
+        pid == GetCurrentProcessId()
+    }
+}
+
+pub(super) fn bring_to_front() {
+    let Some(hwnd) = main_window() else { return };
+    // SAFETY: `hwnd` is one of this process's top-level windows, read just now.
+    unsafe {
+        _ = ShowWindow(hwnd, if IsIconic(hwnd).as_bool() { SW_RESTORE } else { SW_SHOW });
+        if SetForegroundWindow(hwnd).as_bool() {
+            return;
+        }
+        // Windows keeps the foreground from a process that doesn't hold it; joining the
+        // foreground window's input queue for the call lets a clicked toast's app come forward.
+        let them = GetWindowThreadProcessId(GetForegroundWindow(), None);
+        let us = GetCurrentThreadId();
+        if them != 0 && them != us && AttachThreadInput(us, them, true).as_bool() {
+            _ = BringWindowToTop(hwnd);
+            _ = SetForegroundWindow(hwnd);
+            _ = AttachThreadInput(us, them, false);
+        }
+    }
+}
+
+/// This process's frontmost visible, unowned app window (not a tool window).
+fn main_window() -> Option<HWND> {
+    unsafe extern "system" fn each(hwnd: HWND, found: LPARAM) -> BOOL {
+        // SAFETY: `found` points at the `Option<HWND>` `main_window` passed, alive for the walk.
+        unsafe {
+            let mut pid = 0;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            let tool = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0 != 0;
+            let owned = GetWindow(hwnd, GW_OWNER).is_ok_and(|o| !o.is_invalid());
+            if pid == GetCurrentProcessId() && IsWindowVisible(hwnd).as_bool() && !tool && !owned {
+                *(found.0 as *mut Option<HWND>) = Some(hwnd);
+                return BOOL(0);
+            }
+            BOOL(1)
+        }
+    }
+    let mut found: Option<HWND> = None;
+    // SAFETY: the callback only writes `found`, which outlives the enumeration. EnumWindows walks
+    // the top-level windows front to back, so the first match is the frontmost.
+    _ = unsafe { EnumWindows(Some(each), LPARAM(&mut found as *mut Option<HWND> as isize)) };
+    found
+}
+
+/// A tag Windows accepts for `id`: the id itself, or a hash of a longer one.
+fn tag(id: &str) -> String {
+    if id.chars().count() <= TAG_MAX {
+        return id.to_owned();
+    }
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
+/// The toast's XML: a generic toast with the title and body, the user info as its launch
+/// arguments, and no sound.
+pub(super) fn xml(n: &Notification) -> String {
+    let body = if n.body.is_empty() { String::new() } else { format!("<text>{}</text>", escape(&n.body)) };
+    format!(
+        "<toast launch=\"{}\"><visual><binding template=\"ToastGeneric\"><text>{}</text>{body}</binding></visual><audio silent=\"true\"/></toast>",
+        escape(&encode(&n.info)),
+        escape(&n.title),
+    )
+}
+
+fn escape(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .fold(String::with_capacity(s.len()), |mut out, c| {
+            match c {
+                '&' => out.push_str("&amp;"),
+                '<' => out.push_str("&lt;"),
+                '>' => out.push_str("&gt;"),
+                '"' => out.push_str("&quot;"),
+                '\'' => out.push_str("&apos;"),
+                c => out.push(c),
+            }
+            out
+        })
+}
+
+/// User info as `key=value&key=value`, each part percent-encoded.
+pub(super) fn encode(info: &[(String, String)]) -> String {
+    info.iter().map(|(k, v)| format!("{}={}", percent(k), percent(v))).collect::<Vec<_>>().join("&")
+}
+
+pub(super) fn decode(args: &str) -> Vec<(String, String)> {
+    let mut pairs: Vec<(String, String)> = args
+        .split('&')
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            let (k, v) = p.split_once('=').unwrap_or((p, ""));
+            (unpercent(k), unpercent(v))
+        })
+        .collect();
+    pairs.sort();
+    pairs
+}
+
+fn percent(s: &str) -> String {
+    s.bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect()
+}
+
+fn unpercent(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = (b[i] == b'%' && i + 2 < b.len()).then(|| std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok())).flatten();
+        match hex {
+            Some(v) => {
+                out.push(v);
+                i += 3;
+            }
+            None => {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
