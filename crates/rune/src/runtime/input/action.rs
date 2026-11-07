@@ -190,6 +190,7 @@ pub(super) fn merge(tx: &mut Tx, one: Tx) {
     tx.wakes.extend(one.wakes);
     tx.text_flights.extend(one.text_flights);
     tx.launches.extend(one.launches);
+    tx.unclipped_flights |= one.unclipped_flights;
     tx.popups.extend(one.popups);
     tx.file_dialogs.extend(one.file_dialogs);
     if let Some(request) = one.window_frame { tx.window_frame = Some(tx.window_frame.unwrap_or_default().merge(request)); }

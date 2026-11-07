@@ -43,6 +43,8 @@ pub struct Tx {
     pub(crate) text_flights: Vec<(String, String)>,
     /// `Tx::launch`: (source, destination).
     pub(crate) launches: Vec<(String, String)>,
+    /// `Tx::unclipped_flights`.
+    pub(crate) unclipped_flights: bool,
     /// Rows to reveal or centre (`Tx::scroll_into_view` and `Tx::scroll_center`).
     pub(crate) scroll_to: Vec<crate::runtime::ScrollReveal>,
     /// Scroll viewports to send to their bottom: (key, animated).
