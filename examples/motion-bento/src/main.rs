@@ -242,6 +242,7 @@ fn main() {
     METER.with(|m| {
         let mut meter = Meter::new("rune", 120.0);
         meter.note("work", "update_ms + encode_ms: events, poll, view, layout, paint, upload and encode, to submit");
+        meter.note("build", "update_ms: events, poll, view, layout and paint");
         meter.note("variant", &config().variant);
         meter.note("seed", &config().seed.to_string());
         *m.borrow_mut() = Some(meter);
@@ -257,13 +258,14 @@ fn main() {
         .on_close(on_close)
         .on_frame_encoded(|f| {
             let (FrameOutcome::Drawn, Some(start)) = (f.outcome(), f.started()) else { return };
-            let work = f.update_ms().unwrap_or(0.0) + f.encode_ms().unwrap_or(0.0);
+            let build = f.update_ms().unwrap_or(0.0);
+            let work = build + f.encode_ms().unwrap_or(0.0);
             METER.with(|m| {
                 if let Some(m) = m.borrow_mut().as_mut() {
                     if let Some(hz) = f.refresh_hz() {
                         m.set_refresh(hz);
                     }
-                    m.frame(start, work);
+                    m.frame_with_build(start, work, build);
                 }
             });
         })

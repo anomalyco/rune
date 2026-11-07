@@ -45,6 +45,8 @@ Measured from `App::on_frame_encoded`, for drawn frames only:
 - **work**: `update_ms + encode_ms`, from the frame's start (after its drawable came) until its
   commands were submitted: events, `poll`, the view, layout, paint, uploads and encode. CPU wall
   time, not GPU time.
+- **build**: `update_ms` alone: events, `poll`, the view, layout and paint, without the encode.
+  The GPUI build can only time this part, so compare GPUI with this number.
 - **interval**: time between frame starts. A display-paced window starts each frame on a refresh,
   so this is the gap between frames on screen.
 - **late**: intervals over 1.5 refreshes (`FrameEncoded::refresh_hz`), and the refreshes they
