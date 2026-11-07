@@ -1,0 +1,1 @@
+- **Kit: a torn-out tab docks again only back over its strip.** Brought within the reattach distance across the strip, it rejoins the reorder only while it's also within a tab of the strip's ends; level with the strip but past its end, as over another window's strip, it stays torn out.

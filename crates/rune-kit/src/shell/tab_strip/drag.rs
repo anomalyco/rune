@@ -169,7 +169,11 @@ impl TabDragState {
             TabDragPhase::Pressed { .. } | TabDragPhase::Dragging(_) => {}
             _ => return false,
         }
-        let detach = lane.tear.is_some_and(|t| if torn { across.abs() > t.reattach_distance } else { across.abs() >= t.detach_distance });
+        // A torn-out tab docks again only back over the strip: near it across, and along it
+        // within a tab of its ends, not anywhere level with it.
+        let pitch = lane.pitch.max(1.0);
+        let over = (((lane.lo as f32 - lane.index as f32) - 1.0) * pitch..=((lane.hi as f32 - lane.index as f32) * pitch)).contains(&along);
+        let detach = lane.tear.is_some_and(|t| if torn { across.abs() > t.reattach_distance || !over } else { across.abs() >= t.detach_distance });
         if detach {
             self.phase = TabDragPhase::Dragging(TabDragMode::TearOut { from: lane.index, offset });
             return true;
@@ -178,7 +182,6 @@ impl TabDragState {
         if !reordering && along.abs() < SLOP {
             return false;
         }
-        let pitch = lane.pitch.max(1.0);
         let min = (lane.lo as f32 - lane.index as f32) * pitch;
         let max = (lane.hi.saturating_sub(1) as f32 - lane.index as f32) * pitch;
         let delta = along.clamp(min.min(0.0), max.max(0.0));
