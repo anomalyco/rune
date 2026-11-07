@@ -367,12 +367,20 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Centre of the first element whose key is `key`, or whose path ends with `key` when it
-    /// contains a `/` (e.g. `slider/knob`), in points. Failing that, the first line box of the
-    /// link (`El::link`) or highlight (`El::text_highlight`) keyed `key`. Exiting elements and
-    /// their children are gone here; [`Runtime::presented`] still reads them.
+    /// contains a `/` (e.g. `slider/knob`), in points. Elements without keys between them don't
+    /// count, so `slider/knob` finds a knob inside unkeyed rows inside the slider. Failing that,
+    /// the first line box of the link (`El::link`) or highlight (`El::text_highlight`) keyed
+    /// `key`. Exiting elements and their children are gone here; [`Runtime::presented`] still
+    /// reads them.
     pub fn find(&self, key: &str) -> Option<(f32, f32)> {
         let suffix = format!("/{key}");
-        let matches = |n: &Node| if key.contains('/') { n.path == key || n.path.ends_with(&suffix) } else { n.key.as_deref() == Some(key) };
+        let matches = |n: &Node| {
+            if key.contains('/') {
+                n.path == key || n.path.ends_with(&suffix) || keyed_suffix(&n.path, key)
+            } else {
+                n.key.as_deref() == Some(key)
+            }
+        };
         let i = (0..self.nodes.len()).find(|&i| matches(&self.nodes[i]) && !self.subtree_exiting(i));
         let Some(i) = i else { return self.find_link(key).or_else(|| self.find_highlight(key)) };
         let r = self.drawn.get(i).copied()?;
@@ -505,4 +513,12 @@ impl<S: 'static> Runtime<S> {
         let c = self.color(n.id, P_FILL, n.vis.fill);
         (c.a > 0.5).then(|| 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b < 0.25)
     }
+}
+
+/// Whether `path`'s keyed segments end with `key`'s: `slider/knob` matches
+/// `form/#2/slider/#0/knob`, since the `#n` segments stand for elements without keys.
+fn keyed_suffix(path: &str, key: &str) -> bool {
+    let unkeyed = |s: &&str| s.len() > 1 && s.starts_with('#') && s[1..].bytes().all(|b| b.is_ascii_digit());
+    let mut keyed = path.rsplit('/').filter(|s| !unkeyed(s));
+    key.rsplit('/').all(|want| keyed.next() == Some(want))
 }

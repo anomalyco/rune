@@ -1,0 +1,1 @@
+- **Script key paths skip elements without keys.** A script's `"key": "slider/knob"` (and `Runtime::find`) now finds a knob inside unkeyed rows inside the element keyed `slider`; before, every element between them had to have a key.
