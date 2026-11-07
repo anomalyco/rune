@@ -7,7 +7,7 @@ set -e
 O=${1:-target/motion-audit}
 mkdir -p "$O"
 cargo build --release -p todo -p settings -p kit-gallery -p odometer
-cargo build --release -p rune-kit --example shell
+cargo build --release -p rune-kit --example shell --example tab_strip
 cargo build --release -p rune --example growth_reorder --example keep_stuck --example sticky --example scroll_keys --example scroll_anchor --example text_glide --example one_snap
 B=${CARGO_TARGET_DIR:-target}/release
 SH=$B/examples/shell
@@ -48,6 +48,7 @@ run shell-virtual-peek 5.0 $SH virtual --script $S/shell-peek.json
 run shell-virtual-reorder 3.6 $SH virtual --script $S/shell-reorder-virtual.json
 run shell-window-resize 3.0 $SH --script $S/shell-window-resize.json
 run shell-virtual-window-resize 3.0 $SH virtual --script $S/shell-window-resize.json
+run tab-strip       9.0 $B/examples/tab_strip --script $S/tab-strip.json
 run growth-reorder    4.2 $GR --script $S/growth-reorder.json
 run growth-reorder-virtual 4.0 $GR virtual --script $S/growth-reorder-virtual.json
 run keep-stuck        3.2 $KS --script $S/keep-stuck.json

@@ -1,0 +1,14 @@
+{
+  "events": [
+    { "t": 0.3, "type": "drag", "key": "top-list/t-s1", "dx": 300, "dur": 0.8 },
+    { "t": 1.6, "type": "drag", "key": "side-list/t-s6", "dy": -125, "dur": 0.7 },
+    { "t": 2.8, "type": "drag", "key": "side-list/t-s2", "dy": 90, "dur": 0.8 },
+    { "t": 3.3, "type": "key", "name": "Escape" },
+    { "t": 4.2, "type": "click", "key": "top-list/t-s7", "button": "middle" },
+    { "t": 4.6, "type": "click", "button": "middle" },
+    { "t": 5.2, "type": "move", "x": 700, "y": 500 },
+    { "t": 6.0, "type": "drag", "key": "top-list/t-s2", "dx": 70, "dy": 160, "dur": 0.8 },
+    { "t": 7.2, "type": "click", "key": "new-tab" },
+    { "t": 7.9, "type": "move", "x": 700, "y": 500 }
+  ]
+}
