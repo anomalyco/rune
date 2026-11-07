@@ -210,4 +210,15 @@ impl El {
         self.vis.cold_mut().flight_crop = true;
         self
     }
+    /// When an animated commit changes this element's width (a side panel springing open
+    /// beside a column of text), it and everything in it take the layout they land at in
+    /// that frame, so text wraps once rather than on every frame of the travel, and the whole
+    /// slides as one: its first child that drew last frame starts where it was drawn and
+    /// glides to its new place on this element's spring. Heights its growth rows change land
+    /// with it. Motion checks take that frame's re-layout as designed. A window resize, an
+    /// instant commit and Reduce Motion land as they otherwise would.
+    pub fn hold_landing_width(mut self) -> Self {
+        self.vis.cold_mut().hold_landing = true;
+        self
+    }
 }

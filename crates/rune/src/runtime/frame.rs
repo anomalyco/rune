@@ -393,6 +393,7 @@ impl<S: 'static> Runtime<S> {
         let commits0 = self.commits;
         let shaped0 = self.text.shaped;
         self.settled = false;
+        self.landing_holds.clear();
         self.clock = self.wall_clock().unwrap_or(self.clock + elapsed);
         if self.wall_start.is_none() {
             crate::video::headless_frame(self.clock);

@@ -82,6 +82,8 @@ impl<S: 'static> Runtime<S> {
         self.scene.keep_flights(tx.instant && !tx.settle && !first && !concealing);
         let now = self.t;
         if self.fit_height && let Some(root) = nodes.first() { self.fit_window(root.local.h, tx, first); }
+        let mut held = std::mem::take(&mut scratch.held);
+        let holds = self.landing_holds(&nodes, !instant && !tx.relayout && !tx.window_step, &mut held);
 
         // What drew nothing last frame has no exit to show (`unseen_presence.rs`).
         let any_gone = self.nodes.iter().any(|o| !self.node_index.contains_key(&o.id));
@@ -176,8 +178,9 @@ impl<S: 'static> Runtime<S> {
             });
             // A person resizing the window holds the content: rewrapped rows land in the frame,
             // so a pinned tail stays where it is instead of sliding back after the drag. A
-            // streaming row still waits for the width to settle, then eases.
-            let resized = existed && stack.window != self.viewport;
+            // streaming row still waits for the width to settle, then eases. A stack held at its
+            // landing width (`El::hold_landing_width`) lands its rewrapped rows the same way.
+            let resized = existed && (stack.window != self.viewport || held.get(c).copied().unwrap_or(false));
             stack.window = self.viewport;
             if first || !existed || tx.settle || self.reduced_motion || (reading && !revealing_moving) {
                 stack.width_hold_until = 0.0;
@@ -411,7 +414,7 @@ impl<S: 'static> Runtime<S> {
                 // Out of sight before and after: nobody would see it move.
                 let out_of_sight = unseen.get(i).copied().unwrap_or(false) && nodes[i].matched.is_none()
                     && !self.flying.iter().any(|f| f.0 == id);
-                let layout_anim = if out_of_sight {
+                let layout_anim = if out_of_sight || held.get(i).copied().unwrap_or(false) {
                     LayoutAnim::INSTANT
                 } else if stack_row && !lands && !tx.relayout && !follows_window {
                     // Growth and virtual windows own a row's vertical place; its horizontal place
@@ -527,6 +530,17 @@ impl<S: 'static> Runtime<S> {
                     if slid.is_empty() { slid.resize(nodes.len(), false); }
                     slid[i] = true;
                 }
+            }
+            // Held at its landing width, it starts where its anchor child was drawn.
+            if let Some(&(_, dx)) = holds.iter().find(|h| h.0 == i)
+                && nodes[i].looping.is_none()
+                && !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Offset)
+            {
+                let now = self.scene.get(id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
+                self.scene.set(id, prop::OFFSET, rune_motion::Vec2::new(now.x + dx, now.y));
+                self.scene.animate(id, prop::OFFSET, rune_motion::Vec2::new(shift[0], shift[1]), nodes[i].vis.offset_motion.as_deref().copied().unwrap_or_else(|| spring_l.into()));
+                if slid.is_empty() { slid.resize(nodes.len(), false); }
+                slid[i] = true;
             }
             nodes[i].group_fade = self.set_group_rest(id, nodes[i].vis.group_opacity, nodes[i].opacity_motion.as_deref().copied(), spring_l, rest_quiet);
             let k = nodes[i].static_scale;
@@ -790,6 +804,7 @@ impl<S: 'static> Runtime<S> {
         scratch.mounted = mounted;
         scratch.slid = slid;
         scratch.top_moved = top_moved;
+        scratch.held = held;
         self.apply_scratch = scratch;
         self.nodes = nodes;
         self.memo.commit_flattened(&self.nodes, present_len, memo_flattened, memo_reused, taken_paths);

@@ -90,7 +90,7 @@ impl<S: 'static> Runtime<S> {
             let up = step_up(&self.nodes, i);
             let mut flags = up.map_or(0, |u| down[u].1);
             let mut pass = flags;
-            if intent(node) { pass |= MotionElement::LIVE; }
+            if intent(node) || self.landing_holds.holds(node.id) { pass |= MotionElement::LIVE; }
             if self.scrolls.get(&node.id).is_some_and(ScrollState::moving) { pass |= MotionElement::SCROLLING; }
             if self.grows.get(&node.id).is_some_and(|g| g.moving()) { pass |= MotionElement::GROWING; }
             let parent = node.parent.map(|p| down[p].0).filter(|&p| p != u32::MAX);
@@ -100,7 +100,7 @@ impl<S: 'static> Runtime<S> {
             let Some(p) = self.scene.presented(node.id) else { continue };
             let flight = if self.flights.is_empty() { None } else { self.flights.iter().find(|f| f.lands(&node.path, node.key.as_deref())) };
             if flight.is_some() || self.reveals.get(&node.id).is_some_and(|r| !r.words.is_empty()) { flags |= MotionElement::GROWING; }
-            if intent(node) { flags |= MotionElement::LIVE; }
+            if intent(node) || self.landing_holds.holds(node.id) { flags |= MotionElement::LIVE; }
             let drawn = self.drawn.get(i).copied().unwrap_or([p.rect.x, p.rect.y, p.rect.w, p.rect.h]);
             let rect = flight.map_or(drawn, |f| {
                 let (d, c) = (f.destination, f.presented);

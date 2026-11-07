@@ -610,6 +610,10 @@ def analyze(path, script=None):
                     seg.append(i)
                 elif not boundary and seg and h[i][0] - h[seg[-1]][0] <= SEG_GAP and i < len(h) - 1:
                     continue
+                # A move starts where it first shows: what it did before (laid out in a panel
+                # that hasn't opened yet) nobody saw.
+                while seg and (h[seg[0]][5] <= 0.05 or h[seg[0]][7] == 0 or not h[seg[0]][8]):
+                    seg.pop(0)
                 if (not moving or i == len(h) - 1) and len(seg) >= 4:
                     vals = [h[seg[0] - 1][edge]] + [h[j][edge] for j in seg]
                     vals = braking(e, h, seg, edge, vals)
@@ -676,6 +680,11 @@ def analyze(path, script=None):
                 pts = [h[seg[0] - 1]] + [h[j] for j in seg]
                 # The route starts where a retarget's braking ends, as the edges' checks do.
                 pts = pts[max(len(pts) - len(braking(e, h, seg, edge, [p[edge] for p in pts])) for edge in (1, 2)):]
+                # So does a step the trace marks as designed (a column landing at its new width).
+                pts = pts[max((j for j in range(1, len(pts)) if (pts[j][6] >> 8) & 1), default=0):]
+                if len(pts) < 3:
+                    seg = [i] if boundary and changed else []
+                    continue
                 k0, k1 = pts[1][0], pts[-1][0]
                 hidden = all(p[5] <= 0.05 or not p[8] for p in pts)
                 held = any(pressing[p[0]] or p[6] & (4 | BLANK) for p in pts)

@@ -237,6 +237,10 @@ impl<S: 'static> Runtime<S> {
                 let mut scrolling = false;
                 let mut scrolled = [0.0; 2];
                 let mut live_intent = intent(n);
+                // Held at its landing width this frame: its re-layout is the design.
+                if self.landing_holds.holds(n.id) {
+                    live_intent |= 1 | 2;
+                }
                 // A group_opacity swap under an instant hover group is a deliberate cut (Beta's
                 // status/close swap), for it and what it contains: opacity and transition intent.
                 let up = |from: Option<usize>| std::iter::successors(from, |&pi| self.nodes[pi].parent);

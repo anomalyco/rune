@@ -190,6 +190,7 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
         pixels, pixels_fit, effect, backdrop_blur, hover_motion, hover_within,
         group_opacity, group_color, hover_alone, hover_share, hover_focus, icon_turn, cache_key, offset_motion, scale_motion,
         origin, rotate_motion, child_exit, enter_delay, motion_intent, instant_motion, clip_to_content, flight_crop,
+        hold_landing,
     } = b;
     (match (&a.surface, surface) {
         (None, None) => true,
@@ -222,6 +223,7 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
         && a.motion_intent == *motion_intent && a.instant_motion == *instant_motion
         && a.clip_to_content == *clip_to_content
         && a.flight_crop == *flight_crop
+        && a.hold_landing == *hold_landing
 }
 
 pub(super) fn same_visual(a: &Visual, b: &Visual) -> bool {
