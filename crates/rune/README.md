@@ -643,9 +643,18 @@ app.run();
 
   Launch Services learns the scheme when the bundle is opened or registered (`lsregister -f
   MyApp.app`); then `open 'myapp://x'` launches or reaches the app. A bare `cargo run` binary has
-  no bundle and gets no links. iOS isn't wired yet (winit owns the scene delegate), and Windows
-  and Linux pass a link to a new process as a launch argument, so the hook never runs there;
-  read it from the arguments, with your own single-instance forwarding if you need one.
+  no bundle and gets no links. iOS isn't wired yet (winit owns the scene delegate), and Linux
+  passes a link to a new process as a launch argument, so the hook never runs there.
+- Links and relaunches on Windows: Windows starts a new process for each launch, passing a link
+  as an argument. The hook receives the links among the first process's arguments
+  (`scheme://…`) like the launching link on macOS. Call `rune::single_instance("com.example.myapp")`
+  first thing in `main` to keep one process: a later launch hands its arguments to the running
+  process over a per-user named pipe and lets it take the foreground, and `single_instance`
+  returns false so `main` returns without opening a window. Its links reach the hook; a launch
+  without links reopens the app (`App::on_reopen`, then the default, which also brings the front
+  window forward, restored). Register the scheme for the user, usually at install:
+  `HKEY_CURRENT_USER\Software\Classes\myapp` with an empty `URL Protocol` value and
+  `shell\open\command` set to `"C:\path\to\myapp.exe" "%1"`.
   `scripts/mac-app --scheme myapp` writes that entry and registers the bundle for you (see
   "Relaunching a Mac app" below).
 - Edge overlays (HUDs): see `App::overlay` below.

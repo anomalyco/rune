@@ -86,8 +86,9 @@ pub(crate) enum WakeEvent {
     Position(usize, (i32, i32)), Level(usize, bool),
     Place(usize, crate::windows::PlaceRequest),
     Frame(usize, crate::window::frame::FrameRequest),
-    /// The app was reopened (macOS: its Dock icon clicked); for `Windows`, not one host.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    /// The app was reopened (macOS: its Dock icon clicked; Windows: launched again while it
+    /// runs, see `single_instance`); for `Windows`, not one host.
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
     Reopen,
     /// An assistive client asked something of a surface's accessibility tree (`crate::a11y`):
     /// the host answers at the end of the turn this wakes.
@@ -229,6 +230,10 @@ impl Windows {
         if let Some(Some(host)) = crate::platform::reopen::target(&candidates(&self.hosts)).and_then(|i| self.hosts.get_mut(i)) {
             host.reopen(event_loop);
         }
+        // Windows: a launch while the app runs brings its front window forward, restored, as
+        // AppKit's activation does on macOS; the launch let this process take the foreground.
+        #[cfg(target_os = "windows")]
+        crate::open_url::instance::raise_front();
     }
 }
 
@@ -297,6 +302,11 @@ impl ApplicationHandler<WakeEvent> for Windows {
         {
             let proxy = self.proxy.clone();
             crate::platform::reopen::install(move || proxy.send_event(WakeEvent::Reopen).is_ok());
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let proxy = self.proxy.clone();
+            crate::open_url::instance::on_relaunch(move || proxy.send_event(WakeEvent::Reopen).is_ok());
         }
         crate::open_url::incoming::settle();
         // A window opened at launch took it; a GPU kept for a later one would sit idle until then.
