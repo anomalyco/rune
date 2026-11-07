@@ -72,6 +72,14 @@ impl El {
         self.vis.cold_mut().border_layout = true;
         self
     }
+    /// Draws a colour icon (one whose body names its own colours, such as a file-type badge) as
+    /// its silhouette in this element's colour, as an SVG mask of the icon filled with
+    /// `currentColor` draws it (`@opencode/ui` FileIcon's `mono`): a file tab's badge in one
+    /// colour until the tab is selected or hovered. A monochrome icon draws as it always does.
+    pub fn icon_one_color(mut self) -> Self {
+        self.vis.cold_mut().icon_one_color = true;
+        self
+    }
     /// A border whose colour runs from `top` at the top edge to `bottom` at the bottom edge,
     /// e.g. a top-lit hairline rim. Drawn like [`El::border`], inside the box over the fill.
     /// Replaces any `border`, and `border` replaces it.

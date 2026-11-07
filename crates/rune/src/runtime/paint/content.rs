@@ -128,9 +128,10 @@ impl<S: 'static> Runtime<S> {
                 (drawn / zoom.max(1e-4)).round().max(1.0) as u32
             };
             let pos = [(r[0] + r[2] - drawn) * 0.5, (r[1] + r[3] - drawn) * 0.5];
-            // An icon that paints its own colours draws as its image, upright, faded only by the
+            // An icon that paints its own colours draws as its image (or its silhouette in
+            // `color`, `El::icon_one_color`), upright, faded only by the
             // element's opacity and its colour's alpha.
-            if drawn > 1e-4 && let Some(pixels) = self.text.color_icon(ic, px, color) {
+            if drawn > 1e-4 && let Some(pixels) = self.text.color_icon(ic, px, color, n.vis.icon_one_color) {
                 if let Some(image) = self.images.place(pixels, [drawn, drawn]) {
                     self.instances.push(Instance {
                         rect: [pos[0], pos[1], drawn, drawn],
