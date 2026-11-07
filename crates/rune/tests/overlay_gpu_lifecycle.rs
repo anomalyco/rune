@@ -101,7 +101,7 @@ mod lazy {
                     assert_eq!(created.load(Ordering::SeqCst), 0, "a hidden overlay has no window on Windows");
                 } else {
                     wait(Duration::from_secs(10), || full.availability() == Availability::Available).expect("the prewarmed window");
-                    // The GPU probe runs as the event loop starts.
+                    // Let startup make the prewarmed window.
                     std::thread::sleep(Duration::from_millis(1500));
                     assert_eq!(created.load(Ordering::SeqCst), 1, "on_created runs at startup");
                 }

@@ -1,5 +1,5 @@
-//! Making a GPU device ahead of a surface (`warm_gpu`) and looking at the GPUs once at launch
-//! (`probe_gpu`), so a first surface waits less for its device.
+//! Making a GPU device ahead of a surface (`warm_gpu`), so a first surface waits less for its
+//! device.
 
 /// A window's or overlay's surface draws with `gpu`, which `warm_gpu` then leaves alone.
 pub(crate) fn surface_gpu(gpu: &std::sync::Arc<super::Gpu>) {
@@ -39,12 +39,4 @@ pub fn warm_gpu_with(features: wgpu::Features, prepare: impl FnOnce(&wgpu::Devic
     super::prewarm::warm(features, Some(Box::new(prepare)));
     #[cfg(any(target_os = "macos", target_arch = "wasm32"))]
     let _ = (features, prepare);
-}
-
-/// Looks at the GPUs once, on a thread, as the event loop starts: whether a DX12 adapter
-/// exists, which loads the DX12 runtime and drivers. It leaves no device (8 MB, no driver
-/// threads), and the first surface then enumerates the adapters once instead of twice.
-pub(crate) fn probe_gpu() {
-    #[cfg(target_os = "windows")]
-    let _ = std::thread::Builder::new().name("rune-gpu-probe".into()).spawn(|| drop(super::Gpu::wgpu_instance()));
 }
