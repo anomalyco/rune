@@ -371,7 +371,7 @@ impl<S: 'static> Runtime<S> {
             }
             // A matched flight scales its laid-out content uniformly to cover the moving rect,
             // centred: `k` and the centring offset in points. A launch flies at its own size.
-            let cover = if lift && n.local.w > 0.0 && n.local.h > 0.0 && !self.launches.flying(node_id) {
+            let cover = if lift && n.local.w > 0.0 && n.local.h > 0.0 && !self.launches.launched(node_id) {
                 let (pw, ph) = (rect_pt[2] - rect_pt[0], rect_pt[3] - rect_pt[1]);
                 let k = (pw / n.local.w).max(ph / n.local.h).max(1e-3);
                 Some((k, [(pw - n.local.w * k) * 0.5, (ph - n.local.h * k) * 0.5]))

@@ -28,6 +28,14 @@ impl Tx {
     pub fn launch(&mut self, source: impl Into<String>, destination: impl Into<String>) {
         self.launches.push((source.into(), destination.into()));
     }
+
+    /// The `El::matched` flights this change starts draw outside every clip until they land, as
+    /// a [`Tx::launch`] does, rather than inside their destinations' clips: for elements that
+    /// move between parts of the window that clip them, as tabs moving from a titlebar's strip
+    /// into a sidebar that opens as they land, where a clip would hide them for most of the way.
+    pub fn unclipped_flights(&mut self) {
+        self.unclipped_flights = true;
+    }
 }
 
 pub(crate) struct TextFlight {
