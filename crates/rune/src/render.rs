@@ -413,7 +413,10 @@ impl Gpu {
             _ => pick.adapter,
         };
         match Self::device_on(&adapter, wanted) {
-            Ok((device, queue)) => Ok(Gpu { instance, adapter, device, queue }),
+            Ok((device, queue)) => {
+                crate::native_surface::note_device(&device, surface.is_some() || presented);
+                Ok(Gpu { instance, adapter, device, queue })
+            }
             // A driver that can't make a device (a broken integrated GPU on a hybrid laptop)
             // leaves the window to the next adapter that presents to its surface.
             Err(error) => {
@@ -429,6 +432,7 @@ impl Gpu {
                 for other in others {
                     if let Ok((device, queue)) = Self::device_on(&other, wanted) {
                         eprintln!("rune: {} ({:?}) made no device ({error}); using {}", first.name, first.backend, other.get_info().name);
+                        crate::native_surface::note_device(&device, surface.is_some() || presented);
                         return Ok(Gpu { instance, adapter: other, device, queue });
                     }
                 }
