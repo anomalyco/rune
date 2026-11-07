@@ -46,6 +46,7 @@ impl<S: 'static> Runtime<S> {
         self.seen.clear();
         self.seen.resize(n_nodes, false);
         self.stuck.clear();
+        self.sticky_bands.clear();
             self.sticky_frame.clear();
         if self.has_sticky {
             self.stuck.resize(n_nodes, 0.0);
@@ -154,6 +155,10 @@ impl<S: 'static> Runtime<S> {
                 let h = if self.row_h[i] >= 0.0 { self.row_h[i] } else { p.rect.h };
                 let shift = sticky::shift(edge, if tail { inset - h } else { inset }, [top, top + h, left, left + p.rect.w], frame);
                 self.stuck[i] = shift;
+                // A header whose section's rows fade under it keeps the clip they lost.
+                if let Some(&(_, top)) = self.sticky_bands.iter().find(|b| Some(b.0) == node_parent) {
+                    pinh.paint_clip[1] = top;
+                }
                 if edge == crate::el::StickyEdge::Left { pinh.dx += shift } else { pinh.dy += shift }
                 pinh.snap.rigid[(edge != crate::el::StickyEdge::Left) as usize] += shift;
                 // A sticky element stays crisp against the viewport edge it sticks to while rows
@@ -1180,6 +1185,9 @@ impl<S: 'static> Runtime<S> {
                 in_cache, skip_paint, turn: turn_index,
                 snap: pixel_snap::Inherit { off: snap_off, rigid: snap_rigid, layer: if cover.is_some() { 0 } else { snap_layer }, parent: snap_rest.filter(|_| cover.is_none() && snap_rigid == pinh.snap.rigid && pixel_snap::frames(&n.vis)) } };
             self.register_node_hits(i, pinh.clip, (effective_opacity, visible), rect_pt, (press_k, press_anchor));
+            if self.has_sticky {
+                self.fade_below_header(i, s);
+            }
         }
         while let Some((_, start, surface_start)) = layers.pop() {
             if active_cache.is_some_and(|ac| ac.instance_start == start) {

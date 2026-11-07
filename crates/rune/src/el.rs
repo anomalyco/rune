@@ -345,6 +345,8 @@ pub enum Align {
 }
 
 pub use crate::el::anchor::{Anchor, Side, anchor_rect};
+pub(crate) use crate::el::scroll::FadeStyle;
+pub use crate::el::scroll::ScrollFade;
 pub use crate::el::text_spec::TextSpec;
 pub(crate) use crate::el::text_spec::Elide;
 
@@ -442,6 +444,8 @@ pub(crate) type SelectionChangeFn = Rc<dyn Fn(crate::states::States<'_>, &crate:
 pub(crate) struct ScrollEdges {
     /// Fade width (points) for the top and bottom edges; 0 for none.
     pub(crate) fade: f32,
+    /// How the fade follows the content hidden under each edge (`El::scroll_fade`).
+    pub(crate) fade_style: scroll::FadeStyle,
     /// Space `Tx::scroll_into_view` leaves between a revealed row and the viewport's edge.
     pub(crate) margin: f32,
     /// The viewport keeps its top row where it is when content above it changes.
