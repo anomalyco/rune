@@ -31,6 +31,8 @@ pub struct G {
     pub open: Option<String>,
     pub edits: [TextEdit; 8],
     pub combo: rune_kit::ComboboxState,
+    /// The file tree story's files.
+    pub files: rune_kit::TreeModel<rune_kit::FileNode<()>>,
     pub neutral: bool,
     pub palette: bool,
     /// `--reduced-motion`: the runtime's reduced-motion mode.
@@ -62,10 +64,20 @@ fn init() -> G {
         open: None,
         edits: Default::default(),
         combo: Default::default(),
+        files: files(),
         neutral: rune::extra_args().iter().any(|a| a == "neutral"),
         palette: rune::extra_args().iter().any(|a| a == "palette"),
         reduced: rune::extra_args().iter().any(|a| a == "--reduced-motion"),
     }
+}
+
+/// The acme-web checkout Desktop's Files panel shows, `src/util` open on `format.ts`.
+fn files() -> rune_kit::TreeModel<rune_kit::FileNode<()>> {
+    let paths = [".git/HEAD", "src/util/format.ts", "src/money.ts", "src/index.ts", "package.json", "README.md"];
+    let mut m = rune_kit::FileTree::new().compact_folders(false).build(paths.map(|p| (p, ())));
+    m.expand_to("src/util/format.ts");
+    m.select("src/util/format.ts");
+    m
 }
 
 pub fn kit(s: &G, dark: bool) -> &'static Kit {

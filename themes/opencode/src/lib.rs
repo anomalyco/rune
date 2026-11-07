@@ -7,8 +7,10 @@
 //! rune_kit::Button::new("Save").build(k)
 //! ```
 
+pub mod file_icons;
 pub mod icons;
 pub mod provider_icons;
+pub mod tree_icons;
 
 use std::sync::OnceLock;
 

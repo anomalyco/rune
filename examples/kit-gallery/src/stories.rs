@@ -10,6 +10,7 @@ use crate::G;
 mod combobox;
 mod controls;
 mod display;
+mod icons;
 mod inputs;
 mod markdown;
 mod overlays;
@@ -205,6 +206,13 @@ stories! {
     "rune-popup-list--composer" => popup_list_composer,
     "rune-scroll-bar--basic" => scroll_bar_basic,
     "rune-scroll-bar--grow" => scroll_bar_grow,
+    "components-file-icon--samples" => icons::file_icon_samples,
+    "components-file-icon--folder" => icons::file_icon_folder,
+    "ui-icon--gallery" => icons::icon_gallery,
+    "rune-icon--catalog" => icons::icon_catalog,
+    "rune-file-icon--catalog" => icons::file_icon_catalog,
+    "rune-tree-icon--catalog" => icons::tree_icon_catalog,
+    "rune-tree--files" => icons::file_tree,
 }
 
 fn popup_list_composer(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
