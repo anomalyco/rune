@@ -52,6 +52,10 @@ pub(crate) fn anchor_position(a: &Anchor, t: [f32; 4], size: (f32, f32), vp: (f3
     // Along the main axis only keep the start edge inside; a long list may run off the far end
     // (`El::anchored_fit` bounds it instead).
     if vertical { y = y.max(margin) } else { x = x.max(margin) }
+    if a.round {
+        // `Math.round`: halves go up.
+        return ((x + 0.5).floor(), (y + 0.5).floor());
+    }
     (x, y)
 }
 
