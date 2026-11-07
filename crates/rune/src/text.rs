@@ -83,7 +83,7 @@ use hidden_axes::hidden_axes;
 use layout_cache::{Cache, Entry};
 #[cfg(test)]
 use layout_cache::STALE_BYTES;
-pub use icon::{Icon, icon_coverage, set_icon_swap};
+pub use icon::{Icon, icon_coverage, set_icon_swap, set_icon_swap_size};
 use icon::rasterize_icon;
 use trak::{Trak, Traks, font_trak};
 
