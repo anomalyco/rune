@@ -22,11 +22,12 @@ pub(super) struct Titlebar {
     pub(super) caption: Option<crate::titlebar::Caption>,
     /// `Tx::toggle_maximized`, for the shell.
     pub(super) toggle_maximized: bool,
-    /// `Cx::titlebar_height`, as the last view set it, and whether the shell has yet to see it.
-    height: Option<f32>,
-    height_changed: bool,
+    /// `Cx::set_titlebar` and `Cx::titlebar_height`, as the last view set them, and whether the
+    /// shell has yet to see them.
+    set: crate::titlebar::TitlebarSet,
+    set_changed: bool,
     /// What a run without a window draws for `App::titlebar` (`headless_chrome`), so a new
-    /// `Cx::titlebar_height` draws again.
+    /// `Cx::set_titlebar` or `Cx::titlebar_height` draws again.
     headless: Option<(crate::Chrome, crate::Titlebar)>,
 }
 
@@ -109,7 +110,7 @@ impl<S: 'static> Runtime<S> {
     pub(crate) fn headless_chrome(&mut self, chrome: crate::Chrome, titlebar: Option<crate::Titlebar>, borderless: bool) -> crate::Chrome {
         let titlebar = titlebar.filter(|_| !borderless);
         self.titlebar.headless = titlebar.map(|t| (chrome, t));
-        let titlebar = titlebar.map(|t| self.titlebar.height.map_or(t, crate::Titlebar::new));
+        let titlebar = titlebar.map(|t| self.titlebar.set.over(t));
         let chrome = match titlebar {
             Some(t) if cfg!(target_os = "macos") => t.mac_chrome(chrome),
             _ => chrome,
@@ -143,26 +144,27 @@ impl<S: 'static> Runtime<S> {
         self.titlebar.window_menu = Some(WindowMenu::Keyboard);
     }
 
-    /// `Cx::titlebar_height`, as the last view set it; `None` keeps `App::titlebar`'s.
-    pub(crate) fn titlebar_height(&self) -> Option<f32> {
-        self.titlebar.height
+    /// `Cx::set_titlebar` and `Cx::titlebar_height`, as the last view set them; empty keeps
+    /// `App::titlebar`'s.
+    pub(crate) fn titlebar_set(&self) -> crate::titlebar::TitlebarSet {
+        self.titlebar.set
     }
 
-    /// Notes the `Cx::titlebar_height` a view set. A run without a window draws the new height
-    /// at once; a window's shell resizes its frame (`take_titlebar_height_changed`).
-    pub(super) fn set_titlebar_height(&mut self, height: Option<f32>) {
-        if height == self.titlebar.height { return; }
-        self.titlebar.height = height;
-        self.titlebar.height_changed = true;
+    /// Notes the titlebar a view set. A run without a window draws it at once; a window's shell
+    /// resizes its frame and moves the traffic lights (`take_titlebar_changed`).
+    pub(super) fn set_titlebar(&mut self, set: crate::titlebar::TitlebarSet) {
+        if set == self.titlebar.set { return; }
+        self.titlebar.set = set;
+        self.titlebar.set_changed = true;
         if let Some((chrome, titlebar)) = self.titlebar.headless {
             self.headless_chrome(chrome, Some(titlebar), false);
         }
     }
 
-    /// Whether `Cx::titlebar_height` changed since the shell last asked.
+    /// Whether the titlebar the view set changed since the shell last asked.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    pub(crate) fn take_titlebar_height_changed(&mut self) -> bool {
-        std::mem::take(&mut self.titlebar.height_changed)
+    pub(crate) fn take_titlebar_changed(&mut self) -> bool {
+        std::mem::take(&mut self.titlebar.set_changed)
     }
 
     /// Notes whether a secondary press at (x, y) landed on a bare `.window_drag()` region of a
@@ -184,7 +186,7 @@ impl<S: 'static> Runtime<S> {
     /// moves the window, and a secondary click opens the window menu.
     pub(super) fn bare_drag_region(&self, t: usize) -> bool {
         let n = &self.nodes[t];
-        n.window_drag && n.handlers.on_press.is_none() && n.handlers.on_double_press.is_none() && n.handlers.on_drag.is_none()
+        n.window_drag == crate::el::WindowDrag::Drag && n.handlers.on_press.is_none() && n.handlers.on_double_press.is_none() && n.handlers.on_drag.is_none()
             && n.handlers.drag_out.is_none() && self.textbox_input(t).is_none()
     }
 }

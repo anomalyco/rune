@@ -32,6 +32,6 @@ impl<S: 'static> Runtime<S> {
         let (x, y) = self.pointer.unwrap_or(self.press_at);
         let [lx, ly] = self.to_local(i, x, y);
         let (dx, dy) = (x - self.press_at.0, y - self.press_at.1);
-        self.queue.push(Action::DragRepeat(held, Drag { phase: Phase::Move, x: lx, y: ly, dx, dy, ..d }, self.capture_button));
+        self.queue.push(Action::DragRepeat(held, Drag { phase: Phase::Move, x: lx, y: ly, dx, dy, window: [x, y], screen: self.screen_at(x, y), ..d }, self.capture_button));
     }
 }

@@ -270,7 +270,7 @@ impl<S: 'static> Host<S> {
                     rt.cancel_timer_frame();
                     self.idle = true; return;
                 }
-                let origin_moved = screen_origin(&l.window).is_some_and(|o| rt.set_window_origin(o));
+                let origin_moved = sync_screen_origin(rt, &l.window);
                 // A frame Rune moved itself has its drawable and viewport already.
                 let resized = l.resize_surface(&gpu.device, size);
                 let viewport = (size.width as f32 / scale, size.height as f32 / scale);

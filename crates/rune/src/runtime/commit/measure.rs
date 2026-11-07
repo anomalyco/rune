@@ -62,7 +62,7 @@ impl<S: 'static> Runtime<S> {
             reduced_motion: self.reduced_motion,
             time_scale: self.time_scale,
             defaults: self.defaults,
-            titlebar_height: self.titlebar_height(),
+            titlebar: self.titlebar_set(),
             caret: self.caret.clone(),
             caret_read: false,
             layout_seen: self.layout_seen.rects.clone(),
@@ -215,7 +215,7 @@ impl<S: 'static> Measurement<'_, S> {
             reduced_motion: self.reduced_motion,
             time_scale: self.time_scale,
             defaults: self.defaults,
-            titlebar_height: self.titlebar_height,
+            titlebar: self.titlebar,
             caret_read: self.caret_read,
             layout_reads: self.layout_reads,
             memo_flattened: Some(memo_pending),
@@ -361,7 +361,7 @@ impl<S: 'static> Measurement<'_, S> {
             titlebar_inset: this.titlebar_inset,
             chrome: this.chrome,
             caption_color: None,
-            titlebar_height: None,
+            titlebar: Default::default(),
             system_accent: this.system_accent,
             system_scroll_bars: this.system_scroll_bars,
             system_reduced_motion: this.system_reduced_motion,
@@ -411,7 +411,7 @@ impl<S: 'static> Measurement<'_, S> {
         self.reduced_motion = cx.reduced_motion;
         self.time_scale = cx.time_scale;
         self.defaults = cx.defaults;
-        self.titlebar_height = cx.titlebar_height;
+        self.titlebar = cx.titlebar;
         // Reads made by memos this build reused count as made again.
         self.caret_read = cx.caret_read.get() || replayed.caret;
         self.layout_reads = cx.layout_reads.take();

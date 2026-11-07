@@ -78,6 +78,10 @@ pub struct Drag {
     /// view selects by words on 2 and lines on 3, and extends by them as the drag moves.
     pub clicks: u32,
     pub(crate) cancelled: bool,
+    /// The pointer in window points.
+    pub(crate) window: [f32; 2],
+    /// The pointer in desktop pixels, when a native window hosts the view.
+    pub(crate) screen: Option<(i32, i32)>,
 }
 
 impl Drag {
@@ -86,6 +90,32 @@ impl Drag {
     pub fn cancelled(&self) -> bool {
         self.cancelled
     }
+
+    /// The pointer in window points from the window's top-left, whatever scale the element
+    /// draws at.
+    pub fn window_point(&self) -> [f32; 2] {
+        self.window
+    }
+
+    /// The pointer in physical desktop pixels, the space `WindowOptions::position` and
+    /// `WindowHandle::set_position` take: for opening a window under the pointer, as a tab
+    /// dragged out of its strip does. `None` without a native window (headless runs, the web)
+    /// and where the system hides window positions (Wayland).
+    pub fn screen_point(&self) -> Option<(i32, i32)> {
+        self.screen
+    }
+}
+
+/// What a press on an element does to the window (`El::window_drag`, `El::no_window_drag`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum WindowDrag {
+    /// Nothing of its own: a press goes to what's under it.
+    #[default]
+    None,
+    /// A press moves the window, and a double press zooms it.
+    Drag,
+    /// A press stays here, inside a `Drag` element, and does nothing to the window.
+    NoDrag,
 }
 
 pub(crate) type PressFn = Rc<dyn Fn(crate::states::States<'_>, &mut Tx)>;
@@ -492,7 +522,7 @@ pub struct El {
     pub(crate) whole: bool,
     pub(crate) glide: Option<crate::growth::FoldGlide>,
     pub(crate) input: Option<Box<InputSpec>>,
-    pub(crate) window_drag: bool,
+    pub(crate) window_drag: WindowDrag,
     /// `El::ime_cursor`.
     pub(crate) ime_cursor: bool,
     pub(crate) scale: f32,
@@ -558,7 +588,7 @@ fn base(dir: FlexDirection) -> El {
         whole: false,
         glide: None,
         input: None,
-        window_drag: false,
+        window_drag: WindowDrag::None,
         ime_cursor: false,
         scale: 1.0,
         time_scale: 1.0,

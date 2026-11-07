@@ -672,6 +672,14 @@ pub(crate) fn screen_origin(window: &Window) -> Option<(f32, f32)> {
     }
 }
 
+/// Tells `rt` where `window`'s content is on screen: in points for `El::on_screen_layout`
+/// ([`screen_origin`]), and in desktop pixels for `Drag::screen_point`. True when that moved
+/// an `El::on_screen_layout` element.
+pub(crate) fn sync_screen_origin<S: 'static>(rt: &mut Runtime<S>, window: &Window) -> bool {
+    rt.set_window_pixels(window.inner_position().ok().map(|p| (p.x, p.y)));
+    screen_origin(window).is_some_and(|o| rt.set_window_origin(o))
+}
+
 /// The scale an overlay draws at. On macOS, read from the panel AppKit shows, and before it's
 /// ordered in from the display holding most of its frame, where it will appear.
 pub(crate) fn backing_scale(window: &Window) -> f32 {
@@ -726,7 +734,7 @@ impl<S: 'static> Host<S> {
     /// moves an `El::on_screen_layout` element.
     fn sync_origin(&mut self) {
         let Some(w) = &self.win else { return };
-        if let Some(origin) = screen_origin(&w.window) && self.rt.set_window_origin(origin) {
+        if sync_screen_origin(&mut self.rt, &w.window) {
             w.window.request_redraw();
         }
     }

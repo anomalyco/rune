@@ -27,7 +27,7 @@ impl<S: 'static> Host<S> {
                 attrs = winit::platform::startup_notify::WindowAttributesExtStartupNotify::with_activation_token(attrs, token);
             }
         }
-        let chrome = frame_chrome(self.chrome, self.titlebar, self.rt.titlebar_height());
+        let chrome = frame_chrome(self.chrome, self.titlebar, self.rt.titlebar_set());
         #[cfg(target_os = "macos")]
         if !self.options.borderless && chrome.full_size_content {
             use winit::platform::macos::WindowAttributesExtMacOS;
@@ -235,9 +235,7 @@ impl<S: 'static> Host<S> {
                 self.rt.set_viewport((size.width as f32 / scale, size.height as f32 / scale), scale);
             }
             sync_chrome(&mut self.rt, w, self.chrome, self.titlebar);
-            if let Some(origin) = screen_origin(&w.window) {
-                self.rt.set_window_origin(origin);
-            }
+            sync_screen_origin(&mut self.rt, &w.window);
             if w.window.has_focus() {
                 self.rt.window_focus(true);
             }
