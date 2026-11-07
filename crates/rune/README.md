@@ -180,9 +180,11 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   multiplies with `press_scale`, `live_scale` and scale transitions (`origin` applies to all of
   them; `offset` ignores it), and nested scales and turns compose. Under all of them, text, icons
   and images transform with their box (link hit boxes and a text field's caret follow). Text under
-  a still scale rasterizes at the scaled size, so it stays crisp. While a scale springs, text
-  samples its rest-size glyphs, filtered, and turns crisp when the spring settles. That way a
-  spring doesn't rasterize a glyph at every frame's size. Text under an actively moving
+  a still scale rasterizes at the scaled size, so it stays crisp. While a scale springs (or a
+  presence transition runs), text samples glyphs rasterized at its nearest still ancestor's
+  scale (1, or an app's zoom), filtered, and turns crisp when the spring settles. That way a
+  spring doesn't rasterize a glyph at every frame's size, and text that only fades or slides
+  inside a zoomed window draws exactly as it will at rest. Text under an actively moving
   `live_scale` rasterizes at logarithmic $2^{1/4}$ scale buckets and re-rasterizes crisp at the
   exact resting scale once it holds still for 0.1 s; a changing `scale` samples rest-size glyphs
   while moving and re-rasterizes crisp at the resting scale after 0.1 s. A matched flight's own

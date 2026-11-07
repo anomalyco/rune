@@ -311,11 +311,14 @@ pub(super) enum ScaleMotion {
 
 impl ScaleMotion {
     /// The scale text under `sc` rasterizes at. It draws at `sc`, filtered, when they differ.
-    pub(super) fn raster(self, sc: f32) -> f32 {
+    /// Moving text rasterizes at `rest`, the scale of its nearest still ancestor (an app's zoom,
+    /// say), so text that moves inside a zoomed window stays as crisp as at rest and doesn't
+    /// sharpen when the motion ends.
+    pub(super) fn raster(self, sc: f32, rest: f32) -> f32 {
         let k = match self {
             ScaleMotion::Still => sc,
             ScaleMotion::Live => 2.0f32.powf((sc.max(1e-4).log2() * 4.0).round() * 0.25),
-            ScaleMotion::Moving => 1.0,
+            ScaleMotion::Moving => rest,
         };
         // A tiny or huge raster isn't worth its atlas space; sample the rest size instead.
         if (1.0 / 16.0..=4.0).contains(&k) { k } else { 1.0 }

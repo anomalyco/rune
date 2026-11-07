@@ -1094,6 +1094,7 @@ impl<S: 'static> Runtime<S> {
                         loop_value,
                         cover,
                         scale_motion,
+                        rest: pinh.still.0,
                         gliding,
                         caret: input_caret.map(|(caret, _)| caret),
                     },
