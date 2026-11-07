@@ -87,6 +87,10 @@ libc = "0.2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "1"
+# Installed fonts by family name (`text::system_fonts::installed_family_files`): fontique's
+# DirectWrite, CoreText and fontconfig backends, in a collection apart from the app's, which
+# keeps system fonts off. Fontconfig opens at run time, so a build needs no headers for it.
+fontique = { version = "0.12", default-features = false, features = ["std", "system", "fontconfig-dlopen"] }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
 arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
