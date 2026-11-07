@@ -182,7 +182,9 @@ pub fn measure_with(
 ) -> (f32, f32) {
     with_text(|t| {
         let l = t.layout_rich_with(text, spans, style, 1.0, max_width, options);
-        (l.full_width().ceil(), super::layout_height(&l, style, 1.0))
+        // Spaces hanging past a wrapped line's end take no room, as the runtime measures them.
+        let w = if max_width.is_some() { l.width() } else { l.full_width() };
+        (w.ceil(), super::layout_height(&l, style, 1.0))
     })
 }
 

@@ -326,12 +326,14 @@ pub(super) fn compute_layout(taffy: &mut LayoutEngine, root: SlotId, room: Size<
         taffy::compute_leaf_layout(inputs, style, |_, _| 0.0, |known, avail| {
             let Some(i) = ctx else { return Size::ZERO };
             let spec = nodes[i].text.as_ref().unwrap();
+            // `known` is the border box; `avail` is already the content box (known or styled
+            // size, clamped, less padding and border), which is what `lay_out_text` wraps at.
             let w = if spec.wrap {
-                known.width.or(match avail.width {
-                    AvailableSpace::Definite(w) => Some(w),
+                match avail.width {
+                    AvailableSpace::Definite(w) => Some(w.max(0.0)),
                     AvailableSpace::MinContent => Some(0.0),
                     AvailableSpace::MaxContent => None,
-                })
+                }
             } else {
                 None
             };
@@ -345,7 +347,8 @@ pub(super) fn compute_layout(taffy: &mut LayoutEngine, root: SlotId, room: Size<
                 }
             }
             let l = text.layout_for_spec(spec, scale, w.map(|w| w * scale), parley::Alignment::Start);
-            let mut lw = (l.full_width() / scale).ceil_to(scale);
+            // Spaces hanging past a wrapped line's end take no room, as in CSS.
+            let mut lw = ((if w.is_some() { l.width() } else { l.full_width() }) / scale).ceil_to(scale);
             if (spec.truncate || spec.truncate_fade || spec.max_lines > 0)
                 && let AvailableSpace::Definite(a) = avail.width
             {
