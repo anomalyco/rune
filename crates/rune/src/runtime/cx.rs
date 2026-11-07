@@ -47,6 +47,8 @@ pub struct Cx<S> {
     pub(super) caption_color: Option<Color>,
     /// `Cx::foreground` and `Cx::focus_ring`, read once the view returns.
     pub(super) defaults: ViewDefaults,
+    /// `Cx::titlebar_height`, read once the view returns.
+    pub(super) titlebar_height: Option<f32>,
     pub(super) system_accent: crate::SystemAccent,
     pub(super) system_scroll_bars: crate::platform::scroll_bars::SystemScrollBars,
     pub(super) system_reduced_motion: bool,
@@ -64,6 +66,7 @@ impl<S> Cx<S> {
         Cx {
             env: self.env, titlebar_inset: self.titlebar_inset, chrome: self.chrome, caption_color: self.caption_color,
             defaults: self.defaults,
+            titlebar_height: self.titlebar_height,
             system_accent: self.system_accent,
             system_scroll_bars: self.system_scroll_bars,
             system_reduced_motion: self.system_reduced_motion, reduced_motion: self.reduced_motion, time_scale: self.time_scale,
@@ -73,11 +76,11 @@ impl<S> Cx<S> {
     }
 
     /// Takes back a [`Self::retype`]d context a nested view ran with: its overrides, and the
-    /// caret and layout reads it added.
+    /// caret and layout reads it added. The window's chrome stays the outer view's: a staged
+    /// story's `caption_color` or `titlebar_height` isn't the window's.
     pub(crate) fn absorb<T>(&mut self, other: Cx<T>) {
         self.reduced_motion = other.reduced_motion;
         self.time_scale = other.time_scale;
-        self.caption_color = other.caption_color;
         self.defaults = other.defaults;
         self.caret_read.set(self.caret_read.get() || other.caret_read.get());
         let mut reads = self.layout_reads.borrow_mut();
@@ -90,14 +93,18 @@ impl<S> Cx<S> {
         self.env = env;
     }
 
-    pub(crate) fn set_titlebar_inset(&mut self, inset: f32) {
-        self.titlebar_inset = inset;
+    /// A nested view on a stage, which no window controls cover.
+    pub(crate) fn clear_chrome(&mut self) {
+        self.titlebar_inset = 0.0;
+        self.chrome = crate::ChromeInsets::default();
     }
 
     #[cfg(feature = "hot")]
     pub(crate) fn settings_from<T>(&mut self, other: Cx<T>) {
         self.reduced_motion = other.reduced_motion;
         self.time_scale = other.time_scale;
+        self.caption_color = other.caption_color;
+        self.titlebar_height = other.titlebar_height;
         self.caret_read = other.caret_read;
         self.layout_reads = other.layout_reads;
     }
@@ -147,6 +154,18 @@ impl<S> Cx<S> {
     /// `:focus-visible` does. Set it on every run of the view.
     pub fn focus_ring(&mut self, width: f32, offset: f32, color: Color) {
         self.defaults.focus_ring = Some(crate::el::Outline { width, offset, color });
+    }
+    /// The height of the titlebar the app draws (`App::titlebar`), in window points, in place of
+    /// `Titlebar::new`'s while the view keeps setting it: a band that scales with the app's UI
+    /// zoom, as Electron's `setTitleBarOverlay({ height })` does. The Windows caption buttons
+    /// take it (their width stays), macOS centres the traffic lights in it unless
+    /// `Chrome::traffic_lights` places them, and [`Self::chrome_insets`] reports it from the
+    /// next frame on, so the buttons line up with the app's row at every zoom: for a 44 point
+    /// row, `cx.titlebar_height(44.0 * zoom.max(1.0))` keeps the row 44 points tall zoomed out,
+    /// as Electron apps size their `titleBarOverlay`. Insets are window points: a view that
+    /// scales its content by a zoom divides them by it.
+    pub fn titlebar_height(&mut self, points: f32) {
+        self.titlebar_height = Some(points.max(1.0));
     }
     /// The user's accent colour (System Settings › Appearance on macOS) for this window's
     /// appearance, [`SystemAccent::DEFAULT`](crate::SystemAccent::DEFAULT)'s blue elsewhere and

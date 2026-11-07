@@ -104,7 +104,7 @@ pub(crate) use blend::{apron_key, glyph, icon_inst, premul};
 mod focus;
 #[path = "runtime/input/physical.rs"]
 mod physical_dispatch;
-#[cfg_attr(not(target_os = "macos"), allow(unused_imports))]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(unused_imports))]
 pub(crate) use physical_dispatch::Unhandled;
 #[path = "runtime/input/modifier_keys.rs"]
 mod modifier_keys;
@@ -195,6 +195,7 @@ mod press_clicks;
 mod press_repeat;
 #[path = "runtime/input/titlebar.rs"]
 mod titlebar;
+pub(crate) use titlebar::WindowMenu;
 #[path = "runtime/window_requests.rs"]
 mod window_requests;
 #[path = "runtime/paint/tracks.rs"]

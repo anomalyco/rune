@@ -116,6 +116,7 @@ pub(crate) fn run_app<S: 'static>(app: crate::App<S>, mut args: Args) {
         return;
     }
     let (srgb_blend, modifier_keys, font_smoothing) = (app.srgb_blend, app.modifier_keys, app.font_smoothing);
+    let frame = (app.chrome, app.titlebar);
     let scene = args.scene.take();
     let (spec, state, _) = app.into_parts(scene.as_deref());
     let value = Box::new(state);
@@ -128,11 +129,11 @@ pub(crate) fn run_app<S: 'static>(app: crate::App<S>, mut args: Args) {
         on_key: Some(|s: &mut HostState, key, tx| (s.key)(s, key, tx)),
     };
     let state = HostState { value, spec: Box::new(spec), view: view_adapter::<S>, poll: poll_adapter::<S>, setup: setup_adapter::<S>, key: key_adapter::<S> };
-    run_host(shell, state, args, (srgb_blend, font_smoothing), modifier_keys);
+    run_host(shell, state, args, (srgb_blend, font_smoothing), modifier_keys, frame);
 }
 
 #[inline(never)]
-fn run_host(spec: AppSpec<HostState>, state: HostState, args: Args, look: Look, modifier_keys: bool) {
+fn run_host(spec: AppSpec<HostState>, state: HostState, args: Args, look: Look, modifier_keys: bool, frame: (crate::Chrome, Option<crate::Titlebar>)) {
     INITIAL.with(|slot| { assert!(slot.borrow().is_none()); *slot.borrow_mut() = Some(state); });
     if args.snap_on_patch.is_some() {
         let state = initial_state(&spec, args.scene.as_deref());
@@ -140,6 +141,8 @@ fn run_host(spec: AppSpec<HostState>, state: HostState, args: Args, look: Look, 
     }
     let mut app = crate::App::new(spec).font_smoothing(look.1).srgb_blend(look.0);
     app.modifier_keys = modifier_keys;
+    // The window's frame is the app's, as without hot reload.
+    (app.chrome, app.titlebar) = frame;
     if args.headless() { crate::tooling::headless(app, args); }
     else if let Err(error) = crate::window::run(app, args) { panic!("{error}"); }
 }

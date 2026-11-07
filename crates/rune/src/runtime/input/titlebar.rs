@@ -1,6 +1,7 @@
 //! Presses that move or zoom the window: `.window_drag()` regions, and the titlebar band
 //! AppKit drags itself when the app leaves window dragging to it. Also the window's chrome
-//! over a custom titlebar (`App::titlebar`): its insets and the Windows caption buttons.
+//! over a custom titlebar (`App::titlebar`): its insets, the Windows caption buttons and the
+//! window menu.
 use super::*;
 
 #[derive(Default)]
@@ -13,12 +14,31 @@ pub(super) struct Titlebar {
     native_band: f32,
     /// A secondary press began on a bare `.window_drag()` region of a custom titlebar.
     secondary_on_region: bool,
+    /// The window menu the shell opens next.
+    window_menu: Option<WindowMenu>,
     /// What `Cx::chrome_insets` reports.
     pub(super) insets: crate::ChromeInsets,
     /// The Windows caption buttons the view gets drawn over it, with their state.
     pub(super) caption: Option<crate::titlebar::Caption>,
     /// `Tx::toggle_maximized`, for the shell.
     pub(super) toggle_maximized: bool,
+    /// `Cx::titlebar_height`, as the last view set it, and whether the shell has yet to see it.
+    height: Option<f32>,
+    height_changed: bool,
+    /// What a run without a window draws for `App::titlebar` (`headless_chrome`), so a new
+    /// `Cx::titlebar_height` draws again.
+    headless: Option<(crate::Chrome, crate::Titlebar)>,
+}
+
+/// The window menu (Restore, Move, Size, Minimize, Maximize, Close) a custom titlebar opens
+/// where the native title bar would.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WindowMenu {
+    /// At the pointer: a secondary click on a bare `.window_drag()` region.
+    Pointer,
+    /// Under the window's top-left corner, from the keyboard: Alt+Space no handler took.
+    Keyboard,
 }
 
 impl Titlebar {
@@ -77,11 +97,10 @@ impl<S: 'static> Runtime<S> {
 
     /// The caption buttons to draw over the view, and their hover and press state; `None`
     /// draws none. A change re-runs the view.
-    pub(crate) fn set_caption(&mut self, caption: Option<crate::titlebar::Caption>) -> bool {
-        if caption == self.titlebar.caption { return false; }
+    pub(crate) fn set_caption(&mut self, caption: Option<crate::titlebar::Caption>) {
+        if caption == self.titlebar.caption { return; }
         self.titlebar.caption = caption;
         self.dirty = true;
-        true
     }
 
     /// What a run without a window reports and draws for `App::titlebar` on this platform, as
@@ -89,6 +108,8 @@ impl<S: 'static> Runtime<S> {
     /// buttons. Returns the frame the headless traffic-light checks see.
     pub(crate) fn headless_chrome(&mut self, chrome: crate::Chrome, titlebar: Option<crate::Titlebar>, borderless: bool) -> crate::Chrome {
         let titlebar = titlebar.filter(|_| !borderless);
+        self.titlebar.headless = titlebar.map(|t| (chrome, t));
+        let titlebar = titlebar.map(|t| self.titlebar.height.map_or(t, crate::Titlebar::new));
         let chrome = match titlebar {
             Some(t) if cfg!(target_os = "macos") => t.mac_chrome(chrome),
             _ => chrome,
@@ -105,28 +126,65 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Takes a `Tx::toggle_maximized`, for the shell to carry out.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn take_toggle_maximized(&mut self) -> bool {
         std::mem::take(&mut self.titlebar.toggle_maximized)
+    }
+
+    /// The window menu a secondary click on a drag region or an unclaimed Alt+Space asked for,
+    /// for the shell to open.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn take_window_menu(&mut self) -> Option<WindowMenu> {
+        self.titlebar.window_menu.take()
+    }
+
+    /// Alt+Space no handler took opens the window menu (`Unhandled::WindowMenu`).
+    pub(super) fn request_window_menu(&mut self) {
+        self.titlebar.window_menu = Some(WindowMenu::Keyboard);
+    }
+
+    /// `Cx::titlebar_height`, as the last view set it; `None` keeps `App::titlebar`'s.
+    pub(crate) fn titlebar_height(&self) -> Option<f32> {
+        self.titlebar.height
+    }
+
+    /// Notes the `Cx::titlebar_height` a view set. A run without a window draws the new height
+    /// at once; a window's shell resizes its frame (`take_titlebar_height_changed`).
+    pub(super) fn set_titlebar_height(&mut self, height: Option<f32>) {
+        if height == self.titlebar.height { return; }
+        self.titlebar.height = height;
+        self.titlebar.height_changed = true;
+        if let Some((chrome, titlebar)) = self.titlebar.headless {
+            self.headless_chrome(chrome, Some(titlebar), false);
+        }
+    }
+
+    /// Whether `Cx::titlebar_height` changed since the shell last asked.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn take_titlebar_height_changed(&mut self) -> bool {
+        std::mem::take(&mut self.titlebar.height_changed)
     }
 
     /// Notes whether a secondary press at (x, y) landed on a bare `.window_drag()` region of a
     /// custom titlebar, where its release opens the window menu.
     pub(super) fn secondary_region_down(&mut self, x: f32, y: f32, captured: bool) {
-        self.titlebar.secondary_on_region = !captured && self.titlebar.caption.is_some() && self.bare_drag_region(x, y);
+        self.titlebar.secondary_on_region = !captured && self.titlebar.caption.is_some()
+            && self.primary_target(x, y).is_some_and(|t| self.bare_drag_region(t));
     }
 
     /// A secondary release that ends the press `secondary_region_down` noted on a drag region
     /// asks the shell for the window menu.
     pub(super) fn secondary_region_up(&mut self, x: f32, y: f32) {
-        if std::mem::take(&mut self.titlebar.secondary_on_region) && self.bare_drag_region(x, y) {
-            self.titlebar.action = Some(TitlebarAction::SystemMenu);
+        if std::mem::take(&mut self.titlebar.secondary_on_region) && self.primary_target(x, y).is_some_and(|t| self.bare_drag_region(t)) {
+            self.titlebar.window_menu = Some(WindowMenu::Pointer);
         }
     }
 
-    fn bare_drag_region(&self, x: f32, y: f32) -> bool {
-        self.primary_target(x, y).is_some_and(|t| {
-            let n = &self.nodes[t];
-            n.window_drag && n.handlers.on_press.is_none() && n.handlers.on_double_press.is_none() && n.handlers.on_drag.is_none()
-        })
+    /// A `.window_drag()` element with nothing of its own to do with a press: a press there
+    /// moves the window, and a secondary click opens the window menu.
+    pub(super) fn bare_drag_region(&self, t: usize) -> bool {
+        let n = &self.nodes[t];
+        n.window_drag && n.handlers.on_press.is_none() && n.handlers.on_double_press.is_none() && n.handlers.on_drag.is_none()
+            && n.handlers.drag_out.is_none() && self.textbox_input(t).is_none()
     }
 }

@@ -6,7 +6,7 @@ impl<S: 'static> Runtime<S> {
     /// The mutation phase cannot accept an El or an unfinished measurement pass.
     pub(super) fn apply(&mut self, measured: Measured, tx: &Tx) {
         let _apply_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Apply);
-        let Measured { layout: mut taffy, mut nodes, reduced_motion, time_scale, defaults, caret_read, memo_flattened, memo_reused, taken_paths, .. } = measured;
+        let Measured { layout: mut taffy, mut nodes, reduced_motion, time_scale, defaults, titlebar_height, caret_read, memo_flattened, memo_reused, taken_paths, .. } = measured;
         self.defaults = defaults;
         if crate::tooling::interaction::active() { self.interaction_reused(&memo_reused); }
         let mut scratch = std::mem::take(&mut self.apply_scratch);
@@ -864,6 +864,8 @@ impl<S: 'static> Runtime<S> {
         self.aspect_snap.clear();
         self.viewport_stepped = false;
         self.settle = false;
+        // After the commit: a new height changes the insets, which the next frame's view reads.
+        self.set_titlebar_height(titlebar_height);
     }
 
     /// Sets `prop` to `to` when `quiet`, or animates it from `identity` when its target changed.

@@ -147,6 +147,12 @@ impl KeyEvent {
         let Key::Command(c) = self.key else { return None };
         (crate::input::chord::primary_alone(self.mods) && (c == 'z' || !self.mods.shift)).then_some(c)
     }
+    /// Alt+Space off macOS: the window menu's key. It never types a space, and on Windows opens
+    /// the window menu when no handler takes it. (Option+Space types on macOS.)
+    pub(crate) fn is_window_menu_chord(&self) -> bool {
+        let m = self.mods;
+        !cfg!(target_os = "macos") && matches!(&self.key, Key::Text(t) if t == " ") && m.alt && !m.ctrl && !m.cmd && !m.logo
+    }
     /// A macOS Control-letter text binding (Ctrl-A, Ctrl-E, Ctrl-K, …), as in every AppKit field.
     pub(crate) fn control_binding(&self) -> Option<char> {
         let m = self.mods;

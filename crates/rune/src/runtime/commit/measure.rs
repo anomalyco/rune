@@ -62,6 +62,7 @@ impl<S: 'static> Runtime<S> {
             reduced_motion: self.reduced_motion,
             time_scale: self.time_scale,
             defaults: self.defaults,
+            titlebar_height: self.titlebar_height(),
             caret: self.caret.clone(),
             caret_read: false,
             layout_seen: self.layout_seen.rects.clone(),
@@ -169,10 +170,17 @@ impl<S: 'static> Measurement<'_, S> {
             Some(playground) => playground.view(self.state, self.view, cx, self.viewport),
             None => crate::playground::call(self.view, self.state, cx),
         };
-        // The Windows caption buttons go over everything the view drew, as its root's last child.
+        // The Windows caption buttons go over everything the view drew, in a frame around it.
         let Some(caption) = &self.caption else { return root };
         let symbol = cx.caption_color.unwrap_or(if self.env.system_dark { Color::WHITE } else { Color::BLACK });
-        root.child(crate::titlebar::buttons(caption, symbol, self.env.scale))
+        crate::titlebar::frame(root, caption, symbol, self.env.scale, self.fit_height)
+    }
+
+    /// What a memo scope hashes of the window's controls (`Cx::titlebar_inset`,
+    /// `Cx::chrome_insets`), so memos that read them rebuild when they change.
+    pub(super) fn chrome_bits(&self) -> [u32; 4] {
+        let [leading, trailing, height] = self.chrome.bits();
+        [self.titlebar_inset.to_bits(), leading, trailing, height]
     }
 
     pub(super) fn finish(self, tx: &Tx) -> Measured {
@@ -207,6 +215,7 @@ impl<S: 'static> Measurement<'_, S> {
             reduced_motion: self.reduced_motion,
             time_scale: self.time_scale,
             defaults: self.defaults,
+            titlebar_height: self.titlebar_height,
             caret_read: self.caret_read,
             layout_reads: self.layout_reads,
             memo_flattened: Some(memo_pending),
@@ -352,6 +361,7 @@ impl<S: 'static> Measurement<'_, S> {
             titlebar_inset: this.titlebar_inset,
             chrome: this.chrome,
             caption_color: None,
+            titlebar_height: None,
             system_accent: this.system_accent,
             system_scroll_bars: this.system_scroll_bars,
             system_reduced_motion: this.system_reduced_motion,
@@ -367,7 +377,7 @@ impl<S: 'static> Measurement<'_, S> {
         let mut cx = fresh_cx(self);
         #[cfg(feature = "hot")]
         let emptied = self.memo.emptied();
-        let memo = crate::memo::enter(std::mem::take(self.memo), self.env, self.system_accent, self.system_reduced_motion, crate::theme::blends_srgb(), cx.caret.clone(), cx.layout.clone());
+        let memo = crate::memo::enter(std::mem::take(self.memo), self.env, self.system_accent, self.system_reduced_motion, crate::theme::blends_srgb(), self.chrome_bits(), cx.caret.clone(), cx.layout.clone());
         let view_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::View);
         #[cfg(not(feature = "hot"))]
         let mut root = { let root = self.root_view(&mut cx); self.build_tree(root, tx, force_all) };
@@ -388,7 +398,7 @@ impl<S: 'static> Measurement<'_, S> {
                     self.virtual_culled.clear();
                     self.virtual_inputs.clear();
                     cx = fresh_cx(self);
-                    let memo = crate::memo::enter(emptied, self.env, self.system_accent, self.system_reduced_motion, crate::theme::blends_srgb(), cx.caret.clone(), cx.layout.clone());
+                    let memo = crate::memo::enter(emptied, self.env, self.system_accent, self.system_reduced_motion, crate::theme::blends_srgb(), self.chrome_bits(), cx.caret.clone(), cx.layout.clone());
                     let root = crate::hot::original_only(|| self.root_view(&mut cx));
                     (crate::hot::original_only(|| self.build_tree(root, tx, force_all)), memo)
                 }
@@ -401,6 +411,7 @@ impl<S: 'static> Measurement<'_, S> {
         self.reduced_motion = cx.reduced_motion;
         self.time_scale = cx.time_scale;
         self.defaults = cx.defaults;
+        self.titlebar_height = cx.titlebar_height;
         // Reads made by memos this build reused count as made again.
         self.caret_read = cx.caret_read.get() || replayed.caret;
         self.layout_reads = cx.layout_reads.take();

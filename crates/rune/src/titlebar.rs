@@ -11,7 +11,7 @@ use crate::Chrome;
 
 mod caption;
 
-pub(crate) use caption::buttons;
+pub(crate) use caption::{BUTTONS_KEY, FRAME_KEY, frame};
 
 /// The app draws its own titlebar across the top of the window, `height` points tall
 /// (`App::titlebar`, `WindowSpec::titlebar`). Plain data, the same on every platform:
@@ -25,7 +25,8 @@ pub(crate) use caption::buttons;
 ///   the trailing edge at the band's height, as Electron's `titleBarOverlay` does.
 /// - **Elsewhere:** the native frame stays and [`ChromeInsets`] is zero.
 ///
-/// A borderless window has no titlebar to replace, and ignores it.
+/// `Cx::titlebar_height` changes the height while the app runs, as a UI zoom does. A
+/// borderless window has no titlebar to replace, and ignores it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Titlebar {
     height: f32,
@@ -53,7 +54,8 @@ impl Titlebar {
 
 /// What the window's own controls take of the app's titlebar, in points
 /// (`Cx::chrome_insets`). The view re-runs when it changes: entering or leaving full screen,
-/// a scale change. A `memo` closure that reads it needs it in its version.
+/// a scale change, `Cx::titlebar_height`. Memos rebuild with it too, so a `memo` closure that
+/// reads it needs nothing in its version.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct ChromeInsets {
@@ -73,6 +75,11 @@ impl ChromeInsets {
     pub(crate) fn new(leading: f32, trailing: f32, height: f32) -> Self {
         Self { leading, trailing, height }
     }
+
+    /// The bits a memo scope hashes, so memos rebuild when the insets change.
+    pub(crate) fn bits(&self) -> [u32; 3] {
+        [self.leading, self.trailing, self.height].map(f32::to_bits)
+    }
 }
 
 /// One of the Windows caption buttons.
@@ -84,35 +91,83 @@ pub(crate) enum CaptionButton {
 }
 
 impl CaptionButton {
-    pub(crate) const ALL: [CaptionButton; 3] = [CaptionButton::Minimize, CaptionButton::Maximize, CaptionButton::Close];
+    const ALL: [CaptionButton; 3] = [CaptionButton::Minimize, CaptionButton::Maximize, CaptionButton::Close];
 }
 
-/// The caption buttons Rune draws over a custom titlebar on Windows, and the state the window
-/// procedure tracks for them: the system answers presses on them as non-client hits, so the
-/// buttons see neither hover nor press as pointer events.
+/// Where the pointer is with the caption buttons. The system answers presses on them as
+/// non-client hits, so the buttons see neither hover nor press as pointer events: the window
+/// procedure keeps this, and the buttons draw from it.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum CaptionState {
+    #[default]
+    Idle,
+    /// Over `button` with no press.
+    Hovered(CaptionButton),
+    /// A press began on `button`; `over` while the pointer is still on it. Releasing there acts.
+    Pressed { button: CaptionButton, over: bool },
+}
+
+/// The caption buttons Rune draws over a custom titlebar on Windows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Caption {
     pub height: f32,
-    pub hover: Option<CaptionButton>,
-    pub pressed: Option<CaptionButton>,
+    pub state: CaptionState,
     pub maximized: bool,
+    /// The window has a minimize box (`WS_MINIMIZEBOX`); without one, the button is dimmed.
+    pub minimizable: bool,
+    /// The window has a maximize box (`WS_MAXIMIZEBOX`); a window without one, a window that
+    /// isn't resizable, never maximizes, and the button is dimmed.
+    pub maximizable: bool,
+    /// Full screen: the window draws no buttons, but keeps the frame that hosts them.
+    pub hidden: bool,
 }
 
 impl Caption {
     pub(crate) fn new(height: f32) -> Self {
-        Self { height, hover: None, pressed: None, maximized: false }
+        Self { height, state: CaptionState::Idle, maximized: false, minimizable: true, maximizable: true, hidden: false }
+    }
+
+    /// The buttons drawn, left to right. A window that can neither minimize nor maximize shows
+    /// only Close, as Windows draws its native caption.
+    pub(crate) fn buttons(&self) -> &'static [CaptionButton] {
+        match (self.hidden, self.minimizable || self.maximizable) {
+            (true, _) => &[],
+            (false, true) => &CaptionButton::ALL,
+            (false, false) => &[CaptionButton::Close],
+        }
+    }
+
+    /// Whether `button` does anything: a press on a dimmed button doesn't.
+    pub(crate) fn enabled(&self, button: CaptionButton) -> bool {
+        match button {
+            CaptionButton::Minimize => self.minimizable,
+            CaptionButton::Maximize => self.maximizable,
+            CaptionButton::Close => true,
+        }
     }
 
     /// The buttons' rects, left to right, in points from the window's top-left for a window
     /// `width` points wide at `scale`: each a whole number of pixels, flush with the right edge.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub(crate) fn rects(&self, width: f32, scale: f32) -> [(CaptionButton, [f32; 4]); 3] {
+    pub(crate) fn rects(&self, width: f32, scale: f32) -> impl Iterator<Item = (CaptionButton, [f32; 4])> + use<> {
         let (w, h) = caption::size(self.height, scale);
-        std::array::from_fn(|i| (CaptionButton::ALL[i], [width - w * (3 - i) as f32, 0.0, w, h]))
+        let buttons = self.buttons();
+        buttons.iter().enumerate().map(move |(i, &b)| (b, [width - w * (buttons.len() - i) as f32, 0.0, w, h]))
     }
 
-    /// Points the three buttons take from the trailing edge at `scale`.
+    /// The enabled button at (x, y), in points from the window's top-left, in a window `width`
+    /// points wide at `scale`.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn hit(&self, width: f32, scale: f32, (x, y): (f32, f32)) -> Option<CaptionButton> {
+        self.rects(width, scale)
+            .find(|(_, [rx, ry, rw, rh])| x >= *rx && x < rx + rw && y >= *ry && y < ry + rh)
+            .map(|(button, _)| button)
+            .filter(|&b| self.enabled(b))
+    }
+
+    /// Points the buttons take from the trailing edge at `scale`.
     pub(crate) fn width(&self, scale: f32) -> f32 {
-        caption::size(self.height, scale).0 * 3.0
+        caption::size(self.height, scale).0 * self.buttons().len() as f32
     }
 }

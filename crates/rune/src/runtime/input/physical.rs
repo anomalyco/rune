@@ -5,14 +5,15 @@ pub(super) struct Fallback { key: KeyEvent, base: Option<char>, unhandled: Optio
 
 /// What a window does with a logical key no handler took: close or minimize as its title-bar
 /// button would, or run a menu item. A standard ⌘W or ⌘M item, or an app's item marked
-/// `MenuItem::keys_first`, asks for it, so an app's own binding wins.
+/// `MenuItem::keys_first`, asks for it, so an app's own binding wins. On Windows, Alt+Space
+/// opens the window menu.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Clone)]
-pub(crate) enum Unhandled { Close, Minimize, Menu(std::sync::Arc<dyn Fn() + Send + Sync>) }
+pub(crate) enum Unhandled { Close, Minimize, Menu(std::sync::Arc<dyn Fn() + Send + Sync>), WindowMenu }
 
 impl std::fmt::Debug for Unhandled {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self { Self::Close => "Close", Self::Minimize => "Minimize", Self::Menu(_) => "Menu" })
+        f.write_str(match self { Self::Close => "Close", Self::Minimize => "Minimize", Self::Menu(_) => "Menu", Self::WindowMenu => "WindowMenu" })
     }
 }
 
@@ -165,6 +166,7 @@ impl<S: 'static> Runtime<S> {
                         Some(Unhandled::Close) => one.close_window(),
                         Some(Unhandled::Minimize) => one.minimize(),
                         Some(Unhandled::Menu(run)) => run(),
+                        Some(Unhandled::WindowMenu) => self.request_window_menu(),
                         None => {}
                     }
                     fold_live(&mut live, ran || fell, &one);
