@@ -1,0 +1,1 @@
+- **A script's `"cmd": true` holds the primary modifier as the shell reports it.** Off macOS it holds Ctrl with it, and on macOS Super, so a headless script's ⌘K matches a `"mod+k"` chord on every platform instead of doing nothing on Windows and Linux.
