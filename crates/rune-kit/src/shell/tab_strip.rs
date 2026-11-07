@@ -269,6 +269,8 @@ struct Strip<S> {
     list_key: String,
     /// A torn-out tab floats in the caller's layer ([`TabStrip::build_layered`]).
     layered: bool,
+    /// Where the scroll viewport is, for scrolling it while a tab is dragged near an end.
+    auto: Rc<auto_scroll::View>,
 }
 
 /// OpenCode's activity ring: the kit's spinner at 14 points in the muted icon colour, the
@@ -515,6 +517,7 @@ impl<'a, S: 'static> TabStrip<'a, S> {
             matched: self.matched.map(str::to_owned),
             close_icon: self.close_icon,
             busy: self.busy,
+            auto: auto_scroll::view(&format!("{}-scroll", self.key)),
             scroll_key: format!("{}-scroll", self.key),
             list_key: format!("{}-list", self.key),
             layered: layer.is_some(),
@@ -565,12 +568,12 @@ impl<'a, S: 'static> TabStrip<'a, S> {
                 .scroll_fade(ScrollFade::feather(fade))
                 .scroll_margin(fade)
                 .child(list);
-            let scroll = auto_scroll::watch(scroll, &st.scroll_key);
+            let scroll = auto_scroll::watch(scroll, &st.auto);
             col().key(self.key).w_full().grow(1.0).min_h(0.0).child(scroll).children(self.trailing)
         } else {
             let list = row().key(st.list_key.clone()).role("tablist").label(self.label).focus_group().gap(gap).center_y().children(tabs);
             let scroll = row().key(st.scroll_key.clone()).h(st.row_height).shrink().min_w(0.0).scroll_x().scroll_fade(ScrollFade::strength(fade).linear().full_at(0.1)).child(list);
-            let scroll = auto_scroll::watch(scroll, &st.scroll_key);
+            let scroll = auto_scroll::watch(scroll, &st.auto);
             // It grows into the space it's given, so its width is what the tabs may share.
             row().key(self.key).grow(1.0).shrink().min_w(0.0).gap(gap).center_y().child(scroll).children(self.trailing)
         };

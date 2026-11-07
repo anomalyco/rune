@@ -367,14 +367,14 @@ fn handlers<S: 'static>(mut slot: El, id: &str, at: &Place, closable: bool, st: 
     let Some(access) = access else { return slot };
 
     let (id, select, reorder, tear, tear_move) = (id.to_owned(), h.select.clone(), h.reorder.clone(), h.tear_out.clone(), h.tear_move.clone());
-    let scroll = st.scroll_key.clone();
+    let (scroll, auto) = (st.scroll_key.clone(), st.auto.clone());
     slot.on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| {
         if tx.button() != PointerButton::Primary {
             return;
         }
         match d.phase {
             Phase::Down => {
-                access(s).press(&lane, [d.x, d.y], super::auto_scroll::offset(&scroll, vertical));
+                access(s).press(&lane, [d.x, d.y], super::auto_scroll::offset(&auto, vertical));
                 if select_early && let Some(f) = &select {
                     f(s, &id, tx);
                     tx.scroll_into_view_in(reveal.0.clone(), reveal.1.clone());
@@ -383,9 +383,9 @@ fn handlers<S: 'static>(mut slot: El, id: &str, at: &Place, closable: bool, st: 
             Phase::Move => {
                 // Near an end the strip scrolls under the dragged tab, which keeps to the pointer.
                 if access(s).reordering() {
-                    super::auto_scroll::step(&scroll, vertical, d, tx);
+                    super::auto_scroll::step(&auto, &scroll, vertical, d, tx);
                 }
-                let scrolled = access(s).scrolled_since(super::auto_scroll::offset(&scroll, vertical));
+                let scrolled = access(s).scrolled_since(super::auto_scroll::offset(&auto, vertical));
                 let (dx, dy) = (d.dx / zoom, d.dy / zoom);
                 let (along, across) = if vertical { (dy + scrolled, dx) } else { (dx + scrolled, dy) };
                 let was_torn = access(s).torn_out();

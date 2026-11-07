@@ -22,8 +22,9 @@ const FRAME: Duration = Duration::from_micros(16_667);
 /// commit.
 const KEPT: usize = 64;
 
-/// Where one strip's scroll viewport is and how far it has scrolled.
-struct View {
+/// Where one strip's scroll viewport is and how far it has scrolled. Found while the view builds,
+/// where the runtime that draws it is known, and kept by the strip's handlers.
+pub(super) struct View {
     pos: Cell<ScrollPos>,
     rect: Live<[f32; 4]>,
 }
@@ -32,7 +33,7 @@ thread_local! {
     static VIEWS: RefCell<HashMap<(u64, String), Rc<View>>> = RefCell::new(HashMap::new());
 }
 
-fn view(key: &str) -> Rc<View> {
+pub(super) fn view(key: &str) -> Rc<View> {
     let id = (rune::current_runtime_id(), key.to_owned());
     VIEWS.with(|views| {
         let mut views = views.borrow_mut();
@@ -43,22 +44,20 @@ fn view(key: &str) -> Rc<View> {
     })
 }
 
-/// Has the strip's scroll viewport, keyed `key`, report where it is and how far it scrolled.
-pub(super) fn watch(scroll: El, key: &str) -> El {
-    let v = view(key);
-    let rect = v.rect.clone();
+/// Has the strip's scroll viewport report where it is and how far it scrolled into `v`.
+pub(super) fn watch(scroll: El, v: &Rc<View>) -> El {
+    let (rect, v) = (v.rect.clone(), v.clone());
     scroll.drawn_rect_into(&rect).chain_scroll_offset(move |at| v.pos.set(at))
 }
 
-/// How far the strip keyed `key` has scrolled along its axis, in points.
-pub(super) fn offset(key: &str, vertical: bool) -> f32 {
-    view(key).pos.get().offset[usize::from(vertical)]
+/// How far the strip has scrolled along its axis, in points.
+pub(super) fn offset(v: &View, vertical: bool) -> f32 {
+    v.pos.get().offset[usize::from(vertical)]
 }
 
-/// During a drag: scrolls the strip a frame's step when the pointer is near an end that has
-/// more to show, and asks for the next frame's step while it stays there.
-pub(super) fn step(key: &str, vertical: bool, d: &Drag, tx: &mut Tx) {
-    let v = view(key);
+/// During a drag: scrolls the strip keyed `key` a frame's step when the pointer is near an end
+/// that has more to show, and asks for the next frame's step while it stays there.
+pub(super) fn step(v: &View, key: &str, vertical: bool, d: &Drag, tx: &mut Tx) {
     let (at, [x, y, w, h]) = (v.pos.get(), v.rect.get());
     let p = d.window_point();
     let a = usize::from(vertical);
