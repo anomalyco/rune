@@ -369,6 +369,22 @@ impl El {
         { self.handlers.sites.hover_change = Some(std::panic::Location::caller()); }
         self
     }
+    /// [`El::on_hover_change_any`] after any hover handler the element already has, which keeps
+    /// running: a component that follows the hover of an element it doesn't build. The change is
+    /// live-only when both handlers say so.
+    #[doc(hidden)]
+    pub fn chain_hover_change_any(mut self, f: impl Fn(bool, &mut Tx) + 'static) -> Self {
+        self.handlers.on_hover_change = Some(match self.handlers.get_mut_if_some().and_then(|h| h.on_hover_change.take()) {
+            Some(prev) => Rc::new(move |s, inside, tx| {
+                prev(s, inside, tx);
+                let prev_live = std::mem::take(&mut tx.live_only);
+                f(inside, tx);
+                tx.live_only &= prev_live;
+            }),
+            None => Rc::new(move |_, inside, tx| f(inside, tx)),
+        });
+        self
+    }
 
     /// Delay [`Self::on_hover_change`]: `true` arrives once the pointer has rested inside for
     /// `enter`, and `false` once it has stayed out for `leave`. A pass shorter than the delay
