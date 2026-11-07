@@ -66,6 +66,23 @@ impl WindowHandle {
         let number = self.native.number.load(Ordering::Acquire);
         (number != 0).then_some(number)
     }
+    /// Where the window is on the desktop and whether it's maximized, minimized or full screen,
+    /// to save and reopen it there. None while it's closed, and on Wayland, which hides window
+    /// positions. Call it on the UI thread.
+    pub fn placement(&self) -> Option<crate::windows::WindowPlacement> {
+        let window = self.window().ok()?;
+        let (outer, inner) = (window.outer_position().ok()?, window.inner_position().ok()?);
+        let size = window.inner_size();
+        Some(crate::windows::WindowPlacement {
+            position: (outer.x, outer.y),
+            content_position: (inner.x, inner.y),
+            content_size: (size.width, size.height),
+            scale: window.scale_factor(),
+            maximized: window.is_maximized(),
+            minimized: window.is_minimized().unwrap_or(false),
+            full_screen: window.fullscreen().is_some(),
+        })
+    }
     pub fn set_click_through(&self, click_through: bool) -> Result<(), String> {
         self.window()?.set_cursor_hittest(!click_through).map_err(|e| e.to_string())
     }

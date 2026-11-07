@@ -116,6 +116,8 @@ pub(crate) trait AnyHost {
     fn cancel_menus(&mut self) {}
     /// False for hosts that must not keep the loop running alone (overlays).
     fn keeps_loop(&self) -> bool { true }
+    /// An app window's key; overlays have none.
+    fn key(&self) -> Option<&str> { None }
     /// How reopening the app sees it; overlays never come back.
     fn reopen_candidate(&self) -> crate::platform::reopen::Candidate { Default::default() }
     /// Runs `App::on_reopen` as an update; true when it handled the reopen.
@@ -146,7 +148,45 @@ struct Windows {
     gpu: Rc<RefCell<Weak<Gpu>>>,
 }
 impl Windows {
+    /// Starts the windows `crate::open_window` asked for this turn, in fresh slots, each like
+    /// a window the factory returned but without `--scene` or `--size`, which describe the
+    /// launch's windows.
+    fn open_requested(&mut self, event_loop: &ActiveEventLoop) {
+        if self.factory.is_some() { return; }
+        loop {
+            let specs = crate::windows::flatten(crate::windows::take_opened());
+            if specs.is_empty() { return; }
+            let wayland = is_wayland(event_loop);
+            for spec in specs {
+                if self.hosts.iter().flatten().any(|h| h.key() == Some(spec.key())) {
+                    eprintln!("rune: a window keyed {:?} is already open", spec.key());
+                    continue;
+                }
+                let mut args = self.args.clone();
+                (args.scene, args.size) = (None, None);
+                let mut overlays = Vec::new();
+                let slot = self.hosts.len();
+                let host = spec.start(args, Start { proxy: self.proxy.clone(), slot, gpu: self.gpu.clone(), wayland, traced: false, overlays: &mut overlays });
+                self.hosts.push(host);
+                if let Some(Some(host)) = self.hosts.get_mut(slot) { host.resumed(event_loop); }
+                self.connect_overlays(overlays, event_loop);
+            }
+        }
+    }
+
+    fn connect_overlays(&mut self, overlays: Vec<Box<dyn crate::overlay::PendingOverlay>>, event_loop: &ActiveEventLoop) {
+        for mut overlay in overlays {
+            let (slot, proxy) = (self.hosts.len(), self.proxy.clone());
+            let frame_proxy = proxy.clone();
+            overlay.connect(Arc::new(move || { let _ = proxy.send_event(WakeEvent::App(slot)); }),
+                Arc::new(move || { let _ = frame_proxy.send_event(WakeEvent::DisplayTick(slot)); }), self.gpu.clone());
+            overlay.resumed(event_loop);
+            self.hosts.push(Some(overlay));
+        }
+    }
+
     fn cleanup(&mut self, event_loop: &ActiveEventLoop) {
+        if !event_loop.exiting() { self.open_requested(event_loop); }
         for host in &mut self.hosts {
             if let Some(h) = host.as_mut().filter(|h| h.finished()) {
                 h.cancel_menus();
@@ -252,14 +292,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
             let traced = trace_window.as_deref() == Some(spec.key());
             spec.start(self.args.clone(), Start { proxy: self.proxy.clone(), slot, gpu: self.gpu.clone(), wayland, traced, overlays: &mut overlays })
         }, |host| host.resumed(event_loop));
-        for mut overlay in overlays {
-            let (slot, proxy) = (self.hosts.len(), self.proxy.clone());
-            let frame_proxy = proxy.clone();
-            overlay.connect(Arc::new(move || { let _ = proxy.send_event(WakeEvent::App(slot)); }),
-                Arc::new(move || { let _ = frame_proxy.send_event(WakeEvent::DisplayTick(slot)); }), self.gpu.clone());
-            overlay.resumed(event_loop);
-            self.hosts.push(Some(overlay));
-        }
+        self.connect_overlays(overlays, event_loop);
         #[cfg(target_os = "macos")]
         {
             let proxy = self.proxy.clone();
@@ -352,6 +385,10 @@ struct Host<S: 'static> {
     /// `App::float_on_open`: each window maps at a fixed size, then takes its own limits.
     #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
     float_on_open: bool,
+    /// `App::open_inactive`: the first open leaves focus where it is.
+    open_inactive: bool,
+    /// `App::maximized`.
+    open_maximized: bool,
     shared: Arc<Shared<S>>,
     shortcuts: crate::shortcuts::Guard,
     menus: crate::native_menu::Guard<S>,
@@ -429,6 +466,7 @@ impl<S: 'static> Host<S> {
         let tab_visits_controls = app.tab_visits_controls;
         let fit_height = app.fit_content_height;
         let float_on_open = app.float_on_open;
+        let (open_inactive, open_maximized) = (app.open_inactive, app.maximized);
         let app_stats = app.dev_stats;
         let playground = app.playground.take();
         let (mut spec, state, shared) = app.into_parts(args.scene.as_deref());
@@ -501,6 +539,8 @@ impl<S: 'static> Host<S> {
             release_gpu,
             open_at_start: open,
             float_on_open,
+            open_inactive,
+            open_maximized,
             shared,
             shortcuts,
             menus,

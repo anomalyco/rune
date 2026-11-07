@@ -27,6 +27,10 @@ impl<S: 'static> Host<S> {
                 attrs = winit::platform::startup_notify::WindowAttributesExtStartupNotify::with_activation_token(attrs, token);
             }
         }
+        let maximize = self.open_maximized && !self.shown && self.options.resizable;
+        // Windows maximizes it once cloaked: maximizing shows a window.
+        #[cfg(not(target_os = "windows"))]
+        { attrs = attrs.with_maximized(maximize); }
         let chrome = frame_chrome(self.chrome, self.titlebar, self.rt.titlebar_set());
         #[cfg(target_os = "macos")]
         if !self.options.borderless && chrome.full_size_content {
@@ -48,7 +52,9 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "windows")]
         if visible {
             cloak.hold(&window, Instant::now() + win::READY_FALLBACK);
+            // Unfocused (`App::open_inactive`), the first show doesn't activate it.
             window.set_visible(true);
+            if maximize { window.set_maximized(true); }
         }
         // First, before anything observes the view (macOS) or an assistive client asks.
         let a11y = {
