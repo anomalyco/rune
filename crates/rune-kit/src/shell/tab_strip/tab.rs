@@ -140,7 +140,8 @@ pub(super) fn build<S: 'static>(item: TabItem<'_, S>, at: Place, st: &Strip<S>, 
         None => slot.w_full().h(before + h + after).pt(before).pb(after),
     };
     if at.separator {
-        slot = slot.child(el().key("separator").absolute(-st.gap / 2.0 - 0.75, (h - 12.0) / 2.0).size(1.5, 12.0).radius(0.75).fill(st.separator).a11y_hidden());
+        // It comes and goes at once, as `display: none` does, while the pointer crosses tabs.
+        slot = slot.child(hidden(el().key("separator").absolute(-st.gap / 2.0 - 0.75, (h - 12.0) / 2.0).size(1.5, 12.0).radius(0.75).fill(st.separator).a11y_hidden()));
     }
     // Lifted off the strip: a touch larger, floating. The one bounce in the strip.
     let lift = |e: El| k.elevate(e.radius(RADIUS).scale(1.03).scale_motion(rune_motion::motion::MORPH).motion_intent(MotionIntent::OVERSHOOT), &k.elevation.floating);
