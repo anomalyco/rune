@@ -19,6 +19,8 @@ pub struct FrameEncoded {
     window: Option<Rc<str>>,
     seq: u64,
     presents_at: Option<Instant>,
+    started: Option<Instant>,
+    refresh_hz: Option<f64>,
     update_ms: Option<f64>,
     encode_ms: Option<f64>,
 }
@@ -57,6 +59,15 @@ impl FrameEncoded {
     /// press, say), which aims at the next refresh without waiting for a tick.
     pub fn presents_at(&self) -> Option<Instant> { self.presents_at }
 
+    /// For `Drawn`, when the frame started, after its drawable came: `at` minus the update and
+    /// the encode. A display-paced window starts each frame on a refresh, so the gaps between
+    /// starts are the gaps between frames on screen. `None` otherwise.
+    pub fn started(&self) -> Option<Instant> { self.started }
+
+    /// The refresh rate of the display the window was on, in Hz: the display link's on macOS
+    /// (120 on a ProMotion panel), else what the monitor reports. `None` when neither knows.
+    pub fn refresh_hz(&self) -> Option<f64> { self.refresh_hz }
+
     /// For `Drawn`, the milliseconds from the frame's start (after its drawable came) until the
     /// runtime had built it: events, `poll`, the view, layout and paint. The same value a
     /// compositor gets as `Frame::update_ms`. `None` otherwise.
@@ -80,11 +91,12 @@ struct Reporter {
     hook: OnFrameEncoded,
     window: Option<Rc<str>>,
     seq: u64,
+    refresh_hz: Option<f64>,
 }
 
 impl<S: 'static> FrameReports<S> {
     pub(crate) fn new(hook: Option<OnFrameEncoded>, window: Option<&str>) -> Self {
-        Self(hook.map(|hook| Reporter { hook, window: window.map(Rc::from), seq: 0 }), None)
+        Self(hook.map(|hook| Reporter { hook, window: window.map(Rc::from), seq: 0, refresh_hz: None }), None)
     }
 
     pub(crate) fn inspecting(mut self, drawn: Option<OnFrameDrawn<S>>) -> Self {
@@ -95,12 +107,20 @@ impl<S: 'static> FrameReports<S> {
     /// The time to report a `Drawn` frame at, taken only when there's a hook.
     pub(crate) fn stamp(&self) -> Option<Instant> { self.0.as_ref().map(|_| Instant::now()) }
 
+    /// Whether anyone reads the reports, so a host asks for what only they need.
+    pub(crate) fn wanted(&self) -> bool { self.0.is_some() }
+
+    /// The display refresh the next reports carry, until it changes.
+    pub(crate) fn set_refresh(&mut self, hz: Option<f64>) {
+        if let Some(r) = &mut self.0 { r.refresh_hz = hz.filter(|hz| hz.is_finite() && *hz > 0.0); }
+    }
+
     /// A frame encoded at `at` (from `stamp`), which started at `started` and spent `update_ms`
     /// of that building.
     pub(crate) fn drawn(&mut self, at: Option<Instant>, presents_at: Option<Instant>, started: Instant, update_ms: f64) {
         let Some(at) = at else { return };
         let encode_ms = (at.saturating_duration_since(started).as_secs_f64() * 1000.0 - update_ms).max(0.0);
-        self.report(FrameOutcome::Drawn, at, presents_at, Some((update_ms, encode_ms)));
+        self.report(FrameOutcome::Drawn, at, presents_at, Some((started, update_ms, encode_ms)));
     }
 
     /// After a `Drawn` frame: `App::on_frame_drawn` reads the runtime as it presented.
@@ -116,10 +136,10 @@ impl<S: 'static> FrameReports<S> {
         if self.0.is_some() { self.report(FrameOutcome::Skipped, Instant::now(), None, None); }
     }
 
-    fn report(&mut self, outcome: FrameOutcome, at: Instant, presents_at: Option<Instant>, work: Option<(f64, f64)>) {
+    fn report(&mut self, outcome: FrameOutcome, at: Instant, presents_at: Option<Instant>, work: Option<(Instant, f64, f64)>) {
         let Some(r) = &mut self.0 else { return };
-        let (update_ms, encode_ms) = (work.map(|w| w.0), work.map(|w| w.1));
-        let frame = FrameEncoded { at, outcome, window: r.window.clone(), seq: r.seq, presents_at, update_ms, encode_ms };
+        let (started, update_ms, encode_ms) = (work.map(|w| w.0), work.map(|w| w.1), work.map(|w| w.2));
+        let frame = FrameEncoded { at, outcome, window: r.window.clone(), seq: r.seq, presents_at, started, refresh_hz: r.refresh_hz, update_ms, encode_ms };
         r.seq += 1;
         (r.hook)(&frame);
     }
