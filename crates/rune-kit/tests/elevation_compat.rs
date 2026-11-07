@@ -1,21 +1,22 @@
 use rune::Shadow;
 use rune_kit::Elevation;
 
-// Exactly the public field set at 17e36cb. Deliberately exhaustive: adding a field must fail
-// compilation here rather than first in a downstream app (which builds its own elevation).
+// Every public field at 17e36cb, set on a default: an app building its own elevation keeps
+// compiling as fields are added. Elevation can't be a struct literal outside rune-kit since the
+// fields' own shadow (`Elevation::with_input`) is private.
 fn legacy_elevation(ring: Shadow) -> Elevation {
-    Elevation {
-        raised: vec![ring],
-        floating: vec![ring],
-        overlay: vec![ring],
-        button_neutral: vec![ring],
-        button_contrast: vec![],
-        elements: vec![],
-        switch_off: vec![],
-        switch_on: vec![],
-        md: vec![],
-        knob: vec![],
-    }
+    let mut e = Elevation::default();
+    e.raised = vec![ring];
+    e.floating = vec![ring];
+    e.overlay = vec![ring];
+    e.button_neutral = vec![ring];
+    e.button_contrast = vec![];
+    e.elements = vec![];
+    e.switch_off = vec![];
+    e.switch_on = vec![];
+    e.md = vec![];
+    e.knob = vec![];
+    e
 }
 
 #[test]

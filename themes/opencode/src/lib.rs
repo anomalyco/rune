@@ -194,22 +194,18 @@ fn build(dark: bool) -> Kit {
         std_icon_strong: c("icon-strong-base"),
         std_text: c("text-base"),
     };
-    let elevation = Elevation {
-        raised: sh("v2-elevation-raised"),
-        floating: sh("v2-elevation-floating"),
-        overlay: sh("v2-elevation-overlay"),
-        button_neutral: sh("v2-elevation-button-neutral"),
-        button_contrast: sh("v2-elevation-button-contrast"),
-        elements: sh("v2-elevation-elements"),
-        switch_off: sh("v2-elevation-switch-off"),
-        switch_on: sh("v2-elevation-switch-on"),
-        md: sh("shadow-md"),
-        // switch.css, standard appearance: rgba(19, 16, 16, .04/.06/.08).
-        knob: css::box_shadows(
-            "#1310100a 0px 1px 2px -1px, #1310100f 0px 1px 2px 0px, #13101014 0px 1px 3px 0px",
-            solve,
-        ),
-    };
+    let mut elevation = Elevation::default().with_input(sh("v2-elevation-input"));
+    elevation.raised = sh("v2-elevation-raised");
+    elevation.floating = sh("v2-elevation-floating");
+    elevation.overlay = sh("v2-elevation-overlay");
+    elevation.button_neutral = sh("v2-elevation-button-neutral");
+    elevation.button_contrast = sh("v2-elevation-button-contrast");
+    elevation.elements = sh("v2-elevation-elements");
+    elevation.switch_off = sh("v2-elevation-switch-off");
+    elevation.switch_on = sh("v2-elevation-switch-on");
+    elevation.md = sh("shadow-md");
+    // switch.css, standard appearance: rgba(19, 16, 16, .04/.06/.08).
+    elevation.knob = css::box_shadows("#1310100a 0px 1px 2px -1px, #1310100f 0px 1px 2px 0px, #13101014 0px 1px 3px 0px", solve);
     // `line-height-large` is 150%; the older text styles derive their line from it.
     let ty = Type {
         ui: inter(13.0, 440.0, 20.0, -0.04),

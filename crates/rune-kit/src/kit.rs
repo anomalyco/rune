@@ -108,7 +108,8 @@ pub struct Palette {
     pub std_text: Color,
 }
 
-/// Elevation tokens as box-shadow layers (outer and inset), painted in order.
+/// Elevation tokens as box-shadow layers (outer and inset), painted in order. Build one from
+/// [`Elevation::default`], setting its fields, and [`Elevation::with_input`] for the fields'.
 #[derive(Clone, Debug, Default)]
 pub struct Elevation {
     pub raised: Vec<Shadow>,
@@ -123,6 +124,23 @@ pub struct Elevation {
     pub md: Vec<Shadow>,
     /// The standard-appearance switch thumb.
     pub knob: Vec<Shadow>,
+    /// Text fields and field selects (`--v2-elevation-input`); empty for `button_neutral`'s.
+    pub(crate) input: Vec<Shadow>,
+}
+
+impl Elevation {
+    /// Text fields' and field selects' own shadow, `--v2-elevation-input`: in OpenCode's dark
+    /// theme lighter than a button's (no drop, a 16% light ring). Without it fields take
+    /// [`Self::button_neutral`].
+    pub fn with_input(mut self, layers: impl Into<Vec<Shadow>>) -> Self {
+        self.input = layers.into();
+        self
+    }
+
+    /// The shadow text fields and field selects draw ([`Self::with_input`]).
+    pub fn input(&self) -> &[Shadow] {
+        if self.input.is_empty() { &self.button_neutral } else { &self.input }
+    }
 }
 
 /// Small glyphs drawn inside components (not the app's icon catalog).

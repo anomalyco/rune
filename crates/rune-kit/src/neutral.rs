@@ -106,6 +106,7 @@ impl Kit {
             switch_on: vec![],
             md: vec![drop(4.0, 8.0, t.shadow_soft)],
             knob: vec![drop(1.0, 3.0, t.knob_shadow)],
+            input: Vec::new(),
         };
         let ui = TextStyle::new(13.0, 400.0).lh(20.0);
         Kit {
