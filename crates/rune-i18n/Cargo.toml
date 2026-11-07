@@ -1,0 +1,36 @@
+[package]
+name = "rune-i18n"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Message catalogs for Rune apps: keys checked at compile time, catalogs generated from JSON at build time, CLDR plurals, numbers and lists, and the system's preferred languages."
+publish = false
+
+[features]
+default = []
+# `rune_i18n::codegen`: turns a folder of JSON catalogs into Rust for an app's build script.
+codegen = ["dep:serde_json"]
+
+[dependencies]
+fixed_decimal = { version = "0.7", features = ["ryu"] }
+icu_decimal = "2"
+icu_list = "2"
+icu_locale = "2"
+icu_plurals = "2"
+# Thread-safe data payloads, so one translator serves every window.
+icu_provider = { version = "2", features = ["sync"] }
+writeable = "0.6"
+serde_json = { version = "1", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Globalization"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSLocale", "NSString"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Navigator", "Window"] }
+
+[lints]
+workspace = true
