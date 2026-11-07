@@ -1,6 +1,7 @@
-//! The app's Dock icon from image bytes, so an app needs no AppKit glue of its own.
+//! The app's icon from image bytes (the Dock's on macOS, its windows' and the taskbar's on
+//! Windows), so an app needs no platform glue of its own.
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::sync::Mutex;
 #[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,11 +13,16 @@ static PENDING: Mutex<Option<Vec<u8>>> = Mutex::new(None);
 #[cfg(target_os = "macos")]
 static LAUNCHED: AtomicBool = AtomicBool::new(false);
 
-/// macOS: shows `bytes` (an `.icns`, PNG, TIFF or anything else `NSImage` reads) as the app's
-/// Dock and app-switcher icon while it runs, in place of the bundle's. Call it from any thread,
-/// before `run` or after: before, Rune sets it once the app finishes launching; a later call
-/// replaces it. A headless run sets nothing. Fails when the bytes aren't an image. Does nothing
-/// elsewhere. (`AppHandle::set_dock_icon` shows or hides the Dock icon instead.)
+/// The app's icon while it runs, in place of the bundle's or executable's. Call it from any
+/// thread. A headless run sets nothing. Fails when the bytes aren't an image.
+///
+/// - **macOS:** `bytes` is an `.icns`, PNG, TIFF or anything else `NSImage` reads, shown as the
+///   Dock and app-switcher icon. Before `run`, Rune sets it once the app finishes launching; a
+///   later call replaces it. (`AppHandle::set_dock_icon` shows or hides the Dock icon instead.)
+/// - **Windows:** `bytes` is a PNG or JPEG, best square and 256 px or more. Each window opened
+///   after the call shows it in its title bar, on the taskbar and in Alt+Tab, so call it before
+///   `run`.
+/// - Does nothing elsewhere.
 pub fn set_app_icon(bytes: impl Into<Vec<u8>>) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -25,9 +31,43 @@ pub fn set_app_icon(bytes: impl Into<Vec<u8>>) -> Result<(), String> {
         *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = Some(bytes);
         if LAUNCHED.load(Ordering::Acquire) { crate::platform::main_queue::on_main(apply); }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let image = image::load_from_memory(&bytes.into()).map_err(|e| format!("set_app_icon: {e}"))?.into_rgba8();
+        let size = |px: u32| image::imageops::resize(&image, px, px, image::imageops::FilterType::Lanczos3).into_raw();
+        *WINDOWS.lock().unwrap_or_else(|e| e.into_inner()) = Some(WindowsIcon { small: size(SMALL), big: size(BIG) });
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = bytes;
     Ok(())
+}
+
+/// Windows: the icon's pixels at the two sizes a window shows, so each new window makes its own
+/// `HICON`s. The small one draws in the title bar and the taskbar's small mode; the big one on
+/// the taskbar and in Alt+Tab, where Windows scales it to the display's DPI.
+#[cfg(target_os = "windows")]
+struct WindowsIcon {
+    small: Vec<u8>,
+    big: Vec<u8>,
+}
+
+#[cfg(target_os = "windows")]
+static WINDOWS: Mutex<Option<WindowsIcon>> = Mutex::new(None);
+#[cfg(target_os = "windows")]
+const SMALL: u32 = 32;
+#[cfg(target_os = "windows")]
+const BIG: u32 = 256;
+
+/// Windows: `attrs` with the app's icon, once `set_app_icon` has one.
+#[cfg(target_os = "windows")]
+pub(crate) fn with_icon(attrs: winit::window::WindowAttributes) -> winit::window::WindowAttributes {
+    use winit::platform::windows::WindowAttributesExtWindows;
+    use winit::window::Icon;
+    let icon = WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(icon) = icon.as_ref() else { return attrs };
+    let small = Icon::from_rgba(icon.small.clone(), SMALL, SMALL).ok();
+    let big = Icon::from_rgba(icon.big.clone(), BIG, BIG).ok();
+    attrs.with_window_icon(small).with_taskbar_icon(big)
 }
 
 /// The event loop exists: sets an icon asked for before `run` once the main queue drains, which

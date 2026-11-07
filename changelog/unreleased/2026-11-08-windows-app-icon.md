@@ -1,0 +1,1 @@
+- **`set_app_icon` sets the window and taskbar icon on Windows.** It takes a PNG or JPEG (best square and 256 px or more), and each window opened after the call shows it in its title bar, on the taskbar and in Alt+Tab, where Windows showed the generic executable icon. Call it before `run`. A file that isn't an image now fails on Windows as it does on macOS.
