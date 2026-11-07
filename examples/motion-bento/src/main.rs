@@ -3,6 +3,7 @@
 //! can be watched and measured side by side. See README.md.
 
 mod dock;
+mod stress;
 mod style;
 #[cfg(test)]
 mod tests;
@@ -13,7 +14,9 @@ use std::cell::RefCell;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use motion_bento_chaos::hud::{Readout, Replay};
 use motion_bento_chaos::look::{Springs, color, grid};
+use motion_bento_chaos::stress::Wall;
 use motion_bento_chaos::model::SCENES;
 use motion_bento_chaos::schedule::START;
 use motion_bento_chaos::{Action, Config, Meter, Model, Player, script_json};
@@ -28,7 +31,7 @@ thread_local! {
     static METER: RefCell<Option<Meter>> = const { RefCell::new(None) };
 }
 
-fn config() -> &'static Config {
+pub fn config() -> &'static Config {
     CONFIG.get_or_init(Config::default)
 }
 
@@ -46,6 +49,11 @@ pub struct State {
     begun: bool,
     ended: bool,
     written: bool,
+    /// Stress mode's wall, its show time, and the HUD's source and numbers.
+    wall: Option<Wall>,
+    t: f64,
+    replay: Option<Replay>,
+    readout: Option<Readout>,
 }
 
 impl State {
@@ -60,13 +68,17 @@ impl State {
             m,
             springs: Springs::variant(&cfg.variant),
             k,
-            player: (!scripted).then(|| Player::new(cfg)),
+            player: (!scripted && cfg.load.is_none()).then(|| Player::new(cfg)),
             hud: cfg.hud,
             hud_lines: Default::default(),
             hud_at: f64::NEG_INFINITY,
             begun: false,
             ended: false,
             written: false,
+            wall: cfg.load.as_ref().map(|_| Wall::new(cfg.seed)),
+            t: 0.0,
+            replay: cfg.hud_from.as_ref().map(|p| Replay::load(p).unwrap_or_else(|e| panic!("--hud-from: {e}"))),
+            readout: None,
         }
     }
 
@@ -80,13 +92,19 @@ impl State {
             return;
         }
         self.written = true;
-        let Some(path) = &config().metrics else { return };
         METER.with(|m| {
-            if let Some(m) = m.borrow_mut().as_mut() {
-                m.end();
-                if let Err(e) = m.write(path) {
-                    eprintln!("motion-bento: writing {}: {e}", path.display());
-                }
+            let mut m = m.borrow_mut();
+            let Some(m) = m.as_mut() else { return };
+            m.end();
+            if let Some(path) = &config().frames
+                && let Err(e) = std::fs::write(path, m.frames_csv())
+            {
+                eprintln!("motion-bento: writing {}: {e}", path.display());
+            }
+            if let Some(path) = &config().metrics
+                && let Err(e) = m.write(path)
+            {
+                eprintln!("motion-bento: writing {}: {e}", path.display());
             }
         });
     }
@@ -104,6 +122,20 @@ fn poll(s: &mut State, t: f64, tx: &mut Tx) -> bool {
             s.act(a);
             changed = true;
         }
+    }
+    if let (Some(wall), Some(load)) = (&mut s.wall, &cfg.load) {
+        let n = load.at(t);
+        wall.update(t, n);
+        s.t = t;
+        METER.with(|m| m.borrow_mut().as_mut().map(|m| m.tag(t, n)));
+        if s.hud {
+            s.readout = match &s.replay {
+                Some(r) => Some(Readout::replay(r, t)),
+                None => METER.with(|m| m.borrow().as_ref().map(Readout::live)),
+            };
+        }
+        tx.wake_after(Duration::ZERO);
+        changed = true;
     }
     if !s.begun && t >= START {
         s.begun = true;
@@ -126,7 +158,7 @@ fn poll(s: &mut State, t: f64, tx: &mut Tx) -> bool {
     if headless && t >= cfg.duration + 1.0 {
         s.write_metrics();
     }
-    if s.hud && !headless && t - s.hud_at >= 0.25 {
+    if s.hud && s.wall.is_none() && !headless && t - s.hud_at >= 0.25 {
         s.hud_at = t;
         if let Some(lines) = METER.with(|m| m.borrow().as_ref().map(Meter::hud)) {
             changed |= lines != s.hud_lines;
@@ -141,6 +173,7 @@ fn on_key(s: &mut State, e: &KeyEvent, _tx: &mut Tx) -> bool {
     match &e.key {
         Key::Text(t) if t.eq_ignore_ascii_case("h") => {
             s.hud = !s.hud;
+            s.readout = None;
             s.hud_at = f64::NEG_INFINITY;
             true
         }
@@ -205,6 +238,9 @@ fn hud(s: &State) -> El {
 }
 
 fn view(s: &State, _: &mut Cx<State>) -> El {
+    if let Some(wall) = &s.wall {
+        return stress::view(s, wall);
+    }
     let k = &s.k;
     let mut root = col()
         .w(grid::WIDTH)

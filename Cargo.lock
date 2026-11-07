@@ -2088,6 +2088,7 @@ dependencies = [
 name = "motion-bento-chaos"
 version = "0.0.1"
 dependencies = [
+ "libc",
  "procwatch",
 ]
 
