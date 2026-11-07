@@ -1,7 +1,8 @@
 //! The frame meter both builds feed, one call per drawn frame, so their numbers mean the same.
 //!
-//! It keeps each frame's start time and its CPU work (whatever span the build can time: see each
-//! build's README). From those it derives frame-start intervals, missed frames (an interval over
+//! It keeps each frame's start time, its CPU work (whatever span the build can time: see each
+//! build's README) and, where a build can split it out, the part that builds the frame: view,
+//! layout and paint, without the GPU encode. From those it derives frame-start intervals, missed frames (an interval over
 //! 1.5 refresh periods) and percentiles, and it samples the process's CPU time and memory from
 //! procwatch.
 
@@ -12,6 +13,8 @@ struct Frame {
     /// Seconds since the meter started.
     start: f64,
     work_ms: f32,
+    /// NaN when the build can't split it out.
+    build_ms: f32,
 }
 
 /// An interval longer than this is the window resting, not a slow frame.
@@ -39,6 +42,8 @@ pub struct Summary {
     pub fps: f64,
     pub interval_ms: [f64; 4],
     pub work_ms: [f64; 4],
+    /// View, layout and paint only; `None` when no frame reported it.
+    pub build_ms: Option<[f64; 4]>,
     /// Intervals over 1.5 refresh periods.
     pub late: usize,
     /// Refreshes those late intervals skipped.
@@ -128,8 +133,17 @@ impl Meter {
 
     /// One drawn frame that started at `start` and took `work_ms` of CPU.
     pub fn frame(&mut self, start: Instant, work_ms: f64) {
+        self.push(start, work_ms, f32::NAN);
+    }
+
+    /// One drawn frame whose `work_ms` includes `build_ms` of view, layout and paint.
+    pub fn frame_with_build(&mut self, start: Instant, work_ms: f64, build_ms: f64) {
+        self.push(start, work_ms, build_ms as f32);
+    }
+
+    fn push(&mut self, start: Instant, work_ms: f64, build_ms: f32) {
         let s = self.seconds_at(start);
-        self.frames.push(Frame { start: s, work_ms: work_ms as f32 });
+        self.frames.push(Frame { start: s, work_ms: work_ms as f32, build_ms });
         if s - self.footprint_at >= 0.5 {
             self.sample_memory(s);
         }
@@ -167,12 +181,14 @@ impl Meter {
             }
         }
         let mb = |b: u64| b as f64 / 1_048_576.0;
+        let builds: Vec<f64> = frames.iter().filter(|f| !f.build_ms.is_nan()).map(|f| f.build_ms as f64).collect();
         Summary {
             frames: frames.len(),
             seconds,
             fps: if seconds > 0.0 { frames.len() as f64 / seconds } else { 0.0 },
             interval_ms: spread(intervals),
             work_ms: spread(frames.iter().map(|f| f.work_ms as f64).collect()),
+            build_ms: (!builds.is_empty()).then(|| spread(builds)),
             late,
             dropped,
             idle_gaps,
@@ -227,6 +243,9 @@ impl Meter {
         out.push_str(&format!("  \"fps\": {:.2},\n", s.fps));
         out.push_str(&format!("  \"interval_ms\": {},\n", arr(s.interval_ms)));
         out.push_str(&format!("  \"work_ms\": {},\n", arr(s.work_ms)));
+        if let Some(b) = s.build_ms {
+            out.push_str(&format!("  \"build_ms\": {},\n", arr(b)));
+        }
         out.push_str(&format!("  \"late_intervals\": {},\n", s.late));
         out.push_str(&format!("  \"dropped_frames\": {},\n", s.dropped));
         out.push_str(&format!("  \"idle_gaps\": {},\n", s.idle_gaps));
@@ -261,7 +280,7 @@ mod tests {
         for i in 0..240 {
             // Every 60th frame takes three refreshes.
             at += if i % 60 == 59 { period * 3 } else { period };
-            m.frame(at, 2.0);
+            m.frame_with_build(at, 2.0, 1.5);
         }
         // A rest is not a miss.
         m.frame(at + Duration::from_millis(400), 2.0);
@@ -270,6 +289,7 @@ mod tests {
         assert_eq!(s.dropped, 8);
         assert_eq!(s.idle_gaps, 1);
         assert!((s.interval_ms[0] - 1000.0 / 120.0).abs() < 0.01);
+        assert_eq!(s.build_ms.map(|b| b[0]), Some(1.5));
         assert!(m.json().contains("\"dropped_frames\""));
     }
 }
