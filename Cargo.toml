@@ -45,6 +45,8 @@ members = [
     "examples/glass-panel",
     "examples/frosted-bar",
     "examples/odometer",
+    "examples/motion-bento",
+    "examples/motion-bento/chaos",
     "examples/site-scenes",
 ]
 exclude = ["tools/rune-dev-guard"]
