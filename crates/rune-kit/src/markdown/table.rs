@@ -257,6 +257,14 @@ impl Renderer {
             (None, Some(outline)) => (Some(outline), None, 0.5),
             (None, None) => (None, None, 0.0),
         };
+        // A frame's ring is `box-shadow: inset 0 0 0 0.5px`, which keeps its fractional width;
+        // an outline is a border, which snaps to whole device pixels.
+        let framed = s.table_frame.is_some();
+        let ringed = |e: El, c: Color| if framed {
+            e.box_shadow(rune::Shadow { spread: 0.5, color: c, inset: true, ..rune::Shadow::default() })
+        } else {
+            e.border(0.5, c)
+        };
         // Sized exactly in the known text width, the rows scroll inside a frame that stays put,
         // as a web page's `overflow-x: auto` wrapper keeps its fill and ring while the table
         // inside it scrolls.
@@ -289,8 +297,8 @@ impl Renderer {
             // the card clip their own overflow instead.
             if let Some(ring) = ring {
                 match fixed {
-                    Some(_) => decor = decor.radius(6.0).border(0.5, ring),
-                    None => frame = frame.radius(6.0).border(0.5, ring),
+                    Some(_) => decor = ringed(decor.radius(6.0), ring),
+                    None => frame = ringed(frame.radius(6.0), ring),
                 }
             }
             // The header's overflow stops at the frame's rounded top corners.
@@ -314,8 +322,8 @@ impl Renderer {
             }
         } else {
             match (ring, fixed.is_some()) {
-                (Some(ring), true) => decor = decor.radius(6.0).border(0.5, ring),
-                (Some(ring), false) => frame = frame.radius(6.0).border(0.5, ring).clip_rounded(6.0),
+                (Some(ring), true) => decor = ringed(decor.radius(6.0), ring),
+                (Some(ring), false) => frame = ringed(frame.radius(6.0), ring).clip_rounded(6.0),
                 (None, true) => {}
                 (None, false) => frame = frame.clip_soft(0.0),
             }

@@ -442,6 +442,18 @@ pub(super) fn snap(r: [f32; 4], motion: [f32; 4], rigid: [f32; 2], parent: Optio
     (out, rest)
 }
 
+/// A border's or outline's width, or an outline's offset, `w` device px, snapped as Chromium
+/// snaps CSS border and outline widths: under a pixel it draws one whole pixel, above that it
+/// floors to whole pixels. So 0.5 pt is one crisp pixel at 1×, 1.25× and 1.5×, and 1 pt is one
+/// pixel at 1.25× and 1.5×. Zero stays zero; the sign stays.
+pub(super) fn line_width(w: f32) -> f32 {
+    if w == 0.0 || !w.is_finite() {
+        return w;
+    }
+    // Scene values sit on a 1/64 px grid, so 2.99 px is 3.
+    (w.abs() + 1.0 / 64.0).floor().max(1.0).copysign(w)
+}
+
 /// Whether a box paints something its children's gaps show against. Elsewhere centring would
 /// cost a pixel of size for nothing.
 pub(super) fn frames(v: &crate::el::Visual) -> bool {

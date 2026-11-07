@@ -43,7 +43,8 @@ struct Skin {
     fill: Color,
     sheen: Option<[Color; 2]>,
     shadows: Vec<rune::Shadow>,
-    border: Option<(f32, Color)>,
+    /// An `inset 0 0 0 w` box-shadow ring, which keeps its fractional width.
+    ring: Option<(f32, Color)>,
     hover: Color,
     pressed: Color,
     ink: Color,
@@ -58,7 +59,7 @@ fn skin(k: &Kit, v: ButtonVariant) -> Skin {
         fill: c.bg_button_neutral,
         sheen: None,
         shadows: e.button_neutral.clone(),
-        border: None,
+        ring: None,
         hover: c.hover,
         pressed: c.pressed,
         ink,
@@ -69,7 +70,7 @@ fn skin(k: &Kit, v: ButtonVariant) -> Skin {
         fill: Color::TRANSPARENT,
         sheen: None,
         shadows: Vec::new(),
-        border: None,
+        ring: None,
         hover: c.hover,
         pressed: c.pressed,
         ink,
@@ -80,12 +81,12 @@ fn skin(k: &Kit, v: ButtonVariant) -> Skin {
         ButtonVariant::Neutral => neutral(c.text_base),
         ButtonVariant::Danger => neutral(c.danger.fg),
         ButtonVariant::Warning => neutral(c.warning.fg),
-        ButtonVariant::Outline => Skin { border: Some((1.0, c.border_muted)), ..ghost(c.text_base, c.text_base) },
+        ButtonVariant::Outline => Skin { ring: Some((1.0, c.border_muted)), ..ghost(c.text_base, c.text_base) },
         ButtonVariant::Contrast => Skin {
             fill: c.bg_contrast,
             sheen: Some([k.light_on(0.2, c.bg_contrast), k.light(0.0)]),
             shadows: e.button_contrast.clone(),
-            border: None,
+            ring: None,
             hover: k.on(c.contrast_hover, c.bg_contrast),
             pressed: k.on(c.contrast_pressed, c.bg_contrast),
             ink: c.text_contrast,
@@ -96,7 +97,7 @@ fn skin(k: &Kit, v: ButtonVariant) -> Skin {
             fill: c.bg_icon_button_contrast,
             sheen: Some([k.on(c.submit_highlight, c.bg_icon_button_contrast), k.light(0.0)]),
             shadows: e.button_contrast.clone(),
-            border: None,
+            ring: None,
             hover: k.on(c.submit_hover, c.bg_icon_button_contrast),
             pressed: k.on(c.contrast_pressed, c.bg_icon_button_contrast),
             ink: c.submit_fg,
@@ -110,7 +111,7 @@ fn skin(k: &Kit, v: ButtonVariant) -> Skin {
             fill: c.layer_02,
             sheen: None,
             shadows: Vec::new(),
-            border: Some((0.5, c.border_muted)),
+            ring: Some((0.5, c.border_muted)),
             hover: Color::TRANSPARENT,
             pressed: Color::TRANSPARENT,
             ink: c.text_base,
@@ -132,8 +133,8 @@ fn paint(k: &Kit, mut e: El, s: Skin, state: State, interactive: bool) -> El {
     if let Some([top, bottom]) = s.sheen {
         e = e.gradient(top, bottom);
     }
-    if let Some((w, c)) = s.border {
-        e = e.border(w, c);
+    if let Some((w, c)) = s.ring {
+        e = e.box_shadow(rune::Shadow { spread: w, color: c, inset: true, ..rune::Shadow::default() });
     }
     if state == State::Rest && interactive {
         e = e.hover(s.hover).press(press_over(s.hover, s.pressed));

@@ -29,7 +29,10 @@ impl El {
     /// A ring `width` points wide just inside the border box, following the corner radii. It
     /// takes no layout space and replaces the fill under it rather than drawing over it, so a
     /// translucent ring shows what's behind the element. For a stroke over the fill (SwiftUI's
-    /// `strokeBorder`), put the border on an unfilled child the same size.
+    /// `strokeBorder`), put the border on an unfilled child the same size. The width snaps to
+    /// device pixels as a CSS border's does: under one pixel it draws one, above that it floors
+    /// to whole pixels. For a ring at its exact fractional width, as CSS `box-shadow: inset 0 0
+    /// 0 0.5px` draws, use an inset [`Self::box_shadow`] with that spread.
     pub fn border(mut self, width: f32, c: Color) -> Self {
         self.vis.border_width = width;
         self.vis.border = c;
@@ -163,7 +166,8 @@ impl El {
         cold.pixels_fit = Some(fit);
         self
     }
-    /// A ring `offset` points outside the border box (CSS `outline` + `outline-offset`).
+    /// A ring `offset` points outside the border box (CSS `outline` + `outline-offset`). Width
+    /// and offset snap to device pixels as [`Self::border`]'s width does.
     pub fn outline(mut self, width: f32, offset: f32, color: Color) -> Self {
         self.vis.cold_mut().outline = Some(Outline { width, offset, color });
         self

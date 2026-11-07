@@ -862,7 +862,7 @@ impl<S: 'static> Runtime<S> {
                 };
                 let layered = n.vis.gradient.is_some() || n.vis.radial.is_some() || n.vis.surface.is_some();
                 let fill = if layered { base } else { over(overlay, base) }.map(|c| c * o);
-                let bw = n.vis.border_width * sc * s;
+                let bw = pixel_snap::line_width(n.vis.border_width * s) * sc;
                 let border = if bw > 0.0 { premul(self.color(n.id, P_BORDER, n.vis.border), o, srgb) } else { [0.0; 4] };
                 // A gradient border draws as KIND_GRADIENT with a width: `border` top, `uv` bottom.
                 // After a switch back to `border`, it stays a gradient until both stops meet.
@@ -1063,14 +1063,15 @@ impl<S: 'static> Runtime<S> {
                     else { self.focus_ring_visible(i).then_some(n.focus.ring).flatten() };
                 if let Some(ol) = focus_ring.or(n.vis.outline) {
                     let c = if focus_ring.is_some() { ol.color } else { self.color(n.id, P_OUTLINE, ol.color) };
-                    let g = (ol.offset + ol.width) * k_px;
+                    let ow = pixel_snap::line_width(ol.width * s) * sc;
+                    let g = pixel_snap::line_width(ol.offset * s) * sc + ow;
                     if c.a > 0.0 && ol.width > 0.0 {
                         self.instances.push(Instance {
                             rect: [r[0] - g, r[1] - g, w + 2.0 * g, h + 2.0 * g],
                             radii: radii.map(|v| if v != 0.0 { v + g.copysign(v) } else { 0.0 }),
                             fill: [0.0; 4],
                             border: premul(c, o, srgb),
-                            params: [ol.width * k_px, KIND_RECT, 0.0, 1.0],
+                            params: [ow, KIND_RECT, 0.0, 1.0],
                             uv: [0.0; 4],
                             clip,
                             fade: crate::render::pack_fade(fade, clip, clip),
