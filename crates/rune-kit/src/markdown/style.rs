@@ -60,6 +60,12 @@ pub struct MarkdownStyle {
     pub(super) table_full_width: bool,
     /// Space above and below a table (collapsed with its neighbours' like CSS margins).
     pub(super) table_margin: [f32; 2],
+    /// A wide table's scroll bar thumb, at rest and under the pointer (`None`: no bar).
+    pub(super) table_bar: Option<[Color; 2]>,
+    /// The text column's width, when the app knows it (see [`MarkdownStyle::text_width`]).
+    pub(super) text_width: Option<f32>,
+    /// How far a wide code block's sides fade while it scrolls sideways.
+    pub(super) wide_fade: f32,
     pub(super) diff_add: Color,
     pub(super) diff_remove: Color,
     pub(super) diff_add_text: Color,
@@ -199,6 +205,9 @@ impl MarkdownStyle {
             table_head_pad: None,
             table_full_width: false,
             table_margin: [12.0, 16.0],
+            table_bar: None,
+            text_width: None,
+            wide_fade: 12.0,
             diff_add: tint(c.layer_01, c.success.icon, if k.dark { 0.11 } else { 0.14 }),
             diff_remove: tint(c.layer_01, c.danger.icon, if k.dark { 0.11 } else { 0.14 }),
             diff_add_text: c.text_base,
@@ -389,6 +398,21 @@ impl MarkdownStyle {
         self.strong_weight = w;
         self
     }
+    /// The width of the column the document lays out in, when the app knows it. With
+    /// [`Markdown::scroll_wide`], tables then size their columns as a browser's automatic table
+    /// layout does: in proportion to their content when it fits, between their narrowest and
+    /// widest when it nearly does, and at their narrowest (each column's longest word), scrolling
+    /// sideways, when even that is wider than the text. Lists and quotes take their indent off it.
+    pub fn text_width(mut self, points: f32) -> Self {
+        self.text_width = (points.is_finite() && points > 0.0).then_some(points);
+        self
+    }
+    /// How far the sides of a code block that scrolls sideways ([`Markdown::scroll_wide`]) fade
+    /// out, in points: 12 by default, 0 for a hard edge as a web page's `overflow: auto` clips.
+    pub fn wide_fade(mut self, points: f32) -> Self {
+        self.wide_fade = if points.is_finite() { points.max(0.0) } else { 0.0 };
+        self
+    }
     /// The tints behind a diff's added and removed lines (full width).
     pub fn diff(mut self, added: Color, removed: Color) -> Self {
         self.diff_add = added;
@@ -568,6 +592,9 @@ impl std::hash::Hash for MarkdownStyle {
             table_head_pad,
             table_full_width,
             table_margin,
+            table_bar,
+            text_width,
+            wide_fade,
             diff_add,
             diff_remove,
             diff_add_text,
@@ -595,6 +622,7 @@ impl std::hash::Hash for MarkdownStyle {
         (table_outline, table_rule, table_head_fill, table_head_text, table_head_rule, table_head_weight.map(f32_bits), table_tabular, table_font).hash(state);
         ([f32_bits(table_pad[0]), f32_bits(table_pad[1])], table_flush_left, table_head_pad.map(|p| p.map(f32_bits)), table_full_width, table_margin.map(f32_bits)).hash(state);
         table_frame.map(|TableFrame { fill, ring, pad }| (fill, ring, f32_bits(pad))).hash(state);
+        (table_bar, text_width.map(f32_bits), f32_bits(wide_fade)).hash(state);
         match table_body {
             None => 0u8.hash(state),
             Some(TableBody { fill, radius, shadows }) => {

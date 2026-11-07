@@ -12,11 +12,30 @@ fn pts(x: f32) -> f32 {
     if x.is_finite() { x.max(0.0) } else { 0.0 }
 }
 
-/// Per column: the content's width on one line and its longest word (capped), padding included.
+/// Per column: the content's width on one line and its longest word (capped, then whole),
+/// padding included.
 #[derive(Debug)]
 struct Columns {
     natural: Vec<f32>,
     min: Vec<f32>,
+    fit: Vec<f32>,
+}
+
+/// A browser's automatic table layout (`table-layout: auto`) in `avail` points: columns in
+/// proportion to their widest content when it all fits (`full`, a `width: 100%` table) or at
+/// it (an auto-width one); between their narrowest and widest, by how much each can give, when
+/// only the narrowest fits; and at their narrowest otherwise, overflowing.
+fn auto_layout(natural: &[f32], fit: &[f32], avail: f32, full: bool) -> Vec<f32> {
+    let (widest, narrowest): (f32, f32) = (natural.iter().sum(), fit.iter().sum());
+    if widest <= avail {
+        let k = if full && widest > 0.0 { avail / widest } else { 1.0 };
+        return natural.iter().map(|w| w * k).collect();
+    }
+    if narrowest >= avail || widest <= narrowest {
+        return fit.to_vec();
+    }
+    let k = (avail - narrowest) / (widest - narrowest);
+    natural.iter().zip(fit).map(|(w, f)| f + (w - f).max(0.0) * k).collect()
 }
 
 thread_local! {
@@ -174,6 +193,14 @@ impl MarkdownStyle {
         self.table_margin = [pts(top), pts(bottom)];
         self
     }
+    /// A table that scrolls sideways ([`Markdown::scroll_wide`] with [`Self::text_width`]) gets a
+    /// scroll bar in an 8 point strip under its rows: `@opencode/ui`'s `scrollbar.css` thumb
+    /// ([`ScrollBarStyle::native`](crate::ScrollBarStyle::native)), `thumb` while the pointer is
+    /// over the table and `thumb_hover` while it's over the thumb. None by default.
+    pub fn table_scroll_bar(mut self, thumb: Color, thumb_hover: Color) -> Self {
+        self.table_bar = Some([thumb, thumb_hover]);
+        self
+    }
     /// A data table on a card, from the kit's tokens: the body rows on a raised `bg_base` card
     /// inset 2 points in a `layer_01` frame that also holds the faint, medium-weight header;
     /// 13-point cells at weight 440 with tabular figures, padded 12 by 10 (the header 12 by 8),
@@ -230,24 +257,41 @@ impl Renderer {
             (None, Some(outline)) => (Some(outline), None, 0.5),
             (None, None) => (None, None, 0.0),
         };
-        let mut frame = col().role("table").w_full().padding(inset);
+        // Sized exactly in the known text width, the rows scroll inside a frame that stays put,
+        // as a web page's `overflow-x: auto` wrapper keeps its fill and ring while the table
+        // inside it scrolls.
+        let fixed = s.text_width.filter(|_| self.scroll_wide).map(|w| {
+            let avail = (w - self.flow.get().inset - 2.0 * inset).max(0.0);
+            let widths = auto_layout(&cols.natural, &cols.fit, avail, s.table_full_width);
+            let over = widths.iter().sum::<f32>() > avail + 0.5;
+            (widths, over)
+        });
+        let mut frame = col().role(if fixed.is_some() { "" } else { "table" }).w_full().padding(inset);
+        let mut decor = col().role("table").w_full();
         if !s.table_full_width {
             frame = frame.max_w(total + 2.0 * inset);
         }
         if let Some(fill) = fill {
-            frame = frame.radius(6.0).fill(fill);
+            match fixed {
+                Some(_) => decor = decor.radius(6.0).fill(fill),
+                None => frame = frame.radius(6.0).fill(fill),
+            }
         }
-        let head = self.table_row(&t.head, head_maps, t, &cols, self.head_font(), s.table_head_text, self.head_pad(), "columnheader").key("th");
+        let widths = fixed.as_ref().map(|(w, _)| w.as_slice());
+        let head = self.table_row(&t.head, head_maps, t, &cols, widths, self.head_font(), s.table_head_text, self.head_pad(), "columnheader").key("th");
         let rule = |key: String| el().key(key).w_full().h(0.5).fill(s.table_rule).a11y_hidden();
         let row_at = |i: usize, cells: &[Inline]| {
             let rmap = row_maps.get(i).map_or(&[][..], Vec::as_slice);
-            self.table_row(cells, rmap, t, &cols, self.body_font(), s.text, s.table_pad, "cell").key(format!("r{i}"))
+            self.table_row(cells, rmap, t, &cols, widths, self.body_font(), s.text, s.table_pad, "cell").key(format!("r{i}"))
         };
         if let Some(body) = &s.table_body {
             // The frame doesn't clip, so the card's shadow shows past it; the header row and
             // the card clip their own overflow instead.
             if let Some(ring) = ring {
-                frame = frame.radius(6.0).border(0.5, ring);
+                match fixed {
+                    Some(_) => decor = decor.radius(6.0).border(0.5, ring),
+                    None => frame = frame.radius(6.0).border(0.5, ring),
+                }
             }
             // The header's overflow stops at the frame's rounded top corners.
             let head = if ring.is_some() || fill.is_some() {
@@ -269,10 +313,12 @@ impl Renderer {
                 frame = frame.child(body.shadows.iter().fold(card, |c, sh| c.box_shadow(*sh)).child(rows));
             }
         } else {
-            frame = match ring {
-                Some(ring) => frame.radius(6.0).border(0.5, ring).clip_rounded(6.0),
-                None => frame.clip_soft(0.0),
-            };
+            match (ring, fixed.is_some()) {
+                (Some(ring), true) => decor = decor.radius(6.0).border(0.5, ring),
+                (Some(ring), false) => frame = frame.radius(6.0).border(0.5, ring).clip_rounded(6.0),
+                (None, true) => {}
+                (None, false) => frame = frame.clip_soft(0.0),
+            }
             // The header's square fill would paint over the outline where it curves in at the
             // frame's corners, so it rounds by the radius left inside the inset.
             let head = head.fill(s.table_head_fill);
@@ -294,6 +340,10 @@ impl Renderer {
                 frame = frame.child(match s.table_head_rule { Some(c) if t.rows.is_empty() => end.fill(c), _ => end });
             }
         }
+        if let Some((widths, over)) = fixed {
+            let total: f32 = widths.iter().sum();
+            return self.wide_frame(decor, frame.w(total + 2.0 * inset), over);
+        }
         if self.scroll_wide {
             // Every column at its natural width, scrolling when the table is wider than the text.
             // Full width: the viewport makes `w_full` content its natural width, or its own if wider.
@@ -305,8 +355,18 @@ impl Renderer {
         frame
     }
 
+    /// `rows`, a table sized to the text width, scrolling sideways in `decor` when `over` it, with
+    /// the style's scroll bar in room under it, as a web page's `overflow-x: auto` wrapper
+    /// takes a classic scroll bar's height.
+    fn wide_frame(&self, decor: El, rows: El, over: bool) -> El {
+        let viewport = col().key("scroll").w_full().scroll_x().clip_rounded(6.0).child(rows);
+        let Some([thumb, hover]) = self.s.table_bar.filter(|_| over) else { return decor.child(viewport) };
+        let bar = crate::ScrollBarStyle::native(thumb, hover).horizontal();
+        decor.child(crate::ScrollBar::scroll_bar_styled(viewport, bar).pb(bar.strip()))
+    }
+
     #[allow(clippy::too_many_arguments)]
-    fn table_row(&self, cells: &[Inline], maps: &[SpanMap], t: &Table, cols: &Columns, font: TextStyle, color: Color, [pad_x, pad_y]: [f32; 2], cell_role: &'static str) -> El {
+    fn table_row(&self, cells: &[Inline], maps: &[SpanMap], t: &Table, cols: &Columns, widths: Option<&[f32]>, font: TextStyle, color: Color, [pad_x, pad_y]: [f32; 2], cell_role: &'static str) -> El {
         let empty = Inline::default();
         let total: f32 = cols.natural.iter().sum();
         let mut r = row().role("row").w_full();
@@ -325,10 +385,11 @@ impl Renderer {
             // a wider row widens columns in proportion and a narrower one shrinks them as
             // without it. A table that scrolls never shrinks a column below its content.
             let cell = col().key(format!("c{j}")).role(cell_role);
-            let cell = match (self.s.table_full_width && total > 0.0, self.scroll_wide) {
-                (false, _) => cell.w(*natural).shrink().min_w(*min),
-                (true, false) => cell.w_frac(natural / total).shrink().min_w(*min),
-                (true, true) => cell.w_frac(natural / total).shrink().min_w(*natural),
+            let cell = match (widths.and_then(|w| w.get(j)), self.s.table_full_width && total > 0.0, self.scroll_wide) {
+                (Some(w), ..) => cell.w(*w),
+                (None, false, _) => cell.w(*natural).shrink().min_w(*min),
+                (None, true, false) => cell.w_frac(natural / total).shrink().min_w(*min),
+                (None, true, true) => cell.w_frac(natural / total).shrink().min_w(*natural),
             };
             r = r.child(
                 // Clipped: a word wider than a shrunk column (or a row still streaming in) must
@@ -377,7 +438,7 @@ impl Renderer {
         // Each line's widest cell per column, the header's apart from the body's: their
         // padding can differ.
         let widths = |lines: &mut dyn Iterator<Item = &Vec<Inline>>, font: TextStyle| {
-            let (mut natural, mut min) = (vec![0.0f32; n], vec![0.0f32; n]);
+            let (mut natural, mut fit) = (vec![0.0f32; n], vec![0.0f32; n]);
             for cells in lines {
                 for (j, inl) in cells.iter().take(n).enumerate() {
                     if inl.text.is_empty() {
@@ -385,13 +446,14 @@ impl Renderer {
                     }
                     let spans = self.spans(inl, font.size);
                     natural[j] = natural[j].max(rune::text::measure(&inl.text, &spans, font, None).0);
-                    min[j] = min[j].max(rune::text::measure(&inl.text, &spans, font, Some(0.0)).0.min(cap));
+                    fit[j] = fit[j].max(rune::text::measure(&inl.text, &spans, font, Some(0.0)).0);
                 }
             }
-            (natural, min)
+            let min = fit.iter().map(|w| w.min(cap)).collect::<Vec<_>>();
+            (natural, min, fit)
         };
-        let (head_natural, head_min) = widths(&mut std::iter::once(&t.head), head);
-        let (body_natural, body_min) = widths(&mut rows.iter(), body);
+        let (head_natural, head_min, head_fit) = widths(&mut std::iter::once(&t.head), head);
+        let (body_natural, body_min, body_fit) = widths(&mut rows.iter(), body);
         let [head_x, body_x] = [self.head_pad()[0], self.s.table_pad[0]];
         let has_body = !rows.is_empty();
         let padded = |h: &[f32], b: &[f32]| -> Vec<f32> {
@@ -402,8 +464,8 @@ impl Renderer {
                 })
                 .collect()
         };
-        let cols = Rc::new(Columns { natural: padded(&head_natural, &body_natural), min: padded(&head_min, &body_min) });
-        WIDTHS.with_borrow_mut(|c| c.insert(key, cols.clone(), 8 * n + 64));
+        let cols = Rc::new(Columns { natural: padded(&head_natural, &body_natural), min: padded(&head_min, &body_min), fit: padded(&head_fit, &body_fit) });
+        WIDTHS.with_borrow_mut(|c| c.insert(key, cols.clone(), 12 * n + 64));
         cols
     }
 }
