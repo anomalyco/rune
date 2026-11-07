@@ -62,6 +62,8 @@ pub struct VisualCold {
     /// `El::hover_alone`: while the pointer is on this element, the hover tracks of the
     /// elements it sits inside stay off.
     pub hover_alone: bool,
+    /// `El::hover_group_shared`: the key of the elements whose hover this group shares.
+    pub(crate) hover_share: Option<Rc<str>>,
     /// `El::icon_rotation`: the icon's turn in radians, clockwise.
     pub(crate) icon_turn: f32,
     /// Optional app-supplied key mixed into the cached subtree's signature (`El::cache_key`).
@@ -114,6 +116,7 @@ impl Empty for VisualCold {
         group_opacity: None,
         group_color: None,
         hover_alone: false,
+        hover_share: None,
         icon_turn: 0.0,
         cache_key: None,
         offset_motion: None,

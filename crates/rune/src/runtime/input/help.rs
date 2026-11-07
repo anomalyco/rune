@@ -43,6 +43,8 @@ fn subtract(a: [f32; 4], b: [f32; 4]) -> Vec<[f32; 4]> {
 
 const PAD: [f32; 2] = [7.0, 4.0];
 const GAP: f32 = 6.0;
+/// The gap of a tooltip shown above its element (Kobalte's `gutter`).
+const ABOVE: f32 = 4.0;
 const MAX_W: f32 = 300.0;
 const MARGIN: f32 = 4.0;
 
@@ -187,12 +189,14 @@ impl<S: 'static> Runtime<S> {
         let e = self.drawn_box(i);
         let anchor = link.and_then(|k| self.link_boxes(i, e).into_iter().filter(|(j, _)| *j == k).map(|(_, r)| r)
             .reduce(|u, r| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
-        self.draw_tooltip(anchor.unwrap_or(e), text);
+        let above = link.is_none() && self.nodes[i].cold.get().is_some_and(|c| c.help_above);
+        self.draw_tooltip(anchor.unwrap_or(e), text, above);
     }
 
     /// Draws `text` in a tooltip under box `e` (window points, x0 y0 x1 y1; above it when
-    /// there's no room below), kept inside the window.
-    fn draw_tooltip(&mut self, e: [f32; 4], text: String) {
+    /// there's no room below), or `above` it 4 points clear (under it when there's no room
+    /// above), kept inside the window.
+    fn draw_tooltip(&mut self, e: [f32; 4], text: String, above: bool) {
         let s = self.env.scale;
         let dark = self.backdrop_dark().unwrap_or(self.env.system_dark);
         let grey = |v: f32| Color { r: v, g: v, b: v, a: 1.0 };
@@ -207,7 +211,11 @@ impl<S: 'static> Runtime<S> {
         let (w, h) = (tw + 2.0 * PAD[0], th + 2.0 * PAD[1]);
         let (vw, vh) = self.viewport;
         let mut y = e[3] + GAP;
-        if y + h > vh - MARGIN && e[1] - GAP - h >= MARGIN { y = e[1] - GAP - h; }
+        if above && e[1] - ABOVE - h >= MARGIN {
+            y = e[1] - ABOVE - h;
+        } else if y + h > vh - MARGIN && e[1] - GAP - h >= MARGIN {
+            y = e[1] - GAP - h;
+        }
         let x = ((e[0] + e[2] - w) * 0.5).clamp(MARGIN, (vw - w - MARGIN).max(MARGIN));
         let y = y.clamp(MARGIN, (vh - h - MARGIN).max(MARGIN));
         let r = [x * s, y * s, w * s, h * s].map(|v| v.round());
