@@ -108,6 +108,7 @@ pub use el::PillStyle;
 pub use el::PointerEvent;
 pub use el::PointerPress;
 pub use el::RadialRadius;
+pub use el::ScrollFade;
 pub use el::ScrollSpec;
 pub use el::Shadow;
 pub use el::Shell;

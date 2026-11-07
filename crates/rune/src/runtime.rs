@@ -507,6 +507,9 @@ pub struct Runtime<S: 'static> {
     /// bottom, then the node's own content box top and bottom (unscaled points), while
     /// `has_sticky`.
     sticky_frame: Vec<[f32; 8]>,
+    /// Sections whose rows fade under their stuck header this frame (`ScrollFade::below_sticky`),
+    /// with the paint clip top the header keeps.
+    sticky_bands: Vec<(usize, f32)>,
     /// `Tx::keep_on_screen` across the commit underway.
     keeps: Vec<sticky::Keep>,
     /// `Tx::scroll_into_view` requests that follow their target while growth/layout springs run.
@@ -906,6 +909,7 @@ impl<S: 'static> Runtime<S> {
             has_sticky: false,
             stuck: Vec::new(),
             sticky_frame: Vec::new(),
+            sticky_bands: Vec::new(),
             keeps: Vec::new(),
             scroll_reveals: Vec::new(),
             has_raise: false,
