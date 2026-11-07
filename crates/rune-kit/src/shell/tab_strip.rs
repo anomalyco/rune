@@ -5,7 +5,7 @@
 use std::borrow::Cow;
 use std::rc::Rc;
 
-use rune::{Color, El, Icon, ScrollSpec, Spring, Tx, col, row};
+use rune::{Color, El, Icon, ScrollFade, ScrollSpec, Spring, Tx, col, row};
 
 use crate::{Kit, Spinner};
 
@@ -41,10 +41,11 @@ pub enum TabDensity {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TabOverflow {
     /// Horizontal tabs share the strip equally, from `max_width` down to `min_width`, then the
-    /// strip scrolls sideways with `fade_width` feathers at its edges. Pinned tabs keep
-    /// `pinned_width`.
+    /// strip scrolls sideways with a `fade_width` linear fade at each edge while anything is
+    /// past it (Desktop's `titlebar-tabs-fade-*`). Pinned tabs keep `pinned_width`.
     ShrinkThenScroll { min_width: f32, max_width: f32, pinned_width: f32, fade_width: f32 },
-    /// Full-width rows that scroll with `fade_width` feathers at the top and bottom.
+    /// Full-width rows that scroll, the top and bottom feathering by as much as is left to scroll
+    /// past them, up to `fade_width` (Desktop's `--vertical-tabs-fade-*`).
     Scroll { fade_width: f32 },
 }
 
@@ -536,13 +537,13 @@ impl<'a, S: 'static> TabStrip<'a, S> {
                 .grow(1.0)
                 .min_h(0.0)
                 .scroll(ScrollSpec { stick_bottom: false })
-                .scroll_edge_fade(fade)
+                .scroll_fade(ScrollFade::feather(fade))
                 .scroll_margin(fade)
                 .child(list);
             col().key(self.key).w_full().grow(1.0).min_h(0.0).child(scroll).children(self.trailing)
         } else {
             let list = row().key(st.list_key.clone()).role("tablist").label(self.label).focus_group().gap(gap).center_y().children(tabs);
-            let scroll = row().key(st.scroll_key.clone()).h(st.row_height).shrink().min_w(0.0).scroll_x().scroll_edge_fade(fade).child(list);
+            let scroll = row().key(st.scroll_key.clone()).h(st.row_height).shrink().min_w(0.0).scroll_x().scroll_fade(ScrollFade::strength(fade).linear().full_at(0.1)).child(list);
             // It grows into the space it's given, so its width is what the tabs may share.
             row().key(self.key).grow(1.0).shrink().min_w(0.0).gap(gap).center_y().child(scroll).children(self.trailing)
         };
