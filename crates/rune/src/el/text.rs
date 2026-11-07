@@ -5,12 +5,21 @@ use super::*;
 
 impl El {
     /// Keeps this text's height its lines' own, unrounded (22.4 points for a line at a 22.4
-    /// line height), as a browser lays out a paragraph, instead of rounding it up to whole
-    /// device pixels: a stack of such texts lands where a web page's does rather than gaining up
-    /// to a pixel per text.
+    /// line height, 24.375 device pixels for a 19.5 point line at 1.25x), as a browser lays out
+    /// a paragraph: a stack of texts lands where a web page's does rather than gaining up to a
+    /// pixel per text. Every text does this unless it asks for [`El::rounded_lines`].
     pub fn exact_lines(mut self) -> Self {
         if let Some(t) = &mut self.text {
             t.exact_lines = true;
+        }
+        self
+    }
+    /// Rounds this text's height up to whole device pixels instead of keeping its lines' own
+    /// ([`El::exact_lines`]), as Rune laid out every text before: a box sized by one text keeps
+    /// its edges on the pixel grid at any scale.
+    pub fn rounded_lines(mut self) -> Self {
+        if let Some(t) = &mut self.text {
+            t.exact_lines = false;
         }
         self
     }

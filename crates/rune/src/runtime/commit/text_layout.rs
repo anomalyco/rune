@@ -342,7 +342,7 @@ pub(super) fn compute_layout(taffy: &mut LayoutEngine, root: SlotId, room: Size<
                 if let Some(w) = r.advance(*at, scale) {
                     return Size {
                         width: known.width.unwrap_or(w),
-                        height: known.height.unwrap_or(layout_height(&r.layout, spec.style, scale) / scale),
+                        height: known.height.unwrap_or(crate::text::spec_height(&r.layout, spec.style, scale, spec.exact_lines) / scale),
                     };
                 }
             }

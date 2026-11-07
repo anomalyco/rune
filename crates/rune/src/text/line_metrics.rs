@@ -12,7 +12,7 @@ pub fn layout_height(l: &Layout<Ink>, style: TextStyle, scale: f32) -> f32 {
 }
 
 /// [`layout_height`], or with `exact` the lines' own height kept fractional, to 1/64 px as a
-/// browser's layout units keep a 22.4 px line (`El::exact_lines`).
+/// browser's layout units keep a 22.4 px line (`El::exact_lines`, every text's default).
 pub(crate) fn spec_height(l: &Layout<Ink>, style: TextStyle, scale: f32, exact: bool) -> f32 {
     if !exact {
         return layout_height(l, style, scale);

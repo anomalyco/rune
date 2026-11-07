@@ -32,7 +32,7 @@ use crate::overlay::options::contains;
 use crate::flight::{TextFlight, transformed};
 use crate::render::{Instance, KIND_DASHED, KIND_EFFECT, KIND_GLYPH, KIND_GRADIENT, KIND_IMAGE, KIND_INSET, KIND_RADIAL, KIND_RECT, KIND_SEGMENT, KIND_SHADOW, KIND_TRIANGLE, NO_CLIP};
 use crate::shape::{LineCap, Op, Shape};
-use crate::text::{Deco, PaintedDeco, GlyphQuad, Ink, TextSystem, layout_height};
+use crate::text::{Deco, PaintedDeco, GlyphQuad, Ink, TextSystem};
 use crate::tok::motion;
 use event_log::log_event;
 

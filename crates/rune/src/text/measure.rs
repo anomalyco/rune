@@ -162,7 +162,8 @@ pub fn with_families(sans: &str, mono: &str) -> FamiliesGuard {
 
 /// The size in points of `text` (with `spans`, as [`crate::rich`] takes them) set in `style`,
 /// wrapped at `max_width` points when given, as the runtime will lay it out. Widths round up
-/// to whole points. `max_width: Some(0.0)` gives the widest unbreakable run (CSS min-content).
+/// to whole points; heights are the lines' own, as a text lays out unless it asks for
+/// [`El::rounded_lines`](crate::El::rounded_lines). `max_width: Some(0.0)` gives the widest unbreakable run (CSS min-content).
 ///
 /// The first call on a thread loads the fonts (a few milliseconds); later calls cost a hash
 /// lookup when the same text was measured recently, or one shaping pass when not.
@@ -184,7 +185,7 @@ pub fn measure_with(
         let l = t.layout_rich_with(text, spans, style, 1.0, max_width, options);
         // Spaces hanging past a wrapped line's end take no room, as the runtime measures them.
         let w = if max_width.is_some() { l.width() } else { l.full_width() };
-        (w.ceil(), super::layout_height(&l, style, 1.0))
+        (w.ceil(), super::line_metrics::spec_height(&l, style, 1.0, true))
     })
 }
 
