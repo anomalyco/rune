@@ -1,0 +1,1 @@
+- **A one-line field's placeholder stays on one line.** A placeholder wider than its `single_line` field ran onto a second line below the field; it now stays on the field's line, cut at the field's edge as typed text is, while a multi-line field's still wraps.
