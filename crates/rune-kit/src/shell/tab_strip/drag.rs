@@ -1,7 +1,8 @@
 //! A tab strip's pointer gestures as one explicit state machine, kept in the app's state:
 //! `Idle → Pressed → Dragging(Reorder | TearOut) → Dropping → Idle`.
 
-/// Points the pointer travels along the strip before a press becomes a reorder.
+/// Points the pointer travels before a press becomes a reorder (a finger's 8 points are the
+/// runtime's touch slop, which holds its moves back until then, as dnd-kit's touch constraint).
 const SLOP: f32 = 4.0;
 
 /// The gestures of one [`TabStrip`](super::TabStrip), owned by the app (`TabDragState::default()`)
@@ -25,6 +26,9 @@ pub struct TabDragState {
     rect: Option<[f32; 4]>,
     /// The torn-out tab shows in a window of its own now ([TabDragState::hand_off]).
     handed_off: bool,
+    /// How far the strip had scrolled along itself when the press landed, so a drag that
+    /// scrolls it keeps the tab under the pointer.
+    scrolled: f32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -154,11 +158,23 @@ impl TabDragState {
         self.grab
     }
 
-    pub(super) fn press(&mut self, lane: &Lane, grab: [f32; 2]) {
+    /// The press landed at `grab` in the tab, with the strip scrolled `scrolled` along itself.
+    pub(super) fn press(&mut self, lane: &Lane, grab: [f32; 2], scrolled: f32) {
         self.phase = TabDragPhase::Pressed { index: lane.index, pinned: lane.pinned, tab_pitch: lane.pitch };
         self.suppress_click = false;
         self.lift_pitch = lane.pitch;
         self.grab = grab;
+        self.scrolled = scrolled;
+    }
+
+    /// How much further the strip has scrolled since the press, at `scrolled` now.
+    pub(super) fn scrolled_since(&self, scrolled: f32) -> f32 {
+        scrolled - self.scrolled
+    }
+
+    /// Whether a tab is being dragged along the strip.
+    pub(super) fn reordering(&self) -> bool {
+        matches!(self.phase, TabDragPhase::Dragging(TabDragMode::Reorder { .. }))
     }
 
     /// The pointer moved `along` and `across` the strip since the press (points), `offset` in
@@ -179,7 +195,8 @@ impl TabDragState {
             return true;
         }
         let reordering = torn || matches!(self.phase, TabDragPhase::Dragging(TabDragMode::Reorder { .. }));
-        if !reordering && along.abs() < SLOP {
+        // dnd-kit's Distance constraint measures the travel either way.
+        if !reordering && along.hypot(across) < SLOP {
             return false;
         }
         let min = (lane.lo as f32 - lane.index as f32) * pitch;

@@ -310,7 +310,8 @@ impl<S: 'static> Runtime<S> {
         let n = &self.nodes[i];
         if !(n.vis.hover.a > 0.0 || n.vis.hover_group) || self.is_exiting(n.id) { return None; }
         let inside = self.pointer.is_some_and(|(x, y)| self.node_contains(i, x, y))
-            || n.vis.hover_share.as_ref().is_some_and(|k| shared.contains(k));
+            || n.vis.hover_share.as_ref().is_some_and(|k| shared.contains(k))
+            || (n.vis.hover_focus && self.keyboard_focus && self.focus_within(i));
         let capture_inside = if self.secondary_capture.is_some() { inside } else { self.capture_inside };
         let held = captured == Some(n.path.as_str()) && capture_inside;
         let allowed = self.allowed(i);

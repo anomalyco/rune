@@ -124,7 +124,8 @@ pub(super) fn build<S: 'static>(item: TabItem<'_, S>, at: Place, st: &Strip<S>, 
         .key(format!("t-{id}"))
         .label(item.title.into_owned())
         .description(status_words(status))
-        .hover_group()
+        // `:is(:hover, :has(:focus-visible))`: Tab reaching it shows its close button and wash.
+        .hover_group_focus()
         .hover_motion(Anim::INSTANT, Anim::INSTANT)
         .position_in_set(at.index + 1, st.count)
         .focusable(!editing)
@@ -365,21 +366,27 @@ fn handlers<S: 'static>(mut slot: El, id: &str, at: &Place, closable: bool, st: 
     let Some(access) = access else { return slot };
 
     let (id, select, reorder, tear, tear_move) = (id.to_owned(), h.select.clone(), h.reorder.clone(), h.tear_out.clone(), h.tear_move.clone());
+    let scroll = st.scroll_key.clone();
     slot.on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| {
         if tx.button() != PointerButton::Primary {
             return;
         }
         match d.phase {
             Phase::Down => {
-                access(s).press(&lane, [d.x, d.y]);
+                access(s).press(&lane, [d.x, d.y], super::auto_scroll::offset(&scroll, vertical));
                 if select_early && let Some(f) = &select {
                     f(s, &id, tx);
                     tx.scroll_into_view_in(reveal.0.clone(), reveal.1.clone());
                 }
             }
             Phase::Move => {
+                // Near an end the strip scrolls under the dragged tab, which keeps to the pointer.
+                if access(s).reordering() {
+                    super::auto_scroll::step(&scroll, vertical, d, tx);
+                }
+                let scrolled = access(s).scrolled_since(super::auto_scroll::offset(&scroll, vertical));
                 let (dx, dy) = (d.dx / zoom, d.dy / zoom);
-                let (along, across) = if vertical { (dy, dx) } else { (dx, dy) };
+                let (along, across) = if vertical { (dy + scrolled, dx) } else { (dx + scrolled, dy) };
                 let was_torn = access(s).torn_out();
                 if access(s).follow(&lane, along, across, [dx, dy]) {
                     // The tabs it passes spring aside; it follows the pointer exactly.

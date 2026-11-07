@@ -442,6 +442,14 @@ impl El {
         self.vis.cold_mut().hover_share = Some(key.into());
         self
     }
+    /// [`Self::hover_group`] that also counts as hovered while keyboard focus is on it or
+    /// anywhere inside it, as CSS `:is(:hover, :has(:focus-visible))` does: a tab whose close
+    /// button and hover wash show when Tab reaches it, as under the pointer.
+    pub fn hover_group_focus(mut self) -> Self {
+        self.vis.hover_group = true;
+        self.vis.cold_mut().hover_focus = true;
+        self
+    }
     /// Curves for this element's hover track: `enter` when the pointer arrives, `exit` when it
     /// leaves (e.g. a delayed reveal).
     pub fn hover_motion(mut self, enter: impl Into<Anim>, exit: impl Into<Anim>) -> Self {
