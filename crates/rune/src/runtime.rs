@@ -311,6 +311,8 @@ mod row_reorder;
 mod growth_rows;
 #[path = "runtime/motion/fold_hold.rs"]
 mod fold_hold;
+#[path = "runtime/motion/landing_hold.rs"]
+mod landing_hold;
 #[path = "runtime/motion/content_slide.rs"]
 mod content_slide;
 mod elements;
@@ -571,6 +573,8 @@ pub struct Runtime<S: 'static> {
     row_lifts: Vec<(usize, f32)>,
     /// The header each lifted fold shuts under, by the fold's id, which draws where it's laid out.
     fold_headers: HashMap<NodeId, String>,
+    /// What this frame's commits held at their landing width (`El::hold_landing_width`).
+    landing_holds: landing_hold::LandingHolds,
     grow_acc: f32,
     caught_up: f32,
     slack_dt: f32,
@@ -953,6 +957,7 @@ impl<S: 'static> Runtime<S> {
             row_mask: Vec::new(),
             row_lifts: Vec::new(),
             fold_headers: HashMap::default(),
+            landing_holds: Default::default(),
             grow_acc: 0.0,
             caught_up: 0.0,
             slack_dt: 0.0,

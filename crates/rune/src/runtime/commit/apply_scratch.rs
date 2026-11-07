@@ -15,6 +15,8 @@ pub(crate) struct ApplyScratch {
     pub(super) mounted: Vec<bool>,
     pub(super) slid: Vec<bool>,
     pub(super) top_moved: Vec<f32>,
+    /// Per node: held at its landing width this commit (`El::hold_landing_width`).
+    pub(super) held: Vec<bool>,
     pub(super) old_ids: Vec<NodeId>,
     pub(super) moved_spans: Vec<(usize, usize)>,
     pub(super) remap: Vec<Option<usize>>,
