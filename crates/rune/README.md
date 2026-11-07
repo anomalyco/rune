@@ -55,7 +55,8 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   - The animation clock has a time scale, which the Settings speed slider drives.
 - **Renderer** (`render.rs`, `shader.wgsl`): one instanced uber-quad pipeline and one draw call per
   frame.
-  - Kinds: rounded rects (per-corner radius, border), analytic Gaussian shadows (outer and inset),
+  - Kinds: rounded rects (per-corner radius, a border drawn over the fill as CSS draws one, per-side
+    widths), analytic Gaussian shadows (outer and inset),
     vertical and angled linear gradients, circular and elliptical radial gradients (`KIND_RADIAL`),
     dashed border rings (`KIND_DASHED`), RGBA images, and glyphs from the atlas.
   - **Gradients** (`.gradient(top, bottom)`, `.radial_gradient(center, radius, stops)`,

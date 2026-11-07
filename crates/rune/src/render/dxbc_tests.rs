@@ -1,6 +1,6 @@
 //! The precompiled uber shader is FXC's compile of the HLSL wgpu generates today. Run
-//! `RUNE_REGENERATE_DXBC=1 cargo test -p rune --lib uber_dxbc_is_fresh` on Windows to rewrite
-//! the bytecode and its hashes after the WGSL, the uber layout or wgpu changes.
+//! `cargo run -p rune --example regenerate_dxbc` (or `RUNE_REGENERATE_DXBC=1` with this test) on
+//! Windows to rewrite the bytecode and its hashes after the WGSL, the uber layout or wgpu changes.
 
 use std::sync::{Mutex, OnceLock};
 
@@ -99,13 +99,14 @@ fn uber_dxbc_is_fresh() {
         std::fs::write(format!("{root}/uber.vs.dxbc"), &vs).unwrap();
         std::fs::write(format!("{root}/uber.fs.dxbc"), &fs).unwrap();
         std::fs::write(format!("{root}/src/render/uber_dxbc_hash.rs"), format!(
-            "// Written by `RUNE_REGENERATE_DXBC=1 cargo test -p rune --lib uber_dxbc_is_fresh` on Windows.\n\
+            "// Written by `cargo run -p rune --example regenerate_dxbc`, or by\n\
+             // `RUNE_REGENERATE_DXBC=1 cargo test -p rune --lib uber_dxbc_is_fresh`, on Windows.\n\
              pub(super) const UBER_DXBC_WGSL_BLAKE3: &str = \"{wgsl}\";\n\
              pub(super) const UBER_DXBC_ABI_FNV64: u64 = {abi:#018x};\n\
              #[cfg(test)]\npub(super) const UBER_DXBC_HLSL_BLAKE3: &str = \"{hlsl}\";\n")).unwrap();
         return;
     }
-    let stale = "the uber shader's HLSL changed: run `RUNE_REGENERATE_DXBC=1 cargo test -p rune --lib uber_dxbc_is_fresh` on Windows";
+    let stale = "the uber shader's HLSL changed: run `cargo run -p rune --example regenerate_dxbc` on Windows";
     assert_eq!(wgsl, super::UBER_DXBC_WGSL_BLAKE3, "{stale}");
     assert_eq!(abi, super::UBER_DXBC_ABI_FNV64, "{stale}");
     assert_eq!(hlsl, super::UBER_DXBC_HLSL_BLAKE3, "{stale}");

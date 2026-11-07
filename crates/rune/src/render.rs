@@ -21,13 +21,18 @@ pub use backdrop_blur::MAX_BACKDROP_BLURS;
 pub use first_use::precompiled_misses;
 pub use layers::LayerStats;
 
+/// Rounded rect in `fill` with a `params.x`-wide `border` ring drawn over it, as CSS paints a
+/// border over its background. `params.w` is the opacity the colours already carry (1 when not
+/// faded), so the ring hides the fill by `border.a / params.w`. Non-zero `uv` (with `uv.z >= 0`)
+/// gives per-side widths `[top, right, bottom, left]`; `params.x` is then the widest.
 pub const KIND_RECT: f32 = 0.0;
 pub const KIND_SHADOW: f32 = 1.0;
 pub const KIND_GLYPH: f32 = 2.0;
 /// Inset shadow inside a rounded rect: `params.x` spread, `params.z` sigma, `uv.xy` offset.
 pub const KIND_INSET: f32 = 3.0;
 /// Rounded rect with a vertical gradient: `fill` at the top, `uv` (premultiplied) at the bottom.
-/// With a border width in `params.x` it is a `KIND_RECT` whose ring runs from `border` to `uv`.
+/// With a border width in `params.x` it is a `KIND_RECT` whose ring runs from `border` to `uv`,
+/// over the fill, with the same `params.w`.
 pub const KIND_GRADIENT: f32 = 4.0;
 /// A stroke segment: `radii` = x0, y0, x1, y1; `params.x` half width, `params.z` 1 for round caps.
 pub const KIND_SEGMENT: f32 = 5.0;
@@ -351,6 +356,8 @@ pub(crate) fn end_layer(instances: &mut Vec<Instance>, surfaces: &mut [crate::na
             i.fill = i.fill.map(|v| v * opacity);
             i.border = i.border.map(|v| v * opacity);
             if i.params[1] == KIND_GRADIENT { i.uv = i.uv.map(|v| v * opacity); }
+            // A box's `params.w` is the opacity its colours carry (shader.wgsl `border_over`).
+            if i.params[1] == KIND_RECT || i.params[1] == KIND_GRADIENT { i.params[3] *= opacity; }
         }
         if videos == 1 {
             if transfer_clip { surfaces[surface_start].clip = scope.clip; surfaces[surface_start].fade = scope.fade; }

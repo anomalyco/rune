@@ -881,8 +881,25 @@ impl<S: 'static> Runtime<S> {
                     clip,
                     fade: crate::render::pack_fade(fade, clip, clip),
                 });
+                // Per-side widths (`El::border_sides`), each snapped as `bw` is; the widest is `bw`.
+                let sides = n.vis.border_sides.filter(|_| bw > 0.0).map(|ws| ws.map(|v| pixel_snap::line_width(v * s) * sc));
+                let padding = sides.unwrap_or([bw; 4]);
                 let (bw, border, border_kind, border_uv, border_a) =
                     if n.vis.border_dash.is_some() { (0.0, [0.0; 4], KIND_RECT, [0.0; 4], 0.0) } else { (bw, border, border_kind, border_uv, border_a) };
+                // The border's own instance, `o` in `params.w` so the shader knows how much it
+                // hides the fill under it (shader.wgsl `border_over`). With inset shadows it draws
+                // apart, over them, as CSS layers an inset box-shadow between background and border.
+                let ring = Instance {
+                    rect: [r[0], r[1], w, h],
+                    radii,
+                    fill: [0.0; 4],
+                    border,
+                    params: [bw, border_kind, blur * s, o],
+                    uv: if border_kind == KIND_RECT { sides.unwrap_or([0.0; 4]) } else { border_uv },
+                    clip,
+                    fade: crate::render::pack_fade(fade, clip, clip),
+                };
+                let apart = bw > 0.0 && border_a > 0.0005 && n.vis.shadows.iter().chain(stuck_shadows.1).any(|sh| sh.inset);
                 // Dimmed, an opaque fill and its gradient draw as one opaque gradient, so they fade
                 // together as a layer at that opacity would (CSS `opacity`), not one through the other.
                 let flat = layered && o < 1.0 && base[3] >= 1.0 && n.vis.gradient.is_some();
@@ -999,36 +1016,22 @@ impl<S: 'static> Runtime<S> {
                         });
                     }
                     let ov = overlay.map(|c| c * o);
-                    if ov[3] > 0.0005 || border_a > 0.0005 {
-                        self.instances.push(Instance {
-                            rect: [r[0], r[1], w, h],
-                            radii,
-                            fill: ov,
-                            border,
-                            params: [bw, border_kind, blur * s, 1.0],
-                            uv: border_uv,
-                            clip,
-                            fade: crate::render::pack_fade(fade, clip, clip),
-                        });
+                    if apart && ov[3] > 0.0005 {
+                        self.instances.push(border_paint::fill_under(Instance { fill: ov, ..ring }, false));
+                    } else if !apart && (ov[3] > 0.0005 || border_a > 0.0005) {
+                        self.instances.push(Instance { fill: ov, ..ring });
                     }
+                } else if apart {
+                    if fill[3] > 0.0005 { self.instances.push(border_paint::fill_under(Instance { fill, ..ring }, true)); }
                 } else if fill[3] > 0.0005 || border_a > 0.0005 {
-                    let inst = Instance {
-                        rect: [r[0], r[1], w, h],
-                        radii,
-                        fill,
-                        border,
-                        params: [bw, border_kind, blur * s, 1.0],
-                        uv: border_uv,
-                        clip,
-                        fade: crate::render::pack_fade(fade, clip, clip),
-                    };
-                    if fill == [0.0; 4] && border_kind == KIND_RECT && bw > 0.0 {
-                        bands::push_ring(&mut self.instances, inst);
+                    if fill == [0.0; 4] && border_kind == KIND_RECT && bw > 0.0 && sides.is_none() {
+                        bands::push_ring(&mut self.instances, ring);
                     } else {
-                        self.instances.push(inst);
+                        self.instances.push(Instance { fill, ..ring });
                     }
                 }
-                self.instances.extend(dashed);
+                // Inset shadows draw inside the border (CSS's padding box), under it.
+                let (inner, inner_radii) = border_paint::inset_box([r[0], r[1], w, h], radii, padding);
                 for (k, sh) in n.vis.shadows.iter().chain(stuck_shadows.1).enumerate() {
                     if !sh.inset {
                         continue;
@@ -1039,17 +1042,12 @@ impl<S: 'static> Runtime<S> {
                         continue;
                     }
                     let sh = &if k < n.vis.shadows.len() { self.shadow_at(n.id, k, sh) } else { *sh };
-                    self.instances.push(Instance {
-                        rect: [r[0], r[1], w, h],
-                        radii,
-                        fill: premul(c, o, srgb),
-                        border: [0.0; 4],
-                        params: [sh.spread * k_px, KIND_INSET, if sh.blur > 0.0 { (sh.blur * s * 0.5).max(0.5) } else { 0.0 }, 1.0],
-                        uv: [sh.x * k_px, sh.y * k_px, 0.0, 0.0],
-                        clip,
-                        fade: crate::render::pack_fade(fade, clip, clip),
-                    });
+                    self.instances.push(border_paint::inset_shadow(sh, premul(c, o, srgb), (inner, inner_radii), (k_px, s), clip, fade));
                 }
+                if apart {
+                    if sides.is_none() && border_kind == KIND_RECT { bands::push_ring(&mut self.instances, ring); } else { self.instances.push(ring); }
+                }
+                self.instances.extend(dashed);
                 if let Some(effect) = n.vis.effect {
                     let fade = crate::render::pack_fade(fade, clip, clip);
                     faded_slot = paint_slots::push_effect(&mut self.instances, (effect, mark), ([r[0], r[1], w, h], radii, clip, fade), k_px, o);

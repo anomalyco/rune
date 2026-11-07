@@ -313,6 +313,36 @@ fn dash_cov(s: f32, total: f32, d: vec3<f32>) -> f32 {
     return clamp(dash * 0.5 - abs(m) + 0.5, 0.0, 1.0);
 }
 
+// A border over its own background, as CSS paints one: the background runs under the border to
+// the outer edge (`background-clip: border-box`) and the ring of `edge` draws over it. `d` and
+// `inner_d` are the distances to the outer and inner edges. `opacity` is what the colours were
+// already multiplied by, so `edge.a / opacity` is how much the border hides the fill. An opaque
+// border all round a rounded box (`shrink`) pulls the fill in by half its width, as Chromium's
+// bleed avoidance does, so no fill fringes the anti-aliased outer edge.
+fn border_over(fill: vec4<f32>, edge: vec4<f32>, d: f32, inner_d: f32, soft: f32, bw: f32, opacity: f32, shrink: bool) -> vec4<f32> {
+    let cov = clamp(0.5 - d / (soft * 2.0), 0.0, 1.0);
+    let ring = max(cov - clamp(0.5 - inner_d / (soft * 2.0), 0.0, 1.0), 0.0);
+    let hide = clamp(edge.a / clamp(opacity, 1e-6, 1.0), 0.0, 1.0);
+    let under = clamp(0.5 - (d + select(0.0, bw * 0.5, shrink && hide > 0.999)) / (soft * 2.0), 0.0, 1.0);
+    return edge * ring + fill * (under * (1.0 - hide * ring));
+}
+
+// How much of the pixel at `p` the box covers. Where the corner is square that's the exact
+// area, as Chromium rasterises a rect; a rounded corner takes the distance estimate.
+fn box_cov(p: vec2<f32>, half: vec2<f32>, radii: vec4<f32>) -> f32 {
+    var r = radii.x;
+    if (p.x > 0.0) {
+        r = select(radii.y, radii.z, p.y > 0.0);
+    } else {
+        r = select(radii.x, radii.w, p.y > 0.0);
+    }
+    if (r == 0.0) {
+        let e = clamp(min(half, p + vec2<f32>(0.5)) - max(-half, p - vec2<f32>(0.5)), vec2<f32>(0.0), vec2<f32>(1.0));
+        return e.x * e.y;
+    }
+    return clamp(0.5 - sd_rounded(p, half, radii), 0.0, 1.0);
+}
+
 // A texel of a layer `size` pixels across; transparent outside it.
 fn layer_texel(t: vec2<i32>, size: vec2<f32>) -> vec4<f32> {
     if (any(t < vec2<i32>(0)) || any(t >= vec2<i32>(size))) { return vec4<f32>(0.0); }
@@ -368,13 +398,23 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
     if (kind < 0.5) {
         let d = sd_rounded(i.p - center, half, i.radii);
         let soft = max(i.params.z, 0.5);
-        let cov = clamp(0.5 - d / (soft * 2.0), 0.0, 1.0);
         let bw = i.params.x;
         if (bw > 0.0) {
-            let inner = clamp(0.5 - (d + bw) / (soft * 2.0), 0.0, 1.0);
-            col = i.fill * inner + i.border * (cov - inner);
+            // Per-side widths (top, right, bottom, left) in `uv`, as CSS `border-bottom` and the
+            // like; all zero is `bw` all round, and a band window (runtime/bands.rs) has a
+            // negative `uv.z`.
+            let w = i.uv;
+            let sides = w.z >= 0.0 && any(w != vec4<f32>(0.0));
+            var inner_d = d + bw;
+            if (sides) {
+                let ih = max(half - vec2<f32>(w.y + w.w, w.x + w.z) * 0.5, vec2<f32>(0.0));
+                let ic = center + vec2<f32>(w.w - w.y, w.x - w.z) * 0.5;
+                let cut = vec4<f32>(max(w.x, w.w), max(w.x, w.y), max(w.z, w.y), max(w.z, w.w));
+                inner_d = sd_rounded(i.p - ic, ih, sign(i.radii) * max(abs(i.radii) - cut, vec4<f32>(0.0)));
+            }
+            col = border_over(i.fill, i.border, d, inner_d, soft, bw, i.params.w, !sides && any(i.radii != vec4<f32>(0.0)));
         } else {
-            col = i.fill * cov;
+            col = i.fill * clamp(0.5 - d / (soft * 2.0), 0.0, 1.0);
         }
     } else if (kind < 1.5) {
         let sigma = max(i.params.z, 0.01);
@@ -444,32 +484,30 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
         // neighbours would disagree in the last bits about who owns a pixel on a shared edge.
         col = i.fill * triangle(i.pos.xy + projection.xy, i.radii.xy, i.radii.zw, i.uv.xy, u32(i.params.x + 0.5));
     } else if (kind > 2.5) {
-        let d = sd_rounded(i.p - center, half, i.radii);
-        let cov = clamp(0.5 - d, 0.0, 1.0);
         if (kind < 3.5) {
             // Inset shadow: the element's shape minus a blurred copy of it shrunk by the spread
-            // and moved by the offset.
+            // and moved by the offset. Square corners take exact pixel areas, so a hairline
+            // ring's corner pixel is as dark as Chromium draws it.
             let spread = i.params.x;
             let ih = max(half - vec2<f32>(spread), vec2<f32>(0.0));
             let q = i.p - center - i.uv.xy;
             var lit: f32;
             if (i.params.z < 0.3) {
-                lit = clamp(0.5 - sd_rounded(q, ih, sign(i.radii) * max(abs(i.radii) - vec4<f32>(spread), vec4<f32>(0.0))), 0.0, 1.0);
+                lit = box_cov(q, ih, sign(i.radii) * max(abs(i.radii) - vec4<f32>(spread), vec4<f32>(0.0)));
             } else {
                 lit = shadow(q, ih, i.params.z, max(min(abs(i.radii.x) - spread, min(ih.x, ih.y)), 0.0));
             }
-            col = i.fill * cov * (1.0 - clamp(lit, 0.0, 1.0));
+            col = i.fill * box_cov(i.p - center, half, i.radii) * (1.0 - clamp(lit, 0.0, 1.0));
         } else {
             // With a border width, kind 0 whose ring runs from `border` (top) to `uv` (bottom).
+            let d = sd_rounded(i.p - center, half, i.radii);
             let t = clamp((i.p.y - i.rect.y) / max(i.rect.w, 1.0), 0.0, 1.0);
             let soft = max(i.params.z, 0.5);
-            let soft_cov = clamp(0.5 - d / (soft * 2.0), 0.0, 1.0);
             let bw = i.params.x;
             if (bw > 0.0) {
-                let inner = clamp(0.5 - (d + bw) / (soft * 2.0), 0.0, 1.0);
-                col = i.fill * inner + mix(i.border, i.uv, t) * (soft_cov - inner);
+                col = border_over(i.fill, mix(i.border, i.uv, t), d, d + bw, soft, bw, i.params.w, any(i.radii != vec4<f32>(0.0)));
             } else {
-                col = mix(i.fill, i.uv, t) * soft_cov;
+                col = mix(i.fill, i.uv, t) * clamp(0.5 - d / (soft * 2.0), 0.0, 1.0);
             }
         }
     } else {

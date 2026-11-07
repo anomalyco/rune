@@ -129,6 +129,34 @@ fn dash_cov(s: f32, total: f32, d: [f32; 3]) -> f32 {
     clamp(dash * 0.5 - m.abs() + 0.5)
 }
 
+/// A border over its own background, as CSS paints one (shader.wgsl `border_over`).
+#[allow(clippy::too_many_arguments)]
+fn border_over(fill: [f32; 4], edge: [f32; 4], d: f32, inner_d: f32, soft: f32, bw: f32, opacity: f32, shrink: bool) -> [f32; 4] {
+    let cov = clamp(0.5 - d / (soft * 2.0));
+    let ring = (cov - clamp(0.5 - inner_d / (soft * 2.0))).max(0.0);
+    let hide = clamp(edge[3] / opacity.clamp(1e-6, 1.0));
+    let pull = if shrink && hide > 0.999 { bw * 0.5 } else { 0.0 };
+    let under = clamp(0.5 - (d + pull) / (soft * 2.0));
+    std::array::from_fn(|c| edge[c] * ring + fill[c] * (under * (1.0 - hide * ring)))
+}
+
+/// How much of the pixel at `p` the box covers: the exact area at a square corner, the distance
+/// estimate at a rounded one (shader.wgsl `box_cov`).
+fn box_cov(p: [f32; 2], h: [f32; 2], radii: [f32; 4]) -> f32 {
+    let r = if p[0] > 0.0 {
+        if p[1] > 0.0 { radii[2] } else { radii[1] }
+    } else if p[1] > 0.0 {
+        radii[3]
+    } else {
+        radii[0]
+    };
+    if r == 0.0 {
+        let e = |a: usize| clamp(h[a].min(p[a] + 0.5) - (-h[a]).max(p[a] - 0.5));
+        return e(0) * e(1);
+    }
+    clamp(0.5 - sd(p, h, radii))
+}
+
 pub(crate) fn fragment(i: &Primitive, atlas: &Atlas, screen: [f32; 2]) -> [f32; 4] {
     let kind = i.params[1] as u32;
     // An effect slot (kind 12) holds a compositor's place in the stream and covers no pixels.
@@ -168,14 +196,22 @@ pub(crate) fn fragment(i: &Primitive, atlas: &Atlas, screen: [f32; 2]) -> [f32; 
         0 => {
             let d = sd(q, h, i.radii);
             let soft = i.params[2].max(0.5);
-            let cov = clamp(0.5 - d / (soft * 2.0));
-            let inner = clamp(0.5 - (d + i.params[0]) / (soft * 2.0));
-            for (c, out) in col.iter_mut().enumerate() {
-                *out = if i.params[0] > 0.0 {
-                    i.fill[c] * inner + i.border[c] * (cov - inner)
+            let bw = i.params[0];
+            if bw > 0.0 {
+                // Per-side widths (top, right, bottom, left) in `uv`; a band window has uv[2] < 0.
+                let w = i.uv;
+                let sides = w[2] >= 0.0 && w != [0.0; 4];
+                let inner_d = if sides {
+                    let ih = [(h[0] - (w[1] + w[3]) * 0.5).max(0.0), (h[1] - (w[0] + w[2]) * 0.5).max(0.0)];
+                    let at = [q[0] - (w[3] - w[1]) * 0.5, q[1] - (w[0] - w[2]) * 0.5];
+                    let cut = [w[0].max(w[3]), w[0].max(w[1]), w[2].max(w[1]), w[2].max(w[3])];
+                    sd(at, ih, std::array::from_fn(|n| (i.radii[n].abs() - cut[n]).max(0.0).copysign(i.radii[n])))
                 } else {
-                    i.fill[c] * cov
+                    d + bw
                 };
+                col = border_over(i.fill, i.border, d, inner_d, soft, bw, i.params[3], !sides && i.radii != [0.0; 4]);
+            } else {
+                col = i.fill.map(|c| c * clamp(0.5 - d / (soft * 2.0)));
             }
         }
         1 => {
@@ -210,12 +246,12 @@ pub(crate) fn fragment(i: &Primitive, atlas: &Atlas, screen: [f32; 2]) -> [f32; 
             col = i.fill.map(|c| c * powf(cov, i.params[3]));
         }
         3 => {
-            let cov = clamp(0.5 - sd(q, h, i.radii));
+            let cov = box_cov(q, h, i.radii);
             let spread = i.params[0];
             let ih = h.map(|v| (v - spread).max(0.0));
             let q = [q[0] - i.uv[0], q[1] - i.uv[1]];
             let lit = if i.params[2] < 0.3 {
-                clamp(0.5 - sd(q, ih, i.radii.map(|r| (r.abs() - spread).max(0.0).copysign(r))))
+                box_cov(q, ih, i.radii.map(|r| (r.abs() - spread).max(0.0).copysign(r)))
             } else {
                 shadow(
                     q,
@@ -229,14 +265,15 @@ pub(crate) fn fragment(i: &Primitive, atlas: &Atlas, screen: [f32; 2]) -> [f32; 
         4 => {
             let d = sd(q, h, i.radii);
             let soft = i.params[2].max(0.5);
-            let cov = clamp(0.5 - d / (soft * 2.0));
-            let inner = clamp(0.5 - (d + i.params[0]) / (soft * 2.0));
+            let bw = i.params[0];
             let t = clamp((p[1] - i.rect[1]) / i.rect[3].max(1.0));
-            col = std::array::from_fn(|c| if i.params[0] > 0.0 {
-                i.fill[c] * inner + mix(i.border[c], i.uv[c], t) * (cov - inner)
+            col = if bw > 0.0 {
+                let edge = std::array::from_fn(|c| mix(i.border[c], i.uv[c], t));
+                border_over(i.fill, edge, d, d + bw, soft, bw, i.params[3], i.radii != [0.0; 4])
             } else {
-                mix(i.fill[c], i.uv[c], t) * cov
-            });
+                let cov = clamp(0.5 - d / (soft * 2.0));
+                std::array::from_fn(|c| mix(i.fill[c], i.uv[c], t) * cov)
+            };
         }
         10 => {
             let d = sd(q, h, i.radii);

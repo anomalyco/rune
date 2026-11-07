@@ -10,8 +10,9 @@
 //! The bytecode must be what wgpu itself would compile: the same HLSL, whose register
 //! assignments wgpu's root signature for the uber layout expects. `uber_dxbc_is_fresh`
 //! (Windows) compares the HLSL wgpu generates now with the HLSL the bytecode came from, and
-//! `regenerate_uber_dxbc` rewrites both. At run time the bytecode is used only while the WGSL
-//! still hashes the same, and a pipeline the driver refuses falls back to WGSL.
+//! `cargo run -p rune --example regenerate_dxbc` rewrites both without building the tests. At
+//! run time the bytecode is used only while the WGSL still hashes the same, and a pipeline the
+//! driver refuses falls back to WGSL.
 
 #[cfg(target_os = "windows")]
 include!("uber_dxbc_hash.rs");

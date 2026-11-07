@@ -302,6 +302,8 @@ impl<S: 'static> Runtime<S> {
                 if let Some((rc, rw)) = d.ring {
                     inst.border = premul(rc, o * alpha, srgb);
                     inst.params[0] = rw;
+                    // The opacity the colours carry, so the ring hides the chip's fill by its own alpha.
+                    inst.params[3] = o * alpha;
                 }
                 self.instances.push(inst);
             }
