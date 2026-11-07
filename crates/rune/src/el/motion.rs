@@ -201,4 +201,13 @@ impl El {
         self.matched = Some(Rc::from(id.into()));
         self
     }
+    /// While this [`matched`](Self::matched) element flies, its children keep their final
+    /// layout at their own size, from the moving frame's leading edge and centred on its
+    /// height, cropped to it, rather than scaled to cover it: for a row whose width changes as
+    /// it flies, as a tab moving between a titlebar's strip and a sidebar, whose avatar and title
+    /// would otherwise scale up or slide off its leading edge.
+    pub fn matched_crop(mut self) -> Self {
+        self.vis.cold_mut().flight_crop = true;
+        self
+    }
 }
