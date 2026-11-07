@@ -76,6 +76,10 @@ struct Track {
     /// The track's gap from the viewport's top and bottom, and the thumb's least length.
     inset: f32,
     min_thumb: f32,
+    /// A clear border at each end of the thumb, inside its length (`border: 2px solid
+    /// transparent` on a Chromium thumb): the thumb is sized and placed on the track with it, and
+    /// drawn without it.
+    border: f32,
     /// Overlaid and faded at rest whatever the system preference.
     overlay: bool,
     /// The strip sits beside the viewport, in room the caller leaves for it, rather than over
@@ -97,6 +101,7 @@ const KIT_TRACK: Track = Track {
     edge: EDGE,
     inset: INSET,
     min_thumb: MIN_THUMB,
+    border: 0.0,
     overlay: false,
     gutter: false,
     x: false,
@@ -115,6 +120,7 @@ const SCROLL_VIEW_TRACK: Track = Track {
     edge: 4.0,
     inset: 8.0,
     min_thumb: 32.0,
+    border: 0.0,
     overlay: true,
     gutter: false,
     x: false,
@@ -126,14 +132,16 @@ const SCROLL_VIEW_TRACK: Track = Track {
 };
 
 /// `@opencode/ui`'s `scrollbar.css`, which every plain `overflow: auto` container gets: an 8
-/// point strip taken from layout, its track 4 in from the ends, and a thumb with a 2 point clear
-/// border, so a 4 point pill 6 in from the ends, 28 long at least. It shows only while the
-/// pointer is over the area, at once, with no fade or hold.
+/// point strip taken from layout, its track 4 in from the ends (`margin: 4px 0`), and a thumb 32
+/// long at least with a 2 point clear border all round: a 4 point pill 2 in from the strip's
+/// sides, sized and placed with its border as Chromium does, and drawn without it. It shows only
+/// while the pointer is over the area, at once, with no fade or hold.
 const NATIVE_TRACK: Track = Track {
     strip: 8.0,
     edge: 2.0,
-    inset: 6.0,
-    min_thumb: 28.0,
+    inset: 4.0,
+    min_thumb: 32.0,
+    border: 2.0,
     overlay: true,
     gutter: true,
     x: false,
@@ -154,6 +162,11 @@ impl Track {
     fn pulse_span(&self) -> f64 {
         self.hold.as_secs_f64() + FADE_TAIL
     }
+
+    /// The drawn part of a thumb at `top`, `len` long on the track: less its clear border.
+    fn pill(&self, (top, len): (f32, f32)) -> (f32, f32) {
+        (top + self.border, (len - 2.0 * self.border).max(0.0))
+    }
 }
 
 impl ScrollBarStyle {
@@ -172,11 +185,22 @@ impl ScrollBarStyle {
 
     /// `@opencode/ui`'s `scrollbar.css`, the scroll bar of every plain `overflow: auto` box in
     /// OpenCode: an 8 point strip beside the viewport (leave the room for it: the bar draws
-    /// there), with a 4 point `thumb` pill 6 points in from its ends, shown only while the pointer
-    /// is over the area, and `thumb_hover` while the pointer is over the thumb or drags it. It
-    /// shows and hides at once. Pass `border_muted` and `border_strong`.
+    /// there, or over the viewport's edge with [`Self::inside`]), its track 4 points in from the
+    /// ends and a 4 point `thumb` pill sized and placed as Chromium's thumb with its 2 point clear
+    /// border, shown only while the pointer is over the area, and `thumb_hover` while the pointer
+    /// is over the thumb or drags it. It shows and hides at once. Pass `border_muted` and
+    /// `border_strong`.
     pub fn native(thumb: Color, thumb_hover: Color) -> Self {
         Self { thumb, thumb_hover, width: 4.0, hover_width: 4.0, track: NATIVE_TRACK }
+    }
+
+    /// A [`Self::native`] bar over the viewport's own end edge, in room its content leaves there,
+    /// rather than beside it: a plain `overflow-y: auto` box (a sidebar's list) whose styled
+    /// scroll bar takes its 8 point gutter from the box while the content overflows. Give the
+    /// content [`Self::strip`] of end padding while it overflows.
+    pub fn inside(mut self) -> Self {
+        self.track.gutter = false;
+        self
     }
 
     /// The bar along the bottom edge of a viewport that scrolls sideways ([`El::scroll_x`])
@@ -408,7 +432,7 @@ impl Bar {
         self.fill.snap(self.thumb_fill());
         let at = self.pos.get();
         let (len, shows) = track_len(at, &style.track);
-        let (top, h) = thumb_along(at, len.max(0.0), style.track.min_thumb, style.track.along());
+        let (top, h) = style.track.pill(thumb_along(at, len.max(0.0), style.track.min_thumb, style.track.along()));
         let h = if shows { h } else { 0.0 };
         self.track.snap(self.track_rect(at, if shows { len } else { 0.0 }));
         self.slot.snap(self.slot_rect(top, h));
@@ -487,7 +511,7 @@ impl Bar {
         let (len, shows) = track_len(at, &t);
         let a = t.along();
         self.track.set(self.track_rect(at, if shows { len } else { 0.0 }));
-        let (top, h) = thumb_along(at, len.max(0.0), style.track.min_thumb, a);
+        let (top, h) = t.pill(thumb_along(at, len.max(0.0), style.track.min_thumb, a));
         let h = if shows { h } else { 0.0 };
         let (state, opacity, pulse_until) = (&self.state, &self.opacity, &self.pulse_until);
         let prev = state.get();
