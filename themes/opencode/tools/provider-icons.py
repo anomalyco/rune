@@ -4,8 +4,8 @@ components/provider-icons/sprite.svg, the sheet its ProviderIcon uses), as Rune 
 
 usage: tools/provider-icons.py <opencode>/packages/ui/src > src/provider_icons.rs
 
-Rune's monochrome icons take one square viewBox from 0, no groups or transforms, and read paint
-from each element alone. So each mark is flattened here: a viewBox that isn't square from 0 is
+Rune's icons take one square viewBox from 0. Each mark is flattened here, so every one is a flat
+list of shapes, each carrying its own paint: a viewBox that isn't square from 0 is
 centred in a square one (as the browser's xMidYMid meet places it), group and transform are baked
 into the path data (strokes scale with them), the paint a shape inherits is written on it, and
 clip paths are dropped (every clip here holds its whole mark). A mark that names its own colours

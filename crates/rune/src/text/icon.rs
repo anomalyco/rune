@@ -1,5 +1,7 @@
-//! Icons: a subset of SVG (path, rect, circle, ellipse, line; fill/stroke, caps, joins, evenodd,
-//! and `opacity`, `fill-opacity`, `stroke-opacity` on each element).
+//! Icons: a subset of SVG (path, rect, circle, ellipse, line, polyline, polygon; fill/stroke, caps, joins, evenodd,
+//! `opacity`, `fill-opacity`, `stroke-opacity`; groups, whose paint attributes their elements
+//! inherit and whose `opacity` fades them as one; `transform` on groups and elements). What
+//! `defs`, `clipPath`, `mask` and the like hold doesn't paint.
 
 use swash::zeno::{Cap, Fill, Join, Mask, Stroke, Transform};
 
@@ -7,7 +9,7 @@ use super::{Atlas, Rasterized, svg_path};
 
 /// An SVG icon body as found in `@opencode/ui`'s catalog: elements inside a square viewBox,
 /// drawn in its element's colour. A body that names its own colours (`fill="#…"`, gradients),
-/// such as a file-type badge, draws in them instead, as full SVG (groups, transforms, `use`).
+/// such as a file-type badge, draws in them instead, as full SVG (`use`, clips, gradients).
 #[derive(Debug)]
 pub struct Icon {
     pub name: &'static str,
@@ -69,6 +71,15 @@ fn element_path(el: &str) -> Option<String> {
             )
         }
         "line" => format!("M{} {}L{} {}", num(el, "x1"), num(el, "y1"), num(el, "x2"), num(el, "y2")),
+        "polyline" | "polygon" => {
+            let p = numbers(attr(el, "points")?);
+            let mut d: String =
+                p.as_chunks::<2>().0.iter().enumerate().map(|(i, [x, y])| format!("{}{x} {y}", if i == 0 { 'M' } else { 'L' })).collect();
+            if tag == "polygon" {
+                d.push('Z');
+            }
+            d
+        }
         _ => return None,
     })
 }
@@ -99,56 +110,192 @@ pub(super) fn rasterize_icon(icon: &Icon, px: u32, atlas: &mut Atlas) -> Rasteri
     }
 }
 
+/// What an open element hands the ones inside it: its transform to device pixels, whether they
+/// paint at all, and the group whose paint attributes they inherit.
+struct Scope<'a> {
+    ctm: Transform,
+    paints: bool,
+    group: Option<&'a str>,
+    /// It fades what it holds as one (`opacity` on a group): drawn into its own layer.
+    layer: bool,
+}
+
+/// Paint attributes SVG passes from a group to the elements inside it.
+const INHERITED: [&str; 8] =
+    ["fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "fill-rule", "fill-opacity", "stroke-opacity"];
+
 /// `icon`'s coverage at `px` × `px` device pixels, row-major, as the glyph atlas stores it.
 pub fn icon_coverage(icon: &Icon, px: u32) -> Vec<u8> {
     let s = px as f32 / icon.view;
     let mut acc = vec![0u8; (px * px) as usize];
+    // Each open group with an `opacity`: what it holds so far, and that opacity.
+    let mut layers: Vec<(Vec<u8>, f32)> = Vec::new();
     let mut buf = vec![0u8; (px * px) as usize];
+    let root = Scope { ctm: Transform::scale(s, s), paints: true, group: None, layer: false };
+    let mut scopes: Vec<Scope> = Vec::new();
     for raw in icon.body.split('>') {
         let el = raw.trim();
-        if el.is_empty() || el.starts_with("</") {
+        if el.is_empty() || el.starts_with("<!") || el.starts_with("<?") {
+            continue;
+        }
+        if el.starts_with("</") {
+            if scopes.pop().is_some_and(|sc| sc.layer)
+                && let Some((top, alpha)) = layers.pop()
+            {
+                union(layers.last_mut().map_or(&mut acc, |l| &mut l.0), &top, alpha);
+            }
+            continue;
+        }
+        let tag = el.trim_start_matches('<').split_whitespace().next().unwrap_or("").trim_end_matches('/');
+        let open = !el.ends_with('/');
+        let up = scopes.last().unwrap_or(&root);
+        let ctm = attr(el, "transform").map_or(up.ctm, |t| then(transform(t), up.ctm));
+        let paints = up.paints && attr(el, "display") != Some("none") && !NON_RENDERING.contains(&tag);
+        if tag == "g" || tag == "a" || tag == "svg" {
+            if open {
+                let alpha = opacity(attr(el, "opacity"));
+                let layer = paints && alpha < 1.0;
+                if layer {
+                    layers.push((vec![0u8; (px * px) as usize], alpha));
+                }
+                scopes.push(Scope { ctm, paints, group: Some(el), layer });
+            }
+            continue;
+        }
+        if open {
+            scopes.push(Scope { ctm, paints: false, group: None, layer: false });
+        }
+        if !paints {
             continue;
         }
         let Some(d) = element_path(el) else { continue };
         let d = svg_path::parse(&d);
-        let stroke = attr(el, "stroke").is_some_and(|v| v != "none");
-        let fill = attr(el, "fill").map_or(!stroke, |v| v != "none");
-        let opacity = |name: &str| attr(el, name).and_then(|v| v.trim().parse::<f32>().ok()).map_or(1.0, |v| v.clamp(0.0, 1.0));
-        let whole = opacity("opacity");
+        // The element's own attribute, else the innermost group's that sets it.
+        let get = |name: &str| {
+            attr(el, name).or_else(|| {
+                scopes.iter().rev().filter_map(|sc| sc.group).find_map(|g| attr(g, name)).filter(|_| INHERITED.contains(&name))
+            })
+        };
+        let stroke = get("stroke").is_some_and(|v| v != "none");
+        let fill = get("fill").map_or(!stroke, |v| v != "none");
+        let whole = opacity(attr(el, "opacity"));
+        let into = layers.last_mut().map_or(&mut acc, |l| &mut l.0);
         let mut paint = |style: swash::zeno::Style<'_>, alpha: f32| {
             buf.iter_mut().for_each(|b| *b = 0);
-            Mask::new(d.as_slice())
-                .style(style)
-                .transform(Some(Transform::scale(s, s)))
-                .size(px, px)
-                .render_into(&mut buf, None);
-            for (a, &b) in acc.iter_mut().zip(buf.iter()) {
-                let (fa, fb) = (*a as u32, (b as f32 * alpha).round() as u32);
-                *a = (fa + fb - fa * fb / 255).min(255) as u8;
-            }
+            Mask::new(d.as_slice()).style(style).transform(Some(ctm)).size(px, px).render_into(&mut buf, None);
+            union(into, &buf, alpha);
         };
         if fill {
-            let rule = if attr(el, "fill-rule") == Some("evenodd") { Fill::EvenOdd } else { Fill::NonZero };
-            paint(rule.into(), whole * opacity("fill-opacity"));
+            let rule = if get("fill-rule") == Some("evenodd") { Fill::EvenOdd } else { Fill::NonZero };
+            paint(rule.into(), whole * opacity(get("fill-opacity")));
         }
         if stroke {
-            let w = attr(el, "stroke-width").and_then(|v| v.parse().ok()).unwrap_or(1.0f32);
+            let w = get("stroke-width").and_then(|v| v.trim_end_matches("px").parse().ok()).unwrap_or(1.0f32);
             // The transform scales the width with the geometry.
             let mut st = Stroke::new(w);
-            st.cap(match attr(el, "stroke-linecap") {
+            st.cap(match get("stroke-linecap") {
                 Some("round") => Cap::Round,
                 Some("square") => Cap::Square,
                 _ => Cap::Butt,
             });
-            st.join(match attr(el, "stroke-linejoin") {
+            st.join(match get("stroke-linejoin") {
                 Some("round") => Join::Round,
                 Some("bevel") => Join::Bevel,
                 _ => Join::Miter,
             });
-            paint(st.into(), whole * opacity("stroke-opacity"));
+            paint(st.into(), whole * opacity(get("stroke-opacity")));
         }
     }
+    // A group left open still ends at the body's end.
+    while let Some((top, alpha)) = layers.pop() {
+        union(layers.last_mut().map_or(&mut acc, |l| &mut l.0), &top, alpha);
+    }
     acc
+}
+
+/// Elements whose contents are referenced, not drawn where they stand.
+const NON_RENDERING: [&str; 12] = [
+    "defs", "clipPath", "mask", "symbol", "linearGradient", "radialGradient", "pattern", "marker", "filter", "title",
+    "desc", "style",
+];
+
+/// Coverage `top` at `alpha` over `acc`, as overlapping ink adds up.
+fn union(acc: &mut [u8], top: &[u8], alpha: f32) {
+    for (a, &b) in acc.iter_mut().zip(top) {
+        let (fa, fb) = (*a as u32, (b as f32 * alpha).round() as u32);
+        *a = (fa + fb - fa * fb / 255).min(255) as u8;
+    }
+}
+
+/// An opacity attribute (`0.5` or `50%`), clamped; 1 when absent or unreadable.
+fn opacity(v: Option<&str>) -> f32 {
+    let Some(v) = v.map(str::trim) else { return 1.0 };
+    let n = match v.strip_suffix('%') {
+        Some(p) => p.trim().parse::<f32>().map(|p| p / 100.0),
+        None => v.parse::<f32>(),
+    };
+    n.map_or(1.0, |n| n.clamp(0.0, 1.0))
+}
+
+/// An SVG `transform` list as one transform from the element's units to its parent's: the
+/// rightmost function applies first, as SVG composes them.
+fn transform(list: &str) -> Transform {
+    let mut m = Transform::IDENTITY;
+    for item in list.split(')') {
+        let Some((name, args)) = item.split_once('(') else { continue };
+        let a = numbers(args);
+        let at = |i: usize| a.get(i).copied().unwrap_or(0.0);
+        let t = match name.trim().trim_start_matches(',').trim() {
+            "matrix" if a.len() == 6 => Transform::new(a[0], a[1], a[2], a[3], a[4], a[5]),
+            "translate" => Transform::translation(at(0), at(1)),
+            "scale" => Transform::scale(at(0), a.get(1).copied().unwrap_or(at(0))),
+            "rotate" => {
+                let (sin, cos) = at(0).to_radians().sin_cos();
+                let (cx, cy) = (at(1), at(2));
+                // translate(cx cy) rotate(a) translate(-cx -cy)
+                Transform::new(cos, sin, -sin, cos, cx - cos * cx + sin * cy, cy - sin * cx - cos * cy)
+            }
+            "skewX" => Transform::new(1.0, 0.0, at(0).to_radians().tan(), 1.0, 0.0, 0.0),
+            "skewY" => Transform::new(1.0, at(0).to_radians().tan(), 0.0, 1.0, 0.0, 0.0),
+            _ => continue,
+        };
+        m = then(t, m);
+    }
+    m
+}
+
+/// `a`, then `b`. zeno's `Transform::then` mixes up its off-diagonal terms (a skew under a
+/// translate moves the wrong way), so compose here as `Transform::transform_point` reads them.
+fn then(a: Transform, b: Transform) -> Transform {
+    Transform::new(
+        a.xx * b.xx + a.xy * b.yx,
+        a.xx * b.xy + a.xy * b.yy,
+        a.yx * b.xx + a.yy * b.yx,
+        a.yx * b.xy + a.yy * b.yy,
+        a.x * b.xx + a.y * b.yx + b.x,
+        a.x * b.xy + a.y * b.yy + b.y,
+    )
+}
+
+/// The numbers in a transform's arguments or a `points` list, which commas, spaces or a sign
+/// separate.
+fn numbers(s: &str) -> Vec<f32> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut prev = ' ';
+    for c in s.chars() {
+        let starts = (c == '-' || c == '+') && !matches!(prev, 'e' | 'E');
+        if c == ',' || c.is_whitespace() || (starts && !cur.is_empty()) {
+            out.extend(cur.parse::<f32>().ok());
+            cur.clear();
+        }
+        if !(c == ',' || c.is_whitespace()) {
+            cur.push(c);
+        }
+        prev = c;
+    }
+    out.extend(cur.parse::<f32>().ok());
+    out
 }
 
 
