@@ -116,8 +116,10 @@ impl TextSystem {
         let [gx, gy] = at;
         let glide = self.glide;
         let (font, font_size, ink, skew) = (&face.font, face.size * k, face.ink, face.skew);
-        let radius = self.apple.radius(ink, font_size);
-        let ([fx, fy], [subpx, subpy]) = place(at, font_size, self.glide);
+        let direct_write = self.direct_write();
+        let radius = if direct_write { 0.0 } else { self.apple.radius(ink, font_size) };
+        let gamma = self.windows.bucket(ink);
+        let ([fx, fy], [subpx, subpy]) = place(at, font_size, self.glide, direct_write);
         let key = GlyphKey {
             font: font.data.id(),
             index: font.index,
@@ -126,8 +128,8 @@ impl TextSystem {
             coords: face.coords_key,
             subpx,
             subpy,
-            dilation: (radius as f32).to_bits(),
-            apple: self.apple.key(),
+            dilation: if direct_write { gamma as u32 } else { (radius as f32).to_bits() },
+            apple: if direct_write { DIRECT_WRITE_KEY } else { self.apple.key() },
             skew,
         };
         let entry = match self.atlas.map.get(&key) {
@@ -164,10 +166,18 @@ impl TextSystem {
                     out.push(c.quad(gx, gy, glide, ink, byte));
                     return Placed::Other;
                 }
-                let placed = self.apple.rasterize(&mut self.scale_cx, &mut self.atlas, macos::smoothing::Job {
+                let (phase_x, shift_y) = (subpx as f32 / coretext_match::PHASES, subpy as f32 / GLIDE_PHASES as f32);
+                #[cfg(target_os = "windows")]
+                let placed = direct_write.then(|| self.windows.rasterize(&mut self.atlas, &windows::Job {
+                    font: font_ref, blob: &font.data, key: (key.font, key.index, key.coords), coords, glyph: glyph as u16, ppem: font_size,
+                    phase_x, shift_y, skew, lum: gamma,
+                })).flatten();
+                #[cfg(not(target_os = "windows"))]
+                let placed = None;
+                let placed = placed.unwrap_or_else(|| self.apple.rasterize(&mut self.scale_cx, &mut self.atlas, macos::smoothing::Job {
                     font: font_ref, key: (key.font, key.index, key.coords), coords, glyph: glyph as u16, ppem: font_size,
-                    phase_x: subpx as f32 / coretext_match::PHASES, shift_y: subpy as f32 / GLIDE_PHASES as f32, radius, skew,
-                });
+                    phase_x, shift_y, radius, skew,
+                }));
                 match placed {
                     Rasterized::Placed(g) => {
                         self.atlas.map.insert(key, Some(g));
@@ -200,12 +210,16 @@ impl TextSystem {
     }
 }
 
+/// The glyph key tag of a DirectWrite mask (CoreGraphics' pipelines use the low bits).
+pub(super) const DIRECT_WRITE_KEY: u8 = 0x80;
+
 /// Where a glyph with its resting pen at `at` draws at `ppem` device px, gliding by `glide`: its
 /// quad's whole-pixel pen and its x phase (sixtieths, [`coretext_match::PHASES`]) and y phase
-/// ([`GLIDE_PHASES`] a pixel). Adding the quantised glide on top of the resting pen keeps each
+/// ([`GLIDE_PHASES`] a pixel). Pens sit on CoreGraphics' subpixel steps, or on Skia's quarters
+/// when `skia` (DirectWrite). Adding the quantised glide on top of the resting pen keeps each
 /// glyph continuous at glide start/end and visits at most [`GLIDE_PHASES`] phases per axis.
-pub(super) fn place(at: [f32; 2], ppem: f32, glide: [f32; 2]) -> ([f32; 2], [u8; 2]) {
-    let (rx, r_subpx) = coretext_match::glyph_x(at[0], ppem);
+pub(super) fn place(at: [f32; 2], ppem: f32, glide: [f32; 2], skia: bool) -> ([f32; 2], [u8; 2]) {
+    let (rx, r_subpx) = if skia { windows::glyph_x(at[0]) } else { coretext_match::glyph_x(at[0], ppem) };
     let n = GLIDE_PHASES as f32;
     let gx = rx * coretext_match::PHASES + r_subpx as f32 + (glide[0] * n).round() * (coretext_match::PHASES / n);
     let fx = (gx / coretext_match::PHASES).floor();

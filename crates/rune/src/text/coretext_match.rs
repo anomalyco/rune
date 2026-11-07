@@ -6,9 +6,9 @@ use super::ApplePipeline;
 /// smoothing's dilation. Set app-wide with `App::font_smoothing`, or at run time with
 /// `Tx::set_font_smoothing`, which redraws with glyphs rasterised for the new mode.
 ///
-/// The default is [`FontSmoothing::On`] on macOS and [`FontSmoothing::Off`] on every other
-/// platform (Linux, Windows, the web), which has no font smoothing to match. Both work on any
-/// OS (they are arithmetic on outlines, not calls into CoreText). Either way the pipeline
+/// The default is [`FontSmoothing::On`] on macOS, [`FontSmoothing::DirectWrite`] on Windows and
+/// [`FontSmoothing::Off`] elsewhere (Linux, the web). `On` and `Off` work on any OS (they are
+/// arithmetic on outlines, not calls into CoreText). Either way the pipeline
 /// floors pens to CoreGraphics' subpixel steps (`quantisation_steps`), flattens curves and
 /// hints small sizes as CoreGraphics does, and draws coverage as is. Windows blend in
 /// sRGB-encoded space, as CoreGraphics does, unless the app sets `App::srgb_blend`.
@@ -21,23 +21,34 @@ pub enum FontSmoothing {
     On,
     /// Text that matches CoreText with font smoothing off, which is what macOS browsers draw
     /// for `-webkit-font-smoothing: antialiased`: the pipeline without the dilation
-    /// ([`ApplePipeline::UNSMOOTHED`]). Lighter than `On`. The default off macOS.
+    /// ([`ApplePipeline::UNSMOOTHED`]). Lighter than `On`. The default on Linux and the web.
     Off,
+    /// Text that matches Chromium's on Windows: DirectWrite rasterises each glyph as Skia asks it
+    /// to (the rendering mode the font's `gasp` table picks, its hints, grayscale antialiasing),
+    /// pens sit on quarter pixels, and Skia's text gamma and contrast weigh the coverage by the
+    /// text's luminance. The default on Windows; elsewhere, without DirectWrite, it draws as `Off`.
+    DirectWrite,
 }
 
 impl Default for FontSmoothing {
     fn default() -> Self {
-        if cfg!(target_os = "macos") { FontSmoothing::On } else { FontSmoothing::Off }
+        if cfg!(target_os = "macos") {
+            FontSmoothing::On
+        } else if cfg!(target_os = "windows") {
+            FontSmoothing::DirectWrite
+        } else {
+            FontSmoothing::Off
+        }
     }
 }
 
 impl FontSmoothing {
     /// The CoreGraphics stages glyphs rasterise with: all of them for `On`, all but the
-    /// dilation for `Off`.
+    /// dilation for `Off` (and for `DirectWrite` where DirectWrite can't draw a glyph).
     pub fn pipeline(self) -> ApplePipeline {
         match self {
             FontSmoothing::On => ApplePipeline::SMOOTHED,
-            FontSmoothing::Off => ApplePipeline::UNSMOOTHED,
+            FontSmoothing::Off | FontSmoothing::DirectWrite => ApplePipeline::UNSMOOTHED,
         }
     }
 }
