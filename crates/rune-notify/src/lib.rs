@@ -5,7 +5,9 @@
 //!   post asks the person for permission, and posts are dropped until they allow it.
 //! - **Windows:** toast notifications (`Windows.UI.Notifications`) under the app's
 //!   `AppUserModelID`. `register` gives the process that identity, with a name and icon for its
-//!   toasts; nothing posts before it.
+//!   toasts; nothing posts before it. With an activation scheme (`Identity::activation`) a click
+//!   opens a link on that scheme, which reaches the app whether it runs or not, as long as the
+//!   toast is in the notification center; `click_from_url` turns the link back into the click.
 //! - **Elsewhere:** `available` is false and every call does nothing.
 //!
 //! Notifications are silent: they never play a sound.
@@ -67,18 +69,30 @@ pub struct Identity {
     id: String,
     name: String,
     icon: Option<PathBuf>,
+    scheme: Option<String>,
 }
 
 impl Identity {
     /// `id` is the app's reverse-DNS identifier (on Windows its `AppUserModelID`, which also
     /// groups its windows on the taskbar); `name` is what people see.
     pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
-        Identity { id: id.into(), name: name.into(), icon: None }
+        Identity { id: id.into(), name: name.into(), icon: None, scheme: None }
     }
 
     /// An image file (PNG or ICO) for the app's toasts on Windows.
     pub fn icon(mut self, path: impl Into<PathBuf>) -> Self {
         self.icon = Some(path.into());
+        self
+    }
+
+    /// Windows: clicks reach the app as `<scheme>://notification/…` links, so a click on a toast
+    /// left in the notification center starts the app after it quit. `register` points the
+    /// scheme at this executable (`HKEY_CURRENT_USER\Software\Classes\<scheme>`); the app hands
+    /// the links it receives (`rune::App::on_open_url`) to `click_from_url`. With
+    /// `rune::single_instance`, a click while the app runs reaches the running process the same
+    /// way. Without a scheme a click reaches only the process that posted the toast, while it runs.
+    pub fn activation(mut self, scheme: impl Into<String>) -> Self {
+        self.scheme = Some(scheme.into());
         self
     }
 }
@@ -88,7 +102,8 @@ impl Identity {
 ///
 /// Windows: sets the process's `AppUserModelID` and registers the name and icon for it under
 /// `HKEY_CURRENT_USER\Software\Classes\AppUserModelId\<id>`, the identity an app without a
-/// package or Start-menu shortcut posts toasts with. macOS reads the identity from the bundle, so
+/// package or Start-menu shortcut posts toasts with, and the activation scheme, if any, under
+/// `HKEY_CURRENT_USER\Software\Classes\<scheme>`. macOS reads the identity from the bundle, so
 /// this does nothing there, nor elsewhere.
 pub fn register(identity: &Identity) -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -167,10 +182,26 @@ pub fn remove(ids: &[&str]) {
     windows::remove(ids);
 }
 
+/// The click a notification link stands for, when `url` is one of this app's
+/// (`Identity::activation`); None for any other link. Windows only: elsewhere a click never
+/// arrives as a link.
+pub fn click_from_url(url: &str) -> Option<Click> {
+    #[cfg(target_os = "windows")]
+    {
+        windows::click_from_url(url)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = url;
+        None
+    }
+}
+
 /// Calls `f` for every click on one of the app's notifications, from any thread (wake the app's
 /// loop from it). macOS brings the app forward on a click; call `bring_to_front` for the window.
 /// Install it at launch: on macOS a click that launched the app arrives too. On Windows a click
-/// arrives while the process that posted the toast runs.
+/// arrives while the process that posted the toast runs, unless the identity has an activation
+/// scheme: then every click comes as a link (`click_from_url`).
 pub fn on_click(f: impl Fn(Click) + Send + Sync + 'static) {
     *handler().lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(f));
     #[cfg(target_os = "macos")]
