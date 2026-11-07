@@ -57,18 +57,19 @@ mod measure;
 mod pill_chips;
 mod rich_layout;
 mod run;
-pub(crate) use pill_chips::pill_chips;
+pub(crate) use pill_chips::{bare_icons, pill_chips};
 mod svg_path;
 mod trak;
 mod underline;
 mod line_metrics;
 pub use line_metrics::{last_line_fill, layout_height, stream_height_lag};
+pub(crate) use line_metrics::spec_height;
 pub(crate) use underline::underline_edges;
 pub use case::TextCase;
 pub use hash::text_hash;
 pub(crate) use hash::{elide_key, shape_key};
 pub(crate) use families::choose_families;
-pub use measure::{FamiliesGuard, TextInk, advance, font_epoch, ink, measure, measure_with, with_families};
+pub use measure::{FamiliesGuard, TextInk, advance, content_widths, font_epoch, ink, measure, measure_with, with_families};
 pub use rich_layout::RichLayoutOptions;
 pub use run::{Run, RunLayout};
 pub(crate) use case::Source as CaseSource;
@@ -90,7 +91,11 @@ pub(crate) use cursor::{cursor_from_point, cursor_geometry, line_edge, move_line
 pub use decorations::Deco;
 pub(crate) use decorations::PaintedDeco;
 pub use span::{Ink, Link, LinkPaint, Span, TextHighlight};
-pub(crate) use span::{PillChip, PillMetrics, flatten_spans};
+pub(crate) use span::{BareIcon, PillChip, PillMetrics, flatten_spans};
+
+/// Coverage exponents for black and for white text with font smoothing off, measured against
+/// Chromium's grayscale text on Windows (the same Inter and IBM Plex Mono, light and dark).
+const TEXT_GAMMA: [f32; 2] = [1.12, 0.45];
 
 use decorations::Decoration;
 use atlas::{AtlasGlyph, COLOR_GLYPH_BUDGET, ColorGlyph, GlyphKey, GlyphMap, Rasterized};
@@ -385,6 +390,19 @@ impl TextSystem {
     /// How glyphs rasterise and place ([`FontSmoothing`]).
     pub fn font_smoothing(&self) -> FontSmoothing { self.smoothing }
 
+    /// The exponent a glyph's coverage is raised to when drawn in premultiplied `fill`. With
+    /// smoothing off (the default off macOS) it stands in for the text gamma a browser's
+    /// grayscale antialiasing applies there: light text on a dark page draws heavier and dark
+    /// text on a light one a little lighter than coverage blended as is, keyed by the text's
+    /// luminance. With smoothing on, CoreText's dilation does that job and coverage is drawn as is.
+    pub fn coverage_exponent(&self, fill: [f32; 4]) -> f32 {
+        if self.smoothing == FontSmoothing::On || fill[3] <= 0.0 {
+            return 1.0;
+        }
+        let luma = (0.2126 * fill[0] + 0.7152 * fill[1] + 0.0722 * fill[2]) / fill[3];
+        TEXT_GAMMA[0] + (TEXT_GAMMA[1] - TEXT_GAMMA[0]) * luma.clamp(0.0, 1.0)
+    }
+
     /// Rasterise and place glyphs in `mode` from the next placement on, with its CoreGraphics
     /// stages ([`FontSmoothing::pipeline`]). Glyphs already rasterised in another mode stay
     /// cached under their own keys.
@@ -468,7 +486,11 @@ impl TextSystem {
             .enumerate()
             .map(|(i, p)| {
                 let r = (p.start as usize).min(text.len())..(p.end as usize).min(text.len());
-                (i, r, (pm.lead(p.icon.is_some()) * scale).round() as u32, (pm.trail() * scale).round() as u32)
+                let (lead, trail) = match &p.bare {
+                    Some(b) => (b.size + b.gap, 0.0),
+                    None => (pm.lead(p.icon.is_some()), pm.trail()),
+                };
+                (i, r, (lead * scale).round() as u32, (trail * scale).round() as u32)
             })
             .filter(|(_, r, ..)| {
                 !r.is_empty() && text.is_char_boundary(r.start) && text.is_char_boundary(r.end) && !text.as_bytes()[r.clone()].contains(&b'\n')

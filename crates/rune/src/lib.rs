@@ -100,6 +100,7 @@ pub use el::Cycle;
 pub use el::Drag;
 pub use el::El;
 pub use el::GrowthSpec;
+pub use el::InlineIcon;
 pub use el::LiveRegion;
 pub use el::Outline;
 pub use el::Phase;

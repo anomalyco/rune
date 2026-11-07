@@ -65,7 +65,7 @@ pub(super) fn text_extent(n: &Node, spec: &TextSpec, layout: &Layout<Ink>, r: [f
     let origin = [text_x(spec, x0, x1, layout.full_width() / scale), r[1] + n.inset[1]];
     let x = origin[0] + lo / scale;
     (MRect::new(x, origin[1], ((hi - lo) / scale).min(x1 - x).max(0.0),
-        (layout_height(layout, spec.style, scale) / scale).min(r[3] - n.inset[1] - n.inset[3])), origin)
+        (crate::text::spec_height(layout, spec.style, scale, spec.exact_lines) / scale).min(r[3] - n.inset[1] - n.inset[3])), origin)
 }
 
 /// Where a `width`-wide text line starts between `x0` and `x1`. Wrapped text aligns each line
@@ -364,7 +364,7 @@ pub(super) fn compute_layout(taffy: &mut LayoutEngine, root: SlotId, room: Size<
 
 /// The height (device px) of `l` as `spec` shows it: its first `max_lines` lines when set.
 pub(super) fn clamped_height(l: &Layout<Ink>, spec: &TextSpec, scale: f32) -> f32 {
-    let full = layout_height(l, spec.style, scale);
+    let full = crate::text::spec_height(l, spec.style, scale, spec.exact_lines);
     match spec.max_lines.checked_sub(1).and_then(|last| l.lines().nth(last)).filter(|_| l.len() > spec.max_lines) {
         Some(line) => line.metrics().block_max_coord.ceil().min(full),
         None => full,

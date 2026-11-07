@@ -4,6 +4,16 @@
 use super::*;
 
 impl El {
+    /// Keeps this text's height its lines' own, unrounded (22.4 points for a line at a 22.4
+    /// line height), as a browser lays out a paragraph, instead of rounding it up to whole
+    /// device pixels: a stack of such texts lands where a web page's does rather than gaining up
+    /// to a pixel per text.
+    pub fn exact_lines(mut self) -> Self {
+        if let Some(t) = &mut self.text {
+            t.exact_lines = true;
+        }
+        self
+    }
     pub fn font(mut self, s: TextStyle) -> Self {
         if let Some(t) = &mut self.text {
             t.style = s;
@@ -157,7 +167,7 @@ impl El {
             .map(|(start, end, id)| {
                 let st = inp.pill_style.as_ref().map(|f| f(id)).unwrap_or_default();
                 let icon = st.icon.or_else(|| inp.pill_icon.as_ref().and_then(|f| f(id)));
-                crate::text::PillChip { start, end, icon, bg: st.bg, fg: st.fg }
+                crate::text::PillChip { start, end, icon, bg: st.bg, fg: st.fg, bare: None }
             })
             .collect();
     }

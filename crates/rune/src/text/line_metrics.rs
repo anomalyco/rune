@@ -11,6 +11,15 @@ pub fn layout_height(l: &Layout<Ink>, style: TextStyle, scale: f32) -> f32 {
     l.height().max(style.line_px() * scale).ceil()
 }
 
+/// [`layout_height`], or with `exact` the lines' own height kept fractional, to 1/64 px as a
+/// browser's layout units keep a 22.4 px line (`El::exact_lines`).
+pub(crate) fn spec_height(l: &Layout<Ink>, style: TextStyle, scale: f32, exact: bool) -> f32 {
+    if !exact {
+        return layout_height(l, style, scale);
+    }
+    (l.height().max(style.line_px() * scale) * 64.0).round() / 64.0
+}
+
 /// Fraction of the final line occupied by ink advance, excluding hanging whitespace.
 /// Width and the layout use device pixels. No shaping or allocation occurs here.
 pub fn last_line_fill(l: &Layout<Ink>, width: f32) -> f32 {

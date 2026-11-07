@@ -73,6 +73,8 @@ impl Span {
 }
 
 /// An atomic pill drawn as a chip: byte range `start..end` of the content, and its leading icon.
+/// A `bare` one is an [`InlineIcon`](crate::InlineIcon): no chip, only the icon before the
+/// word it keeps to its line.
 #[derive(Clone, Debug)]
 pub(crate) struct PillChip {
     pub start: u32,
@@ -80,6 +82,16 @@ pub(crate) struct PillChip {
     pub icon: Option<&'static Icon>,
     pub bg: Option<Color>,
     pub fg: Option<Color>,
+    pub bare: Option<Box<BareIcon>>,
+}
+
+/// An inline icon's room and look in points (see [`InlineIcon`](crate::InlineIcon)).
+#[derive(Clone, Debug)]
+pub(crate) struct BareIcon {
+    pub size: f32,
+    pub gap: f32,
+    pub radius: f32,
+    pub image: Option<crate::Pixels>,
 }
 
 /// A pill chip's horizontal geometry in points for text of `size` points: the room before its

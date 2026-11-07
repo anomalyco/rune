@@ -246,7 +246,9 @@ pub(super) fn zoom_glyph(mut g: Instance, origin: [f32; 2], r_origin: [f32; 2], 
 /// at `fill`'s alpha. None when the image atlas can't place it.
 pub(super) fn glyph_or_image(q: &GlyphQuad, text: &TextSystem, images: &mut crate::pixels::ImageAtlas, fill: [f32; 4], clip: [f32; 4], fade: [f32; 4]) -> Option<Instance> {
     if q.color == 0 {
-        return Some(glyph(q, fill, clip, fade));
+        let mut g = glyph(q, fill, clip, fade);
+        g.params[3] = text.coverage_exponent(fill);
+        return Some(g);
     }
     let image = images.place(text.color_glyph(q.color), [q.rect[2], q.rect[3]])?;
     Some(Instance {
