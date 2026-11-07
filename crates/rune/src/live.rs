@@ -224,7 +224,13 @@ pub(crate) enum LatchOp {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Property { Opacity, Offset, Scale, Fill, Rect, Blur, Trim }
+pub(crate) enum Property { Opacity, Offset, Scale, Fill, Rect, Blur, Trim, TextColor, Border, Shadow, GradientTop, GradientBottom }
+impl Property {
+    /// A colour: it moves paint only, never geometry.
+    pub(crate) fn is_color(self) -> bool {
+        matches!(self, Property::Fill | Property::TextColor | Property::Border | Property::Shadow | Property::GradientTop | Property::GradientBottom)
+    }
+}
 #[derive(Clone)]
 pub(crate) struct Bound {
     pub source: Arc<Source>,

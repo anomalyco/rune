@@ -561,7 +561,8 @@ impl<S: 'static> Runtime<S> {
                     self.scene.animate(id, prop::BLUR, vis.blur, anim);
                 } else { self.set_or_anim(id, prop::BLUR, vis.blur, spring_l, instant || !was_present); }
             }
-            if !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Fill) {
+            let live_colors = paint_tracks::live_colors(&nodes[i]);
+            if !live_colors.fill {
                 self.commit_paint(id, P_FILL, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.fill), vis.fill, spring_c, instant);
             }
             if vis.border_width > 0.0 {
@@ -572,12 +573,14 @@ impl<S: 'static> Runtime<S> {
                     // A solid border's bottom springs into the gradient rather than jumping.
                     self.scene.set(id, P_BORDER_BOTTOM, c);
                 }
-                self.commit_paint(id, P_BORDER, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.border), vis.border, spring_c, instant);
+                if !live_colors.border {
+                    self.commit_paint(id, P_BORDER, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.border), vis.border, spring_c, instant);
+                }
                 if vis.border_bottom.is_some() || had_bottom {
                     self.set_or_anim(id, P_BORDER_BOTTOM, vis.border_bottom.unwrap_or(vis.border), spring_c, instant);
                 }
             }
-            if let Some(c) = paint_tracks::text_color(&nodes[i]) {
+            if !live_colors.text && let Some(c) = paint_tracks::text_color(&nodes[i]) {
                 self.commit_paint(id, P_TEXT, paint_tracks::prev_node(&self.nodes, &nodes, old, i).and_then(paint_tracks::text_color), c, spring_tc, instant);
             }
             if nodes[i].vis.icon.is_some() && (nodes[i].vis.icon_turn != 0.0 || self.scene.store().has(id, P_ICON_TURN)) {
@@ -593,7 +596,7 @@ impl<S: 'static> Runtime<S> {
                 self.commit_paint(id, P_PRESS_C, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.press), vis.press, spring_c, instant);
             }
             if !vis.cold.is_empty() || paint_tracks::prev_node(&self.nodes, &nodes, old, i).is_some_and(|o| !o.vis.cold.is_empty()) {
-                self.commit_cold_paint(id, vis, old, spring_c, spring_l, instant);
+                self.commit_cold_paint(id, vis, old, live_colors, spring_c, spring_l, instant);
             }
 
             // Streaming word reveal.
@@ -688,16 +691,17 @@ impl<S: 'static> Runtime<S> {
         for old in &old_nodes {
             if old.cold.get().is_none_or(|c| c.live.is_empty()) { continue; }
             if let Some(&i) = self.node_index.get(&old.id) {
-                let mut fill = None;
+                let mut kept = paint_tracks::LiveColors::default();
                 if let Some(cold) = nodes[i].cold.get_mut_if_some() {
                     for bound in &mut cold.live {
                         if let Some(previous) = old.live.iter().find(|b| b.property == bound.property && Arc::ptr_eq(&b.source, &bound.source)) {
                             bound.seen = if tx.settle { None } else { previous.seen };
-                            if bound.property == crate::live::Property::Fill { fill = Some(old.vis.fill); }
+                            kept.add(bound.property);
                         }
                     }
                 }
-                if let Some(fill) = fill { nodes[i].vis.fill = fill; }
+                // A kept colour binding keeps the colour it last latched until it publishes again.
+                kept.carry(old, &mut nodes[i]);
                 // Removing a binding restores the normal property, including transform defaults.
                 for previous in &old.live {
                     if !nodes[i].live.iter().any(|b| b.property == previous.property) {

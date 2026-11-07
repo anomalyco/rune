@@ -38,6 +38,61 @@ pub(super) fn text_color(n: &Node) -> Option<Color> {
     n.text.as_ref().map(|t| t.color).or(n.vis.icon.map(|(_, c)| c))
 }
 
+/// Which of a node's colours a live value owns. A commit leaves those tracks to the latch.
+#[derive(Clone, Copy, Default)]
+pub(super) struct LiveColors {
+    pub(super) fill: bool,
+    pub(super) text: bool,
+    pub(super) border: bool,
+    pub(super) shadow: bool,
+    pub(super) gradient: [bool; 2],
+}
+
+pub(super) fn live_colors(n: &Node) -> LiveColors {
+    let mut c = LiveColors::default();
+    for b in n.live.iter() { c.add(b.property); }
+    c
+}
+
+impl LiveColors {
+    pub(super) fn add(&mut self, p: crate::live::Property) {
+        use crate::live::Property;
+        match p {
+            Property::Fill => self.fill = true,
+            Property::TextColor => self.text = true,
+            Property::Border => self.border = true,
+            Property::Shadow => self.shadow = true,
+            Property::GradientTop => self.gradient[0] = true,
+            Property::GradientBottom => self.gradient[1] = true,
+            _ => {}
+        }
+    }
+
+    /// Puts back on `new` the colours `old` last latched for the bindings it kept, since the
+    /// view authored its own placeholder colour.
+    pub(super) fn carry(self, old: &Node, new: &mut Node) {
+        if self.fill { new.vis.fill = old.vis.fill; }
+        if self.border { new.vis.border = old.vis.border; }
+        if self.text && let Some(c) = text_color(old) {
+            if let Some(spec) = &mut new.text { if spec.color != c { spec.color = c; } }
+            else if new.vis.icon.is_some_and(|(_, ic)| ic != c) && let Some((_, ic)) = &mut new.vis.cold_mut().icon { *ic = c; }
+        }
+        if self.shadow && let Some(c) = old.vis.shadows.first().map(|s| s.color)
+            && new.vis.shadows.first().is_some_and(|s| s.color != c)
+        {
+            new.vis.cold_mut().shadows[0].color = c;
+        }
+        for k in 0..2 {
+            if self.gradient[k] && let Some(c) = old.vis.gradient.as_deref().map(|g| g[k])
+                && new.vis.gradient.as_deref().is_some_and(|g| g[k] != c)
+                && let Some(g) = new.vis.cold_mut().gradient.as_deref_mut()
+            {
+                g[k] = c;
+            }
+        }
+    }
+}
+
 /// Readies `p` (hover, press, press scale), which reads `rest` without a track, to move to
 /// `to`: false when it has no track and `to` is `rest`, so there's nothing to do; otherwise it
 /// has a track, made at `rest` if it had none.
@@ -85,6 +140,7 @@ impl<S: 'static> Runtime<S> {
         id: NodeId,
         vis: &Visual,
         old: Option<usize>,
+        live: LiveColors,
         spring_c: Spring,
         spring_l: Spring,
         instant: bool,
@@ -95,7 +151,9 @@ impl<S: 'static> Runtime<S> {
         }
         for (k, sh) in vis.shadows.iter().take(P_SHADOWS.len()).enumerate() {
             let was = prev_vis(&self.nodes, vis, old).and_then(|o| o.shadows.get(k).copied());
-            self.commit_paint(id, P_SHADOWS[k], was.map(|w| w.color), sh.color, spring_c, instant);
+            if !(k == 0 && live.shadow) {
+                self.commit_paint(id, P_SHADOWS[k], was.map(|w| w.color), sh.color, spring_c, instant);
+            }
             self.commit_paint(id, P_SHADOW_GEO[k], was.map(|w| shadow_geo(&w)), shadow_geo(sh), spring_l, instant);
         }
         let prev_shadows = prev_vis(&self.nodes, vis, old).map_or(0, |o| o.shadows.len()).min(P_SHADOWS.len());
@@ -105,8 +163,11 @@ impl<S: 'static> Runtime<S> {
         }
         if let Some(&g) = vis.gradient.as_deref() {
             let was = prev_vis(&self.nodes, vis, old).and_then(|o| o.gradient.as_deref().copied());
-            self.commit_paint(id, P_GRADIENT[0], was.map(|w| w[0]), g[0], spring_c, instant);
-            self.commit_paint(id, P_GRADIENT[1], was.map(|w| w[1]), g[1], spring_c, instant);
+            for k in 0..2 {
+                if !live.gradient[k] {
+                    self.commit_paint(id, P_GRADIENT[k], was.map(|w| w[k]), g[k], spring_c, instant);
+                }
+            }
         }
         if let Some(rg) = &vis.radial {
             for (k, &(_, c)) in rg.stops.iter().take(P_RADIAL.len()).enumerate() {
@@ -170,3 +231,6 @@ impl<S: 'static> Runtime<S> {
 #[cfg(test)]
 #[path = "../paint_tracks_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "../live_colors_tests.rs"]
+mod live_colors_tests;

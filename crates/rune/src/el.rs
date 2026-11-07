@@ -26,6 +26,11 @@ mod backdrop;
 mod child_exit;
 pub(crate) mod drop;
 pub(crate) mod effect;
+
+/// An effect slot (`El::effect`): size it like any box.
+pub fn effect(mark: u32) -> El {
+    base(FlexDirection::Row).effect(mark)
+}
 mod element_info;
 mod enter_delay;
 mod focus;
@@ -34,6 +39,7 @@ mod handler_set;
 mod handlers;
 mod layout;
 pub(crate) mod layout_watch;
+mod live_colors;
 pub mod motion;
 mod pills;
 mod pixel_snap;
@@ -41,6 +47,51 @@ mod ride_trailing;
 mod scroll;
 mod sticky;
 mod text;
+
+pub fn text(content: impl Into<String>) -> El {
+    let mut e = base(FlexDirection::Row);
+    e.role = "text";
+    e.text = Some(crate::cold::SharedBox::new(TextSpec {
+        content: content.into(),
+        style: crate::tok::type_::BODY,
+        color: Color::WHITE,
+        inked: false,
+        align: Align::Start,
+        spans: Vec::new(),
+        wrap: false,
+        reveal: -1.0,
+        truncate: false,
+        elide: Elide::End,
+        max_lines: 0,
+        truncate_fade: false,
+        fade_em: TRUNCATE_FADE_EM,
+        justify: false,
+        live: None,
+        links: Vec::new(),
+        on_link: None,
+        on_link_secondary: None,
+        advance_in: None,
+        case: None,
+        source: None,
+        selectable: false,
+        selection: DEFAULT_SELECTION,
+        uncopied: Vec::new(),
+        rings: Vec::new(),
+        strikes: Vec::new(),
+        highlights: Vec::new(),
+        blocks: Vec::new(),
+        soft_breaks: Vec::new(),
+        pills: Vec::new(),
+        pill_colors: None,
+        rich_style: crate::edit::RichStyle::default(),
+        redacted: false,
+        secure_revealed: false,
+        wrap_anywhere: false,
+        exact_lines: true,
+        shape: None,
+    }));
+    e
+}
 mod text_spec;
 mod tx;
 pub(crate) mod virtual_list;
@@ -626,59 +677,9 @@ pub fn el() -> El {
     base(FlexDirection::Row)
 }
 
-/// An effect slot (`El::effect`): size it like any box.
-pub fn effect(mark: u32) -> El {
-    base(FlexDirection::Row).effect(mark)
-}
-
 /// Takes the free space along its parent's main axis.
 pub fn spacer() -> El {
     base(FlexDirection::Row).grow(1.0)
-}
-
-pub fn text(content: impl Into<String>) -> El {
-    let mut e = base(FlexDirection::Row);
-    e.role = "text";
-    e.text = Some(crate::cold::SharedBox::new(TextSpec {
-        content: content.into(),
-        style: crate::tok::type_::BODY,
-        color: Color::WHITE,
-        inked: false,
-        align: Align::Start,
-        spans: Vec::new(),
-        wrap: false,
-        reveal: -1.0,
-        truncate: false,
-        elide: Elide::End,
-        max_lines: 0,
-        truncate_fade: false,
-        fade_em: TRUNCATE_FADE_EM,
-        justify: false,
-        live: None,
-        links: Vec::new(),
-        on_link: None,
-        on_link_secondary: None,
-        advance_in: None,
-        case: None,
-        source: None,
-        selectable: false,
-        selection: DEFAULT_SELECTION,
-        uncopied: Vec::new(),
-        rings: Vec::new(),
-        strikes: Vec::new(),
-        highlights: Vec::new(),
-        blocks: Vec::new(),
-        soft_breaks: Vec::new(),
-        pills: Vec::new(),
-        pill_colors: None,
-        rich_style: crate::edit::RichStyle::default(),
-        redacted: false,
-        secure_revealed: false,
-        wrap_anywhere: false,
-        exact_lines: true,
-        shape: None,
-    }));
-    e
 }
 
 /// Text with styled byte ranges; wraps at its width.

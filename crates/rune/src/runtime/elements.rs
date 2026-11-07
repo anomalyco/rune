@@ -199,7 +199,7 @@ impl<S: 'static> Runtime<S> {
                 crate::live::Property::Offset => 1,
                 crate::live::Property::Scale | crate::live::Property::Rect => 1 | 2,
                 crate::live::Property::Opacity => 4,
-                crate::live::Property::Fill | crate::live::Property::Blur | crate::live::Property::Trim => 0,
+                _ => 0,
             })
         }
         let store = self.scene.store();

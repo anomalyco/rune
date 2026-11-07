@@ -67,7 +67,7 @@ fn text_hash(text: &str) -> u64 {
 }
 
 fn intent(n: &Node) -> bool {
-    n.live.iter().any(|b| b.spring.is_none() && !matches!(b.property, crate::live::Property::Fill | crate::live::Property::Blur | crate::live::Property::Trim))
+    n.live.iter().any(|b| b.spring.is_none() && !b.property.is_color() && !matches!(b.property, crate::live::Property::Blur | crate::live::Property::Trim))
 }
 
 impl<S: 'static> Runtime<S> {
