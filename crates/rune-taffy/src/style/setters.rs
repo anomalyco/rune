@@ -279,6 +279,15 @@ impl CompactStyle {
         });
     }
 
+    /// Border widths in points, `[top, right, bottom, left]`, which the box's padding and
+    /// content lay out inside.
+    #[inline(always)]
+    pub fn set_border(&mut self, [top, right, bottom, left]: [f32; 4]) {
+        if self.extra.is_none() && top == 0.0 && right == 0.0 && bottom == 0.0 && left == 0.0 { return; }
+        let l = LengthPercentage::length;
+        self.modify_cold(|s| s.border = Rect { left: l(left), right: l(right), top: l(top), bottom: l(bottom) });
+    }
+
     #[inline(always)]
     pub fn set_margin_left(&mut self, m: f32) {
         if self.extra.is_none() && m == 0.0 { return; }

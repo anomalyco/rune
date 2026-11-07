@@ -234,6 +234,12 @@ fn prepare_text(
     (measure, secure_measure)
 }
 
+/// `El::border_layout`: the border's sides as layout room, each as wide as it draws at `scale`.
+fn lay_out_border(style: &mut CompactStyle, vis: &Visual, scale: f32) {
+    let sides = vis.border_sides.unwrap_or([vis.border_width; 4]);
+    style.set_border(sides.map(|w| crate::runtime::pixel_snap::line_width(w * scale) / scale));
+}
+
 /// Text, an icon, and a text field's placeholder, caret and selection that weren't given a
 /// colour take the window's foreground ([`Cx::foreground`]), as CSS text takes `color`.
 fn take_foreground(
@@ -431,6 +437,7 @@ fn flatten_owned(
     }
     let (measure, secure_measure) = prepare_text(&mut text, input.as_deref(), scale);
     take_foreground(&mut text, input.as_deref_mut(), &mut vis, memo_ctx.foreground);
+    if vis.border_layout { lay_out_border(&mut style, &vis, scale); }
     let inert = inert || parent.is_some_and(|p| nodes[p].inert);
     let hover_within = inherit_hover_within(&vis, above.as_ref(), parent, nodes);
     let pixel_aspect = vis.pixels.as_ref()
@@ -612,6 +619,7 @@ fn flatten_ref(
     let inert = el.inert || parent.is_some_and(|p| nodes[p].inert);
     let mut vis = el.vis.clone();
     take_foreground(&mut text, input.as_deref_mut(), &mut vis, memo_ctx.foreground);
+    if vis.border_layout { lay_out_border(style.to_mut(), &vis, scale); }
     let hover_within = inherit_hover_within(&vis, el.above.as_ref(), parent, nodes);
     let pixel_aspect = vis.pixels.as_ref()
         .filter(|_| {

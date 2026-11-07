@@ -312,10 +312,10 @@ impl Renderer {
             if !t.rows.is_empty() {
                 let mut rows = col().key("tbc").w_full().clip_rounded(body.radius);
                 for (i, cells) in t.rows.iter().enumerate() {
-                    if i > 0 {
-                        rows = rows.child(rule(format!("s{i}")));
-                    }
-                    rows = rows.child(row_at(i, cells));
+                    // `tbody tr:not(:last-child) td { border-bottom: 0.5px }`: a border that
+                    // takes a whole device pixel of the row, as Chromium lays it out.
+                    let row = row_at(i, cells);
+                    rows = rows.child(if i + 1 < t.rows.len() { row.border_sides([0.0, 0.0, 0.5, 0.0], s.table_rule).border_layout() } else { row });
                 }
                 let card = col().key("tb").w_full().radius(body.radius).fill(body.fill);
                 frame = frame.child(body.shadows.iter().fold(card, |c, sh| c.box_shadow(*sh)).child(rows));

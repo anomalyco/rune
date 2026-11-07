@@ -21,6 +21,8 @@ pub struct VisualCold {
     pub border_bottom: Option<Color>,
     /// Per-side border widths `[top, right, bottom, left]` in points (`El::border_sides`).
     pub(crate) border_sides: Option<[f32; 4]>,
+    /// The border takes room in layout, snapped to device pixels (`El::border_layout`).
+    pub(crate) border_layout: bool,
     /// Dash and gap lengths of a dashed border, in points (`El::border_dash`).
     pub border_dash: Option<[f32; 2]>,
     /// Points into the dash pattern where it starts (`El::border_dash_phase`).
@@ -102,6 +104,7 @@ impl Empty for VisualCold {
         surface_place: crate::native_surface::place::SurfacePlace::CENTRED,
         border_bottom: None,
         border_sides: None,
+        border_layout: false,
         border_dash: None,
         border_dash_phase: 0.0,
         shadows: Vec::new(),
