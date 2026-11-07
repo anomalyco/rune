@@ -63,6 +63,15 @@ impl El {
         }
         self
     }
+    /// Makes this element's [`Self::border`] or [`Self::border_sides`] take room in layout, as a
+    /// CSS border does: its padding and content lay out inside it, each side as wide as it
+    /// draws, snapped as Chromium snaps a border width to device pixels. So a
+    /// `border-bottom: 0.5px` row is one whole device pixel taller at any scale (0.8 points at
+    /// 1.25x), and a stack of them ends where a web page's does.
+    pub fn border_layout(mut self) -> Self {
+        self.vis.cold_mut().border_layout = true;
+        self
+    }
     /// A border whose colour runs from `top` at the top edge to `bottom` at the bottom edge,
     /// e.g. a top-lit hairline rim. Drawn like [`El::border`], inside the box over the fill.
     /// Replaces any `border`, and `border` replaces it.
