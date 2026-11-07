@@ -22,6 +22,8 @@ pub(crate) struct ViewDefaults {
     pub(crate) foreground: Option<Color>,
     /// [`Cx::focus_ring`].
     pub(crate) focus_ring: Option<crate::el::Outline>,
+    /// [`Cx::help_look`].
+    pub(crate) help: Option<super::HelpLook>,
 }
 
 /// Wakes the shell from another thread (new data arrived); a no-op headless.
@@ -158,6 +160,13 @@ impl<S> Cx<S> {
     /// `:focus-visible` does. Set it on every run of the view.
     pub fn focus_ring(&mut self, width: f32, offset: f32, color: Color) {
         self.defaults.focus_ring = Some(crate::el::Outline { width, offset, color });
+    }
+    /// How [`El::help`](crate::El::help) tooltips look, where they sit and how long they wait,
+    /// in place of the system's ([`HelpLook::system`](crate::HelpLook::system)): a design
+    /// system's own tooltip, as a web page draws one. Rune then draws it on macOS too, instead
+    /// of AppKit's. Set it on every run of the view.
+    pub fn help_look(&mut self, look: crate::HelpLook) {
+        self.defaults.help = Some(look);
     }
     /// The height of the titlebar the app draws (`App::titlebar`), in window points, in place of
     /// `Titlebar::new`'s while the view keeps setting it: a band that scales with the app's UI

@@ -6,7 +6,8 @@
 //! help (`Link::help`), hit-tested on their glyphs and shown under the link.
 //!
 //! A macOS window shows AppKit's own tooltips instead (`set_native_help`): the host registers
-//! [`Runtime::help_regions`] with its view and AppKit owns the delay, look and hiding.
+//! [`Runtime::help_regions`] with its view and AppKit owns the delay, look and hiding, unless
+//! the view sets its own look (`Cx::help_look`), which Rune draws everywhere.
 use super::*;
 
 #[derive(Default)]
@@ -26,6 +27,9 @@ pub(super) struct HelpState {
     /// The host shows system tooltips from `help_regions`.
     native: bool,
     regions: Vec<([f32; 4], String)>,
+    /// When (clock seconds) a shown tooltip last hid because the pointer left its element,
+    /// for the look's skip delay.
+    hid_at: Option<f64>,
 }
 
 fn overlaps(a: [f32; 4], b: [f32; 4]) -> bool {
@@ -41,14 +45,15 @@ fn subtract(a: [f32; 4], b: [f32; 4]) -> Vec<[f32; 4]> {
         .into_iter().filter(|r| r[2] > r[0] && r[3] > r[1]).collect()
 }
 
-const PAD: [f32; 2] = [7.0, 4.0];
-const GAP: f32 = 6.0;
-/// The gap of a tooltip shown above its element (Kobalte's `gutter`).
-const ABOVE: f32 = 4.0;
-const MAX_W: f32 = 300.0;
-const MARGIN: f32 = 4.0;
-
 impl<S: 'static> Runtime<S> {
+    /// The host shows AppKit's tooltips: on macOS, while the view keeps the system look.
+    fn native_help(&self) -> bool { self.help.native && self.defaults.help.is_none() }
+
+    /// The look tooltips draw in now: the view's, or the system's for this window.
+    fn help_look(&self) -> super::HelpLook {
+        self.defaults.help.unwrap_or_else(|| super::HelpLook::system(self.backdrop_dark().unwrap_or(self.env.system_dark)))
+    }
+
     /// The host shows the system's own tooltips for [`Runtime::help_regions`], so Rune draws none.
     #[cfg(target_os = "macos")]
     pub(crate) fn set_native_help(&mut self, on: bool) { self.help.native = on; }
@@ -126,7 +131,7 @@ impl<S: 'static> Runtime<S> {
     /// Whether moving the pointer to (x, y) changes the help element under it, so a host that
     /// skips frames for unchanged pixels still starts or ends a tooltip's wait.
     pub(super) fn help_target_changes(&self, x: f32, y: f32) -> bool {
-        if self.help.native || self.help.hits.is_empty() && self.help.target.is_none() { return false; }
+        if self.native_help() || self.help.hits.is_empty() && self.help.target.is_none() { return false; }
         let at = self.help_at(x, y).map(|(i, k)| (self.nodes[i].path.as_str(), k));
         at != self.help.target.as_ref().map(|(p, k, _)| (p.as_str(), *k))
     }
@@ -148,14 +153,15 @@ impl<S: 'static> Runtime<S> {
     /// After `build`'s hits: track the rest, show or hide the tooltip and draw it.
     pub(super) fn update_help(&mut self) {
         self.help.regions.clear();
-        if self.help.native {
+        if self.native_help() {
             // Nothing behind a modal, and only where nothing else is drawn over the element.
             let mut regions = Vec::new();
             for &(id, r, seq, link) in &self.help.hits {
                 let Some(&i) = self.node_index.get(&id) else { continue };
                 let Some(text) = self.help_text(i, link) else { continue };
                 if self.subtree_exiting(i) || !self.allowed(i) { continue; }
-                regions.extend(self.unoccluded(i, r, seq).into_iter().map(|p| (p, text.clone())));
+                let words = crate::el::help_words(text);
+                regions.extend(self.unoccluded(i, r, seq).into_iter().map(|p| (p, words.clone().into_owned())));
             }
             self.help.regions = regions;
             self.help.tip = None;
@@ -169,15 +175,23 @@ impl<S: 'static> Runtime<S> {
             None => pointer.and_then(|(x, y)| self.help_at(x, y)),
         };
         let at = under.map(|(i, k)| (self.nodes[i].path.as_str(), k));
+        let look = self.help_look();
+        let delay = look.delay.unwrap_or(self.help_delay);
         if at != self.help.target.as_ref().map(|(p, k, _)| (p.as_str(), *k)) {
-            self.help.target = under.map(|(i, k)| (self.nodes[i].path.clone(), k, self.clock));
+            if self.help.tip.is_some() {
+                self.help.hid_at = Some(self.clock);
+            }
+            // Just after a tooltip hid, the next element's shows at once.
+            let warm = look.skip > 0.0 && self.help.hid_at.is_some_and(|t| self.clock - t <= look.skip);
+            let since = if warm { self.clock - delay } else { self.clock };
+            self.help.target = under.map(|(i, k)| (self.nodes[i].path.clone(), k, since));
             self.help.dismissed = false;
             self.help.scheduled = None;
         }
         self.help.tip = None;
         let (Some((i, link)), Some((_, _, since))) = (under, self.help.target.clone()) else { return };
         if self.help.dismissed { return; }
-        let due = since + self.help_delay;
+        let due = since + delay;
         if self.clock + 1e-6 < due {
             if self.help.scheduled != Some(due) {
                 self.help.scheduled = Some(due);
@@ -193,51 +207,97 @@ impl<S: 'static> Runtime<S> {
         self.draw_tooltip(anchor.unwrap_or(e), text, above);
     }
 
-    /// Draws `text` in a tooltip under box `e` (window points, x0 y0 x1 y1; above it when
-    /// there's no room below), or `above` it 4 points clear (under it when there's no room
-    /// above), kept inside the window.
+    /// Draws `text` (and its keycaps) in a tooltip in the current look under box `e` (window
+    /// points, x0 y0 x1 y1; above it when there's no room below), or `above` it (under it when
+    /// there's no room above), kept inside the window.
     fn draw_tooltip(&mut self, e: [f32; 4], text: String, above: bool) {
         let s = self.env.scale;
-        let dark = self.backdrop_dark().unwrap_or(self.env.system_dark);
-        let grey = |v: f32| Color { r: v, g: v, b: v, a: 1.0 };
-        let (fill, ink, edge) = if dark {
-            (grey(0.17), grey(0.93), Color::WHITE.alpha(0.14))
-        } else {
-            (grey(0.98), grey(0.11), Color::BLACK.alpha(0.16))
+        let look = self.help_look();
+        let key = look.key;
+        let mut parts = text.split(crate::el::HELP_KEY);
+        let words = parts.next().unwrap_or_default();
+        let keys: Vec<String> = parts.map(|k| if key.upper { k.to_uppercase() } else { k.to_owned() }).collect();
+        let caps: Vec<_> = keys.iter().map(|k| {
+            let l = self.text.layout_rich(k, &[], key.font, s, None);
+            let w = ((l.full_width() / s).ceil() + 2.0 * key.pad_x).max(key.height);
+            (l, w)
+        }).collect();
+        let keys_w = if caps.is_empty() { 0.0 } else {
+            caps.iter().map(|(_, w)| w).sum::<f32>() + key.gap * (caps.len() - 1) as f32 + if words.is_empty() { 0.0 } else { key.lead }
         };
-        let style = crate::TextStyle::new(12.0, 400.0).lh(16.0);
-        let layout = self.text.layout_rich(&text, &[], style, s, Some(MAX_W * s));
-        let (tw, th) = ((layout.full_width() / s).ceil(), (layout.height() / s).ceil());
-        let (w, h) = (tw + 2.0 * PAD[0], th + 2.0 * PAD[1]);
+        let [pad_x, pad_y] = look.padding;
         let (vw, vh) = self.viewport;
-        let mut y = e[3] + GAP;
-        if above && e[1] - ABOVE - h >= MARGIN {
-            y = e[1] - ABOVE - h;
-        } else if y + h > vh - MARGIN && e[1] - GAP - h >= MARGIN {
-            y = e[1] - GAP - h;
+        let margin = look.margin;
+        let max_w = look.max_w.unwrap_or(vw - 2.0 * margin - 2.0 * pad_x).max(1.0) - keys_w;
+        let layout = self.text.layout_rich(words, &[], look.font, s, Some(max_w.max(1.0) * s));
+        let (tw, th) = if words.is_empty() { (0.0, 0.0) } else { ((layout.full_width() / s).ceil(), (layout.height() / s).ceil()) };
+        let ch = if caps.is_empty() { th } else { th.max(key.height) };
+        let (w, h) = (tw + keys_w + 2.0 * pad_x, ch + 2.0 * pad_y);
+        let [below, over] = look.gap;
+        let mut y = e[3] + below;
+        if above && e[1] - over - h >= margin {
+            y = e[1] - over - h;
+        } else if y + h > vh - margin && e[1] - below - h >= margin {
+            y = e[1] - below - h;
         }
-        let x = ((e[0] + e[2] - w) * 0.5).clamp(MARGIN, (vw - w - MARGIN).max(MARGIN));
-        let y = y.clamp(MARGIN, (vh - h - MARGIN).max(MARGIN));
+        let x = ((e[0] + e[2] - w) * 0.5).clamp(margin, (vw - w - margin).max(margin));
+        let y = y.clamp(margin, (vh - h - margin).max(margin));
         let r = [x * s, y * s, w * s, h * s].map(|v| v.round());
         let srgb = self.srgb_blend;
+        let radii = [look.radius * s; 4];
+        let cast = super::shadow_paint::Caster {
+            rect: r, radii, shape: radii, k_px: s, scale: s, opacity: 1.0, srgb, clip: NO_CLIP, fade: [0.0; 4], hole: None,
+            opaque: look.fill.a >= 1.0,
+        };
+        for sh in look.shadows.iter().flatten().filter(|sh| sh.color.a > 0.0) {
+            super::shadow_paint::push_shadow(&mut self.instances, sh, sh.color, &cast);
+        }
+        let (ring_w, ring) = look.ring.map_or((0.0, Color::TRANSPARENT), |(rw, c)| ((rw * s).max(1.0), c));
         self.instances.push(Instance {
             rect: r,
-            radii: [5.0 * s; 4],
-            fill: premul(fill, 1.0, srgb),
-            border: premul(edge, 1.0, srgb),
-            params: [s.max(1.0), KIND_RECT, 0.0, 1.0],
+            radii,
+            fill: premul(look.fill, 1.0, srgb),
+            border: premul(ring, 1.0, srgb),
+            params: [ring_w, KIND_RECT, 0.0, 1.0],
             uv: [0.0; 4],
             clip: NO_CLIP,
             fade: crate::render::pack_fade([0.0; 4], NO_CLIP, NO_CLIP),
         });
-        let origin = [r[0] + PAD[0] * s, r[1] + PAD[1] * s];
+        let top = r[1] + pad_y * s;
+        let mut at = r[0] + pad_x * s;
+        if !words.is_empty() {
+            self.draw_tip_text(&layout, [at, top + ((ch - th) * 0.5 * s).round()], look.ink);
+            at += (tw + key.lead) * s;
+        }
+        for (l, cw) in &caps {
+            let cap = [at, top + ((ch - key.height) * 0.5 * s).round(), cw * s, key.height * s].map(|v| v.round());
+            self.instances.push(Instance {
+                rect: cap,
+                radii: [key.radius * s; 4],
+                fill: premul(key.fill, 1.0, srgb),
+                border: [0.0; 4],
+                params: [0.0, KIND_RECT, 0.0, 1.0],
+                uv: [0.0; 4],
+                clip: NO_CLIP,
+                fade: crate::render::pack_fade([0.0; 4], NO_CLIP, NO_CLIP),
+            });
+            let lw = l.full_width();
+            let origin = [cap[0] + ((cap[2] - lw) * 0.5).round(), cap[1] + ((cap[3] - l.height()) * 0.5).round()];
+            self.draw_tip_text(l, origin, key.ink);
+            at += (cw + key.gap) * s;
+        }
+        self.help.tip = Some((crate::el::help_words(&text).into_owned(), [x, y, w, h]));
+    }
+
+    /// Draws a tooltip's shaped text with its top left at `origin` (device pixels).
+    fn draw_tip_text(&mut self, layout: &parley::Layout<crate::text::Ink>, origin: [f32; 2], ink: Color) {
+        let srgb = self.srgb_blend;
         self.glyph_scratch.clear();
         self.text.set_glyph_inks(ink, &[]);
-        self.text.glyphs_for_layout_scaled(&layout, origin, 1.0, false, &mut self.glyph_scratch);
+        self.text.glyphs_for_layout_scaled(layout, origin, 1.0, false, &mut self.glyph_scratch);
         for q in &self.glyph_scratch {
             self.instances.extend(glyph_or_image(q, &self.text, &mut self.images, premul(ink, 1.0, srgb), NO_CLIP, [0.0; 4]));
         }
-        self.help.tip = Some((text, [x, y, w, h]));
     }
 }
 

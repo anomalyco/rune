@@ -692,6 +692,14 @@ pub fn rich(content: impl Into<String>, spans: Vec<Span>) -> El {
     e
 }
 
+/// Parts a help text from each of its [`El::help_keys`] keycaps.
+pub(crate) const HELP_KEY: char = '\u{1f}';
+
+/// A help text as words: its keycaps after it, a space apart.
+pub(crate) fn help_words(help: &str) -> std::borrow::Cow<'_, str> {
+    if help.contains(HELP_KEY) { help.replace(HELP_KEY, " ").into() } else { help.into() }
+}
+
 /// An SVG icon from a catalog, `size` points square, tinted with `.color()`.
 pub fn icon(i: &'static Icon, size: f32) -> El {
     let mut e = base(FlexDirection::Row).size(size, size);
@@ -1237,6 +1245,19 @@ impl El {
         let mut e = self.help(text);
         e.help_cut = true;
         e
+    }
+    /// Keycaps drawn after this element's [`El::help`] text, as a web tooltip shows its
+    /// command's keybind: `.help("Toggle review").help_keys(["Ctrl", "Shift", "R"])`. Call it
+    /// after `help`, which replaces them. The element tree and assistive technology read them
+    /// after the text, a space apart.
+    pub fn help_keys<K: Into<String>>(mut self, keys: impl IntoIterator<Item = K>) -> Self {
+        if let Some(h) = &mut self.help {
+            for k in keys.into_iter().map(Into::into).filter(|k| !k.is_empty()) {
+                h.push(HELP_KEY);
+                h.push_str(&k);
+            }
+        }
+        self
     }
     /// Shows this element's [`El::help`] tooltip above it, 4 points clear, and below only when
     /// there's no room above, as a web page's `placement="top"` tooltip sits over its button.
