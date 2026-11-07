@@ -1,6 +1,7 @@
 //! The scrubber: a frozen clip's frames over the window, one at a time, with the elements that
 //! moved outlined and labelled, a track along the bottom that lights up where things moved, and
-//! Send for the selected stretch.
+//! Send for the selected stretch. Opening it slows the window to a stop, then sets the frozen
+//! window back on a dark stage with the track beneath it; closing reverses that.
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -21,8 +22,19 @@ pub(crate) const PAD: f32 = 12.0;
 const PATH_SPAN: usize = 90;
 /// Narrower than this, the bar drops its key hints.
 const HINT_MIN_W: f32 = 760.0;
+/// The margin round the shrunk window and the bar under it.
+const GAP: f32 = 16.0;
+/// Seconds the window takes to slow to a stop.
+const SLOW_S: f64 = 0.55;
+/// Seconds after opening that the window steps back and the bar rises.
+const SHRINK_S: f64 = 0.2;
+/// Seconds the window takes to come back up to speed after closing.
+const RESUME_S: f64 = 0.35;
+/// Seconds the stage keeps its backdrop and corners while the window springs back.
+const SETTLE_S: f64 = 0.6;
 
 pub(crate) fn moved_color() -> Color { crate::oklch(0.86, 0.15, 85.0) }
+fn backdrop() -> Color { crate::oklch(0.11, 0.0, 0.0) }
 pub(crate) fn jump_color() -> Color { crate::oklch(0.68, 0.2, 25.0) }
 
 /// The scrubber's state; keep one in the app's state.
@@ -34,6 +46,14 @@ pub struct Scrub {
     anchor: Option<usize>,
     picked: Option<u32>,
     note: crate::TextEdit,
+    /// Opening or closing is under way.
+    moving: bool,
+    /// On the window's clock, when it opened or closed (stamped by the next [`Scrub::poll`]).
+    since: Option<f64>,
+    /// The window's clock at the last poll.
+    now: f64,
+    /// The app's speed the view last showed ([`Scrub::poll`]).
+    shown: Option<f32>,
 }
 
 /// What a press of a key did ([`Scrub::key`]).
@@ -88,13 +108,61 @@ impl Scrub {
         self.anchor = None;
         self.picked = None;
         self.note = crate::TextEdit::default();
+        self.moving = true;
+        self.since = None;
     }
 
-    /// Hides the scrubber and resumes recording.
+    /// Hides the scrubber. Recording resumes once the window is back in place ([`Scrub::poll`]),
+    /// so the step back isn't in it.
     pub fn close(&mut self) {
-        if let Some(rewind) = self.rewind.take() { rewind.resume(); }
-        self.clip = None;
+        if self.clip.take().is_some() {
+            self.moving = true;
+            self.since = None;
+        }
     }
+
+    /// How fast the app runs under [`Scrub::stage`]: easing from 1 to 0 as it opens (the
+    /// recording already stopped, so the slow-down isn't in it) and back up as it closes.
+    pub fn app_speed(&self) -> f32 {
+        if self.clip.is_some() {
+            let p = (self.elapsed() / SLOW_S).min(1.0);
+            return ((1.0 - p) * (1.0 - p)) as f32;
+        }
+        let p = (self.elapsed() / RESUME_S).min(1.0);
+        (p * p) as f32
+    }
+
+    /// Seconds since it opened or closed; endless once the motion's done.
+    fn elapsed(&self) -> f64 {
+        if !self.moving { return f64::INFINITY; }
+        self.since.map_or(0.0, |t| (self.now - t).max(0.0))
+    }
+
+    /// Whether the window has stepped back onto the stage yet.
+    fn shrunk(&self) -> bool { self.clip.is_some() && self.elapsed() >= SHRINK_S }
+
+    /// Whether the window is still settling back after closing.
+    fn settling(&self) -> bool { self.clip.is_none() && self.elapsed() < SETTLE_S }
+
+    /// Call from the app's poll with its clock: while the scrubber opens or closes it asks for a
+    /// frame each display refresh, it resumes recording once closed and settled, and it's true
+    /// whenever the view should be built again.
+    pub fn poll(&mut self, now: f64, tx: &mut Tx) -> bool {
+        self.now = now;
+        if self.moving {
+            let since = *self.since.get_or_insert(now);
+            if now - since >= if self.clip.is_some() { SLOW_S } else { SETTLE_S } { self.moving = false; }
+        }
+        if self.clip.is_none() && !self.moving && let Some(rewind) = self.rewind.take() { rewind.resume(); }
+        if self.moving { tx.wake_after(std::time::Duration::ZERO); }
+        let key = self.app_speed() + if self.shrunk() { 2.0 } else { 0.0 } + if self.settling() { 4.0 } else { 0.0 };
+        let changed = self.shown.unwrap_or(1.0) != key;
+        self.shown = Some(key);
+        changed
+    }
+
+    /// Jumps the opening or closing motion to its end: for Reduce Motion, and tests.
+    pub fn settle(&mut self) { self.moving = false; }
 
     pub fn is_open(&self) -> bool { self.clip.is_some() }
 
@@ -152,19 +220,45 @@ impl Scrub {
         Keyed::Handled
     }
 
-    /// The scrubber over the whole window, or nothing while closed. Lay it over the app's view;
-    /// it lines its outlines up with the window wherever it sits, so a story can show it on a
-    /// stage. Pause the app's subtree (`El::time_scale(0.0)`) while it shows, not the window's
-    /// clock: the scrubber itself still animates. `lens` finds this state in the app's; Send
-    /// (the button, or Return in the note) calls `on_send`.
-    pub fn view<S: 'static>(&self, lens: fn(&mut S) -> &mut Scrub, on_send: fn(&mut S, Sent, &mut Tx)) -> El {
-        let Some(clip) = &self.clip else { return el() };
+    /// The app's view on the scrubber's stage. Wrap the app this way whether or not the
+    /// scrubber shows, so nothing in it changes path when it opens. Open, the app slows to a
+    /// stop ([`Scrub::app_speed`]; its own clock, not the window's, so the scrubber still
+    /// animates), steps back onto a dark stage with the elements that moved outlined over it,
+    /// and the track rises beneath. `lens` finds this state in the app's; Send (the button, or
+    /// Return in the note) calls `on_send`. Call [`Scrub::poll`] from the app's poll.
+    pub fn stage<S: 'static>(&self, app: El, lens: fn(&mut S) -> &mut Scrub, on_send: fn(&mut S, Sent, &mut Tx)) -> El {
+        let root = el().key("rewind-root").w_full().h_full();
+        let mut stage = el().key("rewind-stage").w_full().h_full().center()
+            .child(app.time_scale(self.app_speed()));
+        let Some(clip) = &self.clip else {
+            if !self.settling() { return root.child(stage) }
+            return root.fill(backdrop()).child(stage.clip_rounded(12.0).shadow(18.0, 48.0, Color::BLACK.alpha(0.55)));
+        };
         let (vw, vh) = clip.viewport();
-        let [ox, oy, w, _] = crate::memo::layout_with("rewind", |r| r.map(|v| (v * 2.0).round() / 2.0)).unwrap_or([0.0, 0.0, vw, vh]);
+        let [_, _, w, h] = crate::memo::layout_with("rewind-root", |r| r.map(|v| (v * 2.0).round() / 2.0)).unwrap_or([0.0, 0.0, vw, vh]);
+        if self.shrunk() {
+            let (k, oy) = fit(w, h);
+            stage = stage.scale(k).origin(0.5, oy).clip_rounded(12.0 / k)
+                .shadow(18.0, 48.0, Color::BLACK.alpha(0.55))
+                .child(self.marks(clip, lens).transition(crate::Transition::opacity()).enter_delay((SLOW_S - SHRINK_S) as f32 * 0.6));
+        }
+        let mut root = root.fill(backdrop()).child(stage);
+        if self.shrunk() {
+            root = root.child(self.bar(clip, w, &clip.changes(self.frame), lens, on_send)
+                .transition(crate::Transition::offset(0.0, BAR_H + GAP).combined(crate::Transition::opacity())));
+        }
+        root
+    }
+
+    /// The outlines over the frozen window: what moved this frame, where everything else was.
+    fn marks<S: 'static>(&self, clip: &Clip, lens: fn(&mut S) -> &mut Scrub) -> El {
+        let (vw, vh) = clip.viewport();
+        let [ox, oy, _, _] = crate::memo::layout_with("rewind", |r| r.map(|v| (v * 2.0).round() / 2.0)).unwrap_or([0.0, 0.0, vw, vh]);
         let changes = clip.changes(self.frame);
-        // The live view under it keeps changing; dimmed, the recorded frame reads over it.
+        // The live view under it is frozen at the moment it opened; dimmed, the recorded
+        // frame reads over it.
         let layer = el().key("rewind").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
-            .child(el().key("rewind-dim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(Color::BLACK.alpha(0.55))
+            .child(el().key("rewind-dim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(Color::BLACK.alpha(0.4))
                 .on_press(move |s: &mut S| lens(s).picked = None));
         // Recorded frames: they land where they were, never springing between steps.
         let mut marks = el().key("rewind-marks").absolute(-ox, -oy).size(vw, vh).motion(crate::Spring::NONE);
@@ -181,7 +275,7 @@ impl Scrub {
         {
             marks = marks.child(el().key("rewind-picked").absolute(s.rect[0], s.rect[1]).size(s.rect[2].max(1.0), s.rect[3].max(1.0)).border(1.0, Color::WHITE.alpha(0.7)));
         }
-        layer.child(marks).child(self.bar(clip, w, &changes, lens, on_send))
+        layer.child(marks)
     }
 
     fn path_view(&self, clip: &Clip, id: u32) -> Vec<El> {
@@ -207,7 +301,7 @@ impl Scrub {
         let mut facts = vec![format!("{:+.2} s", clip.time(self.frame)), format!("frame {} of {}", self.frame + 1, clip.len())];
         if moved > 0 { facts.push(format!("{moved} moved")); }
         if sel.len() > 1 { facts.push(format!("{} frames selected", sel.len())); }
-        let track_w = (w - PAD * 2.0).max(1.0);
+        let track_w = (w - GAP * 2.0 - PAD * 2.0).max(1.0);
         let send = row().key("rewind-send").h(24.0).px(10.0).center_y().radius(tok::radius::SM).fill(t.card)
             .border(0.5, t.card_border).hover(t.hover).press(t.press)
             .role("button").label("Send these frames")
@@ -223,12 +317,20 @@ impl Scrub {
         if w >= HINT_MIN_W {
             controls = controls.child(text("←→ step  ⇧ select  ⌥ next move  esc resume").font(type_::LABEL).color(t.text_secondary));
         }
-        col().key("rewind-bar").pin(Some(0.0), None, Some(0.0), Some(0.0)).h(BAR_H).px(PAD).pt(8.0).gap(8.0)
-            .fill(t.bg.alpha(0.96)).border(0.5, t.separator)
+        col().key("rewind-bar").pin(Some(GAP), None, Some(GAP), Some(GAP)).h(BAR_H).px(PAD).pt(8.0).gap(8.0)
+            .radius(12.0).fill(t.bg.alpha(0.96)).border(0.5, t.separator)
             .child(super::track::view(clip, self.frame, sel, track_w, lens))
             .child(controls.child(send))
             .child(spacer())
     }
+}
+
+/// How far the window steps back so the bar fits under it, and where it scales from (a fraction
+/// of its height) so it keeps a margin above.
+fn fit(w: f32, h: f32) -> (f32, f32) {
+    let k = ((h - BAR_H - GAP * 3.0) / h).min((w - GAP * 2.0) / w).clamp(0.5, 1.0);
+    let oy = if k < 1.0 { (GAP / (h * (1.0 - k))).clamp(0.0, 1.0) } else { 0.0 };
+    (k, oy)
 }
 
 /// An element that changed this frame: its old place dim, its new place outlined, and a label.
