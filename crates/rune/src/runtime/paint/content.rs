@@ -15,6 +15,8 @@ pub(super) struct LeafBox {
     pub loop_value: Option<f32>,
     pub cover: Option<(f32, [f32; 2])>,
     pub scale_motion: ScaleMotion,
+    /// The scale of the nearest still ancestor, which moving text rasterizes at.
+    pub rest: f32,
     pub gliding: bool,
     pub caret: Option<[f32; 4]>,
 }
@@ -44,6 +46,7 @@ impl<S: 'static> Runtime<S> {
             loop_value,
             cover,
             scale_motion,
+            rest,
             gliding,
             caret: input_caret,
         } = b;
@@ -106,7 +109,7 @@ impl<S: 'static> Runtime<S> {
                 self.scene.get(n.id, P_ICON_TURN).unwrap_or(n.vis.icon_turn)
             } else { n.vis.icon_turn };
             let tk = if cover.is_some() { 1.0 } else { sc };
-            let raster = if cover.is_some() { 1.0 } else { scale_motion.raster(sc) };
+            let raster = if cover.is_some() { 1.0 } else { scale_motion.raster(sc, rest) };
             if cover.is_none() && scale_motion == ScaleMotion::Live {
                 self.static_scale_settling = true;
             }
@@ -157,7 +160,7 @@ impl<S: 'static> Runtime<S> {
             // `press_scale`, transitions): `tk` about the text's origin. It rasterizes at
             // `raster` and draws filtered by the rest, `tk / raster`.
             let tk = if cover.is_some() { 1.0 } else { sc };
-            let raster = if cover.is_some() { 1.0 } else { scale_motion.raster(sc) };
+            let raster = if cover.is_some() { 1.0 } else { scale_motion.raster(sc, rest) };
             if cover.is_none() && scale_motion == ScaleMotion::Live {
                 self.static_scale_settling = true;
             }
