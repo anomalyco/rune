@@ -116,6 +116,8 @@ pub(super) struct Builder {
     autolink: bool,
     image_starts: Vec<usize>,
     image_ranges: Vec<(usize, usize)>,
+    /// Each open image's source and title, beside `image_starts`.
+    image_dests: Vec<(String, String)>,
     tail: Tail,
 }
 
@@ -309,6 +311,32 @@ impl Builder {
         }
     }
 
+    /// Lifts the image whose alt text is `start..end` of the paragraph being read out into a
+    /// [`Block::Image`] of its own, the text before it ending a paragraph and the text after it
+    /// starting one. An image in a heading, a table cell, a link or emphasis stays in the line.
+    fn lift_image(&mut self, start: usize, end: usize, src: String, title: String) -> bool {
+        let Some((InlineKind::Para, inl, open, map)) = self.inline.as_mut() else { return false };
+        // An image still arriving (no source yet) stays its alt text until it is whole.
+        if !open.is_empty() || end > inl.text.len() || src.is_empty() {
+            return false;
+        }
+        let alt = inl.text[start..end].to_owned();
+        inl.text.truncate(start);
+        inl.spans.retain_mut(|s| {
+            s.1 = s.1.min(start);
+            s.0 < s.1
+        });
+        inl.links.retain_mut(|s| {
+            s.1 = s.1.min(start);
+            s.0 < s.1
+        });
+        map.truncate_out(start);
+        self.flush_inline();
+        self.push(Block::Image { src, alt, title }, BlockMap::None);
+        self.inline = Some((InlineKind::Para, Inline::default(), Vec::new(), SpanMap::default()));
+        true
+    }
+
     fn table(&mut self) -> Option<(&mut Table, &mut Vec<Inline>, &mut Vec<SpanMap>, &mut Vec<Vec<SpanMap>>, &mut Vec<SpanMap>)> {
         match self.stack.last_mut() {
             Some((Container::Table(t, cells, head, rows, cell_maps), _, _)) => Some((t, cells, head, rows, cell_maps)),
@@ -401,6 +429,7 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
         autolink,
         image_starts: Vec::new(),
         image_ranges: Vec::new(),
+        image_dests: Vec::new(),
         tail: Tail::None,
     };
     let opts = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS;
@@ -509,9 +538,10 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                 Tag::Emphasis => open(&mut b, Style::Em, None),
                 Tag::Strikethrough => open(&mut b, Style::Strike, None),
                 Tag::Link { dest_url, .. } => open(&mut b, Style::Link, Some(dest_url.into_string())),
-                Tag::Image { .. } => {
+                Tag::Image { dest_url, title, .. } => {
                     let start = b.inline().1.text.len();
                     b.image_starts.push(start);
+                    b.image_dests.push((dest_url.into_string(), title.into_string()));
                 }
                 _ => {}
             },
@@ -541,7 +571,10 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                 TagEnd::Image => {
                     if let Some(start) = b.image_starts.pop() {
                         let end = b.inline().1.text.len();
-                        b.image_ranges.push((start, end));
+                        let (src, title) = b.image_dests.pop().unwrap_or_default();
+                        if !b.lift_image(start, end, src, title) {
+                            b.image_ranges.push((start, end));
+                        }
                     }
                 }
                 _ => {}
@@ -574,6 +607,10 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
             }
             Event::SoftBreak => {
                 let inl = b.inline();
+                // The line after an image starts the paragraph that follows it.
+                if inl.1.text.is_empty() {
+                    continue;
+                }
                 let start = inl.1.text.len();
                 inl.1.text.push(' ');
                 inl.3.push(range, start..inl.1.text.len());

@@ -386,7 +386,7 @@ const GOLDENS: &[(Lang, &str, &[(&str, Syntax)])] = &[
     (Lang::Ts, "interface User { id: number; name?: string }\nexport function greet(u: User): string {\n  return `hi ${u.name ?? \"anon\"}`;\n}", &[
         ("interface", Keyword), ("User", Type), ("{", Punctuation), (":", Punctuation), ("number", Type), (";", Punctuation),
         ("?:", Punctuation), ("string", Type), ("}", Punctuation), ("export", Keyword), ("function", Keyword), ("greet", Function),
-        ("(", Punctuation), (":", Punctuation), ("User", Type), ("):", Punctuation), ("string", Type), ("{", Punctuation),
+        ("(", Punctuation), ("u", Parameter), (":", Punctuation), ("User", Type), ("):", Punctuation), ("string", Type), ("{", Punctuation),
         ("return", Keyword), ("`hi ", String), ("${", Punctuation), (".", Punctuation), ("??", Punctuation), ("\"anon\"", String),
         ("}", Punctuation), ("`", String), (";", Punctuation), ("}", Punctuation),
     ]),

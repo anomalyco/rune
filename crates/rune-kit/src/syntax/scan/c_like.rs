@@ -72,6 +72,11 @@ pub(super) fn c_like(s: &[u8], mut i: usize, end: usize, lang: Lang, out: &mut O
     let mut value = false;
     let mut next = Next::Any;
     let mut after_dot = false;
+    // A defined function's parameter list: a `(` comes next, then its bracket depth while
+    // inside it, and whether a name there starts a parameter (after `(` or a top-level `,`).
+    let mut sig_next = false;
+    let mut sig: Option<u32> = None;
+    let mut want_param = false;
     while i < end && !out.full {
         let b = s[i];
         let start = i;
@@ -163,6 +168,7 @@ pub(super) fn c_like(s: &[u8], mut i: usize, end: usize, lang: Lang, out: &mut O
                 k += 1;
             }
             let call = at(s, k, end) == b'(';
+            let param = sig == Some(1) && want_param;
             // Go capitalises exported names: `Addr string` and `Addr: x` name a field.
             let go_field =
                 lang == Lang::Go && (is_ident_start(at(s, k, end)) || (at(s, k, end) == b':' && at(s, k + 1, end) != b'='));
@@ -184,8 +190,12 @@ pub(super) fn c_like(s: &[u8], mut i: usize, end: usize, lang: Lang, out: &mut O
                 Some(Keyword)
             } else if is_word(w, types) || was_next == Next::Type {
                 Some(Type)
+            } else if param {
+                want_param = false;
+                Some(Parameter)
             } else if was_next == Next::Function || (lang == Lang::Go && call) {
                 // Go capitalises exported functions, so a call is a call before it is a type.
+                sig_next = was_next == Next::Function && call;
                 Some(Function)
             } else if is_all_caps(w) {
                 Some(Number)
@@ -201,6 +211,17 @@ pub(super) fn c_like(s: &[u8], mut i: usize, end: usize, lang: Lang, out: &mut O
             i += 1;
             after_dot = b == b'.' && at(s, i, end) != b'.';
             value = matches!(b, b')' | b']');
+            match (b, sig) {
+                (b'(', None) if sig_next => (sig, want_param) = (Some(1), true),
+                (b'(' | b'[' | b'{' | b'<', Some(d)) => sig = Some(d + 1),
+                // `=>` in a default value closes nothing.
+                (b'>', Some(_)) if start > 0 && s[start - 1] == b'=' => {}
+                (b')' | b']' | b'}' | b'>', Some(d)) => sig = (d > 1).then(|| d - 1),
+                (b',', Some(1)) => want_param = true,
+                (b':' | b'=', Some(1)) => want_param = false,
+                _ => {}
+            }
+            sig_next = false;
             out.push(start, i, Punctuation);
         }
     }

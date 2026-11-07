@@ -445,8 +445,11 @@ impl Renderer {
                         continue;
                     }
                     let spans = self.spans(inl, font.size);
-                    natural[j] = natural[j].max(rune::text::measure(&inl.text, &spans, font, None).0);
-                    fit[j] = fit[j].max(rune::text::measure(&inl.text, &spans, font, Some(0.0)).0);
+                    // Unrounded, as a browser's table layout sums them; a hair over, so a cell at
+                    // its column's natural width never wraps its last word.
+                    let (min, max) = rune::text::content_widths(&inl.text, &spans, font);
+                    natural[j] = natural[j].max(max + 0.01);
+                    fit[j] = fit[j].max(min + 0.01);
                 }
             }
             let min = fit.iter().map(|w| w.min(cap)).collect::<Vec<_>>();

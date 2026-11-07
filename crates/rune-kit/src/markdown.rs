@@ -53,7 +53,9 @@ mod autolink;
 mod cache;
 mod find;
 mod highlight;
+mod image;
 mod interrupt;
+mod link_icon;
 mod links;
 mod parser;
 mod render;
@@ -62,6 +64,7 @@ mod style;
 mod table;
 
 pub use find::{Case, find};
+pub use image::ImageFrame;
 pub use style::MarkdownStyle;
 #[cfg(feature = "mermaid")] pub(crate) use style::DiagramPaint;
 
@@ -118,6 +121,10 @@ pub enum Block {
     Diff(String),
     /// A ```` ```mermaid ```` fence, closed or still arriving.
     Mermaid(String),
+    /// An image (`![alt](src "title")`) that stands as a block of its own, as `markdown.css`'s
+    /// `img { display: block }` sets one: a paragraph around it splits into the text before
+    /// and after it. An image inside a link or emphasis stays its alt text in the line.
+    Image { src: String, alt: String, title: String },
 }
 
 /// A GFM table. Rows may have fewer cells than there are columns.
@@ -187,6 +194,9 @@ pub struct Markdown {
     #[cfg(feature = "mermaid")]
     diagram_frame: Option<FrameWire>,
     code_frame: Option<CodeWire>,
+    link_favicon: Option<link_icon::FaviconWire>,
+    images: Option<image::ImageWire>,
+    on_image: Option<image::ImagePress>,
 }
 
 #[cfg(test)]
@@ -199,7 +209,7 @@ impl Markdown {
         Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_help: None, link_ring: None,
             on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, highlighter: Highlighter::builtin(),
             #[cfg(feature = "mermaid")]
-            diagram_frame: None, code_frame: None }
+            diagram_frame: None, code_frame: None, link_favicon: None, images: None, on_image: None }
     }
     /// Highlight UTF-8 byte ranges of the Markdown source string (see [`find`]).
     ///
@@ -389,6 +399,9 @@ impl Markdown {
             && !(self.selectable && self.copy_source)
             && self.highlighter.is_builtin()
             && self.code_frame.is_none()
+            && self.link_favicon.is_none()
+            && self.images.is_none()
+            && self.on_image.is_none()
             && !(cfg!(feature = "mermaid") && self.src.contains("mermaid"));
         if can_cache {
             let h = rune::memo::digest(&(
@@ -427,7 +440,7 @@ impl Markdown {
             highlighter: self.highlighter, sources, next_source: Cell::new(0), tasks, next_task: Cell::new(0),
             current_block_key: RefCell::new("b0".into()),
             #[cfg(feature = "mermaid")]
-            diagram_frame: self.diagram_frame, code_frame: self.code_frame, flow: Cell::default() };
+            diagram_frame: self.diagram_frame, code_frame: self.code_frame, link_favicon: self.link_favicon, images: self.images, on_image: self.on_image, flow: Cell::default() };
         let root = r.blocks(&blocks, &maps, &keys, true).selection_group(self.selectable);
         if !(self.selectable && self.copy_source) { return root; }
         let names: Rc<[String]> = rendered_keys(blocks.len(), &keys).into();

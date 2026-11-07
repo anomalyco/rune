@@ -100,6 +100,8 @@ pub use markdown::DiagramFrame;
 #[cfg(feature = "markdown")]
 pub use markdown::Highlight;
 #[cfg(feature = "markdown")]
+pub use markdown::ImageFrame;
+#[cfg(feature = "markdown")]
 pub use markdown::Markdown;
 #[cfg(feature = "markdown")]
 pub use markdown::MarkdownStyle;

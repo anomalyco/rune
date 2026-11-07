@@ -17,7 +17,7 @@ fn shown(blocks: &[Block]) -> String {
                     }
                 }
                 Block::Code(c) | Block::Diff(c) | Block::Mermaid(c) => out.push(c.clone()),
-                Block::Rule => {}
+                Block::Rule | Block::Image { .. } => {}
             }
         }
     }

@@ -66,6 +66,8 @@ pub struct MarkdownStyle {
     pub(super) text_width: Option<f32>,
     /// How far a wide code block's sides fade while it scrolls sideways.
     pub(super) wide_fade: f32,
+    /// The icon before a link to a web page: its size and gap (`None`: no icon).
+    pub(super) link_icon: Option<[f32; 2]>,
     pub(super) diff_add: Color,
     pub(super) diff_remove: Color,
     pub(super) diff_add_text: Color,
@@ -208,6 +210,7 @@ impl MarkdownStyle {
             table_bar: None,
             text_width: None,
             wide_fade: 12.0,
+            link_icon: None,
             diff_add: tint(c.layer_01, c.success.icon, if k.dark { 0.11 } else { 0.14 }),
             diff_remove: tint(c.layer_01, c.danger.icon, if k.dark { 0.11 } else { 0.14 }),
             diff_add_text: c.text_base,
@@ -595,6 +598,7 @@ impl std::hash::Hash for MarkdownStyle {
             table_bar,
             text_width,
             wide_fade,
+            link_icon,
             diff_add,
             diff_remove,
             diff_add_text,
@@ -622,7 +626,7 @@ impl std::hash::Hash for MarkdownStyle {
         (table_outline, table_rule, table_head_fill, table_head_text, table_head_rule, table_head_weight.map(f32_bits), table_tabular, table_font).hash(state);
         ([f32_bits(table_pad[0]), f32_bits(table_pad[1])], table_flush_left, table_head_pad.map(|p| p.map(f32_bits)), table_full_width, table_margin.map(f32_bits)).hash(state);
         table_frame.map(|TableFrame { fill, ring, pad }| (fill, ring, f32_bits(pad))).hash(state);
-        (table_bar, text_width.map(f32_bits), f32_bits(wide_fade)).hash(state);
+        (table_bar, text_width.map(f32_bits), f32_bits(wide_fade), link_icon.map(|l| l.map(f32_bits))).hash(state);
         match table_body {
             None => 0u8.hash(state),
             Some(TableBody { fill, radius, shadows }) => {
