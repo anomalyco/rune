@@ -672,7 +672,7 @@ pub fn text(content: impl Into<String>) -> El {
         redacted: false,
         secure_revealed: false,
         wrap_anywhere: false,
-        exact_lines: false,
+        exact_lines: true,
         shape: None,
     }));
     e

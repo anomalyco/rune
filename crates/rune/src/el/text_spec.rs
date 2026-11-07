@@ -67,7 +67,8 @@ pub struct TextSpec {
     pub(crate) redacted: bool,
     pub(crate) secure_revealed: bool,
     pub(crate) wrap_anywhere: bool,
-    /// See [`El::exact_lines`](crate::El::exact_lines): the height is its lines' own, unrounded.
+    /// See [`El::exact_lines`](crate::El::exact_lines): the height is its lines' own, unrounded,
+    /// unless [`El::rounded_lines`](crate::El::rounded_lines) rounds it to device pixels.
     pub(crate) exact_lines: bool,
     /// The scale's bits and [`crate::text::shape_key`] at it, once the content is final (see
     /// [`TextSpec::key_shape`]).
