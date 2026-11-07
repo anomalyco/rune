@@ -373,8 +373,13 @@ impl<S: 'static> Runtime<S> {
             // centred: `k` and the centring offset in points. A launch flies at its own size.
             let cover = if lift && n.local.w > 0.0 && n.local.h > 0.0 && !self.launches.launched(node_id) {
                 let (pw, ph) = (rect_pt[2] - rect_pt[0], rect_pt[3] - rect_pt[1]);
-                let k = (pw / n.local.w).max(ph / n.local.h).max(1e-3);
-                Some((k, [(pw - n.local.w * k) * 0.5, (ph - n.local.h * k) * 0.5]))
+                if n.vis.cold.get().is_some_and(|c| c.flight_crop) {
+                    // `El::matched_crop`: at its own size, from the leading edge.
+                    Some((1.0, [0.0, (ph - n.local.h) * 0.5]))
+                } else {
+                    let k = (pw / n.local.w).max(ph / n.local.h).max(1e-3);
+                    Some((k, [(pw - n.local.w * k) * 0.5, (ph - n.local.h * k) * 0.5]))
+                }
             } else { None };
             let r_exact = rect_pt.map(snap_px);
             // A node the visibility test below culls paints nothing, and any clip it hands down is

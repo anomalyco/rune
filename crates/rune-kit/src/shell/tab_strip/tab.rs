@@ -167,7 +167,7 @@ pub(super) fn build<S: 'static>(item: TabItem<'_, S>, at: Place, st: &Strip<S>, 
         );
     }
     if let Some(prefix) = &st.matched {
-        slot = slot.matched(format!("{prefix}-{id}"));
+        slot = slot.matched(format!("{prefix}-{id}")).matched_crop();
     }
     if lifted {
         // It follows the pointer exactly, over its neighbours.

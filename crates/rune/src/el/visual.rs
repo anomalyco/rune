@@ -87,6 +87,8 @@ pub struct VisualCold {
     /// A scroll area's wrapper (`El::wrap_scroll_area`): rectangular clips and fades set on it
     /// go to its first child, the viewport, so what it draws beside that stays whole.
     pub(crate) clip_to_content: bool,
+    /// `El::matched_crop`: a matched flight keeps the content at its own size, cropped.
+    pub(crate) flight_crop: bool,
 }
 
 impl Empty for VisualCold {
@@ -128,6 +130,7 @@ impl Empty for VisualCold {
         motion_intent: crate::el::motion::MotionIntent::NONE,
         instant_motion: false,
         clip_to_content: false,
+        flight_crop: false,
     };
 }
 
