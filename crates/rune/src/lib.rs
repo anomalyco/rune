@@ -24,6 +24,7 @@ mod platform;
 mod popup_menu;
 mod recorder;
 mod shortcuts;
+mod spell;
 mod states;
 mod system_material;
 mod titlebar;

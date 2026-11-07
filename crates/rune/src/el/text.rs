@@ -363,6 +363,16 @@ impl El {
         }
         self
     }
+    /// Mark this text field's misspelled words, as a browser's `spellcheck` does: the platform's
+    /// checker (Windows' spell checking API, AppKit's `NSSpellChecker`; none on Linux or the
+    /// web) puts a red marker under each word the caret has left, and the field's menu offers its
+    /// suggestions and Learn Spelling. Off by default; a secure field never checks.
+    pub fn spellcheck(mut self, on: bool) -> Self {
+        if let Some(i) = &mut self.input {
+            i.spellcheck = on;
+        }
+        self
+    }
     pub fn placeholder(mut self, s: impl Into<String>, c: Color) -> Self {
         if let Some(i) = &mut self.input {
             i.placeholder = s.into();

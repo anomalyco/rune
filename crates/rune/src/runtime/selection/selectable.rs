@@ -740,6 +740,7 @@ impl<S: 'static> Runtime<S> {
             on_pick: Box::new(move |_, picked, tx| {
                 if picked == Some("copy") && let Some(text) = text { tx.copy(text); }
             }),
+            field: None,
         });
         true
     }

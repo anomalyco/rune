@@ -253,6 +253,22 @@ impl<S: 'static> Runtime<S> {
                         }
                     }
                 }
+                // Misspelled words (`El::spellcheck`), but the one the caret is typing.
+                if inp.spellcheck && !e.is_secure() && e.preedit.is_none() && !departing {
+                    let found = crate::spell::misspelled(&e.text);
+                    let caret = e.focused.then(|| e.range()).filter(|(a, b)| a == b).map(|(a, _)| a);
+                    let color = premul(SPELLING, o, srgb);
+                    for &(a, b) in found.iter().filter(|&&(a, b)| caret.is_none_or(|c| c < a || c > b)) {
+                        let (da, db) = e.display_selection_range(a, b);
+                        for (bb, line) in crate::text::range_boxes(layout, da, db, false) {
+                            let Some(m) = layout.get(line).map(|l| *l.metrics()) else { continue };
+                            // Its top a point under the baseline, as Chromium's.
+                            let top = origin[1] + (m.baseline + s) * tk;
+                            let (x0, x1) = (origin[0] + bb.x0 as f32 * tk, origin[0] + bb.x1 as f32 * tk);
+                            push_spelling_marker(&mut self.instances, x0, x1, top, s * tk, color, clip, fade);
+                        }
+                    }
+                }
             }
             // Span backgrounds (inline code), strikethroughs, a selection over them, then glyphs.
             let reveal = self.reveals.get(&n.id).filter(|st| !st.words.is_empty() && spec.advance_in.is_none());
@@ -502,4 +518,28 @@ impl<S: 'static> Runtime<S> {
             }
         }
     }
+}
+
+/// A misspelled word's marker: Chromium's red, on macOS a row of dots and elsewhere a wavy line.
+/// (Linear light: #FF3B30 on macOS, #FF0000 elsewhere.)
+const SPELLING: Color = if cfg!(target_os = "macos") { Color { r: 1.0, g: 0.0437, b: 0.0296, a: 1.0 } } else { Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 } };
+
+/// The spelling marker from device x `x0` to `x1`, its top at `y`, `k` device px a point: on
+/// macOS 3 pt dots every 4 pt, elsewhere Chromium's 1 pt line waving 2 pt down and back every 6 pt.
+#[allow(clippy::too_many_arguments)]
+fn push_spelling_marker(out: &mut Vec<Instance>, x0: f32, x1: f32, y: f32, k: f32, color: [f32; 4], clip: [f32; 4], fade: [f32; 4]) {
+    if cfg!(target_os = "macos") {
+        let (d, step) = (3.0 * k, 4.0 * k);
+        let count = ((x1 - x0 - d) / step).floor().max(0.0) as usize + 1;
+        let x = x0 + ((x1 - x0) - (count - 1) as f32 * step - d) / 2.0;
+        out.extend((0..count).map(|n| rect_inst([x + n as f32 * step, y, d, d], color, d / 2.0, clip, fade)));
+        return;
+    }
+    const WAVE: [f32; 6] = [0.0, 1.0, 2.0, 2.0, 1.0, 0.0];
+    let t = k.max(1.0).round();
+    let start = x0.round();
+    out.extend((0..(x1.round() - start).max(0.0) as usize).map(|n| {
+        let wave = WAVE[(n as f32 / k) as usize % WAVE.len()];
+        rect_inst([start + n as f32, (y + wave * k).round(), 1.0, t], color, 0.0, clip, fade)
+    }));
 }

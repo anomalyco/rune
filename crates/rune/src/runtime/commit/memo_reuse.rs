@@ -285,6 +285,7 @@ fn same_handlers(
     let crate::el::Handlers {
         on_paste,
         on_window_focus,
+        on_spellcheck,
         modal,
         on_press,
         on_double_press,
@@ -324,6 +325,11 @@ fn same_handlers(
             _ => false,
         }
         && opt_rc_eq(&a.on_window_focus, on_window_focus)
+        && match (&a.on_spellcheck, on_spellcheck) {
+            (None, None) => true,
+            (Some((on_a, fa)), Some((on_b, fb))) => on_a == on_b && Rc::ptr_eq(fa, fb),
+            _ => false,
+        }
         && opt_rc_eq(&a.on_press, on_press)
         && opt_rc_eq(&a.on_double_press, on_double_press)
         && opt_rc_eq(&a.on_secondary_press, on_secondary_press)

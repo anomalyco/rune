@@ -226,6 +226,8 @@ pub struct InputSpec {
     pub(crate) key: Option<InputKeyFn>,
     pub(crate) change: Option<PressFn>,
     pub(crate) paste: Option<InputPasteFn>,
+    /// `El::spellcheck`: the platform's checker marks misspelled words.
+    pub(crate) spellcheck: bool,
 }
 
 impl std::fmt::Debug for InputSpec {
@@ -755,6 +757,7 @@ pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
         key: None,
         change: None,
         paste: None,
+        spellcheck: false,
     }));
     e.sync_input_pills();
     e.sync_input_rich();
@@ -779,6 +782,14 @@ impl El {
     /// Also works on interactive overlays. Headless hosts may call Runtime::window_focus.
     pub fn on_window_focus<S: 'static>(mut self, f: impl Fn(&mut S, bool, &mut Tx) + 'static) -> Self {
         self.handlers.on_window_focus = Some(Rc::new(move |s, focused, tx| f(downcast::<S>(s), focused, tx)));
+        self
+    }
+    /// On the root or around text fields: the app's spell checking setting, `on`, which the
+    /// fields' menus show as a Spellcheck item with a check mark, as a browser's do. Picking it
+    /// calls `f` with the setting flipped; the app keeps it and passes it to its fields'
+    /// [`El::spellcheck`].
+    pub fn on_spellcheck<S: 'static>(mut self, on: bool, f: impl Fn(&mut S, bool, &mut Tx) + 'static) -> Self {
+        self.handlers.on_spellcheck = Some((on, Rc::new(move |s, on, tx| f(downcast::<S>(s), on, tx))));
         self
     }
     /// Paint the latest text in this element's fixed layout box. `text("00:00")` reserves
