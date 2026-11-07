@@ -54,6 +54,7 @@ pub struct App<S: 'static> {
     pub(crate) keep_running: bool,
     pub(crate) on_close: Option<fn(&mut S, &mut Tx)>,
     pub(crate) on_focus: Option<fn(&mut S, bool, &mut Tx)>,
+    pub(crate) on_mods: Option<fn(&mut S, crate::Mods, &mut Tx)>,
     pub(crate) on_ime: Option<fn(&mut S, &crate::Ime, &mut Tx) -> bool>,
     pub(crate) on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
     pub(crate) on_open_url: Option<crate::open_url::incoming::OnOpenUrl<S>>,
@@ -106,6 +107,7 @@ impl<S: 'static> App<S> {
             keep_running: false,
             on_close: None,
             on_focus: None,
+            on_mods: None,
             on_ime: None,
             on_reopen: None,
             on_open_url: None,
@@ -244,6 +246,21 @@ impl<S: 'static> App<S> {
     /// Headless scripts deliver the same callback with `{"focus": false}`.
     pub fn on_focus(mut self, f: fn(&mut S, bool, &mut Tx)) -> Self {
         self.on_focus = Some(f);
+        self
+    }
+
+    /// Hears the modifier keys held down (Shift, Control, Alt or Option, the logo key) each time
+    /// they change, wherever focus is and whether or not anything takes the key, as a web page's
+    /// window-level `keydown`/`keyup` for `Alt` hear it; and none held once the window loses
+    /// focus (a `blur`). For a reveal while a modifier is held: Desktop's Home shows every
+    /// session's worktree and branch while Alt is down. Return nothing: it can't take the key
+    /// from anyone, and [`Tx::live_only`] says the view reads nothing that changed.
+    ///
+    /// ```ignore
+    /// app.on_modifiers(|s: &mut App, mods, _| s.alt_held = mods.alt)
+    /// ```
+    pub fn on_modifiers(mut self, f: fn(&mut S, crate::Mods, &mut Tx)) -> Self {
+        self.on_mods = Some(f);
         self
     }
 

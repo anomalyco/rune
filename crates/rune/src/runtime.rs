@@ -371,6 +371,9 @@ use commit::{Measured, Measurement, unwrapped_width};
 pub struct Runtime<S: 'static> {
     pub state: S,
     pub(crate) on_focus: Option<fn(&mut S, bool, &mut Tx)>,
+    /// `App::on_modifiers`, and the modifiers it last heard.
+    pub(crate) on_mods: Option<fn(&mut S, crate::Mods, &mut Tx)>,
+    mods_heard: crate::Mods,
     /// `App::on_ime` and the composition it has open.
     pub(crate) app_ime: app_ime::AppIme<S>,
     view: fn(&S, &mut Cx<S>) -> El,
@@ -1046,6 +1049,8 @@ impl<S: 'static> Runtime<S> {
             window_focused: None,
             keys_lost: false,
             on_focus: None,
+            on_mods: None,
+            mods_heard: Default::default(),
             app_ime: Default::default(),
             live_subscriptions: Vec::new(),
             live_dirty: false,

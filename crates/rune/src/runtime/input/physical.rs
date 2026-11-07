@@ -176,8 +176,24 @@ impl<S: 'static> Runtime<S> {
             }
             None => false,
         };
+        let ran = self.dispatch_mods(tx, &mut live) || ran;
         tx.live_only = ran && live == Some(true);
         ran
+    }
+    /// `App::on_modifiers`, when the held modifiers changed since it last heard them.
+    fn dispatch_mods(&mut self, tx: &mut Tx, live: &mut Option<bool>) -> bool {
+        let Some(f) = self.on_mods.filter(|_| self.held_mods != self.mods_heard) else { return false };
+        self.mods_heard = self.held_mods;
+        let mut one = self.transaction();
+        let state = match &mut self.playground {
+            Some(playground) => playground.key_state(&mut self.state),
+            None => Some(&mut self.state),
+        };
+        let Some(state) = state else { return false };
+        f(state, self.mods_heard, &mut one);
+        fold_live(live, true, &one);
+        merge(tx, one);
+        true
     }
     /// The focused element's `on_physical_input` handler; true if it consumed `event`.
     fn offer_physical(&mut self, event: &PhysicalInput, tx: &mut Tx, live: &mut Option<bool>) -> bool {
