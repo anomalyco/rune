@@ -21,13 +21,16 @@ mod platform {
 /// The most suggestions a field's menu offers, as Chromium's.
 const MAX_SUGGESTIONS: usize = 5;
 
+/// A text's misspelled words, as byte ranges.
+type Ranges = Rc<Vec<(usize, usize)>>;
+
 thread_local! {
-    /// Each checked text's misspelled byte ranges, by the text's hash.
-    static CHECKED: RefCell<HashMap<u64, Rc<Vec<(usize, usize)>>>> = RefCell::new(HashMap::new());
+    /// Each checked text's misspelled words, by the text's hash.
+    static CHECKED: RefCell<HashMap<u64, Ranges>> = RefCell::new(HashMap::new());
 }
 
 /// The byte ranges of `text`'s misspelled words, checked once per text.
-pub(crate) fn misspelled(text: &str) -> Rc<Vec<(usize, usize)>> {
+pub(crate) fn misspelled(text: &str) -> Ranges {
     if text.trim().is_empty() {
         return Rc::default();
     }

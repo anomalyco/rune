@@ -16,6 +16,7 @@ pub(super) fn misspelled(text: &str) -> Vec<(usize, usize)> {
     let string = NSString::from_str(text);
     let mut found = Vec::new();
     let mut from = 0usize;
+    // SAFETY: the shared checker is AppKit's own, and `string` outlives each call on it.
     unsafe {
         let checker = NSSpellChecker::sharedSpellChecker();
         while from < bytes.len() - 1 {
@@ -36,6 +37,7 @@ pub(super) fn misspelled(text: &str) -> Vec<(usize, usize)> {
 pub(super) fn suggest(word: &str) -> Vec<String> {
     let string = NSString::from_str(word);
     let range = NSRange::new(0, string.length());
+    // SAFETY: as in `misspelled`; `range` is all of `string`.
     unsafe {
         let checker = NSSpellChecker::sharedSpellChecker();
         let Some(guesses) = checker.guessesForWordRange_inString_language_inSpellDocumentWithTag(range, &string, None, 0) else {
@@ -46,5 +48,6 @@ pub(super) fn suggest(word: &str) -> Vec<String> {
 }
 
 pub(super) fn learn(word: &str) {
+    // SAFETY: the shared checker is AppKit's own and the word a live string.
     unsafe { NSSpellChecker::sharedSpellChecker().learnWord(&NSString::from_str(word)) }
 }

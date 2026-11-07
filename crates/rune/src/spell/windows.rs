@@ -14,6 +14,7 @@ thread_local! {
 }
 
 fn create() -> Option<ISpellChecker> {
+    // SAFETY: COM calls on this thread's apartment, with buffers that outlive them.
     unsafe {
         // The window's thread already has an apartment; a headless one may not.
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -42,6 +43,7 @@ pub(super) fn misspelled(text: &str) -> Vec<(usize, usize)> {
         }
         bytes.push(text.len());
         let mut found = Vec::new();
+        // SAFETY: the checker is this thread's, and the text outlives the call.
         unsafe {
             let Ok(errors) = checker.Check(&HSTRING::from(text)) else { return found };
             loop {
@@ -72,6 +74,7 @@ pub(super) fn suggest(word: &str) -> Vec<String> {
     CHECKER.with(|checker| {
         let Some(checker) = &**checker else { return Vec::new() };
         let mut found = Vec::new();
+        // SAFETY: as in `misspelled`; each string `Next` hands over is freed once read.
         unsafe {
             let Ok(list) = checker.Suggest(&HSTRING::from(word)) else { return found };
             loop {
@@ -91,6 +94,7 @@ pub(super) fn suggest(word: &str) -> Vec<String> {
 pub(super) fn learn(word: &str) {
     CHECKER.with(|checker| {
         if let Some(checker) = &**checker {
+            // SAFETY: the checker is this thread's, and the word outlives the call.
             let _ = unsafe { checker.Add(&HSTRING::from(word)) };
         }
     });
