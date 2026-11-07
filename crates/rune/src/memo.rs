@@ -283,6 +283,17 @@ impl MemoCache {
         self.pass + 1
     }
 
+    /// Drops the memos whose own id starts with `prefix`, wherever they nest, and those built
+    /// inside them.
+    pub(crate) fn evict_prefix(&mut self, prefix: &str) {
+        let before = self.entries.len();
+        self.entries.retain(|id, _| !(id.starts_with(prefix) || id.match_indices('/').any(|(i, _)| id[i + 1..].starts_with(prefix))));
+        if self.entries.len() < before {
+            let live: crate::runtime::HashSet<u64> = self.entries.values().map(|e| e.built.id).collect();
+            self.flattened.retain(|id, _| live.contains(id));
+        }
+    }
+
     /// Drops the memos no build since pass `since` (a [`MemoCache::next_pass`]) used: a commit
     /// keeps what any of its view builds used.
     pub(crate) fn keep_since(&mut self, since: u64) {
@@ -294,6 +305,17 @@ impl MemoCache {
             let live: crate::runtime::HashSet<u64> = self.entries.values().map(|e| e.built.id).collect();
             self.flattened.retain(|id, _| live.contains(id));
         }
+    }
+}
+
+impl<S: 'static> crate::Runtime<S> {
+    /// Drops this window's cached subtrees whose memo id starts with `prefix`, wherever they
+    /// nest, and those built inside them, then re-runs the view. A library that built them
+    /// can unload once the commit after this drops its handlers. A memo enclosing a dropped
+    /// one still reuses its own subtree, so it keeps what changed in its version.
+    pub fn invalidate_memos_by_prefix(&mut self, prefix: &str) {
+        self.memo.evict_prefix(prefix);
+        self.invalidate();
     }
 }
 
@@ -554,8 +576,15 @@ fn keyed(el: El, key: String) -> El {
 /// it just builds.
 #[cfg_attr(debug_assertions, track_caller)]
 pub fn memo(id: impl Into<String>, version: impl Hash, build: impl FnOnce() -> El) -> El {
+    memo_with_hash(id, hash_of(&version), build)
+}
+
+/// [`memo`] with a version already hashed to a `u64`, for a caller that keeps its own
+/// hashes (a plugin across a C ABI, where `impl Hash` can't cross). The window's environment
+/// still joins it, as it does `memo`'s.
+#[cfg_attr(debug_assertions, track_caller)]
+pub fn memo_with_hash(id: impl Into<String>, version: u64, build: impl FnOnce() -> El) -> El {
     let key = id.into();
-    let version = hash_of(&version);
     enum Step {
         Reuse(Rc<Built>),
         Build { id: Rc<str>, version: u64, store: bool },
