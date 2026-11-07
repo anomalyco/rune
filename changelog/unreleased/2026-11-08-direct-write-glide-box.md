@@ -1,0 +1,1 @@
+- **A gliding glyph keeps one quad size across its y phases on Windows.** DirectWrite inks one more row for a glyph shifted down part of a pixel when it smooths vertically, so its unshifted mask now keeps that row, empty: text sliding a fraction of a pixel a frame moves instead of growing and shrinking a row, which the motion gate read as text flashing.
