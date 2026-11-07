@@ -19,6 +19,8 @@ pub struct VisualCold {
     pub(crate) surface_place: crate::native_surface::place::SurfacePlace,
     /// Bottom colour of a vertical border gradient whose top is `border` (`El::border_gradient`).
     pub border_bottom: Option<Color>,
+    /// Per-side border widths `[top, right, bottom, left]` in points (`El::border_sides`).
+    pub(crate) border_sides: Option<[f32; 4]>,
     /// Dash and gap lengths of a dashed border, in points (`El::border_dash`).
     pub border_dash: Option<[f32; 2]>,
     /// Points into the dash pattern where it starts (`El::border_dash_phase`).
@@ -96,6 +98,7 @@ impl Empty for VisualCold {
         surface: None,
         surface_place: crate::native_surface::place::SurfacePlace::CENTRED,
         border_bottom: None,
+        border_sides: None,
         border_dash: None,
         border_dash_phase: 0.0,
         shadows: Vec::new(),

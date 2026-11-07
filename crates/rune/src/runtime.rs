@@ -205,6 +205,8 @@ mod action;
 use action::*;
 #[path = "runtime/paint/bands.rs"]
 mod bands;
+#[path = "runtime/paint/border.rs"]
+mod border_paint;
 #[path = "runtime/paint/slots.rs"]
 mod paint_slots;
 #[path = "runtime/paint/pixel_snap.rs"]

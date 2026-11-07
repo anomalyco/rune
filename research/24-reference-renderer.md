@@ -16,10 +16,10 @@ The scalar evaluator implements the five instance kinds present when this work b
 
 | Kind | Reference behavior |
 |---|---|
-| 0 | Per-corner rounded-rect SDF, clamped capsule radii, inset border and softness |
+| 0 | Per-corner rounded-rect SDF, clamped capsule radii, softness, and an inset border (uniform or per-side) over the fill, hiding it by its alpha before opacity (`params[3]`) |
 | 1 | Evan Wallace shadow formula, the shader's erf approximation and four y samples |
 | 2 | R8 glyph texel loads, scaled bilinear footprints, coverage exponent; `params[0]` turns the quad about its centre and samples bilinearly in the glyph's own frame |
-| 3 | Inset shadows with spread, offset and the sharp/blurred branch at sigma .3 |
+| 3 | Inset shadows with spread, offset and the sharp/blurred branch at sigma .3; square corners take exact pixel areas |
 | 4 | Vertical premultiplied-linear gradient with rounded-rect coverage |
 
 Every kind uses the shader's four independent soft clip ramps. Expanded quad
