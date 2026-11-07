@@ -952,10 +952,13 @@ rune::App::new(spec).fit_content_height().run();
   Aero Snap, the snap layouts flyout over maximize, the window menu (Alt+Space, or a right-click on a
   `.window_drag()` region) and its animations; Rune draws the caption buttons over the trailing edge
   (Electron's `titleBarOverlay`: 46 points wide, close turns red), as elements named Minimize,
-  Maximize or Restore, and Close for assistive technology. `Cx::chrome_insets()` says what the
-  controls take (`leading`, `trailing`, `height`; zero where the native frame stays, as on Linux),
-  `Cx::caption_color(c)` colours the caption symbols for an app theme, and `Tx::toggle_maximized()`
-  maximizes or restores. See `examples/custom_titlebar.rs`.
+  Maximize or Restore, and Close for assistive technology, still in reach while the view holds a
+  modal. A window that isn't resizable never maximizes: its maximize button is dimmed, with no snap
+  layouts. `Cx::chrome_insets()` says what the controls take (`leading`, `trailing`, `height`; zero
+  where the native frame stays, as on Linux; memos rebuild when it changes), `Cx::caption_color(c)`
+  colours the caption symbols for an app theme, `Cx::titlebar_height(h)` changes the band's height
+  as the app runs (a UI zoom), and `Tx::toggle_maximized()` maximizes or restores.
+  `cargo run -p rune --example custom_titlebar` shows it.
 - **`AppSpec::new(title, size, init, view)`** fills every other field with its default; literals
   that set a few more end with `..AppSpec::new(..)`. Window chrome lives on the builders, keeping
   existing exhaustive `AppSpec` literals source-compatible.

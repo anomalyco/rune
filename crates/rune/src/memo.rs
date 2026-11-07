@@ -330,12 +330,14 @@ thread_local! {
 
 /// Makes `cache` the one [`memo`] uses until [`Guard::finish`], for one view build.
 /// `caret` and `layout` are what the view's `Cx` returns.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn enter(
     mut cache: MemoCache,
     env: crate::Env,
     accent: crate::SystemAccent,
     reduced_motion: bool,
     srgb_blend: bool,
+    chrome: [u32; 4],
     caret: Option<(String, [f32; 4])>,
     layout: LayoutRects,
 ) -> Guard {
@@ -344,7 +346,8 @@ pub(crate) fn enter(
     let accent = [accent.accent(env.system_dark), accent.focus(env.system_dark)].map(|c| [c.r, c.g, c.b, c.a].map(f32::to_bits));
     let scale = env.scale;
     // Theme colours resolve per blend mode (`theme::blends_srgb`), so a switch rebuilds memos.
-    let env = hash_of(&(env.system_dark, scale.to_bits(), reduced_motion, accent, crate::platform::scroll_bars::scoped(), srgb_blend));
+    // So does a change to what the window's controls take (`Cx::chrome_insets`).
+    let env = hash_of(&(env.system_dark, scale.to_bits(), reduced_motion, accent, crate::platform::scroll_bars::scoped(), srgb_blend, chrome));
     let scope = Scope {
         cache,
         env,
@@ -394,6 +397,7 @@ pub(crate) fn enter_partial(
     accent: crate::SystemAccent,
     reduced_motion: bool,
     srgb_blend: bool,
+    chrome: [u32; 4],
     caret: Option<(String, [f32; 4])>,
     layout: LayoutRects,
 ) -> Guard {
@@ -410,7 +414,7 @@ pub(crate) fn enter_partial(
         keep_nested_rows(&mut cache, &mut nested, next);
     }
     cache.nested_scratch = nested;
-    enter(cache, env, accent, reduced_motion, srgb_blend, caret, layout)
+    enter(cache, env, accent, reduced_motion, srgb_blend, chrome, caret, layout)
 }
 
 /// Records a `Cx::caret` read for the memo building, if any.
@@ -838,7 +842,7 @@ mod tests {
     #[test]
     fn a_view_panicking_inside_a_memo_leaves_no_scope_for_the_next_build() {
         let panicked = std::panic::catch_unwind(|| {
-            let _scope = enter(MemoCache::default(), Env::new(true, 1.0), crate::SystemAccent::DEFAULT, false, true, None, LayoutRects::default());
+            let _scope = enter(MemoCache::default(), Env::new(true, 1.0), crate::SystemAccent::DEFAULT, false, true, [0; 4], None, LayoutRects::default());
             memo("outer", 0, || memo("inner", 0, || panic!("view panicked")))
         });
         assert!(panicked.is_err());

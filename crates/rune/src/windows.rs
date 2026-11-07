@@ -85,7 +85,8 @@ pub struct WindowOptions {
     pub min_size: Option<(f32, f32)>,
     /// Logical maximum content size. None leaves it unconstrained.
     pub max_size: Option<(f32, f32)>,
-    /// Whether the user can resize the window. Programmatic sizing is unaffected.
+    /// Whether the user can resize the window. Programmatic sizing is unaffected. A window
+    /// that isn't resizable doesn't maximize either: its maximize (zoom) button is disabled.
     pub resizable: bool,
 }
 
@@ -139,13 +140,15 @@ impl WindowOptions {
 
     pub(crate) fn attributes(&self, title: &str, size: (f32, f32), app_min: Option<(f32, f32)>, visible: bool) -> winit::window::WindowAttributes {
         use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
-        use winit::window::{Window, WindowLevel};
+        use winit::window::{Window, WindowButtons, WindowLevel};
         let (min, _) = self.size_limits(app_min);
+        let buttons = if self.resizable { WindowButtons::all() } else { WindowButtons::all() - WindowButtons::MAXIMIZE };
         let mut attrs = Window::default_attributes()
             .with_title(title)
             .with_inner_size(LogicalSize::new(size.0, size.1))
             .with_min_inner_size(LogicalSize::new(min.0, min.1))
             .with_resizable(self.resizable)
+            .with_enabled_buttons(buttons)
             .with_transparent(self.transparent)
             .with_decorations(!self.borderless)
             .with_visible(visible)

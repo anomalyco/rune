@@ -7,7 +7,7 @@ use std::rc::Rc;
 use crate::el::{el, row};
 use crate::{Color, El, LineCap, Shape};
 
-use super::{Caption, CaptionButton, Titlebar};
+use super::{Caption, CaptionButton, CaptionState, Titlebar};
 
 /// The close button's hover fill, Windows' own red.
 const CLOSE_RED: Color = Color { r: 0.807_5, g: 0.005_8, b: 0.016_9, a: 1.0 };
@@ -16,6 +16,9 @@ const HOVER_ALPHA: f32 = 0x1A as f32 / 255.0;
 const PRESSED_ALPHA: f32 = 0x33 as f32 / 255.0;
 /// The close button's red while pressed.
 const CLOSE_PRESSED_ALPHA: f32 = 0x98 as f32 / 255.0;
+/// A disabled button's symbol, as a fraction of the symbol colour's alpha: Windows 11's
+/// disabled text.
+const DISABLED_ALPHA: f32 = 0x5C as f32 / 255.0;
 
 /// A button's width and height in points at `scale`, each a whole number of pixels.
 pub(super) fn size(height: f32, scale: f32) -> (f32, f32) {
@@ -23,18 +26,37 @@ pub(super) fn size(height: f32, scale: f32) -> (f32, f32) {
     (snap(Titlebar::CAPTION_BUTTON_WIDTH), snap(height))
 }
 
-/// The three buttons pinned to the root's top-right corner, over everything the view drew.
-/// `symbol` is the glyph colour (`Cx::caption_color`).
-pub(crate) fn buttons(caption: &Caption, symbol: Color, scale: f32) -> El {
+/// The view's root under the caption buttons, in a frame of Rune's own the window's size: the
+/// buttons sit at the window's top-right corner whatever the root's border, clip or transform,
+/// and stay in reach of the pointer and assistive technology while the view holds a modal
+/// (`Runtime::refresh_modal_index`). `symbol` is the glyph colour (`Cx::caption_color`). A
+/// full-screen window keeps the frame with no buttons in it, so the view's paths stay.
+pub(crate) fn frame(root: El, caption: &Caption, symbol: Color, scale: f32, fit_height: bool) -> El {
+    let root = if fit_height { root.w_full() } else { root.w_full().h_full() };
+    el().key(FRAME_KEY).child(root).children((!caption.hidden).then(|| buttons(caption, symbol, scale)))
+}
+
+/// The frame `frame` puts around the view's root.
+pub(crate) const FRAME_KEY: &str = "rune-frame";
+/// The row of caption buttons in it.
+pub(crate) const BUTTONS_KEY: &str = "rune-caption";
+
+/// The buttons pinned to the frame's top-right corner, over everything the view drew.
+fn buttons(caption: &Caption, symbol: Color, scale: f32) -> El {
     let (w, h) = size(caption.height, scale);
-    row().key("rune-caption").pin(None, Some(0.0), Some(0.0), None)
-        .children(CaptionButton::ALL.map(|button| caption_button(caption, button, symbol, (w, h), scale)))
+    row().key(BUTTONS_KEY).pin(None, Some(0.0), Some(0.0), None)
+        .children(caption.buttons().iter().map(|&button| caption_button(caption, button, symbol, (w, h), scale)))
 }
 
 fn caption_button(caption: &Caption, button: CaptionButton, symbol: Color, (w, h): (f32, f32), scale: f32) -> El {
-    let pressed = caption.pressed == Some(button);
-    let hovered = pressed || caption.hover == Some(button);
+    let enabled = caption.enabled(button);
+    let (hovered, pressed) = match caption.state {
+        CaptionState::Pressed { button: b, over: true } if b == button => (true, true),
+        CaptionState::Hovered(b) if b == button => (true, false),
+        _ => (false, false),
+    };
     let (fill, ink) = match button {
+        _ if !enabled => (Color::TRANSPARENT, symbol.alpha(symbol.a * DISABLED_ALPHA)),
         CaptionButton::Close if pressed => (CLOSE_RED.alpha(CLOSE_PRESSED_ALPHA), Color::WHITE),
         CaptionButton::Close if hovered => (CLOSE_RED, Color::WHITE),
         _ if pressed => (symbol.alpha(symbol.a * PRESSED_ALPHA), symbol),
@@ -47,14 +69,17 @@ fn caption_button(caption: &Caption, button: CaptionButton, symbol: Color, (w, h
         CaptionButton::Maximize => ("rune-caption-maximize", "Maximize"),
         CaptionButton::Close => ("rune-caption-close", "Close"),
     };
-    let mut e = el().key(key).role("button").label(label).focusable(false).size(w, h).fill(fill)
+    let mut e = el().key(key).role("button").label(label).focusable(false).disabled(!enabled).size(w, h).fill(fill)
         .child(symbol_el(button, caption.maximized, ink, (w, h), scale));
     // The mouse presses them through the window procedure; assistive technology invokes these.
-    e.handlers.on_press = Some(Rc::new(move |_, tx: &mut crate::Tx| match button {
-        CaptionButton::Minimize => tx.minimize(),
-        CaptionButton::Maximize => tx.toggle_maximized(),
-        CaptionButton::Close => tx.close_window(),
-    }));
+    // A dimmed button has nothing to invoke.
+    if enabled {
+        e.handlers.on_press = Some(Rc::new(move |_, tx: &mut crate::Tx| match button {
+            CaptionButton::Minimize => tx.minimize(),
+            CaptionButton::Maximize => tx.toggle_maximized(),
+            CaptionButton::Close => tx.close_window(),
+        }));
+    }
     e
 }
 

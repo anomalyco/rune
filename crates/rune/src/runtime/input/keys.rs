@@ -58,6 +58,8 @@ impl<S: 'static> Runtime<S> {
                 Some('b' | 'i' | 'u') => self.focused_input().is_some_and(|i| i.edit.format_chord(ev).is_some()),
                 _ => false,
             },
+            // Alt+Space is the window menu's, so a field leaves it to the shell.
+            _ if ev.is_window_menu_chord() => false,
             _ => !ev.is_command_chord() || ev.control_binding().is_some(),
         };
         if input_handles {

@@ -141,7 +141,10 @@ impl<S: 'static> Live<S> {
                 }))
         });
         let hint = self.hint(variants.len(), slot.is_some() || !variants.is_empty() || !triggers.is_empty());
-        col().key("playground-side").w(side_w).h(height).px(12.0).pt(12.0).pb(12.0).gap(12.0)
+        // The Windows caption buttons sit over the column's top.
+        let chrome = cx.chrome_insets();
+        let under_caption = if chrome.trailing > 0.0 { chrome.height } else { 0.0 };
+        col().key("playground-side").w(side_w).h(height).px(12.0).pt(12.0 + under_caption).pb(12.0).gap(12.0)
             .children(title)
             .children(slot)
             .children(picker)
@@ -203,7 +206,7 @@ impl<S: 'static> Live<S> {
             (None, Some(_)) => self.own().map(|(own, stage)| {
                 let mut unit = cx.retype::<()>();
                 unit.set_env(env);
-                unit.set_titlebar_inset(0.0);
+                unit.clear_chrome();
                 if self.reduce_motion { unit.reduced_motion(true); }
                 let root = own.view(stage, &mut unit);
                 cx.absorb(unit);
@@ -237,7 +240,7 @@ impl<S: 'static> Live<S> {
     fn nested(&self, cx: &mut Cx<S>, env: crate::Env, f: impl FnOnce(&mut Cx<S>) -> El) -> El {
         let mut stage = cx.retype::<S>();
         stage.set_env(env);
-        stage.set_titlebar_inset(0.0);
+        stage.clear_chrome();
         if self.reduce_motion { stage.reduced_motion(true); }
         let root = f(&mut stage);
         cx.absorb(stage);

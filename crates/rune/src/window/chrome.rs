@@ -21,18 +21,27 @@ pub(super) fn place_chrome(window: &Window, chrome: Chrome) -> f32 {
     }
 }
 
+/// The frame the window draws for the app's `chrome` and `titlebar` at `height`
+/// (`Cx::titlebar_height`, else the titlebar's own): on macOS a titlebar is a full-size content
+/// view with the traffic lights in the band's middle unless the app placed them.
+pub(super) fn frame_chrome(chrome: Chrome, titlebar: Option<crate::Titlebar>, height: Option<f32>) -> Chrome {
+    #[cfg(target_os = "macos")]
+    return titlebar.map(|t| height.map_or(t, crate::Titlebar::new)).map_or(chrome, |t| t.mac_chrome(chrome));
+    #[cfg(not(target_os = "macos"))]
+    { let _ = (titlebar, height); chrome }
+}
+
 /// Places the traffic lights, and tells the runtime what the window's controls take of the
-/// titlebar and which caption buttons to draw over it. Returns whether the view must re-run.
-pub(super) fn sync_chrome<S: 'static>(rt: &mut Runtime<S>, w: &Win, chrome: Chrome, titlebar: Option<crate::Titlebar>) -> bool {
-    let leading = place_chrome(&w.window, chrome);
+/// titlebar and which caption buttons to draw over it. A change re-runs the view.
+pub(super) fn sync_chrome<S: 'static>(rt: &mut Runtime<S>, w: &Win, chrome: Chrome, titlebar: Option<crate::Titlebar>) {
+    let leading = place_chrome(&w.window, frame_chrome(chrome, titlebar, rt.titlebar_height()));
     rt.set_titlebar_inset(leading);
-    let caption = caption(w);
+    let height = titlebar.map(|t| rt.titlebar_height().unwrap_or(t.height()));
+    let caption = caption(w, height);
     let scale = w.window.scale_factor() as f32;
-    let height = titlebar.filter(|_| custom_frame(w)).map_or(0.0, |t| t.height());
-    let insets = crate::ChromeInsets::new(leading, caption.map_or(0.0, |c| c.width(scale)), height);
-    let before = rt.chrome_insets();
-    rt.set_chrome_insets(insets);
-    rt.set_caption(caption) || before != insets
+    let height = height.filter(|_| custom_frame(w)).unwrap_or(0.0);
+    rt.set_chrome_insets(crate::ChromeInsets::new(leading, caption.map_or(0.0, |c| c.width(scale)), height));
+    rt.set_caption(caption);
 }
 
 /// Whether Rune replaced the native title bar: macOS draws the app's titlebar under its
@@ -46,30 +55,53 @@ fn custom_frame(w: &Win) -> bool {
     { let _ = w; false }
 }
 
-/// The caption buttons a custom frame draws, out of full screen.
-fn caption(w: &Win) -> Option<crate::titlebar::Caption> {
+/// The caption buttons a custom frame draws `height` points tall; none in full screen.
+fn caption(w: &Win, height: Option<f32>) -> Option<crate::titlebar::Caption> {
     #[cfg(target_os = "windows")]
-    return w.native.frame.as_ref().filter(|_| w.window.fullscreen().is_none()).map(|f| f.caption(&w.window));
+    return w.native.frame.as_ref().map(|f| {
+        if let Some(h) = height { f.set_height(h); }
+        f.caption(&w.window)
+    });
     #[cfg(not(target_os = "windows"))]
-    { let _ = w; None }
+    { let _ = (w, height); None }
 }
 
+/// A double click on a titlebar: AppKit's action on macOS, else maximize or restore, as the
+/// maximize button would.
 pub(super) fn titlebar_double_click(window: &Window) {
     #[cfg(target_os = "macos")]
     mac::titlebar_double_click(window);
     #[cfg(not(target_os = "macos"))]
-    window.set_maximized(!window.is_maximized());
+    toggle_maximized(window);
 }
 
-/// The window menu at the pointer, where a custom titlebar has one to open.
-pub(super) fn system_menu(window: &Window) {
+/// Maximizes the window, or restores it when it is maximized. A window without a maximize
+/// button (one that isn't resizable) only restores.
+pub(super) fn toggle_maximized(window: &Window) {
+    let maximized = window.is_maximized();
+    if maximized || window.enabled_buttons().contains(winit::window::WindowButtons::MAXIMIZE) {
+        window.set_maximized(!maximized);
+    }
+}
+
+/// The window menu, where a custom titlebar (at the pointer) or the keyboard opens it.
+pub(super) fn window_menu(window: &Window, menu: crate::runtime::WindowMenu) {
     #[cfg(target_os = "windows")]
-    crate::platform::win32::system_menu(window);
+    crate::platform::win32::window_menu(window, menu);
     #[cfg(not(target_os = "windows"))]
-    let _ = window;
+    let _ = (window, menu);
+}
+
+/// Whether Alt+Space opens this window's window menu when no handler takes it.
+pub(super) fn has_window_menu(window: &Window) -> bool {
+    #[cfg(target_os = "windows")]
+    return crate::platform::win32::has_window_menu(window);
+    #[cfg(not(target_os = "windows"))]
+    { let _ = window; false }
 }
 
 /// Sizes the window's content to `size` points.
+#[cfg(not(target_os = "macos"))]
 pub(super) fn request_inner_size(window: &Window, size: (f32, f32)) {
     #[cfg(target_os = "windows")]
     if crate::platform::win32::request_inner_size(window, size) { return; }

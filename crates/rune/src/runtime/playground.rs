@@ -22,16 +22,23 @@ impl<S: 'static> Runtime<S> {
     /// The node the app's view returned: the first, or with the playground attached, the one
     /// above its bar or on its stage. Root handlers (window focus, paste, file drops) are there.
     pub(super) fn app_root(&self) -> usize {
-        self.playground.as_ref().map_or(0, |p| p.root)
+        self.playground.as_ref().map_or_else(|| self.view_root(), |p| p.root)
+    }
+
+    /// The node the view returned: the first, or the first inside the frame that holds the
+    /// Windows caption buttons over it (`titlebar::frame`).
+    fn view_root(&self) -> usize {
+        usize::from(self.nodes.first().is_some_and(|n| n.key.as_deref() == Some(crate::titlebar::FRAME_KEY)))
     }
 
     pub(super) fn find_app_root(&mut self) {
+        let view_root = self.view_root();
         let Some(playground) = &mut self.playground else { return };
         // A scrolling stage holds the root in a margin.
         let margin = |k: Option<&str>| k == Some("playground-margin");
         let wraps = |k: &str| k == "playground-closed" || margin(Some(k)) || crate::playground::is_stage(k);
         let nodes = &self.nodes;
-        playground.root = nodes.iter().position(|n| !margin(n.key.as_deref()) && n.parent.is_some_and(|p| nodes[p].key.as_deref().is_some_and(wraps))).unwrap_or(0);
+        playground.root = nodes.iter().position(|n| !margin(n.key.as_deref()) && n.parent.is_some_and(|p| nodes[p].key.as_deref().is_some_and(wraps))).unwrap_or(view_root);
     }
 
     /// Moves a Tx's playground requests to the runtime, for the next commit to apply before its

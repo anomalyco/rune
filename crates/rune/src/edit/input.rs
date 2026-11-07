@@ -82,7 +82,7 @@ impl TextEdit {
             };
             return self.key(&KeyEvent { key, mods: Mods { shift: m.shift, cmd: line, ..Mods::default() } }, layout);
         }
-        if ev.is_command_chord() { return out; }
+        if ev.is_command_chord() || ev.is_window_menu_chord() { return out; }
         if !matches!(&ev.key, Key::Text(s) if !s.contains(['\r', '\n'])) { self.break_history_group(); }
         // ⌘ moves to a line's edge on macOS. Elsewhere Ctrl, which also sets `cmd`, moves by
         // word as Option does on macOS; `cmd` with no Ctrl (a script) keeps the line edge.

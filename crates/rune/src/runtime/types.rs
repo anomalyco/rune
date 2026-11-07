@@ -431,10 +431,6 @@ pub enum TitlebarAction {
     Drag,
     /// The titlebar double-click action (zoom, minimise or nothing, per system setting).
     DoubleClick,
-    /// The window menu (Restore, Move, Size, Minimize, Maximize, Close) at the pointer, as a
-    /// right-click on a native title bar opens it: a secondary click on a `.window_drag()`
-    /// region of a custom titlebar (`App::titlebar`) on Windows.
-    SystemMenu,
 }
 
 #[derive(Clone, Copy, Debug, Default)]

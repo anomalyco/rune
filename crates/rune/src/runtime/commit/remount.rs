@@ -268,6 +268,7 @@ impl<S: 'static> Measurement<'_, S> {
             self.system_accent,
             self.system_reduced_motion,
             crate::theme::blends_srgb(),
+            self.chrome_bits(),
             self.caret.clone(),
             self.layout_seen.clone(),
         );
@@ -543,6 +544,7 @@ impl<S: 'static> Measurement<'_, S> {
             reduced_motion: self.reduced_motion,
             time_scale: self.time_scale,
             defaults: self.defaults,
+            titlebar_height: self.titlebar_height,
             caret_read: self.caret_read,
             layout_reads: self.layout_reads,
             memo_flattened: Some(pending),

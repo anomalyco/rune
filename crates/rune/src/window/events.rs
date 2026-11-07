@@ -289,6 +289,15 @@ impl<S: 'static> Host<S> {
                     self.shell(event_loop);
                     return;
                 }
+                // Windows sizes the window in its own loop and shows the new size at once: the
+                // swap chain just took it, so a frame drawn later would leave the old pixels
+                // stretched over it until then.
+                #[cfg(target_os = "windows")]
+                if crate::platform::win32::in_size_move(&l.window) {
+                    self.draw(true);
+                    self.shell(event_loop);
+                    return;
+                }
                 l.window.request_redraw();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -389,8 +398,12 @@ impl<S: 'static> Host<S> {
                 // A release's logical key only matters to `on_key_up` handlers.
                 let logical = (pressed || rt.wants_key_up()).then(|| map_key_event(&event, self.mods)).flatten();
                 let mut redraw = false;
-                // A menu item handing Rune its key: it acts after, if no handler takes it.
-                let unhandled = crate::native_menu::take_unhandled(logical.as_ref().filter(|_| pressed));
+                // A menu item handing Rune its key: it acts after, if no handler takes it. So does
+                // the window menu's Alt+Space, posted rather than run inside the key's message.
+                let unhandled = crate::native_menu::take_unhandled(logical.as_ref().filter(|_| pressed)).or_else(|| {
+                    logical.as_ref().filter(|ev| pressed && ev.is_window_menu_chord() && chrome::has_window_menu(&l.window))
+                        .map(|_| crate::runtime::Unhandled::WindowMenu)
+                });
                 if let winit::keyboard::PhysicalKey::Code(key) = event.physical_key {
                     redraw = rt.physical_then(crate::PhysicalInput::Key {
                         key, mods: map_mods(self.mods), pressed, repeat: event.repeat,
@@ -490,7 +503,7 @@ impl<S: 'static> Host<S> {
                                     let _ = l.window.drag_window();
                                 }
                                 Some(TitlebarAction::DoubleClick) => titlebar_double_click(&l.window),
-                                Some(TitlebarAction::SystemMenu) | None => {}
+                                None => {}
                             }
                         }
                         (ElementState::Released, false) => rt.pointer_up(x, y),
@@ -505,9 +518,8 @@ impl<S: 'static> Host<S> {
                         ElementState::Pressed => rt.secondary_down(x, y),
                         ElementState::Released => {
                             rt.secondary_up(x, y);
-                            if rt.take_titlebar_action() == Some(TitlebarAction::SystemMenu) {
-                                chrome::system_menu(&l.window);
-                            }
+                            // At the pointer, while it's still where the click was.
+                            if let Some(menu) = rt.take_window_menu() { chrome::window_menu(&l.window, menu); }
                         }
                     }
                 }

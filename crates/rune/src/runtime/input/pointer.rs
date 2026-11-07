@@ -155,6 +155,8 @@ impl<S: 'static> Runtime<S> {
             return;
         }
         self.drop_drag_out_request();
+        // A host that didn't act on the last press's request mustn't get it with this one.
+        self.titlebar.action = None;
         self.pointer = Some((x, y));
         // A press is the hand's: hover follows the pointer through moving layout.
         self.release_hover_hold();
@@ -193,14 +195,14 @@ impl<S: 'static> Runtime<S> {
         // Any press breaks a pending pair unless it's the second press of it.
         let pending = self.last_press.take();
         let now = self.now_clock();
-        let n = &self.nodes[ti];
-        if n.window_drag && n.handlers.on_press.is_none() && n.handlers.on_double_press.is_none() && n.handlers.on_drag.is_none() && n.handlers.drag_out.is_none() && self.textbox_input(ti).is_none() {
+        if self.bare_drag_region(ti) {
             self.titlebar.press_region(now, x, y, self.double_click_interval);
             if self.focused.is_some() {
                 self.queue.push(Action::Blur);
             }
             return;
         }
+        let n = &self.nodes[ti];
         self.press_at = (x, y);
         let clicks = self.press_clicks.press(&n.path, now, (x, y), self.double_click_interval);
         self.double_armed = n.handlers.on_double_press.is_some() && pending.is_some_and(|(p, t, px, py)| {

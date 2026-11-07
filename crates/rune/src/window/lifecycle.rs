@@ -184,7 +184,15 @@ impl<S: 'static> Host<S> {
     pub(super) fn shell(&mut self, event_loop: &ActiveEventLoop) {
         self.show_title();
         if self.rt.take_toggle_maximized() && let Some(w) = self.win.as_ref().filter(|w| w.visible) {
-            w.window.set_maximized(!w.window.is_maximized());
+            chrome::toggle_maximized(&w.window);
+        }
+        if let Some(menu) = self.rt.take_window_menu() && let Some(w) = self.win.as_ref().filter(|w| w.visible) {
+            chrome::window_menu(&w.window, menu);
+        }
+        // A new `Cx::titlebar_height` resizes the caption buttons and the band the frame hit-tests.
+        if self.rt.take_titlebar_height_changed() && let Some(w) = &self.win {
+            sync_chrome(&mut self.rt, w, self.chrome, self.titlebar);
+            if self.rt.stale() { w.window.request_redraw(); }
         }
         for _ in 0..8 {
             let minimize = std::mem::take(&mut self.rt.minimize_request);
