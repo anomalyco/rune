@@ -42,6 +42,8 @@ pub(super) struct Flow {
     pub(super) lists: u32,
     /// A block quote's text colour, when they're in one.
     pub(super) ink: Option<Color>,
+    /// How much narrower than the text column they are: list indents and quote rules.
+    pub(super) inset: f32,
 }
 
 /// Shell languages, which [`MarkdownStyle::shell_code`] styles apart (`markdown.tsx`'s list).
@@ -317,8 +319,9 @@ impl Renderer {
         if self.scroll_wide {
             // The text sizes to its longest line inside the viewport, which scrolls under the
             // padding so lines run to the frame's edge.
-            return frame.child(col().key("scroll").w_full().scroll_x().scroll_edge_fade(12.0)
-                .child(col().px(s.code_block_pad[0]).py(s.code_block_pad[1]).child(self.select(body))));
+            let viewport = col().key("scroll").w_full().scroll_x();
+            let viewport = if s.wide_fade > 0.0 { viewport.scroll_edge_fade(s.wide_fade) } else { viewport };
+            return frame.child(viewport.child(col().px(s.code_block_pad[0]).py(s.code_block_pad[1]).child(self.select(body))));
         }
         frame.px(s.code_block_pad[0]).py(s.code_block_pad[1]).child(self.select(body.w_full()))
     }
@@ -500,7 +503,7 @@ impl Renderer {
                 };
                 // Outside markers end a space's width before the text, as a browser sets "1. ".
                 let space = if s.list_outside { rune::text::measure("x x", &[], s.body, None).0 - rune::text::measure("xx", &[], s.body, None).0 } else { 0.0 };
-                self.flow.set(Flow { lists: flow.lists + 1, ..flow });
+                self.flow.set(Flow { lists: flow.lists + 1, inset: flow.inset + indent, ..flow });
                 let mut c = col().role("list").w_full().gap(s.list_gap);
                 let n = items.len();
                 for (k, item) in items.iter().enumerate() {
@@ -538,7 +541,7 @@ impl Renderer {
                 };
                 let q = s.quote;
                 let flow = self.flow.get();
-                self.flow.set(Flow { ink: q.text.or(flow.ink), ..flow });
+                self.flow.set(Flow { ink: q.text.or(flow.ink), inset: flow.inset + q.width + q.pad, ..flow });
                 let inner = self.blocks(inner, inner_maps, &[], false);
                 self.flow.set(flow);
                 row()

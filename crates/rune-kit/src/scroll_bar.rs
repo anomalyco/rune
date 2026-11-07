@@ -1,4 +1,5 @@
-//! A scroll bar over a vertical scroll viewport's right edge: a thin thumb that shows how far
+//! A scroll bar over a vertical scroll viewport's right edge (or, [`ScrollBarStyle::horizontal`],
+//! along a sideways viewport's bottom edge): a thin thumb that shows how far
 //! it has scrolled while its content overflows. It follows the system "Show scroll bars"
 //! preference ([`rune::ScrollBars`]): always shown when overflowing under `Always` (or `Automatic`
 //! with a mouse), and overlaid while scrolling then faded out at rest under `WhenScrolling` (or
@@ -77,6 +78,11 @@ struct Track {
     min_thumb: f32,
     /// Overlaid and faded at rest whatever the system preference.
     overlay: bool,
+    /// The strip sits beside the viewport, in room the caller leaves for it, rather than over
+    /// its edge.
+    gutter: bool,
+    /// Along the viewport's bottom edge, for a viewport that scrolls sideways.
+    x: bool,
     /// The pointer anywhere over the area shows an overlay bar, not only near its edge; only
     /// over the thumb does it take the hover colour.
     area_reveals: bool,
@@ -92,6 +98,8 @@ const KIT_TRACK: Track = Track {
     inset: INSET,
     min_thumb: MIN_THUMB,
     overlay: false,
+    gutter: false,
+    x: false,
     area_reveals: false,
     hold: HOLD,
     enter: ENTER,
@@ -108,6 +116,8 @@ const SCROLL_VIEW_TRACK: Track = Track {
     inset: 8.0,
     min_thumb: 32.0,
     overlay: true,
+    gutter: false,
+    x: false,
     area_reveals: true,
     hold: Duration::from_millis(800),
     enter: Spring::new(0.2, 0.0),
@@ -115,7 +125,31 @@ const SCROLL_VIEW_TRACK: Track = Track {
     tint: Spring::new(0.15, 0.0),
 };
 
+/// `@opencode/ui`'s `scrollbar.css`, which every plain `overflow: auto` container gets: an 8
+/// point strip taken from layout, its track 4 in from the ends, and a thumb with a 2 point clear
+/// border, so a 4 point pill 6 in from the ends, 28 long at least. It shows only while the
+/// pointer is over the area, at once, with no fade or hold.
+const NATIVE_TRACK: Track = Track {
+    strip: 8.0,
+    edge: 2.0,
+    inset: 6.0,
+    min_thumb: 28.0,
+    overlay: true,
+    gutter: true,
+    x: false,
+    area_reveals: true,
+    hold: Duration::ZERO,
+    enter: Spring::NONE,
+    leave: Spring::NONE,
+    tint: Spring::NONE,
+};
+
 impl Track {
+    /// The index of the axis the thumb runs along in a point or size: 0 sideways, 1 down.
+    fn along(&self) -> usize {
+        usize::from(!self.x)
+    }
+
     /// How long after a scroll an overlay bar's pulse has faded out.
     fn pulse_span(&self) -> f64 {
         self.hold.as_secs_f64() + FADE_TAIL
@@ -134,6 +168,27 @@ impl ScrollBarStyle {
     /// `border_strong` under the pointer or while dragged.
     pub fn scroll_view(k: &Kit) -> Self {
         Self { thumb: k.c.border_muted, thumb_hover: k.c.border_strong, width: 4.0, hover_width: 4.0, track: SCROLL_VIEW_TRACK }
+    }
+
+    /// `@opencode/ui`'s `scrollbar.css`, the scroll bar of every plain `overflow: auto` box in
+    /// OpenCode: an 8 point strip beside the viewport (leave the room for it: the bar draws
+    /// there), with a 4 point `thumb` pill 6 points in from its ends, shown only while the pointer
+    /// is over the area, and `thumb_hover` while the pointer is over the thumb or drags it. It
+    /// shows and hides at once. Pass `border_muted` and `border_strong`.
+    pub fn native(thumb: Color, thumb_hover: Color) -> Self {
+        Self { thumb, thumb_hover, width: 4.0, hover_width: 4.0, track: NATIVE_TRACK }
+    }
+
+    /// The bar along the bottom edge of a viewport that scrolls sideways ([`El::scroll_x`])
+    /// rather than down its right edge.
+    pub fn horizontal(mut self) -> Self {
+        self.track.x = true;
+        self
+    }
+
+    /// How thick the strip beside the viewport is, for the room a [`Self::native`] bar takes.
+    pub fn strip(&self) -> f32 {
+        self.track()
     }
 
     /// The kit's thumb on Rune's neutral light or dark tokens, for apps without a kit.
@@ -256,10 +311,16 @@ fn thumb(at: ScrollPos, track: f32) -> (f32, f32) {
 }
 
 /// [`thumb`] never shorter than `min`.
+#[cfg(test)]
 fn thumb_on(at: ScrollPos, track: f32, min: f32) -> (f32, f32) {
-    let (shown, max) = (at.viewport[1], at.max[1]);
+    thumb_along(at, track, min, 1)
+}
+
+/// [`thumb_on`] along axis `a` (0 sideways, 1 down).
+fn thumb_along(at: ScrollPos, track: f32, min: f32, a: usize) -> (f32, f32) {
+    let (shown, max) = (at.viewport[a], at.max[a]);
     let len = (track * shown / (shown + max).max(1.0)).max(min).min(track);
-    let top = if max > 0.0 { (track - len) * (at.offset[1] / max).clamp(0.0, 1.0) } else { 0.0 };
+    let top = if max > 0.0 { (track - len) * (at.offset[a] / max).clamp(0.0, 1.0) } else { 0.0 };
     (top, len)
 }
 
@@ -270,18 +331,31 @@ fn offset_at(at: ScrollPos, track: f32, top: f32) -> f32 {
 }
 
 /// [`offset_at`] for a thumb never shorter than `min`.
+#[cfg(test)]
 fn offset_on(at: ScrollPos, track: f32, top: f32, min: f32) -> f32 {
-    let travel = track - thumb_on(at, track, min).1;
+    offset_along(at, track, top, min, 1)
+}
+
+/// [`offset_on`] along axis `a`.
+fn offset_along(at: ScrollPos, track: f32, top: f32, min: f32, a: usize) -> f32 {
+    let travel = track - thumb_along(at, track, min, a).1;
     if travel <= 0.0 {
-        return at.offset[1];
+        return at.offset[a];
     }
-    (top / travel * at.max[1]).clamp(0.0, at.max[1])
+    (top / travel * at.max[a]).clamp(0.0, at.max[a])
 }
 
 /// The track's length for a viewport at `at`, and whether a bar shows on it at all.
 fn track_len(at: ScrollPos, t: &Track) -> (f32, bool) {
-    let len = at.viewport[1] - 2.0 * t.inset;
-    (len, at.max[1] > 0.5 && len >= t.min_thumb)
+    let a = t.along();
+    let len = at.viewport[a] - 2.0 * t.inset;
+    (len, at.max[a] > 0.5 && len >= t.min_thumb)
+}
+
+/// `[x, y, w, h]` for a rect laid out down a vertical bar (`across` from its left, `along` from
+/// its top), turned to run sideways on a horizontal one.
+fn turned(t: &Track, [across, along, thick, long]: [f32; 4]) -> [f32; 4] {
+    if t.x { [along, across, long, thick] } else { [across, along, thick, long] }
 }
 
 impl Bar {
@@ -297,7 +371,22 @@ impl Bar {
     fn thumb_rect(&self, h: f32) -> [f32; 4] {
         let style = self.style();
         let w = if self.wide() { style.hover_width } else { style.width };
-        [style.widest() - w, 0.0, w, h]
+        turned(&style.track, [style.widest() - w, 0.0, w, h])
+    }
+
+    /// How long the thumb is now.
+    fn thumb_len(&self) -> f32 {
+        self.thumb.get()[3 - usize::from(self.style().track.x)]
+    }
+
+    /// The strip's rect beside a viewport at `at`, `len` long.
+    fn track_rect(&self, at: ScrollPos, len: f32) -> [f32; 4] {
+        let style = self.style();
+        let t = style.track;
+        let a = t.along();
+        let across = at.viewport[1 - a];
+        let from = if t.gutter { across } else { across - style.track() };
+        turned(&t, [from, t.inset, style.track(), len])
     }
 
     fn thumb_fill(&self) -> Color {
@@ -319,9 +408,9 @@ impl Bar {
         self.fill.snap(self.thumb_fill());
         let at = self.pos.get();
         let (len, shows) = track_len(at, &style.track);
-        let (top, h) = thumb_on(at, len.max(0.0), style.track.min_thumb);
+        let (top, h) = thumb_along(at, len.max(0.0), style.track.min_thumb, style.track.along());
         let h = if shows { h } else { 0.0 };
-        self.track.snap([at.viewport[0] - style.track(), style.track.inset, style.track(), if shows { len } else { 0.0 }]);
+        self.track.snap(self.track_rect(at, if shows { len } else { 0.0 }));
         self.slot.snap(self.slot_rect(top, h));
         self.thumb.snap(self.thumb_rect(h));
     }
@@ -329,7 +418,7 @@ impl Bar {
     /// Where a thumb at `top`, `h` long, runs on the track.
     fn slot_rect(&self, top: f32, h: f32) -> [f32; 4] {
         let style = self.style();
-        [style.track() - style.track.edge - style.widest(), top, style.widest(), h]
+        turned(&style.track, [style.track() - style.track.edge - style.widest(), top, style.widest(), h])
     }
 
     /// An overlay bar stays up while the thumb is held or the pointer is at its edge.
@@ -361,15 +450,21 @@ impl Bar {
         let style = self.style();
         let t = style.track;
         let (len, shows) = track_len(at, &t);
-        let (w, track) = (at.viewport[0], style.track());
+        let a = t.along();
+        // The pointer and viewport in a vertical bar's terms: `across` the bar, `along` it.
+        let (w, h_all) = (at.viewport[1 - a], at.viewport[a]);
+        let gutter = if t.gutter { style.track() } else { 0.0 };
+        let track = style.track();
+        let bar_end = w + gutter;
+        let p = p.map(|p| if t.x { (p.y, p.x) } else { (p.x, p.y) });
         let near = shows
-            && p.is_some_and(|p| match t.area_reveals {
-                true => (0.0..=w).contains(&p.x) && (0.0..=at.viewport[1]).contains(&p.y),
-                false => p.x >= w - REVEAL.max(track) && p.x <= w && (t.inset..=t.inset + len).contains(&p.y),
+            && p.is_some_and(|(across, along)| match t.area_reveals {
+                true => (0.0..=bar_end).contains(&across) && (0.0..=h_all).contains(&along),
+                false => across >= bar_end - REVEAL.max(track) && across <= bar_end && (t.inset..=t.inset + len).contains(&along),
             });
-        let (top, h) = thumb_on(at, len.max(0.0), t.min_thumb);
+        let (top, h) = thumb_along(at, len.max(0.0), t.min_thumb, a);
         let over = near
-            && p.is_some_and(|p| p.x >= w - track && (!t.area_reveals || (t.inset + top..=t.inset + top + h).contains(&p.y)));
+            && p.is_some_and(|(across, along)| across >= bar_end - track && (!t.area_reveals || (t.inset + top..=t.inset + top + h).contains(&along)));
         if self.over.replace(over) != over {
             self.widen();
         }
@@ -390,17 +485,17 @@ impl Bar {
         let style = self.style();
         let t = style.track;
         let (len, shows) = track_len(at, &t);
-        let track = style.track();
-        self.track.set([at.viewport[0] - track, style.track.inset, track, if shows { len } else { 0.0 }]);
-        let (top, h) = thumb_on(at, len.max(0.0), style.track.min_thumb);
+        let a = t.along();
+        self.track.set(self.track_rect(at, if shows { len } else { 0.0 }));
+        let (top, h) = thumb_along(at, len.max(0.0), style.track.min_thumb, a);
         let h = if shows { h } else { 0.0 };
         let (state, opacity, pulse_until) = (&self.state, &self.opacity, &self.pulse_until);
         let prev = state.get();
         // A shown bar glides when its content changes length; the hand, an instant change, a
         // resize or a bar appearing moves it at once, and so does a hidden overlay bar, whose
         // glide nobody would see.
-        let resized = (prev_at.viewport[1] - at.viewport[1]).abs() > 0.5;
-        let lengthened = !resized && (prev_at.max[1] - at.max[1]).abs() > 0.5;
+        let resized = (prev_at.viewport[a] - at.viewport[a]).abs() > 0.5;
+        let lengthened = !resized && (prev_at.max[a] - at.max[a]).abs() > 0.5;
         let gliding = now < self.glide_until.get();
         let seen = match prev {
             BarState::Always => true,
@@ -419,7 +514,7 @@ impl Bar {
         let to = |live: &Live<[f32; 4]>, rect| if glides { live.set(rect) } else { live.snap(rect) };
         to(&self.slot, slot);
         // A scroll leaves the thumb's width alone, so it doesn't cut a widening short.
-        if cut || self.thumb.get()[3] != h {
+        if cut || self.thumb_len() != h {
             to(&self.thumb, self.thumb_rect(h));
         }
 
@@ -470,7 +565,7 @@ impl Bar {
             return;
         }
         let extent_changed =
-            (prev_at.max[1] - at.max[1]).abs() > 0.5 || (prev_at.viewport[1] - at.viewport[1]).abs() > 0.5;
+            (prev_at.max[a] - at.max[a]).abs() > 0.5 || (prev_at.viewport[a] - at.viewport[a]).abs() > 0.5;
         if scrolled && !instant {
             opacity.pulse(1.0, 0.0, t.hold);
             pulse_until.set(now + t.pulse_span());
@@ -494,22 +589,26 @@ impl Bar {
             }
             return;
         }
-        let (top, h) = thumb_on(at, len, t.min_thumb);
+        let a = t.along();
+        let (top, h) = thumb_along(at, len, t.min_thumb, a);
+        // Down a vertical bar, or along a horizontal one.
+        let y = if t.x { d.x } else { d.y };
         if d.phase == Phase::Down {
             self.dragging.set(true);
             self.hold();
             self.widen();
-            let on_thumb = (top..=top + h).contains(&d.y);
+            let on_thumb = (top..=top + h).contains(&y);
             // A track press pages toward itself, or with Option (or the preference) jumps there.
-            if !on_thumb && jumps == tx.mods().alt {
-                let toward = if d.y < top { -1 } else { 1 };
+            // Pages run down, so a horizontal bar jumps.
+            if !on_thumb && jumps == tx.mods().alt && !t.x {
+                let toward = if y < top { -1 } else { 1 };
                 self.paging.set(toward);
                 tx.scroll_page(target, toward);
                 tx.drag_repeat_after(PAGE_DELAY);
                 return;
             }
             // A press on the thumb holds it where it was caught; a jump centres it there.
-            d.data = if on_thumb { d.y - top } else { h / 2.0 };
+            d.data = if on_thumb { y - top } else { h / 2.0 };
         }
         if d.phase == Phase::Up {
             self.paging.set(0);
@@ -524,13 +623,18 @@ impl Bar {
             // Paging goes on while held, until the thumb reaches the pointer.
             if tx.drag_repeat() {
                 tx.drag_repeat_after(PAGE_EVERY);
-                if (toward < 0 && d.y < top) || (toward > 0 && d.y > top + h) {
+                if (toward < 0 && y < top) || (toward > 0 && y > top + h) {
                     tx.scroll_page(target, toward);
                 }
             }
             return;
         }
-        tx.scroll_to_instant(target, at.offset[0], offset_on(at, len, d.y - d.data, t.min_thumb));
+        let to = offset_along(at, len, y - d.data, t.min_thumb, a);
+        if t.x {
+            tx.scroll_to_instant(target, to, at.offset[1]);
+        } else {
+            tx.scroll_to_instant(target, at.offset[0], to);
+        }
     }
 }
 
