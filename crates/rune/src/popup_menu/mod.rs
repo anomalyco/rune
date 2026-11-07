@@ -86,7 +86,8 @@ impl PopupItem {
 pub(crate) enum Entry {
     Item(PopupItem),
     Separator,
-    Submenu(String, PopupMenu),
+    /// A titled submenu, and whether it opens.
+    Submenu(String, PopupMenu, bool),
 }
 
 /// The items of a native pop-up or context menu. Ids must be unique across the menu and its
@@ -119,7 +120,12 @@ impl PopupMenu {
     }
     pub fn separator(mut self) -> Self { self.entries.push(Entry::Separator); self }
     pub fn submenu(mut self, title: impl Into<String>, menu: PopupMenu) -> Self {
-        self.entries.push(Entry::Submenu(title.into(), menu));
+        self.entries.push(Entry::Submenu(title.into(), menu, true));
+        self
+    }
+    /// A submenu shown greyed out and closed unless nabled.
+    pub fn submenu_enabled(mut self, title: impl Into<String>, menu: PopupMenu, enabled: bool) -> Self {
+        self.entries.push(Entry::Submenu(title.into(), menu, enabled));
         self
     }
     /// The top-level item that opens over an element anchor, like a pop-up button's current
@@ -131,7 +137,7 @@ impl PopupMenu {
     pub fn find(&self, id: &str) -> Option<&PopupItem> {
         self.entries.iter().find_map(|entry| match entry {
             Entry::Item(item) if item.id == id => Some(item),
-            Entry::Submenu(_, menu) => menu.find(id),
+            Entry::Submenu(_, menu, _) => menu.find(id),
             _ => None,
         })
     }
@@ -149,7 +155,7 @@ impl PopupMenu {
                     if item.id.is_empty() { return Err("an item has an empty id".into()); }
                     if !ids.insert(item.id.clone()) { return Err(format!("duplicate item id {:?}", item.id)); }
                 }
-                Entry::Submenu(_, menu) => menu.validate(ids)?,
+                Entry::Submenu(_, menu, _) => menu.validate(ids)?,
                 Entry::Separator => {}
             }
         }
@@ -165,7 +171,8 @@ impl PopupMenu {
                 v
             }
             Entry::Separator => json!({ "separator": true }),
-            Entry::Submenu(title, menu) => json!({ "submenu": title, "menu": menu.to_json() }),
+            Entry::Submenu(title, menu, true) => json!({ "submenu": title, "menu": menu.to_json() }),
+            Entry::Submenu(title, menu, false) => json!({ "submenu": title, "enabled": false, "menu": menu.to_json() }),
         }).collect();
         let mut v = json!({ "items": entries });
         if let Some(selected) = &self.selected { v["selected"] = selected.clone().into(); }

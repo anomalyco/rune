@@ -47,6 +47,13 @@ pub(super) fn suggest(word: &str) -> Vec<String> {
     }
 }
 
+/// None to choose: AppKit finds each text's language itself, as Desktop leaves it on macOS.
+pub(super) fn available() -> Vec<String> { Vec::new() }
+
+pub(super) fn preferred() -> Vec<String> { Vec::new() }
+
+pub(super) fn english_name(tag: &str) -> String { tag.to_owned() }
+
 pub(super) fn learn(word: &str) {
     // SAFETY: the shared checker is AppKit's own and the word a live string.
     unsafe { NSSpellChecker::sharedSpellChecker().learnWord(&NSString::from_str(word)) }

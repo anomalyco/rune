@@ -476,6 +476,7 @@ pub(crate) type LayoutFn = Rc<dyn Fn(crate::states::States<'_>, [f32; 4])>;
 pub(crate) type LayoutTxFn = Rc<dyn Fn(crate::states::States<'_>, [f32; 4], &mut Tx)>;
 pub(crate) type ScrollOffsetFn = Rc<dyn Fn(crate::ScrollPos)>;
 pub(crate) type WindowFocusFn = Rc<dyn Fn(crate::states::States<'_>, bool, &mut Tx)>;
+pub(crate) type LanguagesFn = Rc<dyn Fn(crate::states::States<'_>, Vec<String>, &mut Tx)>;
 
 #[derive(Clone)]
 pub struct El {
@@ -790,6 +791,15 @@ impl El {
     /// [`El::spellcheck`].
     pub fn on_spellcheck<S: 'static>(mut self, on: bool, f: impl Fn(&mut S, bool, &mut Tx) + 'static) -> Self {
         self.handlers.on_spellcheck = Some((on, Rc::new(move |s, on, tx| f(downcast::<S>(s), on, tx))));
+        self
+    }
+    /// Beside [`El::on_spellcheck`], where the platform has dictionaries to choose
+    /// ([`crate::spell::available_languages`]): the fields' menus add a Spellcheck Languages
+    /// submenu, as Chromium's do off macOS. Picking a dictionary checks with the new choice at
+    /// once ([`crate::spell::set_languages`]) and calls `f` with it, for the app to keep and
+    /// pass to `set_languages` at its next launch.
+    pub fn on_spellcheck_languages<S: 'static>(mut self, f: impl Fn(&mut S, Vec<String>, &mut Tx) + 'static) -> Self {
+        self.handlers.on_spellcheck_languages = Some(Rc::new(move |s, tags, tx| f(downcast::<S>(s), tags, tx)));
         self
     }
     /// Paint the latest text in this element's fixed layout box. `text("00:00")` reserves

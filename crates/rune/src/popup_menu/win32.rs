@@ -225,9 +225,10 @@ unsafe fn build(menu: &PopupMenu, ids: &mut Vec<String>) -> Option<OwnedMenu> {
                     }
                 }
                 Entry::Separator => { AppendMenuW(hmenu.0, MF_SEPARATOR, 0, std::ptr::null()); }
-                Entry::Submenu(title, menu) => {
+                Entry::Submenu(title, menu, enabled) => {
                     let Some(submenu) = build(menu, ids) else { continue };
-                    if AppendMenuW(hmenu.0, MF_STRING | MF_POPUP, submenu.0 as usize, wide(&escape(title)).as_ptr()) != 0 {
+                    let flags = MF_STRING | MF_POPUP | if *enabled { 0 } else { MF_GRAYED };
+                    if AppendMenuW(hmenu.0, flags, submenu.0 as usize, wide(&escape(title)).as_ptr()) != 0 {
                         std::mem::forget(submenu);
                     }
                 }
