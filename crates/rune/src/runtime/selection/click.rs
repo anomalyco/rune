@@ -17,8 +17,8 @@ enum Step {
 }
 
 #[derive(Clone, Copy)]
-struct Hit {
-    caret: usize,
+pub(super) struct Hit {
+    pub(super) caret: usize,
     cluster: usize,
 }
 
@@ -77,7 +77,7 @@ impl InputClick {
     }
 }
 
-fn hit(e: &crate::edit::TextEdit, l: &Layout<Ink>, x: f32, y: f32, s: f32, single: bool) -> Hit {
+pub(super) fn hit(e: &crate::edit::TextEdit, l: &Layout<Ink>, x: f32, y: f32, s: f32, single: bool) -> Hit {
     let h = (l.height() - 1e-3).max(0.0);
     let ys = if single || x < 0.0 { (y * s).clamp(0.0, h) } else { (y * s).max(0.0) };
     let cur = crate::text::cursor_from_point(l, x * s, ys);

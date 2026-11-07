@@ -154,6 +154,11 @@ impl TextInput {
         self.edits.visual(move |e| e.revealed(revealed));
         self
     }
+    /// Mark misspelled words and offer their suggestions in the field's menu (`El::spellcheck`).
+    pub fn spellcheck(mut self, on: bool) -> Self {
+        self.edits.visual(move |e| e.spellcheck(on));
+        self
+    }
     pub fn animate_edit_layout(mut self) -> Self {
         self.edits.handlers.push(Box::new(El::animate_edit_layout));
         self
@@ -395,6 +400,11 @@ impl TextArea {
     pub fn revealed(mut self, revealed: bool) -> Self {
         self.edit.set_revealed(revealed);
         self.edits.visual(move |e| e.revealed(revealed));
+        self
+    }
+    /// Mark misspelled words and offer their suggestions in the field's menu (`El::spellcheck`).
+    pub fn spellcheck(mut self, on: bool) -> Self {
+        self.edits.visual(move |e| e.spellcheck(on));
         self
     }
     pub fn new(edit: &TextEdit) -> TextArea {

@@ -190,6 +190,8 @@ mod hot_state;
 mod props;
 #[path = "runtime/input/secondary.rs"]
 mod secondary;
+#[path = "runtime/input/field_menu.rs"]
+pub(crate) mod field_menu;
 #[path = "runtime/input/app_ime.rs"]
 mod app_ime;
 #[path = "runtime/input/press_clicks.rs"]

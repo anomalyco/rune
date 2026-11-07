@@ -21,6 +21,9 @@ impl<S: 'static> Runtime<S> {
             None => self.trace_event("popup-menu:cancel"),
         }
         let mut one = self.transaction();
+        if let (Some(field), Some(id)) = (request.field, picked) {
+            self.field_menu_pick(*field, id, &mut one);
+        }
         (request.on_pick)(states!(self), picked, &mut one);
         self.latch_requests(&mut one);
         merge(&mut self.pending, one);

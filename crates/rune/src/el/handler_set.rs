@@ -11,6 +11,8 @@ use crate::el::{
 pub(crate) struct Handlers {
     pub on_paste: Option<PasteFn>,
     pub on_window_focus: Option<WindowFocusFn>,
+    /// `El::on_spellcheck`: the app's spell checking setting and what flips it.
+    pub on_spellcheck: Option<(bool, WindowFocusFn)>,
     pub modal: Option<ModalSpec>,
     pub on_press: Option<PressFn>,
     pub on_double_press: Option<PressFn>,
@@ -93,6 +95,7 @@ impl Empty for Handlers {
     const EMPTY: &'static Self = &Handlers {
         on_paste: None,
         on_window_focus: None,
+        on_spellcheck: None,
         modal: None,
         on_press: None,
         on_double_press: None,

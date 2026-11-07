@@ -51,6 +51,9 @@ pub(super) enum Action {
     /// A `Tx::open_file` or `Tx::save_file` callback's id and the dialog's answer.
     FileDialog(u64, crate::file_dialog::FileDialogResult),
     Focus(String, f32, f32),
+    /// A text field's menu: the field, the window point it opens at, and where in the field a
+    /// press asked for it (none from the keyboard).
+    FieldMenu(String, (f32, f32), Option<(f32, f32)>),
     Blur,
     /// What assistive technology asked of an element (`a11y/actions.rs`).
     A11y(String, A11yAct),
@@ -492,6 +495,7 @@ impl<S: 'static> Runtime<S> {
             }
             Action::FileDialog(id, result) => self.run_file_dialog(id, result, &mut one),
             Action::Focus(path, x, y) => self.focus_input(path, x, y, &mut one),
+            Action::FieldMenu(path, at, local) => self.field_menu(path, at, local, &mut one),
             Action::Blur => {
                 if self.focused.is_none() { return false; }
                 self.set_focus(None, self.keyboard_focus);
