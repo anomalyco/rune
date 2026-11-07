@@ -87,6 +87,8 @@ pub struct Tx {
     pub(crate) live_only: bool,
     /// `Tx::open_playground` and kin, and the playground's own controls.
     pub(crate) playground: Vec<crate::playground::Request>,
+    /// `Tx::invalidate_memos_by_prefix`.
+    pub(crate) evict_memos: Vec<String>,
 }
 
 /// A change to the text selection a handler asked for, carried out after its commit.
@@ -144,6 +146,13 @@ impl Tx {
             if let Some(s) = s.cast::<S>() { f(s, picked, tx); }
         });
         self.pick_reads.push(PickRead { within, x, y, pick, f: Rc::new(std::cell::Cell::new(Some(f))) });
+    }
+
+    /// [`Runtime::invalidate_memos_by_prefix`](crate::Runtime::invalidate_memos_by_prefix) on
+    /// this window, from a handler or `poll`: e.g. a plugin host evicting the subtrees an
+    /// unloading library built.
+    pub fn invalidate_memos_by_prefix(&mut self, prefix: impl Into<String>) {
+        self.evict_memos.push(prefix.into());
     }
 
     /// Whether this runtime has an attached motion or tooling trace.

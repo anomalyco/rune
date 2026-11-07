@@ -62,7 +62,11 @@ pub struct Cx<S> {
 }
 
 impl<S> Cx<S> {
-    pub(crate) fn retype<T>(&self) -> Cx<T> {
+    /// A copy of this context for a sub-view over another state type, or a scratch run of
+    /// the same view: environment, settings and the reads made so far. Pass it back with
+    /// [`Self::absorb`] to keep what the sub-view did, or drop it to discard that, as a host
+    /// does for a sub-view (a plugin's panel) that panicked partway.
+    pub fn retype<T>(&self) -> Cx<T> {
         Cx {
             env: self.env, titlebar_inset: self.titlebar_inset, chrome: self.chrome, caption_color: self.caption_color,
             defaults: self.defaults,
@@ -78,7 +82,7 @@ impl<S> Cx<S> {
     /// Takes back a [`Self::retype`]d context a nested view ran with: its overrides, and the
     /// caret and layout reads it added. The window's chrome stays the outer view's: a staged
     /// story's `caption_color` or `titlebar_height` isn't the window's.
-    pub(crate) fn absorb<T>(&mut self, other: Cx<T>) {
+    pub fn absorb<T>(&mut self, other: Cx<T>) {
         self.reduced_motion = other.reduced_motion;
         self.time_scale = other.time_scale;
         self.defaults = other.defaults;

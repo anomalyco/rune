@@ -162,6 +162,7 @@ impl<S: 'static> Runtime<S> {
         self.minimize_request |= std::mem::take(&mut tx.minimize);
         self.titlebar.toggle_maximized |= std::mem::take(&mut tx.toggle_maximized);
         self.latch_playground(tx);
+        for prefix in std::mem::take(&mut tx.evict_memos) { self.invalidate_memos_by_prefix(&prefix); }
         if !tx.open_urls.is_empty() { self.open_urls(std::mem::take(&mut tx.open_urls)); }
         if std::mem::take(&mut tx.clear_secret) {
             if self.copy_request.as_ref().is_some_and(crate::ClipboardWrite::is_secret) { self.copy_request = None; }
