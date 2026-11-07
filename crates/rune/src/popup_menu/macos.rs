@@ -98,7 +98,7 @@ fn collect_ids(menu: &PopupMenu, ids: &mut Vec<String>) {
     for entry in &menu.entries {
         match entry {
             Entry::Item(item) => ids.push(item.id.clone()),
-            Entry::Submenu(_, menu) => collect_ids(menu, ids),
+            Entry::Submenu(_, menu, _) => collect_ids(menu, ids),
             Entry::Separator => {}
         }
     }
@@ -129,13 +129,14 @@ fn build(mtm: MainThreadMarker, menu: &PopupMenu, target: &Target, tag: &mut isi
                     ns_menu.addItem(&ns_item);
                 }
                 Entry::Separator => ns_menu.addItem(&NSMenuItem::separatorItem(mtm)),
-                Entry::Submenu(title, menu) => {
+                Entry::Submenu(title, menu, enabled) => {
                     let title = NSString::from_str(title);
                     let submenu = build(mtm, menu, target, tag, None, found);
                     submenu.setTitle(&title);
                     let ns_item = NSMenuItem::new(mtm);
                     ns_item.setTitle(&title);
                     ns_item.setSubmenu(Some(&submenu));
+                    ns_item.setEnabled(*enabled);
                     ns_menu.addItem(&ns_item);
                 }
             }

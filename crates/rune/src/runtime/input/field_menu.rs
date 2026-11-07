@@ -1,7 +1,8 @@
 //! A text field's own menu (right-click, macOS control-click, the Menu key and Shift+F10), as a
 //! browser's menu over an editable field: a misspelled word's suggestions and Learn Spelling,
 //! then Cut, Copy, Paste and, off macOS, Select All, then the app's Spellcheck setting
-//! (`El::on_spellcheck`). A field with its own `on_secondary_press` shows that instead.
+//! (`El::on_spellcheck`) and, where there are dictionaries to choose, its Spellcheck Languages
+//! (`El::on_spellcheck_languages`). A field with its own `on_secondary_press` shows that instead.
 use super::input_click::hit;
 use super::*;
 use crate::popup_menu::{PopupAnchor, Request};
@@ -14,6 +15,8 @@ pub(crate) struct FieldMenu {
     word: Option<(usize, usize, String)>,
     suggestions: Vec<String>,
     toggle: Option<(bool, crate::el::WindowFocusFn)>,
+    /// The dictionaries checking text when the menu opened, and what keeps a new choice.
+    languages: Option<(Vec<String>, crate::el::LanguagesFn)>,
 }
 
 impl<S: 'static> Runtime<S> {
@@ -29,6 +32,7 @@ impl<S: 'static> Runtime<S> {
         let scroll = self.input_scroll.get(&path).copied().unwrap_or(0.0);
         let s = self.env.scale;
         let toggle = std::iter::successors(Some(i), |&j| self.nodes[j].parent).find_map(|j| self.nodes[j].handlers.on_spellcheck.clone());
+        let keep = std::iter::successors(Some(i), |&j| self.nodes[j].parent).find_map(|j| self.nodes[j].handlers.on_spellcheck_languages.clone());
         if self.focused.as_deref() != Some(path.as_str()) {
             self.set_focus(Some(path.clone()), false);
         }
@@ -70,8 +74,21 @@ impl<S: 'static> Runtime<S> {
         if !cfg!(target_os = "macos") {
             menu = menu.item(PopupItem::new("select-all", "Select All"));
         }
+        let mut languages = None;
         if let Some((on, _)) = &toggle {
             menu = menu.separator().item(PopupItem::new("spellcheck", "Spellcheck").checked(*on));
+            // Desktop's dictionary picker (spellcheck.ts), where the platform has dictionaries
+            // to choose: the last one stays, as the Spellcheck item is how to stop checking.
+            let available = crate::spell::available_languages();
+            if let Some(keep) = keep.filter(|_| !available.is_empty()) {
+                let current = crate::spell::languages();
+                let only = |tag: &String| current.len() == 1 && current[0] == *tag;
+                let items = available.iter().map(|tag| {
+                    PopupItem::new(format!("language-{tag}"), crate::spell::language_name(tag)).checked(current.contains(tag)).enabled(!only(tag))
+                });
+                menu = menu.submenu_enabled("Spellcheck Languages", PopupMenu::new().items(items), *on);
+                languages = Some((current, keep));
+            }
         }
         one.instant = true;
         log_event!(self, "field menu {path}");
@@ -79,7 +96,7 @@ impl<S: 'static> Runtime<S> {
             menu,
             anchor: PopupAnchor::Point(at.0, at.1),
             on_pick: Box::new(|_, _, _| {}),
-            field: Some(Box::new(FieldMenu { path, word, suggestions, toggle })),
+            field: Some(Box::new(FieldMenu { path, word, suggestions, toggle, languages })),
         });
         true
     }
@@ -110,6 +127,17 @@ impl<S: 'static> Runtime<S> {
             "spellcheck" => {
                 if let Some((on, f)) = menu.toggle {
                     f(states!(self), !on, one);
+                }
+            }
+            id if id.starts_with("language-") => {
+                if let (Some((mut current, keep)), Some(tag)) = (menu.languages, id.strip_prefix("language-")) {
+                    match current.iter().position(|t| t == tag) {
+                        Some(n) => _ = current.remove(n),
+                        None => current.push(tag.to_owned()),
+                    }
+                    crate::spell::set_languages(&current);
+                    keep(states!(self), current, one);
+                    self.dirty = true;
                 }
             }
             id => {
