@@ -315,6 +315,46 @@ fn rounded_clip_live_truncated_text_preserves_corner_centres() {
 }
 
 #[test]
+fn live_text_clear_of_rounded_corners_draws_without_a_layer() {
+    type State = (bool, crate::LiveText);
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let mut card = el().size(120.0, 64.0).absolute(8.0, 8.0).radius(16.0).fill(crate::oklch(0.25, 0.04, 260.0));
+        if s.0 { card = card.clip_rounded(16.0); }
+        let label = crate::text("0000").live_text(&s.1).size(80.0, 24.0)
+            .absolute(10.0, 8.0).font(crate::TextStyle::new(20.0, 700.0)).color(Color::WHITE);
+        el().child(card.child(label))
+    }
+    let gpu = Gpu::headless();
+    for scale in [1.0, 2.0] {
+        let size = ((136.0 * scale) as u32, (80.0 * scale) as u32);
+        let target = Offscreen::new(&gpu.device, size.0, size.1);
+        let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+        let value = crate::LiveText::new("0000");
+        let mut plain = Runtime::new((false, value.clone()), view, (136.0, 80.0), Env::new(true, scale));
+        let mut clipped = Runtime::new((true, value.clone()), view, (136.0, 80.0), Env::new(true, scale));
+        for words in ["0000", "8888", "WWWW"] {
+            value.set(words);
+            let mut outputs = Vec::new();
+            for rt in [&mut plain, &mut clipped] {
+                rt.frame(0.0);
+                assert!(rt.instances.iter().all(|i| i.params[1] != KIND_LAYER), "scale={scale} words={words}: no layer");
+                renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, size);
+                outputs.push(pixels(&gpu, &renderer, &target));
+            }
+            // The glyphs match; the card's own edge differs, a hard clip over its feathered fill.
+            let (x0, y0, x1, y1) = ((18.0 * scale) as u32, (16.0 * scale) as u32, (98.0 * scale) as u32, (40.0 * scale) as u32);
+            let mut lit = false;
+            for y in y0..y1 { for x in x0..x1 {
+                let at = ((y * size.0 + x) * 4) as usize;
+                assert!((0..4).all(|c| outputs[0][at + c].abs_diff(outputs[1][at + c]) <= 1), "scale={scale} words={words} ({x},{y})");
+                lit |= outputs[1][at] > 200;
+            } }
+            assert!(lit, "the glyphs drew");
+        }
+    }
+}
+
+#[test]
 fn rounded_clip_and_dissolve_follow_retained_presence() {
     fn view(show: &bool, _: &mut Cx<bool>) -> El {
         el().size(80.0, 40.0).clip_rounded(20.0).dissolve()

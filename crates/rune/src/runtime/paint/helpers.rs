@@ -238,6 +238,25 @@ pub(super) fn own_paints(n: &Node) -> usize {
     ].into_iter().filter(|&b| b).count()
 }
 
+/// Whether `rect` (edges) lies a pixel or more inside the rounded rectangle `mask` (edges) with
+/// corner `radii` `[tl, tr, br, bl]`, so that rounding the mask's corners can't touch it. The
+/// mask is convex, so it's enough that `rect`'s corners are inside; a continuous corner counts
+/// as its whole corner square.
+pub(super) fn inside_rounded(rect: [f32; 4], mask: [f32; 4], radii: [f32; 4]) -> bool {
+    const AA: f32 = 1.0;
+    if rect[2] <= rect[0] || rect[3] <= rect[1] { return true; }
+    if rect[0] < mask[0] || rect[1] < mask[1] || rect[2] > mask[2] || rect[3] > mask[3] { return false; }
+    let corners = [(mask[0], mask[1], 1.0, 1.0), (mask[2], mask[1], -1.0, 1.0), (mask[2], mask[3], -1.0, -1.0), (mask[0], mask[3], 1.0, -1.0)];
+    corners.iter().zip(radii).all(|(&(cx, cy, sx, sy), radius)| {
+        let e = crate::render::corner_extent(radius);
+        [(rect[0], rect[1]), (rect[2], rect[1]), (rect[2], rect[3]), (rect[0], rect[3])].iter().all(|&(x, y)| {
+            let (dx, dy) = ((x - cx) * sx, (y - cy) * sy);
+            if dx >= e || dy >= e { return true; }
+            radius > 0.0 && (radius - dx).hypot(radius - dy) <= radius - AA
+        })
+    })
+}
+
 /// `rect` (x, y, w, h) magnified `k` times from `r_origin` to `origin`.
 pub(super) fn scale_about(rect: [f32; 4], origin: [f32; 2], r_origin: [f32; 2], k: f32) -> [f32; 4] {
     [origin[0] + (rect[0] - r_origin[0]) * k, origin[1] + (rect[1] - r_origin[1]) * k, rect[2] * k, rect[3] * k]

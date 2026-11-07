@@ -696,8 +696,12 @@ impl<S: 'static> Runtime<S> {
                 clip = NO_CLIP; fade = [0.0; 4]; fade_origin = NO_CLIP; rounded = None;
             }
             // Live/truncated text adds a glyph-only rectangle below. Consume the inherited
-            // rounded mask first so the text clip cannot move its corner centres.
-            isolate |= open_cache || (rounded.is_some() && (n.text.as_ref().is_some_and(|t| t.truncate_fade || t.live.is_some())
+            // rounded mask first so the text clip cannot move its corner centres, unless that
+            // rectangle sits clear of the corners and the glyphs can skip the mask.
+            let glyphs_clear = rounded.is_some_and(|(mask, radii)| {
+                self.text_clip(i, (r, r_exact), sc, clip).is_some_and(|(text, ..)| inside_rounded(text, mask, radii))
+            });
+            isolate |= open_cache || (rounded.is_some() && (n.text.as_ref().is_some_and(|t| (t.truncate_fade || t.live.is_some()) && !glyphs_clear)
                 || n.input.as_ref().is_some_and(|i| i.single_line)));
             // A soft clip fades each primitive on its own, so where one paints over another (an
             // image over its placeholder fill, a label over its bubble) the one beneath shows
@@ -1137,7 +1141,10 @@ impl<S: 'static> Runtime<S> {
             self.clip_text_instances(i, first_instance, (r, r_exact), sc, clip, fade, fade_origin);
             let n = &self.nodes[i];
             if let Some((_, radii)) = rounded {
-                for instance in &mut self.instances[primitive_start..] { instance.round_clip_corners(radii); }
+                for instance in &mut self.instances[primitive_start..] {
+                    if glyphs_clear && instance.params[1] == KIND_GLYPH { continue; }
+                    instance.round_clip_corners(radii);
+                }
                 let packed = crate::render::pack_clip_radii(clip, radii);
                 for surface in &mut self.surfaces[surface_start..] { surface.fade[3] = packed; }
             }

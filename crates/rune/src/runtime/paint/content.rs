@@ -471,6 +471,31 @@ impl<S: 'static> Runtime<S> {
         self.instances.push(inst);
     }
 
+    /// The rectangle a live or truncated text clips its glyphs to (edges, device pixels), its
+    /// box, and whether it runs past that box; `None` for other text.
+    pub(super) fn text_clip(&self, i: usize, (r, r_exact): ([f32; 4], [f32; 4]), sc: f32, clip: [f32; 4]) -> Option<([f32; 4], [f32; 4], bool)> {
+        let s = self.env.scale;
+        let n = &self.nodes[i];
+        let (Some(spec), Some(layout)) = (&n.text, &n.text_layout) else { return None };
+        if !(spec.truncate_fade || spec.live.is_some()) { return None; }
+        let ins = n.inset.map(|v| v * sc * s);
+        let mut bounds = [r[0] + ins[0], r[1] + ins[1], r[2] - ins[2], r[3] - ins[3]];
+        // Layout width already includes display scale `s`; bounds also include the
+        // element/ancestor transform `sc`. Compare both after that transform. A text fades
+        // only when it runs past its laid-out box and the box drawn now: snapping each edge
+        // to a whole pixel can leave the drawn box a sliver short, and a box springing to a
+        // new layout (`animate_layout`, a flight) is short until it lands. A text that fits
+        // isn't clipped by either.
+        let exact = r_exact[2] - r_exact[0] - ins[0] - ins[2];
+        let laid_out = (n.local.w - n.inset[0] - n.inset[2]).max(0.0) * s;
+        let overflows = layout.full_width() > laid_out + 0.5
+            && layout.full_width() * sc > (bounds[2] - bounds[0]).max(exact) + 0.5 * sc;
+        if !overflows {
+            bounds[2] = bounds[2].max(bounds[0] + exact.max(layout.full_width() * sc));
+        }
+        Some((intersect(clip, bounds), bounds, overflows))
+    }
+
     /// Text-only clipping leaves the box's fill/border and descendants untouched.
     pub(super) fn clip_text_instances(
         &mut self,
@@ -483,28 +508,11 @@ impl<S: 'static> Runtime<S> {
         fade_origin: [f32; 4],
     ) {
         let s = self.env.scale;
-        let n = &self.nodes[i];
-        if let (Some(spec), Some(layout)) = (&n.text, &n.text_layout)
-            && (spec.truncate_fade || spec.live.is_some())
+        if let Some((text_clip, bounds, overflows)) = self.text_clip(i, (r, r_exact), sc, clip)
+            && let Some(spec) = &self.nodes[i].text
         {
-            let ins = n.inset.map(|v| v * sc * s);
-            let mut bounds = [r[0] + ins[0], r[1] + ins[1], r[2] - ins[2], r[3] - ins[3]];
             let mut widths = fade;
             let mut origins = fade_origin;
-            // Layout width already includes display scale `s`; bounds also include the
-            // element/ancestor transform `sc`. Compare both after that transform. A text fades
-            // only when it runs past its laid-out box and the box drawn now: snapping each edge
-            // to a whole pixel can leave the drawn box a sliver short, and a box springing to a
-            // new layout (`animate_layout`, a flight) is short until it lands. A text that fits
-            // isn't clipped by either.
-            let exact = r_exact[2] - r_exact[0] - ins[0] - ins[2];
-            let laid_out = (n.local.w - n.inset[0] - n.inset[2]).max(0.0) * s;
-            let overflows = layout.full_width() > laid_out + 0.5
-                && layout.full_width() * sc > (bounds[2] - bounds[0]).max(exact) + 0.5 * sc;
-            if !overflows {
-                bounds[2] = bounds[2].max(bounds[0] + exact.max(layout.full_width() * sc));
-            }
-            let text_clip = intersect(clip, bounds);
             if spec.truncate_fade && overflows {
                 let width = (spec.style.size * spec.fade_em * sc * s).min((bounds[2] - bounds[0]).max(0.0));
                 let own = if spec.align == Align::End { [width, 0.0, 0.0, 0.0] }
