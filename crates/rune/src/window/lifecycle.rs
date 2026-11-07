@@ -339,11 +339,13 @@ impl<S: 'static> Host<S> {
         }
         let token = token.or(from_env);
         let Some(w) = self.win.as_mut() else {
-            self.create(event_loop, token, true);
+            // `App::open_inactive`: the first open leaves focus where it is.
+            let focus = !(self.open_inactive && !self.shown);
+            self.create(event_loop, token, focus);
             // On macOS a new window becomes key without activating the app, so activate it
             // like a reopen does. The launch open leaves activation to the platform.
             #[cfg(target_os = "macos")]
-            if self.started && let Some(w) = self.win.as_ref().filter(|w| w.visible) { w.focus(); }
+            if focus && self.started && let Some(w) = self.win.as_ref().filter(|w| w.visible) { w.focus(); }
             return;
         };
         if !w.visible {

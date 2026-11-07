@@ -8,6 +8,7 @@ impl<S: 'static> AnyHost for Host<S> {
     }
     fn finished(&self) -> bool { self.finished }
     fn keeps_loop(&self) -> bool { self.keeps_loop }
+    fn key(&self) -> Option<&str> { Some(self.native_handle.key()) }
     fn terminate(&mut self) {
         // Once: a window that already closed ran its hook then.
         if self.finished || !self.closes() { return; }

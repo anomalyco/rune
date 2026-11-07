@@ -77,6 +77,10 @@ pub struct App<S: 'static> {
     #[cfg(target_arch = "wasm32")]
     pub(crate) font_urls: Vec<String>,
     pub(crate) float_on_open: bool,
+    /// `App::open_inactive`: the first open leaves focus where it is.
+    pub(crate) open_inactive: bool,
+    /// `App::maximized`: the window opens maximized.
+    pub(crate) maximized: bool,
     pub(crate) modifier_keys: bool,
     pub(crate) tab_visits_controls: bool,
     pub(crate) srgb_blend: bool,
@@ -123,6 +127,8 @@ impl<S: 'static> App<S> {
             #[cfg(target_arch = "wasm32")]
             font_urls: Vec::new(),
             float_on_open: false,
+            open_inactive: false,
+            maximized: false,
             modifier_keys: false,
             tab_visits_controls: false,
             srgb_blend: true,
@@ -187,6 +193,21 @@ impl<S: 'static> App<S> {
     /// minimum and maximum apply and the user can resize it. Ignored elsewhere.
     pub fn float_on_open(mut self) -> Self {
         self.float_on_open = true;
+        self
+    }
+
+    /// The window's first open shows it without taking focus or activating the app, so the
+    /// window the user works in keeps its keys and a press it holds. A later `open` or `focus`
+    /// activates it. macOS and Windows; elsewhere the window manager decides.
+    pub fn open_inactive(mut self) -> Self {
+        self.open_inactive = true;
+        self
+    }
+
+    /// Open the window maximized, as a window saved maximized reopens. The size it opens at
+    /// stays what restoring it returns to.
+    pub fn maximized(mut self, maximized: bool) -> Self {
+        self.maximized = maximized;
         self
     }
 

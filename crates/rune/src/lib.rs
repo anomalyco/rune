@@ -345,7 +345,9 @@ pub use windows::Display;
 pub use windows::MacWindowOptions;
 pub use windows::RunOptions;
 pub use windows::WindowOptions;
+pub use windows::WindowPlacement;
 pub use windows::WindowSpec;
+pub use windows::open_window;
 pub use winit::raw_window_handle;
 
 /// The logical clock a scene fn (`AppSpec::scenes`) builds its state against. `--scene` starts
