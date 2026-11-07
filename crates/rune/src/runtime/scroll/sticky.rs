@@ -483,6 +483,22 @@ impl<S: 'static> Runtime<S> {
         self.nodes[i].sticky.as_ref().and_then(|s| Some((s.edge?, s.inset, s.tail)))
     }
 
+    /// `El::stuck_fade`: how much of node `i`'s children show, drawn with its top at `drawn`
+    /// (a frame point, `dy` the offset its siblings draw at): whole until the next sticky-top
+    /// sibling's top comes within `lead + span` of it, gone at `lead`.
+    pub(super) fn stuck_fade(&self, i: usize, drawn: f32, dy: f32) -> f32 {
+        let n = &self.nodes[i];
+        let Some([lead, span]) = n.sticky.as_ref().and_then(|s| s.fade) else { return 1.0 };
+        let next = (i + 1..self.nodes.len())
+            .filter(|&j| self.nodes[j].parent == n.parent)
+            .find(|&j| self.nodes[j].sticky.as_ref().is_some_and(|s| s.edge == Some(StickyEdge::Top)));
+        let Some(p) = next.and_then(|j| self.scene.presented(self.nodes[j].id).map(|p| (j, p))) else { return 1.0 };
+        let (j, p) = p;
+        let own = self.scene.get(self.nodes[j].id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
+        let top = p.rect.y - own.y + dy + self.row_dy[j] - self.row_dy[i];
+        ((top - drawn - lead) / span.max(1e-3)).clamp(0.0, 1.0)
+    }
+
     /// The bands and box node `i` sticks within along `edge` (see `shift`), from its ancestors'
     /// drawn places this frame, and the viewport it sticks to.
     pub(super) fn sticky_frame_of(&self, i: usize, edge: StickyEdge) -> ([f32; 8], Option<usize>) {

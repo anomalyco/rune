@@ -16,6 +16,8 @@ pub(crate) struct Sticky {
     /// `inset` counts from the element's bottom (`El::sticky_top_showing`).
     pub tail: bool,
     pub shadows: Vec<Shadow>,
+    /// `El::stuck_fade`: lead and span, in points.
+    pub fade: Option<[f32; 2]>,
 }
 
 impl El {
@@ -83,6 +85,17 @@ impl El {
     /// `Shadow { y: 0.5, color, ..Default::default() }` under an opaque one. Several stack.
     pub fn stuck_shadow(mut self, shadow: Shadow) -> Self {
         self.sticky.get_or_insert_with(Default::default).shadows.push(shadow);
+        self
+    }
+    /// Fades this [`El::sticky_top`] element's children, not its own fill, as the next
+    /// sticky-top sibling rises to it: whole while that sibling's top is `lead + span` points or
+    /// more below this one's drawn top, gone once it's `lead` below, linearly between, frame by
+    /// frame with the scroll. Desktop's Home fades a stuck day header's title so as the next day
+    /// comes up (`home/scroll.ts`), its fill still covering the rows under it until the next
+    /// header, a later sibling drawn over it, takes its place. A header with no sticky sibling
+    /// after it stays whole.
+    pub fn stuck_fade(mut self, lead: f32, span: f32) -> Self {
+        self.sticky.get_or_insert_with(Default::default).fade = Some([lead, span.max(0.0)]);
         self
     }
 }
