@@ -202,6 +202,16 @@ impl El {
         apply(&mut self, alpha.clamp(0.0, 1.0));
         self
     }
+    /// Fade the whole subtree as one composited layer, like CSS `opacity`: a label over its
+    /// button's fill shows the fill as it is, not faded through, and overlapping children don't
+    /// show through each other. Static, as [`Self::dim`] is: a change lands at once, and
+    /// animation and hit-test opacity still belong to `opacity` / `live_opacity`. Only an
+    /// element below 1 whose paint overlaps (children, or more than one paint of its own) draws
+    /// offscreen; anything else just takes the alpha. Repeated calls multiply.
+    pub fn layer_opacity(mut self, alpha: f32) -> Self {
+        self.vis.layer_opacity *= alpha.clamp(0.0, 1.0);
+        self
+    }
     /// Add children's premultiplied colours while a direct child is between opacity 0 and 1.
     /// Give two overlaid states opacity `1-t` and `t` for a dissolve without a midpoint alpha dip.
     /// Put a shared background outside this scope; its own paint also participates in addition.

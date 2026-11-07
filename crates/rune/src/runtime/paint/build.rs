@@ -76,7 +76,7 @@ impl<S: 'static> Runtime<S> {
             } else { inherited_group };
             let Some(parent) = n.parent.filter(|&p| self.nodes[p].vis.blend == crate::render::Blend::PlusLighter) else { continue };
             let Some(p) = self.scene.presented(n.id) else { continue };
-            let mut opacity = p.opacity;
+            let mut opacity = p.opacity * n.vis.layer_opacity;
             opacity *= self.group_factor(n, inherited_group);
             if fades(n.looping.as_deref().copied()) && let Some(track) = self.loops.get(&n.id) {
                 opacity *= track.sample_at(self.scene.store().node_time(n.id), self.clock, self.reduced_motion);
@@ -95,7 +95,7 @@ impl<S: 'static> Runtime<S> {
         let tree_order = ((flying || self.has_sticky || self.has_raise) && !self.layer_paint_order.is_empty()) || self.layer_paint_order.windows(2).any(|pair| {
             let n = &self.nodes[pair[0]];
             self.nodes[pair[1]].parent == Some(pair[0]) && ((self.has_dissolve && self.dissolve_scratch[pair[0]]) || n.vis.cache || n.vis.clip_radius.is_some() || n.vis.group_opacity.is_some() || n.group_fade
-                || fades(n.looping.as_deref().copied())
+                || n.vis.layer_opacity < 1.0 || fades(n.looping.as_deref().copied())
                 || self.scene.presented(n.id).is_some_and(|p| (p.opacity > 0.0 && p.opacity < 1.0) || p.blur > 0.0 || p.transform.rotate.abs() > 1e-6))
         });
         let default_ring = self.default_ring_owner();
@@ -261,11 +261,16 @@ impl<S: 'static> Runtime<S> {
             let next = if tree_order { self.layer_paint_order.get(paint_index + 1).copied() } else { (i + 1 < n_nodes).then_some(i + 1) };
             let dissolve = self.has_dissolve && self.dissolve_scratch[i];
             let additive_parent = self.has_dissolve && n.parent.is_some_and(|p| self.dissolve_scratch[p]);
+            // `El::layer_opacity` fades paint only; hit testing and what elements report keep
+            // `own`.
+            let paint_own = own * n.vis.layer_opacity;
             // A fading node with children, or a shape whose pieces overlap, takes its opacity
-            // once as a layer rather than each primitive taking it over the ones beneath.
+            // once as a layer rather than each primitive taking it over the ones beneath. So
+            // does a layer opacity over two paints of the node's own (a label on its fill).
             let mut isolate = effective_opacity > 0.001 && (p.blur > 0.0 || dissolve
-                || additive_parent || (own > 0.001 && own < 1.0
-                    && (next.is_some_and(|j| self.nodes[j].parent == Some(i)) || n.vis.shape.as_ref().is_some_and(|s| s.overlaps()))));
+                || additive_parent || (paint_own > 0.001 && paint_own < 1.0
+                    && (next.is_some_and(|j| self.nodes[j].parent == Some(i)) || n.vis.shape.as_ref().is_some_and(|s| s.overlaps())
+                        || (n.vis.layer_opacity < 1.0 && own_paints(n) >= 2))));
             let (mut clip, mut fade) = (pinh.paint_clip, pinh.paint_fade);
             let mut fade_origin = pinh.paint_fade_origin;
             let mut rounded = pinh.rounded;
@@ -629,9 +634,9 @@ impl<S: 'static> Runtime<S> {
             // A backdrop blur samples what is drawn before it, so it goes ahead of any layer this
             // element opens (a fade still blurs the window) and of its shadows, which skip it.
             let blur_hole = (n.vis.backdrop_blur > 0.0 && !skip_paint && visible && backdrop_blurs < crate::MAX_BACKDROP_BLURS
-                && effective_opacity > 0.001 && own * pinh.paint_opacity * n.vis.paint_alpha > 0.001)
+                && effective_opacity > 0.001 && paint_own * pinh.paint_opacity * n.vis.paint_alpha > 0.001)
                 .then(|| paint_slots::push_backdrop_blur(&mut self.instances, n.vis.backdrop_blur, ([r[0], r[1], w, h], radii, n.vis.continuous_corners),
-                    (clip, fade, fade_origin), rounded, sc * s, (own * pinh.paint_opacity * n.vis.paint_alpha).clamp(0.0, 1.0)));
+                    (clip, fade, fade_origin), rounded, sc * s, (paint_own * pinh.paint_opacity * n.vis.paint_alpha).clamp(0.0, 1.0)));
             backdrop_blurs += blur_hole.is_some() as usize;
             // The packed ABI carries one clip rectangle. Preserve a rectangular cut through
             // a rounded corner on a separate outer scope, never recenter the rounded mask.
@@ -669,25 +674,16 @@ impl<S: 'static> Runtime<S> {
             if !isolate && visible && effective_opacity > 0.001 && fade.iter().any(|&f| f != 0.0)
                 && in_fade([r[0], r[1], r[0] + w, r[1] + h], clip, fade, fade_origin)
             {
-                let v = &n.vis;
-                let paints = [
-                    v.fill.a > 0.0,
-                    v.border_width > 0.0 && (v.border.a > 0.0 || v.border_bottom.is_some()),
-                    v.gradient.is_some() || v.radial.is_some() || v.surface.is_some(),
-                    v.shape.is_some(),
-                    v.pixels.is_some(),
-                    !v.shadows.is_empty(),
-                    n.text.is_some(),
-                ].into_iter().filter(|&b| b).count();
+                let paints = own_paints(n);
                 let parent = next.is_some_and(|j| self.nodes[j].parent == Some(i));
                 isolate = paints >= 2 || (paints == 1 && parent);
             }
-            let o = if isolate { 1.0 } else { (own * pinh.paint_opacity).clamp(0.0, 1.0) };
+            let o = if isolate { 1.0 } else { (paint_own * pinh.paint_opacity).clamp(0.0, 1.0) };
             if !skip_paint && isolate {
                 let start_idx = self.instances.len();
                 layers.push((i, start_idx, self.surfaces.len()));
                 let mut marker = Instance::begin_layer([r[0], r[1], w, h], clip,
-                    crate::render::LayerSpec { opacity: own * pinh.paint_opacity,
+                    crate::render::LayerSpec { opacity: paint_own * pinh.paint_opacity,
                         blend: if dissolve { crate::render::Blend::PlusLighter } else { crate::render::Blend::SourceOver },
                         blur: p.blur * sc * s, clip_radius: 0.0 });
                 marker.fade = crate::render::pack_fade(fade, fade_origin, clip);

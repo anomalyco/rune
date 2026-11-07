@@ -230,7 +230,7 @@ impl MenuItem {
             }
         }
         if disabled && !standard {
-            e = e.dim(0.5);
+            e = e.layer_opacity(0.5);
         }
         // A popup opens on its checked item (NSPopUpButton).
         self.acts.apply(e.focusable(!disabled).focus_selected(self.checked == Some(true)).disabled(disabled), !disabled)
