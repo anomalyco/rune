@@ -90,6 +90,15 @@ struct Track {
     /// The pointer anywhere over the area shows an overlay bar, not only near its edge; only
     /// over the thumb does it take the hover colour.
     area_reveals: bool,
+    /// Only the pointer over the element marked [`ScrollBar::scroll_bar_hover`] shows the bar,
+    /// not the pointer over its own area.
+    targeted: bool,
+    /// Only scrolling shows the bar; the pointer holds it up only over its shown thumb.
+    scroll_only: bool,
+    /// How much further down than the viewport's top the track starts, and how far in from the
+    /// viewport's end edge its strip ends: a thumb in a column's gutter under a sticky header.
+    top: f32,
+    end: f32,
     hold: Duration,
     enter: Spring,
     leave: Spring,
@@ -106,6 +115,10 @@ const KIT_TRACK: Track = Track {
     gutter: false,
     x: false,
     area_reveals: false,
+    targeted: false,
+    scroll_only: false,
+    top: 0.0,
+    end: 0.0,
     hold: HOLD,
     enter: ENTER,
     leave: LEAVE,
@@ -125,6 +138,10 @@ const SCROLL_VIEW_TRACK: Track = Track {
     gutter: false,
     x: false,
     area_reveals: true,
+    targeted: false,
+    scroll_only: false,
+    top: 0.0,
+    end: 0.0,
     hold: Duration::from_millis(800),
     enter: Spring::new(0.2, 0.0),
     leave: Spring::new(0.2, 0.0),
@@ -146,10 +163,28 @@ const NATIVE_TRACK: Track = Track {
     gutter: true,
     x: false,
     area_reveals: true,
+    targeted: false,
+    scroll_only: false,
+    top: 0.0,
+    end: 0.0,
     hold: Duration::ZERO,
     enter: Spring::NONE,
     leave: Spring::NONE,
     tint: Spring::NONE,
+};
+
+/// `@opencode/ui`'s MenuScroll (`menu-scroll.tsx`, `menu-scroll.css`), a menu's or dialog list's
+/// thumb: an 8 point strip on the end edge with a 4 point pill down it, 4 points in from the
+/// ends and 24 long at least, shown only while the list scrolls (and 800 ms after) or the thumb
+/// is held or under the pointer, fading over 200 ms.
+const MENU_SCROLL_TRACK: Track = Track {
+    strip: 8.0,
+    edge: 2.0,
+    inset: 4.0,
+    min_thumb: 24.0,
+    scroll_only: true,
+    tint: Spring::NONE,
+    ..SCROLL_VIEW_TRACK
 };
 
 impl Track {
@@ -194,6 +229,14 @@ impl ScrollBarStyle {
         Self { thumb, thumb_hover, width: 4.0, hover_width: 4.0, track: NATIVE_TRACK }
     }
 
+    /// `@opencode/ui`'s MenuScroll thumb, for menus, popovers and dialog lists such as the
+    /// command palette: a 4 point `thumb` pill on an 8 point strip, shown only while the list
+    /// scrolls (and 800 ms after) or the thumb is held or under the pointer, and `thumb_hover`
+    /// under the pointer or held. Pass `border_muted` and `border_strong`.
+    pub fn menu_scroll(thumb: Color, thumb_hover: Color) -> Self {
+        Self { thumb, thumb_hover, width: 4.0, hover_width: 4.0, track: MENU_SCROLL_TRACK }
+    }
+
     /// A [`Self::native`] bar over the viewport's own end edge, in room its content leaves there,
     /// rather than beside it: a plain `overflow-y: auto` box (a sidebar's list) whose styled
     /// scroll bar takes its 8 point gutter from the box while the content overflows. Give the
@@ -207,6 +250,26 @@ impl ScrollBarStyle {
     /// rather than down its right edge.
     pub fn horizontal(mut self) -> Self {
         self.track.x = true;
+        self
+    }
+
+    /// Shows an overlay bar while the pointer is over the element marked
+    /// [`ScrollBar::scroll_bar_hover`] for this viewport, or over the thumb, rather than over
+    /// the viewport, as `@opencode/ui` ScrollView's `thumbHoverTarget` reveals its thumb: a
+    /// timeline whose root also holds the Jump to latest button floating over it, or a page
+    /// whose thumb belongs to one of its columns.
+    pub fn hover_target(mut self) -> Self {
+        self.track.targeted = true;
+        self
+    }
+
+    /// Starts the track `top` points further down the viewport than its top and ends its strip
+    /// `end` points in from the viewport's end edge, as ScrollView's `thumbContainer` mounts its
+    /// thumb in a track the page places: a column's gutter under its sticky header, with the
+    /// track as long as the viewport below `top` and the thumb sized to it.
+    pub fn track_offset(mut self, top: f32, end: f32) -> Self {
+        self.track.top = top.max(0.0);
+        self.track.end = end;
         self
     }
 
@@ -278,6 +341,8 @@ struct Bar {
     near: Cell<bool>,
     /// The pointer is over the track.
     over: Cell<bool>,
+    /// The pointer is over the element marked [`ScrollBar::scroll_bar_hover`].
+    target: Cell<bool>,
     pulse_until: Cell<f64>,
     glide_until: Cell<f64>,
     /// The style the last view built the bar with; `None` until the first.
@@ -313,6 +378,7 @@ fn kept(area: &str) -> Rc<Bar> {
                     paging: Cell::new(0),
                     near: Cell::new(false),
                     over: Cell::new(false),
+                    target: Cell::new(false),
                     pulse_until: Cell::new(-1.0),
                     glide_until: Cell::new(-1.0),
                     style: Cell::new(None),
@@ -372,7 +438,7 @@ fn offset_along(at: ScrollPos, track: f32, top: f32, min: f32, a: usize) -> f32 
 /// The track's length for a viewport at `at`, and whether a bar shows on it at all.
 fn track_len(at: ScrollPos, t: &Track) -> (f32, bool) {
     let a = t.along();
-    let len = at.viewport[a] - 2.0 * t.inset;
+    let len = at.viewport[a] - t.top - 2.0 * t.inset;
     (len, at.max[a] > 0.5 && len >= t.min_thumb)
 }
 
@@ -408,9 +474,9 @@ impl Bar {
         let style = self.style();
         let t = style.track;
         let a = t.along();
-        let across = at.viewport[1 - a];
+        let across = at.viewport[1 - a] - t.end;
         let from = if t.gutter { across } else { across - style.track() };
-        turned(&t, [from, t.inset, style.track(), len])
+        turned(&t, [from, t.top + t.inset, style.track(), len])
     }
 
     fn thumb_fill(&self) -> Color {
@@ -456,7 +522,7 @@ impl Bar {
     /// Once neither holds it, an overlay bar fades out after [`HOLD`] (the look's own). One the
     /// whole area reveals fades as the pointer leaves, as a ScrollView's thumb does.
     fn let_go(&self) {
-        if self.state.get() == BarState::Overlay && !self.dragging.get() && !self.near.get() {
+        if self.state.get() == BarState::Overlay && !self.dragging.get() && !self.revealed() {
             let t = self.style().track;
             if t.area_reveals {
                 self.opacity.set(0.0);
@@ -479,24 +545,49 @@ impl Bar {
         let (w, h_all) = (at.viewport[1 - a], at.viewport[a]);
         let gutter = if t.gutter { style.track() } else { 0.0 };
         let track = style.track();
-        let bar_end = w + gutter;
+        let bar_end = w + gutter - t.end;
+        // Where the track starts down the viewport.
+        let lo = t.top + t.inset;
         let p = p.map(|p| if t.x { (p.y, p.x) } else { (p.x, p.y) });
-        let near = shows
-            && p.is_some_and(|(across, along)| match t.area_reveals {
-                true => (0.0..=bar_end).contains(&across) && (0.0..=h_all).contains(&along),
-                false => across >= bar_end - REVEAL.max(track) && across <= bar_end && (t.inset..=t.inset + len).contains(&along),
-            });
         let (top, h) = thumb_along(at, len.max(0.0), t.min_thumb, a);
-        let over = near
-            && p.is_some_and(|(across, along)| across >= bar_end - track && (!t.area_reveals || (t.inset + top..=t.inset + top + h).contains(&along)));
+        let in_strip = |across: f32, along: f32| (bar_end - track..=bar_end).contains(&across) && (lo..=lo + len).contains(&along);
+        let on_thumb = |(across, along): (f32, f32)| in_strip(across, along) && (!t.area_reveals || (lo + top..=lo + top + h).contains(&along));
+        // A bar its hover target reveals shows here only under the pointer on its thumb, which
+        // belongs to the target as a ScrollView's thumb mounted in the target's track does.
+        let near = shows
+            && p.is_some_and(|(across, along)| match (t.targeted || t.scroll_only, t.area_reveals) {
+                // A scroll-only thumb holds while the pointer is on it as it shows.
+                _ if t.scroll_only => on_thumb((across, along)) && (self.near.get() || self.last_now.get() < self.pulse_until.get()),
+                (true, _) => on_thumb((across, along)),
+                (false, true) => (0.0..=w + gutter).contains(&across) && (0.0..=h_all).contains(&along),
+                (false, false) => across >= bar_end - REVEAL.max(track) && across <= bar_end && (lo..=lo + len).contains(&along),
+            });
+        let over = near && p.is_some_and(on_thumb);
         if self.over.replace(over) != over {
             self.widen();
         }
-        match (self.near.replace(near), near) {
+        self.reveal(|| self.near.set(near));
+    }
+
+    /// Shown while the pointer is near its edge or over its hover target.
+    fn revealed(&self) -> bool {
+        self.near.get() || self.target.get()
+    }
+
+    /// Runs `change`, then holds the bar up or lets it go if that showed or hid it.
+    fn reveal(&self, change: impl FnOnce()) {
+        let was = self.revealed();
+        change();
+        match (was, self.revealed()) {
             (false, true) => self.hold(),
             (true, false) => self.let_go(),
             _ => {}
         }
+    }
+
+    /// The pointer entered or left the element marked [`ScrollBar::scroll_bar_hover`].
+    fn hover_target(&self, inside: bool) {
+        self.reveal(|| self.target.set(inside));
     }
 
     /// Follows the viewport to `at`, from its `on_scroll_offset`, at the size it's drawn at, so
@@ -561,7 +652,7 @@ impl Bar {
             return;
         }
         state.set(BarState::Overlay);
-        if self.dragging.get() || self.near.get() {
+        if self.dragging.get() || self.revealed() {
             self.hold();
             return;
         }
@@ -678,6 +769,19 @@ pub trait ScrollBar {
     /// [`ScrollBar::scroll_bar`] with the thumb drawn in `style`.
     #[track_caller]
     fn scroll_bar_styled(self, style: ScrollBarStyle) -> El;
+
+    /// Makes this element the hover target of the scroll bar on the viewport keyed
+    /// `viewport_key`: while the pointer is anywhere over it, children included, that overlay
+    /// bar shows as it does with the pointer over its own area. Pair it with
+    /// [`ScrollBarStyle::hover_target`] on the bar. Any hover handler the element has keeps
+    /// running.
+    ///
+    /// ```ignore
+    /// col().key("timeline").child(viewport.key("scroll").scroll_bar_styled(style.hover_target()))
+    ///     .child(jump_button)
+    ///     .scroll_bar_hover("scroll")
+    /// ```
+    fn scroll_bar_hover(self, viewport_key: &str) -> El;
 }
 
 impl ScrollBar for El {
@@ -689,6 +793,14 @@ impl ScrollBar for El {
     #[track_caller]
     fn scroll_bar_styled(self, style: ScrollBarStyle) -> El {
         wrap(style, self, Location::caller())
+    }
+
+    fn scroll_bar_hover(self, viewport_key: &str) -> El {
+        let bar = kept(&format!("{viewport_key}-scroll-area"));
+        self.chain_hover_change_any(move |inside, tx| {
+            tx.live_only();
+            bar.hover_target(inside);
+        })
     }
 }
 
