@@ -69,10 +69,13 @@ pub enum Syntax {
     Inserted,
     /// A diff's removed lines.
     Deleted,
+    /// A function's parameters where it's defined (TextMate's `variable.parameter`), in the
+    /// text colour by default.
+    Parameter,
 }
 
 impl Syntax {
-    pub(crate) const COUNT: usize = 10;
+    pub(crate) const COUNT: usize = 11;
 }
 
 /// What colours a highlighted range: a kind of token, coloured by the [`SyntaxTheme`] in use,

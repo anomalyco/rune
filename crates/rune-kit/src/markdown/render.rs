@@ -31,6 +31,11 @@ pub(super) struct Renderer {
     pub(super) diagram_frame: Option<FrameWire>,
     /// `Markdown::code_frame`.
     pub(super) code_frame: Option<CodeWire>,
+    /// `Markdown::link_favicon`.
+    pub(super) link_favicon: Option<link_icon::FaviconWire>,
+    /// `Markdown::images` and `Markdown::on_image`.
+    pub(super) images: Option<image::ImageWire>,
+    pub(super) on_image: Option<image::ImagePress>,
     /// Where the blocks being drawn sit: list depth and a quote's text colour.
     pub(super) flow: Cell<Flow>,
 }
@@ -109,6 +114,7 @@ pub(super) fn margins(b: &Block, s: &MarkdownStyle) -> (f32, f32) {
         Block::Quote(_) => (16.0, 16.0),
         Block::Rule => (32.0, 32.0),
         Block::Table(_) => (s.table_margin[0], s.table_margin[1]),
+        Block::Image { .. } => (24.0, 24.0),
     }
 }
 
@@ -240,7 +246,7 @@ impl Renderer {
             }
         }
         e = e.text_highlights(self.text_highlights_for(&inl.text, map));
-        let e = self.select(self.wire_link(e, inl));
+        let e = self.select(self.wire_link(self.link_icons(e, inl), inl));
         if !self.selectable { return e; }
         inl.spans.iter().filter(|s| matches!(s.2, Style::CodePad)).fold(e, |e, s| e.uncopied(s.0..s.1))
     }
@@ -256,7 +262,9 @@ impl Renderer {
     }
 
     pub(super) fn para(&self, inl: &Inline, map: Option<&SpanMap>, style: TextStyle, color: Color) -> El {
-        let e = self.with_reveal(rich(inl.text.clone(), self.spans(inl, style.size)).font(style).color(color)).w_full();
+        // Lines keep their own 22.4 points, as a page's do, so a long list doesn't drift a
+        // point per item.
+        let e = self.with_reveal(rich(inl.text.clone(), self.spans(inl, style.size)).font(style).color(color).exact_lines()).w_full();
         self.select_inline(e, inl, map)
     }
 
@@ -518,7 +526,7 @@ impl Renderer {
                         Some(n) => format!("{}.", n + k as u64),
                         None => "•".into(),
                     };
-                    let marker = text(marker).font(s.body).color(s.muted).w(indent);
+                    let marker = text(marker).font(s.body).color(s.muted).exact_lines().w(indent);
                     let marker = if s.list_outside { marker.align(Align::End).pr(space) } else { marker.align(Align::Center) };
                     // The item's place in the list says what its marker shows.
                     c = c.child(
@@ -551,6 +559,7 @@ impl Renderer {
                     .child(inner.grow(1.0).shrink().pl(q.pad))
             }
             // A clear rule is spacing only (`hr { border: none; height: 0 }`).
+            Block::Image { src, alt, title } => self.image(src, alt, title),
             Block::Rule if s.rule.a <= 0.0 => el().w_full().h(0.0),
             Block::Rule => el().w_full().h(0.5).fill(s.rule),
         }
@@ -563,6 +572,7 @@ fn item_label(blocks: &[Block]) -> String {
         let text = match b {
             Block::Para(inl) | Block::Heading(_, inl) => inl.text.replace(PAD, ""),
             Block::Code(s) | Block::Diff(s) | Block::Mermaid(s) => s.clone(),
+            Block::Image { alt, .. } => alt.clone(),
             _ => continue,
         };
         if !text.is_empty() {
