@@ -145,6 +145,8 @@ impl<S: 'static> Runtime<S> {
             {
                 self.anchored_inh(i, j, a, &p, &mut pinh);
             }
+            // `El::stuck_fade`: how much of a stuck header's children show.
+            let mut kids_fade = 1.0f32;
             if self.has_sticky && let Some((edge, inset, tail)) = self.sticky_of(i) {
                 // Worked out from this frame's offsets, which the viewport above already applied.
                 // Exclude this node's own `prop::OFFSET` (`live_offset`) so it translates from the
@@ -155,6 +157,7 @@ impl<S: 'static> Runtime<S> {
                 let h = if self.row_h[i] >= 0.0 { self.row_h[i] } else { p.rect.h };
                 let shift = sticky::shift(edge, if tail { inset - h } else { inset }, [top, top + h, left, left + p.rect.w], frame);
                 self.stuck[i] = shift;
+                if edge == crate::el::StickyEdge::Top { kids_fade = self.stuck_fade(i, top + shift, pinh.dy); }
                 // A header whose section's rows fade under it keeps the clip they lost.
                 if let Some(&(_, top)) = self.sticky_bands.iter().find(|b| Some(b.0) == node_parent) {
                     pinh.paint_clip[1] = top;
@@ -1191,7 +1194,7 @@ impl<S: 'static> Runtime<S> {
                 }
                 self.unturned_drawn[i] = (r.map(|v| v / s), full_clip);
             }
-            self.inh_scratch[i] = Inh { opacity: effective_opacity, paint_opacity: o,
+            self.inh_scratch[i] = Inh { opacity: effective_opacity * kids_fade, paint_opacity: o * kids_fade,
                 clip: full_clip, fade: hit_fade, fade_origin: hit_origin,
                 paint_clip: clip, paint_fade: fade, paint_fade_origin: fade_origin, rounded, scale, anchor, anchor_to, blur, dy, dx,
                 cover: cover_offset, outer, mark, group,
