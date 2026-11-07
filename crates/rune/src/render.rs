@@ -120,6 +120,14 @@ impl Default for LayerSpec {
 /// to the shader source.
 pub const CLIP_WGSL: &str = include_str!("clip.wgsl");
 
+/// The uber shader's WGSL and the hash of its pipeline layout, as the precompiled DX12 bytecode
+/// records them; `examples/regen_dxbc.rs` regenerates that bytecode from them.
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub fn uber_shader_identity() -> (String, u64) {
+    (metallib::uber_wgsl(), metallib::uber_abi_hash())
+}
+
 /// Where a compositor is asked to draw an effect slot (`Renderer::draw_range_with`).
 pub struct EffectSite<'a> {
     /// The slot's position in the painter stream.
@@ -347,7 +355,8 @@ pub(crate) fn end_layer(instances: &mut Vec<Instance>, surfaces: &mut [crate::na
     let transfer_clip = scope.fade[3] == 0 && unmasked;
     // A lone effect slot keeps a faded scope: the compositor's paint can't take the opacity.
     let faded_effect = primitives == 1 && instances[start + 1].params[1] == KIND_EFFECT && scope.fill[3] != 1.0;
-    if !faded_effect && primitives + videos <= 1 && (primitives + videos == 0 || scope.border[1] == 0.0) && scope.params[0] == 0.0 && scope.params[2] == 0.0 && scope.params[3] == 0.0
+    // A layer's `radii` hold its hole (`El::cutout_circle`), which only its composite can cut.
+    if !faded_effect && primitives + videos <= 1 && (primitives + videos == 0 || (scope.border[1] == 0.0 && scope.radii == [0.0; 4])) && scope.params[0] == 0.0 && scope.params[2] == 0.0 && scope.params[3] == 0.0
         && (transfer_clip || (scope.clip == NO_CLIP && scope.fade == [0; 4])) {
         let opacity = scope.fill[3];
         if primitives == 1 {

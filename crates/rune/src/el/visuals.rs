@@ -388,6 +388,18 @@ impl El {
         cold.clip_radius = Some(clamped.into_iter().fold(0.0, f32::max));
         self
     }
+    /// Punch a round hole through this element and everything it and its descendants draw: clear
+    /// within `inner` points of `center` (points from the element's top-left, which may lie
+    /// outside it), whole from `outer` points, and ramping linearly between, as CSS
+    /// `mask-image: radial-gradient(circle at x y, transparent inner, black outer)` does. Equal
+    /// radii cut an anti-aliased edge. Room for a badge over an avatar's corner:
+    /// `.cutout_circle([16.0, 0.0], 4.0, 5.0)` under a 6 point dot at the corner. The subtree
+    /// draws in an isolated layer, whose composite cuts the hole; hit testing ignores it.
+    pub fn cutout_circle(mut self, center: [f32; 2], inner: f32, outer: f32) -> Self {
+        let inner = inner.max(0.0);
+        self.vis.cold_mut().cutout = Some([center[0], center[1], inner, outer.max(inner)]);
+        self
+    }
     /// Soft clip with a fade width per side (left, top, right, bottom).
     pub fn clip_fade(mut self, left: f32, top: f32, right: f32, bottom: f32) -> Self {
         self.set_clip([left, top, right, bottom].map(|w| w.max(0.0)));
