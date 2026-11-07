@@ -215,7 +215,10 @@ impl<S: 'static> Runtime<S> {
                     let pl_indent = spec.blocks.first().map_or(0.0, |b| (b.indent_pt(spec.style.size) * s).round() * tk);
                     let pl_origin = [rest_origin[0] + pl_indent, rest_origin[1]];
                     let pl_r_origin = if scale_motion == ScaleMotion::Still { pl_origin } else { [0.0, 0.0] };
-                    let pl = self.text.layout_rich(&inp.placeholder, &[], spec.style, s, Some((w - pl_indent).max(1.0) / tk.max(1e-4)));
+                    // A one-line field's placeholder stays on its line, cut by the field's clip, as its
+                    // text does; a multi-line field's wraps at its width.
+                    let wrap = (!inp.single_line).then(|| (w - pl_indent).max(1.0) / tk.max(1e-4));
+                    let pl = self.text.layout_rich(&inp.placeholder, &[], spec.style, s, wrap);
                     self.glyph_scratch.clear();
                     self.text.set_glyph_inks(inp.placeholder_color, &[]);
                     self.text.set_glide(glide);
