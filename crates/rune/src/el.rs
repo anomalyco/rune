@@ -531,6 +531,8 @@ pub struct El {
     pub(crate) help: Option<String>,
     /// `El::help_when_truncated`: the tooltip shows only while the text is cut short.
     pub(crate) help_cut: bool,
+    /// `El::help_above`: the tooltip shows above the element.
+    pub(crate) help_above: bool,
     pub(crate) material: Option<crate::SystemMaterial>,
     /// `El::aspect_fit`'s width over height; 0 when unset.
     pub(crate) aspect_fit: f32,
@@ -595,6 +597,7 @@ fn base(dir: FlexDirection) -> El {
         time_scale: 1.0,
         help: None,
         help_cut: false,
+        help_above: false,
         material: None,
         aspect_fit: 0.0,
         selection_group: false,
@@ -1230,6 +1233,12 @@ impl El {
         let mut e = self.help(text);
         e.help_cut = true;
         e
+    }
+    /// Shows this element's [`El::help`] tooltip above it, 4 points clear, and below only when
+    /// there's no room above, as a web page's `placement="top"` tooltip sits over its button.
+    pub fn help_above(mut self) -> Self {
+        self.help_above = true;
+        self
     }
     pub fn child(mut self, child: El) -> Self {
         self.memo_built = None;

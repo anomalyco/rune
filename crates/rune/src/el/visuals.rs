@@ -367,6 +367,14 @@ impl El {
         self.vis.hover_group = true;
         self
     }
+    /// [`Self::hover_group`], shared by every element on screen with the same `key`: the pointer
+    /// over any of them hovers them all, so one group can span elements that don't nest, such as
+    /// a reply's text and the footer under it in separate rows of a virtual list.
+    pub fn hover_group_shared(mut self, key: impl Into<Rc<str>>) -> Self {
+        self.vis.hover_group = true;
+        self.vis.cold_mut().hover_share = Some(key.into());
+        self
+    }
     /// Curves for this element's hover track: `enter` when the pointer arrives, `exit` when it
     /// leaves (e.g. a delayed reveal).
     pub fn hover_motion(mut self, enter: impl Into<Anim>, exit: impl Into<Anim>) -> Self {
