@@ -11,7 +11,8 @@ impl<S: 'static> Runtime<S> {
     /// point the drag last saw has nothing new to report, and its instant transaction would
     /// cut short whatever the press started (a tapped slider's knob mid-spring).
     pub(super) fn move_pointer(&mut self, x: f32, y: f32, drag_move: bool) {
-        if self.pointer != Some((x, y)) { self.hover_paused = false; self.release_hover_hold(); }
+        let moved = self.pointer != Some((x, y));
+        if moved { self.hover_paused = false; self.release_hover_hold(); }
         self.pointer = Some((x, y));
         if self.in_viewport(x, y) { self.left_in_capture = false; }
         for &(id, rect) in &self.hits {
@@ -37,11 +38,15 @@ impl<S: 'static> Runtime<S> {
         let Some(i) = self.live_index(&path) else { return };
         let (id, r, has_drag) = (self.nodes[i].id, self.nodes[i].target, self.nodes[i].handlers.on_drag.is_some() && !self.drags_out(&self.nodes[i]));
         // A hit rect is where the element was drawn (after scrolling); `target` is its
-        // unscrolled layout rect, kept only for elements that were never drawn.
-        let mut hits = self.hits.iter().filter(|(hit, _)| *hit == id).peekable();
-        self.capture_inside = !self.press_cancelled && if self.native_overlay || hits.peek().is_some() {
-            hits.any(|&(id, r)| self.hit_contains(id, r, x, y))
-        } else { contains(r, x, y) };
+        // unscrolled layout rect, kept only for elements that were never drawn. Only the
+        // pointer moving decides whether it's still inside: a button that springs out from
+        // under a still pointer stays pressed, as AppKit only re-tracks on a drag.
+        if moved {
+            let mut hits = self.hits.iter().filter(|(hit, _)| *hit == id).peekable();
+            self.capture_inside = !self.press_cancelled && if self.native_overlay || hits.peek().is_some() {
+                hits.any(|&(id, r)| self.hit_contains(id, r, x, y))
+            } else { contains(r, x, y) };
+        }
         if has_drag && drag_move {
             let (dx, dy) = (x - self.press_at.0, y - self.press_at.1);
             let [lx, ly] = self.to_local(i, x, y);

@@ -1,0 +1,1 @@
+- **A button that springs out from under a still pointer keeps its press.** Whether a held press is still inside is decided only when the pointer moves, as AppKit does, so releasing without moving fires `on_press` even if layout slid the element away meanwhile (a tile reflowing as you click its button, or a script's tap on a moving element). Moving off the element still cancels.
