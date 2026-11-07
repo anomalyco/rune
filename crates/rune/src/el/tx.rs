@@ -58,6 +58,10 @@ pub struct Tx {
     pub(crate) minimize: bool,
     /// `Tx::toggle_maximized`.
     pub(crate) toggle_maximized: bool,
+    /// `Tx::toggle_full_screen`.
+    pub(crate) toggle_full_screen: bool,
+    /// `Tx::send_key`, in order.
+    pub(crate) keys: Vec<crate::KeyEvent>,
     /// `Tx::drop_point`.
     pub(crate) drop_point: Option<PointerEvent>,
     pub(crate) title: Option<String>,
@@ -216,6 +220,22 @@ impl Tx {
     /// maximize button would (macOS zooms). Does nothing for overlays and headless runs.
     pub fn toggle_maximized(&mut self) {
         self.toggle_maximized = true;
+    }
+
+    /// Take this window full screen after this handler, or bring it back, as macOS's green
+    /// button and Electron's `setFullScreen` do: on Windows and Linux a borderless window over
+    /// its display, which hides a custom titlebar's caption buttons (`Cx::chrome_insets`).
+    /// Does nothing for overlays and headless runs.
+    pub fn toggle_full_screen(&mut self) {
+        self.toggle_full_screen = true;
+    }
+
+    /// Deliver `ev` once this handler is done, as if it were typed: to the focused field, then
+    /// the key handlers, as the keyboard routes it. For a menu the app draws itself, whose Edit
+    /// items send Ctrl+C (⌘C) and the rest to the field that has focus, as AppKit's standard
+    /// Edit items do. Keys sent in one handler arrive in order.
+    pub fn send_key(&mut self, ev: crate::KeyEvent) {
+        self.keys.push(ev);
     }
 
     /// Set this window's title after this handler, in its title bar and the Window menu. The

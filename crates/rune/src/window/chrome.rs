@@ -85,6 +85,12 @@ pub(super) fn toggle_maximized(window: &Window) {
     }
 }
 
+/// Takes the window full screen, borderless over its display, or brings it back.
+pub(super) fn toggle_full_screen(window: &Window) {
+    let full = window.fullscreen().is_some();
+    window.set_fullscreen((!full).then_some(winit::window::Fullscreen::Borderless(None)));
+}
+
 /// The window menu, where a custom titlebar (at the pointer) or the keyboard opens it.
 pub(super) fn window_menu(window: &Window, menu: crate::runtime::WindowMenu) {
     #[cfg(target_os = "windows")]

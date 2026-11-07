@@ -186,6 +186,9 @@ impl<S: 'static> Host<S> {
         if self.rt.take_toggle_maximized() && let Some(w) = self.win.as_ref().filter(|w| w.visible) {
             chrome::toggle_maximized(&w.window);
         }
+        if self.rt.take_toggle_full_screen() && let Some(w) = self.win.as_ref().filter(|w| w.visible) {
+            chrome::toggle_full_screen(&w.window);
+        }
         if let Some(menu) = self.rt.take_window_menu() && let Some(w) = self.win.as_ref().filter(|w| w.visible) {
             chrome::window_menu(&w.window, menu);
         }
