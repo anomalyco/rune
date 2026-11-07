@@ -306,8 +306,9 @@ impl Select {
                 } else if self.state == State::Focus && !self.open {
                     t = t.outline(1.0, -1.0, c.border_focus).no_focus_ring();
                 } else {
-                    t = shadows(k, t, &k.elevation.button_neutral);
-                    t = if self.open { t.no_focus_ring() } else { t.focus_within_ring(1.0, -1.0, c.border_focus) };
+                    t = shadows(k, t, k.elevation.input());
+                    // select.css:73,100-103: focus inside drops the shadow and the hover tint.
+                    t = if self.open { t.no_focus_ring() } else { t.focus_within_ring(1.0, -1.0, c.border_focus).focus_within_flat() };
                     if self.state == State::Rest && !self.open {
                         t = t.hover(c.hover);
                     }

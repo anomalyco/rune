@@ -27,14 +27,14 @@ fn shell(k: &Kit, e: El, state: State, invalid: bool, focused: bool) -> El {
         .fill(if hover { over(c.hover, c.bg_base) } else { c.bg_base })
         .token_motion(k.motion.control);
     if state == State::Disabled {
-        return shadows(k, e, &k.elevation.button_neutral).layer_opacity(0.5);
+        return shadows(k, e, k.elevation.input()).layer_opacity(0.5);
     }
     if invalid {
         e = e.outline(1.0, -1.0, c.danger.fg);
     } else if focused || state == State::Focus {
         e = e.outline(1.0, -1.0, c.border_focus);
     } else {
-        e = shadows(k, e, &k.elevation.button_neutral);
+        e = shadows(k, e, k.elevation.input());
         if state == State::Rest {
             e = e.hover(c.hover);
         }

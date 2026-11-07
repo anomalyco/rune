@@ -830,6 +830,8 @@ impl<S: 'static> Runtime<S> {
                     Some(s) if stuck_k > 0.0 => (stuck_k, &s.shadows),
                     _ => (0.0, &[]),
                 };
+                // `El::focus_within_flat`: focus inside drops its own shadows and hover fill.
+                let focus_flat = n.focus.flat_within && self.focus_within(i);
                 let solid = !n.vis.shadows.is_empty() && native_material.is_none() && blur_hole.is_none() && n.material.is_none()
                     && self.color(n.id, P_FILL, n.vis.fill).a >= 1.0;
                 // A box that paints itself solid hides the middle of its shadows (bands.rs). Dimmed
@@ -843,7 +845,7 @@ impl<S: 'static> Runtime<S> {
                 for (k, sh) in n.vis.shadows.iter().chain(stuck_shadows.1).enumerate() {
                     let c = if k >= n.vis.shadows.len() { sh.color.alpha(sh.color.a * stuck_shadows.0) }
                         else if k < P_SHADOWS.len() { self.color(n.id, P_SHADOWS[k], sh.color) } else { sh.color };
-                    if c.a <= 0.0 || sh.inset {
+                    if c.a <= 0.0 || sh.inset || (focus_flat && k < n.vis.shadows.len()) {
                         continue;
                     }
                     let sh = &if k < n.vis.shadows.len() { self.shadow_at(n.id, k, sh) } else { *sh };
@@ -856,7 +858,7 @@ impl<S: 'static> Runtime<S> {
                 if let Some(c) = n.focus.highlight && self.highlight_visible(i) {
                     overlay = over(premul(c, 1.0, srgb), overlay);
                 }
-                if n.vis.hover.a > 0.0 || self.scene.store().is_animating(n.id, P_HOVER_C) {
+                if !focus_flat && (n.vis.hover.a > 0.0 || self.scene.store().is_animating(n.id, P_HOVER_C)) {
                     let hov_v = self.scene.get(n.id, P_HOVER).unwrap_or(0.0).clamp(0.0, 1.0);
                     if hov_v > 0.0 {
                         overlay = over(premul(self.color(n.id, P_HOVER_C, n.vis.hover), hov_v, srgb), overlay);
@@ -1050,7 +1052,7 @@ impl<S: 'static> Runtime<S> {
                 // Inset shadows draw inside the border (CSS's padding box), under it.
                 let (inner, inner_radii) = border_paint::inset_box([r[0], r[1], w, h], radii, padding);
                 for (k, sh) in n.vis.shadows.iter().chain(stuck_shadows.1).enumerate() {
-                    if !sh.inset {
+                    if !sh.inset || (focus_flat && k < n.vis.shadows.len()) {
                         continue;
                     }
                     let c = if k >= n.vis.shadows.len() { sh.color.alpha(sh.color.a * stuck_shadows.0) }

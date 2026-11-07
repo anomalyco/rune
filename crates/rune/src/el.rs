@@ -1143,6 +1143,14 @@ impl El {
         self.focus.ring_off = false;
         self
     }
+    /// While focus is on this element or anywhere inside it, from the pointer or the keyboard,
+    /// it draws none of its [`El::box_shadow`]s and no [`El::hover`] fill, as a CSS field whose
+    /// `:focus-within` rule sets `box-shadow: none` and whose hover rule is
+    /// `:not(:focus-within)`: the [`El::focus_within_ring`] stands in for its raised edge.
+    pub fn focus_within_flat(mut self) -> Self {
+        self.focus.flat_within = true;
+        self
+    }
     /// No focus ring: not the default one, and not one set with [`El::focus_ring`]. A control
     /// that shows focus its own way (a fill, an outline it animates) sets it on itself or on
     /// the child that would draw the ring.

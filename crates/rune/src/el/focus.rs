@@ -18,6 +18,9 @@ pub(crate) struct FocusSpec {
     pub within: bool,
     /// `no_focus_ring`: no default ring on this control, and none from this element.
     pub ring_off: bool,
+    /// `focus_within_flat`: no outer or inset shadows and no hover fill while focus is on this
+    /// element or inside it.
+    pub flat_within: bool,
     /// `default_button`: Return presses it.
     pub default: bool,
     pub highlight: Option<Color>,
@@ -45,6 +48,7 @@ impl crate::cold::Empty for FocusSpec {
         ring: None,
         within: false,
         ring_off: false,
+        flat_within: false,
         default: false,
         highlight: None,
         follows: false,
