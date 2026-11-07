@@ -2,6 +2,12 @@
 //! takes its `AppUserModelID`, and `HKEY_CURRENT_USER\Software\Classes\AppUserModelId\<id>`
 //! names it, so its toasts show the app's name and icon. A click raises the toast's `Activated`
 //! event in the process that posted it, which hands it to `on_click`'s handler.
+//!
+//! With an activation scheme the toast is protocol-activated instead: a click opens
+//! `<scheme>://notification/<id>?<user info>` through the shell, which starts the app (or, with
+//! `rune::single_instance`, reaches the running one) with the link, whether or not the process
+//! that posted it still runs. That is the documented way for an app without a package to be
+//! started from its toasts without a COM activator. `click_from_url` reads the link back.
 
 use std::sync::Mutex;
 
@@ -27,6 +33,10 @@ const KEEP: usize = 64;
 const TAG_MAX: usize = 64;
 
 static APP_ID: Mutex<Option<String>> = Mutex::new(None);
+/// `Identity::activation`'s scheme, lowercased.
+static SCHEME: Mutex<Option<String>> = Mutex::new(None);
+/// The host of a notification link.
+const HOST: &str = "notification";
 
 struct Posted {
     id: String,
@@ -62,8 +72,51 @@ pub(super) fn register(identity: &Identity) -> Result<(), String> {
             _ = key.remove_value("IconUri");
         }
     }
+    let scheme = match &identity.scheme {
+        Some(scheme) => Some(register_scheme(scheme, name)?),
+        None => None,
+    };
+    *SCHEME.lock().unwrap_or_else(|e| e.into_inner()) = scheme;
     *APP_ID.lock().unwrap_or_else(|e| e.into_inner()) = Some(identity.id.clone());
     Ok(())
+}
+
+/// Points `scheme` at this executable for the user: what the shell runs when a toast's link opens.
+fn register_scheme(scheme: &str, name: &str) -> Result<String, String> {
+    let valid = scheme.len() >= 2
+        && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    if !valid {
+        return Err(format!("not a URL scheme: {scheme:?}"));
+    }
+    let scheme = scheme.to_ascii_lowercase();
+    let exe = std::env::current_exe().map_err(|e| format!("current exe: {e}"))?;
+    let exe = exe.to_string_lossy();
+    let classes = windows_registry::CURRENT_USER.create(format!("Software\\Classes\\{scheme}")).map_err(|e| format!("{scheme} key: {e}"))?;
+    classes.set_string("", format!("URL:{name}")).map_err(|e| format!("{scheme}: {e}"))?;
+    classes.set_string("URL Protocol", "").map_err(|e| format!("{scheme} URL Protocol: {e}"))?;
+    let set = |path: &str, value: String| {
+        classes.create(path).and_then(|k| k.set_string("", value)).map_err(|e| format!("{scheme}\\{path}: {e}"))
+    };
+    set("DefaultIcon", format!("\"{exe}\",0"))?;
+    set("shell\\open\\command", format!("\"{exe}\" \"%1\""))?;
+    Ok(scheme)
+}
+
+/// The scheme's link for `n`: its id in the path, its user info in the query.
+fn link(scheme: &str, n: &Notification) -> String {
+    format!("{scheme}://{HOST}/{}?{}", percent(&n.id), encode(&n.info))
+}
+
+pub(super) fn click_from_url(url: &str) -> Option<Click> {
+    let scheme = SCHEME.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
+    let (head, rest) = url.trim().split_once("://")?;
+    let rest = rest.strip_prefix(HOST)?.strip_prefix('/')?;
+    if !head.eq_ignore_ascii_case(&scheme) {
+        return None;
+    }
+    let (id, query) = rest.split_once('?').unwrap_or((rest, ""));
+    Some(Click { id: unpercent(id.trim_end_matches('/')), info: decode(query) })
 }
 
 pub(super) fn post(n: &Notification) -> bool {
@@ -84,11 +137,17 @@ pub(super) fn post(n: &Notification) -> bool {
 }
 
 fn show(app: &str, n: &Notification, tag: &str) -> windows::core::Result<ToastNotification> {
+    let scheme = SCHEME.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let doc = XmlDocument::new()?;
-    doc.LoadXml(&HSTRING::from(xml(n)))?;
+    doc.LoadXml(&HSTRING::from(xml(n, scheme.as_deref())))?;
     let toast = ToastNotification::CreateToastNotification(&doc)?;
     toast.SetTag(&HSTRING::from(tag))?;
     toast.SetGroup(&HSTRING::from(GROUP))?;
+    if scheme.is_some() {
+        // The click comes back as a link instead.
+        ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(app))?.Show(&toast)?;
+        return Ok(toast);
+    }
     toast.Activated(&TypedEventHandler::new(|sender: Ref<ToastNotification>, args: Ref<IInspectable>| {
         let tag = sender.ok()?.Tag()?.to_string_lossy();
         let arguments = args.ok()?.cast::<ToastActivatedEventArgs>()?.Arguments()?.to_string_lossy();
@@ -178,13 +237,16 @@ fn tag(id: &str) -> String {
     format!("{:016x}", h.finish())
 }
 
-/// The toast's XML: a generic toast with the title and body, the user info as its launch
-/// arguments, and no sound.
-pub(super) fn xml(n: &Notification) -> String {
+/// The toast's XML: a generic toast with the title and body, and no sound. Its launch arguments
+/// are the user info, or with an activation scheme the link a click opens.
+pub(super) fn xml(n: &Notification, scheme: Option<&str>) -> String {
     let body = if n.body.is_empty() { String::new() } else { format!("<text>{}</text>", escape(&n.body)) };
+    let launch = match scheme {
+        Some(scheme) => format!("activationType=\"protocol\" launch=\"{}\"", escape(&link(scheme, n))),
+        None => format!("launch=\"{}\"", escape(&encode(&n.info))),
+    };
     format!(
-        "<toast launch=\"{}\"><visual><binding template=\"ToastGeneric\"><text>{}</text>{body}</binding></visual><audio silent=\"true\"/></toast>",
-        escape(&encode(&n.info)),
+        "<toast {launch}><visual><binding template=\"ToastGeneric\"><text>{}</text>{body}</binding></visual><audio silent=\"true\"/></toast>",
         escape(&n.title),
     )
 }
