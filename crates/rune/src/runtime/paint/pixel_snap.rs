@@ -419,9 +419,14 @@ fn round(v: f32) -> f32 {
 pub(super) fn snap(r: [f32; 4], motion: [f32; 4], rigid: [f32; 2], parent: Option<Rest>, mut ease: impl FnMut(usize, f32) -> f32) -> ([f32; 4], Rest) {
     let mut out = r;
     let mut rest = Rest { exact: [0.0; 4], at: [0.0; 4] };
+    // A scaled layer's edges and its scaled rigid translation each land a little off the 1/64 px
+    // grid, so their difference wobbles by up to 1/128 px frame to frame even while the content
+    // holds still against the scroll. Back on the grid it holds, and an edge resting on a half
+    // pixel rounds the same way every frame instead of flickering a pixel.
+    let grid = |v: f32| (v * 64.0).round() / 64.0;
     for axis in 0..2 {
         let (a, b) = (axis, axis + 2);
-        let (rest_a, rest_b) = (r[a] - motion[a] - rigid[axis], r[b] - motion[b] - rigid[axis]);
+        let (rest_a, rest_b) = (grid(r[a] - motion[a] - rigid[axis]), grid(r[b] - motion[b] - rigid[axis]));
         (rest.exact[a], rest.exact[b]) = (rest_a, rest_b);
         (rest.at[a], rest.at[b]) = (rest_a, rest_b);
         if rest_b - rest_a < 0.5 {
