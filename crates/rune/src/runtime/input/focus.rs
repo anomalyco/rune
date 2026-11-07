@@ -201,6 +201,10 @@ impl<S: 'static> Runtime<S> {
         }
         self.keyboard_focus = keyboard;
         self.sync_side_focus();
+        // `El::hover_group_focus`: a group keyboard focus enters or leaves hovers or rests now.
+        if self.nodes.iter().any(|n| n.vis.hover_focus) {
+            changed |= self.update_interaction(None);
+        }
         changed
     }
     pub(super) fn sync_requested_focus(&mut self, nodes: &mut Vec<Node>) -> bool {
