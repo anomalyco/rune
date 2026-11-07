@@ -112,10 +112,28 @@ pub struct TabTearOut {
     pub index: usize,
     /// Pointer travel since the press, in points.
     pub offset: [f32; 2],
-    /// Where it was released, in window points, once the tab's layout has been reported (the
-    /// frame after it tore out).
+    /// Where it was released, in window points.
     pub window_point: Option<[f32; 2]>,
-    /// The same point on the desktop, for placing the new window under the pointer.
+    /// The same point on the desktop in physical pixels (`Drag::screen_point`), for placing the
+    /// new window under the pointer. `None` headless.
+    pub screen_point: Option<(i32, i32)>,
+}
+
+/// The pointer moving a torn-out tab, or bringing it back to the strip (`torn` false), while
+/// the button is still down: the app can open the tab's window now and move it with the
+/// pointer, so the drag carries on in the new window ([`TabDragState::hand_off`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TabTearMove {
+    pub id: String,
+    pub index: usize,
+    /// Off the strip; false once the tab came back within the reattach distance.
+    pub torn: bool,
+    /// Where the press landed in the tab, in points from its top-left: where the pointer sits
+    /// in the tab the new window shows.
+    pub grab: [f32; 2],
+    /// The pointer in window points.
+    pub window_point: [f32; 2],
+    /// The pointer on the desktop in physical pixels. `None` headless.
     pub screen_point: Option<(i32, i32)>,
 }
 
@@ -223,6 +241,7 @@ struct Handlers<S> {
     hover: Option<Hover<S>>,
     reorder: Option<Commit<S, TabReorder>>,
     tear_out: Option<Commit<S, TabTearOut>>,
+    tear_move: Option<Commit<S, TabTearMove>>,
 }
 
 /// What every tab of one strip shares while it builds.
@@ -318,7 +337,7 @@ impl<'a, S: 'static> TabStrip<'a, S> {
             close_icon: None,
             busy: busy_ring,
             label: "Tabs".into(),
-            handlers: Handlers { select: None, close: None, double: None, hover: None, reorder: None, tear_out: None },
+            handlers: Handlers { select: None, close: None, double: None, hover: None, reorder: None, tear_out: None, tear_move: None },
         }
     }
     pub fn tabs(mut self, tabs: impl IntoIterator<Item = TabItem<'a, S>>) -> Self {
@@ -443,6 +462,11 @@ impl<'a, S: 'static> TabStrip<'a, S> {
     }
     pub fn on_tear_out(mut self, f: impl Fn(&mut S, TabTearOut, &mut Tx) + 'static) -> Self {
         self.handlers.tear_out = Some(Rc::new(f));
+        self
+    }
+    /// Each move of a torn-out tab, and its return to the strip, while the button is down.
+    pub fn on_tear_move(mut self, f: impl Fn(&mut S, TabTearMove, &mut Tx) + 'static) -> Self {
+        self.handlers.tear_move = Some(Rc::new(f));
         self
     }
 

@@ -21,9 +21,10 @@ pub struct TabDragState {
     lift_pitch: f32,
     /// Where the press landed in the tab, in its own points.
     grab: [f32; 2],
-    /// The lifted tab's layout rect in window points and on the desktop, reported while it's torn out.
+    /// The lifted tab's layout rect in window points, reported while it's torn out.
     rect: Option<[f32; 4]>,
-    screen: Option<[f32; 4]>,
+    /// The torn-out tab shows in a window of its own now ([TabDragState::hand_off]).
+    handed_off: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -91,7 +92,7 @@ pub(super) enum Release {
     /// A press that never became a drag.
     Click,
     Reorder { from: usize, to: usize },
-    TearOut { from: usize, offset: [f32; 2], window: Option<[f32; 2]>, screen: Option<[f32; 2]> },
+    TearOut { from: usize, offset: [f32; 2] },
 }
 
 impl TabDragState {
@@ -117,7 +118,16 @@ impl TabDragState {
     pub fn cancel(&mut self) {
         self.phase = TabDragPhase::Idle;
         self.rect = None;
-        self.screen = None;
+        self.handed_off = false;
+    }
+    /// The torn-out tab now shows in a window of its own that follows the pointer (on_tear_move):
+    /// the strip stops drawing it until the gesture ends, or until it docks back into the strip.
+    pub fn hand_off(&mut self) {
+        self.handed_off = self.torn_out();
+    }
+    /// Whether the torn-out tab shows in a window of its own ([Self::hand_off]).
+    pub fn handed_off(&self) -> bool {
+        self.handed_off
     }
 
     pub(super) fn set_hovered(&mut self, id: &str, inside: bool) {
@@ -138,8 +148,10 @@ impl TabDragState {
     pub(super) fn lifted_rect(&self) -> Option<[f32; 4]> {
         self.rect
     }
-    pub(super) fn report_screen(&mut self, rect: [f32; 4]) {
-        self.screen = Some(rect);
+
+    /// Where the press landed in the tab, in its own points.
+    pub(super) fn grab(&self) -> [f32; 2] {
+        self.grab
     }
 
     pub(super) fn press(&mut self, lane: &Lane, grab: [f32; 2]) {
@@ -172,16 +184,17 @@ impl TabDragState {
         let delta = along.clamp(min.min(0.0), max.max(0.0));
         let to = (lane.index as f32 + (delta / pitch).round()).max(0.0) as usize;
         self.rect = None;
-        self.screen = None;
+        self.handed_off = false;
         self.phase = TabDragPhase::Dragging(TabDragMode::Reorder { from: lane.index, to, delta, pitch, pinned: lane.pinned });
         true
     }
 
     /// The button came up, `cancelled` by Escape or a lost window, `on_tab` with the pointer
     /// still over the pressed tab (a click follows the release then).
-    pub(super) fn release(&mut self, cancelled: bool, on_tab: bool, zoom: f32) -> Release {
+    pub(super) fn release(&mut self, cancelled: bool, on_tab: bool) -> Release {
         let phase = std::mem::take(&mut self.phase);
-        let (rect, screen) = (self.rect.take(), self.screen.take());
+        self.rect = None;
+        self.handed_off = false;
         match phase {
             TabDragPhase::Pressed { .. } => Release::Click,
             TabDragPhase::Dragging(TabDragMode::Reorder { from, to, .. }) => {
@@ -197,9 +210,7 @@ impl TabDragState {
                 if cancelled {
                     return Release::None;
                 }
-                // The pointer: the tab's place in layout, the grab inside it, and the travel.
-                let at = |r: [f32; 4], z: f32| [r[0] + self.grab[0] * z + offset[0] * z, r[1] + self.grab[1] * z + offset[1] * z];
-                Release::TearOut { from, offset, window: rect.map(|r| at(r, zoom)), screen: screen.map(|r| at(r, zoom)) }
+                Release::TearOut { from, offset }
             }
             _ => Release::None,
         }

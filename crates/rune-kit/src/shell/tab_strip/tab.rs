@@ -4,7 +4,7 @@
 use rune::{Anim, Beat, Color, Drag, Easing, El, MotionIntent, Phase, PointerButton, Sequence, SpringPair, Transition, Tx, col, el, icon, row, text};
 
 use super::drag::{Lane, Release};
-use super::{Strip, TabDensity, TabItem, TabItemStatus, TabReorder, TabTearOut};
+use super::{Strip, TabDensity, TabItem, TabItemStatus, TabReorder, TabTearMove, TabTearOut};
 use crate::{ControlSize, IconButton, IconButtonVariant, Kit};
 
 /// The pill's corner radius (`rounded-[6px]`).
@@ -145,7 +145,7 @@ pub(super) fn build<S: 'static>(item: TabItem<'_, S>, at: Place, st: &Strip<S>, 
     }
     // Lifted off the strip: a touch larger, floating. The one bounce in the strip.
     let lift = |e: El| k.elevate(e.radius(RADIUS).scale(1.03).scale_motion(rune_motion::motion::MORPH).motion_intent(MotionIntent::OVERSHOOT), &k.elevation.floating);
-    let ghost = (torn && st.layered).then(|| {
+    let ghost = (torn && st.layered && !st.drag.handed_off()).then(|| {
         let w = at.width.or(st.drag.lifted_rect().map(|r| r[2] / st.zoom)).unwrap_or(224.0);
         let float = el().key(format!("{}-ghost", st.list_key)).size(w, h).child(pill.clone()).a11y_hidden();
         // Over the tab's own place, then wherever the pointer takes it.
@@ -156,15 +156,14 @@ pub(super) fn build<S: 'static>(item: TabItem<'_, S>, at: Place, st: &Strip<S>, 
     slot = slot.child(if ghost.is_some() { el().key("pill").w_full().h(h).motion(rune::Spring::NONE) } else { pill });
     if let Some(access) = st.access.filter(|_| torn) {
         // The pill's place, under a key no other strip uses: the floating copy's anchor, and,
-        // mounted as the tab tears out, where it reports its place for the drop point.
+        // mounted as the tab tears out, where it reports its width for the copy.
         let place = el().key(format!("{}-anchor", st.list_key)).pin(Some(0.0), Some(before), Some(0.0), None).h(h).a11y_hidden();
         slot = slot.child(
             place
                 .on_layout_tx(move |s: &mut S, r, tx: &mut Tx| {
                     access(s).report_rect(r);
                     tx.live_only();
-                })
-                .on_screen_layout(move |s: &mut S, r| access(s).report_screen(r)),
+                }),
         );
     }
     if let Some(prefix) = &st.matched {
@@ -174,7 +173,10 @@ pub(super) fn build<S: 'static>(item: TabItem<'_, S>, at: Place, st: &Strip<S>, 
         // It follows the pointer exactly, over its neighbours.
         slot = slot.raise().offset_motion(Anim::INSTANT);
     }
-    if ghost.is_some() {
+    if torn && st.drag.handed_off() {
+        // Its own window shows it now, under the pointer: the strip only keeps the gesture.
+        slot = slot.opacity(0.0).opacity_motion(rune::Spring::NONE).motion_intent(MotionIntent::CUT);
+    } else if ghost.is_some() {
         // The copy flies; the tab itself waits unseen in its place.
         slot = slot.opacity(0.0).opacity_motion(rune::Spring::NONE).offset(0.0, 0.0).motion_intent(MotionIntent::CUT);
     } else if torn {
@@ -362,7 +364,7 @@ fn handlers<S: 'static>(mut slot: El, id: &str, at: &Place, closable: bool, st: 
     }
     let Some(access) = access else { return slot };
 
-    let (id, select, reorder, tear) = (id.to_owned(), h.select.clone(), h.reorder.clone(), h.tear_out.clone());
+    let (id, select, reorder, tear, tear_move) = (id.to_owned(), h.select.clone(), h.reorder.clone(), h.tear_out.clone(), h.tear_move.clone());
     slot.on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| {
         if tx.button() != PointerButton::Primary {
             return;
@@ -378,15 +380,21 @@ fn handlers<S: 'static>(mut slot: El, id: &str, at: &Place, closable: bool, st: 
             Phase::Move => {
                 let (dx, dy) = (d.dx / zoom, d.dy / zoom);
                 let (along, across) = if vertical { (dy, dx) } else { (dx, dy) };
+                let was_torn = access(s).torn_out();
                 if access(s).follow(&lane, along, across, [dx, dy]) {
                     // The tabs it passes spring aside; it follows the pointer exactly.
                     tx.animated();
+                }
+                let torn = access(s).torn_out();
+                if let Some(f) = tear_move.as_ref().filter(|_| torn || was_torn) {
+                    let grab = access(s).grab();
+                    f(s, TabTearMove { id: id.clone(), index: lane.index, torn, grab, window_point: d.window_point(), screen_point: d.screen_point() }, tx);
                 }
             }
             Phase::Up => {
                 tx.animated();
                 let on_tab = (0.0..=d.w).contains(&d.x) && (0.0..=d.h).contains(&d.y);
-                match access(s).release(d.cancelled(), on_tab, zoom) {
+                match access(s).release(d.cancelled(), on_tab) {
                     // A press already selected the tab; its click needn't again.
                     Release::Click => access(s).suppress_click = select_early && on_tab,
                     Release::Reorder { from, to } => {
@@ -395,10 +403,9 @@ fn handlers<S: 'static>(mut slot: El, id: &str, at: &Place, closable: bool, st: 
                         }
                         access(s).phase = super::TabDragPhase::Idle;
                     }
-                    Release::TearOut { from, offset, window, screen } => {
+                    Release::TearOut { from, offset } => {
                         if let Some(f) = &tear {
-                            let screen_point = screen.map(|[x, y]| (x.round() as i32, y.round() as i32));
-                            f(s, TabTearOut { id: id.clone(), index: from, offset, window_point: window, screen_point }, tx);
+                            f(s, TabTearOut { id: id.clone(), index: from, offset, window_point: Some(d.window_point()), screen_point: d.screen_point() }, tx);
                         }
                     }
                     Release::None => {}
