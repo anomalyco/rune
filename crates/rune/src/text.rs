@@ -49,7 +49,7 @@ mod glyph_cache;
 mod glyph_emit;
 mod hash;
 mod hidden_axes;
-mod icon;
+pub(crate) mod icon;
 mod layout_cache;
 mod macos;
 pub use macos::smoothing::ApplePipeline;
@@ -83,7 +83,7 @@ use hidden_axes::hidden_axes;
 use layout_cache::{Cache, Entry};
 #[cfg(test)]
 use layout_cache::STALE_BYTES;
-pub use icon::{Icon, icon_coverage};
+pub use icon::{Icon, icon_coverage, set_icon_swap};
 use icon::rasterize_icon;
 use trak::{Trak, Traks, font_trak};
 
@@ -878,6 +878,7 @@ impl TextSystem {
 
     /// The atlas quad for `icon` at `px` device pixels square, top-left at `origin`.
     pub fn icon_quad(&mut self, icon: &'static Icon, px: u32, origin: [f32; 2]) -> Option<GlyphQuad> {
+        let icon = icon::swapped(icon);
         let key = (icon as *const Icon as usize, px);
         let entry = match self.atlas.icons.get(&key) {
             Some(&e) => {

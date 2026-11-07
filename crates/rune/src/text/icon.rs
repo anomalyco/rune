@@ -17,6 +17,29 @@ pub struct Icon {
     pub body: &'static str,
 }
 
+/// What draws in place of each icon: an app's alternative icon set (`set_icon_swap`).
+type Swap = fn(&Icon) -> Option<&'static Icon>;
+
+static SWAP: std::sync::RwLock<Option<Swap>> = std::sync::RwLock::new(None);
+
+/// Draws each icon `swap` gives another for as that one, and every icon as itself with `None`:
+/// an alternative icon set an app's setting turns on, such as Desktop's New icons. Every window
+/// draws its next frame with it; an icon keeps its element's size either way.
+pub fn set_icon_swap(swap: Option<Swap>) {
+    *SWAP.write().unwrap_or_else(std::sync::PoisonError::into_inner) = swap;
+}
+
+/// `icon`, or what the icon swap draws in its place.
+pub(crate) fn swapped(icon: &'static Icon) -> &'static Icon {
+    let swap = *SWAP.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+    swap.and_then(|f| f(icon)).unwrap_or(icon)
+}
+
+/// Which icon swap is on, for a cached layer's paint state.
+pub(crate) fn swap_id() -> usize {
+    SWAP.read().unwrap_or_else(std::sync::PoisonError::into_inner).map_or(0, |f| f as usize)
+}
+
 fn attr<'a>(el: &'a str, name: &str) -> Option<&'a str> {
     let mut rest = el;
     loop {

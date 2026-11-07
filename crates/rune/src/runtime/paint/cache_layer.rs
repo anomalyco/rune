@@ -56,7 +56,7 @@ impl<S: 'static> Runtime<S> {
                 let c = ring.color;
                 [ring.width, ring.offset, c.r, c.g, c.b, c.a].map(f32::to_bits).hash(&mut h);
             }
-            (self.srgb_blend, self.text.smoothing, self.text.families()).hash(&mut h);
+            (self.srgb_blend, self.text.smoothing, self.text.families(), crate::text::icon::swap_id()).hash(&mut h);
             h.write_u32(s.to_bits());
             sel_ranges.hash(&mut h);
             let mut scroll_mix = 0u64;
