@@ -85,7 +85,7 @@ pub(super) fn build<S: 'static>(item: TabItem<'_, S>, at: Place, st: &Strip<S>, 
     // A busy icon-only tab spins in its avatar's place.
     let lead = match icon_only && busy {
         true => row().key("avatar").size(16.0, 16.0),
-        false => lead(item.avatar, item.icon, at.active, icon_only && dotted, composite, status, k),
+        false => lead(item.avatar, item.icon, at.active, icon_only && dotted, status, k),
     };
     let title = (!icon_only).then(|| title(&item.title, item.editor, &at, vertical, emphasized, k));
     pill = match (item.subtitle, title) {
@@ -191,21 +191,22 @@ pub(super) fn build<S: 'static>(item: TabItem<'_, S>, at: Place, st: &Strip<S>, 
 }
 
 /// The 16 point avatar, icon or empty mark, with an icon-only tab's status badge on its corner.
-fn lead(avatar: Option<El>, glyph: Option<&'static rune::Icon>, active: bool, badge: bool, ground: [Color; 2], status: Option<TabItemStatus>, k: &Kit) -> El {
+fn lead(avatar: Option<El>, glyph: Option<&'static rune::Icon>, active: bool, badge: bool, status: Option<TabItemStatus>, k: &Kit) -> El {
     let c = &k.c;
     let mark = match (avatar, glyph) {
         (Some(a), _) => a,
         (None, Some(i)) => icon(i, 16.0).key("icon").color(if active { c.icon_base } else { c.icon_muted }),
         (None, None) => el().size(16.0, 16.0).radius(3.0).border(1.0, c.border_muted),
     };
-    let mut slot = row().key("avatar").size(16.0, 16.0).center().child(mark).a11y_hidden();
-    if badge {
-        // The dot sits on the avatar's corner in a cutout of the tab's own colour.
-        let ring = BADGE + 3.0;
-        let ring_el = row().key("badge").absolute(16.0 - ring / 2.0, -ring / 2.0).size(ring, ring).radius(ring / 2.0).center();
-        slot = slot.child(grounded(ring_el, ground, ring / 2.0).child(el().size(BADGE, BADGE).radius(BADGE / 2.0).fill(dot_color(status, k))));
+    if !badge {
+        return row().key("avatar").size(16.0, 16.0).center().child(mark).a11y_hidden();
     }
-    slot
+    // The dot sits on the avatar's corner, which is cut clear 4.5 around it (`tab-nav.css`:
+    // `radial-gradient(circle 4.5px at 100% 0, transparent 4px, black 5px)`).
+    let mark = row().key("mark").size(16.0, 16.0).center().cutout_circle([16.0, 0.0], 4.0, 5.0).child(mark);
+    row().key("avatar").size(16.0, 16.0).center().child(mark).a11y_hidden().child(
+        el().key("badge").absolute(16.0 - BADGE / 2.0, -BADGE / 2.0).size(BADGE, BADGE).radius(BADGE / 2.0).fill(dot_color(status, k)),
+    )
 }
 
 /// The title: clipped, never ellipsised, fading out before the status and close slot.
