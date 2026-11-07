@@ -188,6 +188,17 @@ pub fn measure_with(
     })
 }
 
+/// CSS's min-content and max-content widths of `text` (with `spans`) in `style`, in points and
+/// unrounded, as a browser's automatic table layout reads a cell: its widest unbreakable run,
+/// and its width on one line, neither counting the spaces that end a line.
+pub fn content_widths(text: &str, spans: &[Span], style: TextStyle) -> (f32, f32) {
+    with_text(|t| {
+        let min = t.layout_rich_with(text, spans, style, 1.0, Some(0.0), RichLayoutOptions::default()).width();
+        let max = t.layout_rich_with(text, spans, style, 1.0, None, RichLayoutOptions::default()).width();
+        (min, max)
+    })
+}
+
 /// The advance in points of `text` set on one line in `style`, unrounded: how much wider a row
 /// of [`El::advance_in`](crate::El::advance_in) cells gets for it, to within a device pixel.
 pub fn advance(text: &str, style: TextStyle) -> f32 {

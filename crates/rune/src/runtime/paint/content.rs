@@ -317,6 +317,47 @@ impl<S: 'static> Runtime<S> {
                     self.instances.push(inst);
                 }
             }
+            let mut bare = Vec::new();
+            crate::text::bare_icons(layout, &spec.pills, s, d_origin, &mut bare);
+            for (k, at, px) in bare {
+                let pill = &spec.pills[k];
+                let Some(b) = pill.bare.as_deref() else { continue };
+                let at = [
+                    rest_origin[0] + (at[0] - d_origin[0]) * tk + glide[0],
+                    rest_origin[1] + (at[1] - d_origin[1]) * tk + glide[1],
+                ];
+                let drawn = px * tk;
+                // An image fits the square, keeping its shape; a glyph takes the text's colour.
+                if let Some(pixels) = &b.image
+                    && let (w, h) = pixels.size()
+                    && w > 0
+                    && h > 0
+                {
+                    let (w, h) = (w as f32, h as f32);
+                    let k = drawn / w.max(h);
+                    let rect = [at[0] + (drawn - w * k) * 0.5, at[1] + (drawn - h * k) * 0.5, w * k, h * k];
+                    if let Some(image) = self.images.place(pixels, [rect[2], rect[3]]) {
+                        self.instances.push(Instance {
+                            rect,
+                            radii: [(b.radius * s * tk).min(rect[2].min(rect[3]) * 0.5); 4],
+                            fill: [0.0, 0.0, 0.0, o],
+                            border: [0.0; 4],
+                            params: [image.page as f32, KIND_IMAGE, image.premultiplied as u8 as f32, 1.0],
+                            uv: image.rect.map(|v| v as f32),
+                            clip,
+                            fade: crate::render::pack_fade(fade, clip, clip),
+                        });
+                    }
+                    continue;
+                }
+                let Some(icon) = pill.icon else { continue };
+                let px_r = (px * raster).round().max(1.0) as u32;
+                if let Some(q) = self.text.icon_quad(icon, px_r, at) {
+                    let inst = icon_inst(&q, at, drawn, 0.0, premul(pill.fg.unwrap_or(color), o, srgb), clip, fade);
+                    if self.paint_rank.is_some() && inst.uv[2] > 0.0 { self.icon_aprons.push(apron_key(&inst)); }
+                    self.instances.push(inst);
+                }
+            }
             if spec.selectable && let Some((a, b)) = selectable::range_in(sel_ranges, i) {
                 let (a, b) = n.elided.map_or((a, b), |e| e.range(a, b));
                 selectable::push_selection(&mut self.instances, layout, a, b, origin, tk, premul(spec.selection, o, srgb), s, clip, fade);

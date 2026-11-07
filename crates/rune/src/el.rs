@@ -381,6 +381,7 @@ pub(crate) struct PasteFn {
 pub(crate) type PillIconFn = Rc<dyn Fn(&str) -> Option<&'static crate::Icon>>;
 /// A pill's look by its id; see [`El::pill_style`].
 pub(crate) type PillStyleFn = Rc<dyn Fn(&str) -> PillStyle>;
+pub use pills::InlineIcon;
 
 /// How one [`Mark::Pill`](crate::Mark::Pill) chip looks: any part left unset falls back to
 /// [`El::pill_colors`] and [`El::pill_icon`], then the field's defaults. Build one with
@@ -664,6 +665,7 @@ pub fn text(content: impl Into<String>) -> El {
         redacted: false,
         secure_revealed: false,
         wrap_anywhere: false,
+        exact_lines: false,
         shape: None,
     }));
     e
