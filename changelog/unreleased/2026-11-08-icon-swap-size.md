@@ -1,0 +1,1 @@
+- **`set_icon_swap_size` sizes the icons an icon swap replaces.** An app's alternative icon set drawn on another grid, such as Desktop's New icons on 16 pt, gives its icons the element size it asks for (`icon(i, 14.0)` takes 16 pt) while icons it leaves alone keep theirs. Turning the swap or its size on or off builds every `memo` again, so icons in cached subtrees resize too.

@@ -703,8 +703,10 @@ pub(crate) fn help_words(help: &str) -> std::borrow::Cow<'_, str> {
     if help.contains(HELP_KEY) { help.replace(HELP_KEY, " ").into() } else { help.into() }
 }
 
-/// An SVG icon from a catalog, `size` points square, tinted with `.color()`.
+/// An SVG icon from a catalog, `size` points square (or what [`crate::text::set_icon_swap_size`]
+/// gives a swapped icon), tinted with `.color()`.
 pub fn icon(i: &'static Icon, size: f32) -> El {
+    let size = crate::text::icon::swapped_size(i, size);
     let mut e = base(FlexDirection::Row).size(size, size);
     e.role = "icon";
     e.vis.cold_mut().icon = Some((i, Color::WHITE));

@@ -24,15 +24,41 @@ static SWAP: std::sync::RwLock<Option<Swap>> = std::sync::RwLock::new(None);
 
 /// Draws each icon `swap` gives another for as that one, and every icon as itself with `None`:
 /// an alternative icon set an app's setting turns on, such as Desktop's New icons. Every window
-/// draws its next frame with it; an icon keeps its element's size either way.
+/// draws its next frame with it; an icon keeps its element's size unless [set_icon_swap_size]
+/// gives swapped ones another.
 pub fn set_icon_swap(swap: Option<Swap>) {
     *SWAP.write().unwrap_or_else(std::sync::PoisonError::into_inner) = swap;
+}
+
+/// The size a swapped icon's element takes for the size it's asked for (`set_icon_swap_size`).
+type SwapSize = fn(f32) -> f32;
+
+static SWAP_SIZE: std::sync::RwLock<Option<SwapSize>> = std::sync::RwLock::new(None);
+
+/// Sizes the elements of the icons the swap draws others for: `size` takes the points asked for
+/// and gives the element's, such as Desktop's New icons, drawn on a 16 pt grid, which stay 16 pt
+/// where the icons they replace shrink to 14. Elements made after the call take it, and views
+/// build again (every `memo` included) once it or the swap changes. Icons the swap leaves alone
+/// keep their size.
+pub fn set_icon_swap_size(size: Option<SwapSize>) {
+    *SWAP_SIZE.write().unwrap_or_else(std::sync::PoisonError::into_inner) = size;
 }
 
 /// `icon`, or what the icon swap draws in its place.
 pub(crate) fn swapped(icon: &'static Icon) -> &'static Icon {
     let swap = *SWAP.read().unwrap_or_else(std::sync::PoisonError::into_inner);
     swap.and_then(|f| f(icon)).unwrap_or(icon)
+}
+
+/// The points an element for `icon` takes when asked for `size` (`set_icon_swap_size`).
+pub(crate) fn swapped_size(icon: &'static Icon, size: f32) -> f32 {
+    let Some(grow) = *SWAP_SIZE.read().unwrap_or_else(std::sync::PoisonError::into_inner) else { return size };
+    if std::ptr::eq(swapped(icon), icon) { size } else { grow(size) }
+}
+
+/// Which icon swap and swap size are on, for memos to build again when either changes.
+pub(crate) fn swap_state() -> (usize, usize) {
+    (swap_id(), SWAP_SIZE.read().unwrap_or_else(std::sync::PoisonError::into_inner).map_or(0, |f| f as usize))
 }
 
 /// Which icon swap is on, for a cached layer's paint state.
