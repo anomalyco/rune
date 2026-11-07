@@ -77,6 +77,8 @@ pub struct SurfaceRenderer {
     staging: Option<rune_staging::Staging>,
     #[cfg(target_os = "macos")]
     importer: Option<macos::Importer>,
+    #[cfg(target_os = "windows")]
+    shared: Option<windows::Importer>,
 }
 impl SurfaceRenderer {
     #[cfg(target_arch = "wasm32")]
@@ -163,6 +165,8 @@ impl SurfaceRenderer {
             staging: None,
             #[cfg(target_os = "macos")]
             importer: None,
+            #[cfg(target_os = "windows")]
+            shared: None,
         }
     }
 
@@ -373,6 +377,13 @@ impl SurfaceRenderer {
                 objc2_video::rc::autoreleasepool(|_| {
                     self.importer.as_ref().unwrap().import(b, frame.format, frame.size)
                 })?
+            }
+            #[cfg(target_os = "windows")]
+            Source::Shared(t) => {
+                if self.shared.is_none() {
+                    self.shared = Some(windows::Importer::new(device)?);
+                }
+                self.shared.as_mut().unwrap().import(queue, t)?
             }
         };
         Ok(Imported { frame, textures })
