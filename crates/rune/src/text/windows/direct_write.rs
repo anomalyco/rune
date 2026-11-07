@@ -93,7 +93,13 @@ impl DirectWrite {
             let analysis = self.factory2.CreateGlyphRunAnalysis(&run, Some(&transform), mode, DWRITE_MEASURING_MODE_NATURAL,
                 DWRITE_GRID_FIT_MODE_ENABLED, DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE, 0.0, 0.0);
             analysis.and_then(|a| {
-                let bounds = a.GetAlphaTextureBounds(DWRITE_TEXTURE_ALIASED_1x1)?;
+                let mut bounds = a.GetAlphaTextureBounds(DWRITE_TEXTURE_ALIASED_1x1)?;
+                // Smoothed vertically, a glyph shifted down part of a pixel inks one more row.
+                // Its unshifted mask keeps that row, empty, so a gliding glyph's quad keeps one
+                // size across its y phases and moves rather than growing and shrinking.
+                if job.shift_y == 0.0 && mode == DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC && bounds.bottom > bounds.top {
+                    bounds.bottom += 1;
+                }
                 let (w, h) = ((bounds.right - bounds.left).max(0) as u32, (bounds.bottom - bounds.top).max(0) as u32);
                 self.scratch.clear();
                 self.scratch.resize((w * h) as usize, 0);
