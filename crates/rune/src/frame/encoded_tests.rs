@@ -50,9 +50,25 @@ fn a_drawn_frame_splits_its_work_into_update_and_encode() {
     assert_eq!(log[0].update_ms(), Some(2.0));
     assert!((log[0].encode_ms().unwrap() - 3.0).abs() < 1e-9, "{:?}", log[0].encode_ms());
     assert_eq!(log[1].encode_ms(), Some(0.0));
+    assert_eq!(log[0].started(), Some(started), "a drawn frame says when it started");
     for f in &log[2..] {
-        assert_eq!((f.update_ms(), f.encode_ms()), (None, None), "{:?} frames did no work to time", f.outcome());
+        assert_eq!((f.update_ms(), f.encode_ms(), f.started()), (None, None, None), "{:?} frames did no work to time", f.outcome());
     }
+}
+
+#[test]
+fn reports_carry_the_display_refresh_the_host_last_set() {
+    let (log, hook) = logging();
+    let mut reports = FrameReports::<()>::new(Some(hook), Some("main"));
+    assert!(reports.wanted());
+    reports.skipped();
+    reports.set_refresh(Some(120.0));
+    reports.unchanged(None);
+    reports.drawn(reports.stamp(), None, Instant::now(), 0.0);
+    reports.set_refresh(Some(0.0));
+    reports.skipped();
+    let hz: Vec<_> = log.borrow().iter().map(FrameEncoded::refresh_hz).collect();
+    assert_eq!(hz, vec![None, Some(120.0), Some(120.0), None], "a rate that isn't one reads as unknown");
 }
 
 #[test]
@@ -62,6 +78,8 @@ fn without_a_hook_nothing_is_timed_or_counted() {
     reports.drawn(None, None, Instant::now(), 1.0);
     reports.unchanged(None);
     reports.skipped();
+    reports.set_refresh(Some(60.0));
+    assert!(!reports.wanted());
     assert!(reports.0.is_none());
 }
 

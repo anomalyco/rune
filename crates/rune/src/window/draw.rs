@@ -137,6 +137,7 @@ impl<S: 'static> Host<S> {
         }
         #[cfg(target_os = "macos")]
         { self.rt.native_materials = l.native.materials.native(); }
+        if self.frame_reports.wanted() { self.frame_reports.set_refresh(display_hz(l)); }
         // Only a timer woke the resting window: build the frame first, and take no drawable
         // when it draws what's on screen.
         let quiet = std::mem::take(&mut l.quiet) && !hidden && !live_resize && l.presented.is_some() && self.comp.is_none()
@@ -367,4 +368,11 @@ impl<S: 'static> Host<S> {
             self.take_frame_request(self.frame_secs(frame_time) - shown, true);
         }
     }
+}
+
+/// The window's display refresh: its display link's on macOS, else the monitor's.
+fn display_hz(l: &Win) -> Option<f64> {
+    #[cfg(target_os = "macos")]
+    if let Some(pacing) = &l.native.pacing { return Some(pacing.refresh_hz()); }
+    l.window.current_monitor().and_then(|m| m.refresh_rate_millihertz()).map(|hz| hz as f64 / 1000.0)
 }
