@@ -53,6 +53,7 @@ mod icon;
 mod layout_cache;
 mod macos;
 pub use macos::smoothing::ApplePipeline;
+mod windows;
 mod measure;
 mod pill_chips;
 mod rich_layout;
@@ -93,8 +94,8 @@ pub(crate) use decorations::PaintedDeco;
 pub use span::{Ink, Link, LinkPaint, Span, TextHighlight};
 pub(crate) use span::{BareIcon, PillChip, PillMetrics, flatten_spans};
 
-/// Coverage exponents for black and for white text with font smoothing off, measured against
-/// Chromium's grayscale text on Windows (the same Inter and IBM Plex Mono, light and dark).
+/// Coverage exponents for black and for white text with font smoothing off: the curve Skia's
+/// text gamma (sRGB, contrast 1) draws grayscale text with, for outlines rasterised elsewhere.
 const TEXT_GAMMA: [f32; 2] = [1.12, 0.45];
 
 use decorations::Decoration;
@@ -189,6 +190,8 @@ pub struct TextSystem {
     primary_axes: FxHashMap<(Family, u32, bool), Rc<[parley::FontVariation]>>,
     /// CoreGraphics' glyph pipeline for `smoothing`, and its per-ink state.
     apple: macos::smoothing::Smoothing,
+    /// DirectWrite for `FontSmoothing::DirectWrite`, and its per-ink state.
+    windows: windows::Rasterizer,
     pub(crate) glyph_cache: glyph_cache::GlyphCache,
     /// Device px `[x, y]` the next glyphs glide from their resting pixel ([`Self::set_glide`]).
     glide: [f32; 2],
@@ -314,6 +317,7 @@ impl TextSystem {
             primary_traks: Default::default(),
             primary_axes: Default::default(),
             apple: Default::default(),
+            windows: Default::default(),
             glyph_cache: Default::default(),
             glide: [0.0; 2],
         }
@@ -384,19 +388,31 @@ impl TextSystem {
     }
 
     /// The colours the next glyphs draw in (`spans` by `Ink`). On macOS they choose each
-    /// glyph's dilation, so glyphs in light and dark inks rasterize separately.
-    pub fn set_glyph_inks(&mut self, element: Color, spans: &[Span]) { self.apple.set_inks(element, spans); }
+    /// glyph's dilation and on Windows its gamma table, so glyphs in light and dark inks
+    /// rasterize separately.
+    pub fn set_glyph_inks(&mut self, element: Color, spans: &[Span]) {
+        self.apple.set_inks(element, spans);
+        self.windows.set_inks(element, spans);
+    }
+
+    /// Whether glyphs rasterise with DirectWrite: `FontSmoothing::DirectWrite` where it exists.
+    pub(crate) fn direct_write(&mut self) -> bool {
+        self.smoothing == FontSmoothing::DirectWrite && self.windows.available()
+    }
 
     /// How glyphs rasterise and place ([`FontSmoothing`]).
     pub fn font_smoothing(&self) -> FontSmoothing { self.smoothing }
 
     /// The exponent a glyph's coverage is raised to when drawn in premultiplied `fill`. With
-    /// smoothing off (the default off macOS) it stands in for the text gamma a browser's
+    /// smoothing off (the default on Linux and the web) it stands in for the text gamma a browser's
     /// grayscale antialiasing applies there: light text on a dark page draws heavier and dark
     /// text on a light one a little lighter than coverage blended as is, keyed by the text's
-    /// luminance. With smoothing on, CoreText's dilation does that job and coverage is drawn as is.
+    /// luminance. With smoothing on, CoreText's dilation does that job, and with DirectWrite Skia's
+    /// gamma tables do; coverage is drawn as is.
     pub fn coverage_exponent(&self, fill: [f32; 4]) -> f32 {
-        if self.smoothing == FontSmoothing::On || fill[3] <= 0.0 {
+        // DirectWrite masks already carry Skia's gamma for their text's luminance.
+        let direct_write = self.smoothing == FontSmoothing::DirectWrite && cfg!(target_os = "windows");
+        if self.smoothing == FontSmoothing::On || direct_write || fill[3] <= 0.0 {
             return 1.0;
         }
         let luma = (0.2126 * fill[0] + 0.7152 * fill[1] + 0.0722 * fill[2]) / fill[3];

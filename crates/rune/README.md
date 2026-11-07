@@ -106,9 +106,16 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     plus font smoothing's outline dilation, a radius set by the ink's luminance and the device
     ppem (`text/macos/smoothing.rs`, `ApplePipeline::SMOOTHED`).
   - `Off`: what macOS browsers draw for `-webkit-font-smoothing: antialiased`, CoreText with font
-    smoothing off, and the default on every other platform (Linux, Windows, the web). Apple's
-    pipeline without the dilation (`ApplePipeline::UNSMOOTHED`); lighter than `On`.
-  Both work on every OS, since they are arithmetic on outlines. Blending is separate
+    smoothing off, and the default on Linux and the web. Apple's pipeline without the dilation
+    (`ApplePipeline::UNSMOOTHED`); lighter than `On`. Coverage takes an exponent keyed to the
+    ink's luminance, the curve of Skia's grayscale text gamma.
+  - `DirectWrite`, the default on Windows: Chromium's text there. DirectWrite rasterises each
+    glyph as Skia's `SkScalerContext_DW` asks it to (the rendering mode the `gasp` table picks,
+    grid fitting on, grayscale antialiasing, the face at the run's variation coordinates, read in
+    place from Parley's bytes), pens sit on Skia's quarter pixels, and Skia's gamma tables
+    (sRGB, contrast 1, eight luminance buckets) weigh each mask by its ink
+    (`text/windows/`). Off Windows it draws as `Off`.
+  `On` and `Off` work on every OS, since they are arithmetic on outlines. Blending is separate
   (`srgb_blend`).
   `cargo run -p rune --example coretext_compare [-- --smoothing on|off]` measures
   each mode against CoreText references (`tests/coretext/`, `scripts/coretext-reference.sh`). The
