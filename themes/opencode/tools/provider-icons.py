@@ -39,7 +39,7 @@ def main():
         if ident[0].isdigit():
             ident = "P" + ident
         idents.append((name, ident))
-        print(f'static {ident}: Icon = Icon {{ name: "{name}", view: {fmt_view(view)}, body: r#"{body}"# }};')
+        print(f'static {ident}: Icon = Icon {{ name: "{name}", view: {fmt_view(view)}, body: r##"{body}"## }};')
     print()
     print("/// Desktop's mark for provider `id`, if it ships one.")
     print("pub fn named(id: &str) -> Option<&'static Icon> {")
