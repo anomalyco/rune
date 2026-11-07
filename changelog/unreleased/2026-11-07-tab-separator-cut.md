@@ -1,0 +1,1 @@
+- **Tab separators come and go at once.** A `TabStrip` separator hides beside a hovered or active tab and shows again in the same frame, as OpenCode's `display: none` does, rather than fading over 0.15 s as the pointer crosses the strip.
