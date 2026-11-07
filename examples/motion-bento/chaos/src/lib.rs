@@ -6,11 +6,13 @@
 //! from the last one with its own springs, using the durations and bounces in [`look`].
 
 pub mod config;
+pub mod hud;
 pub mod look;
 pub mod meter;
 pub mod model;
 pub mod rng;
 pub mod schedule;
+pub mod stress;
 
 pub use config::Config;
 pub use meter::Meter;

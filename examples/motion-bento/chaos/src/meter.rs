@@ -15,6 +15,13 @@ struct Frame {
     work_ms: f32,
     /// NaN when the build can't split it out.
     build_ms: f32,
+    /// The show time and load the app tagged the frame with ([`Meter::tag`]).
+    show: f32,
+    load: u32,
+    /// CPU time since the frame before: this thread's, and the whole process's. Unlike the
+    /// spans above, a busy machine that preempts the app doesn't add to them.
+    cpu_ms: f32,
+    proc_ms: f32,
 }
 
 /// An interval longer than this is the window resting, not a slow frame.
@@ -33,6 +40,9 @@ pub struct Meter {
     /// Seconds since the meter started that bound what [`Meter::summary`] counts.
     window: Option<(f64, f64)>,
     extra: Vec<(String, String)>,
+    tag: (f32, u32),
+    /// Thread and process CPU seconds at the last frame.
+    cpu_last: (f64, f64),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -73,6 +83,24 @@ fn cpu_seconds() -> f64 {
     procwatch::snapshot().map_or(0.0, |s| s.cpu_s)
 }
 
+/// This thread's CPU seconds, and the process's (user and system), cheaply enough for every frame.
+fn cpu_now() -> (f64, f64) {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: both calls only write the struct they're given.
+    let thread = if unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) } == 0 { ts.tv_sec as f64 + ts.tv_nsec as f64 * 1e-9 } else { f64::NAN };
+    let mut ru = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    // SAFETY: as above.
+    let process = if unsafe { libc::getrusage(libc::RUSAGE_SELF, ru.as_mut_ptr()) } == 0 {
+        // SAFETY: getrusage filled it.
+        let ru = unsafe { ru.assume_init() };
+        let tv = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 * 1e-6;
+        tv(ru.ru_utime) + tv(ru.ru_stime)
+    } else {
+        f64::NAN
+    };
+    (thread, process)
+}
+
 impl Meter {
     pub fn new(framework: &str, refresh_hz: f64) -> Meter {
         let mut m = Meter {
@@ -87,6 +115,8 @@ impl Meter {
             resident_last: 0,
             window: None,
             extra: Vec::new(),
+            tag: (f32::NAN, 0),
+            cpu_last: cpu_now(),
         };
         m.sample_memory(0.0);
         m
@@ -141,9 +171,18 @@ impl Meter {
         self.push(start, work_ms, build_ms as f32);
     }
 
+    /// Tags the frames reported from here with the show time and load they drew.
+    pub fn tag(&mut self, show: f64, load: usize) {
+        self.tag = (show as f32, load as u32);
+    }
+
     fn push(&mut self, start: Instant, work_ms: f64, build_ms: f32) {
         let s = self.seconds_at(start);
-        self.frames.push(Frame { start: s, work_ms: work_ms as f32, build_ms });
+        let (show, load) = self.tag;
+        let cpu = cpu_now();
+        let (cpu_ms, proc_ms) = (((cpu.0 - self.cpu_last.0) * 1000.0) as f32, ((cpu.1 - self.cpu_last.1) * 1000.0) as f32);
+        self.cpu_last = cpu;
+        self.frames.push(Frame { start: s, work_ms: work_ms as f32, build_ms, show, load, cpu_ms, proc_ms });
         if s - self.footprint_at >= 0.5 {
             self.sample_memory(s);
         }
@@ -257,6 +296,21 @@ impl Meter {
             out.push_str(&format!(",\n  \"{k}\": \"{}\"", v.replace('\\', "\\\\").replace('"', "\\\"")));
         }
         out.push_str("\n}\n");
+        out
+    }
+
+    /// The last `n` frames' show time and build time (work where the build can't split it).
+    pub fn tail(&self, n: usize) -> impl Iterator<Item = (f32, f32)> + '_ {
+        self.frames[self.frames.len().saturating_sub(n)..].iter().map(|f| (f.show, if f.build_ms.is_nan() { f.work_ms } else { f.build_ms }))
+    }
+
+    /// Every frame as CSV, one line each: `show_s,load,build_ms,work_ms,start_s,cpu_ms,proc_ms`
+    /// (`cpu_ms` and `proc_ms` are the CPU time since the frame before, thread and process).
+    pub fn frames_csv(&self) -> String {
+        let mut out = String::from("show_s,load,build_ms,work_ms,start_s,cpu_ms,proc_ms\n");
+        for f in &self.frames {
+            out.push_str(&format!("{:.4},{},{:.4},{:.4},{:.4},{:.4},{:.4}\n", f.show, f.load, f.build_ms, f.work_ms, f.start, f.cpu_ms, f.proc_ms));
+        }
         out
     }
 
