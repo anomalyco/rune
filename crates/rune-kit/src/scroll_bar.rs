@@ -93,6 +93,8 @@ struct Track {
     /// Only the pointer over the element marked [`ScrollBar::scroll_bar_hover`] shows the bar,
     /// not the pointer over its own area.
     targeted: bool,
+    /// Only scrolling shows the bar; the pointer holds it up only over its shown thumb.
+    scroll_only: bool,
     /// How much further down than the viewport's top the track starts, and how far in from the
     /// viewport's end edge its strip ends: a thumb in a column's gutter under a sticky header.
     top: f32,
@@ -114,6 +116,7 @@ const KIT_TRACK: Track = Track {
     x: false,
     area_reveals: false,
     targeted: false,
+    scroll_only: false,
     top: 0.0,
     end: 0.0,
     hold: HOLD,
@@ -136,6 +139,7 @@ const SCROLL_VIEW_TRACK: Track = Track {
     x: false,
     area_reveals: true,
     targeted: false,
+    scroll_only: false,
     top: 0.0,
     end: 0.0,
     hold: Duration::from_millis(800),
@@ -160,12 +164,27 @@ const NATIVE_TRACK: Track = Track {
     x: false,
     area_reveals: true,
     targeted: false,
+    scroll_only: false,
     top: 0.0,
     end: 0.0,
     hold: Duration::ZERO,
     enter: Spring::NONE,
     leave: Spring::NONE,
     tint: Spring::NONE,
+};
+
+/// `@opencode/ui`'s MenuScroll (`menu-scroll.tsx`, `menu-scroll.css`), a menu's or dialog list's
+/// thumb: an 8 point strip on the end edge with a 4 point pill down it, 4 points in from the
+/// ends and 24 long at least, shown only while the list scrolls (and 800 ms after) or the thumb
+/// is held or under the pointer, fading over 200 ms.
+const MENU_SCROLL_TRACK: Track = Track {
+    strip: 8.0,
+    edge: 2.0,
+    inset: 4.0,
+    min_thumb: 24.0,
+    scroll_only: true,
+    tint: Spring::NONE,
+    ..SCROLL_VIEW_TRACK
 };
 
 impl Track {
@@ -208,6 +227,14 @@ impl ScrollBarStyle {
     /// `border_strong`.
     pub fn native(thumb: Color, thumb_hover: Color) -> Self {
         Self { thumb, thumb_hover, width: 4.0, hover_width: 4.0, track: NATIVE_TRACK }
+    }
+
+    /// `@opencode/ui`'s MenuScroll thumb, for menus, popovers and dialog lists such as the
+    /// command palette: a 4 point `thumb` pill on an 8 point strip, shown only while the list
+    /// scrolls (and 800 ms after) or the thumb is held or under the pointer, and `thumb_hover`
+    /// under the pointer or held. Pass `border_muted` and `border_strong`.
+    pub fn menu_scroll(thumb: Color, thumb_hover: Color) -> Self {
+        Self { thumb, thumb_hover, width: 4.0, hover_width: 4.0, track: MENU_SCROLL_TRACK }
     }
 
     /// A [`Self::native`] bar over the viewport's own end edge, in room its content leaves there,
@@ -528,7 +555,9 @@ impl Bar {
         // A bar its hover target reveals shows here only under the pointer on its thumb, which
         // belongs to the target as a ScrollView's thumb mounted in the target's track does.
         let near = shows
-            && p.is_some_and(|(across, along)| match (t.targeted, t.area_reveals) {
+            && p.is_some_and(|(across, along)| match (t.targeted || t.scroll_only, t.area_reveals) {
+                // A scroll-only thumb holds while the pointer is on it as it shows.
+                _ if t.scroll_only => on_thumb((across, along)) && (self.near.get() || self.last_now.get() < self.pulse_until.get()),
                 (true, _) => on_thumb((across, along)),
                 (false, true) => (0.0..=w + gutter).contains(&across) && (0.0..=h_all).contains(&along),
                 (false, false) => across >= bar_end - REVEAL.max(track) && across <= bar_end && (lo..=lo + len).contains(&along),
