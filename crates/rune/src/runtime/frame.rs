@@ -608,11 +608,7 @@ impl<S: 'static> Runtime<S> {
         // What the commit or a `Tx::select_text` changed is heard next frame.
         let changes = self.selection_changes();
         self.queue.extend(changes);
-        // Hit tests read last frame's drawn rects and clips by index. When a commit moved the
-        // indices, the build re-evaluates hover from fresh geometry instead.
-        if self.built || self.nodes.iter().map(|n| n.id).eq(self.built_ids.iter().copied()) {
-            self.update_interaction(None);
-        }
+        self.update_interaction(None);
         #[cfg(test)]
         if let Some(publish) = tests::MID_FRAME.with(|hook| hook.borrow_mut().take()) { publish(); }
         // Poll and input can publish after the initial wake read without committing. Sample
