@@ -128,10 +128,10 @@ impl Native {
                             if let Some(first) = (root.numberOfItems() > 0).then(|| root.itemAtIndex(0)).flatten().and_then(|i| i.submenu()) { first }
                             else { self.add_top(&root, "Application") }
                         }
-                        Location::Named(title) => {
+                        Location::Named(name) => {
                             let existing = (0..root.numberOfItems()).filter_map(|i| root.itemAtIndex(i))
-                                .find(|i| i.title().to_string() == *title).and_then(|i| i.submenu());
-                            existing.unwrap_or_else(|| self.add_top(&root, title))
+                                .find(|i| super::default_macos::name(i) == *name).and_then(|i| i.submenu());
+                            existing.unwrap_or_else(|| self.add_top(&root, name))
                         }
                         Location::Dock => unreachable!(),
                     }
@@ -152,8 +152,8 @@ impl Native {
         Ok(())
         }
     }
-    fn add_top(&mut self, root: &Retained<NSMenu>, title: &str) -> Retained<NSMenu> {
-        let (top, menu) = super::default_macos::add_top(self.mtm, root, title);
+    fn add_top(&mut self, root: &Retained<NSMenu>, name: &str) -> Retained<NSMenu> {
+        let (top, menu) = super::default_macos::add_top(self.mtm, root, name);
         self.tops.push((root.clone(), top));
         menu
     }

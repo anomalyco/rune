@@ -1,7 +1,14 @@
 //! Main-thread AppKit menu assertions, without opening a window or running an event loop.
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 #[path = "../src/native_menu/default_macos.rs"]
 mod default_macos;
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+#[path = "../src/labels.rs"]
+mod labels;
+#[cfg(target_os = "macos")]
+use labels::Label;
 #[cfg(target_os = "macos")]
 #[allow(dead_code)]
 #[path = "../src/native_menu/standard.rs"]

@@ -730,7 +730,7 @@ impl<S: 'static> Runtime<S> {
             self.seal_between();
         }
         let text = self.copy_text();
-        let mut copy = crate::PopupItem::new("copy", "Copy").enabled(text.is_some());
+        let mut copy = crate::PopupItem::new("copy", crate::labels::label(crate::Label::Copy)).enabled(text.is_some());
         // The primary modifier, as the copy key handler takes it: ⌘C on macOS, Ctrl+C elsewhere.
         if let Ok(shortcut) = "mod+c".parse::<crate::Shortcut>() { copy = copy.key_equivalent(shortcut); }
         log_event!(self, "selection menu {path}");
