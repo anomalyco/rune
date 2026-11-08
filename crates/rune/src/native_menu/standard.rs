@@ -43,6 +43,22 @@ pub(crate) fn by_action(action: &str) -> Option<&'static Standard> {
     ITEMS.iter().find(|i| i.action == action)
 }
 
+impl Standard {
+    /// What the app calls it (`rune::set_labels`); `title` is its English.
+    pub(crate) fn label(&self) -> crate::Label<'static> {
+        match self.role {
+            Role::Undo => crate::Label::Undo,
+            Role::Redo => crate::Label::Redo,
+            Role::Cut => crate::Label::Cut,
+            Role::Copy => crate::Label::Copy,
+            Role::Paste => crate::Label::Paste,
+            Role::SelectAll => crate::Label::SelectAll,
+            Role::Minimize => crate::Label::Minimize,
+            Role::Close => crate::Label::Close,
+        }
+    }
+}
+
 /// A key-down event as AppKit reports it: `charactersIgnoringModifiers` and its modifiers.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct KeyDown { pub chars: String, pub cmd: bool, pub shift: bool, pub alt: bool, pub ctrl: bool }
@@ -73,12 +89,13 @@ impl Standard {
     }
 }
 
-/// Where a new top-level menu titled `title` goes among `tops` (index 0 the app menu), in the
-/// Mac order: the app menu, File, Edit, the app's other menus, Window, Help. It goes before
-/// the first menu that comes later in that order, else last.
-pub(crate) fn top_index(title: &str, tops: &[String]) -> usize {
-    fn rank(title: &str) -> u8 { match title { "File" => 1, "Edit" => 2, "Window" => 4, "Help" => 5, _ => 3 } }
-    (1..tops.len()).find(|&i| rank(&tops[i]) > rank(title)).unwrap_or(tops.len())
+/// Where a new top-level menu named `name` goes among the menus named `tops` (index 0 the app
+/// menu), in the Mac order: the app menu, File, Edit, the app's other menus, Window, Help. It
+/// goes before the first menu that comes later in that order, else last. Names are the ones
+/// items place themselves with, whatever language the menus' titles are in.
+pub(crate) fn top_index(name: &str, tops: &[String]) -> usize {
+    fn rank(name: &str) -> u8 { match name { "File" => 1, "Edit" => 2, "Window" => 4, "Help" => 5, _ => 3 } }
+    (1..tops.len()).find(|&i| rank(&tops[i]) > rank(name)).unwrap_or(tops.len())
 }
 
 /// What a Rune view does with a standard action the menu sent it: always hand Rune the key,

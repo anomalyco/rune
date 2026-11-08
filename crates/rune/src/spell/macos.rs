@@ -54,6 +54,11 @@ pub(super) fn preferred() -> Vec<String> { Vec::new() }
 
 pub(super) fn english_name(tag: &str) -> String { tag.to_owned() }
 
+/// Unused: macOS has no dictionaries to choose, so no list names them.
+pub(super) fn name_in(_: &str, _: &str) -> Option<String> { None }
+
+pub(super) fn sort_in<T>(_: &mut [(String, T)], _: &str) -> bool { false }
+
 pub(super) fn learn(word: &str) {
     // SAFETY: the shared checker is AppKit's own and the word a live string.
     unsafe { NSSpellChecker::sharedSpellChecker().learnWord(&NSString::from_str(word)) }

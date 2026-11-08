@@ -87,6 +87,111 @@ pub(super) fn english_name(tag: &str) -> String {
     String::from_utf16_lossy(&buffer[..len as usize - 1])
 }
 
+/// `tag`'s name in `locale`'s language from the ICU in Windows, as Chromium's
+/// `Intl.DisplayNames(locale, { type: "language" })` asks its own: full length, dialect names.
+pub(super) fn name_in(tag: &str, locale: &str) -> Option<String> {
+    let icu = icu()?;
+    let (locale, tag) = (icu_id(locale)?, icu_id(tag)?);
+    let mut contexts = [UDISPCTX_LENGTH_FULL, UDISPCTX_DIALECT_NAMES, UDISPCTX_NO_SUBSTITUTE];
+    let mut buffer = [0u16; 256];
+    let mut error = 0;
+    // SAFETY: icu.dll's C API with NUL-terminated ids, a context array and a buffer that outlive
+    // the calls; the display names object is closed before returning.
+    let len = unsafe {
+        let names = (icu.open)(locale.as_ptr(), contexts.as_mut_ptr(), contexts.len() as i32, &mut error);
+        if names.is_null() || error > 0 {
+            return None;
+        }
+        let len = (icu.name)(names, tag.as_ptr(), buffer.as_mut_ptr(), buffer.len() as i32, &mut error);
+        (icu.close)(names);
+        len
+    };
+    (error <= 0 && len > 0 && len as usize <= buffer.len()).then(|| String::from_utf16_lossy(&buffer[..len as usize]))
+}
+
+/// Sorts `items` by their names as `locale` sorts text, with ICU's collator, as
+/// `String.localeCompare` does. False, leaving them as they were, where there's no collator.
+pub(super) fn sort_in<T>(items: &mut [(String, T)], locale: &str) -> bool {
+    let (Some(icu), Some(locale)) = (icu(), icu_id(locale)) else { return false };
+    let mut error = 0;
+    // SAFETY: icu.dll's C API; the collator is closed once the sort is done.
+    let collator = unsafe { (icu.collator)(locale.as_ptr(), &mut error) };
+    if collator.is_null() || error > 0 {
+        return false;
+    }
+    items.sort_by(|(a, _), (b, _)| {
+        let (a, b): (Vec<u16>, Vec<u16>) = (a.encode_utf16().collect(), b.encode_utf16().collect());
+        // SAFETY: the collator is live, and the strings outlive the call.
+        unsafe { (icu.collate)(collator, a.as_ptr(), a.len() as i32, b.as_ptr(), b.len() as i32) }.cmp(&0)
+    });
+    // SAFETY: closes the collator opened above, used no more.
+    unsafe { (icu.close_collator)(collator) };
+    true
+}
+
+const UDISPCTX_DIALECT_NAMES: i32 = 1;
+const UDISPCTX_LENGTH_FULL: i32 = 0x200;
+const UDISPCTX_NO_SUBSTITUTE: i32 = 0x301;
+
+type Opaque = *mut std::ffi::c_void;
+
+/// The few calls of icu.dll (Windows 10 1903 and later) these use, loaded on first use.
+struct Icu {
+    open: unsafe extern "C" fn(*const u8, *mut i32, i32, *mut i32) -> Opaque,
+    name: unsafe extern "C" fn(Opaque, *const u8, *mut u16, i32, *mut i32) -> i32,
+    close: unsafe extern "C" fn(Opaque),
+    collator: unsafe extern "C" fn(*const u8, *mut i32) -> Opaque,
+    collate: unsafe extern "C" fn(Opaque, *const u16, i32, *const u16, i32) -> i32,
+    close_collator: unsafe extern "C" fn(Opaque),
+}
+
+// SAFETY: the function pointers are plain exports of a module that stays loaded.
+unsafe impl Send for Icu {}
+// SAFETY: as above; ICU's C API is thread-safe for separately opened objects.
+unsafe impl Sync for Icu {}
+
+fn icu() -> Option<&'static Icu> {
+    use windows_sys::Win32::System::LibraryLoader::{LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
+    static ICU: std::sync::OnceLock<Option<Icu>> = std::sync::OnceLock::new();
+    ICU.get_or_init(|| {
+        let dll: Vec<u16> = "icu.dll".encode_utf16().chain([0]).collect();
+        // SAFETY: loads a system DLL from System32, kept for the process, and reads exports whose
+        // C signatures are ICU's stable API (uldn_openForContext, uldn_localeDisplayName,
+        // uldn_close, ucol_open, ucol_strcoll, ucol_close).
+        unsafe {
+            let module = LoadLibraryExW(dll.as_ptr(), std::ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32);
+            if module.is_null() {
+                return None;
+            }
+            Some(Icu {
+                open: export(module, c"uldn_openForContext")?,
+                name: export(module, c"uldn_localeDisplayName")?,
+                close: export(module, c"uldn_close")?,
+                collator: export(module, c"ucol_open")?,
+                collate: export(module, c"ucol_strcoll")?,
+                close_collator: export(module, c"ucol_close")?,
+            })
+        }
+    })
+    .as_ref()
+}
+
+/// Export `name` of `module` as the function pointer type `F`.
+///
+/// # Safety
+/// `F` must be a function pointer type with the export's exact signature.
+unsafe fn export<F: Copy>(module: windows_sys::Win32::Foundation::HMODULE, name: &std::ffi::CStr) -> Option<F> {
+    // SAFETY: the module is loaded; the name is NUL-terminated.
+    let found = unsafe { windows_sys::Win32::System::LibraryLoader::GetProcAddress(module, name.as_ptr().cast()) }?;
+    // SAFETY: per this function's contract, both are function pointers of the same size.
+    Some(unsafe { std::mem::transmute_copy::<unsafe extern "system" fn() -> isize, F>(&found) })
+}
+
+/// A BCP 47 tag as an ICU locale id (`en-029` as `en_029`), NUL-terminated.
+fn icu_id(tag: &str) -> Option<Vec<u8>> {
+    tag.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_').then(|| tag.bytes().map(|b| if b == b'-' { b'_' } else { b }).chain([0]).collect())
+}
+
 /// Reads a COM string list to its end.
 ///
 /// # Safety

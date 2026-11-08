@@ -43,6 +43,7 @@ pub mod growth;
 #[cfg(feature = "hot")]
 pub mod hot;
 pub mod image;
+pub mod labels;
 pub mod live;
 pub mod memo;
 pub mod motion_gate;
@@ -177,6 +178,8 @@ pub use input::chord::KeyPlatform;
 pub use input::chord::Keybind;
 pub use input::physical_input::PhysicalInput;
 pub use input::time::last_input;
+pub use labels::Label;
+pub use labels::set_labels;
 pub use latest::Latest;
 pub use live::Live;
 pub use live::LiveText;

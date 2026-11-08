@@ -26,6 +26,8 @@ mod platform {
     pub(super) fn available() -> Vec<String> { Vec::new() }
     pub(super) fn preferred() -> Vec<String> { Vec::new() }
     pub(super) fn english_name(tag: &str) -> String { tag.to_owned() }
+    pub(super) fn name_in(_: &str, _: &str) -> Option<String> { None }
+    pub(super) fn sort_in<T>(_: &mut [(String, T)], _: &str) -> bool { false }
 }
 
 /// The most suggestions a field's menu offers, as Chromium's.
@@ -80,6 +82,21 @@ pub fn set_languages(tags: &[String]) {
 /// "American English", `fr-FR` "French (France)".
 pub fn language_name(tag: &str) -> String {
     DIALECTS.iter().find(|(t, _)| t.eq_ignore_ascii_case(tag)).map_or_else(|| platform::english_name(tag), |(_, name)| (*name).to_owned())
+}
+
+/// A language tag's name in `locale`'s language as a browser's `Intl.DisplayNames(locale)`
+/// gives it, from the platform's ICU: `en-US` in `de` is "Amerikanisches Englisch". `None`
+/// where the platform has no ICU to ask (only Windows has dictionaries to name).
+pub(crate) fn language_name_in(tag: &str, locale: &str) -> Option<String> {
+    platform::name_in(tag, locale)
+}
+
+/// Sorts `items` by their names as `locale` sorts text (`String.localeCompare`), else by their
+/// lowercased names.
+pub(crate) fn sort_names_in<T>(items: &mut [(String, T)], locale: &str) {
+    if !platform::sort_in(items, locale) {
+        items.sort_by_cached_key(|(name, _)| name.to_lowercase());
+    }
 }
 
 /// CLDR's English dialect names, which `Intl.DisplayNames` uses over "Language (Region)".

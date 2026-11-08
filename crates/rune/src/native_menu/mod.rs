@@ -58,7 +58,9 @@ impl<S> MenuItem<S> {
         item
     }
     pub fn id(mut self, id: impl Into<String>) -> Self { self.description.id = id.into(); self }
-    /// Place this item in a named top-level menu. Existing native menus are reused.
+    /// Place this item in a named top-level menu. Existing native menus are reused. A menu
+    /// Rune makes is titled with the app's `Label::Menu(name)`, so the name stays the same in
+    /// every language (`rune::set_labels`).
     pub fn menu(mut self, title: impl Into<String>) -> Self { self.description.location = Location::Named(title.into()); self }
     pub fn dock(mut self) -> Self { self.description.location = Location::Dock; self }
     pub fn key_equivalent(mut self, shortcut: Shortcut) -> Self { self.description.equivalent = Some(shortcut); self }
@@ -137,7 +139,9 @@ impl<S: 'static> AppHandle<S> {
     /// Replace all this App's custom items, preserving native defaults. Validates and queues
     /// the new snapshot; enabled/checked changes reach AppKit on the next event-loop drain.
     /// Native installation failures are retained by take_menu_errors(). On Windows/Linux this
-    /// returns Unsupported without changing anything (except inside a headless run).
+    /// returns Unsupported without changing anything (except inside a headless run). On macOS
+    /// the menus and standard items Rune made also take the app's current labels
+    /// (`rune::set_labels`), so an app calls this again after its language changes.
     pub fn set_menu(&self, items: impl IntoIterator<Item = MenuItem<S>>) -> Result<(), MenuError> {
         let items: Vec<_> = items.into_iter().collect();
         let mut state = self.shared.menus.0.lock().unwrap();
@@ -240,6 +244,11 @@ impl<S: 'static> Guard<S> {
             #[cfg(not(target_os = "macos"))]
             { if items.is_empty() { Ok(()) } else { Err(MenuError::Unsupported) } }
         });
+        // The app's labels may have changed with its language since the menus were made.
+        #[cfg(target_os = "macos")]
+        if !headless && let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
+            default_macos::relabel(&objc2_app_kit::NSApplication::sharedApplication(mtm));
+        }
         self.revision = Some(revision);
         if let Err(error) = result {
             eprintln!("rune: {error}");
