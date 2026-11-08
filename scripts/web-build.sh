@@ -30,6 +30,19 @@ cargo=${CARGO:-$(rustup which cargo 2>/dev/null || command -v cargo)}
 if [[ -z ${RUSTUP_TOOLCHAIN:-} ]] && toolchain=$(rustup show active-toolchain 2>/dev/null); then
     export RUSTUP_TOOLCHAIN=${toolchain%% *}
 fi
+# C and C++ dependencies (rune-luau's Luau) build for the web with WASI SDK's clang against WASI
+# libc, using WebAssembly exception handling. Set WASI_SDK_PATH to an unpacked WASI SDK 33 or
+# newer; rune-luau's build script links the SDK's libc and C++ runtime from it.
+if [[ -n ${WASI_SDK_PATH:-} ]]; then
+    exe=
+    [[ -f $WASI_SDK_PATH/bin/clang.exe ]] && exe=.exe
+    export CC_wasm32_unknown_unknown="$WASI_SDK_PATH/bin/clang$exe" \
+        CXX_wasm32_unknown_unknown="$WASI_SDK_PATH/bin/clang++$exe" \
+        AR_wasm32_unknown_unknown="$WASI_SDK_PATH/bin/llvm-ar$exe" \
+        CXXSTDLIB_wasm32_unknown_unknown=c++ \
+        CFLAGS_wasm32_unknown_unknown=--target=wasm32-wasip1 \
+        LUAU_CXXFLAGS="--target=wasm32-wasip1 -fexceptions -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false"
+fi
 meta=$("$cargo" metadata --format-version 1 --no-deps)
 selection=$(python3 -c '
 import json,sys
@@ -135,7 +148,7 @@ build_once() {
     mkdir -p "$next"
     wasm-bindgen --target web --out-dir "$next" --out-name app "$artifact" || return 1
     if $opt; then
-        wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-reference-types \
+        wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-reference-types --enable-exception-handling \
             "$next/app_bg.wasm" -o "$next/app_bg.opt.wasm" || return 1
         mv "$next/app_bg.opt.wasm" "$next/app_bg.wasm"
     fi

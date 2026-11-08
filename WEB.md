@@ -90,6 +90,22 @@ example. Disable Rune's `dev`, `hot` and `native-file-dialog` features on wasm. 
 filesystem, process and thread dependencies behind target conditions in your app too.
 Use `rune::time::Instant` for deadlines passed to Rune; it is `std::time::Instant` on native.
 
+## Luau scripts
+
+An app that hosts Luau with `rune-luau` builds for the web too: Luau's C++ compiles with
+[WASI SDK](https://github.com/WebAssembly/wasi-sdk) (33 or newer) against WASI libc, using
+WebAssembly exception handling. Unpack the SDK and point `WASI_SDK_PATH` at it; `web-build.sh`
+then sets the C and C++ compilers for the wasm target, and `rune-luau` links the SDK's C runtime
+and defines the WASI calls libc makes inside the module, so the page loads like any other
+Rune app. Luau runs as its interpreter there.
+
+```sh
+WASI_SDK_PATH=$HOME/wasi-sdk-34.0 scripts/web-build.sh luau-panel --out target/web-luau
+node examples/luau-panel/web-proof.mjs target/web-luau target/web-luau-proof
+```
+
+Browsers with exception handling run it: current Chrome, Edge, Firefox and Safari.
+
 ## Mount in a page
 
 By default Rune appends its own canvas, covers the viewport and stops the body scrolling.

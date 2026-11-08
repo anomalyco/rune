@@ -1,0 +1,44 @@
+[package]
+name = "rune-luau"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["wasi-allocator"]
+# `Script::watch`: reload a script folder when a file in it is saved (notify; native only).
+watch = ["dep:notify"]
+# On wasm32-unknown-unknown, Rust allocates through WASI libc's malloc, which Luau's C++ uses,
+# so one allocator owns linear memory. Off: the app installs such an allocator itself.
+wasi-allocator = []
+# Decoding script values into a host's own records: `Data::decode` (whole numbers decode into
+# `i64` fields on every target), and mlua's `LuaSerdeExt`.
+serde = ["mlua/serde", "dep:serde", "dep:serde_json"]
+
+[dependencies]
+rune = { path = "../rune", default-features = false }
+rustc-hash = "2"
+serde = { version = "1", optional = true }
+serde_json = { version = "1", optional = true }
+
+# Native code generation where Luau has a backend (x86-64 and arm64) and the OS lets a process
+# map executable memory without an entitlement: Windows and Linux. macOS (whose hardened
+# runtime would need `allow-jit`), iOS and the web run Luau's interpreter.
+# mlua is pinned to a rev on main: wasm32-unknown-unknown support landed after 0.12.2.
+[target.'cfg(all(any(target_os = "windows", target_os = "linux"), any(target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
+mlua = { git = "https://github.com/mlua-rs/mlua", rev = "a0ad4535fc72ba89967a931c5be57b162b5f0f3f", features = ["luau-jit"] }
+
+[target.'cfg(not(all(any(target_os = "windows", target_os = "linux"), any(target_arch = "x86_64", target_arch = "aarch64"))))'.dependencies]
+mlua = { git = "https://github.com/mlua-rs/mlua", rev = "a0ad4535fc72ba89967a931c5be57b162b5f0f3f", features = ["luau"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+notify = { version = "8.2", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["console"] }
+
+[lints]
+workspace = true

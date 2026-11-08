@@ -16,6 +16,7 @@ members = [
     "crates/rune-notify",
     "crates/rune-mermaid",
     "crates/rune-perf",
+    "crates/rune-luau",
     "crates/rune-taffy",
     "themes/opencode",
     "examples/hello",
@@ -50,6 +51,7 @@ members = [
     "examples/motion-bento",
     "examples/motion-bento/chaos",
     "examples/site-scenes",
+    "examples/luau-panel",
 ]
 exclude = ["tools/rune-dev-guard"]
 
