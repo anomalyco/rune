@@ -18,11 +18,13 @@ Serve the entire output folder over HTTPS, including `snippets/`. A local HTTP s
 `localhost` also works for development. The host must serve `.wasm` as `application/wasm`.
 No application server, SharedArrayBuffer, COOP or COEP headers are required.
 `--opt` additionally runs an installed `wasm-opt -Oz`; the default build does not need it.
+A release build drops the wasm's function-name section, so a panic's stack shows offsets
+instead of Rust names; `--names` keeps it for profiling, and `--dev` builds always keep it.
 The script prints the raw and gzip wasm sizes. Configure gzip or Brotli on the static host
 to get the corresponding transfer size.
 
 ```text
-usage: web-build.sh PACKAGE [--example NAME] [--out DIR] [--opt] [--dev] [--watch] [--no-html]
+usage: web-build.sh PACKAGE [--example NAME] [--out DIR] [--opt] [--dev] [--watch] [--no-html] [--names]
 ```
 
 The script builds with the toolchain's own cargo (`rustup which cargo`), not a `cargo` wrapper

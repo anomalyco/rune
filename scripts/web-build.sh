@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run from the app's Cargo workspace. Produces a static, HTTPS-hostable folder.
 set -euo pipefail
-usage="usage: web-build.sh PACKAGE [--example NAME] [--out DIR] [--opt] [--dev] [--watch] [--no-html]"
+usage="usage: web-build.sh PACKAGE [--example NAME] [--out DIR] [--opt] [--dev] [--watch] [--no-html] [--names]"
 package=${1:?$usage}
 shift
 example=
@@ -10,6 +10,7 @@ opt=false
 dev=false
 watch=false
 html=true
+names=false
 while (($#)); do
     case "$1" in
         --example) example=${2:?--example needs a name}; shift 2 ;;
@@ -18,6 +19,7 @@ while (($#)); do
         --dev) dev=true; shift ;;
         --watch) watch=true; shift ;;
         --no-html) html=false; shift ;;
+        --names) names=true; shift ;;
         -h|--help) echo "$usage"; exit 0 ;;
         *) echo "unknown option: $1" >&2; echo "$usage" >&2; exit 2 ;;
     esac
@@ -146,9 +148,15 @@ build_once() {
     local next="$out/.next"
     rm -rf "$next"
     mkdir -p "$next"
-    wasm-bindgen --target web --out-dir "$next" --out-name app "$artifact" || return 1
+    # A release build drops the function-name section (over 40% of an unoptimized wasm); a `--dev`
+    # build, or `--names` for profiling, keeps it so panics and profiles name their functions.
+    local bindgen=(--target web --out-dir "$next" --out-name app)
+    $dev || $names || bindgen+=(--remove-name-section)
+    wasm-bindgen "${bindgen[@]}" "$artifact" || return 1
     if $opt; then
-        wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-reference-types --enable-exception-handling \
+        local keep=()
+        $names && keep=(-g)
+        wasm-opt -Oz ${keep[@]+"${keep[@]}"} --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-reference-types --enable-exception-handling \
             "$next/app_bg.wasm" -o "$next/app_bg.opt.wasm" || return 1
         mv "$next/app_bg.opt.wasm" "$next/app_bg.wasm"
     fi
