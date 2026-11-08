@@ -1,0 +1,1 @@
+- **A colour change asked to land at once lands at once on text too.** Text took at least 0.1 s to change colour even under `Spring::NONE` (`El::motion`, `Tx::color_motion`), as its colour leads its background by half the spring with a 0.1 s floor; an instant spring now changes it in the frame, as a picker's trigger drops its open look.
