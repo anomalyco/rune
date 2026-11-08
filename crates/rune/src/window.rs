@@ -90,6 +90,10 @@ pub(crate) enum WakeEvent {
     /// runs, see `single_instance`); for `Windows`, not one host.
     #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
     Reopen,
+    /// The system asks the app to quit (`crate::quit`): every window's `App::on_quit` runs;
+    /// with `true` the session ends now and the windows close.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    Quit(bool),
     /// An assistive client asked something of a surface's accessibility tree (`crate::a11y`):
     /// the host answers at the end of the turn this wakes.
     #[cfg_attr(not(feature = "accessibility"), allow(dead_code))]
@@ -112,6 +116,8 @@ pub(crate) trait AnyHost {
     fn finished(&self) -> bool { false }
     /// The OS is ending the app without Rune asking: run close hooks before the hosts drop.
     fn terminate(&mut self) {}
+    /// The app starts to quit: runs `App::on_quit`, unless the window already closed.
+    fn quit_hook(&mut self) {}
     /// Ends a tracking pop-up menu and answers waiting ones `None`, before the host drops or
     /// the loop exits.
     fn cancel_menus(&mut self) {}
@@ -147,6 +153,8 @@ struct Windows {
     hosts: Vec<Option<Box<dyn AnyHost>>>,
     // Weak pool preserves release_gpu_when_closed when the last GPU owner closes.
     gpu: Rc<RefCell<Weak<Gpu>>>,
+    /// The quit (`crate::quit::start`) whose `App::on_quit` hooks ran last.
+    quit_ran: u64,
 }
 impl Windows {
     /// Starts the windows `crate::open_window` asked for this turn, in fresh slots, each like
@@ -200,10 +208,27 @@ impl Windows {
         }
         if !self.hosts.iter().flatten().any(|h| h.keeps_loop()) {
             // The app ends with its last main window: windows still open close as their close
-            // button would. A quit already asked to exit and skips their hooks.
+            // button would, once the quit's hooks ran. A quit already asked to exit and skips
+            // their close hooks.
             if !event_loop.exiting() {
+                self.quit(event_loop, false);
                 for host in self.hosts.iter_mut().flatten() { host.terminate(); }
             }
+            event_loop.exit();
+        }
+    }
+
+    /// The app starts to quit (`crate::quit`): every window still open runs `App::on_quit`, once
+    /// per quit. A session ending now (`ending`) then closes the windows as their close buttons
+    /// would, before the loop ends, as a macOS logout does: the OS may end the process next.
+    fn quit(&mut self, event_loop: &ActiveEventLoop, ending: bool) {
+        let quit = crate::quit::start();
+        if self.quit_ran != quit {
+            self.quit_ran = quit;
+            for host in self.hosts.iter_mut().flatten() { host.quit_hook(); }
+        }
+        if ending && !event_loop.exiting() {
+            for host in self.hosts.iter_mut().flatten() { host.terminate(); }
             event_loop.exit();
         }
     }
@@ -308,6 +333,8 @@ impl ApplicationHandler<WakeEvent> for Windows {
             let proxy = self.proxy.clone();
             crate::open_url::instance::on_relaunch(move || proxy.send_event(WakeEvent::Reopen).is_ok());
         }
+        let proxy = self.proxy.clone();
+        crate::quit::install(move |ending| proxy.send_event(WakeEvent::Quit(ending)).is_ok());
         crate::open_url::incoming::settle();
         // A window opened at launch took it; a GPU kept for a later one would sit idle until then.
         crate::render::discard_prewarm();
@@ -320,6 +347,12 @@ impl ApplicationHandler<WakeEvent> for Windows {
                 | WakeEvent::A11y(i) => *i,
             WakeEvent::Reopen => {
                 self.reopen(event_loop);
+                self.cleanup(event_loop);
+                return;
+            }
+            WakeEvent::Quit(ending) => {
+                self.quit(event_loop, *ending);
+                crate::quit::handled();
                 self.cleanup(event_loop);
                 return;
             }
@@ -350,6 +383,9 @@ impl ApplicationHandler<WakeEvent> for Windows {
             else { deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil) });
     }
     fn exiting(&mut self, event_loop: &ActiveEventLoop) {
+        // Every quit ends here, so the windows still open run `App::on_quit` first, unless the
+        // quit's hooks already ran (a Windows logoff, the last window closing).
+        self.quit(event_loop, false);
         // Rune didn't ask to exit, so the OS is ending the app: macOS Quit, Cmd-Q, the Dock's
         // Quit, logout. Windows close as their close button would, before the clipboard stops.
         if !event_loop.exiting() {
@@ -385,6 +421,7 @@ struct Host<S: 'static> {
     args: Args,
     keep_running: bool,
     on_close: Option<fn(&mut S, &mut Tx)>,
+    on_quit: Option<fn(&mut S, &mut Tx)>,
     on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
     /// Its place among the windows receiving links (`App::on_open_url`).
     _open_urls: Option<crate::open_url::incoming::Listening>,
@@ -463,7 +500,7 @@ impl<S: 'static> Host<S> {
             let _ = proxy.send_event(WakeEvent::App(slot));
         });
         let (open, keep_running, on_close, release_gpu) = (app.open, app.keep_running, app.on_close, app.release_gpu);
-        let on_reopen = app.on_reopen;
+        let (on_reopen, on_quit) = (app.on_reopen, app.on_quit);
         #[cfg(target_os = "macos")]
         let present_log = args.trace.as_ref().map(|_| Arc::default());
         let mut app = app;
@@ -543,6 +580,7 @@ impl<S: 'static> Host<S> {
             args,
             keep_running,
             on_close,
+            on_quit,
             on_reopen,
             _open_urls: None,
             hidden_at: None,

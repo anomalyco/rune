@@ -18,6 +18,14 @@ impl<S: 'static> AnyHost for Host<S> {
         self.file_dialog.cancel(&mut self.rt);
     }
 
+    fn quit_hook(&mut self) {
+        let Some(f) = self.on_quit.filter(|_| !self.finished) else { return };
+        self.rt.update(f);
+        // Before the loop ends or the session does: a lock or clear must reach the worker.
+        self.clipboard.flush(&mut self.rt);
+        if let Some(w) = self.win.as_ref().filter(|w| w.visible) { w.window.request_redraw(); }
+    }
+
     fn cancel_menus(&mut self) {
         self.popup.cancel(&mut self.rt);
         self.file_dialog.cancel(&mut self.rt);

@@ -262,6 +262,8 @@ impl<S> WindowSpec<S> {
     pub fn on_ime(mut self, f: fn(&mut S, &crate::Ime, &mut crate::Tx) -> bool) -> Self { self.app = self.app.on_ime(f); self }
     /// This window's playground, like `App::playground`.
     pub fn playground(mut self, playground: crate::Playground<S>) -> Self { self.app = self.app.playground(playground); self }
+    /// Runs in this window when the app starts to quit, like `App::on_quit`.
+    pub fn on_quit(mut self, f: fn(&mut S, &mut crate::Tx)) -> Self { self.app = self.app.on_quit(f); self }
     /// Runs when the app is reopened, like `App::on_reopen`.
     pub fn on_reopen(mut self, f: fn(&mut S, bool, &mut crate::Tx) -> bool) -> Self { self.app = self.app.on_reopen(f); self }
     /// Receives links opened with the app, like `App::on_open_url`.

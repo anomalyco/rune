@@ -204,7 +204,8 @@ impl Tx {
         self.shell = self.shell.max(Some(Shell::Close));
     }
 
-    /// Quit the app after this handler, whether or not it keeps running without a window.
+    /// Quit the app after this handler, whether or not it keeps running without a window. Every
+    /// open window's `App::on_quit` runs as it ends; no `on_close` does.
     pub fn quit(&mut self) {
         self.shell = Some(Shell::Quit);
     }

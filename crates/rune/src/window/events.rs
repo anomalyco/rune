@@ -136,7 +136,7 @@ impl<S: 'static> Host<S> {
                 self.shell(event_loop);
             }
             WakeEvent::A11y(_) => self.a11y_receive(),
-            WakeEvent::Reopen | WakeEvent::Turn => {}
+            WakeEvent::Reopen | WakeEvent::Turn | WakeEvent::Quit(_) => {}
         }
     }
 
