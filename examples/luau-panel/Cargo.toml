@@ -1,0 +1,31 @@
+[package]
+name = "luau-panel"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "luau-panel"
+path = "src/main.rs"
+
+[[bin]]
+name = "luau-bench"
+path = "src/bin/bench.rs"
+
+[dependencies]
+rune = { path = "../../crates/rune" }
+serde = { version = "1", features = ["derive"] }
+rune-luau = { path = "../../crates/rune-luau", features = ["serde"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rune-luau = { path = "../../crates/rune-luau", features = ["serde", "watch"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+
+[lints]
+workspace = true

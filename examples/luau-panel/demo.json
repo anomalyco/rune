@@ -1,0 +1,11 @@
+{"events": [
+  {"t": 0.60, "type": "tap", "key": "pulse"},
+  {"t": 1.60, "type": "tap", "key": "ping"},
+  {"t": 2.20, "type": "tap", "x": 300, "y": 230},
+  {"t": 2.80, "type": "scroll", "x": 360, "y": 400, "dy": -1800, "dur": 1.2},
+  {"t": 4.40, "type": "tap", "x": 300, "y": 330},
+  {"t": 5.00, "type": "tap", "key": "shuffle"},
+  {"t": 5.60, "type": "scroll", "x": 360, "y": 400, "dy": -9000, "dur": 1.0},
+  {"t": 7.20, "type": "scroll", "x": 360, "y": 400, "dy": 12000, "dur": 1.2},
+  {"t": 9.00, "type": "mark", "name": "end"}
+]}
