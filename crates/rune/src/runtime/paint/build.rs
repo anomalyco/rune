@@ -248,7 +248,7 @@ impl<S: 'static> Runtime<S> {
                     })
                 };
                 let (scale, anchor, anchor_to) = pinh.still;
-                pinh = Inh { opacity: 1.0, paint_opacity: 1.0, clip, fade, fade_origin, paint_clip: clip, paint_fade: fade,
+                pinh = Inh { opacity: 1.0, paint_opacity: 1.0, hit_opacity: 1.0, clip, fade, fade_origin, paint_clip: clip, paint_fade: fade,
                     paint_fade_origin: fade_origin, rounded: None, scale, anchor, anchor_to, blur: 0.0,
                     dx: pinh.dx - pinh.cover[0], dy: pinh.dy - pinh.cover[1], cover: [0.0; 2], outer: None,
                     scale_motion: ScaleMotion::Still, in_cache: false, skip_paint: false, turn: 0, snap: pixel_snap::Inherit { layer: 0, parent: None, ..pinh.snap }, ..pinh };
@@ -257,9 +257,11 @@ impl<S: 'static> Runtime<S> {
             }
             let mark = if n.vis.mark != 0 { n.vis.mark } else { pinh.mark };
             let mut own = p.opacity;
+            let mut hit_own = own * self.group_factor(n, 1.0);
             own *= self.group_factor(n, pinh.group);
             let base_opacity = (own * pinh.opacity).clamp(0.0, 1.0);
-            let group = if n.vis.hover.a > 0.0 || n.vis.hover_group {
+            let hover_owner = n.vis.hover.a > 0.0 || n.vis.hover_group;
+            let group = if hover_owner {
                 self.scene.get(n.id, P_HOVER).unwrap_or(0.0).clamp(0.0, 1.0)
             } else {
                 pinh.group
@@ -270,8 +272,10 @@ impl<S: 'static> Runtime<S> {
             let loop_value = track.map(|l| l.sample_at(lnow, self.clock, self.reduced_motion));
             if fades(n.looping.as_deref().copied()) && let Some(v) = loop_value {
                 own *= v;
+                hit_own *= v;
             }
             let effective_opacity = (own * pinh.opacity).clamp(0.0, 1.0);
+            let hit_opacity = (hit_own * pinh.hit_opacity).clamp(0.0, 1.0);
             let next = if tree_order { self.layer_paint_order.get(paint_index + 1).copied() } else { (i + 1 < n_nodes).then_some(i + 1) };
             let dissolve = self.has_dissolve && self.dissolve_scratch[i];
             let additive_parent = self.has_dissolve && n.parent.is_some_and(|p| self.dissolve_scratch[p]);
@@ -1204,10 +1208,15 @@ impl<S: 'static> Runtime<S> {
                 clip: full_clip, fade: hit_fade, fade_origin: hit_origin,
                 paint_clip: clip, paint_fade: fade, paint_fade_origin: fade_origin, rounded, scale, anchor, anchor_to, blur, dy, dx,
                 cover: cover_offset, outer, mark, group,
+                hit_opacity: hit_opacity * kids_fade, group_rect: if hover_owner { rect_pt } else { pinh.group_rect },
                 scale_motion, still: if scale_motion == ScaleMotion::Still { (scale, anchor, anchor_to) } else { pinh.still },
                 in_cache, skip_paint, turn: turn_index,
                 snap: pixel_snap::Inherit { off: snap_off, rigid: snap_rigid, layer: if cover.is_some() { 0 } else { snap_layer }, parent: snap_rest.filter(|_| cover.is_none() && snap_rigid == pinh.snap.rigid && pixel_snap::frames(&n.vis)) } };
-            self.register_node_hits(i, pinh.clip, (effective_opacity, visible), rect_pt, (press_k, press_anchor));
+            // Shown only under its group's hover, it takes presses where the pointer hovers the
+            // group: a press in the same frame as the move that reveals it finds it, as a page's
+            // `:hover` applies before the press does.
+            let (hit_opacity, hit_rect) = if effective_opacity > 0.001 { (effective_opacity, rect_pt) } else { (hit_opacity, intersect(rect_pt, pinh.group_rect)) };
+            self.register_node_hits(i, pinh.clip, (hit_opacity, visible), hit_rect, (press_k, press_anchor));
             if self.has_sticky {
                 self.fade_below_header(i, s);
             }
