@@ -242,7 +242,7 @@ impl<T: 'static> Overlay<T> {
         if self.options.input == OverlayInput::Regions && let Some(x11) = &mut self.x11 { x11.regions(self.rt.hit_regions(), live.scale); }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Backing::Layer(layer) = &live.backing { layer.input_regions(self.rt.hit_regions(), self.interactive); }
-        // Its shape applies at once, and most frames draw it unchanged.
+        // An X11 input shape applies at once with no commit; `regions` skips an unchanged shape.
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Backing::Xwayland(surface) = &mut live.backing { surface.regions(self.rt.hit_regions()); }
         let target_format = if self.rt.srgb_blend() { live.config.format.remove_srgb_suffix() } else { live.config.format };
