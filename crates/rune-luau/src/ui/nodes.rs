@@ -109,7 +109,7 @@ unsafe fn is_array(state: *mut ffi::lua_State, idx: c_int) -> bool {
 unsafe fn build(state: *mut ffi::lua_State, base: Base, props: c_int, children: c_int) -> Result<c_int, String> {
     top(|frame| {
         let is_text = matches!(base, Base::Text(_));
-        let mut style = Style::default();
+        let mut style = Style::new(&frame.env);
         // SAFETY: `props` is 0 or a table on this stack; the frame borrow covers no call back
         // into Luau.
         let press = unsafe { decode_props(state, props, &frame.env, is_text, &mut style)? };
@@ -151,7 +151,12 @@ unsafe fn decode_props(state: *mut ffi::lua_State, props: c_int, env: &Env, is_t
                         Value::Nil => {}
                         other => return Err(format!("onPress must be a function, got {}", props::name(other))),
                     },
-                    Ok(atom) => style.decode(atom, v, env, is_text)?,
+                    Ok(Atom::OnHover) => match v {
+                        Value::Func => style.on_hover = Some(env.reference(state, -1)),
+                        Value::Nil => {}
+                        other => return Err(format!("onHover must be a function, got {}", props::name(other))),
+                    },
+                    Ok(atom) => style.decode_at(state, atom, -1, env, is_text)?,
                     Err(name) => env.warn_once(format!("unknown prop {name}")),
                 }
                 ffi::lua_settop(state, -3);
@@ -252,151 +257,4 @@ impl Iterator for Children<'_> {
         let left = self.len + 1 - self.next;
         (left, Some(left))
     }
-}
-
-type BuildNode = dyn Fn(&mut NodeArgs) -> Result<El, String>;
-
-/// A node an app adds to `ui`: `ui.<name>(props, children)` calls `build` with the props as
-/// [`NodeArgs`]. Use it for native views a script places (a code view, a terminal).
-#[derive(Clone)]
-pub struct HostNode {
-    pub(crate) name: String,
-    pub(crate) build: Rc<BuildNode>,
-}
-
-impl HostNode {
-    pub fn new(name: impl Into<String>, build: impl Fn(&mut NodeArgs) -> Result<El, String> + 'static) -> Self {
-        HostNode { name: name.into(), build: Rc::new(build) }
-    }
-}
-
-/// A host node's props and children.
-pub struct NodeArgs {
-    props: Vec<(String, Prop)>,
-    pub children: Vec<El>,
-    attach: &'static super::Attach,
-}
-
-/// One prop a host node received.
-#[derive(Clone)]
-pub enum Prop {
-    Bool(bool),
-    Number(f64),
-    String(String),
-    /// A function; [`NodeArgs::on_press`] attaches it.
-    Function(Handler),
-}
-
-/// A script function a host node can run on press.
-#[derive(Clone)]
-pub struct Handler(Rc<Callback>);
-
-impl NodeArgs {
-    pub fn get(&self, name: &str) -> Option<&Prop> {
-        self.props.iter().find(|(k, _)| k == name).map(|(_, v)| v)
-    }
-
-    pub fn number(&self, name: &str) -> Option<f64> {
-        match self.get(name) {
-            Some(Prop::Number(n)) => Some(*n),
-            _ => None,
-        }
-    }
-
-    pub fn string(&self, name: &str) -> Option<&str> {
-        match self.get(name) {
-            Some(Prop::String(s)) => Some(s),
-            _ => None,
-        }
-    }
-
-    pub fn flag(&self, name: &str) -> bool {
-        matches!(self.get(name), Some(Prop::Bool(true)))
-    }
-
-    /// Runs the script function in prop `name` when `el` is pressed.
-    pub fn on_press(&self, el: El, name: &str) -> El {
-        match self.get(name) {
-            Some(Prop::Function(h)) => (self.attach.press)(el, h.0.clone(), self.string("key").map(Into::into)),
-            _ => el,
-        }
-    }
-}
-
-/// `ui.<host node>(props, children)`: upvalue 1 is the node's index in the script's host nodes.
-pub(crate) unsafe extern "C-unwind" fn ui_host(state: *mut ffi::lua_State) -> c_int {
-    // SAFETY: reads this C function's arguments and upvalue.
-    unsafe {
-        let index = ffi::lua_tointegerx(state, ffi::lua_upvalueindex(1), std::ptr::null_mut()) as usize;
-        let props_at = if ffi::lua_type(state, 1) == ffi::LUA_TTABLE { 1 } else { 0 };
-        let children_at = if ffi::lua_type(state, 2) == ffi::LUA_TTABLE { 2 } else { 0 };
-        guard(state, || {
-            let args = top(|frame| -> Result<NodeArgs, String> {
-                let props = if props_at > 0 { host_props(state, props_at, frame)? } else { Vec::new() };
-                let children = if children_at > 0 { take_children(state, children_at, frame)? } else { Vec::new() };
-                Ok(NodeArgs { props, children, attach: frame.attach })
-            });
-            let mut args = args.ok_or("ui nodes can only be built while rendering")??;
-            let node = top(|frame| frame.env.nodes.get(index).cloned()).flatten().ok_or("unknown host node")?;
-            let el = (node.build)(&mut args).map_err(|e| format!("ui.{}: {e}", node.name))?;
-            // Standard layout props still apply, after the host's own.
-            build_from(state, el, props_at)
-        })
-    }
-}
-
-unsafe fn build_from(state: *mut ffi::lua_State, el: El, props_at: c_int) -> Result<c_int, String> {
-    top(|frame| {
-        let mut style = Style::default();
-        if props_at > 0 {
-            // SAFETY: walks the props table again, decoding only the standard props.
-            unsafe {
-                let mut iter = 0;
-                while {
-                    iter = ffi::lua_rawiter(state, props_at, iter);
-                    iter >= 0
-                } {
-                    if let Ok(atom) = props::key_atom(state, -2)
-                        && atom != Atom::OnPress
-                    {
-                        style.decode(atom, props::read(state, -1), &frame.env, false)?;
-                    }
-                    ffi::lua_settop(state, -3);
-                }
-            }
-        }
-        let handle = frame.put(style.apply(el, &frame.env, false, None, None, frame.attach))?;
-        // SAFETY: pushes the handle as this C function's result.
-        unsafe { ffi::lua_pushlightuserdata(state, handle) };
-        Ok(1)
-    })
-    .unwrap_or_else(|| Err("ui nodes can only be built while rendering".into()))
-}
-unsafe fn host_props(state: *mut ffi::lua_State, idx: c_int, frame: &Frame) -> Result<Vec<(String, Prop)>, String> {
-    let mut out = Vec::new();
-    // SAFETY: walks the table at `idx`, popping each value.
-    unsafe {
-        let mut iter = 0;
-        while {
-            iter = ffi::lua_rawiter(state, idx, iter);
-            iter >= 0
-        } {
-            let key = match props::read(state, -2) {
-                Value::Str(s) => Some(s.to_owned()),
-                _ => None,
-            };
-            let value = match props::read(state, -1) {
-                Value::Bool(b) => Some(Prop::Bool(b)),
-                Value::Num(n) => Some(Prop::Number(n)),
-                Value::Str(s) => Some(Prop::String(s.to_owned())),
-                Value::Func => Some(Prop::Function(Handler(frame.env.reference(state, -1)))),
-                Value::Nil | Value::Other(_) => None,
-            };
-            if let (Some(k), Some(v)) = (key, value) {
-                out.push((k, v));
-            }
-            ffi::lua_settop(state, -3);
-        }
-    }
-    Ok(out)
 }

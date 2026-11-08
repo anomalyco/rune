@@ -12,88 +12,17 @@ use rune::{Cx, El, Tx};
 use rustc_hash::FxHashSet;
 
 use crate::card::{error_card, row_error};
+use crate::options::ScriptOptions;
 use crate::sources::{Compiled, Sources};
 use crate::task::{self, Sched};
-use crate::ui::nodes::HostNode;
+use crate::ui::host::HostNode;
 use crate::ui::rows::Spec;
 use crate::ui::view::mix;
-use crate::ui::{Callback, Env, Event, Palette, attach, default_palette, top, with_frame};
-use crate::vm::{Host, Setup, Vm};
+use crate::ui::{Callback, Env, Event, attach, top, with_frame};
+use crate::vm::{Setup, Vm};
 use crate::watchdog;
 use crate::workers::Shared;
 use crate::{Data, ErrorKind, ScriptError};
-
-/// Receives log lines as they happen.
-type LogFn = dyn Fn(LogLevel, &str);
-
-/// Binds a host's API into a new VM.
-pub(crate) type SetupFn = dyn Fn(&Host<'_>) -> mlua::Result<()>;
-
-/// How a script is hosted. Build with [`ScriptOptions::new`] and its setters.
-#[derive(Clone)]
-pub struct ScriptOptions {
-    palette: Palette,
-    setup: Option<Rc<SetupFn>>,
-    nodes: Vec<HostNode>,
-    time_limit: Duration,
-    memory_limit: usize,
-    on_log: Option<Rc<LogFn>>,
-}
-
-impl Default for ScriptOptions {
-    fn default() -> Self {
-        ScriptOptions {
-            palette: default_palette(),
-            setup: None,
-            nodes: Vec::new(),
-            time_limit: Duration::from_millis(250),
-            memory_limit: 64 << 20,
-            on_log: None,
-        }
-    }
-}
-
-impl ScriptOptions {
-    pub fn new() -> Self {
-        ScriptOptions::default()
-    }
-
-    /// Colour names scripts may use (`fill = "card"`); [`default_palette`] otherwise.
-    pub fn palette(mut self, palette: Palette) -> Self {
-        self.palette = palette;
-        self
-    }
-
-    /// Binds the host's modules, globals, signals and async functions into each new VM.
-    pub fn setup(mut self, setup: impl Fn(&Host<'_>) -> mlua::Result<()> + 'static) -> Self {
-        self.setup = Some(Rc::new(setup));
-        self
-    }
-
-    /// Adds `ui.<name>`, a node the host builds.
-    pub fn node(mut self, node: HostNode) -> Self {
-        self.nodes.push(node);
-        self
-    }
-
-    /// The longest one entry into the VM may run before the watchdog stops it (250 ms).
-    pub fn time_limit(mut self, limit: Duration) -> Self {
-        self.time_limit = limit;
-        self
-    }
-
-    /// The VM's heap limit in bytes (64 MB).
-    pub fn memory_limit(mut self, bytes: usize) -> Self {
-        self.memory_limit = bytes;
-        self
-    }
-
-    /// Receives `print`, `warn` and errors as they happen, besides [`Script::log`].
-    pub fn on_log(mut self, f: impl Fn(LogLevel, &str) + 'static) -> Self {
-        self.on_log = Some(Rc::new(f));
-        self
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogLevel {
@@ -140,24 +69,24 @@ pub struct Reload {
 /// fn view(s: &State, cx: &mut Cx<State>) -> El { s.script.view(cx) }
 /// ```
 pub struct Script {
-    inner: Rc<Inner>,
+    pub(crate) inner: Rc<Inner>,
 }
 
 pub(crate) struct Inner {
-    weak: Weak<Inner>,
+    pub(crate) weak: Weak<Inner>,
     name: Rc<str>,
-    prefix: Rc<str>,
-    options: ScriptOptions,
+    pub(crate) prefix: Rc<str>,
+    pub(crate) options: ScriptOptions,
     vm: RefCell<Option<Rc<Vm>>>,
-    sources: RefCell<Sources>,
-    failed: RefCell<Option<ScriptError>>,
-    version: Cell<u64>,
-    salt: Cell<u64>,
-    dark: Cell<bool>,
-    clock: Cell<f64>,
+    pub(crate) sources: RefCell<Sources>,
+    pub(crate) failed: RefCell<Option<ScriptError>>,
+    pub(crate) version: Cell<u64>,
+    pub(crate) salt: Cell<u64>,
+    pub(crate) dark: Cell<bool>,
+    pub(crate) clock: Cell<f64>,
     /// The earliest task deadline on the frame clock, or infinity.
     deadline: Cell<f64>,
-    metrics: Cell<Metrics>,
+    pub(crate) metrics: Cell<Metrics>,
     log: RefCell<VecDeque<LogLine>>,
     warned: Rc<RefCell<FxHashSet<String>>>,
     nodes: Rc<[HostNode]>,
@@ -329,7 +258,7 @@ impl Script {
 }
 
 impl Inner {
-    fn vm(&self) -> Option<Rc<Vm>> {
+    pub(crate) fn vm(&self) -> Option<Rc<Vm>> {
         self.vm.borrow().clone()
     }
 
@@ -355,7 +284,7 @@ impl Inner {
     }
 
     /// One entry into the VM under the watchdog, counted in the metrics. Errors are logged.
-    fn timed<R>(&self, vm: &Vm, f: impl FnOnce(&Vm) -> R) -> R {
+    pub(crate) fn timed<R>(&self, vm: &Vm, f: impl FnOnce(&Vm) -> R) -> R {
         vm.collect();
         let _armed = watchdog::arm(self.options.time_limit);
         let start = Instant::now();
@@ -369,7 +298,7 @@ impl Inner {
 
     /// Runs script code that may change state: afterwards the version moves, deferred tasks
     /// run, task errors are logged and the next deadline is armed (on `tx`, or by waking).
-    fn enter<R>(&self, tx: Option<&mut Tx>, f: impl FnOnce(&Vm) -> Result<R, ScriptError>) -> Option<Result<R, ScriptError>> {
+    pub(crate) fn enter<R>(&self, tx: Option<&mut Tx>, f: impl FnOnce(&Vm) -> Result<R, ScriptError>) -> Option<Result<R, ScriptError>> {
         let vm = self.vm()?;
         let out = self.timed(&vm, |vm| {
             let out = f(vm);
@@ -409,7 +338,7 @@ impl Inner {
 
     /// After a render, which has no `Tx`: a `task.delay` or `task.defer` it set asks for a
     /// frame, whose poll runs it.
-    fn note_schedule(&self, vm: &Vm) {
+    pub(crate) fn note_schedule(&self, vm: &Vm) {
         let Some((changed, deadline, defers)) =
             vm.lua.app_data_mut::<Sched>().map(|mut s| (s.take_changed(), s.next_deadline(), s.has_defers()))
         else {
@@ -512,6 +441,9 @@ impl Inner {
         let (mut vm, entry) = Vm::new(setup)?;
         let module = self.timed(&vm, |_| entry.call::<Value>(()))?;
         vm.set_module(module)?;
+        if let Some(start) = self.options.start.clone() {
+            self.timed(&vm, |vm| start(&vm.lua, &vm.module, vm.id))?;
+        }
         if let (Some(saved), Some(load)) = (saved, vm.export("loadHotState")) {
             self.timed(&vm, |_| load.call::<()>(saved))?;
         }
@@ -526,7 +458,7 @@ impl Inner {
         Ok(Reload { compile: Duration::ZERO, swap: start.elapsed() })
     }
 
-    fn env(&self, vm: &Vm, dark: bool) -> Rc<Env> {
+    pub(crate) fn env(&self, vm: &Vm, dark: bool) -> Rc<Env> {
         Rc::new(Env {
             script: self.weak.clone(),
             vm: vm.id,
@@ -535,6 +467,9 @@ impl Inner {
             dark,
             memo_failed: Cell::new(false),
             palette: self.options.palette.clone(),
+            shadows: self.options.shadows.clone(),
+            text: self.options.text,
+            weights: self.options.weights,
             garbage: Rc::downgrade(&vm.garbage),
             prefix: self.prefix.clone(),
             nodes: self.nodes.clone(),
@@ -614,7 +549,7 @@ impl Inner {
 }
 
 /// The element behind the handle a render or row function returned.
-fn take_root(out: Value) -> mlua::Result<El> {
+pub(crate) fn take_root(out: Value) -> mlua::Result<El> {
     match out {
         Value::LightUserData(LightUserData(p)) => top(|f| f.take(p)).unwrap_or_else(|| Err("no render in progress".into())).map_err(mlua::Error::runtime),
         Value::Nil => Ok(rune::el()),

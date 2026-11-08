@@ -120,6 +120,70 @@ impl Data {
     }
 }
 
+/// The value at stack slot `idx` as [`Data`], read with the C API inside a C function: whole
+/// numbers as integers, arrays as lists, string-keyed tables as maps; functions and userdata as
+/// `nil`.
+pub(crate) unsafe fn from_stack(state: *mut mlua::ffi::lua_State, idx: std::os::raw::c_int) -> Data {
+    // SAFETY: the caller passes a valid slot.
+    unsafe { read_stack(state, mlua::ffi::lua_absindex(state, idx), 0) }
+}
+
+unsafe fn read_stack(state: *mut mlua::ffi::lua_State, idx: std::os::raw::c_int, depth: usize) -> Data {
+    use mlua::ffi;
+    // SAFETY: `idx` is an absolute slot; every value pushed below is popped before returning.
+    unsafe {
+        match ffi::lua_type(state, idx) {
+            ffi::LUA_TBOOLEAN => Data::Bool(ffi::lua_toboolean(state, idx) != 0),
+            ffi::LUA_TNUMBER => {
+                let n = ffi::lua_tonumberx(state, idx, std::ptr::null_mut());
+                if n.fract() == 0.0 && n.abs() <= MAX_SAFE { Data::Integer(n as i64) } else { Data::Number(n) }
+            }
+            ffi::LUA_TSTRING => {
+                let mut len = 0;
+                let p = ffi::lua_tolstring(state, idx, &mut len);
+                Data::String(String::from_utf8_lossy(std::slice::from_raw_parts(p.cast::<u8>(), len)).into_owned())
+            }
+            ffi::LUA_TTABLE if depth < MAX_DEPTH => {
+                let len = ffi::lua_objlen(state, idx);
+                if len > 0 {
+                    let items = (1..=len)
+                        .map(|i| {
+                            ffi::lua_rawgeti(state, idx, i as ffi::lua_Integer);
+                            let item = read_stack(state, ffi::lua_gettop(state), depth + 1);
+                            ffi::lua_settop(state, -2);
+                            item
+                        })
+                        .collect();
+                    return Data::List(items);
+                }
+                let mut fields = BTreeMap::new();
+                let mut iter = 0;
+                while {
+                    iter = ffi::lua_rawiter(state, idx, iter);
+                    iter >= 0
+                } {
+                    let top = ffi::lua_gettop(state);
+                    let key = match ffi::lua_type(state, top - 1) {
+                        ffi::LUA_TSTRING | ffi::LUA_TNUMBER => match read_stack(state, top - 1, MAX_DEPTH) {
+                            Data::String(s) => Some(s),
+                            Data::Integer(i) => Some(i.to_string()),
+                            Data::Number(n) => Some(n.to_string()),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(key) = key {
+                        fields.insert(key, read_stack(state, top, depth + 1));
+                    }
+                    ffi::lua_settop(state, -3);
+                }
+                Data::Map(fields)
+            }
+            _ => Data::Nil,
+        }
+    }
+}
+
 impl From<bool> for Data {
     fn from(v: bool) -> Self {
         Data::Bool(v)

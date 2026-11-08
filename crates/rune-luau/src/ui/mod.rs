@@ -5,6 +5,7 @@
 //! work: `view:Memo` wraps `rune::memo::memo_with_hash`, and `ui.virtualList` is
 //! `El::virtual_rows`.
 
+pub(crate) mod host;
 pub(crate) mod nodes;
 pub(crate) mod props;
 pub(crate) mod rows;
@@ -81,9 +82,13 @@ pub(crate) struct Env {
     /// A `view:Memo` build failed this render, even if the script caught the error.
     pub(crate) memo_failed: Cell<bool>,
     pub(crate) palette: Palette,
+    pub(crate) shadows: Option<crate::options::Shadows>,
+    /// The text style `ui.text` starts from, and the weights `weight` names.
+    pub(crate) text: rune::TextStyle,
+    pub(crate) weights: [f32; 4],
     pub(crate) garbage: Weak<RefCell<Vec<c_int>>>,
     pub(crate) prefix: Rc<str>,
-    pub(crate) nodes: Rc<[nodes::HostNode]>,
+    pub(crate) nodes: Rc<[host::HostNode]>,
     pub(crate) warned: Rc<RefCell<FxHashSet<String>>>,
     /// Colours this render resolved, by name: a render uses a handful, many times each.
     pub(crate) colors: RefCell<Vec<(Box<str>, Color)>>,
@@ -91,22 +96,37 @@ pub(crate) struct Env {
 
 /// Functions that need the window's state type, picked when a render starts.
 pub(crate) struct Attach {
-    /// Runs the callback on press with a `press` event naming the element's key.
-    pub(crate) press: fn(El, Rc<Callback>, Option<Rc<str>>) -> El,
+    /// Runs the callback on press with a `press` event naming the element's key, and any
+    /// fields a host node adds (a switch's `checked`).
+    pub(crate) press: fn(El, Rc<Callback>, Option<Rc<str>>, Fields) -> El,
+    /// Runs the callback as the pointer enters and leaves, with a `hover` event.
+    pub(crate) hover: fn(El, Rc<Callback>, Option<Rc<str>>) -> El,
     pub(crate) rows: fn(El, rows::Spec) -> El,
     pub(crate) reload: fn(El, Weak<Inner>) -> El,
 }
 
+/// Fields a host node adds to the events its handlers get.
+pub(crate) type Fields = Rc<[(&'static str, crate::Data)]>;
+
 pub(crate) fn attach<S: 'static>() -> &'static Attach {
-    const { &Attach { press: press::<S>, rows: rows::attach::<S>, reload: reload::<S> } }
+    const { &Attach { press: press::<S>, hover: hover::<S>, rows: rows::attach::<S>, reload: reload::<S> } }
 }
 
-fn press<S: 'static>(el: El, cb: Rc<Callback>, key: Option<Rc<str>>) -> El {
-    el.on_press_tx(move |_: &mut S, tx| {
+fn press<S: 'static>(el: El, cb: Rc<Callback>, key: Option<Rc<str>>, fields: Fields) -> El {
+    el.on_press_tx(move |s: &mut S, tx| {
         if let Some(script) = cb.script.upgrade() {
             let mods = tx.mods();
-            let event = Event::press(key.as_deref(), mods.shift, mods.alt, mods.cmd);
-            script.handle(&cb, event, Some(tx));
+            let event = Event { fields: fields.clone(), ..Event::press(key.as_deref(), mods.shift, mods.alt, mods.cmd) };
+            script.around_write(s, Some(tx), |tx| script.handle(&cb, event, tx));
+        }
+    })
+}
+
+fn hover<S: 'static>(el: El, cb: Rc<Callback>, key: Option<Rc<str>>) -> El {
+    el.on_hover_change(move |s: &mut S, on: bool, tx: &mut rune::Tx| {
+        if let Some(script) = cb.script.upgrade() {
+            let event = Event { kind: "hover", key: key.as_deref(), mods: None, rows: None, entered: Some(on), fields: Rc::new([]) };
+            script.around_write(s, Some(tx), |tx| script.handle(&cb, event, tx));
         }
     })
 }
@@ -117,15 +137,17 @@ pub(crate) struct Event<'a> {
     pub(crate) key: Option<&'a str>,
     pub(crate) mods: Option<(bool, bool, bool)>,
     pub(crate) rows: Option<(usize, usize)>,
+    pub(crate) entered: Option<bool>,
+    pub(crate) fields: Fields,
 }
 
 impl<'a> Event<'a> {
     pub(crate) fn press(key: Option<&'a str>, shift: bool, alt: bool, cmd: bool) -> Self {
-        Event { kind: "press", key, mods: Some((shift, alt, cmd)), rows: None }
+        Event { kind: "press", key, mods: Some((shift, alt, cmd)), rows: None, entered: None, fields: Rc::new([]) }
     }
 
     pub(crate) fn to_table(&self, lua: &mlua::Lua) -> mlua::Result<mlua::Table> {
-        let t = lua.create_table_with_capacity(0, 6)?;
+        let t = lua.create_table_with_capacity(0, 6 + self.fields.len())?;
         t.raw_set("kind", self.kind)?;
         if let Some(key) = self.key {
             t.raw_set("key", key)?;
@@ -139,14 +161,24 @@ impl<'a> Event<'a> {
             t.raw_set("first", first)?;
             t.raw_set("last", last)?;
         }
+        if let Some(entered) = self.entered {
+            t.raw_set("entered", entered)?;
+        }
+        for (name, value) in self.fields.iter() {
+            t.raw_set(*name, value.clone())?;
+        }
         Ok(t)
     }
 }
 
 fn reload<S: 'static>(el: El, script: Weak<Inner>) -> El {
-    el.on_press_tx(move |_: &mut S, tx| {
+    el.on_press_tx(move |s: &mut S, tx| {
         if let Some(script) = script.upgrade() {
-            script.reload_from_card(tx);
+            script.around_write(s, Some(tx), |tx| {
+                if let Some(tx) = tx {
+                    script.reload_from_card(tx);
+                }
+            });
         }
     })
 }

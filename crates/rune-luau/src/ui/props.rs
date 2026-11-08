@@ -95,6 +95,19 @@ atoms! {
     RenderRow = "renderRow",
     RowKey = "rowKey",
     OnVisibleRows = "onVisibleRows",
+    OnHover = "onHover",
+    HoverTransition = "hoverTransition",
+    HoverGroup = "hoverGroup",
+    HoverGroupColor = "hoverGroupColor",
+    RevealOnHover = "revealOnHover",
+    Corners = "corners",
+    Pin = "pin",
+    Shadow = "shadow",
+    Selected = "selected",
+    Focusable = "focusable",
+    Disabled = "disabled",
+    HelpSide = "helpSide",
+    FadeOut = "fadeOut",
 }
 
 /// Every prop name the built-in nodes read.
@@ -231,6 +244,27 @@ pub(crate) struct Style {
     wrap: bool,
     selectable: bool,
     text_align: Option<Align>,
+    instant_hover: bool,
+    hover_group: bool,
+    group_color: Option<Color>,
+    reveal: bool,
+    corners: Option<[f32; 4]>,
+    pin: Option<[Option<f32>; 4]>,
+    shadow: Option<String>,
+    selected: bool,
+    focusable: bool,
+    pub(crate) disabled: bool,
+    help_above: bool,
+    fade_out: bool,
+    single_line: bool,
+    pub(crate) on_hover: Option<Rc<Callback>>,
+}
+
+impl Style {
+    /// A node's props before any are read: text starts from the host's text style.
+    pub(crate) fn new(env: &Env) -> Self {
+        Style { text: env.text, ..Style::default() }
+    }
 }
 
 impl Default for Style {
@@ -277,6 +311,20 @@ impl Default for Style {
             wrap: false,
             selectable: false,
             text_align: None,
+            instant_hover: false,
+            hover_group: false,
+            group_color: None,
+            reveal: false,
+            corners: None,
+            pin: None,
+            shadow: None,
+            selected: false,
+            focusable: false,
+            disabled: false,
+            help_above: false,
+            fade_out: false,
+            single_line: false,
+            on_hover: None,
         }
     }
 }
@@ -290,8 +338,11 @@ impl Style {
         if let Some(kids) = kids {
             e = e.children(kids);
         }
-        if let Some(cb) = press {
-            e = (attach.press)(e, cb, s.key.as_deref().map(Into::into));
+        if let Some(cb) = press.filter(|_| !s.disabled) {
+            e = (attach.press)(e, cb, s.key.as_deref().map(Into::into), Rc::new([]));
+        }
+        if let Some(cb) = s.on_hover.take() {
+            e = (attach.hover)(e, cb, s.key.as_deref().map(Into::into));
         }
         if let Some(w) = s.w {
             e = match w {
@@ -399,13 +450,59 @@ impl Style {
         if let Some(n) = s.radius {
             e = e.radius(n);
         }
+        if let Some(r) = s.corners {
+            e = e.corners(r);
+        }
         if s.clip {
             e = e.clip_soft(0.0);
+        }
+        if s.instant_hover {
+            e = e.hover_motion(rune::Anim::INSTANT, rune::Anim::INSTANT);
+        }
+        if s.hover_group {
+            e = e.hover_group();
+        }
+        if let Some(c) = s.group_color {
+            e = e.group_color(c);
+        }
+        if s.reveal {
+            e = e.group_opacity(0.0, 1.0);
+        }
+        if let Some([l, t, r, b]) = s.pin {
+            e = e.pin(l, t, r, b);
+        }
+        if let Some(shadows) = s.shadow.as_deref().and_then(|name| env.shadows.as_ref().and_then(|f| f(name, env.dark))) {
+            // In CSS order, the first on top.
+            e = shadows.into_iter().rev().fold(e, El::box_shadow);
+        }
+        if s.selected {
+            if let Some(c) = env.color("selected") {
+                e = e.fill(c);
+            }
+            e = e.focus_selected(true);
+        }
+        if s.focusable {
+            e = e.focusable(true);
+        }
+        if s.disabled {
+            e = e.disabled(true);
+        }
+        if s.help_above {
+            e = e.help_above();
+        }
+        if !is_text && let Some(c) = s.color {
+            e = e.color(c);
         }
         if is_text {
             e = e.font(s.text).color(s.color.unwrap_or_else(|| env.text_color()));
             if s.truncate {
                 e = e.truncate();
+            }
+            if s.fade_out {
+                e = e.truncate_fade();
+            }
+            if s.single_line {
+                e = e.single_line();
             }
             if s.wrap {
                 e = e.wrap();
@@ -534,14 +631,38 @@ impl Style {
             Atom::Size => self.text.size = num(v)?,
             Atom::Weight => {
                 self.text.weight = match v {
-                    Value::Str("regular") => 400.0,
-                    Value::Str("medium") => 500.0,
-                    Value::Str("semibold") => 600.0,
-                    Value::Str("bold") => 700.0,
+                    Value::Str("regular") => env.weights[0],
+                    Value::Str("medium") => env.weights[1],
+                    Value::Str("semibold") => env.weights[2],
+                    Value::Str("bold") => env.weights[3],
                     Value::Num(n) => n as f32,
                     other => return Err(format!("weight must be regular, medium, semibold or bold, got {}", self::name(other))),
                 }
             }
+            Atom::HoverTransition => {
+                self.instant_hover = match v {
+                    Value::Str("instant") => true,
+                    Value::Str("default") | Value::Nil => false,
+                    other => return Err(format!("hoverTransition must be default or instant, got {}", self::name(other))),
+                }
+            }
+            Atom::HoverGroup => self.hover_group = flag(v)?,
+            Atom::HoverGroupColor => self.group_color = Some(color(v)?),
+            Atom::RevealOnHover => self.reveal = flag(v)?,
+            Atom::Shadow => {
+                self.shadow = match v {
+                    Value::Str(s) => Some(s.to_owned()),
+                    Value::Nil => None,
+                    other => return Err(format!("shadow must be an elevation name, got {}", self::name(other))),
+                }
+            }
+            Atom::Selected => self.selected = flag(v)?,
+            Atom::Focusable => self.focusable = flag(v)?,
+            Atom::Disabled => self.disabled = flag(v)?,
+            Atom::HelpSide => self.help_above = matches!(v, Value::Str("top")),
+            Atom::FadeOut => self.fade_out = flag(v)?,
+            // Tables, read off the stack by `decode_at`.
+            Atom::Corners | Atom::Pin => return Err(format!("{name} must be a table, got {}", self::name(v))),
             Atom::LineHeight => self.text = self.text.lh(num(v)?),
             Atom::Tracking => self.text = self.text.tracking(num(v)?),
             Atom::Mono => {
@@ -557,6 +678,7 @@ impl Style {
             Atom::NoWrap => {
                 if flag(v)? {
                     self.wrap = false;
+                    self.single_line = true;
                 }
             }
             Atom::Truncate => self.truncate = flag(v)?,
@@ -570,12 +692,57 @@ impl Style {
                 })
             }
             // Read by the node that takes them; elsewhere they mean nothing.
-            Atom::OnPress | Atom::Count | Atom::EstimatedRowHeight | Atom::Version | Atom::RenderRow | Atom::RowKey | Atom::OnVisibleRows => {
+            Atom::OnPress | Atom::OnHover | Atom::Count | Atom::EstimatedRowHeight | Atom::Version | Atom::RenderRow | Atom::RowKey | Atom::OnVisibleRows => {
                 env.warn_once(format!("{name} has no effect on this node"));
             }
         }
         Ok(())
     }
+
+    /// Decodes the prop whose value is at stack slot `idx`, reading the table-valued ones
+    /// (`corners`, `pin`) off the stack.
+    pub(crate) unsafe fn decode_at(&mut self, state: *mut ffi::lua_State, atom: Atom, idx: c_int, env: &Env, is_text: bool) -> Result<(), String> {
+        // SAFETY: the caller passes a valid slot.
+        let v = unsafe { read(state, idx) };
+        match (atom, v) {
+            (Atom::Corners | Atom::Pin, Value::Nil) => Ok(()),
+            (Atom::Corners, Value::Other("table")) => {
+                // SAFETY: slot `idx` holds a table.
+                let r = unsafe { numbers::<4>(state, idx, &[]) };
+                self.corners = Some(r.map(|n| n.unwrap_or(0.0)));
+                Ok(())
+            }
+            (Atom::Pin, Value::Other("table")) => {
+                // SAFETY: slot `idx` holds a table.
+                self.pin = Some(unsafe { numbers::<4>(state, idx, &["left", "top", "right", "bottom"]) });
+                Ok(())
+            }
+            _ => self.decode(atom, v, env, is_text),
+        }
+    }
+}
+
+/// `N` numbers from the table at `idx`: by name when `names` are given, else items `1..=N`.
+unsafe fn numbers<const N: usize>(state: *mut ffi::lua_State, idx: c_int, names: &[&str]) -> [Option<f32>; N] {
+    let mut out = [None; N];
+    // SAFETY: `idx` is a table; each lookup pushes one value, popped right after.
+    unsafe {
+        let idx = ffi::lua_absindex(state, idx);
+        for (i, slot) in out.iter_mut().enumerate() {
+            let kind = match names.get(i) {
+                Some(name) => {
+                    ffi::lua_pushlstring(state, name.as_ptr().cast(), name.len());
+                    ffi::lua_rawget(state, idx)
+                }
+                None => ffi::lua_rawgeti(state, idx, i as ffi::lua_Integer + 1),
+            };
+            if kind == ffi::LUA_TNUMBER {
+                *slot = Some(ffi::lua_tonumberx(state, -1, std::ptr::null_mut()) as f32);
+            }
+            ffi::lua_settop(state, -2);
+        }
+    }
+    out
 }
 
 fn as_str(atom: Atom, v: Value<'_>) -> Result<&str, String> {

@@ -41,7 +41,7 @@ pub(crate) unsafe extern "C-unwind" fn ui_virtual_list(state: *mut ffi::lua_Stat
         }
         guard(state, || {
             top(|frame| {
-                let mut style = Style::default();
+                let mut style = Style::new(&frame.env);
                 let (mut count, mut estimate, mut version, mut key) = (0usize, 32.0f32, None, None::<String>);
                 let (mut render, mut row_key, mut visible, mut gap) = (None, None, None, 0.0f32);
                 let mut iter = 0;
@@ -64,7 +64,7 @@ pub(crate) unsafe extern "C-unwind" fn ui_virtual_list(state: *mut ffi::lua_Stat
                             return Err(format!("ui.virtualList {atom:?} can't be a {}", props::name(other)));
                         }
                         (Ok(Atom::OnPress), _) => frame.env.warn_once("ui.virtualList takes no onPress".into()),
-                        (Ok(atom), v) => style.decode(atom, v, &frame.env, false)?,
+                        (Ok(atom), _) => style.decode_at(state, atom, -1, &frame.env, false)?,
                         (Err(name), _) => frame.env.warn_once(format!("unknown prop {name}")),
                     }
                     ffi::lua_settop(state, -3);
@@ -102,30 +102,34 @@ pub(crate) fn attach<S: 'static>(viewport: El, spec: Spec) -> El {
     let mut stack = col().key("rows").w_full().gap(spec.gap).growth(GrowthSpec::default()).virtual_rows(
         spec.count,
         spec.estimate,
-        move |_: &S, i| match &keys.key {
-            Some(cb) => upgrade(&cb.script).map_or_else(|| i.to_string(), |s| s.row_key(cb, i)).into(),
+        move |s: &S, i| match &keys.key {
+            Some(cb) => upgrade(&cb.script).and_then(|script| script.around_read(s, || script.row_key(cb, i))).unwrap_or_else(|| i.to_string()).into(),
             None => i.to_string().into(),
         },
-        move |_: &S, i| {
+        move |s: &S, i| {
             let Some(script) = upgrade(&rows.render.script) else { return rune::el() };
-            let key = match &rows.key {
-                Some(cb) => script.row_key(cb, i),
-                None => i.to_string(),
-            };
-            // Rune keys the row by `key` whatever its memo id; keying the root by that id
-            // keeps memo from reporting a replaced key.
-            let id = format!("{}/{key}", rows.id);
-            rune::memo::memo_with_hash(id.clone(), rows.version, || script.row::<S>(&rows, i).key(id))
+            script
+                .around_read(s, || {
+                    let key = match &rows.key {
+                        Some(cb) => script.row_key(cb, i),
+                        None => i.to_string(),
+                    };
+                    // Rune keys the row by `key` whatever its memo id; keying the root by that id
+                    // keeps memo from reporting a replaced key.
+                    let id = format!("{}/{key}", rows.id);
+                    rune::memo::memo_with_hash(id.clone(), rows.version, || script.row::<S>(&rows, i).key(id))
+                })
+                .unwrap_or_else(rune::el)
         },
     );
     if let Some(v) = spec.keys_version {
         stack = stack.virtual_rows_version(v);
     }
     if let Some(cb) = spec.visible {
-        stack = stack.on_visible_rows(move |_: &mut S, range| {
+        stack = stack.on_visible_rows(move |s: &mut S, range| {
             let Some(script) = cb.script.upgrade() else { return false };
-            let event = Event { kind: "visible-rows", key: None, mods: None, rows: Some((range.start + 1, range.end)) };
-            script.handle(&cb, event, None);
+            let event = Event { kind: "visible-rows", key: None, mods: None, rows: Some((range.start + 1, range.end)), entered: None, fields: Rc::new([]) };
+            script.around_write(s, None, |tx| script.handle(&cb, event, tx));
             true
         });
     }

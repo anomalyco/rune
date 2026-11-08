@@ -35,6 +35,9 @@ return {
 | --- | --- |
 | `Script::new(name, sources)`, `Script::with_options(..)` | Compiles and starts a script. One that fails to start still renders, as an error card. |
 | `ScriptOptions::new().palette(..).setup(..).node(..).time_limit(..).memory_limit(..).on_log(..)` | Colour names, host bindings for each new VM, host-built `ui.*` nodes, the watchdog limit (250 ms), the heap limit (64 MB), and a log sink. |
+| `ScriptOptions::start(..).around(..).around_read(..).shadows(..).text(..)` | A hook that runs with each new VM and the table its entry returned (call a setup function it hands over); hooks around entries from the UI with the app's state and transaction; elevation shadows; the base text style and the weights `regular`..`bold` name. |
+| `Sources::entry(path)` | Starts from another module than `init.luau` (`app.luau` beside it). |
+| `script.render_fn(id, version, dark, f, args)`, `script.spawn_fn(f, args, tx)`, `script.eval_fn(f, args)` | Functions a script handed the host: render one as a memoized surface, run one as a task, or call one at once without letting it wait. `script.version()` moves whenever script code runs. |
 | `script.view(cx)`, `script.surface(cx, name)` | The module's `render(view)` (or `name(view)`), memoized on the script's version: a view rebuilt for other reasons reuses it without entering the VM. |
 | `script.poll(now, tx)` | Runs finished host calls, due `task.wait`/`task.delay` deadlines and deferred tasks, then arms `Tx::wake_after` for the next deadline. With nothing due it never enters the VM. |
 | `script.reload(sources)`, `script.watch(dir)` | Hot reload: the new VM gets `loadHotState(saveHotState())`. A compile or start error keeps the running VM. |
@@ -50,8 +53,8 @@ return {
   skipped. Props: `key`, `w`/`h` (points or `"full"`), `minW`..`maxH`, `grow`, `shrink`, `pad`,
   `px`..`pl`, `m`..`ml`, `gap`, `align`, `justify`, `center`, `wrap`, `fill`, `hover`, `press`,
   `border`, `borderWidth`, `radius`, `clip`, `scrollY`, `scrollX`, `opacity`, `role`, `label`,
-  `help`, `onPress`, and for text `size`, `weight`, `lineHeight`, `tracking`, `color`, `mono`,
-  `tabular`, `noWrap`, `truncate`, `selectable`, `textAlign`. Colours are palette names or
+  `help`, `helpSide`, `pin`, `corners`, `shadow`, `selected`, `focusable`, `disabled`, `hoverTransition`, `hoverGroup`, `hoverGroupColor`, `revealOnHover`, `onPress`, `onHover`, and for text `size`, `weight`, `lineHeight`, `tracking`, `color`, `mono`,
+  `tabular`, `noWrap`, `truncate`, `fadeOut`, `selectable`, `textAlign`. Colours are palette names or
   `ui.hex("#rrggbb")`.
 - **`view:Memo(key, version, build)`** reuses the subtree while `version` (a string, number or
   boolean) is unchanged, without calling `build`. **`view:Handler(fn)`** returns `fn`; handlers
