@@ -410,14 +410,20 @@ impl<S: 'static> View<S> {
                 out = out.child(c.children(all.map(|a| note(build(s, a), a))));
             }
             DiffMode::Split => {
+                let single = st.single_column(f);
                 let half = |key: &'static str, els: Vec<El>| {
-                    let mut c = col().key(key).w_frac(0.5).min_w(0.0);
-                    if let Some(w) = self.view_w(st, true) {
+                    let mut c = col().key(key).w_frac(if single.is_some() { 1.0 } else { 0.5 }).min_w(0.0);
+                    if let Some(w) = self.view_w(st, single.is_none()) {
                         c = c.max_w(w);
                     }
                     c.children(els)
                 };
-                out = out.child(row().key("notes").w_full().items_start().child(half("old", old)).child(half("new", new)));
+                let notes = row().key("notes").w_full().items_start();
+                out = out.child(match single {
+                    Some(Side::Old) => notes.child(half("old", old)),
+                    Some(Side::New) => notes.child(half("new", new)),
+                    None => notes.child(half("old", old)).child(half("new", new)),
+                });
             }
         }
         out
@@ -469,10 +475,11 @@ impl<S: 'static> View<S> {
 
     fn split<'a>(&self, st: &'a DiffState, i: usize, f: usize, old: Option<Cell<'a>>, new: Option<Cell<'a>>) -> El {
         let digits = st.digits(f);
+        let single = st.single_column(f);
         let half = |side: Side, c: Option<Cell<'a>>| -> El {
             let l = &self.look;
             let key = if side == Side::Old { "old" } else { "new" };
-            let mut h = row().key(key).w_frac(0.5).min_w(0.0).min_h(LINE_H).items_start().self_stretch();
+            let mut h = row().key(key).w_frac(if single.is_some() { 1.0 } else { 0.5 }).min_w(0.0).min_h(LINE_H).items_start().self_stretch();
             let Some(c) = c else {
                 return h.fill(l.empty_bg);
             };
@@ -500,8 +507,16 @@ impl<S: 'static> View<S> {
             }
             h
         };
-        let divider = col().key("divider").w(1.0).self_stretch().fill(self.look.border);
-        row().w_full().min_h(LINE_H).items_stretch().child(half(Side::Old, old)).child(divider).child(half(Side::New, new))
+        let line = row().w_full().min_h(LINE_H).items_stretch();
+        // An added or deleted file has one side: it takes the whole width, as one column.
+        match single {
+            Some(Side::Old) => line.child(half(Side::Old, old)),
+            Some(Side::New) => line.child(half(Side::New, new)),
+            None => {
+                let divider = col().key("divider").w(1.0).self_stretch().fill(self.look.border);
+                line.child(half(Side::Old, old)).child(divider).child(half(Side::New, new))
+            }
+        }
     }
 
     fn bar(&self, kind: LineKind) -> El {

@@ -248,6 +248,25 @@ impl FileDiff {
         self.old_text.is_some() || self.new_text.is_some()
     }
 
+    /// The only side the file has: `New` for an added file, `Old` for a deleted one, `None`
+    /// when it has both. A file diffed from texts counts as added when its old text is empty
+    /// and its new one isn't (and the other way round as deleted), unless it moved.
+    pub fn sole_side(&self) -> Option<Side> {
+        match self.status {
+            FileStatus::Added => Some(Side::New),
+            FileStatus::Deleted => Some(Side::Old),
+            FileStatus::Modified => {
+                let empty = |t: &Option<Rc<Source>>| t.as_ref().map(|t| t.text.is_empty());
+                match (empty(&self.old_text), empty(&self.new_text)) {
+                    (Some(true), Some(false)) => Some(Side::New),
+                    (Some(false), Some(true)) => Some(Side::Old),
+                    _ => None,
+                }
+            }
+            FileStatus::Renamed | FileStatus::Copied => None,
+        }
+    }
+
     /// Unchanged line `n` of the old side (with `new` its number on the new side), from
     /// whichever whole text the diff has.
     pub(crate) fn context_line(&self, old: u32, new: u32) -> Option<&str> {
