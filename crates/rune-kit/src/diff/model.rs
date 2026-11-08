@@ -267,6 +267,68 @@ impl FileDiff {
         }
     }
 
+    /// The whole text of `side`, when the diff has it ([`FileDiff::from_texts`],
+    /// [`FileDiff::fold`]).
+    pub fn text(&self, side: Side) -> Option<&str> {
+        let t = match side {
+            Side::Old => &self.old_text,
+            Side::New => &self.new_text,
+        };
+        t.as_deref().map(|t| t.text.as_str())
+    }
+
+    /// A diff whose one hunk holds the whole file, as a patch made with full context does,
+    /// folded as a diff of the two texts is: the hunk splits around its changes with `context`
+    /// unchanged lines each side, and the texts it holds stay with the diff, so every folded
+    /// range can be expanded. The patch's own line pairing stays. A diff of any other shape
+    /// (more than one hunk, or one that starts past the first line) comes back as it was.
+    pub fn fold(mut self, context: u32) -> FileDiff {
+        let [h] = self.hunks.as_slice() else { return self };
+        if self.binary || h.first(Side::Old) > 1 || h.first(Side::New) > 1 {
+            return self;
+        }
+        let text = |side: Side| {
+            let kept = |l: &&Line| l.kind == LineKind::Context || l.kind == if side == Side::Old { LineKind::Removed } else { LineKind::Added };
+            h.lines.iter().filter(kept).fold(String::new(), |mut s, l| {
+                s.push_str(&l.text);
+                if !l.no_newline {
+                    s.push('\n');
+                }
+                s
+            })
+        };
+        let (old, new) = (Rc::new(Source::new(&text(Side::Old))), Rc::new(Source::new(&text(Side::New))));
+        let lines = std::mem::take(&mut self.hunks).pop().map(|h| h.lines).unwrap_or_default();
+        let ranges = lines.iter().enumerate().filter(|(_, l)| l.kind != LineKind::Context).fold(Vec::<(usize, usize)>::new(), |mut out, (i, _)| {
+            let (start, end) = (i.saturating_sub(context as usize), (i + context as usize).min(lines.len() - 1));
+            match out.last_mut() {
+                Some(r) if start <= r.1 + 1 => r.1 = end,
+                _ => out.push((start, end)),
+            }
+            out
+        });
+        let before = |side: Side, i: usize| lines[..i].iter().filter(|l| l.number(side).is_some()).count() as u32;
+        self.hunks = ranges
+            .into_iter()
+            .map(|(start, end)| {
+                let lines = lines[start..=end].to_vec();
+                let count = |side: Side| lines.iter().filter(|l| l.number(side).is_some()).count() as u32;
+                let (ob, nb, oc, nc) = (before(Side::Old, start), before(Side::New, start), count(Side::Old), count(Side::New));
+                Hunk {
+                    old_start: if oc == 0 { ob } else { ob + 1 },
+                    old_count: oc,
+                    new_start: if nc == 0 { nb } else { nb + 1 },
+                    new_count: nc,
+                    section: section(&old, ob),
+                    lines,
+                }
+            })
+            .collect();
+        self.old_text = Some(old);
+        self.new_text = Some(new);
+        self
+    }
+
     /// Unchanged line `n` of the old side (with `new` its number on the new side), from
     /// whichever whole text the diff has.
     pub(crate) fn context_line(&self, old: u32, new: u32) -> Option<&str> {
