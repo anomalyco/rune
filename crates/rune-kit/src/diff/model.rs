@@ -192,13 +192,24 @@ impl FileDiff {
     /// change and word changes on paired lines. Both texts stay with it, so every unchanged
     /// range between hunks can be expanded.
     pub fn from_texts(path: impl Into<String>, old: &str, new: &str) -> FileDiff {
+        FileDiff::from_texts_with_context(path, old, new, CONTEXT)
+    }
+
+    /// [`FileDiff::from_texts`] with `context` unchanged lines around each change instead of
+    /// three: four is what jsdiff (and so OpenCode Desktop) keeps.
+    pub fn from_texts_with_context(path: impl Into<String>, old: &str, new: &str, context: u32) -> FileDiff {
         let path = path.into();
-        FileDiff::between(Some(path.clone()), Some(path), old, new)
+        FileDiff::between_with_context(Some(path.clone()), Some(path), old, new, context)
     }
 
     /// [`FileDiff::from_texts`] for a file whose path changed (a rename), was added (`old_path`
     /// `None`, `old` empty) or deleted (`new_path` `None`, `new` empty).
     pub fn between(old_path: Option<String>, new_path: Option<String>, old: &str, new: &str) -> FileDiff {
+        FileDiff::between_with_context(old_path, new_path, old, new, CONTEXT)
+    }
+
+    /// [`FileDiff::between`] with `context` unchanged lines around each change.
+    pub fn between_with_context(old_path: Option<String>, new_path: Option<String>, old: &str, new: &str, context: u32) -> FileDiff {
         let mut f = FileDiff::empty(old_path, new_path);
         f.status = match (&f.old_path, &f.new_path) {
             (None, _) => FileStatus::Added,
@@ -211,7 +222,7 @@ impl FileDiff {
             return f;
         }
         let (a, b) = (Rc::new(Source::new(old)), Rc::new(Source::new(new)));
-        f.hunks = hunks(&a, &b);
+        f.hunks = hunks(&a, &b, context);
         f.old_text = Some(a);
         f.new_text = Some(b);
         f.pair_words();
@@ -395,9 +406,9 @@ pub(crate) fn columns(line: &str) -> u32 {
     line.chars().fold(0, |col, c| if c == '\t' { col + 4 - col % 4 } else { col + 1 })
 }
 
-/// Hunks of `old` to `new` with [`CONTEXT`] lines around each change, merged when their
+/// Hunks of `old` to `new` with `context` lines around each change, merged when their
 /// context would touch.
-fn hunks(old: &Source, new: &Source) -> Vec<Hunk> {
+fn hunks(old: &Source, new: &Source, context: u32) -> Vec<Hunk> {
     // Intern lines; a last line without its break differs from the same text with one.
     let mut ids: HashMap<(&str, bool), u32> = HashMap::new();
     let (a, b) = (intern(old, &mut ids), intern(new, &mut ids));
@@ -433,7 +444,7 @@ fn hunks(old: &Source, new: &Source) -> Vec<Hunk> {
     let mut groups: Vec<Vec<(Range<u32>, Range<u32>)>> = Vec::new();
     for c in changes {
         match groups.last_mut().and_then(|g| g.last().cloned().map(|l| (g, l))) {
-            Some((g, last)) if c.0.start - last.0.end <= 2 * CONTEXT => g.push(c),
+            Some((g, last)) if c.0.start - last.0.end <= 2 * context => g.push(c),
             _ => groups.push(vec![c]),
         }
     }
@@ -442,10 +453,10 @@ fn hunks(old: &Source, new: &Source) -> Vec<Hunk> {
         .into_iter()
         .map(|g| {
             let (first, last) = (&g[0], &g[g.len() - 1]);
-            let start = first.0.start.saturating_sub(CONTEXT);
+            let start = first.0.start.saturating_sub(context);
             let shift = first.0.start - start;
             let (os, ns) = (start, first.1.start - shift);
-            let end_old = (last.0.end + CONTEXT).min(old.len());
+            let end_old = (last.0.end + context).min(old.len());
             let mut lines = Vec::new();
             let (mut i, mut j) = (os, ns);
             for c in &g {

@@ -350,7 +350,8 @@ the delayed, self-dismissing system tooltip when the look needn't match. The gal
 `rune_kit::diff` shows code changes for review. `diff::parse(patch)` reads `git diff` output
 (several files, renames with similarity, mode changes, binary files, `\ No newline at end of
 file`, quoted paths) and `FileDiff::from_texts(path, old, new)` diffs two texts (Myers, line
-by line). Changed lines that pair up get word-level changes. The app keeps a `DiffState` in
+by line, three lines of context; `from_texts_with_context` keeps another count). Changed lines
+that pair up get word-level changes. The app keeps a `DiffState` in
 its state and draws it with `DiffView`:
 
 ```rust
