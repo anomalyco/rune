@@ -256,6 +256,8 @@ impl AnimSource {
 pub(super) struct Inh {
     pub(super) opacity: f32,
     pub(super) paint_opacity: f32,
+    /// `El::stuck_fade`: how much of a stuck header's first child (its title) shows.
+    pub(super) first_fade: f32,
     pub(super) clip: [f32; 4],
     pub(super) fade: [f32; 4],
     pub(super) fade_origin: [f32; 4],
@@ -327,7 +329,7 @@ impl ScaleMotion {
 
 impl Default for Inh {
     fn default() -> Self {
-        Inh { opacity: 1.0, paint_opacity: 1.0, clip: NO_CLIP, fade: [0.0; 4], fade_origin: NO_CLIP,
+        Inh { opacity: 1.0, paint_opacity: 1.0, first_fade: 1.0, clip: NO_CLIP, fade: [0.0; 4], fade_origin: NO_CLIP,
             paint_clip: NO_CLIP, paint_fade: [0.0; 4], paint_fade_origin: NO_CLIP, rounded: None,
             scale: 1.0, anchor: [0.0; 2], anchor_to: [0.0; 2], blur: 0.0, dy: 0.0, dx: 0.0, cover: [0.0; 2], outer: None, mark: 0, group: 0.0,
             scale_motion: ScaleMotion::Still, still: (1.0, [0.0; 2], [0.0; 2]), in_cache: false, skip_paint: false, turn: 0,

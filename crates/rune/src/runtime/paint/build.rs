@@ -138,6 +138,12 @@ impl<S: 'static> Runtime<S> {
             let n = &self.nodes[i];
             let Some(p) = self.scene.presented(n.id) else { continue };
             let mut pinh = n.parent.map_or_else(|| self.root_inh(), |pr| self.inh_scratch[pr]);
+            // A stuck header's title (its first child) fades as the next header comes up.
+            if pinh.first_fade < 1.0 && n.parent.is_some_and(|pr| pr + 1 == i) {
+                pinh.opacity *= pinh.first_fade;
+                pinh.paint_opacity *= pinh.first_fade;
+            }
+            pinh.first_fade = 1.0;
             pinh.dy += self.row_dy[i];
             pinh.snap.rigid[1] += self.row_dy[i];
             if let Some(a) = &n.above
@@ -145,7 +151,7 @@ impl<S: 'static> Runtime<S> {
             {
                 self.anchored_inh(i, j, a, &p, &mut pinh);
             }
-            // `El::stuck_fade`: how much of a stuck header's children show.
+            // `El::stuck_fade`: how much of a stuck header's title shows.
             let mut kids_fade = 1.0f32;
             if self.has_sticky && let Some((edge, inset, tail)) = self.sticky_of(i) {
                 // Worked out from this frame's offsets, which the viewport above already applied.
@@ -1194,7 +1200,7 @@ impl<S: 'static> Runtime<S> {
                 }
                 self.unturned_drawn[i] = (r.map(|v| v / s), full_clip);
             }
-            self.inh_scratch[i] = Inh { opacity: effective_opacity * kids_fade, paint_opacity: o * kids_fade,
+            self.inh_scratch[i] = Inh { opacity: effective_opacity, paint_opacity: o, first_fade: kids_fade,
                 clip: full_clip, fade: hit_fade, fade_origin: hit_origin,
                 paint_clip: clip, paint_fade: fade, paint_fade_origin: fade_origin, rounded, scale, anchor, anchor_to, blur, dy, dx,
                 cover: cover_offset, outer, mark, group,

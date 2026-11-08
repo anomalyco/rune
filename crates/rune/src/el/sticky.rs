@@ -87,8 +87,9 @@ impl El {
         self.sticky.get_or_insert_with(Default::default).shadows.push(shadow);
         self
     }
-    /// Fades this [`El::sticky_top`] element's children, not its own fill, as the next
-    /// sticky-top sibling rises to it: whole while that sibling's top is `lead + span` points or
+    /// Fades this [`El::sticky_top`] element's first child (its title), not its own fill or its
+    /// other children (a cover above it, a gradient under it), as the next sticky-top sibling
+    /// rises to it: whole while that sibling's top is `lead + span` points or
     /// more below this one's drawn top, gone once it's `lead` below, linearly between, frame by
     /// frame with the scroll. Desktop's Home fades a stuck day header's title so as the next day
     /// comes up (`home/scroll.ts`), its fill still covering the rows under it until the next
