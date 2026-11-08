@@ -436,6 +436,8 @@ pub(super) struct Stack {
     pub(crate) moving: bool,
     pub(super) reorder: row_reorder::Reorder,
     pub(super) slides: content_slide::ContentSlides,
+    /// Fold rows opening or shutting together as one block.
+    pub(super) runs: Vec<growth_runs::GrowthRun>,
 }
 
 /// What a press on a window drag region asks the shell to do, synchronously in that press.

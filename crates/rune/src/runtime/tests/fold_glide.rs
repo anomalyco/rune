@@ -436,3 +436,83 @@ fn a_fold_shut_from_its_stuck_header_makes_no_jump_that_shows() {
         assert!(jumps.is_empty(), "after {after}, tap {tap}: {jumps:#?}");
     }
 }
+
+/// Where `below` is drawn on each of the first `n` frames at 120 Hz after the middle row (a
+/// fold, or a plain row) leaves the stack.
+fn after_removal(fold: bool, n: usize) -> Vec<f32> {
+    fn view(s: &(bool, bool), _: &mut Cx<(bool, bool)>) -> El {
+        let (present, fold) = *s;
+        let mut rows = vec![el().key("above").h(100.0).w_full()];
+        if present {
+            let row = el().key("group").h(40.0).w_full();
+            rows.push(if fold { row.fold_glide(rune_motion::Spring::new(0.3, 0.0)) } else { row });
+        }
+        rows.push(el().key("below").h(100.0).w_full());
+        col().key("root").child(col().key("stack").growth(GrowthSpec::default()).children(rows))
+    }
+    let mut rt = Runtime::new((true, fold), view, (400.0, 600.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    rt.state.0 = false;
+    rt.dirty = true;
+    (0..n).map(|_| {
+        rt.frame(1.0 / 120.0);
+        rt.elements().into_iter().find(|e| e.key.as_deref() == Some("below")).unwrap().rect[1]
+    }).collect()
+}
+
+#[test]
+fn a_fold_glide_row_that_leaves_shuts_at_once() {
+    let fold = after_removal(true, 12);
+    assert!(fold[1] < 140.0 - 0.5, "the fold starts shutting within two frames: {fold:?}");
+    assert!(fold.windows(2).all(|w| w[1] <= w[0]), "and shuts monotonically: {fold:?}");
+    let plain = after_removal(false, 12);
+    assert!(plain.iter().all(|&y| (y - 140.0).abs() < 1e-3), "a plain row still holds its space while it fades: {plain:?}");
+}
+
+/// Each frame at 120 Hz after rows `r0`–`r2` (20 pt folds) come into or leave the stack
+/// together: their drawn heights, and where `below` is drawn.
+fn block(opening: bool, frames: usize) -> Vec<([f32; 3], f32)> {
+    fn view(present: &bool, _: &mut Cx<bool>) -> El {
+        let mut rows = vec![el().key("above").h(100.0).w_full()];
+        if *present {
+            rows.extend((0..3).map(|i| el().key(format!("r{i}")).h(20.0).w_full().fold_glide(rune_motion::Spring::new(0.3, 0.0))));
+        }
+        rows.push(el().key("below").h(100.0).w_full());
+        col().key("root").child(col().key("stack").growth(GrowthSpec::default()).children(rows))
+    }
+    let mut rt = Runtime::new(!opening, view, (400.0, 600.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    rt.state = opening;
+    rt.dirty = true;
+    (0..frames).map(|_| {
+        rt.frame(1.0 / 120.0);
+        let els = rt.elements();
+        let h = |k: &str| els.iter().find(|e| e.key.as_deref() == Some(k)).map_or(0.0, |e| e.rect[3]);
+        ([h("r0"), h("r1"), h("r2")], els.iter().find(|e| e.key.as_deref() == Some("below")).unwrap().rect[1])
+    }).collect()
+}
+
+#[test]
+fn fold_rows_that_open_together_fill_top_to_bottom() {
+    let frames = block(true, 90);
+    for (k, (hs, _)) in frames.iter().enumerate() {
+        let part = hs.iter().filter(|&&h| h > 0.01 && h < 19.99).count();
+        assert!(part <= 1, "frame {k}: one row at the edge at a time: {hs:?}");
+        assert!(hs.windows(2).all(|w| w[1] <= 0.01 || w[0] >= 19.99), "frame {k}: a row opens once the one above is open: {hs:?}");
+    }
+    assert!(frames.windows(2).all(|w| w[1].1 >= w[0].1), "below moves down, never back: {frames:?}");
+    assert!(frames[8].0[0] > 19.99 && frames[8].0[2] < 0.01, "a third in, the top row is open and the last still shut: {:?}", frames[8]);
+    assert_eq!(frames.last().unwrap(), &([20.0; 3], 160.0));
+}
+
+#[test]
+fn fold_rows_that_leave_together_empty_bottom_to_top() {
+    let frames = block(false, 90);
+    for (k, (hs, _)) in frames.iter().enumerate() {
+        let part = hs.iter().filter(|&&h| h > 0.01 && h < 19.99).count();
+        assert!(part <= 1, "frame {k}: one row at the edge at a time: {hs:?}");
+    }
+    assert!(frames.windows(2).all(|w| w[1].1 <= w[0].1), "below moves up, never back: {frames:?}");
+    assert!(frames[1].1 < 160.0, "the block starts shutting at once: {:?}", frames[1]);
+    assert!((frames.last().unwrap().1 - 100.0).abs() < 1e-3);
+}

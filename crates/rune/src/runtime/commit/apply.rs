@@ -141,6 +141,7 @@ impl<S: 'static> Runtime<S> {
             let list = self.virtuals.get(&nodes[c].path);
             let is_virtual = list.is_some();
             let replaced = list.is_some_and(crate::el::virtual_list::VirtualList::replaced_view);
+            let (mut opened, mut shut) = (Vec::new(), Vec::new());
             let mut order = std::mem::take(&mut scratch.order);
             order.clear();
             order.reserve(new_ids.len() + 4);
@@ -157,8 +158,12 @@ impl<S: 'static> Runtime<S> {
                         order.push(old);
                     }
                     ni += 1;
-                } else if self.grows.get(&old).is_some_and(|g| g.h > 0.01) && existed && !instant && !replaced && !(is_virtual && unseen_ids.contains(&old)) {
-                    stack.closing.entry(old).or_insert(now + 0.15);
+                } else if let Some(g) = self.grows.get(&old).filter(|g| g.h > 0.01) && existed && !instant && !replaced && !(is_virtual && unseen_ids.contains(&old)) {
+                    // A row fades in place before its space closes, except a fold, which shuts
+                    // at once on its own spring under its feather, as it would fold shut in place.
+                    let hold = if g.glide.is_some() { 0.0 } else { 0.15 };
+                    if g.glide.is_some() && !stack.closing.contains_key(&old) { shut.push(old); }
+                    stack.closing.entry(old).or_insert(now + hold);
                     order.push(old);
                 } else {
                     self.grows.remove(&old);
@@ -222,6 +227,7 @@ impl<S: 'static> Runtime<S> {
                 }
                 let (duration, glide) = (tx.motion.map_or(0.0, |m| m.duration * 1.15), nodes[j].glide.map(|s| (s, self.fold_limit(id))));
                 let hidden = if glide.is_some() { self.fold_hidden_above(&nodes, j, h) } else { None };
+                if existed && !instant && !nodes[j].virtual_mount && nodes[j].glide.is_some() && !self.grows.contains_key(&id) { opened.push(id); }
                 let g = self.grows.entry(id).or_insert_with(|| {
                     if existed && !instant && !nodes[j].virtual_mount { GrowTrack { streaming, whole, duration, ..GrowTrack::settled(0.0) } } else { GrowTrack::settled(h) }
                 });
@@ -252,6 +258,7 @@ impl<S: 'static> Runtime<S> {
                     }
                 }
             }
+            if !tx.settle && !first && !self.reduced_motion { self.link_growth_runs(&mut stack, &order, &opened, &shut); } else { stack.runs.clear(); }
             if hidden_cut > 0.0 { self.scroll_by_cut(&nodes, c, hidden_cut); }
             if !held.is_empty() { self.give_way(&nodes, c, &std::mem::take(&mut held)); }
             for (j, giving) in reopened.drain(..) { self.ride_from_end(&nodes, c, j, giving); }

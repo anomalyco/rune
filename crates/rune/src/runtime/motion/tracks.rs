@@ -80,9 +80,12 @@ impl<S: 'static> Runtime<S> {
             let n_rows = stack.order.len();
             let mut st_growing = !stack.pending_heights.is_empty();
             let mut st_moving = st_growing;
+            let (in_runs, run_grown) = Self::step_growth_runs(stack, &mut self.grows, steps.min(240), spec);
+            stack.grown += run_grown;
             for (k, id) in stack.order.iter().enumerate() {
                 let Some(g) = self.grows.get_mut(id) else { continue };
                 let h0 = g.h;
+                let in_run = in_runs.contains(id);
                 if let Some(&at) = stack.closing.get(id)
                     && now >= at
                 {
@@ -94,7 +97,7 @@ impl<S: 'static> Runtime<S> {
                 }
                 // A row above the tail (the last row) carries it.
                 let carrying = k + 2 == n_rows;
-                for substep in 0..steps.min(240) {
+                for substep in 0..if in_run { 0 } else { steps.min(240) } {
                     if !stack.pending_heights.is_empty() {
                         let at = now - f64::from(self.grow_acc) - f64::from((steps.min(240) - substep) as f32 * SUBSTEP);
                         if at >= stack.width_hold_until && let Some(height) = stack.pending_heights.remove(id) {

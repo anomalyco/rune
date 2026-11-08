@@ -309,6 +309,8 @@ mod unseen_presence;
 mod row_reorder;
 #[path = "runtime/motion/growth_rows.rs"]
 mod growth_rows;
+#[path = "runtime/motion/growth_runs.rs"]
+mod growth_runs;
 #[path = "runtime/motion/fold_hold.rs"]
 mod fold_hold;
 #[path = "runtime/motion/landing_hold.rs"]
