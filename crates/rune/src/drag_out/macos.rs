@@ -17,6 +17,8 @@ type Muted = Vec<(Retained<NSWindow>, Retained<NSArray<NSPasteboardType>>)>;
 struct Ivars {
     done: RefCell<Option<Done>>,
     mask: Cell<NSDragOperation>,
+    /// The app's own windows are offered the drag too (`DragItem::within_app`).
+    within_app: Cell<bool>,
     /// The app's windows that stop taking drops while this session runs, with the types each
     /// had registered.
     muted: RefCell<Muted>,
@@ -50,7 +52,7 @@ declare_class!(
     unsafe impl NSDraggingSource for Source {
         #[method(draggingSession:sourceOperationMaskForDraggingContext:)]
         fn mask(&self, _session: &NSDraggingSession, context: NSDraggingContext) -> NSDragOperation {
-            mask_in(self.ivars().mask.get(), context)
+            mask_in(self.ivars().mask.get(), context, self.ivars().within_app.get())
         }
         #[method(draggingSession:endedAtPoint:operation:)]
         fn ended(&self, _session: &NSDraggingSession, _point: NSPoint, operation: NSDragOperation) {
@@ -82,9 +84,10 @@ fn mask(item: &DragItem) -> NSDragOperation {
         .into_iter().filter(|&(op, _)| item.offers(op)).fold(NSDragOperation::None, |m, (_, ns)| m | ns)
 }
 
-/// The app's own windows are offered nothing: Rune windows take no drops.
-fn mask_in(mask: NSDragOperation, context: NSDraggingContext) -> NSDragOperation {
-    if context == NSDraggingContext::WithinApplication { NSDragOperation::None } else { mask }
+/// The app's own windows are offered nothing unless the item lets them take it: Rune windows
+/// take no drops from their own drags by default.
+fn mask_in(mask: NSDragOperation, context: NSDraggingContext, within_app: bool) -> NSDragOperation {
+    if context == NSDraggingContext::WithinApplication && !within_app { NSDragOperation::None } else { mask }
 }
 
 /// Modifier keys pick among several offered operations (Cmd+Option for a link in Finder); with
@@ -143,7 +146,10 @@ pub(super) fn begin(window: &winit::window::Window, start: DragOutStart, picture
             d.setDraggingFrame_contents(f, image.as_deref().map(|i| &**i as &AnyObject));
             d
         }).collect();
-        let source = mtm.alloc::<Source>().set_ivars(Ivars { done: RefCell::new(Some(done)), mask: Cell::new(mask(&start.item)), muted: RefCell::new(mute(mtm)) });
+        // A drag the app's windows take leaves their drop registration alone.
+        let within_app = start.item.drops_within_app();
+        let muted = if within_app { Muted::new() } else { mute(mtm) };
+        let source = mtm.alloc::<Source>().set_ivars(Ivars { done: RefCell::new(Some(done)), mask: Cell::new(mask(&start.item)), within_app: Cell::new(within_app), muted: RefCell::new(muted) });
         let source: Retained<Source> = msg_send_id![super(source), init];
         LIVE.with(|live| *live.borrow_mut() = Some(source.clone()));
         let session = view.beginDraggingSessionWithItems_event_source(&NSArray::from_vec(dragging), &event, ProtocolObject::from_ref(&*source));
@@ -244,8 +250,11 @@ mod tests {
     #[test]
     fn nothing_is_offered_to_the_apps_own_windows() {
         let m = NSDragOperation::Copy | NSDragOperation::Link;
-        assert_eq!(mask_in(m, NSDraggingContext::OutsideApplication), m);
-        assert_eq!(mask_in(m, NSDraggingContext::WithinApplication), NSDragOperation::None);
+        assert_eq!(mask_in(m, NSDraggingContext::OutsideApplication, false), m);
+        assert_eq!(mask_in(m, NSDraggingContext::WithinApplication, false), NSDragOperation::None);
+        // `DragItem::within_app` offers the app's own windows the same operations.
+        assert_eq!(mask_in(m, NSDraggingContext::WithinApplication, true), m);
+        assert_eq!(mask_in(m, NSDraggingContext::OutsideApplication, true), m);
     }
 
     #[test]
@@ -267,7 +276,7 @@ mod tests {
 
     fn ivars(log: &std::rc::Rc<RefCell<Vec<DragOutcome>>>) -> Ivars {
         let log = log.clone();
-        Ivars { done: RefCell::new(Some(Box::new(move |o| log.borrow_mut().push(o)))), mask: Cell::new(NSDragOperation::Copy), muted: RefCell::default() }
+        Ivars { done: RefCell::new(Some(Box::new(move |o| log.borrow_mut().push(o)))), mask: Cell::new(NSDragOperation::Copy), within_app: Cell::new(false), muted: RefCell::default() }
     }
 
     #[test]

@@ -1,0 +1,1 @@
+- `DragItem::within_app` offers a drag-out to the app's own windows too, so their `on_drop_files` targets receive its files as they would a drop from Finder (dragging an image from a timeline into a composer). Without it the app's windows still take no drops from its own drags.

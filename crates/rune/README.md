@@ -1577,7 +1577,9 @@ Once the system drag starts, Rune drops the pointer capture and hover, so nothin
 Files are offered as copies (`DragItem::allow_move` also offers a move), an app bundle can be
 dropped into System Settings' privacy lists, and the picture under the pointer is a snapshot of
 the element unless `DragItem::image` sets one. `on_drag_end` receives `DragOutcome::Copied`,
-`Moved`, `Linked` or `Cancelled`.
+`Moved`, `Linked` or `Cancelled`. The app's own windows take no drop from its drags unless
+`DragItem::within_app` offers it to them: their `on_drop_files` targets then receive the files
+as they would from Finder (an image dragged from a list into a composer).
 
 macOS only for now. Elsewhere `drag_out` is ignored and the element keeps its press and
 `on_drag` behaviour. Headless runs record `drag-out <path>` in `--trace` and mark the node

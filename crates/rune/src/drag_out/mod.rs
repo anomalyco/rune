@@ -5,8 +5,9 @@
 //! URLs, PNG data, plain text) and shows a [`DragImage`], by default a snapshot of the element
 //! as the window last drew it, starting exactly over the element. [`crate::El::on_drag_start`]
 //! and [`crate::El::on_drag_end`] bracket the session, so the app can style the source while
-//! it's dragged; [`DragOutcome`] says how the drop ended. Rune windows take no drops, so a drag
-//! let go over the app ends [`DragOutcome::Cancelled`] and the image slides back.
+//! it's dragged; [`DragOutcome`] says how the drop ended. Rune windows take no drops from their
+//! own app's drags unless [`DragItem::within_app`] says so, so a drag let go over the app ends
+//! [`DragOutcome::Cancelled`] and the image slides back.
 //!
 //! macOS runs the session with `NSDraggingSource`. Other platforms don't start one yet: there
 //! `drag_out` is ignored and the element keeps its ordinary press and `on_drag` behaviour.
@@ -54,11 +55,12 @@ pub struct DragItem {
     image: Option<DragImage>,
     operations: u8,
     backing: Option<Color>,
+    within_app: bool,
 }
 
 impl Default for DragItem {
     fn default() -> Self {
-        Self { files: Vec::new(), png: None, text: None, image: None, operations: DragOperation::Copy.bit(), backing: None }
+        Self { files: Vec::new(), png: None, text: None, image: None, operations: DragOperation::Copy.bit(), backing: None, within_app: false }
     }
 }
 
@@ -134,11 +136,29 @@ impl DragItem {
     /// By default a drag only offers a copy, whatever modifier keys are held.
     pub fn allow_move(self) -> Self { self.allow(DragOperation::Move) }
 
+    /// Offer the drag to this app's own windows too, so their `on_drop_files` targets receive
+    /// its files as a drop from Finder would (an image dragged from a timeline into the
+    /// composer). By default the app's windows take no drops from its own drags. A drag let go
+    /// over a window with no target that accepts it ends [`DragOutcome::Copied`] without sliding
+    /// back, as the window takes any file drag.
+    ///
+    /// ```
+    /// # use rune::DragItem;
+    /// assert!(DragItem::new().file("/a.png").within_app().drops_within_app());
+    /// assert!(!DragItem::new().drops_within_app());
+    /// ```
+    pub fn within_app(mut self) -> Self {
+        self.within_app = true;
+        self
+    }
+
     pub fn paths(&self) -> &[PathBuf] { &self.files }
     pub fn png_data(&self) -> Option<&[u8]> { self.png.as_deref() }
     pub fn plain_text(&self) -> Option<&str> { self.text.as_deref() }
     pub fn drag_image(&self) -> Option<&DragImage> { self.image.as_ref() }
     pub fn allows_move(&self) -> bool { self.offers(DragOperation::Move) }
+    /// Whether the app's own windows take this drag's drop ([`DragItem::within_app`]).
+    pub fn drops_within_app(&self) -> bool { self.within_app }
     /// Whether the drag offers `operation` to the target.
     pub fn offers(&self, operation: DragOperation) -> bool { self.operations & operation.bit() != 0 }
     /// The colour the drag image is shown over, from [`DragItem::opaque`].
