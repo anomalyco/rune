@@ -1,8 +1,9 @@
 //! Presence nobody would see. A removed node that drew nothing last frame has no exit to show: it
 //! faded out already, sits under a parent that hid at once, or lies out of the window or its
 //! clips with everything it holds (a filtered list's rows scrolled out of view). It goes at
-//! once rather than fading where nothing shows; what mounts under such a node, still out of
-//! sight, enters at once, and a node out of sight lands its colours. Likewise a virtual row that
+//! once rather than fading where nothing shows; what mounts out of sight enters at once, and a
+//! node out of sight before and after (or transparent, or under a clip with no area) lands its
+//! layout and colours. Likewise a virtual row that
 //! a change mounted with its entrance but that landed out of view lands its entrance at once,
 //! and one nobody saw that a filter brings into view enters like the rows new to it.
 use super::*;
@@ -92,28 +93,34 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Per node of the new tree `nodes`: neither it nor anything under it drew in the last
-    /// build, and none of its swept path lands in sight in this layout (in the window, inside
-    /// its clips). Empty when nothing non-skipped qualifies.
+    /// build (out of sight or transparent), and none of its swept path lands in sight in this
+    /// layout (in the window, inside its clips, not transparent). Empty when nothing non-skipped
+    /// qualifies.
     pub(super) fn unseen_before_and_after(&self, nodes: &[Node], skip: &[memo_reuse::CleanApplySpan]) -> Vec<bool> {
-        if !self.built || self.seen.len() != self.nodes.len() || self.seen.iter().all(|&s| s) {
+        let seen: Vec<bool> = self.drew_nothing().into_iter().map(|nothing| !nothing).collect();
+        // New nodes may mount out of sight however much drew.
+        let mounts = nodes.len() > self.nodes.len();
+        if seen.is_empty() || (!mounts && seen.iter().all(|&s| s)) {
             return Vec::new();
         }
-        let mut seen = self.seen.clone();
-        mark_ancestors(&self.nodes, &mut seen);
         let any_active_unseen = self.nodes.iter().zip(&seen).any(|(old, &s)| {
             !s && self.node_index.get(&old.id).is_some_and(|&ni| !memo_reuse::is_in_clean_spans(skip, ni))
         });
-        if !any_active_unseen { return Vec::new(); }
+        if !any_active_unseen && !mounts { return Vec::new(); }
         // Each new node's place in the last build, found walking both trees in step.
         let mut last = paint_tracks::LastBuild::default();
         let olds: Vec<Option<usize>> = nodes.iter().map(|n| last.find(&self.nodes, n.id)).collect();
-        // Room for shadows and blur, which draw past a node's rect.
-        const MARGIN: f32 = 32.0;
         let window = [0.0, 0.0, self.viewport.0, self.viewport.1];
         // Per node: the swept clip and scroll-offset range its children are under, in points.
         let mut inner = vec![(window, [0.0f32; 2], [0.0f32; 2]); nodes.len()];
         let mut after = vec![false; nodes.len()];
+        // Per node: the opacity it rests at, its ancestors' included. A live opacity or a loop
+        // may show it whatever it rests at.
+        let mut alpha = vec![1.0f32; nodes.len()];
         for (i, n) in nodes.iter().enumerate() {
+            // A hover group's hidden actions (`El::group_opacity`) rest at their rest level.
+            let own = if n.looping.is_some() || n.live.iter().any(|b| b.property == crate::live::Property::Opacity) { 1.0 } else { n.vis.opacity * n.vis.group_opacity.map_or(1.0, |g| g[0].max(0.0)) };
+            alpha[i] = own * n.parent.filter(|&p| p < i).map_or(1.0, |p| alpha[p]);
             let (clip, shift_min, shift_max) = match n.parent {
                 Some(p) if n.above.is_none() && p < i => inner[p],
                 Some(_) if n.above.is_none() => { after[i] = true; (window, [0.0; 2], [0.0; 2]) }
@@ -126,8 +133,12 @@ impl<S: 'static> Runtime<S> {
                 Some(b) => [b[0].min(r[0]), b[1].min(r[1]), b[2].max(r[2]), b[3].max(r[3])],
                 None => r,
             };
-            after[i] |= swept[2] >= clip[0] - MARGIN && swept[0] <= clip[2] + MARGIN
-                && swept[3] >= clip[1] - MARGIN && swept[1] <= clip[3] + MARGIN;
+            // Under a clip with no area nothing draws, shadows included.
+            // Room for its shadows, blur and a focus ring, which draw past its rect.
+            let margin = n.vis.shadows.iter().filter(|s| !s.inset).map(|s| s.x.abs() + s.y.abs() + s.spread.max(0.0) + s.blur * 1.5).fold(0.0, f32::max) + n.vis.blur * 3.0 + 4.0;
+            after[i] |= alpha[i] >= 1.0 / 512.0 && clip[2] > clip[0] && clip[3] > clip[1]
+                && swept[2] >= clip[0] - margin && swept[0] <= clip[2] + margin
+                && swept[3] >= clip[1] - margin && swept[1] <= clip[3] + margin;
             let clip = if n.vis.clip.is_some() || n.scroll.is_some() {
                 intersect(clip, swept)
             } else { clip };
@@ -150,13 +161,8 @@ impl<S: 'static> Runtime<S> {
             inner[i] = (clip, shift_min, shift_max);
         }
         mark_ancestors(nodes, &mut after);
-        // A node new under one nobody saw before or after (a ticking digit in a row scrolled out
-        // of view) enters where nothing shows, so it lands at once too.
-        let mut unseen = vec![false; nodes.len()];
-        for (i, n) in nodes.iter().enumerate() {
-            let new_under_unseen = olds[i].is_none() && n.parent.is_some_and(|p| p < i && unseen[p]);
-            unseen[i] = !after[i] && (olds[i].is_some_and(|o| !seen[o]) || new_under_unseen);
-        }
-        unseen
+        // A node new out of sight (a ticking digit in a row scrolled out of view, a row mounting
+        // past its list's viewport) enters where nothing shows, so it lands at once too.
+        (0..nodes.len()).map(|i| !after[i] && olds[i].is_none_or(|o| !seen[o])).collect()
     }
 }
