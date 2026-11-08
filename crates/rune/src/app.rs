@@ -53,6 +53,7 @@ pub struct App<S: 'static> {
     pub(crate) standard_menus: bool,
     pub(crate) keep_running: bool,
     pub(crate) on_close: Option<fn(&mut S, &mut Tx)>,
+    pub(crate) on_quit: Option<fn(&mut S, &mut Tx)>,
     pub(crate) on_focus: Option<fn(&mut S, bool, &mut Tx)>,
     pub(crate) on_mods: Option<fn(&mut S, crate::Mods, &mut Tx)>,
     pub(crate) on_ime: Option<fn(&mut S, &crate::Ime, &mut Tx) -> bool>,
@@ -106,6 +107,7 @@ impl<S: 'static> App<S> {
             standard_menus: false,
             keep_running: false,
             on_close: None,
+            on_quit: None,
             on_focus: None,
             on_mods: None,
             on_ime: None,
@@ -391,6 +393,21 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// Runs once in every open window when the app starts to quit, before any window closes
+    /// for it: `Tx::quit` or `AppHandle::quit` from any window, the last window closing (in the
+    /// windows still open), macOS Quit (⌘Q, the Dock, logout, restart and shutdown), and a
+    /// Windows logoff or shutdown (`WM_QUERYENDSESSION`, or `WM_ENDSESSION` when no query came
+    /// first), as Electron's `before-quit` and `session-end` do between them. Save what must
+    /// survive the quit here, synchronously: a Windows session may end the process once the
+    /// hooks returned. From then on [`crate::quitting`] holds, so an `on_close` that follows
+    /// (macOS, the end of a Windows session) can tell the app ending from its window closing
+    /// alone. A Windows shutdown another app refuses clears it, and a later quit runs this again.
+    /// What it asks of its `Tx` beyond state is moot once the loop ends. Native windows only.
+    pub fn on_quit(mut self, f: fn(&mut S, &mut Tx)) -> Self {
+        self.on_quit = Some(f);
+        self
+    }
+
     /// macOS: runs on the main thread when the app is reopened while it runs: its Dock icon
     /// clicked, or opened again from Finder, Spotlight or `open`, also in an accessory app.
     /// `has_visible_windows` says whether any Rune window that reopening could bring back is on
@@ -655,7 +672,8 @@ impl<S: 'static> AppHandle<S> {
         self.request(|q| { q.minimize = true; q.focus = false; });
     }
 
-    /// Quit the app: the window closes without `on_close`, and `run` returns.
+    /// Quit the app: every open window's `App::on_quit` runs, the window closes without
+    /// `on_close`, and `run` returns.
     ///
     /// On web this unmounts the app: its loop stops, its GPU device is destroyed, its listeners
     /// come off the page, the body style and title it changed go back, and the canvas Rune made
