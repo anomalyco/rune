@@ -343,8 +343,9 @@ impl<S: 'static> Runtime<S> {
             let spring_l = tx.motion.unwrap_or(nodes[i].motion);
             let anim_l: Anim = tx.motion_curve.unwrap_or_else(|| spring_l.into());
             let spring_c = tx.color_motion.unwrap_or(nodes[i].motion);
-            // Text leads its background so theme crossfades never dip through zero contrast.
-            let spring_tc = Spring::new((spring_c.duration * 0.5).max(0.1), spring_c.bounce);
+            // Text leads its background so theme crossfades never dip through zero contrast; a
+            // colour change asked to land at once lands at once on text too.
+            let spring_tc = if spring_c == Spring::NONE { spring_c } else { Spring::new((spring_c.duration * 0.5).max(0.1), spring_c.bounce) };
             let row_like = nodes[i].in_row == RowLayout::Snaps || nodes[i].parent.is_some_and(|p| nodes[p].growth.is_some());
             // An `El::instant_changes` element lands its changes, and those of what it holds;
             // its own entrance and exit, and colours, stay with the commit.
