@@ -482,7 +482,9 @@ impl<S: 'static> Runtime<S> {
             let visible = match node_turn {
                 None => {
                     let vis_clip = if pinh.in_cache { intersect(pinh.clip, clip) } else { clip };
-                    screen_r[2] >= vis_clip[0].max(vp[0]) - m
+                    // Under a clip with no area nothing draws, however near its edge.
+                    vis_clip[2] > vis_clip[0] && vis_clip[3] > vis_clip[1]
+                        && screen_r[2] >= vis_clip[0].max(vp[0]) - m
                         && screen_r[0] <= vis_clip[2].min(vp[2]) + m
                         && screen_r[3] >= vis_clip[1].max(vp[1]) - m
                         && screen_r[1] <= vis_clip[3].min(vp[3]) + m
