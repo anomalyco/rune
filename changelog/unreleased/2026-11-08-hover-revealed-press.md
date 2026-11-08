@@ -1,0 +1,1 @@
+- **A press finds what its hover reveals.** An element shown only under its hover group (`El::group_opacity` at rest 0) now takes a press where the pointer hovers the group, so a move and a press in the same frame (a quick click, a scripted tap) reach the revealed button as a page's `:hover` does, instead of what lies under it.
