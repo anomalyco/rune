@@ -190,7 +190,7 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
         pixels, pixels_fit, effect, backdrop_blur, hover_motion, hover_within,
         group_opacity, group_color, hover_alone, hover_share, hover_focus, icon_turn, cache_key, offset_motion, scale_motion,
         origin, rotate_motion, child_exit, enter_delay, motion_intent, instant_motion, clip_to_content, flight_crop,
-        hold_landing,
+        hold_landing, offset, paint_alpha, layer_opacity, blur, rotate, mark,
     } = b;
     (match (&a.surface, surface) {
         (None, None) => true,
@@ -224,22 +224,59 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
         && a.clip_to_content == *clip_to_content
         && a.flight_crop == *flight_crop
         && a.hold_landing == *hold_landing
+        && a.offset == *offset && a.paint_alpha == *paint_alpha && a.layer_opacity == *layer_opacity
+        && a.blur == *blur && a.rotate == *rotate && a.mark == *mark
 }
 
 pub(super) fn same_visual(a: &Visual, b: &Visual) -> bool {
-    let Visual {
-        fill, border, hover, press, radius, offset, border_width, opacity, paint_alpha, layer_opacity, blur,
-        rotate, mark, hit, continuous_corners, blend, hover_group, cache, raise,
-        no_pixel_snap, ride_trailing, cold,
-    } = b;
-    a.fill == *fill && a.border == *border && a.hover == *hover && a.press == *press
-        && a.radius == *radius && a.offset == *offset && a.border_width == *border_width
-        && a.opacity == *opacity && a.paint_alpha == *paint_alpha && a.layer_opacity == *layer_opacity && a.blur == *blur
-        && a.rotate == *rotate && a.mark == *mark && a.hit == *hit
-        && a.continuous_corners == *continuous_corners && a.blend == *blend
-        && a.hover_group == *hover_group && a.cache == *cache && a.raise == *raise
-        && a.no_pixel_snap == *no_pixel_snap && a.ride_trailing == *ride_trailing
+    let Visual { fill, radius, opacity, box_paint, cold } = b;
+    a.fill == *fill && a.radius.to_bits() == radius.to_bits() && a.opacity == *opacity
+        && (crate::cold::Cold::ptr_eq(&a.box_paint, box_paint) || *a.box_paint == **box_paint)
         && (crate::cold::Cold::ptr_eq(&a.cold, cold) || same_visual_cold(&a.cold, cold))
+}
+
+fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
+    let crate::el::ElCold {
+        focus, looping, trace_name, trace_namespace, role, label, live, above, motion, opacity_motion, lead,
+        transition, matched, scroll, scroll_axes, sticky, scroll_edges, growth, virtual_estimate, virtual_rows,
+        virtual_rows_version, glide, input, time_scale, help, help_cut, help_above, material, aspect_fit, a11y,
+        #[cfg(debug_assertions)]
+        scroll_source: _,
+        #[cfg(debug_assertions)]
+        virtual_source: _,
+    } = b;
+    crate::cold::Cold::ptr_eq(&a.focus, focus)
+        && opt_box_eq(&a.looping, looping)
+        && a.trace_name == *trace_name
+        && a.trace_namespace == *trace_namespace
+        && a.role == *role
+        && a.label == *label
+        && a.live.is_empty()
+        && live.is_empty()
+        && a.above == *above
+        && a.motion == *motion
+        && opt_box_eq(&a.opacity_motion, opacity_motion)
+        && a.lead == *lead
+        && opt_box_eq(&a.transition, transition)
+        && a.matched == *matched
+        && a.scroll == *scroll
+        && a.scroll_axes == *scroll_axes
+        && opt_box_eq(&a.sticky, sticky)
+        && a.scroll_edges == *scroll_edges
+        && opt_box_eq(&a.growth, growth)
+        && a.virtual_estimate == *virtual_estimate
+        && opt_rc_eq(&a.virtual_rows, virtual_rows)
+        && a.virtual_rows_version == *virtual_rows_version
+        && a.glide == *glide
+        && a.input.is_none()
+        && input.is_none()
+        && a.time_scale == *time_scale
+        && a.help == *help
+        && a.help_cut == *help_cut
+        && a.help_above == *help_above
+        && a.material == *material
+        && a.aspect_fit == *aspect_fit
+        && a.a11y == *a11y
 }
 
 fn same_gestures(
@@ -376,116 +413,45 @@ fn same_handlers(
 pub(super) fn same_root_el(el: &El, built: &crate::memo::Built) -> bool {
     let base = &built.root;
     let El {
-        focus,
-        handlers,
-        looping,
-        key: _,
-        trace_name,
-        trace_namespace,
-        #[cfg(debug_assertions)]
-        key_source: _,
-        #[cfg(debug_assertions)]
-        scroll_source: _,
-        #[cfg(debug_assertions)]
-        virtual_source: _,
-        role,
-        label,
         style,
         vis,
-        live,
-        text,
         children: _,
-        memo_children: _,
-        memo_built: _,
-        has_virtual: _,
-        above,
-        motion,
-        opacity_motion,
-        lead,
-        width_leads,
-        animate_layout,
-        instant_changes,
-        transition,
-        matched,
-        scroll,
-        scroll_axes,
-        sticky,
-        scroll_edges,
-        growth,
-        virtual_estimate,
-        virtual_rows,
-        virtual_rows_version,
-        virtual_mount: _,
-        streaming,
-        whole,
-        glide,
-        input,
-        window_drag,
-        ime_cursor,
+        key: _,
+        text,
+        handlers,
+        memo: _,
+        cold,
         scale,
-        time_scale,
-        help,
-        help_cut,
-        help_above,
-        material,
-        aspect_fit,
-        selection_group,
-        a11y,
-        inert,
+        flags,
+        role,
+        vis_flags,
+        #[cfg(debug_assertions)]
+        key_source: _,
     } = base;
+    // Flags flattening handles itself, or that only describe the children.
+    let ignored = crate::el::ElFlags::HAS_VIRTUAL | crate::el::ElFlags::MEMO_EXTENDED | crate::el::ElFlags::VIRTUAL_MOUNT;
+    let mut a = el.flags;
+    let mut b = *flags;
+    a.set(ignored, false);
+    b.set(ignored, false);
 
     el.children.is_empty()
-        && el.memo_children.as_ref().is_some_and(|mc| Rc::ptr_eq(mc, &built.children))
+        && el.memo_children().is_some_and(|mc| Rc::ptr_eq(mc, &built.children))
         && el.role == *role
-        && el.label == *label
-        && el.trace_name == *trace_name
-        && el.trace_namespace == *trace_namespace
+        && a == b
+        && el.vis_flags == *vis_flags
         && el.style == *style
         && same_visual(&el.vis, vis)
-        && el.live.is_empty()
-        && live.is_empty()
         && match (&el.text, text) {
             (None, None) => true,
             (Some(ta), Some(tb)) => crate::cold::SharedBox::ptr_eq(ta, tb),
             _ => false,
         }
-        && crate::cold::Cold::ptr_eq(&el.focus, focus)
         && same_handlers(&el.handlers, handlers)
-        && opt_box_eq(&el.looping, looping)
-        && el.above == *above
-        && el.motion == *motion
-        && opt_box_eq(&el.opacity_motion, opacity_motion)
-        && el.lead == *lead
-        && el.width_leads == *width_leads
-        && el.animate_layout == *animate_layout
-        && el.instant_changes == *instant_changes
-        && opt_box_eq(&el.transition, transition)
-        && el.matched == *matched
-        && el.scroll == *scroll
-        && el.scroll_axes == *scroll_axes
-        && opt_box_eq(&el.sticky, sticky)
-        && el.scroll_edges == *scroll_edges
-        && opt_box_eq(&el.growth, growth)
-        && el.virtual_estimate == *virtual_estimate
-        && opt_rc_eq(&el.virtual_rows, virtual_rows)
-        && el.virtual_rows_version == *virtual_rows_version
-        && el.streaming == *streaming
-        && el.whole == *whole
-        && el.glide == *glide
-        && el.input.is_none()
-        && input.is_none()
-        && el.window_drag == *window_drag
-        && el.ime_cursor == *ime_cursor
         && el.scale == *scale
-        && el.time_scale == *time_scale
-        && el.help == *help
-        && el.help_cut == *help_cut
-        && el.help_above == *help_above
-        && el.material == *material
-        && el.aspect_fit == *aspect_fit
-        && el.selection_group == *selection_group
-        && el.a11y == *a11y
-        && el.inert == *inert
+        && cold.live.is_empty()
+        && cold.input.is_none()
+        && (crate::cold::Cold::ptr_eq(&el.cold, cold) || same_el_cold(&el.cold, cold))
 }
 
 pub(super) fn inherited_for(
@@ -544,7 +510,7 @@ pub(super) fn try_reuse_memo(
     nodes: &mut Vec<Node>,
     ctx: &mut MemoFlattenCtx<'_>,
 ) -> Option<SlotId> {
-    let built = el.memo_built.as_ref()?;
+    let built = el.memo_built()?;
     if !built.reusable {
         return None;
     }
@@ -587,7 +553,7 @@ pub(super) fn try_reuse_memo(
             n.clear_run_layout();
             n.scale_track = false;
             n.group_fade = false;
-            n.virtual_mount = if k == 0 { el.virtual_mount } else { false };
+            n.virtual_mount = if k == 0 { el.flags.has(crate::el::ElFlags::VIRTUAL_MOUNT) } else { false };
             n.parent = if k == 0 { parent } else { n.parent.map(|p| new_start + (p - flat.start)) };
             n.target = [0.0; 4];
             n.local = MRect::ZERO;
@@ -604,7 +570,7 @@ pub(super) fn try_reuse_memo(
                 elided: None,
                 scale_track: false,
                 group_fade: false,
-                virtual_mount: if k == 0 { el.virtual_mount } else { false },
+                virtual_mount: if k == 0 { el.flags.has(crate::el::ElFlags::VIRTUAL_MOUNT) } else { false },
                 parent: if k == 0 { parent } else { old.parent.map(|p| new_start + (p - flat.start)) },
                 target: [0.0; 4],
                 local: MRect::ZERO,
@@ -660,7 +626,7 @@ pub(super) fn try_reuse_memo(
                 elided: None,
                 scale_track: false,
                 group_fade: false,
-                virtual_mount: if k == 0 { el.virtual_mount } else { false },
+                virtual_mount: if k == 0 { el.flags.has(crate::el::ElFlags::VIRTUAL_MOUNT) } else { false },
                 parent: if k == 0 { parent } else { old.parent.map(|p| new_start + (p - flat.start)) },
                 target: [0.0; 4],
                 local: MRect::ZERO,

@@ -379,7 +379,7 @@ impl<S: 'static> Runtime<S> {
                 } else { scene_rect };
                 let mut spec = NodeSpec::new(mount_rect)
                     .opacity(nodes[i].vis.opacity)
-                    .radius(Corners(nodes[i].vis.radius))
+                    .radius(Corners(nodes[i].vis.radii()))
                     .transition(tr);
                 if let Some(pid) = parent_id {
                     spec = spec.parent(pid);
@@ -398,7 +398,7 @@ impl<S: 'static> Runtime<S> {
                 let mount = if enters_at_once || nodes[i].virtual_mount || quiet_row || self.enters_unseen(&nodes, &unseen, i) { Mount::Initial } else { Mount::Animated };
                 self.scene.insert_delayed(id, spec, mount, nodes[i].vis.enter_delay);
             } else if tx.settle { self.scene.land_waiting(id); }
-            self.scene.set_ride_trailing(id, nodes[i].vis.ride_trailing);
+            self.scene.set_ride_trailing(id, nodes[i].vis_flags.ride_trailing());
             // How far a growth or virtual row's place jumps in this commit (drawn minus new).
             let (mut row_jump, mut reorder_jump) = (0.0, 0.0);
             if was_present && !was_exiting && !lands
@@ -500,7 +500,7 @@ impl<S: 'static> Runtime<S> {
                     self.scene.set_frame(id, scene_rect, layout_anim);
                 }
                 let quiet = lands || out_of_sight;
-                self.set_or_anim(id, prop::RADIUS, Corners(nodes[i].vis.radius), spring_l, quiet);
+                self.set_or_anim(id, prop::RADIUS, Corners(nodes[i].vis.radii()), spring_l, quiet);
                 if nodes[i].live.iter().any(|b| b.property == crate::live::Property::Opacity) {
                     // The live source owns this property, including across unrelated commits.
                 } else if !quiet && let Some(&anim) = nodes[i].opacity_motion.as_deref() {
@@ -572,19 +572,19 @@ impl<S: 'static> Runtime<S> {
             if !live_colors.fill {
                 self.commit_paint(id, P_FILL, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.fill), vis.fill, spring_c, instant);
             }
-            if vis.border_width > 0.0 {
+            if vis.border_width() > 0.0 {
                 let had_bottom = self.scene.store().has(id, P_BORDER_BOTTOM);
                 if vis.border_bottom.is_some() && !had_bottom
-                    && let Some(c) = self.scene.get(id, P_BORDER).or(paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.border))
+                    && let Some(c) = self.scene.get(id, P_BORDER).or(paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.border()))
                 {
                     // A solid border's bottom springs into the gradient rather than jumping.
                     self.scene.set(id, P_BORDER_BOTTOM, c);
                 }
                 if !live_colors.border {
-                    self.commit_paint(id, P_BORDER, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.border), vis.border, spring_c, instant);
+                    self.commit_paint(id, P_BORDER, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.border()), vis.border(), spring_c, instant);
                 }
                 if vis.border_bottom.is_some() || had_bottom {
-                    self.set_or_anim(id, P_BORDER_BOTTOM, vis.border_bottom.unwrap_or(vis.border), spring_c, instant);
+                    self.set_or_anim(id, P_BORDER_BOTTOM, vis.border_bottom.unwrap_or(vis.border()), spring_c, instant);
                 }
             }
             if !live_colors.text && let Some(c) = paint_tracks::text_color(&nodes[i]) {
@@ -596,11 +596,11 @@ impl<S: 'static> Runtime<S> {
                 }
                 self.set_or_anim(id, P_ICON_TURN, nodes[i].vis.icon_turn, spring_l, instant || !was_present);
             }
-            if vis.hover.a > 0.0 || self.scene.store().has(id, P_HOVER_C) {
-                self.commit_paint(id, P_HOVER_C, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.hover), vis.hover, spring_c, instant);
+            if vis.hover().a > 0.0 || self.scene.store().has(id, P_HOVER_C) {
+                self.commit_paint(id, P_HOVER_C, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.hover()), vis.hover(), spring_c, instant);
             }
-            if vis.press.a > 0.0 || self.scene.store().has(id, P_PRESS_C) {
-                self.commit_paint(id, P_PRESS_C, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.press), vis.press, spring_c, instant);
+            if vis.press().a > 0.0 || self.scene.store().has(id, P_PRESS_C) {
+                self.commit_paint(id, P_PRESS_C, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.press()), vis.press(), spring_c, instant);
             }
             if !vis.cold.is_empty() || paint_tracks::prev_node(&self.nodes, &nodes, old, i).is_some_and(|o| !o.vis.cold.is_empty()) {
                 self.commit_cold_paint(id, vis, old, live_colors, spring_c, spring_l, instant);
@@ -827,8 +827,8 @@ impl<S: 'static> Runtime<S> {
         let (mut dissolve, mut cache, mut pix, mut drawn_ly, mut key_up, mut sticky, mut raise, mut any_loop) =
             (false, false, false, false, false, false, false, false);
         for n in &self.nodes {
-            dissolve |= n.vis.blend == crate::render::Blend::PlusLighter;
-            cache |= n.vis.cache;
+            dissolve |= n.vis_flags.blend() == crate::render::Blend::PlusLighter;
+            cache |= n.vis_flags.cache();
             if let Some(c) = n.cold.get() {
                 pix |= c.pixel_aspect.is_some();
                 sticky |= c.sticky.as_ref().is_some_and(|s| s.edge.is_some());
@@ -836,7 +836,7 @@ impl<S: 'static> Runtime<S> {
             }
             drawn_ly |= n.handlers.get().is_some_and(|h| h.on_drawn_layout.is_some() || h.on_visible.is_some() || h.drawn_rect.is_some());
             key_up |= n.focus.get().is_some_and(|f| f.key_up.is_some());
-            raise |= n.vis.raise;
+            raise |= n.vis_flags.raise();
         }
         self.has_dissolve = dissolve;
         self.has_cache = cache;

@@ -41,7 +41,9 @@ impl El {
     /// not in the slot's record: under `El::rotate` the slot draws upright inside a turned
     /// isolated layer (`EffectSite::in_layer`), and Rune turns what the hook painted.
     pub fn effect(mut self, mark: u32) -> Self {
-        self.vis.mark = mark;
+        if mark != 0 || !self.vis.cold.is_empty() {
+            self.vis.cold_mut().mark = mark;
+        }
         self.vis.cold_mut().effect.get_or_insert_with(EffectSlot::default);
         self
     }

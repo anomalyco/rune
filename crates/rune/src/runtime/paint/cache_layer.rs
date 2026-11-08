@@ -85,7 +85,7 @@ impl<S: 'static> Runtime<S> {
             self.cache_inside_scratch.resize(n_nodes, false);
             for i in 0..n_nodes {
                 let n = &self.nodes[i];
-                self.cache_inside_scratch[i] = n.vis.cache || n.parent.is_some_and(|p| self.cache_inside_scratch[p]);
+                self.cache_inside_scratch[i] = n.vis_flags.cache() || n.parent.is_some_and(|p| self.cache_inside_scratch[p]);
             }
             let store = self.scene.store();
             for i in (0..n_nodes).rev() {
@@ -112,13 +112,13 @@ impl<S: 'static> Runtime<S> {
                     || n.input.as_ref().is_some_and(|inp| inp.edit.focused || inp.edit.is_secure())
                     || n.text.as_ref().is_some_and(|t| t.advance_in.is_some());
                 let check = n.text.as_ref().is_some_and(|t| t.live.is_some())
-                    || n.live.iter().any(|b| !n.vis.cache || !matches!(b.property, crate::live::Property::Offset | crate::live::Property::Scale));
+                    || n.live.iter().any(|b| !n.vis_flags.cache() || !matches!(b.property, crate::live::Property::Offset | crate::live::Property::Scale));
                 self.cache_live_scratch[i] |= live;
                 self.cache_check_scratch[i] |= check;
                 // Hover, press and link paint land without a commit (an instant track or a
                 // pointer move inside one text), so hash what this frame samples.
                 let links = n.text.as_ref().is_some_and(|t| !t.links.is_empty());
-                if n.vis.hover.a > 0.0 || n.vis.hover_group || n.vis.press.a > 0.0 || n.handlers.get().is_some_and(|h| h.press_scale.is_some()) || links {
+                if n.vis.hover().a > 0.0 || n.vis_flags.hover_group() || n.vis.press().a > 0.0 || n.handlers.get().is_some_and(|h| h.press_scale.is_some()) || links {
                     let mut ph = rune_motion::Fx::default();
                     ph.write_u64(n.id.0);
                     for prop in [P_HOVER, P_PRESS, P_PRESS_SCALE] {
@@ -130,7 +130,7 @@ impl<S: 'static> Runtime<S> {
                 if let Some(p) = n.parent {
                     self.cache_paint_scratch[p] = self.cache_paint_scratch[p].wrapping_add(self.cache_paint_scratch[i]);
                     // A lifted descendant draws outside this raster; don't elide its inputs.
-                    self.cache_live_scratch[p] |= self.cache_live_scratch[i] || n.vis.raise;
+                    self.cache_live_scratch[p] |= self.cache_live_scratch[i] || n.vis_flags.raise();
                     self.cache_check_scratch[p] |= self.cache_check_scratch[i] || !n.live.is_empty();
                 }
             }

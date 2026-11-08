@@ -308,7 +308,7 @@ impl<S: 'static> Runtime<S> {
     /// `shared`: the `hover_group_shared` keys the pointer is over.
     fn hover_flip(&self, i: usize, captured: Option<&str>, alone: Option<usize>, shared: &[Rc<str>]) -> Option<Flip> {
         let n = &self.nodes[i];
-        if !(n.vis.hover.a > 0.0 || n.vis.hover_group) || self.is_exiting(n.id) { return None; }
+        if !(n.vis.hover().a > 0.0 || n.vis_flags.hover_group()) || self.is_exiting(n.id) { return None; }
         let inside = self.pointer.is_some_and(|(x, y)| self.node_contains(i, x, y))
             || n.vis.hover_share.as_ref().is_some_and(|k| shared.contains(k))
             || (n.vis.hover_focus && self.keyboard_focus && self.focus_within(i));
@@ -347,7 +347,7 @@ impl<S: 'static> Runtime<S> {
         for i in 0..self.nodes.len() {
             let n = &self.nodes[i];
             let press_scale = n.handlers.get().and_then(|h| h.press_scale);
-            if n.vis.hover.a <= 0.0 && !n.vis.hover_group && n.vis.press.a <= 0.0 && press_scale.is_none() { continue; }
+            if n.vis.hover().a <= 0.0 && !n.vis_flags.hover_group() && n.vis.press().a <= 0.0 && press_scale.is_none() { continue; }
             if self.is_exiting(n.id) { continue; }
             match self.hover_flip(i, captured, alone, &shared) {
                 Some(f) if f.changed => flips.push(f),
@@ -362,14 +362,14 @@ impl<S: 'static> Runtime<S> {
                 Some(_) => {}
                 None => {}
             }
-            if n.vis.press.a <= 0.0 && press_scale.is_none() { continue; }
+            if n.vis.press().a <= 0.0 && press_scale.is_none() { continue; }
             let capture_inside = if self.secondary_capture.is_some() {
                 self.pointer.is_some_and(|(x, y)| self.node_contains(i, x, y))
             } else {
                 self.capture_inside
             };
             let down = self.allowed(i) && captured == Some(n.path.as_str()) && capture_inside;
-            let pressed = down && n.vis.press.a > 0.0;
+            let pressed = down && n.vis.press().a > 0.0;
             let id = n.id;
             changed |= self.scene.store().target(id, P_PRESS).unwrap_or(0.0) != pressed as u8 as f32;
             if paint_tracks::ready_from_rest(&mut self.scene, id, P_PRESS, 0.0, pressed as u8 as f32) {

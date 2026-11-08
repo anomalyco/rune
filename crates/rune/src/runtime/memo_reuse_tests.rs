@@ -42,7 +42,7 @@ fn assert_same_state<S: 'static>(memo_rt: &Runtime<S>, fresh_rt: &Runtime<S>, st
         assert_eq!(a.vis.opacity.to_bits(), b.vis.opacity.to_bits(), "{step}: node[{idx}] opacity ({})", a.path);
         assert_eq!(a.vis.paint_alpha.to_bits(), b.vis.paint_alpha.to_bits(), "{step}: node[{idx}] paint_alpha ({})", a.path);
         assert_eq!(a.vis.fill, b.vis.fill, "{step}: node[{idx}] fill ({})", a.path);
-        assert_eq!(a.vis.radius, b.vis.radius, "{step}: node[{idx}] radius ({})", a.path);
+        assert_eq!(a.vis.radii(), b.vis.radii(), "{step}: node[{idx}] radius ({})", a.path);
         assert_eq!(
             a.text.as_ref().map(|t| (&t.content, t.color, t.shape)),
             b.text.as_ref().map(|t| (&t.content, t.color, t.shape)),

@@ -25,7 +25,7 @@ impl El {
 
     /// [`El::pill`] for several ranges.
     pub fn pills(mut self, pills: impl IntoIterator<Item = (Range<usize>, PillStyle)>) -> Self {
-        if self.input.is_some() {
+        if self.cold.input.is_some() {
             return self;
         }
         let Some(t) = &mut self.text else { return self };
@@ -55,7 +55,7 @@ impl El {
     /// rich("see the docs", spans).inline_icon(8, InlineIcon::glyph(&GLOBE).size(14.0).gap(4.0))
     /// ```
     pub fn inline_icon(mut self, at: usize, icon: InlineIcon) -> Self {
-        if self.input.is_some() {
+        if self.cold.input.is_some() {
             return self;
         }
         let Some(t) = &mut self.text else { return self };

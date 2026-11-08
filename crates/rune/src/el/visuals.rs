@@ -4,12 +4,26 @@
 use super::*;
 
 impl El {
+    #[inline]
     pub fn fill(mut self, c: Color) -> Self {
+        self.set_fill(c);
+        self
+    }
+    /// [`El::fill`] in place.
+    #[inline]
+    pub fn set_fill(&mut self, c: Color) -> &mut Self {
         self.vis.fill = c;
         self
     }
+    #[inline]
     pub fn radius(mut self, r: f32) -> Self {
-        self.vis.radius = [r; 4];
+        self.set_radius(r);
+        self
+    }
+    /// [`El::radius`] in place.
+    #[inline]
+    pub fn set_radius(&mut self, r: f32) -> &mut Self {
+        self.vis.set_radii([r; 4]);
         self
     }
     /// Round the corners with Apple's continuous curve (`CALayerCornerCurve.continuous`, SwiftUI's
@@ -18,12 +32,12 @@ impl El {
     /// `clip_rounded` and system material; shadows keep circular corners, like a CALayer
     /// shadow from a `CGPath(roundedRect:)`.
     pub fn continuous_corners(mut self) -> Self {
-        self.vis.continuous_corners = true;
+        self.vis_flags.set(VisualFlags::CONTINUOUS_CORNERS, true);
         self
     }
     /// Per-corner radius: top-left, top-right, bottom-right, bottom-left.
     pub fn corners(mut self, r: [f32; 4]) -> Self {
-        self.vis.radius = r;
+        self.vis.set_radii(r);
         self
     }
     /// A ring `width` points wide just inside the border box, following the corner radii, as a
@@ -34,9 +48,15 @@ impl El {
     /// it draws one, above that it floors to whole pixels. For a ring at its exact fractional
     /// width, as CSS `box-shadow: inset 0 0 0 0.5px` draws, use an inset [`Self::box_shadow`]
     /// with that spread.
+    #[inline]
     pub fn border(mut self, width: f32, c: Color) -> Self {
-        self.vis.border_width = width;
-        self.vis.border = c;
+        self.set_border(width, c);
+        self
+    }
+    /// [`El::border`] in place.
+    #[inline]
+    pub fn set_border(&mut self, width: f32, c: Color) -> &mut Self {
+        self.vis.set_border(width, c);
         if let Some(cold) = self.vis.cold.get_mut_if_some() {
             cold.border_bottom = None;
             cold.border_sides = None;
@@ -53,8 +73,7 @@ impl El {
     /// Replaces any `border`, and `border` replaces it.
     pub fn border_sides(mut self, widths: [f32; 4], c: Color) -> Self {
         let widths = widths.map(|w| if w.is_finite() { w.max(0.0) } else { 0.0 });
-        self.vis.border_width = widths.into_iter().fold(0.0, f32::max);
-        self.vis.border = c;
+        self.vis.set_border(widths.into_iter().fold(0.0, f32::max), c);
         let uniform = widths.iter().all(|&w| w == widths[0]);
         if !uniform || self.vis.cold.get_mut_if_some().is_some() {
             let cold = self.vis.cold_mut();
@@ -84,8 +103,7 @@ impl El {
     /// e.g. a top-lit hairline rim. Drawn like [`El::border`], inside the box over the fill.
     /// Replaces any `border`, and `border` replaces it.
     pub fn border_gradient(mut self, width: f32, top: Color, bottom: Color) -> Self {
-        self.vis.border_width = width;
-        self.vis.border = top;
+        self.vis.set_border(width, top);
         let cold = self.vis.cold_mut();
         cold.border_bottom = Some(bottom);
         cold.border_sides = None;
@@ -213,14 +231,24 @@ impl El {
         self.vis.cold_mut().outline = Some(Outline { width, offset, color });
         self
     }
+    #[inline]
     pub fn opacity(mut self, o: f32) -> Self {
+        self.set_opacity(o);
+        self
+    }
+    /// [`El::opacity`] in place.
+    #[inline]
+    pub fn set_opacity(&mut self, o: f32) -> &mut Self {
         self.vis.opacity = o;
         self
     }
     /// Gaussian blur of the completed subtree, in points (standard deviation). Zero has no
     /// filter cost. The renderer caps sigma at 64 device pixels; bounds grow by three sigma.
     pub fn blur(mut self, sigma: f32) -> Self {
-        self.vis.blur = sigma.max(0.0);
+        let sigma = sigma.max(0.0);
+        if sigma != 0.0 || !self.vis.cold.is_empty() {
+            self.vis.cold_mut().blur = sigma;
+        }
         self
     }
     /// Override the blur target's curve. Ordinary changes use the element's motion spring.
@@ -237,7 +265,9 @@ impl El {
     pub fn dim(mut self, alpha: f32) -> Self {
         fn apply(e: &mut El, alpha: f32) {
             e.expand_memo();
-            e.vis.paint_alpha *= alpha;
+            if alpha < 1.0 || !e.vis.cold.is_empty() {
+                e.vis.cold_mut().paint_alpha *= alpha;
+            }
             for child in &mut e.children { apply(child, alpha); }
         }
         apply(&mut self, alpha.clamp(0.0, 1.0));
@@ -250,7 +280,10 @@ impl El {
     /// element below 1 whose paint overlaps (children, or more than one paint of its own) draws
     /// offscreen; anything else just takes the alpha. Repeated calls multiply.
     pub fn layer_opacity(mut self, alpha: f32) -> Self {
-        self.vis.layer_opacity *= alpha.clamp(0.0, 1.0);
+        let alpha = alpha.clamp(0.0, 1.0);
+        if alpha < 1.0 || !self.vis.cold.is_empty() {
+            self.vis.cold_mut().layer_opacity *= alpha;
+        }
         self
     }
     /// Add children's premultiplied colours while a direct child is between opacity 0 and 1.
@@ -259,7 +292,7 @@ impl El {
     /// At rest (all direct children at 0 or 1), draw normally without a dissolve layer. Overlapping
     /// opaque states therefore use source-over at rest; this API is for replacing states.
     pub fn dissolve(mut self) -> Self {
-        self.vis.blend = crate::render::Blend::PlusLighter;
+        self.vis_flags.set(VisualFlags::PLUS_LIGHTER, true);
         self
     }
     /// Rasterize this subtree once into an offscreen texture when settled and composite that
@@ -268,29 +301,45 @@ impl El {
     /// spring, transition, or effect slot inside the subtree is active, it draws live and
     /// re-caches once settled.
     pub fn cache(mut self) -> Self {
-        self.vis.cache = true;
+        self.vis_flags.set(VisualFlags::CACHE, true);
         self
     }
     /// Cache this subtree like [`Self::cache`], also mixing `key` into its invalidation signature.
     pub fn cache_key(mut self, key: u64) -> Self {
-        self.vis.cache = true;
+        self.vis_flags.set(VisualFlags::CACHE, true);
         self.vis.cold_mut().cache_key = Some(key);
         self
     }
     /// Tags this element's instances (and its descendants', until one sets its own) for a
     /// compositor: `Runtime::marks` runs parallel to `Runtime::instances`.
     pub fn mark(mut self, mark: u32) -> Self {
-        self.vis.mark = mark;
+        if mark != 0 || !self.vis.cold.is_empty() {
+            self.vis.cold_mut().mark = mark;
+        }
         self
     }
     /// Overlay drawn over the fill while hovered.
+    #[inline]
     pub fn hover(mut self, c: Color) -> Self {
-        self.vis.hover = c;
+        self.set_hover(c);
+        self
+    }
+    /// [`El::hover`] in place.
+    #[inline]
+    pub fn set_hover(&mut self, c: Color) -> &mut Self {
+        self.vis.set_hover(c);
         self
     }
     /// Overlay drawn over the fill while pressed.
+    #[inline]
     pub fn press(mut self, c: Color) -> Self {
-        self.vis.press = c;
+        self.set_press(c);
+        self
+    }
+    /// [`El::press`] in place.
+    #[inline]
+    pub fn set_press(&mut self, c: Color) -> &mut Self {
+        self.vis.set_press(c);
         self
     }
     /// Shrink to `scale` about the centre while a press on this element is held, as iOS tiles
@@ -329,7 +378,10 @@ impl El {
     /// stays upright. Hit testing follows the turned box; the reported rect uses its upright
     /// bounding box. Anything not finite is `0.0`.
     pub fn rotate(mut self, radians: f32) -> Self {
-        self.vis.rotate = if radians.is_finite() { radians } else { 0.0 };
+        let r = if radians.is_finite() { radians } else { 0.0 };
+        if r != 0.0 || !self.vis.cold.is_empty() {
+            self.vis.cold_mut().rotate = r;
+        }
         self
     }
     /// The curve [`Self::rotate`] changes on.
@@ -364,7 +416,10 @@ impl El {
     /// layout, and a frozen scroll view would ignore the wheel. Anything not finite or below
     /// zero is `1.0`.
     pub fn time_scale(mut self, k: f32) -> Self {
-        self.time_scale = if k.is_finite() && k >= 0.0 { k } else { 1.0 };
+        let k = if k.is_finite() && k >= 0.0 { k } else { 1.0 };
+        if k != 1.0 || !self.cold.is_empty() {
+            self.cold_mut().time_scale = k;
+        }
         self
     }
     /// A scroll area's wrapper passes its clip to the viewport, beside which it draws the bar.
@@ -378,7 +433,13 @@ impl El {
         }
     }
     /// Clip children to this box with soft gradient edges (never a hard crop).
+    #[inline]
     pub fn clip_soft(mut self, fade: f32) -> Self {
+        self.set_clip_soft(fade);
+        self
+    }
+    /// [`El::clip_soft`] in place.
+    pub fn set_clip_soft(&mut self, fade: f32) -> &mut Self {
         self.set_clip([fade; 4]);
         self
     }
@@ -431,14 +492,14 @@ impl El {
     }
     /// Track hover for descendants' `group_*` styles (see [`Visual::hover_group`]).
     pub fn hover_group(mut self) -> Self {
-        self.vis.hover_group = true;
+        self.vis_flags.set(VisualFlags::HOVER_GROUP, true);
         self
     }
     /// [`Self::hover_group`], shared by every element on screen with the same `key`: the pointer
     /// over any of them hovers them all, so one group can span elements that don't nest, such as
     /// a reply's text and the footer under it in separate rows of a virtual list.
     pub fn hover_group_shared(mut self, key: impl Into<Rc<str>>) -> Self {
-        self.vis.hover_group = true;
+        self.vis_flags.set(VisualFlags::HOVER_GROUP, true);
         self.vis.cold_mut().hover_share = Some(key.into());
         self
     }
@@ -446,7 +507,7 @@ impl El {
     /// anywhere inside it, as CSS `:is(:hover, :has(:focus-visible))` does: a tab whose close
     /// button and hover wash show when Tab reaches it, as under the pointer.
     pub fn hover_group_focus(mut self) -> Self {
-        self.vis.hover_group = true;
+        self.vis_flags.set(VisualFlags::HOVER_GROUP, true);
         self.vis.cold_mut().hover_focus = true;
         self
     }

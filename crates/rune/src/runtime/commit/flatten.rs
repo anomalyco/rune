@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 
+use crate::el::ElFlags;
+
 use super::*;
 
 /// An `aspect_fit` element's first layout: it takes the free space along its parent's main axis
@@ -236,7 +238,7 @@ fn prepare_text(
 
 /// `El::border_layout`: the border's sides as layout room, each as wide as it draws at `scale`.
 fn lay_out_border(style: &mut CompactStyle, vis: &Visual, scale: f32) {
-    let sides = vis.border_sides.unwrap_or([vis.border_width; 4]);
+    let sides = vis.border_sides.unwrap_or([vis.border_width(); 4]);
     style.set_border(sides.map(|w| crate::runtime::pixel_snap::line_width(w * scale) / scale));
 }
 
@@ -365,7 +367,7 @@ fn flatten_owned(
         return (slot, false);
     }
     let record_built = parent_sx.is_none().then(|| {
-        let built = el.memo_built.as_ref().filter(|b| b.reusable && memo_reuse::same_root_el(&el, b))?;
+        let built = el.memo_built().filter(|b| b.reusable && memo_reuse::same_root_el(&el, b))?;
         let (inherited, hover_within) = memo_reuse::inherited_for(parent, nodes, motion, in_row, scale, memo_ctx.foreground);
         Some((built.id, inherited, hover_within))
     }).flatten();
@@ -373,73 +375,33 @@ fn flatten_owned(
     push_segment(path_buf, el.key.as_deref(), index);
     let me = nodes.len();
     let (path, id) = resolve_path_and_id(path_buf, me, memo_ctx);
-    let own_motion = el.motion;
+    let own_motion = el.cold.motion;
     let motion = own_motion.unwrap_or(motion);
     let parent_is_stack = parent.is_some_and(|p| nodes[p].growth.is_some());
-    let animate_layout = el.animate_layout;
-    let in_row = if el.above.is_some() && (animate_layout || in_row == RowLayout::Horizontal) {
+    let flags = el.flags;
+    let animate_layout = flags.has(ElFlags::ANIMATE_LAYOUT);
+    let in_row = if el.cold.above.is_some() && (animate_layout || in_row == RowLayout::Horizontal) {
         RowLayout::Free
     } else if animate_layout && in_row == RowLayout::Snaps {
         RowLayout::Horizontal
     } else {
         in_row
     };
-    let virtual_mount = el.virtual_mount;
-    let instant_changes = el.instant_changes || parent.is_some_and(|p| nodes[p].instant_changes);
-    #[cfg(debug_assertions)]
-    let scroll_source = el.scroll_source;
-    let trace_namespace = el.trace_namespace.or_else(|| parent.and_then(|p| nodes[p].trace_namespace));
-    let El {
-        focus,
-        handlers,
-        looping,
-        key,
-        trace_name,
-        role,
-        label,
-        mut style,
-        mut vis,
-        live,
-        mut text,
-        children,
-        memo_children,
-        above,
-        opacity_motion,
-        lead,
-        width_leads,
-        transition,
-        matched,
-        scroll,
-        scroll_axes,
-        sticky,
-        scroll_edges,
-        growth,
-        streaming,
-        whole,
-        glide,
-        mut input,
-        window_drag,
-        ime_cursor,
-        scale: static_scale,
-        time_scale,
-        help,
-        help_cut,
-        help_above,
-        material,
-        aspect_fit,
-        selection_group,
-        a11y,
-        inert,
-        ..
-    } = el;
+    let instant_changes = flags.has(ElFlags::INSTANT_CHANGES) || parent.is_some_and(|p| nodes[p].instant_changes);
+    let trace_namespace = el.cold.trace_namespace.or_else(|| parent.and_then(|p| nodes[p].trace_namespace));
+    let role = el.role_name();
+    let El { handlers, key, mut style, mut vis, vis_flags, mut text, children, memo, mut cold, scale: static_scale, .. } = el;
+    let focus = cold.focus.clone();
+    // Only a text field's element has to own its cold fields here; a memo placeholder shares them.
+    let mut input = if cold.input.is_some() { cold.get_mut_if_some().and_then(|c| c.input.take()) } else { None };
     if let Some(sx) = parent_sx {
         apply_scroll_x_child(&mut style, sx);
     }
     let (measure, secure_measure) = prepare_text(&mut text, input.as_deref(), scale);
     take_foreground(&mut text, input.as_deref_mut(), &mut vis, memo_ctx.foreground);
     if vis.border_layout { lay_out_border(&mut style, &vis, scale); }
-    let inert = inert || parent.is_some_and(|p| nodes[p].inert);
-    let hover_within = inherit_hover_within(&vis, above.as_ref(), parent, nodes);
+    let inert = flags.has(ElFlags::INERT) || parent.is_some_and(|p| nodes[p].inert);
+    let hover_within = inherit_hover_within(&vis, cold.above.as_ref(), parent, nodes);
     let pixel_aspect = vis.pixels.as_ref()
         .filter(|_| {
             let sz = style.size();
@@ -449,12 +411,14 @@ fn flatten_owned(
     if let Some(ratio) = pixel_aspect.filter(|&r| r > 0.0) {
         style.set_aspect_ratio(Some(ratio));
     }
-    let aspect_fit = (aspect_fit > 0.0).then(|| {
+    let aspect_fit = (cold.aspect_fit > 0.0).then(|| {
         let room = fit_room(&style, parent_row);
-        Box::new((aspect_fit, std::mem::replace(&mut style, room)))
+        Box::new((cold.aspect_fit, std::mem::replace(&mut style, room)))
     });
-    let total_children = memo_children.as_ref().map_or(0, |m| m.children.len()) + children.len();
-    let child_sx = if scroll.is_some() && scroll_axes.x() {
+    let memo_children = memo.as_ref().map(|b| &b.children);
+    let total_children = memo_children.map_or(0, |m| m.children.len()) + children.len();
+    let child_sx = if cold.scroll.is_some() && cold.scroll_axes.x() {
+        let scroll_axes = cold.scroll_axes;
         if total_children == 1 {
             style.set_flex_direction(FlexDirection::Row);
             Some(ScrollXChild::Single { vertical: scroll_axes.y() })
@@ -467,35 +431,41 @@ fn flatten_owned(
     } else {
         None
     };
-    let cold = pack_node_cold(NodeCold {
-        trace_name,
-        trace_namespace,
-        label,
-        live,
-        run_layout: None,
-        live_text_seen: None,
-        looping,
-        opacity_motion,
-        lead,
-        transition,
-        matched: matched.map(|id| (id, own_motion)),
-        above,
-        scroll,
-        scroll_axes,
-        scroll_edges,
-        sticky,
-        growth,
-        glide,
-        a11y,
-        pixel_aspect,
-        aspect_fit,
-        material,
-        help,
-        help_cut,
-        help_above,
-        #[cfg(debug_assertions)]
-        scroll_source,
-    });
+    let time_scale = cold.time_scale;
+    let cold = if cold.is_empty() && trace_namespace.is_none() && pixel_aspect.is_none() && aspect_fit.is_none() {
+        crate::cold::Cold::default()
+    } else {
+        let c = cold.into_owned();
+        pack_node_cold(NodeCold {
+            trace_name: c.trace_name,
+            trace_namespace,
+            label: c.label,
+            live: c.live,
+            run_layout: None,
+            live_text_seen: None,
+            looping: c.looping,
+            opacity_motion: c.opacity_motion,
+            lead: c.lead,
+            transition: c.transition,
+            matched: c.matched.map(|id| (id, own_motion)),
+            above: c.above,
+            scroll: c.scroll,
+            scroll_axes: c.scroll_axes,
+            scroll_edges: c.scroll_edges,
+            sticky: c.sticky,
+            growth: c.growth,
+            glide: c.glide,
+            a11y: c.a11y,
+            pixel_aspect,
+            aspect_fit,
+            material: c.material,
+            help: c.help,
+            help_cut: c.help_cut,
+            help_above: c.help_above,
+            #[cfg(debug_assertions)]
+            scroll_source: c.scroll_source,
+        })
+    };
     nodes.push(Node {
         id,
         path,
@@ -511,6 +481,7 @@ fn flatten_owned(
         handlers,
         cold,
         vis,
+        vis_flags,
         hover_within,
         target: [0.0; 4],
         local: MRect::ZERO,
@@ -519,17 +490,17 @@ fn flatten_owned(
         static_scale,
         time_scale,
         in_row,
-        width_leads,
+        width_leads: flags.has(ElFlags::WIDTH_LEADS),
         instant_changes,
-        streaming,
-        whole,
+        streaming: flags.has(ElFlags::STREAMING),
+        whole: flags.has(ElFlags::WHOLE),
         inert,
         scale_track: false,
         group_fade: false,
-        virtual_mount,
-        selection_group,
-        window_drag,
-        ime_cursor,
+        virtual_mount: flags.has(ElFlags::VIRTUAL_MOUNT),
+        selection_group: flags.has(ElFlags::SELECTION_GROUP),
+        window_drag: flags.window_drag(),
+        ime_cursor: flags.has(ElFlags::IME_CURSOR),
         moved_stub: false,
     });
     let child_in_row = match in_row {
@@ -588,7 +559,7 @@ fn flatten_ref(
         return (slot, false);
     }
     let record_built = parent_sx.is_none().then(|| {
-        let built = el.memo_built.as_ref().filter(|b| b.reusable && memo_reuse::same_root_el(el, b))?;
+        let built = el.memo_built().filter(|b| b.reusable && memo_reuse::same_root_el(el, b))?;
         let (inherited, hover_within) = memo_reuse::inherited_for(parent, nodes, motion, in_row, scale, memo_ctx.foreground);
         Some((built.id, inherited, hover_within))
     }).flatten();
@@ -596,31 +567,33 @@ fn flatten_ref(
     push_segment(path_buf, el.key.as_deref(), index);
     let me = nodes.len();
     let (path, id) = resolve_path_and_id(path_buf, me, memo_ctx);
-    let own_motion = el.motion;
+    let own_motion = el.cold.motion;
     let motion = own_motion.unwrap_or(motion);
     let parent_is_stack = parent.is_some_and(|p| nodes[p].growth.is_some());
-    let animate_layout = el.animate_layout;
-    let in_row = if el.above.is_some() && (animate_layout || in_row == RowLayout::Horizontal) {
+    let flags = el.flags;
+    let animate_layout = flags.has(ElFlags::ANIMATE_LAYOUT);
+    let in_row = if el.cold.above.is_some() && (animate_layout || in_row == RowLayout::Horizontal) {
         RowLayout::Free
     } else if animate_layout && in_row == RowLayout::Snaps {
         RowLayout::Horizontal
     } else {
         in_row
     };
-    let instant_changes = el.instant_changes || parent.is_some_and(|p| nodes[p].instant_changes);
-    let trace_namespace = el.trace_namespace.or_else(|| parent.and_then(|p| nodes[p].trace_namespace));
+    let instant_changes = flags.has(ElFlags::INSTANT_CHANGES) || parent.is_some_and(|p| nodes[p].instant_changes);
+    let trace_namespace = el.cold.trace_namespace.or_else(|| parent.and_then(|p| nodes[p].trace_namespace));
     let mut style: Cow<'_, CompactStyle> = Cow::Borrowed(&el.style);
     if let Some(sx) = parent_sx {
         apply_scroll_x_child(style.to_mut(), sx);
     }
+    let c = &*el.cold;
     let mut text = el.text.clone();
-    let mut input = el.input.clone();
+    let mut input = c.input.clone();
     let (measure, secure_measure) = prepare_text(&mut text, input.as_deref(), scale);
-    let inert = el.inert || parent.is_some_and(|p| nodes[p].inert);
+    let inert = flags.has(ElFlags::INERT) || parent.is_some_and(|p| nodes[p].inert);
     let mut vis = el.vis.clone();
     take_foreground(&mut text, input.as_deref_mut(), &mut vis, memo_ctx.foreground);
     if vis.border_layout { lay_out_border(style.to_mut(), &vis, scale); }
-    let hover_within = inherit_hover_within(&vis, el.above.as_ref(), parent, nodes);
+    let hover_within = inherit_hover_within(&vis, c.above.as_ref(), parent, nodes);
     let pixel_aspect = vis.pixels.as_ref()
         .filter(|_| {
             let sz = style.size();
@@ -630,119 +603,95 @@ fn flatten_ref(
     if let Some(ratio) = pixel_aspect.filter(|&r| r > 0.0) {
         style.to_mut().set_aspect_ratio(Some(ratio));
     }
-    let aspect_fit = if el.aspect_fit > 0.0 {
+    let aspect_fit = if c.aspect_fit > 0.0 {
         let room = fit_room(&style, parent_row);
         let orig = std::mem::replace(&mut style, Cow::Owned(room)).into_owned();
-        Some(Box::new((el.aspect_fit, orig)))
+        Some(Box::new((c.aspect_fit, orig)))
     } else {
         None
     };
-    let total_children = el.memo_children.as_ref().map_or(0, |m| m.children.len()) + el.children.len();
-    let child_sx = if el.scroll.is_some() && el.scroll_axes.x() {
+    let total_children = el.memo.as_ref().map_or(0, |m| m.children.children.len()) + el.children.len();
+    let child_sx = if c.scroll.is_some() && c.scroll_axes.x() {
         if total_children == 1 {
             style.to_mut().set_flex_direction(FlexDirection::Row);
-            Some(ScrollXChild::Single { vertical: el.scroll_axes.y() })
+            Some(ScrollXChild::Single { vertical: c.scroll_axes.y() })
         } else {
-            if !el.scroll_axes.y() {
+            if !c.scroll_axes.y() {
                 style.to_mut().set_flex_direction(FlexDirection::Row);
             }
-            Some(ScrollXChild::Many { vertical: el.scroll_axes.y() })
+            Some(ScrollXChild::Many { vertical: c.scroll_axes.y() })
         }
     } else {
         None
     };
-    let cold_any = el.trace_name.is_some()
-        || trace_namespace.is_some()
-        || el.label.is_some()
-        || !el.live.is_empty()
-        || el.looping.is_some()
-        || el.opacity_motion.is_some()
-        || el.lead.is_some()
-        || el.transition.is_some()
-        || el.matched.is_some()
-        || el.above.is_some()
-        || el.scroll.is_some()
-        || el.scroll_axes != crate::el::ScrollAxes::Y
-        || el.scroll_edges != crate::el::ScrollEdges::default()
-        || el.sticky.is_some()
-        || el.growth.is_some()
-        || el.glide.is_some()
-        || el.a11y != crate::el::A11y::default()
-        || pixel_aspect.is_some()
-        || aspect_fit.is_some()
-        || el.material.is_some()
-        || el.help.is_some()
-        || el.help_cut
-        || el.help_above;
-    #[cfg(debug_assertions)]
-    let cold_any = cold_any || el.scroll_source.is_some();
-    let cold = if cold_any {
-        crate::cold::Cold::from_owned(NodeCold {
-            trace_name: el.trace_name,
+    let cold = if el.cold.is_empty() && trace_namespace.is_none() && pixel_aspect.is_none() && aspect_fit.is_none() {
+        crate::cold::Cold::default()
+    } else {
+        pack_node_cold(NodeCold {
+            trace_name: c.trace_name,
             trace_namespace,
-            label: el.label.clone(),
-            live: el.live.clone(),
+            label: c.label.clone(),
+            live: c.live.clone(),
             run_layout: None,
             live_text_seen: None,
-            looping: el.looping.clone(),
-            opacity_motion: el.opacity_motion.clone(),
-            lead: el.lead,
-            transition: el.transition.clone(),
-            matched: el.matched.as_ref().map(|id| (id.clone(), own_motion)),
-            above: el.above.clone(),
-            scroll: el.scroll,
-            scroll_axes: el.scroll_axes,
-            scroll_edges: el.scroll_edges,
-            sticky: el.sticky.clone(),
-            growth: el.growth.clone(),
-            glide: el.glide,
-            a11y: el.a11y.clone(),
+            looping: c.looping.clone(),
+            opacity_motion: c.opacity_motion.clone(),
+            lead: c.lead,
+            transition: c.transition.clone(),
+            matched: c.matched.as_ref().map(|id| (id.clone(), own_motion)),
+            above: c.above.clone(),
+            scroll: c.scroll,
+            scroll_axes: c.scroll_axes,
+            scroll_edges: c.scroll_edges,
+            sticky: c.sticky.clone(),
+            growth: c.growth.clone(),
+            glide: c.glide,
+            a11y: c.a11y.clone(),
             pixel_aspect,
             aspect_fit,
-            material: el.material,
-            help: el.help.clone(),
-            help_cut: el.help_cut,
-            help_above: el.help_above,
+            material: c.material,
+            help: c.help.clone(),
+            help_cut: c.help_cut,
+            help_above: c.help_above,
             #[cfg(debug_assertions)]
-            scroll_source: el.scroll_source,
+            scroll_source: c.scroll_source,
         })
-    } else {
-        crate::cold::Cold::default()
     };
     nodes.push(Node {
         id,
         path,
         key: el.key.clone(),
-        role: el.role,
+        role: el.role_name(),
         parent,
         taffy: SlotId(0),
         text,
         text_layout: None,
         elided: None,
         input,
-        focus: el.focus.clone(),
+        focus: c.focus.clone(),
         handlers: el.handlers.clone(),
         cold,
         vis,
+        vis_flags: el.vis_flags,
         hover_within,
         target: [0.0; 4],
         local: MRect::ZERO,
         inset: [0.0; 4],
         motion,
         static_scale: el.scale,
-        time_scale: el.time_scale,
+        time_scale: c.time_scale,
         in_row,
-        width_leads: el.width_leads,
+        width_leads: flags.has(ElFlags::WIDTH_LEADS),
         instant_changes,
-        streaming: el.streaming,
-        whole: el.whole,
+        streaming: flags.has(ElFlags::STREAMING),
+        whole: flags.has(ElFlags::WHOLE),
         inert,
         scale_track: false,
         group_fade: false,
-        virtual_mount: el.virtual_mount,
-        selection_group: el.selection_group,
-        window_drag: el.window_drag,
-        ime_cursor: el.ime_cursor,
+        virtual_mount: flags.has(ElFlags::VIRTUAL_MOUNT),
+        selection_group: flags.has(ElFlags::SELECTION_GROUP),
+        window_drag: flags.window_drag(),
+        ime_cursor: flags.has(ElFlags::IME_CURSOR),
         moved_stub: false,
     });
     let child_in_row = match in_row {

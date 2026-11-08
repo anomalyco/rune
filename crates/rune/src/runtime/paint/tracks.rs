@@ -72,7 +72,7 @@ impl LiveColors {
     /// view authored its own placeholder colour.
     pub(super) fn carry(self, old: &Node, new: &mut Node) {
         if self.fill { new.vis.fill = old.vis.fill; }
-        if self.border { new.vis.border = old.vis.border; }
+        if self.border { new.vis.set_border_color(old.vis.border()); }
         if self.text && let Some(c) = text_color(old) {
             if let Some(spec) = &mut new.text { if spec.color != c { spec.color = c; } }
             else if new.vis.icon.is_some_and(|(_, ic)| ic != c) && let Some((_, ic)) = &mut new.vis.cold_mut().icon { *ic = c; }

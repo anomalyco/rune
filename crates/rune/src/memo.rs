@@ -51,6 +51,7 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use crate::El;
+use crate::el::ElFlags;
 use crate::runtime::HashMap;
 use crate::runtime::layout_read::{LayoutRects, SELECTION, Same, boxes_moved, moved, note_read, seen_rect, size, window_key};
 
@@ -76,15 +77,29 @@ pub(crate) struct Shared {
 impl El {
     /// Every child: those shared with a memo cache, then the element's own.
     pub(crate) fn all_children(&self) -> impl Iterator<Item = &El> {
-        self.memo_children.iter().flat_map(|c| c.children.iter()).chain(&self.children)
+        self.memo_children().into_iter().flat_map(|c| c.children.iter()).chain(&self.children)
+    }
+
+    /// The children shared with a memo cache, which come before `children`.
+    #[inline]
+    pub(crate) fn memo_children(&self) -> Option<&Rc<Shared>> {
+        self.memo.as_ref().map(|b| &b.children)
+    }
+
+    /// The cached subtree this placeholder is, unless it was expanded or given extra children.
+    #[inline]
+    pub(crate) fn memo_built(&self) -> Option<&Rc<Built>> {
+        self.memo.as_ref().filter(|_| !self.flags.has(ElFlags::MEMO_EXTENDED))
     }
 
     /// Copies in the children shared with a memo cache, so the element owns all of them.
     pub(crate) fn expand_memo(&mut self) {
-        self.memo_built = None;
-        if let Some(shared) = self.memo_children.take() {
-            self.has_virtual |= shared.has_virtual;
-            let shared = Rc::unwrap_or_clone(shared).children;
+        self.flags.set(ElFlags::MEMO_EXTENDED, false);
+        if let Some(built) = self.memo.take() {
+            if built.children.has_virtual {
+                self.flags.set(ElFlags::HAS_VIRTUAL, true);
+            }
+            let shared = Rc::unwrap_or_clone(built.children.clone()).children;
             let own = std::mem::replace(&mut self.children, shared);
             self.children.extend(own);
         }
@@ -92,27 +107,28 @@ impl El {
 }
 
 fn el_flatten_reusable(e: &El) -> bool {
-    e.virtual_estimate.is_none()
-        && e.growth.is_none()
-        && e.aspect_fit <= 0.0
-        && e.above.is_none()
-        && e.live.is_empty()
-        && e.input.is_none()
+    let c = &*e.cold;
+    c.virtual_estimate.is_none()
+        && c.growth.is_none()
+        && c.aspect_fit <= 0.0
+        && c.above.is_none()
+        && c.live.is_empty()
+        && c.input.is_none()
         && e.handlers.get().is_none_or(|h| h.modal.is_none())
-        && !(e.scroll.is_some() && e.scroll_axes.x())
+        && !(c.scroll.is_some() && c.scroll_axes.x())
         && e.text.as_ref().is_none_or(|t| !t.redacted && t.live.is_none())
         && e.vis.pixels.as_ref().is_none_or(|_| {
             let sz = e.style.size();
             e.style.aspect_ratio().is_some() || (sz.width.is_auto() == sz.height.is_auto())
         })
-        && e.memo_children.as_ref().is_none_or(|m| m.reusable && !m.duplicate_keys)
+        && e.memo_children().is_none_or(|m| m.reusable && !m.duplicate_keys)
         && e.children.iter().all(el_flatten_reusable)
 }
 
 /// Precomputes `shape` on plain, non-input, non-cased text specs at `scale` while the freshly
 /// built subtree is still uniquely owned, so flattening never has to copy a shared `TextSpec`.
 fn prekey_text_shapes(el: &mut El, scale: f32) {
-    if el.input.is_none()
+    if el.cold.input.is_none()
         && let Some(t) = &el.text
         && !t.redacted
         && t.case.is_none()
@@ -129,8 +145,8 @@ fn prekey_text_shapes(el: &mut El, scale: f32) {
 
 /// Whether `el` or anything under it is a focused field.
 pub(crate) fn has_focused_input(el: &El) -> bool {
-    el.input.as_ref().is_some_and(|i| i.edit.focused)
-        || el.memo_children.as_ref().is_some_and(|m| m.focused_input)
+    el.cold.input.as_ref().is_some_and(|i| i.edit.focused)
+        || el.memo_children().is_some_and(|m| m.focused_input)
         || el.children.iter().any(has_focused_input)
 }
 
@@ -148,21 +164,21 @@ static NEXT_BUILT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 impl Built {
     fn new(mut el: El, scale: f32) -> (Rc<Built>, Option<String>) {
         let key = el.key.take();
-        el.memo_built = None;
-        let shared = if el.children.is_empty() && let Some(shared) = el.memo_children.take() {
+        el.flags.set(ElFlags::MEMO_EXTENDED, false);
+        let shared = if el.children.is_empty() && let Some(built) = el.memo.take() {
             prekey_text_shapes(&mut el, scale);
-            shared
+            built.children.clone()
         } else {
             el.expand_memo();
             prekey_text_shapes(&mut el, scale);
             let children = std::mem::take(&mut el.children);
             let focused_input = children.iter().any(has_focused_input);
             let duplicate_keys = crate::input::key_diagnostics::memo_children_have_duplicates(&el, &children);
-            let has_virtual = children.iter().any(|c| c.has_virtual);
+            let has_virtual = children.iter().any(|c| c.flags.has(ElFlags::HAS_VIRTUAL));
             let reusable = !duplicate_keys && !has_virtual && children.iter().all(el_flatten_reusable);
             Rc::new(Shared { children, focused_input, duplicate_keys, has_virtual, reusable })
         };
-        el.has_virtual = el.virtual_estimate.is_some();
+        el.flags.set(ElFlags::HAS_VIRTUAL, el.cold.virtual_estimate.is_some());
         let reusable = shared.reusable && !shared.duplicate_keys && el_flatten_reusable(&el);
         let id = NEXT_BUILT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         (Rc::new(Built { id, reusable, root: el, children: shared }), key)
@@ -172,9 +188,10 @@ impl Built {
     fn placeholder(self: &Rc<Self>, key: Option<String>) -> El {
         let mut el = self.root.clone();
         el.key = key;
-        el.has_virtual |= self.children.has_virtual;
-        el.memo_children = Some(self.children.clone());
-        el.memo_built = Some(self.clone());
+        if self.children.has_virtual {
+            el.flags.set(ElFlags::HAS_VIRTUAL, true);
+        }
+        el.memo = Some(self.clone());
         el
     }
 }

@@ -11,7 +11,7 @@ impl El {
     /// moves against that edge travels only that difference, on its own curve. Children
     /// leaving hold their place the same way.
     pub fn ride_trailing(mut self) -> Self {
-        self.vis.ride_trailing = true;
+        self.vis_flags.set(crate::el::VisualFlags::RIDE_TRAILING, true);
         self
     }
 }

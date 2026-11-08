@@ -73,9 +73,9 @@ impl<S: 'static> Runtime<S> {
                     path: n.path.clone(),
                     target: n.target,
                     fill: (!live.fill).then_some(n.vis.fill),
-                    border: (if live.border { Color::TRANSPARENT } else { n.vis.border }, n.vis.border_width),
+                    border: (if live.border { Color::TRANSPARENT } else { n.vis.border() }, n.vis.border_width()),
                     opacity: n.vis.opacity,
-                    radius: n.vis.radius,
+                    radius: n.vis.radii(),
                     text,
                 }
             })

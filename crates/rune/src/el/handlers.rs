@@ -8,8 +8,8 @@ impl El {
     }
     pub fn on_press_tx<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
         self.handlers.on_press = Some(Rc::new(move |s, tx| f(downcast::<S>(s), tx)));
-        if self.role == "group" {
-            self.role = "button";
+        if self.role == RoleTag::GROUP {
+            self.set_role_name("button");
         }
         self
     }

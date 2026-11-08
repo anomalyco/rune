@@ -7,6 +7,7 @@ use std::borrow::Cow;
 use std::rc::Rc;
 
 use crate::El;
+use crate::el::ElFlags;
 use crate::states::downcast;
 
 impl El {
@@ -29,10 +30,10 @@ impl El {
     /// ```
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn virtualize(mut self, estimated_row_height: f32) -> Self {
-        self.virtual_estimate = Some(estimated_row_height.max(1.0));
-        self.has_virtual = true;
+        self.cold_mut().virtual_estimate = Some(estimated_row_height.max(1.0));
+        self.flags.set(ElFlags::HAS_VIRTUAL, true);
         #[cfg(debug_assertions)]
-        { self.virtual_source = Some(std::panic::Location::caller()); }
+        { self.cold_mut().virtual_source = Some(std::panic::Location::caller()); }
         self
     }
 
@@ -80,7 +81,7 @@ impl El {
         key: impl for<'a> Fn(&'a S, usize) -> Cow<'a, str> + 'static,
         build: impl Fn(&S, usize) -> El + 'static,
     ) -> Self {
-        self.virtual_rows = Some(Rc::new(RowSource::new(count, key, build)));
+        self.cold_mut().virtual_rows = Some(Rc::new(RowSource::new(count, key, build)));
         self.virtualize(estimated_row_height)
     }
 
@@ -91,7 +92,7 @@ impl El {
     /// the same (a change in `count` is always detected without a bump); with a stale version on
     /// an in-place change the rows keep their old keys.
     pub fn virtual_rows_version(mut self, version: impl std::hash::Hash) -> Self {
-        self.virtual_rows_version = Some(crate::memo::hash_of(&version));
+        self.cold_mut().virtual_rows_version = Some(crate::memo::hash_of(&version));
         self
     }
 

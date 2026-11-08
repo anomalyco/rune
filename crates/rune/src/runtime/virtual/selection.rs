@@ -125,15 +125,15 @@ fn walk_row_el<'a>(
     texts: &mut Vec<OffscreenText>,
     copy_providers: &mut Vec<(String, SelectionCopy)>,
 ) {
-    let inert = parent_inert || el.inert;
-    let group = if el.selection_group { Some(path) } else { parent_group };
+    let inert = parent_inert || el.flags.has(crate::el::ElFlags::INERT);
+    let group = if el.flags.has(crate::el::ElFlags::SELECTION_GROUP) { Some(path) } else { parent_group };
     if !inert && let Some(f) = el.handlers.get().and_then(|h| h.selection_copy.as_ref()) {
         copy_providers.push((path.to_owned(), f.clone()));
     }
     let is_row = el.style.display() == Display::Flex
         && matches!(el.style.flex_direction(), FlexDirection::Row | FlexDirection::RowReverse);
     let mut had_child_text = false;
-    if !inert && el.input.is_none() && let Some(t) = &el.text && t.selectable && !t.redacted {
+    if !inert && el.cold.input.is_none() && let Some(t) = &el.text && t.selectable && !t.redacted {
         let mut spec = TextSpec::clone(t);
         spec.apply_case();
         texts.push(OffscreenText {

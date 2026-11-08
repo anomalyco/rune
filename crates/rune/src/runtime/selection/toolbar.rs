@@ -22,7 +22,7 @@ impl El {
     /// start a new one. Focusable controls inside don't take focus either. The press still
     /// reaches `on_press` and the other handlers.
     pub fn keeps_text_selection(mut self) -> Self {
-        self.focus.preserve_on_press.selection = true;
+        self.cold_mut().focus.preserve_on_press.selection = true;
         self
     }
 }

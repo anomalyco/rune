@@ -102,6 +102,7 @@ pub(crate) struct Node {
     pub(super) handlers: crate::cold::Cold<crate::el::Handlers>,
     pub(super) cold: crate::cold::Cold<NodeCold>,
     pub vis: Visual,
+    pub(crate) vis_flags: crate::el::VisualFlags,
     /// The hover curves of the nearest `El::hover_motion_within` at or above it (or above its
     /// anchor). Kept here, not in `vis`, so inheriting them doesn't copy every node's visuals.
     pub(super) hover_within: Option<Rc<(Anim, Anim)>>,
@@ -178,6 +179,7 @@ impl Node {
             handlers: Default::default(),
             cold: Default::default(),
             vis: Visual::default(),
+            vis_flags: crate::el::VisualFlags::default(),
             hover_within: None,
             target: old.target,
             local: old.local,

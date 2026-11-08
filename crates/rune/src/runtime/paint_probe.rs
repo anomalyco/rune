@@ -16,13 +16,13 @@ impl<S: 'static> Runtime<S> {
             let mut over_c = |c: Color, k: f32| {
                 if k > 0.0 && c.a > 0.0 { overlay = unpremul(over(c.premul(k), overlay.premul(1.0))); }
             };
-            if v.hover.a > 0.0 || self.scene.store().is_animating(n.id, P_HOVER_C) {
+            if v.hover().a > 0.0 || self.scene.store().is_animating(n.id, P_HOVER_C) {
                 pointer[0] = self.scene.get(n.id, P_HOVER).unwrap_or(0.0).clamp(0.0, 1.0);
-                over_c(self.color(n.id, P_HOVER_C, v.hover), pointer[0]);
+                over_c(self.color(n.id, P_HOVER_C, v.hover()), pointer[0]);
             }
-            if v.press.a > 0.0 || self.scene.store().is_animating(n.id, P_PRESS_C) {
+            if v.press().a > 0.0 || self.scene.store().is_animating(n.id, P_PRESS_C) {
                 pointer[1] = self.scene.get(n.id, P_PRESS).unwrap_or(0.0).clamp(0.0, 1.0);
-                over_c(self.color(n.id, P_PRESS_C, v.press), pointer[1]);
+                over_c(self.color(n.id, P_PRESS_C, v.press()), pointer[1]);
             }
             let base = self.color(n.id, P_FILL, v.fill);
             let fill = unpremul(over(overlay.premul(1.0), base.premul(1.0)));
@@ -32,11 +32,11 @@ impl<S: 'static> Runtime<S> {
                 * std::iter::successors(Some(i), |&j| self.nodes[j].parent).map(|j| self.nodes[j].vis.layer_opacity).product::<f32>();
             let mut colors = [Color::TRANSPARENT; 6];
             colors[C_FILL] = fill.alpha(fill.a * k);
-            if v.border_width > 0.0 { colors[C_BORDER] = self.color(n.id, P_BORDER, v.border).alpha_times(k); }
+            if v.border_width() > 0.0 { colors[C_BORDER] = self.color(n.id, P_BORDER, v.border()).alpha_times(k); }
             if let Some(c) = paint_tracks::text_color(n) { colors[C_TEXT] = self.color(n.id, P_TEXT, c).alpha_times(k); }
             let mut sizes = [0.0; 5];
             sizes[S_RADIUS] = p.radius.0[0];
-            sizes[S_BORDER] = v.border_width;
+            sizes[S_BORDER] = v.border_width();
             sizes[S_BLUR] = self.inh_scratch.get(i).map_or(p.blur, |h| h.blur);
             sizes[S_BACKDROP] = v.backdrop_blur;
             if let Some(sh) = v.shadows.iter().find(|s| !s.inset) {
