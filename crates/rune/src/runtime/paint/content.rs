@@ -169,10 +169,11 @@ impl<S: 'static> Runtime<S> {
             let (x0, x1) = (zr[0] + ins[0], zr[2] - ins[2]);
             let mut origin = [text_x(spec, x0, x1, (layout.full_width() * tk).ceil()), zr[1] + ins[1]];
             // A gliding box's glyphs and decorations lay out from its nearest whole pixel and move the rest.
-            let glide = if gliding && cover.is_none() && scale_motion == ScaleMotion::Still {
-                [pixel_snap::text_glide(r[0]), pixel_snap::text_glide(r[1])]
+            // Within a 64th of a pixel they don't move, but still lay out from that pixel, as at rest.
+            let (glide, off) = if gliding && cover.is_none() && scale_motion == ScaleMotion::Still {
+                ([pixel_snap::text_glide(r[0]), pixel_snap::text_glide(r[1])], [r[0] - r[0].round(), r[1] - r[1].round()])
             } else {
-                [0.0; 2]
+                ([0.0; 2], [0.0; 2])
             };
             let mut clip = clip;
             if let Some(inp) = n.input.as_ref().filter(|i| i.single_line) {
@@ -182,7 +183,7 @@ impl<S: 'static> Runtime<S> {
                     clip = [clip[0].max(x0), clip[1], clip[2].min(x1), clip[3]];
                 }
             }
-            let rest_origin = [origin[0] - glide[0], origin[1] - glide[1]];
+            let rest_origin = [origin[0] - off[0], origin[1] - off[1]];
             // Paragraph block backgrounds, quote bars and list markers.
             if spec.blocks.iter().any(|&b| b != crate::edit::Block::Paragraph) {
                 emit_block_decorations(
