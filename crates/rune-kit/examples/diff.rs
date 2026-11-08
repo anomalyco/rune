@@ -7,7 +7,8 @@
 //! `--scene split` and `--theme light`. `diff-unified-scrolled.png` is
 //! `-- --scene scrolled --script crates/rune-kit/examples/diff_scrolled.json --snap diff-unified-scrolled.png --at mark:end --size 900x620 --theme dark`:
 //! long lines scrolled sideways, with the line numbers held at the left edge. `--scene added`
-//! splits an added and a deleted file, each one column across the whole width.
+//! splits an added and a deleted file, each one column across the whole width. `--scene folded`
+//! folds a full-context patch with `FileDiff::fold`, four unchanged lines around its change.
 use rune::{App, AppSpec, Cx, El, KeyEvent, Tx, col, row, text};
 use rune_kit::diff::{Annotation, DiffMode, DiffState, DiffView, FileDiff, LineRange, LineRef, Side, parse};
 use rune_kit::{Button, ButtonVariant, Kit, SegmentedControl};
@@ -287,6 +288,11 @@ fn main() {
             ("split", |s: &mut Review| s.diff.set_mode(DiffMode::Split)),
             ("scrolled", |s: &mut Review| {
                 s.diff = DiffState::new(vec![FileDiff::from_texts("src/net/backoff.rs", LONG_OLD, LONG_NEW)])
+            }),
+            ("folded", |s: &mut Review| {
+                let full: String = (1..=40).map(|n| if n == 8 { "-    attempts: 3,\n+    attempts: 5,\n".to_owned() } else { format!("     line {n}\n") }).collect();
+                let patch = format!("--- a/config/retry.rs\t\n+++ b/config/retry.rs\t\n@@ -1,40 +1,40 @@\n{full}");
+                s.diff = DiffState::new(parse(&patch).into_iter().map(|f| f.fold(4)).collect());
             }),
             ("added", |s: &mut Review| {
                 s.diff = DiffState::new(vec![
