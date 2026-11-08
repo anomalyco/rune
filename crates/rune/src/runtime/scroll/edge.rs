@@ -47,6 +47,7 @@ impl<S: 'static> Runtime<S> {
         let style = n.scroll_edges.fade_style;
         let edges = [(y, 1, offset, -1.0), (y, 3, below, 1.0), (x, 0, st.x.offset, -1.0), (x, 2, st.x.max - st.x.offset, 1.0)];
         for (_, edge, hidden, out) in edges.into_iter().filter(|e| e.0 && !(style.end_only && e.3 < 0.0)) {
+            let (style, width) = style.edge(width, out > 0.0);
             let (w, o) = edge_ramp(style, width * k, hidden, k);
             own[edge] = w;
             origin[edge] = r[edge] + out * o * w.abs();

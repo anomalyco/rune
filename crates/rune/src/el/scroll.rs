@@ -133,10 +133,29 @@ pub(crate) struct FadeStyle {
     pub(crate) end_only: bool,
     /// Points hidden at which a strength fade is full; 0 for 15.
     pub(crate) full_at: f32,
+    /// The end edge's own fade (`ScrollFade::with_end`): its width, linear ramp and full-at.
+    pub(crate) end: Option<EndFade>,
+}
+
+/// How the end edge (bottom, or right) fades when it differs from the start (`ScrollFade::with_end`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct EndFade {
+    pub(crate) width: f32,
+    pub(crate) linear: bool,
+    pub(crate) full_at: f32,
 }
 
 impl FadeStyle {
-    pub(crate) const SMOOTH: FadeStyle = FadeStyle { feather: false, linear: false, below_sticky: false, end_only: false, full_at: 0.0 };
+    pub(crate) const SMOOTH: FadeStyle = FadeStyle { feather: false, linear: false, below_sticky: false, end_only: false, full_at: 0.0, end: None };
+
+    /// The style and width (points) the edge with `end` set fades by: the end edge's own when
+    /// [`ScrollFade::with_end`] gave it one.
+    pub(crate) fn edge(self, width: f32, end: bool) -> (FadeStyle, f32) {
+        match self.end.filter(|_| end) {
+            Some(e) => (FadeStyle { linear: e.linear, full_at: e.full_at, end: None, ..self }, e.width),
+            None => (self, width),
+        }
+    }
 }
 
 impl ScrollFade {
@@ -181,6 +200,14 @@ impl ScrollFade {
     /// fade over the rows in the list's surface colour.
     pub fn below_sticky(mut self) -> Self {
         self.style.below_sticky = true;
+        self
+    }
+    /// The end edge (the bottom, or the right of a sideways viewport) fades as `end` does, with
+    /// its own width, ramp and strength, while the start keeps this fade: Desktop's model dialog
+    /// fades its rows 16 points under a stuck header on an eased curve but 24 points at its bottom
+    /// on a linear mask (`search-list.css`). Only `end`'s width, ramp and full-at count.
+    pub fn with_end(mut self, end: ScrollFade) -> Self {
+        self.style.end = Some(EndFade { width: end.width, linear: end.style.linear, full_at: end.style.full_at });
         self
     }
 }
