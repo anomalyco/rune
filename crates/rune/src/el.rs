@@ -585,20 +585,24 @@ fn base(dir: FlexDirection) -> El {
     }
 }
 
+#[inline]
 pub fn row() -> El {
     base(FlexDirection::Row)
 }
 
+#[inline]
 pub fn col() -> El {
     base(FlexDirection::Column)
 }
 
 /// A plain box.
+#[inline]
 pub fn el() -> El {
     base(FlexDirection::Row)
 }
 
 /// Takes the free space along its parent's main axis.
+#[inline]
 pub fn spacer() -> El {
     base(FlexDirection::Row).grow(1.0)
 }
