@@ -1,0 +1,1 @@
+- **`ScrollFade::with_end` gives a viewport's end edge its own fade.** The bottom (or right) edge can fade over another width, on its own ramp and strength, while the start keeps the viewport's fade: Desktop's model dialog fades rows 16 points under a stuck header and 24 points on a linear mask at its bottom.
