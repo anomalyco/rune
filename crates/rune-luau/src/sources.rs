@@ -21,6 +21,7 @@ pub struct Sources {
     files: BTreeMap<String, Arc<str>>,
     parent_config: Option<Arc<str>>,
     folder: Option<String>,
+    entry: Option<String>,
 }
 
 impl Sources {
@@ -50,6 +51,18 @@ impl Sources {
     pub fn parent_config(mut self, luaurc: impl Into<Arc<str>>) -> Self {
         self.parent_config = Some(luaurc.into());
         self
+    }
+
+    /// The module the script starts from, [`ENTRY`] (`init.luau`) unless set: a host with two
+    /// entry points in one folder (`app.luau` beside `init.luau`) starts each as its own script.
+    pub fn entry(mut self, path: impl AsRef<str>) -> Self {
+        self.entry = Some(normalize(path.as_ref()));
+        self
+    }
+
+    /// The module the script starts from.
+    pub fn entry_path(&self) -> &str {
+        self.entry.as_deref().unwrap_or(ENTRY)
     }
 
     /// The script folder's own name, so an alias in [`Sources::parent_config`] that leads to
@@ -104,8 +117,9 @@ impl Sources {
     /// code). Runs on any thread; a watched script compiles off the UI thread.
     pub fn compile(&self) -> Result<Compiled, ScriptError> {
         let compiler = compiler();
-        if !self.files.contains_key(ENTRY) {
-            return Err(ScriptError::new(ErrorKind::Missing, format!("the script has no {ENTRY}")));
+        let entry = self.entry_path();
+        if !self.files.contains_key(entry) {
+            return Err(ScriptError::new(ErrorKind::Missing, format!("the script has no {entry}")));
         }
         let mut modules = BTreeMap::new();
         let mut configs = BTreeMap::new();
@@ -119,7 +133,7 @@ impl Sources {
                 .map_err(|e| ScriptError::new(ErrorKind::Syntax, format!("{path}{}", ScriptError::from(e).message)))?;
             modules.insert(path.clone(), Module { code: code.into(), native: is_native(source) });
         }
-        Ok(Compiled { modules, configs, parent_config: self.parent_config.clone(), folder: self.folder.clone() })
+        Ok(Compiled { modules, configs, parent_config: self.parent_config.clone(), folder: self.folder.clone(), entry: entry.to_owned() })
     }
 }
 
@@ -130,6 +144,7 @@ pub struct Compiled {
     configs: BTreeMap<String, Arc<str>>,
     parent_config: Option<Arc<str>>,
     pub(crate) folder: Option<String>,
+    pub(crate) entry: String,
 }
 
 #[derive(Clone, Debug)]

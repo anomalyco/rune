@@ -12,9 +12,10 @@ use mlua::{Function, IntoLua, Lua, MultiValue, Table, Value, ffi};
 use rustc_hash::FxHashMap;
 
 use crate::require::{Loading, Requirer, module_loader};
-use crate::sources::{Compiled, ENTRY, compiler};
+use crate::sources::{Compiled, compiler};
 use crate::task::{self, Sched};
-use crate::ui::nodes::{BUILTINS, HostNode, ui_host};
+use crate::ui::host::{HostNode, ui_host};
+use crate::ui::nodes::BUILTINS;
 use crate::ui::props::useratom;
 use crate::ui::view::{view_handler, view_memo};
 use crate::workers::Shared;
@@ -111,7 +112,7 @@ pub(crate) struct Setup<'a> {
     pub(crate) clock: f64,
     pub(crate) memory_limit: usize,
     pub(crate) nodes: &'a [HostNode],
-    pub(crate) host: Option<&'a crate::script::SetupFn>,
+    pub(crate) host: Option<&'a crate::options::SetupFn>,
     pub(crate) log: Rc<dyn Fn(LogLevel, String)>,
 }
 
@@ -184,7 +185,7 @@ impl Vm {
         let loading: Loading = Rc::default();
         globals.raw_set("require", lua.create_require_function(Requirer::new(setup.compiled.clone(), loading.clone()))?)?;
         lua.sandbox(true)?;
-        let entry = module_loader(&lua, setup.compiled, &loading, ENTRY)?;
+        let entry = module_loader(&lua, setup.compiled, &loading, &setup.compiled.entry)?;
         let fire = prelude.get::<Function>("fire")?;
         let vm = Vm {
             module: lua.create_table()?,
@@ -210,7 +211,7 @@ impl Vm {
             other => {
                 return Err(ScriptError::new(
                     crate::ErrorKind::Missing,
-                    format!("{ENTRY} must return a table of functions or a render function, not a {}", other.type_name()),
+                    format!("the entry module must return a table of functions or a render function, not a {}", other.type_name()),
                 ));
             }
         };

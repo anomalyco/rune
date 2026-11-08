@@ -28,6 +28,7 @@ impl Script {
         let shared = self.inner().shared.clone();
         let slot = ready.clone();
         let root = dir.clone();
+        let entry = self.inner().sources.borrow().entry_path().to_owned();
         let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
             let Ok(event) = event else { return };
             if !event.kind.is_modify() && !event.kind.is_create() && !event.kind.is_remove() {
@@ -36,7 +37,7 @@ impl Script {
             if !event.paths.iter().any(|p| p.extension().is_some_and(|e| e == "luau")) {
                 return;
             }
-            let result = Sources::from_dir(&root).map_err(|e| ScriptError::new(crate::ErrorKind::Missing, e.to_string())).and_then(|sources| {
+            let result = Sources::from_dir(&root).map(|s| s.entry(&entry)).map_err(|e| ScriptError::new(crate::ErrorKind::Missing, e.to_string())).and_then(|sources| {
                 let start = Instant::now();
                 sources.compile().map(|c| (sources, c, start.elapsed()))
             });
