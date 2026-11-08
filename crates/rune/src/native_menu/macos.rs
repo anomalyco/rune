@@ -136,8 +136,16 @@ impl Native {
                         Location::Dock => unreachable!(),
                     }
                 };
-                if location == Location::App { menu.insertItem_atIndex(&item, app_index); app_index += 1; }
-                else { menu.addItem(&item); }
+                // App items follow the app menu's About item, where AppKit apps list Check for
+                // Updates… and Settings…; an app menu without one takes them first.
+                if location == Location::App {
+                    let first = (menu.numberOfItems() > 0).then(|| menu.itemAtIndex(0)).flatten();
+                    let about = first.and_then(|i| i.action()) == Some(sel!(orderFrontStandardAboutPanel:));
+                    menu.insertItem_atIndex(&item, app_index + isize::from(about));
+                    app_index += 1;
+                } else {
+                    menu.addItem(&item);
+                }
                 self.entries.push((menu, item)); self.targets.extend(target);
             }
         });

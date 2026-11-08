@@ -38,7 +38,8 @@ struct Description {
     separator: bool,
 }
 
-/// A custom native item. Defaults to the app menu, enabled and unchecked, with its title as id.
+/// A custom native item. Defaults to the app menu (after its About item, in the order given),
+/// enabled and unchecked, with its title as id.
 pub struct MenuItem<S> { description: Description, action: fn(&mut S, &mut Tx) }
 impl<S> Clone for MenuItem<S> {
     fn clone(&self) -> Self { Self { description: self.description.clone(), action: self.action } }
