@@ -442,6 +442,52 @@ fn missed_frames_never_poll() {
     assert_eq!(wait, OCCLUDED_RETRY * 2, "other misses leave the backoff");
 }
 
+/// A shown window's due timer asks for a frame. On Wayland a surface that is covered before its
+/// frame callback fires withholds `RedrawRequested`, and the same overdue timer would turn the
+/// loop at once for a frame that can't come. The host waits out the bound, then runs the timer
+/// covered; its next one is ahead, so the loop sleeps.
+#[test]
+fn a_timer_frame_that_never_comes_runs_its_timer_covered_instead_of_spinning() {
+    #[derive(Default)]
+    struct Due { polls: u32 }
+    fn poll(app: &mut Due, _: f64, tx: &mut Tx) -> bool {
+        app.polls += 1;
+        tx.wake_after(Duration::from_millis(100));
+        true
+    }
+    let mut rt = Runtime::new(Due::default(), |_, _| crate::el().size(20.0, 20.0), (20.0, 20.0), crate::Env::default());
+    rt.poll = Some(poll);
+    rt.wall_start = Some(Instant::now());
+    rt.frame(0.0);
+    // A change since that frame, as a `wake` whose poll it hasn't drawn leaves it.
+    rt.invalidate();
+    assert!(rt.stale() && !rt.rests(), "the window doesn't rest: its frame is still to come");
+    // As `new_events` at the timer, which is due by the time the loop runs for it.
+    let due = timer_deadline(&rt).expect("a timer is armed");
+    rt.wall_start = rt.wall_start.map(|t| t - due.saturating_duration_since(Instant::now()) - Duration::from_millis(1));
+    let now = Instant::now();
+    assert!(timer_deadline(&rt).expect("armed") <= now, "the timer is due: this is what turned the loop");
+
+    let mut frame = TimerFrame::default();
+    frame.asked(now);
+    assert_eq!(frame.wait(timer_deadline(&rt), now), Some(now + TIMER_FRAME_STALL),
+        "the frame the timer asked for keeps the loop asleep until the bound");
+    assert!(!frame.stalled(now + TIMER_FRAME_STALL - Duration::from_millis(1)));
+    assert!(frame.stalled(now + TIMER_FRAME_STALL), "after the bound the timer runs covered");
+
+    let polls = rt.state.polls;
+    covered_step(&mut rt);
+    assert_eq!(rt.state.polls, polls + 1, "the due timer polled");
+    let next = timer_deadline(&rt).expect("its next timer is armed");
+    assert!(next > Instant::now(), "the next timer is ahead: {next:?}");
+    // The covered step takes the frame's place, and a timer still ahead keeps its own time.
+    frame.drawn();
+    frame.asked(Instant::now());
+    assert_eq!(frame.wait(timer_deadline(&rt), Instant::now()), Some(next), "the loop sleeps until its next timer");
+    frame.drawn();
+    assert!(!frame.stalled(now + TIMER_FRAME_STALL), "a frame that comes clears it");
+}
+
 #[test]
 fn a_window_s_first_updates_can_register_on_a_later_window() {
     use crate::{App, AppSpec, MenuItem, el};

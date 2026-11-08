@@ -17,6 +17,7 @@ impl<S: 'static> Host<S> {
     /// ran the runtime.
     pub(super) fn missed_frame(&mut self, missed: Missed, stepped: bool) {
         let Some(l) = self.win.as_mut() else { return };
+        l.timer_frame.drawn();
         l.presented = None;
         let now = Instant::now();
         if missed == Missed::Occluded {
@@ -45,6 +46,7 @@ impl<S: 'static> Host<S> {
     /// reports with no event lands here first, and the frame that next draws settles.
     pub(super) fn covered_frame(&mut self) {
         let Some(l) = self.win.as_mut() else { return };
+        l.timer_frame.drawn();
         l.presented = None;
         l.stop_pacing();
         let shown = l.visible;
@@ -72,6 +74,8 @@ impl<S: 'static> Host<S> {
         // A missed frame's retry, or the timer pacing unpaced motion: input waits for it, and
         // `new_events` runs due timers meanwhile.
         if !resizing && l.backing_off(Instant::now()) { return; }
+        // The frame a due timer asked for is here, drawing or running covered below.
+        l.timer_frame.drawn();
         // Starting the display link for a window that isn't on screen would wait for a tick that
         // sleeping displays never send, and a running link holds back its timers (`wake_deadline`).
         #[cfg(target_os = "macos")]

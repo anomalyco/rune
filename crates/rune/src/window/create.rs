@@ -219,6 +219,7 @@ impl<S: 'static> Host<S> {
             cursor: crate::cursor::os::OsCursor::new(event_loop),
             alpha,
             quiet: false,
+            timer_frame: TimerFrame::default(),
             presented: None,
             #[cfg(target_os = "windows")]
             steady_until: None,

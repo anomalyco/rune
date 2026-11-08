@@ -62,6 +62,42 @@ pub(crate) fn timer_wants_frame<S>(rt: &Runtime<S>, next_frame: Option<Instant>)
     next_frame.is_some_and(|next| wall_wake_deadline(rt).is_some_and(|due| due <= next))
 }
 
+/// How long a frame a due timer asked for may wait for the window to draw it. Wayland withholds
+/// `RedrawRequested` while a surface frame callback is outstanding, and a compositor may not send
+/// one for a fully covered surface for a long time; the wait is an occluded surface's first
+/// re-check.
+pub(crate) const TIMER_FRAME_STALL: Duration = OCCLUDED_RETRY;
+
+/// The frame a due timer asked a shown window for, until it draws it. An overdue timer whose
+/// frame never comes would otherwise keep turning the loop (`new_events` asks again, no frame
+/// arrives, and `wake_deadline` returns the past timer), so after `TIMER_FRAME_STALL` the timer
+/// runs covered instead and the next ask starts over.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct TimerFrame(Option<Instant>);
+
+impl TimerFrame {
+    /// A due timer asked for a frame, if none is owed already.
+    pub(crate) fn asked(&mut self, now: Instant) { self.0.get_or_insert(now); }
+
+    /// The frame came, or ran covered in its place: nothing waits for it now.
+    pub(crate) fn drawn(&mut self) { self.0 = None; }
+
+    /// Whether the frame asked for is still outstanding after the stall bound.
+    pub(crate) fn stalled(&self, now: Instant) -> bool {
+        self.0.is_some_and(|asked| now >= asked + TIMER_FRAME_STALL)
+    }
+
+    /// The runtime's next timer as the host waits for it: one already due while its frame is
+    /// outstanding waits out the stall instead, so the loop sleeps rather than waking at once
+    /// for a frame that can't come.
+    pub(crate) fn wait(&self, due: Option<Instant>, now: Instant) -> Option<Instant> {
+        match (due, self.0) {
+            (Some(due), Some(asked)) if due <= now => Some(asked + TIMER_FRAME_STALL),
+            (due, _) => due,
+        }
+    }
+}
+
 /// Why a surface gave no drawable this frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Missed {
