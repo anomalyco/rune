@@ -18,6 +18,7 @@ use crate::props::{NodeId, Prop, PropClass, PropId};
 use crate::spring::Spring;
 use crate::value::{Animatable, MAX_LANES, lanes};
 
+mod started;
 mod tracks;
 mod typed;
 
@@ -177,6 +178,9 @@ pub struct AnimationStore {
     /// where these are read, and freeing a track never scans them.
     touched: Vec<TrackId>,
     set_touched: Vec<TrackId>,
+    /// Tracks started or retargeted since the last tick, and between the two before (`started`).
+    starts: Vec<TrackId>,
+    ticked_starts: Vec<TrackId>,
 
     extra: Vec<Extra>,
     extra_free: u32,
@@ -226,6 +230,8 @@ impl AnimationStore {
             active: Vec::new(),
             touched: Vec::new(),
             set_touched: Vec::new(),
+            starts: Vec::new(),
+            ticked_starts: Vec::new(),
             extra: Vec::new(),
             extra_free: NONE,
             pending: Vec::new(),
@@ -454,6 +460,8 @@ impl AnimationStore {
         let live = |id: &&TrackId| meta[id.index as usize].alive && meta[id.index as usize].generation == id.generation;
         self.touched.extend(self.set_touched.iter().filter(live));
         self.set_touched.clear();
+        std::mem::swap(&mut self.starts, &mut self.ticked_starts);
+        self.starts.clear();
         let clocked = !self.node_clock.is_empty();
         let mut i = 0;
         while i < self.active.len() {
@@ -990,6 +998,7 @@ impl AnimationStore {
         self.t_held[t] = false;
         self.recompute(t);
         self.activate(t);
+        self.starts.push(self.id_of(t));
     }
 
     fn cancel_pending(&mut self, l: usize) {

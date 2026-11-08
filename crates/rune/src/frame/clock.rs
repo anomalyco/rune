@@ -6,6 +6,11 @@
 //! a 49 ms hitch it is where an unbroken cadence would have it. Motion that starts or is
 //! retargeted on the frame starts at the frame's time and shows one small step, so it never
 //! jumps by the gap. Both happen in one runtime pass ([`Runtime::frame_split`]).
+//!
+//! A frame can be late because of what it did itself: a commit that took 50 ms presents the
+//! motion it started 50 ms after its target. That motion then starts from when it showed, as
+//! Core Animation starts what a transaction adds when the transaction commits: the next frame
+//! moves it one frame on rather than charging it the overrun ([`FrameClock::presented`]).
 
 use crate::time::Instant;
 use crate::runtime::Runtime;
@@ -60,11 +65,13 @@ pub(crate) fn advance_by<S: 'static>(rt: &mut Runtime<S>, gap: f64) -> bool {
 #[derive(Debug)]
 pub(crate) struct FrameClock {
     last: Instant,
+    /// The motion the last frame showed first, until it presents.
+    starts: Vec<rune_motion::TrackId>,
 }
 
 impl FrameClock {
     pub(crate) fn new(now: Instant) -> Self {
-        Self { last: now }
+        Self { last: now, starts: Vec::new() }
     }
 
     /// The target time of the last frame the clock stepped to.
@@ -76,6 +83,7 @@ impl FrameClock {
     /// `at`. Display-link targets run ahead of `Instant::now()`, so the clock never goes back.
     pub(crate) fn hold(&mut self, at: Instant) {
         self.last = self.last.max(at);
+        self.starts.clear();
     }
 
     /// The step for a frame presented at `at`. See [`split`].
@@ -91,7 +99,21 @@ impl FrameClock {
     pub(crate) fn advance<S: 'static>(&mut self, rt: &mut Runtime<S>, at: Instant, compositing: bool) -> (bool, f64) {
         let step = self.step(at, rt.animating || compositing);
         rt.frame_target = Some(at);
-        (rt.frame_split(step.catch_up, step.dt), step.total())
+        let animating = rt.frame_split(step.catch_up, step.dt);
+        self.starts.clear();
+        self.starts.extend_from_slice(rt.scene.store().started());
+        (animating, step.total())
+    }
+
+    /// The frame last stepped to finished at `done`. When that's past its target, the motion it
+    /// started holds its first pose for the overrun, so the next frame moves it about a frame
+    /// rather than by how late this one was. Motion already running keeps real time.
+    pub(crate) fn presented<S: 'static>(&mut self, rt: &mut Runtime<S>, done: Instant) {
+        let late = done.saturating_duration_since(self.last).as_secs_f64().min(MAX_GAP);
+        if late > 0.0 && !self.starts.is_empty() {
+            rt.scene.store_mut().delay(&mut self.starts, late * f64::from(rt.time_scale));
+        }
+        self.starts.clear();
     }
 }
 
@@ -221,6 +243,42 @@ mod tests {
         let (a, b) = at(&run(&plain, LATE, |rt| rt.update(|s, _| s.b = 212.0)), LATE);
         assert!(expected < 211.0 && (a - expected).abs() < 0.01, "running motion catches up the whole gap: a={a}, expected={expected}");
         assert!((b - fresh).abs() < 0.01, "new motion takes one 1/120 s step, not the 49 ms gap: b={b}, one step={fresh}");
+    }
+
+    #[test]
+    fn motion_a_frame_starts_and_runs_late_on_moves_one_frame_next_while_running_motion_keeps_time() {
+        // `a` springs from FRAME; `b` starts on the frame at 3 × FRAME, whose own work then runs
+        // 50 ms past its target. The next frame comes a frame after that.
+        let overrun = Duration::from_millis(50);
+        let starts = 3 * FRAME;
+        let next = starts + overrun + FRAME;
+        let poses = |late: bool| {
+            let start = Instant::now();
+            let mut clock = FrameClock::new(start);
+            let mut rt = runtime();
+            for t in [Duration::ZERO, FRAME, 2 * FRAME, starts, next] {
+                if t == FRAME { rt.update(|s, _| s.a = 212.0); }
+                if t == starts { rt.update(|s, _| s.b = 212.0); }
+                clock.advance(&mut rt, start + t, false);
+                clock.presented(&mut rt, start + t + if late && t == starts { overrun } else { Duration::ZERO });
+            }
+            (width(&rt, "a"), width(&rt, "b"))
+        };
+        let one_frame_on = {
+            let start = Instant::now();
+            let mut clock = FrameClock::new(start);
+            let mut rt = runtime();
+            clock.advance(&mut rt, start, false);
+            rt.update(|s, _| s.b = 212.0);
+            clock.advance(&mut rt, start + FRAME, false);
+            clock.advance(&mut rt, start + 2 * FRAME, false);
+            width(&rt, "b")
+        };
+        let (a, b) = poses(true);
+        let (on_time_a, on_time_b) = poses(false);
+        assert!((b - one_frame_on).abs() < 0.01, "b moved one frame from its first pose: b={b}, one frame on={one_frame_on}");
+        assert!(on_time_b - b > 5.0, "without the overrun, b moves the whole gap: {on_time_b} vs {b}");
+        assert!(a < 211.0 && (a - on_time_a).abs() < 0.01, "running motion keeps real time: a={a}, on time={on_time_a}");
     }
 
     #[test]

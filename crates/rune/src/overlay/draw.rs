@@ -263,6 +263,7 @@ impl<T: 'static> Overlay<T> {
         }
         frame::submit_and_present(live, renderer, gpu, &self.rt, enc, frame, prewarm);
         crate::render::gpu_events::presented();
+        self.clock.presented(&mut self.rt, Instant::now());
         if !prewarm { self.meter.presented(); }
         self.dirty = false;
         #[cfg(target_os = "macos")]
