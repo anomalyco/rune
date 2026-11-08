@@ -184,6 +184,7 @@ roles! {
 impl RoleTag {
     pub(crate) const GROUP: RoleTag = RoleTag(0);
     pub(crate) const TEXT: RoleTag = RoleTag(1);
+    pub(crate) const BUTTON: RoleTag = RoleTag(2);
     pub(crate) const ICON: RoleTag = RoleTag(3);
     pub(crate) const IMAGE: RoleTag = RoleTag(4);
     pub(crate) const TEXTBOX: RoleTag = RoleTag(5);
