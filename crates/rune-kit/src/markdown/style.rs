@@ -26,6 +26,8 @@ pub struct MarkdownStyle {
     pub(super) code_block: TextStyle,
     /// Code blocks' text where the highlighter leaves it (the body text colour by default).
     pub(super) code_text: Option<Color>,
+    /// Code blocks no highlighter colours (no language, or one it doesn't know): code_text by default.
+    pub(super) plain_code_text: Option<Color>,
     /// Shell fences' own look (see [`MarkdownStyle::shell_code`]).
     pub(super) shell: Option<ShellLook>,
     pub(super) link_hover: Option<Color>,
@@ -179,6 +181,7 @@ impl MarkdownStyle {
             headings: [heading(17.0, 24.0), heading(15.0, 24.0), heading(13.0, 20.0), heading(13.0, 20.0)],
             code_block: TextStyle { size: 13.0, line_height: 20.0, ..k.ty.mono },
             code_text: None,
+            plain_code_text: None,
             shell: None,
             link_hover: None,
             list_outside: false,
@@ -326,6 +329,12 @@ impl MarkdownStyle {
     /// default).
     pub fn code_block_text(mut self, c: Color) -> Self {
         self.code_text = Some(c);
+        self
+    }
+    /// The text of plain-text code blocks: a fence with no language, or `text`, `txt`, `plain`
+    /// or `plaintext` (`code_block_text`'s colour by default).
+    pub fn plain_code_text(mut self, c: Color) -> Self {
+        self.plain_code_text = Some(c);
         self
     }
     /// Fences in a shell language (`bash`, `sh`, `shell`, `zsh`, `fish`, `console`,
@@ -567,6 +576,7 @@ impl std::hash::Hash for MarkdownStyle {
             headings,
             code_block,
             code_text,
+            plain_code_text,
             shell,
             link_hover,
             list_outside,
@@ -618,7 +628,7 @@ impl std::hash::Hash for MarkdownStyle {
             diagram,
         } = *self;
         (text, muted, accent, link_underline, code_bg, code_block_fill, code_block_border, quote_rule, rule).hash(state);
-        (body, headings, code_block, code_text, shell, link_hover, list_outside, list_nested.map(|n| n.map(f32_bits)), table_align).hash(state);
+        (body, headings, code_block, (code_text, plain_code_text), shell, link_hover, list_outside, list_nested.map(|n| n.map(f32_bits)), table_align).hash(state);
         (f32_bits(quote.width), f32_bits(quote.pad), quote.text).hash(state);
         [inline_code_scale, inline_code_weight, inline_code_pad, code_block_pad[0], code_block_pad[1], list_indent, list_gap, strong_weight, table_min_column]
             .map(f32_bits)

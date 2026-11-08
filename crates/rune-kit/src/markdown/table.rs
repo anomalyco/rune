@@ -383,7 +383,7 @@ impl Renderer {
             let align = if self.s.table_align { t.align.get(j).copied().unwrap_or_default() } else { Align::Start };
             let content = self
                 .with_reveal(
-                    rich(inl.text.clone(), self.spans(inl, font.size))
+                    rich(inl.text.clone(), self.spans(inl, font))
                         .font(font)
                         .color(color)
                         .align(align),
@@ -434,7 +434,7 @@ impl Renderer {
             font_key(body),
             cap.to_bits(),
             self.s.inline_code_scale.to_bits(),
-            self.s.inline_code_weight.to_bits(),
+            (self.s.inline_code_weight.to_bits(), self.s.inline_code_pad.to_bits()),
             self.s.table_pad.map(f32::to_bits),
             self.head_pad().map(f32::to_bits),
             self.s.table_flush_left,
@@ -452,7 +452,7 @@ impl Renderer {
                     if inl.text.is_empty() {
                         continue;
                     }
-                    let spans = self.spans(inl, font.size);
+                    let spans = self.spans(inl, font);
                     // Unrounded, as a browser's table layout sums them; a hair over, so a cell at
                     // its column's natural width never wraps its last word.
                     let (min, max) = rune::text::content_widths(&inl.text, &spans, font);

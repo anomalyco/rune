@@ -53,6 +53,8 @@ pub(super) struct Flow {
 
 /// Shell languages, which [`MarkdownStyle::shell_code`] styles apart (`markdown.tsx`'s list).
 const SHELLS: [&str; 7] = ["bash", "sh", "shell", "zsh", "fish", "console", "terminal"];
+/// Plain-text fence names, which [`MarkdownStyle::plain_code_text`] colours as a fence with none.
+const PLAIN_TEXT: [&str; 4] = ["text", "txt", "plain", "plaintext"];
 
 /// The keys [`Renderer::blocks`] gives `n` blocks.
 pub(super) fn rendered_keys(n: usize, keys: &[String]) -> Vec<String> {
@@ -118,6 +120,26 @@ pub(super) fn margins(b: &Block, s: &MarkdownStyle) -> (f32, f32) {
     }
 }
 
+thread_local! {
+    static PAD_SIZES: RefCell<std::collections::HashMap<u64, f32>> = RefCell::new(std::collections::HashMap::new());
+}
+
+/// The size that sets inline code's padding spaces (`PAD`, in the text's own `font`) to `pad`
+/// points a side, so the text beside the chip sits where a page's `padding: 0 4px` puts it.
+/// Solved twice: a variable font's optical size moves its spaces' widths with the size.
+fn pad_size(font: TextStyle, pad: f32) -> f32 {
+    let key = hash_of((font, pad.to_bits(), rune::text::font_epoch()));
+    if let Some(size) = PAD_SIZES.with_borrow(|m| m.get(&key).copied()) {
+        return size;
+    }
+    let probe = PAD.repeat(64);
+    let wide = |size: f32| (rune::text::measure(&probe, &[], TextStyle { size, ..font }, None).0 / 64.0).max(0.1);
+    let first = font.size * pad / wide(font.size);
+    let size = first * pad / wide(first);
+    PAD_SIZES.with_borrow_mut(|m| m.insert(key, size));
+    size
+}
+
 /// Code as rich text with `spans` and `highlights` (byte ranges of `code`). Text layout widens
 /// tabs in a monospace `style` to four-column stops itself; in any other family it draws a tab
 /// as one space, so each tab is padded with uncopied spaces to the next stop: lines line up and a
@@ -158,8 +180,9 @@ fn tabbed(code: &str, mut spans: Vec<Span>, mut highlights: Vec<TextHighlight>, 
 }
 
 impl Renderer {
-    pub(super) fn spans(&self, inl: &Inline, base: f32) -> Vec<Span> {
+    pub(super) fn spans(&self, inl: &Inline, font: TextStyle) -> Vec<Span> {
         let s = &self.s;
+        let base = font.size;
         let links: Vec<Span> = if inl.links.is_empty() {
             Vec::new()
         } else {
@@ -193,8 +216,10 @@ impl Renderer {
                         sp = sp.bg(s.code_bg, s.inline_code_pad);
                     }
                 }
-                Style::CodePad if no_line.is_none() => continue,
-                Style::CodePad => sp.underline = no_line,
+                Style::CodePad => {
+                    sp.size = Some(pad_size(font, s.inline_code_pad));
+                    sp.underline = no_line;
+                }
                 Style::Strong => sp.weight = Some(s.strong_weight),
                 Style::Em => sp.italic = true,
                 Style::Strike | Style::Link => unreachable!(),
@@ -264,7 +289,7 @@ impl Renderer {
     pub(super) fn para(&self, inl: &Inline, map: Option<&SpanMap>, style: TextStyle, color: Color) -> El {
         // Lines keep their own 22.4 points, as a page's do, so a long list doesn't drift a
         // point per item.
-        let e = self.with_reveal(rich(inl.text.clone(), self.spans(inl, style.size)).font(style).color(color).exact_lines()).w_full();
+        let e = self.with_reveal(rich(inl.text.clone(), self.spans(inl, style)).font(style).color(color).exact_lines()).w_full();
         self.select_inline(e, inl, map)
     }
 
@@ -299,7 +324,9 @@ impl Renderer {
             };
             let top = match b {
                 _ if i == 0 => 0.0,
-                Block::Heading(..) | Block::Rule => mt.max(prev_mb),
+                // An image keeps its own 24 under a heading: the page zeroes the top margin of
+                // the paragraph holding it, not the image's, which collapses through.
+                Block::Heading(..) | Block::Rule | Block::Image { .. } => mt.max(prev_mb),
                 _ if after_heading => prev_mb,
                 _ => mt.max(prev_mb),
             };
@@ -317,8 +344,10 @@ impl Renderer {
         let s = &self.s;
         let highlights = self.text_highlights_for(code, map);
         let shell = s.shell.filter(|_| source.and_then(|src| src.lang.as_deref()).is_some_and(|l| SHELLS.iter().any(|sh| l.eq_ignore_ascii_case(sh))));
+        let plain = source.and_then(|src| src.lang.as_deref()).is_none_or(|l| PLAIN_TEXT.iter().any(|p| l.eq_ignore_ascii_case(p)));
         let (fill, border, ink) = match shell {
             Some(sh) => (sh.fill, sh.border, sh.text),
+            None if plain => (s.code_block_fill, s.code_block_border, s.plain_code_text.or(s.code_text).unwrap_or(s.text)),
             None => (s.code_block_fill, s.code_block_border, s.code_text.unwrap_or(s.text)),
         };
         let spans = if shell.is_some() { Vec::new() } else { self.syntax_spans(code, source) };

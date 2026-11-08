@@ -276,7 +276,7 @@ fn link_spans_come_before_inner_inline_styles_so_bold_em_and_code_keep_theirs() 
         tasks_read_only: false, selectable: false, scroll_wide: false, highlighter: Highlighter::builtin(), sources,
         next_source: Cell::new(0), tasks, next_task: Cell::new(0), current_block_key: RefCell::new("b0".into()),
         #[cfg(feature = "mermaid")] diagram_frame: None, code_frame: None, link_favicon: None, images: None, on_image: None, flow: Cell::default() };
-    let spans = r.spans(inl, style.body.size);
+    let spans = r.spans(inl, style.body);
     // The link span is first so `flatten_spans` applies inner Strong/Em/Code over it.
     assert_eq!((spans[0].start, spans[0].end, spans[0].color, spans[0].weight, spans[0].bg, spans[0].bg_pad), (0, inl.text.len() as u32, Some(Color::WHITE), Some(500.0), Some(bg), 3.0));
     assert!(spans.iter().any(|s| &inl.text[s.start as usize..s.end as usize] == "bold" && s.weight == Some(style.strong_weight)));
