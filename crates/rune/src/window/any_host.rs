@@ -119,22 +119,38 @@ impl<S: 'static> AnyHost for Host<S> {
             // A redraw while the window backs off would draw nothing and leave the timer due.
             } else if self.win.as_ref().is_some_and(|w| (launcher || (w.visible && !w.occluded)) && !w.minimized()
                 && !w.backing_off(Instant::now())) {
-                // A resting window polls first and draws only for what that changed.
-                let rests = self.idle && !composing(self.comp.as_deref()) && self.win.as_ref().is_some_and(Win::rests);
-                let frame = match rests.then(|| self.rt.resting_wake()).flatten() {
-                    Some(stale) => {
-                        self.clipboard.flush(&mut self.rt);
-                        self.shell(event_loop);
-                        // A close the poll asked for may have hidden the window.
-                        let frame = (stale || self.rt.stale()) && self.win.as_ref().is_some_and(|w| w.visible);
-                        self.rt.resting_wake_frame(frame);
-                        frame
+                let now = Instant::now();
+                // A frame the due timer asked for that the window never drew (a Wayland surface
+                // covered before its frame callback fires) would come back here for the same
+                // overdue timer and turn the loop at once. Let the timer run covered, and give
+                // the next frame it asks for the stall bound afresh.
+                if self.win.as_ref().is_some_and(|w| w.timer_frame.stalled(now)) {
+                    if let Some(w) = &mut self.win {
+                        w.timer_frame.drawn();
+                        w.timer_frame.asked(now);
                     }
-                    None => true,
-                };
-                if frame && let Some(w) = &mut self.win {
-                    w.quiet = true;
-                    w.window.request_redraw();
+                    covered_step(&mut self.rt);
+                    self.clipboard.flush(&mut self.rt);
+                    self.shell(event_loop);
+                } else {
+                    // A resting window polls first and draws only for what that changed.
+                    let rests = self.idle && !composing(self.comp.as_deref()) && self.win.as_ref().is_some_and(Win::rests);
+                    let frame = match rests.then(|| self.rt.resting_wake()).flatten() {
+                        Some(stale) => {
+                            self.clipboard.flush(&mut self.rt);
+                            self.shell(event_loop);
+                            // A close the poll asked for may have hidden the window.
+                            let frame = (stale || self.rt.stale()) && self.win.as_ref().is_some_and(|w| w.visible);
+                            self.rt.resting_wake_frame(frame);
+                            frame
+                        }
+                        None => true,
+                    };
+                    if frame && let Some(w) = &mut self.win {
+                        w.quiet = true;
+                        w.timer_frame.asked(now);
+                        w.window.request_redraw();
+                    }
                 }
             } else {
                 covered_step(&mut self.rt);
@@ -148,16 +164,21 @@ impl<S: 'static> AnyHost for Host<S> {
         // The next display tick consumes due timers too. Leaving an overdue timer
         // armed while its redraw waits for that tick would spin the event loop. Without a
         // running link, a timer due sooner than a frame waits a frame (`timer_deadline`).
-        let runtime = timer_deadline(&self.rt).filter(|_| !self.win.as_ref().is_some_and(Win::paced));
+        let now = Instant::now();
         let win = self.win.as_ref();
+        let runtime = timer_deadline(&self.rt).filter(|_| !win.is_some_and(Win::paced));
+        // A due timer whose frame is still on its way takes the frame's bound instead
+        // (`TimerFrame`), so the loop sleeps rather than waking at once for a frame that can't
+        // come.
+        let runtime = win.filter(|w| w.visible).map_or(runtime, |w| w.timer_frame.wait(runtime, now));
         runtime.into_iter()
             .chain(win.and_then(|w| w.first_frame.deadline.map(|(retry, _)| retry)))
             .chain(win.and_then(|w| w.first_frame.ready_deadline()))
             .chain(win.and_then(Win::cloak_deadline))
             .chain(win.and_then(|w| w.retry))
             .chain(win.filter(|w| !w.visible).and_then(|w| w.hidden_pace.deadline()))
-            .chain(self.files.pointer.as_ref().filter(|_| win.is_some_and(|w| w.visible)).map(|_| Instant::now() + DROP_SAMPLE))
-            .chain(win.filter(|w| w.visible).and_then(|w| w.cursor.reassert_at(Instant::now())))
+            .chain(self.files.pointer.as_ref().filter(|_| win.is_some_and(|w| w.visible)).map(|_| now + DROP_SAMPLE))
+            .chain(win.filter(|w| w.visible).and_then(|w| w.cursor.reassert_at(now)))
             .min()
     }
 

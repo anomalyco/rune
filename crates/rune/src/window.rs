@@ -58,11 +58,11 @@ mod lifecycle;
 mod mac;
 mod pacing;
 pub(crate) use pacing::{
-    HiddenPace, Missed, OCCLUDED_MAX, OCCLUDED_RETRY, TIMEOUT_RETRY, TIMER_FRAME, acquire, acquire_checked,
-    timer_deadline, timer_wants_frame,
+    HiddenPace, Missed, TimerFrame, OCCLUDED_MAX, OCCLUDED_RETRY, TIMEOUT_RETRY, TIMER_FRAME,
+    acquire, acquire_checked, timer_deadline, timer_wants_frame,
 };
 #[cfg(test)]
-pub(crate) use pacing::HIDDEN_REFRESH;
+pub(crate) use pacing::{HIDDEN_REFRESH, TIMER_FRAME_STALL};
 #[cfg(test)]
 use pacing::wall_wake_deadline;
 mod stepping;

@@ -33,6 +33,8 @@ pub(super) struct Win {
     pub(super) alpha: Option<crate::render::surface_alpha::AlphaSurface>,
     /// Only a due timer asked for the next frame, which may then draw nothing new.
     pub(super) quiet: bool,
+    /// The frame a due timer asked for, until the window draws it (`TimerFrame`).
+    pub(super) timer_frame: TimerFrame,
     /// The last frame presented, while the window rests.
     pub(super) presented: Option<Presented>,
     /// Until when the window keeps presenting every refresh after a change (`STEADY`).
