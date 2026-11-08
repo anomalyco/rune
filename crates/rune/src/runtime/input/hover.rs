@@ -333,6 +333,12 @@ impl<S: 'static> Runtime<S> {
     /// Retargets the hover, press and press-scale tracks. `held` is the hold `refresh_hover`
     /// just decided; without it (a commit's pass) this decides it.
     pub(super) fn update_interaction(&mut self, held: Option<bool>) -> bool {
+        // Hit tests read last frame's drawn rects and clips by index. When a commit moved the
+        // indices (a commit's focus pass runs before the frame is built again), they belong to
+        // other elements until the build re-evaluates from fresh geometry.
+        if !self.nodes.iter().map(|n| n.id).eq(self.built_ids.iter().copied()) {
+            return false;
+        }
         let mut changed = false;
         let mut flips = std::mem::take(&mut self.hover_hold.flips);
         let captured = self.capture.as_ref().map(|(p, _)| p.as_str()).or(self.secondary_capture.as_deref());
