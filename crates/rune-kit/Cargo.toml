@@ -7,6 +7,8 @@ description = "Generic, themable components for Rune. Components read only seman
 
 [dependencies]
 rune = { path = "../rune", default-features = false }
+# The built-in syntax highlighter: Desktop's own lexers (syntax).
+rune-highlights = { path = "../rune-highlights" }
 rune-mermaid = { path = "../rune-mermaid", optional = true }
 rune-motion = { path = "../rune-motion" }
 unicode-segmentation = "1.13"

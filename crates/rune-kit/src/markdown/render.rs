@@ -411,7 +411,7 @@ impl Renderer {
     pub(super) fn syntax_spans(&self, code: &str, source: Option<&Source>) -> Vec<Span> {
         let Some(src) = source.filter(|_| self.s.highlight) else { return Vec::new() };
         let lang = src.lang.as_deref();
-        // The built-in scanners leave other languages plain; skip the cache for those.
+        // The built-in highlighter leaves other languages plain; skip the cache for those.
         if self.highlighter.is_builtin() && !lang.is_some_and(crate::syntax::known) {
             return Vec::new();
         }
