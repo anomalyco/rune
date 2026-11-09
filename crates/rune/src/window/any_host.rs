@@ -33,7 +33,7 @@ impl<S: 'static> AnyHost for Host<S> {
         // come.
         let runtime = win.filter(|w| w.visible).map_or(runtime, |w| w.timer_frame.wait(runtime, now));
         runtime.into_iter()
-            .chain(win.and_then(|w| w.first_frame.deadline.map(|(retry, _)| retry)))
+            .chain(win.and_then(|w| w.first_frame.deadline().map(|(retry, _)| retry)))
             .chain(win.and_then(|w| w.first_frame.ready_deadline()))
             .chain(win.and_then(Win::cloak_deadline))
             .chain(win.and_then(|w| w.retry))
@@ -156,9 +156,9 @@ impl<S: 'static> Host<S> {
         if matches!(cause, StartCause::ResumeTimeReached { .. }) && let Some(w) = &self.win { w.cursor.reassert(); }
         #[cfg(target_os = "windows")]
         if let Some(w) = &self.win { w.native.cloak.lift_if_due(&w.window, Instant::now()); }
-        if let Some(w) = &mut self.win && let Some((retry, until)) = w.first_frame.deadline && retry <= Instant::now() {
+        if let Some(w) = &mut self.win && let Some((retry, until)) = w.first_frame.deadline() && retry <= Instant::now() {
             if until <= Instant::now() {
-                let notified = w.first_frame.notified;
+                let notified = w.first_frame.notified();
                 if w.first_frame.expire() {
                     self.show_cached();
                     self.shell(event_loop);
@@ -170,7 +170,7 @@ impl<S: 'static> Host<S> {
             } else {
                 // Bounded retries while the frame prepares, whatever stops each one (occlusion,
                 // no drawable). A retry left due would turn the loop at once until it gives up.
-                w.first_frame.deadline = Some((Instant::now() + Duration::from_millis(16), until));
+                w.first_frame.retry_at(Instant::now() + Duration::from_millis(16));
                 w.request_redraw();
             }
         }
@@ -247,7 +247,7 @@ impl<S: 'static> Host<S> {
         if self.rt.follow_font_families() && let Some(w) = &self.win { w.request_redraw(); }
         // Process queued hide/close requests before completing a pending first reveal.
         self.first_frame_ready(event_loop);
-        if !self.win.as_ref().is_some_and(|w| w.visible || w.first_frame.reveal) {
+        if !self.win.as_ref().is_some_and(|w| w.visible || w.first_frame.revealing()) {
             self.rt.refuse_file_dialog("cannot open a file dialog while the window is hidden");
         }
         self.hidden_input(event_loop);

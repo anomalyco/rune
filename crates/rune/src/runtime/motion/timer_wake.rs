@@ -4,25 +4,60 @@
 use super::*;
 
 /// A resting window's timer poll, and the frame it asked for.
-#[derive(Default)]
-pub(super) struct TimerWake {
-    /// When that poll ran, while its frame is still to come. The frame takes the poll as its
-    /// own, and the poll's `wake_after`s wait in `pending` to count from that frame.
-    asked: Option<f64>,
-    /// When the last poll ran, once a frame took an earlier poll as its own.
-    polled_at: Option<f64>,
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) enum TimerWake {
+    /// No timer poll stands for a frame.
+    #[default]
+    Idle,
+    /// A timer's poll ran `at`, and the frame it asked for is still to come. The frame takes the
+    /// poll as its own, and the poll's `wake_after`s wait in `pending` to count from that frame.
+    Asked { at: f64 },
+    /// A frame took the poll at `polled_at` as its own.
+    Taken { polled_at: f64 },
+}
+
+pub(super) enum TimerWakeEvent {
+    /// A resting wake's poll ran `at` and asked for a frame.
+    Asked { at: f64 },
+    /// A frame polls; `due`: a deadline came due since the timer's poll, so it polls again.
+    Frame { due: bool },
+    /// The frame asked for won't stand for its poll: the window hid or showed, or a wake asks
+    /// the next frame to poll.
+    Cancel,
+    /// A poll runs alone: no earlier poll stands for anything now.
+    PollAlone,
 }
 
 impl TimerWake {
+    /// The state after `event`, and, for a frame, whether a timer's poll already stands for it;
+    /// for a cancel, the poll time the poll's timers count from.
+    pub(super) fn step(self, event: TimerWakeEvent) -> (TimerWake, Option<f64>) {
+        match (self, event) {
+            (_, TimerWakeEvent::Asked { at }) => (TimerWake::Asked { at }, None),
+            (_, TimerWakeEvent::PollAlone) => (TimerWake::Idle, None),
+            (TimerWake::Asked { at }, TimerWakeEvent::Frame { due: false }) => (TimerWake::Taken { polled_at: at }, Some(at)),
+            (_, TimerWakeEvent::Frame { .. }) => (TimerWake::Idle, None),
+            (TimerWake::Asked { at }, TimerWakeEvent::Cancel) => (TimerWake::Idle, Some(at)),
+            (state, TimerWakeEvent::Cancel) => (state, None),
+        }
+    }
+
     /// At a frame's poll: whether a timer's poll already stands for it. A deadline that came
     /// due since (`due`) still gets this frame's poll.
     pub(super) fn frame_polled(&mut self, due: bool) -> bool {
-        let asked = self.asked.take().filter(|_| !due);
-        self.polled_at = asked;
-        asked.is_some()
+        let (next, taken) = self.step(TimerWakeEvent::Frame { due });
+        *self = next;
+        taken.is_some()
     }
 
-    pub(super) fn polled_at(&self) -> Option<f64> { self.polled_at }
+    pub(super) fn polled_at(&self) -> Option<f64> {
+        match *self {
+            TimerWake::Taken { polled_at } => Some(polled_at),
+            _ => None,
+        }
+    }
+
+    fn asked(&self) -> bool { matches!(self, TimerWake::Asked { .. }) }
 }
 
 impl<S: 'static> Runtime<S> {
@@ -35,7 +70,7 @@ impl<S: 'static> Runtime<S> {
     /// its drawable: its timers count from it, and nothing polls again unless another came due.
     pub(crate) fn poll_hidden(&mut self) -> bool {
         let now = self.now_clock();
-        if self.timer_wake.asked.is_some() && self.wake_deadlines.first().is_none_or(|t| *t > now) {
+        if self.timer_wake.asked() && self.wake_deadlines.first().is_none_or(|t| *t > now) {
             self.cancel_timer_frame();
             return self.needs_commit();
         }
@@ -47,7 +82,7 @@ impl<S: 'static> Runtime<S> {
 
     /// `poll_hidden`, leaving the poll's `wake_after`s in `pending`.
     fn poll_alone(&mut self) -> bool {
-        self.timer_wake = TimerWake::default();
+        self.timer_wake = self.timer_wake.step(TimerWakeEvent::PollAlone).0;
         if let Some(clock) = self.wall_clock() { self.clock = clock; }
         // An `update`'s `wake_after` counts from now; no frame may come to schedule it.
         let wakes = std::mem::take(&mut self.pending.wakes);
@@ -86,7 +121,7 @@ impl<S: 'static> Runtime<S> {
     /// and its timers count from it; without one they count from the poll.
     pub(crate) fn resting_wake_frame(&mut self, frame: bool) {
         if frame {
-            self.timer_wake.asked = Some(self.clock);
+            self.timer_wake = self.timer_wake.step(TimerWakeEvent::Asked { at: self.clock }).0;
         } else {
             let wakes = std::mem::take(&mut self.pending.wakes);
             self.schedule_wakes(wakes);
@@ -96,7 +131,9 @@ impl<S: 'static> Runtime<S> {
     /// The frame a resting wake asked for won't stand for its poll: the window hid or showed,
     /// or an `AppHandle::wake` asks the next frame to poll. The poll's timers count from it.
     pub(crate) fn cancel_timer_frame(&mut self) {
-        let Some(polled) = self.timer_wake.asked.take() else { return };
+        let (next, polled) = self.timer_wake.step(TimerWakeEvent::Cancel);
+        self.timer_wake = next;
+        let Some(polled) = polled else { return };
         let wakes = std::mem::take(&mut self.pending.wakes);
         self.schedule_wakes_from(polled, wakes);
     }

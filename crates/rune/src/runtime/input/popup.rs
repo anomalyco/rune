@@ -1,5 +1,69 @@
 use super::*;
-use crate::popup_menu::{PopupAnchor, PopupMenu, PopupMenuError, Show};
+use crate::popup_menu::{PopupAnchor, PopupMenu, PopupMenuError, Request, Show};
+use std::collections::VecDeque;
+
+/// The pop-up menus asked for (`Tx::popup_menu`) and not yet answered, oldest first. Menus show
+/// one at a time, so only the first can be open, and an open one is always the first.
+pub(crate) enum Popups {
+    /// None is open: the first, if any, waits for the host to open it.
+    Queued(VecDeque<Request>),
+    /// `open` is showing (or couldn't, and waits for its `None`); `next` wait behind it.
+    Showing { open: Request, next: VecDeque<Request> },
+}
+
+impl Default for Popups {
+    fn default() -> Self { Popups::Queued(VecDeque::new()) }
+}
+
+impl Popups {
+    pub(crate) fn front(&self) -> Option<&Request> {
+        match self {
+            Popups::Queued(queue) => queue.front(),
+            Popups::Showing { open, .. } => Some(open),
+        }
+    }
+    pub(crate) fn push_back(&mut self, request: Request) {
+        match self {
+            Popups::Queued(queue) | Popups::Showing { next: queue, .. } => queue.push_back(request),
+        }
+    }
+    pub(crate) fn extend(&mut self, requests: impl IntoIterator<Item = Request>) {
+        for r in requests { self.push_back(r); }
+    }
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Popups::Queued(queue) => queue.len(),
+            Popups::Showing { next, .. } => next.len() + 1,
+        }
+    }
+    pub(crate) fn is_empty(&self) -> bool { self.len() == 0 }
+    /// The first is showing.
+    pub(crate) fn is_open(&self) -> bool { matches!(self, Popups::Showing { .. }) }
+
+    /// The host opens the first: it shows from now until it's answered.
+    fn open_first(&mut self) -> Option<&Request> {
+        if let Popups::Queued(queue) = self {
+            let open = queue.pop_front()?;
+            *self = Popups::Showing { open, next: std::mem::take(queue) };
+        }
+        self.front()
+    }
+
+    /// The first is answered: it leaves, and the next waits for the host to open it.
+    fn answer_first(&mut self) -> Option<Request> {
+        match std::mem::take(self) {
+            Popups::Queued(mut queue) => {
+                let first = queue.pop_front();
+                *self = Popups::Queued(queue);
+                first
+            }
+            Popups::Showing { open, next } => {
+                *self = Popups::Queued(next);
+                Some(open)
+            }
+        }
+    }
+}
 
 impl<S: 'static> Runtime<S> {
     /// The pop-up menu showing, or the next to show, from [`Tx::popup_menu`].
@@ -14,8 +78,7 @@ impl<S: 'static> Runtime<S> {
             let item = request.menu.find(id).ok_or_else(|| PopupMenuError::UnknownItem(id.into()))?;
             if !item.enabled { return Err(PopupMenuError::Disabled(id.into())); }
         }
-        let Some(request) = self.popups.pop_front() else { return Err(PopupMenuError::NotOpen) };
-        self.popup_open = false;
+        let Some(request) = self.popups.answer_first() else { return Err(PopupMenuError::NotOpen) };
         match picked {
             Some(id) => self.trace_event(format_args!("popup-menu:pick:{id}")),
             None => self.trace_event("popup-menu:cancel"),
@@ -35,13 +98,12 @@ impl<S: 'static> Runtime<S> {
     /// open (its anchor element is gone, or its ids repeat): answer it with `None`. Nothing while
     /// a menu is open, so menus show one at a time.
     pub(crate) fn take_popup(&mut self) -> Option<Option<Show>> {
-        if self.popup_open { return None; }
-        let request = self.popups.front()?;
-        let rect = match &request.anchor {
+        if self.popups.is_open() { return None; }
+        let rect = match &self.popups.front()?.anchor {
             PopupAnchor::Key(key) => self.anchor_rect(key).ok_or_else(|| format!("no element keyed {key:?} to anchor to")),
             &PopupAnchor::Point(x, y) => Ok([x, y, 0.0, 0.0]),
         };
-        self.popup_open = true;
+        let request = self.popups.open_first()?;
         match request.validate().and(rect) {
             Ok(rect) => {
                 let show = Show::new(request.menu.clone(), &request.anchor, rect);
@@ -60,7 +122,7 @@ impl<S: 'static> Runtime<S> {
     /// The next menu anchors to an element and the runtime has changes the next frame commits
     /// (a pick that asked for another menu over what it mounted): open it after that frame.
     pub(crate) fn popup_waits_for_layout(&self) -> bool {
-        !self.popup_open && (self.dirty || self.relayout)
+        !self.popups.is_open() && (self.dirty || self.relayout)
             && self.popups.front().is_some_and(|r| matches!(r.anchor, PopupAnchor::Key(_)))
     }
 
@@ -81,8 +143,7 @@ impl<S: 'static> Runtime<S> {
             if self.resolve_popup(None).is_err() { return; }
         }
         eprintln!("rune: pop-up menu callbacks kept asking for menus while their window went away; dropping {}", self.popups.len());
-        self.popups.clear();
-        self.popup_open = false;
+        self.popups = Popups::default();
     }
 
     /// A headless run's stand-in for the window's menu: the next menu opens and waits for
@@ -104,7 +165,7 @@ impl<S: 'static> Runtime<S> {
     pub(crate) fn popup_json(&self) -> Option<serde_json::Value> {
         let request = self.popups.front()?;
         let mut v = request.menu.to_json();
-        v["open"] = self.popup_open.into();
+        v["open"] = self.popups.is_open().into();
         v["anchor"] = match &request.anchor {
             PopupAnchor::Key(key) => serde_json::json!({ "key": key }),
             PopupAnchor::Point(x, y) => serde_json::json!({ "x": x, "y": y }),

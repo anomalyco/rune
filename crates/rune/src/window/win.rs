@@ -68,150 +68,71 @@ impl Win {
     }
 }
 
-/// A reveal requested before the hidden frame completes is held behind the fence, as is a
-/// reveal of cached pixels older than the state. Hiding cancels that intent, including when
-/// the GPU frame completes later. `deadline` is (next retry, give up) while it prepares.
-/// `on_ready` runs at the first frame, or at `ready_at` when there is none to wait for: the
-/// window is covered, occluded or hidden, or no frame came within `READY_FALLBACK` of opening.
-#[derive(Default)]
-pub(super) struct FirstFrame {
-    pub(super) ready: bool,
-    pub(super) reveal: bool,
-    pub(super) notified: bool,
-    pub(super) deadline: Option<(Instant, Instant)>,
-    /// `on_ready` has run for this native window.
-    pub(super) ran: bool,
-    pub(super) ready_at: Option<Instant>,
-}
-impl FirstFrame {
-    /// A window opened at `now`.
-    pub(super) fn opened(now: Instant) -> Self { Self { ready_at: Some(now + READY_FALLBACK), ..Default::default() } }
-    /// A frame went by undrawn because the window isn't on screen, which may last until it is
-    /// uncovered: `on_ready` stops waiting for a drawn one.
-    pub(super) fn skipped(&mut self, now: Instant) {
-        if !self.ran { self.ready_at = Some(self.ready_at.map_or(now, |at| at.min(now))); }
-    }
-    /// When `on_ready` runs without a first frame, until it has run.
-    pub(super) fn ready_deadline(&self) -> Option<Instant> { self.ready_at.filter(|_| !self.ran) }
-    /// `on_ready` is owed without a first frame.
-    pub(super) fn ready_due(&self, now: Instant) -> bool { self.ready_deadline().is_some_and(|at| at <= now) }
-    /// Takes the first `on_ready`: true once per native window.
-    pub(super) fn take_ready(&mut self) -> bool { !std::mem::replace(&mut self.ran, true) }
-    /// Whether to show the cached frame now. One already on screen shows at once; its next
-    /// frame (or retry) draws a stale state, with no first-frame deadline.
-    pub(super) fn request_reveal(&mut self, stale: bool, visible: bool) -> bool {
-        if visible { return true; }
-        if stale { self.ready = false; }
-        if self.ready { return true; }
-        self.reveal = true;
-        if self.deadline.is_none() { self.prepare(); }
-        false
-    }
-    /// After readiness, a canceled refresh keeps the cached frame and stops retrying.
-    pub(super) fn hide(&mut self) {
-        self.reveal = false;
-        if self.notified {
-            self.ready = true;
-            self.deadline = None;
-        }
-    }
-    /// The drawable deadline passed. The first frame stays hidden (the host reports it); a
-    /// refresh returns whether to reveal the cached frame rather than nothing.
-    pub(super) fn expire(&mut self) -> bool {
-        self.deadline = None;
-        if !self.notified { return false; }
-        self.ready = true;
-        std::mem::take(&mut self.reveal)
-    }
-    /// A hidden frame that got no drawable leaves the cached one stale. Unless the deadline
-    /// retries it, the next try waits `wait`, which doubles up to `OCCLUDED_MAX`.
-    pub(super) fn missed(&mut self, now: Instant, wait: &mut Duration) -> Option<Instant> {
-        self.ready = false;
-        if self.deadline.is_some() { return None; }
-        let at = now + *wait;
-        *wait = (*wait * 2).min(OCCLUDED_MAX);
-        Some(at)
-    }
-    pub(super) fn prepare(&mut self) {
-        let now = Instant::now();
-        self.deadline = Some((now, now + Duration::from_secs(2)));
-    }
-    /// Hidden frames settle, except the refresh a reveal waits on: its new motion runs on.
-    pub(super) fn settles(&self) -> bool { !(self.reveal && self.notified) }
-    /// A finished frame still owes the first readiness, or a refresh owes its reveal.
-    pub(super) fn pending(&self) -> bool { self.ready && (!self.notified || self.reveal) }
-    pub(super) fn complete(&mut self) -> bool {
-        self.ready = true;
-        self.deadline = None;
-        std::mem::take(&mut self.reveal)
-    }
-}
-
 #[test]
 fn launcher_first_frame_holds_reveal_and_hide_cancels_late_completion() {
     let mut frame = FirstFrame::default();
     frame.prepare();
     assert!(!frame.request_reveal(false, false));
-    assert!(!frame.ready);
+    assert!(!frame.ready());
     assert!(frame.complete());
-    assert!(frame.ready && frame.deadline.is_none());
+    assert!(frame.ready() && frame.deadline().is_none());
     assert!(!frame.complete(), "a second callback must not reopen a hidden panel");
     let mut canceled = FirstFrame::default();
     canceled.prepare();
     assert!(!canceled.request_reveal(false, false));
     canceled.hide();
     assert!(!canceled.complete(), "hide before readiness cancels the pending show");
-    assert!(canceled.ready);
+    assert!(canceled.ready());
     assert!(canceled.request_reveal(false, false), "the prepared frame can be revealed without another preparation");
-    assert!(canceled.deadline.is_none());
+    assert!(canceled.deadline().is_none());
 }
 
 #[test]
 fn launcher_stale_reveal_waits_for_an_unsettled_hidden_frame() {
-    let mut frame = FirstFrame { ready: true, notified: true, ..Default::default() };
+    let mut frame = FirstFrame::drawn_notified();
     assert!(!frame.complete());
     assert!(frame.request_reveal(false, false), "unchanged state reveals the cached frame at once");
     assert!(!frame.pending() && frame.settles());
     assert!(!frame.request_reveal(true, false), "changed state renders hidden first");
-    assert!(frame.deadline.is_some() && !frame.settles(), "the refresh keeps its new motion");
-    frame.ready = true; // The hidden frame's fence completed.
+    assert!(frame.deadline().is_some() && !frame.settles(), "the refresh keeps its new motion");
+    frame.gpu_done(); // The hidden frame's fence completed.
     assert!(frame.pending() && frame.complete());
     assert!(!frame.pending() && frame.settles());
     assert!(!frame.request_reveal(true, false));
     frame.hide();
     assert!(frame.settles(), "a canceled refresh is an ordinary hidden frame");
-    assert!(frame.ready && frame.deadline.is_none(), "hide stops the refresh retries");
+    assert!(frame.ready() && frame.deadline().is_none(), "hide stops the refresh retries");
     assert!(!frame.pending() && !frame.complete(), "a late frame does not reveal");
 
     assert!(!frame.request_reveal(true, false));
     assert!(frame.expire(), "a refresh with no drawable reveals the cached frame");
-    assert!(frame.ready && !frame.pending() && frame.deadline.is_none());
+    assert!(frame.ready() && !frame.pending() && frame.deadline().is_none());
     let mut first = FirstFrame::default();
     first.prepare();
     assert!(!first.request_reveal(true, false));
-    assert!(!first.expire() && !first.ready, "the first frame stays hidden and reports instead");
-    first.ready = true;
+    assert!(!first.expire() && !first.ready(), "the first frame stays hidden and reports instead");
+    first.gpu_done();
     assert!(first.pending() && first.complete(), "a late first frame still reveals");
 }
 
 #[test]
 fn launcher_refresh_with_no_drawable_retries_and_never_reveals_stale_pixels() {
     let now = Instant::now();
-    let mut frame = FirstFrame { ready: true, notified: true, ..Default::default() };
+    let mut frame = FirstFrame::drawn_notified();
     let mut wait = TIMEOUT_RETRY;
     assert_eq!(frame.missed(now, &mut wait), Some(now + TIMEOUT_RETRY), "a hidden refresh that got no drawable tries again");
-    assert!(!frame.ready, "its cached frame no longer counts as ready");
+    assert!(!frame.ready(), "its cached frame no longer counts as ready");
     assert_eq!(frame.missed(now, &mut wait), Some(now + TIMEOUT_RETRY * 2), "and backs off");
     for _ in 0..10 { frame.missed(now, &mut wait); }
     assert_eq!(wait, OCCLUDED_MAX);
     assert!(!frame.request_reveal(false, false), "a reveal waits for the refresh even with nothing new to commit");
-    assert!(frame.deadline.is_some());
+    assert!(frame.deadline().is_some());
     assert_eq!(frame.missed(now, &mut wait), None, "the first-frame deadline owns its retries");
 
     // One already on screen shows at once and redraws, rather than retrying a first frame.
-    let mut shown = FirstFrame { ready: true, notified: true, ..Default::default() };
+    let mut shown = FirstFrame::drawn_notified();
     assert!(shown.request_reveal(true, true));
-    assert!(shown.deadline.is_none() && shown.ready);
+    assert!(shown.deadline().is_none() && shown.ready());
 }
 
 impl Win {
@@ -287,7 +208,7 @@ impl Win {
     /// Waiting for a missed frame's retry, or for the timer pacing unpaced motion. A hidden
     /// launcher's first-frame deadline owns its own retries.
     pub(super) fn backing_off(&self, now: Instant) -> bool {
-        self.retry.is_some_and(|retry| retry > now) && self.first_frame.deadline.is_none()
+        self.retry.is_some_and(|retry| retry > now) && self.first_frame.deadline().is_none()
     }
 
     /// What paces the window's frames, for its stats.
@@ -352,7 +273,7 @@ fn on_ready_runs_for_a_window_launched_occluded_or_hidden() {
     let ms = Duration::from_millis;
     let mut shown = FirstFrame::opened(now);
     assert!(!shown.ready_due(now + ms(16)), "a window on screen waits for its first frame");
-    shown.ready = true;
+    shown.gpu_done();
     assert!(shown.pending() && !shown.complete());
     assert!(shown.take_ready(), "its first frame runs on_ready");
     assert!(!shown.take_ready() && shown.ready_deadline().is_none(), "once");
@@ -360,10 +281,10 @@ fn on_ready_runs_for_a_window_launched_occluded_or_hidden() {
     let mut covered = FirstFrame::opened(now);
     covered.skipped(now + ms(30));
     assert!(covered.ready_due(now + ms(30)) && covered.take_ready(), "the first covered frame runs on_ready");
-    assert!(!covered.ready && !covered.pending(), "the window isn't ready until it draws");
+    assert!(!covered.ready() && !covered.pending(), "the window isn't ready until it draws");
     covered.skipped(now + ms(60));
     assert_eq!(covered.ready_deadline(), None, "and skipping again doesn't run it again");
-    covered.ready = true; // Uncovered.
+    covered.gpu_done(); // Uncovered.
     assert!(covered.pending() && !covered.complete() && !covered.take_ready(), "drawing at last doesn't either");
 
     let mut hidden = FirstFrame::opened(now);

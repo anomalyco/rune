@@ -171,7 +171,7 @@ impl<S: 'static> Host<S> {
     pub(super) fn refresh_hidden(&mut self) -> bool {
         let now_due = self.hidden_launcher_renders();
         let Some(w) = &mut self.win else { return false };
-        let render = now_due || w.first_frame.deadline.is_some() || w.hidden_pace.changed(Instant::now());
+        let render = now_due || w.first_frame.deadline().is_some() || w.hidden_pace.changed(Instant::now());
         if render { w.request_redraw(); }
         render
     }
