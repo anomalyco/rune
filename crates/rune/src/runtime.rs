@@ -102,6 +102,10 @@ pub(crate) use blend::{apron_key, glyph, icon_inst, premul};
 
 #[path = "runtime/input/focus.rs"]
 mod focus;
+#[path = "runtime/input/capture.rs"]
+mod capture;
+#[path = "runtime/input/focus_machine.rs"]
+mod focus_machine;
 #[path = "runtime/input/modal_focus.rs"]
 mod modal_focus;
 #[path = "runtime/input/physical.rs"]
@@ -447,13 +451,11 @@ pub struct Runtime<S: 'static> {
     settle: bool,
     queue: ActionQueue,
     pointer: Option<(f32, f32)>,
-    capture: Option<(String, Drag)>,
-    /// The button holding `capture` (`El::pointer_buttons`).
-    capture_button: crate::PointerButton,
-    secondary_capture: Option<String>,
-    capture_inside: bool,
-    /// The pointer left while a press held it; the leave lands on release.
-    left_in_capture: bool,
+    /// The press the pointer holds, or the click a next press may pair with
+    /// (`runtime/input/capture.rs`).
+    press: capture::Press,
+    /// The secondary button's press, held beside it.
+    secondary: capture::Secondary,
     drag_data: f32,
     pub instances: Vec<Instance>,
     /// Per instance, the `El::mark` of its nearest marked node (0 for none). Filled only while
@@ -582,16 +584,14 @@ pub struct Runtime<S: 'static> {
     grow_acc: f32,
     caught_up: f32,
     slack_dt: f32,
-    focused: Option<String>,
-    keyboard_focus: bool,
-    /// The pointer focused a `focus_highlight` row, so its highlight shows without a key.
-    hover_focus: bool,
+    /// What has focus, how it shows and where Tab starts (`runtime/input/focus_machine.rs`).
+    focus: focus_machine::FocusState,
     /// Type-select's typed prefix and when its last key arrived (`now_clock`).
-    typeahead: (String, f64),
+    type_select: focus_machine::TypeSelect,
     /// The activation key (Enter, Escape, Space) held down and the focus it was first pressed
     /// on. Its repeats are dropped once focus has moved, so a held key that closed something
     /// can't act again on whatever took focus next.
-    held: Option<physical_dispatch::HeldKey>,
+    held: physical_dispatch::Activation,
     /// Modifier keys down, for `Key::Modifier` (off unless the app opts in).
     modifier_keys: modifier_keys::ModifierKeys,
     /// Tab visits every control; off, only text fields and lists (macOS Full Keyboard
@@ -604,19 +604,14 @@ pub struct Runtime<S: 'static> {
     /// Focus when the running commit began, before a new view's focus request applied: what a
     /// modal that opens in this commit returns focus to.
     focus_before_commit: Option<String>,
-    /// Focus before the current gesture/commit blurred it, so a scrim press that blurs on
-    /// pointer-down and closes its overlay on pointer-up still honours `focus_return`.
-    last_focused: Option<String>,
     /// `Tx::focus`: the key the next commit focuses, and whether its ring shows.
     focus_request: Option<(String, bool)>,
-    /// Where Tab starts while nothing has focus: the element last focused, or pressed without
-    /// taking focus, as a browser's sequential focus navigation starting point.
-    tab_from: Option<String>,
     /// Focused text fields that unmounted without being blurred: while another field holds focus,
     /// remounting one with its old `focused = true` flag does not steal focus back.
     unmounted_focused: Vec<std::sync::Weak<crate::edit::History>>,
-    modal_index: Option<usize>,
-    modal_members: Vec<bool>,
+    /// The innermost open modal this commit shows and what input may reach inside it, worked
+    /// out from the nodes at each commit; none while no modal shows.
+    modal_scope: Option<focus::ModalScope>,
     loops: HashMap<NodeId, rune_motion::LoopTrack>,
     loop_clock: loop_clock::LoopClock,
     loops_active: bool,
@@ -791,21 +786,10 @@ pub struct Runtime<S: 'static> {
     /// Seconds until the next frame while only [`Cycle`](crate::el::Cycle)s move on screen
     /// (the shell sleeps until then instead of drawing every display frame).
     pub ambient: Option<f32>,
-    /// Where (window points) the current press started.
-    press_at: (f32, f32),
-    /// The first of a possible double press: the element, its down time and point.
-    last_press: Option<(String, f64, f32, f32)>,
-    /// The press now held is the second of a double press.
-    double_armed: bool,
     /// The presses counted into `Drag::clicks`.
     press_clicks: press_clicks::PressClicks,
     /// The held press's drag repeat (`Tx::drag_repeat_after`).
     press_repeat: press_repeat::PressRepeat,
-    press_down_t: f64,
-    /// The held press has travelled past the click slop: it isn't a click of a double press.
-    press_moved: bool,
-    /// A scroll under the held press cancelled it ([`Runtime::scroll_cancels_press`]).
-    press_cancelled: bool,
     titlebar: titlebar::Titlebar,
     /// Two presses closer than this (seconds) are a double press: the system setting on macOS
     /// and Windows, 0.5 elsewhere and headless.
@@ -817,10 +801,6 @@ pub struct Runtime<S: 'static> {
     pub help_delay: f64,
     /// The host starts OS drags, so `drag_out` elements start one (headless tools act as one).
     os_drag: bool,
-    /// The held press is on a `drag_out` element that hasn't crossed the threshold yet.
-    drag_out_armed: bool,
-    /// The armed element's drag threshold (points).
-    drag_out_threshold: f32,
     drag_out_request: Option<crate::drag_out::DragOutStart>,
     /// How OS drags ended, filled by the host's session callbacks between frames.
     drag_ends: crate::drag_out::DragEnds,
@@ -887,11 +867,8 @@ impl<S: 'static> Runtime<S> {
             settle: false,
             queue: ActionQueue::default(),
             pointer: None,
-            capture: None,
-            capture_button: crate::PointerButton::Primary,
-            secondary_capture: None,
-            capture_inside: false,
-            left_in_capture: false,
+            press: Default::default(),
+            secondary: Default::default(),
             drag_data: 0.0,
             instances: Vec::new(),
             marks: Vec::new(),
@@ -973,22 +950,17 @@ impl<S: 'static> Runtime<S> {
             grow_acc: 0.0,
             caught_up: 0.0,
             slack_dt: 0.0,
-            focused: None,
-            keyboard_focus: false,
-            hover_focus: false,
-            typeahead: (String::new(), f64::NEG_INFINITY),
-            held: None,
+            focus: Default::default(),
+            type_select: Default::default(),
+            held: Default::default(),
             modifier_keys: Default::default(),
             full_keyboard_access: true,
             tab_visits_controls: false,
             modal_focus: modal_focus::ModalFocus::Closed,
             focus_before_commit: None,
-            last_focused: None,
             focus_request: None,
-            tab_from: None,
             unmounted_focused: Vec::new(),
-            modal_index: None,
-            modal_members: Vec::new(),
+            modal_scope: None,
             loops: HashMap::default(),
             loop_clock: Default::default(),
             loops_active: false,
@@ -1088,19 +1060,11 @@ impl<S: 'static> Runtime<S> {
             live_only_warnings: Vec::new(),
             key_warnings: None,
             ambient: None,
-            press_at: (0.0, 0.0),
-            last_press: None,
-            double_armed: false,
             press_clicks: Default::default(),
             press_repeat: Default::default(),
-            press_down_t: 0.0,
-            press_moved: false,
-            press_cancelled: false,
             titlebar: Default::default(),
             double_click_interval: 0.5,
             os_drag: true,
-            drag_out_armed: false,
-            drag_out_threshold: crate::drag_out::DRAG_THRESHOLD,
             drag_out_request: None,
             drag_ends: Default::default(),
             drags_open: 0,

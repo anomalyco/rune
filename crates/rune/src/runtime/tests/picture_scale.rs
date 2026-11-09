@@ -241,7 +241,7 @@ fn press_scale_shrinks_while_held_and_springs_back() {
     assert_eq!(held.target, rest.target, "layout keeps the resting size");
     assert!((held.rect[0] - 2.0).abs() < 0.05 && (held.rect[2] - 96.0).abs() < 0.05, "shrinks about its centre: {:?}", held.rect);
     assert!((info(&rt, "dot").scale - 0.96).abs() < 1e-4, "children shrink with it");
-    assert!(rt.capture_inside, "a press near the edge stays inside the resting rect");
+    assert!(rt.press.inside(), "a press near the edge stays inside the resting rect");
     rt.pointer_move(150.0, 50.0);
     settle(&mut rt);
     assert!((info(&rt, "tile").scale - 1.0).abs() < 1e-4, "leaving springs back");

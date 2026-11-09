@@ -64,7 +64,7 @@ impl<S: 'static> Runtime<S> {
             // grip (or the focus callback clears the app's drag state).
             if !focused {
                 self.cancel_pointer();
-                self.held = None;
+                self.held = physical_dispatch::Activation::Up;
             }
             if self.commits == 0 || self.dirty || self.nodes.get(self.app_root()).is_some_and(|n| n.handlers.on_window_focus.is_some()) {
                 self.queue.push(Action::WindowFocus(focused));
@@ -145,7 +145,7 @@ impl<S: 'static> Runtime<S> {
         let changed = crate::tooling::perf_warn::timed("an `update` closure", || f(&mut self.state, &mut one));
         let stale = changed || one.frame_work() || one.window_frame.is_some() || one.srgb_blend.is_some_and(|b| b != self.srgb_blend) || one.font_smoothing.is_some_and(|m| m != self.text.smoothing)
             || self.changes_families(&one)
-            || (one.blur && self.focused.is_some());
+            || (one.blur && self.focus.path().is_some());
         self.latch_requests(&mut one);
         merge(&mut self.pending, one);
         self.dirty |= changed;
@@ -207,12 +207,12 @@ impl<S: 'static> Runtime<S> {
         if let Some(srgb) = tx.srgb_blend.take() { self.set_srgb_blend(srgb); }
         if let Some(rewind) = tx.rewind.take() { self.rewind = rewind; }
         if std::mem::take(&mut tx.blur) {
-            if self.focused.is_some() {
-                self.set_focus(None, self.keyboard_focus);
+            if self.focus.path().is_some() {
+                self.set_focus(None, self.focus.keyboard());
                 self.dirty = true;
             }
             // An explicit blur is not the temporary pointer-down blur of a scrim.
-            self.last_focused = None;
+            self.focus.step(focus_machine::FocusEvent::Settled);
         }
         if let Some(request) = tx.focus_to.take() {
             self.focus_request = Some(request);
@@ -257,7 +257,7 @@ impl<S: 'static> Runtime<S> {
 
     pub(super) fn transaction(&self) -> Tx {
         Tx { trace: self.tracing().then(crate::el::TraceCalls::default), mods: self.held_mods, selection: self.selection_snapshot(),
-            input_time: crate::input::time::current(), clock: self.clock, focus_visible: self.keyboard_focus, ..Tx::default() }
+            input_time: crate::input::time::current(), clock: self.clock, focus_visible: self.focus.keyboard(), ..Tx::default() }
     }
 
     /// A scalar from the actual draw path (e.g. `shell.width`). Values hold until resampled.

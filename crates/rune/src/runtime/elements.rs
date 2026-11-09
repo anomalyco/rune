@@ -302,8 +302,8 @@ impl<S: 'static> Runtime<S> {
                         else { l.phase(self.scene.store().node_time(n.id)) }
                     }),
                     focusable: self.can_focus(i),
-                    focused: self.focused.as_deref() == Some(&n.path),
-                    focus_visible: self.keyboard_focus && self.focused.as_deref() == Some(&n.path),
+                    focused: self.focus.path() == Some(&n.path),
+                    focus_visible: self.focus.keyboard() && self.focus.path() == Some(&n.path),
                     inert: !self.allowed(i) || exiting,
                     exiting,
                     path: n.path.clone(),

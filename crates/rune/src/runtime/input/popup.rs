@@ -67,7 +67,7 @@ impl<S: 'static> Runtime<S> {
     /// A menu is about to take the mouse: press, capture and hover end now, as if the pointer
     /// left, rather than when it next moves. True when that changed anything.
     pub(crate) fn release_pointer_for_popup(&mut self) -> bool {
-        if self.popups.is_empty() || (self.pointer.is_none() && self.capture.is_none() && self.secondary_capture.is_none()) {
+        if self.popups.is_empty() || (self.pointer.is_none() && !self.pointer_captured()) {
             return false;
         }
         self.cancel_pointer();

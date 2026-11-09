@@ -245,9 +245,6 @@ impl<S: 'static> Runtime<S> {
         own.or_else(|| self.nodes.iter().position(|n| n.named(key))).filter(|&j| !self.subtree_exiting(j))
     }
 
-    /// Whether node `i` is inside the open modal, or a portal it anchors.
-    pub(super) fn modal_member(&self, i: usize) -> bool { self.modal_members.get(i).copied().unwrap_or(false) }
-
     /// Whether node `i` is an item of a focus group: a list, tabs, a radio group.
     fn in_focus_group(&self, i: usize) -> bool {
         std::iter::successors(self.nodes[i].parent, |&p| self.nodes[p].parent).any(|p| self.nodes[p].focus.group)

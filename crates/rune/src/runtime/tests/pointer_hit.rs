@@ -149,7 +149,7 @@ fn secondary_only_children_preserve_primary_click_hover_and_background_blur() {
     rt.state.2 = true;
     rt.invalidate();
     rt.frame(0.0);
-    rt.focused = Some("previous-input".into());
+    rt.focus.focus = crate::runtime::focus_machine::Focus::On { path: "previous-input".into(), hovered: false, from: None };
     rt.pointer_move(10.0, 10.0);
     rt.pointer_down(10.0, 10.0);
     assert!(rt.hovered.is_none());

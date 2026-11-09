@@ -176,9 +176,9 @@ impl<S: 'static> Runtime<S> {
         let path = &self.nodes[i].path;
         let hovered = self.pointer.filter(|_| self.hovered.as_deref() == Some(path))
             .and_then(|(x, y)| self.link_at(i, x, y));
-        let held = self.capture.as_ref().is_some_and(|(p, _)| p == path) && self.capture_inside;
+        let held = self.press.path() == Some(path) && self.press.inside();
         let pressed = self.links.press.as_ref().filter(|(p, k)| held && p == path && hovered == Some(*k)).map(|(_, k)| *k);
-        let focused = self.links.focus.filter(|_| self.keyboard_focus && self.focused.as_deref() == Some(path));
+        let focused = self.links.focus.filter(|_| self.focus.keyboard() && self.focus.path() == Some(path));
         (hovered, pressed, focused)
     }
 
@@ -214,10 +214,10 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Pointer up: a press that began and ends on the same link activates it.
-    pub(super) fn link_up(&mut self, path: &str, x: f32, y: f32) {
+    pub(super) fn link_up(&mut self, path: &str, x: f32, y: f32, inside: bool) {
         let Some((p, k)) = self.links.press.take() else { return };
         let Some(i) = self.nodes.iter().position(|n| n.path == p) else { return };
-        if p == path && self.capture_inside && self.link_at(i, x, y) == Some(k) {
+        if p == path && inside && self.link_at(i, x, y) == Some(k) {
             self.queue.push(Action::Link(p, k));
         }
     }
@@ -338,7 +338,7 @@ impl<S: 'static> Runtime<S> {
             elements[at].focused = false;
             elements[at].focus_visible = false;
             let (hovered, pressed, _) = self.link_states(i);
-            let focused = self.links.focus.filter(|_| self.focused.as_deref() == Some(&n.path));
+            let focused = self.links.focus.filter(|_| self.focus.path() == Some(&n.path));
             let boxes = self.link_boxes(i, self.drawn_box(i));
             let targets = self.link_boxes(i, n.target);
             let union = |k: usize, bs: &[(usize, [f32; 4])]| bs.iter().filter(|(j, _)| *j == k).fold(None, |u: Option<[f32; 4]>, (_, r)| {
@@ -363,7 +363,7 @@ impl<S: 'static> Runtime<S> {
                     visible: [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)],
                     focusable: text.focusable,
                     focused: focused == Some(k),
-                    focus_visible: self.keyboard_focus && focused == Some(k),
+                    focus_visible: self.focus.keyboard() && focused == Some(k),
                     hover: if hovered == Some(k) { 1.0 } else { 0.0 },
                     press: if pressed == Some(k) { 1.0 } else { 0.0 },
                     parent: Some(i),

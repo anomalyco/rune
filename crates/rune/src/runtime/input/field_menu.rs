@@ -35,7 +35,7 @@ impl<S: 'static> Runtime<S> {
         let s = self.env.scale;
         let toggle = std::iter::successors(Some(i), |&j| self.nodes[j].parent).find_map(|j| self.nodes[j].handlers.on_spellcheck.clone());
         let keep = std::iter::successors(Some(i), |&j| self.nodes[j].parent).find_map(|j| self.nodes[j].handlers.on_spellcheck_languages.clone());
-        if self.focused.as_deref() != Some(path.as_str()) {
+        if self.focus.path() != Some(path.as_str()) {
             self.set_focus(Some(path.clone()), false);
         }
         let e = access(states!(self));
@@ -115,7 +115,7 @@ impl<S: 'static> Runtime<S> {
 
     /// Does what `picked` in field menu `menu` asks, on its field.
     pub(super) fn field_menu_pick(&mut self, menu: FieldMenu, picked: &str, one: &mut Tx) {
-        if self.focused.as_deref() != Some(menu.path.as_str()) && self.live(&menu.path).is_some() {
+        if self.focus.path() != Some(menu.path.as_str()) && self.live(&menu.path).is_some() {
             self.set_focus(Some(menu.path.clone()), false);
         }
         let command = |c| KeyEvent { key: Key::Command(c), mods: Mods { cmd: true, ctrl: !cfg!(target_os = "macos"), ..Mods::default() } };

@@ -84,7 +84,7 @@ impl<S: 'static> Runtime<S> {
             virtual_inputs: &mut self.virtual_inputs,
             stats: &mut self.stats,
             key_warnings: &mut self.key_warnings,
-            focused: self.focused.as_deref(),
+            focused: self.focus.path(),
             state_unchanged: std::mem::take(&mut self.state_unchanged),
             retry: false,
             hold_windows,
@@ -565,9 +565,9 @@ impl<S: 'static> Runtime<S> {
     /// after it scrolls out. Walks the node tree, since a key may itself contain `/`.
     pub(super) fn track_focused_rows(&mut self) {
         if self.virtuals.is_empty() { return; }
-        let focused = self.focused.as_deref().and_then(|f| self.nodes.iter().position(|n| n.path == f));
+        let focused = self.focus.path().and_then(|f| self.nodes.iter().position(|n| n.path == f));
         for (path, v) in self.virtuals.iter_mut() {
-            let Some(rest) = self.focused.as_deref().and_then(|f| f.strip_prefix(path.as_str())).and_then(|r| r.strip_prefix('/')) else {
+            let Some(rest) = self.focus.path().and_then(|f| f.strip_prefix(path.as_str())).and_then(|r| r.strip_prefix('/')) else {
                 v.focused_row = None;
                 continue;
             };

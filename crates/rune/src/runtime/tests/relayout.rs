@@ -409,6 +409,6 @@ fn a_resize_moves_nodes_keeps_inputs_and_restores_on_virtual_window_fallback() {
         full.set_viewport((w, h), 2.0);
         full.frame(1.0 / 120.0);
         assert_eq!(shown(&rt), shown(&full), "at {w}x{h}");
-        assert_eq!(rt.focused.as_deref(), Some("#0/main/composer"));
+        assert_eq!(rt.focus.path(), Some("#0/main/composer"));
     }
 }

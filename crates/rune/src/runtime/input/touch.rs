@@ -112,7 +112,7 @@ impl<S: 'static> Runtime<S> {
 
     /// Whether the held press is on an element that drags, so a finger drags it, not the page.
     fn press_drags(&self) -> bool {
-        let Some((path, _)) = &self.capture else { return false };
+        let Some(path) = self.press.path() else { return false };
         self.live_index(path).is_some_and(|i| self.nodes[i].handlers.on_drag.is_some() && !self.drags_out(&self.nodes[i]))
     }
 }

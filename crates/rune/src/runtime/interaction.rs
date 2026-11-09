@@ -14,7 +14,7 @@ impl<S: 'static> Runtime<S> {
     /// (layout reports, timers, clipboard and dialog answers).
     pub(super) fn interaction_note(&mut self, action: &Action) -> Option<Note> {
         if !interaction::on() { return None; }
-        let focused = self.focused.as_deref();
+        let focused = self.focus.path();
         let editing = || focused.and_then(|p| self.index_of(p)).is_some_and(|i| self.nodes[i].input.is_some());
         let (name, rank, path): (&'static str, u8, Option<&str>) = match action {
             Action::Press(p, _) => ("on_press", 3, Some(p)),
