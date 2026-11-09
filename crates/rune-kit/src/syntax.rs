@@ -15,8 +15,8 @@
 //! ```
 //!
 //! **Languages.** The built-in scanners (no dependencies) know Rust, JavaScript and JSX,
-//! TypeScript and TSX, JSON, Python, Go, Swift, shell, SQL, HTML and XML, CSS, YAML and unified
-//! diffs, under their common fence names (see [`known`]). Anything else, and code with no
+//! TypeScript and TSX, JSON, Python, Go, Swift, shell, SQL, HTML and XML, CSS, YAML, TOML,
+//! Markdown and unified diffs, under their common fence names (see [`known`]). Anything else, and code with no
 //! language, stays plain: a fence without a language is as often program output or prose as
 //! code, so guessing would colour text that isn't code.
 //!
@@ -72,10 +72,15 @@ pub enum Syntax {
     /// A function's parameters where it's defined (TextMate's `variable.parameter`), in the
     /// text colour by default.
     Parameter,
+    /// A Markdown heading's whole line (TextMate's `markup.heading`, Zed's `title`), which
+    /// editors often draw bold as well.
+    Heading,
+    /// A Markdown link's text.
+    Link,
 }
 
 impl Syntax {
-    pub(crate) const COUNT: usize = 11;
+    pub(crate) const COUNT: usize = 13;
 }
 
 /// What colours a highlighted range: a kind of token, coloured by the [`SyntaxTheme`] in use,
@@ -106,7 +111,8 @@ pub type Highlight = (Range<usize>, Paint);
 /// `rust`/`rs`, `js`/`javascript`/`jsx`/`mjs`/`cjs`, `ts`/`typescript`/`mts`/`cts`, `tsx`,
 /// `json`/`jsonc`/`json5`, `python`/`py`/`python3`/`py3`/`pyi`, `go`/`golang`, `swift`,
 /// `sh`/`bash`/`zsh`/`shell`/`shellscript`, `sql`/`postgres`/`postgresql`/`mysql`/`sqlite`,
-/// `html`/`htm`/`xhtml`/`xml`/`svg`, `css`, `yaml`/`yml` and `diff`/`patch`.
+/// `html`/`htm`/`xhtml`/`xml`/`svg`, `css`, `yaml`/`yml`, `toml`, `markdown`/`md`/`mdx` and
+/// `diff`/`patch`.
 pub fn known(lang: &str) -> bool {
     Lang::from_name(lang).is_some()
 }
@@ -270,6 +276,8 @@ impl SyntaxTheme {
         s[Syntax::Punctuation as usize] = c.text_muted;
         s[Syntax::Inserted as usize] = c.success.icon;
         s[Syntax::Deleted as usize] = c.danger.icon;
+        s[Syntax::Heading as usize] = paint(335.0);
+        s[Syntax::Link as usize] = paint(225.0);
         SyntaxTheme { colors: s }
     }
 

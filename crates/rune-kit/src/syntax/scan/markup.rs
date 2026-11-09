@@ -49,7 +49,7 @@ pub(super) fn markup(s: &[u8], mut i: usize, end: usize, out: &mut Out, depth: u
 
 /// A tag from the `<` at `i`: (its end, its name's range, whether it closes, whether it is
 /// self-closing or a declaration).
-fn tag(s: &[u8], i: usize, end: usize, out: &mut Out) -> (usize, (usize, usize), bool, bool) {
+pub(super) fn tag(s: &[u8], i: usize, end: usize, out: &mut Out) -> (usize, (usize, usize), bool, bool) {
     use Syntax::*;
     let mut j = i + 1;
     let closing = at(s, j, end) == b'/';
