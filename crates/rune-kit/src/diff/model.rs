@@ -5,6 +5,7 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use super::myers::{self, Op};
+use super::words;
 
 /// The two sides of a diff: the text before the change and after it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -36,7 +37,8 @@ pub struct Line {
     /// The line without its line break.
     pub text: String,
     /// Byte ranges of `text` that differ from the line it replaced or was replaced by (word
-    /// changes), when it pairs with one and they share enough to say.
+    /// changes), when it pairs with one: as OpenCode Desktop marks them, one range from the first
+    /// changed word to the last.
     pub changes: Vec<Range<usize>>,
     /// The file ends here without a line break (`\ No newline at end of file`).
     pub no_newline: bool,
@@ -384,13 +386,10 @@ impl FileDiff {
                     i = i.max(del + 1);
                     continue;
                 }
-                let pairs = (add - del).min(i - add);
-                if pairs <= 128 {
-                    for k in 0..pairs {
-                        let (a, b) = myers::words(&h.lines[del + k].text, &h.lines[add + k].text);
-                        h.lines[del + k].changes = a;
-                        h.lines[add + k].changes = b;
-                    }
+                for k in 0..(add - del).min(i - add) {
+                    let (a, b) = words::words(&h.lines[del + k].text, &h.lines[add + k].text);
+                    h.lines[del + k].changes = a.into_iter().collect();
+                    h.lines[add + k].changes = b.into_iter().collect();
                 }
             }
         }

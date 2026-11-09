@@ -191,75 +191,6 @@ fn script(ca: &[bool], cb: &[bool]) -> Vec<Op> {
     out
 }
 
-/// Byte ranges of `old` and `new` that differ, by words: runs of letters, digits and `_`,
-/// runs of whitespace, and single other characters. Changes separated only by whitespace join
-/// into one range. Empty when the lines share too little for word changes to mean anything.
-pub(crate) fn words(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
-    if old == new || old.len() > 1000 || new.len() > 1000 {
-        return (Vec::new(), Vec::new());
-    }
-    let (ta, tb) = (tokens(old), tokens(new));
-    let sa: Vec<&str> = ta.iter().map(|r| &old[r.clone()]).collect();
-    let sb: Vec<&str> = tb.iter().map(|r| &new[r.clone()]).collect();
-    let ops = diff(&sa, &sb);
-    let mut shared = 0;
-    let (mut ra, mut rb): (Vec<Range<usize>>, Vec<Range<usize>>) = (Vec::new(), Vec::new());
-    for op in &ops {
-        match *op {
-            Op::Equal { old: o, len, .. } => {
-                shared += sa[o..o + len].iter().filter(|t| !t.trim().is_empty()).map(|t| t.len()).sum::<usize>();
-            }
-            Op::Delete { old: o, len } => ra.push(ta[o].start..ta[o + len - 1].end),
-            Op::Insert { new: n, len } => rb.push(tb[n].start..tb[n + len - 1].end),
-        }
-    }
-    let content = |s: &str| s.chars().filter(|c| !c.is_whitespace()).count().max(1);
-    if shared * 4 < content(old).max(content(new)) {
-        return (Vec::new(), Vec::new());
-    }
-    (join(old, ra), join(new, rb))
-}
-
-fn join(text: &str, ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
-    let mut out: Vec<Range<usize>> = Vec::new();
-    for r in ranges {
-        match out.last_mut() {
-            Some(last) if text[last.end..r.start].chars().all(char::is_whitespace) => last.end = r.end,
-            _ => out.push(r),
-        }
-    }
-    out
-}
-
-fn tokens(s: &str) -> Vec<Range<usize>> {
-    #[derive(PartialEq, Clone, Copy)]
-    enum K {
-        Word,
-        Space,
-        Other,
-    }
-    let kind = |c: char| {
-        if c.is_alphanumeric() || c == '_' {
-            K::Word
-        } else if c.is_whitespace() {
-            K::Space
-        } else {
-            K::Other
-        }
-    };
-    let mut out: Vec<Range<usize>> = Vec::new();
-    let mut prev: Option<K> = None;
-    for (i, c) in s.char_indices() {
-        let k = kind(c);
-        match out.last_mut() {
-            Some(last) if prev == Some(k) && k != K::Other => last.end = i + c.len_utf8(),
-            _ => out.push(i..i + c.len_utf8()),
-        }
-        prev = Some(k);
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,11 +315,11 @@ mod tests {
 
     #[test]
     fn word_changes_cover_changed_words_and_join_across_spaces() {
+        use super::super::words::words;
         let (a, b) = words("let total = price * count;", "let total = price * amount + tax;");
-        assert_eq!(a, vec![20..25]);
-        assert_eq!(&"let total = price * amount + tax;"[b[0].clone()], "amount + tax");
-        // Nothing in common: no word emphasis, the line colour says it all.
-        assert_eq!(words("fn main() {}", "SELECT * FROM users"), (vec![], vec![]));
-        assert_eq!(words("same", "same"), (vec![], vec![]));
+        assert_eq!(a, Some(20..25));
+        assert_eq!(&"let total = price * amount + tax;"[b.unwrap()], "amount + tax");
+        assert_eq!(words("fn main() {}", "SELECT * FROM users"), (Some(0..12), Some(0..19)));
+        assert_eq!(words("same", "same"), (None, None));
     }
 }
