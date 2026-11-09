@@ -79,7 +79,8 @@ impl<S: 'static> Runtime<S> {
         let instant = tx.instant || first || concealing;
         if tx.instant && !first { self.commit_why |= crate::runtime::CommitWhy::INSTANT; }
         // An instant change lands what it changes; motion an earlier change set going keeps on.
-        self.scene.keep_flights(tx.instant && !tx.settle && !first && !concealing);
+        let keeps_flights = tx.instant && !tx.settle && !first && !concealing;
+        self.scene.keep_flights(keeps_flights);
         let now = self.t;
         if self.fit_height && let Some(root) = nodes.first() { self.fit_window(root.local.h, tx, first); }
         let mut held = std::mem::take(&mut scratch.held);
@@ -454,7 +455,11 @@ impl<S: 'static> Runtime<S> {
                     }
                     la
                 };
-                let flying = if self.flying.is_empty() || lands { None }
+                // An instant change that leaves a flying node's own layout as it was (a click
+                // placing a caret elsewhere, say) keeps its flight on its path, as it keeps
+                // other motion an earlier change set going.
+                let flying = if self.flying.is_empty() { None }
+                    else if lands { self.flying.iter().position(|f| f.0 == id && f.1 == nodes[i].local).filter(|_| keeps_flights && !nodes[i].instant_changes) }
                     else { self.flying.iter().position(|f| f.0 == id) };
                 // A growth row lays out its contents at once. When the top of a parent's contents
                 // moves in it (a padding, gap or margin above its first child changed), they all
