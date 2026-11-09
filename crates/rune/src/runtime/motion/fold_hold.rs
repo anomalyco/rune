@@ -123,9 +123,9 @@ impl<S: 'static> Runtime<S> {
             Some(((self.drawn[row][1] - self.drawn[view][1]) / scale).max(0.0))
         }).flatten().unwrap_or(0.0);
         let Some(g) = self.grows.get_mut(&nodes[j].id) else { return };
-        // And what its contents hid below its bottom edge shows. A fold opening from rest hides
-        // nothing there: its header rises to the top, and what it opens below that lands lifted.
-        let below = if g.lift() > 0.0 { (g.target - g.h - g.lift()).max(0.0) } else { 0.0 };
+        // And what its contents hid below its bottom edge shows: for a fold opening from rest,
+        // all it opens, so its spring carries it whole with its contents still in its layout.
+        let below = (g.target - g.h - g.lift()).max(0.0);
         g.ride_up(shown + below);
     }
 
