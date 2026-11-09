@@ -82,6 +82,7 @@ pub fn text(content: impl Into<String>) -> El {
         copy_breaks: [1, 1],
         copy_prefix: None,
         rings: Vec::new(),
+        span_radius: crate::text::SPAN_RADIUS,
         strikes: Vec::new(),
         highlights: Vec::new(),
         blocks: Vec::new(),

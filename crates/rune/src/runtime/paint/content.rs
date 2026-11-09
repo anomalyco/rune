@@ -308,7 +308,7 @@ impl<S: 'static> Runtime<S> {
             let drawn_spans = n.elided.map(|e| e.spans(&spec.spans));
             let spans = drawn_spans.as_deref().unwrap_or(&spec.spans);
             let drawn_rings = n.elided.map(|e| e.rings(&spec.rings));
-            self.text.decorations_with_rings(layout, spans, drawn_rings.as_deref().unwrap_or(&spec.rings), s, d_origin, &mut self.deco_scratch);
+            self.text.decorations_with_rings(layout, spans, drawn_rings.as_deref().unwrap_or(&spec.rings), spec.span_radius, s, d_origin, &mut self.deco_scratch);
             let drawn_len = n.elided.map_or(spec.content.len(), |e| e.drawn_len(spec.content.len()));
             if !spec.highlights.is_empty() {
                 let drawn = n.elided.map(|e| e.highlights(&spec.highlights));

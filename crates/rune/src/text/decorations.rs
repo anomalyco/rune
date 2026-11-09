@@ -3,6 +3,10 @@
 
 use super::*;
 
+/// The corner radius in points of a span's rounded background unless its text element sets
+/// another ([`El::span_radius`](crate::El::span_radius)).
+pub const SPAN_RADIUS: f32 = 4.0;
+
 /// A rect drawn under or over text: span backgrounds and underlines (device px).
 #[derive(Clone, Copy, Debug)]
 pub struct Deco {
@@ -43,32 +47,36 @@ impl Decoration for PaintedDeco {
 
 impl TextSystem {
     /// Backgrounds and underlines for `spans` (device px, layout top-left at `origin`). Touching
-    /// runs with the same background merge into one rounded rect.
+    /// runs with the same background merge into one rect rounded by [`SPAN_RADIUS`].
     pub fn decorations(&self, layout: &Layout<Ink>, spans: &[Span], scale: f32, origin: [f32; 2], out: &mut Vec<Deco>) {
-        self.decorations_into(layout, spans, &[], scale, origin, out);
+        self.decorations_into(layout, spans, &[], SPAN_RADIUS, scale, origin, out);
     }
 
-    /// [`Self::decorations`], plus inset border `rings` (`(start_byte, end_byte, color, width_pt)`).
+    /// [`Self::decorations`] with backgrounds rounded by `radius` points, plus inset border
+    /// `rings` (`(start_byte, end_byte, color, width_pt)`).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn decorations_with_rings(
         &self,
         layout: &Layout<Ink>,
         spans: &[Span],
         rings: &[(u32, u32, Color, f32)],
+        radius: f32,
         scale: f32,
         origin: [f32; 2],
         out: &mut Vec<PaintedDeco>,
     ) {
-        self.decorations_into(layout, spans, rings, scale, origin, out);
+        self.decorations_into(layout, spans, rings, radius, scale, origin, out);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn decorations_into<D: Decoration>(
         &self, layout: &Layout<Ink>, spans: &[Span], rings: &[(u32, u32, Color, f32)],
-        scale: f32, origin: [f32; 2], out: &mut Vec<D>,
+        radius: f32, scale: f32, origin: [f32; 2], out: &mut Vec<D>,
     ) {
         if spans.iter().all(|s| s.bg.is_none() && s.underline.is_none()) {
             return;
         }
-        let radius = 4.0 * scale;
+        let radius = radius * scale;
         let mut last_bg = None;
         for line in layout.lines() {
             let m = line.metrics();

@@ -1,0 +1,1 @@
+- **`El::span_radius(pt)` sets the corner radius of a text's span backgrounds** (4 pt by default, now `text::SPAN_RADIUS`), so one kind of span can take its stylesheet's radius, a diff's changed words Pierre's 3 px, while inline code and everything else keep 4.
