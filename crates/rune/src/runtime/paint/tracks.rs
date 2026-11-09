@@ -151,6 +151,9 @@ impl<S: 'static> Runtime<S> {
         }
         for (k, sh) in vis.shadows.iter().take(P_SHADOWS.len()).enumerate() {
             let was = prev_vis(&self.nodes, vis, old).and_then(|o| o.shadows.get(k).copied());
+            // An inset ring where a drop shadow was (or the other way) is another shadow, not this
+            // one changing: it lands rather than morphing between the two.
+            let instant = instant || was.is_some_and(|w| w.inset != sh.inset);
             if !(k == 0 && live.shadow) {
                 self.commit_paint(id, P_SHADOWS[k], was.map(|w| w.color), sh.color, spring_c, instant);
             }
