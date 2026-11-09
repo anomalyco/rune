@@ -37,15 +37,23 @@ pub(super) struct Win {
     pub(super) timer_frame: TimerFrame,
     /// The last frame presented, while the window rests.
     pub(super) presented: Option<Presented>,
-    /// Until when the window keeps presenting every refresh after a change (`STEADY`).
+    /// The window's steady run after a change (`STEADY`).
     #[cfg(target_os = "windows")]
-    pub(super) steady_until: Option<Instant>,
-    /// Only the steady hold asked for the next frame.
-    #[cfg(target_os = "windows")]
-    pub(super) steady_frame: bool,
+    pub(super) steady: Steady,
+    /// Its next frame (`redraw`).
+    pub(super) redraw: std::cell::Cell<Redraw>,
 }
 
 impl Win {
+    /// Asks for a frame: now, or at the turn's end while the window paints (`Redraw`).
+    pub(super) fn request_redraw(&self) { self.redraw_step(RedrawEvent::Ask(Instant::now())); }
+
+    pub(super) fn redraw_step(&self, event: RedrawEvent) {
+        let (next, effect) = self.redraw.get().step(event);
+        self.redraw.set(next);
+        if effect == RedrawEffect::Request { self.window.request_redraw(); }
+    }
+
     /// Matches the drawable to the window's size; false when it already did.
     pub(super) fn resize_surface(&mut self, device: &wgpu::Device, size: winit::dpi::PhysicalSize<u32>) -> bool {
         let (width, height) = (size.width.max(1), size.height.max(1));
@@ -222,7 +230,7 @@ impl Win {
         #[cfg(target_os = "windows")]
         {
             self.native.cloak.hold(&self.window, Instant::now() + READY_FALLBACK);
-            self.window.request_redraw();
+            self.request_redraw();
         }
         self.window.set_visible(true);
         if focus { self.window.focus_window(); }

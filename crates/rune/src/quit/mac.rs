@@ -26,7 +26,8 @@ unsafe extern "C" {
 const TERMINATE_NOW: usize = 1;
 
 extern "C" fn should_terminate(_: *mut AnyObject, _: Sel, _: *mut AnyObject) -> usize {
-    super::start();
+    // Windows::exiting carries out the quit's effects.
+    let _ = super::send(super::Event::Start { ending: false });
     TERMINATE_NOW
 }
 

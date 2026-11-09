@@ -41,7 +41,7 @@ impl<S: 'static> Host<S> {
                 key: winit::keyboard::KeyCode::Fn, mods: map_mods(self.mods), pressed, repeat: false,
             }, None);
         }
-        if redraw { l.window.request_redraw(); }
+        if redraw { l.request_redraw(); }
     }
 
     /// Hands the runtime the file drag winit reported since the last pass, in order: the files
@@ -96,7 +96,7 @@ impl<S: 'static> Host<S> {
             queued = self.rt.drag_files_to(Some(at));
         }
         if !queued { return; }
-        if !l.occluded && !l.minimized() { l.window.request_redraw(); } else {
+        if !l.occluded && !l.minimized() { l.request_redraw(); } else {
             self.covered_frame();
             self.shell(event_loop);
         }
@@ -118,7 +118,7 @@ impl<S: 'static> Host<S> {
             }
             WakeEvent::Live(_) => {
                 if self.rt.live_pending() && let Some(w) = self.win.as_ref().filter(|w| w.visible && !w.occluded) {
-                    w.window.request_redraw();
+                    w.request_redraw();
                 }
             }
             WakeEvent::Window(_, request) => {
@@ -132,7 +132,7 @@ impl<S: 'static> Host<S> {
             WakeEvent::Frame(_, mut request) => {
                 request.spring = (request.animate && !self.rt.reduced_motion).then_some(crate::tok::motion::DEFAULT);
                 self.rt.window_frame = Some(self.rt.window_frame.unwrap_or_default().merge(request));
-                if let Some(w) = self.win.as_ref().filter(|w| w.visible) { w.window.request_redraw(); }
+                if let Some(w) = self.win.as_ref().filter(|w| w.visible) { w.request_redraw(); }
                 self.shell(event_loop);
             }
             WakeEvent::A11y(_) => self.a11y_receive(),
@@ -144,7 +144,7 @@ impl<S: 'static> Host<S> {
     fn a11y_receive(&mut self) {
         let Some(w) = self.win.as_mut() else { return };
         let Some(adapter) = w.a11y.as_mut() else { return };
-        if adapter.receive(&mut self.rt, self.spec.title) { w.window.request_redraw(); }
+        if adapter.receive(&mut self.rt, self.spec.title) { w.request_redraw(); }
     }
 
     /// Sends the tree's changes at the end of the turn, after its frames.
@@ -204,24 +204,7 @@ impl<S: 'static> Host<S> {
             WindowEvent::DroppedFile(path) => { self.files.file(path, true); return; }
             WindowEvent::HoveredFileCancelled => { self.files.steps.push(FileStep::Leave); return; }
             WindowEvent::RedrawRequested => {
-                // The frame a due timer asked for drew, or ran covered in `draw`.
-                if let Some(l) = &mut self.win { l.timer_frame.drawn(); }
-                // A new accent, scroller style or light/dark preference asks every window to redraw.
-                self.rt.set_system_accent(crate::system_accent());
-                self.rt.set_system_scroll_bars_state(crate::platform::scroll_bars::current().with_override(self.args.scroll_bars));
-                if self.args.theme.is_none() && let Some(dark) = self.win.as_ref().and_then(|l| crate::platform::preferences::desktop_dark(&l.window)) {
-                    self.rt.set_system_dark(dark);
-                }
-                #[cfg(target_os = "macos")]
-                if let Some(l) = self.win.as_ref().filter(|l| l.native.full_screen.take()) {
-                    sync_chrome(&mut self.rt, l, self.chrome, self.titlebar);
-                }
-                // The window procedure asks for this paint when a caption button's hover or
-                // press changes.
-                #[cfg(target_os = "windows")]
-                if let Some(l) = &self.win { sync_chrome(&mut self.rt, l, self.chrome, self.titlebar); }
-                self.redraw();
-                self.shell(event_loop);
+                self.paint(event_loop);
                 return;
             }
             _ => {}
@@ -253,7 +236,7 @@ impl<S: 'static> Host<S> {
                         l.resize_surface(&gpu.device, size);
                         rt.set_viewport((size.width as f32 / scale, size.height as f32 / scale), scale);
                         sync_chrome(rt, l, chrome, titlebar);
-                        l.window.request_redraw();
+                        l.request_redraw();
                     }
                 }
             }
@@ -277,7 +260,7 @@ impl<S: 'static> Host<S> {
                 let resized = l.resize_surface(&gpu.device, size);
                 let viewport = (size.width as f32 / scale, size.height as f32 / scale);
                 if !resized && viewport == rt.viewport && scale == rt.env.scale {
-                    if restored || origin_moved { l.window.request_redraw(); }
+                    if restored || origin_moved { l.request_redraw(); }
                     return;
                 }
                 let asked = self.frame_jump.take().is_some_and(|(w, h)| (w - viewport.0).abs() < 1.0 && (h - viewport.1).abs() < 1.0);
@@ -300,7 +283,7 @@ impl<S: 'static> Host<S> {
                     self.shell(event_loop);
                     return;
                 }
-                l.window.request_redraw();
+                l.request_redraw();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 #[cfg(target_os = "macos")]
@@ -319,7 +302,7 @@ impl<S: 'static> Host<S> {
                     if resized || viewport != rt.viewport || scale != rt.env.scale {
                         rt.set_viewport(viewport, scale);
                         sync_chrome(rt, l, chrome, titlebar);
-                        l.window.request_redraw();
+                        l.request_redraw();
                     }
                 }
             }
@@ -347,21 +330,21 @@ impl<S: 'static> Host<S> {
                 if was_occluded {
                     // Coming back paints the settled state in the first frame (guarantee 8).
                     rt.settle_all();
-                    l.window.request_redraw();
+                    l.request_redraw();
                 } else if rt.stale() {
-                    l.window.request_redraw();
+                    l.request_redraw();
                 }
             }
             WindowEvent::ThemeChanged(theme) => {
                 if self.args.theme.is_none() {
                     rt.set_system_dark(theme == Theme::Dark);
-                    l.window.request_redraw();
+                    l.request_redraw();
                 }
             }
             WindowEvent::ModifiersChanged(m) => {
                 self.mods = m.state();
                 if rt.physical_observation(crate::PhysicalInput::Modifiers(map_mods(self.mods))) {
-                    l.window.request_redraw();
+                    l.request_redraw();
                 }
             }
             WindowEvent::Focused(focused) => {
@@ -393,7 +376,7 @@ impl<S: 'static> Host<S> {
                     }
                     l.apply_cursor(rt, true);
                 }
-                if rt.stale() { l.window.request_redraw(); }
+                if rt.stale() { l.request_redraw(); }
             }
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
                 let pressed = event.state == ElementState::Pressed;
@@ -417,7 +400,7 @@ impl<S: 'static> Host<S> {
                     else { rt.key(ev); }
                     redraw |= pressed;
                 }
-                if redraw { l.window.request_redraw(); }
+                if redraw { l.request_redraw(); }
             }
             WindowEvent::Ime(ime) => {
                 match ime {
@@ -426,7 +409,7 @@ impl<S: 'static> Host<S> {
                     WIme::Enabled => rt.ime(Ime::Enabled),
                     WIme::Disabled => rt.ime(Ime::Disabled),
                 }
-                l.window.request_redraw();
+                l.request_redraw();
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
                 let shift = crate::runtime::SHIFT_TURNS_WHEEL && self.mods.shift_key();
@@ -442,24 +425,24 @@ impl<S: 'static> Host<S> {
                     None if phase == crate::GesturePhase::Ended => rt.wheel_ended(),
                     None => {}
                 }
-                l.window.request_redraw();
+                l.request_redraw();
             }
             WindowEvent::PinchGesture { delta, phase, .. } => {
                 if let Some((x, y)) = rt.pointer() {
                     rt.magnify_event(crate::MagnifyEvent::new(delta as f32).at(x, y).phase(gesture_phase(phase)));
-                    l.window.request_redraw();
+                    l.request_redraw();
                 }
             }
             WindowEvent::RotationGesture { delta, phase, .. } => {
                 if let Some((x, y)) = rt.pointer() {
                     rt.rotate_event(crate::RotateEvent::new(delta).at(x, y).phase(gesture_phase(phase)));
-                    l.window.request_redraw();
+                    l.request_redraw();
                 }
             }
             WindowEvent::DoubleTapGesture { .. } => {
                 if let Some((x, y)) = rt.pointer() {
                     rt.smart_magnify(x, y);
-                    l.window.request_redraw();
+                    l.request_redraw();
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -476,15 +459,15 @@ impl<S: 'static> Host<S> {
                     }));
                     l.apply_cursor(rt, false);
                 }
-                l.window.request_redraw();
+                l.request_redraw();
             }
             WindowEvent::CursorLeft { .. } => {
                 rt.pointer_leave();
-                l.window.request_redraw();
+                l.request_redraw();
             }
             WindowEvent::Touch(touch) => {
                 crate::window::touch(rt, &touch, scale);
-                l.window.request_redraw();
+                l.request_redraw();
             }
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
                 if state == ElementState::Pressed {
@@ -512,7 +495,7 @@ impl<S: 'static> Host<S> {
                     }
                 }
                 if state == ElementState::Released { self.control_click = false; }
-                l.window.request_redraw();
+                l.request_redraw();
             }
             WindowEvent::MouseInput { state, button: MouseButton::Right, .. } => {
                 if let Some((x, y)) = rt.pointer() {
@@ -521,11 +504,11 @@ impl<S: 'static> Host<S> {
                         ElementState::Released => {
                             rt.secondary_up(x, y);
                             // At the pointer, while it's still where the click was.
-                            if let Some(menu) = rt.take_window_menu() { chrome::window_menu(&l.window, menu); }
+                            if let Some(menu) = rt.take_window_menu() { chrome::window_menu(&l.window, menu, Some((x, y))); }
                         }
                     }
                 }
-                l.window.request_redraw();
+                l.request_redraw();
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 if let Some((x, y)) = rt.pointer() {
@@ -534,7 +517,7 @@ impl<S: 'static> Host<S> {
                         ElementState::Released => rt.button_up(x, y, pointer_button(button)),
                     }
                 }
-                l.window.request_redraw();
+                l.request_redraw();
             }
             _ => {}
         }
@@ -555,3 +538,34 @@ fn touch_promoted() -> bool {
 #[cfg(not(target_os = "windows"))]
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn touch_promoted() -> bool { false }
+
+impl<S: 'static> Host<S> {
+    /// The system's paint (`RedrawRequested`), or one the loop runs for a window whose paint
+    /// the system keeps putting off (`Redraw`).
+    pub(super) fn paint(&mut self, event_loop: &ActiveEventLoop) {
+        // The frame a due timer asked for drew, or ran covered in `draw`.
+        if let Some(l) = &mut self.win { l.timer_frame.drawn(); }
+        // AppKit paints off its own display link; elsewhere a paint holds what it asks for.
+        #[cfg(not(target_os = "macos"))]
+        if let Some(l) = &self.win { l.redraw_step(RedrawEvent::Paint); }
+        // A new accent, scroller style or light/dark preference asks every window to redraw.
+        self.rt.set_system_accent(crate::system_accent());
+        self.rt.set_system_scroll_bars_state(crate::platform::scroll_bars::current().with_override(self.args.scroll_bars));
+        if self.args.theme.is_none() && let Some(dark) = self.win.as_ref().and_then(|l| crate::platform::preferences::desktop_dark(&l.window)) {
+            self.rt.set_system_dark(dark);
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(l) = self.win.as_ref().filter(|l| l.native.full_screen.take()) {
+            sync_chrome(&mut self.rt, l, self.chrome, self.titlebar);
+        }
+        // The window procedure asks for this paint when a caption button's hover or
+        // press changes.
+        #[cfg(target_os = "windows")]
+        if let Some(l) = &self.win { sync_chrome(&mut self.rt, l, self.chrome, self.titlebar); }
+        self.redraw();
+        self.shell(event_loop);
+        // What asked for a frame while it painted waits for the turn's end.
+        #[cfg(not(target_os = "macos"))]
+        if let Some(l) = &self.win { l.redraw_step(RedrawEvent::Painted); }
+    }
+}
