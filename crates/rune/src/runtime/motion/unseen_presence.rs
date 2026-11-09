@@ -136,10 +136,12 @@ impl<S: 'static> Runtime<S> {
             };
             // Under a clip with no area nothing draws, shadows included.
             // Room for its shadows, blur and a focus ring, which draw past its rect.
-            let margin = n.vis.shadows.iter().filter(|s| !s.inset).map(|s| s.x.abs() + s.y.abs() + s.spread.max(0.0) + s.blur * 1.5).fold(0.0, f32::max) + n.vis.blur * 3.0 + 4.0;
+            let margin = n.vis.shadows.iter().filter(|s| !s.inset).map(|s| s.x.abs() + s.y.abs() + s.spread.max(0.0) + s.blur * 1.5).fold(0.0, f32::max) + n.vis.blur * 3.0
+                + if n.focus.enabled { 4.0 } else { 0.0 };
+            // A rect that only touches the clip's edge draws nothing inside it.
             after[i] |= alpha[i] >= 1.0 / 512.0 && clip[2] > clip[0] && clip[3] > clip[1]
-                && swept[2] >= clip[0] - margin && swept[0] <= clip[2] + margin
-                && swept[3] >= clip[1] - margin && swept[1] <= clip[3] + margin;
+                && swept[2] > clip[0] - margin && swept[0] < clip[2] + margin
+                && swept[3] > clip[1] - margin && swept[1] < clip[3] + margin;
             let clip = if n.vis.clip.is_some() || n.scroll.is_some() {
                 intersect(clip, swept)
             } else { clip };
