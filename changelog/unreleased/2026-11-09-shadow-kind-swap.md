@@ -1,0 +1,1 @@
+- **A shadow that turns from an inset ring into a drop shadow (or back) lands instead of morphing.** Its colour and geometry sprang from one to the other, so a drop shadow grew out of a placeholder's inset ring; a change of kind now lands at once.
