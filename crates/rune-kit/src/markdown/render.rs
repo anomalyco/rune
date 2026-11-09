@@ -31,6 +31,8 @@ pub(super) struct Renderer {
     pub(super) diagram_frame: Option<FrameWire>,
     /// `Markdown::code_frame`.
     pub(super) code_frame: Option<CodeWire>,
+    /// `Markdown::quote_frame`.
+    pub(super) quote_frame: Option<QuoteWire>,
     /// `Markdown::link_favicon`.
     pub(super) link_favicon: Option<link_icon::FaviconWire>,
     /// `Markdown::images` and `Markdown::on_image`.
@@ -65,7 +67,7 @@ pub(super) enum Lead {
 }
 
 impl Lead {
-    fn marker(self) -> String {
+    pub(super) fn marker(self) -> String {
         match self {
             Lead::Bullet => "- ".into(),
             Lead::Number(n) => format!("{n}. "),
@@ -74,7 +76,7 @@ impl Lead {
     }
 
     /// The columns a list nested in the item is indented by, past the item's own.
-    fn width(self) -> u8 {
+    pub(super) fn width(self) -> u8 {
         match self {
             Lead::Number(n) => n.to_string().len() as u8 + 2,
             _ => 2,
@@ -627,14 +629,19 @@ impl Renderer {
                 };
                 let q = s.quote;
                 let flow = self.flow.get();
+                let first_task = self.next_task.get();
                 self.flow.set(Flow { ink: q.text.or(flow.ink), inset: flow.inset + q.width + q.pad, ..flow });
-                let inner = self.blocks(inner, inner_maps, &[], false);
+                let drawn = self.blocks(inner, inner_maps, &[], false);
                 self.flow.set(flow);
-                row()
+                let quote = row()
                     .role("blockquote")
                     .w_full()
                     .child(el().w(q.width).h_full().radius((q.width / 2.0).min(1.0)).fill(s.quote_rule))
-                    .child(inner.grow(1.0).shrink().pl(q.pad))
+                    .child(drawn.grow(1.0).shrink().pl(q.pad));
+                match &self.quote_frame {
+                    Some(f) => f(quote, &QuoteFrame { text: &self.plain_text(inner, first_task, Flow { lead: None, ..flow }) }),
+                    None => quote,
+                }
             }
             // A clear rule is spacing only (`hr { border: none; height: 0 }`).
             Block::Image { src, alt, title } => self.image(src, alt, title),
