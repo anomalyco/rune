@@ -43,11 +43,11 @@ impl<S: 'static> Host<S> {
         }
         let reveal = w.first_frame.complete();
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if self.float_on_open && !w.first_frame.notified { float_on_open::release(&w.window, &self.options, self.spec.min_size); }
+        if self.float_on_open && !w.first_frame.notified() { float_on_open::release(&w.window, &self.options, self.spec.min_size); }
         self.native_handle.native.ready.store(true, Ordering::Release);
         *self.shared.window_error.lock().unwrap() = None;
         crate::tooling::perf_warn::launch::first_frame();
-        w.first_frame.notified = true;
+        w.first_frame.notify();
         if w.first_frame.take_ready() { self.run_on_ready(); }
         if reveal {
             self.reveal_launcher(event_loop);

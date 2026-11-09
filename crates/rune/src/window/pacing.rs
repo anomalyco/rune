@@ -22,37 +22,81 @@ pub(crate) fn timer_deadline<S>(rt: &Runtime<S>) -> Option<Instant> {
 /// overlay's commit). A change after a quiet spell renders at once; later ones wait until
 /// `HIDDEN_REFRESH` has passed since the last render, so state that changes many times a
 /// second costs a few builds a second while nobody sees them.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct HiddenPace { last: Option<Instant>, waiting: bool }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum HiddenPace {
+    /// Nothing rendered since it was hidden: a change renders at once.
+    #[default]
+    Fresh,
+    /// The last hidden render was `at`, and nothing waits.
+    Rendered { at: Instant },
+    /// A change waits for `HIDDEN_REFRESH` after the render at `at`.
+    Waiting { at: Instant },
+}
 
 pub(crate) const HIDDEN_REFRESH: Duration = Duration::from_millis(250);
 
+/// What happens to a hidden host's pace.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum PaceEvent {
+    /// Its state changed at `now`.
+    Changed(Instant),
+    /// It checks, at `now`, whether the change that waits is due.
+    Due(Instant),
+    /// A hidden frame rendered what had changed, at `now`.
+    Rendered(Instant),
+    /// It showed, or hid again: the host draws its own frames until the next change.
+    Reset,
+}
+
 impl HiddenPace {
-    /// Whether a change at `now` renders now. Otherwise it waits for `deadline`.
-    pub(crate) fn changed(&mut self, now: Instant) -> bool {
-        self.waiting = !self.ready(now);
-        !self.waiting
+    /// The pace after `event`, and whether a change renders now.
+    pub(crate) fn step(self, event: PaceEvent) -> (HiddenPace, bool) {
+        match (self, event) {
+            (pace, PaceEvent::Changed(now)) if pace.ready(now) => (pace.settled(), true),
+            (HiddenPace::Rendered { at } | HiddenPace::Waiting { at }, PaceEvent::Changed(_)) => (HiddenPace::Waiting { at }, false),
+            (HiddenPace::Waiting { at }, PaceEvent::Due(now)) if at + HIDDEN_REFRESH <= now => (HiddenPace::Rendered { at }, true),
+            (_, PaceEvent::Rendered(now)) => (HiddenPace::Rendered { at: now }, false),
+            (_, PaceEvent::Reset) => (HiddenPace::Fresh, false),
+            (pace, PaceEvent::Changed(_) | PaceEvent::Due(_)) => (pace, false),
+        }
     }
+
+    /// A change that renders now stops any waiting.
+    fn settled(self) -> HiddenPace {
+        match self {
+            HiddenPace::Waiting { at } => HiddenPace::Rendered { at },
+            pace => pace,
+        }
+    }
+
+    /// Whether a change at `now` renders now. Otherwise it waits for `deadline`.
+    pub(crate) fn changed(&mut self, now: Instant) -> bool { self.apply(PaceEvent::Changed(now)) }
     /// Whether a change at `now` would render at once.
     pub(crate) fn ready(&self, now: Instant) -> bool {
-        self.last.is_none_or(|last| now >= last + HIDDEN_REFRESH)
+        match *self {
+            HiddenPace::Fresh => true,
+            HiddenPace::Rendered { at } | HiddenPace::Waiting { at } => now >= at + HIDDEN_REFRESH,
+        }
     }
     /// When the change that waits renders.
     pub(crate) fn deadline(&self) -> Option<Instant> {
-        self.last.filter(|_| self.waiting).map(|last| last + HIDDEN_REFRESH)
+        match *self {
+            HiddenPace::Waiting { at } => Some(at + HIDDEN_REFRESH),
+            _ => None,
+        }
     }
     /// Whether the change that waits is due at `now`; it stops waiting either way it renders.
-    pub(crate) fn take_due(&mut self, now: Instant) -> bool {
-        let due = self.deadline().is_some_and(|at| at <= now);
-        if due { self.waiting = false; }
-        due
-    }
+    pub(crate) fn take_due(&mut self, now: Instant) -> bool { self.apply(PaceEvent::Due(now)) }
     /// A hidden frame rendered what had changed.
-    pub(crate) fn rendered(&mut self, now: Instant) {
-        *self = HiddenPace { last: Some(now), waiting: false };
-    }
+    pub(crate) fn rendered(&mut self, now: Instant) { self.apply(PaceEvent::Rendered(now)); }
     /// Shown, the host draws its own frames; hidden again, the first change renders at once.
-    pub(crate) fn reset(&mut self) { *self = HiddenPace::default(); }
+    pub(crate) fn reset(&mut self) { self.apply(PaceEvent::Reset); }
+
+    fn apply(&mut self, event: PaceEvent) -> bool {
+        let (next, render) = self.step(event);
+        *self = next;
+        render
+    }
 }
 
 /// Whether a timer asks for the frame after one just presented. Only a surface whose display
@@ -72,27 +116,35 @@ pub(crate) const TIMER_FRAME_STALL: Duration = OCCLUDED_RETRY;
 /// frame never comes would otherwise keep turning the loop (`new_events` asks again, no frame
 /// arrives, and `wake_deadline` returns the past timer), so after `TIMER_FRAME_STALL` the timer
 /// runs covered instead and the next ask starts over.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct TimerFrame(Option<Instant>);
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum TimerFrame {
+    /// No timer waits on a frame.
+    #[default]
+    Idle,
+    /// A due timer asked for a frame at `asked`, which the window hasn't drawn yet.
+    Owed { asked: Instant },
+}
 
 impl TimerFrame {
     /// A due timer asked for a frame, if none is owed already.
-    pub(crate) fn asked(&mut self, now: Instant) { self.0.get_or_insert(now); }
+    pub(crate) fn asked(&mut self, now: Instant) {
+        if *self == TimerFrame::Idle { *self = TimerFrame::Owed { asked: now }; }
+    }
 
     /// The frame came, or ran covered in its place: nothing waits for it now.
-    pub(crate) fn drawn(&mut self) { self.0 = None; }
+    pub(crate) fn drawn(&mut self) { *self = TimerFrame::Idle; }
 
     /// Whether the frame asked for is still outstanding after the stall bound.
     pub(crate) fn stalled(&self, now: Instant) -> bool {
-        self.0.is_some_and(|asked| now >= asked + TIMER_FRAME_STALL)
+        matches!(*self, TimerFrame::Owed { asked } if now >= asked + TIMER_FRAME_STALL)
     }
 
     /// The runtime's next timer as the host waits for it: one already due while its frame is
     /// outstanding waits out the stall instead, so the loop sleeps rather than waking at once
     /// for a frame that can't come.
     pub(crate) fn wait(&self, due: Option<Instant>, now: Instant) -> Option<Instant> {
-        match (due, self.0) {
-            (Some(due), Some(asked)) if due <= now => Some(asked + TIMER_FRAME_STALL),
+        match (due, *self) {
+            (Some(due), TimerFrame::Owed { asked }) if due <= now => Some(asked + TIMER_FRAME_STALL),
             (due, _) => due,
         }
     }

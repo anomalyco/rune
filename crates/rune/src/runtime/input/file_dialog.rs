@@ -1,18 +1,18 @@
 use super::*;
-use crate::file_dialog::{FileDialogError, FileDialogKind, FileDialogOptions, FileDialogResult, Pending, Request};
+use crate::file_dialog::{DialogState, FileDialogError, FileDialogKind, FileDialogOptions, FileDialogResult, Pending, Request};
 
 impl<S: 'static> Runtime<S> {
     /// The file dialog showing, or about to show, from [`Tx::open_file`], [`Tx::save_file`] or
     /// [`Tx::open_folder`].
     pub fn file_dialog(&self) -> Option<(FileDialogKind, &FileDialogOptions)> {
-        self.file_dialog.as_ref().map(|d| (d.kind, &d.options))
+        self.file_dialog.pending().map(|d| (d.kind, &d.options))
     }
 
     /// Answers the file dialog showing as if the user chose `path`, or cancelled with `None`.
     /// Its callback runs on the next frame. For tests and headless drivers; native dialogs
     /// answer themselves.
     pub fn resolve_file_dialog(&mut self, path: Option<std::path::PathBuf>) -> Result<(), FileDialogError> {
-        let id = self.file_dialog.as_ref().ok_or_else(|| FileDialogError("no file dialog is open".into()))?.id;
+        let id = self.file_dialog.pending().ok_or_else(|| FileDialogError("no file dialog is open".into()))?.id;
         self.answer_file_dialog(id, Ok(path));
         Ok(())
     }
@@ -28,25 +28,24 @@ impl<S: 'static> Runtime<S> {
             self.queue.push(Action::FileDialog(id, Err(FileDialogError("overlays cannot open file dialogs".into()))));
             return;
         }
-        if self.file_dialog.is_some() {
+        if self.file_dialog.is_open() {
             self.trace_event("file-dialog:busy");
             self.queue.push(Action::FileDialog(id, Err(FileDialogError("a file dialog is already open".into()))));
             return;
         }
         self.trace_event(format_args!("file-dialog:open:{:?}", request.kind));
-        self.file_dialog = Some(Pending { id, kind: request.kind, options: request.options, shown: false });
+        self.file_dialog = DialogState::Requested(Pending { id, kind: request.kind, options: request.options });
     }
 
     /// The dialog for the host to show, marked shown. Nothing while it shows.
     pub(crate) fn take_file_dialog(&mut self) -> Option<(u64, FileDialogKind, FileDialogOptions)> {
-        let d = self.file_dialog.as_mut().filter(|d| !d.shown)?;
-        d.shown = true;
+        let d = self.file_dialog.show()?;
         Some((d.id, d.kind, d.options.clone()))
     }
 
     /// Queues dialog `id`'s answer for the next frame, closing it.
     pub(crate) fn answer_file_dialog(&mut self, id: u64, result: FileDialogResult) {
-        if self.file_dialog.as_ref().is_some_and(|d| d.id == id) { self.file_dialog = None; }
+        self.file_dialog.answered(id);
         self.queue.push(Action::FileDialog(id, result));
     }
 
@@ -88,12 +87,12 @@ impl<S: 'static> Runtime<S> {
             "rune: file dialog callbacks kept asking for dialogs while their window went away; dropping {}",
             self.file_dialog_answers.len()
         );
-        self.file_dialog = None;
+        self.file_dialog = DialogState::Closed;
         self.file_dialog_answers.clear();
         self.queue.retain(|a| !matches!(a, Action::FileDialog(..)));
     }
 
     pub(crate) fn file_dialog_json(&self) -> Option<serde_json::Value> {
-        self.file_dialog.as_ref().map(Pending::to_json)
+        self.file_dialog.pending().map(Pending::to_json)
     }
 }

@@ -104,7 +104,7 @@ fn a_menu_that_cannot_open_answers_none() {
     rt.open_popup_headless();
     assert_eq!(rt.state.picks, [None, None, None], "a missing anchor, a repeated id and an empty id each answer None");
     assert_eq!(rt.popup_menu(), Some(&theme_menu("light")), "the next valid menu opens");
-    assert!(rt.popup_open);
+    assert!(rt.popups.is_open());
 }
 
 #[test]
@@ -117,7 +117,7 @@ fn menus_asked_for_together_open_one_after_another() {
     rt.open_popup_headless();
     rt.resolve_popup(None).unwrap();
     assert_eq!(rt.popup_menu(), Some(&theme_menu("dark")));
-    assert!(!rt.popup_open, "the next waits for the host to open it");
+    assert!(!rt.popups.is_open(), "the next waits for the host to open it");
     rt.open_popup_headless();
     rt.resolve_popup(Some("light")).unwrap();
     assert_eq!(rt.state.picks, [None, Some("light".to_owned())]);
@@ -183,7 +183,7 @@ fn a_window_going_away_answers_every_waiting_menu_none_once() {
     presenter.cancel(&mut rt);
     assert_eq!(rt.state.picks, [None, None, None]);
     assert_eq!(rt.popup_menu(), None);
-    assert!(!rt.popup_open);
+    assert!(!rt.popups.is_open());
     assert!(showing.is_cancelled(), "a tracking menu stops, and one not yet up never opens");
 
     showing.resolve(Some("dark".into()));

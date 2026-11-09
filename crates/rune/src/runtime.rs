@@ -704,11 +704,9 @@ pub struct Runtime<S: 'static> {
     /// True when attached to a live window, overlay or web canvas, not a headless or scripted run.
     pub(crate) open_urls_natively: bool,
     /// Pop-up menus asked for (`Tx::popup_menu`) and not yet answered, oldest first.
-    pub(crate) popups: std::collections::VecDeque<crate::popup_menu::Request>,
-    /// The first of `popups` is showing.
-    pub(crate) popup_open: bool,
+    pub(crate) popups: popup_dispatch::Popups,
     /// The file dialog asked for (`Tx::open_file`, `Tx::save_file`) and not yet answered.
-    pub(crate) file_dialog: Option<crate::file_dialog::Pending>,
+    pub(crate) file_dialog: crate::file_dialog::DialogState,
     /// File dialog callbacks, by id, until their answer runs.
     file_dialog_answers: Vec<(u64, crate::file_dialog::AnswerFn)>,
     next_file_dialog: u64,
@@ -1014,7 +1012,7 @@ impl<S: 'static> Runtime<S> {
             url_requests: Vec::new(),
             open_urls_natively: false,
             popups: Default::default(),
-            file_dialog: None,
+            file_dialog: Default::default(),
             file_dialog_answers: Vec::new(),
             next_file_dialog: 0,
             window_frame: None,
@@ -1025,7 +1023,6 @@ impl<S: 'static> Runtime<S> {
             fit_hold: false,
             fit_held: false,
             window_resting: false,
-            popup_open: false,
             pending: Tx::default(),
             animating: false,
             anim_sources: 0,

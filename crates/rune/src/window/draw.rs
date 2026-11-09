@@ -287,9 +287,9 @@ impl<S: 'static> Host<S> {
         // The frame landed with this present; later ones needn't wait for a transaction.
         #[cfg(target_os = "macos")]
         if self.frame_anim.is_none() { l.present_with_transaction(false); }
-        if !l.first_frame.ready
+        if !l.first_frame.ready()
             && gpu.device.poll(wgpu::PollType::wait_indefinitely()).is_ok() {
-            l.first_frame.ready = true;
+            l.first_frame.gpu_done();
         }
         // The window shows once the GPU has finished the frame it presents.
         #[cfg(target_os = "windows")]

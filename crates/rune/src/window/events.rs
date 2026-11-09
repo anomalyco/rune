@@ -182,7 +182,7 @@ impl<S: 'static> Host<S> {
         if matches!(&event, WindowEvent::ScaleFactorChanged { .. }) { self.apply_placement(event_loop); }
         match event {
             WindowEvent::Focused(focused) => {
-                if self.launcher() && self.win.as_ref().is_some_and(|w| !w.first_frame.notified) { return; }
+                if self.launcher() && self.win.as_ref().is_some_and(|w| !w.first_frame.notified()) { return; }
                 #[cfg(target_os = "macos")]
                 if self.win.as_ref().and_then(|w| w.native.panel.as_ref()).is_some_and(|p| p.is_key() != focused) {
                     // winit queues an initial false from its hidden source window before
