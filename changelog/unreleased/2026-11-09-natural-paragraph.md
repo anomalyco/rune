@@ -1,0 +1,1 @@
+- Text outside an explicit `El::dir` subtree again takes its paragraph direction from its content, so wrapped Hebrew and Arabic align from the right without mirroring the containing layout.

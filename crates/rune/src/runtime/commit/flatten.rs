@@ -182,7 +182,7 @@ fn prepare_text(
     text: &mut Option<crate::cold::SharedBox<TextSpec>>,
     input: Option<&InputSpec>,
     scale: f32,
-    flow: crate::el::Flow,
+    flow: Option<crate::el::Flow>,
 ) -> (Option<u64>, bool) {
     if let Some(t) = text && t.flow != flow {
         t.flow = flow;
@@ -397,6 +397,7 @@ fn flatten_owned(
     let role = el.role_name();
     let parent_flow = parent.map_or(crate::el::Flow::Ltr, |p| nodes[p].flow);
     let (flow, dir_effect) = crate::el::step_direction(parent_flow, crate::el::DirEvent::of(&el));
+    let directed = el.flags.dir().is_some() || parent.is_some_and(|p| nodes[p].directed);
     let pin = crate::el::Pin::of(&el);
     let El { handlers, key, mut style, mut vis, vis_flags, mut text, children, memo, mut cold, scale: static_scale, .. } = el;
     let focus = cold.focus.clone();
@@ -405,7 +406,7 @@ fn flatten_owned(
     if let Some(sx) = parent_sx {
         apply_scroll_x_child(&mut style, sx);
     }
-    let (measure, secure_measure) = prepare_text(&mut text, input.as_deref(), scale, flow);
+    let (measure, secure_measure) = prepare_text(&mut text, input.as_deref(), scale, directed.then_some(flow));
     take_foreground(&mut text, input.as_deref_mut(), &mut vis, memo_ctx.foreground);
     if vis.border_layout { lay_out_border(&mut style, &vis, scale); }
     if dir_effect == crate::el::DirEffect::Mirror {
@@ -508,6 +509,7 @@ fn flatten_owned(
         whole: flags.has(ElFlags::WHOLE),
         inert,
         flow,
+        directed,
         pin,
         scale_track: false,
         group_fade: false,
@@ -604,7 +606,8 @@ fn flatten_ref(
     let mut input = c.input.clone();
     let parent_flow = parent.map_or(crate::el::Flow::Ltr, |p| nodes[p].flow);
     let (flow, dir_effect) = crate::el::step_direction(parent_flow, crate::el::DirEvent::of(el));
-    let (measure, secure_measure) = prepare_text(&mut text, input.as_deref(), scale, flow);
+    let directed = el.flags.dir().is_some() || parent.is_some_and(|p| nodes[p].directed);
+    let (measure, secure_measure) = prepare_text(&mut text, input.as_deref(), scale, directed.then_some(flow));
     let inert = flags.has(ElFlags::INERT) || parent.is_some_and(|p| nodes[p].inert);
     let mut vis = el.vis.clone();
     take_foreground(&mut text, input.as_deref_mut(), &mut vis, memo_ctx.foreground);
@@ -707,6 +710,7 @@ fn flatten_ref(
         whole: flags.has(ElFlags::WHOLE),
         inert,
         flow,
+        directed,
         pin: crate::el::Pin::of(el),
         scale_track: false,
         group_fade: false,

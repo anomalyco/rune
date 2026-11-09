@@ -13,7 +13,7 @@ pub struct RichLayoutOptions {
 
 impl Default for RichLayoutOptions {
     fn default() -> Self {
-        RichLayoutOptions { align: Alignment::Start, wrap_anywhere: false, direction: parley::BaseDirection::Ltr }
+        RichLayoutOptions { align: Alignment::Start, wrap_anywhere: false, direction: parley::BaseDirection::Auto }
     }
 }
 
@@ -50,8 +50,8 @@ impl RichLayoutOptions {
     }
 
     /// [`Self::direction`] of a resolved flow.
-    pub(crate) fn flow(mut self, flow: crate::el::Flow) -> Self {
-        self.direction = flow.base();
+    pub(crate) fn flow(mut self, flow: Option<crate::el::Flow>) -> Self {
+        self.direction = flow.map_or(parley::BaseDirection::Auto, crate::el::Flow::base);
         self
     }
 }
@@ -131,7 +131,7 @@ impl TextSystem {
         wrap_anywhere: bool,
         cache: bool,
     ) -> Rc<Layout<Ink>> {
-        self.layout_keyed(None, text, spans, blocks, pills, style, scale, max_width, align, wrap_anywhere, cache, parley::BaseDirection::Ltr)
+        self.layout_keyed(None, text, spans, blocks, pills, style, scale, max_width, align, wrap_anywhere, cache, parley::BaseDirection::Auto)
     }
 
     /// Secure display runs must not enter the shared layout cache or leave character

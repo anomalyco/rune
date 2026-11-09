@@ -129,6 +129,8 @@ pub(crate) struct Node {
     /// The direction it lays out in (`El::dir`, its own or inherited): right to left, its
     /// children's x mirror inside it and its inset's sides swap.
     pub(crate) flow: crate::el::Flow,
+    /// Whether an explicit direction governs this subtree's paragraphs.
+    pub(crate) directed: bool,
     /// Where it sits in its parent (`El::unmirrored`).
     pub(crate) pin: crate::el::Pin,
     /// `P_SCALE` has a track: paint reads the sprung factor.
@@ -199,6 +201,7 @@ impl Node {
             whole: false,
             inert: false,
             flow: old.flow,
+            directed: old.directed,
             pin: old.pin,
             scale_track: old.scale_track,
             group_fade: old.group_fade,

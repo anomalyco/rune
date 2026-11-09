@@ -226,7 +226,7 @@ impl<S: 'static> Runtime<S> {
                     let options = crate::text::RichLayoutOptions::new().flow(spec.flow);
                     let pl = self.text.layout_rich_with(&inp.placeholder, &[], spec.style, s, wrap, options);
                     // Right to left it ends at the field's start edge, its right.
-                    let pl_x = match (spec.flow, wrap) {
+                    let pl_x = match (crate::el::Flow::of_layout(&pl), wrap) {
                         (crate::el::Flow::Ltr, _) => rest_origin[0] + pl_indent,
                         (crate::el::Flow::Rtl, Some(_)) => rest_origin[0],
                         (crate::el::Flow::Rtl, None) => rest_origin[0] - pl_indent - (pl.full_width() * tk).ceil(),
