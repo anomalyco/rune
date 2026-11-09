@@ -203,7 +203,16 @@ impl GrowTrack {
     }
 
     pub fn moving(&self) -> bool {
-        (self.h - self.target).abs() > SETTLE || self.v.abs() > SETTLE_V || self.mask > 0.01
+        !self.at_rest(self.target - self.h) || self.mask > 0.01
+    }
+
+    fn at_rest(&self, remaining: f32) -> bool {
+        // A fold carries its descendants and a reflow row shares its motion with the
+        // viewport. Their last fraction of a point still positions other content.
+        let (distance, speed) = if self.glide.is_some() || self.duration > 0.0 {
+            (1.0 / 128.0, 0.5)
+        } else { (SETTLE, SETTLE_V) };
+        remaining.abs() <= distance && self.v.abs() <= speed
     }
 
     pub fn retarget(&mut self, target: f32) {
@@ -304,7 +313,7 @@ impl GrowTrack {
             self.h = self.target;
             self.v = 0.0;
             self.stage = None;
-        } else if rem.abs() <= SETTLE && self.v.abs() < SETTLE_V {
+        } else if self.at_rest(rem) {
             self.h = self.target;
             self.v = 0.0;
         } else if self.paced && rem > 0.0 {
