@@ -1,0 +1,17 @@
+name: macOS tests
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p rune -p rune-kit --features rune-kit/markdown --no-fail-fast
