@@ -106,6 +106,13 @@ impl<S: 'static> Runtime<S> {
                     }
                     g.step(spec.spring, &spec.edge, carrying);
                 }
+                // A row nobody saw last frame draws no feather: it has none to ease, and grows one
+                // again as it comes into view.
+                if g.mask > 0.0 && self.built
+                    && self.node_index.get(id).is_some_and(|&i| !self.seen.get(i).copied().unwrap_or(true))
+                {
+                    g.mask = 0.0;
+                }
                 let r = std::mem::take(&mut g.restore);
                 if r > 0.0 { restored.push((ci, *id, r)); }
                 if let Some(share) = g.give { gave.push((*id, (h0 - g.h) * share)); }

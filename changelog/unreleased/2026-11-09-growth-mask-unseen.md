@@ -1,0 +1,1 @@
+- **A growth row out of sight draws no feather.** Its edge feather eased out over frames nobody saw (a streamed reply above the viewport); a row that drew nothing last frame drops it, and grows one again as it comes into view.
