@@ -41,7 +41,7 @@ fn disabled_controls_produce_no_layer_scopes() {
     for dark in [false, true] {
         for case in 0..11 {
             let mut s = Demo { case, ..Default::default() };
-            s.combo.open = true;
+            s.combo.step(rune_kit::ComboboxEvent::Toggle { current: None });
             let mut rt = Runtime::new(s, view, (400.0, 600.0), Env { system_dark: dark, scale: 2.0 });
             rt.frame(0.0); rt.settle_all(); rt.frame(0.0);
             assert!(!rt.instances.is_empty(), "case {case} must paint");

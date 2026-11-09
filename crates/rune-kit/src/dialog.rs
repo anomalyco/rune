@@ -1,4 +1,7 @@
-//! Modal surface; focus, dismissal and background inertness belong to Rune.
+//! Modal surface; focus, dismissal and background inertness belong to Rune. Whether it's open is
+//! the app's; its focus lifecycle is Rune's modal stack (`runtime/input/modal_focus.rs`), as
+//! Desktop's dialog stack has it (`ui/src/context/dialog-machine.ts`): the top dialog holds the
+//! trap, opens on its content and hands focus back to where it was before it opened.
 use rune::{El, TextStyle, col, el, row, text};
 use crate::{ControlSize, IconButton, IconButtonVariant, Kit, shadows};
 

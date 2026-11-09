@@ -119,7 +119,7 @@ pub(super) fn build<S: 'static>(item: TabItem<'_, S>, at: Place, st: &Strip<S>, 
         false => (0.0, 0.0),
     };
     let shift = st.drag.shift(at.index, vertical);
-    let reordering = st.drag.gap_open() || matches!(st.drag.phase, super::TabDragPhase::Pressed { .. } | super::TabDragPhase::Dragging(super::TabDragMode::Reorder { .. }));
+    let reordering = st.drag.gap_open() || matches!(st.drag.phase(), super::TabDragPhase::Pressed { .. } | super::TabDragPhase::Dragging(super::TabDragMode::Reorder { .. }));
     let mut slot = el()
         .key(format!("t-{id}"))
         .label(item.title.into_owned())
@@ -336,7 +336,7 @@ fn handlers<S: 'static>(mut slot: El, id: &str, at: &Place, closable: bool, st: 
         let (id, select, close, reveal) = (id.to_owned(), h.select.clone(), h.close.clone().filter(|_| closable), reveal.clone());
         slot = slot.on_press_tx(move |s: &mut S, tx: &mut Tx| {
             if let Some(a) = access
-                && std::mem::take(&mut a(s).suppress_click)
+                && a(s).take_swallowed_click()
             {
                 return;
             }
@@ -406,14 +406,14 @@ fn handlers<S: 'static>(mut slot: El, id: &str, at: &Place, closable: bool, st: 
             Phase::Up => {
                 tx.animated();
                 let on_tab = (0.0..=d.w).contains(&d.x) && (0.0..=d.h).contains(&d.y);
-                match access(s).release(d.cancelled(), on_tab) {
-                    // A press already selected the tab; its click needn't again.
-                    Release::Click => access(s).suppress_click = select_early && on_tab,
+                // A press already selected the tab; its click needn't again.
+                match access(s).release(d.cancelled(), on_tab, select_early && on_tab) {
+                    Release::Click => {}
                     Release::Reorder { from, to } => {
                         if let Some(f) = &reorder {
                             f(s, TabReorder { id: id.clone(), from, to }, tx);
                         }
-                        access(s).phase = super::TabDragPhase::Idle;
+                        access(s).dropped();
                     }
                     Release::TearOut { from, offset } => {
                         if let Some(f) = &tear {

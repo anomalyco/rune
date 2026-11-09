@@ -220,7 +220,7 @@ fn a_combobox_reads_its_choice_search_and_results() {
     assert!(has(node(&tree, "model-option-smart"), "selected"), "arrows move the active result");
     assert_eq!(node(node(&tree, "search"), "input")["activeDescendant"], "model-option-smart", "focus stays in the search field");
     press_key(&mut rt, Key::Enter);
-    assert_eq!((rt.state.chosen.as_deref(), rt.state.combo.open), (Some("smart"), false));
+    assert_eq!((rt.state.chosen.as_deref(), rt.state.combo.is_open()), (Some("smart"), false));
 }
 
 fn toasts(_: &App, _: &mut Cx<App>) -> El {

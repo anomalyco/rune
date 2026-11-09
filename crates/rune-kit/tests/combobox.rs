@@ -25,8 +25,7 @@ fn animated_runtime() -> Runtime<State> {
     open(State { animate: true, ..State::default() })
 }
 fn open(mut s: State) -> Runtime<State> {
-    s.combo.open = true;
-    s.combo.search.focused = true;
+    s.combo.step(rune_kit::ComboboxEvent::Toggle { current: None });
     let mut rt = Runtime::new(s, view, (400.0, 400.0), Env::new(true, 1.0));
     rt.frame(0.0);
     rt
@@ -49,13 +48,13 @@ fn opening_takes_focus_and_reveals_the_offscreen_selection() {
     rt.pointer_down(x, y);
     rt.pointer_up(x, y);
     rt.frame(0.0);
-    assert!(rt.state.combo.open && rt.state.combo.search.focused);
+    assert!(rt.state.combo.is_open() && rt.state.combo.search().focused);
     assert!(!rt.state.other.focused);
     assert!(rt.state.other.preedit().is_none());
     let last = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("models-option-item-199")).unwrap();
     assert!(last.visible[3] > 0.0);
     key(&mut rt, Key::Text("099".into()), Mods::default());
-    assert_eq!(rt.state.combo.search.text, "099");
+    assert_eq!(rt.state.combo.search().text, "099");
     assert_eq!(rt.state.other.text, "");
 }
 
@@ -78,15 +77,15 @@ fn combobox_loops_skips_disabled_and_scrolls_virtual_rows_into_view() {
     let mut rt = runtime();
     assert!(rt.elements().iter().filter(|e| e.role == "option").count() < 50);
     key(&mut rt, Key::Down, Mods::default());
-    assert_eq!(rt.state.combo.active.as_deref(), Some("item-2"));
+    assert_eq!(rt.state.combo.active(), Some("item-2"));
     key(&mut rt, Key::Up, Mods::default());
     key(&mut rt, Key::Up, Mods::default());
-    assert_eq!(rt.state.combo.active.as_deref(), Some("item-199"));
+    assert_eq!(rt.state.combo.active(), Some("item-199"));
     let last = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("models-option-item-199")).unwrap();
     assert!(last.visible[3] > 0.0);
     key(&mut rt, Key::Enter, Mods::default());
     assert_eq!(rt.state.chosen.as_deref(), Some("item-199"));
-    assert!(!rt.state.combo.open);
+    assert!(!rt.state.combo.is_open());
 }
 
 #[test]
@@ -95,15 +94,15 @@ fn combobox_filters_from_scroll_end_preserves_editor_modifiers_and_ime() {
     key(&mut rt, Key::Up, Mods::default());
     key(&mut rt, Key::Text("099".into()), Mods::default());
     assert!(rt.elements().iter().any(|e| e.key.as_deref() == Some("models-option-item-99")));
-    assert_eq!(rt.state.combo.search.text, "099");
+    assert_eq!(rt.state.combo.search().text, "099");
     key(&mut rt, Key::Down, Mods { alt: true, ..Mods::default() });
-    assert!(rt.state.combo.active.is_none());
+    assert!(rt.state.combo.active().is_none());
     rt.ime(Ime::Preedit("x".into(), None)); rt.frame(0.0);
     key(&mut rt, Key::Enter, Mods::default());
-    assert!(rt.state.combo.open && rt.state.chosen.is_none());
+    assert!(rt.state.combo.is_open() && rt.state.chosen.is_none());
     rt.ime(Ime::Preedit(String::new(), None)); rt.frame(0.0);
     key(&mut rt, Key::Escape, Mods::default());
-    assert!(!rt.state.combo.open);
+    assert!(!rt.state.combo.is_open());
 }
 
 #[test]
@@ -111,7 +110,7 @@ fn focused_combobox_handles_keys_before_app_and_returns_focus_on_close() {
     let mut rt = runtime();
     rt.on_key = Some(|s, _, _| { s.app_keys += 1; true });
     key(&mut rt, Key::Down, Mods::default());
-    assert_eq!(rt.state.combo.active.as_deref(), Some("item-2"));
+    assert_eq!(rt.state.combo.active(), Some("item-2"));
     key(&mut rt, Key::Function(5), Mods::default());
     assert_eq!(rt.state.app_keys, 1, "unhandled keys bubble to the app");
     key(&mut rt, Key::Enter, Mods::default());
@@ -120,17 +119,17 @@ fn focused_combobox_handles_keys_before_app_and_returns_focus_on_close() {
     assert_eq!(trigger.key.as_deref(), Some("models-value-trigger"));
     assert!(trigger.focus_visible);
     key(&mut rt, Key::Text(" ".into()), Mods::default());
-    assert!(rt.state.combo.open && rt.state.combo.search.focused);
+    assert!(rt.state.combo.is_open() && rt.state.combo.search().focused);
     key(&mut rt, Key::Escape, Mods::default());
-    assert!(!rt.state.combo.open);
+    assert!(!rt.state.combo.is_open());
     assert_eq!(rt.state.app_keys, 1, "Enter/Space/arrows/Escape belong to the control");
     assert_eq!(rt.elements().into_iter().find(|e| e.focused).unwrap().key.as_deref(), Some("models-value-trigger"));
     key(&mut rt, Key::Text(" ".into()), Mods::default());
     for _ in 0..60 { rt.frame(1.0 / 60.0); }
     rt.ime(Ime::Preedit("pending".into(), None)); rt.frame(0.0);
     rt.pointer_down(390.0, 390.0); rt.pointer_up(390.0, 390.0); rt.frame(0.0);
-    assert!(!rt.state.combo.open && !rt.state.combo.search.focused);
-    assert!(rt.state.combo.search.preedit().is_none());
+    assert!(!rt.state.combo.is_open() && !rt.state.combo.search().focused);
+    assert!(rt.state.combo.search().preedit().is_none());
     let trigger = rt.elements().into_iter().find(|e| e.focused).unwrap();
     assert_eq!(trigger.key.as_deref(), Some("models-value-trigger"));
     assert!(!trigger.focus_visible);
@@ -144,7 +143,7 @@ fn held_enter_chooses_once_and_does_not_reopen_from_the_trigger() {
     rt.key(KeyEvent { key: Key::Enter, mods: Mods::default() }); rt.frame(0.0);
     for _ in 0..2 { rt.repeat_key(KeyEvent { key: Key::Enter, mods: Mods::default() }); rt.frame(0.0); }
     assert_eq!((rt.state.chosen.as_deref(), rt.state.chooses), (Some("item-2"), 1));
-    assert!(!rt.state.combo.open, "the repeat must not reopen the popup from its trigger");
+    assert!(!rt.state.combo.is_open(), "the repeat must not reopen the popup from its trigger");
     assert_eq!(rt.state.app_keys, 0);
 }
 
@@ -157,10 +156,10 @@ fn repeats_after_an_ime_composition_neither_choose_nor_close() {
         key(&mut rt, Key::Down, Mods::default());
         rt.ime(Ime::Preedit("ka".into(), None)); rt.frame(0.0);
         key(&mut rt, held.clone(), Mods::default());
-        assert!(rt.state.combo.open, "{held:?} during composition belongs to the IME");
+        assert!(rt.state.combo.is_open(), "{held:?} during composition belongs to the IME");
         rt.ime(Ime::Commit("か".into())); rt.frame(0.0);
         for _ in 0..2 { rt.repeat_key(KeyEvent { key: held.clone(), mods: Mods::default() }); rt.frame(0.0); }
-        assert!(rt.state.combo.open, "a repeated {held:?} keeps the popup open");
+        assert!(rt.state.combo.is_open(), "a repeated {held:?} keeps the popup open");
         assert_eq!(rt.state.chooses, 0);
     }
 }
@@ -241,7 +240,7 @@ fn a_custom_trigger_opens_a_list_that_fits_the_window_under_a_search_header() {
     rt.pointer_up(trigger[0] + 10.0, trigger[1] + 10.0);
     rt.settle_all();
     rt.frame(0.0);
-    assert!(rt.state.combo.open && rt.state.combo.search.focused);
+    assert!(rt.state.combo.is_open() && rt.state.combo.search().focused);
     let content = find(&rt, "models-content").rect;
     assert!(content[1] + content[3] <= 300.0, "the popup runs off the window: {content:?}");
     let [_, header_top, _, header_height] = find(&rt, "header").rect;
@@ -249,7 +248,7 @@ fn a_custom_trigger_opens_a_list_that_fits_the_window_under_a_search_header() {
     assert!(viewport[1] >= header_top + header_height, "rows start under the search header");
     assert!(viewport[3] > 100.0, "the list uses the room below: {viewport:?}");
     key(&mut rt, Key::Up, Mods::default());
-    assert_eq!(rt.state.combo.active.as_deref(), Some("item-199"));
+    assert_eq!(rt.state.combo.active(), Some("item-199"));
     let last = find(&rt, "models-option-item-199");
     assert!(last.visible[3] > 0.0);
 }
