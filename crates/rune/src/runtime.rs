@@ -532,6 +532,8 @@ pub struct Runtime<S: 'static> {
     scroll_reveals: Vec<sticky::Reveal>,
     /// Some element is `El::raise`d: paint order isn't tree order.
     has_raise: bool,
+    /// Some element sets `El::paint_order`: its siblings paint out of tree order.
+    has_paint_order: bool,
     /// The focus where the held non-IME key(s) went down, so a release after focus moves
     /// still reaches that element first.
     key_focus: Option<String>,
@@ -915,6 +917,7 @@ impl<S: 'static> Runtime<S> {
             keeps: Vec::new(),
             scroll_reveals: Vec::new(),
             has_raise: false,
+            has_paint_order: false,
             key_focus: None,
             keys_held: 0,
             ime_keys_down: 0,

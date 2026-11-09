@@ -133,6 +133,18 @@ impl El {
         self.vis_flags.set(VisualFlags::RAISE, true);
         self
     }
+    /// Where this element paints among its siblings, as CSS `z-index` orders positioned
+    /// siblings: a higher order paints over siblings with a lower one, wherever they come in
+    /// the tree, and takes the pointer first where they overlap; equal orders paint in tree
+    /// order. 0 by default. Its focus order and accessibility order stay where it is in the
+    /// tree, and unlike [`Self::raise`] it stays inside its parent's layers. A floating button
+    /// placed before the page in the tree, for its Tab order, still paints over the page.
+    pub fn paint_order(mut self, order: i16) -> Self {
+        if order != 0 || !self.vis.cold.is_empty() {
+            self.vis.cold_mut().paint_order = order;
+        }
+        self
+    }
     /// Override the curve this element's own opacity changes on, with an optional delay
     /// ([`AnimExt::delay`](crate::AnimExt::delay)). The first paint and explicit
     /// instant/settle transactions still land immediately. A new element's entrance runs on
