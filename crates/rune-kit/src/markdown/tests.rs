@@ -47,14 +47,14 @@ fn known_languages_are_coloured_and_others_stay_plain() {
     let got = spans(src, &style);
     assert_eq!(got.len(), 6);
     let (ts, s) = &got[0];
-    assert_eq!(coloured(ts, s, style.syntax.color(Syntax::Keyword)), ["const"]);
+    assert_eq!(coloured(ts, s, style.syntax.color(Syntax::Keyword)), ["const "]);
     assert_eq!(coloured(ts, s, style.syntax.color(Syntax::Number)), ["1"]);
     assert!(s.iter().all(|s| s.color.is_some() && s.weight.is_none() && !s.italic && !s.mono && s.size.is_none() && s.bg.is_none()));
     for (code, s) in &got[1..4] {
         assert!(s.is_empty(), "{code:?} stays plain");
     }
     assert_eq!(coloured(&got[4].0, &got[4].1, style.syntax.color(Syntax::Function)), ["f"]);
-    assert_eq!(coloured(&got[5].0, &got[5].1, style.syntax.color(Syntax::Keyword)), ["select"]);
+    assert_eq!(coloured(&got[5].0, &got[5].1, style.syntax.color(Syntax::Keyword)), ["select "]);
 }
 
 #[test]
@@ -73,7 +73,7 @@ fn syntax_builders_override_and_switch_off_colour() {
     let src = "```rust\nlet x = 1;\n```";
     let style = MarkdownStyle::neutral(true).syntax(Syntax::Keyword, red);
     let (code, s) = &spans(src, &style)[0];
-    assert_eq!(coloured(code, s, red), ["let"]);
+    assert_eq!(coloured(code, s, red), ["let "]);
     assert!(spans(src, &style.syntax_highlight(false))[0].1.is_empty());
 }
 

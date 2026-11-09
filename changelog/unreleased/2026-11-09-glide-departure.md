@@ -1,0 +1,1 @@
+- A viewport can glide away from its pinned end even on a zero-time first frame, and an instant jump followed by a glide in one update keeps the glide.

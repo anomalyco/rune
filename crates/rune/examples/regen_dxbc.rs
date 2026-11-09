@@ -1,5 +1,5 @@
 //! Rewrites the precompiled DX12 uber shader (`uber.vs.dxbc`, `uber.fs.dxbc` and
-//! `src/render/uber_dxbc_hash.rs`) after `shader.wgsl`, `clip.wgsl`, the uber layout or wgpu
+//! `src/render/uber/dxbc_hash.rs`) after `shader.wgsl`, `clip.wgsl`, the uber layout or wgpu
 //! changes, without building Rune's unit tests: `cargo run -p rune --example regen_dxbc` on
 //! Windows. It does what `RUNE_REGENERATE_DXBC=1 cargo test -p rune --lib uber_dxbc_is_fresh`
 //! does: makes the uber pipeline from WGSL on a DX12 device, takes the HLSL wgpu-hal logs, and
@@ -28,7 +28,7 @@ fn main() {
     let root = env!("CARGO_MANIFEST_DIR");
     std::fs::write(format!("{root}/uber.vs.dxbc"), &vs).unwrap();
     std::fs::write(format!("{root}/uber.fs.dxbc"), &fs).unwrap();
-    std::fs::write(format!("{root}/src/render/uber_dxbc_hash.rs"), format!(
+    std::fs::write(format!("{root}/src/render/uber/dxbc_hash.rs"), format!(
         "// Written by `cargo run -p rune --example regen_dxbc` (or `RUNE_REGENERATE_DXBC=1 cargo test -p rune --lib uber_dxbc_is_fresh`) on Windows.\n\
          pub(super) const UBER_DXBC_WGSL_BLAKE3: &str = \"{wgsl}\";\n\
          pub(super) const UBER_DXBC_ABI_FNV64: u64 = {abi:#018x};\n\

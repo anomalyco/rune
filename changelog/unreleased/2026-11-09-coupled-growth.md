@@ -1,0 +1,1 @@
+- A folding row and a row growing on a reflow override settle precisely enough to keep their children and the pinned viewport in place.

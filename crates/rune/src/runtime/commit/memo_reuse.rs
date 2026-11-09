@@ -12,6 +12,7 @@ pub(crate) struct InheritedFlatten {
     pub(super) inert: bool,
     /// The parent's flow (`El::dir`).
     pub(super) flow: crate::el::Flow,
+    pub(super) directed: bool,
     pub(super) trace_namespace: Option<(&'static str, &'static str)>,
     pub(super) scale_bits: u32,
     /// The window's foreground (`Cx::foreground`), which a memo's uncoloured text took.
@@ -477,6 +478,7 @@ pub(super) fn inherited_for(
             instant_changes,
             inert,
             flow: parent.map_or(crate::el::Flow::Ltr, |p| nodes[p].flow),
+            directed: parent.is_some_and(|p| nodes[p].directed),
             trace_namespace,
             scale_bits: scale.to_bits(),
             foreground,

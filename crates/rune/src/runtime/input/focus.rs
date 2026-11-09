@@ -393,7 +393,7 @@ impl<S: 'static> Runtime<S> {
             if order.is_empty() { return self.active_modal().is_some(); }
             let current = order.iter().position(|&i| self.focus.is(&self.nodes[i].path));
             // With nothing focused, Tab goes on from where focus was or the pointer pressed last.
-            let from = self.focus.tab_start().and_then(|p| self.nodes.iter().position(|n| n.path == p));
+            let from = self.focus.tab_start().filter(|_| self.defaults.web_focus).and_then(|p| self.nodes.iter().position(|n| n.path == p));
             let next = match (current, from) {
                 (Some(i), _) if ev.mods.shift => (i + order.len() - 1) % order.len(),
                 (Some(i), _) => (i + 1) % order.len(),

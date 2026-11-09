@@ -94,7 +94,7 @@ pub fn text(content: impl Into<String>) -> El {
         secure_revealed: false,
         wrap_anywhere: false,
         exact_lines: true,
-        flow: crate::el::Flow::Ltr,
+        flow: None,
         shape: None,
     }));
     e

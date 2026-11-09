@@ -1,5 +1,5 @@
 //! Rewrites the precompiled uber shader for Windows (`crates/rune/uber.vs.dxbc`,
-//! `uber.fs.dxbc` and `src/render/uber_dxbc_hash.rs`) after `shader.wgsl` or `clip.wgsl`
+//! `uber.fs.dxbc` and `src/render/uber/dxbc_hash.rs`) after `shader.wgsl` or `clip.wgsl`
 //! changes, without building the library's tests:
 //!
 //! `cargo run -p rune --example regenerate_dxbc` on Windows.
@@ -53,11 +53,11 @@ fn main() {
     let (vs, fs) = (fxc(&vertex, "vs", "vs_5_1"), fxc(&fragment, "fs", "ps_5_1"));
     let wgsl = blake3::hash(format!("{}\n{}", rune::render::CLIP_WGSL, include_str!("../src/shader.wgsl")).as_bytes()).to_hex();
     let hlsl = blake3::hash(format!("{vertex}\0{fragment}").as_bytes()).to_hex();
-    let hash_rs = format!("{root}/src/render/uber_dxbc_hash.rs");
+    let hash_rs = format!("{root}/src/render/uber/dxbc_hash.rs");
     let old = std::fs::read_to_string(&hash_rs).unwrap_or_else(|e| fail(&format!("{hash_rs}: {e}")));
     let abi = old.lines().find_map(|l| l.strip_prefix("pub(super) const UBER_DXBC_ABI_FNV64: u64 = "))
         .and_then(|v| v.strip_suffix(';'))
-        .unwrap_or_else(|| fail("no UBER_DXBC_ABI_FNV64 in uber_dxbc_hash.rs"));
+        .unwrap_or_else(|| fail("no UBER_DXBC_ABI_FNV64 in uber/dxbc_hash.rs"));
     let write = |path: String, bytes: &[u8]| std::fs::write(&path, bytes).unwrap_or_else(|e| fail(&format!("{path}: {e}")));
     write(format!("{root}/uber.vs.dxbc"), &vs);
     write(format!("{root}/uber.fs.dxbc"), &fs);

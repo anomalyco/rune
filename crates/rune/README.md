@@ -701,9 +701,9 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   `uber_native.metallib`, built from the MSL that backend emits (first `Renderer::new` 222 ms to 90 ms cold,
   4.0 ms to 0.9 ms warm). After editing `clip.wgsl` or `shader.wgsl`, run
   `cargo test -p rune --lib --features metal-backend precompiled_uber_metallib_is_fresh` on a Mac. If it says the MSL
-  is byte-identical, paste the printed lines into `uber_metallib_hash.rs`. If it says the MSL, flags or library hash
+  is byte-identical, paste the printed lines into `uber/metallib_hash.rs`. If it says the MSL, flags or library hash
   changed, run `scripts/precompile-metal-shaders.sh` (needs Xcode's Metal toolchain) and commit both libraries and
-  `uber_metallib_hash.rs`. Effect, lighting and blur shaders and iOS aren't precompiled; binary archives would need
+  `uber/metallib_hash.rs`. Effect, lighting and blur shaders and iOS aren't precompiled; binary archives would need
   wgpu support.
 - **The first frame draws during window creation** on macOS for visible windows (not launcher windows or panels).
   The first view build and layout run inside creation, right after the window-created callbacks, so keep the initial

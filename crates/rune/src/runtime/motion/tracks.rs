@@ -211,7 +211,7 @@ impl<S: 'static> Runtime<S> {
             // of it, not while they're still short of it. A glide that reaches the end hands it
             // to the pin.
             let shrinking = laid.is_some_and(|end| end < st.max - 0.5 && st.offset < st.max - 1e-3);
-            if sp.stick_bottom && !held && !shrinking && st.offset >= st.max - 0.5 && st.coast().abs() <= 1.0 {
+            if sp.stick_bottom && !held && !shrinking && st.glide().is_none() && st.offset >= st.max - 0.5 && st.coast().abs() <= 1.0 {
                 st.pin();
             }
             st.laid = laid;

@@ -51,8 +51,8 @@ enum Tip {
     Idle,
     /// A tooltip hid as the pointer left its element: until `until`, the next one opens at once.
     Warm { until: f64 },
-    /// The pointer rests on `target`; its tooltip opens at `due`.
-    Waiting { target: Target, due: f64 },
+    /// The pointer has rested on `target` since this clock time.
+    Waiting { target: Target, since: f64 },
     /// `target`'s tooltip shows, fading in from `since`.
     Open { target: Target, since: f64 },
     /// A press elsewhere, a scroll or key, or a popup over `target` hid its tooltip until the
@@ -119,7 +119,7 @@ fn step(tip: &mut Tip, event: Event, delays: Delays) -> Effects<Effect> {
     match std::mem::take(tip) {
         Tip::Warm { until } if now > until => {}
         // The wait is over (or there was none: a zero delay opens in the frame it starts).
-        Tip::Waiting { target, due } if now + 1e-6 >= due => *tip = Tip::Open { target, since: now },
+        Tip::Waiting { target, since } if now + 1e-6 >= since + delays.open => *tip = Tip::Open { target, since: now },
         other => *tip = other,
     }
     effects
@@ -136,7 +136,7 @@ fn leave(tip: &mut Tip, at: Option<Target>, now: f64, delays: Delays) -> Effects
         Some(target) => {
             let due = now + delays.open;
             effects.push(Effect::WakeAt(due));
-            Tip::Waiting { target, due }
+            Tip::Waiting { target, since: now }
         }
         None if open && delays.skip > 0.0 => Tip::Warm { until: now + delays.skip },
         None if warm => std::mem::take(tip),
@@ -211,7 +211,7 @@ impl<S: 'static> Runtime<S> {
 
     /// A tooltip waits for a frame at or after its delay to draw, or fades in or out.
     pub(super) fn tooltip_waiting(&self) -> bool {
-        matches!(self.help.state, Tip::Waiting { due, .. } if self.clock + 1e-6 < due) || self.tooltip_fading()
+        matches!(self.help.state, Tip::Waiting { since, .. } if self.clock + 1e-6 < since + self.help_delays().open) || self.tooltip_fading()
     }
 
     /// The open tooltip fades in, or a closed one fades out, so frames keep coming.
@@ -285,7 +285,7 @@ impl<S: 'static> Runtime<S> {
             Tip::Open { target, .. } => self.help_at(x, y).is_some_and(|(i, k)| self.nodes[i].path == target.path && k == target.link),
             _ => false,
         };
-        if !on_open { self.dismiss_help(); }
+        if !on_open || self.defaults.help.is_none() { self.dismiss_help(); }
     }
 
     /// The help element under (x, y): the topmost one, unless something interactive drawn over

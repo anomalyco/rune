@@ -162,19 +162,19 @@ fn radial_gradient_multi_stop_elliptical_quad_shrinking_and_validation() {
     assert!(p_anim[0] > c_mid_x[0] + 20 && p_anim[0] < 245, "mid-spring stop colour: {p_anim:?}");
 
     // Half-valid radii (e.g. [10.0, 0.0]) are dropped and never fall through to linear_gradient;
-    // stops are capped at 8 (7 segments).
+    // Stops beyond the sixteenth do not add segments.
     fn edge_cases(_: &(), _: &mut Cx<()>) -> El {
-        let ten_stops: Vec<(f32, Color)> = (0..10)
-            .map(|i| (i as f32 / 9.0, Color::WHITE))
+        let stops: Vec<(f32, Color)> = (0..18)
+            .map(|i| (i as f32 / 17.0, Color::WHITE))
             .collect();
         el().size(100.0, 100.0)
             .child(el().size(50.0, 50.0).radial_gradient([0.5, 0.5], [10.0, 0.0], [(0.0, Color::WHITE), (1.0, Color::BLACK)]))
-            .child(el().size(50.0, 50.0).radial_gradient([0.5, 0.5], 25.0, ten_stops))
+            .child(el().size(50.0, 50.0).radial_gradient([0.5, 0.5], 25.0, stops))
     }
     let mut rt_edge = Runtime::new((), edge_cases, (100.0, 100.0), Env::new(true, 1.0));
     rt_edge.frame(0.0);
     let edge_radials: Vec<_> = rt_edge.instances.iter().filter(|i| i.params[1] == KIND_RADIAL).collect();
-    assert_eq!(edge_radials.len(), 7, "10 stops capped at 8 stops (7 segments), invalid [10, 0] dropped");
+    assert_eq!(edge_radials.len(), 15, "18 stops capped at 16 stops (15 segments), invalid [10, 0] dropped");
     assert!(edge_radials.iter().all(|i| i.uv[2] > 0.0 && i.uv[3] > 0.0));
 
     // Angled linear_gradient(PI, ..) matches vertical El::gradient(..), and 45° runs corner-to-corner.

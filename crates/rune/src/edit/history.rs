@@ -193,7 +193,8 @@ impl TextEdit {
         }
         h.bytes -= h.redo.iter().map(Change::bytes).sum::<usize>();
         h.redo.clear();
-        let record = step(&mut h.run, kind, before.text.is_empty());
+        // A rich contenteditable creates its first text node here; a plain field just types.
+        let record = step(&mut h.run, kind, self.rich && before.text.is_empty());
         if record == Record::Join
             && before.anchor == before.focus
             && h.undo.back().is_some_and(|c| c.after == before)
@@ -278,4 +279,3 @@ impl TextEdit {
         Arc::make_mut(&mut self.history).undo.push_back(change);
     }
 }
-

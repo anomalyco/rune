@@ -94,7 +94,9 @@ impl<S: 'static> Runtime<S> {
                 st.x.offset = to.min(st.x.max);
             } else {
                 st.offset = to.min(st.max);
-                st.land(stick);
+                // The jump halted the old motion when queued. Don't cancel a later
+                // request in the same transaction to glide from the new offset.
+                if st.glide().is_none() { st.land(stick); }
             }
             if (if horizontal { st.x.offset } else { st.offset } - was).abs() > 1e-3 { st.nudged = NUDGE_FRAMES; }
         }

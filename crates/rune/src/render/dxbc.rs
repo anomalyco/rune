@@ -16,7 +16,7 @@
 //! driver refuses falls back to WGSL.
 
 #[cfg(target_os = "windows")]
-include!("uber_dxbc_hash.rs");
+include!("uber/dxbc_hash.rs");
 
 #[cfg(target_os = "windows")]
 const VERTEX: &[u8] = include_bytes!("../../uber.vs.dxbc");
