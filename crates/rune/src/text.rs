@@ -713,6 +713,10 @@ impl TextSystem {
         let build = |lcx: &mut LayoutContext<Ink>, fcx: &mut FontContext, exact: &Spacings, widen: &Spacings, weights: &Spacings| {
             let mut b = lcx.ranged_builder(fcx, text, scale, true);
             b.set_base_direction(base);
+            // Lines break where Chromium breaks them: after every run of spaces, even before a
+            // closing bracket or comma (UAX #14 LB13 forbids that), and by Blink's ASCII pair
+            // table elsewhere, so "number }" wraps before "}" rather than before "number".
+            b.set_line_break_override(Some(parley::CHROMIUM_LINE_BREAK_OVERRIDE));
             b.push_default(FontFamily::from(sans.as_slice()));
             b.push_default(StyleProperty::Locale(language));
             b.push_default(StyleProperty::FontSize(style.size));
