@@ -87,14 +87,17 @@ impl TextSystem {
         }
     }
 
-    /// The dilation radius (device px) and hint record a glyph of `face` at `ppem` draws with;
-    /// a TrueType-hinted outline (`tt_hinted`) takes CoreGraphics' hint no further.
+    /// The dilation radius (device px) and hint record a glyph of `face` at `ppem` draws with,
+    /// widened for synthetic bold; a TrueType-hinted outline (`tt_hinted`) takes CoreGraphics' hint
+    /// no further.
     fn outline_look(&mut self, face: &Face, coords: &[i16], ppem: f32, tt_hinted: bool) -> (f32, u32) {
         if self.direct_write() {
             return (0.0, 0);
         }
         let weight = if self.smoothing != FontSmoothing::Windfoil { 1.0 } else if tt_hinted { CJK_WEIGHT } else { outline::TEXT_WEIGHT };
-        let radius = self.apple.radius(face.ink, ppem) * weight;
+        // Synthetic bold grows the outline by half Skia's stroke on every side (`synthetic_bold`).
+        let bold = if face.bold { f64::from(synthetic_bold::stroke(ppem)) / 2.0 } else { 0.0 };
+        let radius = self.apple.radius(face.ink, ppem) * weight + bold;
         let font = &face.font;
         let Some(font_ref) = FontRef::from_index(font.data.as_ref(), font.index as usize) else { return (radius as f32, 0) };
         let hint = if face.skew != 0 || tt_hinted { None } else {

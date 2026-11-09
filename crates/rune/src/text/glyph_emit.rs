@@ -136,6 +136,7 @@ impl TextSystem {
             dilation: if direct_write { gamma as u32 } else { (radius as f32).to_bits() },
             apple: if direct_write { DIRECT_WRITE_KEY } else if windfoil { WINDFOIL_KEY } else { self.apple.key() },
             skew,
+            bold: face.bold,
         };
         let entry = match self.atlas.map.get(&key) {
             Some(e) => {
@@ -147,7 +148,7 @@ impl TextSystem {
             }
             None => {
                 // Colour glyphs sit on whole pixels and ignore emboldening and obliques.
-                let color_key = GlyphKey { subpx: 0, subpy: 0, dilation: 0, apple: 0, skew: 0, ..key };
+                let color_key = GlyphKey { subpx: 0, subpy: 0, dilation: 0, apple: 0, skew: 0, bold: false, ..key };
                 if let Some(c) = self.color_glyphs.get_mut(&color_key) {
                     c.used = true;
                     out.push(c.quad(gx, gy, glide, ink, byte));
@@ -185,16 +186,36 @@ impl TextSystem {
                 }
                 let (phase_x, shift_y) = (subpx as f32 / coretext_match::PHASES, subpy as f32 / GLIDE_PHASES as f32);
                 #[cfg(target_os = "windows")]
-                let placed = direct_write.then(|| self.windows.rasterize(&mut self.atlas, &windows::Job {
+                let placed = (direct_write && !face.bold).then(|| self.windows.rasterize(&mut self.atlas, &windows::Job {
                     font: font_ref, blob: &font.data, key: (key.font, key.index, key.coords), coords, glyph: glyph as u16, ppem: font_size,
                     phase_x, shift_y, skew, lum: gamma,
                 })).flatten();
                 #[cfg(not(target_os = "windows"))]
                 let placed = None;
-                let placed = placed.unwrap_or_else(|| self.apple.rasterize(&mut self.scale_cx, &mut self.atlas, macos::smoothing::Job {
-                    font: font_ref, key: (key.font, key.index, key.coords), coords, glyph: glyph as u16, ppem: font_size,
-                    phase_x, shift_y, radius, skew,
-                }));
+                let placed = match placed {
+                    Some(p) => p,
+                    // Off Windfoil, synthetic bold draws from Skia's stroked outline, through its text gamma.
+                    None if face.bold => {
+                        let lum = direct_write.then_some(gamma);
+                        match synthetic_bold::mask(&mut self.scale_cx, font_ref, coords, glyph as u16, font_size, phase_x, shift_y, skew) {
+                            Some((mut data, at)) if at.width > 0 && at.height > 0 && data.iter().any(|&c| c != 0) => {
+                                if let Some(lum) = lum {
+                                    let table = windows::skia_gamma::table(lum);
+                                    data.iter_mut().for_each(|c| *c = table[*c as usize]);
+                                }
+                                match self.atlas.put(at.width, at.height, &data, at.left, at.top) {
+                                    Some(g) => Rasterized::Placed(g),
+                                    None => Rasterized::Unplaced,
+                                }
+                            }
+                            _ => Rasterized::Empty,
+                        }
+                    }
+                    None => self.apple.rasterize(&mut self.scale_cx, &mut self.atlas, macos::smoothing::Job {
+                        font: font_ref, key: (key.font, key.index, key.coords), coords, glyph: glyph as u16, ppem: font_size,
+                        phase_x, shift_y, radius, skew,
+                    }),
+                };
                 match placed {
                     Rasterized::Placed(g) => {
                         self.atlas.map.insert(key, Residency::Uploaded(g));
@@ -276,6 +297,8 @@ pub(super) struct Face {
     pub(super) ink: u16,
     /// A face without italics leans by a fixed angle instead of fontique's 14°.
     pub(super) skew: u8,
+    /// Drawn in synthetic bold ([`synthetic_bold`]).
+    pub(super) bold: bool,
     pub(super) baseline: f32,
 }
 
@@ -289,8 +312,9 @@ impl Face {
             font: run.font().clone(),
             size: run.font_size(),
             coords_key: coords.iter().fold(0u64, |h, &c| h.wrapping_mul(31).wrapping_add(c as u16 as u64)),
-            ink: glyph_run.style().brush.0,
+            ink: glyph_run.style().brush.0 & !synthetic_bold::SYNTHETIC_BOLD,
             skew: if run.synthesis().skew().is_some() { SYNTHETIC_OBLIQUE } else { 0 },
+            bold: glyph_run.style().brush.0 & synthetic_bold::SYNTHETIC_BOLD != 0,
             baseline: glyph_run.baseline(),
         }
     }
