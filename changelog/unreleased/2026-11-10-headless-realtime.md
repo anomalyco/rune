@@ -1,0 +1,1 @@
+- **`--realtime` keeps a headless run on the wall clock:** each frame waits until its time has passed since the run began, and each script mark prints `rune-mark NAME T` as the run reaches it, so a scripted run against a live server sees the server's replies when a person would, and a harness can act (stop a server, say) at a mark.
