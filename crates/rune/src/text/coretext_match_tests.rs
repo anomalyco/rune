@@ -10,6 +10,17 @@ fn the_default_is_on_on_macos_and_off_elsewhere() {
     assert_eq!(TextSystem::default().apple_pipeline(), want.pipeline());
 }
 
+#[test]
+fn a_browser_on_a_mac_smooths_and_an_ipad_or_anything_else_does_not() {
+    assert_eq!(browser_default("macOS", 0), FontSmoothing::On, "userAgentData");
+    assert_eq!(browser_default("MacIntel", 0), FontSmoothing::On, "navigator.platform");
+    assert_eq!(browser_default("MacIntel", 5), FontSmoothing::Off, "an iPad says it's a Mac");
+    assert_eq!(browser_default("iPhone", 5), FontSmoothing::Off);
+    assert_eq!(browser_default("Windows", 0), FontSmoothing::Off);
+    assert_eq!(browser_default("Linux x86_64", 0), FontSmoothing::Off);
+    assert_eq!(browser_default("", 0), FontSmoothing::Off);
+}
+
 /// A pen that summed advances in a different order lands within f32 noise of the same 1/256 px
 /// and so on the same step.
 #[test]

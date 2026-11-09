@@ -30,8 +30,18 @@ extern "C" {
     /// Sets the canvas's CSS `cursor`, or clears it when `css` is empty.
     #[wasm_bindgen(js_name = setCursor)]
     pub(crate) fn set_cursor(canvas: &web_sys::HtmlCanvasElement, css: &str);
+    /// `navigator.userAgentData.platform` or `navigator.platform`; `None` without a navigator.
+    #[wasm_bindgen(js_name = browserPlatform)]
+    fn browser_platform_name() -> Option<String>;
+    #[wasm_bindgen(js_name = touchPoints)]
+    fn touch_points() -> u32;
     /// Resolves in a later task, letting the browser draw and handle input in between.
     #[wasm_bindgen(js_name = nextTask)]
     pub(crate) fn next_task() -> js_sys::Promise;
     pub(super) fn viewport(canvas: &web_sys::HtmlCanvasElement, callback: &js_sys::Function, embedded: bool) -> js_sys::Function;
+}
+
+/// The browser's platform name and its touch points, as `FontSmoothing`'s web default reads them.
+pub(crate) fn browser_platform() -> Option<(String, u32)> {
+    Some((browser_platform_name()?, touch_points()))
 }

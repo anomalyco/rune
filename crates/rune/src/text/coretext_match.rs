@@ -17,11 +17,13 @@ use super::ApplePipeline;
 pub enum FontSmoothing {
     /// Text that matches CoreText's with font smoothing on (macOS's default): the pipeline plus
     /// font smoothing's outline dilation, which grows outlines by a radius set by the text
-    /// colour's luminance and the device ppem ([`ApplePipeline::SMOOTHED`]).
+    /// colour's luminance and the device ppem ([`ApplePipeline::SMOOTHED`]). The default on
+    /// macOS, and on the web in a Mac's browser, which draws the page's own text this way.
     On,
     /// Text that matches CoreText with font smoothing off, which is what macOS browsers draw
     /// for `-webkit-font-smoothing: antialiased`: the pipeline without the dilation
-    /// ([`ApplePipeline::UNSMOOTHED`]). Lighter than `On`. The default on Linux and the web.
+    /// ([`ApplePipeline::UNSMOOTHED`]). Lighter than `On`. The default on Linux, and on the web
+    /// other than in a Mac's browser.
     Off,
     /// Text that matches Chromium's on Windows: DirectWrite rasterises each glyph as Skia asks it
     /// to (the rendering mode the font's `gasp` table picks, its hints, grayscale antialiasing),
@@ -43,9 +45,22 @@ impl Default for FontSmoothing {
         } else if cfg!(target_os = "windows") {
             FontSmoothing::DirectWrite
         } else {
+            #[cfg(target_arch = "wasm32")]
+            if let Some(platform) = crate::platform::web::platform::browser_platform() {
+                return browser_default(&platform.0, platform.1);
+            }
             FontSmoothing::Off
         }
     }
+}
+
+/// What a browser's page text draws like, from its `navigator` platform and touch points:
+/// Safari, Chrome and Firefox on a Mac draw with font smoothing unless a page turns it off.
+/// iPhones and iPads never smooth, and an iPad reports itself as a Mac with a touch screen.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn browser_default(platform: &str, touch_points: u32) -> FontSmoothing {
+    let mac = platform.get(..3).is_some_and(|p| p.eq_ignore_ascii_case("mac"));
+    if mac && touch_points <= 1 { FontSmoothing::On } else { FontSmoothing::Off }
 }
 
 impl FontSmoothing {

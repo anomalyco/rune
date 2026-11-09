@@ -212,6 +212,10 @@ For example, extend a static slice of `rune_theme_opencode::FONTS` with
 the combined slice to `spec.fonts`. Keep the theme's sans/mono family names in `spec.families`.
 Missing emoji and CJK glyphs display fallback boxes; they do not trigger font downloads.
 
+In a Mac's browser text draws with macOS font smoothing (`FontSmoothing::On`), as Safari,
+Chrome and Firefox draw the page's own text there, and without it elsewhere, iPhone and iPad
+included. `App::font_smoothing` sets it either way.
+
 Rust supplies the hidden textarea with up to 512 UTF-16 units on each side of the selection,
 expanding for the selected range, and skips unchanged mirrors. Browser input events supply replacements; Rune validates the mirrored
 context and converts window-relative UTF-16 positions to UTF-8 boundaries before editing.
