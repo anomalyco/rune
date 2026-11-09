@@ -93,7 +93,7 @@ use trak::{Trak, Traks, font_trak};
 
 pub use atlas::{ATLAS_SIZE, Atlas, AtlasPage, GlyphQuad};
 pub(crate) use cursor::{cursor_from_point, cursor_geometry, line_edge, move_line, range_boxes};
-pub use decorations::Deco;
+pub use decorations::{Deco, SPAN_RADIUS};
 pub(crate) use decorations::PaintedDeco;
 pub use span::{Ink, Link, LinkPaint, Span, TextHighlight};
 pub(crate) use span::{BareIcon, PillChip, PillMetrics, flatten_spans};

@@ -54,6 +54,8 @@ pub struct TextSpec {
     pub(crate) copy_prefix: Option<std::rc::Rc<str>>,
     /// Inset border rings `(start, end, color, width)` on rounded span backgrounds.
     pub(crate) rings: Vec<(u32, u32, Color, f32)>,
+    /// See [`El::span_radius`](crate::El::span_radius), in points.
+    pub(crate) span_radius: f32,
     /// Strikethrough byte ranges `(start, end, color)` of `content`.
     pub(crate) strikes: Vec<(u32, u32, Option<Color>)>,
     /// Paint-only highlight byte ranges of `content`.

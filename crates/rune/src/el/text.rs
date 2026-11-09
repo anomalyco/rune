@@ -71,6 +71,15 @@ impl El {
         }
         self
     }
+    /// The corner radius in points of this text's rounded [`Span::bg`] backgrounds (4 by
+    /// default), as a stylesheet's `border-radius` on one kind of span: a diff's changed words
+    /// at 3, say, while inline code keeps 4.
+    pub fn span_radius(mut self, radius: f32) -> Self {
+        if let Some(t) = &mut self.text && radius.is_finite() {
+            t.span_radius = radius.max(0.0);
+        }
+        self
+    }
     /// Inset border rings `(start, end, color, width)` for multiple byte ranges (see [`El::span_ring`]).
     pub fn span_rings(mut self, rings: impl IntoIterator<Item = (usize, usize, Color, f32)>) -> Self {
         for (start, end, color, width) in rings {
