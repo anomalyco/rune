@@ -142,8 +142,14 @@ pub fn builtin(lang: Option<&str>, code: &str) -> Vec<Highlight> {
     let code = &code[..coloured_len(code)];
     let tokens = LEXERS.with_borrow_mut(|l| l.tokens(lang, code));
     let mut out: Vec<Highlight> = Vec::with_capacity(tokens.len());
-    for (r, token) in tokens {
+    for (mut r, token) in tokens {
         let Some(k) = kind(token) else { continue };
+        // Lexer paint runs can extend a word's colour over the following blanks.
+        // Keep that separator in the base style, especially when the theme sets a weight.
+        if matches!(k, Syntax::Keyword | Syntax::Function | Syntax::Number) {
+            r.end = r.start + code[r.clone()].trim_end().len();
+            if r.is_empty() { continue; }
+        }
         if let Some((last, Paint::Kind(prev))) = out.last_mut()
             && last.end == r.start
             && *prev == k
