@@ -155,7 +155,7 @@ impl<S: 'static> Runtime<S> {
                     let ox0 = st.x.shift() as f32;
                     let ox1 = match st.x.flow { Flow::Ltr => ox0.clamp(0.0, max_x), Flow::Rtl => ox0.clamp(-max_x, 0.0) };
                     let oy0 = st.offset as f32 + st.slack.height();
-                    let oy1 = if st.pinned && sp.stick_bottom { max_y + st.slack.height() } else { oy0.clamp(0.0, max_y + st.slack.height()) };
+                    let oy1 = if st.pinned() && sp.stick_bottom { max_y + st.slack.height() } else { oy0.clamp(0.0, max_y + st.slack.height()) };
                     (
                         [shift_min[0] + ox0.min(ox1), shift_min[1] + oy0.min(oy1)],
                         [shift_max[0] + ox0.max(ox1), shift_max[1] + oy0.max(oy1)],

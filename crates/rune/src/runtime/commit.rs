@@ -89,7 +89,7 @@ impl<S: 'static> Runtime<S> {
             if r.at_end && let Some(&id) = self.path_ids.get(&r.viewport)
                 && let Some(scroll) = self.scrolls.get_mut(&id)
             {
-                scroll.pinned = true;
+                scroll.pin();
             }
         }
         self.note_drawn_rows();

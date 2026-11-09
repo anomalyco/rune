@@ -1193,7 +1193,7 @@ impl<S: 'static> Runtime<S> {
                 // `grid` rounds to 1/64 of a device pixel. Always land at the layout offset.
                 let rounded = grid(exact, s);
                 let step = (rounded - st.drawn[1]).signum() as i8;
-                let back = st.pinned && rounded != grid(st.offset as f32, s) && step == -st.drawn_step && ((exact - st.drawn[1]) * s).abs() < 1.0 / 64.0;
+                let back = st.pinned() && rounded != grid(st.offset as f32, s) && step == -st.drawn_step && ((exact - st.drawn[1]) * s).abs() < 1.0 / 64.0;
                 let drawn = if back { st.drawn[1] } else { rounded };
                 let moved = if drawn == st.drawn[1] { st.drawn_step } else { step };
                 dy -= drawn;

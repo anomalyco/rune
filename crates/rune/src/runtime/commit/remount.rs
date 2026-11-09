@@ -193,7 +193,7 @@ impl<S: 'static> Measurement<'_, S> {
 
             let sticky = self.nodes[scroll_idx].scroll.unwrap().stick_bottom;
             let old_scroll = self.scrolls.get(&scroll_id);
-            let pinned = old_scroll.map_or(sticky, |s| s.pinned);
+            let pinned = old_scroll.map_or(sticky, |s| s.pinned());
             let mut offset = old_scroll.map_or(0.0, |s| s.offset as f32);
             v.viewport = self.nodes[scroll_idx].local.h;
             offset = (offset - v.top).max(0.0);

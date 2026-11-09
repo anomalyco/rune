@@ -26,7 +26,7 @@ impl<S: 'static> Runtime<S> {
         let path = &self.nodes[s].path;
         if self.keeps.iter().any(|k| k.viewport == *path) || self.scroll_reveals.iter().any(|r| r.viewport == *path) { return false; }
         self.scrolls.get(&self.nodes[s].id).is_some_and(|st| {
-            st.offset > 0.5 && !st.pinned && !st.scrolling && !st.direct && st.v == 0.0 && st.glide.is_none()
+            st.offset > 0.5 && !st.pinned() && !st.scrolling && !st.direct && st.coast() == 0.0 && st.glide().is_none()
         })
     }
 

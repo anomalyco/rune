@@ -18,7 +18,7 @@ fn glide(rt: &mut Runtime<()>) -> Vec<f64> {
     for _ in 0..240 {
         rt.frame(DT);
         path.push(offset(rt));
-        if rt.scrolls.values().all(|s| s.glide.is_none()) { break; }
+        if rt.scrolls.values().all(|s| s.glide().is_none()) { break; }
     }
     path
 }

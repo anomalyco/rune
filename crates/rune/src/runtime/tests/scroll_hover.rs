@@ -29,7 +29,7 @@ fn a_glide_holds_a_still_pointers_hover_until_it_stops() {
     let mut frames = 0;
     for f in 0..600 {
         rt.frame(1.0 / 120.0);
-        if rt.scrolls.values().all(|s| s.glide.is_none()) { break; }
+        if rt.scrolls.values().all(|s| s.glide().is_none()) { break; }
         frames += 1;
         assert_eq!(shown(&rt), ["a5"], "frame {f}: no row passing under the pointer takes its hover");
     }
@@ -75,7 +75,7 @@ fn a_hover_a_glide_carried_out_of_view_lets_go_at_once() {
     for f in 0..600 {
         rt.frame(1.0 / 120.0);
         if rt.scene.store().target(id, P_HOVER) == Some(0.0) {
-            assert!(rt.scrolls.values().all(|s| s.glide.is_none()), "frame {f}: the hold kept r5's hover through the glide");
+            assert!(rt.scrolls.values().all(|s| s.glide().is_none()), "frame {f}: the hold kept r5's hover through the glide");
             assert!(!rt.scene.store().is_animating(id, P_HOVER), "r5, out of view, lands its leave instead of fading it unseen");
             return;
         }
@@ -117,7 +117,7 @@ fn the_hold_ends_with_its_glide() {
     for _ in 0..600 {
         rt.frame(1.0 / 120.0);
         held |= rt.hover_hold.held;
-        if rt.scrolls.values().all(|s| s.glide.is_none()) { break; }
+        if rt.scrolls.values().all(|s| s.glide().is_none()) { break; }
     }
     assert!(held, "the glide held hover");
     assert!(!rt.hover_hold.held && !rt.hover_hold.released, "no stale hold is left for a later glide");
@@ -151,7 +151,7 @@ fn a_hand_scroll_anywhere_lets_go_of_the_hold() {
     let mut rt = gliding_pair();
     rt.wheel(150.0, 110.0, -10.0);
     rt.frame(1.0 / 120.0);
-    assert!(rt.scrolls.values().any(|s| s.glide.is_some()), "the viewport under the pointer still glides");
+    assert!(rt.scrolls.values().any(|s| s.glide().is_some()), "the viewport under the pointer still glides");
     assert!(rt.hover_hold.released && !rt.hover_hold.held, "a wheel over the other viewport lets hover follow the pointer again");
 }
 
@@ -160,7 +160,7 @@ fn a_viewport_under_a_modal_holds_no_hover() {
     let mut rt = gliding_pair();
     rt.update(|s, _| *s = true);
     rt.frame(1.0 / 120.0);
-    assert!(rt.scrolls.values().any(|s| s.glide.is_some()));
+    assert!(rt.scrolls.values().any(|s| s.glide().is_some()));
     assert!(!rt.hover_hold.held, "a modal makes the gliding viewport inert");
 }
 
@@ -257,7 +257,7 @@ fn a_glide_to_an_offset_runs_no_hover_handler_under_a_still_pointer_until_it_lan
         let mut frames = 0;
         for _ in 0..600 {
             rt.frame(1.0 / 120.0);
-            if rt.scrolls.values().all(|s| s.glide.is_none()) { break; }
+            if rt.scrolls.values().all(|s| s.glide().is_none()) { break; }
             frames += 1;
         }
         assert!(frames > 5, "{spring:?}: it glided");

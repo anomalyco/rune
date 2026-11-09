@@ -287,7 +287,7 @@ impl<S: 'static> Runtime<S> {
                     let p = &self.nodes[pi];
                     moving |= animating(p.id)
                         || self.stacks.get(&p.id).is_some_and(|s| s.moving)
-                        || self.scrolls.get(&p.id).is_some_and(|s| s.slack.moving() || s.glide.is_some());
+                        || self.scrolls.get(&p.id).is_some_and(|s| s.slack.moving() || s.glide().is_some());
                     live_intent |= intent(p);
                     scrolling |= self.scrolls.get(&p.id).is_some_and(ScrollState::moving);
                     in_growing_row |= self.grows.get(&p.id).is_some_and(|g| g.moving());

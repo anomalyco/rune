@@ -369,7 +369,7 @@ pub(crate) use commit_why::CommitWhy;
 #[cfg(debug_assertions)]
 pub(crate) use layout_read::window_read_key;
 pub(crate) use types::{AnimSource, Node};
-use types::{AxisScroll, Inh, NodeCold, RevealState, RowLayout, ScaleMotion, ScrollState, Stack};
+use types::{AxisScroll, GlideTo, Inh, NodeCold, RevealState, RowLayout, ScaleMotion, ScrollMode, ScrollState, Stack};
 #[path = "runtime/motion/tracks.rs"]
 mod tracks;
 use tracks::{SCROLL_DECAY, mark_ancestors, scroll_offsets, word_starts};

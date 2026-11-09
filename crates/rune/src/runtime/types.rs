@@ -352,26 +352,57 @@ impl Default for Inh {
     }
 }
 
+/// What moves a scroll viewport's vertical offset: one mode at a time, so a viewport can't
+/// follow its bottom while it glides, or coast while a glide carries it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) enum ScrollMode {
+    /// At rest where a hand, an app or a glide left it.
+    #[default]
+    Rest,
+    /// A stick-to-bottom viewport following its content's end.
+    Pinned,
+    /// Coasting from a fling, keys or wheel momentum at `v` points a second, decaying.
+    Momentum { v: f32 },
+    /// Gliding on a spring (`ScrollState::glide_spring`) at `v` points a second.
+    Glide { v: f32, to: GlideTo },
+}
+
+/// Where a glide goes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum GlideTo {
+    /// The content's bottom, as it moves (`Tx::scroll_to_bottom`).
+    Bottom,
+    /// An offset an app or a reveal asked for (`Tx::scroll_to`), while the content reaches it.
+    Offset(f64),
+    /// The end a growth stack shrinks to under a reader who scrolled up (`ease_to_shrunk_end`),
+    /// retargeted as its rows move.
+    ShrunkEnd(f64),
+}
+
+impl GlideTo {
+    /// The offset it heads for, `None` for the bottom.
+    pub(super) fn offset(self) -> Option<f64> {
+        match self {
+            GlideTo::Bottom => None,
+            GlideTo::Offset(to) | GlideTo::ShrunkEnd(to) => Some(to),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct ScrollState {
     pub(super) offset: f64,
-    pub(super) v: f32,
-    pub(super) pinned: bool,
+    pub(super) mode: ScrollMode,
     pub(super) max: f64,
+    /// A hand moved the offset since the last scroll step (an input latch the step clears).
     pub(super) direct: bool,
+    /// A hand or its momentum moved it in the last scroll step (derived there).
     pub(super) scrolling: bool,
     /// A hand (the wheel, keys, a drag, their momentum) or an app's instant jump moved it since
     /// `El::on_scroll_offset` was last told; not following its bottom, a glide or an anchor.
     pub(super) by_hand: bool,
-    /// Velocity of a glide to the bottom (`Tx::scroll_to_bottom`) or to `glide_to`
-    /// (`Tx::scroll_to`) while one runs.
-    pub(super) glide: Option<f32>,
-    /// The glide is `ease_to_shrunk_end`'s, which retargets or ends it as the rows move.
-    pub(super) shrink_glide: bool,
     /// A hand scrolled while the growth stack moved: no shrink glide until it settles.
     pub(super) shrink_cut: bool,
-    /// Where a glide goes, when not to the bottom.
-    pub(super) glide_to: Option<f64>,
     /// The growth stack's layout end while its rows still move (see `ease_to_shrunk_end`).
     pub(super) laid: Option<f64>,
     /// At-bottom state last sent to `El::on_at_bottom`.
@@ -383,8 +414,9 @@ pub(super) struct ScrollState {
     /// The offset, x and y, the last frame drew the content at, in points (slack and a stuck
     /// bottom included): how far it carried the content up and left.
     pub(super) drawn: [f32; 2],
-    /// Which way the last frame's drawn vertical offset stepped: -1, 0 or 1. A pinned end that
-    /// would step straight back holds its pixel instead (see the paint pass).
+    /// Which way the last frame's drawn vertical offset stepped: -1, 0 or 1, kept across modes
+    /// so a glide landing on a pinned end carries its direction in. A pinned end that would step
+    /// straight back holds its pixel instead (see the paint pass).
     pub(super) drawn_step: i8,
     /// Room freed under a pinned growth stack, held under its last row (see `step_slack`).
     pub(super) slack: scroll_bottom::Slack,

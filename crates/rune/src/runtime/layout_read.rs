@@ -531,7 +531,7 @@ impl<S: 'static> Runtime<S> {
                     || store.is_animating(id, P_SCALE) || store.is_animating(id, prop::ROTATION)
                     || self.grows.get(&id).is_some_and(|g| g.moving())
                     || self.stacks.get(&id).is_some_and(|s| s.moving)
-                    || self.scrolls.get(&id).is_some_and(|s| s.slack.height() > 0.0 || s.glide.is_some())
+                    || self.scrolls.get(&id).is_some_and(|s| s.slack.height() > 0.0 || s.glide().is_some())
             })
     }
 

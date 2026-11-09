@@ -127,7 +127,7 @@ impl<S: 'static> Measurement<'_, S> {
             v.top = (nodes[ci].target[1] - scroll.target[1]).max(0.0);
             let st = self.scrolls.get_mut(&scroll.id);
             let sticky = scroll.scroll.unwrap().stick_bottom;
-            let pinned = (settle && sticky) || st.as_ref().map_or(sticky, |s| s.pinned);
+            let pinned = (settle && sticky) || st.as_ref().map_or(sticky, |s| s.pinned());
             let offset = if let Some(st) = st {
                 if !pinned { st.offset = (st.offset + f64::from(v.anchor_delta())).max(0.0); }
                 st.offset as f32
@@ -249,7 +249,7 @@ impl<S: 'static> Measurement<'_, S> {
             assert!(el.cold.growth.is_some(), "`.virtualize(..)` at {path:?} needs `.growth(GrowthSpec)` on the same element");
             let (scroll_path, sticky, scroll_bound) = scroll.expect("virtual stack must be the direct child of a scroll viewport");
             let old_scroll = self.path_ids.get(scroll_path).and_then(|id| self.scrolls.get(id));
-            let pinned = (tx.settle && sticky) || old_scroll.map_or(sticky, |s| s.pinned);
+            let pinned = (tx.settle && sticky) || old_scroll.map_or(sticky, |s| s.pinned());
             let mut offset = old_scroll.map_or(0.0, |s| s.offset as f32);
             // A new viewport has no height yet: its bound from the tree, else the window's.
             let first = if scroll_bound.is_finite() { scroll_bound } else { self.viewport.1 };
