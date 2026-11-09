@@ -32,6 +32,14 @@ pub(crate) fn hwnd(window: &winit::window::Window) -> Option<HWND> {
     Some(h.hwnd.get() as HWND)
 }
 
+/// Drops the paint the system still owes `window`, which the loop just painted itself.
+pub(crate) fn drop_paint(window: &winit::window::Window) {
+    use windows_sys::Win32::Graphics::Gdi::{RDW_NOINTERNALPAINT, RedrawWindow};
+    let Some(hwnd) = hwnd(window) else { return };
+    // SAFETY: a live window this thread owns; no region or rectangle.
+    unsafe { RedrawWindow(hwnd, std::ptr::null(), std::ptr::null_mut(), RDW_NOINTERNALPAINT) };
+}
+
 pub(crate) fn pointer_position() -> Option<(i32, i32)> {
     let mut p = POINT { x: 0, y: 0 };
     (unsafe { GetCursorPos(&mut p) } != 0).then_some((p.x, p.y))

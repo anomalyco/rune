@@ -222,9 +222,8 @@ impl<S: 'static> Host<S> {
             timer_frame: TimerFrame::default(),
             presented: None,
             #[cfg(target_os = "windows")]
-            steady_until: None,
-            #[cfg(target_os = "windows")]
-            steady_frame: false,
+            steady: Steady::Rest,
+            redraw: std::cell::Cell::new(Redraw::Idle),
         });
         if launcher { self.win.as_mut().unwrap().first_frame.prepare(); }
         self.apply_placement(event_loop);
@@ -262,7 +261,7 @@ impl<S: 'static> Host<S> {
             self.shell(event_loop);
         }
         if !drew && (visible || launcher) && let Some(w) = &self.win {
-            w.window.request_redraw();
+            w.request_redraw();
         }
         Ok(())
     }

@@ -37,6 +37,18 @@ type Update<S> = Box<dyn FnOnce(&mut S, &mut Tx) -> bool + Send>;
 /// `App::on_window`'s hook, run after each native window creation.
 pub(crate) type OnWindow = Box<dyn FnMut(&crate::WindowHandle)>;
 
+/// `App::turn_scope`'s hooks.
+pub(crate) struct TurnScope<S> {
+    pub(crate) enter: fn(&mut S),
+    pub(crate) leave: fn(&mut S),
+}
+
+impl<S> Clone for TurnScope<S> {
+    fn clone(&self) -> Self { *self }
+}
+
+impl<S> Copy for TurnScope<S> {}
+
 /// An `AppSpec` with its lifetime: by default it opens one window and quits when it closes,
 /// like `rune::run`.
 pub struct App<S: 'static> {
@@ -54,6 +66,7 @@ pub struct App<S: 'static> {
     pub(crate) keep_running: bool,
     pub(crate) on_close: Option<fn(&mut S, &mut Tx)>,
     pub(crate) on_quit: Option<fn(&mut S, &mut Tx)>,
+    pub(crate) turn_scope: Option<TurnScope<S>>,
     pub(crate) on_focus: Option<fn(&mut S, bool, &mut Tx)>,
     pub(crate) on_mods: Option<fn(&mut S, crate::Mods, &mut Tx)>,
     pub(crate) on_ime: Option<fn(&mut S, &crate::Ime, &mut Tx) -> bool>,
@@ -108,6 +121,7 @@ impl<S: 'static> App<S> {
             keep_running: false,
             on_close: None,
             on_quit: None,
+            turn_scope: None,
             on_focus: None,
             on_mods: None,
             on_ime: None,
@@ -405,6 +419,15 @@ impl<S: 'static> App<S> {
     /// What it asks of its `Tx` beyond state is moot once the loop ends. Native windows only.
     pub fn on_quit(mut self, f: fn(&mut S, &mut Tx)) -> Self {
         self.on_quit = Some(f);
+        self
+    }
+
+    /// Runs `enter` before each turn of the window's event handling that can reach its state
+    /// (an event, a wake, a frame, a hook), and `leave` after it, so state the app's windows
+    /// share can move into the state of the window whose turn it is and back. The windows of
+    /// one event loop take turns, never two at once. Native windows only.
+    pub fn turn_scope(mut self, enter: fn(&mut S), leave: fn(&mut S)) -> Self {
+        self.turn_scope = Some(TurnScope { enter, leave });
         self
     }
 

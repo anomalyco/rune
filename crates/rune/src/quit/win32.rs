@@ -5,20 +5,27 @@
 //! installer or an update) arrive the same way.
 //!
 //! Neither message waits in the queue: Windows sends it and waits for the answer, and once every
-//! window answered `WM_ENDSESSION` it may end the process at any moment. So the window wakes the
-//! loop and runs it here, as a modal loop does, until `Windows` has run the hooks, for at most
-//! `WAIT`.
+//! window answered `WM_ENDSESSION` it may end the process at any moment. So the window starts
+//! the quit (`quitting` holds from then on), wakes the loop and runs it here, as a modal loop
+//! does, until `Windows` has run the hooks, for at most `WAIT`.
+//!
+//! A message can also come while one of the loop's handlers runs, from a modal loop inside it
+//! or a synchronous send. winit then holds the wake until the handler returns, and a paint run
+//! from here would re-enter it, so the window runs no loop: it ends a tracking menu (the usual
+//! modal loop) and answers, and the hooks run as the handler returns, before `WM_ENDSESSION`.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, TRUE, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, MSG, MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, EndMenu, MSG, MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW,
     PostQuitMessage, QS_ALLINPUT, RegisterClassW, TranslateMessage, WM_ENDSESSION, WM_QUERYENDSESSION, WM_QUIT, WNDCLASSW,
     WS_EX_TOOLWINDOW,
 };
+
+use super::{Event, Hooks, Loop, State};
 
 /// How long the window runs the loop for the hooks before it answers anyway: Windows shows
 /// that the app is preventing shutdown after five seconds.
@@ -29,9 +36,7 @@ type Deliver = Box<dyn Fn(bool) -> bool>;
 thread_local! {
     /// Sends a quit to the loop (`true`: the session ends now); false once the loop is gone.
     static DELIVER: RefCell<Option<Deliver>> = const { RefCell::new(None) };
-    /// Counts the quits `Windows` handled.
-    static HANDLED: Cell<u64> = const { Cell::new(0) };
-    static WINDOW: Cell<HWND> = const { Cell::new(std::ptr::null_mut()) };
+    static WINDOW: std::cell::Cell<HWND> = const { std::cell::Cell::new(std::ptr::null_mut()) };
 }
 
 pub(super) fn install(deliver: impl Fn(bool) -> bool + 'static) {
@@ -56,24 +61,18 @@ pub(super) fn install(deliver: impl Fn(bool) -> bool + 'static) {
     WINDOW.set(window);
 }
 
-pub(super) fn handled() {
-    HANDLED.set(HANDLED.get() + 1);
-}
-
 unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match message {
         WM_QUERYENDSESSION => {
-            super::start();
-            run_hooks(false);
+            answer(false);
             TRUE as LRESULT
         }
         WM_ENDSESSION => {
             if w != 0 {
-                super::start();
-                run_hooks(true);
+                answer(true);
             } else {
                 // Another app refused, or the user cancelled: the app runs on.
-                super::cancel();
+                super::send(Event::Cancel);
             }
             0
         }
@@ -82,13 +81,39 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
     }
 }
 
-/// Wakes the loop with the quit and runs it until `Windows` handled it.
-fn run_hooks(ending: bool) {
+/// Starts the quit and has the loop run the hooks, before the answer when the loop can run.
+fn answer(ending: bool) {
+    // The loop carries out the effects when the quit reaches it.
+    let _ = super::send(Event::Start { ending });
+    let sent = DELIVER.with(|d| d.try_borrow().ok().and_then(|d| d.as_ref().map(|d| d(ending)))).unwrap_or(false);
+    match super::loop_state() {
+        Loop::Handling => {
+            // SAFETY: ends whatever menu this thread tracks; nothing when none does.
+            unsafe { EndMenu() };
+            if ending && !answered(ending) {
+                eprintln!("rune: the session ended inside a loop handler, before the windows' App::on_quit ran");
+            }
+        }
+        Loop::Idle if sent => run_loop(ending),
+        Loop::Idle => {}
+    }
+}
+
+/// The loop did what the message asks: ran the hooks, and when the session ends now, closed the
+/// windows too. A cancelled or finished quit asks nothing more.
+fn answered(ending: bool) -> bool {
+    match super::state() {
+        State::Quitting(Hooks::Ran) => !ending,
+        State::Quitting(Hooks::Owed) => false,
+        State::Running | State::Closed | State::Done => true,
+    }
+}
+
+/// Runs the loop's messages until `Windows` answered the message, for at most `WAIT`.
+fn run_loop(ending: bool) {
     let ran = std::panic::catch_unwind(|| {
-        let before = HANDLED.get();
-        let sent = DELIVER.with(|d| d.try_borrow().ok().and_then(|d| d.as_ref().map(|d| d(ending)))).unwrap_or(false);
         let deadline = Instant::now() + WAIT;
-        while sent && HANDLED.get() == before {
+        while !answered(ending) {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 eprintln!("rune: the session ends before the windows' App::on_quit ran");

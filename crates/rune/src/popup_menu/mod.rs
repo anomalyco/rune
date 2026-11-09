@@ -30,6 +30,8 @@ use macos as host;
 mod win32;
 #[cfg(target_os = "windows")]
 use win32 as host;
+#[cfg(target_os = "windows")]
+pub(crate) use win32::turns;
 
 /// Platforms without native menus: nothing opens, so every request answers `None` at once.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]

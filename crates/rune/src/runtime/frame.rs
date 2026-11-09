@@ -45,6 +45,9 @@ impl<S: 'static> Runtime<S> {
         changed
     }
 
+    /// Whether the window has the keyboard focus, as its last focus event said.
+    pub(crate) fn has_window_focus(&self) -> bool { self.window_focused == Some(true) }
+
     /// Queue a native focus transition. Repeated notifications do not repeat the callback.
     /// Losing focus is also `keys_lost`.
     pub fn window_focus(&mut self, focused: bool) {

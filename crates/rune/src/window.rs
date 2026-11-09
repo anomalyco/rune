@@ -37,6 +37,10 @@ use native::Native;
 mod win;
 use win::{FirstFrame, Win};
 mod draw;
+mod redraw;
+use redraw::{Redraw, RedrawEffect, RedrawEvent};
+#[cfg(target_os = "windows")]
+use redraw::{Steady, SteadyEvent};
 mod presented;
 pub(crate) use presented::Presented;
 use presented::composing;
@@ -46,6 +50,7 @@ mod shell_requests;
 mod keys;
 pub(crate) use keys::{key_base, map_key_event, map_mods};
 mod any_host;
+mod app_events;
 mod event_loop;
 mod events;
 mod file_drop;
@@ -113,6 +118,8 @@ pub(crate) trait AnyHost {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent);
     /// Draws what has no redraw event (a layer surface); true while it needs more frames.
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) -> bool { false }
+    /// The turn ends: the next frame it wants is asked for, or a paint put off runs (`redraw`).
+    fn turn_ends(&mut self, _event_loop: &ActiveEventLoop, _now: Instant) {}
     fn finished(&self) -> bool { false }
     /// The OS is ending the app without Rune asking: run close hooks before the hosts drop.
     fn terminate(&mut self) {}
@@ -153,8 +160,6 @@ struct Windows {
     hosts: Vec<Option<Box<dyn AnyHost>>>,
     // Weak pool preserves release_gpu_when_closed when the last GPU owner closes.
     gpu: Rc<RefCell<Weak<Gpu>>>,
-    /// The quit (`crate::quit::start`) whose `App::on_quit` hooks ran last.
-    quit_ran: u64,
 }
 impl Windows {
     /// Starts the windows `crate::open_window` asked for this turn, in fresh slots, each like
@@ -217,49 +222,6 @@ impl Windows {
             event_loop.exit();
         }
     }
-
-    /// The app starts to quit (`crate::quit`): every window still open runs `App::on_quit`, once
-    /// per quit. A session ending now (`ending`) then closes the windows as their close buttons
-    /// would, before the loop ends, as a macOS logout does: the OS may end the process next.
-    fn quit(&mut self, event_loop: &ActiveEventLoop, ending: bool) {
-        let quit = crate::quit::start();
-        if self.quit_ran != quit {
-            self.quit_ran = quit;
-            for host in self.hosts.iter_mut().flatten() { host.quit_hook(); }
-        }
-        if ending && !event_loop.exiting() {
-            for host in self.hosts.iter_mut().flatten() { host.terminate(); }
-            event_loop.exit();
-        }
-    }
-
-    /// The app was reopened: every `on_reopen` hook runs, then, unless one handled it or the
-    /// app is an accessory, the default brings back a window when none shows (`reopen::target`).
-    fn reopen(&mut self, event_loop: &ActiveEventLoop) {
-        let candidates = |hosts: &[Option<Box<dyn AnyHost>>]| -> Vec<_> {
-            hosts.iter().map(|h| h.as_ref().map(|h| h.reopen_candidate()).unwrap_or_default()).collect()
-        };
-        let has_visible = crate::platform::reopen::has_visible(&candidates(&self.hosts));
-        let mut handled = false;
-        for host in self.hosts.iter_mut().flatten() {
-            handled |= host.reopen_hook(event_loop, has_visible);
-        }
-        if handled || event_loop.exiting() { return; }
-        #[cfg(target_os = "macos")]
-        if crate::platform::reopen::accessory() { return; }
-        // The default sees what the hooks did, to other windows too.
-        for host in self.hosts.iter_mut().flatten() { host.apply_pending(event_loop); }
-        if event_loop.exiting() { return; }
-        #[cfg(target_os = "macos")]
-        crate::platform::reopen::unhide();
-        if let Some(Some(host)) = crate::platform::reopen::target(&candidates(&self.hosts)).and_then(|i| self.hosts.get_mut(i)) {
-            host.reopen(event_loop);
-        }
-        // Windows: a launch while the app runs brings its front window forward, restored, as
-        // AppKit's activation does on macOS; the launch let this process take the foreground.
-        #[cfg(target_os = "windows")]
-        crate::open_url::instance::raise_front();
-    }
 }
 
 /// What a window needs from the shell to start, whatever its state type.
@@ -301,11 +263,13 @@ pub(crate) fn start<S: 'static>(mut spec: WindowSpec<S>, handle: Option<WindowHa
 
 impl ApplicationHandler<WakeEvent> for Windows {
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
+        let _handling = crate::quit::handling();
         for host in self.hosts.iter_mut().flatten() { host.new_events(event_loop, cause); }
         // Before resumed there are no hosts to clean up.
         if self.factory.is_none() { self.cleanup(event_loop); }
     }
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let _handling = crate::quit::handling();
         let Some(factory) = self.factory.take() else { return };
         let primary = event_loop.primary_monitor();
         let displays: Vec<_> = event_loop.available_monitors().map(|m| Display {
@@ -341,6 +305,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
         self.cleanup(event_loop);
     }
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
+        let _handling = crate::quit::handling();
         let slot = match &event {
             WakeEvent::DisplayTick(i) | WakeEvent::App(i) | WakeEvent::Live(i) | WakeEvent::Window(i, _) | WakeEvent::Focus(i)
                 | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
@@ -352,7 +317,6 @@ impl ApplicationHandler<WakeEvent> for Windows {
             }
             WakeEvent::Quit(ending) => {
                 self.quit(event_loop, *ending);
-                crate::quit::handled();
                 self.cleanup(event_loop);
                 return;
             }
@@ -364,6 +328,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
         self.cleanup(event_loop);
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        let _handling = crate::quit::handling();
         if let Some(host) = self.hosts.iter_mut().flatten().find(|h| h.owns(id)) {
             let _input = crate::input::time::arrived(&event);
             host.window_event(event_loop, id, event);
@@ -371,11 +336,16 @@ impl ApplicationHandler<WakeEvent> for Windows {
         self.cleanup(event_loop);
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let _handling = crate::quit::handling();
         crate::cursor::os::make_pending(event_loop);
         let mut animating = false;
         for host in self.hosts.iter_mut().flatten() {
             animating |= host.about_to_wait(event_loop);
         }
+        // The frames windows want next (`redraw`), and on Windows the paints the system keeps
+        // putting off behind another window's.
+        let now = Instant::now();
+        for host in self.hosts.iter_mut().flatten() { host.turn_ends(event_loop, now); }
         // Layer surfaces have no redraw events: keep turning while one animates (its vsync
         // paces the loop). Hosts whose only motion is an ambient loop sleep until its next step.
         let deadline = self.hosts.iter().flatten().filter_map(|host| host.wake_deadline()).min();
@@ -383,6 +353,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
             else { deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil) });
     }
     fn exiting(&mut self, event_loop: &ActiveEventLoop) {
+        let _handling = crate::quit::handling();
         // Every quit ends here, so the windows still open run `App::on_quit` first, unless the
         // quit's hooks already ran (a Windows logoff, the last window closing).
         self.quit(event_loop, false);
@@ -395,6 +366,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
         // Surfaces go while winit's display connection is still open (layer surfaces live on it).
         self.hosts.clear();
         crate::clipboard::shutdown();
+        crate::quit::send(crate::quit::Event::Exited);
     }
 }
 
@@ -422,6 +394,9 @@ struct Host<S: 'static> {
     keep_running: bool,
     on_close: Option<fn(&mut S, &mut Tx)>,
     on_quit: Option<fn(&mut S, &mut Tx)>,
+    /// `App::turn_scope`, and whether a turn is in it now.
+    turn_scope: Option<crate::app::TurnScope<S>>,
+    turn: any_host::Turn,
     on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
     /// Its place among the windows receiving links (`App::on_open_url`).
     _open_urls: Option<crate::open_url::incoming::Listening>,
@@ -500,7 +475,7 @@ impl<S: 'static> Host<S> {
             let _ = proxy.send_event(WakeEvent::App(slot));
         });
         let (open, keep_running, on_close, release_gpu) = (app.open, app.keep_running, app.on_close, app.release_gpu);
-        let (on_reopen, on_quit) = (app.on_reopen, app.on_quit);
+        let (on_reopen, on_quit, turn_scope) = (app.on_reopen, app.on_quit, app.turn_scope);
         #[cfg(target_os = "macos")]
         let present_log = args.trace.as_ref().map(|_| Arc::default());
         let mut app = app;
@@ -581,6 +556,8 @@ impl<S: 'static> Host<S> {
             keep_running,
             on_close,
             on_quit,
+            turn_scope,
+            turn: any_host::Turn::Between,
             on_reopen,
             _open_urls: None,
             hidden_at: None,
@@ -823,7 +800,7 @@ impl<S: 'static> Host<S> {
     fn sync_origin(&mut self) {
         let Some(w) = &self.win else { return };
         if sync_screen_origin(&mut self.rt, &w.window) {
-            w.window.request_redraw();
+            w.request_redraw();
         }
     }
 
