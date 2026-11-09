@@ -5,13 +5,15 @@
 //! it, so a row's first child is at its right, start and end alignment swap, and an absolute
 //! child's left inset is its right. Its own padding, border sides, corner radii, soft clip
 //! edges and linear gradients swap left and right with it, as CSS's logical `start` and `end`
-//! resolve: in this model `left` means start (`El::unmirrored` keeps an element physical). An `El::anchored` overlay's `Left` and `Right` sides and a `Top` or
-//! `Bottom` overlay's `Start` and `End` alignment swap too. Shadows, `El::offset` and other
-//! visual transforms stay physical, as CSS's do. Text lays out with a right-to-left paragraph
+//! resolve: in this model `left` means start (`El::unmirrored` keeps an element physical).
+//! An `El::anchored` overlay's `Left` and `Right` sides and a `Top` or `Bottom` overlay's
+//! `Start` and `End` alignment swap too. Shadows, `El::offset` and other visual transforms
+//! stay physical, as CSS's do. Text lays out with a right-to-left paragraph
 //! direction (bidi base level), so its `Start` alignment is its right edge.
 //!
-//! Nothing is mirrored in a window that sets no right-to-left direction: layout reads one flag
-//! per element.
+//! Each element's direction resolves as one step down the tree ([`step`]), from its parent's
+//! [`Flow`] and its own [`DirEvent`]. Nothing is mirrored in a window that sets no
+//! right-to-left direction: layout reads one small enum per element.
 use super::*;
 
 /// Which way an element and what it holds run, as HTML's `dir` attribute.
@@ -90,14 +92,89 @@ impl El {
     }
 }
 
-/// Whether `el` lays out right to left under a parent that does when `parent_rtl`.
-pub(crate) fn resolve(el: &El, parent_rtl: bool) -> bool {
-    match el.flags.dir() {
-        None => parent_rtl,
-        Some(Direction::Ltr) => false,
-        Some(Direction::Rtl) => true,
-        Some(Direction::Auto) => first_strong(el) == Some(Direction::Rtl),
+/// The direction an element resolved to, which its subtree lays out in: what `El::dir` and its
+/// ancestors' give it, `Direction::Auto` settled by its text.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) enum Flow {
+    #[default]
+    Ltr,
+    Rtl,
+}
+
+impl Flow {
+    /// A laid-out paragraph's flow: its bidi base level.
+    pub(crate) fn of_layout<B: parley::Brush>(layout: &parley::Layout<B>) -> Flow {
+        if layout.is_rtl() { Flow::Rtl } else { Flow::Ltr }
     }
+
+    /// The paragraph direction text in this flow lays out in.
+    pub(crate) fn base(self) -> parley::BaseDirection {
+        match self {
+            Flow::Ltr => parley::BaseDirection::Ltr,
+            Flow::Rtl => parley::BaseDirection::Rtl,
+        }
+    }
+}
+
+/// Where an element sits in its parent: where its parent's flow puts it, or where left-to-right
+/// layout does whatever the flow (`El::unmirrored`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Pin {
+    #[default]
+    Flowing,
+    Physical,
+}
+
+impl Pin {
+    pub(crate) fn of(el: &El) -> Pin {
+        if el.flags.has(ElFlags::UNMIRRORED) { Pin::Physical } else { Pin::Flowing }
+    }
+}
+
+/// What an element says about its own direction, the event that steps its parent's flow to its.
+pub(crate) enum DirEvent<'a> {
+    /// No `El::dir`: it takes its parent's.
+    Inherit,
+    /// `El::dir(Ltr)` or `El::dir(Rtl)`.
+    Set(Flow),
+    /// `El::dir(Auto)`: its first strong character decides, left to right when none does.
+    Auto(&'a El),
+}
+
+impl<'a> DirEvent<'a> {
+    pub(crate) fn of(el: &'a El) -> DirEvent<'a> {
+        match el.flags.dir() {
+            None => DirEvent::Inherit,
+            Some(Direction::Ltr) => DirEvent::Set(Flow::Ltr),
+            Some(Direction::Rtl) => DirEvent::Set(Flow::Rtl),
+            Some(Direction::Auto) => DirEvent::Auto(el),
+        }
+    }
+}
+
+/// What flattening does to an element once its flow is known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DirEffect {
+    /// Left to right: as authored.
+    Keep,
+    /// Right to left: its own left and right sides (`mirror_visual`) and its anchored
+    /// overlay's side (`mirror_anchor`) swap.
+    Mirror,
+}
+
+/// One step down the tree: the parent's flow and the element's own direction give its flow,
+/// and what it has to mirror.
+pub(crate) fn step(parent: Flow, event: DirEvent<'_>) -> (Flow, DirEffect) {
+    let flow = match event {
+        DirEvent::Inherit => parent,
+        DirEvent::Set(flow) => flow,
+        DirEvent::Auto(el) => if first_strong(el) == Some(Direction::Rtl) { Flow::Rtl } else { Flow::Ltr },
+    };
+    let effect = match flow {
+        Flow::Ltr => DirEffect::Keep,
+        Flow::Rtl => DirEffect::Mirror,
+    };
+    (flow, effect)
 }
 
 /// The first strong direction in `el`'s text, then its children's in order, skipping children

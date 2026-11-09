@@ -41,7 +41,7 @@ impl<S: 'static> Runtime<S> {
         let y = t[1] + self.stack_row_dy(nodes, i);
         let tw = layout.full_width().ceil() / s;
         let (x0, x1) = (t[0] + n.inset[0], t[2] - n.inset[2]);
-        let mut x = text_x(spec, x0, x1, tw, layout.is_rtl());
+        let mut x = text_x(spec, x0, x1, tw, crate::el::Flow::of_layout(layout));
         if inp.single_line {
             let prev = self.input_scroll.get(&n.path).copied().unwrap_or(0.0);
             x -= single_line_offset(prev, inp, &spec.content, layout, s, (x1 - x0) * s) / s;

@@ -227,7 +227,10 @@ impl<S: 'static> Runtime<S> {
     /// left right to left), negative while it fits.
     fn scroll_overflow_x(&self, i: usize) -> f64 {
         let view = self.nodes[i].target;
-        let reach = |c: usize| if self.nodes[i].rtl { view[2] - self.nodes[c].target[0] } else { self.nodes[c].target[2] - view[0] };
+        let reach = |c: usize| match self.nodes[i].flow {
+            crate::el::Flow::Ltr => self.nodes[c].target[2] - view[0],
+            crate::el::Flow::Rtl => view[2] - self.nodes[c].target[0],
+        };
         let content_w = self.scroll_children(i).map(|c| f64::from(reach(c))).reduce(f64::max).unwrap_or(0.0);
         content_w - f64::from(view[2] - view[0])
     }
@@ -269,7 +272,10 @@ impl<S: 'static> Runtime<S> {
             .find(|&p| self.nodes[p].scroll.is_some() && self.nodes[p].scroll_axes.x()) else { return };
         let view = &self.nodes[v];
         // From the viewport's start edge: its right, right to left.
-        let start = if view.rtl { view.target[2] - (target_x + target_w) } else { target_x - view.target[0] };
+        let start = match view.flow {
+            crate::el::Flow::Ltr => target_x - view.target[0],
+            crate::el::Flow::Rtl => view.target[2] - (target_x + target_w),
+        };
         let (left, width, viewport) = (f64::from(start), f64::from(target_w), f64::from(view.local.w));
         let (margin, id) = (f64::from(view.scroll_edges.margin), view.id);
         // A vertical reveal may have just mounted rows (virtual ones) that widened the content.

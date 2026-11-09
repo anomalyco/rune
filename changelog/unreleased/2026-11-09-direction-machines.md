@@ -1,0 +1,1 @@
+- Layout direction resolves as an explicit step down the tree (a parent's flow and an element's own `El::dir` give its flow and whether it mirrors), and a field's arrows seek the caret's drawn place by affinity as an explicit state machine. `RichLayoutOptions::direction(Direction)` replaces `rtl()` and `WindowTitlebar::direction(Direction)` replaces `rtl(bool)`.

@@ -108,8 +108,11 @@ impl<S: 'static> Runtime<S> {
             let turn = looped + if self.scene.store().has(n.id, P_ICON_TURN) {
                 self.scene.get(n.id, P_ICON_TURN).unwrap_or(n.vis.icon_turn)
             } else { n.vis.icon_turn };
-            // `El::mirror_in_rtl`: the drawing flips (its turn already runs the other way).
-            let flip = n.rtl && n.vis.mirror_rtl;
+            // `El::mirror_in_rtl`: the drawing mirrors (its turn already runs the other way).
+            let facing = match (n.flow, n.vis.mirror_rtl) {
+                (crate::el::Flow::Rtl, true) => crate::text::Facing::Mirrored,
+                _ => crate::text::Facing::Upright,
+            };
             let tk = if cover.is_some() { 1.0 } else { sc };
             let raster = if cover.is_some() { 1.0 } else { scale_motion.raster(sc, rest) };
             if cover.is_none() && scale_motion == ScaleMotion::Live {
@@ -146,7 +149,7 @@ impl<S: 'static> Runtime<S> {
                         fade: crate::render::pack_fade(fade, clip, clip),
                     });
                 }
-            } else if drawn > 1e-4 && let Some(q) = self.text.icon_quad_flipped(ic, px, pos, flip) {
+            } else if drawn > 1e-4 && let Some(q) = self.text.icon_quad_facing(ic, px, pos, facing) {
                 self.push_icon(icon_inst(&q, pos, drawn, turn, premul(color, o, srgb), clip, fade));
             }
         } else if let (Some(spec), Some(layout)) = (&n.text, &n.text_layout) {
@@ -169,7 +172,7 @@ impl<S: 'static> Runtime<S> {
             }
             let ins = n.inset.map(|v| v * zk * s);
             let (x0, x1) = (zr[0] + ins[0], zr[2] - ins[2]);
-            let mut origin = [text_x(spec, x0, x1, (layout.full_width() * tk).ceil(), layout.is_rtl()), zr[1] + ins[1]];
+            let mut origin = [text_x(spec, x0, x1, (layout.full_width() * tk).ceil(), crate::el::Flow::of_layout(layout)), zr[1] + ins[1]];
             // A gliding box's glyphs and decorations lay out from its nearest whole pixel and move the rest.
             // Within a 64th of a pixel they don't move, but still lay out from that pixel, as at rest.
             let (glide, off) = if gliding && cover.is_none() && scale_motion == ScaleMotion::Still {
@@ -220,12 +223,13 @@ impl<S: 'static> Runtime<S> {
                     // A one-line field's placeholder stays on its line, cut by the field's clip, as its
                     // text does; a multi-line field's wraps at its width.
                     let wrap = (!inp.single_line).then(|| (w - pl_indent).max(1.0) / tk.max(1e-4));
-                    let options = crate::text::RichLayoutOptions::new();
-                    let options = if spec.rtl { options.rtl() } else { options };
+                    let options = crate::text::RichLayoutOptions::new().flow(spec.flow);
                     let pl = self.text.layout_rich_with(&inp.placeholder, &[], spec.style, s, wrap, options);
                     // Right to left it ends at the field's start edge, its right.
-                    let pl_x = if !spec.rtl { rest_origin[0] + pl_indent } else if wrap.is_some() { rest_origin[0] } else {
-                        rest_origin[0] - pl_indent - (pl.full_width() * tk).ceil()
+                    let pl_x = match (spec.flow, wrap) {
+                        (crate::el::Flow::Ltr, _) => rest_origin[0] + pl_indent,
+                        (crate::el::Flow::Rtl, Some(_)) => rest_origin[0],
+                        (crate::el::Flow::Rtl, None) => rest_origin[0] - pl_indent - (pl.full_width() * tk).ceil(),
                     };
                     let pl_origin = [pl_x, rest_origin[1]];
                     let pl_r_origin = if scale_motion == ScaleMotion::Still { pl_origin } else { [0.0, 0.0] };
@@ -499,10 +503,10 @@ impl<S: 'static> Runtime<S> {
         let overflows = layout.full_width() > laid_out + 0.5
             && layout.full_width() * sc > (bounds[2] - bounds[0]).max(exact) + 0.5 * sc;
         // A right-to-left paragraph runs out past its left edge.
-        if !overflows && layout.is_rtl() {
-            bounds[0] = bounds[0].min(bounds[2] - exact.max(layout.full_width() * sc));
-        } else if !overflows {
-            bounds[2] = bounds[2].max(bounds[0] + exact.max(layout.full_width() * sc));
+        match (overflows, crate::el::Flow::of_layout(layout)) {
+            (true, _) => {}
+            (false, crate::el::Flow::Ltr) => bounds[2] = bounds[2].max(bounds[0] + exact.max(layout.full_width() * sc)),
+            (false, crate::el::Flow::Rtl) => bounds[0] = bounds[0].min(bounds[2] - exact.max(layout.full_width() * sc)),
         }
         Some((intersect(clip, bounds), bounds, overflows))
     }
@@ -530,8 +534,8 @@ impl<S: 'static> Runtime<S> {
                 // with `dir`, so a Latin title (`Direction::Auto`) in a right-to-left row fades on
                 // the left.
                 let n = &self.nodes[i];
-                let line_rtl = n.parent.map_or(n.rtl, |p| self.nodes[p].rtl);
-                let own = if (spec.align == Align::End) != line_rtl { [width, 0.0, 0.0, 0.0] }
+                let line = n.parent.map_or(n.flow, |p| self.nodes[p].flow);
+                let own = if (spec.align == Align::End) != (line == crate::el::Flow::Rtl) { [width, 0.0, 0.0, 0.0] }
                     else { [0.0, 0.0, width, 0.0] };
                 inherit_fade(&mut widths, &mut origins, bounds, own);
             }

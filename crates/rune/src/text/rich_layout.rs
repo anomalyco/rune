@@ -4,11 +4,17 @@ use super::*;
 
 /// How [`TextSystem::layout_rich_with`] lays out a paragraph. The default is
 /// [`layout_rich`](TextSystem::layout_rich): start-aligned, breaking only between words.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RichLayoutOptions {
     align: Alignment,
     wrap_anywhere: bool,
-    rtl: bool,
+    direction: parley::BaseDirection,
+}
+
+impl Default for RichLayoutOptions {
+    fn default() -> Self {
+        RichLayoutOptions { align: Alignment::Start, wrap_anywhere: false, direction: parley::BaseDirection::Ltr }
+    }
 }
 
 impl RichLayoutOptions {
@@ -30,11 +36,22 @@ impl RichLayoutOptions {
         self
     }
 
-    /// Lays the paragraph out right to left (its bidi base level), as a text element inside
-    /// [`El::dir`](crate::El::dir)`(Direction::Rtl)` does: `Start` aligns to the right edge
-    /// and neutral characters at its ends take the right-to-left side. Left to right without it.
-    pub fn rtl(mut self) -> Self {
-        self.rtl = true;
+    /// The paragraph's direction (its bidi base level), as a text element inside
+    /// [`El::dir`](crate::El::dir) lays out in: `Rtl` aligns `Start` to the right edge and gives
+    /// neutral characters at its ends the right-to-left side, `Auto` takes the first strong
+    /// character's. Left to right by default.
+    pub fn direction(mut self, direction: crate::Direction) -> Self {
+        self.direction = match direction {
+            crate::Direction::Ltr => parley::BaseDirection::Ltr,
+            crate::Direction::Rtl => parley::BaseDirection::Rtl,
+            crate::Direction::Auto => parley::BaseDirection::Auto,
+        };
+        self
+    }
+
+    /// [`Self::direction`] of a resolved flow.
+    pub(crate) fn flow(mut self, flow: crate::el::Flow) -> Self {
+        self.direction = flow.base();
         self
     }
 }
@@ -77,8 +94,7 @@ impl TextSystem {
         max_width: Option<f32>,
         options: RichLayoutOptions,
     ) -> Rc<Layout<Ink>> {
-        let base = if options.rtl { parley::BaseDirection::Rtl } else { parley::BaseDirection::Ltr };
-        self.layout_keyed(None, text, spans, &[], &[], style, scale, max_width, options.align, options.wrap_anywhere, true, base)
+        self.layout_keyed(None, text, spans, &[], &[], style, scale, max_width, options.align, options.wrap_anywhere, true, options.direction)
     }
 
     /// [`layout_aligned`](Self::layout_aligned) with per-paragraph [`Block`](crate::Block)

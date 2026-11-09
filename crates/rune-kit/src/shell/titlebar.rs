@@ -1,6 +1,6 @@
 //! A window's own titlebar band, laid out clear of the window's controls (`ChromeInsets`).
 
-use rune::{ChromeInsets, Color, El, row};
+use rune::{ChromeInsets, Color, Direction, El, row};
 
 use crate::Kit;
 
@@ -28,7 +28,7 @@ pub struct WindowTitlebar {
     tabs: Option<El>,
     trailing: Vec<El>,
     fill: Option<Color>,
-    rtl: bool,
+    direction: Direction,
 }
 
 impl WindowTitlebar {
@@ -49,7 +49,7 @@ impl WindowTitlebar {
             tabs: None,
             trailing: Vec::new(),
             fill: None,
-            rtl: false,
+            direction: Direction::Ltr,
         }
     }
     pub fn key(mut self, key: impl Into<String>) -> Self {
@@ -100,29 +100,31 @@ impl WindowTitlebar {
         self.trailing.push(el);
         self
     }
-    /// The band lays out right to left, inside [`El::dir`](rune::El::dir)`(Direction::Rtl)`:
-    /// its controls and tabs run from the right, while the room kept for the window's controls
-    /// stays on their side (the caption buttons' on the right, the traffic lights' on the left),
-    /// as Desktop's titlebar does under `dir="rtl"`.
-    pub fn rtl(mut self, rtl: bool) -> Self {
-        if rtl != self.rtl {
-            std::mem::swap(&mut self.leading_inset, &mut self.trailing_inset);
-        }
-        self.rtl = rtl;
+    /// The direction the band sits in. Inside [`El::dir`](rune::El::dir)`(Direction::Rtl)` pass
+    /// `Rtl`: its controls and tabs run from the right, while the room kept for the window's
+    /// controls stays on their side (the caption buttons' on the right, the traffic lights' on
+    /// the left), as Desktop's titlebar does under `dir="rtl"`. `Ltr` (the default) and `Auto`
+    /// lay it out left to right.
+    pub fn direction(mut self, direction: Direction) -> Self {
+        self.direction = direction;
         self
     }
 
     pub fn build(self, k: &Kit) -> El {
         let slot = row().key(format!("{}-tabs", self.key)).grow(1.0).shrink().min_w(0.0).h_full().center_y().children(self.tabs);
-        // Right to left the row's left padding is its start side, so `rtl` swapped the insets.
+        // Right to left the row's left padding is its start side: the insets keep their sides.
+        let (left_inset, right_inset) = match self.direction {
+            Direction::Rtl => (self.trailing_inset, self.leading_inset),
+            Direction::Ltr | Direction::Auto => (self.leading_inset, self.trailing_inset),
+        };
         row()
             .key(self.key)
             .role("toolbar")
             .w_full()
             .h(self.height)
             .pt(self.top_pad)
-            .pl(self.leading_inset + self.leading_pad)
-            .pr(self.trailing_inset + self.trailing_pad)
+            .pl(left_inset + self.leading_pad)
+            .pr(right_inset + self.trailing_pad)
             .gap(self.gap)
             .center_y()
             .fill(self.fill.unwrap_or(k.c.bg_deep))
