@@ -50,7 +50,7 @@ pub(crate) struct Vm {
 }
 
 /// What a host binds into each new VM, in [`ScriptOptions::setup`](crate::ScriptOptions::setup).
-/// It runs again for the new VM on every reload.
+/// It runs again for each new VM: in every reload, or ahead of one ([`Script::prewarm`](crate::Script::prewarm)).
 pub struct Host<'a> {
     lua: &'a Lua,
     shared: &'a Arc<Shared>,
@@ -107,18 +107,25 @@ impl Host<'_> {
 }
 
 pub(crate) struct Setup<'a> {
-    pub(crate) compiled: &'a Rc<Compiled>,
     pub(crate) shared: &'a Arc<Shared>,
-    pub(crate) clock: f64,
     pub(crate) memory_limit: usize,
     pub(crate) nodes: &'a [HostNode],
     pub(crate) host: Option<&'a crate::options::SetupFn>,
     pub(crate) log: Rc<dyn Fn(LogLevel, String)>,
 }
 
-impl Vm {
-    /// A new VM with everything bound, sandboxed, before its entry module runs.
-    pub(crate) fn new(setup: Setup<'_>) -> Result<(Vm, Function), ScriptError> {
+/// A VM before its script: the Luau state with the prelude, `@rune/ui` and the host's bindings,
+/// none of which depend on the script's files, so it can be built ahead of a reload
+/// ([`Script::prewarm`](crate::Script::prewarm)).
+pub(crate) struct Base {
+    lua: Lua,
+    prelude: Table,
+    view: Table,
+    signals: Rc<RefCell<FxHashMap<String, Value>>>,
+}
+
+impl Base {
+    pub(crate) fn new(setup: Setup<'_>) -> Result<Base, ScriptError> {
         #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
         crate::web::init();
         let lua = Lua::new();
@@ -127,7 +134,7 @@ impl Vm {
         lua.set_memory_limit(setup.memory_limit)?;
         lua.set_compiler(compiler());
         crate::watchdog::install(&lua)?;
-        lua.set_app_data(Sched::new(setup.shared.clone(), setup.clock));
+        lua.set_app_data(Sched::new(setup.shared.clone(), 0.0));
 
         let (task, forget) = task::install(&lua)?;
         let (wait, park, job) = task::tokens();
@@ -181,11 +188,22 @@ impl Vm {
         if let Some(host) = setup.host {
             host(&Host { lua: &lua, shared: setup.shared, signals: &signals, prelude: &prelude })?;
         }
+        Ok(Base { lua, prelude, view, signals })
+    }
+}
 
+impl Vm {
+    /// A new VM from `base` running `compiled`, sandboxed, before its entry module runs; its
+    /// task clock starts at `clock`.
+    pub(crate) fn new(base: Base, compiled: &Rc<Compiled>, clock: f64) -> Result<(Vm, Function), ScriptError> {
+        let Base { lua, prelude, view, signals } = base;
+        if let Some(mut sched) = lua.app_data_mut::<Sched>() {
+            sched.set_clock(clock);
+        }
         let loading: Loading = Rc::default();
-        globals.raw_set("require", lua.create_require_function(Requirer::new(setup.compiled.clone(), loading.clone()))?)?;
+        lua.globals().raw_set("require", lua.create_require_function(Requirer::new(compiled.clone(), loading.clone()))?)?;
         lua.sandbox(true)?;
-        let entry = module_loader(&lua, setup.compiled, &loading, &setup.compiled.entry)?;
+        let entry = module_loader(&lua, compiled, &loading, &compiled.entry)?;
         let fire = prelude.get::<Function>("fire")?;
         let vm = Vm {
             module: lua.create_table()?,

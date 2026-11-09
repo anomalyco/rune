@@ -86,6 +86,13 @@ impl Sched {
         }
     }
 
+    /// Sets the frame clock to `clock` now (a VM built ahead of time starts on the clock of the
+    /// moment it runs).
+    pub(crate) fn set_clock(&mut self, clock: f64) {
+        self.clock = clock;
+        self.read_at = Instant::now();
+    }
+
     /// The frame clock now: the last poll's reading plus the wall time since.
     fn now(&self) -> f64 {
         self.clock + self.read_at.elapsed().as_secs_f64()
