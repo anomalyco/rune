@@ -131,6 +131,10 @@ export async function fetchBytes(url) {
     return new Uint8Array(await response.arrayBuffer());
 }
 
+export function resolveUrl(url, base) {
+    return new URL(url, base).href;
+}
+
 export function viewport(canvas, callback, embedded) {
     const probe = document.createElement('div');
     probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';

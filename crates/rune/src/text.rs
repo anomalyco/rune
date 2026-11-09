@@ -31,6 +31,7 @@ mod color_icon;
 mod cursor;
 mod decorations;
 mod families;
+pub(crate) mod full_faces;
 mod language;
 pub use language::set_language;
 mod line_break;
@@ -156,6 +157,8 @@ pub struct TextSystem {
     /// The language text shapes in, and the `set_language` change it follows.
     language: Option<parley::fontique::Language>,
     language_epoch: u64,
+    /// Whether it swapped in the full faces a web app fetches (see `full_faces`).
+    full_faces: bool,
     pub sans: String,
     pub mono: String,
     symbol_families: Vec<&'static str>,
@@ -305,6 +308,7 @@ impl TextSystem {
             chosen: 0,
             language: None,
             language_epoch: 0,
+            full_faces: false,
             sans, mono,
             symbol_families,
             emoji,
@@ -338,6 +342,7 @@ impl TextSystem {
         };
         text.load_installed(families.0);
         text.load_installed(families.1);
+        text.follow_full_faces();
         text
     }
 

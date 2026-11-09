@@ -159,7 +159,11 @@ try {
     assert.deepEqual(size, [12, 6]);
     await page.mouse.move(300, 700);
     await page.waitForFunction(() => getComputedStyle(document.querySelector('canvas')).cursor === 'auto');
-    console.log(JSON.stringify({ ok: true, checks: ['image bytes', 'image cursor'] }));
+    // Inter's full faces load from beside app.js once the first frame is up.
+    await page.waitForFunction(() => performance.getEntriesByType('resource').filter(e => /\/Inter-\w+\.ttf$/.test(e.name) && e.responseEnd > 0).length === 3);
+    assert.deepEqual(await page.evaluate(() => performance.getEntriesByType('resource')
+        .filter(e => /\/Inter-\w+\.ttf$/.test(e.name)).map(e => e.responseStatus ?? 200)), [200, 200, 200]);
+    console.log(JSON.stringify({ ok: true, checks: ['image bytes', 'image cursor', 'full Inter faces'] }));
     assert.deepEqual(await page.evaluate(() => window.__proof.gpuErrors), []);
     assert.deepEqual(errors.filter(e => !e.includes('404')), []);
     if (engine === 'chromium') { await clockSmoke(browser, url); console.log(JSON.stringify({ ok: true, checks: ['page clock'] })); }

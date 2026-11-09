@@ -23,6 +23,9 @@ extern "C" {
     /// Resolves to the `Uint8Array` body of `url`, relative to the page.
     #[wasm_bindgen(js_name = fetchBytes)]
     pub(crate) fn fetch_bytes(url: &str) -> js_sys::Promise;
+    /// `url` resolved against `base`.
+    #[wasm_bindgen(js_name = resolveUrl)]
+    pub(crate) fn resolve_url(url: &str, base: &str) -> String;
     #[wasm_bindgen(js_name = objectUrl)]
     pub(crate) fn object_url(bytes: &[u8], kind: &str) -> String;
     #[wasm_bindgen(js_name = revokeUrl)]

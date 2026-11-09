@@ -10,6 +10,8 @@ use super::web_math;
 /// The overscan a page's canvas carries above and below the window, in CSS points: the distance
 /// the browser's compositor can scroll before Rune has to draw a new band.
 const SKIRT: f32 = 256.0;
+#[cfg(feature = "embedded-fonts")]
+mod full_faces;
 mod input;
 mod page;
 pub(crate) mod platform;
@@ -556,6 +558,11 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 if !r.presented {
                     r.presented = true;
                     r.input.presented();
+                    #[cfg(feature = "embedded-fonts")]
+                    {
+                        let proxy = self.proxy.clone();
+                        full_faces::fetch(move || { let _ = proxy.send_event(Wake::App); });
+                    }
                 }
                 if r.rt.shell_request.take().is_some() { self.end(event_loop); return; }
                 if animating || r.rt.has_pending_input() || r.rt.live_pending() || r.compositor.as_ref().is_some_and(|c| c.animating()) {

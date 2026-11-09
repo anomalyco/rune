@@ -8,12 +8,13 @@ pub(super) const DEFAULT_FONTS: &[&[u8]] = &[
     include_bytes!("../../assets/Inter-SemiBold.ttf"),
 ];
 // Inter without TrueType hinting or glyph names (`scripts/web-fonts.sh`): the web rasterizes
-// with Rune's own pipeline, which reads neither, and the copies are a quarter smaller with Brotli.
+// with Rune's own pipeline, which reads neither. Cut to Latin text, a third of the full faces,
+// which the app fetches after its first frame (`full_faces`).
 #[cfg(all(target_arch = "wasm32", any(test, feature = "embedded-fonts")))]
 pub(super) const DEFAULT_FONTS: &[&[u8]] = &[
-    include_bytes!("../../assets/web/Inter-Regular.ttf"),
-    include_bytes!("../../assets/web/Inter-Medium.ttf"),
-    include_bytes!("../../assets/web/Inter-SemiBold.ttf"),
+    include_bytes!("../../assets/web/latin/Inter-Regular.ttf"),
+    include_bytes!("../../assets/web/latin/Inter-Medium.ttf"),
+    include_bytes!("../../assets/web/latin/Inter-SemiBold.ttf"),
     include_bytes!("../../assets/IBMPlexMono-Regular.ttf"),
 ];
 #[cfg(all(target_arch = "wasm32", not(any(test, feature = "embedded-fonts"))))]

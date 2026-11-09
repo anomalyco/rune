@@ -160,6 +160,11 @@ build_once() {
             "$next/app_bg.wasm" -o "$next/app_bg.opt.wasm" || return 1
         mv "$next/app_bg.opt.wasm" "$next/app_bg.wasm"
     fi
+    # Rune's default fonts embed Inter cut to Latin text and fetch the full faces from beside
+    # app.js once the first frame is up: copy those of the Rune this build embedded the cut from.
+    local cut
+    cut=$(tr ' ' '\n' < "${artifact%.wasm}.d" 2>/dev/null | grep -m1 '/assets/web/latin/Inter-Regular\.ttf$' || true)
+    if [[ -n $cut ]]; then cp "${cut%/latin/*}"/Inter-*.ttf "$next/"; fi
     local entry
     for entry in "$next"/*; do
         if [[ -d $entry ]]; then

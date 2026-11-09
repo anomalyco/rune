@@ -79,6 +79,17 @@ pub(super) fn note_fonts(fonts: &[&'static [u8]], families: (&str, &str)) {
     with_state(|slot| apply_fonts(slot, fonts, families));
 }
 
+/// Called when a web app's full faces arrive: the next measurement shapes with them.
+#[cfg(all(target_arch = "wasm32", feature = "embedded-fonts"))]
+pub(super) fn note_faces_arrived() {
+    with_state(|slot| {
+        if let Some(f) = slot.as_mut() {
+            f.generation += 1;
+            f.fonts_generation = f.generation;
+        }
+    });
+}
+
 /// Called by [`TextSystem::set_families`]; the next measurement uses these families.
 pub(super) fn note_families(sans: &str, mono: &str) {
     with_state(|slot| {
