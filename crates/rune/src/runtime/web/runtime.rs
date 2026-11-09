@@ -212,7 +212,7 @@ fn byte_at(text: &str, utf16: usize) -> Option<usize> {
 impl<S: 'static> Runtime<S> {
     pub(crate) fn web_context(&self, mirror: &mut Mirror) -> bool {
         match self.focused_input().filter(|i| i.access.is_some()) {
-            Some(input) => mirror.update(self.focused.as_deref().unwrap_or_default(), Some(&input.edit)),
+            Some(input) => mirror.update(self.focus.path().unwrap_or_default(), Some(&input.edit)),
             None => mirror.update("", None),
         }
     }
@@ -252,14 +252,14 @@ impl<S: 'static> Runtime<S> {
 
     pub(crate) fn web_secure(&mut self, key: &str, text: String) {
         let event = crate::KeyEvent { key: crate::Key::Text(text), mods: crate::Mods::default() };
-        if self.focused.as_deref() == Some(key) && self.has_secure_focus() {
+        if self.focus.path() == Some(key) && self.has_secure_focus() {
             self.key(event);
         }
     }
 
     pub(crate) fn web_edit(&mut self, event: &serde_json::Value) {
         let Some(key) = event["key"].as_str() else { return };
-        if self.focused.as_deref() != Some(key) || self.has_secure_focus() { return; }
+        if self.focus.path() != Some(key) || self.has_secure_focus() { return; }
         let number = |key: &str| event[key].as_u64().and_then(|n| usize::try_from(n).ok());
         let Some(base) = number("base") else { return };
         let Some(expected) = event["expected"].as_str() else { return };

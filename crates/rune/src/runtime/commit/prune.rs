@@ -44,7 +44,8 @@ impl<S: 'static> Runtime<S> {
         self.refresh_modal_index();
         self.flying.retain(|(id, _)| self.node_index.contains_key(id));
         self.has_raise = self.nodes.iter().any(|n| n.vis_flags.raise());
-        if !self.layer_paint_order.is_empty() || !self.flying.is_empty() || self.has_raise { self.update_layer_paint_order(); }
+        self.has_paint_order = self.nodes.iter().any(|n| n.vis.paint_order != 0);
+        if !self.layer_paint_order.is_empty() || !self.flying.is_empty() || self.has_raise || self.has_paint_order { self.update_layer_paint_order(); }
         // A removed element's live sources (a `Pixels` stream) stop waking this window.
         if !self.live_subscriptions.is_empty() {
             let dirty = self.live_dirty;

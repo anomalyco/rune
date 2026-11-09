@@ -93,7 +93,7 @@ impl<S: 'static> Runtime<S> {
         // only when isolation requires it; the ordinary painter stream stays byte-identical.
         // Matched flights paint last (see `update_layer_paint_order`).
         let flying = !self.flying.is_empty();
-        let tree_order = ((flying || self.has_sticky || self.has_raise) && !self.layer_paint_order.is_empty()) || self.layer_paint_order.windows(2).any(|pair| {
+        let tree_order = ((flying || self.has_sticky || self.has_raise || self.has_paint_order) && !self.layer_paint_order.is_empty()) || self.layer_paint_order.windows(2).any(|pair| {
             let n = &self.nodes[pair[0]];
             self.nodes[pair[1]].parent == Some(pair[0]) && ((self.has_dissolve && self.dissolve_scratch[pair[0]]) || n.vis_flags.cache() || n.vis.clip_radius.is_some() || n.vis.group_opacity.is_some() || n.group_fade
                 || n.vis.layer_opacity < 1.0 || fades(n.looping.as_deref().copied())
@@ -1281,7 +1281,7 @@ impl<S: 'static> Runtime<S> {
         // Retarget from the new geometry and schedule the frame that samples that paint. A
         // commit that moved the indices left keyboard focus hover (`El::hover_group_focus`) to
         // this pass too.
-        let interaction = (self.pointer.is_some() || self.keyboard_focus) && self.update_interaction(held);
+        let interaction = (self.pointer.is_some() || self.focus.keyboard()) && self.update_interaction(held);
         self.queue.len() > queued || interaction
     }
 }

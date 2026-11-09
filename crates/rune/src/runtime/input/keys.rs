@@ -9,11 +9,11 @@ impl<S: 'static> Runtime<S> {
         one.focused = self.focused_key();
         if matches!(ev.key, crate::Key::Modifier { .. }) { return !repeat && self.route_modifier(ev, one); }
         one.key_repeat = repeat;
-        let shown = self.keyboard_focus || self.hover_focus;
-        self.keyboard_focus |= focus::navigates(ev);
+        let shown = self.focus.keyboard() || self.focus.hovered();
+        if focus::navigates(ev) { self.focus.step(focus_machine::FocusEvent::Navigated); }
         // With no focused element, app-owned navigation (e.g. a toolbar)
         // gets first refusal before Rune starts a new Tab traversal.
-        let app_first = self.focused.is_none();
+        let app_first = self.focus.path().is_none();
         // Return and Escape that reach a field mid-composition belong to the input method: they
         // confirm or cancel it, and submit, blur and press nothing.
         if matches!(ev.key, crate::Key::Enter | crate::Key::Escape) && self.composing() { return true; }
@@ -114,7 +114,7 @@ impl<S: 'static> Runtime<S> {
         use crate::Key::*;
         if !matches!(ev.key, PageUp | PageDown | Home | End) || ev.mods.cmd || ev.mods.alt || ev.mods.ctrl { return false; }
         // A focused field in a virtual row that scrolled out has no node: page its list.
-        let focused = self.focused.as_deref().and_then(|path| {
+        let focused = self.focus.path().and_then(|path| {
             std::iter::successors(Some(path), |p| p.rsplit_once('/').map(|(head, _)| head))
                 .find_map(|p| self.nodes.iter().position(|n| n.path == p))
         });
@@ -152,7 +152,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub(super) fn focused_layout(&mut self) -> Option<Rc<Layout<Ink>>> {
-        let path = self.focused.clone()?;
+        let path = self.focus.owned()?;
         let s = self.env.scale;
         let n = self.node(&path)?;
         let (mut spec, w) = (n.text.clone()?, n.target[2] - n.target[0] - n.inset[0] - n.inset[2]);
@@ -166,7 +166,7 @@ impl<S: 'static> Runtime<S> {
 
     /// [`Self::with_focused`] for an edit that needs the app state (an app's paste hook).
     pub(super) fn with_focused_state(&mut self, f: impl FnOnce(crate::states::States<'_>, &crate::el::EditFn, &mut Tx) -> EditOutcome, tx: &mut Tx) -> bool {
-        let Some(path) = self.focused.clone() else { return false };
+        let Some(path) = self.focus.owned() else { return false };
         let Some((access, submit, change, animate_layout, single_line, secure, revealed_override)) =
             self.focused_input().map(|i| (i.access.clone(), i.submit.clone(), i.change.clone(), i.animate_layout, i.single_line, i.edit.is_secure(), i.revealed_override))
         else {
@@ -197,7 +197,7 @@ impl<S: 'static> Runtime<S> {
             tx.copy(c);
         }
         if out.blur {
-            self.set_focus(None, self.keyboard_focus);
+            self.set_focus(None, self.focus.keyboard());
         }
         if out.submit
             && let Some(sub) = submit
@@ -238,14 +238,14 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub(super) fn focused_input(&self) -> Option<&InputSpec> {
-        let path = self.focused.as_deref()?;
+        let path = self.focus.path()?;
         self.node(path).and_then(|n| n.input.as_deref()).or_else(|| self.virtual_inputs.get(path).map(Box::as_ref))
     }
 
     /// What [`Tx::focused`] reports: the focused link's id, else the focused element's key,
     /// else its path's last segment (a field in a virtual row that scrolled out has no node).
     pub(super) fn focused_key(&self) -> Option<String> {
-        let path = self.focused.as_deref()?;
+        let path = self.focus.path()?;
         if let Some(id) = self.focused_index().and_then(|i| self.focused_link_id(i)) { return Some(id); }
         Some(self.focused_index().and_then(|i| self.nodes[i].key.clone())
             .unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path).to_owned()))
@@ -253,7 +253,7 @@ impl<S: 'static> Runtime<S> {
 
     /// The focused element's index. Unlike [`Runtime::node`], this finds it while it exits.
     pub(super) fn focused_index(&self) -> Option<usize> {
-        let path = self.focused.as_deref()?;
+        let path = self.focus.path()?;
         self.nodes.iter().position(|n| n.path == path)
     }
 
@@ -301,7 +301,7 @@ impl<S: 'static> Runtime<S> {
         self.paste_target().is_some() || self.app_paste_handler().is_some()
     }
     pub(crate) fn paste_target(&self) -> Option<String> {
-        self.focused_input().filter(|i| i.access.is_some()).and(self.focused.clone())
+        self.focused_input().filter(|i| i.access.is_some()).and(self.focus.owned())
     }
     /// What the paste target hears: every form, images too, for a field with
     /// `on_input_paste` or a root `on_paste_content` handler; text, HTML and RTF for a rich
@@ -332,6 +332,6 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub fn has_focus(&self) -> bool {
-        self.focused.is_some()
+        self.focus.path().is_some()
     }
 }

@@ -16,6 +16,10 @@ extern "C" {
     /// Resolves to `[width, height, Uint8Array]`: straight sRGB RGBA, or `[0, 0, svg bytes]`.
     #[wasm_bindgen(js_name = fetchImage)]
     pub(crate) fn fetch_image(url: &str, max_side: u32) -> js_sys::Promise;
+    /// Resolves to `[width, height, Uint8Array]`, straight sRGB RGBA the browser decoded from
+    /// encoded image bytes (JPEG, WebP, AVIF, GIF's first frame).
+    #[wasm_bindgen(js_name = decodeImage)]
+    pub(crate) fn decode_image(bytes: &[u8], max_side: u32) -> js_sys::Promise;
     /// Resolves to the `Uint8Array` body of `url`, relative to the page.
     #[wasm_bindgen(js_name = fetchBytes)]
     pub(crate) fn fetch_bytes(url: &str) -> js_sys::Promise;

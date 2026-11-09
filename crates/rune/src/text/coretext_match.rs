@@ -86,6 +86,30 @@ pub(crate) fn glyph_x(x: f32, ppem: f32) -> (f32, u8) {
     if phase >= steps { (fx + 1.0, 0) } else { (fx, (phase * (PHASES / steps)) as u8) }
 }
 
+/// Coverage exponents for black and for white text with font smoothing off: the curve Skia's
+/// text gamma (sRGB, contrast 1) draws grayscale text with, for outlines rasterised elsewhere.
+const TEXT_GAMMA: [f32; 2] = [1.12, 0.45];
+
+/// The exponent glyph coverage in `mode` is raised to when drawn in premultiplied `fill`, on
+/// Apple platforms (`apple`) or Windows (`windows`) or neither. With smoothing off on Linux,
+/// Windows and the web it stands in for the text gamma a browser's grayscale antialiasing
+/// applies there: light text on a dark page draws heavier and dark text on a light one a little
+/// lighter than coverage blended as is, keyed by the text's luminance. On macOS and iOS coverage
+/// is drawn as is in every mode: CoreText with smoothing off, and Safari and Chrome with
+/// `-webkit-font-smoothing: antialiased`, apply no text gamma (measured on macOS 15.3 with
+/// Chrome 156: the same ink as CoreText, where the gamma drew light-on-dark text up to 24%
+/// heavier). With smoothing on, CoreText's dilation does that job, and with DirectWrite on
+/// Windows Skia's gamma tables do; coverage is drawn as is.
+pub(crate) fn coverage_exponent(mode: FontSmoothing, fill: [f32; 4], apple: bool, windows: bool) -> f32 {
+    // DirectWrite masks already carry Skia's gamma for their text's luminance.
+    let direct_write = mode == FontSmoothing::DirectWrite && windows;
+    if apple || direct_write || matches!(mode, FontSmoothing::On | FontSmoothing::Windfoil) || fill[3] <= 0.0 {
+        return 1.0;
+    }
+    let luma = (0.2126 * fill[0] + 0.7152 * fill[1] + 0.0722 * fill[2]) / fill[3];
+    TEXT_GAMMA[0] + (TEXT_GAMMA[1] - TEXT_GAMMA[0]) * luma.clamp(0.0, 1.0)
+}
+
 #[cfg(test)]
 #[path = "coretext_match_tests.rs"]
 mod tests;

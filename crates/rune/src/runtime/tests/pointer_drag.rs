@@ -152,10 +152,10 @@ fn a_drag_out_that_offers_nothing_stays_a_press() {
 #[test]
 fn a_drag_out_that_offers_nothing_tracks_leaving_the_element() {
     let mut rt = drag_out_rt(false);
-    assert!(rt.capture_inside);
+    assert!(rt.press.inside());
     rt.pointer_move(150.0, 10.0);
     assert!(rt.pointer_captured(), "the press holds on");
-    assert!(!rt.capture_inside, "the move that declined the drag left the element, so it no longer shows pressed");
+    assert!(!rt.press.inside(), "the move that declined the drag left the element, so it no longer shows pressed");
 }
 
 #[test]

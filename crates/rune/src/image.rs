@@ -172,7 +172,8 @@ impl ImageCache {
     /// PNG, JPEG, modern ICNS containing a PNG representation, or SVG (plain or gzipped SVGZ,
     /// recognised by its content). An SVG rasterizes at twice its own size; use
     /// [`ImageCache::svg`] to rasterize it at the size it draws at. Legacy ICNS codecs return an
-    /// explicit error; callers can provide platform-decoded RGBA instead.
+    /// explicit error; callers can provide platform-decoded RGBA instead. On web the browser
+    /// decodes everything but PNG, SVG and ICNS, so WebP, AVIF and GIF's first frame load too.
     pub fn load(&self, bytes: impl Into<Arc<[u8]>>) -> Image {
         let bytes = bytes.into();
         let mut hash = blake3::Hasher::new();
@@ -295,6 +296,11 @@ impl ImageCache {
                         if !wanted(&weak) { return; }
                         match fetched { Ok(fetched) => from_url::land_in_slices(&url, fetched, px).await, Err(e) => Err(e) }
                     }
+                    Input::Encoded(bytes) if browser_decodes(&bytes) => {
+                        let decoded = from_url::decode_in_browser(&bytes).await;
+                        if !wanted(&weak) { return; }
+                        match decoded { Ok(fetched) => from_url::land_in_slices("image", fetched, 0).await, Err(e) => Err(e) }
+                    }
                     input => input.decode(),
                 };
                 let Some(state) = weak.upgrade() else { return };
@@ -304,6 +310,13 @@ impl ImageCache {
         }
         image
     }
+}
+
+/// Encoded bytes a web build hands to the browser's codecs: everything but PNG (decoded exactly,
+/// alpha and all, by Rune), SVG and ICNS.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+fn browser_decodes(bytes: &[u8]) -> bool {
+    !bytes.starts_with(b"\x89PNG\r\n\x1a\n") && !bytes.starts_with(b"icns") && !is_svg(bytes)
 }
 
 /// Whether anything still holds the image a fetch is for.
@@ -758,6 +771,7 @@ mod tests {
             let mut encoded = std::io::Cursor::new(Vec::new());
             source.write_to(&mut encoded, format).unwrap();
             let bytes = encoded.into_inner();
+            assert_eq!(browser_decodes(&bytes), format == image::ImageFormat::Jpeg, "web decodes JPEG in the browser, PNG itself");
             let d = decode(&bytes).unwrap();
             assert_eq!((d.mips[0].width, d.mips[0].height), (8, 4));
             assert_eq!((d.mips.last().unwrap().width, d.mips.last().unwrap().height), (1, 1));
@@ -767,6 +781,7 @@ mod tests {
                 icns.extend_from_slice(b"icp4");
                 icns.extend_from_slice(&((bytes.len() + 8) as u32).to_be_bytes());
                 icns.extend_from_slice(&bytes);
+                assert!(!browser_decodes(&icns));
                 assert_eq!(decode(&icns).unwrap().mips[0].pixels, d.mips[0].pixels);
                 icns[12..16].copy_from_slice(&0u32.to_be_bytes());
                 assert!(decode(&icns).is_err());

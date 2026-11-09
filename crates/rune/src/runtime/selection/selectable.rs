@@ -17,6 +17,10 @@
 use super::*;
 use std::ops::Range;
 
+/// A secondary press outside the selection selects the word under it first: AppKit text does,
+/// Chromium on Windows and Linux doesn't.
+const SECONDARY_SELECTS_WORD: bool = cfg!(target_os = "macos");
+
 #[path = "copy_join.rs"]
 mod copy_join;
 #[path = "toolbar.rs"]
@@ -535,7 +539,7 @@ impl<S: 'static> Runtime<S> {
 
     /// The held press is selecting text by dragging, and has selected some.
     pub(super) fn selected_by_drag(&self) -> bool {
-        self.text_sel.dragging && self.press_moved && (!self.selection_ranges().is_empty() || self.has_nonempty_selection())
+        self.text_sel.dragging && self.press.held().is_some_and(|h| h.moved) && (!self.selection_ranges().is_empty() || self.has_nonempty_selection())
     }
 
     pub(super) fn clear_text_selection(&mut self) {
@@ -718,12 +722,14 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// A secondary click on selectable text `path` without its own `on_secondary_press` opens the
-    /// Copy menu, selecting the word under the pointer first when the click is outside the
-    /// selection, as AppKit text does. False when the app's handler should run instead.
+    /// Copy menu. On macOS it selects the word under the pointer first when the click is outside
+    /// the selection, as AppKit text does; elsewhere the selection stays as it is, as Chromium's
+    /// does on Windows and Linux. False when the app's handler should run instead.
     pub(super) fn selection_menu(&mut self, path: &str, x: f32, y: f32) -> bool {
         let Some(i) = self.live(path) else { return false };
         if !self.is_selectable(i) || self.nodes[i].handlers.on_secondary_press.is_some() { return false; }
-        if let Some(at) = self.text_index_at(i, x, y)
+        if SECONDARY_SELECTS_WORD
+            && let Some(at) = self.text_index_at(i, x, y)
             && range_in(&self.selection_ranges(), i).is_none_or(|(a, b)| at < a || at >= b)
         {
             let content = self.content_of(i).to_owned();

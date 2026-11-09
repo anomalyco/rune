@@ -282,7 +282,8 @@ impl<S: 'static> Runtime<S> {
                 // Misspelled words (`El::spellcheck`), but the one the caret is typing.
                 if inp.spellcheck && !e.is_secure() && e.preedit().is_none() && !departing {
                     let found = crate::spell::misspelled(&e.text);
-                    let caret = e.focused.then(|| e.range()).filter(|(a, b)| a == b).map(|(a, _)| a);
+                    // The word typing left the caret in waits unmarked until the pause ends (`spell::pause`).
+                    let caret = if e.focused { crate::spell::pause::observe(&mut self.spell_watch, &n.path, &e.text, e.range(), self.clock) } else { None };
                     let color = premul(SPELLING, o, srgb);
                     for &(a, b) in found.iter().filter(|&&(a, b)| caret.is_none_or(|c| c < a || c > b)) {
                         let (da, db) = e.display_selection_range(a, b);

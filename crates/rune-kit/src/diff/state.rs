@@ -313,7 +313,7 @@ impl DiffState {
         }
     }
 
-    /// Highlight code with `h` instead of the built-in scanners.
+    /// Highlight code with `h` instead of the built-in highlighter.
     pub fn set_highlighter(&mut self, h: Highlighter) {
         self.highlighter = h;
         self.chunks.borrow_mut().clear();

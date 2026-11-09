@@ -219,13 +219,13 @@ mod tests {
         assert!(!rt.state[190].focused);
         rt.update(|s, _| s[180].focused = false);
         rt.frame(0.0);
-        assert!(rt.focused.is_none(), "explicitly blurred offscreen input stays blurred");
+        assert!(rt.focus.path().is_none(), "explicitly blurred offscreen input stays blurred");
         rt.update(|s, _| s[190].focused = true);
         rt.frame(0.0);
         assert!(rt.state[190].focused);
         rt.update(|s, _| { s.truncate(100); });
         rt.frame(0.0);
-        assert!(rt.focused.is_none(), "deleted offscreen input loses focus");
+        assert!(rt.focus.path().is_none(), "deleted offscreen input loses focus");
         rt.update(|s, tx| { s.extend(make_blocks(140, None)); tx.scroll_into_view("b190"); });
         rt.frame(0.0);
         assert!(!rt.state[190].focused, "reusing a deleted path must not restore focus");

@@ -126,7 +126,9 @@ fn unit_at(e: &crate::edit::TextEdit, h: Hit, unit: Unit) -> (usize, usize) {
 }
 
 impl<S: 'static> Runtime<S> {
-    pub(super) fn input_down(&mut self, ji: usize, x: f32, y: f32) {
+    /// A press at (x, y) on text field `ji`, down at `down_at`; `second` when it's the second
+    /// of a double press.
+    pub(super) fn input_down(&mut self, ji: usize, x: f32, y: f32, down_at: f64, second: bool) {
         let now = self.now_clock();
         let shift = self.held_mods.shift;
         // Its text drew scaled or rotated with its box: map the press back to the rest layout.
@@ -157,7 +159,6 @@ impl<S: 'static> Runtime<S> {
         self.input_click.captured = true;
         self.input_click.steps.push_back((path.clone(), Step::Down { clicks, shift }));
         self.queue.push(Action::Focus(path.clone(), ix, iy));
-        self.drag_out_armed = false;
         let d = Drag {
             phase: Phase::Down,
             x: lx,
@@ -174,9 +175,7 @@ impl<S: 'static> Runtime<S> {
             window: [x, y],
             screen: self.screen_at(x, y),
         };
-        self.capture = Some((path, d));
-        self.capture_button = crate::PointerButton::Primary;
-        self.capture_inside = true;
+        self.press.hold(capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), down_at, second, None));
     }
 
     pub(super) fn input_drag(&mut self, x: f32, y: f32, drag_move: bool) {
@@ -184,7 +183,7 @@ impl<S: 'static> Runtime<S> {
             return;
         }
         let Some(path) = self.input_click.dragging.clone() else { return };
-        if (x - self.press_at.0).abs() > CLICK_SLOP || (y - self.press_at.1).abs() > CLICK_SLOP {
+        if self.press.held().is_some_and(|h| (x - h.at.0).abs() > CLICK_SLOP || (y - h.at.1).abs() > CLICK_SLOP) {
             self.input_click.last = None;
         }
         let Some(ji) = self.nodes.iter().enumerate().position(|(i, n)| n.path == path && !self.subtree_exiting(i) && n.input.is_some()) else {
@@ -250,7 +249,7 @@ impl<S: 'static> Runtime<S> {
                 true
             }
             Step::Drag => {
-                if self.focused.as_deref() != Some(path.as_str()) {
+                if self.focus.path() != Some(path.as_str()) {
                     self.input_click.drop_drag();
                     return false;
                 }

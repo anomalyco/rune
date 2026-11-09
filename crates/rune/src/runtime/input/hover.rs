@@ -71,9 +71,9 @@ impl<S: 'static> Runtime<S> {
         // A row never takes focus from a text field (a search field above its results).
         let row = hovered.and_then(|i| self.highlight_row(i)).filter(|_| self.focused_input().is_none());
         match row {
-            Some(i) if self.focused.as_deref() != Some(&self.nodes[i].path) || !self.hover_focus =>
+            Some(i) if self.focus.path() != Some(&self.nodes[i].path) || !self.focus.hovered() =>
                 self.queue.push(Action::HoverFocus(Some(self.nodes[i].path.clone()))),
-            None if self.hover_focus => self.queue.push(Action::HoverFocus(None)),
+            None if self.focus.hovered() => self.queue.push(Action::HoverFocus(None)),
             _ => {}
         }
     }
@@ -98,7 +98,7 @@ impl<S: 'static> Runtime<S> {
             }
         }
         // A held press stays inside what holds it until it releases.
-        if let Some((captured, _)) = &self.capture {
+        if let Some(captured) = self.press.path() {
             for path in &self.hover_within {
                 if !inside.contains(path) && holds(path, captured)
                     && self.nodes.iter().enumerate().any(|(i, n)| n.path == *path && self.allowed(i))
@@ -186,7 +186,7 @@ impl<S: 'static> Runtime<S> {
             // A held button, or a press or blur until the pointer next moves, never starts the
             // wait to report an enter.
             let want = self.hover_within.contains(&path)
-                && (shown || self.capture.is_none() && !self.hover_paused);
+                && (shown || !self.press.is_held() && !self.hover_paused);
             let pending = self.hover_pending.iter().position(|p| p.0 == path);
             if want == shown {
                 if let Some(i) = pending { self.hover_pending.remove(i); }
@@ -229,7 +229,7 @@ impl<S: 'static> Runtime<S> {
     /// Hover may wait on moving layout: the pointer is in the window, holds no press, and
     /// hasn't moved since the motion started.
     fn hover_may_hold(&self) -> bool {
-        self.pointer.is_some() && self.capture.is_none() && !self.hover_hold.released
+        self.pointer.is_some() && !self.press.is_held() && !self.hover_hold.released
     }
 
     /// Element `i` is carried by moving layout: a frame, offset or flight spring on it or an
@@ -268,7 +268,7 @@ impl<S: 'static> Runtime<S> {
     /// While moving layout holds hover, the hovered element, as the cursor and tooltips see
     /// it: what the pointer was over, not what slid under it.
     pub(crate) fn held_hover(&self) -> Option<Option<usize>> {
-        (self.hover_hold.held && self.capture.is_none() && self.secondary_capture.is_none())
+        (self.hover_hold.held && !self.pointer_captured())
             .then(|| self.hovered.as_deref().and_then(|p| self.hover_live(p)))
     }
 
@@ -280,7 +280,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     fn captured(&self) -> Option<&str> {
-        self.capture.as_ref().map(|(p, _)| p.as_str()).or(self.secondary_capture.as_deref())
+        self.press.path().or(self.secondary.path())
     }
 
     /// The innermost `hover_alone` element under the pointer: the elements around it show no
@@ -311,8 +311,8 @@ impl<S: 'static> Runtime<S> {
         if !(n.vis.hover().a > 0.0 || n.vis_flags.hover_group()) || self.is_exiting(n.id) { return None; }
         let inside = self.pointer.is_some_and(|(x, y)| self.node_contains(i, x, y))
             || n.vis.hover_share.as_ref().is_some_and(|k| shared.contains(k))
-            || (n.vis.hover_focus && self.keyboard_focus && self.focus_within(i));
-        let capture_inside = if self.secondary_capture.is_some() { inside } else { self.capture_inside };
+            || (n.vis.hover_focus && self.focus.keyboard() && self.focus_within(i));
+        let capture_inside = if self.secondary.is_held() { inside } else { self.press.inside() };
         let held = captured == Some(n.path.as_str()) && capture_inside;
         let allowed = self.allowed(i);
         // A held press stays hovered while it's inside, though a press scale shrank the drawn
@@ -341,7 +341,7 @@ impl<S: 'static> Runtime<S> {
         }
         let mut changed = false;
         let mut flips = std::mem::take(&mut self.hover_hold.flips);
-        let captured = self.capture.as_ref().map(|(p, _)| p.as_str()).or(self.secondary_capture.as_deref());
+        let captured = self.press.path().or(self.secondary.path());
         let alone = self.hovered_alone();
         let shared = self.shared_hovered();
         for i in 0..self.nodes.len() {
@@ -363,10 +363,10 @@ impl<S: 'static> Runtime<S> {
                 None => {}
             }
             if n.vis.press().a <= 0.0 && press_scale.is_none() { continue; }
-            let capture_inside = if self.secondary_capture.is_some() {
+            let capture_inside = if self.secondary.is_held() {
                 self.pointer.is_some_and(|(x, y)| self.node_contains(i, x, y))
             } else {
-                self.capture_inside
+                self.press.inside()
             };
             let down = self.allowed(i) && captured == Some(n.path.as_str()) && capture_inside;
             let pressed = down && n.vis.press().a > 0.0;

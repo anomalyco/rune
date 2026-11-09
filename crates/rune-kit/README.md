@@ -317,9 +317,13 @@ source each time, and earlier blocks stay mounted.
 - **The same highlighting outside Markdown.** `rune_kit::syntax` doesn't need the `markdown`
   feature: `syntax::highlight(Some("rust"), code)` returns the cached ranges and
   `SyntaxTheme::from_kit(&k).spans(&ranges, offset)` turns them into colour-only `Span`s for
-  any rich text, such as code in a composer. Each built-in language is a small hand-written
-  scanner that runs in linear time (under 0.5 ms per thousand lines); a block colours its first
-  32 KiB (or 8192 ranges) and draws the rest plain, so a 10,000-line block never stalls a frame.
+  any rich text, such as code in a composer. The built-in highlighter is OpenCode Desktop's own:
+  Pierre's Highlights, 80 hand-written lexers (C, C++, C#, Java, Kotlin, Ruby, PHP, Lua,
+  Dockerfile, Makefile and the rest) that `rune-highlights` translates from WebAssembly to Rust
+  at build time, so tokens match Desktop's exactly. They run in linear time (0.1 to 0.6 ms per
+  thousand lines); a block streaming in costs only its new lines; a block colours its first
+  128 KiB (or 32,768 ranges) and draws the rest plain. `syntax::lang_for_path` names a file's
+  language as Desktop's diffs do.
 - **```` ```diff ````** (or `patch`) fences tint `+` and `-` lines edge to edge, and dim `@@`
   and file header lines. Set colours with `MarkdownStyle::diff` and `diff_hunk`. Line text
   keeps the body colour unless `diff_text(added, removed)` or `diff_text_tint(0.5)` (toward the

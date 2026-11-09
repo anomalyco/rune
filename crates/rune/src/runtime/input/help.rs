@@ -333,7 +333,7 @@ impl<S: 'static> Runtime<S> {
         let at = target(i, link);
         // A press holds the pointer: it keeps its own element's tooltip, and a drag across
         // other elements starts none.
-        if (self.capture.is_some() || self.secondary_capture.is_some()) && self.help.state.target() != Some(&at) {
+        if self.pointer_captured() && self.help.state.target() != Some(&at) {
             return (Over::Nothing, None);
         }
         if reaches { (Over::Help(at), Some(i)) } else { (Over::Covered(at), None) }

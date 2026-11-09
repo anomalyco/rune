@@ -350,7 +350,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
         // paces the loop). Hosts whose only motion is an ambient loop sleep until its next step.
         let deadline = self.hosts.iter().flatten().filter_map(|host| host.wake_deadline()).min();
         event_loop.set_control_flow(if animating { ControlFlow::Poll }
-            else { deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil) });
+            else { deadline.map_or(ControlFlow::Wait, |at| ControlFlow::WaitUntil(crate::time::for_winit(at))) });
     }
     fn exiting(&mut self, event_loop: &ActiveEventLoop) {
         let _handling = crate::quit::handling();

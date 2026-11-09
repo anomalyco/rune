@@ -264,6 +264,9 @@ and reports whether it has a WebGPU adapter. The proof checks GPU errors, idle r
 and submissions, touch
 focus and momentum, Unicode edits, a long sliding context, predictive replacement,
 composition, selection, paste, copied model text, link isolation, theme and viewport resize.
+In Chromium it also installs Playwright's fake clock after the app has started and checks that
+a touch fling waits for `clock.runFor` instead of finishing in real time: Rune reads the page's
+current `performance.now()` on every frame, so a capture can step it frame by frame.
 The `?input-proof` fixture adds password input, Tab/Escape focus, mobile Enter, recomposition,
 same-field focus stability, continuous-input coalescing and visibility regression checks.
 Its mobile DPR check exercises the Safari-style CSS-size fallback because Chromium device

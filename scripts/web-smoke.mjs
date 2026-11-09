@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
 import { inputSmoke } from './web-input-smoke.mjs';
+import { clockSmoke } from './web-clock-smoke.mjs';
 const { chromium, webkit } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const engine = process.env.WEB_ENGINE || 'chromium';
 const root = resolve(process.argv[2] || 'target/web');
@@ -139,8 +140,14 @@ try {
     }
     await page.setViewportSize({ width: 390, height: 760 });
     await inputSmoke(page, url);
+    // JPEG bytes go to the browser's codecs, PNG bytes to Rune's.
+    await page.goto(`${url}/?image-proof`);
+    await page.waitForFunction(() => window.__imageProof?.jpeg && window.__imageProof?.png);
+    assert.deepEqual(await page.evaluate(() => window.__imageProof), { jpeg: { width: 12, height: 6 }, png: { width: 12, height: 6 } });
+    console.log(JSON.stringify({ ok: true, checks: ['image bytes'] }));
     assert.deepEqual(await page.evaluate(() => window.__proof.gpuErrors), []);
     assert.deepEqual(errors.filter(e => !e.includes('404')), []);
+    if (engine === 'chromium') { await clockSmoke(browser, url); console.log(JSON.stringify({ ok: true, checks: ['page clock'] })); }
     }
 } finally {
     await browser.close();

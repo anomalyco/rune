@@ -575,7 +575,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 if let Some(window) = &self.window { window.request_redraw(); }
                 ControlFlow::Wait
             }
-            Some(deadline) => ControlFlow::WaitUntil(r.rt.wall_start.unwrap() + Duration::from_secs_f64(deadline.max(0.0))),
+            Some(deadline) => ControlFlow::WaitUntil(crate::time::for_winit(r.rt.wall_start.unwrap() + Duration::from_secs_f64(deadline.max(0.0)))),
             None => ControlFlow::Wait,
         });
     }

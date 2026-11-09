@@ -39,13 +39,26 @@ impl Scene {
             Some(p) => self.slot(p).unwrap_or_else(|| panic!("insert {id:?}: parent {p:?} isn't in the scene")) as u32,
             None => NONE,
         };
-        // A child rides a parent that is still mostly to come. Past half its entrance (and in
+        // A child rides an ancestor that is still mostly to come. Past half its entrance (and in
         // the ~0.7 s presence tail after it has visibly arrived), riding would show the child at
-        // once at most of its opacity, so it enters on its own instead of popping in.
-        let rides_parent = parent != NONE && match self.nodes[parent as usize].phase {
-            Phase::Present => false,
-            Phase::Entering => self.presence_now(parent as usize) < 0.5,
-            Phase::Exiting { .. } => true,
+        // once at most of its opacity, so it enters on its own instead of popping in. A parent
+        // that rode in itself is present at once, so the entering ancestor above it is the one
+        // to ask for a plain fade: otherwise each level of a subtree mounting together fades on
+        // its own, and the fades multiply until its deep rows show long after it has arrived.
+        // An entrance of its own (anything beyond the plain fade, or a delay) asks only its parent,
+        // so a list staggering its rows in under an entering surface keeps its stagger.
+        let plain = delay <= 0.0 && spec.transition.insertion == Transition::opacity().insertion;
+        let rides_parent = {
+            let mut a = parent;
+            loop {
+                if a == NONE { break false; }
+                match self.nodes[a as usize].phase {
+                    Phase::Present if plain => a = self.nodes[a as usize].parent,
+                    Phase::Present => break false,
+                    Phase::Entering => break self.presence_now(a as usize) < 0.5,
+                    Phase::Exiting { .. } => break true,
+                }
+            }
         };
         let ins = spec.transition.insertion.kit_rules(false);
         // An entrance that changes nothing on screen (an identity insertion) has nothing to play.

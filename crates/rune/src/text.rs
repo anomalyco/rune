@@ -36,6 +36,7 @@ pub use language::set_language;
 mod line_break;
 mod span;
 mod system_fonts;
+mod system_weight;
 mod default_fonts;
 #[cfg(all(test, target_os = "macos"))]
 mod core_text_tests;
@@ -96,10 +97,6 @@ pub use decorations::Deco;
 pub(crate) use decorations::PaintedDeco;
 pub use span::{Ink, Link, LinkPaint, Span, TextHighlight};
 pub(crate) use span::{BareIcon, PillChip, PillMetrics, flatten_spans};
-
-/// Coverage exponents for black and for white text with font smoothing off: the curve Skia's
-/// text gamma (sRGB, contrast 1) draws grayscale text with, for outlines rasterised elsewhere.
-const TEXT_GAMMA: [f32; 2] = [1.12, 0.45];
 
 use decorations::Decoration;
 use atlas::{AtlasGlyph, COLOR_GLYPH_BUDGET, ColorGlyph, GlyphKey, GlyphMap, Rasterized};
@@ -173,6 +170,8 @@ pub struct TextSystem {
     /// Bit `i` is set once `fallback::SCRIPT_FONTS[i]` has been looked up.
     scripts: u64,
     font_files: LoadedFiles,
+    /// The loaded system faces' families, for the face DirectWrite picks (`system_weight`).
+    system_faces: system_weight::Faces,
     /// Installed families looked up by name (`load_installed`), lowercase.
     installed: std::collections::HashSet<String>,
     pub atlas: Atlas,
@@ -314,6 +313,7 @@ impl TextSystem {
             slot_system_mono: names_system_mono(families.0) || names_system_mono(families.1),
             scripts: 0,
             font_files,
+            system_faces: Default::default(),
             installed: Default::default(),
             atlas: Atlas::new(),
             color_glyphs: GlyphMap::default(),
@@ -442,20 +442,12 @@ impl TextSystem {
             .collect()
     }
 
-    /// The exponent a glyph's coverage is raised to when drawn in premultiplied `fill`. With
-    /// smoothing off (the default on Linux and the web) it stands in for the text gamma a browser's
-    /// grayscale antialiasing applies there: light text on a dark page draws heavier and dark
-    /// text on a light one a little lighter than coverage blended as is, keyed by the text's
-    /// luminance. With smoothing on, CoreText's dilation does that job, and with DirectWrite Skia's
-    /// gamma tables do; coverage is drawn as is.
+    /// The exponent a glyph's coverage is raised to when drawn in premultiplied `fill` on this
+    /// platform: 1 (coverage as is) on macOS and iOS, and a browser's text gamma for `Off`
+    /// elsewhere.
     pub fn coverage_exponent(&self, fill: [f32; 4]) -> f32 {
-        // DirectWrite masks already carry Skia's gamma for their text's luminance.
-        let direct_write = self.smoothing == FontSmoothing::DirectWrite && cfg!(target_os = "windows");
-        if matches!(self.smoothing, FontSmoothing::On | FontSmoothing::Windfoil) || direct_write || fill[3] <= 0.0 {
-            return 1.0;
-        }
-        let luma = (0.2126 * fill[0] + 0.7152 * fill[1] + 0.0722 * fill[2]) / fill[3];
-        TEXT_GAMMA[0] + (TEXT_GAMMA[1] - TEXT_GAMMA[0]) * luma.clamp(0.0, 1.0)
+        let apple = cfg!(any(target_os = "macos", target_os = "ios"));
+        coretext_match::coverage_exponent(self.smoothing, fill, apple, cfg!(target_os = "windows"))
     }
 
     /// Rasterise and place glyphs in `mode` from the next placement on, with its CoreGraphics
@@ -718,7 +710,7 @@ impl TextSystem {
         let off = [b"liga", b"clig", b"calt", b"dlig"].map(|tag| parley::FontFeature::new(parley::setting::Tag::new(tag), 0));
         let unligated: Vec<parley::FontFeature> = features.iter().chain(&off).copied().collect();
         type Spacings = [(std::ops::Range<usize>, f32)];
-        let build = |lcx: &mut LayoutContext<Ink>, fcx: &mut FontContext, exact: &Spacings, widen: &Spacings| {
+        let build = |lcx: &mut LayoutContext<Ink>, fcx: &mut FontContext, exact: &Spacings, widen: &Spacings, weights: &Spacings| {
             let mut b = lcx.ranged_builder(fcx, text, scale, true);
             b.set_base_direction(base);
             b.push_default(FontFamily::from(sans.as_slice()));
@@ -784,6 +776,9 @@ impl TextSystem {
                     b.push(StyleProperty::LetterSpacing(v), r.clone());
                 }
             }
+            for (range, w) in weights {
+                b.push(StyleProperty::FontWeight(FontWeight::new(*w)), range.clone());
+            }
             for (range, stack) in &routed {
                 b.push(FontFamily::from(stacks[*stack].as_deref().unwrap_or_default()), range.clone());
             }
@@ -813,7 +808,17 @@ impl TextSystem {
             break_lines(&mut layout);
             layout
         };
-        let mut layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen);
+        let mut layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen, &[]);
+        // On Windows, system faces as DirectWrite picks them for each run's weight, as Chromium.
+        let weights = if cfg!(target_os = "windows") && !text.is_ascii() {
+            let wanted = |at: usize| spans.iter().rev().find_map(|s| s.weight.filter(|_| span_range(s).contains(&at))).unwrap_or(style.weight);
+            system_weight::corrections(&mut self.system_faces, &mut self.font_cx, &self.font_files, &layout, wanted)
+        } else {
+            Vec::new()
+        };
+        if !weights.is_empty() {
+            layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen, &weights);
+        }
         // The spacing each run got, against the spacing its own font needs.
         let given = |at: usize| {
             spans.iter().zip(&span_spacing).rev().find_map(|(s, v)| v.filter(|_| span_range(s).contains(&at))).unwrap_or(base_spacing)
@@ -837,7 +842,7 @@ impl TextSystem {
             }
         }
         if mismatch {
-            layout = build(&mut self.layout_cx, &mut self.font_cx, &exact, &widen);
+            layout = build(&mut self.layout_cx, &mut self.font_cx, &exact, &widen, &weights);
         }
         layout.align(align, AlignmentOptions::default());
         let l = Rc::new(layout);

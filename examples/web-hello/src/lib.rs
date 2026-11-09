@@ -1,6 +1,8 @@
 use rune::{AppSpec, Cx, El, ScrollSpec, TextEdit, Tx, col, el, row, text, text_input};
 use rune::tok::{self, type_};
 #[cfg(target_arch = "wasm32")]
+mod image_proof;
+#[cfg(target_arch = "wasm32")]
 mod input_proof;
 
 struct State {
@@ -57,5 +59,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
 pub fn start() {
     #[cfg(target_arch = "wasm32")]
     if input_proof::enabled() { input_proof::run(); return; }
+    #[cfg(target_arch = "wasm32")]
+    if image_proof::enabled() { image_proof::run(); return; }
     rune::run(AppSpec::new("Messages", (390.0, 760.0), State::default, view));
 }

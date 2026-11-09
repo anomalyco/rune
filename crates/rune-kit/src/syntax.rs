@@ -1,35 +1,39 @@
 //! Syntax highlighting for code: kinds of token ([`Syntax`]) over byte ranges, coloured by a
 //! [`SyntaxTheme`]. [`Markdown`](crate::Markdown) colours its code fences with it, and the same
-//! output paints any other text, such as code in a composer.
+//! output paints any other text, such as code in a composer or a diff.
 //!
 //! ```ignore
-//! // The built-in scanners, cached per (language, code):
+//! // The built-in lexers, cached per (language, code):
 //! let found = rune_kit::syntax::highlight(Some("rust"), code);
 //! // Colour-only spans, shifted to where the code starts in a longer text:
 //! let spans: Vec<rune::Span> = SyntaxTheme::from_kit(&kit).spans(&found, code_start);
 //! // An app's own highlighter, falling back to the built-in one:
 //! let mine = Highlighter::new(|lang, code| match lang {
-//!     Some("kotlin") => my_kotlin(code),
+//!     Some("brainfuck") => my_brainfuck(code),
 //!     _ => rune_kit::syntax::builtin(lang, code),
 //! });
 //! ```
 //!
-//! **Languages.** The built-in scanners (no dependencies) know Rust, JavaScript and JSX,
-//! TypeScript and TSX, JSON, Python, Go, Swift, shell, SQL, HTML and XML, CSS, YAML, TOML,
-//! Markdown and unified diffs, under their common fence names (see [`known`]). Anything else, and code with no
-//! language, stays plain: a fence without a language is as often program output or prose as
+//! **Languages.** The built-in highlighter is the one OpenCode's desktop app draws with:
+//! Pierre's Highlights ([`rune_highlights`]), 80 hand-written lexers translated to Rust at
+//! build time, under the same names and aliases (see [`known`]): C, C++, C#, Java, Kotlin, Go,
+//! Rust, Swift, Python, Ruby, PHP, Lua, shell, PowerShell, SQL, the web languages and their
+//! frameworks, data and config formats, Dockerfiles and Makefiles, and more. [`lang_for_path`]
+//! names a file's language as Desktop's diffs and file views do. Anything else, and code with
+//! no language, stays plain: a fence without a language is as often program output or prose as
 //! code, so guessing would colour text that isn't code.
 //!
-//! **Cost.** Each scanner is hand-written, moves only forward and runs in linear time: 0.01 to
-//! 0.5 ms per thousand lines on an Apple-silicon Mac in an optimised build, depending on the
-//! language. Highlighting is capped rather than lazy: only the first 32 KiB of a source (cut at
-//! a line end) and its first 8192 coloured ranges get colour, so a 10,000-line block costs what
-//! its first several hundred lines do (under 0.5 ms) and the rest draws plain.
-//! An app's highlighter gets the same 32 KiB. Results are cached per highlighter, language and
-//! code (every source the last two commits drew, and others up to a memory budget), so
-//! rebuilding a view highlights nothing.
+//! **Kinds.** Each lexer token (a Zed capture name such as `keyword.control`) maps to the
+//! [`Syntax`] kind whose colour Desktop's theme gives it ([`kind`]), so a theme that colours
+//! the kinds as Desktop's `syntax-*` tokens matches it token for token.
+//!
+//! **Cost.** The lexers move only forward and run in linear time, 0.1 to 0.6 ms per thousand
+//! lines in an optimised build. Only the first 128 KiB of a source (cut at a line end) and its
+//! first 32,768 coloured ranges get colour; the rest draws plain. An app's highlighter gets the
+//! same 128 KiB. Results are cached per highlighter, language and code (every source the last
+//! two commits drew, and others up to a memory budget), so rebuilding a view highlights nothing.
 
-mod scan;
+mod paths;
 
 use std::any::TypeId;
 use std::cell::RefCell;
@@ -38,32 +42,35 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::rc::Rc;
+use std::sync::OnceLock;
 
 use rune::{Color, Span, oklch};
+use rune_highlights::{Lang, Stream, Token};
 
 use crate::Kit;
 use crate::budget::Budget;
-use scan::Lang;
+
+pub use paths::lang_for_path;
 
 /// A kind of token in code, each with its own colour in a [`SyntaxTheme`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Syntax {
-    /// Keywords, and markup tag names.
+    /// Keywords, preprocessor directives, markup tags, CSS selectors and a link's target.
     Keyword,
-    /// String, character and regex literals, and YAML's unquoted values.
+    /// String and character literals, and literal text.
     String,
-    /// Numbers, and constants such as `true`, `null` and `ALL_CAPS` names.
+    /// Numbers, booleans and other constants, escapes, labels and namespaces.
     Number,
-    /// Comments, and a diff's header lines.
+    /// Comments.
     Comment,
-    /// Type names (capitalised names and built-in types), CSS classes and ids, YAML tags.
+    /// Types, classes, constructors, enums and components.
     Type,
-    /// Functions where they are called or defined, macros, and shell commands.
+    /// Functions where they are called or defined, and CSS ids.
     Function,
-    /// JSON and YAML keys, CSS properties, markup attributes, and shell and SQL variables.
+    /// Properties and object or JSON keys.
     Property,
-    /// Brackets, operators and separators.
+    /// Brackets, separators and list markers.
     Punctuation,
     /// A diff's added lines.
     Inserted,
@@ -77,15 +84,22 @@ pub enum Syntax {
     Heading,
     /// A Markdown link's text.
     Link,
+    /// Operators, and CSS pseudo-classes.
+    Operator,
+    /// Regular expression literals.
+    Regex,
+    /// Markup attributes and CSS classes.
+    Attribute,
+    /// Variables.
+    Variable,
 }
 
 impl Syntax {
-    pub(crate) const COUNT: usize = 13;
+    pub(crate) const COUNT: usize = 17;
 }
 
 /// What colours a highlighted range: a kind of token, coloured by the [`SyntaxTheme`] in use,
-/// or a colour of the highlighter's own. Colour is all a highlight changes, never weight or
-/// style, so highlighting never moves a glyph.
+/// or a colour of the highlighter's own.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Paint {
     Kind(Syntax),
@@ -107,34 +121,161 @@ impl From<Color> for Paint {
 /// A highlighted byte range of the code.
 pub type Highlight = (Range<usize>, Paint);
 
-/// Whether the built-in scanners colour `lang`, a fence's language name (case-insensitive):
-/// `rust`/`rs`, `js`/`javascript`/`jsx`/`mjs`/`cjs`, `ts`/`typescript`/`mts`/`cts`, `tsx`,
-/// `json`/`jsonc`/`json5`, `python`/`py`/`python3`/`py3`/`pyi`, `go`/`golang`, `swift`,
-/// `sh`/`bash`/`zsh`/`shell`/`shellscript`, `sql`/`postgres`/`postgresql`/`mysql`/`sqlite`,
-/// `html`/`htm`/`xhtml`/`xml`/`svg`, `css`, `yaml`/`yml`, `toml`, `markdown`/`md`/`mdx` and
-/// `diff`/`patch`.
+/// Bytes coloured per source; past this (cut at a line end) the code draws plain.
+const MAX_SOURCE: usize = 128 * 1024;
+/// Coloured ranges per source; past this the code draws plain.
+const MAX_TOKENS: usize = 32 * 1024;
+
+/// Whether the built-in highlighter colours `lang`, a fence's language name or alias
+/// (case-insensitive): `rust`/`rs`, `ts`/`typescript`, `c++`/`cpp`, `c#`/`cs`, `kotlin`/`kt`,
+/// `rb`, `php`, `lua`, `sh`/`bash`/`zsh`, `ps1`, `dockerfile`, `makefile`, `yml` and the rest
+/// of Highlights' 211 names ([`rune_highlights::Lang::aliases`]). Not `text` or `plain`.
 pub fn known(lang: &str) -> bool {
-    Lang::from_name(lang).is_some()
+    Lang::from_name(lang).is_some_and(|l| l != Lang::PLAIN)
 }
 
-/// The built-in scanners' highlights of `code`, in order and not overlapping, uncached: empty
-/// for a language they don't know or none. For an app's [`Highlighter`] to fall back on; to
-/// highlight directly, use the cached [`highlight`].
+/// The built-in highlighter's highlights of `code`, in order and not overlapping, uncached:
+/// empty for a language it doesn't know or none. For an app's [`Highlighter`] to fall back
+/// on; to highlight directly, use the cached [`highlight`].
 pub fn builtin(lang: Option<&str>, code: &str) -> Vec<Highlight> {
     let Some(lang) = lang.and_then(Lang::from_name) else { return Vec::new() };
-    scan::highlight(lang, code).into_iter().map(|(a, b, k)| (a as usize..b as usize, Paint::Kind(k))).collect()
+    let code = &code[..coloured_len(code)];
+    let tokens = LEXERS.with_borrow_mut(|l| l.tokens(lang, code));
+    let mut out: Vec<Highlight> = Vec::with_capacity(tokens.len());
+    for (r, token) in tokens {
+        let Some(k) = kind(token) else { continue };
+        if let Some((last, Paint::Kind(prev))) = out.last_mut()
+            && last.end == r.start
+            && *prev == k
+        {
+            last.end = r.end;
+            continue;
+        }
+        if out.len() == MAX_TOKENS {
+            break;
+        }
+        out.push((r, Paint::Kind(k)));
+    }
+    out
+}
+
+/// The kind Desktop's highlight theme (`highlight-theme.tsx`) colours a lexer token as: its
+/// capture name's, or failing that its nearest parent's (`keyword.control` is `keyword`).
+/// `None` for text drawn in the code's own colour (embedded code, emphasis, JSX text).
+pub fn kind(token: Token) -> Option<Syntax> {
+    static TABLE: OnceLock<Vec<Option<Syntax>>> = OnceLock::new();
+    TABLE.get_or_init(|| Token::all().map(|t| resolve(t.name())).collect())[token.index()]
+}
+
+fn resolve(mut name: &str) -> Option<Syntax> {
+    loop {
+        if let Some((_, k)) = KINDS.iter().find(|(n, _)| *n == name) {
+            return *k;
+        }
+        name = &name[..name.rfind('.')?];
+    }
+}
+
+/// Desktop's theme, capture name to kind; names not here take their parent's.
+const KINDS: &[(&str, Option<Syntax>)] = {
+    use Syntax::*;
+    &[
+        ("attribute", Some(Attribute)),
+        ("boolean", Some(Number)),
+        ("comment", Some(Comment)),
+        ("constant", Some(Number)),
+        ("constructor", Some(Type)),
+        ("diff.minus", Some(Deleted)),
+        ("diff.plus", Some(Inserted)),
+        ("embedded", None),
+        ("emphasis", None),
+        ("enum", Some(Type)),
+        ("function", Some(Function)),
+        ("hint", Some(Comment)),
+        ("keyword", Some(Keyword)),
+        ("keyword.operator", Some(Operator)),
+        ("label", Some(Number)),
+        ("link_text", Some(Link)),
+        ("link_uri", Some(Keyword)),
+        ("namespace", Some(Number)),
+        ("number", Some(Number)),
+        ("operator", Some(Operator)),
+        ("predictive", Some(Comment)),
+        ("preproc", Some(Keyword)),
+        ("primary", Some(Link)),
+        ("property", Some(Property)),
+        ("punctuation", Some(Punctuation)),
+        ("punctuation.special", Some(Keyword)),
+        ("selector", Some(Keyword)),
+        ("selector.class", Some(Attribute)),
+        ("selector.id", Some(Function)),
+        ("selector.pseudo", Some(Operator)),
+        ("string", Some(String)),
+        ("string.escape", Some(Number)),
+        ("string.regex", Some(Regex)),
+        ("string.special", Some(Number)),
+        ("tag", Some(Keyword)),
+        ("tag.component.jsx", Some(Type)),
+        ("text", None),
+        ("text.literal", Some(String)),
+        ("title", Some(Heading)),
+        ("type", Some(Type)),
+        ("variable", Some(Variable)),
+        ("variable.parameter", Some(Parameter)),
+        ("variable.special", Some(Number)),
+        ("variant", Some(Number)),
+    ]
+};
+
+thread_local! {
+    static LEXERS: RefCell<Lexers> = RefCell::new(Lexers::default());
+}
+
+/// The thread's lexers: one for whole sources, and a [`Stream`] for a source growing at its end
+/// (a code block streaming in), which then costs only its new lines.
+#[derive(Default)]
+struct Lexers {
+    whole: rune_highlights::Highlighter,
+    stream: Option<Stream>,
+    /// The last source lexed whole, to spot one that grows.
+    last: Option<(Lang, String)>,
+}
+
+impl Lexers {
+    fn tokens(&mut self, lang: Lang, code: &str) -> Vec<(Range<usize>, Token)> {
+        if let Some(s) = self.stream.as_mut().filter(|s| s.lang() == lang && s.continues(code)) {
+            return s.highlight(code);
+        }
+        if self.last.as_ref().is_some_and(|(l, prev)| *l == lang && code.len() > prev.len() && code.starts_with(prev.as_str())) {
+            self.last = None;
+            return self.stream.insert(Stream::new(lang)).highlight(code);
+        }
+        let last = self.last.get_or_insert_with(|| (lang, String::new()));
+        last.0 = lang;
+        last.1.clear();
+        last.1.push_str(code);
+        self.whole.highlight(lang, code)
+    }
+}
+
+/// How much of `src` gets colour: all of it, or up to the last line end within [`MAX_SOURCE`].
+fn coloured_len(src: &str) -> usize {
+    if src.len() <= MAX_SOURCE {
+        return src.len();
+    }
+    src.as_bytes()[..MAX_SOURCE].iter().rposition(|&b| b == b'\n').unwrap_or(0)
 }
 
 /// [`builtin`], cached per language and code: the same call with the same code returns the
-/// same `Rc` without scanning again.
+/// same `Rc` without highlighting again.
 pub fn highlight(lang: Option<&str>, code: &str) -> Rc<[Highlight]> {
     Highlighter::builtin().highlight(lang, code)
 }
 
 type HighlightFn = dyn Fn(Option<&str>, &str) -> Vec<Highlight>;
 
-/// Turns code into highlights: the built-in scanners ([`Highlighter::builtin`], the default),
-/// or an app's own function, such as a syntect or tree-sitter highlighter.
+/// Turns code into highlights: the built-in one ([`Highlighter::builtin`], the default), or an
+/// app's own function, such as a syntect or tree-sitter highlighter.
 ///
 /// The function gets the code's language as written (a fence's first info word, `None` when
 /// it has none) and the code, and returns byte ranges of it with a [`Paint`]. Ranges may come
@@ -151,7 +292,7 @@ pub struct Highlighter {
 }
 
 impl Highlighter {
-    /// The built-in scanners (see the module docs for the languages).
+    /// The built-in highlighter (see the module docs for the languages).
     pub fn builtin() -> Highlighter {
         Highlighter { f: None, id: 0 }
     }
@@ -167,9 +308,9 @@ impl Highlighter {
         self
     }
 
-    /// The highlights of `code`'s first 32 KiB (cut at a line end), cached.
+    /// The highlights of `code`'s first 128 KiB (cut at a line end), cached.
     pub fn highlight(&self, lang: Option<&str>, code: &str) -> Rc<[Highlight]> {
-        let code = &code[..scan::coloured_len(code)];
+        let code = &code[..coloured_len(code)];
         let key = hash_of((self.id, lang, code));
         if let Some(out) = CACHE.with_borrow_mut(|c| {
             c.get(&key)
@@ -208,7 +349,7 @@ impl fmt::Debug for Highlighter {
 }
 
 /// An app highlighter's ranges, sorted, in bounds, on character boundaries and not
-/// overlapping, at most [`scan::MAX_TOKENS`] of them.
+/// overlapping, at most [`MAX_TOKENS`] of them.
 fn tidy(mut v: Vec<Highlight>, src: &str) -> Vec<Highlight> {
     v.retain(|(r, _)| r.start < r.end && r.end <= src.len() && src.is_char_boundary(r.start) && src.is_char_boundary(r.end));
     v.sort_by_key(|(r, _)| r.start);
@@ -220,7 +361,7 @@ fn tidy(mut v: Vec<Highlight>, src: &str) -> Vec<Highlight> {
         }
         keep
     });
-    v.truncate(scan::MAX_TOKENS);
+    v.truncate(MAX_TOKENS);
     v
 }
 
@@ -244,11 +385,17 @@ fn hash_of(v: impl Hash) -> u64 {
     h.finish()
 }
 
-/// A colour per kind of token. [`SyntaxTheme::from_kit`] follows the kit's light or dark
-/// theme; [`SyntaxTheme::with`] overrides one kind.
+/// A colour per kind of token, and optionally a weight. [`SyntaxTheme::from_kit`] follows the
+/// kit's light or dark theme; [`SyntaxTheme::with`] overrides one kind's colour.
+///
+/// Highlighting changes colour only unless a theme gives a kind a weight
+/// ([`with_weight`](Self::with_weight)), as Desktop bolds Markdown headings; in a monospace
+/// face whose bold keeps the same advances, that still moves no glyph.
 #[derive(Clone, Copy, Debug, PartialEq, Hash)]
 pub struct SyntaxTheme {
     colors: [Color; Syntax::COUNT],
+    /// Font weight per kind; 0 keeps the text's.
+    weights: [u16; Syntax::COUNT],
 }
 
 impl SyntaxTheme {
@@ -278,7 +425,11 @@ impl SyntaxTheme {
         s[Syntax::Deleted as usize] = c.danger.icon;
         s[Syntax::Heading as usize] = paint(335.0);
         s[Syntax::Link as usize] = paint(225.0);
-        SyntaxTheme { colors: s }
+        s[Syntax::Operator as usize] = c.text_muted.mix(c.text_base, 0.5);
+        s[Syntax::Regex as usize] = paint(170.0);
+        s[Syntax::Attribute as usize] = paint(40.0);
+        s[Syntax::Variable as usize] = c.text_base.mix(c.text_contrast, 0.25);
+        SyntaxTheme { colors: s, weights: [0; Syntax::COUNT] }
     }
 
     /// Rune's neutral light or dark look ([`Kit::neutral`]'s tokens), for apps without a kit.
@@ -296,6 +447,17 @@ impl SyntaxTheme {
         self
     }
 
+    /// Draws one kind of token at font weight `weight` (100 to 900).
+    pub fn with_weight(mut self, kind: Syntax, weight: f32) -> SyntaxTheme {
+        self.weights[kind as usize] = weight.clamp(1.0, 1000.0) as u16;
+        self
+    }
+
+    /// The weight [`with_weight`](Self::with_weight) gave `kind`, if any.
+    pub fn weight(&self, kind: Syntax) -> Option<f32> {
+        Some(self.weights[kind as usize]).filter(|&w| w > 0).map(f32::from)
+    }
+
     pub fn paint(&self, p: Paint) -> Color {
         match p {
             Paint::Kind(k) => self.color(k),
@@ -303,14 +465,17 @@ impl SyntaxTheme {
         }
     }
 
-    /// Colour-only [`Span`]s for `highlights`, each range moved `offset` bytes on: where the
-    /// code starts in the text the spans style.
+    /// [`Span`]s for `highlights`, each range moved `offset` bytes on: where the code starts in
+    /// the text the spans style. They set a colour, and a weight for kinds the theme gives one.
     pub fn spans(&self, highlights: &[Highlight], offset: usize) -> Vec<Span> {
         highlights
             .iter()
             .map(|(r, p)| {
                 let mut sp = Span::new(r.start + offset, r.end + offset);
                 sp.color = Some(self.paint(*p));
+                if let Paint::Kind(k) = p {
+                    sp.weight = self.weight(*k);
+                }
                 sp
             })
             .collect()

@@ -139,7 +139,7 @@ fn double_and_triple_click_select_word_and_line_in_single_line_input() {
     rt.pointer_up(x, y);
     rt.frame(1.0 / 60.0);
     assert!(rt.state.single.focused);
-    assert!(!rt.keyboard_focus, "pointer focus does not turn on keyboard focus ring");
+    assert!(!rt.focus.keyboard(), "pointer focus does not turn on keyboard focus ring");
     assert_eq!(rt.state.single.anchor, rt.state.single.focus);
     assert!(rt.state.single.focus > 0 && rt.state.single.focus < 4);
 
