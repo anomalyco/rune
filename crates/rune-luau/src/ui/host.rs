@@ -59,6 +59,24 @@ pub enum Prop {
 #[derive(Clone)]
 pub struct Handler(Rc<Callback>);
 
+/// A script function a host node keeps past its build ([`NodeArgs::press_later`]): each element
+/// it attaches to runs it on press, with that element's own event fields.
+#[derive(Clone)]
+pub struct Press {
+    cb: Rc<Callback>,
+    attach: &'static super::Attach,
+    key: Option<Rc<str>>,
+}
+
+impl Press {
+    /// Runs the function when `el` is pressed, with `fields` added to its `press` event.
+    pub fn attach(&self, el: El, fields: Vec<(&'static str, Data)>) -> El {
+        let mut el = el;
+        (self.attach.press)(&mut el, self.cb.clone(), self.key.clone(), fields.into());
+        el
+    }
+}
+
 impl NodeArgs {
     /// The node's key, which the standard pass applies: reading it here leaves it there.
     fn key(&self) -> Option<Rc<str>> {
@@ -147,6 +165,13 @@ impl NodeArgs {
             }
             None => el,
         }
+    }
+
+    /// The script function in prop `name`, kept to run on a press of elements the node builds
+    /// later, such as the rows of a virtual list it makes.
+    pub fn press_later(&self, name: &str) -> Option<Press> {
+        let key = self.key();
+        self.handler(name).map(|h| Press { cb: h.0, attach: self.attach, key })
     }
 
     /// Runs the script function in prop `name` as the pointer enters and leaves `el`.
