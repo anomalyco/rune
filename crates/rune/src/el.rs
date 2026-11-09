@@ -1062,9 +1062,11 @@ impl El {
     pub fn video(self, video: &crate::Player, fit: crate::SurfaceFit) -> Self {
         self.native_surface(video.surface(), fit)
     }
-    /// Opt into keyboard and pointer focus. Disabled controls must set this false.
+    /// Opt into keyboard and pointer focus. Disabled controls must set this false, which also
+    /// keeps a pressable control out of the Tab order under [`Cx::web_focus`](crate::Cx::web_focus).
     pub fn focusable(mut self, enabled: bool) -> Self {
         self.focus.enabled = enabled;
+        self.focus.opt_out = !enabled;
         self
     }
     /// Positive overrides precede document order (0); negative values skip Tab only.
@@ -1149,6 +1151,13 @@ impl El {
         self.focus.return_to = Some(trigger.into());
         self
     }
+    /// The control a [`El::modal`] focuses when it opens, as HTML's `autofocus` attribute in a
+    /// dialog: a Cancel button, say. Without one the modal focuses its first text field, else
+    /// its first Tab stop, or itself under [`Cx::web_focus`](crate::Cx::web_focus).
+    pub fn autofocus(mut self) -> Self {
+        self.focus.autofocus = true;
+        self
+    }
     /// Keyboard-only ring, on this element or a visual child of the focused control. A
     /// control with no ring of its own draws the default one (see [`El::no_focus_ring`]).
     pub fn focus_ring(mut self, width: f32, offset: f32, color: Color) -> Self {
@@ -1196,6 +1205,13 @@ impl El {
     pub fn modal<S: 'static>(mut self, click_outside: bool, dismiss: impl Fn(&mut S) + 'static) -> Self {
         self.handlers.modal = Some(ModalSpec { outside: click_outside,
             dismiss: Rc::new(move |s, _| dismiss(downcast::<S>(s))) });
+        self
+    }
+    /// [`El::modal`] whose dismissal gets the change's [`Tx`]: a dialog that closes at once
+    /// (`tx.instant()`), say.
+    pub fn modal_tx<S: 'static>(mut self, click_outside: bool, dismiss: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
+        self.handlers.modal = Some(ModalSpec { outside: click_outside,
+            dismiss: Rc::new(move |s, tx| dismiss(downcast::<S>(s), tx)) });
         self
     }
     pub fn modal_click_outside(mut self, enabled: bool) -> Self {

@@ -13,6 +13,9 @@ const LIST_ROLES: [&str; 4] = ["listbox", "list", "tree", "grid"];
 const PAGED_ROLES: [&str; 2] = ["menu", "listbox"];
 /// Tables and outlines stop at their ends (NSTableView); menus, popups and segments wrap.
 const CLAMPED_ROLES: [&str; 3] = ["list", "tree", "grid"];
+/// Roles whose pressable elements are Tab stops under `Cx::web_focus`, as HTML's buttons,
+/// links and form controls are.
+const PRESSABLE_ROLES: [&str; 7] = ["button", "link", "tab", "checkbox", "switch", "radio", "combobox"];
 /// AppKit's type-select resets after this long without a key.
 const TYPE_SELECT_PAUSE: f64 = 1.0;
 
@@ -84,9 +87,13 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn allowed(&self, i: usize) -> bool {
         !self.nodes.get(i).is_some_and(|n| n.inert) && (self.active_modal().is_none() || self.modal_members.get(i).copied().unwrap_or(false))
     }
+    /// `El::focusable`, or under `Cx::web_focus` a pressable control that didn't opt out.
+    pub(super) fn takes_focus(&self, n: &Node) -> bool {
+        n.focus.enabled || (self.defaults.web_focus && !n.focus.opt_out && n.handlers.on_press.is_some() && PRESSABLE_ROLES.contains(&n.role))
+    }
     pub(super) fn can_focus(&self, i: usize) -> bool {
         let n = &self.nodes[i];
-        (n.focus.enabled || n.input.as_ref().is_some_and(|s| s.access.is_some())) && self.reachable(i)
+        (self.takes_focus(n) || n.input.as_ref().is_some_and(|s| s.access.is_some())) && self.reachable(i)
     }
     /// Shown, sized, not exiting and not behind a modal.
     fn reachable(&self, i: usize) -> bool {
@@ -100,8 +107,10 @@ impl<S: 'static> Runtime<S> {
     }
     /// Whether Return goes to focused element `i` rather than the default button: a focused
     /// link, a `focus_highlight` row, or an item of a menu, list, tree or grid group.
+    /// Under `Cx::web_focus` a focused button presses on Return too, as an HTML one does.
     fn takes_return(&self, i: usize) -> bool {
         self.link_focused(i) || self.nodes[i].focus.highlight.is_some()
+            || (self.defaults.web_focus && self.nodes[i].handlers.on_press.is_some() && self.takes_focus(&self.nodes[i]))
             || self.group(i).is_some_and(|g| LIST_ROLES.contains(&self.nodes[g].role) || VERTICAL_ROLES.contains(&self.nodes[g].role))
     }
     /// Return with no modifiers presses the window's default button (`El::default_button`)
@@ -122,10 +131,13 @@ impl<S: 'static> Runtime<S> {
         f(states!(self), tx);
         true
     }
+    /// The focus group `i` is an item of. A control inside an item (a tab's close button) is
+    /// no item: it's a Tab stop of its own, as an HTML button inside a roving `tablist` is.
     fn group(&self, i: usize) -> Option<usize> {
         let mut p = self.nodes[i].parent;
         while let Some(i) = p {
             if self.nodes[i].focus.group { return Some(i); }
+            if self.takes_focus(&self.nodes[i]) { return None; }
             p = self.nodes[i].parent;
         }
         None
@@ -134,7 +146,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn highlight_row(&self, mut i: usize) -> Option<usize> {
         loop {
             let n = &self.nodes[i];
-            if n.focus.enabled { return (n.focus.highlight.is_some() && self.can_focus(i)).then_some(i); }
+            if self.takes_focus(n) { return (n.focus.highlight.is_some() && self.can_focus(i)).then_some(i); }
             i = n.parent?;
         }
     }
@@ -151,7 +163,7 @@ impl<S: 'static> Runtime<S> {
         loop {
             if self.focused.as_deref() == Some(&self.nodes[i].path) { return true; }
             // A nested focusable owns its ring, never inherit another control's focus.
-            if self.nodes[i].focus.enabled { return false; }
+            if self.takes_focus(&self.nodes[i]) { return false; }
             let Some(p) = self.nodes[i].parent else { return false };
             i = p;
         }
@@ -162,7 +174,8 @@ impl<S: 'static> Runtime<S> {
         let i = self.focused_index()?;
         let n = &self.nodes[i];
         // A focused link shows its focus with its own hover look.
-        if n.input.is_some() || n.focus.highlight.is_some() || self.link_focused(i) { return None; }
+        // A modal that holds focus itself (`Cx::web_focus`) shows none, as a web dialog doesn't.
+        if n.input.is_some() || n.focus.highlight.is_some() || self.link_focused(i) || !self.can_focus(i) { return None; }
         if self.group(i).is_some_and(|g| LIST_ROLES.contains(&self.nodes[g].role) || VERTICAL_ROLES.contains(&self.nodes[g].role)) {
             return None;
         }
@@ -186,6 +199,11 @@ impl<S: 'static> Runtime<S> {
         {
             self.clear_text_selection();
         }
+        if path.is_some() {
+            self.tab_from = None;
+        } else if let Some(old) = self.focused.clone() {
+            self.tab_from.get_or_insert(old);
+        }
         let mut changed = self.focused != path && self.physical_focus_lost();
         for n in &mut self.nodes {
             if let Some(input) = &mut n.input {
@@ -208,6 +226,7 @@ impl<S: 'static> Runtime<S> {
         changed
     }
     pub(super) fn sync_requested_focus(&mut self, nodes: &mut Vec<Node>) -> bool {
+        let asked = self.focus_request.take();
         for old in &self.nodes {
             if let Some(input) = &old.input
                 && input.edit.focused
@@ -231,7 +250,7 @@ impl<S: 'static> Runtime<S> {
             if self.subtree_exiting(i) || nodes.iter().any(|n| n.path == old.path) { return None; }
             let focused = self.focused.as_deref().or(self.last_focused.as_deref())?;
             let has_children = self.nodes.iter().any(|m| m.parent == Some(i));
-            let scope = if !has_children && !old.focus.enabled && old.input.is_none()
+            let scope = if !has_children && !self.takes_focus(old) && old.input.is_none()
                 && old.local.w == 0.0 && old.local.h == 0.0 {
                 let p = self.nodes.get(old.parent?)?;
                 if p.is_moved_stub() || p.path.is_empty() {
@@ -245,10 +264,17 @@ impl<S: 'static> Runtime<S> {
             if !within(focused, scope) { return None; }
             let anchor = nodes.iter().find(|n| n.key.as_deref() == Some(key))?;
             let candidates = (0..nodes.len()).filter(|&j| within(&nodes[j].path, &anchor.path) && shown(j)
-                && (nodes[j].focus.enabled || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())));
+                && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())));
             candidates.clone().find(|&j| nodes[j].focus.selected)
                 .or_else(|| candidates.into_iter().next())
                 .map(|j| nodes[j].path.clone())
+        });
+        // `Tx::focus`: the first shown element with the key, or its first focusable child.
+        let asked = asked.and_then(|(key, ring)| {
+            let anchor = (0..nodes.len()).find(|&j| nodes[j].key.as_deref() == Some(key.as_str()) && shown(j))?;
+            (anchor..nodes.len()).take_while(|&j| within(&nodes[j].path, &nodes[anchor].path))
+                .find(|&j| shown(j) && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())))
+                .map(|j| (nodes[j].path.clone(), ring))
         });
         let input_focused = self.focused.as_deref().is_some_and(|p| {
             nodes.iter().any(|n| n.path == p && !n.inert && n.input.as_ref().is_some_and(|i| i.edit.focused))
@@ -275,17 +301,22 @@ impl<S: 'static> Runtime<S> {
         let next = requested.clone().find(|&(p, edit)| newly_requested(p, edit))
             .or_else(|| virtual_req().filter(|&(p, edit)| newly_requested(p, edit)).min_by_key(|&(p, _)| p))
             .map(|(p, _)| p.to_owned())
+            .or_else(|| asked.as_ref().map(|(p, _)| p.clone()))
             .or(restore)
             .or_else(|| self.focused.clone().filter(|p| (0..nodes.len()).any(|j| &nodes[j].path == p && shown(j)
-                && (nodes[j].focus.enabled || nodes[j].input.as_ref().is_some_and(|i| i.edit.focused)))
+                && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.edit.focused)))
                 || self.virtual_inputs.get(p).is_some_and(|i| i.edit.focused)))
             .or_else(|| requested.into_iter().next().or_else(|| virtual_req().min_by_key(|&(p, _)| p)).map(|(p, _)| p.to_owned()));
         // State may have deleted a row. Only the new view's accessors are valid now.
         // Use the same focus path as input events, then restore the old presentation
         // tree so apply can retain its exit visuals.
+        let keyboard = match &asked {
+            Some((p, ring)) if next.as_deref() == Some(p.as_str()) => *ring,
+            _ => self.keyboard_focus,
+        };
         std::mem::swap(&mut self.nodes, nodes);
         self.nodes_replaced();
-        let changed = self.set_focus(next, self.keyboard_focus);
+        let changed = self.set_focus(next, keyboard);
         std::mem::swap(&mut self.nodes, nodes);
         self.nodes_replaced();
         if self.input_click.dragging_path().is_some_and(|p| !nodes.iter().any(|n| n.path == p && !n.inert && n.input.is_some())) {
@@ -301,7 +332,7 @@ impl<S: 'static> Runtime<S> {
         });
         changed
     }
-    fn tab_order(&self) -> Vec<usize> {
+    pub(super) fn tab_order(&self) -> Vec<usize> {
         let all: Vec<_> = (0..self.nodes.len()).filter(|&i| self.can_focus(i) && self.nodes[i].focus.order >= 0).collect();
         let mut order: Vec<_> = all.iter().copied().filter(|&i| {
             let Some(g) = self.group(i) else { return true; };
@@ -352,11 +383,15 @@ impl<S: 'static> Runtime<S> {
             }
             if order.is_empty() { return self.active_modal().is_some(); }
             let current = order.iter().position(|&i| self.focused.as_deref() == Some(&self.nodes[i].path));
-            let next = match current {
-                Some(i) if ev.mods.shift => (i + order.len() - 1) % order.len(),
-                Some(i) => (i + 1) % order.len(),
-                None if ev.mods.shift => order.len() - 1,
-                None => 0,
+            // With nothing focused, Tab goes on from where focus was or the pointer pressed last.
+            let from = self.focused.is_none().then(|| self.tab_from.as_deref().and_then(|p| self.nodes.iter().position(|n| n.path == p))).flatten();
+            let next = match (current, from) {
+                (Some(i), _) if ev.mods.shift => (i + order.len() - 1) % order.len(),
+                (Some(i), _) => (i + 1) % order.len(),
+                (None, Some(k)) if ev.mods.shift => order.iter().rposition(|&j| j < k).unwrap_or(order.len() - 1),
+                (None, Some(k)) => order.iter().position(|&j| j > k).unwrap_or(0),
+                (None, None) if ev.mods.shift => order.len() - 1,
+                (None, None) => 0,
             };
             let path = self.nodes[order[next]].path.clone();
             self.set_focus(Some(path.clone()), true);
@@ -437,35 +472,6 @@ impl<S: 'static> Runtime<S> {
         }
         false
     }
-    pub(super) fn sync_modals(&mut self) {
-        // Removed modals restore in reverse nesting order. Exiting visuals are already inert.
-        while self.modal_stack.last().is_some_and(|(p, _)| self.node(p).is_none()) {
-            let (modal, restore) = self.modal_stack.pop().unwrap();
-            // Focus the closing commit moved elsewhere (a field outside, say) stays there.
-            let inside = |f: &str| f.strip_prefix(modal.as_str()).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
-            if self.focused.as_deref().is_some_and(|f| !inside(f) && self.node(f).is_some()) { continue; }
-            let restore = restore.filter(|p| self.node(p).is_some());
-            self.set_focus(restore, self.keyboard_focus);
-        }
-        let Some(i) = self.active_modal() else { return };
-        let path = self.nodes[i].path.clone();
-        if !self.modal_stack.iter().any(|(p, _)| p == &path) {
-            // A field in the modal that asked for focus took it earlier in this commit; closing
-            // returns to what had focus before.
-            let inside = self.focused_index().is_some_and(|j| self.allowed(j));
-            let restore = if inside { self.focus_before_commit.clone() } else { self.focused.clone() };
-            self.modal_stack.push((path.clone(), restore));
-            // Cancel any gesture captured before the modal opened.
-            self.capture = None;
-            self.secondary_capture = None;
-            self.hovered = None;
-        }
-        if !self.focused_index().is_some_and(|j| self.allowed(j)) {
-            let target = self.tab_order().first().map(|&j| self.nodes[j].path.clone()).unwrap_or(path);
-            self.set_focus(Some(target), self.keyboard_focus);
-        }
-    }
-
     /// The item Page Down (or Up) moves to from `items[pos]`: the farthest one still inside a
     /// viewport's height of it, as a list's highlight pages in AppKit, at least one item on and
     /// stopping at the ends. Without a scroll view around it, the last (or first).

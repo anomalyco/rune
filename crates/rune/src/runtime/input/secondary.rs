@@ -32,6 +32,14 @@ impl<S: 'static> Runtime<S> {
         self.secondary_capture = self.secondary_target(x, y).map(str::to_owned);
         self.secondary_region_down(x, y, self.secondary_capture.is_some());
         let i = self.secondary_capture.as_ref().and_then(|p| self.nodes.iter().position(|n| &n.path == p));
+        // Under `Cx::web_focus` a right-click focuses the control it's on, as Chromium's
+        // mousedown does, so focus is back on it when its menu closes.
+        if self.defaults.web_focus
+            && let Some(c) = i.and_then(|i| std::iter::successors(Some(i), |&j| self.nodes[j].parent).find(|&j| self.can_focus(j)))
+            && self.nodes[c].input.is_none()
+        {
+            self.queue.push(Action::FocusControl(self.nodes[c].path.clone()));
+        }
         self.secondary_link_down(i, x, y);
     }
 

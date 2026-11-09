@@ -167,7 +167,7 @@ impl El {
     /// stops it taking focus; leave its press handler off as well.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.a11y.disabled = disabled;
-        if disabled { self.focus.enabled = false; }
+        if disabled { self.focus.enabled = false; self.focus.opt_out = true; }
         self
     }
     /// Leave this element and everything inside it out of the accessibility tree: decoration,

@@ -82,6 +82,10 @@ pub struct Tx {
     pub(crate) font_smoothing: Option<crate::text::FontSmoothing>,
     pub(crate) font_families: Option<(String, String)>,
     pub(crate) blur: bool,
+    /// `Tx::focus`: the key and whether its ring shows.
+    pub(crate) focus_to: Option<(String, bool)>,
+    /// `Tx::focus_visible`.
+    pub(crate) focus_visible: bool,
     /// The text selection as the event arrived (`Tx::text_selection`).
     pub(crate) selection: Option<Rc<crate::TextSelection>>,
     /// `Tx::select_text`, `Tx::select_all_text` and `Tx::clear_text_selection`; the last wins.
@@ -299,6 +303,22 @@ impl Tx {
     /// model clears it too. Does nothing when nothing has focus.
     pub fn blur(&mut self) {
         self.blur = true;
+    }
+
+    /// Focus the element keyed `key` once this handler's change is on screen, as a web page's
+    /// `element.focus()`: a menu's trigger as the menu closes, say. The first shown, focusable
+    /// element with that key takes it (or its first focusable child), drawing its focus ring when
+    /// `ring` (`:focus-visible`). A text field focused through its model (`TextEdit::focused`)
+    /// in the same change wins over it. Nothing happens when no such element shows.
+    pub fn focus(&mut self, key: impl Into<String>, ring: bool) {
+        self.focus_to = Some((key.into(), ring));
+    }
+
+    /// Whether keyboard focus was showing its ring (`:focus-visible`) as this event arrived:
+    /// the keyboard, not the pointer, has been driving. A menu that opens with it returns focus
+    /// to its trigger with the ring.
+    pub fn focus_visible(&self) -> bool {
+        self.focus_visible
     }
 
     /// The [`El::selectable`] text selection as this event arrived: the texts it covers with
