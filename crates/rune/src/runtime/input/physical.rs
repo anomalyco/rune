@@ -116,6 +116,7 @@ impl<S: 'static> Runtime<S> {
         same && focus.as_deref() != self.focus.path()
     }
     pub(super) fn dispatch_physical(&mut self, event: PhysicalInput, fallback: Option<Fallback>, tx: &mut Tx) -> bool {
+        tx.by_keys = true;
         use crate::PhysicalKeyCode as Code;
         let is_mod = |c: Code| matches!(c, Code::ShiftLeft | Code::ShiftRight | Code::ControlLeft
             | Code::ControlRight | Code::AltLeft | Code::AltRight | Code::SuperLeft | Code::SuperRight
