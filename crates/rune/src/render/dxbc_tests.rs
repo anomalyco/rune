@@ -98,7 +98,7 @@ fn uber_dxbc_is_fresh() {
         let root = env!("CARGO_MANIFEST_DIR");
         std::fs::write(format!("{root}/uber.vs.dxbc"), &vs).unwrap();
         std::fs::write(format!("{root}/uber.fs.dxbc"), &fs).unwrap();
-        std::fs::write(format!("{root}/src/render/uber_dxbc_hash.rs"), format!(
+        std::fs::write(format!("{root}/src/render/uber/dxbc_hash.rs"), format!(
             "// Written by `cargo run -p rune --example regenerate_dxbc`, or by\n\
              // `RUNE_REGENERATE_DXBC=1 cargo test -p rune --lib uber_dxbc_is_fresh`, on Windows.\n\
              pub(super) const UBER_DXBC_WGSL_BLAKE3: &str = \"{wgsl}\";\n\

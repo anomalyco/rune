@@ -4,7 +4,7 @@
 //! loads them, so they never touch Classic, the Mac's default. One that's missing or stale (its
 //! WGSL or layout hash differs) is skipped with a log line, and Windfoil compiles from WGSL.
 
-include!("uber_windfoil_hash.rs");
+include!("uber/windfoil_hash.rs");
 
 const LIBRARY: &[u8] = include_bytes!("../uber_windfoil.metallib");
 #[cfg(feature = "metal-backend")]

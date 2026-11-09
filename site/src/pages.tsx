@@ -627,14 +627,14 @@ export function LaunchFastView() {
               <strong>"MSL is byte-identical; no Xcode or metallib regeneration needed"</strong> means only the
               fingerprint changed, for example after a comment edit or a descriptor change that generates the same
               Metal. Paste the three <code>pub(super) const</code> lines it prints into{" "}
-              <code>crates/rune/src/render/uber_metallib_hash.rs</code>.
+              <code>crates/rune/src/render/uber/metallib_hash.rs</code>.
             </li>
             <li>
               <strong>"generated MSL or Metal compile flags changed"</strong> or{" "}
               <strong>"does not match recorded hash"</strong> means the library is stale. Run{" "}
               <code>scripts/precompile-metal-shaders.sh</code>. It needs Xcode's Metal toolchain (
               <code>xcrun -sdk macosx metal</code>), dumps the generated MSL, compiles it and rewrites{" "}
-              <code>uber.metallib</code>, <code>uber_native.metallib</code> and <code>uber_metallib_hash.rs</code>.
+              <code>uber.metallib</code>, <code>uber_native.metallib</code> and <code>uber/metallib_hash.rs</code>.
               Commit all three.
             </li>
           </ul>
