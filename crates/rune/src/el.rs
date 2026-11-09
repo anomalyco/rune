@@ -818,7 +818,7 @@ impl El {
     }
 
     /// A stable motion-lint name, independent of keys and generations. Defaults to the NodeId
-    /// in MotionTrace; tooling retains its keyed path fallback. Static metadata allocates nothing.
+    /// in MotionTrace; tooling retains its keyed path fallback. Stored without copying the name.
     /// Give simultaneous generations distinct names when comparing their motion separately.
     pub fn trace_name(mut self, name: &'static str) -> Self {
         self.cold_mut().trace_name = Some(name);
@@ -827,7 +827,7 @@ impl El {
 
     /// Class and host for this subtree's trace metadata (descendants may override them).
     /// motion-lint pairs names by class too: use `("gpui", "pill")` to match a native Metal trace.
-    /// Static metadata performs no allocation, including when tracing is disabled.
+    /// The labels share the element's lazily allocated storage with its other rare fields.
     pub fn trace_namespace(mut self, class: &'static str, host: &'static str) -> Self {
         self.cold_mut().trace_namespace = Some((class, host));
         self

@@ -28,6 +28,8 @@ fn disabled_trace_hooks_neither_format_nor_allocate() {
     let element = rune::el();
     let before = allocs();
     let _named = element.trace_name("chip:Area").trace_namespace("gpui", "pill");
+    assert!(allocs() - before <= 1, "trace labels share the element's cold storage");
+    let before = allocs();
     for _ in 0..100 {
         rt.update(|_, tx| {
             assert!(!tx.tracing());
