@@ -1176,10 +1176,19 @@ impl<S: 'static> Runtime<S> {
             {
                 let offset = self.stuck_offset(i, p.rect.edges()[3]).unwrap_or(st.offset);
                 let held = self.bottom_offset(i, p.rect.edges()[3]).is_some_and(|b| (offset - b).abs() < 0.5);
-                let drawn = grid(offset as f32 + st.slack.height(), s);
+                let exact = offset as f32 + st.slack.height();
+                // A pinned end settling creeps a fraction of a pixel back and forth as its row
+                // heights and slack land. A step straight back to the pixel it just left, by less
+                // than a whole pixel, holds where it is, so its rows don't flicker between two
+                // pixels; motion one way rounds as ever.
+                let rounded = grid(exact, s);
+                let step = (rounded - st.drawn[1]).signum() as i8;
+                let back = st.pinned && step != 0 && step == -st.drawn_step && ((exact - st.drawn[1]) * s).abs() < 1.0;
+                let drawn = if back { st.drawn[1] } else { rounded };
+                let moved = if drawn == st.drawn[1] { st.drawn_step } else { step };
                 dy -= drawn;
                 snap_rigid[1] -= drawn;
-                if let Some(st) = self.scrolls.get_mut(&self.nodes[i].id) { (st.held, st.drawn[1]) = (held, drawn); }
+                if let Some(st) = self.scrolls.get_mut(&self.nodes[i].id) { (st.held, st.drawn[1], st.drawn_step) = (held, drawn, moved); }
             }
             let (mut scale, mut anchor, mut anchor_to, mut dx) = (sc, anchor, anchor_to, pinh.dx);
             if n.scroll_axes.x() && let Some(st) = self.scrolls.get_mut(&self.nodes[i].id) {

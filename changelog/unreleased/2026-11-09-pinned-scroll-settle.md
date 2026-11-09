@@ -1,0 +1,1 @@
+- **A pinned scroll that settles no longer flickers its content between two pixels.** As a pinned end's rows and slack land, its offset can creep back and forth across a pixel boundary; a step straight back by less than a pixel now holds the pixel it drew.
