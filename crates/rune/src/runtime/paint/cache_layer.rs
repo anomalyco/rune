@@ -49,9 +49,9 @@ impl<S: 'static> Runtime<S> {
             let mut h = rune_motion::Fx::default();
             self.hovered.hash(&mut h);
             self.hover_within.hash(&mut h);
-            self.focused.hash(&mut h);
-            self.keyboard_focus.hash(&mut h);
-            self.hover_focus.hash(&mut h);
+            self.focus.path().hash(&mut h);
+            self.focus.keyboard().hash(&mut h);
+            self.focus.hovered().hash(&mut h);
             if let Some(ring) = self.defaults.focus_ring {
                 let c = ring.color;
                 [ring.width, ring.offset, c.r, c.g, c.b, c.a].map(f32::to_bits).hash(&mut h);

@@ -177,7 +177,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn route_modifier(&mut self, ev: &KeyEvent, one: &mut Tx) -> bool {
         if !self.modifier_keys.enabled { return false; }
         one.key_repeat = false;
-        let app_first = self.focused.is_none();
+        let app_first = self.focus.path().is_none();
         if app_first && let Some(f) = self.on_key && Tx::took(self.app_key(f, ev, one), one) { return true; }
         if let Some(f) = self.focused_input().and_then(|input| input.key.clone())
             && Tx::took(f(states!(self), ev, one), one)
@@ -260,7 +260,7 @@ mod tests {
         assert_eq!(modifiers(&rt.state.app), [(Modifier::ShiftLeft, true), (Modifier::ShiftLeft, false)]);
         assert_eq!((rt.state.app[0].mods, rt.state.app[1].mods), (SHIFT, Mods::default()));
         assert_eq!(Modifier::ShiftLeft.side(), Some(KeySide::Left));
-        assert!(!rt.keyboard_focus, "a modifier tap shows no focus ring");
+        assert!(!rt.focus.keyboard(), "a modifier tap shows no focus ring");
     }
 
     #[test]

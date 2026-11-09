@@ -175,7 +175,7 @@ impl<S: 'static> Runtime<S> {
             PointerButton::Secondary => return self.secondary_down(x, y),
             _ => {}
         }
-        if self.capture.is_some() { return; }
+        if self.press.is_held() { return; }
         self.pointer = Some((x, y));
         self.dismiss_help();
         let hit = self.hits.iter().rev().find(|&&(id, r)| self.hit_contains(id, r, x, y)).and_then(|(id, _)| self.node_index.get(id).copied());
@@ -192,17 +192,9 @@ impl<S: 'static> Runtime<S> {
         let d = Drag { phase: Phase::Down, x: lx, y: ly, w: r[2] - r[0], h: r[3] - r[1], start_x: lx, start_y: ly, dx: 0.0, dy: 0.0, data: 0.0, clicks: 1, cancelled: false, window: [x, y], screen: self.screen_at(x, y) };
         let path = n.path.clone();
         if n.handlers.on_drag.is_some() { self.queue.push(Action::Drag(path.clone(), d, button)); }
-        self.drag_out_armed = false;
-        self.double_armed = false;
-        self.last_press = None;
         self.press_clicks.clear();
-        self.press_at = (x, y);
-        self.press_down_t = self.now_clock();
-        self.press_moved = false;
-        self.press_cancelled = false;
-        self.capture = Some((path, d));
-        self.capture_button = button;
-        self.capture_inside = true;
+        let now = self.now_clock();
+        self.press.hold(capture::Held::new(path, d, button, (x, y), now, false, None));
     }
 
     /// A mouse button came up at (x, y): the release of [`Self::button_down`].
@@ -210,7 +202,7 @@ impl<S: 'static> Runtime<S> {
         match button {
             PointerButton::Primary => self.pointer_up(x, y),
             PointerButton::Secondary => self.secondary_up(x, y),
-            _ if self.capture.is_some() && self.capture_button == button => self.release_capture(x, y),
+            _ if self.press.held().is_some_and(|h| h.button == button) => self.release_capture(x, y),
             _ => {}
         }
     }
@@ -244,7 +236,7 @@ impl<S: 'static> Runtime<S> {
         } else if !repeat {
             self.ime_keys_down = 0;
             self.ime_eat_key_up = false;
-            self.key_focus = self.focused.clone();
+            self.key_focus = self.focus.owned();
             self.keys_held += 1;
         }
     }
@@ -271,7 +263,7 @@ impl<S: 'static> Runtime<S> {
         if self.eat_ime_key_up() { return false; }
         tx.focused = self.focused_key();
         let pressed = self.key_focus.as_deref().and_then(|p| self.live_index(p));
-        let focused = self.focused.as_deref().and_then(|p| self.live_index(p));
+        let focused = self.focus.path().and_then(|p| self.live_index(p));
         let secure = [pressed, focused].into_iter().flatten()
             .any(|i| self.nodes[i].input.as_ref().is_some_and(|input| input.edit.is_secure()));
         if self.keys_held > 0 {

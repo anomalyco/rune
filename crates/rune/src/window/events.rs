@@ -473,7 +473,7 @@ impl<S: 'static> Host<S> {
                 if state == ElementState::Pressed {
                     self.control_click = cfg!(target_os = "macos") && self.mods.control_key();
                 }
-                if let Some((x, y)) = rt.pointer() {
+                if let Some((x, y)) = button_at(rt, &l.window) {
                     match (state, self.control_click) {
                         (ElementState::Pressed, true) => rt.secondary_down(x, y),
                         (ElementState::Released, true) => rt.secondary_up(x, y),
@@ -498,7 +498,7 @@ impl<S: 'static> Host<S> {
                 l.request_redraw();
             }
             WindowEvent::MouseInput { state, button: MouseButton::Right, .. } => {
-                if let Some((x, y)) = rt.pointer() {
+                if let Some((x, y)) = button_at(rt, &l.window) {
                     match state {
                         ElementState::Pressed => rt.secondary_down(x, y),
                         ElementState::Released => {
@@ -511,7 +511,7 @@ impl<S: 'static> Host<S> {
                 l.request_redraw();
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                if let Some((x, y)) = rt.pointer() {
+                if let Some((x, y)) = button_at(rt, &l.window) {
                     match state {
                         ElementState::Pressed => rt.button_down(x, y, pointer_button(button)),
                         ElementState::Released => rt.button_up(x, y, pointer_button(button)),
@@ -538,6 +538,18 @@ fn touch_promoted() -> bool {
 #[cfg(not(target_os = "windows"))]
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn touch_promoted() -> bool { false }
+
+/// Where a mouse button acts: where the runtime last saw the pointer, else where the system
+/// says it is. A menu that took the mouse (`release_pointer_for_popup`) leaves the runtime no
+/// pointer, and winit reports no move for a cursor that hasn't moved since, so a click at the
+/// same spot after the menu closes would otherwise be lost. The pointer moves there first, so
+/// hover is back under it as the press lands.
+fn button_at<S: 'static>(rt: &mut Runtime<S>, window: &winit::window::Window) -> Option<(f32, f32)> {
+    if let Some(at) = rt.pointer() { return Some(at); }
+    let (x, y) = crate::input::drop_pointer::DropPointer::new().sample(window)?;
+    rt.pointer_move(x, y);
+    Some((x, y))
+}
 
 impl<S: 'static> Host<S> {
     /// The system's paint (`RedrawRequested`), or one the loop runs for a window whose paint

@@ -1281,7 +1281,7 @@ impl<S: 'static> Runtime<S> {
         // Retarget from the new geometry and schedule the frame that samples that paint. A
         // commit that moved the indices left keyboard focus hover (`El::hover_group_focus`) to
         // this pass too.
-        let interaction = (self.pointer.is_some() || self.keyboard_focus) && self.update_interaction(held);
+        let interaction = (self.pointer.is_some() || self.focus.keyboard()) && self.update_interaction(held);
         self.queue.len() > queued || interaction
     }
 }

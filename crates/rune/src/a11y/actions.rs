@@ -178,7 +178,7 @@ impl<S: 'static> Runtime<S> {
     /// Focuses field `path` (as a reader focuses it first) and edits it through its editor, so
     /// its change and submit handlers run as for typing.
     fn a11y_edit(&mut self, path: String, tx: &mut Tx, f: impl FnOnce(&mut crate::edit::TextEdit) -> crate::edit::EditOutcome) -> bool {
-        if self.focused.as_deref() != Some(path.as_str()) { self.set_focus(Some(path.clone()), true); }
+        if self.focus.path() != Some(path.as_str()) { self.set_focus(Some(path.clone()), true); }
         log_event!(self, "a11y edit {path}");
         self.with_focused(f, tx)
     }
