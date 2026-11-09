@@ -21,7 +21,7 @@ impl<S: 'static> Runtime<S> {
             let Some(v) = self.virtuals.get_mut(path) else { continue };
             let (offset, pinned) = self.path_ids.get(&v.scroll_path)
                 .and_then(|id| self.scrolls.get(id))
-                .map_or((0.0, false), |s| ((s.offset as f32 - v.top).max(0.0), s.pinned));
+                .map_or((0.0, false), |s| ((s.offset as f32 - v.top).max(0.0), s.pinned()));
             let range = v.visible_range(offset, pinned);
             if v.reported_visible.as_ref() != Some(&range) {
                 v.reported_visible = Some(range.clone());
@@ -57,7 +57,7 @@ impl<S: 'static> Runtime<S> {
         let Some(&i) = self.path_ids.get(path).and_then(|id| self.node_index.get(id)) else { return false };
         if self.subtree_exiting(i) { return false; }
         self.path_ids.get(&v.scroll_path).and_then(|id| self.scrolls.get(id))
-            .is_some_and(|s| v.needs_window((s.offset as f32 - v.top).max(0.0), s.pinned))
+            .is_some_and(|s| v.needs_window((s.offset as f32 - v.top).max(0.0), s.pinned()))
     }
 
     /// Whether an index-built list still mounts its overscan a little per frame, so the host

@@ -146,10 +146,8 @@ impl<S: 'static> Runtime<S> {
         let (id, page, stick) = (self.nodes[i].id, f64::from(self.nodes[i].local.h * 0.9), self.nodes[i].scroll.is_some_and(|s| s.stick_bottom));
         let Some(st) = self.scrolls.get_mut(&id) else { return false };
         st.offset = to(st.offset, st.max, page).clamp(0.0, st.max);
-        st.v = 0.0;
-        st.glide = None;
         st.direct = true;
-        st.pinned = stick && st.offset >= st.max - 0.5;
+        st.land(stick);
         true
     }
 

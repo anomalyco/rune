@@ -318,11 +318,11 @@ fn a_hand_scroll_mid_shrink_keeps_the_viewport() {
     let mut rt = reading(120.0);
     rt.update(|n, _| *n = 15);
     for _ in 0..6 { rt.frame(1.0 / 120.0); }
-    assert!(rt.scrolls.values().next().unwrap().glide.is_some(), "the collapse glides");
+    assert!(rt.scrolls.values().next().unwrap().glide().is_some(), "the collapse glides");
     rt.wheel(100.0, 100.0, 10.0);
     for f in 0..120 {
         rt.frame(1.0 / 120.0);
-        assert!(rt.scrolls.values().next().unwrap().glide.is_none(), "frame {f}: no glide takes the viewport back from the hand");
+        assert!(rt.scrolls.values().next().unwrap().glide().is_none(), "frame {f}: no glide takes the viewport back from the hand");
     }
 }
 
@@ -333,13 +333,13 @@ fn a_shrink_glide_follows_the_end_as_it_moves() {
     let mut rt = reading(120.0);
     rt.update(|n, _| *n = 15);
     for _ in 0..8 { rt.frame(1.0 / 120.0); }
-    let v = rt.scrolls.values().next().unwrap().glide.unwrap();
+    let v = rt.scrolls.values().next().unwrap().glide().unwrap();
     assert!(v.abs() > 1.0, "gliding at {v}");
     rt.update(|n, _| *n = 10);
     rt.frame(1.0 / 120.0);
     let st = rt.scrolls.values().next().unwrap();
-    assert_eq!(st.glide_to, Some(700.0), "the glide aims at the newer end");
-    assert!(st.glide.unwrap().abs() >= v.abs() * 0.5, "and keeps its speed: {:?} from {v}", st.glide);
+    assert_eq!(st.glide_to(), Some(700.0), "the glide aims at the newer end");
+    assert!(st.glide().unwrap().abs() >= v.abs() * 0.5, "and keeps its speed: {:?} from {v}", st.glide());
     for _ in 0..120 { rt.frame(1.0 / 120.0); }
     assert!((rt.scrolls.values().next().unwrap().offset - 700.0).abs() < 0.01, "lands on the newer end");
 
@@ -349,7 +349,7 @@ fn a_shrink_glide_follows_the_end_as_it_moves() {
     rt.update(|n, _| *n = 20);
     rt.frame(1.0 / 120.0);
     let st = rt.scrolls.values().next().unwrap();
-    assert!(st.glide.is_none(), "rows coming back past the offset end the glide");
+    assert!(st.glide().is_none(), "rows coming back past the offset end the glide");
     let at = st.offset;
     for _ in 0..60 { rt.frame(1.0 / 120.0); }
     assert_eq!(rt.scrolls.values().next().unwrap().offset, at, "and the viewport stays where it was");
@@ -364,7 +364,7 @@ fn a_kept_row_holds_its_viewport_through_a_shrink() {
     rt.update(|n, tx| { *n = 17; tx.keep_on_screen("r15"); });
     for f in 0..20 {
         rt.frame(1.0 / 120.0);
-        assert!(rt.scrolls.values().next().unwrap().glide.is_none(), "frame {f}: no shrink glide on a kept viewport");
+        assert!(rt.scrolls.values().next().unwrap().glide().is_none(), "frame {f}: no shrink glide on a kept viewport");
         assert!((top(&rt) - was).abs() < 0.5, "frame {f}: the kept row holds its place");
     }
 }
@@ -375,7 +375,7 @@ fn a_glide_whose_end_shrinks_past_it_lands_there() {
     let mut rt = reading(120.0);
     rt.update(|_, tx| tx.scroll_to("scroll", 0.0, 1000.0));
     for _ in 0..6 { rt.frame(1.0 / 120.0); }
-    assert!(rt.scrolls.values().next().unwrap().glide.is_some_and(|v| v.abs() > 100.0), "gliding up");
+    assert!(rt.scrolls.values().next().unwrap().glide().is_some_and(|v| v.abs() > 100.0), "gliding up");
     rt.update(|n, tx| { *n = 12; tx.instant(); });
     let mut low = f64::MAX;
     for _ in 0..60 {
@@ -397,11 +397,11 @@ fn a_reader_landed_on_a_shrunk_end_follows_rows_arriving_in_its_tail() {
     for f in 0.. {
         rt.frame(1.0 / 120.0);
         let st = rt.scrolls.values().next().unwrap();
-        if st.glide.is_none() && st.max - 1200.0 < 0.5 { break; }
+        if st.glide().is_none() && st.max - 1200.0 < 0.5 { break; }
         assert!(f < 240, "the glide lands and the rows near the end");
     }
     assert!(rt.stacks.values().next().unwrap().moving, "the rows are still settling");
-    assert!(rt.scrolls.values().next().unwrap().pinned, "the reader sticks to the end");
+    assert!(rt.scrolls.values().next().unwrap().pinned(), "the reader sticks to the end");
     rt.update(|n, _| *n = 20);
     for _ in 0..120 { rt.frame(1.0 / 120.0); }
     let st = rt.scrolls.values().next().unwrap();
@@ -445,7 +445,7 @@ fn a_reader_stuck_in_the_collapse_tail_never_steps_up() {
     for f in 0..240 {
         rt.frame(1.0 / 120.0);
         let st = rt.scrolls.values().next().unwrap();
-        stuck_in_tail |= st.pinned && st.max > 1200.0;
+        stuck_in_tail |= st.pinned() && st.max > 1200.0;
         assert!(st.offset <= offset, "frame {f}: the offset steps up from {offset} to {}", st.offset);
         let now = top(&rt);
         assert!(now >= y - 1e-3, "frame {f}: the rows step up from {y} to {now}");
@@ -501,12 +501,12 @@ fn rows_regrowing_under_a_shrink_glide_stay_near() {
     for f in 0.. {
         rt.frame(1.0 / 120.0);
         let st = rt.scrolls.values().next().unwrap();
-        assert!(st.glide.is_some() && f < 120, "the glide passes 850");
+        assert!(st.glide().is_some() && f < 120, "the glide passes 850");
         if st.offset < 850.0 { break; }
     }
     rt.update(|s, _| s.0 = 12);
     rt.frame(1.0 / 120.0);
-    assert!(rt.scrolls.values().next().unwrap().glide.is_none(), "rows coming back past the offset end the glide");
+    assert!(rt.scrolls.values().next().unwrap().glide().is_none(), "rows coming back past the offset end the glide");
     for _ in 0..240 { rt.frame(1.0 / 120.0); }
     assert_eq!(rt.state.2, [false], "the regrown end is near, while the rows still collapse to it");
 }

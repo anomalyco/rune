@@ -31,7 +31,7 @@ type Within = (Vec<String>, Vec<usize>);
 /// Viewport `s` moves content under a still pointer on its own: a glide, an app's instant
 /// scrolls frame after frame (a glide it steps itself), or slack letting rows down.
 fn scroll_carries(s: &ScrollState) -> bool {
-    s.glide.is_some() || s.x.glide.is_some() || s.nudged > 0 || s.slack.moving()
+    s.glide().is_some() || s.x.glide.is_some() || s.nudged > 0 || s.slack.moving()
 }
 
 /// `inner` is `outer` or inside it.
