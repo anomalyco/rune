@@ -145,6 +145,11 @@ impl<S: 'static> Runtime<S> {
             let path = self.node_index.get(&node).map_or_else(|| format!("node:{}", node.0), |&i| self.nodes[i].path.clone());
             (path, prop_name(p.0), store.is_active(track))
         }).collect();
+        // A growth row's feathered edge (`GrowTrack::mask`) paints as it eases out, after its height
+        // has landed: it is a track of its own here.
+        out.extend(self.grows.iter().filter(|(_, g)| g.mask > 0.01).filter_map(|(id, _)| {
+            self.node_index.get(id).map(|&i| (self.nodes[i].path.clone(), "mask", true))
+        }));
         out.sort();
         out.dedup();
         out
