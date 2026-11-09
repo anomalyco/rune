@@ -9,8 +9,20 @@ permissions:
   contents: read
 
 jobs:
+  size:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: bash scripts/file-size.sh
+
   test:
     runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      # Keep the many integration-test links within a hosted runner's memory and disk.
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_PROFILE_TEST_STRIP: symbols
     steps:
       - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
