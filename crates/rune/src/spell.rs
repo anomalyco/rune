@@ -12,6 +12,8 @@ use std::rc::Rc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[path = "spell/pause.rs"]
+pub(crate) mod pause;
 #[cfg(target_os = "windows")]
 #[path = "spell/windows.rs"]
 mod platform;

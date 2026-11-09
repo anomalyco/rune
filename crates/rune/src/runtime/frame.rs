@@ -432,6 +432,9 @@ impl<S: 'static> Runtime<S> {
         self.wake_deadlines.drain(..due);
         self.fire_hover_delays();
         self.fire_press_repeat();
+        let (wake, redraw) = crate::spell::pause::tick(&mut self.spell_watch, self.clock);
+        if let Some(at) = wake { self.schedule_wakes([std::time::Duration::from_secs_f64((at - self.clock).max(0.0))]); }
+        if redraw { self.dirty = true; }
         if let Some(poll) = self.poll.filter(|_| !polled) {
             let mut one = self.transaction();
             // Scheduling does not imply a model change.
