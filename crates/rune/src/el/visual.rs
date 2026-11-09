@@ -115,6 +115,8 @@ pub struct VisualCold {
     pub mark: u32,
     /// `El::mirror_in_rtl`: its icon flips left to right in a right-to-left element.
     pub(crate) mirror_rtl: bool,
+    /// `El::paint_order`: where it paints among its siblings; 0 is tree order.
+    pub(crate) paint_order: i16,
 }
 
 impl Empty for VisualCold {
@@ -170,6 +172,7 @@ impl Empty for VisualCold {
         rotate: 0.0,
         mark: 0,
         mirror_rtl: false,
+        paint_order: 0,
     };
 }
 

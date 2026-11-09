@@ -827,6 +827,7 @@ impl<S: 'static> Runtime<S> {
         self.commit_gen = self.commit_gen.wrapping_add(1);
         let (mut dissolve, mut cache, mut pix, mut drawn_ly, mut key_up, mut sticky, mut raise, mut any_loop) =
             (false, false, false, false, false, false, false, false);
+        let mut ordered = false;
         for n in &self.nodes {
             dissolve |= n.vis_flags.blend() == crate::render::Blend::PlusLighter;
             cache |= n.vis_flags.cache();
@@ -838,6 +839,7 @@ impl<S: 'static> Runtime<S> {
             drawn_ly |= n.handlers.get().is_some_and(|h| h.on_drawn_layout.is_some() || h.on_visible.is_some() || h.drawn_rect.is_some());
             key_up |= n.focus.get().is_some_and(|f| f.key_up.is_some());
             raise |= n.vis_flags.raise();
+            ordered |= n.vis.paint_order != 0;
         }
         self.has_dissolve = dissolve;
         self.has_cache = cache;
@@ -853,10 +855,11 @@ impl<S: 'static> Runtime<S> {
         self.has_key_up = key_up;
         self.has_sticky = self.holding() || sticky;
         self.has_raise = raise;
+        self.has_paint_order = ordered;
         // A flight that left the tree stays lifted and covered while it exits, so it doesn't pop.
         self.flying.retain(|(id, _)| self.node_index.contains_key(id));
         self.launches.keep(&self.flying);
-        if self.nodes.len() > present_len || !self.flying.is_empty() || landed || self.has_sticky || self.has_raise { self.update_layer_paint_order(); }
+        if self.nodes.len() > present_len || !self.flying.is_empty() || landed || self.has_sticky || self.has_raise || self.has_paint_order { self.update_layer_paint_order(); }
         else { self.layer_paint_order.clear(); }
         self.built = false;
         if !self.virtuals.is_empty() {

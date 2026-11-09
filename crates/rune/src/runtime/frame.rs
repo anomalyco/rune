@@ -780,18 +780,22 @@ impl<S: 'static> Runtime<S> {
         let n = self.nodes.len();
         let mut first = vec![n; n + 1];
         let mut next = vec![n; n];
+        // Siblings paint by `El::paint_order`, then (with sticky elements about) sticky ones over
+        // the rows they're stuck over and anchored overlays and modals over both.
         let rank = |i: usize| {
             let nd = &self.nodes[i];
-            if nd.above.is_some() || nd.handlers.modal.is_some() { 2 }
-            else if self.sticky_of(i).is_some() { 1 }
-            else { 0 }
+            let place = if !self.has_sticky { 0 }
+                else if nd.above.is_some() || nd.handlers.modal.is_some() { 2 }
+                else if self.sticky_of(i).is_some() { 1 }
+                else { 0 };
+            (nd.vis.paint_order, place)
         };
-        if self.has_sticky {
-            for r in (0..=2).rev() {
-                for i in (0..n).rev().filter(|&i| rank(i) == r) {
-                    let parent = self.nodes[i].parent.map_or(0, |p| p + 1);
-                    next[i] = first[parent]; first[parent] = i;
-                }
+        if self.has_sticky || self.has_paint_order {
+            let mut ranks: Vec<_> = (0..n).map(|i| (rank(i), i)).collect();
+            ranks.sort_unstable();
+            for &(_, i) in ranks.iter().rev() {
+                let parent = self.nodes[i].parent.map_or(0, |p| p + 1);
+                next[i] = first[parent]; first[parent] = i;
             }
         } else {
             for i in (0..n).rev() {
