@@ -36,6 +36,7 @@ pub use language::set_language;
 mod line_break;
 mod span;
 mod system_fonts;
+mod system_weight;
 mod default_fonts;
 #[cfg(all(test, target_os = "macos"))]
 mod core_text_tests;
@@ -173,6 +174,8 @@ pub struct TextSystem {
     /// Bit `i` is set once `fallback::SCRIPT_FONTS[i]` has been looked up.
     scripts: u64,
     font_files: LoadedFiles,
+    /// The loaded system faces' families, for the face DirectWrite picks (`system_weight`).
+    system_faces: system_weight::Faces,
     /// Installed families looked up by name (`load_installed`), lowercase.
     installed: std::collections::HashSet<String>,
     pub atlas: Atlas,
@@ -314,6 +317,7 @@ impl TextSystem {
             slot_system_mono: names_system_mono(families.0) || names_system_mono(families.1),
             scripts: 0,
             font_files,
+            system_faces: Default::default(),
             installed: Default::default(),
             atlas: Atlas::new(),
             color_glyphs: GlyphMap::default(),
@@ -718,7 +722,7 @@ impl TextSystem {
         let off = [b"liga", b"clig", b"calt", b"dlig"].map(|tag| parley::FontFeature::new(parley::setting::Tag::new(tag), 0));
         let unligated: Vec<parley::FontFeature> = features.iter().chain(&off).copied().collect();
         type Spacings = [(std::ops::Range<usize>, f32)];
-        let build = |lcx: &mut LayoutContext<Ink>, fcx: &mut FontContext, exact: &Spacings, widen: &Spacings| {
+        let build = |lcx: &mut LayoutContext<Ink>, fcx: &mut FontContext, exact: &Spacings, widen: &Spacings, weights: &Spacings| {
             let mut b = lcx.ranged_builder(fcx, text, scale, true);
             b.set_base_direction(base);
             b.push_default(FontFamily::from(sans.as_slice()));
@@ -784,6 +788,9 @@ impl TextSystem {
                     b.push(StyleProperty::LetterSpacing(v), r.clone());
                 }
             }
+            for (range, w) in weights {
+                b.push(StyleProperty::FontWeight(FontWeight::new(*w)), range.clone());
+            }
             for (range, stack) in &routed {
                 b.push(FontFamily::from(stacks[*stack].as_deref().unwrap_or_default()), range.clone());
             }
@@ -813,7 +820,17 @@ impl TextSystem {
             break_lines(&mut layout);
             layout
         };
-        let mut layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen);
+        let mut layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen, &[]);
+        // On Windows, system faces as DirectWrite picks them for each run's weight, as Chromium.
+        let weights = if cfg!(target_os = "windows") && !text.is_ascii() {
+            let wanted = |at: usize| spans.iter().rev().find_map(|s| s.weight.filter(|_| span_range(s).contains(&at))).unwrap_or(style.weight);
+            system_weight::corrections(&mut self.system_faces, &mut self.font_cx, &self.font_files, &layout, wanted)
+        } else {
+            Vec::new()
+        };
+        if !weights.is_empty() {
+            layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen, &weights);
+        }
         // The spacing each run got, against the spacing its own font needs.
         let given = |at: usize| {
             spans.iter().zip(&span_spacing).rev().find_map(|(s, v)| v.filter(|_| span_range(s).contains(&at))).unwrap_or(base_spacing)
@@ -837,7 +854,7 @@ impl TextSystem {
             }
         }
         if mismatch {
-            layout = build(&mut self.layout_cx, &mut self.font_cx, &exact, &widen);
+            layout = build(&mut self.layout_cx, &mut self.font_cx, &exact, &widen, &weights);
         }
         layout.align(align, AlignmentOptions::default());
         let l = Rc::new(layout);
