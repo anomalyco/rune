@@ -1,5 +1,5 @@
 //! `Markdown::selectable`: one selection across a message's paragraphs, list items and code
-//! blocks, copied as the text drawn (no list markers or fences), with links still opening on a
+//! blocks, copied as plain text (blank lines between paragraphs, `- ` before items, no fences), with links still opening on a
 //! click, inside memo'd rows and while the message streams in.
 #![cfg(feature = "markdown")]
 
@@ -81,11 +81,11 @@ fn a_drag_selects_from_a_paragraph_into_a_code_block_and_copies_the_drawn_text()
     assert_eq!(rt.cursor(), Cursor::Text, "an I-beam over the text");
     let code = glyphs(&rt, "m0/b2");
     drag(&mut rt, before(para[1]), before(code[2]));
-    assert_eq!(rt.selected_text().as_deref(), Some("ello world and link.\nalpha\nbeta\nfn "));
+    assert_eq!(rt.selected_text().as_deref(), Some("ello world and link.\n\n- alpha\n- beta\n\nfn "));
     command(&mut rt, 'c');
-    assert_eq!(clipboard.text().as_deref().map(String::as_str), Some("ello world and link.\nalpha\nbeta\nfn "));
+    assert_eq!(clipboard.text().as_deref().map(String::as_str), Some("ello world and link.\n\n- alpha\n- beta\n\nfn "));
     command(&mut rt, 'a');
-    assert_eq!(rt.selected_text().as_deref(), Some("Hello world and link.\nalpha\nbeta\nfn main() {}"), "the message, not the next one");
+    assert_eq!(rt.selected_text().as_deref(), Some("Hello world and link.\n\n- alpha\n- beta\n\nfn main() {}"), "the message, not the next one");
 }
 
 #[test]
@@ -109,13 +109,13 @@ fn a_selection_survives_its_message_and_the_next_streaming_in() {
     let para = glyphs(&rt, "m0/b0");
     let alpha = glyphs(&rt, "m0/b1/i0/#1/b0");
     drag(&mut rt, before(para[1]), before(alpha[2]));
-    assert_eq!(rt.selected_text().as_deref(), Some("ello world and link.\nal"));
+    assert_eq!(rt.selected_text().as_deref(), Some("ello world and link.\n\n- al"));
     for more in [" streams", " in\n\nand", " on"] {
         rt.state.msgs[1].push_str(more);
         rt.state.msgs[0].push_str(more);
         rt.invalidate();
         tick(&mut rt);
-        assert_eq!(rt.selected_text().as_deref(), Some("ello world and link.\nal"), "after {more:?}");
+        assert_eq!(rt.selected_text().as_deref(), Some("ello world and link.\n\n- al"), "after {more:?}");
     }
     // In the streaming message itself, once the growing first one has pushed it down.
     rt.frame(1.0);
@@ -202,4 +202,34 @@ fn tabs_line_up_and_copy_as_tabs() {
     command(&mut rt, 'a');
     command(&mut rt, 'c');
     assert_eq!(clipboard.text().as_deref().map(String::as_str), Some(code));
+}
+
+/// A quote's paragraphs, a list and a code block copy as plain text: blank lines between
+/// blocks, items on their own lines after their markers, code keeping its lines.
+#[test]
+fn a_quote_with_paragraphs_a_list_and_code_copies_as_plain_text() {
+    let src = "Before.\n\n> First `para` here.\n>\n> Second para.\n>\n> - one\n> - two\n>   - nested\n> 1. first\n> 2. second\n\n```\nlet a = 1;\nlet b = 2;\n```\n\nAfter.\n";
+    let mut rt = runtime_with(&[src], true);
+    let clipboard = rune::clipboard::memory();
+    rt.use_clipboard(&clipboard);
+    let g = glyphs(&rt, "m0/b0");
+    drag(&mut rt, before(g[1]), before(g[3]));
+    command(&mut rt, 'a');
+    command(&mut rt, 'c');
+    assert_eq!(
+        clipboard.text().as_deref().map(String::as_str),
+        Some("Before.\n\nFirst para here.\n\nSecond para.\n\n- one\n- two\n  - nested\n\n1. first\n2. second\n\nlet a = 1;\nlet b = 2;\n\nAfter."),
+    );
+
+    // One item alone copies without its marker, and a drag from inside an item leaves it off.
+    rt.pointer_down(470.0, 790.0);
+    rt.pointer_up(470.0, 790.0);
+    rt.frame(1.0);
+    let two = glyphs(&rt, "m0/b1/#1/b2/i1/#1/b0");
+    drag(&mut rt, (two[0].0 - 1.0, two[0].1), (two[2].0 + 3.0, two[2].1));
+    assert_eq!(rt.selected_text().as_deref(), Some("two"));
+    rt.frame(1.0);
+    let one = glyphs(&rt, "m0/b1/#1/b2/i0/#1/b0");
+    drag(&mut rt, before(one[1]), (two[2].0 + 3.0, two[2].1));
+    assert_eq!(rt.selected_text().as_deref(), Some("ne\n- two"));
 }

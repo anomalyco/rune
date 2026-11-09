@@ -446,8 +446,8 @@ impl El {
     /// Makes the [`El::selectable`] texts inside this element one selection, in tree order, as
     /// the paragraphs of a web page are: a drag from one into another selects across them (the
     /// gaps between included), Shift-click extends into any of them, Cmd+A selects them all and
-    /// Cmd+C copies their text joined by a newline, or a tab between texts side by side (table
-    /// cells). Double- and triple-clicks still take a word or paragraph of one text. Text that
+    /// Cmd+C copies their text joined by a newline (or the blank line [`El::copy_breaks`] asks
+    /// for, after any [`El::copy_prefix`]), or a tab between texts side by side (table cells). Double- and triple-clicks still take a word or paragraph of one text. Text that
     /// isn't selectable (a list marker) is skipped. Outside a group each text is its own.
     pub fn selection_group(mut self, on: bool) -> Self {
         self.flags.set(ElFlags::SELECTION_GROUP, on);
@@ -511,6 +511,25 @@ impl El {
             let at = t.uncopied.partition_point(|r| (r.0 as usize) < range.start);
             t.uncopied.insert(at, (range.start as u32, range.end as u32));
         }
+        self
+    }
+    /// How many newlines copying puts between this [`El::selectable`] text and the text copied
+    /// before it, and the text after it, when a [`El::selection_group`] selection takes more than
+    /// one: the larger of the two texts' asks, one by default. Two leaves a blank line, as a web
+    /// page's paragraphs copy. Texts side by side still take a tab.
+    ///
+    /// ```ignore
+    /// text(para).selectable(true).copy_breaks(2, 2) // "first para\n\nsecond para"
+    /// ```
+    pub fn copy_breaks(mut self, before: u8, after: u8) -> Self {
+        if let Some(t) = &mut self.text { t.copy_breaks = [before, after]; }
+        self
+    }
+    /// Text copying puts before this [`El::selectable`] text when a selection takes it from its
+    /// start along with other texts, without drawing it: a list item's `"- "` or `"1. "`, whose
+    /// drawn marker isn't selectable. A copy of this text alone leaves it out.
+    pub fn copy_prefix(mut self, prefix: impl Into<std::rc::Rc<str>>) -> Self {
+        if let Some(t) = &mut self.text { t.copy_prefix = Some(prefix.into()); }
         self
     }
     /// The selection highlight of [`El::selectable`] text or a text field, drawn alike for both.

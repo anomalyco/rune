@@ -17,10 +17,13 @@
 use super::*;
 use std::ops::Range;
 
+#[path = "copy_join.rs"]
+mod copy_join;
 #[path = "toolbar.rs"]
 mod selection_toolbar;
 #[path = "text_selection.rs"]
 mod text_selection;
+pub(crate) use copy_join::CopyJoin;
 pub(crate) use selection_toolbar::OnPress;
 pub use text_selection::{SelectedText, SelectionChange, TextSelection};
 
@@ -506,19 +509,21 @@ impl<S: 'static> Runtime<S> {
 
     /// The texts of `ranges` joined as copying joins them.
     fn joined(&self, ranges: &[(usize, usize, usize)]) -> String {
-        let mut out = String::new();
+        let mut out = CopyJoin::default();
         let mut prev: Option<usize> = None;
         for &(i, a, b) in ranges {
-            let Some(piece) = self.nodes[i].text.as_ref().and_then(|t| t.copy_slice(a as u32, b as u32)) else { continue };
-            if let Some(p) = prev {
-                let (pb, nb) = (self.drawn_box(p), self.drawn_box(i));
-                if nb[1] < pb[3] - 0.5 && nb[0] >= pb[2] - 0.5 { out.push('\t'); }
-                else if !out.ends_with('\n') { out.push('\n'); }
-            }
-            out.push_str(&piece);
+            let Some(spec) = self.nodes[i].text.as_ref() else { continue };
+            let Some(piece) = spec.copy_slice(a as u32, b as u32) else { continue };
+            out.push(spec, a..b, &piece, prev.is_some_and(|p| self.beside(p, i)), usize::MAX);
             prev = Some(i);
         }
-        out
+        out.finish()
+    }
+
+    /// Text `i` was drawn beside text `p`, to its right on the same line (a table row's cells).
+    pub(crate) fn beside(&self, p: usize, i: usize) -> bool {
+        let (pb, nb) = (self.drawn_box(p), self.drawn_box(i));
+        nb[1] < pb[3] - 0.5 && nb[0] >= pb[2] - 0.5
     }
 
     /// Selects from the start of text `first` to the end of text `last`, a later text of its

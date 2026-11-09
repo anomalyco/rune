@@ -10,7 +10,7 @@ use std::rc::Rc;
 use taffy::style::{Display, FlexDirection};
 
 use super::{
-    Held, SelectedText, Unit, floor_boundary, kept, same_keyed_path, trim_uncopied,
+    Held, SelectedText, Unit, kept, same_keyed_path, trim_uncopied,
 };
 use crate::el::{El, SelectionCopy, TextSpec};
 use crate::runtime::Runtime;
@@ -165,25 +165,6 @@ fn walk_row_el<'a>(
             }
             had_child_text = true;
         }
-    }
-}
-
-/// Appends `piece` to `out` with `sep` before it, truncating on a UTF-8 character boundary if
-/// `cap` is reached. Returns `true` when the byte cap was hit.
-pub(super) fn push_capped(out: &mut String, piece: &str, sep: Option<char>, cap: usize) -> bool {
-    if let Some(c) = sep {
-        if out.len() + c.len_utf8() > cap {
-            return true;
-        }
-        out.push(c);
-    }
-    if out.len() + piece.len() <= cap {
-        out.push_str(piece);
-        false
-    } else {
-        let take = floor_boundary(piece, cap.saturating_sub(out.len()));
-        out.push_str(&piece[..take]);
-        true
     }
 }
 

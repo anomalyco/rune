@@ -308,8 +308,10 @@ impl Markdown {
     /// Lets people select and copy the text (see [`El::selectable`]) as one selection across
     /// paragraphs, headings, list items, quotes, code blocks and table cells
     /// ([`El::selection_group`]): Cmd+A selects the whole block, and Cmd+C copies the text as
-    /// drawn, a newline between blocks and a tab between table cells, without list markers or
-    /// code fences (or the source, with [`Self::copy_source`]). Links still open on a click.
+    /// drawn, laid out as plain text: a blank line around paragraphs, headings, quotes and code
+    /// blocks, list items on their own lines after `- `, `1. ` or `- [ ] ` (a nested list indented
+    /// past its parent's marker), and a tab between table cells, without code fences or quote marks (or the
+    /// source, with [`Self::copy_source`]). Links still open on a click.
     /// The highlight is [`MarkdownStyle::selection`].
     pub fn selectable(mut self, on: bool) -> Self {
         self.selectable = on;

@@ -48,6 +48,10 @@ pub struct TextSpec {
     pub(crate) selection: Color,
     /// See [`El::uncopied`](crate::El::uncopied): byte ranges of `content`, sorted.
     pub(crate) uncopied: Vec<(u32, u32)>,
+    /// See [`El::copy_breaks`](crate::El::copy_breaks): newlines before and after it.
+    pub(crate) copy_breaks: [u8; 2],
+    /// See [`El::copy_prefix`](crate::El::copy_prefix).
+    pub(crate) copy_prefix: Option<std::rc::Rc<str>>,
     /// Inset border rings `(start, end, color, width)` on rounded span backgrounds.
     pub(crate) rings: Vec<(u32, u32, Color, f32)>,
     /// Strikethrough byte ranges `(start, end, color)` of `content`.

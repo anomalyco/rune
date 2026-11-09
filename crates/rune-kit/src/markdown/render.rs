@@ -49,6 +49,37 @@ pub(super) struct Flow {
     pub(super) ink: Option<Color>,
     /// How much narrower than the text column they are: list indents and quote rules.
     pub(super) inset: f32,
+    /// The columns a nested list's copied markers are indented by (`"  - "` under `"- "`).
+    pub(super) cols: u8,
+    /// The marker a copy puts before the paragraph that opens a list item, its indent, and the
+    /// newlines before it: two to set a top-level list apart from the block before it.
+    pub(super) lead: Option<(u8, Lead, u8)>,
+}
+
+/// A list item's marker as copying writes it.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Lead {
+    Bullet,
+    Number(u64),
+    Task(bool),
+}
+
+impl Lead {
+    fn marker(self) -> String {
+        match self {
+            Lead::Bullet => "- ".into(),
+            Lead::Number(n) => format!("{n}. "),
+            Lead::Task(done) => if done { "- [x] ".into() } else { "- [ ] ".into() },
+        }
+    }
+
+    /// The columns a list nested in the item is indented by, past the item's own.
+    fn width(self) -> u8 {
+        match self {
+            Lead::Number(n) => n.to_string().len() as u8 + 2,
+            _ => 2,
+        }
+    }
 }
 
 /// Shell languages, which [`MarkdownStyle::shell_code`] styles apart (`markdown.tsx`'s list).
@@ -290,6 +321,12 @@ impl Renderer {
         // Lines keep their own 22.4 points, as a page's do, so a long list doesn't drift a
         // point per item.
         let e = self.with_reveal(rich(inl.text.clone(), self.spans(inl, style)).font(style).color(color).exact_lines()).w_full();
+        // A copy puts a blank line around a paragraph, one newline around a list item's first
+        // with its marker before it.
+        let e = match self.flow.get().lead {
+            Some((cols, lead, before)) => e.copy_prefix(format!("{}{}", " ".repeat(cols.into()), lead.marker())).copy_breaks(before, 1),
+            None => e.copy_breaks(2, 2),
+        };
         self.select_inline(e, inl, map)
     }
 
@@ -333,6 +370,10 @@ impl Renderer {
             if top_level {
                 self.current_block_key.replace(key.clone().into());
             }
+            // Only an item's first block copies after its marker.
+            if i > 0 {
+                self.flow.set(Flow { lead: None, ..self.flow.get() });
+            }
             c = c.child(self.block(b, maps.get(i).unwrap_or(&empty)).key(key).mt(top));
             prev_mb = mb;
             after_heading = matches!(b, Block::Heading(..));
@@ -351,7 +392,7 @@ impl Renderer {
             None => (s.code_block_fill, s.code_block_border, s.code_text.unwrap_or(s.text)),
         };
         let spans = if shell.is_some() { Vec::new() } else { self.syntax_spans(code, source) };
-        let body = self.with_reveal(tabbed(code, spans, highlights, s.code_block).font(s.code_block).color(ink));
+        let body = self.with_reveal(tabbed(code, spans, highlights, s.code_block).font(s.code_block).color(ink)).copy_breaks(2, 2);
         let frame = col().role("code").w_full().radius(6.0).fill(fill).border(0.5, border);
         if self.scroll_wide {
             // The text sizes to its longest line inside the viewport, which scrolls under the
@@ -382,6 +423,7 @@ impl Renderer {
         let all_hl = self.text_highlights_for(src, map);
         let mut c = col().role("code").w_full().py(s.code_block_pad[1]).radius(6.0).fill(s.code_block_fill).border(0.5, s.code_block_border);
         let mut line_start = 0usize;
+        let last = src.split('\n').count() - 1;
         for (n, line) in src.split('\n').enumerate() {
             let line_end = line_start + line.len();
             let line_hl: Vec<TextHighlight> = all_hl
@@ -407,7 +449,8 @@ impl Renderer {
                 .key(format!("l{n}"))
                 .w_full()
                 .px(s.code_block_pad[0])
-                .child(self.select(self.with_reveal(tabbed(shown, Vec::new(), line_hl, s.code_block).font(s.code_block).color(color).wrap()).w_full()));
+                .child(self.select(self.with_reveal(tabbed(shown, Vec::new(), line_hl, s.code_block).font(s.code_block).color(color).wrap()).w_full()
+                    .copy_breaks(if n == 0 { 2 } else { 1 }, if n == last { 2 } else { 1 })));
             if let Some(t) = tint {
                 r = r.fill(t);
             }
@@ -540,14 +583,20 @@ impl Renderer {
                 };
                 // Outside markers end a space's width before the text, as a browser sets "1. ".
                 let space = if s.list_outside { rune::text::measure("x x", &[], s.body, None).0 - rune::text::measure("xx", &[], s.body, None).0 } else { 0.0 };
-                self.flow.set(Flow { lists: flow.lists + 1, inset: flow.inset + indent, ..flow });
                 let mut c = col().role("list").w_full().gap(s.list_gap);
                 let n = items.len();
                 for (k, item) in items.iter().enumerate() {
                     let imap = item_maps.get(k).map_or(&[][..], Vec::as_slice);
                     let task_idx = self.next_task.get();
                     self.next_task.set(task_idx + 1);
-                    if let Some((checked, marker_offset)) = self.tasks.get(task_idx).copied().flatten() {
+                    let task = self.tasks.get(task_idx).copied().flatten();
+                    let lead = match (task, start) {
+                        (Some((checked, _)), _) => Lead::Task(checked),
+                        (None, Some(n)) => Lead::Number(n + k as u64),
+                        (None, None) => Lead::Bullet,
+                    };
+                    self.flow.set(Flow { lists: flow.lists + 1, inset: flow.inset + indent, cols: flow.cols + lead.width(), lead: Some((flow.cols, lead, if k == 0 && flow.lists == 0 { 2 } else { 1 })), ..flow });
+                    if let Some((checked, marker_offset)) = task {
                         c = c.child(self.task_item((k, n), indent, item, imap, marker_offset, checked));
                         continue;
                     }

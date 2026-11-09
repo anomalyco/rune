@@ -1,6 +1,6 @@
 //! `Markdown::copy_source`: copying a selection copies the Markdown source of the top-level
 //! blocks it touches, the whole source verbatim for all of them, and the drawn text for part
-//! of one block. And an app's `on_key` sees Cmd+A before a selectable note does.
+//! of one block; without it, the drawn text laid out as plain text. And an app's `on_key` sees Cmd+A before a selectable note does.
 #![cfg(feature = "markdown")]
 
 use rune::{Cx, El, Env, Key, KeyEvent, Mods, Runtime, col};
@@ -38,7 +38,7 @@ fn copy<T: 'static>(rt: &mut Runtime<T>, clipboard: &rune::clipboard::MemoryClip
 fn copying_takes_the_source_of_whole_blocks() {
     let (mut rt, clipboard) = runtime(true);
     assert_eq!(copy(&mut rt, &clipboard, |tx| tx.select_all_text("note")), SRC, "everything: the source verbatim");
-    assert_eq!(rt.selected_text().as_deref().map(|t| t.starts_with("Title\nHello world")), Some(true), "selected as drawn");
+    assert_eq!(rt.selected_text().as_deref().map(|t| t.starts_with("Title\n\nHello world")), Some(true), "selected as drawn");
     assert_eq!(copy(&mut rt, &clipboard, |tx| tx.select_all_text("note/b1")), "Hello **world** and [link](https://x.dev/a).");
     assert_eq!(copy(&mut rt, &clipboard, |tx| tx.select_all_text("note/b2")), "- alpha\n- [x] beta", "a whole list");
     assert_eq!(copy(&mut rt, &clipboard, |tx| tx.select_all_text("note/b3")), "```rust\nfn main() {}\n```");
@@ -75,7 +75,7 @@ fn a_drag_across_blocks_copies_each_whole() {
 fn without_copy_source_copying_takes_the_drawn_text() {
     let (mut rt, clipboard) = runtime(false);
     let all = copy(&mut rt, &clipboard, |tx| tx.select_all_text("note"));
-    assert_eq!(all, "Title\nHello world and link.\nalpha\nbeta\nfn main() {}\nLast line.");
+    assert_eq!(all, "Title\n\nHello world and link.\n\n- alpha\n- [x] beta\n\nfn main() {}\n\nLast line.");
 }
 
 #[derive(Default)]
@@ -100,7 +100,7 @@ fn an_apps_on_key_sees_cmd_a_before_a_clicked_note() {
         rt.key(KeyEvent { key: Key::Command('a'), mods: Mods { cmd: true, ..Mods::default() } });
         rt.frame(1.0 / 60.0);
         assert_eq!(rt.state.keys, [Key::Command('a')], "takes={takes}");
-        let want = if takes { None } else { Some("a\nb") };
+        let want = if takes { None } else { Some("a\n\nb") };
         assert_eq!(rt.selected_text().as_deref(), want, "takes={takes}: passed on, the note selects all");
     }
 }
@@ -144,5 +144,5 @@ fn inline_code_rule_and_crlf_blocks_copy_cleanly() {
     let crlf = "```rust\r\nfn main() {}\r\n```\r\n\r\n```diff\r\n@@ -1 +1 @@\r\n-old\r\n+new\r\n```\r\n";
     let (mut rt, clipboard) = run(crlf);
     assert_eq!(copy(&mut rt, &clipboard, |tx| tx.select_all_text("note")), crlf);
-    assert_eq!(rt.selected_text().as_deref(), Some("fn main() {}\n@@ -1 +1 @@\n-old\n+new"));
+    assert_eq!(rt.selected_text().as_deref(), Some("fn main() {}\n\n@@ -1 +1 @@\n-old\n+new"));
 }
