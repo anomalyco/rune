@@ -5,7 +5,7 @@
 use std::borrow::Cow;
 use std::rc::Rc;
 
-use rune::{Color, El, Icon, ScrollFade, ScrollSpec, Spring, Tx, col, row};
+use rune::{Color, El, Icon, ScrollFade, ScrollSpec, Spring, Tx, col, el, row};
 
 use crate::{Kit, Spinner};
 
@@ -490,16 +490,31 @@ impl<'a, S: 'static> TabStrip<'a, S> {
         let gap = self.gap.unwrap_or(if vertical { 3.0 } else { 6.0 });
         let count = self.items.len();
         let pinned = self.items.iter().filter(|t| t.pinned).count();
-        let drag = self.drag.as_ref().map(|d| d.0.clone()).unwrap_or_default();
+        let mut drag = self.drag.as_ref().map(|d| d.0.clone()).unwrap_or_default();
         let access = self.drag.as_ref().map(|d| d.1);
         let trailing = if self.trailing.is_some() { self.trailing_width + gap } else { 0.0 };
+        // A tab coming in from another strip takes its share already, so it lands in its gap as is.
+        let incoming = usize::from(drag.incoming().is_some());
         let (tab_w, pinned_w) = match overflow {
             TabOverflow::ShrinkThenScroll { max_width, pinned_width, min_width, .. } => {
-                let w = self.viewport.map_or(max_width, |v| overflow.tab_width(v - trailing, count - pinned, pinned, gap));
+                let w = self.viewport.map_or(max_width, |v| overflow.tab_width(v - trailing, count - pinned + incoming, pinned, gap));
                 (drag.width_lock.map_or(w, |l| l.max(min_width)), pinned_width)
             }
             TabOverflow::Scroll { .. } => (f32::INFINITY, f32::INFINITY),
         };
+        // Each tab's length along the strip with the gap after it: its width across, its row down.
+        let two_line_height = 45.0;
+        let pitch = |pin: bool, two_line: bool| match (vertical, pin) {
+            (false, true) => pinned_w + gap,
+            (false, false) => tab_w + gap,
+            (true, _) => (if two_line { two_line_height } else { self.row_height }) + gap,
+        };
+        let pitches: Vec<f32> = self.items.iter().map(|t| pitch(t.pinned, t.subtitle.is_some())).collect();
+        let auto = auto_scroll::view(&format!("{}-scroll", self.key));
+        if let Some(point) = drag.incoming() {
+            let slot = landing_slot(&pitches, pinned, point, &auto, vertical, self.zoom);
+            drag.open_gap(slot, pitch(false, false));
+        }
         let st = Strip {
             handlers: self.handlers,
             access,
@@ -507,7 +522,7 @@ impl<'a, S: 'static> TabStrip<'a, S> {
             separator: if k.dark { k.c.layer_02 } else { k.c.layer_03 },
             gap,
             row_height: self.row_height,
-            two_line_height: 45.0,
+            two_line_height,
             link_inset: 8.0,
             count,
             zoom: self.zoom,
@@ -517,7 +532,7 @@ impl<'a, S: 'static> TabStrip<'a, S> {
             matched: self.matched.map(str::to_owned),
             close_icon: self.close_icon,
             busy: self.busy,
-            auto: auto_scroll::view(&format!("{}-scroll", self.key)),
+            auto,
             scroll_key: format!("{}-scroll", self.key),
             list_key: format!("{}-list", self.key),
             layered: layer.is_some(),
@@ -528,7 +543,7 @@ impl<'a, S: 'static> TabStrip<'a, S> {
         let ids: Vec<String> = self.items.iter().map(|t| t.id.clone().into_owned()).collect();
         let quiet = |i: usize| active == Some(ids[i].as_str()) || hovered.as_deref() == Some(ids[i].as_str());
         let tear = self.tear.filter(|_| count > 1);
-        let tabs: Vec<El> = self
+        let mut tabs: Vec<El> = self
             .items
             .into_iter()
             .enumerate()
@@ -536,14 +551,9 @@ impl<'a, S: 'static> TabStrip<'a, S> {
                 let pin = item.pinned;
                 let width = (!vertical).then_some(if pin { pinned_w } else { tab_w });
                 let (lo, hi) = if pin { (0, pinned) } else { (pinned, count) };
-                let row = match width {
-                    Some(w) => w + gap,
-                    None if item.subtitle.is_some() => st.two_line_height + gap,
-                    None => st.row_height + gap,
-                };
                 let at = tab::Place {
                     index: i,
-                    lane: drag::Lane { index: i, lo, hi, pitch: row, pinned: pin, tear },
+                    lane: drag::Lane { index: i, lo, hi, pitch: pitches[i], pinned: pin, tear },
                     width,
                     density: if pin { TabDensity::IconOnly } else { width.map_or(TabDensity::Full, TabOverflow::density_for) },
                     active: active == Some(ids[i].as_str()),
@@ -556,6 +566,13 @@ impl<'a, S: 'static> TabStrip<'a, S> {
                 tab
             })
             .collect();
+        // The incoming tab's place: an empty slot its own length, which the tabs after it make
+        // room for on the reorder spring and the tab takes when it's let go.
+        if let Some((slot, pitch)) = st.drag.gap() {
+            let place = el().key(format!("{}-incoming", st.list_key)).a11y_hidden();
+            let place = if vertical { place.w_full().h(pitch) } else { place.w(pitch - gap).h(st.row_height) };
+            tabs.insert(slot.min(tabs.len()), place);
+        }
         let fade = overflow.fade();
         let mut root = if vertical {
             let list = col().key(st.list_key.clone()).role("tablist").label(self.label).focus_group().w_full().pb(fade).children(tabs);
@@ -586,4 +603,20 @@ impl<'a, S: 'static> TabStrip<'a, S> {
         }
         root
     }
+}
+
+/// The slot a tab dragged in from another strip lands in at `point` (window points): after each
+/// unpinned tab whose middle the point has passed, measured with each tab's own length (`pitches`)
+/// from where the strip's viewport drew and how far it has scrolled.
+fn landing_slot(pitches: &[f32], pinned: usize, point: [f32; 2], auto: &auto_scroll::View, vertical: bool, zoom: f32) -> usize {
+    let a = usize::from(vertical);
+    let along = (point[a] - auto_scroll::rect(auto)[a]) / zoom + auto_scroll::offset(auto, vertical);
+    let mut start = 0.0;
+    for (i, pitch) in pitches.iter().enumerate() {
+        if i >= pinned && along < start + pitch / 2.0 {
+            return i;
+        }
+        start += pitch;
+    }
+    pitches.len()
 }

@@ -119,7 +119,7 @@ pub(super) fn build<S: 'static>(item: TabItem<'_, S>, at: Place, st: &Strip<S>, 
         false => (0.0, 0.0),
     };
     let shift = st.drag.shift(at.index, vertical);
-    let reordering = matches!(st.drag.phase, super::TabDragPhase::Pressed { .. } | super::TabDragPhase::Dragging(super::TabDragMode::Reorder { .. }));
+    let reordering = st.drag.gap_open() || matches!(st.drag.phase, super::TabDragPhase::Pressed { .. } | super::TabDragPhase::Dragging(super::TabDragMode::Reorder { .. }));
     let mut slot = el()
         .key(format!("t-{id}"))
         .label(item.title.into_owned())
