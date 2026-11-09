@@ -208,6 +208,8 @@ struct Slot {
     w: u32,
     h: u32,
     generation: u64,
+    /// The animation frame copied in.
+    frame: usize,
 }
 
 /// One stable shelf page, or an exact-size standalone page for a large image.
@@ -238,6 +240,9 @@ pub struct Placed {
 pub struct ImageAtlas {
     pub pages: Vec<ImagePage>,
     slots: HashMap<(u64, usize), Slot>,
+    /// When each animated image drawn here started playing, on the animation clock: its first
+    /// draw, kept while the atlas holds it.
+    starts: HashMap<u64, f64>,
     /// Frames copied in so far, so the idle meter sees new pixels in a slot it already drew.
     #[cfg(debug_assertions)]
     pub(crate) copies: u64,
@@ -247,21 +252,40 @@ impl ImageAtlas {
     /// The atlas origin and size of `pixels`, copying a new frame in when it changed. None while
     /// it's empty or doesn't fit.
     pub fn place(&mut self, pixels: &Pixels, drawn: [f32; 2]) -> Option<Placed> {
+        self.place_at(pixels, drawn, None).map(|(placed, _)| placed)
+    }
+
+    /// [`Self::place`] at `now` on the animation clock: an animated image shows the frame for
+    /// the time since it was first drawn here, and says when (on the same clock) the next one
+    /// shows, or `None` for a still or an animation that has stopped. `None` for `now` shows
+    /// an animation's first frame.
+    pub(crate) fn place_at(&mut self, pixels: &Pixels, drawn: [f32; 2], now: Option<f64>) -> Option<(Placed, Option<f64>)> {
         let frame = pixels.frame.lock().unwrap();
         let (mut w, mut h) = (frame.width, frame.height);
         if w == 0 || h == 0 || w > 8192 || h > 8192 {
             return None;
         }
         let mut level = 0;
+        let mut shown = 0;
+        let mut next = None;
         let bytes = if let Some(decoded) = &frame.mips {
+            let mips = match (&decoded.motion, now) {
+                (Some(motion), Some(now)) => {
+                    let start = *self.starts.entry(pixels.id).or_insert(now);
+                    let (i, change) = motion.at(now - start);
+                    (shown, next) = (i, change.map(|t| start + t));
+                    motion.frame(&decoded.mips, i)
+                }
+                _ => &decoded.mips[..],
+            };
             // Choose the smallest prefiltered level that still covers both device-pixel axes.
             // No mip construction or resampling happens on the render thread.
-            while let Some(next) = decoded.mips.get(level + 1) {
+            while let Some(next) = mips.get(level + 1) {
                 if (next.width as f32) < drawn[0].clamp(1.0, frame.width as f32)
                     || (next.height as f32) < drawn[1].clamp(1.0, frame.height as f32) { break; }
                 level += 1;
             }
-            let mip = &decoded.mips[level];
+            let mip = &mips[level];
             (w, h) = (mip.width, mip.height);
             &mip.pixels
         } else { &frame.rgba };
@@ -271,12 +295,13 @@ impl ImageAtlas {
         }
         if !self.slots.contains_key(&key) {
             let (page, x, y) = self.allocate(w, h);
-            self.slots.insert(key, Slot { page, x, y, w, h, generation: 0 });
+            self.slots.insert(key, Slot { page, x, y, w, h, generation: 0, frame: 0 });
         }
         let slot = self.slots.get_mut(&key).unwrap();
         self.pages[slot.page].touched = true;
-        if slot.generation != frame.generation {
+        if slot.generation != frame.generation || slot.frame != shown {
             slot.generation = frame.generation;
+            slot.frame = shown;
             #[cfg(debug_assertions)]
             { self.copies += 1; }
             let page = &mut self.pages[slot.page];
@@ -289,7 +314,7 @@ impl ImageAtlas {
             let (y0, y1) = (slot.y, slot.y + h);
             page.dirty = Some(page.dirty.map_or((y0, y1), |(a, b)| (a.min(y0), b.max(y1))));
         }
-        Some(Placed { rect: [slot.x, slot.y, w, h], page: slot.page, premultiplied: frame.mips.is_some() })
+        Some((Placed { rect: [slot.x, slot.y, w, h], page: slot.page, premultiplied: frame.mips.is_some() }, next))
     }
 
     /// Forgets images no element showed since the last call, except on pages that still show
@@ -301,6 +326,10 @@ impl ImageAtlas {
         let pages = &self.pages;
         let first_kept = pages.first().is_some_and(|p| p.width <= IMAGE_ATLAS_SIZE && p.height <= IMAGE_ATLAS_SIZE);
         self.slots.retain(|_, s| pages[s.page].touched || (s.page == 0 && first_kept));
+        if !self.starts.is_empty() {
+            let slots = &self.slots;
+            self.starts.retain(|id, _| slots.keys().any(|(slot, _)| slot == id));
+        }
         for (i, page) in self.pages.iter_mut().enumerate() {
             page.shown = std::mem::take(&mut page.touched);
             if !self.slots.values().any(|slot| slot.page == i) {
