@@ -193,6 +193,8 @@ impl<S: 'static> Host<S> {
                 if let Some(w) = &self.win { crate::file_dialog::window_focus(&w.window, focused && w.visible); }
                 // Deliver independently of drawable availability, including hide/occlusion.
                 self.rt.window_focus(focused);
+                // The key window's App takes the menu bar, so its items act in this window.
+                if focused { self.menus.claim(); }
                 self.shell(event_loop);
                 if self.finished || self.win.is_none() { return; }
             }

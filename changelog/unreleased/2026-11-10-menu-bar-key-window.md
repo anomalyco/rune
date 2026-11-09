@@ -1,0 +1,1 @@
+- **The macOS menu bar follows the key window** when each window is its own App (`run_windows`): the App whose window last took focus puts its items there and they act in that window, so File › Close Window closes the window in front rather than the first one opened, and closing the first window no longer takes the app's own menus away.
