@@ -20,6 +20,8 @@ fn present<T: 'static>(overlay: &mut Overlay<T>, at: Instant) {
 }
 
 fn present_paced<T: 'static>(overlay: &mut Overlay<T>, at: Instant, paced: bool) {
+    // These synthetic frames exercise animation, independent of the host's Reduce Motion setting.
+    overlay.rt.set_system_reduced_motion(false);
     let (animating, _) = step(&mut overlay.rt, &mut overlay.clock, &overlay.compositor, at, false);
     overlay.dirty = false;
     overlay.idle = idle_after(&overlay.rt, animating, paced.then_some(at + FRAME));

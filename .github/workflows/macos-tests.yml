@@ -22,8 +22,12 @@ jobs:
       # Keep the many integration-test links within a hosted runner's memory and disk.
       CARGO_BUILD_JOBS: 2
       CARGO_PROFILE_TEST_DEBUG: 0
-      CARGO_PROFILE_TEST_STRIP: symbols
+      CARGO_PROFILE_TEST_STRIP: debuginfo
     steps:
       - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p rune -p rune-kit --features rune-kit/markdown --no-fail-fast
+      # The virtual Metal adapter does not expose TIMESTAMP_QUERY. Keep the
+      # shader freshness, pipeline, rendering, font and menu tests enabled.
+      - run: >-
+          cargo test -p rune -p rune-kit --features rune-kit/markdown --no-fail-fast --
+          --skip gpu::metal::compute_tests::passes_sample_timestamps_at_their_boundaries
