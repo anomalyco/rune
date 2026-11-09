@@ -207,9 +207,9 @@ impl GrowTrack {
     }
 
     fn at_rest(&self, remaining: f32) -> bool {
-        // A fold carries its descendants and a reflow row shares its motion with the
-        // viewport. Their last fraction of a point still positions other content.
-        let (distance, speed) = if self.glide.is_some() || self.duration > 0.0 {
+        // A fold carries its descendants; closing slack under a pinned stack and rows
+        // on a reflow override position the viewport. Their last step remains visible.
+        let (distance, speed) = if self.glide.is_some() || self.duration > 0.0 || self.target == 0.0 {
             (1.0 / 128.0, 0.5)
         } else { (SETTLE, SETTLE_V) };
         remaining.abs() <= distance && self.v.abs() <= speed
