@@ -14,13 +14,8 @@ impl Renderer {
         Self::texture(device, "glyph outlines", wgpu::TextureFormat::Rgba32Uint, crate::text::outline::WIDTH, rows)
     }
 
-    /// Hands text's outline records to the GPU: asks for the Windfoil shader the first time text
-    /// draws from outlines, then uploads new records, growing the texture first if they don't fit.
+    /// Hands text's new outline records to the GPU, growing the texture first if they don't fit.
     pub(super) fn upload_outlines(&mut self, device: &wgpu::Device, staging: &Staging, atlas: &mut Atlas) {
-        if atlas.outlines.has_records() {
-            self.select(device, variant::Event::OutlinesWanted);
-        }
-        atlas.outlines.set_support(self.uber.support());
         let store = &mut atlas.outlines;
         let variant::Uber::Windfoil { outlines, .. } = &mut self.uber else { return };
         if store.rows() > outlines.height() {
@@ -49,5 +44,8 @@ impl Renderer {
             if let Some(slot) = &mut self.images[page] { slot.1 = bind; }
         }
         self.rebind_layers(device);
+        if let variant::Uber::Windfoil { outlines, fill, .. } = &mut self.uber {
+            fill.rebind(device, fill::FillBindings { layout: &self.bind_layout, globals: &self.globals, outlines, stand_in: &self.stand_in });
+        }
     }
 }

@@ -708,6 +708,8 @@ pub(crate) fn reblend<S: 'static>(surface: &wgpu::Surface, gpu: &Gpu, config: &m
 pub(crate) fn rebuild_renderer<S: 'static>(device: &wgpu::Device, renderer: &mut Renderer, target: wgpu::TextureFormat, rt: &mut Runtime<S>) {
     renderer.set_format(device, target);
     renderer.set_srgb_blend(rt.srgb_blend());
+    // Before the first frame, so its glyph masks go to the GPU fill when the renderer has one.
+    renderer.attach_text(&mut rt.text.atlas);
 }
 
 pub(crate) fn is_wayland(event_loop: &ActiveEventLoop) -> bool {

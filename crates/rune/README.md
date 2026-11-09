@@ -100,31 +100,37 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   `WindowSpec::font_smoothing`), or while running with `Tx::set_font_smoothing(mode)`, which
   rasterises the new mode's glyphs on the next frame (each mode keeps its own atlas entries, so a
   switch back is free). Modes:
-  - `On`, the default on macOS: CoreText's text with font smoothing on. Apple's pipeline (pens
-    floored to CoreGraphics' subpixel step, which depends on the ppem: fifths of a device pixel
-    below 8⅓ ppem, quarters to 11.1, thirds to 16.7, halves to 33.3 and whole pixels above; coverage
-    drawn as is; sRGB blending; CoreGraphics' curve flattening and its y autohinter at 7–18 ppem)
-    plus font smoothing's outline dilation, a radius set by the ink's luminance and the device
-    ppem (`text/macos/smoothing.rs`, `ApplePipeline::SMOOTHED`).
+  - `On`, the default on macOS and in a Mac's browser: CoreText's text with font smoothing on.
+    Apple's pipeline (pens floored to CoreGraphics' subpixel step, which depends on the ppem:
+    fifths of a device pixel below 8⅓ ppem, quarters to 11.1, thirds to 16.7, halves to 33.3 and
+    whole pixels above; coverage drawn as is; sRGB blending; CoreGraphics' curve flattening and
+    its y autohinter at 7–18 ppem) plus font smoothing's outline dilation, a radius set by the
+    ink's luminance and the device ppem (`text/macos/smoothing.rs`, `ApplePipeline::SMOOTHED`).
   - `Off`: what macOS browsers draw for `-webkit-font-smoothing: antialiased`, CoreText with font
-    smoothing off, and the default on Linux and the web. Apple's pipeline without the dilation
+    smoothing off. Apple's pipeline without the dilation
     (`ApplePipeline::UNSMOOTHED`); lighter than `On`. Coverage takes an exponent keyed to the
     ink's luminance, the curve of Skia's grayscale text gamma.
-  - `DirectWrite`, the default on Windows: Chromium's text there. DirectWrite rasterises each
+  - `DirectWrite`: Chromium's text on Windows. DirectWrite rasterises each
     glyph as Skia's `SkScalerContext_DW` asks it to (the rendering mode the `gasp` table picks,
     grid fitting on, grayscale antialiasing, the face at the run's variation coordinates, read in
     place from Parley's bytes), pens sit on Skia's quarter pixels, and Skia's gamma tables
     (sRGB, contrast 1, eight luminance buckets) weigh each mask by its ink
     (`text/windows/`). Off Windows it draws as `Off`.
-  - `Windfoil`: Rune's own text, the same on every OS. Text at rest draws as `On`; text whose
-    scale moves (a zoom, a presence scale, a text flight) draws straight from its outlines on the
-    GPU, at its resting pen and size magnified, so it stays sharp and lands on the mask it rests
-    as (`text/outline/`, `outline.wgsl`). Coverage is Windfoil's closed-form box filter over
-    xy-monotone quadratics (DesLauriers 2026), with CoreText's dilation and y autohint applied
-    per pixel. A text's raster path is a state machine (`text/outline/path.rs`: still, moving,
-    landing). It needs the renderer's Windfoil shader (`render/variant.rs`): renderers start
-    with it everywhere but macOS, where the Classic shader keeps drawing until text asks for
-    outlines; where it can't be built, text draws as `On`.
+  - `Windfoil`, the default everywhere but macOS and a Mac's browser: Rune's own text, the same
+    on every OS. Each glyph's exact pixel coverage from its outline, Windfoil's closed-form box filter over
+    xy-monotone quadratics (DesLauriers 2026), with CoreText's dilation (times `TEXT_WEIGHT`,
+    0.93, which puts its ink within 1% of CoreText's) and y autohint applied per pixel, pens on
+    quarter pixels, coverage drawn as is (`text/outline/`, `text/windfoil.rs`, `outline.wgsl`).
+    Masks at rest are filled on the GPU by the shader that draws text whose scale moves (a zoom,
+    a presence scale, a text flight) straight from its outlines, at its resting pen and size
+    magnified, so it stays sharp and lands on the mask it rests as. A text's raster path
+    (`text/outline/path.rs`: still, moving, landing), each mask's residency (`text/atlas_fill.rs`:
+    uploaded, pending, filled) and the renderer's shader (`render/variant.rs`: Classic, Windfoil,
+    unavailable) are state machines. CJK faces up to 24 ppem draw their TrueType-hinted outlines
+    from whole-pixel pens, at half the dilation, so dense ideographs stay legible at 1x. Renderers
+    start with the Windfoil shader everywhere but macOS, where the Classic shader keeps drawing
+    until text asks for outlines; where it can't be built, the CPU fills the same masks
+    (`text/outline/cover.rs`) and moving text draws from them.
   `On` and `Off` work on every OS, since they are arithmetic on outlines. Blending is separate
   (`srgb_blend`).
   `cargo run -p rune --example coretext_compare [-- --smoothing on|off]` measures

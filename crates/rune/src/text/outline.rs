@@ -4,11 +4,13 @@
 //! dilation radius, and the uber shader integrates its coverage.
 
 mod build;
+mod cover;
 mod path;
 mod store;
 
 pub(crate) use path::{Emit, Frame, PathEffect, Paths};
-pub(crate) use store::{Found, Key, OutlineStore, Support, WIDTH};
+pub(crate) use cover::coverage;
+pub(crate) use store::{Found, Glyph, Key, OutlineStore, Support, WIDTH};
 
 use swash::FontRef;
 use swash::scale::ScaleContext;
@@ -35,6 +37,12 @@ pub struct Outline {
     pub radius: f32,
 }
 
+/// The text weight of `FontSmoothing::Windfoil`: CoreText's dilation radius times this. CoreText
+/// flattens curves into chords before its coverage, which takes ink off every curve; Windfoil
+/// integrates the curves exactly, so the same radius draws heavier: 0.93 puts its ink within 1% of
+/// CoreText's for Inter at 1x, 1.5x and 2x, light and dark (`examples/text_gpu.rs`).
+pub(crate) const TEXT_WEIGHT: f64 = 0.93;
+
 /// Rest px the hint transform moves a point at most, which the shader looks past
 /// (`OUTLINE_HINT_REACH` in shader.wgsl).
 pub(crate) const HINT_REACH: f32 = 1.5;
@@ -54,13 +62,15 @@ impl Outline {
     }
 }
 
-/// `glyph`'s outline in font units leaning by `skew` degrees, built into a store record.
-pub(crate) fn extract(cx: &mut ScaleContext, font: FontRef<'_>, coords: &[i16], glyph: u16, skew: u8) -> Option<build::Built> {
+/// `glyph`'s outline in font units leaning by `skew` degrees, built into a store record: the
+/// design outline, or the one its TrueType hints fit to the pixel grid at `hinted` ppem.
+pub(crate) fn extract(cx: &mut ScaleContext, font: FontRef<'_>, coords: &[i16], glyph: u16, skew: u8, hinted: Option<f32>) -> Option<build::Built> {
     let upem = font.metrics(coords).units_per_em;
-    let mut scaler = cx.builder(font).size(upem as f32).hint(false).normalized_coords(coords.iter().copied()).build();
+    let size = hinted.unwrap_or(upem as f32);
+    let mut scaler = cx.builder(font).size(size).hint(hinted.is_some()).normalized_coords(coords.iter().copied()).build();
     let outline = scaler.scale_outline(glyph)?;
     let lean = if skew == 0 { 0.0 } else { (skew as f64).to_radians().tan() };
-    let mut built = build::build(swash::zeno::PathData::commands(&outline.path()), lean)?;
+    let mut built = build::build(swash::zeno::PathData::commands(&outline.path()), upem as f64 / size as f64, lean)?;
     built.upem = upem as f32;
     Some(built)
 }

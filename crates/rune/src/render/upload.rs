@@ -198,22 +198,37 @@ impl Renderer {
             self.uploads.lost.0 = staging.lost();
             self.resend_uploads(atlas);
         }
-        if let Some(rows) = atlas.dirty.take() { Self::write_rows(&staging, &self.atlas, &atlas.data, rows); }
+        // The Windfoil shader, built the first time text draws from outlines (render/variant.rs),
+        // fills atlas pages on the GPU, so the pages are made again as ones it can draw into.
+        if atlas.outlines.has_records() && self.select(device, variant::Event::OutlinesWanted) {
+            self.atlas = Self::atlas_texture(device, true);
+            for page in &mut self.atlas_pages { page.0 = Self::atlas_texture(device, true); }
+            self.rebind_all(device);
+            atlas.invalidate();
+        }
+        atlas.outlines.set_support(self.uber.support());
+        if let Some(rows) = atlas.dirty.take() {
+            atlas.rows_uploaded(0, rows);
+            Self::write_rows(&staging, &self.atlas, &atlas.data, rows);
+        }
         let mut atlas_changed = self.atlas_pages.len() > atlas.pages.len();
         self.atlas_pages.truncate(atlas.pages.len());
-        for (index, page) in atlas.pages.iter_mut().enumerate() {
+        let filled = self.uber.outlines().is_some();
+        for index in 0..atlas.pages.len() {
             if index >= self.atlas_pages.len() {
-                let texture = Self::texture(device, "glyph atlas", wgpu::TextureFormat::R8Unorm, ATLAS_SIZE, ATLAS_SIZE);
+                let texture = Self::atlas_texture(device, filled);
                 let bind = Self::bind_group(device, &self.bind_layout, &self.globals, self.uber.outlines(), &texture, &texture, None);
                 self.atlas_pages.push((texture, bind));
                 atlas_changed = true;
             }
-            if let Some(rows) = page.dirty.take() {
-                Self::write_rows(&staging, &self.atlas_pages[index].0, &page.data, rows);
+            if let Some(rows) = atlas.pages[index].dirty.take() {
+                atlas.rows_uploaded(index + 1, rows);
+                Self::write_rows(&staging, &self.atlas_pages[index].0, &atlas.pages[index].data, rows);
             }
         }
         if atlas_changed { self.images_changed(); }
         self.upload_outlines(device, &staging, atlas);
+        self.fill_atlas(device, queue, &staging, atlas);
         if instances.len() > self.capacity {
             self.capacity = instances.len().next_power_of_two();
             self.instances = Self::instance_buffer(device, self.capacity);

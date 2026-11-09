@@ -2,6 +2,7 @@
 //! use, and the quads that sample them.
 
 use super::*;
+use super::atlas_fill::Residency;
 
 pub const ATLAS_SIZE: u32 = 2048;
 
@@ -182,7 +183,9 @@ pub struct Atlas {
     pub(crate) rasterized: u64,
     shelf: Shelf,
     pub(super) clock: u64,
-    pub(super) map: GlyphMap<Option<AtlasGlyph>>,
+    pub(super) map: GlyphMap<Residency>,
+    /// Per page, the entries whose GPU fill is queued (`atlas_fill.rs`).
+    pub(super) fills: Vec<Vec<GlyphKey>>,
     pub(super) icons: HashMap<(usize, u32), Option<AtlasGlyph>>,
     /// Glyph outlines drawn straight on the GPU, uploaded with the pages.
     pub(crate) outlines: super::outline::OutlineStore,
@@ -234,6 +237,7 @@ impl Atlas {
             shelf: Shelf::new(1),
             clock: 1,
             map: GlyphMap::default(),
+            fills: Vec::new(),
             icons: HashMap::new(),
             outlines: Default::default(),
         }
@@ -257,7 +261,8 @@ impl Atlas {
 
     pub(super) fn evict_page(&mut self, page: usize) {
         let p16 = page as u16;
-        self.map.retain(|_, v| v.is_none_or(|g| g.page != p16));
+        self.map.retain(|_, v| v.mask().is_none_or(|g| g.page != p16));
+        if let Some(queue) = self.fills.get_mut(page) { queue.clear(); }
         self.icons.retain(|_, v| v.is_none_or(|g| g.page != p16));
         self.clock += 1;
         self.resets += 1;
@@ -272,6 +277,10 @@ impl Atlas {
     }
 
     pub(crate) fn begin_frame(&mut self, pinned_mask: u32) {
+        // A text flight's glyphs keep their outline records until it lands.
+        if self.outlines.begin_frame(pinned_mask != 0) {
+            self.forget_outline_masks();
+        }
         let total = self.page_count();
         let total_live: u64 = (0..total).map(|p| self.shelf(p).live_texels as u64).sum();
         let half_page = (ATLAS_SIZE * ATLAS_SIZE / 2) as u64;
