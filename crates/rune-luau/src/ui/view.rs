@@ -32,11 +32,13 @@ pub(crate) unsafe extern "C-unwind" fn view_memo(state: *mut ffi::lua_State) -> 
         if ffi::lua_type(state, 4) != ffi::LUA_TFUNCTION {
             return guard(state, || Err("view:Memo needs a build function".into()));
         }
-        let Some(salt) = top(|f| f.env.salt) else {
+        let Some((salt, prefix)) = top(|f| (f.env.salt, f.env.prefix.clone())) else {
             return guard(state, || Err("view:Memo can only be called while rendering".into()));
         };
         let mut failed: Option<String> = None;
-        // The subtree's root takes the memo's key, as `rune::memo` keys it.
+        // Memo ids are the window's: under the script's prefix, two scripts' "panel" memos are
+        // two entries. The subtree's root takes the memo's id, as `rune::memo` keys it.
+        let key = format!("{prefix}{key}");
         let id = key.clone();
         let el = rune::memo::memo_with_hash(key, mix(version, salt), || build(state, &mut failed).key(id));
         if let Some(message) = failed {

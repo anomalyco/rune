@@ -57,7 +57,8 @@ return {
   `tabular`, `noWrap`, `truncate`, `fadeOut`, `selectable`, `textAlign`. Colours are palette names or
   `ui.hex("#rrggbb")`.
 - **`view:Memo(key, version, build)`** reuses the subtree while `version` (a string, number or
-  boolean) is unchanged, without calling `build`. **`view:Handler(fn)`** returns `fn`; handlers
+  boolean) is unchanged, without calling `build`. Its memo id, and its root's key, is `key` under
+  the script's prefix (`luau:<name>:<key>`), so scripts in one window never share a memo. **`view:Handler(fn)`** returns `fn`; handlers
   run as tasks and receive a `UiEvent` (`kind`, `key`, `shift`, `alt`, `mod`).
 - **`ui.virtualList({ count, estimatedRowHeight, version, renderRow, rowKey?, onVisibleRows?, gap? })`**
   is `El::virtual_rows`: `renderRow(i)` (from 1) runs only for rows entering the window, and each

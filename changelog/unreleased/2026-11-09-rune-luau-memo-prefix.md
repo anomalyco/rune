@@ -1,0 +1,1 @@
+- rune-luau: `view:Memo` ids sit under the script's prefix (`luau:<name>:<key>`), so two scripts in one window that use the same memo key no longer share or evict each other's subtree; the memo's root takes that id as its key.
