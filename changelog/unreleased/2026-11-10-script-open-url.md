@@ -1,0 +1,1 @@
+- **Headless scripts can open a link with the app, and a `--realtime` run starts like a window:** `{"open_url": "myapp://..."}` hands `App::on_open_url` the link at its time, and a `--realtime` run calls `App::on_ready` after its first frame, so a probe can send a link or watch a launch while the app is still starting.

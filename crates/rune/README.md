@@ -2428,6 +2428,8 @@ $L --desktop examples/launcher/backdrop.png --script examples/launcher/scripts/d
   `gap`, default 0.15 s between presses) and `drag` (`dx`, `dy`, `dur`) events, at `x,y` in points or at an element by `key` (or a path of keys such as `slider/knob`, where elements without keys
   between them don't count).
   `{"reopen": true}` reopens the app, as a click on its Dock icon (see "App lifetime").
+  `{"open_url": "myapp://…"}` hands `App::on_open_url` a link, as the system does when a link
+  opens the app.
   `menu-pick` (with an `id`) and `menu-cancel` answer an open pop-up menu, `file-dialog` (with
   a `path`) and `file-dialog-cancel` an open file dialog (see "File dialogs"). `drag_files` and
   `drop_files` drag files in from another app (see "Dropping files in from other apps").

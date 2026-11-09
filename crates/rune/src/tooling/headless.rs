@@ -72,7 +72,9 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     let mut comp = app.compositor.take();
     let (srgb_blend, font_smoothing) = (app.srgb_blend, app.font_smoothing);
     let (on_focus, on_ime, on_mods) = (app.on_focus, app.on_ime, app.on_mods);
-    let on_reopen = app.on_reopen;
+    let (on_reopen, on_open_url) = (app.on_reopen, app.on_open_url);
+    // A `--realtime` run stands in for a window, so it starts the app's live work as one does.
+    let mut on_ready = app.on_ready.take().filter(|_| args.realtime);
     let mut reports = crate::frame::encoded::FrameReports::<S>::new(app.on_frame_encoded.take(), Some("main"));
     let source = read_script(&args);
     let script = source.as_ref().map(load_script).unwrap_or_default();
@@ -261,6 +263,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
                 Kind::Focus(focused) => rt.window_focus(*focused),
                 // The one window always shows here.
                 Kind::Reopen => if let Some(f) = on_reopen { rt.update(|s, tx| { f(s, true, tx); }); },
+                Kind::OpenUrl(url) => if let Some(f) = on_open_url { rt.update(|s, tx| f(s, url, tx)); },
                 Kind::Shortcut(shortcut) => shared.shortcuts.fire(shortcut).unwrap_or_else(|e| die(&format!("script shortcut: {e}"))),
                 Kind::Menu(item) => crate::native_menu::fire(&shared, item).unwrap_or_else(|e| die(&format!("script menu: {e}"))),
                 Kind::PopupMenu(picked) => rt.resolve_popup(picked.as_deref()).unwrap_or_else(|e| die(&format!("script pop-up menu: {e}"))),
@@ -298,6 +301,8 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
                 }
             }
         }
+        // Frame 0 has drawn: a window runs `on_ready` after its first frame.
+        if k == 1 && let Some(mut ready) = on_ready.take() { ready(&crate::WindowHandle::new("main")); }
         let requested_place = take_requests(&mut rt);
         take_window_frame(&mut rt, &mut frame_anim, real_t, limits);
         if !idle { step_window_frame(&mut rt, &mut frame_anim, real_t, scale); }
