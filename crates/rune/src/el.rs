@@ -345,7 +345,8 @@ impl From<(f32, f32)> for RadialRadius {
     }
 }
 
-pub(crate) const MAX_GRADIENT_STOPS: usize = 8;
+/// CSS writes an eased fade as a list of stops: 16 holds the eased gradients Desktop draws.
+pub(crate) const MAX_GRADIENT_STOPS: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum GradientGeometry {
