@@ -83,7 +83,7 @@ impl Raster {
         bytemuck::cast_slice::<_, u8>(&rt.instances).hash(&mut hasher);
         let key = hasher.finish();
         if let Some((k, g)) = &self.0 && *k == key { return g.clone(); }
-        let g = Arc::new(check::raster::rasterize_with(&rt.instances, size, rt.env.scale, &rt.icon_aprons));
+        let g = Arc::new(check::raster::rasterize_with(&rt.instances, size, rt.env.scale, &rt.icon_aprons, &rt.text.glyph_shifts()));
         self.0 = Some((key, g.clone()));
         g
     }

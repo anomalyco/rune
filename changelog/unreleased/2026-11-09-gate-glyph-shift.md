@@ -1,0 +1,1 @@
+- **Motion gate: a gliding glyph's coverage sits where its ink is.** The CPU raster now moves each DirectWrite glyph's coverage by its y phase (`TextSystem::glyph_shifts`), so a quad that keeps its box across phases and jumps a pixel at the wrap no longer reads as a flash.
