@@ -198,7 +198,7 @@ impl El {
     /// logical, as `on_key` sees it: Space is `Key::Text(" ")`. A canvas that pans while Space
     /// is held starts on Space's press in `on_key` and stops here.
     pub fn on_key_up<S: 'static>(mut self, f: impl Fn(&mut S, &KeyEvent, &mut Tx) -> bool + 'static) -> Self {
-        self.focus.key_up = Some(Rc::new(move |s, e, tx| f(state::<S>(s), e, tx)));
+        self.cold_mut().focus.key_up = Some(Rc::new(move |s, e, tx| f(state::<S>(s), e, tx)));
         self
     }
 }

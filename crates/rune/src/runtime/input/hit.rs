@@ -150,7 +150,7 @@ impl<S: 'static> Runtime<S> {
             let n = &self.nodes[i];
             // A secondary-only child must not obscure primary input or background blur.
             (!self.subtree_exiting(i) && self.allowed(i) && (n.has_primary_handler() || n.input.is_some() || n.role == "textbox"
-                || (n.role == "button" && n.vis.hit) || n.window_drag != crate::el::WindowDrag::None || n.focus.enabled || n.handlers.modal.is_some()
+                || (n.role == "button" && n.vis_flags.hit()) || n.window_drag != crate::el::WindowDrag::None || n.focus.enabled || n.handlers.modal.is_some()
                 || self.is_selectable(i))).then_some(i)
         })
     }
@@ -198,7 +198,7 @@ impl<S: 'static> Runtime<S> {
         let s = self.env.scale;
         let n = &self.nodes[i];
         let hits_before = self.hits.len();
-        if (n.vis.hit || n.handlers.get().is_some_and(crate::el::Handlers::takes_hit) || n.input.is_some() || n.role == "textbox" || n.window_drag != crate::el::WindowDrag::None || n.focus.get().is_some_and(|f| f.enabled)
+        if (n.vis_flags.hit() || n.handlers.get().is_some_and(crate::el::Handlers::takes_hit) || n.input.is_some() || n.role == "textbox" || n.window_drag != crate::el::WindowDrag::None || n.focus.get().is_some_and(|f| f.enabled)
             || n.text.as_ref().is_some_and(|t| t.selectable))
             && !self.subtree_exiting(i)
             && self.allowed(i) && effective_opacity > 0.001 && visible
@@ -218,7 +218,7 @@ impl<S: 'static> Runtime<S> {
             let rect = if n.parent.is_some() { cr } else { rect_pt };
             if !self.push_link_hits(i, rect_pt, rect) { self.hits.push((self.nodes[i].id, rect)); }
             let n = &self.nodes[i];
-            if n.vis.hit && effective_opacity > 0.0 && rect[2] > rect[0] && rect[3] > rect[1] {
+            if n.vis_flags.hit() && effective_opacity > 0.0 && rect[2] > rect[0] && rect[3] > rect[1] {
                 self.overlay_hits.push(self.hit_screen_rect(n.id, rect));
             }
         }

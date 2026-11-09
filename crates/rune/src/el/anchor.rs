@@ -43,7 +43,7 @@ impl El {
     /// scale.
     pub fn anchored(mut self, key: impl Into<String>, side: Side, align: Align, gap: f32) -> Self {
         self.style.set_position_absolute();
-        self.above = Some(Anchor { key: key.into(), side, align, gap, fit: false, unscaled: false, round: false });
+        self.cold_mut().above = Some(Anchor { key: key.into(), side, align, gap, fit: false, unscaled: false, round: false });
         self
     }
     /// [`El::anchored`], sized to the window as Floating UI's `size` middleware sizes a
@@ -54,7 +54,7 @@ impl El {
     /// running off the window.
     pub fn anchored_fit(self, key: impl Into<String>, side: Side, align: Align, gap: f32) -> Self {
         let mut e = self.anchored(key, side, align, gap);
-        if let Some(a) = &mut e.above {
+        if let Some(a) = e.cold.get_mut_if_some().and_then(|c| c.above.as_mut()) {
             a.fit = true;
         }
         e
@@ -62,7 +62,7 @@ impl El {
     /// Keep this [`El::anchored`] overlay at window scale instead of its anchor's zoom, for an
     /// overlay that zooms its own content (or must not zoom). Call it after `anchored`.
     pub fn anchored_unscaled(mut self) -> Self {
-        if let Some(a) = &mut self.above {
+        if let Some(a) = self.cold.get_mut_if_some().and_then(|c| c.above.as_mut()) {
             a.unscaled = true;
         }
         self
@@ -71,7 +71,7 @@ impl El {
     /// popper rounds Floating UI's position (`Math.round` on x and y), so a menu under a trigger
     /// at half a point lands where a web menu does. Call it after `anchored`.
     pub fn anchored_round(mut self) -> Self {
-        if let Some(a) = &mut self.above {
+        if let Some(a) = self.cold.get_mut_if_some().and_then(|c| c.above.as_mut()) {
             a.round = true;
         }
         self

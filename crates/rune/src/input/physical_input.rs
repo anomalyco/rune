@@ -15,7 +15,7 @@ impl crate::El {
     /// Return true to consume the event. FocusLost also arrives on window deactivation.
     pub fn on_physical_input<S: 'static>(mut self,
         f: impl Fn(&mut S, &PhysicalInput, &mut crate::Tx) -> bool + 'static) -> Self {
-        self.focus.physical = Some(std::rc::Rc::new(move |state, event, tx| {
+        self.cold_mut().focus.physical = Some(std::rc::Rc::new(move |state, event, tx| {
             state.cast::<S>().is_some_and(|s| f(s, event, tx))
         }));
         self

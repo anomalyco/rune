@@ -12,8 +12,8 @@ impl El {
     /// `Glass` also turns on `continuous_corners`, the only curve `NSGlassEffectView` draws, so
     /// the fill, clip and shadow hole match the glass; `Popover` follows `continuous_corners`.
     pub fn system_material(mut self, material: crate::SystemMaterial) -> Self {
-        if material == crate::SystemMaterial::Glass { self.vis.continuous_corners = true; }
-        self.material = Some(material);
+        if material == crate::SystemMaterial::Glass { self.vis_flags.set(crate::el::VisualFlags::CONTINUOUS_CORNERS, true); }
+        self.cold_mut().material = Some(material);
         self
     }
 

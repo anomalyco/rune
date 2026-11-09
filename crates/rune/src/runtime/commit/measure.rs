@@ -1,15 +1,16 @@
 use super::*;
+use crate::el::ElFlags;
 
 pub(super) fn collect_virtual_inputs(el: &El, parent: &str, index: usize, inert: bool, inputs: &mut HashMap<String, Box<InputSpec>>) {
     // Most offscreen rows hold no focused field; find that out before building any paths.
     if !crate::memo::has_focused_input(el) {
         return;
     }
-    let inert = inert || el.inert;
-    let input = el.input.as_ref().filter(|i| i.edit.focused && i.access.is_some());
+    let inert = inert || el.flags.has(ElFlags::INERT);
+    let input = el.cold.input.as_ref().filter(|i| i.edit.focused && i.access.is_some());
     // A memo's shared children are skipped whole when none is a focused field.
-    let skip = el.memo_children.as_ref().filter(|m| !m.focused_input).map_or(0, |m| m.children.len());
-    if input.is_none() && el.children.is_empty() && skip == el.memo_children.as_ref().map_or(0, |m| m.children.len()) {
+    let skip = el.memo_children().filter(|m| !m.focused_input).map_or(0, |m| m.children.len());
+    if input.is_none() && el.children.is_empty() && skip == el.memo_children().map_or(0, |m| m.children.len()) {
         return;
     }
     let segment = el.key.clone().unwrap_or_else(|| format!("#{index}"));
@@ -237,15 +238,15 @@ impl<S: 'static> Measurement<'_, S> {
     /// is the scroll viewport `el` is the content of, whether it sticks to the bottom, and its bound.
     #[allow(clippy::too_many_arguments)]
     fn window_tree(&mut self, el: &mut El, parent: &str, index: usize, scroll: Option<(&str, bool, f32)>, tx: &Tx, force_all: bool, bound: f32, inert: bool, group: Option<&str>) {
-        if !el.has_virtual {
+        if !el.flags.has(ElFlags::HAS_VIRTUAL) {
             return;
         }
         el.expand_memo();
-        let inert = inert || el.inert;
+        let inert = inert || el.flags.has(ElFlags::INERT);
         let bound = crate::el::virtual_list::height_bound(&el.style, bound);
         let path = node_path(parent, el.key.as_deref(), index);
-        if let Some(estimate) = el.virtual_estimate {
-            assert!(el.growth.is_some(), "`.virtualize(..)` at {path:?} needs `.growth(GrowthSpec)` on the same element");
+        if let Some(estimate) = el.cold.virtual_estimate {
+            assert!(el.cold.growth.is_some(), "`.virtualize(..)` at {path:?} needs `.growth(GrowthSpec)` on the same element");
             let (scroll_path, sticky, scroll_bound) = scroll.expect("virtual stack must be the direct child of a scroll viewport");
             let old_scroll = self.path_ids.get(scroll_path).and_then(|id| self.scrolls.get(id));
             let pinned = (tx.settle && sticky) || old_scroll.map_or(sticky, |s| s.pinned);
@@ -268,13 +269,13 @@ impl<S: 'static> Measurement<'_, S> {
             v.pad_top = padding(el_pad.top);
             v.pad_bottom = padding(el_pad.bottom);
             v.set_gap(crate::el::virtual_list::gap_y(&el.style));
-            let source = el.virtual_rows.take();
+            let source = el.cold.get_mut_if_some().and_then(|c| c.virtual_rows.take());
             let state = playground_host::handler_states_ref(self.state, self.playground);
             if source.is_some() {
                 assert!(el.children.is_empty(), "`.virtual_rows(..)` at {path:?} builds its own rows; it takes no children");
             }
             v.indexed = source.is_some();
-            let version = el.virtual_rows_version.filter(|_| source.is_some());
+            let version = el.cold.virtual_rows_version.filter(|_| source.is_some());
             let same = match &source {
                 Some(rows) => rows.count == v.keys.len()
                     && (self.state_unchanged || (version.is_some() && version == v.keys_version) || (0..rows.count).all(|i| (rows.key)(state, i) == v.keys[i])),
@@ -344,11 +345,11 @@ impl<S: 'static> Measurement<'_, S> {
             el.style.set_pad_bottom(v.pad_bottom + v.after);
             self.populate_virtual_children(el, &path, source, inert, group);
         }
-        let bounds = crate::el::virtual_list::child_bounds(&el.style, el.scroll.is_some(), bound, &el.children);
-        let scroll = el.scroll.map(|s| (path.as_str(), s.stick_bottom, bound));
-        let child_group = if el.selection_group { Some(path.as_str()) } else { group };
+        let bounds = crate::el::virtual_list::child_bounds(&el.style, el.cold.scroll.is_some(), bound, &el.children);
+        let scroll = el.cold.scroll.map(|s| (path.as_str(), s.stick_bottom, bound));
+        let child_group = if el.flags.has(ElFlags::SELECTION_GROUP) { Some(path.as_str()) } else { group };
         for (i, child) in el.children.iter_mut().enumerate() {
-            if !child.has_virtual { continue; }
+            if !child.flags.has(ElFlags::HAS_VIRTUAL) { continue; }
             let bound = bounds.of(child);
             self.window_tree(child, &path, i, scroll, tx, force_all, bound, inert, child_group);
         }
@@ -470,7 +471,7 @@ impl<S: 'static> Measurement<'_, S> {
     ) {
         let state = playground_host::handler_states_ref(self.state, self.playground);
         let v = self.virtuals.get_mut(path).unwrap();
-        let list_group = if el.selection_group { Some(path.to_owned()) } else { group.map(str::to_owned) };
+        let list_group = if el.flags.has(ElFlags::SELECTION_GROUP) { Some(path.to_owned()) } else { group.map(str::to_owned) };
         v.selection.group_path = list_group.clone();
         v.selection.inert = inert;
         v.selection.texts.clear();
@@ -521,21 +522,21 @@ impl<S: 'static> Measurement<'_, S> {
             }
             el.children = v.range.clone().zip(quiet).map(|(i, quiet)| {
                 let mut row = build(i);
-                row.virtual_mount = quiet;
+                row.flags.set(ElFlags::VIRTUAL_MOUNT, quiet);
                 row
             }).collect();
             v.selection.source = Some(rows);
         } else {
             v.selection.source = None;
-            if !self.retry && el.focus.reveal_selected {
-                let selected = el.children.iter().find(|c| c.focus.selected).and_then(|c| c.key.clone());
+            if !self.retry && el.cold.focus.reveal_selected {
+                let selected = el.children.iter().find(|c| c.cold.focus.selected).and_then(|c| c.key.clone());
                 if selected != v.selected_row {
                     v.reveal_selected = selected.clone();
                     v.selected_row = selected;
                 }
             }
             #[cfg(debug_assertions)]
-            crate::tooling::perf_warn::overbuilt(path, el.virtual_source, el.children.len(), v.range.len());
+            crate::tooling::perf_warn::overbuilt(path, el.cold.virtual_source, el.children.len(), v.range.len());
             let pinned: Vec<usize> = v.pinned_rows.iter()
                 .filter_map(|key| v.index_of(key))
                 .filter(|i| !v.range.contains(i))
@@ -552,7 +553,7 @@ impl<S: 'static> Measurement<'_, S> {
                     v.selection.unmounted.insert(i, child);
                     return None;
                 }
-                child.virtual_mount = v.mounts_quietly(i, self.commits);
+                child.flags.set(ElFlags::VIRTUAL_MOUNT, v.mounts_quietly(i, self.commits));
                 Some(child)
             }).collect();
         }

@@ -32,8 +32,8 @@ impl<S: 'static> Runtime<S> {
             let idx = self.nodes.len();
             remap[old_idx] = Some(idx);
             self.node_index.insert(n.id, idx);
-            self.has_dissolve |= n.vis.blend == crate::render::Blend::PlusLighter;
-            self.has_cache |= n.vis.cache;
+            self.has_dissolve |= n.vis_flags.blend() == crate::render::Blend::PlusLighter;
+            self.has_cache |= n.vis_flags.cache();
             self.nodes.push(n);
         }
         self.spare_nodes = old;
@@ -43,7 +43,7 @@ impl<S: 'static> Runtime<S> {
         self.virtuals.retain(|path, _| self.nodes.iter().any(|n| n.path == *path));
         self.refresh_modal_index();
         self.flying.retain(|(id, _)| self.node_index.contains_key(id));
-        self.has_raise = self.nodes.iter().any(|n| n.vis.raise);
+        self.has_raise = self.nodes.iter().any(|n| n.vis_flags.raise());
         if !self.layer_paint_order.is_empty() || !self.flying.is_empty() || self.has_raise { self.update_layer_paint_order(); }
         // A removed element's live sources (a `Pixels` stream) stop waking this window.
         if !self.live_subscriptions.is_empty() {

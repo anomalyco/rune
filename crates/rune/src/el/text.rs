@@ -23,11 +23,18 @@ impl El {
         }
         self
     }
+    #[inline]
     pub fn font(mut self, s: TextStyle) -> Self {
+        self.set_font(s);
+        self
+    }
+    /// [`El::font`] in place.
+    #[inline]
+    pub fn set_font(&mut self, s: TextStyle) -> &mut Self {
         if let Some(t) = &mut self.text {
             t.style = s;
         }
-        if self.input.is_some() {
+        if self.cold.input.is_some() {
             self.sync_input_rich();
         }
         self
@@ -38,7 +45,7 @@ impl El {
     /// across any active IME preedit.
     pub fn spans(mut self, spans: impl Into<Vec<Span>>) -> Self {
         let spans = spans.into();
-        if let Some(inp) = &mut self.input {
+        if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
             inp.decorations = spans;
             self.sync_input_rich();
         } else if let Some(t) = &mut self.text {
@@ -106,7 +113,7 @@ impl El {
     /// Set the visual palette for rich inline marks (`code`, `link`) and paragraph blocks
     /// (`quote`, `code block`, list markers) on a [`text_input`].
     pub fn rich_style(mut self, style: crate::edit::RichStyle) -> Self {
-        if let Some(inp) = &mut self.input {
+        if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
             inp.rich_style = style;
             self.sync_input_rich();
         } else if let Some(t) = &mut self.text {
@@ -121,7 +128,7 @@ impl El {
         if let Some(t) = &mut self.text {
             t.pill_colors = Some((bg, fg));
         }
-        if self.input.is_some() {
+        if self.cold.input.is_some() {
             self.sync_input_rich();
         }
         self
@@ -136,7 +143,7 @@ impl El {
     /// The closure may capture state; it runs each time the field is built, so a pill follows
     /// whatever it captured. For colours too, see [`El::pill_style`].
     pub fn pill_icon(mut self, icon: impl Fn(&str) -> Option<&'static crate::Icon> + 'static) -> Self {
-        if let Some(inp) = &mut self.input {
+        if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
             inp.pill_icon = Some(Rc::new(icon));
             self.sync_input_pills();
             self.sync_input_rich();
@@ -156,7 +163,7 @@ impl El {
     /// })
     /// ```
     pub fn pill_style(mut self, style: impl Fn(&str) -> PillStyle + 'static) -> Self {
-        if let Some(inp) = &mut self.input {
+        if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
             inp.pill_style = Some(Rc::new(style));
             self.sync_input_pills();
             self.sync_input_rich();
@@ -164,7 +171,7 @@ impl El {
         self
     }
     pub(super) fn sync_input_pills(&mut self) {
-        let (Some(inp), Some(t)) = (&self.input, &mut self.text) else { return };
+        let (Some(inp), Some(t)) = (&self.cold.input, &mut self.text) else { return };
         if inp.edit.is_plain() {
             t.pills.clear();
             return;
@@ -181,7 +188,7 @@ impl El {
             .collect();
     }
     pub(crate) fn sync_input_rich(&mut self) {
-        let (Some(inp), Some(t)) = (&self.input, &mut self.text) else { return };
+        let (Some(inp), Some(t)) = (&self.cold.input, &mut self.text) else { return };
         t.rich_style = inp.rich_style;
         if inp.edit.is_plain() && inp.decorations.is_empty() {
             // A plain field lays out and draws exactly as before rich editing existed.
@@ -220,7 +227,14 @@ impl El {
         t.links = rich_links;
     }
     /// Wrap text at the element's width.
+    #[inline]
     pub fn wrap(mut self) -> Self {
+        self.set_wrap();
+        self
+    }
+    /// [`El::wrap`] in place.
+    #[inline]
+    pub fn set_wrap(&mut self) -> &mut Self {
         if let Some(t) = &mut self.text {
             t.wrap = true;
         }
@@ -231,7 +245,7 @@ impl El {
     /// lowering the text's min-content width. Does not change flex shrinking; use
     /// [`El::shrink`] to allow a flex row to narrow the element.
     pub fn wrap_anywhere(mut self) -> Self {
-        if self.input.as_ref().is_some_and(|i| i.single_line) {
+        if self.cold.input.as_ref().is_some_and(|i| i.single_line) {
             return self;
         }
         if let Some(t) = &mut self.text {
@@ -247,31 +261,45 @@ impl El {
     }
     /// One line, cut with "…" when wider than the element; the element may shrink below its
     /// text's width. A [`text_input`] ignores it and the other truncations.
-    pub fn truncate(self) -> Self {
-        self.elide(Elide::End)
+    #[inline]
+    pub fn truncate(mut self) -> Self {
+        self.set_truncate();
+        self
+    }
+    /// [`El::truncate`] in place.
+    #[inline]
+    pub fn set_truncate(&mut self) -> &mut Self {
+        self.set_elide(Elide::End);
+        self
     }
     /// [`El::truncate`] keeping both ends: "…" replaces the middle, as AppKit's
     /// `NSLineBreakByTruncatingMiddle` does for paths and file names. Cuts fall between
     /// graphemes and refit when the element resizes; copying and the accessibility text keep
     /// the whole string.
-    pub fn truncate_middle(self) -> Self {
-        self.elide(Elide::Middle)
+    pub fn truncate_middle(mut self) -> Self {
+        self.set_elide(Elide::Middle);
+        self
     }
     /// [`El::truncate`] keeping the end: "…" replaces the start.
-    pub fn truncate_head(self) -> Self {
-        self.elide(Elide::Head)
+    pub fn truncate_head(mut self) -> Self {
+        self.set_elide(Elide::Head);
+        self
     }
-    fn elide(self, elide: Elide) -> Self {
+    fn set_elide(&mut self, elide: Elide) {
         // A field's caret and selection index its own text, which a cut would break.
-        if self.input.is_some() { return self; }
-        self.one_line(|t| {
+        if self.cold.input.is_some() { return; }
+        self.set_one_line(|t| {
             t.truncate = true;
             t.elide = elide;
             t.truncate_fade = false;
-        })
+        });
     }
     /// One unwrapped line that shrinks with its parent; `cut` sets how an overflow is cut.
     fn one_line(mut self, cut: impl FnOnce(&mut TextSpec)) -> Self {
+        self.set_one_line(cut);
+        self
+    }
+    fn set_one_line(&mut self, cut: impl FnOnce(&mut TextSpec)) {
         if let Some(t) = &mut self.text {
             t.wrap = false;
             t.wrap_anywhere = false;
@@ -280,7 +308,6 @@ impl El {
         }
         self.style.set_flex_shrink(1.0);
         self.style.set_min_width(length(0.0));
-        self
     }
     /// Wrapped text that stops after `lines` lines, "…" ending the last when more would follow,
     /// as CSS's `line-clamp`. The element measures at most `lines` lines tall. The cut falls
@@ -288,7 +315,7 @@ impl El {
     /// looks up to it, and copying and the accessibility text keep the whole string. 0 shows
     /// every line. A [`text_input`] ignores it; use [`auto_grow`] there.
     pub fn max_lines(mut self, lines: usize) -> Self {
-        if self.input.is_some() { return self; }
+        if self.cold.input.is_some() { return self; }
         if let Some(t) = &mut self.text {
             t.wrap = true;
             t.max_lines = lines;
@@ -319,7 +346,7 @@ impl El {
     /// Keep a text field to one line: long text scrolls sideways under the caret instead of
     /// wrapping. Fields are multi-line by default.
     pub fn single_line(mut self) -> Self {
-        if let Some(i) = &mut self.input {
+        if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
             i.single_line = true;
             i.edit.set_single_line(true);
             if let Some(t) = &mut self.text {
@@ -338,7 +365,7 @@ impl El {
     pub fn link(mut self, link: Link) -> Self {
         if let Some(t) = &mut self.text {
             t.links.push(link);
-            self.focus.enabled = true;
+            self.cold_mut().focus.enabled = true;
             if self.handlers.cursor.is_none() {
                 self.handlers.cursor = Some(Cursor::Pointer);
             }
@@ -368,13 +395,13 @@ impl El {
     /// web) puts a red marker under each word the caret has left, and the field's menu offers its
     /// suggestions and Learn Spelling. Off by default; a secure field never checks.
     pub fn spellcheck(mut self, on: bool) -> Self {
-        if let Some(i) = &mut self.input {
+        if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
             i.spellcheck = on;
         }
         self
     }
     pub fn placeholder(mut self, s: impl Into<String>, c: Color) -> Self {
-        if let Some(i) = &mut self.input {
+        if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
             i.placeholder = s.into();
             i.placeholder_color = c;
             i.placeholder_inked = true;
@@ -382,7 +409,7 @@ impl El {
         self
     }
     pub fn caret(mut self, caret: Color, selection: Color) -> Self {
-        if let Some(i) = &mut self.input {
+        if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
             i.caret = caret;
             i.selection = selection;
             i.caret_inked = true;
@@ -400,9 +427,15 @@ impl El {
     /// hover and press paint reach it, and its `on_secondary_press` wins over Copy. A drag that
     /// selects text doesn't press. Inside a draggable (`on_drag`, `drag_out`) row, dragging
     /// drags the row, and double- and triple-clicks still select.
+    #[inline]
     pub fn selectable(mut self, on: bool) -> Self {
+        self.set_selectable(on);
+        self
+    }
+    /// [`El::selectable`] in place.
+    pub fn set_selectable(&mut self, on: bool) -> &mut Self {
         if let Some(t) = &mut self.text {
-            if self.input.is_some() || t.redacted { return self; }
+            if self.cold.input.is_some() || t.redacted { return self; }
             t.selectable = on;
             if on && (self.handlers.cursor.is_none() || (!t.links.is_empty() && self.handlers.cursor == Some(Cursor::Pointer))) {
                 self.handlers.cursor = Some(Cursor::Text);
@@ -417,7 +450,7 @@ impl El {
     /// cells). Double- and triple-clicks still take a word or paragraph of one text. Text that
     /// isn't selectable (a list marker) is skipped. Outside a group each text is its own.
     pub fn selection_group(mut self, on: bool) -> Self {
-        self.selection_group = on;
+        self.flags.set(ElFlags::SELECTION_GROUP, on);
         self
     }
     /// What copying a text selection inside this element puts on the clipboard (Cmd+C and the
@@ -468,7 +501,7 @@ impl El {
     /// accessibility reports it inert. `on_layout` and `Cx::layout` still see its rects. For a
     /// document drawn under an editor that takes its presses itself.
     pub fn inert(mut self) -> Self {
-        self.inert = true;
+        self.flags.set(ElFlags::INERT, true);
         self
     }
     /// Bytes of [`El::selectable`] text that draw but aren't copied, such as the spacing
@@ -482,14 +515,14 @@ impl El {
     }
     /// The selection highlight of [`El::selectable`] text or a text field, drawn alike for both.
     pub fn selection_color(mut self, color: Color) -> Self {
-        if let Some(i) = &mut self.input { i.selection = color; }
+        if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) { i.selection = color; }
         if let Some(t) = &mut self.text { t.selection = color; }
         self
     }
     /// Binds the field to a `TextEdit` in app state. `f` may capture (a row index, say); wrap
     /// a closure in [`edit_access`] so its returned borrow is tied to the state.
     pub fn on_edit<S: 'static>(mut self, f: impl for<'a> Fn(&'a mut S) -> &'a mut TextEdit + 'static) -> Self {
-        if let Some(i) = &mut self.input {
+        if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
             i.access = Some(Rc::new(edit_fn(move |s| f(downcast::<S>(s)))));
         }
         self
@@ -499,14 +532,14 @@ impl El {
     /// or code block), while plain Return in a paragraph calls `on_submit` — or presses the
     /// [`El::default_button`] when the field has none.
     pub fn on_submit<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
-        if let Some(i) = &mut self.input {
+        if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
             i.submit = Some(Rc::new(move |s, tx| f(downcast::<S>(s), tx)));
         }
         self
     }
     /// Let dependent layout reflow when this input changes; the typed text remains immediate.
     pub fn animate_edit_layout(mut self) -> Self {
-        if let Some(i) = &mut self.input { i.animate_layout = true; }
+        if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) { i.animate_layout = true; }
         self
     }
 }

@@ -462,8 +462,8 @@ pub(super) fn line_width(w: f32) -> f32 {
 /// Whether a box paints something its children's gaps show against. Elsewhere centring would
 /// cost a pixel of size for nothing.
 pub(super) fn frames(v: &crate::el::Visual) -> bool {
-    let border = v.border_width > 0.0 && (v.border.a > 0.0 || v.border_bottom.is_some());
-    v.fill.a > 0.0 || v.hover.a > 0.0 || v.press.a > 0.0 || v.gradient.is_some() || v.radial.is_some() || border
+    let border = v.border_width() > 0.0 && (v.border().a > 0.0 || v.border_bottom.is_some());
+    v.fill.a > 0.0 || v.hover().a > 0.0 || v.press().a > 0.0 || v.gradient.is_some() || v.radial.is_some() || border
 }
 
 /// The correction a box at rest last frame drew with, now that it starts to glide from `r`:

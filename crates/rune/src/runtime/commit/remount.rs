@@ -313,7 +313,7 @@ impl<S: 'static> Measurement<'_, S> {
                 let key = &v.keys[row_i];
                 if !plan.mounted_rows.contains_key(key) {
                     let row = build_indexed_row(&plan.rows, state, &plan.path, key, row_i, self.key_warnings);
-                    if row.has_virtual {
+                    if row.flags.has(crate::el::ElFlags::HAS_VIRTUAL) {
                         nested_virtual = true;
                         break;
                     }
@@ -339,7 +339,7 @@ impl<S: 'static> Measurement<'_, S> {
             let v = self.virtuals.get_mut(&plan.path).unwrap();
             plan.quiet = plan.range.clone().map(|i| v.mounts_quietly(i, self.commits)).collect();
             for (pos, row) in &mut plan.built_rows {
-                row.virtual_mount = plan.quiet[*pos];
+                row.flags.set(crate::el::ElFlags::VIRTUAL_MOUNT, plan.quiet[*pos]);
             }
         }
 

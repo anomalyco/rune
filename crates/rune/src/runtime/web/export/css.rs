@@ -147,23 +147,23 @@ pub(super) fn paint(v: &Visual, size: (f32, f32), d: &mut Decls) {
     if v.fill.a > 0.0 { layers.push(color(v.fill)); }
     if !layers.is_empty() { d.push(("background", layers.join(","))); }
     if let Some(clip) = v.cold.clip { mask(clip, d); }
-    let r = v.radius;
+    let r = v.radii();
     if r.iter().any(|&c| c > 0.0) {
         let value = if r.iter().all(|&c| c == r[0]) { px(r[0]) } else { r.map(px).join(" ") };
         d.push(("border-radius", value));
     }
     let laid_out_border = d.iter().any(|(p, _)| *p == "border-width");
     let mut shadows: Vec<String> = Vec::new();
-    if v.border_width > 0.0 && v.border.a > 0.0 {
+    if v.border_width() > 0.0 && v.border().a > 0.0 {
         if laid_out_border {
             d.push(("border-style", "solid".into()));
-            d.push(("border-color", color(v.border)));
+            d.push(("border-color", color(v.border())));
         } else if let Some([t, r, b, l]) = v.cold.border_sides {
             for (x, y, w) in [(0.0, t, t), (-r, 0.0, r), (0.0, -b, b), (l, 0.0, l)] {
-                if w > 0.0 { shadows.push(format!("inset {} {} 0 0 {}", px(x), px(y), color(v.border))); }
+                if w > 0.0 { shadows.push(format!("inset {} {} 0 0 {}", px(x), px(y), color(v.border()))); }
             }
         } else {
-            shadows.push(format!("inset 0 0 0 {} {}", px(v.border_width), color(v.border)));
+            shadows.push(format!("inset 0 0 0 {} {}", px(v.border_width()), color(v.border())));
         }
     }
     for s in &v.cold.shadows {

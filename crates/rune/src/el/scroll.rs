@@ -12,17 +12,25 @@ impl El {
     /// viewport never overflows. Debug builds warn once per call site when a viewport inside a
     /// `.grow()` container resolves to 0 pt tall while its content is not.
     #[cfg_attr(debug_assertions, track_caller)]
-    pub fn scroll(self, spec: ScrollSpec) -> Self {
-        self.viewport(spec, ScrollAxes::Y, taffy::Overflow::Hidden, taffy::Overflow::Scroll)
+    #[inline]
+    pub fn scroll(mut self, spec: ScrollSpec) -> Self {
+        self.set_scroll(spec);
+        self
+    }
+    /// [`El::scroll`] in place.
+    #[cfg_attr(debug_assertions, track_caller)]
+    pub fn set_scroll(&mut self, spec: ScrollSpec) -> &mut Self {
+        self.viewport(spec, ScrollAxes::Y, taffy::Overflow::Hidden, taffy::Overflow::Scroll);
+        self
     }
     #[cfg_attr(debug_assertions, track_caller)]
-    fn viewport(mut self, spec: ScrollSpec, axes: ScrollAxes, x: taffy::Overflow, y: taffy::Overflow) -> Self {
-        self.scroll = Some(spec);
-        self.scroll_axes = axes;
+    fn viewport(&mut self, spec: ScrollSpec, axes: ScrollAxes, x: taffy::Overflow, y: taffy::Overflow) {
+        let cold = self.cold_mut();
+        cold.scroll = Some(spec);
+        cold.scroll_axes = axes;
         #[cfg(debug_assertions)]
-        { self.scroll_source = Some(std::panic::Location::caller()); }
+        { cold.scroll_source = Some(std::panic::Location::caller()); }
         self.style.set_overflow(x, y);
-        self
     }
     /// A horizontal scroll viewport over its children: a filmstrip, a wide code block or
     /// table, a tab strip that overflows.
@@ -42,8 +50,16 @@ impl El {
     /// and [`Tx::scroll_into_view`] scrolls it to show a row. `El::virtualize` and
     /// `El::virtual_rows` window vertical lists only.
     #[cfg_attr(debug_assertions, track_caller)]
-    pub fn scroll_x(self) -> Self {
-        self.viewport(ScrollSpec { stick_bottom: false }, ScrollAxes::X, taffy::Overflow::Scroll, taffy::Overflow::Hidden)
+    #[inline]
+    pub fn scroll_x(mut self) -> Self {
+        self.set_scroll_x();
+        self
+    }
+    /// [`El::scroll_x`] in place.
+    #[cfg_attr(debug_assertions, track_caller)]
+    pub fn set_scroll_x(&mut self) -> &mut Self {
+        self.viewport(ScrollSpec { stick_bottom: false }, ScrollAxes::X, taffy::Overflow::Scroll, taffy::Overflow::Hidden);
+        self
     }
     /// A viewport that scrolls both ways over its children (a wide timeline, a large
     /// table): [`El::scroll`] and [`El::scroll_x`] together. A trackpad gesture moves it along
@@ -52,9 +68,17 @@ impl El {
     /// [`El::scroll`]. The content takes its natural width as in [`El::scroll_x`] and its
     /// natural height.
     #[cfg_attr(debug_assertions, track_caller)]
-    pub fn scroll_xy(self) -> Self {
-        let spec = self.scroll.unwrap_or(ScrollSpec { stick_bottom: false });
-        self.viewport(spec, ScrollAxes::Both, taffy::Overflow::Scroll, taffy::Overflow::Scroll)
+    #[inline]
+    pub fn scroll_xy(mut self) -> Self {
+        self.set_scroll_xy();
+        self
+    }
+    /// [`El::scroll_xy`] in place.
+    #[cfg_attr(debug_assertions, track_caller)]
+    pub fn set_scroll_xy(&mut self) -> &mut Self {
+        let spec = self.cold.scroll.unwrap_or(ScrollSpec { stick_bottom: false });
+        self.viewport(spec, ScrollAxes::Both, taffy::Overflow::Scroll, taffy::Overflow::Scroll);
+        self
     }
     /// On a scroll viewport, called with whether it shows its bottom (within a point): once
     /// after its first layout, then only when that changes, never per frame. Pair with
@@ -89,14 +113,14 @@ impl El {
     /// header stuck there. Everything [`El::scroll_edge_fade`] says of sticky elements, explicit
     /// masks and [`El::scroll_margin`] applies.
     pub fn scroll_fade(mut self, fade: ScrollFade) -> Self {
-        self.scroll_edges.fade = fade.width;
-        self.scroll_edges.fade_style = fade.style;
+        self.cold_mut().scroll_edges.fade = fade.width;
+        self.cold_mut().scroll_edges.fade_style = fade.style;
         self
     }
     /// On a scroll viewport, the space [`Tx::scroll_into_view`] leaves between a revealed row and
     /// the edge it scrolls to, like CSS `scroll-padding`. The content's own ends still stop flush.
     pub fn scroll_margin(mut self, pts: f32) -> Self {
-        self.scroll_edges.margin = pts.max(0.0);
+        self.cold_mut().scroll_edges.margin = pts.max(0.0);
         self
     }
     /// On a vertical scroll viewport, keep the row at the top of the view where it is when a
@@ -108,7 +132,7 @@ impl El {
     /// above shows. A [`Tx::keep_on_screen`] in the same commit wins, and so does a scroll.
     /// [`El::virtual_rows`] lists already keep their first visible row this way.
     pub fn scroll_anchor(mut self) -> Self {
-        self.scroll_edges.anchor = true;
+        self.cold_mut().scroll_edges.anchor = true;
         self
     }
 }

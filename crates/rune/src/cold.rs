@@ -17,9 +17,16 @@ impl<T: Empty> Default for Cold<T> {
 }
 
 impl<T: Empty> Cold<T> {
+    pub(crate) const NONE: Self = Cold(None);
+
     #[inline(always)]
     pub(crate) fn is_empty(&self) -> bool {
         self.0.is_none()
+    }
+
+    /// The value, moved out when this was its only owner.
+    pub(crate) fn into_owned(self) -> T {
+        self.0.map_or_else(|| T::EMPTY.clone(), Rc::unwrap_or_clone)
     }
 
     #[inline(always)]

@@ -124,7 +124,7 @@ impl<S: 'static> Runtime<S> {
             if node.role == "text" { flags |= MotionElement::TEXT; }
             if node.vis.fill.a > 0.01 || text_hash != 0 { flags |= MotionElement::PAINTS; }
             let v = &node.vis;
-            if v.fill.a == 0.0 && v.border_width == 0.0 && v.shadows.is_empty() && node.text.is_none() && v.icon.is_none()
+            if v.fill.a == 0.0 && v.border_width() == 0.0 && v.shadows.is_empty() && node.text.is_none() && v.icon.is_none()
                 && !self.virtuals.is_empty() && self.virtuals.contains_key(&node.path)
             {
                 flags |= MotionElement::VIRTUAL;

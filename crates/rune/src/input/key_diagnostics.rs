@@ -36,15 +36,15 @@ fn unique(shared: &[El], own: &[El], hashes: &mut Vec<u64>) -> bool {
 /// The sibling sets under `el` that need checking: a memo's shared children were checked when
 /// it built, and a virtual list's rows are checked as it windows them.
 fn checks_siblings(el: &El) -> bool {
-    el.virtual_estimate.is_none() && !(el.memo_children.is_some() && el.children.is_empty())
+    el.cold.virtual_estimate.is_none() && !(el.memo_children().is_some() && el.children.is_empty())
 }
 
 fn shared_children(el: &El) -> &[El] {
-    el.memo_children.as_ref().map_or(&[], |m| &m.children)
+    el.memo_children().map_or(&[], |m| &m.children)
 }
 
 fn clean_with(el: &El, hashes: &mut Vec<u64>) -> bool {
-    if el.memo_children.as_ref().is_some_and(|m| m.duplicate_keys) { return false; }
+    if el.memo_children().is_some_and(|m| m.duplicate_keys) { return false; }
     if checks_siblings(el) && !unique(shared_children(el), &el.children, hashes) { return false; }
     el.children.iter().all(|c| clean_with(c, hashes))
 }
@@ -59,7 +59,7 @@ pub(crate) fn clean(root: &El) -> bool {
 /// Whether a memo's children, as built, hold duplicate keys anywhere below the memo's root.
 pub(crate) fn memo_children_have_duplicates(root: &El, children: &[El]) -> bool {
     let mut hashes = Vec::new();
-    (root.virtual_estimate.is_none() && !unique(children, &[], &mut hashes))
+    (root.cold.virtual_estimate.is_none() && !unique(children, &[], &mut hashes))
         || !children.iter().all(|c| clean_with(c, &mut hashes))
 }
 
@@ -67,8 +67,8 @@ pub(crate) fn memo_children_have_duplicates(root: &El, children: &[El]) -> bool 
 /// rejected: paths are built only down to the duplicates.
 fn find(root: &El, path: &str) -> Vec<Duplicate> {
     fn walk(el: &El, path: &str, hashes: &mut Vec<u64>, out: &mut Vec<Duplicate>) {
-        let shared = el.memo_children.as_ref().is_some_and(|m| m.duplicate_keys);
-        if checks_siblings(el) || (shared && el.virtual_estimate.is_none()) {
+        let shared = el.memo_children().is_some_and(|m| m.duplicate_keys);
+        if checks_siblings(el) || (shared && el.cold.virtual_estimate.is_none()) {
             let mut seen: HashMap<&str, &El> = HashMap::new();
             for child in el.all_children() {
                 let Some(key) = &child.key else { continue };
@@ -139,10 +139,10 @@ pub(crate) fn repair_at(root: &mut El, path: &str) -> Vec<Duplicate> {
     if found.is_empty() { return found; }
     // Only memos on the way to a duplicate are copied out of the cache.
     fn walk(el: &mut El, hashes: &mut Vec<u64>) {
-        let shared = el.memo_children.as_ref().is_some_and(|m| m.duplicate_keys);
+        let shared = el.memo_children().is_some_and(|m| m.duplicate_keys);
         let siblings = checks_siblings(el) && !unique(shared_children(el), &el.children, hashes);
         if shared || siblings { el.expand_memo(); }
-        if siblings || (shared && el.virtual_estimate.is_none()) {
+        if siblings || (shared && el.cold.virtual_estimate.is_none()) {
             rename_duplicates(el.children.iter_mut().filter_map(|c| c.key.as_mut()));
         }
         for child in &mut el.children {
@@ -197,21 +197,22 @@ mod tests {
         fn memo(key: &str, children: Vec<El>) -> El {
             let mut root = el().key(key);
             let duplicate_keys = memo_children_have_duplicates(&root, &children);
-            root.memo_children = Some(std::rc::Rc::new(crate::memo::Shared { children, focused_input: false, duplicate_keys, has_virtual: false, reusable: false }));
+            let children = std::rc::Rc::new(crate::memo::Shared { children, focused_input: false, duplicate_keys, has_virtual: false, reusable: false });
+            root.memo = Some(std::rc::Rc::new(crate::memo::Built { id: 0, reusable: false, root: el(), children }));
             root
         }
         let clean_memo = || memo("a", vec![el().key("x"), el().key("y").child(el().key("z"))]);
         let tree = col().children([clean_memo(), memo("b", vec![el().key("x")])]);
         assert!(clean(&tree));
         let dirty = memo("c", vec![el().key("p").children([el().key("x"), el().key("x")])]);
-        assert!(dirty.memo_children.as_ref().unwrap().duplicate_keys);
+        assert!(dirty.memo_children().unwrap().duplicate_keys);
         let mut tree = col().children([clean_memo(), dirty]);
         assert!(!clean(&tree));
         let found = repair(&mut tree);
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].message.contains("under \"#0/c/p\""), "{}", found[0].message);
-        assert!(tree.children[0].memo_children.is_some(), "the clean memo stays shared");
-        assert!(tree.children[1].memo_children.is_none());
+        assert!(tree.children[0].memo_children().is_some(), "the clean memo stays shared");
+        assert!(tree.children[1].memo_children().is_none());
         let keys: Vec<_> = tree.children[1].children[0].children.iter().map(|c| c.key.clone().unwrap()).collect();
         assert_eq!(keys, ["x", "x#dup1"]);
         assert!(clean(&tree));

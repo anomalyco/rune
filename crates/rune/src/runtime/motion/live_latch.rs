@@ -158,7 +158,7 @@ impl<S: 'static> Runtime<S> {
                                 else if node.vis.icon.is_some_and(|(_, ic)| ic != c) && let Some((_, ic)) = &mut node.vis.cold_mut().icon { *ic = c; }
                                 P_TEXT
                             }
-                            Property::Border => { node.vis.border = c; P_BORDER }
+                            Property::Border => { node.vis.set_border_color(c); P_BORDER }
                             Property::Shadow => {
                                 if node.vis.shadows.first().is_some_and(|s| s.color != c) { node.vis.cold_mut().shadows[0].color = c; }
                                 P_SHADOWS[0]

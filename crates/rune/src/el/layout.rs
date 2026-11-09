@@ -4,22 +4,50 @@
 use super::*;
 
 impl El {
+    #[inline]
     pub fn w(mut self, w: f32) -> Self {
+        self.set_w(w);
+        self
+    }
+    /// [`El::w`] in place.
+    #[inline]
+    pub fn set_w(&mut self, w: f32) -> &mut Self {
         self.style.set_width(length(w));
         self
     }
+    #[inline]
     pub fn h(mut self, h: f32) -> Self {
+        self.set_h(h);
+        self
+    }
+    /// [`El::h`] in place.
+    #[inline]
+    pub fn set_h(&mut self, h: f32) -> &mut Self {
         self.style.set_height(length(h));
         self
     }
-    pub fn size(self, w: f32, h: f32) -> Self {
-        self.w(w).h(h)
+    #[inline]
+    pub fn size(mut self, w: f32, h: f32) -> Self {
+        self.set_size(w, h);
+        self
+    }
+    /// [`El::size`] in place.
+    #[inline]
+    pub fn set_size(&mut self, w: f32, h: f32) -> &mut Self {
+        self.set_w(w).set_h(h)
     }
     /// Width over height, as CSS `aspect-ratio`: with one side set (or stretched by the parent)
     /// the other follows; a box with both sides set ignores it. A picture that sets only one
     /// side already takes its image's ratio ([`pixels`](Self::pixels)); use this for video or
     /// any other box. Anything not positive removes it.
+    #[inline]
     pub fn aspect_ratio(mut self, ratio: f32) -> Self {
+        self.set_aspect_ratio(ratio);
+        self
+    }
+    /// [`El::aspect_ratio`] in place.
+    #[inline]
+    pub fn set_aspect_ratio(&mut self, ratio: f32) -> &mut Self {
         self.style.set_aspect_ratio((ratio.is_finite() && ratio > 0.0).then_some(ratio));
         self
     }
@@ -32,19 +60,43 @@ impl El {
     /// In a column with no bounded height, bound it with `max_h`. It sets both sides, so `w`
     /// and `h` don't apply; anything not positive removes it.
     pub fn aspect_fit(mut self, ratio: f32) -> Self {
-        self.aspect_fit = if ratio.is_finite() && ratio > 0.0 { ratio } else { 0.0 };
+        let ratio = if ratio.is_finite() && ratio > 0.0 { ratio } else { 0.0 };
+        if ratio > 0.0 || !self.cold.is_empty() {
+            self.cold_mut().aspect_fit = ratio;
+        }
         self
     }
+    #[inline]
     pub fn w_full(mut self) -> Self {
+        self.set_w_full();
+        self
+    }
+    /// [`El::w_full`] in place.
+    #[inline]
+    pub fn set_w_full(&mut self) -> &mut Self {
         self.style.set_width(percent(1.0));
         self
     }
     /// Width as a fraction of the parent's (CSS `width: 40%` is `.w_frac(0.4)`).
+    #[inline]
     pub fn w_frac(mut self, f: f32) -> Self {
+        self.set_w_frac(f);
+        self
+    }
+    /// [`El::w_frac`] in place.
+    #[inline]
+    pub fn set_w_frac(&mut self, f: f32) -> &mut Self {
         self.style.set_width(percent(f));
         self
     }
+    #[inline]
     pub fn h_full(mut self) -> Self {
+        self.set_h_full();
+        self
+    }
+    /// [`El::h_full`] in place.
+    #[inline]
+    pub fn set_h_full(&mut self) -> &mut Self {
         self.style.set_height(percent(1.0));
         self
     }
@@ -57,115 +109,290 @@ impl El {
     /// `.h_full()`, or a grown child of a bounded parent), or use `.min_h(..)` for a floor.
     /// A grown column that holds its own flex content also needs `.min_h(0.0)` (see
     /// [`El::min_h`]).
+    #[inline]
     pub fn grow(mut self, g: f32) -> Self {
+        self.set_grow(g);
+        self
+    }
+    /// [`El::grow`] in place.
+    #[inline]
+    pub fn set_grow(&mut self, g: f32) -> &mut Self {
         self.style.set_grow(g);
         self
     }
+    #[inline]
     pub fn padding(mut self, p: f32) -> Self {
+        self.set_padding(p);
+        self
+    }
+    /// [`El::padding`] in place.
+    #[inline]
+    pub fn set_padding(&mut self, p: f32) -> &mut Self {
         self.style.set_padding_all(p);
         self
     }
+    #[inline]
     pub fn px(mut self, p: f32) -> Self {
+        self.set_px(p);
+        self
+    }
+    /// [`El::px`] in place.
+    #[inline]
+    pub fn set_px(&mut self, p: f32) -> &mut Self {
         self.style.set_pad_left(p);
         self.style.set_pad_right(p);
         self
     }
+    #[inline]
     pub fn py(mut self, p: f32) -> Self {
+        self.set_py(p);
+        self
+    }
+    /// [`El::py`] in place.
+    #[inline]
+    pub fn set_py(&mut self, p: f32) -> &mut Self {
         self.style.set_pad_top(p);
         self.style.set_pad_bottom(p);
         self
     }
+    #[inline]
     pub fn pt(mut self, p: f32) -> Self {
+        self.set_pt(p);
+        self
+    }
+    /// [`El::pt`] in place.
+    #[inline]
+    pub fn set_pt(&mut self, p: f32) -> &mut Self {
         self.style.set_pad_top(p);
         self
     }
+    #[inline]
     pub fn pb(mut self, p: f32) -> Self {
+        self.set_pb(p);
+        self
+    }
+    /// [`El::pb`] in place.
+    #[inline]
+    pub fn set_pb(&mut self, p: f32) -> &mut Self {
         self.style.set_pad_bottom(p);
         self
     }
+    #[inline]
     pub fn pl(mut self, p: f32) -> Self {
+        self.set_pl(p);
+        self
+    }
+    /// [`El::pl`] in place.
+    #[inline]
+    pub fn set_pl(&mut self, p: f32) -> &mut Self {
         self.style.set_pad_left(p);
         self
     }
+    #[inline]
     pub fn ml(mut self, m: f32) -> Self {
+        self.set_ml(m);
+        self
+    }
+    /// [`El::ml`] in place.
+    #[inline]
+    pub fn set_ml(&mut self, m: f32) -> &mut Self {
         self.style.set_margin_left(m);
         self
     }
+    #[inline]
     pub fn mr(mut self, m: f32) -> Self {
+        self.set_mr(m);
+        self
+    }
+    /// [`El::mr`] in place.
+    #[inline]
+    pub fn set_mr(&mut self, m: f32) -> &mut Self {
         self.style.set_margin_right(m);
         self
     }
+    #[inline]
     pub fn gap(mut self, g: f32) -> Self {
+        self.set_gap(g);
+        self
+    }
+    /// [`El::gap`] in place.
+    #[inline]
+    pub fn set_gap(&mut self, g: f32) -> &mut Self {
         self.style.set_gap(g, g);
         self
     }
     /// Centre children on the cross axis.
+    #[inline]
     pub fn center_y(mut self) -> Self {
+        self.set_center_y();
+        self
+    }
+    /// [`El::center_y`] in place.
+    #[inline]
+    pub fn set_center_y(&mut self) -> &mut Self {
         self.style.set_align_items(AlignItems::CENTER);
         self
     }
+    #[inline]
     pub fn center(mut self) -> Self {
+        self.set_center();
+        self
+    }
+    /// [`El::center`] in place.
+    #[inline]
+    pub fn set_center(&mut self) -> &mut Self {
         self.style.set_align_items(AlignItems::CENTER);
         self.style.set_justify_content(JustifyContent::CENTER);
         self
     }
+    #[inline]
     pub fn justify_between(mut self) -> Self {
+        self.set_justify_between();
+        self
+    }
+    /// [`El::justify_between`] in place.
+    #[inline]
+    pub fn set_justify_between(&mut self) -> &mut Self {
         self.style.set_justify_content(JustifyContent::SPACE_BETWEEN);
         self
     }
+    #[inline]
     pub fn justify_end(mut self) -> Self {
+        self.set_justify_end();
+        self
+    }
+    /// [`El::justify_end`] in place.
+    #[inline]
+    pub fn set_justify_end(&mut self) -> &mut Self {
         self.style.set_justify_content(JustifyContent::FLEX_END);
         self
     }
     /// Wrap children onto new lines (CSS `flex-wrap: wrap`).
+    #[inline]
     pub fn flex_wrap(mut self) -> Self {
+        self.set_flex_wrap();
+        self
+    }
+    /// [`El::flex_wrap`] in place.
+    #[inline]
+    pub fn set_flex_wrap(&mut self) -> &mut Self {
         self.style.set_flex_wrap(FlexWrap::Wrap);
         self
     }
     /// Align children to the start of the cross axis (CSS `align-items: flex-start`).
+    #[inline]
     pub fn items_start(mut self) -> Self {
+        self.set_items_start();
+        self
+    }
+    /// [`El::items_start`] in place.
+    #[inline]
+    pub fn set_items_start(&mut self) -> &mut Self {
         self.style.set_align_items(AlignItems::FLEX_START);
         self
     }
     /// Align children to the end of the cross axis (CSS `align-items: flex-end`).
+    #[inline]
     pub fn items_end(mut self) -> Self {
+        self.set_items_end();
+        self
+    }
+    /// [`El::items_end`] in place.
+    #[inline]
+    pub fn set_items_end(&mut self) -> &mut Self {
         self.style.set_align_items(AlignItems::FLEX_END);
         self
     }
     /// Centre children on the cross axis (CSS `align-items: center`; same as `center_y`).
+    #[inline]
     pub fn items_center(mut self) -> Self {
+        self.set_items_center();
+        self
+    }
+    /// [`El::items_center`] in place.
+    #[inline]
+    pub fn set_items_center(&mut self) -> &mut Self {
         self.style.set_align_items(AlignItems::CENTER);
         self
     }
     /// Stretch children across the cross axis (CSS `align-items: stretch`).
+    #[inline]
     pub fn items_stretch(mut self) -> Self {
+        self.set_items_stretch();
+        self
+    }
+    /// [`El::items_stretch`] in place.
+    #[inline]
+    pub fn set_items_stretch(&mut self) -> &mut Self {
         self.style.set_align_items(AlignItems::STRETCH);
         self
     }
     /// This element's own cross-axis alignment (CSS `align-self`).
+    #[inline]
     pub fn self_start(mut self) -> Self {
+        self.set_self_start();
+        self
+    }
+    /// [`El::self_start`] in place.
+    #[inline]
+    pub fn set_self_start(&mut self) -> &mut Self {
         self.style.set_align_self(Some(AlignSelf::FLEX_START));
         self
     }
+    #[inline]
     pub fn self_center(mut self) -> Self {
+        self.set_self_center();
+        self
+    }
+    /// [`El::self_center`] in place.
+    #[inline]
+    pub fn set_self_center(&mut self) -> &mut Self {
         self.style.set_align_self(Some(AlignSelf::CENTER));
         self
     }
+    #[inline]
     pub fn self_end(mut self) -> Self {
+        self.set_self_end();
+        self
+    }
+    /// [`El::self_end`] in place.
+    #[inline]
+    pub fn set_self_end(&mut self) -> &mut Self {
         self.style.set_align_self(Some(AlignSelf::FLEX_END));
         self
     }
+    #[inline]
     pub fn self_stretch(mut self) -> Self {
+        self.set_self_stretch();
+        self
+    }
+    /// [`El::self_stretch`] in place.
+    #[inline]
+    pub fn set_self_stretch(&mut self) -> &mut Self {
         self.style.set_align_self(Some(AlignSelf::STRETCH));
         self
     }
     /// Pack children at the start of the main axis (CSS `justify-content: flex-start`).
+    #[inline]
     pub fn justify_start(mut self) -> Self {
+        self.set_justify_start();
+        self
+    }
+    /// [`El::justify_start`] in place.
+    #[inline]
+    pub fn set_justify_start(&mut self) -> &mut Self {
         self.style.set_justify_content(JustifyContent::FLEX_START);
         self
     }
     /// Centre children on the main axis (CSS `justify-content: center`).
+    #[inline]
     pub fn justify_center(mut self) -> Self {
+        self.set_justify_center();
+        self
+    }
+    /// [`El::justify_center`] in place.
+    #[inline]
+    pub fn set_justify_center(&mut self) -> &mut Self {
         self.style.set_justify_content(JustifyContent::CENTER);
         self
     }
@@ -179,20 +406,48 @@ impl El {
         self.style.set_justify_content(JustifyContent::SPACE_EVENLY);
         self
     }
+    #[inline]
     pub fn min_w(mut self, w: f32) -> Self {
+        self.set_min_w(w);
+        self
+    }
+    /// [`El::min_w`] in place.
+    #[inline]
+    pub fn set_min_w(&mut self, w: f32) -> &mut Self {
         self.style.set_min_width(length(w));
         self
     }
+    #[inline]
     pub fn max_h(mut self, h: f32) -> Self {
+        self.set_max_h(h);
+        self
+    }
+    /// [`El::max_h`] in place.
+    #[inline]
+    pub fn set_max_h(&mut self, h: f32) -> &mut Self {
         self.style.set_max_height(length(h));
         self
     }
     /// Separate row and column gaps (CSS `row-gap`, `column-gap`).
+    #[inline]
     pub fn gaps(mut self, row: f32, column: f32) -> Self {
+        self.set_gaps(row, column);
+        self
+    }
+    /// [`El::gaps`] in place.
+    #[inline]
+    pub fn set_gaps(&mut self, row: f32, column: f32) -> &mut Self {
         self.style.set_gap(column, row);
         self
     }
+    #[inline]
     pub fn max_w(mut self, w: f32) -> Self {
+        self.set_max_w(w);
+        self
+    }
+    /// [`El::max_w`] in place.
+    #[inline]
+    pub fn set_max_w(&mut self, w: f32) -> &mut Self {
         self.style.set_max_width(length(w));
         self
     }
@@ -208,34 +463,83 @@ impl El {
     ///     col().grow(1.0).min_h(0.0).child(col().scroll(ScrollSpec { stick_bottom: false }).grow(1.0).child(list)),
     /// )
     /// ```
+    #[inline]
     pub fn min_h(mut self, h: f32) -> Self {
+        self.set_min_h(h);
+        self
+    }
+    /// [`El::min_h`] in place.
+    #[inline]
+    pub fn set_min_h(&mut self, h: f32) -> &mut Self {
         self.style.set_min_height(length(h));
         self
     }
     /// Left and right margin together (CSS `margin-inline`).
+    #[inline]
     pub fn mx(mut self, m: f32) -> Self {
+        self.set_mx(m);
+        self
+    }
+    /// [`El::mx`] in place.
+    #[inline]
+    pub fn set_mx(&mut self, m: f32) -> &mut Self {
         self.style.set_margin_x(m);
         self
     }
     /// Top and bottom margin together (CSS `margin-block`).
+    #[inline]
     pub fn my(mut self, m: f32) -> Self {
+        self.set_my(m);
+        self
+    }
+    /// [`El::my`] in place.
+    #[inline]
+    pub fn set_my(&mut self, m: f32) -> &mut Self {
         self.style.set_margin_y(m);
         self
     }
+    #[inline]
     pub fn mt(mut self, m: f32) -> Self {
+        self.set_mt(m);
+        self
+    }
+    /// [`El::mt`] in place.
+    #[inline]
+    pub fn set_mt(&mut self, m: f32) -> &mut Self {
         self.style.set_margin_top(m);
         self
     }
+    #[inline]
     pub fn mb(mut self, m: f32) -> Self {
+        self.set_mb(m);
+        self
+    }
+    /// [`El::mb`] in place.
+    #[inline]
+    pub fn set_mb(&mut self, m: f32) -> &mut Self {
         self.style.set_margin_bottom(m);
         self
     }
+    #[inline]
     pub fn pr(mut self, p: f32) -> Self {
+        self.set_pr(p);
+        self
+    }
+    /// [`El::pr`] in place.
+    #[inline]
+    pub fn set_pr(&mut self, p: f32) -> &mut Self {
         self.style.set_pad_right(p);
         self
     }
     /// Allow shrinking below content size along the parent's main axis.
+    #[inline]
     pub fn shrink(mut self) -> Self {
+        self.set_shrink();
+        self
+    }
+    /// [`El::shrink`] in place.
+    #[inline]
+    pub fn set_shrink(&mut self) -> &mut Self {
         self.style.set_flex_shrink(1.0);
         self.style.set_min_width(length(0.0));
         self
@@ -254,13 +558,27 @@ impl El {
         self
     }
     /// Out of flow, positioned at `left, top` inside the parent's padding box.
+    #[inline]
     pub fn absolute(mut self, left: f32, top: f32) -> Self {
+        self.set_absolute(left, top);
+        self
+    }
+    /// [`El::absolute`] in place.
+    #[inline]
+    pub fn set_absolute(&mut self, left: f32, top: f32) -> &mut Self {
         self.style.set_absolute_inset(Rect { left: length(left), top: length(top), right: auto(), bottom: auto() });
         self
     }
     /// Out of flow, pinned to the given edges of the parent's padding box (`None` leaves an
     /// edge free); pinning both opposite edges stretches the element between them.
+    #[inline]
     pub fn pin(mut self, left: Option<f32>, top: Option<f32>, right: Option<f32>, bottom: Option<f32>) -> Self {
+        self.set_pin(left, top, right, bottom);
+        self
+    }
+    /// [`El::pin`] in place.
+    #[inline]
+    pub fn set_pin(&mut self, left: Option<f32>, top: Option<f32>, right: Option<f32>, bottom: Option<f32>) -> &mut Self {
         let edge = |v: Option<f32>| v.map_or(auto(), length);
         self.style.set_absolute_inset(Rect { left: edge(left), top: edge(top), right: edge(right), bottom: edge(bottom) });
         self
@@ -276,7 +594,7 @@ impl El {
     /// minimises it as the system's titlebar setting says. Hit targets inside it (buttons,
     /// fields) keep their presses.
     pub fn window_drag(mut self) -> Self {
-        self.window_drag = WindowDrag::Drag;
+        self.flags.set_window_drag(WindowDrag::Drag);
         self
     }
     /// A part of a `.window_drag()` band that keeps its presses: a press, double press or
@@ -285,7 +603,7 @@ impl El {
     /// keep theirs; this is for the parts between them, such as the gaps of a toolbar group.
     /// Like any hit target, it takes presses from what lies under it.
     pub fn no_window_drag(mut self) -> Self {
-        self.window_drag = WindowDrag::NoDrag;
+        self.flags.set_window_drag(WindowDrag::NoDrag);
         self
     }
     /// The caret of an editor the app draws itself rather than with `text_input`: while this
@@ -295,12 +613,12 @@ impl El {
     /// the caret you draw, only while the editor has the keyboard. A focused field's caret wins,
     /// and a focused secure field keeps the input method off.
     pub fn ime_cursor(mut self) -> Self {
-        self.ime_cursor = true;
+        self.flags.set(ElFlags::IME_CURSOR, true);
         self
     }
     /// Mark the drawn, ancestor-clipped rectangle as native overlay input. Does not add a handler.
     pub fn hit(mut self) -> Self {
-        self.vis.hit = true;
+        self.vis_flags.set(VisualFlags::HIT, true);
         self
     }
 
@@ -415,9 +733,13 @@ impl El {
         let area = format!("{key}-scroll-area");
         let mut outer = col().key(area.clone());
         outer.style = self.style.take_box_placement();
-        outer.aspect_fit = std::mem::replace(&mut self.aspect_fit, 0.0);
-        outer.above = self.above.take();
-        outer.transition = self.transition.take();
+        if let Some(c) = self.cold.get_mut_if_some() {
+            let (fit, above, transition) = (std::mem::replace(&mut c.aspect_fit, 0.0), c.above.take(), c.transition.take());
+            if fit > 0.0 || above.is_some() || transition.is_some() {
+                let o = outer.cold_mut();
+                (o.aspect_fit, o.above, o.transition) = (fit, above, transition);
+            }
+        }
         outer.vis.cold_mut().clip_to_content = true;
         (area, key, outer, self)
     }

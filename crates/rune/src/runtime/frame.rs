@@ -787,7 +787,7 @@ impl<S: 'static> Runtime<S> {
             }
         }
         let mut lifted: Vec<usize> = self.flying.iter().filter_map(|(id, _)| self.node_index.get(id).copied()).collect();
-        if self.has_raise { lifted.extend((0..n).filter(|&i| self.nodes[i].vis.raise)); }
+        if self.has_raise { lifted.extend((0..n).filter(|&i| self.nodes[i].vis_flags.raise())); }
         lifted.sort_unstable();
         lifted.dedup();
         self.layer_paint_order.clear();
