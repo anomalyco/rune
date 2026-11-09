@@ -249,7 +249,7 @@ impl<S: 'static> Runtime<S> {
             self.queue.push(Action::FocusControl(self.nodes[p].path.clone()));
         } else if !on_link && !in_textbox && !preserve_focus {
             // Tab goes on from here, as from a browser's click on plain content.
-            self.tab_from = Some(n.path.clone());
+            if self.defaults.web_focus { self.tab_from = Some(n.path.clone()); }
             if self.focused.is_some() { self.queue.push(Action::Blur); }
         }
         let r = n.target;

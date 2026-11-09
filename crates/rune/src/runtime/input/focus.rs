@@ -201,7 +201,7 @@ impl<S: 'static> Runtime<S> {
         }
         if path.is_some() {
             self.tab_from = None;
-        } else if let Some(old) = self.focused.clone() {
+        } else if self.defaults.web_focus && let Some(old) = self.focused.clone() {
             self.tab_from.get_or_insert(old);
         }
         let mut changed = self.focused != path && self.physical_focus_lost();
@@ -384,7 +384,7 @@ impl<S: 'static> Runtime<S> {
             if order.is_empty() { return self.active_modal().is_some(); }
             let current = order.iter().position(|&i| self.focused.as_deref() == Some(&self.nodes[i].path));
             // With nothing focused, Tab goes on from where focus was or the pointer pressed last.
-            let from = self.focused.is_none().then(|| self.tab_from.as_deref().and_then(|p| self.nodes.iter().position(|n| n.path == p))).flatten();
+            let from = (self.defaults.web_focus && self.focused.is_none()).then(|| self.tab_from.as_deref().and_then(|p| self.nodes.iter().position(|n| n.path == p))).flatten();
             let next = match (current, from) {
                 (Some(i), _) if ev.mods.shift => (i + order.len() - 1) % order.len(),
                 (Some(i), _) => (i + 1) % order.len(),
