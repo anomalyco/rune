@@ -380,6 +380,7 @@ fn overlay_hidden_commit_keeps_elapsed_motion_on_later_reveal() {
         let spec = OverlaySpec::new("delayed entry", app.size, view)
             .options(OverlayOptions { prewarm: true, ..Default::default() });
         let (mut overlay, handle) = Overlay::new(spec, init(), &app);
+        overlay.rt.set_system_reduced_motion(false);
         overlay.rt.wall_start = None;
         overlay.warm();
         overlay.dirty = false; // Successful submission of A, without a native window.
@@ -422,6 +423,7 @@ fn overlay_hidden_retarget_samples_old_motion_before_committing_new_target() {
         let spec = OverlaySpec::new("retarget", app.size, view)
             .options(OverlayOptions { prewarm: true, ..Default::default() });
         let (mut overlay, _) = Overlay::new(spec, 12.0, &app);
+        overlay.rt.set_system_reduced_motion(false);
         overlay.rt.wall_start = None;
         overlay.rt.time_scale = scale;
         overlay.warm();
@@ -478,6 +480,7 @@ fn overlay_hidden_poll_can_show_and_animate_from_the_cached_pose() {
         let spec = OverlaySpec::new("entry", app.size, view)
             .options(OverlayOptions { prewarm, ..Default::default() });
         let (mut overlay, handle) = Overlay::new(spec, State { width: 12.0, instant, ..Default::default() }, &app);
+        overlay.rt.set_system_reduced_motion(false);
         overlay.rt.state.handle = Some(handle.clone());
         overlay.warm();
         // No native window in this test: model successful submission of the warmed pose.
@@ -528,6 +531,7 @@ fn overlay_cached_reveal_does_not_settle_a_same_tick_update() {
         let spec = OverlaySpec::new("reveal", app.size, view)
             .options(OverlayOptions { prewarm, ..Default::default() });
         let (mut overlay, _) = Overlay::new(spec, 8.0, &app);
+        overlay.rt.set_system_reduced_motion(false);
         overlay.rt.frame(0.0);
         overlay.rt.update(|width, _| *width = 12.0);
         overlay.warm();
