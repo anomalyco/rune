@@ -1,5 +1,5 @@
 //! The built-in scanners: one small scanner per language family (C-like, Python, shell,
-//! markup, CSS, SQL, YAML, diff) walks the bytes once and returns coloured byte ranges. Anything
+//! markup, CSS, Markdown, SQL, TOML, YAML, diff) walks the bytes once and returns coloured byte ranges. Anything
 //! it doesn't recognise stays uncoloured.
 //!
 //! Input is untrusted. Every scanner only moves forward, lookaheads are either bounded or
@@ -13,18 +13,22 @@
 //! literals, comments); no other highlighter's grammar was used.
 
 mod c_like;
+mod markdown;
 mod markup;
 mod python;
 mod shell;
 mod sql;
+mod toml;
 mod yaml;
 
 use super::Syntax;
 use c_like::{Next, c_like, code_line, type_parameters, utf8_len};
+use markdown::markdown;
 use markup::{css, markup};
 use python::python;
 use shell::shell;
 use sql::sql;
+use toml::toml;
 use yaml::yaml;
 
 /// A language family member the scanners know.
@@ -45,6 +49,8 @@ pub(crate) enum Lang {
     Html,
     Sql,
     Yaml,
+    Markdown,
+    Toml,
     /// Unified diffs.
     Diff,
 }
@@ -66,6 +72,8 @@ impl Lang {
             "html" | "htm" | "xhtml" | "xml" | "svg" => Lang::Html,
             "sql" | "postgres" | "postgresql" | "mysql" | "sqlite" => Lang::Sql,
             "yaml" | "yml" => Lang::Yaml,
+            "markdown" | "md" | "mdx" => Lang::Markdown,
+            "toml" => Lang::Toml,
             "diff" | "patch" => Lang::Diff,
             _ => return None,
         })
@@ -138,6 +146,8 @@ fn scan(lang: Lang, s: &[u8], i: usize, end: usize, out: &mut Out, depth: u8) {
         Lang::Html => markup(s, i, end, out, depth),
         Lang::Sql => sql(s, i, end, out),
         Lang::Yaml => yaml(s, i, end, out),
+        Lang::Markdown => markdown(s, i, end, out, depth),
+        Lang::Toml => toml(s, i, end, out),
     }
 }
 
