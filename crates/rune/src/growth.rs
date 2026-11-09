@@ -191,13 +191,19 @@ pub struct GrowTrack {
     pub(crate) ended: f32,
 }
 
+/// A row within this many points of its height, moving slower than `SETTLE_V` points a second,
+/// lands there: its last creep moves it under a hundredth of a point a frame, which no pixel shows,
+/// and would keep the window drawing frames that change nothing.
+const SETTLE: f32 = 1.0 / 16.0;
+const SETTLE_V: f32 = 1.5;
+
 impl GrowTrack {
     pub fn settled(h: f32) -> GrowTrack {
         GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, glide: None, feather: None, limit: f32::INFINITY, stage: None, slide: None, restore: 0.0, give: None, paced: false, rate: 0.0, ended: 0.0 }
     }
 
     pub fn moving(&self) -> bool {
-        (self.h - self.target).abs() > 1.0 / 128.0 || self.v.abs() > 0.5 || self.mask > 0.01
+        (self.h - self.target).abs() > SETTLE || self.v.abs() > SETTLE_V || self.mask > 0.01
     }
 
     pub fn retarget(&mut self, target: f32) {
@@ -298,7 +304,7 @@ impl GrowTrack {
             self.h = self.target;
             self.v = 0.0;
             self.stage = None;
-        } else if rem.abs() <= 1.0 / 128.0 && self.v.abs() < 0.5 {
+        } else if rem.abs() <= SETTLE && self.v.abs() < SETTLE_V {
             self.h = self.target;
             self.v = 0.0;
         } else if self.paced && rem > 0.0 {
@@ -468,8 +474,8 @@ mod tests {
         // One glide: speed rises, then falls, once.
         let peak = speeds.iter().enumerate().fold((0, 0.0), |m, (i, &v)| if v > m.1 { (i, v) } else { m }).0;
         assert!(speeds[..=peak].windows(2).all(|w| w[1] >= w[0] - 1e-3), "{speeds:?}");
-        // (The settle snap closes the last 1/128 pt.)
-        assert!(speeds[peak..].windows(2).all(|w| w[1] <= w[0] + 1.0 / 128.0), "{speeds:?}");
+        // (The settle snap closes the last SETTLE pt.)
+        assert!(speeds[peak..].windows(2).all(|w| w[1] <= w[0] + SETTLE), "{speeds:?}");
     }
 
     #[test]
