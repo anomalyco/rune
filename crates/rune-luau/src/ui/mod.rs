@@ -98,7 +98,7 @@ pub(crate) struct Env {
 pub(crate) struct Attach {
     /// Runs the callback on press with a `press` event naming the element's key, and any
     /// fields a host node adds (a switch's `checked`).
-    pub(crate) press: fn(El, Rc<Callback>, Option<Rc<str>>, Fields) -> El,
+    pub(crate) press: fn(&mut El, Rc<Callback>, Option<Rc<str>>, Fields),
     /// Runs the callback as the pointer enters and leaves, with a `hover` event.
     pub(crate) hover: fn(El, Rc<Callback>, Option<Rc<str>>) -> El,
     pub(crate) rows: fn(El, rows::Spec) -> El,
@@ -112,14 +112,14 @@ pub(crate) fn attach<S: 'static>() -> &'static Attach {
     const { &Attach { press: press::<S>, hover: hover::<S>, rows: rows::attach::<S>, reload: reload::<S> } }
 }
 
-fn press<S: 'static>(el: El, cb: Rc<Callback>, key: Option<Rc<str>>, fields: Fields) -> El {
-    el.on_press_tx(move |s: &mut S, tx| {
+fn press<S: 'static>(el: &mut El, cb: Rc<Callback>, key: Option<Rc<str>>, fields: Fields) {
+    el.set_on_press_tx(move |s: &mut S, tx| {
         if let Some(script) = cb.script.upgrade() {
             let mods = tx.mods();
             let event = Event { fields: fields.clone(), ..Event::press(key.as_deref(), mods.shift, mods.alt, mods.cmd) };
             script.around_write(s, Some(tx), |tx| script.handle(&cb, event, tx));
         }
-    })
+    });
 }
 
 fn hover<S: 'static>(el: El, cb: Rc<Callback>, key: Option<Rc<str>>) -> El {
@@ -246,19 +246,56 @@ impl Frame {
 impl Arena {
     /// Stores `el` and returns its handle.
     pub(crate) fn put(&mut self, el: El) -> Result<*mut c_void, String> {
+        let slot = self.alloc(el)?;
+        Ok(self.handle(slot))
+    }
+
+    /// Stores `el` and returns its slot, where props decode onto it in place.
+    pub(crate) fn alloc(&mut self, el: El) -> Result<usize, String> {
         let slot = self.slots.len();
         if slot >= SLOT_MASK {
             return Err("more than a million nodes in one render".into());
         }
         self.slots.push(Some(el));
-        Ok((((self.generation as usize) << SLOT_BITS) | (slot + 1)) as *mut c_void)
+        Ok(slot)
+    }
+
+    /// The handle a script holds for `slot`.
+    pub(crate) fn handle(&self, slot: usize) -> *mut c_void {
+        (((self.generation as usize) << SLOT_BITS) | (slot + 1)) as *mut c_void
+    }
+
+    /// The element `alloc` stored in `slot`.
+    pub(crate) fn get_mut(&mut self, slot: usize) -> &mut El {
+        self.slots[slot].as_mut().expect("a node keeps its slot until its handle is placed")
+    }
+
+    /// The element in `slot`, and the slots before it, where its children wait: a script
+    /// builds a node's children before the node.
+    pub(crate) fn split(&mut self, slot: usize) -> (Slots<'_>, &mut El) {
+        let (before, rest) = self.slots.split_at_mut(slot);
+        let el = rest[0].as_mut().expect("a node keeps its slot until its handle is placed");
+        (Slots { slots: before, generation: self.generation }, el)
+    }
+
+    /// Every slot, for children a host node takes.
+    pub(crate) fn all(&mut self) -> Slots<'_> {
+        Slots { slots: &mut self.slots, generation: self.generation }
     }
 
     /// Takes the element behind `handle`; each handle gives its element once.
     pub(crate) fn take(&mut self, handle: *mut c_void) -> Result<El, String> {
-        self.slot(handle)?.take().ok_or_else(|| "a node can only be placed once".to_owned())
+        self.all().slot(handle)?.take().ok_or_else(|| "a node can only be placed once".to_owned())
     }
+}
 
+/// Arena slots that handles reach.
+pub(crate) struct Slots<'a> {
+    slots: &'a mut [Option<El>],
+    generation: u32,
+}
+
+impl Slots<'_> {
     /// The slot behind `handle`.
     pub(crate) fn slot(&mut self, handle: *mut c_void) -> Result<&mut Option<El>, String> {
         let raw = handle as usize;

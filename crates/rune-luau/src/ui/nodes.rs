@@ -6,8 +6,8 @@ use std::rc::Rc;
 use mlua::ffi;
 use rune::{El, col, el, row, spacer, text};
 
-use super::props::{self, Atom, Style, Value};
-use super::{Arena, Callback, Env, Frame, guard, top};
+use super::props::{self, Atom, Props, Value};
+use super::{Callback, Env, Frame, Slots, guard, top};
 
 /// The built-in constructors, as `(name, C function)`.
 pub(crate) const BUILTINS: &[(&str, ffi::lua_CFunction)] = &[
@@ -103,38 +103,41 @@ unsafe fn is_array(state: *mut ffi::lua_State, idx: c_int) -> bool {
 }
 
 /// Builds a node from the props table at `props` and the children array at `children` (0 for
-/// none), stores it in the arena and pushes its handle. Props decode first and the element is
-/// made last, in one run of setters, its children moving from the arena straight into it: an
-/// `El` is several hundred bytes, and every hand-off between functions would copy it.
+/// none) and pushes its handle. The element is made in its arena slot first; each prop then
+/// sets it there as it is read, and its children move from their slots straight into its list,
+/// so it is never copied whole.
 unsafe fn build(state: *mut ffi::lua_State, base: Base, props: c_int, children: c_int) -> Result<c_int, String> {
     top(|frame| {
         let is_text = matches!(base, Base::Text(_));
-        let mut style = Style::new(&frame.env);
-        // SAFETY: `props` is 0 or a table on this stack; the frame borrow covers no call back
-        // into Luau.
-        let press = unsafe { decode_props(state, props, &frame.env, is_text, &mut style)? };
-        let el = match base {
+        let Frame { arena, attach, env } = frame;
+        let slot = arena.alloc(match base {
             Base::Box(f) => f(),
             Base::Text(s) => text(s),
-        };
-        let Frame { arena, attach, env } = frame;
-        let mut failed = None;
-        // SAFETY: `children` is 0 or a table on this stack.
-        let kids = (children > 0).then(|| unsafe { Children::new(state, children, arena, env, &mut failed) });
-        let el = style.apply(el, env, is_text, kids, press, attach);
-        if let Some(message) = failed {
-            return Err(message);
+        })?;
+        let mut p = Props::new(env);
+        // SAFETY: `props` is 0 or a table on this stack; the frame borrow covers no call back
+        // into Luau.
+        let press = unsafe { decode_props(state, props, env, is_text, &mut p, arena.get_mut(slot))? };
+        if children > 0 {
+            let (slots, el) = arena.split(slot);
+            let mut failed = None;
+            // SAFETY: `children` is a table on this stack.
+            el.extend_children(unsafe { Children::new(state, children, slots, env, &mut failed) });
+            if let Some(message) = failed {
+                return Err(message);
+            }
         }
-        let handle = arena.put(el)?;
+        p.finish(arena.get_mut(slot), env, is_text, press, *attach);
         // SAFETY: pushes the handle as this C function's result.
-        unsafe { ffi::lua_pushlightuserdata(state, handle) };
+        unsafe { ffi::lua_pushlightuserdata(state, arena.handle(slot)) };
         Ok(1)
     })
     .unwrap_or_else(|| Err("ui nodes can only be built while rendering".into()))
 }
 
-/// Decodes the props table at `props` (0 for none), and the `onPress` function in it.
-unsafe fn decode_props(state: *mut ffi::lua_State, props: c_int, env: &Env, is_text: bool, style: &mut Style) -> Result<Option<Rc<Callback>>, String> {
+/// Decodes the props table at `props` (0 for none) onto `el`, and returns the `onPress`
+/// function in it.
+unsafe fn decode_props(state: *mut ffi::lua_State, props: c_int, env: &Env, is_text: bool, p: &mut Props, el: &mut El) -> Result<Option<Rc<Callback>>, String> {
     let mut press = None;
     if props > 0 {
         // SAFETY: walks the table at `props` with `lua_rawiter`, popping each pair.
@@ -152,11 +155,11 @@ unsafe fn decode_props(state: *mut ffi::lua_State, props: c_int, env: &Env, is_t
                         other => return Err(format!("onPress must be a function, got {}", props::name(other))),
                     },
                     Ok(Atom::OnHover) => match v {
-                        Value::Func => style.on_hover = Some(env.reference(state, -1)),
+                        Value::Func => p.on_hover = Some(env.reference(state, -1)),
                         Value::Nil => {}
                         other => return Err(format!("onHover must be a function, got {}", props::name(other))),
                     },
-                    Ok(atom) => style.decode_at(state, atom, -1, env, is_text)?,
+                    Ok(atom) => p.decode_at(el, state, atom, -1, env, is_text)?,
                     Err(name) => env.warn_once(format!("unknown prop {name}")),
                 }
                 ffi::lua_settop(state, -3);
@@ -172,28 +175,28 @@ pub(crate) unsafe fn take_children(state: *mut ffi::lua_State, idx: c_int, frame
     let mut failed = None;
     let Frame { arena, env, .. } = frame;
     // SAFETY: as `Children` documents.
-    let out: Vec<El> = unsafe { Children::new(state, idx, arena, env, &mut failed) }.collect();
+    let out: Vec<El> = unsafe { Children::new(state, idx, arena.all(), env, &mut failed) }.collect();
     failed.map_or(Ok(out), Err)
 }
 
-/// The children in the array at stack slot `idx`, taken from the arena as they are read. The
-/// first bad entry ends the walk and lands in `failed`.
+/// The children in the array at stack slot `idx`, taken from their arena slots as they are
+/// read. The first bad entry ends the walk and lands in `failed`.
 pub(crate) struct Children<'a> {
     state: *mut ffi::lua_State,
     idx: c_int,
     next: usize,
     len: usize,
-    arena: &'a mut Arena,
+    slots: Slots<'a>,
     env: &'a Env,
     failed: &'a mut Option<String>,
 }
 
 impl<'a> Children<'a> {
     /// SAFETY: `idx` is a table on `state`'s stack, which the walk leaves as it found it.
-    unsafe fn new(state: *mut ffi::lua_State, idx: c_int, arena: &'a mut Arena, env: &'a Env, failed: &'a mut Option<String>) -> Self {
+    unsafe fn new(state: *mut ffi::lua_State, idx: c_int, slots: Slots<'a>, env: &'a Env, failed: &'a mut Option<String>) -> Self {
         // SAFETY: as this function's contract says.
         let len = unsafe { ffi::lua_objlen(state, idx) };
-        Children { state, idx, next: 1, len, arena, env, failed }
+        Children { state, idx, next: 1, len, slots, env, failed }
     }
 }
 
@@ -211,7 +214,7 @@ impl Iterator for Children<'_> {
                 ffi::LUA_TLIGHTUSERDATA => {
                     // SAFETY: the slot holds a light userdata.
                     let handle = unsafe { ffi::lua_tolightuserdata(state, -1) };
-                    match self.arena.slot(handle) {
+                    match self.slots.slot(handle) {
                         // Moved straight out of its slot into the parent's list.
                         Ok(slot) if slot.is_some() => slot.take(),
                         Ok(_) => {
@@ -231,7 +234,9 @@ impl Iterator for Children<'_> {
                         Value::Num(n) => props::format_num(n),
                         _ => String::new(),
                     };
-                    Some(text(s).color(self.env.text_color()))
+                    let mut t = text(s);
+                    t.set_color(self.env.text_color());
+                    Some(t)
                 }
                 ffi::LUA_TNIL => None,
                 // SAFETY: reads the slot pushed above.

@@ -13,7 +13,6 @@ use std::rc::Rc;
 use mlua::ffi;
 use rune::{Align, Color, El, ScrollSpec, TextStyle};
 
-use super::nodes::Children;
 use super::{Attach, Callback, Env};
 
 macro_rules! atoms {
@@ -183,355 +182,155 @@ pub(crate) enum Size {
     Full,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum Cross {
-    Start,
-    Center,
-    End,
-    Stretch,
-}
+/// Padding sides a prop set on its own (`pt`, `px`, ...), which `pad` leaves alone.
+const TOP: u8 = 1;
+const RIGHT: u8 = 2;
+const BOTTOM: u8 = 4;
+const LEFT: u8 = 8;
 
-#[derive(Clone, Copy)]
-pub(crate) enum Main {
-    Start,
-    Center,
-    End,
-    Between,
-}
-
-/// A node's decoded props. The element is set up from it in one function, setter after setter
-/// on one value: an `El` is several hundred bytes and Rune's setters take it by value, and a
-/// straight run of them is what the compiler keeps in place.
-pub(crate) struct Style {
+/// A node's props, read straight onto its element in the arena: most set it as they're read.
+/// The rest wait here for the whole table, so the result doesn't depend on the order Luau walks
+/// it: the press handler needs the key, `pad` yields to the sides set beside it, a text node's
+/// style and colour land together, and `center`, `corners`, `selected` and `disabled` overrule
+/// the props they overlap.
+pub(crate) struct Props {
     pub(crate) key: Option<String>,
-    w: Option<Size>,
-    h: Option<Size>,
-    min_w: Option<f32>,
-    max_w: Option<f32>,
-    min_h: Option<f32>,
-    max_h: Option<f32>,
-    grow: Option<f32>,
-    shrink: bool,
+    pub(crate) on_hover: Option<Rc<Callback>>,
     pad: Option<f32>,
-    pt: Option<f32>,
-    pr: Option<f32>,
-    pb: Option<f32>,
-    pl: Option<f32>,
-    mt: Option<f32>,
-    mr: Option<f32>,
-    mb: Option<f32>,
-    ml: Option<f32>,
-    opacity: Option<f32>,
+    sides: u8,
     role: Option<&'static str>,
-    label: Option<String>,
-    help: Option<String>,
-    gap: Option<f32>,
-    align: Option<Cross>,
-    justify: Option<Main>,
     center: bool,
-    flex_wrap: bool,
-    fill: Option<Color>,
-    hover: Option<Color>,
-    press: Option<Color>,
-    radius: Option<f32>,
-    clip: bool,
+    corners: Option<[f32; 4]>,
+    selected: bool,
+    pub(crate) disabled: bool,
     text: TextStyle,
     color: Option<Color>,
-    border: (Option<f32>, Option<Color>),
-    pub(crate) scroll: Option<(bool, bool)>,
-    stick_bottom: bool,
     truncate: bool,
+    fade_out: bool,
+    single_line: bool,
     wrap: bool,
     selectable: bool,
     text_align: Option<Align>,
-    instant_hover: bool,
-    hover_group: bool,
-    group_color: Option<Color>,
-    reveal: bool,
-    corners: Option<[f32; 4]>,
-    pin: Option<[Option<f32>; 4]>,
-    shadow: Option<String>,
-    selected: bool,
-    focusable: bool,
-    pub(crate) disabled: bool,
-    help_above: bool,
-    fade_out: bool,
-    single_line: bool,
-    pub(crate) on_hover: Option<Rc<Callback>>,
+    border: (Option<f32>, Option<Color>),
+    pub(crate) scroll: Option<(bool, bool)>,
+    stick_bottom: bool,
 }
 
-impl Style {
+impl Props {
     /// A node's props before any are read: text starts from the host's text style.
     pub(crate) fn new(env: &Env) -> Self {
-        Style { text: env.text, ..Style::default() }
-    }
-}
-
-impl Default for Style {
-    fn default() -> Self {
-        Style {
+        Props {
             key: None,
-            w: None,
-            h: None,
-            min_w: None,
-            max_w: None,
-            min_h: None,
-            max_h: None,
-            grow: None,
-            shrink: false,
+            on_hover: None,
             pad: None,
-            pt: None,
-            pr: None,
-            pb: None,
-            pl: None,
-            mt: None,
-            mr: None,
-            mb: None,
-            ml: None,
-            opacity: None,
+            sides: 0,
             role: None,
-            label: None,
-            help: None,
-            gap: None,
-            align: None,
-            justify: None,
             center: false,
-            flex_wrap: false,
-            fill: None,
-            hover: None,
-            press: None,
-            radius: None,
-            clip: false,
-            text: TextStyle::new(13.0, 400.0),
+            corners: None,
+            selected: false,
+            disabled: false,
+            text: env.text,
             color: None,
-            border: (None, None),
-            scroll: None,
-            stick_bottom: false,
             truncate: false,
+            fade_out: false,
+            single_line: false,
             wrap: false,
             selectable: false,
             text_align: None,
-            instant_hover: false,
-            hover_group: false,
-            group_color: None,
-            reveal: false,
-            corners: None,
-            pin: None,
-            shadow: None,
-            selected: false,
-            focusable: false,
-            disabled: false,
-            help_above: false,
-            fade_out: false,
-            single_line: false,
-            on_hover: None,
+            border: (None, None),
+            scroll: None,
+            stick_bottom: false,
         }
     }
-}
 
-impl Style {
-    /// `el` set up with every prop, its children and its press handler. A text node also takes
-    /// the text style and colour.
-    pub(crate) fn apply(&mut self, el: El, env: &Env, is_text: bool, kids: Option<Children<'_>>, press: Option<Rc<Callback>>, attach: &'static Attach) -> El {
-        let mut e = el;
-        let s = self;
-        if let Some(kids) = kids {
-            e = e.children(kids);
+    /// Applies what waited for the whole table: the press and hover handlers (`press` is the
+    /// node's `onPress`), then the props that depend on others, the text style and the key.
+    pub(crate) fn finish(self, e: &mut El, env: &Env, is_text: bool, press: Option<Rc<Callback>>, attach: &'static Attach) {
+        let press = press.filter(|_| !self.disabled);
+        let key: Option<Rc<str>> = (press.is_some() || self.on_hover.is_some()).then(|| self.key.as_deref().map(Into::into)).flatten();
+        if let Some(cb) = press {
+            (attach.press)(e, cb, key.clone(), Rc::new([]));
         }
-        if let Some(cb) = press.filter(|_| !s.disabled) {
-            e = (attach.press)(e, cb, s.key.as_deref().map(Into::into), Rc::new([]));
+        if let Some(cb) = self.on_hover {
+            with(e, |e| (attach.hover)(e, cb, key));
         }
-        if let Some(cb) = s.on_hover.take() {
-            e = (attach.hover)(e, cb, s.key.as_deref().map(Into::into));
-        }
-        if let Some(w) = s.w {
-            e = match w {
-                Size::Points(n) => e.w(n),
-                Size::Full => e.w_full(),
-            };
-        }
-        if let Some(h) = s.h {
-            e = match h {
-                Size::Points(n) => e.h(n),
-                Size::Full => e.h_full(),
-            };
-        }
-        if let Some(n) = s.min_w {
-            e = e.min_w(n);
-        }
-        if let Some(n) = s.max_w {
-            e = e.max_w(n);
-        }
-        if let Some(n) = s.min_h {
-            e = e.min_h(n);
-        }
-        if let Some(n) = s.max_h {
-            e = e.max_h(n);
-        }
-        if let Some(n) = s.grow {
-            e = e.grow(n);
-        }
-        if s.shrink {
-            e = e.shrink();
-        }
-        if let Some(n) = s.pad {
-            e = e.padding(n);
-        }
-        if let Some(n) = s.pt {
-            e = e.pt(n);
-        }
-        if let Some(n) = s.pr {
-            e = e.pr(n);
-        }
-        if let Some(n) = s.pb {
-            e = e.pb(n);
-        }
-        if let Some(n) = s.pl {
-            e = e.pl(n);
-        }
-        if let Some(n) = s.mt {
-            e = e.mt(n);
-        }
-        if let Some(n) = s.mr {
-            e = e.mr(n);
-        }
-        if let Some(n) = s.mb {
-            e = e.mb(n);
-        }
-        if let Some(n) = s.ml {
-            e = e.ml(n);
-        }
-        if let Some(n) = s.opacity {
-            e = e.opacity(n);
-        }
-        if let Some(r) = s.role {
-            e = e.role(r);
-        }
-        if let Some(l) = s.label.take() {
-            e = e.label(l);
-        }
-        if let Some(h) = s.help.take() {
-            e = e.help(h);
-        }
-        if let Some(n) = s.gap {
-            e = e.gap(n);
-        }
-        if let Some(a) = s.align {
-            e = match a {
-                Cross::Start => e.items_start(),
-                Cross::Center => e.items_center(),
-                Cross::End => e.items_end(),
-                Cross::Stretch => e.items_stretch(),
-            };
-        }
-        if let Some(j) = s.justify {
-            e = match j {
-                Main::Start => e.justify_start(),
-                Main::Center => e.justify_center(),
-                Main::End => e.justify_end(),
-                Main::Between => e.justify_between(),
-            };
-        }
-        if s.center {
-            e = e.center();
-        }
-        if s.flex_wrap {
-            e = e.flex_wrap();
-        }
-        if let Some(c) = s.fill {
-            e = e.fill(c);
-        }
-        if let Some(c) = s.hover {
-            e = e.hover(c);
-        }
-        if let Some(c) = s.press {
-            e = e.press(c);
-        }
-        if let Some(n) = s.radius {
-            e = e.radius(n);
-        }
-        if let Some(r) = s.corners {
-            e = e.corners(r);
-        }
-        if s.clip {
-            e = e.clip_soft(0.0);
-        }
-        if s.instant_hover {
-            e = e.hover_motion(rune::Anim::INSTANT, rune::Anim::INSTANT);
-        }
-        if s.hover_group {
-            e = e.hover_group();
-        }
-        if let Some(c) = s.group_color {
-            e = e.group_color(c);
-        }
-        if s.reveal {
-            e = e.group_opacity(0.0, 1.0);
-        }
-        if let Some([l, t, r, b]) = s.pin {
-            e = e.pin(l, t, r, b);
-        }
-        if let Some(shadows) = s.shadow.as_deref().and_then(|name| env.shadows.as_ref().and_then(|f| f(name, env.dark))) {
-            // In CSS order, the first on top.
-            e = shadows.into_iter().rev().fold(e, El::box_shadow);
-        }
-        if s.selected {
-            if let Some(c) = env.color("selected") {
-                e = e.fill(c);
+        match (self.pad, self.sides) {
+            (Some(p), 0) => _ = e.set_padding(p),
+            (Some(p), s) => {
+                if s & TOP == 0 {
+                    e.set_pt(p);
+                }
+                if s & RIGHT == 0 {
+                    e.set_pr(p);
+                }
+                if s & BOTTOM == 0 {
+                    e.set_pb(p);
+                }
+                if s & LEFT == 0 {
+                    e.set_pl(p);
+                }
             }
-            e = e.focus_selected(true);
+            (None, _) => {}
         }
-        if s.focusable {
-            e = e.focusable(true);
+        if let Some(r) = self.role {
+            e.set_role(r);
         }
-        if s.disabled {
-            e = e.disabled(true);
+        if self.center {
+            e.set_center();
         }
-        if s.help_above {
-            e = e.help_above();
+        if let Some(r) = self.corners {
+            with(e, |e| e.corners(r));
         }
-        if !is_text && let Some(c) = s.color {
-            e = e.color(c);
+        if self.selected {
+            if let Some(c) = env.color("selected") {
+                e.set_fill(c);
+            }
+            with(e, |e| e.focus_selected(true));
+        }
+        if self.disabled {
+            with(e, |e| e.disabled(true));
         }
         if is_text {
-            e = e.font(s.text).color(s.color.unwrap_or_else(|| env.text_color()));
-            if s.truncate {
-                e = e.truncate();
+            e.set_font(self.text).set_color(self.color.unwrap_or_else(|| env.text_color()));
+            if self.truncate {
+                e.set_truncate();
             }
-            if s.fade_out {
-                e = e.truncate_fade();
+            if self.fade_out {
+                with(e, El::truncate_fade);
             }
-            if s.single_line {
-                e = e.single_line();
+            if self.single_line {
+                with(e, El::single_line);
             }
-            if s.wrap {
-                e = e.wrap();
+            if self.wrap {
+                e.set_wrap();
             }
-            if s.selectable {
-                e = e.selectable(true);
+            if self.selectable {
+                e.set_selectable(true);
             }
-            if let Some(a) = s.text_align {
-                e = e.align(a);
+            if let Some(a) = self.text_align {
+                e.set_align(a);
             }
+        } else if let Some(c) = self.color {
+            e.set_color(c);
         }
-        if s.border != (None, None) {
-            let c = s.border.1.unwrap_or_else(|| env.color("separator").unwrap_or(Color::TRANSPARENT));
-            e = e.border(s.border.0.unwrap_or(1.0), c);
+        if self.border != (None, None) {
+            let c = self.border.1.unwrap_or_else(|| env.color("separator").unwrap_or(Color::TRANSPARENT));
+            e.set_border(self.border.0.unwrap_or(1.0), c);
         }
-        match s.scroll {
-            Some((true, true)) => e = e.scroll_xy(),
-            Some((true, false)) => e = e.scroll_x(),
-            Some((false, _)) => e = e.scroll(ScrollSpec { stick_bottom: s.stick_bottom }),
-            None => {}
+        match self.scroll {
+            Some((true, true)) => e.set_scroll_xy(),
+            Some((true, false)) => e.set_scroll_x(),
+            Some((false, _)) => e.set_scroll(ScrollSpec { stick_bottom: self.stick_bottom }),
+            None => e,
+        };
+        if let Some(k) = self.key {
+            e.set_key(k);
         }
-        if let Some(k) = s.key.take() {
-            e = e.key(k);
-        }
-        e
     }
 
-    /// Decodes one prop, or says what was wrong with its value.
-    pub(crate) fn decode(&mut self, atom: Atom, v: Value<'_>, env: &Env, is_text: bool) -> Result<(), String> {
+    /// Decodes one prop onto `e`, or keeps it for `finish`, or says what was wrong with its
+    /// value.
+    pub(crate) fn decode(&mut self, e: &mut El, atom: Atom, v: Value<'_>, env: &Env, is_text: bool) -> Result<(), String> {
         let name = NAMES[atom as usize].0;
         let num = |v: Value<'_>| match v {
             Value::Num(n) => Ok(n as f32),
@@ -559,67 +358,115 @@ impl Style {
                     v => string(v)?.to_owned(),
                 })
             }
-            Atom::W => self.w = Some(size(v)?),
-            Atom::H => self.h = Some(size(v)?),
-            Atom::MinW => self.min_w = Some(num(v)?),
-            Atom::MaxW => self.max_w = Some(num(v)?),
-            Atom::MinH => self.min_h = Some(num(v)?),
-            Atom::MaxH => self.max_h = Some(num(v)?),
-            Atom::Grow => self.grow = Some(num(v)?),
-            Atom::Shrink => self.shrink = flag(v)?,
-            Atom::Pad => self.pad = Some(num(v)?),
-            Atom::Px => (self.pl, self.pr) = (Some(num(v)?), Some(num(v)?)),
-            Atom::Py => (self.pt, self.pb) = (Some(num(v)?), Some(num(v)?)),
-            Atom::Pt => self.pt = Some(num(v)?),
-            Atom::Pr => self.pr = Some(num(v)?),
-            Atom::Pb => self.pb = Some(num(v)?),
-            Atom::Pl => self.pl = Some(num(v)?),
-            Atom::M => {
-                let n = Some(num(v)?);
-                (self.mt, self.mr, self.mb, self.ml) = (n, n, n, n);
+            Atom::W => {
+                match size(v)? {
+                    Size::Points(n) => e.set_w(n),
+                    Size::Full => e.set_w_full(),
+                };
             }
-            Atom::Mx => (self.ml, self.mr) = (Some(num(v)?), Some(num(v)?)),
-            Atom::My => (self.mt, self.mb) = (Some(num(v)?), Some(num(v)?)),
-            Atom::Mt => self.mt = Some(num(v)?),
-            Atom::Mr => self.mr = Some(num(v)?),
-            Atom::Mb => self.mb = Some(num(v)?),
-            Atom::Ml => self.ml = Some(num(v)?),
-            Atom::Opacity => self.opacity = Some(num(v)?),
+            Atom::H => {
+                match size(v)? {
+                    Size::Points(n) => e.set_h(n),
+                    Size::Full => e.set_h_full(),
+                };
+            }
+            Atom::MinW => _ = e.set_min_w(num(v)?),
+            Atom::MaxW => _ = e.set_max_w(num(v)?),
+            Atom::MinH => _ = e.set_min_h(num(v)?),
+            Atom::MaxH => _ = e.set_max_h(num(v)?),
+            Atom::Grow => _ = e.set_grow(num(v)?),
+            Atom::Shrink => {
+                if flag(v)? {
+                    e.set_shrink();
+                }
+            }
+            Atom::Pad => self.pad = Some(num(v)?),
+            Atom::Px => {
+                let n = num(v)?;
+                e.set_pl(n).set_pr(n);
+                self.sides |= LEFT | RIGHT;
+            }
+            Atom::Py => {
+                let n = num(v)?;
+                e.set_pt(n).set_pb(n);
+                self.sides |= TOP | BOTTOM;
+            }
+            Atom::Pt => {
+                e.set_pt(num(v)?);
+                self.sides |= TOP;
+            }
+            Atom::Pr => {
+                e.set_pr(num(v)?);
+                self.sides |= RIGHT;
+            }
+            Atom::Pb => {
+                e.set_pb(num(v)?);
+                self.sides |= BOTTOM;
+            }
+            Atom::Pl => {
+                e.set_pl(num(v)?);
+                self.sides |= LEFT;
+            }
+            Atom::M => {
+                let n = num(v)?;
+                e.set_mt(n).set_mr(n).set_mb(n).set_ml(n);
+            }
+            Atom::Mx => {
+                let n = num(v)?;
+                e.set_ml(n).set_mr(n);
+            }
+            Atom::My => {
+                let n = num(v)?;
+                e.set_mt(n).set_mb(n);
+            }
+            Atom::Mt => _ = e.set_mt(num(v)?),
+            Atom::Mr => _ = e.set_mr(num(v)?),
+            Atom::Mb => _ = e.set_mb(num(v)?),
+            Atom::Ml => _ = e.set_ml(num(v)?),
+            Atom::Opacity => _ = e.set_opacity(num(v)?),
             Atom::Role => {
                 let s = string(v)?;
                 self.role = Some(role(s).ok_or_else(|| format!("unknown role {s}"))?);
             }
-            Atom::Label => self.label = Some(string(v)?.to_owned()),
-            Atom::Help => self.help = Some(string(v)?.to_owned()),
-            Atom::Gap => self.gap = Some(num(v)?),
+            Atom::Label => _ = e.set_label(string(v)?),
+            Atom::Help => _ = e.set_help(string(v)?),
+            Atom::Gap => _ = e.set_gap(num(v)?),
             Atom::Align => {
-                self.align = Some(match v {
-                    Value::Str("start") => Cross::Start,
-                    Value::Str("center") => Cross::Center,
-                    Value::Str("end") => Cross::End,
-                    Value::Str("stretch") => Cross::Stretch,
+                match v {
+                    Value::Str("start") => e.set_items_start(),
+                    Value::Str("center") => e.set_items_center(),
+                    Value::Str("end") => e.set_items_end(),
+                    Value::Str("stretch") => e.set_items_stretch(),
                     other => return Err(format!("align must be start, center, end or stretch, got {}", self::name(other))),
-                })
+                };
             }
             Atom::Justify => {
-                self.justify = Some(match v {
-                    Value::Str("start") => Main::Start,
-                    Value::Str("center") => Main::Center,
-                    Value::Str("end") => Main::End,
-                    Value::Str("between") => Main::Between,
+                match v {
+                    Value::Str("start") => e.set_justify_start(),
+                    Value::Str("center") => e.set_justify_center(),
+                    Value::Str("end") => e.set_justify_end(),
+                    Value::Str("between") => e.set_justify_between(),
                     other => return Err(format!("justify must be start, center, end or between, got {}", self::name(other))),
-                })
+                };
             }
             Atom::Center => self.center = flag(v)?,
             Atom::Wrap if is_text => self.wrap = flag(v)?,
-            Atom::Wrap => self.flex_wrap = flag(v)?,
-            Atom::Fill => self.fill = Some(color(v)?),
-            Atom::Hover => self.hover = Some(color(v)?),
-            Atom::Press => self.press = Some(color(v)?),
+            Atom::Wrap => {
+                if flag(v)? {
+                    e.set_flex_wrap();
+                }
+            }
+            Atom::Fill => _ = e.set_fill(color(v)?),
+            Atom::Hover => _ = e.set_hover(color(v)?),
+            Atom::Press => _ = e.set_press(color(v)?),
             Atom::Border => self.border.1 = Some(color(v)?),
             Atom::BorderWidth => self.border.0 = Some(num(v)?),
-            Atom::Radius => self.radius = Some(num(v)?),
-            Atom::Clip => self.clip = flag(v)?,
+            Atom::Radius => _ = e.set_radius(num(v)?),
+            Atom::Clip => {
+                if flag(v)? {
+                    e.set_clip_soft(0.0);
+                }
+            }
             Atom::ScrollY | Atom::ScrollX => {
                 if flag(v)? {
                     let (x, y) = self.scroll.unwrap_or((false, false));
@@ -639,27 +486,47 @@ impl Style {
                     other => return Err(format!("weight must be regular, medium, semibold or bold, got {}", self::name(other))),
                 }
             }
-            Atom::HoverTransition => {
-                self.instant_hover = match v {
-                    Value::Str("instant") => true,
-                    Value::Str("default") | Value::Nil => false,
-                    other => return Err(format!("hoverTransition must be default or instant, got {}", self::name(other))),
+            Atom::HoverTransition => match v {
+                Value::Str("instant") => with(e, |e| e.hover_motion(rune::Anim::INSTANT, rune::Anim::INSTANT)),
+                Value::Str("default") | Value::Nil => {}
+                other => return Err(format!("hoverTransition must be default or instant, got {}", self::name(other))),
+            },
+            Atom::HoverGroup => {
+                if flag(v)? {
+                    with(e, El::hover_group);
                 }
             }
-            Atom::HoverGroup => self.hover_group = flag(v)?,
-            Atom::HoverGroupColor => self.group_color = Some(color(v)?),
-            Atom::RevealOnHover => self.reveal = flag(v)?,
-            Atom::Shadow => {
-                self.shadow = match v {
-                    Value::Str(s) => Some(s.to_owned()),
-                    Value::Nil => None,
-                    other => return Err(format!("shadow must be an elevation name, got {}", self::name(other))),
+            Atom::HoverGroupColor => {
+                let c = color(v)?;
+                with(e, |e| e.group_color(c));
+            }
+            Atom::RevealOnHover => {
+                if flag(v)? {
+                    with(e, |e| e.group_opacity(0.0, 1.0));
                 }
             }
+            Atom::Shadow => match v {
+                Value::Str(s) => {
+                    if let Some(shadows) = env.shadows.as_ref().and_then(|f| f(s, env.dark)) {
+                        // In CSS order, the first on top.
+                        with(e, |e| shadows.into_iter().rev().fold(e, El::box_shadow));
+                    }
+                }
+                Value::Nil => {}
+                other => return Err(format!("shadow must be an elevation name, got {}", self::name(other))),
+            },
             Atom::Selected => self.selected = flag(v)?,
-            Atom::Focusable => self.focusable = flag(v)?,
+            Atom::Focusable => {
+                if flag(v)? {
+                    with(e, |e| e.focusable(true));
+                }
+            }
             Atom::Disabled => self.disabled = flag(v)?,
-            Atom::HelpSide => self.help_above = matches!(v, Value::Str("top")),
+            Atom::HelpSide => {
+                if matches!(v, Value::Str("top")) {
+                    with(e, El::help_above);
+                }
+            }
             Atom::FadeOut => self.fade_out = flag(v)?,
             // Tables, read off the stack by `decode_at`.
             Atom::Corners | Atom::Pin => return Err(format!("{name} must be a table, got {}", self::name(v))),
@@ -699,9 +566,9 @@ impl Style {
         Ok(())
     }
 
-    /// Decodes the prop whose value is at stack slot `idx`, reading the table-valued ones
-    /// (`corners`, `pin`) off the stack.
-    pub(crate) unsafe fn decode_at(&mut self, state: *mut ffi::lua_State, atom: Atom, idx: c_int, env: &Env, is_text: bool) -> Result<(), String> {
+    /// Decodes the prop whose value is at stack slot `idx` onto `e`, reading the table-valued
+    /// ones (`corners`, `pin`) off the stack.
+    pub(crate) unsafe fn decode_at(&mut self, e: &mut El, state: *mut ffi::lua_State, atom: Atom, idx: c_int, env: &Env, is_text: bool) -> Result<(), String> {
         // SAFETY: the caller passes a valid slot.
         let v = unsafe { read(state, idx) };
         match (atom, v) {
@@ -714,12 +581,20 @@ impl Style {
             }
             (Atom::Pin, Value::Other("table")) => {
                 // SAFETY: slot `idx` holds a table.
-                self.pin = Some(unsafe { numbers::<4>(state, idx, &["left", "top", "right", "bottom"]) });
+                let [l, t, r, b] = unsafe { numbers::<4>(state, idx, &["left", "top", "right", "bottom"]) };
+                e.set_pin(l, t, r, b);
                 Ok(())
             }
-            _ => self.decode(atom, v, env, is_text),
+            _ => self.decode(e, atom, v, env, is_text),
         }
     }
+
+}
+
+/// Runs a by-value builder on `e` in place, for the props Rune has no in-place setter for.
+fn with(e: &mut El, f: impl FnOnce(El) -> El) {
+    let taken = std::mem::replace(e, rune::el());
+    *e = f(taken);
 }
 
 /// `N` numbers from the table at `idx`: by name when `names` are given, else items `1..=N`.

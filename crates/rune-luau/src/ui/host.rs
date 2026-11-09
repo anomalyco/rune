@@ -10,7 +10,7 @@ use mlua::ffi;
 use rune::{Color, El};
 
 use super::nodes::take_children;
-use super::props::{self, Atom, Style, Value};
+use super::props::{self, Atom, Props, Value};
 use super::{Callback, Env, Frame, guard, top};
 use crate::Data;
 
@@ -140,7 +140,11 @@ impl NodeArgs {
     pub fn on_press_with(&self, el: El, name: &str, fields: Vec<(&'static str, Data)>) -> El {
         let key = self.key();
         match self.handler(name) {
-            Some(h) => (self.attach.press)(el, h.0, key, fields.into()),
+            Some(h) => {
+                let mut el = el;
+                (self.attach.press)(&mut el, h.0, key, fields.into());
+                el
+            }
             None => el,
         }
     }
@@ -193,8 +197,11 @@ pub(crate) unsafe extern "C-unwind" fn ui_host(state: *mut ffi::lua_State) -> c_
 
 unsafe fn build_from(state: *mut ffi::lua_State, el: El, props_at: c_int, used: &[String]) -> Result<c_int, String> {
     top(|frame| {
-        let mut style = Style::new(&frame.env);
+        let Frame { arena, attach, env } = frame;
+        let slot = arena.alloc(el)?;
+        let mut p = Props::new(env);
         if props_at > 0 {
+            let el = arena.get_mut(slot);
             // SAFETY: walks the props table again, decoding the standard props the build left.
             unsafe {
                 let mut iter = 0;
@@ -205,14 +212,15 @@ unsafe fn build_from(state: *mut ffi::lua_State, el: El, props_at: c_int, used: 
                     let own = matches!(props::read(state, -2), Value::Str(k) if used.iter().any(|u| u == k));
                     match props::key_atom(state, -2) {
                         Ok(Atom::OnPress | Atom::OnHover) => {}
-                        Ok(atom) if !own => style.decode_at(state, atom, -1, &frame.env, false)?,
+                        Ok(atom) if !own => p.decode_at(el, state, atom, -1, env, false)?,
                         _ => {}
                     }
                     ffi::lua_settop(state, -3);
                 }
             }
         }
-        let handle = frame.put(style.apply(el, &frame.env, false, None, None, frame.attach))?;
+        p.finish(arena.get_mut(slot), env, false, None, *attach);
+        let handle = arena.handle(slot);
         // SAFETY: pushes the handle as this C function's result.
         unsafe { ffi::lua_pushlightuserdata(state, handle) };
         Ok(1)

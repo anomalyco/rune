@@ -6,10 +6,16 @@ impl El {
     pub fn on_press<S: 'static>(self, f: impl Fn(&mut S) + 'static) -> Self {
         self.on_press_tx(move |s: &mut S, _tx: &mut Tx| f(s))
     }
+    #[inline]
     pub fn on_press_tx<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
+        self.set_on_press_tx(f);
+        self
+    }
+    /// [`El::on_press_tx`] in place.
+    pub fn set_on_press_tx<S: 'static>(&mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> &mut Self {
         self.handlers.on_press = Some(Rc::new(move |s, tx| f(downcast::<S>(s), tx)));
         if self.role == RoleTag::GROUP {
-            self.set_role_name("button");
+            self.role = RoleTag::BUTTON;
         }
         self
     }

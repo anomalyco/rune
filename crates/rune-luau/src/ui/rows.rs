@@ -10,7 +10,7 @@ use std::rc::{Rc, Weak};
 use mlua::ffi;
 use rune::{El, GrowthSpec, col};
 
-use super::props::{self, Atom, Style, Value};
+use super::props::{self, Atom, Props, Value};
 use super::view::{mix, version_hash};
 use super::{Callback, Event, guard, top};
 use crate::script::Inner;
@@ -41,7 +41,9 @@ pub(crate) unsafe extern "C-unwind" fn ui_virtual_list(state: *mut ffi::lua_Stat
         }
         guard(state, || {
             top(|frame| {
-                let mut style = Style::new(&frame.env);
+                let mut p = Props::new(&frame.env);
+                let mut viewport = col();
+                viewport.set_w_full();
                 let (mut count, mut estimate, mut version, mut key) = (0usize, 32.0f32, None, None::<String>);
                 let (mut render, mut row_key, mut visible, mut gap) = (None, None, None, 0.0f32);
                 let mut iter = 0;
@@ -64,7 +66,7 @@ pub(crate) unsafe extern "C-unwind" fn ui_virtual_list(state: *mut ffi::lua_Stat
                             return Err(format!("ui.virtualList {atom:?} can't be a {}", props::name(other)));
                         }
                         (Ok(Atom::OnPress), _) => frame.env.warn_once("ui.virtualList takes no onPress".into()),
-                        (Ok(atom), _) => style.decode_at(state, atom, -1, &frame.env, false)?,
+                        (Ok(atom), _) => p.decode_at(&mut viewport, state, atom, -1, &frame.env, false)?,
                         (Err(name), _) => frame.env.warn_once(format!("unknown prop {name}")),
                     }
                     ffi::lua_settop(state, -3);
@@ -84,8 +86,9 @@ pub(crate) unsafe extern "C-unwind" fn ui_virtual_list(state: *mut ffi::lua_Stat
                     gap,
                     id: format!("{}{key}", env.prefix).into(),
                 };
-                style.scroll = Some((false, true));
-                let viewport = style.apply(col().w_full(), env, false, None, None, frame.attach).key(key);
+                p.scroll = Some((false, true));
+                p.finish(&mut viewport, env, false, None, frame.attach);
+                viewport.set_key(key);
                 let el = (frame.attach.rows)(viewport, spec);
                 let handle = frame.put(el)?;
                 ffi::lua_pushlightuserdata(state, handle);
