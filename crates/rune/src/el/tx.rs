@@ -86,6 +86,8 @@ pub struct Tx {
     pub(crate) focus_to: Option<(String, bool)>,
     /// `Tx::focus_visible`.
     pub(crate) focus_visible: bool,
+    /// `Tx::by_keys`.
+    pub(crate) by_keys: bool,
     /// The text selection as the event arrived (`Tx::text_selection`).
     pub(crate) selection: Option<Rc<crate::TextSelection>>,
     /// `Tx::select_text`, `Tx::select_all_text` and `Tx::clear_text_selection`; the last wins.
@@ -337,6 +339,14 @@ impl Tx {
     /// to its trigger with the ring.
     pub fn focus_visible(&self) -> bool {
         self.focus_visible
+    }
+
+    /// Whether a key brought this change: a key handler, or a control that Return or Space
+    /// pressed. A menu that opens from it is a keyboard open (Kobalte's `keyboard` gesture),
+    /// which lights its first row and hands focus back to its trigger with the ring, whatever
+    /// put focus on the trigger before.
+    pub fn by_keys(&self) -> bool {
+        self.by_keys
     }
 
     /// The [`El::selectable`] text selection as this event arrived: the texts it covers with

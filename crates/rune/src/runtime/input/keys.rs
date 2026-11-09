@@ -6,6 +6,7 @@ impl<S: 'static> Runtime<S> {
     /// input's handler, focus traversal and the focused editor, in that order.
     pub(super) fn route_key(&mut self, ev: &KeyEvent, repeat: bool, one: &mut Tx) -> bool {
         let physical_key = one.physical_key;
+        one.by_keys = true;
         one.focused = self.focused_key();
         if matches!(ev.key, crate::Key::Modifier { .. }) { return !repeat && self.route_modifier(ev, one); }
         one.key_repeat = repeat;
