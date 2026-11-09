@@ -1,0 +1,1 @@
+- **Motion traces count a growth row's feathered edge as a track.** Its mask eases out after its height lands and paints the row's edge, which the element rects don't show; traces now list it under `tk` as `mask`, so audits don't take those frames for idle ones.
