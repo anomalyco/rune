@@ -1,0 +1,1 @@
+- A pinned scroll lands at its layout offset after a resize or send, even when its last move reverses by less than a pixel.
