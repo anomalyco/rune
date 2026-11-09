@@ -118,11 +118,11 @@ pub(super) enum Record {
     Push,
 }
 
-/// Steps the open run with an edit of `kind`; `onto_empty_line` when typed text lands on a
-/// line that held nothing. Chromium closes its typing step after the first character typed
-/// onto an empty line (after a line break, or into a field emptied by a deletion), so the
-/// character after starts a new step.
-pub(super) fn step(run: &mut Run, kind: EditKind, onto_empty_line: bool) -> Record {
+/// Steps the open run with an edit of `kind`; `into_empty` when typed text lands in a field
+/// that held nothing. The first character typed into an empty field is a step of its own, as
+/// in OpenCode's composer (a contenteditable whose first input closes Chromium's typing step),
+/// so undoing a typed message leaves that character, then empties the field.
+pub(super) fn step(run: &mut Run, kind: EditKind, into_empty: bool) -> Record {
     let (record, next) = match (*run, kind) {
         (_, EditKind::Other) => (Record::Push, Run::Closed),
         (_, EditKind::DeleteRun) | (Run::Closed | Run::Inserting, EditKind::Delete) => (Record::Push, Run::Deleting),
@@ -130,7 +130,7 @@ pub(super) fn step(run: &mut Run, kind: EditKind, onto_empty_line: bool) -> Reco
         (Run::Closed, EditKind::Text | EditKind::LineBreak) => (Record::Push, Run::Inserting),
         (Run::Inserting | Run::Deleting, EditKind::Text | EditKind::LineBreak) => (Record::Join, Run::Inserting),
     };
-    *run = if kind == EditKind::Text && onto_empty_line { Run::Closed } else { next };
+    *run = if kind == EditKind::Text && into_empty { Run::Closed } else { next };
     record
 }
 
@@ -193,7 +193,7 @@ impl TextEdit {
         }
         h.bytes -= h.redo.iter().map(Change::bytes).sum::<usize>();
         h.redo.clear();
-        let record = step(&mut h.run, kind, before.anchor == before.focus && on_empty_line(&before.text, before.anchor));
+        let record = step(&mut h.run, kind, before.text.is_empty());
         if record == Record::Join
             && before.anchor == before.focus
             && h.undo.back().is_some_and(|c| c.after == before)
@@ -279,8 +279,3 @@ impl TextEdit {
     }
 }
 
-/// Whether byte `at` of `text` sits on a line with nothing on it.
-fn on_empty_line(text: &str, at: usize) -> bool {
-    let b = text.as_bytes();
-    (at == 0 || b.get(at - 1) == Some(&b'\n')) && (at >= b.len() || b[at] == b'\n')
-}
