@@ -28,6 +28,11 @@ A Rust GPU UI framework (wgpu, winit) for apps that feel like SwiftUI on iOS at 
 - In `lib.rs`, keep `mod` and `pub use` lists one item per line, sorted.
 - Apps build these types as literals, so adding a pub field breaks them: `AppSpec`, `Env`, `Elevation`, `PaletteSeed`, `OverlaySpec`, `TextStyle`, `RunOptions`, `ScrollSpec`, `Span`, `ByteFrame`, `SurfaceDraw`, `LayerSpec`. Add a builder method instead.
 
+## State
+
+- Behaviour with modes or phases (hover delays, drags, IME composition, scroll modes, requests and retries) is an explicit state machine: one `enum State` whose variants carry only the data valid in them, and one `fn step(state: &mut State, event: Event) -> Effects<Effect>` (`rune::machine`) that returns effects instead of performing them. No clusters of booleans, `Option`s and timestamps whose combinations encode the mode.
+- Timers are events: a timed variant stores its `Attempt` and due time on `Tx::clock`/the runtime clock, the caller turns its effect into `Tx::wake_at`, and `poll` (or the runtime's frame) feeds the timer back into `step`. An answer whose attempt the state no longer holds changes nothing.
+
 ## Performance
 
 App-side rules live in "Launching fast" in `crates/rune/README.md` and the "Launch fast" docs page. In examples and in Rune itself:

@@ -95,6 +95,8 @@ pub struct Tx {
     pub(crate) playground: Vec<crate::playground::Request>,
     /// `Tx::invalidate_memos_by_prefix`.
     pub(crate) evict_memos: Vec<String>,
+    /// `Tx::clock`.
+    pub(crate) clock: f64,
 }
 
 /// A change to the text selection a handler asked for, carried out after its commit.
@@ -197,6 +199,22 @@ impl Tx {
     /// waits about a frame (60 Hz), so a poll that keeps asking never spins the loop.
     pub fn wake_after(&mut self, duration: std::time::Duration) {
         self.wakes.push(duration);
+    }
+
+    /// The window's logical clock in seconds as this handler or poll runs: the `clock` `poll`
+    /// gets, and the frame's for a handler. Headless runs step it virtually, so a state
+    /// machine that stamps its timers with it (`rune::machine`) runs the same in a script.
+    /// 0 for a `Tx` no runtime made.
+    pub fn clock(&self) -> f64 {
+        self.clock
+    }
+
+    /// Wake the app's poll hook once the clock reaches `due` (seconds on [`Tx::clock`]), as
+    /// [`Tx::wake_after`] does for the time left; a deadline already past wakes the next
+    /// frame. A timed state stores its deadline and asks for it here, and its poll checks
+    /// `clock >= due` to fire the timer as an event.
+    pub fn wake_at(&mut self, due: f64) {
+        self.wakes.push(std::time::Duration::from_secs_f64((due - self.clock).max(0.0)));
     }
 
     /// Close the window after this handler, as the close button would (`App::on_close` runs).

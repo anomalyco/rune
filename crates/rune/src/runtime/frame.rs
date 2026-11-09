@@ -135,7 +135,8 @@ impl<S: 'static> Runtime<S> {
     /// Returning false after changing state the view reads leaves the screen stale until the
     /// next change.
     pub fn update_if(&mut self, f: impl FnOnce(&mut S, &mut Tx) -> bool) -> bool {
-        let mut one = self.transaction();
+        // Its wakes count from now (`schedule_pending_wakes`), so its clock reads now too.
+        let mut one = Tx { clock: self.now_clock(), ..self.transaction() };
         let changed = crate::tooling::perf_warn::timed("an `update` closure", || f(&mut self.state, &mut one));
         let stale = changed || one.frame_work() || one.window_frame.is_some() || one.srgb_blend.is_some_and(|b| b != self.srgb_blend) || one.font_smoothing.is_some_and(|m| m != self.text.smoothing)
             || self.changes_families(&one)
@@ -247,7 +248,7 @@ impl<S: 'static> Runtime<S> {
 
     pub(super) fn transaction(&self) -> Tx {
         Tx { trace: self.tracing().then(crate::el::TraceCalls::default), mods: self.held_mods, selection: self.selection_snapshot(),
-            input_time: crate::input::time::current(), ..Tx::default() }
+            input_time: crate::input::time::current(), clock: self.clock, ..Tx::default() }
     }
 
     /// A scalar from the actual draw path (e.g. `shell.width`). Values hold until resampled.
