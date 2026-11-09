@@ -394,7 +394,8 @@ impl TooltipStyle {
     /// This look for Rune's own [`El::help`](rune::El::help) tooltips
     /// ([`Cx::help_look`](rune::Cx::help_look)), placed and timed as `@opencode/ui`'s
     /// `Tooltip` sets Kobalte's: 4 pt from its element, 8 pt inside the window, after 400 ms,
-    /// and at once within 300 ms of the last one hiding. Its keycaps are `keybind-v2`'s
+    /// and at once within 300 ms of the last one hiding; it fades and scales in from 0.96 over
+    /// 120 ms ease-out and out over 80 ms ease-in (`tooltip.css`). Its keycaps are `keybind-v2`'s
     /// neutral keys: 14 pt, 4 pt in, 2 pt corners and 2 pt apart, 6 pt after the text, their
     /// labels in uppercase 11/530.
     pub fn help_look(&self) -> rune::HelpLook {
@@ -413,6 +414,7 @@ impl TooltipStyle {
             .margin(8.0)
             .delay(0.4)
             .skip_delay(0.3)
+            .fade(0.12, 0.08, 0.96)
             .keycaps(self.keys.0, self.keys.1, TextStyle { family: self.font.family, ..key }, true)
             .keycap_shape(14.0, 4.0, 2.0, 2.0, 6.0)
     }
