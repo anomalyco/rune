@@ -1,0 +1,1 @@
+- Typing into a fresh empty field starts one undo step, including the first character.

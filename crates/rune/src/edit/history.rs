@@ -130,7 +130,7 @@ pub(super) fn step(run: &mut Run, kind: EditKind, onto_empty_line: bool) -> Reco
         (Run::Closed, EditKind::Text | EditKind::LineBreak) => (Record::Push, Run::Inserting),
         (Run::Inserting | Run::Deleting, EditKind::Text | EditKind::LineBreak) => (Record::Join, Run::Inserting),
     };
-    *run = if kind == EditKind::Text && onto_empty_line { Run::Closed } else { next };
+    *run = if record == Record::Join && kind == EditKind::Text && onto_empty_line { Run::Closed } else { next };
     record
 }
 
