@@ -532,6 +532,14 @@ impl El {
         if let Some(t) = &mut self.text { t.copy_prefix = Some(prefix.into()); }
         self
     }
+    /// A text field's selection as a browser paints a field's: its highlight and the ink its
+    /// selected glyphs take, one pair while the window is active and another while it isn't
+    /// ([`SelectionStyle::chromium`](crate::SelectionStyle::chromium) is Chromium's). It takes
+    /// over [`El::caret`]'s and [`El::selection_color`]'s highlight.
+    pub fn selection_style(mut self, style: crate::SelectionStyle) -> Self {
+        if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) { i.selection_style = Some(style); }
+        self
+    }
     /// The selection highlight of [`El::selectable`] text or a text field, drawn alike for both.
     pub fn selection_color(mut self, color: Color) -> Self {
         if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) { i.selection = color; }
