@@ -2,6 +2,7 @@
 //! @opencode/ui's use-filtered-list: looping arrows, Ctrl-N/P, composition-safe Enter,
 //! and editor modifiers left to the text field. Fuzzy scores are Rune's own ordering.
 use std::rc::Rc;
+use rune::machine::Effects;
 use rune::{El, Key, TextEdit, Tx, col, el, icon, row};
 use crate::{Kit, Placement, Popover, PopupItem, PopupList, Select, SelectAppearance, TextInput};
 
@@ -18,24 +19,87 @@ impl ComboboxOption {
     }
 }
 
+/// A combobox's popover and highlight, owned by the app (`ComboboxState::default()`), as one
+/// explicit machine: closed, or open with its search field focused and a highlighted row. The
+/// highlight is the row the keys or the pointer chose, or none, which is the first enabled row
+/// the query lists: an edit to the query lets go of a chosen row, as Desktop's list does
+/// (`ui/src/hooks/list-machine.ts`), so deleting back to an earlier query never brings back a
+/// row chosen for it.
 #[derive(Clone, Debug, Default)]
 pub struct ComboboxState {
-    pub open: bool,
-    pub search: TextEdit,
-    pub active: Option<String>,
-    query: String,
+    search: TextEdit,
+    phase: ComboboxPhase,
 }
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ComboboxPhase {
+    #[default]
+    Closed,
+    /// `highlight`: the row the keys or the pointer chose; none is the query's first enabled row.
+    Open { highlight: Option<String> },
+}
+
+pub enum ComboboxEvent<'a> {
+    /// The trigger: opens on `current` (the chosen option), or closes.
+    Toggle { current: Option<&'a str> },
+    /// Escape, a press outside, a choice.
+    Close,
+    /// The query changed.
+    Edited,
+    /// The keys (`reveal`, which scrolls it into view) or the pointer moved the highlight to row `id`.
+    Highlight { id: String, reveal: bool },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ComboboxEffect {
+    /// Scroll row `id` into view.
+    Reveal(String),
+}
+
 impl ComboboxState {
-    pub fn close(&mut self) {
-        self.open = false;
-        self.search.focused = false;
-        self.search.cancel_composition();
-        self.search.break_history_group();
+    pub fn is_open(&self) -> bool { matches!(self.phase, ComboboxPhase::Open { .. }) }
+    pub fn phase(&self) -> &ComboboxPhase { &self.phase }
+    pub fn search(&self) -> &TextEdit { &self.search }
+    /// The row the keys or the pointer chose, while open.
+    pub fn active(&self) -> Option<&str> {
+        match &self.phase {
+            ComboboxPhase::Open { highlight } => highlight.as_deref(),
+            ComboboxPhase::Closed => None,
+        }
     }
+    pub fn close(&mut self) { self.step(ComboboxEvent::Close); }
+
+    pub fn step(&mut self, event: ComboboxEvent<'_>) -> Effects<ComboboxEffect> {
+        match (&mut self.phase, event) {
+            (ComboboxPhase::Closed, ComboboxEvent::Toggle { current }) => {
+                self.search.clear();
+                self.search.focused = true;
+                self.phase = ComboboxPhase::Open { highlight: current.map(str::to_owned) };
+                current.map_or(Effects::none(), |id| Effects::one(ComboboxEffect::Reveal(id.to_owned())))
+            }
+            (ComboboxPhase::Open { .. }, ComboboxEvent::Toggle { .. } | ComboboxEvent::Close) => {
+                self.phase = ComboboxPhase::Closed;
+                self.search.focused = false;
+                self.search.cancel_composition();
+                self.search.break_history_group();
+                Effects::none()
+            }
+            (ComboboxPhase::Open { highlight }, ComboboxEvent::Edited) => {
+                *highlight = None;
+                Effects::none()
+            }
+            (ComboboxPhase::Open { highlight }, ComboboxEvent::Highlight { id, reveal }) => {
+                *highlight = Some(id.clone());
+                if reveal { Effects::one(ComboboxEffect::Reveal(id)) } else { Effects::none() }
+            }
+            (ComboboxPhase::Closed, _) => Effects::none(),
+        }
+    }
+
     fn active_index(&self, options: &[ComboboxOption], filtered: &[usize]) -> Option<usize> {
-        if self.query == self.search.text
-            && let Some(index) = filtered.iter().copied().find(|i| !options[*i].disabled && Some(&options[*i].id) == self.active.as_ref())
-        { return Some(index); }
+        if let Some(index) = filtered.iter().copied().find(|i| !options[*i].disabled && Some(options[*i].id.as_str()) == self.active()) {
+            return Some(index);
+        }
         filtered.iter().copied().find(|i| !options[*i].disabled)
     }
 }
@@ -139,20 +203,16 @@ impl<S: 'static> Combobox<S> {
         };
         if !self.disabled {
             trigger = trigger.on_press_tx(move |s: &mut S, tx| {
-                let state = access(s);
-                state.open = !state.open;
-                state.search.clear();
-                state.search.focused = state.open;
-                state.query.clear();
-                state.active = current.clone();
-                if state.open && let Some(id) = &current { tx.scroll_into_view(format!("{open_key}-option-{id}")); }
+                for effect in access(s).step(ComboboxEvent::Toggle { current: current.as_deref() }) {
+                    match effect { ComboboxEffect::Reveal(id) => tx.scroll_into_view(format!("{open_key}-option-{id}")) }
+                }
             });
         }
         let mut popover = Popover::new(&self.key).trigger(trigger).label(name.clone()).placement(self.placement).padding(0.0)
-            .open(self.state.open && !self.disabled);
+            .open(self.state.is_open() && !self.disabled);
         let access = self.access.clone();
         popover = popover.on_close(move |s: &mut S| access(s).close());
-        if !self.state.open || self.disabled { return popover.build(k, layer); }
+        if !self.state.is_open() || self.disabled { return popover.build(k, layer); }
         let choices = filtered(&self.options, &self.state.search.text);
         let active = self.state.active_index(&self.options, &choices);
         let access = self.access.clone();
@@ -174,8 +234,7 @@ impl<S: 'static> Combobox<S> {
             .on_edit(move |s: &mut S| &mut access(s).search)
             .on_change(move |s: &mut S, tx| {
                 let state = change_access(s);
-                state.active = None;
-                state.query = state.search.text.clone();
+                state.step(ComboboxEvent::Edited);
                 if let Some(i) = filtered(&change_options, &state.search.text).into_iter().find(|i| !change_options[*i].disabled) {
                     tx.scroll_into_view(format!("{change_key}-option-{}", change_options[i].id));
                 }
@@ -214,9 +273,9 @@ impl<S: 'static> Combobox<S> {
                         let index = active.and_then(|i| enabled.iter().position(|v| *v == i)).unwrap_or(0) as isize;
                         let next = index.saturating_add(jump).clamp(0, enabled.len() as isize - 1) as usize;
                         let id = options[enabled[next]].id.clone();
-                        tx.scroll_into_view(format!("{key}-option-{id}"));
-                        state.active = Some(id);
-                        state.query = state.search.text.clone();
+                        for effect in state.step(ComboboxEvent::Highlight { id, reveal: true }) {
+                            match effect { ComboboxEffect::Reveal(id) => tx.scroll_into_view(format!("{key}-option-{id}")) }
+                        }
                     }
                     return true;
                 }
@@ -233,9 +292,9 @@ impl<S: 'static> Combobox<S> {
                     let index = active.and_then(|i| enabled.iter().position(|v| *v == i)).unwrap_or(0);
                     let next = (index as isize + delta).rem_euclid(enabled.len() as isize) as usize;
                     let id = options[enabled[next]].id.clone();
-                    tx.scroll_into_view(format!("{key}-option-{id}"));
-                    state.active = Some(id);
-                    state.query = state.search.text.clone();
+                    for effect in state.step(ComboboxEvent::Highlight { id, reveal: true }) {
+                        match effect { ComboboxEffect::Reveal(id) => tx.scroll_into_view(format!("{key}-option-{id}")) }
+                    }
                 }
                 true
             }).build(k).key("search");
@@ -261,9 +320,7 @@ impl<S: 'static> Combobox<S> {
             .empty_message(self.empty)
             .on_active(move |s: &mut S, i| {
                 if let Some(&orig) = hover_choices.get(i) {
-                    let state = hover_access(s);
-                    state.active = Some(hover_options[orig].id.clone());
-                    state.query = state.search.text.clone();
+                    hover_access(s).step(ComboboxEvent::Highlight { id: hover_options[orig].id.clone(), reveal: false });
                 }
             })
             .on_choose(move |s: &mut S, id, tx| {
