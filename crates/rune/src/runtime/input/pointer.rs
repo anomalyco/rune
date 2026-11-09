@@ -235,17 +235,22 @@ impl<S: 'static> Runtime<S> {
         // off its links isn't a control: the press blurs, as a click on plain content does.
         // Inside a control that owns its keyboard (`El::on_key`), a click on any part of it
         // focuses it, as a click on a table view's row focuses the table.
-        let keyed = (!n.focus.enabled && !self.is_selectable(ti)).then(|| std::iter::successors(n.parent, |&p| self.nodes[p].parent)
+        // A `Cx::web_focus` control that keeps the field's focus on a press (`preserve_focus_on_press`)
+        // doesn't take it, as a button whose mousedown is prevented.
+        let takes_focus = n.focus.enabled || (self.takes_focus(n) && !self.press_keeps_focus(ti));
+        let keyed = (!takes_focus && !self.is_selectable(ti)).then(|| std::iter::successors(n.parent, |&p| self.nodes[p].parent)
             .take_while(|&p| self.allowed(p))
             .find(|&p| self.nodes[p].focus.key.is_some() && self.can_focus(p))).flatten();
         let in_textbox = std::iter::successors(n.parent, |&p| self.nodes[p].parent).any(|p| self.textbox_input(p).is_some());
         let (preserve_focus, keeps) = (self.press_keeps_focus(ti), self.press_keeps_selection(ti));
-        if !on_link && !keeps && n.focus.enabled && !self.is_selectable(ti) {
+        if !on_link && !keeps && takes_focus && !self.is_selectable(ti) {
             self.queue.push(Action::FocusControl(n.path.clone()));
         } else if !on_link && !keeps && let Some(p) = keyed {
             self.queue.push(Action::FocusControl(self.nodes[p].path.clone()));
-        } else if !on_link && !in_textbox && !preserve_focus && self.focused.is_some() {
-            self.queue.push(Action::Blur);
+        } else if !on_link && !in_textbox && !preserve_focus {
+            // Tab goes on from here, as from a browser's click on plain content.
+            self.tab_from = Some(n.path.clone());
+            if self.focused.is_some() { self.queue.push(Action::Blur); }
         }
         let r = n.target;
         let [lx, ly] = self.to_local(ti, x, y);

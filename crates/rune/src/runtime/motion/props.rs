@@ -131,6 +131,12 @@ impl<S: 'static> Runtime<S> {
             None => return 1.0,
         };
         let rest = self.scene.get(n.id, P_GROUP_REST).unwrap_or(rest);
+        // A control the keyboard reached shows as if hovered, as CSS reveals a hover-only button
+        // on `:focus-visible` (or `:focus-within` around it): focus is never on something unseen.
+        let focused = self.keyboard_focus && self.focused.as_deref().is_some_and(|f| {
+            f.strip_prefix(n.path.as_str()).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        });
+        let group = if focused { 1.0 } else { group };
         rest + (hovered - rest) * group
     }
 }

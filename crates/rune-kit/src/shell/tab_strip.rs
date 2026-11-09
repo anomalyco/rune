@@ -264,6 +264,8 @@ struct Strip<S> {
     horizontal_lock: bool,
     matched: Option<String>,
     close_icon: Option<&'static Icon>,
+    /// `TabStrip::close_tab_stop`.
+    close_tab_stop: bool,
     busy: fn(&Kit) -> El,
     scroll_key: String,
     list_key: String,
@@ -312,6 +314,7 @@ pub struct TabStrip<'a, S: 'static> {
     drag: Option<(TabDragState, Access<S>)>,
     fill: Option<Color>,
     close_icon: Option<&'static Icon>,
+    close_tab_stop: bool,
     busy: fn(&Kit) -> El,
     label: String,
     handlers: Handlers<S>,
@@ -338,6 +341,7 @@ impl<'a, S: 'static> TabStrip<'a, S> {
             drag: None,
             fill: None,
             close_icon: None,
+            close_tab_stop: false,
             busy: busy_ring,
             label: "Tabs".into(),
             handlers: Handlers { select: None, close: None, double: None, hover: None, reorder: None, tear_out: None, tear_move: None },
@@ -429,6 +433,12 @@ impl<'a, S: 'static> TabStrip<'a, S> {
     /// The close button's glyph (default the kit's close glyph).
     pub fn close_icon(mut self, icon: &'static Icon) -> Self {
         self.close_icon = Some(icon);
+        self
+    }
+    /// Each tab's close button is a Tab stop after its tab with the kit's focus ring, as a web
+    /// page's `<button>` is. Off, it's pointer only: the strip's arrows move between tabs.
+    pub fn close_tab_stop(mut self, on: bool) -> Self {
+        self.close_tab_stop = on;
         self
     }
     /// What a busy tab shows (default the kit's spinner at 14 points).
@@ -531,6 +541,7 @@ impl<'a, S: 'static> TabStrip<'a, S> {
             horizontal_lock: !vertical,
             matched: self.matched.map(str::to_owned),
             close_icon: self.close_icon,
+            close_tab_stop: self.close_tab_stop,
             busy: self.busy,
             auto,
             scroll_key: format!("{}-scroll", self.key),
