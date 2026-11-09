@@ -98,10 +98,6 @@ pub(crate) use decorations::PaintedDeco;
 pub use span::{Ink, Link, LinkPaint, Span, TextHighlight};
 pub(crate) use span::{BareIcon, PillChip, PillMetrics, flatten_spans};
 
-/// Coverage exponents for black and for white text with font smoothing off: the curve Skia's
-/// text gamma (sRGB, contrast 1) draws grayscale text with, for outlines rasterised elsewhere.
-const TEXT_GAMMA: [f32; 2] = [1.12, 0.45];
-
 use decorations::Decoration;
 use atlas::{AtlasGlyph, COLOR_GLYPH_BUDGET, ColorGlyph, GlyphKey, GlyphMap, Rasterized};
 #[cfg(test)]
@@ -446,20 +442,12 @@ impl TextSystem {
             .collect()
     }
 
-    /// The exponent a glyph's coverage is raised to when drawn in premultiplied `fill`. With
-    /// smoothing off (the default on Linux and the web) it stands in for the text gamma a browser's
-    /// grayscale antialiasing applies there: light text on a dark page draws heavier and dark
-    /// text on a light one a little lighter than coverage blended as is, keyed by the text's
-    /// luminance. With smoothing on, CoreText's dilation does that job, and with DirectWrite Skia's
-    /// gamma tables do; coverage is drawn as is.
+    /// The exponent a glyph's coverage is raised to when drawn in premultiplied `fill` on this
+    /// platform: 1 (coverage as is) on macOS and iOS, and a browser's text gamma for `Off`
+    /// elsewhere.
     pub fn coverage_exponent(&self, fill: [f32; 4]) -> f32 {
-        // DirectWrite masks already carry Skia's gamma for their text's luminance.
-        let direct_write = self.smoothing == FontSmoothing::DirectWrite && cfg!(target_os = "windows");
-        if matches!(self.smoothing, FontSmoothing::On | FontSmoothing::Windfoil) || direct_write || fill[3] <= 0.0 {
-            return 1.0;
-        }
-        let luma = (0.2126 * fill[0] + 0.7152 * fill[1] + 0.0722 * fill[2]) / fill[3];
-        TEXT_GAMMA[0] + (TEXT_GAMMA[1] - TEXT_GAMMA[0]) * luma.clamp(0.0, 1.0)
+        let apple = cfg!(any(target_os = "macos", target_os = "ios"));
+        coretext_match::coverage_exponent(self.smoothing, fill, apple, cfg!(target_os = "windows"))
     }
 
     /// Rasterise and place glyphs in `mode` from the next placement on, with its CoreGraphics

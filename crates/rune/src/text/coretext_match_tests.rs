@@ -77,6 +77,28 @@ fn each_mode_keys_its_own_glyphs_and_changes_the_pixels() {
     assert!(x_on.iter().zip(&x_off).all(|(a, b)| (a - b).abs() <= 1.0), "both modes floor pens to the same CoreGraphics steps: {x_on:?} {x_off:?}");
 }
 
+/// On macOS and iOS every mode draws coverage as is, as CoreText with smoothing off and
+/// browsers with `-webkit-font-smoothing: antialiased` do; elsewhere `Off` takes a browser's
+/// text gamma, heavier for light ink and a little lighter for dark.
+#[test]
+fn off_draws_coverage_as_is_on_apple_platforms() {
+    let inks = [[0.0, 0.0, 0.0, 1.0], [0.11, 0.12, 0.13, 1.0], [0.9, 0.9, 0.9, 1.0], [1.0, 1.0, 1.0, 1.0], [0.4, 0.4, 0.4, 0.5]];
+    for mode in [FontSmoothing::On, FontSmoothing::Off, FontSmoothing::DirectWrite, FontSmoothing::Windfoil] {
+        for fill in inks {
+            assert_eq!(coverage_exponent(mode, fill, true, false), 1.0, "{mode:?} {fill:?} on macOS");
+        }
+    }
+    let off = |fill| coverage_exponent(FontSmoothing::Off, fill, false, false);
+    assert!(off([0.0, 0.0, 0.0, 1.0]) > 1.0 && off([1.0, 1.0, 1.0, 1.0]) < 1.0, "Off elsewhere takes the gamma");
+    assert_eq!(coverage_exponent(FontSmoothing::On, [1.0; 4], false, false), 1.0);
+    assert_eq!(coverage_exponent(FontSmoothing::DirectWrite, [1.0; 4], false, true), 1.0, "DirectWrite masks carry their own gamma");
+    if cfg!(any(target_os = "macos", target_os = "ios")) {
+        let mut text = TextSystem::default();
+        text.set_font_smoothing(FontSmoothing::Off);
+        assert_eq!(text.coverage_exponent([0.9, 0.9, 0.9, 1.0]), 1.0, "a window on this Mac draws Off as is");
+    }
+}
+
 /// `Tx::set_font_smoothing` switches a running window: the next frame rasterises the new
 /// mode's glyphs and draws them; asking for the current mode asks for no frame.
 #[test]
