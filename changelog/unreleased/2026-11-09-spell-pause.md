@@ -1,0 +1,1 @@
+- **A spellchecked field marks the word being typed once typing pauses, as Chromium does.** The word the caret is typing waits unmarked until a second after the last keystroke (Chromium's idle spell checker runs its full check then), and moving the caret without typing marks the word it leaves at once. The wait is an explicit machine (`spell::pause`).

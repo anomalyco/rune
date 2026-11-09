@@ -758,6 +758,8 @@ pub struct Runtime<S: 'static> {
     live_wake: Arc<crate::live::Wake>,
     live_clock: Arc<()>,
     window_focused: Option<bool>,
+    /// The focused spellchecked field's word at the caret (`spell::pause`).
+    spell_watch: Option<crate::spell::pause::Watch>,
     /// `keys_lost` queued its `FocusLost` since the window last had focus.
     keys_lost: bool,
     live_subscriptions: Vec<Arc<crate::live::Subscription>>,
@@ -1066,6 +1068,7 @@ impl<S: 'static> Runtime<S> {
             videos_active: false,
             video_signature: 0,
             window_focused: None,
+            spell_watch: None,
             keys_lost: false,
             on_focus: None,
             on_mods: None,
