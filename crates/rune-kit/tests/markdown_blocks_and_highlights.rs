@@ -119,7 +119,7 @@ fn block_keys_fallback_nested_and_selectable() {
     rt.frame(1.0 / 60.0);
     rt.key(rune::KeyEvent { key: rune::Key::Command('c'), mods: cmd });
     rt.frame(1.0 / 60.0);
-    assert_eq!(rt.copy_request.as_deref(), Some("Heading\nQuoted one\nQuoted two\nParagraph three"));
+    assert_eq!(rt.copy_request.as_deref(), Some("Heading\n\nQuoted one\n\nQuoted two\n\nParagraph three"));
 }
 
 #[test]
