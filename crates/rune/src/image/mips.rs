@@ -69,7 +69,7 @@ impl<'a> MipSteps<'a> {
         }
     }
 
-    pub(super) fn finish(self) -> Decoded { Decoded { mips: self.mips } }
+    pub(super) fn finish(self) -> Decoded { Decoded { mips: self.mips, motion: None } }
 }
 
 /// Rows `rows` of `w`×`h` RGBA8 `src` halved by area, appended to `out`, summing `linear`

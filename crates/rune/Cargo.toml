@@ -30,6 +30,11 @@ ogg-audio = ["dep:symphonia", "dep:opuscule"]
 # SVG and SVGZ images (`ImageCache::svg`, `file`, `load_mime`, and `load` on sniffed SVG bytes), and
 # scalable Linux app icons, rasterized by resvg. Off, those images resolve to `Image::error`.
 svg = ["dep:resvg"]
+# AVIF images (`ImageCache::load` on AVIF bytes), decoded natively by rav1d, a Rust port of
+# dav1d; an animated AVIF shows its first frame. Building it for x86 needs NASM on the PATH for
+# rav1d's assembly. Off, AVIF bytes resolve to `Image::error`. No effect on web, where the
+# browser decodes AVIF.
+avif = ["dep:avif-decode"]
 # Linux desktop services over D-Bus (zbus, with a tokio runtime on each service's thread): the
 # desktop's light or dark preference (the Settings portal), the system tray (`Tray`), global
 # shortcuts on Wayland (the GlobalShortcuts portal) and, with `native-file-dialog`, the
@@ -89,8 +94,9 @@ libc = "0.2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "1"
-# JPEG decoding; a web build hands JPEG to the browser's codecs instead.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# JPEG, GIF, WebP, BMP and ICO decoding; a web build hands them to the browser's codecs instead.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
+avif-decode = { version = "3", optional = true }
 # Installed fonts by family name (`text::system_fonts::installed_family_files`): fontique's
 # DirectWrite, CoreText and fontconfig backends, in a collection apart from the app's, which
 # keeps system fonts off. Fontconfig opens at run time, so a build needs no headers for it.

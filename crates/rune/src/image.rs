@@ -23,7 +23,10 @@ pub(crate) struct Mip {
     pub pixels: Vec<u8>,
 }
 pub(crate) struct Decoded {
+    /// The image, or an animation's first frame.
     pub mips: Vec<Mip>,
+    /// An animation's other frames and timing.
+    pub motion: Option<Box<animated::Motion>>,
 }
 struct State {
     id: ImageId,
@@ -169,11 +172,14 @@ impl ImageCache {
         Self { entries: Mutex::new(HashMap::new()), jobs }
     }
 
-    /// PNG, JPEG, modern ICNS containing a PNG representation, or SVG (plain or gzipped SVGZ,
-    /// recognised by its content). An SVG rasterizes at twice its own size; use
+    /// PNG (APNG animates), JPEG, GIF and WebP (both animate), BMP, ICO, AVIF (with the `avif`
+    /// feature; its first frame), modern ICNS containing a PNG representation, or SVG (plain or
+    /// gzipped SVGZ, recognised by its content). An SVG rasterizes at twice its own size; use
     /// [`ImageCache::svg`] to rasterize it at the size it draws at. Legacy ICNS codecs return an
-    /// explicit error; callers can provide platform-decoded RGBA instead. On web the browser
-    /// decodes everything but PNG, SVG and ICNS, so WebP, AVIF and GIF's first frame load too.
+    /// explicit error; callers can provide platform-decoded RGBA instead. An animation decodes
+    /// every frame on the worker, and plays only while an element draws it in a shown window.
+    /// On web the browser decodes everything but PNG, SVG and ICNS, so GIF and WebP show their
+    /// first frame there.
     pub fn load(&self, bytes: impl Into<Arc<[u8]>>) -> Image {
         let bytes = bytes.into();
         let mut hash = blake3::Hasher::new();
@@ -615,7 +621,12 @@ fn decode(bytes: &[u8]) -> Result<Decoded, ImageError> {
         let (w, h, rgba) = svg_rgba(bytes, 0)?;
         return mip_chain(w, h, &rgba);
     }
+    if avif::is_avif(bytes) {
+        let (w, h, rgba) = avif::rgba(bytes)?;
+        return mip_chain(w, h, &rgba);
+    }
     let bytes = if bytes.starts_with(b"icns") { icns_png(bytes)? } else { bytes };
+    if let Some(animation) = animated::decode(bytes) { return animation; }
     use image::ImageDecoder;
     let error = |e: image::ImageError| ImageError(e.to_string());
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
@@ -661,6 +672,8 @@ fn icns_png(bytes: &[u8]) -> Result<&[u8], ImageError> {
     best.ok_or_else(invalid)
 }
 
+pub(crate) mod animated;
+mod avif;
 mod from_url;
 mod mips;
 use mips::mip_chain;
