@@ -6,9 +6,10 @@ use super::ApplePipeline;
 /// smoothing's dilation. Set app-wide with `App::font_smoothing`, or at run time with
 /// `Tx::set_font_smoothing`, which redraws with glyphs rasterised for the new mode.
 ///
-/// The default is [`FontSmoothing::On`] on macOS, [`FontSmoothing::DirectWrite`] on Windows and
-/// [`FontSmoothing::Off`] elsewhere (Linux, the web). `On` and `Off` work on any OS (they are
-/// arithmetic on outlines, not calls into CoreText). Either way the pipeline
+/// The default is [`FontSmoothing::On`] on macOS and in a Mac's browser, and
+/// [`FontSmoothing::Windfoil`] everywhere else (Windows, Linux, the web); every mode can be
+/// chosen on every OS. `On` and `Off` work on any OS (they are arithmetic on outlines, not calls
+/// into CoreText). Either way the pipeline
 /// floors pens to CoreGraphics' subpixel steps (`quantisation_steps`), flattens curves and
 /// hints small sizes as CoreGraphics does, and draws coverage as is. Windows blend in
 /// sRGB-encoded space, as CoreGraphics does, unless the app sets `App::srgb_blend`.
@@ -22,24 +23,38 @@ pub enum FontSmoothing {
     On,
     /// Text that matches CoreText with font smoothing off, which is what macOS browsers draw
     /// for `-webkit-font-smoothing: antialiased`: the pipeline without the dilation
-    /// ([`ApplePipeline::UNSMOOTHED`]). Lighter than `On`. The default on Linux, and on the web
-    /// other than in a Mac's browser.
+    /// ([`ApplePipeline::UNSMOOTHED`]). Lighter than `On`. Linux and the web other than a Mac's
+    /// browser drew with it before `Windfoil`.
     Off,
     /// Text that matches Chromium's on Windows: DirectWrite rasterises each glyph as Skia asks it
     /// to (the rendering mode the font's `gasp` table picks, its hints, grayscale antialiasing),
     /// pens sit on quarter pixels, and Skia's text gamma and contrast weigh the coverage by the
-    /// text's luminance. The default on Windows; elsewhere, without DirectWrite, it draws as `Off`.
+    /// text's luminance. Elsewhere, without DirectWrite, it draws as `Off`.
     DirectWrite,
-    /// Rune's own text, the same on every platform: each glyph's exact pixel coverage from its
-    /// outline (Windfoil's box filter), grown by CoreText's font smoothing dilation, so it has the
-    /// macOS weight, with coverage drawn as is. Text whose scale moves (zooms, presence scales,
-    /// text flights) draws straight from its outlines on the GPU, so it stays sharp and doesn't
-    /// change when it lands. Where the renderer can't draw outlines it draws as `On`.
+    /// Rune's own text, the same on every platform, and the default everywhere but macOS: each
+    /// glyph's exact pixel coverage from its outline (Windfoil's box filter), grown by CoreText's
+    /// font smoothing dilation (times `TEXT_WEIGHT`, so its ink matches CoreText's), with
+    /// coverage drawn as is and pens on quarter pixels. Masks at rest are filled on the GPU by the
+    /// shader that draws text whose scale moves (zooms, presence scales, text flights) straight
+    /// from its outlines, so it stays sharp and doesn't change when it lands. Where the renderer
+    /// can't draw outlines, the CPU fills the same masks and moving text draws from them.
     Windfoil,
 }
 
 impl Default for FontSmoothing {
     fn default() -> Self {
+        match FontSmoothing::classic() {
+            FontSmoothing::On => FontSmoothing::On,
+            _ => FontSmoothing::Windfoil,
+        }
+    }
+}
+
+impl FontSmoothing {
+    /// The mode this OS drew with before `Windfoil`: `On` on macOS and in a Mac's browser,
+    /// `DirectWrite` on Windows and `Off` elsewhere. Where it's `On` it stays the default; an
+    /// app's setting offers it as the way back elsewhere.
+    pub fn classic() -> FontSmoothing {
         if cfg!(target_os = "macos") {
             FontSmoothing::On
         } else if cfg!(target_os = "windows") {

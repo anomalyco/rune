@@ -470,6 +470,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             surface.configure(&gpu.device, &config);
             let mut renderer = Renderer::new(&gpu.device, format);
             renderer.set_srgb_blend(!format.is_srgb());
+            renderer.attach_text(&mut rt.text.atlas);
             let cursor = crate::cursor::os::OsCursor::new(event_loop);
             let input = input::Bridge::new(&window.canvas().unwrap(), Rc::downgrade(&self.running), window.clone(),
                 input::Mode { embedded: self.embedded, fit_height, document });

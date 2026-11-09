@@ -11,7 +11,8 @@ pub(crate) const WIDTH: u32 = 1024;
 /// Rows the store may fill (64 MB of texels) before it starts again.
 const MAX_ROWS: u32 = 4096;
 
-/// A glyph outline: font, face index, glyph, variation coordinates and synthetic oblique.
+/// A glyph outline: font, face index, glyph, variation coordinates, synthetic oblique, and the
+/// ppem its TrueType hints ran at (f32 bits; 0 for the design outline).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Key {
     pub font: u64,
@@ -19,6 +20,7 @@ pub(crate) struct Key {
     pub glyph: u32,
     pub coords: u64,
     pub skew: u8,
+    pub hinted: u32,
 }
 
 /// Where a glyph's record starts, its ink box in font units (x0, y0, x1, y1, y up) and the
@@ -126,15 +128,21 @@ impl OutlineStore {
     }
 
     /// Starts again when a record didn't fit last frame, unless glyphs drawn earlier must stay
-    /// (`pinned`). Records are valid until then.
-    pub(crate) fn begin_frame(&mut self, pinned: bool) {
+    /// (`pinned`); whether it did. Records are valid until then.
+    pub(crate) fn begin_frame(&mut self, pinned: bool) -> bool {
         if !self.full || pinned {
-            return;
+            return false;
         }
         self.full = false;
         self.used = 1;
         self.glyphs.clear();
         self.hints.clear();
+        true
+    }
+
+    /// Texel `i`, zero past the end.
+    pub(crate) fn texel(&self, i: u32) -> [u32; 4] {
+        self.texels.get(i as usize).copied().unwrap_or_default()
     }
 
     /// Whether any glyph has been drawn from its outline.

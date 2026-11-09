@@ -14,7 +14,7 @@ fn outline_texel(i: u32) -> vec4<u32> {
 
 // The move of a piece's code in radii: x in -1..1, y in 0..2.
 fn outline_move(code: u32) -> vec2<f32> {
-    return vec2<f32>(f32(code / 3u) - 1.0, f32(code % 3u));
+    return vec2<f32>(f32(code & 3u) - 1.0, f32((code >> 2u) & 3u));
 }
 
 // CoreGraphics' y autohint (`HintTransform::apply`): values [-d, lo, x, xt] [middle, mt, cap, ct]

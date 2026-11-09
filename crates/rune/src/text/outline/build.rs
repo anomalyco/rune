@@ -30,10 +30,10 @@ pub(crate) struct Built {
     pub upem: f32,
 }
 
-/// Builds `commands` (font units, y up) leaning `skew` (tan of the oblique angle), or None for
-/// an empty outline.
-pub(crate) fn build(commands: impl Iterator<Item = Command>, skew: f64) -> Option<Built> {
-    let contours = contours(commands, skew);
+/// Builds `commands` (y up, `unit` font units each) leaning `skew` (tan of the oblique angle),
+/// or None for an empty outline.
+pub(crate) fn build(commands: impl Iterator<Item = Command>, unit: f64, skew: f64) -> Option<Built> {
+    let contours = contours(commands, unit, skew);
     if contours.iter().all(|c| c.is_empty()) {
         return None;
     }
@@ -63,8 +63,8 @@ impl Element {
 /// The contours of `commands` as quads, cubics split into quads within a tenth of a font unit,
 /// each closed by a line back to its start. That line has zero length where the contour already
 /// ends on its start, and stays: CoreGraphics' dilator emits it too.
-fn contours(commands: impl Iterator<Item = Command>, skew: f64) -> Vec<Vec<Quad>> {
-    let p = |v: swash::zeno::Point| [v.x as f64 + v.y as f64 * skew, v.y as f64];
+fn contours(commands: impl Iterator<Item = Command>, unit: f64, skew: f64) -> Vec<Vec<Quad>> {
+    let p = |v: swash::zeno::Point| [(v.x as f64 + v.y as f64 * skew) * unit, v.y as f64 * unit];
     let mut out: Vec<Vec<Quad>> = Vec::new();
     let (mut cur, mut start, mut open) = ([0.0; 2], [0.0; 2], false);
     let close = |out: &mut Vec<Vec<Quad>>, cur: [f64; 2], start: [f64; 2]| {
@@ -192,9 +192,10 @@ fn dilation_elements(contour: &[Quad], out: &mut Vec<Element>) {
     }
 }
 
-/// The move code of x step `x` (-1..=1) and y step `y` (0..=2), in r.
+/// The move code of x step `x` (-1..=1) and y step `y` (0..=2), in r: `x + 1` in bits 0-1, `y`
+/// in bits 2-3.
 fn code(x: i32, y: i32) -> u32 {
-    ((x + 1) * 3 + y) as u32
+    ((x + 1) | y << 2) as u32
 }
 
 /// CoreGraphics' move for a piece: its x by the sign of its y travel, its y up by r less r times

@@ -26,6 +26,8 @@ use crate::color::Color;
 use crate::tok::{Family, OpticalSize, TextStyle};
 
 mod atlas;
+mod atlas_fill;
+pub(crate) use atlas_fill::QueuedFill;
 mod case;
 mod color_icon;
 mod cursor;
@@ -67,6 +69,7 @@ mod svg_path;
 mod trak;
 mod underline;
 mod line_metrics;
+mod windfoil;
 pub use line_metrics::{last_line_fill, layout_height, stream_height_lag};
 pub(crate) use line_metrics::spec_height;
 pub(crate) use underline::underline_edges;
@@ -206,8 +209,8 @@ pub struct TextSystem {
     emit: outline::Emit,
     /// Each painted text's raster path (`outline::RasterPath`), by node.
     paths: outline::Paths,
-    /// Whether each face (font, index) has colour glyphs, which outlines can't draw.
-    color_faces: FxHashMap<(u64, u32), bool>,
+    /// What each face (font, index) is, for drawing it from outlines.
+    face_kinds: FxHashMap<(u64, u32), windfoil::FaceKind>,
 }
 
 impl Default for TextSystem {
@@ -338,7 +341,7 @@ impl TextSystem {
             glide: [0.0; 2],
             emit: outline::Emit::Atlas,
             paths: Default::default(),
-            color_faces: Default::default(),
+            face_kinds: Default::default(),
         };
         text.load_installed(families.0);
         text.load_installed(families.1);
@@ -436,14 +439,14 @@ impl TextSystem {
     pub fn font_smoothing(&self) -> FontSmoothing { self.smoothing }
 
     /// How far each gliding glyph mask's ink sits below the top of its quad, in device px, keyed
-    /// as `blend::apron_key` keys its instance: a DirectWrite mask keeps one box across its y
+    /// as `blend::apron_key` keys its instance: a DirectWrite or Windfoil mask keeps one box across its y
     /// phases and moves its ink down that box by its phase, so the box moves a whole pixel only
     /// where the phase wraps. The motion gate's raster, which spreads a glyph over its quad,
     /// moves its coverage by this so a glide reads as the quarter-pixel steps it draws.
     pub(crate) fn glyph_shifts(&self) -> std::collections::HashMap<[u32; 3], f32> {
         self.atlas.map.iter()
-            .filter(|(k, _)| k.subpy != 0 && k.apple == glyph_emit::DIRECT_WRITE_KEY)
-            .filter_map(|(k, a)| a.map(|a| ([(a.x as f32).to_bits(), (a.y as f32).to_bits(), (a.page as f32).to_bits()], k.subpy as f32 / glyph_emit::GLIDE_PHASES as f32)))
+            .filter(|(k, _)| k.subpy != 0 && matches!(k.apple, glyph_emit::DIRECT_WRITE_KEY | glyph_emit::WINDFOIL_KEY))
+            .filter_map(|(k, a)| a.mask().map(|a| ([(a.x as f32).to_bits(), (a.y as f32).to_bits(), (a.page as f32).to_bits()], k.subpy as f32 / glyph_emit::GLIDE_PHASES as f32)))
             .collect()
     }
 
@@ -478,8 +481,6 @@ impl TextSystem {
 
     pub(crate) fn begin_frame_pinned(&mut self, pinned_mask: u32) {
         self.atlas.begin_frame(pinned_mask);
-        // A text flight's glyphs keep their outline records until it lands.
-        self.atlas.outlines.begin_frame(pinned_mask != 0);
         self.paths.begin_frame();
         self.glyph_cache.begin_frame();
         if self.color_bytes > COLOR_GLYPH_BUDGET {

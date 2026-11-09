@@ -14,7 +14,10 @@ const PARAGRAPH: &str = "Windfoil integrates each glyph's outline over the pixel
 zooms, scrolls or turns stays as sharp as text at rest. Quick zephyrs blow, vexing daft Jim; \
 0123456789 (){}[] -> => != <= Ag Wa To fi fl ff — “quotes” ‘and’ «more».";
 
+const CJK: &str = "文字は輪郭から直接描かれ、拡大しても鮮明です。中文排版测试：汉字笔画清晰度。한국어 글꼴 테스트입니다. نص عربي للاختبار والتجربة";
+
 struct State {
+    content: &'static str,
     zoom: Live<f32>,
     scroll: f32,
     lines: usize,
@@ -33,7 +36,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             2 => TextStyle::new(s.size * 1.25, 600.0),
             _ => TextStyle::new(s.size * 0.85, 400.0),
         };
-        body = body.child(text(PARAGRAPH).font(style).color(fg).w_full());
+        body = body.child(text(s.content).font(style).color(fg).w_full());
     }
     el().w_full().h_full().fill(bg).padding(16.0).child(
         el().key("canvas").w_full().live_scale(&s.zoom).offset(0.0, -s.scroll).child(body),
@@ -56,7 +59,8 @@ fn snap(gpu: &Gpu, renderer: &mut Renderer, rt: &mut Runtime<State>, out: &Offsc
 }
 
 fn runtime(scale: f32, size: (f32, f32), lines: usize, dark: bool) -> Runtime<State> {
-    let state = State { zoom: Live::new(1.0), scroll: 0.0, lines, size: 13.0, dark };
+    let content = if std::env::args().any(|a| a == "cjk") { CJK } else { PARAGRAPH };
+    let state = State { content, zoom: Live::new(1.0), scroll: 0.0, lines, size: 13.0, dark };
     Runtime::with_text(state, view, size, Env::new(dark, scale), TextSystem::default())
 }
 
@@ -80,7 +84,13 @@ fn main() {
                 if let Some(mode) = args.get(3) { rt.set_font_smoothing(match mode.as_str() { "on" => rune::FontSmoothing::On, "windfoil" => rune::FontSmoothing::Windfoil, "off" => rune::FontSmoothing::Off, _ => rune::FontSmoothing::DirectWrite }); }
                 let zoom = rt.state.zoom.clone();
                 let tag = if dark { "dark" } else { "light" };
+                // `gpu`: the renderer says first that it fills masks, so the first frame's are GPU-filled.
+                if args.get(5).is_some_and(|a| a == "gpu") {
+                    renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &[], (out.width, out.height));
+                }
+                let t0 = std::time::Instant::now();
                 rt.frame(0.0);
+                println!("first frame {:.2} ms", t0.elapsed().as_secs_f64() * 1000.0);
                 snap(&gpu, &mut renderer, &mut rt, &out, &dir.join(format!("rest-{tag}.png")));
                 println!("at rest: shader {}", renderer.uber_shader());
                 for (i, k) in [1.0f32, 1.06, 1.3, 1.6, 2f32.powf(0.25), std::f32::consts::SQRT_2].iter().enumerate() {
@@ -95,12 +105,12 @@ fn main() {
                 }
             }
         }
-        Some("perf") => perf(args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1.5)),
+        Some("perf") => perf(args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1.5), args.get(2).map(String::as_str)),
         _ => eprintln!("usage: text_gpu snap <dir> [scale] | perf [scale]"),
     }
 }
 
-fn perf(scale: f32) {
+fn perf(scale: f32, mode: Option<&str>) {
     let gpu = Gpu::try_with_features(Gpu::instance(), None, wgpu::Features::TIMESTAMP_QUERY).expect("a GPU with timestamp queries");
     let info = gpu.adapter.get_info();
     let size = (2560.0 / scale, 1440.0 / scale);
@@ -110,7 +120,9 @@ fn perf(scale: f32) {
     let read = gpu.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
     let period = gpu.queue.get_timestamp_period() as f64;
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
-    let mut rt = runtime(scale, size, 48, false);
+    // `empty`: the same frame without its text, so the text's own cost is the difference.
+    let mut rt = runtime(scale, size, if mode == Some("empty") { 0 } else { 48 }, false);
+    if let Some(mode) = mode { rt.set_font_smoothing(match mode { "on" => rune::FontSmoothing::On, "directwrite" => rune::FontSmoothing::DirectWrite, "off" => rune::FontSmoothing::Off, _ => rune::FontSmoothing::Windfoil }); }
     let zoom = rt.state.zoom.clone();
     rt.frame(0.0);
     for _ in 0..10 { rt.frame(1.0 / 120.0); }
@@ -139,8 +151,8 @@ fn perf(scale: f32) {
     rt.state.scroll = 0.0;
     rt.invalidate();
     let zooming = measure(&mut rt, &mut renderer, &mut |_, f| { zoom.set(1.0 + 0.25 * ((f as f32) * 0.05).sin().abs()); });
-    println!("adapter={} backend={:?} scale={scale} glyphs={glyphs}", info.name, info.backend);
+    println!("adapter={} backend={:?} scale={scale} mode={mode:?} glyphs={glyphs} shader={}", info.name, info.backend, renderer.uber_shader());
     for (name, (median, p90, outlines)) in [("still", still), ("scroll", scroll), ("zoom", zooming)] {
-        println!("METRIC case={name} scale={scale} median_ms={median:.4} p90_ms={p90:.4} outline_glyphs={outlines}");
+        println!("METRIC case={name} scale={scale} mode={} median_ms={median:.4} p90_ms={p90:.4} outline_glyphs={outlines}", mode.unwrap_or("default"));
     }
 }

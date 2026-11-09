@@ -52,8 +52,8 @@ pub(crate) enum Source {
 pub(super) enum Uber {
     /// shader.wgsl alone, and no outline store.
     Classic,
-    /// shader.wgsl and outline.wgsl, with the outline store's texture.
-    Windfoil { source: Source, outlines: wgpu::Texture },
+    /// shader.wgsl and outline.wgsl, with the outline store's texture and the atlas fill pass.
+    Windfoil { source: Source, outlines: wgpu::Texture, fill: fill::FillPass },
     /// Windfoil was asked for and couldn't be built: Classic from now on.
     Unavailable,
 }
@@ -62,7 +62,7 @@ pub(super) enum Event {
     /// Text drew glyphs from outlines.
     OutlinesWanted,
     /// Windfoil's pipeline was built.
-    Built { source: Source, outlines: wgpu::Texture },
+    Built { source: Source, outlines: wgpu::Texture, fill: fill::FillPass },
     /// Windfoil's pipeline couldn't be built, and why.
     Refused(String),
 }
@@ -79,8 +79,8 @@ impl Uber {
     pub(super) fn step(&mut self, event: Event) -> Effects<Effect> {
         match (&*self, event) {
             (Uber::Classic, Event::OutlinesWanted) => Effects::one(Effect::Build),
-            (Uber::Classic, Event::Built { source, outlines }) => {
-                *self = Uber::Windfoil { source, outlines };
+            (Uber::Classic, Event::Built { source, outlines, fill }) => {
+                *self = Uber::Windfoil { source, outlines, fill };
                 Effects::none()
             }
             (Uber::Classic, Event::Refused(why)) => {
@@ -109,6 +109,14 @@ impl Uber {
     }
 }
 
+/// What building Windfoil needs from its renderer.
+pub(super) struct BuildContext<'a> {
+    pub format: wgpu::TextureFormat,
+    pub vertex_entry: &'static str,
+    pub globals: &'a wgpu::Buffer,
+    pub stand_in: &'a wgpu::Texture,
+}
+
 /// A built Windfoil: its layouts, shader and frame pipeline.
 pub(super) struct Built {
     pub bind_layout: wgpu::BindGroupLayout,
@@ -131,18 +139,28 @@ impl Renderer {
         }
     }
 
+    /// Tells `atlas` what this renderer does with outlines (`text::outline::Support`) before it
+    /// first draws, so the first frame's glyph masks are queued for the GPU fill rather than
+    /// filled on the CPU. `prepare` tells it again every frame.
+    pub fn attach_text(&self, atlas: &mut Atlas) {
+        atlas.outlines.set_support(self.uber.support());
+    }
+
     /// Steps the shader machine `state` on `event`, carrying out each effect (building Windfoil
     /// feeds `Built` or `Refused` back in) until none is left; with the Windfoil pipeline it
     /// built on the way, if it built one.
-    fn run(device: &wgpu::Device, format: wgpu::TextureFormat, vertex_entry: &'static str, state: &mut Uber, event: Event) -> Option<Built> {
+    fn run(device: &wgpu::Device, cx: &BuildContext<'_>, state: &mut Uber, event: Event) -> Option<Built> {
         let mut built = None;
         let mut queue: Vec<Effect> = state.step(event).into_iter().collect();
         while let Some(effect) = queue.pop() {
             match effect {
                 Effect::Build => {
-                    let next = match Self::build_windfoil(device, format, vertex_entry) {
+                    let next = match Self::build_windfoil(device, cx.format, cx.vertex_entry) {
                         Ok(b) => {
-                            let event = Event::Built { source: b.source, outlines: Self::outline_texture(device, outlines::MIN_ROWS) };
+                            let outlines = Self::outline_texture(device, outlines::MIN_ROWS);
+                            let fill = fill::FillPass::new(device, &b.layout, &b.shader, fill::FillBindings {
+                                layout: &b.bind_layout, globals: cx.globals, outlines: &outlines, stand_in: cx.stand_in });
+                            let event = Event::Built { source: b.source, outlines, fill };
                             built = Some(b);
                             event
                         }
@@ -156,18 +174,22 @@ impl Renderer {
         built
     }
     /// A new renderer's shader machine, asked for Windfoil at once.
-    pub(super) fn start_windfoil(device: &wgpu::Device, format: wgpu::TextureFormat, vertex_entry: &'static str) -> (Uber, Option<Built>) {
+    pub(super) fn start_windfoil(device: &wgpu::Device, cx: &BuildContext<'_>) -> (Uber, Option<Built>) {
         let mut state = Uber::Classic;
-        let built = Self::run(device, format, vertex_entry, &mut state, Event::OutlinesWanted);
+        let built = Self::run(device, cx, &mut state, Event::OutlinesWanted);
         (state, built)
     }
 
-    /// Steps this renderer's shader machine on `event`, taking any Windfoil pipeline it builds.
-    pub(super) fn select(&mut self, device: &wgpu::Device, event: Event) {
-        if let Some(built) = Self::run(device, self.format, self.vertex_entry, &mut self.uber, event) {
+    /// Steps this renderer's shader machine on `event`, taking any Windfoil pipeline it builds;
+    /// whether it took one (the caller then makes its atlas pages ones the GPU can fill).
+    pub(super) fn select(&mut self, device: &wgpu::Device, event: Event) -> bool {
+        let cx = BuildContext { format: self.format, vertex_entry: self.vertex_entry, globals: &self.globals, stand_in: &self.stand_in };
+        if let Some(built) = Self::run(device, &cx, &mut self.uber, event) {
             self.adopt(device, built);
             self.rebind_all(device);
+            return true;
         }
+        false
     }
 
     /// Windfoil's layouts, shader and pipeline for `format`, from the shipped bytecode where it

@@ -7,6 +7,7 @@ use crate::text::{ATLAS_SIZE, Atlas};
 
 mod backdrop_blur;
 mod dxbc;
+mod fill;
 mod first_use;
 pub(crate) mod gpu_events;
 pub(crate) mod layer_blur;
@@ -789,7 +790,6 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let atlas = Self::texture(device, "glyph atlas", wgpu::TextureFormat::R8Unorm, ATLAS_SIZE, ATLAS_SIZE);
         let stand_in = Self::image_texture(device, 1, 1);
         let spring_layout = properties.map(|_| crate::gpu::springs::Bindings::layout(device));
         let vertex_entry = if properties.is_some() { "vs_springs" } else { "vs" };
@@ -798,8 +798,9 @@ impl Renderer {
         let (uber, windfoil) = if classic {
             (variant::Uber::Classic, None)
         } else {
-            Self::start_windfoil(device, format, vertex_entry)
+            Self::start_windfoil(device, &variant::BuildContext { format, vertex_entry, globals: &globals, stand_in: &stand_in })
         };
+        let atlas = Self::atlas_texture(device, windfoil.is_some());
         let (bgl, layout, shader, pipeline) = match windfoil {
             Some(built) => (built.bind_layout, built.layout, built.shader, built.pipeline),
             None => {
