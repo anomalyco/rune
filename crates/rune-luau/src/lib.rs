@@ -71,6 +71,7 @@ pub use ui::default_palette;
 pub use ui::host::Handler;
 pub use ui::host::HostNode;
 pub use ui::host::NodeArgs;
+pub use ui::host::Press;
 pub use ui::host::Prop;
 pub use ui::props::prop_names;
 pub use vm::Host;
