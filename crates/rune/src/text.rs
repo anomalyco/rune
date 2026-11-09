@@ -53,6 +53,7 @@ mod glyph_cache;
 mod glyph_emit;
 mod hash;
 mod hidden_axes;
+mod inline_fit;
 pub(crate) mod icon;
 mod layout_cache;
 mod macos;
@@ -377,6 +378,14 @@ impl TextSystem {
         axes
     }
 
+    /// The ascent and descent per em of the font text in `family` at `weight` shapes with first.
+    fn primary_extents(&mut self, family: Family, weight: f32, italic: bool) -> Option<(f32, f32)> {
+        let font = self.primary_font(family, weight, italic)?;
+        let m = FontRef::from_index(font.blob.as_ref(), font.index as usize)?.metrics(&[]);
+        let em = f32::from(m.units_per_em.max(1));
+        Some((m.ascent / em, m.descent / em))
+    }
+
     /// The font text in `family` at `weight` shapes with first.
     fn primary_font(&mut self, family: Family, weight: f32, italic: bool) -> Option<parley::fontique::QueryFont> {
         if family == Family::SystemMono || self.slot_system_mono {
@@ -650,6 +659,8 @@ impl TextSystem {
             .collect();
         // Each style range's predicted first font at its weight, drawn at its named instance.
         let base_axes = self.primary_axes(style.family, style.weight, style.italic);
+        // The strut inline code keeps inside (`inline_fit`).
+        let strut = if mono_style || !spans.iter().any(|s| s.mono) { None } else { self.primary_extents(style.family, style.weight, style.italic) };
         let span_axes: Vec<Rc<[parley::FontVariation]>> = spans
             .iter()
             .map(|s| {
@@ -716,7 +727,7 @@ impl TextSystem {
         let off = [b"liga", b"clig", b"calt", b"dlig"].map(|tag| parley::FontFeature::new(parley::setting::Tag::new(tag), 0));
         let unligated: Vec<parley::FontFeature> = features.iter().chain(&off).copied().collect();
         type Spacings = [(std::ops::Range<usize>, f32)];
-        let build = |lcx: &mut LayoutContext<Ink>, fcx: &mut FontContext, exact: &Spacings, widen: &Spacings, weights: &Spacings| {
+        let build = |lcx: &mut LayoutContext<Ink>, fcx: &mut FontContext, exact: &Spacings, widen: &Spacings, weights: &Spacings, fits: &Spacings| {
             let mut b = lcx.ranged_builder(fcx, text, scale, true);
             b.set_base_direction(base);
             // Lines break where Chromium breaks them: after every run of spaces, even before a
@@ -789,6 +800,9 @@ impl TextSystem {
             for (range, w) in weights {
                 b.push(StyleProperty::FontWeight(FontWeight::new(*w)), range.clone());
             }
+            for (range, lh) in fits {
+                b.push(LineHeight::Absolute(*lh), range.clone());
+            }
             for (range, stack) in &routed {
                 b.push(FontFamily::from(stacks[*stack].as_deref().unwrap_or_default()), range.clone());
             }
@@ -818,7 +832,7 @@ impl TextSystem {
             break_lines(&mut layout);
             layout
         };
-        let mut layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen, &[]);
+        let mut layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen, &[], &[]);
         // On Windows, system faces as DirectWrite picks them for each run's weight, as Chromium.
         let weights = if cfg!(target_os = "windows") && !text.is_ascii() {
             let wanted = |at: usize| spans.iter().rev().find_map(|s| s.weight.filter(|_| span_range(s).contains(&at))).unwrap_or(style.weight);
@@ -827,7 +841,12 @@ impl TextSystem {
             Vec::new()
         };
         if !weights.is_empty() {
-            layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen, &weights);
+            layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen, &weights, &[]);
+        }
+        // Inline code keeps inside the line box its text sets, as a browser's does.
+        let fits = strut.map_or_else(Vec::new, |strut| inline_fit::mono_fits(&layout, text, spans, style, scale, strut));
+        if !fits.is_empty() {
+            layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen, &weights, &fits);
         }
         // The spacing each run got, against the spacing its own font needs.
         let given = |at: usize| {
@@ -852,7 +871,7 @@ impl TextSystem {
             }
         }
         if mismatch {
-            layout = build(&mut self.layout_cx, &mut self.font_cx, &exact, &widen, &weights);
+            layout = build(&mut self.layout_cx, &mut self.font_cx, &exact, &widen, &weights, &fits);
         }
         layout.align(align, AlignmentOptions::default());
         let l = Rc::new(layout);
