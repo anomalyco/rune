@@ -102,11 +102,11 @@ fn a_highlighter_gets_each_fence_language_as_written() {
 #[test]
 fn without_a_highlighter_the_output_is_the_builtin_ones() {
     let style = MarkdownStyle::neutral(false);
-    let src = "```ts\nconst a = 1;\n```\n\n```\nplain\n```\n\n```kotlin\nval x = 1\n```";
+    let src = "```ts\nconst a = 1;\n```\n\n```\nplain\n```\n\n```cobol\nMOVE 1 TO X\n```";
     let got = spans(src, &style);
     let k = |s| style.syntax.color(s);
     let ts: Vec<_> = got[0].1.iter().map(|s| (s.start, s.end, s.color.unwrap())).collect();
-    assert_eq!(ts, [(0, 5, k(Syntax::Keyword)), (8, 9, k(Syntax::Punctuation)), (10, 11, k(Syntax::Number)), (11, 12, k(Syntax::Punctuation))]);
+    assert_eq!(ts, [(0, 6, k(Syntax::Keyword)), (6, 8, k(Syntax::Variable)), (8, 10, k(Syntax::Operator)), (10, 11, k(Syntax::Number)), (11, 12, k(Syntax::Punctuation))]);
     assert!(got[1].1.is_empty() && got[2].1.is_empty());
     let h = Highlighter::new(|_, _| panic!("colour is off"));
     assert!(spans_with(src, &style.clone().syntax_highlight(false), h).iter().all(|(_, s)| s.is_empty()));

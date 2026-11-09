@@ -1,0 +1,16 @@
+[package]
+name = "rune-highlights"
+version = "0.0.1"
+edition.workspace = true
+license = "MIT AND Apache-2.0"
+description = "Pierre's Highlights (the code highlighter OpenCode's desktop app draws with), translated from its WebAssembly to Rust at build time: 80 languages, the same tokens, no runtime."
+
+[dependencies]
+# Identifier characters for the lexers' `is_id_start` and `is_id_continue` imports.
+unicode-ident = "1"
+
+[build-dependencies]
+wasmparser = { version = "0.245", default-features = false, features = ["std", "simd"] }
+
+[lints]
+workspace = true

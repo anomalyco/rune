@@ -384,7 +384,7 @@ impl Markdown {
         self
     }
 
-    /// Colours code blocks with `f` instead of the built-in scanners: it gets a fence's language
+    /// Colours code blocks with `f` instead of the built-in highlighter: it gets a fence's language
     /// as written (its info string's first word; `None` for an indented block or a bare fence)
     /// and the code, and returns byte ranges of the code with a token kind, which the style's
     /// [`SyntaxTheme`] colours, or a colour of its own. See [`Highlighter`] for caching, and
@@ -392,7 +392,7 @@ impl Markdown {
     ///
     /// ```ignore
     /// Markdown::new(src).highlight(|lang, code| match lang {
-    ///     Some("kotlin") => my_kotlin(code),
+    ///     Some("cobol") => my_cobol(code),
     ///     _ => rune_kit::syntax::builtin(lang, code),
     /// })
     /// ```

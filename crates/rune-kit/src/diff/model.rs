@@ -244,14 +244,10 @@ impl FileDiff {
         self.hunks.iter().flat_map(|h| &h.lines).filter(|l| l.kind == LineKind::Removed).count()
     }
 
-    /// The highlighter language for the path's extension (or name, for a `Makefile`), as
-    /// written: `"rs"`, `"tsx"`.
+    /// The highlighter language for the path, as Desktop names it from the file name
+    /// ([`lang_for_path`](crate::syntax::lang_for_path)): `"rust"`, `"tsx"`, `"makefile"`.
     pub fn language(&self) -> Option<&str> {
-        let name = self.path().rsplit('/').next()?;
-        match name.rsplit_once('.') {
-            Some((stem, ext)) if !stem.is_empty() => Some(ext),
-            _ => Some(name).filter(|n| matches!(*n, "Makefile" | "Dockerfile")),
-        }
+        crate::syntax::lang_for_path(self.path())
     }
 
     /// Whether the unchanged lines between hunks can be shown.
@@ -901,9 +897,9 @@ mod tests {
     #[test]
     fn languages_come_from_the_extension() {
         let f = |p: &str| FileDiff::from_texts(p, "", "x").language().map(str::to_owned);
-        assert_eq!(f("src/lib.rs").as_deref(), Some("rs"));
+        assert_eq!(f("src/lib.rs").as_deref(), Some("rust"));
         assert_eq!(f("web/App.tsx").as_deref(), Some("tsx"));
         assert_eq!(f(".gitignore"), None);
-        assert_eq!(f("Makefile").as_deref(), Some("Makefile"));
+        assert_eq!(f("Makefile").as_deref(), Some("makefile"));
     }
 }
