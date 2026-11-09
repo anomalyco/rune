@@ -98,7 +98,7 @@ impl Native {
         if descriptions.iter().any(|d| d.location == Location::Dock) { install_dock_hook(&app)?; }
         // Construct all targets before removing the previous snapshot.
         let prepared: Vec<_> = descriptions.iter().map(|d| {
-            if d.separator { return (d.location.clone(), NSMenuItem::separatorItem(self.mtm), None); }
+            if d.separator { return (d, NSMenuItem::separatorItem(self.mtm), None); }
             // SAFETY: NSObject initialization follows set_ivars; the main-thread target is
             // kept alive until its menu item is removed and its non-retaining target cleared.
             let target: Retained<MenuTarget> = msg_send_id![super(self.mtm.alloc().set_ivars(Action {
@@ -110,20 +110,24 @@ impl Native {
             item.setEnabled(d.enabled);
             item.setState(if d.checked { 1 } else { 0 });
             super::set_key_equivalent(&item, d.equivalent.as_ref());
-            (d.location.clone(), item, Some(target))
+            (d, item, Some(target))
         }).collect();
         self.clear();
         super::default_macos::adding(&app, || {
             let mut app_index = 0;
-            for (location, item, target) in prepared {
-                let menu = if location == Location::Dock {
+            // Items placed so far by id, and the last one placed after each anchor.
+            let mut placed: Vec<(&str, Retained<NSMenuItem>)> = Vec::new();
+            let mut chained: Vec<(&str, Retained<NSMenuItem>)> = Vec::new();
+            for (d, item, target) in prepared {
+                let location = &d.location;
+                let menu = if *location == Location::Dock {
                     DOCK.with(|slot| slot.borrow_mut().get_or_insert_with(|| NSMenu::new(self.mtm)).clone())
                 } else {
                     let root = super::ensure_default_menu(&app);
                     // An app-supplied empty root is preserved. Reserve its first slot for
                     // the app menu even when a named-menu item appears first in the snapshot.
                     if root.numberOfItems() == 0 { self.add_top(&root, "Application"); }
-                    match &location {
+                    match location {
                         Location::App => {
                             if let Some(first) = (root.numberOfItems() > 0).then(|| root.itemAtIndex(0)).flatten().and_then(|i| i.submenu()) { first }
                             else { self.add_top(&root, "Application") }
@@ -136,9 +140,14 @@ impl Native {
                         Location::Dock => unreachable!(),
                     }
                 };
-                // App items follow the app menu's About item, where AppKit apps list Check for
-                // Updates… and Settings…; an app menu without one takes them first.
-                if location == Location::App {
+                let anchor = d.after.as_deref().and_then(|a| anchor_index(&menu, a, &placed, &chained).map(|i| (a, i)));
+                if let Some((a, index)) = anchor {
+                    menu.insertItem_atIndex(&item, index + 1);
+                    chained.retain(|(c, _)| *c != a);
+                    chained.push((a, item.clone()));
+                } else if *location == Location::App {
+                    // App items follow the app menu's About item, where AppKit apps list Check
+                    // for Updates… and Settings…; an app menu without one takes them first.
                     let first = (menu.numberOfItems() > 0).then(|| menu.itemAtIndex(0)).flatten();
                     let about = first.and_then(|i| i.action()) == Some(sel!(orderFrontStandardAboutPanel:));
                     menu.insertItem_atIndex(&item, app_index + isize::from(about));
@@ -146,6 +155,7 @@ impl Native {
                 } else {
                     menu.addItem(&item);
                 }
+                if !d.separator { placed.push((&d.id, item.clone())); }
                 self.entries.push((menu, item)); self.targets.extend(target);
             }
         });
@@ -156,6 +166,19 @@ impl Native {
         let (top, menu) = super::default_macos::add_top(self.mtm, root, name);
         self.tops.push((root.clone(), top));
         menu
+    }
+}
+
+/// Where `MenuItem::after`'s `anchor` is in `menu`: the last item already placed after it, else
+/// this app's item with that id, else a native item with that AppKit action.
+fn anchor_index(menu: &NSMenu, anchor: &str, placed: &[(&str, Retained<NSMenuItem>)], chained: &[(&str, Retained<NSMenuItem>)]) -> Option<isize> {
+    // SAFETY: reading retained menus and items on the main thread, as `Native::set` does.
+    unsafe {
+        let index_of = |item: &NSMenuItem| Some(menu.indexOfItem(item)).filter(|&i| i >= 0);
+        let find = |list: &[(&str, Retained<NSMenuItem>)]| list.iter().filter(|(a, _)| *a == anchor).find_map(|(_, item)| index_of(item));
+        find(chained).or_else(|| find(placed)).or_else(|| {
+            (0..menu.numberOfItems()).find(|&i| menu.itemAtIndex(i).and_then(|item| item.action()).is_some_and(|a| a.name() == anchor))
+        })
     }
 }
 impl Drop for Native {

@@ -1,0 +1,1 @@
+- **`MenuItem::after(anchor)` places a native menu item right after another** on macOS: one of the app's items by id, or a native one by its AppKit action (`"paste:"`), as Electron's menu items name the item they follow; items after the same anchor keep their order, and a menu without the anchor takes the item at its end as before.

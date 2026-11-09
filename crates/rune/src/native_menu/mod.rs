@@ -31,6 +31,7 @@ struct Description {
     id: String,
     title: String,
     location: Location,
+    after: Option<String>,
     equivalent: Option<Shortcut>,
     keys_first: bool,
     enabled: bool,
@@ -47,7 +48,7 @@ impl<S> Clone for MenuItem<S> {
 impl<S> MenuItem<S> {
     pub fn new(title: impl Into<String>, action: fn(&mut S, &mut Tx)) -> Self {
         let title = title.into();
-        Self { description: Description { id: title.clone(), title, location: Location::App,
+        Self { description: Description { id: title.clone(), title, location: Location::App, after: None,
             equivalent: None, keys_first: false, enabled: true, checked: false, separator: false }, action }
     }
     /// A separator line, placed with `menu` or `dock` like an item. It has no id or title,
@@ -63,6 +64,11 @@ impl<S> MenuItem<S> {
     /// every language (`rune::set_labels`).
     pub fn menu(mut self, title: impl Into<String>) -> Self { self.description.location = Location::Named(title.into()); self }
     pub fn dock(mut self) -> Self { self.description.location = Location::Dock; self }
+    /// Place this item right after `anchor` in its menu: another of this app's items by id, or
+    /// a native item by its AppKit action (`"paste:"`, `"selectAll:"`), as Electron's menu
+    /// items name the item they follow. Items after the same anchor keep the order given. A
+    /// menu without the anchor takes the item at its end, as without one.
+    pub fn after(mut self, anchor: impl Into<String>) -> Self { self.description.after = Some(anchor.into()); self }
     pub fn key_equivalent(mut self, shortcut: Shortcut) -> Self { self.description.equivalent = Some(shortcut); self }
     /// Let the window's own key handling see this item's key equivalent first. AppKit gives a
     /// menu equivalent to the menu before any view, so by default the item takes the chord
