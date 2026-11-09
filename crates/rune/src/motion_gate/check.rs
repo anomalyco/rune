@@ -504,7 +504,10 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
                 let name = short(&t.path);
                 let riders = |entering| if clipped(j) || clipped(j - 1) { carried(i, k, axis, step, entering) } else { 0 };
                 if step.abs() >= rule("jump") && before.abs() < 0.5 && after.abs() < 0.5 {
-                    if scrolling && input_between(k - 1, k) || riding(i, k, axis, step) || pushed(i, k, axis, step) || grew(k) { continue; }
+                    // An input's scroll cut moves a row with the content it scrolls in. A virtual
+                    // list's stack can move by less, as rows above it unmount into its space.
+                    let cut = axis < 2 && input_between(k - 1, k) && (own_edge(&fs[j].1, axis) - own_edge(&fs[j - 1].1, axis)).abs() < 0.25;
+                    if scrolling && input_between(k - 1, k) || cut || riding(i, k, axis, step) || pushed(i, k, axis, step) || grew(k) { continue; }
                     let riders = riders(true);
                     if vd(j).abs() < rule("jump") && riders == 0 { continue; }
                     let appeared = born(t) == Some(fs[j - 1].0) && fs[j - 1].0 > rec.start;
