@@ -79,6 +79,8 @@ rustc-hash = "2"
 zeroize = "1.8"
 half = "2"
 unicode-segmentation = "1.13"
+# Bidi classes for `Direction::Auto` (Parley already builds it, with its data).
+icu_properties = { version = "2.3", default-features = false, features = ["compiled_data"] }
 resvg = { version = "0.45", default-features = false, optional = true }
 
 [target.'cfg(all(unix, not(target_os = "linux")))'.dependencies]

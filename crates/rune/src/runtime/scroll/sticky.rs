@@ -343,7 +343,7 @@ fn target_shift(nodes: &[Node], scrolls: &HashMap<NodeId, ScrollState>, j: usize
             let ox: f32 = std::iter::successors(Some(p), |&u| nodes[u].parent)
                 .take_while(|&u| u != s)
                 .chain(std::iter::once(s))
-                .filter_map(|u| scrolls.get(&nodes[u].id).map(|st| st.x.offset as f32))
+                .filter_map(|u| scrolls.get(&nodes[u].id).map(|st| st.x.shift() as f32))
                 .sum();
             let st_x = nodes[s].target[0];
             let band_w = nodes[s].target[2] - st_x;

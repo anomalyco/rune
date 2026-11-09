@@ -89,7 +89,14 @@ impl<S: 'static> Measurement<'_, S> {
             };
             nodes[i].id = id;
             self.node_index.insert(id, i);
-            let l = taffy.box_layout(nodes[i].taffy);
+            let mut l = taffy.box_layout(nodes[i].taffy);
+            // Right to left: laid out left to right, then mirrored inside the parent (`El::dir`).
+            if let Some(p) = nodes[i].parent.filter(|&p| nodes[p].rtl && !nodes[i].unmirrored) {
+                l.x = nodes[p].local.w - l.x - l.w;
+            }
+            if nodes[i].rtl {
+                l.inset.swap(0, 2);
+            }
             nodes[i].local = MRect::new(l.x, l.y, l.w, l.h);
             let (px, py) = nodes[i].parent.map_or((0.0, 0.0), |p| (nodes[p].target[0], nodes[p].target[1]));
             let mut x = px + l.x;

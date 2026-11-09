@@ -216,7 +216,8 @@ impl MenuItem {
             e = e.child(el().key("indicator").size(16.0, 16.0).center().child(mark).a11y_hidden());
         }
         if let Some((entries, open)) = self.sub {
-            e = e.child(icon(k.glyph.caret_right, 16.0).key("chevron").a11y_hidden().color(if standard {
+            // It points where the submenu opens: left, right to left (`menu.css`).
+            e = e.child(icon(k.glyph.caret_right, 16.0).key("chevron").a11y_hidden().mirror_in_rtl().color(if standard {
                 c.std_icon
             } else {
                 c.text_faint

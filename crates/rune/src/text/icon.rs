@@ -133,14 +133,17 @@ fn element_path(el: &str) -> Option<String> {
     })
 }
 
-pub(super) fn rasterize_icon(icon: &Icon, px: u32, atlas: &mut Atlas) -> Rasterized {
+pub(super) fn rasterize_icon(icon: &Icon, px: u32, flip: bool, atlas: &mut Atlas) -> Rasterized {
     if px == 0 {
         return Rasterized::Empty;
     }
     if px + 4 > super::ATLAS_SIZE {
         return Rasterized::Unplaced;
     }
-    let cov = icon_coverage(icon, px);
+    let mut cov = icon_coverage(icon, px);
+    if flip {
+        cov.chunks_exact_mut(px as usize).for_each(<[u8]>::reverse);
+    }
     if !cov.iter().any(|&c| c != 0) {
         return Rasterized::Empty;
     }

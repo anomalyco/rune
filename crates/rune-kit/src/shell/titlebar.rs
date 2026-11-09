@@ -28,6 +28,7 @@ pub struct WindowTitlebar {
     tabs: Option<El>,
     trailing: Vec<El>,
     fill: Option<Color>,
+    rtl: bool,
 }
 
 impl WindowTitlebar {
@@ -48,6 +49,7 @@ impl WindowTitlebar {
             tabs: None,
             trailing: Vec::new(),
             fill: None,
+            rtl: false,
         }
     }
     pub fn key(mut self, key: impl Into<String>) -> Self {
@@ -98,9 +100,21 @@ impl WindowTitlebar {
         self.trailing.push(el);
         self
     }
+    /// The band lays out right to left, inside [`El::dir`](rune::El::dir)`(Direction::Rtl)`:
+    /// its controls and tabs run from the right, while the room kept for the window's controls
+    /// stays on their side (the caption buttons' on the right, the traffic lights' on the left),
+    /// as Desktop's titlebar does under `dir="rtl"`.
+    pub fn rtl(mut self, rtl: bool) -> Self {
+        if rtl != self.rtl {
+            std::mem::swap(&mut self.leading_inset, &mut self.trailing_inset);
+        }
+        self.rtl = rtl;
+        self
+    }
 
     pub fn build(self, k: &Kit) -> El {
         let slot = row().key(format!("{}-tabs", self.key)).grow(1.0).shrink().min_w(0.0).h_full().center_y().children(self.tabs);
+        // Right to left the row's left padding is its start side, so `rtl` swapped the insets.
         row()
             .key(self.key)
             .role("toolbar")

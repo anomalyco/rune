@@ -182,7 +182,12 @@ fn prepare_text(
     text: &mut Option<crate::cold::SharedBox<TextSpec>>,
     input: Option<&InputSpec>,
     scale: f32,
+    rtl: bool,
 ) -> (Option<u64>, bool) {
+    if let Some(t) = text && t.rtl != rtl {
+        t.rtl = rtl;
+        t.shape = None;
+    }
     if let Some(t) = text && t.redacted {
         // Rich links carry URLs and can expose them through hover, copy and tree children.
         use zeroize::Zeroize;
@@ -390,6 +395,8 @@ fn flatten_owned(
     let instant_changes = flags.has(ElFlags::INSTANT_CHANGES) || parent.is_some_and(|p| nodes[p].instant_changes);
     let trace_namespace = el.cold.trace_namespace.or_else(|| parent.and_then(|p| nodes[p].trace_namespace));
     let role = el.role_name();
+    let rtl = crate::el::resolve_direction(&el, parent.is_some_and(|p| nodes[p].rtl));
+    let unmirrored = flags.has(ElFlags::UNMIRRORED);
     let El { handlers, key, mut style, mut vis, vis_flags, mut text, children, memo, mut cold, scale: static_scale, .. } = el;
     let focus = cold.focus.clone();
     // Only a text field's element has to own its cold fields here; a memo placeholder shares them.
@@ -397,9 +404,13 @@ fn flatten_owned(
     if let Some(sx) = parent_sx {
         apply_scroll_x_child(&mut style, sx);
     }
-    let (measure, secure_measure) = prepare_text(&mut text, input.as_deref(), scale);
+    let (measure, secure_measure) = prepare_text(&mut text, input.as_deref(), scale, rtl);
     take_foreground(&mut text, input.as_deref_mut(), &mut vis, memo_ctx.foreground);
     if vis.border_layout { lay_out_border(&mut style, &vis, scale); }
+    if rtl {
+        crate::el::mirror_visual(&mut vis);
+        if let Some(a) = cold.get_mut_if_some().and_then(|c| c.above.as_mut()) { crate::el::mirror_anchor(a); }
+    }
     let inert = flags.has(ElFlags::INERT) || parent.is_some_and(|p| nodes[p].inert);
     let hover_within = inherit_hover_within(&vis, cold.above.as_ref(), parent, nodes);
     let pixel_aspect = vis.pixels.as_ref()
@@ -495,6 +506,8 @@ fn flatten_owned(
         streaming: flags.has(ElFlags::STREAMING),
         whole: flags.has(ElFlags::WHOLE),
         inert,
+        rtl,
+        unmirrored,
         scale_track: false,
         group_fade: false,
         virtual_mount: flags.has(ElFlags::VIRTUAL_MOUNT),
@@ -588,11 +601,13 @@ fn flatten_ref(
     let c = &*el.cold;
     let mut text = el.text.clone();
     let mut input = c.input.clone();
-    let (measure, secure_measure) = prepare_text(&mut text, input.as_deref(), scale);
+    let rtl = crate::el::resolve_direction(el, parent.is_some_and(|p| nodes[p].rtl));
+    let (measure, secure_measure) = prepare_text(&mut text, input.as_deref(), scale, rtl);
     let inert = flags.has(ElFlags::INERT) || parent.is_some_and(|p| nodes[p].inert);
     let mut vis = el.vis.clone();
     take_foreground(&mut text, input.as_deref_mut(), &mut vis, memo_ctx.foreground);
     if vis.border_layout { lay_out_border(style.to_mut(), &vis, scale); }
+    if rtl { crate::el::mirror_visual(&mut vis); }
     let hover_within = inherit_hover_within(&vis, c.above.as_ref(), parent, nodes);
     let pixel_aspect = vis.pixels.as_ref()
         .filter(|_| {
@@ -639,7 +654,10 @@ fn flatten_ref(
             lead: c.lead,
             transition: c.transition.clone(),
             matched: c.matched.as_ref().map(|id| (id.clone(), own_motion)),
-            above: c.above.clone(),
+            above: c.above.clone().map(|mut a| {
+                if rtl { crate::el::mirror_anchor(&mut a); }
+                a
+            }),
             scroll: c.scroll,
             scroll_axes: c.scroll_axes,
             scroll_edges: c.scroll_edges,
@@ -686,6 +704,8 @@ fn flatten_ref(
         streaming: flags.has(ElFlags::STREAMING),
         whole: flags.has(ElFlags::WHOLE),
         inert,
+        rtl,
+        unmirrored: flags.has(ElFlags::UNMIRRORED),
         scale_track: false,
         group_fade: false,
         virtual_mount: flags.has(ElFlags::VIRTUAL_MOUNT),

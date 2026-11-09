@@ -126,6 +126,11 @@ pub(crate) struct Node {
     pub(super) whole: bool,
     /// Inside an `El::inert` subtree (this element or an ancestor).
     pub(crate) inert: bool,
+    /// Lays out right to left (`El::dir`, its own or inherited): its children's x mirror
+    /// inside it and its inset's sides swap.
+    pub(crate) rtl: bool,
+    /// `El::unmirrored`: keeps its left-to-right place in a right-to-left parent.
+    pub(crate) unmirrored: bool,
     /// `P_SCALE` has a track: paint reads the sprung factor.
     pub(super) scale_track: bool,
     /// `P_GROUP_REST` fades a dropped `El::group_opacity` to full: paint reads it until it lands.
@@ -193,6 +198,8 @@ impl Node {
             streaming: false,
             whole: false,
             inert: false,
+            rtl: old.rtl,
+            unmirrored: old.unmirrored,
             scale_track: old.scale_track,
             group_fade: old.group_fade,
             virtual_mount: false,
@@ -402,6 +409,23 @@ pub(super) struct AxisScroll {
     /// Velocity of a glide to `aim` (`Tx::scroll_to`) while one runs.
     pub(super) glide: Option<f32>,
     pub(super) aim: f64,
+    /// The viewport lays out right to left (`El::dir`): its content starts at its right edge
+    /// and `offset` counts how far it moved right, uncovering what is to the left.
+    pub(super) rtl: bool,
+}
+
+impl AxisScroll {
+    /// How far left the content draws, in points: `offset`, or less it in a right-to-left
+    /// viewport.
+    pub(super) fn shift(&self) -> f64 {
+        if self.rtl { -self.offset } else { self.offset }
+    }
+
+    /// `delta` points of physical movement (positive moving content right) as a change of
+    /// `offset`.
+    pub(super) fn toward(&self, delta: f64) -> f64 {
+        if self.rtl { delta } else { -delta }
+    }
 }
 
 #[derive(Clone, Debug, Default)]

@@ -10,6 +10,8 @@ pub(crate) struct InheritedFlatten {
     pub(super) parent_is_stack: bool,
     pub(super) instant_changes: bool,
     pub(super) inert: bool,
+    /// The parent lays out right to left (`El::dir`).
+    pub(super) rtl: bool,
     pub(super) trace_namespace: Option<(&'static str, &'static str)>,
     pub(super) scale_bits: u32,
     /// The window's foreground (`Cx::foreground`), which a memo's uncoloured text took.
@@ -190,7 +192,7 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
         pixels, pixels_fit, effect, backdrop_blur, hover_motion, hover_within,
         group_opacity, group_color, hover_alone, hover_share, hover_focus, icon_turn, cache_key, offset_motion, scale_motion,
         origin, rotate_motion, child_exit, enter_delay, motion_intent, instant_motion, clip_to_content, flight_crop,
-        hold_landing, offset, paint_alpha, layer_opacity, blur, rotate, mark,
+        hold_landing, offset, paint_alpha, layer_opacity, blur, rotate, mark, mirror_rtl,
     } = b;
     (match (&a.surface, surface) {
         (None, None) => true,
@@ -225,7 +227,7 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
         && a.flight_crop == *flight_crop
         && a.hold_landing == *hold_landing
         && a.offset == *offset && a.paint_alpha == *paint_alpha && a.layer_opacity == *layer_opacity
-        && a.blur == *blur && a.rotate == *rotate && a.mark == *mark
+        && a.blur == *blur && a.rotate == *rotate && a.mark == *mark && a.mirror_rtl == *mirror_rtl
 }
 
 pub(super) fn same_visual(a: &Visual, b: &Visual) -> bool {
@@ -474,6 +476,7 @@ pub(super) fn inherited_for(
             parent_is_stack,
             instant_changes,
             inert,
+            rtl: parent.is_some_and(|p| nodes[p].rtl),
             trace_namespace,
             scale_bits: scale.to_bits(),
             foreground,

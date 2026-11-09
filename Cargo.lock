@@ -3607,6 +3607,7 @@ dependencies = [
  "fontique",
  "futures-util",
  "half",
+ "icu_properties",
  "image",
  "js-sys",
  "libc",

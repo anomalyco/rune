@@ -211,12 +211,14 @@ impl TextEdit {
                     self.replace((a, to), "", false);
                 }
             }
+            Key::Left if !line && let Some(i) = self.visual_step(layout, false, word) => self.move_h(i, m.shift),
             Key::Left => {
                 let i = if line { self.line_edge(layout, false) } else if word { self.prev_word(self.focus) } else { prev_char(&self.text, self.focus) };
                 self.move_h(i, m.shift);
             }
             Key::Right if !m.shift && !m.cmd && !m.alt && !m.ctrl && self.at_end_of_trailing_block() => self.leave_trailing_block(),
             Key::Down if !m.shift && !m.cmd && !m.alt && !m.ctrl && self.at_end_of_trailing_block() => self.leave_trailing_block(),
+            Key::Right if !line && let Some(i) = self.visual_step(layout, true, word) => self.move_h(i, m.shift),
             Key::Right => {
                 let i = if line { self.line_edge(layout, true) } else if word { self.next_word(self.focus) } else { next_char(&self.text, self.focus) };
                 self.move_h(i, m.shift);
@@ -303,6 +305,26 @@ impl TextEdit {
         self.pending = None;
         self.apply_text_and_attr_replace((n, n), "\n", &[], Some(Block::Paragraph), false);
         self.record_change(before, false);
+    }
+
+    /// Where Left (Right when `right`) moves the caret, by a character or a `word`, in text
+    /// that holds right-to-left runs: across the line as it's drawn, so Left always goes left
+    /// through mixed Arabic or Hebrew and Latin, as a browser's caret does. `None` for text
+    /// that runs only left to right (or is hidden), which moves by the logical order.
+    fn visual_step(&self, layout: Option<&Layout<Ink>>, right: bool, word: bool) -> Option<usize> {
+        use parley::{Affinity, Cursor};
+        let l = layout.filter(|l| !(self.secure && !self.revealed) && (l.is_rtl() || l.lines().any(|line| line.runs().any(|r| r.is_rtl()))))?;
+        let at = self.display_index(self.focus);
+        let step = |c: Cursor| match (right, word) {
+            (true, false) => c.next_visual(l),
+            (false, false) => c.previous_visual(l),
+            (true, true) => c.next_visual_word(l),
+            (false, true) => c.previous_visual_word(l),
+        }
+        .index();
+        // A caret between runs has two places; try the other when this one is the line's end.
+        let j = [Affinity::Downstream, Affinity::Upstream].into_iter().map(|a| step(Cursor::from_byte_index(l, at, a))).find(|&j| j != at)?;
+        Some(self.model_index(j))
     }
 
     fn line_edge(&self, layout: Option<&Layout<Ink>>, end: bool) -> usize {

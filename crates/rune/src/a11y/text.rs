@@ -158,7 +158,7 @@ impl<S: 'static> Runtime<S> {
         let s = self.env.scale;
         let r = self.drawn[i];
         let (x0, x1) = (r[0] + n.inset[0], r[0] + r[2] - n.inset[2]);
-        let mut x = text_x(spec, x0, x1, layout.full_width() / s);
+        let mut x = text_x(spec, x0, x1, layout.full_width() / s, layout.is_rtl());
         if let Some(input) = n.input.as_deref() && input.single_line {
             x -= self.input_scroll.get(&n.path).copied().unwrap_or(0.0);
         }

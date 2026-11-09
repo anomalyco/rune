@@ -24,6 +24,7 @@ mod a11y;
 mod anchor;
 mod backdrop;
 mod child_exit;
+mod direction;
 pub(crate) mod drop;
 pub(crate) mod effect;
 
@@ -89,6 +90,7 @@ pub fn text(content: impl Into<String>) -> El {
         secure_revealed: false,
         wrap_anywhere: false,
         exact_lines: true,
+        rtl: false,
         shape: None,
     }));
     e
@@ -401,6 +403,8 @@ pub enum Align {
 }
 
 pub use crate::el::anchor::{Anchor, Side, anchor_rect};
+pub use crate::el::direction::Direction;
+pub(crate) use crate::el::direction::{mirror_anchor, mirror_visual, resolve as resolve_direction};
 pub(crate) use crate::el::scroll::FadeStyle;
 pub use crate::el::scroll::ScrollFade;
 pub use crate::el::text_spec::TextSpec;

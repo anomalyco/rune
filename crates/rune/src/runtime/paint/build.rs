@@ -1183,7 +1183,7 @@ impl<S: 'static> Runtime<S> {
             }
             let (mut scale, mut anchor, mut anchor_to, mut dx) = (sc, anchor, anchor_to, pinh.dx);
             if n.scroll_axes.x() && let Some(st) = self.scrolls.get_mut(&self.nodes[i].id) {
-                st.drawn[0] = grid(st.x.offset as f32, s);
+                st.drawn[0] = grid(st.x.shift() as f32, s);
                 dx -= st.drawn[0];
                 snap_rigid[0] -= st.drawn[0];
             }

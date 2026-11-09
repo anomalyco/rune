@@ -202,7 +202,7 @@ pub(super) fn input_caret(n: &Node, r: [f32; 4], scale: f32, s: f32, gliding: bo
     let ins = n.inset.map(|v| v * scale * s);
     let (x0, x1) = (r[0] + ins[0], r[2] - ins[2]);
     // The text scales with its box, so the caret does too.
-    let mut x = text_x(spec, x0, x1, (layout.full_width() * scale).ceil());
+    let mut x = text_x(spec, x0, x1, (layout.full_width() * scale).ceil(), layout.is_rtl());
     if input.single_line { x -= single_line_scroll(scrolls, &n.path, input, &spec.content, layout, s, (x1 - x0) / scale.max(1e-4)) * scale; }
     let ci = caret_index(e, &spec.content);
     let cur = Cursor::from_byte_index(layout, ci, Affinity::Downstream);

@@ -292,7 +292,7 @@ impl<S: 'static> Runtime<S> {
         while let Some(p) = up {
             if let Some(st) = scrolls.get(&nodes[p].id) {
                 dy += st.offset as f32;
-                dx += st.x.offset as f32;
+                dx += st.x.shift() as f32;
             }
             up = nodes[p].parent.filter(|_| nodes[p].above.is_none());
         }
