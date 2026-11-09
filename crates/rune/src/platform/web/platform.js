@@ -96,6 +96,22 @@ async function blobRgba(blob, maxSide) {
     }
 }
 
+export function objectUrl(bytes, type) {
+    return URL.createObjectURL(new Blob([bytes], { type }));
+}
+
+export function revokeUrl(url) {
+    URL.revokeObjectURL(url);
+}
+
+// Sets `canvas`'s CSS cursor, or clears it when `css` is empty. Safari reads `image-set()` in a
+// cursor only with its `-webkit-` prefix.
+export function setCursor(canvas, css) {
+    if (!css) return void canvas.style.removeProperty('cursor');
+    canvas.style.cursor = css;
+    if (!canvas.style.cursor) canvas.style.cursor = `-webkit-${css}`;
+}
+
 export function nextTask() {
     return globalThis.scheduler?.yield ? globalThis.scheduler.yield() : new Promise((resolve) => setTimeout(resolve, 0));
 }

@@ -195,6 +195,9 @@ SVG (by `Content-Type` or a `.svg`/`.svgz` path) rasterizes with Rune's renderer
 asked for. Images over 8192 pixels a side are refused before their pixels are read, and a
 failed request or a cross-origin image without CORS headers resolves to `Image::error`.
 
+`Cursor::Image` sets the canvas's CSS `cursor` to the PNG at 2x (`image-set(url(blob:…) 2x)`),
+so the browser decodes it and draws it at its size in points on any display.
+
 ## Fonts and browser input
 
 Web includes Inter Regular and IBM Plex Mono Regular (the `embedded-fonts` feature). There is

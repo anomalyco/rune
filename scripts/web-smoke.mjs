@@ -144,7 +144,22 @@ try {
     await page.goto(`${url}/?image-proof`);
     await page.waitForFunction(() => window.__imageProof?.jpeg && window.__imageProof?.png);
     assert.deepEqual(await page.evaluate(() => window.__imageProof), { jpeg: { width: 12, height: 6 }, png: { width: 12, height: 6 } });
-    console.log(JSON.stringify({ ok: true, checks: ['image bytes'] }));
+    // The cursor over them is the PNG at 2x, which the browser decodes and sizes in points.
+    const cursor = () => page.evaluate(() => getComputedStyle(document.querySelector('canvas')).cursor);
+    await page.mouse.move(76, 114);
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('canvas')).cursor.includes('image-set('));
+    const css = await cursor();
+    assert.match(css, /image-set\(url\("blob:[^"]+"\) 2(x|dppx)\) 1 2, auto$/, css);
+    const size = await page.evaluate(async (url) => {
+        const image = new Image();
+        image.src = url;
+        await image.decode();
+        return [image.naturalWidth, image.naturalHeight];
+    }, css.match(/blob:[^"]+/)[0]);
+    assert.deepEqual(size, [12, 6]);
+    await page.mouse.move(300, 700);
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('canvas')).cursor === 'auto');
+    console.log(JSON.stringify({ ok: true, checks: ['image bytes', 'image cursor'] }));
     assert.deepEqual(await page.evaluate(() => window.__proof.gpuErrors), []);
     assert.deepEqual(errors.filter(e => !e.includes('404')), []);
     if (engine === 'chromium') { await clockSmoke(browser, url); console.log(JSON.stringify({ ok: true, checks: ['page clock'] })); }

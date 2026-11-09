@@ -116,6 +116,17 @@ fn a_bad_png_falls_back_to_the_arrow_once() {
     assert_eq!(cache.get(refused, 2.0, |_| Err::<(), _>("the OS refused it".into())), None);
 }
 
+#[test]
+fn web_css_names_the_png_at_2x_with_the_hot_spot_in_points() {
+    let css = |bytes, hot| super::css(CursorImage::png(bytes, hot), "blob:x");
+    assert_eq!(css(png(64, 40), [2.0, 30.0]).unwrap(), r#"image-set(url("blob:x") 2x) 2 19, auto"#, "clamped into the 20 pt height");
+    assert_eq!(css(png(64, 40), [3.7, f32::NAN]).unwrap(), r#"image-set(url("blob:x") 2x) 3 0, auto"#);
+    assert_eq!(css(png(5, 5), [9.0, 9.0]).unwrap(), r#"image-set(url("blob:x") 2x) 2 2, auto"#, "an odd side rounds up");
+    assert!(css(png(300, 8), [0.0, 0.0]).is_err(), "too big");
+    assert!(css(&b"not a png at all, just some text"[..], [0.0, 0.0]).is_err());
+    assert!(css(&png(8, 8)[..20], [0.0, 0.0]).is_err(), "cut short");
+}
+
 /// The NSCursor `Cursor::Image` sets: its image is sized in points with the PNG's pixels as
 /// its bitmap, and its hot spot is in points.
 #[cfg(target_os = "macos")]

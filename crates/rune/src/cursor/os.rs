@@ -13,7 +13,7 @@
 //! With the window's cursor rects off, nothing in AppKit puts the image back once the system
 //! shows another cursor (a window coming or going over the pointer, another app's click-through
 //! overlay), so while it holds the pointer the host sets it again every [`REASSERT`], frame or
-//! no frame.
+//! no frame. On web the canvas's CSS names the PNG itself (`cursor/web.rs`).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -99,7 +99,7 @@ fn holds_image(applied: (bool, Cursor)) -> bool {
 
 /// Pixels per point in the OS cursors made for `window`.
 fn image_scale(window: &Window) -> f32 {
-    if cfg!(target_os = "macos") { crate::cursor::image::SOURCE_SCALE } else { window.scale_factor() as f32 }
+    if cfg!(any(target_os = "macos", target_arch = "wasm32")) { crate::cursor::image::SOURCE_SCALE } else { window.scale_factor() as f32 }
 }
 
 /// Makes the image cursors windows asked for since the loop last slept, and sets them.
@@ -110,7 +110,11 @@ pub(crate) fn make_pending(event_loop: &ActiveEventLoop) {
     let _ = event_loop;
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_arch = "wasm32")]
+#[path = "web.rs"]
+mod images;
+
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
 mod images {
     use std::cell::RefCell;
     use std::sync::{Arc, Weak};

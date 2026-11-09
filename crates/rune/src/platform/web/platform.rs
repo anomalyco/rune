@@ -23,6 +23,13 @@ extern "C" {
     /// Resolves to the `Uint8Array` body of `url`, relative to the page.
     #[wasm_bindgen(js_name = fetchBytes)]
     pub(crate) fn fetch_bytes(url: &str) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = objectUrl)]
+    pub(crate) fn object_url(bytes: &[u8], kind: &str) -> String;
+    #[wasm_bindgen(js_name = revokeUrl)]
+    pub(crate) fn revoke_url(url: &str);
+    /// Sets the canvas's CSS `cursor`, or clears it when `css` is empty.
+    #[wasm_bindgen(js_name = setCursor)]
+    pub(crate) fn set_cursor(canvas: &web_sys::HtmlCanvasElement, css: &str);
     /// Resolves in a later task, letting the browser draw and handle input in between.
     #[wasm_bindgen(js_name = nextTask)]
     pub(crate) fn next_task() -> js_sys::Promise;
