@@ -877,6 +877,9 @@ impl<S: 'static> Runtime<S> {
                 if let Some(c) = n.focus.highlight && self.highlight_visible(i) {
                     overlay = over(premul(c, 1.0, srgb), overlay);
                 }
+                if let Some(c) = n.focus.fill && self.focus_ring_visible(i) {
+                    overlay = over(premul(c, 1.0, srgb), overlay);
+                }
                 if !focus_flat && (n.vis.hover().a > 0.0 || self.scene.store().is_animating(n.id, P_HOVER_C)) {
                     let hov_v = self.scene.get(n.id, P_HOVER).unwrap_or(0.0).clamp(0.0, 1.0);
                     if hov_v > 0.0 {
