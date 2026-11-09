@@ -158,9 +158,9 @@ impl El {
     ///
     /// `center` is in normalized element coordinates (`[0.5, 0.5]` is the centre, `[0.0, 0.0]` top-left).
     /// `radius` is in points (`f32` for a circle or `[rx, ry]` for an ellipse).
-    /// `stops` are up to 8 `(position, color)` pairs along `0.0..=1.0` from `center` (`0.0`) to
-    /// `radius` (`1.0`). Stop colours spring in Oklab when changed and interpolate in premultiplied
-    /// colour across the quad, matching [`El::gradient`].
+    /// `stops` are up to 16 `(position, color)` pairs along `0.0..=1.0` from `center` (`0.0`) to
+    /// `radius` (`1.0`). The first 8 stops' colours spring in Oklab when changed; all interpolate
+    /// in premultiplied colour across the quad, matching [`El::gradient`].
     pub fn radial_gradient(
         mut self,
         center: [f32; 2],
@@ -184,8 +184,9 @@ impl El {
         self
     }
     /// A linear gradient at `angle` radians (CSS convention: `0.0` is bottom-to-top, `PI / 2` is
-    /// left-to-right, `PI` is top-to-bottom like [`El::gradient`]) with up to 8 stops, painted over
-    /// the fill.
+    /// left-to-right, `PI` is top-to-bottom like [`El::gradient`]) with up to 16 stops, painted over
+    /// the fill: enough for the eased gradients CSS writes as a stop list, such as a scrim that
+    /// fades out on an easing curve (`linear-gradient(180deg, bg 0%, … 16 stops …, transparent)`).
     pub fn linear_gradient(mut self, angle: f32, stops: impl AsRef<[(f32, Color)]>) -> Self {
         let r = angle
             .is_finite()

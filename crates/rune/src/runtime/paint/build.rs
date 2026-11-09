@@ -144,6 +144,15 @@ impl<S: 'static> Runtime<S> {
                 pinh.paint_opacity *= pinh.first_fade;
             }
             pinh.first_fade = 1.0;
+            // `El::stuck_reveal`: shown as far as its sticky parent has held.
+            if let Some(span) = n.sticky.as_ref().and_then(|s| s.reveal)
+                && let Some(pr) = n.parent
+            {
+                let held = if self.has_sticky { self.stuck.get(pr).map_or(0.0, |s| s.abs()) } else { 0.0 };
+                let shown = (held / span).clamp(0.0, 1.0);
+                pinh.opacity *= shown;
+                pinh.paint_opacity *= shown;
+            }
             pinh.dy += self.row_dy[i];
             pinh.snap.rigid[1] += self.row_dy[i];
             if let Some(a) = &n.above
