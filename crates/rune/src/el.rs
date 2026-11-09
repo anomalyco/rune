@@ -47,6 +47,7 @@ mod pixel_snap;
 mod rare;
 mod ride_trailing;
 mod scroll;
+mod selection_style;
 mod sticky;
 mod text;
 
@@ -286,6 +287,8 @@ pub struct InputSpec {
     pub(crate) paste: Option<InputPasteFn>,
     /// `El::spellcheck`: the platform's checker marks misspelled words.
     pub(crate) spellcheck: bool,
+    /// [`El::selection_style`]: the selection's highlight and ink, by window focus, over `selection`.
+    pub(crate) selection_style: Option<SelectionStyle>,
 }
 
 impl std::fmt::Debug for InputSpec {
@@ -409,6 +412,7 @@ pub use crate::el::direction::Direction;
 pub(crate) use crate::el::direction::{DirEffect, DirEvent, Flow, Pin, mirror_anchor, mirror_visual, step as step_direction};
 pub(crate) use crate::el::scroll::FadeStyle;
 pub use crate::el::scroll::ScrollFade;
+pub use crate::el::selection_style::SelectionStyle;
 pub use crate::el::text_spec::TextSpec;
 pub(crate) use crate::el::text_spec::Elide;
 
@@ -693,6 +697,7 @@ pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
         change: None,
         paste: None,
         spellcheck: false,
+        selection_style: None,
     }));
     e.sync_input_pills();
     e.sync_input_rich();

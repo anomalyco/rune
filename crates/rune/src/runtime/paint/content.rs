@@ -214,6 +214,8 @@ impl<S: 'static> Runtime<S> {
             }
             // Text fields: selection under the text, placeholder, caret over it.
             let mut caret = None;
+            // A field's selected display bytes and the ink its `El::selection_style` gives them.
+            let mut field_ink: Option<(usize, usize, [f32; 4])> = None;
             if let Some(inp) = &n.input {
                 let e = &inp.edit;
                 let departing = self.flights.iter().any(|f| f.departs(&n.path, n.key.as_deref())
@@ -248,10 +250,16 @@ impl<S: 'static> Runtime<S> {
                     let (a, b) = e.range();
                     if a != b && e.preedit().is_none() {
                         let (da, db) = e.display_selection_range(a, b);
+                        // An inactive window paints a field's selection in its inactive pair, as a browser does.
+                        let (highlight, ink) = inp.selection_style.map_or((inp.selection, None), |st| st.pick(self.window_focused != Some(false)));
                         selectable::push_field_selection(&mut self.instances, layout, da, db,
-                            origin, tk, premul(inp.selection, o, srgb), s, clip, fade);
+                            origin, tk, premul(highlight, o, srgb), s, clip, fade);
+                        field_ink = ink.map(|c| (da, db, premul(c, o, srgb)));
                     }
-                    caret = input_caret;
+                    // A range selection hides the caret, as a browser's field and a native one do.
+                    if a == b || e.is_composing() {
+                        caret = input_caret;
+                    }
                     if e.is_composing()
                         && let (_, Some((pa, pb))) = e.display()
                     {
@@ -422,7 +430,7 @@ impl<S: 'static> Runtime<S> {
                 } else {
                     f32::NEG_INFINITY..f32::INFINITY
                 };
-                let bytes = reveal.is_some() || !link_fx.is_empty() || has_hl_fg;
+                let bytes = reveal.is_some() || !link_fx.is_empty() || has_hl_fg || field_ink.is_some();
                 // A secret's glyphs aren't kept past the frame that draws them.
                 if spec.redacted || n.input.as_ref().is_some_and(|i| i.edit.is_secure()) {
                     self.text.glyphs_in_band(layout, r_origin, raster, bytes, band, &mut self.glyph_scratch);
@@ -449,6 +457,11 @@ impl<S: 'static> Runtime<S> {
                     && let Some(c) = spec.spans.get(q.ink as usize - 1).and_then(|sp| sp.color)
                 {
                     f = premul(c, o, srgb);
+                }
+                if let Some((a, b, c)) = field_ink
+                    && (a..b).contains(&(q.byte as usize))
+                {
+                    f = c;
                 }
                 if has_hl_fg
                     && let Some(c) = spec.highlights.iter().rev().find_map(|h| {
