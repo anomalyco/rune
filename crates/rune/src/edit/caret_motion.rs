@@ -59,9 +59,18 @@ fn step(state: Seek, event: Tried) -> Seek {
     }
 }
 
-/// Where `arrow` takes a caret at display byte `at` across `layout` as drawn, or `None` at the
-/// line's edge that way.
-pub(super) fn visual(layout: &Layout<Ink>, at: usize, arrow: Arrow) -> Option<usize> {
+/// Where an arrow press lands across the drawn line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Landing {
+    /// On this display byte.
+    At(usize),
+    /// The caret is at the line's edge that way: it leaves the line the way its paragraph runs
+    /// (left out of a right-to-left line goes on to the next line), or stays at the text's end.
+    Edge,
+}
+
+/// Where `arrow` takes a caret at display byte `at` across `layout` as drawn.
+pub(super) fn visual(layout: &Layout<Ink>, at: usize, arrow: Arrow) -> Landing {
     let mut state = Seek::Try(Affinity::Downstream);
     loop {
         state = match state {
@@ -76,8 +85,8 @@ pub(super) fn visual(layout: &Layout<Ink>, at: usize, arrow: Arrow) -> Option<us
                 .index();
                 step(state, if j == at { Tried::Stayed } else { Tried::Moved(j) })
             }
-            Seek::Found(j) => return Some(j),
-            Seek::Edge => return None,
+            Seek::Found(j) => return Landing::At(j),
+            Seek::Edge => return Landing::Edge,
         };
     }
 }
