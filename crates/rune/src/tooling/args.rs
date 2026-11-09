@@ -70,7 +70,8 @@ pub struct Args {
     pub(crate) html_template: Option<PathBuf>,
     /// `--realtime`: a headless run waits for the wall clock to reach each frame's time and
     /// prints `rune-mark NAME T` as the script passes each mark, so a live server's replies and a
-    /// harness's actions keep pace with its script.
+    /// harness's actions keep pace with its script. It stands in for a window, so `App::on_ready`
+    /// runs after its first frame.
     pub(crate) realtime: bool,
 }
 
@@ -285,7 +286,8 @@ const HELP: &str = "usage: <app> [window]
   --trace-all           trace unkeyed elements too, by path
   --native             trace native submissions; --frames N stops after N frames
   --realtime            headless: hold each frame until the wall clock reaches its time, and
-                        print \"rune-mark NAME T\" as the script passes each mark
+                        print \"rune-mark NAME T\" as the script passes each mark,
+                        and run on_ready after the first frame, as a window does
   --first-pixels        report when the first GPU-complete offscreen pixels are readable
   --window KEY         select a window for headless tools (run_windows, App::window)
   --list-windows       list window keys using a deterministic virtual display

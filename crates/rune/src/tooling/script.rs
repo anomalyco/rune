@@ -33,6 +33,10 @@ pub(crate) fn parse_script(list: Value) -> Vec<Ev> {
             out.push(Ev { t, kind: Kind::Reopen, pos: Pos::Rel(0.0, 0.0) });
             continue;
         }
+        if let Some(url) = e["open_url"].as_str() {
+            out.push(Ev { t, kind: Kind::OpenUrl(url.into()), pos: Pos::Rel(0.0, 0.0) });
+            continue;
+        }
         if let Some(chord) = e["physical"].as_str() {
             let chord: crate::Shortcut = chord.parse().unwrap_or_else(|e: crate::ShortcutError| die(&e.to_string()));
             let repeat = e["repeat"].as_bool().unwrap_or(false);

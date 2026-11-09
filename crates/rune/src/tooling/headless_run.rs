@@ -124,6 +124,8 @@ pub enum ScriptEvent {
     Focus(bool),
     /// `{"reopen": true}`: the app reopened, as a click on its macOS Dock icon does.
     Reopen,
+    /// `{"open_url": …}`: a link the system opened with the app (`App::on_open_url`).
+    OpenUrl(String),
     /// `{"type": "resize", "dw": …, "dh": …, "dur": …}`: a person resizing the window, one step
     /// a frame, (dw, dh) points from its size when the resize began.
     Resize { dw: f32, dh: f32 },

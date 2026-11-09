@@ -374,6 +374,7 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
                     if let Some(i) = desk.key.filter(|_| desk.active) { desk.members[i].input(&e.kind, (x, y)); }
                 }
                 Kind::Files(step) => desk.file_input(step, (x, y)),
+                Kind::OpenUrl(_) => die("script open_url: a link opens in a single window's run (`--script` without a desktop)"),
                 // The rest are pointer input.
                 kind => {
                     if kind.is_down() { last_down = (x, y); }
