@@ -376,6 +376,9 @@ pub(super) struct ScrollState {
     /// The offset, x and y, the last frame drew the content at, in points (slack and a stuck
     /// bottom included): how far it carried the content up and left.
     pub(super) drawn: [f32; 2],
+    /// Which way the last frame's drawn vertical offset stepped: -1, 0 or 1. A pinned end that
+    /// would step straight back holds its pixel instead (see the paint pass).
+    pub(super) drawn_step: i8,
     /// Room freed under a pinned growth stack, held under its last row (see `step_slack`).
     pub(super) slack: scroll_bottom::Slack,
     /// The horizontal axis of `El::scroll_x` and `El::scroll_xy`; all zero on a vertical one.
