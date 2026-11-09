@@ -152,11 +152,12 @@ struct Scope {
 
 /// Rasterizes `instances` (device pixels, `scale` per point) for a window `size` points across.
 pub fn rasterize(instances: &[Instance], size: (f32, f32), scale: f32) -> Grid {
-    rasterize_with(instances, size, scale, &[])
+    rasterize_with(instances, size, scale, &[], &Default::default())
 }
 
-/// [`rasterize`], knowing which glyphs are icons drawn through their apron (`apron_key`).
-pub(crate) fn rasterize_with(instances: &[Instance], size: (f32, f32), scale: f32, aprons: &[[u32; 3]]) -> Grid {
+/// [`rasterize`], knowing which glyphs are icons drawn through their apron (`apron_key`), and
+/// how far a gliding glyph's ink sits down its quad (`TextSystem::glyph_shifts`).
+pub(crate) fn rasterize_with(instances: &[Instance], size: (f32, f32), scale: f32, aprons: &[[u32; 3]], shifts: &std::collections::HashMap<[u32; 3], f32>) -> Grid {
     let (w, h) = dims(size);
     let px = CELL * scale;
     let full = [f32::NEG_INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::INFINITY];
@@ -181,8 +182,11 @@ pub(crate) fn rasterize_with(instances: &[Instance], size: (f32, f32), scale: f3
         }
         let clip = meet(stack.last().unwrap().clip, q.clip);
         let cells = &mut stack.last_mut().unwrap().cells;
-        let apron = kind == KIND_GLYPH && aprons.contains(&crate::runtime::apron_key(q));
-        for d in draws(q, apron) {
+        let key = (kind == KIND_GLYPH).then(|| crate::runtime::apron_key(q));
+        let apron = key.is_some_and(|k| aprons.contains(&k));
+        let mut q = *q;
+        if let Some(dy) = key.and_then(|k| shifts.get(&k)) { q.rect[1] += dy; }
+        for d in draws(&q, apron) {
             if d.color[3] <= 1e-4 || d.density <= 0.0 { continue; }
             let b = meet(d.outer, clip);
             if b[2] <= b[0] || b[3] <= b[1] { continue; }
@@ -277,7 +281,7 @@ mod tests {
         };
         let (on, off) = (glyph([48.0, 24.0, 16.0, 16.0], 0.0), glyph([47.0, 23.0, 18.0, 18.0], 18.0));
         let aprons = [crate::runtime::apron_key(&off)];
-        let (a, b) = (rasterize_with(&[on], (96.0, 72.0), 1.0, &aprons), rasterize_with(&[off], (96.0, 72.0), 1.0, &aprons));
+        let (a, b) = (rasterize_with(&[on], (96.0, 72.0), 1.0, &aprons, &Default::default()), rasterize_with(&[off], (96.0, 72.0), 1.0, &aprons, &Default::default()));
         let ink = |g: &Grid| (0..g.w * g.h).map(|i| g.lab(i)[0]).collect::<Vec<_>>();
         for (i, (a, b)) in ink(&a).iter().zip(ink(&b)).enumerate() {
             assert!((a - b).abs() < 0.01, "cell {i}: {a} on the grid, {b} off it");

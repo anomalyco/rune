@@ -418,6 +418,18 @@ impl TextSystem {
     /// How glyphs rasterise and place ([`FontSmoothing`]).
     pub fn font_smoothing(&self) -> FontSmoothing { self.smoothing }
 
+    /// How far each gliding glyph mask's ink sits below the top of its quad, in device px, keyed
+    /// as `blend::apron_key` keys its instance: a DirectWrite mask keeps one box across its y
+    /// phases and moves its ink down that box by its phase, so the box moves a whole pixel only
+    /// where the phase wraps. The motion gate's raster, which spreads a glyph over its quad,
+    /// moves its coverage by this so a glide reads as the quarter-pixel steps it draws.
+    pub(crate) fn glyph_shifts(&self) -> std::collections::HashMap<[u32; 3], f32> {
+        self.atlas.map.iter()
+            .filter(|(k, _)| k.subpy != 0 && k.apple == glyph_emit::DIRECT_WRITE_KEY)
+            .filter_map(|(k, a)| a.map(|a| ([(a.x as f32).to_bits(), (a.y as f32).to_bits(), (a.page as f32).to_bits()], k.subpy as f32 / glyph_emit::GLIDE_PHASES as f32)))
+            .collect()
+    }
+
     /// The exponent a glyph's coverage is raised to when drawn in premultiplied `fill`. With
     /// smoothing off (the default on Linux and the web) it stands in for the text gamma a browser's
     /// grayscale antialiasing applies there: light text on a dark page draws heavier and dark
