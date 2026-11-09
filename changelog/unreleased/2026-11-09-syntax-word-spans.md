@@ -1,1 +1,0 @@
-- Built-in code highlighting leaves the whitespace following a keyword, function, or number in the base style instead of extending the token's colour and weight over it.
