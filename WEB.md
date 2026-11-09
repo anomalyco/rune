@@ -212,12 +212,14 @@ For example, extend a static slice of `rune_theme_opencode::FONTS` with
 the combined slice to `spec.fonts`. Keep the theme's sans/mono family names in `spec.families`.
 Missing emoji and CJK glyphs display fallback boxes; they do not trigger font downloads.
 
-The embedded Inter is cut to Latin text (Latin-1, Latin Extended-A, punctuation, arrows and the
-Mac's key symbols), a third of its size. Once the first frame is up the app fetches the full
-faces, `Inter-Regular.ttf`, `Inter-Medium.ttf` and `Inter-SemiBold.ttf`, from beside `app.js`;
-`scripts/web-build.sh` copies them there. Latin text draws the same before and after; other
-text (Greek, Cyrillic, Vietnamese) draws in fallback fonts or boxes until they arrive, and
-stays that way, with a console warning, on a host that doesn't serve them.
+The embedded Inter is cut to Latin, Greek and Cyrillic text (Latin-1, Latin Extended-A, modern
+Greek, Cyrillic, punctuation, arrows and the Mac's key symbols), under half its size. Once the
+first frame is up the app fetches the full faces, `Inter-Regular.ttf`, `Inter-Medium.ttf` and
+`Inter-SemiBold.ttf`, from beside `app.js`; `scripts/web-build.sh` copies them there. Text the
+cut covers draws the same before and after; other text (Vietnamese, polytonic Greek, Cyrillic
+beyond Russian, Ukrainian, Belarusian, Serbian, Macedonian and Bulgarian) draws in fallback
+fonts or boxes until they arrive, and stays that way, with a console warning, on a host that
+doesn't serve them.
 
 In a Mac's browser text draws with macOS font smoothing (`FontSmoothing::On`), as Safari,
 Chrome and Firefox draw the page's own text there, and without it elsewhere, iPhone and iPad

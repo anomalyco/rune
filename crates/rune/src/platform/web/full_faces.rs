@@ -29,7 +29,7 @@ pub(super) fn fetch(wake: impl FnOnce() + 'static) {
             match wasm_bindgen_futures::JsFuture::from(bytes).await {
                 Ok(bytes) => faces.push(js_sys::Uint8Array::new(&bytes).to_vec()),
                 Err(e) => {
-                    let note = format!("rune: {url} did not load, so text outside Latin draws in fallback fonts:");
+                    let note = format!("rune: {url} did not load, so text outside Latin, Greek and Cyrillic draws in fallback fonts:");
                     web_sys::console::warn_2(&note.into(), &e);
                     return;
                 }

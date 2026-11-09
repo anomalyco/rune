@@ -1,7 +1,8 @@
-//! A web app embeds Inter cut to Latin text (`scripts/web-fonts.sh`) and fetches the full faces
-//! after its first frame. When they arrive, every text system registers them in place of the
-//! cut ones and drops what it shaped. The cut faces keep every Latin glyph's outline, advance,
-//! kerning and layout feature, so Latin text stays where it is and only text they lacked moves.
+//! A web app embeds Inter cut to Latin, Greek and Cyrillic text (`scripts/web-fonts.sh`) and
+//! fetches the full faces after its first frame. When they arrive, every text system registers
+//! them in place of the cut ones and drops what it shaped. The cut faces keep each of their
+//! glyphs' outline, advance, kerning and layout features, so text they cover stays where it is
+//! and only text they lacked moves.
 
 use std::sync::OnceLock;
 
