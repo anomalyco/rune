@@ -1,10 +1,11 @@
-//! How a text field paints its selection ([`El::selection_style`](crate::El::selection_style)):
-//! the highlight under the selected text and the ink the selected glyphs take, while the window
-//! is active and while it isn't, as a browser paints a field's `::selection`.
+//! How a text field or selectable text paints its selection
+//! ([`El::selection_style`](crate::El::selection_style)): the highlight under the selected text
+//! and the ink the selected glyphs take, while the window is active and while it isn't, as a
+//! browser paints `::selection`.
 
 use crate::color::Color;
 
-/// A field's selection colours: active while the window has focus, inactive while it doesn't.
+/// Selection colours: active while the window has focus, inactive while it doesn't.
 /// `None` ink keeps the text's own colours.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SelectionStyle {
