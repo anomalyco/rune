@@ -24,6 +24,8 @@ pub(crate) struct ViewDefaults {
     pub(crate) focus_ring: Option<crate::el::Outline>,
     /// [`Cx::help_look`].
     pub(crate) help: Option<super::HelpLook>,
+    /// [`Cx::web_focus`].
+    pub(crate) web_focus: bool,
 }
 
 /// Wakes the shell from another thread (new data arrived); a no-op headless.
@@ -167,6 +169,16 @@ impl<S> Cx<S> {
     /// of AppKit's. Set it on every run of the view.
     pub fn help_look(&mut self, look: crate::HelpLook) {
         self.defaults.help = Some(look);
+    }
+    /// Keyboard focus as a web page has it, for a view that ports one: every pressable control
+    /// (an `on_press` element whose role is button, link, tab, checkbox, switch, radio or
+    /// combobox) is a Tab stop in document order and takes focus when clicked, as an HTML
+    /// `<button>` does, unless it says [`El::focusable(false)`](crate::El::focusable) or is
+    /// disabled. A modal that opens with no [`El::autofocus`](crate::El::autofocus) control and
+    /// no text field focuses itself, as a web dialog does, so Tab enters it at its first control
+    /// rather than landing on its close button. Set it on every run of the view.
+    pub fn web_focus(&mut self) {
+        self.defaults.web_focus = true;
     }
     /// The height of the titlebar the app draws (`App::titlebar`), in window points, in place of
     /// `Titlebar::new`'s while the view keeps setting it: a band that scales with the app's UI

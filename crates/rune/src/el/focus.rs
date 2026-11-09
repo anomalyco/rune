@@ -7,6 +7,10 @@ use crate::el::Outline;
 pub(crate) struct FocusSpec {
     pub physical: Option<crate::input::physical_input::Handler>,
     pub enabled: bool,
+    /// `focusable(false)`: not a Tab stop even where [`crate::Cx::web_focus`] would make it one.
+    pub opt_out: bool,
+    /// [`crate::El::autofocus`].
+    pub autofocus: bool,
     pub order: i32,
     pub group: bool,
     pub selected: bool,
@@ -40,6 +44,8 @@ impl crate::cold::Empty for FocusSpec {
     const EMPTY: &'static Self = &FocusSpec {
         physical: None,
         enabled: false,
+        opt_out: false,
+        autofocus: false,
         order: 0,
         group: false,
         selected: false,

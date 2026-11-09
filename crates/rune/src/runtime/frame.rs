@@ -209,6 +209,10 @@ impl<S: 'static> Runtime<S> {
             // An explicit blur is not the temporary pointer-down blur of a scrim.
             self.last_focused = None;
         }
+        if let Some(request) = tx.focus_to.take() {
+            self.focus_request = Some(request);
+            self.dirty = true;
+        }
         if let Some(title) = tx.title.take() { self.window_title.set(title); }
         if let Some(mut request) = tx.window_frame.take() {
             request.spring = (request.animate && !tx.instant && !self.reduced_motion).then(|| tx.motion.unwrap_or(motion::DEFAULT));
@@ -248,7 +252,7 @@ impl<S: 'static> Runtime<S> {
 
     pub(super) fn transaction(&self) -> Tx {
         Tx { trace: self.tracing().then(crate::el::TraceCalls::default), mods: self.held_mods, selection: self.selection_snapshot(),
-            input_time: crate::input::time::current(), clock: self.clock, ..Tx::default() }
+            input_time: crate::input::time::current(), clock: self.clock, focus_visible: self.keyboard_focus, ..Tx::default() }
     }
 
     /// A scalar from the actual draw path (e.g. `shell.width`). Values hold until resampled.

@@ -102,6 +102,8 @@ pub(crate) use blend::{apron_key, glyph, icon_inst, premul};
 
 #[path = "runtime/input/focus.rs"]
 mod focus;
+#[path = "runtime/input/modal_focus.rs"]
+mod modal_focus;
 #[path = "runtime/input/physical.rs"]
 mod physical_dispatch;
 #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(unused_imports))]
@@ -597,13 +599,19 @@ pub struct Runtime<S: 'static> {
     full_keyboard_access: bool,
     /// `App::tab_visits_controls`: Tab visits every control whatever `full_keyboard_access` says.
     tab_visits_controls: bool,
-    modal_stack: Vec<(String, Option<String>)>,
+    /// The open modals and where focus returns as each closes (`modal_focus`).
+    modal_focus: modal_focus::ModalFocus,
     /// Focus when the running commit began, before a new view's focus request applied: what a
     /// modal that opens in this commit returns focus to.
     focus_before_commit: Option<String>,
     /// Focus before the current gesture/commit blurred it, so a scrim press that blurs on
     /// pointer-down and closes its overlay on pointer-up still honours `focus_return`.
     last_focused: Option<String>,
+    /// `Tx::focus`: the key the next commit focuses, and whether its ring shows.
+    focus_request: Option<(String, bool)>,
+    /// Where Tab starts while nothing has focus: the element last focused, or pressed without
+    /// taking focus, as a browser's sequential focus navigation starting point.
+    tab_from: Option<String>,
     /// Focused text fields that unmounted without being blurred: while another field holds focus,
     /// remounting one with its old `focused = true` flag does not steal focus back.
     unmounted_focused: Vec<std::sync::Weak<crate::edit::History>>,
@@ -971,9 +979,11 @@ impl<S: 'static> Runtime<S> {
             modifier_keys: Default::default(),
             full_keyboard_access: true,
             tab_visits_controls: false,
-            modal_stack: Vec::new(),
+            modal_focus: modal_focus::ModalFocus::Closed,
             focus_before_commit: None,
             last_focused: None,
+            focus_request: None,
+            tab_from: None,
             unmounted_focused: Vec::new(),
             modal_index: None,
             modal_members: Vec::new(),

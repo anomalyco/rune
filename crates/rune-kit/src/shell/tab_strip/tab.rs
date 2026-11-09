@@ -314,10 +314,11 @@ fn status_slot<S: 'static>(look: SlotLook, st: &Strip<S>, id: &str, k: &Kit) -> 
                 }
             })
             .build(k);
-        // Pointer only: the strip's arrows move between tabs, and keyboard focus on the tab shows
-        // it without a ring of its own.
+        // Pointer only unless the strip makes it a Tab stop: the strip's arrows move between tabs,
+        // and keyboard focus on the tab shows it without a ring of its own.
+        let button = if st.close_tab_stop { button } else { button.focusable(false).no_focus_ring() };
         // Its glyph enters with it, unseen until the pointer comes, so the wrapper lands it at once.
-        slot = slot.child(hidden(row().key("close").absolute(0.0, 0.0).group_opacity(0.0, 1.0).instant_changes().child(button.focusable(false).no_focus_ring())));
+        slot = slot.child(hidden(row().key("close").absolute(0.0, 0.0).group_opacity(0.0, 1.0).instant_changes().child(button)));
     }
     Some(slot)
 }
