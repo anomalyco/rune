@@ -1,5 +1,10 @@
 //! Menu, context menu and their items (`@opencode/ui` navigation/menu, components/context-menu).
 //! Compact (default) and standard appearances.
+//!
+//! Whether a menu is open is the app's (`open`, `on_close`); how it opens and closes is Rune's
+//! modal stack (`runtime/input/modal_focus.rs`), which follows Desktop's menu machine
+//! (`ui/src/navigation/menu/machine.ts`): focus returns to the trigger as the menu closes,
+//! without a ring when the pointer opened it.
 
 use std::rc::Rc;
 

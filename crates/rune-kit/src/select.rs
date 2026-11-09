@@ -1,5 +1,10 @@
 //! Select (`@opencode/ui` forms/select): an inline trigger and a listbox of menu items with a
 //! check on the selected option, optionally grouped.
+//!
+//! Whether it's open is the app's (`open`, `on_close`); how it opens and closes is Rune's
+//! modal stack (`runtime/input/modal_focus.rs`): it takes focus, Escape and a press outside
+//! close it, and focus goes back to the trigger, without a ring when the pointer opened it, as
+//! Desktop's menu machine has it (`ui/src/navigation/menu/machine.ts`).
 
 use rune::{El, Icon, TextStyle, Tx, col, el, icon, row, text};
 
