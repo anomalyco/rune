@@ -1,0 +1,1 @@
+- **A subtree mounting with a fade fades once, not once per level.** A child with a plain fade now rides the nearest ancestor still entering through parents that rode in themselves, so nested elements no longer multiply their fades and show long after the subtree arrived; an entrance of its own (more than a fade, or delayed) still asks only its parent.
