@@ -1,1 +1,1 @@
-- Typing into a fresh empty field starts one undo step, including the first character.
+- Typing into a fresh empty plain field starts one undo step, including the first character. A rich field keeps its separate first-character step.

@@ -134,6 +134,22 @@ unsafe extern "system" fn turn(_: HWND, _: u32, _: usize, _: u32) {
     TURN.with(|t| if let Some(turn) = &*t.borrow() { turn() });
 }
 
+/// Asks for the event loop's idle turn about once a frame while a modal loop over `hwnd` runs
+/// (a menu's), until it drops.
+pub(crate) struct Turns(HWND, usize);
+
+pub(crate) fn turns(hwnd: HWND) -> Turns {
+    // SAFETY: a timer on this thread's live window, killed when the guard drops.
+    Turns(hwnd, unsafe { SetTimer(hwnd, TURN_TIMER, TURN_MS, Some(turn)) })
+}
+
+impl Drop for Turns {
+    fn drop(&mut self) {
+        // SAFETY: the timer `turns` set on this thread's window.
+        if self.1 != 0 { unsafe { KillTimer(self.0, TURN_TIMER) }; }
+    }
+}
+
 /// Shows the menu over `hwnd` until it closes. The picked item's id, or `None` when it was
 /// dismissed, cancelled or couldn't open. Leaves where the pointer is in the session.
 fn track(hwnd: HWND, pending: &Pending) -> Option<String> {
@@ -154,11 +170,11 @@ fn track(hwnd: HWND, pending: &Pending) -> Option<String> {
         let flags = TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN
             | if params.is_some() { TPM_VERTICAL } else { 0 };
         let params_ptr = params.as_ref().map_or(std::ptr::null(), |p| p as *const TPMPARAMS);
-        let timer = SetTimer(hwnd, TURN_TIMER, TURN_MS, Some(turn));
+        let turns = turns(hwnd);
         *pending.session.tracking.borrow_mut() = Some(hwnd);
         let command = TrackPopupMenuEx(menu.0, flags, x, y, hwnd, params_ptr);
         pending.session.tracking.borrow_mut().take();
-        if timer != 0 { KillTimer(hwnd, TURN_TIMER); }
+        drop(turns);
         // The menu's loop lets go of the foreground state once the owner gets a message.
         PostMessageW(hwnd, WM_NULL, 0, 0);
         let overlay = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_NOACTIVATE != 0;

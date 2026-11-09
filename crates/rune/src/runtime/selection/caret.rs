@@ -78,9 +78,7 @@ impl<S: 'static> Runtime<S> {
                 st.x.glide = None;
             } else {
                 st.offset = (st.offset + delta).clamp(0.0, st.max);
-                st.pinned = stick && st.offset >= st.max - 0.5;
-                st.v = 0.0;
-                st.glide = None;
+                st.land(stick);
                 scrolled = true;
             }
             st.direct = true;

@@ -333,7 +333,7 @@ fn secure_multiline_conceal_snaps_geometry_scroll_and_bypasses_caches() {
     rt.frame(0.0);
     let st = &rt.scrolls[&scroll_id];
     assert_eq!((st.offset, st.max), (0.0, 0.0));
-    assert!(st.glide.is_none());
+    assert!(st.glide().is_none());
     let elements = rt.elements();
     for e in &elements {
         assert_eq!(e.rect[3], e.target[3], "concealed height must not spring: {}", e.path);

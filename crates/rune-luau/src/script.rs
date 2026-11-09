@@ -19,7 +19,7 @@ use crate::ui::host::HostNode;
 use crate::ui::rows::Spec;
 use crate::ui::view::mix;
 use crate::ui::{Callback, Env, Event, attach, top, with_frame};
-use crate::vm::{Setup, Vm};
+use crate::vm::{Base, Setup, Vm};
 use crate::watchdog;
 use crate::workers::Shared;
 use crate::{Data, ErrorKind, ScriptError};
@@ -91,6 +91,8 @@ pub(crate) struct Inner {
     warned: Rc<RefCell<FxHashSet<String>>>,
     nodes: Rc<[HostNode]>,
     pub(crate) shared: Arc<Shared>,
+    /// A VM base built ahead of the next reload ([`Script::prewarm`]).
+    spare: RefCell<Option<Base>>,
     #[cfg(all(feature = "watch", not(target_arch = "wasm32")))]
     pub(crate) watch: RefCell<Option<crate::watch::Watch>>,
 }
@@ -123,6 +125,7 @@ impl Script {
             warned: Rc::default(),
             nodes,
             shared: Arc::default(),
+            spare: RefCell::new(None),
             #[cfg(all(feature = "watch", not(target_arch = "wasm32")))]
             watch: RefCell::new(None),
         });
@@ -422,23 +425,11 @@ impl Inner {
             let save = vm.export("saveHotState")?;
             self.timed(vm, |_| save.call::<Data>(())).inspect_err(|e| self.log(LogLevel::Warn, &format!("saveHotState: {e}"))).ok()
         });
-        let weak = self.weak.clone();
-        let log: Rc<dyn Fn(LogLevel, String)> = Rc::new(move |level, message| {
-            if let Some(i) = weak.upgrade() {
-                i.log(level, &message);
-            }
-        });
-        let compiled = Rc::new(compiled);
-        let setup = Setup {
-            compiled: &compiled,
-            shared: &self.shared,
-            clock: self.clock.get(),
-            memory_limit: self.options.memory_limit,
-            nodes: &self.options.nodes,
-            host: self.options.setup.as_deref(),
-            log,
+        let base = match self.spare.take() {
+            Some(base) => base,
+            None => self.base()?,
         };
-        let (mut vm, entry) = Vm::new(setup)?;
+        let (mut vm, entry) = Vm::new(base, &Rc::new(compiled), self.clock.get())?;
         let module = self.timed(&vm, |_| entry.call::<Value>(()))?;
         vm.set_module(module)?;
         if let Some(start) = self.options.start.clone() {
@@ -456,6 +447,24 @@ impl Inner {
         }
         drop(old);
         Ok(Reload { compile: Duration::ZERO, swap: start.elapsed() })
+    }
+
+    /// The part of a new VM that doesn't depend on the script's files.
+    fn base(&self) -> Result<Base, ScriptError> {
+        let weak = self.weak.clone();
+        let log: Rc<dyn Fn(LogLevel, String)> = Rc::new(move |level, message| {
+            if let Some(i) = weak.upgrade() {
+                i.log(level, &message);
+            }
+        });
+        Base::new(Setup { shared: &self.shared, memory_limit: self.options.memory_limit, nodes: &self.options.nodes, host: self.options.setup.as_deref(), log })
+    }
+
+    pub(crate) fn prewarm(&self) {
+        if self.spare.borrow().is_none() {
+            let base = self.base().ok();
+            *self.spare.borrow_mut() = base;
+        }
     }
 
     pub(crate) fn env(&self, vm: &Vm, dark: bool) -> Rc<Env> {

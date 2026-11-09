@@ -131,6 +131,8 @@ pub struct GlyphQuad {
     /// A colour glyph (emoji) drawn from [`TextSystem::color_glyph`] instead of the alpha
     /// atlas: 0 for none, else its index plus one.
     pub color: u32,
+    /// A glyph drawn straight from its outline instead of the atlas (`uv` unused).
+    pub outline: Option<super::Outline>,
 }
 
 impl GlyphQuad {
@@ -164,7 +166,7 @@ impl ColorGlyph {
             self.w as f32,
             self.h as f32,
         ];
-        GlyphQuad { rect, uv: [0.0, 0.0], ink, byte, color: self.index }
+        GlyphQuad { rect, uv: [0.0, 0.0], ink, byte, color: self.index, outline: None }
     }
 }
 
@@ -182,6 +184,8 @@ pub struct Atlas {
     pub(super) clock: u64,
     pub(super) map: GlyphMap<Option<AtlasGlyph>>,
     pub(super) icons: HashMap<(usize, u32), Option<AtlasGlyph>>,
+    /// Glyph outlines drawn straight on the GPU, uploaded with the pages.
+    pub(crate) outlines: super::outline::OutlineStore,
 }
 
 impl Atlas {
@@ -192,6 +196,7 @@ impl Atlas {
             page.dirty = Some((0, ATLAS_SIZE));
         }
         self.resident_caches.clear();
+        self.outlines.invalidate();
     }
 
     /// Number of allocated 2048×2048 shelf pages (at least 1).
@@ -230,6 +235,7 @@ impl Atlas {
             clock: 1,
             map: GlyphMap::default(),
             icons: HashMap::new(),
+            outlines: Default::default(),
         }
     }
 

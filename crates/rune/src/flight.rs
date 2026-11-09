@@ -122,8 +122,14 @@ pub(crate) fn selects_under(selector: &str, path: &str, key: &str) -> bool {
 /// transform; a soft inset handles lines that were only partly visible in the source editor.
 pub(crate) fn transformed(mut q: Instance, from: Rect, to: Rect, scale: f32, alpha: f32, clip: [f32; 4], fade: [f32; 4]) -> Instance {
     let zoom = to.w / from.w.max(0.01);
-    q.uv[2] = q.rect[2];
-    q.uv[3] = q.rect[3];
+    let map = |v: f32, from: f32, to: f32| (to + (v / scale - from) * zoom) * scale;
+    if q.params[1] == crate::render::KIND_GLYPH && q.radii[3] > 0.0 {
+        // An outline glyph (`text::Outline`) moves its pen and magnifies its pixel: crisp in flight.
+        q.radii = [map(q.radii[0], from.x, to.x), map(q.radii[1], from.y, to.y), q.radii[2], q.radii[3] * zoom];
+    } else {
+        q.uv[2] = q.rect[2];
+        q.uv[3] = q.rect[3];
+    }
     q.rect = [
         (to.x + (q.rect[0] / scale - from.x) * zoom) * scale,
         (to.y + (q.rect[1] / scale - from.y) * zoom) * scale,

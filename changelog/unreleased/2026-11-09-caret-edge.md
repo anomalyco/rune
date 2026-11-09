@@ -1,0 +1,1 @@
+- Left or Right at the drawn edge of a line in a field holding right-to-left text goes on the way the paragraph runs (out of a right-to-left line to the next line) or stays at the text's end, where it moved one character the other way.

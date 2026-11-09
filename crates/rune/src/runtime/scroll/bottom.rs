@@ -46,17 +46,21 @@ impl Slack {
 /// Steps a glide toward the current bottom, or the offset `Tx::scroll_to` asked for while the
 /// content reaches it. Returns whether it is still moving.
 pub(super) fn glide(st: &mut ScrollState, dt: f32) -> bool {
-    let to = st.glide_to.map_or(st.max, |to| to.min(st.max));
+    let ScrollMode::Glide { v, to: aim } = st.mode else { return false };
+    let to = aim.offset().map_or(st.max, |to| to.min(st.max));
     // Content shrinking past the glide's end lands it there, rather than its speed carrying
     // it past and springing back.
     if st.offset >= st.max && to >= st.max {
         st.offset = st.max;
-        st.glide = None;
-        st.glide_to = None;
+        st.mode = ScrollMode::Rest;
         return false;
     }
-    let moving = scroll_offset::glide_axis(st.glide_spring(), &mut st.offset, &mut st.glide, to, dt);
-    if !moving { st.glide_to = None; }
+    let mut glide = Some(v);
+    let moving = scroll_offset::glide_axis(st.glide_spring(), &mut st.offset, &mut glide, to, dt);
+    st.mode = match glide {
+        Some(v) => ScrollMode::Glide { v, to: aim },
+        None => ScrollMode::Rest,
+    };
     moving
 }
 
@@ -79,14 +83,11 @@ impl<S: 'static> Runtime<S> {
             let Some(i) = self.scroll_viewport(&key) else { continue };
             let (id, sticky, view_h) = (self.nodes[i].id, self.nodes[i].scroll.is_some_and(|s| s.stick_bottom), f64::from(self.nodes[i].local.h));
             let Some(st) = self.scrolls.get_mut(&id) else { continue };
-            targets.push((id, animated, sticky, view_h, st.offset, st.glide));
+            targets.push((id, animated, sticky, view_h, st.offset, st.glide()));
             // Stand at the bottom first so a virtual list mounts and measures its tail rows,
             // which can differ from the estimate: the trip below then ends at the true bottom.
             st.offset = st.max;
-            st.pinned = true;
-            st.glide = None;
-            st.glide_to = None;
-            st.v = 0.0;
+            st.pin();
         }
         for _ in 0..3 {
             if !self.virtual_window_changed() { break; }
@@ -101,13 +102,11 @@ impl<S: 'static> Runtime<S> {
             // A settled frame (a window showing or uncovering) lands at the end.
             if animated && !self.reduced_motion && !self.settled && st.max - start > 0.5 {
                 st.offset = start.max(st.max - GLIDE_REACH * view_h);
-                st.glide = Some(glide.unwrap_or(0.0));
+                st.mode = ScrollMode::Glide { v: glide.unwrap_or(0.0), to: GlideTo::Bottom };
                 st.spring = None;
-                st.shrink_glide = false;
-                st.pinned = false;
             } else {
                 st.offset = st.max;
-                st.pinned = sticky;
+                if sticky { st.pin() } else { st.mode = ScrollMode::Rest }
             }
         }
         if self.virtual_window_changed() {
@@ -141,7 +140,7 @@ impl<S: 'static> Runtime<S> {
     /// negative while fitting rows sit low in a box that has not shrunk yet.
     pub(super) fn stuck_offset(&self, i: usize, bottom: f32) -> Option<f64> {
         let n = &self.nodes[i];
-        let st = self.scrolls.get(&n.id).filter(|st| st.pinned)?;
+        let st = self.scrolls.get(&n.id).filter(|st| st.pinned())?;
         if !n.scroll.is_some_and(|s| s.stick_bottom) { return None; }
         let c = self.scroll_content(i)?;
         let lag = self.stuck_lag(i, c, bottom)?;
@@ -211,7 +210,7 @@ impl<S: 'static> Runtime<S> {
     /// Steps stick-to-bottom viewport `i`'s `Slack` after its offset. Returns whether any is left.
     pub(super) fn step_slack(&mut self, i: usize, dt: f32) -> bool {
         let id = self.nodes[i].id;
-        if self.scrolls.get(&id).is_some_and(|st| !st.pinned && !st.slack.moving()) {
+        if self.scrolls.get(&id).is_some_and(|st| !st.pinned() && !st.slack.moving()) {
             if let Some(st) = self.scrolls.get_mut(&id) { st.slack.edges = None; }
             return false;
         }
@@ -231,6 +230,7 @@ impl<S: 'static> Runtime<S> {
         let now = self.t;
         let target = self.nodes[i].target;
         let Some(st) = self.scrolls.get_mut(&id) else { return false };
+        let pinned = st.pinned();
         let s = &mut st.slack;
         let h0 = s.track.h;
         let [top, bottom] = [view[1], view[3]];
@@ -239,7 +239,7 @@ impl<S: 'static> Runtime<S> {
             s.closing = false;
             s.track.v = 0.0;
         }
-        if st.pinned {
+        if pinned {
             // Growth fills the slack first. Room the bottom edge gains while the rows sit on it
             // joins it, unless the whole viewport moved down with it.
             let mut h = s.track.h - grown;
@@ -625,7 +625,7 @@ mod tests {
         assert_eq!(scroll_state(&rt, "scroll").offset, bottom);
         key(&mut rt, crate::Key::PageUp);
         assert_eq!(scroll_state(&rt, "scroll").offset, bottom - page, "the list pages, not the composer");
-        assert!(!scroll_state(&rt, "scroll").pinned);
+        assert!(!scroll_state(&rt, "scroll").pinned());
         // The pointer over the composer doesn't claim the keys either.
         let (x, y) = rt.find("composer").unwrap();
         rt.pointer_move(x, y);
@@ -634,7 +634,7 @@ mod tests {
         key(&mut rt, crate::Key::PageDown);
         key(&mut rt, crate::Key::PageDown);
         assert_eq!(scroll_state(&rt, "scroll").offset, bottom);
-        assert!(scroll_state(&rt, "scroll").pinned, "back on the end, the list follows it again");
+        assert!(scroll_state(&rt, "scroll").pinned(), "back on the end, the list follows it again");
         let composer = rt.state.composer.as_ref().unwrap();
         assert!(composer.focused);
         assert_eq!(composer.text, "hello");
@@ -666,7 +666,7 @@ mod tests {
         rt.update_if(|_, tx| { tx.scroll_page("scroll", 5); false });
         rt.frame(1.0 / 120.0);
         assert_eq!(scroll_state(&rt, "scroll").offset, bottom, "clamped at the end");
-        assert!(scroll_state(&rt, "scroll").pinned);
+        assert!(scroll_state(&rt, "scroll").pinned());
         rt.state.rows += 5;
         rt.invalidate();
         for _ in 0..120 { rt.frame(1.0 / 120.0); }
@@ -685,7 +685,7 @@ mod tests {
         let st = scroll_state(&rt, "scroll");
         let pages = (st.max - st.offset) / page;
         assert!((2.5..3.5).contains(&pages), "three pages above the end: {pages} (bottom was {bottom})");
-        assert!(!scroll_state(&rt, "scroll").pinned);
+        assert!(!scroll_state(&rt, "scroll").pinned());
         let shown = rt.elements().into_iter().filter(|e| e.key.as_deref().is_some_and(|k| k.starts_with('r')) && e.rect[1] + e.rect[3] > 0.0 && e.rect[1] < 300.0).count();
         assert!(shown >= 5, "the window mounted the rows it pages to ({shown})");
     }

@@ -91,12 +91,17 @@ pub(super) fn toggle_full_screen(window: &Window) {
     window.set_fullscreen((!full).then_some(winit::window::Fullscreen::Borderless(None)));
 }
 
-/// The window menu, where a custom titlebar (at the pointer) or the keyboard opens it.
-pub(super) fn window_menu(window: &Window, menu: crate::runtime::WindowMenu) {
+/// The window menu, where a custom titlebar (at `at`, the click's point in window points, else
+/// the pointer) or the keyboard opens it.
+pub(super) fn window_menu(window: &Window, menu: crate::runtime::WindowMenu, at: Option<(f32, f32)>) {
     #[cfg(target_os = "windows")]
-    crate::platform::win32::window_menu(window, menu);
+    {
+        let scale = window.scale_factor();
+        let at = at.zip(window.inner_position().ok()).map(|((x, y), o)| (o.x + (f64::from(x) * scale).round() as i32, o.y + (f64::from(y) * scale).round() as i32));
+        crate::platform::win32::window_menu(window, menu, at);
+    }
     #[cfg(not(target_os = "windows"))]
-    let _ = (window, menu);
+    let _ = (window, menu, at);
 }
 
 /// Whether Alt+Space opens this window's window menu when no handler takes it.

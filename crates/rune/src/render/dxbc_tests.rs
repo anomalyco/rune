@@ -118,9 +118,9 @@ fn uber_dxbc_is_fresh() {
 #[test]
 fn renderers_load_the_precompiled_uber_shader() {
     let gpu = crate::render::Gpu::headless();
-    let wgsl = super::super::metallib::uber_wgsl();
-    assert!(super::uber(&gpu.device, &wgsl, |_| ()).is_some(), "a DX12 device takes the bytecode");
-    assert!(super::uber(&gpu.device, "changed", |_| ()).is_none(), "other WGSL compiles");
-    assert!(super::with_dxbc_enabled(false, || super::uber(&gpu.device, &wgsl, |_| ())).is_none());
+    let (wgsl, abi) = crate::render::uber_shader_identity();
+    assert!(super::uber(&gpu.device, &wgsl, abi, |_| ()).is_some(), "a DX12 device takes the bytecode");
+    assert!(super::uber(&gpu.device, "changed", abi, |_| ()).is_none(), "other WGSL compiles");
+    assert!(super::with_dxbc_enabled(false, || super::uber(&gpu.device, &wgsl, abi, |_| ())).is_none());
     drop(crate::render::Renderer::new(&gpu.device, wgpu::TextureFormat::Bgra8Unorm));
 }

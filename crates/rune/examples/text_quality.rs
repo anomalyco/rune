@@ -82,6 +82,7 @@ fn experimental(
                     ink: 0,
                     byte: 0,
                     color: 0,
+                    outline: None,
                 });
                 cursor[0] += p.width + 1;
                 cursor[2] = cursor[2].max(p.height);

@@ -148,6 +148,19 @@ impl Smoothing {
         radius_for_bucket(ppem as f64, bucket)
     }
 
+    /// The y autohint `mask` applies to an upright glyph of face `key` at `ppem` dilated by
+    /// `radius`, for a glyph drawn from its outline instead.
+    pub(crate) fn hint(&mut self, cx: &mut ScaleContext, font: FontRef<'_>, key: (u64, u32, u64), coords: &[i16], ppem: f64, radius: f64) -> Option<hint::HintTransform> {
+        if !self.pipeline.hint || !hint::eligible(ppem) {
+            return None;
+        }
+        if self.metrics.len() >= MAX_FACES && !self.metrics.contains_key(&key) {
+            self.metrics.clear();
+        }
+        let metrics = (*self.metrics.entry(key).or_insert_with(|| truetype_metrics(font, coords, cx)))?;
+        autohint(metrics, ppem, if self.pipeline.dilate { radius } else { 0.0 })
+    }
+
     pub(crate) fn rasterize(&mut self, cx: &mut ScaleContext, atlas: &mut Atlas, job: Job<'_>) -> Rasterized {
         let Some((data, at)) = self.mask(cx, &job) else { return Rasterized::Empty };
         if at.width == 0 || at.height == 0 || !data.iter().any(|&c| c != 0) {

@@ -75,8 +75,8 @@ pub(crate) const SHIFT_TURNS_WHEEL: bool = !cfg!(target_os = "macos");
 
 impl ScrollState {
     /// The offset, velocity and limit on one axis.
-    pub(super) fn axis(&mut self, horizontal: bool) -> (&mut f64, &mut f32, f64) {
-        if horizontal { (&mut self.x.offset, &mut self.x.v, self.x.max) } else { (&mut self.offset, &mut self.v, self.max) }
+    pub(super) fn axis(&mut self, horizontal: bool) -> (&mut f64, f64) {
+        if horizontal { (&mut self.x.offset, self.x.max) } else { (&mut self.offset, self.max) }
     }
 }
 

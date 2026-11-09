@@ -177,36 +177,35 @@ impl<S: 'static> Runtime<S> {
             };
             let laid = if axes.y() { self.ease_to_shrunk_end(i, overflow) } else { None };
             let Some(st) = self.scrolls.get_mut(&id) else { continue };
-            st.scrolling = st.direct || st.v.abs() > 1.0 || st.x.v.abs() > 1.0;
+            st.scrolling = st.direct || st.coast().abs() > 1.0 || st.x.v.abs() > 1.0;
             st.by_hand |= st.scrolling;
             st.direct = false;
             st.max = overflow.max(0.0);
-            if st.pinned && sp.stick_bottom {
-                // A reader stuck on a shrinking stack's end doesn't rise with its rows' last fraction.
-                st.offset = laid.filter(|&end| st.offset <= end + 1e-6).map_or(st.max, |end| st.max.min(end));
-                st.v = 0.0;
-                st.glide = None;
-            } else if st.glide.is_some() {
-                moving |= scroll_bottom::glide(st, dt);
-            } else if st.v.abs() > 1.0 {
-                // Exact for exponential decay, so a long frame carries the same distance as
-                // the short frames it stands for.
-                let decay = (-SCROLL_DECAY * dt).exp();
-                st.offset += f64::from(st.v * (1.0 - decay) / SCROLL_DECAY);
-                st.v *= decay;
-                if st.offset <= 0.0 || st.offset >= st.max {
-                    st.v = 0.0;
+            match st.mode {
+                ScrollMode::Pinned if sp.stick_bottom => {
+                    // A reader stuck on a shrinking stack's end doesn't rise with its rows' last fraction.
+                    st.offset = laid.filter(|&end| st.offset <= end + 1e-6).map_or(st.max, |end| st.max.min(end));
                 }
-                moving = true;
-            } else {
-                st.v = 0.0;
+                ScrollMode::Glide { .. } => moving |= scroll_bottom::glide(st, dt),
+                ScrollMode::Momentum { v } if v.abs() > 1.0 => {
+                    // Exact for exponential decay, so a long frame carries the same distance as
+                    // the short frames it stands for.
+                    let decay = (-SCROLL_DECAY * dt).exp();
+                    st.offset += f64::from(v * (1.0 - decay) / SCROLL_DECAY);
+                    let edge = st.offset <= 0.0 || st.offset >= st.max;
+                    st.mode = if edge { ScrollMode::Rest } else { ScrollMode::Momentum { v: v * decay } };
+                    moving = true;
+                }
+                ScrollMode::Momentum { .. } => st.mode = ScrollMode::Rest,
+                ScrollMode::Pinned | ScrollMode::Rest => {}
             }
             st.offset = st.offset.clamp(0.0, st.max);
             // Landed on a shrinking stack's new end: stick once its rows are within half a point
-            // of it, not while they're still short of it.
+            // of it, not while they're still short of it. A glide that reaches the end hands it
+            // to the pin.
             let shrinking = laid.is_some_and(|end| end < st.max - 0.5 && st.offset < st.max - 1e-3);
-            if sp.stick_bottom && !held && !shrinking && st.offset >= st.max - 0.5 && st.v.abs() <= 1.0 {
-                st.pinned = true;
+            if sp.stick_bottom && !held && !shrinking && st.offset >= st.max - 0.5 && st.coast().abs() <= 1.0 {
+                st.pin();
             }
             st.laid = laid;
             if sp.stick_bottom && axes.y() && slack_dt > 0.0 { moving |= self.step_slack(i, slack_dt); }

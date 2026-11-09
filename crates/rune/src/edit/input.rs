@@ -308,10 +308,11 @@ impl TextEdit {
     }
 
     /// Where Left (Right when `right`) moves the caret, by a character or a `word`, when the
-    /// text moves visually ([`CaretMotion`]): across the line as it's drawn. `None` when it
-    /// moves by the logical order, or at the line's edge that way.
+    /// text moves visually ([`CaretMotion`]): across the line as it's drawn, and at the line's
+    /// edge on the way its paragraph runs, so Left leaves a right-to-left line forward. `None`
+    /// when it moves by the logical order.
     fn visual_step(&self, layout: Option<&Layout<Ink>>, right: bool, word: bool) -> Option<usize> {
-        use super::caret_motion::{Arrow, CaretMotion};
+        use super::caret_motion::{Arrow, CaretMotion, Landing};
         let l = layout?;
         match CaretMotion::of(l, self.secure && !self.revealed) {
             CaretMotion::Logical => None,
@@ -322,7 +323,18 @@ impl TextEdit {
                     (false, true) => Arrow::WordLeft,
                     (true, true) => Arrow::WordRight,
                 };
-                super::caret_motion::visual(l, self.display_index(self.focus), arrow).map(|j| self.model_index(j))
+                Some(match super::caret_motion::visual(l, self.display_index(self.focus), arrow) {
+                    Landing::At(j) => self.model_index(j),
+                    Landing::Edge => {
+                        let forward = right == (crate::el::Flow::of_layout(l) == crate::el::Flow::Ltr);
+                        match (forward, word) {
+                            (true, false) => next_char(&self.text, self.focus),
+                            (true, true) => self.next_word(self.focus),
+                            (false, false) => prev_char(&self.text, self.focus),
+                            (false, true) => self.prev_word(self.focus),
+                        }
+                    }
+                })
             }
         }
     }

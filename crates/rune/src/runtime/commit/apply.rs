@@ -121,7 +121,7 @@ impl<S: 'static> Runtime<S> {
             let reader = self.virtuals.get(&nodes[c].path)
                 .filter(|v| !self.keeps.iter().any(|k| k.viewport == v.scroll_path))
                 .and_then(|v| self.path_ids.get(&v.scroll_path))
-                .and_then(|id| self.scrolls.get(id)).is_some_and(|s| !s.pinned);
+                .and_then(|id| self.scrolls.get(id)).is_some_and(|s| !s.pinned());
             let reading = reader && !revealed_now;
             scratch.rows.clear();
             scratch.rows.extend((c + 1..nodes.len()).filter(|&j| nodes[j].parent == Some(c)));
@@ -672,22 +672,19 @@ impl<S: 'static> Runtime<S> {
         // Scroll viewports: a new sticky viewport opens at the end.
         for (i, n) in nodes.iter().enumerate() {
             if let Some(sp) = n.cold.get().and_then(|c| c.scroll) {
-                let e = self.scrolls.entry(n.id).or_insert(ScrollState { pinned: sp.stick_bottom, ..ScrollState::default() });
+                let e = self.scrolls.entry(n.id).or_insert(ScrollState { mode: if sp.stick_bottom { ScrollMode::Pinned } else { ScrollMode::Rest }, ..ScrollState::default() });
                 e.x.flow = n.flow;
                 if concealed.get(i).copied().unwrap_or(false) {
                     e.offset = 0.0;
-                    e.v = 0.0;
+                    e.halt();
                     e.max = 0.0;
-                    e.glide = None;
-                    e.glide_to = None;
                     e.held = false;
                     e.scrolling = false;
                     e.slack = scroll_bottom::Slack::landed(self.viewport);
                     e.x = AxisScroll::default();
                 }
                 if tx.settle && sp.stick_bottom {
-                    e.pinned = true;
-                    e.v = 0.0;
+                    e.pin();
                 }
                 // A window resize, a settle or an instant change lands the slack: the rows go
                 // straight to the bottom, not on a glide a moment later.

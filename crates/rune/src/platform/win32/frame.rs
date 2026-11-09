@@ -118,17 +118,57 @@ pub(crate) fn has_window_menu(window: &winit::window::Window) -> bool {
     super::hwnd(window).is_some_and(|hwnd| unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32 & WS_SYSMENU != 0)
 }
 
-/// Opens the window menu and carries out what the user picks: at the pointer, as a right-click
-/// on a native title bar does, or from the keyboard, as Alt+Space does. The keyboard's is
-/// posted, so its modal loop runs from the message loop rather than inside a key's message.
-pub(crate) fn window_menu(window: &winit::window::Window, menu: WindowMenu) {
+/// Opens the window menu and carries out what the user picks: at `at` (the click), as a right-click
+/// on a native title bar does, or from the keyboard, as Alt+Space does. Both are posted, so the
+/// menu's modal loop runs from the message loop rather than inside the event loop's handler,
+/// where neither a quit (`crate::quit`) nor the windows' timers could run until it closed.
+pub(crate) fn window_menu(window: &winit::window::Window, menu: WindowMenu, at: Option<(i32, i32)>) {
     let Some(hwnd) = super::hwnd(window) else { return };
     if menu == WindowMenu::Keyboard {
         // SAFETY: posts to a live window this thread owns.
         unsafe { PostMessageW(hwnd, WM_SYSCOMMAND, SC_KEYMENU as WPARAM, LPARAM::from(b' ')); }
         return;
     }
-    let Some((x, y)) = super::pointer_position() else { return };
+    // Where the click was, in desktop pixels; the pointer may have moved since.
+    let Some((x, y)) = at.or_else(super::pointer_position) else { return };
+    let id = NEXT_MENU.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Screen points fit 16 bits each, as in every mouse message's.
+    let point = ((y as u16 as u32) << 16 | x as u16 as u32) as usize;
+    // SAFETY: Win32 calls on a live window this thread owns; the subclass keeps no pointer.
+    unsafe {
+        if SetWindowSubclass(hwnd, Some(menu_procedure), id, point) == 0 { return track_window_menu(hwnd, x, y); }
+        if PostMessageW(hwnd, menu_message(), id, 0) == 0 {
+            RemoveWindowSubclass(hwnd, Some(menu_procedure), id);
+            track_window_menu(hwnd, x, y);
+        }
+    }
+}
+
+/// Each posted window menu's subclass id, named in its message.
+static NEXT_MENU: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+
+fn menu_message() -> u32 {
+    static MESSAGE: OnceLock<u32> = OnceLock::new();
+    // SAFETY: the name is NUL-terminated.
+    *MESSAGE.get_or_init(|| unsafe { RegisterWindowMessageW("Rune::WindowMenu\0".encode_utf16().collect::<Vec<u16>>().as_ptr()) })
+}
+
+unsafe extern "system" fn menu_procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPARAM, id: usize, point: usize) -> LRESULT {
+    if (message == menu_message() && w == id) || message == WM_NCDESTROY {
+        // SAFETY: removes this subclass, on the window it was set on.
+        unsafe { RemoveWindowSubclass(hwnd, Some(menu_procedure), id) };
+        if message != WM_NCDESTROY {
+            track_window_menu(hwnd, (point & 0xffff) as u16 as i16 as i32, (point >> 16 & 0xffff) as u16 as i16 as i32);
+            return 0;
+        }
+    }
+    // SAFETY: passes every other message on.
+    unsafe { DefSubclassProc(hwnd, message, w, l) }
+}
+
+/// Shows the window menu at screen point (`x`, `y`) until it closes, and carries out the pick.
+fn track_window_menu(hwnd: HWND, x: i32, y: i32) {
+    let _turns = crate::popup_menu::turns(hwnd);
     // SAFETY: Win32 calls on a live window this thread owns and its own system menu.
     unsafe {
         let menu = GetSystemMenu(hwnd, 0);

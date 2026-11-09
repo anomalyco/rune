@@ -144,6 +144,15 @@ impl<S: 'static> Runtime<S> {
                 pinh.paint_opacity *= pinh.first_fade;
             }
             pinh.first_fade = 1.0;
+            // `El::stuck_reveal`: shown as far as its sticky parent has held.
+            if let Some(span) = n.sticky.as_ref().and_then(|s| s.reveal)
+                && let Some(pr) = n.parent
+            {
+                let held = if self.has_sticky { self.stuck.get(pr).map_or(0.0, |s| s.abs()) } else { 0.0 };
+                let shown = (held / span).clamp(0.0, 1.0);
+                pinh.opacity *= shown;
+                pinh.paint_opacity *= shown;
+            }
             pinh.dy += self.row_dy[i];
             pinh.snap.rigid[1] += self.row_dy[i];
             if let Some(a) = &n.above
@@ -877,6 +886,9 @@ impl<S: 'static> Runtime<S> {
                 if let Some(c) = n.focus.highlight && self.highlight_visible(i) {
                     overlay = over(premul(c, 1.0, srgb), overlay);
                 }
+                if let Some(c) = n.focus.fill && self.focus_ring_visible(i) {
+                    overlay = over(premul(c, 1.0, srgb), overlay);
+                }
                 if !focus_flat && (n.vis.hover().a > 0.0 || self.scene.store().is_animating(n.id, P_HOVER_C)) {
                     let hov_v = self.scene.get(n.id, P_HOVER).unwrap_or(0.0).clamp(0.0, 1.0);
                     if hov_v > 0.0 {
@@ -1181,7 +1193,7 @@ impl<S: 'static> Runtime<S> {
                 // `grid` rounds to 1/64 of a device pixel. Always land at the layout offset.
                 let rounded = grid(exact, s);
                 let step = (rounded - st.drawn[1]).signum() as i8;
-                let back = st.pinned && rounded != grid(st.offset as f32, s) && step == -st.drawn_step && ((exact - st.drawn[1]) * s).abs() < 1.0 / 64.0;
+                let back = st.pinned() && rounded != grid(st.offset as f32, s) && step == -st.drawn_step && ((exact - st.drawn[1]) * s).abs() < 1.0 / 64.0;
                 let drawn = if back { st.drawn[1] } else { rounded };
                 let moved = if drawn == st.drawn[1] { st.drawn_step } else { step };
                 dy -= drawn;

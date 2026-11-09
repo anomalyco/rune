@@ -70,6 +70,16 @@ impl Script {
         })
     }
 
+    /// Builds, ahead of the next reload, the part of a VM that doesn't depend on the script's
+    /// files: the Luau state, the prelude, `@rune/ui` and the host's
+    /// [`ScriptOptions::setup`](crate::ScriptOptions::setup). The reload then only loads the
+    /// modules and runs them, so its swap on the UI thread is shorter. Call it once a reload is
+    /// coming (a file was saved and compiles off the UI thread meanwhile); with one built
+    /// already it does nothing. `setup` runs here rather than in the reload.
+    pub fn prewarm(&self) {
+        self.inner.prewarm();
+    }
+
     /// [`Script::reload`] with sources the host compiled itself, off the UI thread (`compile` is
     /// how long that took, for the report).
     pub fn reload_compiled(&self, sources: Sources, compiled: Compiled, compile: Duration) -> Result<Reload, ScriptError> {

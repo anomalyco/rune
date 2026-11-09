@@ -9,8 +9,10 @@
 //! long lines scrolled sideways, with the line numbers held at the left edge. `--scene added`
 //! splits an added and a deleted file, each one column across the whole width. `--scene folded`
 //! folds a full-context patch with `FileDiff::fold`, four unchanged lines around its change.
+//! `--scene long` folds a longer one around two changes, and `--scene line-info` draws it with
+//! `FoldRow::LineInfo`, as OpenCode Desktop's review does.
 use rune::{App, AppSpec, Cx, El, KeyEvent, Tx, col, row, text};
-use rune_kit::diff::{Annotation, DiffMode, DiffState, DiffView, FileDiff, LineRange, LineRef, Side, parse};
+use rune_kit::diff::{Annotation, DiffMode, DiffState, DiffView, FileDiff, FoldRow, LineRange, LineRef, Side, parse};
 use rune_kit::{Button, ButtonVariant, Kit, SegmentedControl};
 
 const OLD_RS: &str = "use std::time::Duration;
@@ -202,6 +204,7 @@ const DELETED_TOML: &str = "[retry]\nlegacy = true\ndelay_ms = 250\n";
 struct Review {
     diff: DiffState,
     composing: Option<LineRange>,
+    fold_row: FoldRow,
 }
 
 fn init() -> Review {
@@ -213,7 +216,7 @@ fn init() -> Review {
     files.extend(parse(PATCH));
     let mut diff = DiffState::new(files);
     diff.set_annotations(vec![Annotation::new(0, LineRef::new(Side::New, 19), "jitter")]);
-    Review { diff, composing: None }
+    Review { diff, composing: None, fold_row: FoldRow::Summary }
 }
 
 fn view(s: &Review, cx: &mut Cx<Review>) -> El {
@@ -246,6 +249,7 @@ fn view(s: &Review, cx: &mut Cx<Review>) -> El {
     let diff = DiffView::new(|s: &Review| &s.diff, |s: &mut Review| &mut s.diff)
         .annotation(move |s: &Review, a: &Annotation| comment(&kc, s, a))
         .on_comment(|s: &mut Review, lines, _| s.composing = Some(lines))
+        .fold_row(s.fold_row)
         .build(s, &k);
     col().w_full().h_full().fill(k.c.bg_base).child(bar).child(diff)
 }
@@ -278,6 +282,19 @@ fn comment(k: &Kit, _: &Review, a: &Annotation) -> El {
     col().w_full().px(12.0).py(8.0).fill(k.c.bg_base).child(card)
 }
 
+/// A sixty-line full-context patch changed at lines 8 and 45, folded four lines around each.
+fn long() -> DiffState {
+    let full: String = (1..=60)
+        .map(|n| match n {
+            8 => "-    attempts: 3,\n+    attempts: 5,\n".to_owned(),
+            45 => "-    jitter: 0.0,\n+    jitter: 0.2,\n".to_owned(),
+            _ => format!("     line {n}\n"),
+        })
+        .collect();
+    let patch = format!("--- a/config/retry.rs\t\n+++ b/config/retry.rs\t\n@@ -1,60 +1,60 @@\n{full}");
+    DiffState::new(parse(&patch).into_iter().map(|f| f.fold(4)).collect())
+}
+
 fn on_key(s: &mut Review, ev: &KeyEvent, tx: &mut Tx) -> bool {
     s.diff.key(ev, tx)
 }
@@ -293,6 +310,11 @@ fn main() {
                 let full: String = (1..=40).map(|n| if n == 8 { "-    attempts: 3,\n+    attempts: 5,\n".to_owned() } else { format!("     line {n}\n") }).collect();
                 let patch = format!("--- a/config/retry.rs\t\n+++ b/config/retry.rs\t\n@@ -1,40 +1,40 @@\n{full}");
                 s.diff = DiffState::new(parse(&patch).into_iter().map(|f| f.fold(4)).collect());
+            }),
+            ("long", |s: &mut Review| s.diff = long()),
+            ("line-info", |s: &mut Review| {
+                s.diff = long();
+                s.fold_row = FoldRow::LineInfo;
             }),
             ("added", |s: &mut Review| {
                 s.diff = DiffState::new(vec![

@@ -287,7 +287,7 @@ impl<S: 'static> Runtime<S> {
                     let p = &self.nodes[pi];
                     moving |= animating(p.id)
                         || self.stacks.get(&p.id).is_some_and(|s| s.moving)
-                        || self.scrolls.get(&p.id).is_some_and(|s| s.slack.moving() || s.glide.is_some());
+                        || self.scrolls.get(&p.id).is_some_and(|s| s.slack.moving() || s.glide().is_some());
                     live_intent |= intent(p);
                     scrolling |= self.scrolls.get(&p.id).is_some_and(ScrollState::moving);
                     in_growing_row |= self.grows.get(&p.id).is_some_and(|g| g.moving());
@@ -323,7 +323,7 @@ impl<S: 'static> Runtime<S> {
                     radius: p.radius.0[0],
                     fill: self.color(n.id, P_FILL, n.vis.fill),
                     text_color: n.text.as_ref().map(|t| t.color).or(n.vis.icon.map(|(_, c)| c)).map(|c| self.color(n.id, P_TEXT, c)),
-                    hover: if n.focus.highlight.is_some() && self.highlight_visible(i) { 1.0 }
+                    hover: if (n.focus.highlight.is_some() && self.highlight_visible(i)) || (n.focus.fill.is_some() && self.focus_ring_visible(i)) { 1.0 }
                         else { self.scene.get(n.id, P_HOVER).unwrap_or(0.0) },
                     press: self.scene.get(n.id, P_PRESS).unwrap_or(0.0),
                     moving,

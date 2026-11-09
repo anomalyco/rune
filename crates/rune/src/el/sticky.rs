@@ -18,6 +18,8 @@ pub(crate) struct Sticky {
     pub shadows: Vec<Shadow>,
     /// `El::stuck_fade`: lead and span, in points.
     pub fade: Option<[f32; 2]>,
+    /// `El::stuck_reveal`: the parent's shift, in points, at which this element shows whole.
+    pub reveal: Option<f32>,
 }
 
 impl El {
@@ -97,6 +99,15 @@ impl El {
     /// after it stays whole.
     pub fn stuck_fade(mut self, lead: f32, span: f32) -> Self {
         self.cold_mut().sticky.get_or_insert_with(Default::default).fade = Some([lead, span.max(0.0)]);
+        self
+    }
+    /// Shows this child of a [`El::sticky_top`] element as far as its parent is stuck: hidden
+    /// at rest, whole once the parent has held `span` points, linearly between, frame by frame
+    /// with the scroll. A gradient hung under a stuck header with it fades in as rows scroll
+    /// beneath, as Desktop's model dialog fades its header's `::after` by how far its rows have
+    /// scrolled under it (`select-dialog.tsx` `--model-dialog-header-fade`).
+    pub fn stuck_reveal(mut self, span: f32) -> Self {
+        self.cold_mut().sticky.get_or_insert_with(Default::default).reveal = Some(span.max(1e-3));
         self
     }
 }

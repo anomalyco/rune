@@ -16,7 +16,7 @@ const CONFIGS: [&str; 2] = [".luaurc", ".config.luau"];
 /// `.luaurc`). `require` follows Luau's require-by-string rules among them and never reaches
 /// outside the folder: from `init.luau`, `require("@self/row")` is `row.luau`, and
 /// `require("./row")` would be a sibling of the folder, so it fails.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Sources {
     files: BTreeMap<String, Arc<str>>,
     parent_config: Option<Arc<str>>,
@@ -116,6 +116,16 @@ impl Sources {
     /// Compiles every `.luau` file to Luau bytecode (`-O2`, with type information for native
     /// code). Runs on any thread; a watched script compiles off the UI thread.
     pub fn compile(&self) -> Result<Compiled, ScriptError> {
+        self.compile_reusing(None)
+    }
+
+    /// [`Sources::compile`], reusing `previous`'s bytecode for every module whose source is
+    /// the same: a save recompiles only the files it changed.
+    pub fn compile_from(&self, previous: &Compiled) -> Result<Compiled, ScriptError> {
+        self.compile_reusing(Some(previous))
+    }
+
+    fn compile_reusing(&self, previous: Option<&Compiled>) -> Result<Compiled, ScriptError> {
         let compiler = compiler();
         let entry = self.entry_path();
         if !self.files.contains_key(entry) {
@@ -128,10 +138,14 @@ impl Sources {
                 configs.insert(path.clone(), source.clone());
                 continue;
             }
+            if let Some(same) = previous.and_then(|p| p.modules.get(path)).filter(|m| m.source == *source) {
+                modules.insert(path.clone(), same.clone());
+                continue;
+            }
             let code = compiler
                 .compile(source.as_bytes())
                 .map_err(|e| ScriptError::new(ErrorKind::Syntax, format!("{path}{}", ScriptError::from(e).message)))?;
-            modules.insert(path.clone(), Module { code: code.into(), native: is_native(source) });
+            modules.insert(path.clone(), Module { code: code.into(), native: is_native(source), source: source.clone() });
         }
         Ok(Compiled { modules, configs, parent_config: self.parent_config.clone(), folder: self.folder.clone(), entry: entry.to_owned() })
     }
@@ -152,6 +166,8 @@ pub(crate) struct Module {
     pub(crate) code: Arc<[u8]>,
     /// The file starts with `--!native`: compile it to native code where the platform allows.
     pub(crate) native: bool,
+    /// What it was compiled from, so a later compile of the same text reuses it.
+    source: Arc<str>,
 }
 
 impl Compiled {

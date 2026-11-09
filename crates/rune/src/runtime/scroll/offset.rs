@@ -33,11 +33,7 @@ impl<S: 'static> Runtime<S> {
                 let Some((i, to)) = self.anchor_offset(&r.key, r.y.unwrap_or(0.0)) else { continue };
                 jumps.push((self.nodes[i].id, false, to));
                 anchors.push((jumps.len() - 1, r.key, r.y.unwrap_or(0.0)));
-                if let Some(st) = self.scrolls.get_mut(&self.nodes[i].id) {
-                    st.v = 0.0;
-                    st.glide = None;
-                    st.glide_to = None;
-                }
+                if let Some(st) = self.scrolls.get_mut(&self.nodes[i].id) { st.halt(); }
                 continue;
             }
             let Some(i) = self.scroll_viewport_on(&r.key, r.x.is_some(), r.y.is_some()) else { continue };
@@ -63,18 +59,14 @@ impl<S: 'static> Runtime<S> {
             }
             if let Some(y) = r.y.filter(|_| axes.y()) {
                 let to = f64::from(y).max(0.0);
-                st.v = 0.0;
                 if let Some(spring) = glide && (to.min(st.max) - st.offset).abs() > 0.5 {
                     let reach = scroll_bottom::GLIDE_REACH * view_h;
                     let end = to.min(st.max);
                     st.offset = st.offset.clamp(end - reach, end + reach);
-                    st.glide_to = Some(to);
-                    st.glide = Some(retarget_v(spring, st.offset, st.glide.unwrap_or(0.0), end));
-                    st.shrink_glide = false;
-                    st.pinned = false;
+                    let v = retarget_v(spring, st.offset, st.glide().unwrap_or(0.0), end);
+                    st.mode = ScrollMode::Glide { v, to: GlideTo::Offset(to) };
                 } else {
-                    st.glide = None;
-                    st.glide_to = None;
+                    st.halt();
                     jumps.push((id, false, to));
                 }
             }
@@ -102,7 +94,7 @@ impl<S: 'static> Runtime<S> {
                 st.x.offset = to.min(st.x.max);
             } else {
                 st.offset = to.min(st.max);
-                st.pinned = stick && st.offset >= st.max - 0.5;
+                st.land(stick);
             }
             if (if horizontal { st.x.offset } else { st.offset } - was).abs() > 1e-3 { st.nudged = NUDGE_FRAMES; }
         }
@@ -154,21 +146,15 @@ impl<S: 'static> Runtime<S> {
         let end = f64::from(bottom - self.nodes[i].target[3]).max(0.0);
         let held = self.reduced_motion || owned;
         let st = self.scrolls.get_mut(&self.nodes[i].id)?;
-        if st.glide.is_none() { st.shrink_glide = false; }
-        st.shrink_cut = moving && (st.shrink_cut || st.direct || st.v.abs() > 1.0);
-        if st.shrink_glide {
-            if held || st.shrink_cut || end >= st.offset {
-                st.glide = None;
-                st.glide_to = None;
-                st.shrink_glide = false;
-            } else {
-                st.glide_to = Some(end);
+        st.shrink_cut = moving && (st.shrink_cut || st.direct || st.coast().abs() > 1.0);
+        match st.mode {
+            ScrollMode::Glide { to: GlideTo::ShrunkEnd(_), .. } if held || st.shrink_cut || end >= st.offset => st.mode = ScrollMode::Rest,
+            ScrollMode::Glide { v, to: GlideTo::ShrunkEnd(_) } => st.mode = ScrollMode::Glide { v, to: GlideTo::ShrunkEnd(end) },
+            ScrollMode::Rest | ScrollMode::Momentum { .. } if moving && !(held || st.shrink_cut || st.offset > overflow || st.offset - end <= 0.5) => {
+                st.mode = ScrollMode::Glide { v: 0.0, to: GlideTo::ShrunkEnd(end) };
+                st.spring = None;
             }
-        } else if moving && !(held || st.shrink_cut || st.pinned || st.glide.is_some() || st.offset > overflow || st.offset - end <= 0.5) {
-            st.glide = Some(0.0);
-            st.glide_to = Some(end);
-            st.spring = None;
-            st.shrink_glide = true;
+            _ => {}
         }
         moving.then_some(end)
     }
@@ -218,7 +204,58 @@ impl ScrollState {
     /// A hand, its momentum or a glide is moving the content this frame: what
     /// [`ElementInfo::scrolling`](crate::ElementInfo) reports for everything inside.
     pub(crate) fn moving(&self) -> bool {
-        self.scrolling || self.glide.is_some() || self.x.glide.is_some()
+        self.scrolling || self.glide().is_some() || self.x.glide.is_some()
+    }
+
+    /// It follows its content's bottom.
+    pub(super) fn pinned(&self) -> bool {
+        matches!(self.mode, ScrollMode::Pinned)
+    }
+
+    /// The running glide's speed (points a second), while one runs.
+    pub(super) fn glide(&self) -> Option<f32> {
+        match self.mode {
+            ScrollMode::Glide { v, .. } => Some(v),
+            _ => None,
+        }
+    }
+
+    /// Where the running glide heads, when that isn't the bottom.
+    #[cfg(test)]
+    pub(super) fn glide_to(&self) -> Option<f64> {
+        match self.mode {
+            ScrollMode::Glide { to, .. } => to.offset(),
+            _ => None,
+        }
+    }
+
+    /// Its momentum (points a second), 0 unless coasting.
+    pub(super) fn coast(&self) -> f32 {
+        match self.mode {
+            ScrollMode::Momentum { v } => v,
+            _ => 0.0,
+        }
+    }
+
+    /// Follow the bottom from here (a pinned viewport keeps how its end last stepped).
+    pub(super) fn pin(&mut self) {
+        if !self.pinned() { self.mode = ScrollMode::Pinned; }
+    }
+
+    /// Stop following the bottom, where it stands.
+    pub(super) fn unpin(&mut self) {
+        if self.pinned() { self.mode = ScrollMode::Rest; }
+    }
+
+    /// Momentum and any glide stop; a pinned viewport stays pinned.
+    pub(super) fn halt(&mut self) {
+        if !self.pinned() { self.mode = ScrollMode::Rest; }
+    }
+
+    /// A hand or an app put the offset where it is: momentum and any glide stop, and a
+    /// stick-to-bottom viewport (`stick`) follows its end only if it sits there.
+    pub(super) fn land(&mut self, stick: bool) {
+        if stick && self.offset >= self.max - 0.5 { self.pin() } else { self.mode = ScrollMode::Rest; }
     }
 }
 
