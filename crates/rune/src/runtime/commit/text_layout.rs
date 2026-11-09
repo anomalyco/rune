@@ -29,8 +29,10 @@ pub(super) fn single_line_offset(prev: f32, inp: &crate::el::InputSpec, content:
     let caret = Cursor::from_byte_index(layout, caret_index(&inp.edit, content), Affinity::Downstream);
     let cx = crate::text::cursor_geometry(&caret, layout, 1.5 * s).x0 as f32;
     // A right-to-left field runs from its right edge: measure from there and shift rightward.
-    let rtl = layout.is_rtl();
-    let (cx, sign) = if rtl { (layout.full_width() - cx, -1.0) } else { (cx, 1.0) };
+    let (cx, sign) = match crate::el::Flow::of_layout(layout) {
+        crate::el::Flow::Ltr => (cx, 1.0),
+        crate::el::Flow::Rtl => (layout.full_width() - cx, -1.0),
+    };
     let mut scroll = prev * s * sign;
     if cx - scroll > visible - caret_w {
         scroll = cx - visible + caret_w;
@@ -65,23 +67,24 @@ pub(super) fn text_extent(n: &Node, spec: &TextSpec, layout: &Layout<Ink>, r: [f
     let (lo, hi) = layout.lines().map(|l| (l.metrics().offset, l.metrics().advance))
         .fold((f32::MAX, 0.0f32), |(lo, hi), (offset, advance)| (lo.min(offset), hi.max(offset + advance)));
     let (lo, hi) = if lo > hi { (0.0, layout.full_width()) } else { (lo, hi) };
-    let origin = [text_x(spec, x0, x1, layout.full_width() / scale, layout.is_rtl()), r[1] + n.inset[1]];
+    let origin = [text_x(spec, x0, x1, layout.full_width() / scale, crate::el::Flow::of_layout(layout)), r[1] + n.inset[1]];
     let x = origin[0] + lo / scale;
     (MRect::new(x, origin[1], ((hi - lo) / scale).min(x1 - x).max(0.0),
         (crate::text::spec_height(layout, spec.style, scale, spec.exact_lines) / scale).min(r[3] - n.inset[1] - n.inset[3])), origin)
 }
 
 /// Where a `width`-wide text line starts between `x0` and `x1`. Wrapped text aligns each line
-/// inside the wrap width itself, so it starts at `x0`. A right-to-left paragraph (`rtl`, its
+/// inside the wrap width itself, so it starts at `x0`. A right-to-left paragraph (`flow`, its
 /// layout's base level) starts at its right edge; wrapped, its lines already end there.
-pub(super) fn text_x(spec: &TextSpec, x0: f32, x1: f32, width: f32, rtl: bool) -> f32 {
-    match spec.align {
-        _ if line_alignment(spec) != parley::Alignment::Start || (rtl && spec.wrap) => x0,
-        Align::Start if rtl => x1 - width,
-        Align::End if rtl => x0,
-        Align::Start => x0,
-        Align::Center => x0 + (x1 - x0 - width) * 0.5,
-        Align::End => x1 - width,
+pub(super) fn text_x(spec: &TextSpec, x0: f32, x1: f32, width: f32, flow: crate::el::Flow) -> f32 {
+    use crate::el::Flow;
+    if line_alignment(spec) != parley::Alignment::Start || (flow == Flow::Rtl && spec.wrap) {
+        return x0;
+    }
+    match (spec.align, flow) {
+        (Align::Start, Flow::Ltr) | (Align::End, Flow::Rtl) => x0,
+        (Align::Center, _) => x0 + (x1 - x0 - width) * 0.5,
+        (Align::End, Flow::Ltr) | (Align::Start, Flow::Rtl) => x1 - width,
     }
 }
 

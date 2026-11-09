@@ -14,6 +14,7 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::color::Color;
 use crate::text::Link;
 
+mod caret_motion;
 mod display;
 mod history;
 mod html;

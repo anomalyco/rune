@@ -1,7 +1,7 @@
 //! Where `El::anchored` overlays go, how long an `El::anchored_fit` one may be, and the zoom
 //! one inherits from its anchor.
 use super::*;
-use crate::el::{Anchor, Side};
+use crate::el::{Anchor, Flow, Pin, Side};
 
 /// The node an `El::above` anchor `a` names, among the `before` nodes ahead of its element.
 pub(super) fn anchor_index(nodes: &[Node], before: usize, a: &Anchor) -> Option<usize> {
@@ -91,10 +91,10 @@ impl<S: 'static> Measurement<'_, S> {
             self.node_index.insert(id, i);
             let mut l = taffy.box_layout(nodes[i].taffy);
             // Right to left: laid out left to right, then mirrored inside the parent (`El::dir`).
-            if let Some(p) = nodes[i].parent.filter(|&p| nodes[p].rtl && !nodes[i].unmirrored) {
+            if let Some(p) = nodes[i].parent.filter(|&p| nodes[p].flow == Flow::Rtl && nodes[i].pin == Pin::Flowing) {
                 l.x = nodes[p].local.w - l.x - l.w;
             }
-            if nodes[i].rtl {
+            if nodes[i].flow == Flow::Rtl {
                 l.inset.swap(0, 2);
             }
             nodes[i].local = MRect::new(l.x, l.y, l.w, l.h);

@@ -90,7 +90,7 @@ pub fn text(content: impl Into<String>) -> El {
         secure_revealed: false,
         wrap_anywhere: false,
         exact_lines: true,
-        rtl: false,
+        flow: crate::el::Flow::Ltr,
         shape: None,
     }));
     e
@@ -404,7 +404,7 @@ pub enum Align {
 
 pub use crate::el::anchor::{Anchor, Side, anchor_rect};
 pub use crate::el::direction::Direction;
-pub(crate) use crate::el::direction::{mirror_anchor, mirror_visual, resolve as resolve_direction};
+pub(crate) use crate::el::direction::{DirEffect, DirEvent, Flow, Pin, mirror_anchor, mirror_visual, step as step_direction};
 pub(crate) use crate::el::scroll::FadeStyle;
 pub use crate::el::scroll::ScrollFade;
 pub use crate::el::text_spec::TextSpec;

@@ -133,7 +133,16 @@ fn element_path(el: &str) -> Option<String> {
     })
 }
 
-pub(super) fn rasterize_icon(icon: &Icon, px: u32, flip: bool, atlas: &mut Atlas) -> Rasterized {
+/// Which way an icon's drawing faces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Facing {
+    /// As drawn.
+    Upright,
+    /// Mirrored left to right: a directional icon in a right-to-left element (`El::mirror_in_rtl`).
+    Mirrored,
+}
+
+pub(super) fn rasterize_icon(icon: &Icon, px: u32, facing: Facing, atlas: &mut Atlas) -> Rasterized {
     if px == 0 {
         return Rasterized::Empty;
     }
@@ -141,7 +150,7 @@ pub(super) fn rasterize_icon(icon: &Icon, px: u32, flip: bool, atlas: &mut Atlas
         return Rasterized::Unplaced;
     }
     let mut cov = icon_coverage(icon, px);
-    if flip {
+    if facing == Facing::Mirrored {
         cov.chunks_exact_mut(px as usize).for_each(<[u8]>::reverse);
     }
     if !cov.iter().any(|&c| c != 0) {

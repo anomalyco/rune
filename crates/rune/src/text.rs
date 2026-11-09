@@ -84,6 +84,7 @@ use layout_cache::{Cache, Entry};
 #[cfg(test)]
 use layout_cache::STALE_BYTES;
 pub use icon::{Icon, icon_coverage, set_icon_swap, set_icon_swap_size};
+pub(crate) use icon::Facing;
 use icon::rasterize_icon;
 use trak::{Trak, Traks, font_trak};
 
@@ -892,14 +893,14 @@ impl TextSystem {
 
     /// The atlas quad for `icon` at `px` device pixels square, top-left at `origin`.
     pub fn icon_quad(&mut self, icon: &'static Icon, px: u32, origin: [f32; 2]) -> Option<GlyphQuad> {
-        self.icon_quad_flipped(icon, px, origin, false)
+        self.icon_quad_facing(icon, px, origin, Facing::Upright)
     }
 
-    /// [`Self::icon_quad`], drawn flipped left to right when `flip` (`El::mirror_in_rtl`).
-    pub(crate) fn icon_quad_flipped(&mut self, icon: &'static Icon, px: u32, origin: [f32; 2], flip: bool) -> Option<GlyphQuad> {
+    /// [`Self::icon_quad`], drawn facing `facing` (`El::mirror_in_rtl` mirrors it).
+    pub(crate) fn icon_quad_facing(&mut self, icon: &'static Icon, px: u32, origin: [f32; 2], facing: Facing) -> Option<GlyphQuad> {
         let icon = icon::swapped(icon);
-        // A flipped drawing is cached apart, under the size's top bit.
-        let key = (icon as *const Icon as usize, px | (u32::from(flip) << 31));
+        // A mirrored drawing is cached apart, under the size's top bit.
+        let key = (icon as *const Icon as usize, px | (u32::from(facing == Facing::Mirrored) << 31));
         let entry = match self.atlas.icons.get(&key) {
             Some(&e) => {
                 if let Some(a) = e {
@@ -907,7 +908,7 @@ impl TextSystem {
                 }
                 e
             }
-            None => match rasterize_icon(icon, px, flip, &mut self.atlas) {
+            None => match rasterize_icon(icon, px, facing, &mut self.atlas) {
                 Rasterized::Placed(g) => {
                     self.atlas.icons.insert(key, Some(g));
                     Some(g)

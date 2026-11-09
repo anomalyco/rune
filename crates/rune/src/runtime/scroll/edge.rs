@@ -47,7 +47,7 @@ impl<S: 'static> Runtime<S> {
         let style = n.scroll_edges.fade_style;
         // What hides past the left and right edges: a right-to-left viewport starts at its right.
         let (left, right) = (st.x.offset, st.x.max - st.x.offset);
-        let (left, right) = if st.x.rtl { (right, left) } else { (left, right) };
+        let (left, right) = match st.x.flow { crate::el::Flow::Ltr => (left, right), crate::el::Flow::Rtl => (right, left) };
         let edges = [(y, 1, offset, -1.0), (y, 3, below, 1.0), (x, 0, left, -1.0), (x, 2, right, 1.0)];
         for (_, edge, hidden, out) in edges.into_iter().filter(|e| e.0 && !(style.end_only && e.3 < 0.0)) {
             let (style, width) = style.edge(width, out > 0.0);

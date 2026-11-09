@@ -7,6 +7,7 @@
 //! a change mounted with its entrance but that landed out of view lands its entrance at once,
 //! and one nobody saw that a filter brings into view enters like the rows new to it.
 use super::*;
+use crate::el::Flow;
 
 impl<S: 'static> Runtime<S> {
     /// Per node of the last build: neither it nor anything under it drew. Empty before the first
@@ -145,14 +146,14 @@ impl<S: 'static> Runtime<S> {
             let (shift_min, shift_max) = match (self.scrolls.get(&n.id), n.scroll) {
                 (Some(st), Some(sp)) => {
                     let children = || (i + 1..nodes.len()).take_while(|&j| nodes[j].parent >= Some(i)).filter(|&j| nodes[j].parent == Some(i));
-                    let max_x = if !n.scroll_axes.x() { 0.0 } else if st.x.rtl {
-                        children().fold(0.0_f32, |m, c| m.max(n.target[0] - nodes[c].target[0]))
-                    } else {
-                        children().fold(0.0_f32, |m, c| m.max(nodes[c].target[2] - n.target[2]))
+                    let max_x = match (n.scroll_axes.x(), st.x.flow) {
+                        (false, _) => 0.0,
+                        (true, Flow::Ltr) => children().fold(0.0_f32, |m, c| m.max(nodes[c].target[2] - n.target[2])),
+                        (true, Flow::Rtl) => children().fold(0.0_f32, |m, c| m.max(n.target[0] - nodes[c].target[0])),
                     };
                     let max_y = if n.scroll_axes.y() { children().fold(0.0_f32, |m, c| m.max(nodes[c].target[3] - n.target[3])) } else { 0.0 };
                     let ox0 = st.x.shift() as f32;
-                    let ox1 = if st.x.rtl { ox0.clamp(-max_x, 0.0) } else { ox0.clamp(0.0, max_x) };
+                    let ox1 = match st.x.flow { Flow::Ltr => ox0.clamp(0.0, max_x), Flow::Rtl => ox0.clamp(-max_x, 0.0) };
                     let oy0 = st.offset as f32 + st.slack.height();
                     let oy1 = if st.pinned && sp.stick_bottom { max_y + st.slack.height() } else { oy0.clamp(0.0, max_y + st.slack.height()) };
                     (
