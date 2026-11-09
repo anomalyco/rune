@@ -68,6 +68,10 @@ pub struct Args {
     pub(crate) html_widths: Vec<f32>,
     /// `--html-template FILE`: the page `--html` fills at `<!-- rune:css -->` and `<!-- rune:body -->`.
     pub(crate) html_template: Option<PathBuf>,
+    /// `--realtime`: a headless run waits for the wall clock to reach each frame's time and
+    /// prints `rune-mark NAME T` as the script passes each mark, so a live server's replies and a
+    /// harness's actions keep pace with its script.
+    pub(crate) realtime: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -174,6 +178,7 @@ impl Args {
                 }
                 "--trace" => a.trace = Some(val(&mut i).into()),
                 "--native" => a.native = true,
+                "--realtime" => a.realtime = true,
                 "--trace-all" => a.trace_all = true,
                 "--strip" => a.strip = Some(val(&mut i).into()),
                 "--crop" => {
@@ -279,6 +284,8 @@ const HELP: &str = "usage: <app> [window]
                         sampled (tk) and why it was animating (quality.why)
   --trace-all           trace unkeyed elements too, by path
   --native             trace native submissions; --frames N stops after N frames
+  --realtime            headless: hold each frame until the wall clock reaches its time, and
+                        print \"rune-mark NAME T\" as the script passes each mark
   --first-pixels        report when the first GPU-complete offscreen pixels are readable
   --window KEY         select a window for headless tools (run_windows, App::window)
   --list-windows       list window keys using a deterministic virtual display
