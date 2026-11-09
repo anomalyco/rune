@@ -1,0 +1,1 @@
+- **A growing row lands once it is within a sixteenth of a point of its height.** Its spring's last creep moved it under a hundredth of a point a frame, which no pixel shows, and kept the window drawing frames that changed nothing; it now lands from 1/16 pt and 1.5 pt/s.
