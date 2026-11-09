@@ -139,7 +139,7 @@ impl Renderer {
             if page.data.is_empty() { changed |= self.images[index].is_some(); self.images[index] = None; continue; }
             if self.images[index].as_ref().is_none_or(|(t, _)| t.width() != page.width || t.height() != page.height) {
                 let texture = Self::image_texture(device, page.width, page.height);
-                let bind = Self::bind_group(device, &self.bind_layout, &self.globals, &self.atlas, &texture, None);
+                let bind = Self::bind_group(device, &self.bind_layout, &self.globals, self.uber.outlines(), &self.atlas, &texture, None);
                 self.images[index] = Some((texture, bind));
                 changed = true;
                 page.dirty = Some((0, page.height));
@@ -204,7 +204,7 @@ impl Renderer {
         for (index, page) in atlas.pages.iter_mut().enumerate() {
             if index >= self.atlas_pages.len() {
                 let texture = Self::texture(device, "glyph atlas", wgpu::TextureFormat::R8Unorm, ATLAS_SIZE, ATLAS_SIZE);
-                let bind = Self::bind_group(device, &self.bind_layout, &self.globals, &texture, &texture, None);
+                let bind = Self::bind_group(device, &self.bind_layout, &self.globals, self.uber.outlines(), &texture, &texture, None);
                 self.atlas_pages.push((texture, bind));
                 atlas_changed = true;
             }
@@ -213,6 +213,7 @@ impl Renderer {
             }
         }
         if atlas_changed { self.images_changed(); }
+        self.upload_outlines(device, &staging, atlas);
         if instances.len() > self.capacity {
             self.capacity = instances.len().next_power_of_two();
             self.instances = Self::instance_buffer(device, self.capacity);
@@ -384,6 +385,7 @@ impl Renderer {
         self.uploads.srgb = None;
         atlas.dirty = Some((0, ATLAS_SIZE));
         for page in &mut atlas.pages { page.dirty = Some((0, ATLAS_SIZE)); }
+        atlas.outlines.invalidate();
         self.layers.forget_blur_uniforms();
     }
 }

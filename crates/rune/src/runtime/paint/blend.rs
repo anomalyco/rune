@@ -55,6 +55,19 @@ pub(crate) fn glyph_uv_page(uv: [f32; 2]) -> ([f32; 2], f32) {
 }
 
 pub(crate) fn glyph(q: &GlyphQuad, fill: [f32; 4], clip: [f32; 4], fade: [f32; 4]) -> Instance {
+    if let Some(o) = q.outline {
+        // `text::Outline`'s layout: radii.w > 0 tells the shader to read the outline store.
+        return Instance {
+            rect: q.rect,
+            radii: [o.pen[0], o.pen[1], o.scale, o.zoom],
+            fill,
+            border: [o.record as f32, o.hint as f32, o.radius, 0.0],
+            params: [0.0, KIND_GLYPH, 0.0, 1.0],
+            uv: [0.0; 4],
+            clip,
+            fade: crate::render::pack_fade(fade, clip, clip),
+        };
+    }
     let (uv, page) = glyph_uv_page(q.uv);
     Instance {
         rect: q.rect,

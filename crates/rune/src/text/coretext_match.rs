@@ -28,6 +28,12 @@ pub enum FontSmoothing {
     /// pens sit on quarter pixels, and Skia's text gamma and contrast weigh the coverage by the
     /// text's luminance. The default on Windows; elsewhere, without DirectWrite, it draws as `Off`.
     DirectWrite,
+    /// Rune's own text, the same on every platform: each glyph's exact pixel coverage from its
+    /// outline (Windfoil's box filter), grown by CoreText's font smoothing dilation, so it has the
+    /// macOS weight, with coverage drawn as is. Text whose scale moves (zooms, presence scales,
+    /// text flights) draws straight from its outlines on the GPU, so it stays sharp and doesn't
+    /// change when it lands. Where the renderer can't draw outlines it draws as `On`.
+    Windfoil,
 }
 
 impl Default for FontSmoothing {
@@ -47,7 +53,7 @@ impl FontSmoothing {
     /// dilation for `Off` (and for `DirectWrite` where DirectWrite can't draw a glyph).
     pub fn pipeline(self) -> ApplePipeline {
         match self {
-            FontSmoothing::On => ApplePipeline::SMOOTHED,
+            FontSmoothing::On | FontSmoothing::Windfoil => ApplePipeline::SMOOTHED,
             FontSmoothing::Off | FontSmoothing::DirectWrite => ApplePipeline::UNSMOOTHED,
         }
     }

@@ -223,7 +223,10 @@ impl<S: 'static> Runtime<S> {
         if rect.w <= 0.0 || clip[2] <= clip[0] || clip[3] <= clip[1] { return; }
         self.glyph_scratch.clear();
         self.text.set_glyph_inks(spec.color, &[]);
+        // From outlines where text draws them, which a flight's zoom magnifies without blurring.
+        self.text.set_emit(self.text.moving_emit());
         self.text.glyphs_for_layout(layout, scale, [origin[0] * scale, origin[1] * scale], false, &mut self.glyph_scratch);
+        self.text.set_emit(crate::text::outline::Emit::Atlas);
         let color = spec.color;
         let srgb = self.srgb_blend;
         // Colour glyphs live in the image atlas, which may move them before the flight ends.

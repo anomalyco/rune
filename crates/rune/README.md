@@ -116,6 +116,15 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     place from Parley's bytes), pens sit on Skia's quarter pixels, and Skia's gamma tables
     (sRGB, contrast 1, eight luminance buckets) weigh each mask by its ink
     (`text/windows/`). Off Windows it draws as `Off`.
+  - `Windfoil`: Rune's own text, the same on every OS. Text at rest draws as `On`; text whose
+    scale moves (a zoom, a presence scale, a text flight) draws straight from its outlines on the
+    GPU, at its resting pen and size magnified, so it stays sharp and lands on the mask it rests
+    as (`text/outline/`, `outline.wgsl`). Coverage is Windfoil's closed-form box filter over
+    xy-monotone quadratics (DesLauriers 2026), with CoreText's dilation and y autohint applied
+    per pixel. A text's raster path is a state machine (`text/outline/path.rs`: still, moving,
+    landing). It needs the renderer's Windfoil shader (`render/variant.rs`): renderers start
+    with it everywhere but macOS, where the Classic shader keeps drawing until text asks for
+    outlines; where it can't be built, text draws as `On`.
   `On` and `Off` work on every OS, since they are arithmetic on outlines. Blending is separate
   (`srgb_blend`).
   `cargo run -p rune --example coretext_compare [-- --smoothing on|off]` measures

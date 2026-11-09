@@ -113,6 +113,9 @@ impl TextSystem {
     /// Rasterizes (once) and appends one glyph at device position `at`, `k` times its size.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn push_glyph(&mut self, face: &Face, coords: &[i16], glyph: u32, at: [f32; 2], k: f32, byte: u32, out: &mut Vec<GlyphQuad>) -> Placed {
+        if self.emit == outline::Emit::Outline && let Some(placed) = self.push_outline(face, coords, glyph, at, k, byte, out) {
+            return placed;
+        }
         let [gx, gy] = at;
         let glide = self.glide;
         let (font, font_size, ink, skew) = (&face.font, face.size * k, face.ink, face.skew);
@@ -200,6 +203,72 @@ impl TextSystem {
         }
     }
 
+    /// [`Self::push_glyph`] from the glyph's outline, on the pen its atlas mask would sit at, so
+    /// a glyph keeps its place and shape when it comes to rest. None for a glyph outlines can't
+    /// draw (colour, or no room in the store this frame), which takes the atlas.
+    #[allow(clippy::too_many_arguments)]
+    fn push_outline(&mut self, face: &Face, coords: &[i16], glyph: u32, at: [f32; 2], k: f32, byte: u32, out: &mut Vec<GlyphQuad>) -> Option<Placed> {
+        let (font, font_size, ink, skew) = (&face.font, face.size * k, face.ink, face.skew);
+        let face_key = (font.data.id(), font.index);
+        let font_ref = FontRef::from_index(font.data.as_ref(), font.index as usize)?;
+        let color = *self.color_faces.entry(face_key).or_insert_with(|| {
+            [*b"COLR", *b"CBDT", *b"sbix", *b"SVG "].iter().any(|tag| font_ref.table(u32::from_be_bytes(*tag)).is_some())
+        });
+        if color {
+            return None;
+        }
+        let key = outline::Key { font: face_key.0, index: face_key.1, glyph, coords: face.coords_key, skew };
+        let scale_cx = &mut self.scale_cx;
+        let g = match self.atlas.outlines.glyph(key, || outline::extract(scale_cx, font_ref, coords, glyph as u16, skew)) {
+            outline::Found::Outline(g) => g,
+            outline::Found::Empty => return Some(Placed::Other),
+            outline::Found::Full => return None,
+        };
+        let direct_write = self.direct_write();
+        let ([fx, fy], [subpx, subpy]) = place(at, font_size, self.glide, direct_write);
+        let radius = if direct_write { 0.0 } else { self.apple.radius(ink, font_size) };
+        let hint = if direct_write || skew != 0 { None } else {
+            self.apple.hint(&mut self.scale_cx, font_ref, (face_key.0, face_key.1, face.coords_key), coords, font_size as f64, radius)
+        };
+        let o = Outline {
+            pen: [fx + subpx as f32 / coretext_match::PHASES, fy + subpy as f32 / GLIDE_PHASES as f32],
+            scale: font_size / g.upem,
+            zoom: 1.0,
+            record: g.record,
+            hint: hint.map_or(0, |t| self.atlas.outlines.hint(t.values)),
+            radius: radius as f32,
+        };
+        out.push(GlyphQuad { rect: o.rect(g.bbox), uv: [0.0; 2], ink, byte, color: 0, outline: Some(o) });
+        Some(Placed::Other)
+    }
+
+    /// Whether moving text draws from its outlines: with `FontSmoothing::Windfoil`, unless the
+    /// renderer has said it can't.
+    pub(crate) fn draws_outlines(&self) -> bool {
+        self.smoothing == FontSmoothing::Windfoil && self.atlas.outlines.support() != outline::Support::Unavailable
+    }
+
+    /// Steps text `node`'s raster path for this frame (`moving`: its scale moves) and draws the
+    /// glyphs placed next its way; what the step asks the painter to do.
+    pub(crate) fn begin_text(&mut self, node: u64, moving: bool) -> crate::machine::Effects<outline::PathEffect> {
+        let frame = if moving && self.draws_outlines() { outline::Frame::Moving } else { outline::Frame::Resting };
+        let (path, effects) = self.paths.step(node, frame);
+        self.emit = if self.draws_outlines() { path.emit() } else { outline::Emit::Atlas };
+        effects
+    }
+
+    /// Draws the glyphs placed from here on `emit`'s way, until the next text.
+    pub(crate) fn set_emit(&mut self, emit: outline::Emit) {
+        self.emit = emit;
+    }
+
+    pub(crate) fn emit(&self) -> outline::Emit { self.emit }
+
+    /// How glyphs that move outside a text's own path draw (a text flight's).
+    pub(crate) fn moving_emit(&self) -> outline::Emit {
+        if self.draws_outlines() { outline::Emit::Outline } else { outline::Emit::Atlas }
+    }
+
     /// Moves the glyphs placed from here on by `glide` device px (`[x, y]`, each within half a
     /// pixel), in at least [`GLIDE_PHASES`] steps a pixel on any gliding axis. Pixel snapping
     /// glides a moving box between pixels; its text lays out from the box's nearest whole pixel on
@@ -245,6 +314,7 @@ pub(super) fn atlas_quad(a: AtlasGlyph, fx: f32, gy: f32, ink: u16, byte: u32) -
         ink,
         byte,
         color: 0,
+        outline: None,
     }
 }
 

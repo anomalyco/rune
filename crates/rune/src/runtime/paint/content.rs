@@ -170,6 +170,11 @@ impl<S: 'static> Runtime<S> {
             if cover.is_none() && scale_motion == ScaleMotion::Live {
                 self.static_scale_settling = true;
             }
+            // Text whose scale moves draws from its outlines, magnified to `tk`: crisp all the way,
+            // and the same outline on the frame it lands as the atlas mask it rests as.
+            let place_masks = self.text.begin_text(node_id.0, cover.is_none() && scale_motion != ScaleMotion::Still)
+                .into_iter().any(|e| e == crate::text::outline::PathEffect::PlaceMasks);
+            let direct = self.text.emit() == crate::text::outline::Emit::Outline;
             let ins = n.inset.map(|v| v * zk * s);
             let (x0, x1) = (zr[0] + ins[0], zr[2] - ins[2]);
             let mut origin = [text_x(spec, x0, x1, (layout.full_width() * tk).ceil(), crate::el::Flow::of_layout(layout)), zr[1] + ins[1]];
@@ -432,10 +437,18 @@ impl<S: 'static> Runtime<S> {
                 };
                 let bytes = reveal.is_some() || !link_fx.is_empty() || has_hl_fg || field_ink.is_some();
                 // A secret's glyphs aren't kept past the frame that draws them.
-                if spec.redacted || n.input.as_ref().is_some_and(|i| i.edit.is_secure()) {
-                    self.text.glyphs_in_band(layout, r_origin, raster, bytes, band, &mut self.glyph_scratch);
+                let secret = spec.redacted || n.input.as_ref().is_some_and(|i| i.edit.is_secure());
+                if direct || secret {
+                    self.text.glyphs_in_band(layout, r_origin, raster, bytes, band.clone(), &mut self.glyph_scratch);
                 } else {
-                    self.text.glyphs_in_band_cached(layout, r_origin, raster, bytes, band, &mut self.glyph_scratch);
+                    self.text.glyphs_in_band_cached(layout, r_origin, raster, bytes, band.clone(), &mut self.glyph_scratch);
+                }
+                if place_masks && !secret {
+                    // Landing: the masks the next frame draws, placed now and not drawn.
+                    let mut masks = Vec::new();
+                    self.text.set_emit(crate::text::outline::Emit::Atlas);
+                    self.text.glyphs_in_band_cached(layout, r_origin, raster, bytes, band, &mut masks);
+                    self.text.set_emit(crate::text::outline::Emit::Outline);
                 }
                 tk / raster
             };
@@ -488,6 +501,7 @@ impl<S: 'static> Runtime<S> {
             if let (Some(c), Some(inp)) = (caret, &n.input) {
                 self.instances.push(rect_inst(c, premul(inp.caret, o, srgb), 0.0, clip, fade));
             }
+            self.text.set_emit(crate::text::outline::Emit::Atlas);
         }
     }
 

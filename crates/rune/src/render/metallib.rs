@@ -108,6 +108,12 @@ pub(super) fn uber_abi_hash() -> u64 {
     layout_hash(&uber_bind_entries(), &uber_vertex_layout(), uber_primitive())
 }
 
+/// [`uber_abi_hash`] for another set of uber bindings (the Windfoil variant's).
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
+pub(super) fn abi_hash_of(entries: &[wgpu::BindGroupLayoutEntry]) -> u64 {
+    layout_hash(entries, &uber_vertex_layout(), uber_primitive())
+}
+
 #[cfg(any(test, target_os = "macos", target_os = "windows"))]
 fn layout_hash(entries: &[wgpu::BindGroupLayoutEntry], vertex: &wgpu::VertexBufferLayout<'_>, primitive: wgpu::PrimitiveState) -> u64 {
     // The normal uber pipeline has one group; use a placeholder instead of hashing opaque GPU
@@ -152,7 +158,7 @@ pub(super) fn uber_shader_and_pipeline(
         return (super::dxbc::Shaders::one(shader), pipeline);
     }
     #[cfg(target_os = "windows")]
-    if let Some(result) = super::dxbc::uber(device, &wgsl, &mut make_pipeline) {
+    if let Some(result) = super::dxbc::uber(device, &wgsl, uber_abi_hash(), &mut make_pipeline) {
         return result;
     }
     let shaders = super::dxbc::Shaders::one(wgsl_shader(device, &wgsl));
@@ -275,6 +281,12 @@ pub(super) fn with_metallib_enabled<R>(enabled: bool, f: impl FnOnce() -> R) -> 
 /// uses on Metal for `Renderer::new`.
 #[cfg(all(test, target_os = "macos"))]
 fn uber_msl(wgsl_src: &str, attrs: &[wgpu::VertexAttribute], stride: u32) -> (String, String, u64) {
+    uber_msl_with(wgsl_src, &uber_bind_entries(), attrs, stride)
+}
+
+/// [`uber_msl`] for another uber variant's bindings (render/variant.rs).
+#[cfg(all(test, target_os = "macos"))]
+fn uber_msl_with(wgsl_src: &str, bind_entries: &[wgpu::BindGroupLayoutEntry], attrs: &[wgpu::VertexAttribute], stride: u32) -> (String, String, u64) {
     use wgpu::naga::{
         self,
         back::{msl, pipeline_constants::process_overrides},
@@ -301,7 +313,7 @@ fn uber_msl(wgsl_src: &str, attrs: &[wgpu::VertexAttribute], stride: u32) -> (St
         assert_eq!(layout.immediate_size, 0, "audit Metal immediate-data mapping before precompiling");
         let mut result = msl::EntryPointResources::default();
         let (mut buffer, mut texture) = (0, 0);
-        let mut entries = uber_bind_entries();
+        let mut entries = bind_entries.to_vec();
         entries.sort_by_key(|entry| entry.binding);
         for entry in entries {
             if !entry.visibility.contains(stage) { continue; }
@@ -454,6 +466,20 @@ mod tests {
             println!("---BEGIN_NATIVE_METAL_FLAGS---\n{NATIVE_METAL_COMPILE_FLAGS}\n---END_NATIVE_METAL_FLAGS---");
             println!("---BEGIN_NATIVE_VS_MSL---\n{}---END_NATIVE_VS_MSL---", native[0]);
             println!("---BEGIN_NATIVE_FS_MSL---\n{}---END_NATIVE_FS_MSL---", native[1]);
+        }
+        // The Windfoil variant (render/variant.rs), for uber_windfoil{,_native}.metallib.
+        let windfoil = super::super::variant::windfoil_wgsl().expect("the Windfoil uber shader");
+        let entries = super::super::variant::windfoil_bind_entries();
+        let (vs_msl, fs_msl, _) = uber_msl_with(&windfoil, &entries, &UBER_VERTEX_ATTRS, std::mem::size_of::<super::super::Instance>() as u32);
+        println!("---BEGIN_WINDFOIL_WGSL_BLAKE3---\n{}\n---END_WINDFOIL_WGSL_BLAKE3---", uber_wgsl_hash(&windfoil).to_hex());
+        println!("---BEGIN_WINDFOIL_ABI_FNV64---\n{:016x}\n---END_WINDFOIL_ABI_FNV64---", super::super::variant::windfoil_abi_hash());
+        println!("---BEGIN_WINDFOIL_VS_MSL---\n{vs_msl}---END_WINDFOIL_VS_MSL---");
+        println!("---BEGIN_WINDFOIL_FS_MSL---\n{fs_msl}---END_WINDFOIL_FS_MSL---");
+        #[cfg(feature = "metal-backend")]
+        {
+            let native = crate::gpu::metal::render_msl(&windfoil, &entries, NATIVE_MSL_VERSION);
+            println!("---BEGIN_WINDFOIL_NATIVE_VS_MSL---\n{}---END_WINDFOIL_NATIVE_VS_MSL---", native[0]);
+            println!("---BEGIN_WINDFOIL_NATIVE_FS_MSL---\n{}---END_WINDFOIL_NATIVE_FS_MSL---", native[1]);
         }
     }
 

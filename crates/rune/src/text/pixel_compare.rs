@@ -78,7 +78,7 @@ impl Reference {
     /// The reference a mode is meant to match.
     pub fn for_mode(mode: FontSmoothing) -> Reference {
         match mode {
-            FontSmoothing::On => Reference::Smoothed,
+            FontSmoothing::On | FontSmoothing::Windfoil => Reference::Smoothed,
             FontSmoothing::Off | FontSmoothing::DirectWrite => Reference::Unsmoothed,
         }
     }

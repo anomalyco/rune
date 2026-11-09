@@ -55,6 +55,8 @@ mod macos;
 pub use macos::smoothing::ApplePipeline;
 mod windows;
 mod measure;
+pub(crate) mod outline;
+pub use outline::Outline;
 mod pill_chips;
 mod rich_layout;
 mod run;
@@ -198,6 +200,12 @@ pub struct TextSystem {
     pub(crate) glyph_cache: glyph_cache::GlyphCache,
     /// Device px `[x, y]` the next glyphs glide from their resting pixel ([`Self::set_glide`]).
     glide: [f32; 2],
+    /// How the glyphs placed next draw ([`Self::begin_text`], [`Self::set_emit`]).
+    emit: outline::Emit,
+    /// Each painted text's raster path (`outline::RasterPath`), by node.
+    paths: outline::Paths,
+    /// Whether each face (font, index) has colour glyphs, which outlines can't draw.
+    color_faces: FxHashMap<(u64, u32), bool>,
 }
 
 impl Default for TextSystem {
@@ -324,6 +332,9 @@ impl TextSystem {
             windows: Default::default(),
             glyph_cache: Default::default(),
             glide: [0.0; 2],
+            emit: outline::Emit::Atlas,
+            paths: Default::default(),
+            color_faces: Default::default(),
         };
         text.load_installed(families.0);
         text.load_installed(families.1);
@@ -440,7 +451,7 @@ impl TextSystem {
     pub fn coverage_exponent(&self, fill: [f32; 4]) -> f32 {
         // DirectWrite masks already carry Skia's gamma for their text's luminance.
         let direct_write = self.smoothing == FontSmoothing::DirectWrite && cfg!(target_os = "windows");
-        if self.smoothing == FontSmoothing::On || direct_write || fill[3] <= 0.0 {
+        if matches!(self.smoothing, FontSmoothing::On | FontSmoothing::Windfoil) || direct_write || fill[3] <= 0.0 {
             return 1.0;
         }
         let luma = (0.2126 * fill[0] + 0.7152 * fill[1] + 0.0722 * fill[2]) / fill[3];
@@ -470,6 +481,9 @@ impl TextSystem {
 
     pub(crate) fn begin_frame_pinned(&mut self, pinned_mask: u32) {
         self.atlas.begin_frame(pinned_mask);
+        // A text flight's glyphs keep their outline records until it lands.
+        self.atlas.outlines.begin_frame(pinned_mask != 0);
+        self.paths.begin_frame();
         self.glyph_cache.begin_frame();
         if self.color_bytes > COLOR_GLYPH_BUDGET {
             let before = self.color_glyphs.len();
@@ -926,6 +940,7 @@ impl TextSystem {
             ink: 0,
             byte: 0,
             color: 0,
+            outline: None,
         })
     }
 }

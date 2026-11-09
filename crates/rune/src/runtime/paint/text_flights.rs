@@ -58,7 +58,9 @@ impl<S: 'static> Runtime<S> {
             }
             self.glyph_scratch.clear();
             self.text.set_glyph_inks(spec.color, &[]);
+            self.text.set_emit(self.text.moving_emit());
             self.text.glyphs_for_layout(layout, s, [origin[0] * s, origin[1] * s], false, &mut self.glyph_scratch);
+            self.text.set_emit(crate::text::outline::Emit::Atlas);
             for q in &self.glyph_scratch {
                 let Some(q) = glyph_or_image(q, &self.text, &mut self.images, premul(spec.color, 1.0, srgb), NO_CLIP, [0.0; 4]) else { continue };
                 self.instances.push(transformed(q, target, current, s, target_alpha,
