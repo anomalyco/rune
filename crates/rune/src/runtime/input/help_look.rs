@@ -25,6 +25,10 @@ pub struct HelpLook {
     /// `None`: the runtime's `help_delay`.
     pub(crate) delay: Option<f64>,
     pub(crate) skip: f64,
+    /// Seconds the tooltip fades in and out (`HelpLook::fade`); 0 shows or hides at once.
+    pub(crate) fade: [f64; 2],
+    /// The scale it fades in from and out to.
+    pub(crate) fade_scale: f32,
     pub(crate) shadows: [Option<Shadow>; SHADOWS],
     /// [`El::help_keys`](crate::El::help_keys)' keycaps.
     pub(crate) key: KeyCap,
@@ -69,6 +73,8 @@ impl HelpLook {
             margin: 4.0,
             delay: None,
             skip: 0.0,
+            fade: [0.0; 2],
+            fade_scale: 1.0,
             shadows: [None; SHADOWS],
             key: KeyCap {
                 fill: ink.alpha(0.08),
@@ -147,6 +153,16 @@ impl HelpLook {
     /// a web tooltip's `skipDelayDuration` does when the pointer moves along a toolbar.
     pub fn skip_delay(mut self, secs: f64) -> Self {
         self.skip = secs.max(0.0);
+        self
+    }
+    /// The tooltip fades in over `enter` seconds (ease-out) and out over `exit` (ease-in),
+    /// growing from `scale` and shrinking back to it about the middle of the edge that faces
+    /// its element, as a web tooltip's open and close keyframes do. One closing as the next
+    /// opens (within the skip delay) fades out under it. 0 shows or hides at once, the
+    /// default; reduced motion never fades.
+    pub fn fade(mut self, enter: f64, exit: f64, scale: f32) -> Self {
+        self.fade = [enter.max(0.0), exit.max(0.0)];
+        self.fade_scale = if scale.is_finite() { scale.clamp(0.0, 1.0) } else { 1.0 };
         self
     }
     /// Box-shadow layers, painted in order (the first four); empty for none. Inset shadows

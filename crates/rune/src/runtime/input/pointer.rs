@@ -177,7 +177,7 @@ impl<S: 'static> Runtime<S> {
         // A press is the hand's: hover follows the pointer through moving layout.
         self.release_hover_hold();
         self.keyboard_focus = false;
-        self.dismiss_help();
+        self.press_help(x, y);
         // A press cancels the waits to report an enter; the next move after it starts them again.
         self.hover_pending.retain(|p| !p.1);
         self.hover_paused = true;

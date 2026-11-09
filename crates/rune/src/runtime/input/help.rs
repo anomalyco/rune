@@ -8,6 +8,15 @@
 //! A macOS window shows AppKit's own tooltips instead (`set_native_help`): the host registers
 //! [`Runtime::help_regions`] with its view and AppKit owns the delay, look and hiding, unless
 //! the view sets its own look (`Cx::help_look`), which Rune draws everywhere.
+//!
+//! Where the tooltip is in its life is one [`Tip`], stepped by [`step`] once a frame with what
+//! the pointer is over, and on a dismissal; it mirrors `@opencode/ui`'s tooltip machine
+//! (`ui/src/overlays/tooltip/machine.ts`) with Kobalte's open and skip delays. A press on the
+//! element keeps its tooltip, as there; a popup or modal over the element suppresses it until
+//! the pointer leaves. The look's fade (`HelpLook::fade`) plays as the tooltip opens and
+//! closes, the closing one fading out under the next.
+use crate::machine::Effects;
+
 use super::*;
 
 #[derive(Default)]
@@ -15,21 +24,154 @@ pub(super) struct HelpState {
     /// This frame's help elements: (node, visible rect in points, `hits.len()` before it, the
     /// link of its text when the help is that link's).
     hits: Vec<(NodeId, [f32; 4], usize, Option<usize>)>,
-    /// The help element (and link) under the pointer and when (clock seconds) the pointer
-    /// reached it.
-    target: Option<(String, Option<usize>, f64)>,
-    /// A press, scroll or key hid its tooltip until the pointer leaves it.
-    dismissed: bool,
-    /// The deadline already asked for, so each rest schedules one wake.
-    scheduled: Option<f64>,
+    state: Tip,
     /// The tooltip showing this frame: its text and box in points.
     tip: Option<(String, [f32; 4])>,
+    /// The open tooltip as it last drew, for its fade out.
+    drawn: Option<Drawn>,
+    /// A closed tooltip fading out, and when (clock seconds) it closed.
+    leaving: Option<(Drawn, f64)>,
     /// The host shows system tooltips from `help_regions`.
     native: bool,
     regions: Vec<([f32; 4], String)>,
-    /// When (clock seconds) a shown tooltip last hid because the pointer left its element,
-    /// for the look's skip delay.
-    hid_at: Option<f64>,
+}
+
+/// A help element, or one link of its text, by path.
+#[derive(Clone, Debug, PartialEq)]
+struct Target {
+    path: String,
+    link: Option<usize>,
+}
+
+/// Where the tooltip is in its life. Times are clock seconds.
+#[derive(Clone, Debug, Default, PartialEq)]
+enum Tip {
+    /// No help element under the pointer, or a tooltip hid more than the skip delay ago.
+    #[default]
+    Idle,
+    /// A tooltip hid as the pointer left its element: until `until`, the next one opens at once.
+    Warm { until: f64 },
+    /// The pointer rests on `target`; its tooltip opens at `due`.
+    Waiting { target: Target, due: f64 },
+    /// `target`'s tooltip shows, fading in from `since`.
+    Open { target: Target, since: f64 },
+    /// A press elsewhere, a scroll or key, or a popup over `target` hid its tooltip until the
+    /// pointer leaves it.
+    Suppressed { target: Target },
+}
+
+impl Tip {
+    fn target(&self) -> Option<&Target> {
+        match self {
+            Tip::Waiting { target, .. } | Tip::Open { target, .. } | Tip::Suppressed { target } => Some(target),
+            Tip::Idle | Tip::Warm { .. } => None,
+        }
+    }
+}
+
+/// What the pointer is over as a frame draws.
+#[derive(Debug, PartialEq)]
+enum Over {
+    /// No pointer in the window: it left, or a menu took it.
+    Away,
+    /// No help element.
+    Nothing,
+    Help(Target),
+    /// A help element, under a popup or modal that the pointer can't reach it through.
+    Covered(Target),
+}
+
+#[derive(Debug, PartialEq)]
+enum Event {
+    Frame { over: Over, now: f64 },
+    /// A press away from the open tooltip's element, a scroll or a key.
+    Dismiss,
+}
+
+#[derive(Debug, PartialEq)]
+enum Effect {
+    /// Wake at this clock time, when a wait ends.
+    WakeAt(f64),
+    /// The open tooltip closed: fade it out.
+    FadeOut,
+}
+
+/// The look's open and skip delays, in seconds.
+#[derive(Clone, Copy)]
+struct Delays {
+    open: f64,
+    skip: f64,
+}
+
+fn step(tip: &mut Tip, event: Event, delays: Delays) -> Effects<Effect> {
+    let (over, now) = match event {
+        Event::Dismiss => return suppress(tip),
+        Event::Frame { over, now } => (over, now),
+    };
+    let effects = match over {
+        // A menu the element opened took the pointer: the tooltip stays hidden over it after.
+        Over::Away if matches!(tip, Tip::Suppressed { .. }) => Effects::none(),
+        Over::Covered(at) if tip.target() == Some(&at) => suppress(tip),
+        Over::Help(at) if tip.target() == Some(&at) => Effects::none(),
+        Over::Help(at) => leave(tip, Some(at), now, delays),
+        Over::Away | Over::Nothing | Over::Covered(_) => leave(tip, None, now, delays),
+    };
+    match std::mem::take(tip) {
+        Tip::Warm { until } if now > until => {}
+        // The wait is over (or there was none: a zero delay opens in the frame it starts).
+        Tip::Waiting { target, due } if now + 1e-6 >= due => *tip = Tip::Open { target, since: now },
+        other => *tip = other,
+    }
+    effects
+}
+
+/// The pointer left the tooltip's element for `at` (or nothing): an open tooltip closes, and
+/// within the skip delay of one closing the next opens at once.
+fn leave(tip: &mut Tip, at: Option<Target>, now: f64, delays: Delays) -> Effects<Effect> {
+    let open = matches!(tip, Tip::Open { .. });
+    let warm = (open && delays.skip > 0.0) || matches!(tip, Tip::Warm { until } if now <= *until);
+    let mut effects = if open { Effects::one(Effect::FadeOut) } else { Effects::none() };
+    *tip = match at {
+        Some(target) if warm => Tip::Open { target, since: now },
+        Some(target) => {
+            let due = now + delays.open;
+            effects.push(Effect::WakeAt(due));
+            Tip::Waiting { target, due }
+        }
+        None if open && delays.skip > 0.0 => Tip::Warm { until: now + delays.skip },
+        None if warm => std::mem::take(tip),
+        None => Tip::Idle,
+    };
+    effects
+}
+
+/// Hide the tooltip until the pointer leaves its element.
+fn suppress(tip: &mut Tip) -> Effects<Effect> {
+    match std::mem::take(tip) {
+        Tip::Open { target, .. } => {
+            *tip = Tip::Suppressed { target };
+            Effects::one(Effect::FadeOut)
+        }
+        Tip::Waiting { target, .. } | Tip::Suppressed { target } => {
+            *tip = Tip::Suppressed { target };
+            Effects::none()
+        }
+        idle @ (Tip::Idle | Tip::Warm { .. }) => {
+            *tip = idle;
+            Effects::none()
+        }
+    }
+}
+
+/// A tooltip as drawn: its text, the box it hangs from (window points, x0 y0 x1 y1), whether
+/// it sits above that box, and its opacity.
+#[derive(Clone, Debug)]
+struct Drawn {
+    text: String,
+    anchor: [f32; 4],
+    above: bool,
+    alpha: f32,
+    scale: f32,
 }
 
 fn overlaps(a: [f32; 4], b: [f32; 4]) -> bool {
@@ -67,9 +209,37 @@ impl<S: 'static> Runtime<S> {
         self.help.tip.as_ref().map(|(t, r)| (t.as_str(), *r))
     }
 
-    /// A tooltip waits for a frame at or after its delay to draw.
+    /// A tooltip waits for a frame at or after its delay to draw, or fades in or out.
     pub(super) fn tooltip_waiting(&self) -> bool {
-        self.help.scheduled.is_some_and(|due| self.clock + 1e-6 < due)
+        matches!(self.help.state, Tip::Waiting { due, .. } if self.clock + 1e-6 < due) || self.tooltip_fading()
+    }
+
+    /// The open tooltip fades in, or a closed one fades out, so frames keep coming.
+    fn tooltip_fading(&self) -> bool {
+        let look = self.help_look();
+        let opening = matches!(self.help.state, Tip::Open { since, .. } if self.clock < since + look.fade[0]);
+        opening || self.help.leaving.as_ref().is_some_and(|(_, at)| self.clock < at + look.fade[1])
+    }
+
+    /// The look's delays, the runtime's `help_delay` where it sets none.
+    fn help_delays(&self) -> Delays {
+        let look = self.help_look();
+        Delays { open: look.delay.unwrap_or(self.help_delay), skip: look.skip }
+    }
+
+    /// Steps the tooltip's state and carries out what it asks.
+    fn step_help(&mut self, event: Event) {
+        let delays = self.help_delays();
+        for effect in step(&mut self.help.state, event, delays) {
+            match effect {
+                Effect::WakeAt(due) => self.schedule_wakes([std::time::Duration::from_secs_f64((due - self.clock).max(0.0))]),
+                Effect::FadeOut => {
+                    self.help.tip = None;
+                    let fades = self.help_look().fade[1] > 0.0 && !self.reduced_motion;
+                    self.help.leaving = self.help.drawn.take().filter(|_| fades).map(|d| (d, self.clock));
+                }
+            }
+        }
     }
 
     /// During `build`: node `i` has help and draws visible over `rect` (points, x0 y0 x1 y1),
@@ -103,37 +273,70 @@ impl<S: 'static> Runtime<S> {
 
     pub(super) fn clear_help_hits(&mut self) { self.help.hits.clear(); }
 
-    /// A press, scroll or key: hide the tooltip until the pointer leaves its element.
+    /// A scroll or key: hide the tooltip until the pointer leaves its element.
     pub(super) fn dismiss_help(&mut self) {
-        if self.help.target.is_some() {
-            self.help.dismissed = true;
-            self.help.tip = None;
-        }
+        if self.help.state.target().is_some() { self.step_help(Event::Dismiss); }
+    }
+
+    /// A press at (x, y): on the open tooltip's element it keeps the tooltip, as a web
+    /// tooltip's trigger does through its click; anywhere else it dismisses it.
+    pub(super) fn press_help(&mut self, x: f32, y: f32) {
+        let on_open = match &self.help.state {
+            Tip::Open { target, .. } => self.help_at(x, y).is_some_and(|(i, k)| self.nodes[i].path == target.path && k == target.link),
+            _ => false,
+        };
+        if !on_open { self.dismiss_help(); }
     }
 
     /// The help element under (x, y): the topmost one, unless something interactive drawn over
     /// it (not inside it) is there too.
     fn help_at(&self, x: f32, y: f32) -> Option<(usize, Option<usize>)> {
+        self.help_under(x, y).filter(|u| u.2).map(|(h, link, _)| (h, link))
+    }
+
+    /// The topmost help element under (x, y), and whether the pointer reaches it: not behind a
+    /// modal, and nothing interactive drawn over it (not inside it) is there too.
+    fn help_under(&self, x: f32, y: f32) -> Option<(usize, Option<usize>, bool)> {
         let &(id, _, seq, link) = self.help.hits.iter().rev().find(|&&(id, r, _, _)| self.hit_contains(id, r, x, y))?;
         let h = *self.node_index.get(&id)?;
-        if self.subtree_exiting(h) || !self.allowed(h) { return None; }
+        if self.subtree_exiting(h) { return None; }
         let over = self.hits.iter().enumerate().rev().find(|&(_, &(id, r))| self.hit_contains(id, r, x, y));
-        if let Some((k, (top, _))) = over
-            && k > seq
-            && let Some(&t) = self.node_index.get(top)
-            && !std::iter::successors(Some(t), |&p| self.nodes[p].parent).any(|p| p == h)
-        {
-            return None;
-        }
-        Some((h, link))
+        let covered = over.is_some_and(|(k, (top, _))| {
+            k > seq && self.node_index.get(top).is_some_and(|&t| !std::iter::successors(Some(t), |&p| self.nodes[p].parent).any(|p| p == h))
+        });
+        Some((h, link, self.allowed(h) && !covered))
     }
 
     /// Whether moving the pointer to (x, y) changes the help element under it, so a host that
     /// skips frames for unchanged pixels still starts or ends a tooltip's wait.
     pub(super) fn help_target_changes(&self, x: f32, y: f32) -> bool {
-        if self.native_help() || self.help.hits.is_empty() && self.help.target.is_none() { return false; }
+        let target = self.help.state.target();
+        if self.native_help() || self.help.hits.is_empty() && target.is_none() { return false; }
         let at = self.help_at(x, y).map(|(i, k)| (self.nodes[i].path.as_str(), k));
-        at != self.help.target.as_ref().map(|(p, k, _)| (p.as_str(), *k))
+        at != target.map(|t| (t.path.as_str(), t.link))
+    }
+
+    /// What the pointer is over for the tooltip, and the node of a help element it reaches.
+    fn help_over(&self) -> (Over, Option<usize>) {
+        // A menu is up or about to open and has the pointer: the element it came from keeps
+        // its tooltip hidden.
+        if !self.popups.is_empty() { return (self.help.state.target().cloned().map_or(Over::Away, Over::Covered), None); }
+        let Some((x, y)) = self.pointer.filter(|&(x, y)| self.in_viewport(x, y)) else { return (Over::Away, None) };
+        let target = |i: usize, link| Target { path: self.nodes[i].path.clone(), link };
+        // While moving layout holds hover, the tooltip keeps its element, and nothing sliding
+        // under the pointer starts a wait.
+        if self.held_hover().is_some() {
+            let kept = self.help.state.target().and_then(|t| Some((self.hover_live(&t.path)?, t.link)));
+            return kept.map_or((Over::Nothing, None), |(i, k)| (Over::Help(target(i, k)), Some(i)));
+        }
+        let Some((i, link, reaches)) = self.help_under(x, y) else { return (Over::Nothing, None) };
+        let at = target(i, link);
+        // A press holds the pointer: it keeps its own element's tooltip, and a drag across
+        // other elements starts none.
+        if (self.capture.is_some() || self.secondary_capture.is_some()) && self.help.state.target() != Some(&at) {
+            return (Over::Nothing, None);
+        }
+        if reaches { (Over::Help(at), Some(i)) } else { (Over::Covered(at), None) }
     }
 
     /// The parts of help element `h`'s rect `r` that nothing interactive drawn over it (not
@@ -165,52 +368,53 @@ impl<S: 'static> Runtime<S> {
             }
             self.help.regions = regions;
             self.help.tip = None;
+            self.help.state = Tip::Idle;
+            self.help.drawn = None;
+            self.help.leaving = None;
             return;
         }
-        let pointer = self.pointer.filter(|&(x, y)| self.in_viewport(x, y) && self.capture.is_none() && self.secondary_capture.is_none());
-        // While moving layout holds hover, the tooltip keeps its element, and nothing sliding
-        // under the pointer starts a wait.
-        let under = match self.held_hover() {
-            Some(_) => self.help.target.as_ref().and_then(|(p, k, _)| Some((self.hover_live(p)?, *k))).filter(|_| pointer.is_some()),
-            None => pointer.and_then(|(x, y)| self.help_at(x, y)),
-        };
-        let at = under.map(|(i, k)| (self.nodes[i].path.as_str(), k));
-        let look = self.help_look();
-        let delay = look.delay.unwrap_or(self.help_delay);
-        if at != self.help.target.as_ref().map(|(p, k, _)| (p.as_str(), *k)) {
-            if self.help.tip.is_some() {
-                self.help.hid_at = Some(self.clock);
-            }
-            // Just after a tooltip hid, the next element's shows at once.
-            let warm = look.skip > 0.0 && self.help.hid_at.is_some_and(|t| self.clock - t <= look.skip);
-            let since = if warm { self.clock - delay } else { self.clock };
-            self.help.target = under.map(|(i, k)| (self.nodes[i].path.clone(), k, since));
-            self.help.dismissed = false;
-            self.help.scheduled = None;
-        }
+        let (over, under) = self.help_over();
+        self.step_help(Event::Frame { over, now: self.clock });
         self.help.tip = None;
-        let (Some((i, link)), Some((_, _, since))) = (under, self.help.target.clone()) else { return };
-        if self.help.dismissed { return; }
-        let due = since + delay;
-        if self.clock + 1e-6 < due {
-            if self.help.scheduled != Some(due) {
-                self.help.scheduled = Some(due);
-                self.schedule_wakes([std::time::Duration::from_secs_f64(due - self.clock)]);
+        let look = self.help_look();
+        let motion = !self.reduced_motion;
+        // The closed tooltip fades out first, under the next one.
+        if let Some((d, at)) = self.help.leaving.take() {
+            let t = if motion && look.fade[1] > 0.0 { ((self.clock - at) / look.fade[1]) as f32 } else { 1.0 };
+            if t < 1.0 {
+                let e = rune_motion::Easing::EASE_IN.eval(t);
+                let scale = d.scale + (look.fade_scale - d.scale) * e;
+                self.draw_tooltip(&Drawn { alpha: d.alpha * (1.0 - e), scale, ..d.clone() });
+                self.help.leaving = Some((d, at));
             }
-            return;
         }
-        let Some(text) = self.help_text(i, link).cloned() else { return };
-        let e = self.drawn_box(i);
-        let anchor = link.and_then(|k| self.link_boxes(i, e).into_iter().filter(|(j, _)| *j == k).map(|(_, r)| r)
-            .reduce(|u, r| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
-        let above = link.is_none() && self.nodes[i].cold.get().is_some_and(|c| c.help_above);
-        self.draw_tooltip(anchor.unwrap_or(e), text, above);
+        self.help.drawn = None;
+        if let Tip::Open { target, since } = &self.help.state {
+            let (link, since) = (target.link, *since);
+            let node = under.or_else(|| self.hover_live(&target.path));
+            if let Some(i) = node && let Some(text) = self.help_text(i, link).cloned() {
+                let e = self.drawn_box(i);
+                let anchor = link.and_then(|k| self.link_boxes(i, e).into_iter().filter(|(j, _)| *j == k).map(|(_, r)| r)
+                    .reduce(|u, r| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
+                let above = link.is_none() && self.nodes[i].cold.get().is_some_and(|c| c.help_above);
+                let t = if motion && look.fade[0] > 0.0 { ((self.clock - since) / look.fade[0]) as f32 } else { 1.0 };
+                let e_in = rune_motion::Easing::EASE_OUT.eval(t.clamp(0.0, 1.0));
+                let d = Drawn { text, anchor: anchor.unwrap_or(e), above, alpha: e_in, scale: look.fade_scale + (1.0 - look.fade_scale) * e_in };
+                let [x, y, w, h] = self.draw_tooltip(&d);
+                self.help.tip = Some((crate::el::help_words(&d.text).into_owned(), [x, y, w, h]));
+                self.help.drawn = Some(d);
+            }
+        }
+        if self.tooltip_fading() { self.schedule_wakes([std::time::Duration::ZERO]); }
     }
 
-    /// Draws `text` (and its keycaps) in a tooltip in the current look under box `e` (window
-    /// points, x0 y0 x1 y1; above it when there's no room below), or `above` it (under it when
-    /// there's no room above), kept inside the window.
-    fn draw_tooltip(&mut self, e: [f32; 4], text: String, above: bool) {
+    /// Draws `d`'s text (and its keycaps) in a tooltip in the current look under its box
+    /// (above it when there's no room below), or above it (under it when there's no room
+    /// above) when it says so, kept inside the window. Returns the tooltip's box at full size
+    /// (window points, x y w h); it draws at `d.alpha`, scaled by `d.scale` about the middle
+    /// of the edge that faces its box.
+    fn draw_tooltip(&mut self, d: &Drawn) -> [f32; 4] {
+        let (e, text, above) = (d.anchor, d.text.as_str(), d.above);
         let s = self.env.scale;
         let look = self.help_look();
         let key = look.key;
@@ -242,11 +446,17 @@ impl<S: 'static> Runtime<S> {
         }
         let x = ((e[0] + e[2] - w) * 0.5).clamp(margin, (vw - w - margin).max(margin));
         let y = y.clamp(margin, (vh - h - margin).max(margin));
-        let r = [x * s, y * s, w * s, h * s].map(|v| v.round());
+        let full = [x * s, y * s, w * s, h * s].map(|v| v.round());
+        // Scales about the middle of the edge facing the element (Kobalte's transform origin).
+        let (k, alpha) = (d.scale, d.alpha);
+        let pivot = [((e[0] + e[2]) * 0.5 * s).clamp(full[0], full[0] + full[2]), if y >= e[3] { full[1] } else { full[1] + full[3] }];
+        let at_k = |p: [f32; 2]| [pivot[0] + (p[0] - pivot[0]) * k, pivot[1] + (p[1] - pivot[1]) * k];
+        let rect_k = |r: [f32; 4]| { let [x, y] = at_k([r[0], r[1]]); [x, y, r[2] * k, r[3] * k] };
+        let r = rect_k(full);
         let srgb = self.srgb_blend;
-        let radii = [look.radius * s; 4];
+        let radii = [look.radius * s * k; 4];
         let cast = super::shadow_paint::Caster {
-            rect: r, radii, shape: radii, k_px: s, scale: s, opacity: 1.0, srgb, clip: NO_CLIP, fade: [0.0; 4], hole: None,
+            rect: r, radii, shape: radii, k_px: s, scale: s, opacity: alpha, srgb, clip: NO_CLIP, fade: [0.0; 4], hole: None,
             opaque: look.fill.a >= 1.0,
         };
         for sh in look.shadows.iter().flatten().filter(|sh| sh.color.a > 0.0) {
@@ -256,25 +466,25 @@ impl<S: 'static> Runtime<S> {
         self.instances.push(Instance {
             rect: r,
             radii,
-            fill: premul(look.fill, 1.0, srgb),
-            border: premul(ring, 1.0, srgb),
+            fill: premul(look.fill, alpha, srgb),
+            border: premul(ring, alpha, srgb),
             params: [ring_w, KIND_RECT, 0.0, 1.0],
             uv: [0.0; 4],
             clip: NO_CLIP,
             fade: crate::render::pack_fade([0.0; 4], NO_CLIP, NO_CLIP),
         });
-        let top = r[1] + pad_y * s;
-        let mut at = r[0] + pad_x * s;
+        let top = full[1] + pad_y * s;
+        let mut at = full[0] + pad_x * s;
         if !words.is_empty() {
-            self.draw_tip_text(&layout, [at, top + ((ch - th) * 0.5 * s).round()], look.ink);
+            self.draw_tip_text(&layout, at_k([at, top + ((ch - th) * 0.5 * s).round()]), k, look.ink, alpha);
             at += (tw + key.lead) * s;
         }
         for (l, cw) in &caps {
             let cap = [at, top + ((ch - key.height) * 0.5 * s).round(), cw * s, key.height * s].map(|v| v.round());
             self.instances.push(Instance {
-                rect: cap,
-                radii: [key.radius * s; 4],
-                fill: premul(key.fill, 1.0, srgb),
+                rect: rect_k(cap),
+                radii: [key.radius * s * k; 4],
+                fill: premul(key.fill, alpha, srgb),
                 border: [0.0; 4],
                 params: [0.0, KIND_RECT, 0.0, 1.0],
                 uv: [0.0; 4],
@@ -283,20 +493,21 @@ impl<S: 'static> Runtime<S> {
             });
             let lw = l.full_width();
             let origin = [cap[0] + ((cap[2] - lw) * 0.5).round(), cap[1] + ((cap[3] - l.height()) * 0.5).round()];
-            self.draw_tip_text(l, origin, key.ink);
+            self.draw_tip_text(l, at_k(origin), k, key.ink, alpha);
             at += (cw + key.gap) * s;
         }
-        self.help.tip = Some((crate::el::help_words(&text).into_owned(), [x, y, w, h]));
+        [x, y, w, h]
     }
 
-    /// Draws a tooltip's shaped text with its top left at `origin` (device pixels).
-    fn draw_tip_text(&mut self, layout: &parley::Layout<crate::text::Ink>, origin: [f32; 2], ink: Color) {
+    /// Draws a tooltip's shaped text with its top left at `origin` (device pixels), scaled by
+    /// `k` and at `alpha`.
+    fn draw_tip_text(&mut self, layout: &parley::Layout<crate::text::Ink>, origin: [f32; 2], k: f32, ink: Color, alpha: f32) {
         let srgb = self.srgb_blend;
         self.glyph_scratch.clear();
         self.text.set_glyph_inks(ink, &[]);
-        self.text.glyphs_for_layout_scaled(layout, origin, 1.0, false, &mut self.glyph_scratch);
+        self.text.glyphs_for_layout_scaled(layout, origin, k, false, &mut self.glyph_scratch);
         for q in &self.glyph_scratch {
-            self.instances.extend(glyph_or_image(q, &self.text, &mut self.images, premul(ink, 1.0, srgb), NO_CLIP, [0.0; 4]));
+            self.instances.extend(glyph_or_image(q, &self.text, &mut self.images, premul(ink, alpha, srgb), NO_CLIP, [0.0; 4]));
         }
     }
 }
