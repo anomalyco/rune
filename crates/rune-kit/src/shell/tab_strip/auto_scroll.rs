@@ -50,6 +50,11 @@ pub(super) fn watch(scroll: El, v: &Rc<View>) -> El {
     scroll.drawn_rect_into(&rect).chain_scroll_offset(move |at| v.pos.set(at))
 }
 
+/// Where the strip's scroll viewport drew, `[x, y, w, h]` in window points.
+pub(super) fn rect(v: &View) -> [f32; 4] {
+    v.rect.get()
+}
+
 /// How far the strip has scrolled along its axis, in points.
 pub(super) fn offset(v: &View, vertical: bool) -> f32 {
     v.pos.get().offset[usize::from(vertical)]

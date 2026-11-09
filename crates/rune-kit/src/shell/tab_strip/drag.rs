@@ -1,5 +1,9 @@
 //! A tab strip's pointer gestures as one explicit state machine, kept in the app's state:
-//! `Idle → Pressed → Dragging(Reorder | TearOut) → Dropping → Idle`.
+//! `Idle → Pressed → Dragging(Reorder | TearOut) → Dropping → Idle`. Beside it, a tab dragged in
+//! from another strip (another window's) opens a gap where it would land.
+
+use std::cell::Cell;
+use std::rc::Rc;
 
 /// Points the pointer travels before a press becomes a reorder (a finger's 8 points are the
 /// runtime's touch slop, which holds its moves back until then, as dnd-kit's touch constraint).
@@ -29,6 +33,13 @@ pub struct TabDragState {
     /// How far the strip had scrolled along itself when the press landed, so a drag that
     /// scrolls it keeps the tab under the pointer.
     scrolled: f32,
+    /// A tab dragged from another strip hovers here, in window points ([`Self::set_incoming`]).
+    incoming: Option<[f32; 2]>,
+    /// The slot the strip opened its gap at for the incoming tab, as it last built; shared with
+    /// the copy the strip builds from, which finds it.
+    landing: Rc<Cell<Option<usize>>>,
+    /// In the copy the strip builds from: the incoming tab's slot and the gap's length.
+    gap: Option<(usize, f32)>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -132,6 +143,38 @@ impl TabDragState {
     /// Whether the torn-out tab shows in a window of its own ([Self::hand_off]).
     pub fn handed_off(&self) -> bool {
         self.handed_off
+    }
+    /// A tab dragged from another strip (another window's) is over this one at `point`, in this
+    /// window's points, or has left it (`None`): the tabs past the slot it would land in step
+    /// aside on the strip's reorder spring, as they do for a tab dragged within the strip, and
+    /// close again when it leaves.
+    pub fn set_incoming(&mut self, point: Option<[f32; 2]>) {
+        self.incoming = point;
+        if point.is_none() {
+            self.landing.set(None);
+        }
+    }
+    /// Where the incoming tab lands if it's let go now: the slot the strip opened its gap at, from
+    /// the tabs' own lengths and the strip's scroll, as the strip last built. `None` before the
+    /// strip built with it, or once it left.
+    pub fn incoming_slot(&self) -> Option<usize> {
+        self.incoming.and(self.landing.get())
+    }
+    pub(super) fn incoming(&self) -> Option<[f32; 2]> {
+        self.incoming.filter(|_| self.phase == TabDragPhase::Idle)
+    }
+    /// Whether the strip opened a gap for an incoming tab: its tabs step aside on the reorder spring.
+    pub(super) fn gap_open(&self) -> bool {
+        self.gap.is_some()
+    }
+    /// The incoming tab's slot and length, in the copy the strip builds from.
+    pub(super) fn gap(&self) -> Option<(usize, f32)> {
+        self.gap
+    }
+    /// In the copy the strip builds from: the incoming tab lands at `slot`, `pitch` long.
+    pub(super) fn open_gap(&mut self, slot: usize, pitch: f32) {
+        self.landing.set(Some(slot));
+        self.gap = Some((slot, pitch));
     }
 
     pub(super) fn set_hovered(&mut self, id: &str, inside: bool) {
