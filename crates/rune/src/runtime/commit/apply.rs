@@ -247,7 +247,10 @@ impl<S: 'static> Runtime<S> {
                         stack.pending_heights.remove(&id);
                         if (t - g.target).abs() > 1e-4 { g.duration = duration; }
                         let shutting = t < g.target - 1e-4;
-                        if t > g.target + 1e-4 && g.lift() > 0.0 { reopened.push((j, g.give.is_some())); }
+                        // A fold opening again while its contents draw lifted, or opening from
+                        // rest (not one mounting): `ride_from_end` grows it from its bottom where
+                        // its viewport follows its end, and leaves the rest alone.
+                        if t > g.target + 1e-4 && (g.lift() > 0.0 || (g.glide.is_some() && g.target > 1e-4)) { reopened.push((j, g.give.is_some())); }
                         let before = g.h;
                         g.retarget(t);
                         if let Some((above, header)) = hidden.filter(|_| shutting && g.shutting_fold()) {
