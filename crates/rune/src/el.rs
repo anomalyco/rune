@@ -1063,6 +1063,14 @@ impl El {
         self.cold_mut().focus.highlight = Some(color);
         self
     }
+    /// A fill laid over this element while it shows keyboard focus, as CSS
+    /// `:focus-visible { background }` paints one: a list row that Tab reaches. Unlike
+    /// [`El::focus_highlight`] the pointer neither paints it nor moves focus. A row that shows
+    /// focus by its fill alone also sets [`El::no_focus_ring`].
+    pub fn focus_fill(mut self, color: Color) -> Self {
+        self.cold_mut().focus.fill = Some(color);
+        self
+    }
     /// The window's default button, which Return presses (AppKit's `keyEquivalent = "\r"`).
     /// Return goes to it from anywhere in the window, or the open modal, unless the focused
     /// element takes Return itself: a text field with `on_submit`, a link, or a row of a

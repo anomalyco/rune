@@ -1,0 +1,1 @@
+- **`El::focus_fill` paints a fill while an element shows keyboard focus, as CSS `:focus-visible { background }` does.** A list row that Tab reaches (a command palette's) lights with the same overlay its highlight uses, without a ring; unlike `focus_highlight`, the pointer neither paints it nor takes focus from the search field.

@@ -28,6 +28,8 @@ pub(crate) struct FocusSpec {
     /// `default_button`: Return presses it.
     pub default: bool,
     pub highlight: Option<Color>,
+    /// `focus_fill`: painted over the element while it shows keyboard focus.
+    pub fill: Option<Color>,
     pub follows: bool,
     pub return_to: Option<String>,
     /// `on_step`: a slider's arrow and page keys.
@@ -57,6 +59,7 @@ impl crate::cold::Empty for FocusSpec {
         flat_within: false,
         default: false,
         highlight: None,
+        fill: None,
         follows: false,
         return_to: None,
         step: None,
