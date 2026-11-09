@@ -3,7 +3,8 @@
 //! wgpu 30's DX12 backend translates `shader.wgsl` through Naga to HLSL and compiles it with
 //! FXC each time a device makes the uber pipeline: about 250 ms on a desktop CPU, the largest
 //! part of a first surface's cost, and paid again by every new device. Rune ships the bytecode
-//! FXC makes from that HLSL (`uber.vs.dxbc`, `uber.fs.dxbc`) and loads it with
+//! FXC makes from that HLSL for the Windfoil variant (render/variant.rs), the one Windows renderers
+//! draw with (`uber.vs.dxbc`, `uber.fs.dxbc`), and loads it with
 //! `Device::create_shader_module_passthrough`; the pipeline then takes about 2 ms, as the
 //! driver caches its own compile across launches. D3D12 takes FXC's DXBC as it takes DXIL.
 //!
@@ -37,14 +38,14 @@ impl Shaders {
 }
 
 /// The precompiled uber shader and its pipeline on a DX12 device, when the bytecode matches
-/// `wgsl` and the driver takes it.
+/// `wgsl` and the pipeline ABI `abi` and the driver takes it.
 #[cfg(target_os = "windows")]
-pub(super) fn uber<T>(device: &wgpu::Device, wgsl: &str, make_pipeline: impl FnOnce(&Shaders) -> T) -> Option<(Shaders, T)> {
+pub(super) fn uber<T>(device: &wgpu::Device, wgsl: &str, abi: u64, make_pipeline: impl FnOnce(&Shaders) -> T) -> Option<(Shaders, T)> {
     if device.adapter_info().backend != wgpu::Backend::Dx12 || !device.features().contains(wgpu::Features::PASSTHROUGH_SHADERS) {
         return None;
     }
     if !enabled() || blake3::hash(wgsl.as_bytes()).to_hex().as_str() != UBER_DXBC_WGSL_BLAKE3
-        || super::metallib::uber_abi_hash() != UBER_DXBC_ABI_FNV64 {
+        || abi != UBER_DXBC_ABI_FNV64 {
         return None;
     }
     let module = |blob: &'static [u8], entry: &'static str| {

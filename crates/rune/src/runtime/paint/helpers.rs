@@ -266,7 +266,10 @@ pub(super) fn scale_about(rect: [f32; 4], origin: [f32; 2], r_origin: [f32; 2], 
 /// its atlas footprint in `uv.zw`, so the shader samples it filtered.
 pub(super) fn zoom_glyph(mut g: Instance, origin: [f32; 2], r_origin: [f32; 2], k: f32) -> Instance {
     if k == 1.0 && origin == r_origin { return g; }
-    if g.params[1] == KIND_GLYPH && g.uv[2] == 0.0 { (g.uv[2], g.uv[3]) = (g.rect[2], g.rect[3]); }
+    if g.params[1] == KIND_GLYPH && g.radii[3] > 0.0 {
+        // An outline glyph (`text::Outline`) magnifies its pen and pixel instead of its mask.
+        g.radii = [origin[0] + (g.radii[0] - r_origin[0]) * k, origin[1] + (g.radii[1] - r_origin[1]) * k, g.radii[2], g.radii[3] * k];
+    } else if g.params[1] == KIND_GLYPH && g.uv[2] == 0.0 { (g.uv[2], g.uv[3]) = (g.rect[2], g.rect[3]); }
     g.rect = [
         origin[0] + (g.rect[0] - r_origin[0]) * k,
         origin[1] + (g.rect[1] - r_origin[1]) * k,
