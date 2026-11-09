@@ -95,8 +95,20 @@ pub(super) async fn land_in_slices(url: &str, fetched: Fetched, px: u32) -> Resu
 /// are a separate piece of main-thread work.
 #[cfg(target_arch = "wasm32")]
 pub(super) async fn fetch(url: &str) -> Result<Fetched, ImageError> {
+    browser_reply(url, crate::platform::web::platform::fetch_image(url, MAX_SIDE)).await
+}
+
+/// Encoded image bytes decoded by the browser's own codecs, off the main thread, so a web build
+/// carries no JPEG decoder of its own.
+#[cfg(target_arch = "wasm32")]
+pub(super) async fn decode_in_browser(bytes: &[u8]) -> Result<Fetched, ImageError> {
+    browser_reply("image", crate::platform::web::platform::decode_image(bytes, MAX_SIDE)).await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn browser_reply(url: &str, promise: js_sys::Promise) -> Result<Fetched, ImageError> {
     use wasm_bindgen::JsCast;
-    let reply = wasm_bindgen_futures::JsFuture::from(crate::platform::web::platform::fetch_image(url, MAX_SIDE)).await.map_err(|e| {
+    let reply = wasm_bindgen_futures::JsFuture::from(promise).await.map_err(|e| {
         let why = e.dyn_ref::<js_sys::Error>().map_or_else(|| format!("{e:?}"), |e| String::from(e.message()));
         ImageError(format!("{url}: {why}"))
     })?;

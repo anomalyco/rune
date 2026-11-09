@@ -72,6 +72,16 @@ async function readImage(url, maxSide) {
     const type = (response.headers.get('content-type') || blob.type).split(';')[0].trim().toLowerCase();
     const path = response.url ? new URL(response.url).pathname : '';
     if (type === 'image/svg+xml' || /\.svgz?$/i.test(path)) return [0, 0, new Uint8Array(await blob.arrayBuffer())];
+    return blobRgba(blob, maxSide);
+}
+
+export async function decodeImage(bytes, maxSide) {
+    const reply = await blobRgba(new Blob([bytes]), maxSide);
+    await nextTask();
+    return reply;
+}
+
+async function blobRgba(blob, maxSide) {
     const bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image', colorSpaceConversion: 'default' });
     try {
         const { width, height } = bitmap;
