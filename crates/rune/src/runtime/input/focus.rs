@@ -44,9 +44,9 @@ fn sync_input_focus(input: &mut crate::el::InputSpec, states: crate::states::Sta
         edit.set_revealed(revealed);
         changed = true;
     }
-    if edit.focused != focused || (!focused && edit.preedit.is_some()) {
+    if edit.focused != focused || (!focused && edit.is_composing()) {
         edit.focused = focused;
-        if !focused { edit.clear_preedit(); }
+        if !focused { edit.cancel_composition(); }
         edit.break_history_group();
         changed = true;
     }
@@ -578,7 +578,7 @@ mod tests {
         rt.ime(crate::Ime::Preedit("pending".into(), None)); rt.frame(0.0);
         rt.ime_reset = false;
         rt.cancel_composition(); rt.frame(0.0);
-        assert!(rt.state.preedit.is_none() && rt.state.focused && rt.ime_reset);
+        assert!(rt.state.preedit().is_none() && rt.state.focused && rt.ime_reset);
         assert_eq!(rt.state.text, "committed");
     }
 
@@ -636,7 +636,7 @@ mod tests {
         rt.state.open = true; rt.state.search.focused = true; rt.invalidate(); rt.frame(0.0);
         assert!(rt.state.search.focused);
         assert!(!rt.state.first.focused);
-        assert!(rt.state.first.preedit.is_none());
+        assert!(rt.state.first.preedit().is_none());
         assert!(rt.ime_reset);
         assert!(!rt.keyboard_focus);
         rt.key(KeyEvent { key: Key::Text("query".into()), mods: Mods::default() }); rt.frame(0.0);
@@ -649,7 +649,7 @@ mod tests {
         rt.pointer_down(290.0, 290.0); rt.pointer_up(290.0, 290.0); rt.frame(0.0);
         assert!(rt.focused.is_none());
         assert!(!rt.state.search.focused);
-        assert!(rt.state.search.preedit.is_none());
+        assert!(rt.state.search.preedit().is_none());
     }
 
     #[test]

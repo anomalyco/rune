@@ -147,7 +147,7 @@ mod tests {
         event["kind"] = json!("edit");
         rt.web_edit(&event);
         assert_eq!(rt.state.text, "🦀 help");
-        assert!(rt.state.preedit.is_none());
+        assert!(rt.state.preedit().is_none());
         assert_eq!(rt.state.focus, rt.state.text.len());
         rt.web_edit(&event);
         assert_eq!(rt.state.text, "🦀 help", "stale context rejected");

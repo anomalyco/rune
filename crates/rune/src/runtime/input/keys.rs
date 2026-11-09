@@ -218,8 +218,8 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn composing(&mut self) -> bool {
         let Some(access) = self.focused_input().map(|i| i.access.clone()) else { return self.app_ime.composing() };
         match access {
-            Some(access) => access(states!(self)).preedit.is_some(),
-            None => self.focused_input().is_some_and(|i| i.edit.preedit.is_some()),
+            Some(access) => access(states!(self)).preedit().is_some(),
+            None => self.focused_input().is_some_and(|i| i.edit.preedit().is_some()),
         }
     }
 

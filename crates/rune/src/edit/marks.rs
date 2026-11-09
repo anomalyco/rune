@@ -360,7 +360,7 @@ impl TextEdit {
         self.marks.push(MarkRange { start: a, end: b, mark });
         self.pending = None;
         self.normalize_marks();
-        self.record_change(before, false);
+        self.record_change(before, EditKind::Other);
     }
 
     /// Remove `mark` (matching by [`Mark::same_kind`]) from the current selection, or from pending
@@ -397,7 +397,7 @@ impl TextEdit {
         self.marks = out;
         self.pending = None;
         self.normalize_marks();
-        self.record_change(before, false);
+        self.record_change(before, EditKind::Other);
     }
 
     /// Apply or remove a [`Mark::Link`] on the selection (or pending style when empty).
@@ -458,7 +458,7 @@ impl TextEdit {
             self.pending = None;
         }
         self.normalize_marks();
-        self.record_change(before, false);
+        self.record_change(before, EditKind::Other);
     }
 
     /// Toggle `block` on all paragraphs in the selection: if every selected paragraph already has
@@ -491,7 +491,7 @@ impl TextEdit {
                 self.pending = None;
             }
             self.normalize_marks();
-            self.record_change(before, false);
+            self.record_change(before, EditKind::Other);
         }
     }
 
@@ -515,7 +515,7 @@ impl TextEdit {
                 *slot = slot.with_level((lvl + 1).min(MAX_LIST_LEVEL));
             }
         }
-        self.record_change(before, false);
+        self.record_change(before, EditKind::Other);
         true
     }
 
@@ -539,7 +539,7 @@ impl TextEdit {
                 *slot = slot.with_level(lvl.saturating_sub(1));
             }
         }
-        self.record_change(before, false);
+        self.record_change(before, EditKind::Other);
         true
     }
 }

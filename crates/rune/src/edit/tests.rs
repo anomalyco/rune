@@ -45,7 +45,7 @@ fn secure_unicode_editing_has_no_history_or_export() {
     assert_eq!((&*e.text, e.anchor, e.focus), ("h界x", 4, 4));
     e.ime(&Ime::Preedit("composition".into(), None));
     e.ime(&Ime::Commit("commit".into()));
-    assert!(e.preedit.is_none());
+    assert!(e.preedit().is_none());
     assert_eq!(e.text, "h界x");
     e.undo(); e.redo();
     assert_eq!(e.text, "h界x");
@@ -110,7 +110,7 @@ fn secure_revealed_uses_plain_display_and_words_while_keeping_protections() {
     assert_eq!(e.text, "h! world");
     e.ime(&Ime::Preedit("comp".into(), Some((0, 4))));
     e.ime(&Ime::Commit("commit".into()));
-    assert!(e.preedit.is_none());
+    assert!(e.preedit().is_none());
     assert_eq!(e.text, "h! world");
     let dbg = format!("{e:?}");
     assert!(!dbg.contains("h! world") && !dbg.contains("world") && dbg.contains("[redacted]"));
@@ -173,7 +173,7 @@ fn pristine_secure_backspace_at_start_and_ime_do_not_bypass_protection() {
     assert!(!e.has_history());
     e.replace_text("fictional-secret");
     e.ime(&Ime::Preedit("composition".into(), None));
-    assert!(e.preedit.is_none());
+    assert!(e.preedit().is_none());
     assert!(e.is_pristine());
     e.ime(&Ime::Commit("commit".into()));
     assert_eq!(e.text, "fictional-secret", "secure inputs reject IME commits too");
@@ -406,13 +406,13 @@ fn history_deletion_cut_and_ime_are_atomic() {
     assert_eq!(e.text, "h日本🙂");
     undo(&mut e, false);
     assert_eq!((&*e.text, e.anchor, e.focus), ("hé🙂", 3, 1));
-    assert!(e.preedit.is_none());
+    assert!(e.preedit().is_none());
     undo(&mut e, true);
     assert_eq!(e.text, "h日本🙂");
     e.ime(&Ime::Preedit("x".into(), None));
     undo(&mut e, false);
     assert_eq!(e.text, "h日本🙂", "undo cancels preedit without undoing committed text");
-    assert!(e.preedit.is_none());
+    assert!(e.preedit().is_none());
 }
 
 #[test]

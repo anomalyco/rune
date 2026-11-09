@@ -27,7 +27,7 @@ mod marks;
 mod model;
 pub use model::{Block, MAX_LIST_LEVEL, Mark, MarkRange, ParagraphInfo, RichStyle};
 pub(crate) use history::History;
-use history::{ActiveGroup, EditedTag};
+use history::{ActiveGroup, EditKind, EditedTag};
 
 /// Fixed mask shown by a hidden multi-line secure field when non-empty, hiding both byte length
 /// and line count.
@@ -49,8 +49,8 @@ pub struct TextEdit {
     pub text: String,
     pub anchor: usize,
     pub focus: usize,
-    /// IME composition shown at the caret, with its selected range.
-    pub preedit: Option<(String, Option<(usize, usize)>)>,
+    /// The input method's composition (`TextEdit::preedit`).
+    composition: ime::Composition,
     pub focused: bool,
     marks: Vec<MarkRange>,
     blocks: Vec<Block>,
@@ -103,7 +103,7 @@ impl std::hash::Hash for TextEdit {
             self.anchor.hash(h);
             self.focus.hash(h);
         }
-        self.preedit.hash(h);
+        self.composition.hash(h);
         self.focused.hash(h);
         self.marks.hash(h);
         if !self.secure {
@@ -120,7 +120,7 @@ impl std::hash::Hash for TextEdit {
 impl Drop for TextEdit {
     fn drop(&mut self) {
         self.text.zeroize();
-        self.clear_preedit();
+        self.cancel_composition();
     }
 }
 
@@ -153,7 +153,7 @@ impl TextEdit {
             text,
             anchor: n,
             focus: n,
-            preedit: None,
+            composition: ime::Composition::Idle,
             focused: false,
             marks: Vec::new(),
             blocks: vec![Block::Paragraph; line_count],
@@ -391,7 +391,7 @@ impl TextEdit {
             self.blocks.clear();
             self.soft_breaks.clear();
             self.pending = None;
-            self.clear_preedit();
+            self.cancel_composition();
         } else if self.group.0 == Some(None) {
             self.sync_invariants();
             self.group.0 = Some(Some(self.snapshot_now()));
@@ -409,8 +409,20 @@ impl TextEdit {
 
     pub fn set_revealed(&mut self, revealed: bool) { self.revealed = revealed; }
 
-    pub(crate) fn clear_preedit(&mut self) {
-        if let Some((mut text, _)) = self.preedit.take() { text.zeroize(); }
+    /// The input method's composition, drawn at the caret and not yet part of `text`, with the
+    /// byte range of its cursor or selection in it.
+    pub fn preedit(&self) -> Option<(&str, Option<(usize, usize)>)> {
+        self.composition.preedit()
+    }
+
+    /// An input method is composing in this field.
+    pub fn is_composing(&self) -> bool {
+        self.composition != ime::Composition::Idle
+    }
+
+    /// Ends the input method's composition without committing it, as a blur does.
+    pub fn cancel_composition(&mut self) {
+        self.composition.cancel();
     }
 
     pub(crate) fn clear_pending(&mut self) {
@@ -429,7 +441,7 @@ impl TextEdit {
         self.blocks = vec![Block::Paragraph; line_count];
         self.soft_breaks.clear();
         self.pending = None;
-        self.clear_preedit();
+        self.cancel_composition();
         self.edited_tag = EditedTag(false);
         self.history = Arc::default();
         if self.group.0.is_some() {
@@ -666,7 +678,7 @@ impl TextEdit {
         // Code blocks keep no inline marks: there the label stays plain text.
         self.marks.push(MarkRange { start: a, end: a + label.len(), mark: Mark::Pill(id.into()) });
         self.normalize_marks();
-        self.record_change(before, false);
+        self.record_change(before, EditKind::Other);
     }
 
     /// The pill strictly containing byte `i` (`start < i < end`).
@@ -713,7 +725,7 @@ impl TextEdit {
     }
 
     pub fn insert(&mut self, s: &str) {
-        self.replace(self.range(), s, false);
+        self.replace(self.range(), s, EditKind::Other);
     }
 
     pub(crate) fn set_single_line(&mut self, single_line: bool) {
@@ -809,7 +821,7 @@ impl TextEdit {
             self.blocks.resize(self.blocks.len() + added - removed, Block::Paragraph);
             self.anchor = a + ins_len;
             self.focus = self.anchor;
-            self.preedit = None;
+            self.cancel_composition();
             return;
         }
         let line_a = self.line_of_byte(a);
@@ -931,12 +943,12 @@ impl TextEdit {
         self.text.replace_range(a..b, s);
         self.anchor = a + ins_len;
         self.focus = self.anchor;
-        self.preedit = None;
+        self.cancel_composition();
         self.sync_invariants();
         self.mark_edited();
     }
 
-    fn replace(&mut self, (mut a, mut b): (usize, usize), s: &str, typing: bool) {
+    fn replace(&mut self, (mut a, mut b): (usize, usize), s: &str, kind: EditKind) {
         if self.is_hidden_multiline() && self.is_pristine() {
             (a, b) = (0, self.text.len());
         }
@@ -954,14 +966,14 @@ impl TextEdit {
         self.sync_invariants();
         // Backspace or Delete next to a pill, or a selection into one, takes it whole.
         let (a, b) = self.cover_pills(a, b);
-        if !typing { self.break_history_group(); }
+        if kind == EditKind::Other { self.break_history_group(); }
         if &self.text[a..b] == s
             && self.pending.is_none()
             && !self.marks.iter().any(|m| m.mark.is_pill() && m.start < b && a < m.end)
         {
             self.anchor = a + s.len();
             self.focus = self.anchor;
-            self.preedit = None;
+            self.cancel_composition();
             self.mark_edited();
             return;
         }
@@ -990,7 +1002,7 @@ impl TextEdit {
         };
 
         self.apply_text_and_attr_replace((a, b), s, &inserted_marks, None, false);
-        self.record_change(before, typing);
+        self.record_change(before, kind);
     }
 
 }

@@ -334,7 +334,7 @@ fn timing_slop_and_target_changes_reset_multiclick_count_and_preedit_ignores_it(
     let before = (rt.state.single.anchor, rt.state.single.focus);
     click(&mut rt, pt);
     click(&mut rt, pt);
-    assert!(rt.state.single.preedit.is_some());
+    assert!(rt.state.single.preedit().is_some());
     assert_eq!((rt.state.single.anchor, rt.state.single.focus), before);
 }
 

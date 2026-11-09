@@ -29,7 +29,7 @@ impl ComboboxState {
     pub fn close(&mut self) {
         self.open = false;
         self.search.focused = false;
-        self.search.preedit = None;
+        self.search.cancel_composition();
         self.search.break_history_group();
     }
     fn active_index(&self, options: &[ComboboxOption], filtered: &[usize]) -> Option<usize> {
@@ -182,7 +182,7 @@ impl<S: 'static> Combobox<S> {
             })
             .on_key(move |s: &mut S, ev, tx| {
                 let state = key_access(s);
-                if state.search.preedit.is_some() { return false; }
+                if state.search.preedit().is_some() { return false; }
                 if ev.key == Key::Escape {
                     if !tx.key_repeat() { state.close(); }
                     return true;
