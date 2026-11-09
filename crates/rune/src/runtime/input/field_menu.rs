@@ -41,7 +41,7 @@ impl<S: 'static> Runtime<S> {
         let e = access(states!(self));
         e.set_single_line(single);
         if let (Some((x, y)), Some(l)) = (local, layout.as_deref())
-            && e.preedit.is_none()
+            && e.preedit().is_none()
         {
             let caret = hit(e, l, x + scroll, y, s, single).caret;
             let (a, b) = e.range();

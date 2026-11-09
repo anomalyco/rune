@@ -16,7 +16,7 @@ impl TextEdit {
         if s >= e {
             return Vec::new();
         }
-        let Some((ref p, _)) = self.preedit else {
+        let Some((p, _)) = self.preedit() else {
             return vec![(s as u32, e as u32)];
         };
         let (a, b) = self.range();
@@ -123,7 +123,7 @@ impl TextEdit {
 
         // If IME preedit is active, style the preedit range with `self.active_marks()` (which
         // includes any pending typing style or inherited marks at the caret).
-        if let Some((ref p, _)) = self.preedit
+        if let Some((p, _)) = self.preedit()
             && !p.is_empty()
         {
             let (a, _) = self.range();
@@ -173,7 +173,7 @@ impl TextEdit {
         if self.secure {
             return Vec::new();
         }
-        if self.preedit.is_none() {
+        if self.preedit().is_none() {
             let t = &self.text;
             return self
                 .marks
@@ -203,7 +203,7 @@ impl TextEdit {
         if self.blocks.is_empty() {
             return vec![Block::Paragraph; line_count];
         }
-        if self.preedit.is_none() {
+        if self.preedit().is_none() {
             let mut out = self.blocks.clone();
             out.resize(line_count, Block::Paragraph);
             return out;
@@ -234,7 +234,7 @@ impl TextEdit {
             };
             return (text, None);
         }
-        match &self.preedit {
+        match self.preedit() {
             Some((p, _)) => {
                 let (a, b) = self.range();
                 let mut s = String::with_capacity(self.text.len() + p.len());

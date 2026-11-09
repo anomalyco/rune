@@ -218,7 +218,7 @@ impl<S: 'static> Runtime<S> {
                 let e = &inp.edit;
                 let departing = self.flights.iter().any(|f| f.departs(&n.path, n.key.as_deref())
                     && f.alphas(f.destination, now, self.reduced_motion).0 > 0.0);
-                if e.text.is_empty() && e.preedit.is_none() && !inp.placeholder.is_empty() && !departing {
+                if e.text.is_empty() && e.preedit().is_none() && !inp.placeholder.is_empty() && !departing {
                     let pl_indent = spec.blocks.first().map_or(0.0, |b| (b.indent_pt(spec.style.size) * s).round() * tk);
                     // A one-line field's placeholder stays on its line, cut by the field's clip, as its
                     // text does; a multi-line field's wraps at its width.
@@ -246,13 +246,13 @@ impl<S: 'static> Runtime<S> {
                 }
                 if e.focused && !departing {
                     let (a, b) = e.range();
-                    if a != b && e.preedit.is_none() {
+                    if a != b && e.preedit().is_none() {
                         let (da, db) = e.display_selection_range(a, b);
                         selectable::push_field_selection(&mut self.instances, layout, da, db,
                             origin, tk, premul(inp.selection, o, srgb), s, clip, fade);
                     }
                     caret = input_caret;
-                    if let Some((_, _)) = &e.preedit
+                    if e.is_composing()
                         && let (_, Some((pa, pb))) = e.display()
                     {
                         for (bb, _) in crate::text::range_boxes(layout, pa, pb, false) {
@@ -267,7 +267,7 @@ impl<S: 'static> Runtime<S> {
                     }
                 }
                 // Misspelled words (`El::spellcheck`), but the one the caret is typing.
-                if inp.spellcheck && !e.is_secure() && e.preedit.is_none() && !departing {
+                if inp.spellcheck && !e.is_secure() && e.preedit().is_none() && !departing {
                     let found = crate::spell::misspelled(&e.text);
                     let caret = e.focused.then(|| e.range()).filter(|(a, b)| a == b).map(|(a, _)| a);
                     let color = premul(SPELLING, o, srgb);

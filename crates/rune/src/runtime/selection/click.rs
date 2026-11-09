@@ -222,7 +222,7 @@ impl<S: 'static> Runtime<S> {
                 e.set_single_line(single);
                 e.break_history_group();
                 e.clear_pending();
-                if e.preedit.is_some() {
+                if e.preedit().is_some() {
                     self.input_click.clear();
                     one.instant = true;
                     return true;
@@ -256,7 +256,7 @@ impl<S: 'static> Runtime<S> {
                 }
                 let e = access(states!(self));
                 e.set_single_line(single);
-                if e.preedit.is_some() {
+                if e.preedit().is_some() {
                     self.input_click.clear();
                     return false;
                 }

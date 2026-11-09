@@ -170,7 +170,7 @@ impl<S: 'static> Runtime<S> {
         let n = &self.nodes[i];
         let input = n.input.as_deref()?;
         let edit = &input.edit;
-        let (anchor, focus) = if edit.preedit.is_some() {
+        let (anchor, focus) = if edit.preedit().is_some() {
             let caret = caret_index(edit, &self.a11y_drawn_text(i)?);
             (caret, caret)
         } else {

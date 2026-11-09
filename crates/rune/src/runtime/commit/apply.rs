@@ -772,7 +772,7 @@ impl<S: 'static> Runtime<S> {
                     input.key = None;
                     input.change = None;
                     input.edit.focused = false;
-                    input.edit.clear_preedit();
+                    input.edit.cancel_composition();
                     input.edit.conceal();
                     if was_revealed && let Some(spec) = &mut old.text {
                         spec.replace_content(input.edit.display().0);

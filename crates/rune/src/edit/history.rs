@@ -1,5 +1,5 @@
-//! Undo and redo for a [`TextEdit`]: document snapshots, coalesced typing runs, undo groups
-//! and a history bounded in steps and bytes.
+//! Undo and redo for a [`TextEdit`]: document snapshots, typing runs coalesced as Chromium's
+//! editor does ([`Run`], [`step`]), undo groups and a history bounded in steps and bytes.
 
 use std::collections::VecDeque;
 
@@ -76,7 +76,62 @@ pub(crate) struct History {
     pub(super) undo: VecDeque<Change>,
     pub(super) redo: Vec<Change>,
     pub(super) bytes: usize,
-    pub(super) typing: bool,
+    pub(super) run: Run,
+}
+
+/// The undo step the last edit leaves open for the next to join, as a browser's editor keeps
+/// its typing command open. A caret move, a pointer selection, a focus change, undo, redo and
+/// any edit but typing close it. Pauses and word boundaries don't: Chromium's textarea and
+/// contenteditable undo a whole typing run in one step.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Run {
+    #[default]
+    Closed,
+    /// Typed text or line breaks: more join; a deletion starts a new step.
+    Inserting,
+    /// Backspace or Delete: more deletions and typed text join.
+    Deleting,
+}
+
+/// What an edit is, for joining it to the open undo step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum EditKind {
+    /// Typed text without a line break.
+    Text,
+    /// A typed line break (Return, Shift+Return).
+    LineBreak,
+    /// Backspace or Delete over a character or a selection.
+    Delete,
+    /// A word or line deleted at once (Ctrl+Backspace, Ctrl+K): always a new step, which
+    /// further deletions and typing join.
+    DeleteRun,
+    /// Paste, an IME commit, a pill, formatting: a step of its own.
+    Other,
+}
+
+/// Where an edit's change goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Record {
+    /// Into the open step.
+    Join,
+    /// Into a new step.
+    Push,
+}
+
+/// Steps the open run with an edit of `kind`; `onto_empty_line` when typed text lands on a
+/// line that held nothing. Chromium closes its typing step after the first character typed
+/// onto an empty line (after a line break, or into a field emptied by a deletion), so the
+/// character after starts a new step.
+pub(super) fn step(run: &mut Run, kind: EditKind, onto_empty_line: bool) -> Record {
+    let (record, next) = match (*run, kind) {
+        (_, EditKind::Other) => (Record::Push, Run::Closed),
+        (_, EditKind::DeleteRun) | (Run::Closed | Run::Inserting, EditKind::Delete) => (Record::Push, Run::Deleting),
+        (Run::Deleting, EditKind::Delete) => (Record::Join, Run::Deleting),
+        (Run::Closed, EditKind::Text | EditKind::LineBreak) => (Record::Push, Run::Inserting),
+        (Run::Inserting | Run::Deleting, EditKind::Text | EditKind::LineBreak) => (Record::Join, Run::Inserting),
+    };
+    *run = if kind == EditKind::Text && onto_empty_line { Run::Closed } else { next };
+    record
 }
 
 impl TextEdit {
@@ -92,7 +147,7 @@ impl TextEdit {
 
     /// End a typing group on a pointer selection or focus change.
     pub fn break_history_group(&mut self) {
-        if self.history.typing { Arc::make_mut(&mut self.history).typing = false; }
+        if self.history.run != Run::Closed { Arc::make_mut(&mut self.history).run = Run::Closed; }
     }
 
     pub(super) fn snapshot_now(&self) -> Snapshot {
@@ -119,11 +174,11 @@ impl TextEdit {
         self.blocks = s.blocks.clone();
         self.soft_breaks = s.soft_breaks.clone();
         self.pending = None;
-        self.clear_preedit();
+        self.cancel_composition();
         self.sync_invariants();
     }
 
-    pub(super) fn record_change(&mut self, before: Option<Snapshot>, typing: bool) {
+    pub(super) fn record_change(&mut self, before: Option<Snapshot>, kind: EditKind) {
         let Some(before) = before.filter(|_| !self.secure && self.group.0.is_none()) else {
             return;
         };
@@ -138,8 +193,8 @@ impl TextEdit {
         }
         h.bytes -= h.redo.iter().map(Change::bytes).sum::<usize>();
         h.redo.clear();
-        if typing
-            && h.typing
+        let record = step(&mut h.run, kind, before.anchor == before.focus && on_empty_line(&before.text, before.anchor));
+        if record == Record::Join
             && before.anchor == before.focus
             && h.undo.back().is_some_and(|c| c.after == before)
         {
@@ -152,7 +207,6 @@ impl TextEdit {
             h.bytes += change.bytes();
             h.undo.push_back(change);
         }
-        h.typing = typing;
         while h.undo.len() > HISTORY_STEPS || h.bytes > HISTORY_BYTES {
             h.bytes -= h.undo.pop_front().unwrap().bytes();
         }
@@ -196,7 +250,7 @@ impl TextEdit {
         drop(g);
         self.sync_invariants();
         self.break_history_group();
-        self.record_change(before, false);
+        self.record_change(before, EditKind::Other);
         r
     }
 
@@ -204,7 +258,7 @@ impl TextEdit {
     pub fn undo(&mut self) {
         if self.secure || self.group.0.is_some() { return; }
         self.break_history_group();
-        if self.preedit.is_some() { self.clear_preedit(); return; }
+        if self.preedit().is_some() { self.cancel_composition(); return; }
         let h = Arc::make_mut(&mut self.history);
         let Some(change) = h.undo.pop_back() else { return };
         // Public model text may have been replaced by the app. Never restore stale history.
@@ -216,11 +270,17 @@ impl TextEdit {
     pub fn redo(&mut self) {
         if self.secure || self.group.0.is_some() { return; }
         self.break_history_group();
-        if self.preedit.is_some() { self.clear_preedit(); return; }
+        if self.preedit().is_some() { self.cancel_composition(); return; }
         let h = Arc::make_mut(&mut self.history);
         let Some(change) = h.redo.pop() else { return };
         if self.text != change.before.text.as_str() { *h = History::default(); return; }
         self.restore(&change.after);
         Arc::make_mut(&mut self.history).undo.push_back(change);
     }
+}
+
+/// Whether byte `at` of `text` sits on a line with nothing on it.
+fn on_empty_line(text: &str, at: usize) -> bool {
+    let b = text.as_bytes();
+    (at == 0 || b.get(at - 1) == Some(&b'\n')) && (at >= b.len() || b[at] == b'\n')
 }

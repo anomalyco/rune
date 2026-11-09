@@ -71,7 +71,7 @@ impl<S: 'static> Runtime<S> {
         if let Some(input) = n.input.as_deref() {
             let e = &input.edit;
             if !secure { e.text.hash(&mut h); }
-            (e.anchor, e.focus, e.preedit.as_ref().map(|p| (p.0.len(), p.1)), e.focused, &input.placeholder, input.single_line, input.access.is_some()).hash(&mut h);
+            (e.anchor, e.focus, e.preedit().map(|p| (p.0.len(), p.1)), e.focused, &input.placeholder, input.single_line, input.access.is_some()).hash(&mut h);
             self.input_scroll.get(&n.path).map(|v| v.to_bits()).hash(&mut h);
         }
         let handlers = n.handlers.get();

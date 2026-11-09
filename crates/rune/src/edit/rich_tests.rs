@@ -810,12 +810,12 @@ fn an_undo_group_leaves_ime_composition_alone() {
     e.set_caret(1);
     e.ime(&Ime::Preedit("に".into(), None));
     e.undo_group(|e| e.ime(&Ime::Commit("日本".into())));
-    assert_eq!((e.text.as_str(), e.preedit.is_none()), ("x日本", true));
+    assert_eq!((e.text.as_str(), e.preedit().is_none()), ("x日本", true));
     undo(&mut e, false);
     assert_eq!(e.text, "x");
     e.ime(&Ime::Preedit("a".into(), None));
     e.undo_group(|e| e.undo());
-    assert!(e.preedit.is_some(), "undo inside a group does nothing");
+    assert!(e.preedit().is_some(), "undo inside a group does nothing");
 }
 
 #[test]

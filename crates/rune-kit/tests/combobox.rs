@@ -51,7 +51,7 @@ fn opening_takes_focus_and_reveals_the_offscreen_selection() {
     rt.frame(0.0);
     assert!(rt.state.combo.open && rt.state.combo.search.focused);
     assert!(!rt.state.other.focused);
-    assert!(rt.state.other.preedit.is_none());
+    assert!(rt.state.other.preedit().is_none());
     let last = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("models-option-item-199")).unwrap();
     assert!(last.visible[3] > 0.0);
     key(&mut rt, Key::Text("099".into()), Mods::default());
@@ -130,7 +130,7 @@ fn focused_combobox_handles_keys_before_app_and_returns_focus_on_close() {
     rt.ime(Ime::Preedit("pending".into(), None)); rt.frame(0.0);
     rt.pointer_down(390.0, 390.0); rt.pointer_up(390.0, 390.0); rt.frame(0.0);
     assert!(!rt.state.combo.open && !rt.state.combo.search.focused);
-    assert!(rt.state.combo.search.preedit.is_none());
+    assert!(rt.state.combo.search.preedit().is_none());
     let trigger = rt.elements().into_iter().find(|e| e.focused).unwrap();
     assert_eq!(trigger.key.as_deref(), Some("models-value-trigger"));
     assert!(!trigger.focus_visible);
