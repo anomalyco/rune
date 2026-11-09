@@ -28,11 +28,14 @@ pub(super) fn single_line_offset(prev: f32, inp: &crate::el::InputSpec, content:
     let caret_w = (1.5 * s).round();
     let caret = Cursor::from_byte_index(layout, caret_index(&inp.edit, content), Affinity::Downstream);
     let cx = crate::text::cursor_geometry(&caret, layout, 1.5 * s).x0 as f32;
-    let mut scroll = prev * s;
+    // A right-to-left field runs from its right edge: measure from there and shift rightward.
+    let rtl = layout.is_rtl();
+    let (cx, sign) = if rtl { (layout.full_width() - cx, -1.0) } else { (cx, 1.0) };
+    let mut scroll = prev * s * sign;
     if cx - scroll > visible - caret_w {
         scroll = cx - visible + caret_w;
     }
-    scroll.min(cx).clamp(0.0, (layout.full_width() + caret_w - visible).max(0.0))
+    sign * scroll.min(cx).clamp(0.0, (layout.full_width() + caret_w - visible).max(0.0))
 }
 
 /// The display byte index the caret sits at, inside any IME preedit.
@@ -62,17 +65,20 @@ pub(super) fn text_extent(n: &Node, spec: &TextSpec, layout: &Layout<Ink>, r: [f
     let (lo, hi) = layout.lines().map(|l| (l.metrics().offset, l.metrics().advance))
         .fold((f32::MAX, 0.0f32), |(lo, hi), (offset, advance)| (lo.min(offset), hi.max(offset + advance)));
     let (lo, hi) = if lo > hi { (0.0, layout.full_width()) } else { (lo, hi) };
-    let origin = [text_x(spec, x0, x1, layout.full_width() / scale), r[1] + n.inset[1]];
+    let origin = [text_x(spec, x0, x1, layout.full_width() / scale, layout.is_rtl()), r[1] + n.inset[1]];
     let x = origin[0] + lo / scale;
     (MRect::new(x, origin[1], ((hi - lo) / scale).min(x1 - x).max(0.0),
         (crate::text::spec_height(layout, spec.style, scale, spec.exact_lines) / scale).min(r[3] - n.inset[1] - n.inset[3])), origin)
 }
 
 /// Where a `width`-wide text line starts between `x0` and `x1`. Wrapped text aligns each line
-/// inside the wrap width itself, so it starts at `x0`.
-pub(super) fn text_x(spec: &TextSpec, x0: f32, x1: f32, width: f32) -> f32 {
+/// inside the wrap width itself, so it starts at `x0`. A right-to-left paragraph (`rtl`, its
+/// layout's base level) starts at its right edge; wrapped, its lines already end there.
+pub(super) fn text_x(spec: &TextSpec, x0: f32, x1: f32, width: f32, rtl: bool) -> f32 {
     match spec.align {
-        _ if line_alignment(spec) != parley::Alignment::Start => x0,
+        _ if line_alignment(spec) != parley::Alignment::Start || (rtl && spec.wrap) => x0,
+        Align::Start if rtl => x1 - width,
+        Align::End if rtl => x0,
         Align::Start => x0,
         Align::Center => x0 + (x1 - x0 - width) * 0.5,
         Align::End => x1 - width,
@@ -185,9 +191,7 @@ fn spec_elide_keys(spec: &TextSpec, scale: f32, mode: u8, param: usize, max_w: f
     if spec.redacted {
         return None;
     }
-    let shape = spec.shape_key(scale).unwrap_or_else(|| {
-        crate::text::shape_key(&spec.content, &spec.spans, spec.style, scale, spec.wrap_anywhere, &spec.pills)
-    });
+    let shape = spec.shape_key(scale).unwrap_or_else(|| spec.fresh_shape_key(scale));
     let blocks = spec.blocks.iter().any(|&b| b != crate::edit::Block::Paragraph).then_some(spec.blocks.as_slice());
     Some((shape, crate::text::elide_key(shape, mode, param, max_w, align, blocks)))
 }
@@ -224,13 +228,13 @@ pub(super) fn truncated(text: &mut TextSystem, spec: &TextSpec, scale: f32, max_
         e.spans_into(&spec.spans, &mut span_buf);
         if spec.redacted {
             let s = zeroize::Zeroizing::new([&content[..e.head], Elision::ELLIPSIS, &content[e.tail..]].concat());
-            text.layout_blocks_inner(&s, &span_buf, &spec.blocks, &[], spec.style, scale, None, parley::Alignment::Start, spec.wrap_anywhere, false)
+            text.layout_cut(spec, &s, &span_buf, scale, None, parley::Alignment::Start, false)
         } else {
             str_buf.clear();
             str_buf.push_str(&content[..e.head]);
             str_buf.push_str(Elision::ELLIPSIS);
             str_buf.push_str(&content[e.tail..]);
-            text.layout_blocks_inner(&str_buf, &span_buf, &spec.blocks, &[], spec.style, scale, None, parley::Alignment::Start, spec.wrap_anywhere, true)
+            text.layout_cut(spec, &str_buf, &span_buf, scale, None, parley::Alignment::Start, true)
         }
     };
     let (mut lo, mut hi) = (0usize, n);
@@ -410,12 +414,12 @@ pub(super) fn clamped(text: &mut TextSystem, spec: &TextSpec, scale: f32, max_w:
         e.spans_into(&spec.spans, &mut span_buf);
         if spec.redacted {
             let s = zeroize::Zeroizing::new([&content[..e.head], Elision::ELLIPSIS].concat());
-            text.layout_blocks_inner(&s, &span_buf, &spec.blocks, &[], spec.style, scale, Some(max_w), align, spec.wrap_anywhere, false)
+            text.layout_cut(spec, &s, &span_buf, scale, Some(max_w), align, false)
         } else {
             str_buf.clear();
             str_buf.push_str(&content[..e.head]);
             str_buf.push_str(Elision::ELLIPSIS);
-            text.layout_blocks_inner(&str_buf, &span_buf, &spec.blocks, &[], spec.style, scale, Some(max_w), align, spec.wrap_anywhere, true)
+            text.layout_cut(spec, &str_buf, &span_buf, scale, Some(max_w), align, true)
         }
     };
     let fits = |l: &Layout<Ink>| l.len() <= lines && last_line_width(l, lines) <= max_w + 0.5;

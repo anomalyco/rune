@@ -113,6 +113,8 @@ pub struct VisualCold {
     pub(crate) rotate: f32,
     /// App-defined tag a compositor reads per instance (`Runtime::marks`); 0 inherits the parent's.
     pub mark: u32,
+    /// `El::mirror_in_rtl`: its icon flips left to right in a right-to-left element.
+    pub(crate) mirror_rtl: bool,
 }
 
 impl Empty for VisualCold {
@@ -167,6 +169,7 @@ impl Empty for VisualCold {
         blur: 0.0,
         rotate: 0.0,
         mark: 0,
+        mirror_rtl: false,
     };
 }
 

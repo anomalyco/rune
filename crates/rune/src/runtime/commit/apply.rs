@@ -670,6 +670,7 @@ impl<S: 'static> Runtime<S> {
         for (i, n) in nodes.iter().enumerate() {
             if let Some(sp) = n.cold.get().and_then(|c| c.scroll) {
                 let e = self.scrolls.entry(n.id).or_insert(ScrollState { pinned: sp.stick_bottom, ..ScrollState::default() });
+                e.x.rtl = n.rtl;
                 if concealed.get(i).copied().unwrap_or(false) {
                     e.offset = 0.0;
                     e.v = 0.0;

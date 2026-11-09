@@ -196,7 +196,7 @@ impl<S: 'static> Runtime<S> {
         let Some(id) = latched.or_else(|| self.scroll_at_axis(x, y, true)) else { return };
         let Some(st) = self.scrolls.get_mut(&id) else { return };
         let before = st.x.offset;
-        st.x.offset = (st.x.offset - f64::from(dx)).clamp(0.0, st.x.max);
+        st.x.offset = (st.x.offset + st.x.toward(f64::from(dx))).clamp(0.0, st.x.max);
         st.x.v = 0.0;
         st.x.glide = None;
         st.direct = true;
@@ -216,18 +216,19 @@ impl<S: 'static> Runtime<S> {
         self.dismiss_help();
         let Some(id) = self.scroll_at_axis(x, y, true) else { return };
         if let Some(st) = self.scrolls.get_mut(&id) {
-            st.x.v = -vx;
+            st.x.v = st.x.toward(f64::from(vx)) as f32;
             st.x.glide = None;
             log_event!(self, "fling-x {vx:.0}");
             if vx != 0.0 { self.scroll_cancels_press(id); }
         }
     }
 
-    /// How far horizontal viewport `i`'s content reaches past its right edge, negative while it
-    /// fits.
+    /// How far horizontal viewport `i`'s content reaches past its end edge (its right, or its
+    /// left right to left), negative while it fits.
     fn scroll_overflow_x(&self, i: usize) -> f64 {
         let view = self.nodes[i].target;
-        let content_w = self.scroll_children(i).map(|c| f64::from(self.nodes[c].target[2] - view[0])).reduce(f64::max).unwrap_or(0.0);
+        let reach = |c: usize| if self.nodes[i].rtl { view[2] - self.nodes[c].target[0] } else { self.nodes[c].target[2] - view[0] };
+        let content_w = self.scroll_children(i).map(|c| f64::from(reach(c))).reduce(f64::max).unwrap_or(0.0);
         content_w - f64::from(view[2] - view[0])
     }
 
@@ -267,7 +268,9 @@ impl<S: 'static> Runtime<S> {
         let Some(v) = std::iter::successors(self.nodes[i].parent, |&p| self.nodes[p].parent)
             .find(|&p| self.nodes[p].scroll.is_some() && self.nodes[p].scroll_axes.x()) else { return };
         let view = &self.nodes[v];
-        let (left, width, viewport) = (f64::from(target_x - view.target[0]), f64::from(target_w), f64::from(view.local.w));
+        // From the viewport's start edge: its right, right to left.
+        let start = if view.rtl { view.target[2] - (target_x + target_w) } else { target_x - view.target[0] };
+        let (left, width, viewport) = (f64::from(start), f64::from(target_w), f64::from(view.local.w));
         let (margin, id) = (f64::from(view.scroll_edges.margin), view.id);
         // A vertical reveal may have just mounted rows (virtual ones) that widened the content.
         let max = self.scroll_overflow_x(v).max(0.0);

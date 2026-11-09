@@ -70,6 +70,9 @@ pub struct TextSpec {
     /// See [`El::exact_lines`](crate::El::exact_lines): the height is its lines' own, unrounded,
     /// unless [`El::rounded_lines`](crate::El::rounded_lines) rounds it to device pixels.
     pub(crate) exact_lines: bool,
+    /// Lays out with a right-to-left paragraph direction: the element's resolved `El::dir`,
+    /// set when it's flattened.
+    pub(crate) rtl: bool,
     /// The scale's bits and [`crate::text::shape_key`] at it, once the content is final (see
     /// [`TextSpec::key_shape`]).
     pub(crate) shape: Option<(u32, u64)>,
@@ -110,16 +113,25 @@ impl TextSpec {
     /// Hashes what shaping depends on once, so measuring and laying the text out at each width
     /// this commit reuses it. Secure text keeps no content-derived key.
     pub(crate) fn key_shape(&mut self, scale: f32) {
-        self.shape = (!self.redacted)
-            .then(|| (scale.to_bits(), crate::text::shape_key(&self.content, &self.spans, self.style, scale, self.wrap_anywhere, &self.pills)));
+        self.shape = (!self.redacted).then(|| (scale.to_bits(), self.fresh_shape_key(scale)));
     }
 
     /// The key [`Self::key_shape`] kept at `scale`.
     pub(crate) fn shape_key(&self, scale: f32) -> Option<u64> {
         let (_, key) = self.shape.filter(|s| s.0 == scale.to_bits())?;
-        debug_assert_eq!(key, crate::text::shape_key(&self.content, &self.spans, self.style, scale, self.wrap_anywhere, &self.pills),
-            "a text changed after its shape key was taken");
+        debug_assert_eq!(key, self.fresh_shape_key(scale), "a text changed after its shape key was taken");
         Some(key)
+    }
+
+    /// [`crate::text::shape_key`] of this text in its direction.
+    pub(crate) fn fresh_shape_key(&self, scale: f32) -> u64 {
+        let key = crate::text::shape_key(&self.content, &self.spans, self.style, scale, self.wrap_anywhere, &self.pills);
+        crate::text::directed(key, self.base())
+    }
+
+    /// The paragraph direction it lays out in.
+    pub(crate) fn base(&self) -> parley::BaseDirection {
+        if self.rtl { parley::BaseDirection::Rtl } else { parley::BaseDirection::Ltr }
     }
 
     /// Zeroizes the shown string and shows `content` instead.

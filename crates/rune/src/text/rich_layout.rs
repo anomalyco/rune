@@ -8,6 +8,7 @@ use super::*;
 pub struct RichLayoutOptions {
     align: Alignment,
     wrap_anywhere: bool,
+    rtl: bool,
 }
 
 impl RichLayoutOptions {
@@ -26,6 +27,14 @@ impl RichLayoutOptions {
     /// [`El::wrap_anywhere`](crate::El::wrap_anywhere) does. Words that fit still break at spaces.
     pub fn wrap_anywhere(mut self) -> Self {
         self.wrap_anywhere = true;
+        self
+    }
+
+    /// Lays the paragraph out right to left (its bidi base level), as a text element inside
+    /// [`El::dir`](crate::El::dir)`(Direction::Rtl)` does: `Start` aligns to the right edge
+    /// and neutral characters at its ends take the right-to-left side. Left to right without it.
+    pub fn rtl(mut self) -> Self {
+        self.rtl = true;
         self
     }
 }
@@ -68,7 +77,8 @@ impl TextSystem {
         max_width: Option<f32>,
         options: RichLayoutOptions,
     ) -> Rc<Layout<Ink>> {
-        self.layout_blocks_inner(text, spans, &[], &[], style, scale, max_width, options.align, options.wrap_anywhere, true)
+        let base = if options.rtl { parley::BaseDirection::Rtl } else { parley::BaseDirection::Ltr };
+        self.layout_keyed(None, text, spans, &[], &[], style, scale, max_width, options.align, options.wrap_anywhere, true, base)
     }
 
     /// [`layout_aligned`](Self::layout_aligned) with per-paragraph [`Block`](crate::Block)
@@ -105,7 +115,7 @@ impl TextSystem {
         wrap_anywhere: bool,
         cache: bool,
     ) -> Rc<Layout<Ink>> {
-        self.layout_keyed(None, text, spans, blocks, pills, style, scale, max_width, align, wrap_anywhere, cache)
+        self.layout_keyed(None, text, spans, blocks, pills, style, scale, max_width, align, wrap_anywhere, cache, parley::BaseDirection::Ltr)
     }
 
     /// Secure display runs must not enter the shared layout cache or leave character
@@ -119,7 +129,22 @@ impl TextSystem {
         align: Alignment,
     ) -> Rc<Layout<Ink>> {
         let shape = spec.shape_key(scale);
-        self.layout_keyed(shape, &spec.content, &spec.spans, &spec.blocks, &spec.pills, spec.style, scale, max_width, align, spec.wrap_anywhere, !spec.redacted)
+        self.layout_keyed(shape, &spec.content, &spec.spans, &spec.blocks, &spec.pills, spec.style, scale, max_width, align, spec.wrap_anywhere, !spec.redacted, spec.base())
+    }
+
+    /// [`Self::layout_blocks_inner`] of a cut of `spec`'s content, in its direction.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn layout_cut(
+        &mut self,
+        spec: &crate::el::TextSpec,
+        text: &str,
+        spans: &[Span],
+        scale: f32,
+        max_width: Option<f32>,
+        align: Alignment,
+        cache: bool,
+    ) -> Rc<Layout<Ink>> {
+        self.layout_keyed(None, text, spans, &spec.blocks, &[], spec.style, scale, max_width, align, spec.wrap_anywhere, cache, spec.base())
     }
 }
 

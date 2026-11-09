@@ -68,7 +68,7 @@ pub(crate) use line_metrics::spec_height;
 pub(crate) use underline::underline_edges;
 pub use case::TextCase;
 pub use hash::text_hash;
-pub(crate) use hash::{elide_key, shape_key};
+pub(crate) use hash::{directed, elide_key, shape_key};
 pub(crate) use families::choose_families;
 pub use measure::{FamiliesGuard, TextInk, advance, content_widths, font_epoch, ink, measure, measure_with, with_families};
 pub use rich_layout::RichLayoutOptions;
@@ -505,6 +505,7 @@ impl TextSystem {
         align: Alignment,
         wrap_anywhere: bool,
         cache: bool,
+        base: parley::BaseDirection,
     ) -> Rc<Layout<Ink>> {
         self.follow_language();
         let shared = (!cache).then(|| std::mem::replace(&mut self.layout_cx, LayoutContext::new()));
@@ -512,7 +513,7 @@ impl TextSystem {
         // Shaping depends on the text, spans, style, scale, overflow-wrap and pills; line
         // breaking adds the width, alignment and block indents. A layout cached at one width
         // is re-broken at another rather than shaped again.
-        let shape_key = shape.unwrap_or_else(|| shape_key(text, spans, style, scale, wrap_anywhere, pills));
+        let shape_key = shape.unwrap_or_else(|| hash::directed(shape_key(text, spans, style, scale, wrap_anywhere, pills), base));
         let key = hash::break_key(shape_key, max_width, align, has_indented_blocks.then_some(blocks));
         let g = self.generation;
         if cache && let Some(Entry { value: l, used, .. }) = self.layouts.get_mut(&key) {
@@ -704,6 +705,7 @@ impl TextSystem {
         type Spacings = [(std::ops::Range<usize>, f32)];
         let build = |lcx: &mut LayoutContext<Ink>, fcx: &mut FontContext, exact: &Spacings, widen: &Spacings| {
             let mut b = lcx.ranged_builder(fcx, text, scale, true);
+            b.set_base_direction(base);
             b.push_default(FontFamily::from(sans.as_slice()));
             b.push_default(StyleProperty::Locale(language));
             b.push_default(StyleProperty::FontSize(style.size));
@@ -890,8 +892,14 @@ impl TextSystem {
 
     /// The atlas quad for `icon` at `px` device pixels square, top-left at `origin`.
     pub fn icon_quad(&mut self, icon: &'static Icon, px: u32, origin: [f32; 2]) -> Option<GlyphQuad> {
+        self.icon_quad_flipped(icon, px, origin, false)
+    }
+
+    /// [`Self::icon_quad`], drawn flipped left to right when `flip` (`El::mirror_in_rtl`).
+    pub(crate) fn icon_quad_flipped(&mut self, icon: &'static Icon, px: u32, origin: [f32; 2], flip: bool) -> Option<GlyphQuad> {
         let icon = icon::swapped(icon);
-        let key = (icon as *const Icon as usize, px);
+        // A flipped drawing is cached apart, under the size's top bit.
+        let key = (icon as *const Icon as usize, px | (u32::from(flip) << 31));
         let entry = match self.atlas.icons.get(&key) {
             Some(&e) => {
                 if let Some(a) = e {
@@ -899,7 +907,7 @@ impl TextSystem {
                 }
                 e
             }
-            None => match rasterize_icon(icon, px, &mut self.atlas) {
+            None => match rasterize_icon(icon, px, flip, &mut self.atlas) {
                 Rasterized::Placed(g) => {
                     self.atlas.icons.insert(key, Some(g));
                     Some(g)

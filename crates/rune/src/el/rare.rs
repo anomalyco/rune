@@ -116,6 +116,31 @@ impl ElFlags {
     pub(crate) const MEMO_EXTENDED: u16 = 1 << 10;
     const DRAG_SHIFT: u16 = 11;
     const DRAG_MASK: u16 = 0b11 << Self::DRAG_SHIFT;
+    /// `El::dir`: none (its parent's), `Ltr`, `Rtl` or `Auto`.
+    const DIR_SHIFT: u16 = 13;
+    const DIR_MASK: u16 = 0b11 << Self::DIR_SHIFT;
+    /// `El::unmirrored`: a right-to-left parent doesn't mirror where it sits.
+    pub(crate) const UNMIRRORED: u16 = 1 << 15;
+
+    #[inline(always)]
+    pub(crate) fn dir(self) -> Option<crate::Direction> {
+        match (self.0 & Self::DIR_MASK) >> Self::DIR_SHIFT {
+            1 => Some(crate::Direction::Ltr),
+            2 => Some(crate::Direction::Rtl),
+            3 => Some(crate::Direction::Auto),
+            _ => None,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn set_dir(&mut self, dir: crate::Direction) {
+        let bits = match dir {
+            crate::Direction::Ltr => 1,
+            crate::Direction::Rtl => 2,
+            crate::Direction::Auto => 3,
+        };
+        self.0 = (self.0 & !Self::DIR_MASK) | (bits << Self::DIR_SHIFT);
+    }
 
     #[inline(always)]
     pub(crate) fn has(self, bit: u16) -> bool {

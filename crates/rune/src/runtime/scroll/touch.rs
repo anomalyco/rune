@@ -71,8 +71,9 @@ impl<S: 'static> Runtime<S> {
         if touch.id != id { return; }
         let (origin, horizontal) = (touch.origin, touch.horizontal);
         let Some(st) = self.scrolls.get_mut(&id) else { return };
+        let toward = if horizontal { st.x.toward(f64::from(d)) } else { -f64::from(d) };
         let (offset, _, max) = st.axis(horizontal);
-        let to = origin - f64::from(d);
+        let to = origin + toward;
         let edge = to.clamp(0.0, max);
         let over = to - edge;
         *offset = edge + over * 0.55 / (1.0 + over.abs() * 0.55 / 300.0);
@@ -88,7 +89,10 @@ impl<S: 'static> Runtime<S> {
         touch.dragging = false;
         if Some(touch.id) != id { return; }
         let horizontal = touch.horizontal;
-        if let Some(st) = self.scrolls.get_mut(&touch.id) { *st.axis(horizontal).1 = -velocity.clamp(-8000.0, 8000.0); }
+        if let Some(st) = self.scrolls.get_mut(&touch.id) {
+            let v = f64::from(velocity.clamp(-8000.0, 8000.0));
+            *st.axis(horizontal).1 = if horizontal { st.x.toward(v) as f32 } else { -v as f32 };
+        }
     }
 
     /// Own the touched viewport's panned axis through momentum and its edge return. Other

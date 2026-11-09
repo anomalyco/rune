@@ -137,6 +137,8 @@ impl TreeItem {
                         .key("glyph")
                         .color(if r.selected { style.chevron_selected } else { style.chevron_rest })
                         .icon_rotation(if open { 0.0 } else { -FRAC_PI_2 })
+                        // A closed folder's chevron points along the line: left, right to left.
+                        .mirror_in_rtl()
                         .motion(k.motion.control)
                         .offset(0.0, style.chevron_nudge),
                 ),

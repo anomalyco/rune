@@ -220,18 +220,21 @@ fn title(title: &str, editor: Option<El>, at: &Place, vertical: bool, emphasized
     if let Some(field) = editor {
         return row().key("title").grow(1.0).shrink().min_w(0.0).mr(SLOT_END).child(field);
     }
-    let label = text(title.to_owned()).key("label").font(font).color(ink).grow(1.0).shrink().a11y_hidden();
+    // A title runs in its own direction (`tab-nav.tsx`'s `dir="auto"`).
+    let label = text(title.to_owned()).key("label").font(font).color(ink).grow(1.0).shrink().a11y_hidden().dir(rune::Direction::Auto);
     // A compact tab hides its title while the status or close slot would cover it.
     let compact = at.density == TabDensity::Compact;
     if compact && emphasized {
         // Hidden in place and in the rest colour, so nothing about it animates unseen.
-        let label = text(title.to_owned()).key("label").font(font).color(c.text_faint).grow(1.0).shrink().a11y_hidden();
+        let label = text(title.to_owned()).key("label").font(font).color(c.text_faint).grow(1.0).shrink().a11y_hidden().dir(rune::Direction::Auto);
         return row().key("title").grow(1.0).shrink().min_w(0.0).child(hidden(label.truncate_fade_width(0.0).opacity(0.0)).instant_changes());
     }
     let wrap = row().key("title").grow(1.0).shrink().min_w(0.0);
     match emphasized {
-        // The fade ends 24 points before the link's end, clear of the slot.
-        true => wrap.mr(24.0).clip_fade_linear(0.0, 0.0, FADE, 0.0).child(label.truncate_fade_width(0.0)),
+        // The fade ends 24 points before the link's end, clear of the slot. The title itself
+        // runs on under the slot, as Desktop's `flex-1` title runs under its mask: a title
+        // whose direction ends the other way (Latin in a right-to-left tab) starts there.
+        true => wrap.mr(24.0).clip_fade_linear(0.0, 0.0, FADE, 0.0).child(label.truncate_fade_width(0.0).mr(-24.0)),
         // At rest it fades only an overflowing title, 4 points from a horizontal tab's end.
         false => {
             let label = label.truncate_fade_width(FADE / font.size);

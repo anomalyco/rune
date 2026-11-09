@@ -145,10 +145,14 @@ impl<S: 'static> Runtime<S> {
             let (shift_min, shift_max) = match (self.scrolls.get(&n.id), n.scroll) {
                 (Some(st), Some(sp)) => {
                     let children = || (i + 1..nodes.len()).take_while(|&j| nodes[j].parent >= Some(i)).filter(|&j| nodes[j].parent == Some(i));
-                    let max_x = if n.scroll_axes.x() { children().fold(0.0_f32, |m, c| m.max(nodes[c].target[2] - n.target[2])) } else { 0.0 };
+                    let max_x = if !n.scroll_axes.x() { 0.0 } else if st.x.rtl {
+                        children().fold(0.0_f32, |m, c| m.max(n.target[0] - nodes[c].target[0]))
+                    } else {
+                        children().fold(0.0_f32, |m, c| m.max(nodes[c].target[2] - n.target[2]))
+                    };
                     let max_y = if n.scroll_axes.y() { children().fold(0.0_f32, |m, c| m.max(nodes[c].target[3] - n.target[3])) } else { 0.0 };
-                    let ox0 = st.x.offset as f32;
-                    let ox1 = ox0.clamp(0.0, max_x);
+                    let ox0 = st.x.shift() as f32;
+                    let ox1 = if st.x.rtl { ox0.clamp(-max_x, 0.0) } else { ox0.clamp(0.0, max_x) };
                     let oy0 = st.offset as f32 + st.slack.height();
                     let oy1 = if st.pinned && sp.stick_bottom { max_y + st.slack.height() } else { oy0.clamp(0.0, max_y + st.slack.height()) };
                     (
