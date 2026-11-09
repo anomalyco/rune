@@ -1,0 +1,1 @@
+- **A node that only touches its clip's edge counts as out of sight.** The unseen check gave every node 4 pt of room past its clip and counted an edge on the clip as inside; the room is now its own shadows and blur, plus a focus ring's 4 pt only when it can take focus, and a rect touching the edge draws nothing.
