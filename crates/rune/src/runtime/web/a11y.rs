@@ -275,6 +275,7 @@ impl<S: 'static> Runtime<S> {
     pub(crate) fn web_a11y_items(&self) -> Vec<A11yItem> {
         let mut out: Vec<A11yItem> = Vec::new();
         let mut last_flow_parent: Option<usize> = None;
+        let mut inline: Option<Inline> = None;
         let ends = self.subtree_ends();
         // Open containers: (end of their node subtree, their item index).
         let mut open: Vec<(usize, usize)> = Vec::new();
@@ -395,6 +396,17 @@ impl<S: 'static> Runtime<S> {
                         i += 1;
                         continue;
                     }
+                    let text_rect = if self.page.on { inset_rect(rect, n.inset) } else { rect };
+                    if !is_heading && flow_group.is_none()
+                        && let Some(prev) = inline.filter(|l| l.item + 1 == out.len() && l.parent == n.parent)
+                        && let Some(gap) = prev.gap(n.target, spec.style, spec.selectable)
+                        && let Some(item) = out.last_mut().filter(|it| it.kind == "text")
+                    {
+                        join_inline(item, text_rect, runs, gap > spec.style.size * 0.15);
+                        inline = Some(Inline { right: n.target[2], ..prev });
+                        i += 1;
+                        continue;
+                    }
                     let (plain, rich_runs) = if runs.len() == 1 && runs[0].href.is_none() && flow_group.is_none() {
                         (runs.into_iter().next().unwrap().text, Vec::new())
                     } else {
@@ -407,9 +419,7 @@ impl<S: 'static> Runtime<S> {
                     item.runs = rich_runs;
                     item.id = if is_heading { anchor_id(n.key.as_deref()) } else { None };
                     if self.page.on {
-                        let inset = n.inset;
-                        item.rect = [round1(rect[0] + inset[0]), round1(rect[1] + inset[1]),
-                            round1((rect[2] - inset[0] - inset[2]).max(0.0)), round1((rect[3] - inset[1] - inset[3]).max(0.0))];
+                        item.rect = text_rect;
                         let style = spec.style;
                         item.font = Some(A11yFont {
                             family: family_name(style.family),
@@ -423,6 +433,15 @@ impl<S: 'static> Runtime<S> {
                     }
                     push(&mut out, item);
                     last_flow_parent = if is_heading { None } else { flow_group };
+                    inline = (!is_heading && flow_group.is_none()).then(|| Inline {
+                        parent: n.parent,
+                        item: out.len() - 1,
+                        right: n.target[2],
+                        top: n.target[1],
+                        bottom: n.target[3],
+                        style: spec.style,
+                        selectable: spec.selectable,
+                    });
                 }
             } else if n.role == "heading" && let Some(lbl) = n.label.clone().filter(|s| !s.trim().is_empty()) {
                 let mut item = A11yItem::new("heading", &n.path, rect);
@@ -491,13 +510,7 @@ impl<S: 'static> Runtime<S> {
 
 /// Joins one more flowed word run into the paragraph item before it.
 fn merge_flow(prev: &mut A11yItem, rect: [f32; 4], runs: Vec<A11yRun>) {
-    let px1 = prev.rect[0] + prev.rect[2];
-    let py1 = prev.rect[1] + prev.rect[3];
-    let nx0 = prev.rect[0].min(rect[0]);
-    let ny0 = prev.rect[1].min(rect[1]);
-    let nx1 = px1.max(rect[0] + rect[2]);
-    let ny1 = py1.max(rect[1] + rect[3]);
-    prev.rect = [nx0, ny0, round1(nx1 - nx0), round1(ny1 - ny0)];
+    prev.rect = union(prev.rect, rect);
     let needs_space = prev.runs.last().is_some_and(|r| !r.text.ends_with(char::is_whitespace))
         && runs.first().is_some_and(|r| !r.text.starts_with(char::is_whitespace) && !r.text.starts_with([')', ']', '.', ',', ';', ':']));
     if needs_space {
@@ -513,6 +526,68 @@ fn merge_flow(prev: &mut A11yItem, rect: [f32; 4], runs: Vec<A11yRun>) {
         last.text.push_str(&runs[0].text);
     } else {
         prev.runs.extend(runs);
+    }
+}
+
+fn union(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    let (x0, y0) = (a[0].min(b[0]), a[1].min(b[1]));
+    let (x1, y1) = ((a[0] + a[2]).max(b[0] + b[2]), (a[1] + a[3]).max(b[1] + b[3]));
+    [x0, y0, round1(x1 - x0), round1(y1 - y0)]
+}
+
+fn inset_rect(rect: [f32; 4], inset: [f32; 4]) -> [f32; 4] {
+    [round1(rect[0] + inset[0]), round1(rect[1] + inset[1]),
+        round1((rect[2] - inset[0] - inset[2]).max(0.0)), round1((rect[3] - inset[1] - inset[3]).max(0.0))]
+}
+
+/// The last text item and where its node's laid-out box ends, so a sibling text that carries on
+/// the same line joins it: a code line drawn one text per token mirrors as one line, which reads,
+/// finds and copies as the line rather than token by token.
+#[derive(Clone, Copy)]
+struct Inline {
+    parent: Option<usize>,
+    item: usize,
+    right: f32,
+    top: f32,
+    bottom: f32,
+    style: crate::tok::TextStyle,
+    selectable: bool,
+}
+
+impl Inline {
+    /// The gap in points from the last text to `target`, when `target` carries on its line in the
+    /// same face; a larger gap is a separate column, not the same run of text.
+    fn gap(&self, target: [f32; 4], style: crate::tok::TextStyle, selectable: bool) -> Option<f32> {
+        let a = self.style;
+        let same_face = (a.family, a.size, a.weight, a.tracking) == (style.family, style.size, style.weight, style.tracking)
+            && self.selectable == selectable;
+        let height = (self.bottom - self.top).min(target[3] - target[1]);
+        let overlap = self.bottom.min(target[3]) - self.top.max(target[1]);
+        let gap = target[0] - self.right;
+        (same_face && height > 0.0 && overlap >= height * 0.5 && (-0.5..=style.size * 0.6).contains(&gap)).then_some(gap)
+    }
+}
+
+/// Appends a sibling's text to the line item before it, with a space when a visible gap stands
+/// for one.
+fn join_inline(prev: &mut A11yItem, rect: [f32; 4], mut runs: Vec<A11yRun>, gap: bool) {
+    prev.rect = union(prev.rect, rect);
+    let ends_blank = if prev.runs.is_empty() { prev.text.ends_with(char::is_whitespace) } else { prev.runs.last().is_some_and(|r| r.text.ends_with(char::is_whitespace)) };
+    if gap && !ends_blank && runs.first().is_some_and(|r| !r.text.starts_with(char::is_whitespace)) {
+        runs.insert(0, A11yRun { text: " ".into(), href: None, path: None, link: None });
+    }
+    if prev.runs.is_empty() && runs.iter().all(|r| r.href.is_none()) {
+        for r in runs { prev.text.push_str(&r.text); }
+        return;
+    }
+    if prev.runs.is_empty() {
+        prev.runs.push(A11yRun { text: std::mem::take(&mut prev.text), href: None, path: None, link: None });
+    }
+    for r in runs {
+        match prev.runs.last_mut() {
+            Some(last) if last.href.is_none() && r.href.is_none() => last.text.push_str(&r.text),
+            _ => prev.runs.push(r),
+        }
     }
 }
 

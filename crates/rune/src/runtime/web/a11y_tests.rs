@@ -160,6 +160,45 @@ fn a_page_mirrors_a_horizontal_viewport_as_a_scroller_the_browser_scrolls() {
     assert!(!rt.set_page_scroll_x(&path, 120.0), "the same offset is no change");
 }
 
+/// Code drawn one text per token, as an editor that animates tokens does, beside a gutter
+/// number; then words a small gap apart, and a label and value set far apart.
+fn code(_: &(), _: &mut Cx<()>) -> El {
+    let mono = crate::tok::type_::BODY.mono();
+    let line = |n: usize, toks: &[&str]| {
+        let mut row = crate::row().key("toks");
+        for (k, t) in toks.iter().enumerate() {
+            row = row.child(crate::text(*t).key(format!("t{k}")).font(mono).w(t.chars().count() as f32 * 8.0).h(20.0));
+        }
+        crate::row().key(format!("ln{n}")).h(20.0)
+            .child(crate::row().key("num").w(32.0).child(crate::text(n.to_string()).font(mono)))
+            .child(row)
+    };
+    crate::col().w_full()
+        .child(line(1, &["type", " ", "Port", " = ", "Int"]))
+        .child(line(2, &["listen", "(", "port", ")"]))
+        .child(crate::row().key("words").gap(4.0).child(crate::text("Hello")).child(crate::text("world")))
+        .child(crate::row().key("pair").w(300.0).justify_between().child(crate::text("Name")).child(crate::text("Kit")))
+}
+
+#[test]
+fn a_row_of_token_texts_mirrors_as_one_line() {
+    let mut rt = Runtime::new((), code, (480.0, 300.0), Env::default());
+    rt.frame(0.0);
+    let items = rt.web_a11y_items();
+    let texts: Vec<_> = items.iter().map(|i| (i.kind, i.text.as_str(), i.runs.len())).collect();
+    assert_eq!(texts, [
+        ("text", "1", 0),
+        ("text", "type Port = Int", 0),
+        ("text", "2", 0),
+        ("text", "listen(port)", 0),
+        ("text", "Hello world", 0),
+        ("text", "Name", 0),
+        ("text", "Kit", 0),
+    ]);
+    let line = &items[1];
+    assert_eq!((line.rect[0], line.rect[2]), (32.0, 15.0 * 8.0), "the line's box spans its tokens");
+}
+
 #[test]
 fn href_presses_open_absolute_urls() {    let mut rt = Runtime::new((), page, (480.0, 300.0), Env::default());
     rt.frame(0.0);
