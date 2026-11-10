@@ -164,7 +164,9 @@ pub struct AnimationStore {
     t_meta: Vec<Meta>,
     /// The track's clock: 0 is the store's own, otherwise an index into `clocks`.
     t_clock: Vec<u32>,
-    /// On a stopped clock and already sampled where it holds, so `tick` skips it.
+    /// On a stopped clock or waiting for a delayed start, and already sampled where it holds,
+    /// so `tick` skips it. `recompute` and `rebase`, which every change to a track's timing
+    /// goes through, clear it.
     t_held: Vec<bool>,
     track_free: Vec<u32>,
 
@@ -330,7 +332,6 @@ impl AnimationStore {
         while t != NONE {
             self.rebase(t as usize, delta);
             self.t_clock[t as usize] = new;
-            self.t_held[t as usize] = false;
             t = self.t_meta[t as usize].node_next;
         }
         self.release_clock(old);
@@ -405,6 +406,7 @@ impl AnimationStore {
 
     /// Shifts every absolute time of track `t` by `delta`.
     fn rebase(&mut self, t: usize, delta: f64) {
+        self.t_held[t] = false;
         if delta == 0.0 {
             return;
         }
@@ -474,11 +476,11 @@ impl AnimationStore {
                 i += 1;
                 continue;
             }
-            self.t_held[t] = held;
             self.touched.push(TrackId { index: t as u32, generation: self.t_meta[t].generation });
             if self.t_next_due[t] <= now {
                 self.apply_due(t, now);
             }
+            self.t_held[t] = held;
             let l0 = self.t_lane0[t] as usize;
             let n = self.t_n[t] as usize;
             let range = l0..l0 + n;
@@ -909,6 +911,7 @@ impl AnimationStore {
         }
         self.t_next_due[t] = due;
         self.t_settle_at[t] = settle;
+        self.t_held[t] = false;
     }
 
     fn settle(&mut self, t: usize) {
@@ -995,7 +998,6 @@ impl AnimationStore {
         m.token = token;
         m.logical_at = logical_at;
         m.epoch = m.epoch.wrapping_add(1);
-        self.t_held[t] = false;
         self.recompute(t);
         self.activate(t);
         self.starts.push(self.id_of(t));
