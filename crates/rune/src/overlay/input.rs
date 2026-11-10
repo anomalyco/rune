@@ -94,11 +94,19 @@ impl<T: 'static> Overlay<T> {
 
     /// Ends the runtime's press if the panel lost its release: the runtime hears no drop.
     #[cfg(target_os = "macos")]
-    pub(super) fn lost_release(&mut self) {
-        if let Some((x, y)) = self.panel.as_ref().and_then(|p| p.take_recovered_release()) && self.rt.pointer_captured() {
+    pub(super) fn release_lost(&mut self, lost: Option<(f32, f32)>) {
+        if let Some((x, y)) = lost && self.rt.pointer_captured() {
             self.rt.pointer_release_lost(x, y);
             self.dirty = true;
         }
+    }
+
+    /// A left press or release from the panel. A release it already gave up on lands first, so
+    /// it can't end this press, and a late Up can't turn it into a drop.
+    #[cfg(target_os = "macos")]
+    pub(super) fn left_edge(&mut self, lost: Option<(f32, f32)>, pressed: bool, point: Option<(f32, f32)>) {
+        self.release_lost(lost);
+        if self.options.input.resolved(self.interactive) != OverlayInput::None { self.left_button(pressed, point); }
     }
 
     /// Delivers drag ends a host reported. An `on_drag_start` may have hidden the overlay;

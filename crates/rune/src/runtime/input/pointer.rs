@@ -130,6 +130,8 @@ impl<S: 'static> Runtime<S> {
         let (dx, dy) = (x - at.0, y - at.1);
         let screen = self.screen_at(x, y);
         let Some(held) = self.press.drop_held() else { return false };
+        // A cancelled gesture is no click, so the next press starts a new run.
+        self.press_clicks.clear();
         let d = Drag { phase: Phase::Up, x: lx, y: ly, dx, dy, cancelled: true, window: [x, y], screen, ..held.drag };
         self.queue.push(Action::Drag(held.path, d, held.button));
         self.end_press_repeat();

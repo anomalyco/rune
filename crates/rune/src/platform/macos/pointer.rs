@@ -52,6 +52,11 @@ impl PointerState {
         delivered
     }
     fn captured(&self) -> bool { self.hold.borrow().captured() }
+    /// When the loop must sample next. Covered, the recurring `poll` rests; a lost release's
+    /// one-shot deadline doesn't, or nothing would end its press.
+    fn deadline(&self, poll: Option<Instant>, occluded: bool) -> Option<Instant> {
+        poll.filter(|_| !occluded).into_iter().chain(self.hold.borrow().deadline()).min()
+    }
     fn over(&self, x: f32, y: f32) -> bool {
         match self.input.get() {
             OverlayInput::All => true,
@@ -137,7 +142,7 @@ impl Panel {
         self.refresh_monitors();
         if self.visible.get() { self.pointer.observe(&self.panel, self.wake.as_ref()); }
     }
-    pub fn pointer_deadline(&self) -> Option<Instant> { self.pointer_poll.get().into_iter().chain(self.pointer.hold.borrow().deadline()).min() }
+    pub fn pointer_deadline(&self, occluded: bool) -> Option<Instant> { self.pointer.deadline(self.pointer_poll.get(), occluded) }
     /// Samples the pointer if its poll is due; true if it did.
     fn poll_pointer(&self, now: Instant) -> bool {
         if self.pointer_poll.get().is_some_and(|at| at <= now) {

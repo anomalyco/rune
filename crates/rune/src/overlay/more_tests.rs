@@ -63,6 +63,46 @@ fn overlay_input_switch_waits_for_owned_drag_release() {
     assert!(!overlay.rt.pointer_captured());
 }
 
+#[cfg(target_os = "macos")]
+fn lost_release_overlay() -> Overlay<Vec<(crate::Phase, bool)>> {
+    type State = Vec<(crate::Phase, bool)>;
+    fn view(_: &State, _: &mut Cx<State>) -> El {
+        crate::el().w_full().h_full().hit().on_drag(|s: &mut State, drag, _| s.push((drag.phase, drag.cancelled())))
+    }
+    let app = AppSpec {
+        title: "lost release", size: (100.0, 100.0), min_size: None, init: Vec::new, view,
+        scenes: &[], fonts: &[], families: ("sans-serif", "monospace"), setup: None, poll: None, on_key: None,
+    };
+    let spec = OverlaySpec::new("lost release", app.size, view).options(OverlayOptions { input: OverlayInput::All, ..Default::default() });
+    let (mut overlay, _) = Overlay::new(spec, Vec::new(), &app);
+    overlay.rt.frame(0.0);
+    overlay
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn overlay_late_up_after_a_lost_release_is_no_drop() {
+    let mut overlay = lost_release_overlay();
+    overlay.left_edge(None, true, Some((10.0, 10.0)));
+    overlay.left_edge(Some((30.0, 10.0)), false, None);
+    overlay.rt.frame(0.0);
+    let ups: Vec<_> = overlay.rt.state.iter().filter(|d| d.0 == crate::Phase::Up).map(|d| d.1).collect();
+    assert_eq!(ups, [true], "the recovery lands before the late Up");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn overlay_press_that_beats_a_lost_release_ends_the_old_drag_first() {
+    let mut overlay = lost_release_overlay();
+    overlay.left_edge(None, true, Some((10.0, 10.0)));
+    overlay.left_edge(Some((30.0, 10.0)), true, Some((50.0, 10.0)));
+    overlay.left_edge(None, false, Some((50.0, 10.0)));
+    overlay.rt.frame(0.0);
+    let ups: Vec<_> = overlay.rt.state.iter().filter(|d| d.0 == crate::Phase::Up).map(|d| d.1).collect();
+    assert_eq!(ups, [true, false], "the old drag is cancelled, the new one ends normally");
+    assert!(!overlay.rt.state.iter().any(|d| d.0 == crate::Phase::Move), "the old drag never hears the new press's point");
+}
+
 #[test]
 fn handle_requests_collapse_and_updates_keep_their_order() {
     let shared = Arc::new(Shared::<u32> { native: Mutex::default(), requests: Mutex::default(), availability: AtomicU8::new(0), failure: Mutex::default(), surface: Mutex::default(), wake: Mutex::new(None), stats: Arc::default() });

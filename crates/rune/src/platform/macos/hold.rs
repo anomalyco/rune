@@ -84,6 +84,13 @@ pub(super) enum Effect {
 pub(super) fn step(hold: &mut Hold, event: Event) -> Effects<Effect> {
     match event {
         Event::Seen { click, over } => {
+            // A press with nothing queued ahead of it, on one winit already dispatched: that
+            // one's Up never came, and it must end before this press reaches the runtime.
+            let lost = match hold {
+                Hold::Pressed { clicks } if click.down && clicks.is_empty() => Some(click.at),
+                Hold::Releasing { clicks, at, .. } if click.down && clicks.is_empty() => Some(*at),
+                _ => None,
+            };
             match hold {
                 Hold::Free { .. } if !over => {}
                 Hold::Free { ups } if !click.down => ups.push_back(click.at),
@@ -94,7 +101,7 @@ pub(super) fn step(hold: &mut Hold, event: Event) -> Effects<Effect> {
                     *hold = Hold::Pressed { clicks };
                 }
             }
-            Effects::none()
+            lost.map_or(Effects::none(), |at| Effects::one(Effect::ReleaseLost(at)))
         }
         Event::Dispatched { down } => {
             let point = match hold {

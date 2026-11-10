@@ -73,10 +73,11 @@ fn overlay_queued_up_and_next_down_keep_their_ownership_until_dispatched() {
     pointer.observe_release(0, Instant::now() + Duration::from_secs(1), (100.0, 100.0));
     assert!(pointer.captured());
     assert_eq!(pointer.recovered_release.get(), None);
+    pointer.record_click(true, 20.0, 20.0); // next native Down queued behind the Up
     dispatch(&pointer, true);
     dispatch(&pointer, false);
-    pointer.record_click(true, 20.0, 20.0); // next native Down queued
     pointer.released();
+    assert_eq!(pointer.recovered_release.get(), None);
     assert!(pointer.captured());
     dispatch(&pointer, true);
     pointer.released();
@@ -121,4 +122,21 @@ fn overlay_rejected_down_cannot_poison_later_click_and_owned_up_survives_exit() 
     assert!(pointer.hit(100.0, 100.0));
     pointer.step(Event::Stopped);
     assert!(!pointer.hit(100.0, 100.0));
+}
+#[test]
+fn a_covered_overlay_rests_its_poll_but_keeps_a_lost_releases_deadline() {
+    let pointer = PointerState { input: Cell::new(OverlayInput::All), ..Default::default() };
+    let now = Instant::now();
+    let poll = Some(now + Duration::from_millis(8));
+    assert_eq!(pointer.deadline(poll, false), poll);
+    assert_eq!(pointer.deadline(poll, true), None, "covered, the poll rests");
+    pointer.record_click(true, 20.0, 20.0);
+    dispatch(&pointer, true);
+    assert_eq!(pointer.deadline(poll, true), None, "a press with the button down waits for nothing");
+    pointer.observe_release(0, now, (20.0, 20.0));
+    let due = now + Duration::from_millis(100);
+    assert_eq!(pointer.deadline(poll, true), Some(due), "covered, the grace still wakes the loop");
+    assert_eq!(pointer.deadline(poll, false), poll, "the sooner of the two");
+    pointer.observe_release(0, due, (20.0, 20.0));
+    assert_eq!(pointer.deadline(poll, true), None, "once: it does not restart the poll");
 }

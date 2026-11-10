@@ -32,8 +32,8 @@ fn a_quick_press_queued_before_the_release_reaches_the_runtime_stays_held() {
     step(&mut hold, DOWN);
     step(&mut hold, UP);
     assert_eq!(effects(&mut hold, Event::Dispatched { down: true }), [Effect::Deliver((20.0, 20.0))]);
+    assert!(step(&mut hold, DOWN).is_empty(), "an Up is queued ahead of it, so nothing was lost");
     assert_eq!(effects(&mut hold, Event::Dispatched { down: false }), [Effect::Deliver((100.0, 100.0))]);
-    step(&mut hold, DOWN); // the next native press, before the host acknowledges the release
     step(&mut hold, Event::Released);
     assert!(hold.captured(), "the queued press owns the pointer");
     assert_eq!(effects(&mut hold, Event::Dispatched { down: true }), [Effect::Deliver((20.0, 20.0))]);
@@ -44,17 +44,40 @@ fn a_quick_press_queued_before_the_release_reaches_the_runtime_stays_held() {
 }
 
 #[test]
-fn a_press_during_the_grace_cancels_the_lost_release() {
+fn a_press_during_the_grace_loses_nothing_while_the_last_is_still_queued() {
     let mut hold = Hold::default();
     let now = Instant::now();
     step(&mut hold, DOWN);
     step(&mut hold, sample(false, now, (50.0, 50.0)));
-    step(&mut hold, DOWN);
+    assert!(step(&mut hold, DOWN).is_empty());
     assert!(matches!(hold, Hold::Pressed { .. }));
     assert!(step(&mut hold, sample(true, now + Duration::from_secs(1), (50.0, 50.0))).is_empty());
     step(&mut hold, sample(false, now + Duration::from_secs(1), (55.0, 55.0)));
     assert!(step(&mut hold, sample(true, now + Duration::from_secs(1), (55.0, 55.0))).is_empty());
     assert!(matches!(hold, Hold::Pressed { .. }), "the button came back down");
+}
+
+#[test]
+fn a_press_that_beats_the_grace_loses_the_dispatched_press_where_the_button_rose() {
+    let mut hold = Hold::default();
+    let now = Instant::now();
+    step(&mut hold, DOWN);
+    step(&mut hold, Event::Dispatched { down: true });
+    step(&mut hold, sample(false, now, (50.0, 50.0)));
+    assert_eq!(effects(&mut hold, DOWN), [Effect::ReleaseLost((50.0, 50.0))]);
+    assert!(matches!(hold, Hold::Pressed { .. }), "the new press holds");
+    assert_eq!(hold.deadline(), None);
+}
+
+#[test]
+fn a_press_with_the_button_read_down_again_still_loses_the_dispatched_press() {
+    let mut hold = Hold::default();
+    let now = Instant::now();
+    step(&mut hold, DOWN);
+    step(&mut hold, Event::Dispatched { down: true });
+    step(&mut hold, sample(false, now, (50.0, 50.0)));
+    step(&mut hold, sample(true, now, (50.0, 50.0))); // the sample beat the Down's event
+    assert_eq!(effects(&mut hold, DOWN), [Effect::ReleaseLost((20.0, 20.0))]);
 }
 
 #[test]

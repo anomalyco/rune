@@ -22,7 +22,7 @@ impl<T: 'static> AnyHost for Overlay<T> {
         #[cfg(target_os = "macos")]
         let deadline = deadline.filter(|_| !self.live.as_ref().and_then(|l| l.pacing.as_ref()).is_some_and(|p| p.running()));
         #[cfg(target_os = "macos")]
-        let deadline = deadline.into_iter().chain(self.panel.as_ref().filter(|_| !self.presence.occluded()).and_then(|p| p.pointer_deadline())).min();
+        let deadline = deadline.into_iter().chain(self.panel.as_ref().and_then(|p| p.pointer_deadline(self.presence.occluded()))).min();
         // A Windows fade-out steps its alpha once a frame.
         #[cfg(target_os = "windows")]
         let deadline = deadline.into_iter().chain(self.presence.fading().then(|| Instant::now() + crate::window::TIMER_FRAME)).min();
@@ -141,20 +141,20 @@ impl<T: 'static> AnyHost for Overlay<T> {
                 }
             }
             WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } => {
-                // A release lost before this press ends the old press first, not this one.
                 #[cfg(target_os = "macos")]
-                if state.is_pressed() { self.lost_release(); }
-                #[cfg(target_os = "macos")]
-                let point = self.panel.as_ref().and_then(|p| p.take_click(state.is_pressed()));
+                {
+                    let (lost, point) = self.panel.as_ref().map_or((None, None), |p| (p.take_recovered_release(), p.take_click(state.is_pressed())));
+                    self.left_edge(lost, state.is_pressed(), point);
+                    if !state.is_pressed() && let Some(panel) = &self.panel { panel.pointer_released(); }
+                }
+                #[cfg(not(target_os = "macos"))]
                 if self.options.input.resolved(self.interactive) != OverlayInput::None {
                     #[cfg(target_os = "windows")]
                     let point = self.native.as_ref().and_then(|p| p.take_click(state.is_pressed()));
-                    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+                    #[cfg(not(target_os = "windows"))]
                     let point: Option<(f32, f32)> = None;
                     self.left_button(state.is_pressed(), point);
                 }
-                #[cfg(target_os = "macos")]
-                if !state.is_pressed() && let Some(panel) = &self.panel { panel.pointer_released(); }
                 self.apply_input();
             }
             _ => {}
@@ -189,7 +189,8 @@ impl<T: 'static> AnyHost for Overlay<T> {
         if self.live.is_some() && let Some(panel) = &self.panel {
             // Covered or asleep, the 120 Hz regions poll rests; input events still sample.
             panel.observe_pointer(Instant::now(), !self.presence.occluded());
-            self.lost_release();
+            let lost = panel.take_recovered_release();
+            self.release_lost(lost);
             if let Some((x, y)) = self.panel.as_ref().and_then(|p| p.take_pointer()) && self.rt.pointer() != Some((x, y)) {
                 self.observe_pointer(x, y);
                 if self.options.follow_pointer && self.options.display == DisplayTarget::UnderPointer {

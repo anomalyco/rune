@@ -79,6 +79,24 @@ fn a_lost_release_before_the_next_press_leaves_that_press_alone() {
 }
 
 #[test]
+fn a_lost_release_ends_the_run_of_clicks() {
+    type State = Vec<(Phase, u32)>;
+    fn view(_: &State, _: &mut Cx<State>) -> El {
+        el().size(100.0, 40.0).on_drag(|s: &mut State, d, _| s.push((d.phase, d.clicks)))
+    }
+    for release_at in [40.0, 12.0, 10.0] {
+        let mut rt = Runtime::new(Vec::new(), view, (200.0, 200.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        rt.pointer_down(10.0, 10.0);
+        if release_at == 40.0 { rt.pointer_move(40.0, 10.0); }
+        rt.pointer_release_lost(release_at, 10.0);
+        rt.pointer_down(10.0, 10.0);
+        rt.frame(0.0);
+        assert_eq!(rt.state.last(), Some(&(Phase::Down, 1)), "released at {release_at}: a cancelled drag is no click");
+    }
+}
+
+#[test]
 fn a_lost_release_without_a_drag_still_releases_the_press() {
     fn view(_: &u32, _: &mut Cx<u32>) -> El { el().size(100.0, 40.0).on_press(|n: &mut u32| *n += 1) }
     let mut rt = Runtime::new(0, view, (200.0, 200.0), Env::new(true, 1.0));
