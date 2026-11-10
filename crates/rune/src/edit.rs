@@ -32,7 +32,7 @@ use secure::LineMode;
 mod typing;
 use typing::Typing;
 pub(crate) use history::History;
-use history::{ActiveGroup, EditKind, EditedTag};
+use history::{EditKind, EditedTag, Group};
 
 #[derive(Clone, Default, PartialEq)]
 pub struct TextEdit {
@@ -52,7 +52,7 @@ pub struct TextEdit {
     typing: Typing,
     history: Arc<History>,
     /// Set inside [`TextEdit::undo_group`]: edits record nothing until the outermost group ends.
-    group: ActiveGroup,
+    group: Group,
     secure: bool,
     revealed: bool,
     /// Mirrors the field's `El::single_line()`; the runtime sets it before each edit.
@@ -155,7 +155,7 @@ impl TextEdit {
             soft_breaks: Vec::new(),
             typing: Typing::Inherited,
             history: Arc::default(),
-            group: ActiveGroup::default(),
+            group: Group::Closed,
             secure: false,
             revealed: false,
             line_mode: LineMode::Default,
@@ -404,8 +404,8 @@ impl TextEdit {
         self.cancel_composition();
         self.edited_tag = EditedTag(false);
         self.history = Arc::default();
-        if self.group.0.is_some() {
-            self.group.0 = Some((!self.secure).then(|| self.snapshot_now()));
+        if self.group.is_open() {
+            self.group = self.group_from_here();
         }
     }
 
