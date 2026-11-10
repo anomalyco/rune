@@ -639,9 +639,12 @@ pub fn rich(content: impl Into<String>, spans: Vec<Span>) -> El {
 /// Parts a help text from each of its [`El::help_keys`] keycaps.
 pub(crate) const HELP_KEY: char = '\u{1f}';
 
-/// A help text as words: its keycaps after it, a space apart.
+/// Parts a help text's rows ([`El::help_row`]).
+pub(crate) const HELP_ROW: char = '\u{1e}';
+
+/// A help text as words: each row's keycaps after it, a space apart, and its rows a line apart.
 pub(crate) fn help_words(help: &str) -> std::borrow::Cow<'_, str> {
-    if help.contains(HELP_KEY) { help.replace(HELP_KEY, " ").into() } else { help.into() }
+    if help.contains([HELP_KEY, HELP_ROW]) { help.replace(HELP_KEY, " ").replace(HELP_ROW, "\n").into() } else { help.into() }
 }
 
 /// An SVG icon from a catalog, `size` points square (or what [`crate::text::set_icon_swap_size`]
@@ -1285,10 +1288,30 @@ impl El {
         e.cold_mut().help_cut = true;
         e
     }
+    /// Another row under this element's [`El::help`] tooltip, as a web tooltip lists two
+    /// commands, each with its own keybind:
+    /// `.help("Save").help_keys(["Enter"]).help_row("Send").help_keys(["Ctrl", "Enter"])`. Rows
+    /// stack [`HelpLook::row_gap`](crate::HelpLook::row_gap) apart, each its words then its
+    /// keycaps, from the tooltip's start edge. Call it after `help`, which replaces every row.
+    /// The element tree and assistive technology read the rows a line apart. Without `help`
+    /// first, it sets the first row.
+    pub fn help_row(mut self, text: impl Into<String>) -> Self {
+        let text = text.into();
+        match self.cold.get_mut_if_some().and_then(|c| c.help.as_mut()) {
+            Some(h) => {
+                h.push(HELP_ROW);
+                h.push_str(&text);
+            }
+            None => {
+                self.set_help(text);
+            }
+        }
+        self
+    }
     /// Keycaps drawn after this element's [`El::help`] text, as a web tooltip shows its
     /// command's keybind: `.help("Toggle review").help_keys(["Ctrl", "Shift", "R"])`. Call it
-    /// after `help`, which replaces them. The element tree and assistive technology read them
-    /// after the text, a space apart.
+    /// after `help`, which replaces them, or after a [`El::help_row`], for that row's keys. The
+    /// element tree and assistive technology read them after the text, a space apart.
     pub fn help_keys<K: Into<String>>(mut self, keys: impl IntoIterator<Item = K>) -> Self {
         if let Some(h) = self.cold.get_mut_if_some().and_then(|c| c.help.as_mut()) {
             for k in keys.into_iter().map(Into::into).filter(|k| !k.is_empty()) {

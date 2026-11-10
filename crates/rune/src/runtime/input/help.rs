@@ -174,6 +174,18 @@ struct Drawn {
     scale: f32,
 }
 
+/// One row of a tooltip as laid out: its words (when it has any) `tw` by `th` points, its
+/// keycaps and their width with the lead before them, and the row's height.
+struct TipRow {
+    words: bool,
+    layout: std::rc::Rc<parley::Layout<crate::text::Ink>>,
+    tw: f32,
+    th: f32,
+    ch: f32,
+    caps: Vec<(std::rc::Rc<parley::Layout<crate::text::Ink>>, f32)>,
+    keys_w: f32,
+}
+
 fn overlaps(a: [f32; 4], b: [f32; 4]) -> bool {
     a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
 }
@@ -414,29 +426,36 @@ impl<S: 'static> Runtime<S> {
     /// (window points, x y w h); it draws at `d.alpha`, scaled by `d.scale` about the middle
     /// of the edge that faces its box.
     fn draw_tooltip(&mut self, d: &Drawn) -> [f32; 4] {
-        let (e, text, above) = (d.anchor, d.text.as_str(), d.above);
+        let (e, above) = (d.anchor, d.above);
         let s = self.env.scale;
         let look = self.help_look();
         let key = look.key;
-        let mut parts = text.split(crate::el::HELP_KEY);
-        let words = parts.next().unwrap_or_default();
-        let keys: Vec<String> = parts.map(|k| if key.upper { k.to_uppercase() } else { k.to_owned() }).collect();
-        let caps: Vec<_> = keys.iter().map(|k| {
-            let l = self.text.layout_rich(k, &[], key.font, s, None);
-            let w = ((l.full_width() / s).ceil() + 2.0 * key.pad_x).max(key.height);
-            (l, w)
-        }).collect();
-        let keys_w = if caps.is_empty() { 0.0 } else {
-            caps.iter().map(|(_, w)| w).sum::<f32>() + key.gap * (caps.len() - 1) as f32 + if words.is_empty() { 0.0 } else { key.lead }
-        };
         let [pad_x, pad_y] = look.padding;
         let (vw, vh) = self.viewport;
         let margin = look.margin;
-        let max_w = look.max_w.unwrap_or(vw - 2.0 * margin - 2.0 * pad_x).max(1.0) - keys_w;
-        let layout = self.text.layout_rich(words, &[], look.font, s, Some(max_w.max(1.0) * s));
-        let (tw, th) = if words.is_empty() { (0.0, 0.0) } else { ((layout.full_width() / s).ceil(), (layout.height() / s).ceil()) };
-        let ch = if caps.is_empty() { th } else { th.max(key.height) };
-        let (w, h) = (tw + keys_w + 2.0 * pad_x, ch + 2.0 * pad_y);
+        let wrap = look.max_w.unwrap_or(vw - 2.0 * margin - 2.0 * pad_x).max(1.0);
+        // Each row (`El::help_row`) is its words, then its keycaps.
+        let mut rows = Vec::new();
+        for row in d.text.split(crate::el::HELP_ROW) {
+            let mut parts = row.split(crate::el::HELP_KEY);
+            let words = parts.next().unwrap_or_default();
+            let caps: Vec<_> = parts.map(|k| {
+                let k = if key.upper { k.to_uppercase() } else { k.to_owned() };
+                let l = self.text.layout_rich(&k, &[], key.font, s, None);
+                let w = ((l.full_width() / s).ceil() + 2.0 * key.pad_x).max(key.height);
+                (l, w)
+            }).collect();
+            let keys_w = if caps.is_empty() { 0.0 } else {
+                caps.iter().map(|(_, w)| w).sum::<f32>() + key.gap * (caps.len() - 1) as f32 + if words.is_empty() { 0.0 } else { key.lead }
+            };
+            let layout = self.text.layout_rich(words, &[], look.font, s, Some((wrap - keys_w).max(1.0) * s));
+            let (tw, th) = if words.is_empty() { (0.0, 0.0) } else { ((layout.full_width() / s).ceil(), (layout.height() / s).ceil()) };
+            let ch = if caps.is_empty() { th } else { th.max(key.height) };
+            rows.push(TipRow { words: !words.is_empty(), layout, tw, th, ch, caps, keys_w });
+        }
+        let gaps = look.row_gap * rows.len().saturating_sub(1) as f32;
+        let w = rows.iter().map(|r| r.tw + r.keys_w).fold(0.0, f32::max) + 2.0 * pad_x;
+        let h = rows.iter().map(|r| r.ch).sum::<f32>() + gaps + 2.0 * pad_y;
         let [below, over] = look.gap;
         let mut y = e[3] + below;
         if above && e[1] - over - h >= margin {
@@ -473,28 +492,31 @@ impl<S: 'static> Runtime<S> {
             clip: NO_CLIP,
             fade: crate::render::pack_fade([0.0; 4], NO_CLIP, NO_CLIP),
         });
-        let top = full[1] + pad_y * s;
-        let mut at = full[0] + pad_x * s;
-        if !words.is_empty() {
-            self.draw_tip_text(&layout, at_k([at, top + ((ch - th) * 0.5 * s).round()]), k, look.ink, alpha);
-            at += (tw + key.lead) * s;
-        }
-        for (l, cw) in &caps {
-            let cap = [at, top + ((ch - key.height) * 0.5 * s).round(), cw * s, key.height * s].map(|v| v.round());
-            self.instances.push(Instance {
-                rect: rect_k(cap),
-                radii: [key.radius * s * k; 4],
-                fill: premul(key.fill, alpha, srgb),
-                border: [0.0; 4],
-                params: [0.0, KIND_RECT, 0.0, 1.0],
-                uv: [0.0; 4],
-                clip: NO_CLIP,
-                fade: crate::render::pack_fade([0.0; 4], NO_CLIP, NO_CLIP),
-            });
-            let lw = l.full_width();
-            let origin = [cap[0] + ((cap[2] - lw) * 0.5).round(), cap[1] + ((cap[3] - l.height()) * 0.5).round()];
-            self.draw_tip_text(l, at_k(origin), k, key.ink, alpha);
-            at += (cw + key.gap) * s;
+        let mut top = full[1] + pad_y * s;
+        for row in &rows {
+            let mut at = full[0] + pad_x * s;
+            if row.words {
+                self.draw_tip_text(&row.layout, at_k([at, top + ((row.ch - row.th) * 0.5 * s).round()]), k, look.ink, alpha);
+                at += (row.tw + key.lead) * s;
+            }
+            for (l, cw) in &row.caps {
+                let cap = [at, top + ((row.ch - key.height) * 0.5 * s).round(), cw * s, key.height * s].map(|v| v.round());
+                self.instances.push(Instance {
+                    rect: rect_k(cap),
+                    radii: [key.radius * s * k; 4],
+                    fill: premul(key.fill, alpha, srgb),
+                    border: [0.0; 4],
+                    params: [0.0, KIND_RECT, 0.0, 1.0],
+                    uv: [0.0; 4],
+                    clip: NO_CLIP,
+                    fade: crate::render::pack_fade([0.0; 4], NO_CLIP, NO_CLIP),
+                });
+                let lw = l.full_width();
+                let origin = [cap[0] + ((cap[2] - lw) * 0.5).round(), cap[1] + ((cap[3] - l.height()) * 0.5).round()];
+                self.draw_tip_text(l, at_k(origin), k, key.ink, alpha);
+                at += (cw + key.gap) * s;
+            }
+            top += (row.ch + look.row_gap) * s;
         }
         [x, y, w, h]
     }
