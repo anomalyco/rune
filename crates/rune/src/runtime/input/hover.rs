@@ -10,13 +10,44 @@ use super::*;
 /// held.
 #[derive(Default)]
 pub(super) struct HoverHold {
-    /// The pointer moved, pressed or a hand scrolled while layout moved: hover follows the
-    /// pointer until the motion settles.
-    pub(super) released: bool,
-    /// The last pass held hover: moving layout carried an element whose hover would change.
-    pub(super) held: bool,
+    hold: Hold,
     /// Scratch for the hover tracks `update_interaction` would change.
     flips: Vec<Flip>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Hold {
+    /// Hover follows the pointer, and moving layout may hold it.
+    #[default]
+    Free,
+    /// The last pass held hover: moving layout carried an element whose hover would change.
+    Held,
+    /// The pointer moved, pressed or a hand scrolled while layout moved: hover follows the
+    /// pointer until the motion settles.
+    Released,
+}
+
+impl HoverHold {
+    /// The last pass held hover.
+    pub(super) fn held(&self) -> bool { self.hold == Hold::Held }
+
+    /// Hover follows the pointer until layout settles.
+    pub(super) fn released(&self) -> bool { self.hold == Hold::Released }
+
+    /// Notes whether this pass held hover. Released, nothing holds it.
+    fn set_held(&mut self, held: bool) {
+        if self.hold != Hold::Released { self.hold = if held { Hold::Held } else { Hold::Free }; }
+    }
+
+    /// The hand moved: with layout `moving`, hover follows the pointer until it settles.
+    fn release(&mut self, moving: bool) {
+        if self.hold != Hold::Released { self.hold = if moving { Hold::Released } else { Hold::Free }; }
+    }
+
+    /// Layout settled: a released hold may hold again.
+    fn settled(&mut self) {
+        if self.hold == Hold::Released { self.hold = Hold::Free; }
+    }
 }
 
 /// Node `i`'s hover track: where it would go, how, whether that changes it, and whether it
@@ -43,11 +74,11 @@ impl<S: 'static> Runtime<S> {
     /// Hover under the pointer at (x, y): what's hovered and what it's inside. Returns whether
     /// moving layout holds hover this pass, for the `update_interaction` that follows.
     pub(super) fn refresh_hover(&mut self, x: f32, y: f32) -> bool {
-        if self.hover_hold.released && !self.layout_moving() { self.hover_hold.released = false; }
+        if self.hover_hold.released() && !self.layout_moving() { self.hover_hold.settled(); }
         let hovered = self.primary_target(x, y);
         let within = self.within_next();
         let held = self.decide_hold(hovered, within.as_ref(), None);
-        self.hover_hold.held = held;
+        self.hover_hold.set_held(held);
         if let Some((inside, _)) = within { self.apply_within(inside, held); }
         self.apply_hovered(hovered, held);
         held
@@ -58,7 +89,7 @@ impl<S: 'static> Runtime<S> {
         let Some(within) = self.within_next() else { return };
         let hovered = self.pointer.filter(|_| self.hover_may_hold()).and_then(|(x, y)| self.primary_target(x, y));
         let held = self.decide_hold(hovered, Some(&within), None);
-        self.hover_hold.held = held;
+        self.hover_hold.set_held(held);
         self.apply_within(within.0, held);
     }
 
@@ -168,14 +199,14 @@ impl<S: 'static> Runtime<S> {
     /// The pointer moved or pressed, or a hand scrolled: hover follows the pointer through the
     /// layout moving now, until it settles.
     pub(super) fn release_hover_hold(&mut self) {
-        if !self.hover_hold.released && self.layout_moving() { self.hover_hold.released = true; }
-        self.hover_hold.held = false;
+        let moving = !self.hover_hold.released() && self.layout_moving();
+        self.hover_hold.release(moving);
     }
 
     /// Hover may wait on moving layout: the pointer is in the window, holds no press, and
     /// hasn't moved since the motion started.
     fn hover_may_hold(&self) -> bool {
-        self.pointer.is_some() && !self.press.is_held() && !self.hover_hold.released
+        self.pointer.is_some() && !self.press.is_held() && !self.hover_hold.released()
     }
 
     /// Element `i` is carried by moving layout: a frame, offset or flight spring on it or an
@@ -214,7 +245,7 @@ impl<S: 'static> Runtime<S> {
     /// While moving layout holds hover, the hovered element, as the cursor and tooltips see
     /// it: what the pointer was over, not what slid under it.
     pub(crate) fn held_hover(&self) -> Option<Option<usize>> {
-        (self.hover_hold.held && !self.pointer_captured())
+        (self.hover_hold.held() && !self.pointer_captured())
             .then(|| self.hovered.as_deref().and_then(|p| self.hover_live(p)))
     }
 
@@ -350,7 +381,7 @@ impl<S: 'static> Runtime<S> {
             changed = true;
         }
         self.hover_hold.flips = flips;
-        self.hover_hold.held = held;
+        self.hover_hold.set_held(held);
         changed
     }
 }
