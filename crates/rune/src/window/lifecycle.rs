@@ -367,13 +367,7 @@ impl<S: 'static> Host<S> {
     }
 
     pub(super) fn hide(&mut self, event_loop: &ActiveEventLoop) {
-        self.life.hide(crate::platform::reopen::stamp);
-        self.rt.minimize_request = false;
-        self.land_frame();
-        // Before the window can go: a hide need not report a blur. `about_to_wait` delivers it,
-        // after any Fn change the monitor saw first.
-        #[cfg(target_os = "macos")]
-        self.fn_key();
+        self.stop_showing();
         self.wind_down();
         let launcher = self.launcher();
         if self.release_gpu && !launcher {
@@ -390,6 +384,21 @@ impl<S: 'static> Host<S> {
             // Its hidden frame delivers the focus loss.
             if launcher { w.request_redraw(); }
         }
+    }
+
+    /// What a window does just before it stops drawing: it leaves `Life` (a window that hid can
+    /// be reopened), drops a pending minimize, lands a frame move where it was going, and (macOS)
+    /// delivers the Fn key change a hide need not report. No event loop is needed, so a window
+    /// whose surface can't be replaced does the same before `wind_down`
+    /// (`Host::replace_lost_surface`).
+    pub(super) fn stop_showing(&mut self) {
+        self.life.hide(crate::platform::reopen::stamp);
+        self.rt.minimize_request = false;
+        self.land_frame();
+        // Before the window can go: a hide need not report a blur. `about_to_wait` delivers it,
+        // after any Fn change the monitor saw first.
+        #[cfg(target_os = "macos")]
+        self.fn_key();
     }
 
     /// What a window stops doing when it hides: keys released, secure input and IME off, popups

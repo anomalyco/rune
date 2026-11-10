@@ -37,7 +37,7 @@ mod create;
 mod native;
 use native::Native;
 mod win;
-use win::{SurfaceRetries, Win};
+use win::{SurfaceRetries, SurfaceStep, SURFACE_TRIES, Win};
 mod first_frame;
 use first_frame::FirstFrame;
 mod draw;

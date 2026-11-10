@@ -612,36 +612,53 @@ fn a_destroyed_device_that_has_not_reported_its_loss_is_not_configured() {
     assert_eq!(acquire(&surface, &gpu, &config, true, 1, &mut meter), Err(Missed::Unconfigured));
 }
 
-/// A surface that won't come back is retried a bounded number of times, waiting longer each time,
-/// and then the window gives it up: a lost device can never be replaced, and a frame must not ask
-/// again forever. Only a presented frame starts the count over, so a replacement that "works" and
-/// is lost again before it presents still ends in a give-up.
+/// A surface that won't come back is replaced a bounded number of times, waiting longer after
+/// each failure, and then the window gives it up: a lost device can never be replaced, and a
+/// frame must not ask again forever.
 #[test]
-fn surface_retries_give_up_after_a_bounded_number_of_tries() {
-    use super::win::SURFACE_TRIES;
+fn surface_replacements_give_up_after_a_bounded_number_of_tries() {
+    use super::win::{SurfaceStep, SURFACE_TRIES};
     let now = Instant::now();
     let mut retries = SurfaceRetries::default();
     let mut waits = Vec::new();
-    while let Some(at) = retries.failed(now) { waits.push(at - now); }
+    loop {
+        assert_eq!(retries.attempt(), SurfaceStep::Replace);
+        match retries.retry(now) {
+            Some(at) => waits.push(at - now),
+            None => break,
+        }
+        assert!(waits.len() < 100, "a replacement that keeps failing never gives up");
+    }
     assert_eq!(waits.len() as u8, SURFACE_TRIES - 1, "one try, then bounded retries");
     assert!(waits.windows(2).all(|pair| pair[1] > pair[0]), "each wait is longer: {waits:?}");
-    assert_eq!(retries.failures(), SURFACE_TRIES, "a replacement that never presents still gives up");
-
-    // Every surface it made is lost again before its frame presents: nothing calls `worked`, so
-    // it makes a bounded number of devices rather than one about every retry.
-    let mut retries = SurfaceRetries::default();
-    let mut surfaces = 0;
-    loop {
-        surfaces += 1;
-        assert!(surfaces < 100, "a surface lost before it presents never stops being replaced");
-        if retries.failed(now).is_none() { break; }
-    }
-    assert_eq!(surfaces, SURFACE_TRIES);
+    assert_eq!(retries.failures(), SURFACE_TRIES);
+    assert_eq!(retries.attempt(), SurfaceStep::GiveUp);
 
     // A frame that reached the screen starts over.
     retries.worked();
     assert_eq!(retries.failures(), 0);
-    assert!(retries.failed(now).is_some());
+    assert_eq!(retries.attempt(), SurfaceStep::Replace);
+}
+
+/// A replacement that works still counts: a surface replaced and lost again before its frame
+/// presents gives the window up after `SURFACE_TRIES` replacements instead of making one
+/// forever. This is the shape `Host::replace_lost_surface` runs, where only `draw`'s present
+/// calls `worked`.
+#[test]
+fn a_surface_lost_after_every_replacement_gives_up_after_the_tries() {
+    use super::win::{SurfaceStep, SURFACE_TRIES};
+    let mut retries = SurfaceRetries::default();
+    let mut replaced = 0;
+    while retries.attempt() == SurfaceStep::Replace {
+        // The replacement worked, and the frame it made was lost before it presented.
+        replaced += 1;
+        assert!(replaced < 100, "a surface lost before it presents never stops being replaced");
+    }
+    assert_eq!(replaced, SURFACE_TRIES, "the window gives up after a bounded number of replacements");
+
+    // One frame reaches the screen: the next loss starts over.
+    retries.worked();
+    assert_eq!(retries.attempt(), SurfaceStep::Replace);
 }
 
 /// A device that went away (a driver reset, a GPU removed, Windows' Modern Standby) configures

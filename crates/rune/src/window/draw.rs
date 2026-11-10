@@ -107,13 +107,14 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         let shown = if !hidden && l.native.prime.presumes() {
             l.native.prime.spend();
-            let Some(surface) = l.surface.as_ref() else { return };
-            let Some(shown) = crate::platform::macos::PresumeShown::new(surface) else {
+            if let Some(surface) = l.surface.as_ref()
+                && let Some(shown) = crate::platform::macos::PresumeShown::new(surface) {
+                Some(shown)
+            } else {
                 self.meter.skipped();
                 self.missed_frame(Missed::Occluded, false);
                 return;
-            };
-            Some(shown)
+            }
         } else {
             None
         };

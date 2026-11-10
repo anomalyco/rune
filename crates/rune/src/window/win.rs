@@ -6,31 +6,49 @@ use super::*;
 /// hidden or its drawable never arrives. A covered or occluded window doesn't wait for it.
 pub(super) const READY_FALLBACK: Duration = Duration::from_secs(1);
 
-/// How many times in a row a window tried to replace its surface and device before it gave the
-/// window up, and how long it waits between tries (`Host::replace_lost_surface`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct SurfaceRetries {
-    failures: u8,
+/// What a frame does about a surface that can't draw (`Host::replace_lost_surface`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SurfaceStep {
+    /// Try a replacement now.
+    Replace,
+    /// `SURFACE_TRIES` replacements in a row and no frame presented between them: give the
+    /// window up.
+    GiveUp,
 }
 
-/// Tries at replacing a lost surface and device in a row.
+/// How many replacements in a row a window may make before it gives the window up, and how long
+/// it waits between ones that failed (`Host::replace_lost_surface`). Every replacement counts,
+/// whether or not it worked: only a frame that presents starts the count over (`Host::draw`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct SurfaceRetries {
+    replacements: u8,
+}
+
+/// Replacements in a row without a presented frame before the window gives up.
 pub(super) const SURFACE_TRIES: u8 = 3;
-/// The first wait between tries; each one after waits a further `SURFACE_BACKOFF`.
+/// The first wait between replacements; each one after waits a further `SURFACE_BACKOFF`.
 pub(super) const SURFACE_BACKOFF: Duration = Duration::from_millis(100);
 
 impl SurfaceRetries {
-    /// A replacement failed at `now`: when the next try is due, or None when the window gives up
-    /// its surface and device instead.
-    pub(super) fn failed(&mut self, now: Instant) -> Option<Instant> {
-        self.failures = self.failures.saturating_add(1);
-        (self.failures < SURFACE_TRIES).then(|| now + SURFACE_BACKOFF * u32::from(self.failures))
+    /// Counts this replacement and says whether it may happen. One that worked counts too: a
+    /// surface replaced and lost again before its frame presents has still used it up.
+    pub(super) fn attempt(&mut self) -> SurfaceStep {
+        if self.replacements >= SURFACE_TRIES { return SurfaceStep::GiveUp; }
+        self.replacements = self.replacements.saturating_add(1);
+        SurfaceStep::Replace
     }
 
-    /// A replacement worked, or the surface drew: the next failure starts over.
-    pub(super) fn worked(&mut self) { self.failures = 0; }
+    /// When to try again after a replacement that failed at `now`, or None when that was the
+    /// last one `attempt` allows.
+    pub(super) fn retry(&self, now: Instant) -> Option<Instant> {
+        (self.replacements < SURFACE_TRIES).then(|| now + SURFACE_BACKOFF * u32::from(self.replacements))
+    }
+
+    /// A frame presented: the next loss starts its replacements over.
+    pub(super) fn worked(&mut self) { self.replacements = 0; }
 
     #[cfg(test)]
-    pub(super) fn failures(&self) -> u8 { self.failures }
+    pub(super) fn failures(&self) -> u8 { self.replacements }
 }
 
 /// The open window. Fields drop in order: what's native to the OS, then the surface before its

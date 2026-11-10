@@ -340,43 +340,54 @@ impl<S: 'static> Host<S> {
     }
 
     /// Replaces the window's surface and device when either can't draw a frame: a device that is
-    /// gone, or a surface whose last configuration failed (`Win::surface_ok`). A failed
-    /// replacement is retried on a backoff (`SurfaceRetries`); once they run out the window gives
-    /// both up, as `hide` does with `release_gpu_when_closed`, and `AppHandle::window_error` says
-    /// why. False when there is nothing to draw with this frame.
+    /// gone, or a surface whose last configuration failed (`Win::surface_ok`). Every replacement
+    /// counts against `SURFACE_TRIES` (`SurfaceRetries`), whether it worked or not: only a frame
+    /// that presents starts the count over (`Host::draw`), so a surface replaced and lost again
+    /// before it presents still ends in the window being given up. A failed replacement waits a
+    /// backoff before the next try.
     ///
-    /// A replacement that works does not start the count over: only a frame that presents does
-    /// (`Host::draw`), so a device that is lost again before a frame reaches the screen still
-    /// ends in giving the window up instead of making one about every retry.
+    /// Giving the window up leaves it hidden (`Life::Hidden`, as `hide` does), gives back its
+    /// device and surface, and records why (`AppHandle::window_error`); opening it again makes a
+    /// window, a device and a surface. False when there is nothing to draw with this frame.
     pub(super) fn replace_lost_surface(&mut self) -> bool {
         let lost = self.gpu.as_ref().is_none_or(|(gpu, _)| gpu.is_lost());
         let surface_missing = self.win.as_ref().is_some_and(|w| !w.surface_ok || w.surface.is_none());
         if !lost && !surface_missing { return true; }
         let now = Instant::now();
-        let error = match self.reattach() {
+        let Some(step) = self.win.as_mut().map(|w| w.surface_retries.attempt()) else { return false };
+        if step == SurfaceStep::GiveUp {
+            return self.give_up_surface(format!("the window's GPU surface was replaced {SURFACE_TRIES} times without a frame reaching the screen"));
+        }
+        match self.reattach() {
             Ok(()) => {
                 if let Some(w) = self.win.as_mut() { w.retry = None; }
-                return true;
+                true
             }
-            Err(error) => error,
-        };
-        let retry = self.win.as_mut().and_then(|w| w.surface_retries.failed(now));
-        if let Some(at) = retry {
-            eprintln!("rune: could not replace the window's GPU surface, trying again: {error}");
-            if let Some(w) = self.win.as_mut() {
-                w.surface_ok = false;
-                w.retry = Some(at);
-            }
-            return false;
+            Err(error) => match self.win.as_ref().and_then(|w| w.surface_retries.retry(now)) {
+                Some(at) => {
+                    eprintln!("rune: could not replace the window's GPU surface, trying again: {error}");
+                    if let Some(w) = self.win.as_mut() {
+                        w.surface_ok = false;
+                        w.retry = Some(at);
+                    }
+                    false
+                }
+                None => self.give_up_surface(format!("the window's GPU surface could not be replaced: {error}")),
+            },
         }
-        eprintln!("rune: could not replace the window's GPU surface: {error}");
-        // As a hidden window gives them back: input stops, the native window hides and goes,
-        // and with them the device and surface. An app sees `window_error` and can `open` the
-        // window again, which makes all three.
+    }
+
+    /// Gives up the window and the device and surface it drew with, as `hide` does for an app
+    /// that releases its GPU when closed: it leaves the screen as `hide` leaves it, stops input
+    /// and hides the native window (`stop_showing`, `wind_down`), then the window, device and
+    /// surface go. An app sees `window_error` and can `open` the window again.
+    fn give_up_surface(&mut self, reason: String) -> bool {
+        eprintln!("rune: {reason}");
+        self.stop_showing();
         self.wind_down();
         self.release();
         self.idle = true;
-        *self.shared.window_error.lock().unwrap() = Some(format!("the window's GPU surface could not be replaced: {error}"));
+        *self.shared.window_error.lock().unwrap() = Some(reason);
         false
     }
 }
