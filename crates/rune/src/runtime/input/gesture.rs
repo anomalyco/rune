@@ -230,30 +230,16 @@ impl<S: 'static> Runtime<S> {
     /// Records a key press for [`Self::route_key_up`]: whether it belongs to an open IME
     /// composition, or which focused element should still hear its release if focus moves.
     pub(super) fn note_key_down(&mut self, repeat: bool) {
-        if self.composing() {
-            if !repeat { self.ime_keys_down += 1; }
-            self.ime_eat_key_up = true;
-        } else if !repeat {
-            self.ime_keys_down = 0;
-            self.ime_eat_key_up = false;
-            self.key_focus = self.focus.owned();
-            self.keys_held += 1;
-        }
+        let composing = self.composing();
+        let focus = &self.focus;
+        self.key_releases.down(composing, repeat, || focus.owned());
     }
 
     /// Suppresses key releases that belong to an IME composition (while preedit is open, or
     /// the release of the key that confirmed or cancelled it).
     pub(super) fn eat_ime_key_up(&mut self) -> bool {
-        if self.composing() {
-            self.ime_keys_down = self.ime_keys_down.saturating_sub(1);
-            return true;
-        }
-        if self.ime_keys_down > 0 {
-            self.ime_keys_down -= 1;
-            if self.ime_keys_down == 0 { self.ime_eat_key_up = false; }
-            return true;
-        }
-        std::mem::take(&mut self.ime_eat_key_up)
+        let composing = self.composing();
+        self.key_releases.eat(composing)
     }
 
     /// A key release goes to the focused element and up through its ancestors, else to every
@@ -262,16 +248,10 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn route_key_up(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
         if self.eat_ime_key_up() { return false; }
         tx.focused = self.focused_key();
-        let pressed = self.key_focus.as_deref().and_then(|p| self.live_index(p));
+        let pressed = self.key_releases.route().and_then(|p| self.live_index(&p));
         let focused = self.focus.path().and_then(|p| self.live_index(p));
         let secure = [pressed, focused].into_iter().flatten()
             .any(|i| self.nodes[i].input.as_ref().is_some_and(|input| input.edit.is_secure()));
-        if self.keys_held > 0 {
-            self.keys_held -= 1;
-            if self.keys_held == 0 { self.key_focus = None; }
-        } else {
-            self.key_focus = None;
-        }
         let mut chain = Vec::new();
         for start in [pressed, focused].into_iter().flatten() {
             let mut at = Some(start);

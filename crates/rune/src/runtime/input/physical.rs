@@ -129,14 +129,11 @@ impl<S: 'static> Runtime<S> {
             PhysicalInput::Key { key, pressed: false, .. } => {
                 if matches!(&self.held, Activation::Held { physical, .. } if *physical == Some(key)) { self.held = Activation::Up; }
                 if fallback.is_none() && !is_mod(key) && self.composing() {
-                    self.ime_keys_down = self.ime_keys_down.saturating_sub(1);
+                    self.key_releases.composing_release();
                 }
             }
             PhysicalInput::FocusLost => {
-                self.key_focus = None;
-                self.keys_held = 0;
-                self.ime_keys_down = 0;
-                self.ime_eat_key_up = false;
+                self.key_releases.lost();
             }
             PhysicalInput::Modifiers(_) => {}
         }
