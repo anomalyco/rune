@@ -212,3 +212,46 @@ impl El {
         self
     }
 }
+
+impl El {
+    /// The element's accessible role. `"textbox"` on a container also makes a press anywhere
+    /// on it (padding, a leading icon, a trailing label) focus its one reachable text editor and
+    /// place the caret at the nearer end, without blurring a focused field or dragging the
+    /// window; buttons and other controls inside keep their own presses. With zero or more
+    /// than one reachable editor inside, the container does nothing special.
+    #[inline]
+    pub fn role(mut self, role: &'static str) -> Self {
+        self.set_role(role);
+        self
+    }
+    /// [`El::role`] in place.
+    #[inline]
+    pub fn set_role(&mut self, role: &'static str) -> &mut Self {
+        self.set_role_name(role);
+        self
+    }
+    #[inline]
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.set_label(label);
+        self
+    }
+    /// [`El::label`] in place.
+    #[inline]
+    pub fn set_label(&mut self, label: impl Into<String>) -> &mut Self {
+        self.cold_mut().label = Some(label.into());
+        self
+    }
+    /// An outline row's depth for accessibility, 1 at the top (ARIA `aria-level`), as a
+    /// `treeitem` carries it. The element tree reports it as `level`.
+    pub fn level(mut self, level: u32) -> Self {
+        self.cold_mut().a11y.level = Some(level);
+        self
+    }
+    /// Whether a disclosure (a tree row with children, a collapsible header) is open, for
+    /// accessibility (ARIA `aria-expanded`). Leave it unset on an element that can't open.
+    /// The element tree reports it as `expanded`.
+    pub fn expanded(mut self, open: bool) -> Self {
+        self.cold_mut().a11y.expanded = Some(open);
+        self
+    }
+}
