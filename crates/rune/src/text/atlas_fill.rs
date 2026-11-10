@@ -18,6 +18,8 @@ pub struct Fill {
     pub scale: f32,
     pub radius: f32,
     pub pen: [f32; 2],
+    /// The coverage function (`text::Outline::coverage`).
+    pub coverage: u32,
 }
 
 /// Where an atlas entry's texels are.

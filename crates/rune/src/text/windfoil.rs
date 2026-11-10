@@ -1,4 +1,5 @@
-//! `FontSmoothing::Windfoil`: glyphs from their outlines. Text at rest draws atlas masks the GPU
+//! `FontSmoothing::Windfoil` and the other modes drawn from outlines ([`FontSmoothing::look`]):
+//! glyphs from their outlines. Text at rest draws atlas masks the GPU
 //! fills with Windfoil's coverage (`atlas_fill.rs`; the CPU fills them the same way before a
 //! renderer can), and text whose scale moves draws the same coverage straight from the outline
 //! store, on the pen its mask would sit at, so the two meet exactly when it lands.
@@ -34,15 +35,21 @@ enum Found {
 }
 
 impl TextSystem {
-    /// Whether moving text draws from its outlines: with `FontSmoothing::Windfoil`, unless the
+    /// Whether moving text draws from its outlines: in a mode drawn from them, unless the
     /// renderer has said it can't.
     pub(crate) fn draws_outlines(&self) -> bool {
-        self.smoothing == FontSmoothing::Windfoil && self.atlas.outlines.support() != outline::Support::Unavailable
+        self.smoothing.look().is_some() && self.atlas.outlines.support() != outline::Support::Unavailable
     }
 
     /// Whether pens sit on quarter pixels (Skia's) rather than CoreGraphics' steps.
     pub(super) fn quarter_pens(&mut self) -> bool {
-        self.direct_write() || self.smoothing == FontSmoothing::Windfoil
+        self.direct_write() || self.smoothing.look().is_some()
+    }
+
+    /// Whether glyphs in this mode sit on whole-pixel pens: a TrueType-hinted outline's
+    /// (`tt_hinted`), or every glyph's in a mode that keeps whole pens.
+    fn whole_pens(&self, tt_hinted: bool) -> bool {
+        tt_hinted || self.smoothing.look().is_some_and(|l| l.whole_pens)
     }
 
     /// Steps text `node`'s raster path for this frame (`moving`: its scale moves) and draws the
@@ -68,7 +75,8 @@ impl TextSystem {
 
     /// `glyph`'s outline record at `ppem`, building it the first time. A CJK face at small sizes
     /// takes its TrueType-hinted outline, whose strokes sit on whole pixels as DirectWrite's do:
-    /// dense ideographs blur without it.
+    /// dense ideographs blur without it. A mode that autohints takes the light-autohinted
+    /// outline at `ppem` for every face.
     fn find_outline(&mut self, face: &Face, coords: &[i16], glyph: u32, ppem: f32) -> Found {
         let (font, skew) = (&face.font, face.skew);
         let face_key = (font.data.id(), font.index);
@@ -77,11 +85,17 @@ impl TextSystem {
         if kind == FaceKind::Color {
             return Found::Elsewhere;
         }
-        let hinted = (kind == FaceKind::Cjk && ppem <= CJK_HINT_MAX).then_some(ppem);
-        let key = outline::Key { font: face_key.0, index: face_key.1, glyph, coords: face.coords_key, skew, hinted: hinted.map_or(0, f32::to_bits) };
+        let hint = if self.smoothing.look().is_some_and(|l| l.hint == coretext_match::OutlineHint::Auto) {
+            outline::Hinting::Auto(ppem)
+        } else if kind == FaceKind::Cjk && ppem <= CJK_HINT_MAX {
+            outline::Hinting::TrueType(ppem)
+        } else {
+            outline::Hinting::None
+        };
+        let key = outline::Key { font: face_key.0, index: face_key.1, glyph, coords: face.coords_key, skew, hinted: hint.key() };
         let scale_cx = &mut self.scale_cx;
-        match self.atlas.outlines.glyph(key, || outline::extract(scale_cx, font_ref, coords, glyph as u16, skew, hinted)) {
-            outline::Found::Outline(g) => Found::Draws(g, hinted.is_some()),
+        match self.atlas.outlines.glyph(key, || outline::extract(scale_cx, font_ref, face_key.1, coords, glyph as u16, skew, hint)) {
+            outline::Found::Outline(g) => Found::Draws(g, matches!(hint, outline::Hinting::TrueType(_))),
             outline::Found::Empty => Found::Blank,
             outline::Found::Full => Found::Elsewhere,
         }
@@ -100,7 +114,8 @@ impl TextSystem {
         let radius = self.apple.radius(face.ink, ppem) * weight + bold;
         let font = &face.font;
         let Some(font_ref) = FontRef::from_index(font.data.as_ref(), font.index as usize) else { return (radius as f32, 0) };
-        let hint = if face.skew != 0 || tt_hinted { None } else {
+        let cg_hint = self.smoothing.look().is_none_or(|l| l.hint == coretext_match::OutlineHint::CoreGraphics);
+        let hint = if face.skew != 0 || tt_hinted || !cg_hint { None } else {
             self.apple.hint(&mut self.scale_cx, font_ref, (font.data.id(), font.index, face.coords_key), coords, ppem as f64, radius)
         };
         (radius as f32, hint.map_or(0, |t| self.atlas.outlines.hint(t.values)))
@@ -119,13 +134,14 @@ impl TextSystem {
         let quarters = self.quarter_pens();
         let ([fx, fy], [subpx, subpy]) = glyph_emit::place(at, ppem, self.glide, quarters);
         let (radius, hint) = self.outline_look(face, coords, ppem, tt_hinted);
-        let (phase_x, nudge) = pen_phase(tt_hinted, subpx);
+        let (phase_x, nudge) = pen_phase(self.whole_pens(tt_hinted), subpx);
         let shift_y = subpy as f32 / GLIDE_PHASES as f32;
-        let mut o = Outline { pen: [phase_x, 0.0], scale: ppem / g.upem, zoom: 1.0, record: g.record, hint, radius };
+        let mut o = Outline { pen: [phase_x, 0.0], scale: ppem / g.upem, zoom: 1.0, record: g.record, hint, radius, coverage: self.coverage_fn() };
         // The quad of the atlas mask it lands on, so nothing that reads quads sees it change.
         let [left, top, w, h] = mask_box(&o, g.bbox);
         o.pen = [fx + nudge + phase_x, fy + shift_y];
-        out.push(GlyphQuad { rect: [fx + nudge + left, fy + top, w, h], uv: [0.0; 2], ink: face.ink, byte, color: 0, outline: Some(o) });        Some(Placed::Other)
+        out.push(GlyphQuad { rect: [fx + nudge + left, fy + top, w, h], uv: [0.0; 2], ink: face.ink, byte, color: 0, outline: Some(o) });
+        Some(Placed::Other)
     }
 
     /// A Windfoil atlas mask for `key` (`phase`: x in sixtieths, y in glide steps): queued for the
@@ -142,11 +158,11 @@ impl TextSystem {
             Found::Elsewhere => return None,
         };
         let (radius, hint) = self.outline_look(face, coords, ppem, tt_hinted);
-        let (phase_x, nudge) = pen_phase(tt_hinted, phase[0]);
+        let (phase_x, nudge) = pen_phase(self.whole_pens(tt_hinted), phase[0]);
         let shift_y = phase[1] as f32 / GLIDE_PHASES as f32;
-        let o = Outline { pen: [phase_x, 0.0], scale: ppem / g.upem, zoom: 1.0, record: g.record, hint, radius };
+        let o = Outline { pen: [phase_x, 0.0], scale: ppem / g.upem, zoom: 1.0, record: g.record, hint, radius, coverage: self.coverage_fn() };
         let [left, top, w, h] = mask_box(&o, g.bbox);
-        let fill = Fill { record: g.record, hint, scale: o.scale, radius, pen: [phase_x - left, shift_y - top] };
+        let fill = Fill { record: g.record, hint, scale: o.scale, radius, pen: [phase_x - left, shift_y - top], coverage: o.coverage };
         if self.atlas.outlines.support() == outline::Support::Drawn {
             return Some(match self.atlas.reserve(key, w as u32, h as u32, (left + nudge) as i32, -top as i32, fill) {
                 Some(mask) => Rasterized::Placed(mask),
@@ -155,6 +171,7 @@ impl TextSystem {
         }
         let coverage: Vec<u8> = (0..h as u32).flat_map(|row| (0..w as u32).map(move |col| (row, col))).map(|(row, col)| {
             let local = [col as f32 + 0.5 - fill.pen[0], fill.pen[1] - (row as f32 + 0.5)];
+            // The CPU has Windfoil's box coverage only: a Slug mask filled here is Windfoil's.
             (outline::coverage(&self.atlas.outlines, fill.record, fill.hint, local, fill.scale, fill.radius, 0.5) * 255.0).round() as u8
         }).collect();
         Some(match self.atlas.put(w as u32, h as u32, &coverage, (left + nudge) as i32, -top as i32) {
@@ -167,10 +184,18 @@ impl TextSystem {
     }
 }
 
+impl TextSystem {
+    /// The coverage function the shader integrates for this mode's glyphs (`outline.wgsl`).
+    fn coverage_fn(&self) -> u32 {
+        self.smoothing.look().map_or(0, |l| l.coverage as u32)
+    }
+}
+
 /// A pen's x phase in px from its whole pixel (sixtieths `subpx`), and a whole pixel to move it by:
-/// a TrueType-hinted outline keeps its strokes on the grid only from a whole-pixel pen, the nearest.
-fn pen_phase(tt_hinted: bool, subpx: u8) -> (f32, f32) {
-    if tt_hinted { (0.0, (subpx as f32 >= coretext_match::PHASES / 2.0) as u8 as f32) } else { (subpx as f32 / coretext_match::PHASES, 0.0) }
+/// a TrueType-hinted outline keeps its strokes on the grid only from a whole-pixel pen, the
+/// nearest, and a mode on whole pens (`whole`) takes it too.
+fn pen_phase(whole: bool, subpx: u8) -> (f32, f32) {
+    if whole { (0.0, (subpx as f32 >= coretext_match::PHASES / 2.0) as u8 as f32) } else { (subpx as f32 / coretext_match::PHASES, 0.0) }
 }
 
 /// The texels `[left, top, w, h]` of the mask of outline `o` (its pen at its x phase on the

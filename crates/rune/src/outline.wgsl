@@ -157,10 +157,118 @@ fn outline_coverage(rec: u32, hint: u32, local: vec2<f32>, scale: f32, r: f32, h
 
 const OUTLINE_HINT_REACH: f32 = 1.5;
 
+// Where along monotone quadratic `p0 p1 p2`'s axis `a` (0: x, 1: y) it reaches `c`, from 0 to 1.
+fn outline_root(p0: f32, p1: f32, p2: f32, c: f32) -> f32 {
+    let a2 = p0 - 2.0 * p1 + p2;
+    let a1 = 2.0 * (p1 - p0);
+    let a0 = p0 - c;
+    if (abs(a2) < 1.0e-6) {
+        return clamp(-a0 / select(a1, 1.0e-6, abs(a1) < 1.0e-6), 0.0, 1.0);
+    }
+    let sq = sqrt(max(a1 * a1 - 4.0 * a2 * a0, 0.0));
+    let t0 = (-a1 - sq) / (2.0 * a2);
+    let t1 = (-a1 + sq) / (2.0 * a2);
+    return clamp(select(t1, t0, t0 >= -1.0e-4 && t0 <= 1.0 + 1.0e-4), 0.0, 1.0);
+}
+
+// Slug's coverage (Lengyel 2017): the winding along a horizontal and a vertical ray through the
+// pixel's centre, each crossing spread over the pixel's width, the two averaged. Same record,
+// moves and hint as `outline_coverage`. The vertical ray is the centre's winding (from the
+// horizontal one) changed by the crossings within the pixel's height.
+fn outline_slug(rec: u32, hint: u32, local: vec2<f32>, scale: f32, r: f32, hw: f32) -> f32 {
+    let head = outline_texel(rec);
+    let count = head.y;
+    let y0 = bitcast<f32>(head.z);
+    let inv_h = bitcast<f32>(head.w);
+    let hinted = hint != 0u;
+    var ha = vec4<f32>(0.0);
+    var hb = vec4<f32>(0.0);
+    var hc = vec4<f32>(0.0);
+    if (hinted) {
+        ha = bitcast<vec4<f32>>(outline_texel(hint));
+        hb = bitcast<vec4<f32>>(outline_texel(hint + 1u));
+        hc = bitcast<vec4<f32>>(outline_texel(hint + 2u));
+    }
+    // Only the bands about the pixel's rows hold what either ray meets within it.
+    let reach = select(0.0, OUTLINE_HINT_REACH, hinted);
+    var b0 = 0u;
+    var b1 = 0u;
+    if (count > 1u) {
+        let last = f32(count - 1u);
+        b0 = u32(clamp(floor(((local.y - hw - 2.0 * r - reach) / scale - y0) * inv_h), 0.0, last));
+        b1 = u32(clamp(floor(((local.y + hw + reach) / scale - y0) * inv_h), 0.0, last));
+    }
+    var across = 0.0;
+    var winding = 0.0;
+    var down = 0.0;
+    for (var band = b0; band <= b1; band = band + 1u) {
+        var e0 = -3.0e38;
+        var e1 = 3.0e38;
+        if (count > 1u) {
+            e0 = (y0 + f32(band) / inv_h) * scale;
+            e1 = (y0 + f32(band + 1u) / inv_h) * scale;
+        }
+        let entry = outline_texel(head.x + band);
+        for (var k = 0u; k < entry.y; k = k + 1u) {
+            let t0 = outline_texel(entry.x + 2u * k);
+            let t1 = outline_texel(entry.x + 2u * k + 1u);
+            let code = t1.z;
+            let oa = outline_move(code & 15u) * r;
+            let ob = outline_move((code >> 4u) & 15u) * r;
+            var p0 = bitcast<vec2<f32>>(t0.xy) * scale + oa;
+            var p1 = bitcast<vec2<f32>>(t0.zw) * scale + oa;
+            var p2 = bitcast<vec2<f32>>(t1.xy) * scale + ob;
+            var be0 = e0 + oa.y;
+            var be1 = e1 + oa.y;
+            if (hinted) {
+                p0.y = outline_hint(p0.y, ha, hb, hc);
+                p1.y = outline_hint(p1.y, ha, hb, hc);
+                p2.y = outline_hint(p2.y, ha, hb, hc);
+                be0 = outline_hint(be0, ha, hb, hc);
+                be1 = outline_hint(be1, ha, hb, hc);
+            }
+            // A connector lies in one band; a piece counts only within its band's rows.
+            if ((code & 256u) != 0u) {
+                p1 = (p0 + p2) * 0.5;
+                be0 = -3.0e38;
+                be1 = 3.0e38;
+            }
+            let q0 = p0 - local;
+            let q1 = p1 - local;
+            let q2 = p2 - local;
+            let ylo = max(min(q0.y, q2.y), be0 - local.y);
+            let yhi = min(max(q0.y, q2.y), be1 - local.y);
+            // Horizontal ray: where the piece crosses the centre's row, spread across the pixel;
+            // and the centre's winding, which the vertical ray starts from.
+            if (q0.y != q2.y && ylo <= 0.0 && 0.0 < yhi) {
+                let t = outline_root(q0.y, q1.y, q2.y, 0.0);
+                let x = mix(mix(q0.x, q1.x, t), mix(q1.x, q2.x, t), t);
+                let s = sign(q2.y - q0.y);
+                across = across + s * clamp(x / (2.0 * hw) + 0.5, 0.0, 1.0);
+                winding = winding + s * select(0.0, 1.0, x > 0.0);
+            }
+            // Vertical ray: only crossings within the pixel's height change it from the centre's
+            // winding, each counted in its band's rows.
+            if (q0.x != q2.x && min(q0.x, q2.x) <= 0.0 && 0.0 < max(q0.x, q2.x)) {
+                let t = outline_root(q0.x, q1.x, q2.x, 0.0);
+                let y = mix(mix(q0.y, q1.y, t), mix(q1.y, q2.y, t), t);
+                if (abs(y) < hw && y >= be0 - local.y && y < be1 - local.y) {
+                    down = down - sign(q2.x - q0.x) * (clamp(y / (2.0 * hw) + 0.5, 0.0, 1.0) - select(0.0, 1.0, y > 0.0));
+                }
+            }
+        }
+    }
+    return 0.5 * (min(abs(across), 1.0) + min(abs(winding + down), 1.0));
+}
+
 // A glyph instance drawn from its outline (`text::Outline`): radii = pen, scale, zoom; border =
-// record, hint, radius. Rest px, y up, a device pixel 1 / zoom of them across.
+// record, hint, radius, coverage (0: Windfoil's box, 1: Slug's rays). Rest px, y up, a device
+// pixel 1 / zoom of them across.
 fn outline_glyph(i: Out, screen: vec2<f32>) -> f32 {
     let z = i.radii.w;
     let local = vec2<f32>(screen.x - i.radii.x, i.radii.y - screen.y) / z;
+    if (i.border.w > 0.5) {
+        return outline_slug(u32(i.border.x), u32(i.border.y), local, i.radii.z, i.border.z, 0.5 / z);
+    }
     return outline_coverage(u32(i.border.x), u32(i.border.y), local, i.radii.z, i.border.z, 0.5 / z);
 }

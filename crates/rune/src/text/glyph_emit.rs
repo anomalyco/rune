@@ -121,7 +121,7 @@ impl TextSystem {
         let glide = self.glide;
         let (font, font_size, ink, skew) = (&face.font, face.size * k, face.ink, face.skew);
         let direct_write = self.direct_write();
-        let windfoil = self.smoothing == FontSmoothing::Windfoil;
+        let windfoil = self.smoothing.look().is_some();
         let radius = if direct_write { 0.0 } else { self.apple.radius(ink, font_size) * if windfoil { outline::TEXT_WEIGHT } else { 1.0 } };
         let gamma = self.windows.bucket(ink);
         let ([fx, fy], [subpx, subpy]) = place(at, font_size, self.glide, direct_write || windfoil);
@@ -134,7 +134,7 @@ impl TextSystem {
             subpx,
             subpy,
             dilation: if direct_write { gamma as u32 } else { (radius as f32).to_bits() },
-            apple: if direct_write { DIRECT_WRITE_KEY } else if windfoil { WINDFOIL_KEY } else { self.apple.key() },
+            apple: if direct_write { DIRECT_WRITE_KEY } else { self.smoothing.outline_key().unwrap_or_else(|| self.apple.key()) },
             skew,
             bold: face.bold,
         };
@@ -250,7 +250,8 @@ impl TextSystem {
 
 /// The glyph key tag of a DirectWrite mask (CoreGraphics' pipelines use the low bits).
 pub(super) const DIRECT_WRITE_KEY: u8 = 0x80;
-/// The glyph key tag of a Windfoil mask (`windfoil.rs`).
+/// The glyph key tag of a Windfoil mask (`windfoil.rs`), with the mode's number in its low bits
+/// (`FontSmoothing::outline_key`).
 pub(super) const WINDFOIL_KEY: u8 = 0x40;
 
 /// Where a glyph with its resting pen at `at` draws at `ppem` device px, gliding by `glide`: its

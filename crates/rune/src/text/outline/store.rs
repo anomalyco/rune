@@ -150,7 +150,10 @@ impl OutlineStore {
 
     pub(crate) fn support(&self) -> Support { self.support }
 
-    pub(crate) fn set_support(&mut self, support: Support) { self.support = support; }
+    pub(crate) fn set_support(&mut self, support: Support) {
+        self.support = support;
+        super::super::support::note_outlines(support);
+    }
 
     /// Rows the texture needs.
     pub(crate) fn rows(&self) -> u32 { (self.texels.len() / WIDTH as usize) as u32 }

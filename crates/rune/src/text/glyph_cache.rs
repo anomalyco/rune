@@ -10,7 +10,7 @@
 //! moved, or any glyph after the atlas evicts a page, asks the atlas again.
 use std::rc::Weak;
 
-use super::glyph_emit::{DIRECT_WRITE_KEY, Placed, WINDFOIL_KEY, atlas_quad, place};
+use super::glyph_emit::{DIRECT_WRITE_KEY, Placed, atlas_quad, place};
 use super::*;
 
 /// Bytes all entries may hold before the least recently painted go.
@@ -212,7 +212,7 @@ impl TextSystem {
     ) {
         let mut cache = std::mem::take(&mut self.glyph_cache);
         let skia = self.direct_write();
-        let tag = if self.smoothing == FontSmoothing::Windfoil { WINDFOIL_KEY } else { self.apple.key() };
+        let tag = self.smoothing.outline_key().unwrap_or_else(|| self.apple.key());
         let (inks, apple) = if skia { (self.windows.inks(), DIRECT_WRITE_KEY) } else { (self.apple.inks(), tag) };
         let key = Key {
             layout: Rc::as_ptr(layout) as usize,

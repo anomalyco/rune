@@ -79,7 +79,7 @@ impl Reference {
     pub fn for_mode(mode: FontSmoothing) -> Reference {
         match mode {
             FontSmoothing::On | FontSmoothing::Windfoil => Reference::Smoothed,
-            FontSmoothing::Off | FontSmoothing::DirectWrite => Reference::Unsmoothed,
+            _ => Reference::Unsmoothed,
         }
     }
     fn prefix(self) -> &'static str {

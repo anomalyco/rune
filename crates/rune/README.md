@@ -131,6 +131,12 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     start with the Windfoil shader everywhere but macOS, where the Classic shader keeps drawing
     until text asks for outlines; where it can't be built, the CPU fills the same masks
     (`text/outline/cover.rs`) and moving text draws from them.
+  - `WindfoilChromium`, `Slug`, `HintedGpu` and `Hinted`: the other ways to draw from the outline
+    store, for comparing renderers. Each takes Chromium's weight (no dilation, Skia's text gamma):
+    Windfoil's box coverage of the design outline, Slug's two-ray winding (`outline_slug` in
+    `outline.wgsl`), the outline after skrifa's light autohint, and that autohinted outline on
+    whole-pixel pens, which is Chromium's text on Linux. `FontSmoothing::ALL` lists every mode and
+    `FontSmoothing::support` says whether this machine draws one as named (`text/support.rs`).
   `On` and `Off` work on every OS, since they are arithmetic on outlines. Blending is separate
   (`srgb_blend`).
   `cargo run -p rune --example coretext_compare [-- --smoothing on|off]` measures
