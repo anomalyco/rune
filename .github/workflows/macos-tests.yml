@@ -4,6 +4,7 @@ on:
   push:
     branches: [dev]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -22,7 +23,10 @@ jobs:
       - uses: actions/checkout@v5
       - run: bash scripts/file-size.sh
 
+  # Mac runners are scarce and shared across the organisation, and this job takes over an hour, so
+  # draft PRs skip it; marking a PR ready for review starts it.
   test:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: macos-latest
     timeout-minutes: 90
     env:
