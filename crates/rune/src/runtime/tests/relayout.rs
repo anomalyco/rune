@@ -412,3 +412,33 @@ fn a_resize_moves_nodes_keeps_inputs_and_restores_on_virtual_window_fallback() {
         assert_eq!(rt.focus.path(), Some("#0/main/composer"));
     }
 }
+
+/// One decision for both shortcuts: a resize relays out, a quiet commit with virtual rows
+/// remounts, and anything the view reads that changed runs it either way.
+#[test]
+fn a_commit_picks_its_kind_once_from_what_changed() {
+    use crate::runtime::relayout::CommitKind;
+    let mut rt = scrolled_transcript(false);
+    let (tx, settle) = (Tx::default(), Tx { settle: true, ..Tx::default() });
+    rt.state_unchanged = true;
+    assert_eq!(rt.commit_kind(&tx), CommitKind::Remount);
+    rt.relayout = true;
+    assert_eq!(rt.commit_kind(&tx), CommitKind::Relayout, "a resize never remounts");
+    for relayout in [true, false] {
+        rt.relayout = relayout;
+        assert_eq!(rt.commit_kind(&settle), CommitKind::Rebuild);
+        rt.reuse.read_moved = true;
+        assert_eq!(rt.commit_kind(&tx), CommitKind::Rebuild, "a read moved");
+        rt.reuse.read_moved = false;
+        rt.reuse.scale = f32::NAN;
+        assert_eq!(rt.commit_kind(&tx), CommitKind::Rebuild, "a new scale");
+        rt.reuse.scale = rt.env.scale;
+        rt.state_unchanged = false;
+        assert_eq!(rt.commit_kind(&tx), CommitKind::Rebuild, "the state changed");
+        rt.state_unchanged = true;
+    }
+    let mut plain = Runtime::new(0, paragraphs, (700.0, 600.0), Env::new(true, 2.0));
+    plain.frame(0.0);
+    plain.state_unchanged = true;
+    assert_eq!(plain.commit_kind(&tx), CommitKind::Rebuild, "no virtual rows to remount");
+}
