@@ -643,6 +643,7 @@ fn role(s: &str) -> Option<&'static str> {
         "heading" => "heading",
         "img" => "img",
         "status" => "status",
+        "alert" => "alert",
         _ => return None,
     })
 }
