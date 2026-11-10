@@ -391,7 +391,7 @@ fn same_handlers(
         && opt_rc_eq(&a.on_at_bottom, on_at_bottom)
         && match (&a.on_far_from_bottom, on_far_from_bottom) {
             (None, None) => true,
-            (Some((da, fa)), Some((db, fb))) => da == db && Rc::ptr_eq(fa, fb),
+            (Some((da, ua, fa)), Some((db, ub, fb))) => da == db && ua == ub && Rc::ptr_eq(fa, fb),
             _ => false,
         }
         && opt_rc_eq(&a.on_visible_rows, on_visible_rows)

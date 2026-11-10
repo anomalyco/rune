@@ -310,10 +310,15 @@ impl<S: 'static> Runtime<S> {
                     self.queue.push(Action::AtBottom(n.path.clone(), at));
                 }
             }
-            if let Some((min, _)) = &h.on_far_from_bottom {
+            if let Some((min, under, _)) = &h.on_far_from_bottom {
+                // Under a frame, its height counts: the nearest ancestor with that key.
+                let tall = under.as_deref().and_then(|k| {
+                    self.nodes.iter().filter(|m| m.key.as_deref() == Some(k) && n.path.starts_with(&m.path) && n.path[m.path.len()..].starts_with('/'))
+                        .max_by_key(|m| m.path.len()).map(|m| m.local.h)
+                }).unwrap_or(n.local.h);
                 // Rows collapsing measure from the end they head for, glide or not.
                 let end = st.laid.map_or(st.max, |end| end.min(st.max));
-                let far = end - st.offset > f64::from(min.max(n.local.h));
+                let far = end - st.offset > f64::from(min.max(tall));
                 if st.far_from_bottom != Some(far) {
                     st.far_from_bottom = Some(far);
                     self.queue.push(Action::FarFromBottom(n.path.clone(), far));
@@ -364,7 +369,7 @@ mod tests {
 
     // One state type for every test here: each type monomorphises a whole `Runtime<S>`.
     #[derive(Default)]
-    struct Chat { rows: usize, reports: Vec<bool>, instant: bool, reduced: bool, virtualized: bool, loose: bool, tall_tail: bool, composer: Option<crate::TextEdit>, sends: bool, track_drawn: bool, drawn: Vec<f32>, far: Vec<bool>, dock: Option<f32> }
+    struct Chat { rows: usize, reports: Vec<bool>, instant: bool, reduced: bool, virtualized: bool, loose: bool, tall_tail: bool, composer: Option<crate::TextEdit>, sends: bool, track_drawn: bool, drawn: Vec<f32>, far: Vec<bool>, dock: Option<f32>, under: bool }
 
     fn view(s: &Chat, cx: &mut Cx<Chat>) -> El {
         cx.reduced_motion(s.reduced);
@@ -378,11 +383,14 @@ mod tests {
             }
             stack = stack.child(row);
         }
-        let root = col().w_full().h_full()
-            .child(col().key("scroll").w_full().grow(1.0).shrink().scroll(ScrollSpec { stick_bottom: !s.loose })
-                .on_at_bottom(|s: &mut Chat, at| s.reports.push(at))
-                .on_far_from_bottom(400.0, |s: &mut Chat, far| s.far.push(far))
-                .child(stack))
+        let scroll = col().key("scroll").w_full().grow(1.0).shrink().scroll(ScrollSpec { stick_bottom: !s.loose })
+            .on_at_bottom(|s: &mut Chat, at| s.reports.push(at));
+        let scroll = if s.under {
+            scroll.on_far_from_bottom_under(400.0, "pane", |s: &mut Chat, far| s.far.push(far))
+        } else {
+            scroll.on_far_from_bottom(400.0, |s: &mut Chat, far| s.far.push(far))
+        };
+        let root = col().key("pane").w_full().h_full().child(scroll.child(stack))
             .child(el().key("jump").w_full().h(40.0).on_press_tx(|s: &mut Chat, tx| {
                 if s.instant { tx.scroll_to_bottom_instant("stack") } else { tx.scroll_to_bottom("scroll") }
             }));
@@ -488,6 +496,25 @@ mod tests {
         let (_, gap) = near_at.expect("the glide reports near");
         assert!((-400.0..0.0).contains(&gap), "near once within 400 of the end, before landing: {gap}");
         assert_eq!(rt.state.far, [false, true, false]);
+    }
+
+    /// Under its pane, a viewport counts the pane's height (640) rather than its own (600, the
+    /// jump row under it), read as it scrolls: 620 up is near, 660 far, and a resize runs no view.
+    #[test]
+    fn far_under_a_frame_counts_the_frames_height() {
+        let far_at = |under: bool, up: f32| {
+            let mut rt = Runtime::new(Chat { rows: 60, under, ..Default::default() }, view, (200.0, 640.0), Env::new(true, 2.0));
+            rt.frame(0.0);
+            rt.frame(1.0 / 120.0);
+            rt.update(|_, tx| tx.scroll_to_y("scroll", 1e6));
+            let max = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("stack")).unwrap().rect[3] - 600.0;
+            rt.update(|_, tx| tx.scroll_to_y("scroll", max - up));
+            for _ in 0..3 { rt.frame(1.0 / 120.0); }
+            rt.state.far.last().copied()
+        };
+        assert_eq!(far_at(false, 620.0), Some(true), "past its own 600");
+        assert_eq!(far_at(true, 620.0), Some(false), "within the pane's 640");
+        assert_eq!(far_at(true, 660.0), Some(true), "past the pane's 640");
     }
 
     /// A scroll to the bottom asked for while the window is covered (or hidden) waits for the

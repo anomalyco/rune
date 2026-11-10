@@ -1,0 +1,1 @@
+- `El::on_far_from_bottom_under(min, frame, f)`: a scroll viewport that runs under a frame (a chat pane with a header and dock over its scroll) counts the nearest ancestor keyed `frame`'s height in place of its own, measured as it scrolls, so a view needn't read the height and a resize re-runs no view.

@@ -350,7 +350,7 @@ impl<S: 'static> Runtime<S> {
                 true
             }
             Action::FarFromBottom(path, far) => {
-                let Some((_, f)) = self.node(&path).and_then(|n| n.handlers.on_far_from_bottom.clone()) else { return false };
+                let Some((_, _, f)) = self.node(&path).and_then(|n| n.handlers.on_far_from_bottom.clone()) else { return false };
                 f(states!(self), far);
                 true
             }

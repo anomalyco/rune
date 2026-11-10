@@ -91,7 +91,15 @@ impl El {
     /// least `min` points, above its bottom: where a chat shows its "jump to latest" button and
     /// hides it again near the end. Once after its first layout, then only when that changes.
     pub fn on_far_from_bottom<S: 'static>(mut self, min: f32, f: impl Fn(&mut S, bool) + 'static) -> Self {
-        self.handlers.on_far_from_bottom = Some((min, Rc::new(move |s, far| f(downcast::<S>(s), far))));
+        self.handlers.on_far_from_bottom = Some((min, None, Rc::new(move |s, far| f(downcast::<S>(s), far))));
+        self
+    }
+    /// [`El::on_far_from_bottom`] for a viewport that runs under a frame, the nearest ancestor
+    /// keyed `frame` (a chat's pane, with a header and a dock over its scroll): far is more than
+    /// the frame's height above the bottom, and at least `min`. The height is measured as it
+    /// scrolls, so the view never reads it and a resize re-runs no view.
+    pub fn on_far_from_bottom_under<S: 'static>(mut self, min: f32, frame: &str, f: impl Fn(&mut S, bool) + 'static) -> Self {
+        self.handlers.on_far_from_bottom = Some((min, Some(Rc::from(frame)), Rc::new(move |s, far| f(downcast::<S>(s), far))));
         self
     }
     /// On a scroll viewport, fade its top and bottom edges over `width` points (16–32 reads well),
