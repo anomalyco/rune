@@ -611,7 +611,10 @@ pub struct Runtime<S: 'static> {
     /// modal that opens in this commit returns focus to.
     focus_before_commit: Option<String>,
     /// `Tx::focus`: the key the next commit focuses, and whether its ring shows.
-    focus_request: Option<(String, bool)>,
+    focus_request: Option<(String, bool, crate::el::FocusAsk)>,
+    /// This commit's focus is a `Tx::return_focus` hand-back, which a modal opening in it
+    /// doesn't take as where focus was.
+    focus_returned: bool,
     /// Focused text fields that unmounted without being blurred: while another field holds focus,
     /// remounting one with its old `focused = true` flag does not steal focus back.
     unmounted_focused: Vec<std::sync::Weak<crate::edit::History>>,
@@ -955,6 +958,7 @@ impl<S: 'static> Runtime<S> {
             modal_focus: modal_focus::ModalFocus::Closed,
             focus_before_commit: None,
             focus_request: None,
+            focus_returned: false,
             unmounted_focused: Vec::new(),
             modal_scope: None,
             loops: HashMap::default(),

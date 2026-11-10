@@ -97,6 +97,7 @@ impl<S: 'static> Runtime<S> {
     /// Feeds the modal focus machine what this commit shows: modals that went (innermost first),
     /// a modal that opened, and focus that left the top modal.
     pub(super) fn sync_modals(&mut self) {
+        let returned = std::mem::take(&mut self.focus_returned);
         // Exiting visuals are already inert, so a closing modal counts as gone.
         while let Some(top) = self.modal_focus.top().map(str::to_owned).filter(|p| self.node(p).is_none()) {
             let inside = |f: &str| f.strip_prefix(top.as_str()).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
@@ -105,10 +106,12 @@ impl<S: 'static> Runtime<S> {
         }
         let Some(i) = self.active_modal() else { return };
         let path = self.nodes[i].path.clone();
-        // A field in the modal that asked for focus took it earlier in this commit; closing
-        // returns to what had focus before.
+        // A field in the modal that asked for focus took it earlier in this commit, or a closing
+        // menu handed focus back to its trigger as its pick opened this modal (`Tx::return_focus`,
+        // which a web menu does only after the dialog has noted the item): closing returns to
+        // what had focus before.
         let inside = self.focused_index().is_some_and(|j| self.allowed(j));
-        let restore = if inside { self.focus_before_commit.clone() } else { self.focus.owned() };
+        let restore = if inside || returned { self.focus_before_commit.clone() } else { self.focus.owned() };
         let menu = |j: usize| MENU_ROLES.contains(&self.nodes[j].role);
         let is_menu = menu(i) || (i + 1..self.nodes.len()).take_while(|&j| self.nodes[j].parent.is_some_and(|p| p >= i)).any(|j| self.nodes[j].parent == Some(i) && menu(j));
         let opened = if is_menu && !self.focus.keyboard() { Opened::PointerMenu } else { Opened::Dialog };

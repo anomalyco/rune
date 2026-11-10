@@ -1,0 +1,1 @@
+- **`Tx::return_focus`: focus a closing menu hands back to its trigger.** A modal that opens in the same change (a dialog a menu's pick opens) keeps focus, and as it closes hands it back to where focus was before that change, as a web dialog opened from a menu item records the item: nothing, once the menu is gone. Before, the dialog took the trigger as where focus returns.

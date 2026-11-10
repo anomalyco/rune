@@ -82,8 +82,8 @@ pub struct Tx {
     pub(crate) font_smoothing: Option<crate::text::FontSmoothing>,
     pub(crate) font_families: Option<(String, String)>,
     pub(crate) blur: bool,
-    /// `Tx::focus`: the key and whether its ring shows.
-    pub(crate) focus_to: Option<(String, bool)>,
+    /// `Tx::focus` and `Tx::return_focus`: the key, whether its ring shows, and which asked.
+    pub(crate) focus_to: Option<(String, bool, FocusAsk)>,
     /// `Tx::focus_visible`.
     pub(crate) focus_visible: bool,
     /// `Tx::by_keys`.
@@ -103,6 +103,13 @@ pub struct Tx {
     pub(crate) evict_memos: Vec<String>,
     /// `Tx::clock`.
     pub(crate) clock: f64,
+}
+
+/// Which asked for focus: [`Tx::focus`], or [`Tx::return_focus`] handing it back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FocusAsk {
+    Focus,
+    Return,
 }
 
 /// A change to the text selection a handler asked for, carried out after its commit.
@@ -352,7 +359,16 @@ impl Tx {
     /// `ring` (`:focus-visible`). A text field focused through its model (`TextEdit::focused`)
     /// in the same change wins over it. Nothing happens when no such element shows.
     pub fn focus(&mut self, key: impl Into<String>, ring: bool) {
-        self.focus_to = Some((key.into(), ring));
+        self.focus_to = Some((key.into(), ring, FocusAsk::Focus));
+    }
+
+    /// [`Tx::focus`] for focus a closing menu or popover hands back to its trigger, as a web
+    /// menu's `onCloseAutoFocus` does after the change that closed it. A modal that opens in the
+    /// same change (a dialog a menu's pick opens) keeps focus, and as it closes hands it back to
+    /// where focus was before that change, as a web dialog that opened from a menu item records
+    /// that item: when it's gone, nothing has focus.
+    pub fn return_focus(&mut self, key: impl Into<String>, ring: bool) {
+        self.focus_to = Some((key.into(), ring, FocusAsk::Return));
     }
 
     /// Whether keyboard focus was showing its ring (`:focus-visible`) as this event arrived:
