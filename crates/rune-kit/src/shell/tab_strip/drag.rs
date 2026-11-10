@@ -22,13 +22,37 @@ pub struct TabDragState {
     /// cleared when the pointer leaves the strip, and the tabs then spring to their new width.
     pub width_lock: Option<f32>,
     hovered: Option<String>,
-    /// A tab dragged from another strip hovers here, in window points ([`Self::set_incoming`]).
-    incoming: Option<[f32; 2]>,
-    /// The slot the strip opened its gap at for the incoming tab, as it last built; shared with
-    /// the copy the strip builds from, which finds it.
-    landing: Rc<Cell<Option<usize>>>,
-    /// In the copy the strip builds from: the incoming tab's slot and the gap's length.
-    gap: Option<(usize, f32)>,
+    /// A tab dragged from another strip hovers here ([`Self::set_incoming`]).
+    incoming: Incoming,
+}
+
+/// A tab dragged in from another strip (another window's), as one mode: no tab, or one hovering
+/// at a point in this window's points with the slot the strip opened its gap at.
+#[derive(Clone, Debug, Default, PartialEq)]
+enum Incoming {
+    #[default]
+    None,
+    Landing {
+        point: [f32; 2],
+        /// The slot the strip opens its gap at for the incoming tab, as it last built; shared
+        /// with the copy the strip builds from, which finds it.
+        slot: Rc<Cell<Option<usize>>>,
+        /// In the copy the strip builds from: the incoming tab's slot and the gap's length.
+        gap: Option<(usize, f32)>,
+    },
+}
+
+impl Incoming {
+    fn landing(point: [f32; 2]) -> Self {
+        Incoming::Landing { point, slot: Rc::new(Cell::new(None)), gap: None }
+    }
+    /// Where the tab hovers, only while no gesture of the strip's own is running.
+    fn point(&self) -> Option<[f32; 2]> {
+        match self {
+            Incoming::Landing { point, .. } => Some(*point),
+            Incoming::None => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -191,32 +215,46 @@ impl TabDragState {
     /// aside on the strip's reorder spring, as they do for a tab dragged within the strip, and
     /// close again when it leaves.
     pub fn set_incoming(&mut self, point: Option<[f32; 2]>) {
-        self.incoming = point;
-        if point.is_none() {
-            self.landing.set(None);
+        match (point, &mut self.incoming) {
+            (Some(point), Incoming::Landing { point: at, .. }) => *at = point,
+            (Some(point), Incoming::None) => self.incoming = Incoming::landing(point),
+            (None, incoming) => {
+                if let Incoming::Landing { slot, .. } = incoming {
+                    slot.set(None);
+                }
+                *incoming = Incoming::None;
+            }
         }
     }
     /// Where the incoming tab lands if it's let go now: the slot the strip opened its gap at, from
     /// the tabs' own lengths and the strip's scroll, as the strip last built. `None` before the
     /// strip built with it, or once it left.
     pub fn incoming_slot(&self) -> Option<usize> {
-        self.incoming.and(self.landing.get())
+        match &self.incoming {
+            Incoming::Landing { slot, .. } => slot.get(),
+            Incoming::None => None,
+        }
     }
     pub(super) fn incoming(&self) -> Option<[f32; 2]> {
-        self.incoming.filter(|_| matches!(self.gesture, Gesture::Idle { .. }))
+        self.incoming.point().filter(|_| matches!(self.gesture, Gesture::Idle { .. }))
     }
     /// Whether the strip opened a gap for an incoming tab: its tabs step aside on the reorder spring.
     pub(super) fn gap_open(&self) -> bool {
-        self.gap.is_some()
+        matches!(self.incoming, Incoming::Landing { gap: Some(_), .. })
     }
     /// The incoming tab's slot and length, in the copy the strip builds from.
     pub(super) fn gap(&self) -> Option<(usize, f32)> {
-        self.gap
+        match &self.incoming {
+            Incoming::Landing { gap, .. } => *gap,
+            Incoming::None => None,
+        }
     }
     /// In the copy the strip builds from: the incoming tab lands at `slot`, `pitch` long.
-    pub(super) fn open_gap(&mut self, slot: usize, pitch: f32) {
-        self.landing.set(Some(slot));
-        self.gap = Some((slot, pitch));
+    pub(super) fn open_gap(&mut self, slot_at: usize, pitch: f32) {
+        if let Incoming::Landing { slot, gap, .. } = &mut self.incoming {
+            slot.set(Some(slot_at));
+            *gap = Some((slot_at, pitch));
+        }
     }
 
     pub(super) fn set_hovered(&mut self, id: &str, inside: bool) {
