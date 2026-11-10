@@ -24,6 +24,16 @@ fn other_diagram_types_and_garbage_are_unsupported() {
 }
 
 #[test]
+fn directive_end_keeps_a_diagram_on_the_same_line() {
+    for directive in ["%%{init: {}}%%", "%%{\ninit: {}\n}%%"] {
+        let src = format!("{directive} mindmap\n  root\n    child");
+        let (_, lines) = cleaned(&src);
+        assert_eq!(lines.collect::<Vec<_>>(), [(0, "mindmap"), (2, "root"), (4, "child")]);
+        assert!(may_draw(&src));
+    }
+}
+
+#[test]
 fn node_stroke_width_reads_mermaid_px() {
     assert_eq!(parse_style_props("stroke:#333,stroke-width:2px").width, Some(2.0));
     assert_eq!(parse_style_props("stroke-width:4").width, Some(4.0));
