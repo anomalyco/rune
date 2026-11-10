@@ -23,6 +23,7 @@ import posixpath
 import re
 import select
 import shlex
+import shutil
 import signal
 import socket
 import subprocess
@@ -347,6 +348,43 @@ def crate_settings(crate_dir, stop):
     root = workspace_root(crate_dir, stop) or crate_dir
     profiles = read_toml(root / "Cargo.toml").get("profile", {})
     return doc.get("package", {}).get("name"), "rune-hot" in profiles
+
+
+def package_spec(crate_dir, stop):
+    """`name@version` for an app crate, or just its name when the manifest has no version."""
+    package = read_toml(crate_dir / "Cargo.toml").get("package", {})
+    version = package.get("version")
+    if isinstance(version, dict) and version.get("workspace"):
+        root = workspace_root(crate_dir, stop) or crate_dir
+        version = read_toml(root / "Cargo.toml").get("workspace", {}).get("package", {}).get("version")
+    return f"{package['name']}@{version}" if isinstance(version, str) else package.get("name")
+
+
+CARGO_SHIM = """#!/usr/bin/env python3
+# dx builds with `cargo build -p NAME`, which Cargo rejects as ambiguous when a dependency
+# shares the app's name; this names the app's version too.
+import os, sys
+real, name, spec = {real!r}, {name!r}, {spec!r}
+args = sys.argv[1:]
+for i, arg in enumerate(args):
+    if arg == name and i and args[i - 1] in ("-p", "--package"):
+        args[i] = spec
+    elif arg in ("-p" + name, "--package=" + name):
+        args[i] = arg[:-len(name)] + spec
+os.execv(real, [real, *args])
+"""
+
+
+def cargo_shim(directory, name, spec, path):
+    """A PATH whose `cargo` passes dx's `-p NAME` on as `-p NAME@VERSION`."""
+    real = shutil.which("cargo", path=path)
+    if not real or spec == name:
+        return path
+    directory.mkdir(parents=True, exist_ok=True)
+    shim = directory / "cargo"
+    shim.write_text(CARGO_SHIM.format(real=real, name=name, spec=spec))
+    shim.chmod(0o755)
+    return f"{directory}{os.pathsep}{path}"
 
 
 def dx_command(dx, port, package, features, bin, cargo_config, app_args):
@@ -867,6 +905,9 @@ def run(args):
         mirror = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "rune-dev" / hashlib.sha256(f"{ROOT}\0{crate}".encode()).hexdigest()[:12]
         name, has_profile = crate_settings(source(crate), source("external"))
         package = opts.package or name
+        if package == name:
+            spec = package_spec(source(crate), source("external"))
+            env["PATH"] = cargo_shim(mirror / ".rune-dev-bin", name, spec, env.get("PATH", os.defpath))
         cargo_config = [] if has_profile else PROFILE
         allowed = patchable(crate, opts.patch)
     cache = {}

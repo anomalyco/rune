@@ -1,0 +1,1 @@
+- **`rune-dev` builds an app crate that shares its name with a dependency.** dx asks Cargo for `-p NAME`, which Cargo rejects as ambiguous when the graph also holds a crate of that name; a `cargo` shim on dx's `PATH` now passes it on as `NAME@VERSION`.

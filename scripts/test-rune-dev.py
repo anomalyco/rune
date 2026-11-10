@@ -191,6 +191,21 @@ class ExternalTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "hot"):
             dev.crate_settings(self.root / "work/ui", self.root)
 
+    def test_dx_names_the_app_by_version_when_a_dependency_shares_its_name(self):
+        self.write("work/Cargo.toml", '[workspace]\n[workspace.package]\nversion = "2.0.0"\n')
+        self.write("work/app/Cargo.toml", '[package]\nname = "codec"\nversion.workspace = true\n')
+        self.write("solo/Cargo.toml", '[package]\nname = "solo"\n')
+        self.assertEqual(dev.package_spec(self.root / "work/app", self.root), "codec@2.0.0")
+        self.assertEqual(dev.package_spec(self.root / "solo", self.root), "solo")
+        self.write("real/cargo", "#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
+        (self.root / "real/cargo").chmod(0o755)
+        path = dev.cargo_shim(self.root / "bin", "codec", "codec@2.0.0", str(self.root / "real"))
+        self.assertEqual(path.split(os.pathsep)[0], str(self.root / "bin"))
+        run = lambda *args: dev.subprocess.run(["cargo", *args], env={"PATH": path + os.pathsep + os.defpath}, capture_output=True, text=True, check=True).stdout.split()
+        self.assertEqual(run("build", "-p", "codec", "--bin", "codec"), ["build", "-p", "codec@2.0.0", "--bin", "codec"])
+        self.assertEqual(run("rustc", "--package=codec", "-pcodec"), ["rustc", "--package=codec@2.0.0", "-pcodec@2.0.0"])
+        self.assertEqual(dev.cargo_shim(self.root / "none", "solo", "solo", str(self.root / "real")), str(self.root / "real"))
+
     def test_external_keys_read_the_original_files(self):
         self.write("app/Cargo.toml", '[package]\nname = "app"\n')
         self.write("app/src/ui/list.rs", "fn view() {}")
