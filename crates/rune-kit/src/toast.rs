@@ -1,6 +1,5 @@
 //! Toast and ToastRegion (`@opencode/ui` feedback/toast).
 
-use rune::machine::Effects;
 use rune::{Edge, El, Icon, TextStyle, Transition, Tx, col, el, icon, row, text};
 
 use crate::{Acts, Button, ButtonVariant, ControlSize, Kit, press_over, shadows};
@@ -141,64 +140,3 @@ impl Default for ToastRegion {
     }
 }
 
-/// The toasts a [`ToastRegion`] shows, oldest first, as Desktop's toast registry keeps them
-/// (`ui/src/feedback/toast/machine.ts`): a toast shown again while it's still in front updates
-/// in place and pulses rather than stacking a copy, and a buried copy moves to the front as a
-/// new toast. The app owns it and renders [`Self::entries`].
-#[derive(Clone, Debug)]
-pub struct ToastStack<O> {
-    issued: u64,
-    entries: Vec<ToastEntry<O>>,
-}
-
-/// One toast: its id, the key that coalesces copies (its title, description, variant and
-/// actions, say) and what it shows.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ToastEntry<O> {
-    pub id: u64,
-    pub key: String,
-    pub options: O,
-}
-
-pub enum ToastEvent<O> {
-    Shown { key: String, options: O },
-    /// One toast closed (its close button, its timer), or every toast (`None`).
-    Dismissed(Option<u64>),
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum ToastEffect {
-    /// The toast in front was shown again: pulse it.
-    Pulse(u64),
-}
-
-impl<O> Default for ToastStack<O> {
-    fn default() -> Self { Self { issued: 0, entries: Vec::new() } }
-}
-
-impl<O> ToastStack<O> {
-    pub fn entries(&self) -> &[ToastEntry<O>] { &self.entries }
-
-    pub fn step(&mut self, event: ToastEvent<O>) -> Effects<ToastEffect> {
-        match event {
-            ToastEvent::Dismissed(Some(id)) => {
-                self.entries.retain(|e| e.id != id);
-                Effects::none()
-            }
-            ToastEvent::Dismissed(None) => {
-                self.entries.clear();
-                Effects::none()
-            }
-            ToastEvent::Shown { key, options } => {
-                if let Some(front) = self.entries.last_mut().filter(|e| e.key == key) {
-                    front.options = options;
-                    return Effects::one(ToastEffect::Pulse(front.id));
-                }
-                self.entries.retain(|e| e.key != key);
-                self.issued += 1;
-                self.entries.push(ToastEntry { id: self.issued, key, options });
-                Effects::none()
-            }
-        }
-    }
-}
