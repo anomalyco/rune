@@ -9,8 +9,6 @@ compile_error!("web does not support Rune's hot or native-file-dialog features; 
 mod a11y;
 mod app;
 mod cold;
-mod cursor;
-mod desktop;
 mod flight;
 mod frame;
 mod gpu;
@@ -19,16 +17,13 @@ mod latest;
 mod native_menu;
 mod open_url;
 mod overlay;
-mod pixels;
 mod platform;
 mod popup_menu;
 mod quit;
 mod recorder;
-mod relaunch;
 mod shortcuts;
 mod states;
 mod system_material;
-mod titlebar;
 mod video;
 mod window;
 
@@ -63,7 +58,12 @@ pub mod time;
 pub mod tok;
 pub mod tooling;
 pub mod tray;
-pub mod windows;
+
+pub(crate) use image::pixels;
+pub(crate) use input::cursor;
+pub(crate) use quit::relaunch;
+pub(crate) use tooling::virtual_desktop as desktop;
+pub(crate) use window::titlebar;
 
 /// AccessKit's types, for [`Runtime::accessibility_tree`] and [`Runtime::accessibility_action`].
 pub use a11y::AccessibilityLink;
@@ -352,6 +352,7 @@ pub use video::Player;
 pub use video::PlayerState;
 pub use video::Video;
 pub use window::WindowHandle;
+pub use window::spec as windows;
 pub use windows::AnyWindowSpec;
 pub use windows::ConfiguredWindowOptions;
 pub use windows::Display;

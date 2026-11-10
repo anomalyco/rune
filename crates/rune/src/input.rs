@@ -1,6 +1,7 @@
 pub(crate) mod canvas_input;
 pub(crate) mod chord;
 mod chord_label;
+pub(crate) mod cursor;
 pub(crate) mod drop_pointer;
 #[cfg(target_os = "macos")]
 pub(crate) mod fn_key;
