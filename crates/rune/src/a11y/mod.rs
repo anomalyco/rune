@@ -24,9 +24,18 @@ mod windows;
 /// What the adapter's handlers heard since the host last looked.
 #[derive(Default)]
 pub(crate) struct Inbox {
-    activate: bool,
-    deactivate: bool,
+    asked: Asked,
     actions: Vec<ActionRequest>,
+}
+
+/// What a client asked of the runtime's tree. The later call wins, so the two cannot disagree.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(not(all(feature = "accessibility", target_os = "linux")), allow(dead_code))]
+enum Asked {
+    #[default]
+    Nothing,
+    Activate,
+    Deactivate,
 }
 
 /// The queue between the adapter's handlers (any thread) and the host's thread.
@@ -47,7 +56,7 @@ impl ActivationHandler for Activation {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
         // The host's thread builds the tree on the wake; the adapter answers with a
         // placeholder until then.
-        self.0.push(|i| i.activate = true);
+        self.0.push(|i| i.asked = Asked::Activate);
         None
     }
 }
@@ -63,7 +72,7 @@ impl ActionHandler for Actions {
 struct Deactivation(Arc<Shared>);
 impl DeactivationHandler for Deactivation {
     fn deactivate_accessibility(&mut self) {
-        self.0.push(|i| { i.deactivate = true; i.activate = false; });
+        self.0.push(|i| i.asked = Asked::Deactivate);
     }
 }
 
@@ -91,7 +100,7 @@ impl AccessibilityLink {
     }
 
     /// What an assistive client's first request does: the next update holds the whole tree.
-    pub fn activate(&self) { self.shared.push(|i| i.activate = true); }
+    pub fn activate(&self) { self.shared.push(|i| i.asked = Asked::Activate); }
 
     /// Runs what the link heard on `rt`, then returns the tree's changes for the adapter, as a
     /// host's turn does. `name` names the root when the runtime has no window title.
@@ -113,9 +122,15 @@ impl AccessibilityLink {
     fn receive<S: 'static>(&mut self, rt: &mut Runtime<S>, name: &str) -> bool {
         self.adopt(rt);
         let inbox = self.take();
-        if inbox.deactivate { rt.a11y_deactivate(); }
-        if inbox.activate { rt.a11y_activate(name); }
-        if log() && (inbox.activate || inbox.deactivate) { eprintln!("rune: a11y {name:?}: {}", if inbox.activate { "activated" } else { "deactivated" }); }
+        match inbox.asked {
+            Asked::Activate => rt.a11y_activate(name),
+            Asked::Deactivate => rt.a11y_deactivate(),
+            Asked::Nothing => {}
+        }
+        if log() && inbox.asked != Asked::Nothing {
+            let said = if inbox.asked == Asked::Activate { "activated" } else { "deactivated" };
+            eprintln!("rune: a11y {name:?}: {said}");
+        }
         let mut queued = false;
         for request in &inbox.actions {
             let ran = rt.a11y_action(request);
