@@ -48,6 +48,79 @@ impl Gate {
     }
 }
 
+/// A slot with a counting waker, and a request waiting on it that answers `n`.
+fn slot() -> (Slot<u32>, Arc<AtomicUsize>) {
+    let (waker, wakes) = counter();
+    (Slot::new(Some(waker)), wakes)
+}
+
+fn ask(slot: &mut Slot<u32>, n: u32) {
+    slot.wait(crate::time::Instant::now(), Box::new(move || Some(n)));
+}
+
+/// Starts the waiting request and returns its attempt.
+fn start(slot: &mut Slot<u32>) -> Attempt {
+    slot.start().expect("a waiting request").attempt
+}
+
+fn settled(slot: &Slot<u32>) -> Option<Option<u32>> {
+    match &slot.request { Request::Settled(answer) => Some(*answer), _ => None }
+}
+
+#[test]
+fn an_answer_lands_only_while_its_attempt_still_runs() {
+    let (mut slot, _) = slot();
+    ask(&mut slot, 1);
+    let first = start(&mut slot);
+    ask(&mut slot, 2);
+    assert!(slot.land(first, Ok(Some(1))).is_none(), "superseded while it ran");
+    assert!(matches!(slot.request, Request::Waiting(_)), "the newer request still waits");
+    let second = start(&mut slot);
+    assert!(slot.land(first, Ok(Some(1))).is_none(), "a stale answer can't land on a newer run");
+    assert!(slot.land(second, Ok(Some(2))).is_some(), "the newest wakes");
+    assert_eq!(settled(&slot), Some(Some(2)));
+    assert!(slot.land(second, Ok(Some(3))).is_none(), "and lands once");
+    assert_eq!(settled(&slot), Some(Some(2)));
+}
+
+#[test]
+fn an_answer_after_a_cancel_changes_nothing() {
+    let (mut slot, _) = slot();
+    ask(&mut slot, 1);
+    let running = start(&mut slot);
+    slot.cancel();
+    assert!(slot.land(running, Ok(Some(1))).is_none());
+    assert_eq!(settled(&slot), Some(None));
+    ask(&mut slot, 2);
+    slot.cancel();
+    assert!(slot.start().is_none(), "a cancelled request never starts");
+}
+
+#[test]
+fn a_waiting_request_starts_once_and_drops_the_untaken_answer() {
+    let (mut slot, _) = slot();
+    ask(&mut slot, 1);
+    let first = start(&mut slot);
+    assert!(slot.start().is_none(), "already running");
+    slot.land(first, Ok(Some(1)));
+    ask(&mut slot, 2);
+    assert_eq!(settled(&slot), None, "the newer request drops the untaken answer");
+}
+
+#[test]
+fn nothing_or_a_panic_settles_without_a_wake() {
+    let (mut slot, wakes) = slot();
+    ask(&mut slot, 1);
+    let a = start(&mut slot);
+    assert!(slot.land(a, Ok(None)).is_none());
+    assert_eq!(settled(&slot), Some(None));
+    ask(&mut slot, 2);
+    let b = start(&mut slot);
+    assert!(slot.land(b, Err(())).is_none());
+    assert_eq!(settled(&slot), Some(None));
+    assert_eq!(wakes.load(Ordering::SeqCst), 0);
+}
+
 #[test]
 fn the_newest_answer_wins_when_an_older_one_finishes_last() {
     let (search, wakes) = latest::<String>();

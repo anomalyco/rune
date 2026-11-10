@@ -92,20 +92,20 @@ impl<T: Send + 'static> Drive for Inner<T> {
     fn drive(&self) {
         let mut slot = self.slot.lock().unwrap();
         let job = loop {
-            let Some(due) = slot.next.as_ref().map(|j| j.due) else {
+            let super::Request::Waiting(job) = &slot.request else {
                 slot.driven = false;
                 return;
             };
-            let now = crate::time::Instant::now();
+            let (due, now) = (job.due, crate::time::Instant::now());
             if due <= now {
                 slot.driven = false;
-                break slot.next.take().unwrap();
+                break slot.start().expect("a waiting request");
             }
             slot = self.changed.wait_timeout(slot, due - now).unwrap().0;
         };
         drop(slot);
         // A panic prints through the hook and settles the request; the worker carries on.
         let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job.work)).map_err(drop);
-        self.land(job.generation, out);
+        self.land(job.attempt, out);
     }
 }

@@ -6,6 +6,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use crate::Waker;
+use crate::machine::{Attempt, Seq};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod pool;
@@ -87,28 +88,105 @@ pub(crate) struct Inner<T> {
 }
 
 struct Slot<T> {
-    /// The newest request's number; a cancel takes one too.
-    generation: u64,
-    /// The last generation that landed, was cancelled or panicked: pending while behind.
-    settled: u64,
-    /// The newest request, when it hasn't started yet.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    next: Option<Job<T>>,
-    /// A pool task owns `next`: it waits out its debounce and starts it.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    /// Issues each request's attempt, so an answer to an older one never matches.
+    seq: Seq,
+    request: Request<T>,
+    /// A pool task is queued or waiting out a debounce for this slot, and starts whatever is
+    /// `Waiting` when it comes due, so a newer request needs no task of its own. Outlives the
+    /// request it was submitted for: a cancel leaves the task to wake and find nothing.
+    #[cfg(not(target_arch = "wasm32"))]
     driven: bool,
-    answer: Option<T>,
     /// The key of the last `request_if_changed`; any other request or a cancel clears it.
     key: Option<Box<dyn Any + Send>>,
     /// None once the `Latest` drops, so nothing wakes after.
     waker: Option<Waker>,
 }
 
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+/// The newest request: an answer lands only while this still holds its attempt.
+enum Request<T> {
+    /// Nothing pending: the newest request landed (its answer, until taken), returned
+    /// nothing, panicked or was cancelled.
+    Settled(Option<T>),
+    /// Waiting out its debounce; a pool task starts it when it comes due.
+    #[cfg(not(target_arch = "wasm32"))]
+    Waiting(Job<T>),
+    /// Running. On the web the task that holds the work also waits out the debounce, so a
+    /// request is `Running` from the start.
+    Running(Attempt),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 struct Job<T> {
-    generation: u64,
+    attempt: Attempt,
     due: crate::time::Instant,
     work: Box<dyn FnOnce() -> Option<T> + Send>,
+}
+
+impl<T> Slot<T> {
+    fn new(waker: Option<Waker>) -> Self {
+        Slot {
+            seq: Seq::default(),
+            request: Request::Settled(None),
+            #[cfg(not(target_arch = "wasm32"))]
+            driven: false,
+            key: None,
+            waker,
+        }
+    }
+
+    /// Whether `attempt` is the newest request and still running, so its answer may land.
+    fn runs(&self, attempt: Attempt) -> bool {
+        matches!(self.request, Request::Running(a) if a == attempt)
+    }
+
+    /// A request that supersedes every earlier one, waiting until `due`; any answer not yet
+    /// taken is dropped.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn wait(&mut self, due: crate::time::Instant, work: Box<dyn FnOnce() -> Option<T> + Send>) {
+        let attempt = self.seq.next();
+        self.request = Request::Waiting(Job { attempt, due, work });
+    }
+
+    /// A request that supersedes every earlier one and runs in a task that holds its work.
+    #[cfg(target_arch = "wasm32")]
+    fn run(&mut self) -> Attempt {
+        let attempt = self.seq.next();
+        self.request = Request::Running(attempt);
+        attempt
+    }
+
+    /// Drops the newest request, running or not, and any answer not yet taken.
+    fn cancel(&mut self) {
+        self.request = Request::Settled(None);
+        self.key = None;
+    }
+
+    /// Starts the waiting request: its job, which now runs as `Running`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start(&mut self) -> Option<Job<T>> {
+        match std::mem::replace(&mut self.request, Request::Settled(None)) {
+            Request::Waiting(job) => {
+                self.request = Request::Running(job.attempt);
+                Some(job)
+            }
+            other => {
+                self.request = other;
+                None
+            }
+        }
+    }
+
+    /// A request's outcome. Settles it if it's still the newest, and returns the waker to call
+    /// when an answer landed; a panic or a `None` settles with nothing to land.
+    fn land(&mut self, attempt: Attempt, out: Result<Option<T>, ()>) -> Option<Waker> {
+        if !self.runs(attempt) {
+            return None;
+        }
+        let answer = out.ok().flatten();
+        let landed = answer.is_some();
+        self.request = Request::Settled(answer);
+        self.waker.clone().filter(|_| landed)
+    }
 }
 
 impl<T: Send + 'static> Default for Latest<T> {
@@ -129,7 +207,7 @@ impl<T: Send + 'static> Latest<T> {
 
     fn with(waker: Option<Waker>) -> Self {
         let inner = Arc::new(Inner {
-            slot: Mutex::new(Slot { generation: 0, settled: 0, next: None, driven: false, answer: None, key: None, waker }),
+            slot: Mutex::new(Slot::new(waker)),
             changed: Condvar::new(),
         });
         Latest {
@@ -216,14 +294,10 @@ impl<T: Send + 'static> Latest<T> {
         key: Option<Box<dyn Any + Send>>,
         work: Box<dyn FnOnce() -> Option<T> + Send>,
     ) {
-        slot.generation += 1;
-        slot.answer = None;
         slot.key = key;
-        let generation = slot.generation;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let due = crate::time::Instant::now() + self.debounce;
-            slot.next = Some(Job { generation, due, work });
+            slot.wait(crate::time::Instant::now() + self.debounce, work);
             self.inner.changed.notify_all();
             if !slot.driven {
                 slot.driven = true;
@@ -233,14 +307,15 @@ impl<T: Send + 'static> Latest<T> {
         }
         #[cfg(target_arch = "wasm32")]
         {
+            let attempt = slot.run();
             drop(slot);
             let (inner, debounce) = (self.inner.clone(), self.debounce);
             wasm_bindgen_futures::spawn_local(async move {
                 if !debounce.is_zero() {
                     sleep(debounce).await;
                 }
-                if inner.slot.lock().unwrap().generation == generation {
-                    inner.land(generation, Ok(work()));
+                if inner.slot.lock().unwrap().runs(attempt) {
+                    inner.land(attempt, Ok(work()));
                 }
             });
         }
@@ -249,25 +324,22 @@ impl<T: Send + 'static> Latest<T> {
     /// The newest request's answer, once: `Some` the first time after it lands, then `None`
     /// until another does. Call it from `poll` and return whether it gave one.
     pub fn take(&self) -> Option<T> {
-        self.inner.slot.lock().unwrap().answer.take()
+        match &mut self.inner.slot.lock().unwrap().request {
+            Request::Settled(answer) => answer.take(),
+            _ => None,
+        }
     }
 
     /// Whether the newest request is still waiting out its debounce or running: its answer
     /// hasn't landed, and it wasn't cancelled. For a spinner or a "Searching…" row.
     pub fn is_pending(&self) -> bool {
-        let slot = self.inner.slot.lock().unwrap();
-        slot.settled != slot.generation
+        !matches!(self.inner.slot.lock().unwrap().request, Request::Settled(_))
     }
 
     /// Drops every request and any answer not yet taken. A request already running finishes
     /// on its worker, but its answer never lands.
     pub fn cancel(&self) {
-        let mut slot = self.inner.slot.lock().unwrap();
-        slot.generation += 1;
-        slot.settled = slot.generation;
-        slot.next = None;
-        slot.answer = None;
-        slot.key = None;
+        self.inner.slot.lock().unwrap().cancel();
         self.inner.changed.notify_all();
     }
 }
@@ -283,16 +355,8 @@ impl<T: Send + 'static> Drop for Latest<T> {
 impl<T> Inner<T> {
     /// A request's outcome: its answer lands, waking once, if it's still the newest; a panic or
     /// a `None` settles it with nothing to land, and no wake.
-    fn land(&self, generation: u64, out: Result<Option<T>, ()>) {
-        let mut slot = self.slot.lock().unwrap();
-        if slot.generation != generation {
-            return;
-        }
-        slot.settled = generation;
-        let Ok(Some(answer)) = out else { return };
-        slot.answer = Some(answer);
-        let waker = slot.waker.clone();
-        drop(slot);
+    fn land(&self, attempt: Attempt, out: Result<Option<T>, ()>) {
+        let waker = self.slot.lock().unwrap().land(attempt, out);
         if let Some(wake) = waker {
             wake();
         }
