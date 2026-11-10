@@ -733,7 +733,7 @@ fn undo_group_is_unwind_safe_and_interacts_with_clear_history_paste_and_soft_bre
             panic!("boom");
         });
     }));
-    assert!(e.group.0.is_none(), "unwinding clears the active group");
+    assert!(!e.group.is_open(), "unwinding clears the active group");
     e.insert("?");
     assert_eq!(e.history.undo.len(), 1, "edits after a caught panic record again");
     e.undo();

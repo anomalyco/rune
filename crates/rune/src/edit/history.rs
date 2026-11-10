@@ -27,18 +27,31 @@ impl Snapshot {
     }
 }
 
-/// Active [`TextEdit::undo_group`] baseline (`Some(None)` on a secure field). Never cloned or
-/// compared so cloning or comparing a [`TextEdit`] mid-group stays clean.
+/// Whether a [`TextEdit::undo_group`] is open, and what its one step undoes to. Never cloned
+/// or compared, so cloning or comparing a [`TextEdit`] mid-group stays clean.
 #[derive(Default)]
-pub(super) struct ActiveGroup(pub(super) Option<Option<Snapshot>>);
+pub(super) enum Group {
+    #[default]
+    Closed,
+    /// Open on a field that records: the document as the group began.
+    Open(Snapshot),
+    /// Open on a secure field, which records nothing.
+    Unrecorded,
+}
 
-impl Clone for ActiveGroup {
-    fn clone(&self) -> Self {
-        Self(None)
+impl Group {
+    pub(super) fn is_open(&self) -> bool {
+        !matches!(self, Group::Closed)
     }
 }
 
-impl PartialEq for ActiveGroup {
+impl Clone for Group {
+    fn clone(&self) -> Self {
+        Group::Closed
+    }
+}
+
+impl PartialEq for Group {
     fn eq(&self, _: &Self) -> bool {
         true
     }
@@ -139,10 +152,21 @@ impl TextEdit {
     /// (after loading a sent message back into a composer to edit it, say).
     pub fn clear_history(&mut self) {
         self.history = Arc::default();
-        if self.group.0.is_some() {
+        if self.group.is_open() {
             self.sync_invariants();
-            self.group.0 = Some((!self.secure).then(|| self.snapshot_now()));
+            self.group = self.group_from_here();
         }
+    }
+
+    /// An undo group opened on the document as it is now.
+    pub(super) fn group_from_here(&self) -> Group {
+        if self.secure { Group::Unrecorded } else { Group::Open(self.snapshot_now()) }
+    }
+
+    /// Edits record undo steps: not on a secure field, and not inside an undo group, whose
+    /// edits become one step when it closes.
+    fn recording(&self) -> bool {
+        !self.secure && !self.group.is_open()
     }
 
     /// End a typing group on a pointer selection or focus change.
@@ -162,7 +186,7 @@ impl TextEdit {
     }
 
     pub(super) fn snapshot(&self) -> Option<Snapshot> {
-        (!self.secure && self.group.0.is_none()).then(|| self.snapshot_now())
+        self.recording().then(|| self.snapshot_now())
     }
 
     fn restore(&mut self, s: &Snapshot) {
@@ -179,7 +203,7 @@ impl TextEdit {
     }
 
     pub(super) fn record_change(&mut self, before: Option<Snapshot>, kind: EditKind) {
-        let Some(before) = before.filter(|_| !self.secure && self.group.0.is_none()) else {
+        let Some(before) = before.filter(|_| self.recording()) else {
             return;
         };
         let after = self.snapshot_now();
@@ -233,21 +257,24 @@ impl TextEdit {
     /// assert_eq!(e.text, "hi @ag");
     /// ```
     pub fn undo_group<R>(&mut self, f: impl FnOnce(&mut TextEdit) -> R) -> R {
-        if self.group.0.is_some() {
+        if self.group.is_open() {
             return f(self);
         }
         self.sync_invariants();
         self.break_history_group();
-        self.group.0 = Some((!self.secure).then(|| self.snapshot_now()));
+        self.group = self.group_from_here();
         struct Reset<'a>(&'a mut TextEdit);
         impl Drop for Reset<'_> {
             fn drop(&mut self) {
-                self.0.group.0 = None;
+                self.0.group = Group::Closed;
             }
         }
         let g = Reset(self);
         let r = f(g.0);
-        let before = g.0.group.0.take().flatten();
+        let before = match std::mem::take(&mut g.0.group) {
+            Group::Open(baseline) => Some(baseline),
+            Group::Closed | Group::Unrecorded => None,
+        };
         drop(g);
         self.sync_invariants();
         self.break_history_group();
@@ -257,7 +284,7 @@ impl TextEdit {
 
     /// Undo one typing group or discrete edit. Active IME composition is cancelled first.
     pub fn undo(&mut self) {
-        if self.secure || self.group.0.is_some() { return; }
+        if !self.recording() { return; }
         self.break_history_group();
         if self.preedit().is_some() { self.cancel_composition(); return; }
         let h = Arc::make_mut(&mut self.history);
@@ -269,7 +296,7 @@ impl TextEdit {
     }
 
     pub fn redo(&mut self) {
-        if self.secure || self.group.0.is_some() { return; }
+        if !self.recording() { return; }
         self.break_history_group();
         if self.preedit().is_some() { self.cancel_composition(); return; }
         let h = Arc::make_mut(&mut self.history);
@@ -279,3 +306,7 @@ impl TextEdit {
         Arc::make_mut(&mut self.history).undo.push_back(change);
     }
 }
+
+#[cfg(test)]
+#[path = "history_tests.rs"]
+mod tests;

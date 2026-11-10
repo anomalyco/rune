@@ -54,17 +54,18 @@ impl TextEdit {
         self.secure = secure;
         if secure {
             self.history = Arc::default();
-            if self.group.0.is_some() {
-                self.group.0 = Some(None);
+            if self.group.is_open() {
+                self.group = Group::Unrecorded;
             }
             self.marks.clear();
             self.blocks.clear();
             self.soft_breaks.clear();
             self.typing = Typing::Inherited;
             self.cancel_composition();
-        } else if self.group.0 == Some(None) {
+        } else if let Group::Unrecorded = self.group {
+            // A group opened while secure starts recording from here.
             self.sync_invariants();
-            self.group.0 = Some(Some(self.snapshot_now()));
+            self.group = Group::Open(self.snapshot_now());
         }
     }
 
