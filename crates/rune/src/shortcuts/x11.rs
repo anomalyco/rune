@@ -1,6 +1,6 @@
 //! Checked XGrabKey requests on a private connection, with lock-modifier variants. A held
 //! chord fires once (`x11_repeat`).
-use super::{Backend, Shortcut, ShortcutError, ShortcutId, Sink, parse::*};
+use super::{Backend, Shortcut, ShortcutError, ShortcutId, Sink, parse::*, x11_repeat};
 use std::{collections::HashMap, io::{Read, Write}, os::{fd::AsRawFd, unix::net::UnixStream}, sync::{Arc, Mutex}, thread::JoinHandle};
 use x11rb::{connection::Connection, errors::ReplyError, protocol::{ErrorKind, Event, xproto::*}, rust_connection::RustConnection};
 use winit::platform::scancode::PhysicalKeyExtScancode;
@@ -33,12 +33,16 @@ impl Native {
         let listener = std::thread::Builder::new().name("rune-shortcuts-x11".into()).spawn(move || {
             let mut fds = [libc::pollfd { fd: conn.stream().as_raw_fd(), events: libc::POLLIN, revents: 0 },
                 libc::pollfd { fd: wake.as_raw_fd(), events: libc::POLLIN, revents: 0 }];
-            let mut repeats = super::x11_repeat::Repeats::default();
+            let mut repeats = x11_repeat::Held::default();
             loop {
                 loop {
                     match conn.poll_for_event() {
-                        Ok(Some(Event::KeyRelease(event))) => repeats.release(event.detail, event.time),
-                        Ok(Some(Event::KeyPress(event))) if !repeats.press(event.detail, event.time) => {}
+                        Ok(Some(Event::KeyRelease(event))) => {
+                            let _ = x11_repeat::step(&mut repeats,
+                                x11_repeat::Event::Release { code: event.detail, time: event.time });
+                        }
+                        Ok(Some(Event::KeyPress(event))) if x11_repeat::step(&mut repeats,
+                            x11_repeat::Event::Press { code: event.detail, time: event.time }).is_empty() => {}
                         Ok(Some(Event::KeyPress(event))) => {
                             let id = keys.lock().unwrap().iter().find(|(_, grabs)| grabs.iter().any(|g|
                                 g.root == event.root && g.code == event.detail && g.mods == u16::from(event.state) & 0xff)).map(|(id, _)| *id);
