@@ -12,7 +12,7 @@ impl TextEdit {
             self.marks.clear();
             self.blocks.clear();
             self.soft_breaks.clear();
-            self.pending = None;
+            self.typing = Typing::Inherited;
             return;
         }
         let line_count = 1 + count_newlines(self.text.as_bytes());
@@ -34,12 +34,10 @@ impl TextEdit {
         self.normalize_marks();
         self.snap_to_pills();
         let anchor_line = self.line_of_byte(self.anchor);
-        if let Some((armed, ref mut marks)) = self.pending {
-            if armed != (self.anchor, self.focus) || self.blocks.get(anchor_line) == Some(&Block::Code) {
-                self.pending = None;
-            } else if let Some(bits) = self.allowed_marks {
-                marks.retain(|m| bits & 1 << m.kind_order() != 0);
-            }
+        if self.typing.at((self.anchor, self.focus)).is_none() || self.blocks.get(anchor_line) == Some(&Block::Code) {
+            self.typing = Typing::Inherited;
+        } else if let (Some(bits), Typing::Armed { marks, .. }) = (self.allowed_marks, &mut self.typing) {
+            marks.retain(|m| bits & 1 << m.kind_order() != 0);
         }
     }
 
@@ -240,10 +238,8 @@ impl TextEdit {
             if self.blocks.get(line_idx) == Some(&Block::Code) {
                 return Vec::new();
             }
-            if let Some((armed, ref p)) = self.pending
-                && armed == (self.anchor, self.focus)
-            {
-                return p.clone();
+            if let Some(p) = self.typing.at((self.anchor, self.focus)) {
+                return p.to_vec();
             }
             return self.inherited_marks_at(a);
         }
@@ -273,9 +269,7 @@ impl TextEdit {
     pub fn active_link(&self) -> Option<&str> {
         let (a, b) = self.range();
         if a == b {
-            if let Some((armed, ref p)) = self.pending
-                && armed == (self.anchor, self.focus)
-            {
+            if let Some(p) = self.typing.at((self.anchor, self.focus)) {
                 return p.iter().find_map(Mark::link_url);
             }
             let line_idx = self.line_of_byte(a);
@@ -292,13 +286,13 @@ impl TextEdit {
             .find_map(|m| (m.start <= a && b <= m.end).then(|| m.mark.link_url()).flatten())
     }
 
-    fn edit_pending_marks(&mut self, pos: usize, f: impl FnOnce(&mut Vec<Mark>)) {
+    fn edit_typing_style(&mut self, pos: usize, f: impl FnOnce(&mut Vec<Mark>)) {
         if self.blocks.get(self.line_of_byte(pos)) == Some(&Block::Code) {
             return;
         }
         let mut active = self.active_marks();
         f(&mut active);
-        self.pending = Some(((self.anchor, self.focus), active));
+        self.typing = Typing::Armed { at: (self.anchor, self.focus), marks: active };
     }
 
     /// Toggle `mark` on the selection, or in the pending typing style when the selection is empty.
@@ -312,7 +306,7 @@ impl TextEdit {
         let (a, b) = self.range();
         if a == b {
             if !mark.is_pill() {
-                self.edit_pending_marks(a, |active| {
+                self.edit_typing_style(a, |active| {
                     if let Some(pos) = active.iter().position(|m| m.same_kind(&mark)) {
                         if active[pos] == mark || matches!(mark, Mark::Link(ref u) if u.is_empty()) {
                             active.remove(pos);
@@ -342,7 +336,7 @@ impl TextEdit {
         let (a, b) = self.range();
         if a == b {
             if !mark.is_pill() {
-                self.edit_pending_marks(a, |active| {
+                self.edit_typing_style(a, |active| {
                     if let Some(pos) = active.iter().position(|m| m.same_kind(&mark)) {
                         active[pos] = mark;
                     } else {
@@ -358,7 +352,7 @@ impl TextEdit {
             self.marks.retain(|m| !m.mark.is_pill() || m.end <= a || m.start >= b);
         }
         self.marks.push(MarkRange { start: a, end: b, mark });
-        self.pending = None;
+        self.typing = Typing::Inherited;
         self.normalize_marks();
         self.record_change(before, EditKind::Other);
     }
@@ -374,7 +368,7 @@ impl TextEdit {
         if a == b {
             let mut active = self.active_marks();
             active.retain(|m| !m.same_kind(mark));
-            self.pending = Some(((self.anchor, self.focus), active));
+            self.typing = Typing::Armed { at: (self.anchor, self.focus), marks: active };
             return;
         }
         self.break_history_group();
@@ -395,7 +389,7 @@ impl TextEdit {
             }
         }
         self.marks = out;
-        self.pending = None;
+        self.typing = Typing::Inherited;
         self.normalize_marks();
         self.record_change(before, EditKind::Other);
     }
@@ -455,7 +449,7 @@ impl TextEdit {
             }
         }
         if block == Block::Code {
-            self.pending = None;
+            self.typing = Typing::Inherited;
         }
         self.normalize_marks();
         self.record_change(before, EditKind::Other);
@@ -488,7 +482,7 @@ impl TextEdit {
                 }
             }
             if block == Block::Code {
-                self.pending = None;
+                self.typing = Typing::Inherited;
             }
             self.normalize_marks();
             self.record_change(before, EditKind::Other);

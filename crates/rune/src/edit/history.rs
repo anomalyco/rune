@@ -173,7 +173,7 @@ impl TextEdit {
         self.marks = s.marks.clone();
         self.blocks = s.blocks.clone();
         self.soft_breaks = s.soft_breaks.clone();
-        self.pending = None;
+        self.typing = Typing::Inherited;
         self.cancel_composition();
         self.sync_invariants();
     }

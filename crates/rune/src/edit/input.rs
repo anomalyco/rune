@@ -13,13 +13,7 @@ impl TextEdit {
         self.sync_invariants();
         let before = self.snapshot();
         let (a, b) = self.range();
-        let inserted_marks = if let Some((armed, p)) = self.pending.take()
-            && armed == (self.anchor, self.focus)
-        {
-            p
-        } else {
-            self.inherited_marks_at(a)
-        };
+        let inserted_marks = self.typing.take_at((self.anchor, self.focus)).unwrap_or_else(|| self.inherited_marks_at(a));
         self.apply_text_and_attr_replace((a, b), "\n", &inserted_marks, Some(block_for_new_line), soft);
         self.record_change(before, EditKind::LineBreak);
     }
@@ -32,7 +26,7 @@ impl TextEdit {
             self.anchor = i;
         }
         self.snap_to_pills();
-        self.pending = None;
+        self.typing = Typing::Inherited;
     }
 
     fn move_h(&mut self, i: usize, extend: bool) {
@@ -45,7 +39,7 @@ impl TextEdit {
         } else {
             self.set(i, extend);
         }
-        self.pending = None;
+        self.typing = Typing::Inherited;
     }
 
     /// Applies one key. `layout` is the field's layout for the current text (device px).
@@ -252,7 +246,7 @@ impl TextEdit {
                 if m.shift {
                     self.focus = i;
                     self.snap_to_pills();
-                    self.pending = None;
+                    self.typing = Typing::Inherited;
                 } else {
                     self.set_caret(i);
                 }
@@ -265,7 +259,7 @@ impl TextEdit {
                 Some('a') => {
                     self.anchor = 0;
                     self.focus = self.text.len();
-                    self.pending = None;
+                    self.typing = Typing::Inherited;
                 }
                 Some('b' | 'i' | 'u') => {
                     if let Some(mark) = self.format_chord(ev) {
@@ -302,7 +296,7 @@ impl TextEdit {
         self.break_history_group();
         let before = self.snapshot();
         let n = self.text.len();
-        self.pending = None;
+        self.typing = Typing::Inherited;
         self.apply_text_and_attr_replace((n, n), "\n", &[], Some(Block::Paragraph), false);
         self.record_change(before, EditKind::Other);
     }
@@ -442,7 +436,7 @@ impl TextEdit {
                     self.marks.push(MarkRange { start: s_idx, end: e_idx, mark: m.mark.clone() });
                 }
             }
-            self.pending = None;
+            self.typing = Typing::Inherited;
             self.normalize_marks();
             self.record_change(before, EditKind::Other);
             return EditOutcome::default();
@@ -495,7 +489,7 @@ impl TextEdit {
                 mark: m.mark.clone(),
             });
         }
-        self.pending = None;
+        self.typing = Typing::Inherited;
         self.sync_invariants();
         self.record_change(before, EditKind::Other);
         EditOutcome::default()
