@@ -5,7 +5,7 @@ fn typing() -> Playground<Real> {
 }
 
 fn typed(rt: &Runtime<Real>) -> String {
-    rt.playground.as_ref().and_then(|p| p.scene.as_ref()).map(|s| s.state.typed.clone()).unwrap_or_default()
+    rt.playground.as_ref().and_then(|p| p.scene()).map(|s| s.state.typed.clone()).unwrap_or_default()
 }
 
 #[test]

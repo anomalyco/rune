@@ -100,8 +100,8 @@ pub(crate) fn stage_element(all: &[ElementInfo], key: &str) -> Option<usize> {
 impl<S: 'static> Live<S> {
     /// The open stage's own state: a scene's, or a story's.
     fn stage_state(&self) -> Option<&dyn Any> {
-        if !self.open { return None; }
-        if let Some(scene) = &self.scene { return Some(&scene.state); }
+        if !self.is_open() { return None; }
+        if let Some(scene) = self.scene() { return Some(&scene.state); }
         self.own().map(|(own, stage)| own.state_ref(stage))
     }
 }

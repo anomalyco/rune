@@ -183,8 +183,8 @@ impl<S: 'static> Live<S> {
     /// live page), and the playground's controls.
     pub(crate) fn states<'a>(&'a mut self, app: &'a mut S) -> States<'a> {
         let app = crate::runtime::handler_state(app);
-        if !self.open { return States::two(app, &mut self.controls); }
-        if let Some(scene) = &mut self.scene { return States::two(&mut scene.state, &mut self.controls); }
+        if !self.is_open() { return States::two(app, &mut self.controls); }
+        if let Showing::Scene(scene) = &mut self.showing { return States::two(&mut scene.state, &mut self.controls); }
         let Some(i) = self.selected.checked_sub(self.scenes.len()) else { return States::two(app, &mut self.controls) };
         match (self.pages.get(i), self.owned.get_mut(i)) {
             (Some(Page { kind: Kind::Own(own), .. }), Some(Some(stage))) => States::two(own.state(stage.as_mut()), &mut self.controls),
@@ -194,8 +194,8 @@ impl<S: 'static> Live<S> {
 
     pub(crate) fn states_ref<'a>(&'a self, app: &'a S) -> StatesRef<'a> {
         let app = crate::runtime::handler_state_ref(app);
-        if !self.open { return StatesRef::two(app, &self.controls); }
-        if let Some(scene) = &self.scene { return StatesRef::two(&scene.state, &self.controls); }
+        if !self.is_open() { return StatesRef::two(app, &self.controls); }
+        if let Some(scene) = self.scene() { return StatesRef::two(&scene.state, &self.controls); }
         match self.own() {
             Some((own, stage)) => StatesRef::two(own.state_ref(stage), &self.controls),
             None => StatesRef::two(app, &self.controls),
@@ -206,24 +206,24 @@ impl<S: 'static> Live<S> {
     /// the keyboard, unless [`Playground::typing`] asks for every key: in the list, a letter may
     /// be J, K or a trigger's.
     pub(crate) fn stage_hears(&self, app: &S) -> bool {
-        !self.open || self.region == Region::Stage || self.typing(app)
+        !self.is_open() || self.region == Region::Stage || self.typing(app)
     }
 
     /// The state `AppSpec::on_key` gets: the stage's when it's an app state, none on a story
     /// with its own.
     pub(crate) fn key_state<'a>(&'a mut self, app: &'a mut S) -> Option<&'a mut S> {
-        if !self.open { return Some(app); }
+        if !self.is_open() { return Some(app); }
         if matches!(self.page(), Some((_, Page { kind: Kind::Own(_), .. }))) { return None; }
-        match &mut self.scene {
-            Some(scene) => Some(&mut scene.state),
-            None => Some(app),
+        match &mut self.showing {
+            Showing::Scene(scene) => Some(&mut scene.state),
+            _ => Some(app),
         }
     }
 
     /// Whether [`Playground::typing`] gives the stage's `on_key` every key first.
     pub(crate) fn typing(&self, app: &S) -> bool {
-        let Some(typing) = self.typing.filter(|_| self.open) else { return false };
-        match (&self.scene, self.page()) {
+        let Some(typing) = self.typing.filter(|_| self.is_open()) else { return false };
+        match (self.scene(), self.page()) {
             (Some(scene), _) => typing(&scene.state),
             (None, Some((_, Page { kind: Kind::Own(_), .. }))) => false,
             (None, _) => typing(app),
@@ -237,8 +237,8 @@ impl<S: 'static> Live<S> {
     }
 
     pub(crate) fn polls(&self) -> bool {
-        if !self.open { return false; }
-        match (&self.scene, self.own()) {
+        if !self.is_open() { return false; }
+        match (self.scene(), self.own()) {
             (Some(scene), _) => self.poll.is_some() || !scene.script.is_empty(),
             (None, Some((own, stage))) => own.polls(stage),
             (None, None) => false,
@@ -249,8 +249,8 @@ impl<S: 'static> Live<S> {
     /// for a scene or the story's own. The keys the steps press wait in [`Live::take_pressed`].
     pub(crate) fn poll_stage(&mut self, t: f64, tx: &mut Tx) -> bool {
         self.now = t;
-        if !self.open { return false; }
-        if let Some(scene) = &mut self.scene {
+        if !self.is_open() { return false; }
+        if let Showing::Scene(scene) = &mut self.showing {
             let ran = scene.run(t, tx, &mut self.pressed);
             return self.poll.is_some_and(|poll| poll(&mut scene.state, t, tx)) || ran;
         }
