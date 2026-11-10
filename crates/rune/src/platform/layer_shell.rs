@@ -33,6 +33,19 @@ pub(crate) enum Input {
     Physical(crate::PhysicalInput, Option<crate::KeyEvent>),
 }
 
+/// Whether the pointer is over the surface: the serial of its enter, which setting a cursor
+/// needs, and the cursor the surface set since (none: the one it arrived with).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum Over {
+    #[default]
+    Outside,
+    Inside { serial: u32, cursor: Option<crate::el::Cursor> },
+}
+
+impl Over {
+    fn inside(self) -> bool { matches!(self, Over::Inside { .. }) }
+}
+
 #[derive(Default)]
 struct State {
     /// The size the compositor asked for in its latest configure (0 means ours).
@@ -41,8 +54,7 @@ struct State {
     closed: bool,
     input: Vec<Input>,
     surface: Option<WlSurface>,
-    pointer_inside: bool,
-    /// The serial of the latest button event over the surface, until `dispatch` records it.
+    over: Over,
     keyboard_focus: bool,
     want_pointer: bool,
     want_keys: bool,
@@ -54,9 +66,6 @@ struct State {
     /// `wp_cursor_shape_manager_v1` when the compositor has it, and its device for `pointer`.
     shapes: Option<WpCursorShapeManagerV1>,
     shape: Option<WpCursorShapeDeviceV1>,
-    /// The serial of the pointer's enter while it is over the surface, and the cursor set since.
-    entered: Option<u32>,
-    shown: Option<crate::el::Cursor>,
     keyboard: Option<WlKeyboard>,
     xkb: Option<xkbcommon::xkb::State>,
 }
@@ -88,8 +97,7 @@ impl State {
         if !pointer && let Some(p) = self.pointer.take() {
             if let Some(shape) = self.shape.take() { shape.destroy(); }
             if p.version() >= 3 { p.release(); }
-            self.pointer_inside = false;
-            self.entered = None;
+            self.over = Over::Outside;
         }
         if !touch && let Some(t) = self.touch.take() { if t.version() >= 3 { t.release(); } self.touch_id = None; }
         if !keyboard && let Some(k) = self.keyboard.take() { if k.version() >= 3 { k.release(); } self.xkb = None; self.keyboard_focus = false; }
@@ -99,19 +107,17 @@ impl Dispatch<WlPointer, ()> for State {
     fn event(state: &mut Self, _: &WlPointer, event: wl_pointer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         match event {
             wl_pointer::Event::Enter { serial, surface, surface_x, surface_y } => {
-                state.pointer_inside = state.surface.as_ref() == Some(&surface);
                 // Until the surface sets a cursor, the pointer keeps the one it arrived with.
-                state.entered = state.pointer_inside.then_some(serial);
-                state.shown = None;
-                if state.pointer_inside { state.input.push(Input::Move(surface_x as f32, surface_y as f32)); }
+                let inside = state.surface.as_ref() == Some(&surface);
+                state.over = if inside { Over::Inside { serial, cursor: None } } else { Over::Outside };
+                if inside { state.input.push(Input::Move(surface_x as f32, surface_y as f32)); }
             }
-            wl_pointer::Event::Motion { surface_x, surface_y, .. } if state.pointer_inside => state.input.push(Input::Move(surface_x as f32, surface_y as f32)),
+            wl_pointer::Event::Motion { surface_x, surface_y, .. } if state.over.inside() => state.input.push(Input::Move(surface_x as f32, surface_y as f32)),
             wl_pointer::Event::Leave { surface, .. } if state.surface.as_ref() == Some(&surface) => {
-                state.pointer_inside = false;
-                state.entered = None;
+                state.over = Over::Outside;
                 state.input.push(Input::Leave);
             }
-            wl_pointer::Event::Button { button: 0x110, state: wayland_client::WEnum::Value(button), .. } if state.pointer_inside => {
+            wl_pointer::Event::Button { button: 0x110, state: wayland_client::WEnum::Value(button), .. } if state.over.inside() => {
                 let pressed = button == wl_pointer::ButtonState::Pressed;
                 state.input.push(Input::Button(pressed));
                 if pressed && let Some(xkb) = &state.xkb {
@@ -119,7 +125,7 @@ impl Dispatch<WlPointer, ()> for State {
                 }
             }
             // BTN_RIGHT: the secondary gesture, as a window's right button is.
-            wl_pointer::Event::Button { button: 0x111, state: wayland_client::WEnum::Value(button), .. } if state.pointer_inside => {
+            wl_pointer::Event::Button { button: 0x111, state: wayland_client::WEnum::Value(button), .. } if state.over.inside() => {
                 state.input.push(Input::Secondary(button == wl_pointer::ButtonState::Pressed));
             }
             _ => {}
@@ -499,14 +505,14 @@ impl LayerSurface {
     /// cursor-shape-v1 only `Cursor::Hidden` applies; others keep the cursor the pointer
     /// arrived with, such as a terminal's I-beam.
     pub fn set_cursor(&mut self, want: crate::el::Cursor) {
-        let (Some(serial), Some(pointer)) = (self.state.entered, &self.state.pointer) else { return };
-        if self.state.shown == Some(want) { return; }
+        let (Over::Inside { serial, cursor }, Some(pointer)) = (self.state.over, &self.state.pointer) else { return };
+        if cursor == Some(want) { return; }
         match (want, &self.state.shape) {
             (crate::el::Cursor::Hidden, _) => pointer.set_cursor(serial, None, 0, 0),
             (want, Some(device)) => device.set_shape(serial, shape(want)),
             (_, None) => return,
         }
-        self.state.shown = Some(want);
+        self.state.over = Over::Inside { serial, cursor: Some(want) };
         let _ = self.queue.flush();
     }
 
