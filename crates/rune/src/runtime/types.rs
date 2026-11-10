@@ -392,7 +392,7 @@ impl GlideTo {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct ScrollState {
     pub(super) offset: f64,
     pub(super) mode: ScrollMode,
@@ -427,9 +427,10 @@ pub(super) struct ScrollState {
     pub(super) x: AxisScroll,
     /// What `El::on_scroll_offset` was last told (`runtime/scroll/watch.rs`).
     pub(super) told: Option<crate::ScrollPos>,
-    /// The `El::on_scroll_offset` handler that was told, by address: a rebuilt view's new
-    /// handler hears where the viewport stands, though it didn't move.
-    pub(super) told_by: usize,
+    /// The `El::on_scroll_offset` handler that was told: a rebuilt view's new handler hears
+    /// where the viewport stands, though it didn't move. Held weakly, which keeps its
+    /// allocation, so a later handler can't be built at its address and pass for it.
+    pub(super) told_by: Option<std::rc::Weak<dyn Fn(crate::ScrollPos)>>,
     /// The spring `Tx::scroll_to_with` gave the running glide, on both axes; `GLIDE` when none.
     pub(super) spring: Option<rune_motion::Spring>,
     /// Frames left in which an app's instant scroll (`Tx::scroll_to_instant` and the like)

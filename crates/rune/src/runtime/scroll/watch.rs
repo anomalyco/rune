@@ -36,11 +36,11 @@ impl<S: 'static> Runtime<S> {
             let direction = match n.flow { crate::el::Flow::Ltr => crate::Direction::Ltr, crate::el::Flow::Rtl => crate::Direction::Rtl };
             let at = crate::ScrollPos { offset: [st.x.offset as f32, st.offset as f32 + st.slack.height()], max: [st.x.max as f32, st.max as f32],
                 viewport, drawn, direction };
-            let by = Rc::as_ptr(f) as *const () as usize;
             let by_hand = std::mem::take(&mut st.by_hand);
             let prev = st.told.replace(at);
             let changed = prev != Some(at);
-            let new_handler = std::mem::replace(&mut st.told_by, by) != by;
+            let new_handler = !st.told_by.as_ref().is_some_and(|by| std::ptr::addr_eq(by.as_ptr(), Rc::as_ptr(f)));
+            if new_handler { st.told_by = Some(Rc::downgrade(f)); }
             if changed || new_handler {
                 let scrolled = by_hand && prev.is_some_and(|old| (old.offset[0] - at.offset[0]).abs() > 0.01 || (old.offset[1] - at.offset[1]).abs() > 0.01);
                 calls.push((f.clone(), at, scrolled));
