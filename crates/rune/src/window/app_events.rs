@@ -7,8 +7,8 @@ impl Windows {
     /// per quit. A session ending now (`ending`) then closes the windows as their close buttons
     /// would, before the loop ends, as a macOS logout does: the OS may end the process next.
     pub(super) fn quit(&mut self, event_loop: &ActiveEventLoop, ending: bool) {
-        use crate::quit::{Effect, Event};
-        for effect in crate::quit::send(Event::Start { ending }) {
+        use crate::quit::{After, Effect, Event};
+        for effect in crate::quit::send(Event::Start { ending, after: After::Exit }) {
             match effect {
                 Effect::RunHooks => {
                     for host in self.hosts.iter_mut().flatten() { host.quit_hook(); }
@@ -21,6 +21,8 @@ impl Windows {
                     }
                     crate::quit::send(Event::WindowsClosed);
                 }
+                // Only the loop's end relaunches.
+                Effect::Relaunch => {}
             }
         }
     }

@@ -24,6 +24,7 @@ mod platform;
 mod popup_menu;
 mod quit;
 mod recorder;
+mod relaunch;
 mod shortcuts;
 mod states;
 mod system_material;

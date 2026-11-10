@@ -483,7 +483,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             r.shortcuts.drain();
             r.clipboard.receive(&mut r.rt);
             let requests = r.shared.take();
-            if requests.quit { self.end(event_loop); return; }
+            if requests.quit.is_some() { self.end(event_loop); return; }
             if requests.window.as_ref().is_some_and(|r| !matches!(r, crate::app::WindowRequest::Open(_) | crate::app::WindowRequest::Show))
                 || requests.position.is_some() || requests.place.is_some() || requests.minimize {
                 web_sys::console::warn_1(&"Native window management is ignored on web.".into());

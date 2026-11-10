@@ -126,6 +126,19 @@ pub enum Shell {
     /// Close the window as if the user had: `App::keep_running` keeps the app and its state.
     Close,
     Quit,
+    /// Quit, then start the app again (`Tx::relaunch`).
+    Relaunch,
+}
+
+impl Shell {
+    /// What follows the app's exit for this request, when it quits.
+    pub(crate) fn after(self) -> Option<crate::quit::After> {
+        match self {
+            Shell::Close => None,
+            Shell::Quit => Some(crate::quit::After::Exit),
+            Shell::Relaunch => Some(crate::quit::After::Relaunch),
+        }
+    }
 }
 
 impl Tx {
@@ -231,7 +244,15 @@ impl Tx {
     /// Quit the app after this handler, whether or not it keeps running without a window. Every
     /// open window's `App::on_quit` runs as it ends; no `on_close` does.
     pub fn quit(&mut self) {
-        self.shell = Some(Shell::Quit);
+        self.shell = self.shell.max(Some(Shell::Quit));
+    }
+
+    /// Quit the app as [`Tx::quit`] does, then start it again, with the same arguments, once
+    /// this process has exited, as Electron's `app.relaunch()` and `app.quit()` do: a menu's
+    /// Restart, or an update put in place. A system shutdown or logoff that ends the app first
+    /// doesn't start it again.
+    pub fn relaunch(&mut self) {
+        self.shell = Some(Shell::Relaunch);
     }
 
     /// Minimize this window after this handler, as its minimize button would (winit's

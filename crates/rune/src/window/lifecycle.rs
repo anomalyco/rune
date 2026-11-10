@@ -103,10 +103,10 @@ impl<S: 'static> Host<S> {
         self.clipboard.flush(&mut self.rt);
         // The next frame polls for the wake.
         if wake && !quiet { self.rt.cancel_timer_frame(); }
-        if requests.quit {
+        if let Some(after) = requests.quit {
             // Quitting from now on: a close later in this turn closes for the quit.
             // `Windows::exiting` carries out its effects.
-            let _ = crate::quit::send(crate::quit::Event::Start { ending: false });
+            let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
             // A tracking menu holds the event loop until it ends.
             self.popup.cancel(&mut self.rt);
             self.file_dialog.cancel(&mut self.rt);
@@ -204,8 +204,9 @@ impl<S: 'static> Host<S> {
         for _ in 0..8 {
             let minimize = std::mem::take(&mut self.rt.minimize_request);
             match self.rt.shell_request.take() {
-                Some(Shell::Quit) => {
-                    let _ = crate::quit::send(crate::quit::Event::Start { ending: false });
+                Some(shell @ (Shell::Quit | Shell::Relaunch)) => {
+                    let after = shell.after().unwrap_or(crate::quit::After::Exit);
+                    let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
                     self.popup.cancel(&mut self.rt);
                     self.file_dialog.cancel(&mut self.rt);
                     event_loop.exit();
@@ -248,7 +249,10 @@ impl<S: 'static> Host<S> {
         self.rt.set_live_visible(false);
         // While the window still shows its last frames.
         if let Some(trace) = &mut self.trace { trace.settle_presents(crate::frame::present_time::SETTLE); }
-        if self.rt.shell_request.take() == Some(Shell::Quit) {
+        if let Some(after) = self.rt.shell_request.take().and_then(Shell::after) {
+            if after == crate::quit::After::Relaunch {
+                let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
+            }
             self.popup.cancel(&mut self.rt);
             self.file_dialog.cancel(&mut self.rt);
             event_loop.exit();

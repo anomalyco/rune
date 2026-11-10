@@ -52,6 +52,8 @@ fn run_configured(_: Factory, _: Args, _: bool) -> Result<(), String> {
 #[cfg(not(target_arch = "wasm32"))]
 fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), String> {
     let _ = accessory;
+    // A relaunch goes on once the app it restarts has exited.
+    crate::relaunch::wait_for_previous();
     crate::tooling::perf_warn::launch::run_starts();
     crate::platform::ready_signal::run_starts();
     #[cfg(target_os = "macos")]

@@ -295,7 +295,7 @@ impl<S: 'static> Member for Window<S> {
             self.rt.minimize_request = false;
             match self.rt.shell_request.take() {
                 Some(Shell::Close) => self.close(),
-                Some(Shell::Quit) | None => {}
+                Some(Shell::Quit | Shell::Relaunch) | None => {}
             }
             if self.visible {
                 self.rt.open_popup_headless();
