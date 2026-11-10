@@ -33,16 +33,35 @@ struct Desk {
     /// Indices into `members`, bottom first.
     z: Vec<usize>,
     key: Option<usize>,
-    /// The app is frontmost: its key window has focus.
+    /// The app is frontmost: its key window has focus. Kept while no window is key, so the
+    /// next one to take the keyboard knows whether it has focus.
     active: bool,
-    /// The window under the pointer, and the one a press captured.
-    hover: Option<usize>,
-    pressed: Option<usize>,
+    pointer: Pointer,
     /// The window a script's file drag is over.
     files: Option<usize>,
     /// Output origin in global points, and points to pixels.
     origin: (f32, f32),
     scale: f32,
+}
+
+/// Which window the pointer is over.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Pointer {
+    /// Over the backdrop, or no window yet.
+    Out,
+    Over(usize),
+    /// A press on the window captured the pointer: moves and the release go to it, wherever
+    /// the pointer is, until the release.
+    Pressed(usize),
+}
+
+impl Pointer {
+    fn window(self) -> Option<usize> {
+        match self {
+            Pointer::Out => None,
+            Pointer::Over(i) | Pointer::Pressed(i) => Some(i),
+        }
+    }
 }
 
 impl Desk {
@@ -81,17 +100,13 @@ impl Desk {
         if changes.keys && self.can_key(i) { self.focus(Some(i), true); }
     }
 
-    /// A hidden key window hands the keyboard to the topmost visible one.
+    /// A hidden window lets go of the pointer, and a hidden key window hands the keyboard to
+    /// the topmost visible one.
     fn settle_key(&mut self) {
+        if self.pointer.window().is_some_and(|i| !self.members[i].visible()) { self.pointer = Pointer::Out; }
         if self.key.is_some_and(|k| self.can_key(k)) { return; }
         let next = self.topmost_visible();
         if next != self.key { self.focus(next, self.active); }
-        for i in [self.hover, self.pressed].into_iter().flatten() {
-            if !self.members[i].visible() {
-                if self.hover == Some(i) { self.hover = None; }
-                if self.pressed == Some(i) { self.pressed = None; }
-            }
-        }
     }
 
     /// Applies what every window asked, again while draining one window makes requests of
@@ -152,7 +167,7 @@ impl Desk {
     }
 
     fn pointer(&self) -> Option<(f32, f32)> {
-        let i = self.hover?;
+        let i = self.pointer.window()?;
         let (x, y) = self.members[i].pointer()?;
         let (ox, oy) = self.origin_pt(i);
         Some((x + ox, y + oy))
@@ -160,14 +175,17 @@ impl Desk {
 
     /// Pointer input at `at` in output points: to the window a press captured, else the one under it.
     fn pointer_input(&mut self, kind: &Kind, at: (f32, f32)) {
-        let captured = (matches!(kind, Kind::Move) || kind.is_up()).then_some(self.pressed).flatten();
+        let captured = match self.pointer {
+            Pointer::Pressed(i) if matches!(kind, Kind::Move) || kind.is_up() => Some(i),
+            _ => None,
+        };
         let target = captured.or_else(|| self.hit(at));
-        if (matches!(kind, Kind::Move) || kind.is_down()) && self.hover != target && captured.is_none() {
-            if let Some(h) = self.hover { self.members[h].leave(); }
-            self.hover = target;
+        if (matches!(kind, Kind::Move) || kind.is_down()) && self.pointer.window() != target && captured.is_none() {
+            if let Some(h) = self.pointer.window() { self.members[h].leave(); }
+            self.pointer = target.map_or(Pointer::Out, Pointer::Over);
         }
         if kind.is_down() {
-            self.pressed = target;
+            self.pointer = target.map_or(Pointer::Out, Pointer::Pressed);
             match target {
                 // A click brings its window to the front with the keyboard, activating the app.
                 Some(i) => { self.front(i); self.focus(Some(i), true); }
@@ -175,7 +193,7 @@ impl Desk {
                 None => self.focus(self.key, false),
             }
         }
-        if kind.is_up() { self.pressed = None; }
+        if kind.is_up() && let Pointer::Pressed(i) = self.pointer { self.pointer = Pointer::Over(i); }
         if let Some(i) = target {
             let (ox, oy) = self.origin_pt(i);
             self.members[i].input(kind, (at.0 - ox, at.1 - oy));
@@ -269,7 +287,7 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
     });
     let n = members.len();
     let mut desk = Desk {
-        members, z: (0..n).collect(), key: None, active: true, hover: None, pressed: None, files: None,
+        members, z: (0..n).collect(), key: None, active: true, pointer: Pointer::Out, files: None,
         origin: (primary[0], primary[1]), scale,
     };
     let members = &desk.members;

@@ -1,0 +1,1 @@
+- `--desktop` runs: a window that hides while a press it captured is still down lets go of the pointer, so later moves and clicks reach the window under the pointer instead of the hidden one.
