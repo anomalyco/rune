@@ -10,6 +10,7 @@
 //! on the thread that started them, levels come from the fake samples in 10 ms blocks (so they
 //! don't depend on the frame rate), and `stop` writes a real WAV.
 
+mod control;
 mod fake;
 mod meter;
 #[cfg(target_os = "macos")]
@@ -25,7 +26,10 @@ pub use fake::FakeMicrophone;
 pub use meter::Level;
 
 use crate::live::Live;
-use crate::video::headless_clock;
+use crate::machine::Attempt;
+use crate::video::{WakerSlot, headless_clock};
+use control::{Control, Effect, Event, FakeSession, Phase, Source};
+#[cfg(test)]
 use meter::Meter;
 use std::path::{Path, PathBuf};
 use crate::time::Instant;
@@ -121,7 +125,7 @@ pub struct Recorder {
 impl std::fmt::Debug for Recorder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let c = self.shared.ctl.lock().unwrap();
-        f.debug_struct("Recorder").field("path", &self.shared.path).field("state", &c.state).field("elapsed", &c.elapsed).finish_non_exhaustive()
+        f.debug_struct("Recorder").field("path", &self.shared.path).field("state", &c.status()).field("elapsed", &c.elapsed).finish_non_exhaustive()
     }
 }
 
@@ -140,41 +144,11 @@ pub(crate) struct Shared {
     /// The published level: peak and RMS f32 bits in one word, so reads take no lock and
     /// always see a matching pair.
     level: AtomicU64,
-    /// Whether a fake recording has run since the last start, so `level` knows to catch it
-    /// up without locking for a device recording.
+    /// Whether a fake recording is in progress, so `level` knows to catch it up without
+    /// locking for a device recording.
     faked: AtomicBool,
     live: Live<f32>,
-    /// The app's waker and the generation it last heard about.
-    waker: Mutex<Option<(crate::Waker, u64)>>,
-    /// The device recording, if any, with the attempt that opened it.
-    native: Mutex<Option<(u64, backend::Session)>>,
-}
-
-struct Control {
-    state: RecorderState,
-    generation: u64,
-    /// Bumped by every start and cancel, so a late permission answer or device report for an
-    /// earlier attempt is ignored.
-    attempt: u64,
-    elapsed: f64,
-    /// (clock, elapsed) when recording last (re)started.
-    anchor: Option<(f64, f64)>,
-    /// Elapsed follows the headless clock of the starting thread, not the wall clock.
-    virtual_clock: bool,
-    fake: Option<FakeSession>,
-    /// What an interruption saved, for `stop`.
-    saved: Option<Recording>,
-    /// The file the current attempt writes.
-    path: PathBuf,
-}
-
-struct FakeSession {
-    input: fake::Input,
-    path: PathBuf,
-    meter: Meter,
-    /// Samples folded into the meter.
-    metered: u64,
-    unplug: Option<f64>,
+    waker: WakerSlot,
 }
 
 /// Whether recorders use the device backend: in a window, and always in a browser (which has
@@ -211,11 +185,8 @@ pub(crate) fn headless_frame(_clock: f64) {
 pub(crate) fn headless_reset() {
     let recorders: Vec<Arc<Shared>> = HEADLESS.with_borrow(|h| h.iter().filter_map(Weak::upgrade).collect());
     for r in recorders {
-        let mut c = r.ctl.lock().unwrap();
-        c.advance();
-        if c.anchor.is_some() {
-            c.anchor = Some((0.0, c.elapsed));
-        }
+        r.apply(Event::Tick);
+        r.ctl.lock().unwrap().restart_clock();
     }
 }
 
@@ -234,28 +205,15 @@ impl Recorder {
         let wav = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("wav"));
         let format = if wav { RecordFormat::Wav } else { RecordFormat::Aac };
         let opts = Options { format, sample_rate: 44_100, channels: 1, fake: None };
-        let ctl = Control {
-            state: RecorderState::Idle,
-            generation: 0,
-            attempt: 0,
-            elapsed: 0.0,
-            anchor: None,
-            virtual_clock: false,
-            fake: None,
-            saved: None,
-            path: path.clone(),
-        };
-        let silent = Level::SILENT;
         Self {
             shared: Arc::new(Shared {
-                path,
                 opts: Mutex::new(opts),
-                ctl: Mutex::new(ctl),
-                level: AtomicU64::new(pack(silent)),
+                ctl: Mutex::new(Control::new(path.clone())),
+                path,
+                level: AtomicU64::new(pack(Level::SILENT)),
                 faked: AtomicBool::new(false),
                 live: Live::new(0.0),
-                waker: Mutex::new(None),
-                native: Mutex::new(None),
+                waker: WakerSlot::default(),
             }),
         }
     }
@@ -308,105 +266,31 @@ impl Recorder {
     /// (the state is `Starting` meanwhile); without it the state becomes `Failed`.
     pub fn start(&self) {
         let shared = &self.shared;
-        let fake = shared.fake_mic();
-        let attempt = {
-            let mut c = shared.ctl.lock().unwrap();
-            if matches!(c.state, RecorderState::Starting | RecorderState::Recording | RecorderState::Paused) {
-                return;
-            }
-            c.attempt += 1;
-            c.elapsed = 0.0;
-            c.anchor = None;
-            c.fake = None;
-            shared.faked.store(false, Ordering::Relaxed);
-            c.saved = None;
-            let format = if fake.is_some() { RecordFormat::Wav } else { shared.opts.lock().unwrap().format };
-            c.path = with_format_extension(&shared.path, format);
-            c.virtual_clock = fake.is_some() && !devices();
-            c.set(RecorderState::Starting);
-            c.attempt
-        };
-        shared.publish(Level::SILENT);
-        if fake.is_none()
-            && let Err(e) = backend::preflight()
-        {
-            shared.fail(attempt, e);
-            return shared.settle();
-        }
-        let permission = match &fake {
-            Some(mic) => mic.permission,
-            None => backend::permission(),
-        };
-        match permission {
-            MicPermission::Granted => shared.launch(attempt, fake),
-            MicPermission::Denied => shared.fail(attempt, DENIED.into()),
-            MicPermission::Restricted => shared.fail(attempt, RESTRICTED.into()),
-            MicPermission::Undetermined => match fake {
-                Some(_) => {
-                    let answer = shared.resolve_fake_permission();
-                    match answer {
-                        MicPermission::Granted => shared.launch(attempt, shared.fake_mic()),
-                        _ => shared.fail(attempt, denial(answer)),
-                    }
-                }
-                None => {
-                    let weak = Arc::downgrade(shared);
-                    backend::request_permission(Box::new(move |answer| {
-                        let Some(shared) = weak.upgrade() else { return };
-                        match answer {
-                            MicPermission::Granted => shared.launch(attempt, None),
-                            _ => shared.fail(attempt, denial(answer)),
-                        }
-                        shared.settle();
-                    }));
-                }
-            },
-        }
+        let fake = shared.fake_mic().is_some();
+        let format = if fake { RecordFormat::Wav } else { shared.opts.lock().unwrap().format };
+        let path = with_format_extension(&shared.path, format);
+        shared.apply(Event::Start { path, virtual_clock: fake && !devices() });
         shared.settle();
     }
 
     /// Pauses a recording; elapsed time and the file stop growing.
     pub fn pause(&self) {
-        let shared = &self.shared;
-        {
-            let mut c = shared.lock_following();
-            if c.state != RecorderState::Recording {
-                return;
-            }
-            c.anchor = None;
-            c.set(RecorderState::Paused);
-        }
-        shared.publish(Level::SILENT);
-        if let Some((_, s)) = &*shared.native.lock().unwrap() {
-            backend::pause(s);
-        }
-        shared.settle();
+        self.shared.apply(Event::Pause);
+        self.shared.settle();
     }
 
     /// Resumes a paused recording into the same file.
     pub fn resume(&self) {
-        let shared = &self.shared;
-        {
-            let mut c = shared.ctl.lock().unwrap();
-            if c.state != RecorderState::Paused {
-                return;
-            }
-            c.anchor = c.now().map(|now| (now, c.elapsed));
-            c.set(RecorderState::Recording);
-        }
-        if let Some((_, s)) = &*shared.native.lock().unwrap() {
-            backend::resume(s);
-        }
-        shared.settle();
+        self.shared.apply(Event::Resume);
+        self.shared.settle();
     }
 
     /// Stops and finalizes the file (blocking for the few milliseconds that takes), returning
     /// it. After an interruption, returns what was saved. Stopping while `Starting` abandons
     /// the start; stopping when not recording returns an error and changes nothing.
     pub fn stop(&self) -> Result<Recording, String> {
-        let shared = &self.shared;
-        let result = shared.stop();
-        shared.settle();
+        let result = self.shared.apply(Event::Stop).unwrap_or_else(|| Err(control::NOT_RECORDING.into()));
+        self.shared.settle();
         result
     }
 
@@ -415,36 +299,16 @@ impl Recorder {
     /// the app's and stays, and cancelling a start that hasn't opened the input yet leaves an
     /// earlier file at the same path alone.
     pub fn cancel(&self) {
-        let shared = &self.shared;
-        let path = {
-            let mut c = shared.ctl.lock().unwrap();
-            if !matches!(c.state, RecorderState::Starting | RecorderState::Recording | RecorderState::Paused | RecorderState::Interrupted(_)) {
-                return;
-            }
-            c.attempt += 1;
-            c.anchor = None;
-            c.set(RecorderState::Idle);
-            // A device recording in progress deletes its own file, as it alone knows whether
-            // it created one yet.
-            c.fake.take().map(|f| f.path).or_else(|| c.saved.take().map(|s| s.path))
-        };
-        shared.publish(Level::SILENT);
-        let session = shared.native.lock().unwrap().take();
-        if let Some((_, session)) = session {
-            backend::cancel(session);
-        }
-        if let Some(path) = path {
-            let _ = std::fs::remove_file(path);
-        }
-        shared.settle();
+        self.shared.apply(Event::Cancel);
+        self.shared.settle();
     }
 
     pub fn state(&self) -> RecorderState {
-        self.shared.lock_following().state.clone()
+        self.shared.lock_following().status()
     }
     /// Whether audio is being captured now (`Recording`, not paused).
     pub fn is_recording(&self) -> bool {
-        self.shared.lock_following().state == RecorderState::Recording
+        self.shared.lock_following().status() == RecorderState::Recording
     }
     /// Seconds recorded, pauses excluded: 0 until recording starts, held while paused and
     /// after stopping. Live from the clock in a window; the virtual clock headless.
@@ -469,7 +333,7 @@ impl Recorder {
     /// interrupted or failed. Hand it the app's `setup` waker so `poll` hears a permission
     /// answer or an unplugged microphone. Nothing calls it for elapsed time or levels.
     pub fn set_waker(&self, waker: crate::Waker) {
-        *self.shared.waker.lock().unwrap() = Some((waker, 0));
+        self.shared.waker.set(waker);
         self.shared.settle();
     }
 }
@@ -477,32 +341,28 @@ impl Recorder {
 const DENIED: &str = "microphone access is denied: allow it in System Settings > Privacy & Security > Microphone";
 const RESTRICTED: &str = "microphone access is restricted on this device";
 
-fn denial(answer: MicPermission) -> String {
-    if answer == MicPermission::Restricted { RESTRICTED.into() } else { DENIED.into() }
+fn granted(answer: MicPermission) -> Result<(), String> {
+    match answer {
+        MicPermission::Granted => Ok(()),
+        MicPermission::Restricted => Err(RESTRICTED.into()),
+        MicPermission::Denied | MicPermission::Undetermined => Err(DENIED.into()),
+    }
 }
 
 impl Control {
-    fn set(&mut self, state: RecorderState) {
-        if self.state != state {
-            self.state = state;
-            self.generation += 1;
-        }
-    }
+    /// The clock elapsed time follows.
     fn now(&self) -> Option<f64> {
         if self.virtual_clock { headless_clock() } else { Some(wall_now()) }
     }
-    /// Elapsed follows the clock while recording. A clock behind the anchor (a new runtime on
-    /// this thread) restarts from here.
-    fn advance(&mut self) {
-        if self.state != RecorderState::Recording {
-            return;
-        }
-        let Some(now) = self.now() else { return };
-        match self.anchor {
-            Some((clock, elapsed)) if clock <= now => self.elapsed = elapsed + (now - clock),
-            _ => self.anchor = Some((now, self.elapsed)),
-        }
-    }
+}
+
+/// An effect that runs with the control unlocked, as it blocks, re-enters or does I/O.
+enum Unlocked {
+    Ask(Attempt),
+    OpenFake { attempt: Attempt, mic: FakeMicrophone, path: PathBuf },
+    StopDevice { attempt: Attempt, session: backend::Session },
+    CancelDevice(backend::Session),
+    RemoveFile(PathBuf),
 }
 
 impl Shared {
@@ -520,15 +380,116 @@ impl Shared {
         }
     }
 
-    /// The control, caught up to the clock.
-    fn lock_following(&self) -> std::sync::MutexGuard<'_, Control> {
-        let fake = self.ctl.lock().unwrap().fake.is_some();
-        if fake {
-            self.follow();
+    /// Steps the machine with `event` and carries out what it asks, feeding the answers back
+    /// in, until nothing is left. Returns what `stop` replies, if it was asked. Opening a
+    /// device and its answer happen under one lock, so no other event lands between them.
+    /// Call with no locks held; the caller settles.
+    fn apply(self: &Arc<Self>, event: Event) -> Option<Result<Recording, String>> {
+        let mut events = vec![event];
+        let mut reply = None;
+        while !events.is_empty() {
+            let mut unlocked = Vec::new();
+            {
+                let mut c = self.ctl.lock().unwrap();
+                while !events.is_empty() {
+                    let event = events.remove(0);
+                    let now = c.now();
+                    for effect in c.step(event, now) {
+                        match effect {
+                            Effect::Silence => self.publish(Level::SILENT),
+                            Effect::Publish(level) => self.publish(level),
+                            Effect::Ask { attempt } => unlocked.push(Unlocked::Ask(attempt)),
+                            Effect::Open { attempt } => match self.fake_mic() {
+                                Some(mic) => unlocked.push(Unlocked::OpenFake { attempt, mic, path: c.path.clone() }),
+                                None => {
+                                    let opts = self.opts.lock().unwrap().clone();
+                                    events.push(Event::DeviceOpened { attempt, opened: backend::start(self, attempt, &c.path, &opts) });
+                                }
+                            },
+                            Effect::FollowHeadless => self.follow_headless(),
+                            Effect::PauseDevice => c.device().into_iter().for_each(backend::pause),
+                            Effect::ResumeDevice => c.device().into_iter().for_each(backend::resume),
+                            Effect::StopDevice { attempt, session } => unlocked.push(Unlocked::StopDevice { attempt, session }),
+                            Effect::CancelDevice(session) => unlocked.push(Unlocked::CancelDevice(session)),
+                            Effect::RemoveFile(path) => unlocked.push(Unlocked::RemoveFile(path)),
+                            Effect::Reply(result) => reply = Some(result),
+                        }
+                    }
+                }
+                self.faked.store(c.is_fake(), Ordering::Relaxed);
+            }
+            events.extend(unlocked.into_iter().filter_map(|job| self.run(job)));
         }
-        let mut c = self.ctl.lock().unwrap();
-        c.advance();
-        c
+        reply
+    }
+
+    fn run(self: &Arc<Self>, job: Unlocked) -> Option<Event> {
+        match job {
+            Unlocked::Ask(attempt) => self.ask(attempt),
+            Unlocked::OpenFake { attempt, mic, path } => {
+                let opened = mic.open().and_then(|input| {
+                    // The file exists from the start, as a device recording's does.
+                    fake::write_wav(&path, &input, 0)?;
+                    Ok(FakeSession::new(input, path, mic.unplug))
+                });
+                Some(Event::FakeOpened { attempt, opened })
+            }
+            Unlocked::StopDevice { attempt, session } => Some(Event::Stopped { attempt, result: backend::stop(session) }),
+            Unlocked::CancelDevice(session) => {
+                backend::cancel(session);
+                None
+            }
+            Unlocked::RemoveFile(path) => {
+                let _ = std::fs::remove_file(path);
+                None
+            }
+        }
+    }
+
+    /// Microphone access for `attempt`: the answer now, or later from the system's prompt.
+    fn ask(self: &Arc<Self>, attempt: Attempt) -> Option<Event> {
+        let fake = self.fake_mic();
+        if fake.is_none()
+            && let Err(e) = backend::preflight()
+        {
+            return Some(Event::Permission { attempt, granted: Err(e) });
+        }
+        let answer = match (fake.as_ref().map_or_else(backend::permission, |mic| mic.permission), fake) {
+            (MicPermission::Undetermined, Some(_)) => self.resolve_fake_permission(),
+            (MicPermission::Undetermined, None) => {
+                let weak = Arc::downgrade(self);
+                backend::request_permission(Box::new(move |answer| {
+                    let Some(shared) = weak.upgrade() else { return };
+                    shared.apply(Event::Permission { attempt, granted: granted(answer) });
+                    shared.settle();
+                }));
+                return None;
+            }
+            (answer, _) => answer,
+        };
+        Some(Event::Permission { attempt, granted: granted(answer) })
+    }
+
+    /// Follow this recorder on every headless frame of this thread, once.
+    fn follow_headless(self: &Arc<Self>) {
+        HEADLESS.with_borrow_mut(|h| {
+            h.retain(|w| w.strong_count() > 0);
+            if !h.iter().any(|w| std::ptr::eq(w.as_ptr(), Arc::as_ptr(self))) {
+                h.push(Arc::downgrade(self));
+            }
+        });
+    }
+
+    /// The control, caught up to the clock.
+    fn lock_following(self: &Arc<Self>) -> std::sync::MutexGuard<'_, Control> {
+        self.follow();
+        self.ctl.lock().unwrap()
+    }
+
+    /// A recording catches up to the clock: elapsed, a fake's levels, and an unplugged input.
+    fn follow(self: &Arc<Self>) {
+        self.apply(Event::Tick);
+        self.settle();
     }
 
     fn publish(&self, level: Level) {
@@ -539,229 +500,33 @@ impl Shared {
     /// Tells the app's waker that the state changed. Call with no locks held.
     fn settle(&self) {
         let generation = self.ctl.lock().unwrap().generation;
-        let waker = match &mut *self.waker.lock().unwrap() {
-            Some((waker, heard)) if *heard != generation => {
-                *heard = generation;
-                Some(waker.clone())
-            }
-            _ => None,
-        };
-        if let Some(waker) = waker {
-            waker();
-        }
-    }
-
-    fn fail(&self, attempt: u64, error: String) {
-        let mut c = self.ctl.lock().unwrap();
-        if c.attempt == attempt && c.state == RecorderState::Starting {
-            c.set(RecorderState::Failed(error));
-        }
-    }
-
-    /// Permission is granted: open the input.
-    fn launch(self: &Arc<Self>, attempt: u64, fake: Option<FakeMicrophone>) {
-        if self.ctl.lock().unwrap().attempt != attempt {
-            return;
-        }
-        match fake {
-            Some(mic) => self.launch_fake(attempt, mic),
-            None => {
-                let opts = self.opts.lock().unwrap().clone();
-                let path = self.ctl.lock().unwrap().path.clone();
-                let mut native = self.native.lock().unwrap();
-                match backend::start(self, attempt, &path, &opts) {
-                    Ok(session) => *native = Some((attempt, session)),
-                    Err(e) => self.fail(attempt, e),
-                }
-            }
-        }
-    }
-
-    fn launch_fake(self: &Arc<Self>, attempt: u64, mic: FakeMicrophone) {
-        let path = self.ctl.lock().unwrap().path.clone();
-        let opened = mic.open().and_then(|input| {
-            // The file exists from the start, as a device recording's does.
-            fake::write_wav(&path, &input, 0)?;
-            Ok(input)
-        });
-        let mut c = self.ctl.lock().unwrap();
-        if c.attempt != attempt || c.state != RecorderState::Starting {
-            return;
-        }
-        match opened {
-            Ok(input) => {
-                c.fake = Some(FakeSession { input, path, meter: Meter::default(), metered: 0, unplug: mic.unplug });
-                self.faked.store(true, Ordering::Relaxed);
-                c.anchor = c.now().map(|now| (now, 0.0));
-                c.set(RecorderState::Recording);
-                if c.virtual_clock {
-                    HEADLESS.with_borrow_mut(|h| {
-                        h.retain(|w| w.strong_count() > 0);
-                        if !h.iter().any(|w| std::ptr::eq(w.as_ptr(), Arc::as_ptr(self))) {
-                            h.push(Arc::downgrade(self));
-                        }
-                    });
-                }
-            }
-            Err(e) => c.set(RecorderState::Failed(e)),
-        }
-    }
-
-    /// A fake recording catches up to the clock: elapsed, levels, and an unplugged input.
-    fn follow(&self) {
-        let level = {
-            let mut c = self.ctl.lock().unwrap();
-            c.advance();
-            if c.state != RecorderState::Recording {
-                return;
-            }
-            let elapsed = c.elapsed;
-            let Some(f) = c.fake.as_mut() else { return };
-            if let Some(unplug) = f.unplug.filter(|t| elapsed + CLOCK_SLACK >= *t) {
-                c.elapsed = unplug;
-                c.anchor = None;
-                let f = c.fake.take().unwrap();
-                let frames = frames_at(unplug, f.input.rate);
-                match fake::write_wav(&f.path, &f.input, frames) {
-                    Ok(()) => {
-                        c.saved = Some(Recording { path: f.path, duration: frames as f64 / f.input.rate as f64 });
-                        c.set(RecorderState::Interrupted("the microphone went away".into()));
-                    }
-                    Err(e) => c.set(RecorderState::Failed(e)),
-                }
-                drop(c);
-                self.publish(Level::SILENT);
-                self.settle();
-                return;
-            }
-            let rate = f.input.rate;
-            let target = frames_at(elapsed, rate);
-            let block = (rate / 100).max(1) as u64;
-            // Only the last few seconds still show in the meter.
-            f.metered = f.metered.max(target.saturating_sub(10 * rate as u64) / block * block);
-            while f.metered + block <= target {
-                let input = &f.input;
-                f.meter.push_samples((f.metered..f.metered + block).map(|i| input.sample(i)), rate);
-                f.metered += block;
-            }
-            f.meter.level()
-        };
-        self.publish(level);
-    }
-
-    fn stop(&self) -> Result<Recording, String> {
-        let fake = self.ctl.lock().unwrap().fake.is_some();
-        if fake {
-            self.follow();
-        }
-        let mut c = self.ctl.lock().unwrap();
-        c.advance();
-        match c.state.clone() {
-            RecorderState::Recording | RecorderState::Paused => {}
-            RecorderState::Interrupted(_) => {
-                let saved = c.saved.take().ok_or_else(|| "the interrupted recording wasn't saved".to_string());
-                c.set(RecorderState::Stopped);
-                return saved;
-            }
-            RecorderState::Starting => {
-                c.attempt += 1;
-                c.set(RecorderState::Idle);
-                drop(c);
-                if let Some((_, session)) = self.native.lock().unwrap().take() {
-                    backend::cancel(session);
-                }
-                return Err("stopped before recording started".into());
-            }
-            RecorderState::Failed(e) => return Err(e),
-            RecorderState::Idle | RecorderState::Stopped => return Err("not recording".into()),
-        }
-        c.anchor = None;
-        let result = match c.fake.take() {
-            Some(f) => {
-                let frames = frames_at(c.elapsed, f.input.rate);
-                fake::write_wav(&f.path, &f.input, frames).map(|()| Recording { path: f.path, duration: frames as f64 / f.input.rate as f64 })
-            }
-            None => {
-                let path = c.path.clone();
-                drop(c);
-                let session = self.native.lock().unwrap().take();
-                let stopped = match session {
-                    Some((_, session)) => backend::stop(session).map(|duration| Recording { path, duration }),
-                    None => Err("not recording".into()),
-                };
-                c = self.ctl.lock().unwrap();
-                // The device may have gone away while this waited.
-                if let RecorderState::Interrupted(_) = c.state
-                    && let Some(saved) = c.saved.take()
-                {
-                    c.set(RecorderState::Stopped);
-                    drop(c);
-                    self.publish(Level::SILENT);
-                    return Ok(saved);
-                }
-                stopped
-            }
-        };
-        match &result {
-            Ok(_) => c.set(RecorderState::Stopped),
-            Err(e) => c.set(RecorderState::Failed(e.clone())),
-        }
-        drop(c);
-        self.publish(Level::SILENT);
-        result
+        self.waker.tell(generation);
     }
 
     // Reports from a device backend's thread.
 
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub(crate) fn began(&self, attempt: u64) {
-        {
-            let mut c = self.ctl.lock().unwrap();
-            if c.attempt != attempt || c.state != RecorderState::Starting {
-                return;
-            }
-            c.anchor = Some((wall_now(), 0.0));
-            c.set(RecorderState::Recording);
-        }
+    pub(crate) fn began(self: &Arc<Self>, attempt: Attempt) {
+        self.apply(Event::Began { attempt });
         self.settle();
     }
 
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub(crate) fn failed(&self, attempt: u64, error: String) {
-        self.fail(attempt, error);
-        // Only this attempt's session: a late report from an earlier one leaves a newer alone.
-        let session = {
-            let mut native = self.native.lock().unwrap();
-            if native.as_ref().is_some_and(|(a, _)| *a == attempt) { native.take() } else { None }
-        };
-        drop(session);
+    pub(crate) fn failed(self: &Arc<Self>, attempt: Attempt, error: String) {
+        self.apply(Event::Failed { attempt, error });
         self.settle();
     }
 
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub(crate) fn interrupted(&self, attempt: u64, reason: String, duration: f64) {
-        {
-            let mut c = self.ctl.lock().unwrap();
-            if c.attempt != attempt || !matches!(c.state, RecorderState::Recording | RecorderState::Paused) {
-                return;
-            }
-            c.advance();
-            c.anchor = None;
-            c.saved = Some(Recording { path: c.path.clone(), duration });
-            c.set(RecorderState::Interrupted(reason));
-        }
-        self.publish(Level::SILENT);
+    pub(crate) fn interrupted(self: &Arc<Self>, attempt: Attempt, reason: String, duration: f64) {
+        self.apply(Event::Interrupted { attempt, reason, duration });
         self.settle();
     }
 
     /// A level from the device, published unless the recording moved on.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub(crate) fn metered(&self, attempt: u64, level: Level) {
-        let c = self.ctl.lock().unwrap();
-        if c.attempt == attempt && c.state == RecorderState::Recording {
-            drop(c);
-            self.publish(level);
-        }
+    pub(crate) fn metered(self: &Arc<Self>, attempt: Attempt, level: Level) {
+        self.apply(Event::Metered { attempt, level });
     }
 }
 
@@ -770,26 +535,23 @@ impl Shared {
 impl Drop for Shared {
     fn drop(&mut self) {
         let c = self.ctl.get_mut().unwrap_or_else(PoisonError::into_inner);
-        c.advance();
-        if let Some(f) = c.fake.take()
-            && matches!(c.state, RecorderState::Recording | RecorderState::Paused)
-        {
-            let elapsed = f.unplug.map_or(c.elapsed, |t| c.elapsed.min(t));
-            let _ = fake::write_wav(&f.path, &f.input, frames_at(elapsed, f.input.rate));
-        }
-        if let Some((_, session)) = self.native.get_mut().unwrap_or_else(PoisonError::into_inner).take() {
-            backend::finish(session);
+        let now = c.now();
+        let source = match std::mem::replace(&mut c.phase, Phase::Idle) {
+            Phase::Recording { source, mut anchor, .. } => {
+                control::advance(&mut c.elapsed, &mut anchor, now);
+                source
+            }
+            Phase::Paused { source, .. } => source,
+            Phase::Opening { session, .. } => Source::Device(session),
+            _ => return,
+        };
+        match source {
+            Source::Fake(fake) => {
+                let _ = fake.write(c.elapsed);
+            }
+            Source::Device(session) => backend::finish(session),
         }
     }
-}
-
-/// Clock sums drift by a few ulps (60 steps of 1/60 s fall just short of 1 s): treat elapsed
-/// time this close to a boundary as on it, so frame rate never moves a sample or an unplug.
-const CLOCK_SLACK: f64 = 1e-9;
-
-/// Whole samples recorded after `seconds` at `rate`.
-fn frames_at(seconds: f64, rate: u32) -> u64 {
-    ((seconds + CLOCK_SLACK) * rate as f64).floor().max(0.0) as u64
 }
 
 /// `path` with an extension that holds `format`, which AVAudioRecorder picks the container by.

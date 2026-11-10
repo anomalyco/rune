@@ -4,6 +4,7 @@
 //! access. CoreAudio's default input device is watched for changes.
 use super::meter::Meter;
 use super::{MicPermission, Options, RecordFormat, Recorder, Shared};
+use crate::machine::Attempt;
 use objc2_av_foundation::AVMediaTypeAudio;
 use objc2_foundation_video::{NSDictionary, NSError, NSString, NSURL};
 use objc2_video::rc::{Allocated, Retained, autoreleasepool};
@@ -179,7 +180,7 @@ pub(super) enum Command {
     Cancel(Sender<()>),
 }
 
-pub(super) fn start(shared: &Arc<Shared>, attempt: u64, path: &Path, opts: &Options) -> Result<Session, String> {
+pub(super) fn start(shared: &Arc<Shared>, attempt: Attempt, path: &Path, opts: &Options) -> Result<Session, String> {
     let (commands, rx) = mpsc::channel();
     let (weak, path, opts) = (Arc::downgrade(shared), path.to_path_buf(), opts.clone());
     std::thread::Builder::new()
@@ -250,7 +251,7 @@ fn open(path: &Path, opts: &Options) -> Result<(Retained<AnyObject>, Option<u32>
     Ok((recorder, Some(device)))
 }
 
-fn run(weak: Weak<Shared>, attempt: u64, path: PathBuf, opts: Options, commands: Receiver<Command>) {
+fn run(weak: Weak<Shared>, attempt: Attempt, path: PathBuf, opts: Options, commands: Receiver<Command>) {
     ON_RECORDER_THREAD.set(true);
     let opened = autoreleasepool(|_| open(&path, &opts));
     let (recorder, device) = match opened {

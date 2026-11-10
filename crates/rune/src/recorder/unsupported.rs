@@ -18,7 +18,7 @@ pub(super) fn preflight() -> Result<(), String> {
     Err("recording isn't supported on this platform".into())
 }
 
-pub(super) fn start(_: &Arc<Shared>, _: u64, _: &Path, _: &Options) -> Result<Session, String> {
+pub(super) fn start(_: &Arc<Shared>, _: crate::machine::Attempt, _: &Path, _: &Options) -> Result<Session, String> {
     Err("recording isn't supported on this platform".into())
 }
 
