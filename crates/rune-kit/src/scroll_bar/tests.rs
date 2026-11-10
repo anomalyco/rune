@@ -355,6 +355,39 @@ fn the_thumb_widens_under_the_pointer_and_while_held_without_a_view_run() {
 }
 
 #[test]
+fn a_held_thumb_whose_release_is_lost_narrows_once_the_pointer_moves_on() {
+    fn shown(s: &(usize, bool), _: &mut rune::Cx<(usize, bool)>) -> El {
+        let k = Kit::neutral(true);
+        let area = col()
+            .key("scroll")
+            .w_full()
+            .h(100.0)
+            .scroll(rune::ScrollSpec { stick_bottom: false })
+            .child(col().children((0..s.0).map(|i| el().key(format!("row{i}")).w_full().h(20.0))))
+            .scroll_bar(&k);
+        col().size(200.0, 100.0).children(s.1.then_some(area))
+    }
+    let mut rt = rune::Runtime::new((20usize, true), shown, (200.0, 100.0), rune::Env::new(true, 1.0));
+    rt.set_system_scroll_bars(ScrollBars::Always);
+    frames(&mut rt, 2);
+    rt.pointer_move(195.0, 10.0);
+    rt.pointer_down(195.0, 10.0);
+    rt.pointer_move(100.0, 30.0);
+    frames(&mut rt, 30);
+    assert_eq!(rect(&rt, "thumb")[2], THUMB_HOVER);
+    // The bar goes mid-drag, so its release never reaches it, and comes back.
+    rt.update(|s, _| s.1 = false);
+    frames(&mut rt, 2);
+    rt.pointer_up(100.0, 30.0);
+    rt.update(|s, _| s.1 = true);
+    frames(&mut rt, 30);
+    rt.pointer_move(110.0, 40.0);
+    rt.pointer_move(120.0, 50.0);
+    frames(&mut rt, 30);
+    assert_eq!(rect(&rt, "thumb")[2], THUMB, "the press ended once the pointer moved where the drag didn't hear it");
+}
+
+#[test]
 fn a_styled_thumb_takes_its_colours_and_widths_at_rest_and_under_the_pointer() {
     thread_local! {
         static STYLED_RUNS: Cell<usize> = const { Cell::new(0) };
