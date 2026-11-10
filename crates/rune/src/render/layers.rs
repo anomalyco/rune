@@ -34,7 +34,7 @@ pub(super) struct Layers {
     stack: Vec<usize>,
     pipelines: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
     pub additive: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline)>,
-    blur: Option<layer_blur::Pipeline>,
+    pub blur: Option<layer_blur::Pipeline>,
     viewport: (u32, u32),
     image_generation: u64,
     allocations: u64,
@@ -326,6 +326,7 @@ impl Renderer {
             }
         }
         assert!(self.layers.stack.is_empty(), "unclosed layer scope");
+        let isolate = self.check_layer_features(device);
         self.layers.targets.resize_with(self.layers.plan.len(), || None);
         if !self.layers.plan.is_empty() || !self.layers.retained.is_empty() {
             self.layers.frame_stamp += 1;
@@ -341,6 +342,7 @@ impl Renderer {
             l.bounds[2] = (l.bounds[2] - l.bounds[0]).max(0.0);
             l.bounds[3] = (l.bounds[3] - l.bounds[1]).max(0.0);
             if l.bounds[2] == 0.0 || l.bounds[3] == 0.0 { l.opacity = 0.0; }
+            if !isolate { continue; }
             let Some((node_id, sig)) = l.cache.filter(|_| l.opacity > 0.0) else { continue };
             let Some(pos) = self.layers.retained.iter().position(|t| t.cache_node == Some(node_id) && t.cache_sig == sig) else { continue };
             let t_bytes = Self::target_bytes(&self.layers.retained[pos]);
@@ -368,7 +370,8 @@ impl Renderer {
             if !self.layers.plan[index].needs_render { continue; }
             let additive_parent = self.layers.plan[index].parent.is_some_and(|p| self.layers.plan[p].blend == Blend::PlusLighter);
             let l = &mut self.layers.plan[index];
-            if l.opacity == 0.0 {
+            // Without isolation (`breaker`), every group draws straight into its parent.
+            if l.opacity == 0.0 || !isolate {
                 self.layers.targets[index] = None;
                 continue;
             }
@@ -438,7 +441,6 @@ impl Renderer {
                 self.layers.allocations += 1;
             }
             let sigma = self.layers.plan[index].blur;
-            if sigma > 0.0 && self.layers.blur.is_none() { self.layers.blur = Some(layer_blur::Pipeline::new(device)); }
             let t = self.layers.targets[index].as_mut().unwrap();
             t.cache_node = cache_target.map(|(n, _)| n);
             t.cache_sig = cache_target.map_or(0, |(_, s)| s);
@@ -489,29 +491,58 @@ impl Renderer {
             self.add_layer_format(device, self.format);
             for index in 0..self.extra.len() { self.add_layer_format(device, self.extra[index].0); }
         }
-        if self.layers.plan.iter().any(|l| l.blend == Blend::PlusLighter) {
-            if self.layers.additive.is_none() {
-                self.layers.additive = Some((
-                    Self::pipeline(device, &self.layout, &self.shader, FORMAT, self.vertex_entry, Blend::PlusLighter),
-                    Self::pipeline(device, &self.layout, &self.shader, FORMAT, "vs", Blend::PlusLighter)));
-            }
-            if let Some(s) = &mut self.surfaces { s.add_plus_lighter(device, FORMAT); }
+        if self.layers.plan.iter().any(|l| l.blend == Blend::PlusLighter) && let Some(s) = &mut self.surfaces {
+            s.add_plus_lighter(device, FORMAT);
         }
         self.refresh_layer_bindings(device);
         if had_layers || !self.layers.plan.is_empty() { self.position_layer_surfaces(queue); }
     }
 
-    /// The layer pipelines again from the renderer's shader (a new uber variant).
-    pub(super) fn rebuild_layer_pipelines(&mut self, device: &wgpu::Device) {
-        for index in 0..self.layers.pipelines.len() {
-            let format = self.layers.pipelines[index].0;
-            self.layers.pipelines[index].1 = Self::pipeline(device, &self.layout, &self.shader, format, "vs", Blend::SourceOver);
+    /// Builds and checks the pipelines this frame's layers need (`breaker`), and plans the frame
+    /// without the ones the device refused or hasn't taken yet: a dissolve as source-over, a blur
+    /// unblurred. Whether layers can isolate; when they can't, each group draws in its parent.
+    fn check_layer_features(&mut self, device: &wgpu::Device) -> bool {
+        let shown = || self.layers.plan.iter().enumerate().filter(|(_, l)| l.opacity > 0.0);
+        let isolation = shown().any(|(index, _)| self.isolates(index));
+        let plus_lighter = shown().any(|(_, l)| l.blend == Blend::PlusLighter);
+        let blur = shown().any(|(_, l)| l.blur > 0.0);
+        if !isolation && !plus_lighter && !blur && !self.breakers.checking() { return false; }
+        self.check_features(device, |feature| match feature {
+            breaker::Feature::Isolation => isolation,
+            breaker::Feature::PlusLighter => plus_lighter,
+            breaker::Feature::LayerBlur => blur,
+        });
+        let working = |feature| self.breakers.health(feature).working();
+        let (isolate, add, blur) = (working(breaker::Feature::Isolation), working(breaker::Feature::PlusLighter), working(breaker::Feature::LayerBlur));
+        for l in &mut self.layers.plan {
+            if !add { l.blend = Blend::SourceOver; }
+            if !blur { l.blur = 0.0; }
         }
-        if self.layers.additive.is_some() {
-            self.layers.additive = Some((
-                Self::pipeline(device, &self.layout, &self.shader, FORMAT, self.vertex_entry, Blend::PlusLighter),
-                Self::pipeline(device, &self.layout, &self.shader, FORMAT, "vs", Blend::PlusLighter)));
+        isolate
+    }
+
+    /// Whether layer `index` needs a target of its own to draw as asked, while planning.
+    fn isolates(&self, index: usize) -> bool {
+        let l = &self.layers.plan[index];
+        let additive_parent = l.parent.is_some_and(|p| self.layers.plan[p].blend == Blend::PlusLighter);
+        l.cache.is_some() || l.opacity != 1.0 || l.blend != Blend::SourceOver || additive_parent
+            || l.blur != 0.0 || l.fade[3] != 0 || l.clip != NO_CLIP || l.turn.is_some() || l.hole[3] != 0.0
+    }
+
+    /// Drops the composite pipelines (`breaker`), and with `targets` every target, which no
+    /// frame will draw into again.
+    pub(super) fn drop_layer_pipelines(&mut self, targets: bool) {
+        self.layers.pipelines.clear();
+        if targets {
+            self.layers.targets.clear();
+            self.layers.retained.clear();
         }
+    }
+
+    /// Drops the layer blur's pipelines and every target's blur scratch (`breaker`).
+    pub(super) fn drop_layer_blur(&mut self) {
+        self.layers.blur = None;
+        for t in self.layers.targets.iter_mut().flatten().chain(&mut self.layers.retained) { t.blur = None; }
     }
 
     pub(super) fn add_layer_format(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
@@ -652,7 +683,9 @@ impl Renderer {
                 pass.set_bind_group(0, &t.composite, &[]);
                 pass.set_vertex_buffer(0, t.quad.slice(..));
                 pass.draw(0..4, 0..1);
-            } else if l.opacity == 1.0 {
+            } else if l.opacity > 0.0 {
+                // Drawn in its parent: an opaque group that needs no target, or any group
+                // while layers can't isolate (`breaker`).
                 if l.clip != NO_CLIP {
                     let (origin, size) = self.target_frame(target);
                     let edge = |v: f32, o: f32, max: u32| (v - o).clamp(0.0, max as f32) as u32;

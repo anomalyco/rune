@@ -225,7 +225,7 @@ impl Renderer {
             let format = self.extra[index].0;
             self.extra[index].1 = Self::pipeline(device, &self.layout, &self.shader, format, self.vertex_entry, Blend::SourceOver);
         }
-        self.rebuild_layer_pipelines(device);
+        self.shader_changed(device);
         // Built on the old bind layout; made again at the next backdrop blur.
         self.backdrop_blur = None;
     }

@@ -6,6 +6,7 @@ use crate::pixels::ImageAtlas;
 use crate::text::{ATLAS_SIZE, Atlas};
 
 mod backdrop_blur;
+mod breaker;
 mod dxbc;
 mod fill;
 mod first_use;
@@ -740,6 +741,8 @@ pub struct Renderer {
     backdrops: Vec<Backdrop>,
     /// Pipelines and pyramid for backdrop blur records, built on the first one.
     backdrop_blur: Option<backdrop_blur::BackdropBlur>,
+    /// Which lazily built pipelines the device took (`breaker`).
+    breakers: breaker::Breakers,
     uploads: upload::Uploads,
     /// Unique to this renderer, so to the device it was made on (`Frame::device_key`).
     device_key: crate::compose::DeviceKey,

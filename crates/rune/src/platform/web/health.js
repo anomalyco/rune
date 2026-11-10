@@ -24,3 +24,19 @@ export function watchGpu(device, onError, onLost) {
         if (info.reason !== 'destroyed') onLost(info.reason ?? 'unknown', info.message ?? '');
     });
 }
+
+export function pushScopes(device) {
+    device.pushErrorScope('validation');
+    device.pushErrorScope('out-of-memory');
+    device.pushErrorScope('internal');
+}
+
+// Pops `pushScopes`'s scopes now, and resolves to the first error they caught as `kind:
+// message`, or null.
+export function popScopes(device) {
+    const caught = [device.popErrorScope(), device.popErrorScope(), device.popErrorScope()];
+    return Promise.all(caught).then((errors) => {
+        const error = errors.find(Boolean);
+        return error ? `${error.constructor?.name ?? 'GPUError'}: ${error.message}` : null;
+    });
+}

@@ -82,6 +82,7 @@ impl Renderer {
             effects: Vec::new(),
             backdrops: Vec::new(),
             backdrop_blur: None,
+            breakers: Default::default(),
             uploads: Default::default(),
             device_key: crate::compose::DeviceKey::next(),
         }
