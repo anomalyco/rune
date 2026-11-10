@@ -79,6 +79,9 @@ pub struct TextSpec {
     /// Lays out with a right-to-left paragraph direction: the element's resolved `El::dir`,
     /// set when it's flattened.
     pub(crate) flow: Option<crate::el::Flow>,
+    /// See [`El::dir_by_paragraph`](crate::El::dir_by_paragraph): the text lays out in the
+    /// direction of its own first strong character, whatever `flow` is.
+    pub(crate) plaintext: bool,
     /// The scale's bits and [`crate::text::shape_key`] at it, once the content is final (see
     /// [`TextSpec::key_shape`]).
     pub(crate) shape: Option<(u32, u64)>,
@@ -137,6 +140,9 @@ impl TextSpec {
 
     /// The paragraph direction it lays out in.
     pub(crate) fn base(&self) -> parley::BaseDirection {
+        if self.plaintext {
+            return parley::BaseDirection::Auto;
+        }
         self.flow.map_or(parley::BaseDirection::Auto, crate::el::Flow::base)
     }
 
