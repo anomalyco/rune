@@ -7,14 +7,20 @@ use super::*;
 use crate::growth::{FoldGlide, GrowTrack};
 
 #[derive(Clone, Debug)]
-pub(super) struct GrowthRun {
-    rows: Vec<NodeId>,
-    /// Each row's full extent: its target when opening, its height when shutting.
-    extents: Vec<f32>,
-    /// What each row aimed at when the block formed; a later change to any breaks the block.
-    targets: Vec<f32>,
-    /// The block's height on the rows' fold spring.
-    track: GrowTrack,
+pub(super) enum GrowthRun {
+    /// Consecutive rows of one stack, moving on one spring.
+    Formed {
+        rows: Vec<NodeId>,
+        /// Each row's full extent: its target when opening, its height when shutting.
+        extents: Vec<f32>,
+        /// What each row aimed at when the block formed; a later change to any breaks the block.
+        targets: Vec<f32>,
+        /// The block's height on the rows' fold spring.
+        track: GrowTrack,
+    },
+    /// The block no longer stands: it broke at the commit that moved a row off its aim, and its
+    /// rows carry on alone from where they are.
+    Broken,
 }
 
 impl GrowthRun {
@@ -25,7 +31,7 @@ impl GrowthRun {
         let mut track = GrowTrack::settled(tracks.iter().map(|g| g.h).sum());
         track.set_kind(false, true, Some((FoldGlide { spring, feather: tracks[0].feather }, f32::INFINITY)));
         track.retarget(tracks.iter().map(|g| g.target).sum());
-        Some(GrowthRun {
+        Some(GrowthRun::Formed {
             rows: ids.to_vec(),
             extents: tracks.iter().map(|g| g.target.max(g.h)).collect(),
             targets: tracks.iter().map(|g| g.target).collect(),
@@ -33,39 +39,54 @@ impl GrowthRun {
         })
     }
 
-    /// Every row still aims where it did and they still stand together in `order`.
-    fn intact(&self, order: &[NodeId], grows: &HashMap<NodeId, GrowTrack>) -> bool {
-        let aims = self.rows.iter().zip(&self.targets).all(|(id, &t)| grows.get(id).is_none_or(|g| (g.target - t).abs() < 1e-4));
-        let present: Vec<usize> = self.rows.iter().filter_map(|id| order.iter().position(|o| o == id)).collect();
-        aims && present.windows(2).all(|w| w[1] == w[0] + 1)
-    }
-
-    /// Breaks the block: each row carries on alone from where it is, the row at the edge with
-    /// the block's speed.
-    fn unlink(&self, grows: &mut HashMap<NodeId, GrowTrack>) {
-        for id in &self.rows {
+    /// A commit's verdict on the block: true while every row still aims where it did and they
+    /// still stand together in `order`. Otherwise it breaks, and each row carries on alone from
+    /// where it is, the row at the edge with the block's speed.
+    fn commit(&mut self, order: &[NodeId], grows: &mut HashMap<NodeId, GrowTrack>) -> bool {
+        let GrowthRun::Formed { rows, targets, track, .. } = self else { return false };
+        let aims = rows.iter().zip(&*targets).all(|(id, &t)| grows.get(id).is_none_or(|g| (g.target - t).abs() < 1e-4));
+        let present: Vec<usize> = rows.iter().filter_map(|id| order.iter().position(|o| o == id)).collect();
+        if aims && present.windows(2).all(|w| w[1] == w[0] + 1) { return true; }
+        let speed = track.v;
+        for id in rows.iter() {
             if let Some(g) = grows.get_mut(id) && g.h > 1e-4 && g.h < g.target.max(g.h) - 1e-4 {
-                g.v = self.track.v;
+                g.v = speed;
             }
         }
+        *self = GrowthRun::Broken;
+        false
+    }
+
+    /// The block's rows, none of them once it has broken.
+    fn rows(&self) -> &[NodeId] {
+        match self {
+            GrowthRun::Formed { rows, .. } => rows,
+            GrowthRun::Broken => &[],
+        }
+    }
+
+    /// Whether the block still has motion to step.
+    fn moving(&self) -> bool {
+        matches!(self, GrowthRun::Formed { track, .. } if track.moving())
     }
 
     /// Steps the block and gives each row its share: rows above the edge whole, the row at the
     /// edge its part and the feather, rows past it nothing. Returns how far the rows grew.
     fn step(&mut self, steps: usize, spring: rune_motion::Spring, edge: &crate::growth::StreamEdge, grows: &mut HashMap<NodeId, GrowTrack>) -> f32 {
+        let GrowthRun::Formed { rows, extents, track, .. } = self else { return 0.0 };
         for _ in 0..steps {
-            self.track.step(spring, edge, false);
+            track.step(spring, edge, false);
         }
-        let (mut left, mut grown) = (self.track.h, 0.0);
-        for (id, &extent) in self.rows.iter().zip(&self.extents) {
+        let (mut left, mut grown) = (track.h, 0.0);
+        for (id, &extent) in rows.iter().zip(&*extents) {
             let h = left.clamp(0.0, extent);
             left -= extent;
             let Some(g) = grows.get_mut(id) else { continue };
             let at_edge = h > 1e-4 && h < extent - 1e-4;
             grown += (h - g.h).max(0.0);
             g.h = h;
-            g.v = if at_edge { self.track.v } else { 0.0 };
-            g.mask = if at_edge { self.track.mask } else { 0.0 };
+            g.v = if at_edge { track.v } else { 0.0 };
+            g.mask = if at_edge { track.mask } else { 0.0 };
         }
         grown
     }
@@ -77,11 +98,7 @@ impl<S: 'static> Runtime<S> {
     /// growing from nothing) or `shut` (fold rows that left) by it.
     pub(super) fn link_growth_runs(&mut self, stack: &mut Stack, order: &[NodeId], opened: &[NodeId], shut: &[NodeId]) {
         let grows = &mut self.grows;
-        stack.runs.retain(|run| {
-            let keep = run.intact(order, grows);
-            if !keep { run.unlink(grows); }
-            keep
-        });
+        stack.runs.retain_mut(|run| run.commit(order, grows));
         for id in shut {
             if let Some(g) = grows.get_mut(id) { g.retarget(0.0); }
         }
@@ -113,8 +130,8 @@ impl<S: 'static> Runtime<S> {
         let (mut rows, mut grown) = (Vec::new(), 0.0);
         stack.runs.retain_mut(|run| {
             grown += run.step(steps, spec.spring, &spec.edge, grows);
-            rows.extend(run.rows.iter().copied());
-            run.track.moving()
+            rows.extend(run.rows().iter().copied());
+            run.moving()
         });
         (rows, grown)
     }
