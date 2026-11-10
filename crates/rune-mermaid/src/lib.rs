@@ -332,38 +332,23 @@ const KINDS: &[&str] = &[
 
 /// `src`'s front-matter title, and its lines with their indents, without comments, directives
 /// and front matter.
-fn cleaned(src: &str) -> (Option<String>, std::iter::Peekable<std::vec::IntoIter<(usize, &str)>>) {
-    let mut cleaned = Vec::new();
+fn cleaned(src: &str) -> (Option<String>, impl Iterator<Item = (usize, &str)>) {
     let mut in_directive = false;
-    for raw in src.lines() {
-        let l = raw.trim();
-        if in_directive {
-            if let Some(pos) = l.find("}%%") {
-                in_directive = false;
-                let rest = l[pos + 3..].trim();
-                if !rest.is_empty() && !rest.starts_with("%%") {
-                    cleaned.push((0, rest));
-                }
-            }
-            continue;
-        }
-        if l.starts_with("%%{") {
-            if let Some(pos) = l.find("}%%") {
-                let rest = l[pos + 3..].trim();
-                if !rest.is_empty() && !rest.starts_with("%%") {
-                    cleaned.push((0, rest));
-                }
-            } else {
+    let mut lines = src.lines().filter_map(move |raw| {
+        let line = raw.trim();
+        let (indent, text) = if in_directive || line.starts_with("%%{") {
+            let Some((_, rest)) = line.split_once("}%%") else {
                 in_directive = true;
-            }
-            continue;
-        }
-        if !l.is_empty() && !l.starts_with("%%") {
+                return None;
+            };
+            in_directive = false;
+            (0, rest.trim())
+        } else {
             // Mindmaps nest by indentation.
-            cleaned.push((raw.len() - raw.trim_start().len(), l));
-        }
-    }
-    let mut lines = cleaned.into_iter().peekable();
+            (raw.len() - raw.trim_start().len(), line)
+        };
+        (!text.is_empty() && !text.starts_with("%%")).then_some((indent, text))
+    }).peekable();
     let mut fm_title = None;
     // A front-matter block (`---` … `---`) may carry `title: …` and config.
     if lines.peek().map(|l| l.1) == Some("---") {
