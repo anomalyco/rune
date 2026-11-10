@@ -1,0 +1,1 @@
+- **rune-fx `Heat::is_active` is false once a lit light has finished warming**, so a steadily lit glow stops asking for frames; it used to stay true for as long as the light was on. Cooling still counts until the heat falls below 1/512.

@@ -197,6 +197,21 @@ fn heat_cools_continuously() {
 }
 
 #[test]
+fn a_lit_heat_stops_asking_for_frames_once_warm() {
+    let mut h = Heat::new(0.1, 0.3);
+    assert!(!h.is_active(0.0), "cold and off");
+    h.set(1.0, true);
+    assert!(h.is_active(1.05), "warming");
+    assert_eq!(h.at(1.2), 1.0);
+    assert!(!h.is_active(1.2), "fully lit holds still");
+    h.set(1.2, true);
+    assert!(!h.is_active(1.3), "switching on again while on changes nothing");
+    h.set(2.0, false);
+    assert!(h.is_active(2.5), "cooling");
+    assert!(!h.is_active(10.0), "cooled");
+}
+
+#[test]
 fn cpu_noise_is_bounded_periodic_and_deterministic() {
     for i in 0..2000 {
         let x = i as f32 * 0.173;

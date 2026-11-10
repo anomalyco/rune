@@ -70,7 +70,7 @@ impl Switch {
     }
 
     fn moving(&self, t: f32) -> bool {
-        self.heat.is_active(t) && self.on == Some(false) || self.on == Some(true) && self.heat.at(t) < 0.999
+        self.heat.is_active(t)
     }
 }
 
