@@ -19,6 +19,7 @@ use objc2_foundation_video::{NSDictionary, NSString, NSURL};
 use objc2_video::rc::Retained;
 use objc2_video::runtime::AnyObject;
 use objc2_video::{AnyThread, MainThreadMarker};
+use super::phases::{Poster, Settle};
 use std::time::Duration;
 
 /// Paused players that keep a native player (and its decoder) for a quick resume. Older paused
@@ -26,14 +27,10 @@ use std::time::Duration;
 const PARKED_PLAYERS: usize = 4;
 /// Posters never need more than this many pixels per side; headless frames keep full size.
 const POSTER_MAX: f64 = 1920.0;
-/// A seek that never lands stops requesting redraws (or ticks) after this long.
-const SEEK_PATIENCE: Duration = Duration::from_secs(2);
 /// A player item that never becomes ready fails after this long.
 const LOAD_PATIENCE: Duration = Duration::from_secs(30);
 /// How often playing audio checks for its end, loops and loading.
 const AUDIO_TICK: Duration = Duration::from_millis(50);
-/// An audio seek has landed once the player reports a time this close to the target.
-const AUDIO_SEEK_SLOP: f64 = 0.25;
 
 #[derive(Default)]
 pub(crate) struct Native {
@@ -41,10 +38,7 @@ pub(crate) struct Native {
     generator: Option<Retained<AVAssetImageGenerator>>,
     player: Option<Player>,
     posters: Arc<Mutex<Posters>>,
-    poster_started: bool,
-    /// A finished poster may replace the surface's frame: set by a poster request while no
-    /// player has run (first frame, or a paused seek), cleared once a player makes frames.
-    poster_due: bool,
+    poster: Poster,
     decoded: Decoded,
 }
 
@@ -74,15 +68,11 @@ struct Player {
     muted: bool,
     ready: bool,
     created: Instant,
-    /// When the last seek started, and where to.
-    seeking: Option<(Instant, f64)>,
+    settle: Settle,
     /// Video: how its buffers turn upright (they ignore the track's `preferredTransform`).
     orient: Orient,
     /// Video: the item time of the frame on the surface.
     shown: Option<f64>,
-    /// A paused seek within the frame on screen: nothing to wait for, but the player may report
-    /// the old position until it lands, so the handle's time holds.
-    hold: Option<f64>,
 }
 struct Objects {
     player: Retained<AVPlayer>,
@@ -99,10 +89,9 @@ impl Player {
             muted: false,
             ready: false,
             created: Instant::now(),
-            seeking: None,
+            settle: Settle::Still,
             orient: Orient::UP,
             shown: None,
-            hold: None,
         }
     }
 }
@@ -188,7 +177,7 @@ pub(super) fn enable() {
 /// Read an audio clip's duration on a worker, so tiles know it before they play.
 fn load_audio(shared: &Arc<Shared>) {
     let mut native = shared.native.lock().unwrap();
-    if !native.poster_started && !shared.ctl.lock().unwrap().opened() {
+    if native.poster == Poster::Unasked && !shared.ctl.lock().unwrap().opened() {
         request_poster(shared, &mut native, 0.0);
     }
 }
@@ -433,19 +422,19 @@ pub(crate) fn test_poster(shared: &Shared) -> Option<bool> {
 pub(super) fn preload(shared: &Arc<Shared>) {
     let mut native = shared.native.lock().unwrap();
     let c = shared.ctl.lock().unwrap();
-    if shared.kind == Kind::Audio || native.player.is_some() || native.poster_started || c.failed.is_some() {
+    if shared.kind == Kind::Audio || native.player.is_some() || native.poster != Poster::Unasked || c.failed.is_some() {
         return;
     }
     let at = c.time;
     drop(c);
-    native.poster_due = true;
     request_poster(shared, &mut native, at);
 }
 
 /// One worker per clip opens it and decodes the newest requested poster (none for audio),
-/// then wakes its windows, or for audio drives it on the main queue.
+/// then wakes its windows, or for audio drives it on the main queue. Called only while no
+/// player runs, so a video's poster may land.
 fn request_poster(shared: &Arc<Shared>, native: &mut Native, at: f64) {
-    native.poster_started = true;
+    native.poster = if shared.kind == Kind::Video { Poster::Due } else { Poster::Withheld };
     let mut slot = native.posters.lock().unwrap();
     slot.want = Some(at);
     if slot.busy {
@@ -544,12 +533,7 @@ fn reconcile(p: &mut Player, c: &mut Control, now: Instant) {
             o.player.seekToTime_toleranceBefore_toleranceAfter(cm(t), zero(), zero());
             // A paused seek within the frame on screen brings no new frame to wait for.
             let same_frame = !c.playing && c.meta.zip(p.shown).is_some_and(|(m, shown)| m.frame_index(shown) == m.frame_index(t));
-            if same_frame {
-                p.hold = Some(t);
-            } else {
-                p.seeking = Some((now, t));
-                p.hold = None;
-            }
+            p.settle.seek(t, same_frame, now);
         }
         if p.ready {
             let rate = if c.playing { c.rate } else { 0.0 };
@@ -601,7 +585,7 @@ pub(super) fn live_time(shared: &Shared) -> Option<f64> {
         return None;
     }
     let native = shared.native.try_lock().ok()?;
-    let p = native.player.as_ref().filter(|p| p.ready && p.rate > 0.0 && p.seeking.is_none())?;
+    let p = native.player.as_ref().filter(|p| p.ready && p.rate > 0.0 && !p.settle.waiting())?;
     let time = seconds(unsafe { p.objects.as_ref()?.player.currentTime() });
     let c = shared.ctl.lock().unwrap();
     (c.playing && !c.ended).then(|| c.duration.map_or(time, |d| time.clamp(0.0, d)))
@@ -616,7 +600,7 @@ fn take_poster(native: &mut Native, c: &mut Control, surface: Option<&NativeSurf
                 c.open(Ok(meta));
             }
             // A late poster never covers a frame a player made.
-            if let (Some(bytes), Some(surface), None, true) = (bytes, surface, &native.player, native.poster_due) {
+            if let (Some(bytes), Some(surface), None, Poster::Due) = (bytes, surface, &native.player, native.poster) {
                 let id = c.next_frame_id();
                 if let Err(e) = surface.push_bytes(bytes, id) {
                     c.fail(e);
@@ -669,7 +653,7 @@ fn ensure_player(shared: &Arc<Shared>, native: &mut Native, c: &mut Control, mtm
     // Audio opens on the load worker first, which may find it needs decoding (an Ogg clip at a
     // URL with no extension); the worker then drives the clip again, starting a queued play.
     if shared.kind == Kind::Audio && !c.opened() {
-        if !native.poster_started {
+        if native.poster == Poster::Unasked {
             request_poster(shared, native, 0.0);
         }
         return false;
@@ -682,8 +666,7 @@ fn ensure_player(shared: &Arc<Shared>, native: &mut Native, c: &mut Control, mtm
             }
             native.player = Some(Player::new(objects));
             // From here on, frames come from players: an older poster load must not land.
-            native.poster_started = true;
-            native.poster_due = false;
+            native.poster = Poster::Withheld;
             true
         }
         Err(e) => {
@@ -697,15 +680,10 @@ fn ensure_player(shared: &Arc<Shared>, native: &mut Native, c: &mut Control, mtm
 fn follow(p: &mut Player, c: &mut Control, now: Instant, frame_time: Option<f64>) {
     let o = p.objects.as_ref().unwrap();
     let current = seconds(unsafe { o.player.currentTime() });
-    if frame_time.is_none() && p.seeking.is_some_and(|(_, to)| (current - to).abs() < AUDIO_SEEK_SLOP) {
-        p.seeking = None;
-    }
-    if c.playing || p.hold.is_some_and(|to| (current - to).abs() < 1e-3) {
-        p.hold = None;
-    }
+    p.settle.observe(current, c.playing, frame_time.is_none());
     // Seeks land asynchronously: until then the player still reports the old position, which
     // may be the end.
-    let seeking = p.seeking.is_some() || p.hold.is_some();
+    let seeking = p.settle.pending();
     let stopped = p.rate > 0.0 && unsafe { o.player.rate() } == 0.0;
     let at_end = !seeking && (c.duration.is_some_and(|d| current >= d - 1e-3) || stopped);
     let time = if seeking {
@@ -721,7 +699,7 @@ fn follow(p: &mut Player, c: &mut Control, now: Instant, frame_time: Option<f64>
             o.player.setRate(c.rate);
         }
         p.rate = c.rate;
-        p.seeking = Some((now, 0.0));
+        p.settle.seek(0.0, false, now);
         // A loop is news for anything showing play counts or progress from zero.
         c.generation += 1;
     } else if !c.playing {
@@ -743,10 +721,9 @@ pub(super) fn pull(shared: &Arc<Shared>, surface: &NativeSurface, target: Instan
     let Some(mtm) = MainThreadMarker::new() else { return false };
     if native.player.is_none() && !c.playing {
         // Poster mode: no player, no decoder session.
-        let want = c.seek.take().or_else(|| (!native.poster_started).then_some(c.time));
+        let want = c.seek.take().or_else(|| (native.poster == Poster::Unasked).then_some(c.time));
         if let Some(at) = want {
             drop(c);
-            native.poster_due = true;
             request_poster(shared, &mut native, at);
         }
         return false;
@@ -783,7 +760,7 @@ pub(super) fn pull(shared: &Arc<Shared>, surface: &NativeSurface, target: Instan
                 return false;
             }
             p.shown = Some(seconds(shown));
-            p.seeking = None;
+            p.settle.framed();
         }
         follow(p, &mut c, now, Some(seconds(item_time)));
     }
@@ -794,10 +771,8 @@ pub(super) fn pull(shared: &Arc<Shared>, surface: &NativeSurface, target: Instan
 /// clip is playing, seeking or loading (a seek waits for it).
 fn finish(shared: &Arc<Shared>, mut native: MutexGuard<'_, Native>, c: MutexGuard<'_, Control>, now: Instant) -> bool {
     let p = native.player.as_mut().unwrap();
-    if p.seeking.is_some_and(|(since, _)| now - since > SEEK_PATIENCE) {
-        p.seeking = None;
-    }
-    let active = c.playing || p.seeking.is_some() || !p.ready;
+    p.settle.expire(now);
+    let active = c.playing || p.settle.waiting() || !p.ready;
     let park = p.ready && !active;
     drop(c);
     drop(native);
@@ -903,7 +878,7 @@ fn park(shared: &Arc<Shared>) {
             let player = native.player.take();
             // A video that never showed a frame shows a poster instead.
             if clip.kind == Kind::Video && player.as_ref().is_some_and(|p| p.shown.is_none()) {
-                native.poster_started = false;
+                native.poster = Poster::Unasked;
             }
             player
         };
