@@ -676,6 +676,7 @@ pub(crate) mod animated;
 mod avif;
 mod from_url;
 mod mips;
+pub(crate) mod pixels;
 use mips::mip_chain;
 #[cfg(test)]
 use mips::byte;
