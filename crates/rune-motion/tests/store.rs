@@ -133,6 +133,22 @@ fn delays_hold_then_start_exactly_and_newer_animations_cancel_them() {
 }
 
 #[test]
+fn a_due_delayed_start_keeps_its_immediate_wake_until_ticked() {
+    let mut s = AnimationStore::new();
+    s.set(N, X, 0.0);
+    s.animate(N, X, 100.0, motion::SETTLE.delay(1.0));
+    // Due, and the tick that would apply it hasn't run: an immediate wake, not motion.
+    s.set_time(1.0);
+    assert!(s.running());
+    assert_eq!(s.waiting_until(), Some(1.0));
+    s.set_time(1.25);
+    assert_eq!(s.waiting_until(), Some(1.25), "and it stays due until a tick applies it");
+    assert_eq!(s.get(N, X), Some(0.0), "nothing has moved yet");
+    s.tick();
+    assert!(s.get(N, X).unwrap() > 0.0, "the tick starts it");
+}
+
+#[test]
 fn set_is_immediate_and_first_animate_doesnt_animate() {
     let mut s = AnimationStore::new();
     s.animate(N, X, 40.0, motion::SETTLE); // first sight: set, no motion
