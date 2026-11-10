@@ -1,0 +1,1 @@
+- **`Tx::focused` in every handler.** It names the focused element in press, pointer and other handlers too, not only key handlers, so a menu opened from a right-click or a button that keeps a field focused can remember where focus was and hand it back.

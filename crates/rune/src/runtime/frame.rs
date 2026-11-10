@@ -257,7 +257,7 @@ impl<S: 'static> Runtime<S> {
 
     pub(super) fn transaction(&self) -> Tx {
         Tx { trace: self.tracing().then(crate::el::TraceCalls::default), mods: self.held_mods, selection: self.selection_snapshot(),
-            input_time: crate::input::time::current(), clock: self.clock, focus_visible: self.focus.keyboard(), ..Tx::default() }
+            input_time: crate::input::time::current(), clock: self.clock, focus_visible: self.focus.keyboard(), focused: self.focused_key(), ..Tx::default() }
     }
 
     /// A scalar from the actual draw path (e.g. `shell.width`). Values hold until resampled.
