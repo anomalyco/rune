@@ -1,0 +1,1 @@
+- **`App::on_visibility`: the window going off screen and back**, as a page's `visibilitychange`: minimised, hidden or covered where the system says so, and shown again, once per change after the first frame. rune-kit `ToastStack` takes `ToastEvent::Page` and holds every toast's time while the window is hidden (`ToastPage::Hidden`), as Sonner does while `document.hidden`.

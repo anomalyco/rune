@@ -69,6 +69,7 @@ pub struct App<S: 'static> {
     pub(crate) turn_scope: Option<TurnScope<S>>,
     pub(crate) on_focus: Option<fn(&mut S, bool, &mut Tx)>,
     pub(crate) on_mods: Option<fn(&mut S, crate::Mods, &mut Tx)>,
+    pub(crate) on_visibility: Option<fn(&mut S, bool, &mut Tx)>,
     pub(crate) on_ime: Option<fn(&mut S, &crate::Ime, &mut Tx) -> bool>,
     pub(crate) on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
     pub(crate) on_open_url: Option<crate::open_url::incoming::OnOpenUrl<S>>,
@@ -124,6 +125,7 @@ impl<S: 'static> App<S> {
             turn_scope: None,
             on_focus: None,
             on_mods: None,
+            on_visibility: None,
             on_ime: None,
             on_reopen: None,
             on_open_url: None,
@@ -277,6 +279,16 @@ impl<S: 'static> App<S> {
     /// ```
     pub fn on_modifiers(mut self, f: fn(&mut S, crate::Mods, &mut Tx)) -> Self {
         self.on_mods = Some(f);
+        self
+    }
+
+    /// Hears the window go off screen (minimised, hidden, or covered whole by other windows
+    /// where the system says so) and come back, with whether it shows now, as a web page's
+    /// `visibilitychange` hears `document.hidden` change: for work that should wait while no
+    /// one can see it, such as a notification's timer. Called once per change after the first
+    /// frame. Native windows only.
+    pub fn on_visibility(mut self, f: fn(&mut S, bool, &mut Tx)) -> Self {
+        self.on_visibility = Some(f);
         self
     }
 

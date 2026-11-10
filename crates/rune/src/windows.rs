@@ -258,6 +258,8 @@ impl<S> WindowSpec<S> {
     pub fn font_smoothing(mut self, mode: crate::FontSmoothing) -> Self { self.app = self.app.font_smoothing(mode); self }
     pub fn on_focus(mut self, f: fn(&mut S, bool, &mut crate::Tx)) -> Self { self.app = self.app.on_focus(f); self }
     pub fn on_modifiers(mut self, f: fn(&mut S, crate::Mods, &mut crate::Tx)) -> Self { self.app = self.app.on_modifiers(f); self }
+    /// This window going off screen and back, like `App::on_visibility`.
+    pub fn on_visibility(mut self, f: fn(&mut S, bool, &mut crate::Tx)) -> Self { self.app = self.app.on_visibility(f); self }
     /// This window's editor's input method events, like `App::on_ime`.
     pub fn on_ime(mut self, f: fn(&mut S, &crate::Ime, &mut crate::Tx) -> bool) -> Self { self.app = self.app.on_ime(f); self }
     /// This window's playground, like `App::playground`.

@@ -13,9 +13,15 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub fn set_live_visible(&mut self, visible: bool) {
+        let changed = visible != self.surface_visible;
         self.live_wake.visible(visible);
         self.surface_visible = visible;
         if !visible { self.loop_wake = None; }
+        // The window's own setup shows and hides it before the first frame; the app hears the
+        // changes after that (`App::on_visibility`).
+        if changed && self.commits > 0 && let Some(f) = self.on_visibility {
+            self.update(|s, tx| f(s, visible, tx));
+        }
     }
     pub(crate) fn live_visible(&self) -> bool { self.surface_visible }
     pub fn live_pending(&self) -> bool {
