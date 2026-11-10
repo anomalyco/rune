@@ -17,9 +17,13 @@ use std::panic::Location;
 use std::rc::Rc;
 use std::time::Duration;
 
-use rune::{Color, El, Live, Phase, PointerEvent, ScrollPos, Spring, col, el};
+use rune::{Color, El, Live, PointerEvent, ScrollPos, Spring, col, el};
 
 use crate::Kit;
+use crate::grip::Grip;
+
+mod press;
+use press::BarPress;
 
 /// The strip along the right edge that takes presses: wider than the thumb, for an easier aim,
 /// and wide enough for the thumb under the pointer (wider still for a wider styled thumb).
@@ -335,9 +339,8 @@ enum BarState {
 struct Bar {
     pos: Cell<ScrollPos>,
     state: Cell<BarState>,
-    dragging: Cell<bool>,
-    /// A held track press pages up (-1) or down (1); 0 otherwise.
-    paging: Cell<i32>,
+    /// A press on the thumb or the track, until its release.
+    press: Cell<Grip<BarPress>>,
     /// The pointer is near the right edge, where it reveals an overlay bar.
     near: Cell<bool>,
     /// The pointer is over the track.
@@ -375,8 +378,7 @@ fn kept(area: &str) -> Rc<Bar> {
                 Rc::new(Bar {
                     pos: Cell::new(ScrollPos::default()),
                     state: Cell::new(BarState::Uninit),
-                    dragging: Cell::new(false),
-                    paging: Cell::new(0),
+                    press: Cell::new(Grip::Idle),
                     near: Cell::new(false),
                     over: Cell::new(false),
                     target: Cell::new(false),
@@ -451,7 +453,7 @@ fn turned(t: &Track, [across, along, thick, long]: [f32; 4]) -> [f32; 4] {
 
 impl Bar {
     fn wide(&self) -> bool {
-        self.over.get() || self.dragging.get()
+        self.over.get() || self.pressed()
     }
 
     fn style(&self) -> ScrollBarStyle {
@@ -538,7 +540,7 @@ impl Bar {
     /// Once neither holds it, an overlay bar fades out after [`HOLD`] (the look's own). One the
     /// whole area reveals fades as the pointer leaves, as a ScrollView's thumb does.
     fn let_go(&self) {
-        if self.state.get() == BarState::Overlay && !self.dragging.get() && !self.revealed() {
+        if self.state.get() == BarState::Overlay && !self.pressed() && !self.revealed() {
             let t = self.style().track;
             if t.area_reveals {
                 self.opacity.set(0.0);
@@ -670,7 +672,7 @@ impl Bar {
             return;
         }
         state.set(BarState::Overlay);
-        if self.dragging.get() || self.revealed() {
+        if self.pressed() || self.revealed() {
             self.hold();
             return;
         }
@@ -705,73 +707,6 @@ impl Bar {
         } else if (scrolled || extent_changed) && instant && now < pulse_until.get() {
             opacity.pulse(1.0, 0.0, t.hold);
             pulse_until.set(now + t.pulse_span());
-        }
-    }
-
-    /// The thumb or track pressed, dragged or released; `target` is the viewport's path, and
-    /// `jumps` says a track press jumps to the spot rather than paging toward it.
-    fn drag(&self, target: &str, jumps: bool, d: &mut rune::Drag, tx: &mut rune::Tx) {
-        tx.live_only();
-        let at = self.pos.get();
-        let t = self.style().track;
-        let (len, shows) = track_len(at, &t);
-        if !shows {
-            self.paging.set(0);
-            if self.dragging.replace(false) {
-                self.widen();
-            }
-            return;
-        }
-        let a = t.along();
-        let (top, h) = thumb_along(at, len, t.min_thumb, a);
-        // Down a vertical bar, or along a horizontal one from its start, its right edge right to
-        // left.
-        let y = match (t.x, self.rtl()) {
-            (false, _) => d.y,
-            (true, false) => d.x,
-            (true, true) => len - d.x,
-        };
-        if d.phase == Phase::Down {
-            self.dragging.set(true);
-            self.hold();
-            self.widen();
-            let on_thumb = (top..=top + h).contains(&y);
-            // A track press pages toward itself, or with Option (or the preference) jumps there.
-            // Pages run down, so a horizontal bar jumps.
-            if !on_thumb && jumps == tx.mods().alt && !t.x {
-                let toward = if y < top { -1 } else { 1 };
-                self.paging.set(toward);
-                tx.scroll_page(target, toward);
-                tx.drag_repeat_after(PAGE_DELAY);
-                return;
-            }
-            // A press on the thumb holds it where it was caught; a jump centres it there.
-            d.data = if on_thumb { y - top } else { h / 2.0 };
-        }
-        if d.phase == Phase::Up {
-            self.paging.set(0);
-            if self.dragging.replace(false) {
-                self.widen();
-                self.let_go();
-            }
-            return;
-        }
-        let toward = self.paging.get();
-        if toward != 0 {
-            // Paging goes on while held, until the thumb reaches the pointer.
-            if tx.drag_repeat() {
-                tx.drag_repeat_after(PAGE_EVERY);
-                if (toward < 0 && y < top) || (toward > 0 && y > top + h) {
-                    tx.scroll_page(target, toward);
-                }
-            }
-            return;
-        }
-        let to = offset_along(at, len, y - d.data, t.min_thumb, a);
-        if t.x {
-            tx.scroll_to_instant(target, to, at.offset[1]);
-        } else {
-            tx.scroll_to_instant(target, at.offset[0], to);
         }
     }
 }
@@ -851,7 +786,7 @@ fn attach(style: ScrollBarStyle, area: &str, key: &str, outer: El, viewport: El)
     outer
         .on_pointer_move_any(move |p, tx| {
             tx.live_only();
-            moved.point(Some(p));
+            moved.pointer(p);
         })
         .on_hover_change_any(move |inside, tx| {
             tx.live_only();
