@@ -22,13 +22,12 @@ impl<T: 'static> AnyHost for Overlay<T> {
         #[cfg(target_os = "macos")]
         let deadline = deadline.filter(|_| !self.live.as_ref().and_then(|l| l.pacing.as_ref()).is_some_and(|p| p.running()));
         #[cfg(target_os = "macos")]
-        let deadline = deadline.into_iter().chain(self.panel.as_ref().filter(|_| !self.occluded).and_then(|p| p.pointer_deadline())).min();
+        let deadline = deadline.into_iter().chain(self.panel.as_ref().filter(|_| !self.presence.occluded()).and_then(|p| p.pointer_deadline())).min();
         // A Windows fade-out steps its alpha once a frame.
         #[cfg(target_os = "windows")]
-        let deadline = deadline.into_iter().chain(self.fading_out.map(|end| end.min(Instant::now() + crate::window::TIMER_FRAME))).min();
-        deadline.into_iter().chain(self.retry.filter(|_| self.drawing())).chain(self.fading_out)
-            .chain(self.hidden_pace.deadline().filter(|_| !self.drawing()))
-            .chain(self.release_at.filter(|_| !self.drawing())).min()
+        let deadline = deadline.into_iter().chain(self.presence.fading().then(|| Instant::now() + crate::window::TIMER_FRAME)).min();
+        deadline.into_iter().chain(self.retry.filter(|_| self.presence.drawing())).chain(self.presence.deadline())
+            .chain(self.hidden_pace.deadline().filter(|_| !self.presence.drawing())).min()
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -67,7 +66,6 @@ impl<T: 'static> AnyHost for Overlay<T> {
         #[cfg(target_os = "macos")]
         if let WindowEvent::Occluded(occluded) = event {
             let occluded = self.panel.as_ref().map_or(occluded, |p| p.occluded());
-            if occluded && self.fading_out.is_some() { return; }
             self.occluded(occluded);
             return;
         }
@@ -94,7 +92,7 @@ impl<T: 'static> AnyHost for Overlay<T> {
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }) {
             self.sync_live_origin();
         }
-        if !self.visible { return; }
+        if !self.presence.shown() { return; }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. })
             && let Some(x11) = &self.x11 { x11.update_geometry(); }
@@ -166,7 +164,7 @@ impl<T: 'static> AnyHost for Overlay<T> {
         // A window switched the font families (`Tx::set_font_families`).
         self.dirty |= self.rt.follow_font_families();
         // A fading-out overlay takes no input; it only draws its exit.
-        if !self.visible {
+        if !self.presence.shown() {
             self.hidden_input();
             let more = self.draw();
             return self.a11y_turn() || more;
@@ -187,7 +185,7 @@ impl<T: 'static> AnyHost for Overlay<T> {
         #[cfg(target_os = "macos")]
         if self.live.is_some() && let Some(panel) = &self.panel {
             // Covered or asleep, the 120 Hz regions poll rests; input events still sample.
-            panel.observe_pointer(Instant::now(), !self.occluded);
+            panel.observe_pointer(Instant::now(), !self.presence.occluded());
             if let Some((x, y)) = panel.take_recovered_release() && self.rt.pointer_captured() {
                 self.rt.pointer_up(x, y);
                 self.dirty = true;

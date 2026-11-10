@@ -24,7 +24,7 @@ impl<T: 'static> Overlay<T> {
                 && (input != OverlayInput::Regions || self.rt.pointer_captured()
                     || self.rt.hit_regions().iter().any(|r| crate::overlay::options::contains(*r, x, y)))
         });
-        let active = self.visible && input != OverlayInput::None && over;
+        let active = self.presence.shown() && input != OverlayInput::None && over;
         let want = self.rt.cursor();
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Some(Live { backing: Backing::Layer(layer), .. }) = &mut self.live {
@@ -153,7 +153,7 @@ impl<T: 'static> Overlay<T> {
     /// An overlay that draws nothing delivers queued input without drawing, such as the
     /// releases of the modifier keys held when it hid, rather than when it next shows.
     pub(super) fn hidden_input(&mut self) {
-        if !self.drawing() && self.rt.keys_queued() { self.advance(); }
+        if !self.presence.drawing() && self.rt.keys_queued() { self.advance(); }
     }
 
     /// Fn changes the monitor saw since the loop last turned. A hidden overlay drops them: its
@@ -161,7 +161,7 @@ impl<T: 'static> Overlay<T> {
     #[cfg(target_os = "macos")]
     pub(super) fn fn_key(&mut self) {
         let Some(changes) = self.live.as_ref().and_then(|l| l.fn_key.as_ref()).map(|f| f.take()) else { return };
-        if !self.visible || self.options.keys != KeyPolicy::OnDemand { return; }
+        if !self.presence.shown() || self.options.keys != KeyPolicy::OnDemand { return; }
         for pressed in changes {
             self.dirty |= self.rt.physical_with_fallback(crate::PhysicalInput::Key {
                 key: winit::keyboard::KeyCode::Fn, mods: crate::window::map_mods(self.mods), pressed, repeat: false,
@@ -200,7 +200,7 @@ impl<T: 'static> Overlay<T> {
 
     /// Hidden, or shown but not on screen: no frame will come to run what's due.
     pub(super) fn frameless(&self) -> bool {
-        !self.drawing() || self.is_occluded()
+        !self.presence.drawing() || self.presence.occluded()
     }
 
     pub(super) fn advance_at(&mut self, now: Instant) {
@@ -210,14 +210,14 @@ impl<T: 'static> Overlay<T> {
         // shows it; a retained one commits at most every `HIDDEN_REFRESH` to keep its cached
         // frame near. Input and drag ends still run their handlers now.
         let handlers = self.rt.has_pending_input() || self.rt.drag_ends_pending();
-        let polls_only = !handlers && if self.drawing() { self.visible && self.is_occluded() } else { !self.retained() || !self.hidden_pace.ready(now) };
+        let polls_only = !handlers && if self.presence.drawing() { self.presence.shown() && self.presence.occluded() } else { !self.retained() || !self.hidden_pace.ready(now) };
         if !polls_only { return self.commit_at(now); }
         self.rt.poll_hidden();
         if self.rt.has_pending_input() { return self.commit_at(now); }
         drop_window_requests(&mut self.rt);
         self.clipboard.flush(&mut self.rt);
         self.open_popup();
-        if self.drawing() {
+        if self.presence.drawing() {
             self.dirty = true;
         } else if self.rt.needs_commit() {
             self.dirty = true;
@@ -237,7 +237,7 @@ impl<T: 'static> Overlay<T> {
         drop_window_requests(&mut self.rt);
         self.clipboard.flush(&mut self.rt);
         self.open_popup();
-        if !self.drawing() && self.rt.stats.commits != commits { self.hidden_pace.rendered(now); }
+        if !self.presence.drawing() && self.rt.stats.commits != commits { self.hidden_pace.rendered(now); }
         // Even a transition that finished in this step needs its current pixels submitted.
         // A scheduling-only poll with no motion still preserves the prepared frame.
         if self.rt.stats.commits != commits || self.rt.animating || !self.idle {
@@ -247,8 +247,7 @@ impl<T: 'static> Overlay<T> {
     }
 
     pub(super) fn wake_due(&mut self, now: Instant) {
-        self.end_fade_out(now);
-        self.release_due(now);
+        self.presence_due(now);
         // Paced to a frame interval: a hidden or covered overlay's poll that keeps asking for
         // the next frame runs once a frame, however often other events turn the loop.
         let deadline = crate::window::timer_deadline(&self.rt);
@@ -267,18 +266,11 @@ impl<T: 'static> Overlay<T> {
             }
         }
         // A hidden retained overlay's paced commit of what changed since its last.
-        if !self.drawing() && self.hidden_pace.take_due(now) { self.advance_at(now); }
+        if !self.presence.drawing() && self.hidden_pace.take_due(now) { self.advance_at(now); }
         if self.retry.is_some_and(|retry| retry <= now) {
             self.retry = None;
             self.dirty = true;
         }
-    }
-
-    pub(super) fn is_occluded(&self) -> bool {
-        #[cfg(target_os = "macos")]
-        return self.occluded;
-        #[cfg(not(target_os = "macos"))]
-        false
     }
 
     /// A frame with no drawable still runs what it would have (updates, poll, due timers)
@@ -337,7 +329,7 @@ impl<T: 'static> Overlay<T> {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         let recreate_layer = options_changed && matches!(self.live.as_ref().map(|l| &l.backing), Some(Backing::Layer(_)));
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        let layer_was_visible = self.visible;
+        let layer_was_visible = self.presence.shown();
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if recreate_layer { self.hide(); }
         if let Some(placement) = requests.placement { self.options.placement = placement; }
@@ -392,11 +384,11 @@ impl<T: 'static> Overlay<T> {
             if layer_was_visible && requests.visible != Some(false) { self.show_fading(event_loop, Duration::ZERO); }
             else if self.options.prewarm { self.prepare(event_loop, false); }
         }
-        if requests.refollow && self.visible && let Some(point) = Self::sample_pointer(event_loop) {
+        if requests.refollow && self.presence.shown() && let Some(point) = Self::sample_pointer(event_loop) {
             self.refollow(event_loop, point);
         }
         self.apply_input();
-        if self.visible {
+        if self.presence.shown() {
             #[cfg(target_os = "macos")]
             if let Some(panel) = &self.panel { self.shared.native.lock().unwrap().1.global_pointer = panel.global_pointer(); }
             #[cfg(target_os = "windows")]
@@ -405,10 +397,10 @@ impl<T: 'static> Overlay<T> {
             if let Some(x11) = &self.x11 { self.shared.native.lock().unwrap().1.global_pointer = x11.global_pointer(); }
         }
         #[cfg(target_os = "macos")]
-        if requests.request_keys && self.visible && self.options.keys == KeyPolicy::OnDemand
+        if requests.request_keys && self.presence.shown() && self.options.keys == KeyPolicy::OnDemand
             && let Some(panel) = &self.panel { panel.request_keys(); }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if requests.request_keys && self.visible && self.options.keys == KeyPolicy::OnDemand
+        if requests.request_keys && self.presence.shown() && self.options.keys == KeyPolicy::OnDemand
             && let Some(Live { backing: Backing::Layer(layer), .. }) = &self.live { layer.request_keys(); }
     }
 }
