@@ -315,6 +315,46 @@ impl Scene {
     /// new since the last build comes in on its own ([`crate::parts::Kind::enter`]); otherwise
     /// everything shows the frame it mounts.
     pub(crate) fn el(&self, paint: &DiagramStyle, streaming: bool) -> El {
+        let still = |t: Transition| if streaming { t } else { Transition::none() };
+        let mut card = col()
+            .w_full()
+            .items_center()
+            .padding(CARD_PAD)
+            .radius(6.0)
+            .fill(paint.surface)
+            .border(0.5, paint.surface_border)
+            .clip_rounded(6.0)
+            .animate_layout()
+            .transition(still(Transition::opacity()));
+        if self.size[0] > room(paint) + 0.5 {
+            // Shrunk as far as `min_scale` lets it and still too wide: its sides fade out under
+            // the card's padding rather than stopping at a hard edge.
+            card = card.clip_fade(CARD_PAD, 0.0, CARD_PAD, 0.0);
+        }
+        if let Some(title) = self.title_el(paint, streaming) {
+            card = card.gap(TITLE_GAP).child(title);
+        }
+        card.child(self.diagram_el(streaming))
+    }
+
+    /// The title and drawing without the card around them, and the size they take.
+    pub(crate) fn drawing(&self, paint: &DiagramStyle) -> (El, [f32; 2]) {
+        let mut size = self.size;
+        let mut out = col().items_center();
+        if let Some(title) = self.title_el(paint, false) {
+            let t = measure(self.title.as_deref().unwrap_or_default(), title_font(paint)).size;
+            size = [size[0].max(t[0] + 2.0), size[1] + t[1] + TITLE_GAP];
+            out = out.gap(TITLE_GAP).child(title);
+        }
+        (out.child(self.diagram_el(false)), size)
+    }
+
+    fn title_el(&self, paint: &DiagramStyle, streaming: bool) -> Option<El> {
+        let still = if streaming { Transition::opacity() } else { Transition::none() };
+        self.title.as_ref().map(|title| text(title.clone()).key("title").font(title_font(paint)).color(paint.text).transition(still))
+    }
+
+    fn diagram_el(&self, streaming: bool) -> El {
         let [w, h] = self.full;
         let still = |t: Transition| if streaming { t } else { Transition::none() };
         // Fit destinations before springing them. Multiplying a springing canvas size by a
@@ -361,27 +401,15 @@ impl Scene {
             let exit = if streaming { Transition { insertion: rune::Effect::IDENTITY, ..Transition::opacity() } } else { Transition::none() };
             body = body.child(el().key(s.key.clone()).absolute(0.0, 0.0).offset(r[0] * scale, r[1] * scale).size(r[2] * scale, r[3] * scale).hover_group().transition(exit).child(glow).a11y_hidden());
         }
-        let mut card = col()
-            .w_full()
-            .items_center()
-            .padding(CARD_PAD)
-            .radius(6.0)
-            .fill(paint.surface)
-            .border(0.5, paint.surface_border)
-            .clip_rounded(6.0)
-            .animate_layout()
-            .transition(still(Transition::opacity()));
-        if self.size[0] > room(paint) + 0.5 {
-            // Shrunk as far as `min_scale` lets it and still too wide: its sides fade out under
-            // the card's padding rather than stopping at a hard edge.
-            card = card.clip_fade(CARD_PAD, 0.0, CARD_PAD, 0.0);
-        }
-        if let Some(title) = &self.title {
-            let tf = TextStyle { size: paint.font.size + 1.0, line_height: paint.font.line_height + 2.0, weight: 600.0, ..paint.font };
-            card = card.gap(12.0).child(text(title.clone()).key("title").font(tf).color(paint.text).transition(still(Transition::opacity())));
-        }
-        card.child(el().key("diagram").size(self.size[0], self.size[1]).transition(still(Transition::opacity())).child(body))
+        el().key("diagram").size(self.size[0], self.size[1]).transition(still(Transition::opacity())).child(body)
     }
+}
+
+/// Points between a diagram's title and its drawing.
+const TITLE_GAP: f32 = 12.0;
+
+fn title_font(paint: &DiagramStyle) -> TextStyle {
+    TextStyle { size: paint.font.size + 1.0, line_height: paint.font.line_height + 2.0, weight: 600.0, ..paint.font }
 }
 
 pub(crate) fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {

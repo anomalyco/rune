@@ -241,6 +241,25 @@ pub fn render_streamed(src: &str, style: &DiagramStyle, hover: Hover, color: Col
     render_inner(src, style, hover, color, Mode::Settled)
 }
 
+/// A diagram's title and drawing without its card, for a viewer that frames and scales it
+/// itself (a lightbox whose frame stays the card's size while the drawing grows).
+pub struct Drawing {
+    pub el: El,
+    /// The points `el` takes.
+    pub size: [f32; 2],
+    /// The fill and border of the card it would draw in, for the viewer's frame.
+    pub surface: Color,
+    pub surface_border: Color,
+}
+
+/// [`render_with_hover`]'s title and drawing alone, laid out and fitted for `style.max_width`
+/// as its card would be.
+pub fn render_drawing(src: &str, style: &DiagramStyle, hover: Hover, color: Color) -> Option<Drawing> {
+    let hover = (hover != Hover::Off).then_some((hover, color));
+    let (el, size) = scenes::built(src, style, hover, None).0?.drawing(style);
+    Some(Drawing { el, size, surface: style.surface, surface_border: style.surface_border })
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     /// Laid out afresh and drawn the frame it mounts.

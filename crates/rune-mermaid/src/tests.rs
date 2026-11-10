@@ -189,6 +189,18 @@ fn min_scale_zero_fits_any_width() {
     assert_eq!(scene(WIDE_SEQUENCE, &roomy, None).expect("draws").scale, 1.0, "never grows past full size");
 }
 
+/// The bare drawing is the card's drawing without the card: the same size, plus its title.
+#[test]
+fn a_drawing_is_the_card_without_its_padding() {
+    let roomy = DiagramStyle { max_width: 4000.0, ..DiagramStyle::neutral(true) };
+    let full = scene(WIDE_SEQUENCE, &roomy, None).expect("draws");
+    let d = render_drawing(WIDE_SEQUENCE, &roomy, Hover::Off, roomy.text).expect("draws");
+    assert_eq!(d.size, full.size);
+    let titled = format!("---\ntitle: Checkout\n---\n{WIDE_SEQUENCE}");
+    let t = render_drawing(&titled, &roomy, Hover::Off, roomy.text).expect("draws");
+    assert!(t.size[1] > d.size[1] + 20.0 && t.size[0] >= d.size[0], "the title adds a line: {:?} {:?}", t.size, d.size);
+}
+
 /// Lines shrink with the drawing, as an SVG's do: a shrunk diagram's full-size pieces are the
 /// same as an unshrunk one's, so magnifying it never shows fat lines.
 #[test]

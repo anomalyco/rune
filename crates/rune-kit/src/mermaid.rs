@@ -22,12 +22,32 @@ use rune::El;
 
 use crate::markdown::{DiagramPaint, MarkdownStyle};
 
-pub use rune_mermaid::{DiagramStyle, Hover, may_draw, supported};
+pub use rune_mermaid::{DiagramStyle, Drawing, Hover, may_draw, supported};
 
 /// `src` drawn as a diagram card with `style`'s diagram colours, or `None` when it is outside
 /// the supported subset.
 pub fn render(src: &str, style: &MarkdownStyle) -> Option<El> {
     diagram(src, &style.diagram, false, false)
+}
+
+/// [`render`]'s title and drawing without the card, laid out for a card `max_width` points wide
+/// rather than `style`'s column: a lightbox passes the window's width, so a wide flowchart draws
+/// as it reads best instead of turned to fit the column, and a chart fills the room. For a
+/// viewer that frames and scales the drawing itself.
+pub fn drawing(src: &str, style: &MarkdownStyle, max_width: f32) -> Option<Drawing> {
+    let paint = &style.diagram;
+    let mut full = self::style(paint);
+    full.max_width = max_width;
+    let d = rune_mermaid::render_drawing(src, &full, hover(paint), paint.hover)?;
+    Some(Drawing { el: d.el.role("figure").label(kind(src)).description(src.trim()), ..d })
+}
+
+fn hover(paint: &DiagramPaint) -> Hover {
+    match (paint.hover.a > 0.0, paint.hover_neighbours) {
+        (false, _) => Hover::Off,
+        (true, false) => Hover::Edges,
+        (true, true) => Hover::Neighbours,
+    }
 }
 
 /// `streaming`: the reply is still arriving, so what's new since the last build comes in on its
@@ -40,16 +60,7 @@ pub(crate) fn diagram(src: &str, paint: &DiagramPaint, streaming: bool, open: bo
         (true, true) => rune_mermaid::render_streaming,
         (true, false) => rune_mermaid::render_streamed,
     };
-    let card = render(
-        src,
-        &style(paint),
-        match (paint.hover.a > 0.0, paint.hover_neighbours) {
-            (false, _) => Hover::Off,
-            (true, false) => Hover::Edges,
-            (true, true) => Hover::Neighbours,
-        },
-        paint.hover,
-    )?;
+    let card = render(src, &style(paint), hover(paint), paint.hover)?;
     // A drawing says nothing to a screen reader: it reads the diagram's kind, then its source.
     Some(card.role("figure").label(kind(src)).description(src.trim()))
 }
