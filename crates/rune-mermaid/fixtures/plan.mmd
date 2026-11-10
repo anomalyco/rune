@@ -5,35 +5,35 @@ flowchart LR
   classDef blocked fill:#21262d,stroke:#6e7681,color:#c9d1d9
 
   subgraph PREP["Prep, done"]
-    t12["t12 byte strings for IR text"]:::done
-    t07["t07 op table in families"]:::done
+    t12["t12 tokens carry byte spans"]:::done
+    t07["t07 grammar table in groups"]:::done
   end
 
-  subgraph S2["Stage 2: first check in the new language (the pilot)"]
-    t31["t31 cache sees compiler edits"]:::waiting
-    t35["t35 seed = pinned commit, built from source"]:::doing
-    t44["t44 match_useful, the check rewritten"]:::doing
+  subgraph S2["Stage 2: first pass on the new parser (the pilot)"]
+    t31["t31 cache sees grammar edits"]:::waiting
+    t35["t35 baseline = pinned release, built from source"]:::doing
+    t44["t44 lint_unused, the pass rewritten"]:::doing
     t11["t11 old-vs-new compare hook"]:::doing
-    t36["t36 link new code into the old compiler"]:::blocked
-    t37["t37 PILOT: the check runs in the new build"]:::blocked
+    t36["t36 link the new parser into the old tool"]:::blocked
+    t37["t37 PILOT: the pass runs in the new build"]:::blocked
   end
 
-  subgraph IR["IR track: the new language reads the compiler's internal code"]
-    t84["t84 code generator stops using the interpreter"]:::doing
-    t33["t33 IR binary format + reader"]:::blocked
-    t34["t34 generate both sides from the op table"]:::blocked
-    t38["t38 IR verifier, rewritten"]:::blocked
+  subgraph IR["AST track: the new parser reads the old tool's syntax trees"]
+    t84["t84 formatter stops using the old evaluator"]:::doing
+    t33["t33 AST binary format + reader"]:::blocked
+    t34["t34 generate both sides from the grammar table"]:::blocked
+    t38["t38 AST verifier, rewritten"]:::blocked
   end
 
-  subgraph S3["Stage 3: code generator in the new language"]
-    t39["t39 layout, ABI, names"]:::blocked
-    t40["t40 prelude, constants, debug info"]:::blocked
-    t41["t41 functions and core ops"]:::blocked
-    t42["t42 C calls and exports"]:::blocked
-    t43["t43 runtime ops, copy-on-write glue"]:::blocked
+  subgraph S3["Stage 3: formatter on the new parser"]
+    t39["t39 layout, spacing, names"]:::blocked
+    t40["t40 comments, literals, source maps"]:::blocked
+    t41["t41 functions and core forms"]:::blocked
+    t42["t42 imports and exports"]:::blocked
+    t43["t43 macros, attribute glue"]:::blocked
     t45["t45 byte-exact match with the old one, at most 2x slower"]:::blocked
-    t46["t46 the compiler rebuilds itself identically"]:::blocked
-    t47["t47 delete the old code generator"]:::blocked
+    t46["t46 the tool formats itself identically"]:::blocked
+    t47["t47 delete the old formatter"]:::blocked
   end
 
   t31 --> t35 --> t36
