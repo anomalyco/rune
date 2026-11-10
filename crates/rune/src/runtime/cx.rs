@@ -26,6 +26,8 @@ pub(crate) struct ViewDefaults {
     pub(crate) help: Option<super::HelpLook>,
     /// [`Cx::web_focus`].
     pub(crate) web_focus: bool,
+    /// [`Cx::force_focus_rings`].
+    pub(crate) force_focus_rings: bool,
 }
 
 /// Wakes the shell from another thread (new data arrived); a no-op headless.
@@ -169,6 +171,14 @@ impl<S> Cx<S> {
     /// of AppKit's. Set it on every run of the view.
     pub fn help_look(&mut self, look: crate::HelpLook) {
         self.defaults.help = Some(look);
+    }
+    /// Every control that can take focus draws its keyboard focus ring (and its focus fill) as
+    /// if the keyboard had focused it, whether or not it has focus: a developer tool for checking
+    /// focus styles at a glance, as forcing `:focus` and `:focus-visible` on every focusable
+    /// element of a web page does (Chrome DevTools' `CSS.forcePseudoState`). Focus itself doesn't
+    /// move. Set it on every run of the view while the tool is on.
+    pub fn force_focus_rings(&mut self) {
+        self.defaults.force_focus_rings = true;
     }
     /// Keyboard focus as a web page has it, for a view that ports one: every pressable control
     /// (an `on_press` element whose role is button, link, tab, checkbox, switch, radio or

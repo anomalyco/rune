@@ -1,0 +1,1 @@
+- **`Cx::force_focus_rings`: every control draws its focus ring at once.** Each element that can take focus draws its keyboard focus ring and focus fill as if the keyboard had focused it, without moving focus, as forcing `:focus-visible` on a web page does; a debug bar's focus-styles check sets it while it is on.
