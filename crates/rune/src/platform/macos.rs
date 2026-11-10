@@ -26,7 +26,9 @@ pub(crate) mod window_shape;
 
 pub(crate) use geometry::{backing_scale, content_origin, display_bounds, outer_size, overlay_rect, place_window, pointer_display, set_window_frame, window_geometry};
 pub(crate) use pointer::PointerState;
-pub(crate) use surface::{PresumeShown, layer_occluded, pin_contents_top_left, present_with_transaction, surface_occluded, window_occluded};
+#[cfg(test)]
+pub(crate) use surface::layer_occluded;
+pub(crate) use surface::{PresumeShown, pin_contents_top_left, present_with_transaction, surface_occluded, window_occluded};
 use geometry::{overlay_rect_on, screen_id};
 use pointer::MouseMonitors;
 use surface::occlusion_hidden;
