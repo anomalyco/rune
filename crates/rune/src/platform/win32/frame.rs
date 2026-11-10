@@ -29,7 +29,7 @@ use std::rc::Rc;
 use std::sync::OnceLock;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
-use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect, ScreenToClient};
+use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, GetMonitorInfoW, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect, ScreenToClient};
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TrackMouseEvent};
@@ -144,6 +144,17 @@ pub(crate) fn window_menu(window: &winit::window::Window, menu: WindowMenu, at: 
     }
 }
 
+/// The top right corner of `hwnd`'s client area, in desktop pixels.
+fn client_top_right(hwnd: HWND) -> Option<(i32, i32)> {
+    let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    // SAFETY: plain queries on a live window this thread owns.
+    unsafe {
+        if GetClientRect(hwnd, &mut r) == 0 { return None; }
+        let mut p = POINT { x: r.right, y: r.top };
+        (ClientToScreen(hwnd, &mut p) != 0).then_some((p.x, p.y))
+    }
+}
+
 /// Each posted window menu's subclass id, named in its message.
 static NEXT_MENU: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
 
@@ -183,7 +194,7 @@ fn track_window_menu(hwnd: HWND, x: i32, y: i32) {
         enable(SC_MAXIMIZE, !zoomed && style & WS_MAXIMIZEBOX != 0);
         enable(SC_CLOSE, true);
         SetMenuDefaultItem(menu, SC_CLOSE, 0);
-        let picked = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, 0, hwnd, std::ptr::null());
+        let picked = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | crate::popup_menu::layout(), x, y, 0, hwnd, std::ptr::null());
         if picked != 0 { PostMessageW(hwnd, WM_SYSCOMMAND, picked as WPARAM, 0); }
     }
 }
@@ -280,6 +291,13 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
             WM_CAPTURECHANGED | WM_CANCELMODE if matches!(state.caption.get(), CaptionState::Pressed { .. }) => {
                 state.set(hwnd, CaptionState::Idle);
                 if message == WM_CANCELMODE { ReleaseCapture(); }
+            }
+            // Alt+Space right to left: the window menu at the window's top right corner, laid
+            // out right to left, where a right-to-left window's opens; Windows' own keyboard
+            // menu would open left to right at the top left.
+            WM_SYSCOMMAND if wparam & 0xFFF0 == SC_KEYMENU as WPARAM && lparam == LPARAM::from(b' ') && crate::labels::rtl() => {
+                if let Some((x, y)) = client_top_right(hwnd) { track_window_menu(hwnd, x, y); }
+                return 0;
             }
             WM_NCRBUTTONDOWN | WM_NCRBUTTONUP | WM_NCRBUTTONDBLCLK if caption_button(wparam).is_some() => return 0,
             // The default would repaint a title bar this window doesn't have.

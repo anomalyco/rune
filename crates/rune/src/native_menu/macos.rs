@@ -159,6 +159,12 @@ impl Native {
                 self.entries.push((menu, item)); self.targets.extend(target);
             }
         });
+        // Each menu reads the app's way; the bar keeps the system's order of its menus.
+        if let Some(root) = app.mainMenu() {
+            for top in (0..root.numberOfItems()).filter_map(|i| root.itemAtIndex(i)).filter_map(|i| i.submenu()) {
+                super::set_layout_direction(&top);
+            }
+        }
         Ok(())
         }
     }

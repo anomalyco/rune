@@ -20,9 +20,9 @@ use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWi
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, EndMenu, GWL_EXSTYLE, GetClientRect, GetCursorPos, GetForegroundWindow,
     GetWindowLongPtrW, HMENU, IsWindowVisible, KillTimer, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-    PostMessageW, RegisterWindowMessageW, SetForegroundWindow, SetTimer, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, TPM_TOPALIGN, TPM_VERTICAL, TPMPARAMS, TrackPopupMenuEx, WM_NCDESTROY, WM_NULL, WS_EX_NOACTIVATE,
-    WindowFromPoint,
+    PostMessageW, RegisterWindowMessageW, SetForegroundWindow, SetTimer, TPM_LAYOUTRTL, TPM_LEFTALIGN, TPM_NONOTIFY,
+    TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TPM_TOPALIGN, TPM_VERTICAL, TPMPARAMS, TRACK_POPUP_MENU_FLAGS,
+    TrackPopupMenuEx, WM_NCDESTROY, WM_NULL, WS_EX_NOACTIVATE, WindowFromPoint,
 };
 use winit::window::Window;
 
@@ -167,7 +167,7 @@ fn track(hwnd: HWND, pending: &Pending) -> Option<String> {
         // foreground for its menu, and hands it back after.
         let previous = GetForegroundWindow();
         if previous != hwnd { SetForegroundWindow(hwnd); }
-        let flags = TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN
+        let flags = TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON | TPM_TOPALIGN | layout()
             | if params.is_some() { TPM_VERTICAL } else { 0 };
         let params_ptr = params.as_ref().map_or(std::ptr::null(), |p| p as *const TPMPARAMS);
         let turns = turns(hwnd);
@@ -201,8 +201,16 @@ fn client_pointer(hwnd: HWND) -> Option<(f32, f32)> {
     }
 }
 
-/// Where the menu opens, in screen pixels: below an element anchor, keeping clear of it when it
-/// has to flip up, or with its top-left corner at a point.
+/// How a menu lays out in the app's language ([`crate::labels::set_direction`]): from its left
+/// edge, or right to left from its right edge, mirrored, as a right-to-left Windows lays out its
+/// menus.
+pub(crate) fn layout() -> TRACK_POPUP_MENU_FLAGS {
+    if crate::labels::rtl() { TPM_LAYOUTRTL | TPM_RIGHTALIGN } else { TPM_LEFTALIGN }
+}
+
+/// Where the menu opens, in screen pixels: below an element anchor (from its left edge, or its
+/// right right to left), keeping clear of it when it has to flip up, or with its top-left corner
+/// (top-right right to left) at a point.
 fn placement(hwnd: HWND, show: &Show) -> (i32, i32, Option<TPMPARAMS>) {
     let scale = scale(hwnd);
     let mut origin = POINT { x: 0, y: 0 };
@@ -212,7 +220,7 @@ fn placement(hwnd: HWND, show: &Show) -> (i32, i32, Option<TPMPARAMS>) {
     let Some([x, y, w, h]) = show.element else { return (px(show.at.0, origin.x), px(show.at.1, origin.y), None) };
     let element = RECT { left: px(x, origin.x), top: px(y, origin.y), right: px(x + w, origin.x), bottom: px(y + h, origin.y) };
     let params = TPMPARAMS { cbSize: size_of::<TPMPARAMS>() as u32, rcExclude: element };
-    (element.left, element.bottom, Some(params))
+    (if crate::labels::rtl() { element.right } else { element.left }, element.bottom, Some(params))
 }
 
 /// Physical pixels per point on `hwnd`'s monitor.

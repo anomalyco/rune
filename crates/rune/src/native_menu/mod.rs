@@ -19,7 +19,7 @@ mod standard;
 #[cfg(target_os = "macos")]
 mod standard_macos;
 #[cfg(target_os = "macos")]
-pub(crate) use default_macos::{ensure as ensure_default_menu, promote as promote_default_menu};
+pub(crate) use default_macos::{ensure as ensure_default_menu, promote as promote_default_menu, set_layout_direction};
 #[cfg(target_os = "macos")]
 pub(crate) use standard_macos::{adopt as adopt_standard_view, install as install_standard_menus};
 #[cfg(target_os = "macos")]

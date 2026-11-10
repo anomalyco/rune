@@ -71,7 +71,8 @@ fn pick(hwnd: HWND, context: &Context) -> Option<String> {
         GetCursorPos(&mut at);
         // Without the foreground, the menu doesn't close when the user clicks elsewhere.
         SetForegroundWindow(hwnd);
-        let picked = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, at.x, at.y, 0, hwnd, ptr::null());
+        let flags = TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON | crate::popup_menu::layout();
+        let picked = TrackPopupMenu(popup, flags, at.x, at.y, 0, hwnd, ptr::null());
         PostMessageW(hwnd, WM_NULL, 0, 0);
         DestroyMenu(popup);
         match menu.get((picked as usize).checked_sub(1)?) { Some(TrayItem::Action { id, .. }) => Some(id.clone()), _ => None }

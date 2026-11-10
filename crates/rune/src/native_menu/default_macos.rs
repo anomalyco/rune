@@ -37,6 +37,22 @@ pub(crate) fn promote(app: &NSApplication) {
     }
 }
 
+/// Lays `menu` and its submenus out the way the app's language reads
+/// (`labels::set_direction`): right to left, their items align right, with checkmarks and
+/// shortcuts on the other sides, as a menu in a right-to-left localization's.
+pub(crate) fn set_layout_direction(menu: &NSMenu) {
+    // NSUserInterfaceLayoutDirection: left to right 0, right to left 1.
+    let direction: isize = if crate::labels::rtl() { 1 } else { 0 };
+    // SAFETY: main-thread menus and items, indices bounded by the item count; the setter
+    // (macOS 10.11 and later) takes an NSInteger.
+    unsafe {
+        let _: () = msg_send![menu, setUserInterfaceLayoutDirection: direction];
+        for i in 0..menu.numberOfItems() {
+            if let Some(submenu) = menu.itemAtIndex(i).and_then(|item| item.submenu()) { set_layout_direction(&submenu); }
+        }
+    }
+}
+
 /// A menu bar whose first item is an empty app menu, waiting in `PENDING`.
 pub(crate) fn empty_root(app: &NSApplication) -> Retained<NSMenu> {
     let mtm = MainThreadMarker::from(app);
