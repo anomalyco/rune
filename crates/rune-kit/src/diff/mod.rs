@@ -14,5 +14,5 @@ mod words;
 
 pub use model::{FileDiff, FileStatus, Hunk, Line, LineKind, Side, parse};
 pub use pairs::SplitRow;
-pub use state::{Annotation, DiffMode, DiffState, EXPAND_STEP, Expand, LineRange, LineRef};
+pub use state::{Annotation, DiffLine, DiffMode, DiffState, EXPAND_STEP, Expand, LineRange, LineRef};
 pub use view::{DiffView, FoldRow};
