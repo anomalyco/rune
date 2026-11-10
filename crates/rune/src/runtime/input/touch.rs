@@ -30,22 +30,37 @@ pub(super) struct Touch {
 struct Finger {
     id: u64,
     origin: (f32, f32),
+    /// Travel along the pan's axis (vertical until a pan picks horizontal) at the last event,
+    /// and that event's time.
     last: f32,
     at: f64,
     /// Points per second along the pan's axis.
     velocity: f32,
     mode: Mode,
-    /// The vertical viewport under the finger, held until the pan picks its axis.
-    scroll: Option<NodeId>,
-    horizontal: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
-    /// Still within the slop: lifting it here is a tap.
-    Pending,
+    /// Still within the slop: lifting it here is a tap. `scroll` is the vertical viewport
+    /// under the finger, held until the pan picks its axis.
+    Pending { scroll: Option<NodeId> },
+    /// It drags the element it pressed.
     Drag,
-    Pan,
+    /// It pans viewport `scroll` along one axis.
+    Pan { scroll: NodeId, horizontal: bool },
+}
+
+impl Mode {
+    /// The viewport the touch holds: the one it pans, or while pending the one under it.
+    fn scroll(self) -> Option<NodeId> {
+        match self {
+            Mode::Pending { scroll } => scroll,
+            Mode::Pan { scroll, .. } => Some(scroll),
+            Mode::Drag => None,
+        }
+    }
+
+    fn horizontal(self) -> bool { matches!(self, Mode::Pan { horizontal: true, .. }) }
 }
 
 impl<S: 'static> Runtime<S> {
@@ -69,35 +84,37 @@ impl<S: 'static> Runtime<S> {
         let scroll = self.touch_scroll_start(x, y);
         self.pointer_move(x, y);
         self.pointer_down(x, y);
-        self.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::Pending, scroll, horizontal: false });
+        self.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::Pending { scroll } });
     }
 
     fn touch_move(&mut self, id: u64, x: f32, y: f32, time: f64) {
         let Some(f) = self.touch.finger.as_ref().filter(|f| f.id == id) else { return };
         let (dx, dy) = (x - f.origin.0, y - f.origin.1);
-        if f.mode == Mode::Pending && dx.hypot(dy) > TOUCH_SLOP {
-            let (origin, scroll) = (f.origin, f.scroll);
+        if let Mode::Pending { scroll } = f.mode && dx.hypot(dy) > TOUCH_SLOP {
+            let origin = f.origin;
             let (scroll, horizontal) = if self.press_drags() { (None, false) } else { self.touch_scroll_pan(origin.0, origin.1, dx.abs() > dy.abs(), scroll) };
-            let f = self.touch.finger.as_mut().unwrap();
-            (f.scroll, f.horizontal, f.mode) = (scroll, horizontal, if scroll.is_some() { Mode::Pan } else { Mode::Drag });
+            self.touch.finger.as_mut().unwrap().mode = match scroll {
+                Some(scroll) => Mode::Pan { scroll, horizontal },
+                None => Mode::Drag,
+            };
         }
         let f = self.touch.finger.as_mut().unwrap();
-        let along = if f.horizontal { dx } else { dy };
+        let along = if f.mode.horizontal() { dx } else { dy };
         let dt = time - f.at;
         if dt > 0.0 { f.velocity = (along - f.last) / dt as f32; }
         (f.last, f.at) = (along, time);
-        match (f.mode, f.scroll) {
-            (Mode::Pan, Some(scroll)) => self.touch_scroll_move(scroll, along),
-            (Mode::Drag, _) => self.pointer_move(x, y),
-            _ => {}
+        match f.mode {
+            Mode::Pan { scroll, .. } => self.touch_scroll_move(scroll, along),
+            Mode::Drag => self.pointer_move(x, y),
+            Mode::Pending { .. } => {}
         }
     }
 
     fn touch_up(&mut self, id: u64, x: f32, y: f32, time: f64, cancelled: bool) {
         let Some(f) = self.touch.finger.take_if(|f| f.id == id) else { return };
-        let pan = f.mode == Mode::Pan;
+        let pan = matches!(f.mode, Mode::Pan { .. });
         let velocity = if pan && !cancelled && time - f.at < FLING_HOLD { f.velocity } else { 0.0 };
-        self.touch_scroll_end(f.scroll, velocity);
+        self.touch_scroll_end(f.mode.scroll(), velocity);
         if cancelled {
             self.cancel_pointer();
             return;
@@ -207,5 +224,19 @@ mod tests {
         rt.frame(1.0 / 60.0);
         assert!(rt.state.taps.is_empty());
         assert!(!rt.touching());
+    }
+
+    #[test]
+    fn a_finger_past_the_slop_picks_one_mode_with_only_its_own_data() {
+        let mut rt = rig();
+        let list = rt.nodes.iter().find(|n| n.key.as_deref() == Some("list")).unwrap().id;
+        rt.touch(1, TouchPhase::Started, 100.0, 200.0, 0.0);
+        assert_eq!(rt.touch.finger.as_ref().map(|f| f.mode), Some(Mode::Pending { scroll: Some(list) }), "pending, it holds the viewport under it");
+        rt.touch(1, TouchPhase::Moved, 100.0, 150.0, 0.01);
+        assert_eq!(rt.touch.finger.as_ref().map(|f| f.mode), Some(Mode::Pan { scroll: list, horizontal: false }));
+        rt.touch(1, TouchPhase::Ended, 100.0, 150.0, 0.02);
+        rt.touch(2, TouchPhase::Started, 20.0, 20.0, 1.0);
+        rt.touch(2, TouchPhase::Moved, 60.0, 20.0, 1.01);
+        assert_eq!(rt.touch.finger.as_ref().map(|f| f.mode), Some(Mode::Drag), "on an element that drags it holds no viewport");
     }
 }
