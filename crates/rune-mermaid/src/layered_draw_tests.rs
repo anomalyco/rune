@@ -117,6 +117,39 @@ fn edges_sharing_an_end_fan_out() {
     }
 }
 
+/// Edges whose ends both lie outside a subgraph go around its box, as dagre routes them, never
+/// through it.
+#[test]
+fn edges_route_around_subgraphs_they_do_not_belong_to() {
+    let plan = include_str!("../fixtures/plan.mmd");
+    let past = "flowchart TD\n  A[start] --> B[finish]\n  subgraph S[In between]\n    M1[one] --> M2[two] --> M3[three]\n  end\n  A --> M1\n  M3 --> B\n  A --> C[aside] --> B";
+    for dir in ["LR", "TD"] {
+        let srcs = [plan.replacen("flowchart LR", &format!("flowchart {dir}"), 1), past.replacen("flowchart TD", &format!("flowchart {dir}"), 1)];
+        for (src, width) in srcs.iter().flat_map(|s| [(s, 680.0), (s, 4000.0)]) {
+            let Some(crate::Parsed { diagram: crate::Diagram::Flowchart(f), .. }) = crate::parse(src) else { panic!() };
+            let c = canvas(src, &paint_at(true, width));
+            let bounds = |pts: &[[f32; 2]]| pts.iter().fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+            let within = |v: usize, k: usize| std::iter::successors(f.nodes[v].cluster, |&s| f.subgraphs[s].parent).any(|s| s == k);
+            let boxes: Vec<[f32; 4]> = c.ops.iter().filter_map(|op| match op {
+                Op::Fill(pts, _) if pts.len() > 8 => Some(bounds(pts)),
+                _ => None,
+            }).collect();
+            for k in 0..f.subgraphs.len() {
+                let members: Vec<[f32; 4]> = (0..f.nodes.len()).filter(|&v| within(v, k)).map(|v| bounds(&c.regions[v])).collect();
+                let Some(b) = boxes.iter().filter(|b| members.iter().all(|m| b[0] < m[0] - 4.0 && b[1] < m[1] - 4.0 && b[2] > m[2] + 4.0 && b[3] > m[3] + 4.0)).min_by(|a, b| ((a[2] - a[0]) * (a[3] - a[1])).total_cmp(&((b[2] - b[0]) * (b[3] - b[1])))) else { continue };
+                let inner = [b[0] + 1.5, b[1] + 1.5, b[2] - 1.5, b[3] - 1.5];
+                for t in &c.traces {
+                    if within(t.ends.0, k) || within(t.ends.1, k) {
+                        continue;
+                    }
+                    let into = t.line.iter().find(|p| p[0] > inner[0] && p[0] < inner[2] && p[1] > inner[1] && p[1] < inner[3]);
+                    assert!(into.is_none(), "{} → {} runs through {:?} at {into:?}, {dir} at width {width}", f.nodes[t.ends.0].id, f.nodes[t.ends.1].id, f.subgraphs[k].title);
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn an_edge_to_a_subgraph_stops_on_its_border() {
     let paint = DiagramStyle::neutral(false);

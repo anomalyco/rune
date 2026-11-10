@@ -1,0 +1,1 @@
+- **rune-mermaid: edges go around subgraphs they aren't in, as dagre routes them, instead of cutting through their boxes.** A long edge's points on a subgraph's ranks, and one rank either side, move out past the box's nearer side, and a route keeps the bend points it needs to stay out of every subgraph that holds neither of its ends.

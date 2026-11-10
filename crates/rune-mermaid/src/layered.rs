@@ -521,6 +521,29 @@ fn place(g: &Graph, sp: &Spacing, held: Option<&Memo>) -> Option<(Placed, Memo)>
                 }
             }
         }
+        // A long edge passing a subgraph it isn't in goes around its box, as dagre's border
+        // nodes make it: its points on the subgraph's ranks, and one rank either side so the
+        // curve doesn't cut a corner, move out past the box's nearer side.
+        for (c, b) in boxes.iter().enumerate().filter(|(_, b)| b[0] <= b[2]) {
+            let near = first[c].saturating_sub(1)..=last[c] + 1;
+            for v in n..nodes.len() {
+                let Kind::Dummy(e, _) = nodes[v].kind else { continue };
+                let (a, z) = ends(e);
+                if !near.contains(&nodes[v].rank) || [a, z].iter().any(|&u| node_chains[u].contains(&c)) {
+                    continue;
+                }
+                let (lo, hi) = (b[0] - sp.node / 2.0, b[2] + sp.node / 2.0);
+                if x[v] <= lo || x[v] >= hi {
+                    continue;
+                }
+                let left = match first_on_rank[c].get(&nodes[v].rank) {
+                    Some(&w) => pos[v] < pos[w],
+                    None => x[v] < (b[0] + b[2]) / 2.0,
+                };
+                shift[v] += if left { lo - x[v] } else { hi - x[v] };
+                moved = true;
+            }
+        }
         if !moved {
             break;
         }

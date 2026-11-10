@@ -13,6 +13,8 @@ use super::layered::Placed;
 
 /// Clearance between an edge and nodes it passes.
 const NODE_GAP: f32 = 5.0;
+/// Clearance between an edge and the box of a subgraph it passes.
+const CLUSTER_GAP: f32 = 2.0;
 /// Clearance between a moved label and anything else.
 const LABEL_GAP: f32 = 2.0;
 /// The least distance between two edges' ends on the same side of a node: an arrowhead's width
@@ -42,6 +44,11 @@ pub(crate) struct Ctx<'a> {
     /// Port offsets `[start, end]` per edge, across the rank axis, for ends moved apart from
     /// others on the same side of a node ([`Ctx::fanned`]).
     slots: Vec<[Option<f32>; 2]>,
+    /// The subgraphs each of `sizes` sits in, innermost last ([`Ctx::homes`]); an edge keeps out
+    /// of every other subgraph's box.
+    homes: Vec<Vec<usize>>,
+    /// The subgraph each of `sizes` past the nodes is.
+    stops: Vec<usize>,
 }
 
 /// An edge drawn: its curve and the tips and directions of its heads, in screen points.
@@ -60,7 +67,22 @@ impl<'a> Ctx<'a> {
         let swap = |p: [f32; 2]| if across { [p[1], p[0]] } else { p };
         let outlines = (0..sizes.len()).map(|v| outline(shapes[v], swap(placed.centers[v]), sizes[v]).into_iter().map(swap).collect()).collect();
         let centers = placed.centers.clone();
-        Ctx { placed, sizes: sizes.to_vec(), shapes, labels, across, ends, centers, real: sizes.len(), outlines, titles: Vec::new(), slots: Vec::new() }
+        Ctx { placed, sizes: sizes.to_vec(), shapes, labels, across, ends, centers, real: sizes.len(), outlines, titles: Vec::new(), slots: Vec::new(), homes: Vec::new(), stops: Vec::new() }
+    }
+
+    /// The subgraphs each node sits in, innermost last, given per subgraph as its chain from the
+    /// outermost. Call after [`Ctx::cluster_ends`]: a subgraph an edge stops on is its end's home.
+    pub(crate) fn homes(mut self, nodes: impl IntoIterator<Item = Vec<usize>>, chains: &[Vec<usize>]) -> Self {
+        self.homes = nodes.into_iter().collect();
+        self.homes.extend(self.stops.iter().map(|&c| chains[c].clone()));
+        self
+    }
+
+    /// The boxes of subgraphs that hold neither end of edge `i`, in layout axes.
+    fn foreign(&self, i: usize) -> impl Iterator<Item = [f32; 4]> + '_ {
+        let (from, to) = self.ends[i];
+        let home = |v: usize, c: usize| self.homes.get(v).is_some_and(|h| h.contains(&c));
+        self.placed.clusters.iter().enumerate().filter(move |&(c, b)| *b != [0.0; 4] && !home(from, c) && !home(to, c)).map(|(_, b)| *b)
     }
 
     /// Stops edge ends on subgraph borders, `[start, end]` per edge: each subgraph named joins as
@@ -81,6 +103,7 @@ impl<'a> Ctx<'a> {
                         self.sizes.push(size);
                         self.shapes.push(shape);
                         boxes.push((b.0, self.sizes.len() - 1));
+                        self.stops.push(b.0);
                         self.sizes.len() - 1
                     }
                 };
@@ -245,9 +268,12 @@ impl<'a> Ctx<'a> {
             .chain([b])
             .collect();
         let boxes: Vec<[f32; 4]> = self.label_boxes(edge).collect();
+        let foreign: Vec<[f32; 4]> = self.foreign(edge).collect();
+        let g = CLUSTER_GAP;
         pts.iter().all(|&p| {
             (0..self.real).all(|v| v == ends.0 || v == ends.1 || self.clear_of(v, p, NODE_GAP))
                 && boxes.iter().all(|r| p[0] < r[0] || p[0] > r[2] || p[1] < r[1] || p[1] > r[3])
+                && foreign.iter().all(|r| p[0] < r[0] - g || p[0] > r[2] + g || p[1] < r[1] - g || p[1] > r[3] + g)
         })
     }
 
