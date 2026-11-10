@@ -387,7 +387,7 @@ fn overlay_hidden_commit_keeps_elapsed_motion_on_later_reveal() {
         let commit = overlay.clock.last() + Duration::from_secs(10);
         overlay.rt.state.enter = true;
         overlay.advance_at(commit); // Hidden turn 1 commits B; no show request yet.
-        assert_eq!(handle.shared.requests.lock().unwrap().visible, None);
+        assert_eq!(handle.shared.requests.lock().unwrap().visible(), None);
         assert_eq!(overlay.rt.presented("box").unwrap().0[2], 12.0, "idle before B must not age B");
         assert!(!overlay.draw(), "hidden motion must not drive frames");
         assert_eq!(overlay.wake_deadline(), None);
@@ -500,7 +500,7 @@ fn overlay_hidden_poll_can_show_and_animate_from_the_cached_pose() {
         } else {
             overlay.advance();
         }
-        assert_eq!(handle.shared.requests.lock().unwrap().visible, Some(true));
+        assert_eq!(handle.shared.requests.lock().unwrap().visible(), Some(true));
         overlay.settle_before_reveal();
         overlay.refresh_for_reveal_at(Instant::now());
         if queued {
