@@ -318,3 +318,18 @@ fn a_target_that_follows_the_drag_hears_its_point_on_the_element_and_where_it_dr
     rt.frame(4.0 / 60.0);
     assert_eq!(take(&mut rt), [("over", Some((70.0, 60.0))), ("move", Some((70.0, 60.0))), ("off", None), ("drop", Some((70.0, 60.0)))]);
 }
+
+#[test]
+fn a_drag_that_left_or_dropped_carries_nothing_into_the_next_sample() {
+    let mut rt = run(false);
+    rt.drag_files(files(&["a.png"]), Some((50.0, 50.0)));
+    rt.drag_files_leave();
+    assert!(!rt.drag_files_to(Some((150.0, 150.0))), "no drag: a sample queues nothing");
+    rt.frame(1.0 / 60.0);
+    drop_at(&mut rt, &["a.png"], (50.0, 50.0));
+    assert!(!rt.dragging_files() && !rt.drag_files_to(Some((150.0, 150.0))));
+    rt.state.hover.clear();
+    rt.drag_files(files(&["notes.txt"]), Some((50.0, 50.0)));
+    rt.frame(3.0 / 60.0);
+    assert_eq!(rt.state.hover, [("outer", true)], "the next drag starts from its own files, not the last one's");
+}
