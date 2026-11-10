@@ -486,9 +486,8 @@ pub(super) struct Stack {
     pub(super) pad_bottom: f32,
     pub(super) gap: f32,
     pub(super) width: f32,
-    /// Measure at the landing width immediately; defer height targets until it is stable.
-    pub(super) width_hold_until: f64,
-    pub(super) width_shrink_until: f64,
+    /// A width change the rows still wait out (heights it defers go in `pending_heights`).
+    pub(super) width_hold: WidthHold,
     pub(super) pending_heights: HashMap<NodeId, f32>,
     /// The window size at the last commit.
     pub(super) window: (f32, f32),
@@ -502,6 +501,38 @@ pub(super) struct Stack {
     pub(super) slides: content_slide::ContentSlides,
     /// Fold rows opening or shutting together as one block.
     pub(super) runs: Vec<growth_runs::GrowthRun>,
+}
+
+/// A growth stack whose width changed: its rows measure at the new width at once, but their
+/// new heights wait until the width is stable, and a streaming row shrinks only a while after.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) enum WidthHold {
+    #[default]
+    Off,
+    /// Heights wait until `until`; a streaming row may shrink from `shrink_from`.
+    Rewrap { until: f64, shrink_from: f64 },
+}
+
+impl WidthHold {
+    /// Seconds new heights wait after a width change.
+    const HOLD: f64 = 0.12;
+    /// Seconds a streaming row keeps its height after a width change before it may shrink.
+    const SHRINK: f64 = 0.4;
+
+    /// The width changed at `now`.
+    pub(super) fn rewrap(now: f64) -> WidthHold {
+        WidthHold::Rewrap { until: now + Self::HOLD, shrink_from: now + Self::SHRINK }
+    }
+
+    /// Whether a height set at `at` waits for the width to settle.
+    pub(super) fn defers(self, at: f64) -> bool {
+        matches!(self, WidthHold::Rewrap { until, .. } if at < until)
+    }
+
+    /// Whether a streaming row may shrink at `now`.
+    pub(super) fn may_shrink(self, now: f64) -> bool {
+        !matches!(self, WidthHold::Rewrap { shrink_from, .. } if now < shrink_from)
+    }
 }
 
 /// What a press on a window drag region asks the shell to do, synchronously in that press.
@@ -520,3 +551,7 @@ pub struct FrameStats {
     pub glyphs: usize,
     pub shaped: u32,
 }
+
+#[cfg(test)]
+#[path = "width_hold_tests.rs"]
+mod width_hold_tests;

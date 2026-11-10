@@ -100,7 +100,7 @@ impl<S: 'static> Runtime<S> {
                 for substep in 0..if in_run { 0 } else { steps.min(240) } {
                     if !stack.pending_heights.is_empty() {
                         let at = now - f64::from(self.grow_acc) - f64::from((steps.min(240) - substep) as f32 * SUBSTEP);
-                        if at >= stack.width_hold_until && let Some(height) = stack.pending_heights.remove(id) {
+                        if !stack.width_hold.defers(at) && let Some(height) = stack.pending_heights.remove(id) {
                             g.retarget(height);
                         }
                     }
