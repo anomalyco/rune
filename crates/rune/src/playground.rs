@@ -44,6 +44,7 @@ mod view;
 mod widths;
 
 pub(crate) use live::Live;
+use live::Showing;
 use folds::Folds;
 use widths::Widths;
 pub use open::slug;

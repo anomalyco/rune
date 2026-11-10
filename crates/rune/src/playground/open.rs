@@ -61,8 +61,9 @@ impl<S: 'static> Live<S> {
     /// Opens the playground, on story `name` if it's there; open already, it moves there.
     pub(super) fn open_story(&mut self, name: Option<&str>, real: &mut S) {
         let at = name.and_then(|n| self.find(n));
-        if !self.open || at.is_some() {
-            self.open = true;
+        if !self.is_open() || at.is_some() {
+            // Open already on a scene, `select` keeps its stage before replacing it.
+            if !self.is_open() { self.showing = Showing::Open; }
             if let Some(i) = at.or(self.folds.start.then_some(self.selected)) { self.reveal(i); }
             self.select(at.unwrap_or(self.selected), real);
         }

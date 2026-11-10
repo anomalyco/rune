@@ -144,7 +144,7 @@ impl<S: 'static> Live<S> {
 
     /// After folds change: a selection whose row a fold hid moves to the header that hides it.
     pub(super) fn settle(&mut self) {
-        if !self.open { return; }
+        if !self.is_open() { return; }
         let hider = match self.header {
             Some(h) => {
                 let mut around: Vec<&'static str> = std::iter::successors(Self::parent(h), |g| Self::parent(g)).collect();

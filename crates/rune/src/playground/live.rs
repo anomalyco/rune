@@ -2,6 +2,14 @@
 
 use super::*;
 
+/// Whether the playground shows. Open on a scene, it holds that scene's stage; a story with its
+/// own stage keeps it in [`Live::owned`], and a live page has none. Closed, nothing is staged.
+pub(super) enum Showing<S: 'static> {
+    Closed,
+    Open,
+    Scene(Box<Staged<S>>),
+}
+
 /// A window's playground while it runs.
 pub(crate) struct Live<S: 'static> {
     pub(super) pages: Vec<Page<S>>,
@@ -27,7 +35,6 @@ pub(crate) struct Live<S: 'static> {
     pub(super) poll: Option<fn(&mut S, f64, &mut Tx) -> bool>,
     /// Stories, as indices into scenes then pages, in the order the list shows them.
     pub(super) order: Vec<usize>,
-    pub(super) open: bool,
     /// Into scenes then pages.
     pub(super) selected: usize,
     /// A group header is the list's selection rather than `selected`'s row.
@@ -44,7 +51,8 @@ pub(crate) struct Live<S: 'static> {
     pub(super) region: Region,
     /// The focused element's path when the region last looked (see [`Live::see_focus`]).
     pub(super) region_seen: Option<String>,
-    pub(super) scene: Option<Box<Staged<S>>>,
+    /// Whether the playground shows, and on a scene, that scene's stage.
+    pub(super) showing: Showing<S>,
     pub(super) owned: Vec<Option<Box<dyn Any>>>,
     pub(super) controls: Controls,
     pub(super) dark: Option<bool>,
@@ -93,7 +101,6 @@ impl<S: 'static> Live<S> {
             scenes: spec.scenes,
             poll: spec.poll,
             order: Vec::new(),
-            open: false,
             selected: 0,
             header: None,
             folded: Vec::new(),
@@ -102,7 +109,7 @@ impl<S: 'static> Live<S> {
             side_active: false,
             region: Region::List,
             region_seen: None,
-            scene: None,
+            showing: Showing::Closed,
             controls,
             dark: None,
             size: 0,
@@ -136,7 +143,15 @@ impl<S: 'static> Live<S> {
     }
 
     pub(crate) fn is_open(&self) -> bool {
-        self.open
+        !matches!(self.showing, Showing::Closed)
+    }
+
+    /// The open scene's stage.
+    pub(super) fn scene(&self) -> Option<&Staged<S>> {
+        match &self.showing {
+            Showing::Scene(scene) => Some(scene),
+            _ => None,
+        }
     }
 
     pub(super) fn count(&self) -> usize {
@@ -237,9 +252,9 @@ impl<S: 'static> Live<S> {
                     self.open_story(name.as_deref(), real);
                 }
                 Request::Close => self.close(real),
-                Request::Toggle if self.open => self.close(real),
+                Request::Toggle if self.is_open() => self.close(real),
                 Request::Toggle => {
-                    self.open = true;
+                    self.showing = Showing::Open;
                     if self.folds.start { self.reveal(self.selected); }
                     self.select(self.selected, real);
                 }
@@ -298,21 +313,21 @@ impl<S: 'static> Live<S> {
 
     /// [`Playground::keep`], from the scene's stage as it goes.
     pub(super) fn keep(&mut self, real: &mut S) {
-        if let (Some(keep), Some(scene)) = (self.keep, &self.scene) { keep(&scene.state, real); }
+        if let (Some(keep), Some(scene)) = (self.keep, self.scene()) { keep(&scene.state, real); }
     }
 
     pub(super) fn close(&mut self, real: &mut S) {
         self.keep(real);
-        self.open = false;
+        self.showing = Showing::Closed;
         self.header = None;
         self.region = Region::List;
         self.controls.filter = crate::TextEdit::default();
         self.variant.iter_mut().for_each(|v| *v = 0);
-        self.scene = None;
         self.owned.iter_mut().for_each(|o| *o = None);
     }
 
     /// Shows story `i`. A stage made new, as a scene's always is, runs its `'r'` trigger.
+    /// Closed, only the selection moves: nothing is staged until the playground opens.
     pub(super) fn select(&mut self, i: usize, real: &mut S) {
         self.keep(real);
         if let Some(left) = self.selected.checked_sub(self.scenes.len())
@@ -321,7 +336,8 @@ impl<S: 'static> Live<S> {
             own.stop(stage.as_mut());
         }
         self.selected = i.min(self.count().saturating_sub(1));
-        self.scene = None;
+        if !self.is_open() { return; }
+        self.showing = Showing::Open;
         self.generation += 1;
         let scene_clock = crate::SceneClock { now: self.now, dt: 1.0 / 60.0 };
         if let Some((_, f)) = self.scenes.get(self.selected) {
@@ -332,7 +348,7 @@ impl<S: 'static> Live<S> {
                 if let Some(variant) = variant { variant(&mut s); }
                 s
             });
-            self.scene = Some(Box::new(Staged::new(state)));
+            self.showing = Showing::Scene(Box::new(Staged::new(state)));
         } else if let Some((i, page)) = self.page() && let Kind::Own(own) = &page.kind && self.owned[i].is_none() {
             let variant = self.variant[self.selected];
             let stage = crate::with_scene_clock(scene_clock, || own.init(&*real, variant));
@@ -345,9 +361,9 @@ impl<S: 'static> Live<S> {
 
     /// Queues the open story's trigger on `key`, to run at the next poll from now.
     pub(super) fn trigger(&mut self, key: char) {
-        if !self.open { return; }
+        if !self.is_open() { return; }
         let now = self.now;
-        if let Some(scene) = &mut self.scene {
+        if let Showing::Scene(scene) = &mut self.showing {
             if let Some((_, t)) = self.triggers.iter().find(|(s, t)| *s == self.selected && t.key == key) {
                 scene.script.push((now, t.queued()));
             }

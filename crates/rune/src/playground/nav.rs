@@ -9,7 +9,7 @@ impl<S: 'static> Live<S> {
         let m = ev.mods;
         // Control on macOS, the Windows key elsewhere: never the playground's.
         let other = m.alt || (cfg!(target_os = "macos") && m.ctrl) || (cfg!(not(target_os = "macos")) && m.logo);
-        if !self.open || other || region == Region::Stage { return Nav::Pass; }
+        if !self.is_open() || other || region == Region::Stage { return Nav::Pass; }
         let letter = match &ev.key {
             Key::Text(t) if !m.cmd => t.chars().next().filter(|_| t.chars().count() == 1).map(|c| c.to_ascii_lowercase()),
             _ => None,
@@ -97,7 +97,7 @@ impl<S: 'static> Live<S> {
     /// Whether the open story's side controls take keys: `Story::side_keys`, or
     /// `Playground::side_keys` for a scene.
     pub(super) fn side_keys(&self) -> bool {
-        match (&self.scene, self.own()) {
+        match (self.scene(), self.own()) {
             (Some(_), _) => self.sides.iter().any(|(s, side)| *s == self.selected && matches!(side, Side::Keys(..))),
             (None, Some((own, _))) => own.side_keys(),
             (None, None) => false,
@@ -107,8 +107,8 @@ impl<S: 'static> Live<S> {
     /// Keys while the keyboard is on the open story's side controls that take keys: true when
     /// the story's hook took `ev`, or it's ←, which stays rather than leaving.
     pub(crate) fn side_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
-        if !self.open { return false; }
-        let took = if let Some(scene) = &mut self.scene {
+        if !self.is_open() { return false; }
+        let took = if let Showing::Scene(scene) = &mut self.showing {
             let key = self.sides.iter().find_map(|(s, side)| match side {
                 Side::Keys(_, key) if *s == self.selected => Some(key),
                 _ => None,

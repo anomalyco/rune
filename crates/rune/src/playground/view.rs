@@ -7,7 +7,7 @@ impl<S: 'static> Live<S> {
     pub(crate) fn view(&self, app: &S, view: fn(&S, &mut Cx<S>) -> El, cx: &mut Cx<S>, viewport: (f32, f32)) -> El {
         let dark = self.app_dark.map_or_else(|| cx.system_dark(), |dark| dark(app));
         let t = tok::theme(dark);
-        if !self.open {
+        if !self.is_open() {
             if !self.bar { return call(view, app, cx); }
             let root = call(view, app, cx);
             // Laid out as the root of a window BAR shorter, as the runtime sizes a root. The
@@ -174,7 +174,7 @@ impl<S: 'static> Live<S> {
     /// The app's controls for the open story, from `Playground::side` or `Story::side` (or
     /// their `side_keys`), acting on its stage state.
     fn side_slot(&self, app: &S, cx: &mut Cx<S>) -> Option<El> {
-        if let Some(scene) = &self.scene {
+        if let Some(scene) = self.scene() {
             let (_, view) = self.sides.iter().find(|(s, _)| *s == self.selected)?;
             let mut stage = cx.retype::<S>();
             let root = match view {
@@ -200,7 +200,7 @@ impl<S: 'static> Live<S> {
         let preset = self.size.checked_sub(1).and_then(|i| self.sizes.get(i)).map(|(_, size)| *size);
         let layout = self.layout();
         let (w, h) = if layout == Stage::Fill { area } else { frame.or(preset).unwrap_or(area) };
-        let content = match (&self.scene, page) {
+        let content = match (self.scene(), page) {
             (Some(scene), _) => Some(self.nested(cx, env, |c| call(view, &scene.state, c))),
             (None, Some((_, Page { kind: Kind::Live(page), .. }))) => Some(self.nested(cx, env, |c| page(app, c))),
             (None, Some(_)) => self.own().map(|(own, stage)| {

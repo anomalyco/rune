@@ -94,7 +94,7 @@ fn a_fresh_stage_shares_the_real_waker_and_a_wake_from_another_thread_reaches_it
     attach(&mut rt, Some(fresh), &spec, Some(Some("Still".into())), None, false);
     rt.frame(0.0);
     rt.frame(DT);
-    let stage = &rt.playground.as_ref().unwrap().scene.as_ref().expect("a scene's stage").state;
+    let stage = &rt.playground.as_ref().unwrap().scene().expect("a scene's stage").state;
     let (waker, inbox) = (stage.waker.clone().expect("the real waker"), stage.inbox.clone().unwrap());
     let before = wakes.load(Ordering::SeqCst);
     std::thread::spawn(move || {
@@ -128,4 +128,21 @@ fn a_side_view_reads_the_real_state_and_keep_writes_the_preview_back() {
     tap(&mut rt, "keep");
     assert_eq!(shows(&rt, "compare"), "stage 4 real 4");
     assert_eq!((rt.state.count, rt.playground.as_ref().unwrap().generation), (4, generation), "kept, and the stage stays");
+}
+
+#[test]
+fn a_replay_while_closed_makes_no_stage_for_the_next_open_to_keep() {
+    let keep = base().fresh(copy).keep(|stage, real| real.count = stage.count);
+    let mut rt = runtime_with(keep, None, true);
+    open(&mut rt, "big");
+    rt.update(|_, tx| tx.close_playground());
+    rt.frame(DT);
+    rt.state.count = 5;
+    rt.update(|_, tx| tx.replay_playground());
+    rt.frame(DT);
+    assert!(rt.playground.as_ref().unwrap().scene().is_none(), "closed, a replay does nothing");
+    rt.update(|_, tx| tx.toggle_playground());
+    rt.frame(DT);
+    assert_eq!(rt.state.count, 5, "opening keeps nothing back from a stage nobody saw");
+    assert_eq!(shows(&rt, "count"), "count 100", "and the story opens fresh");
 }

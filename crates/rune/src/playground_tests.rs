@@ -254,7 +254,7 @@ fn the_real_state_keeps_polling_while_open() {
     let before = rt.state.polls;
     for _ in 0..5 { rt.frame(1.0 / 60.0); }
     assert!(rt.state.polls >= before + 5);
-    let scene = rt.playground.as_ref().and_then(|p| p.scene.as_ref()).map(|s| s.state.polls);
+    let scene = rt.playground.as_ref().and_then(|p| p.scene()).map(|s| s.state.polls);
     assert!(scene.is_some_and(|n| n >= 5), "the scene polls too");
 }
 
@@ -385,7 +385,7 @@ fn own_state<P: 'static>(rt: &Runtime<Real>) -> &P {
 }
 
 fn scene_state(rt: &Runtime<Real>) -> &Real {
-    &rt.playground.as_ref().and_then(|p| p.scene.as_ref()).expect("a scene").state
+    &rt.playground.as_ref().and_then(|p| p.scene()).expect("a scene").state
 }
 
 #[cfg(feature = "hot")]
