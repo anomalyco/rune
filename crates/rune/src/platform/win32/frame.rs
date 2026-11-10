@@ -29,7 +29,7 @@ use std::rc::Rc;
 use std::sync::OnceLock;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
-use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect, ScreenToClient};
+use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, GetMonitorInfoW, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect, ScreenToClient};
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TrackMouseEvent};
@@ -124,13 +124,17 @@ pub(crate) fn has_window_menu(window: &winit::window::Window) -> bool {
 /// where neither a quit (`crate::quit`) nor the windows' timers could run until it closed.
 pub(crate) fn window_menu(window: &winit::window::Window, menu: WindowMenu, at: Option<(i32, i32)>) {
     let Some(hwnd) = super::hwnd(window) else { return };
-    if menu == WindowMenu::Keyboard {
+    let rtl = crate::labels::rtl();
+    if menu == WindowMenu::Keyboard && !rtl {
         // SAFETY: posts to a live window this thread owns.
         unsafe { PostMessageW(hwnd, WM_SYSCOMMAND, SC_KEYMENU as WPARAM, LPARAM::from(b' ')); }
         return;
     }
-    // Where the click was, in desktop pixels; the pointer may have moved since.
-    let Some((x, y)) = at.or_else(super::pointer_position) else { return };
+    // Where the click was, in desktop pixels; the pointer may have moved since. From the
+    // keyboard right to left, the window's top right corner, where a right-to-left window's
+    // system menu opens: Windows' own Alt+Space menu can't lay out right to left.
+    let at = if menu == WindowMenu::Keyboard { client_top_right(hwnd) } else { at.or_else(super::pointer_position) };
+    let Some((x, y)) = at else { return };
     let id = NEXT_MENU.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // Screen points fit 16 bits each, as in every mouse message's.
     let point = ((y as u16 as u32) << 16 | x as u16 as u32) as usize;
@@ -141,6 +145,17 @@ pub(crate) fn window_menu(window: &winit::window::Window, menu: WindowMenu, at: 
             RemoveWindowSubclass(hwnd, Some(menu_procedure), id);
             track_window_menu(hwnd, x, y);
         }
+    }
+}
+
+/// The top right corner of `hwnd`'s client area, in desktop pixels.
+fn client_top_right(hwnd: HWND) -> Option<(i32, i32)> {
+    let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    // SAFETY: plain queries on a live window this thread owns.
+    unsafe {
+        if GetClientRect(hwnd, &mut r) == 0 { return None; }
+        let mut p = POINT { x: r.right, y: r.top };
+        (ClientToScreen(hwnd, &mut p) != 0).then_some((p.x, p.y))
     }
 }
 
@@ -183,7 +198,7 @@ fn track_window_menu(hwnd: HWND, x: i32, y: i32) {
         enable(SC_MAXIMIZE, !zoomed && style & WS_MAXIMIZEBOX != 0);
         enable(SC_CLOSE, true);
         SetMenuDefaultItem(menu, SC_CLOSE, 0);
-        let picked = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, 0, hwnd, std::ptr::null());
+        let picked = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | crate::popup_menu::layout(), x, y, 0, hwnd, std::ptr::null());
         if picked != 0 { PostMessageW(hwnd, WM_SYSCOMMAND, picked as WPARAM, 0); }
     }
 }

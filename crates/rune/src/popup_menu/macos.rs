@@ -113,6 +113,7 @@ fn build(mtm: MainThreadMarker, menu: &PopupMenu, target: &Target, tag: &mut isi
     // `show` keeps it alive until the menu closes and clears it then.
     unsafe {
         ns_menu.setAutoenablesItems(false);
+        crate::native_menu::set_layout_direction(&ns_menu);
         for entry in &menu.entries {
             match entry {
                 Entry::Item(item) => {
