@@ -4,6 +4,7 @@
 //! Other native platforms return Unsupported; headless scripts use the same item lookup and
 //! action dispatch on every platform.
 use std::sync::{Arc, Mutex, Weak};
+use crate::machine::{Attempt, Seq};
 use crate::{App, AppHandle, Shortcut, Tx, app::Shared};
 
 #[cfg(target_os = "macos")]
@@ -111,14 +112,16 @@ impl std::error::Error for MenuError {}
 
 struct State<S> {
     items: Vec<MenuItem<S>>,
-    revision: u64,
+    /// Each new set of items is a new attempt: a click on an item from an earlier set, or a
+    /// guard that drained one, is stale.
+    revision: Seq,
     running: bool,
     headless: bool,
     errors: Vec<MenuError>,
 }
 pub(crate) struct Hub<S>(Mutex<State<S>>);
 impl<S> Default for Hub<S> {
-    fn default() -> Self { Self(Mutex::new(State { items: Vec::new(), revision: 0, running: false, headless: false, errors: Vec::new() })) }
+    fn default() -> Self { Self(Mutex::new(State { items: Vec::new(), revision: Seq::default(), running: false, headless: false, errors: Vec::new() })) }
 }
 
 fn validate<S>(items: &[MenuItem<S>]) -> Result<(), MenuError> {
@@ -138,7 +141,7 @@ impl<S: 'static> App<S> {
     /// Windows/Linux) are available through AppHandle::take_menu_errors().
     pub fn menu_item(self, item: MenuItem<S>) -> Self {
         let mut state = self.shared.menus.0.lock().unwrap();
-        state.items.push(item); state.revision += 1;
+        state.items.push(item); state.revision.next();
         drop(state);
         self
     }
@@ -156,7 +159,7 @@ impl<S: 'static> AppHandle<S> {
         if !cfg!(target_os = "macos") && !state.headless { return Err(MenuError::Unsupported); }
         if !state.running { return Err(MenuError::NotRunning); }
         validate(&items)?;
-        state.items = items; state.revision += 1;
+        state.items = items; state.revision.next();
         drop(state);
         self.shared.wake();
         Ok(())
@@ -192,18 +195,18 @@ pub(crate) fn take_unhandled(key: Option<&crate::KeyEvent>) -> Option<crate::run
 pub(crate) fn fire<S: 'static>(shared: &Arc<Shared<S>>, selector: &str) -> Result<(), MenuError> {
     enqueue(shared, selector, None)
 }
-fn enqueue<S: 'static>(shared: &Arc<Shared<S>>, selector: &str, expected: Option<u64>) -> Result<(), MenuError> {
+fn enqueue<S: 'static>(shared: &Arc<Shared<S>>, selector: &str, expected: Option<Attempt>) -> Result<(), MenuError> {
     let state = shared.menus.0.lock().unwrap();
-    if expected.is_some_and(|r| r != state.revision) { return Ok(()); }
+    let revision = state.revision.current();
+    if expected.is_some_and(|r| r != revision) { return Ok(()); }
     let index = lookup(&state, selector)?;
     let id = state.items[index].description.id.clone();
-    let revision = state.revision;
     drop(state);
     let weak = Arc::downgrade(shared);
     AppHandle { shared: shared.clone() }.update(move |s, tx| {
         let Some(shared) = weak.upgrade() else { return };
         let state = shared.menus.0.lock().unwrap();
-        if !state.running || state.revision != revision { return; }
+        if !state.running || state.revision.current() != revision { return; }
         let action = lookup(&state, &id).ok().map(|i| state.items[i].action);
         drop(state);
         if let Some(action) = action { action(s, tx); }
@@ -227,7 +230,9 @@ thread_local! {
 
 pub(crate) struct Guard<S: 'static> {
     shared: Weak<Shared<S>>,
-    revision: Option<u64>,
+    /// The set of items it last put in the bar; `None` before its first drain or after
+    /// another App's items took the bar.
+    revision: Option<Attempt>,
     /// This guard's name in `BAR`.
     #[cfg(target_os = "macos")]
     id: u64,
@@ -269,8 +274,8 @@ impl<S: 'static> Guard<S> {
     pub(crate) fn drain(&mut self) {
         let Some(shared) = self.shared.upgrade() else { return };
         let state = shared.menus.0.lock().unwrap();
-        if self.revision == Some(state.revision) { return; }
-        let (items, revision, headless) = (state.items.clone(), state.revision, state.headless);
+        if self.revision == Some(state.revision.current()) { return; }
+        let (items, revision, headless) = (state.items.clone(), state.revision.current(), state.headless);
         drop(state);
         let result = validate(&items).and_then(|()| {
             if headless { return Ok(()); }
