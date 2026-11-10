@@ -22,7 +22,6 @@ impl AnimationStore {
             if id.index == last || !m.alive || m.generation != id.generation { continue; }
             last = id.index;
             self.rebase(t, secs * f64::from(self.clock_scale(self.t_clock[t])));
-            self.t_held[t] = false;
         }
     }
 }
