@@ -33,7 +33,11 @@ impl<S: 'static> Runtime<S> {
             let mut colors = [Color::TRANSPARENT; 6];
             colors[C_FILL] = fill.alpha(fill.a * k);
             if v.border_width() > 0.0 { colors[C_BORDER] = self.color(n.id, P_BORDER, v.border()).alpha_times(k); }
-            if let Some(c) = paint_tracks::text_color(n) { colors[C_TEXT] = self.color(n.id, P_TEXT, c).alpha_times(k); }
+            // As it paints: a hovered group's `El::group_color` mixes in.
+            let group = self.inh_scratch.get(i).map_or(0.0, |h| h.group);
+            if let Some(c) = paint_tracks::text_color(n) { colors[C_TEXT] = paint_tracks::group_tint(n, self.color(n.id, P_TEXT, c), group).alpha_times(k); }
+            // A group's hover lands its colour as the pointer moves, as a hover fill does.
+            if v.group_color.is_some() { pointer[0] = pointer[0].max(group); }
             let mut sizes = [0.0; 5];
             sizes[S_RADIUS] = p.radius.0[0];
             sizes[S_BORDER] = v.border_width();

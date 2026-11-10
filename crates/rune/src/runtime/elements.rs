@@ -322,7 +322,8 @@ impl<S: 'static> Runtime<S> {
                     blur: if flight.is_some() { 0.0 } else { self.inh_scratch.get(i).map_or(p.blur, |h| h.blur) },
                     radius: p.radius.0[0],
                     fill: self.color(n.id, P_FILL, n.vis.fill),
-                    text_color: n.text.as_ref().map(|t| t.color).or(n.vis.icon.map(|(_, c)| c)).map(|c| self.color(n.id, P_TEXT, c)),
+                    text_color: paint_tracks::text_color(n)
+                        .map(|c| paint_tracks::group_tint(n, self.color(n.id, P_TEXT, c), self.inh_scratch.get(i).map_or(0.0, |h| h.group))),
                     hover: if (n.focus.highlight.is_some() && self.highlight_visible(i)) || (n.focus.fill.is_some() && self.focus_ring_visible(i)) { 1.0 }
                         else { self.scene.get(n.id, P_HOVER).unwrap_or(0.0) },
                     press: self.scene.get(n.id, P_PRESS).unwrap_or(0.0),
