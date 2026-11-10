@@ -3,6 +3,8 @@
 //! releases to `on_key_up`.
 use super::*;
 use crate::input::canvas_input::CanvasInput;
+use crate::machine::Attempt;
+use crate::runtime::scroll_x::WheelOwner;
 use crate::{GesturePhase, MagnifyEvent, PointerButton, RotateEvent, WheelEvent};
 
 /// A trackpad gesture at a window point, queued for the handlers under it.
@@ -28,7 +30,7 @@ impl<S: 'static> Runtime<S> {
             self.wheel_delta_arrived(ev.dx, ev.dy);
         }
         if moved || ev.phase != GesturePhase::Moved {
-            let ev = WheelEvent { momentum: self.wheel_lock.momentum, ..ev };
+            let ev = WheelEvent { momentum: self.wheel_lock.momentum(), ..ev };
             let gesture = self.wheel_lock.gesture;
             if !self.offer_wheel(gesture, ev) { self.wheel_scroll_for(gesture, ev.x, ev.y, ev.dx, ev.dy); }
         }
@@ -36,30 +38,35 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Queues `ev` for the `on_wheel` handlers it may go to; false leaves it to scrolling now.
-    fn offer_wheel(&mut self, gesture: u64, ev: WheelEvent) -> bool {
+    fn offer_wheel(&mut self, gesture: Attempt, ev: WheelEvent) -> bool {
         let lock = &self.wheel_lock;
         let same_gesture = lock.run_gesture == gesture;
         // A delta queued this frame may yet be taken: later ones wait their turn behind it.
-        let pending = self.queue.iter().any(|a| matches!(a, Action::Wheel(g, ..) if *g == gesture));
-        if same_gesture && lock.handler.is_none() && lock.horizontal.is_some() && !pending { return false; }
-        let chain = if same_gesture && lock.handler.is_some() { Vec::new() } else { self.gesture_chain(ev.x, ev.y, |g| g.wheel.is_some(), true) };
-        if chain.is_empty() && !(same_gesture && lock.handler.is_some()) && !pending { return false; }
+        let pending = self.wheel_queued(Some(gesture));
+        let (scrolls, handled) = match lock.owner {
+            WheelOwner::Vertical | WheelOwner::Horizontal(_) => (same_gesture, false),
+            WheelOwner::Handler(_) => (false, same_gesture),
+            WheelOwner::Unpicked => (false, false),
+        };
+        if scrolls && !pending { return false; }
+        let chain = if handled { Vec::new() } else { self.gesture_chain(ev.x, ev.y, |g| g.wheel.is_some(), true) };
+        if chain.is_empty() && !handled && !pending { return false; }
         self.queue.push(Action::Wheel(gesture, chain, ev));
         true
     }
 
     /// A queued wheel delta: the handler holding the gesture hears it, else each handler
     /// under the pointer until one takes it, else it scrolls.
-    pub(super) fn run_wheel(&mut self, gesture: u64, chain: Vec<String>, ev: WheelEvent, tx: &mut Tx) -> bool {
+    pub(super) fn run_wheel(&mut self, gesture: Attempt, chain: Vec<String>, ev: WheelEvent, tx: &mut Tx) -> bool {
         self.wheel_lock.sync_gesture(gesture);
         let mut taken = None;
-        if let Some(path) = self.wheel_lock.handler.clone() {
+        if let WheelOwner::Handler(path) = self.wheel_lock.owner.clone() {
             taken = self.call_wheel(&path, ev, tx);
-            if taken.is_none() { self.wheel_lock.handler = None; }
-        } else if self.wheel_lock.horizontal.is_none() {
+            if taken.is_none() { self.wheel_lock.owner = WheelOwner::Unpicked; }
+        } else if self.wheel_lock.owner == WheelOwner::Unpicked {
             for path in chain {
                 if self.call_wheel(&path, ev, tx) == Some(true) {
-                    self.wheel_lock.handler = Some(path);
+                    self.wheel_lock.owner = WheelOwner::Handler(path);
                     taken = Some(true);
                     break;
                 }
@@ -68,7 +75,7 @@ impl<S: 'static> Runtime<S> {
         if taken.is_none() {
             self.wheel_scroll_for(gesture, ev.x, ev.y, ev.dx, ev.dy);
         }
-        if self.wheel_lock.gesture != gesture && !self.queue.iter().any(|a| matches!(a, Action::Wheel(g, ..) if *g == gesture)) {
+        if self.wheel_lock.gesture != gesture && !self.wheel_queued(Some(gesture)) {
             self.wheel_lock.sync_gesture(self.wheel_lock.gesture);
         }
         taken.unwrap_or(false)
