@@ -447,12 +447,7 @@ struct Host<S: 'static> {
     comp: Option<Box<dyn Compositor<S>>>,
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     wayland: bool,
-    /// The window's frame moving to where a handler asked (`Tx::resize_window`), top-down
-    /// screen points on the host's frame clock. macOS only; elsewhere frames change at once.
-    frame_anim: Option<crate::window::frame::FrameAnim>,
-    /// The window origin `frame_anim` last set, to notice a drag mid-flight.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    frame_origin: Option<[f32; 2]>,
+    frame_move: Option<stepping::FrameMove>,
     /// The content size a resize request jumps to, so its Resized event lays out like a step
     /// of a resize animation rather than a user's resize.
     frame_jump: Option<(f32, f32)>,
@@ -593,8 +588,7 @@ impl<S: 'static> Host<S> {
             ime_allowed: false,
             comp,
             wayland,
-            frame_anim: None,
-            frame_origin: None,
+            frame_move: None,
             frame_jump: None,
             trace: None,
             trace_start: None,
