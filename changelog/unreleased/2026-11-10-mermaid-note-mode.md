@@ -1,0 +1,1 @@
+- **A Mermaid state diagram's multi-line note is a mode of the parser, not a flag beside it:** one enum says whether the parser is reading statements or inside a note, stepped line by line, with the end of input closing a note left open as an event rather than a branch after the loop. Nothing a diagram draws changes.

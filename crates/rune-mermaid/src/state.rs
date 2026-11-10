@@ -56,25 +56,19 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<StateDiagram> {
         ids: HashMap::new(),
         composite_ids: HashMap::new(),
         stack: Vec::new(),
-        note: None,
+        mode: Mode::Reading,
         pseudo_seq: 0,
         styles: StyleSheet::default(),
         over: false,
     };
     let mut reader = Reader::default();
     for line in std::iter::once(header).chain(body.iter().copied()) {
-        if p.note.is_some() {
-            if p.note_line(line).is_none() && p.over {
-                return None;
-            }
-            continue;
-        }
-        for stmt in statements(line) {
-            reader.read(&mut p, stmt)?;
+        if p.step(Event::Line(line), &mut reader).is_none() && p.over {
+            return None;
         }
     }
     // A note left open closes at the end.
-    if p.note.is_some() && p.note_line("end note").is_none() && p.over {
+    if p.step(Event::End, &mut reader).is_none() && p.over {
         return None;
     }
     for (id, &idx) in &p.ids {
@@ -89,12 +83,27 @@ struct Parser {
     ids: HashMap<String, usize>,
     composite_ids: HashMap<String, usize>,
     stack: Vec<usize>,
-    /// A multi-line note being read: its state, side and lines so far.
-    note: Option<(String, Side, Vec<String>)>,
+    /// Whether the parser is reading statements or inside a multi-line note.
+    mode: Mode,
     pseudo_seq: usize,
     styles: StyleSheet,
     /// Set once the source goes past [`MAX_ITEMS`] or [`MAX_DEPTH`].
     over: bool,
+}
+
+/// Reading statements, or inside a note the source has not closed yet.
+#[derive(Debug)]
+enum Mode {
+    Reading,
+    /// A multi-line note being read: its state, side and lines so far.
+    InNote { target: String, side: Side, lines: Vec<String> },
+}
+
+/// One thing the parser steps through: a source line, or the end of the input.
+#[derive(Clone, Copy, Debug)]
+enum Event<'a> {
+    Line(&'a str),
+    End,
 }
 
 impl Lenient for Parser {
@@ -121,16 +130,31 @@ impl Parser {
         (!self.over).then_some(())
     }
 
-    fn note_line(&mut self, line: &str) -> Option<()> {
-        let line = line.trim();
-        if !line.eq_ignore_ascii_case("end note") {
-            if let Some((_, _, lines)) = &mut self.note {
-                lines.push(line.to_owned());
+    /// Steps one source line in whatever mode the parser is in, or closes a note left open at the
+    /// end of the input. `None` once the diagram is past its bounds.
+    fn step(&mut self, event: Event<'_>, reader: &mut Reader) -> Option<()> {
+        let mode = std::mem::replace(&mut self.mode, Mode::Reading);
+        match (mode, event) {
+            (Mode::Reading, Event::End) => Some(()),
+            (Mode::Reading, Event::Line(line)) => {
+                for stmt in statements(line) {
+                    reader.read(self, stmt)?;
+                }
+                Some(())
             }
-            return Some(());
+            (Mode::InNote { target, side, mut lines }, Event::Line(line)) => {
+                let line = line.trim();
+                if !line.eq_ignore_ascii_case("end note") {
+                    lines.push(line.to_owned());
+                    self.mode = Mode::InNote { target, side, lines };
+                    return Some(());
+                }
+                self.add_note(&target, side, &lines.join("\n"))
+            }
+            (Mode::InNote { target, side, lines }, Event::End) => {
+                self.add_note(&target, side, &lines.join("\n"))
+            }
         }
-        let (target, side, lines) = self.note.take()?;
-        self.add_note(&target, side, &lines.join("\n"))
     }
 
     fn statement(&mut self, s: &str) -> Option<()> {
@@ -435,7 +459,7 @@ impl Parser {
         match text {
             Some(t) => self.add_note(target, side, &clean_quoted(t)),
             None => {
-                self.note = Some((target.to_owned(), side, Vec::new()));
+                self.mode = Mode::InNote { target: target.to_owned(), side, lines: Vec::new() };
                 Some(())
             }
         }
