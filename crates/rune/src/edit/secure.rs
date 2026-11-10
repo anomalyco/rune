@@ -17,7 +17,33 @@ pub(super) enum LineMode {
     Multi,
 }
 
+/// How a field draws its text, read from its secure setting, its reveal toggle and its line
+/// mode. The toggle is kept on a plain field too, so `.revealed(true).secure()` reveals in
+/// either order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Masking {
+    /// Not secure: the text as typed.
+    Plain,
+    /// Secure and revealed: the plain characters, with every other secure protection kept.
+    Shown,
+    /// Secure and hidden: one bullet per character on one line, or a fixed mask over several.
+    Hidden { multiline: bool },
+}
+
 impl TextEdit {
+    pub(crate) fn masking(&self) -> Masking {
+        match (self.secure, self.revealed) {
+            (false, _) => Masking::Plain,
+            (true, true) => Masking::Shown,
+            (true, false) => Masking::Hidden { multiline: !self.is_single_line() },
+        }
+    }
+
+    /// The text draws as bullets, which caret motion treats as one word on one line.
+    pub(crate) fn is_masked(&self) -> bool {
+        matches!(self.masking(), Masking::Hidden { .. })
+    }
+
     /// Password editing: masked display, no undo, copy, cut or IME. All model buffers are
     /// wiped on drop; secure replacements also wipe the previous allocation before freeing it.
     pub fn secure(mut self) -> Self { self.set_secure(true); self }
@@ -67,7 +93,17 @@ impl TextEdit {
 
     /// Whether this is a multi-line secure field in hidden mode (`secure && !revealed && !single_line`).
     pub(crate) fn is_hidden_multiline(&self) -> bool {
-        self.secure && !self.revealed && !self.is_single_line()
+        self.masking() == Masking::Hidden { multiline: true }
+    }
+
+    /// The text a secure field draws: its mask while hidden, its characters while revealed.
+    pub(super) fn masked_display(&self) -> String {
+        match self.masking() {
+            Masking::Hidden { multiline: false } => "•".repeat(self.text.chars().count()),
+            Masking::Hidden { multiline: true } if !self.text.is_empty() => MULTILINE_SECURE_MASK.to_owned(),
+            Masking::Hidden { multiline: true } => String::new(),
+            Masking::Plain | Masking::Shown => self.text.clone(),
+        }
     }
 
     /// For a secure field that has started exiting: wipe the secret and keep only its mask, so
@@ -75,13 +111,7 @@ impl TextEdit {
     pub(crate) fn conceal(&mut self) {
         if !self.secure { return; }
         self.revealed = false;
-        let mask = if self.text.is_empty() {
-            String::new()
-        } else if self.is_single_line() {
-            "•".repeat(self.text.chars().count())
-        } else {
-            MULTILINE_SECURE_MASK.to_owned()
-        };
+        let mask = self.masked_display();
         self.replace_text(mask);
     }
 
@@ -90,21 +120,19 @@ impl TextEdit {
     /// hidden multi-line fields pin the visual caret to the end of the fixed mask and map
     /// pointer hits to the end of the model.
     pub(crate) fn display_index(&self, byte: usize) -> usize {
-        if self.is_hidden_multiline() {
-            if self.text.is_empty() { 0 } else { MULTILINE_SECURE_MASK.len() }
-        } else if self.secure && !self.revealed {
-            self.text[..byte.min(self.text.len())].chars().count() * '•'.len_utf8()
-        } else {
-            byte.min(self.text.len())
+        match self.masking() {
+            Masking::Hidden { multiline: true } => if self.text.is_empty() { 0 } else { MULTILINE_SECURE_MASK.len() },
+            Masking::Hidden { multiline: false } => self.text[..byte.min(self.text.len())].chars().count() * '•'.len_utf8(),
+            Masking::Plain | Masking::Shown => byte.min(self.text.len()),
         }
     }
     pub(crate) fn model_index(&self, byte: usize) -> usize {
-        if self.is_hidden_multiline() {
-            self.text.len()
-        } else if self.secure && !self.revealed {
-            self.text.char_indices().nth(byte / '•'.len_utf8()).map_or(self.text.len(), |(i, _)| i)
-        } else {
-            byte.min(self.text.len())
+        match self.masking() {
+            Masking::Hidden { multiline: true } => self.text.len(),
+            Masking::Hidden { multiline: false } => {
+                self.text.char_indices().nth(byte / '•'.len_utf8()).map_or(self.text.len(), |(i, _)| i)
+            }
+            Masking::Plain | Masking::Shown => byte.min(self.text.len()),
         }
     }
     pub(crate) fn display_selection_range(&self, a: usize, b: usize) -> (usize, usize) {
@@ -125,3 +153,7 @@ impl TextEdit {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "secure_tests.rs"]
+mod tests;
