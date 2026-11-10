@@ -782,9 +782,15 @@ pub(crate) struct Requests<S> {
 }
 
 impl<S> Requests<S> {
+    /// Asks something of the window itself: show, hide or close it, focus or minimize it, or
+    /// move it. A request added here reaches both `only_updates` and `Shared::window_pending`.
+    fn asks_window(&self) -> bool {
+        self.window.is_some() || self.focus || self.minimize || self.position.is_some() || self.place.is_some()
+    }
+
     /// Nothing but updates: no wake for `poll`, no window, focus or geometry request.
     pub(crate) fn only_updates(&self) -> bool {
-        !self.woken && self.window.is_none() && !self.focus && !self.minimize && self.position.is_none() && self.place.is_none()
+        !self.woken && !self.asks_window()
     }
 }
 
@@ -871,7 +877,7 @@ impl<S> Shared<S> {
     /// A request a `--desktop` run applies to the window (dock and quit aside) waits for `take`.
     pub(crate) fn window_pending(&self) -> bool {
         let r = self.requests.lock().unwrap();
-        r.window.is_some() || r.focus || r.minimize || r.position.is_some() || r.place.is_some() || !r.updates.is_empty()
+        r.asks_window() || !r.updates.is_empty()
     }
 
     pub fn take_place(&self) -> Option<crate::windows::PlaceRequest> {
