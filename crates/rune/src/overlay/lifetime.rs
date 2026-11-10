@@ -5,14 +5,14 @@ use super::*;
 
 impl<T: 'static> Overlay<T> {
     pub(super) fn show_fading(&mut self, event_loop: &ActiveEventLoop, fade: Duration) {
-        if self.visible { return; }
+        if self.presence.shown() { return; }
         // Hidden, it missed the redraws a new accent asks for (`accent::watch`).
         self.rt.set_system_dark(crate::platform::preferences::dark().unwrap_or(self.dark));
         self.accent_changed(crate::system_accent());
         self.scroll_bars_changed(crate::platform::scroll_bars::current());
         // Shown again mid fade-out: the window is still up with current pixels, and its motion
         // carries on rather than settling.
-        let fading = self.fading_out.take().is_some();
+        let fading = self.presence.fading();
         let size = self.at.size;
         self.resolve_size(event_loop);
         if self.live.is_none() {
@@ -34,17 +34,16 @@ impl<T: 'static> Overlay<T> {
             if !fading { self.refresh_for_reveal_at(Instant::now()); }
             self.show_window(&window, fade);
         }
-        self.visible = true;
-        self.release_at = None;
+        let effects = self.presence.step(presence::Event::Show, self.release);
+        self.carry_out(effects);
         self.hidden_pace.reset();
         self.occluded_wait = crate::window::OCCLUDED_RETRY;
         // Shown onto sleeping displays or under another window, the panel stays occluded.
         #[cfg(target_os = "macos")]
         {
-            self.occluded = false;
             self.occlusion_read = false;
             self.sync_occlusion();
-            if !self.occluded { self.ensure_pacing(); }
+            if !self.presence.occluded() { self.ensure_pacing(); }
         }
         if !self.retained() { self.dirty = true; }
         self.idle &= !(self.rt.animating || self.compositor.as_ref().is_some_and(|c| c.animating()));
@@ -140,12 +139,41 @@ impl<T: 'static> Overlay<T> {
 
     pub(super) fn hide(&mut self) { self.hide_fading(Duration::ZERO) }
 
-    /// Shown, or fading out: frames still draw.
-    pub(super) fn drawing(&self) -> bool { self.visible || self.fading_out.is_some() }
+    pub(super) fn hide_fading(&mut self, fade: Duration) {
+        // Any Fn change the monitor saw reaches the view while it's still shown; the hide
+        // then releases what it held.
+        #[cfg(target_os = "macos")]
+        self.fn_key();
+        // Only macOS and Windows fade the window; elsewhere it goes at once, and so does drawing.
+        let fade = if cfg!(any(target_os = "macos", target_os = "windows")) { fade } else { Duration::ZERO };
+        let effects = self.presence.step(presence::Event::Hide { fade, now: Instant::now() }, self.release);
+        self.carry_out(effects);
+    }
+
+    /// A fade-out's end, or a hidden surface's release, may be due. Ending the fade finishes
+    /// native hiding too: AppKit's completion may stall while displays sleep. On Windows, steps
+    /// a fading window's alpha until then.
+    pub(super) fn presence_due(&mut self, now: Instant) {
+        let effects = self.presence.step(presence::Event::Due { now }, self.release);
+        self.carry_out(effects);
+        #[cfg(target_os = "windows")]
+        if let Presence::FadingOut { until, length, .. } = self.presence && let Some(native) = &self.native {
+            native.fade(fade_alpha(until, length, now));
+        }
+    }
+
+    pub(super) fn carry_out(&mut self, effects: crate::machine::Effects<presence::Effect>) {
+        for effect in effects {
+            match effect {
+                presence::Effect::StopDrawing => self.stop_drawing(),
+                presence::Effect::HideWindow { fade } => self.hide_window(fade),
+                presence::Effect::ReleaseGpu => self.park(),
+            }
+        }
+    }
 
     /// A hidden overlay draws nothing more: its display link, timer frames and live values stop.
-    pub(super) fn stop_drawing(&mut self) {
-        self.fading_out = None;
+    fn stop_drawing(&mut self) {
         #[cfg(target_os = "macos")]
         if let Some(live) = &mut self.live && let Some(pacing) = &mut live.pacing { pacing.stop(); }
         self.rt.set_live_visible(false);
@@ -153,63 +181,40 @@ impl<T: 'static> Overlay<T> {
         self.quiet = Default::default();
     }
 
-    /// Finishes native hiding too: AppKit's completion may stall while displays sleep. On
-    /// Windows, steps the window's alpha until then.
-    pub(super) fn end_fade_out(&mut self, now: Instant) {
-        let Some(end) = self.fading_out else { return };
-        if end <= now { return self.hide(); }
-        #[cfg(target_os = "windows")]
-        if let Some(native) = &self.native { native.fade(fade_alpha(end, self.fade_length, now)); }
-    }
-
-    pub(super) fn hide_fading(&mut self, fade: Duration) {
+    /// Input stops, and the native window hides over `fade`. A fading window stays up while
+    /// `presence_due` steps its alpha (Windows), then hides it.
+    fn hide_window(&mut self, fade: Duration) {
         // A hide need not report a blur, and a hidden overlay hears none: what it held is
-        // released, after any Fn change the monitor saw first.
-        #[cfg(target_os = "macos")]
-        self.fn_key();
+        // released.
         if self.options.keys == KeyPolicy::OnDemand { self.rt.keys_lost(); }
-        let was_shown = self.visible || self.fading_out.is_some();
-        // Only macOS and Windows fade the window; elsewhere it goes at once, and so does drawing.
-        let fading = cfg!(any(target_os = "macos", target_os = "windows")) && !fade.is_zero() && (self.visible || self.fading_out.is_some());
-        if fading {
-            self.fading_out = Some(Instant::now() + fade);
-            #[cfg(target_os = "windows")]
-            { self.fade_length = fade; }
-        } else {
-            self.stop_drawing();
-        }
-        self.visible = false;
         self.popup.cancel(&mut self.rt);
         self.rt.cancel_pointer();
         self.apply_cursor();
         self.hidden_input();
-        let Some(live) = &self.live else {
-            if was_shown { self.hidden_release(Instant::now()); }
-            return;
-        };
+        let Some(live) = &self.live else { return };
         match &live.backing {
             Backing::Window(window) => {
                 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
                 if let Some(x11) = &self.x11 { x11.hide(); }
-                // A fading window stays up; `end_fade_out` steps its alpha, then hides it.
                 #[cfg(target_os = "windows")]
                 {
-                    let _ = window;
+                    let _ = (window, fade);
                     if let Some(native) = &mut self.native {
-                        if fading { native.fade(255) } else { native.hide() }
+                        if self.presence.fading() { native.fade(255) } else { native.hide() }
                     }
                 }
                 #[cfg(target_os = "macos")]
                 if let Some(panel) = &self.panel {
                     panel.hide(fade);
                 }
+                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+                let _ = fade;
                 #[cfg(not(target_os = "windows"))]
                 window.set_visible(false);
             }
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             Backing::Layer(_) | Backing::Xwayland(_) => { self.live.take(); }
         }
-        if was_shown { self.hidden_release(Instant::now()); }
     }
 
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -349,30 +354,8 @@ impl<T: 'static> Overlay<T> {
         live
     }
 
-    /// `release_gpu_when_hidden` or `release_gpu_after`. macOS honours only the first: a
-    /// prewarmed panel with `release_gpu_after` (a HUD) retains its pixels.
-    pub(super) fn defers_gpu(&self) -> bool {
-        if cfg!(target_os = "macos") { self.release_after == Some(Duration::ZERO) } else { self.release_after.is_some() }
-    }
-
-    /// Just hidden: gives the GPU surface back now, or schedules it for `release_gpu_after`. A
-    /// fade-out keeps it until the fade ends (`end_fade_out` hides again), so the exit plays
-    /// out on the window and its last frames reach the screen first.
-    pub(super) fn hidden_release(&mut self, now: Instant) {
-        if !self.defers_gpu() || self.fading_out.is_some() { return; }
-        match self.release_after {
-            Some(after) if !after.is_zero() => self.release_at = Some(now + after),
-            _ => self.park(),
-        }
-    }
-
-    /// `release_gpu_after`'s time came while the overlay stayed hidden.
-    pub(super) fn release_due(&mut self, now: Instant) {
-        if self.release_at.is_some_and(|at| at <= now) && !self.drawing() {
-            self.release_at = None;
-            self.park();
-        }
-    }
+    /// `release_gpu_when_hidden` or `release_gpu_after` (see `Release::new`).
+    pub(super) fn defers_gpu(&self) -> bool { self.release != Release::Keep }
 
     /// `release_gpu_when_hidden`: the hidden overlay gives back its surface, swapchain and
     /// renderer, and its hold on the GPU device, which waits a while for the next surface
@@ -383,7 +366,7 @@ impl<T: 'static> Overlay<T> {
     /// screen-sized panels that join every Space empty Mission Control's Space thumbnails.
     /// There the window goes too, and the next show makes a new one.
     pub(super) fn park(&mut self) {
-        if !self.defers_gpu() || !matches!(self.live.as_ref().map(|l| &l.backing), Some(Backing::Window(_))) { return; }
+        if !matches!(self.live.as_ref().map(|l| &l.backing), Some(Backing::Window(_))) { return; }
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         self.release();
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]

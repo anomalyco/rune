@@ -52,6 +52,8 @@ mod xwayland;
 #[cfg(not(target_os = "macos"))]
 pub(crate) use placement::monitor_at;
 use placement::{monitor, position};
+mod presence;
+use presence::{Presence, Release};
 mod requests;
 use requests::{Requests, Update};
 #[path = "overlay/any_host.rs"]
@@ -318,14 +320,8 @@ pub(crate) struct Overlay<T: 'static> {
     announced: bool,
     setup: Option<fn(&mut T, Waker)>,
     pending_input: Option<OverlayInput>,
-    visible: bool,
+    presence: Presence,
     animate_reveal: bool, // `ConfiguredOverlay::animate_reveal`
-    /// When a fade-out started by `OverlayHandle::fade_out` ends. Until then the hidden
-    /// overlay takes no input but keeps drawing, and isn't treated as occluded.
-    fading_out: Option<Instant>,
-    /// How long the fade-out ending at `fading_out` lasts, for its alpha (Windows).
-    #[cfg(target_os = "windows")]
-    fade_length: Duration,
     options: OverlayOptions,
     canvas_size: (f32, f32),
     name: &'static str,
@@ -353,10 +349,8 @@ pub(crate) struct Overlay<T: 'static> {
     /// The native window while it has no GPU surface: just made, or hidden with
     /// `release_gpu_when_hidden`. Windows and X11 only.
     parked: Option<Backing>,
-    /// `ConfiguredOverlay::release_gpu_when_hidden` (zero) or `release_gpu_after`.
-    release_after: Option<Duration>,
-    /// When a hidden overlay with `release_after` gives its GPU surface back.
-    release_at: Option<Instant>,
+    /// `ConfiguredOverlay::release_gpu_when_hidden` or `release_gpu_after`.
+    release: Release,
     cursor: Option<crate::cursor::os::OsCursor>,
     mods: winit::keyboard::ModifiersState,
     renderer: Option<Renderer>,
@@ -369,9 +363,6 @@ pub(crate) struct Overlay<T: 'static> {
     runtime_idle: bool,
     quiet: frame::Quiet,
     clock: FrameClock,
-    /// The panel is shown but none of it is on screen (covered, or the displays asleep).
-    #[cfg(target_os = "macos")]
-    occluded: bool,
     /// This loop turn already read the panel's occlusion (`sync_occlusion`).
     #[cfg(target_os = "macos")]
     occlusion_read: bool,
@@ -420,11 +411,8 @@ impl<T: 'static> Overlay<T> {
             announced: false,
             setup,
             pending_input: None,
-            visible: false,
+            presence: Presence::default(),
             animate_reveal,
-            fading_out: None,
-            #[cfg(target_os = "windows")]
-            fade_length: Duration::ZERO,
             options,
             canvas_size: spec.size,
             name: spec.name,
@@ -439,8 +427,7 @@ impl<T: 'static> Overlay<T> {
             compositor,
             live: None,
             parked: None,
-            release_after,
-            release_at: None,
+            release: Release::new(release_after),
             cursor: None,
             #[cfg(target_os = "macos")]
             panel: None,
@@ -458,8 +445,6 @@ impl<T: 'static> Overlay<T> {
             runtime_idle: false,
             quiet: Default::default(),
             clock: FrameClock::new(Instant::now()),
-            #[cfg(target_os = "macos")]
-            occluded: false,
             #[cfg(target_os = "macos")]
             occlusion_read: false,
             retry: None,
@@ -541,7 +526,7 @@ impl<T: 'static> Overlay<T> {
     fn origin_moved(&mut self, origin: (f32, f32)) {
         if !self.rt.set_window_origin(origin) { return; }
         self.dirty = true;
-        if self.drawing() { self.idle = false; }
+        if self.presence.drawing() { self.idle = false; }
     }
 
     fn position_window(&self, event_loop: &ActiveEventLoop, window: &Window) {
