@@ -1,11 +1,21 @@
 //! What other threads ask of an overlay, applied on its next event-loop turn, and the
 //! requests that change a live window's native options.
 
+use std::time::Duration;
+
 use crate::el::Tx;
 
 use super::Overlay;
 
 pub(super) type Update<T> = Box<dyn FnOnce(&mut T, &mut Tx) -> bool + Send>;
+
+/// A show or a hide, fading the window's alpha over its duration (zero: at once; see
+/// `OverlayHandle::fade_in` and `fade_out` for where windows fade).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Visibility {
+    Show(Duration),
+    Hide(Duration),
+}
 
 pub(super) struct Requests<T> {
     pub input: Option<crate::OverlayInput>,
@@ -15,13 +25,12 @@ pub(super) struct Requests<T> {
     pub request_keys: bool,
     /// Move to the display under the pointer now (`OverlayHandle::refollow_pointer`).
     pub refollow: bool,
-    pub visible: Option<bool>,
+    /// The latest show or hide wins.
+    pub visibility: Option<Visibility>,
     pub edge: Option<super::ScreenEdge>,
     pub margin: Option<f32>,
     pub align: Option<(crate::Align, f32)>,
     pub size: Option<(f32, f32)>,
-    /// How long the `visible` change fades the window's alpha (macOS).
-    pub fade: Option<std::time::Duration>,
     pub macos_level: Option<isize>,
     pub exclude_from_capture: Option<bool>,
     pub xwayland_input: Option<bool>,
@@ -33,10 +42,16 @@ pub(super) struct Requests<T> {
 impl<T> Default for Requests<T> {
     fn default() -> Self {
         Requests {
-            input: None, follow_pointer: None, placement: None, display: None, request_keys: false, refollow: false, visible: None, edge: None,
-            margin: None, align: None, size: None, fade: None, macos_level: None, exclude_from_capture: None, xwayland_input: None, woken: false, updates: Vec::new(),
+            input: None, follow_pointer: None, placement: None, display: None, request_keys: false, refollow: false, visibility: None, edge: None,
+            margin: None, align: None, size: None, macos_level: None, exclude_from_capture: None, xwayland_input: None, woken: false, updates: Vec::new(),
         }
     }
+}
+
+#[cfg(test)]
+impl<T> Requests<T> {
+    /// Whether the latest request shows (`Some(true)`) or hides the overlay.
+    pub fn visible(&self) -> Option<bool> { self.visibility.map(|v| matches!(v, Visibility::Show(_))) }
 }
 
 impl<T: 'static> Overlay<T> {

@@ -76,7 +76,7 @@ fn handle_requests_collapse_and_updates_keep_their_order() {
     handle.update(|n, _| *n *= 3);
     handle.hide();
     let q = std::mem::take(&mut *shared.requests.lock().unwrap());
-    assert_eq!(q.visible, Some(false), "the latest show/hide wins");
+    assert_eq!(q.visible(), Some(false), "the latest show/hide wins");
     assert_eq!((q.edge, q.margin), (Some(ScreenEdge::Bottom), Some(24.0)));
     assert_eq!((q.align, q.size), (Some((Align::End, 12.0)), Some((300.0, 80.0))));
     let mut n = 0;
@@ -329,7 +329,7 @@ fn overlay_occluded_runs_due_timers_without_frames() {
     overlay.dirty = false;
     overlay.wake_due(Instant::now());
     assert_eq!(overlay.rt.state.polls, 2, "the due timer runs without waiting for a drawable");
-    assert_eq!(handle.shared.requests.lock().unwrap().visible, Some(false), "and its hide() goes through");
+    assert_eq!(handle.shared.requests.lock().unwrap().visible(), Some(false), "and its hide() goes through");
     assert_eq!(overlay.wake_deadline(), None);
 
     // Each missed frame waits, longer while it stays occluded; a timeout waits for the

@@ -55,7 +55,7 @@ use placement::{monitor, position};
 mod presence;
 use presence::{Presence, Release};
 mod requests;
-use requests::{Requests, Update};
+use requests::{Requests, Update, Visibility};
 #[path = "overlay/any_host.rs"]
 mod any_host;
 #[path = "overlay/input.rs"]
@@ -181,17 +181,17 @@ impl<T: 'static> OverlayHandle<T> {
     /// preserving motion elapsed since each commit, even when show arrives in a later turn.
     /// Unretained hosts show settled, unless built with `ConfiguredOverlay::animate_reveal`.
     pub fn show(&self) {
-        self.request(|q| { q.visible = Some(true); q.fade = None; });
+        self.request(|q| q.visibility = Some(Visibility::Show(Duration::ZERO)));
     }
 
     pub fn hide(&self) {
-        self.request(|q| { q.visible = Some(false); q.fade = None; });
+        self.request(|q| q.visibility = Some(Visibility::Hide(Duration::ZERO)));
     }
 
     /// Like `show`, fading the window's alpha in from zero over `duration` on macOS
     /// (AppKit's default ease). Elsewhere the overlay appears at once.
     pub fn fade_in(&self, duration: Duration) {
-        self.request(|q| { q.visible = Some(true); q.fade = Some(duration); });
+        self.request(|q| q.visibility = Some(Visibility::Show(duration)));
     }
 
     /// Like `hide`, fading the window's alpha out over `duration` on macOS and Windows before
@@ -201,7 +201,7 @@ impl<T: 'static> OverlayHandle<T> {
     /// given back while hidden goes only once the fade ends. Showing again cancels the fade,
     /// and that motion carries on from where it is. Elsewhere the overlay hides at once.
     pub fn fade_out(&self, duration: Duration) {
-        self.request(|q| { q.visible = Some(false); q.fade = Some(duration); });
+        self.request(|q| q.visibility = Some(Visibility::Hide(duration)));
     }
 
     /// Change the macOS window level (`NSWindow.Level`, e.g. 3 for `.floating`), shown or not.
