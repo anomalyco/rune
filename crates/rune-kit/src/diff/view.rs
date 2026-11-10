@@ -574,7 +574,7 @@ impl<S: 'static> View<S> {
         c.cursor(Cursor::Pointer).on_drag(move |s: &mut S, d: &mut Drag, tx| {
             let st = get(s);
             match d.phase {
-                Phase::Down => st.press_line(f, at),
+                Phase::Down => st.press_line(f, at, tx.mods().shift),
                 Phase::Move => {
                     let Some(r) = st.row_from(row_at, d.y) else { return };
                     let r = st.rows[r as usize];
