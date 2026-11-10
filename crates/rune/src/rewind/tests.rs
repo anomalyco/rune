@@ -247,3 +247,26 @@ fn a_bundle_holds_a_trace_a_contact_sheet_and_a_summary() {
     assert!(summary.contains("## Jumps") && summary.contains("title ↓7.5 pt"), "{summary}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Opening the scrubber over another recorder resumes the one it froze before; showing a saved
+/// clip keeps the frozen one until the scrubber closes.
+#[test]
+fn opening_over_an_open_scrubber_resumes_the_recorder_it_froze() {
+    let (first, second) = (Rewind::new(), Rewind::new());
+    let mut scrub = Scrub::default();
+    scrub.open(&first);
+    scrub.open(&second);
+    assert!(!first.is_paused(), "the first recorder records again");
+    assert!(second.is_paused());
+    scrub.show(first.freeze());
+    first.resume();
+    assert!(second.is_paused(), "a story over it keeps it frozen");
+    scrub.close();
+    assert!(!scrub.is_open() && !second.is_paused());
+    // Reopening the same recorder leaves it frozen.
+    scrub.open(&first);
+    scrub.open(&first);
+    assert!(first.is_paused());
+    scrub.close();
+    assert!(!first.is_paused());
+}
