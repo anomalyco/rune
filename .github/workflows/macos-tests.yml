@@ -38,5 +38,5 @@ jobs:
       # The virtual Metal adapter does not expose TIMESTAMP_QUERY. Keep the
       # shader freshness, pipeline, rendering, font and menu tests enabled.
       - run: >-
-          cargo test -p rune -p rune-kit --features rune-kit/markdown --no-fail-fast --
+          cargo test -p rune -p rune-kit --features rune-kit/markdown,rune-kit/mermaid --no-fail-fast --
           --skip gpu::metal::compute_tests::passes_sample_timestamps_at_their_boundaries
