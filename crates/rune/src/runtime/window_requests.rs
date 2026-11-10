@@ -24,16 +24,68 @@ impl Title {
     }
 }
 
+/// A window that fits its content (`App::fit_content_height`): the height it last asked the
+/// window for, and the frame its move starts with.
+#[derive(Debug, Default)]
+pub(crate) struct FitWindow {
+    /// None until it asks, and again once someone else resizes the window.
+    asked: Option<f32>,
+    hold: FitHold,
+}
+
+/// A fitting window at rest asked to move. The window can't move until the next frame, so the
+/// frame that asked shows the commit's motion at its start, and the host starts the window's
+/// own move from that frame: both then start moving on the same frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum FitHold {
+    #[default]
+    None,
+    /// A commit asked; the frame's motion step holds.
+    Asked,
+    /// The last frame held, for the host to start the window's move from.
+    Held,
+}
+
+impl FitWindow {
+    /// Whether the window should be asked for `height`: it isn't already asked for it, nor
+    /// (asked for nothing since it was last resized) already `current` tall.
+    fn ask(&mut self, height: f32, current: f32) -> bool {
+        if self.asked.unwrap_or(current) == height { return false; }
+        self.asked = Some(height);
+        true
+    }
+
+    /// The window was resized to `height` from outside: forgets what it asked, so the next
+    /// commit asks for the content's height again. True when that differs from what it asked
+    /// (or, never asked, from `current`).
+    fn resized(&mut self, height: f32, current: f32) -> bool {
+        if (self.asked.unwrap_or(current) - height).abs() <= 0.5 { return false; }
+        self.asked = None;
+        true
+    }
+
+    /// The frame steps its motion: whether a commit asked it to hold.
+    fn frame_holds(&mut self) -> bool {
+        self.hold = if self.hold == FitHold::Asked { FitHold::Held } else { FitHold::None };
+        self.hold == FitHold::Held
+    }
+
+    /// Whether the last frame held its motion for the window, for the host starting the
+    /// window's move. The hold ends with it.
+    pub(crate) fn take_held(&mut self) -> bool {
+        std::mem::take(&mut self.hold) == FitHold::Held
+    }
+}
+
 impl<S: 'static> Runtime<S> {
     /// Asks the window for the content's new height, on this commit's spring. The first
     /// commit, a viewport change and `Tx::instant` jump.
     pub(super) fn fit_window(&mut self, height: f32, tx: &Tx, first: bool) {
         let height = height.ceil_to(self.env.scale).max(1.0);
-        if self.fit_asked.unwrap_or(self.viewport.1) == height { return; }
-        self.fit_asked = Some(height);
+        if !self.fit.ask(height, self.viewport.1) { return; }
         let jump = first || tx.instant || tx.relayout || self.reduced_motion;
         // Only a macOS window and headless runs move the frame on a spring.
-        if !jump && self.window_resting && (cfg!(target_os = "macos") || self.wall_start.is_none()) { self.fit_hold = true; }
+        if !jump && self.window_resting && (cfg!(target_os = "macos") || self.wall_start.is_none()) { self.fit.hold = FitHold::Asked; }
         let request = crate::window::frame::FrameRequest {
             size: Some((self.viewport.0, height)), animate: !jump,
             spring: (!jump).then(|| tx.motion.unwrap_or(motion::DEFAULT)), center: false,
@@ -49,4 +101,17 @@ impl<S: 'static> Runtime<S> {
         self.discard_measured(measured);
         height.ceil_to(self.env.scale).max(1.0)
     }
+
+    /// Someone resized a window that fits its content (not a page's band) to `height`: it
+    /// goes back to the content's height.
+    pub(super) fn fit_resized(&mut self, height: f32) -> bool {
+        self.fit_height && !self.page.on && self.window_resting && self.fit.resized(height, self.viewport.1)
+    }
+
+    /// Whether this frame holds its motion for the window (see [`FitHold`]).
+    pub(super) fn fit_frame_holds(&mut self) -> bool { self.fit.frame_holds() }
 }
+
+#[cfg(test)]
+#[path = "window_requests_tests.rs"]
+mod tests;

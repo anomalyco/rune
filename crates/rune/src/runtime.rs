@@ -719,15 +719,11 @@ pub struct Runtime<S: 'static> {
     pub(crate) window_title: window_requests::Title,
     /// The window's height follows the root's natural height (`App::fit_content_height`).
     pub(crate) fit_height: bool,
-    /// The content height last asked of the window.
-    fit_asked: Option<f32>,
+    /// The height a window that fits its content last asked for, and the frame its move
+    /// starts with. The host takes the hold as it starts the move.
+    pub(crate) fit: window_requests::FitWindow,
     /// The band of a taller document the window draws (`App::web_document`).
     pub(crate) page: web_page::Page,
-    /// A fitting window at rest asked to move: this frame shows the commit's motion at its
-    /// start, as the window can't move until the next frame.
-    fit_hold: bool,
-    /// The last frame held its motion for the window (`fit_hold`). The host reads it.
-    pub(crate) fit_held: bool,
     /// The host's window frame isn't moving or about to: set by the host before each frame.
     pub(crate) window_resting: bool,
     /// What `update` asked of the next commit.
@@ -1021,10 +1017,8 @@ impl<S: 'static> Runtime<S> {
             window_frame: None,
             window_title: Default::default(),
             fit_height: false,
-            fit_asked: None,
+            fit: Default::default(),
             page: Default::default(),
-            fit_hold: false,
-            fit_held: false,
             window_resting: false,
             pending: Tx::default(),
             animating: false,
