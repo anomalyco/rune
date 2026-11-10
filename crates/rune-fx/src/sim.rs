@@ -50,21 +50,43 @@ fn pick(claims: impl Iterator<Item = Claim>, key: (u32, u32, u32, u32), origin: 
     claims.enumerate().filter(|(_, c)| c.key == key && c.used != frame).min_by(|a, b| dist(&a.1).total_cmp(&dist(&b.1))).map(|(i, _)| i)
 }
 
-/// Steps to run for a grid last stepped to `prev` (None: never), to reach `target`:
-/// (steps, sim time before the first, start over). A hitch runs at most `MAX_STEPS` and skips the
-/// rest; only a new grid or a jump back in time warms up.
-fn schedule(prev: Option<f32>, target: f32, frozen: bool) -> (usize, f32, bool) {
+/// Steps to run for a grid last stepped to `prev` (None: never), to reach `target`: how many, and
+/// where they start. A hitch runs at most `MAX_STEPS` and skips the rest; only a new grid or a jump
+/// back in time warms up.
+fn schedule(prev: Option<f32>, target: f32, frozen: bool) -> (usize, Start) {
     match prev {
-        Some(t) if frozen => (0, t, false),
+        Some(t) if frozen => (0, Start::Continue { t0: t }),
         Some(t) if target >= t - 1e-4 => {
             let due = ((target - t) / DT + 1e-3).floor() as usize;
             let steps = due.min(MAX_STEPS);
-            (steps, target - steps as f32 * DT, false)
+            (steps, Start::Continue { t0: target - steps as f32 * DT })
         }
         _ => {
             let steps = ((WARMUP / DT).round() as usize).min(SLOTS);
-            (steps, target - steps as f32 * DT, true)
+            (steps, Start::Reset { t0: target - steps as f32 * DT })
         }
+    }
+}
+
+/// Where a planned run starts: continuing from the grid's last state, or starting the sim over.
+#[derive(Clone, Copy)]
+enum Start {
+    /// Picks up at `t0`, the time of the state it starts from.
+    Continue { t0: f32 },
+    /// Clears the state on its first step, starting at `t0`.
+    Reset { t0: f32 },
+}
+
+impl Start {
+    /// Sim time before the first step.
+    fn t0(self) -> f32 {
+        match self {
+            Start::Continue { t0 } | Start::Reset { t0 } => t0,
+        }
+    }
+
+    fn is_reset(self) -> bool {
+        matches!(self, Start::Reset { .. })
     }
 }
 
@@ -78,14 +100,25 @@ struct Grid {
     cur: usize,
     /// Sim time of `views[cur]`; None until the first step.
     t: Option<f32>,
-    plan: Option<Plan>,
+    phase: Phase,
+}
+
+/// What a grid is doing this frame. `begin_frame` puts every grid back to `Idle`.
+#[derive(Clone, Copy)]
+enum Phase {
+    /// Nothing planned this frame: `views[cur]` is already what the layer samples.
+    Idle,
+    /// Steps are due but not yet recorded, so `views[cur]` is the state before them.
+    Planned(Plan),
+    /// Recorded this frame; `cur` already points at the newest state.
+    Stepped,
 }
 
 #[derive(Clone, Copy)]
 struct Plan {
+    /// At least one step.
     steps: usize,
-    t0: f32,
-    reset: bool,
+    start: Start,
     u: SimUniform,
 }
 
@@ -163,7 +196,7 @@ impl Sims {
         let f = self.frame;
         self.grids.retain(|g| g.claim.alive(f));
         for g in &mut self.grids {
-            g.plan = None;
+            g.phase = Phase::Idle;
         }
     }
 
@@ -188,7 +221,7 @@ impl Sims {
         };
         let g = &mut self.grids[idx];
         g.claim = claim;
-        let (steps, t0, reset) = schedule(g.t, layer.time, frozen);
+        let (steps, start) = schedule(g.t, layer.time, frozen);
         let s = layer.shape;
         let r = s.rect;
         let speed = (p.speed / 1.5).max(0.05);
@@ -205,19 +238,22 @@ impl Sims {
             fire: [rise * 3.0, cooling, p.smoke.max(0.0) * 0.6, 0.25 + 0.6 * p.warp],
             fire2: [rise * (0.3 + 1.5 * p.swirl), speed, 1.4, 2.0],
         };
-        g.plan = Some(Plan { steps, t0, reset, u });
+        g.phase = if steps == 0 { Phase::Idle } else { Phase::Planned(Plan { steps, start, u }) };
         (idx, [n[0] as f32 * cell, n[1] as f32 * cell])
     }
 
     /// The state view a grid's layer should sample this frame (after its planned steps).
     pub fn final_view(&self, i: usize) -> &wgpu::TextureView {
         let g = &self.grids[i];
-        let steps = g.plan.map_or(0, |p| p.steps);
+        let steps = match g.phase {
+            Phase::Planned(p) => p.steps,
+            Phase::Idle | Phase::Stepped => 0,
+        };
         &g.views[g.cur ^ (steps & 1)]
     }
 
     pub fn pending(&self) -> bool {
-        self.grids.iter().any(|g| g.plan.is_some_and(|p| p.steps > 0))
+        self.grids.iter().any(|g| matches!(g.phase, Phase::Planned(_)))
     }
 
     pub fn record(&mut self, staging: Option<&rune_staging::Staging>, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, timestamps: Option<wgpu::ComputePassTimestampWrites<'_>>) -> bool {
@@ -225,14 +261,14 @@ impl Sims {
             return false;
         }
         for g in &self.grids {
-            let Some(plan) = g.plan.filter(|p| p.steps > 0) else { continue };
+            let Phase::Planned(plan) = g.phase else { continue };
             let bytes = &mut self.bytes;
             bytes.clear();
             bytes.resize(plan.steps * SLOT, 0);
             for k in 0..plan.steps {
                 let mut u = plan.u;
-                u.origin[2] = plan.t0 + (k + 1) as f32 * DT;
-                u.origin[3] = if plan.reset && k == 0 { 1.0 } else { 0.0 };
+                u.origin[2] = plan.start.t0() + (k + 1) as f32 * DT;
+                u.origin[3] = if plan.start.is_reset() && k == 0 { 1.0 } else { 0.0 };
                 bytes[k * SLOT..k * SLOT + std::mem::size_of::<SimUniform>()].copy_from_slice(bytemuck::bytes_of(&u));
             }
             match staging {
@@ -243,7 +279,7 @@ impl Sims {
         if let Some(s) = staging { s.flush(encoder); }
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fx firesim"), timestamp_writes: timestamps });
         for g in &mut self.grids {
-            let Some(plan) = g.plan.filter(|p| p.steps > 0) else { continue };
+            let Phase::Planned(plan) = g.phase else { continue };
             let wg = [g.n[0].div_ceil(8), g.n[1].div_ceil(8)];
             for k in 0..plan.steps {
                 let off = (k * SLOT) as u32;
@@ -263,8 +299,8 @@ impl Sims {
                 run(ADVECT, &b[6]);
                 g.cur ^= 1;
             }
-            g.t = Some(plan.t0 + plan.steps as f32 * DT);
-            g.plan = Some(Plan { steps: 0, ..plan });
+            g.t = Some(plan.start.t0() + plan.steps as f32 * DT);
+            g.phase = Phase::Stepped;
         }
         true
     }
@@ -329,7 +365,7 @@ impl Sims {
             ]
         };
         let binds = [set(&views[0], &views[1]), set(&views[1], &views[0])];
-        Grid { claim, n, views, binds, uniforms, cur: 0, t: None, plan: None }
+        Grid { claim, n, views, binds, uniforms, cur: 0, t: None, phase: Phase::Idle }
     }
 }
 
@@ -367,13 +403,13 @@ mod tests {
     #[test]
     fn hitches_skip_time_and_only_new_or_rewound_grids_warm_up() {
         let warm = (WARMUP / DT).round() as usize;
-        let (n, _, reset) = schedule(None, 3.0, false);
-        assert!(reset && n == warm);
-        let (n, t0, reset) = schedule(Some(1.0), 1.0 + 2.5 * DT, false);
-        assert!(!reset && n == 2 && (t0 - (1.0 + 0.5 * DT)).abs() < 1e-5);
-        let (n, t0, reset) = schedule(Some(1.0), 3.0, false);
-        assert!(!reset && n == MAX_STEPS && (t0 + MAX_STEPS as f32 * DT - 3.0).abs() < 1e-5, "a 2 s hitch: {n} steps");
-        assert!(schedule(Some(2.0), 1.0, false).2, "back in time starts over");
+        let (n, start) = schedule(None, 3.0, false);
+        assert!(start.is_reset() && n == warm);
+        let (n, start) = schedule(Some(1.0), 1.0 + 2.5 * DT, false);
+        assert!(!start.is_reset() && n == 2 && (start.t0() - (1.0 + 0.5 * DT)).abs() < 1e-5);
+        let (n, start) = schedule(Some(1.0), 3.0, false);
+        assert!(!start.is_reset() && n == MAX_STEPS && (start.t0() + MAX_STEPS as f32 * DT - 3.0).abs() < 1e-5, "a 2 s hitch: {n} steps");
+        assert!(schedule(Some(2.0), 1.0, false).1.is_reset(), "back in time starts over");
         assert_eq!(schedule(Some(1.0), 3.0, true).0, 0, "frozen");
     }
 }
