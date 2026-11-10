@@ -205,15 +205,12 @@ impl Renderer {
 
     pub fn layer_stats(&self) -> LayerStats {
         let mut stats = LayerStats { allocations: self.layers.allocations, ..Default::default() };
-        for (index, t) in self.layers.targets.iter().enumerate() {
+        for (l, t) in self.layers.plan.iter().zip(&self.layers.targets) {
             let Some(t) = t else { continue };
             stats.targets += 1;
             stats.bytes += Self::target_bytes(t);
-            if let Some(blur) = &t.blur {
-                stats.extra_passes += blur.passes();
-            }
-            if self.layers.plan.get(index).is_none_or(|l| l.show == Show::Render) {
-                stats.extra_passes += 1;
+            if l.show == Show::Render {
+                stats.extra_passes += 1 + t.blur.as_ref().map_or(0, layer_blur::Scratch::passes);
             }
         }
         for t in &self.layers.retained {
