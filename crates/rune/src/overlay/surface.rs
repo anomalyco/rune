@@ -60,10 +60,16 @@ impl<T: 'static> Overlay<T> {
             }
         };
         let features = self.compositor.as_ref().map_or(wgpu::Features::empty(), |c| c.features());
+        // A device that died while the overlay was hidden (a driver reset, a resume from
+        // Modern Standby) can configure nothing: the next surface gets a new one.
+        if self.gpu.as_ref().is_some_and(|gpu| gpu.is_lost()) {
+            self.gpu = None;
+            self.renderer = None;
+        }
         // The overlay's own device was already the best for its surface, translucent or not; a
         // device shared from another overlay must composite this one's translucent pixels.
         let pooled = self.gpu.clone().map(|gpu| (gpu, false)).or_else(|| self.gpu_pool.borrow().upgrade().filter(|gpu| {
-            gpu.device.features().contains(features & gpu.adapter.features())
+            !gpu.is_lost() && gpu.device.features().contains(features & gpu.adapter.features())
         }).map(|gpu| (gpu, true)));
         let reused = pooled.and_then(|(gpu, translucent)| make(&gpu.instance).filter(|s| crate::render::translucency::serves(&gpu, s, features, translucent)).map(|s| (gpu, s)));
         let mut prewarmed = None;
@@ -106,7 +112,7 @@ impl<T: 'static> Overlay<T> {
         *self.shared.surface.lock().unwrap() = Some(format!("{:?} on {} ({:?}), {:?}, {:?}", info.backend, info.name, info.device_type, config.alpha_mode, config.format));
         // A surface the driver refuses costs this overlay alone, never the app's other windows
         // (hex#979). The surface drops before its backing.
-        if let Err(error) = crate::window::configure(&surface, &gpu.device, &config) {
+        if let Err(error) = crate::window::configure(&surface, &gpu, &config) {
             self.fail(format!("could not configure its GPU surface on {:?} {}: {error}", info.backend, info.name));
             return None;
         }
@@ -160,7 +166,7 @@ impl<T: 'static> Overlay<T> {
         live.config.width = (self.at.size.0 * scale).round().max(1.0) as u32;
         live.config.height = (self.at.size.1 * scale).round().max(1.0) as u32;
         live.settle();
-        if let Err(error) = crate::window::configure(&live.surface, &gpu.device, &live.config) {
+        if let Err(error) = crate::window::configure(&live.surface, &gpu, &live.config) {
             self.surface_refused(format!("could not resize its GPU surface: {error}"));
             return;
         }

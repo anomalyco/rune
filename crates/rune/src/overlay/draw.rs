@@ -164,7 +164,7 @@ impl<T: 'static> Overlay<T> {
         if renderer.srgb_blend() != self.rt.srgb_blend() {
             if !crate::window::reblend(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, &mut self.rt) { self.surface_refused("its GPU surface refused a new configuration".into()); return false }
         }
-        let frame = match crate::window::acquire_checked(&live.surface, &gpu.device, &live.config, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
+        let frame = match crate::window::acquire_checked(&live.surface, gpu, &live.config, true, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
             Ok(frame) => frame,
             Err(missed) => {
                 if missed == crate::window::Missed::Unconfigured { self.surface_refused("its GPU surface refused a new configuration".into()); return false; }
@@ -199,7 +199,7 @@ impl<T: 'static> Overlay<T> {
                 drop(frame);
                 self.rt.native_materials = true;
                 animating |= self.rt.frame(0.0);
-                match crate::window::acquire_checked(&live.surface, &gpu.device, &live.config, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
+                match crate::window::acquire_checked(&live.surface, gpu, &live.config, true, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
                     Ok(frame) => frame,
                     // Returning true turned the loop with ControlFlow::Poll; wait like any miss.
                     Err(missed) => {
@@ -217,7 +217,7 @@ impl<T: 'static> Overlay<T> {
         let frame = if renderer.srgb_blend() != self.rt.srgb_blend() {
             drop(frame);
             if !crate::window::reblend(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, &mut self.rt) { self.surface_refused("its GPU surface refused a new configuration".into()); return false }
-            match crate::window::acquire_checked(&live.surface, &gpu.device, &live.config, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
+            match crate::window::acquire_checked(&live.surface, gpu, &live.config, true, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
                 Ok(frame) => frame,
                 Err(missed) => {
                     if missed == crate::window::Missed::Unconfigured { self.surface_refused("its GPU surface refused a new configuration".into()); return false; }

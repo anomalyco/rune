@@ -189,7 +189,7 @@ impl<S: 'static> Host<S> {
             if m.anim.done(now) { self.frame_move = None; }
             sync_chrome(&mut self.rt, w, self.chrome, self.titlebar);
             let size = w.window.inner_size();
-            w.resize_surface(&gpu.device, size);
+            w.resize_surface(gpu, size);
             let scale = w.window.scale_factor() as f32;
             self.rt.step_viewport((size.width as f32 / scale, size.height as f32 / scale), scale);
             // In this frame's layout, not the next one when `Moved` arrives.

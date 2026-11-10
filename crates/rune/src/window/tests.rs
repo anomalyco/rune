@@ -529,15 +529,12 @@ fn noop_instance() -> wgpu::Instance {
     wgpu::Instance::new(descriptor)
 }
 
-/// A surface that refuses its configuration reports it as an error its owner can drop, not a
-/// panic in wgpu's default handler that takes the app's every window with it (hex#979).
+/// A GPU on wgpu's noop backend: its device takes anything and refuses every surface.
 #[cfg(target_os = "linux")]
-#[test]
-fn a_refused_surface_configuration_is_an_error_not_a_panic() {
+fn noop_gpu(instance: &wgpu::Instance) -> (Gpu, wgpu::Surface<'static>) {
     use std::num::NonZeroU32;
     use std::ptr::NonNull;
     use winit::raw_window_handle::{RawDisplayHandle, RawWindowHandle, XcbDisplayHandle, XcbWindowHandle};
-    let instance = noop_instance();
     // The noop backend takes any handle and reports no capabilities, so configuring fails.
     let surface = unsafe {
         instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
@@ -547,8 +544,14 @@ fn a_refused_surface_configuration_is_an_error_not_a_panic() {
     }
     .unwrap();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
-    let (device, _queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
-    let config = wgpu::SurfaceConfiguration {
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+    (Gpu::from_device(instance.clone(), adapter, device, queue), surface)
+}
+
+/// What the noop backend takes for a surface: the format the test configures it in.
+#[cfg(target_os = "linux")]
+fn noop_config() -> wgpu::SurfaceConfiguration {
+    wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: wgpu::TextureFormat::Bgra8UnormSrgb,
         width: 200,
@@ -558,10 +561,125 @@ fn a_refused_surface_configuration_is_an_error_not_a_panic() {
         alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied,
         view_formats: vec![],
         color_space: Default::default(),
-    };
-    let error = configure(&surface, &device, &config).unwrap_err();
+    }
+}
+
+/// A surface that refuses its configuration reports it as an error its owner can drop, not a
+/// panic in wgpu's default handler that takes the app's every window with it (hex#979).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_refused_surface_configuration_is_an_error_not_a_panic() {
+    let instance = noop_instance();
+    let (gpu, surface) = noop_gpu(&instance);
+    let config = noop_config();
+    let error = configure(&surface, &gpu, &config).unwrap_err();
     assert!(error.starts_with("Validation Error: In Surface::configure"), "{error}");
     assert!(error.ends_with("(200x80, Bgra8UnormSrgb, PreMultiplied, AutoVsync)"), "{error}");
+}
+
+/// A surface whose configuration failed has no presentation, and wgpu panics
+/// ("Surface is not configured for presentation") on the drawable Rune would ask it for. The
+/// acquire reports the miss instead, and the window makes a surface and device before its next
+/// frame (hex's Modern Standby panic).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_surface_with_no_presentation_is_never_asked_for_a_drawable() {
+    let instance = noop_instance();
+    let (gpu, surface) = noop_gpu(&instance);
+    let config = noop_config();
+    configure(&surface, &gpu, &config).expect_err("the noop surface refuses its configuration");
+    let mut meter = SurfaceMeter::new("unconfigured", Arc::default());
+    assert_eq!(acquire(&surface, &gpu, &config, false, 1, &mut meter), Err(Missed::Unconfigured));
+    assert_eq!(meter.totals().failed(), 1, "the miss is counted");
+}
+
+/// `Device::destroy` only marks the device invalid: its lost callback runs when the device next
+/// maintains itself, which `configure` does with a poll. Without that poll the surface gets no
+/// presentation while `is_lost` still reads false, `configure` says Ok, and the drawable the next
+/// frame asks for panics ("Surface is not configured for presentation").
+#[cfg(target_os = "linux")]
+#[test]
+fn a_destroyed_device_that_has_not_reported_its_loss_is_not_configured() {
+    let instance = noop_instance();
+    let (gpu, surface) = noop_gpu(&instance);
+    let config = noop_config();
+    gpu.device.destroy();
+    assert!(!gpu.is_lost(), "the callback waits for the device's next maintain");
+    let error = configure(&surface, &gpu, &config).unwrap_err();
+    assert!(error.starts_with("the GPU device was lost"), "{error}");
+    assert!(gpu.is_lost());
+    let mut meter = SurfaceMeter::new("destroyed", Arc::default());
+    assert_eq!(acquire(&surface, &gpu, &config, true, 1, &mut meter), Err(Missed::Unconfigured));
+}
+
+/// A surface that won't come back is replaced a bounded number of times, waiting longer after
+/// each failure, and then the window gives it up: a lost device can never be replaced, and a
+/// frame must not ask again forever.
+#[test]
+fn surface_replacements_give_up_after_a_bounded_number_of_tries() {
+    use super::win::{SurfaceStep, SURFACE_TRIES};
+    let now = Instant::now();
+    let mut retries = SurfaceRetries::default();
+    let mut waits = Vec::new();
+    loop {
+        assert_eq!(retries.attempt(), SurfaceStep::Replace);
+        match retries.retry(now) {
+            Some(at) => waits.push(at - now),
+            None => break,
+        }
+        assert!(waits.len() < 100, "a replacement that keeps failing never gives up");
+    }
+    assert_eq!(waits.len() as u8, SURFACE_TRIES - 1, "one try, then bounded retries");
+    assert!(waits.windows(2).all(|pair| pair[1] > pair[0]), "each wait is longer: {waits:?}");
+    assert_eq!(retries.failures(), SURFACE_TRIES);
+    assert_eq!(retries.attempt(), SurfaceStep::GiveUp);
+
+    // A frame that reached the screen starts over.
+    retries.worked();
+    assert_eq!(retries.failures(), 0);
+    assert_eq!(retries.attempt(), SurfaceStep::Replace);
+}
+
+/// A replacement that works still counts: a surface replaced and lost again before its frame
+/// presents gives the window up after `SURFACE_TRIES` replacements instead of making one
+/// forever. This is the shape `Host::replace_lost_surface` runs, where only `draw`'s present
+/// calls `worked`.
+#[test]
+fn a_surface_lost_after_every_replacement_gives_up_after_the_tries() {
+    use super::win::{SurfaceStep, SURFACE_TRIES};
+    let mut retries = SurfaceRetries::default();
+    let mut replaced = 0;
+    while retries.attempt() == SurfaceStep::Replace {
+        // The replacement worked, and the frame it made was lost before it presented.
+        replaced += 1;
+        assert!(replaced < 100, "a surface lost before it presents never stops being replaced");
+    }
+    assert_eq!(replaced, SURFACE_TRIES, "the window gives up after a bounded number of replacements");
+
+    // One frame reaches the screen: the next loss starts over.
+    retries.worked();
+    assert_eq!(retries.attempt(), SurfaceStep::Replace);
+}
+
+/// A device that went away (a driver reset, a GPU removed, Windows' Modern Standby) configures
+/// nothing, and wgpu drops the `DeviceLost` that would say so: `configure` reports the lost
+/// device itself, and no drawable is ever asked of it.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_lost_device_is_reported_and_never_drawn_with() {
+    let instance = noop_instance();
+    let (gpu, surface) = noop_gpu(&instance);
+    let config = noop_config();
+    assert!(!gpu.is_lost());
+    gpu.device.destroy();
+    // wgpu loses a destroyed device once its queues drain, when the device next maintains itself.
+    gpu.device.poll(wgpu::PollType::wait_indefinitely()).ok();
+    assert!(gpu.is_lost(), "the device's lost callback marks it");
+    let error = configure(&surface, &gpu, &config).unwrap_err();
+    assert!(error.starts_with("the GPU device was lost"), "{error}");
+    let mut meter = SurfaceMeter::new("lost", Arc::default());
+    assert_eq!(acquire(&surface, &gpu, &config, true, 1, &mut meter), Err(Missed::Unconfigured));
+    assert_eq!(meter.totals().failed(), 1, "a lost device is a miss, not a panic");
 }
 
 /// Each Rune GPU has its own wgpu instance, and wgpu compares devices by an id each instance

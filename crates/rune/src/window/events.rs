@@ -239,7 +239,7 @@ impl<S: 'static> Host<S> {
                 if (scale - rt.env.scale).abs() > f32::EPSILON {
                     let size = l.window.inner_size();
                     if size.width > 0 && size.height > 0 {
-                        l.resize_surface(&gpu.device, size);
+                        l.resize_surface(gpu, size);
                         rt.set_viewport((size.width as f32 / scale, size.height as f32 / scale), scale);
                         sync_chrome(rt, l, chrome, titlebar);
                         l.request_redraw();
@@ -263,7 +263,7 @@ impl<S: 'static> Host<S> {
                 }
                 let origin_moved = sync_screen_origin(rt, &l.window);
                 // A frame Rune moved itself has its drawable and viewport already.
-                let resized = l.resize_surface(&gpu.device, size);
+                let resized = l.resize_surface(gpu, size);
                 let viewport = (size.width as f32 / scale, size.height as f32 / scale);
                 if !resized && viewport == rt.viewport && scale == rt.env.scale {
                     if restored || origin_moved { l.request_redraw(); }
@@ -303,7 +303,7 @@ impl<S: 'static> Host<S> {
                     winit::dpi::PhysicalSize::new(width, height)
                 };
                 if size.width > 0 && size.height > 0 {
-                    let resized = l.resize_surface(&gpu.device, size);
+                    let resized = l.resize_surface(gpu, size);
                     let viewport = (size.width as f32 / scale, size.height as f32 / scale);
                     if resized || viewport != rt.viewport || scale != rt.env.scale {
                         rt.set_viewport(viewport, scale);

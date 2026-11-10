@@ -6,6 +6,51 @@ use super::*;
 /// hidden or its drawable never arrives. A covered or occluded window doesn't wait for it.
 pub(super) const READY_FALLBACK: Duration = Duration::from_secs(1);
 
+/// What a frame does about a surface that can't draw (`Host::replace_lost_surface`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SurfaceStep {
+    /// Try a replacement now.
+    Replace,
+    /// `SURFACE_TRIES` replacements in a row and no frame presented between them: give the
+    /// window up.
+    GiveUp,
+}
+
+/// How many replacements in a row a window may make before it gives the window up, and how long
+/// it waits between ones that failed (`Host::replace_lost_surface`). Every replacement counts,
+/// whether or not it worked: only a frame that presents starts the count over (`Host::draw`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct SurfaceRetries {
+    replacements: u8,
+}
+
+/// Replacements in a row without a presented frame before the window gives up.
+pub(super) const SURFACE_TRIES: u8 = 3;
+/// The first wait between replacements; each one after waits a further `SURFACE_BACKOFF`.
+pub(super) const SURFACE_BACKOFF: Duration = Duration::from_millis(100);
+
+impl SurfaceRetries {
+    /// Counts this replacement and says whether it may happen. One that worked counts too: a
+    /// surface replaced and lost again before its frame presents has still used it up.
+    pub(super) fn attempt(&mut self) -> SurfaceStep {
+        if self.replacements >= SURFACE_TRIES { return SurfaceStep::GiveUp; }
+        self.replacements = self.replacements.saturating_add(1);
+        SurfaceStep::Replace
+    }
+
+    /// When to try again after a replacement that failed at `now`, or None when that was the
+    /// last one `attempt` allows.
+    pub(super) fn retry(&self, now: Instant) -> Option<Instant> {
+        (self.replacements < SURFACE_TRIES).then(|| now + SURFACE_BACKOFF * u32::from(self.replacements))
+    }
+
+    /// A frame presented: the next loss starts its replacements over.
+    pub(super) fn worked(&mut self) { self.replacements = 0; }
+
+    #[cfg(test)]
+    pub(super) fn failures(&self) -> u8 { self.replacements }
+}
+
 /// The open window. Fields drop in order: what's native to the OS, then the surface before its
 /// window.
 pub(super) struct Win {
@@ -14,8 +59,19 @@ pub(super) struct Win {
     #[cfg_attr(not(any(target_os = "macos", all(unix, not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
     pub(super) native: Native,
     pub(super) first_frame: FirstFrame,
-    pub(super) surface: wgpu::Surface<'static>,
+    /// The surface it draws into. None only while `Host::reattach` replaces it: the old surface
+    /// has to go before the new one is made (a DX12 surface takes the window's one
+    /// DirectComposition target, `Dx12SwapchainKind::DxgiFromVisual`) and before the device it
+    /// drew with.
+    pub(super) surface: Option<wgpu::Surface<'static>>,
     pub(super) config: wgpu::SurfaceConfiguration,
+    /// Whether the surface's last configuration took. False after a refused one, and for a lost
+    /// device: no drawable can be taken from it (`acquire`), and its next frame replaces the
+    /// surface and the device it drew with (`Host::reattach`).
+    pub(super) surface_ok: bool,
+    /// How many times in a row a frame tried to replace that surface and device, and the wait
+    /// between tries (`SurfaceRetries`).
+    pub(super) surface_retries: SurfaceRetries,
     pub(super) window: Arc<Window>,
     /// When to redraw after a frame that had no drawable, or the next frame of motion when no
     /// display link paces it (macOS).
@@ -51,14 +107,22 @@ impl Win {
         if effect == RedrawEffect::Request { self.window.request_redraw(); }
     }
 
-    /// Matches the drawable to the window's size; false when it already did.
-    pub(super) fn resize_surface(&mut self, device: &wgpu::Device, size: winit::dpi::PhysicalSize<u32>) -> bool {
+    /// Matches the drawable to the window's size; false when it already did. A surface that
+    /// refuses the new size is marked so its next frame replaces it (`Host::reattach`) rather
+    /// than drawing into a surface wgpu has no presentation for.
+    pub(super) fn resize_surface(&mut self, gpu: &Gpu, size: winit::dpi::PhysicalSize<u32>) -> bool {
         let (width, height) = (size.width.max(1), size.height.max(1));
         if (self.config.width, self.config.height) == (width, height) { return false; }
         self.config.width = width;
         self.config.height = height;
-        self.surface.configure(device, &self.config);
-        if let Some(alpha) = &mut self.alpha { alpha.resize(device, (width, height)); }
+        // No surface: `Host::reattach` is between the old one and the new, and takes this size
+        // from the window itself.
+        let Some(surface) = &self.surface else { return true };
+        if let Err(error) = super::configure(surface, gpu, &self.config) {
+            eprintln!("rune: a window's surface refused its new size: {error}");
+            self.surface_ok = false;
+        }
+        if let Some(alpha) = &mut self.alpha { alpha.resize(&gpu.device, (width, height)); }
         #[cfg(target_os = "macos")]
         if let Some(shadow) = &self.native.shadow { shadow.redraw(); }
         true
@@ -243,14 +307,14 @@ impl Win {
     /// Presents drawables inside Core Animation transactions, while the frame moves.
     #[cfg(target_os = "macos")]
     pub(super) fn present_with_transaction(&mut self, on: bool) {
-        self.native.materials.set_moving(&self.surface, on);
+        if let Some(surface) = &self.surface { self.native.materials.set_moving(surface, on); }
     }
 
     /// Presents the frame in the transaction that resizes the window while the user drags its
     /// edge. Before the drawable is acquired: wgpu reads `presentsWithTransaction` then.
     #[cfg(target_os = "macos")]
     pub(super) fn set_live_resize(&mut self, on: bool) {
-        self.native.materials.set_live(&self.window, &self.surface, on);
+        if let Some(surface) = &self.surface { self.native.materials.set_live(&self.window, surface, on); }
     }
 
     pub(super) fn focus(&self) {
