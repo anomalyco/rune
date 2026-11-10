@@ -28,12 +28,19 @@ pub(crate) fn jump_color() -> Color { crate::oklch(0.68, 0.2, 25.0) }
 /// The scrubber's state; keep one in the app's state.
 #[derive(Default)]
 pub struct Scrub {
-    rewind: Option<Rewind>,
-    clip: Option<Arc<Clip>>,
+    showing: Showing,
     frame: usize,
     anchor: Option<usize>,
     picked: Option<u32>,
     note: crate::TextEdit,
+}
+
+#[derive(Default)]
+enum Showing {
+    #[default]
+    Closed,
+    /// `clip` over the window; `held` is the recorder it froze, which closing resumes.
+    Open { clip: Arc<Clip>, held: Option<Rewind> },
 }
 
 /// What a press of a key did ([`Scrub::key`]).
@@ -74,17 +81,28 @@ impl Sent {
 }
 
 impl Scrub {
-    /// Freezes `rewind` and shows its clip at the last frame anything moved in.
+    /// Freezes `rewind` and shows its clip at the last frame anything moved in. A recorder an
+    /// earlier `open` froze records again.
     pub fn open(&mut self, rewind: &Rewind) {
-        self.show(rewind.freeze());
-        self.rewind = Some(rewind.clone());
+        self.close();
+        let clip = rewind.freeze();
+        self.show_from(clip, Some(rewind.clone()));
     }
 
-    /// Shows `clip` without a recorder behind it (a story, a saved clip).
+    /// Shows `clip` without a recorder behind it (a story, a saved clip). A recorder an
+    /// earlier `open` froze stays frozen until [`close`](Self::close).
     pub fn show(&mut self, clip: Arc<Clip>) {
+        let held = match std::mem::take(&mut self.showing) {
+            Showing::Open { held, .. } => held,
+            Showing::Closed => None,
+        };
+        self.show_from(clip, held);
+    }
+
+    fn show_from(&mut self, clip: Arc<Clip>, held: Option<Rewind>) {
         let last = clip.len().saturating_sub(1);
         self.frame = if clip.activity(last) > 0.0 { last } else { clip.next_active(last, -1).unwrap_or(last) };
-        self.clip = Some(clip);
+        self.showing = Showing::Open { clip, held };
         self.anchor = None;
         self.picked = None;
         self.note = crate::TextEdit::default();
@@ -92,13 +110,17 @@ impl Scrub {
 
     /// Hides the scrubber and resumes recording.
     pub fn close(&mut self) {
-        if let Some(rewind) = self.rewind.take() { rewind.resume(); }
-        self.clip = None;
+        if let Showing::Open { held: Some(rewind), .. } = std::mem::take(&mut self.showing) { rewind.resume(); }
     }
 
-    pub fn is_open(&self) -> bool { self.clip.is_some() }
+    pub fn is_open(&self) -> bool { self.clip().is_some() }
 
-    pub fn clip(&self) -> Option<&Arc<Clip>> { self.clip.as_ref() }
+    pub fn clip(&self) -> Option<&Arc<Clip>> {
+        match &self.showing {
+            Showing::Open { clip, .. } => Some(clip),
+            Showing::Closed => None,
+        }
+    }
 
     /// The frame showing.
     pub fn frame(&self) -> usize { self.frame }
@@ -111,8 +133,8 @@ impl Scrub {
 
     /// Shows frame `k`; with `extend`, selects from where the selection started to it.
     pub fn seek(&mut self, k: usize, extend: bool) {
-        let Some(clip) = &self.clip else { return };
-        let k = k.min(clip.len().saturating_sub(1));
+        let Some(len) = self.clip().map(|clip| clip.len()) else { return };
+        let k = k.min(len.saturating_sub(1));
         if extend { self.anchor.get_or_insert(self.frame); } else { self.anchor = None; }
         self.frame = k;
     }
@@ -130,14 +152,14 @@ impl Scrub {
 
     /// What Send would hand on now.
     pub fn sent(&self) -> Option<Sent> {
-        Some(Sent { clip: self.clip.clone()?, frames: self.selection(), note: self.note.text.clone() })
+        Some(Sent { clip: self.clip()?.clone(), frames: self.selection(), note: self.note.text.clone() })
     }
 
     /// ←/→ step a frame (⇧ selects, ⌥ jumps to the next frame anything moved in), Home/End go
     /// to the ends, Return sends and Escape closes. Route the app's unhandled keys here while
     /// [`Scrub::is_open`].
     pub fn key(&mut self, ev: &KeyEvent) -> Keyed {
-        let Some(clip) = self.clip.clone() else { return Keyed::Ignored };
+        let Some(clip) = self.clip().cloned() else { return Keyed::Ignored };
         let extend = ev.mods.shift;
         let step = |dir: isize| if ev.mods.alt { clip.next_active(self.frame, dir) } else { self.frame.checked_add_signed(dir) };
         match ev.key {
@@ -158,7 +180,7 @@ impl Scrub {
     /// clock: the scrubber itself still animates. `lens` finds this state in the app's; Send
     /// (the button, or Return in the note) calls `on_send`.
     pub fn view<S: 'static>(&self, lens: fn(&mut S) -> &mut Scrub, on_send: fn(&mut S, Sent, &mut Tx)) -> El {
-        let Some(clip) = &self.clip else { return el() };
+        let Some(clip) = self.clip() else { return el() };
         let (vw, vh) = clip.viewport();
         let [ox, oy, w, _] = crate::memo::layout_with("rewind", |r| r.map(|v| (v * 2.0).round() / 2.0)).unwrap_or([0.0, 0.0, vw, vh]);
         let changes = clip.changes(self.frame);
