@@ -57,7 +57,7 @@ fn missing_named_family_falls_back_to_sans_pixels() {
         let style = TextStyle::new(13.0, 400.0);
         let mut a = Vec::new(); let mut b = Vec::new();
         sans.glyphs("Hello 0123 ffi", style, scale, [0.0, 0.0], &mut a);
-        missing.glyphs("Hello 0123 ffi", style.family(Family::Named("Rune Missing Family, IBM Plex Mono")),
+        missing.glyphs("Hello 0123 ffi", style.family(Family::Named("Rune Missing Family")),
             scale, [0.0, 0.0], &mut b);
         assert_eq!(a.iter().map(|q| (q.rect, q.uv)).collect::<Vec<_>>(), b.iter().map(|q| (q.rect, q.uv)).collect::<Vec<_>>());
         assert_eq!(sans.atlas.data, missing.atlas.data);
