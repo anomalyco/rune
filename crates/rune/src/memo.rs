@@ -579,6 +579,20 @@ fn keyed(el: El, key: String) -> El {
     el.key(key)
 }
 
+/// Runs `f` inside the view build in progress as if it were the next build, and the rest of the
+/// build carries on as that one: memos used so far may be used once more, as the following frame
+/// would use them. For tooling that measures what a rebuild costs a frame: a surface rebuilt
+/// many times in one build to time it, its unchanged inner memos reused each time. Outside a
+/// view build it just runs `f`.
+pub fn as_next_build<R>(f: impl FnOnce() -> R) -> R {
+    SCOPES.with_borrow_mut(|s| {
+        if let Some(s) = s.last_mut() {
+            s.cache.pass += 1;
+        }
+    });
+    f()
+}
+
 /// The subtree `build` returns, keyed `id`, built again only when `version` (or the window's
 /// environment) differs from the last build's. Otherwise `build` isn't called and the
 /// previous subtree is reused, with the same node ids and state.

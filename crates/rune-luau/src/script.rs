@@ -480,6 +480,8 @@ impl Inner {
             text: self.options.text,
             weights: self.options.weights,
             garbage: Rc::downgrade(&vm.garbage),
+            templates: vm.templates.clone(),
+            recording: RefCell::new(None),
             prefix: self.prefix.clone(),
             nodes: self.nodes.clone(),
             warned: self.warned.clone(),

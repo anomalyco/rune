@@ -3,7 +3,8 @@
 //! this render's arena, and return a light-userdata handle (an index), so a node costs no Lua
 //! table, no userdata and no tree diff. Rune's keyed elements and memo cache do the incremental
 //! work: `view:Memo` wraps `rune::memo::memo_with_hash`, and `ui.virtualList` is
-//! `El::virtual_rows`.
+//! `El::virtual_rows`. A node whose props table is frozen (`table.freeze`) is decoded once and
+//! copied after that ([`Templates`]).
 
 pub(crate) mod host;
 pub(crate) mod nodes;
@@ -92,6 +93,51 @@ pub(crate) struct Env {
     pub(crate) warned: Rc<RefCell<FxHashSet<String>>>,
     /// Colours this render resolved, by name: a render uses a handful, many times each.
     pub(crate) colors: RefCell<Vec<(Box<str>, Color)>>,
+    /// The VM's nodes decoded from frozen props tables.
+    pub(crate) templates: Rc<RefCell<Templates>>,
+    /// While a frozen props table decodes: each colour it resolved, so its template knows
+    /// when a theme change has outdated it.
+    pub(crate) recording: RefCell<Option<Vec<(Box<str>, Color)>>>,
+}
+
+/// Nodes decoded from frozen props tables, by table and node kind. A frozen table can't change,
+/// so a node built from one again starts from a copy of the first, its props already applied:
+/// no table walk, no prop decoding, and the element's style shared until it is written. A script
+/// gets this with `local STYLE = table.freeze({ ... })` passed as a node's props.
+#[derive(Default)]
+pub(crate) struct Templates(rustc_hash::FxHashMap<(usize, u8), Template>);
+
+/// How many templates a VM keeps; past it the cache starts over.
+const TEMPLATES: usize = 1024;
+
+pub(crate) struct Template {
+    /// The finished node, without children, words or handlers.
+    el: El,
+    /// The appearance and colours it was decoded with.
+    dark: bool,
+    colors: Vec<(Box<str>, Color)>,
+    /// Keeps the table alive, so its address isn't taken by another table.
+    _table: LuaRef,
+}
+
+impl Templates {
+    /// A copy of the template for `key`, if it holds under `env`.
+    pub(crate) fn get(&self, key: (usize, u8), env: &Env) -> Option<El> {
+        let t = self.0.get(&key)?;
+        let holds = t.dark == env.dark && t.colors.iter().all(|(name, c)| env.resolve(name).ok() == Some(*c));
+        holds.then(|| t.el.clone())
+    }
+
+    /// Keeps `el`, built from the frozen table at stack slot `idx`, as `key`'s template.
+    pub(crate) unsafe fn put(&mut self, state: *mut ffi::lua_State, idx: c_int, key: (usize, u8), env: &Env, el: El, colors: Vec<(Box<str>, Color)>) {
+        if self.0.len() >= TEMPLATES {
+            self.0.clear();
+        }
+        // SAFETY: the caller passes the props table's slot.
+        let r = unsafe { ffi::lua_ref(state, idx) };
+        let table = LuaRef { r, garbage: env.garbage.clone() };
+        self.0.insert(key, Template { el, dark: env.dark, colors, _table: table });
+    }
 }
 
 /// Functions that need the window's state type, picked when a render starts.
@@ -311,6 +357,7 @@ impl Slots<'_> {
 impl Env {
     pub(crate) fn resolve(&self, name: &str) -> Result<Color, String> {
         if let Some(c) = self.cached(name) {
+            self.note(name, c);
             return Ok(c);
         }
         let c = if name.starts_with('#') {
@@ -322,7 +369,14 @@ impl Env {
             Color::TRANSPARENT
         };
         self.colors.borrow_mut().push((name.into(), c));
+        self.note(name, c);
         Ok(c)
+    }
+
+    fn note(&self, name: &str, c: Color) {
+        if let Some(r) = self.recording.borrow_mut().as_mut() {
+            r.push((name.into(), c));
+        }
     }
 
     fn cached(&self, name: &str) -> Option<Color> {
@@ -331,10 +385,12 @@ impl Env {
 
     pub(crate) fn color(&self, name: &str) -> Option<Color> {
         if let Some(c) = self.cached(name) {
+            self.note(name, c);
             return Some(c);
         }
         let c = (self.palette)(name, self.dark)?;
         self.colors.borrow_mut().push((name.into(), c));
+        self.note(name, c);
         Some(c)
     }
 

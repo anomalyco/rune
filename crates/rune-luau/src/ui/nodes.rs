@@ -36,33 +36,33 @@ unsafe extern "C-unwind" fn ui_hex(state: *mut ffi::lua_State) -> c_int {
 
 unsafe extern "C-unwind" fn ui_row(state: *mut ffi::lua_State) -> c_int {
     // SAFETY: Luau calls this as a C function with its arguments on `state`'s stack.
-    unsafe { container(state, row) }
+    unsafe { container(state, row, 0) }
 }
 
 unsafe extern "C-unwind" fn ui_col(state: *mut ffi::lua_State) -> c_int {
     // SAFETY: Luau calls this as a C function with its arguments on `state`'s stack.
-    unsafe { container(state, col) }
+    unsafe { container(state, col, 1) }
 }
 
 unsafe extern "C-unwind" fn ui_box(state: *mut ffi::lua_State) -> c_int {
     // SAFETY: Luau calls this as a C function with its arguments on `state`'s stack.
-    unsafe { container(state, el) }
+    unsafe { container(state, el, 2) }
 }
 
 unsafe extern "C-unwind" fn ui_spacer(state: *mut ffi::lua_State) -> c_int {
     // SAFETY: Luau calls this as a C function with its arguments on `state`'s stack.
-    unsafe { container(state, spacer) }
+    unsafe { container(state, spacer, 3) }
 }
 
 
-/// What a node starts from.
+/// What a node starts from: a box (and which kind, for its template) or a text.
 enum Base {
-    Box(fn() -> El),
+    Box(fn() -> El, u8),
     Text(String),
 }
 
 /// `ui.row(props?, children?)`, or `ui.row(children)`.
-unsafe fn container(state: *mut ffi::lua_State, base: fn() -> El) -> c_int {
+unsafe fn container(state: *mut ffi::lua_State, base: fn() -> El, kind: u8) -> c_int {
     // SAFETY: every call below reads or pushes on this C function's own stack.
     unsafe {
         let (props, children) = match (ffi::lua_type(state, 1), ffi::lua_type(state, 2)) {
@@ -72,7 +72,7 @@ unsafe fn container(state: *mut ffi::lua_State, base: fn() -> El) -> c_int {
             (ffi::LUA_TNIL | ffi::LUA_TNONE, ffi::LUA_TTABLE) => (0, 2),
             _ => (0, 0),
         };
-        guard(state, || build(state, Base::Box(base), props, children))
+        guard(state, || build(state, Base::Box(base, kind), props, children))
     }
 }
 
@@ -110,14 +110,61 @@ unsafe fn build(state: *mut ffi::lua_State, base: Base, props: c_int, children: 
     top(|frame| {
         let is_text = matches!(base, Base::Text(_));
         let Frame { arena, attach, env } = frame;
-        let slot = arena.alloc(match base {
-            Base::Box(f) => f(),
-            Base::Text(s) => text(s),
-        })?;
-        let mut p = Props::new(env);
-        // SAFETY: `props` is 0 or a table on this stack; the frame borrow covers no call back
-        // into Luau.
-        let press = unsafe { decode_props(state, props, env, is_text, &mut p, arena.get_mut(slot))? };
+        // A frozen props table can't change: its node is decoded once, then copied.
+        // SAFETY: `props` is 0 or a table on this stack.
+        let template = (props > 0 && unsafe { ffi::lua_getreadonly(state, props) } != 0).then(|| {
+            let kind = match base {
+                Base::Box(_, kind) => kind,
+                Base::Text(_) => u8::MAX,
+            };
+            // SAFETY: as above.
+            (unsafe { ffi::lua_topointer(state, props) } as usize, kind)
+        });
+        let reused = template.and_then(|key| env.templates.borrow().get(key, env));
+        // The node's own props still to apply once its children are in: none for a template.
+        let (slot, pending) = match (reused, base) {
+            (Some(mut el), base) => {
+                if let Base::Text(s) = base {
+                    el.set_content(s);
+                }
+                (arena.alloc(el)?, None)
+            }
+            (None, base) => {
+                let slot = arena.alloc(match base {
+                    Base::Box(f, _) => f(),
+                    Base::Text(s) => text(s),
+                })?;
+                let mut p = Props::new(env);
+                if template.is_some() {
+                    *env.recording.borrow_mut() = Some(Vec::new());
+                }
+                // SAFETY: `props` is 0 or a table on this stack; the frame borrow covers no call
+                // back into Luau.
+                let decoded = unsafe { decode_props(state, props, env, is_text, &mut p, arena.get_mut(slot)) };
+                let press = match decoded {
+                    Ok(press) => press,
+                    Err(message) => {
+                        env.recording.take();
+                        return Err(message);
+                    }
+                };
+                // The template is the finished node without children, words or handlers.
+                let made = (template.is_some() && press.is_none() && p.on_hover.is_none() && !p.uncacheable).then(|| {
+                    let mut el = arena.get_mut(slot).clone();
+                    p.clone().finish(&mut el, env, is_text, None, *attach);
+                    if is_text {
+                        el.set_content(String::new());
+                    }
+                    el
+                });
+                let colors = env.recording.take();
+                if let (Some(key), Some(el), Some(colors)) = (template, made, colors) {
+                    // SAFETY: `props` is the frozen table's slot.
+                    unsafe { env.templates.borrow_mut().put(state, props, key, env, el, colors) };
+                }
+                (slot, Some((p, press)))
+            }
+        };
         if children > 0 {
             let (slots, el) = arena.split(slot);
             let mut failed = None;
@@ -127,7 +174,9 @@ unsafe fn build(state: *mut ffi::lua_State, base: Base, props: c_int, children: 
                 return Err(message);
             }
         }
-        p.finish(arena.get_mut(slot), env, is_text, press, *attach);
+        if let Some((p, press)) = pending {
+            p.finish(arena.get_mut(slot), env, is_text, press, *attach);
+        }
         // SAFETY: pushes the handle as this C function's result.
         unsafe { ffi::lua_pushlightuserdata(state, arena.handle(slot)) };
         Ok(1)

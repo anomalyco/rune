@@ -45,6 +45,8 @@ pub(crate) struct Vm {
     pub(crate) module: Table,
     pub(crate) view: Table,
     pub(crate) garbage: Rc<RefCell<Vec<c_int>>>,
+    /// Nodes decoded from frozen props tables, reused while this VM runs.
+    pub(crate) templates: Rc<RefCell<crate::ui::Templates>>,
     signals: Rc<RefCell<FxHashMap<String, Value>>>,
     fire: Function,
 }
@@ -211,6 +213,7 @@ impl Vm {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             view,
             garbage: Rc::default(),
+            templates: Rc::default(),
             signals,
             fire,
         };
