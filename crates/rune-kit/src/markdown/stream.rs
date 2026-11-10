@@ -321,9 +321,9 @@ fn drop_closing_pad(doc: &mut ParsedDoc) {
     let (Some(b), Some(m)) = (doc.0.last_mut(), doc.5.last_mut()) else { return };
     let Some((inl, map)) = last_inline(b, m) else { return };
     let len = inl.text.len();
-    let Some(k) = inl.spans.iter().position(|s| s.2 == Style::CodePad && s.1 == len && s.0 + PAD.len() == len) else { return };
+    let Some(k) = inl.spans.iter().position(|s| s.2 == Style::CodePad && s.1 == len && s.0 + CLOSE.len() == len) else { return };
     inl.spans.remove(k);
-    let cut = len - PAD.len();
+    let cut = len - CLOSE.len();
     inl.text.truncate(cut);
     inl.spans.retain_mut(|s| {
         s.1 = s.1.min(cut);

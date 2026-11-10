@@ -30,7 +30,7 @@ fn parses_each_block_type() {
     let b = parse(DOC);
     assert!(matches!(&b[0], Block::Heading(1, i) if i.text == "Title"));
     let Block::Para(p) = &b[1] else { panic!("{b:?}") };
-    assert_eq!(p.text, "Some \u{202f}\u{202f}code\u{202f}\u{202f}, em, bold and a link.");
+    assert_eq!(p.text, "Some \u{202f}\u{202f}\u{2066}code\u{2069}\u{202f}\u{202f}, em, bold and a link.");
     let styles: Vec<Style> = p.spans.iter().map(|s| s.2).collect();
     assert_eq!(styles, [Style::CodePad, Style::Code, Style::CodePad, Style::Em, Style::Strong, Style::Link]);
     assert_eq!(p.links.len(), 1);

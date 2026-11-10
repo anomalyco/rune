@@ -655,7 +655,7 @@ fn item_label(blocks: &[Block]) -> String {
     let mut out = String::new();
     for b in blocks {
         let text = match b {
-            Block::Para(inl) | Block::Heading(_, inl) => inl.text.replace(PAD, ""),
+            Block::Para(inl) | Block::Heading(_, inl) => unpadded(&inl.text),
             Block::Code(s) | Block::Diff(s) | Block::Mermaid(s) => s.clone(),
             Block::Image { alt, .. } => alt.clone(),
             _ => continue,

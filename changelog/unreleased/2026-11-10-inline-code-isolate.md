@@ -1,0 +1,1 @@
+- **rune-kit Markdown: inline code is a left-to-right isolate**, as `:not(pre) > code { direction: ltr; unicode-bidi: isolate }` makes it on a page: code inside Arabic or Hebrew text reads left to right and moves as one, its punctuation staying with it. Copied and plain text leave the isolate marks out with the padding.
