@@ -56,8 +56,13 @@ impl<S: 'static> Runtime<S> {
         if self.window_focused != Some(focused) {
             // Refocused, the pointer where it was hovers again; blurred, it waits for a move.
             if focused && self.window_focused == Some(false) { self.hover_paused = false; }
-            // A focused field's selection takes its active or inactive pair (`El::selection_style`).
-            if self.window_focused.is_some() && self.focused_input().is_some_and(|i| i.selection_style.is_some()) { self.dirty = true; }
+            // A selection takes its active or inactive pair (`El::selection_style`): a focused
+            // field's, or a selectable text's.
+            if self.window_focused.is_some()
+                && (self.focused_input().is_some_and(|i| i.selection_style.is_some()) || self.text_selection().is_some_and(|(_, r)| !r.is_empty()))
+            {
+                self.dirty = true;
+            }
             self.window_focused = Some(focused);
             if let Some(f) = self.on_focus { self.update(|s, tx| f(s, focused, tx)); }
             // Deliver the cancelled Up before FocusLost can commit a view that removes its

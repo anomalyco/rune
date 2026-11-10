@@ -226,8 +226,8 @@ impl<S: 'static> Runtime<S> {
             }
             // Text fields: selection under the text, placeholder, caret over it.
             let mut caret = None;
-            // A field's selected display bytes and the ink its `El::selection_style` gives them.
-            let mut field_ink: Option<(usize, usize, [f32; 4])> = None;
+            // The selected display bytes and the ink their `El::selection_style` gives them.
+            let mut selected_ink: Option<(usize, usize, [f32; 4])> = None;
             if let Some(inp) = &n.input {
                 let e = &inp.edit;
                 let departing = self.flights.iter().any(|f| f.departs(&n.path, n.key.as_deref())
@@ -266,7 +266,7 @@ impl<S: 'static> Runtime<S> {
                         let (highlight, ink) = inp.selection_style.map_or((inp.selection, None), |st| st.pick(self.window_focused != Some(false)));
                         selectable::push_field_selection(&mut self.instances, layout, da, db,
                             origin, tk, premul(highlight, o, srgb), s, clip, fade);
-                        field_ink = ink.map(|c| (da, db, premul(c, o, srgb)));
+                        selected_ink = ink.map(|c| (da, db, premul(c, o, srgb)));
                     }
                     // A range selection hides the caret, as a browser's field and a native one do.
                     if a == b || e.is_composing() {
@@ -419,7 +419,12 @@ impl<S: 'static> Runtime<S> {
             }
             if spec.selectable && let Some((a, b)) = selectable::range_in(sel_ranges, i) {
                 let (a, b) = n.elided.map_or((a, b), |e| e.range(a, b));
-                selectable::push_selection(&mut self.instances, layout, a, b, origin, tk, premul(spec.selection, o, srgb), s, clip, fade);
+                // `::selection` with a colour recolours the selected glyphs, as a field's does.
+                let (highlight, ink) = spec.selection_style.map_or((spec.selection, None), |st| st.pick(self.window_focused != Some(false)));
+                selectable::push_selection(&mut self.instances, layout, a, b, origin, tk, premul(highlight, o, srgb), s, clip, fade);
+                if let Some(c) = ink {
+                    selected_ink = Some((a, b, premul(c, o, srgb)));
+                }
             }
             self.glyph_scratch.clear();
             self.text.set_glyph_inks(color, &spec.spans);
@@ -443,7 +448,7 @@ impl<S: 'static> Runtime<S> {
                 } else {
                     f32::NEG_INFINITY..f32::INFINITY
                 };
-                let bytes = reveal.is_some() || !link_fx.is_empty() || has_hl_fg || field_ink.is_some();
+                let bytes = reveal.is_some() || !link_fx.is_empty() || has_hl_fg || selected_ink.is_some();
                 // A secret's glyphs aren't kept past the frame that draws them.
                 let secret = spec.redacted || n.input.as_ref().is_some_and(|i| i.edit.is_secure());
                 if direct || secret {
@@ -479,7 +484,7 @@ impl<S: 'static> Runtime<S> {
                 {
                     f = premul(c, o, srgb);
                 }
-                if let Some((a, b, c)) = field_ink
+                if let Some((a, b, c)) = selected_ink
                     && (a..b).contains(&(q.byte as usize))
                 {
                     f = c;

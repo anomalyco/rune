@@ -79,6 +79,7 @@ pub fn text(content: impl Into<String>) -> El {
         source: None,
         selectable: false,
         selection: DEFAULT_SELECTION,
+        selection_style: None,
         uncopied: Vec::new(),
         copy_breaks: [1, 1],
         copy_prefix: None,

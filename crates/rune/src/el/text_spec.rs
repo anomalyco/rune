@@ -46,6 +46,8 @@ pub struct TextSpec {
     pub(crate) selectable: bool,
     /// See [`El::selection_color`](crate::El::selection_color).
     pub(crate) selection: Color,
+    /// See [`El::selection_style`](crate::El::selection_style): it takes over `selection`.
+    pub(crate) selection_style: Option<crate::SelectionStyle>,
     /// See [`El::uncopied`](crate::El::uncopied): byte ranges of `content`, sorted.
     pub(crate) uncopied: Vec<(u32, u32)>,
     /// See [`El::copy_breaks`](crate::El::copy_breaks): newlines before and after it.

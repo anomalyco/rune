@@ -60,6 +60,10 @@ impl<S: 'static> Runtime<S> {
             (self.srgb_blend, self.text.smoothing, self.text.families(), crate::text::icon::swap_id()).hash(&mut h);
             h.write_u32(s.to_bits());
             sel_ranges.hash(&mut h);
+            // A selection's colours follow the window's focus (`El::selection_style`).
+            if !sel_ranges.is_empty() {
+                self.window_focused.hash(&mut h);
+            }
             let mut scroll_mix = 0u64;
             for (&id, st) in &self.scrolls {
                 let mut sh = rune_motion::Fx::default();
