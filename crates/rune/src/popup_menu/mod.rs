@@ -282,7 +282,7 @@ pub(crate) struct Show {
     pub at: (f32, f32),
     pub positioned: Option<String>,
     pub min_width: f32,
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
     pub element: Option<[f32; 4]>,
 }
 

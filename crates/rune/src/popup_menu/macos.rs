@@ -72,7 +72,16 @@ pub(super) fn show(window: &Arc<Window>, show: Show, session: Rc<Session>, wake:
     let menu = build(mtm, &show.menu, &target, &mut 0, show.positioned.as_deref(), &mut positioned);
     // SAFETY: a main-thread menu this function owns.
     unsafe { menu.setMinimumWidth(show.min_width.max(0.0) as f64) };
-    let at = NSPoint::new(show.at.0 as f64, show.at.1 as f64);
+    // AppKit puts the menu's (or its positioned item's) top left at the point. Right to left it
+    // opens leftward from a point and lines up with its anchor's right edge, as a right-to-left
+    // localization's menus do.
+    let x = match (crate::labels::rtl(), show.element) {
+        (false, _) => show.at.0 as f64,
+        // SAFETY: a main-thread menu this function owns, already built.
+        (true, Some([x, _, w, _])) => (x + w) as f64 - unsafe { menu.size() }.width,
+        (true, None) => show.at.0 as f64 - unsafe { menu.size() }.width,
+    };
+    let at = NSPoint::new(x, show.at.1 as f64);
     run_later(move || {
         if !session.begin() { return; }
         // A close or hide in the same turn as the request, after the host handed it over.
