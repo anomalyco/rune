@@ -42,8 +42,10 @@ impl Tx {
     /// (`Runtime::key` and kin, headless scripts).
     pub fn input_time(&self) -> Option<crate::time::Instant> { self.input_time }
 
-    /// In a key handler, the key of the element that had focus when the key arrived, `None`
-    /// when nothing had (and in every other handler). An unkeyed element reads as `#n`, its
+    /// The key of the element that had focus when the event arrived, `None` when nothing had:
+    /// in a key handler, when the key arrived; in a press handler, after the press moved focus (a
+    /// menu opened there remembers it to hand focus back). Timers, polls and updates read the focus
+    /// as they run. An unkeyed element reads as `#n`, its
     /// index among its siblings, and a focused [`Link`](crate::Link) as its id. A window's `on_key` hears
     /// a key either before anything else (nothing focused) or after the focused control passed
     /// it on, so `tx.focused().is_none()` picks out the first case: plain arrows can drive the
