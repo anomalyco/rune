@@ -95,7 +95,7 @@ fn two_windows() -> (Desk, Log) {
     let members: Vec<Box<dyn Member>> = (0..2)
         .map(|i| Box::new(Fake { i, frame: [i as f32 * 100.0, 0.0, 100.0, 100.0], visible: true, log: log.clone() }) as Box<dyn Member>)
         .collect();
-    let desk = Desk { members, z: vec![0, 1], key: Some(1), active: true, pointer: Pointer::Out, files: None, origin: (0.0, 0.0), scale: 1.0 };
+    let desk = Desk { members, z: vec![0, 1], focus: Focus::of(Some(1), true), pointer: Pointer::Out, files: Files::None, origin: (0.0, 0.0), scale: 1.0 };
     (desk, log)
 }
 
@@ -128,13 +128,25 @@ fn a_release_keeps_the_pointer_over_the_window_it_pressed() {
     let (mut desk, log) = two_windows();
     desk.pointer_input(&Kind::Move, (50.0, 50.0));
     desk.pointer_input(&Kind::Down, (50.0, 50.0));
-    assert_eq!((desk.pointer, desk.key), (Pointer::Pressed(0), Some(0)), "a press takes the keyboard");
+    assert_eq!((desk.pointer, desk.focus.key()), (Pointer::Pressed(0), Some(0)), "a press takes the keyboard");
     desk.pointer_input(&Kind::Up, (150.0, 50.0));
     assert_eq!(desk.pointer, Pointer::Over(0), "until the pointer next moves");
     desk.pointer_input(&Kind::Move, (150.0, 50.0));
     assert_eq!(desk.pointer, Pointer::Over(1));
     let log = log.borrow();
     assert_eq!(log[log.len() - 2..], [(0, "Leave".into()), (1, "Move".into())]);
+}
+
+#[test]
+fn a_click_on_the_backdrop_deactivates_the_app_but_keeps_its_key_window() {
+    let (mut desk, _) = two_windows();
+    desk.pointer_input(&Kind::Down, (150.0, 50.0));
+    assert_eq!(desk.focus.focused(), Some(1));
+    desk.pointer_input(&Kind::Down, (500.0, 500.0));
+    assert_eq!(desk.pointer, Pointer::Out, "the backdrop takes the press");
+    assert_eq!((desk.focus.key(), desk.focus.focused()), (Some(1), None), "no focus while the app is behind");
+    desk.set_active(true);
+    assert_eq!(desk.focus.focused(), Some(1), "the window it comes back with has focus again");
 }
 
 #[test]

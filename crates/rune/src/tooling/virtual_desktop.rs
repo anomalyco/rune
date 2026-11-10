@@ -32,16 +32,77 @@ struct Desk {
     members: Vec<Box<dyn Member>>,
     /// Indices into `members`, bottom first.
     z: Vec<usize>,
-    key: Option<usize>,
-    /// The app is frontmost: its key window has focus. Kept while no window is key, so the
-    /// next one to take the keyboard knows whether it has focus.
-    active: bool,
+    focus: Focus,
     pointer: Pointer,
-    /// The window a script's file drag is over.
-    files: Option<usize>,
+    files: Files,
     /// Output origin in global points, and points to pixels.
     origin: (f32, f32),
     scale: f32,
+}
+
+/// Which window has the keyboard. Only the key window of a frontmost app has focus, and the
+/// key window is kept while the app is behind, so the window it comes back with still knows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Focus {
+    /// No window is key; `active` says the app is still frontmost, so the next window to take
+    /// the keyboard knows whether it has focus.
+    None { active: bool },
+    Key { i: usize, active: bool },
+}
+
+impl Focus {
+    fn of(key: Option<usize>, active: bool) -> Self {
+        match key {
+            Some(i) => Focus::Key { i, active },
+            None => Focus::None { active },
+        }
+    }
+
+    /// The window the app makes key again when it comes back, and which a pop-up menu, a file
+    /// dialog and a shortcut try first.
+    fn key(self) -> Option<usize> {
+        match self {
+            Focus::None { .. } => None,
+            Focus::Key { i, .. } => Some(i),
+        }
+    }
+
+    /// The window that has the keyboard now: the key window while the app is frontmost.
+    fn focused(self) -> Option<usize> {
+        match self {
+            Focus::Key { i, active: true } => Some(i),
+            Focus::None { .. } | Focus::Key { active: false, .. } => None,
+        }
+    }
+
+    fn active(self) -> bool {
+        match self {
+            Focus::None { active } | Focus::Key { active, .. } => active,
+        }
+    }
+}
+
+/// The window a script's file drag is over.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Files {
+    None,
+    Over(usize),
+}
+
+impl Files {
+    fn of(window: Option<usize>) -> Self {
+        match window {
+            Some(i) => Files::Over(i),
+            None => Files::None,
+        }
+    }
+
+    fn window(self) -> Option<usize> {
+        match self {
+            Files::None => None,
+            Files::Over(i) => Some(i),
+        }
+    }
 }
 
 /// Which window the pointer is over.
@@ -66,15 +127,18 @@ impl Pointer {
 
 impl Desk {
     fn focus(&mut self, key: Option<usize>, active: bool) {
-        let before = self.key.filter(|_| self.active);
-        let after = key.filter(|_| active);
+        let next = Focus::of(key, active);
+        let before = self.focus.focused();
+        let after = next.focused();
         if before != after {
             if let Some(i) = before { self.members[i].focus(false); }
             if let Some(i) = after { self.members[i].focus(true); }
         }
-        self.key = key;
-        self.active = active;
+        self.focus = next;
     }
+
+    /// The app comes back to the front or goes behind another app: the same window stays key.
+    fn set_active(&mut self, active: bool) { self.focus(self.focus.key(), active); }
 
     /// Brings `i` to the front of its level; always-on-top windows stay above the rest.
     fn front(&mut self, i: usize) {
@@ -104,9 +168,9 @@ impl Desk {
     /// the topmost visible one.
     fn settle_key(&mut self) {
         if self.pointer.window().is_some_and(|i| !self.members[i].visible()) { self.pointer = Pointer::Out; }
-        if self.key.is_some_and(|k| self.can_key(k)) { return; }
+        if self.focus.key().is_some_and(|k| self.can_key(k)) { return; }
         let next = self.topmost_visible();
-        if next != self.key { self.focus(next, self.active); }
+        if next != self.focus.key() { self.focus(next, self.focus.active()); }
     }
 
     /// Applies what every window asked, again while draining one window makes requests of
@@ -158,7 +222,7 @@ impl Desk {
 
     /// The element's centre in output points: the key window first, then front to back.
     fn find(&self, key: &str) -> Option<(f32, f32)> {
-        let order = self.key.into_iter().chain(self.z.iter().rev().copied().filter(|&i| Some(i) != self.key));
+        let order = self.focus.key().into_iter().chain(self.z.iter().rev().copied().filter(|&i| Some(i) != self.focus.key()));
         order.filter(|&i| self.members[i].visible()).find_map(|i| {
             let (x, y) = self.members[i].find(key)?;
             let (ox, oy) = self.origin_pt(i);
@@ -190,7 +254,7 @@ impl Desk {
                 // A click brings its window to the front with the keyboard, activating the app.
                 Some(i) => { self.front(i); self.focus(Some(i), true); }
                 // A click on the backdrop activates another app.
-                None => self.focus(self.key, false),
+                None => self.set_active(false),
             }
         }
         if kind.is_up() && let Pointer::Pressed(i) = self.pointer { self.pointer = Pointer::Over(i); }
@@ -204,11 +268,11 @@ impl Desk {
     /// drag that moves off a window leaves it.
     fn file_input(&mut self, step: &crate::tooling::FileStep, at: (f32, f32)) {
         use crate::tooling::FileStep;
-        let target = if matches!(step, FileStep::Leave) { self.files } else { self.hit(at) };
-        if let Some(old) = self.files.filter(|&old| Some(old) != target) {
+        let target = if matches!(step, FileStep::Leave) { self.files.window() } else { self.hit(at) };
+        if let Some(old) = self.files.window().filter(|&old| Some(old) != target) {
             self.members[old].input(&Kind::Files(FileStep::Leave), (0.0, 0.0));
         }
-        self.files = target.filter(|_| matches!(step, FileStep::Hover(_)));
+        self.files = Files::of(target.filter(|_| matches!(step, FileStep::Hover(_))));
         if let Some(i) = target {
             let (ox, oy) = self.origin_pt(i);
             self.members[i].input(&Kind::Files(step.clone()), (at.0 - ox, at.1 - oy));
@@ -237,7 +301,7 @@ impl Desk {
     fn state(&self, i: usize) -> ([f32; 4], bool, bool) {
         let m = &self.members[i];
         let f = m.frame();
-        ([f[0] - self.origin.0, f[1] - self.origin.1, f[2], f[3]], m.visible(), self.active && self.key == Some(i))
+        ([f[0] - self.origin.0, f[1] - self.origin.1, f[2], f[3]], m.visible(), self.focus.focused() == Some(i))
     }
 
     fn snapshot(&self, i: usize, t: f64) -> WindowFrame {
@@ -287,7 +351,7 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
     });
     let n = members.len();
     let mut desk = Desk {
-        members, z: (0..n).collect(), key: None, active: true, pointer: Pointer::Out, files: None,
+        members, z: (0..n).collect(), focus: Focus::of(None, true), pointer: Pointer::Out, files: Files::None,
         origin: (primary[0], primary[1]), scale,
     };
     let members = &desk.members;
@@ -373,23 +437,23 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
             let (x, y) = at();
             match &e.kind {
                 Kind::Mark(_) => {}
-                Kind::Focus(focused) => desk.focus(desk.key, *focused),
+                Kind::Focus(focused) => desk.set_active(*focused),
                 Kind::Reopen => desk.reopen(accessory, &desktop, real_t),
                 Kind::Shortcut(shortcut) => fire(&desk, |m| m.shortcut(shortcut)).unwrap_or_else(|e| die(&format!("script shortcut: {e}"))),
                 Kind::Menu(item) => fire(&desk, |m| m.menu(item)).unwrap_or_else(|e| die(&format!("script menu: {e}"))),
                 Kind::PopupMenu(picked) => {
-                    let open = desk.key.into_iter().chain(desk.z.iter().rev().copied()).find(|&i| desk.members[i].popup_open());
-                    let i = open.or(desk.key).unwrap_or(selected);
+                    let open = desk.focus.key().into_iter().chain(desk.z.iter().rev().copied()).find(|&i| desk.members[i].popup_open());
+                    let i = open.or(desk.focus.key()).unwrap_or(selected);
                     desk.members[i].resolve_popup(picked.as_deref()).unwrap_or_else(|e| die(&format!("script pop-up menu: {e}")));
                 }
                 Kind::FileDialog(path) => {
-                    let open = desk.key.into_iter().chain(desk.z.iter().rev().copied()).find(|&i| desk.members[i].file_dialog_open());
-                    let i = open.or(desk.key).unwrap_or(selected);
+                    let open = desk.focus.key().into_iter().chain(desk.z.iter().rev().copied()).find(|&i| desk.members[i].file_dialog_open());
+                    let i = open.or(desk.focus.key()).unwrap_or(selected);
                     desk.members[i].resolve_file_dialog(path.clone()).unwrap_or_else(|e| die(&format!("script file dialog: {e}")));
                 }
                 // While another app is active, as after a click on the backdrop, keys go to it.
                 Kind::Key(..) | Kind::KeyUp(_) | Kind::Physical(_) | Kind::PhysicalKey(..) | Kind::Paste(_) => {
-                    if let Some(i) = desk.key.filter(|_| desk.active) { desk.members[i].input(&e.kind, (x, y)); }
+                    if let Some(i) = desk.focus.focused() { desk.members[i].input(&e.kind, (x, y)); }
                 }
                 Kind::Files(step) => desk.file_input(step, (x, y)),
                 Kind::OpenUrl(_) => die("script open_url: a link opens in a single window's run (`--script` without a desktop)"),
@@ -421,7 +485,7 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
         record(&desk, real_t);
         let update_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
 
-        let key = desk.key.filter(|_| desk.active);
+        let key = desk.focus.focused();
         drawn.clear();
         for &i in &desk.z {
             let m = &mut desk.members[i];
@@ -510,7 +574,8 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
 
 /// Sends a shortcut or menu pick to the key window's app, else the first other app that knows it.
 fn fire<E>(desk: &Desk, f: impl Fn(&dyn Member) -> Result<(), E>) -> Result<(), E> {
-    let order = desk.key.into_iter().chain(desk.z.iter().rev().copied().filter(|&i| Some(i) != desk.key));
+    let key = desk.focus.key();
+    let order = key.into_iter().chain(desk.z.iter().rev().copied().filter(|&i| Some(i) != key));
     let mut first = None;
     for i in order {
         match f(desk.members[i].as_ref()) {
