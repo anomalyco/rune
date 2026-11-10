@@ -216,7 +216,8 @@ impl<S: 'static> Runtime<S> {
             }
             return;
         };
-        let on_link = self.link_down(ti, x, y);
+        let link = self.link_at(ti, x, y);
+        let on_link = link.is_some();
         // Any press breaks a pending pair unless it's the second press of it.
         let pending = self.press.take_first();
         let now = self.now_clock();
@@ -280,7 +281,7 @@ impl<S: 'static> Runtime<S> {
         if n.handlers.on_drag.is_some() && drag_out.is_none() {
             self.queue.push(Action::Drag(path.clone(), d, crate::PointerButton::Primary));
         }
-        self.press.hold(capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), now, second, drag_out));
+        self.press.hold(capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), now, second, drag_out).on_link(link));
     }
 
     pub fn pointer_up(&mut self, x: f32, y: f32) {
@@ -318,7 +319,7 @@ impl<S: 'static> Runtime<S> {
             .then(|| capture::FirstClick { path: h.path.clone(), at: h.down_at, point: h.at });
         let Some(held) = self.press.release(first) else { return };
         let inside = held.inside();
-        let capture::Held { path, drag: d, button, at, down_at, moved, second: double, .. } = *held;
+        let capture::Held { path, drag: d, button, at, down_at, moved, second: double, link, .. } = *held;
         self.refresh_hover_within();
         if moved { self.press_clicks.clear(); }
         if input_capture { return; }
@@ -330,7 +331,7 @@ impl<S: 'static> Runtime<S> {
             let [lx, ly] = self.to_local(i, x, y);
             self.queue.push(Action::Drag(path.clone(), Drag { phase: Phase::Up, x: lx, y: ly, dx, dy, window: [x, y], screen: self.screen_at(x, y), ..d }, button));
         }
-        self.link_up(&path, x, y, inside);
+        if let Some(k) = link.filter(|_| inside) { self.link_up(&path, k, x, y); }
         if has_press && inside && !selected {
             self.queue.push(Action::Press(path.clone(), button));
         }
