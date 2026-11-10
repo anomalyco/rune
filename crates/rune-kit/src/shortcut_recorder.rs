@@ -12,8 +12,6 @@ pub struct ShortcutRecorderState {
     phase: Recording,
     /// The modifiers held now, which a capture shows as it waits for a key.
     held: Mods,
-    /// The key that ended or refused a chord: its repeats and release are swallowed.
-    finishing: Option<PhysicalKeyCode>,
     unregistered: bool,
 }
 
@@ -21,10 +19,34 @@ pub struct ShortcutRecorderState {
 enum Recording {
     #[default]
     Idle,
-    /// Waiting for a chord; `refusal` is the last one refused, until a new chord starts.
-    Capturing { refusal: Option<Refusal> },
+    /// Waiting for a chord; `refusal` is the last one refused, until a new chord starts, and
+    /// `finishing` is the key that ended or refused it, whose repeats and release are swallowed.
+    Capturing { refusal: Option<Refusal>, finishing: Option<PhysicalKeyCode> },
+    /// The capture is over, and the key that ended it still swallows its repeats and release.
+    Swallowing { key: PhysicalKeyCode },
 }
 
+impl Recording {
+    fn finishing(&self) -> Option<PhysicalKeyCode> {
+        match self {
+            Recording::Capturing { finishing, .. } => *finishing,
+            Recording::Swallowing { key } => Some(*key),
+            Recording::Idle => None,
+        }
+    }
+    fn finishing_mut(&mut self) -> Option<&mut Option<PhysicalKeyCode>> {
+        match self {
+            Recording::Capturing { finishing, .. } => Some(finishing),
+            Recording::Idle | Recording::Swallowing { .. } => None,
+        }
+    }
+    fn refusal_mut(&mut self) -> Option<&mut Option<Refusal>> {
+        match self {
+            Recording::Capturing { refusal, .. } => Some(refusal),
+            Recording::Idle | Recording::Swallowing { .. } => None,
+        }
+    }
+}
 /// Why a chord was refused, and the chord (None for a refused clear or a key that can't be one).
 #[derive(Clone, Debug)]
 struct Refusal {
@@ -38,8 +60,8 @@ impl ShortcutRecorderState {
     pub fn is_recording(&self) -> bool { matches!(self.phase, Recording::Capturing { .. }) }
     fn refusal(&self) -> Option<&Refusal> {
         match &self.phase {
-            Recording::Capturing { refusal } => refusal.as_ref(),
-            Recording::Idle => None,
+            Recording::Capturing { refusal, .. } => refusal.as_ref(),
+            Recording::Idle | Recording::Swallowing { .. } => None,
         }
     }
     pub fn error(&self) -> Option<&ShortcutError> { self.refusal().map(|r| &r.error) }
@@ -48,8 +70,15 @@ impl ShortcutRecorderState {
     /// The shortcut isn't registered (it failed at launch, say): recording the same chord
     /// proposes it through `on_change` again instead of being a no-op, until a change succeeds.
     pub fn mark_unregistered(&mut self) { self.unregistered = true; }
-    pub fn begin(&mut self) { self.phase = Recording::Capturing { refusal: None }; self.finishing = None; }
-    pub fn cancel(&mut self) { self.phase = Recording::Idle; self.held = Mods::default(); }
+    pub fn begin(&mut self) { self.phase = Recording::Capturing { refusal: None, finishing: None }; }
+    /// Ends the capture, keeping the side of a key that still swallows its repeats and release.
+    pub fn cancel(&mut self) {
+        self.phase = match self.phase.finishing() {
+            Some(key) => Recording::Swallowing { key },
+            None => Recording::Idle,
+        };
+        self.held = Mods::default();
+    }
     pub fn keycaps(&self) -> Vec<String> {
         if let Some(refused) = self.refused() { refused.keycaps() }
         else if self.is_recording() { rune::modifier_keycaps(self.held) }
@@ -59,8 +88,9 @@ impl ShortcutRecorderState {
     fn input(&mut self, event: &PhysicalInput) -> Outcome {
         match *event {
             PhysicalInput::FocusLost => {
-                let active = self.is_recording() || self.finishing.is_some();
-                self.cancel(); self.finishing = None;
+                let active = !matches!(self.phase, Recording::Idle);
+                self.cancel();
+                self.phase = Recording::Idle;
                 if active { Outcome::Consumed } else { Outcome::Pass }
             }
             PhysicalInput::Modifiers(mods) => {
@@ -69,13 +99,18 @@ impl ShortcutRecorderState {
             }
             PhysicalInput::Key { key, mods, pressed, repeat } => {
                 self.hold(mods);
-                if self.finishing == Some(key) {
-                    if !pressed { self.finishing = None; }
+                if self.phase.finishing() == Some(key) {
+                    if !pressed {
+                        match self.phase.finishing_mut() {
+                            Some(finishing) => *finishing = None,
+                            None => self.phase = Recording::Idle,
+                        }
+                    }
                     return Outcome::Consumed;
                 }
                 if !self.is_recording() { return Outcome::Pass; }
                 if !pressed || repeat || is_modifier(key) { return Outcome::Consumed; }
-                self.finishing = Some(key);
+                if let Some(finishing) = self.phase.finishing_mut() { *finishing = Some(key); }
                 if key == PhysicalKeyCode::Escape { self.cancel(); return Outcome::Consumed; }
                 if key == PhysicalKeyCode::Backspace { return Outcome::Change(None); }
                 match Shortcut::from_physical_key(key, mods) {
@@ -91,14 +126,14 @@ impl ShortcutRecorderState {
         let held = self.held;
         if (mods.ctrl && !held.ctrl) || (mods.alt && !held.alt) || (mods.shift && !held.shift)
             || (mods.cmd && !held.cmd) || (mods.logo && !held.logo) {
-            if let Recording::Capturing { refusal } = &mut self.phase { *refusal = None; }
+            if let Some(refusal) = self.phase.refusal_mut() { *refusal = None; }
         }
         self.held = mods;
     }
 
     /// `chord` was refused with `error`: the capture goes on, showing both.
     fn refuse(&mut self, error: ShortcutError, chord: Option<Shortcut>) {
-        if let Recording::Capturing { refusal } = &mut self.phase { *refusal = Some(Refusal { error, chord }); }
+        if let Some(refusal) = self.phase.refusal_mut() { *refusal = Some(Refusal { error, chord }); }
     }
 }
 
