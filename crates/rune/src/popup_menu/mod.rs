@@ -12,7 +12,7 @@
 //! - Headless runs: the menu stays open in `--tree` (`popupMenu`) until a script's
 //!   `{"type": "menu-pick", "id": "dark"}` or `{"type": "menu-cancel"}` answers it.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -40,7 +40,7 @@ mod host {
     pub(super) const SUPPORTED: bool = false;
     pub(super) type Tracking = ();
     pub(super) fn show(_: &Arc<Window>, _: Show, _: Rc<Session>, _: Option<Waker>) -> bool { false }
-    pub(super) fn stop(session: &Session, _: bool) { session.tracking.take(); }
+    pub(super) fn stop(_: Tracking) {}
     pub(super) fn scheme(_: bool) {}
     pub(super) fn start(_: Waker) {}
 }
@@ -308,12 +308,16 @@ impl Show {
 /// menu is `Opening` until the platform puts it up, `Open` while it tracks, and ends
 /// `Resolved` with its answer, or `Cancelled` when its window goes away first. A cancelled
 /// menu never opens (or stops tracking), and its answer is dropped.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Default)]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 pub(crate) enum Phase {
     #[default]
     Opening,
-    Open,
-    Resolved(Option<String>),
+    /// Up. `tracking` is the platform's hold on the menu while its loop runs, to stop it.
+    Open { tracking: Option<host::Tracking> },
+    /// Closed with `picked`. `pointer`: where the pointer was over the window as it closed, in
+    /// window points, for a platform that sends no pointer move until the pointer moves again.
+    Resolved { picked: Option<String>, pointer: Option<(f32, f32)> },
     Cancelled,
 }
 
@@ -321,42 +325,50 @@ pub(crate) enum Phase {
 #[derive(Default)]
 pub(crate) struct Session {
     phase: RefCell<Phase>,
-    /// The platform's hold on the menu while it tracks, to stop it.
-    pub tracking: RefCell<host::Tracking>,
-    /// Where the pointer was over the window as the menu closed, in window points, for a
-    /// platform that sends no pointer move until the pointer moves again.
-    pub pointer: Cell<Option<(f32, f32)>>,
 }
 
+// Only macOS and Windows open menus; elsewhere every request answers `None` before a session.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 impl Session {
     /// `Opening` → `Open`, as the menu comes up. False when it was cancelled first.
     pub(crate) fn begin(&self) -> bool {
         let mut phase = self.phase.borrow_mut();
-        if *phase != Phase::Opening { return false; }
-        *phase = Phase::Open;
+        if !matches!(*phase, Phase::Opening) { return false; }
+        *phase = Phase::Open { tracking: None };
         true
     }
 
-    /// `Opening` or `Open` → `Resolved`: the menu closed with `picked`. False, and the answer
-    /// dropped, when it was cancelled first.
-    pub(crate) fn resolve(&self, picked: Option<String>) -> bool {
+    /// The menu's tracking loop starts (`Some`) or returns (`None`).
+    pub(crate) fn tracking(&self, menu: Option<host::Tracking>) {
+        if let Phase::Open { tracking } = &mut *self.phase.borrow_mut() { *tracking = menu; }
+    }
+
+    /// `Opening` or `Open` → `Resolved`: the menu closed with `picked`, the pointer at
+    /// `pointer`. False, and the answer dropped, when it was cancelled first.
+    pub(crate) fn resolve(&self, picked: Option<String>, pointer: Option<(f32, f32)>) -> bool {
         let mut phase = self.phase.borrow_mut();
-        if !matches!(*phase, Phase::Opening | Phase::Open) { return false; }
-        *phase = Phase::Resolved(picked);
+        if !matches!(*phase, Phase::Opening | Phase::Open { .. }) { return false; }
+        *phase = Phase::Resolved { picked, pointer };
         true
     }
 
-    /// Any phase → `Cancelled`. True when the menu was tracking and must be stopped.
-    pub(crate) fn cancel(&self) -> bool { self.phase.replace(Phase::Cancelled) == Phase::Open }
+    /// Any phase → `Cancelled`. The menu to stop, when its loop was tracking.
+    pub(crate) fn cancel(&self) -> Option<host::Tracking> {
+        match self.phase.replace(Phase::Cancelled) {
+            Phase::Open { tracking } => tracking,
+            _ => None,
+        }
+    }
 
     #[cfg(test)]
-    pub(crate) fn is_cancelled(&self) -> bool { *self.phase.borrow() == Phase::Cancelled }
+    pub(crate) fn is_cancelled(&self) -> bool { matches!(*self.phase.borrow(), Phase::Cancelled) }
 
-    /// The answer of a `Resolved` menu, once: the session is `Cancelled` after.
-    fn take_answer(&self) -> Option<Option<String>> {
+    /// The answer of a `Resolved` menu, and where the pointer was, once: the session is
+    /// `Cancelled` after.
+    fn take_answer(&self) -> Option<(Option<String>, Option<(f32, f32)>)> {
         let mut phase = self.phase.borrow_mut();
         match std::mem::replace(&mut *phase, Phase::Cancelled) {
-            Phase::Resolved(picked) => Some(picked),
+            Phase::Resolved { picked, pointer } => Some((picked, pointer)),
             other => {
                 *phase = other;
                 None
@@ -382,8 +394,8 @@ impl Presenter {
     /// pointer the menu released is back where the menu left it, so a click that doesn't move
     /// it first still lands.
     pub(crate) fn answer<S: 'static>(&mut self, rt: &mut Runtime<S>) -> bool {
-        let Some(picked) = self.session.as_ref().and_then(|s| s.take_answer()) else { return false };
-        let pointer = self.session.take().and_then(|s| s.pointer.get());
+        let Some((picked, pointer)) = self.session.as_ref().and_then(|s| s.take_answer()) else { return false };
+        self.session = None;
         if let Err(error) = rt.resolve_popup(picked.as_deref()) {
             eprintln!("rune: {error}");
             let _ = rt.resolve_popup(None);
@@ -426,8 +438,7 @@ impl Presenter {
 
     fn stop(&mut self) {
         let Some(session) = self.session.take() else { return };
-        let tracking = session.cancel();
-        host::stop(&session, tracking);
+        if let Some(menu) = session.cancel() { host::stop(menu); }
     }
 }
 

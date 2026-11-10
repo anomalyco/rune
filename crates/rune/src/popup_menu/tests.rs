@@ -186,7 +186,7 @@ fn a_window_going_away_answers_every_waiting_menu_none_once() {
     assert!(!rt.popups.is_open());
     assert!(showing.is_cancelled(), "a tracking menu stops, and one not yet up never opens");
 
-    showing.resolve(Some("dark".into()));
+    showing.resolve(Some("dark".into()), None);
     assert!(!presenter.answer(&mut rt), "a late answer doesn't call back a second time");
     presenter.cancel(&mut rt);
     assert_eq!(rt.state.picks, [None, None, None]);
@@ -256,4 +256,26 @@ fn a_menu_a_pick_asks_for_waits_for_the_element_the_pick_mounts() {
 #[test]
 fn support_is_macos_and_windows() {
     assert_eq!(popup_menu_supported(), cfg!(any(target_os = "macos", target_os = "windows")));
+}
+
+#[test]
+fn a_session_cancelled_before_it_opens_never_opens_or_answers() {
+    let session = Session::default();
+    assert!(session.cancel().is_none(), "nothing tracks yet, so nothing stops");
+    assert!(!session.begin(), "a cancelled menu never comes up");
+    assert!(!session.resolve(Some("dark".into()), Some((1.0, 2.0))), "its late answer is dropped");
+    assert!(session.take_answer().is_none());
+}
+
+#[test]
+fn a_resolved_session_hands_over_its_answer_and_pointer_once() {
+    let session = Session::default();
+    assert!(session.begin());
+    assert!(!session.begin(), "it comes up once");
+    session.tracking(None);
+    assert!(session.resolve(Some("dark".into()), Some((3.0, 4.0))));
+    assert!(!session.resolve(None, None), "the first answer stands");
+    assert_eq!(session.take_answer(), Some((Some("dark".into()), Some((3.0, 4.0)))));
+    assert!(session.take_answer().is_none() && session.is_cancelled());
+    assert!(session.cancel().is_none(), "a closed menu has nothing to stop");
 }
