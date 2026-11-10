@@ -292,7 +292,7 @@ impl<S: 'static> Runtime<S> {
             }
             EditOutcome::default()
         }, &mut tx);
-        if composing_before || event["kind"] == "preedit" { self.ime_eat_key_up = true; }
+        if composing_before || event["kind"] == "preedit" { self.key_releases.ime_took_key(); }
         if changed { self.dirty = true; }
         merge(&mut self.pending, tx);
     }

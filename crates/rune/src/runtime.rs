@@ -177,6 +177,8 @@ mod scroll_watch;
 pub use scroll_watch::scroll_watch_state;
 #[path = "runtime/input/gesture.rs"]
 mod gesture_dispatch;
+#[path = "runtime/input/key_releases.rs"]
+mod key_releases;
 #[path = "runtime/input/touch.rs"]
 mod touch_input;
 pub use touch_input::TouchPhase;
@@ -539,12 +541,9 @@ pub struct Runtime<S: 'static> {
     has_raise: bool,
     /// Some element sets `El::paint_order`: its siblings paint out of tree order.
     has_paint_order: bool,
-    /// The focus where the held non-IME key(s) went down, so a release after focus moves
-    /// still reaches that element first.
-    key_focus: Option<String>,
-    keys_held: u32,
-    ime_keys_down: u32,
-    ime_eat_key_up: bool,
+    /// Key releases an input method takes, and the focus where the held non-IME key(s) went
+    /// down, so a release after focus moves still reaches that element first.
+    key_releases: key_releases::KeyReleases,
     /// Pictures whose image changed shape since the last commit, which lays them out at once.
     aspect_snap: Vec<NodeId>,
     /// Drawn rect per node (points, root space), for tools and hit tests.
@@ -915,10 +914,7 @@ impl<S: 'static> Runtime<S> {
             scroll_reveals: Vec::new(),
             has_raise: false,
             has_paint_order: false,
-            key_focus: None,
-            keys_held: 0,
-            ime_keys_down: 0,
-            ime_eat_key_up: false,
+            key_releases: Default::default(),
             aspect_snap: Vec::new(),
             drawn: Vec::new(),
             drawn_scale: Vec::new(),

@@ -31,7 +31,7 @@ impl<S: 'static> Runtime<S> {
         let active = self.composing() || matches!(&ev, Ime::Preedit(s, _) | Ime::Commit(s) if !s.is_empty());
         let ran = if app { self.app_ime_event(&ev, one) } else { self.with_focused(|e| e.ime(&ev), one) };
         // The key that confirmed or cancelled a composition comes back up unheard.
-        if ran && active { self.ime_eat_key_up = true; }
+        if ran && active { self.key_releases.ime_took_key(); }
         ran
     }
 
