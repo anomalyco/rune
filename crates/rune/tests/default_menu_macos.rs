@@ -10,6 +10,8 @@ mod labels;
 #[cfg(target_os = "macos")]
 use labels::Label;
 #[cfg(target_os = "macos")]
+use rune::Direction;
+#[cfg(target_os = "macos")]
 #[allow(dead_code)]
 #[path = "../src/native_menu/standard.rs"]
 mod standard;
