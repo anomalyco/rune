@@ -9,9 +9,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub fn set_viewport(&mut self, viewport: (f32, f32), scale: f32) {
-        // Someone resized a window that fits its content (not a page's band): back to its height.
-        if self.fit_height && !self.page.on && self.window_resting && (self.fit_asked.unwrap_or(self.viewport.1) - viewport.1).abs() > 0.5 {
-            self.fit_asked = None;
+        if self.fit_resized(viewport.1) {
             self.relayout = true;
             self.viewport_stepped = false;
         }
@@ -636,8 +634,7 @@ impl<S: 'static> Runtime<S> {
             for event in trace.events { self.trace_event(event); }
             for (name, kind, value) in trace.channels { self.trace_channel(name, kind, value); }
         }
-        self.fit_held = std::mem::take(&mut self.fit_hold);
-        let dt = if self.fit_held { 0.0 } else { dt };
+        let dt = if self.fit_frame_holds() { 0.0 } else { dt };
         let instant_scroll = tx.instant || self.settled;
         let animating = self.step_motion(dt, instant_scroll) || live_animating;
         self.stats.shaped = self.text.shaped - shaped0;

@@ -315,7 +315,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         // As on macOS, a frame change this commit asked for starts with the springs it
         // started, which have shown a step unless they held for the window.
         if rt.window_frame.is_some() {
-            let shown = if rt.fit_held { 0.0 } else { step };
+            let shown = if rt.fit.take_held() { 0.0 } else { step };
             take_window_frame(&mut rt, &mut frame_anim, real_t - shown, limits);
         }
         idle = !animating && frame_anim.is_none();
@@ -495,7 +495,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
 fn take_window_frame<S>(rt: &mut Runtime<S>, anim: &mut Option<crate::window::frame::FrameAnim>, start: f64,
     (min, max): ((f32, f32), Option<(f32, f32)>)) {
     use crate::window::frame::{FrameAnim, clamp_size};
-    rt.fit_held = false;
+    rt.fit.take_held();
     let Some(request) = rt.window_frame.take() else { return };
     let Some(size) = request.size else { return };
     let (w, h) = clamp_size(size, min, max);

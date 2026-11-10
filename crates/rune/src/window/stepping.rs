@@ -102,7 +102,7 @@ impl<S: 'static> Host<S> {
     /// inside the window's minimum and maximum. A size outlives the window: one created later
     /// opens at it.
     pub(super) fn take_frame_request(&mut self, start: f64, painting: bool) {
-        self.rt.fit_held = false;
+        self.rt.fit.take_held();
         let Some(mut request) = self.rt.window_frame.take() else { return };
         let (min, max) = self.options.size_limits(self.spec.min_size);
         request.size = request.size.map(|size| crate::window::frame::clamp_size(size, min, max));
