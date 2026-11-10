@@ -38,11 +38,30 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write
+      contents: read
     defaults:
       run:
         working-directory: www
     steps:
       - uses: actions/checkout@v5
+      # Pull requests build and deploy nothing, so they never assume the role.
+      - name: Configure AWS credentials
+        if: github.event_name == 'push'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::604439173067:role/github/rune-release
+          role-session-name: www-${{ github.run_id }}
+          aws-region: us-east-1
+      - name: Fetch the release secrets
+        if: github.event_name == 'push'
+        uses: aws-actions/aws-secretsmanager-get-secrets@2297f9a879480a9e3af9b293ed15c70caf8e1c88 # v3.0.2
+        with:
+          secret-ids: |
+            CLOUDFLARE_API_TOKEN,rune/release/CLOUDFLARE_API_TOKEN
+          parse-json-secrets: false
       # rust-toolchain.toml picks the toolchain. rust-src is installed up front: otherwise rustup fetches it mid-build
       # from parallel rustc calls, which race and fail.
       - name: Rust toolchain
@@ -88,5 +107,5 @@ jobs:
         if: github.event_name == 'push'
         run: bunx cf deploy --prebuilt --mode "$MODE"
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ env.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
