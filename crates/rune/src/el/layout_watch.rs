@@ -11,7 +11,9 @@ use crate::{El, Tx};
 /// the top-left of its content, `[x, y]`, out of the `max` it can scroll on each axis, in a
 /// viewport `viewport` points wide and tall. `drawn` is the size the frame draws the viewport
 /// at: `viewport` at rest, and where its size has got to while a layout spring resizes it, so
-/// the handler hears every frame of that.
+/// the handler hears every frame of that. `direction` is the way the viewport runs
+/// ([`El::dir`]), `Ltr` or `Rtl`: a right-to-left one starts at its right edge, and its scroll bar
+/// sits on its left, as a browser puts a `dir="rtl"` box's.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ScrollPos {
@@ -19,6 +21,7 @@ pub struct ScrollPos {
     pub max: [f32; 2],
     pub viewport: [f32; 2],
     pub drawn: [f32; 2],
+    pub direction: crate::Direction,
 }
 
 impl El {

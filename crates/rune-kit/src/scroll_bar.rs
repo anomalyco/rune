@@ -1,5 +1,6 @@
-//! A scroll bar over a vertical scroll viewport's right edge (or, [`ScrollBarStyle::horizontal`],
-//! along a sideways viewport's bottom edge): a thin thumb that shows how far
+//! A scroll bar over a vertical scroll viewport's end edge, its right or, right to left
+//! ([`rune::El::dir`]), its left (or, [`ScrollBarStyle::horizontal`], along a sideways viewport's
+//! bottom edge, its thumb starting at the right right to left): a thin thumb that shows how far
 //! it has scrolled while its content overflows. It follows the system "Show scroll bars"
 //! preference ([`rune::ScrollBars`]): always shown when overflowing under `Always` (or `Automatic`
 //! with a mouse), and overlaid while scrolling then faded out at rest under `WhenScrolling` (or
@@ -457,11 +458,24 @@ impl Bar {
         self.style.get().unwrap_or_else(|| ScrollBarStyle::neutral(true))
     }
 
-    /// The thumb as wide as the pointer makes it, `h` long.
+    /// The thumb as wide as the pointer makes it, `h` long, against its slot's outer side.
     fn thumb_rect(&self, h: f32) -> [f32; 4] {
         let style = self.style();
         let w = if self.wide() { style.hover_width } else { style.width };
-        turned(&style.track, [style.widest() - w, 0.0, w, h])
+        self.flowed(turned(&style.track, [style.widest() - w, 0.0, w, h]), if style.track.x { h } else { style.widest() })
+    }
+
+    /// Whether the viewport runs right to left, which puts its bar on its left and starts a
+    /// sideways bar's thumb at the right, as a browser lays out a `dir="rtl"` box's scroll bar
+    /// (`scroll-view.css`'s `inset-inline-end`, `scroll-view.tsx`'s mirrored thumb start).
+    fn rtl(&self) -> bool {
+        self.pos.get().direction == rune::Direction::Rtl
+    }
+
+    /// `r`, laid out from its parent's left, from its right instead when the viewport runs right
+    /// to left: where it's drawn in a parent `within` points wide.
+    fn flowed(&self, [x, y, w, h]: [f32; 4], within: f32) -> [f32; 4] {
+        if self.rtl() { [within - x - w, y, w, h] } else { [x, y, w, h] }
     }
 
     /// How long the thumb is now.
@@ -476,7 +490,7 @@ impl Bar {
         let a = t.along();
         let across = at.viewport[1 - a] - t.end;
         let from = if t.gutter { across } else { across - style.track() };
-        turned(&t, [from, t.top + t.inset, style.track(), len])
+        self.flowed(turned(&t, [from, t.top + t.inset, style.track(), len]), at.viewport[0])
     }
 
     fn thumb_fill(&self) -> Color {
@@ -486,7 +500,7 @@ impl Bar {
 
     /// Widens or narrows the thumb, and changes its colour, after the pointer or a press changed.
     fn widen(&self) {
-        self.thumb.set(self.thumb_rect(self.thumb.get()[3]));
+        self.thumb.set(self.thumb_rect(self.thumb_len()));
         self.fill.set(self.thumb_fill());
     }
 
@@ -508,7 +522,9 @@ impl Bar {
     /// Where a thumb at `top`, `h` long, runs on the track.
     fn slot_rect(&self, top: f32, h: f32) -> [f32; 4] {
         let style = self.style();
-        turned(&style.track, [style.track() - style.track.edge - style.widest(), top, style.widest(), h])
+        let t = style.track;
+        let within = if t.x { track_len(self.pos.get(), &t).0.max(0.0) } else { style.track() };
+        self.flowed(turned(&t, [style.track() - t.edge - style.widest(), top, style.widest(), h]), within)
     }
 
     /// An overlay bar stays up while the thumb is held or the pointer is at its edge.
@@ -548,7 +564,9 @@ impl Bar {
         let bar_end = w + gutter - t.end;
         // Where the track starts down the viewport.
         let lo = t.top + t.inset;
-        let p = p.map(|p| if t.x { (p.y, p.x) } else { (p.x, p.y) });
+        // Measured from the viewport's start edge, its right when it runs right to left.
+        let p = p.map(|p| (if self.rtl() { at.viewport[0] - p.x } else { p.x }, p.y));
+        let p = p.map(|(x, y)| if t.x { (y, x) } else { (x, y) });
         let (top, h) = thumb_along(at, len.max(0.0), t.min_thumb, a);
         let in_strip = |across: f32, along: f32| (bar_end - track..=bar_end).contains(&across) && (lo..=lo + len).contains(&along);
         let on_thumb = |(across, along): (f32, f32)| in_strip(across, along) && (!t.area_reveals || (lo + top..=lo + top + h).contains(&along));
@@ -706,8 +724,13 @@ impl Bar {
         }
         let a = t.along();
         let (top, h) = thumb_along(at, len, t.min_thumb, a);
-        // Down a vertical bar, or along a horizontal one.
-        let y = if t.x { d.x } else { d.y };
+        // Down a vertical bar, or along a horizontal one from its start, its right edge right to
+        // left.
+        let y = match (t.x, self.rtl()) {
+            (false, _) => d.y,
+            (true, false) => d.x,
+            (true, true) => len - d.x,
+        };
         if d.phase == Phase::Down {
             self.dragging.set(true);
             self.hold();
