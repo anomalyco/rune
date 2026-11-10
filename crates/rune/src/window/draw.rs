@@ -16,7 +16,7 @@ impl<S: 'static> Host<S> {
         if missed == Missed::Occluded {
             // Covered or asleep with no notification yet: rest as if one came, and look
             // again on `retry`.
-            l.occluded = true;
+            self.life.cover(true);
             l.first_frame.skipped(now);
             #[cfg(target_os = "macos")]
             l.set_live_resize(false);
@@ -42,7 +42,7 @@ impl<S: 'static> Host<S> {
         l.timer_frame.drawn();
         l.presented = None;
         l.stop_pacing();
-        let shown = l.visible;
+        let shown = self.life.shown();
         l.first_frame.skipped(Instant::now());
         self.land_frame();
         if shown {
@@ -60,8 +60,8 @@ impl<S: 'static> Host<S> {
     pub(super) fn draw(&mut self, resizing: bool) {
         let launcher = self.launcher();
         let (Some(l), Some(_)) = (self.win.as_mut(), self.gpu.as_ref()) else { return };
-        let hidden = launcher && !l.visible;
-        if (!launcher && (!l.visible || l.occluded)) || l.minimized() {
+        let hidden = launcher && !self.life.shown();
+        if (!launcher && !self.life.uncovered()) || l.minimized() {
             return self.covered_frame();
         }
         // A missed frame's retry, or the timer pacing unpaced motion: input waits for it, and
@@ -318,7 +318,7 @@ impl<S: 'static> Host<S> {
             if self.args.frames.is_some_and(|n| self.trace_frames >= n) {
                 // While the window still shows its last frames.
                 trace.settle_presents(crate::frame::present_time::SETTLE);
-                self.finished = true;
+                self.life.finish();
                 return;
             }
         }

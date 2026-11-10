@@ -10,27 +10,16 @@ impl<S: 'static> Host<S> {
         self.apply_placement(event_loop);
         if self.win.is_none() { self.create(event_loop, None, false); }
         let stale = self.rt.needs_commit();
+        let visible = self.life.shown();
         let Some(w) = &mut self.win else { return };
         w.hidden_pace.reset();
-        let visible = w.visible;
         if !w.first_frame.request_reveal(stale, visible) {
             w.request_redraw();
             return;
         }
         // Already showing: its next frame draws the new state, or a covered one's retry does.
         if visible && stale { w.request_redraw(); }
-        self.show_cached();
-    }
-
-    pub(super) fn show_cached(&mut self) {
-        let Some(w) = &mut self.win else { return };
-        w.show(true);
-        w.visible = true;
-        w.occluded = false;
-        self.rt.set_live_visible(true);
-        // No settle, frame, surface configure or acquisition on a cached reveal, unless
-        // the refreshed frame left motion running.
-        if !self.idle { w.request_redraw(); }
+        self.reveal(event_loop, Reveal::Cached, None);
     }
 
     pub(super) fn first_frame_ready(&mut self, event_loop: &ActiveEventLoop) {
