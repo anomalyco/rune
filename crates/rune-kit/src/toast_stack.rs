@@ -10,8 +10,8 @@
 //!   collapses as the pointer leaves, unless a press inside is still held (then as that press
 //!   lets go outside), or when one toast is left.
 //! - **Timers:** a toast that closes on its own counts its time only while the stack is
-//!   collapsed and no press is held in it, as Sonner pauses every toast while `expanded ||
-//!   interacting` and resumes each with what it had left.
+//!   collapsed, no press is held in it and the window shows, as Sonner pauses every toast while
+//!   `expanded || interacting || isDocumentHidden` and resumes each with what it had left.
 //!
 //! The app owns a [`ToastStack`], steps it with what happens and renders [`ToastStack::entries`]
 //! where [`ToastStack::place`] says.
@@ -44,6 +44,7 @@ pub struct ToastStack<O> {
     issued: u64,
     entries: Vec<ToastEntry<O>>,
     stack: ToastStackState,
+    page: ToastPage,
 }
 
 /// One toast: its id, the key that coalesces copies (its title, description, variant and
@@ -63,8 +64,18 @@ pub enum ToastTimer {
     Forever,
     /// It closes at `due`.
     Running { due: f64 },
-    /// The stack is expanded or held: `left` seconds wait for it to collapse.
+    /// The stack is expanded or held, or the window is hidden: `left` seconds wait for the
+    /// stack to collapse in a window that shows.
     Paused { left: f64 },
+}
+
+/// Whether the window the stack is in shows (Sonner's `isDocumentHidden`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ToastPage {
+    #[default]
+    Shown,
+    /// Minimised or otherwise off screen: no toast's time runs.
+    Hidden,
 }
 
 /// Sonner's toaster: `expanded` and `interacting` as one state.
@@ -103,6 +114,8 @@ pub enum ToastEvent<O> {
     Escape { now: f64 },
     /// The clock reached a timer: toasts whose time is up close.
     Tick { now: f64 },
+    /// The window went off screen or came back (`visibilitychange`).
+    Page { page: ToastPage, now: f64 },
 }
 
 #[derive(Debug, PartialEq)]
@@ -133,7 +146,7 @@ pub struct ToastPlacement {
 }
 
 impl<O> Default for ToastStack<O> {
-    fn default() -> Self { Self { issued: 0, entries: Vec::new(), stack: ToastStackState::Collapsed } }
+    fn default() -> Self { Self { issued: 0, entries: Vec::new(), stack: ToastStackState::Collapsed, page: ToastPage::Shown } }
 }
 
 impl<O> ToastStack<O> {
@@ -167,8 +180,14 @@ impl<O> ToastStack<O> {
         Some(ToastPlacement { lift: k * PEEK, scale: 1.0 - k * SHRINK, height: front, content: false, visible, index })
     }
 
+    /// Whether the window shows.
+    pub fn page(&self) -> ToastPage { self.page }
+
+    /// No toast's time runs: the stack is expanded or held, or the window is hidden.
+    fn paused(&self) -> bool { self.stack.expanded() || self.page == ToastPage::Hidden }
+
     pub fn step(&mut self, event: ToastEvent<O>) -> Effects<ToastEffect> {
-        let (was, before) = (self.stack, self.entries.len());
+        let (was, before) = (self.paused(), self.entries.len());
         let (mut effects, now): (_, f64) = match event {
             ToastEvent::Dismissed { id, now } => {
                 match id {
@@ -221,6 +240,10 @@ impl<O> ToastStack<O> {
                 });
                 (closed, now)
             }
+            ToastEvent::Page { page, now } => {
+                self.page = page;
+                (Effects::none(), now)
+            }
         };
         // One toast left collapses the stack (Sonner's `toasts.length <= 1` effect); a held
         // press keeps it until it lets go.
@@ -235,7 +258,7 @@ impl<O> ToastStack<O> {
     fn shown(&mut self, key: String, options: O, secs: Option<f64>, now: f64) -> Effects<ToastEffect> {
         let timer = match secs {
             None => ToastTimer::Forever,
-            Some(s) if self.stack.expanded() => ToastTimer::Paused { left: s },
+            Some(s) if self.paused() => ToastTimer::Paused { left: s },
             Some(s) => ToastTimer::Running { due: now + s },
         };
         if let Some(front) = self.entries.last_mut().filter(|e| e.key == key) {
@@ -249,10 +272,10 @@ impl<O> ToastStack<O> {
         Effects::none()
     }
 
-    /// Pauses every timer as the stack expands or a press holds it, and resumes each with what
-    /// it had left as it collapses.
-    fn retime(&mut self, was: ToastStackState, now: f64) {
-        match (was.expanded(), self.stack.expanded()) {
+    /// Pauses every timer as the stack expands, a press holds it or the window hides, and
+    /// resumes each with what it had left once none of those holds.
+    fn retime(&mut self, was: bool, now: f64) {
+        match (was, self.paused()) {
             (false, true) => {
                 for e in &mut self.entries {
                     if let ToastTimer::Running { due } = e.timer { e.timer = ToastTimer::Paused { left: (due - now).max(0.0) }; }

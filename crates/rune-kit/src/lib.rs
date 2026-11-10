@@ -171,6 +171,7 @@ pub use toast::ToastRegion;
 pub use toast_stack::ToastEffect;
 pub use toast_stack::ToastEntry;
 pub use toast_stack::ToastEvent;
+pub use toast_stack::ToastPage;
 pub use toast_stack::ToastPlacement;
 pub use toast_stack::ToastStack;
 pub use toast_stack::ToastStackState;
