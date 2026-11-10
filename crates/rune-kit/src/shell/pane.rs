@@ -6,6 +6,7 @@ use std::time::Duration;
 use rune::{Anim, Curve, Easing, KeyEvent, Spring, Velocity};
 
 use crate::Kit;
+use crate::grip::Grip;
 
 /// A side pane's width and whether it shows: a sidebar's or an inspector's. The app owns it
 /// (a field of its state), so it can save the width and restore it with [`PaneState::new`].
@@ -17,11 +18,19 @@ pub struct PaneState {
     dock: Dock,
     min: f32,
     max: f32,
-    /// Its edge is being dragged; a drag that collapses the pane goes on holding it.
-    resizing: bool,
+    /// A drag on its edge, from the width and openness it started at; a drag that collapses the
+    /// pane goes on holding it.
+    grip: Grip<GripStart>,
     /// The width and the width it was made with (the default), as asked, before clamping, so a
     /// later `range` can widen to them.
     asked: [f32; 2],
+}
+
+/// Where a drag on a pane's edge started, which a cancel puts it back to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct GripStart {
+    width: f32,
+    open: bool,
 }
 
 /// Where a closed sidebar's peek stands. Kept after it ends, so the view knows which way the
@@ -60,7 +69,7 @@ impl PaneState {
 
     /// An open pane `width` points wide, which double-clicking its edge also returns to.
     pub fn new(width: f32) -> PaneState {
-        let mut p = PaneState { width, dock: Dock::Open { from_peek: false }, min: Self::MIN, max: Self::MAX, resizing: false, asked: [width; 2] };
+        let mut p = PaneState { width, dock: Dock::Open { from_peek: false }, min: Self::MIN, max: Self::MAX, grip: Grip::Idle, asked: [width; 2] };
         p.clamp();
         p
     }
@@ -104,7 +113,7 @@ impl PaneState {
     }
     /// Whether its edge is being dragged.
     pub fn is_resizing(&self) -> bool {
-        self.resizing
+        self.grip.is_held()
     }
     /// Points it takes in the layout: its width when open, else 0.
     pub fn shown_width(&self) -> f32 {
@@ -171,10 +180,32 @@ impl PaneState {
         }
     }
 
-    /// A drag on its edge began or ended. The grip stays while a drag that collapsed the pane
-    /// goes on, so the drag can open it again.
-    pub(super) fn set_resizing(&mut self, on: bool) {
-        self.resizing = on;
+    /// A press on its edge at `at` (window points) starts a drag. The grip stays while a drag
+    /// that collapsed the pane goes on, so the drag can open it again.
+    pub(super) fn press_grip(&mut self, at: [f32; 2]) {
+        self.grip.press(GripStart { width: self.width, open: self.is_open() }, Some(at));
+    }
+    /// The drag on its edge moved to `at`, `travel` points wider than where it started.
+    pub(super) fn drag_grip(&mut self, at: [f32; 2], travel: f32) {
+        if let Some(start) = self.grip.moved(at).copied() {
+            self.drag_to(start.width + travel);
+        }
+    }
+    /// The drag on its edge ended; a cancelled one puts the pane back as it was.
+    pub(super) fn release_grip(&mut self, cancelled: bool) {
+        if let Some(start) = self.grip.release().filter(|_| cancelled) {
+            self.set_width(start.width);
+            self.set_open(start.open);
+        }
+    }
+    /// The pointer moved to `at`: a drag that never hears it lost its release, and the pane
+    /// stays where the drag left it.
+    pub(super) fn pointer_grip(&mut self, at: [f32; 2]) {
+        self.grip.pointer(at);
+    }
+    /// The window lost focus: a drag whose release didn't come ends where it is.
+    pub(super) fn lose_grip(&mut self) {
+        self.grip.lose();
     }
 
     fn clamp(&mut self) {
