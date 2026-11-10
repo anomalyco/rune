@@ -34,7 +34,7 @@ impl<S: 'static> Runtime<S> {
             held.moved |= !press_run::within_slop(at, (x, y));
         }
         self.selection_drag(x, y);
-        if self.input_click.captured {
+        if self.input_click.captured() {
             self.input_drag(x, y, drag_move);
             return;
         }
@@ -117,7 +117,7 @@ impl<S: 'static> Runtime<S> {
     /// End a held drag without a drop: its handler hears `Phase::Up` with [`Drag::cancelled`]
     /// and the release that follows does nothing. False when no drag is held.
     pub(super) fn cancel_drag(&mut self) -> bool {
-        if self.input_click.captured { return false; }
+        if self.input_click.captured() { return false; }
         let Some(held) = self.press.held() else { return false };
         let Some(i) = self.live_index(&held.path) else { return false };
         if self.nodes[i].handlers.on_drag.is_none() || self.drags_out(&self.nodes[i]) { return false; }
