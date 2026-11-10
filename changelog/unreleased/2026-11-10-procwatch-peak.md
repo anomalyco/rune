@@ -1,0 +1,1 @@
+- procwatch: the counting allocator reads its peak and largest-block counters before updating them, so an allocation that raises neither costs no locked compare-and-swap loop, and the installed flag is stored once.
