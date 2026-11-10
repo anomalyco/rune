@@ -37,6 +37,9 @@ pub(crate) use macos::test_frames;
 mod unsupported;
 #[cfg(not(target_os = "macos"))]
 use unsupported as backend;
+mod waker;
+
+pub(crate) use waker::WakerSlot;
 
 use crate::native_surface::{ByteFrame, ColorInfo, Format, NativeSurface};
 use std::path::{Path, PathBuf};
@@ -255,7 +258,7 @@ impl Player {
             kind,
             ctl: Mutex::new(ctl),
             wakes: Mutex::new(Vec::new()),
-            waker: Mutex::new(None),
+            waker: WakerSlot::default(),
             notified: AtomicU64::new(0),
             native: Mutex::new(backend::Native::default()),
         });
@@ -336,7 +339,7 @@ impl Player {
     /// without ticking. Nothing calls it for progress. If the state already changed (loaded, or
     /// failed at once on an unsupported format), it's called once right away.
     pub fn set_waker(&self, waker: crate::Waker) {
-        *self.shared.waker.lock().unwrap() = Some((waker, 0));
+        self.shared.waker.set(waker);
         self.shared.settle(false);
     }
 
@@ -469,8 +472,7 @@ pub(crate) struct Shared {
     kind: Kind,
     ctl: Mutex<Control>,
     wakes: Mutex<Vec<Weak<crate::live::Wake>>>,
-    /// The app's waker and the generation it last heard about.
-    waker: Mutex<Option<(crate::Waker, u64)>>,
+    waker: WakerSlot,
     /// The generation windows last heard about.
     notified: AtomicU64,
     native: Mutex<backend::Native>,
@@ -503,16 +505,7 @@ impl Shared {
     /// Call with no locks held.
     fn settle(&self, windows: bool) {
         let generation = self.ctl.lock().unwrap().generation;
-        let waker = match &mut *self.waker.lock().unwrap() {
-            Some((waker, heard)) if *heard != generation => {
-                *heard = generation;
-                Some(waker.clone())
-            }
-            _ => None,
-        };
-        if let Some(waker) = waker {
-            waker();
-        }
+        self.waker.tell(generation);
         if self.notified.swap(generation, Ordering::AcqRel) != generation && windows {
             self.wake_windows();
         }
