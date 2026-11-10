@@ -139,7 +139,7 @@ impl<S: 'static> Host<S> {
         // when it draws what's on screen.
         let quiet = std::mem::take(&mut l.quiet) && !hidden && !live_resize && l.presented.is_some() && self.comp.is_none()
             && self.trace.is_none() && self.args.trace.is_none() && self.rt.live_visible()
-            && self.rt.window_frame.is_none() && self.frame_anim.is_none();
+            && self.rt.window_frame.is_none() && self.frame_move.is_none();
         #[cfg(target_os = "macos")]
         let quiet = quiet && shown.is_none() && !l.native.materials.native();
         let built = if quiet {
@@ -198,7 +198,7 @@ impl<S: 'static> Host<S> {
         }
         let frame_time = target.unwrap_or(now);
         let presents_at = target;
-        self.rt.window_resting = self.frame_anim.is_none() && self.rt.window_frame.is_none();
+        self.rt.window_resting = self.frame_move.is_none() && self.rt.window_frame.is_none();
         let target_ms = target.zip(self.trace_start).map(|(target, start)| crate::frame::present_time::ms_since(start, target));
         let rt = &mut self.rt;
         if hidden && l.first_frame.settles() { rt.settle_all(); }
@@ -286,7 +286,7 @@ impl<S: 'static> Host<S> {
         if let Some(shadow) = &l.native.shadow { shadow.presented(); }
         // The frame landed with this present; later ones needn't wait for a transaction.
         #[cfg(target_os = "macos")]
-        if self.frame_anim.is_none() { l.present_with_transaction(false); }
+        if self.frame_move.is_none() { l.present_with_transaction(false); }
         if !l.first_frame.ready()
             && gpu.device.poll(wgpu::PollType::wait_indefinitely()).is_ok() {
             l.first_frame.gpu_done();
@@ -333,7 +333,7 @@ impl<S: 'static> Host<S> {
             let event = if hidden { SteadyEvent::Ends } else { SteadyEvent::Drew { changed, focused: rt.has_window_focus(), now } };
             l.steady = l.steady.step(event).0;
         }
-        self.idle = Presented::settle(&mut l.presented, rt, &l.config, animating || self.frame_anim.is_some(), next_tick, rests, self.comp.is_some());
+        self.idle = Presented::settle(&mut l.presented, rt, &l.config, animating || self.frame_move.is_some(), next_tick, rests, self.comp.is_some());
         #[cfg(target_os = "macos")]
         if !hidden && let Some(latency) = l.native.launch_drawables.settle(self.idle, now) {
             l.config.desired_maximum_frame_latency = latency;

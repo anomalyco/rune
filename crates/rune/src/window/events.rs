@@ -275,7 +275,7 @@ impl<S: 'static> Host<S> {
                 // and a frame drawn later would leave the old one stretched to it until then.
                 #[cfg(target_os = "macos")]
                 if crate::platform::macos::in_live_resize(&l.window) {
-                    if self.frame_anim.take().is_some() { l.present_with_transaction(false); }
+                    if self.frame_move.take().is_some() { l.present_with_transaction(false); }
                     self.draw(true);
                     self.shell(event_loop);
                     return;
