@@ -1,0 +1,1 @@
+- **Luau: `role = "alert"`.** A node can be an alert, an assertive live region that screen readers announce at once, as an HTML `role="alert"` is.
