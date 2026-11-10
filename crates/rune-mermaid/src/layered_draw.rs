@@ -333,7 +333,16 @@ fn draw_node(c: &mut Canvas, node: &DrawNode, ctr: [f32; 2], paint: &DiagramStyl
         }
         DrawNode::Shape { shape, label, size, style, .. } => {
             let (fill, border, text_color) = style.resolve(paint);
+            let start = c.ops.len();
             shape::draw(c, *shape, label, ctr, *size, [fill, border, text_color], paint);
+            // `stroke-width` sets the outline, which every shape draws 1 pt wide.
+            if let Some(w) = style.width {
+                for op in &mut c.ops[start..] {
+                    if let super::canvas::Op::Stroke { width, .. } = op {
+                        *width *= w;
+                    }
+                }
+            }
         }
         DrawNode::ClassBox { stereo, name, fields, methods, size, style, .. } => {
             let (fill, border, text_color) = style.resolve(paint);

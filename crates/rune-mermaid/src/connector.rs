@@ -9,7 +9,8 @@ use super::parts::{Kind, Part};
 use super::route::{Ctx, Route};
 use super::{DiagramStyle, adapt_stroke};
 
-const ARROW: f32 = 9.0;
+/// An arrowhead's length past its line's width, about Mermaid's 8 px marker.
+const ARROW: f32 = 7.0;
 
 /// The room a label takes on its edge: its text with a little air, where the line breaks off.
 pub(crate) fn label_box(m: &Measured) -> [f32; 2] {
@@ -168,7 +169,7 @@ fn head(c: &mut Canvas, h: Head, tip: [f32; 2], d: [f32; 2], width: f32, color: 
     let back = |by: f32| [tip[0] - d[0] * by, tip[1] - d[1] * by];
     match h {
         Head::None => {}
-        Head::Arrow => c.fill(arrowhead(tip, d, ARROW + width, 6.5 + width * 1.6), color),
+        Head::Arrow => c.fill(arrowhead(tip, d, ARROW + width, 5.0 + width * 1.6), color),
         Head::OpenTriangle => c.shape(arrowhead(tip, d, 10.0, 9.0), paint.node_fill, color, width),
         Head::DiamondFilled => c.fill(diamond_head(tip, d, 12.0, 8.0), color),
         Head::DiamondOpen => c.shape(diamond_head(tip, d, 12.0, 8.0), paint.node_fill, color, width),

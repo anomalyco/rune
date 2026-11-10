@@ -1,0 +1,65 @@
+flowchart LR
+  classDef done fill:#1f3d2a,stroke:#3fb950,color:#e6edf3
+  classDef doing fill:#3d3416,stroke:#d29922,color:#e6edf3
+  classDef waiting fill:#162a3d,stroke:#58a6ff,color:#e6edf3
+  classDef blocked fill:#21262d,stroke:#6e7681,color:#c9d1d9
+
+  subgraph PREP["Prep, done"]
+    t12["t12 byte strings for IR text"]:::done
+    t07["t07 op table in families"]:::done
+  end
+
+  subgraph S2["Stage 2: first check in the new language (the pilot)"]
+    t31["t31 cache sees compiler edits"]:::waiting
+    t35["t35 seed = pinned commit, built from source"]:::doing
+    t44["t44 match_useful, the check rewritten"]:::doing
+    t11["t11 old-vs-new compare hook"]:::doing
+    t36["t36 link new code into the old compiler"]:::blocked
+    t37["t37 PILOT: the check runs in the new build"]:::blocked
+  end
+
+  subgraph IR["IR track: the new language reads the compiler's internal code"]
+    t84["t84 code generator stops using the interpreter"]:::doing
+    t33["t33 IR binary format + reader"]:::blocked
+    t34["t34 generate both sides from the op table"]:::blocked
+    t38["t38 IR verifier, rewritten"]:::blocked
+  end
+
+  subgraph S3["Stage 3: code generator in the new language"]
+    t39["t39 layout, ABI, names"]:::blocked
+    t40["t40 prelude, constants, debug info"]:::blocked
+    t41["t41 functions and core ops"]:::blocked
+    t42["t42 C calls and exports"]:::blocked
+    t43["t43 runtime ops, copy-on-write glue"]:::blocked
+    t45["t45 byte-exact match with the old one, at most 2x slower"]:::blocked
+    t46["t46 the compiler rebuilds itself identically"]:::blocked
+    t47["t47 delete the old code generator"]:::blocked
+  end
+
+  t31 --> t35 --> t36
+  t84 --> t33 --> t34
+  t33 --> t36
+  t36 --> t37
+  t11 --> t37
+  t44 --> t37
+
+  t34 --> t38
+  t36 --> t38
+  t34 --> t39
+  t34 --> t40
+  t39 --> t41
+  t40 --> t41
+  t41 --> t42
+  t41 --> t43
+  t42 --> t45
+  t43 --> t45
+  t36 --> t45
+  t11 --> t45
+  t45 --> t46 --> t47
+
+  subgraph KEY["Key"]
+    k1["done"]:::done
+    k2["building now"]:::doing
+    k3["built, waiting to land"]:::waiting
+    k4["not started"]:::blocked
+  end

@@ -149,9 +149,9 @@ pub(crate) struct Piece {
 /// Each label's key and kind, beside [`super::canvas::Scene::labels`].
 pub(crate) type LabelKey = (String, Option<Kind>);
 
-/// Splits `c`'s finished ops (already moved and scaled by `map` and `paint`) into keyed pieces,
-/// and keys its labels by the part each belongs to.
-pub(crate) fn pieces(c: &Canvas, map: impl Fn([f32; 2]) -> [f32; 2], stroke: impl Fn(f32) -> f32) -> (Vec<Piece>, Vec<LabelKey>) {
+/// Splits `c`'s finished ops (already moved by `map`) into keyed pieces, and keys its labels by
+/// the part each belongs to.
+pub(crate) fn pieces(c: &Canvas, map: impl Fn([f32; 2]) -> [f32; 2]) -> (Vec<Piece>, Vec<LabelKey>) {
     let mut pieces = Vec::new();
     let mut label_keys = vec![(String::new(), None); c.labels.len()];
     let mut seen: HashMap<String, usize> = HashMap::new();
@@ -180,21 +180,21 @@ pub(crate) fn pieces(c: &Canvas, map: impl Fn([f32; 2]) -> [f32; 2], stroke: imp
                 }
             };
         }
-        if let Some(piece) = piece(&c.ops[ops], run_key, kind, &map, &stroke) {
+        if let Some(piece) = piece(&c.ops[ops], run_key, kind, &map) {
             pieces.push(piece);
         }
     }
     (pieces, label_keys)
 }
 
-fn piece(ops: &[Op], key: String, kind: Option<Kind>, map: &impl Fn([f32; 2]) -> [f32; 2], stroke: &impl Fn(f32) -> f32) -> Option<Piece> {
+fn piece(ops: &[Op], key: String, kind: Option<Kind>, map: &impl Fn([f32; 2]) -> [f32; 2]) -> Option<Piece> {
     let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
     let mut add = |p: [f32; 2], r: f32| b = [b[0].min(p[0] - r), b[1].min(p[1] - r), b[2].max(p[0] + r), b[3].max(p[1] + r)];
     for op in ops {
         match op {
             Op::Fill(points, _) => points.iter().for_each(|&p| add(map(p), 0.0)),
             // A point beyond the stroke's half width for its round caps and antialiasing.
-            Op::Stroke { points, width, .. } => points.iter().for_each(|&p| add(map(p), stroke(*width) / 2.0 + 1.0)),
+            Op::Stroke { points, width, .. } => points.iter().for_each(|&p| add(map(p), width / 2.0 + 1.0)),
         }
     }
     if b[0] > b[2] {
@@ -206,7 +206,7 @@ fn piece(ops: &[Op], key: String, kind: Option<Kind>, map: &impl Fn([f32; 2]) ->
     };
     let shape = ops.iter().fold(Shape::new(), |s, op| match op {
         Op::Fill(points, color) => s.fill(points.iter().map(|&p| local(p)).collect::<Vec<_>>(), *color),
-        Op::Stroke { points, closed, width, cap, color } => s.stroke_with(points.iter().map(|&p| local(p)).collect::<Vec<_>>(), *closed, stroke(*width), *cap, *color),
+        Op::Stroke { points, closed, width, cap, color } => s.stroke_with(points.iter().map(|&p| local(p)).collect::<Vec<_>>(), *closed, *width, *cap, *color),
     });
     let size = [(b[2] - b[0]).max(1.0), (b[3] - b[1]).max(1.0)];
     // Coordinates stretch with the piece, so a frame or lifeline that grows springs to its new

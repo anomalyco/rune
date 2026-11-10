@@ -255,6 +255,8 @@ fn place(g: &Graph, sp: &Spacing, held: Option<&Memo>) -> Option<(Placed, Memo)>
         let keys: Vec<f32> = (0..layer.len()).map(|i| i as f32).collect();
         *layer = grouped_order(layer, &keys, &node_chains);
     }
+    let parents: Vec<Option<usize>> = g.clusters.iter().map(|c| c.parent).collect();
+    align_clusters(&mut layers, &node_chains, &parents);
     let mut best = layers.clone();
     let mut best_x = crossings(&layers, &nodes);
     for it in 0..16 {
@@ -279,6 +281,7 @@ fn place(g: &Graph, sp: &Spacing, held: Option<&Memo>) -> Option<(Placed, Memo)>
                 pos[v] = i;
             }
         }
+        align_clusters(&mut layers, &node_chains, &parents);
         let x = crossings(&layers, &nodes);
         if x < best_x {
             best_x = x;
@@ -288,6 +291,7 @@ fn place(g: &Graph, sp: &Spacing, held: Option<&Memo>) -> Option<(Placed, Memo)>
     let mut layers = best;
     if let Some(m) = held {
         hold_order(&mut layers, m, n, &node_chains);
+        align_clusters(&mut layers, &node_chains, &parents);
     }
 
     // 5. Positions along layers: pack, then pull each node toward its neighbours.
@@ -608,8 +612,15 @@ fn positions(layers: &[Vec<usize>], len: usize) -> Vec<usize> {
 /// Sorts a layer by `keys`, keeping each cluster's members together: clusters sort as one item
 /// at their members' mean key, recursively.
 fn grouped_order(layer: &[usize], keys: &[f32], chains: &[&[usize]]) -> Vec<usize> {
-    fn go(items: Vec<(usize, f32)>, depth: usize, chains: &[&[usize]]) -> Vec<(usize, f32)> {
-        let mut groups: Vec<(Option<usize>, Vec<(usize, f32)>)> = Vec::new();
+    grouped(layer, keys, chains, None)
+}
+
+/// [`grouped_order`]; with `rank`, the clusters among each group's items then trade places so
+/// they come in `rank` order, while loose nodes keep theirs.
+fn grouped(layer: &[usize], keys: &[f32], chains: &[&[usize]], rank: Option<&[f32]>) -> Vec<usize> {
+    type Items = Vec<(usize, f32)>;
+    fn go(items: Items, depth: usize, chains: &[&[usize]], rank: Option<&[f32]>) -> Items {
+        let mut groups: Vec<(Option<usize>, Items)> = Vec::new();
         for it in items {
             let c = chains[it.0].get(depth).copied();
             match groups.iter_mut().find(|g| c.is_some() && g.0 == c) {
@@ -617,19 +628,72 @@ fn grouped_order(layer: &[usize], keys: &[f32], chains: &[&[usize]]) -> Vec<usiz
                 None => groups.push((c, vec![it])),
             }
         }
-        let mut keyed: Vec<(f32, Vec<(usize, f32)>)> = groups
+        let mut keyed: Vec<(f32, Option<usize>, Items)> = groups
             .into_iter()
             .map(|(c, members)| {
                 let key = members.iter().map(|m| m.1).sum::<f32>() / members.len() as f32;
-                let members = if c.is_some() { go(members, depth + 1, chains) } else { members };
-                (key, members)
+                let members = if c.is_some() { go(members, depth + 1, chains, rank) } else { members };
+                (key, c, members)
             })
             .collect();
         keyed.sort_by(|a, b| a.0.total_cmp(&b.0));
-        keyed.into_iter().flat_map(|(_, m)| m).collect()
+        if let Some(rank) = rank {
+            let slots: Vec<usize> = (0..keyed.len()).filter(|&i| keyed[i].1.is_some()).collect();
+            let mut held: Vec<(usize, Items)> = slots.iter().map(|&i| (keyed[i].1.unwrap_or(0), std::mem::take(&mut keyed[i].2))).collect();
+            held.sort_by(|a, b| rank[a.0].total_cmp(&rank[b.0]));
+            for (&i, (c, members)) in slots.iter().zip(held) {
+                (keyed[i].1, keyed[i].2) = (Some(c), members);
+            }
+        }
+        keyed.into_iter().flat_map(|(_, _, m)| m).collect()
     }
     let items = layer.iter().copied().zip(keys.iter().copied()).collect();
-    go(items, 0, chains).into_iter().map(|(v, _)| v).collect()
+    go(items, 0, chains, rank).into_iter().map(|(v, _)| v).collect()
+}
+
+/// Puts sibling clusters in one order on every layer, the one most layers already agree on.
+/// Sweeps order each layer alone, so two subgraphs could swap from one layer to the next and
+/// their boxes, each spanning all its layers, would overlap whatever positions follow.
+fn align_clusters(layers: &mut [Vec<usize>], chains: &[&[usize]], parents: &[Option<usize>]) {
+    let k = parents.len();
+    if k < 2 {
+        return;
+    }
+    // lead[a][b]: layers where a comes before b, less those where it comes after.
+    let mut lead = vec![vec![0i32; k]; k];
+    let mut mean = vec![(0.0f32, 0usize); k];
+    for layer in layers.iter() {
+        let mut first: Vec<Option<usize>> = vec![None; k];
+        for (i, &v) in layer.iter().enumerate() {
+            for &c in chains[v] {
+                first[c].get_or_insert(i);
+                mean[c].0 += i as f32 / layer.len().max(1) as f32;
+                mean[c].1 += 1;
+            }
+        }
+        for a in 0..k {
+            for b in 0..k {
+                if let (Some(ia), Some(ib)) = (first[a], first[b])
+                    && ia < ib
+                    && parents[a] == parents[b]
+                {
+                    lead[a][b] += 1;
+                    lead[b][a] -= 1;
+                }
+            }
+        }
+    }
+    // Siblings that come after more of the others sort later; where layers tie, mean place decides.
+    let rank: Vec<f32> = (0..k)
+        .map(|c| {
+            let behind = (0..k).filter(|&b| lead[c][b] < 0).count() as f32 - (0..k).filter(|&b| lead[c][b] > 0).count() as f32;
+            behind + 0.5 * mean[c].0 / mean[c].1.max(1) as f32
+        })
+        .collect();
+    for layer in layers.iter_mut() {
+        let keys: Vec<f32> = (0..layer.len()).map(|i| i as f32).collect();
+        *layer = grouped(layer, &keys, chains, Some(&rank));
+    }
 }
 
 fn crossings(layers: &[Vec<usize>], nodes: &[LNode]) -> usize {

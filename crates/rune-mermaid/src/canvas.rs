@@ -248,17 +248,18 @@ impl Canvas {
         crate::ink::flatten(&mut self.ops, &mut self.traces, paint.surface);
         let b = self.drawn();
         // Store full-size drawing; Scene::el fits each destination before animating it.
-        // Labels scale without changing font metrics. Lines thin no further than 80%.
+        // Labels scale without changing font metrics. Lines scale with everything else, as an
+        // SVG's do: a floor here would be baked into the full-size drawing, so a diagram shrunk
+        // far to fit would draw fat lines once something magnifies it again.
         let pad = 1.0 / scale;
         let map = |p: [f32; 2]| [p[0] - b[0] + pad, p[1] - b[1] + pad];
-        let stroke = |w: f32| w * scale.max(0.8) / scale;
         let paint = |shape: Shape, op: &Op| match op {
             Op::Fill(points, color) => shape.fill(points.iter().map(|&p| map(p)).collect::<Vec<_>>(), *color),
             Op::Stroke { points, closed, width, cap, color } => {
-                shape.stroke_with(points.iter().map(|&p| map(p)).collect::<Vec<_>>(), *closed, stroke(*width), *cap, *color)
+                shape.stroke_with(points.iter().map(|&p| map(p)).collect::<Vec<_>>(), *closed, *width, *cap, *color)
             }
         };
-        let (pieces, label_keys) = pieces(&self, map, stroke);
+        let (pieces, label_keys) = pieces(&self, map);
         let hovers = self.hovers(map, paint);
         let labels = self.labels.into_iter().map(|l| Label { at: map(l.at), ..l }).collect();
         let full = [b[2] - b[0] + 2.0 * pad, b[3] - b[1] + 2.0 * pad];

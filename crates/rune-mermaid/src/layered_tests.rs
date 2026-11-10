@@ -59,6 +59,28 @@ fn sibling_clusters_never_overlap_across_layers() {
     }
 }
 
+/// The shape of `fixtures/plan.mmd`: five subgraphs whose ranks interleave, with edges from
+/// one into the next. Sweeps alone ordered the subgraphs differently on different ranks.
+#[test]
+fn interleaved_subgraphs_keep_one_order_and_never_overlap() {
+    let edges = [
+        (2, 3), (3, 6), (8, 9), (9, 10), (9, 6), (6, 7), (5, 7), (4, 7), (10, 11), (6, 11), (10, 12), (10, 13),
+        (12, 14), (13, 14), (14, 15), (14, 16), (15, 17), (16, 17), (6, 17), (5, 17), (17, 18), (18, 19),
+    ];
+    let mut g = graph(24, &edges);
+    let free = GCluster { parent: None, lead: [0.0, 16.0], min_span: [0.0, 0.0] };
+    g.clusters = (0..5).map(|_| GCluster { ..free }).collect();
+    g.node_cluster = (0..24).map(|v| Some(match v { 0..=1 => 0, 2..=7 => 1, 8..=11 => 2, 12..=19 => 3, _ => 4 })).collect();
+    let p = layout(&g, &SP).unwrap();
+    for a in 0..5 {
+        for b in a + 1..5 {
+            let (x, y) = (p.clusters[a], p.clusters[b]);
+            let apart = x[2] <= y[0] || y[2] <= x[0] || x[3] <= y[1] || y[3] <= x[1];
+            assert!(apart, "subgraphs {a} and {b} overlap: {x:?} {y:?}");
+        }
+    }
+}
+
 #[test]
 fn isotonic_keeps_separation_and_hits_free_targets() {
     assert_eq!(isotonic(&[0.0, 100.0], &[1.0, 1.0], &[10.0]), vec![0.0, 100.0]);

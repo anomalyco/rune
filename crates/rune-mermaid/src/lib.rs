@@ -473,6 +473,8 @@ pub(crate) struct NodeStyle {
     pub fill: Option<Color>,
     pub stroke: Option<Color>,
     pub color: Option<Color>,
+    /// `stroke-width`, in Mermaid's px (one point each).
+    pub width: Option<f32>,
 }
 
 impl NodeStyle {
@@ -481,6 +483,7 @@ impl NodeStyle {
             fill: over.fill.or(self.fill),
             stroke: over.stroke.or(self.stroke),
             color: over.color.or(self.color),
+            width: over.width.or(self.width),
         }
     }
 
@@ -630,10 +633,16 @@ pub(crate) fn parse_style_props(props: &str) -> NodeStyle {
             "fill" => out.fill = parse_color_spec(v),
             "stroke" => out.stroke = parse_color_spec(v),
             "color" => out.color = parse_color_spec(v),
+            "stroke-width" => out.width = px(v).map(|w| w.clamp(0.0, 5.0)),
             _ => {}
         }
     }
     out
+}
+
+/// A CSS length in px (`2px`, `2`).
+fn px(v: &str) -> Option<f32> {
+    v.trim_end_matches("px").trim().parse::<f32>().ok().filter(|w| w.is_finite())
 }
 
 pub(crate) fn parse_edge_style_props(props: &str) -> EdgeStyle {
@@ -643,7 +652,7 @@ pub(crate) fn parse_edge_style_props(props: &str) -> EdgeStyle {
         let v = v.trim().trim_end_matches("!important").trim();
         match k.trim() {
             "stroke" => out.stroke = parse_color_spec(v),
-            "stroke-width" => out.width = v.trim_end_matches("px").trim().parse::<f32>().ok().map(|w| w.clamp(0.75, 5.0)),
+            "stroke-width" => out.width = px(v).map(|w| w.clamp(0.75, 5.0)),
             _ => {}
         }
     }

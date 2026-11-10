@@ -24,6 +24,13 @@ fn other_diagram_types_and_garbage_are_unsupported() {
 }
 
 #[test]
+fn node_stroke_width_reads_mermaid_px() {
+    assert_eq!(parse_style_props("stroke:#333,stroke-width:2px").width, Some(2.0));
+    assert_eq!(parse_style_props("stroke-width:4").width, Some(4.0));
+    assert_eq!(parse_style_props("stroke-width:wide").width, None);
+}
+
+#[test]
 fn node_style_keeps_contrast_in_dark_and_light_themes() {
     let pastel = parse_style_props("fill:#dcf5dc,stroke:#333");
     for dark in [true, false] {
@@ -180,4 +187,19 @@ fn min_scale_zero_fits_any_width() {
     assert!(fits.scale < 0.6 && (fits.full[1] * fits.scale - fits.size[1]).abs() < 0.01, "it shrinks evenly: {}", fits.scale);
     let roomy = DiagramStyle { max_width: 4000.0, ..narrow }.min_scale(0.0);
     assert_eq!(scene(WIDE_SEQUENCE, &roomy, None).expect("draws").scale, 1.0, "never grows past full size");
+}
+
+/// Lines shrink with the drawing, as an SVG's do: a shrunk diagram's full-size pieces are the
+/// same as an unshrunk one's, so magnifying it never shows fat lines.
+#[test]
+fn lines_shrink_with_the_drawing() {
+    let narrow = DiagramStyle { max_width: 420.0, ..DiagramStyle::neutral(true) }.min_scale(0.0);
+    let roomy = DiagramStyle { max_width: 4000.0, ..narrow };
+    let (small, full) = (scene(WIDE_SEQUENCE, &narrow, None).expect("draws"), scene(WIDE_SEQUENCE, &roomy, None).expect("draws"));
+    assert!(small.scale < 0.5, "shrinks: {}", small.scale);
+    for (a, b) in small.pieces.iter().zip(&full.pieces) {
+        assert_eq!(a.key, b.key);
+        let close = (a.size[0] - b.size[0]).abs() < 0.01 && (a.size[1] - b.size[1]).abs() < 0.01;
+        assert!(close, "{} is {:?} shrunk, {:?} full", a.key, a.size, b.size);
+    }
 }
