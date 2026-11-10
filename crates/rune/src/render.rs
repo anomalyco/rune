@@ -1011,7 +1011,7 @@ impl Renderer {
         }
         // Backdrop blurs split the frame pass, which needs it owned along with the encoder.
         let pass = pass.forget_lifetime();
-        let mut active = ActivePass::owned(pass, encoder, view).with_timestamps(timestamps);
+        let mut active = ActivePass::owned_timed(pass, encoder, view, timestamps);
         self.draw_layer_range(&mut active, self.format, 0..self.count, None, &mut |_, _| {});
     }
 }
