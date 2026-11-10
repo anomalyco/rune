@@ -513,3 +513,15 @@ fn presses_land_on_targets_inside_a_scrolled_viewport() {
     rt.frame(1.0 / 120.0);
     assert_eq!(rt.state, [4]);
 }
+
+#[test]
+fn a_field_that_stops_following_its_press_keeps_the_press_until_release() {
+    let mut c = InputClick::default();
+    c.capture = Capture::Held { dragging: Some("field".into()) };
+    c.steps.push_back(("field".into(), Step::Drag));
+    c.on_focus_change(Some("other"));
+    assert!(c.captured() && c.dragging_path().is_none(), "focus left: the drag stops, the press stays the field's");
+    assert!(matches!(c.steps.front(), Some((_, Step::Cancelled))), "its queued drag step does nothing");
+    assert!(c.end_press());
+    assert!(!c.captured() && !c.end_press(), "the release ends it once");
+}
