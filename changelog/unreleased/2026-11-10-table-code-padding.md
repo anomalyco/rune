@@ -1,0 +1,1 @@
+- **rune-kit Markdown: table columns count inline code's padding.** A cell ending in inline code lost the chip's trailing padding from its widths, as a line leaves trailing white space out, so its column took a smaller share of a full-width table than a page gives it; columns now start where Chromium's automatic table layout puts them.
