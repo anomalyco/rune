@@ -105,7 +105,7 @@ impl<S: 'static> Runtime<S> {
     /// Someone resized a window that fits its content (not a page's band) to `height`: it
     /// goes back to the content's height.
     pub(super) fn fit_resized(&mut self, height: f32) -> bool {
-        self.fit_height && !self.page.on && self.window_resting && self.fit.resized(height, self.viewport.1)
+        self.fit_height && self.page.is_none() && self.window_resting && self.fit.resized(height, self.viewport.1)
     }
 
     /// Whether this frame holds its motion for the window (see [`FitHold`]).

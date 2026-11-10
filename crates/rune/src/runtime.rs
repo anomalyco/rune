@@ -723,7 +723,7 @@ pub struct Runtime<S: 'static> {
     /// starts with. The host takes the hold as it starts the move.
     pub(crate) fit: window_requests::FitWindow,
     /// The band of a taller document the window draws (`App::web_document`).
-    pub(crate) page: web_page::Page,
+    pub(crate) page: Option<web_page::Page>,
     /// The host's window frame isn't moving or about to: set by the host before each frame.
     pub(crate) window_resting: bool,
     /// What `update` asked of the next commit.
@@ -1018,7 +1018,7 @@ impl<S: 'static> Runtime<S> {
             window_title: Default::default(),
             fit_height: false,
             fit: Default::default(),
-            page: Default::default(),
+            page: None,
             window_resting: false,
             pending: Tx::default(),
             animating: false,

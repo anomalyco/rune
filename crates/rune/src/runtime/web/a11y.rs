@@ -208,7 +208,7 @@ impl<S: 'static> Runtime<S> {
         // its offset changes nothing in the mirror, and hashing it would rewrite the whole page's
         // items on every frame of a horizontal flick.
         let mut entries: Vec<_> = self.scrolls.iter()
-            .map(|(id, s)| (id.0, s.offset.to_bits(), if self.page.on { 0 } else { s.x.offset.to_bits() }))
+            .map(|(id, s)| (id.0, s.offset.to_bits(), if self.page.is_some() { 0 } else { s.x.offset.to_bits() }))
             .collect();
         entries.sort_unstable_by_key(|e| e.0);
         entries.hash(&mut h);
@@ -303,7 +303,7 @@ impl<S: 'static> Runtime<S> {
             }
             // A page hands every horizontal viewport to the DOM: iOS scrolls it natively, at the
             // compositor's rate, with axis locking, momentum and text selection.
-            if self.page.on && n.scroll_axes == crate::el::ScrollAxes::X {
+            if self.page.is_some() && n.scroll_axes == crate::el::ScrollAxes::X {
                 let rect = self.mirror_rect(i, 0.0);
                 let offset = self.scrolls.get(&n.id).map_or(0.0, |st| st.x.offset);
                 let mut item = A11yItem::new("scroll_x", &n.path, rect);
@@ -396,7 +396,7 @@ impl<S: 'static> Runtime<S> {
                         i += 1;
                         continue;
                     }
-                    let text_rect = if self.page.on { inset_rect(rect, n.inset) } else { rect };
+                    let text_rect = if self.page.is_some() { inset_rect(rect, n.inset) } else { rect };
                     if !is_heading && flow_group.is_none()
                         && let Some(prev) = inline.filter(|l| l.item + 1 == out.len() && l.parent == n.parent)
                         && let Some(gap) = prev.gap(n.target, spec.style, spec.selectable)
@@ -418,7 +418,7 @@ impl<S: 'static> Runtime<S> {
                     item.text = plain;
                     item.runs = rich_runs;
                     item.id = if is_heading { anchor_id(n.key.as_deref()) } else { None };
-                    if self.page.on {
+                    if self.page.is_some() {
                         item.rect = text_rect;
                         let style = spec.style;
                         item.font = Some(A11yFont {
@@ -460,7 +460,7 @@ impl<S: 'static> Runtime<S> {
     /// The page's horizontal scroll viewports: their paths and how far each is scrolled right.
     /// The browser's mirror holds the containers, so the DOM keeps an offset Rune scrolls too.
     pub(crate) fn page_scroll_x(&self) -> Vec<(String, f32)> {
-        if !self.page.on { return Vec::new(); }
+        if self.page.is_none() { return Vec::new(); }
         self.nodes.iter()
             .filter(|n| n.scroll_axes == crate::el::ScrollAxes::X)
             .filter_map(|n| self.scrolls.get(&n.id).map(|st| (n.path.clone(), st.x.offset as f32)))
@@ -469,7 +469,7 @@ impl<S: 'static> Runtime<S> {
 
     /// Returns updated JSON only when layout commits, viewport or scroll positions changed.
     pub(crate) fn web_a11y<'a>(&self, mirror: &'a mut A11yMirror) -> Option<&'a str> {
-        let vp = (self.viewport.0.to_bits(), if self.page.on { 0 } else { self.viewport.1.to_bits() });
+        let vp = (self.viewport.0.to_bits(), if self.page.is_some() { 0 } else { self.viewport.1.to_bits() });
         let sd = self.scroll_digest();
         if mirror.commits == self.commits && mirror.viewport == vp && mirror.scroll_digest == sd && !mirror.json.is_empty() {
             return None;
