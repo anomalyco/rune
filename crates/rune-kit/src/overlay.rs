@@ -397,7 +397,8 @@ impl TooltipStyle {
     /// and at once within 300 ms of the last one hiding; it fades and scales in from 0.96 over
     /// 120 ms ease-out and out over 80 ms ease-in (`tooltip.css`). Its keycaps are `keybind-v2`'s
     /// neutral keys: 14 pt, 4 pt in, 2 pt corners and 2 pt apart, 6 pt after the text, their
-    /// labels in uppercase 11/530.
+    /// labels in uppercase 11/530. Rows ([`El::help_row`](rune::El::help_row)) stack 6 pt apart,
+    /// as a tooltip listing two commands does (`line-comment.tsx`, `flex-col gap-1.5`).
     pub fn help_look(&self) -> rune::HelpLook {
         let (ring_w, ring) = self.border.unwrap_or((0.0, Color::TRANSPARENT));
         let key = TextStyle::new(11.0, 530.0).lh(11.0).tracking(0.05).features("'tnum' 1, 'lnum' 1");
@@ -417,6 +418,7 @@ impl TooltipStyle {
             .fade(0.12, 0.08, 0.96)
             .keycaps(self.keys.0, self.keys.1, TextStyle { family: self.font.family, ..key }, true)
             .keycap_shape(14.0, 4.0, 2.0, 2.0, 6.0)
+            .row_gap(6.0)
     }
 }
 

@@ -32,6 +32,8 @@ pub struct HelpLook {
     pub(crate) shadows: [Option<Shadow>; SHADOWS],
     /// [`El::help_keys`](crate::El::help_keys)' keycaps.
     pub(crate) key: KeyCap,
+    /// Points between two rows ([`El::help_row`](crate::El::help_row)).
+    pub(crate) row_gap: f32,
 }
 
 /// How a tooltip draws its keycaps.
@@ -87,7 +89,13 @@ impl HelpLook {
                 lead: 6.0,
                 upper: false,
             },
+            row_gap: 4.0,
         }
+    }
+    /// Points between two rows of a tooltip with [`El::help_row`](crate::El::help_row)s.
+    pub fn row_gap(mut self, gap: f32) -> Self {
+        self.row_gap = if gap.is_finite() { gap.max(0.0) } else { 0.0 };
+        self
     }
     /// Keycaps ([`El::help_keys`](crate::El::help_keys)) on `fill`, their labels in `font` and
     /// `ink`, uppercased when `upper`.
