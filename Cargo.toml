@@ -60,6 +60,11 @@ exclude = ["tools/rune-dev-guard"]
 edition = "2024"
 license = "MIT"
 
+# Full debug info for the workspace crates made a single `rune` test build use 18-23 GB of RAM;
+# line tables keep backtraces and file:line in panics at a fraction of that.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.dev.package."*"]
 debug = false
 
