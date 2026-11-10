@@ -28,6 +28,7 @@
 //! ```
 
 mod animated;
+mod carry;
 mod choreo;
 mod clock;
 mod curve;

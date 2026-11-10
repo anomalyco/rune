@@ -1,6 +1,7 @@
 //! The presented tree the render thread owns: presence (exits that stay mounted), layout animation
 //! by edges, screen-space travel, matched geometry, and the per-frame [`Presented`] output.
 
+use crate::carry::Carry;
 use crate::curve::{Anim, Curve};
 use crate::props::{NodeId, Prop, PropId, prop};
 use crate::snap::snap_rect;
@@ -316,8 +317,7 @@ pub struct Scene {
     out: Vec<Presented>,
     /// What [`Scene::present`] presented after the motion trace wrote its frame, for the next.
     late: Vec<Presented>,
-    exited: Vec<NodeId>,
-    exited_seen: usize,
+    exited: Carry<NodeId>,
     to_remove: Vec<u32>,
     travelling: Vec<u32>,
     trace: Option<MotionTrace>,
@@ -346,8 +346,7 @@ impl Scene {
             order_dirty: false,
             out: Vec::new(),
             late: Vec::new(),
-            exited: Vec::new(),
-            exited_seen: 0,
+            exited: Carry::new(),
             to_remove: Vec::new(),
             travelling: Vec::new(),
             trace: None,
@@ -684,7 +683,7 @@ impl Scene {
     pub fn frame(&mut self) -> FrameOutput<'_> {
         self.store.tick();
         // Keep removals made since the last frame (matched geometry), drop last frame's.
-        self.exited.drain(..self.exited_seen);
+        self.exited.begin();
         self.to_remove.clear();
 
         // Presence settles: finish entrances, retire exits whose generation is current.
@@ -763,15 +762,15 @@ impl Scene {
                 self.remove_now(i);
             }
         }
-        self.exited_seen = self.exited.len();
+        self.exited.end();
         // A node still travelling waits on an active track of its own or an ancestor's, so this
         // covers it, and a frozen one doesn't keep the frames coming.
         let animating = self.store.running();
         if let Some(trace) = self.trace.as_mut() {
-            trace.frame(self.store.now(), &self.out, &self.exited, self.store.events(), &self.intents);
+            trace.frame(self.store.now(), &self.out, self.exited.as_slice(), self.store.events(), &self.intents);
             self.intents.clear();
         }
-        FrameOutput { changed: &self.out, exited: &self.exited, events: self.store.events(), animating }
+        FrameOutput { changed: &self.out, exited: self.exited.as_slice(), events: self.store.events(), animating }
     }
 
     /// Presents what was set or animated since [`frame`](Self::frame), without stepping time,
