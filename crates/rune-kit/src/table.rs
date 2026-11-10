@@ -31,6 +31,7 @@ use std::rc::Rc;
 use rune::{Align, Color, Cursor, Drag, El, GrowthSpec, Key, KeyEvent, Phase, ScrollSpec, TextStyle, Tx, col, el, icon, row, text};
 
 use crate::Kit;
+use crate::grip::Grip;
 
 /// Which way a column sorts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -192,7 +193,7 @@ pub struct TableState {
     widths: HashMap<String, f32>,
     /// Each column's laid-out width, for starting a drag.
     laid_out: HashMap<String, f32>,
-    resize_start: Option<Option<f32>>,
+    resize: Grip<ColumnDrag>,
     selected: HashSet<String>,
     cursor: Option<String>,
     /// Where the cursor's row was last seen, to find it again without a scan.
@@ -218,7 +219,7 @@ impl TableState {
             sort: None,
             widths: HashMap::new(),
             laid_out: HashMap::new(),
-            resize_start: None,
+            resize: Grip::Idle,
             selected: HashSet::new(),
             cursor: None,
             cursor_hint: std::cell::Cell::new(0),
@@ -756,6 +757,11 @@ fn header_row<S: 'static>(
     h
 }
 
+/// A drag on a column's edge: the width a cancel puts back (`None`: none of its own), and the
+/// width it started from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ColumnDrag { restore: Option<f32>, from: f32 }
+
 /// The drag target on a header cell's right edge: a hairline that widens the column as it's
 /// dragged, clamped to its bounds. A double click puts the column back.
 fn resize_handle<S: 'static>(c: TableColumn, get_mut: fn(&mut S) -> &mut TableState, rule: Color, last: bool) -> El {
@@ -773,20 +779,18 @@ fn resize_handle<S: 'static>(c: TableColumn, get_mut: fn(&mut S) -> &mut TableSt
             let st = get_mut(s);
             match d.phase {
                 Phase::Down => {
-                    st.resize_start = Some(st.column_width(&id));
-                    d.data = st.column_width(&id).or_else(|| st.laid_out.get(&id).copied()).unwrap_or(c.min);
+                    let (restore, laid_out) = (st.column_width(&id), st.laid_out.get(&id).copied());
+                    st.resize.press(ColumnDrag { restore, from: restore.or(laid_out).unwrap_or(c.min) }, Some(d.window_point()));
                 }
-                Phase::Move | Phase::Up => {
-                    if d.cancelled() {
-                        match st.resize_start.take().flatten() {
-                            Some(w) => st.set_column_width(id.clone(), w),
-                            None => st.reset_column_width(&id),
-                        }
-                    } else {
-                        st.set_column_width(id.clone(), c.clamp(d.data + d.dx));
-                        if d.phase == Phase::Up { st.resize_start = None; }
-                    }
-                }
+                Phase::Move => if let Some(drag) = st.resize.moved(d.window_point()).copied() {
+                    st.set_column_width(id.clone(), c.clamp(drag.from + d.dx));
+                },
+                Phase::Up => match st.resize.release() {
+                    Some(ColumnDrag { restore: Some(w), .. }) if d.cancelled() => st.set_column_width(id.clone(), w),
+                    Some(_) if d.cancelled() => st.reset_column_width(&id),
+                    Some(drag) => st.set_column_width(id.clone(), c.clamp(drag.from + d.dx)),
+                    None => {}
+                },
             }
         })
         .on_double_press(move |s: &mut S| get_mut(s).reset_column_width(&reset))
