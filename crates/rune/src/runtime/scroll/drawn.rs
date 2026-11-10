@@ -52,7 +52,10 @@ impl PixelHold {
             return (drawn, PixelHold::Holding { drawn, dir });
         }
         let dir = if rounded == drawn { dir } else { step };
-        (rounded, PixelHold::Stepping { drawn: rounded, dir, pinned })
+        // A frame that drew no step keeps the mode that last stepped: pinning while the end
+        // holds still doesn't make the gesture's direction the settle's.
+        let stepped_pinned = if rounded == drawn { stepped_pinned } else { pinned };
+        (rounded, PixelHold::Stepping { drawn: rounded, dir, pinned: stepped_pinned })
     }
 }
 
@@ -80,6 +83,19 @@ mod tests {
         let carried = PixelHold::Stepping { drawn: 100.0, dir: -1, pinned: false };
         let (at, next) = carried.draw(100.006, 100.0, true, 2.0);
         assert_eq!(at, grid(100.006, 2.0), "the step drew, not held");
+        assert_eq!(next, PixelHold::Stepping { drawn: grid(100.006, 2.0), dir: 1, pinned: true });
+    }
+
+    #[test]
+    fn a_stationary_pinned_frame_keeps_the_mode_that_stepped() {
+        // The end pins and holds still for a frame before the content moves. That frame drew no
+        // step, so it can't relabel the gesture's direction as the settle's.
+        let carried = PixelHold::Stepping { drawn: 100.0, dir: -1, pinned: false };
+        let (still, next) = carried.draw(100.0, 100.0, true, 2.0);
+        assert_eq!(still, 100.0);
+        assert_eq!(next, PixelHold::Stepping { drawn: 100.0, dir: -1, pinned: false });
+        let (at, next) = next.draw(100.006, 100.0, true, 2.0);
+        assert_eq!(at, grid(100.006, 2.0), "the first real step drew, not held");
         assert_eq!(next, PixelHold::Stepping { drawn: grid(100.006, 2.0), dir: 1, pinned: true });
     }
 
