@@ -1046,7 +1046,7 @@ fn pill_edge_cases_words_lines_bidi_and_direct_text_mutation() {
     m.set_caret(0);
     m.toggle_mark(Mark::Pill("x".into()));
     m.set_mark(Mark::Pill("x".into()));
-    assert!(m.pending.is_none());
+    assert_eq!(m.typing, Typing::Inherited);
     m.set_selection(2, 10);
     m.set_mark(Mark::Pill("agent:y".into()));
     assert_eq!(pills_of(&m), [(2..10, "agent:y".to_owned())]);

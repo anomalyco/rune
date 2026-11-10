@@ -220,7 +220,7 @@ impl<S: 'static> Runtime<S> {
                 let e = access(states!(self));
                 e.set_single_line(single);
                 e.break_history_group();
-                e.clear_pending();
+                e.clear_typing_style();
                 if e.preedit().is_some() {
                     self.input_click.clear();
                     one.instant = true;

@@ -29,6 +29,8 @@ pub use model::{Block, MAX_LIST_LEVEL, Mark, MarkRange, ParagraphInfo, RichStyle
 mod secure;
 pub(crate) use secure::{MULTILINE_SECURE_MASK, Masking};
 use secure::LineMode;
+mod typing;
+use typing::Typing;
 pub(crate) use history::History;
 use history::{ActiveGroup, EditKind, EditedTag};
 
@@ -46,8 +48,8 @@ pub struct TextEdit {
     /// Line indices (`> 0`) created by `Shift+Return` (`<br>`): indented with their block,
     /// without starting a new list marker or incrementing list numbering.
     pub(crate) soft_breaks: Vec<u32>,
-    /// Pending typing style armed at `(anchor, focus)` when toggling marks on an empty selection.
-    pending: Option<((usize, usize), Vec<Mark>)>,
+    /// The style the next typed text takes: a mark toggled on an empty selection arms it.
+    typing: Typing,
     history: Arc<History>,
     /// Set inside [`TextEdit::undo_group`]: edits record nothing until the outermost group ends.
     group: ActiveGroup,
@@ -103,7 +105,7 @@ impl std::hash::Hash for TextEdit {
             self.blocks.hash(h);
         }
         self.soft_breaks.hash(h);
-        self.pending.hash(h);
+        self.typing.hash(h);
         self.secure.hash(h);
         self.revealed.hash(h);
         self.is_single_line().hash(h);
@@ -151,7 +153,7 @@ impl TextEdit {
             marks: Vec::new(),
             blocks: vec![Block::Paragraph; line_count],
             soft_breaks: Vec::new(),
-            pending: None,
+            typing: Typing::Inherited,
             history: Arc::default(),
             group: ActiveGroup::default(),
             secure: false,
@@ -260,7 +262,7 @@ impl TextEdit {
 
     /// No marks, pending style or non-paragraph blocks: draws exactly as plain text.
     pub(crate) fn is_plain(&self) -> bool {
-        self.marks.is_empty() && self.pending.is_none() && self.blocks.iter().all(|&b| b == Block::Paragraph)
+        self.marks.is_empty() && self.typing == Typing::Inherited && self.blocks.iter().all(|&b| b == Block::Paragraph)
     }
 
     /// Parse an HTML fragment (`<b>`, `<strong>`, `<i>`, `<em>`, `<u>`, `<s>`, `<del>`, `<strike>`,
@@ -383,8 +385,8 @@ impl TextEdit {
         self.composition.cancel();
     }
 
-    pub(crate) fn clear_pending(&mut self) {
-        self.pending = None;
+    pub(crate) fn clear_typing_style(&mut self) {
+        self.typing = Typing::Inherited;
     }
 
     /// Replace the whole draft and discard its history, preserving focus and password mode.
@@ -398,7 +400,7 @@ impl TextEdit {
         self.marks.clear();
         self.blocks = vec![Block::Paragraph; line_count];
         self.soft_breaks.clear();
-        self.pending = None;
+        self.typing = Typing::Inherited;
         self.cancel_composition();
         self.edited_tag = EditedTag(false);
         self.history = Arc::default();
@@ -458,7 +460,7 @@ impl TextEdit {
         self.anchor = b;
         self.focus = b;
         self.snap_to_pills();
-        self.pending = None;
+        self.typing = Typing::Inherited;
     }
 
     /// Set the selection `anchor` and `focus` byte indices (clamped to character boundaries of
@@ -468,7 +470,7 @@ impl TextEdit {
         self.anchor = Self::clamp_char_boundary(&self.text, anchor);
         self.focus = Self::clamp_char_boundary(&self.text, focus);
         self.snap_to_pills();
-        self.pending = None;
+        self.typing = Typing::Inherited;
     }
 
     /// The [`Mark::Pill`]s in `self.text`, in order, with their byte ranges and ids.
@@ -563,7 +565,7 @@ impl TextEdit {
         let a = Self::clamp_char_boundary(&self.text, range.start.min(range.end));
         let b = Self::clamp_char_boundary(&self.text, range.end.max(range.start));
         let (a, b) = self.cover_pills(a, b);
-        self.pending = None;
+        self.typing = Typing::Inherited;
         self.apply_text_and_attr_replace((a, b), &label, &[], None, false);
         // Code blocks keep no inline marks: there the label stays plain text.
         self.marks.push(MarkRange { start: a, end: a + label.len(), mark: Mark::Pill(id.into()) });
@@ -854,7 +856,7 @@ impl TextEdit {
         let (a, b) = self.cover_pills(a, b);
         if kind == EditKind::Other { self.break_history_group(); }
         if &self.text[a..b] == s
-            && self.pending.is_none()
+            && self.typing == Typing::Inherited
             && !self.marks.iter().any(|m| m.mark.is_pill() && m.start < b && a < m.end)
         {
             self.anchor = a + s.len();
@@ -865,11 +867,9 @@ impl TextEdit {
         }
         let before = self.snapshot();
         let inserted_marks: Vec<Mark> = if s.is_empty() {
-            self.pending = None;
+            self.typing = Typing::Inherited;
             Vec::new()
-        } else if let Some((armed, p)) = self.pending.take()
-            && armed == (self.anchor, self.focus)
-        {
+        } else if let Some(p) = self.typing.take_at((self.anchor, self.focus)) {
             p
         } else if a < b {
             // Replacing a selection inherits marks that covered the first character of the selection.

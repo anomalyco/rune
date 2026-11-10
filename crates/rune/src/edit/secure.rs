@@ -60,7 +60,7 @@ impl TextEdit {
             self.marks.clear();
             self.blocks.clear();
             self.soft_breaks.clear();
-            self.pending = None;
+            self.typing = Typing::Inherited;
             self.cancel_composition();
         } else if self.group.0 == Some(None) {
             self.sync_invariants();
