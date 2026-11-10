@@ -1,0 +1,1 @@
+- rune-kit: `Markdown::code_link` makes inline code that names something to open a link, drawn in its own colour without the code chip and underlined under the pointer, as Desktop's Markdown draws a path to a file that exists.

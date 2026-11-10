@@ -15,6 +15,8 @@ pub(super) struct Renderer {
     pub(super) on_task: Option<TaskWire>,
     pub(super) tasks_read_only: bool,
     pub(super) link_ring: Option<LinkRing>,
+    /// `Markdown::code_link`.
+    pub(super) code_link: Option<CodeLink>,
     pub(super) selectable: bool,
     /// `Markdown::scroll_wide`.
     pub(super) scroll_wide: bool,
@@ -214,6 +216,7 @@ fn tabbed(code: &str, mut spans: Vec<Span>, mut highlights: Vec<TextHighlight>, 
 
 impl Renderer {
     pub(super) fn spans(&self, inl: &Inline, font: TextStyle) -> Vec<Span> {
+        let inl = &*self.with_code_links(inl);
         let s = &self.s;
         let base = font.size;
         let links: Vec<Span> = if inl.links.is_empty() {
@@ -239,6 +242,12 @@ impl Renderer {
             // Code in a link is a chip in the link's colour, not underlined as well.
             let no_line = in_link.is_some_and(|l| l.underline.is_some()).then_some(Color::TRANSPARENT);
             match st {
+                Style::Code if self.code_link_color(a, b, inl).is_some() => {
+                    sp.mono = true;
+                    sp.weight = Some(s.inline_code_weight);
+                    sp.size = Some(base * s.inline_code_scale);
+                    sp.color = self.code_link_color(a, b, inl);
+                }
                 Style::Code => {
                     let link_base = in_link.and_then(|l| l.size).unwrap_or(base);
                     sp.mono = true;
