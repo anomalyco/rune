@@ -148,33 +148,49 @@ impl Phase {
 pub struct Heat {
     pub attack: f32,
     pub cool: f32,
-    /// (time switched, heat at that time, on?)
-    last: (f32, f32, bool),
+    switch: Switch,
+}
+
+/// How a [`Heat`] was last switched: at time `since`, from heat `from`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Switch {
+    /// Cooling exponentially toward 0.
+    Off { since: f32, from: f32 },
+    /// Warming over `attack` to 1, then holding there.
+    On { since: f32, from: f32 },
 }
 
 impl Heat {
     pub fn new(attack: f32, cool: f32) -> Heat {
-        Heat { attack, cool, last: (0.0, 0.0, false) }
+        Heat { attack, cool, switch: Switch::Off { since: 0.0, from: 0.0 } }
     }
     pub fn set(&mut self, t: f32, on: bool) {
-        if on != self.last.2 {
-            self.last = (t, self.at(t), on);
-        }
+        self.switch = match (self.switch, on) {
+            (Switch::Off { .. }, true) => Switch::On { since: t, from: self.at(t) },
+            (Switch::On { .. }, false) => Switch::Off { since: t, from: self.at(t) },
+            (unchanged, _) => unchanged,
+        };
     }
     pub fn at(&self, t: f32) -> f32 {
-        let (t0, h0, on) = self.last;
-        let dt = (t - t0).max(0.0);
-        if on {
-            let k = (dt / self.attack.max(1e-3)).min(1.0);
-            let e = 1.0 - (1.0 - k).powi(3);
-            h0 + (1.0 - h0) * e
-        } else {
-            h0 * (-dt / self.cool.max(1e-3)).exp()
+        match self.switch {
+            Switch::On { since, from } => {
+                let k = ((t - since).max(0.0) / self.attack()).min(1.0);
+                let e = 1.0 - (1.0 - k).powi(3);
+                from + (1.0 - from) * e
+            }
+            Switch::Off { since, from } => from * (-(t - since).max(0.0) / self.cool.max(1e-3)).exp(),
         }
     }
-    /// Lit enough to keep ticking frames.
+    /// Still changing, so worth ticking frames for: warming up, or not yet cooled to nothing.
+    /// A light that has finished warming holds still.
     pub fn is_active(&self, t: f32) -> bool {
-        self.last.2 || self.at(t) > 1.0 / 512.0
+        match self.switch {
+            Switch::On { since, .. } => t < since + self.attack(),
+            Switch::Off { .. } => self.at(t) > 1.0 / 512.0,
+        }
+    }
+    fn attack(&self) -> f32 {
+        self.attack.max(1e-3)
     }
 }
 
