@@ -27,6 +27,7 @@ impl<S: 'static> Runtime<S> {
         i: usize,
         b: LeafBox,
         sel_ranges: &[(usize, usize, usize)],
+        mark_ranges: &[(usize, usize, usize)],
         glyph_count: &mut usize,
     ) {
         let s = self.env.scale;
@@ -415,6 +416,16 @@ impl<S: 'static> Runtime<S> {
                     let inst = icon_inst(&q, at, drawn, 0.0, premul(pill.fg.unwrap_or(color), o, srgb), clip, fade);
                     if self.paint_rank.is_some() && inst.uv[2] > 0.0 { self.icon_aprons.push(apron_key(&inst)); }
                     self.instances.push(inst);
+                }
+            }
+            if spec.selectable {
+                // A mark keeps the active selection's highlight, whatever the window's focus, and
+                // the glyphs their own ink, as a custom highlight's background does.
+                let highlight = spec.selection_style.map_or(spec.selection, |st| st.pick(true).0);
+                let fill = premul(highlight, o, srgb);
+                for &(_, a, b) in mark_ranges.iter().filter(|m| m.0 == i) {
+                    let laid = |a, b| n.elided.map_or((a, b), |e| e.range(a, b));
+                    text_marks::push_mark(&mut self.instances, layout, &spec.content, (a, b), laid, origin, tk, fill, clip, fade);
                 }
             }
             if spec.selectable && let Some((a, b)) = selectable::range_in(sel_ranges, i) {

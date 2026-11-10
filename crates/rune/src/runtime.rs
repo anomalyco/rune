@@ -136,6 +136,9 @@ mod visible;
 mod links;
 #[path = "runtime/selection/selectable.rs"]
 pub(crate) mod selectable;
+#[path = "runtime/selection/text_marks.rs"]
+mod text_marks;
+pub use text_marks::TextMark;
 #[path = "runtime/selection/click.rs"]
 mod input_click;
 #[path = "runtime/input/help.rs"]

@@ -39,6 +39,8 @@ pub struct SelectedText {
     pub(super) len: usize,
     pub(super) whole: bool,
     pub(super) text: String,
+    /// The selected bytes of the content, as drawn.
+    pub(super) content: String,
 }
 
 impl SelectedText {
@@ -60,6 +62,11 @@ impl SelectedText {
     pub fn is_whole(&self) -> bool { self.whole }
     /// The selected part as copying takes it.
     pub fn text(&self) -> &str { &self.text }
+    /// The selected part as a [`TextMark`](crate::TextMark), to paint it as selected after the
+    /// selection has gone ([`Cx::mark_texts`](crate::Cx::mark_texts)). Only for a selection
+    /// whose paths are whole ([`Tx::text_selection`](crate::Tx::text_selection),
+    /// [`El::on_selection_change`](crate::El::on_selection_change)).
+    pub fn mark(&self) -> crate::TextMark { crate::TextMark::new(self.path.clone(), self.range.clone(), self.content.clone()) }
 }
 
 /// What an [`El::on_selection_change`](crate::El::on_selection_change) element hears.

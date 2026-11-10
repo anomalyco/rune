@@ -161,7 +161,7 @@ impl<S: 'static> Measurement<'_, S> {
             nodes,
             reduced_motion: self.reduced_motion,
             time_scale: self.time_scale,
-            defaults: self.defaults,
+            defaults: self.defaults.clone(),
             titlebar: self.titlebar,
             caret_read: self.caret_read,
             layout_reads: self.layout_reads,
