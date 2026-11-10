@@ -281,7 +281,7 @@ impl<S: 'static> Runtime<S> {
     fn a11y_stamp(&self) -> Stamp {
         let mut scrolls = 0u64;
         for (id, s) in &self.scrolls {
-            scrolls = scrolls.wrapping_add(id.0.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (s.drawn[0].to_bits() as u64) << 32 ^ s.drawn[1].to_bits() as u64);
+            scrolls = scrolls.wrapping_add(id.0.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (s.drawn_x.to_bits() as u64) << 32 ^ s.drawn.y().to_bits() as u64);
         }
         let focus = self.focus.path().map_or(0, hash_str) ^ self.link_focus().map_or(0, |k| k as u64 + 1) << 48;
         Stamp {
@@ -324,7 +324,7 @@ impl<S: 'static> Runtime<S> {
             let up = n.parent.map(|p| walk[p]).unwrap_or_default();
             let mut w = Walk { slot: up.slot, gone: up.gone, shift: up.shift, scrolled: up.scrolled };
             if let Some(p) = n.parent && let Some(st) = self.scrolls.get(&self.nodes[p].id) {
-                let [x, y] = self.content_to_window(p, st.drawn);
+                let [x, y] = self.content_to_window(p, [st.drawn_x, st.drawn.y()]);
                 w.shift = [w.shift[0] + x, w.shift[1] + y];
                 w.scrolled = true;
             }

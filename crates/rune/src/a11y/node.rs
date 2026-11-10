@@ -81,7 +81,7 @@ impl<S: 'static> Runtime<S> {
         (self.allowed(i), self.can_focus(i), n.inert).hash(&mut h);
         if let Some(st) = self.scrolls.get(&n.id).filter(|_| n.scroll.is_some()) {
             [st.offset.to_bits(), st.max.to_bits(), st.x.offset.to_bits(), st.x.max.to_bits()].hash(&mut h);
-            st.drawn.map(f32::to_bits).hash(&mut h);
+            [st.drawn_x, st.drawn.y()].map(f32::to_bits).hash(&mut h);
         }
         // Its box in its viewport's content space, which scrolling leaves alone.
         let r = rect(self.drawn[i], w.shift);
@@ -189,7 +189,7 @@ impl<S: 'static> Runtime<S> {
         // Bounds: a scroll viewport's own box sits in the space its offset moves.
         let mut shift = w.shift;
         if let Some(st) = scroll {
-            let [x, y] = self.content_to_window(i, st.drawn);
+            let [x, y] = self.content_to_window(i, [st.drawn_x, st.drawn.y()]);
             shift = [shift[0] + x, shift[1] + y];
             node.set_transform(Affine::translate((-f64::from(x), -f64::from(y))));
             node.set_clips_children();

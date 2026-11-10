@@ -268,7 +268,7 @@ impl<S: 'static> Runtime<S> {
                         None => at.map_or(v, |at| self.content_to_window(at, v)),
                     };
                     if j != i && let Some(st) = self.scrolls.get(&self.nodes[j].id) {
-                        let [x, y] = to_window(Some(j), st.drawn);
+                        let [x, y] = to_window(Some(j), [st.drawn_x, st.drawn.y()]);
                         scrolled = [scrolled[0] + x, scrolled[1] + y];
                     }
                     // A launch, and what it carries, leaves under the offsets it launched against

@@ -171,6 +171,9 @@ mod live_latch;
 mod loop_clock;
 #[path = "runtime/motion/rewind.rs"]
 mod rewind_record;
+#[path = "runtime/scroll/drawn.rs"]
+mod scroll_drawn;
+use scroll_drawn::PixelHold;
 #[path = "runtime/scroll/watch.rs"]
 mod scroll_watch;
 #[doc(hidden)]
