@@ -31,7 +31,7 @@ impl<S: 'static> Runtime<S> {
             return;
         }
         if let Some(held) = self.press.held_mut() {
-            held.moved |= (x - at.0).abs() > CLICK_SLOP || (y - at.1).abs() > CLICK_SLOP;
+            held.moved |= !press_run::within_slop(at, (x, y));
         }
         self.selection_drag(x, y);
         if self.input_click.captured {
@@ -230,8 +230,7 @@ impl<S: 'static> Runtime<S> {
         let n = &self.nodes[ti];
         let clicks = self.press_clicks.press(&n.path, now, (x, y), self.double_click_interval);
         let second = n.handlers.on_double_press.is_some() && pending.is_some_and(|first| {
-            first.path == n.path && now - first.at <= self.double_click_interval
-                && (x - first.point.0).abs() <= CLICK_SLOP && (y - first.point.1).abs() <= CLICK_SLOP
+            first.path == n.path && press_run::follows(first.at, first.point, now, (x, y), self.double_click_interval)
         });
         if let Some(ji) = self.textbox_input(ti) {
             self.input_down(ji, x, y, now, second);

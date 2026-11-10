@@ -24,8 +24,8 @@ pub(super) struct Hit {
 
 #[derive(Default)]
 pub(super) struct InputClick {
-    /// The last non-Shift press on an input: `(path, time, window_x, window_y, clicks)`.
-    last: Option<(String, f64, f32, f32, u8)>,
+    /// The run of non-Shift presses on inputs.
+    presses: press_run::PressRun,
     /// What the press that started the current selection selects by, and the unit range it
     /// began on, which a drag keeps whole.
     unit: Unit,
@@ -44,13 +44,13 @@ impl InputClick {
     }
 
     pub(super) fn clear(&mut self) {
-        self.last = None;
+        self.presses.clear();
         self.captured = false;
         self.drop_drag();
     }
 
     pub(super) fn clear_last(&mut self) {
-        self.last = None;
+        self.presses.clear();
     }
 
     pub(super) fn drop_drag(&mut self) {
@@ -68,9 +68,7 @@ impl InputClick {
     }
 
     pub(super) fn on_focus_change(&mut self, focused: Option<&str>) {
-        if self.last.as_ref().is_some_and(|(p, ..)| Some(p.as_str()) != focused) {
-            self.last = None;
-        }
+        self.presses.keep_on(focused);
         if self.dragging.as_ref().is_some_and(|p| Some(p.as_str()) != focused) {
             self.drop_drag();
         }
@@ -138,22 +136,10 @@ impl<S: 'static> Runtime<S> {
         let (ix, iy) = (lx - jn.inset[0], ly - jn.inset[1]);
         let r = jn.target;
         let clicks = if shift {
-            self.input_click.last = None;
+            self.input_click.presses.clear();
             1
         } else {
-            let n = match &self.input_click.last {
-                Some((p, t, px, py, n))
-                    if *p == path
-                        && now - t <= self.double_click_interval
-                        && (x - px).abs() <= CLICK_SLOP
-                        && (y - py).abs() <= CLICK_SLOP =>
-                {
-                    (n + 1).min(3)
-                }
-                _ => 1,
-            };
-            self.input_click.last = Some((path.clone(), now, x, y, n));
-            n
+            self.input_click.presses.press(&path, now, (x, y), self.double_click_interval).min(3) as u8
         };
         self.input_click.dragging = Some(path.clone());
         self.input_click.captured = true;
@@ -183,8 +169,8 @@ impl<S: 'static> Runtime<S> {
             return;
         }
         let Some(path) = self.input_click.dragging.clone() else { return };
-        if self.press.held().is_some_and(|h| (x - h.at.0).abs() > CLICK_SLOP || (y - h.at.1).abs() > CLICK_SLOP) {
-            self.input_click.last = None;
+        if self.press.held().is_some_and(|h| !press_run::within_slop(h.at, (x, y))) {
+            self.input_click.presses.clear();
         }
         let Some(ji) = self.nodes.iter().enumerate().position(|(i, n)| n.path == path && !self.subtree_exiting(i) && n.input.is_some()) else {
             self.input_click.drop_drag();

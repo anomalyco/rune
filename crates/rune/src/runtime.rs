@@ -203,8 +203,8 @@ mod secondary;
 pub(crate) mod field_menu;
 #[path = "runtime/input/app_ime.rs"]
 mod app_ime;
-#[path = "runtime/input/press_clicks.rs"]
-mod press_clicks;
+#[path = "runtime/input/press_run.rs"]
+mod press_run;
 #[path = "runtime/input/press_repeat.rs"]
 mod press_repeat;
 #[path = "runtime/input/titlebar.rs"]
@@ -790,7 +790,7 @@ pub struct Runtime<S: 'static> {
     /// (the shell sleeps until then instead of drawing every display frame).
     pub ambient: Option<f32>,
     /// The presses counted into `Drag::clicks`.
-    press_clicks: press_clicks::PressClicks,
+    press_clicks: press_run::PressRun,
     /// The held press's drag repeat (`Tx::drag_repeat_after`).
     press_repeat: press_repeat::PressRepeat,
     titlebar: titlebar::Titlebar,
