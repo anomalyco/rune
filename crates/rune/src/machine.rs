@@ -83,7 +83,13 @@ impl<E> Effects<E> {
 
     pub const fn two(a: E, b: E) -> Self { Self::Two(a, b) }
 
-    pub const fn is_empty(&self) -> bool { matches!(self, Self::None) }
+    pub const fn is_empty(&self) -> bool {
+        match self {
+            Self::None => true,
+            Self::Many(effects) => effects.is_empty(),
+            Self::One(_) | Self::Two(..) => false,
+        }
+    }
 
     /// Adds `e` after the effects already asked for.
     pub fn push(&mut self, e: E) {
@@ -135,3 +141,6 @@ impl<E> Iterator for EffectsIter<E> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
