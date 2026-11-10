@@ -110,18 +110,29 @@ impl std::fmt::Display for MenuError {
 }
 impl std::error::Error for MenuError {}
 
+/// Whether an App's window is running, and whether it runs with no native menu bar.
+enum Presence {
+    /// No window of the App runs: `set_menu` says NotRunning and a click goes nowhere.
+    Absent,
+    /// A window runs. Headless runs the menu actions on the state thread with no bar.
+    Running { headless: bool },
+}
+impl Presence {
+    fn running(&self) -> bool { matches!(self, Self::Running { .. }) }
+    fn headless(&self) -> bool { matches!(self, Self::Running { headless: true }) }
+}
+
 struct State<S> {
     items: Vec<MenuItem<S>>,
     /// Each new set of items is a new attempt: a click on an item from an earlier set, or a
-    /// guard that drained one, is stale.
+    /// guard that drained one, is stale. It is the version of `items`, so it outlives a run.
     revision: Seq,
-    running: bool,
-    headless: bool,
+    presence: Presence,
     errors: Vec<MenuError>,
 }
 pub(crate) struct Hub<S>(Mutex<State<S>>);
 impl<S> Default for Hub<S> {
-    fn default() -> Self { Self(Mutex::new(State { items: Vec::new(), revision: Seq::default(), running: false, headless: false, errors: Vec::new() })) }
+    fn default() -> Self { Self(Mutex::new(State { items: Vec::new(), revision: Seq::default(), presence: Presence::Absent, errors: Vec::new() })) }
 }
 
 fn validate<S>(items: &[MenuItem<S>]) -> Result<(), MenuError> {
@@ -156,8 +167,8 @@ impl<S: 'static> AppHandle<S> {
     pub fn set_menu(&self, items: impl IntoIterator<Item = MenuItem<S>>) -> Result<(), MenuError> {
         let items: Vec<_> = items.into_iter().collect();
         let mut state = self.shared.menus.0.lock().unwrap();
-        if !cfg!(target_os = "macos") && !state.headless { return Err(MenuError::Unsupported); }
-        if !state.running { return Err(MenuError::NotRunning); }
+        if !cfg!(target_os = "macos") && !state.presence.headless() { return Err(MenuError::Unsupported); }
+        if !state.presence.running() { return Err(MenuError::NotRunning); }
         validate(&items)?;
         state.items = items; state.revision.next();
         drop(state);
@@ -170,7 +181,7 @@ impl<S: 'static> AppHandle<S> {
 }
 
 fn lookup<S>(state: &State<S>, selector: &str) -> Result<usize, MenuError> {
-    if !state.running { return Err(MenuError::NotRunning); }
+    if !state.presence.running() { return Err(MenuError::NotRunning); }
     let items = state.items.iter().enumerate().filter(|(_, i)| !i.description.separator);
     let index = if let Some((index, _)) = items.clone().find(|(_, i)| i.description.id == selector) { index }
     else {
@@ -206,7 +217,7 @@ fn enqueue<S: 'static>(shared: &Arc<Shared<S>>, selector: &str, expected: Option
     AppHandle { shared: shared.clone() }.update(move |s, tx| {
         let Some(shared) = weak.upgrade() else { return };
         let state = shared.menus.0.lock().unwrap();
-        if !state.running || state.revision.current() != revision { return; }
+        if !state.presence.running() || state.revision.current() != revision { return; }
         let action = lookup(&state, &id).ok().map(|i| state.items[i].action);
         drop(state);
         if let Some(action) = action { action(s, tx); }
@@ -230,22 +241,30 @@ thread_local! {
 
 pub(crate) struct Guard<S: 'static> {
     shared: Weak<Shared<S>>,
-    /// The set of items it last put in the bar; `None` before its first drain or after
-    /// another App's items took the bar.
-    revision: Option<Attempt>,
+    /// Whether the bar holds this guard's items.
+    placed: Placed,
     /// This guard's name in `BAR`.
     #[cfg(target_os = "macos")]
     id: u64,
 }
+
+/// Where this guard's items stand: not in the bar yet, or the set it last put there.
+#[derive(Clone, Copy)]
+enum Placed {
+    /// Its first drain, or another App's window took the bar since.
+    Fresh,
+    /// The bar holds the items of this revision.
+    Synced(Attempt),
+}
 impl<S: 'static> Guard<S> {
     pub(crate) fn attach(shared: &Arc<Shared<S>>, headless: bool) -> Self {
         let mut state = shared.menus.0.lock().unwrap();
-        state.running = true; state.headless = headless;
+        state.presence = Presence::Running { headless };
         if let Err(error) = validate(&state.items) {
             state.items.clear(); state.errors.push(error);
         }
         drop(state);
-        let mut guard = Self { shared: Arc::downgrade(shared), revision: None,
+        let mut guard = Self { shared: Arc::downgrade(shared), placed: Placed::Fresh,
             #[cfg(target_os = "macos")] id: NEXT_GUARD.with(|n| n.replace(n.get() + 1)) };
         guard.drain();
         guard
@@ -257,7 +276,7 @@ impl<S: 'static> Guard<S> {
         {
             let Some(shared) = self.shared.upgrade() else { return };
             let state = shared.menus.0.lock().unwrap();
-            if state.headless || state.items.is_empty() { return; }
+            if state.presence.headless() || state.items.is_empty() { return; }
             drop(state);
             let taken = BAR.with(|bar| match &*bar.borrow() {
                 Bar::Owned { guard, .. } => *guard != self.id,
@@ -266,7 +285,7 @@ impl<S: 'static> Guard<S> {
             if taken {
                 // The previous holder's items leave with its `Native`, before this one's go in.
                 BAR.with(|bar| *bar.borrow_mut() = Bar::Free);
-                self.revision = None;
+                self.placed = Placed::Fresh;
                 self.drain();
             }
         }
@@ -274,8 +293,8 @@ impl<S: 'static> Guard<S> {
     pub(crate) fn drain(&mut self) {
         let Some(shared) = self.shared.upgrade() else { return };
         let state = shared.menus.0.lock().unwrap();
-        if self.revision == Some(state.revision.current()) { return; }
-        let (items, revision, headless) = (state.items.clone(), state.revision.current(), state.headless);
+        if matches!(self.placed, Placed::Synced(at) if at == state.revision.current()) { return; }
+        let (items, revision, headless) = (state.items.clone(), state.revision.current(), state.presence.headless());
         drop(state);
         let result = validate(&items).and_then(|()| {
             if headless { return Ok(()); }
@@ -318,7 +337,7 @@ impl<S: 'static> Guard<S> {
         if !headless && let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
             default_macos::relabel(&objc2_app_kit::NSApplication::sharedApplication(mtm));
         }
-        self.revision = Some(revision);
+        self.placed = Placed::Synced(revision);
         if let Err(error) = result {
             eprintln!("rune: {error}");
             shared.menus.0.lock().unwrap().errors.push(error);
@@ -329,7 +348,7 @@ impl<S: 'static> Drop for Guard<S> {
     fn drop(&mut self) {
         if let Some(shared) = self.shared.upgrade() {
             let mut state = shared.menus.0.lock().unwrap();
-            state.running = false; state.items.clear();
+            state.presence = Presence::Absent; state.items.clear();
         }
         // The bar waits for the next window to take focus (`claim`).
         #[cfg(target_os = "macos")]
