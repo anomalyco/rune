@@ -295,6 +295,7 @@ pub use runtime::Pose;
 pub use runtime::Runtime;
 pub use runtime::SelectedText;
 pub use runtime::SelectionChange;
+pub use runtime::TextMark;
 pub use runtime::TextSelection;
 pub use runtime::TitlebarAction;
 pub use runtime::TouchPhase;

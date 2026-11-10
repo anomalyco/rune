@@ -16,7 +16,7 @@ impl Default for Env {
 }
 
 /// What a view declares for the elements that don't style themselves.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ViewDefaults {
     /// [`Cx::foreground`].
     pub(crate) foreground: Option<Color>,
@@ -28,6 +28,8 @@ pub(crate) struct ViewDefaults {
     pub(crate) web_focus: bool,
     /// [`Cx::force_focus_rings`].
     pub(crate) force_focus_rings: bool,
+    /// [`Cx::mark_texts`].
+    pub(crate) marks: Rc<[super::TextMark]>,
 }
 
 /// Wakes the shell from another thread (new data arrived); a no-op headless.
@@ -75,7 +77,7 @@ impl<S> Cx<S> {
     pub fn retype<T>(&self) -> Cx<T> {
         Cx {
             env: self.env, titlebar_inset: self.titlebar_inset, chrome: self.chrome, caption_color: self.caption_color,
-            defaults: self.defaults,
+            defaults: self.defaults.clone(),
             titlebar: self.titlebar,
             system_accent: self.system_accent,
             system_scroll_bars: self.system_scroll_bars,

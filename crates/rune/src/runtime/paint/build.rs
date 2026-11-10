@@ -53,6 +53,7 @@ impl<S: 'static> Runtime<S> {
             self.sticky_frame.resize(n_nodes, sticky::UNBOUNDED);
         }
         let sel_ranges = self.selection_ranges();
+        let mark_ranges = self.mark_ranges();
         self.ime_area = None;
         let now = self.t;
         let vp = [0.0, 0.0, self.viewport.0 * s, self.viewport.1 * s];
@@ -85,7 +86,7 @@ impl<S: 'static> Runtime<S> {
             self.dissolve_scratch[parent] |= opacity > 0.001 && opacity < 1.0;
         }
 
-        let paint_state_hash = self.prepare_cache_layers(&sel_ranges);
+        let paint_state_hash = self.prepare_cache_layers(&sel_ranges, &mark_ranges);
 
         self.place_growth_rows();
 
@@ -1143,6 +1144,7 @@ impl<S: 'static> Runtime<S> {
                         caret: input_caret.map(|(caret, _)| caret),
                     },
                     &sel_ranges,
+                    &mark_ranges,
                     &mut glyph_count,
                 );
             }

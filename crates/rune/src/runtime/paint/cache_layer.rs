@@ -37,7 +37,7 @@ pub(super) struct ActiveCache {
 }
 
 impl<S: 'static> Runtime<S> {
-    pub(super) fn prepare_cache_layers(&mut self, sel_ranges: &[(usize, usize, usize)]) -> u64 {
+    pub(super) fn prepare_cache_layers(&mut self, sel_ranges: &[(usize, usize, usize)], mark_ranges: &[(usize, usize, usize)]) -> u64 {
         let (s, n_nodes) = (self.env.scale, self.nodes.len());
         self.cache_live_scratch.clear();
         self.cache_check_scratch.clear();
@@ -64,6 +64,7 @@ impl<S: 'static> Runtime<S> {
             if !sel_ranges.is_empty() {
                 self.window_focused.hash(&mut h);
             }
+            mark_ranges.hash(&mut h);
             let mut scroll_mix = 0u64;
             for (&id, st) in &self.scrolls {
                 let mut sh = rune_motion::Fx::default();
