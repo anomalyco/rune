@@ -1,0 +1,1 @@
+- **rune-kit `DiffState::set_files` ends a press on the line numbers along with the selection:** a gutter drag that was cancelled after the files changed used to bring back the selection from before the press, a range into the old files. The press is now one state that holds the selection to restore, so new files clear both.
