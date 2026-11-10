@@ -86,7 +86,7 @@ impl<S: 'static> Runtime<S> {
             key_warnings: &mut self.key_warnings,
             focused: self.focus.path(),
             state_unchanged: std::mem::take(&mut self.state_unchanged),
-            retry: false,
+            pass: Pass::First,
             hold_windows,
         }
     }
@@ -191,12 +191,12 @@ impl<S: 'static> Measurement<'_, S> {
     pub(super) fn finish_from(mut self, tx: &Tx, mut passes: usize) -> Measured {
         let (layout, nodes, memo_pending, memo_reused, taken_paths) = loop {
             passes += 1;
-            self.retry = passes > 1;
+            self.pass = Pass::of(passes);
             self.virtual_culled.clear();
             self.virtual_inputs.clear();
             // Degenerate zero-height runs fall back to a full measurement instead of
             // an unbounded retry loop. Normal transcripts need one pass.
-            let (layout, mut nodes, pending, mut reused, mut taken) = self.measure_view(tx, passes > 8);
+            let (layout, mut nodes, pending, mut reused, mut taken) = self.measure_view(tx, self.pass.forced());
             if !self.measure_virtuals(&nodes, tx.settle) { break (layout, nodes, pending, reused, taken); }
             memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused, &taken);
             nodes.clear();
@@ -268,7 +268,7 @@ impl<S: 'static> Measurement<'_, S> {
             v.set_estimate(estimate);
             v.scroll_path = scroll_path.to_owned();
             // A retry keeps the viewport the last pass measured; `self.nodes` is the last commit's.
-            if !self.retry { v.viewport = height; }
+            if self.pass.trusts_estimates() { v.viewport = height; }
             offset = (offset - v.top).max(0.0);
             let el_pad = el.style.padding();
             v.pad_top = padding(el_pad.top);
@@ -330,12 +330,12 @@ impl<S: 'static> Measurement<'_, S> {
             // Rows new since the last commit spread over frames, unless this pass is a retry to
             // fill the viewport or a settle. A list's first showing is all new rows: it mounts
             // its viewport and a budget of overscan, and the rest fills over the next frames.
-            let budget = v.indexed && !self.retry && !tx.settle;
+            let budget = v.indexed && self.pass.spreads_rows() && !tx.settle;
             let shown = std::mem::take(&mut v.shown);
             // A live-only check's commit keeps the rows mounted now while they still cover the
             // viewport, as skipping the commit would: re-picking the overscan for a viewport that
             // changed since would build rows the handler had nothing to do with.
-            if self.hold_windows && same && !self.retry && !force_all && !v.needs_window(offset, pinned) {
+            if self.hold_windows && same && self.pass.spreads_rows() && !force_all && !v.needs_window(offset, pinned) {
                 v.hold(offset, pinned);
             } else {
                 v.select(offset, pinned, budget.then_some(&shown));
@@ -539,7 +539,7 @@ impl<S: 'static> Measurement<'_, S> {
             v.selection.source = Some(rows);
         } else {
             v.selection.source = None;
-            if !self.retry && el.cold.focus.reveal_selected {
+            if self.pass.reveals() && el.cold.focus.reveal_selected {
                 let selected = el.children.iter().find(|c| c.cold.focus.selected).and_then(|c| c.key.clone());
                 if selected != v.selected_row {
                     v.reveal_selected = selected.clone();

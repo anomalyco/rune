@@ -3,6 +3,48 @@ use super::*;
 
 pub(super) mod remount;
 
+/// Which measurement pass a commit is on. The first pass trusts the last commit's geometry; a
+/// retry measures again because a virtual window fell short; past eight retries the pass is
+/// forced, mounting every row so a degenerate transcript can't loop forever.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Pass {
+    First,
+    Retry { n: u8 },
+    Forced,
+}
+
+impl Pass {
+    /// The pass number `finish_from` counts to.
+    pub(super) fn of(passes: usize) -> Self {
+        match passes {
+            0 | 1 => Self::First,
+            n if n > 8 => Self::Forced,
+            n => Self::Retry { n: u8::try_from(n).unwrap_or(u8::MAX) },
+        }
+    }
+
+    /// The last commit's measured viewport still stands; a retry keeps the one the last pass found.
+    pub(super) fn trusts_estimates(self) -> bool {
+        matches!(self, Self::First)
+    }
+
+    /// Newly mounted rows may spread over the next frames. A retry builds what the viewport
+    /// needs now, and keeps the rows a live-only check already has mounted.
+    pub(super) fn spreads_rows(self) -> bool {
+        matches!(self, Self::First)
+    }
+
+    /// A newly selected row may be revealed. A retry would only fight the estimate it is fixing.
+    pub(super) fn reveals(self) -> bool {
+        matches!(self, Self::First)
+    }
+
+    /// Every row mounts, whatever the window says.
+    pub(super) fn forced(self) -> bool {
+        matches!(self, Self::Forced)
+    }
+}
+
 /// Measurement capabilities: text/layout caches and virtual geometry only. In particular this
 /// type has no Scene, growth tracks, reveal tracks, draw instances, or mutable app state.
 pub(super) struct Measurement<'a, S: 'static> {
@@ -46,8 +88,9 @@ pub(super) struct Measurement<'a, S: 'static> {
     pub(super) focused: Option<&'a str>,
     /// True when `self.state` was not mutated since the previous commit.
     pub(super) state_unchanged: bool,
-    /// Whether this pass measures again because estimates left part of a viewport blank.
-    pub(super) retry: bool,
+    /// Which pass this is: the first, a retry after estimates left part of a viewport blank, or
+    /// the forced full measurement that ends a runaway retry.
+    pub(super) pass: Pass,
     /// This commit is a live-only check's: virtual lists keep the rows they mount now.
     pub(super) hold_windows: bool,
     pub(super) caret: Option<(String, [f32; 4])>,

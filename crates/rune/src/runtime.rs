@@ -385,7 +385,7 @@ use types::{AxisScroll, GlideTo, Inh, NodeCold, RevealState, RowLayout, ScaleMot
 mod tracks;
 use tracks::{SCROLL_DECAY, mark_ancestors, scroll_offsets, word_starts};
 mod commit;
-use commit::{Measured, Measurement, unwrapped_width};
+use commit::{Measured, Measurement, Pass, unwrapped_width};
 
 pub struct Runtime<S: 'static> {
     pub state: S,
