@@ -16,9 +16,8 @@ fn view(s: &S, _: &mut Cx<S>) -> El {
         .child(el().key("title").absolute(10.0, s.y).size(100.0, 20.0).fill(crate::Color::WHITE))
         .child(el().key("still").absolute(200.0, 200.0).size(40.0, 40.0).fill(crate::Color::WHITE));
     el().size(400.0, 300.0)
-        .child(app.time_scale(if s.scrub.is_open() { 0.0 } else { 1.0 }))
         .child(el().absolute(s.inset, s.inset).size(400.0 - s.inset, 300.0 - s.inset)
-            .child(s.scrub.view(|s: &mut S| &mut s.scrub, |s: &mut S, sent: Sent, _: &mut Tx| s.sent.push(sent))))
+            .child(s.scrub.stage(app, |s: &mut S| &mut s.scrub, |s: &mut S, sent: Sent, _: &mut Tx| s.sent.push(sent))))
 }
 
 fn app(rewind: Rewind) -> Runtime<S> {
@@ -176,7 +175,9 @@ fn freezing_pauses_recording_and_the_keys_step_select_and_resume() {
     frames(&mut rt, 5);
     assert_eq!(rewind.frames(), held, "nothing records while frozen");
     assert!(matches!(rt.state.scrub.key(&press(Key::Escape, false)), Keyed::Closed));
-    assert!(!rt.state.scrub.is_open() && !rewind.is_paused());
+    assert!(!rt.state.scrub.is_open() && rewind.is_paused(), "the step back isn't recorded");
+    rt.update(|s, tx| { s.scrub.settle(); s.scrub.poll(0.0, tx); });
+    assert!(!rewind.is_paused());
     frames(&mut rt, 5);
     assert_eq!(rewind.frames(), held + 5);
 }
@@ -188,13 +189,15 @@ fn the_scrubber_draws_the_moved_element_and_sends_from_its_button() {
     frames(&mut rt, 5);
     jump(&mut rt, 30.0);
     frames(&mut rt, 5);
-    rt.update(|s, _| { let r = s.rewind.clone(); s.scrub.open(&r); s.scrub.set_note("title jumps"); });
-    rt.frame(1.0 / 60.0);
+    rt.update(|s, _| { let r = s.rewind.clone(); s.scrub.open(&r); s.scrub.settle(); s.scrub.set_note("title jumps"); });
+    frames(&mut rt, 60);
     let els = rt.elements();
     let find = |key: &str| els.iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("no {key}")).rect;
     let id = rt.state.scrub.clip().unwrap().changes(rt.state.scrub.frame())[0].id;
-    assert_eq!(find(&format!("rewind-box-{id}")), [10.0, 30.0, 100.0, 20.0]);
-    assert_eq!(find(&format!("rewind-was-{id}")), [10.0, 0.0, 100.0, 20.0]);
+    let (box_, title) = (find(&format!("rewind-box-{id}")), find("title"));
+    assert!(box_.iter().zip(title).all(|(a, b)| (a - b).abs() < 0.01), "the outline sits on the title: {box_:?} {title:?}");
+    let was = find(&format!("rewind-was-{id}"));
+    assert!(was[1] < box_[1] && was[2] == box_[2], "its old place is above: {was:?}");
     assert!(els.iter().any(|e| e.key.as_deref().is_some_and(|k| k.starts_with("rewind-bin-"))), "the track lights up");
     let (x, y) = rt.find("rewind-send").unwrap();
     rt.pointer_down(x, y);
@@ -212,11 +215,12 @@ fn a_scrubber_on_an_inset_stage_still_outlines_where_the_window_drew() {
     frames(&mut rt, 5);
     jump(&mut rt, 30.0);
     frames(&mut rt, 5);
-    rt.update(|s, _| { let r = s.rewind.clone(); s.scrub.open(&r); });
-    frames(&mut rt, 2);
+    rt.update(|s, _| { let r = s.rewind.clone(); s.scrub.open(&r); s.scrub.settle(); });
+    frames(&mut rt, 60);
     let id = rt.state.scrub.clip().unwrap().changes(rt.state.scrub.frame())[0].id;
-    let rect = rt.elements().iter().find(|e| e.key.as_deref() == Some(&format!("rewind-box-{id}"))).unwrap().rect;
-    assert_eq!(rect, [10.0, 30.0, 100.0, 20.0]);
+    let rect = |key: &str| rt.elements().iter().find(|e| e.key.as_deref() == Some(key)).unwrap().rect;
+    let (box_, title) = (rect(&format!("rewind-box-{id}")), rect("title"));
+    assert!(box_.iter().zip(title).all(|(a, b)| (a - b).abs() < 0.01), "the outline sits on the title: {box_:?} {title:?}");
     let bar = rt.elements().iter().find(|e| e.key.as_deref() == Some("rewind-bar")).map(|e| e.rect);
     assert!(bar.is_none_or(|b| b[0] >= 50.0), "the bar stays on the stage: {bar:?}");
 }
@@ -246,4 +250,37 @@ fn a_bundle_holds_a_trace_a_contact_sheet_and_a_summary() {
     assert!(summary.contains("> the title hops"));
     assert!(summary.contains("## Jumps") && summary.contains("title ↓7.5 pt"), "{summary}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn opening_slows_the_app_to_a_stop_and_steps_it_back_above_the_bar() {
+    let mut rt = app(Rewind::new());
+    record(&mut rt);
+    frames(&mut rt, 5);
+    jump(&mut rt, 30.0);
+    frames(&mut rt, 5);
+    let mut woke = true;
+    rt.update(|s, tx| { woke = s.scrub.poll(0.0, tx); });
+    assert!(!woke, "a closed scrubber asks for nothing");
+    rt.update(|s, _| { let r = s.rewind.clone(); s.scrub.open(&r); });
+    assert!(rt.state.scrub.app_speed() > 0.9, "it starts at full speed");
+    assert!(rt.elements().iter().all(|e| e.key.as_deref() != Some("rewind-bar")), "the bar waits for the slow-down");
+    rt.update(|s, tx| { s.scrub.poll(10.0, tx); });
+    rt.update(|s, tx| { woke = s.scrub.poll(10.3, tx); });
+    assert!(woke, "an opening one rebuilds the view");
+    let speed = rt.state.scrub.app_speed();
+    assert!(speed > 0.0 && speed < 0.5, "it slows on the window's clock: {speed}");
+    rt.update(|s, tx| { s.scrub.poll(11.0, tx); });
+    frames(&mut rt, 60);
+    assert_eq!(rt.state.scrub.app_speed(), 0.0);
+    let rect = |key: &str| rt.elements().iter().find(|e| e.key.as_deref() == Some(key)).unwrap().rect;
+    let (title, bar) = (rect("title"), rect("rewind-bar"));
+    assert!(title[2] < 100.0, "the window steps back: {title:?}");
+    let stage_foot = 300.0 * title[2] / 100.0;
+    assert!(stage_foot <= bar[1], "the stage clears the bar: {stage_foot} {bar:?}");
+    rt.update(|s, _| { s.scrub.close(); });
+    assert!(rt.state.scrub.app_speed() < 0.1, "it picks up speed from a stop");
+    rt.update(|s, tx| { s.scrub.poll(12.0, tx); s.scrub.poll(13.0, tx); });
+    assert_eq!(rt.state.scrub.app_speed(), 1.0);
+    assert!(!rt.state.rewind.is_paused(), "recording resumes once it's back in place");
 }

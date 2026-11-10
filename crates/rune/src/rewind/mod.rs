@@ -8,9 +8,9 @@
 //!
 //! [`Rewind::freeze`] pauses recording and hands back a [`Clip`]: any frame's elements, what
 //! changed in each frame and by how much, and an element's path over time. [`Scrub`] is a
-//! ready-made scrubber over a clip: the view lays [`Scrub::view`] over its own, with its own
-//! subtree's clock paused (`El::time_scale(0.0)`), and Send gives the app the selected
-//! stretch, which [`Clip::write_bundle`] turns into a folder (a motion-lint trace, a contact
+//! ready-made scrubber over a clip: the view puts itself on [`Scrub::stage`], which slows it to
+//! a stop when the scrubber opens and steps it back with the track beneath, and Send gives the
+//! app the selected stretch, which [`Clip::write_bundle`] turns into a folder (a motion-lint trace, a contact
 //! sheet and a summary).
 //!
 //! ```ignore
@@ -19,8 +19,9 @@
 //! // A shortcut freezes it:
 //! s.scrub.open(&s.rewind);
 //! // The view, always wrapped the same way so the app's elements keep their paths:
-//! el().child(app_view.time_scale(if s.scrub.is_open() { 0.0 } else { 1.0 }))
-//!     .child(s.scrub.view(|s: &mut App| &mut s.scrub, |s, sent, tx| { ... }))
+//! s.scrub.stage(app_view, |s: &mut App| &mut s.scrub, |s, sent, tx| { ... })
+//! // The poll, so the slow-down and the step back run frame by frame:
+//! changed |= s.scrub.poll(tx);
 //! ```
 
 mod bundle;
