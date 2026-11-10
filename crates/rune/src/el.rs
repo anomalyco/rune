@@ -18,7 +18,7 @@ use crate::text::{Icon, Link, Span};
 use crate::tok::TextStyle;
 
 pub use crate::el::tx::{Shell, Tx};
-pub(crate) use crate::el::tx::{SelectRequest, TraceCalls};
+pub(crate) use crate::el::tx::{FocusAsk, SelectRequest, TraceCalls};
 
 mod a11y;
 mod anchor;

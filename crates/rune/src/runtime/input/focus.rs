@@ -310,11 +310,11 @@ impl<S: 'static> Runtime<S> {
                 .map(|j| nodes[j].path.clone())
         });
         // `Tx::focus`: the first shown element with the key, or its first focusable child.
-        let asked = asked.and_then(|(key, ring)| {
+        let asked = asked.and_then(|(key, ring, ask)| {
             let anchor = (0..nodes.len()).find(|&j| nodes[j].key.as_deref() == Some(key.as_str()) && shown(j))?;
             (anchor..nodes.len()).take_while(|&j| within(&nodes[j].path, &nodes[anchor].path))
                 .find(|&j| shown(j) && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())))
-                .map(|j| (nodes[j].path.clone(), ring))
+                .map(|j| (nodes[j].path.clone(), ring, ask))
         });
         let input_focused = self.focus.path().is_some_and(|p| {
             nodes.iter().any(|n| n.path == p && !n.inert && n.input.as_ref().is_some_and(|i| i.edit.focused))
@@ -341,7 +341,7 @@ impl<S: 'static> Runtime<S> {
         let next = requested.clone().find(|&(p, edit)| newly_requested(p, edit))
             .or_else(|| virtual_req().filter(|&(p, edit)| newly_requested(p, edit)).min_by_key(|&(p, _)| p))
             .map(|(p, _)| p.to_owned())
-            .or_else(|| asked.as_ref().map(|(p, _)| p.clone()))
+            .or_else(|| asked.as_ref().map(|(p, ..)| p.clone()))
             .or(restore)
             .or_else(|| self.focus.owned().filter(|p| (0..nodes.len()).any(|j| &nodes[j].path == p && shown(j)
                 && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.edit.focused)))
@@ -351,9 +351,10 @@ impl<S: 'static> Runtime<S> {
         // Use the same focus path as input events, then restore the old presentation
         // tree so apply can retain its exit visuals.
         let keyboard = match &asked {
-            Some((p, ring)) if next.as_deref() == Some(p.as_str()) => *ring,
+            Some((p, ring, _)) if next.as_deref() == Some(p.as_str()) => *ring,
             _ => self.focus.keyboard(),
         };
+        self.focus_returned = matches!(&asked, Some((p, _, crate::el::FocusAsk::Return)) if next.as_deref() == Some(p.as_str()));
         std::mem::swap(&mut self.nodes, nodes);
         self.nodes_replaced();
         let changed = self.set_focus(next, keyboard);
