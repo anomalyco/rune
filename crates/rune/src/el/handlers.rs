@@ -102,3 +102,166 @@ impl El {
         self
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phase {
+    Down,
+    Move,
+    Up,
+}
+
+/// A pointer gesture on an element. `x`, `y`, `start_x`, `start_y`, `w` and `h` are in the
+/// element's own layout points: from its top-left as drawn (after scrolling and live
+/// offsets), divided by any scale it draws at, so they hold on a zoomed canvas.
+#[derive(Clone, Copy, Debug)]
+pub struct Drag {
+    pub phase: Phase,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub start_x: f32,
+    pub start_y: f32,
+    /// Pointer travel since the press, in window points (independent of the element moving).
+    pub dx: f32,
+    pub dy: f32,
+    /// Scratch kept across one gesture's phases (e.g. a grab offset).
+    pub data: f32,
+    /// Which click of a run the press is, the same on every phase: 1, then 2 and 3 (and on, as
+    /// AppKit's `clickCount`) for presses on this element each within the double-click
+    /// interval and 4 pt of the one before. A press that drags past 4 pt ends the run. A text
+    /// view selects by words on 2 and lines on 3, and extends by them as the drag moves.
+    pub clicks: u32,
+    pub(crate) cancelled: bool,
+    /// The pointer in window points.
+    pub(crate) window: [f32; 2],
+    /// The pointer in desktop pixels, when a native window hosts the view.
+    pub(crate) screen: Option<(i32, i32)>,
+}
+
+impl Drag {
+    /// On `Phase::Up`: the gesture ended without a drop (Escape, the window lost focus, or the
+    /// pointer was taken away). Put back whatever the drag moved.
+    pub fn cancelled(&self) -> bool {
+        self.cancelled
+    }
+
+    /// The pointer in window points from the window's top-left, whatever scale the element
+    /// draws at.
+    pub fn window_point(&self) -> [f32; 2] {
+        self.window
+    }
+
+    /// The pointer in physical desktop pixels, the space `WindowOptions::position` and
+    /// `WindowHandle::set_position` take: for opening a window under the pointer, as a tab
+    /// dragged out of its strip does. `None` without a native window (headless runs, the web)
+    /// and where the system hides window positions (Wayland).
+    pub fn screen_point(&self) -> Option<(i32, i32)> {
+        self.screen
+    }
+}
+
+/// What a press on an element does to the window (`El::window_drag`, `El::no_window_drag`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum WindowDrag {
+    /// Nothing of its own: a press goes to what's under it.
+    #[default]
+    None,
+    /// A press moves the window, and a double press zooms it.
+    Drag,
+    /// A press stays here, inside a `Drag` element, and does nothing to the window.
+    NoDrag,
+}
+
+pub(crate) type PressFn = Rc<dyn Fn(crate::states::States<'_>, &mut Tx)>;
+pub(crate) type InputKeyFn = Rc<dyn Fn(crate::states::States<'_>, &crate::KeyEvent, &mut Tx) -> bool>;
+pub(crate) type StepFn = Rc<dyn Fn(crate::states::States<'_>, i32, &mut Tx)>;
+pub(crate) type StepLimitFn = Rc<dyn Fn(crate::states::States<'_>, bool, &mut Tx)>;
+
+/// A press position in window points, suitable for a context-menu anchor.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PointerPress {
+    pub x: f32,
+    pub y: f32,
+}
+
+/// Where the pointer is, for [`El::on_pointer_move_local`] and
+/// [`El::on_secondary_press_local`]: `x` and `y` in the element's own layout points, as
+/// [`Drag`] and [`crate::WheelEvent`] give them (from its top-left as drawn, divided by any
+/// scale it draws at, so they hold on a zoomed canvas), and the same point in window points
+/// for a context menu's anchor.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PointerEvent {
+    pub x: f32,
+    pub y: f32,
+    pub window_x: f32,
+    pub window_y: f32,
+}
+
+impl PointerEvent {
+    /// The point in window points, as `on_pointer_move` and `on_secondary_press` give it: a
+    /// popup or context menu's anchor.
+    pub fn window(&self) -> PointerPress {
+        PointerPress { x: self.window_x, y: self.window_y }
+    }
+}
+
+pub(crate) type PointerFn = Rc<dyn Fn(crate::states::States<'_>, PointerEvent, &mut Tx)>;
+pub(crate) type DragFn = Rc<dyn Fn(crate::states::States<'_>, &mut Drag, &mut Tx)>;
+pub(crate) type DragOutFn = Rc<dyn Fn(crate::states::StatesRef<'_>) -> Option<crate::DragItem>>;
+pub(crate) type DragEndFn = Rc<dyn Fn(crate::states::States<'_>, crate::DragOutcome, &mut Tx)>;
+
+impl El {
+    /// On the root, receive native window activation/deactivation (not text-field focus).
+    /// Also works on interactive overlays. Headless hosts may call Runtime::window_focus.
+    pub fn on_window_focus<S: 'static>(mut self, f: impl Fn(&mut S, bool, &mut Tx) + 'static) -> Self {
+        self.handlers.on_window_focus = Some(Rc::new(move |s, focused, tx| f(downcast::<S>(s), focused, tx)));
+        self
+    }
+    /// On the root (or modal root), handle paste when no text field is focused.
+    /// Native clipboard reads are asynchronous. Script `paste` uses the same handler.
+    /// It hears the plain text; [`El::on_paste_content`] hears every form.
+    pub fn on_paste<S: 'static>(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
+        self.handlers.on_paste = Some(PasteFn {
+            rich: false,
+            call: Rc::new(move |s, content, tx| {
+                content.has_plain() && { f(downcast::<S>(s), content.text(), tx); true }
+            }),
+        });
+        self
+    }
+    /// [`El::on_paste`] with everything the clipboard held: plain text and, when the source
+    /// offered them, sanitised HTML and RTF. Replaces an `on_paste` on the same element.
+    pub fn on_paste_content<S: 'static>(mut self, f: impl Fn(&mut S, &crate::ClipboardContent, &mut Tx) + 'static) -> Self {
+        self.handlers.on_paste = Some(PasteFn {
+            rich: true,
+            call: Rc::new(move |s, content, tx| { f(downcast::<S>(s), content, tx); true }),
+        });
+        self
+    }
+    /// Secondary release inside the captured element (right-click or macOS control-click), at a
+    /// point in window points: a context menu's anchor. [`El::on_secondary_press_local`] gives
+    /// the element's own points as well. The Menu key and Shift+F10 call it too, while this
+    /// element or one inside it is focused and no key handler took the key, at the focused
+    /// element's bottom-left.
+    pub fn on_secondary_press<S: 'static>(mut self, f: impl Fn(&mut S, PointerPress, &mut Tx) + 'static) -> Self {
+        self.handlers.on_secondary_press = Some(Rc::new(move |s, p, tx| {
+            f(downcast::<S>(s), p.window(), tx);
+        }));
+        self
+    }
+    /// [`El::on_secondary_press`] with the point in this element's own layout points too, as
+    /// [`Drag`] gives them, so a canvas finds what was right-clicked at any zoom. Open the menu
+    /// at [`PointerEvent::window`].
+    ///
+    /// ```ignore
+    /// .on_secondary_press_local(|s: &mut Canvas, p, tx| {
+    ///     s.menu = Some((s.shape_at(p.x, p.y), p.window()));
+    /// })
+    /// ```
+    pub fn on_secondary_press_local<S: 'static>(mut self, f: impl Fn(&mut S, PointerEvent, &mut Tx) + 'static) -> Self {
+        self.handlers.on_secondary_press = Some(Rc::new(move |s, p, tx| f(downcast::<S>(s), p, tx)));
+        self
+    }
+}
