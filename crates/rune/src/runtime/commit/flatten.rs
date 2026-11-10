@@ -315,7 +315,7 @@ fn node_cold_needed(c: &NodeCold) -> bool {
         || c.material.is_some()
         || c.help.is_some()
         || c.help_cut
-        || c.help_above;
+        || c.help_side.is_some();
     #[cfg(debug_assertions)]
     let base = base || c.scroll_source.is_some();
     base
@@ -474,7 +474,7 @@ fn flatten_owned(
             material: c.material,
             help: c.help,
             help_cut: c.help_cut,
-            help_above: c.help_above,
+            help_side: c.help_side,
             #[cfg(debug_assertions)]
             scroll_source: c.scroll_source,
         })
@@ -675,7 +675,7 @@ fn flatten_ref(
             material: c.material,
             help: c.help.clone(),
             help_cut: c.help_cut,
-            help_above: c.help_above,
+            help_side: c.help_side,
             #[cfg(debug_assertions)]
             scroll_source: c.scroll_source,
         })

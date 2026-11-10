@@ -75,8 +75,17 @@ impl El {
     }
     /// Shows this element's [`El::help`] tooltip above it, 4 points clear, and below only when
     /// there's no room above, as a web page's `placement="top"` tooltip sits over its button.
-    pub fn help_above(mut self) -> Self {
-        self.cold_mut().help_above = true;
+    /// Short for `help_side(Side::Top)`.
+    pub fn help_above(self) -> Self {
+        self.help_side(crate::Side::Top)
+    }
+    /// Shows this element's [`El::help`] tooltip on `side` of it, as a web page's `placement`
+    /// does: under it ([`HelpLook::gap`](crate::HelpLook::gap)'s first gap clear, the default),
+    /// or above it, or left or right of it (its second gap clear), on the opposite side when
+    /// there's no room on `side`. A tooltip under or above it is centred across it; one left or
+    /// right of it, centred down it (`placement="right"`). Each stays inside the window.
+    pub fn help_side(mut self, side: crate::Side) -> Self {
+        self.cold_mut().help_side = (side != crate::Side::Bottom).then_some(side);
         self
     }
 }
