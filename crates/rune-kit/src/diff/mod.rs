@@ -5,6 +5,7 @@
 //! [`parse`] reads a patch (`git diff`) and [`FileDiff::from_texts`] diffs two texts. The app
 //! keeps a [`DiffState`] of the files in its state and draws it with [`DiffView`].
 
+mod copy;
 mod model;
 mod myers;
 mod pairs;

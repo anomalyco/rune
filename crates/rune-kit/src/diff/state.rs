@@ -7,6 +7,7 @@ use std::rc::Rc;
 
 use rune::{Key, KeyEvent, Tx};
 
+use super::copy::CopySide;
 use super::model::{FileDiff, LineKind, Side};
 use super::pairs::SplitRow;
 use crate::line_selection::{Column, LineEvent, LinePoint, LineSelection, Lines};
@@ -177,8 +178,7 @@ pub struct DiffState {
     /// The selected lines and the gesture on the line numbers making them.
     lines: LineSelection<DiffLine>,
     /// The side text selection copies, which follows the pointer.
-    copy_side: Side,
-    hovered: Vec<(Side, String)>,
+    copy: CopySide,
     highlighter: Highlighter,
     chunks: RefCell<HashMap<(u32, Side, u32), Rc<Chunk>>>,
     /// Per file, per hunk, per side: the index in the hunk of each of its lines on that side.
@@ -227,8 +227,7 @@ impl DiffState {
             annotations: Vec::new(),
             by_line: HashMap::new(),
             lines: LineSelection::default(),
-            copy_side: Side::New,
-            hovered: Vec::new(),
+            copy: CopySide::default(),
             highlighter: Highlighter::builtin(),
             chunks: RefCell::new(HashMap::new()),
             side_lines: Vec::new(),
@@ -474,7 +473,7 @@ impl DiffState {
     }
 
     pub(crate) fn copy_side(&self) -> Side {
-        self.copy_side
+        self.copy.side()
     }
 
     /// The pointer entered or left a line's text on `side`: text selection then copies that
@@ -483,18 +482,7 @@ impl DiffState {
     /// Notes the pointer entering or leaving a line's code; returns whether that changed the
     /// side a selection copies, the only part the view reads.
     pub(crate) fn hover_text(&mut self, side: Side, cell: &str, inside: bool) -> bool {
-        let was = self.copy_side;
-        if inside {
-            if !self.hovered.iter().any(|(_, c)| c == cell) {
-                self.hovered.push((side, cell.to_owned()));
-            }
-            if self.hovered.iter().all(|(s, _)| *s == side) {
-                self.copy_side = side;
-            }
-        } else {
-            self.hovered.retain(|(_, c)| c != cell);
-        }
-        self.copy_side != was
+        self.copy.step(side, cell, inside)
     }
 
     pub fn visible_file(&self) -> usize {
