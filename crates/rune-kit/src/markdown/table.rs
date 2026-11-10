@@ -456,8 +456,15 @@ impl Renderer {
                     // Unrounded, as a browser's table layout sums them; a hair over, so a cell at
                     // its column's natural width never wraps its last word.
                     let (min, max) = rune::text::content_widths(&inl.text, &spans, font);
-                    natural[j] = natural[j].max(max + 0.01);
-                    fit[j] = fit[j].max(min + 0.01);
+                    // Inline code's padding is white space set around it, which a line leaves
+                    // out of its width where it ends the line; a page counts an inline box's
+                    // padding in the cell's widths.
+                    let ends_code = |end: usize| inl.text[end..].chars().next().is_none_or(char::is_whitespace);
+                    let pad = |hit: bool| if hit { self.s.inline_code_pad } else { 0.0 };
+                    let pads = inl.spans.iter().filter(|s| s.2 == Style::CodePad && inl.spans.iter().any(|c| c.2 == Style::Code && c.1 == s.0));
+                    let (last, word) = pads.fold((false, false), |(last, word), s| (last || s.1 == inl.text.len(), word || ends_code(s.1)));
+                    natural[j] = natural[j].max(max + pad(last) + 0.01);
+                    fit[j] = fit[j].max(min + pad(word) + 0.01);
                 }
             }
             let min = fit.iter().map(|w| w.min(cap)).collect::<Vec<_>>();
