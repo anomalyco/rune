@@ -67,6 +67,7 @@ mod rich_layout;
 mod run;
 pub(crate) use pill_chips::{bare_icons, pill_chips};
 mod svg_path;
+mod synthetic_bold;
 mod trak;
 mod underline;
 mod line_metrics;
@@ -727,7 +728,7 @@ impl TextSystem {
         let off = [b"liga", b"clig", b"calt", b"dlig"].map(|tag| parley::FontFeature::new(parley::setting::Tag::new(tag), 0));
         let unligated: Vec<parley::FontFeature> = features.iter().chain(&off).copied().collect();
         type Spacings = [(std::ops::Range<usize>, f32)];
-        let build = |lcx: &mut LayoutContext<Ink>, fcx: &mut FontContext, exact: &Spacings, widen: &Spacings, weights: &Spacings, fits: &Spacings| {
+        let build = |lcx: &mut LayoutContext<Ink>, fcx: &mut FontContext, exact: &Spacings, widen: &Spacings, weights: &Spacings, fits: &Spacings, bold: &[(std::ops::Range<usize>, u16)]| {
             let mut b = lcx.ranged_builder(fcx, text, scale, true);
             b.set_base_direction(base);
             // Lines break where Chromium breaks them: after every run of spaces, even before a
@@ -803,6 +804,9 @@ impl TextSystem {
             for (range, lh) in fits {
                 b.push(LineHeight::Absolute(*lh), range.clone());
             }
+            for (range, ink) in bold {
+                b.push(StyleProperty::Brush(Ink(*ink)), range.clone());
+            }
             for (range, stack) in &routed {
                 b.push(FontFamily::from(stacks[*stack].as_deref().unwrap_or_default()), range.clone());
             }
@@ -811,6 +815,14 @@ impl TextSystem {
             }
             for (range, v) in widen {
                 b.push(StyleProperty::WordSpacing(*v), range.clone());
+            }
+            // Blink widens each glyph in synthetic bold by a pixel (`SyntheticBoldOffset`).
+            for (range, _) in bold {
+                let at = range.start;
+                let v = exact.iter().find(|(r, _)| r.contains(&at)).map(|e| e.1)
+                    .or_else(|| spans.iter().zip(&span_spacing).rev().find_map(|(s, v)| v.filter(|_| span_range(s).contains(&at))))
+                    .unwrap_or(base_spacing);
+                b.push(StyleProperty::LetterSpacing(v + synthetic_bold::ADVANCE), range.clone());
             }
             // Boxes before and after a pill's label make room for its chip. The label may break
             // like any text; `break_lines_with_blocks` moves a split pill whole to the next line
@@ -832,21 +844,29 @@ impl TextSystem {
             break_lines(&mut layout);
             layout
         };
-        let mut layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen, &[], &[]);
+        let mut layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen, &[], &[], &[]);
         // On Windows, system faces as DirectWrite picks them for each run's weight, as Chromium.
-        let weights = if cfg!(target_os = "windows") && !text.is_ascii() {
-            let wanted = |at: usize| spans.iter().rev().find_map(|s| s.weight.filter(|_| span_range(s).contains(&at))).unwrap_or(style.weight);
+        let system = cfg!(target_os = "windows") && !text.is_ascii();
+        let wanted = |at: usize| spans.iter().rev().find_map(|s| s.weight.filter(|_| span_range(s).contains(&at))).unwrap_or(style.weight);
+        let weights = if system {
             system_weight::corrections(&mut self.system_faces, &mut self.font_cx, &self.font_files, &layout, wanted)
         } else {
             Vec::new()
         };
         if !weights.is_empty() {
-            layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen, &weights, &[]);
+            layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen, &weights, &[], &[]);
         }
         // Inline code keeps inside the line box its text sets, as a browser's does.
         let fits = strut.map_or_else(Vec::new, |strut| inline_fit::mono_fits(&layout, text, spans, style, scale, strut));
-        if !fits.is_empty() {
-            layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen, &weights, &fits);
+        // Bold asked of a system face with no bold draws synthetic bold, as Chromium's does.
+        let bolds = cfg!(target_os = "windows") && (style.weight >= 600.0 || spans.iter().any(|s| s.weight.is_some_and(|w| w >= 600.0)));
+        let bold = if bolds {
+            synthetic_bold::inks(&system_weight::synthetic_bold(&mut self.system_faces, &mut self.font_cx, &self.font_files, &layout, wanted), spans)
+        } else {
+            Vec::new()
+        };
+        if !fits.is_empty() || !bold.is_empty() {
+            layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen, &weights, &fits, &bold);
         }
         // The spacing each run got, against the spacing its own font needs.
         let given = |at: usize| {
@@ -871,7 +891,7 @@ impl TextSystem {
             }
         }
         if mismatch {
-            layout = build(&mut self.layout_cx, &mut self.font_cx, &exact, &widen, &weights, &fits);
+            layout = build(&mut self.layout_cx, &mut self.font_cx, &exact, &widen, &weights, &fits, &bold);
         }
         layout.align(align, AlignmentOptions::default());
         let l = Rc::new(layout);

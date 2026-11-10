@@ -70,6 +70,39 @@ pub(super) fn corrections(
     out
 }
 
+/// The runs of `layout` Chromium draws in synthetic bold on Windows: text asking for 600 or
+/// more in a system face under 600, which its family has no bolder face to replace
+/// (`font_cache_skia_win.cc`: `Weight() >= BoldThreshold() && !typeface->isBold()`). A family
+/// with a `wght` axis draws the weight itself.
+pub(super) fn synthetic_bold(
+    faces: &mut Faces,
+    fcx: &mut FontContext,
+    files: &LoadedFiles,
+    layout: &Layout<Ink>,
+    wanted: impl Fn(usize) -> f32,
+) -> Vec<std::ops::Range<usize>> {
+    const BOLD: f32 = 600.0;
+    let mut out: Vec<std::ops::Range<usize>> = Vec::new();
+    for line in layout.lines() {
+        for run in line.runs() {
+            let range = run.text_range();
+            if range.is_empty() || wanted(range.start) < BOLD {
+                continue;
+            }
+            let font = run.font();
+            let Some((_, face)) = family_of(faces, fcx, files, &font.data, font.index) else { continue };
+            if face.weight >= BOLD {
+                continue;
+            }
+            match out.last_mut() {
+                Some(last) if last.end == range.start => last.end = range.end,
+                _ => out.push(range),
+            }
+        }
+    }
+    out
+}
+
 /// DirectWrite's pick among `weights` for `wanted`: the nearest, and of two as near, the one
 /// whose distance from 400 points the same way as `wanted`'s (`GetFirstMatchingFont`).
 fn nearest(wanted: f32, weights: impl Iterator<Item = f32>) -> Option<f32> {

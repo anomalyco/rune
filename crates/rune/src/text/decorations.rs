@@ -82,7 +82,7 @@ impl TextSystem {
             let m = line.metrics();
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(gr) = item else { continue };
-                let ink = gr.style().brush.0;
+                let ink = gr.style().brush.0 & !super::synthetic_bold::SYNTHETIC_BOLD;
                 if ink == 0 {
                     continue;
                 }
