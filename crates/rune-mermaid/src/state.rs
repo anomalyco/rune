@@ -7,6 +7,7 @@ use rune::Color;
 use super::canvas::{Measured, Scene, measure_balanced};
 use super::layered::Spacing;
 use super::layered_draw::{ClusterSpec, Dir, DrawNode, Edge, Head, Line, NodeShape, layered_canvas, node_size};
+use super::lenient::{Lenient, Reader};
 use super::parts::Names;
 use super::{
     DiagramStyle, EdgeStyle, Hover, MAX_DEPTH, MAX_ITEMS, NodeStyle, StyleSheet, clean_quoted, statements,
@@ -60,7 +61,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<StateDiagram> {
         styles: StyleSheet::default(),
         over: false,
     };
-    // A statement that doesn't read is skipped; one past the bounds leaves the whole diagram as source.
+    let mut reader = Reader::default();
     for line in std::iter::once(header).chain(body.iter().copied()) {
         if p.note.is_some() {
             if p.note_line(line).is_none() && p.over {
@@ -69,16 +70,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<StateDiagram> {
             continue;
         }
         for stmt in statements(line) {
-            let (states, edges) = (p.d.states.len(), p.d.edges.len());
-            if p.statement(stmt).is_none() {
-                if p.over {
-                    return None;
-                }
-                // Whatever the statement added before it failed goes too.
-                p.d.states.truncate(states);
-                p.d.edges.truncate(edges);
-                p.ids.retain(|_, &mut i| i < states);
-            }
+            reader.read(&mut p, stmt)?;
         }
     }
     // A note left open closes at the end.
@@ -103,6 +95,24 @@ struct Parser {
     styles: StyleSheet,
     /// Set once the source goes past [`MAX_ITEMS`] or [`MAX_DEPTH`].
     over: bool,
+}
+
+impl Lenient for Parser {
+    type Mark = (usize, usize);
+    fn mark(&self) -> (usize, usize) {
+        (self.d.states.len(), self.d.edges.len())
+    }
+    fn undo(&mut self, (states, edges): (usize, usize)) {
+        self.d.states.truncate(states);
+        self.d.edges.truncate(edges);
+        self.ids.retain(|_, &mut i| i < states);
+    }
+    fn read_statement(&mut self, s: &str) -> Option<()> {
+        self.statement(s)
+    }
+    fn over(&self) -> bool {
+        self.over
+    }
 }
 
 impl Parser {

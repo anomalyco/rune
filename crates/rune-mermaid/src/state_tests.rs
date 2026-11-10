@@ -101,6 +101,12 @@ fn a_statement_that_does_not_read_is_skipped() {
     let s = state("stateDiagram-v2\nstate \"no id\" {\n  A --> B\n}\nC --> A");
     assert_eq!(s.composites[0].title, "no id");
     assert_eq!(s.states.iter().filter(|st| st.cluster.is_none()).count(), 1, "its closing brace closes the unnamed composite");
+    // A block opener that doesn't read is skipped with its body, so its `}` doesn't close the
+    // composite around it.
+    let s = state("stateDiagram-v2\nstate Outer {\n  state Bad<<x {\n    A --> B\n  }\n  C --> D\n}\nE --> F");
+    let cluster = |id: &str| s.states.iter().find(|st| st.id == id).map(|st| st.cluster);
+    assert_eq!(cluster("A"), None, "the skipped body adds nothing");
+    assert_eq!((cluster("C"), cluster("E")), (Some(Some(0)), Some(None)));
 }
 
 #[test]

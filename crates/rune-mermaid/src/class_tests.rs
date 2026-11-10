@@ -62,6 +62,16 @@ fn a_statement_that_does_not_read_is_skipped_with_its_body() {
 }
 
 #[test]
+fn a_skipped_block_skips_the_blocks_inside_it() {
+    // Namespaces don't nest: `inner` is skipped whole, class body included, and its `}` doesn't
+    // close `outer`.
+    let c = cls("classDiagram\nnamespace outer {\n  namespace inner {\n    class Hidden {\n      +x\n    }\n  }\n  class Kept\n}");
+    let ids: Vec<&str> = c.classes.iter().map(|k| k.id.as_str()).collect();
+    assert_eq!(ids, ["Kept"]);
+    assert_eq!(c.classes[0].namespace, Some(0), "still inside outer");
+}
+
+#[test]
 fn every_prefix_draws_or_falls_back_without_panicking() {
     crate::tests::assert_prefixes_never_panic(
         "classDiagram\n  class A {\n    +i32 x\n    +run()\n  }\n  A --> B : calls",

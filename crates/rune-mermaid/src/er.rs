@@ -8,6 +8,7 @@ use rune::{Color, TextStyle};
 use super::canvas::{Measured, Scene, measure_wrap};
 use super::layered::Spacing;
 use super::layered_draw::{Dir, DrawNode, ENTITY_PAD, Edge, Head, Line, draw_layered, entity_row_h};
+use super::lenient::{Lenient, Reader};
 use super::{DiagramStyle, EdgeStyle, Hover, MAX_ITEMS, NodeStyle, StyleSheet, clean, clean_quoted, statements};
 
 #[derive(Debug)]
@@ -41,27 +42,14 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<ErDiagram> {
         d: ErDiagram { title: None, dir: Dir::Down, entities: Vec::new(), edges: Vec::new() },
         ids: HashMap::new(),
         open: None,
-        skipping: false,
         styles: StyleSheet::default(),
         attrs: 0,
         over: false,
     };
+    let mut reader = Reader::default();
     for line in std::iter::once(header).chain(body.iter().copied()) {
         for stmt in statements(line) {
-            if p.skipping {
-                p.skipping = stmt != "}";
-                continue;
-            }
-            let (entities, edges) = (p.d.entities.len(), p.d.edges.len());
-            if p.statement(stmt).is_none() {
-                if p.over {
-                    return None;
-                }
-                p.d.entities.truncate(entities);
-                p.d.edges.truncate(edges);
-                p.ids.retain(|_, &mut i| i < entities);
-                p.skipping = stmt.ends_with('{');
-            }
+            reader.read(&mut p, stmt)?;
         }
     }
     for (id, &idx) in &p.ids {
@@ -75,11 +63,27 @@ struct Parser {
     ids: HashMap<String, usize>,
     /// The entity whose `{ … }` attribute block is open.
     open: Option<usize>,
-    /// Inside the body of a block that didn't read, until its `}`.
-    skipping: bool,
     styles: StyleSheet,
     attrs: usize,
     over: bool,
+}
+
+impl Lenient for Parser {
+    type Mark = (usize, usize);
+    fn mark(&self) -> (usize, usize) {
+        (self.d.entities.len(), self.d.edges.len())
+    }
+    fn undo(&mut self, (entities, edges): (usize, usize)) {
+        self.d.entities.truncate(entities);
+        self.d.edges.truncate(edges);
+        self.ids.retain(|_, &mut i| i < entities);
+    }
+    fn read_statement(&mut self, s: &str) -> Option<()> {
+        self.statement(s)
+    }
+    fn over(&self) -> bool {
+        self.over
+    }
 }
 
 impl Parser {
