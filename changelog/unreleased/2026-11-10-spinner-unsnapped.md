@@ -1,0 +1,1 @@
+- **rune-kit's `Spinner` draws its dots antialiased at their exact sub-pixel places**, box included, as OpenCode Desktop's Soft Radar does: each of Desktop's dots is an SVG on its own composited layer, which the browser draws unsnapped. Snapped edge by edge, the 14 point radar at 1x (1.75 px dots on a 2.625 px pitch) rounded into bars and gaps of 1 and 2 px.

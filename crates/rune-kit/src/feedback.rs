@@ -38,7 +38,11 @@ impl Spinner {
     pub fn build(self, k: &Kit) -> El {
         let ink = self.color.unwrap_or(k.c.std_text);
         let u = self.size / 16.0;
-        let mut e = el().role("progressbar").label("Loading").size(self.size, self.size);
+        // Every dot draws antialiased at its exact sub-pixel place, the box's included, as
+        // Desktop's dots do: each is an SVG on a composited layer, which the browser draws where
+        // layout puts it without rounding to the device grid. Snapped, a 1.75 px dot on a
+        // 2.625 px pitch (14 points at 1x) rounds to bars and gaps of 1 and 2 px.
+        let mut e = el().role("progressbar").label("Loading").size(self.size, self.size).pixel_snap(false);
         for (i, d) in radar::dots().iter().enumerate() {
             let side = d.size * u;
             let dot = el().key(format!("d{i}")).absolute(d.x * u, d.y * u).size(side, side).radius(side * 0.24).fill(ink).a11y_hidden();
