@@ -6,6 +6,33 @@ use super::*;
 /// hidden or its drawable never arrives. A covered or occluded window doesn't wait for it.
 pub(super) const READY_FALLBACK: Duration = Duration::from_secs(1);
 
+/// How many times in a row a window tried to replace its surface and device before it gave the
+/// window up, and how long it waits between tries (`Host::replace_lost_surface`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct SurfaceRetries {
+    failures: u8,
+}
+
+/// Tries at replacing a lost surface and device in a row.
+pub(super) const SURFACE_TRIES: u8 = 3;
+/// The first wait between tries; each one after waits twice as long again.
+pub(super) const SURFACE_BACKOFF: Duration = Duration::from_millis(100);
+
+impl SurfaceRetries {
+    /// A replacement failed at `now`: when the next try is due, or None when the window gives up
+    /// its surface and device instead.
+    pub(super) fn failed(&mut self, now: Instant) -> Option<Instant> {
+        self.failures = self.failures.saturating_add(1);
+        (self.failures < SURFACE_TRIES).then(|| now + SURFACE_BACKOFF * u32::from(self.failures))
+    }
+
+    /// A replacement worked, or the surface drew: the next failure starts over.
+    pub(super) fn worked(&mut self) { self.failures = 0; }
+
+    #[cfg(test)]
+    pub(super) fn failures(&self) -> u8 { self.failures }
+}
+
 /// The open window. Fields drop in order: what's native to the OS, then the surface before its
 /// window.
 pub(super) struct Win {
@@ -14,12 +41,19 @@ pub(super) struct Win {
     #[cfg_attr(not(any(target_os = "macos", all(unix, not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
     pub(super) native: Native,
     pub(super) first_frame: FirstFrame,
-    pub(super) surface: wgpu::Surface<'static>,
+    /// The surface it draws into. None only while `Host::reattach` replaces it: the old surface
+    /// has to go before the new one is made (a DX12 surface takes the window's one
+    /// DirectComposition target, `Dx12SwapchainKind::DxgiFromVisual`) and before the device it
+    /// drew with.
+    pub(super) surface: Option<wgpu::Surface<'static>>,
     pub(super) config: wgpu::SurfaceConfiguration,
     /// Whether the surface's last configuration took. False after a refused one, and for a lost
     /// device: no drawable can be taken from it (`acquire`), and its next frame replaces the
     /// surface and the device it drew with (`Host::reattach`).
     pub(super) surface_ok: bool,
+    /// How many times in a row a frame tried to replace that surface and device, and the wait
+    /// between tries (`SurfaceRetries`).
+    pub(super) surface_retries: SurfaceRetries,
     pub(super) window: Arc<Window>,
     /// When to redraw after a frame that had no drawable, or the next frame of motion when no
     /// display link paces it (macOS).
@@ -63,7 +97,10 @@ impl Win {
         if (self.config.width, self.config.height) == (width, height) { return false; }
         self.config.width = width;
         self.config.height = height;
-        if let Err(error) = super::configure(&self.surface, gpu, &self.config) {
+        // No surface: `Host::reattach` is between the old one and the new, and takes this size
+        // from the window itself.
+        let Some(surface) = &self.surface else { return true };
+        if let Err(error) = super::configure(surface, gpu, &self.config) {
             eprintln!("rune: a window's surface refused its new size: {error}");
             self.surface_ok = false;
         }
@@ -252,14 +289,14 @@ impl Win {
     /// Presents drawables inside Core Animation transactions, while the frame moves.
     #[cfg(target_os = "macos")]
     pub(super) fn present_with_transaction(&mut self, on: bool) {
-        self.native.materials.set_moving(&self.surface, on);
+        if let Some(surface) = &self.surface { self.native.materials.set_moving(surface, on); }
     }
 
     /// Presents the frame in the transaction that resizes the window while the user drags its
     /// edge. Before the drawable is acquired: wgpu reads `presentsWithTransaction` then.
     #[cfg(target_os = "macos")]
     pub(super) fn set_live_resize(&mut self, on: bool) {
-        self.native.materials.set_live(&self.window, &self.surface, on);
+        if let Some(surface) = &self.surface { self.native.materials.set_live(&self.window, surface, on); }
     }
 
     pub(super) fn focus(&self) {

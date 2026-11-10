@@ -374,6 +374,29 @@ impl<S: 'static> Host<S> {
         // after any Fn change the monitor saw first.
         #[cfg(target_os = "macos")]
         self.fn_key();
+        self.wind_down();
+        let launcher = self.launcher();
+        if self.release_gpu && !launcher {
+            self.release();
+        } else if is_wayland(event_loop) {
+            // Wayland has no hidden toplevel: unmap by destroying, recreate on open.
+            self.win = None;
+            self.native_handle.native.ready.store(false, Ordering::Release);
+            self.native_handle.native.number.store(0, Ordering::Release);
+        } else if let Some(w) = self.win.as_mut() {
+            w.stop_pacing();
+            w.retry = None;
+            w.presented = None;
+            // Its hidden frame delivers the focus loss.
+            if launcher { w.request_redraw(); }
+        }
+    }
+
+    /// What a window stops doing when it hides: keys released, secure input and IME off, popups
+    /// and file dialogs cancelled, the pointer cancelled, drops dropped, modifiers reset, the
+    /// cursor back to normal, and the native window hidden. No event loop is needed, so a window
+    /// that loses its surface does the same from `draw` (`Host::replace_lost_surface`).
+    pub(super) fn wind_down(&mut self) {
         self.rt.keys_lost();
         if let Some(w) = &mut self.win {
             w.first_frame.hide();
@@ -392,26 +415,18 @@ impl<S: 'static> Host<S> {
         if let Some(w) = &mut self.win { w.apply_cursor(&self.rt, false); }
         self.mods = ModifiersState::empty();
         if let Some(w) = &self.win { w.hide(); }
-        let launcher = self.launcher();
-        if self.release_gpu && !launcher {
-            self.win = None;
-            self.native_handle.native.ready.store(false, Ordering::Release);
-            self.native_handle.native.number.store(0, Ordering::Release);
-            self.gpu = None;
-            self.rt.text.atlas.invalidate();
-            self.rt.images.invalidate();
-        } else if is_wayland(event_loop) {
-            // Wayland has no hidden toplevel: unmap by destroying, recreate on open.
-            self.win = None;
-            self.native_handle.native.ready.store(false, Ordering::Release);
-            self.native_handle.native.number.store(0, Ordering::Release);
-        } else if let Some(w) = self.win.as_mut() {
-            w.stop_pacing();
-            w.retry = None;
-            w.presented = None;
-            // Its hidden frame delivers the focus loss.
-            if launcher { w.request_redraw(); }
-        }
+    }
+
+    /// Gives up the window and the device and surface it drew with, as `hide` does for an app
+    /// that releases its GPU when closed. The next `open` makes a window, a device and a surface
+    /// (an app that sees `AppHandle::window_error` and the window gone can ask for one).
+    pub(super) fn release(&mut self) {
+        self.win = None;
+        self.native_handle.native.ready.store(false, Ordering::Release);
+        self.native_handle.native.number.store(0, Ordering::Release);
+        self.gpu = None;
+        self.rt.text.atlas.invalidate();
+        self.rt.images.invalidate();
     }
 
     /// Creates the window, or records why it can't be and leaves the app windowless; a later

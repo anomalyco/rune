@@ -216,9 +216,10 @@ impl<S: 'static> Host<S> {
             a11y,
             native,
             first_frame: FirstFrame::opened(Instant::now()),
-            surface,
+            surface: Some(surface),
             config,
             surface_ok: true,
+            surface_retries: SurfaceRetries::default(),
             window,
             retry: None,
             occluded_wait: OCCLUDED_RETRY,
@@ -279,17 +280,18 @@ impl<S: 'static> Host<S> {
     /// `Surface::configure` returns without recording the surface's error sink: the surface has
     /// no presentation, and its next `get_current_texture` panics ("Surface is not configured
     /// for presentation"). The same goes for a surface whose configuration a driver refused.
-    /// The next frame draws with what this makes; failing, the window is released as `hide`
-    /// releases it with `release_gpu_when_closed`, and opening it again makes both.
+    /// The next frame draws with what this makes; `replace_lost_surface` gives the window up if
+    /// this keeps failing.
     pub(super) fn reattach(&mut self) -> Result<(), String> {
-        let Some(window) = self.win.as_ref().map(|w| w.window.clone()) else {
-            return Err("there is no window to draw into".into());
-        };
-        // The surface goes before the device that made it, and before the one that replaces it.
-        if let Some(w) = &mut self.win {
-            w.alpha = None;
-            w.presented = None;
-        }
+        let Some(w) = self.win.as_mut() else { return Err("there is no window to draw into".into()) };
+        let window = w.window.clone();
+        // The old surface goes before the device that made it and before the new surface is
+        // made: a DX12 surface takes the window's one DirectComposition target
+        // (`Dx12SwapchainKind::DxgiFromVisual`), so the replacement can only be configured once
+        // the old swapchain has let go of it.
+        w.alpha = None;
+        w.presented = None;
+        drop(w.surface.take());
         self.gpu = None;
         self.rt.text.atlas.invalidate();
         self.rt.images.invalidate();
@@ -314,15 +316,22 @@ impl<S: 'static> Host<S> {
         let alpha = alpha_pass(&gpu, transparent, &config, target_format);
         #[cfg(target_os = "macos")]
         crate::platform::macos::pin_contents_top_left(&surface);
+        // The new surface reports presents where the old one did (`try_create`).
+        #[cfg(target_os = "macos")]
+        let present = {
+            let resamples = crate::platform::macos::window_shape::resamples(&window, transparent);
+            let log = self.present_log.clone()
+                .or_else(|| resamples.then(|| Arc::new(crate::frame::present_time::metal::Log::untraced())));
+            log.and_then(|log| crate::frame::present_time::metal::LayerHook::attach(&surface, log))
+        };
         let Some(w) = self.win.as_mut() else { return Err("the window closed while it made a new surface".into()) };
-        w.surface = surface;
+        w.surface = Some(surface);
         w.config = config;
         w.surface_ok = true;
         w.alpha = alpha;
         #[cfg(target_os = "macos")]
         {
-            // The hook watched presents on the old engine, and the launch cap is the launch's.
-            w.native.present = None;
+            w.native.present = present;
             w.native.prime = 0;
         }
         *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
@@ -332,26 +341,40 @@ impl<S: 'static> Host<S> {
     }
 
     /// Replaces the window's surface and device when either can't draw a frame: a device that is
-    /// gone, or a surface whose last configuration failed (`Win::surface_ok`). False when the
-    /// window gave both up instead, and there is nothing to draw with.
+    /// gone, or a surface whose last configuration failed (`Win::surface_ok`). A failed
+    /// replacement is retried on a backoff (`SurfaceRetries`); once they run out the window gives
+    /// both up, as `hide` does with `release_gpu_when_closed`, and `AppHandle::window_error` says
+    /// why. False when there is nothing to draw with this frame.
     pub(super) fn replace_lost_surface(&mut self) -> bool {
         let lost = self.gpu.as_ref().is_none_or(|(gpu, _)| gpu.is_lost());
-        if !lost && self.win.as_ref().is_none_or(|w| w.surface_ok) { return true; }
+        let surface_missing = self.win.as_ref().is_some_and(|w| !w.surface_ok || w.surface.is_none());
+        if !lost && !surface_missing {
+            if let Some(w) = self.win.as_mut() { w.surface_retries.worked(); }
+            return true;
+        }
+        let now = Instant::now();
         let error = match self.reattach() {
-            Ok(()) => return true,
+            Ok(()) => {
+                if let Some(w) = self.win.as_mut() { w.surface_retries.worked(); w.retry = None; }
+                return true;
+            }
             Err(error) => error,
         };
+        let retry = self.win.as_mut().and_then(|w| w.surface_retries.failed(now));
+        if let Some(at) = retry {
+            eprintln!("rune: could not replace the window's GPU surface, trying again: {error}");
+            if let Some(w) = self.win.as_mut() {
+                w.surface_ok = false;
+                w.retry = Some(at);
+            }
+            return false;
+        }
         eprintln!("rune: could not replace the window's GPU surface: {error}");
-        // As a hidden window with `release_gpu_when_closed` gives both back: opening it again
-        // makes a window, a device and a surface.
-        self.win = None;
-        self.gpu = None;
-        *self.gpu_pool.borrow_mut() = Weak::default();
-        self.native_handle.native.ready.store(false, Ordering::Release);
-        self.native_handle.native.number.store(0, Ordering::Release);
-        self.rt.set_live_visible(false);
-        self.rt.text.atlas.invalidate();
-        self.rt.images.invalidate();
+        // As a hidden window gives them back: input stops, the native window hides and goes,
+        // and with them the device and surface. An app sees `window_error` and can `open` the
+        // window again, which makes all three.
+        self.wind_down();
+        self.release();
         self.idle = true;
         *self.shared.window_error.lock().unwrap() = Some(format!("the window's GPU surface could not be replaced: {error}"));
         false

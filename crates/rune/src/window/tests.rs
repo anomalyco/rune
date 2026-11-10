@@ -593,6 +593,44 @@ fn a_surface_with_no_presentation_is_never_asked_for_a_drawable() {
     assert_eq!(meter.totals().failed(), 1, "the miss is counted");
 }
 
+/// `Device::destroy` only marks the device invalid: its lost callback runs when the device next
+/// maintains itself, which `configure` does with a poll. Without that poll the surface gets no
+/// presentation while `is_lost` still reads false, `configure` says Ok, and the drawable the next
+/// frame asks for panics ("Surface is not configured for presentation").
+#[cfg(target_os = "linux")]
+#[test]
+fn a_destroyed_device_that_has_not_reported_its_loss_is_not_configured() {
+    let instance = noop_instance();
+    let (gpu, surface) = noop_gpu(&instance);
+    let config = noop_config();
+    gpu.device.destroy();
+    assert!(!gpu.is_lost(), "the callback waits for the device's next maintain");
+    let error = configure(&surface, &gpu, &config).unwrap_err();
+    assert!(error.starts_with("the GPU device was lost"), "{error}");
+    assert!(gpu.is_lost());
+    let mut meter = SurfaceMeter::new("destroyed", Arc::default());
+    assert_eq!(acquire(&surface, &gpu, &config, true, 1, &mut meter), Err(Missed::Unconfigured));
+}
+
+/// A surface that won't come back is retried a bounded number of times, waiting longer each time,
+/// and then the window gives it up: a lost device can never be replaced, and a frame must not ask
+/// again forever.
+#[test]
+fn surface_retries_give_up_after_a_bounded_number_of_tries() {
+    use super::win::SURFACE_TRIES;
+    let now = Instant::now();
+    let mut retries = SurfaceRetries::default();
+    let mut waits = Vec::new();
+    while let Some(at) = retries.failed(now) { waits.push(at - now); }
+    assert_eq!(waits.len() as u8, SURFACE_TRIES - 1, "one try, then bounded retries");
+    assert!(waits.windows(2).all(|pair| pair[1] > pair[0]), "each wait is longer: {waits:?}");
+    assert_eq!(retries.failures(), SURFACE_TRIES);
+    // A surface that drew, or a replacement that worked, starts over.
+    retries.worked();
+    assert_eq!(retries.failures(), 0);
+    assert!(retries.failed(now).is_some());
+}
+
 /// A device that went away (a driver reset, a GPU removed, Windows' Modern Standby) configures
 /// nothing, and wgpu drops the `DeviceLost` that would say so: `configure` reports the lost
 /// device itself, and no drawable is ever asked of it.
