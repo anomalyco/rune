@@ -32,7 +32,7 @@ macro_rules! stories {
         pub const SCENES: &[(&str, fn(&mut G))] = &[$(($id, |s: &mut G| {
             s.story = $id;
             s.combo = ComboboxState::default();
-            if $id.starts_with("rune-combobox--") { s.combo.open = true; s.combo.search.focused = true; }
+            if $id.starts_with("rune-combobox--") { let _ = s.combo.step(ComboboxEvent::Toggle { current: None }); }
             if $id == "rune-popup-list--composer" {
                 s.edits[7] = TextEdit::new("/");
                 s.edits[7].focused = true;
