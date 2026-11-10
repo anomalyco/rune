@@ -2,6 +2,9 @@
 //! views; on Linux desktops its activation helper; on Windows its first-frame cloak; elsewhere
 //! nothing.
 
+#[cfg(target_os = "macos")]
+use std::sync::Arc;
+
 /// Dropped before the surface and the window, so its AppKit observers and views go while both
 /// still exist.
 #[cfg(target_os = "macos")]
@@ -9,6 +12,10 @@ pub(super) struct Native {
     pub(super) pacing: Option<crate::platform::display_link::DisplayLink>,
     /// Reports when each drawable reached the screen, while tracing or for `shadow`.
     pub(super) present: Option<crate::frame::present_time::metal::LayerHook>,
+    /// The log `present` and `shadow` report to (traced, or an untraced one that only re-samples
+    /// the shadow), kept for the window's life: a surface replaced after a device loss attaches
+    /// the new hook to the same log, so the shadow keeps re-sampling.
+    pub(super) present_log: Option<Arc<crate::frame::present_time::metal::Log>>,
     /// Re-samples a transparent window's system shadow once its new pixels land.
     pub(super) shadow: Option<crate::platform::macos::window_shape::Shadow>,
     pub(super) panel: Option<crate::platform::macos::Panel>,

@@ -614,7 +614,8 @@ fn a_destroyed_device_that_has_not_reported_its_loss_is_not_configured() {
 
 /// A surface that won't come back is retried a bounded number of times, waiting longer each time,
 /// and then the window gives it up: a lost device can never be replaced, and a frame must not ask
-/// again forever.
+/// again forever. Only a presented frame starts the count over, so a replacement that "works" and
+/// is lost again before it presents still ends in a give-up.
 #[test]
 fn surface_retries_give_up_after_a_bounded_number_of_tries() {
     use super::win::SURFACE_TRIES;
@@ -624,8 +625,20 @@ fn surface_retries_give_up_after_a_bounded_number_of_tries() {
     while let Some(at) = retries.failed(now) { waits.push(at - now); }
     assert_eq!(waits.len() as u8, SURFACE_TRIES - 1, "one try, then bounded retries");
     assert!(waits.windows(2).all(|pair| pair[1] > pair[0]), "each wait is longer: {waits:?}");
-    assert_eq!(retries.failures(), SURFACE_TRIES);
-    // A surface that drew, or a replacement that worked, starts over.
+    assert_eq!(retries.failures(), SURFACE_TRIES, "a replacement that never presents still gives up");
+
+    // Every surface it made is lost again before its frame presents: nothing calls `worked`, so
+    // it makes a bounded number of devices rather than one about every retry.
+    let mut retries = SurfaceRetries::default();
+    let mut surfaces = 0;
+    loop {
+        surfaces += 1;
+        assert!(surfaces < 100, "a surface lost before it presents never stops being replaced");
+        if retries.failed(now).is_none() { break; }
+    }
+    assert_eq!(surfaces, SURFACE_TRIES);
+
+    // A frame that reached the screen starts over.
     retries.worked();
     assert_eq!(retries.failures(), 0);
     assert!(retries.failed(now).is_some());

@@ -47,18 +47,33 @@ impl Gpu {
     pub fn is_lost(&self) -> bool { self.lost.load(Ordering::Acquire) }
 }
 
-/// Prints each uncaptured error once, up to `PRINTED` distinct messages. A scoped error (a
-/// `push_error_scope`, as `window::configure` uses) still goes to its scope first; this is the
-/// fallback for errors nothing else caught.
+/// What `log_uncaptured` has printed: each distinct message once, up to `PRINTED`, then one
+/// line saying the rest are silent.
+#[derive(Default)]
+struct Printed {
+    seen: Vec<String>,
+    silenced: bool,
+}
+
+/// Prints each uncaptured error once, up to `PRINTED` distinct messages, then one line saying
+/// further ones are not shown. A scoped error (a `push_error_scope`, as `window::configure`
+/// uses) still goes to its scope first; this is the fallback for errors nothing else caught.
 fn log_uncaptured(device: &wgpu::Device) {
-    let printed: Arc<Mutex<Vec<String>>> = Arc::default();
+    let printed: Arc<Mutex<Printed>> = Arc::default();
     device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
         let message = error.to_string();
-        {
+        let line = {
             let mut printed = printed.lock().unwrap_or_else(|e| e.into_inner());
-            if printed.contains(&message) { return; }
-            if printed.len() < PRINTED { printed.push(message.clone()); }
-        }
-        eprintln!("rune: a GPU error went uncaptured: {message}");
+            if printed.silenced || printed.seen.contains(&message) {
+                None
+            } else if printed.seen.len() < PRINTED {
+                printed.seen.push(message.clone());
+                Some(format!("rune: a GPU error went uncaptured: {message}"))
+            } else {
+                printed.silenced = true;
+                Some(format!("rune: {PRINTED} distinct GPU errors went uncaptured; further uncaptured GPU errors are not shown"))
+            }
+        };
+        if let Some(line) = line { eprintln!("{line}"); }
     }));
 }

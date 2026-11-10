@@ -15,7 +15,7 @@ pub(super) struct SurfaceRetries {
 
 /// Tries at replacing a lost surface and device in a row.
 pub(super) const SURFACE_TRIES: u8 = 3;
-/// The first wait between tries; each one after waits twice as long again.
+/// The first wait between tries; each one after waits a further `SURFACE_BACKOFF`.
 pub(super) const SURFACE_BACKOFF: Duration = Duration::from_millis(100);
 
 impl SurfaceRetries {

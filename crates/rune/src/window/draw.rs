@@ -313,6 +313,9 @@ impl<S: 'static> Host<S> {
         #[cfg(not(target_os = "macos"))]
         gpu.queue.present(frame);
         crate::render::gpu_events::presented();
+        // The frame reached the screen: a surface replaced by `replace_lost_surface` works, and
+        // the next loss starts its retries over.
+        l.surface_retries.worked();
         #[cfg(target_os = "macos")]
         if let Some(shadow) = &l.native.shadow { shadow.presented(); }
         // The frame landed with this present; later ones needn't wait for a transaction.
@@ -368,8 +371,8 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         if !hidden && let Some(latency) = l.native.launch_drawables.settle(self.idle, now) {
             l.config.desired_maximum_frame_latency = latency;
-            let Some(surface) = l.surface.as_ref() else { return };
-            if let Err(error) = configure(surface, gpu, &l.config) {
+            if let Some(surface) = l.surface.as_ref()
+                && let Err(error) = configure(surface, gpu, &l.config) {
                 eprintln!("rune: a window's surface refused its frame latency: {error}");
                 l.surface_ok = false;
             }

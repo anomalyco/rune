@@ -181,7 +181,7 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         let present = hook_log.clone().and_then(|log| crate::frame::present_time::metal::LayerHook::attach(&surface, log));
         #[cfg(target_os = "macos")]
-        let shadow = hook_log.filter(|_| resamples && present.is_some())
+        let shadow = hook_log.clone().filter(|_| resamples && present.is_some())
             .and_then(|log| crate::platform::macos::window_shape::Shadow::new(&window, log, visible || launcher));
         #[cfg(target_os = "macos")]
         if self.present_log.is_some() && present.is_none() { eprintln!("rune: trace: this surface reports no present times"); }
@@ -195,6 +195,7 @@ impl<S: 'static> Host<S> {
         let native = Native {
             pacing: crate::platform::display_link::DisplayLink::new(&window, self.frame_wake.clone()),
             present,
+            present_log: hook_log,
             shadow,
             panel,
             materials: crate::system_material::macos::Materials::new(),
@@ -316,14 +317,12 @@ impl<S: 'static> Host<S> {
         let alpha = alpha_pass(&gpu, transparent, &config, target_format);
         #[cfg(target_os = "macos")]
         crate::platform::macos::pin_contents_top_left(&surface);
-        // The new surface reports presents where the old one did (`try_create`).
+        // The new surface reports presents where the old one did, to the log the window kept
+        // (`try_create`): the shadow built on that log keeps re-sampling.
         #[cfg(target_os = "macos")]
-        let present = {
-            let resamples = crate::platform::macos::window_shape::resamples(&window, transparent);
-            let log = self.present_log.clone()
-                .or_else(|| resamples.then(|| Arc::new(crate::frame::present_time::metal::Log::untraced())));
-            log.and_then(|log| crate::frame::present_time::metal::LayerHook::attach(&surface, log))
-        };
+        let present = self.win.as_ref()
+            .and_then(|w| w.native.present_log.clone())
+            .and_then(|log| crate::frame::present_time::metal::LayerHook::attach(&surface, log));
         let Some(w) = self.win.as_mut() else { return Err("the window closed while it made a new surface".into()) };
         w.surface = Some(surface);
         w.config = config;
@@ -332,7 +331,7 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         {
             w.native.present = present;
-            w.native.prime = 0;
+            w.native.prime.stop();
         }
         *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
         crate::render::surface_gpu(&gpu);
@@ -345,17 +344,18 @@ impl<S: 'static> Host<S> {
     /// replacement is retried on a backoff (`SurfaceRetries`); once they run out the window gives
     /// both up, as `hide` does with `release_gpu_when_closed`, and `AppHandle::window_error` says
     /// why. False when there is nothing to draw with this frame.
+    ///
+    /// A replacement that works does not start the count over: only a frame that presents does
+    /// (`Host::draw`), so a device that is lost again before a frame reaches the screen still
+    /// ends in giving the window up instead of making one about every retry.
     pub(super) fn replace_lost_surface(&mut self) -> bool {
         let lost = self.gpu.as_ref().is_none_or(|(gpu, _)| gpu.is_lost());
         let surface_missing = self.win.as_ref().is_some_and(|w| !w.surface_ok || w.surface.is_none());
-        if !lost && !surface_missing {
-            if let Some(w) = self.win.as_mut() { w.surface_retries.worked(); }
-            return true;
-        }
+        if !lost && !surface_missing { return true; }
         let now = Instant::now();
         let error = match self.reattach() {
             Ok(()) => {
-                if let Some(w) = self.win.as_mut() { w.surface_retries.worked(); w.retry = None; }
+                if let Some(w) = self.win.as_mut() { w.retry = None; }
                 return true;
             }
             Err(error) => error,
