@@ -56,6 +56,10 @@ pub(super) enum TouchEvent {
     Pan { horizontal: bool, across: Option<(NodeId, f64)>, vertical: Option<(NodeId, f64)> },
     /// The finger lifted from `id` with `velocity` along its axis.
     Up { id: Option<NodeId>, velocity: f32 },
+    /// The finger moved `d` points from the offset it caught the viewport at.
+    Move { id: NodeId, d: f32 },
+    /// A frame for the viewport's panned axis: its overflow bounds and the frame's time.
+    Tick { id: NodeId, horizontal: bool, overflow: f64, dt: f32 },
     /// A settling viewport is still moving (`true`) or has come to rest (`false`).
     Settled { moving: bool },
 }
@@ -69,6 +73,12 @@ pub(super) enum TouchEffect {
     StopAcross(NodeId),
     /// Give this viewport the lifted finger's velocity along its axis.
     Fling { id: NodeId, horizontal: bool, velocity: f32 },
+    /// Move this viewport `d` points from the offset the finger caught it at.
+    Pan { id: NodeId, origin: f64, horizontal: bool, d: f32 },
+    /// A frame while the finger holds this viewport: set its pane's bounds to `overflow`.
+    Hold { id: NodeId, horizontal: bool, overflow: f64 },
+    /// A frame while the viewport coasts: step its momentum and edge return by `dt`.
+    Coast { id: NodeId, horizontal: bool, overflow: f64, dt: f32 },
 }
 
 /// The pan's next state, and what to do to the viewports. A finger holds the viewport it
@@ -113,6 +123,16 @@ pub(super) fn step(state: &mut Option<TouchScroll>, event: TouchEvent) -> Effect
                 Effects::one(TouchEffect::Fling { id: t.id(), horizontal: t.horizontal(), velocity })
             } else {
                 Effects::none()
+            }
+        }
+        (Some(TouchScroll::Dragging { id: held, origin, horizontal }), TouchEvent::Move { id, d }) if held == id => {
+            Effects::one(TouchEffect::Pan { id, origin, horizontal, d })
+        }
+        (Some(t), TouchEvent::Tick { id, horizontal, overflow, dt }) if t.id() == id && t.horizontal() == horizontal => {
+            if t.coasting() {
+                Effects::one(TouchEffect::Coast { id, horizontal, overflow, dt })
+            } else {
+                Effects::one(TouchEffect::Hold { id, horizontal, overflow })
             }
         }
         (Some(t), TouchEvent::Settled { moving: false }) if t.coasting() => {
@@ -163,18 +183,7 @@ impl<S: 'static> Runtime<S> {
 
     /// The pan moved `d` points along its axis from where the touch went down.
     pub(super) fn touch_scroll_move(&mut self, id: NodeId, d: f32) {
-        let Some(TouchScroll::Dragging { id: held, origin, horizontal }) = self.touch.scroll else { return };
-        if held != id { return; }
-        let Some(st) = self.scrolls.get_mut(&id) else { return };
-        let toward = if horizontal { st.x.toward(f64::from(d)) } else { -f64::from(d) };
-        let (offset, max) = st.axis(horizontal);
-        let to = origin + toward;
-        let edge = to.clamp(0.0, max);
-        let over = to - edge;
-        *offset = edge + over * 0.55 / (1.0 + over.abs() * 0.55 / 300.0);
-        if !horizontal { st.mode = ScrollMode::Rest; }
-        st.direct = true;
-        self.scroll_cancels_press(id);
+        self.step_touch(TouchEvent::Move { id, d });
     }
 
     /// The touch lifted from viewport `id` (None when it held none) with `velocity` along its
@@ -186,39 +195,20 @@ impl<S: 'static> Runtime<S> {
     /// Own the touched viewport's panned axis through momentum and its edge return. Other
     /// viewports use the native wheel path, including native clamping and stick-to-bottom.
     pub(super) fn step_touch_scroll(&mut self, id: NodeId, overflow: f64, dt: f32, horizontal: bool) -> Option<bool> {
-        let touch = self.touch.scroll.filter(|t| t.id() == id && t.horizontal() == horizontal)?;
-        let dragging = !touch.coasting();
-        let st = self.scrolls.get_mut(&id)?;
-        if horizontal { st.x.max = overflow.max(0.0); } else { st.max = overflow.max(0.0); }
-        let mut v = if horizontal { st.x.v } else { st.coast() };
-        st.scrolling = dragging || v.abs() > 1.0;
-        st.by_hand |= st.scrolling;
-        if dragging { return Some(false); }
-        st.direct = false;
-        let (offset, max) = st.axis(horizontal);
-        let edge = offset.clamp(0.0, max);
-        if *offset != edge {
-            (*offset, v) = rebound(*offset, v, edge, dt);
-            if (*offset - edge).abs() < 0.1 && v.abs() < 1.0 { *offset = edge; v = 0.0; }
-        } else {
-            let decay = (-SCROLL_DECAY * dt).exp();
-            *offset += f64::from(v * (1.0 - decay) / SCROLL_DECAY);
-            v *= decay;
-        }
-        let moving = v.abs() > 1.0 || *offset < 0.0 || *offset > max;
-        if horizontal { st.x.v = v; } else if v != 0.0 { st.mode = ScrollMode::Momentum { v }; } else { st.halt(); }
-        self.step_touch(TouchEvent::Settled { moving });
-        Some(moving)
+        let effects = step(&mut self.touch.scroll, TouchEvent::Tick { id, horizontal, overflow, dt });
+        self.apply_touch(effects)
     }
 
     /// Step the pan and carry out what the transition asked for.
     fn step_touch(&mut self, event: TouchEvent) {
         let effects = step(&mut self.touch.scroll, event);
-        self.apply_touch(effects);
+        let _ = self.apply_touch(effects);
     }
 
-    /// Carry out what a touch transition asked for on the scroll viewports.
-    fn apply_touch(&mut self, effects: Effects<TouchEffect>) {
+    /// Carry out what a touch transition asked for on the scroll viewports: the drag's and the
+    /// coast's math lives here, and a coast reports whether its viewport is still moving.
+    fn apply_touch(&mut self, effects: Effects<TouchEffect>) -> Option<bool> {
+        let mut active = None;
         for effect in effects {
             match effect {
                 TouchEffect::Halt(id) => {
@@ -232,8 +222,53 @@ impl<S: 'static> Runtime<S> {
                     let v = f64::from(velocity.clamp(-8000.0, 8000.0));
                     if horizontal { st.x.v = st.x.toward(v) as f32 } else { st.mode = ScrollMode::Momentum { v: -v as f32 } }
                 }
+                TouchEffect::Pan { id, origin, horizontal, d } => {
+                    let Some(st) = self.scrolls.get_mut(&id) else { continue };
+                    let toward = if horizontal { st.x.toward(f64::from(d)) } else { -f64::from(d) };
+                    let (offset, max) = st.axis(horizontal);
+                    let to = origin + toward;
+                    let edge = to.clamp(0.0, max);
+                    let over = to - edge;
+                    *offset = edge + over * 0.55 / (1.0 + over.abs() * 0.55 / 300.0);
+                    if !horizontal { st.mode = ScrollMode::Rest; }
+                    st.direct = true;
+                    self.scroll_cancels_press(id);
+                }
+                TouchEffect::Hold { id, horizontal, overflow } => {
+                    let Some(st) = self.scrolls.get_mut(&id) else { continue };
+                    if horizontal { st.x.max = overflow.max(0.0); } else { st.max = overflow.max(0.0); }
+                    st.scrolling = true;
+                    st.by_hand = true;
+                    active = Some(false);
+                }
+                TouchEffect::Coast { id, horizontal, overflow, dt } => {
+                    let moving = {
+                        let Some(st) = self.scrolls.get_mut(&id) else { continue };
+                        if horizontal { st.x.max = overflow.max(0.0); } else { st.max = overflow.max(0.0); }
+                        let mut v = if horizontal { st.x.v } else { st.coast() };
+                        st.scrolling = v.abs() > 1.0;
+                        st.by_hand |= st.scrolling;
+                        st.direct = false;
+                        let (offset, max) = st.axis(horizontal);
+                        let edge = offset.clamp(0.0, max);
+                        if *offset != edge {
+                            (*offset, v) = rebound(*offset, v, edge, dt);
+                            if (*offset - edge).abs() < 0.1 && v.abs() < 1.0 { *offset = edge; v = 0.0; }
+                        } else {
+                            let decay = (-SCROLL_DECAY * dt).exp();
+                            *offset += f64::from(v * (1.0 - decay) / SCROLL_DECAY);
+                            v *= decay;
+                        }
+                        let moving = v.abs() > 1.0 || *offset < 0.0 || *offset > max;
+                        if horizontal { st.x.v = v; } else if v != 0.0 { st.mode = ScrollMode::Momentum { v }; } else { st.halt(); }
+                        moving
+                    };
+                    self.step_touch(TouchEvent::Settled { moving });
+                    active = Some(moving);
+                }
             }
         }
+        active
     }
 }
 
@@ -362,6 +397,32 @@ mod tests {
         let mut state = Some(TouchScroll::Dragging { id: page, origin: 0.0, horizontal: false });
         assert_eq!(run(&mut state, TouchEvent::Up { id: Some(strip), velocity: 0.0 }), vec![]);
         assert_eq!(state, Some(TouchScroll::Coasting { id: page, horizontal: false }));
+    }
+
+    #[test]
+    fn a_move_and_a_frame_tick_go_through_step() {
+        let page = NodeId(1);
+        let mut state = Some(TouchScroll::Dragging { id: page, origin: 5.0, horizontal: false });
+        assert_eq!(
+            run(&mut state, TouchEvent::Move { id: page, d: -30.0 }),
+            vec![TouchEffect::Pan { id: page, origin: 5.0, horizontal: false, d: -30.0 }]
+        );
+        assert_eq!(
+            run(&mut state, TouchEvent::Tick { id: page, horizontal: false, overflow: 40.0, dt: 1.0 / 60.0 }),
+            vec![TouchEffect::Hold { id: page, horizontal: false, overflow: 40.0 }],
+            "a held viewport only has its bounds set"
+        );
+        let mut state = Some(TouchScroll::Coasting { id: page, horizontal: false });
+        assert_eq!(
+            run(&mut state, TouchEvent::Tick { id: page, horizontal: false, overflow: 40.0, dt: 1.0 / 60.0 }),
+            vec![TouchEffect::Coast { id: page, horizontal: false, overflow: 40.0, dt: 1.0 / 60.0 }],
+            "a coasting one is stepped"
+        );
+
+        // A move of a viewport the finger no longer drags, or a tick for another axis, asks for nothing.
+        let mut state = Some(TouchScroll::Held { id: page, origin: 5.0, horizontal: false });
+        assert_eq!(run(&mut state, TouchEvent::Move { id: page, d: -30.0 }), vec![]);
+        assert_eq!(run(&mut state, TouchEvent::Tick { id: page, horizontal: true, overflow: 40.0, dt: 0.1 }), vec![]);
     }
 
     #[test]
