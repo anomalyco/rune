@@ -250,7 +250,7 @@ impl Builder {
             for o in open {
                 end_run(&mut inl, o);
             }
-            let trimmed = inl.text.trim_end().len();
+            let trimmed = trimmed_len(&inl);
             inl.text.truncate(trimmed);
             map.truncate_out(trimmed);
             inl.spans.retain_mut(|s| {
@@ -365,6 +365,17 @@ pub(super) const CLOSE: &str = "\u{2069}\u{202f}\u{202f}";
 /// `text` without inline code's padding and isolates.
 pub(super) fn unpadded(text: &str) -> String {
     text.replace(OPEN, "").replace(CLOSE, "")
+}
+
+/// `inl`'s text without its trailing whitespace and, when inline code ends it, the rest of that
+/// code's padding: the line's end closes the isolate, so text that ends in code is a prefix of
+/// the same text with more after the code, as a stream needs.
+fn trimmed_len(inl: &Inline) -> usize {
+    let text = inl.text.trim_end();
+    match text.strip_suffix('\u{2069}') {
+        Some(rest) if inl.spans.iter().any(|s| s.2 == Style::CodePad && s.0 == rest.len()) => rest.trim_end().len(),
+        _ => text.len(),
+    }
 }
 
 /// Source byte range of the inner code text inside a backtick code span `src[range]`.

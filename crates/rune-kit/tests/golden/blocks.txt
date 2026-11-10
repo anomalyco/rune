@@ -9,7 +9,7 @@
     ),
     Para(
         Inline {
-            text: "The server sends a heartbeat every 10 seconds, but \u{202f}\u{202f}stream.ts\u{202f}\u{202f} only reconnects on an \u{202f}\u{202f}error\u{202f}\u{202f} event. When the machine sleeps, the TCP connection goes half-open: the client never sees an error, so it waits forever. See the retry notes for the long version, which is deliberately wordy so that this paragraph has to wrap onto several lines at every width.",
+            text: "The server sends a heartbeat every 10 seconds, but \u{202f}\u{202f}\u{2066}stream.ts\u{2069}\u{202f}\u{202f} only reconnects on an \u{202f}\u{202f}\u{2066}error\u{2069}\u{202f}\u{202f} event. When the machine sleeps, the TCP connection goes half-open: the client never sees an error, so it waits forever. See the retry notes for the long version, which is deliberately wordy so that this paragraph has to wrap onto several lines at every width.",
             spans: [
                 (
                     35,
@@ -18,49 +18,49 @@
                 ),
                 (
                     51,
-                    57,
+                    60,
                     CodePad,
                 ),
                 (
-                    57,
-                    66,
+                    60,
+                    69,
                     Code,
                 ),
                 (
-                    66,
-                    72,
-                    CodePad,
-                ),
-                (
-                    95,
-                    101,
+                    69,
+                    78,
                     CodePad,
                 ),
                 (
                     101,
-                    106,
-                    Code,
-                ),
-                (
-                    106,
-                    112,
+                    110,
                     CodePad,
                 ),
                 (
-                    184,
-                    190,
+                    110,
+                    115,
+                    Code,
+                ),
+                (
+                    115,
+                    124,
+                    CodePad,
+                ),
+                (
+                    196,
+                    202,
                     Em,
                 ),
                 (
-                    237,
-                    252,
+                    249,
+                    264,
                     Link,
                 ),
             ],
             links: [
                 (
-                    237,
-                    252,
+                    249,
+                    264,
                     "https://example.com/retry",
                 ),
             ],
@@ -79,26 +79,26 @@
             [
                 Para(
                     Inline {
-                        text: "\u{202f}\u{202f}backoff.ts\u{202f}\u{202f} resets its delay on every message, so a flapping server is retried at full speed.",
+                        text: "\u{202f}\u{202f}\u{2066}backoff.ts\u{2069}\u{202f}\u{202f} resets its delay on every message, so a flapping server is retried at full speed.",
                         spans: [
                             (
                                 0,
-                                6,
+                                9,
                                 CodePad,
                             ),
                             (
-                                6,
-                                16,
+                                9,
+                                19,
                                 Code,
                             ),
                             (
-                                16,
-                                22,
+                                19,
+                                28,
                                 CodePad,
                             ),
                             (
-                                43,
-                                48,
+                                49,
+                                54,
                                 Em,
                             ),
                         ],
@@ -109,21 +109,21 @@
             [
                 Para(
                     Inline {
-                        text: "The sidebar store ignores \u{202f}\u{202f}session.updated\u{202f}\u{202f} events that arrive before the first list fetch.",
+                        text: "The sidebar store ignores \u{202f}\u{202f}\u{2066}session.updated\u{2069}\u{202f}\u{202f} events that arrive before the first list fetch.",
                         spans: [
                             (
                                 26,
-                                32,
+                                35,
                                 CodePad,
                             ),
                             (
-                                32,
-                                47,
+                                35,
+                                50,
                                 Code,
                             ),
                             (
-                                47,
-                                53,
+                                50,
+                                59,
                                 CodePad,
                             ),
                         ],
@@ -136,21 +136,21 @@
                         [
                             Para(
                                 Inline {
-                                    text: "A nested point with \u{202f}\u{202f}code\u{202f}\u{202f} in it.",
+                                    text: "A nested point with \u{202f}\u{202f}\u{2066}code\u{2069}\u{202f}\u{202f} in it.",
                                     spans: [
                                         (
                                             20,
-                                            26,
+                                            29,
                                             CodePad,
                                         ),
                                         (
-                                            26,
-                                            30,
+                                            29,
+                                            33,
                                             Code,
                                         ),
                                         (
-                                            30,
-                                            36,
+                                            33,
+                                            42,
                                             CodePad,
                                         ),
                                     ],
@@ -371,21 +371,21 @@
     ),
     Para(
         Inline {
-            text: "Done. All 14 tests in \u{202f}\u{202f}src/net\u{202f}\u{202f} pass.",
+            text: "Done. All 14 tests in \u{202f}\u{202f}\u{2066}src/net\u{2069}\u{202f}\u{202f} pass.",
             spans: [
                 (
                     22,
-                    28,
+                    31,
                     CodePad,
                 ),
                 (
-                    28,
-                    35,
+                    31,
+                    38,
                     Code,
                 ),
                 (
-                    35,
-                    41,
+                    38,
+                    47,
                     CodePad,
                 ),
             ],
