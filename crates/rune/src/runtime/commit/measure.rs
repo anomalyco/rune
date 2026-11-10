@@ -253,7 +253,12 @@ impl<S: 'static> Measurement<'_, S> {
             let mut offset = old_scroll.map_or(0.0, |s| s.offset as f32);
             // A new viewport has no height yet: its bound from the tree, else the window's.
             let first = if scroll_bound.is_finite() { scroll_bound } else { self.viewport.1 };
-            let height = self.committed_node(scroll_path).map_or(first, |i| self.nodes[i].local.h);
+            let height = self.committed_node(scroll_path).map_or(first, |i| {
+                let old = self.nodes[i].local.h;
+                // A viewport filling the old window follows its new bound on resize. Picking
+                // rows for the old height first can require running the entire view twice.
+                if tx.relayout && old == self.nodes[0].local.h { first } else { old }
+            });
             let padding = |p: LengthPercentage| match p.expand() {
                 taffy::style::ExpandedLengthPercentage::Length(x) => x,
                 _ => panic!("virtual stack padding must be in points"),
