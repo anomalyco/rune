@@ -1,0 +1,1 @@
+- **rune-motion `Clock` and `PhaseAnimator` keep their modes as one enum each:** a clock is driven by host time (anchored at its first frame) or by `step`, and a phase animator is waiting on a time, a stopped clock, a settle, or done. A manual `Clock` no longer reads the host time passed to `frame`, so only `step` moves it; nothing else an app sees changes.
