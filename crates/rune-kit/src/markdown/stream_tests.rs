@@ -77,7 +77,7 @@ fn an_open_span_draws_as_it_will_end() {
     assert_eq!(styled(&stream("**bold _and em"), Style::Strong), ["bold and em"]);
     let blocks = stream("Run `cargo te");
     assert_eq!(styled(&blocks, Style::Code), ["cargo te"]);
-    assert_eq!(shown(&blocks), format!("Run {PAD}cargo te"), "no padding after a span still arriving");
+    assert_eq!(shown(&blocks), format!("Run {}cargo te", super::super::parser::OPEN), "no padding after a span still arriving");
     let Block::Table(t) = &stream("| a | b |\n|---|---|\n| c | **d")[0] else { panic!() };
     assert_eq!(t.rows[0][1].spans.iter().map(|s| s.2).collect::<Vec<_>>(), [Style::Strong], "in a cell still arriving");
 }

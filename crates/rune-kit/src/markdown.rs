@@ -81,7 +81,7 @@ use autolink::autolink_inline;
 use cache::{doc_cached, stream_cached};
 #[cfg(test)]
 use cache::{CACHE, PARSES};
-use parser::{BlockMap, Cut, PAD, ParsedDoc, Source, SpanMap, parse_doc};
+use parser::{BlockMap, CLOSE, Cut, PAD, ParsedDoc, Source, SpanMap, parse_doc, unpadded};
 use render::{Renderer, hash_of, rendered_keys, source_copy};
 use stream::parse_streaming;
 

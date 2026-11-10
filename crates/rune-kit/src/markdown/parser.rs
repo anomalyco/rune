@@ -356,6 +356,16 @@ impl Builder {
 }
 
 pub(super) const PAD: &str = "\u{202f}\u{202f}";
+/// Inline code's padding before it, ending in a left-to-right isolate (LRI), and after it,
+/// starting with its end (PDI): `markdown.css` sets `:not(pre) > code { direction: ltr;
+/// unicode-bidi: isolate }`, so code reads left to right and moves as one inside Arabic text.
+pub(super) const OPEN: &str = "\u{202f}\u{202f}\u{2066}";
+pub(super) const CLOSE: &str = "\u{2069}\u{202f}\u{202f}";
+
+/// `text` without inline code's padding and isolates.
+pub(super) fn unpadded(text: &str) -> String {
+    text.replace(OPEN, "").replace(CLOSE, "")
+}
 
 /// Source byte range of the inner code text inside a backtick code span `src[range]`.
 fn code_span_content_range(src: &str, range: Range<usize>, rendered: &str) -> Range<usize> {
@@ -605,11 +615,11 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                 let code_src = code_span_content_range(src, range, &t);
                 let inl = b.inline();
                 let a = inl.1.text.len();
-                inl.1.text.push_str(PAD);
+                inl.1.text.push_str(OPEN);
                 let start = inl.1.text.len();
                 inl.1.text.push_str(&t);
                 let end = inl.1.text.len();
-                inl.1.text.push_str(PAD);
+                inl.1.text.push_str(CLOSE);
                 inl.1.spans.push((a, start, Style::CodePad));
                 inl.1.spans.push((start, end, Style::Code));
                 inl.1.spans.push((end, inl.1.text.len(), Style::CodePad));

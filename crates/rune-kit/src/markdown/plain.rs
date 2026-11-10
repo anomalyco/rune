@@ -36,7 +36,7 @@ fn plain(blocks: &[Block], tasks: &[Option<(bool, usize)>], task: &mut usize, co
         let here = lead.take();
         match b {
             Block::Para(inl) | Block::Heading(_, inl) => {
-                let text = inl.text.replace(PAD, "");
+                let text = unpadded(&inl.text);
                 out.push(match here {
                     Some((marker, before)) => Piece { breaks: [before, 1], text: marker + &text },
                     None => Piece { breaks: [2, 2], text },
@@ -59,7 +59,7 @@ fn plain(blocks: &[Block], tasks: &[Option<(bool, usize)>], task: &mut usize, co
                 }
             }
             Block::Table(t) => {
-                let row = |cells: &[Inline]| cells.iter().map(|c| c.text.replace(PAD, "")).collect::<Vec<_>>().join("\t");
+                let row = |cells: &[Inline]| cells.iter().map(|c| unpadded(&c.text)).collect::<Vec<_>>().join("\t");
                 let rows: Vec<String> = std::iter::once(row(&t.head)).chain(t.rows.iter().map(|r| row(r))).collect();
                 out.push(Piece { breaks: [1, 1], text: rows.join("\n") });
             }
