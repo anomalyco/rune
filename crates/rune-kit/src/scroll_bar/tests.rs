@@ -578,6 +578,45 @@ fn thumb_at<S>(rt: &rune::Runtime<S>) -> f32 {
 }
 
 #[test]
+fn a_pulse_is_due_at_its_hold_and_fade_summed_before_now() {
+    use super::visibility::{BarState, Effect, Event, Follow, Glide, Opacity, Phase, step};
+    let hold = std::time::Duration::from_millis(750);
+    let follow = |state: &mut BarState, now: f64, scrolled: bool, instant: bool, extent_changed: bool| {
+        step(
+            state,
+            Event::Follow(Follow {
+                shows: true,
+                overlay: true,
+                scrolled,
+                instant,
+                resized: false,
+                lengthened: false,
+                extent_changed,
+                pressed: false,
+                revealed: false,
+                now,
+                hold,
+            }),
+        )
+    };
+    // A wheel scroll at 0.3 s starts the pulse: its hold and fade are summed first, so the
+    // deadline carries that sum's rounding rather than splitting it across `now`.
+    let mut state = BarState::Overlay { phase: Phase::Hidden, glide: Glide::Idle };
+    follow(&mut state, 0.3, true, false, false);
+    assert_eq!(state.pulse_until(), 1.4000000000000001);
+    // An instant content-size change at exactly 1.4 s lands inside it and renews it.
+    let effects = follow(&mut state, 1.4, false, true, true);
+    assert!(
+        effects.into_iter().any(|e| matches!(e, Effect::Opacity(Opacity::Pulse { .. }))),
+        "the pulse renewed"
+    );
+    // Letting go after a hold at 0.3 s gives the same deadline.
+    let mut held = BarState::Overlay { phase: Phase::Held, glide: Glide::Idle };
+    step(&mut held, Event::LetGo { pressed: false, revealed: false, area_reveals: false, now: 0.3, hold });
+    assert_eq!(held.pulse_until(), 1.4000000000000001);
+}
+
+#[test]
 fn a_new_bar_lands_at_once() {
     fn shown(rows: &usize, cx: &mut rune::Cx<usize>) -> El {
         if *rows == 0 { col().size(200.0, 100.0) } else { view(rows, cx) }

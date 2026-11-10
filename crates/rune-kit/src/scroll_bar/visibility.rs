@@ -154,7 +154,7 @@ pub(super) fn step(state: &mut BarState, event: Event) -> Effects<Effect> {
             let (phase, opacity) = if area_reveals {
                 (Phase::Hidden, Opacity::Set(0.0))
             } else {
-                (Phase::Pulsing { until: now + hold.as_secs_f64() + FADE_TAIL }, Opacity::Pulse { hold })
+                (Phase::Pulsing { until: now + (hold.as_secs_f64() + FADE_TAIL) }, Opacity::Pulse { hold })
             };
             *state = BarState::Overlay { phase, glide };
             Effects::one(Effect::Opacity(opacity))
@@ -213,7 +213,7 @@ fn follow(state: &mut BarState, f: Follow) -> Effects<Effect> {
         return effects;
     }
 
-    let pulse = |f: &Follow| (Phase::Pulsing { until: f.now + f.hold.as_secs_f64() + FADE_TAIL }, Some(Opacity::Pulse { hold: f.hold }));
+    let pulse = |f: &Follow| (Phase::Pulsing { until: f.now + (f.hold.as_secs_f64() + FADE_TAIL) }, Some(Opacity::Pulse { hold: f.hold }));
     let (phase, opacity) = match prev {
         BarState::Always { .. } => {
             if f.scrolled && !f.instant {
