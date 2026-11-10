@@ -1114,6 +1114,13 @@ impl El {
         self.cold_mut().focus.return_to = Some(trigger.into());
         self
     }
+    /// A press on this layer (the scrim under a context menu) focuses what a press there would
+    /// focus without it: the focusable scroll region under the pointer, as a web page's press
+    /// outside a menu focuses the `tabIndex` scroller it lands on, else nothing.
+    pub fn press_focuses_below(mut self) -> Self {
+        self.cold_mut().focus.below = true;
+        self
+    }
     /// The control a [`El::modal`] focuses when it opens, as HTML's `autofocus` attribute in a
     /// dialog: a Cancel button, say. Without one the modal focuses its first text field, else
     /// its first Tab stop, or itself under [`Cx::web_focus`](crate::Cx::web_focus).

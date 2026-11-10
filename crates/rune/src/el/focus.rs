@@ -32,6 +32,8 @@ pub(crate) struct FocusSpec {
     pub fill: Option<Color>,
     pub follows: bool,
     pub return_to: Option<String>,
+    /// [`crate::El::press_focuses_below`].
+    pub below: bool,
     /// `on_step`: a slider's arrow and page keys.
     pub step: Option<StepFn>,
     /// `on_step_limit`: a slider's Home and End.
@@ -62,6 +64,7 @@ impl crate::cold::Empty for FocusSpec {
         fill: None,
         follows: false,
         return_to: None,
+        below: false,
         step: None,
         step_limit: None,
         key_up: None,
