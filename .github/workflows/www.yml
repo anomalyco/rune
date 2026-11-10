@@ -55,13 +55,6 @@ jobs:
           role-to-assume: arn:aws:iam::604439173067:role/github/rune-release
           role-session-name: www-${{ github.run_id }}
           aws-region: us-east-1
-      - name: Fetch the release secrets
-        if: github.event_name == 'push'
-        uses: aws-actions/aws-secretsmanager-get-secrets@2297f9a879480a9e3af9b293ed15c70caf8e1c88 # v3.0.2
-        with:
-          secret-ids: |
-            CLOUDFLARE_API_TOKEN,rune/release/CLOUDFLARE_API_TOKEN
-          parse-json-secrets: false
       # rust-toolchain.toml picks the toolchain. rust-src is installed up front: otherwise rustup fetches it mid-build
       # from parallel rustc calls, which race and fail.
       - name: Rust toolchain
@@ -103,9 +96,15 @@ jobs:
         run: cargo test -p rune-www
       - name: Build
         run: bun run build --mode "$MODE"
+      - name: Cloudflare token
+        id: cloudflare-token
+        if: github.event_name == 'push'
+        run: bash "$GITHUB_WORKSPACE/.github/release/cloudflare-token.sh"
+        env:
+          CLOUDFLARE_TOKEN_URL: ${{ vars.CLOUDFLARE_TOKEN_URL }}
       - name: Deploy
         if: github.event_name == 'push'
         run: bunx cf deploy --prebuilt --mode "$MODE"
         env:
-          CLOUDFLARE_API_TOKEN: ${{ env.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ steps.cloudflare-token.outputs.token }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
