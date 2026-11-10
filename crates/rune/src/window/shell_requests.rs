@@ -21,7 +21,7 @@ impl<S: 'static> Host<S> {
             return minimize_ignored("a window without a minimize button");
         }
         #[cfg(target_os = "macos")]
-        { w.native.prime = 0; }
+        { w.native.prime.stop(); }
         w.window.set_minimized(true);
     }
 

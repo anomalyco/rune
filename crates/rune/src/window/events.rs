@@ -317,7 +317,7 @@ impl<S: 'static> Host<S> {
                 // Their native occlusion transitions must not settle or redraw a reveal.
                 if self.macos_window.launcher && cfg!(target_os = "macos") { return; }
                 #[cfg(target_os = "macos")]
-                { l.native.prime = 0; }
+                { l.native.prime.stop(); }
                 let was_occluded = self.life.cover(occluded);
                 l.retry = None;
                 l.presented = None;

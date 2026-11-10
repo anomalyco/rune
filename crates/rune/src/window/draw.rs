@@ -74,8 +74,8 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         if !hidden {
             if !l.natively_occluded() {
-                l.native.prime = 0;
-            } else if l.native.prime == 0 {
+                l.native.prime.stop();
+            } else if !l.native.prime.presumes() {
                 self.meter.skipped();
                 self.missed_frame(Missed::Occluded, false);
                 return;
@@ -86,13 +86,13 @@ impl<S: 'static> Host<S> {
         // Only a timer woke the resting window, so its frame may draw what's on screen. It
         // decides that before starting the display link, which would draw it at once anyway.
         #[cfg(target_os = "macos")]
-        let deferred = l.quiet && !hidden && !resizing && l.native.prime == 0
+        let deferred = l.quiet && !hidden && !resizing && !l.native.prime.presumes()
             && l.native.pacing.as_ref().is_some_and(|p| p.defers_start(Instant::now()));
         #[cfg(not(target_os = "macos"))]
         let deferred = false;
         #[cfg(target_os = "macos")]
         let target = if hidden || resizing || deferred { None } else if let Some(pacing) = &mut l.native.pacing {
-            if l.native.prime > 0 && !pacing.running() {
+            if l.native.prime.presumes() && !pacing.running() {
                 None
             } else {
                 let Some(target) = pacing.next_frame().target() else { return };
@@ -100,8 +100,8 @@ impl<S: 'static> Host<S> {
             }
         } else { None };
         #[cfg(target_os = "macos")]
-        let shown = if !hidden && l.native.prime > 0 {
-            l.native.prime -= 1;
+        let shown = if !hidden && l.native.prime.presumes() {
+            l.native.prime.spend();
             let Some(shown) = crate::platform::macos::PresumeShown::new(&l.surface) else {
                 self.meter.skipped();
                 self.missed_frame(Missed::Occluded, false);
