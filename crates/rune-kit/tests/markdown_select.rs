@@ -119,7 +119,9 @@ fn a_selection_survives_its_message_and_the_next_streaming_in() {
     }
     // In the streaming message itself, once the growing first one has pushed it down.
     rt.frame(1.0);
-    let second = glyphs(&rt, "m1/b0");
+    let mut second = glyphs(&rt, "m1/b0");
+    // This paragraph is one line: glyph ink centres vary vertically on the same baseline.
+    second.sort_by(|a, b| a.0.total_cmp(&b.0));
     drag(&mut rt, before(second[0]), before(second[6]));
     assert_eq!(rt.selected_text().as_deref(), Some("Second "));
     rt.state.msgs[1].push_str(" more words");
