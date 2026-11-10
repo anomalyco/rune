@@ -1,6 +1,7 @@
 //! Nodes an app adds to `ui`: `ui.<name>(props?, children?)`, `ui.<name>(content, props?)` or
-//! `ui.<name>(props, node)`, built by the app from [`NodeArgs`]. The standard layout props
-//! (`w`, `pad`, `key`, `label`, ...) apply after the app's build, except the ones it read.
+//! `ui.<name>(props, node)`, built by the app from [`NodeArgs`]; a second props table after the
+//! first lays its props over it (`ui.icon("copy", STYLE, { color = ink })`). The standard layout
+//! props (`w`, `pad`, `key`, `label`, ...) apply after the app's build, except the ones it read.
 
 use std::cell::Cell;
 use std::os::raw::c_int;
@@ -9,7 +10,7 @@ use std::rc::Rc;
 use mlua::ffi;
 use rune::{Color, El};
 
-use super::nodes::take_children;
+use super::nodes::{keyed, take_children};
 use super::props::{self, Atom, Props, Value};
 use super::{Callback, Env, Frame, guard, top};
 use crate::Data;
@@ -92,7 +93,7 @@ impl Press {
 impl NodeArgs {
     /// The node's key, which the standard pass applies: reading it here leaves it there.
     fn key(&self) -> Option<Rc<str>> {
-        self.props.iter().find_map(|(k, v)| match v {
+        self.props.iter().rev().find_map(|(k, v)| match v {
             Prop::String(s) if k.as_str() == "key" => Some(s.as_str().into()),
             _ => None,
         })
@@ -103,8 +104,9 @@ impl NodeArgs {
         self.content.as_deref()
     }
 
+    /// Prop `name`: from the props laid over a style, else from the style.
     pub fn get(&self, name: &str) -> Option<&Prop> {
-        let i = self.props.iter().position(|(k, _)| k.as_str() == name)?;
+        let i = self.props.iter().rposition(|(k, _)| k.as_str() == name)?;
         if i < 64 {
             self.used.set(self.used.get() | 1 << i);
         }
@@ -217,14 +219,19 @@ pub(crate) unsafe extern "C-unwind" fn ui_host(state: *mut ffi::lua_State) -> c_
         });
         let first = if lead { 2 } else { 1 };
         let props_at = if ffi::lua_type(state, first) == ffi::LUA_TTABLE { first } else { 0 };
-        let next = first + 1;
+        // Props laid over a style: `ui.icon("copy", STYLE, { color = ink })`.
+        let over_at = if props_at > 0 && ffi::lua_type(state, first + 1) == ffi::LUA_TTABLE && keyed(state, first + 1) { first + 1 } else { 0 };
+        let next = if over_at > 0 { over_at + 1 } else { first + 1 };
         let children_at = match ffi::lua_type(state, next) {
             ffi::LUA_TTABLE | ffi::LUA_TLIGHTUSERDATA => next,
             _ => 0,
         };
         guard(state, || {
             let args = top(|frame| -> Result<NodeArgs, String> {
-                let props = if props_at > 0 { host_props(state, props_at, frame)? } else { Vec::new() };
+                let mut props = if props_at > 0 { host_props(state, props_at, frame)? } else { Vec::new() };
+                if over_at > 0 {
+                    props.extend(host_props(state, over_at, frame)?);
+                }
                 let children = match children_at {
                     0 => Vec::new(),
                     at if ffi::lua_type(state, at) == ffi::LUA_TLIGHTUSERDATA => vec![frame.take(ffi::lua_tolightuserdata(state, at))?],
@@ -236,17 +243,17 @@ pub(crate) unsafe extern "C-unwind" fn ui_host(state: *mut ffi::lua_State) -> c_
             let node = top(|frame| frame.env.nodes.get(index).cloned()).flatten().ok_or("unknown host node")?;
             let el = (node.build)(&mut args).map_err(|e| format!("ui.{}: {e}", node.name))?;
             // Standard layout props still apply, after the host's own.
-            build_from(state, el, props_at, &args)
+            build_from(state, el, [props_at, over_at], &args)
         })
     }
 }
 
-unsafe fn build_from(state: *mut ffi::lua_State, el: El, props_at: c_int, args: &NodeArgs) -> Result<c_int, String> {
+unsafe fn build_from(state: *mut ffi::lua_State, el: El, tables: [c_int; 2], args: &NodeArgs) -> Result<c_int, String> {
     top(|frame| {
         let Frame { arena, attach, env } = frame;
         let slot = arena.alloc(el)?;
         let mut p = Props::new(env);
-        if props_at > 0 {
+        for props_at in tables.into_iter().filter(|&at| at > 0) {
             let el = arena.get_mut(slot);
             // SAFETY: walks the props table again, decoding the standard props the build left.
             unsafe {

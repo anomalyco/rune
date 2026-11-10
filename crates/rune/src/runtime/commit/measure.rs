@@ -247,7 +247,7 @@ impl<S: 'static> Measurement<'_, S> {
         let path = node_path(parent, el.key.as_deref(), index);
         if let Some(estimate) = el.cold.virtual_estimate {
             assert!(el.cold.growth.is_some(), "`.virtualize(..)` at {path:?} needs `.growth(GrowthSpec)` on the same element");
-            let (scroll_path, sticky, scroll_bound) = scroll.expect("virtual stack must be the direct child of a scroll viewport");
+            let (scroll_path, sticky, scroll_bound) = scroll.expect("virtual stack must be inside a scroll viewport");
             let old_scroll = self.path_ids.get(scroll_path).and_then(|id| self.scrolls.get(id));
             let pinned = (tx.settle && sticky) || old_scroll.map_or(sticky, |s| s.pinned());
             let mut offset = old_scroll.map_or(0.0, |s| s.offset as f32);
@@ -351,7 +351,13 @@ impl<S: 'static> Measurement<'_, S> {
             self.populate_virtual_children(el, &path, source, inert, group);
         }
         let bounds = crate::el::virtual_list::child_bounds(&el.style, el.cold.scroll.is_some(), bound, &el.children);
-        let scroll = el.cold.scroll.map(|s| (path.as_str(), s.stick_bottom, bound));
+        // A virtual stack windows against the nearest scroll viewport around it, under or among
+        // other content; a virtual list's rows only against viewports inside them.
+        let scroll = match el.cold.scroll {
+            Some(s) => Some((path.as_str(), s.stick_bottom, bound)),
+            None if el.cold.virtual_estimate.is_some() => None,
+            None => scroll,
+        };
         let child_group = if el.flags.has(ElFlags::SELECTION_GROUP) { Some(path.as_str()) } else { group };
         for (i, child) in el.children.iter_mut().enumerate() {
             if !child.flags.has(ElFlags::HAS_VIRTUAL) { continue; }

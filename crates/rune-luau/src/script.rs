@@ -471,6 +471,7 @@ impl Inner {
         Rc::new(Env {
             script: self.weak.clone(),
             vm: vm.id,
+            render: crate::ui::next_render(),
             salt: self.salt.get(),
             version: self.version.get(),
             dark,

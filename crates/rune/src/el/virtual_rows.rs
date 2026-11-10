@@ -11,7 +11,7 @@ use crate::el::ElFlags;
 use crate::states::downcast;
 
 impl El {
-    /// Window keyed rows of a growth stack directly inside a vertical scroll viewport.
+    /// Window keyed rows of a growth stack inside a vertical scroll viewport.
     /// Unvisited rows use an estimated height; measurement preserves the visible anchor.
     /// Offscreen rows have no layout, text or scene nodes.
     ///
@@ -20,8 +20,10 @@ impl El {
     /// that builds more than 200 rows and four times what it mounts.
     ///
     /// The same element must also be a growth stack: call `.growth(GrowthSpec)` on it as well
-    /// as `.virtualize(..)`, and make it the first child of the `.scroll(..)` viewport. Layout
-    /// panics with the element's path otherwise.
+    /// as `.virtualize(..)`, and put it inside a `.scroll(..)` viewport: as its content, or
+    /// under or among other content in it, at any depth (a page whose figures sit above a long
+    /// list in one scroll). It windows against the nearest viewport around it. Layout panics
+    /// with the element's path otherwise.
     ///
     /// ```ignore
     /// col().scroll(ScrollSpec { stick_bottom: false }).grow(1.0).child(
@@ -49,7 +51,8 @@ impl El {
     /// stays, unvisited rows use the estimate, inserting or prepending rows keeps the reader's
     /// row in place, and `Tx::scroll_into_view` reaches any row by key. A row's key is
     /// `key(s, i)`, whatever key its element had. The same element needs `.growth(GrowthSpec)`
-    /// and must be the direct child of a `.scroll(..)` viewport, and holds no other children.
+    /// and must be inside a `.scroll(..)` viewport (see [`El::virtualize`]), and holds no other
+    /// children.
     ///
     /// A row outside the window isn't built, so it has no elements at all: the inspector,
     /// `Runtime::elements`, accessibility, Tab order, text selection and matched elements see the
