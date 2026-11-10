@@ -29,12 +29,13 @@ impl<S: 'static> Runtime<S> {
         self.release_hover_hold();
         self.focus.step(focus_machine::FocusEvent::Pointed);
         self.dismiss_help();
-        self.secondary = match self.secondary_target(x, y) {
-            Some(path) => capture::Secondary::Held { path: path.to_owned(), left: false },
+        let path = self.secondary_target(x, y).map(str::to_owned);
+        let i = path.as_ref().and_then(|p| self.nodes.iter().position(|n| n.path == *p));
+        self.secondary = match path {
+            Some(path) => capture::Secondary::Held { path, link: i.and_then(|i| self.secondary_link_at(i, x, y)), left: false },
             None => capture::Secondary::Up,
         };
         self.secondary_region_down(x, y, self.secondary.is_held());
-        let i = self.secondary.path().and_then(|p| self.nodes.iter().position(|n| n.path == p));
         // Under `Cx::web_focus` a right-click focuses the control it's on, as Chromium's
         // mousedown does, so focus is back on it when its menu closes.
         if self.defaults.web_focus
@@ -43,16 +44,14 @@ impl<S: 'static> Runtime<S> {
         {
             self.queue.push(Action::FocusControl(self.nodes[c].path.clone()));
         }
-        self.secondary_link_down(i, x, y);
     }
 
     pub fn secondary_up(&mut self, x: f32, y: f32) {
         self.pointer = Some((x, y));
-        let down_link = self.take_secondary_link();
         self.secondary_region_up(x, y);
-        let (path, left) = match std::mem::take(&mut self.secondary) {
-            capture::Secondary::Held { path, left } => (Some(path), left),
-            capture::Secondary::Up => (None, false),
+        let (path, down_link, left) = match std::mem::take(&mut self.secondary) {
+            capture::Secondary::Held { path, link, left } => (Some(path), link, left),
+            capture::Secondary::Up => (None, None, false),
         };
         if let Some(path) = path
             && self.secondary_target(x, y) == Some(path.as_str())

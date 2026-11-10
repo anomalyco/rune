@@ -4,14 +4,11 @@
 use super::*;
 use crate::text::LinkPaint;
 
+/// The focused text element's focused link. A press's link is the press's
+/// (`capture::Held::link`, `capture::Secondary::Held`).
 #[derive(Default)]
 pub(super) struct LinkState {
-    /// The link a pointer press began on: (text path, link index).
-    press: Option<(String, usize)>,
-    /// The focused text element's focused link.
     focus: Option<usize>,
-    /// The link a secondary press began on, in the captured text.
-    secondary: Option<usize>,
 }
 
 /// Where node `n`'s text starts inside its border box `rect` (points, x0 y0 x1 y1), its text
@@ -176,8 +173,7 @@ impl<S: 'static> Runtime<S> {
         let path = &self.nodes[i].path;
         let hovered = self.pointer.filter(|_| self.hovered.as_deref() == Some(path))
             .and_then(|(x, y)| self.link_at(i, x, y));
-        let held = self.press.path() == Some(path) && self.press.inside();
-        let pressed = self.links.press.as_ref().filter(|(p, k)| held && p == path && hovered == Some(*k)).map(|(_, k)| *k);
+        let pressed = self.press.held().filter(|h| h.path == *path && h.inside()).and_then(|h| h.link).filter(|&k| hovered == Some(k));
         let focused = self.links.focus.filter(|_| self.focus.keyboard() && self.focus.path() == Some(path));
         (hovered, pressed, focused)
     }
@@ -206,19 +202,12 @@ impl<S: 'static> Runtime<S> {
         LinkFx(fx)
     }
 
-    /// Pointer down on node `i`: remember the link it began on.
-    pub(super) fn link_down(&mut self, i: usize, x: f32, y: f32) -> bool {
-        let link = self.link_at(i, x, y);
-        self.links.press = link.map(|k| (self.nodes[i].path.clone(), k));
-        link.is_some()
-    }
-
-    /// Pointer up: a press that began and ends on the same link activates it.
-    pub(super) fn link_up(&mut self, path: &str, x: f32, y: f32, inside: bool) {
-        let Some((p, k)) = self.links.press.take() else { return };
-        let Some(i) = self.nodes.iter().position(|n| n.path == p) else { return };
-        if p == path && inside && self.link_at(i, x, y) == Some(k) {
-            self.queue.push(Action::Link(p, k));
+    /// Pointer up on text `path` of a press that began on its link `k`: ending on the same link
+    /// activates it.
+    pub(super) fn link_up(&mut self, path: &str, k: usize, x: f32, y: f32) {
+        let Some(i) = self.nodes.iter().position(|n| n.path == path) else { return };
+        if self.link_at(i, x, y) == Some(k) {
+            self.queue.push(Action::Link(path.to_owned(), k));
         }
     }
 
@@ -238,13 +227,6 @@ impl<S: 'static> Runtime<S> {
         self.nodes[i].text.as_ref()?.on_link_secondary.as_ref()?;
         self.link_at(i, x, y)
     }
-
-    /// Secondary down on captured node `i`: remember the link it began on.
-    pub(super) fn secondary_link_down(&mut self, i: Option<usize>, x: f32, y: f32) {
-        self.links.secondary = i.and_then(|i| self.secondary_link_at(i, x, y));
-    }
-
-    pub(super) fn take_secondary_link(&mut self) -> Option<usize> { self.links.secondary.take() }
 
     /// Runs the `on_link_secondary` handler of node `path` for link `k`.
     pub(super) fn secondary_press_link(&mut self, path: &str, k: usize, point: PointerEvent, tx: &mut Tx) -> bool {
