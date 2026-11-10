@@ -23,11 +23,35 @@ use super::{Obj, Shared, send_sync};
 #[derive(Debug)]
 pub(super) struct Rec {
     shared: Arc<Shared>,
-    cb: Option<Obj<dyn MTLCommandBuffer>>,
-    blit: Option<Obj<dyn MTLBlitCommandEncoder>>,
+    open: Open,
     pub(super) keep: Keep,
     /// Whether a pass drew into a drawable, so the buffer waits for its present.
     pub(super) drawable: bool,
+}
+
+/// The command buffer as recorded so far.
+#[derive(Debug, Default)]
+enum Open {
+    /// Nothing recorded yet.
+    #[default]
+    Empty,
+    Buffer(Obj<dyn MTLCommandBuffer>),
+    /// A blit encoder is open for copies, until a pass or `finish` ends it.
+    Blit(Obj<dyn MTLCommandBuffer>, Obj<dyn MTLBlitCommandEncoder>),
+}
+
+impl Open {
+    /// The buffer, ending an open blit encoder.
+    fn close(self) -> Option<Obj<dyn MTLCommandBuffer>> {
+        match self {
+            Open::Empty => None,
+            Open::Buffer(cb) => Some(cb),
+            Open::Blit(cb, blit) => {
+                blit.endEncoding();
+                Some(cb)
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -56,26 +80,39 @@ send_sync!(Rec, Recorded);
 impl Rec {
     /// The buffer, made on the first command: from then until it is submitted or dropped, the
     /// encoder counts in `Shared::recording`, so read buffer storage only after this.
-    pub(super) fn cb(&mut self) -> &ProtocolObject<dyn MTLCommandBuffer> {
-        if self.cb.is_none() {
+    fn cb(&mut self) -> &ProtocolObject<dyn MTLCommandBuffer> {
+        if let Open::Empty = self.open {
             self.shared.recording.fetch_add(1, Ordering::AcqRel);
-            self.cb = Some(self.shared.command_buffer());
+            self.open = Open::Buffer(self.shared.command_buffer());
         }
-        self.cb.as_deref().unwrap()
+        match &self.open {
+            Open::Buffer(cb) | Open::Blit(cb, _) => cb,
+            Open::Empty => unreachable!("opened above"),
+        }
     }
 
-    /// Ends an open blit encoder, as a pass must before it starts.
-    pub(super) fn end_blit(&mut self) {
-        if let Some(blit) = self.blit.take() { blit.endEncoding(); }
+    /// The buffer for a render or compute pass: an open blit encoder ends first, as Metal
+    /// allows one encoder at a time.
+    pub(super) fn pass_buffer(&mut self) -> &ProtocolObject<dyn MTLCommandBuffer> {
+        if let Open::Blit(..) = self.open
+            && let Some(cb) = std::mem::take(&mut self.open).close()
+        {
+            self.open = Open::Buffer(cb);
+        }
+        self.cb()
     }
 
     fn blit(&mut self) -> &ProtocolObject<dyn MTLBlitCommandEncoder> {
-        if self.blit.is_none() {
-            let cb = self.cb();
+        if !matches!(self.open, Open::Blit(..)) {
+            self.cb();
+            let Open::Buffer(cb) = std::mem::take(&mut self.open) else { unreachable!("opened above") };
             let blit = autoreleasepool(|_| cb.blitCommandEncoder()).expect("a Metal blit encoder");
-            self.blit = Some(blit);
+            self.open = Open::Blit(cb, blit);
         }
-        self.blit.as_deref().unwrap()
+        match &self.open {
+            Open::Blit(_, blit) => blit,
+            _ => unreachable!("opened above"),
+        }
     }
 
     fn keep(&mut self, items: impl IntoIterator<Item = Arc<dyn Any + Send + Sync>>) { self.keep.extend(items); }
@@ -87,8 +124,7 @@ impl Drop for Rec {
     /// An encoder dropped unfinished. Metal ends a buffer's open encoders when it frees the
     /// buffer, reading their attachments, so the buffer goes before what it used.
     fn drop(&mut self) {
-        self.end_blit();
-        if self.cb.take().is_some() { self.shared.recording.fetch_sub(1, Ordering::AcqRel); }
+        if std::mem::take(&mut self.open).close().is_some() { self.shared.recording.fetch_sub(1, Ordering::AcqRel); }
         self.shared.recycle(std::mem::take(&mut self.keep));
     }
 }
@@ -96,7 +132,7 @@ impl Drop for Rec {
 impl MetalEncoder {
     pub(crate) fn new(shared: Arc<Shared>) -> Self {
         let keep = shared.keep_list();
-        MetalEncoder { rec: Arc::new(Mutex::new(Rec { shared, cb: None, blit: None, keep, drawable: false })) }
+        MetalEncoder { rec: Arc::new(Mutex::new(Rec { shared, open: Open::Empty, keep, drawable: false })) }
     }
 }
 
@@ -267,8 +303,7 @@ impl CommandEncoderInterface for MetalEncoder {
     }
     fn finish(&mut self) -> DispatchCommandBuffer {
         let mut rec = self.rec.lock();
-        rec.end_blit();
-        let recorded = rec.cb.take().map(|cb| Recorded { cb, keep: std::mem::take(&mut rec.keep), drawable: rec.drawable, shared: rec.shared.clone() });
+        let recorded = std::mem::take(&mut rec.open).close().map(|cb| Recorded { cb, keep: std::mem::take(&mut rec.keep), drawable: rec.drawable, shared: rec.shared.clone() });
         DispatchCommandBuffer::custom(MetalCommandBuffer(Mutex::new(recorded)))
     }
     fn clear_texture(&self, _: &DispatchTexture, _: &wgpu::ImageSubresourceRange) {

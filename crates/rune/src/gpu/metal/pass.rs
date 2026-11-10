@@ -92,9 +92,8 @@ impl MetalPass {
         }
         let raw = {
             let mut rec = rec.lock();
-            rec.end_blit();
             rec.drawable |= drawable;
-            let cb = rec.cb();
+            let cb = rec.pass_buffer();
             autoreleasepool(|_| cb.renderCommandEncoderWithDescriptor(&d)).expect("a Metal render encoder")
         };
         MetalPass {

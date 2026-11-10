@@ -91,8 +91,7 @@ impl MetalComputePass {
         }
         let raw = {
             let mut rec = rec.lock();
-            rec.end_blit();
-            let cb = rec.cb();
+            let cb = rec.pass_buffer();
             autoreleasepool(|_| cb.computeCommandEncoderWithDescriptor(&d)).expect("a Metal compute encoder")
         };
         MetalComputePass {
