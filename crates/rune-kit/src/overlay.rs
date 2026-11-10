@@ -6,10 +6,11 @@
 //! [`crate::root`]. Content is `El::anchored` to the trigger, so it follows layout, flips when
 //! it doesn't fit, and paints above everything mounted before it.
 
-use rune::{Align, Color, El, ScrollSpec, Shadow, Side, TextStyle, Transition, col, el, row, text};
-use rune_motion::{Effect, Spring, SpringPair, Vec2, tokens};
+use rune::{Align, Color, El, Shadow, Side, TextStyle, Transition, col, el, row, text};
+use rune_motion::{Spring, Vec2};
 
-use crate::{Acts, ControlSize, IconButton, IconButtonVariant, Kit, shadows};
+use crate::popover::{fit, raised};
+use crate::{Acts, ControlSize, IconButton, IconButtonVariant, Kit};
 
 /// Where an overlay sits relative to its trigger (Kobalte/Floating UI placements).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,70 +72,9 @@ fn anchor_with(motion: Spring, content: El, anchor: &str, placement: Placement, 
         .token_motion(motion)
 }
 
-/// A dropdown surface above or below its anchor is at most as tall as the window leaves it
-/// (`El::anchored_fit`); one beside it (a submenu) only flips.
-fn fit(content: El, anchor: &str, side: Side, align: Align, gap: f32) -> El {
-    if matches!(side, Side::Top | Side::Bottom) {
-        content.anchored_fit(anchor, side, align, gap)
-    } else {
-        content.anchored(anchor, side, align, gap)
-    }
-}
-
-/// How far a dropdown's scrolling edge fades while rows are hidden under it: over half a row, so
-/// a list that scrolls reads as one even where the system hides scrollbars (hex#840).
-pub(crate) const LIST_SCROLL_FADE: f32 = 16.0;
-
-/// A dropdown's rows in a scroll viewport that shrinks with its fitted surface, so a list
-/// longer than the window has room for scrolls, its edges fading ([`LIST_SCROLL_FADE`]) while
-/// rows pass under them; a row brought into view stops clear of the fade. Put it in a column
-/// with `.min_h(0.0)` up to the surface.
-pub(crate) fn fit_scroll(rows: El) -> El {
-    col()
-        .key("scroll")
-        .w_full()
-        .shrink()
-        .min_h(0.0)
-        .scroll(ScrollSpec { stick_bottom: false })
-        .scroll_edge_fade(LIST_SCROLL_FADE)
-        .scroll_margin(LIST_SCROLL_FADE)
-        .child(rows)
-}
-
-/// [`fit_scroll`] with a [`crate::scroll_bar`] over its right edge, in a column keyed
-/// `{key}-scroll-area` that shrinks in its place.
-pub(crate) fn fit_scroll_bar(k: &Kit, key: &str, rows: El) -> El {
-    crate::scroll_bar(k, &format!("{key}-scroll-area"), "scroll", fit_scroll(rows)).w_full().shrink().min_h(0.0)
-}
-
-/// Positions a menu surface next to `anchor` with no entrance: it is there on the next frame,
-/// and only its close fades (`.25 / 0`).
-/// The 0.1 s enter spring only plays when a menu reopens mid-fade, from wherever the fade was.
-pub(crate) fn menu_anchor(k: &Kit, content: El, anchor: &str, placement: Placement, gap: f32) -> El {
-    let (side, align) = placement.split();
-    let fade = Transition {
-        insertion: Effect::IDENTITY,
-        removal: Effect::opacity(0.0),
-        springs: SpringPair::new(tokens::INSTANT, Spring::new(0.25, 0.0)),
-        ..Transition::identity()
-    };
-    // The surface's identity entrance alone does not suppress nested default fades.
-    // Land its contents too, so rows are opaque and hit-testable on the first frame.
-    fit(content, anchor, side, align, gap)
-        .transition(fade)
-        .instant_changes()
-        .motion_intent(rune::MotionIntent::CUT)
-        .token_motion(k.motion.overlay)
-}
-
 /// A transparent full-window press target under an open overlay: pressing outside closes it.
 pub fn scrim<S: 'static>(key: impl Into<String>, close: impl Fn(&mut S) + 'static) -> El {
     el().key(key).role("none").absolute(0.0, 0.0).w_full().h_full().on_press(close)
-}
-
-/// The older raised surface (popover, hover card): raised fill, half-strength border, md shadow.
-pub(crate) fn raised(k: &Kit, e: El, radius: f32) -> El {
-    shadows(k, e.radius(radius).fill(k.c.surface_raised).border(1.0, k.alpha(k.c.std_border, 0.5)), &k.elevation.md)
 }
 
 /// `Popover::new("share").trigger(button).title("Share").open(s.open).build(&kit, &mut layer)`.

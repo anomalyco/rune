@@ -4,9 +4,10 @@
 
 use std::rc::Rc;
 
-use rune::{Align, Color, El, GrowthSpec, ScrollSpec, Side, Transition, Tx, col, el, row, text};
+use rune::{Align, Color, El, GrowthSpec, Side, Transition, Tx, col, el, row, text};
 
-use crate::overlay::{Placement, anchor_at, raised, scrim};
+use crate::overlay::{Placement, anchor_at, scrim};
+use crate::popover::{fit_scroll, raised};
 use crate::{ComboboxOption, Kit};
 
 /// One row in a [`PopupList`]: `PopupItem::new("review", "/review").description("Review changes")`.
@@ -283,19 +284,13 @@ impl<S: 'static> PopupList<S> {
         // The viewport and the empty state both stay mounted, so the popover's height springs
         // between them as the search edits it instead of swapping one box for the other.
         let empty = self.items.is_empty();
-        let mut viewport = col()
+        let mut viewport = fit_scroll(rows)
             .key("viewport")
             .role("listbox")
-            .w_full()
             .h((self.items.len() as f32 * 28.0).min(self.max_height))
-            .shrink()
             // A window too short for the list still shows one row to scroll.
-            .min_h(if self.items.is_empty() { 0.0 } else { 28.0 })
-            .scroll(ScrollSpec { stick_bottom: false })
-            .scroll_edge_fade(crate::overlay::LIST_SCROLL_FADE)
-            .scroll_margin(crate::overlay::LIST_SCROLL_FADE)
-            .clip_soft(0.0)
-            .child(rows);
+            .min_h(if empty { 0.0 } else { 28.0 })
+            .clip_soft(0.0);
         if let Some(label) = self.label.as_deref() {
             viewport = viewport.label(label);
         }
