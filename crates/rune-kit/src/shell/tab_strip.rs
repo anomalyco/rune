@@ -12,6 +12,8 @@ use crate::{Kit, Spinner};
 mod auto_scroll;
 mod drag;
 mod tab;
+#[cfg(test)]
+mod tests;
 
 pub use drag::{TabDragMode, TabDragPhase, TabDragState, TearOutSpec};
 
@@ -390,7 +392,8 @@ impl<'a, S: 'static> TabStrip<'a, S> {
         self.select_on_drag_start = Some(on);
         self
     }
-    /// Lets a drag across the strip tear a tab out ([`Self::on_tear_out`]). Off by default.
+    /// Lets a drag across the strip tear a tab out ([`Self::on_tear_out`]). Off by default, and
+    /// never for the only tab unless [`TearOutSpec::lone`].
     pub fn tear_out(mut self, spec: Option<TearOutSpec>) -> Self {
         self.tear = spec;
         self
@@ -553,7 +556,7 @@ impl<'a, S: 'static> TabStrip<'a, S> {
         let hovered = st.drag.hovered().map(str::to_owned);
         let ids: Vec<String> = self.items.iter().map(|t| t.id.clone().into_owned()).collect();
         let quiet = |i: usize| active == Some(ids[i].as_str()) || hovered.as_deref() == Some(ids[i].as_str());
-        let tear = self.tear.filter(|_| count > 1);
+        let tear = self.tear.filter(|t| count > 1 || t.lone);
         let mut tabs: Vec<El> = self
             .items
             .into_iter()

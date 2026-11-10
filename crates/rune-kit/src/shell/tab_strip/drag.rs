@@ -102,11 +102,14 @@ pub struct TearOutSpec {
     pub detach_distance: f32,
     /// Points across the strip within which a torn-out tab rejoins the reorder (24).
     pub reattach_distance: f32,
+    /// Whether the strip's only tab tears out too (false). Set it when a window's last tab can
+    /// go to another window's strip, as a browser's can, and the window it leaves then closes.
+    pub lone: bool,
 }
 
 impl Default for TearOutSpec {
     fn default() -> Self {
-        Self { detach_distance: 36.0, reattach_distance: 24.0 }
+        Self { detach_distance: 36.0, reattach_distance: 24.0, lone: false }
     }
 }
 

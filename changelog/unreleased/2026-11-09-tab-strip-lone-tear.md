@@ -1,0 +1,1 @@
+- **A tab strip's only tab can tear out.** `TearOutSpec::lone` (false by default) lets a drag pull the strip's last tab off it, so an app can carry a window's only tab into another window's strip and close the window it left, as a browser does. Without it the only tab still only reorders.
