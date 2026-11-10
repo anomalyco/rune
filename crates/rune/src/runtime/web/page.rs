@@ -11,11 +11,10 @@ use super::*;
 /// How close the viewport may come to the band's edge before a frame draws a new band around it.
 const MARGIN: f32 = 64.0;
 
-/// Where the band the window shows starts in the document, in points.
+/// The band of a taller document the window shows rather than the whole root, and where it
+/// starts in the document, in points.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Page {
-    /// The window shows a band of a taller document rather than the whole root.
-    pub on: bool,
     /// The browser's own scroll position, in points on the device-pixel grid: negative while it
     /// rubber-bands past the top.
     pub scroll: f32,
@@ -32,8 +31,7 @@ impl<S: 'static> Runtime<S> {
     /// Lay the root out at its natural height and draw the band of it the host scrolls to
     /// with [`Self::set_page_scroll`]. The viewport stays the band's size.
     pub(crate) fn page_mode(&mut self) {
-        self.page.on = true;
-        self.page.view = self.viewport.1;
+        self.page.get_or_insert_default().view = self.viewport.1;
         self.fit_height = true;
         self.relayout = true;
     }
@@ -49,14 +47,15 @@ impl<S: 'static> Runtime<S> {
     /// the band moved (the next frame draws it).
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn set_band(&mut self, band: f32, view: f32) -> bool {
-        if !self.page.on { return false; }
+        let Some(mut page) = self.page else { return false };
         let (band, view) = (band.max(0.0), view.max(0.0));
-        if self.page.band == band && self.page.view == view { return false; }
-        self.page.band = band;
-        self.page.view = view;
-        let top = self.band_top_for(self.page.scroll).unwrap_or(self.page.top);
-        let moved = top != self.page.top;
-        self.page.top = top;
+        if page.band == band && page.view == view { return false; }
+        page.band = band;
+        page.view = view;
+        let top = self.band_top_for(&page, page.scroll).unwrap_or(page.top);
+        let moved = top != page.top;
+        page.top = top;
+        self.page = Some(page);
         moved
     }
 
@@ -67,23 +66,21 @@ impl<S: 'static> Runtime<S> {
     /// browser's compositor scrolls the canvas it already has and nothing is drawn.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn set_page_scroll(&mut self, y: f32) -> bool {
-        if !self.page.on { return false; }
+        let Some(page) = self.page else { return false };
         let y = if y.is_finite() { self.snap_band(y) } else { 0.0 };
-        if y == self.page.scroll { return false; }
-        self.page.scroll = y;
-        let Some(top) = self.band_top_for(y) else { return false };
-        if top == self.page.top { return false; }
-        self.page.top = top;
-        true
+        if y == page.scroll { return false; }
+        let top = self.band_top_for(&page, y).unwrap_or(page.top);
+        self.page = Some(Page { scroll: y, top, ..page });
+        top != page.top
     }
 
-    /// Where the band starts for a scroll position, or `None` while the viewport is comfortably
-    /// inside the band already drawn. A band no taller than the viewport has no room to coast in:
-    /// the canvas follows the page every frame, as a fixed viewport-sized one did.
-    fn band_top_for(&self, scroll: f32) -> Option<f32> {
-        let (view, band) = (self.page.view, self.page.band);
+    /// Where `page`'s band starts for a scroll position, or `None` while the viewport is
+    /// comfortably inside the band already drawn. A band no taller than the viewport has no room
+    /// to coast in: the canvas follows the page every frame, as a fixed viewport-sized one did.
+    fn band_top_for(&self, page: &Page, scroll: f32) -> Option<f32> {
+        let (view, band) = (page.view, page.band);
         if band <= view + 2.0 * MARGIN { return Some(self.snap_band(scroll)); }
-        let top = self.page.top;
+        let top = page.top;
         if scroll >= top + MARGIN && scroll + view <= top + band - MARGIN { return None; }
         let want = scroll - (band - view) * 0.5;
         Some(self.snap_band(want.clamp(0.0, (self.page_height() - band).max(0.0))))
@@ -97,15 +94,15 @@ impl<S: 'static> Runtime<S> {
     /// The browser's scroll position, in points.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn page_scroll_y(&self) -> f32 {
-        if self.page.on { self.page.scroll } else { 0.0 }
+        self.page.map_or(0.0, |p| p.scroll)
     }
 
     /// The part of the band that is on screen: where it starts in the band's points, and how tall
     /// it is. `(0, viewport)` outside a page.
     pub(crate) fn page_window(&self) -> (f32, f32) {
-        if !self.page.on { return (0.0, self.viewport.1); }
-        let view = if self.page.view > 0.0 { self.page.view } else { self.viewport.1 };
-        (self.page.scroll - self.page.top, view)
+        let Some(page) = self.page else { return (0.0, self.viewport.1) };
+        let view = if page.view > 0.0 { page.view } else { self.viewport.1 };
+        (page.scroll - page.top, view)
     }
 
     /// Draw a horizontal viewport at `path` scrolled `x` points from its content's left edge. A
@@ -113,7 +110,7 @@ impl<S: 'static> Runtime<S> {
     /// tells Rune where it went. Returns whether the content moved (the next frame draws it).
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn set_page_scroll_x(&mut self, path: &str, x: f32) -> bool {
-        if !self.page.on || !x.is_finite() { return false; }
+        if self.page.is_none() || !x.is_finite() { return false; }
         let Some(i) = self.live(path) else { return false };
         let Some(st) = self.scrolls.get_mut(&self.nodes[i].id) else { return false };
         let offset = f64::from(x.max(0.0)).min(st.x.max.max(0.0));
@@ -136,7 +133,7 @@ impl<S: 'static> Runtime<S> {
     /// The band's top down the document, in points (0 outside page mode). A mirror's document
     /// position is what a frame drew plus this.
     pub(crate) fn page_offset(&self) -> f32 {
-        if self.page.on { self.page.top } else { 0.0 }
+        self.page.map_or(0.0, |p| p.top)
     }
 }
 

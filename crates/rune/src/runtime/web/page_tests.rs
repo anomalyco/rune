@@ -149,3 +149,12 @@ fn a_band_knows_which_part_of_it_the_window_shows() {
     assert_eq!(rt.drawn_box(1)[1], 0.0, "the band still draws it where it was drawn");
     assert_eq!(rt.state, 0, "but the window has moved past it");
 }
+
+#[test]
+fn a_window_that_is_not_a_page_has_no_band_to_move() {
+    let mut rt = Runtime::new(0u32, tall, (400.0, 200.0), Env::default());
+    rt.frame(0.0);
+    assert!(!rt.set_band(600.0, 200.0) && !rt.set_page_scroll(250.0));
+    assert!(rt.page.is_none(), "the host's band and scroll don't make it one");
+    assert_eq!((rt.page_offset(), rt.page_scroll_y(), rt.page_window()), (0.0, 0.0, (0.0, 200.0)));
+}
