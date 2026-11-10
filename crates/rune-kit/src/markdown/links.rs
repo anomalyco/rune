@@ -6,6 +6,7 @@ pub(super) type LinkWire = Rc<dyn Fn(El) -> El>;
 pub(super) type LinkLook = Rc<dyn Fn(&str) -> Option<(Span, LinkPaint)>>;
 pub(super) type LinkRing = Rc<dyn Fn(&str) -> Option<(Color, f32)>>;
 pub(super) type LinkHelp = Rc<dyn Fn(&str) -> Option<String>>;
+pub(super) type CodeLink = (Rc<dyn Fn(&str) -> Option<String>>, Color);
 
 impl Markdown {
     /// Called with a link's destination when it is clicked, or pressed with Enter or Space
@@ -63,10 +64,51 @@ impl Markdown {
         self.link_help = Some(Rc::new(f));
         self
     }
+    /// Inline code that names something to open, as Desktop's Markdown draws a path to a file
+    /// that exists (markdown.tsx markInlineCode, markdown.css
+    /// code[data-inline-code-kind="path"]):  maps the code's text to a link destination, or
+    /// None to leave it code. Such code keeps its font but draws in color without its chip,
+    /// and is a link, underlined in color at 40% under the pointer. Code already in a link
+    /// stays the link's.
+    pub fn code_link(mut self, color: Color, f: impl Fn(&str) -> Option<String> + 'static) -> Self {
+        self.code_link = Some((Rc::new(f), color));
+        self
+    }
 }
 
 impl Renderer {
+    /// inl with the inline code [Markdown::code_link] names as links among its links.
+    pub(super) fn with_code_links<'a>(&self, inl: &'a Inline) -> std::borrow::Cow<'a, Inline> {
+        let Some((f, _)) = &self.code_link else { return std::borrow::Cow::Borrowed(inl) };
+        let found: Vec<(usize, usize, String)> = inl
+            .spans
+            .iter()
+            .filter(|&&(a, b, st)| matches!(st, Style::Code) && !inl.links.iter().any(|l| l.0 <= a && b <= l.1))
+            .filter_map(|&(a, b, _)| f(inl.text[a..b].trim()).map(|url| (a, b, url)))
+            .collect();
+        if found.is_empty() {
+            return std::borrow::Cow::Borrowed(inl);
+        }
+        let mut out = inl.clone();
+        for (a, b, url) in found {
+            out.spans.push((a, b, Style::Link));
+            out.links.push((a, b, url));
+        }
+        out.links.sort_by_key(|l| l.0);
+        std::borrow::Cow::Owned(out)
+    }
+
+    /// The colour of the code link over ..b, when that range is one.
+    pub(super) fn code_link_color(&self, a: usize, b: usize, inl: &Inline) -> Option<Color> {
+        let (_, color) = self.code_link.as_ref()?;
+        let code = inl.spans.iter().any(|&(x, y, st)| matches!(st, Style::Code) && (x, y) == (a, b));
+        (code && inl.links.iter().any(|l| (l.0, l.1) == (a, b))).then_some(*color)
+    }
+
     pub(super) fn link_span(&self, a: usize, b: usize, inl: &Inline) -> Span {
+        if let Some(color) = self.code_link_color(a, b, inl) {
+            return Span { color: Some(color), ..Span::new(a, b) };
+        }
         let s = &self.s;
         let url = inl.links.iter().find(|l| (l.0, l.1) == (a, b)).map(|l| l.2.as_str());
         if let Some((own, _)) = self.link_look.as_ref().and_then(|look| url.and_then(|u| look(u))) {
@@ -79,6 +121,7 @@ impl Renderer {
     /// The single place a link press is connected: each of `inl.links` becomes a pressable
     /// span of `e` (the text element holding it) reporting its destination.
     pub(super) fn wire_link(&self, mut e: El, inl: &Inline) -> El {
+        let inl = &*self.with_code_links(inl);
         if let Some(ring) = self.link_ring.as_ref().filter(|_| !inl.links.is_empty()) {
             for (a, b, url) in &inl.links {
                 if let Some((color, width)) = ring(url) {
@@ -93,7 +136,11 @@ impl Renderer {
         };
         let hover = |url: &str| self.link_look.as_ref().and_then(|f| f(url)).map_or(default, |l| l.1);
         let help = |url: &str| self.link_help.as_ref().and_then(|f| f(url)).unwrap_or_default();
-        let e = inl.links.iter().fold(e, |e, (a, b, url)| e.link(Link::new(*a..*b, url.clone()).hover(hover(url)).help(help(url))));
+        let hover_at = |a: usize, b: usize, url: &str| match self.code_link_color(a, b, inl) {
+            Some(c) => LinkPaint::new().underline(c.alpha(0.4)),
+            None => hover(url),
+        };
+        let e = inl.links.iter().fold(e, |e, (a, b, url)| e.link(Link::new(*a..*b, url.clone()).hover(hover_at(*a, *b, url)).help(help(url))));
         let e = match &self.on_link { Some(f) => f(e), None => e };
         match &self.on_link_secondary { Some(f) => f(e), None => e }
     }
