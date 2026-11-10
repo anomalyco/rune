@@ -182,7 +182,7 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         let full_screen = mac::FullScreenWatch::new(&window);
         #[cfg(target_os = "macos")]
-        let prime = if visible && panel.is_none() { 2 } else { 0 };
+        let prime = if visible && panel.is_none() { native::Prime::launching() } else { native::Prime::Steady };
         #[cfg(target_os = "macos")]
         let native = Native {
             pacing: crate::platform::display_link::DisplayLink::new(&window, self.frame_wake.clone()),

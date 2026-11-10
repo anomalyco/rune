@@ -326,7 +326,7 @@ impl<S: 'static> Host<S> {
         if let Some(w) = &mut self.win {
             w.first_frame.hide();
             #[cfg(target_os = "macos")]
-            { w.native.prime = 0; }
+            { w.native.prime.stop(); }
         }
         self.secure_input.set(false);
         if !self.closes() { return; }
@@ -378,7 +378,7 @@ impl<S: 'static> Host<S> {
         if let Some(w) = &mut self.win {
             w.first_frame.hide();
             #[cfg(target_os = "macos")]
-            { w.native.prime = 0; }
+            { w.native.prime.stop(); }
         }
         self.secure_input.set(false);
         self.ime_allowed = false;

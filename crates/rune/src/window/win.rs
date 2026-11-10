@@ -178,7 +178,7 @@ impl Win {
     /// Its last frame is on screen and nothing has asked for another since.
     pub(super) fn rests(&self) -> bool {
         #[cfg(target_os = "macos")]
-        if self.native.prime > 0 { return false; }
+        if self.native.prime.presumes() { return false; }
         self.presented.is_some()
     }
 
