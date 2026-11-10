@@ -188,6 +188,8 @@ mod flights;
 mod text_flights;
 #[path = "runtime/input/hover.rs"]
 mod hover;
+#[path = "runtime/input/hover_delay.rs"]
+mod hover_delay;
 #[path = "runtime/motion/timer_wake.rs"]
 mod timer_wake;
 #[path = "runtime/motion/idle_meter.rs"]
@@ -635,10 +637,8 @@ pub struct Runtime<S: 'static> {
     hover_within: Vec<String>,
     /// `on_hover_change` handlers of elements that left the tree, owed their queued leave.
     hover_gone: Vec<(String, crate::el::WindowFocusFn)>,
-    /// Elements with `hover_delays` whose `on_hover_change` last heard `true`.
-    hover_shown: Vec<String>,
-    /// Delayed hover changes waiting out their delay: path, inside, due on the clock.
-    hover_pending: Vec<(String, bool, f64)>,
+    /// Elements with `hover_delays`: which heard the enter, and which wait out a delay.
+    hover_delays: hover_delay::HoverDelays,
     /// A press or blur stopped the waits to report an enter; the pointer's next move restarts them.
     hover_paused: bool,
     /// Hover waiting out layout motion under a still pointer.
@@ -976,8 +976,7 @@ impl<S: 'static> Runtime<S> {
             hovered: None,
             hover_within: Vec::new(),
             hover_gone: Vec::new(),
-            hover_shown: Vec::new(),
-            hover_pending: Vec::new(),
+            hover_delays: Default::default(),
             hover_paused: false,
             hover_hold: Default::default(),
             file_drag: Default::default(),
