@@ -10,22 +10,28 @@ fn model() -> TreeModel<&'static str> {
     m
 }
 
+fn label<'a>(t: &'a &'static str) -> &'a str {
+    t
+}
+
+/// Types `text` at `now`, as a key handler would, and jumps to the row it selects.
+fn typed(m: &mut TreeModel<&'static str>, text: &str, now: f64) -> Option<usize> {
+    let prefix = m.type_ahead.step(text, now);
+    m.type_select(&prefix, label)
+}
+
 #[test]
 fn typing_jumps_by_prefix_and_a_repeated_letter_cycles() {
     let mut m = model();
-    fn label<'a>(t: &'a &'static str) -> &'a str {
-        t
-    }
-    let r = m.type_select("b", true, label);
-    assert_eq!(r, Some(1), "beta: rows are alpha, beta, bravo");
+    assert_eq!(typed(&mut m, "b", 0.0), Some(1), "beta: rows are alpha, beta, bravo");
     m.select("b");
-    assert_eq!(m.type_select("b", false, label), Some(2), "b again cycles to bravo");
+    assert_eq!(typed(&mut m, "b", 0.1), Some(2), "b again cycles to bravo");
     m.select("c");
-    assert_eq!(m.type_select("r", false, label), None, "\"bbr\" is no name");
-    assert_eq!(m.type_select("b", true, label), Some(1), "after a pause, a new prefix from the next row");
+    assert_eq!(typed(&mut m, "r", 0.2), None, "\"bbr\" is no name");
+    assert_eq!(typed(&mut m, "b", 2.0), Some(1), "after a pause, a new prefix from the next row");
     m.select("a");
-    assert_eq!(m.type_select("b", true, label), Some(1));
-    assert_eq!(m.type_select("r", false, label), Some(2), "\"br\" keeps looking past beta to bravo");
+    assert_eq!(typed(&mut m, "b", 3.5), Some(1));
+    assert_eq!(typed(&mut m, "r", 3.6), Some(2), "\"br\" keeps looking past beta to bravo");
 }
 
 #[test]
