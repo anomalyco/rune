@@ -162,6 +162,41 @@ fn a_cue_on_a_frozen_step_waits_and_scaled_steps_keep_one_clock() {
 }
 
 #[test]
+fn a_once_phase_animator_waits_for_rest_and_stops_on_its_last_phase() {
+    let n = NodeId(1);
+    let mut store = AnimationStore::new();
+    let mut ph = PhaseAnimator::new()
+        .phase(|p| {
+            p.animate(n, prop::SCALE, 1.0, motion::SETTLE);
+        })
+        .phase(|p| {
+            p.animate(n, prop::SCALE, 1.04, motion::SETTLE);
+        })
+        .phase(|p| {
+            p.animate(n, prop::SCALE, 0.98, motion::SETTLE);
+        })
+        .advance_on(When::Settled)
+        .hold(0.1)
+        .once();
+    let (mut phases, mut moving) = (Vec::new(), Vec::new());
+    for i in 0..=600 {
+        store.set_time(i as f64 / 120.0);
+        ph.tick(&mut store);
+        store.tick();
+        phases.push(ph.current());
+        moving.push(store.is_animating(n, prop::SCALE));
+    }
+    let switches: Vec<usize> = (1..phases.len()).filter(|&i| phases[i] != phases[i - 1]).collect();
+    assert_eq!(switches.len(), 1, "phase 1 starts on the first tick, then one switch: {switches:?}");
+    let k = switches[0];
+    assert_eq!(phases[k], 2);
+    // `When::Settled` plus the hold: the track was at rest for 0.1 s before the switch.
+    assert!(moving[..k - 12].iter().any(|&m| m) && moving[k - 12..k].iter().all(|&m| !m), "{moving:?}");
+    assert_eq!(store.get(n, prop::SCALE), Some(0.98));
+    assert_eq!(store.active_len(), 0, "a finished one-shot starts nothing more");
+}
+
+#[test]
 fn a_phase_started_frozen_advances_after_resuming() {
     let mut store = AnimationStore::new();
     let n = NodeId(1);

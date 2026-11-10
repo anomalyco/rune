@@ -301,8 +301,28 @@ pub struct PhaseAnimator {
     repeat: bool,
     hold: f32,
     tracks: Vec<(TrackId, u32)>,
-    started: bool,
-    next_at: Option<f64>,
+    next: Next,
+}
+
+/// When a [`PhaseAnimator`] moves on from its current phase.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Next {
+    /// The first phase isn't shown yet.
+    Unstarted,
+    /// At store time `at`: the phase's arrival plus the hold.
+    At(f64),
+    /// The phase started on a stopped clock, so its arrival isn't known yet: asked each tick.
+    Frozen,
+    /// Once every track the phase started has settled (`When::Settled`).
+    Settled,
+    /// A [`once`](PhaseAnimator::once) animator is on its last phase.
+    Done,
+}
+
+impl Next {
+    fn at(t: f64) -> Next {
+        if t == f64::INFINITY { Next::Frozen } else { Next::At(t) }
+    }
 }
 
 impl Default for PhaseAnimator {
@@ -320,8 +340,7 @@ impl PhaseAnimator {
             repeat: true,
             hold: 0.0,
             tracks: Vec::new(),
-            started: false,
-            next_at: None,
+            next: Next::Unstarted,
         }
     }
     pub fn phase(mut self, build: impl FnOnce(&mut Ops)) -> Self {
@@ -354,40 +373,47 @@ impl PhaseAnimator {
             return;
         }
         let now = store.now();
-        if !self.started {
-            self.started = true;
+        let hold = self.hold as f64;
+        if self.next == Next::Unstarted {
             self.tracks.clear();
             self.phases[0].apply(store, 0.0, true, &mut self.tracks);
-            self.next_at = Some(now);
+            self.next = Next::At(now);
         }
         if store.reduced_motion() {
             return;
         }
-        let Some(mut at) = self.next_at else {
-            // Waiting for a settle.
-            if all_settled(store, &self.tracks) {
-                self.next_at = Some(now + self.hold as f64);
-            }
-            return;
-        };
-        if at == f64::INFINITY {
+        let at = match self.next {
+            Next::At(at) => at,
             // The phase was frozen when it started (`set_node_time_scale(_, 0.0)`): ask again.
-            at = arrival(store, &self.tracks, now) + self.hold as f64;
-            self.next_at = Some(at);
-        }
+            Next::Frozen => match Next::at(arrival(store, &self.tracks, now) + hold) {
+                Next::At(at) => {
+                    self.next = Next::At(at);
+                    at
+                }
+                _ => return,
+            },
+            Next::Settled => {
+                if all_settled(store, &self.tracks) {
+                    self.next = Next::At(now + hold);
+                }
+                return;
+            }
+            Next::Unstarted | Next::Done => return,
+        };
         if now < at {
             return;
         }
         let next = self.current + 1;
         if next >= self.phases.len() && !self.repeat {
+            self.next = Next::Done;
             return;
         }
         self.current = next % self.phases.len();
         self.tracks.clear();
         self.phases[self.current].apply(store, 0.0, false, &mut self.tracks);
-        self.next_at = match self.advance {
-            When::Arrived | When::Started => Some(arrival(store, &self.tracks, now) + self.hold as f64),
-            When::Settled => None,
+        self.next = match self.advance {
+            When::Arrived | When::Started => Next::at(arrival(store, &self.tracks, now) + hold),
+            When::Settled => Next::Settled,
         };
     }
 }
