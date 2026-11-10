@@ -16,6 +16,10 @@ pub(super) struct Win {
     pub(super) first_frame: FirstFrame,
     pub(super) surface: wgpu::Surface<'static>,
     pub(super) config: wgpu::SurfaceConfiguration,
+    /// Whether the surface's last configuration took. False after a refused one, and for a lost
+    /// device: no drawable can be taken from it (`acquire`), and its next frame replaces the
+    /// surface and the device it drew with (`Host::reattach`).
+    pub(super) surface_ok: bool,
     pub(super) window: Arc<Window>,
     /// When to redraw after a frame that had no drawable, or the next frame of motion when no
     /// display link paces it (macOS).
@@ -51,14 +55,19 @@ impl Win {
         if effect == RedrawEffect::Request { self.window.request_redraw(); }
     }
 
-    /// Matches the drawable to the window's size; false when it already did.
-    pub(super) fn resize_surface(&mut self, device: &wgpu::Device, size: winit::dpi::PhysicalSize<u32>) -> bool {
+    /// Matches the drawable to the window's size; false when it already did. A surface that
+    /// refuses the new size is marked so its next frame replaces it (`Host::reattach`) rather
+    /// than drawing into a surface wgpu has no presentation for.
+    pub(super) fn resize_surface(&mut self, gpu: &Gpu, size: winit::dpi::PhysicalSize<u32>) -> bool {
         let (width, height) = (size.width.max(1), size.height.max(1));
         if (self.config.width, self.config.height) == (width, height) { return false; }
         self.config.width = width;
         self.config.height = height;
-        self.surface.configure(device, &self.config);
-        if let Some(alpha) = &mut self.alpha { alpha.resize(device, (width, height)); }
+        if let Err(error) = super::configure(&self.surface, gpu, &self.config) {
+            eprintln!("rune: a window's surface refused its new size: {error}");
+            self.surface_ok = false;
+        }
+        if let Some(alpha) = &mut self.alpha { alpha.resize(&gpu.device, (width, height)); }
         #[cfg(target_os = "macos")]
         if let Some(shadow) = &self.native.shadow { shadow.redraw(); }
         true

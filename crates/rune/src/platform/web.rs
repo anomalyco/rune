@@ -260,7 +260,7 @@ async fn try_backend(canvas: &web_sys::HtmlCanvasElement, backends: wgpu::Backen
         required_limits, experimental_features: Default::default(),
         memory_hints: Default::default(), trace: Default::default(),
     }).await.map_err(|e| format!("GPU device: {e}"))?;
-    Ok((Gpu { instance, adapter, device, queue }, surface))
+    Ok((Gpu::from_device(instance, adapter, device, queue), surface))
 }
 
 async fn gpu(canvas: web_sys::HtmlCanvasElement, features: wgpu::Features) -> Result<(Gpu, wgpu::Surface<'static>), String> {

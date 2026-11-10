@@ -1,5 +1,7 @@
 //! The instanced wgpu renderer, with lazy bounded group layers and offscreen readback.
 
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+
 use bytemuck::{Pod, Zeroable};
 
 use crate::pixels::ImageAtlas;
@@ -394,6 +396,10 @@ pub struct Gpu {
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    /// Set by the device's lost callback: a device that went away (a driver reset, a GPU removed,
+    /// Windows' Modern Standby) can't configure a surface, and wgpu drops that error, so nothing
+    /// else would report it. See `is_lost`.
+    lost: Arc<AtomicBool>,
 }
 
 /// Vulkan loaders crash when two threads create instances or devices at once (seen with
@@ -401,6 +407,31 @@ pub struct Gpu {
 static GPU_INIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 impl Gpu {
+    /// A GPU over a device made elsewhere (`device_on`, a native backend, an example): Rune
+    /// watches it for loss and reports its uncaptured errors rather than letting wgpu panic the
+    /// app.
+    pub fn from_device(instance: wgpu::Instance, adapter: wgpu::Adapter, device: wgpu::Device, queue: wgpu::Queue) -> Gpu {
+        let lost = Arc::new(AtomicBool::new(false));
+        let lost_by_callback = lost.clone();
+        device.set_device_lost_callback(move |reason, message| {
+            // Before anything reads it: a lost device's surface can't be configured, and wgpu
+            // reports that failure nowhere (`is_lost`).
+            lost_by_callback.store(true, Ordering::Release);
+            eprintln!("rune: the GPU device was lost ({reason:?}): {message}");
+        });
+        // A validation error Rune didn't scope (a compositor's own resources, a driver's quirk)
+        // would otherwise panic in wgpu's default handler and take every window with it.
+        device.on_uncaptured_error(Arc::new(|error: wgpu::Error| {
+            eprintln!("rune: a GPU error went uncaptured: {error}");
+        }));
+        Gpu { instance, adapter, device, queue, lost }
+    }
+
+    /// Whether the device went away: a driver reset, a GPU removed, a resume from Modern Standby.
+    /// Nothing can be drawn with it, and its surfaces can't be configured, so its owner makes a
+    /// new GPU and surface instead (`Host::reattach`).
+    pub fn is_lost(&self) -> bool { self.lost.load(Ordering::Acquire) }
+
     /// Panics without a usable adapter or device; windows use `try_new`.
     pub fn new(instance: wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) -> Gpu {
         Self::try_new(instance, surface).unwrap_or_else(|error| panic!("{error}"))
@@ -439,7 +470,7 @@ impl Gpu {
         match Self::device_on(&adapter, wanted) {
             Ok((device, queue)) => {
                 crate::native_surface::note_device(&device, surface.is_some() || presented);
-                Ok(Gpu { instance, adapter, device, queue })
+                Ok(Gpu::from_device(instance, adapter, device, queue))
             }
             // A driver that can't make a device (a broken integrated GPU on a hybrid laptop)
             // leaves the window to the next adapter that presents to its surface.
@@ -457,7 +488,7 @@ impl Gpu {
                     if let Ok((device, queue)) = Self::device_on(&other, wanted) {
                         eprintln!("rune: {} ({:?}) made no device ({error}); using {}", first.name, first.backend, other.get_info().name);
                         crate::native_surface::note_device(&device, surface.is_some() || presented);
-                        return Ok(Gpu { instance, adapter: other, device, queue });
+                        return Ok(Gpu::from_device(instance, other, device, queue));
                     }
                 }
                 Err(error)
@@ -617,8 +648,9 @@ impl Gpu {
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn surface_gpu_from<'w>(early: Option<(Gpu, Renderer)>, wanted: wgpu::Features, translucent: bool,
         surface: impl FnOnce(&wgpu::Instance) -> Result<wgpu::Surface<'w>, String>) -> Result<(Gpu, wgpu::Surface<'w>, Option<Renderer>), String> {
-        // A prewarmed native Metal GPU lacking a wanted feature is dropped before it makes a surface.
-        let Some((early, renderer)) = early.filter(|(gpu, _)| crate::gpu::backend::serves(&gpu.device, wanted)) else {
+        // A prewarmed native Metal GPU lacking a wanted feature, or one that died since it was
+        // made, is dropped before it makes a surface.
+        let Some((early, renderer)) = early.filter(|(gpu, _)| !gpu.is_lost() && crate::gpu::backend::serves(&gpu.device, wanted)) else {
             let instance = Self::instance_for(wanted);
             let surface = surface(&instance)?;
             gpu_events::starting();
@@ -1121,6 +1153,9 @@ pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -
 #[cfg(test)]
 mod backdrop_tests;
 
+#[cfg(test)]
+#[path = "render/warm_tests.rs"]
+mod warm_tests;
 
 #[cfg(test)]
 mod prewarm_order_tests {

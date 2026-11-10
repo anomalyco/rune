@@ -59,11 +59,15 @@ impl<S: 'static> Host<S> {
     /// once: AppKit shows the new size when the event returns, with or without it.
     pub(super) fn draw(&mut self, resizing: bool) {
         let launcher = self.launcher();
-        let (Some(l), Some(_)) = (self.win.as_mut(), self.gpu.as_ref()) else { return };
+        let Some(l) = self.win.as_ref() else { return };
         let hidden = launcher && !self.life.shown();
-        if (!launcher && !self.life.uncovered()) || l.minimized() {
-            return self.covered_frame();
-        }
+        let covered = (!launcher && !self.life.uncovered()) || l.minimized();
+        if covered { return self.covered_frame(); }
+        // A device that died (a driver reset, a GPU removed, a resume from Modern Standby) and a
+        // surface that refused its configuration can draw nothing: the window makes both again
+        // before this frame. Neither can give a drawable, and wgpu panics asking one for it.
+        if !self.replace_lost_surface() { return; }
+        let Some(l) = self.win.as_mut() else { return };
         // A missed frame's retry, or the timer pacing unpaced motion: input waits for it, and
         // `new_events` runs due timers meanwhile.
         if !resizing && l.backing_off(Instant::now()) { return; }
@@ -130,7 +134,11 @@ impl<S: 'static> Host<S> {
         // Acquire before latching live values so a drawable wait cannot age the input.
         l.retry = None;
         if renderer.srgb_blend() != self.rt.srgb_blend() {
-            if !reblend(&l.surface, gpu, &mut l.config, renderer, &mut l.alpha, &mut self.rt) { return }
+            if !reblend(&l.surface, gpu, &mut l.config, renderer, &mut l.alpha, &mut self.rt) {
+                // A surface that won't take the new format is replaced before the next frame.
+                l.surface_ok = false;
+                return;
+            }
         }
         #[cfg(target_os = "macos")]
         { self.rt.native_materials = l.native.materials.native(); }
@@ -166,8 +174,14 @@ impl<S: 'static> Host<S> {
         // It draws: the link starts, and still says draw at once.
         #[cfg(target_os = "macos")]
         if deferred && let Some(pacing) = &mut l.native.pacing { let _ = pacing.next_frame(); }
-        let frame = match acquire(&l.surface, &gpu.device, &l.config, 1, &mut self.meter) {
+        let frame = match acquire(&l.surface, gpu, &l.config, l.surface_ok, 1, &mut self.meter) {
             Ok(frame) => frame,
+            // A surface with no presentation (a refused configuration, or a device that is gone)
+            // is replaced before the next frame rather than asked for a drawable.
+            Err(Missed::Unconfigured) => {
+                l.surface_ok = false;
+                return self.missed_frame(Missed::Unconfigured, built.is_some());
+            }
             Err(_) if hidden => { l.retry = l.first_frame.missed(Instant::now(), &mut l.hidden_wait); self.frame_reports.skipped(); return; }
             Err(missed) => return self.missed_frame(missed, built.is_some()),
         };
@@ -216,8 +230,12 @@ impl<S: 'static> Host<S> {
             drop(frame);
             rt.native_materials = true;
             animating |= rt.frame(0.0);
-            let frame = match acquire(&l.surface, &gpu.device, &l.config, 1, &mut self.meter) {
+            let frame = match acquire(&l.surface, gpu, &l.config, l.surface_ok, 1, &mut self.meter) {
                 Ok(frame) => frame,
+                Err(Missed::Unconfigured) => {
+                    l.surface_ok = false;
+                    return self.missed_frame(Missed::Unconfigured, true);
+                }
                 // Retrying at once is what spins while occluded; wait like any missed frame.
                 Err(_) if hidden => { l.retry = l.first_frame.missed(Instant::now(), &mut l.hidden_wait); self.frame_reports.skipped(); return; }
                 Err(missed) => return self.missed_frame(missed, true),
@@ -228,9 +246,16 @@ impl<S: 'static> Host<S> {
         // A handler switched blending (`Tx::set_srgb_blend`): this drawable has the old format.
         let frame = if renderer.srgb_blend() != rt.srgb_blend() {
             drop(frame);
-            if !reblend(&l.surface, gpu, &mut l.config, renderer, &mut l.alpha, rt) { return }
-            let frame = match acquire(&l.surface, &gpu.device, &l.config, 1, &mut self.meter) {
+            if !reblend(&l.surface, gpu, &mut l.config, renderer, &mut l.alpha, rt) {
+                l.surface_ok = false;
+                return;
+            }
+            let frame = match acquire(&l.surface, gpu, &l.config, l.surface_ok, 1, &mut self.meter) {
                 Ok(frame) => frame,
+                Err(Missed::Unconfigured) => {
+                    l.surface_ok = false;
+                    return self.missed_frame(Missed::Unconfigured, true);
+                }
                 Err(_) if hidden => { l.retry = l.first_frame.missed(Instant::now(), &mut l.hidden_wait); self.frame_reports.skipped(); return; }
                 Err(missed) => return self.missed_frame(missed, true),
             };
@@ -337,7 +362,10 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         if !hidden && let Some(latency) = l.native.launch_drawables.settle(self.idle, now) {
             l.config.desired_maximum_frame_latency = latency;
-            l.surface.configure(&gpu.device, &l.config);
+            if let Err(error) = configure(&l.surface, gpu, &l.config) {
+                eprintln!("rune: a window's surface refused its frame latency: {error}");
+                l.surface_ok = false;
+            }
         }
         #[cfg(target_os = "windows")]
         if self.idle && !hidden {

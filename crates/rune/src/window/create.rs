@@ -94,7 +94,8 @@ impl<S: 'static> Host<S> {
             self.rt.help_delay = self.rt.double_click_interval;
         }
         let mut prewarmed = None;
-        let (gpu, surface) = match self.gpu.take() {
+        // A device that died while this window was closed draws nothing: make another.
+        let (gpu, surface) = match self.gpu.take().filter(|(gpu, _)| !gpu.is_lost()) {
             Some((gpu, renderer)) => {
                 let surface = gpu.instance.create_surface(window.clone());
                 self.gpu = Some((gpu, renderer));
@@ -104,7 +105,7 @@ impl<S: 'static> Host<S> {
                 let features = self.comp.as_ref().map_or(wgpu::Features::empty(), |c| c.features());
                 let transparent = self.options.transparent;
                 // A shared device that can't composite this window's translucent pixels gets its own.
-                let cached = self.gpu_pool.borrow().upgrade().and_then(|gpu| {
+                let cached = self.gpu_pool.borrow().upgrade().filter(|gpu| !gpu.is_lost()).and_then(|gpu| {
                     let surface = gpu.instance.create_surface(window.clone()).ok()?;
                     crate::render::translucency::serves(&gpu, &surface, features, transparent).then_some((gpu, surface))
                 });
@@ -142,16 +143,23 @@ impl<S: 'static> Host<S> {
         }
         let (gpu, renderer) = self.gpu.as_mut().unwrap();
         rebuild_renderer(&gpu.device, renderer, target_format, &mut self.rt);
-        surface.configure(&gpu.device, &config);
+        // A refused configuration (the driver's, or a device that is gone) leaves a surface
+        // wgpu panics on its next drawable: the window closes, and the next open makes both.
+        let refused = configure(&surface, gpu, &config).err().map(|error| (gpu.is_lost(), error));
+        if let Some((lost, error)) = refused {
+            if lost {
+                self.gpu = None;
+                *self.gpu_pool.borrow_mut() = Weak::default();
+            }
+            return Err(format!("the window's GPU surface refused its configuration: {error}"));
+        }
         #[cfg(target_os = "macos")]
         crate::platform::macos::pin_contents_top_left(&surface);
         #[cfg(target_os = "macos")]
         crate::platform::macos::window_shape::apply_corners(&window, &self.macos_window, self.options.transparent, self.options.borderless);
         // Metal's PostMultiplied mode only makes CAMetalLayer non-opaque; Core Animation
         // still composites premultiplied pixels. Other backends follow wgpu's straight-alpha contract.
-        let alpha = (self.options.transparent && config.alpha_mode == wgpu::CompositeAlphaMode::PostMultiplied
-            && gpu.adapter.get_info().backend != wgpu::Backend::Metal)
-            .then(|| crate::render::surface_alpha::AlphaSurface::new(&gpu.device, target_format, (config.width, config.height)));
+        let alpha = alpha_pass(gpu, self.options.transparent, &config, target_format);
         let scale = window.scale_factor() as f32;
         self.rt.set_system_dark(crate::platform::preferences::window_dark(&window, self.args.theme.as_deref()));
         self.rt.set_viewport((phys.width as f32 / scale, phys.height as f32 / scale), scale);
@@ -210,6 +218,7 @@ impl<S: 'static> Host<S> {
             first_frame: FirstFrame::opened(Instant::now()),
             surface,
             config,
+            surface_ok: true,
             window,
             retry: None,
             occluded_wait: OCCLUDED_RETRY,
@@ -236,7 +245,7 @@ impl<S: 'static> Host<S> {
             let size = w.window.inner_size();
             let scale = w.window.scale_factor() as f32;
             if size.width > 0 && size.height > 0 {
-                w.resize_surface(&gpu.device, size);
+                w.resize_surface(gpu, size);
                 self.rt.set_viewport((size.width as f32 / scale, size.height as f32 / scale), scale);
             }
             sync_chrome(&mut self.rt, w, self.chrome, self.titlebar);
@@ -264,4 +273,96 @@ impl<S: 'static> Host<S> {
         }
         Ok(())
     }
+
+    /// Replaces the window's surface and the device it draws with, keeping the window, its size
+    /// and its place. A lost GPU configures nothing, and under it wgpu drops the error
+    /// `Surface::configure` returns without recording the surface's error sink: the surface has
+    /// no presentation, and its next `get_current_texture` panics ("Surface is not configured
+    /// for presentation"). The same goes for a surface whose configuration a driver refused.
+    /// The next frame draws with what this makes; failing, the window is released as `hide`
+    /// releases it with `release_gpu_when_closed`, and opening it again makes both.
+    pub(super) fn reattach(&mut self) -> Result<(), String> {
+        let Some(window) = self.win.as_ref().map(|w| w.window.clone()) else {
+            return Err("there is no window to draw into".into());
+        };
+        // The surface goes before the device that made it, and before the one that replaces it.
+        if let Some(w) = &mut self.win {
+            w.alpha = None;
+            w.presented = None;
+        }
+        self.gpu = None;
+        self.rt.text.atlas.invalidate();
+        self.rt.images.invalidate();
+        let features = self.comp.as_ref().map_or(wgpu::Features::empty(), |c| c.features());
+        let transparent = self.options.transparent;
+        let (gpu, surface, prewarmed) = Gpu::for_surface(features, transparent,
+            |instance| instance.create_surface(window.clone()).map_err(|e| e.to_string()))?;
+        let gpu = Arc::new(gpu);
+        let size = window.inner_size();
+        let (mut config, translucent) = surface_config(&surface, &gpu.adapter, (size.width, size.height), self.rt.srgb_blend())
+            .ok_or("the GPU adapter can't present to this window")?;
+        if transparent {
+            config.alpha_mode = translucent.unwrap_or(wgpu::CompositeAlphaMode::Opaque);
+        }
+        if let Err(error) = configure(&surface, &gpu, &config) {
+            return Err(format!("the new GPU surface refused its configuration: {error}"));
+        }
+        let target_format = if self.rt.srgb_blend() { config.format.remove_srgb_suffix() } else { config.format };
+        let mut renderer = prewarmed.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
+        renderer.set_srgb_blend(self.rt.srgb_blend());
+        rebuild_renderer(&gpu.device, &mut renderer, target_format, &mut self.rt);
+        let alpha = alpha_pass(&gpu, transparent, &config, target_format);
+        #[cfg(target_os = "macos")]
+        crate::platform::macos::pin_contents_top_left(&surface);
+        let Some(w) = self.win.as_mut() else { return Err("the window closed while it made a new surface".into()) };
+        w.surface = surface;
+        w.config = config;
+        w.surface_ok = true;
+        w.alpha = alpha;
+        #[cfg(target_os = "macos")]
+        {
+            // The hook watched presents on the old engine, and the launch cap is the launch's.
+            w.native.present = None;
+            w.native.prime = 0;
+        }
+        *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
+        crate::render::surface_gpu(&gpu);
+        self.gpu = Some((gpu, renderer));
+        Ok(())
+    }
+
+    /// Replaces the window's surface and device when either can't draw a frame: a device that is
+    /// gone, or a surface whose last configuration failed (`Win::surface_ok`). False when the
+    /// window gave both up instead, and there is nothing to draw with.
+    pub(super) fn replace_lost_surface(&mut self) -> bool {
+        let lost = self.gpu.as_ref().is_none_or(|(gpu, _)| gpu.is_lost());
+        if !lost && self.win.as_ref().is_none_or(|w| w.surface_ok) { return true; }
+        let error = match self.reattach() {
+            Ok(()) => return true,
+            Err(error) => error,
+        };
+        eprintln!("rune: could not replace the window's GPU surface: {error}");
+        // As a hidden window with `release_gpu_when_closed` gives both back: opening it again
+        // makes a window, a device and a surface.
+        self.win = None;
+        self.gpu = None;
+        *self.gpu_pool.borrow_mut() = Weak::default();
+        self.native_handle.native.ready.store(false, Ordering::Release);
+        self.native_handle.native.number.store(0, Ordering::Release);
+        self.rt.set_live_visible(false);
+        self.rt.text.atlas.invalidate();
+        self.rt.images.invalidate();
+        self.idle = true;
+        *self.shared.window_error.lock().unwrap() = Some(format!("the window's GPU surface could not be replaced: {error}"));
+        false
+    }
+}
+
+/// The pass that turns premultiplied pixels into straight alpha for a `PostMultiplied` surface on
+/// a backend that composites premultiplied pixels (all but Metal).
+fn alpha_pass(gpu: &Gpu, transparent: bool, config: &wgpu::SurfaceConfiguration, format: wgpu::TextureFormat)
+    -> Option<crate::render::surface_alpha::AlphaSurface> {
+    (transparent && config.alpha_mode == wgpu::CompositeAlphaMode::PostMultiplied
+        && gpu.adapter.get_info().backend != wgpu::Backend::Metal)
+        .then(|| crate::render::surface_alpha::AlphaSurface::new(&gpu.device, format, (config.width, config.height)))
 }

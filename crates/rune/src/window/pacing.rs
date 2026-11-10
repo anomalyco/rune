@@ -208,17 +208,25 @@ impl Missed {
 /// `reconfigures` times, synchronously; every other miss returns at once. On macOS a surface
 /// wgpu would call occluded is never asked: each failed `get_current_texture` leaks a texture
 /// id in wgpu-core 30.0.1.
-pub(crate) fn acquire(surface: &wgpu::Surface, device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, reconfigures: u32,
+pub(crate) fn acquire(surface: &wgpu::Surface, gpu: &Gpu, config: &wgpu::SurfaceConfiguration, configured: bool, reconfigures: u32,
     meter: &mut SurfaceMeter) -> Result<wgpu::SurfaceTexture, Missed> {
-    acquire_checked(surface, device, config, reconfigures, meter, true)
+    acquire_checked(surface, gpu, config, configured, reconfigures, meter, true)
 }
 
 /// `acquire`, skipping the occlusion check when the caller has just read the window hosting
-/// the surface as visible (`check_occlusion` false).
-pub(crate) fn acquire_checked(surface: &wgpu::Surface, device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, mut reconfigures: u32,
+/// the surface as visible (`check_occlusion` false). `configured` is whether the surface's last
+/// configuration took: one that didn't has no presentation, and wgpu panics on its next
+/// drawable (`Missed::Unconfigured`), so it is never asked.
+pub(crate) fn acquire_checked(surface: &wgpu::Surface, gpu: &Gpu, config: &wgpu::SurfaceConfiguration, configured: bool, mut reconfigures: u32,
     meter: &mut SurfaceMeter, check_occlusion: bool) -> Result<wgpu::SurfaceTexture, Missed> {
     #[cfg(not(target_os = "macos"))]
     let _ = check_occlusion;
+    // A lost device configures nothing, and wgpu drops the error that says so: like a surface
+    // whose configuration failed, it has no presentation to take a drawable from.
+    if gpu.is_lost() || !configured {
+        meter.failed(Missed::Unconfigured);
+        return Err(Missed::Unconfigured);
+    }
     #[cfg(target_os = "macos")]
     if check_occlusion && crate::platform::macos::surface_occluded(surface) {
         meter.skipped();
@@ -231,14 +239,14 @@ pub(crate) fn acquire_checked(surface: &wgpu::Surface, device: &wgpu::Device, co
             // A surface that won't take its configuration again is reported rather than
             // panicking in wgpu's default error handler.
             Err(Missed::Outdated) if reconfigures > 0 => {
-                if let Err(error) = super::configure(surface, device, config) {
+                if let Err(error) = super::configure(surface, gpu, config) {
                     eprintln!("rune: a surface refused its configuration: {error}");
                     return Err(Missed::Unconfigured);
                 }
                 reconfigures -= 1;
             }
             Err(Missed::Outdated) => {
-                return Err(match super::configure(surface, device, config) {
+                return Err(match super::configure(surface, gpu, config) {
                     Ok(()) => Missed::Outdated,
                     Err(error) => {
                         eprintln!("rune: a surface refused its configuration: {error}");

@@ -463,7 +463,7 @@ fn main() {
     }))
     .unwrap();
     println!("ADAPTER {:?}", adapter.get_info());
-    let gpu = Gpu { instance, adapter, device, queue };
+    let gpu = Gpu::from_device(instance, adapter, device, queue);
     differential(&gpu);
     bench(&gpu, !std::env::args().any(|arg| arg == "--verify-only"));
     primitive_pixels(&gpu);

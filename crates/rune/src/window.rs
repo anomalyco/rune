@@ -657,12 +657,19 @@ pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (
 /// Configures `surface`, returning wgpu's error instead of panicking in its default handler,
 /// so a surface the driver refuses (an overlay's XWayland window on NVIDIA, hex#979) costs
 /// only its owner. The message names the configuration for logs.
+///
+/// A lost device fails here even when wgpu reports nothing: it drops the `DeviceLost` that
+/// `Surface::configure` returns (wgpu-30.0.1 `handle_error_inner`, "will be surfaced via
+/// callback") without recording the surface's error sink, so the surface has no presentation
+/// and the next `get_current_texture` panics ("Surface is not configured for presentation").
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn configure(surface: &wgpu::Surface, device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Result<(), String> {
-    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
-    surface.configure(device, config);
+pub(crate) fn configure(surface: &wgpu::Surface, gpu: &Gpu, config: &wgpu::SurfaceConfiguration) -> Result<(), String> {
+    if gpu.is_lost() { return Err(lost_device(config)); }
+    let validation = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let internal = gpu.device.push_error_scope(wgpu::ErrorFilter::Internal);
+    surface.configure(&gpu.device, config);
     let error = pollster::block_on(internal.pop()).or(pollster::block_on(validation.pop()));
+    if gpu.is_lost() { return Err(lost_device(config)); }
     match error {
         None => Ok(()),
         Some(error) => {
@@ -673,10 +680,16 @@ pub(crate) fn configure(surface: &wgpu::Surface, device: &wgpu::Device, config: 
     }
 }
 
+/// A configuration that never reached the surface because its device is gone.
+#[cfg(not(target_arch = "wasm32"))]
+fn lost_device(config: &wgpu::SurfaceConfiguration) -> String {
+    format!("the GPU device was lost ({}x{}, {:?}, {:?}, {:?})", config.width, config.height, config.format, config.alpha_mode, config.present_mode)
+}
+
 /// The browser reports surface errors asynchronously; there is nothing to catch here.
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn configure(surface: &wgpu::Surface, device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Result<(), String> {
-    surface.configure(device, config);
+pub(crate) fn configure(surface: &wgpu::Surface, gpu: &Gpu, config: &wgpu::SurfaceConfiguration) -> Result<(), String> {
+    surface.configure(&gpu.device, config);
     Ok(())
 }
 
@@ -691,7 +704,7 @@ pub(crate) fn reblend<S: 'static>(surface: &wgpu::Surface, gpu: &Gpu, config: &m
     let Some((next, _)) = surface_config(surface, &gpu.adapter, (config.width, config.height), srgb) else { return false };
     if (config.format, &config.view_formats) != (next.format, &next.view_formats) {
         (config.format, config.view_formats) = (next.format, next.view_formats);
-        if let Err(error) = configure(surface, &gpu.device, config) {
+        if let Err(error) = configure(surface, gpu, config) {
             eprintln!("rune: could not reconfigure a surface for a blend switch: {error}");
             return false;
         }

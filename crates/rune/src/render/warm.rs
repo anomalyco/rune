@@ -50,9 +50,10 @@ pub(crate) fn surface_gpu(gpu: &Arc<Gpu>) {
     *lock(&SLOT.live) = Arc::downgrade(gpu);
 }
 
-/// The device a surface draws with now, if any.
+/// The device a surface draws with now, if any. A lost one is no device to share, so it reads as
+/// none and `warm` makes another.
 pub(super) fn live() -> Option<Arc<Gpu>> {
-    lock(&SLOT.live).upgrade()
+    lock(&SLOT.live).upgrade().filter(|gpu| !gpu.is_lost())
 }
 
 /// Starts making a device with `features` (whichever the adapter has) and the renderer,
@@ -110,8 +111,9 @@ fn wait_for_surface(mut state: std::sync::MutexGuard<'_, State>) {
 /// A hidden overlay's device and renderer, its surface already dropped, for the next surface to
 /// take within `linger`. The device first finishes its work, so what the dropped surface and
 /// its swapchain left is freed now rather than whenever the device next runs. When something
-/// already waits in the slot, this one goes.
+/// already waits in the slot, this one goes; so does a device that died while it was hidden.
 pub(crate) fn park(gpu: Gpu, renderer: Renderer, linger: Duration) {
+    if gpu.is_lost() { return; }
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
     if renderer.surfaces.is_some() { return; }
     let mut state = lock(&SLOT.state);
@@ -146,7 +148,8 @@ fn make(features: wgpu::Features) -> Option<Warmed> {
     Some(Warmed(gpu, renderer))
 }
 
-/// What `warm` made, waiting for it if it's still making it.
+/// What `warm` made, waiting for it if it's still making it. A device that died while it waited
+/// is dropped: its surface's owner makes a new one.
 pub(super) fn take() -> Option<(Gpu, Renderer)> {
     let mut state = lock(&SLOT.state);
     while matches!(*state, State::Making { .. }) {
@@ -154,6 +157,7 @@ pub(super) fn take() -> Option<(Gpu, Renderer)> {
     }
     let State::Ready { warmed: Warmed(gpu, renderer), .. } = std::mem::take(&mut *state) else { return None };
     SLOT.changed.notify_all();
+    if gpu.is_lost() { return None; }
     Some((gpu, renderer))
 }
 
