@@ -12,8 +12,19 @@ pub(super) struct NativeWindow {
     pub(super) ready: AtomicBool,
     /// What the host's meter last published.
     pub(super) stats: Arc<Mutex<SurfaceStats>>,
-    /// The event loop and slot once the host exists, and the requests made before it did.
-    pub(super) route: Mutex<(Option<(EventLoopProxy<WakeEvent>, usize)>, Vec<Request>)>,
+    pub(super) route: Mutex<Route>,
+}
+
+/// Where a window's requests go.
+pub(super) enum Route {
+    /// No host yet, or a headless run, which takes them each turn (`take_headless`).
+    Unbound { queued: Vec<Request> },
+    /// The host's event loop and slot.
+    Bound { proxy: EventLoopProxy<WakeEvent>, slot: usize },
+}
+
+impl Default for Route {
+    fn default() -> Self { Route::Unbound { queued: Vec::new() } }
 }
 
 /// A window's native reference, refreshed across App close/reopen without owning the window.
@@ -28,25 +39,29 @@ impl WindowHandle {
     /// Routes requests to the window's host, starting with those queued before it existed.
     pub(super) fn bind(&self, proxy: EventLoopProxy<WakeEvent>, slot: usize) {
         let mut route = self.native.route.lock().unwrap();
-        for request in std::mem::take(&mut route.1) { let _ = proxy.send_event(request(slot)); }
-        route.0 = Some((proxy, slot));
+        if let Route::Unbound { queued } = &mut *route {
+            for request in std::mem::take(queued) { let _ = proxy.send_event(request(slot)); }
+        }
+        *route = Route::Bound { proxy, slot };
     }
 
     /// A headless run never binds a host; it takes the queued requests instead.
     pub(crate) fn take_headless(&self) -> Vec<WakeEvent> {
-        let queued = std::mem::take(&mut self.native.route.lock().unwrap().1);
+        let queued = match &mut *self.native.route.lock().unwrap() {
+            Route::Unbound { queued } => std::mem::take(queued),
+            Route::Bound { .. } => Vec::new(),
+        };
         queued.into_iter().map(|request| request(0)).collect()
     }
 
     pub(crate) fn headless_pending(&self) -> bool {
-        !self.native.route.lock().unwrap().1.is_empty()
+        matches!(&*self.native.route.lock().unwrap(), Route::Unbound { queued } if !queued.is_empty())
     }
 
     pub(super) fn send(&self, request: impl FnOnce(usize) -> WakeEvent + Send + 'static) {
-        let mut route = self.native.route.lock().unwrap();
-        match &route.0 {
-            Some((proxy, slot)) => { let _ = proxy.send_event(request(*slot)); }
-            None => route.1.push(Box::new(request)),
+        match &mut *self.native.route.lock().unwrap() {
+            Route::Bound { proxy, slot } => { let _ = proxy.send_event(request(*slot)); }
+            Route::Unbound { queued } => queued.push(Box::new(request)),
         }
     }
 
@@ -144,3 +159,7 @@ pub(super) fn native_window_number(window: &Window) -> Option<u32> {
 }
 #[cfg(not(target_os = "macos"))]
 pub(super) fn native_window_number(_: &Window) -> Option<u32> { None }
+
+#[cfg(test)]
+#[path = "handle_tests.rs"]
+mod tests;
