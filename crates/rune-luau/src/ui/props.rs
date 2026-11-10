@@ -107,6 +107,7 @@ atoms! {
     Disabled = "disabled",
     HelpSide = "helpSide",
     FadeOut = "fadeOut",
+    Dir = "dir",
 }
 
 /// Every prop name the built-in nodes read.
@@ -534,6 +535,17 @@ impl Props {
                 }
             }
             Atom::FadeOut => self.fade_out = flag(v)?,
+            // HTML's `dir`: `ltr` or `rtl` lays the subtree out that way whatever the window's
+            // direction, `auto` takes a text's first strong direction.
+            Atom::Dir => {
+                let dir = match string(v)? {
+                    "ltr" => rune::Direction::Ltr,
+                    "rtl" => rune::Direction::Rtl,
+                    "auto" => rune::Direction::Auto,
+                    s => return Err(format!("unknown dir {s}")),
+                };
+                with(e, |e| e.dir(dir));
+            }
             // Tables, read off the stack by `decode_at`.
             Atom::Corners | Atom::Pin => return Err(format!("{name} must be a table, got {}", self::name(v))),
             Atom::LineHeight => self.text = self.text.lh(num(v)?),
