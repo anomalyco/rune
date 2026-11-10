@@ -366,9 +366,13 @@ impl Tx {
     /// menu's `onCloseAutoFocus` does after the change that closed it. A modal that opens in the
     /// same change (a dialog a menu's pick opens) keeps focus, and as it closes hands it back to
     /// where focus was before that change, as a web dialog that opened from a menu item records
-    /// that item: when it's gone, nothing has focus.
+    /// that item: when it's gone, nothing has focus. Focus this change already asked for (a
+    /// pick that focused something with [`Tx::focus`]) stays asked, as a web menu's restore
+    /// finds focus moved outside the menu and leaves it.
     pub fn return_focus(&mut self, key: impl Into<String>, ring: bool) {
-        self.focus_to = Some((key.into(), ring, FocusAsk::Return));
+        if self.focus_to.as_ref().is_none_or(|(.., ask)| *ask == FocusAsk::Return) {
+            self.focus_to = Some((key.into(), ring, FocusAsk::Return));
+        }
     }
 
     /// Whether keyboard focus was showing its ring (`:focus-visible`) as this event arrived:

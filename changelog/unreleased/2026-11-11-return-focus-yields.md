@@ -1,0 +1,1 @@
+- **`Tx::return_focus` yields to focus the change already asked for.** A menu pick that focused something with `Tx::focus` keeps it as the menu hands focus back, as a web menu's restore leaves focus that moved outside the menu, so apps don't need to skip the hand-back themselves.
