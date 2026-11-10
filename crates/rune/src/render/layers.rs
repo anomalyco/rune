@@ -46,6 +46,17 @@ pub(super) struct Layers {
 }
 
 impl Layers {
+    /// Kept textures get the budget left after this frame's visible caches.
+    fn trim_retained(&mut self, active_bytes: u64) {
+        let available = self.cache_budget.saturating_sub(active_bytes);
+        let mut bytes: u64 = self.retained.iter().map(Renderer::target_bytes).sum();
+        while bytes > available {
+            let oldest = self.retained.iter().enumerate().min_by_key(|(_, t)| t.last_used).unwrap().0;
+            let evicted = self.retained.swap_remove(oldest);
+            bytes -= Renderer::target_bytes(&evicted);
+        }
+    }
+
     /// Makes every blurred layer write its blur uniforms again on its next prepare.
     pub(super) fn forget_blur_uniforms(&mut self) {
         let targets = self.targets.iter_mut().flatten().chain(&mut self.retained);
@@ -144,8 +155,8 @@ pub(super) struct Target {
     pub glyphs: Vec<wgpu::BindGroup>,
     image_generation: u64,
     blur: Option<layer_blur::Scratch>,
-    cache_node: Option<u64>,
-    cache_sig: u64,
+    /// The node and signature of the cached content, if this target is kept.
+    cache: Option<(u64, u64)>,
     last_used: u64,
     content_size: [f32; 2],
 }
@@ -179,12 +190,7 @@ impl Renderer {
     /// before least-recently-used entries are evicted. Defaults to 64 MiB.
     pub fn set_cache_budget(&mut self, bytes: u64) {
         self.layers.cache_budget = bytes;
-        let mut retained_bytes: u64 = self.layers.retained.iter().map(Self::target_bytes).sum();
-        while !self.layers.retained.is_empty() && retained_bytes > bytes {
-            let oldest = self.layers.retained.iter().enumerate().min_by_key(|(_, t)| t.last_used).unwrap().0;
-            retained_bytes -= Self::target_bytes(&self.layers.retained[oldest]);
-            self.layers.retained.swap_remove(oldest);
-        }
+        self.layers.trim_retained(0);
     }
 
     /// Current [`El::cache`](crate::El::cache) texture memory budget in bytes.
@@ -197,8 +203,8 @@ impl Renderer {
             out.clear();
         }
         for t in self.layers.targets.iter().flatten().chain(self.layers.retained.iter()) {
-            if let Some(node) = t.cache_node {
-                out.insert(node, t.cache_sig);
+            if let Some((node, sig)) = t.cache {
+                out.insert(node, sig);
             }
         }
     }
@@ -228,7 +234,7 @@ impl Renderer {
         self.layers.viewport = viewport;
         let had_layers = !self.layers.plan.is_empty();
         for slot in &mut self.layers.targets {
-            if slot.as_ref().is_some_and(|t| t.cache_node.is_some()) {
+            if slot.as_ref().is_some_and(|t| t.cache.is_some()) {
                 self.layers.retained.push(slot.take().unwrap());
             }
         }
@@ -238,8 +244,8 @@ impl Renderer {
             if i.params[1] == KIND_LAYER {
                 let parent = self.layers.stack.last().copied();
                 let parent_cached_hit = parent.is_some_and(|p| {
-                    self.layers.plan[p].cache.is_some_and(|(n, s)| {
-                        self.layers.retained.iter().any(|t| t.cache_node == Some(n) && t.cache_sig == s)
+                    self.layers.plan[p].cache.is_some_and(|key| {
+                        self.layers.retained.iter().any(|t| t.cache == Some(key))
                     })
                 });
                 let opacity = i.fill[3].clamp(0.0, 1.0);
@@ -373,14 +379,14 @@ impl Renderer {
             l.rect = [e[0], e[1], (e[2] - e[0]).max(0.0), (e[3] - e[1]).max(0.0)];
             if l.rect[2] == 0.0 || l.rect[3] == 0.0 { l.show = Show::Hidden; }
             if !isolate || l.show != Show::Inline { continue; }
-            let Some((node_id, sig)) = l.cache else { continue };
-            let Some(pos) = self.layers.retained.iter().position(|t| t.cache_node == Some(node_id) && t.cache_sig == sig) else { continue };
+            let Some(key) = l.cache else { continue };
+            let Some(pos) = self.layers.retained.iter().position(|t| t.cache == Some(key)) else { continue };
             let t_bytes = Self::target_bytes(&self.layers.retained[pos]);
             let over_budget = active_cache_bytes + t_bytes > self.layers.cache_budget;
             if over_budget && l.begin + 1 < l.end { continue; }
             let mut t = self.layers.retained.swap_remove(pos);
             if over_budget {
-                t.cache_node = None;
+                t.cache = None;
             } else {
                 t.last_used = stamp;
                 active_cache_bytes += t_bytes;
@@ -429,22 +435,18 @@ impl Renderer {
             let mut bucket = (width.div_ceil(64) * 64, height.div_ceil(64) * 64);
             let mut cache_target = None;
             if let Some((node_id, sig)) = l.cache {
+                let previous = self.layers.retained.iter().position(|t| t.cache.is_some_and(|(n, _)| n == node_id));
                 let needed_bytes = u64::from(bucket.0) * u64::from(bucket.1) * bpp;
                 if bucket.0 <= max_dim && bucket.1 <= max_dim && active_cache_bytes + needed_bytes <= self.layers.cache_budget {
                     active_cache_bytes += needed_bytes;
                     cache_target = Some((node_id, sig));
-                    if let Some(pos) = self.layers.retained.iter().position(|t| t.cache_node == Some(node_id)) {
+                    if let Some(pos) = previous {
                         self.layers.targets[index] = Some(self.layers.retained.swap_remove(pos));
                     } else {
-                        let mut retained_bytes: u64 = self.layers.retained.iter().map(Self::target_bytes).sum();
-                        while !self.layers.retained.is_empty() && active_cache_bytes + retained_bytes > self.layers.cache_budget {
-                            let oldest = self.layers.retained.iter().enumerate().min_by_key(|(_, t)| t.last_used).unwrap().0;
-                            retained_bytes -= Self::target_bytes(&self.layers.retained[oldest]);
-                            self.layers.retained.swap_remove(oldest);
-                        }
+                        self.layers.trim_retained(active_cache_bytes);
                     }
                 } else {
-                    if let Some(pos) = self.layers.retained.iter().position(|t| t.cache_node == Some(node_id)) {
+                    if let Some(pos) = previous {
                         self.layers.retained.swap_remove(pos);
                     }
                     // Drawn like an uncached group, it only needs the part that shows.
@@ -486,13 +488,12 @@ impl Renderer {
                 self.layers.targets[index] = Some(Target { texture, view, projection,
                     identity: self.layers.allocations + 1, composite_parent: None,
                     quad: Self::instance_buffer(device, 1), base, composite, images: Vec::new(), glyphs: Vec::new(), image_generation: u64::MAX, blur: None,
-                    cache_node: None, cache_sig: 0, last_used: 0, content_size: [0.0; 2] });
+                    cache: None, last_used: 0, content_size: [0.0; 2] });
                 self.layers.allocations += 1;
             }
             let sigma = self.layers.plan[index].blur;
             let t = self.layers.targets[index].as_mut().unwrap();
-            t.cache_node = cache_target.map(|(n, _)| n);
-            t.cache_sig = cache_target.map_or(0, |(_, s)| s);
+            t.cache = cache_target;
             t.last_used = stamp;
             t.content_size = [bounds[2], bounds[3]];
             if sigma > 0.0 {
@@ -514,14 +515,7 @@ impl Renderer {
             quad.radii = l.hole;
             staging.write_buffer(&t.quad, 0, bytemuck::bytes_of(&quad));
         }
-        if !self.layers.retained.is_empty() {
-            let mut retained_bytes: u64 = self.layers.retained.iter().map(Self::target_bytes).sum();
-            while !self.layers.retained.is_empty() && active_cache_bytes + retained_bytes > self.layers.cache_budget {
-                let oldest = self.layers.retained.iter().enumerate().min_by_key(|(_, t)| t.last_used).unwrap().0;
-                retained_bytes -= Self::target_bytes(&self.layers.retained[oldest]);
-                self.layers.retained.swap_remove(oldest);
-            }
-        }
+        self.layers.trim_retained(active_cache_bytes);
         // Rebind child composites to their nearest materialized parent (opaque scopes flatten).
         for index in 0..self.layers.plan.len() {
             if self.layers.targets[index].is_none() { continue; }
