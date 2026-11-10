@@ -165,6 +165,7 @@ impl<S: 'static> Runtime<S> {
         // transition (a crossfade in place) and with the parents it leaves or enters with.
         if instant || tx.settle || self.reduced_motion { return; }
         let mut old_index: Option<HashMap<NodeId, usize>> = None;
+        let mut built_index: Option<HashMap<NodeId, usize>> = None;
         // Descendants first: matching an element unmounts its old subtree, matched ones included.
         for (key, from) in old.into_iter().rev() {
             let Some(&(i, true)) = by_id.get(&key) else { continue };
@@ -172,17 +173,17 @@ impl<S: 'static> Runtime<S> {
             if from == to || self.node_index.contains_key(&from) || !self.scene.contains(from) || self.is_exiting(from) { continue; }
             let index = old_index.get_or_insert_with(|| self.nodes.iter().enumerate().map(|(k, n)| (n.id, k)).collect());
             let Some(&from_i) = index.get(&from) else { continue };
-            // Scroll offsets live outside the scene: start where `from` was seen on screen.
-            let mut offset = rune_motion::Vec2::ZERO;
-            if self.built {
-                // Flights drop the cover offsets of flights around them.
-                let shift = |k: usize| self.inh_scratch.get(k).map_or([0.0; 2], |h| [h.dx - h.cover[0], h.dy - h.cover[1]]);
-                let source = self.nodes[from_i].parent.map_or([0.0; 2], shift);
-                let row = self.row_dy.get(from_i).copied().unwrap_or(0.0);
-                let dest = std::iter::successors(nodes[i].parent, |&p| nodes[p].parent)
-                    .find_map(|p| index.get(&nodes[p].id).copied()).map_or([0.0; 2], shift);
-                offset = rune_motion::Vec2::new(source[0] - dest[0], source[1] + row - dest[1]);
-            }
+            // Scroll offsets live outside the scene: start where `from` was seen on screen. They
+            // come from the last build, which a commit earlier in the same frame (a glide's poll
+            // before the key that closes it) leaves in place, so look nodes up by id.
+            let built = &*built_index.get_or_insert_with(|| self.built_ids.iter().enumerate().map(|(k, &id)| (id, k)).collect());
+            // Flights drop the cover offsets of flights around them.
+            let shift = |id: NodeId| built.get(&id).and_then(|&k| self.inh_scratch.get(k)).map_or([0.0; 2], |h| [h.dx - h.cover[0], h.dy - h.cover[1]]);
+            let source = self.nodes[from_i].parent.map_or([0.0; 2], |p| shift(self.nodes[p].id));
+            let row = built.get(&from).and_then(|&k| self.row_dy.get(k)).copied().unwrap_or(0.0);
+            let dest = std::iter::successors(nodes[i].parent, |&p| nodes[p].parent)
+                .map(|p| nodes[p].id).find(|id| built.contains_key(id)).map_or([0.0; 2], shift);
+            let offset = rune_motion::Vec2::new(source[0] - dest[0], source[1] + row - dest[1]);
             let spring = tx.motion.or(nodes[i].matched.as_ref().and_then(|m| m.1)).unwrap_or(motion::REFLOW);
             let fill = self.color(from, P_FILL, self.nodes[from_i].vis.fill);
             let opacity = self.scene.get(from, prop::OPACITY);
