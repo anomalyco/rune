@@ -172,6 +172,14 @@ impl<S: 'static> Runtime<S> {
         self.focus.path().is_some_and(|f| f.strip_prefix(path).is_some_and(|rest| rest.is_empty() || rest.starts_with('/')))
     }
     pub(super) fn focus_ring_visible(&self, mut i: usize) -> bool {
+        // `Cx::force_focus_rings`: the ring of whichever control owns node `i`.
+        if self.defaults.force_focus_rings {
+            loop {
+                if self.can_focus(i) { return true; }
+                let Some(p) = self.nodes[i].parent else { return false };
+                i = p;
+            }
+        }
         if !self.focus.keyboard() { return false; }
         loop {
             if self.focus.is(&self.nodes[i].path) { return true; }
@@ -195,6 +203,26 @@ impl<S: 'static> Runtime<S> {
         let own = self.nodes.iter().enumerate()
             .any(|(j, m)| (m.focus.ring.is_some() || m.focus.ring_off) && self.focus_ring_visible(j));
         (!own).then_some(i)
+    }
+    /// Under `Cx::force_focus_rings`, whether node `i` draws the default ring: a control that
+    /// can take focus and would draw it when focused (see [`Self::default_ring_owner`]), with no
+    /// ring of its own on it or on a part of it.
+    pub(super) fn forced_default_ring(&self, i: usize) -> bool {
+        if !self.defaults.force_focus_rings || !self.can_focus(i) { return false; }
+        let n = &self.nodes[i];
+        if n.input.is_some() || n.focus.highlight.is_some() || self.link_count(i) > 0 { return false; }
+        if self.group(i).is_some_and(|g| LIST_ROLES.contains(&self.nodes[g].role) || VERTICAL_ROLES.contains(&self.nodes[g].role)) {
+            return false;
+        }
+        // A part's own ring belongs to its nearest focusable ancestor-or-self.
+        !self.nodes.iter().enumerate().any(|(j, m)| (m.focus.ring.is_some() || m.focus.ring_off) && self.owner_of(j) == Some(i))
+    }
+    /// The nearest node at or above `j` that can take focus.
+    fn owner_of(&self, mut j: usize) -> Option<usize> {
+        loop {
+            if self.can_focus(j) { return Some(j); }
+            j = self.nodes[j].parent?;
+        }
     }
     /// The view's `Cx::focus_ring`, else AppKit's: 3 points just outside the border box.
     pub(super) fn default_focus_ring(&self) -> crate::el::Outline {

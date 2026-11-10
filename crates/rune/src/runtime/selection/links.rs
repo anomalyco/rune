@@ -266,7 +266,7 @@ impl<S: 'static> Runtime<S> {
         })
     }
 
-    fn link_count(&self, i: usize) -> usize {
+    pub(super) fn link_count(&self, i: usize) -> usize {
         self.nodes[i].text.as_ref().map_or(0, |t| t.links.len())
     }
 

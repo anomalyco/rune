@@ -52,6 +52,7 @@ impl<S: 'static> Runtime<S> {
             self.focus.path().hash(&mut h);
             self.focus.keyboard().hash(&mut h);
             self.focus.hovered().hash(&mut h);
+            self.defaults.force_focus_rings.hash(&mut h);
             if let Some(ring) = self.defaults.focus_ring {
                 let c = ring.color;
                 [ring.width, ring.offset, c.r, c.g, c.b, c.a].map(f32::to_bits).hash(&mut h);
