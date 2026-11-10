@@ -509,7 +509,7 @@ pub struct Runtime<S: 'static> {
     /// Sideways scroll of focused single-line fields, in points, keyed by node path.
     input_scroll: HashMap<String, f32>,
     dissolve_scratch: Vec<bool>,
-    exit_mask: exit_mask::ExitMask,
+    exit_mask: exit_mask::Mask,
     key_index: key_index::KeyIndex,
     has_dissolve: bool,
     cache_live_scratch: Vec<bool>,

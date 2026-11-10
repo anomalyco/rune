@@ -311,7 +311,7 @@ impl<S: 'static> Runtime<S> {
         let mut top_moved = std::mem::take(&mut scratch.top_moved);
         top_moved.clear();
         let has_virtuals = !self.virtuals.is_empty();
-        let mut last = paint_tracks::LastBuild::default();
+        let mut last = paint_tracks::Finder::default();
         let mut skip_cursor = 0usize;
         let mut i = 0usize;
         while i < nodes.len() {

@@ -109,7 +109,7 @@ impl<S: 'static> Runtime<S> {
         });
         if !any_active_unseen && !mounts { return Vec::new(); }
         // Each new node's place in the last build, found walking both trees in step.
-        let mut last = paint_tracks::LastBuild::default();
+        let mut last = paint_tracks::Finder::default();
         let olds: Vec<Option<usize>> = nodes.iter().map(|n| last.find(&self.nodes, n.id)).collect();
         let window = [0.0, 0.0, self.viewport.0, self.viewport.1];
         // Per node: the swept clip and scroll-offset range its children are under, in points.

@@ -30,7 +30,7 @@ impl<S: 'static> Runtime<S> {
         if !animated || self.reduced_motion {
             return out;
         }
-        let mut last = paint_tracks::LastBuild::default();
+        let mut last = paint_tracks::Finder::default();
         for (i, n) in nodes.iter().enumerate() {
             if !n.vis.cold.get().is_some_and(|c| c.hold_landing) || !self.scene.contains(n.id) {
                 continue;
