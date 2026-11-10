@@ -68,7 +68,7 @@
     ),
     Para(
         Inline {
-            text: "Two smaller problems make it worse:",
+            text: "Two smaller issues make it worse:",
             spans: [],
             links: [],
         },

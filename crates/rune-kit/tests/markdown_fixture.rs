@@ -20,7 +20,7 @@ const DOC: &str = r#"## What's happening
 
 The server sends a heartbeat every **10 seconds**, but `stream.ts` only reconnects on an `error` event. When the machine sleeps, the TCP connection goes half-open: the *client* never sees an error, so it waits forever. See [the retry notes](https://example.com/retry) for the long version, which is deliberately wordy so that this paragraph has to wrap onto several lines at every width.
 
-Two smaller problems make it worse:
+Two smaller issues make it worse:
 
 - `backoff.ts` resets its delay on *every* message, so a flapping server is retried at full speed.
 - The sidebar store ignores `session.updated` events that arrive before the first list fetch.
