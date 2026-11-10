@@ -163,13 +163,13 @@ fn suppress(tip: &mut Tip) -> Effects<Effect> {
     }
 }
 
-/// A tooltip as drawn: its text, the box it hangs from (window points, x0 y0 x1 y1), whether
-/// it sits above that box, and its opacity.
+/// A tooltip as drawn: its text, the box it hangs from (window points, x0 y0 x1 y1), the side
+/// of that box it asks for (None: under it), and its opacity.
 #[derive(Clone, Debug)]
 struct Drawn {
     text: String,
     anchor: [f32; 4],
-    above: bool,
+    side: Option<crate::Side>,
     alpha: f32,
     scale: f32,
 }
@@ -408,10 +408,10 @@ impl<S: 'static> Runtime<S> {
                 let e = self.drawn_box(i);
                 let anchor = link.and_then(|k| self.link_boxes(i, e).into_iter().filter(|(j, _)| *j == k).map(|(_, r)| r)
                     .reduce(|u, r| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
-                let above = link.is_none() && self.nodes[i].cold.get().is_some_and(|c| c.help_above);
+                let side = link.is_none().then(|| self.nodes[i].cold.get().and_then(|c| c.help_side)).flatten();
                 let t = if motion && look.fade[0] > 0.0 { ((self.clock - since) / look.fade[0]) as f32 } else { 1.0 };
                 let e_in = rune_motion::Easing::EASE_OUT.eval(t.clamp(0.0, 1.0));
-                let d = Drawn { text, anchor: anchor.unwrap_or(e), above, alpha: e_in, scale: look.fade_scale + (1.0 - look.fade_scale) * e_in };
+                let d = Drawn { text, anchor: anchor.unwrap_or(e), side, alpha: e_in, scale: look.fade_scale + (1.0 - look.fade_scale) * e_in };
                 let [x, y, w, h] = self.draw_tooltip(&d);
                 self.help.tip = Some((crate::el::help_words(&d.text).into_owned(), [x, y, w, h]));
                 self.help.drawn = Some(d);
@@ -421,12 +421,12 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Draws `d`'s text (and its keycaps) in a tooltip in the current look under its box
-    /// (above it when there's no room below), or above it (under it when there's no room
-    /// above) when it says so, kept inside the window. Returns the tooltip's box at full size
+    /// (above it when there's no room below), or on the side it asks for (the opposite one when
+    /// there's no room there), kept inside the window. Returns the tooltip's box at full size
     /// (window points, x y w h); it draws at `d.alpha`, scaled by `d.scale` about the middle
     /// of the edge that faces its box.
     fn draw_tooltip(&mut self, d: &Drawn) -> [f32; 4] {
-        let (e, above) = (d.anchor, d.above);
+        let e = d.anchor;
         let s = self.env.scale;
         let look = self.help_look();
         let key = look.key;
@@ -457,18 +457,38 @@ impl<S: 'static> Runtime<S> {
         let w = rows.iter().map(|r| r.tw + r.keys_w).fold(0.0, f32::max) + 2.0 * pad_x;
         let h = rows.iter().map(|r| r.ch).sum::<f32>() + gaps + 2.0 * pad_y;
         let [below, over] = look.gap;
-        let mut y = e[3] + below;
-        if above && e[1] - over - h >= margin {
-            y = e[1] - over - h;
-        } else if y + h > vh - margin && e[1] - below - h >= margin {
-            y = e[1] - below - h;
-        }
-        let x = ((e[0] + e[2] - w) * 0.5).clamp(margin, (vw - w - margin).max(margin));
+        let (x, y) = match d.side {
+            // Beside it, centred down it: right of it unless only the left has room, and the
+            // other way round (`placement="right"` / `"left"`).
+            Some(side @ (crate::Side::Left | crate::Side::Right)) => {
+                let (left, right) = (e[0] - over - w, e[2] + over);
+                let (fits_left, fits_right) = (left >= margin, right + w <= vw - margin);
+                let on_left = if side == crate::Side::Left { fits_left || !fits_right } else { fits_left && !fits_right };
+                let x = if on_left { left } else { right };
+                (x, (e[1] + e[3] - h) * 0.5)
+            }
+            side => {
+                let mut y = e[3] + below;
+                if side == Some(crate::Side::Top) && e[1] - over - h >= margin {
+                    y = e[1] - over - h;
+                } else if y + h > vh - margin && e[1] - below - h >= margin {
+                    y = e[1] - below - h;
+                }
+                ((e[0] + e[2] - w) * 0.5, y)
+            }
+        };
+        let x = x.clamp(margin, (vw - w - margin).max(margin));
         let y = y.clamp(margin, (vh - h - margin).max(margin));
         let full = [x * s, y * s, w * s, h * s].map(|v| v.round());
         // Scales about the middle of the edge facing the element (Kobalte's transform origin).
         let (k, alpha) = (d.scale, d.alpha);
-        let pivot = [((e[0] + e[2]) * 0.5 * s).clamp(full[0], full[0] + full[2]), if y >= e[3] { full[1] } else { full[1] + full[3] }];
+        let pivot = if x >= e[2] {
+            [full[0], ((e[1] + e[3]) * 0.5 * s).clamp(full[1], full[1] + full[3])]
+        } else if x + w <= e[0] {
+            [full[0] + full[2], ((e[1] + e[3]) * 0.5 * s).clamp(full[1], full[1] + full[3])]
+        } else {
+            [((e[0] + e[2]) * 0.5 * s).clamp(full[0], full[0] + full[2]), if y >= e[3] { full[1] } else { full[1] + full[3] }]
+        };
         let at_k = |p: [f32; 2]| [pivot[0] + (p[0] - pivot[0]) * k, pivot[1] + (p[1] - pivot[1]) * k];
         let rect_k = |r: [f32; 4]| { let [x, y] = at_k([r[0], r[1]]); [x, y, r[2] * k, r[3] * k] };
         let r = rect_k(full);

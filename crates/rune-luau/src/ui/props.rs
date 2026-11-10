@@ -531,8 +531,14 @@ impl Props {
             }
             Atom::Disabled => self.disabled = flag(v)?,
             Atom::HelpSide => {
-                if matches!(v, Value::Str("top")) {
-                    with(e, El::help_above);
+                let side = match v {
+                    Value::Str("top") => Some(rune::Side::Top),
+                    Value::Str("left") => Some(rune::Side::Left),
+                    Value::Str("right") => Some(rune::Side::Right),
+                    _ => None,
+                };
+                if let Some(side) = side {
+                    with(e, |e| e.help_side(side));
                 }
             }
             Atom::FadeOut => self.fade_out = flag(v)?,
