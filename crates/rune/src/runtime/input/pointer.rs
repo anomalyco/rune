@@ -116,13 +116,16 @@ impl<S: 'static> Runtime<S> {
 
     /// End a held drag without a drop: its handler hears `Phase::Up` with [`Drag::cancelled`]
     /// and the release that follows does nothing. False when no drag is held.
-    pub(super) fn cancel_drag(&mut self) -> bool {
+    pub(super) fn cancel_drag(&mut self) -> bool { self.cancel_drag_at(self.pointer) }
+
+    /// [`Self::cancel_drag`], its last report at `point`, or where the press began.
+    fn cancel_drag_at(&mut self, point: Option<(f32, f32)>) -> bool {
         if self.input_click.captured() { return false; }
         let Some(held) = self.press.held() else { return false };
         let Some(i) = self.live_index(&held.path) else { return false };
         if self.nodes[i].handlers.on_drag.is_none() || self.drags_out(&self.nodes[i]) { return false; }
         let at = held.at;
-        let (x, y) = self.pointer.unwrap_or(at);
+        let (x, y) = point.unwrap_or(at);
         let [lx, ly] = self.to_local(i, x, y);
         let (dx, dy) = (x - at.0, y - at.1);
         let screen = self.screen_at(x, y);
@@ -302,6 +305,19 @@ impl<S: 'static> Runtime<S> {
             return;
         }
         self.release_capture(x, y);
+    }
+
+    /// The platform lost the release of a held press, so nothing was dropped: a held drag ends
+    /// cancelled at (x, y), and any other press is released there.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn pointer_release_lost(&mut self, x: f32, y: f32) {
+        let left = self.press.held().filter(|h| h.button == crate::PointerButton::Primary).map(|h| h.left);
+        if left.is_some() && self.cancel_drag_at(Some((x, y))) {
+            self.move_pointer(x, y, false);
+            self.leave_after_release(left == Some(true));
+        } else {
+            self.pointer_up(x, y);
+        }
     }
 
     pub(super) fn release_capture(&mut self, x: f32, y: f32) {

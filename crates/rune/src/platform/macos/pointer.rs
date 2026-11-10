@@ -1,24 +1,23 @@
 //! Overlay pointer sampling, hit testing, and native mouse monitors.
 
-use std::{cell::{Cell, RefCell}, collections::VecDeque, time::{Duration, Instant}};
+use std::{cell::{Cell, RefCell}, time::{Duration, Instant}};
 use objc2::{ClassType, msg_send, msg_send_id, rc::Retained};
 use objc2_app_kit::{NSEvent, NSPanel, NSScreen, NSWindow};
 use objc2_foundation::{MainThreadMarker, NSObject, NSPoint};
 use crate::{OverlayInput, OverlaySupport};
-use super::{Panel, cursor::set_ns_cursor, geometry::{contains_pointer, screen_id}};
+use super::{Panel, cursor::set_ns_cursor, geometry::{contains_pointer, screen_id}, hold::{self, Click, Effect, Event, Hold, Point}};
 
 #[derive(Default)]
 pub(crate) struct PointerState {
     input: Cell<OverlayInput>,
     regions: RefCell<Vec<[f32; 4]>>,
     pending: Cell<Option<(f32, f32)>>,
-    captured: Cell<bool>,
+    hold: RefCell<Hold>,
     last: Cell<Option<(f32, f32)>>,
     inside: Cell<bool>,
     display: Cell<Option<u32>>,
     follow: Cell<bool>,
-    clicks: RefCell<VecDeque<(bool, f32, f32)>>,
-    release_since: Cell<Option<(Instant, (f32, f32))>>,
+    /// A lost release the host hasn't given the runtime yet.
     recovered_release: Cell<Option<(f32, f32)>>,
     /// The cursor the overlay shows while the pointer is over its hit area.
     cursor: Cell<Option<crate::el::Cursor>>,
@@ -39,51 +38,37 @@ impl PointerState {
         let event_point: NSPoint = event.map_or(NSPoint::new(0.0, 0.0), |event| unsafe { msg_send![event, locationInWindow] });
         let buttons: usize = unsafe { msg_send![NSEvent::class(), pressedMouseButtons] };
         eprintln!("overlay-input source={source} window={} kind={kind} event={event_point:?} cursor={cursor:?} local={local:?} frame={frame:?} input={:?} buttons={buttons} captured={} ignore={} regions={:?}",
-            unsafe { panel.windowNumber() }, self.input.get(), self.captured.get(), unsafe { panel.ignoresMouseEvents() }, self.regions.borrow());
+            unsafe { panel.windowNumber() }, self.input.get(), self.captured(), unsafe { panel.ignoresMouseEvents() }, self.regions.borrow());
     }
-    pub(crate) fn hit(&self, x: f32, y: f32) -> bool {
-        self.captured.get() || match self.input.get() {
+    /// Carries a transition out; the point of a click winit dispatched.
+    fn step(&self, event: Event) -> Option<Point> {
+        let mut delivered = None;
+        for effect in hold::step(&mut self.hold.borrow_mut(), event) {
+            match effect {
+                Effect::Deliver(at) => delivered = Some(at),
+                Effect::ReleaseLost(at) => self.recovered_release.set(Some(at)),
+            }
+        }
+        delivered
+    }
+    fn captured(&self) -> bool { self.hold.borrow().captured() }
+    fn over(&self, x: f32, y: f32) -> bool {
+        match self.input.get() {
             OverlayInput::All => true,
             OverlayInput::Regions => self.regions.borrow().iter().any(|r| crate::overlay::options::contains(*r, x, y)),
             _ => false,
         }
     }
+    pub(crate) fn hit(&self, x: f32, y: f32) -> bool { self.captured() || self.over(x, y) }
     fn record_click(&self, down: bool, x: f32, y: f32) {
-        if !self.hit(x, y) { return; }
-        if down { self.captured.set(true); self.release_since.set(None); }
-        self.clicks.borrow_mut().push_back((down, x, y));
+        self.step(Event::Seen { click: Click { down, at: (x, y) }, over: self.over(x, y) });
     }
-    fn released(&self) {
-        // Native callbacks can queue another Down before winit dispatches this Up.
-        self.captured.set(self.clicks.borrow().iter().any(|(down, _, _)| *down));
-        self.release_since.set(None);
-    }
-    fn observe_release(&self, buttons: usize, now: Instant, point: (f32, f32)) {
-        if !self.captured.get() || buttons & 1 != 0 {
-            self.release_since.set(None);
-            return;
-        }
-        // winit dispatches a queued Up within the turn. One still queued seconds later was
-        // never delivered (the panel lost its view), and would otherwise hold capture forever.
-        let queued_up = self.clicks.borrow().iter().any(|(down, _, _)| !down);
-        let grace = if queued_up { Duration::from_secs(2) } else { Duration::from_millis(100) };
-        let (since, released_at) = self.release_since.get().unwrap_or_else(|| {
-            self.release_since.set(Some((now, point)));
-            (now, point)
-        });
-        if now.duration_since(since) < grace { return; }
-        self.captured.set(false);
-        self.clicks.borrow_mut().clear();
-        self.release_since.set(None);
-        self.recovered_release.set(Some(released_at));
+    fn released(&self) { self.step(Event::Released); }
+    fn observe_release(&self, buttons: usize, now: Instant, at: (f32, f32)) {
+        self.step(Event::Sampled { button_down: buttons & 1 != 0, now, at });
     }
     /// winit's view was out of the panel, so the clicks recorded meanwhile never reached it.
-    pub(super) fn view_lost(&self) {
-        self.captured.set(false);
-        self.clicks.borrow_mut().clear();
-        self.release_since.set(None);
-        if let Some(last) = self.last.get() { self.recovered_release.set(Some(last)); }
-    }
+    pub(super) fn view_lost(&self) { self.step(Event::ViewLost { last: self.last.get() }); }
     /// Sets the cursor again after a mouse event, which may have let another window's cursor
     /// rects replace it. The arrow once the pointer is off the hit area.
     fn reapply_cursor(&self, panel: &NSPanel) {
@@ -99,7 +84,7 @@ impl PointerState {
     /// Whether a sample can tell the overlay anything: one passing every click through, holding
     /// no press, showing no cursor and following nothing never reads the pointer.
     fn wanted(&self) -> bool {
-        self.input.get() != OverlayInput::None || self.follow.get() || self.captured.get() || self.cursor.get().is_some()
+        self.input.get() != OverlayInput::None || self.follow.get() || self.captured() || self.cursor.get().is_some()
     }
     pub(super) fn observe(&self, panel: &NSPanel, wake: Option<&crate::Waker>) {
         // SAFETY: monitors and frame publication run on AppKit's main thread.
@@ -119,7 +104,7 @@ impl PointerState {
             NSScreen::screens(mtm).iter().find(|s| contains_pointer(s, pointer))
                 .is_some_and(|s| self.display.replace(Some(screen_id(s))) != Some(screen_id(s)))
         });
-        if (inside || was_inside || self.captured.get() || display_changed) && self.last.replace(Some((x, y))) != Some((x, y)) {
+        if (inside || was_inside || self.captured() || display_changed) && self.last.replace(Some((x, y))) != Some((x, y)) {
             self.pending.set(Some((x, y)));
             if let Some(wake) = wake { wake(); }
         }
@@ -144,20 +129,15 @@ impl Panel {
         else { OverlaySupport::Supported }
     }
     pub fn take_pointer(&self) -> Option<(f32, f32)> { self.pointer.pending.take() }
-    pub fn pointer_captured(&self) -> bool { self.pointer.captured.get() }
+    pub fn pointer_captured(&self) -> bool { self.pointer.captured() }
     pub fn take_recovered_release(&self) -> Option<(f32, f32)> { self.pointer.recovered_release.take() }
-    pub fn take_click(&self, down: bool) -> Option<(f32, f32)> {
-        let mut clicks = self.pointer.clicks.borrow_mut();
-        if clicks.front().is_some_and(|(pressed, _, _)| *pressed == down) {
-            clicks.pop_front().map(|(_, x, y)| (x, y))
-        } else { None }
-    }
+    pub fn take_click(&self, down: bool) -> Option<(f32, f32)> { self.pointer.step(Event::Dispatched { down }) }
     pub fn pointer_released(&self) {
         self.pointer.released();
         self.refresh_monitors();
         if self.visible.get() { self.pointer.observe(&self.panel, self.wake.as_ref()); }
     }
-    pub fn pointer_deadline(&self) -> Option<Instant> { self.pointer_poll.get() }
+    pub fn pointer_deadline(&self) -> Option<Instant> { self.pointer_poll.get().into_iter().chain(self.pointer.hold.borrow().deadline()).min() }
     /// Samples the pointer if its poll is due; true if it did.
     fn poll_pointer(&self, now: Instant) -> bool {
         if self.pointer_poll.get().is_some_and(|at| at <= now) {
@@ -208,7 +188,7 @@ impl Panel {
     }
 
     fn needs_monitors(&self) -> bool {
-        self.follow_pointer.get() || self.pointer.input.get() == OverlayInput::Regions || self.pointer.captured.get()
+        self.follow_pointer.get() || self.pointer.input.get() == OverlayInput::Regions || self.pointer.captured()
             || self.pointer.cursor.get().is_some()
     }
 
@@ -255,12 +235,10 @@ impl Panel {
     pub(super) fn stop_pointer(&self) {
         self.pointer_poll.set(None);
         self.monitors.borrow_mut().take();
-        self.pointer.captured.set(false);
+        self.pointer.step(Event::Stopped);
         self.pointer.pending.set(None);
         self.pointer.last.set(None);
         self.pointer.inside.set(false);
-        self.pointer.clicks.borrow_mut().clear();
-        self.pointer.release_since.set(None);
         self.pointer.recovered_release.set(None);
         self.set_cursor(None);
     }

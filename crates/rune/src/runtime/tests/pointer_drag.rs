@@ -38,6 +38,58 @@ fn taking_the_pointer_away_ends_a_held_drag_cancelled() {
     assert_eq!(rt.state.iter().filter(|d| d.0 == Phase::Up).count(), 1, "the release after it does nothing");
 }
 
+#[derive(Default)]
+struct LostRelease { drags: Vec<(Phase, bool, f32)>, presses: u32 }
+
+fn lost_release_view(_: &LostRelease, _: &mut Cx<LostRelease>) -> El {
+    el().key("pill").size(100.0, 40.0)
+        .on_drag(|s: &mut LostRelease, d, _| s.drags.push((d.phase, d.cancelled(), d.x)))
+        .on_press(|s: &mut LostRelease| s.presses += 1)
+}
+
+#[test]
+fn a_lost_release_cancels_a_held_drag_where_the_button_rose() {
+    let mut rt = Runtime::new(LostRelease::default(), lost_release_view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.pointer_down(10.0, 10.0);
+    rt.pointer_move(40.0, 10.0);
+    rt.pointer_release_lost(60.0, 10.0);
+    rt.frame(0.0);
+    assert!(!rt.pointer_captured());
+    assert_eq!(rt.pointer(), Some((60.0, 10.0)));
+    assert_eq!(rt.state.drags.last(), Some(&(Phase::Up, true, 60.0)));
+    assert_eq!(rt.state.presses, 0, "a press whose release was lost clicks nothing when it dragged");
+    rt.pointer_up(60.0, 10.0);
+    rt.frame(0.0);
+    assert_eq!(rt.state.drags.iter().filter(|d| d.0 == Phase::Up).count(), 1, "a late Up does nothing");
+}
+
+#[test]
+fn a_lost_release_before_the_next_press_leaves_that_press_alone() {
+    let mut rt = Runtime::new(LostRelease::default(), lost_release_view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.pointer_down(10.0, 10.0);
+    rt.pointer_release_lost(10.0, 10.0);
+    rt.pointer_down(20.0, 10.0);
+    assert!(rt.pointer_captured(), "the new press holds");
+    rt.pointer_up(20.0, 10.0);
+    rt.frame(0.0);
+    let ups: Vec<_> = rt.state.drags.iter().filter(|d| d.0 == Phase::Up).map(|d| d.1).collect();
+    assert_eq!(ups, [true, false], "the old drag is cancelled, the new one ends normally");
+}
+
+#[test]
+fn a_lost_release_without_a_drag_still_releases_the_press() {
+    fn view(_: &u32, _: &mut Cx<u32>) -> El { el().size(100.0, 40.0).on_press(|n: &mut u32| *n += 1) }
+    let mut rt = Runtime::new(0, view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.pointer_down(10.0, 10.0);
+    rt.pointer_release_lost(10.0, 10.0);
+    rt.frame(0.0);
+    assert!(!rt.pointer_captured());
+    assert_eq!(rt.state, 1);
+}
+
 #[test]
 fn native_escape_with_a_logical_fallback_cancels_the_drag() {
     fn view(_: &Vec<bool>, _: &mut Cx<Vec<bool>>) -> El {

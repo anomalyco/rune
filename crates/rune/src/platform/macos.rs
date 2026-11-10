@@ -14,6 +14,7 @@ pub mod appearance;
 pub(crate) mod cursor;
 pub(crate) mod drop;
 mod geometry;
+mod hold;
 pub(crate) mod help;
 #[doc(hidden)]
 pub mod panel_bridge;

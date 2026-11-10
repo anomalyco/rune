@@ -1,0 +1,1 @@
+- A macOS overlay whose mouse release is lost now ends a held drag as cancelled (`Phase::Up` with `Drag::cancelled`) instead of a normal release, so a handler no longer treats it as a drop. The overlay also gives up on the release on time when the pointer stays still.

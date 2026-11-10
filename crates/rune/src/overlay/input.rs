@@ -92,6 +92,15 @@ impl<T: 'static> Overlay<T> {
         self.dirty = true;
     }
 
+    /// Ends the runtime's press if the panel lost its release: the runtime hears no drop.
+    #[cfg(target_os = "macos")]
+    pub(super) fn lost_release(&mut self) {
+        if let Some((x, y)) = self.panel.as_ref().and_then(|p| p.take_recovered_release()) && self.rt.pointer_captured() {
+            self.rt.pointer_release_lost(x, y);
+            self.dirty = true;
+        }
+    }
+
     /// Delivers drag ends a host reported. An `on_drag_start` may have hidden the overlay;
     /// its `on_drag_end` still runs.
     pub(super) fn drag_ends_due(&mut self) {

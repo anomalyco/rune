@@ -141,6 +141,9 @@ impl<T: 'static> AnyHost for Overlay<T> {
                 }
             }
             WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } => {
+                // A release lost before this press ends the old press first, not this one.
+                #[cfg(target_os = "macos")]
+                if state.is_pressed() { self.lost_release(); }
                 #[cfg(target_os = "macos")]
                 let point = self.panel.as_ref().and_then(|p| p.take_click(state.is_pressed()));
                 if self.options.input.resolved(self.interactive) != OverlayInput::None {
@@ -186,11 +189,8 @@ impl<T: 'static> AnyHost for Overlay<T> {
         if self.live.is_some() && let Some(panel) = &self.panel {
             // Covered or asleep, the 120 Hz regions poll rests; input events still sample.
             panel.observe_pointer(Instant::now(), !self.presence.occluded());
-            if let Some((x, y)) = panel.take_recovered_release() && self.rt.pointer_captured() {
-                self.rt.pointer_up(x, y);
-                self.dirty = true;
-            }
-            if let Some((x, y)) = panel.take_pointer() && self.rt.pointer() != Some((x, y)) {
+            self.lost_release();
+            if let Some((x, y)) = self.panel.as_ref().and_then(|p| p.take_pointer()) && self.rt.pointer() != Some((x, y)) {
                 self.observe_pointer(x, y);
                 if self.options.follow_pointer && self.options.display == DisplayTarget::UnderPointer {
                     let size = self.at.size;
