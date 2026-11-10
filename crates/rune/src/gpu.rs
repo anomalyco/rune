@@ -3,6 +3,7 @@
 //! `RUNE_GPU_BACKEND=wgpu` selects wgpu's; an iOS app draws with wgpu's unless it chooses `GpuBackend::Metal`.
 
 pub(crate) mod backend;
+pub(crate) mod health;
 #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
 pub(crate) mod metal;
 #[cfg(not(target_arch = "wasm32"))]

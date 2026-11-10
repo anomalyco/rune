@@ -12,6 +12,7 @@ use super::web_math;
 const SKIRT: f32 = 256.0;
 #[cfg(feature = "embedded-fonts")]
 mod full_faces;
+mod health;
 mod input;
 mod page;
 pub(crate) mod platform;
@@ -75,7 +76,7 @@ fn spawn<S: 'static>(mut app: App<S>) -> Result<(), String> {
     shared.connect(Arc::new(move || { let _ = wake.send_event(Wake::App); }));
     page::occupy(quitting(&shared), app.same_tab_router.take());
     event_loop.spawn_app(Browser { app: Some(app), shared, proxy, window: None, embedded: false, document: false, owns_canvas: true,
-        borrowed: page::Borrowed::default(), pending: Rc::default(), running: Rc::default() });
+        borrowed: page::Borrowed::default(), pending: Rc::default(), running: Rc::default(), lost: Rc::default() });
     Ok(())
 }
 
@@ -94,6 +95,8 @@ struct Browser<S: 'static> {
     /// The GPU, and the bytes of `App::font_url`'s fonts that loaded.
     pending: Rc<RefCell<Option<(Result<(Gpu, wgpu::Surface<'static>), String>, Vec<Vec<u8>>)>>>,
     running: Rc<RefCell<Option<Running<S>>>>,
+    /// Why the browser lost the GPU device, until the app ends for it.
+    lost: Rc<RefCell<Option<String>>>,
 }
 
 struct Running<S: 'static> {
@@ -277,6 +280,16 @@ impl<S: 'static> Browser<S> {
         self.shared.quitting.store(true, Ordering::Release);
         event_loop.exit();
     }
+
+    /// Ends the app if the browser lost its GPU device: nothing more can draw on it, and every
+    /// frame tried on it would only add errors.
+    fn ended_by_lost_device(&self, event_loop: &ActiveEventLoop) -> bool {
+        let Some(why) = self.lost.borrow_mut().take() else { return false };
+        let canvas = self.window.as_ref().and_then(|w| w.canvas());
+        error(&format!("The GPU device was lost ({why}). Reload the page to draw again."), canvas.as_ref(), self.embedded, self.document);
+        self.end(event_loop);
+        true
+    }
 }
 
 impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
@@ -378,6 +391,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Wake) {
         if self.shared.quitting.load(Ordering::Acquire) { self.end(event_loop); return; }
+        if self.ended_by_lost_device(event_loop) { return; }
         let Some(window) = self.window.as_ref() else { return };
         if matches!(event, Wake::Ready) {
             let Some((result, fonts)) = self.pending.borrow_mut().take() else { return };
@@ -468,6 +482,11 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 config.format
             };
             surface.configure(&gpu.device, &config);
+            let (lost, proxy) = (self.lost.clone(), self.proxy.clone());
+            health::watch(&gpu.device, move |why| {
+                *lost.borrow_mut() = Some(why);
+                let _ = proxy.send_event(Wake::App);
+            });
             let mut renderer = Renderer::new(&gpu.device, format);
             renderer.set_srgb_blend(!format.is_srgb());
             renderer.attach_text(&mut rt.text.atlas);
@@ -496,7 +515,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
-        if matches!(event, WindowEvent::Focused(_)) { return; }
+        if matches!(event, WindowEvent::Focused(_)) || self.ended_by_lost_device(event_loop) { return; }
         let mut running = self.running.borrow_mut();
         let (Some(window), Some(r)) = (&self.window, &mut *running) else { return };
         let _input = crate::input::time::arrived(&event);
