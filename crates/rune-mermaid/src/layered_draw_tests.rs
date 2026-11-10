@@ -90,6 +90,33 @@ fn subgraph_titles_keep_a_band_of_their_own() {
     }
 }
 
+/// Edges that share a node meet it side by side, in the order they come from, never on one point.
+#[test]
+fn edges_sharing_an_end_fan_out() {
+    let plan = include_str!("../fixtures/plan.mmd");
+    for dir in ["LR", "TD"] {
+        let fan = format!("flowchart {dir}\n  A[one source] --> C[where they meet]\n  B[another source] --> C\n  X[far] --> C\n  C --> D[next]\n  C --> E[and next]");
+        let srcs = [plan.replacen("flowchart LR", &format!("flowchart {dir}"), 1), fan];
+        for (src, width) in srcs.iter().flat_map(|s| [(s, 680.0), (s, 4000.0)]) {
+            let paint = paint_at(true, width);
+            let c = canvas(src, &paint);
+            let tips: Vec<[f32; 2]> = c.ops.iter().filter_map(|op| match op {
+                Op::Fill(p, col) if *col == paint.line && p.len() == 3 => Some(p[0]),
+                _ => None,
+            }).collect();
+            let starts: Vec<[f32; 2]> = lines(&c).map(|l| l[0]).collect();
+            for (what, pts, gap) in [("arrowheads", &tips, 11.5), ("edges leaving", &starts, 6.0)] {
+                for (a, p) in pts.iter().enumerate() {
+                    for q in &pts[a + 1..] {
+                        let d = crate::canvas::dist(*p, *q);
+                        assert!(d >= gap, "{what} {p:?} and {q:?} are {d} apart in {dir} at width {width}: {}", src.lines().next().unwrap_or(""));
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn an_edge_to_a_subgraph_stops_on_its_border() {
     let paint = DiagramStyle::neutral(false);

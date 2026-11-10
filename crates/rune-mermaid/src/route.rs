@@ -15,6 +15,9 @@ use super::layered::Placed;
 const NODE_GAP: f32 = 5.0;
 /// Clearance between a moved label and anything else.
 const LABEL_GAP: f32 = 2.0;
+/// The least distance between two edges' ends on the same side of a node: an arrowhead's width
+/// and a little air, so heads arriving together sit side by side instead of on one point.
+const PORT_GAP: f32 = 14.0;
 
 /// The drawing an edge routes through.
 pub(crate) struct Ctx<'a> {
@@ -36,6 +39,9 @@ pub(crate) struct Ctx<'a> {
     outlines: Vec<Vec<[f32; 2]>>,
     /// Subgraph titles, `[x0, y0, x1, y1]` in layout axes.
     titles: Vec<[f32; 4]>,
+    /// Port offsets `[start, end]` per edge, across the rank axis, for ends moved apart from
+    /// others on the same side of a node ([`Ctx::fanned`]).
+    slots: Vec<[Option<f32>; 2]>,
 }
 
 /// An edge drawn: its curve and the tips and directions of its heads, in screen points.
@@ -54,7 +60,7 @@ impl<'a> Ctx<'a> {
         let swap = |p: [f32; 2]| if across { [p[1], p[0]] } else { p };
         let outlines = (0..sizes.len()).map(|v| outline(shapes[v], swap(placed.centers[v]), sizes[v]).into_iter().map(swap).collect()).collect();
         let centers = placed.centers.clone();
-        Ctx { placed, sizes: sizes.to_vec(), shapes, labels, across, ends, centers, real: sizes.len(), outlines, titles: Vec::new() }
+        Ctx { placed, sizes: sizes.to_vec(), shapes, labels, across, ends, centers, real: sizes.len(), outlines, titles: Vec::new(), slots: Vec::new() }
     }
 
     /// Stops edge ends on subgraph borders, `[start, end]` per edge: each subgraph named joins as
@@ -100,6 +106,40 @@ impl<'a> Ctx<'a> {
         self
     }
 
+    /// Fans out edge ends that would meet a node at the same point: ends on one side of a node
+    /// closer than [`PORT_GAP`] spread apart, in the order of where the edges come from, so they
+    /// don't cross. Call last: it routes every edge once to find where each would meet its nodes.
+    pub(crate) fn fanned(mut self, flip: bool) -> Self {
+        // (node, side, port x, other end's x, edge, which end) for every end.
+        let mut ends: Vec<(usize, i8, f32, f32, usize, usize)> = Vec::new();
+        for i in 0..self.ends.len() {
+            let (from, to) = self.ends[i];
+            if from == to || self.placed.paths.get(i).is_none_or(|p| p.len() < 2) {
+                continue;
+            }
+            let r = self.route(i, flip, [0.0, 0.0]);
+            let (a, b) = (self.screen(r.tip_start), self.screen(r.tip_end));
+            let side = |d: [f32; 2]| if self.screen(d)[1] > 0.0 { -1 } else { 1 };
+            ends.push((from, side(r.dir_start), a[0], b[0], i, 0));
+            ends.push((to, side(r.dir_end), b[0], a[0], i, 1));
+        }
+        ends.sort_by(|p, q| (p.0, p.1).cmp(&(q.0, q.1)).then(p.2.total_cmp(&q.2)));
+        self.slots = vec![[None; 2]; self.ends.len()];
+        for group in ends.chunk_by(|p, q| (p.0, p.1) == (q.0, q.1)) {
+            let (c, reach) = (self.centers[group[0].0][0], self.fan_reach(group[0].0));
+            for (x, &(_, _, natural, _, i, k)) in spread(group, c, reach).into_iter().zip(group) {
+                if (x - natural).abs() > 0.5 {
+                    self.slots[i][k] = Some(x);
+                }
+            }
+        }
+        self
+    }
+
+    fn slot(&self, i: usize) -> [Option<f32>; 2] {
+        self.slots.get(i).copied().unwrap_or_default()
+    }
+
     /// Whether a label's box (screen, `[x0, y0, x1, y1]`) crosses a subgraph's border.
     pub(crate) fn on_border(&self, r: [f32; 4]) -> bool {
         let (a, b) = (self.screen([r[0], r[1]]), self.screen([r[2], r[3]]));
@@ -133,10 +173,27 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    /// How far from its centre fanned ends may spread across `v`: on a flat side, nearly to its
+    /// corners.
+    fn fan_reach(&self, v: usize) -> f32 {
+        let flat = match self.shapes[v] {
+            NodeShape::Cylinder | NodeShape::LinedCylinder => !self.across,
+            s => s.flat(),
+        };
+        let reach = self.port_reach(v);
+        if flat { reach.max(self.size(v)[0] / 2.0 - 6.0) } else { reach }
+    }
+
     /// The point on `v`'s outline straight along the rank axis from `x`, on the side `s` points to.
     fn port(&self, v: usize, x: f32, s: f32) -> [f32; 2] {
+        let c = self.centers[v][0];
+        self.port_within(v, x.clamp(c - self.port_reach(v), c + self.port_reach(v)), s)
+    }
+
+    /// [`Ctx::port`], with `x` as far out as a fanned end may go.
+    fn port_within(&self, v: usize, x: f32, s: f32) -> [f32; 2] {
         let c = self.centers[v];
-        let x = x.clamp(c[0] - self.port_reach(v), c[0] + self.port_reach(v));
+        let x = x.clamp(c[0] - self.fan_reach(v), c[0] + self.fan_reach(v));
         let poly = &self.outlines[v];
         let mut best: Option<f32> = None;
         for i in 0..poly.len() {
@@ -292,10 +349,12 @@ impl<'a> Ctx<'a> {
         } else {
             (out[1][0], out[m - 2][0])
         };
+        let slot = self.slot(i);
         if m == 2 {
             let facing = (out[m - 1][0], out[0][0]);
-            for (x0, x1) in [wanted, facing] {
-                let (a, b) = (self.port(from, x0, s0), self.port(to, x1, -s1));
+            let fanned = (slot[0].unwrap_or(wanted.0), slot[1].unwrap_or(wanted.1));
+            for (x0, x1) in [fanned, wanted, facing] {
+                let (a, b) = (self.port_within(from, x0, s0), self.port_within(to, x1, -s1));
                 if self.clear(i, a, b, ends) {
                     out[0] = a;
                     out[m - 1] = b;
@@ -308,7 +367,10 @@ impl<'a> Ctx<'a> {
                 let (c, r) = (self.centers[v][0], self.port_reach(v));
                 let mut xs: Vec<f32> = (0..=8).map(|k| c - r + 2.0 * r * k as f32 / 8.0).chain([toward[0].clamp(c - r, c + r)]).collect();
                 xs.sort_by(|a, b| (a - toward[0]).abs().total_cmp(&(b - toward[0]).abs()));
-                xs.into_iter().map(|x| self.port(v, x, s)).find(|&p| if first { self.clear(i, p, toward, ends) } else { self.clear(i, toward, p, ends) })
+                if let Some(x) = slot[usize::from(!first)] {
+                    xs.insert(0, x);
+                }
+                xs.into_iter().map(|x| self.port_within(v, x, s)).find(|&p| if first { self.clear(i, p, toward, ends) } else { self.clear(i, toward, p, ends) })
             };
             if let Some(a) = near(from, out[1], s0, true) {
                 out[0] = a;
@@ -330,14 +392,20 @@ impl<'a> Ctx<'a> {
         let (r0, r1) = (self.port_reach(from), self.port_reach(to));
         let mut xs: Vec<f32> = path[1..path.len() - 1].iter().map(|p| p[0]).collect();
         xs.extend([c0, c1, c0 - r0, c0 + r0, c1 - r1, c1 + r1]);
-        let mut pairs: Vec<(f32, f32)> = xs.iter().flat_map(|&a| xs.iter().map(move |&b| (a.clamp(c0 - r0, c0 + r0), b.clamp(c1 - r1, c1 + r1)))).collect();
+        let pairs: Vec<(f32, f32)> = xs.iter().flat_map(|&a| xs.iter().map(move |&b| (a.clamp(c0 - r0, c0 + r0), b.clamp(c1 - r1, c1 + r1)))).collect();
         let cost = |&(a, b): &(f32, f32)| (a - b).abs() * 4.0 + (a - c0).abs() + (b - c1).abs();
-        pairs.sort_by(|p, q| cost(p).total_cmp(&cost(q)));
-        pairs.dedup_by(|p, q| (p.0 - q.0).abs() < 0.5 && (p.1 - q.1).abs() < 0.5);
-        pairs.into_iter().take(TRIES).find_map(|(x0, x1)| {
-            let (a, b) = (self.port(from, x0, s0), self.port(to, x1, -s1));
-            self.clear(i, a, b, (from, to)).then_some([a, b])
-        })
+        let best = |mut pairs: Vec<(f32, f32)>| {
+            pairs.sort_by(|p, q| cost(p).total_cmp(&cost(q)));
+            pairs.dedup_by(|p, q| (p.0 - q.0).abs() < 0.5 && (p.1 - q.1).abs() < 0.5);
+            pairs.into_iter().take(TRIES).find_map(|(x0, x1)| {
+                let (a, b) = (self.port_within(from, x0, s0), self.port_within(to, x1, -s1));
+                self.clear(i, a, b, (from, to)).then_some([a, b])
+            })
+        };
+        // Fanned ends first, at their slots; where those can't stay clear, the free choice.
+        let slot = self.slot(i);
+        let fanned = (slot != [None, None]).then(|| best(pairs.iter().map(|&(a, b)| (slot[0].unwrap_or(a), slot[1].unwrap_or(b))).collect())).flatten();
+        fanned.or_else(|| best(pairs))
     }
 
     /// Whether edge `i`'s label, centred at `p`, keeps clear of every node and other label.
@@ -379,6 +447,46 @@ pub(crate) fn curve(anchors: &[[f32; 2]]) -> Vec<[f32; 2]> {
     let mut out = vec![anchors[0]];
     for w in anchors.windows(2) {
         out.extend(cubic(w[0], w[1]).into_iter().skip(1));
+    }
+    out
+}
+
+/// Port offsets for the ends on one side of a node, `(.., port x, other end's x, ..)` sorted by
+/// port: runs closer than [`PORT_GAP`] spread about their middle, ordered by where their edges
+/// come from, then everything is pushed apart left to right and kept within `c ± reach`.
+fn spread(group: &[(usize, i8, f32, f32, usize, usize)], c: f32, reach: f32) -> Vec<f32> {
+    let mut order: Vec<usize> = (0..group.len()).collect();
+    let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
+    for k in 0..group.len() {
+        match runs.last_mut() {
+            Some(r) if group[k].2 - group[k - 1].2 < PORT_GAP => r.end = k + 1,
+            _ => runs.push(k..k + 1),
+        }
+    }
+    let mut xs = vec![0.0; group.len()];
+    for r in &runs {
+        order[r.clone()].sort_by(|&a, &b| group[a].3.total_cmp(&group[b].3).then(group[a].4.cmp(&group[b].4)));
+        let mid = group[r.clone()].iter().map(|e| e.2).sum::<f32>() / r.len() as f32;
+        for (n, k) in r.clone().enumerate() {
+            xs[k] = mid + (n as f32 - (r.len() - 1) as f32 / 2.0) * PORT_GAP;
+        }
+    }
+    for k in 1..xs.len() {
+        xs[k] = xs[k].max(xs[k - 1] + PORT_GAP);
+    }
+    let (lo, hi) = (c - reach, c + reach);
+    let span = xs[xs.len() - 1] - xs[0];
+    if span > hi - lo {
+        let n = (xs.len() - 1).max(1) as f32;
+        xs.iter_mut().enumerate().for_each(|(k, x)| *x = lo + (hi - lo) * k as f32 / n);
+    } else {
+        let shift = (lo - xs[0]).max(0.0) + (hi - xs[xs.len() - 1]).min(0.0);
+        xs.iter_mut().for_each(|x| *x += shift);
+    }
+    // Back in the group's order: `xs[k]` is the slot of `group[order[k]]`.
+    let mut out = vec![0.0; group.len()];
+    for (k, &g) in order.iter().enumerate() {
+        out[g] = xs[k];
     }
     out
 }

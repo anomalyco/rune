@@ -302,7 +302,8 @@ fn draw_in(dir: Dir, p: &Parts, fonts: Fonts, spacing: &Spacing, paint: &Diagram
     let on_cluster: Vec<[Option<usize>; 2]> = edges.iter().map(|e| e.on_cluster).collect();
     let ctx = Ctx::new(&placed, &sizes, nodes.iter().map(DrawNode::shape).collect(), boxes, across, ends)
         .titles(title_boxes.iter().copied())
-        .cluster_ends(&on_cluster);
+        .cluster_ends(&on_cluster)
+        .fanned(flip);
     // A label pill takes the colour of the innermost subgraph holding both its ends.
     let backs: Vec<Color> = edges
         .iter()

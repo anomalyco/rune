@@ -1,0 +1,1 @@
+- **rune-mermaid: edges that share a node fan out instead of meeting it on one point.** Ends on the same side of a node closer than an arrowhead's width spread apart, in the order their edges come from so they don't cross, out to near the corners of a flat side.
