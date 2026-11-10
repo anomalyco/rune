@@ -143,7 +143,7 @@ impl<S: 'static> Runtime<S> {
         #[cfg(feature = "hot")]
         if self.hot.is_some() { return false; }
         !self.animating && !self.stale() && !self.settle && self.loop_wake.is_none() && self.window_frame.is_none()
-            && self.hover_pending.is_empty() && !self.tooltip_waiting() && !self.press_repeat_waiting() && !self.drag_ends_pending()
+            && !self.hover_delays.waiting() && !self.tooltip_waiting() && !self.press_repeat_waiting() && !self.drag_ends_pending()
             && self.drag_out_request.is_none() && !self.files_held() && !self.live_pending()
             && self.surfaces.is_empty() && !self.steps_frames()
     }

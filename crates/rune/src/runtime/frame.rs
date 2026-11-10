@@ -76,11 +76,8 @@ impl<S: 'static> Runtime<S> {
                 self.keys_lost();
                 // Losing the window ends hover, rather than waiting out an exit grace. A window
                 // that isn't key still hears the pointer, so its next move starts the wait again.
-                self.hover_pending.clear();
+                self.end_hover_delays();
                 self.hover_paused = true;
-                for path in std::mem::take(&mut self.hover_shown) {
-                    self.queue.push(Action::HoverChange(path, false));
-                }
             }
         }
         if !focused { self.input_click.clear(); self.wheel_lost(); }

@@ -80,7 +80,7 @@ impl<S: 'static> Runtime<S> {
 
     /// None when no element tracks `on_hover_change` and none is waiting on a delay.
     fn within_next(&self) -> Option<Within> {
-        if self.hover_within.is_empty() && self.hover_shown.is_empty() && self.hover_pending.is_empty()
+        if self.hover_within.is_empty() && self.hover_delays.is_empty()
             && !self.hits.iter().any(|(id, _)| self.node_index.get(id).is_some_and(|&i| self.nodes[i].handlers.get().is_some_and(|h| h.on_hover_change.is_some())))
         {
             return None;
@@ -158,65 +158,11 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn hover_pruned(&mut self, n: &Node) {
         let take = |list: &mut Vec<String>| list.iter().position(|p| *p == n.path).map(|at| list.remove(at)).is_some();
         let inside = take(&mut self.hover_within);
-        let shown = take(&mut self.hover_shown);
-        self.hover_pending.retain(|p| p.0 != n.path);
+        let shown = self.hover_delays.forget(&n.path);
         let heard = if n.handlers.hover_delay == [0.0; 2] { inside } else { shown };
         let Some(f) = n.handlers.on_hover_change.clone().filter(|_| heard) else { return };
         self.hover_gone.push((n.path.clone(), f));
         self.queue.push(Action::HoverChange(n.path.clone(), false));
-    }
-
-    /// Starts or drops the waits of `hover_delays` elements whose inside changed.
-    pub(super) fn settle_hover_delays(&mut self) {
-        let mut paths: Vec<String> = self.hover_shown.clone();
-        paths.extend(self.hover_pending.iter().map(|p| p.0.clone()));
-        paths.extend(self.hover_within.iter().filter(|p| self.node(p).is_some_and(|n| n.handlers.hover_delay != [0.0; 2])).cloned());
-        paths.sort();
-        paths.dedup();
-        let now = self.now_clock();
-        for path in paths {
-            let Some(delay) = self.node(&path).map(|n| n.handlers.hover_delay) else {
-                // Gone or on its way out: a shown hover hears its leave now, a pending enter
-                // just stops waiting.
-                self.hover_pending.retain(|p| p.0 != path);
-                if self.hover_shown.contains(&path) { self.report_hover(path, false); }
-                continue;
-            };
-            let shown = self.hover_shown.contains(&path);
-            // A held button, or a press or blur until the pointer next moves, never starts the
-            // wait to report an enter.
-            let want = self.hover_within.contains(&path)
-                && (shown || !self.press.is_held() && !self.hover_paused);
-            let pending = self.hover_pending.iter().position(|p| p.0 == path);
-            if want == shown {
-                if let Some(i) = pending { self.hover_pending.remove(i); }
-                continue;
-            }
-            if pending.is_some_and(|i| self.hover_pending[i].1 == want) { continue; }
-            if let Some(i) = pending { self.hover_pending.remove(i); }
-            let d = delay[if want { 0 } else { 1 }] as f64;
-            if d <= 0.0 {
-                self.report_hover(path, want);
-            } else {
-                self.hover_pending.push((path, want, now + d));
-                self.schedule_wakes_from(now, [std::time::Duration::from_secs_f64(d)]);
-            }
-        }
-    }
-
-    pub(super) fn report_hover(&mut self, path: String, inside: bool) {
-        self.hover_shown.retain(|p| *p != path);
-        if inside { self.hover_shown.push(path.clone()); }
-        self.queue.push(Action::HoverChange(path, inside));
-    }
-
-    /// Reports the delayed hover changes due by this frame.
-    pub(super) fn fire_hover_delays(&mut self) {
-        if self.hover_pending.is_empty() { return; }
-        let clock = self.clock + 1e-6;
-        let (due, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.hover_pending).into_iter().partition(|p| p.2 <= clock);
-        self.hover_pending = rest;
-        for (path, inside, _) in due { self.report_hover(path, inside); }
     }
 
     /// The pointer moved or pressed, or a hand scrolled: hover follows the pointer through the

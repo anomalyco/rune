@@ -188,7 +188,7 @@ impl<S: 'static> Runtime<S> {
         self.focus.step(focus_machine::FocusEvent::Pointed);
         self.press_help(x, y);
         // A press cancels the waits to report an enter; the next move after it starts them again.
-        self.hover_pending.retain(|p| !p.1);
+        self.press_hover_delays();
         self.hover_paused = true;
         let target = self.primary_target(x, y);
         if target.and_then(|t| self.textbox_input(t)).is_none() {

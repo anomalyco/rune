@@ -85,8 +85,7 @@ impl<S: 'static> Runtime<S> {
         self.hovered = None;
         self.hover_gone.clear();
         self.hover_within.clear();
-        self.hover_shown.clear();
-        self.hover_pending.clear();
+        self.hover_delays.clear();
         self.forget_drop_targets();
         self.titlebar.clear();
         self.press_clicks.clear();
