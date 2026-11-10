@@ -119,6 +119,7 @@ mod ink;
 mod journey;
 mod layered;
 mod layered_draw;
+mod lenient;
 mod mindmap;
 mod parts;
 mod pie;

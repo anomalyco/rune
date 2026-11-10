@@ -7,6 +7,7 @@ use rune::Color;
 use super::canvas::Scene;
 use super::layered::Spacing;
 use super::layered_draw::{ClusterSpec, Dir, DrawNode, Edge, Head, Line, class_box, draw_layered};
+use super::lenient::{Lenient, Reader};
 use super::{DiagramStyle, EdgeStyle, Hover, MAX_ITEMS, NodeStyle, StyleSheet, clean, clean_quoted, statements};
 
 #[derive(Debug)]
@@ -62,29 +63,13 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<ClassDiagram> {
         active_class: None,
         active_ns: None,
         styles: StyleSheet::default(),
-        skipping: false,
         members: 0,
         over: false,
     };
-    // A statement that doesn't read is skipped (with its `{ … }` body); one past the bounds leaves
-    // the whole diagram as source.
+    let mut reader = Reader::default();
     for line in std::iter::once(header).chain(body.iter().copied()) {
         for stmt in statements(line) {
-            if p.skipping {
-                p.skipping = stmt != "}";
-            } else {
-                let (classes, edges) = (p.d.classes.len(), p.d.edges.len());
-                if p.statement(stmt).is_none() {
-                    if p.over {
-                        return None;
-                    }
-                    // Whatever the statement added before it failed goes too.
-                    p.d.classes.truncate(classes);
-                    p.d.edges.truncate(edges);
-                    p.ids.retain(|_, &mut i| i < classes);
-                    p.skipping = stmt.ends_with('{');
-                }
-            }
+            reader.read(&mut p, stmt)?;
         }
     }
     for (id, &idx) in &p.ids {
@@ -99,11 +84,27 @@ struct Parser {
     active_class: Option<usize>,
     active_ns: Option<usize>,
     styles: StyleSheet,
-    /// Inside the body of a block that didn't read, until its `}`.
-    skipping: bool,
     members: usize,
     /// Set once the source goes past [`MAX_ITEMS`] (or four times that in members).
     over: bool,
+}
+
+impl Lenient for Parser {
+    type Mark = (usize, usize);
+    fn mark(&self) -> (usize, usize) {
+        (self.d.classes.len(), self.d.edges.len())
+    }
+    fn undo(&mut self, (classes, edges): (usize, usize)) {
+        self.d.classes.truncate(classes);
+        self.d.edges.truncate(edges);
+        self.ids.retain(|_, &mut i| i < classes);
+    }
+    fn read_statement(&mut self, s: &str) -> Option<()> {
+        self.statement(s)
+    }
+    fn over(&self) -> bool {
+        self.over
+    }
 }
 
 impl Parser {
