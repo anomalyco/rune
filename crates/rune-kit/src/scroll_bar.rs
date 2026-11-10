@@ -23,7 +23,10 @@ use crate::Kit;
 use crate::grip::Grip;
 
 mod press;
+mod visibility;
+
 use press::BarPress;
+use visibility::{BarState, Event as BarEvent, Follow, Opacity};
 
 /// The strip along the right edge that takes presses: wider than the thumb, for an easier aim,
 /// and wide enough for the thumb under the pointer (wider still for a wider styled thumb).
@@ -46,11 +49,6 @@ const ENTER: Spring = Spring::new(0.14, 0.0);
 const LEAVE: Spring = Spring::new(0.28, 0.0);
 /// The thumb widening and changing colour under the pointer, and gliding to a new length when the content's changes.
 const WIDEN: Spring = Spring::new(0.12, 0.0);
-/// How long after a pulse's hold its fade-out has run.
-const FADE_TAIL: f64 = 0.35;
-/// How long a length glide runs, through which the scrolls that follow it (a feed keeping to its
-/// end) glide too rather than cutting it short.
-const GLIDE_SPAN: f64 = 0.5;
 /// How long a held track press waits before paging again, then how often it pages.
 const PAGE_DELAY: Duration = Duration::from_millis(300);
 const PAGE_EVERY: Duration = Duration::from_millis(60);
@@ -198,11 +196,6 @@ impl Track {
         usize::from(!self.x)
     }
 
-    /// How long after a scroll an overlay bar's pulse has faded out.
-    fn pulse_span(&self) -> f64 {
-        self.hold.as_secs_f64() + FADE_TAIL
-    }
-
     /// The drawn part of a thumb at `top`, `len` long on the track: less its clear border.
     fn pill(&self, (top, len): (f32, f32)) -> (f32, f32) {
         (top + self.border, (len - 2.0 * self.border).max(0.0))
@@ -324,14 +317,6 @@ impl ScrollBarStyle {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum BarState {
-    Uninit,
-    NoOverflow,
-    Always,
-    Overlay,
-}
-
 /// What one scroll bar keeps across rebuilds: where its viewport stands, its visibility state,
 /// where the pointer is, and the live rects and opacity that follow them. Kept per
 /// `(runtime_id, area)` so a rebuild hands the same live sources to the new view without
@@ -347,8 +332,6 @@ struct Bar {
     over: Cell<bool>,
     /// The pointer is over the element marked [`ScrollBar::scroll_bar_hover`].
     target: Cell<bool>,
-    pulse_until: Cell<f64>,
-    glide_until: Cell<f64>,
     /// The style the last view built the bar with; `None` until the first.
     style: Cell<Option<ScrollBarStyle>>,
     last_now: Cell<f64>,
@@ -382,8 +365,6 @@ fn kept(area: &str) -> Rc<Bar> {
                     near: Cell::new(false),
                     over: Cell::new(false),
                     target: Cell::new(false),
-                    pulse_until: Cell::new(-1.0),
-                    glide_until: Cell::new(-1.0),
                     style: Cell::new(None),
                     last_now: Cell::new(0.0),
                     track: Live::new([0.0; 4]),
@@ -531,24 +512,50 @@ impl Bar {
 
     /// An overlay bar stays up while the thumb is held or the pointer is at its edge.
     fn hold(&self) {
-        if self.state.get() == BarState::Overlay {
-            self.opacity.set(1.0);
-            self.pulse_until.set(f64::INFINITY);
-        }
+        self.visibility(BarEvent::Hold);
     }
 
     /// Once neither holds it, an overlay bar fades out after [`HOLD`] (the look's own). One the
     /// whole area reveals fades as the pointer leaves, as a ScrollView's thumb does.
     fn let_go(&self) {
-        if self.state.get() == BarState::Overlay && !self.pressed() && !self.revealed() {
-            let t = self.style().track;
-            if t.area_reveals {
-                self.opacity.set(0.0);
-                self.pulse_until.set(-1.0);
-                return;
+        let t = self.style().track;
+        self.visibility(BarEvent::LetGo {
+            pressed: self.pressed(),
+            revealed: self.revealed(),
+            area_reveals: t.area_reveals,
+            now: self.last_now.get(),
+            hold: t.hold,
+        });
+    }
+
+    /// Steps what the bar shows, carrying out the step's effects: says whether the thumb glides
+    /// to its new length, and whether a glide it was in was cut.
+    fn visibility(&self, event: BarEvent) -> (bool, bool) {
+        let mut state = self.state.get();
+        let effects = visibility::step(&mut state, event);
+        self.state.set(state);
+        let (mut glides, mut cut) = (false, false);
+        for effect in effects {
+            match effect {
+                visibility::Effect::Glide { glides: g, cut: c } => (glides, cut) = (g, c),
+                visibility::Effect::Opacity(change) => self.fade(change),
             }
-            self.opacity.pulse(1.0, 0.0, t.hold);
-            self.pulse_until.set(self.last_now.get() + t.pulse_span());
+        }
+        (glides, cut)
+    }
+
+    /// Sets the bar's opacity at once, eases it, or pulses it up and back down after a hold.
+    fn fade(&self, change: Opacity) {
+        match change {
+            Opacity::Set(o) => {
+                self.opacity.set(o);
+            }
+            Opacity::Snap(o) => {
+                self.opacity.snap(o);
+            }
+            Opacity::Pulse { hold } => {
+                self.opacity.pulse(1.0, 0.0, hold);
+            }
         }
     }
 
@@ -577,7 +584,7 @@ impl Bar {
         let near = shows
             && p.is_some_and(|(across, along)| match (t.targeted || t.scroll_only, t.area_reveals) {
                 // A scroll-only thumb holds while the pointer is on it as it shows.
-                _ if t.scroll_only => on_thumb((across, along)) && (self.near.get() || self.last_now.get() < self.pulse_until.get()),
+                _ if t.scroll_only => on_thumb((across, along)) && (self.near.get() || self.last_now.get() < self.state.get().pulse_until()),
                 (true, _) => on_thumb((across, along)),
                 (false, true) => (0.0..=w + gutter).contains(&across) && (0.0..=h_all).contains(&along),
                 (false, false) => across >= bar_end - REVEAL.max(track) && across <= bar_end && (lo..=lo + len).contains(&along),
@@ -624,89 +631,29 @@ impl Bar {
         self.track.set(self.track_rect(at, if shows { len } else { 0.0 }));
         let (top, h) = t.pill(thumb_along(at, len.max(0.0), style.track.min_thumb, a));
         let h = if shows { h } else { 0.0 };
-        let (state, opacity, pulse_until) = (&self.state, &self.opacity, &self.pulse_until);
-        let prev = state.get();
-        // A shown bar glides when its content changes length; the hand, an instant change, a
-        // resize or a bar appearing moves it at once, and so does a hidden overlay bar, whose
-        // glide nobody would see.
         let resized = (prev_at.viewport[a] - at.viewport[a]).abs() > 0.5;
         let lengthened = !resized && (prev_at.max[a] - at.max[a]).abs() > 0.5;
-        let gliding = now < self.glide_until.get();
-        let seen = match prev {
-            BarState::Always => true,
-            BarState::Overlay => now < self.pulse_until.get(),
-            _ => false,
-        };
-        let glides = shows && !scrolled && !instant && !resized && (lengthened || gliding) && seen;
-        if glides && lengthened {
-            self.glide_until.set(now + GLIDE_SPAN);
-        }
-        let cut = gliding && !glides;
-        if cut {
-            self.glide_until.set(-1.0);
-        }
+        let extent_changed =
+            (prev_at.max[a] - at.max[a]).abs() > 0.5 || (prev_at.viewport[a] - at.viewport[a]).abs() > 0.5;
+        let (glides, cut) = self.visibility(BarEvent::Follow(Follow {
+            shows,
+            overlay,
+            scrolled,
+            instant,
+            resized,
+            lengthened,
+            extent_changed,
+            pressed: self.pressed(),
+            revealed: self.revealed(),
+            now,
+            hold: t.hold,
+        }));
         let slot = self.slot_rect(top, h);
         let to = |live: &Live<[f32; 4]>, rect| if glides { live.set(rect) } else { live.snap(rect) };
         to(&self.slot, slot);
         // A scroll leaves the thumb's width alone, so it doesn't cut a widening short.
         if cut || self.thumb_len() != h {
             to(&self.thumb, self.thumb_rect(h));
-        }
-
-        if !shows {
-            if prev != BarState::NoOverflow || pulse_until.get() >= 0.0 {
-                opacity.snap(1.0);
-                pulse_until.set(-1.0);
-                state.set(BarState::NoOverflow);
-            }
-            return;
-        }
-        if !overlay {
-            if prev == BarState::Overlay && !instant {
-                opacity.set(1.0);
-            } else if prev != BarState::Always {
-                opacity.snap(1.0);
-            }
-            pulse_until.set(-1.0);
-            state.set(BarState::Always);
-            return;
-        }
-        state.set(BarState::Overlay);
-        if self.pressed() || self.revealed() {
-            self.hold();
-            return;
-        }
-        if prev == BarState::Always {
-            if scrolled && !instant {
-                opacity.pulse(1.0, 0.0, t.hold);
-                pulse_until.set(now + t.pulse_span());
-            } else if instant {
-                opacity.snap(0.0);
-                pulse_until.set(-1.0);
-            } else {
-                opacity.set(0.0);
-                pulse_until.set(-1.0);
-            }
-            return;
-        }
-        if prev != BarState::Overlay {
-            if scrolled && !instant {
-                opacity.pulse(1.0, 0.0, t.hold);
-                pulse_until.set(now + t.pulse_span());
-            } else {
-                opacity.snap(0.0);
-                pulse_until.set(-1.0);
-            }
-            return;
-        }
-        let extent_changed =
-            (prev_at.max[a] - at.max[a]).abs() > 0.5 || (prev_at.viewport[a] - at.viewport[a]).abs() > 0.5;
-        if scrolled && !instant {
-            opacity.pulse(1.0, 0.0, t.hold);
-            pulse_until.set(now + t.pulse_span());
-        } else if (scrolled || extent_changed) && instant && now < pulse_until.get() {
-            opacity.pulse(1.0, 0.0, t.hold);
-            pulse_until.set(now + t.pulse_span());
         }
     }
 }
