@@ -31,9 +31,10 @@ pub(crate) use surface::layer_occluded;
 pub(crate) use surface::{PresumeShown, pin_contents_top_left, present_with_transaction, surface_occluded, window_occluded};
 use geometry::{overlay_rect_on, screen_id};
 use pointer::MouseMonitors;
+use presence::Presence;
 use surface::occlusion_hidden;
 
-struct PanelFlags { keys: bool, warming: Rc<Cell<bool>>, revealing: Rc<Cell<bool>>, constrain: bool }
+struct PanelFlags { keys: bool, presence: Rc<Cell<Presence>>, constrain: bool }
 
 // Initialized nonactivating panel. No application activation call.
 declare_class!(
@@ -55,7 +56,7 @@ declare_class!(
             // wgpu skips nextDrawable for occluded windows. Permit only the explicit
             // alpha-zero prewarm acquisition and a fade in or out, which AppKit reports as
             // occluded while its alpha is near zero; other visibility readbacks stay native.
-            if self.ivars().warming.get() || self.ivars().revealing.get() { 2 }
+            if self.ivars().presence.get().may_draw_occluded() { 2 }
             else { unsafe { msg_send![super(self), occlusionState] } }
         }
         // AppKit keeps windows below the menu bar's level out from under it; an overlay goes
@@ -143,19 +144,23 @@ pub(crate) struct Panel {
     pointer: Rc<PointerState>,
     options: OverlayOptions,
     follow_pointer: Cell<bool>,
-    visible: Cell<bool>,
+    visible: Visible,
     pointer_poll: Cell<Option<Instant>>,
-    warming: Rc<Cell<bool>>,
-    /// A fade in or out is running: the panel reads as visible until it finishes, so a
-    /// fading-out overlay can still draw its exit.
-    revealing: Rc<Cell<bool>>,
-    /// Shown or not, the fade generation, and the requested capture exclusion, applied only
-    /// while shown. A finished fade-out orders out only if nothing came after.
-    presence: Rc<Cell<crate::platform::macos::presence::Presence>>,
+    /// Prewarmed, shown or fading, under one fence, and the requested capture exclusion,
+    /// applied only while shown. While a fade runs the panel reads as visible, so a fading-out
+    /// overlay can still draw its exit.
+    presence: Rc<Cell<Presence>>,
     wake: Option<crate::Waker>,
     panel: objc2::rc::Retained<objc2_app_kit::NSPanel>,
     window: objc2::rc::Retained<objc2_app_kit::NSWindow>,
     view: objc2::rc::Retained<objc2_app_kit::NSView>,
+}
+
+/// Whether the app wants the panel seen, read from its presence.
+struct Visible(Rc<Cell<Presence>>);
+
+impl Visible {
+    fn get(&self) -> bool { self.0.get().visible() }
 }
 
 impl Panel {
@@ -180,11 +185,10 @@ impl Panel {
         let ns_window = view.window()?;
         let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(at.size.0 as f64, at.size.1 as f64));
         // SAFETY: AppKit calls on the main thread; the panel is retained by `Panel`.
-        let warming = Rc::new(Cell::new(false));
-        let revealing = Rc::new(Cell::new(false));
+        let presence = Rc::new(Cell::new(Presence::new(options.exclude_from_capture)));
         let style = if ordinary { ns_window.styleMask() } else { NSWindowStyleMask::Borderless };
         let panel = unsafe {
-            let panel: Retained<OverlayPanel> = msg_send_id![super(mtm.alloc().set_ivars(PanelFlags { keys: options.keys == KeyPolicy::OnDemand, warming: warming.clone(), revealing: revealing.clone(), constrain: ordinary })),
+            let panel: Retained<OverlayPanel> = msg_send_id![super(mtm.alloc().set_ivars(PanelFlags { keys: options.keys == KeyPolicy::OnDemand, presence: presence.clone(), constrain: ordinary })),
                 initWithContentRect: rect,
                 styleMask: style | NSWindowStyleMask::NonactivatingPanel,
                 backing: NSBackingStoreType::NSBackingStoreBuffered,
@@ -241,7 +245,7 @@ impl Panel {
             return None;
         }
         panel.setDelegate(unsafe { ns_window.delegate() }.as_deref());
-        Some(Panel { bridge, monitors: RefCell::new(None), pointer, options: options.clone(), follow_pointer: Cell::new(options.follow_pointer), visible: Cell::new(false), pointer_poll: Cell::new(None), warming, revealing, presence: Rc::new(Cell::new(crate::platform::macos::presence::Presence::new(options.exclude_from_capture))), wake, panel, window: ns_window, view })
+        Some(Panel { bridge, monitors: RefCell::new(None), pointer, options: options.clone(), follow_pointer: Cell::new(options.follow_pointer), visible: Visible(presence.clone()), pointer_poll: Cell::new(None), presence, wake, panel, window: ns_window, view })
     }
 
     /// On the primary screen (the one with the menu bar), in AppKit's bottom-left coordinates.
