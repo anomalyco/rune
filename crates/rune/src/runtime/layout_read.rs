@@ -39,6 +39,51 @@ pub(crate) use selection_rects::{SELECTION, SelectedRange, boxes_moved};
 const PASSES: usize = 2;
 /// Commits in a row that layout feedback alone may cause.
 const ECHOES: u32 = 4;
+
+/// Whether layout feedback may still cause a commit (see the module docs). Commits that only
+/// layout reads or `on_layout` caused count up; past [`ECHOES`] in a row they stop causing
+/// commits until anything else commits or a scroll moves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Feedback {
+    /// Feedback may still cause a commit; `run` commits in a row were its alone.
+    Open { run: u32 },
+    /// Too many in a row: reads and `on_layout` cause none until another cause reopens them.
+    Quiet,
+}
+
+impl Default for Feedback {
+    fn default() -> Self { Feedback::Open { run: 0 } }
+}
+
+/// What a frame's commits say about layout feedback.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum FeedbackEvent {
+    /// A commit: layout reads or `on_layout` caused it (`feedback`), and whether something else
+    /// did too.
+    Commit { feedback: bool, other: bool },
+    /// A scroll, or the window moving, reopened feedback.
+    Reopened,
+}
+
+impl Feedback {
+    /// The state after `event`.
+    fn step(self, event: FeedbackEvent) -> Feedback {
+        match (self, event) {
+            (_, FeedbackEvent::Reopened) => Feedback::Open { run: 0 },
+            (_, FeedbackEvent::Commit { other: true, .. }) => Feedback::Open { run: 0 },
+            (Feedback::Open { run }, FeedbackEvent::Commit { feedback: true, .. }) => {
+                match run + 1 {
+                    run if run < ECHOES => Feedback::Open { run },
+                    _ => Feedback::Quiet,
+                }
+            }
+            (state, FeedbackEvent::Commit { .. }) => state,
+        }
+    }
+
+    /// Whether feedback may still cause a commit.
+    fn open(self) -> bool { matches!(self, Feedback::Open { .. }) }
+}
 /// A rect counts as moved when an edge moves more than this (points).
 const MOVED: f32 = 0.5;
 
@@ -397,7 +442,7 @@ impl<S: 'static> Runtime<S> {
     /// feedback first, so the first scroll frame after feedback stopped still checks.
     pub(super) fn layout_reads_moved(&mut self) -> bool {
         if self.layout_seen.is_empty() { return false; }
-        if self.scrolling() { self.layout_echoes = 0; }
+        if self.scrolling() { self.feedback = self.feedback.step(FeedbackEvent::Reopened); }
         if self.selection_read_moved() { self.dirty = true; }
         self.layout_feedback_open() && self.layout_moved(None, None, false)
     }
@@ -429,17 +474,14 @@ impl<S: 'static> Runtime<S> {
 
     /// Whether layout feedback may still cause a commit (see the module docs).
     pub(super) fn layout_feedback_open(&self) -> bool {
-        self.layout_echoes < ECHOES
+        self.feedback.open()
     }
 
     /// Counts a frame's commit toward [`ECHOES`]: `feedback` when layout reads or `on_layout`
     /// caused it, `other` when anything else did.
     pub(super) fn count_layout_echo(&mut self, feedback: bool, other: bool) {
-        if other || self.scrolling() {
-            self.layout_echoes = 0;
-        } else if feedback {
-            self.layout_echoes += 1;
-        }
+        let event = if other || self.scrolling() { FeedbackEvent::Reopened } else { FeedbackEvent::Commit { feedback, other } };
+        self.feedback = self.feedback.step(event);
     }
 
     /// A hand, momentum, an instant scroll or a glide moves a viewport.
@@ -462,7 +504,7 @@ impl<S: 'static> Runtime<S> {
     pub(crate) fn set_window_origin(&mut self, origin: (f32, f32)) -> bool {
         if self.window_origin == origin { return false; }
         self.window_origin = origin;
-        self.layout_echoes = 0;
+        self.feedback = self.feedback.step(FeedbackEvent::Reopened);
         self.report_rects(false, true)
     }
 
