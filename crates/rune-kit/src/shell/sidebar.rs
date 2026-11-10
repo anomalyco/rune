@@ -469,8 +469,9 @@ impl SidebarRow {
     /// Drags the row to a new place among the list's `count` rows, of which it is row `index`.
     /// It lifts above its neighbours and follows the pointer, and they step aside on springs.
     /// A drop calls `drop(s, from, to)` to move the item; Escape, or the window losing focus,
-    /// puts it back. `access` finds the [`Reorder`] in the app's state. A press that doesn't
-    /// move is still a select.
+    /// puts it back, and so does the pointer moving on when the row never hears its release
+    /// (it unmounted mid-drag). `access` finds the [`Reorder`] in the app's state. A press that
+    /// doesn't move is still a select.
     pub fn reorder<S: 'static>(
         mut self,
         state: &Reorder,
@@ -479,15 +480,29 @@ impl SidebarRow {
         access: fn(&mut S) -> &mut Reorder,
         drop: impl Fn(&mut S, usize, usize) + 'static,
     ) -> Self {
+        let held = state.held();
         let bind = Box::new(move |e: El| {
+            // While a row is held, every row hears where the pointer goes: a move its drag never
+            // hears means the release was lost (the row unmounted, or a modal took the pointer).
+            let e = if held {
+                e.on_pointer_move_local(move |s: &mut S, p, tx: &mut Tx| {
+                    if access(s).pointer([p.window_x, p.window_y]) {
+                        tx.animated();
+                    } else {
+                        tx.live_only();
+                    }
+                })
+            } else {
+                e
+            };
             e.on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| {
                 let r = access(s);
                 match d.phase {
-                    Phase::Down => {}
+                    Phase::Down => r.press(index, d.window_point()),
                     Phase::Move => {
                         // The rows it passes spring aside; it follows the pointer exactly.
                         tx.animated();
-                        r.follow(index, count, d.dy, d.h);
+                        r.drag(index, count, d.window_point(), d.dy, d.h);
                     }
                     Phase::Up => {
                         if let Some((from, to)) = r.end(d.cancelled()) {
