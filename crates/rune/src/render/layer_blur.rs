@@ -35,7 +35,8 @@ pub(super) struct Scratch {
 }
 
 impl Pipeline {
-    pub fn new(device: &wgpu::Device) -> Self {
+    /// The pipelines for layers of `format` (`layers::FORMAT`).
+    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("layer gaussian"), source: wgpu::ShaderSource::Wgsl(include_str!("../layer_blur.wgsl").into()),
         });
@@ -59,7 +60,7 @@ impl Pipeline {
             primitive: Default::default(), depth_stencil: None, multisample: Default::default(),
             fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs"),
                 compilation_options: wgpu::PipelineCompilationOptions { constants: &[("MODE", mode), ("ADDITIVE", additive)], ..Default::default() },
-                targets: &[Some(wgpu::ColorTargetState { format: super::layers::FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
+                targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
             multiview_mask: None, cache: None,
         }));
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {

@@ -12,7 +12,7 @@ use super::web_math;
 const SKIRT: f32 = 256.0;
 #[cfg(feature = "embedded-fonts")]
 mod full_faces;
-mod health;
+pub(crate) mod health;
 mod input;
 mod page;
 pub(crate) mod platform;
@@ -585,7 +585,10 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                     }
                 }
                 if r.rt.shell_request.take().is_some() { self.end(event_loop); return; }
-                if animating || r.rt.has_pending_input() || r.rt.live_pending() || r.compositor.as_ref().is_some_and(|c| c.animating()) {
+                // A frame that drew a fallback while the browser checks a pipeline is drawn
+                // again once it answers.
+                if animating || r.rt.has_pending_input() || r.rt.live_pending() || r.compositor.as_ref().is_some_and(|c| c.animating())
+                    || r.renderer.checking_gpu() {
                     window.request_redraw();
                 }
             }
