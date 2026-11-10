@@ -56,7 +56,7 @@ impl<S: 'static> Runtime<S> {
         // line count through a height spring, displaced siblings, or a lingering scroll glide.
         let revealed: HashSet<_> = self.nodes.iter()
             .filter(|n| {
-                n.input.as_ref().is_some_and(|input| input.edit.is_secure() && input.edit.is_revealed())
+                n.input.as_ref().is_some_and(|input| input.edit.masking() == crate::edit::Masking::Shown)
                     || (n.input.is_none() && n.text.as_ref().is_some_and(|t| t.redacted && t.secure_revealed))
             })
             .map(|n| n.id).collect();
@@ -767,7 +767,7 @@ impl<S: 'static> Runtime<S> {
                 // Exit visuals outlive their model. Never call an accessor captured by
                 // a deleted row while normalizing a later focus change.
                 if let Some(input) = &mut old.input {
-                    let was_revealed = input.edit.is_secure() && input.edit.is_revealed();
+                    let was_revealed = input.edit.masking() == crate::edit::Masking::Shown;
                     input.access = None;
                     input.key = None;
                     input.change = None;

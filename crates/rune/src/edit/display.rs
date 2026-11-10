@@ -8,7 +8,7 @@ impl TextEdit {
     /// Map a model byte range `start..end` (in `self.text`) onto `self.display().0` byte ranges,
     /// shifting or splitting around any active IME `preedit` splice.
     pub(crate) fn map_range_to_display(&self, start: usize, end: usize) -> Vec<(u32, u32)> {
-        if (self.secure && !self.revealed) || start >= end {
+        if self.is_masked() || start >= end {
             return Vec::new();
         }
         let s = Self::clamp_char_boundary(&self.text, start);
@@ -223,16 +223,7 @@ impl TextEdit {
     /// byte range of the preedit within it.
     pub fn display(&self) -> (String, Option<(usize, usize)>) {
         if self.secure {
-            let text = if self.revealed {
-                self.text.clone()
-            } else if self.is_single_line() {
-                "•".repeat(self.text.chars().count())
-            } else if self.text.is_empty() {
-                String::new()
-            } else {
-                MULTILINE_SECURE_MASK.to_owned()
-            };
-            return (text, None);
+            return (self.masked_display(), None);
         }
         match self.preedit() {
             Some((p, _)) => {

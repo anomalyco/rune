@@ -27,7 +27,7 @@ mod marks;
 mod model;
 pub use model::{Block, MAX_LIST_LEVEL, Mark, MarkRange, ParagraphInfo, RichStyle};
 mod secure;
-pub(crate) use secure::MULTILINE_SECURE_MASK;
+pub(crate) use secure::{MULTILINE_SECURE_MASK, Masking};
 use secure::LineMode;
 pub(crate) use history::History;
 use history::{ActiveGroup, EditKind, EditedTag};
@@ -80,17 +80,21 @@ impl std::fmt::Debug for TextEdit {
 /// length (single-line) or non-empty state (multi-line), not its text.
 impl std::hash::Hash for TextEdit {
     fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
-        if self.is_hidden_multiline() {
-            (!self.text.is_empty()).hash(h);
-            (self.anchor != self.focus).hash(h);
-        } else if self.secure && !self.revealed {
-            self.text.chars().count().hash(h);
-            self.anchor.hash(h);
-            self.focus.hash(h);
-        } else {
-            self.text.hash(h);
-            self.anchor.hash(h);
-            self.focus.hash(h);
+        match self.masking() {
+            Masking::Hidden { multiline: true } => {
+                (!self.text.is_empty()).hash(h);
+                (self.anchor != self.focus).hash(h);
+            }
+            Masking::Hidden { multiline: false } => {
+                self.text.chars().count().hash(h);
+                self.anchor.hash(h);
+                self.focus.hash(h);
+            }
+            Masking::Plain | Masking::Shown => {
+                self.text.hash(h);
+                self.anchor.hash(h);
+                self.focus.hash(h);
+            }
         }
         self.composition.hash(h);
         self.focused.hash(h);
@@ -488,7 +492,7 @@ impl TextEdit {
     }
 
     fn prev_word(&self, i: usize) -> usize {
-        if self.secure && !self.revealed {
+        if self.is_masked() {
             return 0;
         }
         let s = &self.text;
@@ -513,7 +517,7 @@ impl TextEdit {
     }
 
     fn next_word(&self, i: usize) -> usize {
-        if self.secure && !self.revealed {
+        if self.is_masked() {
             return self.text.len();
         }
         let s = &self.text;

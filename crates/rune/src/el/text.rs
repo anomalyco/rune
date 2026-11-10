@@ -382,7 +382,7 @@ impl El {
             if let Some(t) = &mut self.text {
                 t.wrap = false;
                 t.wrap_anywhere = false;
-                if i.edit.is_secure() && !i.edit.is_revealed() {
+                if i.edit.is_masked() {
                     t.replace_content(i.edit.display().0);
                 }
             }

@@ -192,7 +192,7 @@ impl TextEdit {
                         }
                     } else if a > 0 {
                         let from = if line {
-                            if self.secure && !self.revealed { 0 } else { self.text[..a].rfind('\n').map_or(0, |i| i + 1) }
+                            if self.is_masked() { 0 } else { self.text[..a].rfind('\n').map_or(0, |i| i + 1) }
                         } else if word {
                             self.prev_word(a)
                         } else {
@@ -233,7 +233,7 @@ impl TextEdit {
             Key::Up | Key::Down => {
                 let down = ev.key == Key::Down;
                 let n = self.text.len();
-                let i = if line || (self.secure && !self.revealed) {
+                let i = if line || self.is_masked() {
                     if down { n } else { 0 }
                 } else if let Some(l) = layout {
                     match crate::text::move_line(l, self.display_index(self.focus), down) {
@@ -314,7 +314,7 @@ impl TextEdit {
     fn visual_step(&self, layout: Option<&Layout<Ink>>, right: bool, word: bool) -> Option<usize> {
         use super::caret_motion::{Arrow, CaretMotion, Landing};
         let l = layout?;
-        match CaretMotion::of(l, self.secure && !self.revealed) {
+        match CaretMotion::of(l, self.is_masked()) {
             CaretMotion::Logical => None,
             CaretMotion::Visual => {
                 let arrow = match (right, word) {
@@ -340,7 +340,7 @@ impl TextEdit {
     }
 
     fn line_edge(&self, layout: Option<&Layout<Ink>>, end: bool) -> usize {
-        if self.secure && !self.revealed {
+        if self.is_masked() {
             return if end { self.text.len() } else { 0 };
         }
         if let Some(l) = layout {
