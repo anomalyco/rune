@@ -28,6 +28,27 @@ impl El {
         self.set_font(s);
         self
     }
+    /// Replaces the string of a [`text`] element, keeping its style, colour and every other
+    /// setting: a styled text cloned as a template takes each use's words. Spans and other byte
+    /// ranges of the old string are dropped. Does nothing to other elements or to a text input.
+    pub fn set_content(&mut self, content: impl Into<String>) -> &mut Self {
+        if self.cold.input.is_none()
+            && let Some(t) = &mut self.text
+        {
+            t.content = content.into();
+            t.spans.clear();
+            t.links.clear();
+            t.uncopied.clear();
+            t.strikes.clear();
+            t.highlights.clear();
+            t.pills.clear();
+            t.rings.clear();
+            t.blocks.clear();
+            t.soft_breaks.clear();
+            t.source = None;
+        }
+        self
+    }
     /// [`El::font`] in place.
     #[inline]
     pub fn set_font(&mut self, s: TextStyle) -> &mut Self {

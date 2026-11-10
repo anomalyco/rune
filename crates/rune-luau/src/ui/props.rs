@@ -193,6 +193,7 @@ const LEFT: u8 = 8;
 /// it: the press handler needs the key, `pad` yields to the sides set beside it, a text node's
 /// style and colour land together, and `center`, `corners`, `selected` and `disabled` overrule
 /// the props they overlap.
+#[derive(Clone)]
 pub(crate) struct Props {
     pub(crate) key: Option<String>,
     pub(crate) on_hover: Option<Rc<Callback>>,
@@ -214,6 +215,9 @@ pub(crate) struct Props {
     border: (Option<f32>, Option<Color>),
     pub(crate) scroll: Option<(bool, bool)>,
     stick_bottom: bool,
+    /// A prop whose effect depends on more than its value and the colours (`shadow`): the node
+    /// can't be a template.
+    pub(crate) uncacheable: bool,
 }
 
 impl Props {
@@ -240,6 +244,7 @@ impl Props {
             border: (None, None),
             scroll: None,
             stick_bottom: false,
+            uncacheable: false,
         }
     }
 
@@ -507,6 +512,7 @@ impl Props {
             }
             Atom::Shadow => match v {
                 Value::Str(s) => {
+                    self.uncacheable = true;
                     if let Some(shadows) = env.shadows.as_ref().and_then(|f| f(s, env.dark)) {
                         // In CSS order, the first on top.
                         with(e, |e| shadows.into_iter().rev().fold(e, El::box_shadow));

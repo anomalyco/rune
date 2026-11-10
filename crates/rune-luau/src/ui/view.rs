@@ -17,9 +17,13 @@ use super::{guard, top};
 pub(crate) unsafe extern "C-unwind" fn view_memo(state: *mut ffi::lua_State) -> c_int {
     // SAFETY: arguments are (view, key, version, build) on this C function's stack.
     unsafe {
+        let num;
         let key = match props::read(state, 2) {
-            Value::Str(s) => s.to_owned(),
-            Value::Num(n) => props::format_num(n),
+            Value::Str(s) => s,
+            Value::Num(n) => {
+                num = props::format_num(n);
+                num.as_str()
+            }
             other => {
                 let message = format!("view:Memo key must be a string or number, got {}", props::name(other));
                 return guard(state, || Err(message));

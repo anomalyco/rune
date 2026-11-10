@@ -2,7 +2,7 @@
 //! `ui.<name>(props, node)`, built by the app from [`NodeArgs`]. The standard layout props
 //! (`w`, `pad`, `key`, `label`, ...) apply after the app's build, except the ones it read.
 
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::os::raw::c_int;
 use std::rc::Rc;
 
@@ -35,12 +35,24 @@ impl HostNode {
 /// children (an array, or one node: `ui.settingsRow(props, control)`).
 pub struct NodeArgs {
     content: Option<String>,
-    props: Vec<(String, Prop)>,
+    props: Vec<(Key, Prop)>,
     pub children: Vec<El>,
     attach: &'static super::Attach,
     env: Rc<Env>,
-    /// Props the build read: the standard pass leaves them alone.
-    used: RefCell<Vec<String>>,
+    /// Props the build read, by index in `props` (past 64 all count as read): the standard pass
+    /// leaves them alone.
+    used: Cell<u64>,
+}
+
+/// A prop's name: the bytes of the key string in the props table. The table sits on the Luau
+/// stack for the whole host node call, which is a `NodeArgs`'s whole life, and keeps it alive.
+struct Key(*const u8, usize);
+
+impl Key {
+    fn as_str(&self) -> &str {
+        // SAFETY: as the type says; `host_props` only makes keys of UTF-8 strings.
+        unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(self.0, self.1)) }
+    }
 }
 
 /// One prop a host node received.
@@ -81,7 +93,7 @@ impl NodeArgs {
     /// The node's key, which the standard pass applies: reading it here leaves it there.
     fn key(&self) -> Option<Rc<str>> {
         self.props.iter().find_map(|(k, v)| match v {
-            Prop::String(s) if k == "key" => Some(s.as_str().into()),
+            Prop::String(s) if k.as_str() == "key" => Some(s.as_str().into()),
             _ => None,
         })
     }
@@ -92,8 +104,17 @@ impl NodeArgs {
     }
 
     pub fn get(&self, name: &str) -> Option<&Prop> {
-        self.used.borrow_mut().push(name.to_owned());
-        self.props.iter().find(|(k, _)| k == name).map(|(_, v)| v)
+        let i = self.props.iter().position(|(k, _)| k.as_str() == name)?;
+        if i < 64 {
+            self.used.set(self.used.get() | 1 << i);
+        }
+        Some(&self.props[i].1)
+    }
+
+    /// The names of the props the build read.
+    fn read(&self) -> impl Iterator<Item = &str> {
+        let used = self.used.get();
+        self.props.iter().enumerate().filter(move |(i, _)| *i >= 64 || used & (1 << i) != 0).map(|(_, (k, _))| k.as_str())
     }
 
     pub fn number(&self, name: &str) -> Option<f64> {
@@ -209,18 +230,18 @@ pub(crate) unsafe extern "C-unwind" fn ui_host(state: *mut ffi::lua_State) -> c_
                     at if ffi::lua_type(state, at) == ffi::LUA_TLIGHTUSERDATA => vec![frame.take(ffi::lua_tolightuserdata(state, at))?],
                     at => take_children(state, at, frame)?,
                 };
-                Ok(NodeArgs { content, props, children, attach: frame.attach, env: frame.env.clone(), used: RefCell::default() })
+                Ok(NodeArgs { content, props, children, attach: frame.attach, env: frame.env.clone(), used: Cell::new(0) })
             });
             let mut args = args.ok_or("ui nodes can only be built while rendering")??;
             let node = top(|frame| frame.env.nodes.get(index).cloned()).flatten().ok_or("unknown host node")?;
             let el = (node.build)(&mut args).map_err(|e| format!("ui.{}: {e}", node.name))?;
             // Standard layout props still apply, after the host's own.
-            build_from(state, el, props_at, &args.used.borrow())
+            build_from(state, el, props_at, &args)
         })
     }
 }
 
-unsafe fn build_from(state: *mut ffi::lua_State, el: El, props_at: c_int, used: &[String]) -> Result<c_int, String> {
+unsafe fn build_from(state: *mut ffi::lua_State, el: El, props_at: c_int, args: &NodeArgs) -> Result<c_int, String> {
     top(|frame| {
         let Frame { arena, attach, env } = frame;
         let slot = arena.alloc(el)?;
@@ -234,7 +255,7 @@ unsafe fn build_from(state: *mut ffi::lua_State, el: El, props_at: c_int, used: 
                     iter = ffi::lua_rawiter(state, props_at, iter);
                     iter >= 0
                 } {
-                    let own = matches!(props::read(state, -2), Value::Str(k) if used.iter().any(|u| u == k));
+                    let own = matches!(props::read(state, -2), Value::Str(k) if args.read().any(|u| u == k));
                     match props::key_atom(state, -2) {
                         Ok(Atom::OnPress | Atom::OnHover) => {}
                         Ok(atom) if !own => p.decode_at(el, state, atom, -1, env, false)?,
@@ -253,7 +274,7 @@ unsafe fn build_from(state: *mut ffi::lua_State, el: El, props_at: c_int, used: 
     .unwrap_or_else(|| Err("ui nodes can only be built while rendering".into()))
 }
 
-unsafe fn host_props(state: *mut ffi::lua_State, idx: c_int, frame: &Frame) -> Result<Vec<(String, Prop)>, String> {
+unsafe fn host_props(state: *mut ffi::lua_State, idx: c_int, frame: &Frame) -> Result<Vec<(Key, Prop)>, String> {
     let mut out = Vec::new();
     // SAFETY: walks the table at `idx`, popping each value.
     unsafe {
@@ -263,7 +284,7 @@ unsafe fn host_props(state: *mut ffi::lua_State, idx: c_int, frame: &Frame) -> R
             iter >= 0
         } {
             let key = match props::read(state, -2) {
-                Value::Str(s) => Some(s.to_owned()),
+                Value::Str(s) => Some(Key(s.as_ptr(), s.len())),
                 _ => None,
             };
             let value = match props::read(state, -1) {

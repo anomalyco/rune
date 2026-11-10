@@ -228,21 +228,48 @@ impl IntoLua for Data {
             Data::Integer(i) => Value::Number(i as f64),
             Data::Number(n) => Value::Number(n),
             Data::String(s) => Value::String(lua.create_string(s)?),
-            Data::List(items) => {
-                let t = lua.create_table_with_capacity(items.len(), 0)?;
-                for (i, item) in items.into_iter().enumerate() {
-                    t.raw_set(i + 1, item)?;
-                }
-                Value::Table(t)
-            }
-            Data::Map(fields) => {
-                let t = lua.create_table_with_capacity(0, fields.len())?;
-                for (k, v) in fields {
-                    t.raw_set(k, v)?;
-                }
-                Value::Table(t)
+            // A table is built on the stack with the C API in one protected call, not a call
+            // through mlua's handles per field: props a host passes each render are tables.
+            Data::List(_) | Data::Map(_) => {
+                // SAFETY: `push_stack` leaves exactly the one table it builds on the stack.
+                unsafe { lua.exec_raw::<Value>((), |state| push_stack(state, &self, 0))? }
             }
         })
+    }
+}
+
+/// Pushes `data` with the C API. Inside a protected call: a failed allocation raises a Lua error.
+unsafe fn push_stack(state: *mut mlua::ffi::lua_State, data: &Data, depth: usize) {
+    use mlua::ffi;
+    // SAFETY: each branch pushes exactly one value; a table's entries are pushed and set in turn.
+    unsafe {
+        match data {
+            Data::Nil => ffi::lua_pushnil(state),
+            Data::Bool(b) => ffi::lua_pushboolean(state, i32::from(*b)),
+            Data::Integer(i) => ffi::lua_pushnumber(state, *i as f64),
+            Data::Number(n) => ffi::lua_pushnumber(state, *n),
+            Data::String(s) => {
+                ffi::lua_pushlstring(state, s.as_ptr().cast(), s.len());
+            }
+            Data::List(_) | Data::Map(_) if depth >= MAX_DEPTH => ffi::lua_pushnil(state),
+            Data::List(items) => {
+                ffi::luaL_checkstack(state, 3, std::ptr::null());
+                ffi::lua_createtable(state, items.len().try_into().unwrap_or(0), 0);
+                for (i, item) in items.iter().enumerate() {
+                    push_stack(state, item, depth + 1);
+                    ffi::lua_rawseti(state, -2, (i + 1) as _);
+                }
+            }
+            Data::Map(fields) => {
+                ffi::luaL_checkstack(state, 4, std::ptr::null());
+                ffi::lua_createtable(state, 0, fields.len().try_into().unwrap_or(0));
+                for (k, v) in fields {
+                    ffi::lua_pushlstring(state, k.as_ptr().cast(), k.len());
+                    push_stack(state, v, depth + 1);
+                    ffi::lua_rawset(state, -3);
+                }
+            }
+        }
     }
 }
 
