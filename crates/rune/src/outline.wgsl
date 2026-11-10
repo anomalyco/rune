@@ -72,10 +72,10 @@ fn outline_integrate(q1: vec2<f32>, q2: vec2<f32>, q3: vec2<f32>, lo: f32, hi: f
     return acc;
 }
 
-// How much of a pixel `2 * hw` rest px square at `local` (rest px from the pen, y up) the glyph
-// of record `rec` covers, `scale` rest px a font unit, dilated by `r` rest px and hinted by
-// record `hint` (0: none).
-fn outline_coverage(rec: u32, hint: u32, local: vec2<f32>, scale: f32, r: f32, hw: f32) -> f32 {
+// How much of a box `2 * hx` wide and `2 * hw` tall (rest px) at `local` (rest px from the pen,
+// y up) the glyph of record `rec` covers, `scale` rest px a font unit, dilated by `r` rest px and
+// hinted by record `hint` (0: none). A pixel is `hx == hw`; a subpixel a third as wide.
+fn outline_coverage(rec: u32, hint: u32, local: vec2<f32>, scale: f32, r: f32, hw: f32, hx: f32) -> f32 {
     let head = outline_texel(rec);
     let count = head.y;
     let y0 = bitcast<f32>(head.z);
@@ -113,7 +113,7 @@ fn outline_coverage(rec: u32, hint: u32, local: vec2<f32>, scale: f32, r: f32, h
             let t0 = outline_texel(entry.x + 2u * k);
             let t1 = outline_texel(entry.x + 2u * k + 1u);
             // Sorted by right edge: once one sits left of the pixel, all the rest do.
-            if (bitcast<f32>(t1.w) * scale + r - local.x <= -hw) {
+            if (bitcast<f32>(t1.w) * scale + r - local.x <= -hx) {
                 if (sorted) { break; }
                 continue;
             }
@@ -144,15 +144,15 @@ fn outline_coverage(rec: u32, hint: u32, local: vec2<f32>, scale: f32, r: f32, h
             let q3 = p2 - local;
             let lo = max(wlo, min(q1.y, q3.y));
             let hi = min(whi, max(q1.y, q3.y));
-            if (hi <= lo || max(q1.x, q3.x) <= -hw) { continue; }
-            if (min(q1.x, q3.x) >= hw) {
-                acc = acc + 2.0 * hw * (clamp(q3.y, wlo, whi) - clamp(q1.y, wlo, whi));
+            if (hi <= lo || max(q1.x, q3.x) <= -hx) { continue; }
+            if (min(q1.x, q3.x) >= hx) {
+                acc = acc + 2.0 * hx * (clamp(q3.y, wlo, whi) - clamp(q1.y, wlo, whi));
                 continue;
             }
-            acc = acc + outline_integrate(q1, p1 - local, q3, lo, hi, hw);
+            acc = acc + outline_integrate(q1, p1 - local, q3, lo, hi, hx);
         }
     }
-    return min(abs(acc) / (4.0 * hw * hw), 1.0);
+    return min(abs(acc) / (4.0 * hx * hw), 1.0);
 }
 
 const OUTLINE_HINT_REACH: f32 = 1.5;
@@ -261,14 +261,53 @@ fn outline_slug(rec: u32, hint: u32, local: vec2<f32>, scale: f32, r: f32, hw: f
     return 0.5 * (min(abs(across), 1.0) + min(abs(winding + down), 1.0));
 }
 
+// The subpixel coverage (red, green, blue; w = 1) of the glyph this fragment draws, or zero
+// for any other: the dual-source entry (render/variant.rs) blends each channel by its own.
+var<private> lcd_cov: vec4<f32>;
+
 // A glyph instance drawn from its outline (`text::Outline`): radii = pen, scale, zoom; border =
-// record, hint, radius, coverage (0: Windfoil's box, 1: Slug's rays). Rest px, y up, a device
-// pixel 1 / zoom of them across.
+// record, hint, radius, coverage (0: Windfoil's box, 1: Slug's rays, 2: Windfoil's box about
+// each subpixel, 3: one subpixel per texel, filling a subpixel mask three texels a pixel). Rest px,
+// y up, a device pixel 1 / zoom of them across.
 fn outline_glyph(i: Out, screen: vec2<f32>) -> f32 {
     let z = i.radii.w;
-    let local = vec2<f32>(screen.x - i.radii.x, i.radii.y - screen.y) / z;
-    if (i.border.w > 0.5) {
-        return outline_slug(u32(i.border.x), u32(i.border.y), local, i.radii.z, i.border.z, 0.5 / z);
+    let rec = u32(i.border.x);
+    let hint = u32(i.border.y);
+    let hw = 0.5 / z;
+    let mode = u32(i.border.w + 0.5);
+    // A subpixel mask's texels are thirds of a pixel; its boxes are still a pixel wide.
+    let across = select(1.0, 3.0, mode == 3u);
+    let local = vec2<f32>((screen.x - i.radii.x) / across, i.radii.y - screen.y) / z;
+    if (mode == 1u) {
+        return outline_slug(rec, hint, local, i.radii.z, i.border.z, hw);
     }
-    return outline_coverage(u32(i.border.x), u32(i.border.y), local, i.radii.z, i.border.z, 0.5 / z);
+    if (mode == 2u && OUTLINE_SUBPIXEL) {
+        return outline_rgb(rec, hint, local, i.radii.z, i.border.z, hw);
+    }
+    return outline_coverage(rec, hint, local, i.radii.z, i.border.z, hw, hw);
+}
+
+// Whether this shader blends subpixel text by channel: false here, so a subpixel glyph draws
+// its grayscale coverage; the subpixel variant (render/variant.rs) sets it.
+const OUTLINE_SUBPIXEL: bool = false;
+
+// A subpixel glyph's three coverages, red to blue, each a pixel-wide box about its subpixel's
+// centre (FreeType's light LCD filter, thirds, which keeps the colour fringes faint).
+fn outline_rgb(rec: u32, hint: u32, local: vec2<f32>, scale: f32, r: f32, hw: f32) -> f32 {
+    let third = vec2<f32>(2.0 * hw / 3.0, 0.0);
+    let c = vec3<f32>(
+        outline_coverage(rec, hint, local - third, scale, r, hw, hw),
+        outline_coverage(rec, hint, local, scale, r, hw, hw),
+        outline_coverage(rec, hint, local + third, scale, r, hw, hw));
+    lcd_cov = vec4<f32>(c, 1.0);
+    return (c.x + c.y + c.z) / 3.0;
+}
+
+// A subpixel atlas mask (`radii.x == 1`): three texels a pixel, red to blue.
+fn lcd_mask(i: Out, screen: vec2<f32>) -> f32 {
+    let p = floor(screen - i.rect.xy);
+    let t = vec2<i32>(i.uv.xy) + vec2<i32>(i32(p.x) * 3, i32(p.y));
+    let c = vec3<f32>(textureLoad(atlas, t, 0).r, textureLoad(atlas, t + vec2<i32>(1, 0), 0).r, textureLoad(atlas, t + vec2<i32>(2, 0), 0).r);
+    lcd_cov = vec4<f32>(c, 1.0);
+    return (c.x + c.y + c.z) / 3.0;
 }

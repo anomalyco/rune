@@ -100,7 +100,7 @@ impl Atlas {
         }
         self.rasterized += 1;
         self.touch(page as u16, w * h);
-        let g = AtlasGlyph { page: page as u16, x: ax, y: ay, w, h, left, top };
+        let g = AtlasGlyph { page: page as u16, x: ax, y: ay, w, h, left, top, lcd: fill.coverage == 3 };
         self.map.insert(key, Residency::Pending(g, fill));
         self.queue(page, key);
         Some(g)

@@ -134,7 +134,7 @@ impl TextSystem {
             subpx,
             subpy,
             dilation: if direct_write { gamma as u32 } else { (radius as f32).to_bits() },
-            apple: if direct_write { DIRECT_WRITE_KEY } else { self.smoothing.outline_key().unwrap_or_else(|| self.apple.key()) },
+            apple: if direct_write { DIRECT_WRITE_KEY | (self.smoothing == FontSmoothing::ClearType) as u8 } else { self.smoothing.outline_key().unwrap_or_else(|| self.apple.key()) },
             skew,
             bold: face.bold,
         };
@@ -188,7 +188,7 @@ impl TextSystem {
                 #[cfg(target_os = "windows")]
                 let placed = (direct_write && !face.bold).then(|| self.windows.rasterize(&mut self.atlas, &windows::Job {
                     font: font_ref, blob: &font.data, key: (key.font, key.index, key.coords), coords, glyph: glyph as u16, ppem: font_size,
-                    phase_x, shift_y, skew, lum: gamma,
+                    phase_x, shift_y, skew, lum: gamma, lcd: self.smoothing == FontSmoothing::ClearType,
                 })).flatten();
                 #[cfg(not(target_os = "windows"))]
                 let placed = None;
@@ -280,13 +280,16 @@ pub(super) enum Placed {
 
 /// The quad of atlas mask `a` for a pen at whole-pixel x `fx` and baseline `gy`.
 pub(super) fn atlas_quad(a: AtlasGlyph, fx: f32, gy: f32, ink: u16, byte: u32) -> GlyphQuad {
+    // A subpixel mask is three texels a pixel.
+    let w = if a.lcd { a.w / 3 } else { a.w };
     GlyphQuad {
-        rect: [fx + a.left as f32, gy.round() - a.top as f32, a.w as f32, a.h as f32],
+        rect: [fx + a.left as f32, gy.round() - a.top as f32, w as f32, a.h as f32],
         uv: [a.x as f32, (a.page as u32 * ATLAS_SIZE + a.y) as f32],
         ink,
         byte,
         color: 0,
         outline: None,
+        lcd: a.lcd,
     }
 }
 

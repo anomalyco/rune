@@ -35,10 +35,13 @@ pub(super) struct AtlasGlyph {
     pub(super) page: u16,
     pub(super) x: u32,
     pub(super) y: u32,
+    /// Texels wide: three a pixel for a subpixel mask (`lcd`).
     pub(super) w: u32,
     pub(super) h: u32,
     pub(super) left: i32,
     pub(super) top: i32,
+    /// A subpixel mask: three coverages a pixel, red to blue.
+    pub(super) lcd: bool,
 }
 
 /// Steady-state shelf pages (page 0 + one secondary page for ping-pong eviction).
@@ -136,6 +139,8 @@ pub struct GlyphQuad {
     pub color: u32,
     /// A glyph drawn straight from its outline instead of the atlas (`uv` unused).
     pub outline: Option<super::Outline>,
+    /// A subpixel mask, three texels a pixel (`FontSmoothing::WindfoilRgb`, `ClearType`).
+    pub lcd: bool,
 }
 
 impl GlyphQuad {
@@ -169,7 +174,7 @@ impl ColorGlyph {
             self.w as f32,
             self.h as f32,
         ];
-        GlyphQuad { rect, uv: [0.0, 0.0], ink, byte, color: self.index, outline: None }
+        GlyphQuad { rect, uv: [0.0, 0.0], ink, byte, color: self.index, outline: None, lcd: false }
     }
 }
 
@@ -186,6 +191,9 @@ pub struct Atlas {
     shelf: Shelf,
     pub(super) clock: u64,
     pub(super) map: GlyphMap<Residency>,
+    /// Text draws subpixel masks this frame: the renderer blends by channel
+    /// (`FontSmoothing::lcd`).
+    pub(crate) lcd: bool,
     /// Per page, the entries whose GPU fill is queued (`atlas_fill.rs`).
     pub(super) fills: Vec<Vec<GlyphKey>>,
     pub(super) icons: HashMap<(usize, u32), Option<AtlasGlyph>>,
@@ -239,6 +247,7 @@ impl Atlas {
             shelf: Shelf::new(1),
             clock: 1,
             map: GlyphMap::default(),
+            lcd: false,
             fills: Vec::new(),
             icons: HashMap::new(),
             outlines: Default::default(),
@@ -400,6 +409,6 @@ impl Atlas {
         *d = (d.0.min(y0), d.1.max(y1));
         self.rasterized += 1;
         self.touch(page as u16, w * h);
-        Some(AtlasGlyph { page: page as u16, x: ax, y: ay, w, h, left, top })
+        Some(AtlasGlyph { page: page as u16, x: ax, y: ay, w, h, left, top, lcd: false })
     }
 }

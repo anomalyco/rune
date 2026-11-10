@@ -140,7 +140,7 @@ impl TextSystem {
         // The quad of the atlas mask it lands on, so nothing that reads quads sees it change.
         let [left, top, w, h] = mask_box(&o, g.bbox);
         o.pen = [fx + nudge + phase_x, fy + shift_y];
-        out.push(GlyphQuad { rect: [fx + nudge + left, fy + top, w, h], uv: [0.0; 2], ink: face.ink, byte, color: 0, outline: Some(o) });
+        out.push(GlyphQuad { rect: [fx + nudge + left, fy + top, w, h], uv: [0.0; 2], ink: face.ink, byte, color: 0, outline: Some(o), lcd: false });
         Some(Placed::Other)
     }
 
@@ -164,7 +164,13 @@ impl TextSystem {
         let [left, top, w, h] = mask_box(&o, g.bbox);
         let fill = Fill { record: g.record, hint, scale: o.scale, radius, pen: [phase_x - left, shift_y - top], coverage: o.coverage };
         if self.atlas.outlines.support() == outline::Support::Drawn {
-            return Some(match self.atlas.reserve(key, w as u32, h as u32, (left + nudge) as i32, -top as i32, fill) {
+            // A subpixel mask is three texels a pixel, each one subpixel's box (coverage 3).
+            let (texels, fill) = if self.smoothing.lcd() {
+                (3, Fill { pen: [fill.pen[0] * 3.0, fill.pen[1]], coverage: 3, ..fill })
+            } else {
+                (1, fill)
+            };
+            return Some(match self.atlas.reserve(key, w as u32 * texels, h as u32, (left + nudge) as i32, -top as i32, fill) {
                 Some(mask) => Rasterized::Placed(mask),
                 None => Rasterized::Unplaced,
             });

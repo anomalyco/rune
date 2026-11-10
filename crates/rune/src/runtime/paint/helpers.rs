@@ -269,7 +269,10 @@ pub(super) fn zoom_glyph(mut g: Instance, origin: [f32; 2], r_origin: [f32; 2], 
     if g.params[1] == KIND_GLYPH && g.radii[3] > 0.0 {
         // An outline glyph (`text::Outline`) magnifies its pen and pixel instead of its mask.
         g.radii = [origin[0] + (g.radii[0] - r_origin[0]) * k, origin[1] + (g.radii[1] - r_origin[1]) * k, g.radii[2], g.radii[3] * k];
-    } else if g.params[1] == KIND_GLYPH && g.uv[2] == 0.0 { (g.uv[2], g.uv[3]) = (g.rect[2], g.rect[3]); }
+    } else if g.params[1] == KIND_GLYPH && g.uv[2] == 0.0 {
+        // A subpixel mask's footprint is three texels a pixel wide.
+        (g.uv[2], g.uv[3]) = (g.rect[2] * if g.radii[0] > 0.5 { 3.0 } else { 1.0 }, g.rect[3]);
+    }
     g.rect = [
         origin[0] + (g.rect[0] - r_origin[0]) * k,
         origin[1] + (g.rect[1] - r_origin[1]) * k,
