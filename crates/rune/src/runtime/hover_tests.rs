@@ -111,3 +111,21 @@ fn a_hover_alone_child_keeps_the_row_around_it_unlit() {
     assert_eq!((lit(&rt, "row"), lit(&rt, "face")), (1.0, 0.0), "back on the label the row lights again");
     assert_eq!(rt.stats.commits, commits, "hover between them never commits");
 }
+
+#[test]
+fn a_released_hold_holds_nothing_until_layout_settles() {
+    let mut h = HoverHold::default();
+    h.set_held(true);
+    assert!(h.held());
+    h.release(true);
+    assert!(h.released() && !h.held(), "the hand let go of the hold while layout moves");
+    h.set_held(true);
+    assert!(h.released() && !h.held(), "released, a pass can't hold hover");
+    h.release(true);
+    assert!(h.released(), "a second move keeps it released");
+    h.settled();
+    h.set_held(true);
+    assert!(h.held() && !h.released());
+    h.release(false);
+    assert!(!h.held() && !h.released(), "with layout still, a move just ends the hold");
+}

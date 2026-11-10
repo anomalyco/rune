@@ -104,7 +104,7 @@ fn a_press_that_starts_a_glide_still_lets_go() {
     rt.pointer_up(100.0, 110.0);
     rt.frame(1.0 / 120.0);
     rt.frame(1.0 / 120.0);
-    assert!(rt.hover_hold.held, "the press's glide holds hover");
+    assert!(rt.hover_hold.held(), "the press's glide holds hover");
     assert_eq!(rt.scene.store().target(id, P_PRESS), Some(0.0), "the press lets go mid-glide");
     assert_eq!(rt.scene.store().target(id, P_PRESS_SCALE), Some(1.0), "the press scale springs back mid-glide");
 }
@@ -116,11 +116,11 @@ fn the_hold_ends_with_its_glide() {
     let mut held = false;
     for _ in 0..600 {
         rt.frame(1.0 / 120.0);
-        held |= rt.hover_hold.held;
+        held |= rt.hover_hold.held();
         if rt.scrolls.values().all(|s| s.glide().is_none()) { break; }
     }
     assert!(held, "the glide held hover");
-    assert!(!rt.hover_hold.held && !rt.hover_hold.released, "no stale hold is left for a later glide");
+    assert!(!rt.hover_hold.held() && !rt.hover_hold.released(), "no stale hold is left for a later glide");
 }
 
 /// Two viewports side by side, and a modal over both while `open`.
@@ -141,7 +141,7 @@ fn gliding_pair() -> Runtime<bool> {
     // Until a row other than the hovered one glides under the pointer.
     for _ in 0..30 {
         rt.frame(1.0 / 120.0);
-        if rt.hover_hold.held { return rt; }
+        if rt.hover_hold.held() { return rt; }
     }
     panic!("the glides held hover");
 }
@@ -152,7 +152,7 @@ fn a_hand_scroll_anywhere_lets_go_of_the_hold() {
     rt.wheel(150.0, 110.0, -10.0);
     rt.frame(1.0 / 120.0);
     assert!(rt.scrolls.values().any(|s| s.glide().is_some()), "the viewport under the pointer still glides");
-    assert!(rt.hover_hold.released && !rt.hover_hold.held, "a wheel over the other viewport lets hover follow the pointer again");
+    assert!(rt.hover_hold.released() && !rt.hover_hold.held(), "a wheel over the other viewport lets hover follow the pointer again");
 }
 
 #[test]
@@ -161,7 +161,7 @@ fn a_viewport_under_a_modal_holds_no_hover() {
     rt.update(|s, _| *s = true);
     rt.frame(1.0 / 120.0);
     assert!(rt.scrolls.values().any(|s| s.glide().is_some()));
-    assert!(!rt.hover_hold.held, "a modal makes the gliding viewport inert");
+    assert!(!rt.hover_hold.held(), "a modal makes the gliding viewport inert");
 }
 
 /// Two hundred virtual rows, each recording its `on_hover_change`.
@@ -181,14 +181,14 @@ fn a_row_leaving_the_tree_under_a_held_glide_hears_the_pointer_leave() {
     assert_eq!(rt.state, [(5, true)]);
     rt.update(|_, tx| tx.scroll_to("scroll", 0.0, 3000.0));
     rt.frame(1.0 / 120.0);
-    assert!(rt.hover_hold.held);
+    assert!(rt.hover_hold.held());
     assert!(!rt.nodes.iter().any(|n| n.named("r5") && !rt.is_exiting(n.id)), "the glide's cut unmounts the row");
     for _ in 0..120 {
         rt.frame(1.0 / 120.0);
         if rt.state.contains(&(5, false)) { break; }
     }
     assert!(rt.state.contains(&(5, false)), "the row heard the leave before it was pruned: {:?}", rt.state);
-    assert!(rt.hover_hold.held, "while the glide still holds hover");
+    assert!(rt.hover_hold.held(), "while the glide still holds hover");
 }
 
 /// Forty 20-point rows, each revealing an action on hover and recording its `on_hover_change`.
@@ -220,7 +220,7 @@ fn an_app_stepping_its_own_glide_holds_a_still_pointers_hover_until_it_stops() {
     assert_eq!((commits, flashes), (0, 0), "no hover commits or chrome under the still pointer mid-scroll: {:?}", rt.state);
     for _ in 0..30 { rt.frame(1.0 / 120.0); }
     assert_eq!(rt.state, [(5, true), (5, false), (25, true)], "once it stops, hover resolves once at the pointer");
-    assert!(!rt.hover_hold.held, "and lets go");
+    assert!(!rt.hover_hold.held(), "and lets go");
 }
 
 /// What forty rows' hover handlers heard: `on_hover_change` and `on_hover`.
@@ -265,6 +265,6 @@ fn a_glide_to_an_offset_runs_no_hover_handler_under_a_still_pointer_until_it_lan
         for _ in 0..30 { rt.frame(1.0 / 120.0); }
         assert_eq!(rt.state.changes, [(5, true), (5, false), (25, true)], "{spring:?}: once it lands, hover resolves once at the pointer");
         assert_eq!(rt.state.enters, [5, 25], "{spring:?}");
-        assert!(!rt.hover_hold.held);
+        assert!(!rt.hover_hold.held());
     }
 }

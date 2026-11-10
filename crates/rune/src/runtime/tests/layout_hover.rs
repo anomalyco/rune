@@ -101,7 +101,7 @@ fn rows_sliding_under_a_still_pointer_dont_take_its_hover() {
         assert_eq!(rt.state.changes, [(5, true), (5, false), (0, true)], "growth {growth}");
         assert_eq!(row_at(&rt, 110.0), Some(0), "growth {growth}");
         assert_eq!(shown(&rt), ["a0"], "growth {growth}: once they settle, the row under the pointer has it");
-        assert!(!rt.hover_hold.held && !rt.hover_hold.released);
+        assert!(!rt.hover_hold.held() && !rt.hover_hold.released());
     }
 }
 
@@ -110,7 +110,7 @@ fn moving_the_pointer_during_a_slide_retargets_at_once() {
     let mut rt = sliding(false);
     for _ in 0..6 { rt.frame(DT); }
     assert_eq!(shown(&rt), ["a5"]);
-    assert!(rt.hover_hold.held);
+    assert!(rt.hover_hold.held());
     let under = row_at(&rt, 111.0).unwrap();
     assert_ne!(under, 5, "a row slid under the pointer");
     rt.pointer_move(100.0, 111.0);
@@ -163,7 +163,7 @@ fn a_press_during_a_slide_still_shows_and_lets_go() {
     rt.frame(DT);
     assert_eq!(rt.scene.store().target(id, P_PRESS), Some(0.0), "the press lets go mid-slide");
     assert_eq!(rt.scene.store().target(id, P_PRESS_SCALE), Some(1.0));
-    assert!(!rt.hover_hold.held && rt.hover_hold.released, "the press let go of the hold until the slide settles");
+    assert!(!rt.hover_hold.held() && rt.hover_hold.released(), "the press let go of the hold until the slide settles");
 }
 
 /// Each row's enters minus its leaves, from `on_hover_change`.
@@ -179,7 +179,7 @@ fn a_press_mid_slide_follows_the_pointer_and_pairs_each_enter_with_a_leave() {
     let mut rt = sliding(false);
     for _ in 0..4 { rt.frame(DT); }
     rt.pointer_down(100.0, 110.0);
-    assert!(rt.hover_hold.released, "a press lets go of the hold");
+    assert!(rt.hover_hold.released(), "a press lets go of the hold");
     for _ in 0..40 {
         rt.frame(DT);
         let inside = inside(&rt);
@@ -199,13 +199,13 @@ fn a_move_before_the_next_tick_sees_layout_just_set_moving() {
     let id = rt.nodes.iter().find(|n| n.named("r3")).unwrap().id;
     rt.scene.animate(id, prop::OFFSET, rune_motion::Vec2::new(0.0, 40.0), motion::SNAPPY);
     rt.pointer_move(100.0, 111.0);
-    assert!(rt.hover_hold.released, "an untouched spring");
+    assert!(rt.hover_hold.released(), "an untouched spring");
     // A growing element's height.
     let mut rt = resting(Rows::default());
     let id = rt.nodes.iter().find(|n| n.named("r3")).unwrap().id;
     rt.grows.insert(id, crate::growth::GrowTrack { target: 100.0, ..Default::default() });
     rt.pointer_move(100.0, 111.0);
-    assert!(rt.hover_hold.released, "a growth");
+    assert!(rt.hover_hold.released(), "a growth");
 }
 
 #[test]
