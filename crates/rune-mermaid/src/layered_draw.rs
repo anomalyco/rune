@@ -3,7 +3,7 @@
 
 use rune::{Align, Color, TextStyle};
 
-use super::canvas::{Canvas, Measured, Scene, ellipse, measure, measure_balanced, measure_wrap, over_color, room, rounded_rect};
+use super::canvas::{Canvas, Measured, Scene, ellipse, measure_balanced, measure_wrap, over_color, room, rounded_rect};
 use super::chart::small;
 use super::connector::{self, label_box, title_box};
 use super::layered::{GCluster, GEdge, Graph, Spacing, layout};
@@ -77,8 +77,11 @@ pub(crate) struct Edge {
 /// How far a horizontal diagram may shrink to fit before it turns top-down instead.
 const TURN_BELOW: f32 = 0.78;
 
-/// Where a subgraph's title sits inside its top left corner.
-const TITLE_INSET: [f32; 2] = [10.0, 7.0];
+/// The least room around a subgraph's title, at its sides and above it. The title is centred
+/// in a band across the top of its box, as mermaid.js draws it.
+const TITLE_INSET: [f32; 2] = [12.0, 7.0];
+/// Subgraph titles wider than this wrap; shorter ones keep one line and widen their box.
+const TITLE_WRAP: f32 = 420.0;
 
 pub(crate) struct ClusterSpec {
     pub title: String,
@@ -191,7 +194,7 @@ pub(crate) fn layered_canvas(
     let edge_font = small(paint);
     let labels: Vec<Option<Measured>> = edges.iter().map(|e| e.label.as_ref().map(|l| measure_balanced(l, edge_font))).collect();
     let title_font = TextStyle { weight: 500.0, ..edge_font };
-    let titles: Vec<Measured> = clusters.iter().map(|c| measure(&c.title, title_font)).collect();
+    let titles: Vec<Measured> = clusters.iter().map(|c| measure_wrap(&c.title, title_font, TITLE_WRAP)).collect();
     let fonts = Fonts { edge: edge_font, title: title_font };
     let parts = Parts { nodes, ids, edges, clusters, labels: &labels, titles: &titles };
     let mut canvas = draw_in(dir, &parts, fonts, spacing, paint, hover)?;
@@ -247,7 +250,7 @@ fn draw_in(dir: Dir, p: &Parts, fonts: Fonts, spacing: &Spacing, paint: &Diagram
             .map(|(s, t)| {
                 // The title's height and inset, so the gap under it matches the padding on every other side.
                 let lead = if t.text.is_empty() { 0.0 } else { t.size[1] + TITLE_INSET[1] };
-                let min_w = if t.text.is_empty() { 0.0 } else { t.size[0] + 24.0 };
+                let min_w = if t.text.is_empty() { 0.0 } else { t.size[0] + 2.0 * TITLE_INSET[0] };
                 GCluster {
                     parent: s.parent,
                     lead: if across { [lead, 0.0] } else { [0.0, lead] },
@@ -285,8 +288,8 @@ fn draw_in(dir: Dir, p: &Parts, fonts: Fonts, spacing: &Spacing, paint: &Diagram
         let (p0, p1) = (pt([b[0], b[1]]), pt([b[2], b[3]]));
         c.part(Some(Part::Index(Kind::Frame, i)));
         c.shape(rounded_rect(p0[0], p0[1], p1[0], p1[1], 6.0), paint.cluster_fill, cluster_border, 1.0);
-        let at = [p0[0] + TITLE_INSET[0], p0[1] + TITLE_INSET[1]];
-        c.label_at(&titles[i], at, fonts.title, paint.muted, Align::Start);
+        let at = [(p0[0] + p1[0] - titles[i].size[0]) / 2.0, p0[1] + TITLE_INSET[1]];
+        c.label_at(&titles[i], at, fonts.title, paint.muted, Align::Center);
         if !titles[i].text.is_empty() {
             title_boxes.push(title_box(&titles[i], at));
         }

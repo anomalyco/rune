@@ -56,6 +56,40 @@ fn no_edge_crosses_a_subgraph_title() {
     }
 }
 
+/// Each subgraph's title has the top of its box to itself, as in mermaid.js: one line, centred,
+/// and no node or edge inside its band.
+#[test]
+fn subgraph_titles_keep_a_band_of_their_own() {
+    let plan = include_str!("../fixtures/plan.mmd");
+    let titles = ["Prep, done", "Stage 2: first pass on the new parser (the pilot)", "AST track: the new parser reads the old tool's syntax trees", "Stage 3: formatter on the new parser", "Key"];
+    for dir in ["LR", "TD"] {
+        let src = plan.replacen("flowchart LR", &format!("flowchart {dir}"), 1);
+        for width in [680.0, 4000.0] {
+            let c = canvas(&src, &paint_at(true, width));
+            let boxes: Vec<[f32; 4]> = c.ops.iter().filter_map(|op| match op {
+                Op::Fill(pts, _) if pts.len() > 8 => Some(pts.iter().fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])),
+                _ => None,
+            }).collect();
+            for t in titles {
+                let l = label(&c, t);
+                let r = rect(l);
+                let what = format!("{t:?} {dir} at width {width}: {r:?}");
+                assert!(!l.wrap, "one line: {what}");
+                let b = boxes.iter().filter(|b| b[0] <= r[0] && b[2] >= r[2] && b[1] <= r[1] && b[3] >= r[3]).min_by(|a, b| (a[2] - a[0]).total_cmp(&(b[2] - b[0]))).unwrap_or_else(|| panic!("in a box: {what}"));
+                assert!(((b[0] + b[2]) / 2.0 - (r[0] + r[2]) / 2.0).abs() < 0.5, "centred in {b:?}: {what}");
+                let band = [b[0], b[1], b[2], r[3]];
+                for n in c.labels.iter().filter(|n| !titles.contains(&n.text.as_str())) {
+                    let o = rect(n);
+                    assert!(o[0] >= band[2] || o[2] <= band[0] || o[1] >= band[3] || o[3] <= band[1], "{:?} is in the band of {what}", n.text);
+                }
+                for l in lines(&c) {
+                    assert!(!l.windows(2).any(|w| hits(w, r)), "an edge crosses {what}: {l:?}");
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn an_edge_to_a_subgraph_stops_on_its_border() {
     let paint = DiagramStyle::neutral(false);

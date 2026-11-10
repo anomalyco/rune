@@ -1,0 +1,1 @@
+- **rune-mermaid: subgraph titles keep one line, centred in a band across the top of their box, as mermaid.js draws them.** A title up to 420 points wide no longer wraps at 200 in the corner; its box widens to fit it, and no node or edge enters its band.
