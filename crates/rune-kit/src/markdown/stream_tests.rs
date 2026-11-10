@@ -17,7 +17,8 @@ fn shown(blocks: &[Block]) -> String {
                     }
                 }
                 Block::Code(c) | Block::Diff(c) | Block::Mermaid(c) => out.push(c.clone()),
-                Block::Rule | Block::Image { .. } => {}
+                Block::Image { alt, .. } => out.push(alt.clone()),
+                Block::Rule => {}
             }
         }
     }
@@ -55,9 +56,12 @@ fn an_open_span_never_shows_its_markers() {
         "See [the **docs**](https://example.com/a_b \"t\") and ![a chart](x.png), then *[more](y)*.",
         "- [ ] todo\n- [x] done",
     ] {
-        let whole = shown(&parse(doc));
+        // An image becomes its own block when its URL arrives; compare the characters,
+        // not the whitespace around that block.
+        let visible = |s: String| if doc.contains("![") { s.split_whitespace().collect::<String>() } else { s };
+        let whole = visible(shown(&parse(doc)));
         for src in prefixes(doc) {
-            let text = shown(&stream(src));
+            let text = visible(shown(&stream(src)));
             assert!(whole.starts_with(&text), "{src:?} shows {text:?}, not the start of {whole:?}");
         }
     }

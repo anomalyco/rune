@@ -84,8 +84,8 @@ fn link_and_image_urls_are_not_matched_while_visible_text_autolinks_and_alt_text
         ]]
     );
 
-    let img = find(src, "Look at diagram alt text and .", Case::Sensitive);
-    assert_eq!(slice_all(src, &img), vec![vec!["Look at ", "diagram alt text", " and ", "."]]);
+    assert!(find(src, "Look at diagram alt text and .", Case::Sensitive).is_empty(), "images are separate blocks");
+    assert_eq!(slice_all(src, &find(src, "diagram alt text", Case::Sensitive)), vec![vec!["diagram alt text"]]);
 }
 
 #[test]
@@ -466,4 +466,3 @@ fn highlighting_fragmented_match_is_linear() {
     assert_eq!(marks.len(), 1);
     assert_eq!(marks[0].label.as_deref(), Some(expected.as_str()));
 }
-

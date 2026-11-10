@@ -102,6 +102,7 @@ fn find_in_blocks(src: &str, blocks: &[Block], maps: &[BlockMap], needle: &Needl
     for (b, map) in blocks.iter().zip(maps.iter().chain(std::iter::repeat(&empty))) {
         match (b, map) {
             (Block::Para(inl) | Block::Heading(_, inl), BlockMap::Inline(m)) => find_in_text(src, &inl.text, m, needle, out),
+            (Block::Image { alt, .. }, BlockMap::Inline(m)) => find_in_text(src, alt, m, needle, out),
             (Block::Code(code) | Block::Diff(code), BlockMap::Code(m)) => find_in_text(src, code, m, needle, out),
             (Block::Mermaid(code), BlockMap::Code(m)) => {
                 #[cfg(feature = "mermaid")]

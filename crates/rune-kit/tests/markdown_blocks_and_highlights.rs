@@ -668,8 +668,8 @@ fn review_marks_do_not_wrap_large_offsets_or_intercept_links() {
 fn review_autolinks_skip_images_emails_and_unsafe_schemes() {
     let src = "HTTP://example.org/a, ![https://image.example/alt](image.png) [https://label.example](https://dest.example) <https://angle.example> `https://code.example` foo@bar.com javascript:alert(1) data:text/plain,test";
     let blocks = parse(src);
-    let Block::Para(p) = &blocks[0] else { panic!("{blocks:?}") };
-    assert_eq!(p.links.iter().map(|(_, _, u)| u.as_str()).collect::<Vec<_>>(),
+    let links = blocks.iter().filter_map(|b| match b { Block::Para(p) => Some(&p.links), _ => None });
+    assert_eq!(links.flatten().map(|(_, _, u)| u.as_str()).collect::<Vec<_>>(),
         ["HTTP://example.org/a", "https://dest.example", "https://angle.example"]);
 }
 

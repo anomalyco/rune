@@ -321,6 +321,16 @@ impl Builder {
             return false;
         }
         let alt = inl.text[start..end].to_owned();
+        let mut alt_map = SpanMap::default();
+        for (src, out) in &map.0 {
+            let overlap = start.max(out.start)..end.min(out.end);
+            if !overlap.is_empty() {
+                let source = if src.len() == out.len() {
+                    src.start + (overlap.start - out.start)..src.start + (overlap.end - out.start)
+                } else { src.clone() };
+                alt_map.push(source, overlap.start - start..overlap.end - start);
+            }
+        }
         inl.text.truncate(start);
         inl.spans.retain_mut(|s| {
             s.1 = s.1.min(start);
@@ -332,7 +342,7 @@ impl Builder {
         });
         map.truncate_out(start);
         self.flush_inline();
-        self.push(Block::Image { src, alt, title }, BlockMap::None);
+        self.push(Block::Image { src, alt, title }, BlockMap::Inline(alt_map));
         self.inline = Some((InlineKind::Para, Inline::default(), Vec::new(), SpanMap::default()));
         true
     }

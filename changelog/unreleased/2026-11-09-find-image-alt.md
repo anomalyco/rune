@@ -1,0 +1,1 @@
+- Markdown find matches an image's alt text again without matching its destination URL.
