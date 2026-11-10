@@ -87,12 +87,13 @@ fn the_body_rows_sit_on_a_raised_card_inset_in_the_frame() {
     assert_eq!(rt.presented_pose("tb").unwrap().shadows(), &raised[..], "the card is raised");
     // Rules between body rows only: none under the header, none after the last row.
     assert!(!has(&rt, "s0") && !has(&rt, "s-end") && !has(&rt, "s3"));
-    for (i, key) in ["s1", "s2"].into_iter().enumerate() {
-        let rule = by_key(&rt, key);
-        assert_eq!(parent(&rt, key).path, tbc.path);
-        assert_eq!((rule.fill, rule.rect[3]), (k.c.border_muted, 0.5));
-        let above = by_key(&rt, &format!("r{i}")).rect;
-        assert_eq!(rule.rect[1], above[1] + above[3], "{key} sits under r{i}");
+    for i in 0..2 {
+        let key = format!("r{i}");
+        assert_eq!(parent(&rt, &key).path, tbc.path);
+        let above = by_key(&rt, &key).rect;
+        let below = by_key(&rt, &format!("r{}", i + 1)).rect;
+        assert_eq!(above[3], 36.5, "row includes its bottom border");
+        assert_eq!(below[1], above[1] + above[3]);
     }
     let last = by_key(&rt, "r2").rect;
     assert_eq!(last[1] + last[3], tb.rect[1] + tb.rect[3], "the last row ends the card");
@@ -106,7 +107,7 @@ fn the_card_preset_sets_its_cells_header_and_padding() {
     assert_eq!(west.text_color, Some(k.c.text_faint), "a faint header");
     assert_eq!(north.text_color, Some(k.c.text_base));
     assert_eq!(by_key(&rt, "th").rect[3], 16.0 + 2.0 * 8.0, "the header's 16-point line padded 8");
-    assert_eq!(by_key(&rt, "r0").rect[3], 16.0 + 2.0 * 10.0, "body rows padded 10");
+    assert_eq!(by_key(&rt, "r0").rect[3], 16.0 + 2.0 * 10.0 + 0.5, "body rows padded 10 plus the bottom border");
     assert_eq!(west.rect[0] - cell(&rt, "th", 1).rect[0], 12.0);
     assert_eq!(north.rect[0] - cell(&rt, "r0", 0).rect[0], 12.0);
     assert_eq!(text(&rt, "Lettuce ×2").rect[0], west.rect[0], "header and body columns line up");
@@ -218,8 +219,9 @@ fn a_header_alone_draws_no_card() {
 fn a_streaming_last_row_gets_a_rule_above_and_none_below() {
     let src = "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | a row still arri";
     let rt = run_with(Doc { src: src.into(), style: card, width: 600.0, streaming: true, scroll_wide: false });
-    assert!(has(&rt, "r1") && has(&rt, "s1") && !has(&rt, "s2") && !has(&rt, "s0"));
+    assert_eq!(by_key(&rt, "r0").rect[3], 36.5);
     let (r1, tb) = (by_key(&rt, "r1").rect, by_key(&rt, "tb").rect);
+    assert_eq!(r1[3], 36.0, "no border after the last row");
     assert_eq!(r1[1] + r1[3], tb[1] + tb[3]);
 }
 
