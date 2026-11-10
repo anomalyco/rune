@@ -27,7 +27,7 @@ const TERMINATE_NOW: usize = 1;
 
 extern "C" fn should_terminate(_: *mut AnyObject, _: Sel, _: *mut AnyObject) -> usize {
     // Windows::exiting carries out the quit's effects.
-    let _ = super::send(super::Event::Start { ending: false });
+    let _ = super::send(super::Event::Start { ending: false, after: super::After::Exit });
     TERMINATE_NOW
 }
 

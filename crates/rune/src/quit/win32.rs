@@ -84,7 +84,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
 /// Starts the quit and has the loop run the hooks, before the answer when the loop can run.
 fn answer(ending: bool) {
     // The loop carries out the effects when the quit reaches it.
-    let _ = super::send(Event::Start { ending });
+    let _ = super::send(Event::Start { ending, after: super::After::Exit });
     let sent = DELIVER.with(|d| d.try_borrow().ok().and_then(|d| d.as_ref().map(|d| d(ending)))).unwrap_or(false);
     match super::loop_state() {
         Loop::Handling => {
@@ -103,8 +103,8 @@ fn answer(ending: bool) {
 /// windows too. A cancelled or finished quit asks nothing more.
 fn answered(ending: bool) -> bool {
     match super::state() {
-        State::Quitting(Hooks::Ran) => !ending,
-        State::Quitting(Hooks::Owed) => false,
+        State::Quitting(Hooks::Ran, _) => !ending,
+        State::Quitting(Hooks::Owed, _) => false,
         State::Running | State::Closed | State::Done => true,
     }
 }

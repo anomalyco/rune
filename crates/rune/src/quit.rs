@@ -6,7 +6,7 @@
 //! on, so a window's `on_close` can tell the app ending from the user closing that one window.
 //!
 //! One machine ([`State`], [`step`]) holds where the quit is: running, quitting (the windows'
-//! hooks owed, then run), done. The hooks run in the event loop (`Windows`, which carries out
+//! hooks owed, then run, and whether the app starts again after, `Tx::relaunch`), done. The hooks run in the event loop (`Windows`, which carries out
 //! the effects). Windows sends its session messages to a window and waits for the answer, and
 //! may end the process once every `WM_ENDSESSION` has returned, so the session window (`win32`)
 //! wakes the loop and runs it until the hooks have run before it answers; when it comes while
@@ -25,8 +25,8 @@ mod win32;
 pub(crate) enum State {
     /// The app runs.
     Running,
-    /// A quit started; the windows' hooks are owed or ran.
-    Quitting(Hooks),
+    /// A quit started; the windows' hooks are owed or ran, and what follows the exit.
+    Quitting(Hooks, After),
     /// The session ends now (a logoff): the windows closed as their close buttons would, and
     /// the loop is ending.
     Closed,
@@ -43,11 +43,19 @@ pub(crate) enum Hooks {
     Ran,
 }
 
+/// What follows a quit's exit: nothing, or the app starting again (`Tx::relaunch`). A relaunch
+/// asked during a quit outranks the plain exit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum After {
+    Exit,
+    Relaunch,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Event {
-    /// Something asks to quit: `Tx::quit`, the last window closing, macOS terminating, a
-    /// Windows session query (`ending: false`) or its end (`ending: true`).
-    Start { ending: bool },
+    /// Something asks to quit: `Tx::quit` or `Tx::relaunch`, the last window closing, macOS
+    /// terminating, a Windows session query (`ending: false`) or its end (`ending: true`).
+    Start { ending: bool, after: After },
     /// The loop ran every window's hook.
     HooksRan,
     /// The loop closed the windows for the session's end (`Effect::CloseAndExit`).
@@ -66,19 +74,25 @@ pub(crate) enum Effect {
     /// Every open window closes as its close button would, the loop sends
     /// `Event::WindowsClosed` and ends.
     CloseAndExit,
+    /// The loop ended for a relaunch: start the app again (`crate::relaunch`).
+    Relaunch,
 }
 
 pub(crate) fn step(state: State, event: Event) -> (State, Vec<Effect>) {
     use {Effect::*, Event::*, State::*};
     let close = |ending: bool| if ending { vec![CloseAndExit] } else { vec![] };
     match (state, event) {
-        (Done, _) | (_, Exited) => (Done, vec![]),
+        (Done, _) => (Done, vec![]),
+        (Quitting(_, After::Relaunch), Exited) => (Done, vec![Relaunch]),
+        (_, Exited) => (Done, vec![]),
+        // A session ending closed the windows: the system ends the app, and nothing restarts it.
         (Closed, _) => (Closed, vec![]),
-        (Running | Quitting(Hooks::Owed), Start { ending }) => (Quitting(Hooks::Owed), [vec![RunHooks], close(ending)].concat()),
-        (Quitting(Hooks::Ran), Start { ending }) => (Quitting(Hooks::Ran), close(ending)),
-        (Quitting(_), HooksRan) => (Quitting(Hooks::Ran), vec![]),
-        (Quitting(_), WindowsClosed) => (Closed, vec![]),
-        (Running | Quitting(_), Cancel) => (Running, vec![]),
+        (Running, Start { ending, after }) => (Quitting(Hooks::Owed, after), [vec![RunHooks], close(ending)].concat()),
+        (Quitting(Hooks::Owed, was), Start { ending, after }) => (Quitting(Hooks::Owed, was.max(after)), [vec![RunHooks], close(ending)].concat()),
+        (Quitting(Hooks::Ran, was), Start { ending, after }) => (Quitting(Hooks::Ran, was.max(after)), close(ending)),
+        (Quitting(_, after), HooksRan) => (Quitting(Hooks::Ran, after), vec![]),
+        (Quitting(..), WindowsClosed) => (Closed, vec![]),
+        (Running | Quitting(..), Cancel) => (Running, vec![]),
         (Running, HooksRan | WindowsClosed) => (Running, vec![]),
     }
 }

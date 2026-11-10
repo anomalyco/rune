@@ -368,7 +368,9 @@ impl ApplicationHandler<WakeEvent> for Windows {
         // Surfaces go while winit's display connection is still open (layer surfaces live on it).
         self.hosts.clear();
         crate::clipboard::shutdown();
-        crate::quit::send(crate::quit::Event::Exited);
+        if crate::quit::send(crate::quit::Event::Exited).contains(&crate::quit::Effect::Relaunch) {
+            crate::relaunch::spawn();
+        }
     }
 }
 

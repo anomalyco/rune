@@ -25,6 +25,8 @@
 ///
 /// macOS and other platforms: always true. macOS already reaches the running app.
 pub fn single_instance(id: &str) -> bool {
+    // A relaunch (`Tx::relaunch`) claims once the process it restarts has let go.
+    crate::relaunch::wait_for_previous();
     #[cfg(target_os = "windows")]
     {
         windows::claim(id)

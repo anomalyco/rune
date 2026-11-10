@@ -705,7 +705,14 @@ impl<S: 'static> AppHandle<S> {
     /// app quit before it mounts never does.
     pub fn quit(&self) {
         self.shared.quitting.store(true, Ordering::Release);
-        self.request(|q| q.quit = true);
+        self.request(|q| q.quit = q.quit.max(Some(crate::quit::After::Exit)));
+    }
+
+    /// Quit the app as [`AppHandle::quit`] does, then start it again with the same arguments
+    /// once this process has exited ([`Tx::relaunch`]). Web: as `quit`.
+    pub fn relaunch(&self) {
+        self.shared.quitting.store(true, Ordering::Release);
+        self.request(|q| q.quit = Some(crate::quit::After::Relaunch));
     }
 
     /// macOS: show or hide the app's Dock icon (and app menu) while it runs, switching between
@@ -767,7 +774,8 @@ pub(crate) struct Requests<S> {
     pub minimize: bool,
     pub position: Option<(i32, i32)>,
     pub place: Option<crate::windows::PlaceRequest>,
-    pub quit: bool,
+    /// `AppHandle::quit` or `AppHandle::relaunch`, and what follows the exit.
+    pub quit: Option<crate::quit::After>,
     /// `AppHandle::wake` asked for `poll`.
     pub woken: bool,
     pub updates: Vec<Update<S>>,
@@ -789,7 +797,7 @@ impl<S> Default for Requests<S> {
             minimize: false,
             position: None,
             place: None,
-            quit: false,
+            quit: None,
             woken: false,
             updates: Vec::new(),
         }
@@ -990,7 +998,7 @@ mod tests {
             Some(WindowRequest::Close),
             "window requests collapse to the latest"
         );
-        assert!(!requests.quit);
+        assert!(requests.quit.is_none());
         let mut n = 0;
         for f in requests.updates {
             f(&mut n, &mut Tx::default());
