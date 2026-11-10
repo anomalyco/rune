@@ -12,17 +12,25 @@ pub(super) struct Launches {
 }
 
 /// A launch in the air, the offsets outside the scene it was started against, the ones its
-/// last frame drew it under, and how fast they last moved between frames with no commit. Its
-/// re-aims folded `folded` of what its flight added to them into its path, when `1 - travel`
-/// was `folded_at`.
+/// last frame drew it under (none before its first frame), and how fast they last moved
+/// between frames with no commit. Its re-aims folded `folded` of what its flight added to them
+/// into its path, when `1 - travel` was `folded_at`.
 struct Launched {
     id: NodeId,
     shift: [f32; 2],
-    last: Option<[f32; 2]>,
-    seen: (f64, u64),
+    drawn: Option<Drawn>,
     drift: [f32; 2],
     folded: [f32; 2],
     folded_at: [f32; 2],
+}
+
+/// The offsets outside the scene a launch's frame drew it under, at scene time `at`, after
+/// commit `commit`.
+#[derive(Clone, Copy)]
+struct Drawn {
+    offset: [f32; 2],
+    at: f64,
+    commit: u64,
 }
 
 impl Launches {
@@ -42,11 +50,11 @@ impl Launches {
     pub(super) fn restart(&mut self, scene: &Scene, id: NodeId) -> [rune_motion::Vec2; 2] {
         let Some(l) = self.flying.iter_mut().find(|l| l.id == id) else { return [rune_motion::Vec2::ZERO; 2] };
         let ([ox, oy], [vx, vy]) = l.blend(scene);
-        if let Some(last) = l.last {
+        if let Some(drawn) = l.drawn {
             let carried = l.carried(scene);
             let travel = scene.get(id, prop::TRAVEL).unwrap_or(rune_motion::Vec2::new(1.0, 1.0));
             (l.folded, l.folded_at) = (carried, [1.0 - travel.x, 1.0 - travel.y]);
-            l.shift = last;
+            l.shift = drawn.offset;
         }
         [rune_motion::Vec2::new(ox, oy), rune_motion::Vec2::new(vx, vy)]
     }
@@ -82,12 +90,11 @@ impl Launches {
     pub(super) fn offset_fix(&mut self, scene: &Scene, id: NodeId, offset: [f32; 2], commit: u64) -> [f32; 2] {
         let Some(l) = self.flying.iter_mut().find(|l| l.id == id) else { return [0.0; 2] };
         let now = scene.now();
-        if let Some(last) = l.last && l.seen.1 == commit && now > l.seen.0 {
-            let dt = (now - l.seen.0) as f32;
-            l.drift = [(offset[0] - last[0]) / dt, (offset[1] - last[1]) / dt];
+        if let Some(last) = l.drawn && last.commit == commit && now > last.at {
+            let dt = (now - last.at) as f32;
+            l.drift = [(offset[0] - last.offset[0]) / dt, (offset[1] - last.offset[1]) / dt];
         }
-        l.last = Some(offset);
-        l.seen = (now, commit);
+        l.drawn = Some(Drawn { offset, at: now, commit });
         let travel = scene.get(id, prop::TRAVEL).unwrap_or(rune_motion::Vec2::new(1.0, 1.0));
         [(l.shift[0] - offset[0]) * (1.0 - travel.x), (l.shift[1] - offset[1]) * (1.0 - travel.y)]
     }
@@ -105,7 +112,7 @@ impl Launched {
     /// that moves it. Drawn under `offset + (shift - offset) * (1 - travel)`: its rate is the
     /// offset's drift times travel plus `(offset - shift) * rate`.
     fn blend(&self, scene: &Scene) -> ([f32; 2], [f32; 2]) {
-        let Some(last) = self.last else { return ([0.0; 2], [0.0; 2]) };
+        let Some(Drawn { offset: last, .. }) = self.drawn else { return ([0.0; 2], [0.0; 2]) };
         let travel = scene.get(self.id, prop::TRAVEL).unwrap_or(rune_motion::Vec2::new(1.0, 1.0));
         let rate = scene.store().sample_velocity(self.id, prop::TRAVEL).unwrap_or(rune_motion::Vec2::ZERO);
         let (t, r) = ([travel.x, travel.y], [rate.x, rate.y]);
@@ -291,7 +298,7 @@ impl<S: 'static> Runtime<S> {
             self.flying.retain(|f| f.0 != to);
             self.flying.push((to, nodes[i].local));
             self.launches.flying.retain(|l| l.id != to);
-            self.launches.flying.push(Launched { id: to, shift, last: None, seen: (0.0, 0), drift: [0.0; 2], folded: [0.0; 2], folded_at: [0.0; 2] });
+            self.launches.flying.push(Launched { id: to, shift, drawn: None, drift: [0.0; 2], folded: [0.0; 2], folded_at: [0.0; 2] });
         }
     }
 
