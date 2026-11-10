@@ -68,6 +68,7 @@ mod run;
 pub(crate) use pill_chips::{bare_icons, pill_chips};
 mod support;
 pub use support::SmoothingSupport;
+pub(crate) use support::note_dual_source;
 mod svg_path;
 mod synthetic_bold;
 mod trak;
@@ -197,7 +198,11 @@ pub struct TextSystem {
     cluster_scratch: Vec<(f32, u32)>,
     coords_scratch: Vec<i16>,
     traks: Traks,
+    /// The mode glyphs draw in: [`Self::requested`]'s, or its grayscale twin while subpixel
+    /// text can't draw ([`FontSmoothing::drawn`]).
     pub(crate) smoothing: FontSmoothing,
+    /// The mode the app asked for ([`Self::set_font_smoothing`]).
+    requested: FontSmoothing,
     /// The `trak` table of the first font of a family slot at a weight, upright or italic.
     primary_traks: FxHashMap<(Family, u32, bool), Option<Rc<Trak>>>,
     /// The hidden-axis coordinates (`hidden_axes`) of the same first font.
@@ -337,6 +342,7 @@ impl TextSystem {
             coords_scratch: Vec::new(),
             traks: Traks::new(),
             smoothing: FontSmoothing::default(),
+            requested: FontSmoothing::default(),
             primary_traks: Default::default(),
             primary_axes: Default::default(),
             apple: Default::default(),
@@ -444,11 +450,11 @@ impl TextSystem {
 
     /// Whether glyphs rasterise with DirectWrite: `FontSmoothing::DirectWrite` where it exists.
     pub(crate) fn direct_write(&mut self) -> bool {
-        self.smoothing == FontSmoothing::DirectWrite && self.windows.available()
+        matches!(self.smoothing, FontSmoothing::DirectWrite | FontSmoothing::ClearType) && self.windows.available()
     }
 
     /// How glyphs rasterise and place ([`FontSmoothing`]).
-    pub fn font_smoothing(&self) -> FontSmoothing { self.smoothing }
+    pub fn font_smoothing(&self) -> FontSmoothing { self.requested }
 
     /// How far each gliding glyph mask's ink sits below the top of its quad, in device px, keyed
     /// as `blend::apron_key` keys its instance: a DirectWrite or Windfoil mask keeps one box across its y
@@ -457,7 +463,7 @@ impl TextSystem {
     /// moves its coverage by this so a glide reads as the quarter-pixel steps it draws.
     pub(crate) fn glyph_shifts(&self) -> std::collections::HashMap<[u32; 3], f32> {
         self.atlas.map.iter()
-            .filter(|(k, _)| k.subpy != 0 && (k.apple == glyph_emit::DIRECT_WRITE_KEY || k.apple & 0xC0 == glyph_emit::WINDFOIL_KEY))
+            .filter(|(k, _)| k.subpy != 0 && k.apple & (glyph_emit::DIRECT_WRITE_KEY | glyph_emit::WINDFOIL_KEY) != 0)
             .filter_map(|(k, a)| a.mask().map(|a| ([(a.x as f32).to_bits(), (a.y as f32).to_bits(), (a.page as f32).to_bits()], k.subpy as f32 / glyph_emit::GLIDE_PHASES as f32)))
             .collect()
     }
@@ -474,8 +480,17 @@ impl TextSystem {
     /// stages ([`FontSmoothing::pipeline`]). Glyphs already rasterised in another mode stay
     /// cached under their own keys.
     pub fn set_font_smoothing(&mut self, mode: FontSmoothing) {
-        self.smoothing = mode;
-        self.apple.set_pipeline(mode.pipeline());
+        self.requested = mode;
+        self.smoothing = mode.drawn(self.lcd_ok());
+        self.apple.set_pipeline(self.smoothing.pipeline());
+        self.atlas.lcd = self.smoothing.lcd();
+    }
+
+    /// Whether subpixel text draws here now: the renderer draws outlines and blends by channel,
+    /// and for ClearType, DirectWrite is there.
+    fn lcd_ok(&mut self) -> bool {
+        support::lcd_ok(self.atlas.outlines.support())
+            && (self.requested != FontSmoothing::ClearType || self.windows.available())
     }
 
     /// The CoreGraphics stages glyphs rasterize with.
@@ -492,6 +507,11 @@ impl TextSystem {
     }
 
     pub(crate) fn begin_frame_pinned(&mut self, pinned_mask: u32) {
+        // A subpixel mode draws grayscale until the renderer can blend by channel, and after it
+        // says it can't.
+        if self.requested.lcd() && self.requested.drawn(self.lcd_ok()) != self.smoothing {
+            self.set_font_smoothing(self.requested);
+        }
         self.atlas.begin_frame(pinned_mask);
         self.paths.begin_frame();
         self.glyph_cache.begin_frame();
@@ -997,6 +1017,7 @@ impl TextSystem {
             byte: 0,
             color: 0,
             outline: None,
+            lcd: false,
         })
     }
 }

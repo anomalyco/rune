@@ -137,6 +137,11 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     `outline.wgsl`), the outline after skrifa's light autohint, and that autohinted outline on
     whole-pixel pens, which is Chromium's text on Linux. `FontSmoothing::ALL` lists every mode and
     `FontSmoothing::support` says whether this machine draws one as named (`text/support.rs`).
+  - `WindfoilRgb` and `ClearType` (Windows): subpixel text. Masks hold three coverages a pixel
+    (Windfoil's box about each subpixel, or DirectWrite's `CLEARTYPE_3x1`), and the window draws
+    them with a dual-source pipeline that blends each channel by its own (`render/variant.rs`,
+    `Lcd`). Layers draw them grayscale; without dual-source blending they draw as
+    `WindfoilChromium` and `DirectWrite`.
   `On` and `Off` work on every OS, since they are arithmetic on outlines. Blending is separate
   (`srgb_blend`).
   `cargo run -p rune --example coretext_compare [-- --smoothing on|off]` measures

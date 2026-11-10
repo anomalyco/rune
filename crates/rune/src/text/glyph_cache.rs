@@ -25,7 +25,7 @@ const UNFLAT: u32 = u32::MAX;
 const UNKNOWN: u8 = 0;
 const PLACED: u8 = 1;
 const EMPTY: u8 = 2;
-const NO_MASK: AtlasGlyph = AtlasGlyph { page: 0, x: 0, y: 0, w: 0, h: 0, left: 0, top: 0 };
+const NO_MASK: AtlasGlyph = AtlasGlyph { page: 0, x: 0, y: 0, w: 0, h: 0, left: 0, top: 0, lcd: false };
 
 #[derive(Default)]
 pub(crate) struct GlyphCache {
@@ -213,7 +213,8 @@ impl TextSystem {
         let mut cache = std::mem::take(&mut self.glyph_cache);
         let skia = self.direct_write();
         let tag = self.smoothing.outline_key().unwrap_or_else(|| self.apple.key());
-        let (inks, apple) = if skia { (self.windows.inks(), DIRECT_WRITE_KEY) } else { (self.apple.inks(), tag) };
+        let dw_tag = DIRECT_WRITE_KEY | (self.smoothing == FontSmoothing::ClearType) as u8;
+        let (inks, apple) = if skia { (self.windows.inks(), dw_tag) } else { (self.apple.inks(), tag) };
         let key = Key {
             layout: Rc::as_ptr(layout) as usize,
             inks: inks.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3)),

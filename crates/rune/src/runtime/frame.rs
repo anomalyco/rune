@@ -148,7 +148,7 @@ impl<S: 'static> Runtime<S> {
         // Its wakes count from now (`schedule_pending_wakes`), so its clock reads now too.
         let mut one = Tx { clock: self.now_clock(), ..self.transaction() };
         let changed = crate::tooling::perf_warn::timed("an `update` closure", || f(&mut self.state, &mut one));
-        let stale = changed || one.frame_work() || one.window_frame.is_some() || one.srgb_blend.is_some_and(|b| b != self.srgb_blend) || one.font_smoothing.is_some_and(|m| m != self.text.smoothing)
+        let stale = changed || one.frame_work() || one.window_frame.is_some() || one.srgb_blend.is_some_and(|b| b != self.srgb_blend) || one.font_smoothing.is_some_and(|m| m != self.text.font_smoothing())
             || self.changes_families(&one)
             || (one.blur && self.focus.path().is_some());
         self.latch_requests(&mut one);

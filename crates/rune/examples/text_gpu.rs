@@ -81,7 +81,7 @@ fn main() {
                 let out = Offscreen::new(&gpu.device, (size.0 * scale) as u32, (size.1 * scale) as u32);
                 let mut renderer = if args.get(4).is_some_and(|a| a == "classic") { Renderer::new_classic(&gpu.device, OFFSCREEN_FORMAT) } else { Renderer::new(&gpu.device, OFFSCREEN_FORMAT) };
                 let mut rt = runtime(scale, size, 4, dark);
-                if let Some(mode) = args.get(3) { rt.set_font_smoothing(match mode.as_str() { "on" => rune::FontSmoothing::On, "windfoil" => rune::FontSmoothing::Windfoil, "off" => rune::FontSmoothing::Off, _ => rune::FontSmoothing::DirectWrite }); }
+                if let Some(mode) = args.get(3) { rt.set_font_smoothing(smoothing(mode)); }
                 let zoom = rt.state.zoom.clone();
                 let tag = if dark { "dark" } else { "light" };
                 // `gpu`: the renderer says first that it fills masks, so the first frame's are GPU-filled.
@@ -122,7 +122,7 @@ fn perf(scale: f32, mode: Option<&str>) {
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     // `empty`: the same frame without its text, so the text's own cost is the difference.
     let mut rt = runtime(scale, size, if mode == Some("empty") { 0 } else { 48 }, false);
-    if let Some(mode) = mode { rt.set_font_smoothing(match mode { "on" => rune::FontSmoothing::On, "directwrite" => rune::FontSmoothing::DirectWrite, "off" => rune::FontSmoothing::Off, _ => rune::FontSmoothing::Windfoil }); }
+    if let Some(mode) = mode { rt.set_font_smoothing(smoothing(mode)); }
     let zoom = rt.state.zoom.clone();
     rt.frame(0.0);
     for _ in 0..10 { rt.frame(1.0 / 120.0); }
@@ -155,4 +155,9 @@ fn perf(scale: f32, mode: Option<&str>) {
     for (name, (median, p90, outlines)) in [("still", still), ("scroll", scroll), ("zoom", zooming)] {
         println!("METRIC case={name} scale={scale} mode={} median_ms={median:.4} p90_ms={p90:.4} outline_glyphs={outlines}", mode.unwrap_or("default"));
     }
+}
+
+/// A mode by its name in lower case (`windfoilrgb`, `cleartype`, ...); Windfoil for any other.
+fn smoothing(name: &str) -> rune::FontSmoothing {
+    rune::FontSmoothing::ALL.into_iter().find(|m| format!("{m:?}").eq_ignore_ascii_case(name)).unwrap_or(rune::FontSmoothing::Windfoil)
 }

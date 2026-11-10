@@ -55,6 +55,14 @@ pub enum FontSmoothing {
     /// whole-pixel pens, with grayscale box coverage through Skia's text gamma. On Windows
     /// Chromium's text is `DirectWrite`'s.
     Hinted,
+    /// `WindfoilChromium` per subpixel: Windfoil's box over each third of a pixel, red to blue,
+    /// blended channel by channel (dual-source blending), as ClearType draws. Inside layers, and
+    /// where the GPU can't blend that way, it draws as `WindfoilChromium`.
+    WindfoilRgb,
+    /// Windows only: DirectWrite's ClearType (`CLEARTYPE_3x1`, Skia's gamma per channel),
+    /// blended channel by channel, as Chromium draws text on an opaque background. Inside layers,
+    /// and where the GPU can't blend that way, it draws as `DirectWrite`.
+    ClearType,
 }
 
 impl Default for FontSmoothing {
@@ -113,7 +121,8 @@ impl FontSmoothing {
             FontSmoothing::Slug => chromium(Coverage::Slug, OutlineHint::None, false),
             FontSmoothing::HintedGpu => chromium(Coverage::Box, OutlineHint::Auto, false),
             FontSmoothing::Hinted => chromium(Coverage::Box, OutlineHint::Auto, true),
-            FontSmoothing::On | FontSmoothing::Off | FontSmoothing::DirectWrite => return None,
+            FontSmoothing::WindfoilRgb => chromium(Coverage::Rgb, OutlineHint::None, false),
+            FontSmoothing::On | FontSmoothing::Off | FontSmoothing::DirectWrite | FontSmoothing::ClearType => return None,
         })
     }
 
@@ -125,9 +134,25 @@ impl FontSmoothing {
             FontSmoothing::Slug => 2,
             FontSmoothing::HintedGpu => 3,
             FontSmoothing::Hinted => 4,
-            FontSmoothing::On | FontSmoothing::Off | FontSmoothing::DirectWrite => return None,
+            FontSmoothing::WindfoilRgb => 5,
+            FontSmoothing::On | FontSmoothing::Off | FontSmoothing::DirectWrite | FontSmoothing::ClearType => return None,
         };
         Some(super::glyph_emit::WINDFOIL_KEY | n)
+    }
+
+    /// Whether it draws subpixel masks, three coverages a pixel.
+    pub(crate) fn lcd(self) -> bool {
+        matches!(self, FontSmoothing::WindfoilRgb | FontSmoothing::ClearType)
+    }
+
+    /// What a subpixel mode draws as while subpixel text can't draw here (`lcd_ok` false): its
+    /// grayscale twin. Every other mode draws as itself.
+    pub(crate) fn drawn(self, lcd_ok: bool) -> FontSmoothing {
+        match self {
+            FontSmoothing::WindfoilRgb if !lcd_ok => FontSmoothing::WindfoilChromium,
+            FontSmoothing::ClearType if !lcd_ok => FontSmoothing::DirectWrite,
+            mode => mode,
+        }
     }
 }
 
@@ -148,6 +173,9 @@ pub(crate) struct Look {
 pub(crate) enum Coverage {
     Box = 0,
     Slug = 1,
+    /// The box over each subpixel: three coverages a pixel. A mask's fill takes 3, one subpixel
+    /// a texel.
+    Rgb = 2,
 }
 
 /// What moves an outline onto the pixel grid before its coverage.
@@ -203,7 +231,7 @@ const TEXT_GAMMA: [f32; 2] = [1.12, 0.45];
 /// Windows Skia's gamma tables do; coverage is drawn as is.
 pub(crate) fn coverage_exponent(mode: FontSmoothing, fill: [f32; 4], apple: bool, windows: bool) -> f32 {
     // DirectWrite masks already carry Skia's gamma for their text's luminance.
-    let direct_write = mode == FontSmoothing::DirectWrite && windows;
+    let direct_write = matches!(mode, FontSmoothing::DirectWrite | FontSmoothing::ClearType) && windows;
     // Outline modes with Chromium's weight take its gamma on every OS, as the lab drew them.
     let chromium = mode.look().is_some_and(|l| !l.macos_weight);
     if (apple && !chromium) || direct_write || matches!(mode, FontSmoothing::On | FontSmoothing::Windfoil) || fill[3] <= 0.0 {

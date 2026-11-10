@@ -465,7 +465,8 @@ impl Gpu {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn device_on(adapter: &wgpu::Adapter, wanted: wgpu::Features) -> Result<(wgpu::Device, wgpu::Queue), String> {
-        let optional_features = wgpu::Features::TIMESTAMP_QUERY | wanted | crate::gpu::backend::free_features(adapter);
+        // Dual-source blending is for subpixel text (`FontSmoothing::WindfoilRgb`, `ClearType`).
+        let optional_features = wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::DUAL_SOURCE_BLENDING | wanted | crate::gpu::backend::free_features(adapter);
         // Precompiled uber shaders: a metallib on macOS, DXBC on Windows.
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         let optional_features = optional_features | wgpu::Features::PASSTHROUGH_SHADERS;
@@ -718,6 +719,10 @@ pub struct Renderer {
     atlas: wgpu::Texture,
     /// Which uber shader draws (`variant::Uber`), with the outline store's texture under Windfoil.
     uber: variant::Uber,
+    /// Windfoil's subpixel pipeline for the window (`variant::Lcd`), and whether this frame's
+    /// text draws subpixel masks.
+    lcd: variant::Lcd,
+    lcd_frame: bool,
     /// The 1×1 image the base bind group holds until the first image page.
     stand_in: wgpu::Texture,
     /// Secondary glyph atlas pages (`1..`).
@@ -791,6 +796,7 @@ impl Renderer {
             mapped_at_creation: false,
         });
         let stand_in = Self::image_texture(device, 1, 1);
+        crate::text::note_dual_source(device.features().contains(wgpu::Features::DUAL_SOURCE_BLENDING));
         let spring_layout = properties.map(|_| crate::gpu::springs::Bindings::layout(device));
         let vertex_entry = if properties.is_some() { "vs_springs" } else { "vs" };
         // The shader machine starts Classic; everywhere but macOS (whose default text keeps the
@@ -838,6 +844,8 @@ impl Renderer {
             globals,
             atlas,
             uber,
+            lcd: variant::Lcd::Unbuilt,
+            lcd_frame: false,
             stand_in,
             atlas_pages: Vec::new(),
             images: Vec::new(),
@@ -964,6 +972,7 @@ impl Renderer {
         let old = std::mem::replace(&mut self.pipeline, next);
         self.extra.push((self.format, old));
         self.format = format;
+        self.lcd = variant::Lcd::Unbuilt;
         self.srgb_blend = !format.is_srgb();
         if self.layer_stats().targets > 0 { self.add_layer_format(device, format); }
         let [vw, vh] = self.target_frame(None).1;
@@ -1105,6 +1114,9 @@ impl Renderer {
         }
         let pipeline = if self.layer_blend(target) == Blend::PlusLighter {
             &self.layers.additive.as_ref().expect("prepared dissolve").0
+        } else if let (variant::Lcd::Built(lcd), true, None) = (&self.lcd, self.lcd_frame && format == self.format, target) {
+            // Subpixel text blends by channel over the window; inside layers it draws grayscale.
+            lcd
         } else if format == self.format {
             &self.pipeline
         } else {

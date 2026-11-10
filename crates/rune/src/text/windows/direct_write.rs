@@ -13,7 +13,7 @@ use windows::Win32::Graphics::DirectWrite::*;
 use windows::core::Interface;
 
 use super::{owner, skia_gamma};
-use crate::text::{Atlas, Rasterized};
+use crate::text::{Atlas, AtlasGlyph, Rasterized};
 
 /// Faces (a font at one set of variation coordinates) kept before the cache starts over.
 const MAX_FACES: usize = 256;
@@ -35,6 +35,9 @@ pub(crate) struct Job<'a> {
     pub skew: u8,
     /// The text's luminance bucket ([`skia_gamma::bucket`]).
     pub lum: u8,
+    /// A subpixel mask (`FontSmoothing::ClearType`): ClearType's three coverages a pixel, each
+    /// through Skia's gamma, rather than their average.
+    pub lcd: bool,
 }
 
 pub(crate) struct DirectWrite {
@@ -109,11 +112,13 @@ impl DirectWrite {
                     a.CreateAlphaTexture(DWRITE_TEXTURE_CLEARTYPE_3x1, &bounds, &mut self.scratch)?;
                 }
                 // Skia's A8 from LCD (`RGBToA8`): each pixel's three subpixel coverages, averaged.
-                for i in 0..(w * h) as usize {
-                    let rgb = &self.scratch[i * 3..i * 3 + 3];
-                    self.scratch[i] = ((rgb[0] as u32 + rgb[1] as u32 + rgb[2] as u32) / 3) as u8;
+                if !job.lcd {
+                    for i in 0..(w * h) as usize {
+                        let rgb = &self.scratch[i * 3..i * 3 + 3];
+                        self.scratch[i] = ((rgb[0] as u32 + rgb[1] as u32 + rgb[2] as u32) / 3) as u8;
+                    }
+                    self.scratch.truncate((w * h) as usize);
                 }
-                self.scratch.truncate((w * h) as usize);
                 Ok((bounds, w, h))
             })
         };
@@ -126,8 +131,9 @@ impl DirectWrite {
         for c in &mut self.scratch {
             *c = table[*c as usize];
         }
-        Some(match atlas.put(w, h, &self.scratch, bounds.left, -bounds.top) {
-            Some(g) => Rasterized::Placed(g),
+        let texels = if job.lcd { 3 } else { 1 };
+        Some(match atlas.put(w * texels, h, &self.scratch, bounds.left, -bounds.top) {
+            Some(g) => Rasterized::Placed(AtlasGlyph { lcd: job.lcd, ..g }),
             None => Rasterized::Unplaced,
         })
     }
