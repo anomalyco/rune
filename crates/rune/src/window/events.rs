@@ -182,13 +182,17 @@ impl<S: 'static> Host<S> {
         if matches!(&event, WindowEvent::ScaleFactorChanged { .. }) { self.apply_placement(event_loop); }
         match event {
             WindowEvent::Focused(focused) => {
-                if self.launcher() && self.win.as_ref().is_some_and(|w| !w.first_frame.notified()) { return; }
+                // winit queues an initial false from its hidden source window before
+                // adoption. It must not dismiss an already-key panel on first open.
                 #[cfg(target_os = "macos")]
-                if self.win.as_ref().and_then(|w| w.native.panel.as_ref()).is_some_and(|p| p.is_key() != focused) {
-                    // winit queues an initial false from its hidden source window before
-                    // adoption. It must not dismiss an already-key panel on first open.
-                    return;
-                }
+                let stale = self.win.as_ref().and_then(|w| w.native.panel.as_ref()).is_some_and(|p| p.is_key() != focused);
+                #[cfg(not(target_os = "macos"))]
+                let stale = false;
+                // Before any return below: a window that goes to the background (deactivated,
+                // hidden or another window made key) must not keep blocking other apps' keys.
+                if !stale { self.secure_input.window_focus(focused); }
+                if self.launcher() && self.win.as_ref().is_some_and(|w| !w.first_frame.notified()) { return; }
+                if stale { return; }
                 #[cfg(all(feature = "native-file-dialog", target_os = "linux"))]
                 if let Some(w) = &self.win { crate::file_dialog::window_focus(&w.window, focused && w.visible); }
                 // Deliver independently of drawable availability, including hide/occlusion.
