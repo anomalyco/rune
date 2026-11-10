@@ -1,5 +1,6 @@
 //! The `view` a render function receives: `view:Memo(key, version, build)` and
-//! `view:Handler(fn)`, plus `view.dark`.
+//! `view:Handler(fn)`, plus `view.dark`; and `ui.each(items, key, version, build)`, a memo per
+//! item of a list.
 //!
 //! `Memo` is a C function: it hashes `version` straight off the stack (a number's bits, a
 //! string's bytes) and calls `rune::memo::memo_with_hash`. On a hit Rune hands back the subtree
@@ -66,10 +67,20 @@ fn build(state: *mut ffi::lua_State, failed: &mut Option<String>) -> El {
     // SAFETY: pushes a copy of the function, calls it protected and pops what it left.
     unsafe {
         ffi::lua_pushvalue(state, 4);
-        if ffi::lua_pcall(state, 0, 1, 0) != ffi::LUA_OK {
+        let status = ffi::lua_pcall(state, 0, 1, 0);
+        built(state, status, failed, "view:Memo build")
+    }
+}
+
+/// The node a protected build call (`status`) left on the stack, which it pops; on an error,
+/// an empty element and the message in `failed`.
+unsafe fn built(state: *mut ffi::lua_State, status: c_int, failed: &mut Option<String>, what: &str) -> El {
+    // SAFETY: the call's one result is on top of the stack.
+    unsafe {
+        if status != ffi::LUA_OK {
             *failed = Some(match props::read(state, -1) {
                 Value::Str(s) => s.to_owned(),
-                _ => "view:Memo build failed".to_owned(),
+                _ => format!("{what} failed"),
             });
             ffi::lua_settop(state, -2);
             return rune::el();
@@ -77,7 +88,7 @@ fn build(state: *mut ffi::lua_State, failed: &mut Option<String>) -> El {
         let handle = ffi::lua_tolightuserdata(state, -1);
         ffi::lua_settop(state, -2);
         if handle.is_null() {
-            *failed = Some("view:Memo build must return a ui node".into());
+            *failed = Some(format!("{what} must return a ui node"));
             return rune::el();
         }
         match top(|f| f.take(handle)) {
@@ -88,6 +99,91 @@ fn build(state: *mut ffi::lua_State, failed: &mut Option<String>) -> El {
             }
             None => rune::el(),
         }
+    }
+}
+
+/// `ui.each(items, key, version, build)`: a list of nodes, `build(item, index)` for each item,
+/// each a memo of its own (as `view:Memo`) on the item's key and version, so a render rebuilds
+/// only the items whose version moved. `key` and `version` are field names or functions of
+/// `(item, index)`. Returns the nodes as a list, to pass as children.
+pub(crate) unsafe extern "C-unwind" fn ui_each(state: *mut ffi::lua_State) -> c_int {
+    // SAFETY: arguments are (items, key, version, build) on this C function's stack; slot 5 is
+    // the result list and slot 6 the item being built, popped after each.
+    unsafe {
+        let pick = |i| matches!(ffi::lua_type(state, i), ffi::LUA_TSTRING | ffi::LUA_TFUNCTION);
+        if ffi::lua_type(state, 1) != ffi::LUA_TTABLE || !pick(2) || !pick(3) || ffi::lua_type(state, 4) != ffi::LUA_TFUNCTION {
+            return guard(state, || Err("ui.each needs items, a key and a version (field names or functions) and a build function".into()));
+        }
+        ffi::lua_settop(state, 4);
+        let len = ffi::lua_objlen(state, 1);
+        ffi::lua_createtable(state, len as c_int, 0);
+        guard(state, || {
+            // An item's key is its node's key and its memo's id; memos nest under the surface's,
+            // which carries the script's prefix, so two scripts' keys never meet.
+            let salt = top(|f| f.env.salt).ok_or("ui.each can only be called while rendering")?;
+            for i in 1..=len {
+                ffi::lua_rawgeti(state, 1, i as ffi::lua_Integer);
+                let key = match field(state, 2, i)? {
+                    Value::Str(s) => s.to_owned(),
+                    Value::Num(n) => props::format_num(n),
+                    other => return Err(format!("ui.each: item {i}'s key must be a string or a number, got {}", props::name(other))),
+                };
+                ffi::lua_settop(state, 6);
+                field(state, 3, i)?;
+                let version = version_hash(state, 7).map_err(|e| format!("ui.each: item {i}: {e}"))?;
+                ffi::lua_settop(state, 6);
+                let mut failed: Option<String> = None;
+                let id = key.clone();
+                let el = rune::memo::memo_with_hash(key, mix(version, salt), || item(state, i, &mut failed).key(id));
+                if let Some(message) = failed {
+                    top(|f| f.env.memo_failed.set(true));
+                    return Err(message);
+                }
+                let handle = top(|f| f.put(el)).ok_or("ui.each can only be called while rendering")??;
+                ffi::lua_settop(state, 5);
+                ffi::lua_pushlightuserdata(state, handle);
+                ffi::lua_rawseti(state, 5, i as ffi::lua_Integer);
+            }
+            Ok(1)
+        })
+    }
+}
+
+/// Pushes the item at slot 6's key or version: its field named by the string at `by`, or what
+/// the function at `by` returns for `(item, i)`.
+unsafe fn field<'a>(state: *mut ffi::lua_State, by: c_int, i: usize) -> Result<Value<'a>, String> {
+    // SAFETY: slot 6 is the item; `by` is a string or a function.
+    unsafe {
+        if ffi::lua_type(state, by) == ffi::LUA_TSTRING {
+            if ffi::lua_type(state, 6) != ffi::LUA_TTABLE {
+                return Err(format!("ui.each: item {i} is a {}, not a table with fields", props::name(props::read(state, 6))));
+            }
+            ffi::lua_pushvalue(state, by);
+            ffi::lua_rawget(state, 6);
+        } else {
+            ffi::lua_pushvalue(state, by);
+            ffi::lua_pushvalue(state, 6);
+            ffi::lua_pushinteger(state, i as ffi::lua_Integer);
+            if ffi::lua_pcall(state, 2, 1, 0) != ffi::LUA_OK {
+                return Err(match props::read(state, -1) {
+                    Value::Str(s) => s.to_owned(),
+                    _ => format!("ui.each: item {i}'s key or version failed"),
+                });
+            }
+        }
+        Ok(props::read(state, -1))
+    }
+}
+
+/// Calls the build function (slot 4) for the item at slot 6, protected.
+fn item(state: *mut ffi::lua_State, i: usize, failed: &mut Option<String>) -> El {
+    // SAFETY: pushes the function and its arguments, calls it protected and pops what it left.
+    unsafe {
+        ffi::lua_pushvalue(state, 4);
+        ffi::lua_pushvalue(state, 6);
+        ffi::lua_pushinteger(state, i as ffi::lua_Integer);
+        let status = ffi::lua_pcall(state, 2, 1, 0);
+        built(state, status, failed, "ui.each build")
     }
 }
 

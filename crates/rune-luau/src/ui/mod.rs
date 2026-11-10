@@ -76,6 +76,8 @@ pub(crate) struct Callback {
 pub(crate) struct Env {
     pub(crate) script: Weak<Inner>,
     pub(crate) vm: u64,
+    /// This render, unique on the thread ([`next_render`]).
+    pub(crate) render: u64,
     pub(crate) salt: u64,
     /// The script's version: it moves whenever script code runs.
     pub(crate) version: u64,
@@ -103,7 +105,9 @@ pub(crate) struct Env {
 /// Nodes decoded from frozen props tables, by table and node kind. A frozen table can't change,
 /// so a node built from one again starts from a copy of the first, its props already applied:
 /// no table walk, no prop decoding, and the element's style shared until it is written. A script
-/// gets this with `local STYLE = table.freeze({ ... })` passed as a node's props.
+/// gets this with `local STYLE = table.freeze({ ... })` passed as a node's props, or as the style
+/// under a small table of its own props (`ui.row(STYLE, { key = id }, children)`): then only
+/// those are decoded, onto a copy of the style's.
 #[derive(Default)]
 pub(crate) struct Templates(rustc_hash::FxHashMap<(usize, u8), Template>);
 
@@ -113,30 +117,52 @@ const TEMPLATES: usize = 1024;
 pub(crate) struct Template {
     /// The finished node, without children, words or handlers.
     el: El,
+    /// The node before its props were finished, and those props, for props laid over it.
+    under: El,
+    props: props::Props,
     /// The appearance and colours it was decoded with.
     dark: bool,
     colors: Vec<(Box<str>, Color)>,
+    /// The render it last held in: a render checks its colours once.
+    checked: Cell<u64>,
     /// Keeps the table alive, so its address isn't taken by another table.
     _table: LuaRef,
 }
 
+/// A template as a node starts from.
+pub(crate) enum Reuse {
+    /// The finished node: no props of its own.
+    Whole(El),
+    /// The node and its pending props, to decode the node's own props onto and finish.
+    Under(El, props::Props),
+}
+
 impl Templates {
-    /// A copy of the template for `key`, if it holds under `env`.
-    pub(crate) fn get(&self, key: (usize, u8), env: &Env) -> Option<El> {
+    /// A copy of the template for `key`, if it holds under `env`: finished, or ready for
+    /// `layered` props.
+    pub(crate) fn get(&self, key: (usize, u8), env: &Env, layered: bool) -> Option<Reuse> {
         let t = self.0.get(&key)?;
-        let holds = t.dark == env.dark && t.colors.iter().all(|(name, c)| env.resolve(name).ok() == Some(*c));
-        holds.then(|| t.el.clone())
+        if t.checked.get() != env.render {
+            let holds = t.dark == env.dark && t.colors.iter().all(|(name, c)| env.resolve(name).ok() == Some(*c));
+            if !holds {
+                return None;
+            }
+            t.checked.set(env.render);
+        }
+        Some(if layered { Reuse::Under(t.under.clone(), t.props.clone()) } else { Reuse::Whole(t.el.clone()) })
     }
 
-    /// Keeps `el`, built from the frozen table at stack slot `idx`, as `key`'s template.
-    pub(crate) unsafe fn put(&mut self, state: *mut ffi::lua_State, idx: c_int, key: (usize, u8), env: &Env, el: El, colors: Vec<(Box<str>, Color)>) {
+    /// Keeps a node built from the frozen table at stack slot `idx` as `key`'s template: `under`
+    /// with its pending `props`, and `el`, the two finished.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) unsafe fn put(&mut self, state: *mut ffi::lua_State, idx: c_int, key: (usize, u8), env: &Env, el: El, under: El, props: props::Props, colors: Vec<(Box<str>, Color)>) {
         if self.0.len() >= TEMPLATES {
             self.0.clear();
         }
         // SAFETY: the caller passes the props table's slot.
         let r = unsafe { ffi::lua_ref(state, idx) };
         let table = LuaRef { r, garbage: env.garbage.clone() };
-        self.0.insert(key, Template { el, dark: env.dark, colors, _table: table });
+        self.0.insert(key, Template { el, under, props, dark: env.dark, colors, checked: Cell::new(env.render), _table: table });
     }
 }
 
@@ -247,6 +273,14 @@ thread_local! {
     static FRAMES: RefCell<Vec<Frame>> = const { RefCell::new(Vec::new()) };
     static GENERATION: Cell<u32> = const { Cell::new(0) };
     static POOL: RefCell<Vec<Vec<Option<El>>>> = const { RefCell::new(Vec::new()) };
+    static RENDERS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// A number no earlier render on this thread had, for [`Env::render`].
+pub(crate) fn next_render() -> u64 {
+    let n = RENDERS.get().wrapping_add(1);
+    RENDERS.set(n);
+    n
 }
 
 /// Handles are `generation << 20 | slot + 1`: a handle kept from an earlier render is refused,
