@@ -39,7 +39,8 @@ pub(crate) struct A11yItem {
     /// In a page, text's font, so the browser's selection and find highlights land on the
     /// drawn glyphs.
     pub font: Option<A11yFont>,
-    /// `El::selectable` text in a page: the browser selects and copies it.
+    /// Text the browser selects and copies, in a page: `El::selectable` text, and text outside
+    /// anything that takes the pointer (`Runtime::page_text_selects`).
     pub selectable: bool,
 }
 
@@ -143,6 +144,22 @@ pub(crate) fn align_name(align: crate::el::Align) -> &'static str {
     }
 }
 
+/// Roles of controls a press works, which keep the pointer even without their own handler.
+const CONTROL_ROLES: [&str; 16] = ["button", "link", "tab", "checkbox", "switch", "radio", "combobox", "option",
+    "menuitem", "menuitemcheckbox", "menuitemradio", "slider", "spinbutton", "scrollbar", "textbox", "searchbox"];
+
+/// Node `n` takes the pointer: a press, drag, gesture or pointer handler, a control, or a field.
+/// Hover alone doesn't count; the page's mirror forwards hover to the canvas.
+pub(crate) fn takes_pointer(n: &Node) -> bool {
+    let h = &n.handlers;
+    h.on_press.is_some() || h.on_double_press.is_some() || h.on_secondary_press.is_some()
+        || h.on_pointer_move.is_some() || h.on_drag.is_some() || h.drag_out.is_some() || h.on_drag_start.is_some()
+        || h.gestures.as_ref().is_some_and(|g| g.takes_gestures())
+        || n.input.is_some() || n.window_drag == crate::el::WindowDrag::Drag
+        || n.a11y.more.as_ref().is_some_and(|m| m.href.is_some())
+        || CONTROL_ROLES.contains(&n.role)
+}
+
 fn round1(v: f32) -> f32 { (v * 10.0).round() / 10.0 }
 
 pub(crate) fn clean_slice(spec: &crate::el::TextSpec, a: usize, b: usize) -> String {
@@ -238,6 +255,20 @@ impl<S: 'static> Runtime<S> {
         ends
     }
 
+    /// In a page, which nodes' text the browser selects without `El::selectable`, as a web page's
+    /// text selects: all of it but text inside something that takes the pointer (mirrored text
+    /// takes the pointer from the canvas, so it would swallow that control's press) or inside
+    /// `El::unselectable`. Empty outside a page. A parent always comes before its children.
+    pub(crate) fn page_text_selects(&self) -> Vec<bool> {
+        if self.page.is_none() { return Vec::new(); }
+        let mut out = vec![false; self.nodes.len()];
+        for (i, n) in self.nodes.iter().enumerate() {
+            let inherited = n.parent.is_none_or(|p| out[p]);
+            out[i] = inherited && !n.a11y.unselectable && !takes_pointer(n);
+        }
+        out
+    }
+
     pub(crate) fn descendant_label(&self, root: usize, end: usize) -> String {
         let mut parts = Vec::new();
         for j in root..end {
@@ -277,6 +308,7 @@ impl<S: 'static> Runtime<S> {
         let mut last_flow_parent: Option<usize> = None;
         let mut inline: Option<Inline> = None;
         let ends = self.subtree_ends();
+        let selects = self.page_text_selects();
         // Open containers: (end of their node subtree, their item index).
         let mut open: Vec<(usize, usize)> = Vec::new();
         // Open horizontal scrollers and how far the browser has scrolled each, so their content
@@ -373,6 +405,7 @@ impl<S: 'static> Runtime<S> {
             }
             if let Some(spec) = n.text.as_deref().filter(|t| !t.redacted && rect[2] > 0.0 && rect[3] > 0.0) {
                 let runs = text_runs(&n.path, spec);
+                let selectable = spec.selectable || selects.get(i).copied().unwrap_or(false);
                 if !runs.is_empty() {
                     let is_heading = n.role == "heading";
                     // Flowed word-by-word paragraphs (`pr_chips::flow`) put sibling words (or 1-word
@@ -399,7 +432,7 @@ impl<S: 'static> Runtime<S> {
                     let text_rect = if self.page.is_some() { inset_rect(rect, n.inset) } else { rect };
                     if !is_heading && flow_group.is_none()
                         && let Some(prev) = inline.filter(|l| l.item + 1 == out.len() && l.parent == n.parent)
-                        && let Some(gap) = prev.gap(n.target, spec.style, spec.selectable)
+                        && let Some(gap) = prev.gap(n.target, spec.style, selectable)
                         && let Some(item) = out.last_mut().filter(|it| it.kind == "text")
                     {
                         join_inline(item, text_rect, runs, gap > spec.style.size * 0.15);
@@ -429,7 +462,7 @@ impl<S: 'static> Runtime<S> {
                             italic: style.italic,
                             align: align_name(spec.align),
                         });
-                        item.selectable = spec.selectable;
+                        item.selectable = selectable;
                     }
                     push(&mut out, item);
                     last_flow_parent = if is_heading { None } else { flow_group };
@@ -440,7 +473,7 @@ impl<S: 'static> Runtime<S> {
                         top: n.target[1],
                         bottom: n.target[3],
                         style: spec.style,
-                        selectable: spec.selectable,
+                        selectable,
                     });
                 }
             } else if n.role == "heading" && let Some(lbl) = n.label.clone().filter(|s| !s.trim().is_empty()) {

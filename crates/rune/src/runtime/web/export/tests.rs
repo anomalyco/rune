@@ -43,6 +43,8 @@ fn exports_landmarks_headings_links_and_text_with_their_css() {
     assert!(card.decls.iter().any(|d| d.0 == "box-shadow" && d.1.starts_with("inset 0 0 0 1px")), "a paint-only border is an inset shadow");
     let title = &nodes[1];
     assert!(title.decls.contains(&("color", "#ffffff".into())) && title.decls.iter().any(|d| d.0 == "font-size"));
+    assert!(!nodes.iter().any(|n| n.tag != "a" && n.decls.iter().any(|d| d.0 == "user-select")), "page text selects");
+    assert!(link.decls.contains(&("user-select", "none".into())), "as the live mirror's, a link's text doesn't");
 }
 
 #[test]

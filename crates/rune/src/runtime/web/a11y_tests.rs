@@ -84,8 +84,58 @@ fn a_page_mirrors_landmarks_ids_links_and_images_in_document_coordinates() {
     let font = items[3].font.as_ref().expect("text in a page carries its font");
     assert_eq!((font.family.as_str(), font.align), ("sans", "left"));
     assert!(items[3].selectable);
-    assert!(!items[2].selectable);
+    assert!(items[2].selectable, "a page's plain text selects without asking");
     assert_eq!(items[3].rect[0], 4.0, "selectable text sits at its text box, inside the padding");
+}
+
+/// Plain text beside text inside things that take the pointer: a pressable card (holding a button,
+/// so its text mirrors on its own), a draggable row, a tab, and an opted-out header.
+fn controls(_: &(), _: &mut Cx<()>) -> El {
+    let body = crate::tok::type_::BODY;
+    crate::col().w_full().role("main")
+        .child(crate::text("Plain words").key("plain").font(body))
+        .child(crate::col().key("card").on_press(|_: &mut ()| {})
+            .child(crate::text("Card words").key("card-words").font(body))
+            .child(crate::text("Pinned words").key("pinned").font(body).selectable(true))
+            .child(crate::row().key("go").on_press(|_: &mut ()| {}).child(crate::text("Go"))))
+        .child(crate::row().key("drag").on_drag(|_: &mut (), _, _| {}).child(crate::text("Drag words").font(body)))
+        .child(crate::row().key("tab").role("tab").child(crate::text("Tab words").font(body)))
+        .child(crate::col().key("brand").unselectable()
+            .child(crate::text("Brand words").font(body))
+            .child(crate::text("Kept words").font(body).selectable(true)))
+}
+
+fn selectable_texts<S: 'static>(rt: &Runtime<S>) -> Vec<(String, bool)> {
+    rt.web_a11y_items().into_iter().filter(|i| i.kind == "text").map(|i| (i.text, i.selectable)).collect()
+}
+
+#[test]
+fn a_page_selects_its_text_but_not_text_inside_controls() {
+    let mut rt = Runtime::new((), controls, (480.0, 400.0), Env::default());
+    rt.page_mode();
+    rt.frame(0.0);
+    let texts = selectable_texts(&rt);
+    let want = |s: &str, on: bool| (s.to_owned(), on);
+    assert_eq!(texts, [
+        want("Plain words", true),
+        want("Card words", false),
+        want("Pinned words", true),
+        want("Drag words", false),
+        want("Tab words", false),
+        want("Brand words", false),
+        want("Kept words", true),
+    ]);
+    let items = rt.web_a11y_items();
+    assert!(items.iter().any(|i| i.kind == "button" && i.text == "Go"), "the card's button still mirrors");
+    let plain = items.iter().find(|i| i.text == "Plain words").expect("plain text mirrors");
+    assert_eq!(plain.to_json()["e"], json!(true), "the bridge makes it selectable");
+}
+
+#[test]
+fn outside_a_page_only_selectable_text_is_marked() {
+    let mut rt = Runtime::new((), controls, (480.0, 400.0), Env::default());
+    rt.frame(0.0);
+    assert!(selectable_texts(&rt).iter().all(|(_, on)| !on), "a full-window app's canvas selects text itself");
 }
 
 #[test]

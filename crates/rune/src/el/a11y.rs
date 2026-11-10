@@ -63,13 +63,16 @@ pub(crate) struct A11y {
     pub checked: Option<Checked>,
     pub disabled: bool,
     pub hidden: bool,
+    /// `El::unselectable`: a web page's mirror leaves this subtree's text out of the selection.
+    pub unselectable: bool,
     pub live: Option<LiveRegion>,
     pub more: Option<Box<A11yMore>>,
 }
 
 impl A11y {
     pub(crate) const EMPTY: A11y = A11y {
-        level: None, expanded: None, secure: false, checked: None, disabled: false, hidden: false, live: None, more: None,
+        level: None, expanded: None, secure: false, checked: None, disabled: false, hidden: false, unselectable: false,
+        live: None, more: None,
     };
 
     fn more(&mut self) -> &mut A11yMore {
@@ -177,6 +180,16 @@ impl El {
     /// or a duplicate of what another element already says. It still draws and takes input.
     pub fn a11y_hidden(mut self) -> Self {
         self.cold_mut().a11y.hidden = true;
+        self
+    }
+    /// Keep the text in this element and everything inside it out of a web page's selection
+    /// (CSS `user-select: none`). A page ([`App::web_document`](crate::App::web_document)) lets
+    /// people select and copy its text as any web page does, except text inside something that
+    /// takes the pointer: a press, drag or gesture handler, a button, link or field. Use this
+    /// for other text that shouldn't select, such as a wordmark drawn as text.
+    /// [`El::selectable`] text inside still selects. Outside a web page it changes nothing.
+    pub fn unselectable(mut self) -> Self {
+        self.cold_mut().a11y.unselectable = true;
         self
     }
     /// How changes to this element's text are announced (ARIA `aria-live`), for status text

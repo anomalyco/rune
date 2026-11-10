@@ -53,6 +53,7 @@ impl<S: 'static> Runtime<S> {
         let mut out = Vec::new();
         // Ancestors' tags, to keep inline content inside links, headings and buttons.
         let mut stack: Vec<(usize, &'static str)> = Vec::new();
+        let selects = self.page_text_selects();
         let mut i = 0;
         while i < self.nodes.len() {
             let n = &self.nodes[i];
@@ -63,7 +64,22 @@ impl<S: 'static> Runtime<S> {
                 continue;
             }
             let inline = stack.iter().any(|&(_, t)| matches!(t, "a" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "span" | "p"));
-            let node = self.export_node(i, stack.len(), inline);
+            let mut node = self.export_node(i, stack.len(), inline);
+            // A page's text selects as the live mirror's will, once the wasm takes over: not
+            // inside a control, unless it's `El::selectable`.
+            if let Some(&on) = selects.get(i) {
+                let parent = n.parent.is_none_or(|p| selects[p]);
+                let explicit = n.text.as_deref().is_some_and(|t| t.selectable);
+                let value = match (on, parent, explicit) {
+                    (false, true, false) => Some("none"),
+                    (false, false, true) => Some("text"),
+                    _ => None,
+                };
+                if let Some(v) = value {
+                    node.decls.push(("-webkit-user-select", v.into()));
+                    node.decls.push(("user-select", v.into()));
+                }
+            }
             stack.push((end, node.tag));
             out.push(node);
             // Shapes and text carry their content; an image has none.
