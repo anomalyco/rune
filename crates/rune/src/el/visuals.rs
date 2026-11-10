@@ -557,3 +557,158 @@ impl El {
         self.looping(rune_motion::LoopSpec::cycle(c))
     }
 }
+
+/// A CSS-style box shadow. Outer shadows draw behind the element; `inset` ones draw inside its
+/// shape, over the fill. A zero-blur, zero-offset outer shadow with a spread is a ring outside
+/// the border box (drawn as a ring, so translucent fills don't show it through).
+///
+/// `blur` is the CSS `box-shadow` blur radius (`blur = 2σ`, so Gaussian standard deviation
+/// `σ = blur * 0.5`). `CALayer.shadowRadius` and Sketch / Figma shadow blur specify `r ≈ σ`,
+/// so pass `blur = 2.0 * r` to match a `CALayer` shadow radius (whereas [`El::blur`] takes `σ` directly).
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Shadow {
+    pub x: f32,
+    pub y: f32,
+    /// Twice the Gaussian's standard deviation, in points (CSS blur radius).
+    pub blur: f32,
+    pub spread: f32,
+    pub color: Color,
+    pub inset: bool,
+}
+
+/// Radius of [`El::radial_gradient`], in points: a circle (`f32`) or an `[rx, ry]` ellipse.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RadialRadius(pub [f32; 2]);
+
+impl From<f32> for RadialRadius {
+    fn from(r: f32) -> Self {
+        Self([r, r])
+    }
+}
+
+impl From<[f32; 2]> for RadialRadius {
+    fn from(r: [f32; 2]) -> Self {
+        Self(r)
+    }
+}
+
+impl From<(f32, f32)> for RadialRadius {
+    fn from((rx, ry): (f32, f32)) -> Self {
+        Self([rx, ry])
+    }
+}
+
+/// CSS writes an eased fade as a list of stops: 16 holds the eased gradients Desktop draws.
+pub(crate) const MAX_GRADIENT_STOPS: usize = 16;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum GradientGeometry {
+    Radial { center: [f32; 2], radius: [f32; 2] },
+    Linear { angle: f32 },
+}
+
+/// A radial or angled linear gradient painted over an element's fill.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RadialGradient {
+    pub(crate) geometry: GradientGeometry,
+    /// Sorted `(t, color)` stops in `0.0..=1.0`, capped at [`MAX_GRADIENT_STOPS`].
+    pub(crate) stops: Vec<(f32, Color)>,
+}
+
+fn normalize_gradient_stops(geometry: GradientGeometry, raw: &[(f32, Color)]) -> Option<RadialGradient> {
+    let mut stops: Vec<(f32, Color)> = raw
+        .iter()
+        .copied()
+        .filter(|(t, _)| t.is_finite())
+        .map(|(t, c)| (t.clamp(0.0, 1.0), c))
+        .collect();
+    if stops.is_empty() {
+        return None;
+    }
+    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+    stops.truncate(MAX_GRADIENT_STOPS);
+    if stops.len() == 1 {
+        let c = stops[0].1;
+        stops = vec![(0.0, c), (1.0, c)];
+    }
+    Some(RadialGradient { geometry, stops })
+}
+
+impl Shadow {
+    /// A CALayer shadow: `shadowRadius` `radius`, `shadowOffset` (`x`, `y`) with y down as in a
+    /// flipped view, and `shadowColor` at `shadowOpacity` folded into `color`. Core Animation's
+    /// blur has a standard deviation of about `shadowRadius` (0.97 to 1.02 times it, measured
+    /// from 1.5 to 32 pt), so `blur` is twice the radius. Corners stay circular, as with a
+    /// `CGPath(roundedRect:)` shadow path. With `srgb_blend(true)` it also composites as one.
+    pub fn core_animation(x: f32, y: f32, radius: f32, color: Color) -> Shadow {
+        Shadow { x, y, blur: 2.0 * radius, color, ..Shadow::default() }
+    }
+}
+
+/// A ring drawn `offset` points outside the border box, `width` points wide (CSS `outline`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Outline {
+    pub width: f32,
+    pub offset: f32,
+    pub color: Color,
+}
+
+impl El {
+    /// Paint the newest video frame inside this node. Node dimensions are in points.
+    pub fn native_surface(mut self, surface: &crate::NativeSurface, fit: crate::SurfaceFit) -> Self {
+        self.vis.cold_mut().surface = Some((surface.clone(), fit));
+        self
+    }
+    /// Which edges a surface or [`pixels_fit`](Self::pixels_fit) image sticks to inside this
+    /// node, as (horizontal, vertical): `Start` is left and top, `End` is right and bottom. It
+    /// positions the spare space `Fit` leaves and the overflow `Fill` crops; the default is
+    /// `Center` on both axes. Applies to [`native_surface`](Self::native_surface),
+    /// [`video`](Self::video) and `pixels_fit`.
+    ///
+    /// ```
+    /// # use rune::{Align, SurfaceFit, el};
+    /// # let stream = rune::NativeSurface::new();
+    /// // A streamed page that keeps its top-left corner while the panel is resized.
+    /// let view = el().native_surface(&stream, SurfaceFit::Fill).surface_anchor(Align::Start, Align::Start);
+    /// ```
+    pub fn surface_anchor(mut self, horizontal: Align, vertical: Align) -> Self {
+        self.vis.cold_mut().surface_place.anchor = [horizontal, vertical];
+        self
+    }
+    /// Draw a surface or `pixels_fit` image at one texel per device pixel instead of scaling it
+    /// to the node, so `SurfaceFit` no longer applies. A node bigger than the image leaves the
+    /// rest empty; a smaller one crops it. Combine with
+    /// [`surface_anchor`](Self::surface_anchor) to choose which edges stay put. It suits a
+    /// stream rendered at the window's scale, whose last frame should hold still, not stretch,
+    /// until the next one arrives at the node's new size.
+    ///
+    /// ```
+    /// # use rune::{Align, SurfaceFit, el};
+    /// # let stream = rune::NativeSurface::new();
+    /// let view = el()
+    ///     .native_surface(&stream, SurfaceFit::Fill)
+    ///     .surface_anchor(Align::Start, Align::Start)
+    ///     .surface_unscaled(true);
+    /// ```
+    pub fn surface_unscaled(mut self, unscaled: bool) -> Self {
+        self.vis.cold_mut().surface_place.unscaled = unscaled;
+        self
+    }
+    /// Play `video` inside this node: `Fit` letterboxes, `Fill` crops. Frames come from the
+    /// display link while it plays; a paused video draws no frames of its own. Audio players
+    /// need no element.
+    pub fn video(self, video: &crate::Player, fit: crate::SurfaceFit) -> Self {
+        self.native_surface(video.surface(), fit)
+    }
+    /// Turn this element's icon by `radians`, clockwise about its centre: a disclosure chevron
+    /// pointing right when closed and down when open. A change springs on the element's
+    /// [`motion`](Self::motion) and jumps under reduced motion. Only the glyph turns; layout and
+    /// hit testing keep the upright box.
+    pub fn icon_rotation(mut self, radians: f32) -> Self {
+        let r = if radians.is_finite() { radians } else { 0.0 };
+        if r != 0.0 || !self.vis.cold.is_empty() {
+            self.vis.cold_mut().icon_turn = r;
+        }
+        self
+    }
+}

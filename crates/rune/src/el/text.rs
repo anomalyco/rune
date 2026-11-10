@@ -602,3 +602,78 @@ impl El {
         self
     }
 }
+
+impl El {
+    /// Paint the latest text in this element's fixed layout box. `text("00:00")` reserves
+    /// that placeholder's size; explicit `.size(w, h)` also works. Updates never resize the
+    /// box or reflow siblings, and overflow is clipped. Plain single-line text only.
+    pub fn live_text(mut self, value: &crate::LiveText) -> Self {
+        assert!(self.cold.input.is_none(), "live_text cannot bind a text editor");
+        let spec = self.text.as_mut().expect("live_text requires a text element");
+        spec.live = Some(value.clone());
+        self
+    }
+    #[inline]
+    pub fn color(mut self, c: Color) -> Self {
+        self.set_color(c);
+        self
+    }
+    /// [`El::color`] in place.
+    #[inline]
+    pub fn set_color(&mut self, c: Color) -> &mut Self {
+        if let Some(t) = &mut self.text {
+            t.color = c;
+            t.inked = true;
+        }
+        if let Some(cold) = self.vis.cold.get_mut_if_some() && let Some((_, ic)) = &mut cold.icon {
+            *ic = c;
+            cold.icon_inked = true;
+        }
+        if self.cold.input.is_some() {
+            self.sync_input_rich();
+        }
+        self
+    }
+    #[inline]
+    pub fn align(mut self, a: Align) -> Self {
+        self.set_align(a);
+        self
+    }
+    /// [`El::align`] in place.
+    #[inline]
+    pub fn set_align(&mut self, a: Align) -> &mut Self {
+        if let Some(t) = &mut self.text {
+            t.align = a;
+        }
+        self
+    }
+    /// Draw this text in capitals or lower case without changing its string, like SwiftUI's
+    /// `textCase`: `text("Text channels").text_case(TextCase::Uppercase)` draws "TEXT CHANNELS".
+    /// The dev tree, tools and link labels keep the authored text, and [`Span`] and [`Link`]
+    /// ranges stay byte ranges of it. Casing follows `str::to_uppercase`, so "ß" draws "SS".
+    /// Text fields draw what is typed and ignore it.
+    pub fn text_case(mut self, case: crate::TextCase) -> Self {
+        if let Some(t) = &mut self.text {
+            t.case = Some(case);
+        }
+        self
+    }
+    /// Spread each wrapped line but the last to fill the width; the last line and unwrapped text
+    /// keep [`El::align`].
+    pub fn justify(mut self) -> Self {
+        if let Some(t) = &mut self.text {
+            t.justify = true;
+        }
+        self
+    }
+    /// Measure this text as the grapheme at byte `at` of `run`, shaped as one line in the same
+    /// style, instead of on its own rounded up to a device pixel. Neighbouring cells of one run
+    /// then sit at its fractional, kerned advances and together take its width, and each draws
+    /// the run's own glyphs for its grapheme (contextual forms included).
+    pub fn advance_in(mut self, run: &crate::text::Run, at: usize) -> Self {
+        if let Some(t) = &mut self.text {
+            t.advance_in = Some((run.clone(), at));
+        }
+        self
+    }
+}

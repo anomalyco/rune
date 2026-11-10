@@ -237,3 +237,32 @@ impl El {
         self
     }
 }
+
+impl El {
+    /// A stable motion-lint name, independent of keys and generations. Defaults to the NodeId
+    /// in MotionTrace; tooling retains its keyed path fallback. Stored without copying the name.
+    /// Give simultaneous generations distinct names when comparing their motion separately.
+    pub fn trace_name(mut self, name: &'static str) -> Self {
+        self.cold_mut().trace_name = Some(name);
+        self
+    }
+
+    /// Class and host for this subtree's trace metadata (descendants may override them).
+    /// motion-lint pairs names by class too: use `("gpui", "pill")` to match a native Metal trace.
+    /// The labels share the element's lazily allocated storage with its other rare fields.
+    pub fn trace_namespace(mut self, class: &'static str, host: &'static str) -> Self {
+        self.cold_mut().trace_namespace = Some((class, host));
+        self
+    }
+    /// A finite opacity/scale sequence on the shared render clock. The final pose holds;
+    /// reduced motion and explicit settle land it immediately. A new key replays it.
+    pub fn sequence(self, frames: rune_motion::Sequence) -> Self {
+        self.looping(rune_motion::LoopSpec::sequence(frames))
+    }
+
+    /// A renderer-owned periodic or finite presentation track, on the shared clock.
+    pub fn looping(mut self, spec: rune_motion::LoopSpec) -> Self {
+        self.cold_mut().looping = Some(Box::new(spec));
+        self
+    }
+}

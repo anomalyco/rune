@@ -243,3 +243,47 @@ impl ScrollFade {
         self
     }
 }
+
+/// A vertical scroll viewport.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScrollSpec {
+    /// Follow the end: while scrolled to the bottom, growth keeps the bottom in view, and a new
+    /// viewport opens at the bottom on its first frame. When the content is a growth stack, room
+    /// the viewport gains at its bottom (a composer shrinking under it) is held under the last
+    /// row and closes on the stack's spring once its rows stop growing, so a send only moves
+    /// the rows up.
+    pub stick_bottom: bool,
+}
+
+/// A scroll viewport's content-aware edges: `El::scroll_edge_fade`, `El::scroll_margin` and
+/// `El::scroll_anchor`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct ScrollEdges {
+    /// Fade width (points) for the top and bottom edges; 0 for none.
+    pub(crate) fade: f32,
+    /// How the fade follows the content hidden under each edge (`El::scroll_fade`).
+    pub(crate) fade_style: FadeStyle,
+    /// Space `Tx::scroll_into_view` leaves between a revealed row and the viewport's edge.
+    pub(crate) margin: f32,
+    /// The viewport keeps its top row where it is when content above it changes.
+    pub(crate) anchor: bool,
+}
+
+/// The axes a scroll viewport moves on: `El::scroll` (vertical), `El::scroll_x`, `El::scroll_xy`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ScrollAxes {
+    #[default]
+    Y,
+    X,
+    Both,
+}
+
+impl ScrollAxes {
+    pub(crate) fn x(self) -> bool { self != ScrollAxes::Y }
+    pub(crate) fn y(self) -> bool { self != ScrollAxes::X }
+    /// Whether it moves on the horizontal axis (`true`) or the vertical one.
+    pub(crate) fn has(self, horizontal: bool) -> bool { if horizontal { self.x() } else { self.y() } }
+}
+
+pub(crate) type AtBottomFn = Rc<dyn Fn(crate::states::States<'_>, bool)>;
+pub(crate) type VisibleRowsFn = Rc<dyn Fn(crate::states::States<'_>, std::ops::Range<usize>) -> bool>;
