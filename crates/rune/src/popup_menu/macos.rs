@@ -18,14 +18,12 @@ use crate::runtime::Waker;
 pub(super) const SUPPORTED: bool = true;
 
 /// The menu while it tracks, to cancel it.
-pub(super) type Tracking = Option<Retained<NSMenu>>;
+pub(super) type Tracking = Retained<NSMenu>;
 
-/// Stops the menu tracking in `session`, if it is.
-pub(super) fn stop(session: &Session, _tracking: bool) {
-    if let Some(menu) = session.tracking.borrow_mut().take() {
-        // SAFETY: the host's (main) thread. The tracking loop ends once this handler returns.
-        unsafe { menu.cancelTrackingWithoutAnimation() };
-    }
+/// Stops the menu's tracking.
+pub(super) fn stop(menu: Tracking) {
+    // SAFETY: the host's (main) thread. The tracking loop ends once this handler returns.
+    unsafe { menu.cancelTrackingWithoutAnimation() };
 }
 
 /// An `NSMenu` takes its appearance from the view it pops up in.
@@ -86,19 +84,19 @@ pub(super) fn show(window: &Arc<Window>, show: Show, session: Rc<Session>, wake:
         if !session.begin() { return; }
         // A close or hide in the same turn as the request, after the host handed it over.
         let picked = if view.window().is_some_and(|w| w.isVisible()) {
-            *session.tracking.borrow_mut() = Some(menu.clone());
+            session.tracking(Some(menu.clone()));
             // SAFETY: main thread (a main run-loop block). winit's view is flipped, so `at` is
             // in window points from the top-left, the coordinates Rune lays out in; AppKit maps
             // them through the view to the screen at its backing scale.
             let chose = unsafe { menu.popUpMenuPositioningItem_atLocation_inView(positioned.as_deref(), at, Some(&view)) };
-            session.tracking.borrow_mut().take();
+            session.tracking(None);
             let picked = target.ivars().picked.borrow_mut().take();
             if chose && picked.is_none() { eprintln!("rune: pop-up menu reported a pick without its action"); }
             picked
         } else { None };
         clear_targets(&menu);
         drop((menu, target));
-        if session.resolve(picked) && let Some(wake) = wake { wake(); }
+        if session.resolve(picked, None) && let Some(wake) = wake { wake(); }
     });
     true
 }
