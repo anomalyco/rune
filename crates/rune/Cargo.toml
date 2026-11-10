@@ -76,6 +76,7 @@ taffy = { version = "0.15", default-features = false, features = ["std", "taffy_
 # them a Thai phrase never wraps and every CJK line logs a missing segmentation model.
 parley = { version = "0.12", default-features = false, features = ["std", "complex-scripts"] }
 swash = "0.2.10"
+skrifa = "0.44"
 bytemuck = { version = "1.25", features = ["derive"] }
 png = "0.18"
 serde = "1"

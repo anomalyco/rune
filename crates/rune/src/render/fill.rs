@@ -117,7 +117,7 @@ fn instance(q: &QueuedFill) -> Instance {
         rect: [x - 1.0, y - 1.0, w + 2.0, h + 2.0],
         radii: [x + f.pen[0], y + f.pen[1], f.scale, 1.0],
         fill: [1.0; 4],
-        border: [f.record as f32, f.hint as f32, f.radius, 0.0],
+        border: [f.record as f32, f.hint as f32, f.radius, f.coverage as f32],
         params: [0.0, KIND_GLYPH, 0.0, 1.0],
         uv: [0.0; 4],
         clip: NO_CLIP,

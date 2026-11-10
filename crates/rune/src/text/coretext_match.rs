@@ -39,6 +39,22 @@ pub enum FontSmoothing {
     /// from its outlines, so it stays sharp and doesn't change when it lands. Where the renderer
     /// can't draw outlines, the CPU fills the same masks and moving text draws from them.
     Windfoil,
+    /// Windfoil with Chromium's weight: each glyph's exact box coverage of its design outline,
+    /// with no dilation or hint, drawn through Skia's text gamma (the luminance-keyed exponent
+    /// `Off` takes off macOS), as Chromium's grayscale text weighs. Pens on quarter pixels.
+    WindfoilChromium,
+    /// Slug's coverage (Lengyel): the winding along a horizontal and a vertical ray through each
+    /// pixel, each spread over the pixel's width, averaged; of the design outline, through Skia's
+    /// text gamma. Drawn by the same shader and store as Windfoil, so it needs the renderer's
+    /// Windfoil shader: without it the CPU fills Windfoil's box coverage instead.
+    Slug,
+    /// FreeType's light autohint (skrifa's) moves the outline's heights onto the pixel grid at
+    /// each size, then Windfoil's box coverage, through Skia's text gamma. Pens on quarter pixels.
+    HintedGpu,
+    /// What Chromium draws on Linux: the light-autohinted outline (FreeType's `hintslight`) on
+    /// whole-pixel pens, with grayscale box coverage through Skia's text gamma. On Windows
+    /// Chromium's text is `DirectWrite`'s.
+    Hinted,
 }
 
 impl Default for FontSmoothing {
@@ -84,9 +100,64 @@ impl FontSmoothing {
     pub fn pipeline(self) -> ApplePipeline {
         match self {
             FontSmoothing::On | FontSmoothing::Windfoil => ApplePipeline::SMOOTHED,
-            FontSmoothing::Off | FontSmoothing::DirectWrite => ApplePipeline::UNSMOOTHED,
+            _ => ApplePipeline::UNSMOOTHED,
         }
     }
+
+    /// How a mode drawn from outlines (`text/windfoil.rs`) draws them; None for the others.
+    pub(crate) fn look(self) -> Option<Look> {
+        let chromium = |coverage, hint, whole_pens| Look { macos_weight: false, coverage, hint, whole_pens };
+        Some(match self {
+            FontSmoothing::Windfoil => Look { macos_weight: true, coverage: Coverage::Box, hint: OutlineHint::CoreGraphics, whole_pens: false },
+            FontSmoothing::WindfoilChromium => chromium(Coverage::Box, OutlineHint::None, false),
+            FontSmoothing::Slug => chromium(Coverage::Slug, OutlineHint::None, false),
+            FontSmoothing::HintedGpu => chromium(Coverage::Box, OutlineHint::Auto, false),
+            FontSmoothing::Hinted => chromium(Coverage::Box, OutlineHint::Auto, true),
+            FontSmoothing::On | FontSmoothing::Off | FontSmoothing::DirectWrite => return None,
+        })
+    }
+
+    /// The glyph key tag of an outline-drawn mode's masks: one per mode, so none share masks.
+    pub(crate) fn outline_key(self) -> Option<u8> {
+        let n = match self {
+            FontSmoothing::Windfoil => 0,
+            FontSmoothing::WindfoilChromium => 1,
+            FontSmoothing::Slug => 2,
+            FontSmoothing::HintedGpu => 3,
+            FontSmoothing::Hinted => 4,
+            FontSmoothing::On | FontSmoothing::Off | FontSmoothing::DirectWrite => return None,
+        };
+        Some(super::glyph_emit::WINDFOIL_KEY | n)
+    }
+}
+
+/// How an outline-drawn mode draws a glyph ([`FontSmoothing::look`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Look {
+    /// CoreText's dilation (times `TEXT_WEIGHT`) and coverage as is; otherwise no dilation and
+    /// Skia's text gamma.
+    pub(crate) macos_weight: bool,
+    pub(crate) coverage: Coverage,
+    pub(crate) hint: OutlineHint,
+    /// Pens on whole pixels rather than quarters.
+    pub(crate) whole_pens: bool,
+}
+
+/// The coverage function the outline shader integrates (`outline.wgsl`, the instance's `border.w`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Coverage {
+    Box = 0,
+    Slug = 1,
+}
+
+/// What moves an outline onto the pixel grid before its coverage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OutlineHint {
+    None,
+    /// CoreGraphics' y autohint, applied in the shader.
+    CoreGraphics,
+    /// FreeType's light autohint (skrifa), baked into the glyph's record at its size.
+    Auto,
 }
 
 /// Glyph x phases are in sixtieths of a device pixel ([`PHASES`]), which hold every step
@@ -133,7 +204,9 @@ const TEXT_GAMMA: [f32; 2] = [1.12, 0.45];
 pub(crate) fn coverage_exponent(mode: FontSmoothing, fill: [f32; 4], apple: bool, windows: bool) -> f32 {
     // DirectWrite masks already carry Skia's gamma for their text's luminance.
     let direct_write = mode == FontSmoothing::DirectWrite && windows;
-    if apple || direct_write || matches!(mode, FontSmoothing::On | FontSmoothing::Windfoil) || fill[3] <= 0.0 {
+    // Outline modes with Chromium's weight take its gamma on every OS, as the lab drew them.
+    let chromium = mode.look().is_some_and(|l| !l.macos_weight);
+    if (apple && !chromium) || direct_write || matches!(mode, FontSmoothing::On | FontSmoothing::Windfoil) || fill[3] <= 0.0 {
         return 1.0;
     }
     let luma = (0.2126 * fill[0] + 0.7152 * fill[1] + 0.0722 * fill[2]) / fill[3];

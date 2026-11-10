@@ -61,7 +61,7 @@ pub(crate) fn glyph(q: &GlyphQuad, fill: [f32; 4], clip: [f32; 4], fade: [f32; 4
             rect: q.rect,
             radii: [o.pen[0], o.pen[1], o.scale, o.zoom],
             fill,
-            border: [o.record as f32, o.hint as f32, o.radius, 0.0],
+            border: [o.record as f32, o.hint as f32, o.radius, o.coverage as f32],
             params: [0.0, KIND_GLYPH, 0.0, 1.0],
             uv: [0.0; 4],
             clip,

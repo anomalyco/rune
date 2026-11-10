@@ -66,6 +66,8 @@ mod pill_chips;
 mod rich_layout;
 mod run;
 pub(crate) use pill_chips::{bare_icons, pill_chips};
+mod support;
+pub use support::SmoothingSupport;
 mod svg_path;
 mod synthetic_bold;
 mod trak;
@@ -455,7 +457,7 @@ impl TextSystem {
     /// moves its coverage by this so a glide reads as the quarter-pixel steps it draws.
     pub(crate) fn glyph_shifts(&self) -> std::collections::HashMap<[u32; 3], f32> {
         self.atlas.map.iter()
-            .filter(|(k, _)| k.subpy != 0 && matches!(k.apple, glyph_emit::DIRECT_WRITE_KEY | glyph_emit::WINDFOIL_KEY))
+            .filter(|(k, _)| k.subpy != 0 && (k.apple == glyph_emit::DIRECT_WRITE_KEY || k.apple & 0xC0 == glyph_emit::WINDFOIL_KEY))
             .filter_map(|(k, a)| a.mask().map(|a| ([(a.x as f32).to_bits(), (a.y as f32).to_bits(), (a.page as f32).to_bits()], k.subpy as f32 / glyph_emit::GLIDE_PHASES as f32)))
             .collect()
     }
