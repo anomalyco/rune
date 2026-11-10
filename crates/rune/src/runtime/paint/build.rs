@@ -315,11 +315,11 @@ impl<S: 'static> Runtime<S> {
             let tracked_scale = if has_live_scale { static_k * p.transform.scale.x } else { static_k };
             let scale_settling = if tracked_scale != 1.0 || has_live_scale || self.static_scales.contains_key(&n.id) {
                 let t = self.t;
-                let seen = self.static_scales.entry(n.id).or_insert((tracked_scale, f64::NEG_INFINITY, false));
+                let seen = self.static_scales.entry(n.id).or_insert((tracked_scale, f64::NEG_INFINITY));
                 if self.settled {
-                    *seen = (tracked_scale, f64::NEG_INFINITY, seen.2);
+                    *seen = (tracked_scale, f64::NEG_INFINITY);
                 } else if (seen.0 - tracked_scale).abs() > 1e-5 {
-                    *seen = (tracked_scale, t, true);
+                    *seen = (tracked_scale, t);
                 }
                 let moving = t - seen.1 < STATIC_SCALE_SETTLE;
                 if !has_live_scale {

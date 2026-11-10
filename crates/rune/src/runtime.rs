@@ -620,9 +620,9 @@ pub struct Runtime<S: 'static> {
     loops: HashMap<NodeId, rune_motion::LoopTrack>,
     loop_clock: loop_clock::LoopClock,
     loops_active: bool,
-    /// `El::scale` per node that has one or had one: (factor, animation time it last changed,
-    /// whether it has ever changed). See [`ScaleMotion`].
-    static_scales: HashMap<NodeId, (f32, f64, bool)>,
+    /// `El::scale` per node that has one or had one: the factor, and the animation time it
+    /// last changed (`-∞` for never, or settled). See [`ScaleMotion`].
+    static_scales: HashMap<NodeId, (f32, f64)>,
     /// A changed `El::scale` hasn't held still long enough for its text to rasterize.
     static_scale_settling: bool,
     /// Some node ran on a scaled clock (`El::time_scale`) at the last commit.
