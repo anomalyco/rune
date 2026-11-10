@@ -1,0 +1,1 @@
+- **A press on plain content in a focusable scroll region focuses it**, as a web page focuses a `tabIndex` scroller clicked where nothing inside takes focus. `El::press_focuses_below` lets a layer over the page (a context menu's scrim) do the same for the scroll region under the press.
