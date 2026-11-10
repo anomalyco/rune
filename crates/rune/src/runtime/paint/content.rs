@@ -60,10 +60,7 @@ impl<S: 'static> Runtime<S> {
             .or_else(|| self.nodes[i].text.as_ref().map(|sp| sp.color))
             .map(|c| self.color(node_id, P_TEXT, c));
         let n = &self.nodes[i];
-        let text_tint = |c: Color| match n.vis.group_color {
-            Some(g) if group > 0.0 => c.mix(g, group),
-            _ => c,
-        };
+        let text_tint = |c: Color| paint_tracks::group_tint(n, c, group);
         if let Some(shape) = &n.vis.shape {
             // When pixel snapping adjusts `r`'s width or height from `r_exact`, keep a point-sized
             // shape centred in `r` so it shares `r`'s centre with fills, borders and icons.

@@ -207,9 +207,11 @@ impl GrowTrack {
     }
 
     fn at_rest(&self, remaining: f32) -> bool {
-        // A fold carries its descendants; closing slack under a pinned stack and rows
-        // on a reflow override position the viewport. Their last step remains visible.
-        let (distance, speed) = if self.glide.is_some() || self.duration > 0.0 || self.target == 0.0 {
+        // Closing slack under a pinned stack and rows on a reflow override position the
+        // viewport: their last step remains visible. A fold glide lands as other rows do:
+        // its spring's tail under a sixteenth of a point creeps in steps the pixel snap
+        // holds and lets go, which reads as the row stopping and setting off again.
+        let (distance, speed) = if self.duration > 0.0 || self.target == 0.0 {
             (1.0 / 128.0, 0.5)
         } else { (SETTLE, SETTLE_V) };
         remaining.abs() <= distance && self.v.abs() <= speed

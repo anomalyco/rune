@@ -45,8 +45,9 @@ pub struct Paint {
     /// Channels (a bit per index in [`CHANNELS`]) it lands at once by design: those its own
     /// `El::motion(Spring::NONE)` or `El::blur_motion(Spring::NONE)` governs (see [`at_once`]).
     pub at_once: u16,
-    /// How hovered and how pressed it shows, 0 to 1. A highlight lands with the pointer by
-    /// design, so a fill that steps with these isn't a snap.
+    /// How hovered and how pressed it shows, 0 to 1 (hovered: its own hover, or its group's
+    /// when it has a `group_color`). A highlight lands with the pointer by design, so a fill or
+    /// group colour that steps with these isn't a snap.
     pub pointer: [f32; 2],
 }
 

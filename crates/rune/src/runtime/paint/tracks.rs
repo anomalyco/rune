@@ -38,6 +38,15 @@ pub(super) fn text_color(n: &Node) -> Option<Color> {
     n.text.as_ref().map(|t| t.color).or(n.vis.icon.map(|(_, c)| c))
 }
 
+/// Text or icon colour `c` as it paints while its hover group is `group` hovered (0 to 1):
+/// mixed toward its `El::group_color`.
+pub(super) fn group_tint(n: &Node, c: Color, group: f32) -> Color {
+    match n.vis.group_color {
+        Some(g) if group > 0.0 => c.mix(g, group),
+        _ => c,
+    }
+}
+
 /// Which of a node's colours a live value owns. A commit leaves those tracks to the latch.
 #[derive(Clone, Copy, Default)]
 pub(super) struct LiveColors {
