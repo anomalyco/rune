@@ -23,6 +23,8 @@ mod started;
 mod tracks;
 mod typed;
 
+use self::tracks::Mode;
+
 const NONE: u32 = u32::MAX;
 /// Most additive layers a lane keeps before it collapses them into one merged segment.
 const MAX_ADDITIVE: usize = 8;
@@ -165,9 +167,9 @@ pub struct AnimationStore {
     t_meta: Vec<Meta>,
     /// The track's clock: 0 is the store's own, otherwise an index into `clocks`.
     t_clock: Vec<u32>,
-    /// On a stopped clock or waiting for a delayed start, and already sampled where it holds,
-    /// so `tick` skips it. `recompute` and `rebase`, which every change to a track's timing
-    /// goes through, clear it.
+    /// Sampled at its held pose by the last tick (in whichever [`Mode`] it holds), so `tick`
+    /// can skip it until [`mode`](Self::mode) says it moves. [`resample`](Self::resample)
+    /// clears it wherever a track's timing or pose changes.
     t_held: Vec<bool>,
     track_free: Vec<u32>,
 
@@ -405,7 +407,7 @@ impl AnimationStore {
 
     /// Shifts every absolute time of track `t` by `delta`.
     fn rebase(&mut self, t: usize, delta: f64) {
-        self.t_held[t] = false;
+        self.resample(t);
         if delta == 0.0 {
             return;
         }
@@ -470,8 +472,8 @@ impl AnimationStore {
             let now = if clocked { self.time_of(t) } else { self.now };
             // Nothing moves on a stopped clock, or on a track that only waits for a delayed
             // start: once sampled where it holds, it isn't touched again until it moves.
-            let held = (clocked && self.frozen(t)) || (now >= self.t_settle_at[t] && self.t_next_due[t] > now);
-            if held && self.t_held[t] {
+            let mode = self.mode(t);
+            if mode.holds() && self.t_held[t] {
                 i += 1;
                 continue;
             }
@@ -479,7 +481,7 @@ impl AnimationStore {
             if self.t_next_due[t] <= now {
                 self.apply_due(t, now);
             }
-            self.t_held[t] = held;
+            self.t_held[t] = mode.holds();
             let l0 = self.t_lane0[t] as usize;
             let n = self.t_n[t] as usize;
             let range = l0..l0 + n;
@@ -571,7 +573,7 @@ impl AnimationStore {
         if self.node_clock.is_empty() {
             return !self.active.is_empty();
         }
-        self.active.iter().any(|&t| !self.frozen(t as usize))
+        self.active.iter().any(|&t| !matches!(self.mode(t as usize), Mode::Frozen))
     }
 
     pub fn track_len(&self) -> usize {
@@ -623,7 +625,7 @@ impl AnimationStore {
                 self.t_next_due[t] = f64::INFINITY;
                 self.t_slot[t] = NONE;
                 self.t_clock[t] = clock;
-                self.t_held[t] = false;
+                self.resample(t);
                 t as u32
             }
             None => {
@@ -910,7 +912,7 @@ impl AnimationStore {
         }
         self.t_next_due[t] = due;
         self.t_settle_at[t] = settle;
-        self.t_held[t] = false;
+        self.resample(t);
     }
 
     fn settle(&mut self, t: usize) {
