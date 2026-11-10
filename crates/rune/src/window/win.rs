@@ -17,9 +17,6 @@ pub(super) struct Win {
     pub(super) surface: wgpu::Surface<'static>,
     pub(super) config: wgpu::SurfaceConfiguration,
     pub(super) window: Arc<Window>,
-    /// False while hidden (platforms that can hide a window keep it for the next open).
-    pub(super) visible: bool,
-    pub(super) occluded: bool,
     /// When to redraw after a frame that had no drawable, or the next frame of motion when no
     /// display link paces it (macOS).
     pub(super) retry: Option<Instant>,

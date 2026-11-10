@@ -24,7 +24,7 @@ impl<S: 'static> Host<S> {
     /// modifier keys held when it hid, rather than when it next shows. A shown window's
     /// redraw delivers it, as does a hidden launcher's.
     pub(super) fn hidden_input(&mut self, event_loop: &ActiveEventLoop) {
-        if !self.started || self.finished || self.win.as_ref().is_some_and(|w| w.visible || self.launcher()) { return; }
+        if !self.started || self.life.finished() || self.win.as_ref().is_some_and(|_| self.life.shown() || self.launcher()) { return; }
         if !self.rt.keys_queued() { return; }
         self.rt.hidden_timer_frame();
         self.clipboard.flush(&mut self.rt);
@@ -51,7 +51,7 @@ impl<S: 'static> Host<S> {
     pub(super) fn flush_files(&mut self, event_loop: &ActiveEventLoop) {
         #[cfg(target_os = "macos")]
         let appkit = self.win.as_ref().map(|l| crate::platform::macos::drop::take(&l.window)).unwrap_or_default();
-        let Some(l) = self.win.as_ref().filter(|w| w.visible) else {
+        let Some(l) = self.win.as_ref().filter(|_| self.life.shown()) else {
             self.files = FileDrop::default();
             return;
         };
@@ -96,7 +96,7 @@ impl<S: 'static> Host<S> {
             queued = self.rt.drag_files_to(Some(at));
         }
         if !queued { return; }
-        if !l.occluded && !l.minimized() { l.request_redraw(); } else {
+        if !self.life.covered() && !l.minimized() { l.request_redraw(); } else {
             self.covered_frame();
             self.shell(event_loop);
         }
@@ -117,7 +117,7 @@ impl<S: 'static> Host<S> {
                 }
             }
             WakeEvent::Live(_) => {
-                if self.rt.live_pending() && let Some(w) = self.win.as_ref().filter(|w| w.visible && !w.occluded) {
+                if self.rt.live_pending() && let Some(w) = self.win.as_ref().filter(|_| self.life.uncovered()) {
                     w.request_redraw();
                 }
             }
@@ -132,7 +132,7 @@ impl<S: 'static> Host<S> {
             WakeEvent::Frame(_, mut request) => {
                 request.spring = (request.animate && !self.rt.reduced_motion).then_some(crate::tok::motion::DEFAULT);
                 self.rt.window_frame = Some(self.rt.window_frame.unwrap_or_default().merge(request));
-                if let Some(w) = self.win.as_ref().filter(|w| w.visible) { w.request_redraw(); }
+                if let Some(w) = self.shown_win() { w.request_redraw(); }
                 self.shell(event_loop);
             }
             WakeEvent::A11y(_) => self.a11y_receive(),
@@ -194,13 +194,13 @@ impl<S: 'static> Host<S> {
                 if self.launcher() && self.win.as_ref().is_some_and(|w| !w.first_frame.notified()) { return; }
                 if stale { return; }
                 #[cfg(all(feature = "native-file-dialog", target_os = "linux"))]
-                if let Some(w) = &self.win { crate::file_dialog::window_focus(&w.window, focused && w.visible); }
+                if let Some(w) = &self.win { crate::file_dialog::window_focus(&w.window, focused && self.life.shown()); }
                 // Deliver independently of drawable availability, including hide/occlusion.
                 self.rt.window_focus(focused);
                 // The key window's App takes the menu bar, so its items act in this window.
                 if focused { self.menus.claim(); }
                 self.shell(event_loop);
-                if self.finished || self.win.is_none() { return; }
+                if self.life.finished() || self.win.is_none() { return; }
             }
             WindowEvent::CloseRequested => {
                 self.close(event_loop);
@@ -249,7 +249,7 @@ impl<S: 'static> Host<S> {
             WindowEvent::Resized(size) => {
                 sync_chrome(rt, l, chrome, titlebar);
                 let was_live = rt.live_visible();
-                rt.set_live_visible(l.visible && !l.occluded && size.width > 0 && size.height > 0 && !l.minimized());
+                rt.set_live_visible(self.life.uncovered() && size.width > 0 && size.height > 0 && !l.minimized());
                 // Restored where no occlusion event says so (Windows): as uncovering does, the
                 // first frame paints the settled state of what changed meanwhile.
                 let restored = !was_live && rt.live_visible();
@@ -318,11 +318,11 @@ impl<S: 'static> Host<S> {
                 if self.macos_window.launcher && cfg!(target_os = "macos") { return; }
                 #[cfg(target_os = "macos")]
                 { l.native.prime = 0; }
-                let was_occluded = std::mem::replace(&mut l.occluded, occluded);
+                let was_occluded = self.life.cover(occluded);
                 l.retry = None;
                 l.presented = None;
                 l.occluded_wait = OCCLUDED_RETRY;
-                rt.set_live_visible(l.visible && !occluded && !l.minimized());
+                rt.set_live_visible(self.life.uncovered() && !l.minimized());
                 if occluded {
                     self.secure_input.set(false);
                     l.stop_pacing();
@@ -357,7 +357,7 @@ impl<S: 'static> Host<S> {
                 rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
                 rt.set_full_keyboard_access(crate::platform::preferences::full_keyboard_access());
                 rt.set_system_scroll_bars_state(crate::platform::scroll_bars::reread().with_override(self.args.scroll_bars));
-                self.secure_input.set(focused && l.visible && !l.occluded && rt.has_secure_focus());
+                self.secure_input.set(focused && self.life.uncovered() && rt.has_secure_focus());
                 sync_chrome(rt, l, chrome, titlebar);
                 if !focused {
                     rt.cancel_composition();

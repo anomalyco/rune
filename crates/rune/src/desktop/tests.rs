@@ -56,3 +56,18 @@ fn output_pixels_fit_a_texture() {
     assert_eq!(pixels((f32::NAN, 10.0), 2.0, 8192), None);
     assert_eq!(pixels((10.0, 10.0), f32::INFINITY, 8192), None);
 }
+
+/// A window closed for good runs no more close hooks, even when its own `on_close` asks to
+/// close again.
+#[test]
+fn a_finished_window_runs_its_close_hook_once() {
+    use crate::{App, AppSpec, El, Tx, WindowSpec, el};
+    fn close(closes: &mut u32, tx: &mut Tx) { *closes += 1; tx.close_window(); }
+    let app = App::new(AppSpec::new("W", (100.0, 100.0), || 0u32, |_: &u32, _: &mut crate::Cx<u32>| -> El { el() })).on_close(close);
+    let mut w = Window::new(WindowSpec::from_app("w", app), None, &Args::default(), true, true, 1.0);
+    let desktop = VirtualDesktop::from_script(None, 2.0).unwrap();
+    w.rt.update(|_, tx| tx.close_window());
+    w.drain(&desktop, 0.0);
+    assert_eq!(w.rt.state, 1);
+    assert!(!w.visible() && !w.reopen_candidate().reopenable);
+}

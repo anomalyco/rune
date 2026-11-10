@@ -60,7 +60,11 @@ pub(crate) mod frame;
 mod handle;
 pub use handle::WindowHandle;
 use handle::native_window_number;
+mod life;
+pub(crate) use life::Life;
 mod lifecycle;
+mod reveal;
+use reveal::{Found, Reveal, RevealEffect};
 #[cfg(target_os = "macos")]
 mod mac;
 mod pacing;
@@ -390,7 +394,8 @@ struct Host<S: 'static> {
     on_window: Option<crate::app::OnWindow>,
     on_ready: Option<crate::app::OnWindow>,
     frame_reports: crate::frame::encoded::FrameReports<S>,
-    finished: bool,
+    /// Shown, hidden or closed for good; `win` holds the window while it has one.
+    life: Life,
     /// False for windows `App::window` added: they live as long as the loop, never keep it.
     keeps_loop: bool,
     spec: AppSpec<S>,
@@ -404,8 +409,6 @@ struct Host<S: 'static> {
     on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
     /// Its place among the windows receiving links (`App::on_open_url`).
     _open_urls: Option<crate::open_url::incoming::Listening>,
-    /// When it last hid, in `reopen::stamp` order.
-    hidden_at: Option<u64>,
     release_gpu: bool,
     open_at_start: bool,
     /// `App::float_on_open`: each window maps at a fixed size, then takes its own limits.
@@ -553,7 +556,7 @@ impl<S: 'static> Host<S> {
             on_window,
             on_ready,
             frame_reports,
-            finished: false,
+            life: Life::Unopened,
             keeps_loop: true,
             spec,
             args,
@@ -564,7 +567,6 @@ impl<S: 'static> Host<S> {
             turn: any_host::Turn::Between,
             on_reopen,
             _open_urls: None,
-            hidden_at: None,
             release_gpu,
             open_at_start: open,
             float_on_open,
@@ -812,7 +814,7 @@ impl<S: 'static> Host<S> {
 
     /// Publishes what `AppHandle::is_visible` reports.
     fn publish(&self) {
-        let visible = !self.finished && self.win.as_ref().is_some_and(|w| w.visible);
+        let visible = self.life.shown() && self.win.is_some();
         self.shared.visible.store(visible, Ordering::Release);
     }
 }

@@ -13,7 +13,7 @@ impl<S: 'static> Host<S> {
     pub(super) fn minimize(&mut self) {
         #[cfg(target_os = "macos")]
         let launcher = self.launcher();
-        let Some(w) = self.win.as_mut().filter(|w| w.visible) else { return minimize_ignored("a hidden window") };
+        let Some(w) = self.win.as_mut().filter(|_| self.life.shown()) else { return minimize_ignored("a hidden window") };
         #[cfg(target_os = "macos")]
         if w.native.panel.is_some() || launcher { return minimize_ignored("a panel"); }
         // Off macOS winit reports a minimize button on a borderless window too.

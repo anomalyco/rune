@@ -160,6 +160,7 @@ impl<S: 'static> Host<S> {
             self.rt.settle_all();
         }
         self.shown = true;
+        if visible { self.life.show(); }
         self.idle = true;
         self.rt.set_live_visible(visible);
         *self.native_handle.native.window.lock().unwrap() = Arc::downgrade(&window);
@@ -210,8 +211,6 @@ impl<S: 'static> Host<S> {
             surface,
             config,
             window,
-            visible,
-            occluded: false,
             retry: None,
             occluded_wait: OCCLUDED_RETRY,
             hidden_wait: TIMEOUT_RETRY,
@@ -252,7 +251,7 @@ impl<S: 'static> Host<S> {
         #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
         let mut drew = false;
         #[cfg(target_os = "macos")]
-        if visible && !self.rt.minimize_request && !self.finished && !event_loop.exiting()
+        if visible && !self.rt.minimize_request && !self.life.finished() && !event_loop.exiting()
             && self.win.as_ref().is_some_and(|w| w.native.panel.is_none() && w.window.is_minimized() != Some(true))
         {
             let presents = self.meter.totals().presents;
