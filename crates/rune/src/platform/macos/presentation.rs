@@ -117,16 +117,7 @@ impl Panel {
     pub fn hide(&self, fade: Duration) {
         self.visible.set(false);
         self.revealing.set(false);
-        self.pointer_poll.set(None);
-        self.monitors.borrow_mut().take();
-        self.pointer.captured.set(false);
-        self.pointer.pending.set(None);
-        self.pointer.last.set(None);
-        self.pointer.inside.set(false);
-        self.pointer.clicks.borrow_mut().clear();
-        self.pointer.release_since.set(None);
-        self.pointer.recovered_release.set(None);
-        self.set_cursor(None);
+        self.stop_pointer();
         // Clicks and scrolls go to the window below for the whole fade; `show` restores
         // hit-testing through `pointer.observe`.
         self.panel.setIgnoresMouseEvents(true);
