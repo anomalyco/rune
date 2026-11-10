@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# A push or PR update makes its older runs moot; an hour-long Mac job per push queued six deep.
+concurrency:
+  group: macos-tests-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   size:
     runs-on: ubuntu-latest
