@@ -383,8 +383,11 @@ pub fn scene_clock() -> SceneClock {
 
 /// Runs `f` (a scene fn or `init`) with `clock` as the scene clock.
 pub(crate) fn with_scene_clock<T>(clock: SceneClock, f: impl FnOnce() -> T) -> T {
-    let before = SCENE_CLOCK.replace(clock);
-    let out = f();
-    SCENE_CLOCK.set(before);
-    out
+    struct Restore(SceneClock);
+    impl Drop for Restore {
+        fn drop(&mut self) { SCENE_CLOCK.set(self.0); }
+    }
+
+    let _restore = Restore(SCENE_CLOCK.replace(clock));
+    f()
 }

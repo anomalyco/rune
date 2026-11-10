@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn unwinding_a_scene_restores_the_enclosing_clock() {
+    use crate::{SceneClock, scene_clock, with_scene_clock};
+
+    let outer = SceneClock { now: 4.0, dt: 0.1 };
+    with_scene_clock(outer, || {
+        let inner = SceneClock { now: 12.0, dt: 0.5 };
+        let result = std::panic::catch_unwind(|| with_scene_clock(inner, || panic!("scene failed")));
+        assert!(result.is_err());
+        assert_eq!(scene_clock(), outer);
+    });
+    assert_eq!(scene_clock(), SceneClock::default());
+}
+
+#[test]
 fn the_scene_filter_lists_only_the_scenes_it_keeps() {
     let mut rt = runtime_with(base().scenes(|name| name.contains('/')), Some(None), true);
     assert!(find(&rt, "playground-item-0").is_none() && find(&rt, "playground-item-1").is_none());
