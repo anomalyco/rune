@@ -51,7 +51,10 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
     }
     if s.picker {
         let mut root = el().w_full().h_full().hit().fill(BLUE.alpha(0.06))
-            .on_pointer_move(|s: &mut State, p| { s.pointer.set([p.x, p.y]); })
+            .on_pointer_move_local(|s: &mut State, p, tx| {
+                s.pointer.set([p.window_x, p.window_y]);
+                tx.live_only();
+            })
             .on_drag(|s: &mut State, drag, tx| {
                 tx.instant();
                 if drag.phase == Phase::Down { s.selection_at_press = s.selection; }
