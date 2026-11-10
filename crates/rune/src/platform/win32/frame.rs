@@ -124,17 +124,13 @@ pub(crate) fn has_window_menu(window: &winit::window::Window) -> bool {
 /// where neither a quit (`crate::quit`) nor the windows' timers could run until it closed.
 pub(crate) fn window_menu(window: &winit::window::Window, menu: WindowMenu, at: Option<(i32, i32)>) {
     let Some(hwnd) = super::hwnd(window) else { return };
-    let rtl = crate::labels::rtl();
-    if menu == WindowMenu::Keyboard && !rtl {
+    if menu == WindowMenu::Keyboard {
         // SAFETY: posts to a live window this thread owns.
         unsafe { PostMessageW(hwnd, WM_SYSCOMMAND, SC_KEYMENU as WPARAM, LPARAM::from(b' ')); }
         return;
     }
-    // Where the click was, in desktop pixels; the pointer may have moved since. From the
-    // keyboard right to left, the window's top right corner, where a right-to-left window's
-    // system menu opens: Windows' own Alt+Space menu can't lay out right to left.
-    let at = if menu == WindowMenu::Keyboard { client_top_right(hwnd) } else { at.or_else(super::pointer_position) };
-    let Some((x, y)) = at else { return };
+    // Where the click was, in desktop pixels; the pointer may have moved since.
+    let Some((x, y)) = at.or_else(super::pointer_position) else { return };
     let id = NEXT_MENU.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // Screen points fit 16 bits each, as in every mouse message's.
     let point = ((y as u16 as u32) << 16 | x as u16 as u32) as usize;
@@ -295,6 +291,13 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
             WM_CAPTURECHANGED | WM_CANCELMODE if matches!(state.caption.get(), CaptionState::Pressed { .. }) => {
                 state.set(hwnd, CaptionState::Idle);
                 if message == WM_CANCELMODE { ReleaseCapture(); }
+            }
+            // Alt+Space right to left: the window menu at the window's top right corner, laid
+            // out right to left, where a right-to-left window's opens; Windows' own keyboard
+            // menu would open left to right at the top left.
+            WM_SYSCOMMAND if wparam & 0xFFF0 == SC_KEYMENU as WPARAM && lparam == LPARAM::from(b' ') && crate::labels::rtl() => {
+                if let Some((x, y)) = client_top_right(hwnd) { track_window_menu(hwnd, x, y); }
+                return 0;
             }
             WM_NCRBUTTONDOWN | WM_NCRBUTTONUP | WM_NCRBUTTONDBLCLK if caption_button(wparam).is_some() => return 0,
             // The default would repaint a title bar this window doesn't have.
