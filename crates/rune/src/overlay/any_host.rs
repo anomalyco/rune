@@ -143,7 +143,7 @@ impl<T: 'static> AnyHost for Overlay<T> {
             WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } => {
                 #[cfg(target_os = "macos")]
                 {
-                    let (lost, point) = self.panel.as_ref().map_or((None, None), |p| (p.take_recovered_release(), p.take_click(state.is_pressed())));
+                    let (lost, point) = self.panel.as_ref().map_or((None, None), |p| p.take_edge(state.is_pressed()));
                     self.left_edge(lost, state.is_pressed(), point);
                     if !state.is_pressed() && let Some(panel) = &self.panel { panel.pointer_released(); }
                 }

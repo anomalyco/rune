@@ -78,22 +78,41 @@ fn a_lost_release_before_the_next_press_leaves_that_press_alone() {
     assert_eq!(ups, [true, false], "the old drag is cancelled, the new one ends normally");
 }
 
+type ClickRun = Vec<(Phase, u32)>;
+
+fn click_run_runtime() -> Runtime<ClickRun> {
+    fn view(_: &ClickRun, _: &mut Cx<ClickRun>) -> El {
+        el().size(100.0, 40.0).on_drag(|s: &mut ClickRun, d, _| s.push((d.phase, d.clicks)))
+    }
+    let mut rt = Runtime::new(Vec::new(), view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt
+}
+
 #[test]
-fn a_lost_release_ends_the_run_of_clicks() {
-    type State = Vec<(Phase, u32)>;
-    fn view(_: &State, _: &mut Cx<State>) -> El {
-        el().size(100.0, 40.0).on_drag(|s: &mut State, d, _| s.push((d.phase, d.clicks)))
-    }
-    for release_at in [40.0, 12.0, 10.0] {
-        let mut rt = Runtime::new(Vec::new(), view, (200.0, 200.0), Env::new(true, 1.0));
-        rt.frame(0.0);
+fn a_lost_release_that_moved_ends_the_run_of_clicks() {
+    // (seen moving to, released at, the next press's count)
+    for (seen, released, clicks) in [(Some(40.0), 40.0, 1), (Some(40.0), 10.0, 1), (None, 40.0, 1), (None, 12.0, 2), (None, 10.0, 2)] {
+        let mut rt = click_run_runtime();
         rt.pointer_down(10.0, 10.0);
-        if release_at == 40.0 { rt.pointer_move(40.0, 10.0); }
-        rt.pointer_release_lost(release_at, 10.0);
+        if let Some(x) = seen { rt.pointer_move(x, 10.0); }
+        rt.pointer_release_lost(released, 10.0);
         rt.pointer_down(10.0, 10.0);
         rt.frame(0.0);
-        assert_eq!(rt.state.last(), Some(&(Phase::Down, 1)), "released at {release_at}: a cancelled drag is no click");
+        assert_eq!(rt.state.last(), Some(&(Phase::Down, clicks)), "moved to {seen:?}, released at {released}");
     }
+}
+
+#[test]
+fn a_stationary_escape_keeps_the_run_of_clicks() {
+    let mut rt = click_run_runtime();
+    rt.pointer_down(10.0, 10.0);
+    rt.physical_key_input(crate::PhysicalInput::Key { key: crate::PhysicalKeyCode::Escape,
+        mods: crate::Mods::default(), pressed: true, repeat: false }, KeyEvent { key: crate::Key::Escape, mods: crate::Mods::default() }, None);
+    rt.pointer_up(10.0, 10.0);
+    rt.pointer_down(10.0, 10.0);
+    rt.frame(0.0);
+    assert_eq!(rt.state.last(), Some(&(Phase::Down, 2)));
 }
 
 #[test]

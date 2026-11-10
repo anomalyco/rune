@@ -130,8 +130,6 @@ impl<S: 'static> Runtime<S> {
         let (dx, dy) = (x - at.0, y - at.1);
         let screen = self.screen_at(x, y);
         let Some(held) = self.press.drop_held() else { return false };
-        // A cancelled gesture is no click, so the next press starts a new run.
-        self.press_clicks.clear();
         let d = Drag { phase: Phase::Up, x: lx, y: ly, dx, dy, cancelled: true, window: [x, y], screen, ..held.drag };
         self.queue.push(Action::Drag(held.path, d, held.button));
         self.end_press_repeat();
@@ -313,10 +311,13 @@ impl<S: 'static> Runtime<S> {
     /// cancelled at (x, y), and any other press is released there.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn pointer_release_lost(&mut self, x: f32, y: f32) {
-        let left = self.press.held().filter(|h| h.button == crate::PointerButton::Primary).map(|h| h.left);
-        if left.is_some() && self.cancel_drag_at(Some((x, y))) {
+        let held = self.press.held().filter(|h| h.button == crate::PointerButton::Primary)
+            .map(|h| (h.left, h.moved || !press_run::within_slop(h.at, (x, y))));
+        if let Some((left, moved)) = held && self.cancel_drag_at(Some((x, y))) {
+            // As a normal release: a press that dragged ends the run of clicks.
+            if moved { self.press_clicks.clear(); }
             self.move_pointer(x, y, false);
-            self.leave_after_release(left == Some(true));
+            self.leave_after_release(left);
         } else {
             self.pointer_up(x, y);
         }

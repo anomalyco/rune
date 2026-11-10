@@ -1,7 +1,7 @@
 use super::*;
 
-const DOWN: Event = Event::Seen { click: Click { down: true, at: (20.0, 20.0) }, over: true };
-const UP: Event = Event::Seen { click: Click { down: false, at: (100.0, 100.0) }, over: true };
+const DOWN: Event = Event::Seen { down: true, at: (20.0, 20.0), over: true };
+const UP: Event = Event::Seen { down: false, at: (100.0, 100.0), over: true };
 
 fn sample(button_down: bool, now: Instant, at: Point) -> Event { Event::Sampled { button_down, now, at } }
 
@@ -44,40 +44,59 @@ fn a_quick_press_queued_before_the_release_reaches_the_runtime_stays_held() {
 }
 
 #[test]
-fn a_press_during_the_grace_loses_nothing_while_the_last_is_still_queued() {
+fn two_queued_presses_with_no_up_between_end_the_first_between_them() {
     let mut hold = Hold::default();
     let now = Instant::now();
     step(&mut hold, DOWN);
     step(&mut hold, sample(false, now, (50.0, 50.0)));
     assert!(step(&mut hold, DOWN).is_empty());
     assert!(matches!(hold, Hold::Pressed { .. }));
-    assert!(step(&mut hold, sample(true, now + Duration::from_secs(1), (50.0, 50.0))).is_empty());
-    step(&mut hold, sample(false, now + Duration::from_secs(1), (55.0, 55.0)));
-    assert!(step(&mut hold, sample(true, now + Duration::from_secs(1), (55.0, 55.0))).is_empty());
-    assert!(matches!(hold, Hold::Pressed { .. }), "the button came back down");
+    assert_eq!(effects(&mut hold, Event::Dispatched { down: true }), [Effect::Deliver((20.0, 20.0))]);
+    assert_eq!(effects(&mut hold, Event::Dispatched { down: true }), [Effect::ReleaseLost((50.0, 50.0)), Effect::Deliver((20.0, 20.0))]);
+    step(&mut hold, UP);
+    assert_eq!(effects(&mut hold, Event::Dispatched { down: false }), [Effect::Deliver((100.0, 100.0))], "the second press ends normally");
+    step(&mut hold, Event::Released);
+    assert_eq!(hold, Hold::default());
 }
 
 #[test]
-fn a_press_that_beats_the_grace_loses_the_dispatched_press_where_the_button_rose() {
+fn a_press_that_beats_the_grace_ends_the_dispatched_press_where_the_button_rose() {
     let mut hold = Hold::default();
     let now = Instant::now();
     step(&mut hold, DOWN);
     step(&mut hold, Event::Dispatched { down: true });
     step(&mut hold, sample(false, now, (50.0, 50.0)));
-    assert_eq!(effects(&mut hold, DOWN), [Effect::ReleaseLost((50.0, 50.0))]);
+    assert!(step(&mut hold, DOWN).is_empty());
     assert!(matches!(hold, Hold::Pressed { .. }), "the new press holds");
     assert_eq!(hold.deadline(), None);
+    assert_eq!(effects(&mut hold, Event::Dispatched { down: true }), [Effect::ReleaseLost((50.0, 50.0)), Effect::Deliver((20.0, 20.0))]);
 }
 
 #[test]
-fn a_press_with_the_button_read_down_again_still_loses_the_dispatched_press() {
+fn a_sample_that_beats_the_next_press_keeps_the_release_point() {
     let mut hold = Hold::default();
     let now = Instant::now();
     step(&mut hold, DOWN);
     step(&mut hold, Event::Dispatched { down: true });
     step(&mut hold, sample(false, now, (50.0, 50.0)));
-    step(&mut hold, sample(true, now, (50.0, 50.0))); // the sample beat the Down's event
-    assert_eq!(effects(&mut hold, DOWN), [Effect::ReleaseLost((20.0, 20.0))]);
+    assert!(step(&mut hold, sample(true, now, (55.0, 55.0))).is_empty()); // the sample beat the Down's event
+    assert_eq!(hold.deadline(), None, "the grace rests while the button reads down");
+    step(&mut hold, DOWN);
+    assert_eq!(effects(&mut hold, Event::Dispatched { down: true }), [Effect::ReleaseLost((50.0, 50.0)), Effect::Deliver((20.0, 20.0))]);
+}
+
+#[test]
+fn a_rebounding_button_gives_up_where_it_first_rose_after_a_fresh_grace() {
+    let mut hold = Hold::default();
+    let now = Instant::now();
+    step(&mut hold, DOWN);
+    step(&mut hold, Event::Dispatched { down: true });
+    step(&mut hold, sample(false, now, (50.0, 50.0)));
+    step(&mut hold, sample(true, now, (55.0, 55.0)));
+    let later = now + Duration::from_secs(1);
+    step(&mut hold, sample(false, later, (60.0, 60.0)));
+    assert_eq!(hold.deadline(), Some(later + UNSEEN_UP_GRACE));
+    assert_eq!(effects(&mut hold, sample(false, later + UNSEEN_UP_GRACE, (70.0, 70.0))), [Effect::ReleaseLost((50.0, 50.0))]);
 }
 
 #[test]

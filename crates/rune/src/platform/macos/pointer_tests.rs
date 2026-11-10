@@ -1,5 +1,6 @@
 use super::*;
 use std::collections::VecDeque;
+use super::super::hold::Click;
 
 /// winit dispatches the click at the front of the queue.
 fn dispatch(pointer: &PointerState, down: bool) -> Option<Point> { pointer.step(Event::Dispatched { down }) }
@@ -37,7 +38,7 @@ fn a_click_through_overlay_that_follows_nothing_never_samples_the_pointer() {
     pointer.follow.set(true);
     assert!(pointer.wanted(), "following the pointer reads it");
     pointer.follow.set(false);
-    pointer.step(Event::Seen { click: Click { down: true, at: (0.0, 0.0) }, over: true });
+    pointer.step(Event::Seen { down: true, at: (0.0, 0.0), over: true });
     assert!(pointer.wanted(), "a press it holds still needs its release");
     pointer.step(Event::Stopped);
     for input in [OverlayInput::Regions, OverlayInput::All] {
@@ -117,7 +118,7 @@ fn overlay_rejected_down_cannot_poison_later_click_and_owned_up_survives_exit() 
     pointer.record_click(true, 1.0, 1.0);
     pointer.record_click(true, 20.0, 20.0);
     pointer.record_click(false, 100.0, 100.0);
-    assert_eq!(queued(&pointer), VecDeque::from([Click { down: true, at: (20.0, 20.0) }, Click { down: false, at: (100.0, 100.0) }]));
+    assert_eq!(queued(&pointer), VecDeque::from([Click { down: true, at: (20.0, 20.0), ends: None }, Click { down: false, at: (100.0, 100.0), ends: None }]));
     // Physical Up must not turn off native hit testing before winit dispatches it.
     assert!(pointer.hit(100.0, 100.0));
     pointer.step(Event::Stopped);
@@ -139,4 +140,36 @@ fn a_covered_overlay_rests_its_poll_but_keeps_a_lost_releases_deadline() {
     assert_eq!(pointer.deadline(poll, false), poll, "the sooner of the two");
     pointer.observe_release(0, due, (20.0, 20.0));
     assert_eq!(pointer.deadline(poll, true), None, "once: it does not restart the poll");
+}
+#[test]
+fn a_queued_press_hands_over_the_release_lost_before_it() {
+    let pointer = PointerState { input: Cell::new(OverlayInput::All), ..Default::default() };
+    pointer.record_click(true, 20.0, 20.0);
+    pointer.observe_release(0, Instant::now(), (50.0, 50.0));
+    pointer.record_click(true, 30.0, 30.0);
+    assert_eq!(pointer.take_edge(true), (None, Some((20.0, 20.0))));
+    assert_eq!(pointer.take_edge(true), (Some((50.0, 50.0)), Some((30.0, 30.0))), "landing before the second press");
+}
+
+#[test]
+fn a_sample_beating_the_next_press_cancels_the_old_drag_where_the_button_rose() {
+    type State = Vec<(crate::Phase, bool, f32)>;
+    fn view(_: &State, _: &mut crate::Cx<State>) -> crate::El {
+        crate::el().size(100.0, 100.0).on_drag(|s: &mut State, d, _| s.push((d.phase, d.cancelled(), d.x)))
+    }
+    let mut rt = crate::Runtime::new(Vec::new(), view, (100.0, 100.0), crate::Env::default());
+    rt.frame(0.0);
+    let pointer = PointerState { input: Cell::new(OverlayInput::All), ..Default::default() };
+    let now = Instant::now();
+    pointer.record_click(true, 10.0, 10.0);
+    pointer.take_edge(true);
+    rt.pointer_down(10.0, 10.0);
+    pointer.observe_release(0, now, (50.0, 50.0));
+    pointer.observe_release(1, now, (70.0, 70.0));
+    pointer.record_click(true, 70.0, 70.0);
+    let (lost, _) = pointer.take_edge(true);
+    let (x, y) = lost.expect("the old press lost its release");
+    rt.pointer_release_lost(x, y);
+    rt.frame(0.0);
+    assert_eq!(rt.state.last(), Some(&(crate::Phase::Up, true, 50.0)));
 }

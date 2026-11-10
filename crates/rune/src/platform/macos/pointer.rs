@@ -5,7 +5,7 @@ use objc2::{ClassType, msg_send, msg_send_id, rc::Retained};
 use objc2_app_kit::{NSEvent, NSPanel, NSScreen, NSWindow};
 use objc2_foundation::{MainThreadMarker, NSObject, NSPoint};
 use crate::{OverlayInput, OverlaySupport};
-use super::{Panel, cursor::set_ns_cursor, geometry::{contains_pointer, screen_id}, hold::{self, Click, Effect, Event, Hold, Point}};
+use super::{Panel, cursor::set_ns_cursor, geometry::{contains_pointer, screen_id}, hold::{self, Effect, Event, Hold, Point}};
 
 #[derive(Default)]
 pub(crate) struct PointerState {
@@ -66,7 +66,12 @@ impl PointerState {
     }
     pub(crate) fn hit(&self, x: f32, y: f32) -> bool { self.captured() || self.over(x, y) }
     fn record_click(&self, down: bool, x: f32, y: f32) {
-        self.step(Event::Seen { click: Click { down, at: (x, y) }, over: self.over(x, y) });
+        self.step(Event::Seen { down, at: (x, y), over: self.over(x, y) });
+    }
+    /// winit dispatched a press or release: a lost release to land before it, and its point.
+    fn take_edge(&self, down: bool) -> (Option<Point>, Option<Point>) {
+        let point = self.step(Event::Dispatched { down });
+        (self.recovered_release.take(), point)
     }
     fn released(&self) { self.step(Event::Released); }
     fn observe_release(&self, buttons: usize, now: Instant, at: (f32, f32)) {
@@ -136,7 +141,7 @@ impl Panel {
     pub fn take_pointer(&self) -> Option<(f32, f32)> { self.pointer.pending.take() }
     pub fn pointer_captured(&self) -> bool { self.pointer.captured() }
     pub fn take_recovered_release(&self) -> Option<(f32, f32)> { self.pointer.recovered_release.take() }
-    pub fn take_click(&self, down: bool) -> Option<(f32, f32)> { self.pointer.step(Event::Dispatched { down }) }
+    pub fn take_edge(&self, down: bool) -> (Option<(f32, f32)>, Option<(f32, f32)>) { self.pointer.take_edge(down) }
     pub fn pointer_released(&self) {
         self.pointer.released();
         self.refresh_monitors();
