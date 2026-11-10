@@ -99,10 +99,12 @@ pub(super) fn floor_boundary(text: &str, i: usize) -> usize {
 fn prev_boundary(text: &str, i: usize) -> usize { floor_boundary(text, i.saturating_sub(1)) }
 
 /// The range of `unit` at byte `i` of `text`: a word (or run of spaces or punctuation) by
-/// Unicode word boundaries, or a paragraph with its line break. Past the end of a line (on its
-/// break, or past the end of the text) it takes the line's last word or paragraph, as AppKit does.
+/// Unicode word boundaries, Chinese, Japanese, Thai, Lao, Khmer and Burmese words by ICU's
+/// dictionaries as a browser finds them, or a paragraph with its line break. Past the end of a
+/// line (on its break, or past the end of the text) it takes the line's last word or paragraph,
+/// as AppKit does.
 pub(crate) fn unit_at(text: &str, i: usize, unit: Unit) -> (usize, usize) {
-    use unicode_segmentation::UnicodeSegmentation;
+    use icu_segmenter::{WordSegmenter, options::WordBreakInvariantOptions};
     let mut i = floor_boundary(text, i);
     if i > 0 && i == text.len() && unit != Unit::Char { i = prev_boundary(text, i); }
     match unit {
@@ -113,10 +115,11 @@ pub(crate) fn unit_at(text: &str, i: usize, unit: Unit) -> (usize, usize) {
                 if text[i..].starts_with('\r') && i > 0 && !text[..i].ends_with('\n') { i = prev_boundary(text, i); }
             }
             let mut last = (i, i);
-            for (start, word) in text.split_word_bound_indices() {
-                let end = start + word.len();
+            let mut start = 0;
+            for end in WordSegmenter::new_dictionary(WordBreakInvariantOptions::default()).segment_str(text).filter(|&b| b > 0) {
                 last = (start, end);
                 if i < end { return last; }
+                start = end;
             }
             last
         }
