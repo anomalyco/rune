@@ -1,7 +1,10 @@
 //! DirectWrite rasterising glyphs as Chromium's Skia asks it to (`SkScalerContext_DW`): the
 //! rendering mode its `gasp` rules pick, grid fitting on (Chromium's hinting is "medium"),
-//! grayscale antialiasing, and the pen's x phase in the glyph's transform. The faces load from
-//! the same bytes Parley shapes with, at the run's variation coordinates.
+//! and the pen's x phase in the glyph's transform. Coverage is ClearType's three subpixels
+//! averaged, Skia's A8 from LCD (`kGenA8FromLCD_Flag`): what Chromium draws with ClearType on
+//! wherever it can't draw subpixel text. DirectWrite's own grayscale has 17 levels, and Skia's
+//! gamma lifts its faintest into dots above and below round letters. The faces load from the
+//! same bytes Parley shapes with, at the run's variation coordinates.
 
 use std::collections::HashMap;
 
@@ -36,8 +39,7 @@ pub(crate) struct Job<'a> {
 
 pub(crate) struct DirectWrite {
     factory: IDWriteFactory6,
-    /// The same factory as IDWriteFactory2, whose glyph analysis takes a grid-fit mode and
-    /// grayscale antialiasing.
+    /// The same factory as IDWriteFactory2, whose glyph analysis takes a grid-fit mode.
     factory2: IDWriteFactory2,
     loader: IDWriteInMemoryFontFileLoader,
     /// Per font blob and index: its resource and the `gasp` facts the rendering mode needs.
@@ -91,9 +93,9 @@ impl DirectWrite {
         // SAFETY: `run` borrows locals that outlive the analysis; the face is released below.
         let made = unsafe {
             let analysis = self.factory2.CreateGlyphRunAnalysis(&run, Some(&transform), mode, DWRITE_MEASURING_MODE_NATURAL,
-                DWRITE_GRID_FIT_MODE_ENABLED, DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE, 0.0, 0.0);
+                DWRITE_GRID_FIT_MODE_ENABLED, DWRITE_TEXT_ANTIALIAS_MODE_CLEARTYPE, 0.0, 0.0);
             analysis.and_then(|a| {
-                let mut bounds = a.GetAlphaTextureBounds(DWRITE_TEXTURE_ALIASED_1x1)?;
+                let mut bounds = a.GetAlphaTextureBounds(DWRITE_TEXTURE_CLEARTYPE_3x1)?;
                 // Smoothed vertically, a glyph shifted down part of a pixel inks one more row.
                 // Its unshifted mask keeps that row, empty, so a gliding glyph's quad keeps one
                 // size across its y phases and moves rather than growing and shrinking.
@@ -102,10 +104,16 @@ impl DirectWrite {
                 }
                 let (w, h) = ((bounds.right - bounds.left).max(0) as u32, (bounds.bottom - bounds.top).max(0) as u32);
                 self.scratch.clear();
-                self.scratch.resize((w * h) as usize, 0);
+                self.scratch.resize((w * h * 3) as usize, 0);
                 if w > 0 && h > 0 {
-                    a.CreateAlphaTexture(DWRITE_TEXTURE_ALIASED_1x1, &bounds, &mut self.scratch)?;
+                    a.CreateAlphaTexture(DWRITE_TEXTURE_CLEARTYPE_3x1, &bounds, &mut self.scratch)?;
                 }
+                // Skia's A8 from LCD (`RGBToA8`): each pixel's three subpixel coverages, averaged.
+                for i in 0..(w * h) as usize {
+                    let rgb = &self.scratch[i * 3..i * 3 + 3];
+                    self.scratch[i] = ((rgb[0] as u32 + rgb[1] as u32 + rgb[2] as u32) / 3) as u8;
+                }
+                self.scratch.truncate((w * h) as usize);
                 Ok((bounds, w, h))
             })
         };
