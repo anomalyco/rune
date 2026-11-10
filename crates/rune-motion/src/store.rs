@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
+use crate::carry::Carry;
 use crate::curve::{Anim, Blend, Curve, Decay, Velocity};
 use crate::layer::{Eps, Kind, Layer};
 use crate::props::{NodeId, Prop, PropClass, PropId};
@@ -192,8 +193,7 @@ pub struct AnimationStore {
     index: FxMap<(u64, u16), u32>,
     node_head: FxMap<u64, u32>,
 
-    events: Vec<MotionEvent>,
-    events_seen: usize,
+    events: Carry<MotionEvent>,
     retarget_audit: Option<RetargetAudit>,
 }
 
@@ -240,8 +240,7 @@ impl AnimationStore {
             pending_free: NONE,
             index: FxMap::default(),
             node_head: FxMap::default(),
-            events: Vec::new(),
-            events_seen: 0,
+            events: Carry::new(),
             retarget_audit: None,
         }
     }
@@ -456,7 +455,7 @@ impl AnimationStore {
     /// Samples every active track at `now()`, applies due delayed animations, settles finished
     /// tracks. Allocation-free once buffers have grown to the working-set size.
     pub fn tick(&mut self) {
-        self.events.drain(..self.events_seen);
+        self.events.begin();
         self.touched.clear();
         let meta = &self.t_meta;
         let live = |id: &&TrackId| meta[id.index as usize].alive && meta[id.index as usize].generation == id.generation;
@@ -515,12 +514,12 @@ impl AnimationStore {
             }
             i += 1;
         }
-        self.events_seen = self.events.len();
+        self.events.end();
     }
 
     /// Events since the previous tick (settles, completions).
     pub fn events(&self) -> &[MotionEvent] {
-        &self.events
+        self.events.as_slice()
     }
 
     /// The values presented at the last tick for a track, as raw lanes.
