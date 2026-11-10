@@ -405,7 +405,12 @@ fn a_plain_field_draws_no_box_but_still_focuses_on_a_press_anywhere_and_types() 
     let dis_glyph = rt.instances.iter().find(|i| {
         i.params[1] == rune::render::KIND_GLYPH && i.rect[0] >= dis_inp[0] && i.rect[0] < dis_inp[0] + dis_inp[2] && i.rect[1] >= dis_inp[1] && i.rect[1] < dis_inp[1] + dis_inp[3]
     }).expect("disabled glyph");
-    assert!((dis_glyph.fill[3] - 0.5).abs() < 0.01, "disabled plain dims to 0.5: {:?}", dis_glyph.fill);
+    let mut opacity = vec![1.0];
+    for i in rt.instances.iter().take_while(|i| !std::ptr::eq(*i, dis_glyph)) {
+        if i.params[1] == rune::render::KIND_LAYER { opacity.push(opacity.last().unwrap() * i.fill[3]); }
+        if i.params[1] == rune::render::KIND_LAYER_END { opacity.pop(); }
+    }
+    assert!((dis_glyph.fill[3] * opacity.last().unwrap() - 0.5).abs() < 0.01, "disabled plain dims to 0.5");
 
     // In the 56 pt plain launcher header, leading icon (18 pt), input (24 pt), placeholder glyphs and clear button (28 pt) are all vertically centred.
     let b = plain.rect;

@@ -37,7 +37,7 @@ fn view(s: &Demo, cx: &mut Cx<Demo>) -> El {
 }
 
 #[test]
-fn disabled_controls_produce_no_layer_scopes() {
+fn disabled_controls_balance_their_compositing_scopes() {
     for dark in [false, true] {
         for case in 0..11 {
             let mut s = Demo { case, ..Default::default() };
@@ -45,8 +45,13 @@ fn disabled_controls_produce_no_layer_scopes() {
             let mut rt = Runtime::new(s, view, (400.0, 600.0), Env { system_dark: dark, scale: 2.0 });
             rt.frame(0.0); rt.settle_all(); rt.frame(0.0);
             assert!(!rt.instances.is_empty(), "case {case} must paint");
-            assert!(rt.instances.iter().all(|i| i.params[1] != KIND_LAYER && i.params[1] != KIND_LAYER_END),
-                "case {case} dark={dark}: disabled styling introduced a scope");
+            let mut depth = 0i32;
+            for i in &rt.instances {
+                if i.params[1] == KIND_LAYER { depth += 1; }
+                if i.params[1] == KIND_LAYER_END { depth -= 1; }
+                assert!(depth >= 0, "case {case}: unmatched end");
+            }
+            assert_eq!(depth, 0, "case {case}: unclosed layer");
             if case == 9 { assert!(rt.elements().iter().any(|e| e.role == "menuitemcheckbox")); }
             if case == 10 { assert!(rt.elements().iter().any(|e| e.role == "option")); }
         }
