@@ -1,0 +1,1 @@
+- Renderer diagnostics no longer count blur passes when a cached layer reuses its finished texture. Rendering is unchanged.

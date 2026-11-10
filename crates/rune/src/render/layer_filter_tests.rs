@@ -49,6 +49,23 @@ fn gaussian_pixels_support_offscreen_saturation_and_pooling() {
 }
 
 #[test]
+fn cached_blur_only_counts_passes_when_it_draws_the_layer() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        el().size(20.0, 16.0).fill(Color::WHITE).blur(2.0).cache()
+    }
+    let gpu = Gpu::headless();
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let mut rt = Runtime::new((), view, (32.0, 32.0), Env::new(true, 1.0));
+    let target = Offscreen::new(&gpu.device, 32, 32);
+    for expected in [3, 0] {
+        rt.frame(1.0 / 60.0);
+        renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (32, 32));
+        let _ = pixels(&gpu, &renderer, &target);
+        assert_eq!(renderer.layer_stats().extra_passes, expected);
+    }
+}
+
+#[test]
 fn blur_live_springs_curves_and_zero_bypass() {
     fn view(value: &Live<f32>, _: &mut Cx<Live<f32>>) -> El {
         el().size(20.0, 16.0).fill(Color::WHITE).live_blur(value)
