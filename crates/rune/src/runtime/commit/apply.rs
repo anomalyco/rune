@@ -189,12 +189,10 @@ impl<S: 'static> Runtime<S> {
             let resized = existed && (stack.window != self.viewport || held.get(c).copied().unwrap_or(false));
             stack.window = self.viewport;
             if first || !existed || tx.settle || self.reduced_motion || (reading && !revealing_moving) {
-                stack.width_hold_until = 0.0;
-                stack.width_shrink_until = 0.0;
+                stack.width_hold = WidthHold::Off;
                 stack.pending_heights.clear();
             } else if (width - stack.width).abs() > 0.25 {
-                stack.width_hold_until = now + 0.12;
-                stack.width_shrink_until = now + 0.4;
+                stack.width_hold = WidthHold::rewrap(now);
             }
             stack.width = width;
             stack.pending_heights.retain(|id, _| new_set.contains(id));
@@ -241,8 +239,8 @@ impl<S: 'static> Runtime<S> {
                 } else {
                     // Only a width/scale rewrap may shrink an active streaming row, including
                     // when fresh text arrives in the same frame as the resize.
-                    let t = if streaming && !self.relayout && now >= stack.width_shrink_until { h.max(g.h.min(g.target)) } else { h };
-                    if now < stack.width_hold_until {
+                    let t = if streaming && !self.relayout && stack.width_hold.may_shrink(now) { h.max(g.h.min(g.target)) } else { h };
+                    if stack.width_hold.defers(now) {
                         stack.pending_heights.insert(id, t);
                     } else {
                         stack.pending_heights.remove(&id);
