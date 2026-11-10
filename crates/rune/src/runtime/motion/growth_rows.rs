@@ -13,6 +13,7 @@ impl<S: 'static> Runtime<S> {
         self.row_mask.clear();
         self.row_mask.resize(n_nodes, -1.0);
         self.row_lifts.clear();
+        let mut emptied = Vec::new();
         for (cid, stack) in &self.stacks {
             let Some(&ci) = self.node_index.get(cid) else { continue };
             let Some(spec) = self.nodes[ci].growth.as_deref().copied() else { continue };
@@ -32,10 +33,16 @@ impl<S: 'static> Runtime<S> {
                     let withheld = if g.streaming { (self.nodes[ri].local.h - g.target).max(0.0) } else { 0.0 };
                     let rewrap = stack.pending_heights.contains_key(id) && self.nodes[ri].local.h > g.h + 0.01;
                     let overflows = spec.edge.overflow && (g.streaming || g.paced);
-                    if spec.edge.clip && !overflows && (g.h < g.target - 0.01 || g.mask > 0.01 || withheld > 0.01 || rewrap || g.shutting_fold()) {
+                    // A fold that landed shut keeps what it folded away where it drew, lifted
+                    // and clipped, until that has left: let go as it lands, the contents would
+                    // drop back to their layout for the frames their exit has left.
+                    let landed = g.shut && !g.moving();
+                    let folded = landed && self.holds_exiting(ri);
+                    if landed && !folded { emptied.push(*id); }
+                    if spec.edge.clip && !overflows && (g.h < g.target - 0.01 || g.mask > 0.01 || withheld > 0.01 || rewrap || g.shutting_fold() || folded) {
                         self.row_mask[ri] = g.mask.max(withheld.min(spec.edge.floor)).max(if rewrap { spec.edge.floor } else { 0.0 });
                     }
-                    let lift = g.lift();
+                    let lift = if landed && !folded { 0.0 } else { g.lift() };
                     if lift > 0.0 {
                         self.row_lifts.push((ri, lift));
                     }
@@ -47,6 +54,9 @@ impl<S: 'static> Runtime<S> {
             for (id, dy) in stack.slides.shifts() {
                 if let Some(&i) = self.node_index.get(&id) { self.row_dy[i] += dy; }
             }
+        }
+        for id in emptied {
+            if let Some(g) = self.grows.get_mut(&id) { g.shut = false; g.slide = None; }
         }
         // A fold's lifted contents (`GrowTrack::hide_above`) draw that far up inside it, all but
         // the header it shuts under.
@@ -63,5 +73,18 @@ impl<S: 'static> Runtime<S> {
             let lifted: Vec<NodeId> = self.row_lifts.iter().map(|&(ri, _)| self.nodes[ri].id).collect();
             self.fold_headers.retain(|id, _| lifted.contains(id));
         }
+    }
+
+    /// Something inside row `ri` is leaving. Leaving nodes follow the ones that stay, so they
+    /// needn't sit in one run after it.
+    fn holds_exiting(&self, ri: usize) -> bool {
+        let inside = |mut i: usize| loop {
+            match self.nodes[i].parent {
+                Some(p) if p == ri => return true,
+                Some(p) if p > ri => i = p,
+                _ => return false,
+            }
+        };
+        (ri + 1..self.nodes.len()).any(|i| inside(i) && self.is_exiting(self.nodes[i].id))
     }
 }

@@ -189,6 +189,9 @@ pub struct GrowTrack {
     pub(crate) rate: f32,
     /// Seconds a paced climb has gone on since its stream ended.
     pub(crate) ended: f32,
+    /// A glide last retargeted shut: landed, it still lifts and clips what it folded away until
+    /// that has gone (`Runtime::place_growth_rows`).
+    pub(crate) shut: bool,
 }
 
 /// A row within this many points of its height, moving slower than `SETTLE_V` points a second,
@@ -199,7 +202,7 @@ const SETTLE_V: f32 = 1.5;
 
 impl GrowTrack {
     pub fn settled(h: f32) -> GrowTrack {
-        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, glide: None, feather: None, limit: f32::INFINITY, stage: None, slide: None, restore: 0.0, give: None, paced: false, rate: 0.0, ended: 0.0 }
+        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, glide: None, feather: None, limit: f32::INFINITY, stage: None, slide: None, restore: 0.0, give: None, paced: false, rate: 0.0, ended: 0.0, shut: false }
     }
 
     pub fn moving(&self) -> bool {
@@ -230,6 +233,7 @@ impl GrowTrack {
             self.span = (target - self.h).abs();
             self.stage = None;
             self.give = None;
+            self.shut = self.glide.is_some() && target < self.h;
             if self.glide.is_some() {
                 // Only what shows of a long fold moves: shutting, the part below the window goes
                 // first; opening, it lands once the spring has carried the row to the window's edge.
@@ -295,6 +299,7 @@ impl GrowTrack {
             // A glide's stop at the window's edge goes with it: the row it hands over to carries
             // on from where it is, rather than landing the rest at once.
             self.stage = None;
+            self.shut = false;
         }
         self.glide = glide.map(|g| g.0.spring);
         self.feather = glide.and_then(|g| g.0.feather);
@@ -388,7 +393,8 @@ impl GrowTrack {
         }
         self.rate *= (-dt / pace::WINDOW).exp();
         if !self.moving() {
-            self.slide = None;
+            // A glide that shut keeps its contents lifted until what it folded away has left.
+            if !self.shut { self.slide = None; }
             if !self.streaming {
                 self.paced = false;
                 self.rate = 0.0;
@@ -568,6 +574,21 @@ mod tests {
             assert!(!t.moving(), "{from} -> {to} settles within 0.5 s: {hs:?}");
             assert!(hs.windows(2).all(|w| (w[1].1 - w[0].1) * (to - from) >= -1e-3), "monotone: {hs:?}");
             assert!(hs.iter().all(|&(_, h)| h >= from.min(to) - 1e-3 && h <= from.max(to) + 1e-3), "no overshoot");
+        }
+    }
+
+    #[test]
+    fn a_fold_lands_rather_than_creeping_its_last_sixteenth() {
+        // The spring's tail under a sixteenth of a point moves in steps the pixel snap holds and
+        // lets go, which reads as the row stopping and setting off again.
+        for (from, to) in [(640.0, 40.0), (40.0, 640.0), (3040.0, 40.0), (41.0, 40.0), (40.0, 60.0)] {
+            let mut t = GrowTrack { whole: true, ..GrowTrack::settled(from) };
+            t.set_kind(false, true, Some((FoldGlide { spring: FOLD, feather: None }, 900.0)));
+            t.retarget(to);
+            let hs: Vec<f32> = (0..60).map(|_| { t.step(GROWTH, &edge::FEATHER, false); t.step(GROWTH, &edge::FEATHER, false); t.h }).collect();
+            let creeping = hs.iter().filter(|&&h| h != to && (h - to).abs() < SETTLE).count();
+            assert!(creeping <= 2, "{from} -> {to}: {creeping} frames within a sixteenth of a point: {hs:?}");
+            assert!(!t.moving() && t.h == to);
         }
     }
 
