@@ -26,6 +26,9 @@ mod rounded_clip_tests;
 #[cfg(test)]
 #[path = "continuous_corner_tests.rs"]
 mod continuous_corner_tests;
+#[cfg(test)]
+#[path = "layer_show_tests.rs"]
+mod show_tests;
 
 pub(super) struct Layers {
     plan: Vec<Layer>,
@@ -73,8 +76,11 @@ struct Layer {
     begin: u32,
     end: u32,
     parent: Option<usize>,
-    bounds: [f32; 4], // edges while planning, xywh after preparation
-    /// The part of `bounds` that can show (edges), which a cache that doesn't fit falls back to.
+    /// The edges of what it draws, `[x0, y0, x1, y1]`, while planning.
+    edges: [f32; 4],
+    /// Its target's place in the window, `[x, y, width, height]`, once planned.
+    rect: [f32; 4],
+    /// The part of `edges` that can show, which a cache that doesn't fit falls back to.
     vis: [f32; 4],
     clip: [f32; 4],
     limit: [f32; 4], // ancestor output needed by their filters; never a replacement rounded clip
@@ -83,8 +89,9 @@ struct Layer {
     blend: Blend,
     blur: f32,
     support: f32,
+    /// The node and signature `El::cache` asked to keep it under.
     cache: Option<(u64, u64)>,
-    needs_render: bool,
+    show: Show,
     /// `Instance::turned`: the composite turns `angle` radians about `pivot`.
     turn: Option<(f32, [f32; 2])>,
     /// Turned, or inside a turned layer: the window, clips and filter limits above don't line
@@ -95,6 +102,21 @@ struct Layer {
     /// The round hole its composite cuts (`El::cutout_circle`): centre, then the radii it's clear
     /// within and whole from, in window device pixels; zeros for none.
     hole: [f32; 4],
+}
+
+/// How a layer draws this frame. Only `Render` and `Cached` layers have a target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Show {
+    /// Nothing to draw: transparent, empty, or inside a transparent layer.
+    Hidden,
+    /// Inside a cache that composites from its texture, so not drawn on its own.
+    Covered,
+    /// Drawn straight into its parent's pass.
+    Inline,
+    /// Drawn into its own target, then composited.
+    Render,
+    /// Composited from the texture its cache kept, without drawing into it.
+    Cached,
 }
 
 /// The upright bounds of edges `r` turned `angle` radians clockwise about `p`.
@@ -190,7 +212,7 @@ impl Renderer {
             if let Some(blur) = &t.blur {
                 stats.extra_passes += blur.passes();
             }
-            if self.layers.plan.get(index).is_none_or(|l| l.needs_render) {
+            if self.layers.plan.get(index).is_none_or(|l| l.show == Show::Render) {
                 stats.extra_passes += 1;
             }
         }
@@ -220,7 +242,14 @@ impl Renderer {
                         self.layers.retained.iter().any(|t| t.cache_node == Some(n) && t.cache_sig == s)
                     })
                 });
-                let hidden = parent.is_some_and(|p| self.layers.plan[p].opacity == 0.0) || parent_cached_hit;
+                let opacity = i.fill[3].clamp(0.0, 1.0);
+                let show = match parent.map(|p| self.layers.plan[p].show) {
+                    _ if opacity == 0.0 => Show::Hidden,
+                    Some(Show::Hidden) => Show::Hidden,
+                    Some(Show::Covered) => Show::Covered,
+                    _ if parent_cached_hit => Show::Covered,
+                    _ => Show::Inline,
+                };
                 // Bound storage by the ancestor's required input, including filter support.
                 // Keep the actual clip separate so rounded corners never move.
                 let limit = parent.map_or(NO_CLIP, |p| {
@@ -252,17 +281,18 @@ impl Renderer {
                 self.layers.stack.push(self.layers.plan.len());
                 self.layers.plan.push(Layer {
                     begin: index as u32, end: 0, parent,
-                    bounds: [i.rect[0], i.rect[1], i.rect[0] + i.rect[2], i.rect[1] + i.rect[3]],
+                    edges: [i.rect[0], i.rect[1], i.rect[0] + i.rect[2], i.rect[1] + i.rect[3]],
+                    rect: [0.0; 4],
                     vis: [0.0; 4],
                     clip: i.clip,
                     limit,
                     fade: i.fade,
-                    opacity: if hidden { 0.0 } else { i.fill[3].clamp(0.0, 1.0) },
+                    opacity,
                     blend: if i.params[0] == 1.0 { Blend::PlusLighter } else { Blend::SourceOver },
                     blur,
                     support: parent.map_or(0.0, |p| self.layers.plan[p].support) + (3.0 * blur).ceil(),
                     cache,
-                    needs_render: true,
+                    show,
                     turn,
                     free,
                     frame,
@@ -276,31 +306,31 @@ impl Renderer {
                 let grow = (3.0 * l.blur).ceil();
                 // Retain off-viewport sources that can contribute through this or an ancestor's
                 // filter. Clipping to the destination viewport before filtering loses those taps.
+                let e = l.edges;
                 let vis = if l.free {
-                    [(l.bounds[0] - grow).max(l.frame[0] - grow).floor(), (l.bounds[1] - grow).max(l.frame[1] - grow).floor(),
-                        (l.bounds[2] + grow).min(l.frame[2] + grow).ceil(), (l.bounds[3] + grow).min(l.frame[3] + grow).ceil()]
+                    [(e[0] - grow).max(l.frame[0] - grow).floor(), (e[1] - grow).max(l.frame[1] - grow).floor(),
+                        (e[2] + grow).min(l.frame[2] + grow).ceil(), (e[3] + grow).min(l.frame[3] + grow).ceil()]
                 } else {
-                    [(l.bounds[0] - grow).max(l.clip[0].max(l.limit[0]) - grow).max(-l.support).floor(),
-                        (l.bounds[1] - grow).max(l.clip[1].max(l.limit[1]) - grow).max(-l.support).floor(),
-                        (l.bounds[2] + grow).min(l.clip[2].min(l.limit[2]) + grow).min(viewport.0 as f32 + l.support).ceil(),
-                        (l.bounds[3] + grow).min(l.clip[3].min(l.limit[3]) + grow).min(viewport.1 as f32 + l.support).ceil()]
+                    [(e[0] - grow).max(l.clip[0].max(l.limit[0]) - grow).max(-l.support).floor(),
+                        (e[1] - grow).max(l.clip[1].max(l.limit[1]) - grow).max(-l.support).floor(),
+                        (e[2] + grow).min(l.clip[2].min(l.limit[2]) + grow).min(viewport.0 as f32 + l.support).ceil(),
+                        (e[3] + grow).min(l.clip[3].min(l.limit[3]) + grow).min(viewport.1 as f32 + l.support).ceil()]
                 };
                 l.vis = vis;
                 if l.cache.is_some() {
                     if vis[2] <= vis[0] || vis[3] <= vis[1] {
-                        l.opacity = 0.0;
+                        l.show = Show::Hidden;
                     }
-                    l.bounds = [l.bounds[0].floor(), l.bounds[1].floor(),
-                        l.bounds[2].ceil(), l.bounds[3].ceil()];
+                    l.edges = [e[0].floor(), e[1].floor(), e[2].ceil(), e[3].ceil()];
                 } else {
-                    l.bounds = vis;
+                    l.edges = vis;
                 }
-                let bounds = match l.turn {
-                    Some((angle, pivot)) if l.bounds[2] > l.bounds[0] && l.bounds[3] > l.bounds[1] => turned_bounds(l.bounds, angle, pivot),
-                    _ => l.bounds,
+                let edges = match l.turn {
+                    Some((angle, pivot)) if l.edges[2] > l.edges[0] && l.edges[3] > l.edges[1] => turned_bounds(l.edges, angle, pivot),
+                    _ => l.edges,
                 };
                 if let Some(parent) = l.parent.filter(|&p| self.layers.plan[p].cache.is_none()) {
-                    union(&mut self.layers.plan[parent].bounds, bounds);
+                    union(&mut self.layers.plan[parent].edges, edges);
                 }
             } else if let Some(&at) = self.layers.stack.last() {
                 if self.layers.plan[at].cache.is_some() { continue; }
@@ -318,7 +348,7 @@ impl Renderer {
                     KIND_RECT | KIND_GRADIENT | KIND_DASHED | KIND_RADIAL => 1.0 + i.params[2] * 2.0,
                     _ => 1.0,
                 };
-                union(&mut self.layers.plan[at].bounds, [
+                union(&mut self.layers.plan[at].edges, [
                     (rect[0] - grow).max(i.clip[0]), (rect[1] - grow).max(i.clip[1]),
                     (rect[0] + rect[2] + grow).min(i.clip[2]),
                     (rect[1] + rect[3] + grow).min(i.clip[3]),
@@ -339,11 +369,11 @@ impl Renderer {
         // First claim resident cache hits so existing on-screen caches never thrash under a tight budget.
         for index in 0..self.layers.plan.len() {
             let l = &mut self.layers.plan[index];
-            l.bounds[2] = (l.bounds[2] - l.bounds[0]).max(0.0);
-            l.bounds[3] = (l.bounds[3] - l.bounds[1]).max(0.0);
-            if l.bounds[2] == 0.0 || l.bounds[3] == 0.0 { l.opacity = 0.0; }
-            if !isolate { continue; }
-            let Some((node_id, sig)) = l.cache.filter(|_| l.opacity > 0.0) else { continue };
+            let e = l.edges;
+            l.rect = [e[0], e[1], (e[2] - e[0]).max(0.0), (e[3] - e[1]).max(0.0)];
+            if l.rect[2] == 0.0 || l.rect[3] == 0.0 { l.show = Show::Hidden; }
+            if !isolate || l.show != Show::Inline { continue; }
+            let Some((node_id, sig)) = l.cache else { continue };
             let Some(pos) = self.layers.retained.iter().position(|t| t.cache_node == Some(node_id) && t.cache_sig == sig) else { continue };
             let t_bytes = Self::target_bytes(&self.layers.retained[pos]);
             let over_budget = active_cache_bytes + t_bytes > self.layers.cache_budget;
@@ -355,27 +385,46 @@ impl Renderer {
                 t.last_used = stamp;
                 active_cache_bytes += t_bytes;
             }
-            l.needs_render = false;
-            let mut quad = Instance::begin_layer(l.bounds, l.clip, LayerSpec {
+            l.show = Show::Cached;
+            let mut quad = Instance::begin_layer(l.rect, l.clip, LayerSpec {
                 opacity: l.opacity, blend: l.blend, ..Default::default() });
             quad.fade = l.fade;
-            if (t.content_size[0] - l.bounds[2]).abs() > 0.5 || (t.content_size[1] - l.bounds[3]).abs() > 0.5 {
+            if (t.content_size[0] - l.rect[2]).abs() > 0.5 || (t.content_size[1] - l.rect[3]).abs() > 0.5 {
                 quad.uv = [0.0, 0.0, t.content_size[0], t.content_size[1]];
             }
             staging.write_buffer(&t.quad, 0, bytemuck::bytes_of(&quad));
             self.layers.targets[index] = Some(t);
         }
+        // Settle what the planning walk couldn't know at a layer's start: one inside a layer that
+        // turned out hidden draws nothing, and one inside a cache that didn't composite from its
+        // texture (over budget, or layers can't isolate) draws after all.
+        for index in 0..self.layers.plan.len() {
+            let parent = self.layers.plan[index].parent.map(|p| self.layers.plan[p].show);
+            let l = &mut self.layers.plan[index];
+            l.show = match (l.show, parent) {
+                // A claimed cache keeps its target, which goes back to the pool next frame.
+                (Show::Cached, _) => Show::Cached,
+                (_, Some(Show::Hidden)) => Show::Hidden,
+                (Show::Covered, Some(Show::Covered | Show::Cached)) => Show::Covered,
+                (Show::Covered, _) => Show::Inline,
+                (show, _) => show,
+            };
+        }
 
         for index in 0..self.layers.plan.len() {
-            if !self.layers.plan[index].needs_render { continue; }
+            match self.layers.plan[index].show {
+                Show::Inline => {}
+                Show::Cached | Show::Render => continue,
+                Show::Hidden | Show::Covered => { self.layers.targets[index] = None; continue; }
+            }
             let additive_parent = self.layers.plan[index].parent.is_some_and(|p| self.layers.plan[p].blend == Blend::PlusLighter);
             let l = &mut self.layers.plan[index];
             // Without isolation (`breaker`), every group draws straight into its parent.
-            if l.opacity == 0.0 || !isolate {
+            if !isolate {
                 self.layers.targets[index] = None;
                 continue;
             }
-            let mut bounds = l.bounds;
+            let mut bounds = l.rect;
             let (mut width, mut height) = (bounds[2] as u32, bounds[3] as u32);
             let mut bucket = (width.div_ceil(64) * 64, height.div_ceil(64) * 64);
             let mut cache_target = None;
@@ -398,11 +447,10 @@ impl Renderer {
                     if let Some(pos) = self.layers.retained.iter().position(|t| t.cache_node == Some(node_id)) {
                         self.layers.retained.swap_remove(pos);
                     }
-                    l.cache = None;
                     // Drawn like an uncached group, it only needs the part that shows.
                     let v = l.vis;
                     bounds = [v[0], v[1], (v[2] - v[0]).max(0.0), (v[3] - v[1]).max(0.0)];
-                    l.bounds = bounds;
+                    l.rect = bounds;
                     (width, height) = (bounds[2] as u32, bounds[3] as u32);
                     bucket = (width.div_ceil(64) * 64, height.div_ceil(64) * 64);
                 }
@@ -413,6 +461,7 @@ impl Renderer {
                 self.layers.targets[index] = None;
                 continue;
             }
+            self.layers.plan[index].show = Show::Render;
             if self.layers.targets[index].as_ref().is_none_or(|t| {
                 let size = (t.texture.width(), t.texture.height());
                 // The minimum bucket is unavoidable for tiny controls. Do not recreate that
@@ -494,6 +543,8 @@ impl Renderer {
         if self.layers.plan.iter().any(|l| l.blend == Blend::PlusLighter) && let Some(s) = &mut self.surfaces {
             s.add_plus_lighter(device, FORMAT);
         }
+        debug_assert!(self.layers.plan.iter().zip(&self.layers.targets)
+            .all(|(l, t)| t.is_some() == matches!(l.show, Show::Render | Show::Cached)), "only Render and Cached layers hold a target");
         self.refresh_layer_bindings(device);
         if had_layers || !self.layers.plan.is_empty() { self.position_layer_surfaces(queue); }
     }
@@ -502,7 +553,8 @@ impl Renderer {
     /// without the ones the device refused or hasn't taken yet: a dissolve as source-over, a blur
     /// unblurred. Whether layers can isolate; when they can't, each group draws in its parent.
     fn check_layer_features(&mut self, device: &wgpu::Device) -> bool {
-        let shown = || self.layers.plan.iter().enumerate().filter(|(_, l)| l.opacity > 0.0);
+        // A layer a cache covers counts: the cache can still miss and draw it this frame.
+        let shown = || self.layers.plan.iter().enumerate().filter(|(_, l)| l.show != Show::Hidden);
         let isolation = shown().any(|(index, _)| self.isolates(index));
         let plus_lighter = shown().any(|(_, l)| l.blend == Blend::PlusLighter);
         let blur = shown().any(|(_, l)| l.blur > 0.0);
@@ -597,7 +649,7 @@ impl Renderer {
             let layer = self.layers.plan.iter().rposition(|l| before > l.begin && before <= l.end);
             let bounds = self.layer_target(layer).map_or(
                 [0.0, 0.0, self.layers.viewport.0 as f32, self.layers.viewport.1 as f32],
-                |p| self.layers.plan[p].bounds);
+                |p| self.layers.plan[p].rect);
             // prepare_surfaces may precede prepare on the first frame.
             if bounds[2] > 0.0 && bounds[3] > 0.0 { s.target(queue, index, bounds); }
         }
@@ -632,7 +684,7 @@ impl Renderer {
     pub(super) fn target_frame(&self, target: Option<usize>) -> ([f32; 2], [u32; 2]) {
         match target {
             Some(index) => {
-                let b = self.layers.plan[index].bounds;
+                let b = self.layers.plan[index].rect;
                 ([b[0], b[1]], [b[2] as u32, b[3] as u32])
             }
             None => ([0.0, 0.0], [self.layers.viewport.0, self.layers.viewport.1]),
@@ -643,7 +695,7 @@ impl Renderer {
         self.flush_uploads(encoder);
         let mut first = true;
         for (index, l) in self.layers.plan.iter().enumerate().rev() {
-            if !l.needs_render { continue; }
+            if l.show != Show::Render { continue; }
             let Some(target) = &self.layers.targets[index] else { continue };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("isolated group"),
@@ -658,7 +710,7 @@ impl Renderer {
                 occlusion_query_set: None, multiview_mask: None,
             }).forget_lifetime();
             first = false;
-            pass.set_viewport(0.0, 0.0, l.bounds[2], l.bounds[3], 0.0, 1.0);
+            pass.set_viewport(0.0, 0.0, l.rect[2], l.rect[3], 0.0, 1.0);
             let mut active = ActivePass::owned(pass, encoder, &target.view);
             self.draw_layer_range(&mut active, FORMAT, l.begin + 1..l.end, Some(index), hook);
             drop(active);
@@ -674,7 +726,7 @@ impl Renderer {
             if l.begin < cursor || l.begin >= range.end { continue; }
             assert!(l.end < range.end, "draw_range must not split a layer scope");
             self.draw_plain(pass, format, cursor..l.begin, target, true, hook);
-            if let Some(t) = &self.layers.targets[index] {
+            if let (Show::Render | Show::Cached, Some(t)) = (l.show, &self.layers.targets[index]) {
                 let pipeline = if self.layer_blend(target) == Blend::PlusLighter {
                     &self.layers.additive.as_ref().expect("prepared dissolve").1
                 } else { &self.layers.pipelines.iter().find(|(f, _)| *f == format).expect("Renderer::add_format first").1 };
@@ -683,9 +735,9 @@ impl Renderer {
                 pass.set_bind_group(0, &t.composite, &[]);
                 pass.set_vertex_buffer(0, t.quad.slice(..));
                 pass.draw(0..4, 0..1);
-            } else if l.opacity > 0.0 {
-                // Drawn in its parent: an opaque group that needs no target, or any group
-                // while layers can't isolate (`breaker`).
+            } else if l.show == Show::Inline {
+                // An opaque group that needs no target, or any group while layers can't isolate
+                // (`breaker`).
                 if l.clip != NO_CLIP {
                     let (origin, size) = self.target_frame(target);
                     let edge = |v: f32, o: f32, max: u32| (v - o).clamp(0.0, max as f32) as u32;

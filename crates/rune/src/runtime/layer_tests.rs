@@ -89,7 +89,7 @@ fn isolated_layers_match_scalar_overlap_crossfade_and_nesting() {
     for i in &mut instances[..3] { i.clip = [8.0, 5.0, 24.0, 11.0]; }
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &instances, (32, 16));
     assert_eq!(renderer.layer_stats().bytes, 64 * 64 * 8, "clip uses the minimum bucket");
-    assert_eq!(renderer.layers.plan[0].bounds, [8.0, 5.0, 16.0, 6.0]);
+    assert_eq!(renderer.layers.plan[0].rect, [8.0, 5.0, 16.0, 6.0]);
     let out = pixels(&gpu, &renderer, &target);
     near(&out[(8 * 32 + 6) * 4..(8 * 32 + 7) * 4], [0; 4]);
     near(&out[(8 * 32 + 16) * 4..(8 * 32 + 17) * 4], rgba([0.5; 4]));
@@ -265,7 +265,7 @@ fn scale_and_fade_reuse_bucket_for_sixty_growing_frames() {
     rt.frame(0.0);
     renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (256, 256));
     let allocations = renderer.layer_stats().allocations;
-    let first_bounds = renderer.layers.plan[0].bounds;
+    let first_bounds = renderer.layers.plan[0].rect;
     assert_eq!(allocations, 1);
     for frame in 1..=60 {
         let t = frame as f32 / 60.0;
@@ -277,7 +277,7 @@ fn scale_and_fade_reuse_bucket_for_sixty_growing_frames() {
         near(&out[(90 * 256 + 90) * 4..(90 * 256 + 91) * 4], rgba([0.1 + 0.8 * t; 4]));
         assert_eq!(renderer.layer_stats().allocations, allocations, "frame {frame}");
     }
-    assert!(renderer.layers.plan[0].bounds[2] > first_bounds[2]);
+    assert!(renderer.layers.plan[0].rect[2] > first_bounds[2]);
     // A genuine shrink drops an oversized allocation, then the tiny minimum bucket stays put.
     for size in [20.0, 19.0, 20.0] {
         let content = group([4.0, 4.0, size, size], 0.5, [1.0; 4]);
