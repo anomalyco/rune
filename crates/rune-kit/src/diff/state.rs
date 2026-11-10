@@ -139,6 +139,14 @@ struct Chunk {
 
 const CHUNK: u32 = 128;
 
+/// A press on the line numbers, holding the selection before it (a cancel puts it back) and
+/// whether its release clears the selection (it pressed the one selected line, and no drag).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum LinePress {
+    Idle,
+    Held { before: Option<LineRange>, unselect: bool },
+}
+
 /// A diff and everything about how it is shown: the app keeps one in its state and
 /// [`DiffView`](super::DiffView) draws it.
 pub struct DiffState {
@@ -149,10 +157,7 @@ pub struct DiffState {
     annotations: Vec<Annotation>,
     by_line: HashMap<(u32, Side, u32), Vec<u32>>,
     selection: Option<LineRange>,
-    selecting: bool,
-    selection_at_press: Option<LineRange>,
-    /// The press was on the one selected line: it clears the selection unless it drags.
-    unselect: bool,
+    press: LinePress,
     shift: bool,
     /// The side text selection copies, which follows the pointer.
     copy_side: Side,
@@ -205,9 +210,7 @@ impl DiffState {
             annotations: Vec::new(),
             by_line: HashMap::new(),
             selection: None,
-            selecting: false,
-            selection_at_press: None,
-            unselect: false,
+            press: LinePress::Idle,
             shift: false,
             copy_side: Side::New,
             hovered: Vec::new(),
@@ -234,7 +237,7 @@ impl DiffState {
         s
     }
 
-    /// Show `files` instead, every range collapsed again and the selection cleared.
+    /// Show `files` instead, every range collapsed again and the selection (and a press on it) cleared.
     /// Annotations stay; drop or remap them with [`DiffState::set_annotations`].
     pub fn set_files(&mut self, files: Vec<FileDiff>) {
         self.ui = files.iter().map(|f| FileUi { collapsed: false, revealed: vec![(0, 0); f.hunks.len() + 1] }).collect();
@@ -255,6 +258,7 @@ impl DiffState {
         self.columns = files.iter().map(FileDiff::columns).max().unwrap_or(0);
         self.files = files;
         self.selection = None;
+        self.press = LinePress::Idle;
         self.chunks.borrow_mut().clear();
         self.visible = 0;
         self.reported = None;
@@ -434,40 +438,36 @@ impl DiffState {
     /// A press on line `at`'s number: a new selection, or with Shift held one extended to it.
     /// Pressing the one selected line clears it on release, unless the press drags.
     pub(crate) fn press_line(&mut self, file: usize, at: LineRef) {
-        self.selection_at_press = self.selection;
         let sel = match self.selection {
             Some(s) if self.shift && s.file == file => LineRange { end: at, ..s },
             _ => LineRange::line(file, at),
         };
-        self.unselect = !self.shift && self.selection == Some(sel);
-        self.selecting = true;
+        let unselect = !self.shift && self.selection == Some(sel);
+        self.press = LinePress::Held { before: self.selection, unselect };
         self.set_selection(Some(sel));
     }
 
     /// The pointer, dragging from a line number, reached line `at`.
     pub(crate) fn drag_to(&mut self, file: usize, at: LineRef) {
-        if let Some(s) = self.selection.filter(|s| self.selecting && s.file == file && s.end != at) {
-            self.unselect = false;
+        let LinePress::Held { unselect, .. } = &mut self.press else { return };
+        if let Some(s) = self.selection.filter(|s| s.file == file && s.end != at) {
+            *unselect = false;
             self.set_selection(Some(LineRange { end: at, ..s }));
         }
     }
 
     /// The press on the line numbers ended: the selection it leaves.
     pub(crate) fn release_line(&mut self) -> Option<LineRange> {
-        self.selection_at_press = None;
-        if std::mem::take(&mut self.unselect) {
+        if let LinePress::Held { unselect: true, .. } = std::mem::replace(&mut self.press, LinePress::Idle) {
             self.selection = None;
         }
-        self.selecting = false;
         self.selection
     }
 
     pub(crate) fn cancel_line(&mut self) {
-        if self.selecting {
-            self.selection = self.selection_at_press.take();
+        if let LinePress::Held { before, .. } = std::mem::replace(&mut self.press, LinePress::Idle) {
+            self.selection = before;
         }
-        self.selecting = false;
-        self.unselect = false;
     }
 
     pub(crate) fn copy_side(&self) -> Side {
@@ -979,8 +979,20 @@ mod tests {
             s.drag_to(0, LineRef::new(Side::New, 3));
             s.cancel_line();
             assert_eq!(s.selection(), original);
-            assert!(!s.selecting && !s.unselect);
+            assert_eq!(s.press, LinePress::Idle);
         }
+    }
+
+    #[test]
+    fn new_files_end_a_gutter_press_so_its_cancel_restores_nothing_from_the_old_ones() {
+        let mut s = sample();
+        s.set_selection(Some(LineRange::line(0, LineRef::new(Side::Old, 2))));
+        s.press_line(0, LineRef::new(Side::New, 1));
+        s.set_files(vec![FileDiff::from_texts("y", "a\n", "b\n")]);
+        s.cancel_line();
+        assert_eq!(s.selection(), None, "the old files' range doesn't come back");
+        s.drag_to(0, LineRef::new(Side::New, 1));
+        assert_eq!(s.selection(), None, "nor does a drag the new files never saw pressed");
     }
 
     #[test]
