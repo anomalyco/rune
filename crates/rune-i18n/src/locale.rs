@@ -1,6 +1,6 @@
 //! Matching preferred languages to supported locales.
 
-use icu_locale::{LocaleExpander, LanguageIdentifier, subtags::Language};
+use icu_locale::{LanguageIdentifier, Locale, LocaleExpander, subtags::Language};
 
 /// The first supported locale that one of `preferred` (BCP 47 tags, most wanted first) names, by
 /// language and likely script: `de-AT` picks `de`, `zh-TW` picks `zh-Hant` over `zh-Hans`, `pa-PK`
@@ -9,7 +9,7 @@ use icu_locale::{LocaleExpander, LanguageIdentifier, subtags::Language};
 pub fn negotiate<'a>(preferred: impl IntoIterator<Item = &'a str>, supported: &[&str]) -> Option<usize> {
     let expander = LocaleExpander::new_extended();
     let maximize = |tag: &str| {
-        let mut id = LanguageIdentifier::try_from_str(&tag.replace('_', "-")).ok()?;
+        let mut id = Locale::try_from_str(&tag.replace('_', "-")).ok()?.id;
         expander.maximize(&mut id);
         Some(id)
     };

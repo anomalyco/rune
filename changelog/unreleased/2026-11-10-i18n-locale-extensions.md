@@ -1,0 +1,1 @@
+- `rune-i18n` now matches language tags that include formatting preferences, so `zh-TW-u-nu-hanidec` selects a Traditional Chinese catalog just as `zh-TW` does.
