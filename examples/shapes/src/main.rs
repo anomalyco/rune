@@ -2,7 +2,7 @@
 //! polygon. `cargo run -p shapes -- --snap shapes.png` renders it headless; time animates the
 //! waveform, so `--at 1.5` shows another moment.
 
-use rune::{AppSpec, Color, Cx, El, LineCap, Path, Shape, Tx, canvas, col, row, text};
+use rune::{AppSpec, Color, Cx, El, LineCap, Path, Shape, Tx, canvas, col, memo, row, text};
 
 struct State {
     t: f32,
@@ -152,7 +152,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                     col()
                         .gap(8.0)
                         .child(label("Paths, a concave fill, line widths"))
-                        .child(canvas(curves()).key("curves").size(490.0, 96.0)),
+                        .child(memo("curves", (), || canvas(curves()).size(490.0, 96.0))),
                 ),
         )
 }
