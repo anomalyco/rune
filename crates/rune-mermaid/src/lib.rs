@@ -243,6 +243,7 @@ pub fn render_streamed(src: &str, style: &DiagramStyle, hover: Hover, color: Col
 
 /// A diagram's title and drawing without its card, for a viewer that frames and scales it
 /// itself (a lightbox whose frame stays the card's size while the drawing grows).
+#[non_exhaustive]
 pub struct Drawing {
     pub el: El,
     /// The points `el` takes.

@@ -38,8 +38,9 @@ pub fn drawing(src: &str, style: &MarkdownStyle, max_width: f32) -> Option<Drawi
     let paint = &style.diagram;
     let mut full = self::style(paint);
     full.max_width = max_width;
-    let d = rune_mermaid::render_drawing(src, &full, hover(paint), paint.hover)?;
-    Some(Drawing { el: d.el.role("figure").label(kind(src)).description(src.trim()), ..d })
+    let mut d = rune_mermaid::render_drawing(src, &full, hover(paint), paint.hover)?;
+    d.el = std::mem::replace(&mut d.el, rune::el()).role("figure").label(kind(src)).description(src.trim());
+    Some(d)
 }
 
 fn hover(paint: &DiagramPaint) -> Hover {
