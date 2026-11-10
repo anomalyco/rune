@@ -83,8 +83,8 @@ fn default_faces_keep_batch_c_pixels() {
             }
         }
         system.atlas.data.hash(&mut hash);
-        // Re-baselined for `FontSmoothing::On` (CoreGraphics pipeline) once Calibrated was removed.
-        let expected = if scale == 1.0 { 17045220814369067823 } else { 10933675232581112092 };
+        // At 2× the inline Plex span fits the Inter line box rather than growing the line.
+        let expected = if scale == 1.0 { 17045220814369067823 } else { 13062214990305271866 };
         assert_eq!(hash.finish(), expected, "sans/mono pixels changed at {scale}×");
     }
 }
