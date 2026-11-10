@@ -19,15 +19,8 @@ pub(crate) enum FileEvent {
 
 #[derive(Default)]
 pub(crate) struct FileDrag {
-    /// A drag is over the window (set when the step is queued, before it runs).
-    active: bool,
-    /// The files the drag carries, for `drag_files_to`.
-    paths: Vec<PathBuf>,
-    /// The target of the last hover queued or run, so a move that keeps it queues nothing.
-    aimed: Option<Aim>,
-    /// Where the drag is now, in window points, and whether a `FileEvent::Move` waits to run.
-    at: Option<(f32, f32)>,
-    move_queued: bool,
+    /// The drag over the window (set when its step is queued, before it runs).
+    over: Option<Over>,
     /// The drop target notified with `on_drop_hover(true)` (or, rejecting the drag,
     /// `on_drop_rejected_hover(true)`), and that callback, which still hears `false` after the
     /// element unmounts or starts to exit.
@@ -39,6 +32,18 @@ pub(crate) struct FileDrag {
     /// queue already waited one.
     held: Vec<Queued>,
     waited: bool,
+}
+
+/// A file drag over the window.
+struct Over {
+    /// The files it carries, for `drag_files_to`.
+    paths: Vec<PathBuf>,
+    /// Where it is now, in window points, when the platform says.
+    at: Option<(f32, f32)>,
+    /// The target of the last hover queued or run, so a move that keeps it queues nothing.
+    aimed: Option<Aim>,
+    /// A `FileEvent::Move` waits to run.
+    move_queued: bool,
 }
 
 /// A drop target's path, and whether it takes any of the dragged files (else it stops the drag
@@ -58,12 +63,9 @@ impl<S: 'static> Runtime<S> {
     /// [`El::on_drop_files`] under it that accepts the files hears `on_drop_hover(true)` next
     /// frame.
     pub fn drag_files(&mut self, paths: Vec<PathBuf>, at: Option<(f32, f32)>) {
-        self.file_drag.active = true;
-        self.file_drag.at = at;
         // A move a lost frame never ran mustn't keep this drag's moves from queueing.
-        self.file_drag.move_queued = false;
-        self.file_drag.aimed = self.drop_aim(&paths, at);
-        self.file_drag.paths.clone_from(&paths);
+        let aimed = self.drop_aim(&paths, at);
+        self.file_drag.over = Some(Over { paths: paths.clone(), at, aimed, move_queued: false });
         self.queue.push(Action::Files(FileEvent::Hover(paths, at)));
     }
 
@@ -73,27 +75,27 @@ impl<S: 'static> Runtime<S> {
     /// redraw only when something listens. Sampling while still also notices a target that
     /// unmounted.
     pub fn drag_files_to(&mut self, at: Option<(f32, f32)>) -> bool {
-        if !self.file_drag.active { return false; }
-        let moved = std::mem::replace(&mut self.file_drag.at, at) != at;
-        let target = self.drop_aim(&self.file_drag.paths, at);
-        if target == self.file_drag.aimed {
-            let follows = target.as_ref().is_some_and(|aim| self.drop_move_fn(aim).is_some());
-            if !moved || !follows || std::mem::replace(&mut self.file_drag.move_queued, true) { return false; }
+        let Some(over) = &self.file_drag.over else { return false };
+        let moved = over.at != at;
+        let target = self.drop_aim(&over.paths, at);
+        let same = target == over.aimed;
+        let follows = same && target.as_ref().is_some_and(|aim| self.drop_move_fn(aim).is_some());
+        let Some(over) = &mut self.file_drag.over else { return false };
+        over.at = at;
+        if same {
+            if !moved || !follows || std::mem::replace(&mut over.move_queued, true) { return false; }
             self.queue.push(Action::Files(FileEvent::Move));
             return true;
         }
-        self.file_drag.aimed = target;
-        let paths = self.file_drag.paths.clone();
+        over.aimed = target;
+        let paths = over.paths.clone();
         self.queue.push(Action::Files(FileEvent::Hover(paths, at)));
         true
     }
 
     /// The file drag left the window, was cancelled, or the window hid.
     pub fn drag_files_leave(&mut self) {
-        if !std::mem::take(&mut self.file_drag.active) { return; }
-        self.file_drag.paths.clear();
-        self.file_drag.aimed = None;
-        self.file_drag.at = None;
+        if self.file_drag.over.take().is_none() { return; }
         self.queue.push(Action::Files(FileEvent::Leave));
     }
 
@@ -103,16 +105,13 @@ impl<S: 'static> Runtime<S> {
     /// target with one that takes none of them gets them all there. A drop nothing takes is
     /// ignored.
     pub fn drop_files(&mut self, paths: Vec<PathBuf>, at: Option<(f32, f32)>) {
-        self.file_drag.active = false;
-        self.file_drag.paths.clear();
-        self.file_drag.aimed = None;
-        self.file_drag.at = None;
+        self.file_drag.over = None;
         self.queue.push(Action::Files(FileEvent::Drop(paths, at)));
     }
 
     /// A file drag is over the window. Hosts whose platform reports no drag positions sample
     /// the pointer while this holds.
-    pub fn dragging_files(&self) -> bool { self.file_drag.active }
+    pub fn dragging_files(&self) -> bool { self.file_drag.over.is_some() }
 
     /// The key (else path) of the element showing the drop hover, for tests and tools.
     pub fn drop_hovered(&self) -> Option<String> { self.hover_key(true) }
@@ -124,7 +123,7 @@ impl<S: 'static> Runtime<S> {
     /// Drops the drag's target and the hover callback it would hear `false` on, unheard: their
     /// elements went with the state they were built for.
     pub(super) fn forget_drop_targets(&mut self) {
-        self.file_drag.aimed = None;
+        if let Some(over) = &mut self.file_drag.over { over.aimed = None; }
         self.file_drag.hovered = None;
     }
 
@@ -227,7 +226,7 @@ impl<S: 'static> Runtime<S> {
     /// follows the drag where it is.
     fn hover_files(&mut self, paths: &[PathBuf], at: Option<(f32, f32)>, tx: &mut Tx) -> bool {
         let target = self.drop_aim(paths, at);
-        if self.file_drag.active { self.file_drag.aimed.clone_from(&target); }
+        if let Some(over) = &mut self.file_drag.over { over.aimed.clone_from(&target); }
         let mut ran = self.set_drop_hover(target.clone(), at, tx);
         if let Some(aim) = target && let Some(f) = self.drop_move_fn(&aim) && let Some(p) = self.drop_point(&aim.0, at) {
             self.trace_event(format_args!("drop-move:{}", aim.0));
@@ -268,10 +267,10 @@ impl<S: 'static> Runtime<S> {
         match event {
             FileEvent::Hover(paths, at) => self.hover_files(&paths, at, tx),
             FileEvent::Move => {
-                self.file_drag.move_queued = false;
-                if !self.file_drag.active { return false; }
-                let paths = self.file_drag.paths.clone();
-                self.hover_files(&paths, self.file_drag.at, tx)
+                let Some(over) = &mut self.file_drag.over else { return false };
+                over.move_queued = false;
+                let (paths, at) = (over.paths.clone(), over.at);
+                self.hover_files(&paths, at, tx)
             }
             FileEvent::Leave => self.set_drop_hover(None, None, tx),
             FileEvent::Drop(paths, at) => {
