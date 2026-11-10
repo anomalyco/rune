@@ -469,22 +469,12 @@ fn pane<S: 'static>(state: PaneState, access: fn(&mut S) -> &mut PaneState, cont
         e.on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| {
             let p = access(s);
             match d.phase {
-                Phase::Down => {
-                    d.data = if p.is_open() { p.width() } else { -p.width() };
-                    p.set_resizing(true);
-                }
+                Phase::Down => p.press_grip(d.window_point()),
                 Phase::Move => {
                     tx.instant();
-                    p.set_resizing(true);
-                    p.drag_to(d.data.abs() + sign * d.dx);
+                    p.drag_grip(d.window_point(), sign * d.dx);
                 }
-                Phase::Up => {
-                    if d.cancelled() {
-                        p.set_width(d.data.abs());
-                        p.set_open(d.data > 0.0);
-                    }
-                    p.set_resizing(false);
-                }
+                Phase::Up => p.release_grip(d.cancelled()),
             }
         })
         .on_double_press(move |s: &mut S| access(s).reset_width())
@@ -495,19 +485,17 @@ fn pane<S: 'static>(state: PaneState, access: fn(&mut S) -> &mut PaneState, cont
     });
     let toggle: Option<Apply> =
         toggle.then(|| Box::new(move |e: El| e.on_press(move |s: &mut S| access(s).toggle())) as Apply);
-    // If a drag's release is lost (window blur, pointer cancel), clear `resizing` on blur or the
-    // next uncaptured pointer move. During a live drag, `Action::Drag(Phase::Move)` runs right
-    // after `Action::PointerMove` in the same frame and keeps `resizing` set. Blur also ends a
-    // peek.
+    // A drag whose release is lost (the grip unmounted, a modal took the pointer) ends on blur
+    // or once the pointer moves where the drag doesn't hear it. Blur also ends a peek.
     let clear = (state.is_resizing() || state.is_peeking()).then(|| {
         Box::new(move |e: El| {
             e.on_window_focus(move |s: &mut S, focused, _| {
                 if !focused {
-                    access(s).set_resizing(false);
+                    access(s).lose_grip();
                     access(s).end_peek();
                 }
             })
-            .on_pointer_move(move |s: &mut S, _| access(s).set_resizing(false))
+            .on_pointer_move(move |s: &mut S, p| access(s).pointer_grip([p.x, p.y]))
         }) as Apply
     });
     let hover = (sign > 0.0).then(|| {
