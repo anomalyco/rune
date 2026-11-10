@@ -42,6 +42,7 @@ mod layout;
 pub(crate) mod layout_watch;
 mod live_colors;
 pub mod motion;
+mod paragraphs;
 mod pills;
 mod pixel_snap;
 mod rare;
@@ -95,6 +96,7 @@ pub fn text(content: impl Into<String>) -> El {
         wrap_anywhere: false,
         exact_lines: true,
         flow: None,
+        plaintext: false,
         shape: None,
     }));
     e
