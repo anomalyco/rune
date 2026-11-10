@@ -415,9 +415,9 @@ fn table_font_and_padding_set_the_cells_and_the_first_column_sits_flush() {
     assert_eq!(by_key(&rt, "th").rect[3], 20.0 + 2.0 * 4.0, "the table font's line and the cell padding");
     assert_eq!(by_key(&rt, "r0").rect[3], 28.0);
     // Columns hold their text on one line: the first is its text plus the right padding only.
-    let name = rune::text::measure("Name", &[], rune::TextStyle { size: 15.0 * 0.93, line_height: 20.0, weight: 670.0, features: "'tnum' 1", ..Kit::neutral(true).ty.body }, None).0;
-    let alpha = rune::text::measure("alpha", &[], rune::TextStyle { size: 15.0 * 0.93, line_height: 20.0, features: "'tnum' 1", ..Kit::neutral(true).ty.body }, None).0;
-    assert_eq!(cells[0].rect[2], name.max(alpha) + 10.0);
+    let name = rune::text::content_widths("Name", &[], rune::TextStyle { size: 15.0 * 0.93, line_height: 20.0, weight: 670.0, features: "'tnum' 1", ..Kit::neutral(true).ty.body }).1;
+    let alpha = rune::text::content_widths("alpha", &[], rune::TextStyle { size: 15.0 * 0.93, line_height: 20.0, features: "'tnum' 1", ..Kit::neutral(true).ty.body }).1;
+    assert!((cells[0].rect[2] - (name.max(alpha) + 10.0)).abs() < 0.02);
 }
 
 #[test]
