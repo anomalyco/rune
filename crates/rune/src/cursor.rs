@@ -25,6 +25,11 @@ pub enum Cursor {
     ResizeRow,
     /// A precise-selection cross (CSS `crosshair`), for picking a point or dragging out a rect.
     Crosshair,
+    /// The system's magnifier with a plus (CSS `zoom-in`), at the size of every other system
+    /// cursor: over a picture that opens larger.
+    ZoomIn,
+    /// The magnifier with a minus (CSS `zoom-out`).
+    ZoomOut,
     /// No OS cursor (CSS `none`), for views that draw their own. It shows again as soon as the
     /// pointer leaves the element or the window, the element goes away, or the host loses the
     /// pointer: a window losing focus, an overlay hiding.

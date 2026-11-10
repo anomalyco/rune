@@ -915,3 +915,27 @@ fn link_ring_frames_chosen_links_merges_inner_runs_and_stays_on_hover() {
     assert_eq!(hovered.len(), 1);
     assert_eq!((hovered[0].rect, hovered[0].params[0], hovered[0].border), (ringed[0].rect, 1.0, want_ring));
 }
+
+#[test]
+fn an_image_shows_the_system_zoom_in_cursor() {
+    fn shown(src: &String, _: &mut Cx<String>) -> El {
+        thread_local! {
+            static PICTURE: rune::Image = {
+                let cache = rune::ImageCache::new(std::sync::Arc::new(|| {}));
+                let image = cache.rgba(64, 32, [40u8, 80, 120, 255].repeat(64 * 32));
+                image.wait().unwrap();
+                image
+            };
+        }
+        let picture = PICTURE.with(|p| p.clone());
+        let md = Markdown::new(src.clone()).images(move |_| Some(picture.clone())).image_frame(|e, _| e.on_press(|_: &mut String| {}));
+        col().w_full().child(md.build(&Kit::neutral(true)))
+    }
+    let mut rt = Runtime::new("![A chart](chart.png)\n".to_owned(), shown, (480.0, 400.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let image = rt.elements().into_iter().find(|e| e.role == "image").expect("the image");
+    let [x, y, w, h] = image.rect;
+    rt.pointer_move(x + w / 2.0, y + h / 2.0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.cursor(), rune::Cursor::ZoomIn, "the system's own magnifier, at a system cursor's size");
+}

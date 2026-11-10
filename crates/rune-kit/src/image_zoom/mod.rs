@@ -75,7 +75,9 @@ impl ImageZoom {
     pub fn dragging(&self) -> bool { gesture::dragging(&self.state) }
 
     /// Steps a glide to the frame clock `now`. True while one runs (the view must run again);
-    /// it asks `tx` for the next frame until it lands.
+    /// it asks `tx` for the next frame until it lands. The image lands each frame on its own
+    /// (`El::instant_changes`), so `tx` stays animated: an app that closes the preview in the
+    /// same frame still flies or fades it out.
     pub fn poll(&mut self, now: f64, tx: &mut Tx) -> bool {
         let State::Gliding { gesture, last } = self.state else { return false };
         let moving = self.glide.step(now - last);
@@ -86,7 +88,6 @@ impl ImageZoom {
             let zoomed = self.zoomed();
             self.run(Event::GlideSettled { zoomed }, tx);
         }
-        tx.instant();
         true
     }
 
@@ -270,7 +271,8 @@ impl<S: 'static> Preview<S> {
         let lens = self.lens;
         let bar = self.bar(zoom, k);
         let scale = zoom.view().scale;
-        let image = self.image.absolute(x, y).size(w, h).radius(k.radius.md * scale);
+        // A glide's frames, a pinch and a pan move it to exactly where the view says.
+        let image = self.image.absolute(x, y).size(w, h).radius(k.radius.md * scale).instant_changes();
         let close = self.close.clone();
         let mut body_el = el()
             .key("image-preview-body")
@@ -356,7 +358,8 @@ impl<S: 'static> Preview<S> {
             .on_press_tx(move |s: &mut S, tx: &mut Tx| lens(s).fit(tx))
             .build(k)
             .key("image-preview-zoom-level")
-            .min_w(52.0);
+            // Three tabular digits, so the bar holds still as the level passes 100%.
+            .min_w(58.0);
         bar.child(IconButton::new(glyphs[0]).variant(IconButtonVariant::Ghost).label(out)
                 .on_press_tx(move |s: &mut S, tx: &mut Tx| lens(s).zoom_out(tx)).build(k).key("image-preview-zoom-out"))
             .child(level)

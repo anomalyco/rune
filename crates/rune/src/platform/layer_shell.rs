@@ -278,6 +278,8 @@ fn shape(c: crate::el::Cursor) -> Shape {
         Cursor::ResizeColumn => Shape::ColResize,
         Cursor::ResizeRow => Shape::RowResize,
         Cursor::Crosshair => Shape::Crosshair,
+        Cursor::ZoomIn => Shape::ZoomIn,
+        Cursor::ZoomOut => Shape::ZoomOut,
     }
 }
 impl Dispatch<WlSurface, ()> for State {

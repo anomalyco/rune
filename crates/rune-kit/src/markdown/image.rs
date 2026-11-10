@@ -2,7 +2,7 @@
 //! width, rounded 4, 24 above and below; until the app has the picture (or when it never will),
 //! Chromium's broken-image glyph and the alt text.
 
-use rune::{CursorImage, Image, Pixels};
+use rune::{Image, Pixels};
 
 use super::*;
 
@@ -21,10 +21,6 @@ pub struct ImageFrame<'a> {
     /// The picture it shows.
     pub image: &'a Image,
 }
-
-/// A magnifier with a plus, for `markdown.css`'s `img { cursor: zoom-in }`, which no desktop
-/// cursor set has; the hot spot is the lens's centre.
-const ZOOM_IN: CursorImage = CursorImage::png(include_bytes!("zoom-in-cursor.png"), [11.5, 11.5]);
 
 /// Chromium's 16 point broken-image glyph, as straight-alpha RGBA.
 const BROKEN: &[u8; 1024] = include_bytes!("broken-image.rgba");
@@ -61,7 +57,7 @@ impl Renderer {
         let shown = self.images.as_ref().and_then(|f| f(src)).filter(|i| i.is_ready() && i.error().is_none()).and_then(|i| Some((i.size()?, i)));
         let Some(([w, _], picture)) = shown else { return self.broken(alt) };
         // Its own size in points, as a browser draws an image's pixels at 1x, up to the text's width.
-        let mut e = el().role("image").label(if alt.is_empty() { "Image preview" } else { alt }).w_full().max_w(w as f32).pixels(picture.pixels()).radius(4.0).cursor(Cursor::Image(ZOOM_IN));
+        let mut e = el().role("image").label(if alt.is_empty() { "Image preview" } else { alt }).w_full().max_w(w as f32).pixels(picture.pixels()).radius(4.0).cursor(Cursor::ZoomIn);
         if !title.is_empty() {
             e = e.help(title);
         }
@@ -79,6 +75,6 @@ impl Renderer {
         }
         let glyph = BROKEN_PIXELS.with(|p| el().size(16.0, 16.0).pixels(p).a11y_hidden());
         let ink = self.flow.get().ink.unwrap_or(self.s.text);
-        row().role("image").label(alt).w_full().cursor(Cursor::Image(ZOOM_IN)).child(glyph).child(self.with_reveal(text(alt.to_owned()).font(self.s.body).color(ink)).shrink())
+        row().role("image").label(alt).w_full().cursor(Cursor::ZoomIn).child(glyph).child(self.with_reveal(text(alt.to_owned()).font(self.s.body).color(ink)).shrink())
     }
 }

@@ -181,6 +181,8 @@ fn icon(c: Cursor) -> CursorIcon {
         Cursor::ResizeColumn => CursorIcon::ColResize,
         Cursor::ResizeRow => CursorIcon::RowResize,
         Cursor::Crosshair => CursorIcon::Crosshair,
+        Cursor::ZoomIn => CursorIcon::ZoomIn,
+        Cursor::ZoomOut => CursorIcon::ZoomOut,
     }
 }
 
