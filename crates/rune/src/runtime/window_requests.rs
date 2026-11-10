@@ -5,22 +5,61 @@ use super::*;
 /// The window's title: `AppSpec`'s until a handler sets another, and whether the window has
 /// yet to show the last one set.
 #[derive(Debug, Default)]
-pub(crate) struct Title { now: Option<String>, changed: bool }
+pub(crate) enum Title {
+    /// No title yet: the window hasn't taken `AppSpec`'s.
+    #[default]
+    Unset,
+    /// The title the window shows.
+    Shown(String),
+    /// A title set since the window last showed one.
+    Pending(String),
+}
+
+/// What moves the title on.
+#[derive(Debug)]
+pub(super) enum TitleEvent {
+    /// The window opens with `AppSpec`'s title.
+    Start(String),
+    /// A handler set `title`.
+    Set(String),
+    /// The window showed the title it was given.
+    Shown,
+}
 
 impl Title {
     /// The title the window opens with, before any handler sets one.
     pub(crate) fn start(&mut self, title: &str) {
-        if self.now.is_none() { self.now = Some(title.to_owned()); }
+        *self = std::mem::take(self).step(TitleEvent::Start(title.to_owned())).0;
     }
+
     pub(super) fn set(&mut self, title: String) {
-        if self.now.as_deref() == Some(title.as_str()) { return; }
-        self.now = Some(title);
-        self.changed = true;
+        *self = std::mem::take(self).step(TitleEvent::Set(title)).0;
     }
-    pub(crate) fn current(&self) -> Option<&str> { self.now.as_deref() }
+
+    pub(crate) fn current(&self) -> Option<&str> {
+        match self {
+            Title::Unset => None,
+            Title::Shown(title) | Title::Pending(title) => Some(title),
+        }
+    }
+
     /// A title set since the window last took one, for the window to show.
     pub(crate) fn take_change(&mut self) -> Option<&str> {
-        if std::mem::take(&mut self.changed) { self.now.as_deref() } else { None }
+        let (title, showed) = std::mem::take(self).step(TitleEvent::Shown);
+        *self = title;
+        showed.then(|| self.current()).flatten()
+    }
+
+    /// The title after `event`, and whether the window shows something new.
+    fn step(self, event: TitleEvent) -> (Title, bool) {
+        match (self, event) {
+            (Title::Unset, TitleEvent::Start(title)) => (Title::Shown(title), false),
+            (title, TitleEvent::Start(_)) => (title, false),
+            (title, TitleEvent::Set(next)) if title.current() == Some(next.as_str()) => (title, false),
+            (_, TitleEvent::Set(title)) => (Title::Pending(title), false),
+            (Title::Pending(title), TitleEvent::Shown) => (Title::Shown(title), true),
+            (title, TitleEvent::Shown) => (title, false),
+        }
     }
 }
 
