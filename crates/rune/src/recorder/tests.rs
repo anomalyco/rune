@@ -264,8 +264,8 @@ fn cancelling_a_pending_start_keeps_an_earlier_file() {
     // A device start waiting on a permission answer: Starting, with no input open.
     {
         let mut c = rec.shared.ctl.lock().unwrap();
-        c.attempt += 1;
-        c.set(RecorderState::Starting);
+        let attempt = c.seq.next();
+        c.phase = Phase::Asking { attempt };
     }
     rec.cancel();
     assert_eq!(rec.state(), RecorderState::Idle);
@@ -335,12 +335,41 @@ fn levels_pack_into_one_word() {
 fn a_stale_failure_leaves_the_current_session() {
     let rec = Recorder::to_file(std::env::temp_dir().join("rune-recorder-stale.m4a"));
     let (session, _commands) = macos::idle_session();
-    *rec.shared.native.lock().unwrap() = Some((2, session));
-    rec.shared.ctl.lock().unwrap().attempt = 2;
-    rec.shared.failed(1, "late".into());
-    assert!(rec.shared.native.lock().unwrap().is_some());
-    rec.shared.failed(2, "now".into());
-    assert!(rec.shared.native.lock().unwrap().is_none());
+    let (stale, attempt) = {
+        let mut c = rec.shared.ctl.lock().unwrap();
+        let (stale, attempt) = (c.seq.next(), c.seq.next());
+        c.phase = Phase::Opening { attempt, session };
+        (stale, attempt)
+    };
+    rec.shared.failed(stale, "late".into());
+    assert!(matches!(rec.shared.ctl.lock().unwrap().phase, Phase::Opening { .. }));
+    rec.shared.failed(attempt, "now".into());
+    assert!(matches!(rec.shared.ctl.lock().unwrap().phase, Phase::Failed(_)));
+}
+
+/// A second `stop` (or a `cancel`) while the device finishes its file changes nothing: the
+/// first `stop` gets the file. It used to mark the recorder `Failed("not recording")`.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_second_stop_while_the_device_finishes_changes_nothing() {
+    let rec = Recorder::to_file(std::env::temp_dir().join("rune-recorder-second-stop.m4a"));
+    let (session, commands) = macos::idle_session();
+    {
+        let mut c = rec.shared.ctl.lock().unwrap();
+        let attempt = c.seq.next();
+        c.phase = Phase::Recording { attempt, source: Source::Device(session), anchor: None };
+    }
+    let first = std::thread::spawn({
+        let rec = rec.clone();
+        move || rec.stop()
+    });
+    let Ok(macos::Command::Stop(reply)) = commands.recv() else { panic!("the device was asked to stop") };
+    assert_eq!(rec.stop(), Err("not recording".into()));
+    rec.cancel();
+    assert_eq!(rec.state(), RecorderState::Recording, "still finishing the first stop's file");
+    reply.send(Ok(1.5)).unwrap();
+    assert_eq!(first.join().unwrap().map(|r| r.duration), Ok(1.5));
+    assert_eq!(rec.state(), RecorderState::Stopped);
 }
 
 /// Dropping the last handle on the recorder thread itself (the last handle went while it
