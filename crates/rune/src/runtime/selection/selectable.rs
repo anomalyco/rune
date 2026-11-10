@@ -83,8 +83,8 @@ pub(super) struct Held {
     pub(super) origin: (usize, usize),
     /// The held press is extending this selection.
     pub(super) dragging: bool,
-    /// The last press on selectable text: its path, time, point and click count.
-    pub(super) last: Option<(String, f64, f32, f32, u8)>,
+    /// The run of presses on selectable text.
+    pub(super) presses: press_run::PressRun,
     /// Shift is held (from the host's modifier events), so a press extends the selection.
     pub(super) shift: bool,
     pub(super) pick: super::select_all::Pick, // where Select All goes with no selection
@@ -619,19 +619,14 @@ impl<S: 'static> Runtime<S> {
         use virtual_selection::EndRef;
         let Some(i) = target.filter(|&i| self.is_selectable(i) && self.link_at(i, x, y).is_none()) else {
             self.clear_text_selection();
-            self.text_sel.last = None;
+            self.text_sel.presses.clear();
             return;
         };
         let Some(at) = self.text_index_at(i, x, y) else { return };
         let path = self.nodes[i].path.clone();
         let content = self.content_of(i).to_owned();
         let now = self.now_clock();
-        let clicks = match &self.text_sel.last {
-            Some((p, t, px, py, n)) if *p == path && now - t <= self.double_click_interval
-                && (x - px).abs() <= CLICK_SLOP && (y - py).abs() <= CLICK_SLOP => (n + 1).min(3),
-            _ => 1,
-        };
-        self.text_sel.last = Some((path.clone(), now, x, y, clicks));
+        let clicks = self.text_sel.presses.press(&path, now, (x, y), self.double_click_interval).min(3);
         let i_end = EndRef::Mounted(i);
         let holder = self.selection_holder_end().filter(|&h| h == i_end || self.end_same_group(h, i_end));
         match holder {
@@ -740,7 +735,7 @@ impl<S: 'static> Runtime<S> {
             let (a, b) = self.unit_in(i, at, Unit::Word);
             self.text_sel = Held { path: Some(path.to_owned()), content, anchor: a, focus: b, far: None,
                 anchor_end: None, focus_end: None, mounted_between: HashMap::default(), between: 0,
-                unit: Unit::Word, origin: (a, b), dragging: false, last: None, shift: self.text_sel.shift,
+                unit: Unit::Word, origin: (a, b), dragging: false, presses: Default::default(), shift: self.text_sel.shift,
                 pick: std::mem::take(&mut self.text_sel.pick) };
             self.seal_between();
         }

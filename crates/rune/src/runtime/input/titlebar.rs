@@ -8,8 +8,8 @@ use super::*;
 pub(super) struct Titlebar {
     /// What the press just delivered asks the shell to do.
     pub(super) action: Option<TitlebarAction>,
-    /// The last press that could start a double press: when (clock seconds) and where.
-    last_press: Option<(f64, f32, f32)>,
+    /// The last press that could start a double press.
+    presses: press_run::PressRun,
     /// Window points from the top that AppKit drags natively, over the content (0 elsewhere).
     native_band: f32,
     /// A secondary press began on a bare `.window_drag()` region of a custom titlebar.
@@ -59,14 +59,13 @@ impl Titlebar {
     }
 
     pub(super) fn clear(&mut self) {
-        self.last_press = None;
+        self.presses.clear();
     }
 
+    /// The press pairs with the last: a double press, after which the next starts a new pair.
     fn double(&mut self, now: f64, x: f32, y: f32, interval: f64) -> bool {
-        let double = self.last_press.is_some_and(|(t, px, py)| {
-            now - t <= interval && (x - px).abs() <= CLICK_SLOP && (y - py).abs() <= CLICK_SLOP
-        });
-        self.last_press = if double { None } else { Some((now, x, y)) };
+        let double = self.presses.press("", now, (x, y), interval) >= 2;
+        if double { self.presses.clear(); }
         double
     }
 }
