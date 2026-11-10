@@ -1,0 +1,1 @@
+- On macOS, changing the app menu's language labels only its Services submenu as Services, not its separators.
