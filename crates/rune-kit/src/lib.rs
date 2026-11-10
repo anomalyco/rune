@@ -27,6 +27,7 @@ pub mod diff;
 mod feedback;
 mod field;
 pub mod glyphs;
+mod grip;
 pub mod image_zoom;
 mod keybind;
 pub mod kit;

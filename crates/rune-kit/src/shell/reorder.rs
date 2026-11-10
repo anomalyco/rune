@@ -1,5 +1,7 @@
 //! Dragging a list's rows into a new order.
 
+use crate::grip::Grip;
+
 /// Points the pointer travels before a press on a row becomes a drag.
 const SLOP: f32 = 4.0;
 
@@ -7,11 +9,16 @@ const SLOP: f32 = 4.0;
 /// row's `SidebarRow::reorder`. Rows are taken to share one height.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Reorder {
-    from: Option<usize>,
-    to: usize,
-    dy: f32,
-    pitch: f32,
+    grip: Grip<Lift>,
     gap: f32,
+}
+
+/// A row held by a press: still a press inside the slop, then a drag that carries it from its
+/// place `from` to `to`, `dy` from where it was pressed, rows `pitch` apart.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Lift {
+    Pressed { index: usize },
+    Dragging { from: usize, to: usize, dy: f32, pitch: f32 },
 }
 
 impl Reorder {
@@ -25,45 +32,73 @@ impl Reorder {
     }
     /// The row being dragged, by its index before the drag.
     pub fn dragging(&self) -> Option<usize> {
-        self.from
+        match self.grip.get() {
+            Some(Lift::Dragging { from, .. }) => Some(*from),
+            _ => None,
+        }
     }
     /// Where the dragged row would land if dropped now.
     pub fn target(&self) -> Option<usize> {
-        self.from.map(|_| self.to)
+        match self.grip.get() {
+            Some(Lift::Dragging { to, .. }) => Some(*to),
+            _ => None,
+        }
+    }
+
+    /// Whether a press on a row holds the list (pressed or dragging).
+    pub(super) fn held(&self) -> bool {
+        self.grip.is_held()
+    }
+
+    /// The primary button went down on row `index`, at `at` in window points. A drag whose
+    /// release was lost ends here, moving nothing.
+    pub(super) fn press(&mut self, index: usize, at: [f32; 2]) {
+        self.grip.press(Lift::Pressed { index }, Some(at));
+    }
+
+    /// The row's own drag moved to `at` in window points, `dy` from the press on row `index`.
+    pub(super) fn drag(&mut self, index: usize, count: usize, at: [f32; 2], dy: f32, h: f32) {
+        self.grip.moved(at);
+        self.follow(index, count, dy, h);
+    }
+
+    /// The pointer moved to `at`, seen from any row. Returns whether that showed the drag's
+    /// release was lost, so the list let go of its row.
+    pub(super) fn pointer(&mut self, at: [f32; 2]) -> bool {
+        self.grip.pointer(at).is_some()
     }
 
     /// The pointer moved `dy` since the press on row `index`, which is `h` tall.
     pub(super) fn follow(&mut self, index: usize, count: usize, dy: f32, h: f32) {
-        if self.from.is_none() {
-            if dy.abs() < SLOP {
-                return;
-            }
-            self.from = Some(index);
-            self.pitch = (h + self.gap).max(1.0);
-        }
-        self.dy = dy;
-        let to = index as f32 + (dy / self.pitch).round();
-        self.to = to.clamp(0.0, count.saturating_sub(1) as f32) as usize;
+        let (from, pitch) = match self.grip.get() {
+            Some(&Lift::Dragging { from, pitch, .. }) => (from, pitch),
+            _ if dy.abs() < SLOP => return,
+            Some(&Lift::Pressed { index }) => (index, (h + self.gap).max(1.0)),
+            None => (index, (h + self.gap).max(1.0)),
+        };
+        let to = (from as f32 + (dy / pitch).round()).clamp(0.0, count.saturating_sub(1) as f32) as usize;
+        self.grip.hold(Lift::Dragging { from, to, dy, pitch });
     }
 
     /// The drag ended: `(from, to)` for a drop that moves a row, `None` for a cancel or a drop
     /// in place.
     pub(super) fn end(&mut self, cancelled: bool) -> Option<(usize, usize)> {
-        let from = self.from.take()?;
-        self.dy = 0.0;
-        (!cancelled && from != self.to).then_some((from, self.to))
+        match self.grip.release()? {
+            Lift::Dragging { from, to, .. } if !cancelled && from != to => Some((from, to)),
+            _ => None,
+        }
     }
 
     /// How far row `index` sits from its place: the dragged row with the pointer, and the rows
     /// between its place and its target a step toward the gap it left.
     pub(super) fn shift(&self, index: usize) -> f32 {
-        let Some(from) = self.from else { return 0.0 };
+        let Some(&Lift::Dragging { from, to, dy, pitch }) = self.grip.get() else { return 0.0 };
         if index == from {
-            self.dy
-        } else if from < index && index <= self.to {
-            -self.pitch
-        } else if self.to <= index && index < from {
-            self.pitch
+            dy
+        } else if from < index && index <= to {
+            -pitch
+        } else if to <= index && index < from {
+            pitch
         } else {
             0.0
         }
@@ -90,5 +125,29 @@ mod tests {
         assert_eq!(r.shift(0), 0.0);
         r.follow(2, 5, 60.0, 45.0);
         assert_eq!(r.end(true), None, "a cancel moves nothing");
+    }
+
+    #[test]
+    fn a_press_after_a_lost_release_drags_its_own_row() {
+        let mut r = Reorder::new();
+        r.press(1, [0.0, 0.0]);
+        r.drag(1, 5, [0.0, 100.0], 100.0, 45.0);
+        assert_eq!(r.dragging(), Some(1));
+        // Row 1's release never came. Row 3 is pressed and dragged down a row.
+        r.press(3, [0.0, 200.0]);
+        assert_eq!(r.dragging(), None, "the stale drag let go");
+        r.drag(3, 5, [0.0, 250.0], 50.0, 45.0);
+        assert_eq!(r.end(false), Some((3, 4)));
+    }
+
+    #[test]
+    fn moves_the_drag_never_hears_put_the_row_back() {
+        let mut r = Reorder::new();
+        r.press(1, [0.0, 0.0]);
+        r.drag(1, 5, [0.0, 100.0], 100.0, 45.0);
+        assert!(!r.pointer([0.0, 100.0]), "the drag heard it");
+        assert!(!r.pointer([0.0, 110.0]), "one it hasn't yet");
+        assert!(r.pointer([0.0, 120.0]), "a second: the release was lost");
+        assert_eq!((r.dragging(), r.shift(2), r.end(false)), (None, 0.0, None));
     }
 }
