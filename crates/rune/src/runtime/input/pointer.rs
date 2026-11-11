@@ -137,6 +137,12 @@ impl<S: 'static> Runtime<S> {
         true
     }
 
+    /// The button is up, so the held press can no longer start a drag-out; it stays a press.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn disarm_drag_out(&mut self) {
+        if let Some(held) = self.press.held_mut() { held.drag_out = None; }
+    }
+
     /// The held press crossed the drag threshold on a `drag_out` element: ask the host for an
     /// OS drag and hand it the pointer, so nothing stays pressed or hovered after the drop.
     /// False when the element offers nothing this time and the press stays a press.

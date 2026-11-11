@@ -184,3 +184,26 @@ fn losing_the_view_gives_up_where_the_pointer_was_and_hiding_stays_silent() {
     assert!(step(&mut hold, Event::Stopped).is_empty());
     assert_eq!(hold, Hold::default());
 }
+
+#[test]
+fn the_button_is_known_up_once_a_sample_or_the_monitor_says_so() {
+    let mut hold = Hold::default();
+    let now = Instant::now();
+    assert!(!hold.button_up());
+    step(&mut hold, DOWN);
+    assert!(!hold.button_up(), "the press itself is still on its way");
+    step(&mut hold, Event::Dispatched { down: true });
+    assert!(!hold.button_up(), "held");
+    step(&mut hold, UP);
+    assert!(hold.button_up(), "the monitor saw the Up");
+    step(&mut hold, Event::Dispatched { down: false });
+    step(&mut hold, Event::Released);
+    step(&mut hold, DOWN);
+    step(&mut hold, Event::Dispatched { down: true });
+    step(&mut hold, sample(false, now, (30.0, 30.0)));
+    assert!(hold.button_up(), "a sample read it rise");
+    step(&mut hold, sample(true, now, (30.0, 30.0)));
+    assert!(hold.button_up(), "rebounding: the held press's own Up is still missing");
+    step(&mut hold, DOWN);
+    assert!(!hold.button_up(), "a new press is on its way");
+}

@@ -112,12 +112,63 @@ fn overlay_cursor_move_for_the_next_press_cancels_the_old_drag_first() {
     overlay.native_left(&pointer, true);
     pointer.read(0, Instant::now(), (12.0, 10.0), true, false);
     pointer.record_click(true, 50.0, 10.0);
-    overlay.before_position(&pointer); // winit reports the click's position just before the click
-    overlay.cursor_moved(50.0, 10.0);
+    overlay.native_moved(&pointer, 50.0, 10.0); // winit reports the click's position just before the click
     overlay.native_left(&pointer, true);
     overlay.rt.frame(0.0);
     assert_eq!(overlay.rt.state.iter().filter(|d| d.0 == crate::Phase::Up).map(|d| d.1).collect::<Vec<_>>(), [true]);
     assert!(!overlay.rt.state.iter().any(|d| d.0 == crate::Phase::Move), "the old drag never hears the new press's point");
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct DragOutCount { starts: u32 }
+
+#[cfg(target_os = "macos")]
+fn drag_out_overlay() -> Overlay<DragOutCount> {
+    fn view(_: &DragOutCount, _: &mut Cx<DragOutCount>) -> El {
+        crate::el().w_full().h_full().hit()
+            .drag_out(|_: &DragOutCount| Some(crate::DragItem::new().file("/Applications/Example.app")))
+            .on_drag_start(|s: &mut DragOutCount, _| s.starts += 1)
+    }
+    let app = AppSpec {
+        title: "drag out", size: (200.0, 100.0), min_size: None, init: DragOutCount::default, view,
+        scenes: &[], fonts: &[], families: ("sans-serif", "monospace"), setup: None, poll: None, on_key: None,
+    };
+    let spec = OverlaySpec::new("drag out", app.size, view).options(OverlayOptions { input: OverlayInput::All, ..Default::default() });
+    let (mut overlay, _) = Overlay::new(spec, DragOutCount::default(), &app);
+    overlay.rt.frame(0.0);
+    overlay
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn overlay_release_past_the_drag_threshold_starts_no_os_drag() {
+    let mut overlay = drag_out_overlay();
+    let pointer = crate::platform::macos::PointerState::new(OverlayInput::All, false);
+    pointer.record_click(true, 10.0, 10.0);
+    overlay.native_moved(&pointer, 10.0, 10.0);
+    overlay.native_left(&pointer, true);
+    // A quick flick: no drag event reaches the view before the Up, whose position is far off.
+    pointer.record_click(false, 60.0, 10.0);
+    overlay.native_moved(&pointer, 60.0, 10.0);
+    overlay.native_left(&pointer, false);
+    pointer.released();
+    overlay.rt.frame(0.0);
+    assert_eq!(overlay.rt.state.starts, 0, "the button was up: no OS drag");
+    assert!(!overlay.rt.pointer_captured());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn overlay_drag_past_the_threshold_with_the_button_down_starts_an_os_drag() {
+    let mut overlay = drag_out_overlay();
+    let pointer = crate::platform::macos::PointerState::new(OverlayInput::All, false);
+    pointer.record_click(true, 10.0, 10.0);
+    overlay.native_moved(&pointer, 10.0, 10.0);
+    overlay.native_left(&pointer, true);
+    overlay.native_moved(&pointer, 60.0, 10.0);
+    overlay.rt.frame(0.0);
+    assert_eq!(overlay.rt.state.starts, 1);
 }
 
 #[test]

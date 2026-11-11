@@ -92,6 +92,8 @@ impl PointerState {
         true
     }
     pub(crate) fn released(&self) { self.step(Event::Released); }
+    /// Whether the button is known to be up for the press the runtime holds.
+    pub(crate) fn button_up(&self) -> bool { self.hold.borrow().button_up() }
     fn observe_release(&self, buttons: usize, now: Instant, at: (f32, f32)) {
         self.step(Event::Sampled { button_down: buttons & 1 != 0, now, at });
     }

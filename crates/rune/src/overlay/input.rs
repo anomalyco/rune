@@ -111,6 +111,16 @@ impl<T: 'static> Overlay<T> {
         self.release_lost(lost);
     }
 
+    /// winit reported a position on the panel. With the button known up, the held press can't
+    /// start an OS drag: the session needs the button held, and this is the Up's own position or
+    /// one from before it.
+    #[cfg(target_os = "macos")]
+    pub(super) fn native_moved(&mut self, pointer: &crate::platform::macos::PointerState, x: f32, y: f32) {
+        self.before_position(pointer);
+        if pointer.button_up() { self.rt.disarm_drag_out(); }
+        self.cursor_moved(x, y);
+    }
+
     /// winit dispatched a left press or release on the panel.
     #[cfg(target_os = "macos")]
     pub(super) fn native_left(&mut self, pointer: &crate::platform::macos::PointerState, pressed: bool) {

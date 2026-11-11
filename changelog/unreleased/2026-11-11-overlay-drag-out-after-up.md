@@ -1,0 +1,1 @@
+- A drag-out element on a macOS overlay released past its drag threshold, with no drag event before the release (a quick flick), no longer starts an OS drag with the button already up: the press ends normally. Drags that leave the overlay with the button held start their OS drag as before.

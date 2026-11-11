@@ -334,10 +334,7 @@ fn drive(overlay: &mut Overlay<u32>, pointer: &PointerState, letter: Letter, pla
         Letter::SeenDown => pointer.record_click(true, at.0, at.1),
         Letter::SeenUp => pointer.record_click(false, at.0, at.1),
         Letter::ReadUp | Letter::ReadDown | Letter::Grace => read(pointer),
-        Letter::CursorMoved => {
-            overlay.before_position(pointer);
-            overlay.cursor_moved(at.0, at.1);
-        }
+        Letter::CursorMoved => overlay.native_moved(pointer, at.0, at.1),
         Letter::MouseDown => overlay.native_left(pointer, true),
         Letter::MouseUp => {
             overlay.native_left(pointer, false);
