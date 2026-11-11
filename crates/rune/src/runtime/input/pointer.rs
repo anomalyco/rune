@@ -323,6 +323,24 @@ impl<S: 'static> Runtime<S> {
         }
     }
 
+    /// What input has queued for handlers, emptied: each drag event, `None` for a press.
+    #[cfg(test)]
+    pub(crate) fn take_queued_pointer(&mut self) -> Vec<Option<Drag>> {
+        let heard = self.queue.iter().filter_map(|action| match action {
+            Action::Drag(_, drag, _) => Some(Some(*drag)),
+            Action::Press(..) => Some(None),
+            _ => None,
+        }).collect();
+        self.queue.retain(|_| false);
+        heard
+    }
+
+    #[cfg(test)]
+    pub(crate) fn end_click_run(&mut self) {
+        self.press_clicks.clear();
+        self.press.take_first();
+    }
+
     pub(super) fn release_capture(&mut self, x: f32, y: f32) {
         // Hosts release at the last position they saw, which a leave doesn't move.
         let left = self.press.held().is_some_and(|h| h.left);

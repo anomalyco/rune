@@ -103,6 +103,23 @@ fn overlay_press_that_beats_a_lost_release_ends_the_old_drag_first() {
     assert!(!overlay.rt.state.iter().any(|d| d.0 == crate::Phase::Move), "the old drag never hears the new press's point");
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn overlay_cursor_move_for_the_next_press_cancels_the_old_drag_first() {
+    let mut overlay = lost_release_overlay();
+    let pointer = crate::platform::macos::PointerState::new(OverlayInput::All, false);
+    pointer.record_click(true, 10.0, 10.0);
+    overlay.native_left(&pointer, true);
+    pointer.read(0, Instant::now(), (12.0, 10.0), true, false);
+    pointer.record_click(true, 50.0, 10.0);
+    overlay.before_position(&pointer); // winit reports the click's position just before the click
+    overlay.cursor_moved(50.0, 10.0);
+    overlay.native_left(&pointer, true);
+    overlay.rt.frame(0.0);
+    assert_eq!(overlay.rt.state.iter().filter(|d| d.0 == crate::Phase::Up).map(|d| d.1).collect::<Vec<_>>(), [true]);
+    assert!(!overlay.rt.state.iter().any(|d| d.0 == crate::Phase::Move), "the old drag never hears the new press's point");
+}
+
 #[test]
 fn handle_requests_collapse_and_updates_keep_their_order() {
     let shared = Arc::new(Shared::<u32> { native: Mutex::default(), requests: Mutex::default(), availability: AtomicU8::new(0), failure: Mutex::default(), surface: Mutex::default(), wake: Mutex::new(None), stats: Arc::default() });

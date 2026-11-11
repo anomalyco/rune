@@ -110,8 +110,9 @@ impl<T: 'static> AnyHost for Overlay<T> {
             }
             WindowEvent::CursorMoved { position, .. } if self.options.input.resolved(self.interactive) != OverlayInput::None => {
                 let scale = self.live.as_ref().map_or(1.0, |l| l.scale);
-                self.dirty |= self.rt.observe_pointer(position.x as f32 / scale, position.y as f32 / scale);
-                self.begin_drag_out();
+                #[cfg(target_os = "macos")]
+                if let Some(pointer) = self.native_pointer() { self.before_position(&pointer); }
+                self.cursor_moved(position.x as f32 / scale, position.y as f32 / scale);
             }
             WindowEvent::CursorLeft { .. } if self.options.input.resolved(self.interactive) != OverlayInput::None => {
                 self.rt.pointer_leave();
@@ -143,8 +144,10 @@ impl<T: 'static> AnyHost for Overlay<T> {
             WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } => {
                 #[cfg(target_os = "macos")]
                 {
-                    let (lost, point) = self.panel.as_ref().map_or((None, None), |p| p.take_edge(state.is_pressed()));
-                    self.left_edge(lost, state.is_pressed(), point);
+                    match self.native_pointer() {
+                        Some(pointer) => self.native_left(&pointer, state.is_pressed()),
+                        None => self.left_edge(None, state.is_pressed(), None),
+                    }
                     if !state.is_pressed() && let Some(panel) = &self.panel { panel.pointer_released(); }
                 }
                 #[cfg(not(target_os = "macos"))]
@@ -189,9 +192,8 @@ impl<T: 'static> AnyHost for Overlay<T> {
         if self.live.is_some() && let Some(panel) = &self.panel {
             // Covered or asleep, the 120 Hz regions poll rests; input events still sample.
             panel.observe_pointer(Instant::now(), !self.presence.occluded());
-            let lost = panel.take_recovered_release();
-            self.release_lost(lost);
-            if let Some((x, y)) = self.panel.as_ref().and_then(|p| p.take_pointer()) && self.rt.pointer() != Some((x, y)) {
+            let pointer = panel.pointer_state();
+            if let Some((x, y)) = self.turn_position(&pointer) && self.rt.pointer() != Some((x, y)) {
                 self.observe_pointer(x, y);
                 if self.options.follow_pointer && self.options.display == DisplayTarget::UnderPointer {
                     let size = self.at.size;

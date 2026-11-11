@@ -1,7 +1,7 @@
 use super::*;
 
-const DOWN: Event = Event::Seen { down: true, at: (20.0, 20.0), over: true };
-const UP: Event = Event::Seen { down: false, at: (100.0, 100.0), over: true };
+const DOWN: Event = Event::Seen { down: true, at: (20.0, 20.0), over: true, last: None };
+const UP: Event = Event::Seen { down: false, at: (100.0, 100.0), over: true, last: None };
 
 fn sample(button_down: bool, now: Instant, at: Point) -> Event { Event::Sampled { button_down, now, at } }
 
@@ -97,6 +97,34 @@ fn a_rebounding_button_gives_up_where_it_first_rose_after_a_fresh_grace() {
     step(&mut hold, sample(false, later, (60.0, 60.0)));
     assert_eq!(hold.deadline(), Some(later + UNSEEN_UP_GRACE));
     assert_eq!(effects(&mut hold, sample(false, later + UNSEEN_UP_GRACE, (70.0, 70.0))), [Effect::ReleaseLost((50.0, 50.0))]);
+}
+
+#[test]
+fn acknowledging_an_older_up_keeps_the_queued_presss_release() {
+    let mut hold = Hold::default();
+    let now = Instant::now();
+    step(&mut hold, DOWN);
+    step(&mut hold, Event::Dispatched { down: true });
+    step(&mut hold, UP);
+    step(&mut hold, DOWN);
+    step(&mut hold, sample(false, now, (50.0, 50.0)));
+    step(&mut hold, Event::Dispatched { down: false });
+    step(&mut hold, Event::Released);
+    step(&mut hold, sample(false, now, (70.0, 70.0)));
+    step(&mut hold, Event::Dispatched { down: true });
+    assert_eq!(hold.deadline(), Some(now + UNSEEN_UP_GRACE), "the grace keeps running");
+    assert_eq!(effects(&mut hold, sample(false, now + UNSEEN_UP_GRACE, (80.0, 80.0))), [Effect::ReleaseLost((50.0, 50.0))]);
+}
+
+#[test]
+fn a_position_ends_the_press_before_the_front_click_without_taking_it() {
+    let mut hold = Hold::default();
+    step(&mut hold, DOWN);
+    step(&mut hold, Event::Seen { down: true, at: (30.0, 30.0), over: true, last: Some((15.0, 15.0)) });
+    assert!(step(&mut hold, Event::Positioning).is_empty(), "the front press is the first: nothing before it to end");
+    assert_eq!(effects(&mut hold, Event::Dispatched { down: true }), [Effect::Deliver((20.0, 20.0))]);
+    assert_eq!(effects(&mut hold, Event::Positioning), [Effect::ReleaseLost((15.0, 15.0))], "never the new press's point");
+    assert_eq!(effects(&mut hold, Event::Dispatched { down: true }), [Effect::Deliver((30.0, 30.0))], "landed once");
 }
 
 #[test]

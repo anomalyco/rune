@@ -38,7 +38,7 @@ fn a_click_through_overlay_that_follows_nothing_never_samples_the_pointer() {
     pointer.follow.set(true);
     assert!(pointer.wanted(), "following the pointer reads it");
     pointer.follow.set(false);
-    pointer.step(Event::Seen { down: true, at: (0.0, 0.0), over: true });
+    pointer.step(Event::Seen { down: true, at: (0.0, 0.0), over: true, last: None });
     assert!(pointer.wanted(), "a press it holds still needs its release");
     pointer.step(Event::Stopped);
     for input in [OverlayInput::Regions, OverlayInput::All] {

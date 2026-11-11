@@ -92,6 +92,39 @@ impl<T: 'static> Overlay<T> {
         self.dirty = true;
     }
 
+    /// winit reported the pointer at (x, y).
+    pub(super) fn cursor_moved(&mut self, x: f32, y: f32) {
+        self.dirty |= self.rt.observe_pointer(x, y);
+        self.begin_drag_out();
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn native_pointer(&self) -> Option<Rc<crate::platform::macos::PointerState>> {
+        self.panel.as_ref().map(|panel| panel.pointer_state())
+    }
+
+    /// A release lost before the click a position belongs to ends first, so the press that lost
+    /// it never hears that position.
+    #[cfg(target_os = "macos")]
+    pub(super) fn before_position(&mut self, pointer: &crate::platform::macos::PointerState) {
+        let lost = pointer.take_lost_before_position();
+        self.release_lost(lost);
+    }
+
+    /// winit dispatched a left press or release on the panel.
+    #[cfg(target_os = "macos")]
+    pub(super) fn native_left(&mut self, pointer: &crate::platform::macos::PointerState, pressed: bool) {
+        let (lost, point) = pointer.take_edge(pressed);
+        self.left_edge(lost, pressed, point);
+    }
+
+    /// A turn's pointer work once the panel has sampled: the position to report, if any.
+    #[cfg(target_os = "macos")]
+    pub(super) fn turn_position(&mut self, pointer: &crate::platform::macos::PointerState) -> Option<(f32, f32)> {
+        self.before_position(pointer);
+        pointer.take_position()
+    }
+
     /// Ends the runtime's press if the panel lost its release: the runtime hears no drop.
     #[cfg(target_os = "macos")]
     pub(super) fn release_lost(&mut self, lost: Option<(f32, f32)>) {

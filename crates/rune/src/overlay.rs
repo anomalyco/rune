@@ -680,6 +680,10 @@ mod surface;
 #[path = "overlay/tests.rs"]
 mod tests;
 
+#[cfg(all(test, target_os = "macos"))]
+#[path = "overlay/lost_release_tests.rs"]
+mod lost_release_tests;
+
 /// A Windows overlay's alpha (255 opaque) at `now`, fading out linearly over `length` until `end`.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn fade_alpha(end: Instant, length: Duration, now: Instant) -> u8 {
