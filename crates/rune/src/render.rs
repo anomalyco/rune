@@ -413,19 +413,6 @@ const MAX_VIEWS: u32 = 65_536;
 /// parallel GPU tests on lavapipe), so Rune creates them one at a time.
 static GPU_INIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Whether DXGI lists a hardware adapter (not WARP): its adapter list alone, so no device is made
-/// and no GPU driver loads.
-#[cfg(target_os = "windows")]
-fn dxgi_hardware_adapter() -> bool {
-    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIFactory1};
-    // SAFETY: a DXGI factory and its adapters, each asked for its description only.
-    unsafe {
-        let Ok(factory) = CreateDXGIFactory1::<IDXGIFactory1>() else { return false };
-        (0..).map_while(|i| factory.EnumAdapters1(i).ok())
-            .any(|a| a.GetDesc1().is_ok_and(|d| d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 == 0))
-    }
-}
-
 impl Gpu {
     /// Panics without a usable adapter or device; windows use `try_new`.
     pub fn new(instance: wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) -> Gpu {
@@ -579,24 +566,15 @@ impl Gpu {
         if crate::gpu::backend::wgpu_for(wanted) { Self::wgpu_instance() } else { Self::instance() }
     }
 
-    /// wgpu's own backends, whatever `RUNE_GPU_BACKEND` says: DX12 alone on Windows: it's the backend that composites transparent surfaces, and a
-    /// Vulkan instance loads every GPU's Vulkan driver, where a broken one (Intel's, on a hybrid
-    /// laptop) crashed the process before its first window (Hex #662). Vulkan only when no DX12
-    /// adapter exists.
-    /// DXGI says whether a hardware adapter exists, from its adapter list alone: no device is made
-    /// and no driver loads (wgpu's own `enumerate_adapters` makes a device on every adapter, the
-    /// discrete GPU and WARP included: 987,254 µs p50 on a hybrid laptop).
+    /// wgpu's own backends, whatever `RUNE_GPU_BACKEND` says: DX12 alone on Windows. It's the
+    /// backend that composites transparent surfaces, and a Vulkan instance loads every GPU's Vulkan
+    /// driver, where a broken one (Intel's, on a hybrid laptop) crashed the process before its first
+    /// window (Hex #662). A machine without a hardware D3D12 adapter gets WARP, D3D12's software
+    /// adapter, from the same instance.
     #[cfg(target_os = "windows")]
     fn wgpu_instance() -> wgpu::Instance {
-        static DX12: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
-        let dx12 = *DX12.get_or_init(|| {
-            let found = dxgi_hardware_adapter();
-            if !found { eprintln!("rune: no DX12 adapter; drawing with Vulkan"); }
-            crate::marks::mark("gpu.dx12_probe");
-            found
-        });
-        let instance = Self::wgpu_instance_on(if dx12 { wgpu::Backends::DX12 } else { wgpu::Backends::VULKAN });
+        let instance = Self::wgpu_instance_on(wgpu::Backends::DX12);
         crate::marks::mark("gpu.instance");
         instance
     }
