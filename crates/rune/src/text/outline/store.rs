@@ -140,6 +140,14 @@ impl OutlineStore {
         true
     }
 
+    /// The texels records fill so far (texel 0 included), as a recording keeps them.
+    pub(crate) fn used_texels(&self) -> &[[u32; 4]] { &self.texels[..self.used] }
+
+    /// A store holding `texels` (a recording's `used_texels`) and nothing else.
+    pub(crate) fn from_texels(texels: Vec<[u32; 4]>) -> OutlineStore {
+        OutlineStore { used: texels.len(), texels, ..OutlineStore::default() }
+    }
+
     /// Texel `i`, zero past the end.
     pub(crate) fn texel(&self, i: u32) -> [u32; 4] {
         self.texels.get(i as usize).copied().unwrap_or_default()

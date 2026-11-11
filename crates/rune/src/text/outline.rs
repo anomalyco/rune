@@ -5,13 +5,18 @@
 
 mod build;
 mod cover;
+mod fill;
+mod lanes;
 mod path;
 mod store;
 
 pub(crate) use path::{Emit, Frame, PathEffect, Paths};
 // `coverage` is also the CPU renderer's, for glyphs it draws straight from outlines.
 #[allow(unused_imports)]
-pub(crate) use cover::{coverage, fill_mask};
+pub(crate) use cover::coverage;
+pub use fill::Census;
+pub(crate) use fill::{fill_mask, fill_shared, share_rows};
+pub(crate) use lanes::{F4, Portable};
 pub(crate) use store::{Found, Glyph, Key, OutlineStore, Support, WIDTH};
 
 use swash::FontRef;

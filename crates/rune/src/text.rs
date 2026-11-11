@@ -33,6 +33,8 @@ mod color_icon;
 mod cursor;
 mod decorations;
 mod families;
+#[doc(hidden)]
+pub mod fill_bench;
 pub(crate) mod full_faces;
 mod language;
 pub use language::set_language;
