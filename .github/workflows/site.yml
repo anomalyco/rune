@@ -18,7 +18,7 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: release
+    environment: ${{ github.ref_name == 'dev' && 'dev' || 'release' }}
     permissions:
       id-token: write
       contents: read
@@ -30,7 +30,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: arn:aws:iam::604439173067:role/github/rune-release
+          role-to-assume: arn:aws:iam::604439173067:role/github/rune-${{ github.ref_name == 'dev' && 'dev' || 'release' }}
           role-session-name: site-${{ github.run_id }}
           aws-region: us-east-1
       - uses: actions/setup-node@v5
@@ -43,6 +43,7 @@ jobs:
         run: bash "$GITHUB_WORKSPACE/.github/release/cloudflare-token.sh"
         env:
           CLOUDFLARE_TOKEN_URL: ${{ vars.CLOUDFLARE_TOKEN_URL }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       - run: bun run deploy:${{ github.ref_name == 'production' && 'production' || 'dev' }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ steps.cloudflare-token.outputs.token }}

@@ -16,8 +16,8 @@ export default defineConfig(({ mode }) => {
         CANONICAL_HOST: bindings.text(host),
       },
       triggers: [
-        triggers.fetch({ pattern: `${host}${BASE_PATH}`, zone: "anoma.ly" }),
-        triggers.fetch({ pattern: `${host}${BASE_PATH}/*`, zone: "anoma.ly" }),
+        triggers.fetch({ pattern: `${host}${BASE_PATH}`, zone: host }),
+        triggers.fetch({ pattern: `${host}${BASE_PATH}/*`, zone: host }),
       ],
       workersDev: false,
       previewUrls: false,
