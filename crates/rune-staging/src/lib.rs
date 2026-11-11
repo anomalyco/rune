@@ -248,7 +248,15 @@ impl Inner {
         let chunk = &mut self.active[index];
         let at = chunk.used.next_multiple_of(align);
         chunk.used = at + size;
-        let view = chunk.view.get_or_insert_with(|| chunk.buffer.get_mapped_range_mut(..).expect("a mapped staging chunk"));
+        let view = match chunk.view.take() {
+            Some(view) => chunk.view.insert(view),
+            None => match chunk.buffer.get_mapped_range_mut(..) {
+                Ok(view) => chunk.view.insert(view),
+                // A lost device's new chunk can't map. Its frame draws nothing and the renderer
+                // is made again on a new device, so the write has nowhere to go.
+                Err(_) => return (chunk.buffer.clone(), at),
+            },
+        };
         fill(&mut view.slice(at as usize..(at + size) as usize));
         self.pending_bytes += size;
         self.stats.writes += 1;

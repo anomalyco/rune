@@ -53,6 +53,9 @@ pub(super) enum News {
     Parked,
 }
 
+/// `decode`'s answer when Rune's device was replaced under the ring: not a failure.
+const DEVICE_CHANGED: &str = "Rune's GPU device changed";
+
 /// What opening found.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Facts {
@@ -171,8 +174,18 @@ pub(super) fn us(t0: Instant) -> u128 {
 
 fn run(pipe: &Pipe, job: Job) {
     crate::marks::mark("video.open");
+    let generation = crate::native_surface::windows::device_generation();
     let mut d = match Decoder::open(&job) {
         Ok(d) => d,
+        // An open that failed as Rune lost its device opens again on the next one.
+        Err(_) if gpu::lost_since(generation) => {
+            if logging() {
+                log!("Rune's GPU device was lost while the clip opened: it opens again on the next one");
+            }
+            pipe.lock().news.push(News::Parked);
+            (job.notify)();
+            return;
+        }
         Err(e) => {
             pipe.lock().news.push(News::Failed(e));
             (job.notify)();
@@ -182,9 +195,19 @@ fn run(pipe: &Pipe, job: Job) {
     crate::marks::mark("video.opened");
     pipe.lock().news.push(News::Opened(d.facts));
     (job.notify)();
-    if let Err(e) = d.decode(pipe, &job) {
-        pipe.lock().news.push(News::Failed(e));
-        (job.notify)();
+    match d.decode(pipe, &job) {
+        Err(e) if e == DEVICE_CHANGED || gpu::lost_since(generation) => {
+            if logging() {
+                log!("Rune's GPU device changed: the clip opens again on the new one");
+            }
+            pipe.lock().news.push(News::Parked);
+            (job.notify)();
+        }
+        Err(e) => {
+            pipe.lock().news.push(News::Failed(e));
+            (job.notify)();
+        }
+        Ok(()) => {}
     }
 }
 
@@ -409,6 +432,15 @@ impl Decoder {
                 Some((ID3D11Texture2D::from_raw(raw), b.GetSubresourceIndex().ok()?))
             })
         };
+        // Rune replaced its device (a lost one, a driver update): the ring's textures and fences
+        // were opened on the old one, and the decoders' D3D11 device went with it, so the decoder
+        // lets go and the clip opens again at its picture on the new one.
+        if self.ring.as_ref().is_some_and(Ring::stale) {
+            let device = gpu::device()?;
+            if !self.ring.as_mut().is_some_and(|r| r.adopt(&device)) {
+                return Err(DEVICE_CHANGED.into());
+            }
+        }
         let Some(ring) = &mut self.ring else {
             return mf::nv12_bytes(sample, &picture).map(Pic::Cpu);
         };

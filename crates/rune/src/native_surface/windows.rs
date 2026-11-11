@@ -82,6 +82,14 @@ pub(crate) fn presenting_device() -> Option<ID3D12Device> {
     DEVICE.lock().unwrap().clone()
 }
 
+/// Counts the windows' D3D12 devices Rune made: it moves when one replaces a lost one, so what
+/// was opened on the old device (a decoder's textures and fences) is opened again.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn device_generation() -> u64 {
+    GENERATION.load(Ordering::Acquire)
+}
+
 static ADAPTER_LUID: AtomicU64 = AtomicU64::new(0);
 
 /// The LUID (`HighPart`, `LowPart`) of the adapter Rune last made a window's device on, once it
@@ -100,6 +108,7 @@ pub(crate) fn note_adapter(device: &wgpu::Device) {
     let luid = unsafe { hal.raw_device().GetAdapterLuid() };
     ADAPTER_LUID.store((u64::from(luid.HighPart as u32) << 32) | u64::from(luid.LowPart), Ordering::Relaxed);
     *DEVICE.lock().unwrap() = Some(hal.raw_device().clone());
+    GENERATION.fetch_add(1, Ordering::AcqRel);
 }
 
 pub(crate) struct Importer {
