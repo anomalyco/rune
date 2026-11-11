@@ -155,14 +155,14 @@ fn state_follows_open_play_end_and_failure() {
     c.open(Ok(meta()));
     assert_eq!(c.state(), PlayerState::Ready);
     assert_eq!((c.duration, c.size), (Some(1.0), Some((64, 36))));
-    c.playing = true;
+    step(&mut c, Event::Play);
     assert_eq!(c.state(), PlayerState::Playing);
     c.advance_virtual(10.0);
     c.advance_virtual(10.5);
     assert_eq!(c.time, 0.5);
     let generation = c.generation;
     c.advance_virtual(11.25);
-    assert_eq!((c.time, c.playing, c.ended), (1.0, false, true));
+    assert_eq!((c.time, &c.run), (1.0, &Run::Ended));
     assert_eq!(c.state(), PlayerState::Ended);
     assert!(c.generation > generation, "ending re-runs views");
     c.fail("boom".into());
@@ -174,21 +174,20 @@ fn state_follows_open_play_end_and_failure() {
 fn virtual_time_loops_rates_and_seeks() {
     let mut c = Control::default();
     c.open(Ok(meta()));
-    c.playing = true;
+    step(&mut c, Event::Play);
     c.looping = true;
     c.rate = 2.0;
     c.advance_virtual(0.0);
     c.advance_virtual(0.6);
     assert!((c.time - 0.2).abs() < 1e-9, "1.2 s wraps to 0.2: {}", c.time);
-    assert!(c.playing);
-    c.seek = Some(0.75);
-    c.anchor = None;
+    assert!(c.playing());
+    step(&mut c, Event::Seek(0.75));
     c.advance_virtual(5.0);
     assert_eq!(c.time, 0.75);
     c.advance_virtual(5.1);
     assert!((c.time - 0.95).abs() < 1e-9);
     // Paused time stays put whatever the clock does.
-    c.playing = false;
+    step(&mut c, Event::Pause);
     c.advance_virtual(9.0);
     assert!((c.time - 0.95).abs() < 1e-9);
 }
@@ -200,28 +199,28 @@ fn playing_after_the_end_restarts_from_zero() {
         let mut c = v.shared.ctl.lock().unwrap();
         c.open(Ok(meta()));
         c.time = 1.0;
-        c.ended = true;
+        c.run = Run::Ended;
     }
     assert_eq!(v.state(), PlayerState::Ended);
     v.play();
     let c = v.shared.ctl.lock().unwrap();
     assert_eq!(c.seek, Some(0.0));
-    assert!(c.playing && !c.ended);
+    assert!(c.playing());
 }
 
 #[test]
 fn display_positions_loop_or_end() {
     let mut c = Control::default();
     c.open(Ok(meta()));
-    c.playing = true;
+    step(&mut c, Event::Play);
     assert!(!c.observe(0.4, false));
     assert_eq!(c.time, 0.4);
     c.looping = true;
     assert!(c.observe(1.0, true), "looping restarts the player");
-    assert_eq!((c.time, c.playing), (0.0, true));
+    assert_eq!((c.time, c.playing()), (0.0, true));
     c.looping = false;
     assert!(!c.observe(1.2, true));
-    assert_eq!((c.time, c.playing, c.state()), (1.0, false, PlayerState::Ended));
+    assert_eq!((c.time, c.playing(), c.state()), (1.0, false, PlayerState::Ended));
 }
 
 #[test]
@@ -569,7 +568,7 @@ fn headless_audio_time_follows_the_virtual_clock() {
     let heard = ends.clone();
     let clip = a.clone();
     a.set_waker(Arc::new(move || {
-        if clip.shared.ctl.lock().unwrap().ended {
+        if clip.shared.ctl.lock().unwrap().run == Run::Ended {
             heard.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
     }));
