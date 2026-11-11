@@ -91,34 +91,47 @@ fn every_touch_sequence_matches_what_the_old_finger_did() {
     });
 }
 
-/// The old `configured`/`scale`/`closed` fields, with readiness stated once (a configure has
-/// arrived) instead of inferred from a size that a read takes away — the bug the machine removes.
-/// Closing is final here; the old fields kept changing, but nothing read them: every caller hides
-/// on `closed` before it looks at a size.
+/// The old `configured`/`scale`/`closed` fields, transcribed literally: `configured` was the
+/// size the compositor asked for (taken by a read, which is why it couldn't say "ready"), `scale`
+/// the last one it sent, and `closed` latched. All three kept taking new values after a close;
+/// nothing read them, because the caller hides on `closed`. `ever` is what readiness means, kept
+/// beside them so the machine's `configured()` can be compared on every step.
 #[derive(Default)]
 struct OldReadiness {
-    configured: bool,
-    size: Option<(u32, u32)>,
+    configured: Option<(u32, u32)>,
     scale: Option<i32>,
     closed: bool,
+    ever: bool,
 }
 
 impl OldReadiness {
     fn step(&mut self, event: readiness::Event) {
-        if self.closed {
-            return;
-        }
         match event {
             readiness::Event::Configure { width, height } => {
-                self.configured = true;
-                self.size = Some((width, height));
+                self.configured = Some((width, height));
+                self.ever = true;
             }
             readiness::Event::Scale(scale) => self.scale = Some(scale),
             readiness::Event::Closed => self.closed = true,
         }
     }
+}
 
-    fn read(&mut self) -> (Option<(u32, u32)>, Option<i32>) { (self.size.take(), self.scale.take()) }
+/// What `overlay/draw.rs` uses from one `dispatch`: it hides on `closed`, and reads a size and a
+/// scale only while the surface is still open. Both sides are projected through this, so a read
+/// after a close is compared like any other instead of being skipped.
+#[derive(Debug, PartialEq)]
+struct Used {
+    closed: bool,
+    size: Option<(u32, u32)>,
+    scale: Option<i32>,
+}
+
+fn used(closed: bool, size: Option<(u32, u32)>, scale: Option<i32>) -> Used {
+    match closed {
+        true => Used { closed, size: None, scale: None },
+        false => Used { closed, size, scale },
+    }
 }
 
 #[test]
@@ -145,18 +158,14 @@ fn every_readiness_sequence_reports_the_same_size_and_scale() {
                     readiness::step(&mut state, *event);
                     old.step(*event);
                 }
-                // Closing drops whatever it hadn't said yet: the surface is gone.
-                Symbol::Read if old.closed => {
-                    assert_eq!((state.take_size(), state.take_scale()), (None, None), "read {i} after {seq:?}");
+                Symbol::Read => {
+                    let got = used(state.closed(), state.take_size(), state.take_scale());
+                    let was = used(old.closed, old.configured.take(), old.scale.take());
+                    assert_eq!(got, was, "read {i} of {seq:?}");
                 }
-                Symbol::Read => assert_eq!((state.take_size(), state.take_scale()), old.read(), "read {i} of {seq:?}"),
             }
             assert_eq!(state.closed(), old.closed, "closed after {seq:?}");
-            if !old.closed {
-                assert_eq!(state.configured(), old.configured, "configured after {seq:?}");
-            } else {
-                assert!(state.configured(), "a closed surface is never configuring again: {seq:?}");
-            }
+            assert_eq!(state.configured(), old.ever || old.closed, "configured after {seq:?}");
         }
     });
 }
