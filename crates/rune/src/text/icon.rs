@@ -142,14 +142,17 @@ pub(crate) enum Facing {
     Mirrored,
 }
 
-pub(super) fn rasterize_icon(icon: &Icon, px: u32, facing: Facing, atlas: &mut Atlas) -> Rasterized {
+/// `icon` drawn `size` device pixels across (its viewBox's scale) on a `px` × `px` canvas,
+/// `px` the size rounded up, so an icon at a fractional size keeps its exact scale and its canvas
+/// lands 1:1 on the device grid, as Chromium paints an SVG at its scale from a snapped origin.
+pub(super) fn rasterize_icon(icon: &Icon, (px, size): (u32, f32), facing: Facing, atlas: &mut Atlas) -> Rasterized {
     if px == 0 {
         return Rasterized::Empty;
     }
     if px + 4 > super::ATLAS_SIZE {
         return Rasterized::Unplaced;
     }
-    let mut cov = icon_coverage(icon, px);
+    let mut cov = icon_coverage_at(icon, px, size);
     if facing == Facing::Mirrored {
         cov.chunks_exact_mut(px as usize).for_each(<[u8]>::reverse);
     }
@@ -187,7 +190,13 @@ const INHERITED: [&str; 8] =
 
 /// `icon`'s coverage at `px` × `px` device pixels, row-major, as the glyph atlas stores it.
 pub fn icon_coverage(icon: &Icon, px: u32) -> Vec<u8> {
-    let s = px as f32 / icon.view;
+    icon_coverage_at(icon, px, px as f32)
+}
+
+/// `icon`'s coverage drawn `size` device pixels across, from the top-left of a `px` × `px`
+/// canvas.
+pub fn icon_coverage_at(icon: &Icon, px: u32, size: f32) -> Vec<u8> {
+    let s = size / icon.view;
     let mut acc = vec![0u8; (px * px) as usize];
     // Each open group with an `opacity`: what it holds so far, and that opacity.
     let mut layers: Vec<(Vec<u8>, f32)> = Vec::new();

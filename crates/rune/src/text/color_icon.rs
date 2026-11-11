@@ -52,6 +52,12 @@ impl TextSystem {
     ///
     /// With `one` (`El::icon_one_color`) the image is the icon's silhouette in `color`: its own
     /// colours drawn as their coverage only, as an SVG mask filled with `currentColor` draws it.
+    /// Whether `icon` paints its own colours, and so draws as an image ([`Self::color_icon`]).
+    pub(crate) fn is_color_icon(&mut self, icon: &'static Icon) -> bool {
+        let at = icon as *const Icon as usize;
+        *self.color_icons.kinds.entry(at).or_insert_with(|| kind(icon)) != Kind::Mono
+    }
+
     pub fn color_icon(&mut self, icon: &'static Icon, px: u32, color: Color, one: bool) -> Option<&Pixels> {
         let at = icon as *const Icon as usize;
         let ColorIcons { kinds, images, bytes } = &mut self.color_icons;
