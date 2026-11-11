@@ -120,12 +120,21 @@ fn step(watch: &mut Watch, event: Event) -> Effects<Effect> {
     }
 }
 
-/// What the UI thread tells the watchdog. Only the watched thread writes a frame, so `version`
-/// moves with plain stores.
+/// The next read of a look.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Read {
+    Version,
+    Payload(u64),
+    Recheck(Running),
+}
+
+/// What the UI thread tells the watchdog. Only the watched thread writes a frame, and it keeps
+/// the last `version` itself, so it never reads this one back.
 struct Shared {
     /// Moved on by each frame's start and end: odd while one runs, when it names that frame.
     version: AtomicU64,
-    /// The running frame's start, stored before `version` says it runs.
+    /// The running frame's start. Written only while `version` is even, so a look that reads
+    /// a newer one finds `version` has moved when it rechecks.
     start: AtomicU64,
     after_us: AtomicU32,
     parked: AtomicBool,
@@ -136,28 +145,53 @@ impl Shared {
         Self { version: AtomicU64::new(0), start: AtomicU64::new(0), after_us: AtomicU32::new(AFTER_MS * 1000), parked: AtomicBool::new(false) }
     }
 
-    /// A frame starts at `now`, whether or not the last one ended.
-    fn arm(&self, now: u64) {
-        self.after_us.store(AFTER_MS * 1000, Ordering::Relaxed);
-        self.start.store(now, Ordering::Relaxed);
-        let version = self.version.load(Ordering::Relaxed);
-        self.version.store((version + 1) | 1, Ordering::SeqCst);
+    /// A frame starts at `now`, whether or not the last one ended: the new `version`.
+    fn arm(&self, version: u64, now: u64) -> u64 {
+        let ended = self.disarm(version);
+        self.write(now);
+        self.publish(ended)
+    }
+
+    fn write(&self, now: u64) {
+        self.after_us.store(AFTER_MS * 1000, Ordering::Release);
+        self.start.store(now, Ordering::Release);
+    }
+
+    fn publish(&self, ended: u64) -> u64 {
+        self.version.store(ended + 1, Ordering::SeqCst);
+        ended + 1
     }
 
     fn hurry(&self) { self.after_us.fetch_min(HURRY_MS * 1000, Ordering::Relaxed); }
 
-    /// The running frame ends: the number of the frame that ran last.
-    fn disarm(&self) -> u64 {
-        let version = self.version.load(Ordering::Relaxed);
-        self.version.store((version + 1) & !1, Ordering::SeqCst);
-        version.saturating_sub(1) | 1
+    /// The running frame ends, if one runs: the new `version`, one past the frame that ran last.
+    fn disarm(&self, version: u64) -> u64 {
+        if version % 2 == 0 { return version; }
+        self.version.store(version + 1, Ordering::SeqCst);
+        version + 1
     }
 
-    /// A frame that starts during the look can pair its `start` with the older `seq`; `still`
-    /// refuses that sample, and the next look sees the new frame.
+    /// The frame running now, with its own start: a look a frame change lands in starts over.
     fn look(&self) -> Option<Running> {
-        let seq = self.version.load(Ordering::SeqCst);
-        (seq % 2 == 1).then(|| Running { seq, start: self.start.load(Ordering::Relaxed), after_us: self.after_us.load(Ordering::Relaxed) })
+        let mut read = Read::Version;
+        loop {
+            match self.read(read) {
+                Ok(found) => return found,
+                Err(next) => read = next,
+            }
+        }
+    }
+
+    /// One read of a look: what it found, or the read to make next.
+    fn read(&self, read: Read) -> Result<Option<Running>, Read> {
+        match read {
+            Read::Version => {
+                let seq = self.version.load(Ordering::SeqCst);
+                if seq % 2 == 0 { Ok(None) } else { Err(Read::Payload(seq)) }
+            }
+            Read::Payload(seq) => Err(Read::Recheck(Running { seq, start: self.start.load(Ordering::Acquire), after_us: self.after_us.load(Ordering::Acquire) })),
+            Read::Recheck(frame) => if self.still(frame.seq) { Ok(Some(frame)) } else { Err(Read::Version) },
+        }
     }
 
     /// Whether frame `seq` is the one running.
@@ -254,10 +288,11 @@ mod mac {
     static SAMPLES: Mutex<Vec<(u64, Sampled)>> = Mutex::new(Vec::new());
 
     /// Whether a thread's frames are watched.
-    #[derive(Clone, Copy, PartialEq, Eq)]
+    #[derive(Clone, Copy)]
     enum Watched {
         NotAsked,
-        Yes,
+        /// `version` is the last one this thread wrote to `SHARED`.
+        Yes { version: u64 },
         No,
     }
 
@@ -285,22 +320,24 @@ mod mac {
 
     /// A frame starts on this thread.
     pub(crate) fn arm() {
-        let watched = match WATCHED.get() {
+        let version = match WATCHED.get() {
+            Watched::Yes { version } => version,
+            Watched::No => return,
             Watched::NotAsked => {
-                let yes = watchdog().is_some_and(|w| w.1 == std::thread::current().id());
-                WATCHED.set(if yes { Watched::Yes } else { Watched::No });
-                yes
+                if !watchdog().is_some_and(|w| w.1 == std::thread::current().id()) {
+                    WATCHED.set(Watched::No);
+                    return;
+                }
+                0
             }
-            w => w == Watched::Yes,
         };
-        if !watched { return; }
-        SHARED.arm(now_ns());
+        WATCHED.set(Watched::Yes { version: SHARED.arm(version, now_ns()) });
         if SHARED.is_parked() { wake(); }
     }
 
     /// The running frame's interaction was slow before: sample it sooner.
     pub(crate) fn hurry() {
-        if WATCHED.get() != Watched::Yes { return; }
+        if !matches!(WATCHED.get(), Watched::Yes { .. }) { return; }
         SHARED.hurry();
         wake();
     }
@@ -312,9 +349,11 @@ mod mac {
 
     /// The frame on this thread ended: what the watchdog saw of it, if it ran long.
     pub(crate) fn disarm() -> Option<Stacks> {
-        if WATCHED.get() != Watched::Yes { return None; }
-        let seq = SHARED.disarm();
+        let Watched::Yes { version } = WATCHED.get() else { return None };
+        let ended = SHARED.disarm(version);
+        WATCHED.set(Watched::Yes { version: ended });
         if !TAKEN.swap(false, Ordering::Acquire) { return None; }
+        let seq = ended - 1;
         let samples: Vec<Sampled> = SAMPLES.lock().ok()?.drain(..).filter(|(s, _)| *s == seq).map(|(_, s)| s).collect();
         Stacks::of(&samples)
     }
