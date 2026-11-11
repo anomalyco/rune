@@ -23,6 +23,9 @@
 //! on the thread that made it, from the first frame or edit after `play`: pausing, seeking,
 //! rate, looping and the end (which wakes the app's waker) all as in a window, silently.
 //!
+//! On Windows, Media Foundation decodes on a thread per clip, on the GPU where it can, into
+//! shared NV12 textures Rune samples in place; WASAPI plays the sound (`windows`).
+//!
 //! Other platforms report [`PlayerState::Failed`] and draw a neutral placeholder for video.
 
 #[cfg(all(target_os = "macos", feature = "ogg-audio"))]
@@ -38,10 +41,14 @@ pub(crate) use macos::test_frames;
 #[cfg(any(target_os = "macos", test))]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod turn;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod unsupported;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 use unsupported as backend;
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+use self::windows as backend;
 mod waker;
 
 use phases::{Effect, Event, Run, Stage, step};
@@ -53,6 +60,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use crate::time::Instant;
+
+/// A playing clip whose next picture is due sooner than this (seconds) draws every refresh;
+/// later, the window sleeps until then.
+pub(crate) const WAKE_MIN: f64 = 0.002;
 
 /// Set once a window event loop runs. Until then (headless runs, tests) no player is created.
 static PLAYBACK: AtomicBool = AtomicBool::new(false);
@@ -317,6 +328,13 @@ impl Player {
     pub fn set_muted(&self, muted: bool) {
         self.edit(|c| c.muted = muted);
     }
+    /// The sound's gain while unmuted, from 0 (silent) to 1 (as recorded, the default).
+    /// Non-finite values are ignored.
+    pub fn set_volume(&self, volume: f32) {
+        if volume.is_finite() {
+            self.edit(|c| c.volume = volume.clamp(0.0, 1.0));
+        }
+    }
     /// Called, from any thread, when the state changes: loaded, ended, failed, or started
     /// again by a loop. Hand it the app's `setup` waker so `poll` sees an audio clip end
     /// without ticking. Nothing calls it for progress. If the state already changed (loaded, or
@@ -340,7 +358,7 @@ impl Player {
             let c = self.read();
             (c.time, c.live())
         };
-        if live { backend::live_time(&self.shared).unwrap_or(time) } else { time }
+        backend::live_time(&self.shared, live).unwrap_or(time)
     }
     /// Length in seconds, once loaded.
     pub fn duration(&self) -> Option<f64> {
@@ -358,6 +376,9 @@ impl Player {
     }
     pub fn muted(&self) -> bool {
         self.shared.ctl.lock().unwrap().muted
+    }
+    pub fn volume(&self) -> f32 {
+        self.shared.ctl.lock().unwrap().volume
     }
     /// The surface video frames land in: for frame observers and draw counts.
     pub fn surface(&self) -> &NativeSurface {
@@ -418,6 +439,9 @@ pub(crate) struct Pulled {
     pub active: bool,
     /// Changes when state, duration or size change, so views reading them re-run.
     pub generation: u64,
+    /// While active: no frame is needed before this, when the next picture is due. None asks
+    /// for every refresh.
+    pub due: Option<Instant>,
 }
 
 /// Folds one drawn video's `generation` into a frame's signature, which changes, re-running
@@ -545,11 +569,11 @@ impl Shared {
                 Clock::Virtual(_) => self.open_now(),
                 Clock::Display(_) => backend::drive(self),
             }
-            return Pulled { active: false, generation: self.ctl.lock().unwrap().generation };
+            return Pulled { active: false, generation: self.ctl.lock().unwrap().generation, due: None };
         }
-        let active = match clock {
-            Clock::Virtual(now) => self.pull_virtual(surface, now),
-            Clock::Display(target) => backend::pull(self, surface, target),
+        let (active, due) = match clock {
+            Clock::Virtual(now) => (self.pull_virtual(surface, now), None),
+            Clock::Display(target) => (backend::pull(self, surface, target), backend::due(self)),
         };
         let pulled = {
             let mut c = self.ctl.lock().unwrap();
@@ -558,7 +582,7 @@ impl Shared {
                     push_placeholder(surface);
                 }
             }
-            Pulled { active: active && !c.failed(), generation: c.generation }
+            Pulled { active: active && !c.failed(), generation: c.generation, due }
         };
         self.settle(false);
         pulled
@@ -608,7 +632,8 @@ pub(crate) struct Control {
     pub rate: f32,
     pub looping: bool,
     pub muted: bool,
-    /// A seek not yet carried out, by a player, a poster or the headless clock.
+    pub volume: f32,
+    /// A seek not yet carried out, by a player, a poster, a decoder or the headless clock.
     seek: Option<f64>,
     // Reported by pulls and ticks.
     pub time: f64,
@@ -632,6 +657,7 @@ impl Default for Control {
             rate: 1.0,
             looping: false,
             muted: true,
+            volume: 1.0,
             seek: None,
             time: 0.0,
             duration: None,

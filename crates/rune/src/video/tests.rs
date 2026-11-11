@@ -52,6 +52,8 @@ fn extensions_come_from_the_last_path_segment() {
     assert_eq!(ext("sounds/clip."), None);
 }
 
+/// Windows reads WebM and Ogg when the system has their extensions, so it finds out on open.
+#[cfg(not(target_os = "windows"))]
 #[test]
 fn webm_video_fails_at_once() {
     let a = Player::url("https://example.com/clips/tap.webm?v=2");
@@ -85,6 +87,7 @@ fn the_waker_hears_each_state_change_once() {
 
 /// An unsupported format fails inside the constructor, before any waker can be set: setting
 /// one afterwards still delivers that failure, once.
+#[cfg(not(target_os = "windows"))]
 #[test]
 fn a_waker_set_after_a_failure_hears_it_once() {
     let a = Player::url("tap.ogv");
@@ -268,9 +271,9 @@ fn failures_draw_a_placeholder_and_stop_drawing() {
     let mut rt = crate::Runtime::new(v.clone(), view, (32.0, 18.0), crate::Env::new(true, 2.0));
     rt.frame(0.0);
     let PlayerState::Failed(message) = v.state() else { panic!("{:?}", v.state()) };
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     assert!(message.contains("no such file"), "{message}");
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     assert_eq!(message, "video playback isn't supported on this platform yet");
     let frame = v.surface().latest().expect("placeholder frame");
     assert_eq!((frame.size, frame.format), ([32, 18], Format::Bgra));

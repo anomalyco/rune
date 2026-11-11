@@ -1022,7 +1022,18 @@ impl<S: 'static> Runtime<S> {
                     }
                     if let Some((surface, fit)) = &n.vis.surface {
                         if let Some(pulled) = surface.pull_video(video_clock, &self.live_wake) {
-                            self.videos_active |= pulled.active;
+                            // A clip whose next picture isn't due for a while wakes the window
+                            // then, instead of drawing every refresh in between.
+                            let wait = pulled.due.map(|due| due.saturating_duration_since(crate::time::Instant::now()).as_secs_f64());
+                            match wait {
+                                Some(wait) if pulled.active && wait > crate::video::WAKE_MIN => {
+                                    let wake = self.clock + wait;
+                                    if self.loop_wake.is_none_or(|w| wake < w.0) {
+                                        self.loop_wake = Some((wake, now + wait * self.time_scale as f64));
+                                    }
+                                }
+                                _ => self.videos_active |= pulled.active,
+                            }
                             video_signature = crate::video::fold(video_signature, pulled.generation, surface.key());
                         }
                         self.surfaces.push(crate::native_surface::SurfaceDraw {

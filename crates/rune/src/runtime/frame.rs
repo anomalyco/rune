@@ -298,6 +298,17 @@ impl<S: 'static> Runtime<S> {
         self.wake_deadlines.first().copied().into_iter().chain(self.loop_wake.map(|w| w.0)).min_by(f64::total_cmp)
     }
 
+    /// The next due timer of `poll`'s, on `wake_deadline`'s clock.
+    pub(crate) fn poll_wake_deadline(&self) -> Option<f64> {
+        self.wake_deadlines.first().copied()
+    }
+
+    /// The next frame motion asks for at its own cadence (a loop's next step, a video's next
+    /// picture), on `wake_deadline`'s clock.
+    pub(crate) fn motion_wake_deadline(&self) -> Option<f64> {
+        self.loop_wake.map(|w| w.0)
+    }
+
     /// Lands every track before the next frame: growth, reveals and follow-the-end (guarantee 8,
     /// for returning to a window or session).
     pub fn settle_all(&mut self) {

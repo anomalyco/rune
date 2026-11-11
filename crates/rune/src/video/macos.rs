@@ -543,8 +543,9 @@ pub(super) fn apply(shared: &Arc<Shared>) {
 }
 
 /// Audio, on the main thread: what a live player (`Control::live`) reports now, while it plays.
-pub(super) fn live_time(shared: &Shared) -> Option<f64> {
-    if shared.kind != Kind::Audio || MainThreadMarker::new().is_none() {
+/// `live`: the player's own position is the one to read (`Control::live`).
+pub(super) fn live_time(shared: &Shared, live: bool) -> Option<f64> {
+    if !live || shared.kind != Kind::Audio || MainThreadMarker::new().is_none() {
         return None;
     }
     let native = shared.native.try_lock().ok()?;
@@ -657,6 +658,10 @@ impl Port for Av<'_> {
         unsafe { self.objects().player.setMuted(muted) };
     }
 
+    fn set_volume(&mut self, volume: f32) {
+        unsafe { self.objects().player.setVolume(volume) };
+    }
+
     fn seek_to(&mut self, at: f64) {
         unsafe { self.objects().player.seekToTime_toleranceBefore_toleranceAfter(cm(at), zero(), zero()) };
     }
@@ -710,6 +715,11 @@ pub(super) fn pull(shared: &Arc<Shared>, surface: &NativeSurface, target: Instan
     let turn = turn::turn(&mut c, &mut av, now);
     let asked = av.asked;
     finish(shared, native, c, turn, asked)
+}
+
+/// The display link draws a playing clip every refresh.
+pub(super) fn due(_: &Shared) -> Option<Instant> {
+    None
 }
 
 /// Poster requests and parking, shared by video pulls and audio drives. Returns whether the
