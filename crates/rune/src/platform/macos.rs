@@ -56,7 +56,7 @@ declare_class!(
             // wgpu skips nextDrawable for occluded windows. Permit only the explicit
             // alpha-zero prewarm acquisition and a fade in or out, which AppKit reports as
             // occluded while its alpha is near zero; other visibility readbacks stay native.
-            if self.ivars().presence.get().may_draw_occluded() { 2 }
+            if self.ivars().presence.get().draws_occluded() { 2 }
             else { unsafe { msg_send![super(self), occlusionState] } }
         }
         // AppKit keeps windows below the menu bar's level out from under it; an overlay goes

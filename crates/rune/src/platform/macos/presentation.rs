@@ -44,6 +44,7 @@ fn carry_out(panel: &Retained<NSPanel>, presence: &Rc<Cell<Presence>>, effects: 
             // SAFETY: an AppKit call on the main thread.
             Effect::SetAlpha(alpha) => unsafe { panel.setAlphaValue(alpha) },
             Effect::IgnoreMouse => panel.setIgnoresMouseEvents(true),
+            Effect::DrawOccluded(on) => presence.set(presence.get().with_draws_occluded(on)),
             Effect::Fade { alpha, over } => fade(panel, presence, alpha, over),
             // SAFETY: an AppKit call on the main thread.
             Effect::ResignKey => unsafe { panel.resignKeyWindow() },
