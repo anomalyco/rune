@@ -81,20 +81,11 @@ pub(super) fn fill_with<E: super::raster::Exec>(atlas: &mut Atlas, exec: &dyn Fn
     FillReport { threads, masks: fills.len(), texels, cover_ns: super::ns(covered - started), copy_ns: super::ns(end - covered) }
 }
 
-/// One mask's texels, row by row: the fill instance's coverage (render/fill.rs) at each texel's
-/// centre, rounded as the R8 target stores it. A subpixel mask (coverage 3) is three texels a
-/// pixel, each one subpixel's pixel-wide box; Slug's coverage (1) has no CPU form and takes
-/// Windfoil's box, as the text system's own CPU fill does.
+/// One mask's texels, row by row: the GPU fill's own bytes (`outline::fill_mask`, the text
+/// system's one definition of a mask, subpixel masks included).
 fn cover(store: &outline::OutlineStore, q: &QueuedFill) -> Vec<u8> {
-    let [_, _, w, h] = q.rect;
-    let f = q.fill;
-    let across = if f.coverage == 3 { 3.0 } else { 1.0 };
+    let [x, y, w, h] = q.rect;
     let mut out = Vec::with_capacity((w * h) as usize);
-    for row in 0..h {
-        for col in 0..w {
-            let local = [(col as f32 + 0.5 - f.pen[0]) / across, f.pen[1] - (row as f32 + 0.5)];
-            out.push(super::blend::q(outline::coverage(store, f.record, f.hint, local, f.scale, f.radius, 0.5) * 255.0));
-        }
-    }
+    outline::fill_mask(store, &q.fill, [x, y], w, h, &mut out);
     out
 }
