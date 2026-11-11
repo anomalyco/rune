@@ -150,3 +150,49 @@ impl Atlas {
         self.clock += 1;
     }
 }
+
+impl Atlas {
+    /// Every mask the GPU filled, by page, with the bytes `outline::fill_texel` gives for it:
+    /// what a CPU fill of the same mask writes (`Renderer::fill_drift` compares the two).
+    pub(crate) fn gpu_fills(&self) -> Vec<(u16, [u32; 4], Vec<u8>)> {
+        self.map.values().filter_map(|r| match *r {
+            Residency::Filled(g, fill) => {
+                let mut bytes = Vec::with_capacity((g.w * g.h) as usize);
+                super::outline::fill_mask(&self.outlines, &fill, [g.x, g.y], g.w, g.h, &mut bytes);
+                Some((g.page, [g.x, g.y, g.w, g.h], bytes))
+            }
+            _ => None,
+        }).collect()
+    }
+}
+
+impl Atlas {
+    /// Fills every mask the GPU filled again on the CPU (`outline::fill_texel`), on `threads`
+    /// threads, into a scratch buffer: the time it takes (ns, monotonic), masks and texels. A
+    /// measurement for the CPU renderer's first frame (instant-boot), not a fill.
+    #[doc(hidden)]
+    pub fn cpu_fill_timing(&self, threads: usize) -> (u64, usize, u64) {
+        let fills: Vec<(u32, u32, u32, u32, Fill)> = self.map.values().filter_map(|r| match *r {
+            Residency::Filled(g, f) => Some((g.x, g.y, g.w, g.h, f)),
+            _ => None,
+        }).collect();
+        let texels: u64 = fills.iter().map(|f| u64::from(f.2 * f.3)).sum();
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let start = std::time::Instant::now();
+        std::thread::scope(|s| {
+            for _ in 0..threads.max(1) {
+                s.spawn(|| {
+                    let mut out = Vec::new();
+                    loop {
+                        let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(&(x, y, w, h, fill)) = fills.get(k) else { break };
+                        out.clear();
+                        super::outline::fill_mask(&self.outlines, &fill, [x, y], w, h, &mut out);
+                        std::hint::black_box(&out);
+                    }
+                });
+            }
+        });
+        (start.elapsed().as_nanos() as u64, fills.len(), texels)
+    }
+}

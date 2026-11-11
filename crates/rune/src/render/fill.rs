@@ -118,7 +118,8 @@ fn instance(q: &QueuedFill) -> Instance {
         radii: [x + f.pen[0], y + f.pen[1], f.scale, 1.0],
         fill: [1.0; 4],
         border: [f.record as f32, f.hint as f32, f.radius, f.coverage as f32],
-        params: [0.0, KIND_GLYPH, 0.0, 1.0],
+        // A negative exponent marks a fill: the shader rounds the coverage as fill_texel does.
+        params: [0.0, KIND_GLYPH, 0.0, -1.0],
         uv: [0.0; 4],
         clip: NO_CLIP,
         fade: [0; 4],
@@ -128,7 +129,8 @@ fn instance(q: &QueuedFill) -> Instance {
 impl Renderer {
     /// A glyph atlas page; a Windfoil renderer also draws into its pages (`FillPass`).
     pub(super) fn atlas_texture(device: &wgpu::Device, filled: bool) -> wgpu::Texture {
-        let render = if filled { wgpu::TextureUsages::RENDER_ATTACHMENT } else { wgpu::TextureUsages::empty() };
+        // A page the GPU fills can be read back to compare its fills with the CPU's (`fill_drift`).
+        let render = if filled { wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC } else { wgpu::TextureUsages::empty() };
         device.create_texture(&wgpu::TextureDescriptor {
             label: Some("glyph atlas"),
             size: wgpu::Extent3d { width: ATLAS_SIZE, height: ATLAS_SIZE, depth_or_array_layers: 1 },
@@ -155,5 +157,55 @@ impl Renderer {
             texture.map(|t| (t, f))
         }).collect();
         fill.run(device, queue, &pages);
+    }
+}
+
+/// How far the GPU's atlas fills are from the CPU's (`Renderer::fill_drift`): texels compared,
+/// and how many differ by 1, 2, and 3 or more.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FillDrift {
+    pub masks: usize,
+    pub texels: u64,
+    pub off_by: [u64; 3],
+    pub max: u8,
+}
+
+impl Renderer {
+    /// Reads every atlas page back and compares each mask the GPU filled with what
+    /// `text::outline::fill_texel` gives for it, byte for byte. A diagnostic: it blocks on the GPU.
+    #[doc(hidden)]
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn fill_drift(&self, device: &wgpu::Device, queue: &wgpu::Queue, atlas: &crate::text::Atlas) -> FillDrift {
+        let pages: Vec<&wgpu::Texture> = std::iter::once(&self.atlas).chain(self.atlas_pages.iter().map(|(t, _)| t)).collect();
+        let read = |texture: &wgpu::Texture| -> Vec<u8> {
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("fill drift"), size: u64::from(ATLAS_SIZE * ATLAS_SIZE), usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            encoder.copy_texture_to_buffer(texture.as_image_copy(), wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(ATLAS_SIZE), rows_per_image: Some(ATLAS_SIZE) } }, wgpu::Extent3d { width: ATLAS_SIZE, height: ATLAS_SIZE, depth_or_array_layers: 1 });
+            queue.submit([encoder.finish()]);
+            let slice = buffer.slice(..);
+            slice.map_async(wgpu::MapMode::Read, |r| r.expect("map fill drift"));
+            device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+            let out = slice.get_mapped_range().expect("mapped").to_vec();
+            buffer.unmap();
+            out
+        };
+        let data: Vec<Vec<u8>> = pages.iter().map(|t| read(t)).collect();
+        let mut d = FillDrift::default();
+        for (page, [x, y, w, h], cpu) in atlas.gpu_fills() {
+            let Some(gpu) = data.get(page as usize) else { continue };
+            d.masks += 1;
+            for row in 0..h {
+                for col in 0..w {
+                    let g = gpu[((y + row) * ATLAS_SIZE + x + col) as usize];
+                    let c = cpu[(row * w + col) as usize];
+                    let off = g.abs_diff(c);
+                    d.texels += 1;
+                    d.max = d.max.max(off);
+                    if off > 0 { d.off_by[usize::from(off.min(3)) - 1] += 1; }
+                }
+            }
+        }
+        d
     }
 }

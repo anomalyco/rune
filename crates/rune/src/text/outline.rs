@@ -9,7 +9,9 @@ mod path;
 mod store;
 
 pub(crate) use path::{Emit, Frame, PathEffect, Paths};
-pub(crate) use cover::coverage;
+// `coverage` is also the CPU renderer's, for glyphs it draws straight from outlines.
+#[allow(unused_imports)]
+pub(crate) use cover::{coverage, fill_mask};
 pub(crate) use store::{Found, Glyph, Key, OutlineStore, Support, WIDTH};
 
 use swash::FontRef;
