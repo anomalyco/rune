@@ -148,6 +148,8 @@ pub(super) struct Glides {
     t: f64,
     /// The window (device px).
     size: [f32; 2],
+    /// A layer's correction still has a visible way to go.
+    easing: bool,
 }
 
 /// Frames a glide outlives its node's last paint (a cached subtree, a removed node).
@@ -225,6 +227,7 @@ impl Glides {
         self.frame = self.frame.wrapping_add(1);
         (self.t, self.size) = (t, size);
         self.now.clear();
+        self.easing = false;
         let frame = self.frame;
         if !self.glides.is_empty() {
             self.glides.retain(|_, g| frame.wrapping_sub(g.seen) < KEEP);
@@ -232,6 +235,12 @@ impl Glides {
         if !self.layers.is_empty() {
             self.layers.retain(|_, l| frame.wrapping_sub(l.seen) < KEEP);
         }
+    }
+
+    /// Whether a scaled layer's correction is still easing in or out: the last paint asks for
+    /// another frame.
+    pub(super) fn easing(&self) -> bool {
+        self.easing
     }
 
     /// Node `id` has its own scale and heads a layer: `r` is its drawn rect and `unscaled` the
@@ -300,7 +309,7 @@ impl Glides {
     /// the scales on it and above it, `motion` from [`motion`], and `rigid` and `parent` as in
     /// [`Self::at_rest`]. `layer` is `Inherit::layer` and `sc` the node's scale. Its resting
     /// edges come back only where it snaps on the plain grid.
-    pub(super) fn snapped(&mut self, id: NodeId, motion: Option<Motion>, (r, unscaled): ([f32; 4], [f32; 4]), rigid: [f32; 2], (layer, sc): (u32, f32), parent: Option<Parent>) -> (([f32; 4], Option<Parent>), Option<super::AnotherFrame>) {
+    pub(super) fn snapped(&mut self, id: NodeId, motion: Option<Motion>, (r, unscaled): ([f32; 4], [f32; 4]), rigid: [f32; 2], (layer, sc): (u32, f32), parent: Option<Parent>) -> ([f32; 4], Option<Parent>) {
         // Snapping to the unscaled grid fades in over the last pixel scaling moves the edges, so
         // a scale settling at 1 lands on the grid without a jump. In a layer that is how far
         // its scale moves the layer's edges, the same for every box in it.
@@ -325,7 +334,7 @@ impl Glides {
             }
         }
         if layer == 0 {
-            return ((out, rest), None);
+            return (out, rest);
         }
         // Translations inside the layer are scaled with it.
         let lr = l.rigid;
@@ -355,13 +364,14 @@ impl Glides {
             _ => snap(r, [0.0; 4], rigid, None, |_, c| c).0,
         };
         if l.to == 1.0 {
-            return ((at, None), None);
+            return (at, None);
         }
         for k in 0..4 {
             out[k] += (at[k] - r[k]) * l.to;
             left = left.max((at[k] - r[k]).abs() * (1.0 - l.to));
         }
-        ((out, None), (left > 1.0 / 128.0).then_some(super::AnotherFrame))
+        self.easing |= left > 1.0 / 128.0;
+        (out, None)
     }
 
     fn glide(&mut self, id: NodeId, m: Motion, r: [f32; 4], rigid: [f32; 2], parent: Option<Parent>) -> ([f32; 4], Parent) {

@@ -74,7 +74,7 @@ impl Old {
 fn fields(scale: ScaleSettle) -> (f32, f64) {
     match scale {
         ScaleSettle::Still(s) => (s, f64::NEG_INFINITY),
-        ScaleSettle::Settling { scale, since } | ScaleSettle::Settled { scale, since } => (scale, since),
+        ScaleSettle::Settling { scale, since } => (scale, since),
     }
 }
 

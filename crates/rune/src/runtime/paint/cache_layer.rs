@@ -11,8 +11,6 @@ mod tests;
 pub(super) enum ScaleSettle {
     Still(f32),
     Settling { scale: f32, since: f64 },
-    /// Keep the observation even at rest: paint samples animation time.
-    Settled { scale: f32, since: f64 },
 }
 
 #[derive(Clone, Copy)]
@@ -23,22 +21,22 @@ impl ScaleSettle {
     /// request frames during the interval, including when the clock is slowed.
     #[inline]
     pub(super) fn step(&mut self, scale: f32, now: f64, reset: bool, epsilon: f32, poll: bool) -> Effects<AnotherFrame> {
+        let (seen, since) = match *self {
+            Self::Still(seen) => (seen, f64::NEG_INFINITY),
+            Self::Settling { scale, since } => (scale, since),
+        };
+        // Unchanged and past the window: read the timestamp only. No write, no frame.
+        if !reset && (scale - seen).abs() <= epsilon && now - since >= STATIC_SCALE_SETTLE {
+            return Effects::None;
+        }
         if reset {
             *self = Self::Still(scale);
-        } else {
-            let (Self::Still(seen) | Self::Settling { scale: seen, .. } | Self::Settled { scale: seen, .. }) = *self;
-            if (scale - seen).abs() > epsilon {
-                *self = Self::Settling { scale, since: now };
-            }
+            return Effects::None;
         }
-        if poll && let (Self::Settling { scale, since } | Self::Settled { scale, since }) = *self {
-            if now - since < STATIC_SCALE_SETTLE {
-                *self = Self::Settling { scale, since };
-                return Effects::One(AnotherFrame);
-            }
-            *self = Self::Settled { scale, since };
+        if (scale - seen).abs() > epsilon {
+            *self = Self::Settling { scale, since: now };
         }
-        Effects::None
+        if poll { Effects::One(AnotherFrame) } else { Effects::None }
     }
 }
 
