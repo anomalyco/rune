@@ -65,10 +65,15 @@ impl<S: 'static> Runtime<S> {
             // At rest a shape draws from its exact box's origin rounded to the device grid, at its
             // exact scale, as Chromium draws a canvas or an inline SVG: what it holds keeps its
             // geometry against the grid, so a sheet's 1 px header line covers the same device rows
-            // (one whole and half the next at 1.5x) wherever the sheet sits. Moving, it follows its
-            // snapped box. A view-boxed shape stretches to the box.
+            // (one whole and half the next at 1.5x) wherever the sheet sits. Moving or scaled, it
+            // stays centred in its snapped box, sharing the centre fills, borders and icons use, so
+            // a glide or a swap to an icon doesn't wobble. A view-boxed shape stretches to the box.
             let still = cover.is_none() && scale_motion == ScaleMotion::Still && !gliding && (sc - 1.0).abs() < 1e-5;
-            let at = if still { [(r_exact[0] + 0.5).floor(), (r_exact[1] + 0.5).floor()] } else { [r[0], r[1]] };
+            let at = if still {
+                [(r_exact[0] + 0.5).floor(), (r_exact[1] + 0.5).floor()]
+            } else {
+                [r[0] + (w - w_exact) * 0.5, r[1] + (h - h_exact) * 0.5]
+            };
             let (origin, k) = match shape.view_box {
                 Some([vw, vh]) => ([r[0], r[1]], [w / vw, h / vh]),
                 None => (at, [k_px, k_px]),
