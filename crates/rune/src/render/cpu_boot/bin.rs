@@ -118,6 +118,12 @@ fn plan_layers(instances: &[Instance], viewport: (u32, u32)) -> (Vec<Layer>, Has
     (plans, scope)
 }
 
+/// The tiles holding any of `reg`'s pixels (`[x0, y0, x1, y1)`, device px).
+pub(super) fn region_tiles(reg: [f32; 4], cols: u32, rows: u32) -> impl Iterator<Item = usize> {
+    let (tx0, tx1) = (reg[0] as u32 / TILE_W, (reg[2].ceil() as u32).div_ceil(TILE_W).min(cols));
+    ((reg[1] as u32 / TILE_H)..(reg[3].ceil() as u32).div_ceil(TILE_H).min(rows)).flat_map(move |ty| (tx0..tx1).map(move |tx| (ty * cols + tx) as usize))
+}
+
 fn cut(a: [i32; 4], b: [i32; 4]) -> [i32; 4] {
     let r = [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])];
     if r[2] > r[0] && r[3] > r[1] { r } else { [0; 4] }
@@ -169,10 +175,7 @@ impl Bins {
         for (n, i) in scene.instances.iter().enumerate().filter(|(_, i)| i.params[1] == KIND_BACKDROP_BLUR) {
             bounds[n] = super::backdrop::bounds(i, (w, h));
             let Some(rec) = super::backdrop::plan(i, (w, h)) else { continue };
-            let reg = rec.region;
-            for ty in (reg[1] as u32 / TILE_H)..(reg[3].ceil() as u32).div_ceil(TILE_H).min(rows) {
-                for tx in (reg[0] as u32 / TILE_W)..(reg[2].ceil() as u32).div_ceil(TILE_W).min(cols) { quiet[(ty * cols + tx) as usize] = true; }
-            }
+            for t in region_tiles(rec.region, cols, rows) { quiet[t] = true; }
             blurs.push((n as u32, rec));
         }
         // The last opaque instance covering each tile whole, plus one (0: none).

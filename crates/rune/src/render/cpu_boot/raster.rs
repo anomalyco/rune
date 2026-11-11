@@ -21,7 +21,9 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
     let clear = scene.clear.map(|c| c.clamp(0.0, 1.0) * 255.0);
     let clear = [q(clear[2]), q(clear[1]), q(clear[0]), q(clear[3])];
     let mut report = Report { threads: exec.threads(), ..Report::default() };
-    let mut blurred: Vec<backdrop::Blurred> = Vec::with_capacity(bins.blurs.len());
+    if tiles.is_empty() { return report; }
+    // Each record's blur, or None when no tile painted this frame shows it.
+    let mut blurred: Vec<Option<backdrop::Blurred>> = Vec::with_capacity(bins.blurs.len());
     // A backdrop blur splits the frame: what's under it is painted everywhere first.
     let cuts: Vec<u32> = bins.blurs.iter().map(|(n, _)| *n).chain([u32::MAX]).collect();
     let mut from = 0;
@@ -46,9 +48,9 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
                     painter.surface.fill(painter.tile, clear);
                     painter.stats.cleared += 1;
                 }
-                painter.occluders(t);
                 let list = bins.tile(t);
                 let (a, b) = (list.partition_point(|&n| n < from), list.partition_point(|&n| n < until));
+                painter.occluders(&list[a..b]);
                 for &n in &list[a..b] {
                     let b = bins.bounds[n as usize];
                     let tile = painter.tile;
@@ -73,13 +75,18 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
         report.glyph_px += s.glyph_px;
         report.cleared += s.cleared;
         report.slowest_tile_ns = report.slowest_tile_ns.max(s.slowest_tile_ns);
-        if let Some((_, rec)) = bins.blurs.get(phase) {
+        if let Some((n, rec)) = bins.blurs.get(phase) {
             let px: &[u8] = &*target.pixels;
             let stride = target.stride;
-            blurred.push(backdrop::blur(rec, scene.size, |x, y| {
+            let b = bins.bounds[*n as usize];
+            let shown = tiles.iter().any(|&t| {
+                let (tx, ty) = (t % bins.cols, t / bins.cols);
+                ((tx * TILE_W) as i32) < b[2] && (((tx + 1) * TILE_W) as i32) > b[0] && ((ty * TILE_H) as i32) < b[3] && (((ty + 1) * TILE_H) as i32) > b[1]
+            });
+            blurred.push(shown.then(|| backdrop::blur(rec, scene.size, |x, y| {
                 let at = y as usize * stride + x as usize * 4;
                 [px[at + 2] as f32 / 255.0, px[at + 1] as f32 / 255.0, px[at] as f32 / 255.0, px[at + 3] as f32 / 255.0]
-            }));
+            })));
         }
         from = until;
     }
@@ -224,7 +231,7 @@ struct Painter<'p, 's> {
     breaks: Vec<u32>,
     segs: Vec<Segment>,
     /// The blurs of the frame's backdrop blur records painted so far, in order.
-    blurred: &'p [backdrop::Blurred],
+    blurred: &'p [Option<backdrop::Blurred>],
 }
 
 #[derive(Clone, Copy)]
@@ -312,11 +319,12 @@ impl Painter<'_, '_> {
         [tx * TILE_W, ty * TILE_H, ((tx + 1) * TILE_W).min(w), ((ty + 1) * TILE_H).min(h)]
     }
 
-    /// Tile `t`'s occluders, in painter order.
-    fn occluders(&mut self, t: usize) {
+    /// The occluders among `list` (a tile's instances in one phase), in painter order. A box
+    /// past a backdrop blur's record never stands in for what that blur reads: phases end at
+    /// each record, and occluders come from this phase only.
+    fn occluders(&mut self, list: &[u32]) {
         self.occ.clear();
-        if self.bins.quiet[t] { return; }
-        for &n in self.bins.tile(t) {
+        for &n in list {
             let i = &self.scene.instances[n as usize];
             let Some(solid) = super::bin::opaque_box(i) else { continue };
             let (b, tile) = (self.bins.bounds[n as usize], self.tile);
@@ -706,7 +714,7 @@ impl Painter<'_, '_> {
     /// A `KIND_BACKDROP_BLUR`'s composite, from the blur painted before it.
     fn backdrop(&mut self, i: &Instance, r: [u32; 4], clip: &Clip) {
         let Some(at) = self.bins.blurs.iter().position(|(n, _)| *n == self.n) else { return };
-        let Some(b) = self.blurred.get(at) else { return };
+        let Some(Some(b)) = self.blurred.get(at) else { return };
         for y in r[1]..r[3] {
             for x in r[0]..r[2] {
                 let c = backdrop::composite(b, i, clip, [x as f32 + 0.5, y as f32 + 0.5]);

@@ -90,7 +90,9 @@ pub(super) fn plan(prev: &Prev, scene: &Scene<'_>, bins: &Bins, exec: &dyn super
     let y1 = whole[3].min(whole[3] + dy as f32);
     let rect = [(whole[0] - 0.5).ceil().max(0.0) as u32, (y0 - 0.5).ceil().max(0.0) as u32, ((whole[2] - 0.5).floor() + 1.0).max(0.0) as u32, ((y1 - 0.5).floor() + 1.0).max(0.0) as u32];
     if rect[2] <= rect[0] || rect[3] <= rect[1] { return None; }
-    if prev.bins.cols != bins.cols || prev.bins.quiet.iter().any(|&q| q) { return None; }
+    // A backdrop blur's pixels never move: its record is in place in the old tiles that held it,
+    // so no tile drawn from them counts as moved.
+    if prev.bins.cols != bins.cols { return None; }
     // Any tile may have moved whole: instance for instance is the test, not the rect. Tile rows
     // go to threads.
     let clean: Vec<AtomicBool> = (0..bins.tile_count()).map(|_| AtomicBool::new(false)).collect();

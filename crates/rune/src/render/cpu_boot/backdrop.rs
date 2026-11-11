@@ -117,6 +117,13 @@ pub(super) fn blur(rec: &Record, viewport: (u32, u32), window: impl Fn(u32, u32)
     };
     let window_region = [rec.region[0] / v[0], rec.region[1] / v[1], rec.region[2] / v[0], rec.region[3] / v[1]];
     let window_map = [extent[0] / v[0], extent[1] / v[1], rec.origin[0] / v[0], rec.origin[1] / v[1]];
+    // The region's pixels as floats, once: the first pass reads each a few dozen times. A
+    // bilinear read at the region's edge reaches one pixel past it.
+    let (cx0, cy0) = ((rec.region[0].floor() as u32).saturating_sub(1), (rec.region[1].floor() as u32).saturating_sub(1));
+    let (cx1, cy1) = (((rec.region[2].ceil() as u32) + 1).min(viewport.0), ((rec.region[3].ceil() as u32) + 1).min(viewport.1));
+    let cw = cx1 - cx0;
+    let cache: Vec<[f32; 4]> = (cy0..cy1).flat_map(|y| (cx0..cx1).map(move |x| (x, y))).map(|(x, y)| window(x, y)).collect();
+    let window = |x: u32, y: u32| if x >= cx0 && x < cx1 && y >= cy0 && y < cy1 { cache[((y - cy0) * cw + (x - cx0)) as usize] } else { window(x, y) };
     let mut down: Vec<Level> = Vec::with_capacity(rec.n + 1);
     for m in 0..=rec.n {
         let (w, h) = dims(m);

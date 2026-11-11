@@ -81,8 +81,15 @@ impl CpuPainter {
         if self.size != scene.size { self.hashes.clear(); }
         self.dirty.clear();
         let all = self.hashes.len() != self.next.len();
-        // A blur reads its neighbours' pixels: the tiles under one paint every frame.
-        let changed = |t: usize| all || bins.quiet[t] || self.hashes[t] != self.next[t];
+        // A backdrop blur reads every pixel of its region: when any tile there changed, the
+        // whole region paints again (what's under the blur first, then the blur).
+        let mut redo = vec![false; self.next.len()];
+        for (_, rec) in &bins.blurs {
+            if all || super::bin::region_tiles(rec.region, bins.cols, bins.rows).any(|t| self.hashes[t] != self.next[t]) {
+                for t in super::bin::region_tiles(rec.region, bins.cols, bins.rows) { redo[t] = true; }
+            }
+        }
+        let changed = |t: usize| all || redo[t] || self.hashes[t] != self.next[t];
         let by_hash = (0..self.next.len()).filter(|&t| changed(t)).count();
         // Only a frame that changed many tiles can be a scroll; and a move is kept only when it
         // leaves fewer tiles to paint than the hashes alone do.
