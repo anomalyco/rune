@@ -17,7 +17,7 @@ use objc2_foundation::{
     NSArray, NSAttributedString, NSCopying, NSData, NSDictionary, NSNumber, NSRange, NSString, NSURL, NSUTF8StringEncoding,
 };
 use zeroize::Zeroizing;
-use super::{ClipboardContent, ClipboardImage, MAX_IMAGE_BYTES};
+use super::{ClipboardContent, ClipboardImage, MAX_IMAGE_BYTES, Wipe};
 use super::html::MAX_RICH_BYTES;
 
 /// Refuse to hand AppKit's RTF parser multi-megabyte blobs (e.g. embedded images).
@@ -57,6 +57,30 @@ pub(super) fn write(pb: &NSPasteboard, content: &ClipboardContent) -> Result<(),
         if !pb.writeObjects(&objects) { return Err(refused("content")); }
         Ok(())
     })
+}
+
+/// Writes a secret as arboard would (the text, marked concealed for clipboard managers) and
+/// returns the change count `clearContents` gave it: the count of this write, with no window for
+/// another app's write to be taken for it.
+pub(super) fn write_secret(pb: &NSPasteboard, text: &str) -> Result<u64, String> {
+    autoreleasepool(|_| unsafe {
+        let count = pb.clearContents() as u64;
+        let objects = NSArray::from_vec(vec![ProtocolObject::from_retained(NSString::from_str(text))]);
+        let written = pb.writeObjects(&objects);
+        pb.setString_forType(&NSString::from_str(""), &NSString::from_str("org.nspasteboard.ConcealedType"));
+        if written { Ok(count) } else { Err("NSPasteboard#writeObjects: returned false".into()) }
+    })
+}
+
+/// Clears the pasteboard if its change count is still `revision`. The pasteboard has no lock,
+/// so another app's write can still land between the count and the clear; the count is read
+/// last, right before it. A clear that finds another write slipped in reports the secret gone.
+pub(super) fn clear_if(pb: &NSPasteboard, revision: Option<u64>) -> Wipe {
+    unsafe {
+        let before = pb.changeCount() as u64;
+        if Some(before) != revision { return Wipe::NotOurs; }
+        if pb.clearContents() as u64 == before + 1 { Wipe::Done } else { Wipe::NotOurs }
+    }
 }
 
 /// Plain text, HTML and RTF, with HTML made from the RTF when the pasteboard has no HTML, and
@@ -249,6 +273,28 @@ mod tests {
         }
         let both = read(&pb, true).unwrap();
         assert_eq!((both.text(), both.image().map(|i| i.png().to_vec())), ("shot.png", Some(png_2x3())), "PNG passes through as is");
+        let _: () = unsafe { objc2::msg_send![&pb, releaseGlobally] };
+    }
+
+    /// A secret's change count is the write's own, and a clear goes only to that write.
+    #[test]
+    fn a_secret_carries_its_change_count_and_is_cleared_only_while_it_holds() {
+        let pb: Option<Retained<NSPasteboard>> = unsafe { objc2::msg_send_id![NSPasteboard::class(), pasteboardWithUniqueName] };
+        let Some(pb) = pb else { return eprintln!("no pasteboard server; skipped") };
+        let count = write_secret(&pb, "hunter2").unwrap();
+        assert_eq!(count, unsafe { pb.changeCount() } as u64);
+        assert_eq!(read(&pb, false).unwrap().text(), "hunter2");
+        let concealed = unsafe { pb.types() }.unwrap().iter().any(|t| t.to_string() == "org.nspasteboard.ConcealedType");
+        assert!(concealed, "clipboard managers are told to skip it");
+        unsafe {
+            pb.clearContents();
+            pb.setString_forType(&NSString::from_str("hunter2"), NSPasteboardTypeString);
+        }
+        assert_eq!(clear_if(&pb, Some(count)), Wipe::NotOurs, "the same text from another app is left");
+        assert_eq!(read(&pb, false).unwrap().text(), "hunter2");
+        let count = write_secret(&pb, "hunter2").unwrap();
+        assert_eq!(clear_if(&pb, Some(count)), Wipe::Done);
+        assert!(read(&pb, false).is_none());
         let _: () = unsafe { objc2::msg_send![&pb, releaseGlobally] };
     }
 

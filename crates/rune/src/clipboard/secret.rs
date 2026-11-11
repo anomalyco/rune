@@ -163,6 +163,17 @@ pub(super) struct Alarm {
     pub(super) due: Instant,
 }
 
+/// How a clipboard answered a wipe of Rune's secret.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Wipe {
+    /// It held the secret and doesn't any more.
+    Done,
+    /// Something else is on it now; it was left alone.
+    NotOurs,
+    /// It couldn't be read or wiped just now: the secret may still be on it.
+    Failed,
+}
+
 /// One clipboard's record of the secret Rune wrote to it last.
 #[derive(Default)]
 pub(super) enum Hold {
@@ -174,10 +185,10 @@ pub(super) enum Hold {
         attempt: Attempt,
         slot: Arc<Slot>,
         notify: Option<Notify>,
-        /// `None` only when the delay is too long for the clock to represent.
-        due: Option<Instant>,
-        /// The clipboard's change count after the write, where it has one.
+        /// The clipboard's change count from the write, where it has one.
         revision: Option<u64>,
+        /// Who the OS says put the write there (an X11 selection owner), where it says.
+        writer: Option<u64>,
         /// A keyed hash of the text, so the text needn't stay in memory until the clear.
         print: u64,
     },
@@ -194,28 +205,27 @@ impl Hold {
     pub(super) fn armed(&self, alarm: Attempt) -> bool {
         matches!(self, Self::Holding { attempt, .. } if *attempt == alarm)
     }
-    pub(super) fn next_check(&self, watch: Instant) -> Option<Instant> {
-        let Self::Holding { due, .. } = self else { return None };
-        Some(due.map_or(watch, |d| d.min(watch)))
-    }
 }
 
 pub(super) enum HoldEvent {
     /// A secret reached the clipboard and has been reported as holding it.
-    Written { slot: Arc<Slot>, notify: Option<Notify>, due: Option<Instant>, revision: Option<u64>, print: u64 },
+    Written { slot: Arc<Slot>, notify: Option<Notify>, due: Option<Instant>, revision: Option<u64>, writer: Option<u64>, print: u64 },
     /// A later write took its place, or the clipboard changed under it.
     Lost,
-    /// A clear was asked for; `ours` says whether the clipboard still has what Rune wrote.
-    Clear { ours: bool },
-    /// The caller wiped the clipboard itself and confirmed it.
-    Wiped,
-    /// An alarm came due.
-    Due { attempt: Attempt, ours: bool },
+    /// A clear was asked for. A `patient` one leaves a secret that turns out to be gone for the
+    /// periodic check to settle, as if it had never been asked.
+    Clear { patient: bool },
+    /// An alarm came due at `now`.
+    Due { attempt: Attempt, now: Instant },
+    /// The clipboard's answer to a wipe this hold asked for. A failed one is tried again at
+    /// `again`, if it was the delay's.
+    Swept { wipe: Wipe, patient: bool, again: Option<Instant> },
 }
 
 pub(super) enum HoldEffect {
-    /// Wipe the clipboard.
-    Wipe,
+    /// Wipe the clipboard if it still holds the secret, and answer with [`HoldEvent::Swept`]. A
+    /// wipe the delay asked for at `expiring` is tried again a watch later if it fails.
+    WipeIfOurs { patient: bool, expiring: Option<Instant> },
     Release(Arc<Slot>, SecretState),
     Notify(Notify),
     /// Replace the alarm being waited on: a new hold never inherits the last one's.
@@ -224,28 +234,28 @@ pub(super) enum HoldEffect {
 
 pub(super) fn step_hold(seq: &mut Seq, hold: &mut Hold, event: HoldEvent) -> Effects<HoldEffect> {
     match event {
-        HoldEvent::Written { slot, notify, due, revision, print } => {
+        HoldEvent::Written { slot, notify, due, revision, writer, print } => {
             let mut effects = release(hold, SecretState::Replaced);
             let attempt = seq.next();
-            *hold = Hold::Holding { attempt, slot, notify: notify.clone(), due, revision, print };
+            *hold = Hold::Holding { attempt, slot, notify: notify.clone(), revision, writer, print };
             effects.push(HoldEffect::Arm(due.map(|due| Alarm { attempt, due })));
             if let Some(notify) = notify { effects.push(HoldEffect::Notify(notify)); }
             effects
         }
         HoldEvent::Lost => release(hold, SecretState::Replaced),
-        HoldEvent::Clear { ours } => settle(hold, ours),
-        HoldEvent::Wiped => release(hold, SecretState::Cleared),
-        HoldEvent::Due { attempt, ours } if hold.armed(attempt) => settle(hold, ours),
-        HoldEvent::Due { .. } => Effects::none(),
+        HoldEvent::Clear { patient } if !hold.is_free() => Effects::one(HoldEffect::WipeIfOurs { patient, expiring: None }),
+        HoldEvent::Due { attempt, now } if hold.armed(attempt) => Effects::one(HoldEffect::WipeIfOurs { patient: false, expiring: Some(now) }),
+        HoldEvent::Clear { .. } | HoldEvent::Due { .. } => Effects::none(),
+        HoldEvent::Swept { wipe: Wipe::Done, .. } => release(hold, SecretState::Cleared),
+        HoldEvent::Swept { wipe: Wipe::NotOurs, patient: false, .. } => release(hold, SecretState::Replaced),
+        HoldEvent::Swept { wipe: Wipe::NotOurs, patient: true, .. } => Effects::none(),
+        // The hold and its delay stay, so the delay still clears the secret; once the delay
+        // has run out, a retry takes its place.
+        HoldEvent::Swept { wipe: Wipe::Failed, again, .. } => match (hold, again) {
+            (Hold::Holding { attempt, .. }, Some(due)) => Effects::one(HoldEffect::Arm(Some(Alarm { attempt: *attempt, due }))),
+            _ => Effects::none(),
+        },
     }
-}
-
-/// Ends a hold on a clear: wipes only what is still ours.
-fn settle(hold: &mut Hold, ours: bool) -> Effects<HoldEffect> {
-    if hold.is_free() || !ours { return release(hold, SecretState::Replaced); }
-    let mut effects = Effects::one(HoldEffect::Wipe);
-    effects.extend(release(hold, SecretState::Cleared));
-    effects
 }
 
 fn release(hold: &mut Hold, state: SecretState) -> Effects<HoldEffect> {

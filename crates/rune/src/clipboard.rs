@@ -29,6 +29,10 @@ mod macos;
 mod native;
 #[cfg(target_arch = "wasm32")]
 mod web;
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))]
+mod linux;
+#[cfg(target_os = "windows")]
+mod win32;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::tiff_to_png;
 pub use content::{ClipboardContent, ClipboardImage, MAX_IMAGE_BYTES};
@@ -36,7 +40,7 @@ pub use content::{ClipboardContent, ClipboardImage, MAX_IMAGE_BYTES};
 use content::valid_image_size;
 pub use html::sanitize_html;
 pub use secret::{SecretCopy, SecretState};
-use secret::{Alarm, Hold, HoldEffect, HoldEvent, Slot, Unwritten, step_hold};
+use secret::{Alarm, Hold, HoldEffect, HoldEvent, Slot, Unwritten, Wipe, step_hold};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> { m.lock().unwrap_or_else(|e| e.into_inner()) }
 
@@ -269,6 +273,26 @@ pub(crate) fn shutdown() {
     native::shutdown();
 }
 
+/// Whether the clipboard still holds the secret Rune wrote.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Owner {
+    Ours,
+    Theirs,
+    /// It couldn't be read just now.
+    Unknown,
+}
+
+/// What Rune's secret write left on a clipboard, to tell it from anything put there since.
+struct Mark<'a> {
+    revision: Option<u64>,
+    writer: Option<u64>,
+    keys: &'a RandomState,
+    print: u64,
+}
+impl Mark<'_> {
+    fn text_is(&self, text: &str) -> bool { self.keys.hash_one(text) == self.print }
+}
+
 trait Backend {
     fn write(&mut self, copy: &ClipboardWrite) -> Result<(), String>;
     fn text(&mut self) -> Option<Zeroizing<String>>;
@@ -277,9 +301,45 @@ trait Backend {
     fn content(&mut self, _all: bool) -> Option<ClipboardContent> { self.text().map(ClipboardContent::from) }
     fn revision(&self) -> Option<u64>;
     fn clear(&mut self) -> Result<(), String>;
+    /// The text, telling a clipboard that can't be read just now (`Err`) from one without text.
+    fn read_text(&mut self) -> Result<Option<Zeroizing<String>>, String> { Ok(self.text()) }
+    /// Who put what the clipboard holds there, where the OS says: X11's selection owner.
+    fn writer(&mut self) -> Result<Option<u64>, String> { Ok(None) }
+    /// The change count and writer of the write that just succeeded, taken during it where the
+    /// OS allows, else straight after it.
+    fn stamp(&mut self) -> (Option<u64>, Option<u64>) { (self.revision(), self.writer().ok().flatten()) }
+    /// Whether the clipboard still holds the write `mark` describes.
+    fn owner(&mut self, mark: &Mark) -> Owner {
+        if mark.revision != self.revision() { return Owner::Theirs; }
+        if mark.writer.is_some() {
+            match self.writer() {
+                Err(_) => return Owner::Unknown,
+                Ok(writer) if writer != mark.writer => return Owner::Theirs,
+                Ok(_) => {}
+            }
+        }
+        match self.read_text() {
+            Err(_) => Owner::Unknown,
+            Ok(Some(text)) if mark.text_is(&text) => Owner::Ours,
+            Ok(_) => Owner::Theirs,
+        }
+    }
+    /// Wipes the clipboard if it still holds the write `mark` describes. Where the OS has a way,
+    /// another app's copy can't land between the check and the wipe; here it can.
+    fn clear_if(&mut self, mark: &Mark) -> Wipe {
+        match self.owner(mark) {
+            Owner::Ours => {}
+            Owner::Theirs => return Wipe::NotOurs,
+            Owner::Unknown => return Wipe::Failed,
+        }
+        if self.clear().is_err() { return Wipe::Failed; }
+        // A wipe that reports success and changes nothing.
+        if self.owner(mark) == Owner::Ours { Wipe::Failed } else { Wipe::Done }
+    }
 }
-/// How often the worker checks that a held secret is still on the clipboard. Where there is no
-/// change count (Linux) it compares the text's fingerprint, so it checks less often.
+/// How often the worker checks that a held secret is still on the clipboard, and how soon a wipe
+/// that failed is tried again. Where there is no change count (Linux) it asks who owns the
+/// clipboard (X11) and compares the text's fingerprint, so it checks less often.
 const WATCH: Duration = if cfg!(any(target_os = "macos", target_os = "windows")) {
     Duration::from_millis(250)
 } else {
@@ -309,7 +369,9 @@ impl WriteSteps for RealTime {
 struct Core { keys: RandomState, seq: Seq, hold: Hold, alarm: Option<Alarm>, own_pills: Option<OwnPills> }
 impl Core {
     fn next_check(&self) -> Option<Instant> {
-        self.hold.next_check(Instant::now() + WATCH)
+        if self.hold.is_free() { return None; }
+        let watch = Instant::now() + WATCH;
+        Some(self.alarm.map_or(watch, |a| a.due.min(watch)))
     }
 
     fn handle<B: Backend>(&mut self, cb: &mut B, request: Request) {
@@ -374,44 +436,41 @@ impl Core {
             let due = steps.now().checked_add(delay);
             steps.hashing();
             let print = self.keys.hash_one(copy.content.text());
-            self.apply(cb, HoldEvent::Written { slot: slot.clone(), notify, due, revision: rev, print });
+            let (revision, writer) = cb.stamp();
+            self.apply(cb, HoldEvent::Written { slot: slot.clone(), notify, due, revision, writer, print });
             if slot.cancelled() { self.clear(cb, Some(&slot)); }
         }
     }
 
     /// Steps the hold and carries its effects out, in order.
     fn apply<B: Backend>(&mut self, cb: &mut B, event: HoldEvent) {
+        let mut answer = None;
         for effect in step_hold(&mut self.seq, &mut self.hold, event) {
             match effect {
-                HoldEffect::Wipe => {
-                    let _ = cb.clear();
-                    self.own_pills = None;
+                HoldEffect::WipeIfOurs { patient, expiring } => {
+                    let wipe = self.mark().map_or(Wipe::NotOurs, |mark| cb.clear_if(&mark));
+                    if wipe == Wipe::Done { self.own_pills = None; }
+                    answer = Some(HoldEvent::Swept { wipe, patient, again: expiring.map(|now| now + WATCH) });
                 }
                 HoldEffect::Release(slot, state) => slot.released(state),
                 HoldEffect::Notify(notify) => notify.send(),
                 HoldEffect::Arm(alarm) => self.alarm = alarm,
             }
         }
+        if let Some(answer) = answer { self.apply(cb, answer); }
     }
 
-    fn unchanged<B: Backend>(&self, cb: &mut B) -> bool {
-        let Hold::Holding { revision, print, .. } = &self.hold else { return false };
-        *revision == cb.revision() && cb.text().is_some_and(|t| self.keys.hash_one(t.as_str()) == *print)
+    fn mark(&self) -> Option<Mark<'_>> {
+        let Hold::Holding { revision, writer, print, .. } = &self.hold else { return None };
+        Some(Mark { revision: *revision, writer: *writer, keys: &self.keys, print: *print })
     }
 
+    /// A clear of a failed replay is patient: if the secret turns out gone, the hold settles as it
+    /// would have without the clear.
     fn clear<B: Backend>(&mut self, cb: &mut B, which: Option<&Arc<Slot>>) {
         if !self.hold.answers(which) { return; }
-        if which.is_some_and(|s| s.failed()) { return self.recover(cb); }
-        let ours = self.unchanged(cb);
-        self.apply(cb, HoldEvent::Clear { ours });
-    }
-
-    /// Clears what a failed replay left held. Anything short of a confirmed wipe keeps the hold,
-    /// so its delay still clears the secret.
-    fn recover<B: Backend>(&mut self, cb: &mut B) {
-        if !self.unchanged(cb) || cb.clear().is_err() || self.unchanged(cb) { return; }
-        self.own_pills = None;
-        self.apply(cb, HoldEvent::Wiped);
+        let patient = which.is_some_and(|s| s.failed());
+        self.apply(cb, HoldEvent::Clear { patient });
     }
 
     /// Expire the held secret, or let it go if the clipboard changed under it.
@@ -426,15 +485,13 @@ impl Core {
         }
         if let Some(alarm) = self.alarm.filter(|a| now >= a.due) {
             self.alarm = None;
-            if self.hold.armed(alarm.attempt) {
-                let ours = self.unchanged(cb);
-                return self.apply(cb, HoldEvent::Due { attempt: alarm.attempt, ours });
-            }
+            if self.hold.armed(alarm.attempt) { return self.apply(cb, HoldEvent::Due { attempt: alarm.attempt, now }); }
         }
-        let Hold::Holding { revision, .. } = &self.hold else { return };
-        let changed = match *revision {
+        let Some(mark) = self.mark() else { return };
+        let changed = match mark.revision {
             Some(revision) => cb.revision() != Some(revision),
-            None => !self.unchanged(cb),
+            // A clipboard that can't be read now keeps the hold.
+            None => cb.owner(&mark) == Owner::Theirs,
         };
         if changed { self.apply(cb, HoldEvent::Lost); }
     }

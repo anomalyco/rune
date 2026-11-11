@@ -45,7 +45,7 @@ impl Worker {
 }
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 fn worker() -> &'static mpsc::Sender<Request> {
-    &WORKER.get_or_init(|| Worker::spawn(|| arboard::Clipboard::new().ok())).sender
+    &WORKER.get_or_init(|| Worker::spawn(|| arboard::Clipboard::new().ok().map(Native::new))).sender
 }
 
 #[cfg(any(target_os = "ios", target_os = "android"))]
@@ -58,10 +58,55 @@ pub(super) fn shutdown() {
     if let Some(worker) = WORKER.get() { worker.stop(); }
 }
 
+/// The OS clipboard through arboard, and what arboard leaves out for secrets: the change count
+/// of the write itself (macOS), who owns the clipboard (X11), and a wipe that checks ownership
+/// as one step where the OS allows (Windows, X11).
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
-impl Backend for arboard::Clipboard {
-    fn write(&mut self, copy: &ClipboardWrite) -> Result<(), String> { write(self, copy) }
-    fn text(&mut self) -> Option<Zeroizing<String>> { self.get_text().ok().map(Zeroizing::new) }
+pub(super) struct Native {
+    cb: arboard::Clipboard,
+    /// The change count `clearContents` gave the last secret write.
+    #[cfg(target_os = "macos")]
+    stamped: Option<u64>,
+    #[cfg(all(unix, not(target_os = "macos")))]
+    session: linux::Session,
+}
+
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+impl Native {
+    fn new(cb: arboard::Clipboard) -> Self {
+        Self {
+            cb,
+            #[cfg(target_os = "macos")]
+            stamped: None,
+            #[cfg(all(unix, not(target_os = "macos")))]
+            session: linux::Session::open(),
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+impl Backend for Native {
+    fn write(&mut self, copy: &ClipboardWrite) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        {
+            self.stamped = None;
+            if copy.clear_after.is_some() {
+                let pb = unsafe { objc2_app_kit::NSPasteboard::generalPasteboard() };
+                self.stamped = Some(macos::write_secret(&pb, copy.content.text())?);
+                return Ok(());
+            }
+        }
+        write(&mut self.cb, copy)
+    }
+    fn text(&mut self) -> Option<Zeroizing<String>> { self.cb.get_text().ok().map(Zeroizing::new) }
+    fn read_text(&mut self) -> Result<Option<Zeroizing<String>>, String> {
+        match self.cb.get_text() {
+            Ok(text) => Ok(Some(Zeroizing::new(text))),
+            // Empty, or not text: either way not the secret.
+            Err(arboard::Error::ContentNotAvailable | arboard::Error::ConversionFailure) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
+    }
     #[cfg(target_os = "macos")]
     fn content(&mut self, all: bool) -> Option<ClipboardContent> {
         macos::read(&*unsafe { objc2_app_kit::NSPasteboard::generalPasteboard() }, all)
@@ -73,15 +118,15 @@ impl Backend for arboard::Clipboard {
     fn content(&mut self, all: bool) -> Option<ClipboardContent> {
         let text = self.text();
         #[cfg(target_os = "windows")]
-        let html = windows_read_html().or_else(|| self.get().html().ok()).filter(|h| !h.is_empty() && h.len() <= html::MAX_RICH_BYTES);
+        let html = windows_read_html().or_else(|| self.cb.get().html().ok()).filter(|h| !h.is_empty() && h.len() <= html::MAX_RICH_BYTES);
         #[cfg(not(target_os = "windows"))]
-        let html = self.get().html().ok().filter(|h| !h.is_empty() && h.len() <= html::MAX_RICH_BYTES);
+        let html = self.cb.get().html().ok().filter(|h| !h.is_empty() && h.len() <= html::MAX_RICH_BYTES);
         #[cfg(any(target_os = "windows", all(unix, not(any(target_os = "ios", target_os = "android")))))]
-        let image = all.then(|| self.get_image().ok()).flatten()
+        let image = all.then(|| self.cb.get_image().ok()).flatten()
             .and_then(|i| u32::try_from(i.width).ok().zip(u32::try_from(i.height).ok()).and_then(|(w, h)| ClipboardImage::from_rgba(w, h, &i.bytes)));
         #[cfg(not(any(target_os = "windows", all(unix, not(any(target_os = "ios", target_os = "android"))))))]
         let image: Option<ClipboardImage> = None;
-        let files = if all { self.get().file_list().unwrap_or_default() } else { Vec::new() };
+        let files = if all { self.cb.get().file_list().unwrap_or_default() } else { Vec::new() };
         if text.is_none() && html.is_none() && image.is_none() && files.is_empty() { return None; }
         let mut content = ClipboardContent::from(text.unwrap_or_default()).with_files(files);
         if let Some(html) = html { content = content.with_html(html); }
@@ -89,7 +134,50 @@ impl Backend for arboard::Clipboard {
         Some(content)
     }
     fn revision(&self) -> Option<u64> { revision() }
-    fn clear(&mut self) -> Result<(), String> { arboard::Clipboard::clear(self).map_err(|e| e.to_string()) }
+    fn clear(&mut self) -> Result<(), String> { self.cb.clear().map_err(|e| e.to_string()) }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn writer(&mut self) -> Result<Option<u64>, String> { self.session.writer() }
+    fn stamp(&mut self) -> (Option<u64>, Option<u64>) {
+        #[cfg(target_os = "macos")]
+        if let Some(count) = self.stamped.take() { return (Some(count), None); }
+        // arboard's own read answers from its own connection once the server has its write, so
+        // the owner asked for next is the write's or a later one, never the one before it.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if self.session.has_writer() { let _ = self.cb.get_text(); }
+        // No owner (0) means the write's owner wasn't seen: judge by the text alone, as before.
+        (self.revision(), self.writer().ok().flatten().filter(|&w| w != 0))
+    }
+    #[cfg(target_os = "macos")]
+    fn clear_if(&mut self, mark: &Mark) -> Wipe {
+        match self.owner(mark) {
+            Owner::Ours => {}
+            Owner::Theirs => return Wipe::NotOurs,
+            Owner::Unknown => return Wipe::Failed,
+        }
+        macos::clear_if(&*unsafe { objc2_app_kit::NSPasteboard::generalPasteboard() }, mark.revision)
+    }
+    #[cfg(target_os = "windows")]
+    fn clear_if(&mut self, mark: &Mark) -> Wipe { win32::clear_if(mark) }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn clear_if(&mut self, mark: &Mark) -> Wipe {
+        match self.owner(mark) {
+            Owner::Ours => {}
+            Owner::Theirs => return Wipe::NotOurs,
+            Owner::Unknown => return Wipe::Failed,
+        }
+        match mark.writer {
+            Some(writer) => self.session.release_if(writer),
+            None => {
+                match self.session.marked_secret() {
+                    Ok(true) => {}
+                    Ok(false) => return Wipe::NotOurs,
+                    Err(_) => return Wipe::Failed,
+                }
+                if self.clear().is_err() { return Wipe::Failed; }
+                if self.owner(mark) == Owner::Ours { Wipe::Failed } else { Wipe::Done }
+            }
+        }
+    }
 }
 
 fn run_worker<B: Backend>(recv: mpsc::Receiver<Request>, mut open: impl FnMut() -> Option<B>) {
@@ -154,8 +242,6 @@ fn write_one_form(cb: &mut arboard::Clipboard, content: &ClipboardContent) -> Re
 fn write_text(cb: &mut arboard::Clipboard, copy: &ClipboardWrite) -> Result<(), arboard::Error> {
     let text = copy.content.text();
     if copy.clear_after.is_none() { return cb.set_text(text); }
-    #[cfg(target_os = "macos")]
-    { use arboard::SetExtApple; return cb.set().exclude_from_history().text(text); }
     #[cfg(target_os = "windows")]
     { use arboard::SetExtWindows; return cb.set().exclude_from_monitoring().text(text); }
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
