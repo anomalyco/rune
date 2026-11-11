@@ -20,6 +20,8 @@ pub(super) struct Keep {
     pub path: String,
     pub viewport: String,
     pub was: f32,
+    /// When the element lives inside a virtual row: `(virtual_list_path, row_key, y_in_row)`.
+    pub virtual_row: Option<(String, String, f32)>,
     /// The element, or the header it's in, was stuck to the top: it stays there for the commit.
     pub hold: Option<Hold>,
 }
@@ -290,6 +292,12 @@ mod tests {
     }
 }
 
+/// The nearest vertical scroll viewport around node `i` of `nodes`.
+fn vertical_viewport(nodes: &[Node], i: usize) -> Option<usize> {
+    std::iter::successors(nodes[i].parent, |&p| nodes[p].parent)
+        .find(|&p| nodes[p].scroll.is_some() && nodes[p].scroll_axes.y())
+}
+
 /// How far a sticky box with edges `top`, `bottom`, `left` and `right` moves from where
 /// scrolling put it, along the edge's axis. `frame` holds its viewport's top and bottom, then
 /// its parent's content box top and bottom, then the same four for the horizontal axis.
@@ -413,8 +421,7 @@ impl<S: 'static> Runtime<S> {
 
     /// The nearest vertical scroll viewport around node `i`.
     pub(super) fn viewport_of(&self, i: usize) -> Option<usize> {
-        std::iter::successors(self.nodes[i].parent, |&p| self.nodes[p].parent)
-            .find(|&p| self.nodes[p].scroll.is_some() && self.nodes[p].scroll_axes.y())
+        vertical_viewport(&self.nodes, i)
     }
 
     /// Records where each `Tx::keep_on_screen` element showed on the last frame, before the
@@ -446,12 +453,13 @@ impl<S: 'static> Runtime<S> {
                         self.nodes[i].target[1] - self.nodes[r].target[1],
                     ))
                 });
-            self.requests.step(requests::Event::Capture(Keep {
+            self.requests.step(requests::Event::Arrive(requests::Request::Capture(Keep {
                 path: self.nodes[i].path.clone(),
                 viewport: self.nodes[s].path.clone(),
                 was: self.drawn[i][1] - self.drawn[s][1],
+                virtual_row,
                 hold,
-            }, virtual_row));
+            })));
         }
     }
 
@@ -540,12 +548,14 @@ impl<S: 'static> Runtime<S> {
     /// virtual rows the jump brings into view.
     pub(super) fn apply_keeps(&mut self) {
         if !self.requests.has_keeps() { return; }
+        let mut keeps = self.requests.take_keeps();
         for pass in 0..4 {
             // Step with the keeps in place: they own their viewports (`ease_to_shrunk_end`).
+            self.requests.restore_keeps(keeps);
             self.step_scroll(0.0);
-            let mut requests = std::mem::take(&mut self.requests);
+            keeps = self.requests.take_keeps();
             let mut moved = false;
-            for (k, virtual_row) in requests.anchors() {
+            for k in &keeps {
                 let Some(s) = self.nodes.iter().position(|n| n.path == k.viewport && n.scroll.is_some() && n.scroll_axes.y()) else { continue };
                 let laid = if let Some(i) = self.nodes.iter().position(|n| n.path == k.path) {
                     if self.viewport_of(i) != Some(s) { continue; }
@@ -556,7 +566,7 @@ impl<S: 'static> Runtime<S> {
                     }
                     // Mounted anchors follow drawn geometry after the motion step.
                     continue;
-                } else if let Some((v_path, row_key, in_row)) = virtual_row
+                } else if let Some((v_path, row_key, in_row)) = &k.virtual_row
                     && let Some(v) = self.virtuals.get(v_path)
                     && let Some(idx) = v.index_of(row_key)
                 {
@@ -574,12 +584,10 @@ impl<S: 'static> Runtime<S> {
                 st.land(stick);
                 moved = true;
             }
-            if !moved || !self.virtual_window_changed() { self.requests = requests; break; }
-            self.requests = requests.take_reveals();
+            if !moved || !self.virtual_window_changed() { break; }
             self.commit(&Tx::default());
-            requests.restore_reveals(std::mem::take(&mut self.requests));
-            self.requests = requests;
         }
+        self.requests.restore_keeps(keeps);
     }
 
     /// Compensate this frame's drawn displacement, in viewport coordinates. Sticky
@@ -649,14 +657,12 @@ impl<S: 'static> Runtime<S> {
         // Once the content end prevents holding the anchor, let stick-bottom own the
         // viewport again, including growth committed while the collapse is still settling.
         if !self.requests.has_keeps() { return moved; }
-        let mut requests = std::mem::take(&mut self.requests);
-        requests.step(requests::Event::RetainKeeps(&|k| {
+        self.requests.step(requests::Event::RetainKeeps(&|k| {
             let Some(i) = self.nodes.iter().position(|n| n.path == k.path) else { return true };
-            let Some(s) = self.viewport_of(i) else { return false };
+            let Some(s) = vertical_viewport(&self.nodes, i) else { return false };
             !(self.scrolls.get(&self.nodes[s].id).is_some_and(|st| st.pinned())
                 && self.drawn[i][1] - self.drawn[s][1] > k.was + 0.5)
         }));
-        self.requests = requests;
         moved
     }
 

@@ -1,3 +1,4 @@
+use super::super::sticky::{Hold, Keep};
 use super::*;
 
 #[derive(Clone, Copy, Debug)]
@@ -70,11 +71,12 @@ impl Old {
 }
 
 fn drive(requests: &mut Requests, input: Input) -> Placement {
-    let anchor = |v: &str, p: &str| super::Keep { path: p.into(), viewport: v.into(), was: 7.0,
-        hold: (p == "item").then(|| super::super::sticky::Hold { path: "header".into(), inset: 1.0 }) };
+    let anchor = |v: &str, p: &str| Keep { path: p.into(), viewport: v.into(), was: 7.0, virtual_row: None,
+        hold: (p == "item").then(|| Hold { path: "header".into(), inset: 1.0 }) };
     let effects = match input {
-        CaptureKey(v, row) => requests.step(Event::Capture(anchor(v, "item"), row.then(|| ("list".into(), "row".into(), 3.0)))),
-        Fold => requests.step(Event::FoldAnchor(anchor("a", "below"))),
+        CaptureKey(v, row) => requests.step(Event::Arrive(Request::Capture(Keep { virtual_row:
+            row.then(|| ("list".into(), "row".into(), 3.0)), ..anchor(v, "item") }))),
+        Fold => requests.step(Event::Arrive(Request::FoldAnchor(anchor("a", "below")))),
         Place { viewport, first, to, at_end } => requests.step(Event::Place { viewport, scope: Some("scope"),
             key: "mark", center: viewport == "a", first, at_end, from: 5.0, to }),
         Tail => requests.step(Event::NewTail { viewport: "a", key: "new" }),
@@ -104,8 +106,8 @@ fn every_request_sequence_matches_the_separate_keep_and_reveal_lists() {
             sequence.push(input);
             let (mut old, mut real) = (old.clone(), real.clone());
             assert_eq!(drive(&mut real, input), old.apply(input), "{sequence:?}");
-            let snapshot = Old { keeps: real.anchors().map(|(k, row)| OldKeep { path: k.path.clone(), viewport: k.viewport.clone(),
-                was: k.was, virtual_row: row.cloned(), hold: k.hold.as_ref().map(|h| (h.path.clone(), h.inset)) }).collect(),
+            let snapshot = Old { keeps: real.keeps().map(|k| OldKeep { path: k.path.clone(), viewport: k.viewport.clone(),
+                was: k.was, virtual_row: k.virtual_row.clone(), hold: k.hold.as_ref().map(|h| (h.path.clone(), h.inset)) }).collect(),
                 scroll_reveals: real.reveals().map(|r| OldReveal { viewport: r.viewport.clone(), scope: r.scope.clone(),
                     key: r.key.clone(), center: r.center, at_end: r.at_end }).collect() };
             assert_eq!(snapshot, old, "{sequence:?}");

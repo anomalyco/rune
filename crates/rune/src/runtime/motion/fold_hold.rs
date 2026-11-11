@@ -106,12 +106,13 @@ impl<S: 'static> Runtime<S> {
             && let Some(i) = self.nodes.iter().position(|n| n.id == below.id)
             && let Some(v) = self.nodes.iter().position(|n| n.id == nodes[s].id)
         {
-            self.requests.step(requests::Event::FoldAnchor(sticky::Keep {
+            self.requests.step(requests::Event::Arrive(requests::Request::FoldAnchor(sticky::Keep {
                 path: below.path.clone(),
                 viewport: viewport.clone(),
                 was: self.drawn[i][1] - self.drawn[v][1],
+                virtual_row: None,
                 hold: None,
-            }));
+            })));
         }
         // How far below the viewport's top the fold's top showed: its header rises that far.
         let shown = (self.drawn.len() == self.nodes.len()).then(|| {

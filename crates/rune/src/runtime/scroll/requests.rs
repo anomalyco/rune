@@ -1,98 +1,103 @@
-//! Requests outliving a commit. Keep and reveal are independent for fold-installed anchors;
-//! ordinary captures replace both. Store them by kind so paint can skip an empty kind in O(1)
-//! and preserve the order within each pass.
+//! Requests that outlive a commit: `Tx::keep_on_screen` anchors, a fold's row held below its
+//! header, and `Tx::scroll_into_view`/`Tx::scroll_center` reveals. One [`Request`] and one
+//! [`Requests::step`] own their life, so which request a viewport keeps, and when it gives way
+//! to another, is answered in one place instead of five scans across three files.
+//!
+//! They are stored in two lanes because they are consumed apart: the paint pass reads only
+//! keeps, and the nested commit that remounts virtual rows lifts only the keeps out, leaving
+//! the reveals' buffer where it is.
 use super::sticky::{Keep, Reveal};
 use crate::machine::Effects;
 
-pub(super) type VirtualRow = (String, String, f32);
-
-#[derive(Clone)]
-enum Request { Mounted(Keep), Virtual { anchor: Keep, row: VirtualRow }, Reveal(Reveal) }
-
-impl Request {
-    fn viewport(&self) -> &str {
-        match self { Self::Mounted(k) | Self::Virtual { anchor: k, .. } => &k.viewport, Self::Reveal(r) => &r.viewport }
-    }
+/// One request outliving the commit that made it.
+pub(super) enum Request {
+    /// A `Tx::keep_on_screen` element: it and any reveal on its viewport give way to it.
+    Capture(Keep),
+    /// The row below a fold's header, held where it shows: it takes the viewport's earlier
+    /// keeps, while a reveal of the same viewport stays.
+    FoldAnchor(Keep),
+    /// A `Tx::scroll_into_view` or `Tx::scroll_center` target.
+    Reveal(Reveal),
 }
 
 #[derive(Default, Clone)]
 pub(super) struct Requests {
-    entries: Vec<Request>,
-    // Keep the two passes in their original order, and skip an empty pass in O(1).
-    n_keeps: usize,
+    keeps: Vec<Keep>,
+    reveals: Vec<Reveal>,
 }
 
 pub(super) enum Event<'a> {
-    Capture(Keep, Option<VirtualRow>),
-    FoldAnchor(Keep),
+    Arrive(Request),
+    /// A reveal placed its target: `from` and `to` are its viewport's offset before and after,
+    /// and `first` says whether this is the placement that created it.
     Place { first: bool, scope: Option<&'a str>, key: &'a str, viewport: &'a str,
         center: bool, at_end: bool, from: f64, to: f64 },
+    /// A virtual list's last row left the view: an end-pinned reveal follows the row that took
+    /// its place.
     NewTail { viewport: &'a str, key: &'a str },
     RetainKeeps(&'a dyn Fn(&Keep) -> bool),
+    /// A frame ended: keeps last while their viewport's subtree moves, reveals while their
+    /// viewport glides or moves with their target mounted in it.
     Finish { gliding: &'a dyn Fn(&str) -> bool, animating: &'a dyn Fn(&str) -> bool,
         mounted: &'a dyn Fn(&Reveal) -> bool },
+    /// A user or explicit scroll ends every request that would pull the view back.
     Cancel,
+    /// An explicit destination wins over a reveal for its whole lifetime; holds stay.
     Destination,
 }
 
+/// What placing a reveal asks of its viewport.
 #[derive(Debug, PartialEq)]
 pub(super) enum Effect { Rest, Move(f64) }
 
 impl Requests {
-    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
-    pub fn has_keeps(&self) -> bool { self.n_keeps != 0 }
-    pub fn owns(&self, path: &str) -> bool { self.entries.iter().any(|r| r.viewport() == path) }
-    pub fn keeps(&self) -> impl Iterator<Item = &Keep> {
-        self.entries[..self.n_keeps].iter().map(|r| match r { Request::Mounted(k) | Request::Virtual { anchor: k, .. } => k, _ => unreachable!() })
+    pub fn is_empty(&self) -> bool { self.keeps.is_empty() && self.reveals.is_empty() }
+    pub fn has_keeps(&self) -> bool { !self.keeps.is_empty() }
+    pub fn keeps(&self) -> impl Iterator<Item = &Keep> { self.keeps.iter() }
+    pub fn keeps_mut(&mut self) -> impl Iterator<Item = &mut Keep> { self.keeps.iter_mut() }
+    pub fn reveals(&self) -> impl Iterator<Item = &Reveal> { self.reveals.iter() }
+
+    /// Keeps some request, of either kind, holds `path` back.
+    pub fn owns(&self, path: &str) -> bool {
+        self.keeps.iter().any(|k| k.viewport == path) || self.reveals.iter().any(|r| r.viewport == path)
     }
-    pub fn anchors(&self) -> impl Iterator<Item = (&Keep, Option<&VirtualRow>)> {
-        self.entries[..self.n_keeps].iter().map(|r| match r {
-            Request::Mounted(k) => (k, None), Request::Virtual { anchor, row } => (anchor, Some(row)),
-            Request::Reveal(_) => unreachable!(),
-        })
+
+    /// Lifts the keeps out for the nested commit that remounts virtual rows, which sees no
+    /// holds and leaves the reveals in place. No allocation, as no buffer moves.
+    pub fn take_keeps(&mut self) -> Vec<Keep> {
+        std::mem::take(&mut self.keeps)
     }
-    pub fn keeps_mut(&mut self) -> impl Iterator<Item = &mut Keep> {
-        self.entries[..self.n_keeps].iter_mut().map(|r| match r { Request::Mounted(k) | Request::Virtual { anchor: k, .. } => k, _ => unreachable!() })
+
+    pub fn restore_keeps(&mut self, keeps: Vec<Keep>) {
+        self.keeps = keeps;
     }
-    pub fn reveals(&self) -> impl Iterator<Item = &Reveal> {
-        self.entries[self.n_keeps..].iter().map(|r| match r { Request::Reveal(r) => r, _ => unreachable!() })
+
+    fn arrive(&mut self, request: Request) {
+        match request {
+            Request::Capture(k) => {
+                self.keeps.retain(|old| old.viewport != k.viewport);
+                self.reveals.retain(|old| old.viewport != k.viewport);
+                self.keeps.push(k);
+            }
+            Request::FoldAnchor(k) => {
+                self.keeps.retain(|old| old.viewport != k.viewport);
+                self.keeps.push(k);
+            }
+            Request::Reveal(r) => {
+                self.reveals.retain(|old| old.viewport != r.viewport);
+                self.reveals.push(r);
+            }
+        }
     }
-    fn reveals_mut(&mut self) -> impl Iterator<Item = &mut Reveal> {
-        self.entries[self.n_keeps..].iter_mut().map(|r| match r { Request::Reveal(r) => r, _ => unreachable!() })
-    }
-    /// Only reveals are visible during the nested commit that remounts virtual rows.
-    pub fn take_reveals(&mut self) -> Self {
-        Self { entries: self.entries.split_off(self.n_keeps), n_keeps: 0 }
-    }
-    pub fn restore_reveals(&mut self, mut after_commit: Self) {
-        self.entries.extend(after_commit.entries.drain(after_commit.n_keeps..));
-    }
-    fn retain(&mut self, keep: impl Fn(&Request) -> bool) {
-        self.entries.retain(|r| {
-            if keep(r) { return true; }
-            if !matches!(r, Request::Reveal(_)) { self.n_keeps -= 1; }
-            false
-        });
-    }
+
     pub fn step(&mut self, event: Event) -> Effects<Effect> {
         match event {
-            Event::Capture(k, row) => {
-                self.retain(|r| r.viewport() != k.viewport);
-                let request = match row { Some(row) => Request::Virtual { anchor: k, row }, None => Request::Mounted(k) };
-                self.entries.insert(self.n_keeps, request);
-                self.n_keeps += 1;
-            }
-            Event::FoldAnchor(k) => {
-                self.retain(|r| matches!(r, Request::Reveal(_)) || r.viewport() != k.viewport);
-                self.entries.insert(self.n_keeps, Request::Mounted(k));
-                self.n_keeps += 1;
-            }
+            Event::Arrive(request) => self.arrive(request),
             Event::Place { first, scope, key, viewport, center, at_end, from, to } => {
                 if first {
-                    self.entries.retain(|r| !matches!(r, Request::Reveal(r) if r.viewport == viewport));
-                    self.entries.push(Request::Reveal(Reveal { scope: scope.map(str::to_owned), key: key.to_owned(),
-                        viewport: viewport.to_owned(), center, at_end }));
-                } else if let Some(r) = self.reveals_mut().find(|r| r.viewport == viewport) {
+                    self.arrive(Request::Reveal(Reveal { scope: scope.map(str::to_owned),
+                        key: key.to_owned(), viewport: viewport.to_owned(), center, at_end }));
+                } else if let Some(r) = self.reveals.iter_mut().find(|r| r.viewport == viewport) {
                     r.at_end |= at_end;
                 }
                 if (to - from).abs() < 0.5 {
@@ -100,20 +105,20 @@ impl Requests {
                 } else { return Effects::one(Effect::Move(to)); }
             }
             Event::NewTail { viewport, key } => {
-                if let Some(r) = self.reveals_mut().find(|r| r.viewport == viewport && r.at_end) {
+                if let Some(r) = self.reveals.iter_mut().find(|r| r.viewport == viewport && r.at_end) {
                     r.scope = None;
                     r.key = key.to_owned();
                 }
             }
             Event::RetainKeeps(keep) => {
-                if self.has_keeps() { self.retain(|r| match r { Request::Mounted(k) | Request::Virtual { anchor: k, .. } => keep(k), Request::Reveal(_) => true }); }
+                if self.has_keeps() { self.keeps.retain(keep); }
             }
-            Event::Finish { gliding, animating, mounted } => self.retain(|r| match r {
-                Request::Mounted(k) | Request::Virtual { anchor: k, .. } => animating(&k.viewport),
-                Request::Reveal(r) => gliding(&r.viewport) || (animating(&r.viewport) && mounted(r)),
-            }),
-            Event::Cancel => { self.entries.clear(); self.n_keeps = 0; }
-            Event::Destination => self.entries.truncate(self.n_keeps),
+            Event::Finish { gliding, animating, mounted } => {
+                self.keeps.retain(|k| animating(&k.viewport));
+                self.reveals.retain(|r| gliding(&r.viewport) || (animating(&r.viewport) && mounted(r)));
+            }
+            Event::Cancel => { self.keeps.clear(); self.reveals.clear(); }
+            Event::Destination => self.reveals.clear(),
         }
         Effects::none()
     }
