@@ -104,6 +104,7 @@ static STATE: Mutex<State> = Mutex::new(State::Running);
 pub(crate) fn send(event: Event) -> Vec<Effect> {
     let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
     let (next, effects) = step(*state, event);
+    if *state == State::Running && matches!(next, State::Quitting(..)) { crate::marks::mark("quit.start"); }
     *state = next;
     effects
 }

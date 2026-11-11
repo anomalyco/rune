@@ -12,6 +12,7 @@ impl Windows {
             match effect {
                 Effect::RunHooks => {
                     for host in self.hosts.iter_mut().flatten() { host.quit_hook(); }
+                    crate::marks::mark("quit.hooks");
                     crate::quit::send(Event::HooksRan);
                 }
                 Effect::CloseAndExit => {

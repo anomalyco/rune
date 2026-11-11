@@ -3,6 +3,10 @@
 
 use super::*;
 
+/// The first frame's marks (crate::marks), for the first window to draw.
+static FIRST_BUILD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static FIRST_ENCODED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 impl<S: 'static> Host<S> {
     /// A shown frame with no drawable. Asking for a redraw here would turn the loop at once, for
     /// as long as the window is occluded or its displays sleep, so it waits for `retry`, with
@@ -219,6 +223,7 @@ impl<S: 'static> Host<S> {
         let presents_at = target;
         self.rt.window_resting = self.frame_move.is_none() && self.rt.window_frame.is_none();
         let target_ms = target.zip(self.trace_start).map(|(target, start)| crate::frame::present_time::ms_since(start, target));
+        crate::marks::mark_once(&FIRST_BUILD, "frame.first.build");
         let rt = &mut self.rt;
         if hidden && l.first_frame.settles() { rt.settle_all(); }
         let (mut animating, dt) = if let Some((animating, dt, _)) = built {
@@ -307,12 +312,14 @@ impl<S: 'static> Host<S> {
         }
         if let Some(alpha) = &l.alpha { alpha.draw(&mut enc, &view); }
         renderer.submit(&gpu.queue, enc);
+        crate::marks::mark_once(&FIRST_ENCODED, "frame.first.encoded");
         let encoded = self.frame_reports.stamp();
         l.window.pre_present_notify();
         #[cfg(target_os = "macos")]
         l.native.materials.present(&rt.materials, rt.env.scale, || gpu.queue.present(frame));
         #[cfg(not(target_os = "macos"))]
         gpu.queue.present(frame);
+        crate::marks::presented();
         crate::render::gpu_events::presented();
         // The frame reached the screen: a surface replaced by `replace_lost_surface` works, and
         // the next loss starts its retries over.
@@ -325,12 +332,14 @@ impl<S: 'static> Host<S> {
         if !l.first_frame.ready()
             && gpu.device.poll(wgpu::PollType::wait_indefinitely()).is_ok() {
             l.first_frame.gpu_done();
+            crate::marks::mark("frame.first.gpu_done");
         }
         // The window shows once the GPU has finished the frame it presents.
         #[cfg(target_os = "windows")]
         if l.native.cloak.held() {
             let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
             l.native.cloak.lift(&l.window);
+            crate::marks::mark("window.shown");
         }
         let submitted = Instant::now();
         self.clock.presented(rt, submitted);

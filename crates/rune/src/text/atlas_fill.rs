@@ -103,6 +103,7 @@ impl Atlas {
         let g = AtlasGlyph { page: page as u16, x: ax, y: ay, w, h, left, top, lcd: fill.coverage == 3 };
         self.map.insert(key, Residency::Pending(g, fill));
         self.queue(page, key);
+        crate::marks::add("text.gpu_fills", 1);
         Some(g)
     }
 

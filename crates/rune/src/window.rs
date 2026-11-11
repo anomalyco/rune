@@ -281,6 +281,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let _handling = crate::quit::handling();
         let Some(factory) = self.factory.take() else { return };
+        crate::marks::mark("loop.resumed");
         let primary = event_loop.primary_monitor();
         let displays: Vec<_> = event_loop.available_monitors().map(|m| Display {
             id: Some(crate::DisplayId::from_monitor(m.clone(), is_wayland(event_loop))),
@@ -347,6 +348,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let _handling = crate::quit::handling();
+        crate::marks::loop_waits();
         crate::cursor::os::make_pending(event_loop);
         let mut animating = false;
         for host in self.hosts.iter_mut().flatten() {
@@ -364,6 +366,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
     }
     fn exiting(&mut self, event_loop: &ActiveEventLoop) {
         let _handling = crate::quit::handling();
+        crate::marks::mark("loop.exiting");
         // Every quit ends here, so the windows still open run `App::on_quit` first, unless the
         // quit's hooks already ran (a Windows logoff, the last window closing).
         self.quit(event_loop, false);
@@ -375,6 +378,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
         for host in self.hosts.iter_mut().flatten() { host.cancel_menus(); }
         // Surfaces go while winit's display connection is still open (layer surfaces live on it).
         self.hosts.clear();
+        crate::marks::mark("windows.dropped");
         crate::clipboard::shutdown();
         if crate::quit::send(crate::quit::Event::Exited).contains(&crate::quit::Effect::Relaunch) {
             crate::relaunch::spawn();

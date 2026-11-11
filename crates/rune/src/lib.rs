@@ -42,6 +42,7 @@ pub mod image;
 pub mod labels;
 pub mod live;
 pub mod machine;
+pub mod marks;
 pub mod memo;
 pub mod motion_gate;
 pub mod native_surface;

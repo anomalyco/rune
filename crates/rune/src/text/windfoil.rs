@@ -94,7 +94,10 @@ impl TextSystem {
         };
         let key = outline::Key { font: face_key.0, index: face_key.1, glyph, coords: face.coords_key, skew, hinted: hint.key() };
         let scale_cx = &mut self.scale_cx;
-        match self.atlas.outlines.glyph(key, || outline::extract(scale_cx, font_ref, face_key.1, coords, glyph as u16, skew, hint)) {
+        match self.atlas.outlines.glyph(key, || {
+            let _built = crate::marks::Timed::start("text.outline_ns", true);
+            outline::extract(scale_cx, font_ref, face_key.1, coords, glyph as u16, skew, hint)
+        }) {
             outline::Found::Outline(g) => Found::Draws(g, matches!(hint, outline::Hinting::TrueType(_))),
             outline::Found::Empty => Found::Blank,
             outline::Found::Full => Found::Elsewhere,
