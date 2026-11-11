@@ -72,22 +72,29 @@ pub struct Scene<'a> {
 /// How a GPU stores a float into an `Rgba16Float` target. Vendors differ, and a layer's pixels
 /// come out a step apart when the CPU guesses wrong, so the painter follows the adapter the
 /// window will use (`gpu::pick`, known before any device exists).
+///
+/// Measured on D3D12 (a mid-animation layer frame at 2880×1800 against each GPU's own frame of
+/// the same draw data): Intel Iris Xe and NVIDIA RTX 3080 Ti both store toward zero (rounded to
+/// nearest, 9% of that frame's pixels come out a step off; toward zero, 0.13–0.27%). D3D lets a
+/// float target's conversion round either way, so a vendor not measured takes toward zero too;
+/// if it rounds to nearest instead, layer pixels can come out a step off (two inside a nested
+/// layer), and the drift count at the hand-over says so.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum HalfRounding {
-    /// Intel (measured: Iris Xe).
     #[default]
     TowardZero,
-    /// To nearest, ties to even, as IEEE and D3D's conversion rules say.
+    /// To nearest, ties to even (IEEE's default).
     NearestEven,
 }
 
+/// PCI vendor IDs whose half-float rounding was measured.
+const MEASURED: [(u32, HalfRounding); 2] = [(0x8086, HalfRounding::TowardZero), (0x10de, HalfRounding::TowardZero)];
+
 impl HalfRounding {
-    /// The rounding of the GPU with PCI vendor ID `vendor`.
+    /// The rounding of the GPU with PCI vendor ID `vendor`: measured for Intel and NVIDIA,
+    /// assumed (toward zero) for any other, AMD (0x1002) among them.
     pub fn of_vendor(vendor: u32) -> HalfRounding {
-        match vendor {
-            0x8086 => HalfRounding::TowardZero,
-            _ => HalfRounding::NearestEven,
-        }
+        MEASURED.iter().find(|m| m.0 == vendor).map_or(HalfRounding::TowardZero, |m| m.1)
     }
 }
 
