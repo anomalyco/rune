@@ -406,6 +406,9 @@ pub struct Gpu {
     lost: Arc<AtomicBool>,
 }
 
+/// The most views and buffers a device binds at once (`Limits::max_non_sampler_bindings`).
+const MAX_VIEWS: u32 = 65_536;
+
 /// Vulkan loaders crash when two threads create instances or devices at once (seen with
 /// parallel GPU tests on lavapipe), so Rune creates them one at a time.
 static GPU_INIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -502,12 +505,18 @@ impl Gpu {
         // A compositor that asks for immediates (`Compositor::features`) gets all the adapter has.
         let max_immediate_size = if required_features.contains(wgpu::Features::IMMEDIATES) { adapter.limits().max_immediate_size } else { 0 };
         let adapter_limits = adapter.limits();
+        // Views and buffers bound at once (D3D12's shader-visible descriptor heap, which wgpu sizes from
+        // this limit when it makes the device). wgpu's default, a million, is a 32-64 MB heap on
+        // Windows; 65,536 is far more than Rune binds and keeps it to a few MB (a bare wgpu window:
+        // 82.0 MB private bytes with a million, 24.8 MB with 65,536; a bare D3D12 window, 14.1 MB).
+        let views = MAX_VIEWS.min(adapter_limits.max_non_sampler_bindings);
         let required_limits = if adapter_limits.max_inter_stage_shader_variables < wgpu::Limits::default().max_inter_stage_shader_variables
             || adapter_limits.max_color_attachments < wgpu::Limits::default().max_color_attachments
             || adapter_limits.max_compute_workgroup_storage_size < wgpu::Limits::default().max_compute_workgroup_storage_size
         {
             wgpu::Limits {
                 max_immediate_size,
+                max_non_sampler_bindings: views,
                 ..wgpu::Limits::downlevel_defaults()
                     .using_resolution(adapter_limits.clone())
                     .using_alignment(adapter_limits)
@@ -515,6 +524,7 @@ impl Gpu {
         } else {
             wgpu::Limits {
                 max_immediate_size,
+                max_non_sampler_bindings: views,
                 ..wgpu::Limits::default()
                     .using_resolution(adapter_limits.clone())
                     .using_alignment(adapter_limits)
