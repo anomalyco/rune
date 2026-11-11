@@ -166,8 +166,8 @@ pub struct TextSystem {
     /// The language text shapes in, and the `set_language` change it follows.
     language: Option<parley::fontique::Language>,
     language_epoch: u64,
-    /// Whether it swapped in the full faces a web app fetches (see `full_faces`).
-    full_faces: bool,
+    /// How many of the faces a web app adds after its first frame it registered (`full_faces`).
+    faces_taken: usize,
     pub sans: String,
     pub mono: String,
     symbol_families: Vec<&'static str>,
@@ -293,16 +293,23 @@ impl TextSystem {
         let mut collection = Collection::new(CollectionOptions { shared: false, system_fonts: false });
         let list: &[&'static [u8]] = if fonts.is_empty() { DEFAULT_FONTS } else { fonts };
         let mut registered = Vec::new();
-        #[cfg(all(target_arch = "wasm32", feature = "embedded-fonts"))]
-        if !fonts.is_empty() {
-            for data in DEFAULT_FONTS {
-                collection.register_fonts(Blob::new(Arc::new(*data)), None);
-            }
-        }
         for data in list {
             let mut added: Vec<FamilyId> = collection.register_fonts(Blob::new(Arc::new(*data)), None).into_iter().map(|(id, _)| id).collect();
             added.sort_unstable();
             registered.extend(added);
+        }
+        // A web app's own fonts first: the embedded faces fill in only a family it brought none
+        // of, so they never stand in for its own, and the full Inter faces are fetched only when
+        // the embedded Inter is in use.
+        #[cfg(all(target_arch = "wasm32", feature = "embedded-fonts"))]
+        {
+            let fill: Vec<bool> = default_fonts::DEFAULT_FAMILIES.iter().map(|f| fonts.is_empty() || collection.family_id(f).is_none()).collect();
+            for (data, _) in DEFAULT_FONTS.iter().zip(&fill).filter(|(_, fill)| **fill && !fonts.is_empty()) {
+                collection.register_fonts(Blob::new(Arc::new(*data)), None);
+            }
+            if fill[0] {
+                full_faces::note_embedded_inter();
+            }
         }
         // No system font loads here: each comes the first time a text needs it (`load_fallbacks`).
         register_cjk_fallbacks(&mut collection, &registered, families);
@@ -323,7 +330,7 @@ impl TextSystem {
             chosen: 0,
             language: None,
             language_epoch: 0,
-            full_faces: false,
+            faces_taken: 0,
             sans, mono,
             symbol_families: Vec::new(),
             emoji: None,

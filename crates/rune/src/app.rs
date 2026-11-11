@@ -92,6 +92,9 @@ pub struct App<S: 'static> {
     /// `App::font_url`'s fonts, which a web app fetches before its first frame.
     #[cfg(target_arch = "wasm32")]
     pub(crate) font_urls: Vec<String>,
+    /// `App::font_url_later`'s fonts, which a web app fetches after its first frame.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) late_font_urls: Vec<String>,
     pub(crate) float_on_open: bool,
     /// `App::open_inactive`: the first open leaves focus where it is.
     pub(crate) open_inactive: bool,
@@ -146,6 +149,8 @@ impl<S: 'static> App<S> {
             web_document: false,
             #[cfg(target_arch = "wasm32")]
             font_urls: Vec::new(),
+            #[cfg(target_arch = "wasm32")]
+            late_font_urls: Vec::new(),
             float_on_open: false,
             open_inactive: false,
             maximized: false,

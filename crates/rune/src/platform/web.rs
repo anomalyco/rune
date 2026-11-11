@@ -10,7 +10,6 @@ use super::web_math;
 /// The overscan a page's canvas carries above and below the window, in CSS points: the distance
 /// the browser's compositor can scroll before Rune has to draw a new band.
 const SKIRT: f32 = 256.0;
-#[cfg(feature = "embedded-fonts")]
 mod full_faces;
 pub(crate) mod health;
 mod input;
@@ -115,6 +114,8 @@ struct Running<S: 'static> {
     presented: bool,
     /// `App::on_ready`, which runs once that first frame is presented, as a window's does.
     on_ready: Option<crate::app::OnWindow>,
+    /// `App::font_url_later`'s fonts, fetched once that first frame is presented.
+    late_fonts: Vec<String>,
     /// Where the canvas was last put in the document (a page's band top), in points.
     band: Option<f32>,
     cursor: crate::cursor::os::OsCursor,
@@ -413,6 +414,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             let tab_visits_controls = app.tab_visits_controls;
             let playground = app.playground.take();
             let on_ready = app.on_ready.take();
+            let late_fonts = std::mem::take(&mut app.late_font_urls);
             let (spec, state, shared) = app.into_parts(None);
             let scale = window.scale_factor() as f32;
             let document = self.document;
@@ -498,7 +500,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 input::Mode { embedded: self.embedded, fit_height, document });
             *self.running.borrow_mut() = Some(Running { gpu, surface, config, renderer, rt, shared, input, clipboard,
                 clock: crate::frame::clock::FrameClock::new(now), compositor, suspended: false, embedded: self.embedded,
-                document, presented: false, band: None, on_ready,
+                document, presented: false, band: None, on_ready, late_fonts,
                 cursor, _menus: menus, shortcuts });
         }
         if let Some(r) = &mut *self.running.borrow_mut() {
@@ -582,11 +584,8 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                     r.presented = true;
                     r.input.presented();
                     if let Some(mut ready) = r.on_ready.take() { ready(&crate::WindowHandle::new("main")); }
-                    #[cfg(feature = "embedded-fonts")]
-                    {
-                        let proxy = self.proxy.clone();
-                        full_faces::fetch(move || { let _ = proxy.send_event(Wake::App); });
-                    }
+                    let proxy = self.proxy.clone();
+                    full_faces::fetch(std::mem::take(&mut r.late_fonts), move || { let _ = proxy.send_event(Wake::App); });
                 }
                 if r.rt.shell_request.take().is_some() { self.end(event_loop); return; }
                 // A frame that drew a fallback while the browser checks a pipeline is drawn

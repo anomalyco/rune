@@ -60,4 +60,21 @@ impl<S: 'static> App<S> {
         }
         self
     }
+
+    /// [`Self::font_url`] for a font the first frame doesn't need, such as one a setting picks:
+    /// on web the browser fetches it once the first frame is up, so it costs the page neither
+    /// download size nor start time. Until it arrives, text that names its family sets in the
+    /// slot's fallback (Inter, IBM Plex Mono); then every window takes it up on its next frame,
+    /// in place of any registered face of the same family, width, style and weight. A font that
+    /// fails to load is reported in the console and skipped. On native it's [`Self::font_url`].
+    pub fn font_url_later(self, url: &str) -> Self {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let mut app = self;
+            app.late_font_urls.push(url.to_owned());
+            app
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.font_url(url)
+    }
 }

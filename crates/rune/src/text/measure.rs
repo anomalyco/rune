@@ -79,8 +79,9 @@ pub(super) fn note_fonts(fonts: &[&'static [u8]], families: (&str, &str)) {
     with_state(|slot| apply_fonts(slot, fonts, families));
 }
 
-/// Called when a web app's full faces arrive: the next measurement shapes with them.
-#[cfg(all(target_arch = "wasm32", feature = "embedded-fonts"))]
+/// Called when faces a web app adds after its first frame arrive: the next measurement shapes
+/// with them.
+#[cfg(target_arch = "wasm32")]
 pub(super) fn note_faces_arrived() {
     with_state(|slot| {
         if let Some(f) = slot.as_mut() {
