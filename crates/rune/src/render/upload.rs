@@ -90,13 +90,16 @@ fn same(a: &[Instance], b: &[Instance]) -> bool {
 fn pack((w, h): (u32, u32)) -> u64 { u64::from(w) << 32 | u64::from(h) }
 
 impl Renderer {
-    /// Records pending uploads into `encoder`, ahead of the renderer's commands in it.
+    /// Records pending uploads into `encoder`, ahead of the renderer's commands in it, and the
+    /// atlas fills staged after them.
     pub(super) fn flush_uploads(&self, encoder: &mut wgpu::CommandEncoder) {
         if let Some(s) = &self.uploads.staging { s.flush(encoder); }
+        self.encode_fills(encoder);
     }
 
-    /// Submits pending uploads ahead of commands already recorded.
+    /// Submits pending uploads (and atlas fills) ahead of commands already recorded.
     pub(super) fn submit_uploads(&self) {
+        if self.fills.lock().unwrap_or_else(|e| e.into_inner()).is_some() { return self.submit_fills(); }
         if let Some(s) = &self.uploads.staging { s.submit(); }
     }
 
