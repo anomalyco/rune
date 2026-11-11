@@ -74,6 +74,10 @@ impl ImageZoom {
     /// Whether a pan holds the pointer.
     pub fn dragging(&self) -> bool { gesture::dragging(&self.state) }
 
+    /// Whether a glide runs: `poll` does nothing otherwise, so a caller that polls every frame
+    /// can skip it (and the write it takes).
+    pub fn gliding(&self) -> bool { matches!(self.state, State::Gliding { .. }) }
+
     /// Steps a glide to the frame clock `now`. True while one runs (the view must run again);
     /// it asks `tx` for the next frame until it lands. The image lands each frame on its own
     /// (`El::instant_changes`), so `tx` stays animated: an app that closes the preview in the
