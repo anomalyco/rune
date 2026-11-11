@@ -6,9 +6,9 @@ license.workspace = true
 
 [features]
 default = ["accessibility", "dbus", "embedded-fonts", "metal-backend", "ogg-audio", "svg"]
-# On web, bundle Inter (Regular, Medium, SemiBold) and IBM Plex Mono as built-in fallback fonts.
-# Disable when AppSpec::fonts supplies the app's own fonts to omit the bytes from the wasm.
-# Native builds always bundle Inter.
+# Bundle Inter (Regular, Medium, SemiBold; on web also IBM Plex Mono) as the fonts text falls back
+# to when the app registers none. Disable when AppSpec::fonts supplies the app's own fonts to omit
+# the bytes (about 1.25 MB native).
 embedded-fonts = []
 # Fall back to WebGL2 on wasm32 when WebGPU is unavailable.
 webgl = ["wgpu/webgl"]
@@ -179,6 +179,10 @@ xkbcommon = "0.9"
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D12", "Win32_Graphics_DirectWrite", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Media_Audio", "Win32_Media_MediaFoundation", "Win32_Security", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_LibraryLoader", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_Variant", "Win32_UI_Shell_PropertiesSystem"] }
 # `#[windows::core::implement]` (the OLE drop target, `platform::win32::drop_target`) names this crate.
 windows-core = "0.62"
+# D3D12 alone: a machine without a hardware D3D12 adapter draws on WARP, D3D12's own software
+# adapter. Vulkan was only that fallback here, and it compiled in `ash`, `libloading` and the
+# Vulkan backend.
+wgpu = { version = "30", default-features = false, features = ["dx12"] }
 accesskit_windows = { version = "0.35.2", optional = true }
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Performance", "Win32_System_Pipes", "Win32_System_RemoteDesktop", "Win32_System_StationsAndDesktops", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Time"] }
 
@@ -191,8 +195,9 @@ zbus = { version = "6", default-features = false, features = ["tokio", "proxy", 
 tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"], optional = true }
 futures-util = { version = "0.3", optional = true }
 
-[target.'cfg(all(not(target_vendor = "apple"), not(target_arch = "wasm32")))'.dependencies]
-wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"] }
+# wgpu's Vulkan backend everywhere but Windows (D3D12 there, below) and Apple (Metal).
+[target.'cfg(all(not(target_vendor = "apple"), not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["vulkan"] }
 
 [dev-dependencies]
 # The HLSL wgpu generates, for the precompiled uber shader (`render/dxbc_tests.rs`).

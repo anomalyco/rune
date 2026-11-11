@@ -15,7 +15,7 @@ bytemuck = { version = "1.25", features = ["derive"] }
 wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"] }
 
 [dev-dependencies]
-rune = { path = "../rune" }
+rune = { path = "../rune", default-features = false }
 rune-ref = { path = "../rune-ref" }
 ab_glyph = "0.2.32"
 png = "0.18"
