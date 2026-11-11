@@ -340,7 +340,7 @@ fn compare(t: &GrowTrack, d: &Dev, path: &[Ev], e: Ev) {
     if let Motion::Fold { limit, .. } = t.motion {
         same("fold limit", limit, d.limit);
     }
-    assert_eq!(matches!(t.motion, Motion::Whole), d.whole && d.glide.is_none(), "whole after {}", what());
+    assert_eq!(t.whole, d.whole, "whole after {}", what());
 
     // Where the glide stops.
     let stage = match t.stage {

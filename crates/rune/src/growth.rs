@@ -148,15 +148,12 @@ pub struct FoldGlide {
     pub feather: Option<f32>,
 }
 
-/// What moves a row's height.
+/// The glide a row has of its own, in place of the stack's spring.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) enum Motion {
-    /// The stack's spring under the speed caps ([`caps`]), ramping up from rest over `age`.
+    /// The stack's spring (or, for a [`GrowTrack::whole`] row, the spring alone).
     #[default]
     Spring,
-    /// `El::arrives_whole`: the spring alone, however far, so a pinned viewport follows one
-    /// glide (its [`WHOLE_REACH`] duration comes from `span`).
-    Whole,
     /// `El::fold_glide`: this row's own spring for its own time, in place of the stack's; its
     /// moving edge feathered `feather` deep (the stack edge's when `None`), and its bottom
     /// leaving the window at `limit`.
@@ -244,6 +241,10 @@ pub struct GrowTrack {
     /// `El::streaming`: this row climbs on its stream's pace, which overrides its whole or fold
     /// kind until it rests off the stream.
     pub streaming: bool,
+    /// `El::arrives_whole`, or a caller's own: no speed limits, only the spring, however far, so
+    /// a pinned viewport follows one glide (its [`WHOLE_REACH`] duration comes from `span`). A
+    /// fold's own spring takes precedence while the row is a fold.
+    pub whole: bool,
     /// Commit spring duration floor (`Tx::motion`), so a slower transaction (`REFLOW`) slows the row too.
     pub(crate) duration: f32,
     /// Points between the presented height and the target when it was last set (see [`WHOLE_REACH`]).
@@ -277,7 +278,7 @@ const SETTLE_V: f32 = 1.5;
 
 impl GrowTrack {
     pub fn settled(h: f32) -> GrowTrack {
-        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, duration: 0.0, span: 0.0, motion: Motion::Spring, stage: Stage::Free, lift: Lift::None, restore: 0.0, give: None, pace: Pace::Rest, rate: 0.0 }
+        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, motion: Motion::Spring, stage: Stage::Free, lift: Lift::None, restore: 0.0, give: None, pace: Pace::Rest, rate: 0.0 }
     }
 
     pub fn moving(&self) -> bool {
@@ -394,7 +395,7 @@ impl GrowTrack {
     pub(crate) fn glide(&self) -> Option<Spring> {
         match self.motion {
             Motion::Fold { spring, .. } => Some(spring),
-            Motion::Spring | Motion::Whole => None,
+            Motion::Spring => None,
         }
     }
 
@@ -402,7 +403,7 @@ impl GrowTrack {
     pub(crate) fn feather(&self) -> Option<f32> {
         match self.motion {
             Motion::Fold { feather, .. } => feather,
-            Motion::Spring | Motion::Whole => None,
+            Motion::Spring => None,
         }
     }
 
@@ -415,6 +416,7 @@ impl GrowTrack {
     pub(crate) fn restarted(&self, h: f32) -> GrowTrack {
         GrowTrack {
             streaming: self.streaming,
+            whole: self.whole,
             motion: match self.motion {
                 Motion::Fold { spring, feather, limit, .. } => Motion::Fold { spring, feather, limit, shut: false },
                 other => other,
@@ -427,6 +429,7 @@ impl GrowTrack {
     /// overrides) with the height at which its bottom leaves the window.
     pub(crate) fn set_kind(&mut self, streaming: bool, whole: bool, glide: Option<(FoldGlide, f32)>) {
         self.streaming = streaming;
+        self.whole = whole;
         if streaming {
             // `paced |= streaming`: a row already off its stream climbs again from where it was.
             if self.pace == Pace::Rest {
@@ -441,7 +444,7 @@ impl GrowTrack {
                 // A glide's stop at the window's edge goes with it: the row it hands over to
                 // carries on from where it is, rather than landing the rest at once.
                 self.stage = Stage::Free;
-                if whole { Motion::Whole } else { Motion::Spring }
+                Motion::Spring
             }
         };
     }
@@ -472,7 +475,7 @@ impl GrowTrack {
             self.h = if landed { aim } else { x };
             self.v = if landed { 0.0 } else { v };
             self.age += dt;
-        } else if matches!(self.motion, Motion::Whole) {
+        } else if self.whole {
             // Content that arrived complete has nothing to read as it opens: one critically
             // damped glide on the spring, however far, which a pinned viewport follows.
             let spring = spring.with_duration(spring.duration * (self.span / WHOLE_REACH).sqrt().max(1.0));
@@ -614,7 +617,7 @@ mod tests {
 
     #[test]
     fn a_whole_row_glides_on_the_spring_alone() {
-        let mut t = GrowTrack { motion: Motion::Whole, ..GrowTrack::settled(0.0) };
+        let mut t = GrowTrack { whole: true, ..GrowTrack::settled(0.0) };
         t.retarget(900.0);
         let (mut prev, mut speeds) = (0.0, Vec::new());
         for _ in 0..180 {
@@ -639,7 +642,7 @@ mod tests {
     fn a_far_whole_glide_opens_no_harder_than_its_reach() {
         // The largest change in per-frame step at 120 Hz.
         let jerk = |dist: f32| {
-            let mut t = GrowTrack { motion: Motion::Whole, ..GrowTrack::settled(0.0) };
+            let mut t = GrowTrack { whole: true, ..GrowTrack::settled(0.0) };
             t.retarget(dist);
             let (mut prev, mut step, mut most) = (0.0, 0.0, 0.0f32);
             for _ in 0..360 {
@@ -687,7 +690,7 @@ mod tests {
     /// A `fold_glide` row whose bottom leaves the window at 900 pt, stepped at 120 Hz on a slow stack spring and a
     /// slow commit floor, neither of which may slow it: (seconds, height) per frame.
     fn fold(from: f32, to: f32, secs: f32) -> (GrowTrack, Vec<(f32, f32)>) {
-        let mut t = GrowTrack { motion: Motion::Whole, duration: 1.0, ..GrowTrack::settled(from) };
+        let mut t = GrowTrack { whole: true, duration: 1.0, ..GrowTrack::settled(from) };
         t.set_kind(false, true, Some((FoldGlide { spring: FOLD, feather: None }, 900.0)));
         t.retarget(to);
         let mut out = vec![(0.0, t.h)];
@@ -722,7 +725,7 @@ mod tests {
         // The spring's tail under a sixteenth of a point moves in steps the pixel snap holds and
         // lets go, which reads as the row stopping and setting off again.
         for (from, to) in [(640.0, 40.0), (40.0, 640.0), (3040.0, 40.0), (41.0, 40.0), (40.0, 60.0)] {
-            let mut t = GrowTrack { motion: Motion::Whole, ..GrowTrack::settled(from) };
+            let mut t = GrowTrack { whole: true, ..GrowTrack::settled(from) };
             t.set_kind(false, true, Some((FoldGlide { spring: FOLD, feather: None }, 900.0)));
             t.retarget(to);
             let hs: Vec<f32> = (0..60).map(|_| { t.step(GROWTH, &edge::FEATHER, false); t.step(GROWTH, &edge::FEATHER, false); t.h }).collect();
@@ -750,7 +753,7 @@ mod tests {
 
     #[test]
     fn a_glide_handed_to_a_whole_row_mid_way_carries_on() {
-        let mut t = GrowTrack { motion: Motion::Whole, ..GrowTrack::settled(40.0) };
+        let mut t = GrowTrack { whole: true, ..GrowTrack::settled(40.0) };
         t.set_kind(false, true, Some((FoldGlide { spring: FOLD, feather: None }, 200.0)));
         t.retarget(640.0);
         for _ in 0..10 {
@@ -769,7 +772,7 @@ mod tests {
     #[test]
     fn a_fold_feathers_its_moving_edge_both_ways() {
         for (from, to) in [(40.0, 640.0), (640.0, 40.0)] {
-            let mut t = GrowTrack { motion: Motion::Whole, ..GrowTrack::settled(from) };
+            let mut t = GrowTrack { whole: true, ..GrowTrack::settled(from) };
             t.set_kind(false, true, Some((FoldGlide { spring: FOLD, feather: Some(20.0) }, f32::INFINITY)));
             t.retarget(to);
             let mut masks = Vec::new();
@@ -788,7 +791,7 @@ mod tests {
 
     #[test]
     fn a_fold_reversed_mid_glide_keeps_its_velocity() {
-        let mut t = GrowTrack { motion: Motion::Whole, ..GrowTrack::settled(640.0) };
+        let mut t = GrowTrack { whole: true, ..GrowTrack::settled(640.0) };
         t.set_kind(false, true, Some((FoldGlide { spring: FOLD, feather: None }, 900.0)));
         t.retarget(40.0);
         for _ in 0..12 {
