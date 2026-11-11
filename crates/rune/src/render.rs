@@ -9,6 +9,7 @@ use crate::text::{ATLAS_SIZE, Atlas};
 
 mod backdrop_blur;
 mod breaker;
+pub mod cpu_boot;
 mod dxbc;
 mod fill;
 #[doc(hidden)]

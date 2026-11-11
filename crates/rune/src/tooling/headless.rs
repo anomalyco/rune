@@ -191,8 +191,10 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     let mut frames_written = 0usize;
     let has_video = writer.has_video();
     let snap_crop = std::cell::Cell::new(None::<[u32; 4]>);
+    let cpu_boot = std::cell::RefCell::new(args.cpu_boot.clone().map(|dir| crate::render::cpu_boot::tool::Tool::new(dir, args.cpu_boot_threads)));
     // Finished readbacks, in frame order.
     let mut deliver = |shot: Shot, mut px: Vec<u8>| {
+        if shot.snap && let Some(tool) = cpu_boot.borrow_mut().as_mut() { tool.gpu(&px, (wp, hp)); }
         if args.chrome_overlay
             && let Some(lights) = chrome.traffic_light_rects()
         {
@@ -341,6 +343,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
                 ui.set_format(&gpu.device, target_format);
             }
         }
+        if let Some(tool) = cpu_boot.borrow_mut().as_mut() { tool.frame(&mut rt, (wp, hp), k, (update_ms * 1e6) as u64, k == snap_frame); }
         renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
         renderer.prepare_surfaces(&gpu.device, &gpu.queue, &rt.surfaces, (wp, hp));
         let mut enc = gpu.device.create_command_encoder(&Default::default());
