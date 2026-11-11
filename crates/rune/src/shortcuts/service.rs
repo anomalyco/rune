@@ -19,11 +19,6 @@ type Pending<S> = (Result<Shortcut, ShortcutError>, Handler<S>);
 type Job = Box<dyn FnOnce(&mut Engine) + Send>;
 #[cfg(target_os = "linux")]
 type Job = std::convert::Infallible;
-/// How a call reaches the engine: shared on Linux, through `ENGINES` elsewhere.
-#[cfg(target_os = "linux")]
-type EngineRef = Arc<Mutex<Engine>>;
-#[cfg(not(target_os = "linux"))]
-type EngineRef = ();
 type Connect = fn(bool, Sink) -> Result<NativeBackend, ShortcutError>;
 #[cfg(not(target_os = "linux"))]
 static NEXT_OWNER: AtomicUsize = AtomicUsize::new(1);
@@ -35,7 +30,9 @@ static NATIVE: Mutex<Vec<(ShortcutId, Shortcut, &'static str)>> = Mutex::new(Vec
 struct Control {
     #[cfg(not(target_os = "linux"))]
     key: usize,
-    attachment: Mutex<Attachment<EngineRef, Job>>,
+    attachment: Mutex<Attachment<Job>>,
+    #[cfg(target_os = "linux")]
+    engine: Mutex<Option<Arc<Mutex<Engine>>>>,
 }
 
 pub(crate) struct Hub<S> {
@@ -54,6 +51,8 @@ impl<S> Default for Hub<S> {
                 #[cfg(not(target_os = "linux"))]
                 key: NEXT_OWNER.fetch_add(1, Ordering::Relaxed),
                 attachment: Mutex::new(Attachment::Detached),
+                #[cfg(target_os = "linux")]
+                engine: Mutex::default(),
             }),
             pending: Mutex::default(), handlers: Arc::default(), errors: Mutex::default(), title: OnceLock::new(), unmodified: AtomicBool::new(false),
         }
@@ -143,7 +142,8 @@ impl Control {
         let effect = step_attachment(&mut route, call).into_iter().next();
         #[cfg(target_os = "linux")]
         {
-            let Some(AttachEffect::Run { engine, wake }) = effect else { return Err(ShortcutError::NotRunning) };
+            let Some(AttachEffect::Run { wake }) = effect else { return Err(ShortcutError::NotRunning) };
+            let engine = self.engine.lock().unwrap().clone().ok_or(ShortcutError::NotRunning)?;
             // Acquire the engine before releasing routing, so shutdown cannot race a new call.
             let mut engine = engine.lock().unwrap();
             drop(route);
@@ -154,7 +154,7 @@ impl Control {
         }
         #[cfg(not(target_os = "linux"))]
         match effect {
-            Some(AttachEffect::Run { engine: (), wake }) => {
+            Some(AttachEffect::Run { wake }) => {
                 drop(route);
                 let engine = ENGINES.with(|engines| engines.borrow().get(&self.key).cloned()).ok_or(ShortcutError::NotRunning)?;
                 let result = f(&mut engine.borrow_mut());
@@ -230,6 +230,10 @@ pub(crate) struct Guard {
 
 impl Guard {
     pub(crate) fn attach<S: 'static>(shared: &Arc<Shared<S>>, wake: Waker, headless: bool, wayland: bool) -> Self {
+        Self::attach_with(shared, wake, headless, wayland, super::backend)
+    }
+
+    fn attach_with<S: 'static>(shared: &Arc<Shared<S>>, wake: Waker, headless: bool, wayland: bool, connect: Connect) -> Self {
         let weak = Arc::downgrade(shared);
         let sink: Sink = Arc::new(move |id, token| {
             if let Some(shared) = weak.upgrade() {
@@ -247,14 +251,13 @@ impl Guard {
         let control = shared.shortcuts.control.clone();
         let title = shared.shortcuts.title.get().copied().unwrap_or_default();
         let bindings = if headless { Bindings::Virtual(HashMap::new()) } else { Bindings::Disconnected };
-        let engine = Engine { title, wayland, sink, connect: super::backend, bindings };
+        let engine = Engine { title, wayland, sink, connect, bindings };
         #[cfg(not(target_os = "linux"))]
-        let engine = ENGINES.with(|engines| { engines.borrow_mut().insert(control.key, Rc::new(RefCell::new(engine))); });
+        ENGINES.with(|engines| engines.borrow_mut().insert(control.key, Rc::new(RefCell::new(engine))));
+        // A replaced engine closes with the slot locked, so callers wait until its chords are free.
         #[cfg(target_os = "linux")]
-        let engine = Arc::new(Mutex::new(engine));
-        let attached = step_attachment(&mut control.attachment.lock().unwrap(), AttachEvent::Attach { owner: std::thread::current().id(), wake, engine });
-        // A replaced engine goes outside the lock, before this host's first registration.
-        for effect in attached { let AttachEffect::Superseded(_replaced) = effect else { continue }; }
+        { *control.engine.lock().unwrap() = Some(Arc::new(Mutex::new(engine))); }
+        step_attachment(&mut control.attachment.lock().unwrap(), AttachEvent::Attach { owner: std::thread::current().id(), wake });
         let handlers = shared.shortcuts.handlers.clone();
         let guard = Self { control, cleanup: Some(Box::new(move || handlers.lock().unwrap().clear())), _thread: std::marker::PhantomData };
         for (shortcut, handler) in std::mem::take(&mut *shared.shortcuts.pending.lock().unwrap()) {
@@ -280,17 +283,16 @@ impl Guard {
 impl Drop for Guard {
     fn drop(&mut self) {
         let closed = step_attachment(&mut self.control.attachment.lock().unwrap(), AttachEvent::Close);
-        for effect in closed {
-            let AttachEffect::Release { jobs, engine } = effect else { continue };
-            // Dropping queued reply senders releases waiting callers with NotRunning.
-            drop(jobs);
-            #[cfg(target_os = "linux")]
-            engine.lock().unwrap().release();
-            #[cfg(not(target_os = "linux"))]
-            let () = engine;
-        }
+        // Dropping queued reply senders releases waiting callers with NotRunning.
+        for effect in closed { if let AttachEffect::Release(jobs) = effect { drop(jobs); } }
         #[cfg(not(target_os = "linux"))]
         ENGINES.with(|engines| engines.borrow_mut().remove(&self.control.key));
+        // The slot stays locked through the release, so a new host can't start while this one's
+        // backend still holds its chords.
+        #[cfg(target_os = "linux")]
+        if let Some(engine) = self.control.engine.lock().unwrap().take() {
+            engine.lock().unwrap().release();
+        }
         if let Some(cleanup) = self.cleanup.take() { cleanup(); }
     }
 }
@@ -299,6 +301,8 @@ impl Drop for Guard {
 mod lifecycle_tests;
 #[cfg(test)]
 mod machine_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod teardown_tests;
 
 #[cfg(test)]
 mod tests {

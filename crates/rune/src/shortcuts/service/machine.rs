@@ -1,6 +1,7 @@
 //! The service's state: whether an App has a host, and what its engine holds. These are two
 //! enums because they live in different places. The attachment is read from any thread, while
-//! a macOS or Windows engine never leaves its own.
+//! a macOS or Windows engine never leaves its own, and a Linux engine sits in its own slot, whose
+//! lock a closing backend holds so that nothing reaches the next engine until its chords are free.
 
 use super::super::{Shortcut, ShortcutError, ShortcutId};
 use crate::{machine::Effects, runtime::Waker};
@@ -8,20 +9,19 @@ use std::{collections::HashMap, mem, thread::ThreadId};
 
 pub(super) type Registrations = HashMap<ShortcutId, Shortcut>;
 
-/// Whether an App has a host. `E` is how a call reaches the engine; `J` is a call waiting for
-/// the owner thread.
-pub(super) enum Attachment<E, J> {
+/// Whether an App has a host. `J` is a call waiting for the owner thread.
+pub(super) enum Attachment<J> {
     /// No host has attached yet.
     Detached,
-    Attached { owner: ThreadId, wake: Waker, engine: E, jobs: Vec<J> },
+    Attached { owner: ThreadId, wake: Waker, jobs: Vec<J> },
     /// The host closed. Calls are refused, and a later host can still attach.
     Closed,
 }
 
 // Linux calls reach the engine directly, so nothing posts or drains there.
 #[cfg_attr(target_os = "linux", allow(dead_code))]
-pub(super) enum AttachEvent<E, J> {
-    Attach { owner: ThreadId, wake: Waker, engine: E },
+pub(super) enum AttachEvent<J> {
+    Attach { owner: ThreadId, wake: Waker },
     /// A call from `from`. When `shared`, any thread can reach the engine, so none waits.
     Call { from: ThreadId, shared: bool },
     /// The job of a call told to `Wait`, sent under the same lock.
@@ -31,40 +31,30 @@ pub(super) enum AttachEvent<E, J> {
 }
 
 #[cfg_attr(target_os = "linux", allow(dead_code))]
-pub(super) enum AttachEffect<E, J> {
+pub(super) enum AttachEffect<J> {
     /// Nothing is attached: the call fails with `NotRunning`.
     Refuse,
     /// Run the call on this thread.
-    Run { engine: E, wake: Waker },
+    Run { wake: Waker },
     /// Post a job and wait for the owner to run it.
     Wait,
     Wake(Waker),
     /// Run these on the owner thread.
     Jobs(Vec<J>),
-    /// A newer host replaced this engine.
-    Superseded(E),
-    /// The host closed: release its waiting callers, then its engine.
-    Release { jobs: Vec<J>, engine: E },
+    /// The host closed: release its waiting callers.
+    Release(Vec<J>),
 }
 
-pub(super) fn step_attachment<E: Clone, J>(state: &mut Attachment<E, J>, event: AttachEvent<E, J>) -> Effects<AttachEffect<E, J>> {
+pub(super) fn step_attachment<J>(state: &mut Attachment<J>, event: AttachEvent<J>) -> Effects<AttachEffect<J>> {
     match event {
-        AttachEvent::Attach { owner, wake, engine } => match state {
+        AttachEvent::Attach { owner, wake } => {
             // Callers already waiting stay queued for the new host.
-            Attachment::Attached { owner: held_owner, wake: held_wake, engine: held_engine, .. } => {
-                *held_owner = owner;
-                *held_wake = wake;
-                Effects::one(AttachEffect::Superseded(mem::replace(held_engine, engine)))
-            }
-            _ => {
-                *state = Attachment::Attached { owner, wake, engine, jobs: Vec::new() };
-                Effects::none()
-            }
-        },
+            let jobs = match state { Attachment::Attached { jobs, .. } => mem::take(jobs), _ => Vec::new() };
+            *state = Attachment::Attached { owner, wake, jobs };
+            Effects::none()
+        }
         AttachEvent::Call { from, shared } => match state {
-            Attachment::Attached { owner, wake, engine, .. } if shared || *owner == from => {
-                Effects::one(AttachEffect::Run { engine: engine.clone(), wake: wake.clone() })
-            }
+            Attachment::Attached { owner, wake, .. } if shared || *owner == from => Effects::one(AttachEffect::Run { wake: wake.clone() }),
             Attachment::Attached { .. } => Effects::one(AttachEffect::Wait),
             _ => Effects::one(AttachEffect::Refuse),
         },
@@ -80,7 +70,7 @@ pub(super) fn step_attachment<E: Clone, J>(state: &mut Attachment<E, J>, event: 
             _ => Effects::none(),
         },
         AttachEvent::Close => match mem::replace(state, Attachment::Closed) {
-            Attachment::Attached { engine, jobs, .. } => Effects::one(AttachEffect::Release { jobs, engine }),
+            Attachment::Attached { jobs, .. } => Effects::one(AttachEffect::Release(jobs)),
             _ => Effects::none(),
         },
     }

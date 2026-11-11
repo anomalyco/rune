@@ -1,5 +1,6 @@
 //! Every short sequence of events through the machines, compared after each event with a
-//! literal copy of the code they replaced. Both platform shapes run on every host.
+//! literal copy of the code they replaced. Both platform shapes run on every host, and a
+//! teardown keeps running until the sequence says it finished.
 
 use super::*;
 use std::{cell::RefCell, sync::LazyLock, thread::ThreadId};
@@ -20,15 +21,38 @@ fn every_sequence(letters: usize, length: u32, mut run: impl FnMut(&[usize])) {
 
 #[derive(Clone, Debug, PartialEq)]
 enum Outcome {
-    Attached { superseded: Option<u32> },
+    Attached,
+    /// The attach replaced this engine, whose teardown is now running.
+    Replacing { engine: u32 },
     Refused,
     Ran { engine: u32, wake: usize },
     Queued { wake: usize },
     Drained { ran: Vec<u32>, dropped: Vec<u32> },
     Closed { jobs: Vec<u32>, engine: Option<u32> },
+    /// Parked behind a running teardown, to finish when it does.
+    Blocked,
+    /// That thread is inside a teardown or parked, so it can't do anything else.
+    Skipped,
 }
 
-/// Who owns the service, its wake, its waiting jobs, the shared engine and the per-thread ones.
+enum Op { Attach(Waker, u32), Call(u32), Drain, Close, ReleaseEngine }
+
+/// Teardowns still running, oldest first, each with the wake of the attach it holds up, and the
+/// operations parked behind them.
+#[derive(Default)]
+struct Schedule { teardowns: Vec<(ThreadId, Option<Waker>)>, parked: Vec<(ThreadId, Op)> }
+
+impl Schedule {
+    fn busy(&self, thread: ThreadId) -> bool {
+        self.teardowns.iter().any(|(t, _)| *t == thread) || self.parked.iter().any(|(t, _)| *t == thread)
+    }
+
+    fn view(&self) -> (Vec<ThreadId>, Vec<ThreadId>) {
+        (self.teardowns.iter().map(|(t, _)| *t).collect(), self.parked.iter().map(|(t, _)| *t).collect())
+    }
+}
+
+/// Who owns the service, its wake, its waiting jobs, the Linux engine and the per-thread ones.
 type RouteView = (Option<ThreadId>, Option<usize>, Vec<u32>, Option<u32>, Vec<(ThreadId, u32)>);
 
 fn sorted(engines: &HashMap<ThreadId, u32>) -> Vec<(ThreadId, u32)> {
@@ -37,21 +61,81 @@ fn sorted(engines: &HashMap<ThreadId, u32>) -> Vec<(ThreadId, u32)> {
     engines
 }
 
+/// One side of the comparison, split where the real code can block.
+trait Model {
+    fn schedule(&mut self) -> &mut Schedule;
+    fn attach(&mut self, thread: ThreadId, wake: Waker, engine: u32) -> Outcome;
+    /// The routing half of an attach, which runs once any replaced engine is gone.
+    fn finish_attach(&mut self, thread: ThreadId, wake: Waker);
+    fn call(&mut self, thread: ThreadId, job: u32) -> Outcome;
+    fn drain(&mut self, thread: ThreadId) -> Outcome;
+    fn close(&mut self, thread: ThreadId) -> Outcome;
+    /// The engine half of a close on Linux.
+    fn release_engine(&mut self, thread: ThreadId) -> Outcome;
+    fn view(&self) -> RouteView;
+}
+
+fn perform(model: &mut impl Model, thread: ThreadId, op: Op) -> Outcome {
+    match op {
+        Op::Attach(wake, engine) => model.attach(thread, wake, engine),
+        Op::Call(job) => model.call(thread, job),
+        Op::Drain => model.drain(thread),
+        Op::Close => model.close(thread),
+        Op::ReleaseEngine => model.release_engine(thread),
+    }
+}
+
+/// The oldest teardown ends. A parked caller holds the routing lock, so it runs before the
+/// attach that teardown held up can finish.
+fn finish_teardown(model: &mut impl Model) -> Vec<Outcome> {
+    let schedule = model.schedule();
+    if schedule.teardowns.is_empty() { return vec![Outcome::Skipped]; }
+    let (thread, attaching) = schedule.teardowns.remove(0);
+    let (calls, others): (Vec<_>, Vec<_>) = std::mem::take(&mut schedule.parked).into_iter().partition(|(_, op)| matches!(op, Op::Call(_)));
+    let mut outcomes: Vec<_> = calls.into_iter().map(|(thread, op)| perform(model, thread, op)).collect();
+    if let Some(wake) = attaching { model.finish_attach(thread, wake); }
+    outcomes.extend(others.into_iter().map(|(thread, op)| perform(model, thread, op)));
+    outcomes
+}
+
 // The routing as it was: Routing's fields, the Linux engine slot and the thread-local engines,
-// with the current thread passed in and a job as a number.
+// with the current thread passed in and a job as a number. A running teardown on Linux holds
+// the slot's lock.
 #[derive(Default)]
 struct OldRouting { owner: Option<ThreadId>, wake: Option<Waker>, jobs: Vec<u32> }
 
 #[derive(Default)]
-struct OldControl { routing: OldRouting, engine: Option<u32>, engines: HashMap<ThreadId, u32>, linux: bool }
+struct OldControl { routing: OldRouting, engine: Option<u32>, engines: HashMap<ThreadId, u32>, linux: bool, schedule: Schedule }
 
 impl OldControl {
+    fn slot_locked(&self) -> bool { self.linux && !self.schedule.teardowns.is_empty() }
+}
+
+impl Model for OldControl {
+    fn schedule(&mut self) -> &mut Schedule { &mut self.schedule }
+
+    fn attach(&mut self, thread: ThreadId, wake: Waker, engine: u32) -> Outcome {
+        if self.slot_locked() { self.schedule.parked.push((thread, Op::Attach(wake, engine))); return Outcome::Blocked; }
+        let replaced = if self.linux { self.engine.replace(engine) } else { self.engines.insert(thread, engine) };
+        if let Some(engine) = replaced {
+            self.schedule.teardowns.push((thread, Some(wake)));
+            return Outcome::Replacing { engine };
+        }
+        self.finish_attach(thread, wake);
+        Outcome::Attached
+    }
+
+    fn finish_attach(&mut self, thread: ThreadId, wake: Waker) {
+        self.routing.owner = Some(thread);
+        self.routing.wake = Some(wake);
+    }
+
     fn call(&mut self, thread: ThreadId, job: u32) -> Outcome {
         if self.linux {
-            let route = &self.routing;
-            if route.owner.is_none() { return Outcome::Refused; }
+            if self.routing.owner.is_none() { return Outcome::Refused; }
+            if self.slot_locked() { self.schedule.parked.push((thread, Op::Call(job))); return Outcome::Blocked; }
             let Some(engine) = self.engine else { return Outcome::Refused };
-            let wake = route.wake.clone();
+            let wake = self.routing.wake.clone();
             return Outcome::Ran { engine, wake: address(&wake.unwrap()) };
         }
         let route = &mut self.routing;
@@ -66,13 +150,6 @@ impl OldControl {
         Outcome::Queued { wake: address(&wake.unwrap()) }
     }
 
-    fn attach(&mut self, thread: ThreadId, wake: Waker, engine: u32) -> Outcome {
-        let superseded = if self.linux { self.engine.replace(engine) } else { self.engines.insert(thread, engine) };
-        self.routing.owner = Some(thread);
-        self.routing.wake = Some(wake);
-        Outcome::Attached { superseded }
-    }
-
     fn drain(&mut self, thread: ThreadId) -> Outcome {
         if self.linux { return Outcome::Drained { ran: vec![], dropped: vec![] }; }
         let jobs = std::mem::take(&mut self.routing.jobs);
@@ -81,8 +158,20 @@ impl OldControl {
 
     fn close(&mut self, thread: ThreadId) -> Outcome {
         let route = std::mem::take(&mut self.routing);
-        let engine = if self.linux { self.engine.take() } else { self.engines.remove(&thread) };
+        if self.linux {
+            if self.slot_locked() { self.schedule.parked.push((thread, Op::ReleaseEngine)); return Outcome::Blocked; }
+            return self.release_engine(thread);
+        }
+        let engine = self.engines.remove(&thread);
+        if engine.is_some() { self.schedule.teardowns.push((thread, None)); }
         Outcome::Closed { jobs: route.jobs, engine }
+    }
+
+    fn release_engine(&mut self, thread: ThreadId) -> Outcome {
+        if self.slot_locked() { self.schedule.parked.push((thread, Op::ReleaseEngine)); return Outcome::Blocked; }
+        let engine = self.engine.take();
+        if engine.is_some() { self.schedule.teardowns.push((thread, None)); }
+        Outcome::Closed { jobs: vec![], engine }
     }
 
     fn view(&self) -> RouteView {
@@ -91,13 +180,35 @@ impl OldControl {
 }
 
 /// The machine with the glue `Guard` and `Control` wrap around it.
-struct NewControl { attachment: Attachment<u32, u32>, engines: HashMap<ThreadId, u32>, linux: bool }
+struct NewControl { attachment: Attachment<u32>, engine: Option<u32>, engines: HashMap<ThreadId, u32>, linux: bool, schedule: Schedule }
 
 impl NewControl {
+    fn slot_locked(&self) -> bool { self.linux && !self.schedule.teardowns.is_empty() }
+}
+
+impl Model for NewControl {
+    fn schedule(&mut self) -> &mut Schedule { &mut self.schedule }
+
+    fn attach(&mut self, thread: ThreadId, wake: Waker, engine: u32) -> Outcome {
+        if self.slot_locked() { self.schedule.parked.push((thread, Op::Attach(wake, engine))); return Outcome::Blocked; }
+        let replaced = if self.linux { self.engine.replace(engine) } else { self.engines.insert(thread, engine) };
+        if let Some(engine) = replaced {
+            self.schedule.teardowns.push((thread, Some(wake)));
+            return Outcome::Replacing { engine };
+        }
+        self.finish_attach(thread, wake);
+        Outcome::Attached
+    }
+
+    fn finish_attach(&mut self, thread: ThreadId, wake: Waker) {
+        assert!(step_attachment(&mut self.attachment, AttachEvent::Attach { owner: thread, wake }).is_empty());
+    }
+
     fn call(&mut self, thread: ThreadId, job: u32) -> Outcome {
         match step_attachment(&mut self.attachment, AttachEvent::Call { from: thread, shared: self.linux }).into_iter().next() {
-            Some(AttachEffect::Run { engine, wake }) => {
-                let engine = if self.linux { Some(engine) } else { self.engines.get(&thread).copied() };
+            Some(AttachEffect::Run { wake }) => {
+                if self.slot_locked() { self.schedule.parked.push((thread, Op::Call(job))); return Outcome::Blocked; }
+                let engine = if self.linux { self.engine } else { self.engines.get(&thread).copied() };
                 engine.map_or(Outcome::Refused, |engine| Outcome::Ran { engine, wake: address(&wake) })
             }
             Some(AttachEffect::Wait) => match step_attachment(&mut self.attachment, AttachEvent::Post(job)).into_iter().next() {
@@ -106,15 +217,6 @@ impl NewControl {
             },
             _ => Outcome::Refused,
         }
-    }
-
-    fn attach(&mut self, thread: ThreadId, wake: Waker, engine: u32) -> Outcome {
-        let mut superseded = if self.linux { None } else { self.engines.insert(thread, engine) };
-        let event = AttachEvent::Attach { owner: thread, wake, engine: if self.linux { engine } else { 0 } };
-        for effect in step_attachment(&mut self.attachment, event) {
-            if let AttachEffect::Superseded(replaced) = effect && self.linux { superseded = Some(replaced); }
-        }
-        Outcome::Attached { superseded }
     }
 
     fn drain(&mut self, thread: ThreadId) -> Outcome {
@@ -126,21 +228,44 @@ impl NewControl {
     }
 
     fn close(&mut self, thread: ThreadId) -> Outcome {
-        let (mut released, mut shared) = (vec![], None);
+        let mut released = vec![];
         for effect in step_attachment(&mut self.attachment, AttachEvent::Close) {
-            if let AttachEffect::Release { jobs, engine } = effect { released = jobs; shared = Some(engine); }
+            if let AttachEffect::Release(jobs) = effect { released = jobs; }
         }
-        let engine = if self.linux { shared } else { self.engines.remove(&thread) };
+        if self.linux { return self.release_engine(thread); }
+        let engine = self.engines.remove(&thread);
+        if engine.is_some() { self.schedule.teardowns.push((thread, None)); }
         Outcome::Closed { jobs: released, engine }
+    }
+
+    fn release_engine(&mut self, thread: ThreadId) -> Outcome {
+        if self.slot_locked() { self.schedule.parked.push((thread, Op::ReleaseEngine)); return Outcome::Blocked; }
+        let engine = self.engine.take();
+        if engine.is_some() { self.schedule.teardowns.push((thread, None)); }
+        Outcome::Closed { jobs: vec![], engine }
     }
 
     fn view(&self) -> RouteView {
         let engines = sorted(&self.engines);
         match &self.attachment {
-            Attachment::Attached { owner, wake, engine, jobs } => (Some(*owner), Some(address(wake)), jobs.clone(), self.linux.then_some(*engine), engines),
-            Attachment::Detached | Attachment::Closed => (None, None, vec![], None, engines),
+            Attachment::Attached { owner, wake, jobs } => (Some(*owner), Some(address(wake)), jobs.clone(), self.engine, engines),
+            Attachment::Detached | Attachment::Closed => (None, None, vec![], self.engine, engines),
         }
     }
+}
+
+/// Letters 0..8 are Attach, Call, Drain and Close from either thread; 8 ends the oldest teardown.
+fn play(model: &mut impl Model, letter: usize, threads: &[ThreadId; 2], wakes: &[Waker; 2], number: u32) -> Vec<Outcome> {
+    if letter == 8 { return finish_teardown(model); }
+    let thread = threads[letter % 2];
+    if model.schedule().busy(thread) { return vec![Outcome::Skipped]; }
+    let op = match letter / 2 {
+        0 => Op::Attach(wakes[letter % 2].clone(), number),
+        1 => Op::Call(number),
+        2 => Op::Drain,
+        _ => Op::Close,
+    };
+    vec![perform(model, thread, op)]
 }
 
 #[test]
@@ -148,20 +273,19 @@ fn every_attachment_sequence_matches_the_old_routing() {
     let threads = [std::thread::current().id(), other_thread()];
     let wakes: [Waker; 2] = [Arc::new(|| {}), Arc::new(|| { let _ = 1; })];
     for linux in [false, true] {
-        // Attach, Call, Drain and Close, each from either thread.
-        every_sequence(8, 6, |sequence| {
+        every_sequence(9, 6, |sequence| {
             let mut old = OldControl { linux, ..OldControl::default() };
-            let mut new = NewControl { attachment: Attachment::Detached, engines: HashMap::new(), linux };
+            let mut new = NewControl { attachment: Attachment::Detached, engine: None, engines: HashMap::new(), linux, schedule: Schedule::default() };
             for (n, letter) in sequence.iter().enumerate() {
-                let (thread, number) = (threads[letter % 2], n as u32 + 1);
-                let (expected, actual) = match letter / 2 {
-                    0 => (old.attach(thread, wakes[letter % 2].clone(), number), new.attach(thread, wakes[letter % 2].clone(), number)),
-                    1 => (old.call(thread, number), new.call(thread, number)),
-                    2 => (old.drain(thread), new.drain(thread)),
-                    _ => (old.close(thread), new.close(thread)),
-                };
+                let number = n as u32 + 1;
+                let expected = play(&mut old, *letter, &threads, &wakes, number);
+                let actual = play(&mut new, *letter, &threads, &wakes, number);
                 assert_eq!(actual, expected, "linux {linux}, {sequence:?} at {n}");
                 assert_eq!(new.view(), old.view(), "linux {linux}, {sequence:?} at {n}");
+                assert_eq!(new.schedule.view(), old.schedule.view(), "linux {linux}, {sequence:?} at {n}");
+                if linux && actual.iter().any(|outcome| matches!(outcome, Outcome::Ran { .. })) {
+                    assert!(new.schedule.teardowns.is_empty(), "a call reached an engine during a teardown: {sequence:?} at {n}");
+                }
             }
         });
     }
@@ -170,16 +294,16 @@ fn every_attachment_sequence_matches_the_old_routing() {
 #[test]
 fn only_a_close_reaches_closed_and_a_later_host_can_attach() {
     let thread = std::thread::current().id();
-    let mut state = Attachment::<u32, u32>::Detached;
+    let mut state = Attachment::<u32>::Detached;
     assert!(matches!(step_attachment(&mut state, AttachEvent::Call { from: thread, shared: true }).into_iter().next(), Some(AttachEffect::Refuse)));
     assert!(matches!(state, Attachment::Detached));
-    step_attachment(&mut state, AttachEvent::Attach { owner: thread, wake: Arc::new(|| {}), engine: 1 });
+    step_attachment(&mut state, AttachEvent::Attach { owner: thread, wake: Arc::new(|| {}) });
     assert!(matches!(state, Attachment::Attached { .. }));
     step_attachment(&mut state, AttachEvent::Close);
     assert!(matches!(state, Attachment::Closed));
     assert!(matches!(step_attachment(&mut state, AttachEvent::Call { from: thread, shared: true }).into_iter().next(), Some(AttachEffect::Refuse)));
-    assert!(step_attachment(&mut state, AttachEvent::Attach { owner: thread, wake: Arc::new(|| {}), engine: 2 }).is_empty());
-    assert!(matches!(state, Attachment::Attached { engine: 2, .. }));
+    assert!(step_attachment(&mut state, AttachEvent::Attach { owner: thread, wake: Arc::new(|| {}) }).is_empty());
+    assert!(matches!(state, Attachment::Attached { .. }));
 }
 
 // The engine as it was, with `super::backend` behind a field and its own process-wide list.
