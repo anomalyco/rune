@@ -2,6 +2,7 @@
 //! the frames a covered or occluded window steps without drawing.
 
 use super::*;
+use super::stepping::FrameMove;
 
 /// The first frame's marks (crate::marks), for the first window to draw.
 static FIRST_BUILD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -167,7 +168,7 @@ impl<S: 'static> Host<S> {
         let fp_entry = crate::frame::live_log::on().then(crate::frame::live_log::Stamp::now);
         let quiet = l.timer_frame.take_quiet() && !hidden && !live_resize && l.presented.is_some() && !composed(self.comp.as_deref())
             && self.trace.is_none() && self.args.trace.is_none() && self.rt.live_visible()
-            && self.rt.window_frame.is_none() && self.frame_move.is_none();
+            && self.rt.window_frame.is_none() && !FrameMove::moving(&self.frame_move);
         #[cfg(target_os = "macos")]
         let quiet = quiet && shown.is_none() && !l.native.materials.native();
         let built = if quiet {
@@ -237,7 +238,7 @@ impl<S: 'static> Host<S> {
         }
         let frame_time = target.unwrap_or(now);
         let presents_at = target;
-        self.rt.window_resting = self.frame_move.is_none() && self.rt.window_frame.is_none();
+        self.rt.window_resting = !FrameMove::moving(&self.frame_move) && self.rt.window_frame.is_none();
         let target_ms = target.zip(self.trace_start).map(|(target, start)| crate::frame::present_time::ms_since(start, target));
         crate::marks::mark_once(&FIRST_BUILD, "frame.first.build");
         let rt = &mut self.rt;
@@ -370,7 +371,7 @@ impl<S: 'static> Host<S> {
         if let Some(shadow) = &l.native.shadow { shadow.presented(); }
         // The frame landed with this present; later ones needn't wait for a transaction.
         #[cfg(target_os = "macos")]
-        if self.frame_move.is_none() { l.present_with_transaction(false); }
+        if !FrameMove::moving(&self.frame_move) { l.present_with_transaction(false); }
         if !l.first_frame.ready()
             && gpu.device.poll(wgpu::PollType::wait_indefinitely()).is_ok() {
             l.first_frame.gpu_done();
@@ -424,10 +425,10 @@ impl<S: 'static> Host<S> {
             let event = if hidden { SteadyEvent::Ends } else { SteadyEvent::Drew { changed, focused: rt.has_window_focus(), now } };
             l.steady = l.steady.step(event).0;
         }
-        self.idle = Presented::settle(&mut l.presented, rt, &l.config, animating || self.frame_move.is_some(), next_tick, rests, composed(self.comp.as_deref()));
+        self.idle = Presented::settle(&mut l.presented, rt, &l.config, animating || FrameMove::moving(&self.frame_move), next_tick, rests, composed(self.comp.as_deref()));
         // Why the window draws again: each bit is one of `Presented::settle`'s reasons.
         #[cfg(feature = "frame-profile")]
-        let fp_next = [animating, self.frame_move.is_some(), rt.needs_commit(), rt.stale() && !rt.needs_commit(), rt.has_pending_input(), rt.live_pending(),
+        let fp_next = [animating, FrameMove::moving(&self.frame_move), rt.needs_commit(), rt.stale() && !rt.needs_commit(), rt.has_pending_input(), rt.live_pending(),
             rt.window_frame.is_some(), super::timer_wants_frame(rt, next_tick)]
             .iter().enumerate().fold(fp_steady, |bits, (i, on)| bits | (u16::from(*on) << i));
         #[cfg(target_os = "macos")]

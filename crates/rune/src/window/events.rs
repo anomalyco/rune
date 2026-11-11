@@ -301,13 +301,13 @@ impl<S: 'static> Host<S> {
                     if restored || origin_moved { l.request_redraw(); }
                     return;
                 }
-                let asked = self.frame_jump.take().is_some_and(|(w, h)| (w - viewport.0).abs() < 1.0 && (h - viewport.1).abs() < 1.0);
+                let asked = stepping::FrameMove::take_jump(&mut self.frame_move, viewport);
                 if asked { rt.step_viewport(viewport, scale) } else { rt.set_viewport(viewport, scale) }
                 // The user is dragging the edge. AppKit commits the new size when this returns,
                 // and a frame drawn later would leave the old one stretched to it until then.
                 #[cfg(target_os = "macos")]
                 if crate::platform::macos::in_live_resize(&l.window) {
-                    if self.frame_move.take().is_some() { l.present_with_transaction(false); }
+                    if stepping::FrameMove::take_moving(&mut self.frame_move).is_some() { l.present_with_transaction(false); }
                     self.draw(true);
                     self.shell(event_loop);
                     return;

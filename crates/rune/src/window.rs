@@ -108,6 +108,9 @@ mod tests;
 mod wake_tests;
 #[cfg(test)]
 mod backoff_tests;
+#[cfg(test)]
+#[path = "window/frame_move_tests.rs"]
+mod frame_move_tests;
 
 pub(crate) enum WakeEvent {
     DisplayTick(usize),
@@ -488,10 +491,8 @@ struct Host<S: 'static> {
     comp: Option<Box<dyn Compositor<S>>>,
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     wayland: bool,
+    /// The frame moving or jumping to where a handler asked (`stepping::FrameMove`).
     frame_move: Option<stepping::FrameMove>,
-    /// The content size a resize request jumps to, so its Resized event lays out like a step
-    /// of a resize animation rather than a user's resize.
-    frame_jump: Option<(f32, f32)>,
     /// Present times of every window this host opens while tracing.
     #[cfg(target_os = "macos")]
     present_log: Option<Arc<crate::frame::present_time::metal::Log>>,
@@ -631,7 +632,6 @@ impl<S: 'static> Host<S> {
             comp,
             wayland,
             frame_move: None,
-            frame_jump: None,
             trace: None,
             trace_start: None,
             trace_frames: 0,
