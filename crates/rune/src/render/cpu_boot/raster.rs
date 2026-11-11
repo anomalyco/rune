@@ -40,6 +40,7 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
                 // One tile at a time, so a thread that drew cheap tiles takes more.
                 let Some(&t) = tiles.get(next.fetch_add(1, Ordering::Relaxed)) else { break };
                 let t = t as usize;
+                let began = std::time::Instant::now();
                 painter.tile = painter.tile_rect(t as u32 % bins.cols, t as u32 / bins.cols);
                 if phase == 0 && !bins.covered[t] {
                     painter.surface.fill(painter.tile, clear);
@@ -55,6 +56,7 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
                     if r[2] > r[0] && r[3] > r[1] { painter.draw(n, r); }
                 }
                 painter.depth = 0;
+                painter.stats.slowest_tile_ns = painter.stats.slowest_tile_ns.max(super::ns(began.elapsed()));
             }
             drop(painter);
             let mut s = sums.lock().unwrap_or_else(|e| e.into_inner());
@@ -62,6 +64,7 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
             s.shaded_px += stats.shaded_px;
             s.glyph_px += stats.glyph_px;
             s.cleared += stats.cleared;
+            s.slowest_tile_ns = s.slowest_tile_ns.max(stats.slowest_tile_ns);
         };
         exec.run(&worker);
         let s = sums.into_inner().unwrap_or_else(|e| e.into_inner());
@@ -69,6 +72,7 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
         report.shaded_px += s.shaded_px;
         report.glyph_px += s.glyph_px;
         report.cleared += s.cleared;
+        report.slowest_tile_ns = report.slowest_tile_ns.max(s.slowest_tile_ns);
         if let Some((_, rec)) = bins.blurs.get(phase) {
             let px: &[u8] = &*target.pixels;
             let stride = target.stride;
