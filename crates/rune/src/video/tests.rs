@@ -168,6 +168,51 @@ fn a_seek_before_the_clip_opens_is_clamped_when_it_does() {
 
 /// `play()` on a parked clip only unparks it on its next pull or edit on the main thread;
 /// until then, parking others must not release it.
+/// Four parked clips busy on other threads, and a fifth that played again between its turn and
+/// its park: nothing is released, as a playing clip never is.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_clip_that_plays_again_before_its_park_is_never_released() {
+    let _parking = PARKING.lock().unwrap_or_else(|e| e.into_inner());
+    let clips: Vec<Video> = (0..5).map(|_| Video::file(fixture())).collect();
+    let mut released = Vec::new();
+    for clip in &clips[..4] {
+        released.extend(backend::parked_with(&clip.shared));
+    }
+    let busy: Vec<_> = clips[..4].iter().map(|clip| clip.shared.ctl.lock().unwrap()).collect();
+    clips[4].shared.ctl.lock().unwrap().run = Run::Playing { anchor: None };
+    std::thread::scope(|s| s.spawn(|| released.extend(backend::parked_with(&clips[4].shared))).join().unwrap());
+    drop(busy);
+    assert!(released.is_empty(), "{} released", released.len());
+}
+
+/// The clip's own waker is app code, run with no player locks held: a frame it pushes to another
+/// surface wakes that surface at once.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_frame_the_clips_waker_pushes_elsewhere_wakes_at_once() {
+    use std::sync::atomic::AtomicUsize;
+    let v = Video::file("/nonexistent/clip.mp4");
+    let other = NativeSurface::new();
+    let woke = Arc::new(AtomicUsize::new(0));
+    let count = woke.clone();
+    other.set_waker(Arc::new(move || {
+        count.fetch_add(1, Ordering::SeqCst);
+    }));
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let log = heard.clone();
+    v.set_waker(Arc::new(move || {
+        let before = woke.load(Ordering::SeqCst);
+        push_placeholder(&other);
+        log.lock().unwrap().push(woke.load(Ordering::SeqCst) - before);
+    }));
+    let mut rt = crate::Runtime::new(v.clone(), view, (32.0, 18.0), crate::Env::new(true, 2.0));
+    rt.frame(0.0);
+    assert!(matches!(v.state(), PlayerState::Failed(_)));
+    let heard = heard.lock().unwrap();
+    assert!(!heard.is_empty() && heard.iter().all(|n| *n == 1), "{heard:?}");
+}
+
 /// Parking tests share the process's one list of parked clips.
 #[cfg(target_os = "macos")]
 static PARKING: Mutex<()> = Mutex::new(());

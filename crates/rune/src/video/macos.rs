@@ -840,7 +840,8 @@ pub(super) fn parked_with(shared: &Arc<Shared>) -> Vec<Arc<Shared>> {
     let mut i = 0;
     while excess > 0 && i < parked.len() {
         let clip = parked[i].upgrade();
-        if clip.as_ref().is_none_or(|clip| Arc::ptr_eq(clip, shared) || playing(clip) == Some(false)) {
+        // Only a clip seen paused goes, `shared` too: it may have played again since its turn.
+        if clip.as_ref().is_none_or(|clip| playing(clip) == Some(false)) {
             parked.remove(i);
             released.extend(clip);
             excess -= 1;

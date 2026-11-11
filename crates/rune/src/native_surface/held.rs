@@ -19,13 +19,13 @@ thread_local! {
 }
 
 /// Holds surface wakes and replaced frames on this thread until it drops. Create it before
-/// taking a player's locks and drop it after releasing them.
-pub(crate) struct Held(());
+/// taking a player's locks and drop it after releasing them, with no app code between.
+pub(crate) struct Held(std::marker::PhantomData<*const ()>);
 
 impl Held {
     pub(crate) fn new() -> Self {
         DEFERRED.with_borrow_mut(|d| d.depth += 1);
-        Held(())
+        Held(std::marker::PhantomData)
     }
 }
 

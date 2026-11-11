@@ -572,13 +572,17 @@ impl Shared {
             return Pulled { active: false, generation: self.ctl.lock().unwrap().generation, due: None };
         }
         // Frames land with this clip's locks held: the surface's waker and the release of the
-        // frame each replaces wait until they're released.
-        let held = crate::native_surface::Held::new();
+        // frame each replaces wait until they're released. Only around those writes, so app
+        // code (the clip's own waker) pushes to other surfaces as usual.
         let (active, due) = match clock {
             Clock::Virtual(now) => (self.pull_virtual(surface, now), None),
-            Clock::Display(target) => (backend::pull(self, surface, target), backend::due(self)),
+            Clock::Display(target) => {
+                let _held = crate::native_surface::Held::new();
+                (backend::pull(self, surface, target), backend::due(self))
+            }
         };
         let pulled = {
+            let _held = crate::native_surface::Held::new();
             let mut c = self.ctl.lock().unwrap();
             for effect in step(&mut c, Event::Drawn) {
                 if effect == Effect::Placeholder {
@@ -587,7 +591,6 @@ impl Shared {
             }
             Pulled { active: active && !c.failed(), generation: c.generation, due }
         };
-        drop(held);
         self.settle(false);
         pulled
     }
@@ -595,6 +598,7 @@ impl Shared {
     /// Headless: decode the frame at the virtual playback time, synchronously.
     fn pull_virtual(&self, surface: &NativeSurface, now: f64) -> bool {
         self.open_now();
+        let _held = crate::native_surface::Held::new();
         let mut native = self.native.lock().unwrap();
         let (meta, frame, shown) = {
             let mut c = self.ctl.lock().unwrap();
@@ -646,8 +650,11 @@ pub(crate) struct Control {
     pub meta: Option<Meta>,
     run: Run,
     stage: Stage,
-    /// Fences poster requests: a newer request or a native player taking over moves it on.
+    /// Fences poster requests: a request for a new time or a native player taking over moves
+    /// it on.
     posters: Seq,
+    /// The time the current poster attempt asked for; None once a player took over.
+    poster_at: Option<f64>,
     generation: u64,
     frame_id: u64,
     /// Headless: the frame index on the surface.
@@ -670,6 +677,7 @@ impl Default for Control {
             run: Run::default(),
             stage: Stage::default(),
             posters: Seq::default(),
+            poster_at: None,
             generation: 0,
             frame_id: 0,
             shown: None,

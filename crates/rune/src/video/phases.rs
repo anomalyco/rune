@@ -282,6 +282,7 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
             // no surface to lose, so its answer always counts.
             if c.kind == Kind::Video {
                 c.posters.next();
+                c.poster_at = None;
             }
             c.stage = Stage::Loading { created, muted: false, volume: 1.0 };
         }
@@ -361,10 +362,12 @@ fn advance(c: &mut Control, now: f64) {
 }
 
 /// Audio has no poster, so its worker only opens it. Called only while no player runs. A video's
-/// request supersedes the ones before it, which may still be decoding an older time.
+/// request for a new time supersedes the ones before it, which may still be decoding an older
+/// time; one for the same time shares their attempt.
 fn ask_poster(c: &mut Control, at: f64) -> Effects<Effect> {
-    if c.kind == Kind::Video {
+    if c.kind == Kind::Video && c.poster_at != Some(at) {
         c.posters.next();
+        c.poster_at = Some(at);
     }
     c.stage = if c.kind == Kind::Video { Stage::Poster } else { Stage::Bare };
     Effects::one(Effect::AskPoster(at, c.posters.current()))

@@ -86,6 +86,25 @@ fn a_poster_for_an_older_paused_seek_neither_shows_nor_fails() {
     assert_eq!(posters_shown(&new), 1);
 }
 
+/// A slow worker, each answer one request behind, while the app seeks to the same time again
+/// and again: every answer is for the time asked for, so each shows.
+#[test]
+fn posters_for_repeated_seeks_to_one_time_all_show() {
+    let mut c = Control::default();
+    let meta = Meta { duration: 1.0, size: Some((64, 36)), frame: 0.25 };
+    let (mut owed, mut shown) = (None, 0);
+    for _ in 0..30 {
+        step(&mut c, Event::Seek(0.3));
+        let AskPoster(_, attempt) = only(step(&mut c, Event::Pull)) else { panic!("asks for a poster") };
+        if let Some(answered) = owed.replace(attempt)
+            && step(&mut c, Event::PosterDone { attempt: answered, result: Ok(meta) }) == Effects::one(Effect::ShowPoster)
+        {
+            shown += 1;
+        }
+    }
+    assert_eq!(shown, 29);
+}
+
 #[test]
 fn a_superseded_poster_keeps_the_clips_frame_timing() {
     let mut c = Control::default();

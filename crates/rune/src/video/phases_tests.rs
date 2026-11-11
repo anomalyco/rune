@@ -106,6 +106,8 @@ struct Old {
     fence: u32,
     // The fence the newest request was made under.
     asked: u32,
+    // differs from dev: the time the fence's requests asked for, until a player takes over.
+    fence_at: Option<f64>,
     // The requests the worker still owes, oldest (in flight) first.
     pending: Vec<u32>,
     now: Instant,
@@ -136,6 +138,7 @@ impl Old {
             done: None,
             fence: 0,
             asked: 0,
+            fence_at: None,
             pending: Vec::new(),
             now,
             log: Vec::new(),
@@ -265,9 +268,10 @@ impl Old {
     }
     fn request_poster(&mut self, at: f64) {
         self.poster = if !self.audio { OldPoster::Due } else { OldPoster::Withheld };
-        // differs from dev: a video request fences the ones before it.
-        if !self.audio {
+        // differs from dev: a video request for a new time fences the ones before it.
+        if !self.audio && self.fence_at != Some(at) {
             self.fence += 1;
+            self.fence_at = Some(at);
         }
         // The request remembers the fence it was made under.
         self.asked = self.fence;
@@ -354,6 +358,8 @@ impl Old {
         // A video player fences the poster requests before it.
         if !self.audio {
             self.fence += 1;
+            // differs from dev: the next request is new, whatever its time.
+            self.fence_at = None;
         }
         self.poster = OldPoster::Withheld;
         true
