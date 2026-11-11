@@ -71,6 +71,8 @@ impl Stamp {
 
 /// One drawn frame's stage boundaries and counts.
 pub(crate) struct Frame {
+    /// The draw began: a timer's frame builds before it takes a drawable (prebuild).
+    pub(crate) entry: Stamp,
     pub(crate) start: Stamp,
     pub(crate) acquired: Stamp,
     pub(crate) built: Stamp,
@@ -106,12 +108,12 @@ pub(crate) fn frame(f: Frame) {
     let next: Vec<&str> = ["motion", "frame_move", "commit", "relayout_or_queue", "input", "live", "window_frame", "timer", "steady_frame", "changed", "steady_again"]
         .into_iter().enumerate().filter(|(i, _)| f.next & (1 << i) != 0).map(|(_, n)| n).collect();
     let line = serde_json::json!({
-        "t": f.start.wall, "inputs": inputs, "input": input_ns, "wakes": wakes, "wake": wake_ns, "asked": asked, "wakers": wakers,
-        "acquire": d(f.start, f.acquired), "build": d(f.acquired, f.built),
+        "t": f.entry.wall, "inputs": inputs, "input": input_ns, "wakes": wakes, "wake": wake_ns, "asked": asked, "wakers": wakers,
+        "prebuild": d(f.entry, f.start), "acquire": d(f.start, f.acquired), "build": d(f.acquired, f.built),
         "view": ns(p[0]), "commit": ns(p[1]), "layout": ns(p[2]), "text": ns(p[3]), "paint": ns(p[4]), "apply": ns(p[5]),
         "upload": d(f.built, f.uploaded), "encode": d(f.uploaded, f.encoded), "submit": d(f.encoded, f.submitted),
-        "present": d(f.submitted, f.presented), "total": d(f.start, f.presented),
-        "cpu": f.presented.cpu.saturating_sub(f.start.cpu), "build_cpu": f.built.cpu.saturating_sub(f.acquired.cpu),
+        "present": d(f.submitted, f.presented), "total": d(f.entry, f.presented),
+        "cpu": f.presented.cpu.saturating_sub(f.entry.cpu), "build_cpu": f.built.cpu.saturating_sub(f.acquired.cpu),
         "nodes": f.nodes, "shaped": f.shaped, "instances": f.instances, "animating": f.animating,
         "why": crate::runtime::CommitWhy::names(f.why),
         "next": next, "poll_due": f.poll_due, "loop_due": f.loop_due, "loops": f.loops,
