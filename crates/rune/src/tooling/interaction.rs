@@ -167,12 +167,12 @@ impl Tracker {
     /// A frame starts; `queued` when input waits for it. A built frame no host presented
     /// (a bare `Runtime`, a window that skipped drawing) ends at its build.
     pub(crate) fn frame_begins(&mut self, queued: bool) -> Option<Finished> {
-        self.begin_with(queued, Instant::now, crate::frame::profile::cpu_ms)
+        self.begin_with(queued, slow_ms(), Instant::now, crate::frame::profile::cpu_ms)
     }
 
-    fn begin_with(&mut self, queued: bool, now: impl FnOnce() -> Instant, cpu: impl FnOnce() -> Option<f64>) -> Option<Finished> {
+    fn begin_with(&mut self, queued: bool, slow_ms: f64, now: impl FnOnce() -> Instant, cpu: impl FnOnce() -> Option<f64>) -> Option<Finished> {
         let finished = match &self.frame {
-            Frame::Built(b) => self.finish(b.at, None),
+            Frame::Built(b) => self.finish_with(b.at, None, slow_ms),
             _ => None,
         };
         let now = now();
@@ -204,17 +204,17 @@ impl Tracker {
     /// The frame, of `nodes` nodes, is built; `shaped` text runs it shaped. A slow frame no
     /// input caused comes back to send.
     pub(crate) fn built(&mut self, shaped: u32, nodes: usize) -> Option<SlowFrame> {
-        self.build_with(shaped, nodes, watchdog::disarm(), Instant::now, crate::frame::profile::cpu_ms)
+        self.build_with(shaped, nodes, watchdog::disarm(), slow_ms(), Instant::now, crate::frame::profile::cpu_ms)
     }
 
-    fn build_with(&mut self, shaped: u32, nodes: usize, stacks: Option<Stacks>, now: impl FnOnce() -> Instant, cpu: impl FnOnce() -> Option<f64>) -> Option<SlowFrame> {
+    fn build_with(&mut self, shaped: u32, nodes: usize, stacks: Option<Stacks>, slow_ms: f64, now: impl FnOnce() -> Instant, cpu: impl FnOnce() -> Option<f64>) -> Option<SlowFrame> {
         if !matches!(self.frame, Frame::Open { .. }) {
             let Effects::One(Effect::CheckFrame { start, why }) = step(&mut self.frame, Event::BuildUntimed) else { return None };
             let stacks = stacks?;
             let built = now();
             let work = built.saturating_duration_since(start).as_secs_f64() * 1000.0;
-            let cause = cause::cause(work, slow_ms(), None, Some(&stacks), overloaded());
-            return (work > slow_ms()).then_some(SlowFrame { start, built, why, nodes, cause, stacks });
+            let cause = cause::cause(work, slow_ms, None, Some(&stacks), overloaded());
+            return (work > slow_ms).then_some(SlowFrame { start, built, why, nodes, cause, stacks });
         }
         let event = Event::BuildTimed { at: now(), phases: TIMES.replace([0.0; PHASES]), shaped, cpu: cpu(), stacks };
         if let Effects::One(Effect::StopPhases) = step(&mut self.frame, event) { ACTIVE.set(false); }
@@ -224,13 +224,17 @@ impl Tracker {
     /// The built frame was submitted at `submitted`, to show at `presents_at` when a display
     /// link paced it. Counts it, and says whether to send it as slow.
     pub(crate) fn finish(&mut self, submitted: Instant, presents_at: Option<Instant>) -> Option<Finished> {
+        self.finish_with(submitted, presents_at, slow_ms())
+    }
+
+    fn finish_with(&mut self, submitted: Instant, presents_at: Option<Instant>, slow_ms: f64) -> Option<Finished> {
         let Effects::One(Effect::Count(Built { timed, at: built, phases, shaped, cpu_ms, stacks })) = step(&mut self.frame, Event::Finish) else { return None };
         let submitted = submitted.max(built);
         let present = presents_at.map_or(submitted, |p| p.max(submitted));
         let total = present.saturating_duration_since(timed.arrived).as_secs_f64() * 1000.0;
         let work = submitted.saturating_duration_since(timed.frame_start).as_secs_f64() * 1000.0;
-        let over = total > slow_ms() || work > slow_ms();
-        let cause = over.then(|| cause::cause(work, slow_ms(), cpu_ms, stacks.as_ref(), overloaded()));
+        let over = total > slow_ms || work > slow_ms;
+        let cause = over.then(|| cause::cause(work, slow_ms, cpu_ms, stacks.as_ref(), overloaded()));
         let contended = cause == Some(Cause::SchedulerWait);
         let note = &timed.note;
         self.rollup.add(&note.route, &note.control, note.action, total, over && !contended, contended);

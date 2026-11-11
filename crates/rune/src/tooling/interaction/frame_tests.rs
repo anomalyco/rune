@@ -55,14 +55,14 @@ impl Old {
         }
     }
 
-    fn build(&mut self, shaped: u32, now: Instant, cpu: Option<f64>, stacks: Option<u32>) -> Option<(Instant, Instant, u16, u32)> {
+    fn build(&mut self, shaped: u32, now: Instant, cpu: Option<f64>, stacks: Option<u32>, slow_ms: f64) -> Option<(Instant, Instant, u16, u32)> {
         let why = self.frame_why;
         self.frame_start = None;
         let began = self.began.take();
         let Some(t) = self.timed.as_mut().filter(|t| t.built.is_none()) else {
             let (start, stacks) = (began?.0, stacks?);
             let work = now.saturating_duration_since(start).as_secs_f64() * 1000.0;
-            return (work > 1000.0 / 60.0).then_some((start, now, why, stacks));
+            return (work > slow_ms).then_some((start, now, why, stacks));
         };
         t.built = Some((now, std::mem::take(&mut self.times), shaped));
         t.cpu.1 = t.cpu.0.zip(cpu).map(|(from, to)| to - from);
@@ -94,7 +94,11 @@ fn compare(got: Option<Finished>, expected: Option<Report>) {
 
 #[test]
 fn frame_phase_walk() {
+    // A fixed threshold: the walk never reads `RUNE_PERF_SLOW_MS` from the environment. It sits
+    // between the walk's 30 ms steps so both a slow and a quick untimed frame come up.
+    const SLOW_MS: f64 = 75.0;
     let base = Instant::now();
+    let (mut slow, mut quick) = (0, 0);
     for mut path in 0..8usize.pow(5) {
         let mut tracker = Tracker::default();
         let mut old = Old::default();
@@ -106,7 +110,7 @@ fn frame_phase_walk() {
             let now = base + Duration::from_millis(i * 30);
             let cpu = (i % 3 != 0).then_some(i as f64);
             match e {
-                0 | 1 => compare(tracker.begin_with(e == 1, || now, || cpu), old.begin(e == 1, now, cpu)),
+                0 | 1 => compare(tracker.begin_with(e == 1, SLOW_MS, || now, || cpu), old.begin(e == 1, now, cpu)),
                 2 | 3 => {
                     let rank = e as u8;
                     let at = (e == 3).then_some(base);
@@ -121,14 +125,20 @@ fn frame_phase_walk() {
                 }
                 5 => {
                     let taken = (i % 3 != 0).then_some(i as u32);
-                    let expected = old.build(i as u32, now, cpu, taken);
+                    let untimed = !matches!(tracker.frame, Frame::Open { .. });
+                    let expected = old.build(i as u32, now, cpu, taken, SLOW_MS);
                     let stacks = taken.map(|taken| Stacks { taken, waiting: taken, cpu_share: None, raw: vec![] });
-                    let got = tracker.build_with(i as u32, 99, stacks, || now, || cpu);
+                    let got = tracker.build_with(i as u32, 99, stacks, SLOW_MS, || now, || cpu);
                     assert_eq!(got.map(|f| (f.start, f.built, f.why, f.stacks.taken)), expected);
+                    match (untimed, expected.is_some()) {
+                        (true, true) => slow += 1,
+                        (true, false) if taken.is_some() => quick += 1,
+                        _ => (),
+                    }
                 }
                 6 | 7 => {
                     let (sub, present) = if e == 6 { (base, Some(now)) } else { (now, Some(base)) };
-                    compare(tracker.finish(sub, present), old.finish(sub, present));
+                    compare(tracker.finish_with(sub, present, SLOW_MS), old.finish(sub, present));
                 }
                 _ => unreachable!(),
             }
@@ -152,4 +162,5 @@ fn frame_phase_walk() {
         }
         tracker.rolled_since = None; // Don't export the walk's synthetic samples at drop.
     }
+    assert!(slow > 0 && quick > 0, "the walk covers a slow untimed frame ({slow}) and a quick one ({quick})");
 }
