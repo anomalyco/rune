@@ -354,6 +354,7 @@ impl TextSystem {
         };
         text.load_installed(families.0);
         text.load_installed(families.1);
+        text.load_slot_fallbacks();
         text.follow_full_faces();
         text
     }

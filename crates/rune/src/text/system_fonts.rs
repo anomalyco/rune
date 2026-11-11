@@ -294,11 +294,36 @@ impl TextSystem {
         }
         #[cfg(not(windows))]
         if emoji || !missing.is_empty() {
-            self.fallbacks.symbols = true;
-            self.symbol_families = load_families(&mut self.font_cx.collection, SYMBOL_FONT_FILES, SYMBOL_FAMILIES);
-            self.emoji = self.symbol_families.iter().copied().find(|f| f.contains("Emoji"));
+            self.load_symbol_families();
         }
         crate::marks::mark("text.fallback.loaded");
+    }
+
+    #[cfg(not(windows))]
+    fn load_symbol_families(&mut self) {
+        self.fallbacks.symbols = true;
+        self.symbol_families = load_families(&mut self.font_cx.collection, SYMBOL_FONT_FILES, SYMBOL_FAMILIES);
+        self.emoji = self.symbol_families.iter().copied().find(|f| f.contains("Emoji"));
+    }
+
+    /// When the sans or mono slot names no family the collection has, loads the system font
+    /// its text falls back to, once, so a missing family draws in the system's font, not
+    /// nothing (`load_fallbacks` loads nothing for Latin text). Run where the slots are set.
+    pub(super) fn load_slot_fallbacks(&mut self) {
+        let collection = &mut self.font_cx.collection;
+        if slot_resolves(collection, &self.sans) && slot_resolves(collection, &self.mono) {
+            return;
+        }
+        #[cfg(windows)]
+        // Windows' fallback for Latin; `asked` is otherwise never given ASCII.
+        if self.fallbacks.asked.insert('A') {
+            let locale = self.language.as_ref().map(|l| l.to_string());
+            self.add_symbol_files(direct_write::fallback_files(&['A'], locale.as_deref()));
+        }
+        #[cfg(not(windows))]
+        if !self.fallbacks.symbols {
+            self.load_symbol_families();
+        }
     }
 
     /// Windows: the families in `files` at the end of every family stack, colour emoji last, so
@@ -372,6 +397,13 @@ pub(super) fn load_installed(collection: &mut Collection, loaded: &mut LoadedFil
         added |= !load_files(collection, loaded, installed_family_files(&name)).is_empty();
     }
     added
+}
+
+/// Whether the slot `list` names a family the collection has, or `ui-monospace`, whose
+/// families load with the text that asks for them (`family_list` then falls back to sans).
+fn slot_resolves(collection: &mut Collection, list: &str) -> bool {
+    names_system_mono(list)
+        || named_list(list).iter().any(|f| matches!(f, FontFamilyName::Named(name) if collection.family_id(name).is_some()))
 }
 
 /// `Family::Named`'s families: one literal name, or a CSS list when it has a comma.
