@@ -66,6 +66,7 @@ pub use script::Script;
 pub use sources::Compiled;
 pub use sources::ENTRY;
 pub use sources::Sources;
+pub use sources::precompiled;
 pub use ui::Palette;
 pub use ui::default_palette;
 pub use ui::host::Handler;

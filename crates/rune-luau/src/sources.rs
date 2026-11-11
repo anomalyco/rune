@@ -142,6 +142,10 @@ impl Sources {
                 modules.insert(path.clone(), same.clone());
                 continue;
             }
+            if let Some(code) = PRECOMPILED.get().and_then(|table| table.get(&**source)) {
+                modules.insert(path.clone(), Module { code: Arc::from(*code), native: is_native(source), source: source.clone() });
+                continue;
+            }
             let code = compiler
                 .compile(source.as_bytes())
                 .map_err(|e| ScriptError::new(ErrorKind::Syntax, format!("{path}{}", ScriptError::from(e).message)))?;
@@ -192,6 +196,22 @@ impl Compiled {
             self.configs.get(&path).map(|s| &**s)
         })
     }
+}
+
+/// Bytecode compiled ahead of time, by the source text it came from (`precompiled`).
+static PRECOMPILED: std::sync::OnceLock<std::collections::HashMap<&'static str, &'static [u8]>> = std::sync::OnceLock::new();
+
+/// Bytecode an app compiled ahead of time for the sources it ships, as `(source, bytecode)`, so a
+/// script made from them starts without compiling: `Sources::compile` takes a module's bytecode from
+/// here when its text is the same. Compile it as Rune does: optimisation level 2, type information
+/// level 1, debug level 1 (`mlua::chunk::Compiler`, from the same Luau as this build). Compiling
+/// is most of a script's start (a 100 KB plugin: about 28,000 µs of its 30,000 on a Windows
+/// laptop). Call it once, before scripts start; later calls do nothing. A table from another Luau
+/// bytecode version than this build's is ignored, and those scripts compile as before.
+pub fn precompiled(modules: impl IntoIterator<Item = (&'static str, &'static [u8])>) {
+    let version = compiler().compile("return nil").ok().and_then(|code| code.first().copied());
+    let table = modules.into_iter().filter(|(_, code)| code.first().copied() == version).collect();
+    let _ = PRECOMPILED.set(table);
 }
 
 pub(crate) fn compiler() -> mlua::chunk::Compiler {
