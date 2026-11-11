@@ -241,7 +241,7 @@ pub(super) fn same_visual(a: &Visual, b: &Visual) -> bool {
 fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
     let crate::el::ElCold {
         focus, looping, trace_name, trace_namespace, role, label, live, above, motion, opacity_motion, lead,
-        transition, matched, scroll, scroll_axes, sticky, scroll_edges, growth, virtual_estimate, virtual_rows,
+        animated_changes, transition, matched, scroll, scroll_axes, sticky, scroll_edges, growth, virtual_estimate, virtual_rows,
         virtual_rows_version, glide, input, time_scale, help, help_cut, help_side, material, aspect_fit, a11y,
         #[cfg(debug_assertions)]
         scroll_source: _,
@@ -260,6 +260,7 @@ fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
         && a.motion == *motion
         && opt_box_eq(&a.opacity_motion, opacity_motion)
         && a.lead == *lead
+        && a.animated_changes == *animated_changes
         && opt_box_eq(&a.transition, transition)
         && a.matched == *matched
         && a.scroll == *scroll
