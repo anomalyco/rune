@@ -15,6 +15,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 mod cloak;
 pub(crate) mod dark_mode;
+pub(crate) mod dcomp_handover;
+pub(crate) mod dib;
 mod dpi_drag;
 pub(crate) mod drop_target;
 mod frame;
@@ -33,6 +35,33 @@ pub(crate) use frame::window_menu;
 pub(crate) fn hwnd(window: &winit::window::Window) -> Option<HWND> {
     let RawWindowHandle::Win32(h) = window.window_handle().ok()?.as_raw() else { return None };
     Some(h.hwnd.get() as HWND)
+}
+
+/// When the display shows its next refresh after `now`, from DWM's timing (`now` plus a 60 Hz
+/// frame when DWM won't say).
+pub(crate) fn next_vblank(now: std::time::Instant) -> std::time::Instant {
+    use windows_sys::Win32::Graphics::Dwm::{DWM_TIMING_INFO, DwmGetCompositionTimingInfo};
+    use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+    // SAFETY: plain out-parameters.
+    unsafe {
+        let mut t: DWM_TIMING_INFO = std::mem::zeroed();
+        t.cbSize = size_of::<DWM_TIMING_INFO>() as u32;
+        let (mut qpc, mut freq) = (0i64, 0i64);
+        if DwmGetCompositionTimingInfo(std::ptr::null_mut(), &mut t) < 0 || t.qpcRefreshPeriod == 0
+            || QueryPerformanceCounter(&mut qpc) == 0 || QueryPerformanceFrequency(&mut freq) == 0 || freq <= 0 {
+            return now + std::time::Duration::from_micros(16_667);
+        }
+        let (period, last) = (t.qpcRefreshPeriod as i64, t.qpcVBlank as i64);
+        let next = last + ((qpc - last) / period + 1) * period;
+        now + std::time::Duration::from_nanos(((next - qpc).max(0) as i128 * 1_000_000_000 / freq as i128) as u64)
+    }
+}
+
+/// Whether a screen reader is running (`SPI_GETSCREENREADER`).
+pub(crate) fn screen_reader() -> bool {
+    let mut on = 0i32;
+    // SAFETY: SPI_GETSCREENREADER writes one BOOL.
+    unsafe { SystemParametersInfoW(SPI_GETSCREENREADER, 0, (&raw mut on).cast(), 0) != 0 && on != 0 }
 }
 
 /// Drops the paint the system still owes `window`, which the loop just painted itself.

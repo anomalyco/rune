@@ -148,7 +148,7 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         if let (Some(w), Some((gpu, ..))) = (self.win.as_mut(), self.gpu.as_ref()) {
             let size = w.window.inner_size();
-            w.resize_surface(gpu, size);
+            w.resize_surface(Some(&**gpu), size);
             let scale = w.window.scale_factor() as f32;
             self.rt.set_viewport((size.width as f32 / scale, size.height as f32 / scale), scale);
         }

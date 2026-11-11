@@ -6,6 +6,9 @@ use super::*;
 /// The first frame's marks (crate::marks), for the first window to draw.
 static FIRST_BUILD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static FIRST_ENCODED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The first frame the swap chain called occluded (a window DXGI won't present, as on a desktop
+/// no one sees): the window then waits `OCCLUDED_RETRY` before it tries again.
+static FIRST_OCCLUDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 impl<S: 'static> Host<S> {
     /// A shown frame with no drawable. Asking for a redraw here would turn the loop at once, for
@@ -18,6 +21,7 @@ impl<S: 'static> Host<S> {
         l.presented = None;
         let now = Instant::now();
         if missed == Missed::Occluded {
+            crate::marks::mark_once(&FIRST_OCCLUDED, "frame.occluded");
             // Covered or asleep with no notification yet: rest as if one came, and look
             // again when the backoff is up.
             self.life.cover(Cover::Surface, true);
@@ -62,6 +66,12 @@ impl<S: 'static> Host<S> {
     /// Draws a frame. `resizing` draws one for a size the user just dragged the window to, at
     /// once: AppKit shows the new size when the event returns, with or without it.
     pub(super) fn draw(&mut self, resizing: bool) {
+        // Windows: a window still on the CPU renderer draws there (`cpu_frame`).
+        #[cfg(target_os = "windows")]
+        {
+            self.hand_over_if_done();
+            if self.win.as_ref().is_some_and(|w| w.native.mode.cpu_draws()) { return self.draw_cpu(resizing); }
+        }
         let launcher = self.launcher();
         let Some(l) = self.win.as_ref() else { return };
         let hidden = launcher && !self.life.shown();
@@ -333,6 +343,15 @@ impl<S: 'static> Host<S> {
         l.native.materials.present(&rt.materials, rt.env.scale, || gpu.queue.present(frame));
         #[cfg(not(target_os = "macos"))]
         gpu.queue.present(frame);
+        // A swap chain made again on a handed-over window's visual takes over now (`cpu_frame`).
+        #[cfg(target_os = "windows")]
+        if matches!(l.native.mode, super::cpu_frame::SurfaceMode::Rebinding { .. }) {
+            let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+            if let super::cpu_frame::SurfaceMode::Rebinding { handover } = std::mem::take(&mut l.native.mode) {
+                if let Err(error) = handover.commit() { eprintln!("rune: the window's new swap chain couldn't take over: {error}"); }
+                l.native.mode = super::cpu_frame::SurfaceMode::Handed { handover };
+            }
+        }
         crate::marks::presented();
         crate::render::gpu_events::presented();
         #[cfg(feature = "frame-profile")]

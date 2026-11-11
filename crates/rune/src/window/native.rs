@@ -78,6 +78,20 @@ pub(super) struct Native {
     pub(super) frame: Option<crate::platform::win32::CustomFrame>,
     /// Hears other windows cover it whole (`WakeEvent::Covered`).
     pub(super) _occlusion: Option<crate::platform::win32::occlusion::Tracked>,
+    /// Whether the CPU renderer or the GPU draws its frames (`cpu_frame`).
+    pub(super) mode: super::cpu_frame::SurfaceMode,
+    /// Whether its accessibility adapter waits for the first frame (`Host::a11y_after_frame`).
+    pub(super) a11y_start: A11yStart,
+}
+
+/// When a window's UI Automation adapter is made: with the window (a screen reader is running),
+/// or on the loop's first idle turn after the first frame.
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum A11yStart {
+    #[default]
+    Made,
+    AfterFirstFrame,
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))))]

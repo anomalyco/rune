@@ -54,18 +54,27 @@ impl<S: 'static> Host<S> {
         let frame = self.titlebar.and_then(|t| crate::platform::win32::CustomFrame::install(&window, t.height()));
         #[cfg(target_os = "windows")]
         let cloak = crate::platform::win32::Cloak::default();
+        // Its first frame on the CPU renderer, painted before it shows (`cpu_frame`).
         #[cfg(target_os = "windows")]
-        if visible {
+        let cpu_first = visible && !launcher && cpu_frame::opens_on_cpu(self);
+        #[cfg(target_os = "windows")]
+        if visible && !cpu_first {
             // Unfocused (`App::open_inactive`), it never activates.
             cloak.hold(&window, Instant::now() + win::READY_FALLBACK, focus);
             window.set_visible(true);
             if maximize { window.set_maximized(true); }
         }
-        // First, before anything observes the view (macOS) or an assistive client asks.
-        let a11y = {
-            let handle = self.native_handle.clone();
-            crate::a11y::Adapter::new(&window, Arc::new(move || handle.send(WakeEvent::A11y)))
-        };
+        crate::marks::mark("window.framed");
+        // First, before anything observes the view (macOS) or an assistive client asks. On Windows,
+        // with no screen reader running, UI Automation's adapter (about 7,500 µs) waits for the
+        // loop's first idle turn after the first frame: it subclasses the window, which works at
+        // any time (`a11y_after_frame`).
+        #[cfg(target_os = "windows")]
+        let a11y_start = if crate::platform::win32::screen_reader() { native::A11yStart::Made } else { native::A11yStart::AfterFirstFrame };
+        #[cfg(target_os = "windows")]
+        let a11y = if a11y_start == native::A11yStart::Made { self.a11y_adapter(&window) } else { None };
+        #[cfg(not(target_os = "windows"))]
+        let a11y = self.a11y_adapter(&window);
         #[cfg(target_os = "macos")]
         crate::native_menu::adopt_standard_view();
         #[cfg(target_os = "macos")]
@@ -98,6 +107,8 @@ impl<S: 'static> Host<S> {
             // A tooltip control's initial delay is the double-click time.
             self.rt.help_delay = self.rt.double_click_interval;
         }
+        #[cfg(target_os = "windows")]
+        if cpu_first { return self.open_on_cpu(event_loop, window, a11y, a11y_start, frame, cloak, focus, maximize, built); }
         let mut prewarmed = None;
         crate::marks::mark("gpu.begin");
         // A device that died while this window was closed draws nothing: make another.
@@ -223,7 +234,7 @@ impl<S: 'static> Host<S> {
         let native = {
             let handle = self.native_handle.clone();
             let report = Arc::new(move |covered| handle.send(move |slot| WakeEvent::Covered(slot, covered)));
-            Native { cloak, frame, _occlusion: crate::platform::win32::occlusion::Tracked::new(&window, report) }
+            Native { cloak, frame, _occlusion: crate::platform::win32::occlusion::Tracked::new(&window, report), mode: Default::default(), a11y_start }
         };
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let native = Native::default();
@@ -259,7 +270,7 @@ impl<S: 'static> Host<S> {
             let size = w.window.inner_size();
             let scale = w.window.scale_factor() as f32;
             if size.width > 0 && size.height > 0 {
-                w.resize_surface(gpu, size);
+                w.resize_surface(Some(&**gpu), size);
                 self.rt.set_viewport((size.width as f32 / scale, size.height as f32 / scale), scale);
             }
             sync_chrome(&mut self.rt, w, self.chrome, self.titlebar);
@@ -288,6 +299,26 @@ impl<S: 'static> Host<S> {
         Ok(())
     }
 
+    /// UI Automation's (or the platform's) accessibility adapter for the window.
+    pub(super) fn a11y_adapter(&self, window: &Window) -> Option<crate::a11y::Adapter> {
+        let handle = self.native_handle.clone();
+        crate::a11y::Adapter::new(window, Arc::new(move || handle.send(WakeEvent::A11y)))
+    }
+
+    /// Windows: the accessibility adapter a window opened without, on the first idle turn after
+    /// its first frame; assistive clients hear the window's content change so they ask again.
+    #[cfg(target_os = "windows")]
+    pub(super) fn a11y_after_frame(&mut self) {
+        let Some(w) = self.win.as_ref() else { return };
+        if w.native.a11y_start != native::A11yStart::AfterFirstFrame || !w.first_frame.ready() { return; }
+        let adapter = self.a11y_adapter(&w.window);
+        crate::marks::mark("window.a11y");
+        let Some(w) = self.win.as_mut() else { return };
+        w.native.a11y_start = native::A11yStart::Made;
+        w.a11y = adapter;
+        if let Some(a) = &w.a11y { a.notify_structure(); }
+    }
+
     /// Replaces the window's surface and the device it draws with, keeping the window, its size
     /// and its place. A lost GPU configures nothing, and under it wgpu drops the error
     /// `Surface::configure` returns without recording the surface's error sink: the surface has
@@ -310,8 +341,17 @@ impl<S: 'static> Host<S> {
         self.rt.images.invalidate();
         let features = self.comp.as_ref().map_or(wgpu::Features::empty(), |c| c.features());
         let transparent = self.options.transparent;
-        let (gpu, surface, prewarmed) = Gpu::for_surface(features, transparent,
-            |instance| instance.create_surface(window.clone()).map_err(|e| e.to_string()))?;
+        // A window the CPU handed to the GPU keeps its DirectComposition target: the new swap
+        // chain goes on the same visual, committed once it has presented (`SurfaceMode::rebind`).
+        #[cfg(target_os = "windows")]
+        let visual = w.native.mode.visual();
+        #[cfg(not(target_os = "windows"))]
+        let visual: Option<*mut std::ffi::c_void> = None;
+        let (gpu, surface, prewarmed) = Gpu::for_surface(features, transparent, |instance| match visual {
+            // SAFETY: the window keeps the visual's `Handover` as long as it keeps this surface.
+            Some(visual) => unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }.map_err(|e| e.to_string()),
+            None => instance.create_surface(window.clone()).map_err(|e| e.to_string()),
+        })?;
         let gpu = Arc::new(gpu);
         let size = window.inner_size();
         let (mut config, translucent) = surface_config(&surface, &gpu.adapter, (size.width, size.height), self.rt.srgb_blend())
@@ -340,6 +380,8 @@ impl<S: 'static> Host<S> {
         w.config = config;
         w.surface_ok = true;
         w.alpha = alpha;
+        #[cfg(target_os = "windows")]
+        w.native.mode.rebind();
         #[cfg(target_os = "macos")]
         {
             w.native.present = present;

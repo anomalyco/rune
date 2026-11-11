@@ -156,6 +156,10 @@ impl<S: 'static> Host<S> {
                 if covered { self.land_frame(); }
                 self.set_cover(Cover::Windows, covered);
             }
+            #[cfg(target_os = "windows")]
+            WakeEvent::GpuReady(_) => self.gpu_ready(),
+            #[cfg(not(target_os = "windows"))]
+            WakeEvent::GpuReady(_) => {}
             WakeEvent::Reopen | WakeEvent::Turn | WakeEvent::Quit(_) => {}
         }
     }
@@ -249,7 +253,9 @@ impl<S: 'static> Host<S> {
             return;
         }
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. }) { self.sync_origin(); }
-        let (Some(l), Some((gpu, ..))) = (self.win.as_mut(), self.gpu.as_ref()) else { return };
+        // A window the CPU renderer draws has no GPU yet; its input goes on all the same.
+        let Some(l) = self.win.as_mut() else { return };
+        let gpu = self.gpu.as_ref().map(|(gpu, _)| &**gpu);
         let rt = &mut self.rt;
         let scale = l.window.scale_factor() as f32;
         let (chrome, titlebar) = (self.chrome, self.titlebar);

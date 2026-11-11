@@ -109,14 +109,14 @@ impl Win {
     /// Matches the drawable to the window's size; false when it already did. A surface that
     /// refuses the new size is marked so its next frame replaces it (`Host::reattach`) rather
     /// than drawing into a surface wgpu has no presentation for.
-    pub(super) fn resize_surface(&mut self, gpu: &Gpu, size: winit::dpi::PhysicalSize<u32>) -> bool {
+    pub(super) fn resize_surface(&mut self, gpu: Option<&Gpu>, size: winit::dpi::PhysicalSize<u32>) -> bool {
         let (width, height) = (size.width.max(1), size.height.max(1));
         if (self.config.width, self.config.height) == (width, height) { return false; }
         self.config.width = width;
         self.config.height = height;
         // No surface: `Host::reattach` is between the old one and the new, and takes this size
-        // from the window itself.
-        let Some(surface) = &self.surface else { return true };
+        // from the window itself; or the CPU renderer draws it, whose buffer follows this size.
+        let (Some(surface), Some(gpu)) = (&self.surface, gpu) else { return true };
         if let Err(error) = super::configure(surface, gpu, &self.config) {
             eprintln!("rune: a window's surface refused its new size: {error}");
             self.surface_ok = false;
