@@ -19,7 +19,7 @@ impl<T: 'static> Overlay<T> {
     /// A layer surface kept while hidden (prewarmed, not shown yet) still hears the compositor.
     fn drain_hidden(&mut self) {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if let Some(Live { backing: Backing::Layer(layer), .. }) = self.live.as_mut() && layer.drain() {
+        if let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut() && layer.drain() {
             self.hide();
         }
     }
@@ -53,7 +53,7 @@ impl<T: 'static> Overlay<T> {
     /// overlay answers `None`, committed with its next frame. One anchored to an element waits
     /// for the frame that commits what changed since the last.
     pub(super) fn open_popup(&mut self) {
-        let window = match self.live.as_ref().map(|l| &l.backing) {
+        let window = match self.surface.live().map(|l| &l.backing) {
             Some(Backing::Window(w)) if self.presence.shown() && !self.presence.occluded() => Some(w.clone()),
             _ => None,
         };
@@ -61,9 +61,9 @@ impl<T: 'static> Overlay<T> {
     }
 
     pub(super) fn draw_frame(&mut self, prewarm: bool) -> bool {
-        let timer = std::mem::take(&mut self.quiet.timer);
+        let timer = !self.quiet.step(frame::QuietEvent::FrameStarts).is_empty();
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if let Some(Live { backing: Backing::Layer(layer), .. }) = self.live.as_mut() {
+        if let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut() {
             let changes = layer.dispatch();
             if changes.closed {
                 self.hide();
@@ -74,26 +74,26 @@ impl<T: 'static> Overlay<T> {
                 let size = (if w == 0 { self.at.size.0 } else { w as f32 }, if h == 0 { self.at.size.1 } else { h as f32 });
                 if size != self.at.size {
                     self.at.size = size;
-                    if let Some(live) = self.live.as_mut() { live.scale = 0.0; }
+                    if let Some(live) = self.surface.live_mut() { live.scale = 0.0; }
                 }
             }
             if let Some(scale) = changes.scale {
-                if let Some(Live { backing: Backing::Layer(layer), .. }) = self.live.as_mut() { layer.set_buffer_scale(scale); }
+                if let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut() { layer.set_buffer_scale(scale); }
                 if let Some(gpu) = self.gpu.clone() {
                     self.rescale(&gpu, scale as f32);
                 }
             }
-            if self.live.as_ref().is_some_and(|l| l.scale == 0.0) && let Some(gpu) = self.gpu.clone() {
+            if self.surface.live().is_some_and(|l| l.scale == 0.0) && let Some(gpu) = self.gpu.clone() {
                 self.rescale(&gpu, self.rt.env.scale);
             }
         }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if let Some(Live { backing: Backing::Xwayland(surface), .. }) = self.live.as_mut() {
+        if let Some(Live { backing: Backing::Xwayland(surface), .. }) = self.surface.live_mut() {
             let input = surface.dispatch();
             for input in input { self.surface_input(input); }
         }
         self.apply_input();
-        if self.live.is_none() || self.renderer.is_none() || self.gpu.is_none() {
+        if self.surface.live().is_none() || self.renderer.is_none() || self.gpu.is_none() {
             return false;
         }
         // `sync_occlusion` below reads, once a turn, the panel hosting the surface: the window
@@ -105,29 +105,27 @@ impl<T: 'static> Overlay<T> {
         // Even an idle overlay looks again on its retry while occluded: the occlusion
         // notification that should uncover it may never come.
         #[cfg(target_os = "macos")]
-        if !prewarm {
-            self.sync_occlusion();
-            // Until it's uncovered, only the retry (or a due timer, in `wake_due`) steps it,
-            // however often other windows turn the loop.
-            if self.presence.occluded() {
-                if self.retry.is_none_or(|retry| retry <= Instant::now()) {
+        if !prewarm { self.sync_occlusion(); }
+        let gate = frame::Gate { prewarm, occluded: cfg!(target_os = "macos") && self.presence.occluded(), dirty: self.dirty, idle: self.idle, retry: self.retry };
+        match frame::turn(gate, Instant::now) {
+            frame::Turn::Occluded { recheck } => {
+                if recheck {
                     self.meter.skipped();
                     self.missed(crate::window::Missed::Occluded, false, false);
                 }
                 return false;
             }
+            // `wake_due` runs due timers while it backs off.
+            frame::Turn::Rest | frame::Turn::BackedOff => return false,
+            frame::Turn::Draw => if !prewarm { self.retry = None; },
         }
-        if !self.dirty && self.idle { return false; }
-        // Input waits for the retry too; `wake_due` runs due timers meanwhile.
-        if !prewarm && self.backing_off(Instant::now()) { return false; }
-        if !prewarm { self.retry = None; }
-        let (Some(live), Some(renderer), Some(gpu)) = (self.live.as_mut(), self.renderer.as_mut(), self.gpu.as_ref()) else {
+        let (Some(live), Some(renderer), Some(gpu)) = (self.surface.live_mut(), self.renderer.as_mut(), self.gpu.as_ref()) else {
             return false;
         };
         // Only a timer woke the resting overlay: build the frame first, and take neither a
         // drawable nor a display tick when it draws what's on screen. The link, stopped, would
         // draw it at once anyway (`defers_start`).
-        let quiet = self.quiet.presented.as_ref().filter(|_| timer && !prewarm && self.compositor.is_none()
+        let quiet = self.quiet.presented().filter(|_| timer && !prewarm && self.compositor.is_none()
             && !self.rt.has_pending_input() && renderer.srgb_blend() == self.rt.srgb_blend());
         #[cfg(target_os = "macos")]
         let quiet = quiet.filter(|_| live.pacing.as_ref().is_none_or(|p| p.defers_start(Instant::now())));
@@ -272,7 +270,8 @@ impl<T: 'static> Overlay<T> {
         let next_tick = None;
         self.idle = idle_after(&self.rt, animating, next_tick);
         self.runtime_idle = !prewarm && idle_after(&self.rt, runtime_animating, next_tick);
-        self.quiet.presented(&self.rt, &live.config, !prewarm && self.idle && self.compositor.is_none());
+        let rt = &self.rt;
+        self.quiet.presented_frame(!prewarm && self.idle && self.compositor.is_none(), |slot| crate::window::Presented::record(slot, rt, &live.config, false));
         if !prewarm { self.occluded_wait = crate::window::OCCLUDED_RETRY; }
         // The display link wakes this overlay, never ControlFlow::Poll. Without one (it can't
         // be made while the displays sleep, or didn't start), a timer paces its motion.
@@ -307,7 +306,7 @@ impl<T: 'static> Overlay<T> {
         // Hit regions paint nothing, so a frame can change only them (a full-screen drawing
         // surface turning on); no presentation follows to commit them.
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if self.publish_regions() && let Some(Live { backing: Backing::Layer(layer), .. }) = &mut self.live { layer.commit(); }
+        if self.publish_regions() && let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut() { layer.commit(); }
         #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
         self.publish_regions();
         self.meter.redraw(true);
@@ -326,9 +325,9 @@ impl<T: 'static> Overlay<T> {
         if !self.presence.set_occluded(occluded) { return; }
         self.idle = true;
         // What it last presented may not be what shows once uncovered.
-        self.quiet = Default::default();
+        self.quiet.step(frame::QuietEvent::Forget);
         if occluded {
-            if let Some(live) = &mut self.live && let Some(pacing) = &mut live.pacing { pacing.stop(); }
+            if let Some(live) = self.surface.live_mut() && let Some(pacing) = &mut live.pacing { pacing.stop(); }
             self.rt.set_live_visible(false);
         } else if self.presence.drawing() {
             self.dirty = true;
@@ -358,7 +357,7 @@ impl<T: 'static> Overlay<T> {
     /// that exists follows the panel to the display it is on now.
     #[cfg(target_os = "macos")]
     pub(super) fn ensure_pacing(&mut self) {
-        let (Some(live), Some(wake)) = (&mut self.live, &self.frame_wake) else { return };
+        let (Some(live), Some(wake)) = (self.surface.live_mut(), &self.frame_wake) else { return };
         let Backing::Window(window) = &live.backing;
         match &mut live.pacing {
             Some(pacing) => pacing.update_display(window),
@@ -385,7 +384,7 @@ impl<T: 'static> Overlay<T> {
             if let Some(gpu) = &self.gpu { let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely()); }
             return;
         }
-        let Some(live) = &self.live else { return };
+        let Some(live) = self.surface.live() else { return };
         self.warm_offscreen((live.config.width, live.config.height));
     }
 

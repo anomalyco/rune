@@ -316,8 +316,6 @@ struct Live {
 
 pub(crate) struct Overlay<T: 'static> {
     on_created: Option<Box<dyn FnMut(crate::OverlayCreated)>>,
-    /// `on_created` heard of the current native window; a released one is announced again.
-    announced: bool,
     setup: Option<fn(&mut T, Waker)>,
     pending_input: Option<OverlayInput>,
     presence: Presence,
@@ -345,10 +343,7 @@ pub(crate) struct Overlay<T: 'static> {
     native: Option<crate::platform::win32::OverlayWindow>,
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     x11: Option<crate::platform::x11::overlay::InputWindow>,
-    live: Option<Live>,
-    /// The native window while it has no GPU surface: just made, or hidden with
-    /// `release_gpu_when_hidden`. Windows and X11 only.
-    parked: Option<Backing>,
+    surface: surface::Surface,
     /// `ConfiguredOverlay::release_gpu_when_hidden` or `release_gpu_after`.
     release: Release,
     cursor: Option<crate::cursor::os::OsCursor>,
@@ -408,7 +403,6 @@ impl<T: 'static> Overlay<T> {
         }));
         let overlay = Overlay {
             on_created,
-            announced: false,
             setup,
             pending_input: None,
             presence: Presence::default(),
@@ -425,8 +419,7 @@ impl<T: 'static> Overlay<T> {
             clipboard: Default::default(),
             popup: Default::default(),
             compositor,
-            live: None,
-            parked: None,
+            surface: Default::default(),
             release: Release::new(release_after),
             cursor: None,
             #[cfg(target_os = "macos")]
@@ -515,7 +508,7 @@ impl<T: 'static> Overlay<T> {
     }
 
     fn sync_live_origin(&mut self) {
-        let Some(Backing::Window(window)) = self.live.as_ref().map(|l| &l.backing) else { return };
+        let Some(Backing::Window(window)) = self.surface.live().map(|l| &l.backing) else { return };
         let window = window.clone();
         self.sync_origin(&window);
     }
@@ -568,12 +561,12 @@ impl<T: 'static> Overlay<T> {
 
     fn resized(&mut self, event_loop: &ActiveEventLoop) {
         // A parked window takes the size now; its surface is made at it.
-        if let Some(Backing::Window(w)) = &self.parked {
+        if let Some(Backing::Window(w)) = self.surface.parked() {
             let w = w.clone();
             let _ = w.request_inner_size(LogicalSize::new(self.at.size.0 as f64, self.at.size.1 as f64));
             return self.place_window(event_loop, &w);
         }
-        let Some(live) = self.live.as_mut() else { return };
+        let Some(live) = self.surface.live_mut() else { return };
         match &mut live.backing {
             Backing::Window(w) => {
                 let _ = w.request_inner_size(LogicalSize::new(self.at.size.0 as f64, self.at.size.1 as f64));
@@ -591,7 +584,7 @@ impl<T: 'static> Overlay<T> {
             live.scale = 0.0;
             self.rescale(&gpu, scale);
         }
-        if let Some(Backing::Window(w)) = self.live.as_ref().map(|l| &l.backing) {
+        if let Some(Backing::Window(w)) = self.surface.live().map(|l| &l.backing) {
             let w = w.clone();
             self.place_window(event_loop, &w);
             if let Some(gpu) = self.gpu.clone() { self.rescale(&gpu, crate::window::backing_scale(&w)); }
@@ -639,7 +632,7 @@ impl<T: 'static> Overlay<T> {
     /// The display containing `point` when a window-backed `UnderPointer` overlay isn't on it.
     fn pointer_display_away(&self, event_loop: &ActiveEventLoop, point: (i32, i32)) -> Option<winit::monitor::MonitorHandle> {
         if self.options.display != DisplayTarget::UnderPointer { return None; }
-        let Some(Backing::Window(window)) = self.live.as_ref().map(|l| &l.backing) else { return None };
+        let Some(Backing::Window(window)) = self.surface.live().map(|l| &l.backing) else { return None };
         event_loop.available_monitors().find(|m| {
             let (p, s) = (m.position(), m.size());
             point.0 >= p.x && point.1 >= p.y && i64::from(point.0) < i64::from(p.x) + i64::from(s.width)
@@ -679,6 +672,10 @@ mod surface;
 #[cfg(test)]
 #[path = "overlay/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "overlay/state_walk_tests.rs"]
+mod state_walk_tests;
 
 #[cfg(all(test, target_os = "macos"))]
 #[path = "overlay/lost_release_tests.rs"]

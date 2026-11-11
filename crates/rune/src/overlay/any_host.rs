@@ -20,7 +20,7 @@ impl<T: 'static> AnyHost for Overlay<T> {
         // covered, faded out or unpaced), a timer due sooner than a frame waits a frame.
         let deadline = crate::window::timer_deadline(&self.rt);
         #[cfg(target_os = "macos")]
-        let deadline = deadline.filter(|_| !self.live.as_ref().and_then(|l| l.pacing.as_ref()).is_some_and(|p| p.running()));
+        let deadline = deadline.filter(|_| !self.surface.live().and_then(|l| l.pacing.as_ref()).is_some_and(|p| p.running()));
         #[cfg(target_os = "macos")]
         let deadline = deadline.into_iter().chain(self.panel.as_ref().and_then(|p| p.pointer_deadline(self.presence.occluded()))).min();
         // A Windows fade-out steps its alpha once a frame.
@@ -40,7 +40,7 @@ impl<T: 'static> AnyHost for Overlay<T> {
         self.meter.waited();
         #[cfg(target_os = "macos")]
         if matches!(event, WakeEvent::DisplayTick(_))
-            && self.live.as_ref().and_then(|l| l.pacing.as_ref()).is_some_and(|p| p.running()) {
+            && self.surface.live().and_then(|l| l.pacing.as_ref()).is_some_and(|p| p.running()) {
             self.draw();
         }
         if let WakeEvent::App(_) = event {
@@ -49,7 +49,7 @@ impl<T: 'static> AnyHost for Overlay<T> {
     }
 
     fn owns(&self, id: WindowId) -> bool {
-        let window = match self.live.as_ref().map(|l| &l.backing).or(self.parked.as_ref()) {
+        let window = match self.surface.backing() {
             Some(Backing::Window(w)) => Some(w),
             _ => None,
         };
@@ -60,7 +60,7 @@ impl<T: 'static> AnyHost for Overlay<T> {
         if !matches!(event, WindowEvent::RedrawRequested) { self.meter.waited(); }
         #[cfg(target_os = "macos")]
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. } | WindowEvent::Occluded(_))
-            && let Some(live) = &mut self.live && let Some(pacing) = &mut live.pacing {
+            && let Some(live) = self.surface.live_mut() && let Some(pacing) = &mut live.pacing {
             let Backing::Window(window) = &live.backing;
             pacing.update_display(window);
         }
@@ -111,7 +111,7 @@ impl<T: 'static> AnyHost for Overlay<T> {
                 self.dirty = true;
             }
             WindowEvent::CursorMoved { position, .. } if self.options.input.resolved(self.interactive) != OverlayInput::None => {
-                let scale = self.live.as_ref().map_or(1.0, |l| l.scale);
+                let scale = self.surface.live().map_or(1.0, |l| l.scale);
                 let (x, y) = (position.x as f32 / scale, position.y as f32 / scale);
                 #[cfg(target_os = "macos")]
                 if let Some(pointer) = self.native_pointer() { return self.native_moved(&pointer, x, y); }
@@ -179,20 +179,20 @@ impl<T: 'static> AnyHost for Overlay<T> {
             return self.a11y_turn() || more;
         }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if let Some(live) = &self.live && let Some(x11) = &self.x11 && let Some((point, desktop)) = x11.take_pointer(live.scale) {
+        if let Some(live) = self.surface.live() && let Some(x11) = &self.x11 && let Some((point, desktop)) = x11.take_pointer(live.scale) {
             self.observe_pointer(point.0, point.1);
             self.follow_pointer(_event_loop, desktop);
         }
         #[cfg(target_os = "windows")]
-        if self.live.is_some() && let Some(point) = self.native.as_ref().and_then(|p| p.take_pointer()) && self.rt.pointer() != Some(point) {
+        if self.surface.live().is_some() && let Some(point) = self.native.as_ref().and_then(|p| p.take_pointer()) && self.rt.pointer() != Some(point) {
             self.observe_pointer(point.0, point.1);
             if let Some(point) = crate::platform::win32::pointer_position() { self.follow_pointer(_event_loop, point); }
         }
         // Covering or sleeping displays can come without an event the overlay sees.
         #[cfg(target_os = "macos")]
-        if self.live.is_some() { self.sync_occlusion(); }
+        if self.surface.live().is_some() { self.sync_occlusion(); }
         #[cfg(target_os = "macos")]
-        if self.live.is_some() && let Some(panel) = &self.panel {
+        if self.surface.live().is_some() && let Some(panel) = &self.panel {
             // Covered or asleep, the 120 Hz regions poll rests; input events still sample.
             panel.observe_pointer(Instant::now(), !self.presence.occluded());
             let pointer = panel.pointer_state();
@@ -223,7 +223,7 @@ impl<T: 'static> Overlay<T> {
     /// Answers what assistive clients asked of the overlay and sends its tree's changes. An
     /// action draws the frame that runs it.
     fn a11y_turn(&mut self) -> bool {
-        let Some(adapter) = self.live.as_mut().and_then(|l| l.a11y.as_mut()) else { return false };
+        let Some(adapter) = self.surface.live_mut().and_then(|l| l.a11y.as_mut()) else { return false };
         let queued = adapter.service(&mut self.rt, self.name);
         if queued {
             self.dirty = true;

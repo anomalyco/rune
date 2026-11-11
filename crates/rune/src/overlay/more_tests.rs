@@ -267,7 +267,7 @@ fn hidden_overlay_update_wakes_once_without_a_surface() {
     overlay.wake_due(Instant::now());
     assert!(!overlay.draw(), "hidden overlays do not acquire or animate a surface");
     assert_eq!(overlay.rt.state.len(), 2, "no polling after the one wake");
-    assert!(overlay.live.is_none() && overlay.gpu.is_none());
+    assert!(overlay.surface.live().is_none() && overlay.gpu.is_none());
 }
 
 thread_local! { static BUILDS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }

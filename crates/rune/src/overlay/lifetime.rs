@@ -15,20 +15,20 @@ impl<T: 'static> Overlay<T> {
         let fading = self.presence.fading();
         let size = self.at.size;
         self.resolve_size(event_loop);
-        if self.live.is_none() {
+        if self.surface.live().is_none() {
             self.prepare(event_loop, true);
             if self.shared.failure.lock().unwrap().is_some() { return; }
         }
-        if self.live.is_none() { return; }
+        if self.surface.live().is_none() { return; }
         self.resume_live();
         if size != self.at.size { self.resized(event_loop); }
-        if self.live.is_none() { return; }
+        if self.surface.live().is_none() { return; }
         if !fading { self.settle_before_reveal(); }
-        if let Some(Backing::Window(window)) = self.live.as_ref().map(|l| &l.backing) {
+        if let Some(Backing::Window(window)) = self.surface.live().map(|l| &l.backing) {
             let window = window.clone();
             self.place_window(event_loop, &window);
             if let Some(gpu) = self.gpu.clone() { self.rescale(&gpu, crate::window::backing_scale(&window)); }
-            if self.live.is_none() { return; }
+            if self.surface.live().is_none() { return; }
             // Retained alpha-zero hosts already have pixels. A hidden update must reach
             // the surface before exposing it, rather than flashing the old frame.
             if !fading { self.refresh_for_reveal_at(Instant::now()); }
@@ -54,7 +54,7 @@ impl<T: 'static> Overlay<T> {
     /// only its window at startup and parks it; its surface, and the GPU device for the first,
     /// wait for the show.
     pub(super) fn prepare(&mut self, event_loop: &ActiveEventLoop, showing: bool) {
-        if self.live.is_some() { return; }
+        if self.surface.live().is_some() { return; }
         let surface = showing || !self.defers_gpu();
         let wayland = crate::window::is_wayland(event_loop);
         // Only an X11 window waits parked for its surface. A Wayland overlay's window is its
@@ -65,9 +65,9 @@ impl<T: 'static> Overlay<T> {
         self.resolve_size(event_loop);
         let made = if wayland {
             self.layer(event_loop).or_else(|| self.xwayland())
-        } else if self.parked.is_some() || self.window(event_loop).is_some() {
-            // macOS made the surface with its panel; elsewhere the window waits in `parked`.
-            match self.live.take() {
+        } else if self.surface.parked().is_some() || self.window(event_loop).is_some() {
+            // macOS made the surface with its panel; elsewhere the window waits parked.
+            match self.surface.take_live() {
                 Some(live) => Some(live),
                 None if surface => self.unpark(),
                 None => return self.ready(showing),
@@ -77,12 +77,12 @@ impl<T: 'static> Overlay<T> {
         };
         match made {
             Some(live) => {
-                self.live = Some(live);
+                self.surface.made(live);
                 // An earlier attempt's failure no longer holds.
                 self.shared.failure.lock().unwrap().take();
                 // The surface was made before the panel was adopted and placed; its display's
                 // scale is known now, before `warm` draws.
-                if let Some(Backing::Window(window)) = self.live.as_ref().map(|l| &l.backing) && let Some(gpu) = self.gpu.clone() {
+                if let Some(Backing::Window(window)) = self.surface.live().map(|l| &l.backing) && let Some(gpu) = self.gpu.clone() {
                     let scale = crate::window::backing_scale(window);
                     self.rescale(&gpu, scale);
                     if self.shared.failure.lock().unwrap().is_some() { return; }
@@ -106,8 +106,8 @@ impl<T: 'static> Overlay<T> {
         self.dirty = true;
         self.idle = true;
         if self.options.prewarm && !(showing && self.defers_gpu()) { self.warm(); }
-        if !self.announced && let Some(created) = &mut self.on_created {
-            self.announced = true;
+        if !self.surface.announced() && let Some(created) = &mut self.on_created {
+            self.surface.announce();
             let (window_number, capabilities) = *self.shared.native.lock().unwrap();
             created(crate::OverlayCreated { window_number, capabilities });
         }
@@ -175,10 +175,10 @@ impl<T: 'static> Overlay<T> {
     /// A hidden overlay draws nothing more: its display link, timer frames and live values stop.
     fn stop_drawing(&mut self) {
         #[cfg(target_os = "macos")]
-        if let Some(live) = &mut self.live && let Some(pacing) = &mut live.pacing { pacing.stop(); }
+        if let Some(live) = self.surface.live_mut() && let Some(pacing) = &mut live.pacing { pacing.stop(); }
         self.rt.set_live_visible(false);
         self.retry = None;
-        self.quiet = Default::default();
+        self.quiet.step(frame::QuietEvent::Forget);
     }
 
     /// Input stops, and the native window hides over `fade`. A fading window stays up while
@@ -191,7 +191,7 @@ impl<T: 'static> Overlay<T> {
         self.rt.cancel_pointer();
         self.apply_cursor();
         self.hidden_input();
-        let Some(live) = &self.live else { return };
+        let Some(live) = self.surface.live() else { return };
         match &live.backing {
             Backing::Window(window) => {
                 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -213,7 +213,7 @@ impl<T: 'static> Overlay<T> {
                 window.set_visible(false);
             }
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-            Backing::Layer(_) | Backing::Xwayland(_) => { self.live.take(); }
+            Backing::Layer(_) | Backing::Xwayland(_) => { self.surface.take_live(); }
         }
     }
 
@@ -339,18 +339,18 @@ impl<T: 'static> Overlay<T> {
         }
         self.place_window(event_loop, &window);
         #[cfg(target_os = "macos")]
-        { self.live = Some(live); }
+        self.surface.made(live);
         #[cfg(not(target_os = "macos"))]
-        { self.parked = Some(Backing::Window(window)); }
+        self.surface.park(Backing::Window(window));
         Some(())
     }
 
     /// The parked window's GPU surface, and the device for the first surface. Failing, the
     /// window stays parked for the next show to try again.
     pub(super) fn unpark(&mut self) -> Option<Live> {
-        let Some(Backing::Window(window)) = self.parked.take() else { return None };
+        let Some(Backing::Window(window)) = self.surface.take_parked() else { return None };
         let live = self.attach(Backing::Window(window.clone()), crate::window::backing_scale(&window));
-        if live.is_none() { self.parked = Some(Backing::Window(window)); }
+        if live.is_none() { self.surface.park(Backing::Window(window)); }
         live
     }
 
@@ -366,16 +366,16 @@ impl<T: 'static> Overlay<T> {
     /// screen-sized panels that join every Space empty Mission Control's Space thumbnails.
     /// There the window goes too, and the next show makes a new one.
     pub(super) fn park(&mut self) {
-        if !matches!(self.live.as_ref().map(|l| &l.backing), Some(Backing::Window(_))) { return; }
+        if !matches!(self.surface.live().map(|l| &l.backing), Some(Backing::Window(_))) { return; }
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         self.release();
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
-            let Some(Live { alpha, surface, backing, .. }) = self.live.take() else { return };
+            let Some(Live { alpha, surface, backing, .. }) = self.surface.take_live() else { return };
             // The surface goes before the device that made it and the window it draws into.
             drop(alpha);
             drop(surface);
-            self.parked = Some(backing);
+            self.surface.park(backing);
         }
         // The device goes to the next surface rather than with this one; one another
         // surface still draws with stays there.

@@ -558,7 +558,7 @@ fn window_panel_overlay_focus_callback_is_connected_before_first_show() {
     overlay.rt.window_focus(false);
     assert_eq!(overlay.rt.state, [true, false]);
     assert_eq!(overlay.rt.shell_request, Some(crate::el::Shell::Close));
-    assert!(overlay.live.is_none());
+    assert!(overlay.surface.live().is_none());
 }
 
 #[test]
@@ -660,10 +660,11 @@ fn a_timer_frame_that_changes_nothing_on_screen_draws_nothing() {
     present(&mut overlay, start);
     assert!(overlay.idle, "only the timer asks for another frame");
     let mut quiet = frame::Quiet::default();
-    quiet.presented(&overlay.rt, &config, false);
-    assert!(quiet.presented.is_none(), "a frame it doesn't rest on records nothing");
-    quiet.presented(&overlay.rt, &config, true);
-    let presented = quiet.presented.as_ref().unwrap();
+    let record = |slot: &mut Option<crate::window::Presented>| crate::window::Presented::record(slot, &overlay.rt, &config, false);
+    quiet.presented_frame(false, record);
+    assert!(quiet.presented().is_none(), "a frame it doesn't rest on records nothing");
+    quiet.presented_frame(true, record);
+    let presented = quiet.presented().unwrap();
 
     let at = start + Duration::from_millis(33);
     let polls = overlay.rt.state.polls;
