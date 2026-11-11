@@ -2,7 +2,7 @@
 //! and what a new stage leaves behind.
 
 use super::*;
-use crate::playground::{Column, FILTER, Moved, Nav, Region, Request};
+use crate::playground::{FILTER, Moved, Nav, Region, Request};
 
 pub(crate) fn handler_states<'a, S: 'static>(state: &'a mut S, playground: &'a mut Option<Box<crate::playground::Live<S>>>) -> crate::states::States<'a> {
     match playground {
@@ -122,7 +122,7 @@ impl<S: 'static> Runtime<S> {
         if !self.playground.as_ref().is_some_and(|p| p.is_open()) { return false; }
         self.sync_region();
         if self.focused_input().is_some() { return self.filter_key(ev, one); }
-        if self.side_takes_keys() {
+        if self.on_side_keys() {
             if matches!(ev.key, crate::Key::Escape | crate::Key::Tab) {
                 self.to_list();
                 return true;
@@ -142,12 +142,12 @@ impl<S: 'static> Runtime<S> {
             }
             Nav::IntoSide => {
                 if let Some(first) = side.first() { self.set_focus(Some(first.clone()), true); }
-                self.give_region(Column::Side);
+                self.give_region(Region::Side);
                 true
             }
             Nav::IntoStage => {
                 self.set_focus(None, true);
-                self.give_region(Column::Stage);
+                self.give_region(Region::Stage);
                 true
             }
             Nav::Filter => {
@@ -202,21 +202,21 @@ impl<S: 'static> Runtime<S> {
     /// The list takes the keyboard back: focus leaves the stage or the side column.
     fn to_list(&mut self) {
         self.set_focus(None, true);
-        self.give_region(Column::List);
+        self.give_region(Region::List);
     }
 
-    /// Gives `column` the keyboard, redrawing the columns' focus.
-    fn give_region(&mut self, column: Column) {
-        let (focus, slot) = (self.focus.owned(), column == Column::Side && self.on_side_keys());
+    /// Gives `region` the keyboard, redrawing the columns' focus.
+    fn give_region(&mut self, region: Region) {
+        let focus = self.focus.owned();
         let Some(playground) = &mut self.playground else { return };
-        if playground.moved(Moved::Give { region: Region::of(column, slot), seen: focus }) { self.dirty = true; }
+        if playground.moved(Moved::Give { region, seen: focus }) { self.dirty = true; }
     }
 
     /// A press in the open playground gives its column the keyboard.
     pub(super) fn playground_pointer_down(&mut self, x: f32) {
         let width = self.viewport.0;
-        let Some(column) = self.playground.as_ref().filter(|p| p.is_open()).map(|p| p.region_at(x, width)) else { return };
-        self.give_region(column);
+        let Some(region) = self.playground.as_ref().filter(|p| p.is_open()).map(|p| p.region_at(x, width)) else { return };
+        self.give_region(region);
     }
 
     /// Focus that moved into a column since the last look gives that column the keyboard: a
@@ -225,19 +225,18 @@ impl<S: 'static> Runtime<S> {
     fn sync_region(&mut self) {
         if self.playground.as_ref().is_none_or(|p| p.saw_focus(self.focus.path())) { return; }
         let at = if self.focus.hovered() { None } else { self.focused_index() };
-        let column = at.map(|i| {
+        let region = at.map(|i| {
             if self.under(i, |k| k == "playground-side") {
-                Column::Side
+                Region::Side
             } else if self.under(i, crate::playground::is_stage) {
-                Column::Stage
+                Region::Stage
             } else {
-                Column::List
+                Region::List
             }
         });
-        let slot_focused = at.is_some_and(|i| self.is_side_slot(i));
         let focus = self.focus.owned();
         let Some(playground) = &mut self.playground else { return };
-        if playground.moved(Moved::Focus { focus, column, slot_focused }) { self.dirty = true; }
+        if playground.moved(Moved::Focus { focus, region }) { self.dirty = true; }
     }
 
     /// Polls the open stage, then queues the keys its steps pressed ([`Play::press`]) behind
@@ -278,14 +277,13 @@ impl<S: 'static> Runtime<S> {
             focus_machine::Focus::On { path, .. } => Some(path.clone()),
             _ => None,
         });
-        // Focus that wasn't put back is where the key left it, which says whether the slot has it.
-        let region = match region {
-            Region::Side { .. } if back.is_none() => Region::Side { slot_focused: self.on_side_keys() },
-            region => region,
-        };
         let Some(p) = &mut self.playground else { return took };
         p.moved(Moved::Resume { region, back: path });
-        if let Some(aside) = back { self.focus.put_back(aside); }
+        if let Some(aside) = back {
+            self.focus.put_back(aside);
+            // A key that blurred it reported the slot off; it's back.
+            self.sync_side_focus();
+        }
         took
     }
 
@@ -299,22 +297,10 @@ impl<S: 'static> Runtime<S> {
         self.playground.as_ref().is_some_and(|p| p.typing(&self.state))
     }
 
-    /// Keys go to the open story's side controls: focus is on them and their column has the
-    /// keyboard, which is what their view marks.
-    fn side_takes_keys(&self) -> bool {
-        let on_slot = self.on_side_keys();
-        self.playground.as_ref().is_some_and(|p| p.region().takes_side_keys(on_slot))
-    }
-
-    /// Focus is on the open story's side controls that take keys (`Story::side_keys`), whose
-    /// slot is focusable only then.
+    /// The keyboard is on the open story's side controls that take keys (`Story::side_keys`),
+    /// whose slot is focusable only then.
     fn on_side_keys(&self) -> bool {
-        !self.focus.hovered() && self.focused_index().is_some_and(|i| self.is_side_slot(i))
-    }
-
-    /// Whether node `i` is the open story's slot.
-    fn is_side_slot(&self, i: usize) -> bool {
-        self.nodes[i].key.as_deref().is_some_and(|k| k.starts_with("playground-slot-"))
+        !self.focus.hovered() && self.focused_index().is_some_and(|i| self.nodes[i].key.as_deref().is_some_and(|k| k.starts_with("playground-slot-")))
     }
 
     /// Tells the keyboard whether the side controls that take keys have focus, so their view

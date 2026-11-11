@@ -164,7 +164,7 @@ impl<S: 'static> Live<S> {
                 controls.then(|| "Tab\u{a0}controls".into()),
                 Some("Esc\u{a0}back".into()),
             ],
-            Region::Side { .. } => vec![Some("↑↓\u{a0}controls".into()), variants, Some("Esc\u{a0}stories".into())],
+            Region::Side => vec![Some("↑↓\u{a0}controls".into()), variants, Some("Esc\u{a0}stories".into())],
             Region::Stage => vec![Some("Keys go to the story".into()), Some("Esc\u{a0}stories".into())],
         };
         // No-break spaces keep each part whole when the hint wraps.

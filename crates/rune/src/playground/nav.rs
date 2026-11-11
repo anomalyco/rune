@@ -14,7 +14,7 @@ impl<S: 'static> Live<S> {
             Key::Text(t) if !m.cmd => t.chars().next().filter(|_| t.chars().count() == 1).map(|c| c.to_ascii_lowercase()),
             _ => None,
         };
-        let in_side = matches!(region, Region::Side { .. });
+        let in_side = region == Region::Side;
         if in_side {
             match ev.key {
                 Key::Tab | Key::Escape | Key::Left => return Nav::OutOfSide,
