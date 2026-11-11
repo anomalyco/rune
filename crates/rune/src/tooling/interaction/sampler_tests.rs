@@ -66,7 +66,7 @@ mod mac {
         });
         let target: Target = target.recv().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(30));
-        let raw = target.sample(|| true).expect("sampled");
+        let raw = target.sample(|| true, || {}).expect("sampled");
         stop.store(true, Ordering::Relaxed);
         let _ = release.send(());
         worker.join().unwrap();
@@ -103,7 +103,38 @@ mod mac {
             spin_here_for_the_sampler(&flag);
         });
         let target = got.recv().unwrap();
-        assert!(target.sample(|| false).is_none());
+        let caught = std::cell::Cell::new(false);
+        assert!(target.sample(|| false, || caught.set(true)).is_none());
+        assert!(!caught.get(), "nothing was caught");
+        stop.store(true, Ordering::Relaxed);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn a_caught_sample_is_announced_while_the_thread_is_still_stopped() {
+        use std::sync::atomic::AtomicU64;
+        use std::time::{Duration, Instant};
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let count = Arc::new(AtomicU64::new(0));
+        let (ready, got) = mpsc::channel();
+        let (flag, counting) = (stop.clone(), count.clone());
+        let worker = std::thread::spawn(move || {
+            ready.send(Target::current().unwrap()).unwrap();
+            while !flag.load(Ordering::Relaxed) { counting.fetch_add(1, Ordering::Relaxed); }
+        });
+        let target: Target = got.recv().unwrap();
+        while count.load(Ordering::Relaxed) == 0 { std::hint::spin_loop(); }
+        let frozen = std::cell::Cell::new(false);
+        target.sample(|| true, || {
+            let before = count.load(Ordering::Relaxed);
+            let until = Instant::now() + Duration::from_millis(2);
+            while Instant::now() < until { std::hint::spin_loop(); }
+            frozen.set(count.load(Ordering::Relaxed) == before);
+        }).expect("sampled");
+        assert!(frozen.get(), "the thread ran during the announcement");
+        let after = count.load(Ordering::Relaxed);
+        while count.load(Ordering::Relaxed) == after { std::hint::spin_loop(); }
         stop.store(true, Ordering::Relaxed);
         worker.join().unwrap();
     }

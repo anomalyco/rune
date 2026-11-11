@@ -1,3 +1,7 @@
+use std::cell::{Cell, RefCell};
+use std::sync::{TryLockError, mpsc};
+
+use super::super::stack::DEPTH;
 use super::*;
 
 const MS: u64 = 1_000_000;
@@ -330,4 +334,226 @@ fn every_sequence_from_a_nearly_full_frame_matches_the_old_loop() {
     let mut reached = Reached::default();
     walk(world, 6, &mut Vec::new(), &mut reached);
     assert!(reached.full && reached.sampling && reached.quiet && reached.resumed);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Memory {
+    seq: u64,
+    start: u64,
+    after_us: u32,
+}
+
+/// One atomic write of the protocol.
+#[derive(Clone, Copy, Debug)]
+enum Write {
+    NextSeq,
+    AfterUs(u32),
+    Start(u64),
+    Hurry,
+}
+
+impl Memory {
+    fn apply(&mut self, write: Write) {
+        match write {
+            Write::NextSeq => self.seq += 1,
+            Write::AfterUs(us) => self.after_us = us,
+            Write::Start(ns) => self.start = ns,
+            Write::Hurry => self.after_us = self.after_us.min(HURRY_US),
+        }
+    }
+}
+
+/// Records the real `begin`'s writes.
+#[derive(Default)]
+struct Recorder(RefCell<Vec<Write>>);
+
+impl Frames for Recorder {
+    fn start(&self) -> u64 { unreachable!("begin only writes") }
+    fn seq(&self) -> u64 { unreachable!("begin only writes") }
+    fn after_us(&self) -> u32 { unreachable!("begin only writes") }
+    fn next_seq(&self) { self.0.borrow_mut().push(Write::NextSeq); }
+    fn set_after_us(&self, us: u32) { self.0.borrow_mut().push(Write::AfterUs(us)); }
+    fn set_start(&self, ns: u64) { self.0.borrow_mut().push(Write::Start(ns)); }
+}
+
+/// Memory where the writes scheduled before each read land as that read happens.
+struct Scripted<'a> {
+    memory: Cell<Memory>,
+    writes: &'a [Write],
+    landed_by: [usize; 3],
+    landed: Cell<usize>,
+    reads: Cell<usize>,
+}
+
+impl Scripted<'_> {
+    fn read(&self) -> Memory {
+        let mut memory = self.memory.get();
+        let upto = self.landed_by[self.reads.get()];
+        for &write in &self.writes[self.landed.get()..upto] { memory.apply(write); }
+        self.landed.set(upto);
+        self.reads.set(self.reads.get() + 1);
+        self.memory.set(memory);
+        memory
+    }
+}
+
+impl Frames for Scripted<'_> {
+    fn start(&self) -> u64 { self.read().start }
+    fn seq(&self) -> u64 { self.read().seq }
+    fn after_us(&self) -> u32 { self.read().after_us }
+    fn next_seq(&self) { unreachable!("a look only reads") }
+    fn set_after_us(&self, _: u32) { unreachable!("a look only reads") }
+    fn set_start(&self, _: u64) { unreachable!("a look only reads") }
+}
+
+/// `arm`'s stores on `dev`, in its order.
+fn dev_arm(now: u64) -> [Write; 3] { [Write::NextSeq, Write::AfterUs(AFTER_US), Write::Start(now)] }
+
+/// The loop's reads on `dev`, in its order, each after the writes scheduled before it.
+fn dev_reads(mut memory: Memory, writes: &[Write], landed_by: [usize; 3]) -> (u64, u64, u32) {
+    let mut landed = 0;
+    let mut land = |memory: &mut Memory, upto: usize| {
+        for &write in &writes[landed..upto] { memory.apply(write); }
+        landed = upto;
+    };
+    land(&mut memory, landed_by[0]);
+    let start = memory.start;
+    if start == 0 { return (0, 0, 0); }
+    land(&mut memory, landed_by[1]);
+    let seq = memory.seq;
+    // differs from dev: `AFTER_US` is read even once a frame has samples; the value goes unused then.
+    land(&mut memory, landed_by[2]);
+    (start, seq, memory.after_us)
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Program {
+    Arm,
+    Disarm,
+    Hurry,
+}
+
+fn writes_of(program: &[Program], arm: &[Write]) -> Vec<Write> {
+    program.iter().flat_map(|step| match step {
+        Program::Arm => arm.to_vec(),
+        Program::Disarm => vec![Write::Start(0)],
+        Program::Hurry => vec![Write::Hurry],
+    }).collect()
+}
+
+#[test]
+fn every_write_landing_between_a_looks_reads_matches_the_old_reads() {
+    let recorder = Recorder::default();
+    begin(&recorder, || NEW);
+    let real_arm = recorder.0.into_inner();
+    let reference_arm = dev_arm(NEW);
+    let programs: [&[Program]; 6] = [
+        &[Program::Arm],
+        &[Program::Disarm, Program::Arm],
+        &[Program::Hurry, Program::Arm],
+        &[Program::Hurry, Program::Disarm, Program::Arm, Program::Hurry],
+        &[Program::Arm, Program::Disarm],
+        &[Program::Arm, Program::Hurry],
+    ];
+    let memories = [Memory { seq: 1, start: OLD, after_us: AFTER_US }, Memory { seq: 1, start: OLD, after_us: HURRY_US }, Memory { seq: 1, start: 0, after_us: AFTER_US }];
+    let now = NEW + 13 * MS;
+    let seeds = [
+        (Watch::Unarmed, Dev { seen: 0, taken: 0, next: 0, quiet_since: None }),
+        (sampling(1, 3, now - MS), Dev { seen: 1, taken: 3, next: now - MS, quiet_since: None }),
+        (sampling(1, MOST, 0), Dev { seen: 1, taken: MOST, next: 0, quiet_since: None }),
+        (sampling(2, 3, now + MS), Dev { seen: 2, taken: 3, next: now + MS, quiet_since: None }),
+    ];
+    let mut mixed = false;
+    for memory in memories {
+        for program in programs {
+            let (real, reference) = (writes_of(program, &real_arm), writes_of(program, &reference_arm));
+            assert_eq!(real.len(), reference.len(), "arm's writes changed");
+            for first in 0..=real.len() {
+                for second in first..=real.len() {
+                    for third in second..=real.len() {
+                        let landed_by = [first, second, third];
+                        let scripted = Scripted { memory: Cell::new(memory), writes: &real, landed_by, landed: Cell::new(0), reads: Cell::new(0) };
+                        let frame = super::look(&scripted);
+                        let (start, seq, after_us) = dev_reads(memory, &reference, landed_by);
+                        let context = format!("{memory:?} {program:?} {landed_by:?}");
+                        assert_eq!(frame, (start != 0).then_some(Running { seq, start, after_us }), "the reads differ: {context}");
+                        if start == OLD && seq == 2 { mixed = true; }
+                        for (mut watch, mut dev) in seeds {
+                            assert_eq!(look(&mut watch, frame, now), dev.look(start, seq, after_us, now), "the decision differs: {context}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(mixed, "the walk never read one frame's start with the next frame's number");
+}
+
+fn raw() -> Raw { Raw { pcs: [0; DEPTH], len: 0, waiting: false, cpu_us: 0 } }
+
+fn named(at_ns: u64) -> Sampled { Sampled { frames: vec![Frame { name: "app::stall".into(), app: true }], waiting: false, cpu_us: 0, at_ns } }
+
+#[test]
+fn a_disarm_during_naming_still_gets_the_stack_captured_for_its_frame() {
+    let (samples, taken) = (Mutex::new(Vec::new()), AtomicBool::new(false));
+    let (samples, taken) = (&samples, &taken);
+    let (resumed, on_resume) = mpsc::channel();
+    let (flag_read, on_flag_read) = mpsc::channel();
+    let stacks = std::thread::scope(|scope| {
+        let ui = scope.spawn(move || {
+            on_resume.recv().unwrap();
+            let published = was_taken(taken);
+            flag_read.send(()).unwrap();
+            if published { collect(samples, 7) } else { None }
+        });
+        capture(samples, taken, 7, |caught| {
+            caught();
+            resumed.send(()).unwrap();
+            Some(raw())
+        }, |_| {
+            on_flag_read.recv().unwrap();
+            named(1)
+        });
+        ui.join().unwrap()
+    });
+    assert_eq!(stacks.map(|s| s.taken), Some(1), "the frame that was captured reports it");
+    assert!(!was_taken(taken), "nothing is left over for the next frame");
+}
+
+fn is_locked(samples: &Mutex<Vec<(u64, Sampled)>>) -> bool { matches!(samples.try_lock(), Err(TryLockError::WouldBlock)) }
+
+#[test]
+fn a_capture_publishes_while_the_thread_is_stopped_and_holds_the_samples_until_the_sample_is_in() {
+    // differs from dev: "published" comes before "resumed". Dev published after "pushed", so a
+    // `disarm` between them found nothing and the next frame's filtered the sample out.
+    const REFERENCE: [&str; 5] = ["stopped", "published", "resumed", "named", "pushed"];
+    let (samples, taken) = (Mutex::new(Vec::new()), AtomicBool::new(false));
+    let events = RefCell::new(Vec::new());
+    capture(&samples, &taken, 7, |caught| {
+        assert!(is_locked(&samples), "locked before the stop");
+        events.borrow_mut().push("stopped");
+        caught();
+        if taken.load(Ordering::Acquire) { events.borrow_mut().push("published"); }
+        events.borrow_mut().push("resumed");
+        Some(raw())
+    }, |_| {
+        assert!(is_locked(&samples), "still locked while naming");
+        events.borrow_mut().push("named");
+        named(1)
+    });
+    if samples.lock().unwrap().len() == 1 { events.borrow_mut().push("pushed"); }
+    assert_eq!(*events.borrow(), REFERENCE);
+}
+
+#[test]
+fn a_refused_sample_publishes_nothing_and_a_full_buffer_is_cleared() {
+    let (samples, taken) = (Mutex::new(Vec::new()), AtomicBool::new(false));
+    capture(&samples, &taken, 7, |_| None, |_| panic!("nothing to name"));
+    assert!(!taken.load(Ordering::Acquire));
+    assert!(samples.lock().unwrap().is_empty());
+    assert!(!is_locked(&samples), "released on the way out");
+
+    samples.lock().unwrap().extend((0..4 * MOST).map(|_| (1, named(0))));
+    capture(&samples, &taken, 7, |caught| { caught(); Some(raw()) }, |_| named(1));
+    assert_eq!(samples.lock().unwrap().len(), 1);
 }

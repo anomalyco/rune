@@ -109,9 +109,9 @@ mod mac {
             }
         }
 
-        /// Samples the thread if `still()` holds once it's stopped: `None` when it doesn't, or
-        /// the thread can't be stopped or read.
-        pub(crate) fn sample(&self, still: impl Fn() -> bool) -> Option<Raw> {
+        /// Samples the thread if `still()` holds once it's stopped, calling `caught` before
+        /// resuming it: `None` when it doesn't hold, or the thread can't be stopped or read.
+        pub(crate) fn sample(&self, still: impl Fn() -> bool, caught: impl Fn()) -> Option<Raw> {
             let mut info = BasicInfo::default();
             let mut count = THREAD_BASIC_INFO_COUNT;
             // SAFETY: `info` is a live buffer of `count` 32-bit words, as the flavor needs.
@@ -122,6 +122,7 @@ mod mac {
             // samples only the UI thread from its own thread). It's resumed below on every path.
             if unsafe { thread_suspend(self.port) } != 0 { return None; }
             let walked = still() && self.walk(&mut raw);
+            if walked { caught(); }
             // SAFETY: resumes the suspension above.
             unsafe { thread_resume(self.port) };
             walked.then_some(raw)

@@ -1,0 +1,1 @@
+- **Interaction timing keeps a stack the watchdog caught just as its frame ended.** The sample is announced while the UI thread is still stopped, and the sample list stays locked until the sample is named and stored, so `ui.frame` and `ui.interaction` reports no longer lose it. A frame that ends during that naming waits for it.

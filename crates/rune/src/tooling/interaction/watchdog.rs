@@ -2,8 +2,8 @@
 //! long, so a slow interaction says which functions its time went to. Sampling after the frame
 //! is too late; the hitch is over by then.
 //!
-//! A frame arms it ([`arm`]) with a relaxed store of its start, and [`disarm`] clears it. The
-//! watchdog sleeps until the frame is [`AFTER_MS`] old ([`HURRY_MS`] for a signature that was
+//! A frame arms it ([`arm`]) with a sequentially consistent store of its start, so it and a
+//! parking watchdog can't miss each other, and [`disarm`] clears it. The watchdog sleeps until the frame is [`AFTER_MS`] old ([`HURRY_MS`] for a signature that was
 //! slow before), then samples every [`EVERY`] until the frame ends. Between frames it checks
 //! every [`IDLE_POLL`], and after a second with no frame it parks, so a resting app wakes it
 //! never and the UI thread unparks it only for the first frame after a rest.
@@ -15,10 +15,11 @@
 //! second runtime on a worker) aren't watched. Apple Silicon Macs only (`stack`).
 #![cfg_attr(not(all(target_os = "macos", target_arch = "aarch64", not(test))), allow(dead_code))]
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use super::stack::Frame;
+use super::stack::{Frame, Raw};
 use crate::machine::Effects;
 
 /// A frame this old is sampled.
@@ -187,6 +188,55 @@ impl Stacks {
     }
 }
 
+/// The frame atomics, one call per atomic, so a test can land writes between any two.
+trait Frames {
+    fn start(&self) -> u64;
+    fn seq(&self) -> u64;
+    fn after_us(&self) -> u32;
+    fn next_seq(&self);
+    fn set_after_us(&self, us: u32);
+    fn set_start(&self, ns: u64);
+}
+
+/// Reads what's running and decodes it. Past here, no frame is `None`, not a zero.
+fn look(frames: &impl Frames) -> Option<Running> {
+    let start = frames.start();
+    if start == 0 { return None; }
+    let seq = frames.seq();
+    Some(Running { seq, start, after_us: frames.after_us() })
+}
+
+/// A frame's writes when it starts.
+fn begin(frames: &impl Frames, now: impl FnOnce() -> u64) {
+    frames.next_seq();
+    frames.set_after_us(AFTER_MS * 1000);
+    frames.set_start(now());
+}
+
+/// Tries one sample of frame `seq`. `stop` calls its argument while the thread is stopped, once
+/// it has the stack: `taken` is then set before the thread can reach `disarm`, and `samples`
+/// stays locked until the sample is in, so `disarm` waits for it rather than missing it. The
+/// lock comes before the stop, because nothing may take one while the thread is stopped.
+fn capture(samples: &Mutex<Vec<(u64, Sampled)>>, taken: &AtomicBool, seq: u64, stop: impl FnOnce(&dyn Fn()) -> Option<Raw>, name: impl FnOnce(Raw) -> Sampled) {
+    let mut all = samples.lock();
+    let Some(raw) = stop(&|| taken.store(true, Ordering::Release)) else { return };
+    let sampled = name(raw);
+    if let Ok(all) = &mut all {
+        // A frame nobody disarmed leaves its samples; keep the buffer bounded.
+        if all.len() >= 4 * MOST { all.clear(); }
+        all.push((seq, sampled));
+    }
+}
+
+/// Whether a sample was caught since the last call.
+fn was_taken(taken: &AtomicBool) -> bool { taken.swap(false, Ordering::Acquire) }
+
+/// Frame `seq`'s samples, summarized; the rest are dropped.
+fn collect(samples: &Mutex<Vec<(u64, Sampled)>>, seq: u64) -> Option<Stacks> {
+    let samples: Vec<Sampled> = samples.lock().ok()?.drain(..).filter(|(s, _)| *s == seq).map(|(_, s)| s).collect();
+    Stacks::of(&samples)
+}
+
 #[cfg(all(target_os = "macos", target_arch = "aarch64", not(test)))]
 pub(crate) use mac::{arm, disarm, hurry};
 
@@ -209,7 +259,7 @@ mod mac {
     use std::time::Instant;
 
     use super::super::stack::{Symbols, Target};
-    use super::{AFTER_MS, Effect, Event, HURRY_MS, MOST, Running, Sampled, Stacks, Watch, step};
+    use super::{AFTER_MS, Effect, Event, Frames, HURRY_MS, Sampled, Stacks, Watch, begin, capture, collect, look, step, was_taken};
 
     /// Bumped by each frame, so a sample can tell its frame is the one still running.
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -219,6 +269,24 @@ mod mac {
     static PARKED: AtomicBool = AtomicBool::new(false);
     static TAKEN: AtomicBool = AtomicBool::new(false);
     static SAMPLES: Mutex<Vec<(u64, Sampled)>> = Mutex::new(Vec::new());
+
+    /// The statics, as [`Frames`].
+    struct Statics;
+
+    impl Frames for Statics {
+        #[inline(always)]
+        fn start(&self) -> u64 { START.load(Ordering::SeqCst) }
+        #[inline(always)]
+        fn seq(&self) -> u64 { SEQ.load(Ordering::SeqCst) }
+        #[inline(always)]
+        fn after_us(&self) -> u32 { AFTER_US.load(Ordering::Relaxed) }
+        #[inline(always)]
+        fn next_seq(&self) { SEQ.fetch_add(1, Ordering::Relaxed); }
+        #[inline(always)]
+        fn set_after_us(&self, us: u32) { AFTER_US.store(us, Ordering::Relaxed); }
+        #[inline(always)]
+        fn set_start(&self, ns: u64) { START.store(ns, Ordering::SeqCst); }
+    }
 
     /// Whether a thread's frames are watched.
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -261,9 +329,7 @@ mod mac {
             w => w == Watched::Yes,
         };
         if !watched { return; }
-        SEQ.fetch_add(1, Ordering::Relaxed);
-        AFTER_US.store(AFTER_MS * 1000, Ordering::Relaxed);
-        START.store(now_ns(), Ordering::SeqCst);
+        begin(&Statics, now_ns);
         if PARKED.load(Ordering::SeqCst) { wake(); }
     }
 
@@ -283,25 +349,15 @@ mod mac {
     pub(crate) fn disarm() -> Option<Stacks> {
         if WATCHED.get() != Watched::Yes { return None; }
         START.store(0, Ordering::SeqCst);
-        if !TAKEN.swap(false, Ordering::Acquire) { return None; }
-        let seq = SEQ.load(Ordering::Relaxed);
-        let samples: Vec<Sampled> = SAMPLES.lock().ok()?.drain(..).filter(|(s, _)| *s == seq).map(|(_, s)| s).collect();
-        Stacks::of(&samples)
-    }
-
-    /// Reads what's running and decodes it. Past here, no frame is `None`, not a zero.
-    fn look() -> Option<Running> {
-        let start = START.load(Ordering::SeqCst);
-        if start == 0 { return None; }
-        let seq = SEQ.load(Ordering::SeqCst);
-        Some(Running { seq, start, after_us: AFTER_US.load(Ordering::Relaxed) })
+        if !was_taken(&TAKEN) { return None; }
+        collect(&SAMPLES, SEQ.load(Ordering::Relaxed))
     }
 
     fn run(target: Target) {
         let mut symbols = Symbols::default();
         let mut watch = Watch::Unarmed;
         loop {
-            for effect in step(&mut watch, Event::Look { frame: look(), now: now_ns() }) {
+            for effect in step(&mut watch, Event::Look { frame: look(&Statics), now: now_ns() }) {
                 match effect {
                     Effect::Sleep(wait) => std::thread::park_timeout(wait),
                     Effect::Park => {
@@ -311,15 +367,10 @@ mod mac {
                     }
                     Effect::Sample { seq, start, at } => {
                         let still = || SEQ.load(Ordering::SeqCst) == seq && START.load(Ordering::SeqCst) == start;
-                        if let Some(raw) = target.sample(still) {
+                        capture(&SAMPLES, &TAKEN, seq, |caught| target.sample(still, caught), |raw| {
                             let frames = raw.pcs[..raw.len].iter().enumerate().map(|(i, &pc)| symbols.frame(pc, i == 0)).collect();
-                            if let Ok(mut all) = SAMPLES.lock() {
-                                // A frame nobody disarmed leaves its samples; keep the buffer bounded.
-                                if all.len() >= 4 * MOST { all.clear(); }
-                                all.push((seq, Sampled { frames, waiting: raw.waiting, cpu_us: raw.cpu_us, at_ns: at }));
-                            }
-                            TAKEN.store(true, Ordering::Release);
-                        }
+                            Sampled { frames, waiting: raw.waiting, cpu_us: raw.cpu_us, at_ns: at }
+                        });
                         step(&mut watch, Event::Taken { seq, now: now_ns() });
                     }
                 }
