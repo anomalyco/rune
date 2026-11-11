@@ -327,8 +327,8 @@ impl<T: 'static> Overlay<T> {
         }
         // A hidden retained overlay's paced commit of what changed since its last.
         if !self.presence.drawing() && self.hidden_pace.take_due(now) { self.advance_at(now); }
-        if self.retry.is_some_and(|retry| retry <= now) {
-            self.retry = None;
+        if self.backoff.deadline().is_some_and(|at| at <= now) {
+            self.backoff_step(crate::window::BackoffEvent::Lapsed);
             self.dirty = true;
         }
     }
@@ -344,15 +344,26 @@ impl<T: 'static> Overlay<T> {
         } else {
             self.advance_at(now);
         }
-        self.retry = missed.retry(paced, now, &mut self.occluded_wait);
-        #[cfg(target_os = "macos")]
-        if self.retry.is_some() && let Some(pacing) = self.surface.live_mut().and_then(|l| l.pacing.as_mut()) { pacing.stop(); }
+        self.backoff_step(crate::window::BackoffEvent::Missed { missed, paced, now });
         let pacing = self.pacing_state(missed != crate::window::Missed::Occluded);
         self.meter.set_pacing(pacing);
     }
 
+    /// Steps the overlay's wait after a frame it couldn't draw, and carries out what that asks:
+    /// a display link that would draw sooner than the wait stops.
+    pub(super) fn backoff_step(&mut self, event: crate::window::BackoffEvent) {
+        for effect in self.backoff.step(event) {
+            match effect {
+                crate::window::BackoffEffect::StopPacing => {
+                    #[cfg(target_os = "macos")]
+                    if let Some(pacing) = self.surface.live_mut().and_then(|l| l.pacing.as_mut()) { pacing.stop(); }
+                }
+            }
+        }
+    }
+
     /// Waiting for a missed frame's retry, or for the timer pacing unpaced motion.
-    pub(super) fn backing_off(&self, now: Instant) -> bool { self.retry.is_some_and(|retry| retry > now) }
+    pub(super) fn backing_off(&self, now: Instant) -> bool { self.backoff.waiting(now) }
 
     /// What paces the overlay's frames, for its stats.
     pub(super) fn pacing_state(&self, moving: bool) -> crate::Pacing {

@@ -37,7 +37,7 @@ impl<T: 'static> Overlay<T> {
         let effects = self.presence.step(presence::Event::Show, self.release);
         self.carry_out(effects);
         self.hidden_pace.reset();
-        self.occluded_wait = crate::window::OCCLUDED_RETRY;
+        self.backoff_step(crate::window::BackoffEvent::Revealed);
         // Shown onto sleeping displays or under another window, the panel stays occluded.
         #[cfg(target_os = "macos")]
         {
@@ -177,7 +177,7 @@ impl<T: 'static> Overlay<T> {
         #[cfg(target_os = "macos")]
         if let Some(live) = self.surface.live_mut() && let Some(pacing) = &mut live.pacing { pacing.stop(); }
         self.rt.set_live_visible(false);
-        self.retry = None;
+        self.backoff_step(crate::window::BackoffEvent::Lapsed);
         self.quiet.step(frame::QuietEvent::Forget);
     }
 

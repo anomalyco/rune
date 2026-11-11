@@ -44,6 +44,9 @@ pub(crate) enum BackoffEvent {
     Lapsed,
     /// The window's occlusion changed: nothing waits, and the occluded wait starts over.
     Uncovered,
+    /// An overlay is shown or uncovered with a wait still set. It stands, so a covered frame's
+    /// re-check runs on time, and the occluded wait starts over.
+    Revealed,
     /// A frame presented: nothing waits, and both waits start over.
     Presented,
 }
@@ -81,6 +84,10 @@ impl Backoff {
             }
             BackoffEvent::Uncovered => {
                 self.at = None;
+                self.occluded = OCCLUDED_RETRY;
+                Effects::none()
+            }
+            BackoffEvent::Revealed => {
                 self.occluded = OCCLUDED_RETRY;
                 Effects::none()
             }

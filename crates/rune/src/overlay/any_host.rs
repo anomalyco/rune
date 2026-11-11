@@ -26,7 +26,7 @@ impl<T: 'static> AnyHost for Overlay<T> {
         // A Windows fade-out steps its alpha once a frame.
         #[cfg(target_os = "windows")]
         let deadline = deadline.into_iter().chain(self.presence.fading().then(|| Instant::now() + crate::window::TIMER_FRAME)).min();
-        deadline.into_iter().chain(self.retry.filter(|_| self.presence.drawing())).chain(self.presence.deadline())
+        deadline.into_iter().chain(self.backoff.deadline().filter(|_| self.presence.drawing())).chain(self.presence.deadline())
             .chain(self.hidden_pace.deadline().filter(|_| !self.presence.drawing())).min()
     }
 

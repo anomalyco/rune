@@ -470,8 +470,7 @@ fn overlay_occluded_runs_due_timers_without_frames() {
     overlay.missed(Missed::Occluded, false, false);
     assert_eq!(overlay.rt.state.polls, 1);
     assert_eq!(overlay.rt.wake_deadline(), Some(0.25));
-    overlay.retry = None;
-    overlay.occluded_wait = OCCLUDED_RETRY;
+    overlay.backoff = Default::default();
     let start = Instant::now() - Duration::from_millis(251);
     overlay.rt.wall_start = Some(start);
     assert!(overlay.wake_deadline().is_some_and(|at| at <= Instant::now()), "the timer stays armed while occluded");
@@ -487,17 +486,20 @@ fn overlay_occluded_runs_due_timers_without_frames() {
     for _ in 0..6 {
         let before = Instant::now();
         overlay.missed(Missed::Occluded, false, false);
-        let retry = overlay.retry.expect("an occluded miss re-checks later");
+        let retry = overlay.backoff.deadline().expect("an occluded miss re-checks later");
         assert_eq!(overlay.wake_deadline(), Some(retry));
         waits.push(retry - before);
     }
     assert!(waits[0] >= OCCLUDED_RETRY && waits.windows(2).all(|w| w[1] + Duration::from_millis(1) >= w[0]), "{waits:?}");
     assert!(waits[5] >= OCCLUDED_MAX && waits.iter().all(|&w| w <= OCCLUDED_MAX + Duration::from_millis(50)), "{waits:?}");
     overlay.missed(Missed::Timeout, true, false);
-    assert_eq!(overlay.retry, None);
+    assert_eq!(overlay.backoff.deadline(), None);
     overlay.occluded(false);
     assert!(overlay.dirty, "uncovered, it redraws once");
-    assert_eq!(overlay.occluded_wait, OCCLUDED_RETRY);
+    let now = Instant::now();
+    let mut probe = overlay.backoff;
+    probe.step(crate::window::BackoffEvent::Missed { missed: Missed::Occluded, paced: false, now });
+    assert_eq!(probe.deadline(), Some(now + OCCLUDED_RETRY), "uncovered, the wait starts over");
 
     // An update arriving while it is covered arms its timer at once, not on a later retry.
     overlay.occluded(true);
@@ -527,11 +529,11 @@ fn overlay_misses_back_off_until_their_retry() {
     let now = Instant::now();
     overlay.missed(Missed::Timeout, false, false);
     assert_eq!(overlay.rt.state.polls, 1, "the missed frame still polls");
-    assert!(overlay.retry.is_some_and(|at| at >= now + TIMEOUT_RETRY));
+    assert!(overlay.backoff.deadline().is_some_and(|at| at >= now + TIMEOUT_RETRY));
     assert!(overlay.backing_off(Instant::now()), "an unpaced timeout waits for its retry");
     overlay.missed(Missed::Outdated, true, true);
     assert_eq!(overlay.rt.state.polls, 1, "a frame that already stepped doesn't step again");
-    assert!(overlay.retry.is_some_and(|at| at >= now + OCCLUDED_RETRY) && overlay.backing_off(Instant::now()),
+    assert!(overlay.backoff.deadline().is_some_and(|at| at >= now + OCCLUDED_RETRY) && overlay.backing_off(Instant::now()),
         "an outdated surface waits even while a display link runs");
 
     // A timer comes due while it backs off: it runs now, and the next deadline is a frame on.
@@ -544,10 +546,10 @@ fn overlay_misses_back_off_until_their_retry() {
 
     // Fading out, an occluded miss can't mark it occluded, yet it still waits.
     overlay.presence = Presence::FadingOut { until: Instant::now() + Duration::from_secs(1), length: Duration::from_secs(1), occluded: false };
-    overlay.retry = None;
+    overlay.backoff = Default::default();
     overlay.missed(Missed::Occluded, false, false);
     assert!(overlay.presence.drawing() && overlay.backing_off(Instant::now()));
-    overlay.retry = Some(Instant::now());
+    overlay.backoff_step(crate::window::BackoffEvent::At(Instant::now()));
     assert!(!overlay.backing_off(Instant::now() + Duration::from_millis(1)), "a due retry draws");
 }
 

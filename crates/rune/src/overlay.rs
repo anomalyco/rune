@@ -362,10 +362,8 @@ pub(crate) struct Overlay<T: 'static> {
     #[cfg(target_os = "macos")]
     occlusion_read: bool,
     /// When to try a frame again that had no drawable, or the next frame of motion with no
-    /// display link to pace it.
-    retry: Option<Instant>,
-    /// The next occluded re-check's wait, backing off while the surface stays occluded.
-    occluded_wait: Duration,
+    /// display link to pace it, and the waits behind it (`window::Backoff`).
+    backoff: crate::window::Backoff,
     /// When a hidden retained overlay commits the changes it hasn't yet.
     hidden_pace: crate::window::HiddenPace,
     #[cfg(target_os = "macos")]
@@ -440,8 +438,7 @@ impl<T: 'static> Overlay<T> {
             clock: FrameClock::new(Instant::now()),
             #[cfg(target_os = "macos")]
             occlusion_read: false,
-            retry: None,
-            occluded_wait: crate::window::OCCLUDED_RETRY,
+            backoff: Default::default(),
             hidden_pace: Default::default(),
             #[cfg(target_os = "macos")]
             frame_wake: None,

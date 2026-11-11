@@ -106,7 +106,7 @@ impl<T: 'static> Overlay<T> {
         // notification that should uncover it may never come.
         #[cfg(target_os = "macos")]
         if !prewarm { self.sync_occlusion(); }
-        let gate = frame::Gate { prewarm, occluded: cfg!(target_os = "macos") && self.presence.occluded(), dirty: self.dirty, idle: self.idle, retry: self.retry };
+        let gate = frame::Gate { prewarm, occluded: cfg!(target_os = "macos") && self.presence.occluded(), dirty: self.dirty, idle: self.idle, retry: self.backoff.deadline() };
         match frame::turn(gate, Instant::now) {
             frame::Turn::Occluded { recheck } => {
                 if recheck {
@@ -117,7 +117,7 @@ impl<T: 'static> Overlay<T> {
             }
             // `wake_due` runs due timers while it backs off.
             frame::Turn::Rest | frame::Turn::BackedOff => return false,
-            frame::Turn::Draw => if !prewarm { self.retry = None; },
+            frame::Turn::Draw => if !prewarm { self.backoff_step(crate::window::BackoffEvent::Lapsed); },
         }
         let (Some(live), Some(renderer), Some(gpu)) = (self.surface.live_mut(), self.renderer.as_mut(), self.gpu.as_ref()) else {
             return false;
@@ -272,7 +272,7 @@ impl<T: 'static> Overlay<T> {
         self.runtime_idle = !prewarm && idle_after(&self.rt, runtime_animating, next_tick);
         let rt = &self.rt;
         self.quiet.presented_frame(!prewarm && self.idle && self.compositor.is_none(), |slot| crate::window::Presented::record(slot, rt, &live.config, false));
-        if !prewarm { self.occluded_wait = crate::window::OCCLUDED_RETRY; }
+        if !prewarm { self.backoff.step(crate::window::BackoffEvent::Presented); }
         // The display link wakes this overlay, never ControlFlow::Poll. Without one (it can't
         // be made while the displays sleep, or didn't start), a timer paces its motion.
         #[cfg(target_os = "macos")]
@@ -283,7 +283,7 @@ impl<T: 'static> Overlay<T> {
                 if prewarm || idle { pacing.stop(); }
                 pacing.running()
             });
-            if !paced && !prewarm && !idle { self.retry = Some(now + crate::window::TIMER_FRAME); }
+            if !paced && !prewarm && !idle { self.backoff.step(crate::window::BackoffEvent::At(now + crate::window::TIMER_FRAME)); }
             // A display link that couldn't be made while the displays slept: they're back.
             if !prewarm && live.pacing.is_none() && let Some(wake) = &self.frame_wake {
                 let Backing::Window(window) = &live.backing;
@@ -331,7 +331,7 @@ impl<T: 'static> Overlay<T> {
             self.rt.set_live_visible(false);
         } else if self.presence.drawing() {
             self.dirty = true;
-            self.occluded_wait = crate::window::OCCLUDED_RETRY;
+            self.backoff_step(crate::window::BackoffEvent::Revealed);
             self.rt.set_live_visible(true);
             self.ensure_pacing();
         }

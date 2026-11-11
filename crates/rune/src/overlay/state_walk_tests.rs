@@ -1,11 +1,11 @@
 //! Every short sequence of what reaches an overlay's frame and surface state, driven through
-//! `Quiet`, `turn` and `Surface`, checked after every event against a literal transcription of
-//! the fields and branches they replaced.
+//! `Quiet`, `turn`, `Surface` and `Backoff`, checked after every event against a literal
+//! transcription of the fields and branches they replaced.
 
 use std::time::Duration;
 
 use super::frame::{Gate, Quiet, QuietEffect, QuietEvent, Turn, turn};
-use crate::window::{Missed, OCCLUDED_MAX, OCCLUDED_RETRY};
+use crate::window::{Backoff, BackoffEvent, Missed, OCCLUDED_MAX, OCCLUDED_RETRY, TIMEOUT_RETRY, TIMER_FRAME};
 use super::surface::{Surface, SurfaceEffect};
 use crate::time::Instant;
 
@@ -152,20 +152,35 @@ fn dev_gate(prewarm: bool, occluded: bool, dirty: bool, idle: bool, retry: &mut 
     (false, false, *retry)
 }
 
-/// `draw_frame`'s arms for each answer, as the branch writes them: an occluded miss runs
-/// `missed` (`Missed::Occluded.retry`), and a drawn frame clears the retry.
-fn ours_gate(decided: Turn, prewarm: bool, retry: &mut Option<Instant>, wait: &mut Duration, now: Instant) -> (bool, bool, Option<Instant>) {
+/// `draw_frame`'s arms for each answer, as the branch writes them: an occluded miss steps the
+/// backoff, and a drawn frame clears the wait before it takes its drawable.
+fn ours_gate(decided: Turn, prewarm: bool, backoff: &mut Backoff, now: Instant) -> (bool, bool, Option<Instant>) {
     match decided {
         Turn::Occluded { recheck } => {
-            if recheck { *retry = Missed::Occluded.retry(false, now, wait); }
-            (true, recheck, *retry)
+            if recheck { backoff.step(BackoffEvent::Missed { missed: Missed::Occluded, paced: false, now }); }
+            (true, recheck, backoff.deadline())
         }
-        Turn::Rest | Turn::BackedOff => (true, false, *retry),
+        Turn::Rest | Turn::BackedOff => (true, false, backoff.deadline()),
         Turn::Draw => {
-            if !prewarm { *retry = None; }
-            (false, false, *retry)
+            if !prewarm { backoff.step(BackoffEvent::Lapsed); }
+            (false, false, backoff.deadline())
         }
     }
+}
+
+/// A backoff the overlay starts with: it may draw again at `at`, and its occluded wait starts
+/// at `wait` (as a long covered spell leaves it, or as dev's fields did).
+fn backoff_start(at: Option<Instant>, wait: Duration) -> Backoff {
+    let mut backoff = Backoff::seeded(wait, TIMEOUT_RETRY);
+    if let Some(at) = at { backoff.step(BackoffEvent::At(at)); }
+    backoff
+}
+
+/// The occluded wait behind `backoff`'s deadline, which no query shows: a miss now, on a copy.
+fn occluded_wait(backoff: Backoff, now: Instant) -> Duration {
+    let mut probe = backoff;
+    probe.step(BackoffEvent::Missed { missed: Missed::Occluded, paced: false, now });
+    probe.deadline().expect("an occluded miss always re-checks") - now
 }
 
 #[test]
@@ -183,10 +198,10 @@ fn turn_matches_dev_for_every_gate() {
                 let reads = std::cell::Cell::new(0);
                 let decided = turn(Gate { prewarm, occluded, dirty, idle, retry: start }, || { reads.set(reads.get() + 1); now });
                 let (mut dev_retry, mut dev_wait) = (start, start_wait);
-                let (mut our_retry, mut our_wait) = (start, start_wait);
-                let ours = ours_gate(decided, prewarm, &mut our_retry, &mut our_wait, now);
-                assert_eq!(ours, dev_gate(prewarm, occluded, dirty, idle, &mut dev_retry, &mut dev_wait, now), "{decided:?} {prewarm} {occluded} {dirty} {idle} {start:?} {start_wait:?}");
-                assert_eq!((our_retry, our_wait), (dev_retry, dev_wait), "the retry and wait it leaves: {decided:?}");
+                let mut ours = backoff_start(start, start_wait);
+                let arms = ours_gate(decided, prewarm, &mut ours, now);
+                assert_eq!(arms, dev_gate(prewarm, occluded, dirty, idle, &mut dev_retry, &mut dev_wait, now), "{decided:?} {prewarm} {occluded} {dirty} {idle} {start:?} {start_wait:?}");
+                assert_eq!(occluded_wait(ours, now), dev_wait, "the wait it leaves: {decided:?} {start_wait:?}");
                 assert!(reads.get() <= 1 && (start.is_some() || reads.get() == 0), "the clock is read only to compare a retry");
             }
         }
@@ -210,17 +225,128 @@ fn occluded_misses_back_off_like_dev() {
         TurnOp { delta: Duration::from_secs(3), occluded: false },
     ];
     walk(&alphabet, 5, |seq| {
-        let (mut dev, mut ours) = ((None, OCCLUDED_RETRY), (None, OCCLUDED_RETRY));
+        let mut dev = (None, OCCLUDED_RETRY);
+        let mut ours = backoff_start(None, OCCLUDED_RETRY);
         let mut now = base;
         for (i, &op) in seq.iter().enumerate() {
             now = now + op.delta;
-            let decided = turn(Gate { prewarm: false, occluded: op.occluded, dirty: false, idle: true, retry: ours.0 }, || now);
-            let ours_arms = ours_gate(decided, false, &mut ours.0, &mut ours.1, now);
+            let decided = turn(Gate { prewarm: false, occluded: op.occluded, dirty: false, idle: true, retry: ours.deadline() }, || now);
+            let ours_arms = ours_gate(decided, false, &mut ours, now);
             let dev_arms = dev_gate(false, op.occluded, false, true, &mut dev.0, &mut dev.1, now);
             assert_eq!(ours_arms, dev_arms, "{seq:?} at {i}");
-            assert_eq!(ours, dev, "{seq:?} at {i}");
+            assert_eq!(ours.deadline(), dev.0, "{seq:?} at {i}");
+            assert_eq!(occluded_wait(ours, now), dev.1, "{seq:?} at {i}");
         }
     });
+}
+
+/// origin/dev's overlay fields, as they were: `retry` and `occluded_wait`, written by `missed`,
+/// `wake_due`, `draw_frame`, `stop_drawing`, a show and an occlusion change.
+#[derive(Clone, Copy)]
+struct DevBackoff {
+    retry: Option<Instant>,
+    wait: Duration,
+}
+
+impl DevBackoff {
+    fn new(wait: Duration) -> Self { DevBackoff { retry: None, wait } }
+
+    /// `missed`, through origin/dev's `Missed::retry` rule copied literally (above).
+    fn missed(&mut self, missed: Missed, paced: bool, now: Instant) {
+        self.retry = match missed {
+            Missed::Occluded => dev_occluded_retry(now, &mut self.wait),
+            Missed::Timeout if paced => None,
+            Missed::Timeout => Some(now + TIMEOUT_RETRY),
+            Missed::Outdated | Missed::Unconfigured => Some(now + OCCLUDED_RETRY),
+        };
+    }
+}
+
+/// One thing that reached the overlay's wait, as `overlay/input.rs`, `overlay/draw.rs` and
+/// `overlay/lifetime.rs` fed it.
+#[derive(Clone, Copy, Debug)]
+enum BackoffOp {
+    /// `missed`: a shown frame got no drawable. `paced`: a display link runs, whose next tick
+    /// draws the frame itself.
+    Missed { missed: Missed, paced: bool },
+    /// `wake_due`: a retry due at the manual clock is cleared and asks for a frame.
+    Due,
+    /// `draw_frame`: the frame draws (`presents`: and presents), clearing the wait first.
+    Frame { presents: bool },
+    /// A timer paces motion with no display link to pace it (macOS).
+    At,
+    /// `occluded(false)` or a show: the occluded wait starts over; a wait stands.
+    Reveal,
+    /// `stop_drawing`, on hide: nothing waits.
+    Stop,
+}
+
+/// Both sides take `seq` on a manual clock, checked after every event. `prewarm`: a prewarm
+/// frame, which leaves the wait alone. `scale`: how far each event is from the last.
+fn holds_up(seq: &[BackoffOp], prewarm: bool, scale: u32) {
+    let t0 = Instant::now();
+    let mut dev = DevBackoff::new(OCCLUDED_RETRY);
+    let mut ours = Backoff::default();
+    for (k, &op) in seq.iter().enumerate() {
+        let now = t0 + Duration::from_millis(11) * scale * k as u32;
+        match op {
+            BackoffOp::Missed { missed, paced } => {
+                let effect = ours.step(BackoffEvent::Missed { missed, paced, now });
+                dev.missed(missed, paced, now);
+                assert_eq!(!effect.is_empty(), dev.retry.is_some(), "a wait stops the display link: {op:?} at {k}");
+            }
+            BackoffOp::Due => {
+                if ours.deadline().is_some_and(|at| at <= now) { ours.step(BackoffEvent::Lapsed); }
+                if dev.retry.is_some_and(|at| at <= now) { dev.retry = None; }
+            }
+            BackoffOp::Frame { presents } => {
+                if !prewarm {
+                    ours.step(BackoffEvent::Lapsed);
+                    dev.retry = None;
+                }
+                if presents && !prewarm {
+                    ours.step(BackoffEvent::Presented);
+                    dev.wait = OCCLUDED_RETRY;
+                }
+            }
+            BackoffOp::At => if !prewarm {
+                ours.step(BackoffEvent::At(now + TIMER_FRAME));
+                dev.retry = Some(now + TIMER_FRAME);
+            },
+            BackoffOp::Reveal => {
+                ours.step(BackoffEvent::Revealed);
+                dev.wait = OCCLUDED_RETRY;
+            }
+            BackoffOp::Stop => {
+                ours.step(BackoffEvent::Lapsed);
+                dev.retry = None;
+            }
+        }
+        assert_eq!(ours.deadline(), dev.retry, "{op:?} at {k}, prewarm {prewarm}, scale {scale}");
+        assert_eq!(ours.waiting(now), dev.retry.is_some_and(|at| at > now), "waiting after {op:?} at {k}");
+        assert_eq!(occluded_wait(ours, now), dev.wait, "the wait after {op:?} at {k}, prewarm {prewarm}");
+    }
+}
+
+#[test]
+fn overlay_backoff_matches_dev_for_every_sequence() {
+    let alphabet = [
+        BackoffOp::Missed { missed: Missed::Occluded, paced: false },
+        BackoffOp::Missed { missed: Missed::Timeout, paced: false },
+        BackoffOp::Missed { missed: Missed::Timeout, paced: true },
+        BackoffOp::Missed { missed: Missed::Outdated, paced: false },
+        BackoffOp::Missed { missed: Missed::Unconfigured, paced: false },
+        BackoffOp::Due,
+        BackoffOp::Frame { presents: false },
+        BackoffOp::Frame { presents: true },
+        BackoffOp::At,
+        BackoffOp::Reveal,
+        BackoffOp::Stop,
+    ];
+    // Sparse events leave waits pending; a slow clock runs them out and climbs to the cap.
+    for (prewarm, scale) in [(false, 1), (true, 1), (false, 64)] {
+        walk(&alphabet, 5, |seq| holds_up(seq, prewarm, scale));
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
