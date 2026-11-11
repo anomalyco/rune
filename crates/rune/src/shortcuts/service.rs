@@ -2,7 +2,8 @@ use super::{Shortcut, ShortcutError, ShortcutId, Sink, NativeBackend};
 #[cfg(test)]
 use super::Backend;
 use crate::{Tx, app::Shared, runtime::Waker};
-use std::{collections::HashMap, rc::Rc, sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, AtomicU32, Ordering}}, thread::ThreadId};
+use machine::{AttachEffect, AttachEvent, Attachment, BindEffect, BindEvent, Bindings, step_attachment, step_bindings};
+use std::{collections::HashMap, rc::Rc, sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, AtomicU32, Ordering}}};
 #[cfg(not(target_os = "linux"))]
 use std::cell::RefCell;
 #[cfg(not(target_os = "linux"))]
@@ -10,10 +11,20 @@ use std::sync::atomic::AtomicUsize;
 #[cfg(any(test, not(target_os = "linux")))]
 use std::sync::mpsc;
 
+mod machine;
+
 type Handler<S> = Arc<dyn Fn(&mut S, &mut Tx) + Send + Sync>;
 type Pending<S> = (Result<Shortcut, ShortcutError>, Handler<S>);
 #[cfg(not(target_os = "linux"))]
 type Job = Box<dyn FnOnce(&mut Engine) + Send>;
+#[cfg(target_os = "linux")]
+type Job = std::convert::Infallible;
+/// How a call reaches the engine: shared on Linux, through `ENGINES` elsewhere.
+#[cfg(target_os = "linux")]
+type EngineRef = Arc<Mutex<Engine>>;
+#[cfg(not(target_os = "linux"))]
+type EngineRef = ();
+type Connect = fn(bool, Sink) -> Result<NativeBackend, ShortcutError>;
 #[cfg(not(target_os = "linux"))]
 static NEXT_OWNER: AtomicUsize = AtomicUsize::new(1);
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
@@ -21,18 +32,10 @@ static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 /// between two Apps can name its owner. Headless registrations stay out of it.
 static NATIVE: Mutex<Vec<(ShortcutId, Shortcut, &'static str)>> = Mutex::new(Vec::new());
 
-#[derive(Default)]
-struct Routing {
-    owner: Option<ThreadId>, wake: Option<Waker>,
-    #[cfg(not(target_os = "linux"))]
-    jobs: Vec<Job>,
-}
 struct Control {
     #[cfg(not(target_os = "linux"))]
     key: usize,
-    routing: Mutex<Routing>,
-    #[cfg(target_os = "linux")]
-    engine: Mutex<Option<Arc<Mutex<Engine>>>>,
+    attachment: Mutex<Attachment<EngineRef, Job>>,
 }
 
 pub(crate) struct Hub<S> {
@@ -50,9 +53,7 @@ impl<S> Default for Hub<S> {
             control: Arc::new(Control {
                 #[cfg(not(target_os = "linux"))]
                 key: NEXT_OWNER.fetch_add(1, Ordering::Relaxed),
-                routing: Mutex::default(),
-                #[cfg(target_os = "linux")]
-                engine: Mutex::default(),
+                attachment: Mutex::new(Attachment::Detached),
             }),
             pending: Mutex::default(), handlers: Arc::default(), errors: Mutex::default(), title: OnceLock::new(), unmodified: AtomicBool::new(false),
         }
@@ -67,53 +68,67 @@ thread_local! {
 
 struct Engine {
     title: &'static str,
-    headless: bool,
     wayland: bool,
     sink: Sink,
-    native: Option<NativeBackend>,
-    registrations: HashMap<ShortcutId, Shortcut>,
+    connect: Connect,
+    bindings: Bindings<NativeBackend>,
 }
 
 impl Engine {
     fn register(&mut self, id: ShortcutId, shortcut: Shortcut) -> Result<(), ShortcutError> {
-        if self.registrations.values().any(|s| s == &shortcut) { return Err(ShortcutError::Conflict); }
-        if !self.headless {
-            // Another App in this process holds it; some backends (the portal) wouldn't refuse.
-            if NATIVE.lock().unwrap().iter().any(|(_, s, _)| s == &shortcut) { return Err(ShortcutError::Conflict); }
-            if self.native.is_none() { self.native = Some(super::backend(self.wayland, self.sink.clone())?); }
-            if let Err(error) = self.native.as_mut().unwrap().register(id, &shortcut) {
-                if self.registrations.is_empty() { self.native = None; }
-                return Err(error);
-            }
-        }
-        if !self.headless { NATIVE.lock().unwrap().push((id, shortcut.clone(), self.title)); }
-        self.registrations.insert(id, shortcut);
-        Ok(())
+        // Another App in this process holds it; some backends (the portal) wouldn't refuse.
+        let claimed = !matches!(self.bindings, Bindings::Virtual(_)) && NATIVE.lock().unwrap().iter().any(|(_, s, _)| s == &shortcut);
+        self.apply(BindEvent::Register { id, shortcut, claimed })
     }
 
     fn unregister(&mut self, id: ShortcutId) -> Result<(), ShortcutError> {
-        if !self.registrations.contains_key(&id) { return Err(ShortcutError::UnknownId); }
-        if let Some(native) = self.native.as_mut() { native.unregister(id)?; }
-        self.registrations.remove(&id);
-        NATIVE.lock().unwrap().retain(|(native, ..)| *native != id);
-        // Drop the connection/listener when the last registration goes away.
-        if self.registrations.is_empty() { self.native = None; }
-        Ok(())
+        self.apply(BindEvent::Unregister(id))
     }
 
     /// Who holds `shortcut`: this App, another App in this process, or the platform.
     /// Headless engines answer only for their own virtual registrations.
     fn owner(&self, shortcut: &Shortcut) -> Option<String> {
-        if self.registrations.values().any(|s| s == shortcut) { return Some(self.title.into()); }
-        if self.headless { return None; }
+        if self.bindings.find(shortcut).is_some() { return Some(self.title.into()); }
+        if matches!(self.bindings, Bindings::Virtual(_)) { return None; }
         let other = NATIVE.lock().unwrap().iter().find(|(_, s, _)| s == shortcut).map(|(.., title)| (*title).into());
         other.or_else(|| super::system_owner(shortcut))
     }
 
     fn release(&mut self) {
-        self.native = None;
-        NATIVE.lock().unwrap().retain(|(id, ..)| !self.registrations.contains_key(id));
-        self.registrations.clear();
+        let _ = self.apply(BindEvent::Release);
+    }
+
+    fn native(&mut self) -> &mut NativeBackend {
+        let Bindings::Connected { native, .. } = &mut self.bindings else { unreachable!("the machine only asks a connected engine") };
+        native
+    }
+
+    /// Steps the bindings and carries out what they ask for, answering with what came of it.
+    fn apply(&mut self, event: BindEvent<NativeBackend>) -> Result<(), ShortcutError> {
+        let mut answer = Ok(());
+        for effect in step_bindings(&mut self.bindings, event) {
+            match effect {
+                BindEffect::Refuse(error) => answer = Err(error),
+                BindEffect::Connect { id, shortcut } => answer = match (self.connect)(self.wayland, self.sink.clone()) {
+                    Ok(native) => self.apply(BindEvent::Opened { native, id, shortcut }),
+                    Err(error) => Err(error),
+                },
+                BindEffect::Bind { id, shortcut } => answer = match self.native().register(id, &shortcut) {
+                    Ok(()) => self.apply(BindEvent::Bound { id, shortcut }),
+                    Err(error) => self.apply(BindEvent::Rejected(error)),
+                },
+                BindEffect::Unbind(id) => answer = match self.native().unregister(id) {
+                    Ok(()) => self.apply(BindEvent::Unbound(id)),
+                    Err(error) => Err(error),
+                },
+                BindEffect::Claim { id, shortcut } => NATIVE.lock().unwrap().push((id, shortcut, self.title)),
+                BindEffect::Disclaim(id) => NATIVE.lock().unwrap().retain(|(native, ..)| *native != id),
+                BindEffect::DisclaimAll(registrations) => NATIVE.lock().unwrap().retain(|(id, ..)| !registrations.contains_key(id)),
+                // Drop the connection/listener when the last registration goes away.
+                BindEffect::Disconnect(native) => drop(native),
+            }
+        }
+        answer
     }
 }
 
@@ -123,38 +138,37 @@ impl Drop for Engine {
 
 impl Control {
     fn invoke<T: Send + 'static>(&self, f: impl FnOnce(&mut Engine) -> Result<T, ShortcutError> + Send + 'static) -> Result<T, ShortcutError> {
+        let mut route = self.attachment.lock().unwrap();
+        let call = AttachEvent::Call { from: std::thread::current().id(), shared: cfg!(target_os = "linux") };
+        let effect = step_attachment(&mut route, call).into_iter().next();
         #[cfg(target_os = "linux")]
         {
-            let route = self.routing.lock().unwrap();
-            route.owner.ok_or(ShortcutError::NotRunning)?;
-            let engine = self.engine.lock().unwrap().clone().ok_or(ShortcutError::NotRunning)?;
+            let Some(AttachEffect::Run { engine, wake }) = effect else { return Err(ShortcutError::NotRunning) };
             // Acquire the engine before releasing routing, so shutdown cannot race a new call.
             let mut engine = engine.lock().unwrap();
-            let wake = route.wake.clone();
             drop(route);
             let result = f(&mut engine);
             drop(engine);
-            if let Some(wake) = wake { wake(); }
+            wake();
             result
         }
         #[cfg(not(target_os = "linux"))]
-        {
-            let mut route = self.routing.lock().unwrap();
-            let owner = route.owner.ok_or(ShortcutError::NotRunning)?;
-            if owner == std::thread::current().id() {
-                let wake = route.wake.clone();
+        match effect {
+            Some(AttachEffect::Run { engine: (), wake }) => {
                 drop(route);
                 let engine = ENGINES.with(|engines| engines.borrow().get(&self.key).cloned()).ok_or(ShortcutError::NotRunning)?;
                 let result = f(&mut engine.borrow_mut());
-                if let Some(wake) = wake { wake(); }
-                return result;
+                wake();
+                result
             }
-            let (tx, rx) = mpsc::sync_channel(1);
-            route.jobs.push(Box::new(move |engine| { let _ = tx.send(f(engine)); }));
-            let wake = route.wake.clone();
-            drop(route);
-            if let Some(wake) = wake { wake(); }
-            rx.recv().unwrap_or(Err(ShortcutError::NotRunning))
+            Some(AttachEffect::Wait) => {
+                let (tx, rx) = mpsc::sync_channel(1);
+                let posted = step_attachment(&mut route, AttachEvent::Post(Box::new(move |engine| { let _ = tx.send(f(engine)); })));
+                drop(route);
+                for effect in posted { if let AttachEffect::Wake(wake) = effect { wake(); } }
+                rx.recv().unwrap_or(Err(ShortcutError::NotRunning))
+            }
+            _ => Err(ShortcutError::NotRunning),
         }
     }
 }
@@ -199,8 +213,7 @@ impl<S: 'static> Hub<S> {
     pub(crate) fn fire(&self, shortcut: &Shortcut) -> Result<(), ShortcutError> {
         let shortcut = shortcut.clone();
         self.control.invoke(move |engine| {
-            let id = engine.registrations.iter().find(|(_, s)| **s == shortcut).map(|(id, _)| *id)
-                .ok_or(ShortcutError::UnknownId)?;
+            let id = engine.bindings.find(&shortcut).ok_or(ShortcutError::UnknownId)?;
             (engine.sink)(id, None);
             Ok(())
         })
@@ -233,16 +246,15 @@ impl Guard {
         });
         let control = shared.shortcuts.control.clone();
         let title = shared.shortcuts.title.get().copied().unwrap_or_default();
-        let engine = Engine { title, headless, wayland, sink, native: None, registrations: HashMap::new() };
+        let bindings = if headless { Bindings::Virtual(HashMap::new()) } else { Bindings::Disconnected };
+        let engine = Engine { title, wayland, sink, connect: super::backend, bindings };
         #[cfg(not(target_os = "linux"))]
-        ENGINES.with(|engines| engines.borrow_mut().insert(control.key, Rc::new(RefCell::new(engine))));
+        let engine = ENGINES.with(|engines| { engines.borrow_mut().insert(control.key, Rc::new(RefCell::new(engine))); });
         #[cfg(target_os = "linux")]
-        { *control.engine.lock().unwrap() = Some(Arc::new(Mutex::new(engine))); }
-        {
-            let mut route = control.routing.lock().unwrap();
-            route.owner = Some(std::thread::current().id());
-            route.wake = Some(wake);
-        }
+        let engine = Arc::new(Mutex::new(engine));
+        let attached = step_attachment(&mut control.attachment.lock().unwrap(), AttachEvent::Attach { owner: std::thread::current().id(), wake, engine });
+        // A replaced engine goes outside the lock, before this host's first registration.
+        for effect in attached { let AttachEffect::Superseded(_replaced) = effect else { continue }; }
         let handlers = shared.shortcuts.handlers.clone();
         let guard = Self { control, cleanup: Some(Box::new(move || handlers.lock().unwrap().clear())), _thread: std::marker::PhantomData };
         for (shortcut, handler) in std::mem::take(&mut *shared.shortcuts.pending.lock().unwrap()) {
@@ -257,7 +269,8 @@ impl Guard {
     pub(crate) fn drain(&self) {
         #[cfg(not(target_os = "linux"))]
         {
-            let jobs = std::mem::take(&mut self.control.routing.lock().unwrap().jobs);
+            let drained = step_attachment(&mut self.control.attachment.lock().unwrap(), AttachEvent::Drain);
+            let Some(AttachEffect::Jobs(jobs)) = drained.into_iter().next() else { return };
             let engine = ENGINES.with(|engines| engines.borrow().get(&self.control.key).cloned());
             if let Some(engine) = engine { for job in jobs { job(&mut engine.borrow_mut()); } }
         }
@@ -266,20 +279,26 @@ impl Guard {
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        // Dropping queued reply senders releases waiting callers with NotRunning.
-        *self.control.routing.lock().unwrap() = Routing::default();
+        let closed = step_attachment(&mut self.control.attachment.lock().unwrap(), AttachEvent::Close);
+        for effect in closed {
+            let AttachEffect::Release { jobs, engine } = effect else { continue };
+            // Dropping queued reply senders releases waiting callers with NotRunning.
+            drop(jobs);
+            #[cfg(target_os = "linux")]
+            engine.lock().unwrap().release();
+            #[cfg(not(target_os = "linux"))]
+            let () = engine;
+        }
         #[cfg(not(target_os = "linux"))]
         ENGINES.with(|engines| engines.borrow_mut().remove(&self.control.key));
-        #[cfg(target_os = "linux")]
-        if let Some(engine) = self.control.engine.lock().unwrap().take() {
-            engine.lock().unwrap().release();
-        }
         if let Some(cleanup) = self.cleanup.take() { cleanup(); }
     }
 }
 
 #[cfg(test)]
 mod lifecycle_tests;
+#[cfg(test)]
+mod machine_tests;
 
 #[cfg(test)]
 mod tests {
@@ -293,9 +312,10 @@ mod tests {
             fn unregister(&mut self, _: ShortcutId) -> Result<(), ShortcutError> { Ok(()) }
         }
         for error in [ShortcutError::Conflict, ShortcutError::Unsupported, ShortcutError::PermissionDenied, ShortcutError::Backend("disconnected".into())] {
-            let mut engine = Engine { title: "mock", headless: false, wayland: false, sink: Arc::new(|_, _| {}), native: Some(Box::new(Mock(error.clone()))), registrations: HashMap::new() };
+            let bindings = Bindings::Connected { native: Box::new(Mock(error.clone())) as NativeBackend, registrations: HashMap::new() };
+            let mut engine = Engine { title: "mock", wayland: false, sink: Arc::new(|_, _| {}), connect: super::super::backend, bindings };
             assert_eq!(engine.register(ShortcutId(1), "ctrl+a".parse().unwrap()), Err(error));
-            assert!(engine.registrations.is_empty());
+            assert!(matches!(engine.bindings, Bindings::Disconnected));
         }
         assert_eq!(super::super::native_status(-9878, -9878), Err(ShortcutError::Conflict));
         assert_eq!(super::super::native_status(1409, 1409), Err(ShortcutError::Conflict));
@@ -310,7 +330,7 @@ mod tests {
             fn unregister(&mut self, _: ShortcutId) -> Result<(), ShortcutError> { Ok(()) }
         }
         let chord: Shortcut = "ctrl+alt+shift+f17".parse().unwrap();
-        let native = |title| Engine { title, headless: false, wayland: false, sink: Arc::new(|_, _| {}), native: Some(Box::new(Accept)), registrations: HashMap::new() };
+        let native = |title| Engine { title, wayland: false, sink: Arc::new(|_, _| {}), connect: super::super::backend, bindings: Bindings::Connected { native: Box::new(Accept) as NativeBackend, registrations: HashMap::new() } };
         let (mut first, mut second) = (native("First"), native("Second"));
         first.register(ShortcutId(u32::MAX - 1), chord.clone()).unwrap();
         assert_eq!(second.register(ShortcutId(u32::MAX - 2), chord.clone()), Err(ShortcutError::Conflict),
