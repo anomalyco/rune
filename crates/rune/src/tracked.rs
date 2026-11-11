@@ -45,16 +45,25 @@ impl<T> Tracked<T> {
         Tracked { id: NEXT.fetch_add(1, Ordering::Relaxed), value }
     }
 
+    // These are associated functions (`Tracked::touch(&field)`), as `Rc`'s are, so they never
+    // shadow a method of the value: `field.touch()` still calls the value's own.
+
     /// The value, without recording a read: for code outside the view (handlers, polls) that
     /// wants to read without paying the check, and for comparing.
-    pub fn untracked(&self) -> &T {
-        &self.value
+    pub fn untracked(this: &Self) -> &T {
+        &this.value
     }
 
     /// Marks the value changed without borrowing it: for a value with interior mutability that
     /// changed behind a shared reference.
-    pub fn touch(&self) {
-        bump(self.id);
+    pub fn touch(this: &Self) {
+        bump(this.id);
+    }
+
+    /// How many writes the value has seen. A region that keeps rebuilding read a value whose
+    /// version moves every frame: compare versions to find which.
+    pub fn version(this: &Self) -> u64 {
+        version(this.id)
     }
 
 }
