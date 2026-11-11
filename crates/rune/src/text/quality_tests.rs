@@ -516,7 +516,7 @@ fn span_ring_subranges_case_elision_and_cache_changes() {
         .span_ring(3, 5, Color::BLACK, 1.0).text_case(TextCase::Lowercase).text.unwrap();
     cased.apply_case();
     assert_eq!(cased.content, "i\u{307} xy");
-    assert_eq!((cased.rings[0].0, cased.rings[0].1), (4, 6));
+    assert_eq!((cased.cold.rings[0].0, cased.cold.rings[0].1), (4, 6));
     assert_eq!((cased.spans[1].start, cased.spans[1].end), (4, 6));
 
     fn truncated(_: &(), _: &mut Cx<()>) -> El {

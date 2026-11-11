@@ -195,7 +195,7 @@ fn spec_elide_keys(spec: &TextSpec, scale: f32, mode: u8, param: usize, max_w: f
         return None;
     }
     let shape = spec.shape_key(scale).unwrap_or_else(|| spec.fresh_shape_key(scale));
-    let blocks = spec.blocks.iter().any(|&b| b != crate::edit::Block::Paragraph).then_some(spec.blocks.as_slice());
+    let blocks = spec.cold.blocks.iter().any(|&b| b != crate::edit::Block::Paragraph).then_some(spec.cold.blocks.as_slice());
     Some((shape, crate::text::elide_key(shape, mode, param, max_w, align, blocks)))
 }
 
@@ -346,7 +346,7 @@ pub(super) fn compute_layout(taffy: &mut LayoutEngine, root: SlotId, room: Size<
             } else {
                 None
             };
-            if let Some((run, at)) = &spec.advance_in {
+            if let Some((run, at)) = &spec.cold.advance_in {
                 let r = text.run_layout(run, spec.style, scale);
                 if let Some(w) = r.advance(*at, scale) {
                     return Size {

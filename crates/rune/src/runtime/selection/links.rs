@@ -139,7 +139,7 @@ impl<S: 'static> Runtime<S> {
         let [ox, oy] = origin(n, spec, layout, rect, s, z);
         let px = s / z.max(1e-4);
         let mut out = Vec::new();
-        for (k, l) in spec.links.iter().enumerate() {
+        for (k, l) in spec.cold.links.iter().enumerate() {
             let (a, b) = drawn(n, l.start, l.end);
             for (bb, _) in boxes(layout, layout_len(n, spec), a, b) {
                 out.push((k, [ox + bb.x0 as f32 / px, oy + bb.y0 as f32 / px, ox + bb.x1 as f32 / px, oy + bb.y1 as f32 / px]));
@@ -150,7 +150,7 @@ impl<S: 'static> Runtime<S> {
 
     /// The link of node `i` under window point (x, y).
     pub(super) fn link_at(&self, i: usize, x: f32, y: f32) -> Option<usize> {
-        if self.nodes[i].text.as_ref().is_none_or(|t| t.links.is_empty()) { return None; }
+        if self.nodes[i].text.as_ref().is_none_or(|t| t.cold.links.is_empty()) { return None; }
         let (rect, x, y) = self.unturned_box_and_point(i, x, y);
         self.link_boxes(i, rect).into_iter()
             .find(|(_, r)| contains(*r, x, y)).map(|(k, _)| k)
@@ -159,7 +159,7 @@ impl<S: 'static> Runtime<S> {
     /// Hit rects for node `i`: only its links' boxes, clipped like `clipped`. False when it
     /// has no links, or is selectable (it takes its whole box).
     pub(super) fn push_link_hits(&mut self, i: usize, rect: [f32; 4], clipped: [f32; 4]) -> bool {
-        if self.nodes[i].text.as_ref().is_none_or(|t| t.links.is_empty() || t.selectable) { return false; }
+        if self.nodes[i].text.as_ref().is_none_or(|t| t.cold.links.is_empty() || t.selectable) { return false; }
         let id = self.nodes[i].id;
         for (_, r) in self.link_boxes(i, rect) {
             let c = [r[0].max(clipped[0]), r[1].max(clipped[1]), r[2].min(clipped[2]), r[3].min(clipped[3])];
@@ -180,10 +180,10 @@ impl<S: 'static> Runtime<S> {
 
     /// The paints node `i`'s links show this frame.
     pub(super) fn link_fx(&self, i: usize) -> LinkFx {
-        let Some(spec) = self.nodes[i].text.as_ref().filter(|t| !t.links.is_empty()) else { return LinkFx(Vec::new()) };
+        let Some(spec) = self.nodes[i].text.as_ref().filter(|t| !t.cold.links.is_empty()) else { return LinkFx(Vec::new()) };
         let (hovered, pressed, focused) = self.link_states(i);
         let mut fx = Vec::new();
-        for (k, l) in spec.links.iter().enumerate() {
+        for (k, l) in spec.cold.links.iter().enumerate() {
             let paint = if pressed == Some(k) {
                 l.pressed.unwrap_or(l.hover)
             } else if hovered == Some(k) {
@@ -197,7 +197,7 @@ impl<S: 'static> Runtime<S> {
             } else { continue };
             let (a, b) = drawn(&self.nodes[i], l.start, l.end);
             let pad = spec.spans.iter().find(|sp| sp.start < l.end && sp.end > l.start && sp.bg.is_some()).map_or(2.0, |sp| sp.bg_pad);
-            fx.push((a, b, paint, pad, !spec.rings.is_empty()));
+            fx.push((a, b, paint, pad, !spec.cold.rings.is_empty()));
         }
         LinkFx(fx)
     }
@@ -215,7 +215,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn press_link(&mut self, path: &str, k: usize, tx: &mut Tx) -> bool {
         let Some((f, id)) = self.node(path).and_then(|n| {
             let t = n.text.as_ref()?;
-            Some((t.on_link.clone()?, t.links.get(k)?.id.clone()))
+            Some((t.cold.on_link.clone()?, t.cold.links.get(k)?.id.clone()))
         }) else { return false };
         log_event!(self, "link {path} {id}");
         (f.0)(states!(self), &id, tx);
@@ -224,7 +224,7 @@ impl<S: 'static> Runtime<S> {
 
     /// Node `i`'s link under (x, y), if its text takes secondary presses on links.
     pub(super) fn secondary_link_at(&self, i: usize, x: f32, y: f32) -> Option<usize> {
-        self.nodes[i].text.as_ref()?.on_link_secondary.as_ref()?;
+        self.nodes[i].text.as_ref()?.cold.on_link_secondary.as_ref()?;
         self.link_at(i, x, y)
     }
 
@@ -232,7 +232,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn secondary_press_link(&mut self, path: &str, k: usize, point: PointerEvent, tx: &mut Tx) -> bool {
         let Some((f, id)) = self.node(path).and_then(|n| {
             let t = n.text.as_ref()?;
-            Some((t.on_link_secondary.clone()?, t.links.get(k)?.id.clone()))
+            Some((t.cold.on_link_secondary.clone()?, t.cold.links.get(k)?.id.clone()))
         }) else { return false };
         log_event!(self, "link secondary {path} {id}");
         (f.0)(states!(self), &id, point.window(), tx);
@@ -242,14 +242,14 @@ impl<S: 'static> Runtime<S> {
     /// Centre of the first drawn line box of the link whose id is `id`, in points.
     pub(super) fn find_link(&self, id: &str) -> Option<(f32, f32)> {
         (0..self.nodes.len()).filter(|&i| !self.subtree_exiting(i)).find_map(|i| {
-            let k = self.nodes[i].text.as_ref()?.links.iter().position(|l| l.id == id)?;
+            let k = self.nodes[i].text.as_ref()?.cold.links.iter().position(|l| l.id == id)?;
             let (_, r) = self.link_boxes(i, self.drawn_box(i)).into_iter().find(|(j, _)| *j == k)?;
             Some(((r[0] + r[2]) * 0.5, (r[1] + r[3]) * 0.5))
         })
     }
 
     pub(super) fn link_count(&self, i: usize) -> usize {
-        self.nodes[i].text.as_ref().map_or(0, |t| t.links.len())
+        self.nodes[i].text.as_ref().map_or(0, |t| t.cold.links.len())
     }
 
     /// Tab inside the focused text's links: moves to its next (or previous) link and returns
@@ -287,14 +287,14 @@ impl<S: 'static> Runtime<S> {
     /// The id of focused node `i`'s focused link, which tools list as its own element.
     pub(super) fn focused_link_id(&self, i: usize) -> Option<String> {
         let k = self.links.focus?;
-        self.nodes[i].text.as_ref()?.links.get(k).map(|l| l.id.clone())
+        self.nodes[i].text.as_ref()?.cold.links.get(k).map(|l| l.id.clone())
     }
 
     /// The Menu key on focused node `i`'s focused link: its `on_link_secondary`, at the
     /// bottom-left of its first line box.
     pub(super) fn focused_link_menu(&mut self, i: usize, tx: &mut Tx) -> bool {
         let Some(k) = self.links.focus.filter(|&k| k < self.link_count(i)) else { return false };
-        if self.nodes[i].text.as_ref().is_none_or(|t| t.on_link_secondary.is_none()) { return false; }
+        if self.nodes[i].text.as_ref().is_none_or(|t| t.cold.on_link_secondary.is_none()) { return false; }
         let Some((_, r)) = self.link_boxes(i, self.drawn_box(i)).into_iter().find(|(j, _)| *j == k) else { return false };
         let path = self.nodes[i].path.clone();
         let point = self.pointer_event(i, r[0], r[3]);
@@ -313,7 +313,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn link_elements(&self, elements: &mut Vec<ElementInfo>) {
         for i in 0..self.nodes.len() {
             let n = &self.nodes[i];
-            let Some(spec) = n.text.as_ref().filter(|t| !t.links.is_empty()) else { continue };
+            let Some(spec) = n.text.as_ref().filter(|t| !t.cold.links.is_empty()) else { continue };
             let Some(at) = elements.iter().position(|e| e.path == n.path) else { continue };
             let text = elements[at].clone();
             elements[at].focusable = false;
@@ -326,7 +326,7 @@ impl<S: 'static> Runtime<S> {
             let union = |k: usize, bs: &[(usize, [f32; 4])]| bs.iter().filter(|(j, _)| *j == k).fold(None, |u: Option<[f32; 4]>, (_, r)| {
                 Some(u.map_or(*r, |u| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]))
             });
-            for (k, l) in spec.links.iter().enumerate() {
+            for (k, l) in spec.cold.links.iter().enumerate() {
                 let Some(r) = union(k, &boxes) else { continue };
                 let t = union(k, &targets).unwrap_or(r);
                 let v = text.visible;
@@ -369,13 +369,13 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn highlight_boxes_in(&self, nodes: &[Node], i: usize, rect: [f32; 4], z: f32) -> Vec<(usize, [f32; 4])> {
         let n = &nodes[i];
         let (Some(spec), Some(layout)) = (&n.text, &n.text_layout) else { return Vec::new() };
-        if spec.highlights.is_empty() { return Vec::new(); }
+        if spec.cold.highlights.is_empty() { return Vec::new(); }
         let s = self.env.scale;
         let [ox, oy] = origin(n, spec, layout, rect, s, z);
         let px = s / z.max(1e-4);
         let len = layout_len(n, spec);
         let mut out = Vec::new();
-        for (k, h) in spec.highlights.iter().enumerate() {
+        for (k, h) in spec.cold.highlights.iter().enumerate() {
             let (a, b) = drawn(n, h.start, h.end);
             for (bb, _) in boxes(layout, len, a, b) {
                 out.push((k, [ox + bb.x0 as f32 / px, oy + bb.y0 as f32 / px, ox + bb.x1 as f32 / px, oy + bb.y1 as f32 / px]));
@@ -396,11 +396,11 @@ impl<S: 'static> Runtime<S> {
         let mut union: Option<[f32; 4]> = None;
         let mut visit = |i: usize| {
             let n = &nodes[i];
-            let Some(spec) = n.text.as_ref().filter(|t| !t.highlights.is_empty()) else { return };
+            let Some(spec) = n.text.as_ref().filter(|t| !t.cold.highlights.is_empty()) else { return };
             if !n.parent.is_none_or(|p| super::in_scope(&nodes[p].path, scope)) {
                 return;
             }
-            let matches: Vec<_> = spec.highlights.iter().map(|h| h.key.as_deref().is_some_and(|hkey| {
+            let matches: Vec<_> = spec.cold.highlights.iter().map(|h| h.key.as_deref().is_some_and(|hkey| {
                 crate::flight::selects_under(key, &n.path, hkey)
             })).collect();
             if matches.iter().any(|m| *m) {
@@ -423,7 +423,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn find_highlight(&self, key: &str) -> Option<(f32, f32)> {
         (0..self.nodes.len()).filter(|&i| !self.subtree_exiting(i)).find_map(|i| {
             let n = &self.nodes[i];
-            let k = n.text.as_ref()?.highlights.iter().position(|h| {
+            let k = n.text.as_ref()?.cold.highlights.iter().position(|h| {
                 h.key.as_deref().is_some_and(|hk| crate::flight::selects_under(key, &n.path, hk))
             })?;
             let (_, r) = self.highlight_boxes(i, self.drawn_box(i)).into_iter().find(|(j, _)| *j == k)?;
@@ -433,24 +433,24 @@ impl<S: 'static> Runtime<S> {
 
     /// Reports each text highlight as its own `"mark"` element after its text.
     pub(super) fn highlight_elements(&self, elements: &mut Vec<ElementInfo>) {
-        if !self.nodes.iter().any(|n| n.text.as_ref().is_some_and(|t| !t.highlights.is_empty())) { return; }
+        if !self.nodes.iter().any(|n| n.text.as_ref().is_some_and(|t| !t.cold.highlights.is_empty())) { return; }
         let text_elements: std::collections::HashMap<_, _> = elements.iter().enumerate().map(|(i, e)| (e.path.clone(), i)).collect();
         for i in 0..self.nodes.len() {
             let n = &self.nodes[i];
-            let Some(spec) = n.text.as_ref().filter(|t| !t.highlights.is_empty()) else { continue };
+            let Some(spec) = n.text.as_ref().filter(|t| !t.cold.highlights.is_empty()) else { continue };
             let Some(&at) = text_elements.get(&n.path) else { continue };
             let text = elements[at].clone();
             let boxes = self.highlight_boxes(i, self.drawn_box(i));
             let targets = self.highlight_boxes(i, n.target);
             let unions = |bs: &[(usize, [f32; 4])]| {
-                let mut out = vec![None; spec.highlights.len()];
+                let mut out = vec![None; spec.cold.highlights.len()];
                 for &(k, r) in bs {
                     out[k] = Some(out[k].map_or(r, |u: [f32; 4]| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
                 }
                 out
             };
             let (boxes, targets) = (unions(&boxes), unions(&targets));
-            for (k, h) in spec.highlights.iter().enumerate() {
+            for (k, h) in spec.cold.highlights.iter().enumerate() {
                 let Some(r) = boxes[k] else { continue };
                 let t = targets[k].unwrap_or(r);
                 let v = text.visible;

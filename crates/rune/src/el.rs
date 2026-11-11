@@ -89,51 +89,7 @@ pub fn effect(mark: u32) -> El {
 pub fn text(content: impl Into<String>) -> El {
     let mut e = base(FlexDirection::Row);
     e.role = RoleTag::TEXT;
-    e.text = Some(crate::cold::SharedBox::new(TextSpec {
-        content: content.into(),
-        style: crate::tok::type_::BODY,
-        color: Color::WHITE,
-        inked: false,
-        align: Align::Start,
-        spans: Vec::new(),
-        wrap: false,
-        reveal: -1.0,
-        truncate: false,
-        elide: Elide::End,
-        max_lines: 0,
-        truncate_fade: false,
-        fade_em: TRUNCATE_FADE_EM,
-        justify: false,
-        live: None,
-        links: Vec::new(),
-        on_link: None,
-        on_link_secondary: None,
-        advance_in: None,
-        case: None,
-        source: None,
-        selectable: false,
-        selection: DEFAULT_SELECTION,
-        selection_style: None,
-        uncopied: Vec::new(),
-        copy_breaks: [1, 1],
-        copy_prefix: None,
-        rings: Vec::new(),
-        span_radius: crate::text::SPAN_RADIUS,
-        strikes: Vec::new(),
-        highlights: Vec::new(),
-        blocks: Vec::new(),
-        soft_breaks: Vec::new(),
-        pills: Vec::new(),
-        pill_colors: None,
-        rich_style: crate::edit::RichStyle::default(),
-        redacted: false,
-        secure_revealed: false,
-        wrap_anywhere: false,
-        exact_lines: true,
-        flow: None,
-        plaintext: false,
-        shape: None,
-    }));
+    e.text = Some(crate::cold::SharedBox::new(TextSpec::new(content.into())));
     e
 }
 
@@ -183,7 +139,7 @@ impl std::fmt::Debug for LinkSecondaryFn {
 }
 
 /// Default `truncate_fade` edge, in ems.
-const TRUNCATE_FADE_EM: f32 = 1.5;
+pub(crate) const TRUNCATE_FADE_EM: f32 = 1.5;
 
 /// A root paste handler; `rich` is true only for [`El::on_paste_content`], so a plain
 /// [`El::on_paste`] never asks the OS clipboard for HTML or RTF.

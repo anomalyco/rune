@@ -145,7 +145,7 @@ impl TextSystem {
         align: Alignment,
     ) -> Rc<Layout<Ink>> {
         let shape = spec.shape_key(scale);
-        self.layout_keyed(shape, &spec.content, &spec.spans, &spec.blocks, &spec.pills, spec.style, scale, max_width, align, spec.wrap_anywhere, !spec.redacted, spec.base())
+        self.layout_keyed(shape, &spec.content, &spec.spans, &spec.cold.blocks, &spec.cold.pills, spec.style, scale, max_width, align, spec.wrap_anywhere, !spec.redacted, spec.base())
     }
 
     /// [`Self::layout_blocks_inner`] of a cut of `spec`'s content, in its direction.
@@ -160,7 +160,7 @@ impl TextSystem {
         align: Alignment,
         cache: bool,
     ) -> Rc<Layout<Ink>> {
-        self.layout_keyed(None, text, spans, &spec.blocks, &[], spec.style, scale, max_width, align, spec.wrap_anywhere, cache, spec.base())
+        self.layout_keyed(None, text, spans, &spec.cold.blocks, &[], spec.style, scale, max_width, align, spec.wrap_anywhere, cache, spec.base())
     }
 }
 

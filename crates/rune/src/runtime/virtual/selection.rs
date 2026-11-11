@@ -175,10 +175,10 @@ pub(super) fn offscreen_piece(t: &OffscreenText, range: Range<usize>, base: Opti
         None => t.path.clone(),
     };
     let len = t.spec.content.len();
-    let (full_a, full_b) = if t.spec.uncopied.is_empty() {
+    let (full_a, full_b) = if t.spec.cold.uncopied.is_empty() {
         (0, len)
     } else {
-        trim_uncopied(&t.spec.uncopied, (0, len))
+        trim_uncopied(&t.spec.cold.uncopied, (0, len))
     };
     let whole = !range.is_empty() && len > 0 && range.start <= full_a && range.end >= full_b;
     let text = t.spec.copy_slice(range.start as u32, range.end as u32).unwrap_or_default();

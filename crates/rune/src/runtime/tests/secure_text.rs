@@ -677,7 +677,7 @@ fn secure_rich_labels_have_no_links_flights_or_retained_measure_hashes() {
     let mut rt = Runtime::new(true, view, (300.0, 100.0), Env::new(true, 1.0));
     rt.frame(0.0);
     let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("secret")).unwrap();
-    assert!(n.text.as_ref().unwrap().links.is_empty());
+    assert!(n.text.as_ref().unwrap().cold.links.is_empty());
     assert_eq!(rt.layout.measure_hash(n.id.0), Some(Some(0)));
     assert!(rt.element_is_secure(&n.path));
     assert!(!rt.element_is_secure("missing"));

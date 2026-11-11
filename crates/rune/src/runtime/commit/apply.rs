@@ -57,7 +57,7 @@ impl<S: 'static> Runtime<S> {
         let revealed: HashSet<_> = self.nodes.iter()
             .filter(|n| {
                 n.input.as_ref().is_some_and(|input| input.edit.masking() == crate::edit::Masking::Shown)
-                    || (n.input.is_none() && n.text.as_ref().is_some_and(|t| t.redacted && t.secure_revealed))
+                    || (n.input.is_none() && n.text.as_ref().is_some_and(|t| t.redacted && t.cold.secure_revealed))
             })
             .map(|n| n.id).collect();
         let mut concealed = std::mem::take(&mut scratch.concealed);
@@ -66,7 +66,7 @@ impl<S: 'static> Runtime<S> {
             concealed.resize(nodes.len(), false);
             for (i, n) in nodes.iter().enumerate() {
                 let hidden_now = n.input.as_ref().is_some_and(|input| input.edit.is_hidden_multiline())
-                    || (n.input.is_none() && n.text.as_ref().is_some_and(|t| t.redacted && !t.secure_revealed));
+                    || (n.input.is_none() && n.text.as_ref().is_some_and(|t| t.redacted && !t.cold.secure_revealed));
                 if hidden_now && revealed.contains(&n.id) {
                     concealed[i] = true;
                 }
@@ -785,7 +785,7 @@ impl<S: 'static> Runtime<S> {
                     }
                 } else if let Some(spec) = &mut old.text
                     && spec.redacted
-                    && spec.secure_revealed
+                    && spec.cold.secure_revealed
                 {
                     spec.conceal();
                     let scale = self.env.scale;

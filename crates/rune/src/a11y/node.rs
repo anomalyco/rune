@@ -62,8 +62,8 @@ impl<S: 'static> Runtime<S> {
         secure.hash(&mut h);
         if let Some(t) = n.text.as_deref() {
             if !secure { t.content.hash(&mut h); }
-            (t.redacted, t.selectable, t.on_link.is_some(), t.on_link_secondary.is_some(), t.links.len()).hash(&mut h);
-            for l in &t.links { (l.start, l.end, &l.id, l.role, &l.label).hash(&mut h); }
+            (t.redacted, t.selectable, t.cold.on_link.is_some(), t.cold.on_link_secondary.is_some(), t.cold.links.len()).hash(&mut h);
+            for l in &t.cold.links { (l.start, l.end, &l.id, l.role, &l.label).hash(&mut h); }
         }
         // A text's lines come from its layout and where it scrolled.
         n.text_layout.as_ref().map(|l| std::rc::Rc::as_ptr(l) as usize).hash(&mut h);

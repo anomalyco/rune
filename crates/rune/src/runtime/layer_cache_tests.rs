@@ -883,7 +883,7 @@ fn pill_styles_follow_captured_state_through_a_cached_subtree() {
     assert_eq!(step(&mut rt).1, 0, "steady frame hits the cached layer");
     rt.invalidate();
     assert_eq!(step(&mut rt).1, 0, "rebuilding with unchanged pill styles keeps the cached layer");
-    let icons = |rt: &Runtime<S>| rt.nodes.iter().find_map(|n| n.text.as_ref().filter(|t| !t.pills.is_empty())).unwrap().pills.iter().map(|p| p.icon.unwrap().name).collect::<Vec<_>>();
+    let icons = |rt: &Runtime<S>| rt.nodes.iter().find_map(|n| n.text.as_ref().filter(|t| !t.cold.pills.is_empty())).unwrap().cold.pills.iter().map(|p| p.icon.unwrap().name).collect::<Vec<_>>();
     assert_eq!(icons(&rt), ["a", "b"]);
     calls.set(0);
     rt.state.1 = true;

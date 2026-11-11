@@ -20,7 +20,7 @@ impl El {
         t.shape = None;
         let paragraphs = paragraphs(&t.content);
         let dirs: Vec<Direction> = paragraphs.iter().map(|&(a, b)| Direction::of(&t.content[a..b]).unwrap_or(Direction::Ltr)).collect();
-        let whole = self.cold.input.is_some() || t.redacted || t.live.is_some() || t.advance_in.is_some() || t.truncate || t.truncate_fade || t.max_lines > 0;
+        let whole = self.cold.input.is_some() || t.redacted || t.cold.live.is_some() || t.cold.advance_in.is_some() || t.truncate || t.truncate_fade || t.max_lines > 0;
         if whole || dirs.iter().all(|&d| d == dirs[0]) {
             return self;
         }
@@ -35,7 +35,7 @@ impl El {
             e
         }).collect();
         // The links' Tab stops went with them.
-        if !t.links.is_empty() && let Some(c) = self.cold.get_mut_if_some() { c.focus.enabled = false; }
+        if !t.cold.links.is_empty() && let Some(c) = self.cold.get_mut_if_some() { c.focus.enabled = false; }
         if self.role == RoleTag::TEXT { self.role = RoleTag::GROUP; }
         self.style.set_flex_direction(FlexDirection::Column);
         let kept = std::mem::take(&mut self.children);
@@ -82,21 +82,25 @@ fn paragraph(t: &TextSpec, k: usize, (a, b): (usize, usize), last: bool, e: &mut
     let mut p = t.clone();
     p.content = t.content[a..b].to_owned();
     p.spans = t.spans.iter().filter_map(|s| clip(s.start, s.end).map(|(start, end)| crate::text::Span { start, end, ..s.clone() })).collect();
-    p.links = t.links.iter().filter_map(|l| clip(l.start, l.end).map(|(start, end)| Link { start, end, ..l.clone() })).collect();
-    p.uncopied = t.uncopied.iter().filter_map(|&(s, e)| clip(s, e)).collect();
-    p.rings = t.rings.iter().filter_map(|&(s, e, c, w)| clip(s, e).map(|(s, e)| (s, e, c, w))).collect();
-    p.strikes = t.strikes.iter().filter_map(|&(s, e, c)| clip(s, e).map(|(s, e)| (s, e, c))).collect();
-    p.highlights = t.highlights.iter().filter_map(|h| clip(h.start, h.end).map(|(start, end)| crate::text::TextHighlight { start, end, ..h.clone() })).collect();
-    // A chip lies inside one line; one across a newline has no paragraph to sit in.
-    p.pills = t.pills.iter().filter(|c| a32 <= c.start && c.end <= b32).map(|c| crate::text::PillChip { start: c.start - a32, end: c.end - a32, ..c.clone() }).collect();
-    p.blocks = t.blocks.get(k).copied().into_iter().collect();
-    p.soft_breaks.clear();
-    p.copy_breaks = [if k == 0 { t.copy_breaks[0] } else { 1 }, if last { t.copy_breaks[1] } else { 1 }];
-    p.copy_prefix = if k == 0 { t.copy_prefix.clone() } else { None };
+    // A plain text's paragraphs share its empty cold fields.
+    if !t.cold.is_empty() {
+        let cold = &mut *p.cold;
+        cold.links = t.cold.links.iter().filter_map(|l| clip(l.start, l.end).map(|(start, end)| Link { start, end, ..l.clone() })).collect();
+        cold.uncopied = t.cold.uncopied.iter().filter_map(|&(s, e)| clip(s, e)).collect();
+        cold.rings = t.cold.rings.iter().filter_map(|&(s, e, c, w)| clip(s, e).map(|(s, e)| (s, e, c, w))).collect();
+        cold.strikes = t.cold.strikes.iter().filter_map(|&(s, e, c)| clip(s, e).map(|(s, e)| (s, e, c))).collect();
+        cold.highlights = t.cold.highlights.iter().filter_map(|h| clip(h.start, h.end).map(|(start, end)| crate::text::TextHighlight { start, end, ..h.clone() })).collect();
+        // A chip lies inside one line; one across a newline has no paragraph to sit in.
+        cold.pills = t.cold.pills.iter().filter(|c| a32 <= c.start && c.end <= b32).map(|c| crate::text::PillChip { start: c.start - a32, end: c.end - a32, ..c.clone() }).collect();
+        cold.blocks = t.cold.blocks.get(k).copied().into_iter().collect();
+        cold.soft_breaks.clear();
+        cold.copy_breaks = [if k == 0 { t.cold.copy_breaks[0] } else { 1 }, if last { t.cold.copy_breaks[1] } else { 1 }];
+        cold.copy_prefix = if k == 0 { t.cold.copy_prefix.clone() } else { None };
+    }
     // Fractional line heights, so the stacked paragraphs keep the one text's line pitch.
     p.exact_lines = true;
     p.shape = None;
-    let links = !p.links.is_empty();
+    let links = !p.cold.links.is_empty();
     e.text = Some(crate::cold::SharedBox::new(p));
     links
 }

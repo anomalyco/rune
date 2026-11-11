@@ -40,7 +40,7 @@ impl<S: 'static> Runtime<S> {
         // values they leave nothing to sample on a later visible frame.
         let mut sampled = false;
         for node in &self.nodes {
-            let text = node.text.as_ref().and_then(|t| t.live.as_ref()).map(|t| &t.source);
+            let text = node.text.as_ref().and_then(|t| t.cold.live.as_ref()).map(|t| &t.source);
             let pixels = node.vis.cold.get().and_then(|v| v.pixels.as_ref()).map(|p| &p.source);
             let has_live = node.cold.get().is_some_and(|c| !c.live.is_empty());
             if !has_live && text.is_none() && pixels.is_none() {
@@ -76,7 +76,7 @@ impl<S: 'static> Runtime<S> {
         self.live_dirty = false;
         for node in &mut self.nodes {
             if let Some(spec) = &mut node.text
-                && let Some(live) = &spec.live
+                && let Some(live) = &spec.cold.live
             {
                 let seen = &mut node.cold.live_text_seen;
                 if let Some(text) = live.read(seen) && spec.source_text() != &*text {
