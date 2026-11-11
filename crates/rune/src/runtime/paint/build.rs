@@ -24,7 +24,7 @@ impl<S: 'static> Runtime<S> {
         self.clear_help_hits();
         self.clear_drop_hits();
         self.loops_active = false;
-        self.static_scale_settling = false;
+        self.scale_frame = None;
         self.videos_active = false;
         let now = crate::time::Instant::now();
         let video_clock = match self.wall_start {
@@ -315,15 +315,10 @@ impl<S: 'static> Runtime<S> {
             let tracked_scale = if has_live_scale { static_k * p.transform.scale.x } else { static_k };
             let scale_settling = if tracked_scale != 1.0 || has_live_scale || self.static_scales.contains_key(&n.id) {
                 let t = self.t;
-                let seen = self.static_scales.entry(n.id).or_insert((tracked_scale, f64::NEG_INFINITY));
-                if self.settled {
-                    *seen = (tracked_scale, f64::NEG_INFINITY);
-                } else if (seen.0 - tracked_scale).abs() > 1e-5 {
-                    *seen = (tracked_scale, t);
-                }
-                let moving = t - seen.1 < STATIC_SCALE_SETTLE;
-                if !has_live_scale {
-                    self.static_scale_settling |= moving;
+                let seen = self.static_scales.entry(n.id).or_insert(ScaleSettle::Still(tracked_scale));
+                let moving = matches!(seen.step(tracked_scale, t, self.settled, 1e-5, true), crate::machine::Effects::One(_));
+                if !has_live_scale && moving {
+                    self.scale_frame = Some(AnotherFrame);
                 }
                 moving
             } else { false };
@@ -444,7 +439,9 @@ impl<S: 'static> Runtime<S> {
             } else {
                 let motion = pixel_snap::motion(&p, rest, s, n.above.is_some(), self.row_h[i] >= 0.0);
                 let raw = if unscaled { r_exact } else { raw_edges.map(snap_px) };
-                self.pixel_snap.snapped(n.id, motion, (r_exact, raw), rigid, (snap_layer, sc), pinh.snap.parent)
+                let (position, effect) = self.pixel_snap.snapped(n.id, motion, (r_exact, raw), rigid, (snap_layer, sc), pinh.snap.parent);
+                if effect.is_some() { self.scale_frame = effect; }
+                position
             };
             let (w, h) = ((r[2] - r[0]).max(0.0), (r[3] - r[1]).max(0.0));
             // `El::rotate`: this subtree draws into a layer turned about its origin.
@@ -555,7 +552,7 @@ impl<S: 'static> Runtime<S> {
             }
             if n.vis_flags.cache() && self.cache_live_scratch[i] {
                 if let Some(entry) = self.node_caches.get_mut(&n.id) {
-                    entry.was_live = true;
+                    entry.phase = RasterPhase::Live;
                 }
             }
             let mut skip_paint = pinh.skip_paint;
@@ -567,17 +564,10 @@ impl<S: 'static> Runtime<S> {
             let mut committed_scale_moving = false;
             if n.vis_flags.cache() && let Some(entry) = self.node_caches.get_mut(&n.id)
                 && entry.commit_gen != self.commit_gen
-                && (sc * s - entry.raster_scale).abs() > 1e-4
+                && let Some(frame) = entry.committed_scale(sc * s, now)
             {
-                if (sc * s - entry.seen_scale).abs() > 1e-4 {
-                    entry.seen_scale = sc * s;
-                    entry.scale_changed_at = now;
-                }
-                committed_scale_moving = now - entry.scale_changed_at < STATIC_SCALE_SETTLE;
-                if committed_scale_moving {
-                    entry.was_live = true;
-                    self.static_scale_settling = true;
-                }
+                committed_scale_moving = true;
+                self.scale_frame = Some(frame);
             }
             if n.vis_flags.cache() && active_cache.is_none() && !lift && !skip_paint && !self.cache_live_scratch[i]
                 && !committed_scale_moving && own_turn.is_none()
@@ -748,15 +738,16 @@ impl<S: 'static> Runtime<S> {
                         h.write_u32(pinh.group.to_bits());
                         h.finish()
                     };
-                    let (raster_scale, seen_scale, scale_changed_at, elided, cached_glyphs) =
+                    let (scale, pass, frame) =
                         if let Some(entry) = self.node_caches.get(&n.id) {
                             let is_resident = self.text.atlas.resident_caches.get(&n.id.0) == Some(&entry.signature);
                             entry.open(eff_scale, s, self.settled, now, self.commit_gen, is_resident,
-                                scale_motion, paint_hash, || self.cache_check_scratch[i], &mut self.static_scale_settling)
+                                scale_motion, paint_hash, || self.cache_check_scratch[i], glyph_count)
                         } else {
-                            (eff_scale, eff_scale, f64::NEG_INFINITY, false, 0)
+                            (ScaleSettle::Still(eff_scale), RasterPass::Paint { glyph_start: glyph_count }, None)
                         };
-                    if elided {
+                    if frame.is_some() { self.scale_frame = frame; }
+                    if matches!(pass, RasterPass::Elide { .. }) {
                         skip_paint = true;
                     }
                     active_cache = Some(ActiveCache {
@@ -766,14 +757,10 @@ impl<S: 'static> Runtime<S> {
                         origin: [r[0], r[1]],
                         size: [w, h],
                         cur_scale: eff_scale,
-                        raster_scale,
-                        seen_scale,
-                        scale_changed_at,
+                        scale,
                         env_scale: s,
                         paint_hash,
-                        glyph_start: glyph_count,
-                        cached_glyphs,
-                        elided,
+                        pass,
                     });
                 }
             }

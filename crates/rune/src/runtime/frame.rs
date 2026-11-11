@@ -751,7 +751,7 @@ impl<S: 'static> Runtime<S> {
         self.end_exit_mask();
         self.record_rewind();
         animating |= source(self.loops_active, AnimSource::LOOP);
-        animating |= source(self.static_scale_settling || self.pixel_snap.easing(), AnimSource::SCALE_SETTLE);
+        animating |= source(self.scale_frame.is_some(), AnimSource::SCALE_SETTLE);
         animating |= source(self.videos_active, AnimSource::VIDEO);
         animating |= source(self.draw_text_flights(), AnimSource::TEXT_FLIGHT);
         if !animating && raster_check::on() {

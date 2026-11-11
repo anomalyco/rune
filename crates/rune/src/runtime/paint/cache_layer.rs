@@ -1,19 +1,69 @@
 //! `El::cache` offscreen raster caching: subtree eligibility and state hashing before paint,
 //! and bounds/signature sealing when a cached layer closes.
 use super::*;
+use crate::machine::Effects;
+
+#[cfg(test)]
+#[path = "cache_layer_tests.rs"]
+mod tests;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum ScaleSettle {
+    Still(f32),
+    Settling { scale: f32, since: f64 },
+    /// Keep the observation even at rest: paint samples animation time.
+    Settled { scale: f32, since: f64 },
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct AnotherFrame;
+
+impl ScaleSettle {
+    /// Paint samples the animation clock, not a wall-clock deadline. Continue to
+    /// request frames during the interval, including when the clock is slowed.
+    #[inline]
+    pub(super) fn step(&mut self, scale: f32, now: f64, reset: bool, epsilon: f32, poll: bool) -> Effects<AnotherFrame> {
+        if reset {
+            *self = Self::Still(scale);
+        } else {
+            let (Self::Still(seen) | Self::Settling { scale: seen, .. } | Self::Settled { scale: seen, .. }) = *self;
+            if (scale - seen).abs() > epsilon {
+                *self = Self::Settling { scale, since: now };
+            }
+        }
+        if poll && let (Self::Settling { scale, since } | Self::Settled { scale, since }) = *self {
+            if now - since < STATIC_SCALE_SETTLE {
+                *self = Self::Settling { scale, since };
+                return Effects::One(AnotherFrame);
+            }
+            *self = Self::Settled { scale, since };
+        }
+        Effects::None
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum RasterPhase {
+    Live,
+    Raster { paint_hash: u64 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum RasterPass {
+    Paint { glyph_start: usize },
+    Elide { glyphs: usize },
+}
 
 #[derive(Clone, Debug)]
 pub(super) struct NodeCache {
     pub(super) signature: u64,
     pub(super) raster_scale: f32,
-    pub(super) seen_scale: f32,
-    pub(super) scale_changed_at: f64,
+    pub(super) scale: ScaleSettle,
     pub(super) env_scale: f32,
-    pub(super) was_live: bool,
+    pub(super) phase: RasterPhase,
     pub(super) rel_bounds: [f32; 4],
     pub(super) glyphs: usize,
     pub(super) commit_gen: u64,
-    pub(super) paint_state_hash: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -24,46 +74,46 @@ pub(super) struct ActiveCache {
     pub(super) origin: [f32; 2],
     pub(super) size: [f32; 2],
     pub(super) cur_scale: f32,
-    pub(super) raster_scale: f32,
-    pub(super) seen_scale: f32,
-    pub(super) scale_changed_at: f64,
+    pub(super) scale: ScaleSettle,
     pub(super) env_scale: f32,
     /// Everything outside commits that paints the subtree: hover, press, links, an outside
     /// hover group and the window-wide state in `build`'s paint hash.
     pub(super) paint_hash: u64,
-    pub(super) glyph_start: usize,
-    pub(super) cached_glyphs: usize,
-    pub(super) elided: bool,
+    pub(super) pass: RasterPass,
 }
 
 impl NodeCache {
     #[inline]
+    pub(super) fn committed_scale(&mut self, scale: f32, now: f64) -> Option<AnotherFrame> {
+        if (scale - self.raster_scale).abs() > 1e-4
+            && matches!(self.scale.step(scale, now, false, 1e-4, true), Effects::One(_))
+        {
+            self.phase = RasterPhase::Live;
+            Some(AnotherFrame)
+        } else { None }
+    }
+
+    #[inline]
     pub(super) fn open(&self, eff_scale: f32, s: f32, settled: bool, now: f64, commit_gen: u64,
         is_resident: bool, scale_motion: ScaleMotion, paint_hash: u64, check: impl FnOnce() -> bool,
-        another_frame: &mut bool) -> (f32, f32, f64, bool, usize) {
+        glyph_start: usize) -> (ScaleSettle, RasterPass, Option<AnotherFrame>) {
         let env_same = (s - self.env_scale).abs() <= 1e-4 && !settled;
-        let (seen_scale, scale_changed_at) = if !env_same {
-            (eff_scale, f64::NEG_INFINITY)
-        } else if (eff_scale - self.seen_scale).abs() > 1e-4 {
-            (eff_scale, now)
-        } else {
-            (self.seen_scale, self.scale_changed_at)
-        };
+        let mut scale = self.scale;
         let scale_diff = (eff_scale - self.raster_scale).abs() > 1e-4;
         let same_commit = commit_gen == self.commit_gen;
-        let scale_settling = same_commit && scale_diff && env_same && is_resident && !self.was_live
-            && (now - scale_changed_at < STATIC_SCALE_SETTLE || scale_motion == ScaleMotion::Moving);
-        *another_frame |= scale_settling;
+        let eligible = same_commit && scale_diff && env_same && is_resident && matches!(self.phase, RasterPhase::Raster { .. });
+        let pending = scale.step(eff_scale, now, !env_same, 1e-4, eligible);
+        let scale_settling = eligible && (matches!(pending, Effects::One(_)) || scale_motion == ScaleMotion::Moving);
         // A commit can change any paint property. Never use a partial
         // model hash to skip checking the actual emitted draw output.
         let content_same = same_commit && (!scale_diff || scale_settling);
         let can_elide = is_resident
-            && !self.was_live
+            && matches!(self.phase, RasterPhase::Raster { .. })
             && content_same
-            && paint_hash == self.paint_state_hash
+            && matches!(self.phase, RasterPhase::Raster { paint_hash: hash } if hash == paint_hash)
             && !check();
-        let raster_scale = if can_elide && scale_settling { self.raster_scale } else { eff_scale };
-        (raster_scale, seen_scale, scale_changed_at, can_elide, self.glyphs)
+        let pass = if can_elide { RasterPass::Elide { glyphs: self.glyphs } } else { RasterPass::Paint { glyph_start } };
+        (scale, pass, scale_settling.then_some(AnotherFrame))
     }
 }
 
@@ -184,24 +234,26 @@ impl<S: 'static> Runtime<S> {
     ) {
         use std::hash::Hasher;
         let layer_grow = (3.0 * crate::render::layer_blur::sigma(self.instances[start].params[2])).ceil();
-        if ac.elided {
-            let entry = self.node_caches.get_mut(&ac.node_id).expect("elided cache entry");
-            entry.seen_scale = ac.seen_scale;
-            entry.scale_changed_at = ac.scale_changed_at;
-            let k = if (ac.cur_scale - entry.raster_scale).abs() <= 1e-4 {
-                1.0
-            } else {
-                ac.cur_scale / entry.raster_scale.max(1e-4)
-            };
-            let b0 = (ac.origin[0] + entry.rel_bounds[0] * k).floor();
-            let b1 = (ac.origin[1] + entry.rel_bounds[1] * k).floor();
-            let b2 = (ac.origin[0] + entry.rel_bounds[2] * k).ceil();
-            let b3 = (ac.origin[1] + entry.rel_bounds[3] * k).ceil();
-            let sig = entry.signature;
-            self.seal_cache_marker(start, [b0, b1, (b2 - b0).max(0.0), (b3 - b1).max(0.0)], ac.node_id, sig);
-            *glyph_count += ac.cached_glyphs;
-            return;
-        }
+        let glyph_start = match ac.pass {
+            RasterPass::Paint { glyph_start } => glyph_start,
+            RasterPass::Elide { glyphs } => {
+                let entry = self.node_caches.get_mut(&ac.node_id).expect("elided cache entry");
+                entry.scale = ac.scale;
+                let k = if (ac.cur_scale - entry.raster_scale).abs() <= 1e-4 {
+                    1.0
+                } else {
+                    ac.cur_scale / entry.raster_scale.max(1e-4)
+                };
+                let b0 = (ac.origin[0] + entry.rel_bounds[0] * k).floor();
+                let b1 = (ac.origin[1] + entry.rel_bounds[1] * k).floor();
+                let b2 = (ac.origin[0] + entry.rel_bounds[2] * k).ceil();
+                let b3 = (ac.origin[1] + entry.rel_bounds[3] * k).ceil();
+                let sig = entry.signature;
+                self.seal_cache_marker(start, [b0, b1, (b2 - b0).max(0.0), (b3 - b1).max(0.0)], ac.node_id, sig);
+                *glyph_count += glyphs;
+                return;
+            }
+        };
 
         if self.instances.len() == start + 1 && self.surfaces.len() == surface_start {
             self.instances.pop();
@@ -218,7 +270,7 @@ impl<S: 'static> Runtime<S> {
         // Blur is baked into the target, unlike opacity and clipping on the composite.
         h.write_u32(self.instances[start].params[2].to_bits());
         h.write_u8(self.srgb_blend as u8 | (self.text.smoothing as u8) << 1);
-        h.write_u32(ac.raster_scale.to_bits());
+        h.write_u32(ac.cur_scale.to_bits());
         h.write_u32(ac.size[0].to_bits());
         h.write_u32(ac.size[1].to_bits());
         if let Some(key) = self.nodes[ac.node_index].vis.cache_key {
@@ -318,19 +370,17 @@ impl<S: 'static> Runtime<S> {
         let mut sig = h.finish();
         if sig == 0 { sig = 1; }
         let rel_bounds = [b0 - ac.origin[0], b1 - ac.origin[1], b2 - ac.origin[0], b3 - ac.origin[1]];
-        let glyphs = *glyph_count - ac.glyph_start;
+        let glyphs = *glyph_count - glyph_start;
         let is_resident = self.text.atlas.resident_caches.get(&ac.node_id.0) == Some(&sig);
         self.node_caches.insert(ac.node_id, NodeCache {
             signature: sig,
-            raster_scale: ac.raster_scale,
-            seen_scale: ac.seen_scale,
-            scale_changed_at: ac.scale_changed_at,
+            raster_scale: ac.cur_scale,
+            scale: ac.scale,
             env_scale: ac.env_scale,
-            was_live: false,
+            phase: RasterPhase::Raster { paint_hash: ac.paint_hash },
             rel_bounds,
             glyphs,
             commit_gen: self.commit_gen,
-            paint_state_hash: ac.paint_hash,
         });
         if is_resident && self.surfaces.len() == surface_start {
             self.instances.truncate(start + 1);

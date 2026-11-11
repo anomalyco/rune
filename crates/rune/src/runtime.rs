@@ -357,7 +357,7 @@ mod paint_probe;
 pub use elements::{ElementInfo, Pick, Picked, Pose};
 #[path = "runtime/paint/cache_layer.rs"]
 mod cache_layer;
-use cache_layer::{ActiveCache, NodeCache};
+use cache_layer::{ActiveCache, AnotherFrame, NodeCache, RasterPass, RasterPhase, ScaleSettle};
 #[path = "runtime/paint/helpers.rs"]
 mod paint_helpers;
 use paint_helpers::*;
@@ -636,11 +636,10 @@ pub struct Runtime<S: 'static> {
     loops: HashMap<NodeId, rune_motion::LoopTrack>,
     loop_clock: loop_clock::LoopClock,
     loops_active: bool,
-    /// `El::scale` per node that has one or had one: the factor, and the animation time it
-    /// last changed (`-∞` for never, or settled). See [`ScaleMotion`].
-    static_scales: HashMap<NodeId, (f32, f64)>,
-    /// A changed `El::scale` hasn't held still long enough for its text to rasterize.
-    static_scale_settling: bool,
+    /// Last scale observation per node that has a scale or had one. See [`ScaleMotion`].
+    static_scales: HashMap<NodeId, ScaleSettle>,
+    /// Frame requested by scale settling or pixel snapping in the last paint.
+    scale_frame: Option<AnotherFrame>,
     /// Some node ran on a scaled clock (`El::time_scale`) at the last commit.
     time_scaled: bool,
     /// Shared host deadline: unscaled wake time and corresponding animation time.
@@ -977,7 +976,7 @@ impl<S: 'static> Runtime<S> {
             loop_clock: Default::default(),
             loops_active: false,
             static_scales: HashMap::default(),
-            static_scale_settling: false,
+            scale_frame: None,
             time_scaled: false,
             loop_wake: None,
             surface_visible: true,

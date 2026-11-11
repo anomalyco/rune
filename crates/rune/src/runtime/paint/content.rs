@@ -121,7 +121,7 @@ impl<S: 'static> Runtime<S> {
             let tk = if cover.is_some() { 1.0 } else { sc };
             let raster = if cover.is_some() { 1.0 } else { scale_motion.raster(sc, rest) };
             if cover.is_none() && scale_motion == ScaleMotion::Live {
-                self.static_scale_settling = true;
+                self.scale_frame = Some(AnotherFrame);
             }
             let zoom = tk / raster.max(1e-4);
             let exact_side = w_exact.min(h_exact);
@@ -173,7 +173,7 @@ impl<S: 'static> Runtime<S> {
             let tk = if cover.is_some() { 1.0 } else { sc };
             let raster = if cover.is_some() { 1.0 } else { scale_motion.raster(sc, rest) };
             if cover.is_none() && scale_motion == ScaleMotion::Live {
-                self.static_scale_settling = true;
+                self.scale_frame = Some(AnotherFrame);
             }
             // Text whose scale moves draws from its outlines, magnified to `tk`: crisp all the way,
             // and the same outline on the frame it lands as the atlas mask it rests as.
