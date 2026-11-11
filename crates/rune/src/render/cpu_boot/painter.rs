@@ -5,7 +5,8 @@
 
 use std::time::Instant;
 
-use super::bin::Bins;
+use super::bin::{Bins, TILE_H, TILE_W};
+use crate::render::{Instance, KIND_BACKDROP_BLUR, KIND_EFFECT, KIND_IMAGE, KIND_LAYER, KIND_LAYER_END};
 use super::pool::Pool;
 use super::{NeedsGpu, Report, Scene, Target, damage, raster, scroll};
 
@@ -29,9 +30,20 @@ pub struct CpuPainter {
     /// The buffer's row pitch last frame, in bytes.
     stride: usize,
     dirty: Vec<u32>,
-    /// The last frame's instances and bins, for telling a scroll (`scroll.rs`).
+    /// The last frame's instances and bins, for telling a scroll (`scroll.rs`) and for a frame
+    /// that only recolours (`recoloured`).
     prev: Option<scroll::Prev>,
+    /// The atlas's evictions last frame (`Atlas::resets`).
+    resets: u64,
+    /// The last frame's scene-wide switches (`Scene::flags`), from a frame the CPU could draw.
+    flags: Option<super::Flags>,
+    /// Scratch for `recoloured`: the instances that changed, and which tiles they mark.
+    changed: Vec<u32>,
+    marked: Vec<bool>,
 }
+
+/// Instances a frame may recolour and still take `recoloured`.
+const RECOLOURED_MAX: usize = 256;
 
 /// What a frame painted.
 #[derive(Clone, Debug, Default)]
@@ -56,7 +68,7 @@ impl CpuPainter {
     /// A painter running on `threads` threads, the caller among them (the others are made now,
     /// and park between frames).
     pub fn new(threads: usize) -> CpuPainter {
-        CpuPainter { pool: Pool::new(threads), hashes: Vec::new(), next: Vec::new(), each: Vec::new(), size: (0, 0), stride: 0, dirty: Vec::new(), prev: None }
+        CpuPainter { pool: Pool::new(threads), hashes: Vec::new(), next: Vec::new(), each: Vec::new(), size: (0, 0), stride: 0, dirty: Vec::new(), prev: None, resets: 0, flags: None, changed: Vec::new(), marked: Vec::new() }
     }
 
     /// The buffer's pixels are no longer the last frame's (a new buffer): the next frame paints
@@ -65,6 +77,7 @@ impl CpuPainter {
     pub fn forget(&mut self) {
         self.hashes.clear();
         self.prev = None;
+        self.flags = None;
     }
 
     /// Fills the masks the text system queued (`fill_masks`) on this painter's threads.
@@ -75,9 +88,12 @@ impl CpuPainter {
     /// Paints `scene` into `target`, which holds the frame this painter painted last unless
     /// `forget` was called since.
     pub fn paint(&mut self, scene: &Scene<'_>, target: &mut Target<'_>) -> Result<Painted, NeedsGpu> {
-        if let Some(why) = scene.needs_gpu() { return Err(why); }
         super::check_target(scene, target)?;
         let start = Instant::now();
+        // A recoloured frame draws what the last one did, so whatever it needed it still does.
+        if self.flags == Some(scene.flags()) && let Some(p) = self.recoloured(scene, target, start) { return Ok(p); }
+        if let Some(why) = scene.needs_gpu() { return Err(why); }
+        self.flags = Some(scene.flags());
         let bins = Bins::of(scene);
         let binned = Instant::now();
         damage::hashes(scene, &bins, &mut self.each, &mut self.next);
@@ -132,6 +148,7 @@ impl CpuPainter {
         std::mem::swap(&mut self.hashes, &mut self.next);
         self.size = scene.size;
         self.stride = target.stride;
+        self.resets = scene.atlas_resets;
         let hashed = Instant::now();
         let extra = (self.dirty.len() / TILES_PER_THREAD).min(self.pool.threads() - 1);
         let mut report = raster::run(scene, &bins, target, &self.dirty, &Threads { pool: &self.pool, extra });
@@ -148,6 +165,89 @@ impl CpuPainter {
         self.prev = Some(scroll::Prev { instances: scene.instances.to_vec(), bins });
         Ok(Painted { dirty_tiles: self.dirty.len(), tiles: report.tiles, rects, scrolled, hash_ns: super::ns(hashed - binned), plan_ns: super::ns(moving - planning), move_ns: super::ns(moved - moving), report })
     }
+}
+
+impl CpuPainter {
+    /// A frame that draws the last frame's instances, some of them in other colours (a spinner's
+    /// dots, a caret's blink, a hover's fill) or with new texels (an animated image): the bins
+    /// still hold, so it skips binning and hashing every tile, repaints only the tiles the
+    /// changed instances reach, and rehashes only those. With nothing changed it touches
+    /// nothing: no tile, no rect, nothing to present. None when the frame needs the full path.
+    fn recoloured(&mut self, scene: &Scene<'_>, target: &mut Target<'_>, start: Instant) -> Option<Painted> {
+        let prev = self.prev.as_mut()?;
+        if self.hashes.is_empty() || self.size != scene.size || self.stride != target.stride || prev.instances.len() != scene.instances.len() || self.resets != scene.atlas_resets {
+            return None;
+        }
+        // The whole list at memcmp's speed first: most frames that get here changed nothing.
+        let images = scene.images.iter().any(|p| p.dirty.is_some());
+        if !images && bytemuck::cast_slice::<Instance, u8>(scene.instances) == bytemuck::cast_slice::<Instance, u8>(&prev.instances) {
+            let mut report = Report { total_ns: super::ns(start.elapsed()), tiles: prev.bins.tile_count(), ..Report::default() };
+            report.raster_ns = 0;
+            return Some(Painted { tiles: report.tiles, hash_ns: report.total_ns, report, ..Painted::default() });
+        }
+        self.changed.clear();
+        for (n, (new, old)) in scene.instances.iter().zip(&prev.instances).enumerate() {
+            let same = bytemuck::bytes_of(new) == bytemuck::bytes_of(old)
+                && !(new.params[1] == KIND_IMAGE && image_written(scene, new) && damage::instance(scene, &prev.bins, n) != self.each[n]);
+            if same { continue; }
+            if self.changed.len() == RECOLOURED_MAX || !recolour(new, old) { return None; }
+            self.changed.push(n as u32);
+        }
+        let bins = &prev.bins;
+        let tiles = bins.tile_count();
+        self.marked.clear();
+        self.marked.resize(tiles, false);
+        for &n in &self.changed {
+            let b = bins.bounds[n as usize];
+            if b[2] <= b[0] || b[3] <= b[1] { continue; }
+            let (tx0, tx1) = (b[0] as u32 / TILE_W, (b[2] as u32).div_ceil(TILE_W).min(bins.cols));
+            for ty in b[1] as u32 / TILE_H..(b[3] as u32).div_ceil(TILE_H).min(bins.rows) {
+                for tx in tx0..tx1 { self.marked[(ty * bins.cols + tx) as usize] = true; }
+            }
+        }
+        // A blur under a changed tile is taken again: its whole region paints.
+        for (_, rec) in &bins.blurs {
+            if super::bin::region_tiles(rec.region, bins.cols, bins.rows).any(|t| self.marked[t]) {
+                for t in super::bin::region_tiles(rec.region, bins.cols, bins.rows) { self.marked[t] = true; }
+            }
+        }
+        self.dirty.clear();
+        self.dirty.extend((0..tiles as u32).filter(|&t| self.marked[t as usize]));
+        for &n in &self.changed {
+            self.each[n as usize] = damage::instance(scene, bins, n as usize);
+            prev.instances[n as usize] = scene.instances[n as usize];
+        }
+        for &t in &self.dirty { self.hashes[t as usize] = damage::rehash(scene, bins, &self.each, t as usize); }
+        let hashed = Instant::now();
+        let extra = (self.dirty.len() / TILES_PER_THREAD).min(self.pool.threads() - 1);
+        let mut report = if self.dirty.is_empty() { Report::default() } else { raster::run(scene, bins, target, &self.dirty, &Threads { pool: &self.pool, extra }) };
+        let done = Instant::now();
+        report.raster_ns = super::ns(done - hashed);
+        report.total_ns = super::ns(done - start);
+        report.tiles = tiles;
+        let rects = damage::rects(&self.dirty, bins.cols, scene.size, MAX_RECTS);
+        Some(Painted { dirty_tiles: self.dirty.len(), tiles, rects, scrolled: None, hash_ns: super::ns(hashed - start), plan_ns: 0, move_ns: 0, report })
+    }
+}
+
+/// Whether `new` is `old` in other colours: every word the same but its fill, a box's border and
+/// `params.w` (an opacity, a text gamma), which no bin, bound or layer plan reads outside layers, and opaque exactly where it was (the occluders and the
+/// tiles it covers whole stay). Layer scopes and blurs (whose opacity plans a layer) don't count.
+fn recolour(new: &Instance, old: &Instance) -> bool {
+    let (a, b): (&[u32; 32], &[u32; 32]) = (bytemuck::cast_ref(new), bytemuck::cast_ref(old));
+    let kind = new.params[1];
+    let structural = kind == KIND_LAYER || kind == KIND_LAYER_END || kind == KIND_BACKDROP_BLUR || kind == KIND_EFFECT;
+    // The border is a colour only for boxes and gradients (a glyph's names its outline).
+    let border = matches!(kind as u32, 0 | 4 | 10 | 11);
+    let shading_w = matches!(kind as u32, 0 | 2);
+    !structural && (0..32).all(|k| (8..12).contains(&k) || ((12..16).contains(&k) && border) || (k == 19 && shading_w) || a[k] == b[k]) && super::bin::opaque_box(new) == super::bin::opaque_box(old)
+}
+
+/// Whether rows `new` samples were written into its image page since the renderer last took it.
+fn image_written(scene: &Scene<'_>, i: &Instance) -> bool {
+    let Some(page) = scene.images.get(i.params[0] as usize) else { return false };
+    let (y0, y1) = (i.uv[1].max(0.0) as u32, (i.uv[1] + i.uv[3]).max(0.0).ceil() as u32);
+    page.dirty.is_some_and(|(a, b)| a < y1 && b > y0)
 }
 
 /// Moves the tiles the scroll left clean `dy` rows (down when positive): each takes what was

@@ -273,7 +273,7 @@ pub(super) fn pixel_bounds(i: &Instance, w: i32, h: i32) -> [i32; 4] {
 
 /// A rounded box and how far inside its edge a pixel centre must be to be whole: the region of
 /// pixels a box kind paints in one colour.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(super) struct Solid {
     pub edges: [f32; 4],
     pub radii: [f32; 4],

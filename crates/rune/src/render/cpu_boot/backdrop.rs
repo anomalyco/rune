@@ -121,7 +121,7 @@ pub(super) struct Blurred {
 
 /// Blurs the window's pixels under `rec`: `window(x, y)` reads pixel `(x, y)` as the target
 /// holds it, R, G, B, A in 0..=1.
-pub(super) fn blur(rec: &Record, viewport: (u32, u32), window: impl Fn(u32, u32) -> [f32; 4]) -> Blurred {
+pub(super) fn blur(rec: &Record, viewport: (u32, u32), half: super::HalfRounding, window: impl Fn(u32, u32) -> [f32; 4]) -> Blurred {
     let [pw, ph] = rec.size;
     let extent = [pw as f32 * 2.0, ph as f32 * 2.0];
     let v = [viewport.0 as f32, viewport.1 as f32];
@@ -168,7 +168,7 @@ pub(super) fn blur(rec: &Record, viewport: (u32, u32), window: impl Fn(u32, u32)
             }).collect();
             for (ty, ay) in (sy0..sy1).zip(&ys) {
                 for (tx, ax) in (sx0..sx1).zip(&xs) {
-                    out.px[(ty * w + tx) as usize] = down13(|o| tap(&ax[(o[0] + 2.0) as usize], &ay[(o[1] + 2.0) as usize], &window)).map(f16);
+                    out.px[(ty * w + tx) as usize] = down13(|o| tap(&ax[(o[0] + 2.0) as usize], &ay[(o[1] + 2.0) as usize], &window)).map(|v| f16(v, half));
                 }
             }
         } else {
@@ -185,7 +185,7 @@ pub(super) fn blur(rec: &Record, viewport: (u32, u32), window: impl Fn(u32, u32)
             let texel = |x: u32, y: u32| src.px[(y * src.w + x) as usize];
             for (ty, ay) in (sy0..sy1).zip(&ys) {
                 for (tx, ax) in (sx0..sx1).zip(&xs) {
-                    out.px[(ty * w + tx) as usize] = down13(|o| tap(&ax[(o[0] + 2.0) as usize], &ay[(o[1] + 2.0) as usize], &texel)).map(f16);
+                    out.px[(ty * w + tx) as usize] = down13(|o| tap(&ax[(o[0] + 2.0) as usize], &ay[(o[1] + 2.0) as usize], &texel)).map(|v| f16(v, half));
                 }
             }
         }
@@ -223,7 +223,7 @@ pub(super) fn blur(rec: &Record, viewport: (u32, u32), window: impl Fn(u32, u32)
                 c = add(c, add(add(add(s(2, 2), s(0, 0)), s(2, 0)), s(0, 2)));
                 let c = c.map(|v| v / 16.0);
                 let f = tap(&ax.1, &ay.1, &fine_texel);
-                out.px[(ty * w + tx) as usize] = std::array::from_fn(|ch| f16(f[ch] * (1.0 - weight) + c[ch] * weight));
+                out.px[(ty * w + tx) as usize] = std::array::from_fn(|ch| f16(f[ch] * (1.0 - weight) + c[ch] * weight, half));
             }
         }
         coarse = Some(out);

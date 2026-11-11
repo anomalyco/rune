@@ -65,6 +65,41 @@ pub struct Scene<'a> {
     /// How many times the atlas has evicted a page (`Atlas::resets`): a glyph at the same place
     /// may be another mask after one.
     atlas_resets: u64,
+    /// How the GPU that takes over rounds into half floats (layers, blur levels).
+    half: HalfRounding,
+}
+
+/// How a GPU stores a float into an `Rgba16Float` target. Vendors differ, and a layer's pixels
+/// come out a step apart when the CPU guesses wrong, so the painter follows the adapter the
+/// window will use (`gpu::pick`, known before any device exists).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum HalfRounding {
+    /// Intel (measured: Iris Xe).
+    #[default]
+    TowardZero,
+    /// To nearest, ties to even, as IEEE and D3D's conversion rules say.
+    NearestEven,
+}
+
+impl HalfRounding {
+    /// The rounding of the GPU with PCI vendor ID `vendor`.
+    pub fn of_vendor(vendor: u32) -> HalfRounding {
+        match vendor {
+            0x8086 => HalfRounding::TowardZero,
+            _ => HalfRounding::NearestEven,
+        }
+    }
+}
+
+/// A scene's switches (`Scene::flags`).
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Flags {
+    srgb_blend: bool,
+    native_surfaces: bool,
+    compositor: bool,
+    lcd: bool,
+    smoothing: Option<FontSmoothing>,
+    half: HalfRounding,
 }
 
 /// An image atlas page: RGBA8 texels, `width * 4` bytes a row.
@@ -72,6 +107,8 @@ pub struct Scene<'a> {
 pub struct Image<'a> {
     width: u32,
     data: &'a [u8],
+    /// Rows written since the renderer last uploaded the page (`ImagePage::dirty`).
+    dirty: Option<(u32, u32)>,
 }
 
 impl<'a> Scene<'a> {
@@ -80,8 +117,8 @@ impl<'a> Scene<'a> {
     /// sRGB encoding as windows do by default.
     pub fn new(instances: &'a [Instance], atlas: &'a Atlas, images: &'a ImageAtlas, size: (u32, u32), clear: [f32; 4]) -> Self {
         let glyph_pages = (0..atlas.page_count()).filter_map(|p| atlas.page_data(p)).collect();
-        let images = images.pages.iter().map(|p| Image { width: p.width, data: &p.data }).collect();
-        Scene { instances, glyph_pages, outlines: Some(&atlas.outlines), images, size, clear, lcd: atlas.lcd, srgb_blend: true, native_surfaces: false, compositor: false, smoothing: None, atlas_resets: atlas.resets() }
+        let images = images.pages.iter().map(|p| Image { width: p.width, data: &p.data, dirty: p.dirty }).collect();
+        Scene { instances, glyph_pages, outlines: Some(&atlas.outlines), images, size, clear, lcd: atlas.lcd, srgb_blend: true, native_surfaces: false, compositor: false, smoothing: None, atlas_resets: atlas.resets(), half: HalfRounding::default() }
     }
 
     /// Whether the frame blends in sRGB encoding (`Runtime::srgb_blend`). Linear blending needs
@@ -108,6 +145,17 @@ impl<'a> Scene<'a> {
     /// the atlas says so, unless the GPU couldn't (no dual-source blending).
     pub fn lcd(mut self, on: bool) -> Self {
         self.lcd = on;
+        self
+    }
+
+    /// The scene-wide switches, which a frame that only recolours keeps.
+    fn flags(&self) -> Flags {
+        Flags { srgb_blend: self.srgb_blend, native_surfaces: self.native_surfaces, compositor: self.compositor, lcd: self.lcd, smoothing: self.smoothing, half: self.half }
+    }
+
+    /// How the GPU that will take over rounds half floats (`HalfRounding::of_vendor`).
+    pub fn half_rounding(mut self, r: HalfRounding) -> Self {
+        self.half = r;
         self
     }
 
