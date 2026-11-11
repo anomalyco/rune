@@ -1,5 +1,6 @@
 //! Structure and presence: nodes mount, enter, leave and revive, and the presence progress
-//! that blends a node's transition effect toward identity.
+//! that blends a node's transition effect toward identity. Each change is one `phase::step`,
+//! carried out here in the order it asks for.
 use super::*;
 
 impl Scene {
@@ -20,7 +21,7 @@ impl Scene {
     pub fn insert_delayed(&mut self, id: NodeId, spec: NodeSpec, mount: Mount, delay: f32) {
         if let Some(i) = self.slot(id) {
             self.nodes[i].transition = spec.transition;
-            let exiting = matches!(self.nodes[i].phase, Phase::Exiting { .. });
+            let exiting = self.nodes[i].presence.exiting();
             if exiting && mount == Mount::Initial {
                 self.present_now(i);
                 // Also lands motion toward an unchanged frame and ends screen travel.
@@ -52,17 +53,22 @@ impl Scene {
             let mut a = parent;
             loop {
                 if a == NONE { break false; }
-                match self.nodes[a as usize].phase {
-                    Phase::Present if plain => a = self.nodes[a as usize].parent,
-                    Phase::Present => break false,
-                    Phase::Entering => break self.presence_now(a as usize) < 0.5,
-                    Phase::Exiting { .. } => break true,
+                match self.nodes[a as usize].presence {
+                    Presence::Present { .. } if plain => a = self.nodes[a as usize].parent,
+                    Presence::Present { .. } => break false,
+                    Presence::Entering { .. } => break self.presence_now(a as usize) < 0.5,
+                    Presence::Exiting { .. } => break true,
                 }
             }
         };
         let ins = spec.transition.insertion.kit_rules(false);
         // An entrance that changes nothing on screen (an identity insertion) has nothing to play.
         let animate = mount == Mount::Animated && !rides_parent && !ins.shows_nothing();
+        let delay = if delay.is_finite() { delay.max(0.0) } else { 0.0 };
+        let entrance = Anim { delay, ..Anim::from(spec.transition.springs.enter) };
+        let mut generation = 0;
+        let mut presence = Presence::LANDED;
+        let acts = phase::step(&mut presence, &mut generation, PhaseEvent::Mount { ins, animate, entrance });
         let node = Node {
             id,
             parent,
@@ -76,10 +82,8 @@ impl Scene {
             radius: spec.radius,
             fill: spec.fill,
             transition: spec.transition,
-            phase: if animate { Phase::Entering } else { Phase::Present },
-            generation: 0,
-            fx_a: fx_of(&ins),
-            fx_b: FX_ID,
+            presence,
+            generation,
             anchor: ins.anchor,
             reveal: ins.reveal,
             path: None,
@@ -113,15 +117,7 @@ impl Scene {
         if parent == NONE { self.root_tail = i; } else { self.nodes[parent as usize].last_child = i; }
         self.index.insert(id.0, i);
         self.order_dirty = true;
-        let enter = spec.transition.springs.enter;
-        if animate {
-            self.track_set(i as usize, prop::PRESENCE, 0.0);
-            let delay = if delay.is_finite() { delay.max(0.0) } else { 0.0 };
-            self.track_animate(i as usize, prop::PRESENCE, 1.0, Anim { delay, ..Anim::from(enter) });
-            self.intent(id, Intent::TRANSITION | Intent::OPACITY, enter.duration);
-        } else if !self.at_base(i as usize, prop::PRESENCE, 1.0) {
-            self.track_set(i as usize, prop::PRESENCE, 1.0);
-        }
+        self.apply(i as usize, acts);
     }
 
     /// A present node's transition from its latest render: the removal effect and exit spring it
@@ -129,7 +125,7 @@ impl Scene {
     /// an exiting node keeps the transition it is leaving with.
     pub fn set_transition(&mut self, id: NodeId, transition: Transition) {
         if let Some(i) = self.slot(id)
-            && !matches!(self.nodes[i].phase, Phase::Exiting { .. })
+            && !self.nodes[i].presence.exiting()
         {
             self.nodes[i].transition = transition;
         }
@@ -139,53 +135,16 @@ impl Scene {
     /// and is reported in `exited` only once its presence has settled at 0 (opacity 0).
     pub fn remove(&mut self, id: NodeId) {
         let Some(i) = self.slot(id) else { return };
-        if matches!(self.nodes[i].phase, Phase::Exiting { .. }) {
+        if self.nodes[i].presence.exiting() {
             return;
         }
         let p = self.presence_now(i);
-        let unplayed = p < 1e-3;
-        if unplayed && lerp_fx(&self.nodes[i].fx_a, &self.nodes[i].fx_b, p)[0] < 1.0 / 512.0 {
-            // An entrance that hasn't shown anything yet (a delayed one still waiting) has no
-            // exit to play.
-            self.remove_now(i);
-            return;
-        }
-        let rem = self.nodes[i].transition.removal.kit_rules(true);
-        let target = fx_of(&rem);
-        let n = &mut self.nodes[i];
-        n.generation += 1;
-        n.phase = Phase::Exiting { generation: n.generation };
-        if p >= 0.999 {
-            n.fx_a = target;
-            n.fx_b = FX_ID;
-        } else if unplayed {
-            // None of the entrance has played, but its insertion effect shows (a slide that
-            // doesn't fade): leave from there, as a whole exit from it.
-            n.fx_b = lerp_fx(&n.fx_a, &n.fx_b, p);
-            n.fx_a = target;
-        } else {
-            // Mid-entrance: keep the current look at p, land exactly on the removal effect at 0.
-            let cur = lerp_fx(&n.fx_a, &n.fx_b, p);
-            n.fx_a = target;
-            for k in 0..8 {
-                n.fx_b[k] = target[k] + (cur[k] - target[k]) / p.max(1e-3);
-            }
-        }
-        if rem.scale != 1.0 {
-            n.anchor = rem.anchor;
-        }
-        if rem.reveal.is_some() {
-            n.reveal = rem.reveal;
-        }
-        n.dirty = true;
-        let exit = n.transition.springs.exit;
-        if unplayed {
-            self.track_set(i, prop::PRESENCE, 1.0);
-        } else {
-            self.ensure_prop(i, prop::PRESENCE);
-        }
-        self.track_animate(i, prop::PRESENCE, 0.0, Anim::from(exit));
-        self.intent(id, Intent::TRANSITION | Intent::OPACITY, exit.duration);
+        let (rem, exit) = {
+            let n = &self.nodes[i];
+            (n.transition.removal.kit_rules(true), Anim::from(n.transition.springs.exit))
+        };
+        let acts = self.nodes[i].phase_step(PhaseEvent::Exit { p, rem, exit });
+        self.apply(i, acts);
     }
 
     /// The app removed a keyed node with no exit: it and its subtree unmount now and are reported
@@ -199,7 +158,7 @@ impl Scene {
     /// An entering node is present at once, its entrance landed: one nobody saw run.
     pub fn enter_now(&mut self, id: NodeId) {
         if let Some(i) = self.slot(id)
-            && self.nodes[i].phase == Phase::Entering
+            && self.nodes[i].presence.entering()
         {
             self.present_now(i);
         }
@@ -209,7 +168,7 @@ impl Scene {
     /// present at once. One already under way keeps going.
     pub fn land_waiting(&mut self, id: NodeId) {
         if let Some(i) = self.slot(id)
-            && self.nodes[i].phase == Phase::Entering
+            && self.nodes[i].presence.entering()
             && self.presence_now(i) < 1e-3
         {
             self.present_now(i);
@@ -220,7 +179,7 @@ impl Scene {
     /// change brings into view.
     pub fn reenter(&mut self, id: NodeId) {
         if let Some(i) = self.slot(id)
-            && self.nodes[i].phase == Phase::Present
+            && self.nodes[i].presence.resting()
         {
             self.track_set(i, prop::PRESENCE, 0.0);
             self.revive(i);
@@ -229,42 +188,49 @@ impl Scene {
 
     fn revive(&mut self, i: usize) {
         let p = self.presence_now(i);
-        let n = &mut self.nodes[i];
-        n.generation += 1;
-        n.phase = Phase::Entering;
-        if p <= 0.001 {
-            let ins = n.transition.insertion.kit_rules(false);
-            n.fx_a = fx_of(&ins);
-        } else {
-            // Keep the current look at p, land exactly on identity at 1.
-            let cur = lerp_fx(&n.fx_a, &n.fx_b, p);
-            let q = (1.0 - p).max(1e-3);
-            for k in 0..8 {
-                n.fx_a[k] = (cur[k] - FX_ID[k] * p) / q;
-            }
-        }
-        n.fx_b = FX_ID;
-        n.dirty = true;
-        let enter = n.transition.springs.enter;
-        let id = n.id;
-        self.track_animate(i, prop::PRESENCE, 1.0, Anim::from(enter));
-        self.intent(id, Intent::TRANSITION | Intent::OPACITY, enter.duration);
+        let (ins, entrance) = {
+            let n = &self.nodes[i];
+            (n.transition.insertion.kit_rules(false), Anim::from(n.transition.springs.enter))
+        };
+        let acts = self.nodes[i].phase_step(PhaseEvent::Revive { p, ins, entrance });
+        self.apply(i, acts);
     }
 
     /// An exiting node is present again at once: no presence effect, nothing left to settle.
     fn present_now(&mut self, i: usize) {
-        let n = &mut self.nodes[i];
-        n.generation += 1;
-        n.phase = Phase::Present;
-        let ins = n.transition.insertion.kit_rules(false);
-        n.fx_a = fx_of(&ins);
-        n.fx_b = FX_ID;
-        n.anchor = ins.anchor;
-        n.reveal = ins.reveal;
-        self.track_set(i, prop::PRESENCE, 1.0);
+        let ins = self.nodes[i].transition.insertion.kit_rules(false);
+        let acts = self.nodes[i].phase_step(PhaseEvent::Land { ins });
+        self.apply(i, acts);
     }
 
     fn presence_now(&self, i: usize) -> f32 {
         self.nodes[i].tracks[prop::PRESENCE.id.0 as usize].and_then(|t| self.sample(t)).map_or(1.0, |(x, _)| x[0])
+    }
+
+    /// Carries out what a phase change asked for, in order.
+    pub(super) fn apply(&mut self, i: usize, acts: phase::Acts) {
+        let id = self.nodes[i].id;
+        for act in acts {
+            match act {
+                Act::Land(v) => self.track_set(i, prop::PRESENCE, v),
+                Act::LandIfNeeded(v) => {
+                    if !self.at_base(i, prop::PRESENCE, v) {
+                        self.track_set(i, prop::PRESENCE, v);
+                    }
+                }
+                Act::Ensure => self.ensure_prop(i, prop::PRESENCE),
+                Act::Run { target, anim } => self.track_animate(i, prop::PRESENCE, target, anim),
+                Act::Dirty => self.nodes[i].dirty = true,
+                Act::Anchor(a) => self.nodes[i].anchor = a,
+                Act::Reveal(r) => self.nodes[i].reveal = r,
+                Act::Retire => {
+                    if !self.to_remove.contains(&(i as u32)) {
+                        self.to_remove.push(i as u32);
+                    }
+                }
+                Act::Unmount => self.remove_now(i),
+                Act::Intent { bits, seconds } => self.intent(id, bits, seconds),
+            }
+        }
     }
 }

@@ -52,7 +52,7 @@ impl Scene {
     pub fn is_resting_at(&self, id: NodeId, frame: Rect) -> bool {
         let Some(i) = self.slot(id) else { return false };
         let n = &self.nodes[i];
-        n.phase == Phase::Present
+        n.presence.resting()
             && n.path.is_none()
             && self.values(i, prop::FRAME.id).map_or(n.frame, Rect::read_lanes) == frame
             && (self.store.active_len() == 0 || !self.store.is_node_animating(id))
