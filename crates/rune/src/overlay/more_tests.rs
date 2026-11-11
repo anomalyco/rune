@@ -179,6 +179,28 @@ fn overlay_a_stale_up_ahead_of_an_unmatched_press_leaves_its_drag_out_armed() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn overlay_a_stale_click_taken_for_the_next_press_leaves_its_drag_out_armed() {
+    let mut overlay = drag_out_overlay();
+    let pointer = crate::platform::macos::PointerState::new(OverlayInput::All, false);
+    let click = |overlay: &mut Overlay<DragOutCount>, down: bool| {
+        pointer.record_click(down, 10.0, 10.0);
+        overlay.native_moved(&pointer, 10.0, 10.0);
+        overlay.native_left(&pointer, down);
+        if !down { pointer.released(); }
+    };
+    click(&mut overlay, true); // A
+    pointer.record_click(false, 10.0, 10.0); // A's Up is swallowed: seen, never delivered
+    click(&mut overlay, true); // B, unmatched behind A's Up
+    click(&mut overlay, false); // B's Up takes A's queued Up, leaving B's Down and Up queued
+    click(&mut overlay, true); // C takes B's stale Down
+    assert!(overlay.rt.pointer_captured(), "C is held");
+    overlay.native_moved(&pointer, 60.0, 10.0);
+    overlay.rt.frame(0.0);
+    assert_eq!(overlay.rt.state.starts, 1, "B's stale Up says nothing about C's button: C's drag starts, as on dev");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn overlay_drag_past_the_threshold_with_the_button_down_starts_an_os_drag() {
     let mut overlay = drag_out_overlay();
     let pointer = crate::platform::macos::PointerState::new(OverlayInput::All, false);
