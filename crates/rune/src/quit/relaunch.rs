@@ -16,17 +16,25 @@ const WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 /// is quitting either way.
 pub(crate) fn spawn() {
     #[cfg(not(target_arch = "wasm32"))]
-    if let Err(e) = start() {
+    if let Err(e) = start(std::env::args_os().skip(1).collect()) {
         eprintln!("rune: couldn't start the app again: {e}");
     }
 }
 
+/// Starts this app again with another launch's arguments, to go on once this process has
+/// exited: a launch that reached this process while it quits (`single_instance`).
+#[cfg(target_os = "windows")]
+pub(crate) fn spawn_with(args: Vec<String>) {
+    if let Err(e) = start(args.into_iter().map(Into::into).collect()) {
+        eprintln!("rune: couldn't start the app for a launch that came while it quit: {e}");
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
-fn start() -> std::io::Result<()> {
+fn start(args: Vec<std::ffi::OsString>) -> std::io::Result<()> {
     use std::process::{Command, Stdio};
     let exe = std::env::current_exe()?;
     let pid = std::process::id().to_string();
-    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     #[cfg(target_os = "macos")]
     if let Some(bundle) = bundle_of(&exe) {
         let status = Command::new("/usr/bin/open").arg("-n").arg(&bundle).arg("--env").arg(format!("{AFTER}={pid}")).arg("--args").args(&args).status()?;

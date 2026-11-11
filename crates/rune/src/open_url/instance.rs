@@ -20,7 +20,9 @@
 /// its `App::on_open_url`, or, without links, it brought its front window forward, so return
 /// from `main` without opening a window. Returns true when this is the first process, which
 /// from now on receives the launches that follow, and also when the first can't be reached
-/// (it hangs or is exiting), so the launch still opens a window. `id` names the app (its
+/// (it hangs or is exiting), so the launch still opens a window. A launch that reaches the first
+/// while it quits (its windows closing) starts the app again once that process has exited, as
+/// `Tx::relaunch` does, instead of being lost with it. `id` names the app (its
 /// reverse-DNS identifier); builds that should run side by side use different ids.
 ///
 /// macOS and other platforms: always true. macOS already reaches the running app.
@@ -57,7 +59,7 @@ pub(crate) fn launch_links() -> Vec<String> {
 
 /// Windows: the loop's side of a later launch without links (`on_relaunch`), and the window it brings forward.
 #[cfg(target_os = "windows")]
-pub(crate) use windows::{on_relaunch, raise_front};
+pub(crate) use windows::{exited, on_relaunch, raise_front, reopened};
 
 #[cfg(target_os = "windows")]
 mod windows {
@@ -93,6 +95,34 @@ mod windows {
 
     /// Sends a launch without links to the loop as a reopen; set once the loop runs.
     static RELAUNCH: Mutex<Option<Relaunch>> = Mutex::new(None);
+
+    /// Launches without links sent to the loop as a reopen and not yet taken; once the loop has
+    /// ended (`exited`), a launch starts the app again instead.
+    struct Waiting {
+        reopens: Vec<Vec<String>>,
+        exited: bool,
+    }
+
+    static WAITING: Mutex<Waiting> = Mutex::new(Waiting { reopens: Vec::new(), exited: false });
+
+    /// The loop took the reopens sent so far (it brought a window forward, or the app's
+    /// `on_reopen` did).
+    pub(crate) fn reopened() {
+        WAITING.lock().unwrap_or_else(|e| e.into_inner()).reopens.clear();
+    }
+
+    /// The loop ended: each reopen it didn't take starts the app again once this process has
+    /// exited, as does every launch from now on.
+    pub(crate) fn exited() {
+        let reopens = {
+            let mut waiting = WAITING.lock().unwrap_or_else(|e| e.into_inner());
+            waiting.exited = true;
+            std::mem::take(&mut waiting.reopens)
+        };
+        for args in reopens {
+            crate::relaunch::spawn_with(args);
+        }
+    }
 
     /// The loop runs: a launch without links calls `relaunch` from now on (`WakeEvent::Reopen`).
     pub(crate) fn on_relaunch(relaunch: impl Fn() -> bool + Send + 'static) {
@@ -228,11 +258,26 @@ mod windows {
     }
 
     /// A later launch's arguments: its links to `App::on_open_url`, or, without links, a reopen.
+    /// One that comes while the app quits, or that the loop hadn't taken when it ended, starts the
+    /// app again with them once this process has exited, as `Tx::relaunch` does: the windows it
+    /// would reach are closing, and the launch would be lost.
     fn relaunched(args: Vec<String>) {
-        let links: Vec<String> = args.into_iter().filter(|a| super::is_link(a)).collect();
+        if crate::quit::quitting() {
+            return crate::relaunch::spawn_with(args);
+        }
+        let links: Vec<String> = args.iter().filter(|a| super::is_link(a)).cloned().collect();
         if links.is_empty() {
-            if let Some(relaunch) = RELAUNCH.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-                relaunch();
+            {
+                let mut waiting = WAITING.lock().unwrap_or_else(|e| e.into_inner());
+                if waiting.exited {
+                    drop(waiting);
+                    return crate::relaunch::spawn_with(args);
+                }
+                waiting.reopens.push(args);
+            }
+            let sent = RELAUNCH.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|relaunch| relaunch());
+            if !sent {
+                exited();
             }
             return;
         }
