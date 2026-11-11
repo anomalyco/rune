@@ -241,6 +241,12 @@ pub(crate) fn power_rank(device: wgpu::DeviceType) -> u8 {
     }
 }
 
+/// The PCI vendor of the GPU driving the primary display, which `pick` chooses for a window:
+/// known before any GPU is made, for the CPU renderer that draws until then.
+pub(crate) fn display_vendor() -> Option<u32> {
+    display_devices().first().map(|ids| ids.0)
+}
+
 /// The PCI vendor and device IDs of the GPUs driving a display on the desktop, the primary
 /// display's first.
 #[cfg(target_os = "windows")]

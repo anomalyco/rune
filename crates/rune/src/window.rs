@@ -34,6 +34,8 @@ use chrome::{frame_chrome, place_chrome, sync_chrome, titlebar_double_click};
 mod configure;
 pub(crate) use configure::configure;
 mod create;
+#[cfg(target_os = "windows")]
+mod cpu_frame;
 mod native;
 use native::Native;
 mod win;
@@ -125,6 +127,9 @@ pub(crate) enum WakeEvent {
     /// A native menu's modal loop holds the event loop: run its idle turn (`Windows::turn`).
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Turn,
+    /// Windows: the GPU a CPU-drawn window was waiting for is made, or failed (`cpu_frame`).
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    GpuReady(usize),
 }
 
 /// What `Windows` needs of a host, whatever its state type: an app window or an overlay.
@@ -331,7 +336,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
         let slot = match &event {
             WakeEvent::DisplayTick(i) | WakeEvent::App(i) | WakeEvent::Live(i) | WakeEvent::Window(i, _) | WakeEvent::Focus(i)
                 | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
-                | WakeEvent::A11y(i) | WakeEvent::Covered(i, _) => *i,
+                | WakeEvent::A11y(i) | WakeEvent::Covered(i, _) | WakeEvent::GpuReady(i) => *i,
             WakeEvent::Reopen => {
                 self.reopen(event_loop);
                 self.cleanup(event_loop);

@@ -231,6 +231,13 @@ impl Adapter {
         self.link.receive(rt, name)
     }
 
+    /// Tells assistive clients the window's content changed, so one that looked before this
+    /// adapter existed asks again.
+    pub(crate) fn notify_structure(&self) {
+        #[cfg(all(feature = "accessibility", target_os = "windows"))]
+        self.inner.notify(crate::runtime::a11y_tree::Changes { structure: true, moved: false });
+    }
+
     /// Sends the tree's changes since the last update, when a client listens.
     pub(crate) fn sync<S: 'static>(&mut self, rt: &mut Runtime<S>) {
         if let Some(update) = self.link.update(rt) {

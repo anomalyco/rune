@@ -254,6 +254,12 @@ impl<S: 'static> Host<S> {
         }
         self.hidden_input(event_loop);
         self.a11y_turn();
+        // The first idle turn after a CPU-drawn window's first frame starts its GPU.
+        #[cfg(target_os = "windows")]
+        {
+            self.cpu_idle();
+            self.a11y_after_frame();
+        }
         false
     }
 
