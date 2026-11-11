@@ -139,33 +139,82 @@ fn animated_value_retargets_keeping_velocity() {
     assert!((d.sample(30.0) - d.target()).abs() < 1e-2);
 }
 
-/// Bit-exact golden for `animate_to`/`release` across every curve kind, so a refactor of the
+/// Golden samples for `animate_to`/`release` across every curve kind, so a refactor of the
 /// lane restart can't drift the numbers.
+///
+/// Samples are pinned with a tight tolerance, not a bit hash. Springs and decay sample
+/// `exp`/`sin`/`cos` from the platform's libm, and glibc and Apple's libm disagree in the
+/// last bits: the same run at the same revision moves a value of ~400 by up to 3e-5. The
+/// tolerance below is about 20× that platform noise and still orders of magnitude below a
+/// real change to how a lane restarts.
 #[test]
 fn animated_retarget_golden() {
+    const ANCHORS: [usize; 6] = [0, 1, 3, 9, 21, 39];
+    /// Per curve, per anchor, `[x.x, x.y, v.x, v.y]`.
+    const SAMPLES: [[[f32; 4]; 6]; 5] = [
+        [
+            [30.078003, 7.5296297, -800.0, 400.0],
+            [15.205883, 12.992083, -426.75085, 80.23154],
+            [3.2957265, 11.149232, -112.73632, -93.2812],
+            [-0.20551914, 1.577376, 1.509766, -24.364733],
+            [-0.0026638499, 0.009844182, 0.045319706, -0.1750176],
+            [0.0, 0.0, 0.0, 0.0],
+        ],
+        [
+            [56.422695, -0.41329098, -800.0, 400.0],
+            [38.957146, 7.563013, -600.40234, 244.27997],
+            [17.499737, 14.067252, -277.22702, 37.680252],
+            [11.163436, 5.5244317, 65.7598, -71.8772],
+            [20.527206, -0.43597618, -1.4065659, 3.7947469],
+            [19.988346, 0.0052623716, 0.1345897, -0.10417824],
+        ],
+        [
+            [48.35736, 7.3219295, -800.0, 400.0],
+            [30.425076, 14.737576, -593.33307, 237.03568],
+            [11.4471245, 21.428228, -188.11761, 41.604954],
+            [29.531113, 6.3093452, 231.20714, -141.46454],
+            [40.0, 0.0, 0.0, -0.0],
+            [40.0, 0.0, 0.0, -0.0],
+        ],
+        [
+            [111.8616, -21.43715, -800.0, 400.0],
+            [92.35385, -11.683273, -760.94543, 380.47272],
+            [56.148865, 6.41922, -688.46295, 344.23148],
+            [-33.05693, 51.022118, -509.8728, 254.9364],
+            [-148.05019, 108.518745, -279.6561, 139.82805],
+            [-230.99655, 149.99193, -113.5973, 56.79865],
+        ],
+        [
+            [80.0, 0.0, 0.0, 0.0],
+            [80.0, 0.0, 0.0, 0.0],
+            [80.0, 0.0, 0.0, 0.0],
+            [80.0, 0.0, 0.0, 0.0],
+            [80.0, 0.0, 0.0, 0.0],
+            [80.0, 0.0, 0.0, 0.0],
+        ],
+    ];
+    const TARGETS: [[f32; 2]; 5] = [[0.0, 0.0], [20.0, 0.0], [40.0, 0.0], [-287.7384, 178.36285], [80.0, 0.0]];
+    let close = |got: f32, want: f32| (got - want).abs() <= 2e-6 + 1e-6 * want.abs();
+
     let tween = Curve::Tween { duration: 0.3, easing: Easing::EASE_OUT };
     let curves = [Curve::Spring(motion::GLIDE), Curve::Spring(Spring::new(0.5, 0.3)), tween, Curve::Decay(Decay::IOS_NORMAL), Curve::Instant];
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut mix = |x: f32| {
-        h ^= u64::from(x.to_bits());
-        h = h.wrapping_mul(0x100_0000_01b3);
-    };
     for (n, &c) in curves.iter().enumerate() {
         let mut a = Animated::new(Vec2::new(0.0, 10.0));
         a.animate_to(Vec2::new(100.0, -40.0), Anim::new(Curve::Spring(motion::SNAP)), 0.0);
         a.animate_to(Vec2::new(-30.0, 60.0), Anim::new(c), 0.07);
         a.animate_to(Vec2::new(5.0, 5.0), Anim::new(c).velocity(Velocity::Uniform(250.0)), 0.13);
         a.release(Vec2::new(-800.0, 400.0), Vec2::new(20.0 * n as f32, 0.0), c, 0.2);
-        for k in 0..40 {
-            let t = 0.2 + f64::from(k) * 0.025;
+        for (i, &k) in ANCHORS.iter().enumerate() {
+            let t = 0.2 + k as f64 * 0.025;
             let (x, v) = (a.sample(t), a.velocity(t));
-            [x.x, x.y, v.x, v.y].into_iter().for_each(&mut mix);
+            let got = [x.x, x.y, v.x, v.y];
+            for (j, (&g, &w)) in got.iter().zip(&SAMPLES[n][i]).enumerate() {
+                assert!(close(g, w), "curve {n} sample {k} field {j}: {g} vs {w}");
+            }
         }
         let tg = a.target();
-        mix(tg.x);
-        mix(tg.y);
+        assert!(close(tg.x, TARGETS[n][0]) && close(tg.y, TARGETS[n][1]), "curve {n} target: {tg:?} vs {:?}", TARGETS[n]);
     }
-    assert_eq!(h, 15_969_925_884_686_696_054, "golden hash");
 }
 
 #[test]
