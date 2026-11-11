@@ -6,8 +6,14 @@ impl Windows {
     /// The app starts to quit (`crate::quit`): every window still open runs `App::on_quit`, once
     /// per quit. A session ending now (`ending`) then closes the windows as their close buttons
     /// would, before the loop ends, as a macOS logout does: the OS may end the process next.
-    pub(super) fn quit(&mut self, event_loop: &ActiveEventLoop, ending: bool) {
+    /// With `hide`, every window leaves the screen first, so the quit looks done the moment it
+    /// starts and the hooks run unseen.
+    pub(super) fn quit(&mut self, event_loop: &ActiveEventLoop, ending: bool, hide: bool) {
         use crate::quit::{After, Effect, Event};
+        if hide {
+            for host in self.hosts.iter_mut().flatten() { host.vanish(); }
+            crate::marks::mark("quit.hidden");
+        }
         for effect in crate::quit::send(Event::Start { ending, after: After::Exit }) {
             match effect {
                 Effect::RunHooks => {

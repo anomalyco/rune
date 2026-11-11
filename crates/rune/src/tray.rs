@@ -90,6 +90,15 @@ pub struct Tray {
     native: native::Native,
 }
 
+/// Takes every tray icon off the notification area now, before a fast exit ends the process
+/// (`crate::fast_exit`). Elsewhere the icon goes with the process: its D-Bus name (Linux) or
+/// status item (macOS) ends when the connection does.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn remove_all() {
+    #[cfg(target_os = "windows")]
+    native::remove_all();
+}
+
 impl Tray {
     pub fn new(spec: TraySpec, on_event: impl Fn(TrayEvent) + Send + Sync + 'static) -> Result<Self, TrayError> {
         if spec.icon.rgba.len() != spec.icon.width as usize * spec.icon.height as usize * 4 {

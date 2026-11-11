@@ -99,6 +99,57 @@ pub(crate) fn step(state: State, event: Event) -> (State, Vec<Effect>) {
 }
 
 static STATE: Mutex<State> = Mutex::new(State::Running);
+static FAST_EXIT: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
+
+/// Ends the process without tearing anything down once the app has quit: every window hides as
+/// the quit starts, every window's `App::on_quit` runs, the clipboard hands over what it holds,
+/// tray icons leave the notification area, a relaunch starts, then `last` runs (the app's final
+/// durable write, a trace) and the process ends at once. Windows, GPU devices, threads and memory
+/// aren't dropped: the OS takes them back, which on Windows skips hundreds of milliseconds of
+/// destructors and graphics-driver `DllMain` detach. Nothing after the event loop returns runs,
+/// so whatever the app does there belongs in `last` or its quit hooks. Set it once, before the
+/// app runs; a later call does nothing. On the web the page's own lifetime applies instead.
+pub fn fast_exit(last: fn()) {
+    let _ = FAST_EXIT.set(last);
+}
+
+/// The app's last step before a fast exit, when it asked for one (`fast_exit`).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn fast_exit_hook() -> Option<fn()> {
+    FAST_EXIT.get().copied()
+}
+
+/// A fast exit, once the windows' hooks ran and the loop is ending: what must leave the system
+/// tidy goes in order (the clipboard's hand-over, tray icons, a relaunch), then the app's
+/// `last`, then the process ends without dropping a window, a device or an allocation.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn end_fast(last: fn()) -> ! {
+    crate::clipboard::shutdown();
+    crate::tray::remove_all();
+    if send(Event::Exited).contains(&Effect::Relaunch) {
+        relaunch::spawn();
+    }
+    crate::marks::mark("quit.last");
+    last();
+    end_process()
+}
+
+/// Ends this process now with exit code 0: no destructors, no `atexit`, no DLL detach.
+#[cfg(not(target_arch = "wasm32"))]
+fn end_process() -> ! {
+    crate::marks::mark("quit.end");
+    #[cfg(target_os = "windows")]
+    // SAFETY: the pseudo-handle names this process; TerminateProcess on it doesn't return.
+    unsafe {
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+        TerminateProcess(GetCurrentProcess(), 0);
+    }
+    #[cfg(unix)]
+    // SAFETY: `_exit` ends the process without running anything of this process's.
+    unsafe { libc::_exit(0) }
+    #[allow(unreachable_code)]
+    std::process::exit(0)
+}
 
 /// Steps the app's quit, returning what the loop must do.
 pub(crate) fn send(event: Event) -> Vec<Effect> {

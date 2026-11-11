@@ -34,6 +34,8 @@ impl<T: 'static> AnyHost for Overlay<T> {
         self.sync(event_loop);
     }
 
+    fn vanish(&mut self) { self.hide(); }
+
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
         self.meter.waited();
         #[cfg(target_os = "macos")]
