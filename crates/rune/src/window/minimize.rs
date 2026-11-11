@@ -3,7 +3,7 @@
 use super::*;
 use crate::machine::Effects;
 
-/// A minimize the app asked for, and whether it waits for a show first.
+/// A minimize the app asked for, and one a hidden poll holds for the show in the same turn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Minimize {
     /// Nothing asked.
@@ -11,9 +11,10 @@ pub(crate) enum Minimize {
     None,
     /// Asked; a shell minimizes at its next step.
     Asked,
-    /// A hidden poll asked in a turn that shows the window: the poll's shell leaves it for the
-    /// shell after the show.
-    AfterShow,
+    /// A hidden poll in a show turn took the ask out of the shell's hands for its own shell, and
+    /// holds it for after. `field` is what is in the field meanwhile: an ask that arrived while
+    /// that shell ran (a pop-up's callback, say), which the shell takes first.
+    Held { field: bool },
 }
 
 /// What became of a minimize.
@@ -21,13 +22,13 @@ pub(crate) enum Minimize {
 pub(crate) enum MinimizeEvent {
     /// `Tx::minimize`, `AppHandle::minimize`, or the standard minimize key.
     Asked,
-    /// A poll of a hidden window, in a turn that shows it: the show comes first.
+    /// A poll of a hidden window, in a turn that shows it: it holds the ask for after its shell.
     HeldForShow,
-    /// The show that turn asked for is carried out.
-    Shown,
-    /// A shell took what waited.
+    /// That poll's shell is done: the ask it held is due again.
+    Returned,
+    /// A shell took what waits.
     Taken,
-    /// The window hid or closed.
+    /// The window hid or closed: it takes what waits back out.
     Lost,
 }
 
@@ -39,29 +40,43 @@ pub(crate) enum MinimizeEffect {
 }
 
 impl Minimize {
-    /// Whether a shell has something to do now: an asked minimize is due, a held one waits.
-    pub(crate) fn asked(self) -> bool { matches!(self, Minimize::Asked) }
-
-    /// Whether anything asked, held or due: what a window that can't minimize reports.
+    /// Whether an ask waits at all, held or not.
     pub(crate) fn latched(self) -> bool { !matches!(self, Minimize::None) }
+
+    /// What waits for a shell now, dev's `minimize_request`. An ask a hidden poll holds is out
+    /// of it until that poll's shell is done.
+    pub(crate) fn field(self) -> bool {
+        match self {
+            Minimize::None => false,
+            Minimize::Asked => true,
+            Minimize::Held { field } => field,
+        }
+    }
 }
 
-/// The one transition. Any ask latches it, a show's own hidden poll holds it for the show, the
-/// show makes it due, and a shell takes it once — a shell that runs before the show leaves it.
-/// Hiding or closing drops it.
+/// The one transition. An ask latches in the field. A hidden poll in a show turn takes it and
+/// holds it across its own shell, so that shell takes only what arrives meanwhile; when it
+/// returns the held ask is due again, and the shell after the show takes it once. Hiding or
+/// closing takes what waits back out.
 pub(crate) fn step(state: &mut Minimize, event: MinimizeEvent) -> Effects<MinimizeEffect> {
     use Minimize as M;
     use MinimizeEvent as E;
     match (*state, event) {
-        (_, E::Lost) => { *state = M::None; Effects::none() }
-        (_, E::Asked) => { *state = M::Asked; Effects::none() }
+        (M::None, E::Asked) => { *state = M::Asked; Effects::none() }
         (M::None, _) => Effects::none(),
-        (M::Asked, E::HeldForShow) => { *state = M::AfterShow; Effects::none() }
-        (M::AfterShow, E::HeldForShow) => Effects::none(),
-        (M::AfterShow, E::Shown) => { *state = M::Asked; Effects::none() }
-        (M::Asked, E::Shown) => Effects::none(),
+        (M::Asked, E::Asked) => Effects::none(),
+        (M::Asked, E::HeldForShow) => { *state = M::Held { field: false }; Effects::none() }
+        // A second poll in the turn would take the field again, and hold what it finds.
+        (M::Held { field: true }, E::HeldForShow) => { *state = M::Held { field: false }; Effects::none() }
+        (M::Held { field: false }, E::HeldForShow) => { *state = M::None; Effects::none() }
+        (M::Held { field }, E::Asked) => { *state = M::Held { field: true }; Effects::none() }
         (M::Asked, E::Taken) => { *state = M::None; Effects::one(MinimizeEffect::Minimize) }
-        (M::AfterShow, E::Taken) => Effects::none(),
+        (M::Held { field: true }, E::Taken) => { *state = M::Held { field: false }; Effects::one(MinimizeEffect::Minimize) }
+        (M::Held { field: false }, E::Taken) => Effects::none(),
+        (M::Held { .. }, E::Returned) => { *state = M::Asked; Effects::none() }
+        (M::Asked | M::None, E::Returned) => Effects::none(),
+        (M::Asked, E::Lost) => { *state = M::None; Effects::none() }
+        (M::Held { .. }, E::Lost) => { *state = M::Held { field: false }; Effects::none() }
     }
 }
 

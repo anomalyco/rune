@@ -5,11 +5,6 @@ use super::*;
 
 impl<S: 'static> Host<S> {
     pub(super) fn window_request(&mut self, event_loop: &ActiveEventLoop, request: WindowRequest) {
-        // A minimize asked in the same turn as a show waits for it (`Minimize`): the shell
-        // after the show takes it.
-        if matches!(request, WindowRequest::Show | WindowRequest::Open(_)) {
-            self.rt.minimize_step(MinimizeEvent::Shown);
-        }
         match request {
             WindowRequest::Open(token) => self.open(event_loop, token),
             WindowRequest::Show => self.show(event_loop),
@@ -261,9 +256,11 @@ impl<S: 'static> Host<S> {
         if event_loop.exiting() || self.shown_win().is_some() { return false; }
         let changed = self.rt.poll_hidden();
         self.clipboard.flush(&mut self.rt);
-        // A show this turn minimizes after it: this poll's shell leaves the request.
+        // A show this turn minimizes after it: this poll holds the ask across its own shell, and
+        // a callback's ask during that shell is the one it takes first.
         if shows { self.rt.minimize_step(MinimizeEvent::HeldForShow); }
         self.shell(event_loop);
+        if shows { self.rt.minimize_step(MinimizeEvent::Returned); }
         if changed && self.launcher() { self.refresh_hidden(); }
         true
     }
@@ -336,7 +333,7 @@ impl<S: 'static> Host<S> {
             if self.file_dialog.open(&mut self.rt, window.map(|w| &**w)) && let Some(w) = shown { w.request_redraw(); }
             // A callback that ran (a menu that couldn't open) may have asked to close, quit or
             // minimize.
-            if self.rt.shell_request.is_none() && !self.rt.minimize.asked() { return; }
+            if self.rt.shell_request.is_none() && !self.rt.minimize.field() { return; }
         }
     }
 

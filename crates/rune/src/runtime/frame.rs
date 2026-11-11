@@ -168,9 +168,9 @@ impl<S: 'static> Runtime<S> {
 
     /// Takes a `Tx::minimize` that `what` can't carry out, saying so in debug builds.
     pub(crate) fn ignore_minimize(&mut self, what: &str) {
-        let latched = self.minimize.latched();
+        let field = self.minimize.field();
         self.minimize_step(crate::window::MinimizeEvent::Lost);
-        if latched && cfg!(debug_assertions) {
+        if field && cfg!(debug_assertions) {
             eprintln!("rune: minimize ignored: {what} can't minimize");
         }
     }

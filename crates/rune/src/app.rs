@@ -1129,11 +1129,11 @@ mod tests {
         rt.window_focus(true);
         assert!(!rt.minimize.latched());
         rt.window_focus(false);
-        assert!(rt.minimize.asked() && rt.shell_request.is_none(), "a handler's minimize is latched for the shell");
+        assert!(rt.minimize.field() && rt.shell_request.is_none(), "a handler's minimize is latched for the shell");
         rt.ignore_minimize("a test");
         assert!(!rt.minimize.latched(), "a shell that can't minimize takes the request");
         rt.update(|_, tx| tx.minimize());
-        assert!(rt.minimize.asked());
+        assert!(rt.minimize.field());
         let app = App::new(spec());
         app.handle().minimize();
         let requests = app.shared.take();

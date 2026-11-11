@@ -4,6 +4,8 @@
 
 use super::minimize::{step, MinimizeEffect, MinimizeEvent};
 use super::{Minimize, WakeFacts, WakeWork};
+use crate::Cx;
+use crate::runtime::Runtime;
 
 /// Every sequence of `alphabet` up to `len` long, prefixes first.
 fn walk<E: Copy>(alphabet: &[E], len: usize, mut run: impl FnMut(&[E])) {
@@ -49,65 +51,62 @@ fn a_drain_asks_the_window_for_the_same_work_as_dev_for_every_fact() {
 enum Op {
     /// `Tx::minimize`, `AppHandle::minimize`, or the standard key.
     Asked,
-    /// `poll_hidden` in a turn that shows the window: the poll, then its shell.
-    HeldForShow,
-    /// `window_request(Show | Open)`.
-    Shown,
+    /// `poll_hidden` in a turn that shows the window: `let minimize = shows && take(...)`.
+    PollEnter,
     /// A shell's minimize step.
     Taken,
-    /// `close` or `stop_showing`.
+    /// The poll's shell is done: `minimize_request |= minimize`.
+    PollReturn,
+    /// `close` or `stop_showing`: `minimize_request = false`.
     Lost,
 }
 
-/// dev's minimize latch, `Runtime::minimize_request`, as its call sites left it.
+/// dev's minimize latch, `Runtime::minimize_request`, and the local `poll_hidden` kept across
+/// its own shell, as dev's call sites left them.
 #[derive(Default)]
 struct DevMinimize {
     /// `minimize_request`.
     latch: bool,
-    /// The poll of a hidden window took it, and its own shell saw nothing.
-    held: bool,
+    /// `let minimize = shows && std::mem::take(&mut self.rt.minimize_request);`, the local the
+    /// whole shell ran under, callbacks included.
+    saved: Option<bool>,
 }
 
 impl DevMinimize {
     /// The call site as dev wrote it, saying whether it called `minimize()`.
     fn apply(&mut self, op: Op) -> bool {
         match op {
-            // `latch_requests`: `minimize_request |= std::mem::take(&mut tx.minimize)`.
+            // `latch_requests`, `AppHandle::minimize`, the standard key: `latch = true`.
             Op::Asked => {
                 self.latch = true;
-                self.held = false;
                 false
             }
-            // `poll_hidden`: `let minimize = shows && take(); self.shell(..); minimize_request |= minimize`.
-            Op::HeldForShow => {
-                let minimize = std::mem::take(&mut self.latch);
-                self.latch |= minimize;
-                self.held = minimize;
-                false
-            }
-            // `window_request`: the show and its reveal never touched the latch.
-            Op::Shown => {
-                self.held = false;
+            // `poll_hidden`, before its shell.
+            Op::PollEnter => {
+                self.saved = Some(std::mem::take(&mut self.latch));
                 false
             }
             // `shell`: `let minimize = std::mem::take(&mut self.minimize_request);` then
             // `None if minimize => self.minimize()`.
-            Op::Taken => {
-                // differs from dev: a shell that reaches a minimize held for a show still to
-                // come leaves it. dev took it and handed a hidden window a `minimize()` it
-                // ignored, which dropped the request. The window always sends the show before
-                // that shell, so the difference is a request kept, never a frame.
-                if self.held { return false; }
-                std::mem::take(&mut self.latch)
+            Op::Taken => std::mem::take(&mut self.latch),
+            // `poll_hidden`, after its shell: `self.rt.minimize_request |= minimize;`.
+            Op::PollReturn => {
+                self.latch |= self.saved.take().unwrap_or(false);
+                false
             }
             // `close` and `stop_showing`: `minimize_request = false`.
             Op::Lost => {
                 self.latch = false;
-                self.held = false;
                 false
             }
         }
     }
+
+    /// The ask waiting: in the field, or in the local this poll took out of it.
+    fn latched(&self) -> bool { self.latch || self.saved.unwrap_or(false) }
+
+    /// What a shell would take now.
+    fn field(&self) -> bool { self.latch }
 }
 
 fn apply_event(state: &mut Minimize, event: MinimizeEvent) -> bool {
@@ -117,9 +116,9 @@ fn apply_event(state: &mut Minimize, event: MinimizeEvent) -> bool {
 fn apply_minimize(state: &mut Minimize, op: Op) -> bool {
     let event = match op {
         Op::Asked => MinimizeEvent::Asked,
-        Op::HeldForShow => MinimizeEvent::HeldForShow,
-        Op::Shown => MinimizeEvent::Shown,
+        Op::PollEnter => MinimizeEvent::HeldForShow,
         Op::Taken => MinimizeEvent::Taken,
+        Op::PollReturn => MinimizeEvent::Returned,
         Op::Lost => MinimizeEvent::Lost,
     };
     apply_event(state, event)
@@ -127,46 +126,72 @@ fn apply_minimize(state: &mut Minimize, op: Op) -> bool {
 
 #[test]
 fn a_shell_minimizes_once_exactly_where_dev_did_for_every_sequence() {
-    let alphabet = [Op::Asked, Op::HeldForShow, Op::Shown, Op::Taken, Op::Lost];
+    let alphabet = [Op::Asked, Op::PollEnter, Op::Taken, Op::PollReturn, Op::Lost];
     let mut cases = 0;
     walk(&alphabet, 6, |seq| {
         cases += 1;
         let (mut dev, mut state) = (DevMinimize::default(), Minimize::None);
         for (i, &op) in seq.iter().enumerate() {
             assert_eq!(apply_minimize(&mut state, op), dev.apply(op), "{seq:?} at {i}");
-            assert_eq!(state.latched(), dev.latch, "{seq:?} at {i}");
+            assert_eq!(state.latched(), dev.latched(), "{seq:?} at {i}");
+            assert_eq!(state.field(), dev.field(), "{seq:?} at {i}");
         }
     });
     assert_eq!(cases, (0..=6).map(|k| 5usize.pow(k)).sum::<usize>());
 }
 
 #[test]
-fn a_minimize_asked_in_a_show_turn_waits_for_the_show() {
-    // The turn's own order: poll a hidden window, show it, then shell.
-    let (mut state, mut took) = (Minimize::None, Vec::new());
-    for event in [MinimizeEvent::Asked, MinimizeEvent::HeldForShow, MinimizeEvent::Taken, MinimizeEvent::Shown, MinimizeEvent::Taken] {
-        took.push(apply_event(&mut state, event));
-    }
-    assert_eq!(took, [false, false, false, false, true], "the poll's shell leaves it, the show's shell takes it");
-    assert_eq!(state, Minimize::None);
+fn a_poll_that_holds_a_minimize_lets_the_shell_after_the_show_take_it() {
+    // The turn's own order: the poll saves its ask, its shell leaves it, then the show's shell
+    // takes it, and the window is minimized once — after it is shown.
+    let mut rt = Runtime::new(0u32, |_: &u32, _: &mut Cx<u32>| crate::el(), (100.0, 100.0), crate::Env::default());
+    rt.update(|_, tx| tx.minimize());
+    assert!(!rt.minimize_step(MinimizeEvent::HeldForShow), "the poll's shell doesn't take it");
+    assert!(!rt.minimize_step(MinimizeEvent::Taken));
+    assert!(!rt.minimize_step(MinimizeEvent::Returned), "nothing to carry out at the return");
+    assert!(rt.minimize_step(MinimizeEvent::Taken), "the shell after the show takes it");
+    assert_eq!(rt.minimize, Minimize::None);
 }
 
 #[test]
-fn a_second_ask_after_a_held_minimize_is_due_before_the_show() {
-    // `AppHandle::minimize` after the poll: the later ask no longer waits.
+fn a_popup_callback_s_minimize_does_not_take_the_ask_a_hidden_poll_holds() {
+    // A hidden window receives Show. Its poll asks to minimize and opens a pop-up; with no shown
+    // window the pop-up resolves at once with `None`, and that callback asks again. The hidden
+    // shell's retry takes the callback's ask, and the poll's own ask is still due after the show.
+    let mut rt = Runtime::new(0u32, |_: &u32, _: &mut Cx<u32>| crate::el(), (100.0, 100.0), crate::Env::default());
+    let mut took = Vec::new();
+    rt.update(|_, tx| tx.minimize());
+    took.push(rt.minimize_step(MinimizeEvent::HeldForShow));
+    took.push(rt.minimize_step(MinimizeEvent::Taken));
+    rt.update(|_, tx| tx.minimize());
+    took.push(rt.minimize_step(MinimizeEvent::Taken));
+    took.push(rt.minimize_step(MinimizeEvent::Returned));
+    took.push(rt.minimize_step(MinimizeEvent::Taken));
+    assert_eq!(took, [false, false, true, false, true], "the retry takes the callback's, the show's shell the poll's");
+    assert_eq!(rt.minimize, Minimize::None);
+}
+
+#[test]
+fn a_second_ask_during_a_hidden_poll_is_due_before_the_show() {
     let (mut state, mut took) = (Minimize::None, Vec::new());
     for event in [MinimizeEvent::Asked, MinimizeEvent::HeldForShow, MinimizeEvent::Asked, MinimizeEvent::Taken] {
         took.push(apply_event(&mut state, event));
     }
     assert_eq!(took, [false, false, false, true]);
-    assert_eq!(state, Minimize::None);
+    assert!(!state.field());
 }
 
 #[test]
-fn hiding_and_closing_drop_a_minimize_that_waits() {
-    for state in [Minimize::Asked, Minimize::AfterShow] {
-        let mut state = state;
-        assert!(!apply_event(&mut state, MinimizeEvent::Lost));
-        assert_eq!(state, Minimize::None);
-    }
+fn hiding_and_closing_take_a_minimize_back_out_but_not_one_a_poll_holds() {
+    let mut state = Minimize::Asked;
+    assert!(!apply_event(&mut state, MinimizeEvent::Lost));
+    assert_eq!(state, Minimize::None);
+    // dev's local outlived a close inside the poll's shell, and was restored after it.
+    let mut state = Minimize::None;
+    assert!(!apply_event(&mut state, MinimizeEvent::Asked));
+    assert!(!apply_event(&mut state, MinimizeEvent::HeldForShow));
+    assert!(!apply_event(&mut state, MinimizeEvent::Lost));
+    assert!(state.latched(), "the held ask is not the field's to take");
+    assert!(!apply_event(&mut state, MinimizeEvent::Returned));
+    assert_eq!(state, Minimize::Asked);
 }
