@@ -1,24 +1,26 @@
 //! Elements that fly to their place on one screen path: `El::matched` pairs and `Tx::launch`.
+use crate::machine::{Attempt, Effects, Seq};
 use super::*;
 
 /// `Tx::launch` and `El::matched` flights: each one from the frame it is asked for until it
 /// lands, and the launches still waiting for their destination to mount.
 #[derive(Default)]
 pub(super) struct Launches {
-    seq: u32,
+    seq: Seq,
     launches: Vec<Launch>,
 }
 
-/// One launch or matched flight, with the id that names it while it has no node to fly to yet.
+/// One launch or matched flight, with the attempt that names it while it has no node to fly to
+/// yet.
 struct Launch {
-    id: LaunchId,
+    attempt: Attempt,
     phase: LaunchPhase,
 }
 
 /// Where a launch is between being asked for and landing.
 enum LaunchPhase {
     /// `Tx::launch`: its source's text was at `from` on screen, and it waits for the commit
-    /// that mounts `target`. One whose destination never mounts is dropped, by the id it has.
+    /// that mounts `target`. Its answer carries the attempt back.
     Waiting { target: String, from: [f32; 2] },
     /// In the air, at the node it flies to.
     Airborne(Airborne),
@@ -32,9 +34,28 @@ enum Airborne {
     Unclipped { id: NodeId },
 }
 
-/// A launch's identity, since one waiting for its destination has no node id yet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct LaunchId(u32);
+/// What moves a launch on, from being asked for to landing.
+enum LaunchEvent<'a> {
+    /// `Tx::launch` asked for `target` this frame, whose source's text was at `from` on screen.
+    Ask { target: String, from: [f32; 2] },
+    /// A commit builds: hand out the launches waiting for a destination to mount.
+    Commit,
+    /// The destination the launch `attempt` waited for mounted, and its flight starts there.
+    TakeOff { attempt: Attempt, flight: Launched },
+    /// It didn't mount, so the launch is over.
+    Missed { attempt: Attempt },
+    /// An `El::matched` flight on `id` starts (`on`) or stops drawing outside every clip.
+    Unclip { id: NodeId, on: bool },
+    /// The window's flights are `flying`: the ones in the air that left them landed.
+    Flights { flying: &'a [(NodeId, MRect)] },
+}
+
+/// What a transition asks its caller to do: find `target`'s node in the commit's tree and start
+/// its path from `from`, then feed the flight back as `TakeOff`, or `Missed` when it didn't
+/// mount. A launch keeps its attempt while it waits, so a late answer changes nothing.
+enum LaunchEffect {
+    Mount { attempt: Attempt, target: String, from: [f32; 2] },
+}
 
 impl Launch {
     /// The node it flies to, once it has one.
@@ -74,36 +95,75 @@ impl Launches {
 
     /// `Tx::launch` asked for `target` this frame, whose source's text was at `from` on screen.
     pub(super) fn wait(&mut self, target: String, from: [f32; 2]) {
-        let id = self.next();
-        self.launches.push(Launch { id, phase: LaunchPhase::Waiting { target, from } });
+        self.step(LaunchEvent::Ask { target, from });
     }
 
-    /// The launches waiting for their destination to mount, taken out.
-    pub(super) fn take_waiting(&mut self) -> Vec<Launch> {
-        let launches = std::mem::take(&mut self.launches);
-        let mut waiting = Vec::new();
-        let mut airborne = Vec::with_capacity(launches.len());
-        for launch in launches {
-            if matches!(launch.phase, LaunchPhase::Waiting { .. }) { waiting.push(launch) } else { airborne.push(launch) }
-        }
-        self.launches = airborne;
-        waiting
+    /// What this commit mounts, in the order they were asked for. Each launch waits for its
+    /// answer (`take_off` or `miss`) before it is over.
+    pub(super) fn commit(&mut self) -> Vec<LaunchEffect> { self.step(LaunchEvent::Commit).into_iter().collect() }
+
+    /// The destination `attempt` waited for mounted, and `flight` starts at its node.
+    pub(super) fn take_off(&mut self, attempt: Attempt, flight: Launched) {
+        self.step(LaunchEvent::TakeOff { attempt, flight });
     }
 
-    /// Puts launch `id` in the air with `flight`, replacing the flight its node already had.
-    pub(super) fn start(&mut self, id: LaunchId, flight: Launched) {
-        let to = flight.id;
-        self.launches.retain(|l| l.airborne_id() != Some(to));
-        self.launches.push(Launch { id, phase: LaunchPhase::Airborne(Airborne::Launched(flight)) });
-    }
+    /// The destination `attempt` waited for didn't mount, so its launch is over.
+    pub(super) fn miss(&mut self, attempt: Attempt) { self.step(LaunchEvent::Missed { attempt }); }
 
     /// Starts (`on`) or drops the entry for `id`'s `El::matched` flight, which draws it outside
     /// every clip until it lands. A `Tx::launch` on the same node draws it so already.
-    pub(super) fn unclip(&mut self, id: NodeId, on: bool) {
-        self.launches.retain(|l| !matches!(&l.phase, LaunchPhase::Airborne(Airborne::Unclipped { id: other }) if *other == id));
-        if on && !self.flying(id) {
-            let launch = self.next();
-            self.launches.push(Launch { id: launch, phase: LaunchPhase::Airborne(Airborne::Unclipped { id }) });
+    pub(super) fn unclip(&mut self, id: NodeId, on: bool) { self.step(LaunchEvent::Unclip { id, on }); }
+
+    /// Drops the flights in the air that landed (left `flying`). Launches still waiting for
+    /// their destination stay for the commit that mounts it.
+    pub(super) fn keep(&mut self, flying: &[(NodeId, MRect)]) { self.step(LaunchEvent::Flights { flying }); }
+
+    /// One transition: the phase each event leaves a launch in, and the mount attempts a commit
+    /// hands out. The caller finds the node and starts its path, then feeds the answer back.
+    fn step(&mut self, event: LaunchEvent) -> Effects<LaunchEffect> {
+        match event {
+            LaunchEvent::Ask { target, from } => {
+                let attempt = self.seq.next();
+                self.launches.push(Launch { attempt, phase: LaunchPhase::Waiting { target, from } });
+                Effects::none()
+            }
+            LaunchEvent::Commit => {
+                let mut mounts = Effects::none();
+                for launch in &self.launches {
+                    if let LaunchPhase::Waiting { target, from } = &launch.phase {
+                        mounts.push(LaunchEffect::Mount { attempt: launch.attempt, target: target.clone(), from: *from });
+                    }
+                }
+                mounts
+            }
+            LaunchEvent::TakeOff { attempt, flight } => {
+                let waiting = self.launches.iter().position(|l| l.attempt == attempt && matches!(l.phase, LaunchPhase::Waiting { .. }));
+                // An answer whose launch is no longer waiting changes nothing.
+                if let Some(at) = waiting {
+                    let to = flight.id;
+                    self.launches.remove(at);
+                    // It takes over the flight its node already had: a matched one, unclipped.
+                    self.launches.retain(|l| l.airborne_id() != Some(to));
+                    self.launches.push(Launch { attempt, phase: LaunchPhase::Airborne(Airborne::Launched(flight)) });
+                }
+                Effects::none()
+            }
+            LaunchEvent::Missed { attempt } => {
+                self.launches.retain(|l| !(l.attempt == attempt && matches!(l.phase, LaunchPhase::Waiting { .. })));
+                Effects::none()
+            }
+            LaunchEvent::Unclip { id, on } => {
+                self.launches.retain(|l| !matches!(&l.phase, LaunchPhase::Airborne(Airborne::Unclipped { id: other }) if *other == id));
+                if on && !self.flying(id) {
+                    let attempt = self.seq.next();
+                    self.launches.push(Launch { attempt, phase: LaunchPhase::Airborne(Airborne::Unclipped { id }) });
+                }
+                Effects::none()
+            }
+            LaunchEvent::Flights { flying } => {
+                self.launches.retain(|l| l.airborne_id().is_none_or(|id| flying.iter().any(|f| f.0 == id)));
+                Effects::none()
+            }
         }
     }
 
@@ -127,12 +187,6 @@ impl Launches {
             LaunchPhase::Airborne(Airborne::Launched(f)) if f.id == id => Some(f),
             _ => None,
         })
-    }
-
-    fn next(&mut self) -> LaunchId {
-        let id = LaunchId(self.seq);
-        self.seq = self.seq.wrapping_add(1);
-        id
     }
 
     /// Before its destination's layout moves mid-flight and its path restarts from where it is
@@ -164,12 +218,6 @@ impl Launches {
         let Some(l) = self.flight(id) else { return [rune_motion::Vec2::ZERO; 2] };
         let ([ox, oy], [vx, vy]) = l.blend(scene);
         [rune_motion::Vec2::new(ox, oy), rune_motion::Vec2::new(vx - l.drift[0], vy - l.drift[1])]
-    }
-
-    /// Drops the flights in the air that landed (left `flying`). Launches still waiting for
-    /// their destination stay for the commit that mounts it.
-    pub(super) fn keep(&mut self, flying: &[(NodeId, MRect)]) {
-        self.launches.retain(|l| l.airborne_id().is_none_or(|id| flying.iter().any(|f| f.0 == id)));
     }
 
     /// A launch leaves from where its source was seen and flies to where its destination is
@@ -343,17 +391,25 @@ impl<S: 'static> Runtime<S> {
     /// `Tx::launch`, in the commit: each destination that just mounted starts with its first
     /// text where its source's text was seen, at its own size, and flies to its place unclipped.
     pub(super) fn launch_elements(&mut self, nodes: &[Node], tx: &Tx, instant: bool) {
-        let launches = self.launches.take_waiting();
-        if instant || tx.settle || self.reduced_motion { return; }
+        let mounts = self.launches.commit();
+        if instant || tx.settle || self.reduced_motion {
+            for LaunchEffect::Mount { attempt, .. } in mounts { self.launches.miss(attempt); }
+            return;
+        }
         let index: HashMap<NodeId, usize> = self.nodes.iter().enumerate().map(|(k, n)| (n.id, k)).collect();
         let built: HashMap<NodeId, usize> = self.built_ids.iter().enumerate().map(|(k, &id)| (id, k)).collect();
         let scale = self.env.scale;
-        for launch in launches {
-            let Launch { id, phase } = launch;
-            let LaunchPhase::Waiting { target, from } = phase else { continue };
-            let Some(i) = nodes.iter().position(|n| crate::flight::selects(&target, &n.path, n.key.as_deref())) else { continue };
+        for mount in mounts {
+            let LaunchEffect::Mount { attempt, target, from } = mount;
+            let Some(i) = nodes.iter().position(|n| crate::flight::selects(&target, &n.path, n.key.as_deref())) else {
+                self.launches.miss(attempt);
+                continue;
+            };
             let to = nodes[i].id;
-            if index.contains_key(&to) && !self.is_exiting(to) { continue; }
+            if index.contains_key(&to) && !self.is_exiting(to) {
+                self.launches.miss(attempt);
+                continue;
+            }
             let within = |mut j: usize| loop {
                 match nodes[j].parent {
                     Some(p) if p == i => break true,
@@ -388,7 +444,7 @@ impl<S: 'static> Runtime<S> {
             self.scene.launch(to, start, LayoutAnim::new(spring).screen());
             self.flying.retain(|f| f.0 != to);
             self.flying.push((to, nodes[i].local));
-            self.launches.start(id, Launched { id: to, shift, drawn: None, drift: [0.0; 2], folded: [0.0; 2], folded_at: [0.0; 2] });
+            self.launches.take_off(attempt, Launched { id: to, shift, drawn: None, drift: [0.0; 2], folded: [0.0; 2], folded_at: [0.0; 2] });
         }
     }
 
