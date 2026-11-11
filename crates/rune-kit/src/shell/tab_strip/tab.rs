@@ -33,21 +33,32 @@ pub(super) struct Place {
     pub width: Option<f32>,
     pub density: TabDensity,
     pub active: bool,
+    /// A separator stands before it: neither it nor the tab before it is active. Either one's
+    /// hover hides it, by Rune's hover groups, so a hover commits nothing.
     pub separator: bool,
 }
 
+/// The hover group a tab shares with the separator after it (`Place::separator` of the next).
+fn hover_key(list_key: &str, id: &str) -> String {
+    format!("{list_key}-hover-{id}")
+}
+
 /// The tab, and while it's torn out of a layered strip, its copy floating over the window: a tab
-/// inside the strip stays inside the strip's clip.
-pub(super) fn build<S: 'static>(item: TabItem<'_, S>, at: Place, st: &Strip<S>, k: &Kit) -> (El, Option<El>) {
+/// inside the strip stays inside the strip's clip. `prev`: the id of the tab before it.
+///
+/// What its hover changes (the wash, the title's fade, the close button, the slot's ground and
+/// the separators either side) is drawn by Rune's hover groups, not from state, so a hover runs
+/// no view.
+pub(super) fn build<S: 'static>(item: TabItem<'_, S>, at: Place, prev: Option<&str>, st: &Strip<S>, k: &Kit) -> (El, Option<El>) {
     let c = &k.c;
     let id = item.id.into_owned();
     let vertical = at.width.is_none();
-    let hovered = st.drag.hovered() == Some(id.as_str());
     let lifted = st.drag.dragging() == Some(at.index);
     let torn = lifted && st.drag.torn_out();
     let editing = item.editor.is_some();
     let status = item.status;
-    let emphasized = at.active || hovered || status.is_some() || editing;
+    // Emphasized whatever the pointer does; a hover emphasizes the rest (`title`, `status_slot`).
+    let emphasized = at.active || status.is_some() || editing;
     let icon_only = at.density == TabDensity::IconOnly;
     let dotted = matches!(status, Some(TabItemStatus::Attention | TabItemStatus::Unread | TabItemStatus::Failed));
     let busy = status == Some(TabItemStatus::Busy);
@@ -58,7 +69,7 @@ pub(super) fn build<S: 'static>(item: TabItem<'_, S>, at: Place, st: &Strip<S>, 
     // active or dragged one, the hover wash under the pointer.
     let overlay = if at.active || lifted || editing {
         c.pressed
-    } else if item.marked || hovered {
+    } else if item.marked {
         c.hover
     } else {
         Color::TRANSPARENT
@@ -97,7 +108,9 @@ pub(super) fn build<S: 'static>(item: TabItem<'_, S>, at: Place, st: &Strip<S>, 
         (_, Some(t)) => pill.child(lead).child(t),
         (_, None) => pill.child(lead),
     };
-    let look = SlotLook { status, active: at.active, vertical, icon_only, hovered, closable, composite, h, width: at.width };
+    // What the pointer lays over the slot's ground where the tab has no overlay of its own.
+    let hover_overlay = (overlay == Color::TRANSPARENT).then_some(c.hover);
+    let look = SlotLook { status, active: at.active, vertical, icon_only, hover_overlay, closable, composite, h, width: at.width };
     if let Some(slot) = status_slot(look, st, &id, k) {
         pill = pill.child(slot);
     }
@@ -126,6 +139,8 @@ pub(super) fn build<S: 'static>(item: TabItem<'_, S>, at: Place, st: &Strip<S>, 
         .description(status_words(status))
         // `:is(:hover, :has(:focus-visible))`: Tab reaching it shows its close button and wash.
         .hover_group_focus()
+        // The separator after it hides with it.
+        .hover_group_shared(hover_key(&st.list_key, &id))
         .hover_motion(Anim::INSTANT, Anim::INSTANT)
         .position_in_set(at.index + 1, st.count)
         .focusable(!editing)
@@ -141,8 +156,16 @@ pub(super) fn build<S: 'static>(item: TabItem<'_, S>, at: Place, st: &Strip<S>, 
         None => slot.w_full().h(before + h + after).pt(before).pb(after),
     };
     if at.separator {
-        // It comes and goes at once, as `display: none` does, while the pointer crosses tabs.
-        slot = slot.child(hidden(el().key("separator").absolute(-st.gap / 2.0 - 0.75, (h - 12.0) / 2.0).size(1.5, 12.0).radius(0.75).fill(st.separator).a11y_hidden()));
+        // It comes and goes at once, as `display: none` does, while the pointer crosses tabs:
+        // this tab's hover hides the empty element around it, and the tab before it hides the
+        // line, through the hover group that element shares with it.
+        let line = hidden(el().key("line").absolute(0.0, 0.0).size(1.5, 12.0).radius(0.75).fill(st.separator).group_opacity(1.0, 0.0));
+        let mut around = el().key("separator").absolute(-st.gap / 2.0 - 0.75, (h - 12.0) / 2.0).size(0.0, 0.0).a11y_hidden()
+            .hover_motion(Anim::INSTANT, Anim::INSTANT).group_opacity(1.0, 0.0);
+        if let Some(prev) = prev {
+            around = around.hover_group_shared(hover_key(&st.list_key, prev));
+        }
+        slot = slot.child(hidden(around.child(line)));
     }
     // Lifted off the strip: a touch larger, floating. The one bounce in the strip.
     let lift = |e: El| k.elevate(e.radius(RADIUS).scale(1.03).scale_motion(rune_motion::motion::MORPH).motion_intent(MotionIntent::OVERSHOOT), &k.elevation.floating);
@@ -230,21 +253,25 @@ fn title(title: &str, editor: Option<El>, at: &Place, vertical: bool, emphasized
         return row().key("title").grow(1.0).shrink().min_w(0.0).child(hidden(label.truncate_fade_width(0.0).opacity(0.0)).instant_changes());
     }
     let wrap = row().key("title").grow(1.0).shrink().min_w(0.0);
-    match emphasized {
-        // The fade ends 24 points before the link's end, clear of the slot. The title itself
-        // runs on under the slot, as Desktop's `flex-1` title runs under its mask: a title
-        // whose direction ends the other way (Latin in a right-to-left tab) starts there.
-        true => wrap.mr(24.0).clip_fade_linear(0.0, 0.0, FADE, 0.0).child(label.truncate_fade_width(0.0).mr(-24.0)),
-        // At rest it fades only an overflowing title, 4 points from a horizontal tab's end.
-        false => {
-            let label = label.truncate_fade_width(FADE / font.size);
-            let wrap = wrap.mr(if vertical { 0.0 } else { 4.0 });
-            match compact {
-                true => wrap.child(hidden(label.group_opacity(1.0, 0.0))),
-                false => wrap.child(label),
-            }
-        }
+    // The fade ends 24 points before the link's end, clear of the slot. The title itself runs on
+    // under the slot, as Desktop's `flex-1` title runs under its mask: a title whose direction
+    // ends the other way (Latin in a right-to-left tab) starts there.
+    let faded = |label: El| label.truncate_fade_width(0.0).mr(-24.0);
+    if emphasized {
+        return wrap.mr(24.0).clip_fade_linear(0.0, 0.0, FADE, 0.0).child(faded(label));
     }
+    // At rest it fades only an overflowing title, 4 points from a horizontal tab's end. A compact
+    // tab's hover hides it; a wider tab's hover shows it faded clear of the slot instead, in the
+    // same place.
+    let end = if vertical { 0.0 } else { 4.0 };
+    let rest = label.clone().truncate_fade_width(FADE / font.size);
+    if compact {
+        return wrap.mr(end).child(hidden(rest.group_opacity(1.0, 0.0)));
+    }
+    let rest = row().key("rest").grow(1.0).shrink().min_w(0.0).mr(end).child(hidden(rest.group_opacity(1.0, 0.0)));
+    let hovered = hidden(row().key("hovered").pin(Some(0.0), Some(0.0), Some(24.0), Some(0.0)).clip_fade_linear(0.0, 0.0, FADE, 0.0)
+        .group_opacity(0.0, 1.0).child(faded(label)));
+    wrap.child(rest).child(hovered)
 }
 
 /// What the status slot needs to know about its tab.
@@ -253,7 +280,8 @@ struct SlotLook {
     active: bool,
     vertical: bool,
     icon_only: bool,
-    hovered: bool,
+    /// The overlay the slot's ground takes under the pointer, when the tab has none at rest.
+    hover_overlay: Option<Color>,
     closable: bool,
     /// The tab's own colour: the strip's ground and the overlay on it.
     composite: [Color; 2],
@@ -264,7 +292,7 @@ struct SlotLook {
 /// The status mark and close button, which share one slot: the close button shows in the
 /// mark's place while the pointer is on the tab, at once.
 fn status_slot<S: 'static>(look: SlotLook, st: &Strip<S>, id: &str, k: &Kit) -> Option<El> {
-    let SlotLook { status, active, vertical, icon_only, hovered, closable, composite, h, width } = look;
+    let SlotLook { status, active, vertical, icon_only, hover_overlay, closable, composite, h, width } = look;
     let busy = status == Some(TabItemStatus::Busy);
     // An icon-only tab carries its dots on the avatar; only a busy ring takes the slot.
     let mark = match status {
@@ -279,11 +307,21 @@ fn status_slot<S: 'static>(look: SlotLook, st: &Strip<S>, id: &str, k: &Kit) -> 
     }
     // The slot paints the tab under it so a long title never shows through.
     // A vertical tab's slot is clear unless the pointer or a status is on it.
-    let painted = hovered || status.is_some() || (active && !vertical);
+    // Under the pointer it's always painted, in the hover's overlay where the tab has none.
+    let painted = (status.is_some() || (active && !vertical)) && !(icon_only && !busy);
     let top = (h - SLOT) / 2.0;
     let mut slot = row().key("status").size(SLOT, SLOT).center();
-    if painted && !(icon_only && !hovered && !busy) {
+    let ground = |key: &'static str, fill: Color| hidden(el().key(key).pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(fill).group_opacity(0.0, 1.0));
+    if painted {
         slot = grounded(slot, composite, 0.0);
+    } else {
+        slot = slot.child(ground("ground-base", composite[0]));
+        if hover_overlay.is_none() {
+            slot = slot.child(ground("ground-rest", composite[1]));
+        }
+    }
+    if let Some(over) = hover_overlay {
+        slot = slot.child(ground("ground-hover", over));
     }
     slot = match (icon_only, width) {
         (true, Some(w)) => slot.absolute((w - SLOT) / 2.0, top),
@@ -363,8 +401,11 @@ fn handlers<S: 'static>(mut slot: El, id: &str, at: &Place, closable: bool, st: 
             if let Some(a) = access {
                 a(s).set_hovered(&id, inside);
             }
-            if let Some(f) = &hover {
-                f(s, &id, inside, tx);
+            // The strip draws nothing from it (its hover groups do): only the app's handler can
+            // change what the view draws, and it says so.
+            match &hover {
+                Some(f) => f(s, &id, inside, tx),
+                None => tx.live_only(),
             }
         });
     }
