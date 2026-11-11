@@ -330,6 +330,8 @@ mod apply_scratch;
 mod relayout;
 #[path = "runtime/virtual/window.rs"]
 mod virtual_window;
+#[path = "runtime/virtual/fill.rs"]
+mod virtual_fill;
 #[path = "runtime/motion/unseen_presence.rs"]
 mod unseen_presence;
 #[path = "runtime/virtual/row_reorder.rs"]
@@ -584,8 +586,8 @@ pub struct Runtime<S: 'static> {
     /// The memo pass the current commit's first view build was. Memos none of its builds used
     /// go once it applies.
     memo_since: u64,
-    /// Frames in a row an index-built list has asked for to fill its overscan.
-    virtual_fill: u32,
+    /// Whether an index-built list still fills its overscan, and for how many frames.
+    virtual_fill: virtual_fill::Fill,
     /// True when the commit in flight is for scroll/layout only (`self.state` wasn't mutated).
     state_unchanged: bool,
     reuse: relayout::Reuse,
@@ -951,7 +953,7 @@ impl<S: 'static> Runtime<S> {
             rewind: None,
             virtual_culled: HashSet::default(),
             memo_since: 0,
-            virtual_fill: 0,
+            virtual_fill: virtual_fill::Fill::default(),
             state_unchanged: false,
             reuse: Default::default(),
             virtual_inputs: HashMap::default(),

@@ -1,11 +1,7 @@
 //! Virtual lists between commits: whether a window wants moving, and which rows show.
 
 use super::*;
-
-/// The most frames in a row an index-built list keeps the host drawing to fill its overscan.
-/// Filling takes four at most (half a viewport per side each); this bounds a list whose
-/// heights keep changing.
-const VIRTUAL_FILL_FRAMES: u32 = 12;
+use super::virtual_fill::FillEvent;
 
 impl<S: 'static> Runtime<S> {
     pub(super) fn virtual_window_changed(&self) -> bool {
@@ -63,8 +59,7 @@ impl<S: 'static> Runtime<S> {
     /// Whether an index-built list still mounts its overscan a little per frame, so the host
     /// should draw another. Each such frame commits more rows; a few frames fill it.
     pub(super) fn virtual_filling(&mut self) -> bool {
-        let filling = self.virtuals.iter().any(|(path, v)| v.indexed && self.wants_window(path, v));
-        self.virtual_fill = if filling { self.virtual_fill + 1 } else { 0 };
-        filling && self.virtual_fill <= VIRTUAL_FILL_FRAMES
+        let wanted = self.virtuals.iter().any(|(path, v)| v.indexed && self.wants_window(path, v));
+        !self.virtual_fill.step(FillEvent::Frame { wanted }).is_empty()
     }
 }

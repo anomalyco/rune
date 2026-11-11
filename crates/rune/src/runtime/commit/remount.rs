@@ -52,7 +52,7 @@ impl<S: 'static> Runtime<S> {
             return false;
         }
         for (path, v) in &self.virtuals {
-            if !v.indexed || !v.selection.source.as_ref().is_some_and(|s| s.count == v.keys.len()) {
+            if !v.indexed || !v.selection.source.rebuild().is_some_and(|s| s.count == v.keys.len()) {
                 return false;
             }
             let Some(&list_id) = self.path_ids.get(path) else { return false };
@@ -199,12 +199,11 @@ impl<S: 'static> Measurement<'_, S> {
             }
             v.shown = shown;
 
-            let list_group = v.selection.group_path.clone();
-            let inert = v.selection.inert;
+            let list_group = v.selection.scope.group_path.clone();
+            let inert = v.selection.scope.inert;
             v.selection.texts.clear();
             v.selection.copy_providers.clear();
-            v.selection.unmounted.clear();
-            let rows = v.selection.source.as_ref().unwrap().clone();
+            let rows = v.selection.source.rebuild().expect("an index-built list keeps its row builder").clone();
 
             let under = |f: &str| f.strip_prefix(path.as_str()).is_some_and(|rest| rest.starts_with('/'));
             let focused = v

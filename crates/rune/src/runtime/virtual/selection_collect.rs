@@ -1,7 +1,7 @@
 //! On-demand unbuilt virtual-row building, copy collection, ⌘A span resolution, and programmatic
 //! selection requests on unbuilt rows.
 use super::{
-    EndRef, MAX_VIRTUAL_COPY_BYTES, MAX_VIRTUAL_COPY_ROWS, OffscreenText,
+    EndRef, MAX_VIRTUAL_COPY_BYTES, MAX_VIRTUAL_COPY_ROWS, OffscreenText, Source,
     collect_virtual_row_selection, offscreen_piece,
 };
 use crate::el::{SelectRequest, SelectionCopy};
@@ -43,23 +43,21 @@ impl<S: 'static> Runtime<S> {
     ) {
         let Some(v) = self.virtuals.get(list_path) else { return };
         let Some(key) = v.keys.get(r) else { return };
-        if let Some(rows) = &v.selection.source {
-            let state = playground_host::handler_states_ref(&self.state, self.playground.as_deref());
-            let mut row = (rows.build)(state, r).key(key.clone());
-            if !crate::input::key_diagnostics::clean(&row) {
-                let _ = crate::input::key_diagnostics::repair_at(&mut row, &format!("{list_path}/{key}"));
+        let (group_path, inert) = (v.selection.scope.group_path.as_deref(), v.selection.scope.inert);
+        match &v.selection.source {
+            Source::Rebuild(rows) => {
+                let state = playground_host::handler_states_ref(&self.state, self.playground.as_deref());
+                let mut row = (rows.build)(state, r).key(key.clone());
+                if !crate::input::key_diagnostics::clean(&row) {
+                    let _ = crate::input::key_diagnostics::repair_at(&mut row, &format!("{list_path}/{key}"));
+                }
+                collect_virtual_row_selection(&row, list_path, key, r, group_path, inert, texts, providers);
             }
-            collect_virtual_row_selection(
-                &row, list_path, key, r,
-                v.selection.group_path.as_deref(), v.selection.inert,
-                texts, providers,
-            );
-        } else if let Some(row) = v.selection.unmounted.get(&r) {
-            collect_virtual_row_selection(
-                row, list_path, key, r,
-                v.selection.group_path.as_deref(), v.selection.inert,
-                texts, providers,
-            );
+            Source::Stored(rows) => {
+                if let Some(row) = rows.get(&r) {
+                    collect_virtual_row_selection(row, list_path, key, r, group_path, inert, texts, providers);
+                }
+            }
         }
     }
 

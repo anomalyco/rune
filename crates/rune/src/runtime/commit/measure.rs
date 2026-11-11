@@ -493,11 +493,9 @@ impl<S: 'static> Measurement<'_, S> {
         let state = playground_host::handler_states_ref(self.state, self.playground);
         let v = self.virtuals.get_mut(path).unwrap();
         let list_group = if el.flags.has(ElFlags::SELECTION_GROUP) { Some(path.to_owned()) } else { group.map(str::to_owned) };
-        v.selection.group_path = list_group.clone();
-        v.selection.inert = inert;
+        v.selection.scope = selectable::virtual_selection::Scope { group_path: list_group.clone(), inert };
         v.selection.texts.clear();
         v.selection.copy_providers.clear();
-        v.selection.unmounted.clear();
         if let Some(rows) = source {
             let quiet: Vec<bool> = v.range.clone().map(|i| v.mounts_quietly(i, self.commits)).collect();
             let key_warnings = &mut *self.key_warnings;
@@ -546,9 +544,8 @@ impl<S: 'static> Measurement<'_, S> {
                 row.flags.set(ElFlags::VIRTUAL_MOUNT, quiet);
                 row
             }).collect();
-            v.selection.source = Some(rows);
+            v.selection.source = selectable::virtual_selection::Source::Rebuild(rows);
         } else {
-            v.selection.source = None;
             if self.pass.reveals() && el.cold.focus.reveal_selected {
                 let selected = el.children.iter().find(|c| c.cold.focus.selected).and_then(|c| c.key.clone());
                 if selected != v.selected_row {
@@ -562,6 +559,10 @@ impl<S: 'static> Measurement<'_, S> {
                 .filter_map(|key| v.index_of(key))
                 .filter(|i| !v.range.contains(i))
                 .collect();
+            let mut stored = match std::mem::take(&mut v.selection.source) {
+                selectable::virtual_selection::Source::Stored(mut rows) => { rows.clear(); rows }
+                selectable::virtual_selection::Source::Rebuild(_) => std::collections::HashMap::default(),
+            };
             el.children = std::mem::take(&mut el.children).into_iter().enumerate().filter_map(|(i, mut child)| {
                 if !v.range.contains(&i) {
                     collect_virtual_inputs(&child, path, i, inert, self.virtual_inputs);
@@ -571,12 +572,13 @@ impl<S: 'static> Measurement<'_, S> {
                             &mut v.selection.texts, &mut v.selection.copy_providers,
                         );
                     }
-                    v.selection.unmounted.insert(i, child);
+                    stored.insert(i, child);
                     return None;
                 }
                 child.flags.set(ElFlags::VIRTUAL_MOUNT, v.mounts_quietly(i, self.commits));
                 Some(child)
             }).collect();
+            v.selection.source = selectable::virtual_selection::Source::Stored(stored);
         }
     }
 }

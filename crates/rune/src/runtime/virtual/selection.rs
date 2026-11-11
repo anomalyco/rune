@@ -62,23 +62,54 @@ pub(crate) struct OffscreenText {
     pub tab_before: bool,
 }
 
+/// Where an offscreen row comes from: the view's row builder, or the row the view built itself
+/// and the list kept by index. One or the other, never both.
+pub(crate) enum Source {
+    /// `El::virtual_rows`: a row is built when selection needs it.
+    Rebuild(Rc<crate::el::virtual_rows::RowSource>),
+    /// Rows the view built; the ones outside the window are kept as they were written.
+    Stored(HashMap<usize, El>),
+}
+
+impl Default for Source {
+    fn default() -> Self {
+        Source::Stored(HashMap::default())
+    }
+}
+
+impl Source {
+    /// The row builder, when rows are built by index.
+    pub(crate) fn rebuild(&self) -> Option<&Rc<crate::el::virtual_rows::RowSource>> {
+        match self {
+            Source::Rebuild(rows) => Some(rows),
+            Source::Stored(_) => None,
+        }
+    }
+}
+
+/// What the last commit collected offscreen rows under: the selection group they belong to and
+/// whether the list is inert. They are written together, so they always describe one commit.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Scope {
+    pub group_path: Option<String>,
+    pub inert: bool,
+}
+
 /// Offscreen selection state retained on a [`crate::el::virtual_list::VirtualList`].
 #[derive(Default)]
 pub(crate) struct PinnedSelection {
     pub texts: Vec<OffscreenText>,
     pub copy_providers: Vec<(String, SelectionCopy)>,
-    pub source: Option<Rc<crate::el::virtual_rows::RowSource>>,
-    pub unmounted: HashMap<usize, El>,
-    pub group_path: Option<String>,
-    pub inert: bool,
+    pub source: Source,
+    pub scope: Scope,
 }
 
 impl std::fmt::Debug for PinnedSelection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PinnedSelection")
             .field("texts", &self.texts.len())
-            .field("group_path", &self.group_path)
-            .field("inert", &self.inert)
+            .field("group_path", &self.scope.group_path)
+            .field("inert", &self.scope.inert)
             .finish()
     }
 }
@@ -189,7 +220,7 @@ pub(super) fn offscreen_piece(t: &OffscreenText, range: Range<usize>, base: Opti
 impl<S: 'static> Runtime<S> {
     pub(crate) fn virtual_list_allowed(&self, list_path: &str) -> bool {
         self.live(list_path).is_some()
-            && !self.virtuals.get(list_path).is_some_and(|v| v.selection.inert)
+            && !self.virtuals.get(list_path).is_some_and(|v| v.selection.scope.inert)
     }
 
     pub(crate) fn offscreen_text(&self, vi: usize, ti: usize) -> &OffscreenText {
