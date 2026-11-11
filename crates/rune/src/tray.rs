@@ -57,14 +57,17 @@ pub struct TraySpec {
     pub(crate) id: String,
     pub(crate) title: String,
     pub(crate) tooltip: String,
+    pub(crate) icon_name: String,
     pub(crate) icon: TrayIcon,
     pub(crate) menu: Vec<TrayItem>,
 }
 impl TraySpec {
     pub fn new(id: impl Into<String>, title: impl Into<String>, icon: TrayIcon) -> Self {
-        Self { id: id.into(), title: title.into(), tooltip: String::new(), icon, menu: Vec::new() }
+        Self { id: id.into(), title: title.into(), tooltip: String::new(), icon_name: String::new(), icon, menu: Vec::new() }
     }
     pub fn tooltip(mut self, tooltip: impl Into<String>) -> Self { self.tooltip = tooltip.into(); self }
+    /// A freedesktop icon theme name (Linux `IconName`) a host may draw instead of the pixels.
+    pub fn icon_name(mut self, name: impl Into<String>) -> Self { self.icon_name = name.into(); self }
     pub fn menu(mut self, menu: Vec<TrayItem>) -> Self { self.menu = menu; self }
 }
 

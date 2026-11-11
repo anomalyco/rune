@@ -18,7 +18,7 @@ type Pixmaps = Vec<(i32, i32, Vec<u8>)>;
 /// One dbusmenu node, `(ia{sv}av)`; children are variants holding the same shape.
 type Layout = (i32, HashMap<String, OwnedVariant>, Vec<OwnedVariant>);
 
-struct Model { id: String, title: String, tooltip: String, pixmaps: Pixmaps, menu: Vec<TrayItem>, revision: u32, token: Option<String> }
+struct Model { id: String, title: String, tooltip: String, icon_name: String, pixmaps: Pixmaps, menu: Vec<TrayItem>, revision: u32, token: Option<String> }
 type Shared = Arc<Mutex<Model>>;
 
 enum Command { Menu(Vec<TrayItem>), Tooltip(String) }
@@ -76,9 +76,10 @@ impl Item {
     fn status(&self) -> &str { "Active" }
     #[zbus(property)]
     fn window_id(&self) -> i32 { 0 }
-    /// Empty, so the host draws `IconPixmap`.
+    /// A host that resolves the name draws that icon, and may recolour a symbolic one to fit its
+    /// panel; one that can't, or gets no name, draws `IconPixmap`.
     #[zbus(property)]
-    fn icon_name(&self) -> &str { "" }
+    fn icon_name(&self) -> String { self.model.lock().unwrap().icon_name.clone() }
     #[zbus(property)]
     fn icon_pixmap(&self) -> Pixmaps { self.model.lock().unwrap().pixmaps.clone() }
     #[zbus(property)]
@@ -154,7 +155,7 @@ async fn register(conn: &Connection) {
 impl Native {
     pub(super) fn new(spec: TraySpec, on_event: Handler) -> Result<Self, TrayError> {
         let model = Arc::new(Mutex::new(Model { pixmaps: pixmaps(&spec), id: spec.id, title: spec.title, tooltip: spec.tooltip,
-            menu: spec.menu, revision: 1, token: None }));
+            icon_name: spec.icon_name, menu: spec.menu, revision: 1, token: None }));
         let (commands, mut receiver) = unbounded_channel();
         let (ready, result) = mpsc::sync_channel(1);
         let worker = std::thread::Builder::new().name("rune-tray".into()).spawn(move || {
@@ -253,5 +254,20 @@ mod tests {
     fn the_icon_is_argb_in_network_order() {
         let spec = TraySpec::new("t", "T", super::super::TrayIcon::rgba(1, 1, vec![1, 2, 3, 4]));
         assert_eq!(pixmaps(&spec), vec![(1, 1, vec![4, 1, 2, 3])]);
+    }
+
+    fn item(icon_name: &str) -> Item {
+        let spec = TraySpec::new("t", "T", super::super::TrayIcon::rgba(1, 1, vec![1, 2, 3, 4])).icon_name(icon_name);
+        let pixmaps = pixmaps(&spec);
+        let model = Model { id: spec.id, title: spec.title, tooltip: spec.tooltip, icon_name: spec.icon_name,
+            pixmaps, menu: spec.menu, revision: 1, token: None };
+        Item { model: Arc::new(Mutex::new(model)), on_event: Arc::new(|_| {}) }
+    }
+
+    #[test]
+    fn the_icon_name_is_served_and_empty_until_set() {
+        assert_eq!(item("").icon_name(), "");
+        assert_eq!(item("my-app-symbolic").icon_name(), "my-app-symbolic");
+        assert_eq!(item("my-app-symbolic").icon_pixmap(), vec![(1, 1, vec![4, 1, 2, 3])]);
     }
 }
