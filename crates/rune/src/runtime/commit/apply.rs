@@ -162,8 +162,8 @@ impl<S: 'static> Runtime<S> {
                 } else if let Some(g) = self.grows.get(&old).filter(|g| g.h > 0.01) && existed && !instant && !replaced && !(is_virtual && unseen_ids.contains(&old)) {
                     // A row fades in place before its space closes, except a fold, which shuts
                     // at once on its own spring under its feather, as it would fold shut in place.
-                    let hold = if g.glide.is_some() { 0.0 } else { 0.15 };
-                    if g.glide.is_some() && !stack.closing.contains_key(&old) { shut.push(old); }
+                    let hold = if g.glide().is_some() { 0.0 } else { 0.15 };
+                    if g.glide().is_some() && !stack.closing.contains_key(&old) { shut.push(old); }
                     stack.closing.entry(old).or_insert(now + hold);
                     order.push(old);
                 } else {
@@ -228,12 +228,12 @@ impl<S: 'static> Runtime<S> {
                 let hidden = if glide.is_some() { self.fold_hidden_above(&nodes, j, h) } else { None };
                 if existed && !instant && !nodes[j].virtual_mount && nodes[j].glide.is_some() && !self.grows.contains_key(&id) { opened.push(id); }
                 let g = self.grows.entry(id).or_insert_with(|| {
-                    if existed && !instant && !nodes[j].virtual_mount { GrowTrack { streaming, whole, duration, ..GrowTrack::settled(0.0) } } else { GrowTrack::settled(h) }
+                    if existed && !instant && !nodes[j].virtual_mount { GrowTrack { duration, ..GrowTrack::settled(0.0) } } else { GrowTrack::settled(h) }
                 });
                 g.set_kind(streaming, whole, glide);
                 let snap_change = (instant || resized) && !streaming && (h - g.target).abs() > 1e-4;
                 if tx.settle || !existed || first || self.reduced_motion || snap_change || row_reading {
-                    *g = GrowTrack { streaming, whole, glide: g.glide, feather: g.feather, limit: g.limit, ..GrowTrack::settled(h) };
+                    *g = g.restarted(h);
                     stack.pending_heights.remove(&id);
                     stack.slides.land(id);
                 } else {
@@ -249,7 +249,7 @@ impl<S: 'static> Runtime<S> {
                         // A fold opening again while its contents draw lifted, or opening from
                         // rest (not one mounting): `ride_from_end` grows it from its bottom where
                         // its viewport follows its end, and leaves the rest alone.
-                        if t > g.target + 1e-4 && (g.lift() > 0.0 || (g.glide.is_some() && g.target > 1e-4)) { reopened.push((j, g.give.is_some())); }
+                        if t > g.target + 1e-4 && (g.lift() > 0.0 || (g.glide().is_some() && g.target > 1e-4)) { reopened.push((j, g.give.is_some())); }
                         let before = g.h;
                         g.retarget(t);
                         if let Some((above, header)) = hidden.filter(|_| shutting && g.shutting_fold()) {

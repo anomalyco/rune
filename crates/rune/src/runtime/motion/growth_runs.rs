@@ -27,9 +27,9 @@ impl GrowthRun {
     /// One block of `ids` (consecutive rows of one stack), from their tracks as they stand.
     fn link(ids: &[NodeId], grows: &HashMap<NodeId, GrowTrack>) -> Option<GrowthRun> {
         let tracks: Vec<&GrowTrack> = ids.iter().map(|id| grows.get(id)).collect::<Option<_>>()?;
-        let spring = tracks[0].glide?;
+        let spring = tracks[0].glide()?;
         let mut track = GrowTrack::settled(tracks.iter().map(|g| g.h).sum());
-        track.set_kind(false, true, Some((FoldGlide { spring, feather: tracks[0].feather }, f32::INFINITY)));
+        track.set_kind(false, true, Some((FoldGlide { spring, feather: tracks[0].feather() }, f32::INFINITY)));
         track.retarget(tracks.iter().map(|g| g.target).sum());
         Some(GrowthRun::Formed {
             rows: ids.to_vec(),
@@ -102,13 +102,13 @@ impl<S: 'static> Runtime<S> {
         for id in shut {
             if let Some(g) = grows.get_mut(id) { g.retarget(0.0); }
         }
-        let fold = |g: &GrowTrack| (g.glide, g.feather);
+        let fold = |g: &GrowTrack| (g.glide(), g.feather());
         for set in [opened, shut] {
             let mut block: Vec<NodeId> = Vec::new();
             for id in order.iter().map(Some).chain([None]) {
                 let eligible = id.filter(|id| set.contains(id))
                     .and_then(|id| grows.get(id))
-                    .filter(|g| g.glide.is_some() && g.stage.is_none() && g.lift() == 0.0);
+                    .filter(|g| g.glide().is_some() && !g.staged() && g.lift() == 0.0);
                 if let (Some(g), Some(id)) = (eligible, id)
                     && block.last().and_then(|last| grows.get(last)).is_none_or(|last| fold(last) == fold(g))
                 {

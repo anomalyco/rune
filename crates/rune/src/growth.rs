@@ -148,6 +148,90 @@ pub struct FoldGlide {
     pub feather: Option<f32>,
 }
 
+/// What moves a row's height.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum Motion {
+    /// The stack's spring under the speed caps ([`caps`]), ramping up from rest over `age`.
+    #[default]
+    Spring,
+    /// `El::arrives_whole`: the spring alone, however far, so a pinned viewport follows one
+    /// glide (its [`WHOLE_REACH`] duration comes from `span`).
+    Whole,
+    /// `El::fold_glide`: this row's own spring for its own time, in place of the stack's; its
+    /// moving edge feathered `feather` deep (the stack edge's when `None`), and its bottom
+    /// leaving the window at `limit`.
+    Fold {
+        spring: Spring,
+        feather: Option<f32>,
+        limit: f32,
+        /// Retargeted shut: landed, it still lifts and clips what it folded away until that has
+        /// gone (`Runtime::place_growth_rows`).
+        shut: bool,
+    },
+}
+
+/// Whether a row climbs on its stream's [`pace`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum Pace {
+    /// Not on a stream: the capped spring, the whole glide or the fold.
+    #[default]
+    Rest,
+    /// Climbing on the arrival rate: from a row's first streaming frame until it rests off the
+    /// stream. `ended` counts the seconds since the stream stopped feeding it.
+    Climbing { ended: f32 },
+}
+
+/// Where a glide's spring stops.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum Stage {
+    /// At the target.
+    #[default]
+    Free,
+    /// `at` points in: the rest of a fold opening past its window's edge lands at once, out of
+    /// sight, and contents still lifted come back above it.
+    StopAt(f32),
+}
+
+impl Stage {
+    fn aim(self, target: f32) -> f32 {
+        match self {
+            Stage::Free => target,
+            Stage::StopAt(at) => at,
+        }
+    }
+
+    fn is_set(self) -> bool {
+        !matches!(self, Stage::Free)
+    }
+}
+
+/// How a growth row's contents draw against its height: `a + b × h` points up from their layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum Lift {
+    /// At their layout.
+    #[default]
+    None,
+    /// A fold shutting under a header held stuck to its viewport's top: contents ride its bottom
+    /// edge from the height `pinned` they were cut at, so what shows slides up under the header
+    /// on the fold's spring rather than racing past. Nothing to feather.
+    Riding { pinned: f32 },
+    /// Easing back to their layout over what is left of the glide, `a + b × h` points up.
+    Easing { a: f32, b: f32 },
+}
+
+impl Lift {
+    /// The lift that draws `a + b × h` points up from the layout.
+    ///
+    /// A slope of exactly -1.0 draws the contents on the row's bottom edge, which is what
+    /// [`Lift::Riding`] is, and dev's feather branch read that one value as riding wherever it
+    /// came from, so a computed slope landing on it is riding here too: the state says which it
+    /// is once, instead of the reader testing a float. (That a computed slope can reach it is a
+    /// separate bug, filed on its own: it suppresses a fold's feather.)
+    fn slope(a: f32, b: f32) -> Lift {
+        if b == -1.0 { Lift::Riding { pinned: a } } else { Lift::Easing { a, b } }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GrowTrack {
     pub h: f32,
@@ -157,41 +241,32 @@ pub struct GrowTrack {
     pub age: f32,
     /// Presented feather height (points).
     pub mask: f32,
+    /// `El::streaming`: this row climbs on its stream's pace, which overrides its whole or fold
+    /// kind until it rests off the stream.
     pub streaming: bool,
-    /// `El::arrives_whole`: no speed limits, only the spring.
-    pub whole: bool,
     /// Commit spring duration floor (`Tx::motion`), so a slower transaction (`REFLOW`) slows the row too.
     pub(crate) duration: f32,
     /// Points between the presented height and the target when it was last set (see [`WHOLE_REACH`]).
     pub(crate) span: f32,
-    /// `El::fold_glide`: this row's own spring, in place of the stack's.
-    pub(crate) glide: Option<Spring>,
-    /// `El::fold_feather`: the glide's feather depth, in place of the stack edge's.
-    pub(crate) feather: Option<f32>,
-    /// A glide's height at which the row's bottom leaves the window: the part of a change
-    /// beyond it lands at once, out of sight.
-    pub(crate) limit: f32,
-    /// A glide opening past `limit`: where its spring stops before the row lands whole.
-    pub(crate) stage: Option<f32>,
-    /// A glide whose contents draw `a + b × h` points up from their layout (`lift`): riding its
-    /// bottom edge while it shuts under a held header (`hide_above`), and easing back as it
-    /// turns around.
-    pub(crate) slide: Option<(f32, f32)>,
+    /// What moves the height.
+    pub(crate) motion: Motion,
+    /// Where the glide stops, when it stops short of the target.
+    pub(crate) stage: Stage,
+    /// How the contents draw against the height.
+    pub(crate) lift: Lift,
     /// Points of lifted contents put back above the row as its glide landed whole, for its
     /// viewport's offset to take up (`Runtime::restore_above`).
     pub(crate) restore: f32,
     /// The share of each point it shuts by that a header held over it comes down, when the
     /// viewport's end will stop its bottom short (`Runtime::give_way`).
     pub(crate) give: Option<f32>,
-    /// Climbing on the stream's [`pace`]: from its first streaming frame until it rests.
-    pub(crate) paced: bool,
+    /// Whether it climbs on its stream's pace.
+    pub(crate) pace: Pace,
     /// Points per second the target has been rising at, averaged over [`pace::WINDOW`].
+    ///
+    /// It sits beside [`Pace`] rather than inside it because it outlives a restarted climb: a
+    /// streaming row snapped to a new height keeps the rate it had when the pace picks up again.
     pub(crate) rate: f32,
-    /// Seconds a paced climb has gone on since its stream ended.
-    pub(crate) ended: f32,
-    /// A glide last retargeted shut: landed, it still lifts and clips what it folded away until
-    /// that has gone (`Runtime::place_growth_rows`).
-    pub(crate) shut: bool,
 }
 
 /// A row within this many points of its height, moving slower than `SETTLE_V` points a second,
@@ -202,7 +277,7 @@ const SETTLE_V: f32 = 1.5;
 
 impl GrowTrack {
     pub fn settled(h: f32) -> GrowTrack {
-        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, glide: None, feather: None, limit: f32::INFINITY, stage: None, slide: None, restore: 0.0, give: None, paced: false, rate: 0.0, ended: 0.0, shut: false }
+        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, duration: 0.0, span: 0.0, motion: Motion::Spring, stage: Stage::Free, lift: Lift::None, restore: 0.0, give: None, pace: Pace::Rest, rate: 0.0 }
     }
 
     pub fn moving(&self) -> bool {
@@ -231,28 +306,36 @@ impl GrowTrack {
             }
             self.target = target;
             self.span = (target - self.h).abs();
-            self.stage = None;
+            self.stage = Stage::Free;
             self.give = None;
-            self.shut = self.glide.is_some() && target < self.h;
-            if self.glide.is_some() {
+            if let Motion::Fold { limit, shut, .. } = &mut self.motion {
+                *shut = target < self.h;
                 // Only what shows of a long fold moves: shutting, the part below the window goes
                 // first; opening, it lands once the spring has carried the row to the window's edge.
-                if target < self.h && self.h > self.limit {
-                    self.h = self.limit.max(target);
-                } else if target > self.h && target > self.limit {
-                    self.stage = Some(self.limit.max(self.h));
+                if target < self.h && self.h > *limit {
+                    self.h = (*limit).max(target);
+                } else if target > self.h && target > *limit {
+                    self.stage = Stage::StopAt((*limit).max(self.h));
                 }
                 self.span = (target - self.h).abs();
             }
             // Lifted contents ease back to their layout over what's left of the glide.
             let d = target - self.h;
-            self.slide = (lift > 1.0 / 64.0 && d.abs() > 1.0 / 64.0).then(|| (lift * target / d, -lift / d));
+            self.lift = if lift > 1.0 / 64.0 && d.abs() > 1.0 / 64.0 {
+                Lift::slope(lift * target / d, -lift / d)
+            } else {
+                Lift::None
+            };
         }
     }
 
     /// How far up from their layout the row's contents draw.
     pub(crate) fn lift(&self) -> f32 {
-        self.slide.map_or(0.0, |(a, b)| (a + b * self.h).max(0.0))
+        match self.lift {
+            Lift::None => 0.0,
+            Lift::Riding { pinned } => (pinned - self.h).max(0.0),
+            Lift::Easing { a, b } => (a + b * self.h).max(0.0),
+        }
     }
 
     /// A fold shutting under a header held stuck to its viewport's top, with `above` points of
@@ -265,7 +348,7 @@ impl GrowTrack {
         let cut = above.min(self.h - self.target).max(0.0);
         self.h -= cut;
         self.span = (self.target - self.h).abs();
-        self.slide = Some((pinned, -1.0));
+        self.lift = Lift::Riding { pinned };
         cut
     }
 
@@ -278,61 +361,118 @@ impl GrowTrack {
         let stage = (h + rise.max(0.0)).min(self.target);
         let (d, end) = (stage - h, self.target - stage);
         let b = if d > 1.0 / 64.0 { (end - from) / d } else { 0.0 };
-        self.slide = Some((if d > 1.0 / 64.0 { from - b * h } else { end }, b));
-        self.stage = Some(stage);
+        self.lift = Lift::slope(if d > 1.0 / 64.0 { from - b * h } else { end }, b);
+        self.stage = Stage::StopAt(stage);
         self.span = d;
     }
 
     /// A fold shutting over what it held, which its clip folds away (`El::fold_glide`).
     pub(crate) fn shutting_fold(&self) -> bool {
-        self.glide.is_some() && self.h > self.target + 0.01
+        matches!(self.motion, Motion::Fold { .. }) && self.h > self.target + 0.01
+    }
+
+    /// Whether a glide last retargeted shut: landed, it still lifts and clips what it folded
+    /// away until that has gone.
+    pub(crate) fn shut(&self) -> bool {
+        matches!(self.motion, Motion::Fold { shut: true, .. })
+    }
+
+    /// Whether it climbs on a stream's pace.
+    pub(crate) fn paced(&self) -> bool {
+        matches!(self.pace, Pace::Climbing { .. })
+    }
+
+    /// What a shut fold held has left: let go of its lift and of the shut flag that kept it.
+    pub(crate) fn forget_folded(&mut self) {
+        self.lift = Lift::None;
+        if let Motion::Fold { shut, .. } = &mut self.motion {
+            *shut = false;
+        }
+    }
+
+    /// The fold's own spring, when this row is a fold.
+    pub(crate) fn glide(&self) -> Option<Spring> {
+        match self.motion {
+            Motion::Fold { spring, .. } => Some(spring),
+            Motion::Spring | Motion::Whole => None,
+        }
+    }
+
+    /// The fold's own edge depth, when it sets one.
+    pub(crate) fn feather(&self) -> Option<f32> {
+        match self.motion {
+            Motion::Fold { feather, .. } => feather,
+            Motion::Spring | Motion::Whole => None,
+        }
+    }
+
+    /// Whether the glide has stopped `Stage::StopAt` short of its target, still to land whole.
+    pub(crate) fn staged(&self) -> bool {
+        self.stage.is_set()
+    }
+
+    /// The same row kind, restarted at `h` with nothing else carried over.
+    pub(crate) fn restarted(&self, h: f32) -> GrowTrack {
+        GrowTrack {
+            streaming: self.streaming,
+            motion: match self.motion {
+                Motion::Fold { spring, feather, limit, .. } => Motion::Fold { spring, feather, limit, shut: false },
+                other => other,
+            },
+            ..GrowTrack::settled(h)
+        }
     }
 
     /// The row's `El::streaming`, `El::arrives_whole` and `El::fold_glide` (which streaming
     /// overrides) with the height at which its bottom leaves the window.
     pub(crate) fn set_kind(&mut self, streaming: bool, whole: bool, glide: Option<(FoldGlide, f32)>) {
         self.streaming = streaming;
-        self.paced |= streaming;
-        self.whole = whole;
-        let glide = glide.filter(|_| !streaming);
-        if glide.is_none() {
-            // A glide's stop at the window's edge goes with it: the row it hands over to carries
-            // on from where it is, rather than landing the rest at once.
-            self.stage = None;
-            self.shut = false;
+        if streaming {
+            // `paced |= streaming`: a row already off its stream climbs again from where it was.
+            if self.pace == Pace::Rest {
+                self.pace = Pace::Climbing { ended: 0.0 };
+            }
         }
-        self.glide = glide.map(|g| g.0.spring);
-        self.feather = glide.and_then(|g| g.0.feather);
-        self.limit = glide.map_or(f32::INFINITY, |g| g.1);
+        let glide = glide.filter(|_| !streaming);
+        let shut = self.shut();
+        self.motion = match glide {
+            Some((g, limit)) => Motion::Fold { spring: g.spring, feather: g.feather, limit, shut },
+            None => {
+                // A glide's stop at the window's edge goes with it: the row it hands over to
+                // carries on from where it is, rather than landing the rest at once.
+                self.stage = Stage::Free;
+                if whole { Motion::Whole } else { Motion::Spring }
+            }
+        };
     }
 
     /// Advance one fixed substep.
     pub fn step(&mut self, spring: Spring, edge: &StreamEdge, carrying_tail: bool) {
         let dt = SUBSTEP;
         let spring = spring.with_duration(spring.duration.max(self.duration) * edge.duration.max(0.05));
-        let aim = self.stage.unwrap_or(self.target);
+        let aim = self.stage.aim(self.target);
         let rem = aim - self.h;
-        if self.stage.is_some() && rem.abs() < 1.0 {
+        if self.stage.is_set() && rem.abs() < 1.0 {
             // The glide carried the row to the window's edge: the rest lands at once, out of view,
             // and contents still lifted come back above it.
             self.restore += self.lift();
-            self.slide = None;
+            self.lift = Lift::None;
             self.h = self.target;
             self.v = 0.0;
-            self.stage = None;
+            self.stage = Stage::Free;
         } else if self.at_rest(rem) {
             self.h = self.target;
             self.v = 0.0;
-        } else if self.paced && rem > 0.0 {
+        } else if matches!(self.pace, Pace::Climbing { .. }) && rem > 0.0 {
             self.climb(rem, carrying_tail);
-        } else if let Some(own) = self.glide.filter(|_| !self.streaming) {
+        } else if !self.streaming && let Motion::Fold { spring: own, .. } = self.motion {
             // A fold: its own spring for its own time, however far, from the velocity it has.
             let (x, v) = own.sample(self.h, self.v, aim, dt);
             let landed = (rem >= 0.0 && x >= aim) || (rem <= 0.0 && x <= aim);
             self.h = if landed { aim } else { x };
             self.v = if landed { 0.0 } else { v };
             self.age += dt;
-        } else if self.whole {
+        } else if matches!(self.motion, Motion::Whole) {
             // Content that arrived complete has nothing to read as it opens: one critically
             // damped glide on the spring, however far, which a pinned viewport follows.
             let spring = spring.with_duration(spring.duration * (self.span / WHOLE_REACH).sqrt().max(1.0));
@@ -378,13 +518,13 @@ impl GrowTrack {
         } else {
             0.0
         };
-        if self.glide.is_some() && !self.streaming {
+        if !self.streaming && let Motion::Fold { feather, .. } = self.motion {
             // A fold's edge feathers both ways, opening and shutting: it softens as the spring
             // picks up, holds through a reversal, and goes crisp as the glide lands.
             // Contents riding the bottom edge (`hide_above`) aren't cut by it: nothing to soften.
             let left = (self.target - self.h).abs();
-            let riding = self.slide.is_some_and(|(_, b)| b == -1.0);
-            let aim = if left > 0.25 && !riding { self.feather.unwrap_or(edge.mask_max).min(1.5 * left) } else { 0.0 };
+            let riding = matches!(self.lift, Lift::Riding { .. });
+            let aim = if left > 0.25 && !riding { feather.unwrap_or(edge.mask_max).min(1.5 * left) } else { 0.0 };
             self.mask = if aim > self.mask { (self.mask + FOLD_FEATHER_GROW * dt).min(aim) } else { aim };
         } else if aim > self.mask {
             self.mask = (self.mask + caps::MASK_GROW * dt).min(aim);
@@ -394,11 +534,10 @@ impl GrowTrack {
         self.rate *= (-dt / pace::WINDOW).exp();
         if !self.moving() {
             // A glide that shut keeps its contents lifted until what it folded away has left.
-            if !self.shut { self.slide = None; }
+            if !self.shut() { self.lift = Lift::None; }
             if !self.streaming {
-                self.paced = false;
+                self.pace = Pace::Rest;
                 self.rate = 0.0;
-                self.ended = 0.0;
             }
         }
     }
@@ -406,8 +545,9 @@ impl GrowTrack {
     /// One substep of a streaming row's climb `rem` points short of its target (see [`pace`]).
     fn climb(&mut self, rem: f32, carrying_tail: bool) {
         let dt = SUBSTEP;
-        self.ended = if self.streaming { 0.0 } else { self.ended + dt };
-        let landing = (self.ended / pace::LAND_RAMP).min(1.0);
+        let Pace::Climbing { ended } = &mut self.pace else { return };
+        *ended = if self.streaming { 0.0 } else { *ended + dt };
+        let landing = (*ended / pace::LAND_RAMP).min(1.0);
         let w = (self.rate / pace::TRAIL).clamp(pace::MIN + (pace::LAND - pace::MIN) * landing, pace::MAX);
         let a = (w * w * rem - 2.0 * w * self.v).clamp(-pace::ACCEL, pace::ACCEL);
         let mut cap = if rem > caps::LONG_DISTANCE { caps::MAX_LONG } else { caps::MAX };
@@ -474,7 +614,7 @@ mod tests {
 
     #[test]
     fn a_whole_row_glides_on_the_spring_alone() {
-        let mut t = GrowTrack { whole: true, ..GrowTrack::settled(0.0) };
+        let mut t = GrowTrack { motion: Motion::Whole, ..GrowTrack::settled(0.0) };
         t.retarget(900.0);
         let (mut prev, mut speeds) = (0.0, Vec::new());
         for _ in 0..180 {
@@ -499,7 +639,7 @@ mod tests {
     fn a_far_whole_glide_opens_no_harder_than_its_reach() {
         // The largest change in per-frame step at 120 Hz.
         let jerk = |dist: f32| {
-            let mut t = GrowTrack { whole: true, ..GrowTrack::settled(0.0) };
+            let mut t = GrowTrack { motion: Motion::Whole, ..GrowTrack::settled(0.0) };
             t.retarget(dist);
             let (mut prev, mut step, mut most) = (0.0, 0.0, 0.0f32);
             for _ in 0..360 {
@@ -547,7 +687,7 @@ mod tests {
     /// A `fold_glide` row whose bottom leaves the window at 900 pt, stepped at 120 Hz on a slow stack spring and a
     /// slow commit floor, neither of which may slow it: (seconds, height) per frame.
     fn fold(from: f32, to: f32, secs: f32) -> (GrowTrack, Vec<(f32, f32)>) {
-        let mut t = GrowTrack { whole: true, duration: 1.0, ..GrowTrack::settled(from) };
+        let mut t = GrowTrack { motion: Motion::Whole, duration: 1.0, ..GrowTrack::settled(from) };
         t.set_kind(false, true, Some((FoldGlide { spring: FOLD, feather: None }, 900.0)));
         t.retarget(to);
         let mut out = vec![(0.0, t.h)];
@@ -582,7 +722,7 @@ mod tests {
         // The spring's tail under a sixteenth of a point moves in steps the pixel snap holds and
         // lets go, which reads as the row stopping and setting off again.
         for (from, to) in [(640.0, 40.0), (40.0, 640.0), (3040.0, 40.0), (41.0, 40.0), (40.0, 60.0)] {
-            let mut t = GrowTrack { whole: true, ..GrowTrack::settled(from) };
+            let mut t = GrowTrack { motion: Motion::Whole, ..GrowTrack::settled(from) };
             t.set_kind(false, true, Some((FoldGlide { spring: FOLD, feather: None }, 900.0)));
             t.retarget(to);
             let hs: Vec<f32> = (0..60).map(|_| { t.step(GROWTH, &edge::FEATHER, false); t.step(GROWTH, &edge::FEATHER, false); t.h }).collect();
@@ -610,7 +750,7 @@ mod tests {
 
     #[test]
     fn a_glide_handed_to_a_whole_row_mid_way_carries_on() {
-        let mut t = GrowTrack { whole: true, ..GrowTrack::settled(40.0) };
+        let mut t = GrowTrack { motion: Motion::Whole, ..GrowTrack::settled(40.0) };
         t.set_kind(false, true, Some((FoldGlide { spring: FOLD, feather: None }, 200.0)));
         t.retarget(640.0);
         for _ in 0..10 {
@@ -629,7 +769,7 @@ mod tests {
     #[test]
     fn a_fold_feathers_its_moving_edge_both_ways() {
         for (from, to) in [(40.0, 640.0), (640.0, 40.0)] {
-            let mut t = GrowTrack { whole: true, ..GrowTrack::settled(from) };
+            let mut t = GrowTrack { motion: Motion::Whole, ..GrowTrack::settled(from) };
             t.set_kind(false, true, Some((FoldGlide { spring: FOLD, feather: Some(20.0) }, f32::INFINITY)));
             t.retarget(to);
             let mut masks = Vec::new();
@@ -648,7 +788,7 @@ mod tests {
 
     #[test]
     fn a_fold_reversed_mid_glide_keeps_its_velocity() {
-        let mut t = GrowTrack { whole: true, ..GrowTrack::settled(640.0) };
+        let mut t = GrowTrack { motion: Motion::Whole, ..GrowTrack::settled(640.0) };
         t.set_kind(false, true, Some((FoldGlide { spring: FOLD, feather: None }, 900.0)));
         t.retarget(40.0);
         for _ in 0..12 {
@@ -685,3 +825,6 @@ mod tests {
         assert!(t.h > h);
     }
 }
+
+#[cfg(test)]
+mod walk;

@@ -32,11 +32,11 @@ impl<S: 'static> Runtime<S> {
                     self.row_h[ri] = g.h;
                     let withheld = if g.streaming { (self.nodes[ri].local.h - g.target).max(0.0) } else { 0.0 };
                     let rewrap = stack.pending_heights.contains_key(id) && self.nodes[ri].local.h > g.h + 0.01;
-                    let overflows = spec.edge.overflow && (g.streaming || g.paced);
+                    let overflows = spec.edge.overflow && (g.streaming || g.paced());
                     // A fold that landed shut keeps what it folded away where it drew, lifted
                     // and clipped, until that has left: let go as it lands, the contents would
                     // drop back to their layout for the frames their exit has left.
-                    let landed = g.shut && !g.moving();
+                    let landed = g.shut() && !g.moving();
                     let folded = landed && self.holds_exiting(ri);
                     if landed && !folded { emptied.push(*id); }
                     if spec.edge.clip && !overflows && (g.h < g.target - 0.01 || g.mask > 0.01 || withheld > 0.01 || rewrap || g.shutting_fold() || folded) {
@@ -56,7 +56,7 @@ impl<S: 'static> Runtime<S> {
             }
         }
         for id in emptied {
-            if let Some(g) = self.grows.get_mut(&id) { g.shut = false; g.slide = None; }
+            if let Some(g) = self.grows.get_mut(&id) { g.forget_folded(); }
         }
         // A fold's lifted contents (`GrowTrack::hide_above`) draw that far up inside it, all but
         // the header it shuts under.
