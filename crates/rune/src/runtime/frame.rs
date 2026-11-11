@@ -2,6 +2,14 @@
 use super::*;
 
 impl<S: 'static> Runtime<S> {
+    /// rame-profile: the paths of drawn nodes whose loop is running, which wake the window.
+    #[cfg(feature = "frame-profile")]
+    pub(crate) fn fp_loops(&self) -> Vec<String> {
+        self.nodes.iter().enumerate()
+            .filter(|(i, n)| n.looping.is_some() && self.seen.get(*i).copied().unwrap_or(false) && self.loops.contains_key(&n.id))
+            .map(|(_, n)| n.path.clone()).collect()
+    }
+
     /// Clock seconds now: the wall clock in a window (input arrives between frames), the
     /// virtual clock headless.
     pub(super) fn now_clock(&self) -> f64 {

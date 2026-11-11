@@ -223,7 +223,10 @@ impl Tx {
     /// display's rate this way, until it stops asking. That needs a display link pacing the
     /// surface (macOS); hidden, covered, faded out or unpaced, a wake due sooner than a frame
     /// waits about a frame (60 Hz), so a poll that keeps asking never spins the loop.
+    #[cfg_attr(feature = "frame-profile", track_caller)]
     pub fn wake_after(&mut self, duration: std::time::Duration) {
+        #[cfg(feature = "frame-profile")]
+        crate::frame::live_log::waker(std::panic::Location::caller(), duration);
         self.wakes.push(duration);
     }
 
@@ -239,7 +242,10 @@ impl Tx {
     /// [`Tx::wake_after`] does for the time left; a deadline already past wakes the next
     /// frame. A timed state stores its deadline and asks for it here, and its poll checks
     /// `clock >= due` to fire the timer as an event.
+    #[cfg_attr(feature = "frame-profile", track_caller)]
     pub fn wake_at(&mut self, due: f64) {
+        #[cfg(feature = "frame-profile")]
+        crate::frame::live_log::waker(std::panic::Location::caller(), std::time::Duration::from_secs_f64((due - self.clock).max(0.0)));
         self.wakes.push(std::time::Duration::from_secs_f64((due - self.clock).max(0.0)));
     }
 

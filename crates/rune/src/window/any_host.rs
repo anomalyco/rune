@@ -263,14 +263,22 @@ impl<S: 'static> Host<S> {
     }
 
     fn user_event_in_turn(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
+        #[cfg(feature = "frame-profile")]
+        let logged = Some(crate::frame::live_log::now());
         self.meter.waited();
         self.handle_user_event(event_loop, event);
         self.publish();
+        #[cfg(feature = "frame-profile")]
+        if let Some(start) = logged { crate::frame::live_log::wake(start); }
     }
 
     fn window_event_in_turn(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        #[cfg(feature = "frame-profile")]
+        let logged = (!matches!(event, WindowEvent::RedrawRequested)).then(crate::frame::live_log::now);
         if !matches!(event, WindowEvent::RedrawRequested) { self.meter.waited(); }
         self.handle_window_event(event_loop, id, event);
         self.publish();
+        #[cfg(feature = "frame-profile")]
+        if let Some(start) = logged { crate::frame::live_log::input(start); }
     }
 }
