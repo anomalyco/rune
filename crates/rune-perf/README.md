@@ -73,9 +73,9 @@ other threads, native and GPU allocation, and does not mean retained heap.
 | --- | --- |
 | Pending samples | 256 fixed-size records |
 | Rolling history | 60 seconds and 600 reports |
-| Snapshot | Atomic `perf.json`, with each incident and at shutdown (nothing written while idle), 256 KiB max |
-| Anomaly logs | `perf.log` + `perf.log.1`, 4 MiB each, kept open for appending; ten frame lines/second |
-| Process log | Every 30 seconds |
+| Snapshot | Atomic `perf.json`, with each write of incidents, and at shutdown when the run wrote anything, 256 KiB max |
+| Anomaly logs | `perf.log` + `perf.log.1`, 4 MiB each, kept open for appending; ten frame lines/second, held in memory and written once 2 seconds pass with no new finding (and at shutdown) |
+| Process log | A line every 30 seconds while frames arrive, kept in memory (the last 20) and written only beside a finding |
 | Incidents | 16 reusable `perf-incident-NN.json` slots, 256 KiB each |
 | Dedup keys | 64 recent rule/window/source keys; scoped to this app/build/launch |
 | Growth history | Six minute buckets |
@@ -88,7 +88,7 @@ data in the current window, not a permanent backend promise. Process counters
 come from `procwatch::usage()`, which reads memory and descriptors without walking
 threads. macOS supplies resident/physical/lifetime-peak footprint and fds; other
 platforms currently report those unavailable. Failed reads also return unknown.
-Memory is checked against the incident rules every 2 seconds without writing; the snapshot's timestamp says when it was written.
+Memory is checked against the incident rules as frames arrive, at most every 2 seconds and never on a timer, so an idle app wakes nothing; a run with no finding writes no file. The snapshot's timestamp says when it was written.
 
 An incident preserves the bounded recent history and dropped-sample count. Slot
 paths are reused: consumers should copy a file promptly if they need durable
