@@ -653,7 +653,7 @@ impl Port for Av<'_> {
         let size = unsafe { item.presentationSize() };
         let duration = seconds(unsafe { item.duration() });
         let size = (size.width >= 1.0 && size.height >= 1.0).then(|| (size.width.round() as u32, size.height.round() as u32));
-        Meta { duration, size, frame: 1.0 / 30.0, sound: has_sound(&unsafe { item.asset() }) }
+        Meta { duration, size, frame: 1.0 / 30.0, sound: has_sound(&*unsafe { item.asset() }) }
     }
 
     fn alive(&self) -> bool {
