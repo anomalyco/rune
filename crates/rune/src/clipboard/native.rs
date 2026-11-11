@@ -106,7 +106,7 @@ fn run_worker<B: Backend>(recv: mpsc::Receiver<Request>, mut open: impl FnMut() 
             Ok(request) => request,
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
         };
-        if matches!(request, Request::Clear(_)) && core.held.is_none() { continue; }
+        if matches!(request, Request::Clear(_)) && core.hold.is_free() { continue; }
         if clipboard.is_none() { clipboard = open(); }
         let Some(cb) = &mut clipboard else {
             if let Request::Write(copy, notify) = request && let Some(slot) = copy.slot() {

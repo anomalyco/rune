@@ -14,10 +14,14 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, mpsc};
 use std::time::Duration;
 use crate::time::Instant;
 use zeroize::Zeroizing;
+use crate::machine::Seq;
 use crate::{Runtime, Waker};
 
 mod content;
 mod html;
+mod secret;
+#[cfg(test)]
+mod secret_tests;
 pub(crate) mod tx;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -31,6 +35,8 @@ pub use content::{ClipboardContent, ClipboardImage, MAX_IMAGE_BYTES};
 #[cfg(target_os = "macos")]
 use content::valid_image_size;
 pub use html::sanitize_html;
+pub use secret::{SecretCopy, SecretState};
+use secret::{Alarm, Hold, HoldEffect, HoldEvent, Slot, Unwritten, step_hold};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> { m.lock().unwrap_or_else(|e| e.into_inner()) }
 
@@ -66,75 +72,6 @@ impl std::ops::Deref for ClipboardWrite {
 impl std::fmt::Debug for ClipboardWrite {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ClipboardWrite").field("clear_after", &self.clear_after).finish_non_exhaustive()
-    }
-}
-
-/// What became of a secret copy.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum SecretState {
-    /// Not written yet.
-    #[default]
-    Pending,
-    /// On the clipboard: the last copy Rune wrote, and the clipboard hasn't changed since.
-    Holding,
-    /// Cleared by Rune: its delay ran out, or `clear_now` or `Tx::clear_secret_clipboard` ran.
-    Cleared,
-    /// Something else took its place: a later copy, a change by another app, or a newer copy
-    /// before this one was written. Its countdown should end quietly.
-    Replaced,
-    /// The write failed; the clipboard didn't change.
-    Failed(String),
-}
-
-#[derive(Default)]
-struct Slot {
-    state: Mutex<SecretState>,
-    /// `clear_now` ran: skip the write if it hasn't happened yet.
-    cancel: AtomicBool,
-    route: OnceLock<Route>,
-}
-impl Slot {
-    fn set(&self, state: SecretState) { *lock(&self.state) = state; }
-}
-
-/// Settles a secret write that was dropped before reaching a clipboard (replaced in its
-/// handler, cancelled, or left in a headless runtime with no clipboard).
-struct Unwritten(Arc<Slot>);
-impl Drop for Unwritten {
-    fn drop(&mut self) {
-        let mut state = lock(&self.0.state);
-        if *state == SecretState::Pending {
-            *state = if self.0.cancel.load(Ordering::SeqCst) { SecretState::Cleared } else { SecretState::Replaced };
-        }
-    }
-}
-
-/// A secret copy from `Tx::copy_secret`. It holds no text, and is cheap to clone and send.
-/// Its state is updated by the clipboard worker; asking never reads the OS clipboard.
-#[derive(Clone)]
-pub struct SecretCopy(Arc<Slot>);
-impl SecretCopy {
-    /// A copy that is never written and stays `Pending`, for scenes and tests that show a copy
-    /// in flight without a `Tx`.
-    pub fn pending() -> Self { Self(Arc::default()) }
-    pub fn state(&self) -> SecretState {
-        if let Some(Route::Memory(m)) = self.0.route.get() { m.tick(); }
-        lock(&self.0.state).clone()
-    }
-    /// Still the last copy Rune wrote, and the clipboard hasn't changed since. The OS
-    /// clipboard is checked a few times a second while a secret is held.
-    pub fn holds(&self) -> bool { self.state() == SecretState::Holding }
-    /// Clear the clipboard now if this copy still holds it, on the clipboard worker. A copy not
-    /// yet written is never written. Idempotent.
-    pub fn clear_now(&self) {
-        self.0.cancel.store(true, Ordering::SeqCst);
-        let holding = *lock(&self.0.state) == SecretState::Holding;
-        if holding && let Some(route) = self.0.route.get() { route.send(Request::Clear(Some(self.0.clone()))); }
-    }
-}
-impl std::fmt::Debug for SecretCopy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("SecretCopy").field(&*lock(&self.0.state)).finish()
     }
 }
 
@@ -349,16 +286,6 @@ const WATCH: Duration = if cfg!(any(target_os = "macos", target_os = "windows"))
     Duration::from_secs(1)
 };
 
-/// The secret Rune wrote last, while the clipboard may still hold it.
-struct Held {
-    slot: Option<Arc<Slot>>,
-    notify: Option<Notify>,
-    deadline: Option<Instant>,
-    revision: Option<u64>,
-    /// A keyed hash of the text, so the text needn't stay in memory until the clear.
-    print: u64,
-}
-
 /// The pill copy Rune wrote last, while the clipboard still holds that exact write.
 struct OwnPills {
     revision: Option<u64>,
@@ -368,17 +295,15 @@ struct OwnPills {
 
 /// The clipboard owner's bookkeeping, shared by the OS worker and the memory clipboard.
 #[derive(Default)]
-struct Core { keys: RandomState, held: Option<Held>, own_pills: Option<OwnPills> }
+struct Core { keys: RandomState, seq: Seq, hold: Hold, alarm: Option<Alarm>, own_pills: Option<OwnPills> }
 impl Core {
     fn next_check(&self) -> Option<Instant> {
-        let held = self.held.as_ref()?;
-        let watch = Instant::now() + WATCH;
-        Some(held.deadline.map_or(watch, |d| d.min(watch)))
+        self.hold.next_check(Instant::now() + WATCH)
     }
 
     fn handle<B: Backend>(&mut self, cb: &mut B, request: Request) {
         match request {
-            Request::Write(copy, notify) => self.write(cb, copy, notify),
+            Request::Write(copy, notify) => self.write(cb, copy, notify, Instant::now()),
             Request::Clear(which) => self.clear(cb, which.as_ref()),
             Request::Read { purpose, reply, wake } => {
                 if let Some(answer) = self.answer(cb, purpose) && reply.send(answer).is_ok() { wake(); }
@@ -407,17 +332,16 @@ impl Core {
         Some(reply)
     }
 
-    fn write<B: Backend>(&mut self, cb: &mut B, copy: ClipboardWrite, notify: Option<Notify>) {
+    fn write<B: Backend>(&mut self, cb: &mut B, copy: ClipboardWrite, notify: Option<Notify>, now: Instant) {
         let slot = copy.slot().cloned();
         let notify = notify.filter(|_| slot.is_some());
-        let cancelled = |slot: &Option<Arc<Slot>>| slot.as_ref().is_some_and(|s| s.cancel.load(Ordering::SeqCst));
-        if cancelled(&slot) { return; } // `Unwritten` settles it as cleared.
+        if slot.as_ref().is_some_and(|s| s.cancelled()) { return; } // `Unwritten` settles it as cleared.
         if let Err(error) = cb.write(&copy) {
             if let Some(s) = &slot { s.set(SecretState::Failed(error)); }
             if let Some(n) = &notify { n.send(); }
             return;
         }
-        self.release(SecretState::Replaced);
+        self.apply(cb, HoldEvent::Lost);
         let rev = cb.revision();
         self.own_pills = copy
             .clear_after
@@ -434,58 +358,62 @@ impl Core {
                 }
             })
             .filter(|o| !o.pills.is_empty());
-        if let Some(delay) = copy.clear_after {
-            if let Some(s) = &slot { s.set(SecretState::Holding); }
-            self.held = Some(Held {
-                slot: slot.clone(),
-                notify: notify.clone(),
-                deadline: Instant::now().checked_add(delay),
-                revision: rev,
-                print: self.keys.hash_one(copy.content.text()),
-            });
-            if let Some(n) = &notify { n.send(); }
-            if cancelled(&slot) { self.clear(cb, slot.as_ref()); }
+        if let (Some(delay), Some(slot)) = (copy.clear_after, slot) {
+            let print = self.keys.hash_one(copy.content.text());
+            self.apply(cb, HoldEvent::Written { slot: slot.clone(), notify, due: now.checked_add(delay), revision: rev, print });
+            if slot.cancelled() { self.clear(cb, Some(&slot)); }
         }
     }
 
-    fn release(&mut self, state: SecretState) {
-        let Some(held) = self.held.take() else { return };
-        if let Some(s) = &held.slot { s.set(state); }
-        if let Some(n) = &held.notify { n.send(); }
+    /// Steps the hold and carries its effects out, in order.
+    fn apply<B: Backend>(&mut self, cb: &mut B, event: HoldEvent) {
+        for effect in step_hold(&mut self.seq, &mut self.hold, event) {
+            match effect {
+                HoldEffect::Wipe => {
+                    cb.clear();
+                    self.own_pills = None;
+                }
+                HoldEffect::Report(slot, state) => slot.set(state),
+                HoldEffect::Notify(notify) => notify.send(),
+                HoldEffect::Arm(alarm) => self.alarm = Some(alarm),
+            }
+        }
     }
 
     fn unchanged<B: Backend>(&self, cb: &mut B) -> bool {
-        let Some(held) = &self.held else { return false };
-        held.revision == cb.revision() && cb.text().is_some_and(|t| self.keys.hash_one(t.as_str()) == held.print)
+        let Hold::Holding { revision, print, .. } = &self.hold else { return false };
+        *revision == cb.revision() && cb.text().is_some_and(|t| self.keys.hash_one(t.as_str()) == *print)
     }
 
     fn clear<B: Backend>(&mut self, cb: &mut B, which: Option<&Arc<Slot>>) {
-        let Some(held) = &self.held else { return };
-        if which.is_some_and(|w| !held.slot.as_ref().is_some_and(|s| Arc::ptr_eq(s, w))) { return; }
-        if self.unchanged(cb) {
-            cb.clear();
-            self.own_pills = None;
-            self.release(SecretState::Cleared);
-        } else {
-            self.release(SecretState::Replaced);
-        }
+        if !self.hold.answers(which) { return; }
+        let ours = self.unchanged(cb);
+        self.apply(cb, HoldEvent::Clear { ours });
     }
 
     /// Expire the held secret, or let it go if the clipboard changed under it.
-    fn tick<B: Backend>(&mut self, cb: &mut B) {
+    fn tick<B: Backend>(&mut self, cb: &mut B) { self.tick_at(cb, Instant::now()); }
+
+    fn tick_at<B: Backend>(&mut self, cb: &mut B, now: Instant) {
         if let Some(own) = &self.own_pills
             && let Some(rev) = own.revision
             && cb.revision() != Some(rev)
         {
             self.own_pills = None;
         }
-        let Some(held) = &self.held else { return };
-        if held.deadline.is_some_and(|d| Instant::now() >= d) { return self.clear(cb, None); }
-        let changed = match held.revision {
+        if let Some(alarm) = self.alarm.filter(|a| now >= a.due) {
+            self.alarm = None;
+            if self.hold.armed(alarm.attempt) {
+                let ours = self.unchanged(cb);
+                return self.apply(cb, HoldEvent::Due { attempt: alarm.attempt, ours });
+            }
+        }
+        let Hold::Holding { revision, .. } = &self.hold else { return };
+        let changed = match *revision {
             Some(revision) => cb.revision() != Some(revision),
             None => !self.unchanged(cb),
         };
-        if changed { self.release(SecretState::Replaced); }
+        if changed { self.apply(cb, HoldEvent::Lost); }
     }
 }
 
