@@ -113,9 +113,11 @@ impl<T: 'static> Overlay<T> {
 
     /// winit dispatched a left press or release on the panel.
     #[cfg(target_os = "macos")]
-    pub(super) fn native_left(&mut self, pointer: &crate::platform::macos::PointerState, pressed: bool) {
+    pub(super) fn native_left(&mut self, pointer: &crate::platform::macos::PointerState, pressed: bool, now: Instant) {
         let (lost, point) = pointer.take_edge(pressed);
         self.left_edge(lost, pressed, point);
+        // A drag the monitor never saw still needs its Up noticed if that's lost.
+        if pressed && point.is_none() && self.rt.holds_drag() { pointer.unseen_drag(now); }
     }
 
     /// A turn's pointer work once the panel has sampled: the position to report, if any.
@@ -138,6 +140,8 @@ impl<T: 'static> Overlay<T> {
     /// it can't end this press, and a late Up can't turn it into a drop.
     #[cfg(target_os = "macos")]
     pub(super) fn left_edge(&mut self, lost: Option<(f32, f32)>, pressed: bool, point: Option<(f32, f32)>) {
+        // Landing moves the runtime to the old release; an unmatched press stays where winit put it.
+        let point = point.or(self.rt.pointer().filter(|_| pressed && lost.is_some()));
         self.release_lost(lost);
         if self.options.input.resolved(self.interactive) != OverlayInput::None { self.left_button(pressed, point); }
     }

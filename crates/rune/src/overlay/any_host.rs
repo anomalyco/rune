@@ -145,7 +145,7 @@ impl<T: 'static> AnyHost for Overlay<T> {
                 #[cfg(target_os = "macos")]
                 {
                     match self.native_pointer() {
-                        Some(pointer) => self.native_left(&pointer, state.is_pressed()),
+                        Some(pointer) => self.native_left(&pointer, state.is_pressed(), Instant::now()),
                         None => self.left_edge(None, state.is_pressed(), None),
                     }
                     if !state.is_pressed() && let Some(panel) = &self.panel { panel.pointer_released(); }

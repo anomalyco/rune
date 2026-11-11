@@ -17,6 +17,11 @@ pub(super) type Point = (f32, f32);
 const QUEUED_UP_GRACE: Duration = Duration::from_secs(2);
 /// How long the button may read up with no Up seen at all.
 const UNSEEN_UP_GRACE: Duration = Duration::from_millis(100);
+/// How often to read the button during a drag the monitor never saw: nothing else may wake the
+/// loop when its Up is lost.
+const UNSEEN_PRESS_CHECK: Duration = Duration::from_millis(100);
+
+fn grace(queued_up: bool) -> Duration { if queued_up { QUEUED_UP_GRACE } else { UNSEEN_UP_GRACE } }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Click {
@@ -32,8 +37,9 @@ impl Click {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Hold {
-    /// No press is held. `ups` are releases still to dispatch, of presses the monitor never saw.
-    Free { ups: VecDeque<Point> },
+    /// No press is captured. `ups` are releases still to dispatch, of presses the monitor never
+    /// saw, and `unseen` watches a drag winit dispatched that the monitor never saw.
+    Free { ups: VecDeque<Point>, unseen: Unseen },
     /// A press is held, the button down or its Up still on the way. `at` is the newest press's
     /// Down, then where the button was last read down.
     Pressed { clicks: VecDeque<Click>, at: Point },
@@ -45,7 +51,28 @@ pub(super) enum Hold {
 }
 
 impl Default for Hold {
-    fn default() -> Self { Self::Free { ups: VecDeque::new() } }
+    fn default() -> Self { Self::Free { ups: VecDeque::new(), unseen: Unseen::Idle } }
+}
+
+/// A drag the runtime holds that the monitor never saw (no monitor was running). The panel
+/// doesn't capture for it, so its normal release is untouched; this only notices a lost Up.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Unseen {
+    Idle,
+    /// The button reads down; read it again at `check`.
+    Down { check: Instant },
+    /// The button read up at `at` and `since`.
+    Rose { at: Point, since: Instant },
+}
+
+impl Unseen {
+    fn deadline(self, queued_up: bool) -> Option<Instant> {
+        match self {
+            Self::Idle => None,
+            Self::Down { check } => Some(check),
+            Self::Rose { since, .. } => Some(since + grace(queued_up)),
+        }
+    }
 }
 
 impl Hold {
@@ -54,14 +81,16 @@ impl Hold {
     /// When a lost release gives up, for the event loop to sample the pointer then even if
     /// nothing else moves.
     pub(super) fn deadline(&self) -> Option<Instant> {
-        let Self::Releasing { clicks, since, .. } = self else { return None };
-        let queued_up = clicks.iter().any(|click| !click.down);
-        Some(*since + if queued_up { QUEUED_UP_GRACE } else { UNSEEN_UP_GRACE })
+        match self {
+            Self::Free { ups, unseen } => unseen.deadline(!ups.is_empty()),
+            Self::Releasing { clicks, since, .. } => Some(*since + grace(clicks.iter().any(|click| !click.down))),
+            Self::Pressed { .. } | Self::Rebound { .. } => None,
+        }
     }
 
     pub(super) fn into_clicks(self) -> VecDeque<Click> {
         match self {
-            Self::Free { ups } => ups.into_iter().map(Click::up).collect(),
+            Self::Free { ups, .. } => ups.into_iter().map(Click::up).collect(),
             Self::Pressed { clicks, .. } | Self::Releasing { clicks, .. } | Self::Rebound { clicks, .. } => clicks,
         }
     }
@@ -109,6 +138,8 @@ pub(super) enum Event {
     Seen { down: bool, at: Point, over: bool },
     /// winit dispatched a press (`down`) or a release.
     Dispatched { down: bool },
+    /// winit dispatched a press the monitor never saw, and the runtime holds it as a drag.
+    UnseenDrag { now: Instant },
     /// winit is about to report a position, which belongs to the click at the front of the queue.
     Positioning,
     /// The runtime has had the release, or a system drag took it.
@@ -134,7 +165,7 @@ pub(super) fn step(hold: &mut Hold, event: Event) -> Effects<Effect> {
         Event::Seen { down, at, over } => {
             match hold {
                 Hold::Free { .. } if !over => {}
-                Hold::Free { ups } if !down => ups.push_back(at),
+                Hold::Free { ups, .. } if !down => ups.push_back(at),
                 Hold::Pressed { clicks, .. } | Hold::Releasing { clicks, .. } | Hold::Rebound { clicks, .. } if !down => clicks.push_back(Click::up(at)),
                 _ => {
                     let ends = hold.lost_before();
@@ -147,7 +178,7 @@ pub(super) fn step(hold: &mut Hold, event: Event) -> Effects<Effect> {
         }
         Event::Dispatched { down } => {
             let click = match hold {
-                Hold::Free { ups } if !down => ups.pop_front().map(Click::up),
+                Hold::Free { ups, .. } if !down => ups.pop_front().map(Click::up),
                 Hold::Pressed { clicks, .. } | Hold::Releasing { clicks, .. } | Hold::Rebound { clicks, .. } if clicks.front().is_some_and(|click| click.down == down) =>
                     clicks.pop_front(),
                 _ => None,
@@ -157,6 +188,10 @@ pub(super) fn step(hold: &mut Hold, event: Event) -> Effects<Effect> {
             let mut effects = click.ends.map_or(Effects::none(), |at| Effects::one(Effect::ReleaseLost(at)));
             effects.push(Effect::Deliver(click.at));
             effects
+        }
+        Event::UnseenDrag { now } => {
+            if let Hold::Free { unseen, .. } = hold { *unseen = Unseen::Down { check: now + UNSEEN_PRESS_CHECK }; }
+            Effects::none()
         }
         Event::Positioning => {
             let ends = match hold {
@@ -171,7 +206,7 @@ pub(super) fn step(hold: &mut Hold, event: Event) -> Effects<Effect> {
             // what the button did since is that press's.
             if !hold.queued_down() {
                 let clicks = std::mem::take(hold).into_clicks();
-                *hold = Hold::Free { ups: clicks.into_iter().map(|click| click.at).collect() };
+                *hold = Hold::Free { ups: clicks.into_iter().map(|click| click.at).collect(), unseen: Unseen::Idle };
             }
             Effects::none()
         }
@@ -191,7 +226,22 @@ pub(super) fn step(hold: &mut Hold, event: Event) -> Effects<Effect> {
 fn sampled(hold: &mut Hold, button_down: bool, now: Instant, point: Point) -> Effects<Effect> {
     let due = hold.deadline();
     match hold {
-        Hold::Free { .. } => Effects::none(),
+        Hold::Free { unseen, .. } => match *unseen {
+            Unseen::Idle => Effects::none(),
+            Unseen::Down { .. } | Unseen::Rose { .. } if button_down => {
+                *unseen = Unseen::Down { check: now + UNSEEN_PRESS_CHECK };
+                Effects::none()
+            }
+            Unseen::Down { .. } => {
+                *unseen = Unseen::Rose { at: point, since: now };
+                Effects::none()
+            }
+            Unseen::Rose { at, .. } => {
+                if due.is_some_and(|due| now < due) { return Effects::none(); }
+                *unseen = Unseen::Idle;
+                Effects::one(Effect::ReleaseLost(at))
+            }
+        },
         Hold::Pressed { at, .. } if button_down => {
             *at = point;
             Effects::none()

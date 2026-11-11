@@ -109,12 +109,12 @@ fn overlay_cursor_move_for_the_next_press_cancels_the_old_drag_first() {
     let mut overlay = lost_release_overlay();
     let pointer = crate::platform::macos::PointerState::new(OverlayInput::All, false);
     pointer.record_click(true, 10.0, 10.0);
-    overlay.native_left(&pointer, true);
+    overlay.native_left(&pointer, true, Instant::now());
     pointer.read(0, Instant::now(), (12.0, 10.0), true, false);
     pointer.record_click(true, 50.0, 10.0);
     overlay.before_position(&pointer); // winit reports the click's position just before the click
     overlay.cursor_moved(50.0, 10.0);
-    overlay.native_left(&pointer, true);
+    overlay.native_left(&pointer, true, Instant::now());
     overlay.rt.frame(0.0);
     assert_eq!(overlay.rt.state.iter().filter(|d| d.0 == crate::Phase::Up).map(|d| d.1).collect::<Vec<_>>(), [true]);
     assert!(!overlay.rt.state.iter().any(|d| d.0 == crate::Phase::Move), "the old drag never hears the new press's point");

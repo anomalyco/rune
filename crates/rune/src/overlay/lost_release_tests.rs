@@ -6,9 +6,13 @@
 //! compared with those predictions. Each point carries the press it belongs to, so the
 //! invariants can name a position reaching an earlier press.
 //!
-//! winit can only dispatch a click the monitor saw, in order; a Down the panel gave up on never
-//! arrives, but an Up may still arrive late. A press the monitor never saw is out of scope, and
-//! the reference expects a winit move during the grace to reach the drag, as it always has.
+//! winit dispatches the clicks the monitor saw, in order; a Down the panel gave up on never
+//! arrives, but an Up may still arrive late. With no monitor running and nothing held, winit can
+//! also dispatch a click nothing saw. A winit move during the grace reaches the drag, as it
+//! always has.
+//!
+//! The target is what dev does. The one intended departure, checking on a drag the monitor never
+//! saw, says so with `differs from dev:`.
 
 use super::*;
 use crate::platform::macos::PointerState;
@@ -17,16 +21,16 @@ use std::sync::atomic::AtomicUsize;
 
 type Point = (f32, f32);
 
-const LENGTH: usize = 6;
 const SLOP: f32 = 4.0;
 const UNSEEN_UP_GRACE: Duration = Duration::from_millis(100);
 const QUEUED_UP_GRACE: Duration = Duration::from_secs(2);
+const UNSEEN_PRESS_CHECK: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Letter { SeenDown, SeenUp, ReadUp, ReadDown, CursorMoved, MouseDown, MouseUp, Turn, Grace, Occlude, ViewLost }
+enum Letter { SeenDown, SeenUp, ReadUp, ReadDown, CursorMoved, MouseDown, MouseUp, UnseenDown, UnseenUp, Turn, Grace, Occlude, ViewLost }
 
-const ALPHABET: [Letter; 11] = [Letter::SeenDown, Letter::SeenUp, Letter::ReadUp, Letter::ReadDown, Letter::CursorMoved,
-    Letter::MouseDown, Letter::MouseUp, Letter::Turn, Letter::Grace, Letter::Occlude, Letter::ViewLost];
+const ALPHABET: [Letter; 13] = [Letter::SeenDown, Letter::SeenUp, Letter::ReadUp, Letter::ReadDown, Letter::CursorMoved,
+    Letter::MouseDown, Letter::MouseUp, Letter::UnseenDown, Letter::UnseenUp, Letter::Turn, Letter::Grace, Letter::Occlude, Letter::ViewLost];
 
 /// Whether presses, and readings and moves, land within the click slop of the last or far off.
 #[derive(Clone, Copy, Debug)]
@@ -54,10 +58,10 @@ struct Queued { down: bool, at: Point, press: usize, /// The panel gave up on it
 
 /// The runtime's held drag, as predicted.
 #[derive(Clone, Copy)]
-struct Predicted { press: usize, down: Point, moved: bool }
+struct Predicted { press: usize, down: Point, moved: bool, unseen: bool }
 
 /// What one letter is, for the driver to play and the invariants to read.
-struct Played { at: Option<Point>, reading: Option<(usize, Point, Duration)>, dispatched: Option<Queued>, expect: Vec<Heard> }
+struct Played { clock: Duration, at: Option<Point>, reading: Option<(usize, Point, Duration)>, dispatched: Option<Queued>, expect: Vec<Heard> }
 
 struct Reference {
     plan: Plan,
@@ -77,11 +81,17 @@ struct Reference {
     last_read: Option<Point>,
     pending: Option<Point>,
     holding: bool,
+    /// The runtime holds a drag the monitor never saw, and when its button was last read down.
+    armed: bool,
+    checked: Duration,
     /// When the button read up, while a press is held.
     rising: Option<Duration>,
     rebounded: bool,
-    /// A release was given up on and the runtime hasn't heard.
+    /// A release was given up on and the runtime hasn't heard, and the press it was given up for.
     owed: bool,
+    lost_of: usize,
+    /// The Up at the front of the queue when the panel gave up.
+    lost_up: Option<Point>,
     given_up: usize,
     occluded: bool,
     drag: Option<Predicted>,
@@ -98,8 +108,8 @@ enum Outcome { Illegal, Passed, Failed(&'static str, String) }
 impl Reference {
     fn new(plan: Plan, runtime_at: Point) -> Self {
         Self { plan, clock: Duration::ZERO, queue: VecDeque::new(), seen: 0, owner: vec![0], ups: vec![None], rose: vec![None], latest: vec![point(0, false)],
-            buttons: 0, at: point(0, false), next_press_under_way: false, last_read: None, pending: None, holding: false, rising: None, rebounded: false,
-            owed: false, given_up: 0, occluded: false, drag: None, runtime_at, run: None, open: None, last_press: None }
+            buttons: 0, at: point(0, false), next_press_under_way: false, last_read: None, pending: None, holding: false, armed: false, checked: Duration::ZERO, rising: None, rebounded: false,
+            owed: false, lost_of: 0, lost_up: None, given_up: 0, occluded: false, drag: None, runtime_at, run: None, open: None, last_press: None }
     }
 
     fn event(&mut self, far: bool, owner: usize) -> Point {
@@ -113,8 +123,11 @@ impl Reference {
     fn live(&self) -> impl DoubleEndedIterator<Item = &Queued> { self.queue.iter().filter(|click| !click.forgotten) }
 
     fn deadline(&self) -> Option<Duration> {
+        let grace = if self.live().any(|click| !click.down) { QUEUED_UP_GRACE } else { UNSEEN_UP_GRACE };
+        // differs from dev: a drag the monitor never saw is checked on, so a lost Up is noticed.
+        if self.armed { return Some(self.rising.map_or(self.checked + UNSEEN_PRESS_CHECK, |since| since + grace)); }
         let since = self.rising.filter(|_| self.holding)?;
-        Some(since + if self.live().any(|click| !click.down) { QUEUED_UP_GRACE } else { UNSEEN_UP_GRACE })
+        Some(since + grace)
     }
 
     /// One sample of the current button and point.
@@ -131,6 +144,17 @@ impl Reference {
                 for click in &mut self.queue { click.forgotten = true; }
                 self.queue.retain(|click| !click.down);
             }
+        } else if self.armed {
+            // differs from dev: dev never reads the button for a drag the monitor never saw.
+            if self.buttons != 0 {
+                self.rising = None;
+                self.checked = self.clock;
+            } else if self.rising.is_none() {
+                self.rising = Some(self.clock);
+                self.rose[self.seen] = Some(self.at);
+            } else if self.deadline().is_some_and(|due| self.clock >= due) {
+                self.give_up();
+            }
         }
         if self.last_read != Some(self.at) {
             self.last_read = Some(self.at);
@@ -140,22 +164,31 @@ impl Reference {
     }
 
     fn give_up(&mut self) {
+        if !self.owed {
+            let front_up = self.live().next().filter(|click| self.holding && !click.down).map(|click| click.at);
+            self.lost_up = front_up;
+        }
         self.holding = false;
+        self.armed = false;
         self.rising = None;
         self.rebounded = false;
         self.given_up = self.seen;
+        if !self.owed { self.lost_of = self.seen; }
         self.owed |= self.drag.is_some();
     }
 
     /// Where a press that lost its release let go.
-    fn expected_cancel(&self, press: usize) -> Point {
+    fn expected_cancel(&self, press: usize, unseen: bool) -> Point {
+        // As on dev, the panel knows nothing of a drag the monitor never saw: giving up on a newer
+        // press ends that drag at the newer press's point.
+        if unseen { return self.lost_up.or(self.rose[self.lost_of]).unwrap_or(self.latest[self.lost_of]); }
         self.ups[press].or(self.rose[press]).unwrap_or(self.latest[press])
     }
 
     fn land_lost(&mut self, expect: &mut Vec<Heard>) {
         if !std::mem::take(&mut self.owed) { return; }
         let Some(drag) = self.drag.take() else { return };
-        let at = self.expected_cancel(drag.press);
+        let at = self.expected_cancel(drag.press, drag.unseen);
         expect.push(Heard::Cancel(at));
         if drag.moved || !within_slop(drag.down, at) { self.run = None; }
         self.runtime_at = at;
@@ -189,13 +222,14 @@ impl Reference {
                 self.latest.push(point);
                 self.queue.push_back(Queued { down: true, at: point, press: self.seen, forgotten: false, owes });
                 self.holding = true;
+                self.armed = false;
                 self.rising = None;
                 self.rebounded = false;
                 (self.buttons, self.at, at) = (1, point, Some(point));
             }
             Letter::SeenUp => {
                 let point = self.event(self.plan.far_readings, self.seen);
-                if self.ups[self.seen].is_none() && self.seen > self.given_up { self.ups[self.seen] = Some(point); }
+                if self.ups[self.seen].is_none() && self.seen > self.given_up && !self.armed { self.ups[self.seen] = Some(point); }
                 self.queue.push_back(Queued { down: false, at: point, press: self.seen, forgotten: false, owes: false });
                 (self.buttons, self.at, at) = (0, point, Some(point));
             }
@@ -222,12 +256,47 @@ impl Reference {
                 let Some(click) = click else { return None };
                 self.owed |= click.owes;
                 self.land_lost(&mut expect);
+                // As on dev, a drag the monitor never saw hears the press's point, then is replaced.
+                if self.drag.is_some() { expect.push(Heard::Move(click.at)); }
                 let clicks = match self.run { Some((was, count)) if within_slop(was, click.at) => count + 1, _ => 1 };
                 self.run = Some((click.at, clicks));
                 self.runtime_at = click.at;
-                self.drag = Some(Predicted { press: click.press, down: click.at, moved: false });
+                self.drag = Some(Predicted { press: click.press, down: click.at, moved: false, unseen: false });
                 expect.push(Heard::Down(click.at, clicks));
                 dispatched = Some(click);
+            }
+            Letter::UnseenDown => {
+                if self.holding || !self.queue.is_empty() { return None; }
+                // As on dev, the press lands at winit's last position and replaces any held drag.
+                let down = self.runtime_at;
+                self.land_lost(&mut expect);
+                self.seen += 1;
+                self.next_press_under_way = false;
+                self.ups.push(None);
+                self.rose.push(None);
+                self.latest.push(down);
+                // differs from dev: the new drag is checked on.
+                (self.armed, self.checked, self.rising) = (true, self.clock, None);
+                let clicks = match self.run { Some((was, count)) if within_slop(was, down) => count + 1, _ => 1 };
+                self.run = Some((down, clicks));
+                self.runtime_at = down;
+                self.drag = Some(Predicted { press: self.seen, down, moved: false, unseen: true });
+                expect.push(Heard::Down(down, clicks));
+                self.buttons = 1;
+                dispatched = Some(Queued { down: true, at: down, press: self.seen, forgotten: false, owes: false });
+            }
+            Letter::UnseenUp => {
+                if self.holding || !self.queue.is_empty() || self.seen == 0 { return None; }
+                self.land_lost(&mut expect);
+                let released = self.runtime_at;
+                if let Some(drag) = self.drag.take() {
+                    expect.extend([Heard::Up(released), Heard::Press]);
+                    if drag.moved { self.run = None; }
+                }
+                (self.armed, self.rising) = (false, None);
+                self.buttons = 0;
+                reading = Some(self.read());
+                dispatched = Some(Queued { down: false, at: released, press: self.seen, forgotten: false, owes: false });
             }
             Letter::MouseUp => {
                 if !self.queue.front().is_some_and(|click| !click.down) { return None; }
@@ -241,6 +310,7 @@ impl Reference {
                 }
                 let holding = self.live().any(|click| click.down);
                 self.holding = holding;
+                self.armed = false;
                 if !holding { (self.rising, self.rebounded) = (None, false); }
                 reading = Some(self.read());
                 dispatched = Some(click);
@@ -257,12 +327,14 @@ impl Reference {
             },
             Letter::Occlude => self.occluded = !self.occluded,
             Letter::ViewLost => {
+                // As on dev, a drag the monitor never saw ends at the last reading.
+                if self.armed && let Some(last) = self.last_read { self.rose[self.seen] = Some(last); }
                 // With nothing newer read, the held press ends where it was last known.
                 self.give_up();
                 self.queue.clear();
             }
         }
-        Some(Played { at, reading, dispatched, expect })
+        Some(Played { clock: self.clock, at, reading, dispatched, expect })
     }
 
     /// The invariants, on what one letter made the runtime hear.
@@ -276,15 +348,19 @@ impl Reference {
                 }
                 Heard::Down(down, clicks) => {
                     dropped = false;
-                    if self.open.is_some() { return Err(("ends-exactly-once", "a press replaced a drag that hadn't ended".into())); }
-                    let Some(click) = dispatched.filter(|click| click.down && letter == Letter::MouseDown) else {
+                    if let Some(open) = &self.open {
+                        // As on dev, a new press replaces a drag the monitor never saw.
+                        if !open.unseen { return Err(("ends-exactly-once", "a press replaced a drag that hadn't ended".into())); }
+                        if let Some(last) = &mut self.last_press { last.1 = false; }
+                    }
+                    let Some(click) = dispatched.filter(|click| click.down && matches!(letter, Letter::MouseDown | Letter::UnseenDown)) else {
                         return Err(("ends-exactly-once", "a drag began without a dispatched press".into()));
                     };
                     if down != click.at { return Err(("own-point", format!("press at {:?} began at {down:?}", click.at))); }
                     let want = match self.last_press { Some((was, false, count)) if within_slop(was, down) => count + 1, _ => 1 };
                     if clicks != want { return Err(("click-counts", format!("{clicks} clicks, reference {want}"))); }
                     self.last_press = Some((down, false, clicks));
-                    self.open = Some(Predicted { press: click.press, down, moved: false });
+                    self.open = Some(Predicted { press: click.press, down, moved: false, unseen: letter == Letter::UnseenDown });
                     continue;
                 }
                 Heard::Move(at) => (at, false),
@@ -293,16 +369,17 @@ impl Reference {
             dropped = false;
             let Some(open) = &mut self.open else { return Err(("ends-exactly-once", format!("{item:?} on a drag already ended"))); };
             let owner = self.owner[event_of(at)];
-            if owner > open.press { return Err(("no-later-press-position", format!("press {} heard {item:?}, from press {owner}", open.press))); }
+            // As on dev, a drag the monitor never saw hears every position.
+            if owner > open.press && !open.unseen { return Err(("no-later-press-position", format!("press {} heard {item:?}, from press {owner}", open.press))); }
             open.moved |= !within_slop(open.down, at);
-            let (press, moved) = (open.press, open.moved);
+            let (press, moved, unseen) = (open.press, open.moved, open.unseen);
             if let Some(last) = &mut self.last_press { last.1 = moved; }
             if !up { continue; }
             if matches!(item, Heard::Cancel(_)) {
-                let want = self.expected_cancel(press);
+                let want = self.expected_cancel(press, unseen);
                 if at != want { return Err(("own-point", format!("press {press} cancelled at {at:?}, reference {want:?}"))); }
             } else {
-                let own = dispatched.is_some_and(|click| !click.down && click.press == press) && letter == Letter::MouseUp;
+                let own = dispatched.is_some_and(|click| !click.down && click.press == press) && matches!(letter, Letter::MouseUp | Letter::UnseenUp);
                 if !own || press <= self.given_up { return Err(("no-drop-after-cancel", format!("press {press} ended normally after losing its release"))); }
                 dropped = true;
             }
@@ -338,9 +415,9 @@ fn drive(overlay: &mut Overlay<u32>, pointer: &PointerState, letter: Letter, pla
             overlay.before_position(pointer);
             overlay.cursor_moved(at.0, at.1);
         }
-        Letter::MouseDown => overlay.native_left(pointer, true),
-        Letter::MouseUp => {
-            overlay.native_left(pointer, false);
+        Letter::MouseDown | Letter::UnseenDown => overlay.native_left(pointer, true, base + played.clock),
+        Letter::MouseUp | Letter::UnseenUp => {
+            overlay.native_left(pointer, false, base + played.clock);
             pointer.released();
             read(pointer);
         }
@@ -351,6 +428,10 @@ fn drive(overlay: &mut Overlay<u32>, pointer: &PointerState, letter: Letter, pla
         Letter::Occlude => {}
         Letter::ViewLost => pointer.view_lost(),
     }
+    heard(overlay)
+}
+
+fn heard<S: 'static>(overlay: &mut Overlay<S>) -> Vec<Heard> {
     overlay.rt.take_queued_pointer().into_iter().map(|item| match item {
         None => Heard::Press,
         Some(drag) => {
@@ -377,7 +458,9 @@ fn run(overlay: &mut Overlay<u32>, plan: Plan, sequence: &[Letter]) -> Outcome {
     let (buttons, at, clock) = model.read();
     pointer.read(buttons, base + clock, at, true, false);
     // Then the button comes to rest and the grace runs out, however the sequence left things.
-    for &letter in sequence.iter().chain(&[Letter::ReadUp, Letter::Grace, Letter::Turn]) {
+    for (index, &letter) in sequence.iter().chain(&[Letter::ReadUp, Letter::Grace, Letter::Turn]).enumerate() {
+        // Nothing due, so nothing would wake the loop: the same as the shorter sequence.
+        if letter == Letter::Grace && index < sequence.len() && model.deadline().is_none() { return Outcome::Illegal; }
         let Some(played) = model.play(letter) else { return Outcome::Illegal };
         let heard = drive(overlay, &pointer, letter, &played, base);
         if let Err((invariant, why)) = model.check(letter, played.dispatched, &heard) { return Outcome::Failed(invariant, why); }
@@ -393,7 +476,7 @@ fn run(overlay: &mut Overlay<u32>, plan: Plan, sequence: &[Letter]) -> Outcome {
 #[derive(Default)]
 struct Tally { ran: usize, failures: BTreeMap<&'static str, (usize, String)> }
 
-fn visit(overlay: &mut Overlay<u32>, plan: Plan, sequence: &mut Vec<Letter>, tally: &mut Tally) {
+fn visit(overlay: &mut Overlay<u32>, plan: Plan, sequence: &mut Vec<Letter>, length: usize, tally: &mut Tally) {
     match run(overlay, plan, sequence) {
         Outcome::Illegal => return,
         Outcome::Passed => tally.ran += 1,
@@ -403,16 +486,15 @@ fn visit(overlay: &mut Overlay<u32>, plan: Plan, sequence: &mut Vec<Letter>, tal
             entry.0 += 1;
         }
     }
-    if sequence.len() == LENGTH { return; }
+    if sequence.len() == length { return; }
     for letter in ALPHABET {
         sequence.push(letter);
-        visit(overlay, plan, sequence, tally);
+        visit(overlay, plan, sequence, length, tally);
         sequence.pop();
     }
 }
 
-#[test]
-fn every_short_sequence_of_pointer_events_keeps_the_drag_invariants() {
+fn walk(length: usize) {
     let jobs: Vec<(Plan, Letter)> = PLANS.iter().flat_map(|plan| ALPHABET.iter().map(|letter| (*plan, *letter))).collect();
     let next = AtomicUsize::new(0);
     let total = Mutex::new(Tally::default());
@@ -422,7 +504,7 @@ fn every_short_sequence_of_pointer_events_keeps_the_drag_invariants() {
             let mut overlay = overlay();
             let mut tally = Tally::default();
             while let Some((plan, letter)) = jobs.get(next.fetch_add(1, Ordering::Relaxed)) {
-                visit(&mut overlay, *plan, &mut vec![*letter], &mut tally);
+                visit(&mut overlay, *plan, &mut vec![*letter], length, &mut tally);
             }
             let mut total = total.lock().unwrap();
             total.ran += tally.ran;
@@ -433,7 +515,71 @@ fn every_short_sequence_of_pointer_events_keeps_the_drag_invariants() {
         });
     });
     let total = total.into_inner().unwrap();
-    println!("{} sequences up to length {LENGTH}", total.ran);
+    println!("{} sequences up to length {length}", total.ran);
     assert!(total.ran > 100_000, "only {} sequences were legal", total.ran);
     assert!(total.failures.is_empty(), "{} sequences, failures: {:#?}", total.ran, total.failures);
+}
+
+#[test]
+fn every_short_sequence_of_pointer_events_keeps_the_drag_invariants() { walk(5); }
+
+#[test]
+#[ignore = "millions of sequences; run by hand after changing the pointer machine"]
+fn every_sequence_to_length_six_keeps_the_drag_invariants() { walk(6); }
+
+/// An overlay with the pointer at (10, 10), and a panel that has read it there.
+fn at_rest<S: 'static>(mut overlay: Overlay<S>) -> (Overlay<S>, PointerState, Instant) {
+    let now = Instant::now();
+    overlay.rt.pointer_move(10.0, 10.0);
+    let pointer = PointerState::new(OverlayInput::All, false);
+    pointer.read(0, now, (10.0, 10.0), true, false);
+    heard(&mut overlay);
+    (overlay, pointer, now)
+}
+
+#[test]
+fn an_unseen_drag_that_loses_its_up_ends_cancelled_once() {
+    let (mut overlay, pointer, now) = at_rest(overlay());
+    overlay.native_left(&pointer, true, now);
+    assert_eq!(heard(&mut overlay), [Heard::Down((10.0, 10.0), 1)]);
+    assert!(!pointer.captured(), "the panel doesn't capture for it");
+    assert_eq!(pointer.deadline(None, false), Some(now + UNSEEN_PRESS_CHECK), "nothing else may wake the loop");
+    pointer.read(0, now, (12.0, 10.0), true, false);
+    let due = pointer.deadline(None, true).expect("the grace wakes the loop, covered or not");
+    assert_eq!(due, now + UNSEEN_UP_GRACE);
+    pointer.read(0, due, (12.0, 10.0), true, false);
+    overlay.turn_position(&pointer);
+    assert_eq!(heard(&mut overlay), [Heard::Cancel((12.0, 10.0))]);
+    assert_eq!(pointer.deadline(None, false), None);
+}
+
+#[test]
+fn an_unseen_drag_released_normally_hears_a_plain_up() {
+    let (mut overlay, pointer, now) = at_rest(overlay());
+    overlay.native_left(&pointer, true, now);
+    heard(&mut overlay);
+    overlay.native_left(&pointer, false, now);
+    pointer.released();
+    assert_eq!(heard(&mut overlay), [Heard::Up((10.0, 10.0)), Heard::Press]);
+    assert_eq!(pointer.deadline(None, false), None);
+}
+
+#[test]
+fn an_unseen_press_with_no_drag_is_left_alone_and_never_clicks() {
+    fn view(_: &u32, _: &mut Cx<u32>) -> El { crate::el().w_full().h_full().hit().on_press(|_: &mut u32| {}) }
+    let app = AppSpec {
+        title: "button", size: (100.0, 100.0), min_size: None, init: || 0, view,
+        scenes: &[], fonts: &[], families: ("sans-serif", "monospace"), setup: None, poll: None, on_key: None,
+    };
+    let spec = OverlaySpec::new("button", app.size, view).options(OverlayOptions { input: OverlayInput::All, ..Default::default() });
+    let (mut button, _) = Overlay::new(spec, 0, &app);
+    button.rt.frame(0.0);
+    let (mut button, pointer, now) = at_rest(button);
+    button.native_left(&pointer, true, now);
+    assert_eq!(pointer.deadline(None, false), None, "no check for a press that isn't a drag");
+    pointer.read(0, now, (10.0, 10.0), true, false);
+    pointer.read(0, now + QUEUED_UP_GRACE, (10.0, 10.0), true, false);
+    button.turn_position(&pointer);
+    assert_eq!(heard(&mut button), [], "a lost release synthesizes no click, as on dev");
+    assert!(button.rt.pointer_captured(), "and the press stays held, as on dev");
 }

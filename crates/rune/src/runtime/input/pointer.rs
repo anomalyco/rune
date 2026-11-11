@@ -118,12 +118,21 @@ impl<S: 'static> Runtime<S> {
     /// and the release that follows does nothing. False when no drag is held.
     pub(super) fn cancel_drag(&mut self) -> bool { self.cancel_drag_at(self.pointer) }
 
+    /// The node of a held press that [`Self::cancel_drag`] can end.
+    fn cancellable_drag(&self) -> Option<usize> {
+        if self.input_click.captured() { return None; }
+        let i = self.live_index(&self.press.held()?.path)?;
+        (self.nodes[i].handlers.on_drag.is_some() && !self.drags_out(&self.nodes[i])).then_some(i)
+    }
+
+    /// Whether a held press is a drag, which can end without a drop or a click.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn holds_drag(&self) -> bool { self.cancellable_drag().is_some() }
+
     /// [`Self::cancel_drag`], its last report at `point`, or where the press began.
     fn cancel_drag_at(&mut self, point: Option<(f32, f32)>) -> bool {
-        if self.input_click.captured() { return false; }
+        let Some(i) = self.cancellable_drag() else { return false };
         let Some(held) = self.press.held() else { return false };
-        let Some(i) = self.live_index(&held.path) else { return false };
-        if self.nodes[i].handlers.on_drag.is_none() || self.drags_out(&self.nodes[i]) { return false; }
         let at = held.at;
         let (x, y) = point.unwrap_or(at);
         let [lx, ly] = self.to_local(i, x, y);

@@ -184,3 +184,27 @@ fn losing_the_view_gives_up_where_the_pointer_was_and_hiding_stays_silent() {
     assert!(step(&mut hold, Event::Stopped).is_empty());
     assert_eq!(hold, Hold::default());
 }
+
+#[test]
+fn an_unseen_drag_is_checked_on_and_gives_up_where_the_button_rose() {
+    let mut hold = Hold::default();
+    let now = Instant::now();
+    step(&mut hold, Event::UnseenDrag { now });
+    assert!(!hold.captured(), "the panel doesn't capture for it");
+    assert_eq!(hold.deadline(), Some(now + UNSEEN_PRESS_CHECK));
+    let later = now + UNSEEN_PRESS_CHECK;
+    step(&mut hold, sample(true, later, (30.0, 30.0)));
+    assert_eq!(hold.deadline(), Some(later + UNSEEN_PRESS_CHECK), "still down: read it again");
+    step(&mut hold, sample(false, later, (40.0, 40.0)));
+    assert_eq!(hold.deadline(), Some(later + UNSEEN_UP_GRACE));
+    assert_eq!(effects(&mut hold, sample(false, later + UNSEEN_UP_GRACE, (50.0, 50.0))), [Effect::ReleaseLost((40.0, 40.0))]);
+    assert_eq!(hold, Hold::default());
+}
+
+#[test]
+fn an_unseen_drags_normal_release_stops_the_checks() {
+    let mut hold = Hold::default();
+    step(&mut hold, Event::UnseenDrag { now: Instant::now() });
+    step(&mut hold, Event::Released);
+    assert_eq!(hold, Hold::default());
+}
