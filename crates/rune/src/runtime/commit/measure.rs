@@ -176,7 +176,12 @@ impl<S: 'static> Measurement<'_, S> {
         // The Windows caption buttons go over everything the view drew, in a frame around it.
         let Some(caption) = &self.caption else { return root };
         let symbol = cx.caption_color.unwrap_or(if self.env.system_dark { Color::WHITE } else { Color::BLACK });
-        crate::titlebar::frame(root, caption, symbol, (self.env.scale, self.zoom), self.fit_height)
+        // At the height this run sets (`Cx::titlebar_height`, a zoom's), in this commit: the
+        // window's frame takes it after, and drawing the old one first would spring the buttons
+        // to the new one, at launch and on every zoom step.
+        let height = cx.titlebar.height.or(cx.titlebar.titlebar.map(|t| t.height())).unwrap_or(caption.height);
+        let caption = crate::titlebar::Caption { height, ..*caption };
+        crate::titlebar::frame(root, &caption, symbol, (self.env.scale, self.zoom), self.fit_height)
     }
 
     /// What a memo scope hashes of the window's controls (`Cx::titlebar_inset`,

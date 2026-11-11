@@ -1,0 +1,1 @@
+- **Windows: the caption buttons take the height the view sets for the titlebar (`Cx::titlebar_height`) in that commit.** They drew the frame's last height first and sprang to the new one over about 0.4 s, at launch with a saved zoom and at every zoom step; now they land at it at once, as Electron's `titleBarOverlay` resizes.
