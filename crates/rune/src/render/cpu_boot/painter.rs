@@ -14,6 +14,8 @@ const MAX_RECTS: usize = 8;
 /// Dirty tiles per extra thread: a handful of tiles paints faster on the calling thread than it
 /// takes to wake another.
 const TILES_PER_THREAD: usize = 24;
+/// Tiles a frame must change before it's checked for a scroll.
+const MIN_SCROLL_TILES: usize = 16;
 
 /// Paints frames into one retained buffer.
 pub struct CpuPainter {
@@ -41,8 +43,11 @@ pub struct Painted {
     /// Rows of the buffer moved by `dy` (down when positive) before the dirty tiles painted:
     /// a window can scroll its own copy by as much and copy only the rest.
     pub scrolled: Option<([u32; 4], i32)>,
-    /// Hashing tiles, on the calling thread.
+    /// Hashing tiles, on the calling thread, with telling a scroll and moving its rows.
     pub hash_ns: u64,
+    /// Of that, telling whether the frame scrolled (scroll.rs), and moving the rows.
+    pub plan_ns: u64,
+    pub move_ns: u64,
 }
 
 impl CpuPainter {
@@ -76,18 +81,30 @@ impl CpuPainter {
         if self.size != scene.size { self.hashes.clear(); }
         self.dirty.clear();
         let all = self.hashes.len() != self.next.len();
-        let shift = if all { None } else { self.prev.as_ref().and_then(|p| scroll::plan(p, scene, &bins)) };
-        if let Some(s) = &shift { move_rows(target, s.rect, s.dy); }
-        let touched = |t: usize| shift.as_ref().is_some_and(|s| {
+        // A blur reads its neighbours' pixels: the tiles under one paint every frame.
+        let changed = |t: usize| all || bins.quiet[t] || self.hashes[t] != self.next[t];
+        let by_hash = (0..self.next.len()).filter(|&t| changed(t)).count();
+        // Only a frame that changed many tiles can be a scroll; and a move is kept only when it
+        // leaves fewer tiles to paint than the hashes alone do.
+        let planning = Instant::now();
+        let shift = if all || by_hash < MIN_SCROLL_TILES { None } else { self.prev.as_ref().and_then(|p| scroll::plan(p, scene, &bins, &Threads { pool: &self.pool, extra: self.pool.threads() - 1 })) };
+        let touched = |s: &scroll::Shift, t: usize| {
             let (tx, ty) = (t as u32 % bins.cols, t as u32 / bins.cols);
             tx * super::bin::TILE_W < s.rect[2] && (tx + 1) * super::bin::TILE_W > s.rect[0] && ty * super::bin::TILE_H < s.rect[3] && (ty + 1) * super::bin::TILE_H > s.rect[1]
-        });
-        // A blur reads its neighbours' pixels: the tiles under one paint every frame. A tile the
-        // move touched holds the right pixels only if it moved whole.
-        self.dirty.extend((0..self.next.len() as u32).filter(|&t| {
-            let t = t as usize;
-            all || bins.quiet[t] || if touched(t) { !shift.as_ref().is_some_and(|s| s.clean[t]) } else { self.hashes[t] != self.next[t] }
-        }));
+        };
+        // A tile the move touched holds the right pixels only if it moved whole.
+        let dirty = |s: Option<&scroll::Shift>, t: usize| match s {
+            Some(s) if touched(s, t) => bins.quiet[t] || !s.clean[t],
+            _ => changed(t),
+        };
+        let shift = shift.filter(|s| (0..self.next.len()).filter(|&t| dirty(Some(s), t)).count() < by_hash);
+        let moving = Instant::now();
+        if let Some(s) = &shift {
+            let movers = (s.clean.iter().filter(|&&c| c).count() / TILES_PER_THREAD).min(self.pool.threads() - 1);
+            move_tiles(&Threads { pool: &self.pool, extra: movers }, target, scene.size, bins.cols, &s.clean, s.dy);
+        }
+        let moved = Instant::now();
+        self.dirty.extend((0..self.next.len() as u32).filter(|&t| dirty(shift.as_ref(), t as usize)));
         std::mem::swap(&mut self.hashes, &mut self.next);
         self.size = scene.size;
         let hashed = Instant::now();
@@ -104,22 +121,42 @@ impl CpuPainter {
         if let Some(s) = &shift { damage::add(&mut rects, s.rect, MAX_RECTS); }
         let scrolled = shift.as_ref().map(|s| (s.rect, s.dy));
         self.prev = Some(scroll::Prev { instances: scene.instances.to_vec(), bins });
-        Ok(Painted { dirty_tiles: self.dirty.len(), tiles: report.tiles, rects, scrolled, hash_ns: super::ns(hashed - binned), report })
+        Ok(Painted { dirty_tiles: self.dirty.len(), tiles: report.tiles, rects, scrolled, hash_ns: super::ns(hashed - binned), plan_ns: super::ns(moving - planning), move_ns: super::ns(moved - moving), report })
     }
 }
 
-/// Moves rows `rect` of the buffer by `dy`: row `y` takes what row `y - dy` held, in the order
-/// that reads each row before it's written.
-fn move_rows(target: &mut Target<'_>, rect: [u32; 4], dy: i32) {
-    let (x0, x1, stride) = (rect[0] as usize * 4, rect[2] as usize * 4, target.stride);
-    let mut copy = |y: u32| {
-        let src = (y as i64 - dy as i64) as usize * stride;
-        let dst = y as usize * stride;
-        target.pixels.copy_within(src + x0..src + x1, dst + x0);
+/// Moves the tiles the scroll left clean `dy` rows (down when positive): each takes what was
+/// `dy` rows back. Tiles of one column read only that column, so columns go to threads; within a
+/// column the tiles and their rows go in the order that reads each row before it's written
+/// (bottom up for a move down). The rest repaint, so they aren't moved.
+fn move_tiles(threads: &Threads<'_>, target: &mut Target<'_>, size: (u32, u32), cols: u32, clean: &[bool], dy: i32) {
+    use super::bin::{TILE_H, TILE_W};
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let (base, len, stride) = (target.pixels.as_mut_ptr() as usize, target.pixels.len(), target.stride);
+    let rows = size.1.div_ceil(TILE_H);
+    let next = AtomicU32::new(0);
+    let job = || loop {
+        let tx = next.fetch_add(1, Ordering::Relaxed);
+        if tx >= cols { break; }
+        let (x0, x1) = (tx * TILE_W, ((tx + 1) * TILE_W).min(size.0));
+        let bytes = (x1 - x0) as usize * 4;
+        let copy = |y: u32| {
+            let (src, dst) = ((y as i64 - dy as i64) as usize * stride + x0 as usize * 4, y as usize * stride + x0 as usize * 4);
+            assert!(src + bytes <= len && dst + bytes <= len);
+            // SAFETY: both in bounds (checked); `dy != 0`, so the two rows don't overlap; only
+            // this thread touches column `tx`, and a row is read before any move writes it.
+            unsafe { std::ptr::copy_nonoverlapping((base + src) as *const u8, (base + dst) as *mut u8, bytes) };
+        };
+        let tile_rows = |ty: u32| (ty * TILE_H, ((ty + 1) * TILE_H).min(size.1));
+        let moved = |ty: u32| clean[(ty * cols + tx) as usize];
+        if dy > 0 {
+            for ty in (0..rows).rev().filter(|&ty| moved(ty)) { let (a, b) = tile_rows(ty); for y in (a..b).rev() { copy(y); } }
+        } else {
+            for ty in (0..rows).filter(|&ty| moved(ty)) { let (a, b) = tile_rows(ty); for y in a..b { copy(y); } }
+        }
     };
-    if dy > 0 { for y in (rect[1]..rect[3]).rev() { copy(y); } } else { for y in rect[1]..rect[3] { copy(y); } }
+    raster::Exec::run(threads, &job);
 }
-
 /// The pool, with as many of its workers as the frame's damage pays for.
 struct Threads<'p> {
     pool: &'p Pool,

@@ -9,11 +9,11 @@
 //! where it paints one colour over both places. Every position the shading reads is relative to
 //! the instance's rect, so those draw the same pixels `dy` rows away.
 
-use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use super::Scene;
 use super::bin::{Bins, Show, Solid, TILE_H, TILE_W, clip_span, interior, intersect};
-use super::shade::Clip;
+use super::shade::{Clip, has_sides};
 use crate::render::{Instance, KIND_LAYER, KIND_LAYER_END};
 
 /// What the last frame drew, kept for the next frame's comparison.
@@ -55,26 +55,31 @@ fn movable(kind: f32) -> bool {
 
 /// The shift that explains this frame, if one does: the whole-pixel `dy` most of the moved
 /// instances agree on, inside the clip they share.
-pub(super) fn plan(prev: &Prev, scene: &Scene<'_>, bins: &Bins) -> Option<Shift> {
+pub(super) fn plan(prev: &Prev, scene: &Scene<'_>, bins: &Bins, exec: &dyn super::raster::Exec) -> Option<Shift> {
     let old = &prev.instances;
-    let mut by_key: HashMap<u64, Vec<u32>> = HashMap::new();
-    for (m, i) in old.iter().enumerate() {
-        if movable(i.params[1]) { by_key.entry(key(i)).or_default().push(m as u32); }
-    }
-    // Votes for (dy, the clip the content stayed inside).
-    let mut votes: HashMap<(i32, [u32; 4]), u32> = HashMap::new();
-    for i in scene.instances.iter().filter(|i| i.params[1] == crate::render::KIND_GLYPH || i.params[1] == crate::render::KIND_RECT) {
-        let Some(ms) = by_key.get(&key(i)) else { continue };
-        for &m in ms {
-            let o = &old[m as usize];
-            let dy = i.rect[1] - o.rect[1];
-            if dy != 0.0 && dy.fract() == 0.0 && i.clip == o.clip && dy.abs() < scene.size.1 as f32 {
-                *votes.entry((dy as i32, i.clip.map(f32::to_bits))).or_default() += 1;
-            }
+    let voter = |i: &Instance| i.params[1] == crate::render::KIND_GLYPH || i.params[1] == crate::render::KIND_RECT;
+    // The old voters by key, sorted: those with one key are a run.
+    let mut by_key: Vec<(u64, u32)> = old.iter().enumerate().filter(|(_, i)| voter(i)).map(|(m, i)| (key(i), m as u32)).collect();
+    by_key.sort_unstable();
+    // Votes for (dy, the clip the content stayed inside); a frame has a handful of each.
+    let mut votes: Vec<((i32, [u32; 4]), u32)> = Vec::new();
+    for i in scene.instances.iter().filter(|i| voter(i)) {
+        let k = key(i);
+        let at = by_key.partition_point(|e| e.0 < k);
+        // One vote each, for the smallest move that explains it: repeated glyphs (a column of
+        // the same letter in code) match other lines too, and staying put (0) beats them.
+        let dy = by_key[at..].iter().take_while(|e| e.0 == k).map(|e| &old[e.1 as usize]).filter(|o| i.clip == o.clip).map(|o| i.rect[1] - o.rect[1])
+            .filter(|dy| dy.fract() == 0.0 && dy.abs() < scene.size.1 as f32).min_by(|a, b| a.abs().total_cmp(&b.abs()));
+        let Some(dy) = dy else { continue };
+        let vote = (dy as i32, i.clip.map(f32::to_bits));
+        match votes.iter_mut().find(|v| v.0 == vote) {
+            Some(v) => v.1 += 1,
+            None => votes.push((vote, 1)),
         }
     }
-    let ((dy, clip_bits), count) = votes.into_iter().max_by_key(|(_, c)| *c)?;
-    if count < 8 { return None; }
+    // The move most agree on, if more in its clip moved by it than stayed put.
+    let &((dy, clip_bits), count) = votes.iter().filter(|v| v.0.0 != 0).max_by_key(|v| v.1)?;
+    if count < 8 || votes.iter().any(|v| v.0 == (0, clip_bits) && v.1 >= count) { return None; }
     let clip = clip_bits.map(f32::from_bits);
     // Rows whose centres are where the clip is whole, now and `dy` rows back.
     let c = Clip::of(&Instance { clip, ..bytemuck::Zeroable::zeroed() });
@@ -86,14 +91,20 @@ pub(super) fn plan(prev: &Prev, scene: &Scene<'_>, bins: &Bins) -> Option<Shift>
     let rect = [(whole[0] - 0.5).ceil().max(0.0) as u32, (y0 - 0.5).ceil().max(0.0) as u32, ((whole[2] - 0.5).floor() + 1.0).max(0.0) as u32, ((y1 - 0.5).floor() + 1.0).max(0.0) as u32];
     if rect[2] <= rect[0] || rect[3] <= rect[1] { return None; }
     if prev.bins.cols != bins.cols || prev.bins.quiet.iter().any(|&q| q) { return None; }
-    let mut clean = vec![false; bins.tile_count()];
-    for t in 0..bins.tile_count() {
-        let (tx, ty) = (t as u32 % bins.cols, t as u32 / bins.cols);
-        let r = [tx * TILE_W, ty * TILE_H, ((tx + 1) * TILE_W).min(scene.size.0), ((ty + 1) * TILE_H).min(scene.size.1)];
-        if r[0] < rect[0] || r[2] > rect[2] || r[1] < rect[1] || r[3] > rect[3] || bins.quiet[t] { continue; }
-        clean[t] = tile_moved(prev, scene, bins, t, r, dy);
-    }
-    Some(Shift { rect, dy, clean })
+    // Any tile may have moved whole: instance for instance is the test, not the rect. Tile rows
+    // go to threads.
+    let clean: Vec<AtomicBool> = (0..bins.tile_count()).map(|_| AtomicBool::new(false)).collect();
+    let next = AtomicU32::new(0);
+    exec.run(&|| loop {
+        let ty = next.fetch_add(1, Ordering::Relaxed);
+        if ty >= bins.rows { break; }
+        for tx in 0..bins.cols {
+            let t = (ty * bins.cols + tx) as usize;
+            let r = [tx * TILE_W, ty * TILE_H, ((tx + 1) * TILE_W).min(scene.size.0), ((ty + 1) * TILE_H).min(scene.size.1)];
+            if !bins.quiet[t] && tile_moved(prev, scene, bins, t, r, dy) { clean[t].store(true, Ordering::Relaxed); }
+        }
+    });
+    Some(Shift { rect, dy, clean: clean.into_iter().map(AtomicBool::into_inner).collect() })
 }
 
 /// Whether tile `t` (pixels `r`) draws what the old frame drew `dy` rows back.
@@ -101,22 +112,28 @@ fn tile_moved(prev: &Prev, scene: &Scene<'_>, bins: &Bins, t: usize, r: [u32; 4]
     let back = [r[0] as i32, r[1] as i32 - dy, r[2] as i32, r[3] as i32 - dy];
     if back[1] < 0 || back[3] > scene.size.1 as i32 { return false; }
     let ob = &prev.bins;
-    // What drew over the old rows, from the old tiles that held them.
-    let tx = r[0] / TILE_W;
-    let mut olds: Vec<u32> = Vec::new();
-    for oty in back[1] as u32 / TILE_H..(back[3] as u32).div_ceil(TILE_H).min(ob.rows) {
-        olds.extend_from_slice(ob.tile((oty * ob.cols + tx) as usize));
-    }
-    olds.sort_unstable();
-    olds.dedup();
-    olds.retain(|&m| {
+    // What drew over the old rows: the old tiles that held them (one, or two when `dy` isn't a
+    // whole number of tiles), each in painter order, merged, those reaching the rows kept.
+    let (tx, oty) = (r[0] / TILE_W, back[1] as u32 / TILE_H);
+    let upper = ob.tile((oty * ob.cols + tx) as usize);
+    let lower = if (back[3] as u32).div_ceil(TILE_H) > oty + 1 && oty + 1 < ob.rows { ob.tile(((oty + 1) * ob.cols + tx) as usize) } else { &[] };
+    let reaches = |m: u32| {
         let b = ob.bounds[m as usize];
         b[0] < back[2] && b[2] > back[0] && b[1] < back[3] && b[3] > back[1]
+    };
+    let (mut a, mut b) = (0, 0);
+    let mut olds = std::iter::from_fn(|| loop {
+        let m = match (upper.get(a), lower.get(b)) {
+            (Some(&x), Some(&y)) if x == y => { a += 1; b += 1; x }
+            (Some(&x), Some(&y)) if x < y => { a += 1; x }
+            (_, Some(&y)) => { b += 1; y }
+            (Some(&x), None) => { a += 1; x }
+            (None, None) => return None,
+        };
+        if reaches(m) { return Some(m); }
     });
-    let news = bins.tile(t);
-    if news.len() != olds.len() { return false; }
     let both = [r[0] as f32, r[1].min(back[1] as u32) as f32, r[2] as f32, r[3].max(back[3] as u32) as f32];
-    news.iter().zip(&olds).all(|(&n, &m)| same(scene, bins, prev, n, m, dy, both))
+    bins.tile(t).iter().all(|&n| olds.next().is_some_and(|m| same(scene, bins, prev, n, m, dy, both))) && olds.next().is_none()
 }
 
 /// Whether new instance `n` draws over the tile what old instance `m` drew `dy` rows back:
@@ -128,13 +145,13 @@ fn same(scene: &Scene<'_>, bins: &Bins, prev: &Prev, n: u32, m: u32, dy: i32, bo
     let marker = a.params[1] == KIND_LAYER || a.params[1] == KIND_LAYER_END;
     if wa == wb {
         // In place: it must look the same everywhere it reaches over both.
-        return if marker { layer_same(bins, prev, n, m, 0) && layer_covers(scene, bins, n, both) } else { flat_over(a, both) };
+        return if marker { layer_same(bins, prev, n, m, 0) && layer_covers(scene, bins, n, both) } else { flat_over(a, both) || rows_alike(a, both) };
     }
     let rest = (0..32).all(|k| k == RECT_Y || k == CLIP_Y0 || k == CLIP_Y1 || wa[k] == wb[k]);
     if !rest || a.rect[1] != b.rect[1] + dy as f32 { return false; }
-    // Its clip moved with it, or stayed put and is whole over both places.
+    // Its clip moved with it, or stayed put and cuts every row over both places alike.
     let clip_moved = a.clip[1] == b.clip[1] + dy as f32 && a.clip[3] == b.clip[3] + dy as f32;
-    let clip_kept = a.clip[1] == b.clip[1] && a.clip[3] == b.clip[3] && covers(None, &Clip::of(a), both);
+    let clip_kept = a.clip[1] == b.clip[1] && a.clip[3] == b.clip[3] && clip_rows_alike(&Clip::of(a), both);
     if !clip_moved && !clip_kept { return false; }
     !marker || layer_same(bins, prev, n, m, dy)
 }
@@ -155,7 +172,40 @@ fn layer_covers(scene: &Scene<'_>, bins: &Bins, n: u32, both: [f32; 4]) -> bool 
     if l.show != Show::Render { return true; }
     let b = l.bounds.map(|v| v as f32);
     let begin = &scene.instances[l.begin as usize];
-    l.hole[3] <= 0.0 && b[0] <= both[0] && b[1] <= both[1] && b[2] >= both[2] && b[3] >= both[3] && covers(None, &Clip::of(begin), both)
+    l.hole[3] <= 0.0 && b[1] <= both[1] && b[3] >= both[3] && clip_rows_alike(&Clip::of(begin), both)
+}
+
+/// Whether an instance in place draws every row of `r` alike: a box or a shadow whose rows
+/// there are all in its straight middle, far enough from its top and bottom edges and corners
+/// that what it draws depends on x alone, inside a clip that cuts them alike.
+fn rows_alike(i: &Instance, r: [f32; 4]) -> bool {
+    let (top, bottom) = (r[1] + 0.5, r[3] - 0.5);
+    let middle = |margin: f32| top >= i.rect[1] + margin && bottom <= i.rect[1] + i.rect[3] - margin;
+    let reach = i.radii.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    let alike = match i.params[1] as u32 {
+        // `sd_rounded` there is `|x| - half width`, or deep inside past the border's reach.
+        0 => !has_sides(i) && middle(reach + 4.0 * (i.params[0].max(0.0) + i.params[2].max(0.5)) + 4.0),
+        // `shadow_row`'s samples and its interior test are the same on every row there.
+        1 => i.uv[2] <= 0.0 && {
+            let half = [i.rect[2] * 0.5, i.rect[3] * 0.5];
+            let corner = i.radii[0].abs().min(half[0].min(half[1]));
+            middle(corner + 6.0 * i.params[2].max(0.01) + 1.0)
+        },
+        _ => false,
+    };
+    alike && clip_rows_alike(&Clip::of(i), r)
+}
+
+/// Whether `clip` cuts every row of `r` alike: they're all where its top and bottom edges, their
+/// fades and its corners don't reach.
+fn clip_rows_alike(c: &Clip, r: [f32; 4]) -> bool {
+    let inset = c.inset();
+    let (mut top, mut bottom) = (inset[1], inset[3]);
+    if let Some(radii) = c.radii {
+        let (t, b) = Solid { edges: c.rect, radii, inset: 0.5 }.bands();
+        (top, bottom) = (top.max(t + 1.0), bottom.max(b + 1.0));
+    }
+    r[1] + 0.5 >= c.rect[1] + top && r[3] - 0.5 <= c.rect[3] - bottom
 }
 
 /// Whether a box in place paints one colour over all of `r`.
