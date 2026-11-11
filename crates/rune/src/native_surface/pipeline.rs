@@ -338,6 +338,10 @@ impl SurfaceRenderer {
             count += 1;
         }
         self.draws.truncate(count);
+        #[cfg(target_os = "windows")]
+        if let Some(shared) = &mut self.shared {
+            shared.forget_gone();
+        }
         #[cfg(target_os = "macos")]
         if let Some(i) = &self.importer {
             i.flush();
@@ -384,6 +388,13 @@ impl SurfaceRenderer {
                     self.shared = Some(windows::Importer::new(device)?);
                 }
                 self.shared.as_mut().unwrap().import(queue, t)?
+            }
+            #[cfg(target_os = "windows")]
+            Source::Decoded(planes, value) => {
+                if self.shared.is_none() {
+                    self.shared = Some(windows::Importer::new(device)?);
+                }
+                self.shared.as_mut().unwrap().import_decoded(queue, planes, *value)?
             }
         };
         Ok(Imported { frame, textures })
@@ -545,8 +556,22 @@ impl SurfaceRenderer {
             });
         }
         let index = queue.submit([encoder.finish()]);
+        self.release_decoded(queue);
         let _ = self.completion.try_send(());
         index
+    }
+
+    /// Decoded video pictures this submission drew may be written again once it's done.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn release_decoded(&self, queue: &wgpu::Queue) {
+        #[cfg(target_os = "windows")]
+        for p in self.draws.iter().filter(|p| p.drawn.load(std::sync::atomic::Ordering::Relaxed)) {
+            if let Source::Decoded(planes, value) = &p.imported.frame.source {
+                windows::release_decoded(queue, planes, *value);
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        let _ = queue;
     }
 }
 

@@ -812,6 +812,7 @@ impl Port for Fake {
     fn set_muted(&mut self, muted: bool) {
         self.log.push(Cmd::Muted(muted));
     }
+    fn set_volume(&mut self, _: f32) {}
     fn seek_to(&mut self, at: f64) {
         self.log.push(Cmd::Seek(at));
     }
@@ -955,8 +956,8 @@ impl New {
         let c = &self.c;
         assert_eq!(c.stage.has_player(), self.fake.player, "the stage says what the native side holds");
         let (created, player_muted, player_rate, settle, shown) = match c.stage {
-            Stage::Loading { created, muted } => (Some(created), muted, 0.0, Settle::Still, None),
-            Stage::Ready { created, muted, rate, settle, shown } => (Some(created), muted, rate, settle, shown),
+            Stage::Loading { created, muted, .. } => (Some(created), muted, 0.0, Settle::Still, None),
+            Stage::Ready { created, muted, rate, settle, shown, .. } => (Some(created), muted, rate, settle, shown),
             _ => (None, false, 0.0, Settle::Still, None),
         };
         View {

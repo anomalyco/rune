@@ -657,6 +657,10 @@ impl Port for Av<'_> {
         unsafe { self.objects().player.setMuted(muted) };
     }
 
+    fn set_volume(&mut self, volume: f32) {
+        unsafe { self.objects().player.setVolume(volume) };
+    }
+
     fn seek_to(&mut self, at: f64) {
         unsafe { self.objects().player.seekToTime_toleranceBefore_toleranceAfter(cm(at), zero(), zero()) };
     }
@@ -710,6 +714,11 @@ pub(super) fn pull(shared: &Arc<Shared>, surface: &NativeSurface, target: Instan
     let turn = turn::turn(&mut c, &mut av, now);
     let asked = av.asked;
     finish(shared, native, c, turn, asked)
+}
+
+/// The display link draws a playing clip every refresh.
+pub(super) fn due(_: &Shared) -> Option<Instant> {
+    None
 }
 
 /// Poster requests and parking, shared by video pulls and audio drives. Returns whether the

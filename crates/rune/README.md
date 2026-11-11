@@ -1952,7 +1952,7 @@ tap.play();
 ```
 
 - **Controls and state**: `play` (from the start after `Ended`), `pause`, `seek` (clamped),
-  `set_rate`, `set_looping`, `set_muted`; `state()` is `Loading`, `Ready`, `Playing`, `Ended`
+  `set_rate`, `set_looping`, `set_muted`, `set_volume`; `state()` is `Loading`, `Ready`, `Playing`, `Ended`
   or `Failed(message)`, plus `time()`, `duration()`, `natural_size()`.
 - **Sound**: `Player::file`/`url`/`new` make videos, which start muted. `Player::audio` makes
   an audio clip, which starts unmuted. `set_muted` changes either.
@@ -1992,6 +1992,23 @@ tap.play();
   follows the virtual clock of the runtime on the thread that made it, as a video's does
   (pause, seek, rate, loop, and the end, which wakes the clip's waker), with no sound. `--tree` adds a `video` object (`kind`, `state`, `time`,
   `duration`, `size`, `rate`, `looping`, `muted`, `error`) to video elements.
+- **Windows**: Media Foundation's source reader decodes each clip on a thread of its own, with
+  the GPU's decoder (DXVA, through a D3D11 device on the adapter Rune draws with) where it has
+  one and in software otherwise. Each picture is copied on the GPU into a small ring of shared
+  NV12 textures that Rune's D3D12 device samples in place, ordered by fences: no CPU copy, and
+  the UI thread only swaps the picture for the refresh the frame presents at (read from DWM's
+  timing). A playing clip asks for the next frame when its next picture is due, not every
+  refresh. A clip nobody draws stops decoding (its queue fills); a muted one picks up at its
+  picture when drawn again, and after 3 s undrawn its decoder lets go of everything but the
+  picture on screen. Loops seek back while the last pictures still wait, so there's no gap.
+  Sound plays on the default output through WASAPI, following the playback clock. Media
+  Foundation, D3D11 and WASAPI load on the first clip, through `GetProcAddress`: nothing at
+  launch, nothing in the import table. Formats are what Media Foundation reads: mp4/mov/m4v
+  (H.264; HEVC, VP9 and AV1 with their system extensions), WebM, mp3, m4a/AAC, wav, flac. A
+  Windows N edition without the Media Feature Pack fails every clip with a message saying so.
+  `RUNE_VIDEO_LOG=1` prints each open's steps in microseconds (`frames` adds every picture);
+  `RUNE_VIDEO_DECODE=software` skips the GPU decoder. Request headers aren't sent on Windows
+  yet: such a clip fails with a message.
 - **Other platforms**: every clip reports `Failed("video playback isn't supported on this
   platform yet")` (or the audio equivalent), and video draws a neutral grey placeholder.
 

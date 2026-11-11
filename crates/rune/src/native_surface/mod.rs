@@ -65,6 +65,9 @@ pub(crate) enum Source {
     PixelBuffer(macos::PixelBuffer),
     #[cfg(target_os = "windows")]
     Shared(windows::SharedTexture),
+    /// A video decoder's NV12 picture and the fence value that marks it written.
+    #[cfg(target_os = "windows")]
+    Decoded(Arc<windows::DecodedPlanes>, u64),
 }
 pub(crate) struct Frame {
     pub id: u64,
@@ -284,6 +287,13 @@ impl NativeSurface {
             source: Source::Shared(texture),
         });
         Ok(())
+    }
+    /// Shows a decoded NV12 picture (`video::windows`), sampled in place once its fence reaches
+    /// `value`.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn push_decoded(&self, planes: Arc<windows::DecodedPlanes>, value: u64, frame_id: u64, format: Format, color: ColorInfo, orient: Orient) {
+        let size = planes.size;
+        self.replace(Frame { id: frame_id, size, format, color, orient, source: Source::Decoded(planes, value) });
     }
     fn replace(&self, frame: Frame) {
         let (old, wake) = {
