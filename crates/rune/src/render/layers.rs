@@ -17,6 +17,9 @@ const SPARE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_CACHE_DIM: u32 = 4096;
 
 #[cfg(test)]
+#[path = "layers/plan_frame_tests.rs"]
+mod plan_frame_tests;
+#[cfg(test)]
 #[path = "../runtime/layer_tests.rs"]
 mod tests;
 #[cfg(test)]
@@ -59,6 +62,9 @@ pub(super) struct Layers {
     allocations: u64,
     cache_budget: u64,
     frame_stamp: u64,
+    /// Test-only: the most bytes of live targets and their blur scratches a frame has held at once.
+    #[cfg(test)]
+    peak: u64,
 }
 
 impl Layers {
@@ -94,6 +100,34 @@ impl Layers {
         self.slots.extend(self.targets.iter().map(|slot| slot.as_ref().map(Target::held)));
     }
 
+    /// Forgets what the last plan asked of the pools. A frame with no layers reads none of it, and
+    /// a burst of layers must not leave its scratch behind for every later frame to hold.
+    fn forget_plan(&mut self) {
+        self.dispositions.clear();
+        self.moves.clear();
+        self.kept.clear();
+        self.parked.clear();
+        self.slots.clear();
+        self.dispositions.shrink_to_fit();
+        self.moves.shrink_to_fit();
+        self.kept.shrink_to_fit();
+        self.parked.shrink_to_fit();
+        self.slots.shrink_to_fit();
+    }
+
+    /// Test-only: notes the peak of the bytes this frame holds live, targets and blur scratches
+    /// alike, so a test can pin it against the peak dev held.
+    #[cfg(test)]
+    fn watch_peak(&mut self) {
+        let bytes: u64 = self.targets.iter().flatten().chain(&self.retained).chain(&self.spare)
+            .map(Renderer::target_bytes).sum();
+        self.peak = self.peak.max(bytes);
+    }
+
+    /// Test-only: the most live target bytes the last frame held at once.
+    #[cfg(test)]
+    pub(super) fn peak_bytes(&self) -> u64 { self.peak }
+
     /// Makes every blurred layer write its blur uniforms again on its next prepare.
     pub(super) fn forget_blur_uniforms(&mut self) {
         let targets = self.targets.iter_mut().flatten().chain(&mut self.retained).chain(&mut self.spare);
@@ -122,6 +156,8 @@ impl Default for Layers {
             allocations: 0,
             cache_budget: DEFAULT_CACHE_BUDGET,
             frame_stamp: 0,
+            #[cfg(test)]
+            peak: 0,
         }
     }
 }
@@ -238,6 +274,8 @@ impl Renderer {
     pub(super) fn prepare_layers(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, instances: &[Instance], viewport: (u32, u32)) {
         let staging = self.uploads.staging(device, queue);
         self.layers.viewport = viewport;
+        #[cfg(test)]
+        { self.layers.peak = 0; }
         let had_layers = !self.layers.plan.is_empty();
         for slot in &mut self.layers.targets {
             if slot.as_ref().is_some_and(|t| t.cache.is_some()) {
@@ -376,12 +414,19 @@ impl Renderer {
             self.layers.frame_stamp += 1;
         }
         let max_dim = device.limits().max_texture_dimension_2d.min(MAX_CACHE_DIM);
-        // One disposition per layer, and every change to the target pools it needs, decided on the
-        // pools as they are: `commit` then carries the moves out and `paint_layers` draws them.
-        self.layers.gather();
-        self.layers.decide(isolate, max_dim);
-        self.commit(device);
-        self.paint_layers(device, &staging);
+        if self.layers.plan.is_empty() {
+            // No layers to plan: what closed at the last frame's end is all this frame keeps or
+            // drops, exactly as dev trimmed the pool. Nothing here reads a target's size.
+            self.layers.forget_plan();
+            self.layers.trim_retained(0);
+        } else {
+            // One disposition per layer, and every change to the target pools it needs, decided on
+            // the pools as they are: `commit` then carries the moves out and `paint_layers` draws them.
+            self.layers.gather();
+            self.layers.decide(isolate, max_dim);
+            self.commit(device);
+            self.paint_layers(device, &staging);
+        }
         // Rebind child composites to their nearest materialized parent (opaque scopes flatten).
         for index in 0..self.layers.plan.len() {
             if self.layers.targets[index].is_none() { continue; }
@@ -426,9 +471,14 @@ impl Renderer {
                     self.layers.targets[slot] = Some(t);
                 }
                 Move::Create { slot, size } => self.layers.targets[slot] = Some(self.make_target(device, size)),
+                Move::Unblur(slot) => {
+                    if let Some(t) = self.layers.targets[slot].as_mut() { t.blur = None; }
+                }
                 Move::Drop(Kept::Retained(at)) => { self.layers.retained.swap_remove(at); }
                 Move::Drop(Kept::Spare(at)) => { self.layers.spare.swap_remove(at); }
             }
+            #[cfg(test)]
+            self.layers.watch_peak();
         }
     }
 
@@ -480,6 +530,8 @@ impl Renderer {
                     t.cache = cache;
                     t.last_used = stamp;
                     t.content_size = [rect[2], rect[3]];
+                    // A scratch the layer no longer wants was dropped by `Move::Unblur`, before any
+                    // later layer's texture existed.
                     if l.blur > 0.0 {
                         let pipeline = self.layers.blur.as_ref().expect("prepared layer blur");
                         if t.blur.is_none() {
@@ -490,7 +542,7 @@ impl Renderer {
                             [rect[2], rect[3]], l.blur, l.blend == Blend::PlusLighter) {
                             self.layers.allocations += 1;
                         }
-                    } else { t.blur = None; }
+                    }
                     staging.write_buffer(&t.projection, 0, bytemuck::cast_slice(&rect));
                     let mut quad = Instance::begin_layer(rect, l.clip, LayerSpec {
                         opacity: l.opacity, blend: l.blend, ..Default::default() });
@@ -500,6 +552,8 @@ impl Renderer {
                     staging.write_buffer(&t.quad, 0, bytemuck::bytes_of(&quad));
                 }
             }
+            #[cfg(test)]
+            self.layers.watch_peak();
         }
     }
 

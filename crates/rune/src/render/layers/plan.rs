@@ -112,6 +112,9 @@ pub(super) enum Move {
     Set { slot: usize, from: Kept },
     /// Makes a target of `size` for a slot.
     Create { slot: usize, size: [u32; 2] },
+    /// Drops a slot target's blur scratch: the layer draws unblurred from now on, and the scratch
+    /// must go before a later layer makes a texture of its own (dev dropped it in the same place).
+    Unblur(usize),
     /// Drops a kept target.
     Drop(Kept),
 }
@@ -218,23 +221,26 @@ impl Layers {
                 size[0] >= width && size[1] >= height && (size == bucket
                     || u64::from(size[0]) * u64::from(size[1]) <= 2 * u64::from(width) * u64::from(height))
             });
-            if fits { continue; }
-            self.park_slot(index);
-            let spare = self.parked.iter().position(|t| {
-                let size = t.size;
-                size[0] >= width && size[1] >= height
-                    && u64::from(size[0]) * u64::from(size[1]) <= 2 * u64::from(width.max(64)) * u64::from(height.max(64))
-            });
-            match spare {
-                Some(at) => {
-                    self.slots[index] = Some(self.parked.swap_remove(at));
-                    self.moves.push(Move::Set { slot: index, from: Kept::Spare(at) });
-                }
-                None => {
-                    self.slots[index] = Some(Held::new(bucket, bpp));
-                    self.moves.push(Move::Create { slot: index, size: bucket });
+            if !fits {
+                self.park_slot(index);
+                let spare = self.parked.iter().position(|t| {
+                    let size = t.size;
+                    size[0] >= width && size[1] >= height
+                        && u64::from(size[0]) * u64::from(size[1]) <= 2 * u64::from(width.max(64)) * u64::from(height.max(64))
+                });
+                match spare {
+                    Some(at) => {
+                        self.slots[index] = Some(self.parked.swap_remove(at));
+                        self.moves.push(Move::Set { slot: index, from: Kept::Spare(at) });
+                    }
+                    None => {
+                        self.slots[index] = Some(Held::new(bucket, bpp));
+                        self.moves.push(Move::Create { slot: index, size: bucket });
+                    }
                 }
             }
+            // The scratch a blur left behind goes before the next layer makes its own texture.
+            if layer.blur == 0.0 { self.moves.push(Move::Unblur(index)); }
         }
         self.trim(active);
     }
