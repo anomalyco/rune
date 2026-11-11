@@ -7,7 +7,7 @@ use super::ApplePipeline;
 /// `Tx::set_font_smoothing`, which redraws with glyphs rasterised for the new mode.
 ///
 /// The default is [`FontSmoothing::On`] on macOS and in a Mac's browser, and
-/// [`FontSmoothing::Windfoil`] everywhere else (Windows, Linux, the web); every mode can be
+/// [`FontSmoothing::WindfoilChromium`] everywhere else (Windows, Linux, the web); every mode can be
 /// chosen on every OS. `On` and `Off` work on any OS (they are arithmetic on outlines, not calls
 /// into CoreText). Either way the pipeline
 /// floors pens to CoreGraphics' subpixel steps (`quantisation_steps`), flattens curves and
@@ -31,7 +31,7 @@ pub enum FontSmoothing {
     /// pens sit on quarter pixels, and Skia's text gamma and contrast weigh the coverage by the
     /// text's luminance. Elsewhere, without DirectWrite, it draws as `Off`.
     DirectWrite,
-    /// Rune's own text, the same on every platform, and the default everywhere but macOS: each
+    /// Rune's own text with CoreText's weight, the same on every platform: each
     /// glyph's exact pixel coverage from its outline (Windfoil's box filter), grown by CoreText's
     /// font smoothing dilation (times `TEXT_WEIGHT`, so its ink matches CoreText's), with
     /// coverage drawn as is and pens on quarter pixels. Masks at rest are filled on the GPU by the
@@ -39,9 +39,12 @@ pub enum FontSmoothing {
     /// from its outlines, so it stays sharp and doesn't change when it lands. Where the renderer
     /// can't draw outlines, the CPU fills the same masks and moving text draws from them.
     Windfoil,
-    /// Windfoil with Chromium's weight: each glyph's exact box coverage of its design outline,
-    /// with no dilation or hint, drawn through Skia's text gamma (the luminance-keyed exponent
-    /// `Off` takes off macOS), as Chromium's grayscale text weighs. Pens on quarter pixels.
+    /// Windfoil with Chromium's weight, and the default everywhere but macOS and a Mac's browser:
+    /// each glyph's exact box coverage of its design outline, with no dilation or hint, drawn
+    /// through Skia's text gamma (the luminance-keyed exponent `Off` takes off macOS), as
+    /// Chromium's grayscale text weighs. Pens on quarter pixels. At rest and in motion it draws as
+    /// `Windfoil` does (GPU-filled masks, outlines while its scale moves, the CPU's fill where the
+    /// renderer has no outline shader).
     WindfoilChromium,
     /// Slug's coverage (Lengyel): the winding along a horizontal and a vertical ray through each
     /// pixel, each spread over the pixel's width, averaged; of the design outline, through Skia's
@@ -69,7 +72,7 @@ impl Default for FontSmoothing {
     fn default() -> Self {
         match FontSmoothing::classic() {
             FontSmoothing::On => FontSmoothing::On,
-            _ => FontSmoothing::Windfoil,
+            _ => FontSmoothing::WindfoilChromium,
         }
     }
 }
